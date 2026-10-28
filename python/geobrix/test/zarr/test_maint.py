@@ -625,7 +625,14 @@ def test_a_write_in_flight_keeps_its_files_from_a_vacuum_unless_forced(
 
 @pytest.mark.parametrize(
     "case",
-    ["registered", "foreign-owner", "read-only", "foreign-file", "nested-store"],
+    [
+        "registered",
+        "foreign-owner",
+        "read-only",
+        "foreign-file",
+        "nested-store",
+        "nested-store-no-marker",
+    ],
 )
 def test_vacuum_never_touches_base_or_unowned_root(
     spark_delta, drop, tmp_path, no_hooks, monkeypatch, case
@@ -646,7 +653,7 @@ def test_vacuum_never_touches_base_or_unowned_root(
             gbx_zarr_vacuum(spark_delta, table)
         assert any((root / "data").rglob("*.zpack"))
         return
-    if case == "nested-store":
+    if case.startswith("nested-store"):
         table, root, _ = _store(spark_delta, drop, tmp_path, label="outer")
         inner = _table("inner")
         drop(inner)
@@ -654,12 +661,18 @@ def test_vacuum_never_touches_base_or_unowned_root(
         gbx_zarr_write(
             _cube(), inner, root=str(nested), chunks=CHUNKS, spark=spark_delta
         )
+        bare = case.endswith(
+            "no-marker"
+        )  # the marker is the note: the ledger still claims
+        if bare:
+            (nested / OWNER_MARKER).unlink()
         for p in nested.rglob("*"):
             os.utime(p, (old, old))
         mine = _hashes(nested)
         got = _reasons(gbx_zarr_vacuum(spark_delta, table))
         assert not [f for f in got if f.startswith("data/nested/")]
-        assert _hashes(nested) == mine and OWNER_MARKER in mine
+        assert _hashes(nested) == mine and (OWNER_MARKER in mine) == (not bare)
+        assert any(f.endswith(".zpack") for f in mine)
         assert H.read_variable(spark_delta, inner, "t2m").shape == (48, 10, 12)
         return
     store = make_era5_like(tmp_path / "base.zarr", zarr_format=3)

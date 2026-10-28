@@ -259,6 +259,16 @@ def _marker_path(root: str) -> str:
     return os.path.join(root, OWNER_MARKER)
 
 
+def holds_store(entries) -> bool:
+    """Whether a directory with these ``entries`` (its file and sub-directory names) is the
+    root of a store GeoBrix owns: it has an ownership ledger or an owner marker. The ledger is
+    the claim and the marker only the note beside it, which may be missing, so either one
+    makes the directory another store's. Anything that walks a root and changes what it
+    finds asks this before it goes in."""
+    names = set(entries)
+    return OWNER_LEDGER in names or OWNER_MARKER in names
+
+
 def _owner_error(marker: str, owner: dict, table: str) -> ZarrOwnershipError:
     return ZarrOwnershipError(
         f"{os.path.dirname(marker)} is already owned by table "

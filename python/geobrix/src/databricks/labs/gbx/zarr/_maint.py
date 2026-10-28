@@ -56,7 +56,7 @@ from databricks.labs.gbx.zarr._filemode import (
     require_geobrix_files,
 )
 from databricks.labs.gbx.zarr._pack import PackWriter, require_packs
-from databricks.labs.gbx.zarr._register import OWNER_MARKER, identity_of
+from databricks.labs.gbx.zarr._register import holds_store, identity_of
 from databricks.labs.gbx.zarr._shard import Region
 from databricks.labs.gbx.zarr._store import ManifestStore
 from databricks.labs.gbx.zarr.errors import (
@@ -538,16 +538,17 @@ def _list_packs(root: str) -> list[tuple[str, float]]:
 
     Only the layout a writer of this store produces is listed,
     ``data/<array>/<write_id>/part-<id>.zpack``: any other file under ``data/`` is somebody
-    else's and is never a candidate. A directory that holds an owner marker is another
-    store's root (one can be created, or an overlay registered, under this store's
-    ``data/``): it is not entered. Links and anything that is not a plain file are left alone.
+    else's and is never a candidate. A directory that holds an ownership ledger or an owner
+    marker is another store's root (one can be created, or an overlay registered, under
+    this store's ``data/``): it is not entered. Links and anything that is not a plain
+    file are left alone.
     """
     top = os.path.join(root, "data")
 
     def walk():
         out = []
         for folder, dirs, names in os.walk(top, followlinks=False):
-            if OWNER_MARKER in names:
+            if holds_store([*dirs, *names]):
                 dirs[:] = []
                 continue
             for name in names:

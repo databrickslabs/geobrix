@@ -428,9 +428,9 @@ _BAND_PIXELS = (
 def _burn_banded(out, lut, ad, lon, lat, resolution, width):
     """Write each pixel's cell value into `out` (flat, row-major): the cell index of a band of rows at a time
     (`ad.pixel_keys`), looked up in the sorted cell ids. A pixel whose cell is not in `lut` keeps its NoData.
+    Every pixel is indexed also when there are no cells, so a coordinate that is not finite is refused as it was
+    when each pixel was indexed on its own.
     """
-    if not lut:
-        return
     keys = np.fromiter(lut.keys(), dtype=np.int64, count=len(lut))
     vals = np.fromiter(lut.values(), dtype="float64", count=len(lut))
     order = np.argsort(keys)
@@ -438,9 +438,10 @@ def _burn_banded(out, lut, ad, lon, lat, resolution, width):
     step = max(1, _BAND_PIXELS // max(1, width)) * width  # whole rows
     for lo in range(0, lon.size, step):
         pk = ad.pixel_keys(lon[lo : lo + step], lat[lo : lo + step], resolution)
-        pos = np.minimum(np.searchsorted(keys, pk), len(keys) - 1)
-        hit = keys[pos] == pk
-        out[lo : lo + pk.size][hit] = vals[pos[hit]]
+        if keys.size:
+            pos = np.minimum(np.searchsorted(keys, pk), len(keys) - 1)
+            hit = keys[pos] == pk
+            out[lo : lo + pk.size][hit] = vals[pos[hit]]
 
 
 def cells_to_raster(

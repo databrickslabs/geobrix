@@ -161,3 +161,17 @@ def test_the_bng_burn_refuses_a_coordinate_that_is_not_finite():
             3,
             grid="bng",
         )
+
+
+def test_the_bng_burn_of_no_cells_is_all_nodata_and_still_refuses_a_canvas_that_is_not_finite():
+    """No cells is no pixel burned, and a canvas with a NaN corner is refused all the same, as it was when every
+    pixel was indexed one by one."""
+    raster = cr.cells_to_raster(
+        {}, 0.0, 0.0, 1000.0, 1000.0, 100.0, 10, 10, 27700, 3, grid="bng"
+    )
+    with _serde.open_tile(raster) as ds:
+        assert (ds.read(1) == -9999.0).all()
+    with pytest.raises(ValueError, match="Non-finite"):
+        cr.cells_to_raster(
+            {}, float("nan"), 0.0, 1000.0, 1000.0, 100.0, 10, 10, 27700, 3, grid="bng"
+        )

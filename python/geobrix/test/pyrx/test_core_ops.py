@@ -119,16 +119,44 @@ def test_as_format_to_png():
 
 def test_as_format_to_cog_is_a_real_cog():
     # COG has no Create(): the output must be a Cloud Optimized GeoTIFF
-    # (LAYOUT=COG), not a plain GTiff and not an error.
-    src = make_geotiff_bytes(width=256, height=256, count=2)
+    # (LAYOUT=COG) that keeps the RGB(A) colour interpretation, the NoData and
+    # the CRS, with 512 blocks and overviews on a tile larger than one block.
+    from rasterio.enums import ColorInterp
+
+    labels = [
+        ColorInterp.red,
+        ColorInterp.green,
+        ColorInterp.blue,
+        ColorInterp.alpha,
+    ]
+    profile = dict(
+        driver="GTiff",
+        width=700,
+        height=600,
+        count=4,
+        dtype="uint8",
+        crs="EPSG:32618",
+        transform=from_origin(500000.0, 4500000.0, 10.0, 10.0),
+        nodata=0,
+    )
+    data = np.random.default_rng(0).integers(1, 255, (4, 600, 700), dtype="uint8")
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(data)
+            dst.colorinterp = labels
+        src = mf.read()
     with _serde.open_tile(src) as ds:
-        before = ds.read()
         out = ops_core.as_format(ds, "COG")
     with _serde.open_tile(out) as o:
         assert o.driver == "GTiff"  # COG opens as GTiff
         assert o.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
-        assert (o.width, o.height, o.count) == (256, 256, 2)
-        assert np.array_equal(o.read(), before)
+        assert list(o.colorinterp) == labels
+        assert o.block_shapes[0] == (512, 512)
+        assert o.overviews(1)
+        assert o.nodata == 0
+        assert o.crs.to_epsg() == 32618
+        assert o.transform == profile["transform"]
+        assert np.array_equal(o.read(), data)
 
 
 def test_as_format_bad_driver_raises():

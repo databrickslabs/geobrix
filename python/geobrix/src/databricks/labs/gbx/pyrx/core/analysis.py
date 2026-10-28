@@ -262,7 +262,7 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
     tmp = new_local_temp_file(suffix=".tif")
     try:
         with rasterio.open(tmp, "w", **profile) as dst:
-            _comp.match_alpha(dst, ds.colorinterp)
+            _comp.match_alpha(dst, ds.colorinterp, all_labels=True)
             dst.write(data)
         # Free the decoded array before reading the output bytes back so
         # the peak is capped at max(data, cog_file_bytes), not their sum.

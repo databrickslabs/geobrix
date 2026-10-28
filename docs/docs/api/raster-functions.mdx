@@ -2720,7 +2720,7 @@ Warp a tile to match the grid of a reference tile exactly — same CRS, extent, 
 <Tier both/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio**. Output formats are limited to rasterio's bundled-GDAL writable driver set; the tile is re-encoded in the requested format. `'COG'` produces a Cloud Optimized GeoTIFF (512-pixel blocks, an overview pyramid and size-adaptive ZSTD compression), the same layout as [`rst_cog_convert`](#rst_cog_convert).
+Powered by **rasterio**. Output formats are limited to rasterio's bundled-GDAL writable driver set; the tile is re-encoded in the requested format. `'COG'` produces a Cloud Optimized GeoTIFF (512-pixel blocks, size-adaptive ZSTD compression, and overviews when the tile is larger than 512 pixels), the same layout as [`rst_cog_convert`](#rst_cog_convert).
 :::
 
 :::note Heavyweight tier

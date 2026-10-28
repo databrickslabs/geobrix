@@ -405,6 +405,22 @@ def test_uc_ddl_contract(fn):
             assert f"{p.name} GEOMETRY" in impl
 
 
+def test_uc_ddl_batch_style_names_a_pandas_handler_beside_the_product_function():
+    (stmt,) = ddl.function_ddl(
+        MAN.functions["gbx_bng_eastnorthasbng"],
+        "cat",
+        "sch",
+        "file:///Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl",
+        MAN.uc_dependencies,
+        "0.6.0",
+        style="batch",
+        name="gbx_mvp_bng_eastnorthasbng_batch",
+    )
+    assert "LANGUAGE PYTHON\nPARAMETER STYLE PANDAS\n" in stmt
+    assert "`cat`.`sch`.gbx_mvp_bng_eastnorthasbng_batch(" in stmt
+    assert "bng_eastnorthasbng_batch as handler" in stmt
+
+
 @pytest.mark.parametrize(
     "value,want",
     [

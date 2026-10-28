@@ -24,10 +24,9 @@ NATIVE_DIR_KEY = (
 def _point_jvm_at_payload(spark) -> None:
     """On dedicated (classic only) tell the JVM to load the wheel's natives, when the wheel ships them."""
     try:
-        native = importlib.import_module("databricks.labs.gbx._native")
-    except ModuleNotFoundError:
-        return  # this wheel bundles no natives
-    d = native.native_dir()
+        d = importlib.import_module("databricks.labs.gbx._native").native_dir()
+    except (ModuleNotFoundError, AttributeError):
+        return  # this wheel bundles no natives (or only the dev Rust dir, a namespace package)
     if d and spark.conf.get(NATIVE_DIR_KEY, None) != d:
         spark.conf.set(
             NATIVE_DIR_KEY, d

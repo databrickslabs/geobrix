@@ -47,6 +47,42 @@ def bng_eastnorthasbng(easting, northing, resolution):
     )  # an unknown resolution raises (a parameter error)
 
 
+def _res(raw):
+    """A UC resolution (STRING: '3', '1km', '-3') as a BNG index; one that BNG does not define raises."""
+    from databricks.labs.gbx.pygx import _bng
+
+    return _bng.get_resolution(raw.strip() if isinstance(raw, str) else raw)
+
+
+def bng_eastnorthasbng_batch(batches):
+    """PARAMETER STYLE PANDAS handler: an iterator of (easting, northing, resolution) Series.
+
+    The OD-18 probe form of bng_eastnorthasbng: the same Rust kernel as the session's `d` rung, fed a
+    batch at a time. A wheel without the platform build answers row by row, as `bng_eastnorthasbng`.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from databricks.labs.gbx import _rs
+
+    for e, n, r in batches:
+        if _rs.unavailable_reason():
+            yield pd.Series([bng_eastnorthasbng(a, b, c) for a, b, c in zip(e, n, r)])
+            continue
+        out = np.full(len(e), None, dtype=object)
+        ev = e.to_numpy(dtype="float64", na_value=np.nan)
+        nv = n.to_numpy(dtype="float64", na_value=np.nan)
+        ok = ~np.isnan(ev) & ~np.isnan(
+            nv
+        )  # a NULL coordinate is NULL before its resolution is read
+        for raw in pd.unique(r[ok].dropna()):
+            mask = ok & (r == raw).to_numpy()
+            out[mask] = _rs.bng_cells(ev[mask], nv[mask], _res(raw)).to_numpy(
+                zero_copy_only=False
+            )
+        yield pd.Series(out)
+
+
 def _warp(raster: bytes, crs, fn: str) -> bytes:
     from rasterio.io import MemoryFile
 

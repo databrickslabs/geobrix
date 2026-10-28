@@ -146,16 +146,27 @@ class _Ctx:
     setups: Set[str] = dataclasses.field(default_factory=set)
 
 
+def _cannot_run_here(form: Form, uc: Optional[str]) -> Optional[str]:
+    """Why this run cannot time the form (None when it can): an L4 form needs a UC schema, `d` the Rust build."""
+    if form.level == "L4" and not uc:
+        return "no UC schema given (--levels-uc)"
+    if form.level == "L3" and form.variant == "d":
+        from databricks.labs.gbx import _rs
+
+        why = _rs.unavailable_reason()
+        return f"Rust kernels unavailable: {why}" if why else None
+    return None
+
+
 def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
     from databricks.labs.gbx import register
     from databricks.labs.gbx.bench import levels_forms as lf
     from databricks.labs.gbx.manifest import resolve_ref
 
     spark, uc = ctx.spark, ctx.uc
-    if form.level == "L4" and not uc:
-        return _row(
-            base, note="no UC schema given (--levels-uc)", status="na_by_design"
-        )
+    gone = _cannot_run_here(form, uc)
+    if gone:
+        return _row(base, note=gone, status="na_by_design")
     src = lf.INPUTS[form.input](spark, requested, ctx.corpus, ctx.schema)
     if src is None:
         return _row(

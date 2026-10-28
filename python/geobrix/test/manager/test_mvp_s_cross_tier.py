@@ -7,7 +7,7 @@ import importlib
 
 import pytest
 
-from databricks.labs.gbx import manifest, register
+from databricks.labs.gbx import _rs, manifest, register
 from databricks.labs.gbx.bench import oracles
 from databricks.labs.gbx.manager import capabilities
 
@@ -58,6 +58,8 @@ def _column_function(sql_name):
 
 @pytest.mark.parametrize("fn,level,variant,api", list(_cases()))
 def test_mvp_s_oracle_session(request, tmp_path, fn, level, variant, api):
+    if (level, variant) == ("L3", "d") and _rs.unavailable_reason():
+        pytest.skip(_rs.unavailable_reason())
     spark = request.getfixturevalue("spark" if level == "L3" else "jvm_spark")
     raw = variant == "raw"
     register(spark, only=[fn], _levels={fn: (level, "-" if raw else variant)})
@@ -109,6 +111,54 @@ def test_mvp_s_oracle_uc_handlers(tmp_path):
     ran = oracles.run_handlers(oracles.MVP_S, tmpdir=str(tmp_path))
     assert [m for _, m in ran if m] == []
     assert len(ran) == sum("uc" in c.surfaces for c in oracles.MVP_S)
+
+
+def test_uc_batch_handler_answers_the_bng_rows_like_the_scalar_handler():
+    """The Rust-backed PARAMETER STYLE PANDAS handler (the scalar one when this wheel has no build)."""
+    import pandas as pd
+
+    from databricks.labs.gbx.uc.handlers import bng_eastnorthasbng_batch
+
+    rows = [
+        c
+        for c in oracles.MVP_S
+        if c.fn == "gbx_bng_eastnorthasbng"
+        and "uc" in c.surfaces
+        and c.kind in ("exact", "null")
+    ]
+    e, n, r = (list(col) for col in zip(*[c.args for c in rows]))
+    res = pd.Series([None if x is None else str(x) for x in r], dtype=object)
+    (out,) = bng_eastnorthasbng_batch(
+        [(pd.Series(e, dtype="float64"), pd.Series(n, dtype="float64"), res)]
+    )
+    assert list(out) == [c.expect if c.kind == "exact" else None for c in rows]
+
+
+def test_a_missing_or_unloadable_rust_build_falls_back_to_python(tmp_path, monkeypatch):
+    """The loader says why (no raise), the registrar picks c1, and the batch handler answers row by row."""
+    import pandas as pd
+
+    from databricks.labs.gbx.manager import l3
+    from databricks.labs.gbx.uc.handlers import bng_eastnorthasbng_batch
+
+    fn = manifest.load().functions["gbx_bng_eastnorthasbng"]
+    for build, said in (("none", "no Rust build"), ("corrupt", "failed to load")):
+        rs_dir = tmp_path / build
+        rs_dir.mkdir()
+        if build == "corrupt":
+            (rs_dir / "_gbxrs.abi3.so").write_bytes(b"not a shared object")
+        monkeypatch.setattr(_rs, "_rs_dir", lambda d=rs_dir: d)
+        monkeypatch.setattr(_rs, "_MOD", None)
+        monkeypatch.setattr(_rs, "_WHY", None)
+        assert said in _rs.unavailable_reason()
+        variant, skip = l3.l3_variant(fn)
+        assert variant == "c1" and _rs.unavailable_reason() in skip
+        cols = (
+            pd.Series([530000.0, None]),
+            pd.Series([180000.0, 1.0]),
+            pd.Series(["3", "3"]),
+        )
+        assert list(next(bng_eastnorthasbng_batch([cols]))) == ["TQ3080", None]
 
 
 @pytest.mark.parametrize(

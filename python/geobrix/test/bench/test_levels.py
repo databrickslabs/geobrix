@@ -11,6 +11,7 @@ import types
 
 import pytest
 
+from databricks.labs.gbx import _rs
 from databricks.labs.gbx.bench import attribution
 from databricks.labs.gbx.bench import cluster as cl
 from databricks.labs.gbx.bench import levels
@@ -41,13 +42,22 @@ def test_levels_leg_runs_mvp_s_light_forms(spark_session_local, tmp_path):
     ok = [r for r in rows if r.status == "ok"]
     assert all(r.iter_median_s > 0 and r.rows > 0 and r.output_fingerprint for r in ok)
     c0 = [r for r in ok if r.fn == B and r.form == "c0"]
-    # at each scale every variant computes the same cells; `floor` is not one (a constant)
-    cells = {
-        (r.rows, r.output_fingerprint) for r in ok if r.fn == B and r.form != "floor"
-    }
-    assert len(cells) == len({rows for rows, _ in cells})
+    # at each scale c0, c1 and d compute the same cells (`floor` is a constant, not a variant);
+    # `d` is a row that says "Rust kernels unavailable" when this host has no build
+    no_rust = _rs.unavailable_reason() is not None
+    cells = {}
+    for r in ok:
+        if r.fn == B and r.form != "floor":
+            cells.setdefault(r.rows, {})[r.form] = r.output_fingerprint
+    assert len(cells) == 2 and all(
+        set(forms) == ({"c0", "c1"} if no_rust else {"c0", "c1", "d"})
+        and len(set(forms.values())) == 1
+        for forms in cells.values()
+    )
     # No tile corpus here: the raster forms are skipped with a reason, not dropped.
-    assert {r.fn for r in rows if r.status == "na_by_design"} == {RST}
+    assert {r.fn for r in rows if r.status == "na_by_design"} == (
+        {RST, B} if no_rust else {RST}
+    )
     for r in ok:
         assert "attr=" in r.note and r.compute == "dedicated" and r.native_s is None
         if "attr=rest" in r.note:  # classic reads the Spark REST API

@@ -11,7 +11,10 @@
      "levels": {
        "L1": {"companion": "com.databricks.labs.gbx.gridx.bng.BNG_EastNorthAsBNG"},
        "L2": {"class": "com.databricks.labs.gbx.kernels.udf.BngEastNorthAsBngUdf", "returns": "string"},
-       "L3": {"register": "udf", "variants": {"c0": "databricks.labs.gbx.pygx.functions:_bng_eastnorthasbng_udf"}},
+       "L3": {"register": "udf", "variants": {
+         "c0": "databricks.labs.gbx.pygx.functions:_bng_eastnorthasbng_udf",
+         "c1": "databricks.labs.gbx.pygx._accel:bng_eastnorthasbng_c1",
+         "d": "databricks.labs.gbx.pygx._accel:bng_eastnorthasbng_d"}},
        "L4": {"handler": "databricks.labs.gbx.uc.handlers:bng_eastnorthasbng", "deps": ["h3", "shapely"]}},
      "oracle": "MVP_S"},
     {"sql_name": "gbx_rst_transformcrs", "family": "raster-tile-scalar", "kind": "scalar",

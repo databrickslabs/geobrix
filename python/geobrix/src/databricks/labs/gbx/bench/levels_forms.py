@@ -164,6 +164,8 @@ FORMS: Dict[str, List[Form]] = {
         _f("L1", "-", B, "bng_points", _BNG, computes=("dedicated",)),
         _f("L2", "-", B, "bng_points", _BNG, computes=("dedicated", "standard")),
         _f("L3", "c0", B, "bng_points", _BNG),
+        _f("L3", "c1", B, "bng_points", _BNG),
+        _f("L3", "d", B, "bng_points", _BNG),
         Form(
             "S",
             B,

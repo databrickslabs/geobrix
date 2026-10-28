@@ -24,6 +24,7 @@ from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 from .test_tessellate_centroid_window import _oracle_and_check, _raster
 
 
+@pytest.mark.perf
 def test_centroid_assignment_memory_is_bounded():
     b = _raster(2048, 2048)  # 4.2 M px
     with MemoryFile(b) as mf, mf.open() as ds:
@@ -38,6 +39,7 @@ def test_centroid_assignment_memory_is_bounded():
     assert peak / (2048 * 2048) < 64, f"{peak / (2048 * 2048):.1f} B/px"
 
 
+@pytest.mark.perf
 def test_single_strip_source_memory_is_bounded():
     # One GTiff strip holds the whole image: the block height must not set the strip.
     b = _raster(2048, 2048, blockysize=2048)

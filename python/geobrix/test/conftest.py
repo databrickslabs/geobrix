@@ -170,6 +170,28 @@ def pytest_collection_modifyitems(items):
     )
 
 
+@pytest.fixture
+def no_backoff_sleep(monkeypatch):
+    """The retry back-offs of the code under test without the waiting.
+
+    ``core._retry`` (the FUSE transient-miss retry: linear back-off, 10 attempts, ~22 s on a file
+    that is not there) and tenacity (the STAC search retry: exponential from 4 s) sleep with
+    ``time.sleep`` for real. The tests need the retries, not the wait; only the modules' own
+    ``time`` is replaced, so no other sleep changes. Use it with
+    ``pytestmark = pytest.mark.usefixtures("no_backoff_sleep")``.
+    """
+    import types
+
+    from databricks.labs.gbx.core import _retry
+
+    quick = types.SimpleNamespace(sleep=lambda seconds: None)
+    monkeypatch.setattr(_retry, "time", quick)
+    if _importable("tenacity"):
+        import tenacity.nap
+
+        monkeypatch.setattr(tenacity.nap, "time", quick)
+
+
 @pytest.fixture(scope="session")
 def spark_connect_local():
     """A local Spark Connect session (`remote("local[2]")`), started once per session."""

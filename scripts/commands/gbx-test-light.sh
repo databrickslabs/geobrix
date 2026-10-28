@@ -17,7 +17,8 @@ show_help() {
     echo ""
     echo -e "${CYAN}Options:${NC}"
     echo -e "  ${GREEN}--path <dir>${NC}           Test directory or file; repeatable (default: every light dir, in the light CI phase order)"
-    echo -e "  ${GREEN}--markers <expr>${NC}       Extra pytest marker expression, ANDed with 'not integration' (see gbx:test:pyrx)"
+    echo -e "  ${GREEN}--markers <expr>${NC}       Extra pytest marker expression, ANDed with '(not integration) and (not perf)' (see gbx:test:pyrx)"
+    echo -e "  ${GREEN}--perf${NC}                 Also run the perf-marked cases (slow timing / memory tests), which the unit loop skips"
     echo -e "  ${GREEN}--docker${NC}               Run in the geobrix-dev container instead of the host venv (see gbx:test:pyrx)"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
     print_lock_help

@@ -15,7 +15,8 @@ The host run sets `TZ=UTC` (as the container and the CI runners are), and points
 ## Options
 
 - `--path <dir>` — test file or directory; repeatable. Any light dir listed in `_LIGHT_TEST_DIRS` (`python/geobrix/test/conftest.py`), e.g. `python/geobrix/test/zarr/test_manifest.py` (default: `python/geobrix/test/pyrx/`)
-- `--markers <expr>` — extra pytest marker expression, ANDed with the default `not integration`: `--markers 'not delta'` runs `-m '(not integration) and (not delta)'`. Integration tests stay excluded
+- `--markers <expr>` — extra pytest marker expression, ANDed with the default `(not integration) and (not perf)`: `--markers 'not delta'` runs `-m '((not integration) and (not perf)) and (not delta)'`. Integration tests stay excluded
+- `--perf` — also run the `perf`-marked cases: slow tessellate, geomk and streamed-merge tests that measure time or memory (about two minutes in all). The unit loop skips them by default; CI (which calls pytest directly with `-m 'not integration'`) still runs them
 - `--docker` — run in the `geobrix-dev` container instead of the host venv (takes the container lock; see below)
 - `--log <path>` — write output to `test-logs/<path>` (relative) or an absolute path
 - `--no-wait` - Fail at once (exit 75) if another test run holds the container lock, instead of waiting for it (see "One test run at a time")

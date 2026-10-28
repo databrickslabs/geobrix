@@ -11,6 +11,9 @@ from pyspark.sql.types import StructType
 
 from databricks.labs.gbx.ds import paths as P
 
+# A missing file is retried with a linear back-off (~22 s a call); the tests need the retries only.
+pytestmark = pytest.mark.usefixtures("no_backoff_sleep")
+
 # Streaming file sources need an explicit schema (binaryFile's fixed layout).
 _BINARY_SCHEMA = "path string, modificationTime timestamp, length long, content binary"
 

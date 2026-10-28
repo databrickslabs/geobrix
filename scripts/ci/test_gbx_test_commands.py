@@ -355,13 +355,17 @@ def test_markers_narrow_the_default_and_pytest_addopts_reaches_pytest(sandbox):
 
     sandbox.run("gbx-test-pyrx.sh", "--path", path, "--markers", "not delta")
     words = argv.read_text().splitlines()
-    assert _last_m(words) == "(not integration) and (not delta)"
+    assert _last_m(words) == "((not integration) and (not perf)) and (not delta)"
 
     sandbox.run("gbx-test-light.sh", "--path", path, "--markers", "slow or fast")
     words = argv.read_text().splitlines()
-    assert _last_m(words) == "(not integration) and (slow or fast)"
+    assert _last_m(words) == "((not integration) and (not perf)) and (slow or fast)"
 
-    sandbox.run("gbx-test-pyrx.sh", "--path", path)  # no --markers: unchanged
+    sandbox.run("gbx-test-pyrx.sh", "--path", path)  # no --markers: the unit loop skips perf
+    words = argv.read_text().splitlines()
+    assert _last_m(words) == "(not integration) and (not perf)"
+
+    sandbox.run("gbx-test-pyrx.sh", "--path", path, "--perf")  # opt in to the perf cases
     words = argv.read_text().splitlines()
     assert _last_m(words) == "not integration"
 
@@ -378,7 +382,7 @@ def test_markers_narrow_the_default_and_pytest_addopts_reaches_pytest(sandbox):
         if "pytest" in c[-1]
     ][-1]
     words = shlex.split(command[-1])
-    assert _last_m(words) == "(not integration) and (not delta)"
+    assert _last_m(words) == "((not integration) and (not perf)) and (not delta)"
     assert env["PYTEST_ADDOPTS"] == "--durations=5"
 
 

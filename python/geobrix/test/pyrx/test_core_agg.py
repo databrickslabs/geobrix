@@ -333,6 +333,7 @@ def test_reproject_dataset_target_res_honored():
     assert abs(natural_xres - 0.01) > 1e-4
 
 
+@pytest.mark.perf
 def test_merge_streaming_multicrs_produces_valid_output(monkeypatch):
     """Streaming merge with CRS-mismatched tiles returns valid single-CRS output.
 

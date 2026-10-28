@@ -492,6 +492,7 @@ def _depends_on_h3_boundary_ulps(key: str) -> bool:
     return key.startswith("h3|") and key.endswith("|aligned")
 
 
+@pytest.mark.perf
 def test_geomk_golden() -> None:
     """Assert current light-tier output matches the committed golden corpus.
 

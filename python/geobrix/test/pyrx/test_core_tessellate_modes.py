@@ -4,6 +4,7 @@ iter_tessellate_h3 yields (cellid_int, gtiff_bytes) 2-tuples.
 """
 
 import numpy as np
+import pytest
 import rasterio
 from rasterio.io import MemoryFile
 
@@ -59,6 +60,7 @@ def test_centroid_mode_invalid_raises():
                 list(T.iter_tessellate_h3(ds, resolution=9, mode="bad_mode"))
 
 
+@pytest.mark.perf
 def test_covering_mode_unchanged():
     """Passing mode='covering' (explicit default) still yields cells (backward compat)."""
     tile = _tile_4326()
@@ -68,6 +70,7 @@ def test_covering_mode_unchanged():
     assert len(cells) > 0, "covering mode must yield at least one cell"
 
 
+@pytest.mark.perf
 def test_covering_mode_is_overlap_set():
     """covering mode cell ids must exactly match h3.polygon_to_cells_experimental overlap set."""
     import h3

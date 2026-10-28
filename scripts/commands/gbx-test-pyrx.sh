@@ -15,8 +15,10 @@ show_help() {
     echo -e "${CYAN}Options:${NC}"
     echo -e "  ${GREEN}--path <dir>${NC}           Test directory or file; repeatable. Any light dir (default: python/geobrix/test/pyrx/)"
     echo -e "                          e.g. python/geobrix/test/zarr/test_manifest.py. The light dirs are _LIGHT_TEST_DIRS in test/conftest.py"
-    echo -e "  ${GREEN}--markers <expr>${NC}       Extra pytest marker expression, ANDed with the default 'not integration',"
-    echo -e "                          e.g. --markers 'not delta' (runs as -m '(not integration) and (not delta)')"
+    echo -e "  ${GREEN}--markers <expr>${NC}       Extra pytest marker expression, ANDed with the default '(not integration) and (not perf)',"
+    echo -e "                          e.g. --markers 'not delta' (runs as -m '((not integration) and (not perf)) and (not delta)')"
+    echo -e "  ${GREEN}--perf${NC}                 Also run the perf-marked cases (slow tessellate / geomk / streamed-merge timing and memory"
+    echo -e "                          tests); the default unit loop skips them, CI runs them"
     echo -e "  ${GREEN}--docker${NC}               Run in the geobrix-dev container instead of the host venv (default). Only for GDAL"
     echo -e "                          natives, the JAR and parity"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
@@ -49,6 +51,7 @@ TEST_PATHS=()
 LOG_PATH=""
 USE_DOCKER=0
 EXTRA_MARKERS=""
+WITH_PERF=0
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -65,6 +68,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --docker)
             USE_DOCKER=1
+            shift
+            ;;
+        --perf)
+            WITH_PERF=1
             shift
             ;;
         --log)
@@ -99,9 +106,12 @@ fi
 show_banner "GeoBrix: Light-tier Tests (pyrx, zarr, ...; no JAR)"
 setup_log_file "$LOG_PATH"
 
-# The marker expression: integration tests are always excluded; --markers narrows further.
-MARKERS="not integration"
-[[ -n "$EXTRA_MARKERS" ]] && MARKERS="(not integration) and ($EXTRA_MARKERS)"
+# The marker expression: integration tests are always excluded, and so are the perf-marked cases
+# (the unit loop; --perf includes them); --markers narrows further.
+BASE_MARKERS="(not integration) and (not perf)"
+[[ $WITH_PERF -eq 1 ]] && BASE_MARKERS="not integration"
+MARKERS="$BASE_MARKERS"
+[[ -n "$EXTRA_MARKERS" ]] && MARKERS="($BASE_MARKERS) and ($EXTRA_MARKERS)"
 MARKERS_Q="$(printf '%q' "$MARKERS")"   # one shell word inside the `bash -c` command string below
 
 echo -e "${CYAN}Test path: ${YELLOW}${TEST_PATHS[*]}${NC}"

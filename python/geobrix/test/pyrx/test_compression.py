@@ -53,6 +53,17 @@ def test_creation_opts_none():
     assert "zstd_level" not in o and "zlevel" not in o
 
 
+@pytest.mark.parametrize("driver", ["GTiff", "COG"])
+@pytest.mark.parametrize("name", ["raw", "none", "RAW", "NONE"])
+def test_creation_opts_no_codec_names_say_none_explicitly(name, driver):
+    """'raw' and 'none' mean no compression for every driver. The key is emitted, not omitted:
+    the COG driver compresses with LZW when COMPRESS is absent, and a profile copied from a
+    compressed source would keep its codec."""
+    assert C.creation_opts("uint16", compress=name, driver=driver) == {
+        "compress": "none"
+    }
+
+
 def test_auto_plus_explicit_level_warns():
     with pytest.warns(UserWarning, match="auto"):
         C.creation_opts("int16", decoded_bytes=1024, compress="auto", level=22)

@@ -239,7 +239,8 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
     data = ds.read()
 
     # Route compression through the authority for codec/level/predictor.
-    # Map "RAW" -> "none" so the authority emits no compression keys.
+    # Map "RAW" -> "none": the authority emits compress=none (the COG driver
+    # would otherwise default to LZW).
     # "AUTO" is passed through directly so creation_opts picks size-adaptive
     # ZSTD level from decoded_bytes (the ZSTD baseline, same as the GTiff path).
     _comp_arg = "none" if compression == "RAW" else compression.lower()
@@ -248,7 +249,7 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
     )
 
     # The source's layout and codec keys are not the COG driver's (cog_profile); merge the authority
-    # options (codec + level + predictor), which are empty for RAW.
+    # options (codec + level + predictor); for RAW that is compress=none alone.
     profile = _comp.cog_profile(ds.profile)
     profile.update(
         driver="COG",
@@ -341,7 +342,8 @@ def cog_convert_file(
         _src_nbits = _src.tags(1, ns="IMAGE_STRUCTURE").get("NBITS")
 
     # Route compression through the authority for codec/level/predictor.
-    # Map "RAW" -> "none" so the authority emits no compression keys.
+    # Map "RAW" -> "none": the authority emits compress=none (the COG driver
+    # would otherwise default to LZW).
     _comp_arg = (
         "none" if str(compression).upper() == "RAW" else str(compression).lower()
     )
@@ -360,7 +362,7 @@ def cog_convert_file(
         overview_resampling=str(overview_resampling).upper(),
         bigtiff=bigtiff_val,
     )
-    # Merge authority options (codec + level + predictor); RAW path emits empty dict.
+    # Merge authority options (codec + level + predictor); RAW is compress=none alone.
     creation.update(_comp_opts)
 
     with rasterio.Env(GDAL_CACHEMAX=200):

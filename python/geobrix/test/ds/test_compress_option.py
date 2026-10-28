@@ -288,6 +288,31 @@ def src_zstd_tif(tmp_path_factory):
     return str(p)
 
 
+@pytest.mark.parametrize(
+    "format,opts",
+    [
+        ("raster_gbx", {"cog": "true", "compress": "none"}),
+        ("raster_gbx", {"cog": "true", "compress": "raw"}),
+        ("raster_gbx", {"cog": "true", "cogCompression": "raw"}),
+        ("cog_gbx", {"compress": "none"}),
+        ("cog_gbx", {"compress": "raw"}),
+    ],
+    ids=lambda v: (
+        v if isinstance(v, str) else "-".join(f"{k}={x}" for k, x in v.items())
+    ),
+)
+def test_a_cog_written_with_no_codec_has_no_compression(
+    spark_session, src_zstd_tif, tmp_path, format, opts
+):
+    """The COG driver compresses with LZW when COMPRESS is absent: 'none' and 'raw' must say
+    NONE. The source is ZSTD, so neither the driver default nor the source's codec can pass.
+    """
+    df = _read_df(spark_session, src_zstd_tif)
+    with _write_and_open(df, tmp_path / "out", format=format, **opts) as ds:
+        assert ds.compression in (None, Compression.none), ds.compression
+        assert "COMPRESSION" not in ds.tags(ns="IMAGE_STRUCTURE")
+
+
 def test_gtiff_auto_already_zstd_fast_path(spark_session, src_zstd_tif, tmp_path):
     """GTiff compress='auto' on already-ZSTD input: output is ZSTD + bytes unchanged.
 

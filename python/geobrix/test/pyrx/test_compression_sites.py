@@ -1152,3 +1152,103 @@ def test_a_striped_source_logs_no_blockxsize_warning(op, caplog):
                 assert call()
     noisy = [r.getMessage() for r in caplog.records if "BLOCKXSIZE" in r.getMessage()]
     assert noisy == [], noisy
+
+
+# ---------------------------------------------------------------------------
+# The codec names that mean "no compression" write none at every site that accepts them
+# ---------------------------------------------------------------------------
+
+
+def _deflate_tiled_src(dtype="uint16", sz=64) -> bytes:
+    """A tiled DEFLATE GTiff: a codec to inherit by mistake, and not the COG driver's default (LZW)."""
+    a = (np.arange(sz * sz, dtype="int64").reshape(1, sz, sz) % 251).astype(dtype)
+    prof = dict(
+        driver="GTiff",
+        width=sz,
+        height=sz,
+        count=1,
+        dtype=dtype,
+        crs="EPSG:32630",
+        transform=from_bounds(500000, 5500000, 500640, 5500640, sz, sz),
+        compress="deflate",
+        tiled=True,
+        blockxsize=16,
+        blockysize=16,
+    )
+    with MemoryFile() as mf:
+        with mf.open(**prof) as d:
+            d.write(a)
+        return mf.read()
+
+
+def _assert_no_codec(b: bytes, *, context: str) -> None:
+    with MemoryFile(bytes(b)) as m, m.open() as ds:
+        img = ds.tags(ns="IMAGE_STRUCTURE")
+        assert "COMPRESSION" not in img, f"{context}: {img}"
+        assert ds.compression in (
+            None,
+            Compression.none,
+        ), f"{context}: {ds.compression}"
+
+
+def _no_codec_cog_convert(name, tmp_path):
+    from databricks.labs.gbx.pyrx.core.analysis import cog_convert
+
+    with MemoryFile(_deflate_tiled_src()) as m, m.open() as ds:
+        return cog_convert(ds, name, 16, "AVERAGE")
+
+
+def _no_codec_cog_convert_file(name, tmp_path):
+    from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
+
+    src, dst = tmp_path / "src.tif", tmp_path / "dst.tif"
+    src.write_bytes(_deflate_tiled_src())
+    cog_convert_file(str(src), str(dst), name, 16, "AVERAGE")
+    return dst.read_bytes()
+
+
+def _no_codec_encode_tile(fmt):
+    def run(name, tmp_path):
+        from databricks.labs.gbx.ds._encode import encode_tile
+
+        src = tmp_path / "src.tif"
+        src.write_bytes(_deflate_tiled_src())
+        with rasterio.open(src) as ds:
+            return encode_tile(ds, (0, 0, 64, 64), str(src), "", name, fmt, 16)[1]
+
+    return run
+
+
+def _no_codec_tile_to_bytes_cog(name, tmp_path):
+    from databricks.labs.gbx.ds._write import tile_to_bytes
+
+    return tile_to_bytes(
+        0, _deflate_tiled_src(), {"compression": name}, force_driver="COG"
+    )
+
+
+def _no_codec_apply_compression(name, tmp_path):
+    from databricks.labs.gbx.ds.writer import _apply_compression
+
+    return _apply_compression(_deflate_tiled_src(), name, None, None)
+
+
+_NO_CODEC_SITES = {
+    "cog_convert": (_no_codec_cog_convert, ["raw", "RAW"]),
+    "cog_convert_file": (_no_codec_cog_convert_file, ["raw", "RAW"]),
+    "encode_tile_cog": (_no_codec_encode_tile("cog"), ["raw", "none"]),
+    "encode_tile_gtiff": (_no_codec_encode_tile("gtiff"), ["raw", "none"]),
+    "tile_to_bytes_cog": (_no_codec_tile_to_bytes_cog, ["raw", "none"]),
+    "apply_compression": (_no_codec_apply_compression, ["raw", "none"]),
+}
+
+
+@pytest.mark.parametrize(
+    "site,name",
+    [(s, n) for s, (_, names) in _NO_CODEC_SITES.items() for n in names],
+)
+def test_a_no_codec_name_writes_no_compression(site, name, tmp_path):
+    """Read back ``COMPRESSION``: absent. The COG driver gave LZW for an omitted COMPRESS, and a
+    site that starts from the source's profile kept the source's DEFLATE."""
+    out = _NO_CODEC_SITES[site][0](name, tmp_path)
+    _assert_no_codec(out, context=f"{site}({name})")

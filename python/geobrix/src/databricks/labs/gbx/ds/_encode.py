@@ -77,6 +77,8 @@ def encode_tile(
         # Route through the compression authority for size-adaptive levels.
         cog_compression = compression if str(compression).lower() != "auto" else "AUTO"
         compression_str = str(cog_compression).upper()
+        if compression_str == "NONE":
+            compression_str = "RAW"  # the COG profile names call "no compression" raw
 
         # If not AUTO, validate compression name (same set as analysis.cog_convert).
         if compression_str != "AUTO":

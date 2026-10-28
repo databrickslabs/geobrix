@@ -386,6 +386,11 @@ formats.
 
 ### Raster writers
 
+- **The lightweight COG writers write `raw` and `none` uncompressed.** `raster_gbx` with
+  `cog=true`, `cog_gbx` and `rst_cog_convert(tile, 'RAW')` named no codec for `raw` or `none`, and
+  the COG driver then compresses with LZW, so the file came out LZW-compressed. A COG written from a
+  tile whose `compression` metadata says `raw` or `none` kept the source's codec for the same
+  reason. They now write no compression. The GeoTIFF path already did.
 - **The heavyweight `gdal` writer writes Zarr with its default options.** The default compression,
   DEFLATE, is a TIFF codec name the Zarr driver does not have, so a Zarr write failed with
   `Compressor/decompressor for DEFLATE not available` unless the tile's `compression` named a Zarr

@@ -155,7 +155,9 @@ def creation_opts(
         'zstd' — explicit ZSTD; level defaults to _AUTO_DEFAULT_LEVEL.
         'deflate' — DEFLATE; level (zlevel) defaults to 6.
         'lzw' — LZW; predictor derived from dtype.
-        'none'/'raw' — no compression.
+        'none'/'raw' — no compression, emitted as ``compress=none`` for every driver: the
+        COG driver compresses with LZW when COMPRESS is absent, and a profile copied from a
+        compressed source would keep that source's codec.
         Any other string — passed through as-is (no predictor assumption).
     level:
         Optional level override. Ignored (with UserWarning) when compress='auto'.
@@ -221,7 +223,7 @@ def _codec_opts(dtype, decoded_bytes, compress, level, predictor, driver) -> dic
 
     c = str(compress).lower()
     if c in ("none", "raw"):
-        return {}  # no compression keys
+        return {"compress": "none"}  # no level / predictor keys either
 
     if c == "zstd":
         opts = {"compress": "zstd"}

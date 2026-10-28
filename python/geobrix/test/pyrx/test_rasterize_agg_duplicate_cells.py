@@ -136,3 +136,20 @@ def test_two_spellings_of_one_bng_cell_burn_the_largest_value_in_any_order():
         pixels, nodata = _burn("bng", order)
         burned = set(pixels[pixels != nodata].tolist())
         assert 9.0 in burned and 2.0 not in burned, burned
+
+
+def test_a_quadbin_id_as_signed_and_unsigned_is_one_cell_with_the_largest_value():
+    cells = dc.GRIDS["quadbin"]()
+    first = cells[0]
+    negative = first - (1 << 64)  # the same 64 bits, read as a signed integer
+    others = [(c, 4.0 + i) for i, c in enumerate(cells[1:4])]
+    rows = [(first, 9.0), (negative, 2.0)] + others
+    for order in (rows, rows[::-1]):
+        # object dtype: a Python int below -2**63 does not fit an int64 column
+        cellid = pd.Series([c for c, _ in order], dtype="object")
+        value = pd.Series([v for _, v in order], dtype="float64")
+        raster = rx._rst_quadbin_rasterize_agg_udf.func(cellid, value, *[None] * 10)
+        with _serde.open_tile(bytes(raster)) as ds:
+            pixels, nodata = ds.read(1), ds.nodata
+        burned = set(pixels[pixels != nodata].tolist())
+        assert 9.0 in burned and 2.0 not in burned, burned

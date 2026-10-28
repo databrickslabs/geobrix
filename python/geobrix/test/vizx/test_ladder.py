@@ -168,6 +168,49 @@ def test_audit_max_tile_bytes_for_archive():
     ), f"max_tile_bytes should be positive, got {entry['max_tile_bytes']}"
 
 
+@pytest.mark.parametrize("plain", [False, True], ids=["gzip", "uncompressed-directory"])
+def test_the_archive_helpers_read_the_tiles_of_either_directory_layout(plain):
+    """The tile-size audit, the MVT layer discovery and the raster tile size read the same tiles
+    whether the archive's directories are gzipped or stored plain (the heavy writer's layout).
+    """
+    import io
+    from test.pmtiles_light._archives import uncompressed_internals
+
+    import mapbox_vector_tile as mvt
+    from PIL import Image
+    from pmtiles.tile import TileType
+
+    from databricks.labs.gbx.vizx._maplibre import (
+        _max_tile_bytes,
+        _mvt_layer_names_from_bytes,
+        _raster_tile_px,
+    )
+
+    from .test_pmtiles_autofit import _build_archive
+
+    vector = mvt.encode(
+        [
+            {
+                "name": "roads",
+                "features": [{"geometry": "POINT(10 10)", "properties": {}}],
+            }
+        ]
+    )
+    png = io.BytesIO()
+    Image.new("RGBA", (32, 32), (1, 2, 3, 255)).save(png, format="PNG")
+    png = png.getvalue()
+    archives = {
+        "vector": _build_archive([(0, 0, 0, vector)], TileType.MVT),
+        "raster": _build_archive([(0, 0, 0, png)], TileType.PNG),
+    }
+    if plain:
+        archives = {k: uncompressed_internals(v) for k, v in archives.items()}
+
+    assert _max_tile_bytes(archives["vector"]) == len(vector)
+    assert _mvt_layer_names_from_bytes(archives["vector"]) == ["roads"]
+    assert _raster_tile_px({"bytes": archives["raster"]}) == 32
+
+
 # ---------------------------------------------------------------------------
 # Bug fix: simplify rung must run BEFORE the over-budget raw-bytes bail.
 # ---------------------------------------------------------------------------

@@ -245,6 +245,24 @@ def test_cell_grouped_file_contains_banner():
     assert "=== grouped FILE-amortization starting ===" in cluster._CELL_GROUPED_FILE
 
 
+def test_cell_pmtiles_compiles_and_imports_what_exists():
+    """The PMTiles cell is notebook source that only runs on a cluster: it must at least compile,
+    and the directory iterator it decodes the archives with must be importable."""
+    import importlib
+    import re
+
+    from databricks.labs.gbx.bench import cluster
+
+    compile(cluster._CELL_PMTILES, "<_CELL_PMTILES>", "exec")
+    for module, name in re.findall(
+        r"^from (databricks\.labs\.gbx\.\S+) import (\w+)", cluster._CELL_PMTILES, re.M
+    ):
+        try:  # a name in the module, else a submodule of the package
+            assert hasattr(importlib.import_module(module), name), (module, name)
+        except AssertionError:
+            importlib.import_module(f"{module}.{name}")
+
+
 # ---------------------------------------------------------------------------
 # grouped_file.run_grouped_file: [grouped] mode-start print
 # ---------------------------------------------------------------------------

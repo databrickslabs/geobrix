@@ -214,14 +214,9 @@ case class RST_BNG_RasterizeAgg(
         // Resolution from the cells (derived from each cell's Long id); error on mixed.
         val resolution = RST_BNG_RasterizeAgg.resolutionOf(buffer.cells.iterator.map(_._1))
 
-        // Canonical fold order: sort by (cellId, value) and build the lookup in that order,
-        // so the last write for a repeated cell is its largest value (a null value was
-        // already turned into 1.0), regardless of row-arrival order.
-        val ordered = buffer.cells.toSeq.sortWith { (a, b) =>
-            if (a._1 != b._1) java.lang.Long.compareUnsigned(a._1, b._1) < 0 else a._2 < b._2
-        }
-        val lut = scala.collection.mutable.LongMap.empty[Double]
-        ordered.foreach { case (cellId, v) => lut.update(cellId, v) }
+        // Canonical fold order (see RasterizeBurn.canonicalLut): the last write for a repeated cell is its largest
+        // value (a null value was already turned into 1.0), regardless of row-arrival order.
+        val lut = RasterizeBurn.canonicalLut(buffer.cells.toSeq)
 
         // Resolve grid spec: explicit extent if fully supplied, else snapped grid.
         val explicit = xminOpt.isDefined && yminOpt.isDefined && xmaxOpt.isDefined &&
@@ -275,16 +270,7 @@ object RST_BNG_RasterizeAgg extends WithExpressionInfo {
     }
 
     /** Resolution of a cell set (derived from each cell's Long id); throws on a mixed-resolution set. */
-    private[agg] def resolutionOf(cellIds: Iterator[Long]): Int = {
-        var res = Int.MinValue
-        cellIds.foreach { c =>
-            val r = BNG.getResolution(BNG.cellDigits(c))
-            if (res == Int.MinValue) res = r
-            else if (r != res) throw new IllegalArgumentException(
-                s"$name: BNG cell set has mixed resolutions ($res and $r)")
-        }
-        res
-    }
+    private[agg] def resolutionOf(cellIds: Iterator[Long]): Int = RasterizeBurn.bngResolutionOf(cellIds)
 
     /** Snapped, lattice-aligned grid spec from a cell set; port of
      *  `cellraster.compute_gridspec` (+ `snap_bounds`).

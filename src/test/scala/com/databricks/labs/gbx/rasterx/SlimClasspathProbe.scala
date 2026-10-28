@@ -2,6 +2,8 @@ package com.databricks.labs.gbx.rasterx
 
 import com.databricks.labs.gbx.kernels.uc.BngUc
 import com.databricks.labs.gbx.kernels.udf.{BngEastNorthAsBngUdf, BngTessellateUdf}
+import com.databricks.labs.gbx.rasterx.expressions.agg.mvp.BngRasterizeCellsBytesUdf
+import org.apache.spark.sql.Row
 
 import scala.jdk.CollectionConverters._
 
@@ -31,6 +33,21 @@ object SlimClasspathProbe {
               chips.size + " " + chips.asScala.map(_.getString(0)).min // six chips; the lowest cell id
           },
           "L2 tessellate bad: " + attempt(tessellate.call(offset, "3km", java.lang.Boolean.FALSE).size.toString),
+          // The rasterize facade needs GDAL natives, which this JVM does not have, so it stops there. What it must not
+          // do is stop sooner, on a class of Catalyst or the unsafe types: the line says what it raised.
+          "L2 rasterize: " + attempt {
+              new BngRasterizeCellsBytesUdf().call(Seq(Row("TQ3080", 1.0)), 530000.0, 180000.0, 532000.0, 182000.0, 2, 2)
+              "burned"
+          },
+          // The classes the merge facade runs on, loaded (it too stops at the natives when called).
+          "L2 merge classes: " + attempt {
+              // scalastyle:off classforname
+              Seq("com.databricks.labs.gbx.kernels.udf.RstMergeArrayBytesUdf",
+                  "com.databricks.labs.gbx.rasterx.operations.MergeRasters$",
+                  "com.databricks.labs.gbx.rasterx.gdal.RasterDriver$").foreach(n => Class.forName(n))
+              // scalastyle:on classforname
+              "loaded"
+          },
           "loadable: " + (if (loadable.isEmpty) "none" else loadable.mkString(",")))
         // scalastyle:off println
         lines.foreach(println)

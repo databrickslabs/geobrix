@@ -141,6 +141,12 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         val nan = decode(burn(Row("TQ3181", Double.NaN) +: cells))._3
         assert(nan.head(1).isNaN && nan(1) == Seq(3.0, 2.0), "a NaN value burns NaN")
         assert(burn(Seq(Row(null, 1.0))) == null && burn(Seq.empty) == null, "no cell id, nothing to burn")
+        // A NaN beside numbers in one cell: a valid ordering puts it last, so it wins, whatever the order or the number
+        // of rows (an invalid one can make the sort raise on 32 rows or more).
+        val crowd = Row("TQ3080", Double.NaN) +: (1 to 200).map(i => Row("TQ3080", i.toDouble)) :+ Row("TQ3180", 2.0)
+        val px = decode(burn(crowd))._3
+        assert(px.head.forall(_ == -9999.0) && px(1)(0).isNaN && px(1)(1) == 2.0, px.toString)
+        assert(decode(burn(crowd.reverse))._3(1)(0).isNaN)
         assert(vsimemEntries() == before, "the facade left in-memory GDAL files behind")
     }
 
@@ -164,7 +170,8 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
           where(classOf[com.fasterxml.jackson.core.JsonParser]), // jackson-core
           where(classOf[com.fasterxml.jackson.databind.ObjectMapper]), // jackson-databind
           where(classOf[com.fasterxml.jackson.annotation.JsonProperty]), // jackson-annotations
-          where(classOf[org.slf4j.Logger]) // slf4j-api
+          where(classOf[org.slf4j.Logger]), // slf4j-api
+          where(classOf[org.gdal.gdal.Dataset]) // the GDAL bindings the raster facades load (not their natives)
         ).distinct.mkString(java.io.File.pathSeparator)
         val javaBin = Paths.get(System.getProperty("java.home"), "bin", "java").toString
         val child = new ProcessBuilder(javaBin, "-cp", classpath, SlimClasspathProbe.getClass.getName.stripSuffix("$"))
@@ -180,6 +187,12 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         // the tessellate facade: six chips for the offset polygon, none of them a core cell, a bad resolution named
         assert(lines.contains("L2 tessellate good: 6 TQ3080"), output)
         assert(lines.exists(l => l.startsWith("L2 tessellate bad: RAISES IllegalStateException") && l.contains("found 3km")), output)
+        // The rasterize facade stops at the GDAL natives (there are none here), never on a Catalyst or unsafe class
+        // its helpers reach: a constant-pool check of the facade alone cannot see that edge, so it is run.
+        val raster = lines.find(_.startsWith("L2 rasterize: ")).getOrElse("")
+        assert(raster.startsWith("L2 rasterize: RAISES"), output)
+        for (banned <- Seq("catalyst", "unsafe", "kryo")) assert(!raster.toLowerCase.contains(banned), output)
+        assert(lines.contains("L2 merge classes: loaded"), output)
         // the classpath really is slim: nothing of Catalyst, the unsafe types or Kryo can load in the child
         assert(lines.contains("loadable: none"), output)
     }

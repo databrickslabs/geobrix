@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions.agg
 
-import com.databricks.labs.gbx.gridx.grid.GridSystem
+import com.databricks.labs.gbx.gridx.grid.{BNG, GridSystem}
 import com.databricks.labs.gbx.rasterx.operations.OSRTransformGeometry
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.gdal.gdal.Dataset
@@ -26,6 +26,35 @@ object RasterizeBurn {
 
     /** NoData sentinel, matching `cellraster._NODATA` in the lightweight tier. */
     val NoData: Double = -9999.0
+
+    /** Resolution of a BNG cell set (read from each cell's Long id); raises on a mixed-resolution set.
+     *
+     *  It lives here and not in the BNG aggregate's companion: that companion implements the Catalyst function
+     *  interface, so calling it needs Catalyst classes that the Java UDF facade does not have on a standard cluster. */
+    def bngResolutionOf(cellIds: Iterator[Long]): Int = {
+        var res = Int.MinValue
+        cellIds.foreach { c =>
+            val r = BNG.getResolution(BNG.cellDigits(c))
+            if (res == Int.MinValue) res = r
+            else if (r != res) throw new IllegalArgumentException(
+                s"gbx_rst_bng_rasterize_agg: BNG cell set has mixed resolutions ($res and $r)")
+        }
+        res
+    }
+
+    /** The cell-value lookup of a set of `(cell id, value)` pairs, a repeated cell keeping its LARGEST value whatever
+     *  order the pairs arrive in: they are written in `(cell id unsigned, value)` order, so the last write for a cell
+     *  is its maximum. [[java.lang.Double.compare]] orders NaN after every number (and `<` does not order it at all,
+     *  which can make the sort raise), so a NaN beside numbers wins.
+     */
+    def canonicalLut(pairs: scala.collection.Seq[(Long, Double)]): scala.collection.mutable.LongMap[Double] = {
+        val lut = scala.collection.mutable.LongMap.empty[Double]
+        pairs.sortWith { (a, b) =>
+            if (a._1 != b._1) java.lang.Long.compareUnsigned(a._1, b._1) < 0
+            else java.lang.Double.compare(a._2, b._2) < 0
+        }.foreach { case (cellId, v) => lut.update(cellId, v) }
+        lut
+    }
 
     /** Burn a cell-value lookup table into `rasterDs`, writing NoData for absent cells.
      *

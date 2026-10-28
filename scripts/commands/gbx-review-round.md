@@ -37,7 +37,9 @@ bash scripts/commands/gbx-review-round.sh [OPTIONS] [-- <extra isaac args>]
   output: nothing to review, and they cost context) are skipped through Isaac's `opt_out.paths`,
   set in `scripts/commands/isaac-review-local.yaml`, which the command passes with `-c`.
   Isaac replaces a list when it layers a config, so that file repeats Isaac's own default
-  `opt_out` paths too. A config you pass yourself after `--` (`-c`) replaces it.
+  `opt_out` paths too. The same file sets `pr_commenting.auto_post_threshold` so every severity
+  (critical, major, minor, info) is reported; Isaac's default drops minor and info. A config you pass
+  yourself after `--` (`-c`) replaces it, and so does `--include-generated` (no config is passed).
 - `--log <path>` — Tee output to a log (`filename` → `test-logs/<name>`).
 - `-h`, `--help` — Show help.
 

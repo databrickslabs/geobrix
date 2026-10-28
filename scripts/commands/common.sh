@@ -298,6 +298,11 @@ GBX_CONTAINER_LOCK="$GBX_CONTAINER_ROOT/scripts/docker/gbx-lock.sh"
 # The `env` words carry this shell's lock overrides into the container: `docker exec` does not
 # pass the host environment, and `run` reads the work-lock file and the timeout from there
 # (`hold` gets the same values through `docker exec -e` in gbx_acquire_test_lock).
+case "$GBX_WORK_LOCK_FILE$GBX_TEST_LOCK_TIMEOUT$GBX_CONTAINER_ROOT" in
+    *[[:space:]]*)
+        echo "ERROR: GBX_WORK_LOCK_FILE, GBX_TEST_LOCK_TIMEOUT and GBX_CONTAINER_ROOT must not contain whitespace (GBX_LOCK_RUN is split into words)" >&2
+        exit 2 ;;
+esac
 GBX_LOCK_RUN="env GBX_WORK_LOCK_FILE=$GBX_WORK_LOCK_FILE GBX_LOCK_TIMEOUT=$GBX_TEST_LOCK_TIMEOUT /bin/bash $GBX_CONTAINER_LOCK run"
 # Command line of the script that sourced this file (written into the lock info and the log).
 GBX_LOCK_CMD="$(basename "${BASH_SOURCE[1]:-$0}") $*"

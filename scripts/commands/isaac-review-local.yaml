@@ -1,5 +1,14 @@
 # Isaac Review config that gbx:review:round layers on Isaac's defaults (isaac review -c).
 #
+# pr_commenting.auto_post_threshold: Isaac's default reporting threshold is critical/major, so
+# minor and info findings are filtered out of a run. Every severity is reported here; the triage
+# of a round decides what matters.
+pr_commenting:
+  auto_post_threshold:
+    critical: true
+    major: true
+    minor: true
+    info: true
 # opt_out removes matching files from the review before any reviewer reads them. Isaac's config
 # merge REPLACES a list rather than appending to it, so the defaults of its own config.yaml
 # (generated and vendored trees) are repeated here, then the generated lock files this repo

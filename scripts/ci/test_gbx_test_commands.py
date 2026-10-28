@@ -789,6 +789,13 @@ def test_the_sdk_is_pinned_and_an_interpreter_older_than_3_11_is_passed_over(
         ("gbx-bench-cluster.sh", [], {}, "push_and_run_bench_on_cluster", []),
         ("gbx-test-bundle-databricks.sh", [], {}, "push_and_run_bundle_on_cluster", []),
         (
+            "gbx-test-bundle-databricks.sh",
+            ["--local"],
+            {},
+            "test_bundle_on_databricks",
+            ["pytest"],  # --local runs the bundle under pytest, which the SDK layer does not carry
+        ),
+        (
             "gbx-test-primitive-databricks.sh",
             [],
             {},
@@ -944,6 +951,10 @@ def test_ci_status_help_is_help_not_the_run_limit(tmp_path):
     )
 
     assert bad.returncode == 1 and "Unknown option" in bad.stderr
+    letters = subprocess.run(
+        ["bash", str(command), "abc"], env=env, capture_output=True, text=True
+    )
+    assert letters.returncode == 1 and "abc" in letters.stderr  # a LIMIT must be a number
     assert not (tmp_path / "gh.log").exists()
 
 
@@ -976,6 +987,8 @@ def test_review_round_skips_the_generated_lock_files_unless_asked(sandbox):
     assert (
         '"third_party/go/vendor/**"' in text
     )  # Isaac's own defaults are repeated: lists replace
+    for severity in ("critical", "major", "minor", "info"):
+        assert f"    {severity}: true" in text  # all severities are reported, not just the top two
 
     assert "-c" not in review("--include-generated")
     assert (
@@ -1094,6 +1107,7 @@ def test_venv_sync_match_container_builds_on_the_containers_python_and_versions(
     lock.write_text(
         "numpy==2.3.4 \\\n    --hash=sha256:aa\nonlylock==9.9 \\\n    --hash=sha256:bb\n"
         "pyspark==4.0.0 \\\n    --hash=sha256:cc\n"
+        'marked==1.0 ; python_version < "3.13" \\\n    --hash=sha256:dd\n'
     )
 
     res = sandbox.run(
@@ -1114,6 +1128,7 @@ def test_venv_sync_match_container_builds_on_the_containers_python_and_versions(
     assert (
         "onlylock==9.9" in first
     )  # a package the container lacks keeps the lock's version
+    assert 'marked==1.0 ; python_version < "3.13"' in first  # environment markers are kept
     # Matching can pull in packages the lock does not name at their newest: they are pinned too.
     pins = next(r for r in reqs if "onlylock" not in r)
     assert pins.split() == [

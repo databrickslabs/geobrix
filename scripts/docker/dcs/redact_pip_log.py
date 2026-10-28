@@ -11,8 +11,9 @@ Usage: python3 redact_pip_log.py <log file>     (PIP_INDEX_URL in the environmen
 """
 
 import os
+import re
 import sys
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 PLACEHOLDER = "<package-index>"
 
@@ -34,13 +35,17 @@ def secrets_in(url: str) -> list[str]:
         host,
         parts.username or "",
         parts.password or "",
+        # a tool may print the credentials with their escapes decoded (ci%40corp as ci@corp)
+        unquote(parts.username or ""),
+        unquote(parts.password or ""),
     }
     return sorted((s for s in found if s), key=len, reverse=True)
 
 
 def redact(text: str, url: str) -> str:
+    """*text* without the index; matched whatever the case, as a host is printed in either."""
     for secret in secrets_in(url):
-        text = text.replace(secret, PLACEHOLDER)
+        text = re.sub(re.escape(secret), PLACEHOLDER, text, flags=re.IGNORECASE)
     return text
 
 

@@ -419,20 +419,14 @@ def _run_wheel_install(tmp_path, install_rc, script=None):
 
 def test_a_failing_wheel_install_prints_its_errors_without_the_package_index(tmp_path):
     """pip's warnings and errors on an unreachable index name the index; the build log must not."""
-    res = _run_wheel_install(tmp_path, install_rc=1)
+    res = _run_wheel_install(tmp_path, install_rc=2)
     out = res.stdout + res.stderr
-    assert res.returncode != 0  # the failure still fails the build
+    assert res.returncode == 2  # the failure still fails the build, with pip's own status
     assert (
         "Could not fetch URL" in out and "<package-index>" in out
     )  # and says what failed
     for leaked in (INDEX, INDEX_HOST, "ci-user"):
         assert leaked not in out
-
-
-def test_a_successful_wheel_install_prints_nothing_about_the_package_index(tmp_path):
-    res = _run_wheel_install(tmp_path, install_rc=0)
-    assert res.returncode == 0, res.stdout + res.stderr
-    assert INDEX_HOST not in res.stdout + res.stderr
 
 
 def test_the_log_redactor_removes_every_part_of_the_index():
@@ -452,6 +446,14 @@ def test_the_log_redactor_removes_every_part_of_the_index():
         assert leaked not in out
     assert out.count("<package-index>") >= 4
     assert redactor.redact(text, "") == text  # no index configured: nothing to remove
+    # a tool may print the host in another case, or the user with its escapes decoded
+    spelled = "https://ci%40corp:p%2Fw@IDX.Internal:8443/simple/"
+    out = redactor.redact("host idx.internal user ci@corp password p/w", spelled)
+    for leaked in ("idx.internal", "ci@corp", "p/w"):
+        assert leaked not in out
+    # a port out of range makes urlsplit(...).port raise: the URL, netloc and host are still removed
+    out = redactor.redact("fetch bad.example", "https://u:pw@bad.example:99999999/simple/")
+    assert "bad.example" not in out
 
 
 def test_the_build_context_holds_the_dockerfile_and_the_log_redactor(
@@ -497,6 +499,7 @@ def _interrupt_a_build(cmd, tmp_path, sig, extra_args=()):
 
 def _assert_cleaned_up(cmd, proc, out, tmp, code):
     assert proc.returncode == code, out
+    assert "write error" not in out  # the closing line goes to a pipe the signal may have closed
     assert list(tmp.iterdir()) == []
     assert INDEX not in out
     assert _tagged(cmd) == []

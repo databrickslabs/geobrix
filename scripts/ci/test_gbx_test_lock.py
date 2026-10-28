@@ -587,6 +587,18 @@ def test_the_run_and_work_lock_waits_share_one_deadline(demo):
     assert elapsed < 8, elapsed  # about 5 s in all, not 4 + 5
 
 
+def test_the_work_locks_holder_stays_named_while_a_child_of_the_work_outlives_it(demo):
+    info = Path(str(demo.work_lock_file) + ".info")
+    script = demo.root / "scripts" / "docker" / "gbx-lock.sh"
+    subprocess.run(
+        ["bash", str(script), "run", "sh", "-c", "sleep 1 >/dev/null 2>&1 &"],
+        env=demo.env(),
+        capture_output=True,
+    )
+    assert info.exists()  # the child keeps the lock: a waiter is told who started it
+    time.sleep(1.3)  # let the child end before the sandbox is removed
+
+
 def test_the_work_locks_holder_is_cleared_when_the_work_ends_or_is_stale(demo):
     info = Path(str(demo.work_lock_file) + ".info")
     script = demo.root / "scripts" / "docker" / "gbx-lock.sh"
@@ -651,6 +663,14 @@ def test_the_work_wrapper_carries_this_shells_lock_overrides_into_the_container(
     (work,) = _work_execs(sandbox)
     assert f"GBX_WORK_LOCK_FILE={sandbox.work_lock_file}" in work
     assert "GBX_LOCK_TIMEOUT=123" in work and _under_work_lock(work)
+
+
+def test_a_lock_override_with_whitespace_is_refused(sandbox):
+    # GBX_LOCK_RUN is split into words on purpose, so a path with a space would be torn in two.
+    res = sandbox.run("gbx-docker-exec.sh", "mvn -version", GBX_WORK_LOCK_FILE="/tmp/a b.lock")
+
+    assert res.returncode == 2 and "whitespace" in res.output
+    assert sandbox.execs() == []
 
 
 def test_a_docker_exec_command_that_is_not_maven_or_pytest_skips_the_lock(sandbox):
@@ -948,3 +968,5 @@ def test_the_exempt_notebook_runner_installs_geobrix_only_when_it_is_missing(san
 
     (run,) = [c[-1] for c in sandbox.execs() if "run_notebooks_cell_by_cell" in c[-1]]
     assert re.search(r"pip show geobrix [^\n]*\|\| pip install --no-deps -e", run)
+    # and only an editable install of THIS checkout counts: a stale copy would run the notebooks
+    assert "Editable project location: /root/geobrix/python/geobrix" in run

@@ -89,4 +89,4 @@ runs:
         # All dirs run in ONE process, so state one dir leaves behind reaches the
         # next: e.g. test/pyvx registers PROJ grids before test/bench builds rasters
         # on worker threads (see test/conftest.py for the maintained condition).
-        pytest test/pyrx test/ds test/pyvx test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample test/bench test/core test/models test/zarr -m "not integration" -v
+        pytest test/pyrx test/ds test/pyvx test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample test/bench test/core test/models test/zarr test/manager -m "not integration" -v

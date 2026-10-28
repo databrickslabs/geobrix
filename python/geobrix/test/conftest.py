@@ -75,6 +75,7 @@ _LIGHT_TEST_DIRS = [
     "sample",
     "models",
     "zarr",
+    "manager",
 ]
 
 # Skip the light-tier suites when their dependencies are not installed.

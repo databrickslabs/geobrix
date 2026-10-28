@@ -29,6 +29,7 @@ _EXPORTS = {
     "ZarrOwnershipError": ("databricks.labs.gbx.zarr.errors", "ZarrOwnershipError"),
     "gbx_zarr_register": ("databricks.labs.gbx.zarr.functions", "gbx_zarr_register"),
     "gbx_zarr_read": ("databricks.labs.gbx.zarr.functions", "gbx_zarr_read"),
+    "gbx_zarr_sample": ("databricks.labs.gbx.zarr.functions", "gbx_zarr_sample"),
     "gbx_zarr_write": ("databricks.labs.gbx.zarr.functions", "gbx_zarr_write"),
     "BLOCKS_SCHEMA": ("databricks.labs.gbx.zarr.functions", "BLOCKS_SCHEMA"),
     "block_to_numpy": ("databricks.labs.gbx.zarr.functions", "block_to_numpy"),

@@ -16,6 +16,7 @@ from databricks.labs.gbx.zarr._engine import (  # noqa: E402
     open_manifest_array,
     open_plain_array,
     read_box,
+    read_points,
 )
 from databricks.labs.gbx.zarr._store import ManifestStore  # noqa: E402
 from databricks.labs.gbx.zarr._testing import plain_store_rows  # noqa: E402
@@ -499,6 +500,48 @@ def test_read_box_clamps_like_numpy_and_pads_missing_axes(era5_v3_sharded, kind)
         want[:, -3:, :2],
     )
     assert read_box(arr, (slice(10, 10),)).shape == (0, 73, 144)
+
+
+@pytest.mark.parametrize("fixture", ["era5_v3_sharded", "era5_v2"])
+@pytest.mark.parametrize("kind", ["manifest", "native", "zarr", "tensorstore"])
+def test_read_points_matches_numpy_and_reads_only_the_chunks_with_cells(
+    fixture, kind, request
+):
+    if kind == "tensorstore":
+        pytest.importorskip("tensorstore")
+    path = request.getfixturevalue(fixture)
+    store = _manifest(path)
+    if kind in ("manifest", "native"):
+        pipeline = "default" if kind == "manifest" else "native"
+        arr = open_manifest_array(store, "t2m", pipeline=pipeline)
+    else:
+        arr = open_plain_array(str(path), "t2m", engine=kind)
+    want = _direct(path)
+    rng = np.random.default_rng(3)
+    cells = [rng.integers(0, n, 300) for n in want.shape]
+    cells = [np.append(c, c[:5]) for c in cells]  # cells may repeat
+    got = read_points(arr, cells)
+    assert got.shape == (305,) and got.dtype == want.dtype
+    np.testing.assert_array_equal(got, want[tuple(cells)])
+    assert read_points(arr, [np.array([], dtype=int)] * 3).shape == (0,)
+    with pytest.raises(ValueError, match="out of range on axis 1"):
+        read_points(arr, [np.array([0]), np.array([73]), np.array([0])])
+    with pytest.raises(ValueError, match="2 coordinate arrays for an array of 3 axes"):
+        read_points(arr, [np.array([0]), np.array([0])])
+
+    if (
+        kind == "native"
+    ):  # chunks (12, 37, 72): two cells in one chunk, one in a far one
+        asked = []
+        real = store.chunk_regions
+        store.chunk_regions = lambda name, coords: asked.append(list(coords)) or real(
+            name, coords
+        )
+        cells = [np.array([0, 11, 47]), np.array([0, 36, 72]), np.array([0, 71, 143])]
+        np.testing.assert_array_equal(read_points(arr, cells), want[tuple(cells)])
+        assert asked == [
+            [(0, 0, 0), (3, 1, 1)]
+        ]  # not the 16 chunks of their bounding box
 
 
 @pytest.mark.parametrize("kind", ["manifest", "native", "zarr"])

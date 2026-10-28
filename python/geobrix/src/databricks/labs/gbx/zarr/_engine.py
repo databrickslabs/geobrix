@@ -7,7 +7,9 @@ Two kinds of array, two openers, one reader:
   chunks on a thread pool; or as a read-only ``zarr.Array`` read by zarr-python.
 - ``open_plain_array`` opens an array of an ordinary store on a local or FUSE path
   (a Unity Catalog Volume) through tensorstore, or through zarr-python.
-- ``read_box`` reads a box of either kind as a ``numpy`` array.
+- ``read_box`` reads a box of either kind as a ``numpy`` array, and ``read_points`` the
+  values at a set of cells (the sampler's read: it decodes only the chunks that hold a cell,
+  where a box read would decode every chunk of the box).
 
 The zarrs codec pipeline is a Rust decoder for zarr-python. zarr picks the pipeline when
 an array is opened, and ``codec_pipeline.path`` is a setting of the whole process, so the
@@ -40,7 +42,7 @@ import zarr
 
 from databricks.labs.gbx.zarr.errors import ZarrError, ZarrUnsupported
 
-__all__ = ["open_manifest_array", "open_plain_array", "read_box"]
+__all__ = ["open_manifest_array", "open_plain_array", "read_box", "read_points"]
 
 _ZARRS_PIPELINE = "zarrs.ZarrsCodecPipeline"
 _PIPELINE_KEY = "codec_pipeline.path"
@@ -277,6 +279,44 @@ class PlainArray:
     def _read(self, box: list[tuple[int, int]]) -> np.ndarray:
         raise NotImplementedError
 
+    def read_points(self, coords) -> np.ndarray:
+        """The values at the cells ``coords`` (one integer array per axis) as a 1-D array
+        in that order, in native byte order. Cells may repeat."""
+        return _native_order(
+            np.asarray(self._read_points(_point_coords(self.shape, coords)))
+        )
+
+    def _read_points(self, coords: list[np.ndarray]) -> np.ndarray:
+        raise NotImplementedError
+
+
+def _point_coords(shape: tuple[int, ...], coords) -> list[np.ndarray]:
+    """``coords`` as one int64 array per axis, checked to be cells of an array of ``shape``."""
+    coords = [np.asarray(c).reshape(-1) for c in coords]
+    if len(coords) != len(shape):
+        raise ValueError(
+            f"read_points got {len(coords)} coordinate arrays for an array of "
+            f"{len(shape)} axes"
+        )
+    if len({c.size for c in coords}) > 1:
+        raise ValueError(
+            "read_points takes one coordinate array per axis, of one length"
+        )
+    out = []
+    for axis, (c, n) in enumerate(zip(coords, shape)):
+        if c.size and c.dtype.kind not in "iu":
+            raise ValueError(
+                f"read_points takes integer cells; axis {axis} got {c.dtype}"
+            )
+        c = c.astype(np.int64, copy=False)
+        if c.size and (c.min() < 0 or c.max() >= n):
+            raise ValueError(
+                f"read_points cell out of range on axis {axis} (size {n}): "
+                f"{int(c.min())}..{int(c.max())}"
+            )
+        out.append(c)
+    return out
+
 
 def _native_order(values: np.ndarray) -> np.ndarray:
     """``values`` in native byte order (pyarrow rejects byte-swapped arrays)."""
@@ -297,6 +337,9 @@ class _ZarrPlainArray(PlainArray):
     def _read(self, box):
         return self._arr[tuple(slice(a, b) for a, b in box)]
 
+    def _read_points(self, coords):
+        return self._arr.vindex[tuple(coords)]
+
 
 class _ManifestZarrArray(_ZarrPlainArray):
     """A manifest array read by zarr-python (``auto`` for an array native cannot decode)."""
@@ -316,6 +359,9 @@ class _TensorstorePlainArray(PlainArray):
     def _read(self, box):
         return self._store[tuple(slice(a, b) for a, b in box)].read().result()
 
+    def _read_points(self, coords):
+        return self._store.vindex[tuple(coords)].read().result()
+
 
 class _NativeManifestArray(PlainArray):
     engine = "manifest"
@@ -332,6 +378,11 @@ class _NativeManifestArray(PlainArray):
         from databricks.labs.gbx.zarr._native import read_box_native
 
         return read_box_native(self._store, self._meta, box, self._decode)
+
+    def _read_points(self, coords):
+        from databricks.labs.gbx.zarr._native import read_points_native
+
+        return read_points_native(self._store, self._meta, coords, self._decode)
 
 
 def open_plain_array(
@@ -469,5 +520,24 @@ def read_box(arr, slices) -> np.ndarray:
         return _native_order(np.asarray(arr[tuple(slice(a, b) for a, b in box)]))
     raise TypeError(
         f"read_box reads arrays from open_manifest_array or open_plain_array, not "
+        f"{type(arr).__name__}"
+    )
+
+
+def read_points(arr, coords) -> np.ndarray:
+    """The values at the cells ``coords`` of ``arr`` (from either opener) as a 1-D array.
+
+    ``coords`` holds one integer array per axis, all of one length; the result has one value
+    per cell, in that order, and cells may repeat. A plain store is read with a vectorized
+    index (tensorstore or zarr-python ``vindex``) and a manifest array through its native
+    engine, so only the chunks that hold a requested cell are read and decoded.
+    """
+    if isinstance(arr, PlainArray):
+        return arr.read_points(coords)
+    if isinstance(arr, zarr.Array):
+        cells = _point_coords(tuple(arr.shape), coords)
+        return _native_order(np.asarray(arr.vindex[tuple(cells)]))
+    raise TypeError(
+        f"read_points reads arrays from open_manifest_array or open_plain_array, not "
         f"{type(arr).__name__}"
     )

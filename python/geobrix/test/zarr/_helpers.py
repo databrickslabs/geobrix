@@ -236,6 +236,40 @@ def registered_source(
     )
 
 
+def sample_table(
+    source, points, *, crs=None, engine="auto", variables=None, sel=None, flag=None
+):
+    """``(cfg, pa.Table)`` of ``gbx_zarr_sample`` at the geometries ``points``, without Spark.
+
+    ``source`` is a path or a ``registered_source``. The driver's planning and mapping and a
+    task's reading run in this process, as the sampler runs them; the table has a ``point``
+    column (the position in ``points``) before the sample's columns, in (point, step) order.
+    """
+    from databricks.labs.gbx.zarr import _read, _sample
+
+    src = (
+        _read._open_source(None, str(source), "path", None, None)
+        if isinstance(source, (str, bytes)) or hasattr(source, "__fspath__")
+        else source
+    )
+    names = _read._choose_variables(variables, src)
+    cfg = _sample._plan_sample(src, names, sel, crs, flag)
+    uid, row, col = cfg.grid.map(points, crs)
+    units = _sample._units(src, cfg, np.unique(uid[uid >= 0]))
+    parts = []
+    for point, extra in _sample._sample_points(cfg, units, uid, row, col, engine):
+        parts.append(
+            pa.Table.from_batches([extra]).add_column(0, "point", pa.array(point))
+        )
+    table = (
+        pa.concat_tables(parts)
+        if parts
+        else pa.schema([("point", pa.int64()), *cfg.extra_schema]).empty_table()
+    )
+    order = np.argsort(table.column("point").to_numpy(), kind="stable")
+    return cfg, table.take(pa.array(order))
+
+
 def json_attrs(row):
     """The attributes of a block row as a dict."""
     return json.loads(row["attrs"] or "{}")

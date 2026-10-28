@@ -17,6 +17,7 @@ from databricks.labs.gbx.zarr._read import (
     gbx_zarr_read,
 )
 from databricks.labs.gbx.zarr._register import gbx_zarr_register
+from databricks.labs.gbx.zarr._sample import gbx_zarr_sample
 from databricks.labs.gbx.zarr._write import gbx_zarr_write
 
 __all__ = [
@@ -25,5 +26,6 @@ __all__ = [
     "block_to_xarray",
     "gbx_zarr_read",
     "gbx_zarr_register",
+    "gbx_zarr_sample",
     "gbx_zarr_write",
 ]

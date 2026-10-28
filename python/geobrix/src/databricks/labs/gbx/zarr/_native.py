@@ -39,7 +39,7 @@ from databricks.labs.gbx.zarr._meta import ArrayMeta
 from databricks.labs.gbx.zarr._shard import Region
 from databricks.labs.gbx.zarr.errors import ZarrError, ZarrStoreDrift, ZarrUnsupported
 
-__all__ = ["make_decoder", "read_box_native"]
+__all__ = ["make_decoder", "read_box_native", "read_points_native"]
 
 _BYTES_TO_BYTES = ("zstd", "gzip", "blosc", "crc32c")
 _IO_GROUP_BYTES = 32 << 20  # split one file's reads into tasks of about this size
@@ -168,6 +168,21 @@ def _io_groups(items: list[tuple[tuple, Region]]) -> list[list[tuple[tuple, Regi
     return groups
 
 
+def _decoded(meta: ArrayMeta, decode, coord: tuple, region: Region, data: bytes):
+    """The values of one chunk, or ``ZarrStoreDrift`` when its bytes do not decode."""
+    try:
+        return decode(data)
+    except MemoryError:
+        raise  # not a sign of a corrupt file
+    except Exception as e:  # numcodecs raises RuntimeError, ValueError, ...
+        raise ZarrStoreDrift(
+            f"chunk {coord} of array {meta.name!r} in {region.file} could not be "
+            f"decoded ({type(e).__name__}: {e})",
+            fix="run gbx_zarr_sync if the store changed outside GeoBrix; "
+            "otherwise the file is corrupt",
+        ) from None
+
+
 def read_box_native(store, meta: ArrayMeta, box, decode) -> np.ndarray:
     """The box (``(start, stop)`` per axis, inside the array) of ``meta`` in ``store``.
 
@@ -176,27 +191,13 @@ def read_box_native(store, meta: ArrayMeta, box, decode) -> np.ndarray:
     thread of your own, not from the store's pool.
     """
     store.ensure_outside_pool("read_box")
-    pool = store._executor()  # raises for a closed store
-    reader = store._reader
+    store._executor()  # raises for a closed store, empty box or not
     out = np.full(tuple(b - a for a, b in box), _fill(meta), dtype=native_dtype(meta))
     if not out.size:
         return out
-    coords = list(itertools.product(*_chunk_ranges(meta, box)))
-    regions = store.chunk_regions(meta.name, coords)
-    held = [(c, r) for c, r in zip(coords, regions) if r is not None]
 
     def place(coord: tuple, region: Region, data: bytes) -> None:
-        try:
-            values = decode(data)
-        except MemoryError:
-            raise  # not a sign of a corrupt file
-        except Exception as e:  # numcodecs raises RuntimeError, ValueError, ...
-            raise ZarrStoreDrift(
-                f"chunk {coord} of array {meta.name!r} in {region.file} could not be "
-                f"decoded ({type(e).__name__}: {e})",
-                fix="run gbx_zarr_sync if the store changed outside GeoBrix; "
-                "otherwise the file is corrupt",
-            ) from None
+        values = _decoded(meta, decode, coord, region, data)
         src, dst = [], []
         for c, n, (a, b) in zip(coord, meta.chunks, box):
             origin = c * n
@@ -204,6 +205,57 @@ def read_box_native(store, meta: ArrayMeta, box, decode) -> np.ndarray:
             src.append(slice(lo - origin, hi - origin))
             dst.append(slice(lo - a, hi - a))
         out[tuple(dst)] = values[tuple(src)]  # converts to native byte order
+
+    _read_chunks(store, meta, list(itertools.product(*_chunk_ranges(meta, box))), place)
+    return out
+
+
+def read_points_native(store, meta: ArrayMeta, coords, decode) -> np.ndarray:
+    """The values at the cells ``coords`` (one integer array per axis, all one length) of
+    ``meta`` in ``store``, as a 1-D array in that order.
+
+    Only the chunks that hold a requested cell are read and decoded, each once, however many
+    cells it holds; a cell of a chunk the store does not hold reads as the fill value. Errors
+    from the reader (``ZarrStoreDrift``) propagate. Call it from a thread of your own, not
+    from the store's pool.
+    """
+    store.ensure_outside_pool("read_points")
+    store._executor()  # raises for a closed store
+    coords = [np.asarray(c, dtype=np.int64).reshape(-1) for c in coords]
+    out = np.full(coords[0].shape, _fill(meta), dtype=native_dtype(meta))
+    if not out.size:
+        return out
+    grid = tuple(-(-n // c) for n, c in zip(meta.shape, meta.chunks))
+    which = np.ravel_multi_index(
+        tuple(c // n for c, n in zip(coords, meta.chunks)), grid
+    )
+    order = np.argsort(which, kind="stable")
+    ids, starts = np.unique(which[order], return_index=True)
+    ends = np.append(starts[1:], order.size)
+    cells = {
+        int(i): order[a:b] for i, a, b in zip(ids, starts, ends, strict=True)
+    }  # chunk id -> the requested cells it holds
+
+    def place(coord: tuple, region: Region, data: bytes) -> None:
+        values = _decoded(meta, decode, coord, region, data)
+        at = cells[int(np.ravel_multi_index(coord, grid))]
+        out[at] = values[
+            tuple(c[at] - k * n for c, k, n in zip(coords, coord, meta.chunks))
+        ]
+
+    wanted = [tuple(int(k) for k in np.unravel_index(i, grid)) for i in cells]
+    _read_chunks(store, meta, wanted, place)
+    return out
+
+
+def _read_chunks(store, meta: ArrayMeta, coords: list, place) -> None:
+    """Fetch the chunks at ``coords`` and hand each to ``place(coord, region, data)`` on the
+    store's pool. A chunk the store does not hold is not placed (the caller's fill stays).
+    """
+    pool = store._executor()  # raises for a closed store
+    reader = store._reader
+    regions = store.chunk_regions(meta.name, coords)
+    held = [(c, r) for c, r in zip(coords, regions) if r is not None]
 
     def fetch(group: list) -> tuple[list, list[bytes]]:
         datas = reader.read([r for _, r in group])
@@ -265,4 +317,3 @@ def read_box_native(store, meta: ArrayMeta, box, decode) -> np.ndarray:
             f"and {inflight} bytes undecoded",
             fix="this is a defect in the native engine; report it",
         )
-    return out

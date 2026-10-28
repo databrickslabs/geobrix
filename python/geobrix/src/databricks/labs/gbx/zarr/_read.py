@@ -74,6 +74,8 @@ __all__ = [
     "gbx_zarr_read",
     "block_to_numpy",
     "block_to_xarray",
+    "check_access",
+    "check_version_args",
     "classify_source",
     "parse_documents",
     "store_documents",
@@ -137,6 +139,29 @@ def classify_source(source: str, source_type: str = "auto") -> str:
         return source_type
     text = source.strip()
     return "path" if text.startswith("/") or _SCHEME.match(text) else "table"
+
+
+def check_access(access) -> None:
+    """Refuse an ``access`` the readers do not offer: files are read through the Volume
+    mount (``auto`` and ``fuse``) until direct storage access exists."""
+    if access not in _ACCESS:
+        raise ValueError(
+            f"access must be one of {_ACCESS}, got {access!r}. Fix: pass 'auto' or 'fuse'."
+        )
+    if access == "direct":
+        raise ZarrAccessUnavailable(
+            "direct storage access is not available yet: files are read through the "
+            "Volume mount",
+            fix='use access="auto" or "fuse"',
+        )
+
+
+def check_version_args(version_as_of, timestamp_as_of) -> None:
+    if version_as_of is not None and timestamp_as_of is not None:
+        raise ValueError(
+            "pass version_as_of or timestamp_as_of, not both. "
+            "Fix: name the version one way."
+        )
 
 
 def _budget_bytes() -> int:
@@ -847,8 +872,8 @@ def _plan_table(src: _Source, variables, axes, budget) -> list[Unit]:
 class _UnitReader:
     """Opens what a unit reads: a store built from its rows, or the plain arrays."""
 
-    def __init__(self, cfg: _TaskConfig, unit: Unit):
-        self.cfg, self.store, self._open = cfg, None, {}
+    def __init__(self, cfg: _TaskConfig, unit: Unit, engine: str = "zarr"):
+        self.cfg, self.store, self._open, self._engine = cfg, None, {}, engine
         if cfg.kind == "table":
             from databricks.labs.gbx.zarr._access import FuseRangeReader
             from databricks.labs.gbx.zarr._store import ManifestStore
@@ -866,8 +891,8 @@ class _UnitReader:
         if arr is None:
             if self.store is not None:
                 arr = open_manifest_array(self.store, name)
-            else:  # tensorstore regresses inside tasks (spike), so the zarr engine
-                arr = open_plain_array(self.cfg.root, name, engine="zarr")
+            else:  # tensorstore regresses inside tasks (spike), so tasks pass "zarr"
+                arr = open_plain_array(self.cfg.root, name, engine=self._engine)
             self._open[name] = arr
         return arr
 
@@ -1214,21 +1239,8 @@ def gbx_zarr_read(
             f"output must be one of {_OUTPUTS}, got {output!r}. "
             "Fix: pass 'blocks', 'tiles' or 'table'."
         )
-    if access not in _ACCESS:
-        raise ValueError(
-            f"access must be one of {_ACCESS}, got {access!r}. Fix: pass 'auto' or 'fuse'."
-        )
-    if access == "direct":
-        raise ZarrAccessUnavailable(
-            "direct storage access is not available yet: files are read through the "
-            "Volume mount",
-            fix='use access="auto" or "fuse"',
-        )
-    if version_as_of is not None and timestamp_as_of is not None:
-        raise ValueError(
-            "pass version_as_of or timestamp_as_of, not both. "
-            "Fix: name the version one way."
-        )
+    check_access(access)
+    check_version_args(version_as_of, timestamp_as_of)
     if output != "tiles":
         for name, value in (("band_dim", band_dim), ("tile_size", tile_size)):
             if value is not None:

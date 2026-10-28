@@ -5,7 +5,9 @@ appends the command (one JSON line) to $FAKE_DOCKER_EXEC_LOG -- and its `-e KEY=
 to $FAKE_DOCKER_EXEC_LOG.env, same line number -- and then either
 
 - runs it on THIS machine (bash, flock and the lock files are real), when it is the lock
-  holder (`gbx-lock.sh hold`) or $FAKE_DOCKER_RUN_ALL=1; or
+  holder (`gbx-lock.sh hold`), or $FAKE_DOCKER_RUN_ALL=1, or its last argument matches the
+  regex $FAKE_DOCKER_RUN_MATCHING (so a test can run one command string for real, such as a
+  command that reads a file the test wrote, and leave the rest recorded); or
 - does nothing, prints $FAKE_DOCKER_EXEC_STDOUT (default nothing) and exits
   $FAKE_DOCKER_EXEC_RC (default 0): the work a command would send into the container (Maven,
   pytest) is recorded, not run.
@@ -17,6 +19,7 @@ succeeds and does nothing.
 
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -55,7 +58,9 @@ def main(args):
     holder = (
         any(part.endswith(LOCK_SCRIPT) for part in command) and command[-1] == "hold"
     )
-    if holder or os.environ.get("FAKE_DOCKER_RUN_ALL") == "1":
+    pattern = os.environ.get("FAKE_DOCKER_RUN_MATCHING")
+    matched = bool(pattern) and re.search(pattern, command[-1] if command else "")
+    if holder or matched or os.environ.get("FAKE_DOCKER_RUN_ALL") == "1":
         root = os.environ.get("FAKE_DOCKER_ROOT")
         if root:
             command = [part.replace(CONTAINER_REPO, root) for part in command]

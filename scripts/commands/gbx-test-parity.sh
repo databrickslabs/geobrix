@@ -199,11 +199,13 @@ for f in "${RUN_FILES[@]}"; do
     FILE_EXIT=$?
 
     # The pytest summary line, then the skip reasons (-rs): which one explains a skip below.
+    # pytest runs with --color=yes, so the report (the tee) holds escape codes (ESC[33mSKIPPED
+    # ESC[0m ...). They are stripped INSIDE the container command, before the greps: a '^SKIPPED'
+    # grep on the coloured report matches nothing. The ESC is a literal byte in the sed script
+    # (the same on GNU and BSD sed).
+    ANSI_SED="sed 's/$(printf '\033')\\[[0-9;]*m//g'"
     SUMMARY=$(docker exec geobrix-dev /bin/bash -c \
-        "tail -6 $REPORT 2>/dev/null | grep -E 'passed|failed|skipped|no tests ran'; grep -E '^SKIPPED' $REPORT 2>/dev/null" 2>/dev/null)
-    # pytest runs with --color=yes, so the summary and the -rs lines carry escape codes
-    # (ESC[33mSKIPPED ESC[0m ...): strip them, or '^SKIPPED' below matches nothing.
-    SUMMARY=$(printf '%s\n' "$SUMMARY" | sed $'s/\033\\[[0-9;]*m//g')
+        "tail -6 $REPORT 2>/dev/null | $ANSI_SED | grep -E 'passed|failed|skipped|no tests ran'; $ANSI_SED $REPORT 2>/dev/null | grep -E '^SKIPPED'" 2>/dev/null)
     N_PASSED=$(echo "$SUMMARY" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+' | head -1)
     N_PASSED=${N_PASSED:-0}
     N_SKIPPED=$(echo "$SUMMARY" | grep -oE '[0-9]+ skipped' | grep -oE '[0-9]+' | head -1)

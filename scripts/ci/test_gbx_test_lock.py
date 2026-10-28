@@ -696,7 +696,7 @@ NOT_WORK = [
     # reads the pytest summary
     (
         "gbx-test-parity.sh",
-        r'SUMMARY=\$\(docker exec geobrix-dev /bin/bash -c \\\n"tail -6 \$REPORT 2>/dev/null \| grep -E \'passed\|failed\|skipped\|no tests ran\'; grep -E \'\^SKIPPED\' \$REPORT 2>/dev/null" 2>/dev/null\)',
+        r'SUMMARY=\$\(docker exec geobrix-dev /bin/bash -c \\\n"tail -6 \$REPORT 2>/dev/null \| \$ANSI_SED \| grep -E \'passed\|failed\|skipped\|no tests ran\'; \$ANSI_SED \$REPORT 2>/dev/null \| grep -E \'\^SKIPPED\'" 2>/dev/null\)',
     ),
     (
         "gbx-test-python-docs.sh",

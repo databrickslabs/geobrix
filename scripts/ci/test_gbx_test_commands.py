@@ -172,19 +172,29 @@ def test_a_dot_slash_path_still_honours_the_documented_exclusions(sandbox):
 def test_a_parity_skip_names_missing_sample_data_when_that_is_why(sandbox):
     # Newly discovered suites skip wholesale when the container has no sample-data mounts; the
     # failure said only "0 tests passed", not why. The command runs pytest with --color=yes, so
-    # the real summary lines are COLOURED (ESC[33mSKIPPED ESC[0m ...): the samples are too, or a
-    # grep for '^SKIPPED' that forgot the escape codes would pass here and never fire for real.
+    # the report it reads back is COLOURED (ESC[33mSKIPPED ESC[0m ...), and a '^SKIPPED' grep on
+    # it matches nothing. So this test runs the REAL command string the script sends to the
+    # container (the fake docker executes it, on a coloured report the test wrote): stripping
+    # the colour anywhere but inside that command fails here.
     _parity_sandbox(sandbox, TEST_ROOT)
     path = ("--path", "python/geobrix/test/ds/test_vector_parity.py")
-    yellow, reset = "\x1b[33m", "\x1b[0m"
+    report = sandbox.root / "target" / "parity-test_vector_parity.txt"
+    report.parent.mkdir()
+    yellow, bold, reset = "\x1b[33m", "\x1b[1m", "\x1b[0m"
 
     def run(reason):
-        stdout = (
+        report.write_text(
+            "python/geobrix/test/ds/test_vector_parity.py::test_a "
+            f"{yellow}SKIPPED{reset}{yellow} (reason){reset}\n"
+            f"{yellow}=== short test summary info ==={reset}\n"
             f"{yellow}SKIPPED{reset} [2] python/geobrix/test/ds/test_vector_parity.py:67: {reason}\n"
-            f"{yellow}== 0 passed, 2 skipped in 1.00s =={reset}"
+            f"{yellow}=============== {bold}2 skipped{reset}{yellow} in 1.00s ==============={reset}\n"
         )
         return sandbox.run(
-            "gbx-test-parity.sh", "--skip-build", *path, FAKE_DOCKER_EXEC_STDOUT=stdout
+            "gbx-test-parity.sh",
+            "--skip-build",
+            *path,
+            FAKE_DOCKER_RUN_MATCHING="tail -6",
         )
 
     res = run("sample not mounted: /Volumes/x")
@@ -193,6 +203,7 @@ def test_a_parity_skip_names_missing_sample_data_when_that_is_why(sandbox):
 
     res = run("could not import 'mapbox_vector_tile' (sample of one)")
     assert res.returncode == 1 and "sample data missing" not in res.output
+    assert "2 skipped" in res.output  # it still read the (coloured) summary
 
 
 # --------------------------------------------------- python-docs: single-file isolation

@@ -104,14 +104,32 @@ def test_delta_jars_reach_the_classpath_only_when_zarr_tests_run(tmp_path, monke
     monkeypatch.setenv("PYSPARK_SUBMIT_ARGS", "x")  # records the original for teardown
     monkeypatch.delenv("PYSPARK_SUBMIT_ARGS")
 
-    def session(*paths):
-        return SimpleNamespace(items=[SimpleNamespace(path=p) for p in paths])
+    def item(path, delta=False):
+        marker = SimpleNamespace(name="delta") if delta else None
+        return SimpleNamespace(
+            path=path,
+            get_closest_marker=lambda name: marker if name == "delta" else None,
+        )
+
+    def session(*items):
+        return SimpleNamespace(
+            items=[i if isinstance(i, SimpleNamespace) else item(i) for i in items]
+        )
 
     ds_test = PKG / "test" / "ds" / "test_x.py"
     zarr_test = PKG / "test" / "zarr" / ".." / "zarr" / "test_x.py"  # needs resolving
 
     conftest.pytest_collection_finish(session(ds_test))
-    assert "PYSPARK_SUBMIT_ARGS" not in os.environ, "no zarr test collected"
+    assert (
+        "PYSPARK_SUBMIT_ARGS" not in os.environ
+    ), "no zarr or delta-marked test collected"
+
+    conftest.pytest_collection_finish(
+        session(item(ds_test, delta=True))
+    )  # a ds test marked delta
+    assert (
+        shlex.split(os.environ.pop("PYSPARK_SUBMIT_ARGS"))[0] == "--driver-class-path"
+    )
 
     conftest.pytest_collection_finish(session(ds_test, zarr_test))
     args = shlex.split(os.environ["PYSPARK_SUBMIT_ARGS"])  # as PySpark splits it

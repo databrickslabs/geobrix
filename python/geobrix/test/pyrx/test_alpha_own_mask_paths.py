@@ -461,6 +461,36 @@ def test_a_merge_keeps_the_alpha_band_and_the_mask(monkeypatch, name, streaming)
     assert valid[:, 23].tolist() == [r in _want_rows(name) for r in range(H)]
 
 
+def test_a_merge_closes_the_memory_file_of_an_alpha_copy_whose_write_fails(monkeypatch):
+    """The in-memory copy of an alpha tile is closed even when writing it raises."""
+    made = []
+
+    class Spy(MemoryFile):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            made.append(self)
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("write failed")
+
+    monkeypatch.setattr(agg, "MemoryFile", Spy)
+    monkeypatch.setattr(agg, "_write_masked_tile", fail)
+    tiles = [
+        al.row_coded(
+            "rgba",
+            height=H,
+            masked_rows=MASKED,
+            transparent_rows=TRANSPARENT,
+            transform=from_origin(x, 50, 0.5, 0.5),
+        )
+        for x in (10, 16)
+    ]
+    with pytest.raises(RuntimeError, match="write failed"):
+        agg.merge_tiles(tiles)
+    spied = [m for m in made if type(m) is Spy]
+    assert spied and all(m.closed for m in spied)
+
+
 @pytest.mark.parametrize("streaming", [False, True], ids=["in-ram", "streaming"])
 def test_a_merge_keeps_valid_zero_pixels_when_a_tile_has_an_own_mask(
     monkeypatch, streaming

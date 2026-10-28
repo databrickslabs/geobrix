@@ -125,7 +125,7 @@ def _reproject_dataset(src, dst_crs, target_res=None, anchor=None):
         transform = rasterio.Affine(target_res[0], 0.0, left, 0.0, -target_res[1], top)
     out_dtype = src.dtypes[0]
     decoded_bytes = src.count * width * height * np.dtype(out_dtype).itemsize
-    profile = _comp.drop_ycbcr(src.profile)
+    profile = _comp.drop_stripe_blocks(_comp.drop_ycbcr(src.profile))
     profile.update(
         driver="GTiff", crs=dst_crs, transform=transform, width=width, height=height
     )
@@ -194,7 +194,7 @@ def _write_masked_tile(ds, path, mask) -> None:
     (``None``: no mask band), the alpha label kept, with the canonical creation options: never the
     source's codec, so a JPEG tile is not re-compressed lossily."""
     data = ds.read()
-    profile = _comp.drop_ycbcr(ds.profile)
+    profile = _comp.drop_stripe_blocks(_comp.drop_ycbcr(ds.profile))
     profile.update(driver="GTiff")
     profile.update(
         _comp.creation_opts(
@@ -546,16 +546,19 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
         for d in merge_ds:
             if _nodata.has_alpha(d):
                 copy_mf = MemoryFile()
+                # Listed before the write, so the ``finally`` closes it even if the write
+                # fails (rasterio's MemoryFile frees its in-memory file only on close()).
+                extra.append((copy_mf, None))
                 _write_masked_tile(d, copy_mf, _valid_u8(d))
                 copy = copy_mf.open()
-                extra.append((copy_mf, copy))
+                extra[-1] = (copy_mf, copy)
                 d = copy
             composite.append(d)
         mosaic, out_transform = _merge_pixels(composite)
         own_mask = _union_own_mask(merge_ds) if group_masked else None
         out_dtype = str(mosaic.dtype)
         decoded_bytes = mosaic.nbytes
-        profile = _comp.drop_ycbcr(ref.profile)
+        profile = _comp.drop_stripe_blocks(_comp.drop_ycbcr(ref.profile))
         profile.update(
             driver="GTiff",
             height=mosaic.shape[1],
@@ -575,7 +578,8 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
             return out_mf.read()
     finally:
         for mf, rds in extra:
-            rds.close()
+            if rds is not None:
+                rds.close()
             mf.close()
         _close_all(memfiles, datasets)
 
@@ -615,7 +619,7 @@ def combineavg_tiles(rasters: List[bytes]) -> bytes:
                 shape = (ds.count, ds.height, ds.width)
                 sums = np.zeros(shape, dtype="float64")
                 counts = np.zeros(shape, dtype="int64")
-                ref_profile = _comp.drop_ycbcr(ds.profile)
+                ref_profile = _comp.drop_stripe_blocks(_comp.drop_ycbcr(ds.profile))
                 ref_labels = list(ds.colorinterp)
                 out_dtype = ds.dtypes[0]
             elif (ds.count, ds.height, ds.width) != shape:
@@ -734,7 +738,7 @@ def frombands_tiles(indexed: List[Tuple[int, bytes]]) -> bytes:
                     )
                     bands.append(dest)
         data = np.stack(bands)
-        profile = _comp.drop_ycbcr(ref.profile)
+        profile = _comp.drop_stripe_blocks(_comp.drop_ycbcr(ref.profile))
         profile.update(driver="GTiff", count=data.shape[0])
         # A pixel of the stack is valid when a band of it is (a data band valid, the rule of
         # both tiers), so the stack keeps an own mask only where EVERY tile has one: the union
@@ -969,7 +973,7 @@ def _combine_stat_tiles(rasters: List[bytes], stat: str) -> bytes:
 
         ref = datasets[0]
         out_dtype = ref.dtypes[0]
-        ref_profile = _comp.drop_ycbcr(ref.profile)
+        ref_profile = _comp.drop_stripe_blocks(_comp.drop_ycbcr(ref.profile))
 
         # Collect per-tile NoData values and per-band arrays.
         # min/max/count don't accumulate, so float32 decode is safe and faster.
@@ -1147,7 +1151,7 @@ def align_to_tiles(tile_bytes: bytes, ref_bytes: bytes, dst_nodata=None) -> byte
                 src.count * dst_width * dst_height * np.dtype(out_dtype).itemsize
             )
 
-            profile = _comp.drop_ycbcr(src.profile)
+            profile = _comp.drop_stripe_blocks(_comp.drop_ycbcr(src.profile))
             profile.update(
                 driver="GTiff",
                 crs=dst_crs,

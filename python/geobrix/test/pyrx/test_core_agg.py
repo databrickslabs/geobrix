@@ -416,6 +416,28 @@ def test_a_tile_in_another_crs_leaves_its_neighbours_pixels_alone(
     }  # no zero fill inside the reference tile
 
 
+def test_a_merge_across_crs_of_striped_tiles_logs_no_blockxsize_warning(caplog):
+    """A striped GeoTIFF reports its strip as blockxsize; copied into the reprojected tile and the
+    mosaic it made GDAL log "BLOCKXSIZE can only be used with TILED=YES" for each dataset.
+    """
+    import logging
+
+    a = _ras(
+        np.arange(16).reshape(4, 4), ulx=500000.0, uly=4000000.0, px=10.0, epsg=32633
+    )
+    b = _ras(
+        np.arange(16).reshape(4, 4), ulx=500100.0, uly=4000000.0, px=10.0, epsg=32634
+    )
+    for merge in (agg.merge_tiles, agg._merge_tiles_streaming):
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            merge([a, b])
+        noisy = [
+            r.getMessage() for r in caplog.records if "BLOCKXSIZE" in r.getMessage()
+        ]
+        assert noisy == [], (merge.__name__, noisy)
+
+
 def test_merge_small_unchanged():
     """Small 2-tile merge uses the in-RAM path (default budget) and returns the correct mosaic.
 

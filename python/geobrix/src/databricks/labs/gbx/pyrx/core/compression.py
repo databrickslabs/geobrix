@@ -270,6 +270,21 @@ def drop_ycbcr(profile: dict, *, unless_jpeg: bool = False) -> dict:
     return prof
 
 
+def drop_stripe_blocks(profile: dict) -> dict:
+    """Copy of *profile* without ``blockxsize`` / ``blockysize`` when it is not tiled.
+
+    A striped GeoTIFF's profile reports its strip as ``blockxsize`` (the full width) and
+    ``blockysize`` (rows per strip), with ``tiled`` False. Handed to a new GTiff of another
+    size that is both stale and refused by GDAL, which logs ``BLOCKXSIZE can only be used with
+    TILED=YES`` for every dataset written. A tiled profile keeps its blocks.
+    """
+    prof = dict(profile)
+    if not prof.get("tiled"):
+        prof.pop("blockxsize", None)
+        prof.pop("blockysize", None)
+    return prof
+
+
 # Keys of a source profile that a write with the COG driver must not inherit: the driver lays the
 # file out and picks the photometric itself, and warns once per key it is handed (TILED,
 # BLOCKXSIZE, BLOCKYSIZE, PHOTOMETRIC); the codec keys are replaced by ``creation_opts(driver="COG")``.

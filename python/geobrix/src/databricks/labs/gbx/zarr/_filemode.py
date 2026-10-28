@@ -14,10 +14,17 @@ relative to the root it lies under: the FILE value is only how the column stores
 nothing outside the manifest module has to know the mode. ``path_of`` turns either
 form into the bare ``/Volumes/...`` path that opens through the FUSE mount.
 
-The FILE modes need a workspace with the File type preview, which this release has not
-verified on a cluster (gate G4, spec 16). ``VERIFIED_FILE_MODES`` is that gate: while a
-mode is not in it, ``auto`` never picks it and asking for it raises ``ZarrUnsupported``.
-A passing G4 adds the mode to the set; nothing else changes.
+The FILE modes need a workspace with the File type preview. ``VERIFIED_FILE_MODES`` is the
+gate (G4, spec 16) a mode passes once it has been verified on a cluster: while a mode is not
+in it, ``auto`` never picks it and asking for it raises ``ZarrUnsupported``.
+
+- ``external`` passed: on a runtime with FILE, ``auto`` picks it (Serverless, the Databricks
+  Container Service image and a workspace without the preview stay on ``fuse``).
+- ``managed`` failed and is **not available in 0.6.0**: Delta VACUUM, a deletion-vector delete
+  and ``REORG ... PURGE`` never reclaim the bytes of a managed file, and a write that fails
+  after its files were made leaves them behind, so a managed store only grows. It needs a
+  sweep of the filespace in ``gbx_zarr_vacuum`` and a pack write in a scalar or Arrow UDF
+  (``FileRef.from_local_file`` fails in ``mapInArrow``) before it can open.
 """
 
 from __future__ import annotations
@@ -45,9 +52,9 @@ __all__ = [
 
 FILE_MODE_CHOICES = ("auto", "fuse", "external", "managed")
 
-# Gate G4: the FILE modes whose behaviour on a FILE-enabled workspace has been verified.
-# Empty until the on-cluster pass has run (spec 16, G4).
-VERIFIED_FILE_MODES: frozenset[str] = frozenset()
+# Gate G4: the FILE modes whose behaviour on a FILE-enabled workspace has been verified on a
+# cluster (spec 16, G4). ``external`` passed; ``managed`` did not (see the module docstring).
+VERIFIED_FILE_MODES: frozenset[str] = frozenset({"external"})
 
 # The modes whose files GeoBrix itself writes, reads and vacuums. A managed store's files
 # belong to the table: GeoBrix reads them and runs Delta's VACUUM, and does not yet write
@@ -65,6 +72,15 @@ _UNVERIFIED = (
     "verified here"
 )
 _FUSE_FIX = 'use file_mode="fuse" (the default)'
+# Why a mode that failed the gate is refused by name (``resolve``): the reason, and what to use.
+_REFUSED = {
+    "managed": (
+        'file_mode="managed" is not available in 0.6.0: Delta VACUUM does not reclaim the '
+        "bytes of a managed file (nor does a deletion-vector delete or REORG PURGE), so a "
+        "managed store would only grow",
+        'use file_mode="auto" (the default), "external" or "fuse"',
+    )
+}
 _SCHEMES = ("dbfs:/", "file:/")  # the schemes ``to_local_path`` strips
 
 
@@ -93,8 +109,10 @@ def resolve(
     """The file mode to use, never ``"auto"``: ``"fuse"``, ``"external"`` or ``"managed"``.
 
     ``auto`` is the best verified mode the runtime supports: ``managed`` when a filespace
-    root is given (``has_filespace``), else ``external``, else ``fuse``; it never raises.
-    An explicit ``external`` or ``managed`` that cannot be used raises ``ZarrUnsupported``.
+    root is given (``has_filespace``), else ``external``, else ``fuse``; it never raises. As
+    shipped that is ``external`` on a runtime with FILE and ``fuse`` elsewhere.
+    An explicit ``external`` or ``managed`` that cannot be used raises ``ZarrUnsupported``
+    (``managed`` always does in 0.6.0, see the module docstring).
     A registered store (``registered=True``) is never ``managed``: managed ingest copies
     each file, so the base store would be duplicated.
     """
@@ -116,7 +134,8 @@ def resolve(
             return "managed"
         return "external" if _usable("external", spark) else "fuse"
     if file_mode not in VERIFIED_FILE_MODES:
-        raise ZarrUnsupported(_UNVERIFIED, fix=_FUSE_FIX)
+        reason, fix = _REFUSED.get(file_mode, (_UNVERIFIED, _FUSE_FIX))
+        raise ZarrUnsupported(reason, fix=fix)
     if not file_supported(spark):
         raise ZarrUnsupported(
             f"file_mode={file_mode!r} needs a workspace with the File type preview "

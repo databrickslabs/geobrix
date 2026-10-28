@@ -35,7 +35,7 @@ from databricks.labs.gbx.zarr.errors import (  # noqa: E402
     ZarrUnsupported,
 )
 
-NOT_VERIFIED = "were not verified here"
+NOT_VERIFIED = "were not verified here|not available in 0.6.0"  # the gate's two texts
 
 
 @pytest.fixture
@@ -99,7 +99,7 @@ def _props(mode, **kw):
     "supported, modes",
     [
         (False, ("external", "managed")),  # no FILE on this runtime
-        (True, ()),  # FILE, but G4 has not verified a mode: the shipped state
+        (True, ()),  # FILE, but the gate has no mode open
     ],
 )
 def test_auto_resolves_to_fuse_without_file_support(file_support, supported, modes):
@@ -109,21 +109,27 @@ def test_auto_resolves_to_fuse_without_file_support(file_support, supported, mod
     assert FM.resolve(None, "fuse", has_filespace=True) == "fuse"
 
 
-def test_the_g4_gate_ships_closed(monkeypatch):
-    """No FILE mode is verified yet: a passing G4 adds it to VERIFIED_FILE_MODES, and this
-    test with it."""
+def test_the_g4_gate_ships_external_open_and_managed_closed(monkeypatch):
+    """Gate G4 passed for FILE EXTERNAL and failed for FILE MANAGED (Delta VACUUM never reclaims
+    a managed file's bytes): `auto` picks external on a FILE runtime, and managed is refused by
+    name. Where FILE is not supported `auto` stays on fuse."""
+    assert FM.VERIFIED_FILE_MODES == frozenset({"external"})
     monkeypatch.setattr(FM, "file_supported", lambda spark: True)
-    assert FM.VERIFIED_FILE_MODES == frozenset()
+    for filespace in (True, False):
+        assert FM.resolve(None, "auto", has_filespace=filespace) == "external"
+    assert FM.resolve(None, "external", has_filespace=True) == "external"
+    with pytest.raises(ZarrUnsupported, match="not available in 0.6.0") as e:
+        FM.resolve(None, "managed", has_filespace=True)
+    assert "reclaim" in str(e.value) and "Fix:" in str(e.value)
+    monkeypatch.setattr(FM, "file_supported", lambda spark: False)  # Serverless, DCS
     assert FM.resolve(None, "auto", has_filespace=True) == "fuse"
-    with pytest.raises(ZarrUnsupported, match=NOT_VERIFIED):
-        FM.resolve(None, "external", has_filespace=True)
 
 
 @pytest.mark.parametrize("mode", ["external", "managed"])
 @pytest.mark.parametrize(
     "supported, modes, text",
     [
-        (True, (), NOT_VERIFIED),  # the gate: shipped state, even on a FILE runtime
+        (True, (), NOT_VERIFIED),  # the gate closed, even on a FILE runtime
         (False, ("external", "managed"), "does not support FILE"),
     ],
 )
@@ -133,7 +139,7 @@ def test_explicit_managed_raises_without_file_support(
     file_support(supported, modes)
     with pytest.raises(ZarrUnsupported, match=text) as e:
         FM.resolve(None, mode, has_filespace=True)
-    assert 'use file_mode="fuse"' in e.value.fix and "Fix:" in str(e.value)
+    assert "use file_mode=" in e.value.fix and "Fix:" in str(e.value)
 
 
 def test_a_verified_runtime_picks_the_mode_by_its_filespace(file_support, monkeypatch):

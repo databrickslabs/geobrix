@@ -1196,10 +1196,11 @@ def gbx_zarr_register(
     The table is read-only unless ``writable=True``, which needs an ``overlay_root``:
     a directory (on a Volume) outside the store that this table owns and GeoBrix writes
     to, recorded by an owner marker so no other table can claim it. ``file_mode`` is
-    ``"auto"`` or ``"fuse"`` (path strings relative to the store root); ``"external"``
-    keeps FILE EXTERNAL references and needs a workspace with the File type preview,
-    which is not yet available. ``"managed"`` is never allowed for a registered store: it
-    would copy the base. ``retain`` is how long superseded versions stay readable.
+    ``"auto"`` (the default: ``"external"`` on a runtime with the File type preview,
+    ``"fuse"`` elsewhere, Serverless included), ``"fuse"`` (path strings relative to the
+    store root) or ``"external"`` (FILE EXTERNAL references, governed with the table; needs a
+    workspace with the File type preview, ``ZarrUnsupported`` otherwise). ``"managed"`` is
+    not available in 0.6.0, and never for a registered store: it would copy the base. ``retain`` is how long superseded versions stay readable.
 
     An array GeoBrix cannot decode (a string coordinate, say) is registered like any
     other, objects and documents, and listed under ``unsupported`` in the commit's

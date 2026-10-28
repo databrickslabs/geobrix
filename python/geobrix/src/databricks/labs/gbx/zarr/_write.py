@@ -2746,9 +2746,12 @@ def gbx_zarr_write(
       (``None`` computes them, a dict sets some, ``False`` means none) and ``codecs`` (the
       inner chunk's codec chain, as Zarr v3 codec documents or zarr codec objects; default
       ``bytes`` + ``zstd`` level 3 + ``crc32c``) lay out each array; coordinates are one
-      unsharded chunk. ``file_mode`` is ``"auto"`` or ``"fuse"`` (the manifest keeps path
-      strings); ``"external"`` and ``"managed"`` keep FILE values and need a workspace with
-      the File type preview, which is not yet available. ``retain`` is the store's.
+      unsharded chunk. ``file_mode`` is ``"auto"`` (the default: ``"external"`` on a runtime with
+      the File type preview, ``"fuse"`` elsewhere, Serverless included), ``"fuse"`` (the
+      manifest keeps path strings) or ``"external"`` (FILE EXTERNAL values, governed with
+      the table; needs the preview, ``ZarrUnsupported`` otherwise). ``"managed"`` is not
+      available in 0.6.0: Delta VACUUM does not reclaim a managed file's bytes. ``retain``
+      is the store's.
     - ``"append"``: extend along ``append_dim`` (default: the first dimension labelled by
       CF times). The input must carry that dimension's labels, all after the store's last;
       on a regular axis they land at their step (so appends may arrive out of order), else

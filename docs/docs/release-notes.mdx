@@ -869,8 +869,18 @@ formats.
   not clean them up, so add a lifecycle rule to the bucket that aborts incomplete multipart
   uploads (`AbortIncompleteMultipartUpload`, after a few days).
 
-### Zarr stores — copy targets and reference files (new)
+### Zarr stores — file modes, copy targets and reference files (new)
 
+- **`file_mode="external"` is available where the File type preview is on.** A Zarr store made
+  or registered on a classic cluster in a workspace with the preview keeps FILE EXTERNAL
+  references in its manifest, governed with the table, and `file_mode="auto"` picks it there.
+  On Serverless, on the Databricks Container Service image and where the preview is off, `auto`
+  keeps path strings (`"fuse"`). Spark cannot hash a FILE value, so leave the manifest's `file`
+  column out of a `hash(*)` or a `GROUP BY`.
+- **`file_mode="managed"` is not available in 0.6.0.** Delta `VACUUM`, a deletion-vector delete
+  and `REORG TABLE ... APPLY (PURGE)` never reclaim the bytes of a managed file, and a write
+  that fails after its files were made leaves them behind, so a managed store would only grow.
+  Asking for it raises `ZarrUnsupported`; use `"auto"`, `"external"` or `"fuse"`.
 - **A copy export needs a path every node sees.** `gbx_zarr_export(method="copy")` is written
   by the cluster's tasks, so a `to` on the driver's local disk is refused before any task runs
   (`ValueError`, "export to a /Volumes path"). It used to fail after the work was done, with the

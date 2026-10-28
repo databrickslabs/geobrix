@@ -18,7 +18,7 @@ see a half-written store.
 GeoBrix adds the missing layer. It reads and samples Zarr stores of any origin, registers an existing
 store **in place** without copying it, and lets you **write to a store transactionally**: every write
 is all-or-nothing, concurrent writers do not corrupt each other, and every version of the store stays
-readable until you decide it can go.
+readable for the store's `retain` period (7 days by default), and for as long as you like if you tag it.
 
 This page explains how the model works and what it guarantees. The examples run against a small
 sample cube, and every block of code on this page is run by the documentation tests.
@@ -34,7 +34,9 @@ pip install "geobrix[light_dbr19,zarr_dbr19]"   # Databricks Runtime 19
 ```
 
 The examples use `cube`, `table` and `root`: the path of a Zarr store, the Unity Catalog name of a
-store's manifest table, and a directory on a Volume that GeoBrix writes a store's files to.
+store's manifest table, and a directory on a Volume that GeoBrix writes a store's files to. The `cube`
+path below exists once the sample cube has been generated into your sample-data Volume (next);
+until then, point `cube` at any Zarr store.
 
 <CodeFromTest code={zarrExamples} language="python" functionName="SETUP" />
 
@@ -100,9 +102,9 @@ manifest table exists, and who may write.
 | Kind | Created by | Where the bytes live | Versions and transactions | Who may write |
 |---|---|---|---|---|
 | **Plain store** | Anyone: xarray, a vendor, any Zarr tool | The store's own objects | None. GeoBrix reads the current bytes. | Not GeoBrix |
-| **Registered, read-only** | `gbx_zarr_register(path, table)` | The store's own objects, **not copied** | Yes, in the manifest table | Nobody through GeoBrix |
-| **Registered, writable** | `gbx_zarr_register(..., writable=True, overlay_root=...)` | The store's own objects, plus an **overlay** of new pack files | Yes | Anyone with `MODIFY` on the table; the store itself is never written |
-| **Managed** | `gbx_zarr_write(..., mode="create")` | Pack files GeoBrix wrote under the store's root | Yes | Anyone with `MODIFY` on the table |
+| **Registered, read-only** | `gbx_zarr_register(spark, path, table)` | The store's own objects, **not copied** | Yes, in the manifest table | Nobody through GeoBrix |
+| **Registered, writable** | `gbx_zarr_register(spark, path, table, writable=True, overlay_root=...)` | The store's own objects, plus an **overlay** of new pack files | Yes | Anyone with `MODIFY` on the table and write access to the overlay root's Volume; the store itself is never written |
+| **Managed** | `gbx_zarr_write(..., mode="create")` | Pack files GeoBrix wrote under the store's root | Yes | Anyone with `MODIFY` on the table and write access to the root's Volume |
 
 ![The four kinds of Zarr store side by side: a plain store with only its own objects and no manifest table; a read-only registered store whose Delta manifest table points at the store's objects without copying them; a writable registered store whose manifest points at the store's objects and at an overlay root of immutable pack files, with the store's objects locked against writes; and a managed store whose manifest points at pack files under a data root. A banner explains that many registrations of one store are independent branches and that every root has exactly one owner.](../../../resources/images/diagrams/zarr/store-kinds.png)
 
@@ -250,12 +252,12 @@ Asking for `managed` fails before anything is written:
 
 A write happens in two phases, and only the second one is visible.
 
-![A write in two phases. Phase one, distributed and invisible: the driver plans against a base version of the manifest and picks a write_id; executor tasks encode the chunks, fully covered chunks fresh and partly covered ones by read-modify-write at the base version; each task writes one immutable pack file to the Volume and returns small manifest rows to the driver. Phase two, atomic: the driver commits one Delta MERGE with a compare-and-swap on each replaced key, the changed array and coordinate rows and a commit row keyed by the write_id, and the manifest moves to the next version, visible whole. A failure before the MERGE leaves only unreferenced packs for vacuum; running a write again with the same write_id returns the version it already committed.](../../../resources/images/diagrams/zarr/write-commit.png)
+![A write in two phases. Phase one, distributed and invisible: the driver plans against a base version of the manifest and picks a write_id; executor tasks encode the chunks, fully covered chunks fresh and partly covered ones by read-modify-write at the base version; each task writes one immutable pack file for each array it holds to the Volume and returns small manifest rows to the driver. Phase two, atomic: the driver commits one Delta MERGE with a compare-and-swap on each replaced key, the changed array and coordinate rows and a commit row keyed by the write_id, and the manifest moves to the next version, visible whole. A failure before the MERGE leaves only unreferenced packs for vacuum; running a write again with the same write_id returns the version it already committed.](../../../resources/images/diagrams/zarr/write-commit.png)
 
 1. **Files.** The input is grouped by the shard it belongs to. Each task encodes the chunks it owns and
-   writes **one pack file** in a single sequential write. A chunk the input covers completely is
+   writes **one pack file for each array it holds**, each in a single sequential write. A chunk the input covers completely is
    encoded fresh; a chunk it only partly covers is read at the base version, patched and re-encoded.
-   Each task hands back a small manifest row per chunk, about 100 bytes.
+   Each task hands back a small manifest row for every chunk it wrote.
 2. **Commit.** The driver collects the rows and runs **one Delta MERGE**. It writes the chunk rows with
    a compare-and-swap (CAS) on every key it replaces (the `write_id` the key had in the base version, or
    "still absent" for a new key), the changed array and coordinate rows, and a `commit` row keyed by
@@ -287,9 +289,9 @@ The manifest decides, row by row.
   chunk. When a writer finds that another has committed those rows first, it **rebases**: it re-reads
   the latest version, checks that none of the data keys it replaces has changed since its base (the
   CAS), recomputes the shape (the maximum extent) and redoes the coordinate chunk, and retries the
-  MERGE. Its data files are never rewritten. A rebase retries up to 20 times with a jittered wait,
-  and every lost round means another writer landed, so up to twenty simultaneous appenders to one
-  array all land.
+  MERGE. Its data files are never rewritten. A rebase retries up to 20 times with a jittered wait.
+  Every lost round means another writer landed, so the last of N simultaneous appenders needs about
+  N attempts; in GeoBrix's checks, 8 appenders to one array at the same moment all landed.
 - **The same chunk.** If another writer committed a change to a chunk this write also touches, after
   this write's base version, the write raises `ZarrWriteConflict`. That includes two partial writes to
   different cells of one chunk, because each is a read-modify-write of the whole chunk.
@@ -392,7 +394,7 @@ cannot delete them.
 Immutable files mean old files pile up: every update, overwrite and failed write leaves packs that no
 current row needs. `gbx_zarr_vacuum` deletes the files that no readable version needs.
 
-![The timeline of a vacuum. Versions v1 to v8 run left to right, with the retain window, seven days by default, shaded at the right and the vacuum horizon where it starts. A pack replaced before the horizon is superseded and deleted; a pack replaced inside the window is retained because a readable version still uses it; packs that live rows point at are live; a pack that a tag row points at is tagged and kept until the tag is removed; the pack of a write that never committed is uncommitted and is kept for the retain period and then deleted; a pack younger than one hour is recent and always kept. Below, the manifest table's own retention properties keep Delta history at least as long as the store's retain.](../../../resources/images/diagrams/zarr/retention-timeline.png)
+![The timeline of a vacuum. Versions v1 to v8 run left to right, with the retain window, seven days by default, shaded at the right and the horizon, the later of the last vacuum's and the moment retain ago, where it starts; v4, the version live at the horizon, stays readable, and versions older than it raise ZarrVersionUnavailable. A pack replaced before the horizon is superseded and deleted; a pack replaced inside the window is retained because a readable version, v4, still uses it; packs that live rows point at are live; a pack that a tag row points at is tagged and kept until the tag is removed; the pack of a write that never committed is uncommitted and is kept for the retain period and then deleted; a pack younger than one hour is recent and always kept. Below, the manifest table's own retention properties keep Delta history at least as long as the store's retain, and predictive optimization may vacuum the table itself.](../../../resources/images/diagrams/zarr/retention-timeline.png)
 
 A file is kept while **any** of these is true:
 
@@ -405,9 +407,9 @@ A file is kept while **any** of these is true:
 
 Everything else is **superseded** (it was replaced by a newer version, and only versions older than
 `retain` used it) or **uncommitted** (its write failed, was retried or lost a conflict). `dry_run=True`
-lists what would go and changes nothing. A `retain` under one hour is refused unless `force=True`, as
-with Delta's `VACUUM`, and a `retain` longer than the store's is refused too, since versions older than
-the store's own `retain` are not readable anyway.
+lists what would go and changes nothing. A `retain` under one hour is refused unless `force=True`,
+and a `retain` longer than the store's is refused too, since versions older than the store's own
+`retain` are not readable anyway.
 
 Time travel needs two things: the files, and the manifest's own Delta history. When a store is created or
 registered, GeoBrix sets the manifest table's `delta.deletedFileRetentionDuration` to at least the
@@ -419,12 +421,23 @@ them aligned; it never lowers a value you raised.
   testFile="docs/tests/python/formats/test_zarr_examples.py"
   outputConstant="SHOW_RETENTION_output" />
 
-**Predictive optimization** can run `VACUUM` on a Unity Catalog managed table by itself, and it keeps
-a table's files for at least 7 days even if the table asks for less. A store whose `retain` is shorter than that
-can therefore still find Delta history for a version whose files GeoBrix has already deleted. A vacuum
-that deletes records a **horizon** on the table first, and a read of a version older than the horizon
-raises `ZarrVersionUnavailable` with a `Fix:` instead of failing on a missing file. To keep a version
-for good, tag it.
+**Time travel stops at `retain`, with or without a vacuum.** GeoBrix promises a version only as far
+back as the **horizon**: the later of the horizon a vacuum recorded and the moment `retain` ago. A read
+by version number or by timestamp of a version older than the one that was live at the horizon raises
+`ZarrVersionUnavailable` with a `Fix:`, even if no vacuum has ever run, because Delta's own maintenance
+may already have removed the files. The latest version and every tagged version are always readable.
+This store keeps its versions for two seconds so the example is quick (the default is `"7 days"`):
+
+<CodeFromTest code={zarrExamples} language="python" functionName="time_travel_stops_at_retain"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="TIME_TRAVEL_STOPS_AT_RETAIN_output" />
+
+**Predictive optimization** can run `VACUUM` on a Unity Catalog managed table by itself. In GeoBrix's
+own checks it kept a table's files for at least 7 days even when the table asked for less, so a store
+whose `retain` is shorter than that can still find Delta history for a version whose files are
+gone. That is why the horizon, and not Delta's history, decides what is readable. A vacuum that
+deletes records its horizon on the table before it removes anything. To keep a version for good, tag it.
 
 The vacuum below ran a week after the store was written (in the documentation tests, the clock is moved on). It
 lists first, then deletes. The tag keeps its files, the live rows keep theirs, and the packs that
@@ -491,7 +504,8 @@ optimize after many small appends, especially for reads from a Volume; it change
 - **Outside writers.** GeoBrix detects writes that other tools make to a registered store; it cannot make
   them transactional. On a Volume the identity of an object is its modification time and size, which is
   weaker than a content hash. A publish is not atomic for plain readers.
-- **Many simultaneous appenders.** A rebase retries up to 20 times. More than about twenty writers
+- **Many simultaneous appenders.** A rebase retries up to 20 times, and the last of N simultaneous
+  appenders needs about N attempts. A burst of more than about twenty writers
   appending to one array at the same instant can exhaust that, and the last of them fails with
   `ZarrWriteConflict` and a `Fix:`; run it again.
 - **Direct storage access.** `access="auto"` reads and writes cloud storage directly where Unity Catalog

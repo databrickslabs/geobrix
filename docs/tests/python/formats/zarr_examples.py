@@ -83,6 +83,10 @@ READ_HISTORY_output = """
 |{latitude -> [0, 181], longitude -> [0, 360], time -> [0, 12]}|
 +--------------------------------------------------------------+
 """
+TIME_TRAVEL_STOPS_AT_RETAIN_output = """
+Fix: pick a later version or tag the version you need with gbx_zarr_tag
+tag first-day: 12 hours
+"""
 TIME_TRAVEL_output = """
 version 1: 12
 as of the second commit's time: 24
@@ -451,6 +455,42 @@ def time_travel(spark, table):
     print("as of the second commit's time:", hours_at(timestamp_as_of=stamp))
     print("tag two-days:", hours_at(version_as_of="tag:two-days"))
     print("latest:", hours_at())
+
+
+def time_travel_stops_at_retain(spark, cube, table, root):
+    """A store keeps its versions for `retain`; older ones cannot be read, vacuum or not."""
+    import time
+
+    from databricks.labs.gbx.zarr import (
+        ZarrVersionUnavailable,
+        gbx_zarr_read,
+        gbx_zarr_tag,
+        gbx_zarr_write,
+    )
+
+    first = gbx_zarr_read(
+        spark,
+        cube,
+        variables=["t2m", "time", "latitude", "longitude"],
+        sel={"time": slice("2023-01-01T00:00", "2023-01-01T11:00")},
+    )
+    # retain is "7 days" unless you say otherwise; two seconds keeps this example short.
+    gbx_zarr_write(first, table, mode="create", root=root, retain="2 seconds")
+    gbx_zarr_tag(spark, table, "first-day")  # a second version, and a name for it
+    time.sleep(3)
+    try:
+        gbx_zarr_read(spark, table, variables=["t2m"], version_as_of=1)
+    except ZarrVersionUnavailable as err:
+        print("Fix:", err.fix)
+    tagged = gbx_zarr_read(
+        spark,
+        table,
+        variables=["t2m"],
+        sel={"latitude": 48.0, "longitude": 2.0},
+        version_as_of="tag:first-day",
+        output="table",
+    )
+    print("tag first-day:", tagged.count(), "hours")
 
 
 def restore_a_version(spark, table):

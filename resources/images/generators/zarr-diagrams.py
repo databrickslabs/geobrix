@@ -246,7 +246,7 @@ def store_kinds():
         ),
         dict(
             title="Registered, read-only",
-            sub="gbx_zarr_register(path, table)",
+            sub="gbx_zarr_register(spark, path, table)",
             manifest="table",
             base="listed once, not copied",
             overlay=None,
@@ -277,7 +277,7 @@ def store_kinds():
             rows=[
                 ("Bytes", "pack files GeoBrix wrote under the root"),
                 ("Manifest", "every chunk and shard, every version"),
-                ("GeoBrix", "anyone with MODIFY on the table writes"),
+                ("GeoBrix", "needs MODIFY on the table and write access to the Volume"),
             ],
         ),
     ]
@@ -571,7 +571,7 @@ def write_commit():
             y3,
             290,
             88,
-            "One pack per task",
+            "One pack per array and task",
             "data/<array>/<write_id>/part-*.zpack, written once, sequentially, never modified again.",
             BASE,
             BASE_T,
@@ -585,7 +585,7 @@ def write_commit():
             290,
             88,
             "Return small rows",
-            "About 100 bytes per chunk: file, offset, length, checksum.",
+            "A small row for each chunk: file, offset, length, checksum.",
             PACK,
             PACK_T,
             4,
@@ -934,12 +934,26 @@ def retention_timeline():
                 x, ay - 2, f"v{k + 1}", size=12, weight=800, fill=TABLE, anchor="middle"
             )
         )
+    out.append(
+        f'<circle cx="640" cy="{ay + 12}" r="11.5" fill="none" stroke="{KEEP}" stroke-width="2.5"/>'
+    )
+    out.append(
+        text(
+            726,
+            ay + 38,
+            "v4 is live at the horizon: it stays readable",
+            size=11,
+            weight=700,
+            fill=KEEP,
+            anchor="end",
+        )
+    )
     out.append(line(win_x, ay - 4, win_x, ay + 424, color=BAD, w=2.4, dash="7 5"))
     out.append(
         text(
             win_x - 8,
             ay + 442,
-            "vacuum horizon",
+            "the horizon",
             size=12,
             weight=800,
             fill=BAD,
@@ -950,7 +964,7 @@ def retention_timeline():
         text(
             win_x - 8,
             ay + 458,
-            "versions before it raise ZarrVersionUnavailable",
+            "versions older than the one live here raise ZarrVersionUnavailable",
             size=11,
             fill=MUTED2,
             anchor="end",
@@ -969,10 +983,10 @@ def retention_timeline():
         (
             "pack of v2's chunks",
             390,
-            900,
+            840,
             "retained",
             PACK,
-            "replaced at v5, inside the window: a readable version still uses it",
+            "replaced at v5, inside the window: v4, live at the horizon, still reads it",
             False,
         ),
         (
@@ -1053,11 +1067,11 @@ def retention_timeline():
                 f'<rect x="{x0}" y="{y}" width="{x1 - x0}" height="30" rx="7" fill="url(#hatch)"/>'
             )
         out.append(text(x0 + 10, y + 20, kind, size=12, weight=800, fill=col))
-        if x1 - x0 > 260:
+        if k in (0, 1):
+            out.append(text(x1 + 12, y + 20, why, size=11.5, fill=INK2))
+        elif x1 - x0 > 260:
             tx = max(x0 + 110, win_x + 16) if x0 < win_x < x1 else x0 + 110
             out.append(text(tx, y + 20, why, size=11.5, fill=INK2))
-        elif k == 0:
-            out.append(text(x1 + 12, y + 20, why, size=11.5, fill=INK2))
         else:
             out.append(text(x0 - 12, y + 20, why, size=11.5, fill=INK2, anchor="end"))
     py = by + 7 * 52 + 58
@@ -1087,8 +1101,8 @@ def retention_timeline():
         ),
         (
             "predictive optimization",
-            "keeps at least 7 days",
-            "Databricks may VACUUM the manifest table itself",
+            "may VACUUM the table",
+            "so GeoBrix sets the properties on the left and honours its own horizon",
         ),
     ]
     cw = (W - 120) / 4
@@ -1304,7 +1318,7 @@ DIAGRAMS = {
 
 
 def render_png(svg_path, png_path, w, h):
-    """Rasterize with headless Chrome at 2x, then crop the white margin."""
+    """Rasterize with headless Chrome at 2x, crop the white margin and quantize the palette."""
     if not os.path.exists(CHROME):
         print(f"  no browser at {CHROME}: PNG skipped (set CHROME)")
         return False
@@ -1332,7 +1346,13 @@ def render_png(svg_path, png_path, w, h):
         img, Image.new("RGB", img.size, (255, 255, 255))
     ).getbbox()
     if bbox:
-        img.crop(bbox).save(png_path)
+        img = img.crop(bbox)
+    # 128 colours, no dithering: the diagrams are flat fills and text, and this makes the file
+    # about a third of its size.
+    img = img.quantize(
+        colors=128, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE
+    )
+    img.save(png_path, optimize=True)
     return True
 
 

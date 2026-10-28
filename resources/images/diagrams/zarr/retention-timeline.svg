@@ -22,18 +22,20 @@
 <text x="1140" y="166" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#7A5AA6" text-anchor="middle">v7</text>
 <circle cx="1300" cy="180" r="8" fill="#7A5AA6"/>
 <text x="1300" y="166" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#7A5AA6" text-anchor="middle">v8</text>
+<circle cx="640" cy="180" r="11.5" fill="none" stroke="#0F8E8B" stroke-width="2.5"/>
+<text x="726" y="206" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="700" fill="#0F8E8B" text-anchor="end">v4 is live at the horizon: it stays readable</text>
 <line x1="740" y1="164" x2="740" y2="592" stroke="#D2441F" stroke-width="2.4" stroke-dasharray="7 5"/>
-<text x="732" y="610" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#D2441F" text-anchor="end">vacuum horizon</text>
-<text x="732" y="626" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#5A6878" text-anchor="end">versions before it raise ZarrVersionUnavailable</text>
+<text x="732" y="610" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#D2441F" text-anchor="end">the horizon</text>
+<text x="732" y="626" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#5A6878" text-anchor="end">versions older than the one live here raise ZarrVersionUnavailable</text>
 <text x="216" y="250" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#1B3139" text-anchor="end">pack of v1's chunks</text>
 <rect x="270" y="230" width="250" height="30" rx="7" ry="7" fill="#FCE9E2" stroke="#D2441F" stroke-width="1.8" stroke-dasharray="5 3"/>
 <rect x="270" y="230" width="250" height="30" rx="7" fill="url(#hatch)"/>
 <text x="280" y="250" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#D2441F" text-anchor="start">superseded</text>
 <text x="532" y="250" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="400" fill="#1B3139" text-anchor="start">replaced before the horizon: deleted</text>
 <text x="216" y="302" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#1B3139" text-anchor="end">pack of v2's chunks</text>
-<rect x="390" y="282" width="510" height="30" rx="7" ry="7" fill="#E3EEF8" stroke="#1F6FB5" stroke-width="1.8"/>
+<rect x="390" y="282" width="450" height="30" rx="7" ry="7" fill="#E3EEF8" stroke="#1F6FB5" stroke-width="1.8"/>
 <text x="400" y="302" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#1F6FB5" text-anchor="start">retained</text>
-<text x="756" y="302" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="400" fill="#1B3139" text-anchor="start">replaced at v5, inside the window: a readable version still uses it</text>
+<text x="852" y="302" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="400" fill="#1B3139" text-anchor="start">replaced at v5, inside the window: v4, live at the horizon, still reads it</text>
 <text x="216" y="354" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#1B3139" text-anchor="end">pack of v3's chunks</text>
 <rect x="520" y="334" width="920" height="30" rx="7" ry="7" fill="#DCEFE0" stroke="#2F8F4E" stroke-width="1.8"/>
 <text x="530" y="354" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#2F8F4E" text-anchor="start">live</text>
@@ -66,7 +68,7 @@
 <text x="750.0" y="732" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="800" fill="#0F1B2A" text-anchor="start">max(30 days, retain)</text>
 <text x="750.0" y="750" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="400" fill="#3F4D5E" text-anchor="start">Delta history lasts at least as long</text>
 <text x="1095.0" y="710" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#7A5AA6" text-anchor="start">predictive optimization</text>
-<text x="1095.0" y="732" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="800" fill="#0F1B2A" text-anchor="start">keeps at least 7 days</text>
-<text x="1095.0" y="750" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="400" fill="#3F4D5E" text-anchor="start">Databricks may VACUUM the manifest table itself</text>
+<text x="1095.0" y="732" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="800" fill="#0F1B2A" text-anchor="start">may VACUUM the table</text>
+<text x="1095.0" y="750" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="400" fill="#3F4D5E" text-anchor="start">so GeoBrix sets the properties on the left and</text><text x="1095.0" y="764" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="400" fill="#3F4D5E" text-anchor="start">honours its own horizon</text>
 <text x="1460" y="808" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#7A8794" text-anchor="end">GeoBrix · Zarr stores</text>
 </svg>

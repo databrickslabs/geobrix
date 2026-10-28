@@ -289,6 +289,27 @@ def test_time_travel(spark, story, capsys):
     assert shown(capsys) == ex.TIME_TRAVEL_output.strip()
 
 
+def test_time_travel_stops_at_retain_without_a_vacuum(
+    spark, cube, new_table, tmp_path, capsys
+):
+    table = new_table("retain")
+    ex.time_travel_stops_at_retain(spark, cube, table, str(tmp_path / "short_retain"))
+    assert shown(capsys) == ex.TIME_TRAVEL_STOPS_AT_RETAIN_output.strip()
+    props = dict(spark.sql(f"SHOW TBLPROPERTIES {table}").collect())
+    assert props["geobrix.zarr.retain"] == "2 seconds"
+    assert (
+        "geobrix.zarr.vacuum_horizon" not in props
+    )  # no vacuum ran: retain alone bounds it
+    latest = gbx_zarr_read(
+        spark,
+        table,
+        variables=["t2m"],
+        sel={"latitude": 48.0, "longitude": 2.0},
+        output="table",
+    )
+    assert latest.count() == 12  # the latest version always reads
+
+
 def test_restore_a_tagged_version(spark, story):
     story.version = ex.restore_a_version(spark, story.table)
     assert story.version == 9

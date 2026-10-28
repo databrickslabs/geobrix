@@ -2818,8 +2818,9 @@ def gbx_zarr_write(
     that changed the same chunks since this one read them (or a shard a chunk was read
     from, or a coordinate label to another value) raises ``ZarrWriteConflict``, and nothing
     of this write is visible. One that changed only metadata is rebased and the commit
-    retried, at most twenty times (every lost round means another writer landed, so up to
-    twenty simultaneous appenders to one array all land). Examples are another append's
+    retried, at most twenty times (every lost round means another writer landed, so the last
+    of N simultaneous appenders needs about N attempts; eight simultaneous appenders to one
+    array were measured to all land). Examples are another append's
     shape, a shared coordinate chunk, or an array created meanwhile.
 
     A blocks DataFrame is read once for ``update`` and ``overwrite``. ``create`` and

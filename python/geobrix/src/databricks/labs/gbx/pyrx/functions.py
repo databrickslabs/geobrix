@@ -2858,17 +2858,46 @@ def _transformcrs_tile(tile, crs_value, file_ref=None, grid_dirs=None):
         return _serde.build_error_tile(f"RST_TransformCrs: {e}", _tile_cellid(tile))
 
 
+def _error_tile_of(tile):
+    """*tile* as a dict when it is an error tile, else None. The one test every pass-through shares.
+
+    An error tile is a swallowed failure: no raster, no path, and its reason under ``last_error`` or
+    ``error_message``. A tile that still has pixels is never one (the merge aggregates stamp a warning
+    under ``last_error`` on good tiles).
+    """
+    if tile is None or isinstance(tile, (bytes, bytearray, VirtualTile)):
+        return None
+    d = tile.asDict() if hasattr(tile, "asDict") else dict(tile)
+    if d.get("raster") is not None or d.get("path") is not None:
+        return None
+    md = d.get("metadata") or {}
+    return d if ("last_error" in md or "error_message" in md) else None
+
+
 def _empty_tile_out(tile):
     """What a function returns for a tile with neither raster nor path.
 
-    An error tile (a diagnostic under last_error or error_message) goes out unchanged, so the
-    upstream reason survives every step, as it does on the JVM tier; any other empty tile is NULL.
+    An error tile goes out unchanged, so the upstream reason survives every step, as it does on the
+    JVM tier; any other empty tile is NULL.
     """
-    if tile is None or isinstance(tile, (bytes, bytearray)):
-        return None
-    d = tile.asDict() if hasattr(tile, "asDict") else dict(tile)
-    md = d.get("metadata") or {}
-    return d if ("last_error" in md or "error_message" in md) else None
+    return _error_tile_of(tile)
+
+
+def _empty_tile_rows(tile, who):
+    """The rows a tile generator emits for a tile with neither raster nor path (call it when
+    :func:`_tile_is_empty`); the generator form of :func:`_empty_tile_out`.
+
+    NULL has nothing to split: no rows, as ``explode(NULL)`` gives. An error tile comes out as itself,
+    so the upstream reason survives; any other empty tile is one error tile naming *who*.
+    """
+    if tile is None:
+        return []
+    err = _error_tile_of(tile)
+    return (
+        [err]
+        if err is not None
+        else [_serde.build_error_tile(f"{who}: empty or unreadable tile")]
+    )
 
 
 @f.udf(V2_TILE_SCHEMA)
@@ -5306,7 +5335,7 @@ class _RstSeparateBandsUDTF:
 
     def eval(self, tile, file_ref=None):
         if _tile_is_empty(tile):
-            yield _serde.build_error_tile("RST_SeparateBands: empty or unreadable tile")
+            yield from _empty_tile_rows(tile, "RST_SeparateBands")
             return
         from databricks.labs.gbx.pyrx import _env
 
@@ -5359,7 +5388,7 @@ class _RstRetileUDTF:
 
     def eval(self, tile, tile_width, tile_height, file_ref=None):
         if _tile_is_empty(tile):
-            yield _serde.build_error_tile("RST_ReTile: empty or unreadable tile")
+            yield from _empty_tile_rows(tile, "RST_ReTile")
             return
         from databricks.labs.gbx.pyrx import _env
 
@@ -5387,9 +5416,7 @@ class _RstToOverlappingTilesUDTF:
 
     def eval(self, tile, tile_width, tile_height, overlap, file_ref=None):
         if _tile_is_empty(tile):
-            yield _serde.build_error_tile(
-                "RST_ToOverlappingTiles: empty or unreadable tile"
-            )
+            yield from _empty_tile_rows(tile, "RST_ToOverlappingTiles")
             return
         from databricks.labs.gbx.pyrx import _env
 
@@ -5419,7 +5446,7 @@ class _RstMakeTilesUDTF:
 
     def eval(self, tile, size_in_mb, file_ref=None):
         if _tile_is_empty(tile):
-            yield _serde.build_error_tile("RST_MakeTiles: empty or unreadable tile")
+            yield from _empty_tile_rows(tile, "RST_MakeTiles")
             return
         from databricks.labs.gbx.pyrx import _env
 
@@ -5460,7 +5487,7 @@ class _RstH3TessellateUDTF:
 
     def eval(self, tile, resolution, assignment=None, coverage=None, file_ref=None):
         if _tile_is_empty(tile) or resolution is None:
-            yield _serde.build_error_tile("RST_H3_Tessellate: empty or unreadable tile")
+            yield from _empty_tile_rows(tile, "RST_H3_Tessellate")
             return
         effective_mode = assignment if assignment is not None else "centroid"
         if effective_mode not in {"covering", "centroid"}:
@@ -5607,9 +5634,7 @@ class _RstQuadbinTessellateUDTF:
 
     def eval(self, tile, resolution, assignment=None, coverage=None, file_ref=None):
         if _tile_is_empty(tile) or resolution is None:
-            yield _serde.build_error_tile(
-                "RST_Quadbin_Tessellate: empty or unreadable tile"
-            )
+            yield from _empty_tile_rows(tile, "RST_Quadbin_Tessellate")
             return
         effective_mode = assignment if assignment is not None else "centroid"
         if effective_mode not in {"covering", "centroid"}:
@@ -5660,9 +5685,7 @@ class _RstBngTessellateUDTF:
 
     def eval(self, tile, resolution, assignment=None, coverage=None, file_ref=None):
         if _tile_is_empty(tile) or resolution is None:
-            yield _serde.build_error_tile(
-                "RST_BNG_Tessellate: empty or unreadable tile"
-            )
+            yield from _empty_tile_rows(tile, "RST_BNG_Tessellate")
             return
         effective_mode = assignment if assignment is not None else "centroid"
         if effective_mode not in {"covering", "centroid"}:
@@ -5767,7 +5790,10 @@ class _RstCustomTessellateUDTF:
         coverage=None,
         file_ref=None,
     ):
-        if _tile_is_empty(tile) or resolution is None or grid_struct is None:
+        if _tile_is_empty(tile):
+            yield from _empty_tile_rows(tile, "RST_Custom_Tessellate")
+            return
+        if resolution is None or grid_struct is None:
             yield _serde.build_error_tile(
                 "RST_Custom_Tessellate: empty tile or missing grid/resolution"
             )

@@ -104,8 +104,8 @@ class RST_ErrorHandlerTest extends AnyFunSuite {
 
     test("safeEval (generator) error tile cellid falls back to -1 when the tile row is unusable") {
         val throwingEval: () => IterableOnce[InternalRow] = () => throw new RuntimeException("gen error")
-        val noTile: InternalRow = null
-        val errorTile = RST_ErrorHandler.safeEval(throwingEval, noTile, BinaryType).toSeq.head.getStruct(0, 9)
+        val notATile: InternalRow = new GenericInternalRow(Array[Any]("not a tile"))
+        val errorTile = RST_ErrorHandler.safeEval(throwingEval, notATile, BinaryType).toSeq.head.getStruct(0, 9)
         errorTile.getLong(0) shouldBe -1L
     }
 

@@ -113,3 +113,38 @@ def test_tooverlappingtiles_corrupt_yields_one_error_row(spark):
     assert (
         "RST_ToOverlappingTiles" in row["metadata"]["last_error"]
     ), f"expected 'RST_ToOverlappingTiles' in last_error, got: {row['metadata']['last_error']!r}"
+
+
+# Every light tile generator and the arguments after its tile: they share one answer for a tile with
+# nothing to open (`_empty_tile_rows`), so each one needs only its own wiring checked.
+TILE_GENERATORS = {
+    "gbx_rst_separatebands": "",
+    "gbx_rst_retile": ", 8, 8",
+    "gbx_rst_tooverlappingtiles": ", 8, 8, 0",
+    "gbx_rst_maketiles": ", 1",
+    "gbx_rst_h3_tessellate": ", 3",
+    "gbx_rst_quadbin_tessellate": ", 3",
+    "gbx_rst_bng_tessellate": ", 3",
+    "gbx_rst_custom_tessellate": ", NULL, 3",
+}
+
+
+@pytest.mark.parametrize("name", sorted(TILE_GENERATORS))
+def test_a_null_tile_gives_no_rows_and_an_error_tile_comes_out_as_itself(spark, name):
+    from databricks.labs.gbx.bench import oracles
+    from databricks.labs.gbx.manifest import TILE_SQL
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    prx.register(spark)
+    upstream = oracles._build("tile_error", "")
+    spark.createDataFrame(
+        [(1, None), (2, upstream)], f"id int, tile {TILE_SQL}"
+    ).createOrReplaceTempView("_udtf_empty_in")
+    rows = spark.sql(
+        f"SELECT id, t.* FROM _udtf_empty_in, LATERAL {name}(tile{TILE_GENERATORS[name]}) t"
+    ).collect()
+    assert [r["id"] for r in rows] == [
+        2
+    ], "a NULL tile gives no rows, the error tile one"
+    assert rows[0]["raster"] is None and rows[0]["path"] is None
+    assert rows[0]["metadata"] == upstream["metadata"], "the upstream reason is kept"

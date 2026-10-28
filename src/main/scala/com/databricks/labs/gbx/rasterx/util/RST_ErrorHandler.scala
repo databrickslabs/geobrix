@@ -128,11 +128,17 @@ object RST_ErrorHandler extends Logging {
       * row exactly like the rows of the success path. Returning the bare 9-field tile row hands Spark
       * a Long where it expects the struct and fails with a ClassCastException.
       *
+      * A NULL tile has nothing to split: no rows, as `explode(NULL)` gives and as the light tier does. An error
+      * tile in comes out as itself in the one-column row, so the upstream diagnostic survives; it is found
+      * structurally and never opened, so no failure is needed to reach it.
+      *
       * @param tileRow
       *   the tile row the generator is evaluating (its tile argument, not the generator's input row);
       *   the error tile carries its cell id, read without opening the raster, or -1 when it has none.
       */
     def safeEval(eval: () => IterableOnce[InternalRow], tileRow: InternalRow, rasterType: DataType): IterableOnce[InternalRow] = {
+        if (tileRow == null) return Seq.empty
+        if (RasterSerializationUtil.isErrorTile(tileRow)) return Seq(InternalRow.fromSeq(Seq(tileRow)))
         try {
             eval()
         } catch {

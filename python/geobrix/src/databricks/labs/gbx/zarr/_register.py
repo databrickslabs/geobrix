@@ -1196,8 +1196,10 @@ def gbx_zarr_register(
     The table is read-only unless ``writable=True``, which needs an ``overlay_root``:
     a directory (on a Volume) outside the store that this table owns and GeoBrix writes
     to, recorded by an owner marker so no other table can claim it. ``file_mode`` is
-    ``"auto"`` or ``"fuse"`` (path strings relative to the store root); ``retain`` is how
-    long superseded versions stay readable.
+    ``"auto"`` or ``"fuse"`` (path strings relative to the store root); ``"external"``
+    keeps FILE EXTERNAL references and needs a workspace with the File type preview,
+    which is not yet available. ``"managed"`` is never allowed for a registered store: it
+    would copy the base. ``retain`` is how long superseded versions stay readable.
 
     An array GeoBrix cannot decode (a string coordinate, say) is registered like any
     other, objects and documents, and listed under ``unsupported`` in the commit's
@@ -1218,7 +1220,9 @@ def gbx_zarr_register(
         )
     retain_seconds(retain)
     _q(table)
-    mode = resolve_file_mode(spark, file_mode, has_filespace=False)
+    mode = resolve_file_mode(
+        spark, file_mode, has_filespace=bool(overlay_root), registered=True
+    )
     base = _local_root(path)
     overlay = _local_root(overlay_root) if overlay_root else None
     if overlay:

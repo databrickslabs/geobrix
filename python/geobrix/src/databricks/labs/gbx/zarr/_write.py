@@ -76,6 +76,8 @@ from databricks.labs.gbx.core._arrow import to_spark_df
 from databricks.labs.gbx.zarr import _manifest as M
 from databricks.labs.gbx.zarr import _write_tiles
 from databricks.labs.gbx.zarr._access import bounded_closure, resolve_access
+from databricks.labs.gbx.zarr._filemode import require_geobrix_files
+from databricks.labs.gbx.zarr._filemode import resolve as resolve_file_mode
 from databricks.labs.gbx.zarr._layout import chunk_layout, coordinate_chunks
 from databricks.labs.gbx.zarr._meta import (
     ArrayMeta,
@@ -1227,12 +1229,7 @@ def _write_roots(table, props, owner) -> tuple[str, str | None]:
     """
     from databricks.labs.gbx.zarr._register import check_owner_marker
 
-    if props.file_mode != "fuse":
-        raise ZarrUnsupported(
-            f"{table} keeps its files in file_mode {props.file_mode!r}, which GeoBrix does "
-            "not write yet",
-            fix="write to a store with file_mode 'fuse'",
-        )
+    require_geobrix_files(table, props.file_mode, "write")
     if props.kind == "registered":
         if not props.writable or not props.overlay_root:
             raise ZarrReadOnly(
@@ -2737,7 +2734,9 @@ def gbx_zarr_write(
       (``None`` computes them, a dict sets some, ``False`` means none) and ``codecs`` (the
       inner chunk's codec chain, as Zarr v3 codec documents or zarr codec objects; default
       ``bytes`` + ``zstd`` level 3 + ``crc32c``) lay out each array; coordinates are one
-      unsharded chunk. ``file_mode`` and ``retain`` are the store's.
+      unsharded chunk. ``file_mode`` is ``"auto"`` or ``"fuse"`` (the manifest keeps path
+      strings); ``"external"`` and ``"managed"`` keep FILE values and need a workspace with
+      the File type preview, which is not yet available. ``retain`` is the store's.
     - ``"append"``: extend along ``append_dim`` (default: the first dimension labelled by
       CF times). The input must carry that dimension's labels, all after the store's last;
       on a regular axis they land at their step (so appends may arrive out of order), else
@@ -2826,7 +2825,6 @@ def gbx_zarr_write(
     incomplete multipart uploads (``AbortIncompleteMultipartUpload``) to the bucket of the
     Volume.
     """
-    from databricks.labs.gbx.zarr._filemode import resolve as resolve_file_mode
     from databricks.labs.gbx.zarr._register import (
         _claim_marker,
         _discard,
@@ -2918,7 +2916,9 @@ def gbx_zarr_write(
             "or 'overwrite'",
         )
     _check_new_root(data_root, owner)
-    fm = resolve_file_mode(spark, file_mode, has_filespace=False)
+    # the data root is the filespace of a managed store
+    fm = resolve_file_mode(spark, file_mode, has_filespace=True)
+    require_geobrix_files(target, fm, "write")  # before a marker is claimed
     inp = _create_input(spark, data, tiles, variables)
     plan = _plan_create(target, write_id, data_root, inp, chunks, shards, codecs)
     plan.access = _write_access(spark, plan, access)  # before anything is claimed

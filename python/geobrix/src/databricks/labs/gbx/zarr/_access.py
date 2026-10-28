@@ -34,6 +34,7 @@ from time import monotonic as _monotonic
 from typing import Protocol
 
 from databricks.labs.gbx.core._retry import _retry_transient
+from databricks.labs.gbx.zarr._filemode import path_of
 from databricks.labs.gbx.zarr._shard import Region
 from databricks.labs.gbx.zarr.errors import ZarrAccessUnavailable, ZarrStoreDrift
 
@@ -253,6 +254,7 @@ class FuseRangeReader(_SpanReader):
                 f"manifest file {file!r} is not a usable path",
                 fix="correct the row or run gbx_zarr_sync",
             )
+        file = path_of(file)  # a FILE uri (dbfs:/Volumes/...) opens as its bare path
         external = region.origin == "external" and self._base_root is not None
         base = os.path.normpath(
             os.path.abspath(self._base_root if external else self._root)
@@ -906,6 +908,7 @@ class ObstoreRangeReader(_SpanReader):
                 f"manifest file {file!r} is not a usable path",
                 fix="correct the row or run gbx_zarr_sync",
             )
+        file = path_of(file)  # a FILE uri (dbfs:/Volumes/...) is its bare path
         external = region.origin == "external" and self._base is not None
         base = self._base if external else self._root
         if os.path.isabs(file):

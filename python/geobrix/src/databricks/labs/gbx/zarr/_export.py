@@ -55,6 +55,7 @@ from databricks.labs.gbx.zarr._access import (
     _within,
     resolve_access,
 )
+from databricks.labs.gbx.zarr._filemode import require_geobrix_files
 from databricks.labs.gbx.zarr._maint import _STREAM_WINDOW, _require_files, _stream
 from databricks.labs.gbx.zarr._meta import xarray_fill_form
 from databricks.labs.gbx.zarr._read import (
@@ -640,12 +641,7 @@ def gbx_zarr_export(
     else:
         _check_reference_target(path, to)
     props = M.read_props(spark, source)
-    if props.file_mode != "fuse":
-        raise ZarrUnsupported(
-            f"{source} keeps its files in file_mode {props.file_mode!r}, which GeoBrix "
-            "does not read yet",
-            fix="export a store with file_mode 'fuse'",
-        )
+    require_geobrix_files(source, props.file_mode, "export")
     src = _open_table(spark, source, version_as_of, None)
     reach = FUSE
     if method == "reference" and access == "direct":

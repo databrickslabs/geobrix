@@ -721,11 +721,12 @@ def test_vacuum_retain_floor_and_malformed_retain(
 
 
 def test_vacuum_of_a_file_mode_managed_store_runs_delta_vacuum(
-    spark_delta, drop, tmp_path
+    spark_delta, drop, tmp_path, monkeypatch
 ):
     """Ruling Z10: the retention property is set (never below the store's retain), then a
     plain VACUUM runs, never a RETAIN clause, so retentionDurationCheck is never touched.
-    Another file mode that GeoBrix does not write yet is refused."""
+    GeoBrix does not write the files of a managed store."""
+    monkeypatch.setattr(M, "file_column_type", lambda mode: "STRING")  # no FILE in OSS
     table = _table("fm")
     drop(table)
     M.create_manifest(
@@ -743,15 +744,8 @@ def test_vacuum_of_a_file_mode_managed_store_runs_delta_vacuum(
     assert props[M.HORIZON_PROP]
     assert {r["reason"] for r in rows} <= {"delta"}
 
-    other = _table("fe")
-    drop(other)
-    M.create_manifest(
-        spark_delta,
-        other,
-        M.StoreProps("managed", str(tmp_path / "fe"), None, True, "external", "7 days"),
-    )
-    with pytest.raises(ZarrUnsupported, match="external"):
-        gbx_zarr_vacuum(spark_delta, other)
+    with pytest.raises(ZarrUnsupported, match="managed"):
+        gbx_zarr_optimize(spark_delta, table)
 
 
 # --- history -----------------------------------------------------------------------------

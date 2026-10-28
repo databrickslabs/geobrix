@@ -50,6 +50,7 @@ from databricks.labs.gbx.core._arrow import to_spark_df
 from databricks.labs.gbx.core._retry import _retry_transient
 from databricks.labs.gbx.zarr import _manifest as M
 from databricks.labs.gbx.zarr._access import identities_match, reader_for
+from databricks.labs.gbx.zarr._filemode import path_of, require_geobrix_files
 from databricks.labs.gbx.zarr._pack import PackWriter, require_packs
 from databricks.labs.gbx.zarr._register import OWNER_MARKER, identity_of
 from databricks.labs.gbx.zarr._shard import Region
@@ -57,7 +58,6 @@ from databricks.labs.gbx.zarr._store import ManifestStore
 from databricks.labs.gbx.zarr.errors import (
     ZarrError,
     ZarrReadOnly,
-    ZarrUnsupported,
     ZarrVersionUnavailable,
     ZarrWriteConflict,
 )
@@ -360,12 +360,7 @@ def _optimize(
             f"{target_file_mb!r}. Fix: pass target_file_mb=128."
         )
     props = M.read_props(spark, table)
-    if props.file_mode != "fuse":
-        raise ZarrUnsupported(
-            f"{table} keeps its files in file_mode {props.file_mode!r}, which GeoBrix does "
-            "not write yet",
-            fix="optimize a store with file_mode 'fuse'",
-        )
+    require_geobrix_files(table, props.file_mode, "write")
     root, base = _roots(spark, table, props)
     if root is None:
         raise ZarrReadOnly(
@@ -568,9 +563,10 @@ def _files_at(spark, table: str, version: int, root: str, tag: str | None = None
     Raises ``ZarrVersionUnavailable`` when Delta no longer has the version's data files.
     """
     where = "tag IS NULL" if tag is None else f"tag = {M._lit(tag)}"
+    select = M.file_select(M.file_layout(spark, table))
     try:
         rows = spark.sql(
-            f"SELECT DISTINCT file FROM {M._q(table)} VERSION AS OF {int(version)} "
+            f"SELECT DISTINCT {select} FROM {M._q(table)} VERSION AS OF {int(version)} "
             f"WHERE {where} AND kind IN ('shard', 'chunk') AND file IS NOT NULL "
             "AND coalesce(origin, 'gbx') = 'gbx'"
         ).toArrow()
@@ -583,7 +579,7 @@ def _files_at(spark, table: str, version: int, root: str, tag: str | None = None
             fix=f"check that SELECT * FROM {table} VERSION AS OF {version} runs, then "
             "run the vacuum again",
         ) from e
-    return {_rel(f, root) for f in rows.column("file").to_pylist()}
+    return {_rel(path_of(f), root) for f in rows.column("file").to_pylist()}
 
 
 def _protected(spark, table: str, root: str, horizon: datetime):
@@ -601,8 +597,9 @@ def _protected(spark, table: str, root: str, horizon: datetime):
     """
     from pyspark.sql import functions as F
 
+    select = M.file_select(M.file_layout(spark, table))
     rows = spark.sql(
-        f"SELECT DISTINCT file, tag IS NOT NULL AS tagged FROM {M._q(table)} "
+        f"SELECT DISTINCT {select}, tag IS NOT NULL AS tagged FROM {M._q(table)} "
         "WHERE kind IN ('shard', 'chunk') AND file IS NOT NULL "
         "AND coalesce(origin, 'gbx') = 'gbx'"
     ).toArrow()
@@ -610,7 +607,7 @@ def _protected(spark, table: str, root: str, horizon: datetime):
     for f, is_tag in zip(
         rows.column("file").to_pylist(), rows.column("tagged").to_pylist()
     ):
-        (tagged if is_tag else live).add(_rel(f, root))
+        (tagged if is_tag else live).add(_rel(path_of(f), root))
     tagged -= live
 
     history = [
@@ -798,7 +795,7 @@ def gbx_zarr_vacuum(
     is not this table's (``ZarrOwnershipError``), are never touched. Old versions you want to
     keep indefinitely are tagged (``gbx_zarr_tag``). In ``file_mode="managed"`` the table
     owns the files and this runs Delta's ``VACUUM`` (a ``retain`` shorter than the store's
-    changes nothing there); other file modes raise ``ZarrUnsupported``.
+    changes nothing there). ``fuse`` and ``external`` stores are vacuumed by GeoBrix.
     """
     props = M.read_props(spark, table)
     seconds, store_seconds = _check_retain(table, props, retain, force)
@@ -811,12 +808,7 @@ def gbx_zarr_vacuum(
     )
     if props.file_mode == "managed":
         return _delta_vacuum(spark, table, store_seconds, horizon, dry_run)
-    if props.file_mode != "fuse":
-        raise ZarrUnsupported(
-            f"{table} keeps its files in file_mode {props.file_mode!r}, which GeoBrix "
-            "does not vacuum yet",
-            fix="vacuum a store with file_mode 'fuse' (or 'managed', where Delta does)",
-        )
+    require_geobrix_files(table, props.file_mode, "vacuum")
 
     root, _ = _roots(spark, table, props)
     if root is None:
@@ -877,11 +869,13 @@ _COLUMNS = ", ".join(M.MANIFEST_COLUMNS)
 
 
 def _commit_source_sql(write_id: str, meta: dict) -> str:
-    """One ``commit`` row as a SELECT in the manifest's column order."""
+    """One ``commit`` row as a SELECT in the manifest's column order. ``file`` is a bare
+    NULL, which a UNION takes the type of the rows' own ``file`` from: STRING, or a FILE
+    value."""
     wid = M._lit(write_id)
     return (
         f"SELECT 'commit' AS kind, CAST(NULL AS STRING) AS array, {wid} AS key, "
-        "CAST(NULL AS STRING) AS shard_key, CAST(NULL AS STRING) AS file, "
+        "CAST(NULL AS STRING) AS shard_key, NULL AS file, "
         "CAST(NULL AS BIGINT) AS offset, CAST(NULL AS BIGINT) AS length, "
         "CAST(NULL AS STRING) AS checksum, CAST(NULL AS STRING) AS origin, "
         f"CAST(NULL AS STRING) AS identity, {wid} AS write_id, "

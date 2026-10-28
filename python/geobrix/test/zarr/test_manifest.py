@@ -976,7 +976,8 @@ def test_a_user_named_table_is_quoted_everywhere(spark_delta):
         spark_delta.sql(f"DROP TABLE IF EXISTS {name}")
 
 
-def test_registered_props_round_trip(spark_delta):
+def test_registered_props_round_trip(spark_delta, monkeypatch):
+    monkeypatch.setattr(M, "file_column_type", lambda mode: "STRING")  # no FILE in OSS
     props = M.StoreProps(
         kind="registered",
         root="/Volumes/c/s/v/it's\\here",

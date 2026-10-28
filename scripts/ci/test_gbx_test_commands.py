@@ -802,6 +802,13 @@ def test_the_sdk_is_pinned_and_an_interpreter_older_than_3_11_is_passed_over(
             "run_notebooks_serverless",
             [],
         ),
+        (
+            "gbx-uc-sql.sh",
+            ["--file", "x.sql", "--profile", "p", "--warehouse-id", "w"],
+            {},
+            "uc_sql",
+            [],
+        ),
     ],
 )
 def test_the_workspace_launchers_get_the_sdk_when_the_venv_has_none(

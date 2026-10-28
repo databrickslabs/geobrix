@@ -372,3 +372,28 @@ def test_check_laz_names_the_file_with_a_run_of_ff(tmp_path):
             L.check_laz(source, "c.laz")
     with pytest.raises(ValueError, match="a run of 0xFF bytes"):
         L.check_laz(path, "c.laz")
+
+
+def test_a_laszip_only_install_scans_for_the_run_of_0xff(tmp_path, monkeypatch):
+    """With no lazrs, laszip decodes (and overflows on the same bytes), so its points
+    are scanned too: no chunk table is read, but the damaged file is refused and a
+    sound one is not."""
+    import laspy
+    from laspy.compression import LazBackend
+
+    bad = _minimal_repro(tmp_path / "bad.laz", point_format=1)
+    good = _make_laz(tmp_path / "ok.laz", point_format=3)
+    headers = {}
+    for path in (bad, good):
+        with laspy.open(path) as r:
+            headers[path] = r.header
+    monkeypatch.setitem(sys.modules, "lazrs", None)  # import lazrs fails
+    monkeypatch.setattr(
+        LazBackend, "detect_available", staticmethod(lambda: (LazBackend.Laszip,))
+    )
+    size = os.path.getsize
+    assert L._read_chunk_table(headers[bad], bad, size(bad)) == VERDICT
+    assert L._read_chunk_table(headers[good], good, size(good)) is None
+    with pytest.raises(ValueError, match="run of 0xFF"):
+        L.check_laz(bad, "bad.laz")
+    L.check_laz(good, "ok.laz")

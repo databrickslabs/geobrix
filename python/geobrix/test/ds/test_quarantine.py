@@ -714,6 +714,22 @@ def test_lidar_laz_declaring_a_huge_point_count_fabricates_none(tmp_path):
     )
 
 
+def test_lidar_laz_without_lazrs_still_caps_a_huge_point_count_by_file_size(
+    tmp_path, monkeypatch
+):
+    """With no chunk table to take the limit from (lazrs is not the decoder), a header
+    count beyond what the bytes of the file could hold is capped by the file's size."""
+    from databricks.labs.gbx.ds import lidar
+
+    path = _laz(tmp_path / "a.laz")
+    _declare_points(path, 10**9)
+    monkeypatch.setattr(lidar, "_read_chunk_table", lambda *a: None)
+    rows, recs = _read(tmp_path, path, "lidar_gbx")
+    assert len(rows) == 5000 and _at_offset_corner(rows) == []
+    (capped,) = [r for r in recs if "can hold" in r["error_message"]]
+    assert capped["error_class"] == Q.RECORDS_NOT_READ
+
+
 def test_lidar_valid_laz_reads_every_point_and_no_record(tmp_path):
     path = _laz(tmp_path / "a.laz")
     rows, recs = _read(tmp_path, path, "lidar_gbx")

@@ -106,7 +106,9 @@ class ResultRow:
     # Python-worker task-seconds (plan metric "time to run Python workers"), summed over the
     # tasks of the execution. Divided by the execution's executor task-seconds it is
     # py_eval_frac, a ratio of like units in (0, 1]. Unlike py_eval_s it does not grow with
-    # the number of slots the run used.
+    # the number of slots the run used. It is recorded, not a decision input: a stage whose time
+    # is the UDF scores about 1 whether that time is the kernel or the Arrow shell around it
+    # (a no-op UDF scores 0.84-0.96); the `floor` form's median is what tells those apart.
     py_eval_s: Optional[float] = None
     py_eval_frac: Optional[float] = None
     native_s: Optional[float] = None  # NULL until a level reports its native time

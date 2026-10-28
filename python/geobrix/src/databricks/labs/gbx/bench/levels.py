@@ -310,8 +310,15 @@ def _row(
 def summarize(rows: List[ResultRow]) -> str:
     """A markdown table of a levels run: one line per form and scale, the attribution split beside the timing.
 
-    A NULL metric prints as "-".
+    A NULL metric prints as "-". ``floor_median_s`` is the median of the same function's ``floor``
+    form (the Arrow UDF shell with a constant body) at the same row count, beside each other
+    variant: the share of a variant's time that a faster kernel cannot win back.
     """
+    floor = {
+        (r.fn, r.level, r.rows): r.iter_median_s
+        for r in rows
+        if r.form == "floor" and r.status == "ok"
+    }
 
     def f(v, fmt):
         return "-" if v is None else fmt(v)
@@ -326,6 +333,7 @@ def summarize(rows: List[ResultRow]) -> str:
         "compute",
         "rows",
         "median_s",
+        "floor_median_s",
         "rows/s",
         "sent_MiB",
         "recv_MiB",
@@ -353,6 +361,11 @@ def summarize(rows: List[ResultRow]) -> str:
             r.compute,
             str(r.rows),
             f"{r.iter_median_s:.3f}",
+            (
+                f(floor.get((r.fn, r.level, r.rows)), lambda x: f"{x:.3f}")
+                if r.form != "floor"
+                else "-"
+            ),
             f"{r.throughput_rows_s:.0f}",
             mib(r.ser_sent_bytes),
             mib(r.ser_recv_bytes),

@@ -119,6 +119,33 @@ _MV_UC = (
 )
 
 
+_FLOOR = "TQ3080"
+
+
+def floor_bng(spark, src):
+    """The BNG function's Arrow UDF shell with nothing inside it: the same three input columns
+    and string output as ``gbx_bng_eastnorthasbng``, and a constant body. Its median is what the
+    shell costs without a kernel, so ``floor_median_s`` beside a variant's median says how much of
+    that variant is the kernel (the part a faster kernel can win back)."""
+    import pandas as pd
+    from pyspark.sql import functions as F
+    from pyspark.sql.types import StringType
+
+    const = _FLOOR
+
+    def floor(
+        e, n, res
+    ):  # no annotations: this module's are strings the UDF cannot resolve
+        return pd.Series(const, index=e.index)
+
+    spark.udf.register(
+        "gbx_bng_floor", F.pandas_udf(floor, StringType(), F.PandasUDFType.SCALAR)
+    )
+    df = spark.sql(_BNG.replace("{fn}", "gbx_bng_floor").format(src=src))
+    r = df.collect()[0]
+    return r[0], r[1], r[2], df
+
+
 def _f(level, variant, fn, inp, sql, uc=False, **kw):
     name = ("{uc}." + fn) if uc else fn  # an L4 function is addressed by its UC schema
     return Form(
@@ -132,6 +159,15 @@ FORMS: Dict[str, List[Form]] = {
         _f("L1", "-", B, "bng_points", _BNG, computes=("dedicated",)),
         _f("L2", "-", B, "bng_points", _BNG, computes=("dedicated", "standard")),
         _f("L3", "c0", B, "bng_points", _BNG),
+        Form(
+            "S",
+            B,
+            "L3",
+            "floor",
+            "bng_points",
+            run="databricks.labs.gbx.bench.levels_forms:floor_bng",
+            register=False,
+        ),
         _f(
             "L4",
             "uc-scalar",

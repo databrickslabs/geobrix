@@ -148,12 +148,17 @@ const config = {
             : [
                 {
                   type: 'dropdown',
-                  label: 'Version',
+                  // The label names the version being read; the matching entry below is
+                  // highlighted (activeBaseRegex) on every docs page.
+                  label: '0.6 (current)',
                   position: 'right',
                   items: [
                     {
                       label: '0.6 (current)',
                       to: '/docs/intro',
+                      // Tested against the full pathname (baseUrl included) on desktop and
+                      // the baseUrl-less one on mobile, so it matches /docs under either.
+                      activeBaseRegex: '/docs(/|$)',
                     },
                     {
                       // pathname:// keeps the baseUrl, does a full page load (the archive

@@ -36,7 +36,7 @@ def _read_directory(get_bytes, header: dict, offset: int, length: int) -> list:
         # (cheapest level) it for the library's own parser costs nothing.
         return deserialize_directory(gzip.compress(raw, compresslevel=1))
     raise ValueError(
-        f"pmtiles_gbx: internal compression {comp.value} ({comp.name}) is not supported"
+        f"pmtiles: internal compression {comp.value} ({comp.name}) is not supported"
     )
 
 

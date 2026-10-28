@@ -437,6 +437,8 @@ validate_set() {
 # overriding whatever the caller's shell exports (a system python3 is another minor version).
 # TZ is pinned to UTC, as in the dev container and on the CI runners: a developer's local zone
 # (EST/EDT) makes timestamp tests fail natively, and the Spark JVM takes its zone from TZ too.
+# GBX_TEST_TZ=<zone> runs under another zone on purpose, to check that a timestamp test does not
+# depend on UTC (the caller's own TZ is still ignored).
 run_in_pyrx_venv() {
     local _cmd="$1"
     local _venv="${GBX_PYRX_VENV:-${PROJECT_ROOT}/.venv-pyrx}"
@@ -446,7 +448,7 @@ run_in_pyrx_venv() {
     fi
     # shellcheck disable=SC1091
     source "${_venv}/bin/activate"
-    PYSPARK_PYTHON="${_venv}/bin/python" PYSPARK_DRIVER_PYTHON="${_venv}/bin/python" TZ=UTC \
+    PYSPARK_PYTHON="${_venv}/bin/python" PYSPARK_DRIVER_PYTHON="${_venv}/bin/python" TZ="${GBX_TEST_TZ:-UTC}" \
         bash -c "${_cmd}"
     local _rc=$?
     deactivate || true

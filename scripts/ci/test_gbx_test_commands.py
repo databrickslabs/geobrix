@@ -373,6 +373,11 @@ def test_markers_narrow_the_default_and_pytest_addopts_reaches_pytest(sandbox):
     words = argv.read_text().splitlines()
     assert _last_m(words) == "not perf"
 
+    # Both opt-ins leave nothing to exclude: pytest gets an empty -m, which selects everything.
+    sandbox.run("gbx-test-pyrx.sh", "--path", path, "--perf", "--with-integration")
+    words = argv.read_text().splitlines()
+    assert _last_m(words) == ""
+
     # --docker: the marker is still one word in the container's command, and the caller's
     # PYTEST_ADDOPTS (--durations, --junitxml) is passed into the container.
     sandbox.run(
@@ -425,6 +430,19 @@ def test_the_host_run_pins_utc_as_the_container_and_ci_do(sandbox):
 
     assert res.returncode == 0, res.output
     assert Path(str(log) + ".tz").read_text().split() == ["UTC"]
+
+    # GBX_TEST_TZ is the one way to another zone; the caller's TZ is still ignored.
+    res = sandbox.run(
+        "gbx-test-pyrx.sh",
+        "--path",
+        "python/geobrix/test/zarr/test_read.py",
+        TZ="Asia/Tokyo",
+        GBX_TEST_TZ="America/New_York",
+    )
+
+    assert res.returncode == 0, res.output
+    # (the fake python appends one line per run)
+    assert Path(str(log) + ".tz").read_text().split() == ["UTC", "America/New_York"]
 
 
 CI_ACTION = REPO_ROOT / ".github" / "actions" / "pyrx_build" / "action.yml"
@@ -1032,7 +1050,19 @@ def test_review_round_skips_the_generated_lock_files_unless_asked(sandbox):
     )  # the caller's config, not ours
 
 
-def test_review_round_keeps_a_relative_report_when_notebooks_are_stripped(sandbox):
+@pytest.mark.parametrize(
+    "output_args",
+    [
+        ["-o", "test-logs/r.md"],
+        ["--output", "test-logs/r.md"],
+        ["-o=test-logs/r.md"],
+        ["--output=test-logs/r.md"],
+    ],
+    ids=["-o", "--output", "-o=", "--output="],
+)
+def test_review_round_keeps_a_relative_report_when_notebooks_are_stripped(
+    sandbox, output_args
+):
     # A changed .ipynb sends isaac into a scratch worktree that is deleted on exit; a relative
     # `-o` was written there and lost. The report must land under the caller's directory.
     git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(sandbox.root)]
@@ -1044,12 +1074,14 @@ def test_review_round_keeps_a_relative_report_when_notebooks_are_stripped(sandbo
     subprocess.run([*git, "commit", "-q", "-m", "notebook"], check=True)
     dbexec = sandbox.bin / "dbexec"
     dbexec.write_text(
-        '#!/bin/sh\nout=""\nwhile [ $# -gt 0 ]; do [ "$1" = "-o" ] && out="$2"; shift; done\n'
+        '#!/bin/sh\nout=""\nwhile [ $# -gt 0 ]; do\n'
+        '  case "$1" in -o|--output) out="$2";; -o=*|--output=*) out="${1#*=}";; esac\n'
+        "  shift\ndone\n"
         'mkdir -p "$(dirname "$out")" && echo report > "$out"\necho reviewed\n'
     )
     dbexec.chmod(0o755)
 
-    res = sandbox.run("gbx-review-round.sh", "--base", "HEAD~1", "--", "-o", "test-logs/r.md")
+    res = sandbox.run("gbx-review-round.sh", "--base", "HEAD~1", "--", *output_args)
 
     assert res.returncode == 0, res.output
     assert (sandbox.root / "test-logs" / "r.md").read_text() == "report\n"

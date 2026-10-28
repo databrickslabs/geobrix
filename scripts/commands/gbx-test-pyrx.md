@@ -6,7 +6,7 @@ The host run is the default: it needs no container, takes no lock and starts at 
 
 `GBX_PYRX_VENV=<dir>` runs on a venv other than `.venv-pyrx` (created with `gbx:venv:sync` under the same variable), for example to try a new lock without disturbing a venv another run is using.
 
-The host run sets `TZ=UTC` (as the container and the CI runners are), and points `PYSPARK_PYTHON` and `PYSPARK_DRIVER_PYTHON` at the venv python. Without `TZ=UTC`, timestamp tests such as `test/zarr/test_read.py` fail in a US time zone.
+The host run sets `TZ=UTC` (as the container and the CI runners are), and points `PYSPARK_PYTHON` and `PYSPARK_DRIVER_PYTHON` at the venv python. Without `TZ=UTC`, timestamp tests such as `test/zarr/test_read.py` fail in a US time zone. `GBX_TEST_TZ=<zone>` (for example `America/New_York`) runs under another zone on purpose, to check that a timestamp test does not depend on UTC; the zone your shell has is still ignored.
 
 ## Usage
 

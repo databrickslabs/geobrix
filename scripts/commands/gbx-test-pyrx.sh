@@ -34,6 +34,7 @@ show_help() {
     echo ""
     echo -e "${CYAN}Environment:${NC}"
     echo -e "  ${YELLOW}GBX_PYRX_VENV=<dir>${NC}  Use this venv instead of .venv-pyrx (create it with the same variable: gbx:venv:sync)"
+    echo -e "  ${YELLOW}GBX_TEST_TZ=<zone>${NC}   Run under this time zone instead of UTC (the host run pins UTC, as the container and CI are), e.g. America/New_York, to check a timestamp test does not depend on UTC"
     echo ""
     echo -e "${CYAN}Other pytest options:${NC}"
     echo -e "  Set ${YELLOW}PYTEST_ADDOPTS${NC} in the calling shell (host and --docker runs both pass it on), e.g."

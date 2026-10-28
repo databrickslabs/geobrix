@@ -155,7 +155,8 @@ def _check_shared_target(spark, path: str, to: str) -> None:
     The tasks write the objects, so on a cluster a driver-local directory would receive
     some of them on each executor (where the driver cannot find them) and the copy would
     fail after the work was done, leaving the strays behind."""
-    if path.startswith(_SHARED_ROOTS) or _single_node(spark):
+    shared = os.path.normpath(os.path.abspath(path)).startswith(_SHARED_ROOTS)
+    if shared or _single_node(spark):
         return
     raise ValueError(
         f"{to} is not a path every node of the cluster sees, and the copy is written by "

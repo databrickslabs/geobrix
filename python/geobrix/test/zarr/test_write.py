@@ -24,6 +24,7 @@ from databricks.labs.gbx.zarr import _write  # noqa: E402
 from databricks.labs.gbx.zarr._manifest import find_commit_version  # noqa: E402
 from databricks.labs.gbx.zarr._read import BLOCKS_SCHEMA  # noqa: E402
 from databricks.labs.gbx.zarr._register import (  # noqa: E402
+    OWNER_LEDGER,
     OWNER_MARKER,
     gbx_zarr_register,
     identity_of,
@@ -1514,23 +1515,31 @@ def test_the_wait_between_attempts_is_capped(spark_delta, drop, tmp_path, no_hoo
     assert pauses == sorted(pauses)  # and it never shrinks
 
 
-def test_a_write_to_a_root_whose_marker_is_gone_is_refused(
+def test_a_root_whose_marker_is_gone_is_restored_from_its_ledger(
     spark_delta, drop, tmp_path, no_hooks
 ):
+    """The marker is the note beside the claim. With the claim (the ledger) still naming the
+    table, a write puts the note back; with neither, the root cannot be shown to be the
+    table's and the Fix says which directory to look at."""
+    import shutil
     import types
 
     from databricks.labs.gbx.core import _retry
 
     no_hooks.setattr(_retry, "time", types.SimpleNamespace(sleep=lambda s: None))
     table, root, version = _create(spark_delta, drop, tmp_path)
+    block = _blocks(spark_delta, ("t2m", (0, 0, 0), np.ones((12, 5, 6), "float32")))
     (root / OWNER_MARKER).unlink()
-    with pytest.raises(ZarrOwnershipError, match="no owner marker"):
-        gbx_zarr_write(
-            _blocks(spark_delta, ("t2m", (0, 0, 0), np.ones((12, 5, 6), "float32"))),
-            table,
-            mode="update",
-        )
-    assert _latest(spark_delta, table) == version
+    assert gbx_zarr_write(block, table, mode="update") > version
+    assert json.loads((root / OWNER_MARKER).read_text())["table"].endswith(table)
+
+    (root / OWNER_MARKER).unlink()
+    shutil.rmtree(root / OWNER_LEDGER)
+    latest = _latest(spark_delta, table)
+    with pytest.raises(ZarrOwnershipError, match="no owner marker") as e:
+        gbx_zarr_write(block, table, mode="update")
+    assert OWNER_LEDGER in e.value.fix and "Fix:" in str(e.value)
+    assert _latest(spark_delta, table) == latest
 
 
 # --- fix round 2 (Ruling Z41) ------------------------------------------------------------------

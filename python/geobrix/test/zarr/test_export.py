@@ -292,6 +292,7 @@ class _Reached(Exception):
     [
         ("spark://10.0.0.4:7077", "/tmp/export/copy", True),
         ("spark://10.0.0.4:7077", "file:/local_disk0/copy", True),
+        ("spark://10.0.0.4:7077", "/Volumes/../tmp/export/copy", True),  # not a Volume
         ("spark://10.0.0.4:7077", "/Volumes/c/s/v/copy", False),
         ("spark://10.0.0.4:7077", "dbfs:/Volumes/c/s/v/copy", False),
         ("local[*, 4]", "/tmp/export/copy", False),  # one machine: every task sees it

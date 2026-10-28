@@ -861,7 +861,7 @@ def publish(spark, table: str, *, break_lock: bool = False) -> int:
             fix="register the store with writable=True and an overlay_root",
         )
     check_owner_marker(
-        props.overlay_root, qualified_table_name(spark, table), "overlay"
+        props.overlay_root, qualified_table_name(spark, table), "overlay", spark
     )
     files = FileLayout.of(props)
     snap = M.snapshot(spark, table, files=files)

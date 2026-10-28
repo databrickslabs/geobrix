@@ -1224,7 +1224,7 @@ def _plan_create(table, write_id, root, inp: _Input, chunks, shards, codecs) -> 
     return plan
 
 
-def _write_roots(table, props, owner) -> tuple[str, str | None]:
+def _write_roots(spark, table, props, owner) -> tuple[str, str | None]:
     """``(root, base_root)``: where this write's files go, and a registered store's own
     files. Refuses a read-only registration, and a root whose owner marker is not ours.
     """
@@ -1237,9 +1237,9 @@ def _write_roots(table, props, owner) -> tuple[str, str | None]:
                 f"{table} is a read-only registration of {props.root}",
                 fix="register the store with writable=True and an overlay_root",
             )
-        check_owner_marker(props.overlay_root, owner, "overlay")
+        check_owner_marker(props.overlay_root, owner, "overlay", spark)
         return props.overlay_root, props.root
-    check_owner_marker(props.root, owner, "managed")
+    check_owner_marker(props.root, owner, "managed", spark)
     return props.root, None
 
 
@@ -1374,7 +1374,7 @@ def _tile_frame(spark, prep):
 def _plan_existing(
     spark, table, write_id, mode, props, data, variables, append_dim, owner, tiles=None
 ) -> _Plan:
-    root, base_root = _write_roots(table, props, owner)
+    root, base_root = _write_roots(spark, table, props, owner)
     files = FileLayout.of(props)
     base = M.snapshot(spark, table, files=files)
     docs = _docs_at(spark, base)

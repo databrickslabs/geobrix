@@ -118,9 +118,9 @@ def _roots(spark, table: str, props) -> tuple[str | None, str | None]:
     if props.kind == "registered":
         if not props.writable or not props.overlay_root:
             return None, props.root
-        check_owner_marker(props.overlay_root, owner, "overlay")
+        check_owner_marker(props.overlay_root, owner, "overlay", spark)
         return props.overlay_root, props.root
-    check_owner_marker(props.root, owner, "managed")
+    check_owner_marker(props.root, owner, "managed", spark)
     return props.root, None
 
 

@@ -11,7 +11,7 @@ The **lightweight (pyrx / pyvx) tier** is a pure-Python/PySpark implementation t
 
 The lightweight tier is seeing **increasing investment** precisely because of that reach. Functions that run on Serverless and ARM expand the audience that can use GeoBrix without infrastructure friction; that is the direction the product is moving, and the lightweight tier is how GeoBrix gets there now.
 
-This page explains *how* the lightweight tier reaches functional and performance parity with the heavyweight JVM tier. The key is choosing the right Spark execution shape per function: fan-out generators use streaming UDTFs, aggregators use grouped-aggregate Arrow UDFs, and per-tile transforms use Arrow scalar UDFs. Underneath each shape, vectorized Python libraries (NumPy, SciPy, rasterio, rio-tiler, xarray-spatial, shapely, mapbox-vector-tile) do the compute.
+This page explains *how* the lightweight tier reaches functional and performance parity with the heavyweight JVM tier. The key is choosing the right Spark execution shape per function: fan-out generators use streaming UDTFs, aggregators use grouped-aggregate Arrow UDFs, and per-tile transforms use Arrow scalar UDFs. Underneath each shape, vectorized Python libraries (NumPy, SciPy, rasterio, rio-tiler, shapely, mapbox-vector-tile) do the compute.
 
 For measured timing and output-consistency numbers, see **[Benchmarking](./benchmarking)**.
 
@@ -161,7 +161,7 @@ The compute underneath each UDF shape comes from best-in-class Python libraries 
 | **SciPy** | Focal filtering (`rst_filter`, `rst_convolve`); Delaunay triangulation + barycentric interpolation for the TIN functions (`st_triangulate`, `st_interpolateelevation*`) |
 | **rio-tiler** | XYZ / web-tile output (`rst_tilexyz`, `rst_xyzpyramid`) |
 | **NumPy** (Horn 3×3) | Terrain analysis (slope, aspect, hillshade, tri, tpi, roughness) |
-| **xarray-spatial** | Viewshed |
+| **GDAL** (`GDALViewshedGenerate`) | Viewshed, with the heavyweight tier's settings |
 | **shapely** | WKB geometry handling (clip, polygonize, rasterize, grid aggregation); TIN geometry parse and legacy-struct decode to WKB (`st_legacyaswkb`) |
 | **pyogrio** | Vector reader I/O (Arrow-native columnar batches — OGR-free) |
 | **mapbox-vector-tile** | MVT protobuf encode / decode (`st_asmvt`, `st_asmvt_pyramid`) |
@@ -519,7 +519,7 @@ Each UDF shape delegates compute to a focused Python module in `pyrx/core/` or `
 | `pyrx/core/bandmath.py` | NumPy | `rst_ndvi`, `rst_ndwi`, `rst_nbr`, `rst_savi`, `rst_evi`, `rst_index`, `rst_mapalgebra`, `rst_threshold`, `rst_derivedband` |
 | `pyrx/core/focal.py` | SciPy + NumPy | `rst_filter`, `rst_convolve` |
 | `pyrx/core/terrain.py` | NumPy (Horn 3×3) | `rst_slope`, `rst_aspect`, `rst_hillshade`, `rst_tri`, `rst_tpi`, `rst_roughness`, `rst_color_relief` |
-| `pyrx/core/analysis.py` | rasterio + shapely + xarray-spatial | `rst_proximity`, `rst_contour`, `rst_sample`, `rst_viewshed` |
+| `pyrx/core/analysis.py` | rasterio + shapely + GDAL's viewshed | `rst_proximity`, `rst_contour`, `rst_sample`, `rst_viewshed` |
 | `pyrx/core/tiles.py` | rasterio + rio-tiler | `rst_retile`, `rst_tooverlappingtiles`, `rst_maketiles`, `rst_tilexyz`, `rst_xyzpyramid` |
 | `pyrx/core/grid.py` | rasterio + shapely + h3/quadbin | `rst_h3_tessellate`, discrete-grid rastertogrid (UDTF path) |
 | `pyrx/core/bridge.py` | rasterio + shapely | `rst_rasterize`, `rst_gridfrompoints`, `rst_dtmfromgeoms` |
@@ -563,7 +563,7 @@ Tiling, warps, terrain, and the aggregators win by 2–20× in pure-core. At Spa
 The `gbx_st_asmvt` MVT aggregator runs within ~6% of the heavyweight JVM/OGR aggregator on a cluster. The `gbx_pmtiles_agg` archive aggregator is a format-agnostic grouped aggregate — registered from both `pyrx` and `pyvx`, reusing the lightweight PMTiles writer's archive assembler (the `pmtiles` package) — that folds a group's tiles into one PMTiles archive per key. On a cluster it runs at roughly parity with the heavyweight Scala encoder: the lightweight median is ~1.07× the heavyweight median (0.742 s vs 0.695 s for 1,000 tiles → one archive), with overlapping spreads, so the gap is within run-to-run noise. The VectorX TIN and legacy-migration functions sit just behind the JVM/JTS tier on the cluster spark-path: legacy decoding (`gbx_st_legacyaswkb`) and elevation interpolation (`gbx_st_interpolateelevationbbox`, `gbx_st_interpolateelevationgeom`) run within ~0.75–0.88× of heavy, while `gbx_st_triangulate` runs ~1.7× slower. That gap is the JVM↔Python serialization of the geometry arrays crossing the UDTF boundary — the same boundary cost seen for other byte-heavy lightweight UDTFs — not the triangulation compute itself; decoded-output parity holds across both tiers. Small metadata accessors (`rst_width`, `rst_srid`, …) are sub-millisecond on both tiers; the JVM-native path can edge them out by a fraction of a millisecond — irrelevant at scale but visible in pure-core.
 
 **Heavyweight still faster:**
-Algorithm-bound GDAL operations — `rst_viewshed` (xrspatial/Numba), `rst_proximity`, `rst_contour`, `rst_polygonize` — run slower on the lightweight tier because no Python library matches the GDAL implementation. These are correct and production-usable; the heavyweight tier is simply the better choice when those specific operations dominate the workload.
+Algorithm-bound GDAL operations — `rst_proximity`, `rst_contour`, `rst_polygonize` — run slower on the lightweight tier because no Python library matches the GDAL implementation. These are correct and production-usable; the heavyweight tier is simply the better choice when those specific operations dominate the workload.
 
 **GridX quadbin (pygx) — heavyweight faster, by the per-row UDF tax:**
 The quadbin functions are **sub-millisecond cell math**, so the lightweight spark-path timing is set by per-row JVM↔Python dispatch and cluster run-to-run variance, not by the work. At that scale precise per-function speedups don't reproduce — the *same* unchanged function varied ~±40% between repeated 5-iteration cluster runs — so the honest summary is that the lightweight tier sits **roughly at parity** with the heavyweight JVM tier across the quadbin surface (sometimes faster, sometimes modestly slower, within that variance), with **exact cell-set parity** for all 10. The numpy-vectorized `pointascell`/`resolution` `pandas_udf`s closed what had been a large per-row-dispatch gap; the array-returning ops use plain UDFs for scale safety (see the module note above). The lightweight tier's decisive advantage is **Serverless/ARM reach and no-JVM/JAR install** at competitive timing. See [Benchmarking — Grid](./benchmarking) for details.

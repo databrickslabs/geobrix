@@ -9,7 +9,7 @@ import rioDist from '!!raw-loader!../../tests/python/api/rasterio_distributed_ex
 
 # Rasterio Distributed
 
-[RasterX](./raster-functions)'s lightweight (`pyrx`) tier is, in large part, `rasterio` plus a best-of-breed Python raster stack — rio-tiler, rio-cogeo, scipy, xarray-spatial, scikit-image, shapely, pyproj, h3, quadbin — run as Arrow-vectorized Spark UDFs and UDTFs across the cluster. It is not a single-node `rasterio.open` loop, and it is not a reimplementation. The same `rasterio` functions you would call locally run inside a vectorized Spark UDF, once per tile, on every executor in parallel. No JAR, no init script, no native GDAL install separate from rasterio's bundled GDAL.
+[RasterX](./raster-functions)'s lightweight (`pyrx`) tier is, in large part, `rasterio` plus a best-of-breed Python raster stack — rio-tiler, scipy, scikit-image, shapely, pyproj, h3, quadbin — run as Arrow-vectorized Spark UDFs and UDTFs across the cluster. It is not a single-node `rasterio.open` loop, and it is not a reimplementation. The same `rasterio` functions you would call locally run inside a vectorized Spark UDF, once per tile, on every executor in parallel. No JAR, no init script, no native GDAL install separate from rasterio's bundled GDAL.
 
 If you already know `rasterio`, you already understand what `pyrx` does. The coverage matrix below maps the surface, and the side-by-sides show each operation in rasterio next to its distributed `pyrx` form.
 
@@ -44,7 +44,7 @@ See the [RasterX Function Reference](./raster-functions) for runnable per-functi
 | **Clip / mask** | `rst_clip` | rasterio + shapely |
 | **Resample** | `rst_resample` | rasterio |
 | **Merge** | `rst_merge`, `rst_merge_agg` | rasterio + NumPy |
-| **COG conversion** | `rst_cog_convert` | rio-cogeo |
+| **COG conversion** | `rst_cog_convert` | rasterio (GDAL's COG driver) |
 | **Band math / spectral indices** | `rst_ndvi`, `rst_evi`, `rst_savi`, `rst_ndwi`, `rst_nbr`, `rst_index`, `rst_derivedband`, `rst_derivedband_agg`, `rst_combineavg`, `rst_combineavg_agg` | NumPy + numexpr |
 | **Terrain (Horn 3×3)** | `rst_slope`, `rst_aspect`, `rst_hillshade`, `rst_tri`, `rst_tpi`, `rst_roughness` | NumPy |
 | **Color relief** | `rst_color_relief` | NumPy (see [Known divergences](#known-behavior-divergences)) |
@@ -52,7 +52,7 @@ See the [RasterX Function Reference](./raster-functions) for runnable per-functi
 | **Focal / convolution** | `rst_filter`, `rst_convolve` | scipy.ndimage |
 | **Proximity** | `rst_proximity` | scipy |
 | **Contour** | `rst_contour` | scikit-image (see [Known divergences](#known-behavior-divergences)) |
-| **Viewshed** | `rst_viewshed` | xarray-spatial |
+| **Viewshed** | `rst_viewshed` | GDAL (`GDALViewshedGenerate`) |
 | **XYZ tiles** | `rst_tilexyz`, `rst_xyzpyramid` | rio-tiler + morecantile |
 | **Tiling / retile** | `rst_maketiles`, `rst_retile` | rasterio + NumPy |
 | **Grid aggregation (H3)** | `rst_h3_tessellate`, `rst_h3_rastertogrid*` | h3 |
@@ -177,11 +177,10 @@ Where the lightweight and heavyweight implementations use different underlying a
 | `rst_color_relief` | `gdal.DEMProcessing` | NumPy `np.interp` | Color ramp interpolation can differ at boundary values; `default` keyword not available in `pyrx` |
 | `rst_resample` | GDAL resampler | rasterio resampler | NoData and boundary pixels can differ |
 | `rst_contour` | `gdal.ContourGenerateEx` | `skimage.find_contours` | Contour tracing algorithm differs; vertex positions near NoData may diverge |
-| `rst_viewshed` | `gdal.ViewshedGenerate` | `xrspatial.viewshed` | Visibility computation differs in algorithm; results agree on clear line-of-sight and fully obstructed pixels, but may differ at grazing angles |
 
 See [Benchmarking](./benchmarking) and [Performance](./performance) for per-function timing data across both tiers.
 
-Rasterio's bundled GDAL also has a narrower driver set than the heavyweight custom build. If you are reading an obscure raster format (HDF4, GRIB2 with specific subtype handling, certain radar formats), the heavyweight tier is more likely to support it.
+In the GeoBrix wheels for environment 5 and 6, `rasterio` runs on GeoBrix's own GDAL build, the one the heavyweight tier loads from the same wheel, rather than the smaller GDAL bundled in PyPI's `rasterio` wheels, so both tiers read the same formats.
 
 ---
 

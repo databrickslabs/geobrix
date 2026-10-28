@@ -4109,7 +4109,7 @@ Higher-level analytical transforms wrapping single GDAL primitives — COG layou
 <Tier both/>
 
 :::note Lightweight tier (pyrx)
-Re-encodes the tile as a Cloud Optimized GeoTIFF (validated with `cog_validate`). `compression` defaults to `"auto"` — a **size-adaptive ZSTD** level with a dtype-matched predictor (the GeoBrix materialize baseline; see [Materialized Compression](./materialized-compression)) — or an explicit codec name (`zstd`, `deflate`, `lzw`, `lerc`, `jpeg`, `webp`, `none`). The tile's `metadata.driver` is `GTiff` (a COG is a valid GeoTIFF).
+Re-encodes the tile as a Cloud Optimized GeoTIFF (it passes GDAL's COG validator). `compression` defaults to `"auto"` — a **size-adaptive ZSTD** level with a dtype-matched predictor (the GeoBrix materialize baseline; see [Materialized Compression](./materialized-compression)) — or an explicit codec name (`zstd`, `deflate`, `lzw`, `lerc`, `jpeg`, `webp`, `none`). The tile's `metadata.driver` is `GTiff` (a COG is a valid GeoTIFF).
 :::
 
 :::note Lightweight Python — virtual-tile force-output
@@ -4174,7 +4174,7 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 <Tier both/>
 
 :::note Lightweight tier (pyrx)
-Powered by **xarray-spatial** (`xrspatial.viewshed`). Returns a Byte tile (255 visible / 0 invisible) from a DEM tile and a POINT observer. The CPU line-of-sight scan differs from the heavyweight GDAL sweep (no earth-curvature correction), but the binary visible/invisible classification matches. Pulls `numba` — the heaviest pyrx dependency.
+Runs GDAL's viewshed (`GDALViewshedGenerate`) with the same settings as the heavyweight tier. Returns a Byte tile (255 visible / 0 invisible) from a DEM tile and a POINT observer.
 :::
 
 :::note Lightweight Python — virtual-tile force-output

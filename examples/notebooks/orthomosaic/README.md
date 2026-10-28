@@ -45,8 +45,7 @@ Installed by the `config_nb` `%pip` cell:
 geobrix[light_env5,photogrammetry,vizx]
 ```
 
-The `photogrammetry` extra bundles: `pycolmap>=4.0.0`, `rasterio>=1.3`, `rio-cogeo>=3.5`,
-`folium`, `pymbtiles`, `mercantile`, `pmtiles`.
+The `photogrammetry` extra bundles: `pycolmap>=4.0.0`, `rasterio>=1.3`, `pmtiles`.
 
 The wheel is fetched from:
 ```

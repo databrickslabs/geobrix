@@ -105,7 +105,7 @@ register(spark)
 One `.tif` file per input row, written under the target directory. Output filenames
 are derived from the `name` column (or `nameCol` override) with a `.tif` extension.
 
-Each output file passes `rio_cogeo.cogeo.cog_validate` — the `cog_gbx` writer
+Each output file passes GDAL's COG validator (`validate_cloud_optimized_geotiff`) — the `cog_gbx` writer
 uses GDAL's `driver="COG"` creation path, which produces a genuine, spec-valid COG
 in a single encode pass.
 

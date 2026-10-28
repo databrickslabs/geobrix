@@ -391,7 +391,7 @@ def test_uc_ddl_contract(fn):
     impl = stmts[0]
     assert "environment_version = '6'" in impl and "geobrix @ file:///Volumes/" in impl
     assert "COMMENT 'geobrix 0.6.0'" in impl and "LANGUAGE PYTHON" in impl
-    assert all("`cat`.`sch`." in s for s in stmts)  # 3-level names only (§2.3)
+    assert all("`cat`.`sch`." in s for s in stmts)  # 3-level names only
     has_default = any(p.default for p in fn.params)
     assert len(stmts) == (2 if has_default else 1)
     if has_default:
@@ -415,6 +415,10 @@ def test_uc_ddl_contract(fn):
         ("ESRI:102003", ("ESRI", 102003)),
         (102003, ("ESRI", 102003)),
         ("EPSG:102003", None),  # an ESRI code under the EPSG name is not an EPSG code
+        # a digit run beyond any code gets the same Fix, not an int() error
+        pytest.param("EPSG:" + "9" * 5000, None, id="epsg-5000-digits"),
+        pytest.param("9" * 5000, None, id="5000-digits"),
+        pytest.param(10**30, None, id="int-1e30"),
         ("IAU_2015:30100", None),
         ("urn:ogc:def:crs:EPSG::4326", None),
         ('GEOGCS["WGS 84"]', None),
@@ -426,7 +430,7 @@ def test_uc_ddl_contract(fn):
     ],
 )
 def test_uc_crs_parser_contract(value, want):
-    """User decision (product CRS probe): int SRID or EPSG:/ESRI:<n> only, as an INT; the rest refused."""
+    """From the product CRS probe: an int SRID or EPSG:/ESRI:<n> only, as an INT; the rest refused."""
     if want:
         got = gcrs.parse_uc_crs(value, fn="gbx_x")
         assert (got.authority, got.srid) == want and isinstance(got.srid, int)
@@ -473,41 +477,68 @@ def test_uc_handlers_import_and_run_in_a_sandbox_without_pyspark():
 
 
 class _UcSpark:
-    """A session stand-in: records statements, answers the information_schema read with `routines`."""
+    """A session stand-in: records statements and answers information_schema.routines.
 
-    def __init__(self, routines=None):
-        self.stmts, self.routines = [], routines
+    Like Unity Catalog it stores the schema (`stored_schema`) and the routine names lower-case, and
+    it applies the WHERE on the schema the query sends.
+    """
+
+    def __init__(self, routines=None, stored_schema="sch"):
+        self.stmts, self.routines, self.stored_schema = [], routines, stored_schema
 
     def sql(self, query):
         self.stmts.append(query)
         rows = []
         if "information_schema.routines" in query:
-            rows = [
-                {"routine_name": n, "comment": c}
-                for n, c in (self.routines or {}).items()
-            ]
+            asked = re.search(r"lower\(routine_schema\) = '([^']*)'", query)
+            if asked and asked.group(1) == self.stored_schema:
+                rows = [
+                    {"routine_name": n, "comment": c}
+                    for n, c in (self.routines or {}).items()
+                ]
         return type("R", (), {"collect": lambda _s, r=rows: r})()
 
 
 ENV6_WHEEL = "geobrix-0.6.0+env6-py3-none-any.whl"
+ENV5_WHEEL = "geobrix-0.6.0+env5-py3-none-any.whl"
+PLAIN_WHEEL = "geobrix-0.6.0-py3-none-any.whl"
 UC_NAMES = {f.sql_name: "geobrix 0.6.0" for f in UC_FNS}
+VOLUME_DIR = "/Volumes/c/s/v/dir"
+
+
+@pytest.fixture
+def volume(monkeypatch):
+    """Stand-in for the Volume folder: set `.files` to the wheel names it holds."""
+    from databricks.labs.gbx.ds import _listing
+
+    box = type("Volume", (), {"files": []})()
+    monkeypatch.setattr(
+        _listing,
+        "list_files",
+        lambda path, filter_regex=".*", **_kw: [  # the real filter, on the names given
+            f"{path}/{n}" for n in box.files if re.match(filter_regex, f"{path}/{n}")
+        ],
+    )
+    return box
 
 
 @pytest.mark.parametrize(
     "files,wheel,error",
     [
-        (["geobrix-0.6.0-py3-none-any.whl"], "geobrix-0.6.0-py3-none-any.whl", None),
+        ([PLAIN_WHEEL], PLAIN_WHEEL, None),
         ([ENV6_WHEEL], ENV6_WHEEL, None),
-        (["geobrix-0.6.0+env5-py3-none-any.whl", ENV6_WHEEL], ENV6_WHEEL, None),
-        (["geobrix-0.6.0+env5-py3-none-any.whl"], None, re.escape(ENV6_WHEEL)),
+        ([ENV5_WHEEL, ENV6_WHEEL], None, "one folder per environment"),
+        ([PLAIN_WHEEL, ENV5_WHEEL], None, "one folder per environment"),
+        ([ENV5_WHEEL], None, re.escape(ENV6_WHEEL)),
         ([], None, "exactly one"),
-        (["geobrix-0.6.0-py3-none-any.whl", ENV6_WHEEL], None, "exactly one"),
+        ([PLAIN_WHEEL, ENV6_WHEEL], None, "exactly one"),
         (["geobrix-0.5.3-py3-none-any.whl"], None, "exactly one"),
     ],
     ids=[
         "plain",
         "env6",
         "env6-beside-env5",
+        "plain-beside-env5",
         "env5-only",
         "none",
         "two",
@@ -515,78 +546,123 @@ UC_NAMES = {f.sql_name: "geobrix 0.6.0" for f in UC_FNS}
     ],
 )
 def test_uc_install_deploys_one_env6_wheel_and_verifies(
-    tmp_path, monkeypatch, files, wheel, error
+    volume, monkeypatch, files, wheel, error
 ):
     from databricks.labs.gbx import uc
 
-    for name in files:
-        (tmp_path / name).write_bytes(b"")
+    volume.files = files
     monkeypatch.setenv("DATABRICKS_ENV_VERSION", "6")
     spark = _UcSpark(UC_NAMES)
     if error:
         with pytest.raises(RuntimeError, match=error):
-            uc.install("cat", "sch", str(tmp_path), spark=spark)
+            uc.install("cat", "sch", VOLUME_DIR, spark=spark)
         assert not spark.stmts  # nothing is created from the wrong wheel
         return
-    stmts = uc.install("cat", "sch", str(tmp_path), spark=spark)
+    stmts = uc.install("cat", "sch", VOLUME_DIR, spark=spark)
     assert spark.stmts[: len(stmts)] == stmts  # every statement ran, in order
-    assert all(f"geobrix @ file://{tmp_path}/{wheel}" in s for s in stmts[:1])
+    assert f"geobrix @ file://{VOLUME_DIR}/{wheel}" in stmts[0]
     assert (
         "information_schema.routines" in spark.stmts[-1]
     )  # then the schema was verified
 
 
-def test_uc_install_refuses_a_runtime_that_is_not_env6(tmp_path, monkeypatch):
+def test_uc_install_refuses_a_runtime_that_is_not_env6(volume, monkeypatch):
     from databricks.labs.gbx import uc
 
-    (tmp_path / ENV6_WHEEL).write_bytes(b"")
+    volume.files = [ENV6_WHEEL]
     monkeypatch.setenv("DATABRICKS_ENV_VERSION", "5")
     monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "client.5.0")
     with pytest.raises(RuntimeError, match="env 6"):
-        uc.install("cat", "sch", str(tmp_path), spark=_UcSpark(UC_NAMES))
+        uc.install("cat", "sch", VOLUME_DIR, spark=_UcSpark(UC_NAMES))
 
 
 def test_uc_install_dry_run_emits_the_ddl_without_a_session_or_a_wheel(monkeypatch):
     from databricks.labs.gbx import uc
 
     monkeypatch.delenv("DATABRICKS_ENV_VERSION", raising=False)
-    everything = uc.install("cat", "sch", "/Volumes/c/s/v/dir", dry_run=True)
+    everything = uc.install("cat", "sch", VOLUME_DIR, dry_run=True)
     assert len(everything) == sum(
         2 if any(p.default for p in f.params) else 1 for f in UC_FNS
     )
     assert all(ENV6_WHEEL in s for s in everything if "LANGUAGE PYTHON" in s)
     only = uc.install(
-        "cat",
-        "sch",
-        "/Volumes/c/s/v/dir",
-        only=["gbx_bng_eastnorthasbng"],
-        dry_run=True,
+        "cat", "sch", VOLUME_DIR, only=["gbx_bng_eastnorthasbng"], dry_run=True
     )
     assert len(only) == 1 and "gbx_bng_eastnorthasbng(" in only[0]
+    hyphen = uc.install(
+        "my-cat", "sch", VOLUME_DIR, only=["bng_eastnorthasbng"], dry_run=True
+    )
+    assert (
+        "`my-cat`.`sch`.gbx_bng_eastnorthasbng(" in hyphen[0]
+    )  # a name is always quoted
 
 
 @pytest.mark.parametrize(
-    "routines,error",
+    "catalog,schema,volume_dir",
     [
-        (UC_NAMES, None),
-        ({**UC_NAMES, "gbx_st_makevalid": "geobrix 0.5.3"}, "gbx_st_makevalid"),
+        ("cat", "x' OR '1'='1", VOLUME_DIR),
+        ("ca`t", "sch", VOLUME_DIR),
+        ("cat", "sch.other", VOLUME_DIR),
+        ("cat", "", VOLUME_DIR),
+        ("cat", "sch", "/Volumes/c/s/o'brien"),
+        ("cat", "sch", "/Volumes/c/s/v/a\\b"),
+        ("cat", "sch", "/Volumes/c/s/v/a\nb"),
+        ("cat", "sch", "/Volumes/c/s/v/a\x00b"),
+        ("cat", "sch", "/Volumes/c/s"),
+        ("cat", "sch", "relative/dir"),
+        ("cat", "sch", "dbfs:/Volumes/c/s/v/dir"),
+    ],
+)
+def test_uc_names_and_paths_are_validated_before_any_sql_is_built(
+    volume, monkeypatch, catalog, schema, volume_dir
+):
+    from databricks.labs.gbx import register, uc
+
+    volume.files = [ENV6_WHEEL]
+    monkeypatch.setenv("DATABRICKS_ENV_VERSION", "6")
+    spark = _UcSpark(UC_NAMES)
+    with pytest.raises(ValueError, match="Fix:"):
+        uc.install(catalog, schema, volume_dir, spark=spark, dry_run=True)
+    with pytest.raises(ValueError, match="Fix:"):
+        uc.install(catalog, schema, volume_dir, spark=spark)
+    if volume_dir == VOLUME_DIR:  # a hostile name must not reach verify's WHERE either
+        with pytest.raises(ValueError, match="Fix:"):
+            register(spark, target="uc", catalog=catalog, schema=schema)
+    assert not spark.stmts
+
+
+@pytest.mark.parametrize(
+    "routines,schema,stored,error",
+    [
+        (UC_NAMES, "sch", "sch", None),
         (
-            {n: c for n, c in UC_NAMES.items() if n != "gbx_st_makevalid"},
+            {**UC_NAMES, "gbx_st_makevalid": "geobrix 0.5.3"},
+            "sch",
+            "sch",
             "gbx_st_makevalid",
         ),
+        (
+            {n: c for n, c in UC_NAMES.items() if n != "gbx_st_makevalid"},
+            "sch",
+            "sch",
+            "gbx_st_makevalid",
+        ),
+        # Unity Catalog stores names lower-case: the schema is asked for, and the routines compared, lower-cased
+        (UC_NAMES, "GeoBrix_UC", "geobrix_uc", None),
+        ({n.upper(): c for n, c in UC_NAMES.items()}, "sch", "sch", None),
     ],
-    ids=["match", "old-version", "missing"],
+    ids=["match", "old-version", "missing", "mixed-case-schema", "mixed-case-routines"],
 )
-def test_register_uc_checks_the_schema_against_this_wheel(routines, error):
+def test_register_uc_checks_the_schema_against_this_wheel(
+    routines, schema, stored, error
+):
     from databricks.labs.gbx import register
 
-    call = lambda: register(  # noqa: E731
-        _UcSpark(routines), target="uc", catalog="cat", schema="sch"
-    )
+    spark = _UcSpark(routines, stored_schema=stored)
     if error:
         with pytest.raises(RuntimeError, match=error):
-            call()
+            register(spark, target="uc", catalog="cat", schema=schema)
     else:
-        assert call() == {}
+        assert register(spark, target="uc", catalog="cat", schema=schema) == {}
     with pytest.raises(ValueError, match="catalog= and schema="):
         register(_UcSpark(routines), target="uc")

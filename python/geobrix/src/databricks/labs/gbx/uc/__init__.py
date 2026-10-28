@@ -56,10 +56,16 @@ def _single_wheel(volume_dir: str) -> str:
         return m.group(1) if m else None
 
     ok = [p for p in found if env_of(p) in (None, ENV)]
+    other = [os.path.basename(p) for p in found if env_of(p) not in (None, ENV)]
+    if ok and other:
+        raise RuntimeError(
+            f"{volume_dir} holds {os.path.basename(ok[0])} and {other[0]}, wheels for different environments. "
+            f"Use one folder per environment and never put both environment wheels in one folder; "
+            f"keep only {_env_wheel_name()} here"
+        )
     if len(ok) == 1:
         return ok[0]
-    other = [os.path.basename(p) for p in found if env_of(p) not in (None, ENV)]
-    if not ok and other:
+    if other:
         raise RuntimeError(
             f"{volume_dir} holds {other[0]}, a wheel for another environment; the UC functions run on "
             f"env {ENV}: stage {_env_wheel_name()} there (one wheel per environment folder)"
@@ -99,8 +105,14 @@ def install(
 
     ``dry_run`` only returns the DDL (the wheel name is the env 6 wheel's, not looked up).
     """
+    # Everything that reaches a statement is checked before any statement is built or any folder read.
+    ddl.quote_ident("catalog", catalog)
+    ddl.quote_ident("schema", schema)
+    ddl.check_volume_dir(volume_dir)
     man = manifest.load()
     names = _l4_names(only)
+    if not dry_run:
+        _require_env6()
     wheel = (
         f"{volume_dir.rstrip('/')}/{_env_wheel_name()}"
         if dry_run
@@ -117,7 +129,6 @@ def install(
             _public_version(),
         )
     if not dry_run:
-        _require_env6()
         if spark is None:
             from pyspark.sql import SparkSession
 
@@ -133,21 +144,26 @@ def verify(
 ) -> None:
     """register(target='uc'): every name exists in the schema, created by this wheel's version; else fail."""
     if not catalog or not schema:
-        raise ValueError("register(target='uc') needs catalog= and schema=")
+        raise ValueError(
+            "register(target='uc') needs catalog= and schema=. "
+            "Fix: pass the catalog and schema the UC functions were installed in."
+        )
+    qc, qs = ddl.quote_ident("catalog", catalog), ddl.quote_ident("schema", schema)
     names = list(names)
+    # Unity Catalog stores names lower-case whatever case they were created with: compare lower-case.
     rows = spark.sql(
-        f"SELECT routine_name, comment FROM `{catalog}`.information_schema.routines "
-        f"WHERE routine_schema = '{schema}'"
+        f"SELECT routine_name, comment FROM {qc}.information_schema.routines "
+        f"WHERE lower(routine_schema) = {ddl.quote_str(schema.lower())}"
     ).collect()
-    have = {r["routine_name"]: r["comment"] for r in rows}
+    have = {r["routine_name"].lower(): r["comment"] for r in rows}
     want = f"geobrix {_public_version()}"
-    bad = [n for n in names if have.get(n) != want]
+    bad = [n for n in names if have.get(n.lower()) != want]
     if bad:
         raise RuntimeError(
             f"UC schema {catalog}.{schema} does not match wheel {__version__} for {bad} "
-            f"(found {[have.get(n) for n in bad]}); run gbx.uc.install from an env {ENV} notebook"
+            f"(found {[have.get(n.lower()) for n in bad]}); run gbx.uc.install from an env {ENV} notebook"
         )
     print(
         f"geobrix: UC functions verified in {catalog}.{schema} ({__version__}); for unqualified names run: "
-        f"SET PATH = {catalog}.{schema}, system.session, system.builtin, system.ai, CURRENT_SCHEMA"
+        f"SET PATH = {qc}.{qs}, system.session, system.builtin, system.ai, CURRENT_SCHEMA"
     )

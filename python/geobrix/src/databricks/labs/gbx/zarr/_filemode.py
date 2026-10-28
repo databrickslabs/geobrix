@@ -20,7 +20,7 @@ and asking for it raises ``ZarrUnsupported``.
 
 - ``external`` passed: on a runtime with FILE, ``auto`` picks it (Serverless, the Databricks
   Container Service image and a workspace without the preview stay on ``fuse``).
-- ``managed`` failed and is **not available in 0.6.0**: Delta VACUUM, a deletion-vector delete
+- ``managed`` failed and is **not available in this release**: Delta VACUUM, a deletion-vector delete
   and ``REORG ... PURGE`` never reclaim the bytes of a managed file, and a write that fails
   after its files were made leaves them behind, so a managed store only grows. It needs a
   sweep of the filespace in ``gbx_zarr_vacuum`` and a pack write in a scalar or Arrow UDF
@@ -76,7 +76,7 @@ _FUSE_FIX = 'use file_mode="fuse" (the default)'
 # Why a mode that failed the gate is refused by name (``resolve``): the reason, and what to use.
 _REFUSED = {
     "managed": (
-        'file_mode="managed" is not available in 0.6.0: Delta VACUUM does not reclaim the '
+        'file_mode="managed" is not available in this release: Delta VACUUM does not reclaim the '
         "bytes of a managed file (nor does a deletion-vector delete or REORG PURGE), so a "
         "managed store would only grow",
         'use file_mode="auto" (the default), "external" or "fuse"',
@@ -113,7 +113,7 @@ def resolve(
     root is given (``has_filespace``), else ``external``, else ``fuse``; it never raises. As
     shipped that is ``external`` on a runtime with FILE and ``fuse`` elsewhere.
     An explicit ``external`` or ``managed`` that cannot be used raises ``ZarrUnsupported``
-    (``managed`` always does in 0.6.0, see the module docstring).
+    (``managed`` always does in this release, see the module docstring).
     A registered store (``registered=True``) is never ``managed``: managed ingest copies
     each file, so the base store would be duplicated.
     """

@@ -61,7 +61,7 @@ Fix: run gbx_zarr_sync(<table>) on the store's manifest table to record the chan
 +-------+-----+-------+
 """
 MANAGED_IS_NOT_AVAILABLE_output = """
-file_mode="managed" is not available in 0.6.0: Delta VACUUM does not reclaim the bytes of a managed file (nor does a deletion-vector delete or REORG PURGE), so a managed store would only grow Fix: use file_mode="auto" (the default), "external" or "fuse"
+file_mode="managed" is not available in this release: Delta VACUUM does not reclaim the bytes of a managed file (nor does a deletion-vector delete or REORG PURGE), so a managed store would only grow Fix: use file_mode="auto" (the default), "external" or "fuse"
 """
 READ_HISTORY_output = """
 +-------+------+-------------------------------------+

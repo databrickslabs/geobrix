@@ -35,7 +35,7 @@ from databricks.labs.gbx.zarr.errors import (  # noqa: E402
     ZarrUnsupported,
 )
 
-NOT_VERIFIED = "were not verified here|not available in 0.6.0"  # the gate's two texts
+NOT_VERIFIED = "were not verified here|not available in this release"  # the gate's two texts
 
 
 @pytest.fixture
@@ -118,7 +118,7 @@ def test_the_g4_gate_ships_external_open_and_managed_closed(monkeypatch):
     for filespace in (True, False):
         assert FM.resolve(None, "auto", has_filespace=filespace) == "external"
     assert FM.resolve(None, "external", has_filespace=True) == "external"
-    with pytest.raises(ZarrUnsupported, match="not available in 0.6.0") as e:
+    with pytest.raises(ZarrUnsupported, match="not available in this release") as e:
         FM.resolve(None, "managed", has_filespace=True)
     assert "reclaim" in str(e.value) and "Fix:" in str(e.value)
     monkeypatch.setattr(FM, "file_supported", lambda spark: False)  # Serverless, DCS

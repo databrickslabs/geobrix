@@ -1480,7 +1480,7 @@ def gbx_zarr_register(
     ``"fuse"`` elsewhere, Serverless included), ``"fuse"`` (path strings relative to the
     store root) or ``"external"`` (FILE EXTERNAL references, governed with the table; needs a
     workspace with the File type preview, ``ZarrUnsupported`` otherwise). ``"managed"`` is
-    not available in 0.6.0, and never for a registered store: it would copy the base. ``retain`` is how long superseded versions stay readable.
+    not available in this release, and never for a registered store: it would copy the base. ``retain`` is how long superseded versions stay readable.
 
     An array GeoBrix cannot decode (a string coordinate, say) is registered like any
     other, objects and documents, and listed under ``unsupported`` in the commit's

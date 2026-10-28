@@ -2759,7 +2759,7 @@ def gbx_zarr_write(
       the File type preview, ``"fuse"`` elsewhere, Serverless included), ``"fuse"`` (the
       manifest keeps path strings) or ``"external"`` (FILE EXTERNAL values, governed with
       the table; needs the preview, ``ZarrUnsupported`` otherwise). ``"managed"`` is not
-      available in 0.6.0: Delta VACUUM does not reclaim a managed file's bytes. ``retain``
+      available in this release: Delta VACUUM does not reclaim a managed file's bytes. ``retain``
       is the store's.
     - ``"append"``: extend along ``append_dim`` (default: the first dimension labelled by
       CF times). The input must carry that dimension's labels, all after the store's last;

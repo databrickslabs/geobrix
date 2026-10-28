@@ -11,7 +11,7 @@ Two properties are asserted here:
    (tiny compressed, large decoded) must be rejected because the full read below
    decodes the whole raster into RAM.
 
-2. Fix 1d — the cap is DRIVER-captured. rst_fromfile bakes the connect-aware cap as
+2. The cap is DRIVER-captured. rst_fromfile bakes the connect-aware cap as
    an f.lit at Column-build time (on the driver) and passes it into _fromfile_impl
    as ``cap_bytes``. _fromfile_impl runs inside a UDF on a session-less Serverless
    worker, so when ``cap_bytes`` is provided it is used DIRECTLY (never re-resolved
@@ -128,7 +128,7 @@ class TestFromfileMaterializeCap:
 
 
 class TestDriverCapturedCapBytes:
-    """Fix 1d: an explicit cap_bytes is used DIRECTLY (never re-resolved) and wins."""
+    """An explicit cap_bytes is used DIRECTLY (never re-resolved) and wins."""
 
     def test_cap_bytes_used_directly_raises(self, tmp_path):
         """A small explicit cap_bytes makes a modest raster over-cap → raises,

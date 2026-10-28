@@ -1065,9 +1065,9 @@ class RasterGbxReader(DataSourceReader):
         # from those sources instead of walking self.path.
         self.manifest = options.get("manifest")
         self.tiles_table = options.get("tilesTable")
-        # skipOrdering: when True, suppress the T8 sort-by-source-path at the end
+        # skipOrdering: when True, suppress the sort-by-source-path at the end
         # of partitions() so rows are returned in manifest/table/walk enumeration
-        # order.  Default False preserves today's always-on sort (B-ORDERHOME).
+        # order.  Default False preserves today's always-on sort.
         self.skip_ordering = str(options.get("skipOrdering", "false")).lower() == "true"
         if self.manifest and self.tiles_table:
             raise ValueError(
@@ -1125,7 +1125,7 @@ class RasterGbxReader(DataSourceReader):
             tile_size=self.tile_size,
             overlap_percent=self.overlap_percent,
         )
-        # Layout convention (T8): sort by source file path so tiles from the
+        # Layout convention: sort by source file path so tiles from the
         # same file are adjacent. Maximises per-worker open/stage cache reuse
         # when a worker processes consecutive partitions from the same source.
         # None-safe: place None values at the end (deterministic ordering).
@@ -1206,7 +1206,7 @@ class RasterGbxReader(DataSourceReader):
             )
 
         # Default path: walk self.path and plan partitions per file.
-        # Layout convention (T8): sort the final list by file_path so tiles
+        # Layout convention: sort the final list by file_path so tiles
         # from the same source are always adjacent, regardless of walk order.
         # Maximises per-worker rasterio open/stage cache reuse.
         # To control task parallelism or re-align after a join, use

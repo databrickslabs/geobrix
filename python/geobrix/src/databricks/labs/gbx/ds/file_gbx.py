@@ -2151,7 +2151,7 @@ def resolve_file_table(
     **Ordering:** unless ``skip_ordering=True``, the result is sorted by
     ``source`` ascending with NULLs last (``F.col("source").asc_nulls_last()``)
     so that tiles from the same source file land in the same partition, which
-    amortizes per-source open costs (the T8 convention for table reads).
+    amortizes per-source open costs (the sort-by-source convention for table reads).
 
     Args:
         spark: Active SparkSession (driver-side; never called from a worker).

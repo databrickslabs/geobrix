@@ -164,7 +164,7 @@ def test_download_distributed_multi_asset_no_clobber(spark, tmp_path):
     each asset writes to its own per-asset token subdir, both rows survive, and
     metadata has TWO distinct source values.
 
-    Regression test for C1 from the SP1 whole-branch review.
+    Regression test for the review finding that two assets sharing (theme, type) clobbered each other.
     """
     # Asset A: shard 1 — ids 10, 11 (both inside AOI)
     src_a = str(tmp_path / "shard_a.parquet")
@@ -253,7 +253,7 @@ def test_download_distributed_multi_asset_no_clobber(spark, tmp_path):
 def test_empty_meta_dataframe_matches_meta_cols(spark):
     """Empty-result meta DataFrame must have the exact _META_COLS schema.
 
-    Tasks 7/8 union meta DataFrames; a schema mismatch on the empty branch
+    Callers union meta DataFrames; a schema mismatch on the empty branch
     (missing path/last_update) causes a union error at runtime.
     """
     empty_meta = _meta_dataframe(spark, [], partitions=2)

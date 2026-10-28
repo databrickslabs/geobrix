@@ -716,7 +716,7 @@ class TestFrombandsBytesSkipsCorrupt:
 
 
 # ---------------------------------------------------------------------------
-# Spark grouped-agg corrupt-member skip tests (Task A1 / Finding C)
+# Spark grouped-agg corrupt-member skip tests
 #
 # These exercise the ACTUAL pandas_udfs via a Spark groupBy().agg() with one
 # valid + one corrupt tile struct in the same group, asserting:

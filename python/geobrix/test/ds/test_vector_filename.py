@@ -44,7 +44,7 @@ def test_complete_ext_rejects_wrong_geo_ext():
         _complete_ext("roads.gpkg", ".shp.zip")
 
 
-# ---- Task A2: _resolve_single_file_output ----
+# ---- _resolve_single_file_output ----
 
 
 def test_case1_filename_given(tmp_path):
@@ -71,7 +71,7 @@ def test_filename_extension_completed(tmp_path):
     assert out == str(tmp_path / "roads.shp.zip")
 
 
-# ---- Task A3: VectorGbxWriter path resolution ----
+# ---- VectorGbxWriter path resolution ----
 
 
 def test_writer_resolves_gpkg_stem(tmp_path):
@@ -87,7 +87,7 @@ def test_writer_resolves_gpkg_stem(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task A4: End-to-end round-trip tests for fileName/adaptive-naming
+# End-to-end round-trip tests for fileName/adaptive-naming
 # ---------------------------------------------------------------------------
 # Three naming cases per single-file writer:
 #   (a) stem path  -- .save("<dir>/<stem>")         -> <dir>/<stem>.<ext>

@@ -249,7 +249,7 @@ def test_creation_opts_gtiff_deflate_uses_zlevel():
 
 # ---------------------------------------------------------------------------
 # Missing matrix: explicit ZSTD predictor for float32/uint8; full LZW matrix
-# (T3 completeness additions — these test canonical which is already correct;
+# (completeness additions — these test canonical which is already correct;
 # they are regression guards, not red→green drivers)
 # ---------------------------------------------------------------------------
 
@@ -276,7 +276,7 @@ def test_creation_opts_explicit_zstd_uint8_predictor_1():
 def test_creation_opts_explicit_deflate_uint8_predictor_1():
     """Explicit compress='deflate' + uint8 must derive predictor=1.
 
-    DIV-2 guard: pre-fold _write.py used '3 if _is_float else 2', returning 2 for uint8.
+    Regression guard: pre-fold _write.py used '3 if _is_float else 2', returning 2 for uint8.
     Canonical creation_opts must return predictor=1 (matching heavy OperatorOptions).
     """
     o = C.creation_opts("uint8", compress="deflate", level=6)
@@ -354,9 +354,9 @@ def test_cog_predictor_hygiene_int8_auto_omits_predictor():
 
 
 def test_cog_predictor_hygiene_float32_preserves_predictor_3():
-    """DIV-1 guard: COG + float32 must still emit predictor=3.
+    """Regression guard: COG + float32 must still emit predictor=3.
 
-    This is the SP3 DIV-1 regression guard.  The hygiene fix must not affect
+    The hygiene fix must not affect
     the floating-point predictor case.
     """
     o = C.creation_opts(
@@ -365,7 +365,7 @@ def test_cog_predictor_hygiene_float32_preserves_predictor_3():
     assert o["compress"] == "zstd"
     assert (
         o.get("predictor") == "3"
-    ), f"DIV-1 guard: COG float32 must have predictor='3', got {o.get('predictor')!r}"
+    ), f"COG float32 must have predictor='3', got {o.get('predictor')!r}"
 
 
 def test_cog_predictor_hygiene_int16_preserves_predictor_2():

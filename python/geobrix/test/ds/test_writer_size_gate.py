@@ -357,7 +357,7 @@ def test_large_tile_subwindow(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 7. Fix 1b — driver-captured cap passed into materialize_decision (not re-resolved)
+# 7. Driver-captured cap passed into materialize_decision (not re-resolved)
 # ---------------------------------------------------------------------------
 
 

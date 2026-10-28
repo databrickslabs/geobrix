@@ -109,7 +109,7 @@ def test_auto_resolves_to_fuse_without_file_support(file_support, supported, mod
     assert FM.resolve(None, "fuse", has_filespace=True) == "fuse"
 
 
-def test_the_g4_gate_ships_external_open_and_managed_closed(monkeypatch):
+def test_external_file_mode_is_open_and_managed_is_refused(monkeypatch):
     """On a FILE-enabled cluster FILE EXTERNAL passed and FILE MANAGED failed (Delta VACUUM never reclaims
     a managed file's bytes): `auto` picks external on a FILE runtime, and managed is refused by
     name. Where FILE is not supported `auto` stays on fuse."""

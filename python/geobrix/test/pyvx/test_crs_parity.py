@@ -101,7 +101,7 @@ _RD_LON, _RD_LAT = 5.39, 52.16
 
 # A WKT body whose parts disagree about dimensionality — no WKT parser accepts it as-is.
 # Coordinates (15, 51) / (16, 52) are inside EPSG:32633's area_of_use (lon 12°–18°E).
-# Changed from (11, 42)/(12, 43) after Tasks 2+3 added the domain-check: the old coords
+# Changed from (11, 42)/(12, 43) after the domain-check was added: the old coords
 # (lon 11°/12°E) sit outside or on the boundary of EPSG:32633, so both tiers returned NULL.
 _MIXED_DIM_WKT = "GEOMETRYCOLLECTION Z (POINT Z (15 51 5), POINT (16 52))"
 
@@ -195,7 +195,7 @@ def light():
 
 def _ewkb(srid: int, geom=None) -> bytes:
     # POINT(15, 51): lon=15°E lat=51°N — inside EPSG:32633 (UTM33N, lon 12°–18°E).
-    # Changed from (11, 42) after Tasks 2+3 added the domain-check: lon=11°E is outside
+    # Changed from (11, 42) after the domain-check was added: lon=11°E is outside
     # EPSG:32633's bounds, so the old point was NULL'd by the domain guard on both tiers.
     g = Point(15.0, 51.0) if geom is None else geom
     return to_wkb(shapely.set_srid(g, srid), include_srid=True)
@@ -598,7 +598,7 @@ def test_st_transformcrs_parity_no_source_at_all_returns_null(heavy, light, geom
 # ---------------------------------------------------------------------------
 #
 # These tests assert the OUTCOME CLASS (null / raise / value) agrees across tiers
-# for the error-handling corpus introduced in Tasks 2 + 3.  The fixture helpers below
+# for the error-handling corpus.  The fixture helpers below
 # encode the specific geometries the brief specifies; the assertions delegate to
 # `assert_geom_parity` for value cases and use plain None checks for null cases.
 
@@ -628,7 +628,7 @@ def test_transformcrs_parity_out_of_domain_both_null(heavy, light):
 
     POINT(150, -80) is legitimately parseable and carries a resolvable SRID, but lon=150°E
     and lat=-80°S lie far outside EPSG:27700's (British National Grid) area_of_use.  The
-    domain check introduced in Tasks 2+3 must suppress this on both tiers.
+    domain check must suppress this on both tiers.
     """
     g = _ewkb_point(150.0, -80.0, 4326)
     light_result = light._udf_st_transformcrs(g, "EPSG:27700")
@@ -1053,7 +1053,7 @@ def test_light_sql_surface_declares_binary(spark_with_jar, light):
 # CRS code runs and both heavy functions answer with the 3D geometry.
 _UNIFORM_ZM_SHAPES = [
     # Coordinates (15, 51) / (16, 52) are inside EPSG:32633's area_of_use (lon 12°–18°E).
-    # Changed from (11, 42)/(12, 43) after Tasks 2+3 added the domain-check.
+    # Changed from (11, 42)/(12, 43) after the domain-check was added.
     ("point", "POINT ZM (15 51 5 99)"),
     ("linestring", "LINESTRING ZM (15 51 5 99, 16 52 6 98)"),
     ("polygon", "POLYGON ZM ((15 51 5 99, 16 51 5 98, 16 52 5 97, 15 51 5 99))"),

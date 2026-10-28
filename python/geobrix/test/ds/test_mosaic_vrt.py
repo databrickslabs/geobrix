@@ -452,7 +452,7 @@ def _run_quadbin_mosaic(src_path: str, out_dir: str, **extra_opts) -> CogCommitM
 
 
 # ---------------------------------------------------------------------------
-# T4-1. VRT exists after a quadbin write+commit
+# VRT exists after a quadbin write+commit
 # ---------------------------------------------------------------------------
 
 
@@ -465,7 +465,7 @@ def test_quadbin_vrt_file_created(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# T4-2. VRT references exactly the written quadbin members
+# VRT references exactly the written quadbin members
 # ---------------------------------------------------------------------------
 
 
@@ -491,7 +491,7 @@ def test_quadbin_vrt_references_written_members(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# T4-3. VRT opens with CRS EPSG:3857
+# VRT opens with CRS EPSG:3857
 # ---------------------------------------------------------------------------
 
 
@@ -509,7 +509,7 @@ def test_quadbin_vrt_crs_is_3857(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# T4-4. Windowed read from quadbin VRT is non-trivial (members loaded)
+# Windowed read from quadbin VRT is non-trivial (members loaded)
 # ---------------------------------------------------------------------------
 
 
@@ -544,7 +544,7 @@ def test_quadbin_vrt_windowed_read_returns_data(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# T4-5. write_vrt=False → no VRT produced for quadbin path either
+# write_vrt=False → no VRT produced for quadbin path either
 # ---------------------------------------------------------------------------
 
 

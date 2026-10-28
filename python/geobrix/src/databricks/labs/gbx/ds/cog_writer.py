@@ -1058,7 +1058,7 @@ class CogGbxWriter(DataSourceWriter):
         cog_bigtiff="YES",
         # Mosaic mode (Phase A: native mini-COG + VRT).  ``None`` = single-COG
         # mode (default, unchanged behaviour).  Set by CogGbxDataSource.writer()
-        # after calling parse_mosaic_options(); Tasks 2–3 read self.mosaic_opts.
+        # after calling parse_mosaic_options(); the mosaic write path reads self.mosaic_opts.
         mosaic_opts: Optional[MosaicOptions] = None,
     ):
         assert_path_schema(schema)
@@ -1081,7 +1081,7 @@ class CogGbxWriter(DataSourceWriter):
         self.driver_mode = driver_mode
         self.driver_mode_verbose = driver_mode_verbose
         self.cog_bigtiff = cog_bigtiff
-        # Mosaic mode: None = single-COG (unchanged); set for Tasks 2–3 to read.
+        # Mosaic mode: None = single-COG (unchanged); read by the mosaic write path.
         self.mosaic_opts = mosaic_opts
         # Driver-capture the connect-aware materialize cap. __init__ runs on the
         # DRIVER (DataSource V2 contract) where a live session is present; the

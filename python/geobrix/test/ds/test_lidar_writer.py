@@ -335,7 +335,7 @@ def test_writer_merge_under_budget_succeeds(spark, tmp_path):
 def test_merge_preserves_crs_from_parts(spark, tmp_path):
     """Parts written with EPSG:32611; merge with no crs= option must infer it
     from the first part's header and tag the merged file identically.
-    TDD: verifies _merge_laz_parts CRS-inference path (Finding 1)."""
+    TDD: verifies _merge_laz_parts CRS-inference path."""
     import glob as _g
     import os as _os
 
@@ -392,7 +392,7 @@ def test_merge_preserves_crs_from_parts(spark, tmp_path):
 def test_writer_stem_bucketing_multi_key_partition(spark, tmp_path):
     """Multiple (group,cluster) keys forced into ONE partition via repartition(1)
     must each produce a distinct, correctly-named .laz with the right point count.
-    TDD: verifies Finding 3 stem-bucketing within a partition."""
+    TDD: verifies stem-bucketing within a partition."""
     import glob as _g
     import os as _os
 
@@ -458,7 +458,7 @@ def test_writer_stem_bucketing_multi_key_partition(spark, tmp_path):
 def test_writer_merge_rejects_heterogeneous_formats(spark, tmp_path):
     """A directory mixing RGB (fmt 2) and XYZ-only (fmt 0) parts must raise a
     clear ValueError naming the conflicting formats.
-    TDD: verifies Finding 4 homogeneity check in _commit_merge."""
+    TDD: verifies the homogeneity check in _commit_merge."""
     import glob as _g
     import os as _os
 

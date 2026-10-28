@@ -1504,7 +1504,7 @@ class VectorGbxReader(DataSourceReader):
         # Random-access formats (GPKG/FileGDB) are staged to worker-local temp first so
         # GDAL can seek; the stream reads the local copy.
         #
-        # Layout convention (T8): _members() returns paths sorted alphabetically so
+        # Layout convention: _members() returns paths sorted alphabetically so
         # partitions are emitted in source-path order. When a worker pulls consecutive
         # tasks from the same source file the per-worker staged-file cache (_VEC_STAGE)
         # is reused, paying the copy cost only once per source.

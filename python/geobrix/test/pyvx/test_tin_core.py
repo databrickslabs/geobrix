@@ -45,7 +45,7 @@ def test_breakline_appears_as_triangle_edges():
 
 
 def test_breakline_endpoint_not_a_mass_point_becomes_edge():
-    # C1/T1: breakline midpoints are NOT among the corner mass points, yet the
+    # Breakline midpoints are NOT among the corner mass points, yet the
     # constraint segment must still appear as a triangle edge (heavy CDT adds
     # every breakline coord as a site).
     pts = np.array([[0, 0, 0], [4, 0, 0], [4, 4, 0], [0, 4, 0]], dtype=float)
@@ -68,7 +68,7 @@ def test_recovery_terminates_on_dense_constraints():
 
 
 def test_zsnap_sets_vertex_z_along_constraint():
-    # T5: a vertex lying ON the constraint line must have its Z overwritten with
+    # A vertex lying ON the constraint line must have its Z overwritten with
     # the interpolated breakline Z (10.0), not the mass-point Z (0.0).
     pts = np.array([[0, 0, 0], [4, 0, 0], [4, 4, 0], [0, 4, 0]], dtype=float)
     bl = [np.array([[0.0, 2.0, 10.0], [4.0, 2.0, 10.0]])]

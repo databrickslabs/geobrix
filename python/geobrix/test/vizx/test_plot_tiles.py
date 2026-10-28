@@ -138,7 +138,7 @@ def test_plot_tiles_facet_mixed_crs_ok(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Finding 3: empty DataFrame raises a clear ValueError in all modes
+# Empty DataFrame raises a clear ValueError in all modes
 # ---------------------------------------------------------------------------
 
 
@@ -176,7 +176,7 @@ def test_plot_tiles_empty_df_mosaic_raises(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Finding 4: first mode emits NO overflow warning on a multi-row DataFrame
+# First mode emits NO overflow warning on a multi-row DataFrame
 # ---------------------------------------------------------------------------
 
 
@@ -206,7 +206,7 @@ def test_plot_tiles_first_no_overflow_warn(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Finding 5: _extract_tile handles wrapper Row that has sibling path/raster col
+# _extract_tile handles wrapper Row that has sibling path/raster col
 # ---------------------------------------------------------------------------
 
 
@@ -250,7 +250,7 @@ def test_extract_tile_wrapper_with_sibling_path(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Finding 2: mosaic decimates — output dataset fits within max_pixels
+# Mosaic decimates — output dataset fits within max_pixels
 # ---------------------------------------------------------------------------
 
 

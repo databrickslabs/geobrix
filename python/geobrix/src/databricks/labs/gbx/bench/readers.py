@@ -3036,7 +3036,7 @@ def run_raster_decode_read_sweep(
 
     **Ordering-amortization comparison** (``skip_ordering=None``, the default, for
     managed/external):
-    Runs the decode job **twice** — once with the T8 auto-order (same-source tiles
+    Runs the decode job **twice** — once with the automatic order (same-source tiles
     grouped → ``open_windowed_via_fileref`` reuse across consecutive tiles in a source
     file, amortising the open cost) and once with ``skipOrdering=True`` (random order,
     no batching).  Returns **two** ``ResultRow`` objects so the ordering payoff is

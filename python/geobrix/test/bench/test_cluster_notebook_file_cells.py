@@ -562,7 +562,7 @@ def test_notebook_vector_table_read_regression_existing_build_unaffected():
 
 
 # ---------------------------------------------------------------------------
-# Raster decode-read (Task C)
+# Raster decode-read
 # ---------------------------------------------------------------------------
 
 

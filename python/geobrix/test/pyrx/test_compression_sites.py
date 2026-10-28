@@ -360,7 +360,7 @@ def test_proximity_is_zstd(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# tile_to_bytes wiring (T1 fail-on-revert: DIV-1 and DIV-2 guards)
+# tile_to_bytes wiring (fail-on-revert guards: ZSTD float and DEFLATE uint8 predictors)
 # ---------------------------------------------------------------------------
 
 
@@ -387,7 +387,7 @@ def _make_src_bytes_write(dtype: str, sz: int = 32) -> bytes:
 
 
 def test_tile_to_bytes_cog_zstd_float32_predictor_3():
-    """T1 / DIV-1 fail-on-revert: COG+ZSTD float32 must carry predictor=3.
+    """Fail-on-revert: COG+ZSTD float32 must carry predictor=3.
 
     Before the fold, _write.py::_creation_opts omitted predictor for ZSTD entirely
     (lines 36-38: only opts["zstd_level"] was set).  After the fold, creation_opts
@@ -409,13 +409,13 @@ def test_tile_to_bytes_cog_zstd_float32_predictor_3():
             "PREDICTOR"
         )
         assert pred is not None and int(pred) == 3, (
-            f"DIV-1 guard: expected predictor=3 for float32 ZSTD COG, got {pred!r}. "
+            f"expected predictor=3 for float32 ZSTD COG, got {pred!r}. "
             "Reverting the _write.py fold removes this predictor."
         )
 
 
 def test_tile_to_bytes_cog_deflate_uint8_predictor_1():
-    """T1 / DIV-2 fail-on-revert: COG+DEFLATE uint8 must not carry predictor=2.
+    """Fail-on-revert: COG+DEFLATE uint8 must not carry predictor=2.
 
     Before the fold, _write.py used `'3' if _is_float(dtype) else '2'` which
     returned 2 for uint8.  Canonical predictor_for('uint8') returns 1.
@@ -444,9 +444,9 @@ def test_tile_to_bytes_cog_deflate_uint8_predictor_1():
             "PREDICTOR"
         )
         # pred is None means no prediction (GDAL default), which is correct for uint8.
-        # pred == "2" means STANDARD differencing, which is wrong for uint8 (DIV-2 guard).
+        # pred == "2" means STANDARD differencing, which is wrong for uint8.
         assert pred is None or int(pred) == 1, (
-            f"DIV-2 guard: expected predictor=1 or None (no prediction) for uint8 DEFLATE COG, "
+            f"expected predictor=1 or None (no prediction) for uint8 DEFLATE COG, "
             f"got {pred!r}. Pre-fold code returned 2 for uint8 (non-float non-small-int branch)."
         )
 

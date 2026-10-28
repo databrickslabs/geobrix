@@ -439,10 +439,10 @@ def test_partitions_manifest_full_spark_read(tmp_path, spark, kind):
 
 
 def test_raster_tilestable_skip_ordering_option_manifest_path(tmp_path):
-    """skipOrdering='true' on the manifest/tilesTable path suppresses the T8 sort.
+    """skipOrdering='true' on the manifest/tilesTable path suppresses the sort by source path.
 
     Uses a manifest (no Spark table needed) since both manifest and tilesTable
-    share the same sort gate at the end of the Approach-1 branch.
+    share the same sort gate at the end of the pre-computed tile input branch.
 
     Checks:
     - Default (no skipOrdering): partitions sorted by file_path asc.

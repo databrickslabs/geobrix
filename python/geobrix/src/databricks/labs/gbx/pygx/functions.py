@@ -664,7 +664,7 @@ def _dilate_check_mode(mode):
     """Raise ValueError for an unknown dilation mode (parameter error).
 
     ``None`` is allowed and treated as the default mode by callers.
-    Tasks 5/6/7 reuse this helper — keep it at module scope.
+    Other dilation functions reuse this helper — keep it at module scope.
     """
     if mode is not None and mode not in _MODES:
         raise ValueError(f"unknown mode {mode!r}; expected one of {_MODES}")

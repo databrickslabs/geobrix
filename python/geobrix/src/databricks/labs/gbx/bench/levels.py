@@ -144,10 +144,33 @@ class _Ctx:
     uc: Optional[str]
     registered: Dict[str, Tuple[str, str]]
     setups: Set[str] = dataclasses.field(default_factory=set)
+    jvm_why: Optional[str] = (
+        None  # why this session has no geobrix JAR ("" = it has one), once probed
+    )
 
 
-def _cannot_run_here(form: Form, uc: Optional[str]) -> Optional[str]:
-    """Why this run cannot time the form (None when it can): an L4 form needs a UC schema, `d` the Rust build."""
+_JVM_LEVELS = ("L1", "L2", "JVM-DF")  # forms whose body is the geobrix JAR
+
+
+def _no_jar(ctx: "_Ctx") -> str:
+    """Why this session has no geobrix JAR ("" when it has one); probed once per run."""
+    if ctx.jvm_why is None:
+        from databricks.labs.gbx.manager import capabilities
+
+        caps = capabilities.detect(ctx.spark, need_jvm=True)
+        ctx.jvm_why = "" if caps.jar is not None else caps.jar_reason
+    return ctx.jvm_why
+
+
+def _cannot_run_here(
+    form: Form, uc: Optional[str], ctx: Optional["_Ctx"] = None
+) -> Optional[str]:
+    """Why this run cannot time the form (None when it can): an L4 form needs a UC schema, a JVM form
+    the JAR, `d` the Rust build."""
+    if ctx is not None and form.level in _JVM_LEVELS:
+        why = _no_jar(ctx)
+        if why:
+            return f"no geobrix JAR on this session ({why})"
     if form.level == "L4" and not uc:
         return "no UC schema given (--levels-uc)"
     if form.level == "L3" and form.variant == "d":
@@ -164,7 +187,7 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
     from databricks.labs.gbx.manifest import resolve_ref
 
     spark, uc = ctx.spark, ctx.uc
-    gone = _cannot_run_here(form, uc)
+    gone = _cannot_run_here(form, uc, ctx)
     if gone:
         return _row(base, note=gone, status="na_by_design")
     src = lf.INPUTS[form.input](spark, requested, ctx.corpus, ctx.schema)

@@ -33,6 +33,20 @@ def run_s(spark, tmp_path, scales, base_rows=2000, mvp="S", **kw):
     )  # fmt: skip
 
 
+def test_jvm_forms_without_the_jar_are_na_by_design(spark_session_local, tmp_path):
+    """A host with no geobrix JAR cannot time the JVM levels: a row that says so, not an error."""
+    from databricks.labs.gbx.manager import capabilities
+
+    spark = spark_session_local
+    if capabilities.detect(spark, need_jvm=True).jar is not None:
+        pytest.skip("this session carries the geobrix JAR")
+    rows = run_s(spark, tmp_path, scales=(1,), base_rows=100, only_levels=("L1", "L2"))
+    bng = [r for r in rows if r.fn == B]
+    assert {r.level for r in bng} == {"L1", "L2"}
+    assert {r.status for r in bng} == {"na_by_design"}
+    assert all("no geobrix JAR" in r.note for r in bng)
+
+
 def test_levels_leg_runs_mvp_s_light_forms(spark_session_local, tmp_path):
     spark = spark_session_local
     # 20k rows and up: Spark's sent-bytes counter stops growing past one 10k-row Arrow batch

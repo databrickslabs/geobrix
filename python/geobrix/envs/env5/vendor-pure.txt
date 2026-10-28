@@ -1,0 +1,8 @@
+# Pure-Python packages the env5 wheel vendors into _vendor/common (no dist-info), because they
+# require rasterio, pyproj or shapely by distribution name and the vendored builds have none.
+# Exact versions with their wheel's sha256: the ones the light CI lock tests
+# (requirements-light-env5-ci.txt). mapbox-vector-tile 2.1.x: 2.2 needs protobuf 6, env5 has 5.
+# Fetched on the host by gbx:build:wheel with --require-hashes.
+rio-tiler==9.4.12 --hash=sha256:103a3df350ea1c756c78570f4a4bacbe0d769808d879766bcbf880f3daa73372
+morecantile==7.0.3 --hash=sha256:747c6b8f3a8029ddaadb04d96c834f10d2796d1898ad893bed47c896a058ddc7
+mapbox-vector-tile==2.1.0 --hash=sha256:29ebdf6cb01a712e2ee08f6bdf7259a23e9c264b01fa69ae83358e33ebdd040c

@@ -465,6 +465,14 @@ def _load_libgdal():
     import glob as _glob
     import os as _os
 
+    from databricks.labs.gbx import _native
+
+    # An activated env-wheel payload: rasterio is the payload's, and so is its libgdal (the hashed
+    # name from the payload's MANIFEST.json); dlopen returns the copy rasterio already mapped.
+    native = _native.libgdal_path() if _native.activated_by() else None
+    if native:
+        return ctypes.CDLL(native)
+
     import rasterio
 
     rp = _os.path.dirname(rasterio.__file__)

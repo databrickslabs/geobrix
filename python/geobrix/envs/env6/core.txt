@@ -1,0 +1,46 @@
+# geobrix-0.6.0+env6 default dependencies: DBR 19, Serverless environment 6, SQL warehouses, UC
+# functions. The env wheel's unmarked Requires-Dist is exactly this file (gbx:build:wheel checks it).
+# rasterio, pyogrio, pyproj, shapely and netCDF4 are not here: the wheel carries them, built against
+# its own GDAL (_vendor/<arch>), and so rio-tiler, morecantile and mapbox-vector-tile (vendor-pure.txt).
+# rio-cogeo and xarray-spatial are dropped (spec 5.2); xarray-spatial is the [viewshed] extra.
+
+# The runtime's preinstalled versions as the floor, the next minor as the cap: nothing moves.
+numpy>=2.3.4,<2.4
+pandas>=2.3.3,<2.4
+pyarrow>=21.0.0,<22
+scipy>=1.16.3,<1.17
+protobuf>=6.31.1,<7
+urllib3<2.6
+# PEP 728 TypedDict(extra_items=...), which rio-tiler 9 uses, works from 4.13.0.
+typing_extensions>=4.13
+
+# The light tier.
+numexpr>=2.14.1
+h3>=4.1,<5
+quadbin>=0.2,<0.3
+pmtiles>=3.4,<4
+scikit-image>=0.22,<1
+lazy_loader>=0.5
+defusedxml>=0.7,<1
+laspy>=2.7,<2.8
+lazrs>=0.8.2,<0.9
+exifread>=3.0,<4
+
+# What the vendored packages need at run time (their Requires-Dist; the vendored trees carry no
+# metadata, so the wheel declares it). click: `import rasterio` imports it (rasterio.errors);
+# every Databricks runtime already has a click >= 4.0, so this moves nothing.
+affine>=2.4
+attrs
+certifi
+click>=4.0
+pyparsing>=3
+packaging
+cftime>=1.6
+pyclipper>=1.3,<2
+cachetools
+pydantic>=2,<3
+color-operations
+pystac>=1.9,<2
+# rio-tiler's HTTP client; 2.12 and later are the releases without the two HIGH advisories.
+httpx2>=2.12
+xarray>=2025.1

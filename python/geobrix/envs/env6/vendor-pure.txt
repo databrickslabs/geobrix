@@ -1,0 +1,7 @@
+# Pure-Python packages the env6 wheel vendors into _vendor/common (no dist-info), because they
+# require rasterio, pyproj or shapely by distribution name and the vendored builds have none.
+# Exact versions with their wheel's sha256: the ones the light CI lock tests
+# (requirements-light-env6-ci.txt). Fetched on the host by gbx:build:wheel with --require-hashes.
+rio-tiler==9.4.12 --hash=sha256:103a3df350ea1c756c78570f4a4bacbe0d769808d879766bcbf880f3daa73372
+morecantile==7.0.3 --hash=sha256:747c6b8f3a8029ddaadb04d96c834f10d2796d1898ad893bed47c896a058ddc7
+mapbox-vector-tile==2.2.0 --hash=sha256:d26ad320ade60cc6c0b66edc6ee4b6f53663aedf0b444b115c6ba68e9ba1e6d1

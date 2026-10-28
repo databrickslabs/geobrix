@@ -1,5 +1,12 @@
 __version__ = "0.6.0"
 
+# An env wheel refuses the other environment's runtime, then serves its native payload (the
+# bindings under their public names, GDAL/PROJ data, CA): both before anything imports a binding.
+from databricks.labs.gbx import _env_guard, _native  # noqa: E402
+
+_env_guard.check()
+_native.activate(by="import")
+
 from databricks.labs.gbx.crs_grids import register_proj_grids  # noqa: E402
 
 

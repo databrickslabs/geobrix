@@ -20,6 +20,13 @@ BASE_ROWS = {
     "invalid_polys": 250_000,
     "tiles_mat": 250,
     "tiles_virt": 250,
+    # MVP-H: groups of tiles (merge: two offset copies of a corpus tile, combine: two aligned copies)
+    # and the corpus tiles on the British National Grid (the others have no BNG cells).
+    "tiles_grouped_mat": 250,
+    "tiles_grouped_virt": 250,
+    "tiles_aligned_mat": 250,
+    "tiles_gb_mat": 250,
+    "tiles_gb_virt": 250,
 }
 
 
@@ -91,11 +98,105 @@ def _tiles(virtual: bool):
     return build
 
 
+def _corpus_rows(corpus: str) -> Optional[List[str]]:
+    """The corpus' row tiles, sorted; None when the corpus has none."""
+    rows = corpus.rstrip("/") + "/rows"
+    if not os.path.isdir(rows):
+        return None
+    from databricks.labs.gbx.ds._listing import list_files
+
+    return list_files(
+        rows, filter_regex=r".*\.tif$", recursive=False, raise_on_empty=False
+    )
+
+
+def _tile_column(spark, pairs, virtual: bool, keyed: bool):
+    """A DataFrame of ``[key,] tile`` from ``(key, path)`` pairs: virtual tiles, or tiles read now."""
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.manifest import TILE_SQL
+    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+    if virtual:
+        rows = [(k, VirtualTile(cellid=0, path=p).to_row()) for k, p in pairs]
+        df = spark.createDataFrame(rows, f"key string, tile {TILE_SQL}")
+    else:
+        from databricks.labs.gbx.pyrx import functions as prx
+
+        df = spark.createDataFrame(pairs, "key string, path string").select(
+            "key", prx.rst_fromfile(F.col("path"), "GTiff", True).alias("tile")
+        )
+    return df if keyed else df.select("tile")
+
+
+def _grouped(recipe: str, virtual: bool):
+    """Groups of tiles for the by-key helpers: each corpus row tile with the members the multi-tile
+    recipe of ``bench.synth`` writes beside it (merge: two offset copies; combineavg: two aligned
+    copies), keyed by the recipe directory's hash. The members are files under the corpus, written once.
+    """
+
+    def build(spark, n, corpus, schema):
+        sources = _corpus_rows(corpus)
+        if not sources:
+            return None
+        from databricks.labs.gbx.bench import synth
+
+        pairs = []
+        for src in sources[:n]:
+            out = synth.synth_dir(corpus, "rows/" + os.path.basename(src), recipe)
+            pairs += [
+                (os.path.basename(out), m) for m in synth.synthesize(src, recipe, out)
+            ]
+        kind = "virt" if virtual else "mat"
+        return _table(
+            spark,
+            schema,
+            f"mvp_in_tiles_grouped_{recipe}_{kind}_v{RECIPE_VERSION}_{n}",
+            lambda: _tile_column(spark, pairs, virtual, keyed=True),
+        )
+
+    return build
+
+
+def _gb_tiles(virtual: bool):
+    """The corpus row tiles that are EPSG:27700 (the BNG cells of the others fall outside Britain)."""
+
+    def build(spark, n, corpus, schema):
+        sources = _corpus_rows(corpus)
+        if not sources:
+            return None
+        import rasterio
+
+        gb = []
+        for p in sources:
+            with rasterio.open(p) as ds:
+                if ds.crs is not None and ds.crs.to_epsg() == 27700:
+                    gb.append(p)
+            if len(gb) >= n:
+                break
+        if not gb:
+            return None
+        kind = "virt" if virtual else "mat"
+        return _table(
+            spark,
+            schema,
+            f"mvp_in_tiles_gb_{kind}_v{RECIPE_VERSION}_{n}",
+            lambda: _tile_column(spark, [(p, p) for p in gb], virtual, keyed=False),
+        )
+
+    return build
+
+
 INPUTS: Dict[str, Callable] = {
     "bng_points": _bng_points,
     "invalid_polys": _invalid_polys,
     "tiles_mat": _tiles(False),
     "tiles_virt": _tiles(True),
+    "tiles_grouped_mat": _grouped("merge", False),
+    "tiles_grouped_virt": _grouped("merge", True),
+    "tiles_aligned_mat": _grouped("combineavg", False),
+    "tiles_gb_mat": _gb_tiles(False),
+    "tiles_gb_virt": _gb_tiles(True),
 }
 
 # Each query answers one row (n, fp, n_out): the output count, an order-independent fingerprint,
@@ -202,3 +303,217 @@ FORMS: Dict[str, List[Form]] = {
         ),
     ]
 }
+
+
+# --- MVP-H: the DataFrame helpers against the per-row UDTFs and the grouped aggregates -----------
+#
+# Forms run in this order: the light ones first, then the JVM ones, because both register the same
+# `gbx_rst_*` names and a registration lasts for the session (a setup runs once).
+# Each timed query reads the whole output: tile-returning forms hand it to `gbx_rst_transformcrs`
+# (a downstream op that reads the pixels), and the fingerprint is `sum(length(raster))` with
+# `count(raster)` as n_out, so a NULL raster shows. The retile size is the same on both sides.
+
+_RETILE_PX = 512
+_DOWN = "gbx_rst_transformcrs(tile, 'EPSG:3857')"
+_TILE_FP = (
+    "SELECT count(*) AS n, sum(length(x.raster)) AS fp, count(x.raster) AS n_out FROM "
+    "(SELECT {down} AS x FROM {{src}}, LATERAL {udtf} AS t)"
+)
+_RETILE_UDTF = _TILE_FP.format(
+    down="gbx_rst_transformcrs(struct(t.*), 'EPSG:3857')",
+    udtf=f"gbx_rst_retile(tile, {_RETILE_PX}, {_RETILE_PX})",
+)
+_TESS_UDTF = _TILE_FP.format(
+    down="gbx_rst_transformcrs(struct(t.*), 'EPSG:3857')",
+    udtf="gbx_rst_bng_tessellate(tile, 3)",
+)
+# The light aggregate returns the mosaic as BINARY; the heavy one returns a tile struct.
+_MERGE_L3 = (
+    "SELECT count(*) AS n, sum(length(x)) AS fp, count(x) AS n_out FROM "
+    "(SELECT gbx_rst_merge_agg(tile) AS x FROM {src} GROUP BY key)"
+)
+_MERGE_L1 = (
+    "SELECT count(*) AS n, sum(length(x.raster)) AS fp, count(x.raster) AS n_out FROM "
+    "(SELECT gbx_rst_merge_agg(tile) AS x FROM {src} GROUP BY key)"
+)
+_COMBINE_SQL = (
+    "SELECT count(*) AS n, sum(length(x.raster)) AS fp, count(x.raster) AS n_out FROM "
+    "(SELECT gbx_rst_combineavg(collect_list(tile)) AS x FROM {src} GROUP BY key)"
+)
+
+
+def _register_light(spark, *names):
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    prx.register(spark, only=list(names))
+
+
+def register_h_downstream(spark):
+    _register_light(spark, "gbx_rst_transformcrs")
+
+
+def register_h_retile_udtf(spark):
+    _register_light(spark, "gbx_rst_transformcrs", "gbx_rst_retile")
+
+
+def register_h_tess_udtf(spark):
+    _register_light(spark, "gbx_rst_transformcrs", "gbx_rst_bng_tessellate")
+
+
+def register_h_merge_l3(spark):
+    _register_light(spark, "gbx_rst_merge_agg")
+
+
+def register_h_combine_l3(spark):
+    _register_light(spark, "gbx_rst_combineavg")
+
+
+def register_h_heavy(spark):
+    """The JVM names (RST_MergeAgg, RST_CombineAvg): needs the staged JAR. Replaces the light ones."""
+    from databricks.labs.gbx.rasterx import functions as rx
+
+    rx.register(spark)
+
+
+def _stats(df, tile_expr: Optional[str]):
+    """(n, fp, n_out, df): the row count, the summed raster length and the non-NULL raster count of
+    `tile_expr` over `df` (or of its `raster` column), read in full. `df` here is the query that ran.
+    """
+    from pyspark.sql import functions as F
+
+    if tile_expr is not None:
+        df = df.select(F.expr(tile_expr).alias("x")).select(
+            F.col("x.raster").alias("raster")
+        )
+    out = df.agg(F.count(F.lit(1)), F.sum(F.length("raster")), F.count("raster"))
+    r = out.collect()[0]
+    return r[0], r[1], r[2], out
+
+
+def h_retile_helper(spark, src):
+    from databricks.labs.gbx.pyrx import helpers
+
+    tiles = helpers.retile_virtual(spark.table(src), "tile", _RETILE_PX, _RETILE_PX)
+    return _stats(tiles, _DOWN)
+
+
+def h_tess_helper(spark, src):
+    from databricks.labs.gbx.pyrx import helpers
+
+    return _stats(helpers.bng_tessellate_virtual(spark.table(src), "tile", 3), _DOWN)
+
+
+def h_merge_fold(spark, src):
+    from databricks.labs.gbx.pyrx import helpers
+
+    return _stats(helpers.merge_by_key(spark.table(src), ["key"], method="fold"), None)
+
+
+def h_merge_vrt(spark, src):
+    from databricks.labs.gbx.pyrx import helpers
+
+    return _stats(helpers.merge_by_key(spark.table(src), ["key"], method="vrt"), None)
+
+
+def h_combine_avg(spark, src):
+    from databricks.labs.gbx.pyrx import helpers
+
+    return _stats(helpers.combine_by_key(spark.table(src), ["key"], stat="avg"), None)
+
+
+_H = "databricks.labs.gbx.bench.levels_forms:"
+
+
+def _h(fn, level, variant, inp, *, run="", sql="", setup="", **kw):
+    return Form(
+        "H",
+        fn,
+        level,
+        variant,
+        inp,
+        sql=sql,
+        run=_H + run if run else "",
+        setup=_H + setup if setup else "",
+        register=False,
+        **kw,
+    )
+
+
+FORMS["H"] = [
+    _h(
+        "retile_virtual",
+        "DF",
+        "h_retile_helper",
+        "tiles_virt",
+        run="h_retile_helper",
+        setup="register_h_downstream",
+    ),
+    _h(
+        "gbx_rst_retile",
+        "L3",
+        "h_retile_udtf",
+        "tiles_mat",
+        sql=_RETILE_UDTF,
+        setup="register_h_retile_udtf",
+    ),
+    _h(
+        "bng_tessellate_virtual",
+        "DF",
+        "h_tess_helper",
+        "tiles_gb_virt",
+        run="h_tess_helper",
+        setup="register_h_downstream",
+    ),
+    _h(
+        "gbx_rst_bng_tessellate",
+        "L3",
+        "h_tess_udtf",
+        "tiles_gb_mat",
+        sql=_TESS_UDTF,
+        setup="register_h_tess_udtf",
+    ),
+    _h("merge_by_key", "DF", "h_merge_fold", "tiles_grouped_mat", run="h_merge_fold"),
+    _h("merge_by_key", "DF", "h_merge_vrt", "tiles_grouped_virt", run="h_merge_vrt"),
+    _h(
+        "gbx_rst_merge_agg",
+        "L3",
+        "h_merge_l3_agg",
+        "tiles_grouped_mat",
+        sql=_MERGE_L3,
+        setup="register_h_merge_l3",
+    ),
+    _h(
+        "combine_by_key",
+        "DF",
+        "h_combine_avg",
+        "tiles_aligned_mat",
+        run="h_combine_avg",
+    ),
+    _h(
+        "gbx_rst_combineavg",
+        "L3",
+        "h_combine_l3",
+        "tiles_aligned_mat",
+        sql=_COMBINE_SQL,
+        setup="register_h_combine_l3",
+    ),
+    # The JVM comparators (the staged JAR, a dedicated cluster); last, because they replace the light names.
+    _h(
+        "gbx_rst_merge_agg",
+        "L1",
+        "h_merge_l1_agg",
+        "tiles_grouped_mat",
+        sql=_MERGE_L1,
+        setup="register_h_heavy",
+        computes=("dedicated",),
+    ),
+    _h(
+        "gbx_rst_combineavg",
+        "L1",
+        "h_combine_l1",
+        "tiles_aligned_mat",
+        sql=_COMBINE_SQL,
+        setup="register_h_heavy",
+        computes=("dedicated",),
+    ),
+]

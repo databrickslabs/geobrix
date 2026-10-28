@@ -274,6 +274,87 @@ MVP_S: Tuple[Case, ...] = (
 )
 
 
+# MVP-H: the DataFrame helpers in pyrx/helpers.py (a case's `fn` is the helper's name, not a SQL name).
+# The first arg builds the input rows; the rest are the helper's arguments after the DataFrame and,
+# for the by-key helpers, the method / stat.
+MVP_H: Tuple[Case, ...] = (
+    Case(
+        "h_retile",
+        "retile_virtual",
+        (Build("tile_virtual"), 32, 32),
+        "virtual_windows",
+        [(0, 0, 32, 32), (32, 0, 32, 32), (0, 32, 32, 16), (32, 32, 32, 16)],
+        ("session",),
+    ),
+    Case(
+        "h_retile_materialized",
+        "retile_virtual",
+        (Build("tile_4326"), 32, 32),
+        "raises",
+        "takes virtual tiles",
+        ("session",),
+    ),
+    # An error tile in is the same error tile out; a by-key helper drops it as the aggregates do,
+    # so a group of nothing else has no raster.
+    Case(
+        "h_retile_error_tile",
+        "retile_virtual",
+        (Build("tile_error"), 32, 32),
+        "error_tile",
+        UPSTREAM_ERROR,
+        ("session",),
+    ),
+    Case(
+        "h_merge_error_tile",
+        "merge_by_key",
+        (Build("tile_error"), "fold"),
+        "null",
+        None,
+        ("session",),
+    ),
+    Case(
+        "h_tess",
+        "bng_tessellate_virtual",
+        (Build("tile_27700_path"), 3),
+        "virtual_cells",
+        {"TQ3080", "TQ3180", "TQ3081", "TQ3181"},
+        ("session",),
+    ),
+    Case(
+        "h_merge_fold",
+        "merge_by_key",
+        (Build("quad_tiles"), "fold"),
+        "merged_equals",
+        Build("tile_32"),
+        ("session",),
+    ),
+    Case(
+        "h_merge_vrt",
+        "merge_by_key",
+        (Build("quad_paths"), "vrt"),
+        "merged_equals",
+        Build("tile_32"),
+        ("session",),
+    ),
+    Case(
+        "h_combine_avg",
+        "combine_by_key",
+        (Build("pair_aligned"), "avg"),
+        "pixel_ratio",
+        1.5,
+        ("session",),
+    ),
+    Case(
+        "h_combine_max",
+        "combine_by_key",
+        (Build("pair_aligned"), "max"),
+        "pixel_ratio",
+        2.0,
+        ("session",),
+    ),
+)
+
+
 def _tile_bytes(
     crs_value: str, w: int = 64, h: int = 48, origin=None, px=None
 ) -> bytes:
@@ -356,6 +437,56 @@ def _build(name: str, tmpdir: str):
         return _tile(
             None, path, {"col_off": 0, "row_off": 0, "width": 64, "height": 48}
         )
+    if name == "tile_32":
+        return _tile(_tile_bytes("EPSG:4326", 32, 32))
+    if name == "quad_tiles":
+        from rasterio.io import MemoryFile
+
+        from databricks.labs.gbx.pyrx.core import tiling
+
+        with MemoryFile(_tile_bytes("EPSG:4326", 32, 32)) as mf, mf.open() as ds:
+            return [
+                _tile(
+                    raster,
+                    window=dict(zip(("col_off", "row_off", "width", "height"), win)),
+                )
+                for win, raster in tiling.iter_retile_located(ds, 16, 16)
+            ]
+    if name == "tile_27700_path":
+        path = os.path.join(tmpdir, "oracle_27700.tif")
+        if not os.path.exists(path):
+            with open(path, "wb") as fh:
+                fh.write(
+                    _tile_bytes(
+                        "EPSG:27700", 20, 20, origin=(530000.0, 182000.0), px=100.0
+                    )
+                )
+        return _tile(None, path, None)
+    if name == "quad_paths":
+        out = []
+        for i, t in enumerate(_build("quad_tiles", tmpdir)):
+            p = os.path.join(tmpdir, f"quad_{i}.tif")
+            with open(p, "wb") as fh:
+                fh.write(t["raster"])
+            out.append(_tile(None, p, None))
+        return out
+    if name == "pair_aligned":
+        import numpy as np
+        from rasterio.io import MemoryFile
+
+        from databricks.labs.gbx.pyrx.core.compression import write_gtiff
+
+        a = _tile_bytes("EPSG:4326", 32, 32)
+        with MemoryFile(a) as mf, mf.open() as ds:
+            prof, arr = ds.profile.copy(), ds.read()
+        return [
+            _tile(a),
+            _tile(
+                write_gtiff(
+                    prof, np.where(arr == -9999.0, arr, arr * 2).astype("float32")
+                )
+            ),
+        ]
     raise KeyError(name)
 
 
@@ -519,6 +650,135 @@ def check_error(case: Case, exc: BaseException) -> Optional[str]:
             else f"{case.cid}: refused without a 'Fix:' line: {exc}"
         )
     return f"{case.cid}: raised {type(exc).__name__}: {str(exc)[:300]}"
+
+
+def _raster_bytes(out) -> Optional[bytes]:
+    """The raster bytes of a result that is bytes, a tile struct, or NULL."""
+    if out is None:
+        return None
+    if isinstance(out, (bytes, bytearray)):
+        return bytes(out)
+    raster = _field(out, "raster")
+    return None if raster is None else bytes(raster)
+
+
+def _check_merged(case: Case, out) -> Optional[str]:
+    """A merged raster has the expected grid and the expected pixels (`case.expect` names the fixture)."""
+    import numpy as np
+    from rasterio.io import MemoryFile
+
+    got_b = _raster_bytes(out)
+    want_b = _build(case.expect.name, tempfile.gettempdir())["raster"]
+    if got_b is None:
+        return f"{case.cid}: no merged raster"
+    with (
+        MemoryFile(got_b) as a,
+        a.open() as got,
+        MemoryFile(want_b) as b,
+        b.open() as want,
+    ):
+        if (got.shape, got.transform) != (want.shape, want.transform):
+            return f"{case.cid}: {got.shape}@{got.transform} vs {want.shape}@{want.transform}"
+        return (
+            None
+            if np.array_equal(got.read(), want.read())
+            else f"{case.cid}: pixels differ"
+        )
+
+
+def _check_helper(case: Case, rows, tiles) -> Optional[str]:
+    """MVP-H: judge the collected rows of one helper call (`tiles` are the input tiles)."""
+    import numpy as np
+    from rasterio.io import MemoryFile
+
+    if case.kind == "raises":
+        return f"{case.cid}: returned {len(rows)} rows, want an error"
+    ts = [r["tile"] for r in rows] if rows and "tile" in rows[0].asDict() else []
+    if case.kind == "error_tile":
+        return (
+            check(case, ts[0], None)
+            if len(ts) == 1
+            else f"{case.cid}: {len(ts)} rows, want the one error tile"
+        )
+    if case.kind == "null":
+        return (
+            None
+            if rows and all(r["raster"] is None for r in rows)
+            else f"{case.cid}: want a NULL raster, got {len(rows)} rows"
+        )
+    if case.kind == "virtual_windows":
+        if any(t["raster"] is not None for t in ts):
+            return f"{case.cid}: a sub-tile carries bytes"
+        wins = sorted(
+            (
+                t["window"]["col_off"],
+                t["window"]["row_off"],
+                t["window"]["width"],
+                t["window"]["height"],
+            )
+            for t in ts
+        )
+        return None if wins == sorted(case.expect) else f"{case.cid}: windows {wins}"
+    if case.kind == "virtual_cells":
+        from databricks.labs.gbx.pygx import _bng
+
+        cells = {_bng.format(t["cellid"]) for t in ts}
+        ok = cells == case.expect and all(
+            t["raster"] is None and t["clip_crs"] == "EPSG:27700" for t in ts
+        )
+        return None if ok else f"{case.cid}: cells {cells}"
+    if case.kind == "merged_equals":
+        return _check_merged(case, rows[0]["raster"] if rows else None)
+    if case.kind == "pixel_ratio":
+        with (
+            MemoryFile(bytes(rows[0]["raster"])) as a,
+            a.open() as got,
+            MemoryFile(tiles[0]["raster"]) as b,
+            b.open() as base,
+        ):
+            x = base.read(1, masked=True)
+            with np.errstate(
+                divide="ignore", invalid="ignore"
+            ):  # a valid 0 divides to NaN
+                ratio = got.read(1)[~x.mask] / x.compressed()
+        ratio = ratio[np.isfinite(ratio)]
+        return (
+            None
+            if np.allclose(ratio, case.expect, rtol=1e-6)
+            else f"{case.cid}: ratio {np.unique(ratio)[:5]}"
+        )
+    raise ValueError(case.kind)
+
+
+def run_helpers(spark, cases, tmpdir: Optional[str] = None):
+    """MVP-H: build a (key, tile) DataFrame from the case, call the helper by name, check the rows."""
+    from databricks.labs.gbx.manifest import TILE_SQL
+    from databricks.labs.gbx.pyrx import helpers
+
+    tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")
+    out = []
+    for case in cases:
+        if "session" not in case.surfaces:
+            continue
+        first = resolve_arg(case.args[0], tmpdir)
+        tiles = first if isinstance(first, list) else [first]
+        df = spark.createDataFrame(
+            [("a", t) for t in tiles], f"key string, tile {TILE_SQL}"
+        )
+        fn, extra = getattr(helpers, case.fn), list(case.args[1:])
+        try:
+            if case.fn == "merge_by_key":
+                res = fn(df, ["key"], method=extra[0]).collect()
+            elif case.fn == "combine_by_key":
+                res = fn(df, ["key"], stat=extra[0]).collect()
+            else:
+                res = fn(df, "tile", *extra).collect()
+            out.append((case, _check_helper(case, res, tiles)))
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
+            out.append((case, check_error(case, exc)))
+    return out
 
 
 _SQL = {"DOUBLE": "double", "INT": "int", "STRING": "string", "BINARY": "binary"}

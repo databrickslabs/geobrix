@@ -65,6 +65,15 @@ class Param:
     uc_crs: bool = False
 
 
+@dataclass(frozen=True)
+class Helper:
+    """A top-level DataFrame helper (not a SQL function): where it lives, and how settled it is."""
+
+    name: str
+    module: str
+    status: str
+
+
 # eq=False keeps identity hashing: the level specs are mappings, which do not hash.
 @dataclass(frozen=True, eq=False)
 class Function:
@@ -89,6 +98,7 @@ class Manifest:
     functions: Mapping[str, Function]
     uc_dependencies: Mapping[str, str]
     level_table_version: str
+    helpers: Tuple[Helper, ...] = ()
 
 
 def sql_type(t: str) -> str:
@@ -140,6 +150,9 @@ def load() -> Manifest:
         MappingProxyType(fns),
         MappingProxyType(dict(raw["uc_dependencies"])),
         raw["level_table_version"],
+        tuple(
+            Helper(h["name"], h["module"], h["status"]) for h in raw.get("helpers", [])
+        ),
     )
 
 

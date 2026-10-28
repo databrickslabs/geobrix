@@ -102,6 +102,18 @@ def test_level_keys_are_in_the_closed_vocabulary(fn):
             assert set(spec) & manifest.LEVEL_REQUIRED_ANY[lvl], lvl
 
 
+@pytest.mark.parametrize("helper", MAN.helpers, ids=lambda h: h.name)
+def test_helpers_import_and_have_oracle_rows(helper):
+    import importlib
+
+    from databricks.labs.gbx.bench import oracles
+
+    assert callable(getattr(importlib.import_module(helper.module), helper.name))
+    assert any(
+        c.fn == helper.name for c in oracles.MVP_H
+    ), "every helper needs oracle rows"
+
+
 def test_manifest_is_hashable_and_immutable():
     fn = MAN.functions["gbx_st_makevalid"]
     assert hash(fn) is not None and fn in {fn}

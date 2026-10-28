@@ -2,6 +2,12 @@
   "schema_version": 1,
   "level_table_version": "2026-10-27.mvp0",
   "uc_dependencies": {"h3": "4.5.0", "shapely": "2.1.2", "rasterio": "1.5.0", "pyproj": "3.7.2"},
+  "helpers": [
+    {"name": "retile_virtual", "module": "databricks.labs.gbx.pyrx.helpers", "status": "mvp"},
+    {"name": "bng_tessellate_virtual", "module": "databricks.labs.gbx.pyrx.helpers", "status": "mvp"},
+    {"name": "merge_by_key", "module": "databricks.labs.gbx.pyrx.helpers", "status": "mvp"},
+    {"name": "combine_by_key", "module": "databricks.labs.gbx.pyrx.helpers", "status": "mvp"}
+  ],
   "functions": [
     {"sql_name": "gbx_bng_eastnorthasbng", "family": "bng-scalar", "kind": "scalar",
      "params": [{"name": "easting", "session": ["DOUBLE"], "uc": "DOUBLE"},

@@ -112,8 +112,11 @@ FAKE = [
 def test_no_index_host_survives_redaction():
     for line in FAKE:
         assert "fake-index" not in redact.redact(line), line
-    keep = "geobrix-0.6.0+env6-py3-none-any.whl databricks.labs.gbx 4462389585 labs@databricks.com"
-    assert redact.redact(keep) == keep
+    for keep in (
+        "geobrix-0.6.0+env6-py3-none-any.whl databricks.labs.gbx 4462389585 labs@databricks.com",
+        "ModuleNotFoundError: No module named 'rasterio.io'",  # a module path, not a host
+    ):
+        assert redact.redact(keep) == keep
     piped = subprocess.run(
         [sys.executable, str(NATIVE / "redact.py")],
         input="\n".join(FAKE) + "\n",

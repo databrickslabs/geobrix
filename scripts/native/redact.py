@@ -4,7 +4,10 @@
 The configured index may be an internal one, and this repository is public: no URL and no host
 may reach a log. Replaced: every ``scheme://...`` URL, pip's ``host='...'``, a host after
 ``Connection to`` / ``connect to`` / ``lookup address information for``, and any other
-dotted host name ending in a common top-level domain (pip and uv print some without a scheme).
+host name of three or more labels ending in a common top-level domain (pip and uv print some
+without a scheme). Two-label names are left alone outside those contexts: they are mostly Python
+module paths (``rasterio.io``, ``shapely.io``), and an index host is printed with a scheme or after
+one of the phrases above.
 Standard library only, any Python 3. As a filter: ``... 2>&1 | python3 scripts/native/redact.py``.
 """
 
@@ -24,7 +27,8 @@ PATTERNS = (
     ),
     (
         re.compile(
-            r"(?<![\w./@-])(?:[A-Za-z0-9-]+\.)+" + _TLD + r"(?::\d+)?(?![\w.-])", re.I
+            r"(?<![\w./@-])(?:[A-Za-z0-9-]+\.){2,}" + _TLD + r"(?::\d+)?(?![\w.-])",
+            re.I,
         ),
         "<host>",
     ),

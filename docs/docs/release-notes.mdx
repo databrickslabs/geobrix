@@ -484,11 +484,14 @@ formats.
 ### Raster viewshed — GDAL's viewshed on both tiers (behavior change)
 
 - **Light-tier `rst_viewshed` now uses GDAL's viewshed for every DEM size**, with the same settings
-  as the heavyweight tier, so the two tiers return the same visibility mask. Small DEMs were
-  computed with xarray-spatial before, and their edge cells near grazing angles could differ
-  from the heavyweight result. xarray-spatial (and the numba compiler it brought) is no longer
-  needed, there is no first-call compile delay, and a 256 × 256 DEM now takes about 9 ms instead
-  of about 57 ms.
+  as the heavyweight tier. Small DEMs were computed with xarray-spatial before, and their edge
+  cells near grazing angles could differ from the heavyweight result. xarray-spatial (and the
+  numba compiler it brought) is no longer needed, there is no first-call compile delay, and a
+  256 × 256 DEM now takes about 9 ms instead of about 57 ms.
+- **Large-DEM masks change too.** The light tier already used GDAL's viewshed for large DEMs, but
+  with a different line-of-sight mode; it now uses the heavyweight tier's mode. How many cells
+  change depends on the terrain: from a fraction of a percent on smooth terrain to a few percent
+  on rough terrain (about 3% of the cells of a rough 256 × 256 DEM).
 
 ### Raster tiling and tessellation — tier parity and large rasters (behavior change)
 

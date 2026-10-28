@@ -442,13 +442,12 @@ def _build_mosaic_vrt(
     7. When a tile has its own (per-dataset) mask band the mosaic gets a mask band: the
        union of the tiles' masks (``mask,1`` of each tile), a pixel no tile covers being
        invalid. GDAL reads that mask ahead of the NoData, as it does for any raster.
-       ``mask,1`` is band 1's mask, which for a tile WITHOUT a mask band is its NoData (or
-       alpha) on band 1 alone, not the any-band rule of ``_nodata.valid_mask``. Masked and
-       unmasked tiles do mix: the writer's commit step builds one index over the cells of every
-       source it was given. When a pixel of an unmasked tile can be NoData in one band only,
-       write that tile with its validity as its mask first, as the streamed merge of
-       ``pyrx.core.agg`` does; for a tile whose bands share their NoData pixels (or that has
-       none) the two agree.
+       A tile with a mask band of its own, or an alpha band, has one mask for all its bands.
+       A tile WITHOUT one has a mask per band (its NoData), and is valid at a pixel where ANY
+       band is (the rule of ``_nodata.valid_mask``), so each of its bands is a source of the
+       mosaic's mask band: a pixel is invalid only where every band of every tile that covers
+       it is NoData. Masked and unmasked tiles do mix: the writer's commit step builds one
+       index over the cells of every source it was given.
 
     Assumptions (valid for Phase A native-pixel tiling):
     - All tiles share the same CRS, pixel size, band count, and dtype.
@@ -473,6 +472,7 @@ def _build_mosaic_vrt(
     str
         Absolute path to the written ``mosaic.vrt``.
     """
+    import copy
     import xml.etree.ElementTree as ET
 
     import rasterio
@@ -497,6 +497,7 @@ def _build_mosaic_vrt(
                     "nodatavals": ds.nodatavals,  # tuple, one per band (None where unset)
                     "colorinterp": list(ds.colorinterp),
                     "own_mask": _nodata.has_own_mask(ds),
+                    "alpha": _nodata.has_alpha(ds),
                 }
             )
 
@@ -657,6 +658,12 @@ def _build_mosaic_vrt(
             )
             # an invalid pixel of one tile does not hide a valid pixel of another
             ET.SubElement(src_el, "NODATA").text = "0"
+            # a tile with a mask band per band: each of its other bands can make a pixel valid
+            if not (meta["own_mask"] or meta["alpha"]):
+                for band in range(2, meta["count"] + 1):
+                    more = copy.deepcopy(src_el)
+                    more.find("SourceBand").text = f"mask,{band}"
+                    mask_band.append(more)
 
     # ── Step 5: write XML to disk ──────────────────────────────────────────
     tree = ET.ElementTree(root)

@@ -596,7 +596,12 @@ def test_the_general_harness_refuses_to_time_a_plan_that_is_not_lightweight(
 
 @pytest.mark.parametrize(
     "name",
-    ["rst_h3_rasterize_agg", "rst_quadbin_rasterize_agg", "rst_bng_rasterize_agg"],
+    [
+        "rst_h3_rasterize_agg",
+        "rst_quadbin_rasterize_agg",
+        "rst_bng_rasterize_agg",
+        "rst_custom_rasterize_agg",
+    ],
 )
 def test_the_bench_rasterize_input_is_the_presence_mask(spark, name):
     """The bench times the presence mask: its light col_fn passes the value OMITTED. The

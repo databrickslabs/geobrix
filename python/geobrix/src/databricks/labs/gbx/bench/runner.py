@@ -804,9 +804,10 @@ def _grid_aggregate_df(spark, fs):
 
     Two families ride input_kind == "grid_aggregate":
 
-    RASTERIZE aggs (rst_{quadbin,bng}_rasterize_agg): stream (cellid, value) rows
-    from a fixed deterministic cell set and use the 2-arg auto-derive overload (the
-    grid is derived from the cell set). ``value`` is NULL on every row ->
+    RASTERIZE aggs (rst_{quadbin,bng,custom}_rasterize_agg): stream (cellid, value) rows
+    from a fixed deterministic cell set and use the auto-derive overload (the raster
+    grid is derived from the cell set; the custom one also gets its grid struct from
+    the spec's col_fn). ``value`` is NULL on every row ->
     presence-mask burn (1.0) for heavy; the light col_fn omits the value instead
     (a typed all-null column burns NaN there).
 
@@ -846,6 +847,8 @@ def _grid_aggregate_df(spark, fs):
                 else _spec.quadbin_cellfill_cells()
             )
             rows = [(int(c), v) for c, v in cells]
+        elif fs.name == "rst_custom_rasterize_agg":
+            rows = [(int(c), None) for c in _spec.custom_rasterize_cells()]
         else:  # rst_quadbin_rasterize_agg
             rows = [(int(c), None) for c in _spec.quadbin_rasterize_cells()]
     schema = StructType(

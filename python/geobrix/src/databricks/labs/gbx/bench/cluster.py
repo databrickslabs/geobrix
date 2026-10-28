@@ -67,6 +67,20 @@ ORDER = [
     "launched_tasks",
     "slots_available",
     "chunk_size",
+    # Levels leg: the level/form/compute timed, then the attribution split.
+    "level",
+    "form",
+    "compute",
+    "ser_sent_bytes",
+    "ser_recv_bytes",
+    "py_eval_s",
+    "native_s",
+    "shuffle_bytes",
+    "spill_bytes",
+    "peak_exec_mem_bytes",
+    "gc_s",
+    "py_worker_rss_mb",
+    "failure_mode",
 ]
 
 # Guard against drift: ORDER must cover exactly the ResultRow fields, no more, no less.
@@ -336,6 +350,13 @@ INPUT_TILE = {input_tile!r}
 # CORPUS + "/bench-corpus-cog-multiwindow". Skips cleanly when the manifest is absent.
 BENCHMARK_GROUPED_FILE = {benchmark_grouped_file!r}
 GROUPED_FILE_ONLY = {grouped_file_only!r}
+# --levels <S|G|A|H|IO>: also run the streamline MVP levels leg (every form of that MVP at each
+# execution level the compute offers, with the attribution split). --levels-only: ONLY run it.
+# --levels-uc <catalog.schema>: where the L4 (Unity Catalog) functions live; without it the L4
+# forms record a skipped row. The leg reads its tile inputs from {{CORPUS}}/rows.
+LEVELS_MVP = {levels_mvp!r}
+LEVELS_ONLY = {levels_only!r}
+LEVELS_UC = {levels_uc!r}
 MULTIWINDOW_CORPUS = {multiwindow_corpus!r} or (CORPUS + "/bench-corpus-cog-multiwindow")
 # --file-matrix: sweep file_mode in ("fuse","external","managed") for GeoTIFF + GeoPackage reads.
 # --file-matrix-only: ONLY run the FILE matrix, skip all fn benchmarks.
@@ -458,7 +479,7 @@ _READER_ONLY = (
     or VECTOR_TIN_ONLY or GRID_QUADBIN_ONLY or GRID_BNG_ONLY or GRID_CUSTOM_ONLY
     or FANOUT_ONLY or NETCDF_ONLY or NETCDF_WRITER_ONLY or GROUPED_FILE_ONLY
     or FILE_MATRIX_ONLY or GPKG_CHUNKSIZE_ONLY or LAYOUT_SWEEP_ONLY or LAYOUT_SCAN_ONLY
-    or VECTOR_TABLE_READ_ONLY or RASTER_DECODE_READ_ONLY
+    or VECTOR_TABLE_READ_ONLY or RASTER_DECODE_READ_ONLY or LEVELS_ONLY
 )
 corpus = None if _READER_ONLY else _m.Corpus.read(f"{{CORPUS}}/corpus.json")
 # Function-bench summaries annotate results with the row-pool size; reader-only runs have no
@@ -2910,6 +2931,18 @@ else:
         _show_md(f"grouped FILE-amortization benchmark -- {RUN_ID}", _md)
 """
 
+_CELL_LEVELS = """# Streamline MVP levels leg (perf matrix + attribution split): every form of the MVP at each
+# execution level this compute offers (L1 Catalyst, L2 Java UDF, L3 light, L4 Unity Catalog),
+# timed at 1x/4x/16x. Rows land in the same results table; the split is in the row's own columns.
+from databricks.labs.gbx.bench import levels as _lv
+print("=== levels leg starting:", LEVELS_MVP, flush=True)
+_lv_rows = _lv.run_mvp(spark, LEVELS_MVP, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, corpus=CORPUS,
+                       schema=".".join(TABLE.split(".")[:2]), uc=(LEVELS_UC or None), where="cluster")
+_sink(_lv_rows)
+lw.extend(_lv_rows)
+_show_md(f"levels leg {LEVELS_MVP} -- {RUN_ID}", _lv.summarize(_lv_rows))
+"""
+
 _CELL_FILE_MATRIX = """# FILE-access matrix: GeoTIFF + GeoPackage reads across file_mode in ("fuse","external","managed").
 # Isolation: each mode's DataFrame is built fresh inside its own loop iteration so no warm
 # table/partition state carries from one mode to the next. GeoTIFF reuses {CORPUS}/rows
@@ -3591,6 +3624,9 @@ def build_bench_notebook(cfg: dict) -> dict:
         disable_fuse_direct=bool(cfg.get("disable_fuse_direct", False)),
         benchmark_grouped_file=bool(cfg.get("benchmark_grouped_file")),
         grouped_file_only=bool(cfg.get("grouped_file_only")),
+        levels_mvp=str(cfg.get("levels_mvp", "") or ""),
+        levels_only=bool(cfg.get("levels_only")),
+        levels_uc=str(cfg.get("levels_uc", "") or ""),
         multiwindow_corpus=str(cfg.get("multiwindow_corpus", "") or ""),
         benchmark_file_matrix=bool(cfg.get("file_matrix")),
         file_matrix_only=bool(cfg.get("file_matrix_only")),
@@ -3650,6 +3686,8 @@ def build_bench_notebook(cfg: dict) -> dict:
     exif_only = bool(cfg.get("exif_only"))
     benchmark_grouped_file = bool(cfg.get("benchmark_grouped_file"))
     grouped_file_only = bool(cfg.get("grouped_file_only"))
+    levels_mvp = str(cfg.get("levels_mvp", "") or "")
+    levels_only = bool(cfg.get("levels_only"))
     benchmark_file_matrix = bool(cfg.get("file_matrix"))
     file_matrix_only = bool(cfg.get("file_matrix_only"))
     benchmark_gpkg_chunksize = bool(cfg.get("gpkg_chunksize"))
@@ -3763,6 +3801,7 @@ def build_bench_notebook(cfg: dict) -> dict:
             lidar_only,
             exif_only,
             grouped_file_only,
+            levels_only,
             file_matrix_only,
             gpkg_chunksize_only,
             layout_sweep_only,
@@ -3801,6 +3840,7 @@ def build_bench_notebook(cfg: dict) -> dict:
         (benchmark_grid_custom or grid_custom_only, [_CELL_GRID_CUSTOM]),
         (benchmark_fanout or fanout_only, [_CELL_FANOUT]),
         (benchmark_grouped_file or grouped_file_only, [_CELL_GROUPED_FILE]),
+        (bool(levels_mvp), [_CELL_LEVELS]),
         (benchmark_file_matrix or file_matrix_only, [_CELL_FILE_MATRIX]),
         (benchmark_gpkg_chunksize or gpkg_chunksize_only, [_CELL_GPKG_CHUNKSIZE]),
         (benchmark_layout_sweep or layout_sweep_only, [_CELL_LAYOUT_SWEEP]),

@@ -89,6 +89,27 @@ class ResultRow:
     slots_available: int = 0
     # Vector reader chunkSize option for the leg (0 = not applicable / not a vector leg).
     chunk_size: int = 0
+    # Levels leg (bench/levels.py): which implementation level served the function ("L1" |
+    # "L2" | "L3" | "L4"), the form timed (the L3 variant, or a shape label), and the compute
+    # the run was on ("dedicated" | "standard" | "serverless"). "na" on every other leg.
+    level: str = "na"
+    form: str = "na"
+    compute: str = "na"
+    # Attribution split (bench/attribution.py), taken from the plan of the last measured
+    # iteration. Bytes, seconds and MB. 0 means none was observed; a metric the session
+    # could not report at all (a Connect session has no GC time) is 0 here and named in
+    # `note` ("unavailable: ..."). native_s stays 0 until a measured split exists.
+    ser_sent_bytes: int = 0
+    ser_recv_bytes: int = 0
+    py_eval_s: float = 0.0
+    native_s: float = 0.0
+    shuffle_bytes: int = 0
+    spill_bytes: int = 0
+    peak_exec_mem_bytes: int = 0
+    gc_s: float = 0.0
+    py_worker_rss_mb: float = 0.0
+    # Why an error row failed ("ExceptionType: message"); "" on every other row.
+    failure_mode: str = ""
 
 
 def write_jsonl(rows: List[ResultRow], path) -> None:

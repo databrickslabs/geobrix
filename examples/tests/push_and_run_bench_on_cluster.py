@@ -458,6 +458,28 @@ def main() -> int:
     # --grouped-file-only: ONLY run the grouped-file benchmark, skip all fn benchmarks.
     benchmark_grouped_file = "--grouped-file" in sys.argv
     grouped_file_only = "--grouped-file-only" in sys.argv
+    # --levels <S|G|A|H|IO>: also run the streamline MVP levels leg (every form of that MVP at
+    #   each execution level the compute offers, with the attribution split). --levels-only: ONLY
+    #   that leg (no fn benchmarks, no heavy tests JAR). --levels-uc <catalog.schema>: where the
+    #   L4 (Unity Catalog) functions live; without it the L4 forms record a skipped row.
+    levels_mvp = _arg("--levels", "")
+    levels_only = "--levels-only" in sys.argv
+    levels_uc = _arg("--levels-uc", "")
+    if levels_mvp not in ("", "S", "G", "A", "H", "IO"):
+        print(
+            f"ERROR: --levels must be one of S, G, A, H, IO (got '{levels_mvp}')",
+            file=sys.stderr,
+        )
+        return 2
+    if (levels_only or levels_uc) and not levels_mvp:
+        print(
+            "ERROR: --levels-only and --levels-uc need --levels <S|G|A|H|IO>.",
+            file=sys.stderr,
+        )
+        return 2
+    if levels_only:
+        # The leg installs its own levels through register(); it never uses the tests JAR.
+        heavyweight, lightweight = False, True
     # --multiwindow-corpus PATH: the multiwindow COG corpus dir (holding
     #   cog_multiwindow_manifest.json). Default (empty) -> CORPUS/bench-corpus-cog-multiwindow.
     multiwindow_corpus = _arg("--multiwindow-corpus", "")
@@ -653,6 +675,11 @@ def main() -> int:
         benchmark_grouped_file=benchmark_grouped_file,
         grouped_file_only=grouped_file_only,
         multiwindow_corpus=multiwindow_corpus,
+        #  --levels <MVP>: the streamline MVP levels leg. --levels-only: ONLY that leg.
+        #  --levels-uc <catalog.schema>: where its L4 (Unity Catalog) functions live.
+        levels_mvp=levels_mvp,
+        levels_only=levels_only,
+        levels_uc=levels_uc,
         #  Phase-2 FILE legs (light-only, serialized):
         #  --file-matrix: file_mode sweep (fuse/external/managed) for GeoTIFF + GeoPackage reads.
         file_matrix=file_matrix,
@@ -727,6 +754,9 @@ def main() -> int:
         cfg["modes"] = "spark-path"
     if grouped_file_only:
         # Grouped FILE-amortization benchmark is spark-path only; skip pure-core sections.
+        cfg["modes"] = "spark-path"
+    if levels_only:
+        # The levels leg is spark-path only; skip pure-core sections.
         cfg["modes"] = "spark-path"
     if file_matrix_only:
         # FILE matrix benchmark is spark-path only; skip pure-core sections.
@@ -826,6 +856,7 @@ def main() -> int:
         or cfg.get("fanout_only")
         or cfg.get("netcdf_only")
         or cfg.get("grouped_file_only")
+        or cfg.get("levels_only")
         or cfg.get("file_matrix_only")
         or cfg.get("gpkg_chunksize_only")
         or cfg.get("layout_sweep_only")

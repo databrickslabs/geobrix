@@ -24,3 +24,9 @@ def spark():
         .getOrCreate()
     )
     yield session
+
+
+@pytest.fixture(scope="module")
+def spark_session_local(spark):
+    """The local classic session, under the name the levels leg's tests use."""
+    return spark

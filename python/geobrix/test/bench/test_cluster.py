@@ -57,7 +57,7 @@ def spark():
 def test_rows_to_dataframe_schema_and_where(spark):
     df = cl.rows_to_dataframe([_row(), _row(fn="rst_avg")], spark, where="cluster")
     cols = df.columns
-    assert len(cols) == 45
+    assert len(cols) == 58
     assert "output_fingerprint" in cols
     assert "iter_total_wall_clock_s" in cols
     assert "avg_wall_clock_s" in cols
@@ -67,13 +67,29 @@ def test_rows_to_dataframe_schema_and_where(spark):
     assert cols[0] == "run_event_num"
     # Column ORDER: the headline timing metrics sit right after `mode` (per_tile_avg_s
     # immediately left of per_tile_avg_ms), the per-iter distribution (iter_*) trails,
-    # then the virtual-tile fields, plan_s, and then the FILE-matrix dimensions last.
+    # then the virtual-tile fields, plan_s, the FILE-matrix dimensions, and the levels leg's
+    # level/form/compute + attribution split last.
     assert cols == cl.ORDER
     mo = cols.index("mode")
     assert cols[mo + 1] == "avg_wall_clock_s"
     assert cols[mo + 2] == "per_tile_avg_s"
     assert cols[mo + 3] == "per_tile_avg_ms"
     assert cols[-13:] == [
+        "level",
+        "form",
+        "compute",
+        "ser_sent_bytes",
+        "ser_recv_bytes",
+        "py_eval_s",
+        "native_s",
+        "shuffle_bytes",
+        "spill_bytes",
+        "peak_exec_mem_bytes",
+        "gc_s",
+        "py_worker_rss_mb",
+        "failure_mode",
+    ]
+    assert cols[-26:-13] == [
         "iter_min_s",
         "iter_p90_s",
         "iter_total_wall_clock_s",

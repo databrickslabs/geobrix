@@ -35,6 +35,15 @@ case class RST_ReTile(
     override def eval(input: InternalRow): IterableOnce[InternalRow] = {
         // The tile row is read once, outside the guarded body, so a failure's error tile can carry its cellid.
         val rawTile = tile.eval(input).asInstanceOf[InternalRow]
+        // A window of 0 or less never advances: a PARAMETER error that raises (it is not a per-tile failure to hide
+        // in an error tile). A NULL size is unchanged: it reads as 0 inside the guarded body, an error tile.
+        for ((name, size) <- Seq("tile_width" -> tileWidthExpr, "tile_height" -> tileHeightExpr)) {
+            val v = size.eval(input)
+            if (v != null && v.asInstanceOf[Int] <= 0) {
+                throw new IllegalArgumentException(
+                  s"gbx_rst_retile: $name must be 1 or more pixels, got $v. Fix: pass a window of at least 1 pixel.")
+            }
+        }
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromExpr(exprConfExpr)

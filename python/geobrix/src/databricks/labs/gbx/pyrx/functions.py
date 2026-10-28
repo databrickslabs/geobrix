@@ -5387,6 +5387,9 @@ class _RstRetileUDTF:
     """Streaming UDTF: yield one sub-tile struct per non-overlapping window."""
 
     def eval(self, tile, tile_width, tile_height, file_ref=None):
+        tiling.require_window(
+            tile_width, tile_height
+        )  # a parameter error raises, whatever the tile
         if _tile_is_empty(tile):
             yield from _empty_tile_rows(tile, "RST_ReTile")
             return

@@ -52,6 +52,20 @@ def separate_bands(ds) -> list:
     return list(iter_separate_bands(ds))
 
 
+def require_window(tile_width, tile_height, fn="gbx_rst_retile"):
+    """Raise unless the window size is 1 pixel or more in each direction (NULL is left to the caller).
+
+    A window of 0 or less never advances through the raster. It is a PARAMETER error, so it raises with a
+    Fix and is never an error tile; the JVM tier raises the same words.
+    """
+    for name, value in (("tile_width", tile_width), ("tile_height", tile_height)):
+        if value is not None and int(value) <= 0:
+            raise ValueError(
+                f"{fn}: {name} must be 1 or more pixels, got {int(value)}. "
+                "Fix: pass a window of at least 1 pixel."
+            )
+
+
 def _iter_window_tiles(ds, tile_width, tile_height, step_x, step_y):
     """Yield one GTiff byte string per window tile (streaming, never buffered)."""
     for _, b in _iter_window_tiles_located(ds, tile_width, tile_height, step_x, step_y):

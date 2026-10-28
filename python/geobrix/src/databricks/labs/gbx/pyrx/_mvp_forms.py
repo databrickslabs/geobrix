@@ -121,6 +121,7 @@ _LRU = _OpenLru()
 
 
 def _windows(ds, w, h):
+    tiling.require_window(w, h)
     return tiling.plan_grid_windows(ds.width, ds.height, int(w), int(h))
 
 

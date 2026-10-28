@@ -40,6 +40,7 @@ PROBE = (
     "windows",
     "windows_batch",
     "no_rows",
+    "raises",
 )  # the array / count+part probes split a readable tile; they hold no error contract
 NAMED = {
     "gbx_mvp_rst_retile_array": "SELECT explode(gbx_mvp_rst_retile_array({args})) AS tile FROM _gbx_oracle",

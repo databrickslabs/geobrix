@@ -465,6 +465,16 @@ MVP_G: Tuple[Case, ...] = (
         None,
         ("session",),
     ),
+    # A window of 0 pixels never advances: a parameter error that raises on every level and says how to fix it
+    # (it used to hang the light tier and give an error tile on the JVM).
+    Case(
+        "rt_zero_window",
+        RT,
+        (Build("tile_4326"), 0, 32),
+        "raises",
+        "tile_width",
+        ("session",),
+    ),
     # A NULL tile has nothing to split: no rows, as explode(NULL) gives.
     Case("rt_null", RT, (None, 32, 32), "no_rows", None, ("session",)),
     # An error tile in comes out as the same error tile (the upstream reason survives); a tile that
@@ -1207,6 +1217,8 @@ def _check_rows(case: Case, rows: list, args) -> Optional[str]:
         if len(rows) != 1:
             return f"{case.cid}: {len(rows)} rows, want the one error tile"
         return check(case, tiles[0], args)
+    if case.kind == "raises":
+        return f"{case.cid}: returned {len(rows)} rows, want an error"
     if case.kind == "windows_batch":
         return _check_window_batch(case, tiles, args)
     if case.kind == "windows":

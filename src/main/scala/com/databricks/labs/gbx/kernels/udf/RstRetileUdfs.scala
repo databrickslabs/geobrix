@@ -121,6 +121,17 @@ object RetileKernel {
             case NonFatal(_) | _: LinkageError => ()
         }
 
+    /** The window size of a call as ints. A size of 0 or less is a PARAMETER error and raises, as at L1 and L3
+      * (it would never advance). */
+    def window(w: Any, h: Any): (Int, Int) = {
+        val (tw, th) = (Coerce.double(w).toInt, Coerce.double(h).toInt)
+        for ((name, v) <- Seq("tile_width" -> tw, "tile_height" -> th) if v <= 0) {
+            throw new IllegalArgumentException(
+              s"gbx_rst_retile: $name must be 1 or more pixels, got $v. Fix: pass a window of at least 1 pixel.")
+        }
+        (tw, th)
+    }
+
     /** GTiff bytes of one window `(col_off, row_off, width, height)` of `ds`. */
     def cut(ds: Dataset, win: (Int, Int, Int, Int)): Array[Byte] = {
         val (t, md) = ReTile.getTile(ds, Map("driver" -> "GTiff"), win._1, win._2, win._3, win._4)
@@ -141,7 +152,7 @@ object RetileKernel {
 class RstRetileCountBytesUdf extends UDF3[Array[Byte], Any, Any, java.lang.Integer] {
     override def call(r: Array[Byte], w: Any, h: Any): java.lang.Integer = {
         if (r == null) return null
-        val (tw, th) = (Coerce.double(w).toInt, Coerce.double(h).toInt)
+        val (tw, th) = RetileKernel.window(w, h)
         try ReTile.generateWindows(RetileKernel.open(r), tw, th).size
         catch { case NonFatal(e) => RetileKernel.failed(e); 1 }
     }
@@ -151,7 +162,7 @@ class RstRetileCountBytesUdf extends UDF3[Array[Byte], Any, Any, java.lang.Integ
 class RstRetilePartBytesUdf extends UDF4[Array[Byte], Any, Any, Any, Array[Byte]] {
     override def call(r: Array[Byte], w: Any, h: Any, i: Any): Array[Byte] = {
         if (r == null || i == null) return null
-        val (tw, th, idx) = (Coerce.double(w).toInt, Coerce.double(h).toInt, Coerce.double(i).toInt)
+        val ((tw, th), idx) = (RetileKernel.window(w, h), Coerce.double(i).toInt)
         val planned =
             try { val ds = RetileKernel.open(r); Some((ds, ReTile.generateWindows(ds, tw, th))) }
             catch { case NonFatal(e) => RetileKernel.failed(e); None }
@@ -169,7 +180,7 @@ class RstRetilePartBytesUdf extends UDF4[Array[Byte], Any, Any, Any, Array[Byte]
 class RstRetileArrayBytesUdf extends UDF3[Array[Byte], Any, Any, java.util.List[Array[Byte]]] {
     override def call(r: Array[Byte], w: Any, h: Any): java.util.List[Array[Byte]] = {
         if (r == null) return null
-        val (tw, th) = (Coerce.double(w).toInt, Coerce.double(h).toInt)
+        val (tw, th) = RetileKernel.window(w, h)
         try {
             val ds = RetileKernel.open(r)
             ReTile.generateWindows(ds, tw, th).map(RetileKernel.cut(ds, _)).asJava

@@ -194,6 +194,16 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         assert(new RstRetileArrayBytesUdf().call(junk, 8, 8).asScala.toSeq == Seq(null))
         assert(intercept[Exception](new RstRetileCountBytesUdf().call(input, "wide", 8)).getMessage.contains("wide"))
         intercept[IndexOutOfBoundsException](new RstRetilePartBytesUdf().call(input, 8, 8, 4))
+        // a window of 0 never advances: a parameter error that says what to do, on all three facades
+        for (bad <- Seq((0, 8, "tile_width"), (8, -1, "tile_height"))) {
+            for (call <- Seq[() => Any](
+                   () => new RstRetileCountBytesUdf().call(input, bad._1, bad._2),
+                   () => new RstRetilePartBytesUdf().call(input, bad._1, bad._2, 0),
+                   () => new RstRetileArrayBytesUdf().call(input, bad._1, bad._2))) {
+                val e = intercept[IllegalArgumentException](call())
+                assert(e.getMessage.contains(s"${bad._3} must be 1 or more pixels") && e.getMessage.contains("Fix:"), e.getMessage)
+            }
+        }
         RetileKernel.clear()
     }
 

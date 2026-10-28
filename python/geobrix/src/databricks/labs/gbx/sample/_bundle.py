@@ -406,7 +406,7 @@ def _fgdb_column(series, kind: str):
     import pandas as pd
 
     if kind == "str":
-        return series.map(lambda v: None if v is None or v != v else str(v))
+        return series.map(lambda v: None if pd.isna(v) else str(v))
     numeric = pd.to_numeric(series, errors="coerce")
     if kind == "int" and not numeric.isna().any():
         return numeric.astype("int32")
@@ -482,10 +482,11 @@ def _stage_nyc_filegdb(
     """
     base = Path(base)
     dest = base / _NYC_FILEGDB_ZIP
-    exists_skip, size_mb = _path_exists_for_skip(dest)
-    existing = exists_skip and size_mb is not None
+    # A file that is present but whose size cannot be read (a FUSE mount) is still present.
+    existing, size_mb = _path_exists_for_skip(dest)
     if existing and _nyc_filegdb_complete(dest):
-        print(f"⏭️  NYC FileGDB: {size_mb:.1f} MB (already exists)")
+        size = "" if size_mb is None else f" {size_mb:.1f} MB"
+        print(f"⏭️  NYC FileGDB:{size} (already exists)")
         return dest
     missing = [
         rel
@@ -1074,8 +1075,8 @@ def run_complete_bundle(  # noqa: C901
 
     try:
         _stage_nyc_filegdb(base, tmp, volume_root=volume_root)
-    except ImportError:
-        errors.append(("FileGDB", "geopandas and pyogrio required"))
+    except ImportError as e:
+        errors.append(("FileGDB", f"geopandas and pyogrio required: {e}"))
     except Exception as e:
         errors.append(("FileGDB", str(e)))
         print(f"⚠️  FileGDB failed: {e}")

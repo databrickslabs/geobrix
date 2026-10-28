@@ -121,8 +121,8 @@ def create_filegdb(input_dir: str, output_gdb: str, verbose: bool = True):
             # Add features
             for idx, row in boroughs.iterrows():
                 feature = ogr.Feature(layer.GetLayerDefn())
-                feature.SetField('BORO_NAME', str(row.get('boro_name', '')))
-                feature.SetField('BORO_CODE', str(row.get('boro_code', '')))
+                feature.SetField('BORO_NAME', str(row.get('boroname', '')))
+                feature.SetField('BORO_CODE', str(row.get('borocode', '')))
                 feature.SetGeometry(ogr.CreateGeometryFromWkt(row.geometry.wkt))
                 layer.CreateFeature(feature)
                 feature = None
@@ -152,7 +152,7 @@ def create_filegdb(input_dir: str, output_gdb: str, verbose: bool = True):
             for idx, row in zones.iterrows():
                 feature = ogr.Feature(layer.GetLayerDefn())
                 feature.SetField('ZONE_NAME', str(row.get('zone', '')))
-                location_id = row.get('LocationID')
+                location_id = row.get('locationid')
                 if location_id is not None:
                     feature.SetField('LOCATION_ID', int(location_id))
                 feature.SetGeometry(ogr.CreateGeometryFromWkt(row.geometry.wkt))
@@ -220,8 +220,8 @@ def create_filegdb(input_dir: str, output_gdb: str, verbose: bool = True):
             # Add features
             for idx, row in subway.iterrows():
                 feature = ogr.Feature(layer.GetLayerDefn())
-                feature.SetField('STATION_NAME', str(row.get('Station_Na', '')))
-                feature.SetField('LINE', str(row.get('Line', '')))
+                feature.SetField('STATION_NAME', str(row.get('stop_name', '')))
+                feature.SetField('LINE', str(row.get('line', '')))
                 feature.SetGeometry(ogr.CreateGeometryFromWkt(row.geometry.wkt))
                 layer.CreateFeature(feature)
                 feature = None

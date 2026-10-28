@@ -456,3 +456,80 @@ def test_nyc_filegdb_step_skips_a_complete_zip_and_replaces_an_incomplete_one(tm
     assert _zip_layers(dest) == {"NYC_Boroughs"}
     assert _bundle_mod._stage_nyc_filegdb(base, tmp_path / "work") == dest
     assert _zip_layers(dest) == FILEGDB_LAYERS
+
+
+@pytest.mark.parametrize(
+    "kind,values,dtype,expected",
+    [
+        ("str", ["a", None, float("nan"), 3], "object", ["a", None, None, "3"]),
+        (
+            "str",
+            ["a", "pd.NA"],
+            "object",
+            ["a", None],
+        ),  # a nullable-dtype missing value
+        ("int", ["1", "2"], "int32", [1, 2]),
+        ("int", ["1", None, "3"], "float64", [1.0, None, 3.0]),  # int cannot hold null
+        ("float", ["1.5", "x"], "float64", [1.5, None]),
+    ],
+)
+def test_fgdb_column_converts_to_the_field_dtype_and_keeps_missing_values_null(
+    kind, values, dtype, expected
+):
+    pd = pytest.importorskip("pandas")
+    values = [pd.NA if v == "pd.NA" else v for v in values]
+
+    out = _bundle_mod._fgdb_column(pd.Series(values, dtype=object), kind)
+
+    assert str(out.dtype) == dtype
+    assert [None if pd.isna(v) else v for v in out] == expected
+
+
+def test_nyc_filegdb_step_keeps_a_zip_whose_size_cannot_be_read(tmp_path, monkeypatch):
+    """A FUSE mount can report a file present but not its size; that zip is not rebuilt each run."""
+    base = tmp_path / "geobrix-examples"
+    _write_tiny_nyc_layers(base)
+    dest = _bundle_mod._stage_nyc_filegdb(base, tmp_path / "work")
+    before = dest.stat().st_mtime_ns
+    exists = _bundle_mod._path_exists_for_skip
+    monkeypatch.setattr(
+        _bundle_mod,
+        "_path_exists_for_skip",
+        lambda p: (exists(p)[0], None) if Path(p) == dest else exists(p),
+    )
+
+    assert _bundle_mod._stage_nyc_filegdb(base, tmp_path / "work") == dest
+
+    assert dest.stat().st_mtime_ns == before
+
+
+@pytest.mark.parametrize(
+    "error,reported",
+    [
+        (
+            ImportError("No module named 'pyogrio'"),
+            "geopandas and pyogrio required: No module named 'pyogrio'",
+        ),
+        (RuntimeError("source layer missing"), "source layer missing"),
+    ],
+)
+def test_run_complete_bundle_records_a_failed_filegdb_step(
+    tmp_path, monkeypatch, error, reported
+):
+    """A FileGDB step that fails is recorded in errors with its cause, and the bundle carries on."""
+
+    def offline(*args, **kwargs):
+        raise RuntimeError("offline")
+
+    def fail(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(_bundle_mod, "download_to_path", offline)
+    monkeypatch.setattr(_bundle_mod, "download_srtm_to_path", offline)
+    monkeypatch.setattr(_bundle_mod, "_stage_nyc_filegdb", fail)
+
+    result = run_complete_bundle(
+        str(tmp_path / "geobrix-examples"), temp_dir=str(tmp_path / "tmp")
+    )
+
+    assert ("FileGDB", reported) in result["errors"]

@@ -1114,10 +1114,16 @@ def _require_exist(files, root: str | None, table: str, version, action: str) ->
         )
 
 
-def _require_files(upserts: pa.Table, props, table: str, version) -> None:
-    """The rows being brought back must read: the pack files GeoBrix wrote must still
-    exist, and an object of the base store must still be the one the row recorded (a row
-    restored over a base that moved on would read as drift)."""
+_GERUND = {"restore": "restoring", "export": "exporting"}
+
+
+def _require_files(
+    upserts: pa.Table, props, table: str, version, *, verb: str = "restore"
+) -> None:
+    """The rows being brought back (or exported) must read: the pack files GeoBrix wrote
+    must still exist, and an object of the base store must still be the one the row
+    recorded (a row restored over a base that moved on would read as drift). ``verb`` is
+    what the caller does with the rows, for the messages."""
     if not upserts.num_rows:
         return
     file, origin = upserts.column("file"), upserts.column("origin")
@@ -1129,7 +1135,7 @@ def _require_files(upserts: pa.Table, props, table: str, version) -> None:
         _files_root(props),
         table,
         version,
-        "restore a later version or a tag",
+        f"{verb} a later version or a tag",
     )
     theirs = upserts.filter(pc.and_(named, external))
     moved = []
@@ -1151,10 +1157,10 @@ def _require_files(upserts: pa.Table, props, table: str, version) -> None:
     if moved:
         raise ZarrVersionUnavailable(
             f"version {version} of {table} points at {len(moved)} object(s) of the base "
-            f"store that changed since (e.g. {moved[0]}), so restoring it would make the "
-            "store read as drift",
+            f"store that changed since (e.g. {moved[0]}), so {_GERUND[verb]} it would make "
+            "the store read as drift",
             fix=f"run gbx_zarr_sync({table!r}) to record the store as it is now, then "
-            "restore a later version",
+            f"{verb} a later version",
         )
 
 

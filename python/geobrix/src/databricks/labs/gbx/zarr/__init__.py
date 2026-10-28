@@ -38,6 +38,7 @@ _EXPORTS = {
     "gbx_zarr_untag": ("databricks.labs.gbx.zarr.functions", "gbx_zarr_untag"),
     "gbx_zarr_history": ("databricks.labs.gbx.zarr.functions", "gbx_zarr_history"),
     "gbx_zarr_restore": ("databricks.labs.gbx.zarr.functions", "gbx_zarr_restore"),
+    "gbx_zarr_export": ("databricks.labs.gbx.zarr.functions", "gbx_zarr_export"),
     "BLOCKS_SCHEMA": ("databricks.labs.gbx.zarr.functions", "BLOCKS_SCHEMA"),
     "block_to_numpy": ("databricks.labs.gbx.zarr.functions", "block_to_numpy"),
     "block_to_xarray": ("databricks.labs.gbx.zarr.functions", "block_to_xarray"),

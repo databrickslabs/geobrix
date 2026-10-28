@@ -371,6 +371,7 @@ _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _MS = timedelta(milliseconds=1)
 # Errors a storage reports for credentials it will not accept, as text: S3 answers an expired
 # session token with a 400 (obstore raises a generic error for it, not a permission error).
+_STATUS = re.compile(r"non-2xx status code: (\d{3})")
 _AUTH_ERROR = re.compile(
     r"ExpiredToken|InvalidAccessKeyId|InvalidToken|TokenRefreshRequired|"
     r"SignatureDoesNotMatch|AuthenticationFailed|InvalidAuthenticationInfo|"
@@ -782,6 +783,20 @@ def _scrub(cfg: AccessConfig, text: str) -> str:
     return _SAS_SIGNATURE.sub("sig=***", text)
 
 
+def _is_refusal(text: str) -> bool:
+    """Whether the error text of a request obstore calls generic is the storage refusing the
+    credentials: a code S3 or Azure names, a 401 or 403, or a 400 with no body to tell
+    (S3 answers a failed HEAD with a bare 400 or 403, "not possible to retrieve the exact
+    exception", so an expired token seen on a HEAD has no ``ExpiredToken`` in it)."""
+    if _AUTH_ERROR.search(text):
+        return True
+    m = _STATUS.search(text)
+    if m is None:
+        return False
+    status = int(m.group(1))
+    return status in (401, 403) or (status == 400 and "<Code>" not in text)
+
+
 @contextmanager
 def _obstore_errors(cfg: AccessConfig):
     """Failures of an obstore call, as the errors the readers handle: credentials the storage
@@ -798,7 +813,7 @@ def _obstore_errors(cfg: AccessConfig):
         raise FileNotFoundError(_scrub(cfg, str(e))) from None
     except ox.BaseError as e:
         text = str(e)
-        if _AUTH_ERROR.search(text):
+        if _is_refusal(text):
             raise _Refused() from None
         raise OSError(_scrub(cfg, text)) from None
 

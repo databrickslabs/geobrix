@@ -994,6 +994,17 @@ def _s3_expired():
     )
 
 
+def _s3_bare_400():
+    """What S3 sends for a failed HEAD (no body: "not possible to retrieve the exact
+    exception"), as obstore words it. There is no ExpiredToken in it."""
+    from obstore import exceptions as ox
+
+    return ox.GenericError(
+        "Generic S3 error: Error performing HEAD http://127.0.0.1:49179/bkt/vol/k in "
+        "905.208\u00b5s - Server returned non-2xx status code: 400 Bad Request: "
+    )
+
+
 def _forbidden():
     from obstore import exceptions as ox
 
@@ -1007,9 +1018,9 @@ def _forbidden():
         ("read", _s3_expired),
         ("read", _forbidden),
         ("put", _s3_expired),
-        ("stat", _s3_expired),
+        ("stat", _s3_bare_400),
     ],
-    ids=["read-S3-400", "read-403", "put", "stat"],
+    ids=["read-S3-400", "read-403", "put", "stat-bare-400"],
 )
 def test_refused_credentials_are_not_retried_and_auto_carries_on_through_the_mount(
     cloud, monkeypatch, op, refusal, mode
@@ -1083,6 +1094,162 @@ def test_refused_credentials_are_not_retried_and_auto_carries_on_through_the_mou
             assert e.value.fix == expired
         assert calls["n"] == 1
     assert sleeps == []
+
+
+@pytest.fixture
+def fake_s3(monkeypatch):
+    """A fake S3 endpoint on 127.0.0.1 that answers every request with ``respond(method,
+    target) -> (status, body, headers)`` and records it in ``seen``. The stores GeoBrix
+    builds point at it, so obstore's own wording and retry logic are what is tested."""
+    import http.server
+    import threading
+
+    class S3:
+        seen = []
+        respond = staticmethod(lambda method, target: (400, b"", {}))
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def _answer(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            if n:
+                self.rfile.read(n)
+            S3.seen.append((self.command, self.path))
+            status, body, headers = S3.respond(self.command, self.path)
+            self.send_response(status)
+            for key, value in headers.items():
+                self.send_header(key, value)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+
+        do_GET = do_PUT = do_POST = do_DELETE = do_HEAD = _answer
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    endpoint = f"http://127.0.0.1:{server.server_port}"
+    real = _access._store_args
+    monkeypatch.setattr(
+        _access,
+        "_store_args",
+        lambda cfg: {
+            **real(cfg),
+            "endpoint": endpoint,
+            "client_options": {"allow_http": True},
+        },
+    )
+    S3.seen = []
+    yield S3
+    server.shutdown()
+
+
+@pytest.mark.parametrize("mode", ["auto", "direct"])
+@pytest.mark.parametrize("status", [400, 403])
+def test_a_bare_4xx_from_s3_is_a_refusal_not_a_transient_error(
+    fake_s3, cloud, monkeypatch, mode, status
+):
+    """S3 answers a failed HEAD (or a failed list) with a bare 400 or 403 and no body: the
+    credentials expired and nothing says so. One request, no retry, no sleep: "auto" asks the
+    mount instead (the commit's pack check, a registered store's file identity, the first
+    request made at vend), "direct" raises."""
+    from databricks.labs.gbx.zarr._pack import require_packs
+
+    sleeps = []
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    fake_s3.respond = lambda method, target: (status, b"", {})
+    vol = cloud.vol
+    (vol / "store" / "data").mkdir()
+    (vol / "store" / "data" / "p.zpack").write_bytes(b"z")
+    cfg = AccessConfig(
+        "direct",
+        "s3://bkt/vol/store",
+        {
+            "access_key_id": SENTINEL,
+            "secret_access_key": SENTINEL,
+            "session_token": SENTINEL,
+        },
+        "aws",
+        str(vol),
+        "s3://bkt/vol",
+        fallback=mode == "auto",
+        region="us-west-2",
+    )
+    st = (vol / "base" / "b.bin").stat()
+    region = Region(
+        "b.bin", 0, 8, "external", f"{st.st_mtime_ns // 1_000_000}:{st.st_size}"
+    )
+
+    def attempt(call):
+        _access._REFUSED.clear()  # each call meets the refusal for the first time
+        fake_s3.seen.clear()
+        if mode == "auto":
+            result = call()
+            assert len(fake_s3.seen) == 1  # asked once, then the mount
+            return result
+        with pytest.raises(ZarrAccessUnavailable) as e:
+            call()
+        assert "credentials expired" in e.value.fix and SENTINEL not in str(e.value)
+        assert len(fake_s3.seen) == 1
+
+    # the commit's check that the packs are there (driver)
+    attempt(
+        lambda: require_packs(
+            str(vol / "store"), ["data/p.zpack"], what="write", access=cfg
+        )
+    )
+
+    # a registered store's external file: the identity HEAD in a task
+    def reader():
+        return reader_for(cfg, str(vol / "store"), str(vol / "base")).read([region])
+
+    if mode == "auto":
+        assert attempt(reader) == [cloud.pack[500:508]]
+    else:
+        attempt(reader)
+    # the first request made with the credentials, at vend
+    _install(monkeypatch, response={**CLOUDS["aws"][0], "url": "s3://bkt/vol"})
+    monkeypatch.setattr(_access, "_canary", _REAL_CANARY)
+    fake_s3.seen.clear()
+    if mode == "auto":
+        assert (
+            resolve_access(None, VOLUME, access="auto", operation="READ_VOLUME").mode
+            == "fuse"
+        )
+    else:
+        with pytest.raises(ZarrAccessUnavailable, match="refused the credentials"):
+            resolve_access(None, VOLUME, access="direct", operation="READ_VOLUME")
+    assert len(fake_s3.seen) == 1 and sleeps == []
+
+
+def test_a_failure_that_is_not_the_credentials_is_still_retried(
+    fake_s3, cloud, monkeypatch
+):
+    """Only a refusal skips the retries: a 400 that names another problem is a transient error
+    as before (3 requests for 3 attempts, then an OSError)."""
+    sleeps = []
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    other = b"<Error><Code>InvalidArgument</Code><Message>bad</Message></Error>"
+    fake_s3.respond = lambda method, target: (400, other, {})
+    vol = cloud.vol
+    cfg = AccessConfig(
+        "direct",
+        "s3://bkt/vol/store",
+        {"access_key_id": SENTINEL, "secret_access_key": SENTINEL},
+        "aws",
+        str(vol),
+        "s3://bkt/vol",
+        fallback=True,
+        region="us-west-2",
+    )
+    reader = ObstoreRangeReader(
+        cfg, attempts=3, fallback=lambda: FuseRangeReader(str(vol))
+    )
+    with pytest.raises(OSError):
+        reader.read([Region("pack.bin", 0, 8)])
+    assert len(fake_s3.seen) == 3 and len(sleeps) == 2 and not cfg.refused
 
 
 def test_a_direct_read_compares_the_object_time_at_whole_seconds(cloud, monkeypatch):

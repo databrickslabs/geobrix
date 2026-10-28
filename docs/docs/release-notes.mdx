@@ -690,8 +690,19 @@ formats.
   `rst_bng_rasterize_agg` and `rst_custom_rasterize_agg` burned whichever row arrived last in the
   lightweight tier, and the order of the rows inside a group is not fixed, so the same data could
   give a different raster from one run to the next. Both tiers now burn the largest value of the
-  cell. A null value is the presence mask and counts as `1.0`. A cell that appears once, or whose
-  rows all carry the same value, burns as before.
+  cell. A cell that appears once, or whose rows all carry the same value, burns as before. Two
+  spellings of one BNG cell, such as `TQ3080` and `TQ 3080`, are one cell.
+- **In the lightweight rasterizers a null value never wins.** A null value, or a `NaN`, is ignored
+  whenever the cell has a number, so a cell with the values `0.5` and `NULL` burns `0.5`, not
+  `1.0`; a cell whose values are all null burns `NaN`. A group with no number at all, as when
+  `value` is omitted, is still the presence mask and burns `1.0`. A typed Double column delivers a
+  null as `NaN`, so the lightweight tier cannot tell the two apart. The heavyweight tier still
+  counts a null value as `1.0`.
+- **The lightweight `*_cellfill` aggregates give the same fill whatever order the rows arrive
+  in.** When a cell id repeated in a group, `h3_cellfill`, `quadbin_cellfill`, `bng_cellfill` and
+  `custom_cellfill` used the row that arrived last. They now use the cell's largest non-null
+  value, and a cell stays `NULL` only when every one of its values is null. The heavyweight tier
+  still keeps the row it receives last.
 
 ### Registered PROJ grids and raster CRS transforms
 

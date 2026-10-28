@@ -499,7 +499,7 @@ See [Grid raster tessellation](./grid-raster-tessellation) for the coverage / as
 Fill NULL quadbin cells from valid neighbours within `k` rings using nearest-neighbour interpolation. A grouped aggregator: the call must appear inside a `GROUP BY` query. Cell IDs are `BIGINT`. With `k=1` and `method='mean'`, each NULL cell receives the unweighted mean of its ring-1 neighbours.
 
 :::warning Lightweight and heavyweight return different types
-Heavyweight `gbx_quadbin_cellfill` returns `ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>`; the lightweight function returns `BINARY` in both Python and SQL. A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight aggregate emits a serialized result. The functional content (cell IDs and filled values) is equivalent.
+Heavyweight `gbx_quadbin_cellfill` returns `ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>`; the lightweight function returns `BINARY` in both Python and SQL. A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight aggregate emits a serialized result. The functional content (cell IDs and filled values) is equivalent. In the lightweight tier a cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in; the heavyweight tier keeps the row it receives last.
 :::
 
 :::note Lightweight tier (pygx)
@@ -1318,7 +1318,7 @@ See [Grid raster tessellation](./grid-raster-tessellation) for the coverage / as
 Fill NULL BNG cells from valid neighbours within `k` rings using nearest-neighbour interpolation. A grouped aggregator: the call must appear inside a `GROUP BY` query. BNG cell IDs are `STRING`. With `k=1` and `method='mean'`, each NULL cell receives the unweighted mean of its ring-1 neighbours.
 
 :::warning Lightweight and heavyweight return different types
-Heavyweight `gbx_bng_cellfill` returns `ARRAY<STRUCT<cellid STRING, value DOUBLE>>`; the lightweight function returns `BINARY` in both Python and SQL. A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight aggregate emits a serialized result. The functional content (cell IDs and filled values) is equivalent.
+Heavyweight `gbx_bng_cellfill` returns `ARRAY<STRUCT<cellid STRING, value DOUBLE>>`; the lightweight function returns `BINARY` in both Python and SQL. A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight aggregate emits a serialized result. The functional content (cell IDs and filled values) is equivalent. In the lightweight tier a cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in; the heavyweight tier keeps the row it receives last.
 :::
 
 :::note Lightweight tier (pygx)
@@ -1901,7 +1901,7 @@ See [Grid raster tessellation](./grid-raster-tessellation) for the coverage / as
 Fill NULL custom grid cells from valid neighbours within `k` rings using nearest-neighbour interpolation. A grouped aggregator: the call must appear inside a `GROUP BY` query. Cell IDs are `BIGINT`. The grid spec is passed as the third argument (unlike the BNG/quadbin/h3 variants where the grid identity is implicit). With `k=1` and `method='mean'`, each NULL cell receives the unweighted mean of its ring-1 neighbours.
 
 :::warning Lightweight and heavyweight return different types
-Heavyweight `gbx_custom_cellfill` returns `ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>`; the lightweight function returns `BINARY` in both Python and SQL. A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight aggregate emits a serialized result. The functional content (cell IDs and filled values) is equivalent.
+Heavyweight `gbx_custom_cellfill` returns `ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>`; the lightweight function returns `BINARY` in both Python and SQL. A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight aggregate emits a serialized result. The functional content (cell IDs and filled values) is equivalent. In the lightweight tier a cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in; the heavyweight tier keeps the row it receives last.
 :::
 
 **Signature:** `gbx_custom_cellfill(cellid, value, grid, [k], [method], [power])`
@@ -1936,7 +1936,7 @@ Heavyweight `gbx_custom_cellfill` returns `ARRAY<STRUCT<cellid BIGINT, value DOU
 `gbx_h3_cellfill` is the grouped aggregator that interpolates missing H3 cell values from valid ring-neighbours, using the same fill algorithm as the BNG, quadbin, and custom-grid variants.
 
 :::warning Return-type divergence
-Heavyweight `gbx_h3_cellfill` returns `ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>`; the lightweight function returns `BINARY` in both Python and SQL. A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight aggregate emits a serialised result. The functional content (cell IDs and filled values) is equivalent.
+Heavyweight `gbx_h3_cellfill` returns `ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>`; the lightweight function returns `BINARY` in both Python and SQL. A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight aggregate emits a serialised result. The functional content (cell IDs and filled values) is equivalent. In the lightweight tier a cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in; the heavyweight tier keeps the row it receives last.
 :::
 
 ### h3_cellfill

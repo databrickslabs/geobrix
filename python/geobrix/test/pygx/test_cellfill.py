@@ -181,17 +181,43 @@ def test_fill_k0_is_noop():
             assert out[nb] == pytest.approx(5.0), f"{label}: k=0 changed neighbour"
 
 
-def test_fill_duplicate_cellid_last_wins():
-    """Duplicate cell-ID tie-break: last row's value wins (matches heavy toMap)."""
+def test_a_repeated_cell_keeps_its_largest_value_in_any_row_order():
+    """A repeated cell id fills from its largest non-null value, whatever the row order.
+
+    Drives the four grouped aggregators with every order of the centre cell's three
+    rows (7.0, 99.0, NULL) beside five valid neighbours; "the last row wins" would give
+    7.0, or a value filled from the neighbours, for some orders.
+    """
+    import itertools
+
+    import pandas as pd
+    from pyspark.sql import Row
+
+    conf = Row(**_CUSTOM_CONF.__dict__)
+    udfs = {
+        "H3": (gx._h3_cellfill_agg_udf, lambda c: c),
+        "QUADBIN": (gx._quadbin_cellfill_agg_udf, lambda c: c),
+        "BNG": (gx._bng_cellfill_agg_udf, lambda c: _bng.format(c)),
+        "CUSTOM": (gx._custom_cellfill_agg_udf, lambda c: c),
+    }
     for label, center, k_loop in _grids():
-        # Build cells dict manually with last-wins semantics (matching UDF behaviour).
-        cells = {}
-        for val in (99.0, 7.0):  # first 99.0, then overwritten by 7.0
-            cells[center] = val
-        out = dict(
-            _cellfill.fill(cells, k=1, method="mean", power=2.0, k_loop_fn=k_loop)
-        )
-        assert out[center] == pytest.approx(7.0), f"{label}: expected last value 7.0"
+        udf, spell = udfs[label]
+        neighbours = [(nb, 5.0) for nb in k_loop(center, 1)[:5]]
+        outcomes = set()
+        for order in itertools.permutations([7.0, 99.0, None]):
+            rows = [(center, v) for v in order] + neighbours
+            args = [
+                pd.Series([spell(c) for c, _ in rows]),
+                pd.Series([v for _, v in rows], dtype="float64"),
+            ]
+            if label == "CUSTOM":
+                args.append(pd.Series([conf] * len(rows)))
+            args += [pd.Series([1] * len(rows)), pd.Series(["mean"] * len(rows))]
+            args.append(pd.Series([2.0] * len(rows)))
+            out = dict(_cellfill.decode(udf.func(*args)))
+            assert out[center] == pytest.approx(99.0), f"{label} {order}: {out[center]}"
+            outcomes.add(tuple(sorted(out.items())))
+        assert len(outcomes) == 1, f"{label}: the fill depends on the row order"
 
 
 # ---------------------------------------------------------------------------

@@ -3301,9 +3301,9 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         input_kind="h3_aggregate",
         # Float burn order can differ across tiers, but the burn is a discrete LUT
-        # lookup (last-wins on a canonical (cellId, value) sort, identical both
-        # tiers), so the masks/values are exact -- keep the global tol. Loosen only
-        # if the cluster run shows a near-miss.
+        # lookup (a repeated cell burns its largest value, identical both tiers),
+        # so the masks/values are exact -- keep the global tol. Loosen only if the
+        # cluster run shows a near-miss.
         sources=_CELLRASTER_LIGHT
         + (
             _PYRX_SERDE,

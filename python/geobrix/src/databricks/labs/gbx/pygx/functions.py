@@ -984,11 +984,11 @@ def _h3_cellfill_agg_udf(
     method: pd.Series,
     power: pd.Series,
 ) -> Optional[bytes]:
-    cells = {}
-    for c, v in zip(cellid, value):
-        if pd.isna(c):
-            continue
-        cells[int(c)] = None if pd.isna(v) else float(v)
+    cells = _cellfill.collect(
+        (int(c), None if pd.isna(v) else float(v))
+        for c, v in zip(cellid, value)
+        if not pd.isna(c)
+    )
     if not cells:
         return None
     if len(cells) > 50_000_000:
@@ -1009,11 +1009,11 @@ def _quadbin_cellfill_agg_udf(
     method: pd.Series,
     power: pd.Series,
 ) -> Optional[bytes]:
-    cells = {}
-    for c, v in zip(cellid, value):
-        if pd.isna(c):
-            continue
-        cells[int(c)] = None if pd.isna(v) else float(v)
+    cells = _cellfill.collect(
+        (int(c), None if pd.isna(v) else float(v))
+        for c, v in zip(cellid, value)
+        if not pd.isna(c)
+    )
     if not cells:
         return None
     if len(cells) > 50_000_000:
@@ -1035,14 +1035,14 @@ def _bng_cellfill_agg_udf(
     power: pd.Series,
 ) -> Optional[bytes]:
     # BNG cell IDs arrive as strings (object dtype); None = SQL NULL.
-    cells = {}
-    for c, v in zip(cellid, value):
-        if c is None or pd.isna(c):
-            continue
-        cid_int = _bng.parse_safe(str(c))
-        if cid_int is None:
-            continue
-        cells[cid_int] = None if pd.isna(v) else float(v)
+    parsed = (
+        (_bng.parse_safe(str(c)), v) for c, v in zip(cellid, value) if not pd.isna(c)
+    )
+    cells = _cellfill.collect(
+        (cid_int, None if pd.isna(v) else float(v))
+        for cid_int, v in parsed
+        if cid_int is not None
+    )
     if not cells:
         return None
     if len(cells) > 50_000_000:
@@ -1072,11 +1072,11 @@ def _custom_cellfill_agg_udf(
             break
     if conf is None:
         return None
-    cells = {}
-    for c, v in zip(cellid, value):
-        if pd.isna(c):
-            continue
-        cells[int(c)] = None if pd.isna(v) else float(v)
+    cells = _cellfill.collect(
+        (int(c), None if pd.isna(v) else float(v))
+        for c, v in zip(cellid, value)
+        if not pd.isna(c)
+    )
     if not cells:
         return None
     if len(cells) > 50_000_000:

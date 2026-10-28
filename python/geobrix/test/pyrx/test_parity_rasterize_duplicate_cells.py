@@ -4,8 +4,9 @@ A cell id that repeats in a group with different values burns the LARGEST value 
 tiers, whatever order the rows arrive in. For each of ``rst_{h3,quadbin,bng,custom}_rasterize_agg``
 the same repeated rows are sent through both tiers in two row orders (as given, and
 reversed), onto one explicit canvas, and the four rasters must be identical, pixel for
-pixel, with only the largest value of each cell burned. A null value is the presence mask
-(1.0) and a negative value is compared as a number, so the rows include both.
+pixel, with only the largest value of each cell burned. A negative value is compared as a
+number, so the rows include one. The null rule is not compared here: the lightweight tier
+ignores a null value, the heavyweight tier still counts it as 1.0.
 
 HARNESS REUSE: the shared canvas comes from the light ``cellraster.compute_gridspec`` as in
 ``test_parity_bng_quadbin_raster_grid.py``; the custom grid derives its canvas in both

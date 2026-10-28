@@ -8,7 +8,10 @@ heavyweight tier sorts the group by ``(cellid, value)`` before the lookup is bui
 largest value wins; the lightweight tier now follows the same rule.
 
 The UDF bodies are called directly (``.func``) so the row order is exactly the order given.
-A null value is the presence mask (1.0) and is compared as 1.0, like any other value.
+
+A null value never wins: a typed Double column delivers a null as ``NaN``, which looks like
+a real ``NaN``, so both are ignored while the cell has a number, and a cell with only nulls
+burns ``NaN``. A group with no number at all is the presence mask and burns 1.0.
 """
 
 import random
@@ -54,6 +57,27 @@ def test_max_value_per_cell_keeps_the_largest_in_any_order():
     assert rx._max_value_per_cell([], []) == {}
 
 
+def test_max_value_per_cell_ignores_null_unless_every_value_is_null():
+    nan = float("nan")
+    cells, vals = [1, 1, 2, 2, 3], [0.5, nan, nan, None, 4.0]
+    for order in (slice(None), slice(None, None, -1)):
+        got = rx._max_value_per_cell(cells[order], vals[order])
+        assert got[1] == 0.5 and got[3] == 4.0 and np.isnan(got[2])
+    # No number anywhere (the value omitted, or a column of nulls): the presence mask.
+    assert rx._max_value_per_cell([1, 2, 2], [None, nan, None]) == {1: 1.0, 2: 1.0}
+
+
+def test_max_value_per_cell_merges_spellings_of_one_cell():
+    # "TQ3080" and "TQ 3080" are one BNG cell: the largest value wins whatever the order.
+    from databricks.labs.gbx.pyrx.core import cellraster as cr
+
+    key = cr._adapter("bng").to_key
+    cells, vals = ["TQ3080", "TQ 3080", "TQ3081"], [9.0, 2.0, 1.0]
+    for order in (slice(None), slice(None, None, -1)):
+        got = rx._max_value_per_cell(cells[order], vals[order], key)
+        assert sorted(got.values()) == [1.0, 9.0] and len(got) == 2
+
+
 @pytest.mark.parametrize("grid", sorted(dc.GRIDS))
 def test_repeated_cells_burn_the_largest_value_in_any_row_order(grid):
     cells = dc.GRIDS[grid]()
@@ -68,9 +92,9 @@ def test_repeated_cells_burn_the_largest_value_in_any_row_order(grid):
         arrays[name], nodata = _burn(grid, order)
         covered = set(arrays[name][arrays[name] != nodata].tolist())
         assert covered, f"{grid} ({name}): nothing burned"
-        assert covered <= set(expected.values()), (
-            f"{grid} ({name}): a smaller duplicate was burned: "
-            f"{sorted(covered - set(expected.values()))}"
+        assert covered == set(expected.values()), (
+            f"{grid} ({name}): burned {sorted(covered)}, "
+            f"expected exactly {sorted(set(expected.values()))}"
         )
 
     # The same cells in another order give the same raster, pixel for pixel.
@@ -78,3 +102,26 @@ def test_repeated_cells_burn_the_largest_value_in_any_row_order(grid):
         assert np.array_equal(
             arrays["as given"], arrays[name]
         ), f"{grid}: raster differs between the row order 'as given' and '{name}'"
+
+
+@pytest.mark.parametrize("grid", sorted(dc.GRIDS))
+def test_a_null_value_never_wins_a_repeated_cell(grid):
+    cells = dc.GRIDS[grid]()
+    rows, expected = dc.null_rows(cells)
+    shuffled = list(rows)
+    random.Random(11).shuffle(shuffled)
+    arrays = {}
+    for name, order in {
+        "as given": rows,
+        "reversed": rows[::-1],
+        "shuffled": shuffled,
+    }.items():
+        arrays[name], nodata = _burn(grid, order)
+        burned = arrays[name][arrays[name] != nodata]
+        numbers = {v for v in burned.tolist() if v == v}
+        assert numbers == {v for v in expected.values() if v == v}, f"{grid} ({name})"
+        assert np.isnan(
+            burned
+        ).any(), f"{grid} ({name}): the all-null cell must burn NaN"
+    for name in ("reversed", "shuffled"):
+        assert np.array_equal(arrays["as given"], arrays[name], equal_nan=True)

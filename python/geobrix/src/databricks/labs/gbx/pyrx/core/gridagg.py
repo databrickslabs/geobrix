@@ -4,10 +4,11 @@ Mirrors the heavyweight ``RST_{H3,Quadbin,BNG}_RasterToGrid`` families exactly:
 
 * Per band, every valid pixel is mapped to a grid cell id by
   the pixel-centroid world coordinate (0.5-pixel offset through the
-  geotransform). For H3/quadbin the raster is interpreted as EPSG:4326 lon/lat
-  -- no reprojection (callers reproject upstream via ``rst_transform``). BNG has
-  no lon/lat path, so the raster is warped to EPSG:27700 (nearest) up front and
-  pixels outside GB are dropped via ``pygx._bng.is_valid``.
+  geotransform). H3/quadbin work in EPSG:4326 lon/lat: a raster in another CRS is
+  warped to EPSG:4326 (nearest) up front, and one with no CRS (and no ``crs``
+  override) is taken as 4326 already. BNG has no lon/lat path, so the raster is
+  warped to EPSG:27700 (nearest) up front and pixels outside GB are dropped via
+  ``pygx._bng.is_valid``.
   A pixel is valid for a band when the band's own mask says so (NoData, the raster's
   own mask band) and, for a raster with an alpha band, its alpha is above 0
   (``_nodata.band_valid_mask``): every band is judged alone, and a transparent pixel

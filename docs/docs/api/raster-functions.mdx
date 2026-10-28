@@ -834,7 +834,7 @@ GROUP BY cell_id
 ```
 :::
 
-Streaming aggregator that burns BNG cell geometry/value pairs (one row per cell) into a single rasterized tile per group. The input raster is automatically reprojected to **EPSG:27700** (British National Grid) before rasterization. BNG cell IDs are **STRING**. The inverse of `rst_bng_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, this one synthesizes a raster from per-cell values.
+Streaming aggregator that burns BNG cell geometry/value pairs (one row per cell) into a single rasterized tile per group. The output tile is always in EPSG:27700 (British National Grid). BNG cell IDs are **STRING**. The inverse of `rst_bng_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, this one synthesizes a raster from per-cell values.
 
 :::note Lightweight-only `out_crs` parameter (no-op for BNG)
 The lightweight **Python** binding accepts an optional trailing `out_crs` (string CRS) argument that the heavyweight/Scala tier does not — but for BNG it is a **no-op**: the output is always EPSG:27700. Both `out_srid` and `out_crs` are ignored here (they exist only for signature parity with the H3/quadbin aggregators).
@@ -1180,7 +1180,7 @@ GROUP BY cell_id
 ```
 :::
 
-Streaming aggregator that burns quadbin cell geometry/value pairs (one row per cell) into a single rasterized tile per group. The input raster is interpreted as EPSG:4326 (lon/lat); resolution is the quadbin zoom level (0..26). The inverse of `rst_quadbin_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, this one synthesizes a raster from per-cell values.
+Streaming aggregator that burns quadbin cell geometry/value pairs (one row per cell) into a single rasterized tile per group. Quadbin cells are defined in EPSG:4326 lon/lat; their geometry is reprojected to `out_srid`, so the output tile is in that CRS (`pixel_size`, the extent and `width`/`height` are given in it). The cell IDs carry their zoom level (0..26). The inverse of `rst_quadbin_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, this one synthesizes a raster from per-cell values.
 
 :::note Lightweight-only `out_crs` parameter
 The lightweight **Python** binding accepts an optional trailing `out_crs` (string CRS) argument that the heavyweight/Scala tier does not. When supplied it overrides the integer `out_srid` for the output CRS; the heavyweight tier accepts only the integer `out_srid` (its `builder()` is strictly 12-argument). This is a lightweight superset, not a heavyweight regression.

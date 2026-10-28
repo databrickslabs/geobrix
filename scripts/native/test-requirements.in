@@ -1,4 +1,4 @@
-# Test environment with click 8.2.1, what the env6 / DBR 19 base ships (NP-4). Locked per architecture with hashes:
+# Test environment with click 8.2.1, what the env6 / DBR 19 base ships. Locked per architecture with hashes:
 #   uv pip compile --generate-hashes --python-version 3.12 --python-platform <arch>-manylinux_2_28 \
 #     scripts/native/test-requirements.in -o scripts/native/test-requirements-<arch>.txt
 -r test-requirements-base.in

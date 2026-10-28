@@ -1,4 +1,4 @@
-"""The activation rules (``_native/_rules.py``): the one copy both activators use (NP-10, NP-11).
+"""The activation rules (``_native/_rules.py``): the one copy both activators use.
 
 The CA rows: a user's ``GDAL_CURL_CA_BUNDLE``/``PROJ_CURL_CA_BUNDLE`` is never touched; otherwise
 both get the user's ``CURL_CA_BUNDLE``, else the user's ``SSL_CERT_FILE``, else the system store;

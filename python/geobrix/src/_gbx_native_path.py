@@ -1,4 +1,4 @@
-"""Startup activation of the GeoBrix env wheel's native payload (ruling NP-2).
+"""Startup activation of the GeoBrix env wheel's native payload.
 
 Imported at interpreter start by ``geobrix-native.pth`` (one line: ``import _gbx_native_path``),
 which the env wheel installs beside this module in site-packages. It imports nothing from

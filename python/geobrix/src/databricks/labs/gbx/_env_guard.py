@@ -1,4 +1,4 @@
-"""Fail fast when an env wheel runs on the other environment's runtime (spec 5.5, OD-36).
+"""Fail fast when an env wheel runs on the other environment's runtime.
 
 The env5 wheel serves DBR 17.3, DBR 18 and Serverless environment 5; the env6 wheel serves DBR 19,
 Serverless environment 6, SQL warehouses and UC functions. Their pins differ (numpy, protobuf, ...),

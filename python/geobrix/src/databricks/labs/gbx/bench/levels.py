@@ -1,6 +1,6 @@
-"""Streamline perf matrix: one Form = (function, level, shape) timed on one input at 1x/4x/16x.
+"""Perf matrix: one Form = (function, level, shape) timed on one input at 1x/4x/16x.
 
-Every MVP appends its forms to ``levels_forms.FORMS``; ``run_mvp`` times each one at the
+Every set of functions (S, G, A, H) appends its forms to ``levels_forms.FORMS``; ``run_mvp`` times each one at the
 levels the compute offers and records the attribution split (``attribution.py``) in the same
 ``ResultRow`` the other bench legs write.
 """

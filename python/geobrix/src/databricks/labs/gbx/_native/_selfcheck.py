@@ -1,4 +1,4 @@
-"""The one native-payload oracle: the same inputs and answers at every level (probes P8, P9; B3).
+"""The one native-payload oracle: the same inputs and answers at every level.
 
 - ``stack()``: which build each binding runs (GDAL's own ``osgeo`` and ``osgeo_utils`` too),
   whether it came from the payload, and the libgdal files the process maps (one: the payload's).

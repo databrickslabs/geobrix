@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Probe P11: the five Python bindings, built from sdist against gdal-native, run their own test suites.
+"""The bindings probe: the five Python bindings, built from sdist against gdal-native, run their own test suites.
 
 Driver (stdlib only), run by test-bindings.sh inside the build container with --network none:
 
@@ -496,7 +496,7 @@ def smoke(venv, arch):
         ]
         if not mapped or any(not m.startswith(own) for m in mapped):
             fail(f"lib{fam} is mapped from {mapped}, expected only the payload's {own}")
-    # OpenSSL has its own SONAME (.4); zlib, expat and lzma are the Python's own and accepted (N3); anything else of the
+    # OpenSSL has its own SONAME (.4); zlib, expat and lzma are the Python's own and accepted; anything else of the
     # families the payload carries that the system also provides is reported, not failed: the SONAMEs are hashed, so
     # a system copy cannot stand in for ours
     foreign = sorted(

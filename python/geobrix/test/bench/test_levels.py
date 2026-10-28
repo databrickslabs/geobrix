@@ -1,4 +1,4 @@
-"""The MVP levels leg: forms timed per level, with the attribution split beside the timing."""
+"""The levels leg: forms timed per level, with the attribution split beside the timing."""
 
 import dataclasses
 import json
@@ -376,7 +376,7 @@ def test_connect_session_records_unavailable_metrics_instead_of_failing():
     )
     peak = attribution.WorkerPeak(
         _Forbidden()
-    )  # C1: nothing reaches every worker from Connect
+    )  # nothing reaches every worker from Connect
     peak.start()
     assert peak.read() is None and "Connect" in peak.reason
     # Two stages (an exchange between them); the Python stage's pipeline holds a nested one.

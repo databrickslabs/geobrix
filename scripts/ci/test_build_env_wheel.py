@@ -1,6 +1,6 @@
 """gbx:build:wheel's pure rules (scripts/native/build_env_wheel.py, scripts/native/redact.py).
 
-- requires-python: the env wheels' range must admit only Pythons the committed range admits (NP-10).
+- requires-python: the env wheels' range must admit only Pythons the committed range admits (the payload is cp312-only).
 - the version stamp: exactly one `__version__`, pre-releases kept, `+env<N>` appended.
 - a vendored package's requirement on a core.txt package is checked by version, not name only.
 - redaction: no index URL or host survives, with or without a scheme (fake hosts only).

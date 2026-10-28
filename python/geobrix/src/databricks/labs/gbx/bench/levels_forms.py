@@ -1,4 +1,4 @@
-"""Forms + inputs per MVP. Each MVP task appends its forms; inputs are cached Delta tables.
+"""Forms + inputs per set of functions (S, G, A, H); each set appends its forms. Inputs are cached Delta tables.
 
 An input builder is ``f(spark, n, corpus, schema) -> table name`` (None when the input cannot
 be built here). With ``schema`` it is a Delta table, created once and reused by every form and
@@ -20,22 +20,22 @@ BASE_ROWS = {
     "invalid_polys": 250_000,
     "tiles_mat": 250,
     "tiles_virt": 250,
-    # MVP-H: groups of tiles (merge: two offset copies of a corpus tile, combine: two aligned copies)
+    # DataFrame helpers (H): groups of tiles (merge: two offset copies of a corpus tile, combine: two aligned copies)
     # and the corpus tiles on the British National Grid (the others have no BNG cells).
     "tiles_grouped_mat": 250,
     "tiles_grouped_virt": 250,
     "tiles_aligned_mat": 250,
     "tiles_gb_mat": 250,
     "tiles_gb_virt": 250,
-    # MVP-G: BNG polygons that each cover a handful of cells, and a few big tiles (4096 x 4096)
+    # Generators (G): BNG polygons that each cover a handful of cells, and a few big tiles (4096 x 4096)
     "bng_polys": 100_000,
     "tiles_big": 4,
-    # MVP-A: tiles in groups of about 50, and (key, BNG cell, value) rows; each also with half of its rows in one key
+    # Aggregates (A): tiles in groups of about 50, and (key, BNG cell, value) rows; each also with half of its rows in one key
     "tiles_grouped": 2000,
     "tiles_grouped_skew": 112,  # half of it is one key: 56 tiles, 896 MiB decoded
     "bng_cells": 1_000_000,
     "bng_cells_skew": 1_000_000,
-    # MVP-H: towers on a DSM of 16 tiles (the tiles are the same at every scale)
+    # DataFrame helpers (H): towers on a DSM of 16 tiles (the tiles are the same at every scale)
     "dsm_towers": 64,
 }
 
@@ -489,7 +489,7 @@ FORMS: Dict[str, List[Form]] = {
 }
 
 
-# --- MVP-H: the DataFrame helpers against the per-row UDTFs and the grouped aggregates -----------
+# --- H, the DataFrame helpers: against the per-row UDTFs and the grouped aggregates --------------
 #
 # Forms run in this order: the light ones first, then the JVM ones, because both register the same
 # `gbx_rst_*` names and a registration lasts for the session (a setup runs once).
@@ -779,7 +779,7 @@ FORMS["H"] = [
 ]
 
 
-# --- MVP-G: generators, one form per shape ----------------------------------------------------------
+# --- G, generators: one form per shape --------------------------------------------------------------
 #
 # Each query answers (n, fp, n_out) over the OUTPUT rows. The tessellate fingerprint is the summed (reduced)
 # hash of the cell id: the same cells give the same fingerprint in every shape at every level. The retile
@@ -822,7 +822,7 @@ _RT_PART_L2 = (
     + "(SELECT gbx_mvp_rst_retile_part_l2(tile.raster, {size}, i) AS b FROM {{src}} "
     "LATERAL VIEW explode(sequence(0, gbx_mvp_rst_retile_count_l2(tile.raster, {size}) - 1)) v AS i)"
 )
-# The session TVF over the array form (E-K2): a SQL body, so no Python between the rows and the plan.
+# The session TVF over the array form: a SQL body, so no Python between the rows and the plan.
 _RT_TVF = (
     _RT_FP.format(x="t.tile.raster")
     + "{{src}} s, LATERAL gbx_mvp_rst_retile_tvf(s.tile, {w}, {h}) t"
@@ -856,7 +856,7 @@ def setup_g_l2(spark):
 
 
 def setup_g_tvf(spark):
-    """The session SQL table function over the array probe (E-K2); its body calls the probe UDF."""
+    """The session SQL table function over the array probe; its body calls the probe UDF."""
     from databricks.labs.gbx.manifest import TILE_SQL
 
     setup_g_probes(spark)
@@ -1027,7 +1027,7 @@ FORMS["G"] = [
 ]
 
 
-# --- MVP-A: aggregates, one form per shape and input ------------------------------------------------------
+# --- A, aggregates: one form per shape and input ----------------------------------------------------------
 #
 # Each query answers (n, fp, n_out) over the groups: the fingerprint is the summed length of the group's raster
 # and n_out counts the rasters that are not NULL, so a form that fails on some groups cannot pass on size.

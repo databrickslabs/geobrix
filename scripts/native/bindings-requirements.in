@@ -1,4 +1,4 @@
-# What the five Python-binding sdists need beyond the toolchain's own build requirements (build-requirements.in), task N4.
+# What the five Python-binding sdists need beyond the toolchain's own build requirements (build-requirements.in).
 # Read with tomllib from each sdist's [build-system] requires:
 #   rasterio 1.5.2    setuptools>=77.0.3, cython>=3.1,<=3.3, numpy>=2,<3
 #   pyogrio 0.13.0    setuptools, Cython>=3.1, versioneer[toml]==0.28

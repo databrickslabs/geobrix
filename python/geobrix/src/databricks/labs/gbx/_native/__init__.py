@@ -1,4 +1,4 @@
-"""The env wheel's native payload: where it is, and its activation (spec 5.1; rulings NP-1, NP-2).
+"""The env wheel's native payload: where it is, and its activation.
 
 Layout under the payload root (``databricks/labs/gbx/`` in an installed env wheel, or
 ``$GBX_NATIVE_ROOT``, e.g. ``build/env-wheel/env6/payload`` for a source checkout)::
@@ -15,10 +15,10 @@ Layout under the payload root (``databricks/labs/gbx/`` in an installed env whee
     _jar/                     the GeoBrix JAR
 
 ``<arch>`` is ``x86_64`` or ``aarch64`` (``platform.machine()``). The bindings are served under
-their public import names (NP-1): activation puts ``_vendor/<arch>`` and then ``_vendor/common``
+their public import names: activation puts ``_vendor/<arch>`` and then ``_vendor/common``
 just before the first site-packages entry of ``sys.path`` (after the standard library, ahead of
 every installed package). It runs at interpreter start through ``geobrix-native.pth``
-(``_gbx_native_path``) and again at ``import databricks.labs.gbx`` (NP-2's fallback, for an
+(``_gbx_native_path``) and again at ``import databricks.labs.gbx`` (the fallback, for an
 environment where ``.pth`` files are not processed); the second run changes nothing. Both apply
 the one set of rules in ``_native/_rules.py``: where the payload can load (Linux, x86_64 or
 aarch64, CPython 3.12), the ``sys.path`` position, ``GDAL_DATA``/``PROJ_DATA`` (never over a

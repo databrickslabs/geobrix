@@ -1,4 +1,4 @@
-# The Python build tools of the manylinux_2_28 container (task N2). Locked per architecture with hashes:
+# The Python build tools of the manylinux_2_28 container. Locked per architecture with hashes:
 #   uv pip compile --generate-hashes --python-version 3.12 --python-platform <arch>-manylinux_2_28 \
 #     scripts/native/build-requirements.in -o scripts/native/build-requirements-<arch>.txt
 # maturin and numpy follow scripts/native/pins.conf (MATURIN_VERSION, NUMPY_BUILD_VERSION); pins.py audit checks them.

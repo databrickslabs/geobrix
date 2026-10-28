@@ -210,7 +210,7 @@ grep -q "JNI_SMOKE_OK ${GDAL_VERSION}" "$WORK/jni.txt" || fail "JniSmoke did not
 if grep -q "Native library load failed" "$WORK/jni.txt"; then nl="the bindings' own 'Native library load failed' line appears (expected and harmless: their loadLibrary finds nothing on java.library.path, the absolute System.load already bound the library)"; else nl="no 'Native library load failed' line"; fi
 ok "JNI smoke: $(grep JNI_SMOKE_OK "$WORK/jni.txt"); $nl"
 
-# --- 6 osgeo from the same build: the version, the library it loaded, a FileGDB write and read (defect Task 19 Step 1), the
+# --- 6 osgeo from the same build: the version, the library it loaded, a FileGDB write and read (the FileGDB writer relies on it), the
 # code pages that need iconv, GRIB's AEC (CCSDS) support, and the GDAL_DATA that osgeo has to be given (the JNI: JniSmoke)
 cat > "$WORK/osgeo_check.py" <<'EOF'
 import os, struct, tempfile

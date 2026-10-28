@@ -1,4 +1,4 @@
-"""The MVP-S oracle: every session row of every manifest function, at every implementation level,
+"""The session-function oracle: every session row of every manifest function, at every implementation level,
 through SQL. The light variants also run through the Python Column API; the JVM levels (Catalyst
 and Java UDF) run when the staged JAR is in the session (`gbx-test-parity.sh` builds and stages it).
 """
@@ -107,7 +107,7 @@ def test_detect_sees_the_jar_and_gdal(jvm_spark):
 
 
 def test_mvp_s_oracle_uc_handlers(tmp_path):
-    """T0: the UC handlers on Python values (GEOMETRY stand-in = EWKB bytes until a UC runtime shows what a handler receives)."""
+    """Without Spark: the UC handlers on Python values (GEOMETRY stand-in = EWKB bytes until a UC runtime shows what a handler receives)."""
     ran = oracles.run_handlers(oracles.MVP_S, tmpdir=str(tmp_path))
     assert [m for _, m in ran if m] == []
     assert len(ran) == sum("uc" in c.surfaces for c in oracles.MVP_S)
@@ -220,7 +220,7 @@ def _bng_batches():
     batches["fractional_resolution"] = tuple(
         _arrow_column(v) for v in ([530000.0], [180000.0], [3.5])
     )
-    # An infinity is NULL like NaN (AP-21), even beside a resolution that would raise. A huge finite
+    # An infinity is NULL like NaN, even beside a resolution that would raise. A huge finite
     # coordinate is outside GB: no right cell exists, so every rung answers what c0 answers (int64
     # wrap-around, no panic in a debug build). Beyond 2**63 the cast is the CPU's, so those stay out.
     batches["non_finite_coordinates"] = (
@@ -297,7 +297,7 @@ def test_c1_and_d_keep_c0s_contract_on_every_input_shape(build, monkeypatch):
 
 
 def test_a_memory_error_while_loading_is_not_cached(tmp_path, monkeypatch):
-    """Resource exhaustion is never "no build": it propagates, and the next call tries again (AP-10)."""
+    """Resource exhaustion is never "no build": it propagates, and the next call tries again."""
 
     class Exhausted:
         def __init__(self, *args):

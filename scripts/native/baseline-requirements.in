@@ -1,4 +1,4 @@
-# The PyPI wheels the bindings probe compares with (task N4, scripts/native/test-bindings.sh): the same versions as the ones
+# The PyPI wheels the bindings probe compares with (scripts/native/test-bindings.sh): the same versions as the ones
 # built from sdist (pins.conf), pinned by sha256 so a baseline cannot change under the probe. They are evidence only and
 # never shipped. netCDF4 is 1.7.5, not the pinned 1.7.5.1: 1.7.5.1 has no binary wheel on PyPI for either architecture.
 # Locked per architecture with hashes (--no-deps: the bindings' dependencies come from the test environment's lock):

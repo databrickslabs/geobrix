@@ -38,10 +38,10 @@ class Case:
     args: Tuple[Any, ...]
     # exact | exact_rows | null | raises | uc_refused | error_tile | tile_props | geom_props
     # exact_rows is one batch: `args` is a tuple of argument rows, `expect` one value per row.
-    # Generators (MVP-G) also use no_rows | windows | cells, and error_tile means exactly one row.
-    # MVP-H's rst_viewshed_towers uses towers (see MVP_H).
+    # Generators also use no_rows | windows | cells, and error_tile means exactly one row.
+    # The DataFrame helpers' rst_viewshed_towers uses towers (see MVP_H).
     # windows_batch is one task over several tiles: `args` is a tuple of argument rows, as for exact_rows.
-    # Aggregates (MVP-A) use merged_equals | pixels | error_group | null; `args[0]` is the group's rows.
+    # Aggregates use merged_equals | pixels | error_group | null; `args[0]` is the group's rows.
     kind: str
     # exact: the value. raises: a substring the error message must contain (the offending
     # value), so a missing function cannot pass. tile_props: the target CRS, or (CRS, SRID).
@@ -74,7 +74,7 @@ MVP_S: Tuple[Case, ...] = (
     Case("bng_origin", B, (0.0, 0.0, 3), "exact", "SV0000"),
     Case("bng_null_e", B, (None, 180000.0, 3), "null"),
     Case("bng_nan_e", B, (float("nan"), 180000.0, 3), "null"),
-    # A non-finite coordinate is NULL like NaN, on every level (AP-21): there is no right cell for it.
+    # A non-finite coordinate is NULL like NaN, on every level: there is no right cell for it.
     Case(
         "bng_inf_e",
         B,
@@ -278,7 +278,7 @@ MVP_S: Tuple[Case, ...] = (
 )
 
 
-# The towers of the MVP-H towers row, as (id, x, y) on the 200 m DSM grid of `dsm_tiles_edge`: in one tile, in
+# The towers of the DataFrame helpers' towers row, as (id, x, y) on the 200 m DSM grid of `dsm_tiles_edge`: in one tile, in
 # one tile with the ridge at the edge of its window, 20 m from a ridge that is inside its window (and so across two
 # tiles), on the corner of four tiles, in a tile of NoData, on the west edge of the DSM (inside it, within half a
 # pixel of its edge), 10 m west of the DSM (outside it, with a tile in reach), and in no tile's reach.
@@ -297,7 +297,7 @@ TOWERS_TOLERANCE = (
     0.005  # of total_px: GDAL builds differ by a pixel or so along a visibility edge
 )
 
-# MVP-H: the DataFrame helpers in pyrx/helpers.py (a case's `fn` is the helper's name, not a SQL name).
+# The DataFrame helpers in pyrx/helpers.py (a case's `fn` is the helper's name, not a SQL name).
 # The first arg builds the input rows; the rest are the helper's arguments after the DataFrame and,
 # for the by-key helpers, the method / stat. A towers row (`rst_viewshed_towers`) takes the DSM manifest
 # `(tx, ty, path)` instead of tiles, then the towers (id, x, y[, mast]; a mast column is passed by name), the radius
@@ -478,7 +478,7 @@ MVP_H: Tuple[Case, ...] = (
 )
 
 
-# MVP-G: generators, functions that return many rows per input (and the array form of tessellate).
+# Generators: functions that return many rows per input (and the array form of tessellate).
 # A case's rows are what `LATERAL fn(args)` (or `inline(fn(args))`) gives for it; see `run_rows`.
 RT, TE, TS = "gbx_rst_retile", "gbx_bng_tessellateexplode", "gbx_bng_tessellate"
 # 2800 x 1800 m, offset 100 m into the cells it covers: six 1 km cells, every one a border cell.
@@ -608,7 +608,7 @@ MVP_G: Tuple[Case, ...] = (
 )
 
 
-# MVP-A: aggregates (a case's `fn` is the aggregate; see `run_groups`). `args[0]` is the group's rows: tiles
+# Aggregates (a case's `fn` is the aggregate; see `run_groups`). `args[0]` is the group's rows: tiles
 # for the merge, (cellid, value) pairs for the rasterize; the other args are its per-group constants.
 MA, BR = "gbx_rst_merge_agg", "gbx_rst_bng_rasterize_agg"
 # out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad: 3 x 2 pixels of 1 km, the
@@ -903,7 +903,7 @@ def dsm_tile_rows(
 
 
 def _build_helper_input(name: str, tmpdir: str):
-    """The fixtures of the MVP-H oracle (tiles for the DataFrame helpers)."""
+    """The fixtures of the helper cases (tiles for the DataFrame helpers)."""
     if name == "dsm_tiles":  # four tiles, 400 x 400 m
         return dsm_tile_rows(tmpdir)
     if (
@@ -1257,7 +1257,7 @@ def _check_error_group(case: Case, out, tile_out: bool) -> Optional[str]:
 
 
 def _check_helper(case: Case, rows, tiles) -> Optional[str]:
-    """MVP-H: judge the collected rows of one helper call (`tiles` are the input tiles)."""
+    """Judge the collected rows of one helper call (`tiles` are the input tiles)."""
     import numpy as np
     from rasterio.io import MemoryFile
 
@@ -1337,7 +1337,7 @@ def _check_helper(case: Case, rows, tiles) -> Optional[str]:
 
 
 def run_towers(spark, case: Case, tmpdir: str, level: Optional[str] = None):
-    """MVP-H: `rst_viewshed_towers` over the case's DSM and towers, at `level` (None: the default one).
+    """`rst_viewshed_towers` over the case's DSM and towers, at `level` (None: the default one).
     Returns {tower: (visible_px, total_px)}; a tower with no row is not in it."""
     from databricks.labs.gbx.pyrx.functions import rst_viewshed_towers
 
@@ -1375,7 +1375,7 @@ def towers_differ(want: Dict, got: Dict) -> Optional[str]:
 def run_helpers(
     spark, cases, tmpdir: Optional[str] = None, level: Optional[str] = None
 ):
-    """MVP-H: build a (key, tile) DataFrame from the case, call the helper by name, check the rows.
+    """Build a (key, tile) DataFrame from the case, call the helper by name, check the rows.
     A towers case runs at `level` (None: the default one)."""
     from databricks.labs.gbx.manifest import TILE_SQL
     from databricks.labs.gbx.pyrx import helpers
@@ -1582,7 +1582,7 @@ def _check_window_batch(case: Case, tiles: list, arg_rows) -> Optional[str]:
 
 
 def _check_rows(case: Case, rows: list, args) -> Optional[str]:
-    """MVP-G: judge the rows a generator produced for one case."""
+    """Judge the rows a generator produced for one case."""
     from databricks.labs.gbx._geom import parse_geom
 
     tiles = [
@@ -1826,7 +1826,7 @@ def _uc_value(arg, param, case: Case):
 
 
 def run_handlers(cases, tmpdir: Optional[str] = None):
-    """T0 for L4: call the UC handlers with Python values. GEOMETRY params get EWKB bytes."""
+    """L4 without Spark: call the UC handlers with Python values. GEOMETRY params get EWKB bytes."""
     from databricks.labs.gbx import manifest
 
     tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")
@@ -1856,7 +1856,7 @@ def run_handlers(cases, tmpdir: Optional[str] = None):
 
 
 def run_handlers_rows(cases, tmpdir: Optional[str] = None):
-    """T0 for UC table functions: call the handler behind the TVF and check its elements as rows."""
+    """UC table functions without Spark: call the handler behind the TVF and check its elements as rows."""
     from databricks.labs.gbx import manifest
 
     tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")

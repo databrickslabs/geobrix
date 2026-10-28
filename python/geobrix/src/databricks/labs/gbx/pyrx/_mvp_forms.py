@@ -1,4 +1,4 @@
-"""MVP-G probe forms: other ways to ask for the same rows (names ``gbx_mvp_*``, never documented).
+"""Probe forms for generators and aggregates: other ways to ask for the same rows (names ``gbx_mvp_*``, never documented).
 
 The perf matrix times each shape of a generator, and the oracle holds every shape to the same rows.
 The scale-out keeps the shapes that win and deletes the rest.
@@ -219,7 +219,7 @@ bng_tessellateexplode_udtf_arrow = udtf(
     useArrow=True,
 )
 
-# --- MVP-A: aggregates as a finalize over collect_list, a tree of finalizes, and a table function ---------
+# --- Aggregates as a finalize over collect_list, a tree of finalizes, and a table function --------------
 #
 # Every form here keeps the contract of `gbx_rst_merge_agg` / `gbx_rst_bng_rasterize_agg` on the light tier, so
 # whichever wins can take the aggregate's place: a repeated cell keeps its largest value, a null value (None or

@@ -1,4 +1,4 @@
-# The test environment of the bindings probe (task N4, scripts/native/test-bindings.sh), shared by the two locks:
+# The test environment of the bindings probe (scripts/native/test-bindings.sh), shared by the two locks:
 # test-requirements.in (click 8.2.1, the env6 base) and test-requirements-newclick.in (the newest click rasterio accepts).
 # The five bindings themselves are NOT here: they are the thing under test (ours, vendored; the PyPI wheels as baseline).
 # What each binding's own suite needs: rasterio[test] (aiohttp, boto3, fsspec, hypothesis, matplotlib, packaging,

@@ -1,6 +1,6 @@
-"""The env wheel refuses the other environment's runtime, naming the file to install (spec 5.5).
+"""The env wheel refuses the other environment's runtime, naming the file to install.
 
-The rows are the signals measured on each surface (P2a): Serverless sets
+The rows are the signals measured on each surface: Serverless sets
 DATABRICKS_ENV_VERSION, classic sets DATABRICKS_RUNTIME_VERSION, and the UC sandbox has only
 /databricks/DBR_VERSION, which follows the function's declared environment. With no Databricks
 signal at all the guard never raises.

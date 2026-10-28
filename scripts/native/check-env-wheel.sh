@@ -12,7 +12,7 @@
 #   4 CA: a user SSL_CERT_FILE survives `import rasterio` for GDAL and PROJ; without one, the system store
 #   5 tripwire: the other environment's old extra name fails resolution, naming the other wheel
 #   6 Python 3.11: pip refuses the wheel, and a forced install never activates the payload
-#   7 P8: _selfcheck.light() passes, every binding from the payload (GDAL's own osgeo and osgeo_utils too, and
+#   7 selfcheck: _selfcheck.light() passes, every binding from the payload (GDAL's own osgeo and osgeo_utils too, and
 #     osgeo_utils.gdal_calc and osgeo.gdal_array import), one libgdal mapped (rasterio's and osgeo's, the same
 #     version), no foreign GDAL library mapped
 set -uo pipefail
@@ -102,8 +102,8 @@ r["ok"] = (r["light"]["ok"] and all(st["from_payload"].values()) and st["foreign
 print("P8_RESULT " + json.dumps(r))
 PY
 )"
-echo "$out" | grep -q '^P8_RESULT {"import_s".*"ok": true}$' && ok "7 P8: _selfcheck.light() ok, 5/5 bindings + osgeo (gdal_array) + osgeo_utils (gdal_calc) from the payload, one libgdal, no foreign GDAL library" \
-    || bad "7 P8"
+echo "$out" | grep -q '^P8_RESULT {"import_s".*"ok": true}$' && ok "7 selfcheck: _selfcheck.light() ok, 5/5 bindings + osgeo (gdal_array) + osgeo_utils (gdal_calc) from the payload, one libgdal, no foreign GDAL library" \
+    || bad "7 selfcheck"
 echo "$out" | grep '^P8_RESULT' || echo "$out" | tail -5
 
 echo "ENV_WHEEL_VERIFIED env=$ENV arch=$ARCH failures=$FAILS"

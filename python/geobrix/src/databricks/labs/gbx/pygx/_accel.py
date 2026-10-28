@@ -1,8 +1,8 @@
-"""Faster rungs for gbx_bng_eastnorthasbng (Addendum 4 ladder): c1 vectorized encode, d Rust kernel.
+"""Faster rungs for gbx_bng_eastnorthasbng: c1 vectorized encode, d Rust kernel.
 
-Same results as c0 (pygx.functions._bng_eastnorthasbng_udf), row for row, errors included; the MVP-S
-oracle runs all three. The contract they share:
-  * a NULL (or NaN, or infinite: AP-21) coordinate or a NULL resolution is NULL, and a coordinate that
+Same results as c0 (pygx.functions._bng_eastnorthasbng_udf), row for row, errors included; the session-function
+cross-tier oracle runs all three. The contract they share:
+  * a NULL (or NaN, or infinite) coordinate or a NULL resolution is NULL, and a coordinate that
     is not a finite number is NULL before the resolution is read, so a bad resolution on such a row is
     not an error;
   * an integral float resolution (an INT column holding a NULL arrives as 3.0) is the integer;

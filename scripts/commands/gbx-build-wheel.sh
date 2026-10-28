@@ -29,7 +29,7 @@ usage() {
     echo "                   changes (refused otherwise, so that the wheel's GIT_SHA says what it was built from)"
     echo "  --verify ARCH    build nothing: install dist/env<N>'s wheel in a fresh offline venv in ARCH's toolchain"
     echo "                   image and run scripts/native/check-env-wheel.sh (install, .pth and import activation, CA,"
-    echo "                   tripwire, Python 3.11, probe P8); 'both' runs aarch64 then x86_64"
+    echo "                   tripwire, Python 3.11, payload self-check); 'both' runs aarch64 then x86_64"
     echo "  --log            Log file (filename -> test-logs/<name>; relative -> under test-logs/; absolute as-is)"
     echo ""
     echo "Inputs: build/native/out/<arch>/{stage-native,bindings}/ for x86_64 and aarch64 (gbx:build:native),"

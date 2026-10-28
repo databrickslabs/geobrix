@@ -1,10 +1,10 @@
-"""The env wheels carry what they claim (spec 5.1, 5.3, 5.4, 3.6; probe P8's byte identity).
+"""The env wheels carry what they claim.
 
 Reads the two built wheels (``gbx:build:wheel --env 5`` and ``--env 6``) as zip files: the metadata
 against ``python/geobrix/envs/envN``, the tripwire extras, both architectures' payload, the JAR,
 the startup activation at the wheel root, the build record, the licence guard on every library
-name, Requires-Python 3.12 only (NP-10), one zip timestamp for every member (SOURCE_DATE_EPOCH: the
-build is deterministic), and that the native payload is byte-identical in the two wheels (OD-35).
+name, Requires-Python 3.12 only, one zip timestamp for every member (SOURCE_DATE_EPOCH: the
+build is deterministic), and that the native payload is byte-identical in the two wheels.
 """
 
 import base64
@@ -25,7 +25,7 @@ REPO = Path(__file__).resolve().parents[4]
 ENVS = REPO / "python" / "geobrix" / "envs"
 PKG = "databricks/labs/gbx"
 ARCHES = ("x86_64", "aarch64")
-TRIPWIRES = {  # the other environment's old extra names, per wheel (spec 5.4)
+TRIPWIRES = {  # the other environment's old extra names, per wheel
     6: (
         "light_dbr17",
         "light_dbr18",
@@ -82,7 +82,7 @@ def _check_one(env, zf):
     assert meta["Version"] == f"{v}+env{env}"
     assert SpecifierSet(meta["Requires-Python"]) == SpecifierSet(
         ">=3.12,<3.13"
-    )  # NP-10
+    )  # the payload is cp312-only
 
     unmarked, by_extra = set(), {}
     for line in meta.get_all("Requires-Dist") or []:
@@ -121,7 +121,7 @@ def _check_one(env, zf):
         assert f"{PKG}/_vendor/{a}/rasterio/__init__.py" in names
     assert (
         f"{PKG}/_jar/geobrix-{v}-jar-with-dependencies.jar" in names
-    )  # the spec 3.6 package-data bug
+    )  # the JAR is in the wheel
     assert zf.read("geobrix-native.pth").decode().strip() == "import _gbx_native_path"
     assert "_gbx_native_path.py" in names
     build_info = {}

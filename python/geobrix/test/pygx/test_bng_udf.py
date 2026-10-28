@@ -28,7 +28,7 @@ def test_pointascell_wkt_uses_bng_coords(spark):
         "SELECT gbx_bng_pointascell('POINT(530000 180000)', '1km') AS c"
     ).collect()[0]
     assert row["c"] == "TQ3080"
-    # A geometry whose centroid is not a finite point is a data error: NULL (AP-21), as for an
+    # A geometry whose centroid is not a finite point is a data error: NULL, as for an
     # empty geometry. It neither raises nor becomes a cell.
     inf, nan = float("inf"), float("nan")
     geoms = [

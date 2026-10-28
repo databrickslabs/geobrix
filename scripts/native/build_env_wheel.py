@@ -7,12 +7,12 @@ setuptools and `wheel` are the hashed build requirements. No container lock (no 
 
 Inputs:
   build/native/out/<arch>/stage-native/gdal-native/  GDAL and the libraries it needs, MANIFEST.json, and
-                                                      GDAL's own Python bindings (python/osgeo, osgeo_utils) (N3)
-  build/native/out/<arch>/bindings/{vendor,wheels}/   the five bindings built against it (N4)
+                                                      GDAL's own Python bindings (python/osgeo, osgeo_utils)
+  build/native/out/<arch>/bindings/{vendor,wheels}/   the five bindings built against it
   python/geobrix/envs/env<N>/                         core.txt, extra-*.txt, vendor-pure.txt, base.txt
-  python/geobrix/envs/pyproject.env.toml              the env wheels' pyproject (ruling NP-3)
+  python/geobrix/envs/pyproject.env.toml              the env wheels' pyproject
   --vendor-pure <dir>  the vendor-pure.txt wheels, fetched and hash-checked on the host by the command
-  --jar <path>         the GeoBrix JAR (shipped in _jar/, spec 3.6)
+  --jar <path>         the GeoBrix JAR (shipped in _jar/)
   --extra-payload <d>  a tree merged into the payload, only under _native/<arch>/ (the Rust kernels:
                        _native/<arch>/rs/_gbxrs.abi3.so); repeatable
   --allow-dirty        build although the inputs have uncommitted changes (GIT_DIRTY = True)
@@ -49,7 +49,7 @@ Only then the wheel goes to dist/env<N>/, which keeps no other wheel.
 
 `--verify <arch>` builds nothing: it installs dist/env<N>'s wheel in a fresh offline venv in that
 architecture's toolchain image and runs scripts/native/check-env-wheel.sh (the install, the .pth and
-import-time activation, the CA rule, the tripwire, Python 3.11, and probe P8's `_selfcheck`). The
+import-time activation, the CA rule, the tripwire, Python 3.11, and the payload's `_selfcheck`). The
 venv's wheelhouse (core.txt with base.txt as constraints) is fetched on the host first, through
 `--host-python`'s pip, its output redacted.
 """
@@ -81,7 +81,7 @@ PYDIR = REPO / "python" / "geobrix"
 PKG = Path("databricks/labs/gbx")
 ARCHES = ("x86_64", "aarch64")
 PLATFORMS = {"x86_64": "linux/amd64", "aarch64": "linux/arm64"}
-TRIPWIRES = {  # spec 5.4: the other environment's old extra names -> geobrix==<version>+env<other>
+TRIPWIRES = {  # the other environment's old extra names -> geobrix==<version>+env<other>
     6: (
         "light_dbr17",
         "light_dbr18",
@@ -94,7 +94,7 @@ TRIPWIRES = {  # spec 5.4: the other environment's old extra names -> geobrix==<
 }
 RELY_ON_BASE = {
     "click"
-}  # spec 5.2: preinstalled on every runtime; core.txt may still declare it
+}  # preinstalled on every runtime; core.txt may still declare it
 GIT_INPUTS = (  # what the wheel is built from, under git
     "python/geobrix/src",
     "python/geobrix/envs",

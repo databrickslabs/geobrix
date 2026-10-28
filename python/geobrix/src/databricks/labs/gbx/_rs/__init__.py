@@ -25,10 +25,10 @@ def _source_checkout() -> Optional[Path]:
 
 
 def _rs_dir() -> Optional[Path]:
-    """B1 layout: <payload>/_native/<arch>/rs/. On a macOS source checkout: build/rs/dev-darwin/rs/.
+    """Payload layout: <payload>/_native/<arch>/rs/. On a macOS source checkout: build/rs/dev-darwin/rs/.
 
     The macOS iteration build (maturin build, never shipped) stays out of the package tree: a stray
-    `_native/` directory without B1's module would be an empty namespace package.
+    `_native/` directory without the rs module would be an empty namespace package.
     """
     if sys.platform == "darwin":
         root = _source_checkout()

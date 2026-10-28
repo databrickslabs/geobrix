@@ -1,4 +1,4 @@
-"""The MVP-G oracle: generators (functions returning many rows per input) through every shape.
+"""The generators oracle: generators (functions returning many rows per input) through every shape.
 
 One table, one test. A shape is a level plus the SQL that reaches it: the table function form every
 tier shares (`LATERAL fn(...)`), the array form with `inline`, and the probe forms the perf matrix
@@ -147,7 +147,7 @@ def test_mvp_g_oracle(request, tmp_path, shape):
 
 
 def test_mvp_g_uc_handlers(tmp_path):
-    """T0 for the UC table function: the handler behind it, called with the values UC passes."""
+    """The UC table function without Spark: the handler behind it, called with the values UC passes."""
     ran = oracles.run_handlers_rows(oracles.MVP_G, tmpdir=str(tmp_path))
     assert len(ran) == sum(c.fn == TE and "uc" in c.surfaces for c in oracles.MVP_G)
     assert [m for _, m in ran if m] == []

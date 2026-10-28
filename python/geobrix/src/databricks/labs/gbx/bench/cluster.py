@@ -371,8 +371,9 @@ INPUT_TILE = {input_tile!r}
 # CORPUS + "/bench-corpus-cog-multiwindow". Skips cleanly when the manifest is absent.
 BENCHMARK_GROUPED_FILE = {benchmark_grouped_file!r}
 GROUPED_FILE_ONLY = {grouped_file_only!r}
-# --levels <S|G|A|H|IO>: also run the streamline MVP levels leg (every form of that MVP at each
-# execution level the compute offers, with the attribution split). --levels-only: ONLY run it.
+# --levels <S|G|A|H|IO>: also run the levels leg for one set of functions (S session functions,
+# G generators, A aggregates, H DataFrame helpers; IO has no forms yet): every form of the set at
+# each execution level the compute offers, with the attribution split. --levels-only: ONLY run it.
 # --levels-uc <catalog.schema>: where the L4 (Unity Catalog) functions live; without it the L4
 # forms record a skipped row. The leg reads its tile inputs from {{CORPUS}}/rows.
 LEVELS_MVP = {levels_mvp!r}
@@ -2928,7 +2929,7 @@ else:
         _show_md(f"grouped FILE-amortization benchmark -- {RUN_ID}", _md)
 """
 
-_CELL_LEVELS = """# Streamline MVP levels leg (perf matrix + attribution split): every form of the MVP at each
+_CELL_LEVELS = """# Levels leg (perf matrix + attribution split): every form of the chosen set at each
 # execution level this compute offers (L1 Catalyst, L2 Java UDF, L3 light, L4 Unity Catalog),
 # timed at 1x/4x/16x. Rows land in the same results table; the split is in the row's own columns.
 from databricks.labs.gbx.bench import levels as _lv

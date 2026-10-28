@@ -490,8 +490,9 @@ def main() -> int:
     # --grouped-file-only: ONLY run the grouped-file benchmark, skip all fn benchmarks.
     benchmark_grouped_file = "--grouped-file" in sys.argv
     grouped_file_only = "--grouped-file-only" in sys.argv
-    # --levels <S|G|A|H|IO>: also run the streamline MVP levels leg (every form of that MVP at
-    #   each execution level the compute offers, with the attribution split). --levels-only: ONLY
+    # --levels <S|G|A|H|IO>: also run the levels leg for one set of functions (S session functions,
+    #   G generators, A aggregates, H DataFrame helpers; IO has no forms yet): every form of the set
+    #   at each execution level the compute offers, with the attribution split. --levels-only: ONLY
     #   that leg (no fn benchmarks, no heavy tests JAR). --levels-uc <catalog.schema>: where the
     #   L4 (Unity Catalog) functions live; without it the L4 forms record a skipped row.
     levels_mvp = _arg("--levels", "")
@@ -707,7 +708,7 @@ def main() -> int:
         benchmark_grouped_file=benchmark_grouped_file,
         grouped_file_only=grouped_file_only,
         multiwindow_corpus=multiwindow_corpus,
-        #  --levels <MVP>: the streamline MVP levels leg. --levels-only: ONLY that leg.
+        #  --levels <S|G|A|H|IO>: the levels leg for one set of functions. --levels-only: ONLY that leg.
         #  --levels-uc <catalog.schema>: where its L4 (Unity Catalog) functions live.
         levels_mvp=levels_mvp,
         levels_only=levels_only,

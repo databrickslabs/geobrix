@@ -39,7 +39,7 @@ def bng_eastnorthasbng(easting, northing, resolution):
         return None
     e, n = float(easting), float(northing)
     if not (math.isfinite(e) and math.isfinite(n)):
-        return None  # NaN and the infinities are NULL (AP-21)
+        return None  # NaN and the infinities are NULL, as on every level
     # UC has one STRING type: an INT resolution arrives as its digits ('3'), which BNG parses.
     res = resolution.strip() if isinstance(resolution, str) else resolution
     return _bng.point_as_cell(
@@ -57,7 +57,7 @@ def _res(raw):
 def bng_eastnorthasbng_batch(batches):
     """PARAMETER STYLE PANDAS handler: an iterator of (easting, northing, resolution) Series.
 
-    The OD-18 probe form of bng_eastnorthasbng: the same Rust kernel as the session's `d` rung, fed a
+    The probe form of bng_eastnorthasbng: the same Rust kernel as the session's `d` rung, fed a
     batch at a time. A wheel without the platform build answers row by row, as `bng_eastnorthasbng`.
     """
     import numpy as np

@@ -1,5 +1,5 @@
 #!/bin/bash
-# test-bindings.sh GDAL_NATIVE_DIR BINDINGS_DIR: probe P11. Run in the toolchain image with --network none and
+# test-bindings.sh GDAL_NATIVE_DIR BINDINGS_DIR: the bindings probe. Run in the toolchain image with --network none and
 #   /gdal-native (ro)        the exported stage-native tree the bindings were linked against
 #   /bindings (rw)           build-bindings.sh's output (vendor/, dist/, build-seconds.txt); p11.json and test-results/ go here
 #   /sdists (ro)             the five sdists: their test directories are the suites

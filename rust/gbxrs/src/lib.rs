@@ -116,7 +116,7 @@ type ArrowStrings<'py> = (
 );
 
 /// Appends the cell of (e, n) and says so. A coordinate that is not a finite number (NaN or an
-/// infinity) is NULL on every level (AP-21): nothing is appended and the answer is false.
+/// infinity) is NULL on every level: nothing is appended and the answer is false.
 fn push_cell(e: f64, n: f64, res: i32, out: &mut String) -> bool {
     if !(e.is_finite() && n.is_finite()) {
         return false;
@@ -215,7 +215,7 @@ mod tests {
         }
     }
 
-    /// NaN and the infinities are NULL (AP-21): no cell is written, whichever coordinate they are in.
+    /// NaN and the infinities are NULL: no cell is written, whichever coordinate they are in.
     #[test]
     fn a_coordinate_that_is_not_finite_is_null() {
         let bad = [f64::NAN, f64::INFINITY, f64::NEG_INFINITY];

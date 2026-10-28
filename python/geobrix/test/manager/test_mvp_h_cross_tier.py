@@ -1,4 +1,4 @@
-"""The MVP-H oracle: the DataFrame helpers (retile, tessellate, merge, combine) on local Spark."""
+"""The DataFrame helpers oracle: retile, tessellate, merge and combine on local Spark."""
 
 import pytest
 

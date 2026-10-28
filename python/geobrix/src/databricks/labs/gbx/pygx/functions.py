@@ -271,7 +271,7 @@ def _bng_pointascell_udf(geom: pd.Series, res: pd.Series) -> pd.Series:
             out.append(None)
             continue
         c = pg.centroid
-        # AP-21: a centroid that is not a finite point (inf, NaN) is a data error: NULL, as for an
+        # A centroid that is not a finite point (inf, NaN) is a data error: NULL, as for an
         # empty geometry, before _bng.point_to_cell_id (which raises for it) is reached
         if not (math.isfinite(c.x) and math.isfinite(c.y)):
             out.append(None)
@@ -291,7 +291,7 @@ def _bng_eastnorthasbng_udf(e: pd.Series, n: pd.Series, res: pd.Series) -> pd.Se
             out.append(None)
             continue
         ee, nn = float(ee), float(nn)
-        # AP-21: an infinity is NULL like NaN, before the resolution is checked
+        # An infinity is NULL like NaN, before the resolution is checked
         if not (math.isfinite(ee) and math.isfinite(nn)):
             out.append(None)
             continue

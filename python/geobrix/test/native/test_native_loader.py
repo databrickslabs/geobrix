@@ -105,7 +105,7 @@ def test_the_payload_is_used_only_where_it_can_load(tmp_path, monkeypatch):
     assert _state() == before
 
     # A user CA in SSL_CERT_FILE: GDAL and PROJ get it in their own variables, so that a binding's
-    # import-time certifi default cannot take its place (ruling NP-11).
+    # import-time certifi default cannot take its place.
     for k in ("GDAL_CURL_CA_BUNDLE", "PROJ_CURL_CA_BUNDLE"):
         monkeypatch.delenv(k)
     monkeypatch.setenv("SSL_CERT_FILE", "/user/corporate.pem")

@@ -1,4 +1,4 @@
-"""The payload's activation rules: the one copy both activators use (rulings NP-2, NP-10, NP-11).
+"""The payload's activation rules: the one copy both activators use.
 
 Used by ``_gbx_native_path`` (interpreter start, through ``geobrix-native.pth``; it loads this file
 by path so that no geobrix package is imported) and by ``databricks.labs.gbx._native.activate``

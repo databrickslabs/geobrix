@@ -1,4 +1,4 @@
-"""The MVP-A oracle: aggregates through every shape.
+"""The aggregates oracle: aggregates through every shape.
 
 One table, one test. A shape is a level plus the SQL that reaches it: the grouped aggregate itself (Arrow
 UDF on L3, the Catalyst aggregate on L1), the finalize scalar over `collect_list` (light probes, and the Java

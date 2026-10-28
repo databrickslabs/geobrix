@@ -15,7 +15,7 @@ import io
 import json
 import os
 from pathlib import Path
-from _job_submit import submit_once  # sibling module (script dir is on sys.path)
+from _job_submit import runner_dir, submit_once  # sibling module (script dir is on sys.path)
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 
 CORPUS = os.environ.get("GBX_BENCH_CORPUS", "/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus")
@@ -148,7 +148,7 @@ def main() -> int:
     from databricks.sdk.service.workspace import ImportFormat
     w = WorkspaceClient(profile=os.environ["DATABRICKS_CONFIG_PROFILE"])
     cid = os.environ["CLUSTER_ID"]
-    runner = os.environ.get("GBX_RUNNER_DIR", "/Workspace/Users/mjohns@databricks.com/GeoBrix/gbx-beta-dbr-v0.2.0/sample-data/tests")
+    runner = runner_dir(w)
     p = "/" + f"{runner}/_stage_distinct_var_corpus".strip().removeprefix("/Workspace").lstrip("/")
     try:
         w.workspace.mkdirs(str(Path(p).parent))

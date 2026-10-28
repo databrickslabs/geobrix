@@ -2,8 +2,10 @@
 # verify-native.sh [root]: the oracle for `gbx:build:native --target stage-native`. Runs in the toolchain image with the
 # staged tree mounted (default /gdal-native) and this directory mounted at /verify, under `--network none`.
 # Prints `ok: <check>` per check and stops at the first `VERIFY FAILED: <what>`; the last line of a good run is `VERIFY OK`.
-#   1 versions, tools      2 licence guard      3 required drivers      4 ELF closure and auditwheel
-#   5 JNI smoke            6 osgeo against the one GDAL      7 HTTPS through GDAL_CURL_CA_BUNDLE (no compiled-in CA path)
+#   1 versions, tools      2 licence guard      3 required drivers
+#   4 ELF closure, hashed SONAMEs (none equals a system name), auditwheel, and libgdal loading after the host's sqlite and curl
+#   5 JNI smoke            6 osgeo against the one GDAL: FileGDB, iconv code pages (CP1252, CP932), GRIB AEC, GDAL_DATA
+#   7 HTTPS through GDAL_CURL_CA_BUNDLE (no compiled-in CA path)
 #   8 the dev kit: headers, pkg-config, gdal-config, cmake and a C program built against include/ + lib-dev/
 set -uo pipefail
 
@@ -26,6 +28,11 @@ for d in lib lib-dev bin share/gdal share/proj java python/osgeo python/osgeo_ut
 done
 [ -f "$R/MANIFEST.json" ] || fail "no MANIFEST.json"
 [ -f "$R/lib/libgdalalljni.so" ] || fail "no lib/libgdalalljni.so"
+# the SONAMEs are hashed (libgdal-<hash>.so.39): the stager recorded original -> hashed in MANIFEST.json
+sonm() { $PY -c 'import json, sys; print(next(v for k, v in json.load(open(sys.argv[1]))["sonames"].items() if k.startswith(sys.argv[2])))' "$R/MANIFEST.json" "$1" 2> /dev/null; }
+LIBGDAL="$(sonm libgdal.so.)"; LIBCURL="$(sonm libcurl.so.)"; LIBSSL="$(sonm libssl.so.)"
+[ -n "$LIBGDAL" ] && [ -n "$LIBCURL" ] && [ -n "$LIBSSL" ] || fail "MANIFEST.json has no SONAME map (sonames) for libgdal, libcurl and libssl"
+[ -f "$R/lib/$LIBGDAL" ] && [ -f "$R/lib/$LIBCURL" ] && [ -f "$R/lib/$LIBSSL" ] || fail "MANIFEST.json names $LIBGDAL, $LIBCURL, $LIBSSL, which are not all in lib/"
 [ -f "$R/java/gdal-${GDAL_VERSION}.jar" ] || fail "no java/gdal-${GDAL_VERSION}.jar"
 if [ -n "$(find "$R/lib" -maxdepth 1 -type l)" ]; then fail "lib/ holds symlinks: $(find "$R/lib" -maxdepth 1 -type l -printf '%f ' | head -c 200)"; fi
 
@@ -36,7 +43,7 @@ case "$v" in "GDAL ${GDAL_VERSION},"*|"GDAL ${GDAL_VERSION} "*) ;; *) fail "gdal
 "$R/bin/projinfo" EPSG:27700 > "$WORK/projinfo.txt" 2>&1 || fail "projinfo EPSG:27700: $(head -c 300 "$WORK/projinfo.txt")"
 grep -q "tmerc" "$WORK/projinfo.txt" || fail "projinfo EPSG:27700 printed no transverse Mercator definition"
 "$R/bin/ogrinfo" --version | grep -q "^GDAL ${GDAL_VERSION}[ ,]" || fail "ogrinfo version"
-ok "gdalinfo '${v%%,*}', projinfo EPSG:27700 (data found relative to the tree)"
+ok "gdalinfo '${v%%,*}', projinfo EPSG:27700 (the tools find the GDAL and PROJ data relative to the tree; osgeo and the JNI need GDAL_DATA set, step 6)"
 
 # --- 2 licence guard: libraries, NEEDED, driver lists, licence files
 BANNED='poppler|podofo|pdfium|rttopo|spatialite|mysql|mariadb|FileGDBAPI|ecw|ltidsdk|kdu|lura|grok|x265|odbc|clntsh|sfcgal|CGAL'
@@ -110,8 +117,31 @@ for dp, _d, files in os.walk(root):
             fail(f"{rel} has no SONAME")
         if rel.startswith("lib/") and so and so[0] != name:
             fail(f"{rel} is not named after its SONAME {so[0]}")
+# hashed names: a bundled library shares no SONAME with a system library (the loader reuses an already-loaded library of the
+# same SONAME, so a bundled libsqlite3.so.0 or libcurl.so.4 would be shadowed by, or would shadow, the host's)
+import json
+hashed = re.compile(r"^.+-[0-9a-f]{8}\.so(\..*)?$")
+manifest = json.load(open(os.path.join(root, "MANIFEST.json")))
+system = set()
+for d in ("/lib64", "/usr/lib64", "/lib", "/usr/lib", "/usr/local/lib"):
+    for dp, _dirs, files in os.walk(d):
+        system.update(files)
+for so, rel in sorted(sonames.items()):
+    if os.path.basename(rel) == "libgdalalljni.so":
+        continue
+    if not hashed.match(so):
+        fail(f"{rel} has SONAME {so}, which has no -<sha256[:8]> infix (it would share a name with a system library)")
+    if so in system or policy.match(so):
+        fail(f"bundled SONAME {so} is also the name of a system library in this image")
+mapped = manifest.get("sonames", {})
+if sorted(mapped.values()) != sorted(os.path.basename(r) for s, r in sonames.items() if os.path.basename(r) != "libgdalalljni.so"):
+    fail("MANIFEST.json sonames (original -> hashed) does not match the libraries in lib/")
+for old in mapped:
+    if old in libs:
+        fail(f"the original name {old} is still in lib/")
 print(f"ok: ELF closure: {n} ELF files, each RUNPATH $ORIGIN-relative to lib/, each NEEDED in lib/ or the manylinux set, "
-      f"{len(sonames)} SONAMEs unique and equal to the file names")
+      f"{len(sonames)} SONAMEs unique and equal to the file names; {len(mapped)} libraries have hashed SONAMEs "
+      f"(<stem>-<sha256[:8]>.so<rest>), none equal to a system library name; the JNI keeps libgdalalljni.so")
 PYEOF
 
 W="$WORK/gbxprobe-0"
@@ -134,6 +164,39 @@ assert not r.get("external_libs"), r.get("external_libs")
 PYEOF
 ok "auditwheel: the tree is consistent with manylinux_2_28_${ARCH}, no external shared libraries"
 
+# libgdal loaded after the HOST's sqlite and curl (what a Python process that imported sqlite3 and used libcurl looks like).
+# With shared SONAMEs this fails to load here (undefined symbol: sqlite3_error_offset / curl_multi_poll) or runs on the host's
+# SQLite and curl; with hashed names GDAL keeps its own.
+cat > "$WORK/hostfirst.py" <<'EOF'
+import ctypes, os, sys
+root, libgdal, libcurl = os.environ["ROOT"], os.environ["LIBGDAL"], os.environ["LIBCURL"]
+host = {}
+for name in ("libsqlite3.so.0", "libcurl.so.4"):
+    path = "/usr/lib64/" + name
+    ctypes.CDLL(path)
+    host[name] = path
+ctypes.CDLL(f"{root}/lib/{libgdal}")
+sys.path.insert(0, f"{root}/python")
+os.environ["GDAL_DATA"] = f"{root}/share/gdal"
+from osgeo import gdal, ogr
+gdal.UseExceptions(); ogr.UseExceptions()
+ds = ogr.GetDriverByName("GPKG").CreateDataSource(os.environ["TMP"] + "/h.gpkg")
+rs = ds.ExecuteSQL("SELECT sqlite_version()")
+version = rs.GetNextFeature().GetField(0)
+ds.ReleaseResultSet(rs)
+assert version == os.environ["SQLITE_VERSION"], f"GDAL runs on SQLite {version}, not {os.environ['SQLITE_VERSION']}"
+gdal.VSIStatL("/vsicurl/http://127.0.0.1:9/x")   # first curl use: GDAL compares the curl it was built against with the one it runs on
+maps = sorted({l.split()[-1] for l in open("/proc/self/maps")})
+ours = [m for m in maps if m.startswith(root + "/lib/") and ("libcurl" in m or "libsqlite3" in m)]
+assert len(ours) == 2, ours
+for name in host:   # the host copies are mapped too (as their real files, libsqlite3.so.0.8.6 ...), next to ours
+    assert any(os.path.basename(m).startswith(name.split(".so")[0] + ".so") and not m.startswith(root) for m in maps), f"the host {name} was not loaded"
+print("sqlite", version, "libcurl and libsqlite3 from", sorted(os.path.basename(m) for m in ours))
+EOF
+TMP="$WORK" ROOT="$R" LIBGDAL="$LIBGDAL" LIBCURL="$LIBCURL" SQLITE_VERSION="$SQLITE_VERSION" $PY "$WORK/hostfirst.py" > "$WORK/hostfirst.txt" 2>&1 || fail "libgdal after the host's libsqlite3.so.0 and libcurl.so.4: $(tail -c 500 "$WORK/hostfirst.txt")"
+grep -q "Runtime failure is likely" "$WORK/hostfirst.txt" && fail "GDAL runs against a different curl than it was built with: $(grep -m1 'Runtime failure' "$WORK/hostfirst.txt")"
+ok "libgdal loads after the host's libsqlite3.so.0 and libcurl.so.4, runs on its own SQLite ${SQLITE_VERSION} and curl ${CURL_VERSION} (hashed SONAMEs)"
+
 # --- 5 JNI: the Java classes and the JNI library from the same build. JniSmoke is compiled first and put on the class
 # path next to the jar: the source-file launcher loads it in a separate class loader, and a library loaded by System.load
 # there is invisible to the classes in the jar (UnsatisfiedLinkError on the first native call).
@@ -147,25 +210,65 @@ grep -q "JNI_SMOKE_OK ${GDAL_VERSION}" "$WORK/jni.txt" || fail "JniSmoke did not
 if grep -q "Native library load failed" "$WORK/jni.txt"; then nl="the bindings' own 'Native library load failed' line appears (expected and harmless: their loadLibrary finds nothing on java.library.path, the absolute System.load already bound the library)"; else nl="no 'Native library load failed' line"; fi
 ok "JNI smoke: $(grep JNI_SMOKE_OK "$WORK/jni.txt"); $nl"
 
-# --- 6 osgeo from the same build: the version, the library it loaded, a FileGDB write and read (defect Task 19 Step 1)
-WANT="$GDAL_VERSION" ROOT="$R" PYTHONPATH="$R/python" $PY -c "
-from osgeo import gdal, ogr, osr; import os, tempfile
+# --- 6 osgeo from the same build: the version, the library it loaded, a FileGDB write and read (defect Task 19 Step 1), the
+# code pages that need iconv, GRIB's AEC (CCSDS) support, and the GDAL_DATA that osgeo has to be given (the JNI: JniSmoke)
+cat > "$WORK/osgeo_check.py" <<'EOF'
+import os, struct, tempfile
+from osgeo import gdal, ogr, osr
 gdal.UseExceptions(); ogr.UseExceptions(); osr.UseExceptions()
 want = os.environ['WANT']; root = os.environ['ROOT']
 assert gdal.__version__ == want, gdal.__version__
 assert gdal.VersionInfo('RELEASE_NAME') == want, gdal.VersionInfo('RELEASE_NAME')
-mapped = sorted({l.split()[-1] for l in open('/proc/self/maps') if 'libgdal.so' in l})
+mapped = sorted({l.split()[-1] for l in open('/proc/self/maps') if 'libgdal' in l})
 assert mapped and all(m.startswith(root + '/lib/') for m in mapped), mapped
-d = os.path.join(tempfile.mkdtemp(), 't.gdb'); drv = ogr.GetDriverByName('OpenFileGDB')
+tmp = tempfile.mkdtemp()
+d = os.path.join(tmp, 't.gdb'); drv = ogr.GetDriverByName('OpenFileGDB')
 ds = drv.CreateDataSource(d); sr = osr.SpatialReference(); sr.ImportFromEPSG(4326)
 lyr = ds.CreateLayer('p', sr, ogr.wkbPoint); f = ogr.Feature(lyr.GetLayerDefn())
 f.SetGeometry(ogr.CreateGeometryFromWkt('POINT (1 2)')); lyr.CreateFeature(f); ds = None
 back = ogr.Open(d)  # keep the dataset: a layer of a dataset that was garbage-collected is a dangling pointer
 assert back.GetLayer(0).GetFeatureCount() == 1
 srs = osr.SpatialReference(); assert srs.ImportFromEPSG(27700) == 0
+# iconv (glibc's): a CP1252 Shapefile is written and read back; a CP932 DBF (Shift-JIS, .cpg CP932) decodes to text
+sdir = os.path.join(tmp, 'cp1252')
+ds = ogr.GetDriverByName('ESRI Shapefile').CreateDataSource(sdir)
+lyr = ds.CreateLayer('cp', None, ogr.wkbPoint, ['ENCODING=CP1252'])
+fd = ogr.FieldDefn('name', ogr.OFTString); fd.SetWidth(32); lyr.CreateField(fd)
+f = ogr.Feature(lyr.GetLayerDefn()); f.SetField('name', 'caf\u00e9 \u20ac \u00f1'); f.SetGeometry(ogr.CreateGeometryFromWkt('POINT (1 2)'))
+lyr.CreateFeature(f); f = None; ds = None
+back = ogr.Open(sdir)
+assert back.GetLayer(0).GetNextFeature().GetField('name') == 'caf\u00e9 \u20ac \u00f1'
+text = '\u6771\u4eac'  # Tokyo
+rec = text.encode('cp932')
+dbf = struct.pack('<B3BIHH', 3, 126, 10, 28, 1, 65, 11) + bytes(20)
+dbf += b'NAME'.ljust(11, b'\0') + b'C' + bytes(4) + bytes([10, 0]) + bytes(14) + b'\r' + b' ' + rec.ljust(10, b' ') + b'\x1a'
+open(os.path.join(tmp, 'jp.dbf'), 'wb').write(dbf); open(os.path.join(tmp, 'jp.cpg'), 'w').write('CP932')
+back = ogr.Open(os.path.join(tmp, 'jp.dbf'))
+got = back.GetLayer(0).GetNextFeature().GetField('NAME')
+assert got == text, repr(got)
+assert gdal.GetDriverByName('GRIB').GetMetadataItem('HAVE_AEC') == 'YES', 'GRIB was built without libaec (CCSDS)'
 print('osgeo', gdal.__version__, 'libgdal from', mapped[0])
-" > "$WORK/osgeo.txt" 2>&1 || fail "osgeo / FileGDB write: $(tail -c 600 "$WORK/osgeo.txt")"
-ok "$(cat "$WORK/osgeo.txt") (FileGDB write and read, EPSG:27700 via PROJ data)"
+EOF
+WANT="$GDAL_VERSION" ROOT="$R" PYTHONPATH="$R/python" $PY "$WORK/osgeo_check.py" > "$WORK/osgeo.txt" 2>&1 || fail "osgeo check: $(tail -c 700 "$WORK/osgeo.txt")"
+# osgeo and the JNI do not find share/gdal on their own (the tools do), and GDAL fixes its data search path at the first lookup
+# (importing osgeo.gdal registers the drivers, which does one), so SetConfigOption("GDAL_DATA") after the import has no effect:
+# osgeo needs GDAL_DATA in the environment before the import, or gdal.PushFinderLocation(<share/gdal>); the JNI needs the
+# config option before AllRegister() (JniSmoke does exactly that). Each case is its own process.
+PYTHONPATH="$R/python" $PY -c "
+from osgeo import gdal
+assert gdal.FindFile('gdal', 'osmconf.ini') is None" > "$WORK/osgeo-nodata.txt" 2>&1 || fail "osgeo finds share/gdal without GDAL_DATA, or fails: $(tail -c 300 "$WORK/osgeo-nodata.txt")"
+GDAL_DATA="$R/share/gdal" PYTHONPATH="$R/python" $PY -c "
+import os
+from osgeo import gdal
+got = gdal.FindFile('gdal', 'osmconf.ini')
+assert got == os.environ['GDAL_DATA'] + '/osmconf.ini', got" > "$WORK/osgeo-data.txt" 2>&1 || fail "osgeo does not find share/gdal with GDAL_DATA in the environment: $(tail -c 300 "$WORK/osgeo-data.txt")"
+ROOT="$R" PYTHONPATH="$R/python" $PY -c "
+import os
+from osgeo import gdal
+gdal.PushFinderLocation(os.environ['ROOT'] + '/share/gdal')
+got = gdal.FindFile('gdal', 'osmconf.ini')
+assert got == os.environ['ROOT'] + '/share/gdal/osmconf.ini', got" > "$WORK/osgeo-push.txt" 2>&1 || fail "osgeo does not find share/gdal after PushFinderLocation: $(tail -c 300 "$WORK/osgeo-push.txt")"
+ok "$(cat "$WORK/osgeo.txt") (FileGDB write and read, EPSG:27700 via PROJ data, CP1252 Shapefile write/read and CP932 DBF decode via iconv, GRIB HAVE_AEC=YES; share/gdal found with GDAL_DATA in the environment or PushFinderLocation, not without)"
 
 # --- 7 HTTPS from our libcurl + OpenSSL: no CA path is compiled in, so trust arrives only through GDAL_CURL_CA_BUNDLE.
 # A local server with a throwaway CA stands in for the network. The CA is also put in the SYSTEM trust store, so a
@@ -220,20 +323,20 @@ try:
     print("OPENED", ds.RasterXSize, ds.RasterYSize)
 except RuntimeError as e:
     print("REFUSED", str(e).replace("\n", " ")[:200])
-v = ctypes.CDLL(os.path.join(root, "lib", "libcurl.so.4"))
+v = ctypes.CDLL(os.path.join(root, "lib", os.environ["LIBCURL"]))
 v.curl_version.restype = ctypes.c_char_p
 print("CURL", v.curl_version().decode())
 maps = sorted({l.split()[-1] for l in open("/proc/self/maps") if "libssl" in l or "libcrypto" in l})
 print("TLS_LIBS", " ".join(maps))
 EOF
-PYTHONPATH="$R/python" $PY "$WORK/vsicurl.py" "$PORT" "$R" > "$WORK/vsicurl-noca.txt" 2>&1
+LIBCURL="$LIBCURL" PYTHONPATH="$R/python" $PY "$WORK/vsicurl.py" "$PORT" "$R" > "$WORK/vsicurl-noca.txt" 2>&1
 grep -q "^REFUSED" "$WORK/vsicurl-noca.txt" || fail "without GDAL_CURL_CA_BUNDLE our libcurl opened an HTTPS URL whose CA only the system store trusts (a CA path is compiled in): $(head -c 400 "$WORK/vsicurl-noca.txt")"
 grep -qi "certificate" "$WORK/vsicurl-noca.txt" || fail "the refusal does not name a certificate problem: $(head -c 400 "$WORK/vsicurl-noca.txt")"
-GDAL_CURL_CA_BUNDLE="$TLS/ca.pem" PYTHONPATH="$R/python" $PY "$WORK/vsicurl.py" "$PORT" "$R" > "$WORK/vsicurl-ca.txt" 2>&1
+GDAL_CURL_CA_BUNDLE="$TLS/ca.pem" LIBCURL="$LIBCURL" PYTHONPATH="$R/python" $PY "$WORK/vsicurl.py" "$PORT" "$R" > "$WORK/vsicurl-ca.txt" 2>&1
 grep -q "^OPENED 64 48" "$WORK/vsicurl-ca.txt" || fail "with GDAL_CURL_CA_BUNDLE the /vsicurl/ HTTPS read failed: $(grep -v '^\*\|^[<>]' "$WORK/vsicurl-ca.txt" | head -c 500)"
 grep "^CURL" "$WORK/vsicurl-ca.txt" | grep -q "OpenSSL/4" || fail "our libcurl is not built on OpenSSL 4: $(grep '^CURL' "$WORK/vsicurl-ca.txt")"
 tls="$(grep '^TLS_LIBS' "$WORK/vsicurl-ca.txt")"
-case "$tls" in *"$R/lib/libssl.so.4"*) ;; *) fail "the TLS libraries in use are not ours: $tls" ;; esac
+case "$tls" in *"$R/lib/$LIBSSL"*) ;; *) fail "the TLS libraries in use are not ours: $tls" ;; esac
 case "$tls" in *"libssl.so.1.1"*|*"libssl.so.3"*) fail "a system libssl was loaded as well: $tls" ;; esac
 ok "HTTPS /vsicurl/ read: refused without a CA although the system store trusts it, read with GDAL_CURL_CA_BUNDLE; $(grep '^CURL' "$WORK/vsicurl-ca.txt")"
 

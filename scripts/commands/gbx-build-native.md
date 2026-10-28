@@ -11,7 +11,7 @@ bash scripts/commands/gbx-build-native.sh [--arch x86_64|aarch64|both] [--target
 ## Options
 
 - `--arch x86_64|aarch64|both` - default: this machine's architecture. `both` builds aarch64 first, then x86_64. The architecture that is not the host's runs under emulation and is much slower.
-- `--target toolchain|stage-native|bindings` - default `bindings`. A target whose stage is not in `build.Dockerfile` yet stops with `PRECONDITION MISSING`. `stage-native` and `bindings` build on the toolchain image `geobrix-native-build:toolchain-<pins>-<arch>`: it is built first when missing, and an existing one is used as it is (a change to the toolchain stage needs `--target toolchain` first).
+- `--target toolchain|stage-native|bindings` - default `bindings`. A target whose stage is not in `build.Dockerfile` yet stops with `PRECONDITION MISSING`. `stage-native` and `bindings` build on the toolchain image `geobrix-native-build:toolchain-<hash>-<arch>`: it is built first when missing, and an existing one is used as it is; a change to the toolchain stage or to a file it copies changes `<hash>`, so the next build makes a new toolchain image.
 - `--no-cache` - Rebuild every layer. A cold build's seconds are the full cost; a cached one reports only the layers that changed.
 - `--log <path>` - Write output to a log file (filename goes to `test-logs/<name>`, relative paths go under `test-logs/`, absolute paths are used as-is)
 - `--help` - Display help message
@@ -20,7 +20,7 @@ An option that needs a value given without one prints `<option> needs a value` a
 
 ## What `--target toolchain` checks
 
-Per architecture, after the image is built as `geobrix-native-build:toolchain-<sha256(pins.conf)[:12]>-<arch>`:
+Per architecture, after the image is built as `geobrix-native-build:toolchain-<hash>-<arch>`, where `<hash>` is the first 12 characters of a sha256 over `pins.conf`, the toolchain stage of `build.Dockerfile` and the files that stage copies (so a toolchain edit, not only a pin change, makes a new tag):
 
 1. The tools match the pins (rustc, maturin, numpy, SWIG, Ant, JDK 17, cargo-deny), and no pip or uv index configuration is in the image.
 2. The Rust smoke crate (`scripts/native/rust-smoke`) builds into a `cp312-abi3-manylinux_2_28_<arch>` wheel with `--network none`, from sources vendored on the host (`scripts/native/cargo-vendor.sh`), and leaves no `target/` in the mounted crate; the wheel installs with `--no-index` and `smoke()` returns `ok`.
@@ -32,11 +32,11 @@ Stages `deps` -> `gdal` -> `stage-native` of `build.Dockerfile`, then `export-st
 
 | Path | Holds |
 |---|---|
-| `lib/` | one file per SONAME (a wheel holds no symlinks), RUNPATH `$ORIGIN`: `libgdal`, `libgdalalljni.so` (the JNI), PROJ, GEOS (`libgeos_c`), netCDF, HDF5 and every library they need, including a private OpenSSL 4 (`libssl.so.4`, `libcrypto.so.4`) under `libcurl`; `lib/pkgconfig`, `lib/cmake` |
-| `lib-dev/` | symlinks for linking only (`libgdal.so`, plus every SONAME); never packaged |
+| `lib/` | one file per SONAME (a wheel holds no symlinks), RUNPATH `$ORIGIN`: `libgdal`, `libgdalalljni.so` (the JNI), PROJ, GEOS (`libgeos_c`), netCDF, HDF5 and every library they need, including a private OpenSSL 4 under `libcurl`; `lib/pkgconfig`, `lib/cmake`. Every library except the JNI has a hashed auditwheel-style name, `<stem>-<sha256[:8]>.so<rest>` (`libgdal-71a8c415.so.39`), set as its SONAME and rewritten in every NEEDED, so it shares no SONAME with a system library: the loader reuses an already-loaded library of the same SONAME, which made GDAL run on the host's SQLite and curl, or fail to load, depending on what the process had loaded first. `MANIFEST.json` records the map (`sonames`: original -> hashed); look names up there, never hard-code them |
+| `lib-dev/` | symlinks for linking only: for each library its original linker name (`libgdal.so`), its original SONAME and its hashed name, all pointing at `../lib/<hashed>`; a program linked through them records the hashed name. Never packaged |
 | `bin/` | `gdalinfo`, `ogrinfo`, `projinfo` (RUNPATH `$ORIGIN/../lib`); `gdal-config`, `geos-config`, `nc-config` (prefix taken from the script's own location) |
 | `include/` | the headers of GDAL, PROJ, GEOS, GeoTIFF, TIFF, HDF5, netCDF, curl, OpenSSL and the compression libraries |
-| `share/{gdal,proj}` | GDAL and PROJ data (found relative to the tree; no `GDAL_DATA` or `PROJ_DATA` needed) |
+| `share/{gdal,proj}` | GDAL and PROJ data. The tools find them relative to the executable, and PROJ relative to `libproj`; osgeo and the JNI do NOT find `share/gdal` on their own (`Cannot find osmconf.ini (GDAL_DATA is not defined)`), and GDAL fixes its data search path at the first lookup: osgeo needs `GDAL_DATA` in the environment before `import osgeo.gdal` (or `gdal.PushFinderLocation(<root>/share/gdal)`; `gdal.SetConfigOption('GDAL_DATA', ...)` after the import has no effect), the JNI needs `gdal.SetConfigOption("GDAL_DATA", ...)` before `gdal.AllRegister()` (and `PROJ_DATA` for PROJ unless it is found relative to `libproj`) |
 | `java/gdal-<version>.jar` | the Java classes, from the same build as the JNI library |
 | `python/{osgeo,osgeo_utils}` | the GDAL Python bindings (RUNPATH `$ORIGIN/../../lib`) |
 | `licenses/<dep>/` | the licence files of every library built from source |
@@ -46,12 +46,13 @@ Every dependency is built from the pinned source with the options of `scripts/na
 
 Per architecture, `scripts/native/verify-native.sh` runs in the toolchain image with the exported tree mounted read-only and `--network none`, and prints `ok: <check>` or `VERIFY FAILED: <what>`:
 
-1. `gdalinfo --version` reports the pinned GDAL and `projinfo EPSG:27700` works, with no `GDAL_DATA`, `PROJ_DATA` or `LD_LIBRARY_PATH` set.
+1. `gdalinfo --version` reports the pinned GDAL and `projinfo EPSG:27700` works, with no `GDAL_DATA`, `PROJ_DATA` or `LD_LIBRARY_PATH` set (the tools only).
 2. Licence guard: no library or NEEDED entry matches `poppler|podofo|pdfium|rttopo|spatialite|mysql|mariadb|FileGDBAPI|ecw|ltidsdk|kdu|lura|grok|x265|odbc|clntsh|sfcgal|CGAL`; none of ECW, JP2ECW, MrSID, JP2MrSID, JP2KAK, JP2Lura, JP2Grok, FileGDB (the SDK driver), MySQL, ODBC, MSSQLSpatial, PGeo, OCI is registered; every `licenses/<dep>` is non-empty.
 3. The 24 required drivers are registered (GTiff, COG, VRT, MEM, netCDF, HDF5, GRIB, JP2OpenJPEG, Zarr, PNG, JPEG, WEBP, MBTiles, GPKG, OpenFileGDB, ESRI Shapefile, GeoJSON, GeoJSONSeq, FlatGeobuf, MVT, PMTiles, CSV, KML, GML).
-4. ELF closure: every ELF file has a RUNPATH `$ORIGIN`-relative to `lib/` and no RPATH, every NEEDED is in `lib/` or in the manylinux policy set, SONAMEs are unique and equal to the file names; `auditwheel show` on a throwaway wheel of the tree reports consistency with `manylinux_2_28_<arch>` and no external shared libraries.
+4. ELF closure: every ELF file has a RUNPATH `$ORIGIN`-relative to `lib/` and no RPATH, every NEEDED is in `lib/` or in the manylinux policy set, SONAMEs are unique and equal to the file names, every library but the JNI has a hashed SONAME that equals no library name in the image and matches the `sonames` map of `MANIFEST.json`; `auditwheel show` on a throwaway wheel of the tree reports consistency with `manylinux_2_28_<arch>` and no external shared libraries.
+   Then `libgdal` is loaded after the host's `libsqlite3.so.0` and `libcurl.so.4` (what a Python process that imported `sqlite3` looks like): it must load, run on its own SQLite and curl, and not warn that GDAL runs against another curl.
 5. JNI: `JniSmoke` loads `libgdalalljni.so` by absolute path and checks GDAL, OGR (OpenFileGDB) and OSR (EPSG:27700) from the Java classes.
-6. osgeo: the version is the pinned one, `libgdal` is the one in `lib/`, and an OpenFileGDB layer is written and read back.
+6. osgeo: the version is the pinned one, `libgdal` is the one in `lib/`, an OpenFileGDB layer is written and read back, a CP1252 Shapefile is written and read back and a CP932 DBF decodes (iconv), the GRIB driver reports `HAVE_AEC=YES` (CCSDS), and `share/gdal` is found with `GDAL_DATA` in the environment or `PushFinderLocation`, and not without. `JniSmoke` also checks that `share/gdal` is found when `GDAL_DATA` is set before `AllRegister()`.
 7. HTTPS: a local server with a throwaway CA, which the system trust store also trusts (control: the system curl accepts it). Our `/vsicurl/` read is refused without `GDAL_CURL_CA_BUNDLE` (no CA path is compiled into libcurl) and succeeds with it; the libcurl is built on OpenSSL 4 and no system libssl is loaded.
 8. The dev kit: a C program built against `include/` + `lib-dev/` through `pkg-config`, through `gdal-config` and through CMake `find_package(GDAL)`, run with no library path.
 

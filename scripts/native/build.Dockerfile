@@ -72,7 +72,7 @@ RUN --mount=type=bind,source=src,target=/src --mount=type=tmpfs,target=/tmp/gbx-
 
 # ---------- stage-native: the relocatable gdal-native/ tree (written to /stage/gdal-native) ----------
 FROM gdal AS stage-native
-COPY recipes/stage-payload.sh recipes/set-rpath.py /recipes/
+COPY recipes/stage-payload.sh recipes/set-rpath.py recipes/rename-sonames.py /recipes/
 RUN bash /recipes/stage-payload.sh
 
 FROM scratch AS export-stage-native

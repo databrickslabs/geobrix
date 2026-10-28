@@ -31,7 +31,7 @@ usage() {
     echo "  --no-cache  Rebuild every layer (a cold build; the seconds it reports are then the full cost)"
     echo "  --log     Log file (filename -> test-logs/<name>; relative -> under test-logs/; absolute as-is)"
     echo ""
-    echo "Image: geobrix-native-build:<target>-<first 12 of sha256 of scripts/native/pins.conf>-<arch>"
+    echo "Image: geobrix-native-build:<target>-<first 12 of sha256 of pins.conf + the toolchain stage of build.Dockerfile + the files it copies>-<arch>"
     echo "Output: build/native/out/<arch>/<target>/. Sources, wheels and tool binaries are fetched and checksummed on"
     echo "the host first (scripts/native/prefetch.sh). The image build still downloads the Rust toolchain (rustup) and the"
     echo "JDK (dnf); Rust crates build with --network none from vendored sources."
@@ -63,7 +63,16 @@ grep -Eq "^FROM .* AS $TARGET\$" "$DOCKERFILE" || {
     echo "PRECONDITION MISSING: build.Dockerfile has no '$TARGET' stage yet; gbx:build:native not run"; exit 1; }
 
 cd "$PROJECT_ROOT"
-PINS12="$(sha256_of scripts/native/pins.conf | cut -c1-12)"
+# The image tag: first 12 of a sha256 over pins.conf, the toolchain stage of build.Dockerfile and the files that stage copies
+# (so an edit to the toolchain, not only to a pin, makes a new tag and a new toolchain image). Later targets reuse the tag
+# of the toolchain they are built on.
+tag_hash() {
+    {
+        cat scripts/native/pins.conf
+        awk '/^FROM .* AS toolchain$/ {f = 1; next} f && /^FROM / {exit} f' scripts/native/build.Dockerfile
+        cat "scripts/native/build-requirements-$1.txt" scripts/native/cargo-offline.toml rust-toolchain.toml
+    } | { sha256sum 2> /dev/null || shasum -a 256; } | cut -c1-12
+}
 python3 scripts/native/pins.py validate > /dev/null || { python3 scripts/native/pins.py validate; exit 1; }
 
 # A copy-on-write clone where the filesystem has one (APFS, btrfs, xfs), an ordinary copy elsewhere.
@@ -146,16 +155,17 @@ verify_toolchain() {
 
 # gdal-native/ as exported, mounted read-only into the toolchain image with no network: the oracle is verify-native.sh.
 verify_stage_native() {
-    local a="$1" plat="$2" out="$3"
-    echo "== verify $a: $out/gdal-native in geobrix-native-build:toolchain-$PINS12-$a (--network none)"
+    local a="$1" plat="$2" out="$3" h="$4"
+    echo "== verify $a: $out/gdal-native in geobrix-native-build:toolchain-$h-$a (--network none)"
     docker run --rm --network none --platform "$plat" -v "$out/gdal-native:/gdal-native:ro" -v "$PROJECT_ROOT/scripts/native:/verify:ro" \
-        "geobrix-native-build:toolchain-$PINS12-$a" bash /verify/verify-native.sh /gdal-native 2>&1 | tee "$out/verify.txt"
+        "geobrix-native-build:toolchain-$h-$a" bash /verify/verify-native.sh /gdal-native 2>&1 | tee "$out/verify.txt"
 }
 
 build_arch() {
-    local a="$1" plat upper tag out args=() flag kv t0 t1 t2 size
+    local a="$1" plat upper tag out h args=() flag kv t0 t1 t2 size
     case "$a" in x86_64) plat=linux/amd64; upper=X86_64 ;; aarch64) plat=linux/arm64; upper=AARCH64 ;; esac
-    tag="geobrix-native-build:$TARGET-$PINS12-$a"
+    h="$(tag_hash "$a")"
+    tag="geobrix-native-build:$TARGET-$h-$a"
     out="$GBX_NATIVE_BUILD/out/$a/$TARGET"
 
     t0=$(date +%s)
@@ -172,12 +182,12 @@ build_arch() {
     # toolchain-stage change needs `--target toolchain` first. `--build-context toolchain=...` makes the Dockerfile's
     # `FROM toolchain` read that image instead of building the stage again.
     if [ "$TARGET" != toolchain ]; then
-        if ! docker image inspect "geobrix-native-build:toolchain-$PINS12-$a" > /dev/null 2>&1; then
+        if ! docker image inspect "geobrix-native-build:toolchain-$h-$a" > /dev/null 2>&1; then
             echo "== build $a: docker buildx build --target toolchain ($plat; no toolchain image for these pins yet)"
             docker buildx build --platform "$plat" -f "$DOCKERFILE" "${args[@]}" ${NO_CACHE[@]+"${NO_CACHE[@]}"} --target toolchain \
-                -t "geobrix-native-build:toolchain-$PINS12-$a" --load "$GBX_NATIVE_BUILD/ctx/$a"
+                -t "geobrix-native-build:toolchain-$h-$a" --load "$GBX_NATIVE_BUILD/ctx/$a"
         fi
-        args+=(--build-context "toolchain=docker-image://geobrix-native-build:toolchain-$PINS12-$a")
+        args+=(--build-context "toolchain=docker-image://geobrix-native-build:toolchain-$h-$a")
     fi
     echo "== build $a: docker buildx build --target $TARGET ($plat)"
     docker buildx build --platform "$plat" -f "$DOCKERFILE" "${args[@]}" ${NO_CACHE[@]+"${NO_CACHE[@]}"} --target "$TARGET" -t "$tag" --load "$GBX_NATIVE_BUILD/ctx/$a"
@@ -193,7 +203,7 @@ build_arch() {
 
     case "$TARGET" in
         toolchain) verify_toolchain "$a" "$plat" "$tag" ;;
-        stage-native) verify_stage_native "$a" "$plat" "$out" ;;
+        stage-native) verify_stage_native "$a" "$plat" "$out" "$h" ;;
         *) echo "VERIFY FAILED: no verify for target $TARGET"; return 1 ;;
     esac
     echo "NATIVE_VERIFIED arch=$a target=$TARGET total_seconds=$(($(date +%s) - t0)) image=$tag"

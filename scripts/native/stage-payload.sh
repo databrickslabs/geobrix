@@ -1,14 +1,15 @@
 #!/bin/bash
 # stage-payload.sh: turn the build prefix (/opt/gbx-native) into the relocatable tree gdal-native/ at /stage/gdal-native:
-#   lib/        one file per SONAME (a wheel holds no symlinks), RUNPATH $ORIGIN, with libgdalalljni.so; lib/pkgconfig, lib/cmake
-#   lib-dev/    symlinks for linking only (libgdal.so -> ../lib/libgdal.so.39, plus every SONAME); never packaged
+#   lib/        one file per SONAME (a wheel holds no symlinks), RUNPATH $ORIGIN, with libgdalalljni.so; lib/pkgconfig, lib/cmake.
+#               Every library but the JNI has a hashed name (libgdal-<sha256[:8]>.so.39), so it shares no SONAME with a system one
+#   lib-dev/    symlinks for linking only (libgdal.so, libgdal.so.39 and libgdal-<hash>.so.39 -> ../lib/libgdal-<hash>.so.39); never packaged
 #   bin/        gdalinfo ogrinfo projinfo, and gdal-config geos-config nc-config made relocatable
 #   include/    the headers of GDAL, PROJ, GEOS and every library built for them
 #   share/      gdal, proj
 #   java/       gdal-<GDAL_VERSION>.jar
 #   python/     osgeo, osgeo_utils (RUNPATH $ORIGIN/../../lib)
 #   licenses/   one directory per library built from source
-#   MANIFEST.json   versions, revision, arch, driver lists, build seconds, sizes, sha256 of every file
+#   MANIFEST.json   versions, revision, arch, the SONAME map (original -> hashed), driver lists, build seconds, sizes, sha256 of every file
 # Runs in the build container after build-gdal.sh. Every check that can fail prints `STAGE FAILED: <what>` and exits 1.
 set -euo pipefail
 source /recipes/pins.conf
@@ -183,26 +184,12 @@ if left:
     sys.exit("STAGE FAILED: the build prefix is still named in " + ", ".join(sorted(left)))
 PYEOF
 
-# --- lib-dev/: the linker names. Symlinks, so they are not part of lib/ and not packaged.
-$PY - "$OUT" <<'PYEOF'
-import os, sys
-out = sys.argv[1]
-n = 0
-for name in sorted(os.listdir(os.path.join(out, "lib"))):
-    if ".so" not in name or not os.path.isfile(os.path.join(out, "lib", name)):
-        continue
-    for link in {name, name.split(".so")[0] + ".so"}:
-        dst = os.path.join(out, "lib-dev", link)
-        if not os.path.lexists(dst):
-            os.symlink("../lib/" + name, dst)
-            n += 1
-print(f"lib-dev: {n} links")
-PYEOF
-
-# --- strip, then RUNPATH relative to lib/ for every ELF file (set-rpath.py fails on any it cannot set)
+# --- strip, then hashed SONAMEs (rename-sonames.py also rebuilds lib-dev/), then RUNPATH relative to lib/ for every ELF
+# file (set-rpath.py fails on any it cannot set). The hash is taken from the stripped bytes.
 while IFS= read -r f; do
     if head -c 4 "$f" | grep -q 'ELF'; then strip --strip-unneeded "$f"; fi
 done < <(find "$OUT/lib" "$OUT/bin" "$OUT/python" -type f)
+$PY /recipes/rename-sonames.py --tree "$OUT" --map-out /stage/sonames.json
 $PY /recipes/set-rpath.py --tree "$OUT" --tree-at gdal-native --lib-at gdal-native/lib
 
 # --- MANIFEST.json (last: it records the final bytes)
@@ -211,6 +198,7 @@ import hashlib, json, os, re, subprocess, sys
 
 out = sys.argv[1]
 env = {"PATH": os.environ["PATH"]}
+renamed = json.load(open(os.path.join(os.path.dirname(out), "sonames.json")))
 
 def pins():
     d = {}
@@ -260,6 +248,8 @@ manifest = {
     "arch": os.uname().machine,
     "baseline": "manylinux_2_28",
     "versions": versions,
+    "sonames": renamed["sonames"],
+    "jni": renamed["jni"],
     "drivers": {
         "raster_count": len(raster), "vector_count": len(vector),
         "raster": raster, "vector": vector,

@@ -23,7 +23,8 @@ cp LICENSE.TXT "$P/share/licenses/gdal/"
 known="$(grep -rhoiE 'gdal_check_package\( *[A-Za-z0-9_]+' --include=CMakeLists.txt --include='*.cmake' . | sed -E 's/.*\( *//' | tr 'a-z' 'A-Z' | sort -u)"
 
 opts=(-DGDAL_USE_EXTERNAL_LIBS=OFF)
-for x in ZLIB DEFLATE ZSTD LIBLZMA LZ4 BLOSC PNG JPEG WEBP LERC TIFF GEOTIFF SQLITE3 CURL OPENSSL EXPAT OPENJPEG HDF5 NETCDF GEOS; do
+# ICONV is glibc's iconv (no library is linked): Shapefile/DBF code pages need it. LIBAEC adds CCSDS to GRIB (libaec is already built for HDF5)
+for x in ZLIB DEFLATE ZSTD LIBLZMA LZ4 BLOSC PNG JPEG WEBP LERC TIFF GEOTIFF SQLITE3 CURL OPENSSL EXPAT OPENJPEG HDF5 NETCDF GEOS ICONV LIBAEC; do
     opts+=("-DGDAL_USE_$x=ON")
 done
 for x in POPPLER PODOFO PDFIUM SPATIALITE MYSQL ODBC FILEGDB ECW MRSID KDU LURATECH OCI HEIF SFCGAL; do

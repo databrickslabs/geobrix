@@ -16,7 +16,7 @@ def test_predictor_for_dtype():
 
 def test_auto_level_scales_down_with_size():
     # New ladder: ≤128 MiB → L6, ≤1 GiB → L3, >1 GiB → L1
-    # Grounded by .superpowers/sdd/2026-09-10-grid-fidelity-stage3/followup-compression-matrix-report.md:
+    # Grounded by a ZSTD level sweep across 11 tile types (see the ladder in compression.py):
     # L6 is the universal knee; L9/L12 add nothing; L16 often regresses.
     small = C.auto_level(1 * 1024**2)  # 1 MiB -> L6 (<=128 MiB)
     mid = C.auto_level(200 * 1024**2)  # 200 MiB -> L3 (<=1 GiB)

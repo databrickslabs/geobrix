@@ -1,8 +1,5 @@
 """Coverage-param engine tests (0.5.1 re-cut) — the LIGHT-ENGINE correctness heart.
 
-Locked design: .superpowers/specs/2026-09-14-geom-aware-boundary-perimeter-fix.md
-("COVERAGE PARAM — LOCKED").
-
 Three classify bases per region P/S/H:
   - cover    (``*_cover``)    — overlap                       -> coverage="coveras" (DEFAULT)
   - centroid (``*_centroid``) — cell centroid inside region   -> coverage="polyfill"

@@ -10,8 +10,8 @@ import warnings
 _FLOAT = {"float32", "float64"}
 _SMALL_INT = {"uint8", "int8"}
 
-# Grounded by .superpowers/sdd/2026-09-10-grid-fidelity-stage3/followup-compression-matrix-report.md
-# (full ZSTD level sweep across 11 tile types, rasterio 1.5.0/GDAL 3.12, Darwin arm64).
+# Grounded by a full ZSTD level sweep across 11 tile types (rasterio 1.5.0/GDAL 3.12,
+# Darwin arm64).
 #
 # Key finding: L6 is the universal knee.
 #   - L9 and L12 add nothing over L6 on output size for any tile type tested.

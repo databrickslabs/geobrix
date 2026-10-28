@@ -124,6 +124,32 @@ def test_combine_max_all_nodata_pixel_gets_nodata():
     assert r[2] == pytest.approx(ND, abs=TOL)
 
 
+def test_combine_max_holds_a_few_tiles_not_the_stack():
+    """Peak allocation does not grow with the number of tiles: a running max, not np.stack of all N."""
+    import tracemalloc
+
+    rng = np.random.default_rng(0)
+    side, n = 256, 48
+    profile = dict(
+        driver="GTiff", width=side, height=side, count=1, dtype="float32",
+        crs="EPSG:4326", transform=from_origin(0.0, 1.0, 0.001, 0.001), nodata=ND,
+    )  # fmt: skip
+    rasters = []
+    for _ in range(n):
+        with MemoryFile() as mf:
+            with mf.open(**profile) as ds:
+                ds.write(rng.random((1, side, side)).astype("float32"))
+            rasters.append(mf.read())
+    tracemalloc.start()
+    try:
+        agg.combine_max_tiles(rasters)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    one_tile = side * side * 4
+    assert peak < 12 * one_tile, f"peak {peak / 2**20:.1f} MiB for {n} tiles"
+
+
 # ---------------------------------------------------------------------------
 # sum
 # ---------------------------------------------------------------------------

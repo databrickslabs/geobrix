@@ -910,11 +910,72 @@ def _require_aligned(datasets, func_name: str) -> None:
             )
 
 
+# min and max fold one tile at a time into a running value; the others need the whole stack.
+_RUNNING_STATS = {"min": (np.inf, np.minimum), "max": (-np.inf, np.maximum)}
+
+
+def _running_stat(datasets, nodatas, stat: str, fallback) -> np.ndarray:
+    """min or max over the tiles, one tile in memory at a time (plus the running value and count).
+
+    float32 like the stacked reduction, so the values are the same; NaN propagates as it does there.
+    """
+    init, op = _RUNNING_STATS[stat]
+    acc = counts = None
+    for ds, nd in zip(datasets, nodatas):
+        arr = ds.read().astype("float32")  # (bands, h, w)
+        valid = np.ones(arr.shape, dtype=bool) if nd is None else arr != nd
+        if acc is None:
+            acc = np.full(arr.shape, init, dtype="float32")
+            counts = np.zeros(arr.shape, dtype="int64")
+        acc = op(acc, np.where(valid, arr, np.float32(init)))
+        counts += valid
+    return np.where(counts > 0, acc.astype("float64"), fallback)
+
+
+def _stacked_stat(datasets, nodatas, stat: str, fallback) -> np.ndarray:
+    """sum, count, median or stddev over the whole stack of tiles (N, bands, h, w)."""
+    # sum/stddev/median need float64 precision to avoid accumulation error; count is exact in float32.
+    _ACCUM_STATS = {"sum", "stddev", "median"}
+    stack_dtype = "float64" if stat in _ACCUM_STATS else "float32"
+    # Stack: (N, bands, h, w) — mirrors in_ar layout in the VRT pixel function.
+    stacked = np.stack([ds.read().astype(stack_dtype) for ds in datasets], axis=0)
+
+    # Build per-tile validity mask: (N, bands, h, w).
+    valid = np.ones(stacked.shape, dtype=bool)
+    for i, nd in enumerate(nodatas):
+        if nd is not None:
+            valid[i] = stacked[i] != nd
+
+    counts = valid.sum(axis=0)  # (bands, h, w)
+    masked = np.ma.masked_array(stacked, mask=~valid)
+
+    if stat == "sum":
+        raw_stat = masked.sum(axis=0)
+    elif stat == "count":
+        # count = number of valid inputs; all-NoData pixel -> NoData (not 0).
+        raw_stat = counts.astype("float64")
+    elif stat == "median":
+        raw_stat = np.ma.median(masked, axis=0)  # mean-of-two on even count
+    elif stat == "stddev":
+        raw_stat = masked.std(axis=0)  # population std, ddof=0
+    else:
+        raise ValueError(
+            f"_combine_stat_tiles: unsupported stat '{stat}'; "
+            "expected one of: min, max, sum, count, median, stddev"
+        )
+
+    # Fill masked/NoData cells with the fallback sentinel.
+    filled = np.ma.filled(np.ma.asarray(raw_stat, dtype="float64"), fallback)
+    # All-NoData pixels (counts==0) → fallback.
+    return np.where(counts > 0, filled, fallback)
+
+
 def _combine_stat_tiles(rasters: List[bytes], stat: str) -> bytes:
     """Per-pixel ``stat`` across aligned tiles, excluding NoData (GTiff bytes).
 
-    Mirrors CombineStats.compute (Scala): stacks all N tile arrays then applies
-    the masked reduction per-pixel per-band. Output dtype is preserved from the
+    Mirrors CombineStats.compute (Scala): the masked reduction per-pixel per-band. min and max fold
+    one tile at a time into a running value (memory is about four tiles, however many there are);
+    sum, count, median and stddev stack all N tile arrays. Output dtype is preserved from the
     first input tile; integer output is rounded via np.rint before the cast (same
     as the heavy VRT pixel function's `np.copyto(out_ar, np.rint(result), casting='unsafe')`).
 
@@ -935,65 +996,12 @@ def _combine_stat_tiles(rasters: List[bytes], stat: str) -> bytes:
         out_dtype = ref.dtypes[0]
         ref_profile = _comp.drop_ycbcr(ref.profile)
 
-        # Collect per-tile NoData values and per-band arrays.
-        # min/max/count don't accumulate, so float32 decode is safe and faster.
-        # sum/stddev/median need float64 precision to avoid accumulation error.
-        _ACCUM_STATS = {"sum", "stddev", "median"}
-        stack_dtype = "float64" if stat in _ACCUM_STATS else "float32"
+        nodatas = [ds.nodata for ds in datasets]  # header values, no pixel read
+        any_nodata = any(nd is not None for nd in nodatas)
+        fallback = next((nd for nd in nodatas if nd is not None), 0.0)
 
-        nodatas = []
-        tile_arrays = []
-        any_nodata = False
-        fallback = None
-
-        for ds in datasets:
-            nd = ds.nodata
-            arr = ds.read().astype(stack_dtype)  # (bands, h, w)
-            tile_arrays.append(arr)
-            nodatas.append(nd)
-            if nd is not None:
-                any_nodata = True
-                if fallback is None:
-                    fallback = nd
-
-        if fallback is None:
-            fallback = 0.0
-
-        # Stack: (N, bands, h, w) — mirrors in_ar layout in the VRT pixel function.
-        stacked = np.stack(tile_arrays, axis=0)
-
-        # Build per-tile validity mask: (N, bands, h, w).
-        valid = np.ones(stacked.shape, dtype=bool)
-        for i, nd in enumerate(nodatas):
-            if nd is not None:
-                valid[i] = stacked[i] != nd
-
-        counts = valid.sum(axis=0)  # (bands, h, w)
-        masked = np.ma.masked_array(stacked, mask=~valid)
-
-        if stat == "min":
-            raw_stat = masked.min(axis=0)
-        elif stat == "max":
-            raw_stat = masked.max(axis=0)
-        elif stat == "sum":
-            raw_stat = masked.sum(axis=0)
-        elif stat == "count":
-            # count = number of valid inputs; all-NoData pixel -> NoData (not 0).
-            raw_stat = counts.astype("float64")
-        elif stat == "median":
-            raw_stat = np.ma.median(masked, axis=0)  # mean-of-two on even count
-        elif stat == "stddev":
-            raw_stat = masked.std(axis=0)  # population std, ddof=0
-        else:
-            raise ValueError(
-                f"_combine_stat_tiles: unsupported stat '{stat}'; "
-                "expected one of: min, max, sum, count, median, stddev"
-            )
-
-        # Fill masked/NoData cells with the fallback sentinel.
-        filled = np.ma.filled(np.ma.asarray(raw_stat, dtype="float64"), fallback)
-        # All-NoData pixels (counts==0) → fallback.
-        result = np.where(counts > 0, filled, fallback)
+        reduce = _running_stat if stat in _RUNNING_STATS else _stacked_stat
+        result = reduce(datasets, nodatas, stat, fallback)
 
         # Dtype preservation + integer rounding (matches heavy tier exactly).
         if np.issubdtype(np.dtype(out_dtype), np.integer):

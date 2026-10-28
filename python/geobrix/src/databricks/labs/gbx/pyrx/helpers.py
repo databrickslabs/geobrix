@@ -393,27 +393,33 @@ def _out_schema(df: DataFrame, keys: Sequence[str]) -> StructType:
     )
 
 
-def _decoded_bytes(tile) -> int:
-    """Decoded size of a virtual tile's window, from its header."""
+def _decoded_size(ds) -> int:
+    """Decoded bytes of an open raster, from its header."""
     import numpy as np
 
+    return (
+        int(ds.count)
+        * int(ds.width)
+        * int(ds.height)
+        * int(np.dtype(ds.dtypes[0]).itemsize)
+    )
+
+
+def _decoded_bytes(tile) -> int:
+    """Decoded size of a virtual tile's window, from its header."""
     from databricks.labs.gbx.pyrx.core import open_tile as ot
 
     with ot.open_header(tile) as ds:
-        return (
-            int(ds.count)
-            * int(ds.width)
-            * int(ds.height)
-            * int(np.dtype(ds.dtypes[0]).itemsize)
-        )
+        return _decoded_size(ds)
 
 
-def _tile_member(tile, cap_bytes: int):
+def _tile_member(tile, cap_bytes: int, decoded_budget: int, fix: str):
     """The raster bytes of one group member; None for a member the aggregates leave out.
 
     A NULL tile, an empty or error tile (no raster, no path) and bytes that do not open are dropped,
     as ``gbx_rst_merge_agg`` and ``gbx_rst_combineavg_agg`` drop them. A virtual member is decoded
-    here, under the materialize cap.
+    here, under the materialize cap. Every member's decoded size, from its header, must fit the
+    decoded-tile budget, for bytes already in the row as much as for a path: the fold decodes it.
     """
     from databricks.labs.gbx.ds.file_gbx import materialize_decision
     from databricks.labs.gbx.pyrx import _serde
@@ -433,10 +439,15 @@ def _tile_member(tile, cap_bytes: int):
     if candidate is None:
         return None
     try:
-        with _serde.open_tile(candidate):
-            pass
+        with _serde.open_tile(candidate) as ds:
+            size = _decoded_size(ds)
     except Exception:  # noqa: BLE001 - dropped, as the aggregates drop it
         return None
+    if size > decoded_budget:
+        raise ValueError(
+            f"a member tile is {size / 2**20:.1f} MiB decoded, over the "
+            f"{decoded_budget / 2**20:.0f} MiB tile budget of this session. Fix: {fix}"
+        )
     return candidate
 
 
@@ -503,7 +514,8 @@ def _group_stream(
                 if held > group_budget:
                     raise ValueError(
                         f"the tiles for key {current!r} hold more than "
-                        f"{group_budget / 2**20:.0f} MiB, the tile budget of this session. Fix: {fix}"
+                        f"{group_budget / 2**20:.0f} MiB of encoded bytes, the cap for a group of "
+                        f"tiles in this session. Fix: {fix}"
                     )
                 members.append(item)
     if started:
@@ -517,9 +529,9 @@ def _cap_bytes(df: DataFrame) -> int:
     return _connect_aware_lru_sizing(df.sparkSession)[0]
 
 
-def _group_budget(df: DataFrame) -> int:
-    """The bytes of member tiles one key may hold: the canonical decoded-tile budget (64 MiB on
-    Serverless and Connect, 1.5 GiB on classic), taken on the driver."""
+def _decoded_budget(df: DataFrame) -> int:
+    """The decoded-tile budget (64 MiB on Serverless and Connect, 1.5 GiB on classic): what one
+    member may decode to. Taken on the driver."""
     from databricks.labs.gbx.manager.capabilities import is_connect
     from databricks.labs.gbx.pyrx.core.budget import decoded_budget_bytes
 
@@ -529,11 +541,24 @@ def _group_budget(df: DataFrame) -> int:
 _FIX_SPLIT = (
     "split the key so each group is smaller (add a sub-key, such as a spatial block)"
 )
+_FIX_CUT = "cut the tiles smaller first (retile_virtual)"
 
 
-def _fold_by_key(df, keys, tile_col, num_partitions, finish, fix=_FIX_SPLIT):
-    """Shuffle (keys, tile) by the keys and fold each group once with `finish(list of GTiff bytes)`."""
-    cap, budget = _cap_bytes(df), _group_budget(df)
+def _fold_by_key(
+    df,
+    keys,
+    tile_col,
+    num_partitions,
+    finish,
+    fix_group=_FIX_SPLIT,
+    fix_member=_FIX_CUT,
+):
+    """Shuffle (keys, tile) by the keys and fold each group once with `finish(list of GTiff bytes)`.
+
+    A key's members may hold the materialize cap in encoded bytes (64 MiB on Serverless and Connect,
+    256 MiB on classic); each member's decoded size must fit the decoded-tile budget.
+    """
+    cap, decoded = _cap_bytes(df), _decoded_budget(df)
     shuffled = _sorted_by_key(df.select(*keys, tile_col), keys, num_partitions)
 
     def run(batches):
@@ -541,11 +566,11 @@ def _fold_by_key(df, keys, tile_col, num_partitions, finish, fix=_FIX_SPLIT):
             batches,
             keys,
             tile_col,
-            lambda tile: _tile_member(tile, cap),
+            lambda tile: _tile_member(tile, cap, decoded, fix_member),
             finish,
             cap,
-            budget,
-            fix,
+            cap,
+            fix_group,
         )
 
     return shuffled.mapInArrow(run, _out_schema(df, keys))
@@ -616,13 +641,15 @@ def merge_by_key(
     member whose encoded GeoTIFF bytes sort last win, as the aggregate does, and ``vrt`` lets the
     last path in sorted order win: the aggregate's order comes from the decoded, re-encoded tiles, which this
     method never reads, so it cannot follow it. The ``vrt`` result is a COG (DEFLATE, with overviews;
-    BigTIFF only when it could pass 4 GiB), where ``fold`` gives a plain zstd GeoTIFF. Use ``fold`` where
-    the aggregate's winner matters.
+    a BigTIFF from about 2 GiB uncompressed, GDAL's ``IF_SAFER`` rule), where ``fold`` gives a plain
+    zstd GeoTIFF. Use ``fold`` where the aggregate's winner matters.
 
-    A key's members may hold the session's tile budget (``decoded_budget_bytes``: 64 MiB on Serverless
-    and Connect, 1.5 GiB on classic) in encoded bytes; a bigger group stops the query with a ``Fix:``
-    to split the key. The Arrow batches that carry the rows are sized by Spark and held in memory
-    besides.
+    For ``fold``, a key's members may hold the materialize cap in encoded bytes (64 MiB on Serverless
+    and Connect, 256 MiB on classic), and each member's decoded size, from its header, must fit the
+    decoded-tile budget (``decoded_budget_bytes``: 64 MiB on Serverless and Connect, 1.5 GiB on
+    classic), for tiles with bytes as much as for paths. Over either, the query stops with a ``Fix:``
+    to split the key, cut the tiles smaller, or use ``method='vrt'``. The Arrow batches that carry the
+    rows are sized by Spark and held in memory besides.
 
     Args:
         df: a DataFrame with the key columns and a tile column.
@@ -646,9 +673,10 @@ def merge_by_key(
             n,
             agg_core.merge_tiles,
             _FIX_SPLIT + ", or use method='vrt', which reads paths only",
+            _FIX_CUT + ", or use method='vrt', which reads paths only",
         )
     t = F.col(tile_col)
-    cap, budget = _cap_bytes(df), _group_budget(df)
+    cap = _cap_bytes(df)
     paths = _sorted_by_key(
         _require_virtual(df, tile_col, "merge_by_key(method='vrt')").select(
             *keys,
@@ -683,7 +711,7 @@ def merge_by_key(
             member,
             lambda members: _vrt_mosaic(members, cap),
             cap,
-            budget,
+            cap,
             _FIX_SPLIT,
             weigh=lambda m: 0,  # paths only: no tile bytes are held
         )
@@ -707,10 +735,11 @@ def combine_by_key(
     time, and the result encoded once. A member that is NULL, an error tile or unreadable is left
     out; a group with no usable member gets a NULL raster.
 
-    A key's members may hold the session's tile budget (``decoded_budget_bytes``: 64 MiB on Serverless
-    and Connect, 1.5 GiB on classic) in encoded bytes; a bigger group stops the query with a ``Fix:``
-    to split the key. The Arrow batches that carry the rows (Spark caps them at 256 MiB) are held in
-    memory besides.
+    A key's members may hold the materialize cap in encoded bytes (64 MiB on Serverless and Connect,
+    256 MiB on classic), and each member's decoded size, from its header, must fit the decoded-tile
+    budget (``decoded_budget_bytes``: 64 MiB on Serverless and Connect, 1.5 GiB on classic). Over
+    either, the query stops with a ``Fix:`` to split the key or cut the tiles smaller. The Arrow
+    batches that carry the rows (Spark caps them at 256 MiB) are held in memory besides.
 
     Args:
         df: a DataFrame with the key columns and a tile column.

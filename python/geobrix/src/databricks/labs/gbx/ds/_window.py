@@ -55,8 +55,9 @@ def window_for_bbox(
         )
     win = _from_bounds(minx, miny, maxx, maxy, transform=src.transform)
     # Whole-pixel coverage of the bbox, then clip to the dataset extent. Both edges snap outward: the
-    # far edge is the CEIL of (offset + length). Ceiling the length instead would end a pixel short
-    # whenever the offset's and the length's fractions add up past 1, and drop the bbox's far-edge
+    # near edge to the FLOOR of the offset and the far edge to the CEIL of (offset + length).
+    # rasterio's round_offsets / round_lengths (1.5) ignore `op` and round to nearest, which started
+    # the window up to a pixel late and ended it up to two pixels early, dropping the bbox's edge
     # pixels (2 to 3% of an unaligned source). `_EDGE_EPS` keeps a bbox that lies on a pixel edge
     # from growing a pixel by float noise.
     col0 = math.floor(win.col_off + _EDGE_EPS)

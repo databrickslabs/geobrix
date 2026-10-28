@@ -39,15 +39,27 @@ def _frame(spark, tmp_path, name):
     )
 
 
-def test_a_group_over_the_tile_budget_stops_the_fold(spark, tmp_path, monkeypatch):
-    """The members a key holds are bounded by the canonical tile budget, before the fold copies them."""
+def test_a_group_over_the_materialize_cap_stops_the_fold(spark, tmp_path, monkeypatch):
+    """A key's members (their encoded bytes, 2.2 KB here) are bounded by the materialize cap, before
+    the fold copies them; each member alone (about 0.6 KB) fits."""
+    from databricks.labs.gbx.pyrx import helpers
+
+    monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "1500")  # the cap is read on the driver
+    with pytest.raises(Exception, match="split the key"):
+        helpers.merge_by_key(_frame(spark, tmp_path, "quad_tiles"), ["key"]).collect()
+
+
+def test_a_member_that_decodes_over_the_tile_budget_stops_the_fold(
+    spark, tmp_path, monkeypatch
+):
+    """A member's decoded size comes from its header, also when its bytes are already in the row."""
     from databricks.labs.gbx.pyrx import helpers
 
     monkeypatch.setattr(
         "databricks.labs.gbx.pyrx.core.budget.decoded_budget_bytes",
-        lambda strategy: 100,
+        lambda strategy: 100,  # a 16x16 float32 member decodes to 1 KB
     )
-    with pytest.raises(Exception, match="split the key"):
+    with pytest.raises(Exception, match="MiB decoded, over the"):
         helpers.merge_by_key(_frame(spark, tmp_path, "quad_tiles"), ["key"]).collect()
 
 

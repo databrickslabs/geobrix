@@ -3,19 +3,22 @@
 Reads the two built wheels (``gbx:build:wheel --env 5`` and ``--env 6``) as zip files: the metadata
 against ``python/geobrix/envs/envN``, the tripwire extras, both architectures' payload, the JAR,
 the startup activation at the wheel root, the build record, the licence guard on every library
-name, and that the native payload is byte-identical in the two wheels (one payload, OD-35).
+name, Requires-Python 3.12 only (NP-10), one zip timestamp for every member (SOURCE_DATE_EPOCH: the
+build is deterministic), and that the native payload is byte-identical in the two wheels (OD-35).
 """
 
 import base64
 import hashlib
 import json
 import re
+import time
 import zipfile
 from email.parser import Parser
 from pathlib import Path
 
 import pytest
 from packaging.requirements import Requirement
+from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 
 REPO = Path(__file__).resolve().parents[4]
@@ -77,6 +80,9 @@ def _check_one(env, zf):
         zf.read(f"geobrix-{v}+env{env}.dist-info/METADATA").decode()
     )
     assert meta["Version"] == f"{v}+env{env}"
+    assert SpecifierSet(meta["Requires-Python"]) == SpecifierSet(
+        ">=3.12,<3.13"
+    )  # NP-10
 
     unmarked, by_extra = set(), {}
     for line in meta.get_all("Requires-Dist") or []:
@@ -121,6 +127,11 @@ def _check_one(env, zf):
     build_info = {}
     exec(zf.read(f"{PKG}/_build_info.py").decode(), build_info)
     assert build_info["ENV"] == env and build_info["VERSION"] == f"{v}+env{env}"
+    # Deterministic: every member carries SOURCE_DATE_EPOCH (HEAD's commit time), as wheel writes it
+    # (UTC, seconds rounded down to even), so one tree gives one sha256.
+    t = time.gmtime(build_info["SOURCE_DATE_EPOCH"])[:6]
+    stamp = (*t[:5], t[5] - t[5] % 2)
+    assert {i.date_time for i in zf.infolist()} == {stamp}
 
     libs = [n for n in names if re.search(r"\.so(\.|$)", n.rsplit("/", 1)[-1])]
     assert libs and not [n for n in libs if BANNED.search(n.rsplit("/", 1)[-1])]

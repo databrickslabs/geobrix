@@ -15,22 +15,21 @@ Layout under the payload root (``databricks/labs/gbx/`` in an installed env whee
 
 ``<arch>`` is ``x86_64`` or ``aarch64`` (``platform.machine()``). The bindings are served under
 their public import names (NP-1): activation puts ``_vendor/<arch>`` and then ``_vendor/common``
-at the front of ``sys.path``. It runs at interpreter start through ``geobrix-native.pth``
+just before the first site-packages entry of ``sys.path`` (after the standard library, ahead of
+every installed package). It runs at interpreter start through ``geobrix-native.pth``
 (``_gbx_native_path``) and again at ``import databricks.labs.gbx`` (NP-2's fallback, for an
-environment where ``.pth`` files are not processed); the second run changes nothing.
+environment where ``.pth`` files are not processed); the second run changes nothing. Both apply
+the one set of rules in ``_native/_rules.py``: where the payload can load (Linux, x86_64 or
+aarch64, CPython 3.12), the ``sys.path`` position, ``GDAL_DATA``/``PROJ_DATA`` (never over a
+user's value, nor ``PROJ_DATA`` over a user's ``PROJ_LIB``) and the CA bundle our curl uses (it
+has no compiled-in CA path): a user's ``GDAL_CURL_CA_BUNDLE``/``PROJ_CURL_CA_BUNDLE`` is never
+touched; otherwise they get the user's ``CURL_CA_BUNDLE`` or ``SSL_CERT_FILE``, else the system
+store (where Databricks admins add corporate CAs), else certifi's (this import-time activation
+only). ``CURL_CA_BUNDLE`` itself is never set.
 
-Activation also sets, in ``os.environ`` and only where the user has set nothing:
-``GDAL_DATA`` and ``PROJ_DATA`` (GDAL fixes its data search path at a thread's first lookup, so
-only the environment before the first binding import reaches every thread), and the CA bundle
-our curl uses (it has no compiled-in CA path): ``GDAL_CURL_CA_BUNDLE`` unless one of
-``GDAL_CURL_CA_BUNDLE``, ``CURL_CA_BUNDLE``, ``SSL_CERT_FILE`` is set, and ``PROJ_CURL_CA_BUNDLE``
-unless one of ``PROJ_CURL_CA_BUNDLE``, ``CURL_CA_BUNDLE``, ``SSL_CERT_FILE`` is set. The bundle is
-the system store (where Databricks admins add corporate CAs), else certifi's. ``CURL_CA_BUNDLE``
-itself is never set: every curl user in the process reads it.
-
-Nothing is activated off Linux, on another architecture, or with ``GBX_NATIVE_DISABLE=1``; then
-the bindings come from wherever pip installed them. ``GBX_NATIVE_PTH=0`` skips only the startup
-(``.pth``) activation.
+Nothing is activated off Linux, on another architecture or interpreter, or with
+``GBX_NATIVE_DISABLE=1``; then the bindings come from wherever pip installed them.
+``GBX_NATIVE_PTH=0`` skips only the startup (``.pth``) activation.
 """
 
 import glob
@@ -41,17 +40,10 @@ import re
 import sys
 from typing import List, Optional
 
-_ARCHES = ("x86_64", "aarch64")
-_SYSTEM_CA = [
-    "/etc/ssl/certs/ca-certificates.crt",  # Debian / Ubuntu (Databricks runtimes)
-    "/etc/pki/tls/certs/ca-bundle.crt",  # RHEL / AlmaLinux
-    "/etc/ssl/cert.pem",
-]
-# The CA variables each library reads, highest precedence first (GDAL cpl_http, PROJ filemanager).
-_CA_READERS = {
-    "GDAL_CURL_CA_BUNDLE": ("GDAL_CURL_CA_BUNDLE", "CURL_CA_BUNDLE", "SSL_CERT_FILE"),
-    "PROJ_CURL_CA_BUNDLE": ("PROJ_CURL_CA_BUNDLE", "CURL_CA_BUNDLE", "SSL_CERT_FILE"),
-}
+from databricks.labs.gbx._native import _rules
+
+_ARCHES = _rules.ARCHES
+_SYSTEM_CA = list(_rules.SYSTEM_CA)
 _activated_by: Optional[str] = None
 
 
@@ -80,17 +72,15 @@ def native_dir(
     return d if d and os.path.isdir(os.path.join(d, "lib")) else None
 
 
+def _certifi() -> str:
+    import certifi
+
+    return certifi.where()
+
+
 def ca_bundle(candidates: Optional[List[str]] = None) -> Optional[str]:
     """The system CA store (Databricks runtimes are Ubuntu; admins add corporate CAs there), else certifi."""
-    for p in _SYSTEM_CA if candidates is None else candidates:
-        if os.path.isfile(p):
-            return p
-    try:
-        import certifi
-
-        return certifi.where()
-    except ImportError:
-        return None
+    return _rules.ca_for({}, _SYSTEM_CA if candidates is None else candidates, _certifi)
 
 
 def activate(
@@ -101,26 +91,13 @@ def activate(
     Returns False (and changes nothing) where the payload cannot load.
     """
     global _activated_by
-    if os.environ.get("GBX_NATIVE_DISABLE") == "1":
+    a = arch(machine)
+    if a is None:
         return False
-    d = native_dir(root, machine)
-    if d is None:
+    if not _rules.activate(
+        root or payload_root(), a, candidates=_SYSTEM_CA, fallback=_certifi
+    ):
         return False
-    r, a = root or payload_root(), arch(machine)
-    for p in (os.path.join(r, "_vendor", "common"), os.path.join(r, "_vendor", a)):
-        if os.path.isdir(p) and p not in sys.path:
-            sys.path.insert(0, p)
-    share = os.path.join(r, "_native", "share")
-    os.environ.setdefault("GDAL_DATA", os.path.join(share, "gdal"))
-    os.environ.setdefault("PROJ_DATA", os.path.join(share, "proj"))
-    unset = [
-        k
-        for k, readers in _CA_READERS.items()
-        if not any(os.environ.get(n) for n in readers)
-    ]
-    ca = ca_bundle() if unset else None
-    for k in unset if ca else ():
-        os.environ[k] = ca
     if _activated_by is None:
         startup = getattr(sys.modules.get("_gbx_native_path"), "ACTIVE", False)
         _activated_by = "pth" if startup else by

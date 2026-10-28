@@ -1,0 +1,10 @@
+# What the env6 runtimes (DBR 19, Serverless environment 6) preinstall, for the packages core.txt
+# bounds and the vendored packages need. Exact versions. gbx:build:wheel checks every core.txt range
+# and every vendored package's requirement against them, and the --verify install uses them as
+# constraints (the runtime's base, offline).
+numpy==2.3.4
+pandas==2.3.3
+pyarrow==21.0.0
+scipy==1.16.3
+protobuf==6.33.5
+click==8.2.1

@@ -8,27 +8,34 @@ setuptools and `wheel` are the hashed build requirements. No container lock (no 
 Inputs:
   build/native/out/<arch>/stage-native/gdal-native/  GDAL and the libraries it needs, MANIFEST.json (N3)
   build/native/out/<arch>/bindings/{vendor,wheels}/   the five bindings built against it (N4)
-  python/geobrix/envs/env<N>/                         core.txt, extra-*.txt, vendor-pure.txt
+  python/geobrix/envs/env<N>/                         core.txt, extra-*.txt, vendor-pure.txt, base.txt
   python/geobrix/envs/pyproject.env.toml              the env wheels' pyproject (ruling NP-3)
   --vendor-pure <dir>  the vendor-pure.txt wheels, fetched and hash-checked on the host by the command
   --jar <path>         the GeoBrix JAR (shipped in _jar/, spec 3.6)
   --extra-payload <d>  a tree merged into the payload, only under _native/<arch>/ (the Rust kernels:
                        _native/<arch>/rs/_gbxrs.abi3.so); repeatable
+  --allow-dirty        build although the inputs have uncommitted changes (GIT_DIRTY = True)
+
+Before any step: the inputs exist, Docker runs and both toolchain images are there, and the inputs
+under git (the package source, the env files, scripts/native) have no uncommitted change (else
+`--allow-dirty`), so the wheel's GIT_SHA says what it was built from.
 
 Steps (each prints `== <n> ...`; a failure prints `BUILD FAILED: <what>`, a missing input
 `PRECONDITION MISSING: <what>`, and exits 1):
   1 a scratch tree: the package source, the template pyproject plus the extras and tripwires,
     env/ (the env files), and __version__ stamped `<version>+env<N>` (exactly one replacement);
   2 _build_info.py: ENV, VERSION, the GDAL/PROJ/GEOS versions from MANIFEST.json, the native
-    revision, the git sha;
+    revision, the git sha, whether the tree was dirty, SOURCE_DATE_EPOCH;
   3 the payload per architecture: _native/<arch>/lib (no pkgconfig/cmake, no symlinks) and
     MANIFEST.json, _native/share and _native/licenses (identical for both architectures, or fail),
     _vendor/<arch>, the extra payload, _jar/;
   4 the vendored pure-Python wheels into _vendor/common without their dist-info (licences to
     _vendor/licenses); every Requires-Dist of a vendored package must be another vendored package
-    (at a version it accepts), a core.txt name, or click;
-  5 python -m build --wheel --no-isolation;
-  6 wheel unpack, add geobrix-native.pth (`import _gbx_native_path`), wheel pack;
+    at a version it accepts, or a core.txt name whose base version (base.txt) or floor it accepts
+    and whose cap is no higher than its own, or click at the base version;
+  5 python -m build --wheel --no-isolation, with SOURCE_DATE_EPOCH = HEAD's commit time;
+  6 wheel unpack, add geobrix-native.pth (`import _gbx_native_path`), wheel pack (same epoch, so the
+    same tree gives the same bytes);
   7 verify the wheel (metadata against the env files, the payload, the JAR, the licence guard, the
     URLs in the metadata, the size) and extract its payload to build/env-wheel/env<N>/payload/,
     the GBX_NATIVE_ROOT layout;
@@ -36,11 +43,18 @@ Steps (each prints `== <n> ...`; a failure prints `BUILD FAILED: <what>`, a miss
     throwaway wheel of _native/<arch> + _vendor/<arch> is consistent with manylinux_2_28_<arch> and
     names no external library (the closure check of the payload as packed).
 Only then the wheel goes to dist/env<N>/, which keeps no other wheel.
+
+`--verify <arch>` builds nothing: it installs dist/env<N>'s wheel in a fresh offline venv in that
+architecture's toolchain image and runs scripts/native/check-env-wheel.sh (the install, the .pth and
+import-time activation, the CA rule, the tripwire, Python 3.11, and probe P8's `_selfcheck`). The
+venv's wheelhouse (core.txt with base.txt as constraints) is fetched on the host first, through
+`--host-python`'s pip, its output redacted.
 """
 
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -52,8 +66,12 @@ from importlib.metadata import version as installed_version
 from pathlib import Path
 
 from packaging.requirements import Requirement
+from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 from packaging.version import Version
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from redact import redact  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 PYDIR = REPO / "python" / "geobrix"
@@ -74,6 +92,14 @@ TRIPWIRES = {  # spec 5.4: the other environment's old extra names -> geobrix==<
 RELY_ON_BASE = {
     "click"
 }  # spec 5.2: preinstalled on every runtime; core.txt may still declare it
+GIT_INPUTS = (  # what the wheel is built from, under git
+    "python/geobrix/src",
+    "python/geobrix/envs",
+    "python/geobrix/README.md",
+    "python/geobrix/pyproject.toml",
+    "python/geobrix/requirements-build.txt",
+    "scripts/native",
+)
 SIZE_BUDGET_MB = 100  # the env wheels measured 80 MB (2026-10-28); a payload that grows 25% past that fails
 METADATA_URL_HOSTS = {"databricks.com", "github.com", "databrickslabs.github.io"}
 URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://([^/\s\"'<>]+)")
@@ -152,18 +178,136 @@ def wheel_metadata(whl):
         return Parser().parsestr(zf.read(name).decode())
 
 
-def run(cmd, log, cwd=None):
+def run(cmd, log, env=None):
     with open(log, "w") as fh:
-        res = subprocess.run(cmd, cwd=cwd, stdout=fh, stderr=subprocess.STDOUT)
+        res = subprocess.run(cmd, stdout=fh, stderr=subprocess.STDOUT, env=env)
     if res.returncode != 0:
         tail = Path(log).read_text(errors="replace").splitlines()[-25:]
-        print("\n".join(URL.sub("<url>", ln) for ln in tail))
+        print(redact("\n".join(tail)))
         fail(f"{' '.join(map(str, cmd[:4]))} ... exited {res.returncode} (log: {log})")
 
 
-def base_version():
+def git(*a):
+    res = subprocess.run(["git", "-C", str(REPO), *a], capture_output=True, text=True)
+    return res.stdout.strip()
+
+
+def source_version():
+    """`__version__` as written in the package source."""
     text = (PYDIR / "src" / PKG / "__init__.py").read_text()
     return re.search(r'^__version__ = "([^"]+)"$', text, re.M).group(1)
+
+
+def env_version(public, env):
+    """The env wheel's version: the public version (pre-releases included) + `+env<N>`."""
+    v = Version(public)
+    if v.local:
+        fail(f"__version__ {public} already has a local label")
+    return f"{v}+env{env}"
+
+
+def stamp_version(text, env):
+    """`__init__.py` text with `__version__` stamped `<version>+env<N>` (exactly one replacement)."""
+    m = re.findall(r'^__version__ = "([^"]+)"$', text, re.M)
+    if len(m) != 1:
+        fail(
+            f"__init__.py has {len(m)} `__version__ = ...` lines; exactly one is stamped"
+        )
+    version = env_version(m[0], env)
+    return (
+        text.replace(f'__version__ = "{m[0]}"', f'__version__ = "{version}"'),
+        version,
+    )
+
+
+def requires_python_subset(env_spec, core_spec):
+    """True when every Python the env range admits, the core range admits too (and it admits one)."""
+    env_set, core_set = SpecifierSet(env_spec), SpecifierSet(core_spec)
+    probe = [Version(f"3.{m}.{p}") for m in range(6, 20) for p in (0, 3, 99)]
+    admitted = [v for v in probe if env_set.contains(v)]
+    return bool(admitted) and all(core_set.contains(v) for v in admitted)
+
+
+def _next_release(v, keep):
+    rel = list(v.release[:keep]) or [v.release[0]]
+    rel[-1] += 1
+    return Version(".".join(map(str, rel)))
+
+
+def _bounds(spec):
+    """(floor, cap) of a SpecifierSet: the version it starts from, the version it stays below
+    (`<`, `~=`, `==` and `==X.*`; `<=` and `!=` are not used by the requirements checked here).
+    """
+    floor = cap = None
+    for s in spec:
+        wild = s.version.endswith(".*")
+        v = Version(s.version[:-2] if wild else s.version)
+        if s.operator in (">=", "==", "~="):
+            floor = v if floor is None or v > floor else floor
+        top = None
+        if s.operator == "<":
+            top = v
+        elif s.operator == "~=":
+            top = _next_release(v, len(v.release) - 1)
+        elif s.operator == "==":
+            top = _next_release(v, len(v.release)) if wild else v
+        if top is not None:
+            cap = top if cap is None or top < cap else cap
+    return floor, cap
+
+
+def check_against_core(name, req, core_req, base):
+    """A vendored package's requirement on a core.txt (or rely-on-base) package, by version."""
+    want = req.specifier
+    if not want:
+        return
+    core_floor, core_cap = _bounds(core_req.specifier) if core_req else (None, None)
+    start = base or core_floor
+    if start is None:
+        fail(
+            f"vendored {name} requires {req}, and core.txt has no floor for it (nor base.txt a version)"
+        )
+    if not want.contains(start, prereleases=True):
+        fail(
+            f"vendored {name} requires {req}; the environment starts at {req.name} {start}"
+        )
+    _floor, cap = _bounds(want)
+    if cap is not None and (core_req is None or core_cap is None or core_cap > cap):
+        fail(
+            f"vendored {name} requires {req}; core.txt lets pip install {req.name} at or above {cap}"
+        )
+
+
+def toolchain_image(bindings_dir, arch):
+    """The toolchain image the bindings were built on (bindings/build.txt names its tag)."""
+    rec = (
+        (bindings_dir / "build.txt").read_text()
+        if (bindings_dir / "build.txt").is_file()
+        else ""
+    )
+    m = re.search(r"image=geobrix-native-build:bindings-([0-9a-f]{12})-" + arch, rec)
+    if not m:
+        missing(
+            f"{bindings_dir}/build.txt names no bindings image (the toolchain the payload was built in)"
+        )
+    return f"geobrix-native-build:toolchain-{m.group(1)}-{arch}"
+
+
+def check_docker(images):
+    if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
+        missing(
+            "Docker is not running (the auditwheel and install checks run in the toolchain images)"
+        )
+    for image in images:
+        if (
+            subprocess.run(
+                ["docker", "image", "inspect", image], capture_output=True
+            ).returncode
+            != 0
+        ):
+            missing(
+                f"the toolchain image {image} (gbx:build:native --target toolchain)"
+            )
 
 
 def check_inputs(args):
@@ -187,10 +331,20 @@ def check_inputs(args):
     for d in args.extra_payload:
         if not d.is_dir():
             missing(f"--extra-payload {d} is not a directory")
-    return natives, bindings
+    check_docker([toolchain_image(bindings[a], a) for a in ARCHES])
+    dirty = git("status", "--porcelain", "--", *GIT_INPUTS)
+    if dirty and not args.allow_dirty:
+        n = len(dirty.splitlines())
+        fail(
+            f"{n} uncommitted change(s) under {', '.join(GIT_INPUTS)}: commit them, or pass --allow-dirty"
+        )
+    epoch = git("log", "-1", "--format=%ct", "HEAD")
+    if not epoch.isdigit():
+        missing("git log -1 --format=%ct HEAD gave no commit time (SOURCE_DATE_EPOCH)")
+    return natives, bindings, bool(dirty), int(epoch)
 
 
-def build_tree(args, env, ver, natives):
+def build_tree(args, env, version):
     """Step 1: the scratch source tree with its pyproject."""
     tree = args.work / "tree"
     shutil.rmtree(tree, ignore_errors=True)
@@ -210,18 +364,24 @@ def build_tree(args, env, ver, natives):
     other = 11 - env
     trip = tree / "env" / f"tripwire-env{other}.txt"
     trip.write_text(
-        f"# A light_* name of the other environment's family: this wheel is not the one to install.\n"
-        f"geobrix=={ver.base_version}+env{other}\n"
+        "# A light_* name of the other environment's family: this wheel is not the one to install.\n"
+        f"geobrix=={version.split('+')[0]}+env{other}\n"
     )
 
     template = (PYDIR / "envs" / "pyproject.env.toml").read_text()
     committed = tomllib.loads((PYDIR / "pyproject.toml").read_text())["project"]
     mine = tomllib.loads(template)["project"]
-    for key in ("name", "license", "requires-python", "authors"):
+    for key in ("name", "license", "authors"):
         if mine.get(key) != committed.get(key):
             fail(
                 f"envs/pyproject.env.toml [project] {key} = {mine.get(key)!r}, the committed pyproject says {committed.get(key)!r}"
             )
+    if not requires_python_subset(
+        mine["requires-python"], committed["requires-python"]
+    ):
+        fail(
+            f"requires-python {mine['requires-python']!r} admits a Python {committed['requires-python']!r} does not"
+        )
     lines = [template.rstrip("\n"), ""]
     extras = sorted(p.stem.removeprefix("extra-") for p in envdir.glob("extra-*.txt"))
     for name in extras:
@@ -234,14 +394,14 @@ def build_tree(args, env, ver, natives):
     tomllib.loads((tree / "pyproject.toml").read_text())  # still TOML
 
     init = tree / "src" / PKG / "__init__.py"
-    text, stamp = init.read_text(), f'__version__ = "{ver.base_version}"'
-    if text.count(stamp) != 1:
-        fail(f"{init} has {text.count(stamp)} lines `{stamp}`; exactly one is stamped")
-    init.write_text(text.replace(stamp, f'__version__ = "{ver.base_version}+env{env}"'))
+    text, stamped = stamp_version(init.read_text(), env)
+    if stamped != version:
+        fail(f"stamped {stamped}, wanted {version}")
+    init.write_text(text)
     return tree, extras
 
 
-def write_build_info(tree, env, version, natives):
+def write_build_info(tree, env, version, natives, dirty, epoch):
     """Step 2."""
     manifests = {
         a: json.loads((natives[a] / "MANIFEST.json").read_text()) for a in ARCHES
@@ -254,35 +414,19 @@ def write_build_info(tree, env, version, natives):
     for k, per_arch in pick.items():
         if len(set(per_arch.values())) != 1:
             fail(f"the two architectures' MANIFEST.json disagree on {k}: {per_arch}")
-
-    def git(*a):
-        res = subprocess.run(
-            ["git", "-C", str(REPO), *a], capture_output=True, text=True
-        )
-        return res.stdout.strip()
-
-    dirty = bool(
-        git(
-            "status",
-            "--porcelain",
-            "--",
-            "python/geobrix/src",
-            "python/geobrix/envs",
-            "scripts/native",
-        )
-    )
+    a0 = ARCHES[0]
     (tree / "src" / PKG / "_build_info.py").write_text(
         '"""Written by gbx:build:wheel into the env wheel (never in the source tree)."""\n\n'
         f"ENV = {env}\n"
         f'VERSION = "{version}"\n'
-        f'GDAL_VERSION = "{pick["gdal"][ARCHES[0]]}"\n'
-        f'PROJ_VERSION = "{pick["proj"][ARCHES[0]]}"\n'
-        f'GEOS_VERSION = "{pick["geos"][ARCHES[0]]}"\n'
-        f"NATIVE_REVISION = {pick['revision'][ARCHES[0]]}\n"
+        f'GDAL_VERSION = "{pick["gdal"][a0]}"\n'
+        f'PROJ_VERSION = "{pick["proj"][a0]}"\n'
+        f'GEOS_VERSION = "{pick["geos"][a0]}"\n'
+        f"NATIVE_REVISION = {pick['revision'][a0]}\n"
         f'GIT_SHA = "{git("rev-parse", "HEAD")}"\n'
         f"GIT_DIRTY = {dirty}\n"
+        f"SOURCE_DATE_EPOCH = {epoch}\n"
     )
-    return manifests
 
 
 def copy_files(src, dst, skip_dirs=()):
@@ -314,7 +458,7 @@ def binding_licences(wheels_dir):
     return out
 
 
-def add_payload(args, tree, natives, bindings):
+def add_payload(args, tree, natives, bindings, version):
     """Step 3."""
     pkg = tree / "src" / PKG
     nat = pkg / "_native"
@@ -376,7 +520,7 @@ def add_payload(args, tree, natives, bindings):
                 fail(f"--extra-payload {d}: {rel} is already in the payload")
             (pkg / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(p, pkg / rel)
-    jar = pkg / "_jar" / f"geobrix-{base_version()}-jar-with-dependencies.jar"
+    jar = pkg / "_jar" / f"geobrix-{version.split('+')[0]}-jar-with-dependencies.jar"
     jar.parent.mkdir(parents=True)
     with zipfile.ZipFile(args.jar) as zf:
         if (
@@ -389,14 +533,51 @@ def add_payload(args, tree, natives, bindings):
     shutil.copy2(args.jar, jar)
 
 
+def pins_of(path):
+    """name -> Version of the `name==version` lines of a requirements file."""
+    return {
+        canonicalize_name(r.name): Version(next(iter(r.specifier)).version)
+        for r in reqs_of(path)
+    }
+
+
+def check_requirements(env, vendored):
+    """Every vendored package's Requires-Dist, against the vendored set, core.txt and base.txt."""
+    envdir = PYDIR / "envs" / f"env{env}"
+    core = {canonicalize_name(r.name): r for r in reqs_of(envdir / "core.txt")}
+    base = pins_of(envdir / "base.txt")
+    # The base pins are what the runtime has: core.txt must admit them.
+    for dep, v in base.items():
+        if dep in core and not core[dep].specifier.contains(v, prereleases=True):
+            fail(
+                f"env{env}/core.txt {core[dep]} does not admit the runtime's {dep} {v} (base.txt)"
+            )
+    for name, (_v, meta) in sorted(vendored.items()):
+        for line in meta.get_all("Requires-Dist") or []:
+            r = Requirement(line)
+            if r.marker is not None and not r.marker.evaluate(PY312_LINUX):
+                continue
+            dep = canonicalize_name(r.name)
+            if dep in vendored:
+                if not r.specifier.contains(vendored[dep][0], prereleases=True):
+                    fail(
+                        f"vendored {name} requires {r}, the vendored {dep} is {vendored[dep][0]}"
+                    )
+            elif dep in core or dep in RELY_ON_BASE:
+                check_against_core(name, r, core.get(dep), base.get(dep))
+            else:
+                fail(
+                    f"vendored {name} requires {r}: neither vendored, in env{env}/core.txt, nor preinstalled (click)"
+                )
+
+
 def add_vendor_pure(args, tree, env, bindings):
     """Step 4."""
+    envdir = PYDIR / "envs" / f"env{env}"
     pkg = tree / "src" / PKG
     common, licdir = pkg / "_vendor" / "common", pkg / "_vendor" / "licenses"
     pins = {}
-    for line in (
-        (PYDIR / "envs" / f"env{env}" / "vendor-pure.txt").read_text().splitlines()
-    ):
+    for line in (envdir / "vendor-pure.txt").read_text().splitlines():
         line = line.split("#", 1)[0].strip()
         if line:
             spec, digest = line.split(" --hash=sha256:")
@@ -440,29 +621,11 @@ def add_vendor_pure(args, tree, env, bindings):
         meta = wheel_metadata(whl)
         vendored[canonicalize_name(meta["Name"])] = (Version(meta["Version"]), meta)
 
-    core = {
-        canonicalize_name(r.name)
-        for r in reqs_of(PYDIR / "envs" / f"env{env}" / "core.txt")
-    }
-    for name, (_v, meta) in sorted(vendored.items()):
-        for line in meta.get_all("Requires-Dist") or []:
-            r = Requirement(line)
-            if r.marker is not None and not r.marker.evaluate(PY312_LINUX):
-                continue
-            dep = canonicalize_name(r.name)
-            if dep in vendored:
-                if not r.specifier.contains(vendored[dep][0], prereleases=True):
-                    fail(
-                        f"vendored {name} requires {r}, the vendored {dep} is {vendored[dep][0]}"
-                    )
-            elif dep not in core and dep not in RELY_ON_BASE:
-                fail(
-                    f"vendored {name} requires {r}: neither vendored, in env{env}/core.txt, nor preinstalled (click)"
-                )
+    check_requirements(env, vendored)
     return sorted(vendored)
 
 
-def build_wheel(args, tree):
+def build_wheel(args, tree, epoch):
     """Step 5."""
     for pkg_name in ("build", "setuptools", "wheel"):
         pinned = re.search(
@@ -474,6 +637,7 @@ def build_wheel(args, tree):
             )
     out = args.work / "build-out"
     shutil.rmtree(out, ignore_errors=True)
+    env = {**os.environ, "SOURCE_DATE_EPOCH": str(epoch)}
     run(
         [
             sys.executable,
@@ -486,6 +650,7 @@ def build_wheel(args, tree):
             str(tree),
         ],
         args.work / "build.log",
+        env,
     )
     wheels = list(out.glob("*.whl"))
     if len(wheels) != 1:
@@ -493,21 +658,24 @@ def build_wheel(args, tree):
     return wheels[0]
 
 
-def add_pth(args, whl):
+def add_pth(args, whl, epoch):
     """Step 6."""
     unpacked, final = args.work / "unpacked", args.work / "final"
     for d in (unpacked, final):
         shutil.rmtree(d, ignore_errors=True)
         d.mkdir(parents=True)
+    env = {**os.environ, "SOURCE_DATE_EPOCH": str(epoch)}
     run(
         [sys.executable, "-m", "wheel", "unpack", str(whl), "-d", str(unpacked)],
         args.work / "unpack.log",
+        env,
     )
     (root,) = unpacked.iterdir()
     (root / "geobrix-native.pth").write_text("import _gbx_native_path\n")
     run(
         [sys.executable, "-m", "wheel", "pack", str(root), "-d", str(final)],
         args.work / "pack.log",
+        env,
     )
     (packed,) = final.glob("*.whl")
     return packed
@@ -524,6 +692,15 @@ def verify_metadata(zf, env, version, extras):
     meta = Parser().parsestr(meta_text)
     if meta["Version"] != version:
         fail(f"METADATA Version {meta['Version']}, wanted {version}")
+    template = tomllib.loads((PYDIR / "envs" / "pyproject.env.toml").read_text())[
+        "project"
+    ]
+    if SpecifierSet(meta["Requires-Python"] or "") != SpecifierSet(
+        template["requires-python"]
+    ):
+        fail(
+            f"METADATA Requires-Python {meta['Requires-Python']}, the template says {template['requires-python']}"
+        )
     unmarked, by_extra = set(), {}
     for line in meta.get_all("Requires-Dist") or []:
         r = Requirement(line)
@@ -542,7 +719,7 @@ def verify_metadata(zf, env, version, extras):
         want = {canon(r) for r in reqs_of(envdir / f"extra-{name}.txt")}
         if by_extra.get(norm_extra(name)) != want:
             fail(f"extra [{name}] differs from extra-{name}.txt")
-    trip = {f"geobrix=={Version(version).base_version}+env{other}"}
+    trip = {f"geobrix=={version.split('+')[0]}+env{other}"}
     for name in TRIPWIRES[env]:
         if by_extra.get(norm_extra(name)) != trip:
             fail(f"tripwire [{name}] is {by_extra.get(norm_extra(name))}")
@@ -551,10 +728,10 @@ def verify_metadata(zf, env, version, extras):
     hosts = {h.lower() for h in URL.findall(meta_text)}
     if not hosts <= METADATA_URL_HOSTS:
         n = len(hosts - METADATA_URL_HOSTS)
-        fail(f"METADATA names {n} host(s) outside {sorted(METADATA_URL_HOSTS)}")
+        fail(f"METADATA names {n} host(s) outside the project's own")
 
 
-def verify_payload(zf, version):
+def verify_payload(zf, version, epoch):
     names = set(zf.namelist())
     for a in ARCHES:
         manifest = json.loads(zf.read(f"{PKG}/_native/{a}/MANIFEST.json"))
@@ -563,14 +740,14 @@ def verify_payload(zf, version):
                 fail(f"{a}: {lib} is not in the wheel")
         if f"{PKG}/_vendor/{a}/rasterio/__init__.py" not in names:
             fail(f"{a}: the vendored rasterio is not in the wheel")
-    base = Version(version).base_version
     for need in (
-        f"{PKG}/_jar/geobrix-{base}-jar-with-dependencies.jar",
+        f"{PKG}/_jar/geobrix-{version.split('+')[0]}-jar-with-dependencies.jar",
         "geobrix-native.pth",
         "_gbx_native_path.py",
         f"{PKG}/_build_info.py",
         f"{PKG}/_native/share/proj/proj.db",
         f"{PKG}/_native/__init__.py",
+        f"{PKG}/_native/_rules.py",
         f"{PKG}/_native/_selfcheck.py",
     ):
         if need not in names:
@@ -588,6 +765,20 @@ def verify_payload(zf, version):
         fail(f"the licence guard matches {banned}")
     if any(re.search(r"(pkgconfig|cmake)/", n) for n in names):
         fail("the wheel holds pkgconfig or cmake files")
+    stamp = zip_date_time(epoch)
+    off = [i.filename for i in zf.infolist() if i.date_time != stamp]
+    if off:
+        fail(
+            f"{len(off)} member(s) are not stamped SOURCE_DATE_EPOCH {epoch}, e.g. {off[:3]}"
+        )
+
+
+def zip_date_time(epoch):
+    """The zip timestamp `wheel` writes for SOURCE_DATE_EPOCH: UTC, seconds rounded down to even."""
+    import time
+
+    t = time.gmtime(epoch)[:6]
+    return (*t[:5], t[5] - t[5] % 2)
 
 
 def extract_payload(zf, payload):
@@ -605,13 +796,13 @@ def extract_payload(zf, payload):
         out.write_bytes(zf.read(n))
 
 
-def verify(args, whl, env, version, extras):
+def verify(args, whl, env, version, extras, epoch):
     """Step 7: returns the wheel's size in MB."""
     if whl.name != f"geobrix-{version}-py3-none-any.whl":
         fail(f"the wheel is {whl.name}, wanted geobrix-{version}-py3-none-any.whl")
     with zipfile.ZipFile(whl) as zf:
         verify_metadata(zf, env, version, extras)
-        verify_payload(zf, version)
+        verify_payload(zf, version, epoch)
         extract_payload(zf, args.work / "payload")
     size = whl.stat().st_size / 1e6
     if size > SIZE_BUDGET_MB:
@@ -619,11 +810,7 @@ def verify(args, whl, env, version, extras):
     return size
 
 
-def auditwheel(args, bindings):
-    """Step 8."""
-    if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
-        missing("Docker is not running (step 8 runs auditwheel in the toolchain image)")
-    script = r"""
+AUDITWHEEL_SCRIPT = r"""
 set -euo pipefail
 A="$1"; W=/tmp/aw/gbxprobe-0
 mkdir -p "$W/gbxprobe/_native" "$W/gbxprobe/_vendor" "$W/gbxprobe-0.dist-info"
@@ -633,7 +820,7 @@ cp -a "/payload/_vendor/$A" "$W/gbxprobe/_vendor/$A"
 printf 'Metadata-Version: 2.1\nName: gbxprobe\nVersion: 0\n' > "$W/gbxprobe-0.dist-info/METADATA"
 printf 'Wheel-Version: 1.0\nGenerator: gbx-build-wheel\nRoot-Is-Purelib: false\nTag: cp312-cp312-linux_%s\n' "$A" > "$W/gbxprobe-0.dist-info/WHEEL"
 $PY -m wheel pack "$W" --dest-dir /tmp/aw > /dev/null
-auditwheel show --json "/tmp/aw/gbxprobe-0-cp312-cp312-linux_$A.whl" > /tmp/aw/aw.json
+auditwheel show --json "/tmp/aw/gbxprobe-0-cp312-cp312-linux_$A.whl" > /tmp/aw/aw.json 2> /dev/null
 $PY - "$A" <<'EOF'
 import json, sys
 r = json.load(open("/tmp/aw/aw.json"))
@@ -643,60 +830,84 @@ print(("ok: " if ok else "BUILD FAILED: ") + f"auditwheel {sys.argv[1]}: overall
 sys.exit(0 if ok else 1)
 EOF
 """
+
+
+def auditwheel(args, bindings):
+    """Step 8."""
     for a in ARCHES:
-        rec = (
-            (bindings[a] / "build.txt").read_text()
-            if (bindings[a] / "build.txt").is_file()
-            else ""
-        )
-        m = re.search(r"image=geobrix-native-build:bindings-([0-9a-f]{12})-" + a, rec)
-        if not m:
-            missing(
-                f"{bindings[a]}/build.txt names no bindings image (the toolchain the payload was built in)"
-            )
-        image = f"geobrix-native-build:toolchain-{m.group(1)}-{a}"
-        if (
-            subprocess.run(
-                ["docker", "image", "inspect", image], capture_output=True
-            ).returncode
-            != 0
-        ):
-            missing(
-                f"the toolchain image {image} (gbx:build:native --arch {a} --target toolchain)"
-            )
+        image = toolchain_image(bindings[a], a)
         res = subprocess.run(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "--network",
-                "none",
-                "--platform",
-                PLATFORMS[a],
-                "-v",
-                f"{args.work / 'payload'}:/payload:ro",
-                image,
-                "bash",
-                "-c",
-                script,
-                "aw",
-                a,
-            ],
-            capture_output=True,
-            text=True,
-        )
+            ["docker", "run", "--rm", "--network", "none", "--platform", PLATFORMS[a],
+             "-v", f"{args.work / 'payload'}:/payload:ro", image, "bash", "-c", AUDITWHEEL_SCRIPT, "aw", a],
+            capture_output=True, text=True,
+        )  # fmt: skip
         out = (res.stdout + res.stderr).strip()
         print("    " + out.replace("\n", "\n    "))
         if res.returncode != 0:
             fail(f"auditwheel {a} (in {image})")
 
 
+def verify_install(args, env, version, arch):
+    """`--verify <arch>`: the install check of the built wheel in that architecture's toolchain image."""
+    whl = args.out / f"geobrix-{version}-py3-none-any.whl"
+    if not whl.is_file():
+        missing(f"{whl} (build it: gbx:build:wheel --env {env})")
+    bindings = args.native_out / arch / "bindings"
+    image = toolchain_image(bindings, arch)
+    check_docker([image])
+    envdir = PYDIR / "envs" / f"env{env}"
+    house = REPO / "build" / "env-wheel" / "wheelhouse" / f"env{env}" / arch
+    key = hashlib.sha256(
+        (envdir / "core.txt").read_bytes() + (envdir / "base.txt").read_bytes()
+    ).hexdigest()
+    if (house / ".inputs-sha256").is_file() and (
+        house / ".inputs-sha256"
+    ).read_text().strip() == key:
+        print(f"    wheelhouse {house}: current", flush=True)
+    else:
+        print(
+            f"    wheelhouse {house}: fetching core.txt with base.txt as constraints (host pip)",
+            flush=True,
+        )
+        shutil.rmtree(house, ignore_errors=True)
+        house.mkdir(parents=True)
+        res = subprocess.run(
+            [args.host_python, "-m", "pip", "download", "-q", "--disable-pip-version-check",
+             "-r", str(envdir / "core.txt"), "-c", str(envdir / "base.txt"), "--only-binary", ":all:",
+             "--platform", f"manylinux_2_28_{arch}", "--platform", f"manylinux2014_{arch}",
+             "--python-version", "3.12", "-d", str(house)],
+            capture_output=True, text=True,
+        )  # fmt: skip
+        if res.returncode != 0:
+            print(redact((res.stdout + res.stderr)[-3000:]))
+            fail(
+                f"pip download of the env{env} wheelhouse for {arch} exited {res.returncode}"
+            )
+        (house / ".inputs-sha256").write_text(key + "\n")
+    res = subprocess.run(
+        ["docker", "run", "--rm", "--network", "none", "--platform", PLATFORMS[arch],
+         "-v", f"{args.out}:/dist:ro", "-v", f"{house}:/wheelhouse:ro", "-v", f"{envdir}:/env:ro",
+         "-v", f"{REPO / 'scripts' / 'native'}:/check:ro", image,
+         "bash", "/check/check-env-wheel.sh", str(env), version.split("+")[0]],
+        capture_output=True, text=True,
+    )  # fmt: skip
+    out = (res.stdout + res.stderr).strip()
+    report = args.work / f"verify-{arch}.txt"
+    report.write_text(out + "\n")
+    print("    " + redact(out).replace("\n", "\n    "))
+    if res.returncode != 0:
+        fail(f"the install check of {whl.name} on {arch} (report: {report})")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     p.add_argument("--env", type=int, choices=(5, 6), required=True)
-    p.add_argument("--jar", type=Path, required=True)
-    p.add_argument("--vendor-pure", type=Path, required=True)
+    p.add_argument("--jar", type=Path)
+    p.add_argument("--vendor-pure", type=Path)
     p.add_argument("--extra-payload", type=Path, action="append", default=[])
+    p.add_argument("--allow-dirty", action="store_true")
+    p.add_argument("--verify", choices=ARCHES)
+    p.add_argument("--host-python", default="python3")
     p.add_argument("--native-out", type=Path, default=REPO / "build" / "native" / "out")
     p.add_argument("--work", type=Path)
     p.add_argument("--out", type=Path)
@@ -705,28 +916,41 @@ def main():
     args.work = (args.work or REPO / "build" / "env-wheel" / f"env{env}").resolve()
     args.out = (args.out or REPO / "dist" / f"env{env}").resolve()
     args.work.mkdir(parents=True, exist_ok=True)
-    ver = Version(base_version())
-    version = f"{ver.base_version}+env{env}"
+    version = env_version(source_version(), env)
 
-    natives, bindings = check_inputs(args)
+    if args.verify:
+        step(
+            "verify",
+            f"install check of geobrix {version} on {args.verify} (toolchain image, --network none)",
+        )
+        verify_install(args, env, version, args.verify)
+        print(
+            f"ENV_WHEEL_VERIFIED env={env} arch={args.verify} wheel={args.out / f'geobrix-{version}-py3-none-any.whl'}"
+        )
+        return
+    if args.jar is None or args.vendor_pure is None:
+        p.error("--jar and --vendor-pure are required to build")
+    natives, bindings, dirty, epoch = check_inputs(args)
     step(1, f"scratch tree for geobrix {version}: {args.work / 'tree'}")
-    tree, extras = build_tree(args, env, ver, natives)
-    step(2, "_build_info.py")
-    write_build_info(tree, env, version, natives)
+    tree, extras = build_tree(args, env, version)
+    step(2, f"_build_info.py (GIT_DIRTY {dirty}, SOURCE_DATE_EPOCH {epoch})")
+    write_build_info(tree, env, version, natives, dirty, epoch)
     step(
         3,
         f"payload: {', '.join(ARCHES)} natives and bindings, share, licences, the JAR",
     )
-    add_payload(args, tree, natives, bindings)
+    add_payload(args, tree, natives, bindings, version)
     step(4, "vendored pure-Python packages")
     vendored = add_vendor_pure(args, tree, env, bindings)
-    print(f"    vendored: {', '.join(vendored)}; every Requires-Dist covered")
+    print(
+        f"    vendored: {', '.join(vendored)}; every Requires-Dist covered, by version"
+    )
     step(5, "python -m build --wheel --no-isolation")
-    whl = build_wheel(args, tree)
+    whl = build_wheel(args, tree, epoch)
     step(6, "geobrix-native.pth")
-    whl = add_pth(args, whl)
+    whl = add_pth(args, whl, epoch)
     step(7, "verify the wheel and extract its payload")
-    size = verify(args, whl, env, version, extras)
+    size = verify(args, whl, env, version, extras, epoch)
     step(8, "auditwheel per architecture (toolchain image, --network none)")
     auditwheel(args, bindings)
     args.out.mkdir(parents=True, exist_ok=True)
@@ -734,7 +958,8 @@ def main():
         old.unlink()
     shutil.move(str(whl), args.out / whl.name)
     print(
-        f"WHEEL_BUILT env={env} wheel={args.out / whl.name} mb={size:.1f} sha256={sha256(args.out / whl.name)} payload={args.work / 'payload'}"
+        f"WHEEL_BUILT env={env} wheel={args.out / whl.name} mb={size:.1f} sha256={sha256(args.out / whl.name)} "
+        f"source_date_epoch={epoch} git_dirty={dirty} payload={args.work / 'payload'}"
     )
 
 

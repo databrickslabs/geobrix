@@ -1,11 +1,11 @@
-"""The payload is activated only where its libraries can load (Linux, a known arch), and only once.
+"""The payload is activated only where it can load (Linux, a known arch, CPython 3.12), and once.
 
 A fake payload in the env wheel's layout: ``_native/<arch>/lib`` holds the libraries under the
 hashed names ``MANIFEST.json`` maps (never a hard-coded file name), ``_native/share`` the GDAL and
 PROJ data, ``_vendor/<arch>`` and ``_vendor/common`` the bindings, ``_jar/`` the JAR. Activation
-puts the vendored trees at the front of ``sys.path`` and sets the data and CA variables only
-where the user has set nothing; on macOS, an unknown arch or with ``GBX_NATIVE_DISABLE=1`` it
-changes nothing.
+puts the vendored trees just before the first site-packages entry of ``sys.path`` and sets the
+data and CA variables without overriding the user's (the rule rows are in test_native_rules.py);
+on macOS, an unknown arch or with ``GBX_NATIVE_DISABLE=1`` it changes nothing.
 """
 
 import json
@@ -21,6 +21,7 @@ _ENV = (
     "PROJ_CURL_CA_BUNDLE",
     "CURL_CA_BUNDLE",
     "SSL_CERT_FILE",
+    "PROJ_LIB",
     "GBX_NATIVE_DISABLE",
     "GBX_NATIVE_ROOT",
 )
@@ -56,7 +57,14 @@ def test_the_payload_is_used_only_where_it_can_load(tmp_path, monkeypatch):
     root = _payload(tmp_path / "gbx")
     bundle = tmp_path / "ca-certificates.crt"
     bundle.write_text("-----BEGIN CERTIFICATE-----\n")
-    monkeypatch.setattr(sys, "path", list(sys.path))
+    stdlib = [
+        "",
+        "/py/lib/python312.zip",
+        "/py/lib/python3.12",
+        "/py/lib/python3.12/lib-dynload",
+    ]
+    site = "/venv/lib/python3.12/site-packages"
+    monkeypatch.setattr(sys, "path", [*stdlib, site, "/src"])
     for k in _ENV:
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setattr(_native, "_SYSTEM_CA", [str(bundle)])
@@ -64,11 +72,18 @@ def test_the_payload_is_used_only_where_it_can_load(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
     r = str(root)
 
-    # Linux x86_64: the arch tree, then the common tree, at the front; data and CA set when unset,
-    # except a CA the user chose (a pre-set GDAL_CURL_CA_BUNDLE survives).
+    # Linux x86_64: the arch tree, then the common tree, after the standard library and before
+    # site-packages; data and CA set when unset, except a CA the user chose (a pre-set
+    # GDAL_CURL_CA_BUNDLE survives).
     monkeypatch.setenv("GDAL_CURL_CA_BUNDLE", "/user/corporate.pem")
     assert _native.activate(root=r, machine="x86_64") is True
-    assert sys.path[:2] == [f"{r}/_vendor/x86_64", f"{r}/_vendor/common"]
+    assert sys.path == [
+        *stdlib,
+        f"{r}/_vendor/x86_64",
+        f"{r}/_vendor/common",
+        site,
+        "/src",
+    ]
     assert os.environ["GDAL_DATA"] == f"{r}/_native/share/gdal"
     assert os.environ["PROJ_DATA"] == f"{r}/_native/share/proj"
     assert os.environ["GDAL_CURL_CA_BUNDLE"] == "/user/corporate.pem"
@@ -89,15 +104,15 @@ def test_the_payload_is_used_only_where_it_can_load(tmp_path, monkeypatch):
     assert _native.activate(root=r, machine="x86_64") is True
     assert _state() == before
 
-    # A user CA in the variables both GDAL and PROJ read: neither of ours is set.
+    # A user CA in SSL_CERT_FILE: GDAL and PROJ get it in their own variables, so that a binding's
+    # import-time certifi default cannot take its place (ruling NP-11).
     for k in ("GDAL_CURL_CA_BUNDLE", "PROJ_CURL_CA_BUNDLE"):
         monkeypatch.delenv(k)
     monkeypatch.setenv("SSL_CERT_FILE", "/user/corporate.pem")
     _native.activate(root=r, machine="x86_64")
-    assert (
-        "GDAL_CURL_CA_BUNDLE" not in os.environ
-        and "PROJ_CURL_CA_BUNDLE" not in os.environ
-    )
+    assert os.environ["GDAL_CURL_CA_BUNDLE"] == "/user/corporate.pem"
+    assert os.environ["PROJ_CURL_CA_BUNDLE"] == "/user/corporate.pem"
+    assert "CURL_CA_BUNDLE" not in os.environ
     monkeypatch.delenv("SSL_CERT_FILE")
 
     # macOS (arm64), an unknown arch and GBX_NATIVE_DISABLE=1: nothing changes.

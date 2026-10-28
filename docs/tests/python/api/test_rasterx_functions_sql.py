@@ -1236,7 +1236,7 @@ def test_every_generator_example_marks_its_tiers():
             sql = getattr(rasterx_functions_sql, name)()
             if ", LATERAL gbx_" in sql or ",\nLATERAL gbx_" in sql:
                 assert name in names, f"{name} uses the lightweight LATERAL form unmarked"
-    assert len(names) >= 41
+    assert len(names) >= 42
 
 
 @pytest.mark.parametrize("name,sql", _TIER_MARKED, ids=[n for n, _ in _TIER_MARKED])

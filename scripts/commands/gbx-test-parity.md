@@ -26,6 +26,7 @@ That means the parity gate can silently not-run. **A skipped suite reads as gree
 1. **Rebuilds the JAR by default.** A staged JAR older than the Scala sources makes every heavy call fail with `UNRESOLVED_ROUTINE`: a mass failure that looks like a code bug but is only a stale artifact. Rebuilding first removes that failure mode entirely.
 2. **Stages exactly one JAR**, deleting older ones so a stale artifact cannot be picked up instead.
 3. **Runs with integration enabled** — parity is the whole point of the run.
+   It first installs geobrix into the container (editable, idempotent), because Spark's Python workers do not see pytest's `pythonpath` and would fail every light row with `ModuleNotFoundError`.
 4. **Fails when any test skipped**, printing the likely cause (no staged JAR, a JAR-free Spark session already live in the process, or **sample data missing**: the container was started without the sample-data mounts, so the suites that read the sample bundle skip as `sample not mounted`; start it with `gbx:docker:start`). This is what stops a fully-skipped run from being mistaken for a pass.
 
 ## Which suites run

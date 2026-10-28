@@ -53,8 +53,9 @@ def try_open(raster_bytes: bytes) -> bool:
 
 # Raster drivers that write a file but that rasterio's extension map does not list: COG shares
 # ``tif`` with GTiff (only GTiff survives), and the Surfer grids and VICAR have no extension of
-# their own. (The other drivers the map hides, ENVI, ISCE, Leveller and ROI_PAC, write a header
-# beside the data and cannot be encoded to one buffer.)
+# their own. (The other drivers the map hides cannot be encoded to one buffer: ENVI and ISCE
+# write a header file beside the data, ROI_PAC and Leveller need a file type or a creation option
+# of their own.)
 _EXTENSIONLESS_WRITERS = ("COG", "GS7BG", "GSAG", "GSBG", "VICAR")
 
 

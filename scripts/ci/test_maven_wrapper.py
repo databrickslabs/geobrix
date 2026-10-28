@@ -21,7 +21,6 @@ RUNNER_DOCKERFILE = "scripts/ci-local/Dockerfile.gha-runner"
 POM = "pom.xml"
 # Files that run Maven in CI, scanned for bare `mvn`. jfrog-auth only detects whether `mvn` is on
 # PATH (to write the Maven settings), it does not run it.
-SCRIPTS = ("scripts/security/maven-pgp-verify", "scripts/security/maven-pgp-bootstrap")
 WRAPPER_ACTION = "./.github/actions/maven-wrapper"
 # A step that uses one of these has installed the pinned Maven before any later step runs.
 PROVIDERS = (f"uses: {WRAPPER_ACTION}", "uses: ./.github/actions/scala_build")
@@ -32,6 +31,9 @@ NEEDS_WRAPPER = re.compile(
 BARE_MVN = re.compile(r"(?<![\w./-])mvn(?![\w-])")
 EXEMPT_FROM_BARE_MVN = {".github/actions/jfrog-auth/action.yml"}
 INSTALLER = ".github/actions/maven-wrapper/action.yml"
+PGP_VERIFY = "scripts/security/maven-pgp-verify"
+PYRX_ACTION = ".github/actions/pyrx_build/action.yml"
+SCRIPTS = (PGP_VERIFY, "scripts/security/maven-pgp-bootstrap")
 
 
 def ci_files() -> list:
@@ -115,6 +117,11 @@ def problems(files: dict) -> list:
             )
         if "./mvnw" not in m.group(2):
             out.append("the requireMavenVersion message does not name ./mvnw")
+        if "gbx:docker:rebuild" not in m.group(2):
+            out.append(
+                "the requireMavenVersion message does not name gbx:docker:rebuild "
+                "(inside the dev container ./mvnw cannot work; the image must be rebuilt)"
+            )
 
     # --- CI: no bare mvn, and the pinned Maven is installed before anything needs it
     for name in [*SCRIPTS, *ci_files_in(files)]:
@@ -123,6 +130,27 @@ def problems(files: dict) -> list:
         for ln in code_lines(files[name]):
             if BARE_MVN.search(ln):
                 out.append(f"{name}: bare mvn (use ./mvnw): {ln.strip()[:80]}")
+    for name in SCRIPTS:
+        if not re.search(r"GBX_MVN:-\$\{root\}/mvnw\}", files[name]):
+            out.append(
+                f"{name}: the default Maven is not the wrapper (${{GBX_MVN:-${{root}}/mvnw}})"
+            )
+    for name in ci_files_in(files):
+        code = "\n".join(code_lines(files[name]))
+        if "fetch-delta-test-jars.sh" in code and not re.search(
+            r"GBX_MVN:\s*\./mvnw", code
+        ):
+            out.append(
+                f"{name}: fetch-delta-test-jars.sh runs without GBX_MVN: ./mvnw "
+                "(the script's default is the runner's bare mvn)"
+            )
+    action = files[INSTALLER]
+    if "command -v unzip" not in action:
+        out.append(
+            f"{INSTALLER}: no unzip guard (the wrapper then fails with a misleading checksum error)"
+        )
+    if "jfrog-central" not in action:
+        out.append(f"{INSTALLER}: no check for the JFrog mirror in ~/.m2/settings.xml")
     for name in ci_files_in(files):
         if name == INSTALLER:
             continue
@@ -161,110 +189,197 @@ def test_the_wrapper_script_is_in_place():
         capture_output=True,
         text=True,
     ).stdout
-    assert staged.startswith("100755 "), f"mvnw is not executable in the index: {staged!r}"
+    assert staged.startswith(
+        "100755 "
+    ), f"mvnw is not executable in the index: {staged!r}"
     assert not list((REPO_ROOT / ".mvn" / "wrapper").glob("*.jar"))
 
 
-def with_change(name: str, old: str, new: str) -> dict:
-    assert old in REAL[name], f"fixture drifted: {old!r} not in {name}"
-    return {**REAL, name: REAL[name].replace(old, new, 1)}
+# --- mutations: every anchor comes from the live files, so a consistent bump needs no edit here -------
 
 
-def dropped(name: str, pattern: str) -> dict:
-    new, n = re.subn(pattern, "", REAL[name], count=1, flags=re.S)
+def live_version(files: dict = REAL) -> str:
+    m = re.search(r"apache-maven-(\d+\.\d+\.\d+)-bin\.zip", files[PROPS])
+    assert m, "the wrapper properties have no apache-maven-<version>-bin.zip URL"
+    return m.group(1)
+
+
+def bumped(version: str, part: str = "patch") -> str:
+    major, minor, patch = version.split(".")
+    if (
+        part == "minor"
+    ):  # 3.9.16 -> 3.10.0: a two-digit minor must still pass the checks
+        return f"{major}.{int(minor) + 1}.0"
+    return f"{major}.{minor}.{int(patch) + 1}"
+
+
+STALE = "0.0.1"  # a version no repo ever pins
+
+
+def sub(name: str, pattern: str, repl: str, flags: int = 0) -> dict:
+    """REAL with the first match of a structural pattern replaced in one file."""
+    new, n = re.subn(pattern, repl, REAL[name], count=1, flags=flags)
     assert n == 1, f"fixture drifted: {pattern!r} not in {name}"
     return {**REAL, name: new}
 
 
-MUTATIONS = {
-    "wrapper version moved alone": (
-        with_change(
-            PROPS,
-            "apache-maven/3.9.16/apache-maven-3.9.16",
-            "apache-maven/3.9.17/apache-maven-3.9.17",
-        ),
-        f"{DEV_DOCKERFILE} installs Maven 3.9.16, the wrapper pins 3.9.17",
-    ),
-    "dev image moved alone": (
-        with_change(
-            DEV_DOCKERFILE, "ARG MAVEN_VERSION=3.9.16", "ARG MAVEN_VERSION=3.9.9"
-        ),
-        f"{DEV_DOCKERFILE} installs Maven 3.9.9, the wrapper pins 3.9.16",
-    ),
-    "local-CI image moved alone": (
-        with_change(
-            RUNNER_DOCKERFILE, "ARG MAVEN_VERSION=3.9.16", "ARG MAVEN_VERSION=3.9.9"
-        ),
-        f"{RUNNER_DOCKERFILE} installs Maven 3.9.9",
-    ),
-    "local-CI image hash differs": (
-        with_change(
-            RUNNER_DOCKERFILE, "ARG MAVEN_SHA512=831a8591", "ARG MAVEN_SHA512=a555254d"
-        ),
+def set_maven_arg(text: str, version: str) -> str:
+    return re.sub(r"(?m)^(ARG MAVEN_VERSION=)\S+$", rf"\g<1>{version}", text)
+
+
+def set_floor(text: str, version: str) -> str:
+    return re.sub(
+        r"(<requireMavenVersion>\s*<version>\[)[\d.]+(,\)</version>)",
+        rf"\g<1>{version}\g<2>",
+        text,
+    )
+
+
+def set_wrapper(text: str, version: str) -> str:
+    return re.sub(
+        r"(apache-maven/)[\d.]+(/apache-maven-)[\d.]+(-bin\.zip)",
+        rf"\g<1>{version}\g<2>{version}\g<3>",
+        text,
+    )
+
+
+def consistent_bump(version: str) -> dict:
+    """What the documented bump edits: the wrapper URL, both images, the enforcer floor."""
+    return {
+        **REAL,
+        PROPS: set_wrapper(REAL[PROPS], version),
+        DEV_DOCKERFILE: set_maven_arg(REAL[DEV_DOCKERFILE], version),
+        RUNNER_DOCKERFILE: set_maven_arg(REAL[RUNNER_DOCKERFILE], version),
+        POM: set_floor(REAL[POM], version),
+    }
+
+
+@pytest.mark.parametrize("part", ["patch", "minor"])
+def test_a_consistent_bump_needs_no_edit_here(part):
+    version = bumped(live_version(), part)
+    files = consistent_bump(version)
+    assert files != REAL
+    assert problems(files) == []
+
+
+def m_wrapper_alone():
+    v2 = bumped(live_version())
+    dev = arg(REAL[DEV_DOCKERFILE], "MAVEN_VERSION")
+    return (
+        {**REAL, PROPS: set_wrapper(REAL[PROPS], v2)},
+        f"{DEV_DOCKERFILE} installs Maven {dev}, the wrapper pins {v2}",
+    )
+
+
+def m_image_alone(name):
+    return lambda: (
+        {**REAL, name: set_maven_arg(REAL[name], STALE)},
+        f"{name} installs Maven {STALE}, the wrapper pins {live_version()}",
+    )
+
+
+def m_runner_hash():
+    old8 = arg(REAL[RUNNER_DOCKERFILE], "MAVEN_SHA512")[:8]
+    new8 = "0" * 8 if old8 != "0" * 8 else "f" * 8
+    return (
+        sub(RUNNER_DOCKERFILE, rf"(ARG MAVEN_SHA512=){old8}", rf"\g<1>{new8}"),
         "pin different (or no) MAVEN_SHA512",
+    )
+
+
+def m_floor_alone():
+    return (
+        {**REAL, POM: set_floor(REAL[POM], STALE)},
+        f"pom.xml requires Maven >= {STALE}, the wrapper pins {live_version()}",
+    )
+
+
+def m_message(text, expected):
+    return lambda: (
+        sub(POM, r"<message>.*?</message>", f"<message>{text}</message>", re.S),
+        expected,
+    )
+
+
+def m_sub(name, pattern, repl, expected, flags=0):
+    return lambda: (sub(name, pattern, repl, flags), expected)
+
+
+SCALA_BUILD = ".github/actions/scala_build/action.yml"
+BUILD_MAIN = ".github/workflows/build_main.yml"
+VERIFY_WORKFLOW = ".github/workflows/verify-maven-pgp.yml"
+NO_WRAPPER_STEP = (r"uses: \./\.github/actions/maven-wrapper", "run: true")
+
+MUTATIONS = {
+    "wrapper version moved alone": m_wrapper_alone,
+    "dev image moved alone": m_image_alone(DEV_DOCKERFILE),
+    "local-CI image moved alone": m_image_alone(RUNNER_DOCKERFILE),
+    "local-CI image hash differs": m_runner_hash,
+    "enforcer floor moved alone": m_floor_alone,
+    "enforcer message loses ./mvnw": m_message(
+        "Rebuild with gbx:docker:rebuild", "message does not name ./mvnw"
     ),
-    "enforcer floor moved alone": (
-        with_change(POM, "<version>[3.9.16,)</version>", "<version>[3.8.0,)</version>"),
-        "pom.xml requires Maven >= 3.8.0, the wrapper pins 3.9.16",
+    "enforcer message loses the container fix": m_message(
+        "Run ./mvnw", "message does not name gbx:docker:rebuild"
     ),
-    "enforcer message loses the fix": (
-        with_change(POM, "Run ./mvnw instead of mvn", "Upgrade Maven"),
-        "message does not name ./mvnw",
-    ),
-    "SHA-256 dropped": (
-        dropped(PROPS, r"distributionSha256Sum=\S+\n"),
+    "SHA-256 dropped": m_sub(
+        PROPS,
+        r"(?m)^distributionSha256Sum=\S+\n",
+        "",
         "distributionSha256Sum is missing",
     ),
-    "wrapper jar type": (
-        with_change(PROPS, "distributionType=only-script", "distributionType=source"),
-        "distributionType must be only-script",
+    "wrapper jar type": m_sub(
+        PROPS, r"distributionType=\S+", "distributionType=source", "must be only-script"
     ),
-    "download from another host": (
-        with_change(
-            PROPS, "https://repo.maven.apache.org/maven2", "https://example.org/maven2"
-        ),
+    "download from another host": m_sub(
+        PROPS,
+        r"https://repo\.maven\.apache\.org/maven2",
+        "https://example.org/maven2",
         "distributionUrl is not the Maven Central bin.zip",
     ),
-    "bare mvn in the Scala build": (
-        with_change(
-            ".github/actions/scala_build/action.yml",
-            "./mvnw -C -q clean install -DskipTests",
-            "mvn -C -q clean install -DskipTests",
-        ),
-        "scala_build/action.yml: bare mvn",
+    "bare mvn in the Scala build": m_sub(
+        SCALA_BUILD, r"\./mvnw (?=-)", "mvn ", "scala_build/action.yml: bare mvn"
     ),
-    "bare mvn in the PGP script": (
-        with_change(
-            "scripts/security/maven-pgp-verify", 'exec "${mvn_cmd}" -B', "exec mvn -B"
-        ),
-        "maven-pgp-verify: bare mvn",
+    "bare mvn in the PGP script": m_sub(
+        PGP_VERIFY, r'exec "\$\{mvn_cmd\}"', "exec mvn", "maven-pgp-verify: bare mvn"
     ),
-    "bare mvn behind sudo": (
-        with_change(
-            ".github/workflows/build_main.yml", "sudo -E ./mvnw", "sudo -E mvn"
-        ),
-        "build_main.yml: bare mvn",
+    "PGP script defaults to the runner's mvn": m_sub(
+        PGP_VERIFY,
+        r"\$\{GBX_MVN:-\$\{root\}/mvnw\}",
+        "${GBX_MVN:-mvn}",
+        "maven-pgp-verify: the default Maven is not the wrapper",
     ),
-    "Maven not installed before the PGP gate": (
-        dropped(
-            ".github/workflows/verify-maven-pgp.yml",
-            r"      # The gate runs on the same pinned.*?jfrog-access-token: \$\{\{ steps\.jfrog\.outputs\.jfrog-access-token \}\}\n\n",
-        ),
+    "bare mvn behind sudo": m_sub(
+        BUILD_MAIN, r"sudo -E \./mvnw", "sudo -E mvn", "build_main.yml: bare mvn"
+    ),
+    "Maven not installed before the PGP gate": m_sub(
+        VERIFY_WORKFLOW,
+        *NO_WRAPPER_STEP,
         "verify-maven-pgp.yml: scripts/security/maven-pgp-verify runs before the pinned Maven is installed",
     ),
-    "Maven not installed before the Delta fetch": (
-        dropped(
-            ".github/actions/pyrx_build/action.yml",
-            r"    # The Delta jar fetch below runs Maven.*?jfrog-access-token: \$\{\{ steps\.jfrog\.outputs\.jfrog-access-token \}\}\n",
-        ),
+    "Maven not installed before the Delta fetch": m_sub(
+        PYRX_ACTION,
+        *NO_WRAPPER_STEP,
         "pyrx_build/action.yml: ./mvnw runs before the pinned Maven is installed",
+    ),
+    "Delta fetch without GBX_MVN": m_sub(
+        PYRX_ACTION,
+        r"      env:\n        GBX_MVN: \./mvnw\n",
+        "",
+        "pyrx_build/action.yml: fetch-delta-test-jars.sh runs without GBX_MVN: ./mvnw",
+    ),
+    "installer without the unzip guard": m_sub(
+        INSTALLER, r"command -v unzip", "command -v true", "no unzip guard"
+    ),
+    "installer without the mirror guard": m_sub(
+        INSTALLER, r"jfrog-central", "central", "no check for the JFrog mirror"
     ),
 }
 
 
 @pytest.mark.parametrize("name", sorted(MUTATIONS))
 def test_each_drift_is_reported(name):
-    files, expected = MUTATIONS[name]
+    files, expected = MUTATIONS[name]()
     assert files != REAL, f"the mutation {name!r} changed nothing"
     found = problems(files)
     assert any(expected in p for p in found), (expected, found)

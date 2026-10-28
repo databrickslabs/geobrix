@@ -35,6 +35,8 @@ brew install act
 
 The first invocation builds `geobrix-ci-runner:local` (~5 min). Subsequent runs reuse the image.
 
+The image bakes the Maven version the repo pins (`.mvn/wrapper/maven-wrapper.properties`). The command only builds the image when it is missing, so after that version changes an old image fails the pom's Maven check: `docker rmi geobrix-ci-runner:local`, then run again.
+
 ## What's wired
 
 - **Runner image**: `catthehacker/ubuntu:runner-24.04` (digest-pinned). pip/Maven/npm registry URLs are build-arg injected from the host env (`PIP_INDEX_URL`, `MAVEN_MIRROR_URL`, `NPM_REGISTRY_URL`); set them to a private proxy if your network requires it, otherwise leave unset to use public registries.

@@ -22,7 +22,8 @@
 # Refresh procedure:
 #
 #   1. ./scripts/security/maven-pgp-bootstrap > /tmp/draft.list
-#      Runs `mvn -Pverify-pgp verify` with relaxed settings, captures every
+#      (inside geobrix-dev: GBX_MVN=mvn ./scripts/security/maven-pgp-bootstrap)
+#      Runs `./mvnw -Pverify-pgp verify` with relaxed settings, captures every
 #      key fingerprint Maven Central serves for our resolved closure, and
 #      emits draft keysmap entries.
 #
@@ -31,8 +32,9 @@
 #      Do NOT trust this file blindly — that is the entire point.
 #
 #   3. Replace the TODO block below with the reviewed entries, run
-#      `./scripts/security/maven-pgp-verify` to confirm a clean check, then
-#      commit.
+#      `./scripts/security/maven-pgp-verify` (inside geobrix-dev:
+#      `GBX_MVN=mvn ./scripts/security/maven-pgp-verify`) to confirm a clean
+#      check, then commit.
 #
 # Trust-anchor URLs for the direct dependencies in pom.xml — use these to
 # cross-check fingerprints before adding entries:

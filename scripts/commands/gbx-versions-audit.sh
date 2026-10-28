@@ -56,6 +56,9 @@ FILES=(
     ".github/workflows/build_scala_by_package.yml"
     ".github/workflows/codecov-scala-parallel.yml"
     "scripts/docker/Dockerfile"
+    "scripts/ci-local/Dockerfile.gha-runner"
+    ".mvn/wrapper/maven-wrapper.properties"
+    "pom.xml"
     "scripts/geobrix-gdal-init.sh"
     "scripts/commands/gbx-lint-python.sh"
     "python/geobrix/pyproject.toml"
@@ -96,6 +99,8 @@ PACKAGES=(
     "nbformat:::nbformat(==|_VERSION=|>=):::DBR LTS"
     "nbconvert:::nbconvert(==|_VERSION=|>=):::DBR LTS"
     "pyzmq:::pyzmq(==|_VERSION=):::INTENTIONAL DBR DIVERGENCE — see Dockerfile ZMQ fixes"
+    # Build tool — one Maven for CI (wrapper), the dev image, the local-CI image and the pom's enforcer floor
+    "maven:::MAVEN_VERSION=|distributionUrl=|<version>\[3\.[0-9.]+,\)</version>:::.mvn/wrapper (CI); scripts/ci/test_maven_wrapper.py keeps them equal"
     # Geospatial — geopandas not in DBR; pinned to be pandas-2.2 compatible
     "geopandas:::geopandas(==|_VERSION=):::current stable, compatible with DBR pandas 2.2"
 )

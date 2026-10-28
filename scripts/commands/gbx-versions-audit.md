@@ -37,7 +37,8 @@ Source of truth (priority order):
 2. **Current PyPI stable** — for tools NOT in DBR: `build`, `pytest-cov`, `geopandas` (pinned to be compatible with DBR's pandas 2.2.x).
 3. **CI matrix** — for tools intentionally divergent from DBR: `pytest 8.4.2` (kept ahead of DBR 8.3.5 because tests don't run in DBR).
 4. **System apt + ubuntugis PPA** — for GDAL native + Python bindings; auto-detected from `gdal-config --version`.
-5. **Intentional DBR divergence** — `pyzmq 25.1.1` (Dockerfile only). DBR has 26.2.0 but our Jupyter ZMQ workaround requires the older pin. Re-evaluate on next DBR LTS bump.
+5. **Build tool** — `maven`: the Maven version the wrapper pins for CI (`.mvn/wrapper/maven-wrapper.properties`), the dev and local-CI images' `MAVEN_VERSION`, and the pom's enforcer floor. `scripts/ci/test_maven_wrapper.py` fails when they differ.
+6. **Intentional DBR divergence** — `pyzmq 25.1.1` (Dockerfile only). DBR has 26.2.0 but our Jupyter ZMQ workaround requires the older pin. Re-evaluate on next DBR LTS bump.
 
 ## Files audited
 
@@ -45,6 +46,7 @@ Source of truth (priority order):
 - `.github/actions/python_build/action.yml`
 - `.github/workflows/build_*.yml` and `codecov-*.yml` (matrix values)
 - `scripts/docker/Dockerfile`
+- `scripts/ci-local/Dockerfile.gha-runner`, `.mvn/wrapper/maven-wrapper.properties`, `pom.xml` (the Maven pin)
 - `scripts/geobrix-gdal-init.sh`
 - `scripts/commands/gbx-lint-python.sh`
 - `python/geobrix/pyproject.toml` (dev/test extras — currently unpinned)

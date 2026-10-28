@@ -779,6 +779,102 @@ def test_start_refuses_a_bad_platform(arm):
     assert res.returncode == 2 and arm.calls == []
 
 
+# --- the image's Maven against the repo's pin (warn only) -----------------------------------
+
+
+def pinned_maven() -> str:
+    props = (REPO_ROOT / ".mvn" / "wrapper" / "maven-wrapper.properties").read_text()
+    return re.search(r"apache-maven-([\d.]+)-bin\.zip", props).group(1)
+
+
+def maven_history(version: str) -> list:
+    """`docker history` lines of an image whose Maven layer was built with MAVEN_VERSION=<version>."""
+    return [
+        "ENV MAVEN_HOME=/usr/local/share/maven",
+        f"|2 MAVEN_VERSION={version} MAVEN_SHA512=abc /bin/sh -c mkdir -p /m && curl -fsSL "
+        "-o /tmp/m.tgz https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/x.tar.gz",
+        "/bin/bash",
+    ]
+
+
+STALE = "0.0.1"  # never the pinned version
+WARNING = "the repo pins Maven"
+
+
+def test_the_image_maven_is_the_build_arg_in_its_history(arm):
+    arm.state["history"] = maven_history("3.9.9")
+    assert arm.sh("gbx_image_maven_version img").stdout.strip() == "3.9.9"
+    arm.state["history"] = ["/bin/bash", "ENV A=1"]
+    assert arm.sh("gbx_image_maven_version img").stdout.strip() == ""
+
+
+def test_the_pinned_maven_is_read_from_the_wrapper_properties(arm):
+    assert arm.sh("gbx_wrapper_maven_version").stdout.strip() == pinned_maven()
+
+
+def test_a_stale_image_warns_and_names_the_rebuild_but_never_fails(arm):
+    arm.state["history"] = maven_history(STALE)
+    res = arm.sh("gbx_warn_if_image_maven_differs img; echo rc=$?")
+    assert "rc=0" in res.stdout
+    assert f"Maven {STALE}" in res.stderr and f"{WARNING} {pinned_maven()}" in res.stderr
+    assert "gbx-docker-rebuild.sh" in res.stderr
+
+
+@pytest.mark.parametrize("history", ["pinned", "none"])
+def test_a_current_or_unreadable_image_is_silent(arm, history):
+    arm.state["history"] = maven_history(pinned_maven()) if history == "pinned" else []
+    res = arm.sh("gbx_warn_if_image_maven_differs img; echo rc=$?")
+    assert "rc=0" in res.stdout and res.stderr == ""
+
+
+def test_start_warns_about_a_stale_image_for_an_existing_container_and_leaves_it(arm):
+    arm.image(f"{TAG}-arm64", "arm64")
+    arm.container("arm64")
+    arm.state["history"] = maven_history(STALE)
+    res = start(arm)
+    assert res.returncode == 0, res.output
+    assert f"{WARNING} {pinned_maven()}" in res.output and "gbx-docker-rebuild.sh" in res.output
+    assert lifecycle(arm) == [] and arm.of("run") == []
+
+
+def test_start_warns_before_a_recreate_from_a_stale_image_and_still_recreates(arm):
+    arm.image(f"{TAG}-arm64", "arm64")
+    arm.container("arm64")
+    arm.state["history"] = maven_history(STALE)
+    res = start(arm, "--recreate")
+    assert res.returncode == 0, res.output
+    assert WARNING in res.output
+    verbs = [c[0] for c in arm.calls]
+    assert verbs.index("history") < verbs.index("stop"), verbs  # the image is read before the container goes
+    assert lifecycle(arm) == ["stop", "rm"] and arm.of("run")
+
+
+def test_start_warns_when_it_creates_a_container_from_a_stale_image(arm):
+    arm.image(f"{TAG}-arm64", "arm64")
+    arm.state["history"] = maven_history(STALE)
+    res = start(arm)
+    assert res.returncode == 0, res.output
+    assert f"{WARNING} {pinned_maven()}" in res.output and arm.of("run")
+
+
+def test_start_is_silent_about_maven_when_the_image_matches(arm):
+    arm.image(f"{TAG}-arm64", "arm64")
+    arm.state["history"] = maven_history(pinned_maven())
+    res = start(arm)
+    assert res.returncode == 0, res.output
+    assert WARNING not in res.output
+
+
+def test_restart_privileged_warns_before_it_recreates_from_a_stale_image(arm):
+    arm.image(f"{TAG}-arm64", "arm64")
+    arm.container("arm64")
+    arm.state["history"] = maven_history(STALE)
+    res = restart(arm, "--privileged")
+    assert res.returncode == 0, res.output
+    assert f"{WARNING} {pinned_maven()}" in res.output
+    assert lifecycle(arm) == ["stop", "rm"] and arm.of("run")
+
+
 # --- a recreate checks the image BEFORE it stops or removes the working container -----------
 
 

@@ -120,6 +120,42 @@ gbx_require_dev_image() {
     echo "$image"
 }
 
+# gbx_wrapper_maven_version  ->  the Maven version the repo pins in .mvn/wrapper/maven-wrapper.properties
+# (read from distributionUrl); nothing when the file or the version cannot be read.
+gbx_wrapper_maven_version() {
+    local root props
+    root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+    props="$root/.mvn/wrapper/maven-wrapper.properties"
+    [ -r "$props" ] || return 0
+    sed -n 's#^distributionUrl=.*/apache-maven-\([0-9][0-9.]*\)-bin\.zip.*#\1#p' "$props" | head -1
+}
+
+# gbx_image_maven_version <image>  ->  the Maven version baked into a dev image: the MAVEN_VERSION build arg
+# that `docker history` records on the layer that installed it. Nothing when the history cannot be read or
+# has no such layer (an image from before Maven was installed that way).
+gbx_image_maven_version() {
+    docker history --no-trunc --format '{{.CreatedBy}}' "$1" 2>/dev/null \
+        | grep -o 'MAVEN_VERSION=[0-9][0-9.]*' | head -1 | cut -d= -f2
+}
+
+# gbx_warn_if_image_maven_differs <image>  ->  always returns 0 (warn only). When the image's Maven is not
+# the version the repo pins, says so on stderr and names the fix: the pom's enforcer stops every build in a
+# container made from that image, and the container cannot fetch the pinned Maven itself (./mvnw needs
+# Maven Central and unzip, which it lacks), so the only fix is a rebuilt image.
+gbx_warn_if_image_maven_differs() {
+    local want have
+    want="$(gbx_wrapper_maven_version)"
+    have="$(gbx_image_maven_version "$1")"
+    if [ -n "$want" ] && [ -n "$have" ] && [ "$want" != "$have" ]; then
+        {
+            echo "WARNING: the dev image has Maven $have, but the repo pins Maven $want (.mvn/wrapper/maven-wrapper.properties)."
+            echo "  A container made from this image fails the pom's Maven version check at its first build."
+            echo "  Fix: bash scripts/commands/gbx-docker-rebuild.sh   (then gbx-docker-start.sh --recreate, at a quiet point)"
+        } >&2
+    fi
+    return 0
+}
+
 # gbx_check_docker_flags <docker build flags...>  ->  status 2 (and says why) for a flag build_smart.sh owns:
 # a platform (it is chosen with --platform / GBX_DOCKER_PLATFORM, and the tag follows it) or the package index
 # as a build-arg (it travels as a BuildKit secret; a build-arg is recorded in the image history).

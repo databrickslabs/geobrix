@@ -27,5 +27,18 @@ runs:
         MVNW_USERNAME: gha-service-account
         MVNW_PASSWORD: ${{ inputs.jfrog-access-token }}
       run: |
+        # Without unzip the wrapper swaps the pinned .zip for a .tar.gz URL, and the zip's SHA-256 then
+        # fails with "your Maven distribution might be compromised": say what is really wrong.
+        if ! command -v unzip >/dev/null 2>&1; then
+          echo "::error::unzip is not installed on this runner; the Maven wrapper needs it to unpack the pinned zip."
+          exit 1
+        fi
+        # jfrog-auth writes the JFrog mirror into ~/.m2/settings.xml only when `mvn` is on PATH. Without
+        # it ./mvnw would resolve through blocked Maven Central, so stop here with the reason. (act sets
+        # ACT=true and stubs jfrog-auth; its mirror image has its own Maven settings.)
+        if [ "${ACT:-}" != true ] && ! grep -q 'jfrog-central' "${HOME}/.m2/settings.xml" 2>/dev/null; then
+          echo "::error::~/.m2/settings.xml has no JFrog mirror. jfrog-auth configures Maven only when the runner image has a Maven on PATH: keep one installed."
+          exit 1
+        fi
         echo "MVNW_REPOURL=${MVNW_REPOURL}" >> "${GITHUB_ENV}"
         ./mvnw -B -v

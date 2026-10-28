@@ -414,7 +414,7 @@ def test_a_form_with_null_outputs_is_an_error_unless_it_allows_them(
     out = {}
     for allows in (False, True):
         form = levels.Form(
-            "T", "f", "L1", "-", "t_in", sql, register=False, allows_null=allows
+            "T", "f", "L3", "-", "t_in", sql, register=False, allows_null=allows
         )
         monkeypatch.setitem(lf.FORMS, "T", [form])
         (out[allows],) = run_s(

@@ -16,16 +16,28 @@ _MOD = None
 _WHY: Optional[str] = None
 
 
+def _source_checkout() -> Optional[Path]:
+    """The repository root when this package runs from a source checkout (rust/gbxrs sits above it)."""
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "rust" / "gbxrs" / "Cargo.toml").is_file():
+            return parent
+    return None
+
+
 def _rs_dir() -> Optional[Path]:
-    """B1 layout: <payload>/_native/<arch>/rs/. On macOS dev hosts: the gitignored _native/dev-darwin/rs/."""
+    """B1 layout: <payload>/_native/<arch>/rs/. On a macOS source checkout: build/rs/dev-darwin/rs/.
+
+    The macOS iteration build (maturin build, never shipped) stays out of the package tree: a stray
+    `_native/` directory without B1's module would be an empty namespace package.
+    """
     if sys.platform == "darwin":
-        return Path(__file__).resolve().parents[1] / "_native" / "dev-darwin" / "rs"
+        root = _source_checkout()
+        return root / "build" / "rs" / "dev-darwin" / "rs" if root else None
     try:
         from databricks.labs.gbx import _native
-
-        d = _native.native_dir()
-    except (ModuleNotFoundError, AttributeError):  # a wheel without the payload
+    except ModuleNotFoundError:
         return None
+    d = _native.native_dir()
     return Path(d) / "rs" if d else None
 
 
@@ -44,7 +56,10 @@ def load():
         mod = importlib.util.module_from_spec(spec)
         loader.exec_module(mod)
         _MOD = mod
-    except Exception as exc:  # noqa: BLE001 - glibc too old, wrong arch, ...
+    except (
+        ImportError,
+        OSError,
+    ) as exc:  # glibc too old, wrong arch, corrupt file; MemoryError propagates
         _WHY = f"Rust kernels failed to load ({type(exc).__name__}: {exc})"
     return _MOD
 

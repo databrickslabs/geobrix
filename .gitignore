@@ -80,7 +80,7 @@ test-logs/bench/
 /.gbx-local.env
 # Build output of the native crates (cargo target, vendored sources)
 /build/
-# The Rust crate: cargo target, maturin wheels, and the macOS iteration build of the kernel module
+# The Rust crate: cargo target and maturin wheels (the macOS iteration build of the kernel module is
+# build/rs/dev-darwin/rs/, under /build/ above)
 /rust/gbxrs/target/
 /rust/gbxrs/dist/
-/python/geobrix/src/databricks/labs/gbx/_native/dev-darwin/

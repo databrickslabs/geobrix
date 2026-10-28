@@ -56,10 +56,7 @@ def _expected_sha() -> Optional[str]:
 
     try:
         path = importlib.import_module("databricks.labs.gbx._native").jar_path()
-    except (
-        ModuleNotFoundError,
-        AttributeError,
-    ):  # no payload, or only the dev Rust dir
+    except ModuleNotFoundError:
         return None
     if not path:
         return None

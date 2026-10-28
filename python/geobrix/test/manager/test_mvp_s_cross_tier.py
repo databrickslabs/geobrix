@@ -161,6 +161,30 @@ def test_a_missing_or_unloadable_rust_build_falls_back_to_python(tmp_path, monke
         assert list(next(bng_eastnorthasbng_batch([cols]))) == ["TQ3080", None]
 
 
+def test_a_memory_error_while_loading_is_not_cached(tmp_path, monkeypatch):
+    """Resource exhaustion is never "no build": it propagates, and the next call tries again (AP-10)."""
+
+    class Exhausted:
+        def __init__(self, *args):
+            pass
+
+        def create_module(self, spec):
+            return None
+
+        def exec_module(self, module):
+            raise MemoryError("while loading")
+
+    (tmp_path / "_gbxrs.abi3.so").write_bytes(b"x")
+    monkeypatch.setattr(_rs, "_rs_dir", lambda: tmp_path)
+    monkeypatch.setattr(_rs.importlib.machinery, "ExtensionFileLoader", Exhausted)
+    monkeypatch.setattr(_rs, "_MOD", None)
+    monkeypatch.setattr(_rs, "_WHY", None)
+    for _ in range(2):
+        with pytest.raises(MemoryError):
+            _rs.unavailable_reason()
+    assert _rs._WHY is None
+
+
 @pytest.mark.parametrize(
     "raw,type_name,want",
     [

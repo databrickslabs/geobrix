@@ -71,8 +71,10 @@ def test_the_repository_passes_the_audit():
             (r"(?m)^ARG GDAL_VERSION=\S+", "ARG GDAL_VERSION=9.9.9"),
         ),
         ("scripts/native/pins.conf", (r"(?m)^(GDAL_SHA256=).*", r"\1<")),
+        # a half-done bump: the version moved, its URL, file name and checksum did not
+        ("scripts/native/pins.conf", (r"(?m)^(GDAL_VERSION=).*", r"\g<1>9.9.9")),
     ],
-    ids=["rust-channel", "legacy-gdal-arg", "checksum"],
+    ids=["rust-channel", "legacy-gdal-arg", "checksum", "version-without-url"],
 )
 def test_drift_is_reported(tmp_path, rel, change):
     root = audited_copy(tmp_path)
@@ -86,6 +88,56 @@ def test_drift_is_reported(tmp_path, rel, change):
 
     assert res.returncode == 1, res.stdout
     assert rel in res.stdout + res.stderr
+
+
+CARGO_ROWS = {
+    "pyo3-as-a-table": (
+        {
+            "crate/Cargo.toml": '[package]\nname = "x"\n\n[dependencies.pyo3]\nversion = "0.29.0"\n'
+        },
+        "crate/Cargo.toml",
+    ),
+    "inherited-but-never-pinned": (
+        {
+            "Cargo.toml": '[workspace]\nmembers = ["crate"]\n',
+            "crate/Cargo.toml": "[dependencies]\npyo3.workspace = true\n",
+        },
+        "crate/Cargo.toml",
+    ),
+    "inherited-and-pinned": (
+        {
+            "Cargo.toml": '[workspace.dependencies]\npyo3 = { version = "={PYO3}", features = ["abi3"] }\n',
+            "crate/Cargo.toml": "[dependencies]\npyo3.workspace = true\n",
+        },
+        None,
+    ),
+    "maturin-backend-before-requires": (
+        {
+            "py/pyproject.toml": '[build-system]\nbuild-backend = "maturin"\nrequires = ["maturin=={MATURIN}"]\n'
+        },
+        None,
+    ),
+}
+
+
+@pytest.mark.parametrize("files, drift", CARGO_ROWS.values(), ids=CARGO_ROWS.keys())
+def test_crates_and_maturin_projects_are_audited_in_every_toml_form(
+    tmp_path, files, drift
+):
+    root = audited_copy(tmp_path)
+    for rel, text in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        text = text.replace("{PYO3}", pin("PYO3_VERSION")).replace(
+            "{MATURIN}", pin("MATURIN_VERSION")
+        )
+        (root / rel).write_text(text)
+
+    res = pins("audit", "--check", "--root", str(root))
+
+    if drift:
+        assert res.returncode == 1 and drift in res.stdout, res.stdout
+    else:
+        assert res.returncode == 0, res.stdout
 
 
 def pinned_report() -> dict:

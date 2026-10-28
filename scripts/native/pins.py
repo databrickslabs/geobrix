@@ -51,6 +51,15 @@ def load_pins(path: Path) -> dict:
     return pins
 
 
+def version_forms(version: str) -> list:
+    """The spellings a version takes in a URL or file name: 1.2.3, 1_2_3, and SQLite's 3540100 for 3.54.1."""
+    forms = [re.escape(version), re.escape(version.replace(".", "_"))]
+    parts = version.split(".")
+    if len(parts) == 3 and all(p.isdigit() for p in parts):
+        forms.append(f"{parts[0]}{int(parts[1]):02d}{int(parts[2]):02d}00")
+    return forms
+
+
 def validate(pins: dict, name: str = "scripts/native/pins.conf") -> list:
     """Findings for the pin file alone."""
     out = []
@@ -67,6 +76,16 @@ def validate(pins: dict, name: str = "scripts/native/pins.conf") -> list:
                 continue
             if f"{dep}_SHA256" not in pins and f"{dep}_SDIST_SHA256" not in pins:
                 out.append(f"{name}: {key} has no {dep}_SHA256")
+            # a bump moves the version, the URLs, the file name and the checksum together
+            spelled = re.compile(
+                r"(?<![\d.])(?:%s)(?![\d])" % "|".join(version_forms(value))
+            )
+            for suffix in ("URL", "URL2", "FILE", "SDIST_FILE"):
+                other = pins.get(f"{dep}_{suffix}")
+                if other not in (None, "single-source") and not spelled.search(other):
+                    out.append(
+                        f"{name}: {key}={value} does not appear in {dep}_{suffix}; move the version, URL, file name and checksum together"
+                    )
     return out
 
 
@@ -88,27 +107,99 @@ def walk(root: Path, names):
             yield p
 
 
+DEPENDENCY_SECTION = re.compile(r"(^|\.)(dev-|build-)?dependencies$")
+PYO3_TABLE = re.compile(r"(^|\.)(dev-|build-)?dependencies\.pyo3$")
+
+
+def pyo3_declarations(text: str) -> list:
+    """(kind, version, in_workspace) for each pyo3 declaration in a Cargo.toml: kind is 'version' or
+    'inherited'. Covers `pyo3 = "x"`, `pyo3 = { version = "x" }`, `pyo3.version`, `pyo3.workspace = true`,
+    `pyo3 = { workspace = true }` and the `[dependencies.pyo3]` table form."""
+    out, section, table = [], "", None
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        head = re.fullmatch(r"\[([^\[\]]+)\]", line)
+        if head:
+            if table is not None and not table["seen"]:
+                out.append(("version", None, table["ws"]))
+            section = head.group(1).strip()
+            ws = section.startswith("workspace.")
+            table = (
+                {"seen": False, "ws": ws}
+                if PYO3_TABLE.search(section.removeprefix("workspace."))
+                else None
+            )
+            continue
+        ws = section.startswith("workspace.")
+        bare = section.removeprefix("workspace.")
+        if table is not None:
+            m = re.match(r'version\s*=\s*"([^"]*)"', line)
+            if m:
+                out.append(("version", m.group(1), table["ws"]))
+                table["seen"] = True
+            elif re.match(r"workspace\s*=\s*true", line):
+                out.append(("inherited", None, table["ws"]))
+                table["seen"] = True
+            continue
+        if not DEPENDENCY_SECTION.search(bare):
+            continue
+        if re.match(r"pyo3\.workspace\s*=\s*true", line):
+            out.append(("inherited", None, ws))
+            continue
+        m = re.match(r'pyo3\.version\s*=\s*"([^"]*)"', line)
+        if m:
+            out.append(("version", m.group(1), ws))
+            continue
+        m = re.match(r"pyo3\s*=\s*(.*)", line)
+        if m:
+            value = m.group(1)
+            if value.startswith('"'):
+                out.append(("version", value.split('"')[1], ws))
+            elif re.search(r"\bworkspace\s*=\s*true", value):
+                out.append(("inherited", None, ws))
+            else:
+                v = re.search(r'\bversion\s*=\s*"([^"]*)"', value)
+                out.append(("version", v.group(1) if v else None, ws))
+    if table is not None and not table["seen"]:
+        out.append(("version", None, table["ws"]))
+    return out
+
+
 def rust_crates(root: Path, pins: dict) -> list:
-    out = []
+    out, inheriting, workspace_pinned = [], [], False
+    want = "=" + pins["PYO3_VERSION"]
     for path in walk(root, {"Cargo.toml"}):
-        text = path.read_text()
-        for m in re.finditer(
-            r'(?m)^\s*pyo3\s*=\s*(?:"([^"]*)"|\{[^}]*?\bversion\s*=\s*"([^"]*)")', text
-        ):
-            got = m.group(1) or m.group(2)
-            if got != "=" + pins["PYO3_VERSION"]:
+        rel = path.relative_to(root)
+        for kind, version, in_workspace in pyo3_declarations(path.read_text()):
+            if kind == "inherited":
+                inheriting.append(rel)
+            elif version != want:
                 out.append(
-                    f"{path.relative_to(root)}: pyo3 is {got!r}, pins.conf says =PYO3_VERSION (={pins['PYO3_VERSION']})"
+                    f"{rel}: pyo3 is {version!r}, pins.conf says {want!r} (=PYO3_VERSION)"
                 )
+            elif in_workspace:
+                workspace_pinned = True
+    if inheriting and not workspace_pinned:
+        out += [
+            f"{rel}: pyo3 is inherited from the workspace, but no [workspace.dependencies] entry pins {want!r} (=PYO3_VERSION)"
+            for rel in inheriting
+        ]
     for path in walk(root, {"pyproject.toml"}):
         text = path.read_text()
-        if not re.search(r'(?m)^\s*build-backend\s*=\s*"maturin"', text):
+        if not re.search(r"(?m)^\s*build-backend\s*=\s*[\"']maturin[\"']", text):
             continue
-        m = re.search(r'"maturin\s*([^"]*)"', text)
-        want = "==" + pins["MATURIN_VERSION"]
-        if not m or m.group(1).replace(" ", "") != want:
+        requires = re.search(r"(?ms)^\s*requires\s*=\s*\[(.*?)\]", text)
+        m = (
+            re.search(r"[\"']maturin\s*([^\"']*)[\"']", requires.group(1))
+            if requires
+            else None
+        )
+        wanted = "==" + pins["MATURIN_VERSION"]
+        if not m or m.group(1).replace(" ", "") != wanted:
             out.append(
-                f"{path.relative_to(root)}: maturin requirement is {('maturin' + m.group(1)) if m else 'missing'}, pins.conf says maturin{want}"
+                f"{path.relative_to(root)}: maturin requirement is {('maturin' + m.group(1)) if m else 'missing'}, pins.conf says maturin{wanted}"
             )
     return out
 

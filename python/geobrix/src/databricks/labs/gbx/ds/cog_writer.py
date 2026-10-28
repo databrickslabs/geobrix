@@ -2016,9 +2016,12 @@ class CogGbxWriter(DataSourceWriter):
         is not considered.
 
         A Zarr tile is always a part: one variable and one step of a cube, never the
-        whole store, even when its window is the whole plane.
+        whole store, even when its window is the whole plane or it is the origin window of
+        the grid. It is a part whether it is virtual or holds its bytes
+        (``virtual_tiles=False``), so the test is the ``zarr_array`` both carry, not
+        ``is_zarr_tile``.
         """
-        if vt.clip_polygon is not None or is_zarr_tile(vt):
+        if vt.clip_polygon is not None or (vt.metadata or {}).get("zarr_array"):
             return True
         if (vt.metadata or {}).get(BAND_METADATA_KEY) is not None:
             return True

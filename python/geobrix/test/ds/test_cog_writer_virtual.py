@@ -595,13 +595,17 @@ def test_reader_split_tiles_are_named_as_parts(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("materialized", [False, True], ids=["virtual", "materialized"])
 @pytest.mark.parametrize(
     "tile_size", [None, (24, 16)], ids=["chunk-windows", "whole-plane"]
 )
-def test_virtual_zarr_tiles_are_each_written_to_their_own_cog(tmp_path, tile_size):
+def test_zarr_tiles_are_each_written_to_their_own_cog(
+    tmp_path, tile_size, materialized
+):
     """Zarr tiles of one store share its path and, for a whole-plane window, the stamped
-    source dims. Every variable and step still gets its own file, band 1 of which is that
-    step's cells; a whole-plane tile is not path-converted (its path is a directory)."""
+    source dims, whether they are virtual or hold their bytes (``virtual_tiles=False``).
+    Every variable and step still gets its own file, band 1 of which is that step's cells;
+    a virtual whole-plane tile is not path-converted (its path is a directory)."""
     zarr = pytest.importorskip("zarr")
     from databricks.labs.gbx.zarr import _read, _tiles
 
@@ -642,6 +646,12 @@ def test_virtual_zarr_tiles_are_each_written_to_their_own_cog(tmp_path, tile_siz
     )
     tiles = [r for p in plans for r in _tiles.tile_rows(p, range(p.n_tiles))]
     assert len(tiles) == (2 * 3 * 4 if tile_size is None else 2 * 3)
+    if materialized:
+        from databricks.labs.gbx.pyrx.core.open_tile import materialize_to_bytes
+        from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+        tiles = [materialize_to_bytes(VirtualTile.from_row(t)).to_row() for t in tiles]
+        assert all(t["raster"] for t in tiles)
     w = CogGbxWriter(str(tmp_path / "out"), _v2_schema(), overwrite=True)
     msg = w._write_tiles(
         iter([{"source": _tiles.source_of(t), "tile": t} for t in tiles])

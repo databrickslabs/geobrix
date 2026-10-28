@@ -332,11 +332,16 @@ def _open_source(spark, source, kind, version_as_of, timestamp_as_of) -> _Source
 
 
 def _open_table(spark, table, version_as_of, timestamp_as_of) -> _Source:
+    from databricks.labs.gbx.zarr._filemode import FileLayout
     from databricks.labs.gbx.zarr._manifest import read_props, read_rows, snapshot
 
     props = read_props(spark, table)
     snap = snapshot(
-        spark, table, version_as_of=version_as_of, timestamp_as_of=timestamp_as_of
+        spark,
+        table,
+        version_as_of=version_as_of,
+        timestamp_as_of=timestamp_as_of,
+        files=FileLayout.of(props),
     )
     metas = {}
     for row in read_rows(spark, snap, kinds=["group", "array"]).to_pylist():

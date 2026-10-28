@@ -76,7 +76,7 @@ from databricks.labs.gbx.core._arrow import to_spark_df
 from databricks.labs.gbx.zarr import _manifest as M
 from databricks.labs.gbx.zarr import _write_tiles
 from databricks.labs.gbx.zarr._access import bounded_closure, resolve_access
-from databricks.labs.gbx.zarr._filemode import require_geobrix_files
+from databricks.labs.gbx.zarr._filemode import FileLayout, require_geobrix_files
 from databricks.labs.gbx.zarr._filemode import resolve as resolve_file_mode
 from databricks.labs.gbx.zarr._layout import chunk_layout, coordinate_chunks
 from databricks.labs.gbx.zarr._meta import (
@@ -882,6 +882,7 @@ class _Plan:
     access: object = (
         None  # AccessConfig: how the tasks reach the files (holds credentials)
     )
+    files: object = None  # FileLayout: how the manifest keeps its files
 
 
 def _as_numbers(values):
@@ -1374,7 +1375,8 @@ def _plan_existing(
     spark, table, write_id, mode, props, data, variables, append_dim, owner, tiles=None
 ) -> _Plan:
     root, base_root = _write_roots(table, props, owner)
-    base = M.snapshot(spark, table)
+    files = FileLayout.of(props)
+    base = M.snapshot(spark, table, files=files)
     docs = _docs_at(spark, base)
     arrays = dict(docs.arrays)
     fmt = 3 if any(k.endswith("zarr.json") for k in docs.metas) else 2
@@ -1403,6 +1405,7 @@ def _plan_existing(
         extents=extents,
         fmt=fmt,
         separator=separator,
+        files=files,
     )
     labels = None
     if _is_xarray(data):
@@ -2501,12 +2504,18 @@ def _commit(spark, plan: _Plan, data_rows: pa.Table, stats: dict) -> int:
         rows = pa.concat_tables([docs_rows, coord_rows, data_rows])
         _require_packs(plan, rows)
         return M.commit(
-            spark, plan.table, rows, write_id=plan.write_id, meta=meta, sharded=sharded
+            spark,
+            plan.table,
+            rows,
+            write_id=plan.write_id,
+            meta=meta,
+            sharded=sharded,
+            files=plan.files,
         )
     base = plan.base
     for attempt in range(_ATTEMPTS):
         rows = pa.concat_tables([docs_rows, coord_rows, data_rows])
-        latest = M.snapshot(spark, plan.table)
+        latest = M.snapshot(spark, plan.table, files=plan.files)
         if latest.version != plan.base.version:
             stale = M.changed_since(spark, plan.table, base, rows).to_pylist()
             data_stale = [
@@ -2526,6 +2535,7 @@ def _commit(spark, plan: _Plan, data_rows: pa.Table, stats: dict) -> int:
                 write_id=plan.write_id,
                 meta=meta,
                 sharded=sharded,
+                files=plan.files,
             )
         except M.ConcurrentCommit:
             _pause(_wait(attempt))
@@ -2922,22 +2932,21 @@ def gbx_zarr_write(
     inp = _create_input(spark, data, tiles, variables)
     plan = _plan_create(target, write_id, data_root, inp, chunks, shards, codecs)
     plan.access = _write_access(spark, plan, access)  # before anything is claimed
+    new_props = M.StoreProps(
+        kind="managed",
+        root=data_root,
+        overlay_root=None,
+        writable=True,
+        file_mode=fm,
+        retain=retain,
+    )
+    # an adopted table keeps the mode it was made with
+    plan.files = FileLayout.of(M.read_props(spark, target) if adopt else new_props)
     claimed = made = False
     try:
         claimed = _claim_marker(data_root, owner, "managed")
         if not adopt:
-            M.create_manifest(
-                spark,
-                target,
-                M.StoreProps(
-                    kind="managed",
-                    root=data_root,
-                    overlay_root=None,
-                    writable=True,
-                    file_mode=fm,
-                    retain=retain,
-                ),
-            )
+            M.create_manifest(spark, target, new_props)
             made = True
         return _write(spark, plan, optimize)
     except BaseException:

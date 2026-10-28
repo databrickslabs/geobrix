@@ -43,6 +43,7 @@ from databricks.labs.gbx.zarr._access import (
     check_identity,
     identities_match,
 )
+from databricks.labs.gbx.zarr._filemode import FileLayout
 from databricks.labs.gbx.zarr._meta import doc_bytes, same_layout, with_shape
 from databricks.labs.gbx.zarr._register import (
     _chunk_rows,
@@ -388,7 +389,9 @@ def _release_row_of(lock: dict, write_id: str) -> dict:
     }
 
 
-def _break_lock(spark, table: str, lock: dict, break_lock: bool) -> None:
+def _break_lock(
+    spark, table: str, lock: dict, break_lock: bool, files: FileLayout | None = None
+) -> None:
     """Clear a lock a sync found, or refuse: only on request, and only an old one."""
     if not (break_lock and _breakable(lock)):
         raise _locked(table, lock, break_lock)
@@ -400,20 +403,23 @@ def _break_lock(spark, table: str, lock: dict, break_lock: bool) -> None:
             pa.Table.from_pylist([_release_row_of(lock, wid)]),
             write_id=wid,
             meta={"mode": "publish-lock-broken"},
+            files=files,
         )
     except (ZarrWriteConflict, M.ConcurrentCommit):
         raise _locked(table, lock) from None  # it changed under us: look again
     _LOG.warning("broke the publish lock of %s (taken %s ago)", table, _lock_age(lock))
 
 
-def _take_lock(spark, table: str, break_lock: bool = False) -> str:
+def _take_lock(
+    spark, table: str, break_lock: bool = False, files: FileLayout | None = None
+) -> str:
     """Insert the publish lock row; returns its ``write_id``.
 
     The insert is a compare-and-swap against "no lock", so of two publishes one gets the
     row and the other ``ZarrWriteConflict``. A lock that is there is replaced only with
     ``break_lock=True`` and only when it is old enough (``_LOCK_BREAK_AFTER_SECONDS``).
     """
-    held = _locks(spark, M.snapshot(spark, table))
+    held = _locks(spark, M.snapshot(spark, table, files=files))
     expected = None
     if held:
         if not (break_lock and _breakable(held[0])):
@@ -438,9 +444,10 @@ def _take_lock(spark, table: str, break_lock: bool = False) -> str:
             pa.Table.from_pylist([row]),
             write_id=lock,
             meta={"mode": "publish-lock"},
+            files=files,
         )
     except (ZarrWriteConflict, M.ConcurrentCommit):
-        now = _locks(spark, M.snapshot(spark, table))
+        now = _locks(spark, M.snapshot(spark, table, files=files))
         raise _locked(table, now[0] if now else {}) from None
     return lock
 
@@ -455,7 +462,7 @@ def _release_row(lock: str, write_id: str) -> dict:
     }
 
 
-def _release(spark, table: str, lock: str) -> None:
+def _release(spark, table: str, lock: str, files: FileLayout | None = None) -> None:
     """Drop the lock row on a publish that stopped short; never hides the error that did."""
     wid = uuid.uuid4().hex
     try:
@@ -465,6 +472,7 @@ def _release(spark, table: str, lock: str) -> None:
             pa.Table.from_pylist([_release_row(lock, wid)]),
             write_id=wid,
             meta={"mode": "publish-release"},
+            files=files,
         )
     except Exception:
         _LOG.warning(
@@ -489,13 +497,26 @@ def _registered(spark, table: str, what: str) -> M.StoreProps:
     return props
 
 
-def _commit_diff(spark, table: str, diff: _Diff, arrays: dict, mode: str) -> int:
+def _commit_diff(
+    spark,
+    table: str,
+    diff: _Diff,
+    arrays: dict,
+    mode: str,
+    files: FileLayout | None = None,
+) -> int:
     rows = pa.Table.from_pylist(diff.rows, schema=M._COMMIT_SCHEMA)
     meta = {"mode": mode, **diff.counts()}
     sharded = {name: m.shard is not None for name, m in arrays.items()}
     try:
         return M.commit(
-            spark, table, rows, write_id=diff.write_id, meta=meta, sharded=sharded
+            spark,
+            table,
+            rows,
+            write_id=diff.write_id,
+            meta=meta,
+            sharded=sharded,
+            files=files,
         )
     except (ZarrWriteConflict, M.ConcurrentCommit):
         raise ZarrWriteConflict(
@@ -528,14 +549,15 @@ def gbx_zarr_sync(
     ``break_lock=True`` clears it and the sync goes on. A younger lock is never broken.
     """
     props = _registered(spark, table, "gbx_zarr_sync")
-    held = _locks(spark, M.snapshot(spark, table))
+    files = FileLayout.of(props)
+    held = _locks(spark, M.snapshot(spark, table, files=files))
     if held:
-        _break_lock(spark, table, held[0], break_lock)
-    snap = M.snapshot(spark, table)
+        _break_lock(spark, table, held[0], break_lock, files)
+    snap = M.snapshot(spark, table, files=files)
     live = M.read_rows(spark, snap, kinds=_LIVE_KINDS)
     diff, arrays = _compare(spark, props.root, live, uuid.uuid4().hex)
     if diff:
-        version = _commit_diff(spark, table, diff, arrays, "sync")
+        version = _commit_diff(spark, table, diff, arrays, "sync", files)
         _say(f"synced {table} at version {version}: {diff.counts()}")
     else:
         _say(f"{table} is up to date")
@@ -744,23 +766,25 @@ def publish(spark, table: str, *, break_lock: bool = False) -> int:
     check_owner_marker(
         props.overlay_root, qualified_table_name(spark, table), "overlay"
     )
-    snap = M.snapshot(spark, table)
+    files = FileLayout.of(props)
+    snap = M.snapshot(spark, table, files=files)
     ours = M.read_rows(spark, snap, kinds=_LIVE_KINDS)
     if not pc.any(pc.equal(ours.column("origin"), "gbx")).as_py():
         return snap.version
-    lock = _take_lock(spark, table, break_lock)
+    lock = _take_lock(spark, table, break_lock, files)
     try:
         if _AFTER_LOCK is not None:
             _AFTER_LOCK()
         return _publish(spark, table, props, lock)
     except BaseException:
-        _release(spark, table, lock)
+        _release(spark, table, lock, files)
         raise
 
 
 def _publish(spark, table: str, props, lock: str) -> int:
     base, write_id = props.root, uuid.uuid4().hex
-    live = M.read_rows(spark, M.snapshot(spark, table), kinds=_LIVE_KINDS)
+    files = FileLayout.of(props)
+    live = M.read_rows(spark, M.snapshot(spark, table, files=files), kinds=_LIVE_KINDS)
     diff, _ = _compare(spark, base, live, write_id)
     if diff:
         shown = ", ".join(
@@ -873,4 +897,5 @@ def _publish(spark, table: str, props, lock: str) -> int:
         write_id=write_id,
         meta=meta,
         sharded=sharded,
+        files=files,
     )

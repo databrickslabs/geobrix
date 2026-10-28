@@ -50,7 +50,11 @@ from databricks.labs.gbx.core._arrow import to_spark_df
 from databricks.labs.gbx.core._retry import _retry_transient
 from databricks.labs.gbx.zarr import _manifest as M
 from databricks.labs.gbx.zarr._access import identities_match, reader_for
-from databricks.labs.gbx.zarr._filemode import path_of, require_geobrix_files
+from databricks.labs.gbx.zarr._filemode import (
+    FileLayout,
+    path_of,
+    require_geobrix_files,
+)
 from databricks.labs.gbx.zarr._pack import PackWriter, require_packs
 from databricks.labs.gbx.zarr._register import OWNER_MARKER, identity_of
 from databricks.labs.gbx.zarr._shard import Region
@@ -368,7 +372,8 @@ def _optimize(
             "put the folded shards",
             fix="register the store with writable=True and an overlay_root",
         )
-    snap = M.snapshot(spark, table)
+    files = FileLayout.of(props)
+    snap = M.snapshot(spark, table, files=files)
     docs = _write._docs_at(spark, snap)
     names = _array_names(variables, docs)
     wanted = None if shards is None else {s for s in shards if s[0] in names}
@@ -459,6 +464,7 @@ def _optimize(
                 write_id=write_id,
                 meta=meta,
                 sharded=sharded,
+                files=files,
             )
         except M.ConcurrentCommit:
             # the same rows, once more: a stale one now fails as a conflict
@@ -480,7 +486,7 @@ def _optimize(
             fix="retry once the other writers are done",
         )
     _warn_skipped(table, skipped)
-    return M.snapshot(spark, table).version
+    return M.snapshot(spark, table, files=files).version
 
 
 def _warn_skipped(table: str, skipped: list) -> None:
@@ -557,13 +563,20 @@ def _list_packs(root: str) -> list[tuple[str, float]]:
     return _retry_transient(walk) if os.path.isdir(top) else []
 
 
-def _files_at(spark, table: str, version: int, root: str, tag: str | None = None):
+def _files_at(
+    spark,
+    table: str,
+    version: int,
+    root: str,
+    tag: str | None = None,
+    files: FileLayout | None = None,
+):
     """The pack files the live rows of ``version`` (or its ``tag`` rows) point at.
 
     Raises ``ZarrVersionUnavailable`` when Delta no longer has the version's data files.
     """
     where = "tag IS NULL" if tag is None else f"tag = {M._lit(tag)}"
-    select = M.file_select(M.file_layout(spark, table))
+    select = M.file_select(files or M.file_layout(spark, table))
     try:
         rows = spark.sql(
             f"SELECT DISTINCT {select} FROM {M._q(table)} VERSION AS OF {int(version)} "
@@ -582,7 +595,9 @@ def _files_at(spark, table: str, version: int, root: str, tag: str | None = None
     return {_rel(path_of(f), root) for f in rows.column("file").to_pylist()}
 
 
-def _protected(spark, table: str, root: str, horizon: datetime):
+def _protected(
+    spark, table: str, root: str, horizon: datetime, files: FileLayout | None = None
+):
     """What a vacuum may not delete, as ``(live, tagged, window files, commit versions,
     oldest)``.
 
@@ -597,7 +612,8 @@ def _protected(spark, table: str, root: str, horizon: datetime):
     """
     from pyspark.sql import functions as F
 
-    select = M.file_select(M.file_layout(spark, table))
+    files = files or M.file_layout(spark, table)
+    select = M.file_select(files)
     rows = spark.sql(
         f"SELECT DISTINCT {select}, tag IS NOT NULL AS tagged FROM {M._q(table)} "
         "WHERE kind IN ('shard', 'chunk') AND file IS NOT NULL "
@@ -631,7 +647,7 @@ def _protected(spark, table: str, root: str, horizon: datetime):
     if oldest is not None:
         for v in sorted(v for v, _ in history if v >= oldest):
             try:
-                window |= _files_at(spark, table, v, root)
+                window |= _files_at(spark, table, v, root, files=files)
             except ZarrVersionUnavailable:
                 continue  # Delta dropped its files: nobody can read it
             oldest = v
@@ -643,7 +659,7 @@ def _protected(spark, table: str, root: str, horizon: datetime):
             )
         for _, (v, mode) in versions.items():
             if mode == "restore" and v is not None and v > oldest:
-                window |= _files_at(spark, table, v, root)
+                window |= _files_at(spark, table, v, root, files=files)
     return live, tagged, window, versions, oldest
 
 
@@ -813,7 +829,7 @@ def gbx_zarr_vacuum(
     root, _ = _roots(spark, table, props)
     if root is None:
         return _report(spark, [])
-    kept = _protected(spark, table, root, horizon)
+    kept = _protected(spark, table, root, horizon, FileLayout.of(props))
     # a write that has not committed may still be running: its files keep the store's retain
     stale = now - timedelta(seconds=seconds if force else store_seconds)
     decided, doomed = _decide(_list_packs(root), kept, now, now - _GRACE, stale)
@@ -910,11 +926,16 @@ def gbx_zarr_tag(spark, table: str, name: str, *, version_as_of=None) -> None:
             f"tag {name!r} already exists in {table}. Fix: pick another name, or remove "
             "it first with gbx_zarr_untag."
         )
-    snap = M.snapshot(spark, table, version_as_of=version_as_of)
+    files = FileLayout.of(props)
+    snap = M.snapshot(spark, table, version_as_of=version_as_of, files=files)
     if version_as_of is not None:  # a tag must not pin a version whose files are gone
         root = _files_root(props)
         _require_exist(
-            _files_at(spark, table, snap.version, root, tag=snap.tag) if root else (),
+            (
+                _files_at(spark, table, snap.version, root, tag=snap.tag, files=files)
+                if root
+                else ()
+            ),
             root,
             table,
             version_as_of,
@@ -1198,22 +1219,29 @@ def gbx_zarr_restore(
             "restored",
             fix="register the store with writable=True and an overlay_root",
         )
+    files = FileLayout.of(props)
     target = M.snapshot(
-        spark, table, version_as_of=version_as_of, timestamp_as_of=timestamp_as_of
+        spark,
+        table,
+        version_as_of=version_as_of,
+        timestamp_as_of=timestamp_as_of,
+        files=files,
     )
     label = target.version if target.tag is None else f"tag:{target.tag}"
     want = M.read_rows(spark, target, kinds=_DATA_KINDS)
     write_id = uuid.uuid4().hex
     meta = {"mode": "restore", "from": label, "write_id": write_id}
     for attempt in range(_write._ATTEMPTS):
-        latest = M.snapshot(spark, table)
+        latest = M.snapshot(spark, table, files=files)
         live = M.read_rows(spark, latest, kinds=_DATA_KINDS)
         rows, upserts = _restore_rows(live, want, write_id)
         if rows.num_rows == 0:
             return latest.version
         _require_files(upserts, props, table, label)
         try:
-            return M.commit(spark, table, rows, write_id=write_id, meta=meta)
+            return M.commit(
+                spark, table, rows, write_id=write_id, meta=meta, files=files
+            )
         except M.ConcurrentCommit:
             # re-read the live rows and work out the changes again
             _write._pause(_write._wait(attempt))

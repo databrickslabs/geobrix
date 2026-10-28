@@ -155,6 +155,44 @@ def held_shard(spark_delta):
 # --- the brief's five -------------------------------------------------------------
 
 
+def test_a_read_or_commit_adds_no_query_for_the_file_layout(
+    spark_delta, table, monkeypatch
+):
+    """How the table keeps its files comes with the properties a caller read already: a read
+    asks for them once (``read_props``), and a commit given the layout asks for nothing.
+    """
+    from databricks.labs.gbx.zarr._filemode import FileLayout
+    from databricks.labs.gbx.zarr._read import _open_table
+
+    seen = []
+    real = spark_delta.sql
+    monkeypatch.setattr(
+        spark_delta,
+        "sql",
+        lambda text, *a, **k: seen.append(text) or real(text, *a, **k),
+    )
+
+    def shows():
+        return sum("SHOW TBLPROPERTIES" in q for q in seen)
+
+    _open_table(spark_delta, table, None, None)
+    assert shows() == 1  # read_props; the snapshot reuses its layout
+
+    files = FileLayout.of(M.read_props(spark_delta, table))
+    seen.clear()
+    w = uuid.uuid4().hex
+    M.commit(
+        spark_delta,
+        table,
+        _rows(_chunk("c/0/0/0", w)),
+        write_id=w,
+        meta={},
+        files=files,
+    )
+    assert M.snapshot(spark_delta, table, files=files).files == files
+    assert shows() == 0
+
+
 def test_create_sets_properties_and_refuses_existing(spark_delta, table):
     props = M.read_props(spark_delta, table)
     assert props == PROPS

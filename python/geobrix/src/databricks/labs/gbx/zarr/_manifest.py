@@ -31,6 +31,7 @@ from databricks.labs.gbx.core._arrow import to_spark_df
 from databricks.labs.gbx.zarr._filemode import (
     FileLayout,
     file_column_type,
+    layout_for,
     path_of,
     relative_to,
     require_geobrix_files,
@@ -491,12 +492,12 @@ def _tblprops(spark, table: str) -> dict[str, str]:
 def _layout_of(tp: dict[str, str]) -> FileLayout:
     """How the table with properties ``tp`` keeps its files. A table without the
     properties is a plain one: ``fuse``."""
-    mode = tp.get(PROP_PREFIX + "file_mode", "fuse")
-    root = tp.get(PROP_PREFIX + "root") or None
-    overlay = tp.get(PROP_PREFIX + "overlay_root") or None
-    if tp.get(PROP_PREFIX + "kind") == "registered":
-        return FileLayout(mode, gbx_root=overlay, base_root=root)
-    return FileLayout(mode, gbx_root=root)
+    return layout_for(
+        tp.get(PROP_PREFIX + "kind"),
+        tp.get(PROP_PREFIX + "root") or None,
+        tp.get(PROP_PREFIX + "overlay_root") or None,
+        tp.get(PROP_PREFIX + "file_mode", "fuse"),
+    )
 
 
 def file_layout(spark, table: str) -> FileLayout:
@@ -626,7 +627,12 @@ _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 def snapshot(
-    spark, table: str, *, version_as_of=None, timestamp_as_of=None
+    spark,
+    table: str,
+    *,
+    version_as_of=None,
+    timestamp_as_of=None,
+    files: FileLayout | None = None,
 ) -> Snapshot:
     """Pin a version of the manifest.
 
@@ -641,6 +647,10 @@ def snapshot(
     The version live at the horizon, everything after it and every tag stay readable.
     Other versions on the table (OPTIMIZE, property changes) are not GeoBrix commits;
     ``find_commit_version`` and the commit rows identify those.
+
+    The snapshot carries how the table keeps its files (``Snapshot.files``): pass ``files``
+    (``FileLayout.of(read_props(...))``) when the properties were read already, else one
+    ``SHOW TBLPROPERTIES`` finds it.
     """
     if version_as_of is not None and timestamp_as_of is not None:
         raise ValueError("pass version_as_of or timestamp_as_of, not both")
@@ -668,8 +678,8 @@ def snapshot(
 
     if version is None and timestamp_as_of is None:  # the latest, or a tag read there
         latest = _latest_version(spark, table)
-        tp = _tblprops(spark, table)
-        files = _layout_of(tp)
+        if files is None:
+            files = file_layout(spark, table)
         if tag is None:
             return Snapshot(table=table, version=latest, files=files)
         present = (
@@ -726,7 +736,9 @@ def snapshot(
             if files_gone(_error_text(e)):
                 raise _version_gone(table, picked) from e
             raise
-    return Snapshot(table=table, version=picked, tag=None, files=_layout_of(tp))
+    return Snapshot(
+        table=table, version=picked, tag=None, files=files or _layout_of(tp)
+    )
 
 
 # Longest list sent as an IN predicate. Longer ones become a semi-join against a small
@@ -962,7 +974,13 @@ def _require_regions(source: pa.Table) -> None:
     )
 
 
-def _sharded_arrays(spark, table: str, source: pa.Table, names: list[str]) -> set[str]:
+def _sharded_arrays(
+    spark,
+    table: str,
+    source: pa.Table,
+    names: list[str],
+    files: FileLayout | None = None,
+) -> set[str]:
     """Which of the arrays ``names`` are sharded: by the array document this commit writes,
     else by the one the table holds now. An array nobody has described is not, and neither
     is a Zarr v2 array (a ``.zarray`` document): v2 has no sharding."""
@@ -983,7 +1001,7 @@ def _sharded_arrays(spark, table: str, source: pa.Table, names: list[str]) -> se
             docs.setdefault(row["array"], None)
     missing = [n for n in names if n not in docs]
     if missing:
-        snap = Snapshot(table, _latest_version(spark, table))
+        snap = Snapshot(table, _latest_version(spark, table), files=files)
         for row in read_rows(spark, snap, kinds="array", arrays=missing).to_pylist():
             if row["key"] == "zarr.json":
                 docs[row["array"]] = row["meta"]
@@ -998,7 +1016,11 @@ def _sharded_arrays(spark, table: str, source: pa.Table, names: list[str]) -> se
 
 
 def _require_shard_keys(
-    spark, table: str, source: pa.Table, sharded: dict | None = None
+    spark,
+    table: str,
+    source: pa.Table,
+    sharded: dict | None = None,
+    files: FileLayout | None = None,
 ) -> None:
     """Refuse an upserted shard or chunk row of a sharded array that has no ``shard_key``.
 
@@ -1033,7 +1055,7 @@ def _require_shard_keys(
         known = {n: bool(v) for n, v in (sharded or {}).items()}
         ask = sorted(n for n in names if n is not None and n not in known)
         if ask:
-            hits = _sharded_arrays(spark, table, source, ask)
+            hits = _sharded_arrays(spark, table, source, ask, files)
             known.update({n: n in hits for n in ask})
         bad = [n for n in names if n is not None and known.get(n)]
         if not bad:
@@ -1181,6 +1203,7 @@ def commit(
     write_id: str,
     meta: dict,
     sharded: dict | None = None,
+    files: FileLayout | None = None,
 ) -> int:
     """Commit ``rows`` plus a commit row in one MERGE; returns the Delta version.
 
@@ -1194,17 +1217,19 @@ def commit(
     ``ZarrWriteConflict`` listing every key that changed; a Delta conflict with a
     concurrent commit raises the retryable ``ConcurrentCommit``. A ``write_id`` that
     already committed returns its existing version, so retries are idempotent, even when a
-    twin of the same write lands between the check and the MERGE.
+    twin of the same write lands between the check and the MERGE. ``files`` is how the
+    table keeps its files (``FileLayout.of(read_props(...))``); without it one
+    ``SHOW TBLPROPERTIES`` finds out.
     """
     _check_write_id(write_id)
     source = _commit_source(rows, write_id, meta)
     _require_regions(source)
-    _require_shard_keys(spark, table, source, sharded)
+    _require_shard_keys(spark, table, source, sharded, files)
     existing = find_commit_version(spark, table, write_id)
     if existing is not None:
         return existing
     sql_table = _q(table)
-    layout = file_layout(spark, table)
+    layout = files if files is not None else file_layout(spark, table)
     require_geobrix_files(table, layout.mode, "write")  # before any temp view is made
 
     def merge(view: str) -> None:

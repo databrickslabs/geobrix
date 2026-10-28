@@ -35,6 +35,7 @@ __all__ = [
     "FileLayout",
     "file_column_type",
     "file_supported",
+    "layout_for",
     "path_of",
     "relative_to",
     "require_geobrix_files",
@@ -194,8 +195,23 @@ class FileLayout:
     gbx_root: str | None = None
     base_root: str | None = None
 
+    @classmethod
+    def of(cls, props) -> "FileLayout":
+        """The layout of the store with ``props`` (a ``StoreProps``)."""
+        return layout_for(props.kind, props.root, props.overlay_root, props.file_mode)
+
     def root_of(self, origin: str | None) -> str | None:
         """The root a row of ``origin`` is relative to."""
         if origin == "external" and self.base_root:
             return self.base_root
         return self.gbx_root or self.base_root
+
+def layout_for(
+    kind: str | None, root: str | None, overlay_root: str | None, mode: str
+) -> FileLayout:
+    """The layout of a store of ``kind`` (``"managed"`` or ``"registered"``): a registered
+    store's relative paths lie under its base (``root``) or, for what GeoBrix wrote, its
+    overlay; a managed store's under its data root."""
+    if kind == "registered":
+        return FileLayout(mode, gbx_root=overlay_root, base_root=root)
+    return FileLayout(mode, gbx_root=root)

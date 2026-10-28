@@ -1024,7 +1024,7 @@ def test_p5_the_rebase_after_a_merge_level_conflict(
     two, three = uuid.uuid4().hex, uuid.uuid4().hex
     real, calls = M.commit, []
 
-    def racing(spark_, table_, rows, *, write_id, meta, sharded=None):
+    def racing(spark_, table_, rows, *, write_id, meta, sharded=None, **kw):
         calls.append(write_id)
         if write_id == two and calls.count(two) == 1:
             gbx_zarr_write(
@@ -1032,7 +1032,9 @@ def test_p5_the_rebase_after_a_merge_level_conflict(
             )
             if how == "concurrent":
                 raise M.ConcurrentCommit("simulated row-level conflict. Fix: retry.")
-        return real(spark_, table_, rows, write_id=write_id, meta=meta, sharded=sharded)
+        return real(
+            spark_, table_, rows, write_id=write_id, meta=meta, sharded=sharded, **kw
+        )
 
     no_hooks.setattr(_write.M, "commit", racing)
     no_hooks.setattr(_write, "_pause", lambda s: None)
@@ -1464,11 +1466,13 @@ def test_a_writer_that_loses_seven_rounds_still_lands(
     table, _, _ = _create(spark_delta, drop, tmp_path)
     real, calls, pauses = M.commit, [], []
 
-    def lose_seven_rounds(spark_, table_, rows, *, write_id, meta, sharded=None):
+    def lose_seven_rounds(spark_, table_, rows, *, write_id, meta, sharded=None, **kw):
         calls.append(write_id)
         if len(calls) <= 7:
             raise M.ConcurrentCommit("lost this round. Fix: retry.")
-        return real(spark_, table_, rows, write_id=write_id, meta=meta, sharded=sharded)
+        return real(
+            spark_, table_, rows, write_id=write_id, meta=meta, sharded=sharded, **kw
+        )
 
     no_hooks.setattr(_write.M, "commit", lose_seven_rounds)
     no_hooks.setattr(_write, "_pause", pauses.append)
@@ -1608,9 +1612,11 @@ def test_rr1_m3_disjoint_read_modify_writers_of_one_shard_need_no_guard(
     blocks_b = _blocks(spark_delta, ("t2m", (12, 0, 0), part))
     real, calls, ran = M.commit, [], []
 
-    def recording(spark_, table_, rows, *, write_id, meta, sharded=None):
+    def recording(spark_, table_, rows, *, write_id, meta, sharded=None, **kw):
         calls.append((write_id, rows.column("op").to_pylist()))
-        return real(spark_, table_, rows, write_id=write_id, meta=meta, sharded=sharded)
+        return real(
+            spark_, table_, rows, write_id=write_id, meta=meta, sharded=sharded, **kw
+        )
 
     def a_first(wid):
         if wid == b and not ran:

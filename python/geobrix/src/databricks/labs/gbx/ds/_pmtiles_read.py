@@ -112,23 +112,48 @@ def _read_directory(get_bytes, header: dict, offset: int, length: int) -> list:
     )
 
 
-def _iter_tile_ids(get_bytes, header: dict, offset: int, length: int):
-    """(z, x, y) of every addressed tile under one directory, in tile-id order.
+def _iter_entries(get_bytes, header: dict, offset: int, length: int):
+    """``((z, x, y), entry)`` for every addressed tile under one directory, in
+    tile-id order (a run-length entry yields one pair per tile it addresses).
     Reads directories only -- never tile data. Same traversal (and order) as
-    ``pmtiles.reader.all_tiles``."""
+    ``pmtiles.reader.all_tiles``, with directories decoded by the header."""
     from pmtiles.tile import tileid_to_zxy
 
     for entry in _read_directory(get_bytes, header, offset, length):
         if entry.run_length > 0:
             for i in range(entry.run_length):
-                yield tileid_to_zxy(entry.tile_id + i)
+                yield tileid_to_zxy(entry.tile_id + i), entry
         else:
-            yield from _iter_tile_ids(
+            yield from _iter_entries(
                 get_bytes,
                 header,
                 header["leaf_directory_offset"] + entry.offset,
                 entry.length,
             )
+
+
+def _memory_source(raw) -> Callable[[int, int], bytes]:
+    """``get_bytes(offset, length)`` over archive bytes held in memory."""
+
+    def get_bytes(offset: int, length: int) -> bytes:
+        return raw[offset : offset + length]
+
+    return get_bytes
+
+
+def iter_tiles(raw) -> Iterator[Tuple[Tuple[int, int, int], bytes]]:
+    """``((z, x, y), payload)`` for every tile of an in-memory archive, in
+    tile-id order -- the shape and order of ``pmtiles.reader.all_tiles``. Unlike
+    it, directories are decoded by the header's ``internal_compression``, so the
+    uncompressed-directory archives the heavyweight writer produces read too.
+    The one driver-side tile iterator (``pmtiles_info`` and the vizx viewers)."""
+    get_bytes = _memory_source(raw)
+    header = _read_header(get_bytes)
+    base = header["tile_data_offset"]
+    for zxy, entry in _iter_entries(
+        get_bytes, header, header["root_offset"], header["root_length"]
+    ):
+        yield zxy, get_bytes(base + entry.offset, entry.length)
 
 
 def _list_tiles(path: str) -> List[Tuple[int, int, int]]:
@@ -137,11 +162,12 @@ def _list_tiles(path: str) -> List[Tuple[int, int, int]]:
     with _listing._retry_transient(lambda: open(path, "rb")) as fh:
         get_bytes = _range_source(fh)
         header = _read_header(get_bytes)
-        return list(
-            _iter_tile_ids(
+        return [
+            zxy
+            for zxy, _entry in _iter_entries(
                 get_bytes, header, header["root_offset"], header["root_length"]
             )
-        )
+        ]
 
 
 class _TileLookup:

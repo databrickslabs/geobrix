@@ -598,14 +598,13 @@ def _decode_pmtiles_for_static(layer) -> "Layer":
 
     Raises ValueError when the archive contains no renderable tiles.
     """
+    from databricks.labs.gbx.ds._pmtiles_read import iter_tiles
     from databricks.labs.gbx.pmtiles import pmtiles_info
     from databricks.labs.gbx.vizx._layers import raster_layer, vector_layer
     from databricks.labs.gbx.vizx._pmtiles import (
-        MemorySource,
         _decode_mvt_to_geoms,
         _is_raster_type,
         _maybe_gunzip,
-        all_tiles,
     )
 
     data = layer.data
@@ -644,7 +643,7 @@ def _decode_pmtiles_for_static(layer) -> "Layer":
         # Tile counts per zoom; pick the highest zoom whose count is within budget.
         _MAX_OVERVIEW_TILES = 256
         per_zoom: dict = {}
-        for (z, x, y), _payload in all_tiles(MemorySource(raw)):
+        for (z, x, y), _payload in iter_tiles(raw):
             per_zoom.setdefault(z, 0)
             per_zoom[z] += 1
         if not per_zoom:
@@ -658,7 +657,7 @@ def _decode_pmtiles_for_static(layer) -> "Layer":
         )
 
         placed = []
-        for (z, x, y), payload in all_tiles(MemorySource(raw)):
+        for (z, x, y), payload in iter_tiles(raw):
             if z != target_z:
                 continue
             img = Image.open(io.BytesIO(_maybe_gunzip(payload))).convert("RGBA")
@@ -695,7 +694,7 @@ def _decode_pmtiles_for_static(layer) -> "Layer":
         import geopandas as gpd
 
         tiles_by_z: dict = defaultdict(list)
-        for (z, x, y), payload in all_tiles(MemorySource(raw)):
+        for (z, x, y), payload in iter_tiles(raw):
             tiles_by_z[z].append((x, y, payload))
 
         # A drop_densest overview drops most features at low zooms, so the min zoom can
@@ -766,17 +765,17 @@ def _layer_audit_entry(layer, idx: int, embed_bytes: int) -> dict:
 def _max_tile_bytes(raw: bytes) -> int | None:
     """Return the maximum single-tile decompressed byte size in a pmtiles archive.
 
-    Iterates the archive's actual tiles via ``all_tiles``.
+    Iterates the archive's actual tiles via ``iter_tiles``.
     Returns ``None`` if the archive contains no tiles or cannot be parsed.
     """
     try:
         import gzip
 
-        from pmtiles.reader import MemorySource, all_tiles
+        from databricks.labs.gbx.ds._pmtiles_read import iter_tiles
 
         max_size = 0
         found = False
-        for (z, x, y), payload in all_tiles(MemorySource(raw)):
+        for (z, x, y), payload in iter_tiles(raw):
             found = True
             data = payload
             if data[:2] == b"\x1f\x8b":
@@ -1718,12 +1717,12 @@ def _mvt_layer_names_from_bytes(raw: bytes, *, max_tiles: int = 40) -> list:
     """
     try:
         import mapbox_vector_tile as mvt
-        from pmtiles.reader import MemorySource, all_tiles
 
+        from databricks.labs.gbx.ds._pmtiles_read import iter_tiles
         from databricks.labs.gbx.vizx._pmtiles import _maybe_gunzip
 
         names, seen = [], set()
-        for i, (_key, payload) in enumerate(all_tiles(MemorySource(raw))):
+        for i, (_key, payload) in enumerate(iter_tiles(raw)):
             if i >= max_tiles:
                 break
             for lname in mvt.decode(_maybe_gunzip(payload)).keys():
@@ -1832,9 +1831,9 @@ def _raster_tile_px(info: dict) -> int:
     try:
         import struct
 
-        from pmtiles.reader import MemorySource, all_tiles
+        from databricks.labs.gbx.ds._pmtiles_read import iter_tiles
 
-        for _key, payload in all_tiles(MemorySource(raw)):
+        for _key, payload in iter_tiles(raw):
             if payload[:8] == b"\x89PNG\r\n\x1a\n" and len(payload) >= 24:
                 return int(struct.unpack(">I", payload[16:20])[0])
             break  # only the first tile; non-PNG -> fall back to the default

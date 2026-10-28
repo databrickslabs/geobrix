@@ -8,10 +8,8 @@ POLYGON is mandatory — points-only gives a false pass per the MVT tile-local
 contract (see CLAUDE.md).
 
 Reading note: the heavy (Scala) encoder writes ``internal_compression=NONE``
-directories while the Python ``pmtiles`` reader unconditionally tries
-``gzip.decompress``. We apply the same ``_internal_compression_aware`` patch
-used in ``test/ds/test_pmtiles_agg_parity.py`` so that both archives decode
-correctly without changing either encoder.
+directories, which the library reader cannot read (it always gunzips). Both
+archives are decoded with ``iter_tiles``, which reads them by the header.
 
 Heavy requires the geobrix JAR staged under python/geobrix/lib/ and GDAL/OGR
 native libraries. Auto-skips when absent. Run in geobrix-dev Docker:
@@ -20,17 +18,11 @@ native libraries. Auto-skips when absent. Run in geobrix-dev Docker:
         --with-integration --log pmtiles-merge-parity.log
 """
 
-import contextlib
 import logging
-import os
-import tempfile
 from pathlib import Path
 
 import mapbox_vector_tile as mvt
 import pytest
-from pmtiles import tile as _pmtile
-from pmtiles.reader import MmapSource, Reader
-from pmtiles.tile import Compression
 from shapely.geometry import Polygon
 
 from databricks.labs.gbx.pmtiles._agg_light import _assemble_archive
@@ -63,44 +55,12 @@ _BLOB_B = _make_mvt_blob(_POLY_B, prop_id=2)
 _Z, _X, _Y = 3, 2, 4
 
 
-@contextlib.contextmanager
-def _internal_compression_aware(reader):
-    """Honor the archive's ``internal_compression`` when reading directories.
-
-    The stock ``pmtiles`` ``deserialize_directory`` unconditionally
-    ``gzip.decompress``-es the directory bytes. The heavy (Scala) writer emits
-    ``internal_compression=NONE`` directories (uncompressed varint stream), which
-    that hardcoded path can't read. The light writer forces GZIP. To compare both
-    tiers we make the decoder respect the header: pass directory bytes through
-    untouched when the header says NONE, and gzip-decompress otherwise.
-    """
-    if reader.header()["internal_compression"] == Compression.NONE:
-        orig = _pmtile.gzip.decompress
-        _pmtile.gzip.decompress = lambda b: b
-        try:
-            yield
-        finally:
-            _pmtile.gzip.decompress = orig
-    else:
-        yield
-
-
 def _read_tile_from_archive(archive: bytes, z: int, x: int, y: int) -> bytes:
-    """Read and return tile (z, x, y) from a PMTiles archive blob.
+    """Read and return tile (z, x, y) from a PMTiles archive blob (gzip or
+    uncompressed directories)."""
+    from databricks.labs.gbx.ds._pmtiles_read import iter_tiles
 
-    Uses ``_internal_compression_aware`` so both GZIP (light) and NONE (heavy)
-    internal-compression modes decode correctly.
-    """
-    with tempfile.NamedTemporaryFile(suffix=".pmtiles", delete=False) as f:
-        f.write(archive)
-        name = f.name
-    try:
-        with open(name, "rb") as fh:
-            r = Reader(MmapSource(fh))
-            with _internal_compression_aware(r):
-                tile = r.get(z, x, y)
-    finally:
-        os.unlink(name)
+    tile = dict(iter_tiles(archive)).get((z, x, y))
     assert tile is not None, f"tile ({z},{x},{y}) missing from archive"
     return tile
 

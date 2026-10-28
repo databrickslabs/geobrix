@@ -25,6 +25,8 @@ import os
 import posixpath
 import re
 import sys
+import urllib.error
+import urllib.request
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
@@ -356,6 +358,7 @@ class FuseRangeReader(_SpanReader):
 
 _ACCESS_MODES = ("auto", "fuse", "direct")
 _OPERATIONS = ("READ_VOLUME", "WRITE_VOLUME")
+_S3_ENDPOINT = "https://s3.amazonaws.com"
 _VENDING_PATH = "/api/2.0/unity-catalog/temporary-volume-credentials"
 _UNAVAILABLE_FIX = (
     'use access="auto" or "fuse" on this compute; direct access needs dedicated '
@@ -625,16 +628,87 @@ def _vend(path: str, operation: str, also) -> AccessConfig:
             body={"volume_id": volume_id, "operation": operation},
         )
     cloud, creds = _credentials(response)
-    url = str(response["url"]).rstrip("/")
+    url = response.get("url") if isinstance(response, dict) else None
+    if not isinstance(url, str) or "://" not in url:
+        raise _Unavailable("Unity Catalog returned no usable storage location")
+    url = url.rstrip("/")
     below = os.path.relpath(local, volume_path).replace(os.sep, "/")
-    return AccessConfig(
+    cfg = AccessConfig(
         "direct",
         url if below == "." else f"{url}/{below}",
         creds,
         cloud,
         volume_path,
         url,
+        region=_s3_region(response, url) if cloud == "aws" else None,
     )
+    try:
+        _make_store(cfg)  # a URL or credential kind obstore will not build fails here
+        _canary(cfg, local)
+    except Exception as e:
+        cause = (
+            "the storage refused the credentials"
+            if isinstance(e, _Refused)
+            else (f"{type(e).__name__}: {_scrub(cfg, str(e))[:200]}")
+        )
+        raise _Unavailable(
+            f"the first request with the credentials failed ({cause})"
+        ) from None
+    return cfg
+
+
+def _s3_region(response, url: str) -> str:
+    """The region of the bucket the credentials are for: the response's, else
+    ``AWS_REGION`` / ``AWS_DEFAULT_REGION``, else the bucket's own, asked of S3. Never a
+    silent default (obstore's is us-east-1, which every other region answers with a redirect
+    or a signature error)."""
+    region = (
+        response.get("region")
+        or response["aws_temp_credentials"].get("region")
+        or os.environ.get("AWS_REGION")
+        or os.environ.get("AWS_DEFAULT_REGION")
+    )
+    if region:
+        return str(region)
+    bucket = url.partition("://")[2].partition("/")[0]
+    region = _discover_region(bucket)
+    if not region:
+        raise _Unavailable(
+            f"the region of the bucket {bucket!r} is not known: the response has none, "
+            "AWS_REGION is not set and the bucket did not say"
+        )
+    return region
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def _discover_region(bucket: str) -> str | None:
+    """The region of an S3 bucket from the ``x-amz-bucket-region`` header of an unsigned HEAD
+    (S3 sends it on a redirect or a refusal alike), or ``None``."""
+    request = urllib.request.Request(f"{_S3_ENDPOINT}/{bucket}", method="HEAD")
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        with opener.open(request, timeout=5) as r:
+            return r.headers.get("x-amz-bucket-region")
+    except urllib.error.HTTPError as e:  # 301 / 403 carry the header
+        return e.headers.get("x-amz-bucket-region")
+    except Exception:
+        return None
+
+
+def _canary(cfg: AccessConfig, path: str) -> None:
+    """ONE small request with the vended credentials, against the store root: it fails for
+    a wrong region or URL, credentials that are not allowed there, or no route to the storage,
+    which a vend that merely succeeded cannot tell. The tasks would otherwise all fail where
+    the mount works."""
+    import obstore
+
+    store = _make_store(cfg)
+    with _obstore_errors(cfg):
+        next(iter(obstore.list(store, cfg.key_of(path) or None, chunk_size=1)), None)
 
 
 def resolve_access(

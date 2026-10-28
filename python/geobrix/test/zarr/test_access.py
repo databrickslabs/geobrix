@@ -433,6 +433,19 @@ CLOUDS = {
 }
 
 
+_REAL_CANARY = _access._canary
+_REAL_DISCOVER = _access._discover_region
+
+
+@pytest.fixture(autouse=True)
+def _vending_has_no_network(monkeypatch):
+    """Vending in these tests makes no request: no canary, a known region, no discovery."""
+    monkeypatch.setattr(_access, "_canary", lambda cfg, path: None)
+    monkeypatch.setattr(_access, "_discover_region", lambda bucket: None)
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+
+
 @pytest.fixture(autouse=True)
 def _forget_refusals():
     """A refusal is remembered for the life of the process: every test starts without one."""
@@ -496,6 +509,43 @@ def _nothing_usable_in_the_response(mp):
     return VOLUME, ()
 
 
+def _unusable_url(mp):
+    _install(mp, response={**CLOUDS["aws"][0], "url": None})
+    return VOLUME, ()
+
+
+def _url_that_does_not_fit_the_credentials(mp):
+    _install(mp, response={**CLOUDS["aws"][0], "url": "https://example.com/vol"})
+    return VOLUME, ()
+
+
+def _first_request_fails(mp):
+    """A wrong region, say: S3 answers the one request made with the credentials with a
+    redirect, and its text happens to echo a credential."""
+    from obstore import exceptions as ox
+
+    def canary(cfg, path):
+        raise ox.GenericError(f"301 PermanentRedirect for key {SENTINEL}-sk")
+
+    _install(mp, response=CLOUDS["aws"][0])
+    mp.setattr(_access, "_canary", canary)
+    return VOLUME, ()
+
+
+def _region_not_known(mp):
+    _install(mp, response=CLOUDS["aws"][0])
+    mp.delenv("AWS_REGION", raising=False)  # and nothing discovers one (fixture)
+    return VOLUME, ()
+
+
+def _store_that_cannot_be_read(mp):
+    """The real first request, against a location that is not there."""
+    url = "file:///nonexistent-gbx-volume"
+    _install(mp, response={**CLOUDS["aws"][0], "url": url})
+    mp.setattr(_access, "_canary", _REAL_CANARY)
+    return VOLUME, ()
+
+
 def _no_sdk(mp):
     mp.setitem(sys.modules, "databricks.sdk", None)  # the import fails
     return VOLUME, ()
@@ -526,6 +576,11 @@ CAUSES = [
     _no_obstore,
     _not_on_a_volume,
     _two_volumes,
+    _unusable_url,
+    _url_that_does_not_fit_the_credentials,
+    _first_request_fails,
+    _region_not_known,
+    _store_that_cannot_be_read,
 ]
 
 
@@ -577,6 +632,90 @@ def test_vending_asks_uc_for_the_volume_and_maps_the_credentials(cloud, monkeypa
     )
     assert dataclasses.replace(again, fallback=False) == cfg and again.fallback
     assert not cfg.fallback and len(client.calls) == 4
+
+
+def test_direct_is_chosen_after_one_request_and_names_its_region(monkeypatch, tmp_path):
+    """The canary is ONE request with the vended credentials against the store root; the
+    region is the response's, else AWS_REGION, else the bucket's own; never a default.
+    """
+    response, creds, _ = CLOUDS["aws"]
+    _install(monkeypatch, response=response)
+    seen = []
+    monkeypatch.setattr(_access, "_canary", lambda cfg, path: seen.append((cfg, path)))
+
+    def region(env=None, found=None, answer=None):
+        for name in ("AWS_REGION", "AWS_DEFAULT_REGION"):
+            monkeypatch.delenv(name, raising=False)
+        if env:
+            monkeypatch.setenv(*env)
+        monkeypatch.setattr(_access, "_discover_region", lambda bucket: found)
+        seen.clear()
+        cfg = resolve_access(
+            None, VOLUME + "/stores", access="direct", operation="READ_VOLUME"
+        )
+        assert len(seen) == 1 and seen[0][1] == VOLUME + "/stores"
+        assert (
+            seen[0][0].creds.reveal() == creds
+        )  # the canary signs with what was vended
+        return cfg.region, _access._make_store(cfg).config.get("region")
+
+    assert region(("AWS_REGION", "ap-south-1")) == ("ap-south-1",) * 2
+    assert region(("AWS_DEFAULT_REGION", "eu-west-2")) == ("eu-west-2",) * 2
+    assert region(found="eu-west-1") == ("eu-west-1",) * 2  # asked of S3
+    monkeypatch.setattr(_access, "_discover_region", lambda bucket: "never")
+    monkeypatch.setitem(response, "region", "sa-east-1")  # the response says
+    assert region(("AWS_REGION", "ap-south-1"))[0] == "sa-east-1"
+
+    # the real request, against a location obstore can read (no region applies to file://)
+    vol = tmp_path / "vol"
+    vol.mkdir()
+    _install(monkeypatch, response={**CLOUDS["aws"][0], "url": f"file://{vol}"})
+    monkeypatch.setattr(_access, "_canary", _REAL_CANARY)
+    cfg = resolve_access(
+        None, VOLUME + "/new", access="direct", operation="WRITE_VOLUME"
+    )
+    assert cfg.is_direct and cfg.volume_url == f"file://{vol}"
+
+
+def test_the_region_of_a_bucket_is_read_from_the_header_s3_sends(monkeypatch):
+    """S3 names the bucket's region on a redirect, a refusal or a success alike."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    answers = {
+        "moved": (301, {"x-amz-bucket-region": "eu-north-1"}),
+        "refused": (403, {"x-amz-bucket-region": "ap-southeast-2"}),
+        "open": (200, {"x-amz-bucket-region": "us-west-1"}),
+        "nowhere": (404, {}),
+    }
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_HEAD(self):
+            status, headers = answers[self.path.strip("/")]
+            self.send_response(status)
+            for k, v in headers.items():
+                self.send_header(k, v)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        monkeypatch.setattr(
+            _access, "_S3_ENDPOINT", f"http://127.0.0.1:{server.server_port}"
+        )
+        got = {b: _REAL_DISCOVER(b) for b in answers}
+    finally:
+        server.shutdown()
+    assert got == {
+        "moved": "eu-north-1",
+        "refused": "ap-southeast-2",
+        "open": "us-west-1",
+        "nowhere": None,
+    }
 
 
 def test_the_sdk_may_not_log_the_vending_response(monkeypatch):

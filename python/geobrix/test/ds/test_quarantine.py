@@ -9,6 +9,7 @@ it: a valid file, then a few bytes garbled, truncated or rewritten.
 import errno
 import json
 import os
+import re
 import shutil
 import sqlite3
 import struct
@@ -714,22 +715,50 @@ def test_lidar_laz_declaring_a_huge_point_count_fabricates_none(tmp_path):
     )
 
 
-def test_lidar_laz_without_lazrs_still_caps_a_huge_point_count_by_its_chunk_table(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("damage", ["none", "variable", "zero", "count"])
+def test_lidar_laz_without_lazrs_still_caps_a_huge_point_count(
+    tmp_path, monkeypatch, damage
 ):
     """With no chunk table to hand to the decoder (lazrs is not the decoder), a header count beyond
     what the table holds is capped by it: its chunk count times the points per chunk, both readable
-    without lazrs. (A guess from the file's size would let a million-point claim through.)
-    """
+    without lazrs. Where that cannot be known (chunks of varying size, zero points per chunk) or
+    cannot be trusted (a garbled count), the bytes of the file bound it, at the fewest a point
+    takes: a guess, but never looser than the file."""
+    import laspy
+
     from databricks.labs.gbx.ds import lidar
 
     path = _laz(tmp_path / "a.laz")
+    with open(path, "rb") as fh:
+        raw = fh.read()
+        fh.seek(0)
+        header = laspy.LasHeader.read_from(fh, read_evlrs=False)
+    by_size = int((len(raw) - header.offset_to_point_data) * 1024)
+    if damage in (
+        "variable",
+        "zero",
+    ):  # points per chunk: the u32 at byte 12 of the record
+        at = raw.find(bytes(header.vlrs.get("LasZipVlr")[0].record_data)) + 12
+        patch = struct.pack("<I", 0xFFFFFFFF if damage == "variable" else 0)
+        with open(path, "r+b") as fh:
+            fh.seek(at)
+            fh.write(patch)
+    if damage == "count":  # the chunk count at the head of the chunk table
+        with open(path, "r+b") as fh:
+            fh.seek(header.offset_to_point_data)
+            table = struct.unpack("<q", fh.read(8))[0]
+            fh.seek(table + 4)
+            fh.write(struct.pack("<I", 0x7FFFFFFF))
     _declare_points(path, 10**9)
     monkeypatch.setattr(lidar, "_read_chunk_table", lambda *a: None)
+
     rows, recs = _read(tmp_path, path, "lidar_gbx")
-    assert len(rows) == 5000 and _at_offset_corner(rows) == []
+
+    # a record whose chunk size or count is damaged does not decode: what matters is the cap
+    assert _at_offset_corner(rows) == [] and (damage != "none" or len(rows) == 5000)
     (capped,) = [r for r in recs if r["error_class"] == Q.RECORDS_NOT_READ]
-    assert "more than the 50000 its chunk table holds" in capped["error_message"]
+    most = int(re.search(r"at most (\d+) were read", capped["error_message"]).group(1))
+    assert most == (50000 if damage == "none" else by_size)
 
 
 def test_lidar_valid_laz_reads_every_point_and_no_record(tmp_path):

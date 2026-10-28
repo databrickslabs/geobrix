@@ -851,8 +851,9 @@ def _laz_point_room(h, local: str, size: int) -> Tuple[int, bool]:
     points per chunk of the LASzip record (the u32 at byte 12, which laspy parses without lazrs),
     the bound the lazrs branch takes from the decoded table. ``from_table`` is False when it cannot
     be read: chunks that vary in size (all ones at byte 12, as COPC files have), no LASzip record,
-    a table that cannot be found or is empty. The bytes of point data over the fewest a point
-    takes (:data:`_MIN_LAZ_POINT_BYTES`) are the answer then."""
+    a table that cannot be found or is empty, or a count so large that the bytes of point data
+    cap it first. The bytes of point data over the fewest a point takes
+    (:data:`_MIN_LAZ_POINT_BYTES`) are the answer then."""
     start = int(h.offset_to_point_data)
     by_size = int((size - start) / _MIN_LAZ_POINT_BYTES)
     laszip = h.vlrs.get("LasZipVlr")
@@ -867,7 +868,9 @@ def _laz_point_room(h, local: str, size: int) -> Tuple[int, bool]:
         found = _find_chunk_table(f, start, size)
     if isinstance(found, str) or found[1] == 0:
         return by_size, False
-    return int(found[1]) * chunk_size, True
+    # a garbled count is no looser than the bytes of the file allow
+    room = int(found[1]) * chunk_size
+    return (room, True) if room <= by_size else (by_size, False)
 
 
 def _readable_points(

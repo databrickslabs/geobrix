@@ -194,7 +194,7 @@ def require_file_compute(spark, label: str, mode: str) -> None:
 
     A FILE store is made on a runtime with the File type preview, and its manifest cannot be
     committed to there: the commit mints each value with ``try_to_file``, a function Serverless
-    and the Container Services image lack. What reading such a store does there has not been
+    and the Databricks Container Service image lack. What reading such a store does there has not been
     verified, so it is refused the same way, before anything is written. ``fuse`` stores pass
     without a probe; for the others ``file_supported`` caches its answer per session."""
     if mode == "fuse" or file_supported(spark):
@@ -202,8 +202,11 @@ def require_file_compute(spark, label: str, mode: str) -> None:
     raise ZarrUnsupported(
         f"{label} keeps its files as FILE values (file_mode={mode!r}), and this compute "
         "does not support FILE values, so it can neither read, write nor maintain the store",
-        fix="use FILE-enabled compute (a classic cluster in a workspace with the File type "
-        "preview); create the stores that Serverless also uses with file_mode='fuse'",
+        fix="use a Databricks Runtime 19 dedicated cluster (single-user, with "
+        "fileReferenceCreationMode=MANAGED in its cluster config) in a workspace with the "
+        "File type preview; to use the data elsewhere, copy it with "
+        "gbx_zarr_export(method='copy') on such a cluster and register the copy with "
+        "file_mode='fuse'; create stores that other compute also uses with file_mode='fuse'",
     )
 
 

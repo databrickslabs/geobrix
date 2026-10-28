@@ -880,16 +880,20 @@ formats.
 ### Zarr stores — file modes, copy targets and reference files (new)
 
 - **`file_mode="external"` is available where the File type preview is on.** A Zarr store made
-  or registered on a classic cluster in a workspace with the preview keeps FILE EXTERNAL
-  references in its manifest, governed with the table, and `file_mode="auto"` picks it there.
+  or registered on a Databricks Runtime 19 dedicated cluster (single-user, with
+  `fileReferenceCreationMode=MANAGED` in the cluster config) in a workspace with the preview
+  keeps FILE EXTERNAL references in its manifest, governed with the table, and
+  `file_mode="auto"` picks it there.
   On Serverless, on the Databricks Container Service image and where the preview is off, `auto`
   keeps path strings (`"fuse"`). Spark cannot hash a FILE value, so leave the manifest's `file`
   column out of a `hash(*)` or a `GROUP BY`.
 - **A Zarr store made in FILE mode needs FILE-enabled compute to read, write and maintain it.**
-  Its manifest holds FILE values, which Serverless and the Container Services image cannot
-  commit, so `gbx_zarr_read`, `gbx_zarr_write`, `gbx_zarr_sync`, `gbx_zarr_export` and the
-  maintenance functions stop there with a `ZarrUnsupported` that says so, before they write
-  anything. A store that Serverless also uses is created with `file_mode="fuse"`. FILE mode
+  Its manifest holds FILE values, which Serverless and the Databricks Container Service image
+  cannot commit, so `gbx_zarr_read`, `gbx_zarr_write`, `gbx_zarr_sync`, `gbx_zarr_export` and
+  the maintenance functions stop there with a `ZarrUnsupported` that says so, before they
+  write anything. A store that other compute also uses is created with `file_mode="fuse"`; to
+  move a FILE store there, copy it with `gbx_zarr_export(method="copy")` on a cluster that has
+  FILE and register the copy with `file_mode="fuse"`. FILE mode
   also makes registering slower: in a measured run, registering 20,000 objects took 34.5 s with
   path strings and 106.7 s with FILE references (about 3 times, 3.6 ms more per object).
 - **`file_mode="managed"` is not available in 0.6.0.** Delta `VACUUM`, a deletion-vector delete

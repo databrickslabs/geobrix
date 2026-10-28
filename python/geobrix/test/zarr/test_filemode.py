@@ -225,7 +225,9 @@ def test_a_file_store_is_refused_on_compute_without_file(
     try:
         with pytest.raises(ZarrUnsupported, match="FILE values") as e:
             calls[entry]()
-        assert "Fix:" in str(e.value) and "FILE-enabled compute" in e.value.fix
+        assert "Fix:" in str(e.value)
+        for named in ("Runtime 19 dedicated", "fileReferenceCreationMode", "'fuse'"):
+            assert named in e.value.fix
         assert list(root.iterdir()) == [] and not (tmp_path / "copy").exists()
         monkeypatch.setattr(FM, "file_supported", lambda spark: True)
         M.read_props(spark_delta, table, need_file=True)  # FILE compute: no refusal

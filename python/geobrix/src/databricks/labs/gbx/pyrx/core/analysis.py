@@ -541,7 +541,8 @@ def _viewshed_gdal_ctypes(
 
     Writes the DEM to a local scratch file, calls GDALViewshedGenerate via ctypes
     against the bundled libgdal, reads the binary 0/255 output, and returns a
-    uint8 numpy array.  Peak RSS ≈ GDAL block cache (independent of DEM size).
+    uint8 numpy array on the DEM's own grid (GDAL's max-distance window is put back
+    at its offset, 0 elsewhere).  Peak RSS ≈ GDAL block cache (independent of DEM size).
 
     The scratch dir is cleaned up unconditionally in a finally block.
     """
@@ -658,9 +659,32 @@ def _viewshed_gdal_ctypes(
                 gdal.GDALClose(out_h)
             gdal.GDALClose(ds_h)
 
-        # The output is already uint8 0/255 (GVOT_NORMAL); no remap needed.
+        # The output is already uint8 0/255 (GVOT_NORMAL); no remap needed. With a max distance GDAL
+        # writes only the window around the observer: put it back on the DEM's grid (0 outside it),
+        # the full extent the xrspatial engine returns. Writing the smaller array into the DEM-sized
+        # profile instead makes GDAL resample it up to the DEM's size.
         with _rasterio.open(out_path) as result_ds:
-            return result_ds.read(1).astype("uint8")
+            win = result_ds.read(1).astype("uint8")
+            t = result_ds.transform
+        col = int(round((t.c - ds.transform.c) / ds.transform.a))
+        row = int(round((t.f - ds.transform.f) / ds.transform.e))
+        if win.shape == (ds.height, ds.width) and row == 0 and col == 0:
+            return win  # no max distance, or one that covers the DEM
+        # GDAL crops its window to the DEM, so this holds; a negative offset would wrap in the slice
+        # below and an overflow would only fail on shape, so refuse rather than misplace the mask.
+        if (
+            row < 0
+            or col < 0
+            or row + win.shape[0] > ds.height
+            or col + win.shape[1] > ds.width
+        ):
+            raise RuntimeError(
+                f"rst_viewshed: GDAL's {win.shape[1]}x{win.shape[0]} window at pixel ({col}, {row}) "
+                f"falls outside the {ds.width}x{ds.height} DEM"
+            )
+        full = np.zeros((ds.height, ds.width), dtype="uint8")
+        full[row : row + win.shape[0], col : col + win.shape[1]] = win
+        return full
     finally:
         import shutil as _shutil
 

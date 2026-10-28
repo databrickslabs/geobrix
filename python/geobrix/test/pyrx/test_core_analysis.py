@@ -684,6 +684,81 @@ def test_viewshed_engines_agree_small():
     )
 
 
+def _flat_dem_bytes(n):
+    """n x n flat DEM (elev 0), 1 m pixels, origin (0, n), EPSG:27700."""
+    profile = dict(
+        driver="GTiff",
+        width=n,
+        height=n,
+        count=1,
+        dtype="float32",
+        crs="EPSG:27700",
+        transform=from_origin(0.0, float(n), 1.0, 1.0),
+        nodata=None,
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(np.zeros((n, n), dtype="float32"), 1)
+        return mf.read()
+
+
+# 200^2 takes the xrspatial engine, 1000^2 (over the 134,217 px gate) takes the GDAL ctypes engine.
+@pytest.mark.parametrize("n, max_distance", [(200, 80.0), (1000, 200.0)])
+def test_viewshed_max_distance_keeps_dem_grid_and_true_disc(n, max_distance):
+    """A max distance on a flat DEM gives a disc of ~pi*r^2 visible on the DEM's own grid.
+
+    GDAL writes only the max-distance window; written unplaced into the DEM-sized
+    profile it was resampled up to the DEM (781,547 visible for 1000^2 / r=200).
+    """
+    src = _flat_dem_bytes(n)
+    with _serde.open_tile(src) as ds:
+        dem_shape, dem_transform = (ds.height, ds.width), ds.transform
+        ox, oy = _observer_world_xy(ds, col=n // 2, row=n // 2)
+        out = analysis.viewshed(ds, ox, oy, 10.0, 0.0, max_distance)
+    with _serde.open_tile(out) as o:
+        arr = o.read(1)
+        assert arr.shape == dem_shape
+        assert o.transform == dem_transform
+    assert set(np.unique(arr).tolist()) <= {0, 255}
+    disc = math.pi * max_distance**2
+    visible = int((arr == 255).sum())
+    assert abs(visible - disc) <= 0.01 * disc, f"{visible} visible vs ~{disc:.0f}"
+    # The disc sits on the observer: its pixel is visible, a corner far outside is not.
+    assert arr[n // 2, n // 2] == 255 and arr[0, 0] == 0
+
+
+@pytest.mark.parametrize("row, col", [(75, 75), (20, 20), (140, 145), (0, 0)])
+def test_viewshed_ctypes_max_distance_matches_xrspatial_pixel_for_pixel(row, col):
+    """Where GDAL crops its window to the DEM (observer near an edge or a corner) the ctypes
+    engine still puts every pixel where xrspatial does, on a DEM whose origin is not (0, 0).
+    """
+    pytest.importorskip("xrspatial")
+    from rasterio.transform import xy as _xy
+
+    dem = np.zeros((150, 150), dtype="float32")
+    dem[:, 50] = 30.0  # a wall, so there are shadows to misplace
+    profile = dict(
+        driver="GTiff",
+        width=150,
+        height=150,
+        count=1,
+        dtype="float32",
+        crs="EPSG:27700",
+        transform=from_origin(1000.0, 5000.0, 1.0, 1.0),
+        nodata=None,
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(dem, 1)
+        src = mf.read()
+    with _serde.open_tile(src) as ds:
+        ox, oy = _xy(ds.transform, row, col, offset="center")
+        got = analysis._viewshed_gdal_ctypes(ds, ox, oy, 10.0, 0.0, 60.0)
+        want = analysis._viewshed_xrspatial(ds, ox, oy, 10.0, 0.0, 60.0)
+    assert got.shape == want.shape == (150, 150)
+    assert np.array_equal(got, want)
+
+
 # ---------------------------------------------------------------------------
 # Child-process script for test_viewshed_gdal_bounds_peak_rss.
 # Runs in a fresh subprocess so ru_maxrss is not pre-inflated by pytest imports.

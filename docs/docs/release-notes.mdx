@@ -373,6 +373,17 @@ formats.
   green and blue bands of a COG it wrote were left unlabelled (only an alpha band was kept);
   they now keep their red, green and blue labels, as in the source tile.
 
+### Raster functions — `rst_viewshed` with a max distance (fix)
+
+- **The lightweight `rst_viewshed` with a max distance returns the right mask on a large DEM.**
+  On a DEM over about 134,000 pixels (about 366 by 366), the mask came back stretched to the
+  DEM's size, with far more visible pixels than the max-distance disc holds: a flat 1000 by 1000
+  DEM with a 200 m max distance gave 781,547 visible pixels where the disc has about 125,700.
+  `rst_viewshed_towers` counted `visible_px` and `total_px` from the same stretched mask. The
+  mask now sits on the DEM's own grid, 0 outside the max distance, as it always did on a small
+  DEM. Release v0.5.2 is affected; earlier releases are not, and neither is a call without a max
+  distance.
+
 ### Raster writers
 
 - **The heavyweight `gdal` writer writes Zarr with its default options.** The default compression,

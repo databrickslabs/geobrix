@@ -161,6 +161,17 @@ def test_a_missing_or_unloadable_rust_build_falls_back_to_python(tmp_path, monke
         assert list(next(bng_eastnorthasbng_batch([cols]))) == ["TQ3080", None]
 
 
+def test_a_linux_wheel_without_the_native_payload_is_not_an_error(monkeypatch):
+    """No `_native` module in the wheel ("cannot import name", an ImportError) means no Rust build."""
+    import sys
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(_rs, "_MOD", None)
+    monkeypatch.setattr(_rs, "_WHY", None)
+    assert _rs._rs_dir() is None
+    assert "no Rust build" in _rs.unavailable_reason()
+
+
 def _arrow_column(values, all_null=None):
     """A column typed the way Spark hands it to an Arrow UDF: strings, INTs and DOUBLEs."""
     import pyarrow as pa

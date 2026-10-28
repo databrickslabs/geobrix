@@ -35,7 +35,7 @@ def _rs_dir() -> Optional[Path]:
         return root / "build" / "rs" / "dev-darwin" / "rs" if root else None
     try:
         from databricks.labs.gbx import _native
-    except ModuleNotFoundError:
+    except ImportError:  # no payload module in this wheel: "cannot import name", not ModuleNotFoundError
         return None
     d = _native.native_dir()
     return Path(d) / "rs" if d else None

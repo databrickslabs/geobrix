@@ -74,12 +74,8 @@ def _pointascell_udf(lon: pd.Series, lat: pd.Series, res: pd.Series) -> pd.Serie
     # (typically a single literal => one pass). Bit-identical to the scalar path.
     for z in np.unique(ress[~null]):
         mask = ~null & (ress == z)
-        z = _res_or_null(z)  # 3.0 (a NULL made the batch float) -> 3
-        if z != int(z):
-            raise ValueError(
-                f"gbx_quadbin_pointascell: resolution must be a whole number; got {z}"
-            )
-        out[mask] = _quadbin.point_as_cell_vec(lons[mask], lats[mask], int(z))
+        z = _whole_res("gbx_quadbin_pointascell", _res_or_null(z))  # 3.0, '3' -> 3
+        out[mask] = _quadbin.point_as_cell_vec(lons[mask], lats[mask], z)
     cells = pd.Series(out, dtype="Int64")
     cells[null] = pd.NA
     return cells
@@ -702,6 +698,26 @@ def _res_or_null(res):
     return None if pd.isna(res) else _norm_res(res)
 
 
+def _whole_res(fn, res) -> int:
+    """A non-NULL resolution as the int an integer-resolution grid (quadbin, custom) takes.
+
+    A whole number is that int, whether it arrives as an int, a float (``3.0``: a NULL in an
+    INT column made pandas hand the batch over as floats) or text (``'3'``, ``' 3 '``,
+    ``'3.0'``: SQL callers pass the resolution as a string). Anything else, ``3.5`` or ``'abc'``,
+    raises naming the value instead of being cut to a whole number. BNG does not come through
+    here: its resolutions are also strings (``'1km'``) that mean something else.
+    """
+    value = res
+    if isinstance(res, str):
+        try:
+            value = float(res.strip())
+        except ValueError:
+            value = None
+    if value is None or not float(value).is_integer():
+        raise ValueError(f"{fn}: resolution must be a whole number; got {res!r}")
+    return int(value)
+
+
 # ============================================================================
 # Custom gridding (gbx_custom_*) — pure-Python port of CustomGridSystem.scala +
 # GridConf.scala. Cell ids are BIGINT; geometry outputs are plain WKB (NO SRID —
@@ -772,10 +788,7 @@ def _custom_pointascell_udf(
         if g is None or spec is None or r is None:
             out.append(None)
             continue
-        if r != int(r):
-            raise ValueError(
-                f"gbx_custom_pointascell: resolution must be a whole number; got {r}"
-            )
+        r = _whole_res("gbx_custom_pointascell", r)
         pg = parse_geom(g)
         if pg is None or pg.is_empty:
             out.append(None)
@@ -784,7 +797,7 @@ def _custom_pointascell_udf(
         x, y = _custom_first_coord(pg)
         # resolution PARAMETER raises (via point_to_cell_id_or_none);
         # NaN / out-of-bounds coordinate DATA -> None
-        out.append(_custom.point_to_cell_id_or_none(conf, x, y, int(r)))
+        out.append(_custom.point_to_cell_id_or_none(conf, x, y, r))
     # Int64, not the float64 pandas picks for ints beside a None: a cell id past 2**53 would
     # be rounded to the nearest float in any batch that holds a NULL.
     return pd.Series(out, dtype="Int64")

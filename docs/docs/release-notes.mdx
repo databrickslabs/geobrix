@@ -756,6 +756,12 @@ formats.
   `typing_extensions` (a pure-Python package with no dependencies) to the latest release.
   Serverless environment 6, Databricks Runtime 19 and Databricks Runtime 19 ML already ship 4.15
   and install exactly as before.
+- **`rio-tiler` is no longer held below 9.3.** The lightweight extras allowed `rio-tiler` 9.0 up
+  to, but not including, 9.3, because 9.3.0 failed to import on Python 3.12: the same
+  `typing_extensions` problem as above, not a fault in `rio-tiler`. With the `typing_extensions`
+  4.13 floor, `rio-tiler` 9.3 and later import on Serverless environments 5 and 6 and Databricks
+  Runtime 17.3, 18 and 19. The extras now allow any `rio-tiler` 9 release, so a new install takes
+  9.4 instead of 9.2; no other package in the extras changes.
 - **Photogrammetry extras:** `pycolmap` and `pycolmap-cuda12` move to 4.2.1.
 - **The GeoBrix JAR no longer bundles the Scala standard library;** Databricks Runtime provides
   it. Nothing changes for users.

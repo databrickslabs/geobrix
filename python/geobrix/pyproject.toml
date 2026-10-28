@@ -77,7 +77,7 @@ light-base = [
     "pandas>=2.0.0",
     "pyarrow>=11.0.0",
     # Cap <2 to guard against a future scipy 2.x major at resolve time (no 2.x
-    # exists yet — a no-op today, like the pyproj<4 / rio-tiler<9.3 pins). scipy is
+    # exists yet — a no-op today, like the pyproj<4 / rio-tiler<10 pins). scipy is
     # floor-only elsewhere and floats to latest on the dev-container / transitive
     # path, so bound it like the other runtime-sensitive deps rather than leave it open.
     "scipy>=1.11.0,<2",
@@ -93,7 +93,7 @@ light-base = [
     "pyogrio>=0.12,<1",
     # Cap pyproj: a floor-only, native-PROJ-tied dep that floats to "latest" on
     # Serverless (not held by the immutable base) — same float-and-break risk as
-    # rio-tiler 9.3.0. No 4.x exists yet, so <4 is a no-op today but future-proofs.
+    # any unbounded dep. No 4.x exists yet, so <4 is a no-op today but future-proofs.
     "pyproj>=3.6,<4",
     # Functional floor only; the protobuf-5 cap (light_dbr17/18/env5) and the
     # protobuf-6 floor (light_dbr19/env6) live in the per-regime variant deltas below.
@@ -117,7 +117,7 @@ light-base = [
     # netcdf-c + HDF5, reading both NetCDF-3 and NetCDF-4/HDF5 (S5P, ERA5).
     # Folded into [light-base] so any geobrix[light_*] reads NetCDF out of the box.
     # Floor pinned; add a ceiling if a future release floats/breaks on py3.12,
-    # same discipline as the rio-tiler / mapbox-vector-tile pins above.
+    # same discipline as the mapbox-vector-tile pin above.
     "netcdf4>=1.6,<2",
     # Entity-hardened XML parsing for external-origin GDAL .vrt mosaic indexes
     # (raster_gbx VRT expansion). The stdlib xml.etree parser is vulnerable to
@@ -157,11 +157,11 @@ light_dbr17 = [
     "pandas<2.3",
     "numpy<2.2",
     "urllib3<2.4",
-    # <9.3 is unified across both regimes (kept as is). The "9.3.0 regressed a PEP 728
-    # TypedDict import on Python 3.12" failure it was added for matches the typing_extensions
-    # floor above: 9.0.6, 9.3.0 and 9.4.12 all import with typing_extensions>=4.13 and all
-    # fail with 4.12.2. Whether the cap is still needed has not been re-measured.
-    "rio-tiler>=9.0,<9.3",
+    # Capped at the next major, like rio-cogeo<8 / scipy<2 / pyproj<4, unified across both
+    # regimes. It used to stop at 9.3 because 9.3.0 failed to import on Python 3.12; that was
+    # the PEP 728 TypedDict keyword fixed by the typing_extensions floor above (9.0.6, 9.3.0
+    # and 9.4.12 all import with it and all fail with 4.12.2), so the cap is lifted.
+    "rio-tiler>=9.0,<10",
     "httpcore>=1.0.9",
     "idna<3.8",                     # DBR 17.3/18/env5 protobuf-5 base idna 3.7
     "mapbox-vector-tile>=2.1,<2.2", # protobuf-5 cap (2.2 would pull protobuf 6)
@@ -192,9 +192,8 @@ light_dbr19 = [
     "pandas<2.4",
     "numpy<2.4",
     "urllib3<2.6",
-    # rio-tiler <9.3 unified across both regimes (see [light_dbr17]: the 9.3.0 import failure
-    # on Python 3.12 was the typing_extensions floor, now set above).
-    "rio-tiler>=9.0,<9.3",
+    # rio-tiler capped at the next major, unified across both regimes (see [light_dbr17]).
+    "rio-tiler>=9.0,<10",
     "httpcore>=1.0.9",          # DBR 19 / env 6 ship >=1.0.9; floor harmless
     # idna cap: DBR 19 / env 6 base idna is 3.11; cap <3.12 to silence the
     # "a core package changed: idna" notebook notice. idna is API-stable 3.x;

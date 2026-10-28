@@ -254,15 +254,15 @@ base-version fidelity).  These CVEs are resolved when Databricks ships a patched
   cluster notice on DBR.  Patching is a CI-health action, not a 0.6.0 release gate.
 
 - **httpx2 / httpcore2 — 4 HIGH+MED alerts** in the two `_all` umbrella locks
-  (`requirements-light-env5-all-ci.txt` / `-env6-all-ci.txt`).  rio-tiler 9.2.x
-  (the newest admitted by the `rio-tiler>=9.0,<9.3` cap) replaced its classic
+  (`requirements-light-env5-all-ci.txt` / `-env6-all-ci.txt`).  rio-tiler 9.2 and later
+  (9.4.12 is the newest admitted by the `rio-tiler>=9.0,<10` cap) replaced its classic
   `httpx` client with the `httpx2` distribution.  The patched `httpx2`
   (`>=2.11` for the MED multipart/header CVEs, `>=2.12` for HIGH
   CVE-2026-84382 decompression-amplification, plus the paired `httpcore2>=2.10`
   for HIGH CVE-2026-84381) **requires `idna>=3.18`**, which the base-pinned idna
   caps (`<3.8` env5 / `<3.12` env6, above) forbid — so the resolver backtracks
   `httpx2` to 2.3.0 (its last release compatible with an unbounded idna).  rio-tiler
-  9.2.x itself admits any `httpx2`; the wall is idna.  These CVEs are therefore
+  itself admits any `httpx2`; the wall is idna.  These CVEs are therefore
   **inherited transitively from the same base-pinned idna constraint as the
   urllib3/idna cases above** and clear only when the DBR/Serverless base advances
   idna to `>=3.18` (letting the geobrix idna cap rise), not by a wheel bump.  The

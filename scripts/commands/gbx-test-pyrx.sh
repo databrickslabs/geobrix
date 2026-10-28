@@ -19,6 +19,8 @@ show_help() {
     echo -e "                          e.g. --markers 'not delta' (runs as -m '((not integration) and (not perf)) and (not delta)')"
     echo -e "  ${GREEN}--perf${NC}                 Also run the perf-marked cases (slow tessellate / geomk / streamed-merge cases, some of them"
     echo -e "                          correctness oracles); the default unit loop skips them, CI runs them. Pass it on the full run before a push"
+    echo -e "  ${GREEN}--with-integration${NC}     Also run the integration-marked tests (they need the network or a long setup, e.g. installing a"
+    echo -e "                          package into a scratch venv); CI and the default loop exclude them. Combine with --path/--markers to pick one"
     echo -e "  ${GREEN}--docker${NC}               Run in the geobrix-dev container instead of the host venv (default). Only for GDAL"
     echo -e "                          natives, the JAR and parity"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
@@ -52,6 +54,7 @@ LOG_PATH=""
 USE_DOCKER=0
 EXTRA_MARKERS=""
 WITH_PERF=0
+WITH_INTEGRATION=0
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -72,6 +75,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --perf)
             WITH_PERF=1
+            shift
+            ;;
+        --with-integration)
+            WITH_INTEGRATION=1
             shift
             ;;
         --log)
@@ -106,12 +113,18 @@ fi
 show_banner "GeoBrix: Light-tier Tests (pyrx, zarr, ...; no JAR)"
 setup_log_file "$LOG_PATH"
 
-# The marker expression: integration tests are always excluded, and so are the perf-marked cases
-# (the unit loop; --perf includes them); --markers narrows further.
-BASE_MARKERS="(not integration) and (not perf)"
-[[ $WITH_PERF -eq 1 ]] && BASE_MARKERS="not integration"
+# The marker expression: integration tests and the perf-marked cases are excluded by default (the
+# unit loop; --with-integration and --perf include them); --markers narrows further.
+EXCLUDES=()
+[[ $WITH_INTEGRATION -eq 1 ]] || EXCLUDES+=("not integration")
+[[ $WITH_PERF -eq 1 ]] || EXCLUDES+=("not perf")
+BASE_MARKERS=""
+for e in "${EXCLUDES[@]}"; do BASE_MARKERS="${BASE_MARKERS:+$BASE_MARKERS and }($e)"; done
+[[ ${#EXCLUDES[@]} -eq 1 ]] && BASE_MARKERS="${EXCLUDES[0]}"
 MARKERS="$BASE_MARKERS"
-[[ -n "$EXTRA_MARKERS" ]] && MARKERS="($BASE_MARKERS) and ($EXTRA_MARKERS)"
+if [[ -n "$EXTRA_MARKERS" ]]; then
+    MARKERS="${BASE_MARKERS:+($BASE_MARKERS) and }($EXTRA_MARKERS)"
+fi
 MARKERS_Q="$(printf '%q' "$MARKERS")"   # one shell word inside the `bash -c` command string below
 
 echo -e "${CYAN}Test path: ${YELLOW}${TEST_PATHS[*]}${NC}"

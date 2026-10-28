@@ -14,7 +14,7 @@ from databricks.labs.gbx.bench.levels import Form
 
 # Bump when an input recipe (a seed or a shape) changes: it is part of the cached table's name,
 # so a stale table from an older recipe is never reused.
-RECIPE_VERSION = 1
+RECIPE_VERSION = 2
 BASE_ROWS = {
     "bng_points": 1_000_000,
     "invalid_polys": 250_000,
@@ -224,11 +224,12 @@ def _gb_tiles(virtual: bool):
 
 
 _GROUP_SIZE = 50  # tiles a group holds, at most
+_REST_GROUP_SIZE = 4  # tiles a group holds, at most, in the half of the skew input that is not the hot key
 _CELL_KEYS = 200  # groups of the BNG cell rows
 
 
-def _grouped_tiles(skew: bool):
-    """`(key, tile)`: the corpus row tiles in groups of up to 50, every group of ONE coordinate system.
+def _plan_grouped_tiles(sources, n, skew):
+    """`(key, path)` pairs for the first `n` of the corpus row tiles `sources`, every group of ONE CRS.
 
     The corpus cycles four systems over four places (two cities), so a group of mixed ones is a mosaic of
     several places: terabytes of NoData for the light merge, and one tile for the heavy one. Same-system tiles
@@ -236,39 +237,48 @@ def _grouped_tiles(skew: bool):
     The groups are sized from the tiles there are (`n` is only an upper bound), so the 1x, 4x and 16x inputs
     have groups of one size until the corpus runs out.
 
-    With `skew`, half the rows are one key of one system. `BASE_ROWS` for this input is chosen so that group is
-    56 tiles, 896 MiB decoded (16 MiB each): the skew is in how the rows are spread, not one group too big to
-    hold. At 4x and 16x that group is 3.5 and 14 GiB, which no merge shape can hold: those points are the
-    memory cliff, not a comparison.
+    With `skew`, half the rows are ONE key of one system (`hot`) and the other half are small groups of up to 4
+    tiles, so the hot key is 14 times the typical group at the base size and more beyond it. The base size
+    (`BASE_ROWS`) makes `hot` 56 tiles, 896 MiB decoded (16 MiB each): the skew is in how the rows are spread,
+    not one group too big to hold. At 4x and 16x `hot` is 3.5 and 14 GiB, which no merge shape can hold: those
+    points are the memory cliff, not a comparison.
     """
+    import rasterio
+
+    n = min(n, len(sources))
+    half = n // 2
+    size = _REST_GROUP_SIZE if skew else _GROUP_SIZE
+    by_crs: Dict[Optional[int], List[str]] = {}
+    hot_crs = None
+    for p in sources:
+        with rasterio.open(p) as ds:
+            crs = ds.crs.to_epsg() if ds.crs else None
+        hot_crs = crs if not by_crs else hot_crs
+        by_crs.setdefault(crs, []).append(p)
+        have = sum(map(len, by_crs.values()))
+        if have >= n and (not skew or len(by_crs[hot_crs]) >= half):
+            break
+    pairs = []
+    if skew:
+        hot, by_crs[hot_crs] = by_crs[hot_crs][:half], by_crs[hot_crs][half:]
+        pairs += [("hot", p) for p in hot]
+    left = n - len(pairs)
+    for crs, paths in sorted(by_crs.items(), key=lambda kv: str(kv[0])):
+        for i, p in enumerate(paths[: max(0, left)]):
+            pairs.append((f"{crs}-{i // size}", p))
+        left -= len(paths)
+    return pairs
+
+
+def _grouped_tiles(skew: bool):
+    """`(key, tile)`: the corpus row tiles in groups of one CRS (see :func:`_plan_grouped_tiles`)."""
 
     def build(spark, n, corpus, schema):
         sources = _corpus_rows(corpus)
         if not sources:
             return None
-        import rasterio
-
         n = min(n, len(sources))
-        half = n // 2
-        by_crs: Dict[Optional[int], List[str]] = {}
-        hot_crs = None
-        for p in sources:
-            with rasterio.open(p) as ds:
-                crs = ds.crs.to_epsg() if ds.crs else None
-            hot_crs = crs if not by_crs else hot_crs
-            by_crs.setdefault(crs, []).append(p)
-            have = sum(map(len, by_crs.values()))
-            if have >= n and (not skew or len(by_crs[hot_crs]) >= half):
-                break
-        pairs = []
-        if skew:
-            hot, by_crs[hot_crs] = by_crs[hot_crs][:half], by_crs[hot_crs][half:]
-            pairs += [("hot", p) for p in hot]
-        left = n - len(pairs)
-        for crs, paths in sorted(by_crs.items(), key=lambda kv: str(kv[0])):
-            for i, p in enumerate(paths[: max(0, left)]):
-                pairs.append((f"{crs}-{i // _GROUP_SIZE}", p))
-            left -= len(paths)
+        pairs = _plan_grouped_tiles(sources, n, skew)
         kind = "skew" if skew else "even"
         return _table(
             spark,

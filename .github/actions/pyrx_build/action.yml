@@ -17,11 +17,6 @@ inputs:
       gives each its share (see the `pyrx` job matrix in .github/workflows/build_main.yml).
       Empty runs every light dir in one process.
     default: ''
-  skip_dirs:
-    description: >
-      Space-separated dirs from `dirs` to leave out of this run (the bench path filter passes
-      test/bench here when nothing it covers changed). Ignored when `dirs` is empty.
-    default: ''
 runs:
   using: "composite"
   steps:
@@ -80,7 +75,6 @@ runs:
       shell: bash
       env:
         SHARD_DIRS: ${{ inputs.dirs }}
-        SKIP_DIRS: ${{ inputs.skip_dirs }}
       run: |
         cd python/geobrix
         # pyproject sets pythonpath=["src"]; exclude integration (network) tests.
@@ -109,18 +103,7 @@ runs:
         # grids before test/bench builds rasters on worker threads (see test/conftest.py for
         # the maintained condition), so those two stay in one shard, pyvx first.
         if [ -n "$SHARD_DIRS" ]; then
-          DIRS=""
-          for d in $SHARD_DIRS; do
-            case " $SKIP_DIRS " in
-              *" $d "*) echo "Skipping $d (skip_dirs)" ;;
-              *) DIRS="$DIRS $d" ;;
-            esac
-          done
-          if [ -z "$DIRS" ]; then
-            echo "Nothing to run: every dir of this shard was skipped"
-            exit 0
-          fi
-          pytest $DIRS -m "not integration" -v
+          pytest $SHARD_DIRS -m "not integration" -v
         else
           # No shard given: every light dir in one process. gbx:test:python and gbx:test:light
           # read this line, so keep it a plain `pytest test/... -m ...` and in step with the shards.

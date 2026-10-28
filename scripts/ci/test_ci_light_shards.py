@@ -1,4 +1,4 @@
-"""Guards for the sharded light CI job and its test/bench path filter.
+"""Guards for the sharded light CI job.
 
 The light tier runs as parallel shards (the `pyrx` job matrix in build_main.yml). These tests
 read the workflow and the two CI actions and fail unless:
@@ -8,21 +8,15 @@ read the workflow and the two CI actions and fail unless:
 * the heavy build ignores the same set (`LIGHT_IGNORES`) and the unsharded fallback line of the
   light action lists the same set;
 * `pyvx` runs before `bench` in the same shard (the PROJ state bench relies on);
-* `build` waits for the whole sharded job, and the shards actually receive their `dirs`.
-
-The path filter (`paths_changed.py`) is checked against the paths the workflow really passes
-it, including the cases that must fail safe.
+* `build` waits for the whole sharded job, the shards actually receive their `dirs`, and
+  nothing can quietly drop a shard or a dir: the matrix has no `exclude`/`include`, and the job
+  and the action step carry no `if`, `continue-on-error` or skip input.
 """
 
 import ast
-import os
 import re
-import shlex
-import subprocess
-import sys
 from pathlib import Path
 
-import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -30,7 +24,6 @@ CONFTEST = REPO_ROOT / "python" / "geobrix" / "test" / "conftest.py"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "build_main.yml"
 LIGHT_ACTION = REPO_ROOT / ".github" / "actions" / "pyrx_build" / "action.yml"
 HEAVY_ACTION = REPO_ROOT / ".github" / "actions" / "python_build" / "action.yml"
-PATHS_CHANGED = Path(__file__).with_name("paths_changed.py")
 
 HOW_TO_FIX = (
     "Put every light dir in exactly one shard of the `pyrx` job in build_main.yml"
@@ -94,96 +87,24 @@ def test_pyvx_runs_before_bench_in_the_same_shard():
     assert "test/pyvx" in dirs and dirs.index("test/pyvx") < dirs.index("test/bench")
 
 
-def test_heavy_waits_for_every_shard_and_each_shard_gets_its_dirs():
+def test_heavy_waits_for_every_shard_and_nothing_can_hide_one():
     workflow = yaml.safe_load(WORKFLOW.read_text())
     needs = workflow["jobs"]["build"]["needs"]
     assert "pyrx" in ([needs] if isinstance(needs, str) else needs)
+
     job = _pyrx_job()
     assert job["strategy"]["fail-fast"] is False
+    # Only these two dimensions: an `exclude` (or `include`) could remove or add a shard
+    # that the guard above never sees, because it reads `shard` alone.
+    assert set(job["strategy"]["matrix"]) == {"python", "shard"}
+    # A job-level condition or continue-on-error would let a failing shard pass the gate.
+    assert not {"if", "continue-on-error"} & set(job)
+
     (step,) = [
         s for s in job["steps"] if s.get("uses") == "./.github/actions/pyrx_build"
     ]
-    assert step["with"]["dirs"] == "${{ matrix.shard.dirs }}"
-    assert "steps.bench.outputs.changed" in step["with"]["skip_dirs"]
-
-
-def _watched_paths():
-    """The paths the workflow's bench step hands to paths_changed.py."""
-    (step,) = [s for s in _pyrx_job()["steps"] if s.get("id") == "bench"]
-    words = shlex.split(step["run"].replace("\\\n", " "))
-    return words[words.index("HEAD") + 1 :]
-
-
-def _git(cwd, *args):
-    # hooks off: a developer's global hooks would run on every commit of these scratch repos
-    cmd = ["git", "-c", "user.name=ci", "-c", "user.email=ci@example.com"]
-    done = subprocess.run(
-        [*cmd, "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", *args],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return done.stdout.strip()
-
-
-def _shallow_clone_after_a_change(tmp_path, changed_file):
-    """A depth-1 clone at the commit that touches `changed_file`; returns (clone, base sha)."""
-    origin = tmp_path / "origin"
-    origin.mkdir()
-    _git(origin, "init", "-q")
-    _git(origin, "config", "uploadpack.allowAnySHA1InWant", "true")
-    files = [
-        "python/geobrix/test/bench/test_x.py",
-        "python/geobrix/src/databricks/labs/gbx/bench/x.py",
-        "python/geobrix/test/conftest.py",
-        ".github/workflows/build_main.yml",
-        "docs/a.md",
-    ]
-    for f in files:
-        (origin / f).parent.mkdir(parents=True, exist_ok=True)
-        (origin / f).write_text("v1\n")
-    _git(origin, "add", ".")
-    _git(origin, "commit", "-q", "-m", "base")
-    base = _git(origin, "rev-parse", "HEAD")
-    (origin / changed_file).write_text("v2\n")
-    _git(origin, "commit", "-q", "-am", "head")
-    clone = tmp_path / "clone"
-    _git(tmp_path, "clone", "-q", "--depth=1", f"file://{origin}", str(clone))
-    return clone, base
-
-
-@pytest.mark.parametrize(
-    "changed_file,base_kind,expected",
-    [
-        ("python/geobrix/test/bench/test_x.py", "real", "true"),
-        ("python/geobrix/src/databricks/labs/gbx/bench/x.py", "real", "true"),
-        ("python/geobrix/test/conftest.py", "real", "true"),
-        (".github/workflows/build_main.yml", "real", "true"),
-        ("docs/a.md", "real", "false"),
-        # Fail safe: no usable base means the bench tests run, whatever changed.
-        ("docs/a.md", "empty", "true"),
-        ("docs/a.md", "zeros", "true"),
-        ("docs/a.md", "unknown", "true"),
-    ],
-)
-def test_the_bench_filter_runs_bench_unless_provably_unchanged(
-    tmp_path, changed_file, base_kind, expected
-):
-    clone, base = _shallow_clone_after_a_change(tmp_path, changed_file)
-    base = {"real": base, "empty": "", "zeros": "0" * 40, "unknown": "1" * 40}[
-        base_kind
-    ]
-    out = tmp_path / "github_output"
-
-    res = subprocess.run(
-        [sys.executable, str(PATHS_CHANGED), base, "HEAD", *_watched_paths()],
-        cwd=clone,
-        env={**os.environ, "GITHUB_OUTPUT": str(out)},
-        capture_output=True,
-        text=True,
-    )
-
-    assert res.returncode == 0, res.stderr
-    assert res.stdout.startswith(f"{expected}: "), res.stdout
-    assert out.read_text() == f"changed={expected}\n"
+    assert step["with"] == {
+        "python_version": "${{ matrix.python }}",
+        "dirs": "${{ matrix.shard.dirs }}",
+    }
+    assert not {"if", "continue-on-error"} & set(step)

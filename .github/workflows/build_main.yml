@@ -54,7 +54,8 @@ jobs:
   # the light dirs of python/geobrix/test/conftest.py (_LIGHT_TEST_DIRS), each once, and the
   # heavy build's LIGHT_IGNORES lists the same set. A new light dir goes into ONE shard here.
   # Keep pyvx before bench in one shard: pyvx leaves the PROJ grids bench relies on (the guard
-  # checks that too).
+  # checks that too). Every shard always runs; there is no matrix exclude/include and no path
+  # filter, so a red test/bench at HEAD can never be hidden (the guard checks that as well).
   pyrx:
     name: Lightweight (pyrx) tests - ${{ matrix.shard.name }} (${{ matrix.python }})
     runs-on:
@@ -92,40 +93,11 @@ jobs:
           token: ${{ secrets.REPO_ACCESS_TOKEN || secrets.GITHUB_TOKEN }}
       - name: Create pip cache key file
         run: echo "pyrx-${{ github.ref }}-${{ matrix.python }}" > .ci-pip-cache-key
-      # test/bench (~6 of the ~59 light minutes) guards the bench harness only, so it runs when
-      # something it covers changed in the pushed range / the PR: the bench code, its tests, the
-      # shared light conftest, or this CI wiring (so a wiring change proves the whole pipeline).
-      # Fail safe: a first push of a branch, a manual run, or a base commit that cannot be
-      # fetched all run it (scripts/ci/paths_changed.py), and so does a crash of the check
-      # itself (continue-on-error leaves the output unset, which is not 'false'). Only the
-      # shard holding test/bench asks.
-      - name: Decide whether test/bench runs
-        id: bench
-        if: contains(matrix.shard.dirs, 'test/bench')
-        continue-on-error: true
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          PUSH_BEFORE: ${{ github.event.before }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-        run: |
-          BASE=""
-          case "$EVENT_NAME" in
-            push) BASE="$PUSH_BEFORE" ;;
-            pull_request) BASE="$PR_BASE" ;;
-          esac
-          python3 scripts/ci/paths_changed.py "$BASE" HEAD \
-            python/geobrix/src/databricks/labs/gbx/bench \
-            python/geobrix/test/bench \
-            python/geobrix/test/conftest.py \
-            .github/actions/pyrx_build/action.yml \
-            .github/workflows/build_main.yml \
-            scripts/ci/paths_changed.py
       - name: build + test pyrx (lightweight)
         uses: ./.github/actions/pyrx_build
         with:
           python_version: ${{ matrix.python }}
           dirs: ${{ matrix.shard.dirs }}
-          skip_dirs: ${{ steps.bench.outputs.changed == 'false' && 'test/bench' || '' }}
       # Tests of the scripts themselves: the JAR packaging check, the gbx:dcs:build /
       # gbx:dcs:publish gates and the CI shard guard. Stdlib + pytest (from the pyrx install
       # above); the DCS commands run against a fake docker on PATH, so no Docker daemon or

@@ -21,7 +21,7 @@ show_help() {
     echo -e "  ${GREEN}--help${NC}                 Show this help"
     echo ""
     echo -e "${CYAN}Phases (no --path):${NC} the heavy and light tiers cannot share one pytest process, so the default"
-    echo -e "  run mirrors CI as separate pytest invocations, each with its own log, and prints a per-phase summary:"
+    echo -e "  run mirrors CI's heavy and light jobs as separate pytest invocations (the light phase is one process here; CI shards it), each with its own log, and prints a per-phase summary:"
     echo -e "  ${YELLOW}heavy${NC}  test/ minus the light dirs (LIGHT_IGNORES in .github/actions/python_build/action.yml)"
     echo -e "  ${YELLOW}light${NC}  the light dirs (pytest list in .github/actions/pyrx_build/action.yml)"
     echo -e "  Exits non-zero if any phase fails. ${YELLOW}--path${NC} bypasses phasing (one process, as given)."

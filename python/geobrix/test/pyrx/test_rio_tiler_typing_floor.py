@@ -161,6 +161,22 @@ def test_the_installed_typing_extensions_accepts_extra_items():
     assert Probe.__required_keys__ == frozenset({"name"})
 
 
+# What uv prints when it cannot reach the index (not when it cannot solve).
+INDEX_UNREACHABLE = (
+    "request failed after",
+    "failed to fetch",
+    "error sending request",
+    "tcp connect error",
+    "dns error",
+    "timed out",
+)
+
+
+def _without_urls(text):
+    # uv names the index in its errors; keep it out of test output.
+    return re.sub(r"\S+://\S+", "<url>", text)[-800:]
+
+
 @pytest.mark.integration
 def test_rio_tiler_imports_at_the_declared_typing_extensions_floor(tmp_path):
     # The CI locks resolve typing_extensions to the newest release, so only a fresh
@@ -189,10 +205,15 @@ def test_rio_tiler_imports_at_the_declared_typing_extensions_floor(tmp_path):
             str(rio_tiler),
         ],
         capture_output=True,
+        text=True,
     )
-    if install.returncode != 0:  # no package index: nothing to judge
-        pytest.skip("the package index is not reachable")
+    if install.returncode != 0:
+        unreachable = [m for m in INDEX_UNREACHABLE if m in install.stderr.lower()]
+        if unreachable:  # no package index: nothing to judge
+            pytest.skip(f"the package index is not reachable ({unreachable[0]})")
+        # Anything else (a floor the closure cannot satisfy, say) is what this test is for.
+        pytest.fail("uv could not install the floor: " + _without_urls(install.stderr))
     probe = subprocess.run(
         [py, "-c", "import rio_tiler, rio_tiler.io"], capture_output=True, text=True
     )
-    assert probe.returncode == 0, probe.stderr[-400:]
+    assert probe.returncode == 0, _without_urls(probe.stderr)

@@ -145,7 +145,7 @@ docker exec geobrix-dev /bin/bash -c \
      pip3 install --break-system-packages --quiet \
        rio-cogeo==7.0.2 scikit-image==0.26.0 xarray-spatial==0.9.9 \
        pmtiles==3.7.0 h3==4.5.0 pyarrow==19.0.1 netCDF4==1.7.4 \
-       quadbin==0.2.2 numexpr==2.14.1 laspy==2.7.0 rio-tiler==9.0.6 \
+       quadbin==0.2.2 numexpr==2.14.1 laspy==2.7.0 rio-tiler==9.4.12 \
        lazrs==0.8.2 mapbox-vector-tile==2.1.0 exifread==3.5.1 \
        tenacity==9.1.4 contextily==1.6.2 anywidget==0.11.0"
 

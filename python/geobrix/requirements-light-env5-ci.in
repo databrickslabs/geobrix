@@ -53,7 +53,8 @@ scipy==1.15.3
 numexpr==2.14.2
 
 # --- web-mercator XYZ tiling (rio-tiler bundles morecantile + color-operations) ---
-rio-tiler==9.0.6
+# The newest release the extras admit (rio-tiler>=9.0,<10): CI tests what users install.
+rio-tiler==9.4.12
 
 # --- COG output (rst_cog_convert) ---
 rio-cogeo==7.0.2

@@ -94,6 +94,11 @@ def _geobrix_version() -> str:
 _BENCH_SRC = TESTS_DIR.parent.parent / "python/geobrix/src/databricks/labs/gbx/bench"
 
 
+def _function_names(functions: str) -> list:
+    """The names in a ``--functions`` list: comma-separated, any blanks around a name dropped."""
+    return [x.strip() for x in functions.split(",") if x.strip()]
+
+
 def _unknown_bng_names(functions: str) -> list:
     """The ``bng_*`` names in a ``--functions`` list that no BNG bench leg or registered bench
     function answers to.
@@ -110,7 +115,7 @@ def _unknown_bng_names(functions: str) -> list:
     legs = re.findall(r'^\s*\("(bng_\w+)", dict\(', cluster, re.M)
     registered = re.findall(r'^    "(bng_\w+)": FnSpec\(', spec, re.M)
     known = set(legs) | set(registered)
-    return [x for x in functions.split(",") if x.startswith("bng_") and x not in known]
+    return [x for x in _function_names(functions) if x.startswith("bng_") and x not in known]
 
 
 def _arg(flag: str, default: str) -> str:
@@ -231,7 +236,7 @@ def _expected_rows(
         from databricks.labs.gbx.bench import spec as _spec
 
         fns = _spec.select(
-            functions=[x for x in functions.split(",") if x] or None, set=sel
+            functions=_function_names(functions) or None, set=sel
         )
     except Exception:
         return None
@@ -418,7 +423,7 @@ def main() -> int:
             run_id = f"{run_id}-netcdf"
         elif netcdf_writer_only:
             run_id = f"{run_id}-netcdf-writer"
-    functions = _arg("--functions", "")
+    functions = ",".join(_function_names(_arg("--functions", "")))
     sel = _arg("--set", "core")
     unknown_bng = _unknown_bng_names(functions)
     if unknown_bng:

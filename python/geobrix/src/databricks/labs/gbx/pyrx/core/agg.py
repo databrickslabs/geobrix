@@ -473,6 +473,12 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
     (a pixel no tile reaches is invalid). A group whose tiles are all in the reference CRS is
     merged as before: a gap between tiles with no NoData is zeros, valid.
 
+    IN RAM AND STREAMED: the two merges give the same grid, NoData and pixels, tile by tile: each
+    source is skipped where it is NoData by ITS OWN NoData (``rasterio.merge`` reads every source
+    that way, and the streamed mosaic index takes the NoData of each tile, not of the first). They
+    differ in layout, so never in a byte comparison: the in-RAM result is a striped zstd GeoTIFF, the
+    streamed one a Cloud Optimized GeoTIFF (512-pixel tiles, overviews, DEFLATE).
+
     TIER DIFFERENCE (tiles in another CRS): the heavyweight ``gbx_rst_merge_agg`` does not
     merge them. It builds a ``gdalbuildvrt`` mosaic, which skips a tile whose projection
     differs, and returns ONE tile, the one that sorts first in byte order (probed against

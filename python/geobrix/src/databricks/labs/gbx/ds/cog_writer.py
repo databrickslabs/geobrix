@@ -616,9 +616,13 @@ def _build_mosaic_vrt(
                     "ySize": str(tile_h),
                 },
             )
-            # Skip this tile's nodata pixels when compositing (transparent overlap).
-            if band_nodata is not None:
-                ET.SubElement(src_el, "NODATA").text = repr(float(band_nodata))
+            # Skip this tile's nodata pixels when compositing (transparent overlap): the tile's
+            # OWN NoData, as the in-RAM merge reads each source by its own, not that of the
+            # first tile (a tile with none would otherwise paint its fill over its neighbour,
+            # and a valid pixel equal to the first tile's NoData would be skipped).
+            tile_nodata = meta["nodatavals"][band_idx - 1]
+            if tile_nodata is not None:
+                ET.SubElement(src_el, "NODATA").text = repr(float(tile_nodata))
             # A tile with its own mask band is composited by it: its masked pixels (the
             # corners of an h3 cell's bounding box, for a cell of an alpha source, which
             # declares no NoData) do not overwrite a neighbour's pixels.

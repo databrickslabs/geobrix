@@ -421,10 +421,10 @@ def _stamp_crs_bytes(ds, target_crs) -> bytes:
     from rasterio.io import MemoryFile
 
     from databricks.labs.gbx.pyrx.core._nodata import has_own_mask
-    from databricks.labs.gbx.pyrx.core.compression import match_alpha
+    from databricks.labs.gbx.pyrx.core.compression import match_alpha, source_profile
 
     own_mask = has_own_mask(ds)
-    profile = ds.profile.copy()
+    profile = source_profile(ds.profile, unless_jpeg=True)
     profile.update(driver="GTiff", crs=target_crs)
     with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
         with MemoryFile() as mf:

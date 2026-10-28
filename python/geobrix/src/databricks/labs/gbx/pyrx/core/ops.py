@@ -115,7 +115,7 @@ def as_format(ds, new_format: str) -> bytes:
     if new_format == "COG":
         return cog_convert(ds, "AUTO", 512, "AVERAGE")
     data = ds.read()
-    profile = ds.profile.copy()
+    profile = _comp.source_profile(ds.profile, unless_jpeg=True)
     profile.update(driver=new_format)
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:

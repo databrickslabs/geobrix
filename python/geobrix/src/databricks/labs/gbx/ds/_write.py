@@ -79,11 +79,22 @@ def tile_to_bytes(
     from rasterio.io import MemoryFile
 
     from databricks.labs.gbx.pyrx.core import _nodata
-    from databricks.labs.gbx.pyrx.core.compression import internal_mask_env, match_alpha
+    from databricks.labs.gbx.pyrx.core.compression import (
+        cog_profile,
+        internal_mask_env,
+        match_alpha,
+        source_profile,
+    )
 
     with MemoryFile(raster_bytes) as src_mf, src_mf.open() as src:
         data = src.read()
-        profile = src.profile.copy()
+        # The COG driver lays the file out and picks its codec itself: it takes none of the
+        # source's layout keys. Another driver starts from the source profile as a new GTiff.
+        profile = (
+            cog_profile(src.profile)
+            if str(driver).upper() == "COG"
+            else source_profile(src.profile, unless_jpeg=True)
+        )
         profile["driver"] = driver
         profile.update(
             _tile_creation_opts(driver, metadata, src.dtypes[0], src.width, src.height)

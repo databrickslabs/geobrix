@@ -47,6 +47,7 @@ from databricks.labs.gbx.pyrx.core import (
     warp,
     xyz,
 )
+from databricks.labs.gbx.pyrx.core.compression import source_profile
 from databricks.labs.gbx.pyvx import functions as pyvx
 
 # Fixed 3x3 normalised mean kernel for rst_convolve. Hardcoded identically here
@@ -159,7 +160,7 @@ def _synthetic_rgb_tile(ds) -> bytes:
     rgb = (rng.rand(h, w, 3) * 255).astype(np.uint8)
 
     # Build a 3-band GTiff with the input tile's geotransform and CRS
-    profile = ds.profile.copy()
+    profile = source_profile(ds.profile, unless_jpeg=True)
     profile.update(driver="GTiff", count=3, dtype="uint8")
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
@@ -194,7 +195,7 @@ def _ds_to_gtiff_bytes(ds) -> bytes:
     """
     from rasterio.io import MemoryFile
 
-    profile = ds.profile.copy()
+    profile = source_profile(ds.profile, unless_jpeg=True)
     profile.update(driver="GTiff")
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:

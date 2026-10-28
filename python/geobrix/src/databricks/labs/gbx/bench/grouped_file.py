@@ -198,11 +198,13 @@ def _window_gtiff_bytes(src_path, window) -> bytes:
     from rasterio.windows import Window
     from rasterio.windows import transform as window_transform
 
+    from databricks.labs.gbx.pyrx.core.compression import source_profile
+
     col_off, row_off, width, height = window
     with rasterio.open(str(src_path)) as ds:
         win = Window(col_off, row_off, width, height)
         data = ds.read(window=win)
-        profile = ds.profile.copy()
+        profile = source_profile(ds.profile, unless_jpeg=True)
         profile.update(
             driver="GTiff",
             width=width,

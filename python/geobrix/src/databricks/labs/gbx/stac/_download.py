@@ -117,7 +117,7 @@ def windowed_download(
 
             out_dtype = src.dtypes[0]
             decoded_bytes = data.nbytes
-            profile = src.profile.copy()
+            profile = _comp.source_profile(src.profile)
             profile.update(
                 driver="GTiff",
                 width=ow,

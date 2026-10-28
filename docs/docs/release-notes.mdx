@@ -369,6 +369,11 @@ formats.
   re-encoding them with its own defaults. `rst_cog_convert` and `rst_asformat(..., 'COG')` no
   longer log a GDAL warning per tile that the COG driver ignores the source's `TILED`,
   `BLOCKXSIZE`, `BLOCKYSIZE` or `PHOTOMETRIC` option; the output is unchanged.
+- **Lightweight functions that rewrite a striped GeoTIFF no longer log a GDAL warning per tile.**
+  `rst_asformat`, `rst_merge`, the STAC windowed download and the other functions that start from
+  the source's own layout logged `BLOCKXSIZE can only be used with TILED=YES` for a striped
+  source; the output is unchanged. The STAC windowed download and the vizx tile-simplify raster
+  path also read a JPEG/YCbCr source now, where they failed on `PHOTOMETRIC=YCBCR`.
 - **The lightweight `rst_cog_convert` keeps the colour interpretation of RGB tiles.** The red,
   green and blue bands of a COG it wrote were left unlabelled (only an alpha band was kept);
   they now keep their red, green and blue labels, as in the source tile.

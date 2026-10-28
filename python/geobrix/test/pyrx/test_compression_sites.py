@@ -15,10 +15,12 @@ inconsistently across GDAL builds).
 
 from __future__ import annotations
 
+import pathlib
+
 import numpy as np
 import pytest
 import rasterio
-from rasterio.enums import Compression
+from rasterio.enums import ColorInterp, Compression
 from rasterio.io import MemoryFile
 from rasterio.transform import from_bounds
 from rasterio.windows import Window
@@ -927,6 +929,24 @@ def _case_tile_to_bytes_cog(tmp_path):
     return tile_to_bytes(0, _ycbcr_src(), meta, force_driver="COG")
 
 
+def _case_windowed_download(tmp_path):
+    from databricks.labs.gbx.stac._download import windowed_download
+
+    path = _ycbcr_path(tmp_path)
+    out = windowed_download(
+        path,
+        str(tmp_path / "out.tif"),
+        (500000.0, 4490000.0, 500640.0, 4490640.0),
+    )
+    return pathlib.Path(out).read_bytes()
+
+
+def _case_simplify_raster(tmp_path):
+    from databricks.labs.gbx.vizx._simplify import _simplify_raster
+
+    return _simplify_raster(_ycbcr_path(tmp_path), {"raster_max_px": 64}, None)
+
+
 def _case_apply_compression(tmp_path):
     from databricks.labs.gbx.ds.writer import _apply_compression
 
@@ -962,6 +982,8 @@ _YCBCR_OPS = [
     (_case_encode_tile_cog, 3),
     (_case_tile_to_bytes_cog, 3),
     (_case_apply_compression, 3),
+    (_case_windowed_download, 3),
+    (_case_simplify_raster, 3),
 ]
 
 
@@ -1119,37 +1141,128 @@ def test_centroid_tessellate_chips_use_creation_opts(src_compress, coverage):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "op", ["resample_to_size", "reproject_to_srid", "build_overviews"]
-)
-def test_a_striped_source_logs_no_blockxsize_warning(op, caplog):
-    """A striped GeoTIFF's profile carries ``blockxsize`` with ``tiled`` False; written to a new
-    GTiff GDAL logs "BLOCKXSIZE can only be used with TILED=YES" for each dataset."""
-    import logging
-
-    from databricks.labs.gbx.pyrx.core import ops, resample, warp
-
+def _striped_source(count=1, alpha=False) -> bytes:
+    """A 64x64 uint8 GTiff written striped: no ``tiled=True``, so its profile carries ``blockxsize``."""
     profile = dict(
         driver="GTiff",
         width=64,
         height=64,
-        count=1,
+        count=count,
         dtype="uint8",
         crs="EPSG:4326",
         transform=from_bounds(0, 0, 1, 1, 64, 64),
     )
+    data = np.arange(count * 64 * 64, dtype="uint8").reshape(count, 64, 64) % 251
     with MemoryFile() as mf:
-        with mf.open(**profile) as dst:  # striped: no tiled=True
-            dst.write(np.arange(64 * 64, dtype="uint8").reshape(1, 64, 64) % 251)
-        with mf.open() as ds:
-            assert not ds.profile["tiled"] and ds.profile.get("blockxsize")
-            call = {
-                "resample_to_size": lambda: resample.resample_to_size(ds, 32, 32),
-                "reproject_to_srid": lambda: warp.reproject_to_srid(ds, 3857),
-                "build_overviews": lambda: ops.build_overviews(ds, [2]),
-            }[op]
-            with caplog.at_level(logging.WARNING):
-                assert call()
+        with mf.open(**profile) as dst:
+            dst.write(data)
+            if alpha:
+                dst.colorinterp = [
+                    ColorInterp.red,
+                    ColorInterp.green,
+                    ColorInterp.blue,
+                    ColorInterp.alpha,
+                ][:count]
+        return mf.read()
+
+
+def _striped_path(tmp_path, **kw) -> str:
+    p = tmp_path / "striped.tif"
+    p.write_bytes(_striped_source(**kw))
+    return str(p)
+
+
+# site -> (how it takes its source, call). "ds" is an open dataset, "bytes" the file's bytes and
+# "path" a file on disk; ``tmp_path`` is for sites that write beside their input.
+def _striped_sites():
+    from databricks.labs.gbx.bench import grouped_file, spec, synth
+    from databricks.labs.gbx.ds import _write, _xyz_mosaic
+    from databricks.labs.gbx.pyrx import functions as F
+    from databricks.labs.gbx.pyrx.core import gridagg, ops, resample, tiling, warp
+    from databricks.labs.gbx.stac import _download
+    from databricks.labs.gbx.vizx import _simplify
+
+    return {
+        "resample_to_size": (
+            "ds",
+            lambda ds, tp: resample.resample_to_size(ds, 32, 32),
+        ),
+        "reproject_to_srid": ("ds", lambda ds, tp: warp.reproject_to_srid(ds, 3857)),
+        "build_overviews": ("ds", lambda ds, tp: ops.build_overviews(ds, [2])),
+        "dataset_to_gtiff_bytes": ("ds", lambda ds, tp: F._dataset_to_gtiff_bytes(ds)),
+        "stamp_crs_bytes": (
+            "ds",
+            lambda ds, tp: gridagg._stamp_crs_bytes(ds, "EPSG:3857"),
+        ),
+        "encoded_size_bytes": ("ds", lambda ds, tp: tiling._encoded_size_bytes(ds)),
+        "as_format_gtiff": ("ds", lambda ds, tp: ops.as_format(ds, "GTiff")),
+        "tile_to_bytes_cog": (
+            "bytes",
+            lambda b, tp: _write.tile_to_bytes(0, b, {"compression": "ZSTD"}, "COG"),
+        ),
+        "windowed_download": (
+            "path",
+            lambda p, tp: _download.windowed_download(
+                p, str(tp / "out.tif"), (0.0, 0.0, 0.5, 0.5)
+            ),
+        ),
+        "simplify_raster": (
+            "path",
+            lambda p, tp: _simplify._simplify_raster(p, {"raster_max_px": 32}, None),
+        ),
+        "bench_synth_combineavg": (
+            "path",
+            lambda p, tp: synth.synthesize(p, "combineavg", str(tp / "synth")),
+        ),
+        "bench_window_gtiff_bytes": (
+            "path",
+            lambda p, tp: grouped_file._window_gtiff_bytes(p, (0, 0, 32, 32)),
+        ),
+        "bench_synthetic_rgb_tile": ("ds", lambda ds, tp: spec._synthetic_rgb_tile(ds)),
+        "bench_ds_to_gtiff_bytes": ("ds", lambda ds, tp: spec._ds_to_gtiff_bytes(ds)),
+        "to_render_rgb": (
+            "rgba-path",
+            lambda p, tp: _xyz_mosaic.to_render_rgb(p),
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        "resample_to_size",
+        "reproject_to_srid",
+        "build_overviews",
+        "dataset_to_gtiff_bytes",
+        "stamp_crs_bytes",
+        "encoded_size_bytes",
+        "as_format_gtiff",
+        "tile_to_bytes_cog",
+        "windowed_download",
+        "simplify_raster",
+        "bench_synth_combineavg",
+        "bench_window_gtiff_bytes",
+        "bench_synthetic_rgb_tile",
+        "bench_ds_to_gtiff_bytes",
+        "to_render_rgb",
+    ],
+)
+def test_a_striped_source_logs_no_blockxsize_warning(op, caplog, tmp_path):
+    """A striped GeoTIFF's profile carries ``blockxsize`` with ``tiled`` False; written to a new
+    GTiff GDAL logs "BLOCKXSIZE can only be used with TILED=YES" for each dataset."""
+    import logging
+
+    kind, call = _striped_sites()[op]
+    if kind == "rgba-path":
+        arg = _striped_path(tmp_path, count=4, alpha=True)
+    else:
+        arg = _striped_path(tmp_path) if kind == "path" else _striped_source()
+    with MemoryFile(_striped_source()) as mf, mf.open() as ds:
+        assert not ds.profile["tiled"] and ds.profile.get("blockxsize")
+        if kind == "ds":
+            arg = ds
+        with caplog.at_level(logging.WARNING):
+            assert call(arg, tmp_path)
     noisy = [r.getMessage() for r in caplog.records if "BLOCKXSIZE" in r.getMessage()]
     assert noisy == [], noisy
 

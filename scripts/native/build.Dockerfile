@@ -97,13 +97,18 @@ COPY --from=bindings /out /
 # gdal-sys generates its bindings from the payload's headers with bindgen (its prebuilt ones stop at GDAL 3.12), and
 # bindgen loads libclang. FROM toolchain, not stage-native: a crate links the exported gdal-native tree (the dev kit,
 # mounted read-only when it builds; scripts/native/build-rust-native.sh), so building a crate never rebuilds GDAL and a
-# change here never changes the toolchain image tag. clang-libs comes from the base image's distribution
-# repositories, as the JDK does. libclang does not find its own builtin headers (stddef.h, in /usr/lib/clang/<v>/include)
-# from /usr/lib64, and with no clang binary bindgen cannot ask for them: /opt/clang-resource links them and
+# change here never changes the toolchain image tag. clang-libs and llvm-libs come from the base image's distribution
+# repositories, at exactly CLANG_LIBS_VERSION (scripts/native/rust-pins.conf; it pulls in gcc-toolset-15, which PATH
+# leaves out). libclang does not find its own builtin headers (stddef.h, in /usr/lib/clang/<v>/include) from
+# /usr/lib64, and with no clang binary bindgen cannot ask for them: /opt/clang-resource links them and
 # BINDGEN_EXTRA_CLANG_ARGS names them.
 FROM toolchain AS rust-native
-RUN dnf -y install clang-libs && dnf clean all \
- && rpm -q clang-libs > /opt/clang-libs-version.txt \
+ARG CLANG_LIBS_VERSION
+RUN test -n "${CLANG_LIBS_VERSION}" \
+ && dnf -y install "clang-libs-${CLANG_LIBS_VERSION}" "llvm-libs-${CLANG_LIBS_VERSION}" && dnf clean all \
+ && test "$(rpm -q --qf '%{VERSION}-%{RELEASE}' clang-libs)" = "${CLANG_LIBS_VERSION}" \
+ && test "$(rpm -q --qf '%{VERSION}-%{RELEASE}' llvm-libs)" = "${CLANG_LIBS_VERSION}" \
+ && rpm -q clang-libs llvm-libs > /opt/clang-libs-version.txt \
  && ls /usr/lib64/libclang.so* > /dev/null \
  && inc="$(dirname "$(find /usr/lib/clang /usr/lib64/clang -path '*/include/stddef.h' 2> /dev/null | head -n 1)")" \
  && test -f "$inc/stddef.h" && ln -s "$(dirname "$inc")" /opt/clang-resource

@@ -31,10 +31,11 @@ def pin(key: str) -> str:
 
 
 def audited_copy(tmp_path: Path) -> Path:
-    """The pin file, the toolchain file, the legacy list and every file the legacy list names."""
+    """The pin files, the toolchain file, the legacy list, every file the legacy list names, and the crates' locks."""
     root = tmp_path / "tree"
-    paths = ["scripts/native/pins.conf", "scripts/native/legacy-consumers.txt"]
-    paths.append("rust-toolchain.toml")
+    paths = ["scripts/native/pins.conf", "scripts/native/rust-pins.conf"]
+    paths += ["scripts/native/legacy-consumers.txt", "rust-toolchain.toml"]
+    paths += [str(p.relative_to(REPO_ROOT)) for p in REPO_ROOT.glob("rust/*/Cargo.lock")]
     for line in (
         (REPO_ROOT / "scripts/native/legacy-consumers.txt").read_text().splitlines()
     ):
@@ -73,8 +74,25 @@ def test_the_repository_passes_the_audit():
         ("scripts/native/pins.conf", (r"(?m)^(GDAL_SHA256=).*", r"\1<")),
         # a half-done bump: the version moved, its URL, file name and checksum did not
         ("scripts/native/pins.conf", (r"(?m)^(GDAL_VERSION=).*", r"\g<1>9.9.9")),
+        # a crate pin in pins.conf would rebuild GDAL on every bump
+        (
+            "scripts/native/pins.conf",
+            (r"(?m)^(MATURIN_VERSION=.*)$", r"\1\nCRATE_GEOS_SYS_VERSION=2.0.10"),
+        ),
+        # a pin no Cargo.lock locks any more
+        (
+            "scripts/native/rust-pins.conf",
+            (r"(?m)^(CRATE_GEOS_VERSION=.*)$", r"\1\nCRATE_GDAL_VERSION=0.19.0"),
+        ),
     ],
-    ids=["rust-channel", "legacy-gdal-arg", "checksum", "version-without-url"],
+    ids=[
+        "rust-channel",
+        "legacy-gdal-arg",
+        "checksum",
+        "version-without-url",
+        "crate-pin-in-pins-conf",
+        "stale-crate-pin",
+    ],
 )
 def test_drift_is_reported(tmp_path, rel, change):
     root = audited_copy(tmp_path)
@@ -192,6 +210,46 @@ def test_an_environment_is_checked_against_the_pins(tmp_path, field, name, value
     else:
         assert res.returncode == 1, res.stdout
         assert (name or "python") in res.stdout
+
+
+TAG_INPUTS = (
+    "scripts/native/pins.conf",
+    "scripts/native/build.Dockerfile",
+    "scripts/native/build-requirements-aarch64.txt",
+    "scripts/native/cargo-offline.toml",
+    "rust-toolchain.toml",
+)
+
+
+@pytest.mark.parametrize(
+    "change, moves",
+    [
+        ((r"(?m)^(# Native stack pins:)", r"\1 (reworded)"), False),
+        ((r"(?m)^(GDAL_VERSION=.*)$", r"\n\n\1   "), False),  # blank lines, trailing space
+        ((r"(?m)^GBX_NATIVE_REVISION=\d+", "GBX_NATIVE_REVISION=99"), True),
+    ],
+    ids=["comment", "blank-lines", "value"],
+)
+def test_only_a_pin_value_moves_the_image_tag_and_the_staged_pins(tmp_path, change, moves):
+    # The image tag and the pins copied into the deps stage are the GDAL build's cache key: a comment edit must
+    # rebuild nothing, a value edit must rebuild.
+    root = tmp_path / "tag"
+    for rel in TAG_INPUTS:
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(REPO_ROOT / rel, root / rel)
+    key = lambda: (  # noqa: E731
+        pins("tag-hash", "aarch64", "--root", str(root)).stdout,
+        pins("canonical", "--root", str(root)).stdout,
+    )
+    before = key()
+    target = root / "scripts/native/pins.conf"
+    target.write_text(re.sub(change[0], change[1], target.read_text(), count=1))
+    after = key()
+
+    assert re.fullmatch(r"[0-9a-f]{12}\n", before[0]) and "GDAL_VERSION=" in before[1]
+    assert (after[0] != before[0], after[1] != before[1]) == (moves, moves)
+    command = (REPO_ROOT / "scripts/commands/gbx-build-native.sh").read_text()
+    assert "pins.py tag-hash" in command and "pins.py canonical" in command
 
 
 def test_the_container_build_stays_offline_on_vendored_crates():

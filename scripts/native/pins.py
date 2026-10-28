@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""The one pin file for the native stack (scripts/native/pins.conf) and the audit that fails on drift.
+"""The pin files of the native stack and the audit that fails on drift.
 
-    pins.py get KEY                       print one value
-    pins.py build-args                    one `--build-arg KEY=VALUE` per line (no licences or URLs)
+scripts/native/pins.conf pins GDAL, PROJ, GEOS, every library they are built from and the build toolchain; its
+KEY=VALUE lines are the cache key of the GDAL build. scripts/native/rust-pins.conf pins what feeds no GDAL build
+(PyO3, the georust crates, the rust-native stage's libclang), so a crate bump never rebuilds GDAL.
+
+    pins.py get KEY                       print one value (from either file)
+    pins.py build-args                    one `--build-arg KEY=VALUE` per line of pins.conf (no licences or URLs)
     pins.py sources                       one tab-separated `FILE SHA256 URL URL2` line per source tarball (not tools or sdists)
-    pins.py validate                      the pin file alone: no placeholder, checksums present and well formed
+    pins.py validate                      the pin files alone: no placeholder, checksums present and well formed
+    pins.py canonical [--root DIR]        pins.conf as the image build sees it: its KEY=VALUE lines, no comment or blank line
+    pins.py tag-hash ARCH [--root DIR]    the native image tag: 12 hex of a sha256 over the canonical pins.conf, the
+                                          toolchain stage of build.Dockerfile and the files that stage copies
     pins.py audit [--check] [--root DIR]  every consumer against the pins; --check exits 1 on drift
     pins.py env-check [--check] LABEL=REPORT.json ...
                                           environments (JSON from scripts/ci/venv_env_report.py collect)
@@ -14,6 +21,7 @@ Stdlib only (the host python3 may be 3.10). The pin file is KEY=VALUE, readable 
 """
 
 import argparse
+import hashlib
 import importlib.util
 import re
 import sys
@@ -24,9 +32,28 @@ DEFAULT_ROOT = HERE.parent.parent
 BOUND = ("RASTERIO", "PYOGRIO", "PYPROJ", "SHAPELY", "NETCDF4")
 # X_VERSION keys with no X_SHA256: tools fetched per architecture or from a registry, and versions only compared.
 # Their URLs (RUSTUP_URL, CARGO_DENY_URL) are still checked for the version. The CRATE_<name>_VERSION pins are
-# crates too: their checksums are in each Cargo.lock, which the audit checks against the pin.
-NO_CHECKSUM = {"RUSTUP", "CARGO_DENY", "MATURIN", "PYO3", "NUMPY_BUILD", "PYTHON"}
+# crates too: their checksums are in each Cargo.lock, which the audit checks against the pin. CLANG_LIBS is a
+# distribution package (rpm checks its signature).
+NO_CHECKSUM = {
+    "RUSTUP",
+    "CARGO_DENY",
+    "MATURIN",
+    "PYO3",
+    "NUMPY_BUILD",
+    "PYTHON",
+    "CLANG_LIBS",
+}
+NATIVE_PINS = "scripts/native/pins.conf"
+RUST_PINS = "scripts/native/rust-pins.conf"
 CRATE_PIN = re.compile(r"CRATE_([A-Z0-9_]+)_VERSION")
+# keys that belong in rust-pins.conf: in pins.conf they would rebuild GDAL on every bump
+RUST_ONLY = re.compile(r"CRATE_[A-Z0-9_]+_VERSION|PYO3_VERSION|CLANG_LIBS_VERSION")
+# what the toolchain stage of build.Dockerfile copies besides the pins (the image tag hashes them)
+TOOLCHAIN_FILES = (
+    "scripts/native/build-requirements-{arch}.txt",
+    "scripts/native/cargo-offline.toml",
+    "rust-toolchain.toml",
+)
 LOCKED = re.compile(r'(?m)^\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"]+)"')
 PLACEHOLDER = re.compile(r"^$|[<>]|\bTODO\b|\bTBD\b|CHANGEME|\bXXX+\b", re.I)
 SKIP_DIRS = {
@@ -54,6 +81,47 @@ def load_pins(path: Path) -> dict:
             value = value[1:-1]
         pins[key] = value
     return pins
+
+
+def load_all(root: Path) -> dict:
+    """pins.conf and rust-pins.conf as one mapping; a key set in both is an error."""
+    native = load_pins(root / NATIVE_PINS)
+    rust_path = root / RUST_PINS
+    rust = load_pins(rust_path) if rust_path.exists() else {}
+    both = sorted(set(native) & set(rust))
+    if both:
+        raise SystemExit(f"{NATIVE_PINS} and {RUST_PINS} both set {', '.join(both)}")
+    return {**native, **rust}
+
+
+def canonical(path: Path) -> str:
+    """The KEY=VALUE lines of a pin file, stripped, in file order: what the image build copies and its tag hashes,
+    so a comment or blank-line edit changes neither."""
+    lines = [ln.strip() for ln in path.read_text().splitlines()]
+    return "".join(f"{ln}\n" for ln in lines if ln and not ln.startswith("#"))
+
+
+def toolchain_stage(dockerfile: str) -> str:
+    """The toolchain stage of build.Dockerfile: the lines after `FROM ... AS toolchain`, up to the next FROM."""
+    out, inside = [], False
+    for line in dockerfile.splitlines():
+        if re.match(r"FROM .* AS toolchain$", line):
+            inside = True
+        elif inside and line.startswith("FROM "):
+            break
+        elif inside:
+            out.append(line + "\n")
+    return "".join(out)
+
+
+def tag_hash(root: Path, arch: str) -> str:
+    """12 hex of a sha256 over the canonical pins.conf, the toolchain stage and the files it copies: the tag of
+    every native image (geobrix-native-build:<target>-<hash>-<arch>)."""
+    h = hashlib.sha256(canonical(root / NATIVE_PINS).encode())
+    h.update(toolchain_stage((root / "scripts/native/build.Dockerfile").read_text()).encode())
+    for rel in TOOLCHAIN_FILES:
+        h.update((root / rel.format(arch=arch)).read_bytes())
+    return h.hexdigest()[:12]
 
 
 def version_forms(version: str) -> list:
@@ -185,7 +253,7 @@ def rust_crates(root: Path, pins: dict) -> list:
                 inheriting.append(rel)
             elif version != want:
                 out.append(
-                    f"{rel}: pyo3 is {version!r}, pins.conf says {want!r} (=PYO3_VERSION)"
+                    f"{rel}: pyo3 is {version!r}, rust-pins.conf says {want!r} (=PYO3_VERSION)"
                 )
             elif in_workspace:
                 workspace_pinned = True
@@ -213,20 +281,26 @@ def rust_crates(root: Path, pins: dict) -> list:
 
 
 def crate_locks(root: Path, pins: dict) -> list:
-    """Every Cargo.lock against the CRATE_<name>_VERSION pins: a locked crate of a pinned name at another version."""
+    """Every Cargo.lock against the CRATE_<name>_VERSION pins: a locked crate of a pinned name at another version,
+    and a pin that no Cargo.lock locks (a stale pin)."""
     want = {
         m.group(1).lower().replace("_", "-"): (key, value)
         for key, value in pins.items()
         if (m := CRATE_PIN.fullmatch(key))
     }
-    out = []
+    out, seen = [], set()
     for path in walk(root, {"Cargo.lock"}):
         for name, version in LOCKED.findall(path.read_text()):
             key, pinned = want.get(name.replace("_", "-"), (None, version))
+            seen.add(name.replace("_", "-"))
             if version != pinned:
                 out.append(
-                    f"{path.relative_to(root)}: locks {name} {version}, pins.conf says {key}={pinned}"
+                    f"{path.relative_to(root)}: locks {name} {version}, rust-pins.conf says {key}={pinned}"
                 )
+    for name in sorted(set(want) - seen):
+        out.append(
+            f"{RUST_PINS}: {want[name][0]} pins {name}, which no Cargo.lock locks (a stale pin: drop it)"
+        )
     return out
 
 
@@ -311,11 +385,18 @@ def build_dockerfile(root: Path) -> list:
 
 
 def audit(root: Path) -> list:
-    pins_path = root / "scripts/native/pins.conf"
+    pins_path = root / NATIVE_PINS
     if not pins_path.exists():
-        return [f"scripts/native/pins.conf: missing under {root}"]
-    pins = load_pins(pins_path)
-    findings = validate(pins)
+        return [f"{NATIVE_PINS}: missing under {root}"]
+    native = load_pins(pins_path)
+    rust = load_pins(root / RUST_PINS) if (root / RUST_PINS).exists() else {}
+    pins = load_all(root)
+    findings = validate(native) + validate(rust, RUST_PINS)
+    findings += [
+        f"{NATIVE_PINS}: {key} belongs in {RUST_PINS} (here every bump would rebuild GDAL)"
+        for key in sorted(native)
+        if RUST_ONLY.fullmatch(key)
+    ]
     for check in (
         rust_toolchain,
         rust_crates,
@@ -385,6 +466,11 @@ def main(argv: list) -> int:
     sub.add_parser("build-args")
     sub.add_parser("sources")
     sub.add_parser("validate")
+    c = sub.add_parser("canonical")
+    c.add_argument("--root", default=str(DEFAULT_ROOT))
+    t = sub.add_parser("tag-hash")
+    t.add_argument("arch", choices=("x86_64", "aarch64"))
+    t.add_argument("--root", default=str(DEFAULT_ROOT))
     a = sub.add_parser("audit")
     a.add_argument("--check", action="store_true")
     a.add_argument("--root", default=str(DEFAULT_ROOT))
@@ -393,8 +479,16 @@ def main(argv: list) -> int:
     e.add_argument("environments", nargs="+", metavar="LABEL=REPORT.json")
     args = ap.parse_args(argv)
 
-    if args.cmd in ("get", "build-args", "validate", "sources"):
-        pins = load_pins(DEFAULT_ROOT / "scripts/native/pins.conf")
+    if args.cmd == "canonical":
+        sys.stdout.write(canonical(Path(args.root) / NATIVE_PINS))
+        return 0
+    if args.cmd == "tag-hash":
+        print(tag_hash(Path(args.root), args.arch))
+        return 0
+    if args.cmd in ("build-args", "sources"):
+        pins = load_pins(DEFAULT_ROOT / NATIVE_PINS)
+    if args.cmd in ("get", "validate"):
+        pins = load_all(DEFAULT_ROOT)
     if args.cmd == "get":
         if args.key not in pins:
             print(f"no such pin: {args.key}", file=sys.stderr)
@@ -422,8 +516,10 @@ def main(argv: list) -> int:
                 )
         return 0
     if args.cmd == "validate":
-        findings = validate(pins)
-        print("\n".join(findings) or "pins.conf: ok")
+        findings = validate(load_pins(DEFAULT_ROOT / NATIVE_PINS)) + validate(
+            load_pins(DEFAULT_ROOT / RUST_PINS), RUST_PINS
+        )
+        print("\n".join(findings) or "pins.conf, rust-pins.conf: ok")
         return 1 if findings else 0
     if args.cmd == "env-check":
         drifting = env_check(args.environments)

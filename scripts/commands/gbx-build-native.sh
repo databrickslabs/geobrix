@@ -37,7 +37,7 @@ usage() {
     echo "  --no-cache  Rebuild every layer (a cold build; the seconds it reports are then the full cost)"
     echo "  --log     Log file (filename -> test-logs/<name>; relative -> under test-logs/; absolute as-is)"
     echo ""
-    echo "Image: geobrix-native-build:<target>-<first 12 of sha256 of pins.conf + the toolchain stage of build.Dockerfile + the files it copies>-<arch>"
+    echo "Image: geobrix-native-build:<target>-<first 12 of sha256 of pins.conf's KEY=VALUE lines + the toolchain stage of build.Dockerfile + the files it copies>-<arch>"
     echo "Output: build/native/out/<arch>/<target>/. Sources, wheels and tool binaries are fetched and checksummed on"
     echo "the host first (scripts/native/prefetch.sh). The image build still downloads the Rust toolchain (rustup) and the"
     echo "JDK (dnf); Rust crates build with --network none from vendored sources."
@@ -69,16 +69,11 @@ grep -Eq "^FROM .* AS $TARGET\$" "$DOCKERFILE" || {
     echo "PRECONDITION MISSING: build.Dockerfile has no '$TARGET' stage yet; gbx:build:native not run"; exit 1; }
 
 cd "$PROJECT_ROOT"
-# The image tag: first 12 of a sha256 over pins.conf, the toolchain stage of build.Dockerfile and the files that stage copies
-# (so an edit to the toolchain, not only to a pin, makes a new tag and a new toolchain image). Later targets reuse the tag
-# of the toolchain they are built on.
-tag_hash() {
-    {
-        cat scripts/native/pins.conf
-        awk '/^FROM .* AS toolchain$/ {f = 1; next} f && /^FROM / {exit} f' scripts/native/build.Dockerfile
-        cat "scripts/native/build-requirements-$1.txt" scripts/native/cargo-offline.toml rust-toolchain.toml
-    } | { sha256sum 2> /dev/null || shasum -a 256; } | cut -c1-12
-}
+# The image tag: first 12 of a sha256 over pins.conf's KEY=VALUE lines (comments and blank lines dropped), the toolchain
+# stage of build.Dockerfile and the files that stage copies (so an edit to the toolchain, not only to a pin, makes a new
+# tag and a new toolchain image; a comment edit makes none). Later targets reuse the tag of the toolchain they are
+# built on. rust-pins.conf is not hashed: no image GDAL is built in reads it.
+tag_hash() { python3 scripts/native/pins.py tag-hash "$1"; }
 python3 scripts/native/pins.py validate > /dev/null || { python3 scripts/native/pins.py validate; exit 1; }
 
 # A copy-on-write clone where the filesystem has one (APFS, btrfs, xfs), an ordinary copy elsewhere.
@@ -91,6 +86,9 @@ assemble_ctx() {
     mkdir -p "$ctx/wheelhouse" "$ctx/wheelhouse-bindings" "$ctx/bin"
     clone scripts/native "$ctx/recipes"
     rm -rf "$ctx/recipes/__pycache__" "$ctx/recipes/rust-smoke/target"
+    # the stages copy the pins without their comments: a comment edit must not miss the cache and rebuild GDAL
+    rm -f "$ctx/recipes/pins.conf"
+    python3 scripts/native/pins.py canonical > "$ctx/recipes/pins.conf"
     cp rust-toolchain.toml "$ctx/rust-toolchain.toml"
     clone "$GBX_NATIVE_BUILD/src" "$ctx/src"
     clone "$GBX_NATIVE_BUILD/wheelhouse/$a" "$ctx/wheelhouse/$a"
@@ -237,6 +235,8 @@ build_arch() {
     while read -r flag kv; do args+=("$flag" "$kv"); done < <(python3 scripts/native/pins.py build-args)
     args+=(--build-arg "MANYLINUX_IMAGE=$(pin "MANYLINUX_IMAGE_$upper")" --build-arg "GBX_ARCH=$a"
            --build-arg "RUSTUP_INIT_SHA256=$(pin "RUSTUP_INIT_SHA256_$upper")" --build-arg "CARGO_DENY_SHA256=$(pin "CARGO_DENY_SHA256_$upper")")
+    # rust-pins.conf feeds only the rust-native stage
+    [ "$TARGET" != rust-native ] || args+=(--build-arg "CLANG_LIBS_VERSION=$(pin CLANG_LIBS_VERSION)")
 
     t1=$(date +%s)
     # The later targets build on the toolchain image of these pins, and are verified inside it (the stage-native image

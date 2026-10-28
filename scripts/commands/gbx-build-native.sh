@@ -24,7 +24,9 @@ usage() {
     echo "            the non-native one runs under emulation and is much slower."
     echo "  --target  toolchain    the build container: Python 3.12 tools, OpenJDK 17, SWIG, Ant, Rust, cargo-deny; verified by an"
     echo "                         offline abi3 PyO3 build, an import of the wheel and an offline cargo-deny check"
-    echo "            stage-native the GDAL stack staged for the wheel"
+    echo "            stage-native GDAL, PROJ, GEOS and every library they need, built from source, with the JNI library, the Java"
+    echo "                         classes and osgeo from the same build: build/native/out/<arch>/stage-native/gdal-native/. Verified by"
+    echo "                         scripts/native/verify-native.sh (licence guard, drivers, ELF closure, auditwheel, JNI, osgeo, HTTPS, dev kit)"
     echo "            bindings     the Python bindings built against it (default)"
     echo "  --no-cache  Rebuild every layer (a cold build; the seconds it reports are then the full cost)"
     echo "  --log     Log file (filename -> test-logs/<name>; relative -> under test-logs/; absolute as-is)"
@@ -142,6 +144,14 @@ verify_toolchain() {
     echo "      The CI job .github/workflows/rust-deny.yml runs the full check, yanked crates included, and is the gate."
 }
 
+# gdal-native/ as exported, mounted read-only into the toolchain image with no network: the oracle is verify-native.sh.
+verify_stage_native() {
+    local a="$1" plat="$2" out="$3"
+    echo "== verify $a: $out/gdal-native in geobrix-native-build:toolchain-$PINS12-$a (--network none)"
+    docker run --rm --network none --platform "$plat" -v "$out/gdal-native:/gdal-native:ro" -v "$PROJECT_ROOT/scripts/native:/verify:ro" \
+        "geobrix-native-build:toolchain-$PINS12-$a" bash /verify/verify-native.sh /gdal-native 2>&1 | tee "$out/verify.txt"
+}
+
 build_arch() {
     local a="$1" plat upper tag out args=() flag kv t0 t1 t2 size
     case "$a" in x86_64) plat=linux/amd64; upper=X86_64 ;; aarch64) plat=linux/arm64; upper=AARCH64 ;; esac
@@ -157,6 +167,18 @@ build_arch() {
            --build-arg "RUSTUP_INIT_SHA256=$(pin "RUSTUP_INIT_SHA256_$upper")" --build-arg "CARGO_DENY_SHA256=$(pin "CARGO_DENY_SHA256_$upper")")
 
     t1=$(date +%s)
+    # The later targets build on the toolchain image of these pins, and are verified inside it (the stage-native image
+    # also holds the build prefix). It is built here when it is missing; an existing one is used as it is, so a
+    # toolchain-stage change needs `--target toolchain` first. `--build-context toolchain=...` makes the Dockerfile's
+    # `FROM toolchain` read that image instead of building the stage again.
+    if [ "$TARGET" != toolchain ]; then
+        if ! docker image inspect "geobrix-native-build:toolchain-$PINS12-$a" > /dev/null 2>&1; then
+            echo "== build $a: docker buildx build --target toolchain ($plat; no toolchain image for these pins yet)"
+            docker buildx build --platform "$plat" -f "$DOCKERFILE" "${args[@]}" ${NO_CACHE[@]+"${NO_CACHE[@]}"} --target toolchain \
+                -t "geobrix-native-build:toolchain-$PINS12-$a" --load "$GBX_NATIVE_BUILD/ctx/$a"
+        fi
+        args+=(--build-context "toolchain=docker-image://geobrix-native-build:toolchain-$PINS12-$a")
+    fi
     echo "== build $a: docker buildx build --target $TARGET ($plat)"
     docker buildx build --platform "$plat" -f "$DOCKERFILE" "${args[@]}" ${NO_CACHE[@]+"${NO_CACHE[@]}"} --target "$TARGET" -t "$tag" --load "$GBX_NATIVE_BUILD/ctx/$a"
     if grep -Eq "^FROM .* AS export-$TARGET\$" "$DOCKERFILE"; then
@@ -171,6 +193,7 @@ build_arch() {
 
     case "$TARGET" in
         toolchain) verify_toolchain "$a" "$plat" "$tag" ;;
+        stage-native) verify_stage_native "$a" "$plat" "$out" ;;
         *) echo "VERIFY FAILED: no verify for target $TARGET"; return 1 ;;
     esac
     echo "NATIVE_VERIFIED arch=$a target=$TARGET total_seconds=$(($(date +%s) - t0)) image=$tag"

@@ -22,7 +22,9 @@ RUN dnf -y install java-17-openjdk-devel perl-IPC-Cmd perl-Time-Piece zip unzip 
  && rpm -q java-17-openjdk-devel > /opt/jdk-version.txt
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk
 COPY wheelhouse/${GBX_ARCH}/ /wheelhouse/
-COPY recipes/ /recipes/
+# Only what the toolchain itself reads: an edit to any other script in scripts/native/ must not rebuild this stage
+# (SWIG, Rust) or anything built on it (deps, gdal).
+COPY recipes/build-requirements-${GBX_ARCH}.txt recipes/cargo-offline.toml /recipes/
 RUN $PY -m pip install --no-index --find-links /wheelhouse --require-hashes -r /recipes/build-requirements-${GBX_ARCH}.txt \
  && for t in cmake ninja maturin auditwheel patchelf; do ln -sf /opt/python/cp312-cp312/bin/$t /usr/local/bin/$t; done
 COPY src/${SWIG_FILE} src/${ANT_FILE} /src/
@@ -49,3 +51,29 @@ RUN { echo "arch $(uname -m)"; grep PRETTY_NAME /etc/os-release; echo "glibc $(l
 
 FROM scratch AS export-toolchain
 COPY --from=manifest-toolchain /toolchain-manifest.txt /
+
+# ---------- deps: every library GDAL is linked against, built from the pinned sources into /opt/gbx-native ----------
+# The sources are bind-mounted from the build context, so they never enter a layer, and every unpacked source tree and
+# build directory is in RAM (a tmpfs mount at /tmp/gbx-build), so a layer holds only what was installed. One RUN per
+# group keeps a failure late in the list from redoing the groups before it. Versions come from /recipes/pins.conf, the
+# same file the image tag hashes.
+FROM toolchain AS deps
+COPY recipes/pins.conf recipes/build-lib.sh recipes/build-deps.sh /recipes/
+RUN --mount=type=bind,source=src,target=/src --mount=type=tmpfs,target=/tmp/gbx-build,size=6442450944 bash /recipes/build-deps.sh compress
+RUN --mount=type=bind,source=src,target=/src --mount=type=tmpfs,target=/tmp/gbx-build,size=6442450944 bash /recipes/build-deps.sh raster
+RUN --mount=type=bind,source=src,target=/src --mount=type=tmpfs,target=/tmp/gbx-build,size=6442450944 bash /recipes/build-deps.sh net
+RUN --mount=type=bind,source=src,target=/src --mount=type=tmpfs,target=/tmp/gbx-build,size=6442450944 bash /recipes/build-deps.sh science
+RUN --mount=type=bind,source=src,target=/src --mount=type=tmpfs,target=/tmp/gbx-build,size=6442450944 bash /recipes/build-deps.sh geo
+
+# ---------- gdal: GDAL with its tools, the JNI library, the Java classes and osgeo ----------
+FROM deps AS gdal
+COPY recipes/build-gdal.sh /recipes/
+RUN --mount=type=bind,source=src,target=/src --mount=type=tmpfs,target=/tmp/gbx-build,size=6442450944 bash /recipes/build-gdal.sh
+
+# ---------- stage-native: the relocatable gdal-native/ tree (written to /stage/gdal-native) ----------
+FROM gdal AS stage-native
+COPY recipes/stage-payload.sh recipes/set-rpath.py /recipes/
+RUN bash /recipes/stage-payload.sh
+
+FROM scratch AS export-stage-native
+COPY --from=stage-native /stage/gdal-native /gdal-native

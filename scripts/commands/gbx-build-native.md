@@ -1,6 +1,6 @@
 # gbx:build:native
 
-Builds the GeoBrix native stack inside one pinned `manylinux_2_28` container (`scripts/native/build.Dockerfile`), for x86_64 and aarch64. The `toolchain` target is the build container itself: Python 3.12 build tools (cmake, ninja, Cython, numpy 2.1.3, maturin, auditwheel, patchelf), OpenJDK 17, SWIG, Ant, and the pinned Rust toolchain with `cargo-deny`. Later targets (`stage-native`, `bindings`) build the GDAL stack and the Python bindings in it. Every version comes from `scripts/native/pins.conf`. Source tarballs, Python wheels, `rustup-init` and `cargo-deny` are fetched and checksum-checked on the host first (`scripts/native/prefetch.sh`), so the image build needs no package index. It does still download two things from public hosts while it builds: the JDK (dnf, from the base image's distribution repositories) and the Rust toolchain (`rustup toolchain install` from static.rust-lang.org, checked by rustup against a manifest it fetches itself). Rust crates are the part that is truly offline: they build with `--network none` from sources vendored on the host.
+Builds the GeoBrix native stack inside one pinned `manylinux_2_28` container (`scripts/native/build.Dockerfile`), for x86_64 and aarch64. The `toolchain` target is the build container itself: Python 3.12 build tools (cmake, ninja, Cython, numpy 2.1.3, maturin, auditwheel, patchelf), OpenJDK 17, SWIG, Ant, and the pinned Rust toolchain with `cargo-deny`. Later targets build on it: `stage-native` is GDAL, PROJ, GEOS and every library they need, built from source in the same container (below); `bindings` is the Python bindings built against it. Every version comes from `scripts/native/pins.conf`. Source tarballs, Python wheels, `rustup-init` and `cargo-deny` are fetched and checksum-checked on the host first (`scripts/native/prefetch.sh`), so the image build needs no package index. It does still download two things from public hosts while it builds: the JDK (dnf, from the base image's distribution repositories) and the Rust toolchain (`rustup toolchain install` from static.rust-lang.org, checked by rustup against a manifest it fetches itself). Rust crates are the part that is truly offline: they build with `--network none` from sources vendored on the host.
 
 ## Usage
 
@@ -11,7 +11,7 @@ bash scripts/commands/gbx-build-native.sh [--arch x86_64|aarch64|both] [--target
 ## Options
 
 - `--arch x86_64|aarch64|both` - default: this machine's architecture. `both` builds aarch64 first, then x86_64. The architecture that is not the host's runs under emulation and is much slower.
-- `--target toolchain|stage-native|bindings` - default `bindings`. A target whose stage is not in `build.Dockerfile` yet stops with `PRECONDITION MISSING`.
+- `--target toolchain|stage-native|bindings` - default `bindings`. A target whose stage is not in `build.Dockerfile` yet stops with `PRECONDITION MISSING`. `stage-native` and `bindings` build on the toolchain image `geobrix-native-build:toolchain-<pins>-<arch>`: it is built first when missing, and an existing one is used as it is (a change to the toolchain stage needs `--target toolchain` first).
 - `--no-cache` - Rebuild every layer. A cold build's seconds are the full cost; a cached one reports only the layers that changed.
 - `--log <path>` - Write output to a log file (filename goes to `test-logs/<name>`, relative paths go under `test-logs/`, absolute paths are used as-is)
 - `--help` - Display help message
@@ -25,6 +25,37 @@ Per architecture, after the image is built as `geobrix-native-build:toolchain-<s
 1. The tools match the pins (rustc, maturin, numpy, SWIG, Ant, JDK 17, cargo-deny), and no pip or uv index configuration is in the image.
 2. The Rust smoke crate (`scripts/native/rust-smoke`) builds into a `cp312-abi3-manylinux_2_28_<arch>` wheel with `--network none`, from sources vendored on the host (`scripts/native/cargo-vendor.sh`), and leaves no `target/` in the mounted crate; the wheel installs with `--no-index` and `smoke()` returns `ok`.
 3. `cargo deny` passes the policy in `deny.toml`: licenses, bans and sources offline, advisories against the public advisory database. **Yanked crates are not checked here, by design:** a vendored source has no crates index, so the command allows the `index-failure` lint and prints a NOTE. The yanked check, and the full `advisories bans licenses sources` run, are the CI job `.github/workflows/rust-deny.yml` (`scripts/native/cargo-deny-ci.sh`): the pinned cargo-deny against every `Cargo.lock` in the repository on public crates.io, weekly and on every push and pull request. That job is the gate for a Rust crate.
+
+## What `--target stage-native` builds and checks
+
+Stages `deps` -> `gdal` -> `stage-native` of `build.Dockerfile`, then `export-stage-native` writes the tree to `build/native/out/<arch>/stage-native/gdal-native/`:
+
+| Path | Holds |
+|---|---|
+| `lib/` | one file per SONAME (a wheel holds no symlinks), RUNPATH `$ORIGIN`: `libgdal`, `libgdalalljni.so` (the JNI), PROJ, GEOS (`libgeos_c`), netCDF, HDF5 and every library they need, including a private OpenSSL 4 (`libssl.so.4`, `libcrypto.so.4`) under `libcurl`; `lib/pkgconfig`, `lib/cmake` |
+| `lib-dev/` | symlinks for linking only (`libgdal.so`, plus every SONAME); never packaged |
+| `bin/` | `gdalinfo`, `ogrinfo`, `projinfo` (RUNPATH `$ORIGIN/../lib`); `gdal-config`, `geos-config`, `nc-config` (prefix taken from the script's own location) |
+| `include/` | the headers of GDAL, PROJ, GEOS, GeoTIFF, TIFF, HDF5, netCDF, curl, OpenSSL and the compression libraries |
+| `share/{gdal,proj}` | GDAL and PROJ data (found relative to the tree; no `GDAL_DATA` or `PROJ_DATA` needed) |
+| `java/gdal-<version>.jar` | the Java classes, from the same build as the JNI library |
+| `python/{osgeo,osgeo_utils}` | the GDAL Python bindings (RUNPATH `$ORIGIN/../../lib`) |
+| `licenses/<dep>/` | the licence files of every library built from source |
+| `MANIFEST.json` | versions, native revision, arch, driver lists, build seconds per dependency, sizes, sha256 of every file |
+
+Every dependency is built from the pinned source with the options of `scripts/native/build-deps.sh`; an option that CMake or `configure` ignores fails the build (`BUILD FAILED: <dep> ignored -D<name>`), so a renamed option cannot be dropped silently. Sources are bind-mounted from the build context and every build directory is a tmpfs (RAM), so the image layers hold only what was installed; each is capped at 6 GB of the Docker VM's RAM.
+
+Per architecture, `scripts/native/verify-native.sh` runs in the toolchain image with the exported tree mounted read-only and `--network none`, and prints `ok: <check>` or `VERIFY FAILED: <what>`:
+
+1. `gdalinfo --version` reports the pinned GDAL and `projinfo EPSG:27700` works, with no `GDAL_DATA`, `PROJ_DATA` or `LD_LIBRARY_PATH` set.
+2. Licence guard: no library or NEEDED entry matches `poppler|podofo|pdfium|rttopo|spatialite|mysql|mariadb|FileGDBAPI|ecw|ltidsdk|kdu|lura|grok|x265|odbc|clntsh|sfcgal|CGAL`; none of ECW, JP2ECW, MrSID, JP2MrSID, JP2KAK, JP2Lura, JP2Grok, FileGDB (the SDK driver), MySQL, ODBC, MSSQLSpatial, PGeo, OCI is registered; every `licenses/<dep>` is non-empty.
+3. The 24 required drivers are registered (GTiff, COG, VRT, MEM, netCDF, HDF5, GRIB, JP2OpenJPEG, Zarr, PNG, JPEG, WEBP, MBTiles, GPKG, OpenFileGDB, ESRI Shapefile, GeoJSON, GeoJSONSeq, FlatGeobuf, MVT, PMTiles, CSV, KML, GML).
+4. ELF closure: every ELF file has a RUNPATH `$ORIGIN`-relative to `lib/` and no RPATH, every NEEDED is in `lib/` or in the manylinux policy set, SONAMEs are unique and equal to the file names; `auditwheel show` on a throwaway wheel of the tree reports consistency with `manylinux_2_28_<arch>` and no external shared libraries.
+5. JNI: `JniSmoke` loads `libgdalalljni.so` by absolute path and checks GDAL, OGR (OpenFileGDB) and OSR (EPSG:27700) from the Java classes.
+6. osgeo: the version is the pinned one, `libgdal` is the one in `lib/`, and an OpenFileGDB layer is written and read back.
+7. HTTPS: a local server with a throwaway CA, which the system trust store also trusts (control: the system curl accepts it). Our `/vsicurl/` read is refused without `GDAL_CURL_CA_BUNDLE` (no CA path is compiled into libcurl) and succeeds with it; the libcurl is built on OpenSSL 4 and no system libssl is loaded.
+8. The dev kit: a C program built against `include/` + `lib-dev/` through `pkg-config`, through `gdal-config` and through CMake `find_package(GDAL)`, run with no library path.
+
+To use the tree for a build: `export PKG_CONFIG_PATH=<root>/lib/pkgconfig LIBRARY_PATH=<root>/lib-dev GDAL_CONFIG=<root>/bin/gdal-config CMAKE_PREFIX_PATH=<root>`.
 
 ## Rust crates from other tasks
 
@@ -45,7 +76,8 @@ docker run --rm --network none -v <crate>:/src -v <out-dir>:/vendor:ro -v <out>:
 ## Notes
 
 - Needs Docker and nothing else: no dev container, no container lock. It never pushes or saves an image.
-- Output goes to `build/native/` (gitignored): `src/`, `bin/<arch>/`, `wheelhouse/<arch>/`, `vendor/`, `ctx/<arch>/` (the build context), `out/<arch>/<target>/`.
+- Output goes to `build/native/` (gitignored): `src/`, `bin/<arch>/`, `wheelhouse/<arch>/`, `vendor/`, `ctx/<arch>/` (the build context), `out/<arch>/<target>/` (for `stage-native`: `gdal-native/`, `build.txt`, `verify.txt`).
+- Disk: the images are large (3.3 GB toolchain, 3.5 GB stage-native, mostly shared layers) and the Docker VM can be full; the command never prunes images, caches or builders.
 - The last line of a good run is `NATIVE_VERIFIED arch=<arch> target=<target> total_seconds=<n> image=<tag>`; the line before the verify is `NATIVE_BUILD ... build_seconds=<n> image_bytes=<n>`.
 - Host Rust for vendoring is installed by `bash scripts/native/install-host-rust.sh` (the command runs it when missing) into `~/.cache/geobrix`; no shell profile is touched.
 - If the emulated x86_64 build is too slow, the same command runs on GitHub Actions: `.github/workflows/build-gdal-native.yml` (manual trigger, on the org's hardened runner group).

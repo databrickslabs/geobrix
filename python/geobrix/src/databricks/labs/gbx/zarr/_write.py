@@ -2067,6 +2067,7 @@ def _chunk_rows(chunks: pa.Table, w: str, tomb, delete) -> pa.Table:
             "write_id": _const(w, n),
             "op": pc.if_else(delete, _const("delete", n), _const("upsert", n)),
             "expected_write_id": chunks.column("expected_write_id"),
+            "identity": chunks.column("identity"),
         },
         n,
     )
@@ -2248,6 +2249,9 @@ def _patch_rows(spark, plan, snap, docs, patch, writers, rebase, tools):
     fill = 0 if meta.fill_value is None else meta.fill_value
     current = {k: np.full(meta.chunks, fill, dtype=native) for k in chunks}
     live: dict[str, str] = {}
+    shadowed: dict[str, str | None] = (
+        {}
+    )  # key -> identity of the base object it shadows
     base_meta = None if docs is None else docs.arrays.get(patch.name)
     if snap is not None and base_meta is not None:
         kw = {"keys": keys}
@@ -2257,6 +2261,7 @@ def _patch_rows(spark, plan, snap, docs, patch, writers, rebase, tools):
             spark, snap, kinds=["shard", "chunk"], arrays=[patch.name], **kw
         ).to_pylist()
         live = {r["key"]: r["write_id"] for r in rows if r["kind"] == "chunk"}
+        shadowed = {r["key"]: r["identity"] for r in rows if r["kind"] == "chunk"}
         store = ManifestStore(
             docs.metas,
             rows,
@@ -2322,6 +2327,7 @@ def _patch_rows(spark, plan, snap, docs, patch, writers, rebase, tools):
                 "origin": "gbx",
                 "op": "upsert",
                 "expected_write_id": live.get(key),
+                "identity": shadowed.get(key),
             }
         )
     return out

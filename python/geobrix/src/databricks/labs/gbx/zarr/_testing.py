@@ -149,7 +149,7 @@ class PlainRows(list):
     root: Path
 
 
-def plain_store_rows(path, *, origin="gbx"):
+def plain_store_rows(path, *, origin="gbx", identity=False):
     """Read a local Zarr store as ``(metas, rows, arrays)``.
 
     ``metas`` maps each metadata key to its bytes (``zarr.json``, ``t2m/zarr.json``,
@@ -158,7 +158,9 @@ def plain_store_rows(path, *, origin="gbx"):
     to the store, ``offset`` 0, ``length`` the object's size, ``origin`` as given
     (``"external"`` makes it a registered store's own files) and a zero ``write_id``.
     ``shard_key`` is the key on a shard row and NULL on a chunk row, as register writes it.
-    ``arrays`` maps each array name to its ``ArrayMeta``.
+    ``identity=True`` records each file's ``"<mtime_ms>:<size>"`` identity, as register
+    does, so that a reader checks the file against it. ``arrays`` maps each array name to
+    its ``ArrayMeta``.
     """
     from databricks.labs.gbx.zarr._meta import parse_v2, parse_v3
 
@@ -198,7 +200,11 @@ def plain_store_rows(path, *, origin="gbx"):
                     length=f.stat().st_size,
                     checksum=None,
                     origin=origin,
-                    identity=None,
+                    identity=(
+                        f"{f.stat().st_mtime_ns // 1_000_000}:{f.stat().st_size}"
+                        if identity
+                        else None
+                    ),
                     write_id="0" * 32,
                     tag=None,
                     meta=None,

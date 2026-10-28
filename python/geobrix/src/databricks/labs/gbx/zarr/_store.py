@@ -98,7 +98,11 @@ def _region(row: dict, label: str) -> Region:
         raise ZarrStoreDrift(
             f"the manifest {row.get('kind')} row {label} {problem}", fix=_ROWS_FIX
         )
-    return Region(file, int(offset), int(length), row.get("origin") or "gbx")
+    origin = row.get("origin") or "gbx"
+    # only an external file has an identity to check; a gbx row's identity is the base
+    # object it shadows, which this region does not read
+    identity = row.get("identity") if origin == "external" else None
+    return Region(file, int(offset), int(length), origin, identity)
 
 
 def _span(size: int, byte_range: ByteRequest | None) -> tuple[int, int]:
@@ -295,7 +299,7 @@ class ManifestStore(Store):
             at = whole.offset + (
                 whole.length - size if spec.index_location == "end" else 0
             )
-            (raw,) = self._reader.read([Region(whole.file, at, size, whole.origin)])
+            (raw,) = self._reader.read([whole.part(at, size)])
             entries = decode_index(raw, n, spec.index_codecs, source=whole.file)
             held = np.flatnonzero(
                 (entries[:, 0] != MISSING) | (entries[:, 1] != MISSING)
@@ -308,9 +312,7 @@ class ManifestStore(Store):
                         fix="run gbx_zarr_sync if the store changed outside GeoBrix; "
                         "otherwise the file is corrupt",
                     )
-                chunks[i] = Region(
-                    whole.file, whole.offset + offset, nbytes, whole.origin
-                )
+                chunks[i] = whole.part(whole.offset + offset, nbytes)
         chunks.update(rows.chunks)  # an override, or None: the chunk is deleted
         return VirtualShard(n, chunks, spec.index_codecs, spec.index_location)
 
@@ -387,11 +389,7 @@ class ManifestStore(Store):
             if start == stop:
                 return b""
             return self._reader.read(
-                [
-                    Region(
-                        region.file, region.offset + start, stop - start, region.origin
-                    )
-                ]
+                [region.part(region.offset + start, stop - start)]
             )[0]
         if key in self._shards:
             shard = self._virtual_shard(key)

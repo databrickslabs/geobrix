@@ -17,14 +17,44 @@ from databricks.labs.gbx.core._retry import _retry_transient
 from databricks.labs.gbx.zarr._shard import Region
 from databricks.labs.gbx.zarr.errors import ZarrStoreDrift
 
-__all__ = ["RangeReader", "FuseRangeReader"]
+__all__ = ["RangeReader", "FuseRangeReader", "check_identity", "MTIME_RESOLUTION_MS"]
 
 # A transient FUSE miss is worth another try; these will not change by waiting.
 _PERMANENT = (PermissionError, IsADirectoryError, NotADirectoryError)
 _SYNC_FIX = "run gbx_zarr_sync if the store changed outside GeoBrix; otherwise "
+_DRIFT_FIX = (
+    "run gbx_zarr_sync(<table>) on the store's manifest table to record the change, "
+    "then read again"
+)
+# How finely a file's modification time is compared with the one recorded when it was
+# listed: whole milliseconds. A Unity Catalog Volume lists times through Hadoop and shows
+# them through the FUSE mount; if they ever differ below a second, raise this to 1000
+# (``same_identity(..., mtime_resolution_ms=1000)``) rather than reading drift into every file.
+MTIME_RESOLUTION_MS = 1
 _PROC_FD = "/proc/self/fd"
 # Where an open descriptor can be traced back to the file it holds (Linux).
 _CHECK_DESCRIPTORS = sys.platform.startswith("linux") and os.path.isdir(_PROC_FD)
+
+
+def check_identity(row: dict, observed: str) -> None:
+    """Raise ``ZarrStoreDrift`` unless the file ``observed`` is the one the manifest recorded.
+
+    ``row`` holds the manifest ``file`` and ``identity`` (``"<mtime_ms>:<size>"``);
+    ``observed`` is the identity of the file as it is now, in the same form. A row with
+    no identity (a file GeoBrix wrote) is never drift.
+    """
+    from databricks.labs.gbx.zarr._register import same_identity
+
+    expected = row.get("identity")
+    if expected is None or same_identity(
+        expected, observed, mtime_resolution_ms=MTIME_RESOLUTION_MS
+    ):
+        return
+    raise ZarrStoreDrift(
+        f"{row.get('file')} changed outside GeoBrix: the manifest recorded "
+        f"{expected} (modification time in ms : size) and the file is now {observed}.",
+        fix=_DRIFT_FIX,
+    )
 
 
 class RangeReader(Protocol):
@@ -87,6 +117,12 @@ class FuseRangeReader:
     waiting cannot fix are raised at once: a path that names a directory, or runs through
     a file, is drift, and a permission error propagates.
 
+    A region of an external file carries the identity the manifest recorded for it. The
+    first time a reader opens such a file it takes the file's modification time and size
+    from the open descriptor (once per reader, which is once per task) and raises
+    ``ZarrStoreDrift`` if they are not what was recorded: the file was changed, or replaced,
+    outside GeoBrix (``check_identity``).
+
     The name check can lag the file system: the real path of a name is looked up once
     and kept, and a link can be put in the name's place between the check and the open.
     So on Linux the opened descriptor is traced (``/proc/self/fd``) to the file it really
@@ -99,6 +135,7 @@ class FuseRangeReader:
         self._base_root = base_root
         self._attempts = attempts
         self._real: dict[str, str] = {}  # path -> os.path.realpath(path)
+        self._observed: dict[str, str] = {}  # path -> its identity, taken once
 
     def _realpath(self, path: str) -> str:
         real = self._real.get(path)
@@ -145,8 +182,11 @@ class FuseRangeReader:
         root_of: dict[str, str] = (
             {}
         )  # path -> real path of the root it was checked under
+        recorded: dict[str, set[str]] = {}  # path -> identities the manifest recorded
         for i, r in enumerate(regions):
             path, root_of[path] = self._resolve(r)
+            if r.origin == "external" and r.identity is not None:
+                recorded.setdefault(path, set()).add(r.identity)
             if r.offset < 0 or r.length < 0:
                 raise ZarrStoreDrift(
                     f"manifest region {r.length} bytes at offset {r.offset} of "
@@ -158,7 +198,8 @@ class FuseRangeReader:
         for path, members in by_file.items():
             spans = _coalesce(regions, members)
             for (start, _, held), data in zip(
-                spans, self._read_spans(path, spans, root_of[path])
+                spans,
+                self._read_spans(path, spans, root_of[path], recorded.get(path, ())),
             ):
                 if len(held) == 1 and regions[held[0]].offset == start:
                     out[held[0]] = data
@@ -169,10 +210,10 @@ class FuseRangeReader:
                     out[i] = bytes(view[r.offset - start : r.offset - start + r.length])
         return out
 
-    def _read_spans(self, path: str, spans, real_root: str) -> list[bytes]:
+    def _read_spans(self, path: str, spans, real_root: str, recorded) -> list[bytes]:
         def attempt() -> list[bytes]:
             try:
-                return self._pread_all(path, spans, real_root)
+                return self._pread_all(path, spans, real_root, recorded)
             except _PERMANENT as e:
                 raise _Permanent(e) from None
 
@@ -197,8 +238,7 @@ class FuseRangeReader:
                 fix=_SYNC_FIX + "restore the file",
             ) from None
 
-    @staticmethod
-    def _pread_all(path: str, spans, real_root: str) -> list[bytes]:
+    def _pread_all(self, path: str, spans, real_root: str, recorded) -> list[bytes]:
         fd = os.open(path, os.O_RDONLY)
         try:
             if _CHECK_DESCRIPTORS:
@@ -221,6 +261,15 @@ class FuseRangeReader:
                         "only point at files under the store root or, for a "
                         "registered store, its base root",
                     )
+            if recorded:
+                observed = self._observed.get(path)
+                if observed is None:
+                    st = os.fstat(fd)
+                    observed = self._observed[path] = (
+                        f"{st.st_mtime_ns // 1_000_000}:{st.st_size}"
+                    )
+                for identity in recorded:
+                    check_identity({"file": path, "identity": identity}, observed)
             out = []
             for start, stop, _ in spans:
                 want, parts, at = stop - start, [], start

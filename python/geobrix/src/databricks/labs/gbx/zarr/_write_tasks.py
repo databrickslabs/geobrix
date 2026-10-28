@@ -86,7 +86,8 @@ _PIECES_ARROW = pa.schema(
 ROWS_DDL = (
     "rtype STRING, kind STRING, array STRING, key STRING, shard_key STRING, "
     "file STRING, offset BIGINT, length BIGINT, checksum STRING, empty BOOLEAN, "
-    "rmw BOOLEAN, expected_write_id STRING, shard_live BOOLEAN, info STRING, "
+    "rmw BOOLEAN, expected_write_id STRING, identity STRING, shard_live BOOLEAN, "
+    "info STRING, "
     "data BINARY"
 )
 ROWS_ARROW = pa.schema(
@@ -103,6 +104,7 @@ ROWS_ARROW = pa.schema(
         ("empty", pa.bool_()),
         ("rmw", pa.bool_()),
         ("expected_write_id", pa.string()),
+        ("identity", pa.string()),  # of the base object a chunk row shadows
         ("shard_live", pa.bool_()),
         ("info", pa.string()),
         ("data", pa.binary()),
@@ -497,6 +499,10 @@ class _Assembler:
                 empty=empty,
                 rmw=rmw,
                 expected_write_id=None if base is None else base["write_id"],
+                # the row replaces one for the same key: the file it recorded for the
+                # base object (a registered store's own) stays the identity this chunk
+                # shadows, which is how a sync tells that the base changed under it
+                identity=None if base is None else base.get("identity"),
                 shard_live=group.shard is not None and cfg.mode != "overwrite",
             )
         )

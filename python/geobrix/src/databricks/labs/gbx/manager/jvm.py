@@ -99,11 +99,10 @@ def install_l2(spark, fn, caps) -> Optional[str]:
         return f"{fn.sql_name}: Java UDF registration failed ({type(exc).__name__}: {str(exc)[:160]})"
 
 
-def install_private_l1(spark, fqn: str, name: str) -> Optional[str]:
-    """Install the Catalyst companion `fqn` under the private session name `name` (`gbx__l1_<x>`), with no
-    dispatch wrapper in front of it: a helper that calls the heavy step itself uses it as it is. None when it
-    is installed, else one line saying why not. Called only after `capabilities.detect` found a matching JAR.
-    """
+def install_companion(spark, fqn: str, name: str) -> Optional[str]:
+    """Install the Catalyst companion `fqn` under the session name `name` (its own SQL name, or the private
+    `gbx__l1_<x>`), with no dispatch wrapper in front of it. None when it is installed, else one line saying why
+    not. Called only after `capabilities.detect` found a matching JAR."""
     try:
         _point_jvm_at_payload(spark)
         r = str(
@@ -114,6 +113,12 @@ def install_private_l1(spark, fqn: str, name: str) -> Optional[str]:
         return None if r == "ok" else f"{name}: {r}"
     except Exception as exc:  # noqa: BLE001 - any failure is a fallback reason
         return f"{name}: heavy install failed ({type(exc).__name__}: {str(exc)[:160]})"
+
+
+def install_private_l1(spark, fqn: str, name: str) -> Optional[str]:
+    """`install_companion` under a private session name (`gbx__l1_<x>`): a helper that calls the heavy step itself
+    uses it as it is, beside whatever the registrar put under the SQL name."""
+    return install_companion(spark, fqn, name)
 
 
 def viewshed_towers_jvm(

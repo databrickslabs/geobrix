@@ -413,10 +413,12 @@ def register_l1_udafs(spark) -> None:
     shape is timed and judged with the 12 arguments, so the companion goes in directly.
     """
     from databricks.labs.gbx import manifest
+    from databricks.labs.gbx.manager import (
+        jvm,  # the JVM bridge is the manager's, not the light product's
+    )
 
-    inst = spark._jvm.com.databricks.labs.gbx.kernels.L1Installer
     for name in _L1_AGGREGATES:
         companion = manifest.load().functions[name].levels["L1"]["companion"]
-        got = str(inst.install(spark._jsparkSession, name, companion))
-        if got != "ok":
-            raise RuntimeError(f"{name}: L1 install gave {got}")
+        why = jvm.install_companion(spark, companion, name)
+        if why:
+            raise RuntimeError(f"{name}: L1 install gave {why}")

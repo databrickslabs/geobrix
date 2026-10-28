@@ -46,6 +46,8 @@ __all__ = [
     "reader_for",
     "put_pack",
     "stat_for",
+    "bounded_closure",
+    "closure_size",
     "check_identity",
     "identities_match",
     "MTIME_RESOLUTION_MS",
@@ -1014,3 +1016,70 @@ def stat_for(cfg: AccessConfig | None):
             raise _expired(cfg) from None
 
     return head
+
+
+# --- credentials only in a small closure -------------------------------------------------------
+
+_UDF_COMPRESSION_THRESHOLD = (
+    1 << 20
+)  # spark.broadcast.UDFCompressionThreshold's default
+_CLOSURE_MARGIN = 64 * 1024  # what PySpark adds around the pickled function
+_SIZE = re.compile(r"^\s*(\d+)\s*([kmg]?)b?\s*$", re.IGNORECASE)
+
+
+def closure_size(fn) -> int:
+    """The bytes ``fn`` pickles to, as PySpark pickles a task function."""
+    from pyspark import cloudpickle
+
+    return len(cloudpickle.dumps(fn))
+
+
+def _closure_limit(spark) -> int:
+    """The largest task closure that stays below Spark's UDF broadcast threshold
+    (``spark.broadcast.UDFCompressionThreshold``, default 1 MiB), less a margin. Above it
+    PySpark broadcasts the pickled function, which writes it to ``spark.local.dir``."""
+    threshold = _UDF_COMPRESSION_THRESHOLD
+    try:
+        m = _SIZE.match(
+            str(spark.conf.get("spark.broadcast.UDFCompressionThreshold", None))
+        )
+        if m:
+            threshold = (
+                int(m.group(1))
+                << {"": 0, "k": 10, "m": 20, "g": 30}[m.group(2).lower()]
+            )
+    except Exception:  # no session (a test), or a client that will not say
+        pass
+    return max(threshold - _CLOSURE_MARGIN, 0)
+
+
+def bounded_closure(spark, access: AccessConfig | None, build):
+    """``(fn, access)``: the function a task runs, with the access it carries.
+
+    ``build(a)`` makes the function with ``a`` as its access. Credentials may only ride in a
+    SMALL closure: one that pickles above Spark's broadcast threshold is written to disk
+    (``spark.local.dir``) by PySpark, and the credentials with it. So when the function built
+    with a direct ``access`` is too big (a long time axis, a large tile plan), an ``"auto"``
+    call builds it again for the mount (and returns ``FUSE``, which the caller adopts for the
+    driver's own phases); a ``"direct"`` call raises ``ZarrAccessUnavailable``.
+    """
+    fn = build(access)
+    if access is None or not access.is_direct:
+        return fn, access
+    size, limit = closure_size(fn), _closure_limit(spark)
+    if size <= limit:
+        return fn, access
+    if access.fallback:
+        _LOG.info(
+            "the task closure is %d bytes, over the %d that may hold credentials: "
+            "reading through the mount",
+            size,
+            limit,
+        )
+        return build(FUSE), FUSE
+    raise ZarrAccessUnavailable(
+        f"this call's plan is {size} bytes, over the {limit} a task closure that holds "
+        "credentials may be (Spark would write it to local disk, credentials included)",
+        fix='read a smaller selection, or use access="auto" (it reads a large plan '
+        'through the mount) or "fuse"',
+    )

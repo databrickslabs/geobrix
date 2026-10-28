@@ -44,6 +44,7 @@ import pyarrow as pa
 from databricks.labs.gbx.zarr._access import (
     FUSE,
     AccessConfig,
+    bounded_closure,
     reader_for,
     resolve_access,
 )
@@ -1334,7 +1335,7 @@ def gbx_zarr_read(
     units, cfg = _plan(
         spark, src, names, sel, isel, output, decode, use_zarr_fill_value_as_mask
     )
-    cfg = dataclasses.replace(cfg, access=source_access(spark, src, access))
+    reach = source_access(spark, src, access)
     if output == "blocks":
         schema = BLOCKS_SCHEMA
     else:
@@ -1345,7 +1346,10 @@ def gbx_zarr_read(
         )
     if not units:
         return spark.createDataFrame([], schema)
-    return _work_frame(spark, units).mapInArrow(_task_function(cfg), schema)
+    task, _ = bounded_closure(
+        spark, reach, lambda a: _task_function(dataclasses.replace(cfg, access=a))
+    )
+    return _work_frame(spark, units).mapInArrow(task, schema)
 
 
 # --- tiles ---------------------------------------------------------------------------
@@ -1523,7 +1527,8 @@ def _tiles_frame(spark, plans, virtual: bool, access=None):
         return spark.createDataFrame([], schema)
     per_task = _TILES_PER_TASK if virtual else _MATERIALIZED_PER_TASK
     tiles = spark.range(total, numPartitions=-(-total // per_task))
-    return tiles.mapInArrow(_tile_task(plans, virtual, access), schema)
+    task, _ = bounded_closure(spark, access, lambda a: _tile_task(plans, virtual, a))
+    return tiles.mapInArrow(task, schema)
 
 
 # --- block helpers -------------------------------------------------------------------

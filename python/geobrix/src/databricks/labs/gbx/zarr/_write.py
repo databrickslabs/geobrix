@@ -58,6 +58,7 @@ or ``spark.conf.set``; ``spark.sql.shuffle.partitions`` is read through a guarde
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import math
@@ -74,7 +75,7 @@ import pyarrow.compute as pc
 from databricks.labs.gbx.core._arrow import to_spark_df
 from databricks.labs.gbx.zarr import _manifest as M
 from databricks.labs.gbx.zarr import _write_tiles
-from databricks.labs.gbx.zarr._access import resolve_access
+from databricks.labs.gbx.zarr._access import bounded_closure, resolve_access
 from databricks.labs.gbx.zarr._layout import chunk_layout, coordinate_chunks
 from databricks.labs.gbx.zarr._meta import (
     ArrayMeta,
@@ -1898,7 +1899,10 @@ def _write_files(spark, plan: _Plan) -> pa.Table:
         fault=_FAULT,
         access=plan.access,
     )
-    pieces = frame.mapInArrow(explode_function(cfg), PIECES_DDL)
+    # the explode stage touches no storage: it never carries the credentials
+    pieces = frame.mapInArrow(
+        explode_function(dataclasses.replace(cfg, access=None)), PIECES_DDL
+    )
     parts, nbytes = _planned(plan)
     if plan.mode != "create" and base_names:
         # an overwrite deletes every row its input does not replace: it needs them all
@@ -1917,7 +1921,12 @@ def _write_files(spark, plan: _Plan) -> pa.Table:
         if n is None
         else pieces.repartition(n, "variable", "part")
     ).sortWithinPartitions("variable", "part", "ord", "key")
-    return grouped.mapInArrow(assemble_function(cfg), ROWS_DDL).toArrow()
+    assemble, plan.access = bounded_closure(
+        spark,
+        plan.access,
+        lambda a: assemble_function(dataclasses.replace(cfg, access=a)),
+    )
+    return grouped.mapInArrow(assemble, ROWS_DDL).toArrow()
 
 
 # --- after the files: side rows, coordinates ---------------------------------------------

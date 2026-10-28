@@ -41,6 +41,7 @@ from dataclasses import dataclass
 import numpy as np
 import pyarrow as pa
 
+from databricks.labs.gbx.zarr._access import bounded_closure
 from databricks.labs.gbx.zarr._meta import _check_mask_flag
 from databricks.labs.gbx.zarr._plan import Unit, boxes_of, keys_of_boxes, rows_for_boxes
 from databricks.labs.gbx.zarr._read import (
@@ -604,10 +605,16 @@ def _through_spark(df, cfg, units, schema):
     together: hashed over at most ``_MAX_PARTITIONS`` partitions and sorted within each.
     """
     parts = max(1, min(len(units), _MAX_PARTITIONS))
+    task, _ = bounded_closure(
+        df.sparkSession,
+        cfg.read.access,
+        lambda a: _sample_task(
+            dataclasses.replace(cfg, read=dataclasses.replace(cfg.read, access=a)),
+            units,
+        ),
+    )
     return (
-        df.repartition(parts, _UID)
-        .sortWithinPartitions(_UID)
-        .mapInArrow(_sample_task(cfg, units), schema)
+        df.repartition(parts, _UID).sortWithinPartitions(_UID).mapInArrow(task, schema)
     )
 
 

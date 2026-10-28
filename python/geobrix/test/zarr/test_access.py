@@ -1375,6 +1375,58 @@ def test_sample_resolves_access_for_its_source_and_a_plain_store_has_none(
     assert len(calls) == 1  # a plain store never asks
 
 
+# --- direct access: credentials ride only in a small closure ------------------------------------
+
+
+def test_credentials_ride_only_in_a_small_closure():
+    """A task function that pickles above Spark's broadcast threshold is written to local disk
+    by PySpark. So with a closure over the threshold "auto" builds it again for the mount (no
+    credentials in it) and "direct" raises; the threshold is Spark's own conf."""
+    from pyspark import cloudpickle
+
+    direct = AccessConfig(
+        "direct", "file:///v", {"k": SENTINEL}, "aws", "/v", "file:///v", fallback=True
+    )
+
+    def build(pad):
+        def make(access):
+            blob = b"x" * pad
+
+            def run(batches):
+                return blob, access
+
+            return run
+
+        return make
+
+    def spark(value):
+        def get(key, default=None):
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+        return SimpleNamespace(conf=SimpleNamespace(get=get))
+
+    def carries(fn):
+        return SENTINEL.encode() in cloudpickle.dumps(fn)
+
+    fn, used = _access.bounded_closure(spark("2m"), direct, build(1 << 20))
+    assert used is direct and carries(fn)  # 1 MiB under a 2 MiB threshold
+    fn, used = _access.bounded_closure(spark("2m"), direct, build(3 << 20))
+    assert used is _access.FUSE and not carries(fn)  # auto: the mount, no credentials
+    for threshold in ("1048576", None, RuntimeError("a client that will not say")):
+        fn, used = _access.bounded_closure(spark(threshold), direct, build(2 << 20))
+        assert used is _access.FUSE and not carries(fn)  # the default is 1 MiB
+    with pytest.raises(ZarrAccessUnavailable) as e:
+        _access.bounded_closure(
+            spark("2m"), dataclasses.replace(direct, fallback=False), build(3 << 20)
+        )
+    assert "smaller selection" in e.value.fix and SENTINEL not in str(e.value)
+    # nothing is measured for the mount, which holds no credentials
+    fn, used = _access.bounded_closure(spark("2m"), _access.FUSE, build(3 << 20))
+    assert used is _access.FUSE and not carries(fn)
+
+
 # --- direct access, end to end on Spark -------------------------------------------------------
 
 
@@ -1419,6 +1471,16 @@ def test_a_direct_write_and_read_round_trip_on_spark(
         assert not spark_delta.catalog.tableExists(table)
 
         calls = _recording(monkeypatch, _write, direct)
+        stages = {}
+        for name in ("explode_function", "assemble_function"):
+            real = getattr(_write, name)
+            monkeypatch.setattr(
+                _write,
+                name,
+                lambda cfg, _real=real, _name=name: (
+                    stages.__setitem__(_name, cfg.access) or _real(cfg)
+                ),
+            )
         version = gbx_zarr_write(
             ds,
             table,
@@ -1430,6 +1492,8 @@ def test_a_direct_write_and_read_round_trip_on_spark(
             optimize=True,  # the fold reads and puts through obstore as well
         )
         assert calls == [(str(mount / "store"), "direct", "WRITE_VOLUME", [])]
+        # the stage that touches no storage never holds the credentials
+        assert stages == {"explode_function": None, "assemble_function": direct}
         assert version == 1  # the write's own; the fold it asked for is the next one
         packs = sorted((cloud_dir / "store" / "data").rglob("*.zpack"))
         assert packs and not (mount / "store" / "data").exists()  # the mount saw none
@@ -1460,3 +1524,94 @@ def uuid_hex():
     import uuid
 
     return uuid.uuid4().hex[:8]
+
+
+def test_a_large_selection_never_puts_credentials_on_local_disk(
+    spark_delta, tmp_path, monkeypatch
+):
+    """A table read of a 150,000-step axis has a task closure of over 1 MiB (the labels ride
+    in it). "auto" reads it through the mount and "direct" refuses; either way no file under
+    ``spark.local.dir`` holds the token. A control closure of the same size WITH the config in
+    it does land the token on disk, so the search can see it."""
+    from pathlib import Path
+
+    import numpy as np
+    import pandas as pd
+    import xarray as xr
+
+    from databricks.labs.gbx.zarr import _read, _write
+
+    n = 150_000
+    ds = xr.Dataset(
+        {"v": (("time", "y", "x"), np.arange(n * 4, dtype="float32").reshape(n, 2, 2))},
+        coords={
+            "time": pd.date_range("2000-01-01", periods=n, freq="h"),
+            "y": [10.0, 11.0],
+            "x": [20.0, 21.0],
+        },
+    )
+    table = f"gbx_zarr_access_big_{uuid_hex()}"
+    url = f"file://{tmp_path}"
+    direct = AccessConfig(
+        "direct", url, {"access_key_id": SENTINEL}, "aws", str(tmp_path), url
+    )
+
+    def resolve(spark, path, *, access, operation, also=()):
+        return dataclasses.replace(direct, fallback=access == "auto")
+
+    def holders():
+        sc = spark_delta.sparkContext
+        scratch = Path(sc._temp_dir).parent  # spark-<id>: the files PySpark writes
+        roots = [scratch, *scratch.parent.glob("blockmgr-*")]
+        found = []
+        for root in roots:
+            for f in root.rglob("*"):
+                try:
+                    if f.is_file() and SENTINEL.encode() in f.read_bytes():
+                        found.append(str(f))
+                except OSError:
+                    pass
+        return found
+
+    try:
+        gbx_write = _write.gbx_zarr_write
+        gbx_write(
+            ds,
+            table,
+            root=str(tmp_path / "store"),
+            spark=spark_delta,
+            chunks={"time": 15_000, "y": 2, "x": 2},
+            access="fuse",
+        )
+        monkeypatch.setattr(_read, "resolve_access", resolve)
+        built = []
+        real_task = _read._task_function
+        monkeypatch.setattr(
+            _read,
+            "_task_function",
+            lambda cfg: built.append(cfg.access) or real_task(cfg),
+        )
+        df = _read.gbx_zarr_read(
+            spark_delta, table, output="table", variables=["v"], access="auto"
+        )
+        assert df.count() == n * 4
+        assert built[0].is_direct and built[-1].mode == "fuse"  # too big: built again
+        with pytest.raises(ZarrAccessUnavailable, match="over the"):
+            _read.gbx_zarr_read(
+                spark_delta, table, output="table", variables=["v"], access="direct"
+            )
+        assert holders() == []
+
+        blob = b"x" * (2 << 20)
+
+        def control(
+            batches,
+        ):  # the same size, with the config in it: nothing guards this
+            for batch in batches:
+                yield batch.select(["id"])
+            len(blob), direct
+
+        spark_delta.range(1).mapInArrow(control, "id long").collect()
+        assert len(holders()) >= 1
+    finally:
+        spark_delta.sql(f"DROP TABLE IF EXISTS {table}")

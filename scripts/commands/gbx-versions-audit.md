@@ -11,6 +11,9 @@ bash scripts/commands/gbx-versions-audit.sh [OPTIONS]
 ## Options
 
 - `--package <name>` — Show only one package (e.g. `pip`, `numpy`, `pyspark`).
+- `--native` — Audit every consumer of the native pins instead of printing the package inventory (see "Native pins" below).
+- `--host` — Check the host venv AND this checkout's dev container against the native pins.
+- `--check` — With `--native` or `--host`: exit 1 on drift. Without it the report is printed and the exit is 0.
 - `--log <path>` — Write output to log file.
 - `--help` — Display help.
 
@@ -26,6 +29,21 @@ gbx:versions:audit --package numpy
 # Just pyspark — useful when bumping Spark
 gbx:versions:audit --package pyspark
 ```
+
+## Native pins
+
+`scripts/native/pins.conf` is the one place GeoBrix pins GDAL, PROJ, GEOS, every library they are built from, the Rust toolchain (with `rust-toolchain.toml`), maturin, PyO3, cargo-deny and the Python bindings (rasterio, pyogrio, pyproj, shapely, netCDF4). Each source has its version, URL, second URL (or `single-source`), file name, SHA-256 and SPDX licence. The sums were identical from two sources, or compared with the project's published checksum, when they were resolved.
+
+```bash
+# every consumer against the pins (CI-style: exit 1 on drift)
+bash scripts/commands/gbx-versions-audit.sh --native --check
+
+# the host venv and the dev container against the pins: Python patch version, the bound
+# packages, and GDAL/PROJ/GEOS as rasterio, pyproj and shapely report them
+bash scripts/commands/gbx-versions-audit.sh --host --check
+```
+
+`--native` runs `python3 scripts/native/pins.py audit`: the pin file itself (no placeholder, every `X_VERSION` has its checksum), the `rust-toolchain.toml` channel, every `Cargo.toml` that depends on `pyo3` (`=PYO3_VERSION`), every maturin `pyproject.toml` (`maturin==MATURIN_VERSION`), `scripts/native/build-requirements.in`, the `gdal.java.version` property in `pom.xml` when present, and the legacy consumers still on an older GDAL (`scripts/native/legacy-consumers.txt`: a changed value is drift; a regex that no longer matches means the consumer was retired, so delete its line). `--host` reuses the collector and comparison of `gbx:venv:check`; it is red while the environments still carry the previous GDAL stack. `pins.py get KEY` and `pins.py build-args` read the pins for scripts and Docker builds.
 
 ## What's tracked
 
@@ -45,7 +63,8 @@ Source of truth (priority order):
 - `.github/actions/python_build/action.yml`
 - `.github/workflows/build_*.yml` and `codecov-*.yml` (matrix values)
 - `scripts/docker/Dockerfile`
-- `scripts/geobrix-gdal-init.sh`
+- `scripts/geobrix-gdal-init.sh`, `scripts/build-gdal-artifacts.sh`, `scripts/docker/dcs/Dockerfile`, `pom.xml`
+- `scripts/native/pins.conf`, `rust-toolchain.toml`
 - `scripts/commands/gbx-lint-python.sh`
 - `python/geobrix/pyproject.toml` (dev/test extras — currently unpinned)
 - `examples/tests/requirements.txt` (lower bounds — not pinned)

@@ -1,0 +1,7 @@
+# The Rust toolchain for every GeoBrix native crate: an exact stable release, never a moving channel.
+# The version is pinned in scripts/native/pins.conf (RUST_TOOLCHAIN); `pins.py audit` fails when they differ.
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+profile = "minimal"

@@ -2,6 +2,8 @@
 # gbx:versions:audit - Inventory pinned Python tooling versions across CI, Docker, init scripts, and venv setup.
 # Use case 1: audit drift between locations.
 # Use case 2: when bumping to a new DBR LTS, run this first to see every place that needs an update.
+# Use case 3 (--native, --host): check the native stack (GDAL, PROJ, GEOS, Rust, the bindings) against
+# scripts/native/pins.conf: the repository's consumers (--native) and the host venv and the dev container (--host).
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -15,6 +17,11 @@ show_help() {
     echo ""
     echo -e "${CYAN}Options:${NC}"
     echo -e "  ${GREEN}--package <name>${NC} Show only one package (e.g. pip, numpy, pyspark)."
+    echo -e "  ${GREEN}--native${NC}         Audit every consumer of the native pins (scripts/native/pins.conf, rust-toolchain.toml,"
+    echo -e "                      legacy consumers) instead of the package inventory."
+    echo -e "  ${GREEN}--host${NC}           Check the host venv AND this checkout's dev container against the pins: Python patch"
+    echo -e "                      version, the bound Python packages, and GDAL/PROJ/GEOS as rasterio/pyproj/shapely report them."
+    echo -e "  ${GREEN}--check${NC}          With --native or --host: exit 1 on drift (without it the report is printed and the exit is 0)."
     echo -e "  ${GREEN}--log <path>${NC}     Write output to log file."
     echo -e "  ${GREEN}--help${NC}           Show this help."
     echo ""
@@ -27,10 +34,19 @@ show_help() {
 
 PACKAGE_FILTER=""
 LOG_PATH=""
+NATIVE=false
+HOST=false
+CHECK=false
 while [[ $# -gt 0 ]]; do
     case $1 in
         --package)
             PACKAGE_FILTER="$2"; shift 2;;
+        --native)
+            NATIVE=true; shift;;
+        --host)
+            HOST=true; shift;;
+        --check)
+            CHECK=true; shift;;
         --log)
             LOG_PATH=$(resolve_log_path "$2"); shift 2;;
         --help|-h)
@@ -44,6 +60,38 @@ cd "$PROJECT_ROOT"
 show_banner "Versions audit"
 setup_log_file "$LOG_PATH"
 
+# --native / --host: the native pins are checked, not inventoried (scripts/native/pins.py does the work).
+if [ "$NATIVE" = true ] || [ "$HOST" = true ]; then
+    CHECK_ARG=()
+    [ "$CHECK" = true ] && CHECK_ARG=(--check)
+    RC=0
+    if [ "$NATIVE" = true ]; then
+        python3 scripts/native/pins.py audit ${CHECK_ARG[@]+"${CHECK_ARG[@]}"} || RC=1
+    fi
+    if [ "$HOST" = true ]; then
+        # The same collector gbx:venv:check uses, run by the host venv's interpreter and inside the container.
+        REPORT="$PROJECT_ROOT/scripts/ci/venv_env_report.py"
+        VENV_DIR="${GBX_PYRX_VENV:-$PROJECT_ROOT/.venv-pyrx}"
+        VENV_PY="$VENV_DIR/bin/python"
+        if [ ! -x "$VENV_PY" ]; then
+            echo -e "${RED}ERROR: no host venv at $VENV_DIR. Run: bash scripts/commands/gbx-venv-sync.sh${NC}" >&2
+            exit 1
+        fi
+        check_docker
+        WORK="$(mktemp -d "${TMPDIR:-/tmp}/gbx-versions-audit.XXXXXX")"
+        "$VENV_PY" - collect < "$REPORT" > "$WORK/host.json" \
+            || { rm -rf "$WORK"; echo -e "${RED}ERROR: could not read the host venv${NC}" >&2; exit 1; }
+        docker exec -i "$GBX_DEV_CONTAINER" python3 - collect < "$REPORT" > "$WORK/container.json" \
+            || { rm -rf "$WORK"; echo -e "${RED}ERROR: could not read the container's environment${NC}" >&2; exit 1; }
+        python3 scripts/native/pins.py env-check ${CHECK_ARG[@]+"${CHECK_ARG[@]}"} "host=$WORK/host.json" "container=$WORK/container.json" || RC=1
+        rm -rf "$WORK"
+    fi
+    if [ -n "$LOG_PATH" ]; then
+        echo -e "${CYAN}Log saved to: ${YELLOW}$LOG_PATH${NC}"
+    fi
+    exit $RC
+fi
+
 # Files where pinned versions live. Keep this list in sync with the SECURITY/CI
 # review notes in .superpowers/prompts/security/. New file? Add it here AND remove this line
 # of staleness.
@@ -56,7 +104,12 @@ FILES=(
     ".github/workflows/build_scala_by_package.yml"
     ".github/workflows/codecov-scala-parallel.yml"
     "scripts/docker/Dockerfile"
+    "scripts/docker/dcs/Dockerfile"
     "scripts/geobrix-gdal-init.sh"
+    "scripts/build-gdal-artifacts.sh"
+    "pom.xml"
+    "scripts/native/pins.conf"
+    "rust-toolchain.toml"
     "scripts/commands/gbx-lint-python.sh"
     "python/geobrix/pyproject.toml"
     "examples/tests/requirements.txt"
@@ -83,7 +136,9 @@ PACKAGES=(
     "pytest-cov:::pytest-cov(==|_VERSION=):::current PyPI stable"
     "build:::build(==|_VERSION=):::current PyPI stable (not in DBR)"
     # Native — system + apt
-    "gdal:::(gdal-config|gdal\[numpy\]|GDAL\[numpy\]|gdal: ?\[):::system apt + ubuntugis PPA"
+    "gdal:::(gdal-config|gdal\[numpy\]|GDAL\[numpy\]|gdal: ?\[|GDAL_VERSION=|org\.gdal):::scripts/native/pins.conf (legacy consumers listed in scripts/native/legacy-consumers.txt)"
+    "proj:::PROJ_VERSION=:::scripts/native/pins.conf"
+    "geos:::GEOS_VERSION=:::scripts/native/pins.conf"
     # Jupyter / notebook stack — DBR-aligned (Dockerfile dev container)
     "ipython:::ipython(==|_VERSION=):::DBR LTS"
     "ipykernel:::ipykernel(==|_VERSION=):::DBR LTS"

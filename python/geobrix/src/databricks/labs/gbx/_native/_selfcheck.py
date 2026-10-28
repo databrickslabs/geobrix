@@ -1,6 +1,7 @@
 """The one native-payload oracle: the same inputs and answers at every level (probes P8, P9; B3).
 
-- ``stack()``: which build each binding runs and whether it came from the payload.
+- ``stack()``: which build each binding runs (GDAL's own ``osgeo`` and ``osgeo_utils`` too),
+  whether it came from the payload, and the libgdal files the process maps (one: the payload's).
 - ``light()``: raster, vector, CRS, geometry and netCDF checks in this process, no Spark.
 - ``light_sql(spark)`` / ``heavy_sql(spark, scratch_dir)``: the same GeoTIFF through the light and
   the heavy SQL functions; heavy also reads a Shapefile and checks the driver JVM's GDAL.
@@ -30,6 +31,7 @@ BINDINGS = ("rasterio", "pyogrio", "pyproj", "shapely", "netCDF4")
 GDAL_STACK_LIB = re.compile(
     r"/lib(gdal|proj|geos_c|netcdf|hdf5)(-[0-9a-f]{8})?\.so[.\d]*$"
 )
+LIBGDAL = re.compile(r"/libgdal(-[0-9a-f]{8})?\.so[.\d]*$")
 
 
 def _light_register(spark):
@@ -67,12 +69,15 @@ def stack():
     import rasterio
     import shapely
 
-    from databricks.labs.gbx import _native
+    from databricks.labs.gbx import _native, _osgeo
 
+    osgeo = _osgeo.bindings("_selfcheck.stack")
+    gdal_calc = _osgeo.utils("gdal_calc", "_selfcheck.stack")
     a = _native.arch()
     root = _native.payload_root()
     vendor = os.path.join(root, "_vendor", a) if a else None
     mods = dict(zip(BINDINGS, (rasterio, pyogrio, pyproj, shapely, netCDF4)))
+    mods["osgeo"] = osgeo.gdal
     mapped = _mapped_gdal_stack()
     native = _native.native_dir()
     return {
@@ -82,12 +87,20 @@ def stack():
         "native_dir": native,
         "activated_by": _native.activated_by(),
         "rasterio_gdal": rasterio.__gdal_version__,
+        "osgeo_gdal": osgeo.gdal.VersionInfo("RELEASE_NAME"),
         "pyogrio_gdal": pyogrio.__gdal_version_string__,
         "pyproj_proj": pyproj.proj_version_str,
         "shapely_geos": shapely.geos_version_string,
         "netcdf": netCDF4.__netcdf4libversion__,
         "hdf5": netCDF4.__hdf5libversion__,
-        "from_payload": {n: _under(m.__file__, vendor) for n, m in mods.items()},
+        "from_payload": {
+            **{n: _under(m.__file__, vendor) for n, m in mods.items()},
+            "osgeo_utils": _under(
+                gdal_calc.__file__, os.path.join(root, "_vendor", "common")
+            ),
+        },
+        # every libgdal mapped after rasterio and osgeo imported (None off Linux): one is one GDAL
+        "libgdal": None if mapped is None else [p for p in mapped if LIBGDAL.search(p)],
         # mapped GDAL-stack libraries that are NOT the payload's (None off Linux): [] is one stack
         "foreign_libs": (
             None if mapped is None else [p for p in mapped if not _under(p, native)]

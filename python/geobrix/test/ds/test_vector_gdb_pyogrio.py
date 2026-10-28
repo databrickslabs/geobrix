@@ -96,23 +96,6 @@ def _pts(n, offset=0, srid="4326", proj=""):
 _NAME = StructField("name", StringType())
 
 
-def test_osgeo_is_blocked():
-    with pytest.raises(ImportError):
-        from osgeo import ogr  # noqa: F401
-
-
-def test_writer_module_does_not_import_osgeo():
-    """The writer is light: no osgeo import anywhere in ds/vector.py."""
-    import re
-
-    import databricks.labs.gbx.ds.vector as vec
-
-    with open(vec.__file__, encoding="utf-8") as fh:
-        src = fh.read()
-    found = re.findall(r"^\s*(?:import|from)\s+osgeo\b.*$", src, re.MULTILINE)
-    assert not found, f"ds/vector.py must not import osgeo: {found}"
-
-
 @pytest.mark.parametrize(
     "geom,allowed",
     [

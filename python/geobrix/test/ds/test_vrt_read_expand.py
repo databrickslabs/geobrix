@@ -4,7 +4,7 @@ Tests that raster_gbx (and cog_gbx) detect a .vrt path at load time, parse the
 VRT XML to enumerate member mini-COG paths, and emit one whole-file virtual tile
 row per member — so all downstream rst_* ops work per-tile UNCHANGED.
 
-Pure Python (no JAR, no osgeo).
+Pure Python (no JAR).
 
 Coverage:
   1. raster_gbx reads a persisted mosaic.vrt → row count == member count.
@@ -12,7 +12,6 @@ Coverage:
   3. rst_avg(col("tile")) returns non-null values for each row (rst_* unchanged proof).
   4. A minted VRT (absolute SourceFilename paths, from mint_vrt) also expands correctly.
   5. cog_gbx reads the same .vrt → same row count (write→read round-trip).
-  6. No osgeo import in raster.py (light-tier compliance).
   7. Loading the mosaic DIRECTORY must not double-count the VRT + tiles.
   8. _parse_vrt_members uses the hardened defusedxml parser.
   9. Quadbin mosaic.vrt expansion surfaces cellid + gridSystem in tile.metadata.
@@ -27,7 +26,6 @@ Run (in Docker):
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import pathlib
 
@@ -289,22 +287,6 @@ def test_vrt_cog_gbx_reads_vrt(spark, tmp_path):
     assert count == len(
         members
     ), f"cog_gbx round-trip: expected {len(members)} rows, got {count}"
-
-
-# ---------------------------------------------------------------------------
-# 6. No osgeo import in raster.py (light-tier compliance)
-# ---------------------------------------------------------------------------
-
-
-def test_vrt_no_osgeo_in_raster_py():
-    """raster.py must not import osgeo — light-tier / Serverless compliance."""
-    import re
-
-    spec = importlib.util.find_spec("databricks.labs.gbx.ds.raster")
-    assert spec is not None, "ds.raster module not found"
-    src_text = pathlib.Path(spec.origin).read_text(encoding="utf-8")
-    osgeo_imports = re.findall(r"^(?:import|from)\s+osgeo\b.*$", src_text, re.MULTILINE)
-    assert not osgeo_imports, f"raster.py must not import osgeo: {osgeo_imports}"
 
 
 # ---------------------------------------------------------------------------

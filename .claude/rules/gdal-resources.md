@@ -20,8 +20,8 @@ paths:
 ## Light-tier pyrx specifics
 
 - **HARD REQ: pyrx never `spark.conf.set` / `_jvm` / `.rdd`** — Serverless-safe. `repartition` is bench-only.
-- **pyrx GDAL bundling is rejected** — don't bundle `osgeo.gdal`; reach GDAL via `rasterio`'s `libgdal` per-op.
-- **Byte-heavy slowness is the scalar `@f.udf` boundary tax** — an Arrow UDF is the lever; robustness (rio-tiler/xrspatial swap-out) over a partial stub.
+- **GDAL's own Python bindings come from the env wheel** — `osgeo`/`osgeo_utils` are vendored in the payload (same libgdal as rasterio). Import them ONLY through `databricks.labs.gbx._osgeo` (`bindings()` / `utils()`; raises `OsgeoUnavailable` with a `Fix:` where absent); `test/native/test_osgeo.py` fails on any direct import. In the dev container without `GBX_NATIVE_ROOT`, `osgeo` is the system GDAL, a second libgdal beside rasterio's.
+- **Byte-heavy slowness is the scalar `@f.udf` boundary tax** — an Arrow UDF is the lever; robustness (rio-tiler swap-out) over a partial stub.
 - pyrx diverges from heavy on NoData/edge behavior (terrain border, band-math, focal). Expected.
 - gdal writer enforces exact `(source, tile)` schema; `nameCol` overwrites `source`.
 - `JTS.toWKB` is 2D-only and drops Z — use `JTS.toWKB3`. (PySpark sends ints as Long.)

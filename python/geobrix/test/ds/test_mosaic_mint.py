@@ -2,7 +2,7 @@
 
 Tests the mint_vrt() public function that builds a TRANSIENT VRT over a
 dynamic tile collection (filtered query result, ad-hoc list, Volume dir).
-Pure Python (no Spark, no JAR, no osgeo).
+Pure Python (no Spark, no JAR).
 
 Coverage:
   1. mint_vrt([paths]) returns a path; rasterio.open() opens the mosaic.
@@ -11,7 +11,6 @@ Coverage:
      members than the full-collection VRT.
   4. Transient: the returned path is NOT inside the tiles directory.
   5. mint_vrt(out=<path>) writes the VRT to the caller-supplied destination.
-  6. No osgeo import in _mosaic.py (light-tier compliance).
 
 Run (in Docker):
     bash scripts/commands/gbx-test-python.sh \\
@@ -21,7 +20,6 @@ Run (in Docker):
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import pathlib
 import xml.etree.ElementTree as ET
@@ -210,23 +208,6 @@ def test_mint_vrt_out_path(tmp_path):
     assert os.path.exists(dest), f"VRT not written at {dest!r}"
     with rasterio.open(dest) as ds:
         assert ds.width == _TILE_W * 2
-
-
-# ---------------------------------------------------------------------------
-# 6. No osgeo import in _mosaic.py (light-tier compliance)
-# ---------------------------------------------------------------------------
-
-
-def test_mint_vrt_no_osgeo():
-    """_mosaic.py must not import osgeo — light-tier / Serverless compliance."""
-    import re
-
-    spec = importlib.util.find_spec("databricks.labs.gbx.ds._mosaic")
-    assert spec is not None, "_mosaic module not found"
-    src_text = pathlib.Path(spec.origin).read_text(encoding="utf-8")
-    # Reject any actual import of osgeo (allow doc-string mentions like "no osgeo").
-    osgeo_imports = re.findall(r"^(?:import|from)\s+osgeo\b.*$", src_text, re.MULTILINE)
-    assert not osgeo_imports, f"_mosaic.py must not import osgeo: {osgeo_imports}"
 
 
 # ---------------------------------------------------------------------------

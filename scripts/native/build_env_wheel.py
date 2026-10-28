@@ -6,7 +6,8 @@ Run by `gbx:build:wheel` (scripts/commands/gbx-build-wheel.sh) inside
 setuptools and `wheel` are the hashed build requirements. No container lock (no dev container).
 
 Inputs:
-  build/native/out/<arch>/stage-native/gdal-native/  GDAL and the libraries it needs, MANIFEST.json (N3)
+  build/native/out/<arch>/stage-native/gdal-native/  GDAL and the libraries it needs, MANIFEST.json, and
+                                                      GDAL's own Python bindings (python/osgeo, osgeo_utils) (N3)
   build/native/out/<arch>/bindings/{vendor,wheels}/   the five bindings built against it (N4)
   python/geobrix/envs/env<N>/                         core.txt, extra-*.txt, vendor-pure.txt, base.txt
   python/geobrix/envs/pyproject.env.toml              the env wheels' pyproject (ruling NP-3)
@@ -28,7 +29,9 @@ Steps (each prints `== <n> ...`; a failure prints `BUILD FAILED: <what>`, a miss
     revision, the git sha, whether the tree was dirty, SOURCE_DATE_EPOCH;
   3 the payload per architecture: _native/<arch>/lib (no pkgconfig/cmake, no symlinks) and
     MANIFEST.json, _native/share and _native/licenses (identical for both architectures, or fail),
-    _vendor/<arch>, the extra payload, _jar/;
+    _vendor/<arch> (the five bindings, and gdal-native's osgeo with its RUNPATH set for that place
+    by set-rpath.py in the architecture's toolchain image), _vendor/common/osgeo_utils (identical
+    for both architectures, or fail), the extra payload, _jar/;
   4 the vendored pure-Python wheels into _vendor/common without their dist-info (licences to
     _vendor/licenses); every Requires-Dist of a vendored package must be another vendored package
     at a version it accepts, or a core.txt name whose base version (base.txt) or floor it accepts
@@ -112,6 +115,10 @@ BANNED = re.compile(
     re.I,
 )
 LIB_NAME = re.compile(r"\.so(\.|$)")
+# GDAL's MIT licence covers osgeo and osgeo_utils except osgeo_utils/gdal_merge.py (LGPL-2.0-or-later,
+# and used by nothing here): it is left out, and no other file of theirs may name a GPL-family licence.
+OSGEO_UTILS_LEFT_OUT = ("gdal_merge.py",)
+GPL_TEXT = re.compile(rb"General Public License|\bL?GPL-[0-9]")
 HASHED_NEED = re.compile(rb"lib[A-Za-z0-9_+]+-[0-9a-f]{8}\.so[.0-9]*")
 PY312_LINUX = {
     "python_version": "3.12",
@@ -458,6 +465,46 @@ def binding_licences(wheels_dir):
     return out
 
 
+def set_rpath(bindings_dir, arch, tree, tree_at):
+    """RUNPATH of every ELF file under ``tree`` (which sits at ``tree_at`` in the wheel) relative to
+    _native/<arch>/lib: set-rpath.py in the architecture's toolchain image (patchelf), --network none."""
+    image = toolchain_image(bindings_dir, arch)
+    res = subprocess.run(
+        ["docker", "run", "--rm", "--network", "none", "--platform", PLATFORMS[arch],
+         "--user", f"{os.getuid()}:{os.getgid()}", "-v", f"{tree}:/tree",
+         "-v", f"{REPO / 'scripts' / 'native'}:/recipes:ro", image,
+         "/opt/python/cp312-cp312/bin/python", "/recipes/set-rpath.py",
+         "--tree", "/tree", "--tree-at", tree_at, "--lib-at", f"_native/{arch}/lib"],
+        capture_output=True, text=True,
+    )  # fmt: skip
+    if res.returncode != 0:
+        print(redact((res.stdout + res.stderr).strip()))
+        fail(f"set-rpath.py on {tree_at} (in {image})")
+
+
+def add_osgeo(natives, bindings, vendor, a):
+    """GDAL's own bindings from gdal-native: osgeo into _vendor/<arch> beside the five."""
+    if (vendor / "osgeo").exists():
+        fail(f"{bindings[a]}/vendor already holds osgeo")
+    copy_files(natives[a] / "python" / "osgeo", vendor / "osgeo")
+    set_rpath(bindings[a], a, vendor / "osgeo", f"_vendor/{a}/osgeo")
+
+
+def add_osgeo_utils(natives, pkg):
+    """osgeo_utils (pure Python, identical for both architectures) into _vendor/common."""
+    trees = {a: tree_digest(natives[a] / "python" / "osgeo_utils") for a in ARCHES}
+    if trees[ARCHES[0]] != trees[ARCHES[1]]:
+        fail("python/osgeo_utils differs between the architectures")
+    dst = pkg / "_vendor" / "common" / "osgeo_utils"
+    copy_files(natives[ARCHES[0]] / "python" / "osgeo_utils", dst)
+    for name in OSGEO_UTILS_LEFT_OUT:
+        (dst / name).unlink()
+    for root in (dst, *(pkg / "_vendor" / a / "osgeo" for a in ARCHES)):
+        gpl = [p.relative_to(pkg) for p in sorted(root.rglob("*.py")) if GPL_TEXT.search(p.read_bytes())]
+        if gpl:
+            fail(f"{gpl} name a GPL-family licence (GDAL's MIT licence does not cover them)")
+
+
 def add_payload(args, tree, natives, bindings, version):
     """Step 3."""
     pkg = tree / "src" / PKG
@@ -487,6 +534,7 @@ def add_payload(args, tree, natives, bindings, version):
         copy_files(bindings[a] / "vendor", vendor)
         if list(vendor.rglob("*.dist-info")):
             fail(f"{bindings[a]}/vendor holds a dist-info")
+        add_osgeo(natives, bindings, vendor, a)
         # The bindings record hashed SONAMEs, which change with every gdal-native rebuild: a binding
         # tree linked against another build names libraries this lib/ does not have.
         for so in vendor.rglob("*.so"):
@@ -495,12 +543,20 @@ def add_payload(args, tree, natives, bindings, version):
                 fail(
                     f"{so.relative_to(pkg)} needs {sorted(stale)}, not in {a}/lib: the bindings were built against another gdal-native"
                 )
+    add_osgeo_utils(natives, pkg)
     copy_files(natives[ARCHES[0]] / "share", nat / "share")
     copy_files(natives[ARCHES[0]] / "licenses", nat / "licenses")
     for name, files in blics[ARCHES[0]].items():
         for rel, data in files.items():
             (nat / "licenses" / name / rel).parent.mkdir(parents=True, exist_ok=True)
             (nat / "licenses" / name / rel).write_bytes(data)
+    # osgeo and osgeo_utils are GDAL's: its licence, listed under their names like the bindings'
+    gdal_licence = nat / "licenses" / "gdal" / "LICENSE.TXT"
+    if not gdal_licence.is_file():
+        fail("gdal-native/licenses/gdal/LICENSE.TXT is missing")
+    for name in ("osgeo", "osgeo_utils"):
+        (nat / "licenses" / name).mkdir()
+        shutil.copy2(gdal_licence, nat / "licenses" / name / "LICENSE.TXT")
 
     for d in args.extra_payload:
         for p in sorted(d.rglob("*")):
@@ -738,9 +794,13 @@ def verify_payload(zf, version, epoch):
         for lib in [*manifest["sonames"].values(), manifest["jni"]]:
             if f"{PKG}/_native/{a}/lib/{lib}" not in names:
                 fail(f"{a}: {lib} is not in the wheel")
-        if f"{PKG}/_vendor/{a}/rasterio/__init__.py" not in names:
-            fail(f"{a}: the vendored rasterio is not in the wheel")
+        for binding in ("rasterio", "osgeo"):
+            if f"{PKG}/_vendor/{a}/{binding}/__init__.py" not in names:
+                fail(f"{a}: the vendored {binding} is not in the wheel")
     for need in (
+        f"{PKG}/_vendor/common/osgeo_utils/gdal_calc.py",
+        f"{PKG}/_native/licenses/osgeo/LICENSE.TXT",
+        f"{PKG}/_native/licenses/osgeo_utils/LICENSE.TXT",
         f"{PKG}/_jar/geobrix-{version.split('+')[0]}-jar-with-dependencies.jar",
         "geobrix-native.pth",
         "_gbx_native_path.py",
@@ -763,6 +823,14 @@ def verify_payload(zf, version, epoch):
     banned = [n for n in names if LIB_NAME.search(leaf(n)) and BANNED.search(leaf(n))]
     if banned:
         fail(f"the licence guard matches {banned}")
+    left_in = [
+        n
+        for n in names
+        if n.startswith(f"{PKG}/_vendor/common/osgeo_utils/")
+        and leaf(n) in OSGEO_UTILS_LEFT_OUT
+    ]
+    if left_in:
+        fail(f"{left_in} is in the wheel (GDAL's MIT licence does not cover it)")
     if any(re.search(r"(pkgconfig|cmake)/", n) for n in names):
         fail("the wheel holds pkgconfig or cmake files")
     stamp = zip_date_time(epoch)

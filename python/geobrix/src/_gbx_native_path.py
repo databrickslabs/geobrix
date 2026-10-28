@@ -12,7 +12,7 @@ Otherwise it puts ``databricks/labs/gbx/_vendor/<arch>`` and then ``_vendor/comm
 the first site-packages entry of ``sys.path``: after the standard library and ahead of every
 installed package, so ``import rasterio`` serves the payload's build (which must match the
 payload's GDAL) even before geobrix is imported, and even when the user has another rasterio,
-pyogrio, pyproj, shapely, netCDF4, rio-tiler, morecantile or mapbox-vector-tile installed
+pyogrio, pyproj, shapely, netCDF4, osgeo, rio-tiler, morecantile or mapbox-vector-tile installed
 (``GBX_NATIVE_DISABLE=1`` turns the payload off). It sets ``GDAL_DATA``, ``PROJ_DATA`` and the
 GDAL and PROJ CA bundles where the user has not (the user's own CA wins), and ``ACTIVE = True``.
 """

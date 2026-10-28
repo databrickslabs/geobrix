@@ -7,12 +7,13 @@
 # Each check prints `ok: <check>` or `CHECK FAILED: <what>`; the last line is
 # `ENV_WHEEL_VERIFIED env=<ENV> arch=<arch> failures=<n>` and the exit status is 1 when any check failed.
 #   1 a fresh cp312 venv installs the wheel offline, with the runtime's base versions as constraints
-#   2 the bindings import before geobrix, through geobrix-native.pth alone, from the payload
+#   2 the bindings (osgeo too) import before geobrix, through geobrix-native.pth alone, from the payload
 #   3 without the .pth (GBX_NATIVE_PTH=0), `import databricks.labs.gbx` first activates the payload
 #   4 CA: a user SSL_CERT_FILE survives `import rasterio` for GDAL and PROJ; without one, the system store
 #   5 tripwire: the other environment's old extra name fails resolution, naming the other wheel
 #   6 Python 3.11: pip refuses the wheel, and a forced install never activates the payload
-#   7 P8: _selfcheck.light() passes, every binding from the payload, no foreign GDAL library mapped
+#   7 P8: _selfcheck.light() passes, every binding from the payload (GDAL's own osgeo and osgeo_utils too, and
+#     osgeo_utils.gdal_calc imports), one libgdal mapped (rasterio's and osgeo's), no foreign GDAL library mapped
 set -uo pipefail
 ENV="$1"; VERSION="$2"; OTHER=$((11 - ENV)); ARCH="$(uname -m)"
 PY=/opt/python/cp312-cp312/bin/python PY311=/opt/python/cp311-cp311/bin/python
@@ -35,10 +36,10 @@ else
     bad "1 the wheel does not install offline from the wheelhouse"; echo "ENV_WHEEL_VERIFIED env=$ENV arch=$ARCH failures=$FAILS"; exit 1
 fi
 
-out="$("$V/bin/python" -c 'import sys, rasterio, shapely, pyproj, pyogrio, netCDF4, _gbx_native_path as p
+out="$("$V/bin/python" -c 'import sys, rasterio, shapely, pyproj, pyogrio, netCDF4, osgeo.gdal, _gbx_native_path as p
 assert p.ACTIVE, "the .pth did not activate"
 assert "databricks.labs.gbx" not in sys.modules
-for m in (rasterio, shapely, pyproj, pyogrio, netCDF4):
+for m in (rasterio, shapely, pyproj, pyogrio, netCDF4, osgeo.gdal):
     assert "/databricks/labs/gbx/_vendor/" in m.__file__, m.__file__
 site = next(i for i, x in enumerate(sys.path) if x.endswith("site-packages"))
 vend = [i for i, x in enumerate(sys.path) if "/databricks/labs/gbx/_vendor/" in x]
@@ -94,11 +95,13 @@ import databricks.labs.gbx  # noqa: F401
 imp = round(time.perf_counter() - t, 3)
 from databricks.labs.gbx._native import _selfcheck as s
 r = {"import_s": imp, "stack": s.stack(), "light": s.light(), "payload_mb": s.payload_size_mb(), "closure_mb": s.installed_closure_mb()}
-r["ok"] = r["light"]["ok"] and all(r["stack"]["from_payload"].values()) and r["stack"]["foreign_libs"] == []
+st = r["stack"]
+r["ok"] = (r["light"]["ok"] and all(st["from_payload"].values()) and st["foreign_libs"] == []
+           and len(st["libgdal"]) == 1 and st["osgeo_gdal"] == st["rasterio_gdal"])
 print("P8_RESULT " + json.dumps(r))
 PY
 )"
-echo "$out" | grep -q '^P8_RESULT {"import_s".*"ok": true}$' && ok "7 P8: _selfcheck.light() ok, 5/5 bindings from the payload, no foreign GDAL library" \
+echo "$out" | grep -q '^P8_RESULT {"import_s".*"ok": true}$' && ok "7 P8: _selfcheck.light() ok, 5/5 bindings + osgeo + osgeo_utils (gdal_calc) from the payload, one libgdal, no foreign GDAL library" \
     || bad "7 P8"
 echo "$out" | grep '^P8_RESULT' || echo "$out" | tail -5
 

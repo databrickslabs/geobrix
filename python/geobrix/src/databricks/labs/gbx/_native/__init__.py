@@ -9,8 +9,9 @@ Layout under the payload root (``databricks/labs/gbx/`` in an installed env whee
     _native/<arch>/MANIFEST.json  the build record: versions, the original -> hashed SONAME map
     _native/share/{gdal,proj} GDAL and PROJ data (identical for both architectures)
     _native/licenses/         the licence of every native library and vendored binding
-    _vendor/<arch>/           rasterio, pyogrio, pyproj, shapely, netCDF4 built against _native
-    _vendor/common/           rio-tiler, morecantile, mapbox-vector-tile (pure Python)
+    _vendor/<arch>/           rasterio, pyogrio, pyproj, shapely, netCDF4 built against _native,
+                              and GDAL's own osgeo from the same build
+    _vendor/common/           rio-tiler, morecantile, mapbox-vector-tile, osgeo_utils (pure Python)
     _jar/                     the GeoBrix JAR
 
 ``<arch>`` is ``x86_64`` or ``aarch64`` (``platform.machine()``). The bindings are served under

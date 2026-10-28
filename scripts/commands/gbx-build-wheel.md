@@ -1,6 +1,6 @@
 # gbx:build:wheel
 
-Builds an env wheel, `geobrix-<version>+env5-py3-none-any.whl` (DBR 17.3, DBR 18, Serverless environment 5, Lakeflow CURRENT) or `geobrix-<version>+env6-py3-none-any.whl` (DBR 19, Serverless environment 6, SQL warehouses, UC functions), or checks a built one's install. Each carries both architectures' native payload: `gdal-native` (GDAL, PROJ, GEOS, HDF5, netCDF and the libraries they need, the JNI) and rasterio, pyogrio, pyproj, shapely and netCDF4 built against it, plus the JAR, the tripwire extras, the runtime guard and the startup activation. The env wheels require CPython 3.12 (`Requires-Python: >=3.12,<3.13`: the bindings are cp312 builds). The work is `scripts/native/build_env_wheel.py`, run inside `uv run --no-project --with-requirements python/geobrix/requirements-build.txt` (the hashed build requirements). The committed `python/geobrix/pyproject.toml` is not used: the env wheels have their own, `python/geobrix/envs/pyproject.env.toml` (ruling NP-3).
+Builds an env wheel, `geobrix-<version>+env5-py3-none-any.whl` (DBR 17.3, DBR 18, Serverless environment 5, Lakeflow CURRENT) or `geobrix-<version>+env6-py3-none-any.whl` (DBR 19, Serverless environment 6, SQL warehouses, UC functions), or checks a built one's install. Each carries both architectures' native payload: `gdal-native` (GDAL, PROJ, GEOS, HDF5, netCDF and the libraries they need, the JNI), GDAL's own Python bindings from the same build (`osgeo`, `osgeo_utils`), and rasterio, pyogrio, pyproj, shapely and netCDF4 built against it, plus the JAR, the tripwire extras, the runtime guard and the startup activation. The env wheels require CPython 3.12 (`Requires-Python: >=3.12,<3.13`: the bindings are cp312 builds). The work is `scripts/native/build_env_wheel.py`, run inside `uv run --no-project --with-requirements python/geobrix/requirements-build.txt` (the hashed build requirements). The committed `python/geobrix/pyproject.toml` is not used: the env wheels have their own, `python/geobrix/envs/pyproject.env.toml` (ruling NP-3).
 
 ## Usage
 
@@ -25,7 +25,7 @@ An option that needs a value given without one prints `<option> needs a value` a
 
 | Path | What |
 |---|---|
-| `build/native/out/<arch>/stage-native/gdal-native/` | `gbx:build:native --target stage-native`, both architectures: `lib/`, `share/`, `licenses/`, `MANIFEST.json` |
+| `build/native/out/<arch>/stage-native/gdal-native/` | `gbx:build:native --target stage-native`, both architectures: `lib/`, `share/`, `licenses/`, `python/` (`osgeo`, `osgeo_utils`), `MANIFEST.json` |
 | `build/native/out/<arch>/bindings/` | `gbx:build:native --target bindings`: `vendor/` (the five bindings, no dist-info), `wheels/` (their metadata and licences), `build.txt` (which toolchain image built them) |
 | `python/geobrix/envs/env<N>/core.txt` | the wheel's default dependencies: the runtime's preinstalled ranges, the light tier, and what the vendored packages need at run time |
 | `python/geobrix/envs/env<N>/base.txt` | what the runtimes preinstall (exact versions) of the packages core.txt bounds: checked against core.txt and the vendored packages' requirements, and the constraints of the `--verify` install |
@@ -41,9 +41,9 @@ Every line pip, uv and the builder print goes through `scripts/native/redact.py`
 | `databricks/labs/gbx/_native/<arch>/lib/` | `gdal-native/lib/` without `pkgconfig/` and `cmake/`: one file per hashed SONAME, and `libgdalalljni.so` |
 | `databricks/labs/gbx/_native/<arch>/MANIFEST.json` | the native build record (versions, the original -> hashed SONAME map). Library names come from it, never from a fixed name |
 | `databricks/labs/gbx/_native/share/{gdal,proj}` | GDAL and PROJ data (the build fails if the architectures' differ) |
-| `databricks/labs/gbx/_native/licenses/` | every native library's licence and the five bindings' (from their wheels' dist-info) |
-| `databricks/labs/gbx/_vendor/<arch>/` | rasterio, pyogrio, pyproj, shapely, netCDF4 |
-| `databricks/labs/gbx/_vendor/common/`, `_vendor/licenses/` | the vendor-pure.txt packages without their dist-info; their licences |
+| `databricks/labs/gbx/_native/licenses/` | every native library's licence, the five bindings' (from their wheels' dist-info), and `osgeo/` and `osgeo_utils/` (GDAL's licence) |
+| `databricks/labs/gbx/_vendor/<arch>/` | rasterio, pyogrio, pyproj, shapely, netCDF4, and `osgeo` (gdal-native's SWIG modules, their RUNPATH set to `_native/<arch>/lib` by `set-rpath.py` in the architecture's toolchain image) |
+| `databricks/labs/gbx/_vendor/common/`, `_vendor/licenses/` | the vendor-pure.txt packages without their dist-info, and `osgeo_utils` (identical for both architectures, or the build fails; without `gdal_merge.py`, which is LGPL-licensed and unused); their licences |
 | `databricks/labs/gbx/_jar/geobrix-<version>-jar-with-dependencies.jar` | the JAR |
 | `databricks/labs/gbx/_build_info.py` | `ENV`, `VERSION`, the GDAL/PROJ/GEOS versions, the native revision, the git sha, whether the tree was dirty, `SOURCE_DATE_EPOCH` |
 | `geobrix-native.pth`, `_gbx_native_path.py` (site-packages root) | the startup activation |
@@ -68,11 +68,11 @@ Each step prints `== <n> ...`; a failure prints `BUILD FAILED: <what>`, a missin
 
 1. A scratch tree in `build/env-wheel/env<N>/tree/`: the package source, `envs/pyproject.env.toml` with one `optional-dependencies.<name>` line per extra and per tripwire name, `env/`, and `__version__` stamped `<version>+env<N>` (exactly one replacement). The template's `name`, `license` and `authors` must equal the committed pyproject's, and its `requires-python` must admit only Pythons the committed range admits.
 2. `_build_info.py`; the two architectures' `MANIFEST.json` must agree on GDAL, PROJ, GEOS and the revision.
-3. The payload. `lib/` must hold exactly the libraries `MANIFEST.json` names; no symlinks anywhere; `share/` and the licences must be identical for both architectures; every hashed library name a vendored binding records must be in that architecture's `lib/` (bindings built against another `gdal-native` fail here).
+3. The payload. `lib/` must hold exactly the libraries `MANIFEST.json` names; no symlinks anywhere; `share/` and the licences must be identical for both architectures; every hashed library name a vendored binding records must be in that architecture's `lib/` (bindings built against another `gdal-native` fail here); no `osgeo` or `osgeo_utils` file may name a GPL-family licence.
 4. The vendored pure-Python wheels (sha256 against `vendor-pure.txt`, `py3-none-any` only). Every `Requires-Dist` of every vendored package (the five bindings' too) must be another vendored package at a version it accepts, or a `core.txt` (or preinstalled `click`) package whose base version (`base.txt`) or `core.txt` floor it accepts and whose `core.txt` cap is no higher than its own. Every `base.txt` version must satisfy `core.txt`.
 5. `python -m build --wheel --no-isolation` (log: `build/env-wheel/env<N>/build.log`).
 6. `wheel unpack`, `geobrix-native.pth` (`import _gbx_native_path`) added, `wheel pack`.
-7. The wheel against the env files (version, `Requires-Python`, `Requires-Dist`, extras, tripwires, no same-environment old name), both architectures' libraries and vendored rasterio, the JAR, the `.pth`, `_build_info.py`, `_native/_rules.py`, `proj.db`, no `pkgconfig`/`cmake`, no `__init__.py` inside the payload, no library name matching the licence guard of `scripts/native/verify-native.sh`, no host in `METADATA` other than the project's URLs, every member stamped `SOURCE_DATE_EPOCH`, and the size (budget 100 MB; the wheels measured 80 MB). The payload is extracted to `build/env-wheel/env<N>/payload/`.
+7. The wheel against the env files (version, `Requires-Python`, `Requires-Dist`, extras, tripwires, no same-environment old name), both architectures' libraries and vendored rasterio and `osgeo`, `osgeo_utils.gdal_calc`, the `osgeo` and `osgeo_utils` licences, no `gdal_merge.py`, the JAR, the `.pth`, `_build_info.py`, `_native/_rules.py`, `proj.db`, no `pkgconfig`/`cmake`, no `__init__.py` inside the payload, no library name matching the licence guard of `scripts/native/verify-native.sh`, no host in `METADATA` other than the project's URLs, every member stamped `SOURCE_DATE_EPOCH`, and the size (budget 100 MB; the wheels measured 80 MB). The payload is extracted to `build/env-wheel/env<N>/payload/`.
 8. Per architecture, in the toolchain image that built the bindings (from `bindings/build.txt`), `--network none`: `auditwheel show` on a throwaway `cp312-cp312-linux_<arch>` wheel of `_native/<arch>` + `_vendor/<arch>` reports `manylinux_2_28_<arch>` and no external library.
 
 Only then is the wheel moved to `dist/env<N>/`, which keeps no other wheel. The last line is `WHEEL_BUILT env=<N> wheel=<path> mb=<size> sha256=<sum> source_date_epoch=<t> git_dirty=<bool> payload=<dir>`.
@@ -82,12 +82,12 @@ Only then is the wheel moved to `dist/env<N>/`, which keeps no other wheel. The 
 The core.txt wheelhouse for that architecture (with `base.txt` as constraints) is fetched on the host into `build/env-wheel/wheelhouse/env<N>/<arch>/`, kept while core.txt and base.txt are unchanged. Then, in the architecture's toolchain image (AlmaLinux 8, the manylinux_2_28 floor), `--network none`, `scripts/native/check-env-wheel.sh` prints `ok: <check>` or `CHECK FAILED: <what>` for:
 
 1. a fresh CPython 3.12 venv installs the wheel offline, and the runtime's base versions do not move;
-2. `import rasterio, shapely, pyproj, pyogrio, netCDF4` with no geobrix import serves the payload's builds (the `.pth`), placed just before site-packages;
+2. `import rasterio, shapely, pyproj, pyogrio, netCDF4, osgeo.gdal` with no geobrix import serves the payload's builds (the `.pth`), placed just before site-packages;
 3. with `GBX_NATIVE_PTH=0`, `import databricks.labs.gbx` first activates the payload (`activated_by == "import"`);
 4. a user `SSL_CERT_FILE` survives `import rasterio` and `pyogrio` for GDAL and PROJ; without one, the system store;
 5. the tripwire: two of the other environment's old extra names fail with `ResolutionImpossible` naming the other wheel;
 6. CPython 3.11: pip refuses the wheel, and a forced install (`--ignore-requires-python`) leaves the payload inactive;
-7. probe P8: `_selfcheck.light()` passes, all five bindings come from the payload, and no GDAL-stack library from outside it is mapped (the line `P8_RESULT {...}` has the numbers).
+7. probe P8: `_selfcheck.light()` passes, all five bindings and `osgeo` come from the payload, `osgeo_utils.gdal_calc` imports from it, the process maps one libgdal (rasterio's and `osgeo`'s, same version), and no GDAL-stack library from outside the payload is mapped (the line `P8_RESULT {...}` has the numbers).
 
 The report is `build/env-wheel/env<N>/verify-<arch>.txt`; the last line is `ENV_WHEEL_VERIFIED env=<N> arch=<arch> ...`, and the command exits 1 on any failed check.
 

@@ -15,10 +15,10 @@ import gzip
 import io
 import os
 import shutil
-import subprocess
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from databricks.labs.gbx import _osgeo
 from databricks.labs.gbx.pyrx.core.local_temp import local_temp_root
 
 try:
@@ -259,7 +259,8 @@ def _create_synthetic_dem_geotiff(
     Fills with an elevation gradient (0–100 m) so the raster is human-viewable."""
     try:
         import numpy as np
-        from osgeo import gdal, osr
+
+        gdal, _ogr, osr, _array = _osgeo.bindings("the synthetic DEM")
     except ImportError:
         return False
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -287,25 +288,19 @@ def _scale_raster_to_viewable_byte(raster_path: Path) -> Optional[Path]:
     """Write a separate Byte 0-255 GeoTIFF for human viewing; keep the original .tif unchanged.
     Uses -scale with no src range so GDAL stretches actual min/max to 0-255 (viewable in QGIS etc.).
     """
-    if not shutil.which("gdal_translate") or not raster_path.exists():
+    if not raster_path.exists():
+        return None
+    try:
+        gdal = _osgeo.bindings("the viewable Byte copy").gdal
+    except ImportError:
         return None
     out_path = raster_path.parent / (raster_path.stem + "_byte.tif")
     try:
         # -scale with no args: compute src min/max from raster, map to 0-255 (avoids black clips)
-        rc = subprocess.run(
-            [
-                "gdal_translate",
-                "-q",
-                "-ot",
-                "Byte",
-                "-scale",
-                str(raster_path),
-                str(out_path),
-            ],
-            capture_output=True,
-            text=True,
-        )
-        if rc.returncode == 0 and out_path.exists():
+        gdal.Translate(
+            str(out_path), str(raster_path), outputType=gdal.GDT_Byte, scaleParams=[[]]
+        ).Close()
+        if out_path.exists():
             return out_path
     except Exception:
         pass
@@ -335,13 +330,18 @@ def srtm_hgt_to_geotiff(
     Returns:
         True if tif_path was written successfully.
     """
-    import subprocess
-
+    try:
+        gdal = _osgeo.bindings("srtm_hgt_to_geotiff").gdal
+    except ImportError:
+        return False
     tif_path.parent.mkdir(parents=True, exist_ok=True)
-    # Try gdal_translate .hgt -> .tif (requires GDAL built with SRTMHGT)
-    cmd = ["gdal_translate", "-q", "-of", "GTiff", str(hgt_path), str(tif_path)]
-    rc = subprocess.run(cmd, capture_output=True, text=True)
-    if rc.returncode == 0 and tif_path.exists():
+    # .hgt -> .tif (requires GDAL built with SRTMHGT)
+    try:
+        gdal.Translate(str(tif_path), str(hgt_path), format="GTiff").Close()
+        translated = True
+    except RuntimeError:
+        translated = False
+    if translated and tif_path.exists():
         if not quiet:
             size_mb = tif_path.stat().st_size / (1024 * 1024)
             print(f"✅ {description}: {size_mb:.1f} MB (GeoTIFF)")

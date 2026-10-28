@@ -96,6 +96,8 @@ def stack():
         "gdal_array": osgeo["gdal_array"],
         # osgeo is rasterio's GDAL: the same version, and each opens a /vsimem file the other wrote
         "shared_libgdal": osgeo["shared"],
+        # why that /vsimem round trip failed (None when it passed or the versions differ)
+        "vsimem_error": osgeo["vsimem_error"],
         "osgeo_error": osgeo_error,
         "pyogrio_gdal": pyogrio.__gdal_version_string__,
         "pyproj_proj": pyproj.proj_version_str,

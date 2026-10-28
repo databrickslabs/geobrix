@@ -71,11 +71,7 @@ def _unavailable(fn: str, exc: ImportError) -> OsgeoUnavailable:
 
 
 def _not_shared(fn: str, r: dict) -> OsgeoUnavailable:
-    why = (
-        "; a /vsimem file one writes does not open in the other"
-        if r["osgeo_gdal"] == r["rasterio_gdal"]
-        else ""
-    )
+    why = f"; {r['vsimem_error']}" if r.get("vsimem_error") else ""
     maps = (
         ""
         if r["libgdal"] is None
@@ -100,52 +96,67 @@ def mapped_libgdal() -> Optional[List[str]]:
     return sorted(p for p in paths if LIBGDAL.search(p))
 
 
-def vsimem_shared(gdal) -> bool:
-    """True when osgeo's ``gdal`` and rasterio run one GDAL: a 1x1 GeoTIFF rasterio writes to
-    ``/vsimem`` opens in osgeo with its pixel, and one osgeo writes opens in rasterio. Each
-    libgdal has its own ``/vsimem``, so a second GDAL sees neither file."""
+def vsimem_check(gdal) -> Optional[str]:
+    """None when osgeo's ``gdal`` and rasterio run one GDAL, else why not. A georeferenced 1x1
+    GeoTIFF rasterio writes to ``/vsimem`` must open in osgeo with its pixel, and one osgeo writes
+    must open in rasterio: each libgdal has its own ``/vsimem``, so a second GDAL sees neither file.
+    The osgeo calls run with exceptions on (``gdal.ExceptionMgr``, which restores the caller's mode),
+    so the check prints no warning; a failure names the step and the exception."""
     import uuid
 
     import numpy as np
     import rasterio
     from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
 
     theirs = f"/vsimem/gbx-osgeo-check-{uuid.uuid4().hex}.tif"
-    gdal.PushErrorHandler("CPLQuietErrorHandler")
+    step, wrote = "rasterio writing a /vsimem GeoTIFF", False
     try:
-        with MemoryFile(ext=".tif") as mem:
-            with mem.open(
-                driver="GTiff", width=1, height=1, count=1, dtype="uint8"
-            ) as dst:
-                dst.write(np.full((1, 1, 1), 7, dtype="uint8"))
-            ds = gdal.Open(mem.name)
-            if ds is None or ds.GetRasterBand(1).ReadRaster() != b"\x07":
-                return False
-            ds = None
-        out = gdal.GetDriverByName("GTiff").Create(theirs, 1, 1, 1, gdal.GDT_Byte)
-        out.GetRasterBand(1).WriteRaster(0, 0, 1, 1, b"\x09")
-        out = None  # closes (and flushes) the dataset
-        with rasterio.open(theirs) as src:
-            return int(src.read(1)[0, 0]) == 9
-    except (
-        Exception
-    ):  # noqa: BLE001 - any failure to see the other's file: not one GDAL
-        return False
-    finally:
-        try:
-            gdal.Unlink(theirs)
-        except (
-            Exception
-        ):  # noqa: BLE001 - nothing was written (osgeo raises with exceptions on)
-            pass
-        gdal.PopErrorHandler()
+        with gdal.ExceptionMgr(useExceptions=True):
+            gdal.PushErrorHandler("CPLQuietErrorHandler")
+            try:
+                with MemoryFile(ext=".tif") as mem:
+                    with mem.open(
+                        driver="GTiff",
+                        width=1,
+                        height=1,
+                        count=1,
+                        dtype="uint8",
+                        transform=from_origin(0, 1, 1, 1),
+                    ) as dst:
+                        dst.write(np.full((1, 1, 1), 7, dtype="uint8"))
+                    step = "osgeo opening rasterio's /vsimem file"
+                    ds = gdal.Open(mem.name)
+                    if ds.GetRasterBand(1).ReadRaster() != b"\x07":
+                        return "osgeo read another pixel from rasterio's /vsimem file"
+                    ds = None
+                step = "osgeo writing a /vsimem GeoTIFF"
+                drv = gdal.GetDriverByName("GTiff")
+                out = drv.Create(theirs, 1, 1, 1, gdal.GDT_Byte)
+                wrote = True
+                out.SetGeoTransform((0, 1, 0, 1, 0, -1))
+                out.GetRasterBand(1).WriteRaster(0, 0, 1, 1, b"\x09")
+                out = None  # closes (and flushes) the dataset
+                step = "rasterio opening osgeo's /vsimem file"
+                with rasterio.open(theirs) as src:
+                    if int(src.read(1)[0, 0]) != 9:
+                        return "rasterio read another pixel from osgeo's /vsimem file"
+                return None
+            finally:
+                if wrote:
+                    gdal.Unlink(theirs)
+                gdal.PopErrorHandler()
+    # any failure to see the other's file means not one GDAL; the message keeps the reason
+    except Exception as exc:  # noqa: BLE001
+        return f"{step} failed ({type(exc).__name__}: {exc})"
 
 
 def libgdal_report() -> dict:
     """osgeo's GDAL against rasterio's: both versions and module files, ``gdal_array`` (it
     imports), ``libgdal`` (the files mapped, a diagnostic; None off Linux), ``shared`` (one GDAL:
-    the same version and the ``/vsimem`` round trip of ``vsimem_shared``) and ``error`` (why
-    osgeo does not import, else None)."""
+    the same version and the ``/vsimem`` round trip of ``vsimem_check``), ``vsimem_error`` (why
+    that round trip failed, else None) and ``error`` (why osgeo does not import, else None).
+    """
     import rasterio
 
     r = {
@@ -156,6 +167,7 @@ def libgdal_report() -> dict:
         "gdal_array": False,
         "libgdal": None,
         "shared": False,
+        "vsimem_error": None,
         "error": None,
     }
     try:
@@ -170,11 +182,13 @@ def libgdal_report() -> dict:
     else:
         r["gdal_array"] = True
     version = gdal.VersionInfo("RELEASE_NAME")
+    vsimem_error = vsimem_check(gdal) if version == r["rasterio_gdal"] else None
     r.update(
         osgeo_gdal=version,
         osgeo=gdal.__file__,
         libgdal=mapped_libgdal(),
-        shared=version == r["rasterio_gdal"] and vsimem_shared(gdal),
+        shared=version == r["rasterio_gdal"] and vsimem_error is None,
+        vsimem_error=vsimem_error,
     )
     return r
 

@@ -93,16 +93,20 @@ def fake_osgeo(monkeypatch):
 ONE, TWO = ["/x/libgdal.so.39"], ["/x/libgdal.so.39", "/y/libgdal-0a1b2c3d.so.38"]
 
 
+NOT_SEEN = "osgeo opening rasterio's /vsimem file failed (RuntimeError: No such file)"
+
+
 @pytest.mark.parametrize(
     "version, mapped, round_trip, same_libgdal, refused",
     [
-        ("rasterio's", ONE, True, True, None),
+        ("rasterio's", ONE, None, True, None),
         # a GDAL-bundling library (fiona) loaded first maps a second libgdal; still one GDAL
-        ("rasterio's", TWO, True, True, None),
-        ("9.9.9", ONE, True, True, "osgeo GDAL 9.9.9 from /fake/osgeo/gdal.py"),
-        # the same version, two libgdal (or two dylibs off Linux): /vsimem is not shared
-        ("rasterio's", None, False, True, "a /vsimem file one writes does not open"),
-        ("9.9.9", TWO, False, False, None),  # a by-path caller may use another GDAL
+        ("rasterio's", TWO, None, True, None),
+        ("9.9.9", ONE, None, True, "osgeo GDAL 9.9.9 from /fake/osgeo/gdal.py"),
+        # the same version, two libgdal (or two dylibs off Linux): /vsimem is not shared, and
+        # the message says which step failed
+        ("rasterio's", None, NOT_SEEN, True, NOT_SEEN),
+        ("9.9.9", TWO, NOT_SEEN, False, None),  # a by-path caller may use another GDAL
     ],
 )
 def test_osgeo_on_another_gdal_is_refused(
@@ -111,7 +115,7 @@ def test_osgeo_on_another_gdal_is_refused(
     rasterio = pytest.importorskip("rasterio")
     fake_osgeo(rasterio.__gdal_version__ if version == "rasterio's" else version)
     monkeypatch.setattr(_osgeo, "mapped_libgdal", lambda: mapped)
-    monkeypatch.setattr(_osgeo, "vsimem_shared", lambda gdal: round_trip)
+    monkeypatch.setattr(_osgeo, "vsimem_check", lambda gdal: round_trip)
     if refused is None:
         assert _osgeo.bindings("rst_demo", same_libgdal=same_libgdal).gdal_array is None
         return
@@ -165,8 +169,19 @@ print(json.dumps({
 """
 
 
-@pytest.mark.parametrize("foreign_first", [False, True], ids=["alone", "foreign-first"])
-def test_the_payload_osgeo_is_the_pinned_gdal_and_rasterio_libgdal(foreign_first):
+# the first osgeo use runs the /vsimem check: it must print no warning (rasterio's
+# NotGeoreferencedWarning is a UserWarning; osgeo's exception-mode notice a FutureWarning)
+STRICT = ["-W", "error::UserWarning", "-W", "error::FutureWarning"]
+
+
+@pytest.mark.parametrize(
+    "foreign_first, warn_args",
+    [(False, []), (True, []), (False, STRICT)],
+    ids=["alone", "foreign-first", "warnings-are-errors"],
+)
+def test_the_payload_osgeo_is_the_pinned_gdal_and_rasterio_libgdal(
+    foreign_first, warn_args
+):
     if not sys.platform.startswith("linux"):
         pytest.skip(
             "the env wheels' payload loads on Linux only (run in the container)"
@@ -187,7 +202,10 @@ def test_the_payload_osgeo_is_the_pinned_gdal_and_rasterio_libgdal(foreign_first
             pytest.skip("no system libgdal to load as the foreign GDAL")
         env["FOREIGN_LIBGDAL"] = foreign
     res = subprocess.run(
-        [sys.executable, "-c", _PROBE], env=env, capture_output=True, text=True
+        [sys.executable, *warn_args, "-c", _PROBE],
+        env=env,
+        capture_output=True,
+        text=True,
     )
     assert res.returncode == 0, res.stderr[-2000:]
     got = json.loads(res.stdout.splitlines()[-1])

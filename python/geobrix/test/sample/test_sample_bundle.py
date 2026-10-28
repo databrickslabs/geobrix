@@ -503,6 +503,32 @@ def test_nyc_filegdb_step_keeps_a_zip_whose_size_cannot_be_read(tmp_path, monkey
     assert dest.stat().st_mtime_ns == before
 
 
+@pytest.mark.parametrize("bundle", ["essential", "complete"])
+def test_a_present_file_whose_size_cannot_be_read_is_never_downloaded_again(
+    tmp_path, monkeypatch, bundle
+):
+    """A FUSE mount can report a file present but not its size: every step of the bundles skips what
+    is present, whatever it can say of its size."""
+
+    def offline(*args, **kwargs):
+        raise AssertionError("a present file was downloaded again")
+
+    monkeypatch.setattr(_bundle_mod, "_path_exists_for_skip", lambda p: (True, None))
+    monkeypatch.setattr(_bundle_mod, "download_to_path", offline)
+    monkeypatch.setattr(_bundle_mod, "download_srtm_to_path", offline)
+    monkeypatch.setattr(_bundle_mod, "_stage_nyc_filegdb", lambda *a, **k: None)
+    run = run_essential_bundle if bundle == "essential" else run_complete_bundle
+    base = tmp_path / "geobrix-examples"
+    (base / "nyc" / "hrrr-weather").mkdir(
+        parents=True
+    )  # the one step that lists a folder
+    (base / "nyc" / "hrrr-weather" / "hrrr_nyc_20260101_12z.grib2").write_bytes(b"x")
+
+    result = run(str(base), temp_dir=str(tmp_path / "tmp"))
+
+    assert result["errors"] == []
+
+
 @pytest.mark.parametrize(
     "error,reported",
     [

@@ -74,7 +74,9 @@ def test_oracle_rows_fit_signature(fn):
     assert rows, "every manifest function needs oracle rows"
     assert len({c.cid for c in rows}) == len(rows), "oracle row ids must be unique"
     for c in rows:
-        assert fn.min_args <= len(c.args) <= fn.max_args, c.cid
+        arg_rows = c.args if c.kind == "exact_rows" else (c.args,)
+        assert all(fn.min_args <= len(r) <= fn.max_args for r in arg_rows), c.cid
+        assert c.kind != "exact_rows" or len(c.expect) == len(c.args), c.cid
         assert c.surfaces and set(c.surfaces) <= {"session", "uc"}, c.cid
         if (
             c.kind == "raises"
@@ -201,16 +203,38 @@ def test_level_selection_contract(fn, case):
         assert choice.level == "L3"
 
 
-@pytest.mark.parametrize("fn", FNS, ids=lambda f: f.sql_name)
+@pytest.mark.parametrize(
+    "fn", [f for f in FNS if {"L1", "L2"} & set(f.levels)], ids=lambda f: f.sql_name
+)
 def test_override_is_honoured(fn):
-    variant = "c0" if "variants" in fn.levels["L3"] else "-"
-    assert levels.select(fn, _caps(), override=("L3", variant)).level == "L3"
+    forced = "L1" if "L1" in fn.levels else "L2"
+    assert levels.select(fn, _caps()).level != forced  # no JAR: the default is light
+    assert levels.select(fn, _caps(), override=(forced, "-")).level == forced
 
 
-def test_connect_session_never_touches_the_jvm(monkeypatch, capsys):
+def test_pending_heavy_rows_name_real_oracle_rows():
+    from databricks.labs.gbx.bench import oracles
+
+    assert set(oracles.HEAVY_PENDING) <= {c.cid for c in oracles.MVP_S}
+
+
+@pytest.mark.parametrize(
+    "runtime,reason",
+    [
+        ("client.6.0", "Spark Connect session (Serverless)"),
+        (None, "Spark Connect session (standard access mode)"),
+    ],
+    ids=["serverless", "standard"],
+)
+def test_connect_session_never_touches_the_jvm(monkeypatch, capsys, runtime, reason):
     from databricks.labs.gbx import manager
 
-    monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "client.6.0")
+    if (
+        runtime is None
+    ):  # standard access mode: the JAR is probed through Connect-safe calls
+        monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+    else:
+        monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", runtime)
     stub = ConnectStub()
     out = manager.register(stub)
     assert {c.level for c in out.values()} == {"L3"}
@@ -220,7 +244,34 @@ def test_connect_session_never_touches_the_jvm(monkeypatch, capsys):
     assert len(printed) == len(
         set(printed)
     )  # each reason line once per session, across all names
-    assert any("Spark Connect session (Serverless); using light" in p for p in printed)
+    assert any(f"{reason}; using light" in p for p in printed)
+    assert not any(
+        "Error" in p for p in printed
+    )  # a reason is plain words, never an exception class
+    manager.register(stub)  # a second call in the same session says nothing new
+    assert capsys.readouterr().out == ""
+
+
+def test_one_unavailable_function_does_not_stop_the_rest(monkeypatch, capsys):
+    import importlib.util
+
+    from databricks.labs.gbx import manager
+
+    real = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda n, *a, **k: None if n == "rasterio" else real(n, *a, **k),
+    )
+    monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "client.6.0")
+    stub = ConnectStub()
+    out = manager.register(stub)
+    assert "gbx_rst_transformcrs" not in out and "gbx_bng_eastnorthasbng" in out
+    assert "gbx_st_makevalid" in stub.registered  # registered after the skipped one
+    skipped = [
+        p for p in capsys.readouterr().out.splitlines() if "gbx_rst_transformcrs" in p
+    ]
+    assert len(skipped) == 1 and "rasterio" in skipped[0]
 
 
 def test_bad_target():

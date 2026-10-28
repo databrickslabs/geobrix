@@ -28,7 +28,8 @@ def register(
 
     ``target='uc'`` verifies the Unity Catalog functions instead of registering session ones.
     ``only`` limits the names (SQL names or short names, e.g. ``bng_eastnorthasbng``).
-    Returns the level chosen for each name. ``_levels`` forces a level and is for tests.
+    Returns the level chosen for each name. A name no level can serve here is skipped (one line
+    says why) and the others still register. ``_levels`` forces a level and is for tests.
     """
     if target not in ("session", "uc"):
         raise ValueError(f"target must be 'session' or 'uc' (got {target!r})")
@@ -57,7 +58,13 @@ def register(
     out: Dict[str, Choice] = {}
     for n in names:
         fn = man.functions[n]
-        choice = levels.select(fn, caps, overrides.get(n))
+        try:
+            choice = levels.select(fn, caps, overrides.get(n))
+        except levels.NoLevelAvailable as exc:
+            # The rest still register; the skipped name is reported once.
+            why = "; ".join(r.removeprefix("geobrix: ") for r in exc.reasons)
+            messages.say(spark, f"geobrix: {n} not registered ({why})")
+            continue
         out[n] = _install(spark, fn, choice, caps, forced=n in overrides)
     return out
 

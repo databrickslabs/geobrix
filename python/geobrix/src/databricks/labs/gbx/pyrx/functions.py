@@ -2832,65 +2832,64 @@ def _transformcrs_bytes(tile, crs_value, file_ref=None):
         return warp.reproject_to_crs(ds, str(crs_value))
 
 
-@f.udf(V2_TILE_SCHEMA)
-def _transformcrs_udf(tile, crs_value):
-    if _tile_is_empty(tile) or crs_value is None:
-        return None
-    new_bytes = _transformcrs_bytes(tile, crs_value)
-    return VirtualTile(
-        cellid=_tile_cellid(tile), raster=new_bytes, metadata={}
-    ).to_row()
+def _transformcrs_tile(tile, crs_value, file_ref=None, grid_dirs=None):
+    """One reprojected tile row, or an error tile when the reprojection fails.
 
+    An unreadable tile or an unparseable CRS is data, not a task failure: every route
+    (SQL and Column API) returns the error tile the JVM tier returns
+    (RST_ErrorHandler.safeEval), with the reason under metadata['last_error'].
+    """
+    try:
+        if grid_dirs is not None:
+            from databricks.labs.gbx.pyrx import _env
 
-@f.udf(V2_TILE_SCHEMA)
-def _uf_transformcrs(tile, file_ref, crs_value):
-    if _tile_is_empty(tile) or crs_value is None:
-        return None
-    new_bytes = _transformcrs_bytes(tile, crs_value, file_ref=file_ref)
-    if new_bytes is None:
-        return None
-    return VirtualTile(
-        cellid=_tile_cellid(tile), raster=new_bytes, metadata={}
-    ).to_row()
-
-
-def _build_uf_transformcrs(grid_dirs):
-    """FILE-aware transformcrs UDF factory: captures grid_dirs at build time → pickled."""
-    from databricks.labs.gbx.pyrx import _env
-
-    @f.udf(V2_TILE_SCHEMA)
-    def _udf(tile, file_ref, crs_value):
-        if _tile_is_empty(tile) or crs_value is None:
-            return None
-        _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
+            _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
         new_bytes = _transformcrs_bytes(tile, crs_value, file_ref=file_ref)
         if new_bytes is None:
             return None
         return VirtualTile(
             cellid=_tile_cellid(tile), raster=new_bytes, metadata={}
         ).to_row()
+    except Exception as e:  # noqa: BLE001
+        return _serde.build_error_tile(f"RST_TransformCrs: {e}", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _transformcrs_udf(tile, crs_value):
+    if _tile_is_empty(tile) or crs_value is None:
+        return None
+    return _transformcrs_tile(tile, crs_value)
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _uf_transformcrs(tile, file_ref, crs_value):
+    if _tile_is_empty(tile) or crs_value is None:
+        return None
+    return _transformcrs_tile(tile, crs_value, file_ref=file_ref)
+
+
+def _build_uf_transformcrs(grid_dirs):
+    """FILE-aware transformcrs UDF factory: captures grid_dirs at build time → pickled."""
+
+    @f.udf(V2_TILE_SCHEMA)
+    def _udf(tile, file_ref, crs_value):
+        if _tile_is_empty(tile) or crs_value is None:
+            return None
+        return _transformcrs_tile(
+            tile, crs_value, file_ref=file_ref, grid_dirs=grid_dirs
+        )
 
     return _udf
 
 
 def _build_transformcrs_sql_udf(grid_dirs):
     """SQL-registered (no file_ref) transformcrs UDF factory: captures grid_dirs."""
-    from databricks.labs.gbx.pyrx import _env
 
     @f.udf(V2_TILE_SCHEMA)
     def _udf(tile, crs_value):
         if _tile_is_empty(tile) or crs_value is None:
             return None
-        try:
-            _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
-            new_bytes = _transformcrs_bytes(tile, crs_value)
-            return VirtualTile(
-                cellid=_tile_cellid(tile), raster=new_bytes, metadata={}
-            ).to_row()
-        # An unreadable tile is data, not a task failure: the error-tile contract the
-        # JVM tier follows (RST_ErrorHandler.safeEval).
-        except Exception as e:  # noqa: BLE001
-            return _serde.build_error_tile(f"RST_TransformCrs: {e}", _tile_cellid(tile))
+        return _transformcrs_tile(tile, crs_value, grid_dirs=grid_dirs)
 
     return _udf
 

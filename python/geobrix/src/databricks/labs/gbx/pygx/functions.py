@@ -671,6 +671,9 @@ def _norm_res(res):
     """
     if isinstance(res, (np.integer,)):
         return int(res)
+    if isinstance(res, (float, np.floating)) and float(res).is_integer():
+        # A NULL in an INT column makes pandas hand the whole batch over as floats (3.0).
+        return int(res)
     return res
 
 

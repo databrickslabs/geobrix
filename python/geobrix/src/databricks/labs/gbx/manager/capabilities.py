@@ -76,7 +76,7 @@ def _identity(spark, connect: bool) -> Tuple[Optional[str], str]:
         return str(spark.sql("SELECT gbx__buildinfo() AS i").first()["i"]), ""
     except (
         Exception
-    ) as exc:  # noqa: BLE001 - absent class, refused registration, py4j JavaPackage
+    ):  # noqa: BLE001 - absent class, refused registration, py4j JavaPackage
         if not connect:
             try:
                 spark._jvm.java.lang.Class.forName(
@@ -88,7 +88,7 @@ def _identity(spark, connect: bool) -> Tuple[Optional[str], str]:
                 )
             except Exception:  # noqa: BLE001
                 pass
-        return None, f"no geobrix JAR on classpath ({type(exc).__name__})"
+        return None, "no geobrix JAR on classpath"
 
 
 def _gdal(spark, connect: bool) -> str:
@@ -98,8 +98,8 @@ def _gdal(spark, connect: bool) -> str:
         else:
             spark.udf.registerJavaFunction("gbx__gdalprobe", GDALPROBE_UDF, "string")
             r = str(spark.sql("SELECT gbx__gdalprobe() AS g").first()["g"])
-    except Exception as exc:  # noqa: BLE001
-        return f"GDAL natives not loadable ({type(exc).__name__})"
+    except Exception:  # noqa: BLE001
+        return "GDAL natives not loadable"
     return "" if r.startswith("ok:") else f"GDAL natives not loadable ({r[:120]})"
 
 

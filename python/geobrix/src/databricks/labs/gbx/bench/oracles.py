@@ -31,7 +31,8 @@ class Case:
     cid: str
     fn: str
     args: Tuple[Any, ...]
-    # exact | null | raises | uc_refused | error_tile | tile_props | geom_props
+    # exact | exact_rows | null | raises | uc_refused | error_tile | tile_props | geom_props
+    # exact_rows is one batch: `args` is a tuple of argument rows, `expect` one value per row.
     kind: str
     # exact: the value. raises: a substring the error message must contain (the offending
     # value), so a missing function cannot pass. tile_props: the target CRS, or (CRS, SRID).
@@ -41,6 +42,14 @@ class Case:
         4326  # the integer SRID UC GEOMETRY args are built with (never a CRS string)
     )
 
+
+# Rows the JVM tier is known to fail until its facade conforms to the light contract; the
+# JVM parity runs expect these to fail (strictly) and drop the entry when the row passes.
+HEAVY_PENDING = {
+    "bng_digit_res": "heavy refuses a digit-string BNG resolution",
+    "bng_digit_res_quad": "heavy refuses a digit-string BNG resolution",
+    "tcrs_corrupt": "heavy's error tile carries error_message, not last_error",
+}
 
 B, T, M = "gbx_bng_eastnorthasbng", "gbx_rst_transformcrs", "gbx_st_makevalid"
 SQUARE = "POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))"
@@ -56,6 +65,19 @@ MVP_S: Tuple[Case, ...] = (
     Case("bng_null_e", B, (None, 180000.0, 3), "null"),
     Case("bng_nan_e", B, (float("nan"), 180000.0, 3), "null"),
     Case("bng_null_res", B, (530000.0, 180000.0, None), "null"),
+    # A NULL in an INT column makes pandas hand the whole batch over as floats (3.0): the
+    # valid rows around the NULL must still answer, row by row.
+    Case(
+        "bng_mixed_null_res",
+        B,
+        (
+            (530000.0, 180000.0, 3),
+            (530000.0, 180000.0, None),
+            (325000.0, 673000.0, 3),
+        ),
+        "exact_rows",
+        ("TQ3080", None, "NT2573"),
+    ),
     Case("bng_bad_res", B, (530000.0, 180000.0, "3km"), "raises", "3km"),
     # A UC STRING parameter receives an INT literal as its digit string, so every surface
     # accepts the digit-string form of the integer resolution.
@@ -150,6 +172,15 @@ MVP_S: Tuple[Case, ...] = (
         "tcrs_corrupt",
         T,
         (Build("tile_corrupt"), "EPSG:3857"),
+        "error_tile",
+        None,
+        ("session",),
+    ),
+    # A target CRS that cannot be parsed is data too: an error tile, on the SQL and the Column API.
+    Case(
+        "tcrs_bad_crs",
+        T,
+        (Build("tile_4326"), "EPSG:not-a-crs"),
         "error_tile",
         None,
         ("session",),
@@ -371,6 +402,12 @@ def check(case: Case, out, args) -> Optional[str]:
             if out == case.expect
             else f"{case.cid}: got {out!r}, want {case.expect!r}"
         )
+    if case.kind == "exact_rows":
+        return (
+            None
+            if list(out) == list(case.expect)
+            else f"{case.cid}: got {list(out)!r}, want {list(case.expect)!r}"
+        )
     if case.kind == "null":
         return None if out is None else f"{case.cid}: got {out!r}, want NULL"
     if case.kind in ("raises", "uc_refused"):
@@ -430,29 +467,43 @@ def _ddl_type(value, param) -> str:
     return _SQL[param.session[0]]
 
 
+def _argument_rows(case: Case, tmpdir: str) -> List[List[Any]]:
+    raw = case.args if case.kind == "exact_rows" else (case.args,)
+    return [[resolve_arg(a, tmpdir) for a in row] for row in raw]
+
+
 def run_session(
     spark,
     cases: Sequence[Case],
     name_of: Callable[[str], str] = lambda f: f,
     tmpdir: Optional[str] = None,
     surface: str = "session",
+    column_of: Optional[Callable[[str], Callable]] = None,
 ) -> List[Tuple[Case, Optional[str]]]:
-    """Run each case through SQL (`name_of(fn)(cols...)`) and check it. One row per case."""
+    """Run each case through SQL (`name_of(fn)(cols...)`) and check it. One result per case.
+
+    With `column_of` (SQL name -> Column function) the case runs through the Python Column
+    API instead of SQL, so both APIs are held to the same rows.
+    """
     from databricks.labs.gbx import manifest
 
     if tmpdir is None:  # virtual-tile fixtures live here; removed when the run ends
         with tempfile.TemporaryDirectory(prefix="gbx-oracle-") as d:
-            return run_session(spark, cases, name_of, d, surface)
+            return run_session(spark, cases, name_of, d, surface, column_of)
     man = manifest.load()
     results = []
     for case in cases:
         if surface not in case.surfaces:
             continue
-        args = [resolve_arg(a, tmpdir) for a in case.args]
+        rows = _argument_rows(case, tmpdir)
+        args = rows[0]
         fn = man.functions[case.fn]
         params = fn.params
+        # A column is typed from its first non-NULL value; an all-NULL column from the manifest.
         schema = ", ".join(
-            f"c{i} {_ddl_type(v, params[i])}" for i, v in enumerate(args)
+            f"c{i} "
+            + _ddl_type(next((r[i] for r in rows if r[i] is not None), None), params[i])
+            for i in range(len(args))
         )
         # On the UC surface GEOMETRY params get an integer-SRID constructor, never a CRS string.
         cols = ", ".join(
@@ -467,11 +518,22 @@ def run_session(
         if surface == "uc" and fn.returns_uc == "GEOMETRY":
             call = f"st_asewkb({call})"
         try:
-            spark.createDataFrame([tuple(args)], schema).createOrReplaceTempView(
-                "_gbx_oracle"
+            df = spark.createDataFrame([tuple(r) for r in rows], schema)
+            if column_of is None:
+                df.createOrReplaceTempView("_gbx_oracle")
+                got = spark.sql(f"SELECT {call} AS out FROM _gbx_oracle").collect()
+            else:
+                from pyspark.sql import functions as F
+
+                fcols = [F.col(f"c{i}") for i in range(len(args))]
+                got = df.select(column_of(case.fn)(*fcols).alias("out")).collect()
+            outs = [r["out"] for r in got]
+            results.append(
+                (
+                    case,
+                    check(case, outs if case.kind == "exact_rows" else outs[0], args),
+                )
             )
-            out = spark.sql(f"SELECT {call} AS out FROM _gbx_oracle").first()["out"]
-            results.append((case, check(case, out, args)))
         except (
             Exception
         ) as exc:  # noqa: BLE001 - the case decides whether an error is expected

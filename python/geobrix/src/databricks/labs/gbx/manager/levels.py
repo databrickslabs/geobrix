@@ -10,9 +10,10 @@ import importlib.util
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
+from databricks.labs.gbx import manifest
 from databricks.labs.gbx.manager.capabilities import Capabilities
 
-LEVEL_TABLE_VERSION = "2026-10-27.mvp0"
+LEVEL_TABLE_VERSION = manifest.load().level_table_version  # one source: the manifest
 # A function with no measured row below tries every level it has, highest first.
 PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_bng_eastnorthasbng": ("L1", "L2", "L3"),
@@ -21,6 +22,14 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
 }
 L3_ORDER: Tuple[str, ...] = ("d", "c1", "c0")
 NAMES = {"L1": "heavy (Catalyst)", "L2": "heavy (Java UDF)", "L3": "light"}
+
+
+class NoLevelAvailable(RuntimeError):
+    """No level can serve the function here; `reasons` has one entry per level tried."""
+
+    def __init__(self, name: str, reasons: Tuple[str, ...]):
+        super().__init__(f"{name}: no level available ({'; '.join(reasons)})")
+        self.name, self.reasons = name, reasons
 
 
 @dataclass(frozen=True)
@@ -82,4 +91,4 @@ def select(
         if why is None:
             return Choice(level, "-", tuple(reasons))
         reasons.append(f"geobrix: {NAMES[level]} unavailable: {why}")
-    raise RuntimeError(f"{fn.sql_name}: no level available ({'; '.join(reasons)})")
+    raise NoLevelAvailable(fn.sql_name, tuple(reasons))

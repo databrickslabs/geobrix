@@ -97,7 +97,7 @@ def _notebook_json(
         "execution_count": None,
         "metadata": {},
         "outputs": [],
-        "source": [f"%pip install --quiet pystac-client planetary-computer geopandas"],
+        "source": [f"%pip install --quiet pystac-client planetary-computer geopandas pyogrio"],
     })
     # Restart Python so the new GeoBrix code is loaded (no SDK path in bundle).
     cells.append({

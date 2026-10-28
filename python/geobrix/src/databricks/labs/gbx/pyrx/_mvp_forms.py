@@ -11,6 +11,7 @@ from databricks.labs.gbx import _pyspark  # noqa: F401
 
 import hashlib
 from collections import OrderedDict
+from contextlib import contextmanager
 
 from pyspark.sql import functions as f
 from pyspark.sql.functions import udtf
@@ -18,6 +19,7 @@ from pyspark.sql.types import ArrayType, IntegerType
 
 from databricks.labs.gbx.pygx.functions import _BngTessellateExplode
 from databricks.labs.gbx.pyrx import _serde
+from databricks.labs.gbx.pyrx.core import budget
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core import tiling
 from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
@@ -77,14 +79,19 @@ def _task_attempt():
 
 
 class _OpenLru:
-    """Per-Python-worker LRU of opened datasets: the re-open amortized over the pieces of one tile.
+    """The dataset a tile opened, kept for the next call: the re-open amortized over the pieces of one tile.
 
-    An entry is (context, dataset, the bytes it was opened from, None for a virtual tile). A worker is
-    reused, so what a task opened must not outlive it: the first call of a new task closes everything the
-    last one left (a Python worker has no task-end hook, so a finished task's datasets stay open, at most
-    `cap` of them with their bytes, until the next task on this worker starts)."""
+    The pieces of one input row are cut one after the other, so ONE entry is all the shape can use; a second
+    never hits and costs a whole raster of memory. An entry is (context, dataset, the bytes it was opened from,
+    None for a virtual tile). It is dropped when the caller says the last piece is cut, when another raster
+    takes its place, and when a new task starts on this worker (a Python worker has no task-end hook, so
+    without those the last raster would stay resident on an idle worker).
 
-    def __init__(self, cap: int = 4):
+    A raster is admitted only if its bytes fit the decoded-memory budget of this runtime
+    (`budget.decoded_budget_bytes`); a larger one is opened for the call alone, so every piece pays the
+    open, and nothing stays resident."""
+
+    def __init__(self, cap: int = 1):
         self.cap, self.items, self.task = cap, OrderedDict(), None
 
     def close(self):
@@ -92,7 +99,14 @@ class _OpenLru:
             _, (ctx, _ds, _raw) = self.items.popitem(last=False)
             ctx.__exit__(None, None, None)
 
-    def get(self, tile):
+    def _drop(self, key):
+        entry = self.items.pop(key, None)
+        if entry is not None:
+            entry[0].__exit__(None, None, None)
+
+    @contextmanager
+    def opened(self, tile):
+        """Yield `(dataset, release)`; call `release()` once the last piece of this tile is cut."""
         task = _task_attempt()
         if task != self.task:
             self.close()
@@ -103,18 +117,34 @@ class _OpenLru:
             # the key of bytes is a sample: only the same bytes are the same raster
             if raw is None or hit[2] == raw:
                 self.items.move_to_end(key)
-                return hit[1]
-            del self.items[
+                released = []
+                try:
+                    yield hit[1], lambda: released.append(True)
+                finally:
+                    if released:
+                        self._drop(key)
+                return
+            self._drop(
                 key
-            ]  # same bucket, other bytes: a miss, and the old entry is not wanted
-            hit[0].__exit__(None, None, None)
+            )  # same bucket, other bytes: a miss, and the old entry is not wanted
         ctx = ot._open(tile)
         ds = ctx.__enter__()
+        if raw is not None and len(raw) > budget.decoded_budget_bytes("auto"):
+            try:  # too big to keep: this call's piece only
+                yield ds, lambda: None
+            finally:
+                ctx.__exit__(None, None, None)
+            return
         self.items[key] = (ctx, ds, raw)
         while len(self.items) > self.cap:
             _, (old, _ds, _raw) = self.items.popitem(last=False)
             old.__exit__(None, None, None)
-        return ds
+        released = []
+        try:
+            yield ds, lambda: released.append(True)
+        finally:
+            if released:
+                self._drop(key)
 
 
 _LRU = _OpenLru()
@@ -142,13 +172,18 @@ def retile_array(tile, w, h):
     """All the sub-tiles of one tile as one array value (explode it for rows)."""
     if tile is None:
         return None
-    ds = _LRU.get(tile)
-    return [_piece(tile, ds, win, w, h) for win in _windows(ds, w, h)]
+    with _LRU.opened(tile) as (ds, release):
+        pieces = [_piece(tile, ds, win, w, h) for win in _windows(ds, w, h)]
+        release()  # one call per input row: nothing to keep for the next
+        return pieces
 
 
 @f.udf(IntegerType())
 def retile_count(tile, w, h):
-    return None if tile is None else len(_windows(_LRU.get(tile), w, h))
+    if tile is None:
+        return None
+    with _LRU.opened(tile) as (ds, _release):
+        return len(_windows(ds, w, h))  # the parts that follow find it open
 
 
 @f.udf(V2_TILE_SCHEMA)
@@ -156,8 +191,12 @@ def retile_part(tile, w, h, i):
     """Sub-tile number `i`: with retile_count, rows without a collection per input."""
     if tile is None or i is None:
         return None
-    ds = _LRU.get(tile)
-    return _piece(tile, ds, _windows(ds, w, h)[int(i)], w, h)
+    with _LRU.opened(tile) as (ds, release):
+        windows = _windows(ds, w, h)
+        piece = _piece(tile, ds, windows[int(i)], w, h)
+        if int(i) == len(windows) - 1:
+            release()  # the last piece of this row: the raster is not wanted again
+        return piece
 
 
 # The same table functions as the plain UDTFs, with Arrow batches between the JVM and Python.

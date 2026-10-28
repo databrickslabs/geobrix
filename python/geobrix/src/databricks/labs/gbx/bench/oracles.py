@@ -475,6 +475,15 @@ MVP_G: Tuple[Case, ...] = (
         "tile_width",
         ("session",),
     ),
+    # A NULL window size is data: the same one error tile on every level that judges errors, never a bare exception.
+    Case(
+        "rt_null_window",
+        RT,
+        (Build("tile_4326"), None, 32),
+        "error_tile",
+        None,
+        ("session",),
+    ),
     # A NULL tile has nothing to split: no rows, as explode(NULL) gives.
     Case("rt_null", RT, (None, 32, 32), "no_rows", None, ("session",)),
     # An error tile in comes out as the same error tile (the upstream reason survives); a tile that

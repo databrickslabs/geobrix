@@ -151,3 +151,35 @@ def test_mvp_g_uc_handlers(tmp_path):
     ran = oracles.run_handlers_rows(oracles.MVP_G, tmpdir=str(tmp_path))
     assert len(ran) == sum(c.fn == TE and "uc" in c.surfaces for c in oracles.MVP_G)
     assert [m for _, m in ran if m] == []
+
+
+def test_the_probe_cache_holds_one_raster_and_confirms_a_hit_against_its_bytes(
+    monkeypatch,
+):
+    """The oracle's pair goes through a row at a time, so the last piece of A frees A before B arrives; this holds
+    the guard itself: a sampled bucket picks the entry, only the same bytes hit, one raster stays, and a raster
+    over the decoded budget is not kept."""
+    from databricks.labs.gbx.pyrx import _mvp_forms
+    from databricks.labs.gbx.pyrx.core import budget
+
+    a, b = oracles._edit_pair()
+    assert _mvp_forms._digest(a) == _mvp_forms._digest(b), "one bucket, two rasters"
+    lru = _mvp_forms._OpenLru()
+    tile = oracles._tile
+
+    def pixels(raw):
+        with lru.opened(tile(raw)) as (ds, release):
+            return float(ds.read(1).sum()), ds, release
+
+    sum_a, ds_a, _ = pixels(a)
+    again, ds_again, _ = pixels(bytearray(a))  # a fresh copy of the same bytes: a hit
+    assert (again, ds_again) == (sum_a, ds_a) and len(lru.items) == 1
+    sum_b, ds_b, release = pixels(b)  # same bucket, other bytes: a miss that replaces A
+    assert sum_b != sum_a and ds_b is not ds_a and len(lru.items) == 1
+    with lru.opened(tile(b)) as (_, release):
+        release()  # the last piece of the row
+    assert len(lru.items) == 0
+    monkeypatch.setattr(budget, "decoded_budget_bytes", lambda strategy: len(a) - 1)
+    with lru.opened(tile(a)) as (ds, release):
+        assert float(ds.read(1).sum()) == sum_a  # usable for this call
+    assert len(lru.items) == 0, "a raster over the budget is opened per call, not kept"

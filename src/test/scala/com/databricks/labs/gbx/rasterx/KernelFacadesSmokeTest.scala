@@ -194,6 +194,12 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         assert(new RstRetileArrayBytesUdf().call(junk, 8, 8).asScala.toSeq == Seq(null))
         assert(intercept[Exception](new RstRetileCountBytesUdf().call(input, "wide", 8)).getMessage.contains("wide"))
         intercept[IndexOutOfBoundsException](new RstRetilePartBytesUdf().call(input, 8, 8, 4))
+        // a NULL window is data, as at L1 and L3: the same error tile, not a NullPointerException
+        for (nulls <- Seq[(Any, Any)]((null, 8), (8, null))) {
+            assert(new RstRetileCountBytesUdf().call(input, nulls._1, nulls._2) == 1)
+            assert(new RstRetilePartBytesUdf().call(input, nulls._1, nulls._2, 0) == null)
+            assert(new RstRetileArrayBytesUdf().call(input, nulls._1, nulls._2).asScala.toSeq == Seq(null))
+        }
         // a window of 0 never advances: a parameter error that says what to do, on all three facades
         for (bad <- Seq((0, 8, "tile_width"), (8, -1, "tile_height"))) {
             for (call <- Seq[() => Any](
@@ -224,14 +230,20 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         // an edited copy whose few changed bytes fall between two sampled blocks: the same bucket, not the same raster
         val b = (100 until 500 by 7).iterator.map(plain).find(x => RetileKernel.key(x) == RetileKernel.key(a)).get
         assert(a.length == b.length && a.length > 524288 && !java.util.Arrays.equals(a, b))
-        def pieces(raster: Array[Byte]): Seq[Seq[Byte]] =
+        // the piece that holds the edit (not the last, so the raster stays open for the next call)
+        def all(raster: Array[Byte]): Seq[Seq[Byte]] =
             new RstRetileArrayBytesUdf().call(raster, 256, 256).asScala.map(_.toSeq).toSeq
+        val (pa, pb) = (all(a), all(b))
+        val k = pa.indices.find(i => pa(i) != pb(i)).get
+        assert(k < pa.length - 1, "the edit must be in a piece that is not the last")
+        def piece(raster: Array[Byte]): Seq[Byte] = new RstRetilePartBytesUdf().call(raster, 256, 256, k).toSeq
         RetileKernel.clear()
-        val ofA = pieces(a)
-        val ofB = pieces(b) // B after A on one thread, as two rows of one task
+        val ofA = piece(a)
+        assert(RetileKernel.cached() == 1)
+        val ofB = piece(b) // B right after A on one thread, as two rows of one task
         RetileKernel.clear()
-        val ofBAlone = pieces(b)
-        assert(ofA != ofBAlone, "the edit must show in the pieces")
+        val ofBAlone = piece(b)
+        assert(ofA != ofBAlone, "the edit must show in the piece")
         assert(ofB == ofBAlone, "B was cut from A's open raster")
         RetileKernel.clear()
     }
@@ -258,14 +270,21 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         assert(vsimemEntries() == before, "a finished task left a raster open")
     }
 
-    test("RetileKernel keeps four rasters open per thread and releases the ones it pushes out") {
+    test("RetileKernel keeps ONE raster open per thread, and drops it after the row's last piece") {
         RetileKernel.clear()
         val before = vsimemEntries()
-        for (n <- 1 to 6) RetileKernel.open(tinyGTiff(n.toFloat))
-        assert(RetileKernel.cached() == RetileKernel.Capacity)
-        // six opened, two evicted and released: only the four still held keep an in-memory file
-        assert(vsimemEntries().size - before.size == RetileKernel.Capacity, "an evicted raster kept its in-memory file")
+        for (n <- 1 to 3) RetileKernel.open(tinyGTiff(n.toFloat))
+        assert(RetileKernel.cached() == RetileKernel.Capacity && RetileKernel.Capacity == 1)
+        // three opened, two pushed out and released: only the one still held keeps an in-memory file
+        assert(vsimemEntries().size - before.size == 1, "a raster that was pushed out kept its in-memory file")
         RetileKernel.clear()
         assert(RetileKernel.cached() == 0 && vsimemEntries() == before, "clear left in-memory GDAL files behind")
+        // the pieces of one row: the raster stays open until the last piece has been cut, then it goes
+        val input = tinyGTiff()
+        val part = new RstRetilePartBytesUdf()
+        for (i <- 0 until 3) { assert(part.call(input, 8, 8, i).nonEmpty); assert(RetileKernel.cached() == 1, s"piece $i") }
+        assert(part.call(input, 8, 8, 3).nonEmpty && RetileKernel.cached() == 0, "the last piece left the raster open")
+        new RstRetileArrayBytesUdf().call(input, 8, 8) // one call is the whole row
+        assert(RetileKernel.cached() == 0 && vsimemEntries() == before, "the array facade left the raster open")
     }
 }

@@ -12,14 +12,16 @@ import java.security.MessageDigest
 import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
-/** What the retile facades share: an open raster kept between calls, so a tile cut into N pieces is opened
-  * once instead of N times (the count+part shape calls once per piece). The cache is per thread, because a GDAL
-  * Dataset is not safe to share between tasks, holds at most [[Capacity]] rasters, and is cleared when the Spark
-  * task that filled it ends. A raster pushed out is released through [[RasterDriver.releaseDataset]], which frees
-  * its in-memory file. An entry keeps the bytes it was opened from: [[key]] is only a bucket, and a hit is
-  * confirmed against all of them. */
+/** What the retile facades share: the raster of the row being cut, kept open between calls, so a tile cut into N
+  * pieces is opened once instead of N times (the count+part shape calls once per piece). The pieces of one input row
+  * are cut one after the other, so the cache holds ONE raster ([[Capacity]]): a second entry would never hit and costs
+  * a whole raster, and its bytes, in memory. The cache is per thread, because a GDAL Dataset is not safe to share
+  * between tasks; the entry goes when the last piece is cut ([[release]]), when another raster takes its place and
+  * when the Spark task that filled it ends. A raster dropped is released through [[RasterDriver.releaseDataset]],
+  * which frees its in-memory file. An entry keeps the bytes it was opened from: [[key]] is only a bucket, and a hit
+  * is confirmed against all of them. */
 object RetileKernel {
-    val Capacity = 4
+    val Capacity = 1
     private val log = LoggerFactory.getLogger(RetileKernel.getClass)
 
     /** A raster held open, with the bytes it was opened from. */
@@ -82,6 +84,17 @@ object RetileKernel {
         }
     }
 
+    /** Drop the cached raster `ds` (the last piece of its row is cut): release it and forget its bytes. */
+    def release(ds: Dataset): Unit = {
+        val it = lru.get().values().iterator()
+        while (it.hasNext) {
+            if (it.next().ds eq ds) {
+                it.remove()
+                RasterDriver.releaseDataset(ds)
+            }
+        }
+    }
+
     /** How many rasters this thread holds open. */
     def cached(): Int = lru.get().size()
 
@@ -121,16 +134,20 @@ object RetileKernel {
             case NonFatal(_) | _: LinkageError => ()
         }
 
-    /** The window size of a call as ints. A size of 0 or less is a PARAMETER error and raises, as at L1 and L3
-      * (it would never advance). */
-    def window(w: Any, h: Any): (Int, Int) = {
-        val (tw, th) = (Coerce.double(w).toInt, Coerce.double(h).toInt)
-        for ((name, v) <- Seq("tile_width" -> tw, "tile_height" -> th) if v <= 0) {
-            throw new IllegalArgumentException(
-              s"gbx_rst_retile: $name must be 1 or more pixels, got $v. Fix: pass a window of at least 1 pixel.")
+    /** The window size of a call as ints, or None when either is NULL (a NULL size is data: the facades answer it as
+      * the other levels do, with an error tile). A size of 0 or less is a PARAMETER error and raises, as at L1 and
+      * L3 (it would never advance), and so is one that is not a number. */
+    def window(w: Any, h: Any): Option[(Int, Int)] =
+        if (w == null || h == null) {
+            None
+        } else {
+            val (tw, th) = (Coerce.double(w).toInt, Coerce.double(h).toInt)
+            for ((name, v) <- Seq("tile_width" -> tw, "tile_height" -> th) if v <= 0) {
+                throw new IllegalArgumentException(
+                  s"gbx_rst_retile: $name must be 1 or more pixels, got $v. Fix: pass a window of at least 1 pixel.")
+            }
+            Some((tw, th))
         }
-        (tw, th)
-    }
 
     /** GTiff bytes of one window `(col_off, row_off, width, height)` of `ds`. */
     def cut(ds: Dataset, win: (Int, Int, Int, Int)): Array[Byte] = {
@@ -141,6 +158,9 @@ object RetileKernel {
     /** Log a failure the facades turn into an error tile (NULL bytes); the reason stays in the executor log. */
     def failed(e: Throwable): Unit =
         log.warn(s"gbx_rst_retile: ${e.getClass.getSimpleName}: ${e.getMessage}")
+
+    /** The window size is NULL: nothing to cut, so the same error tile as for bytes that do not open. */
+    val NullWindow = new IllegalArgumentException("tile_width or tile_height is NULL")
 }
 
 /* The error contract of the other levels, for bytes: a PARAMETER that is not a number raises; bytes that do not open,
@@ -148,21 +168,28 @@ object RetileKernel {
  * (an array of one NULL, a NULL piece, or one piece that is NULL). A NULL raster is NULL, so no rows. */
 
 /** L2 facade for the count half of the count+part shape of gbx_rst_retile: how many pieces a raster has.
-  * A raster that does not open is one piece, which `part` answers with NULL bytes (the error tile). */
+  * A raster that does not open, or a NULL window, is one piece, which `part` answers with NULL bytes (the error tile). */
 class RstRetileCountBytesUdf extends UDF3[Array[Byte], Any, Any, java.lang.Integer] {
     override def call(r: Array[Byte], w: Any, h: Any): java.lang.Integer = {
         if (r == null) return null
-        val (tw, th) = RetileKernel.window(w, h)
-        try ReTile.generateWindows(RetileKernel.open(r), tw, th).size
-        catch { case NonFatal(e) => RetileKernel.failed(e); 1 }
+        RetileKernel.window(w, h) match {
+            case None => RetileKernel.failed(RetileKernel.NullWindow); 1
+            case Some((tw, th)) =>
+                try ReTile.generateWindows(RetileKernel.open(r), tw, th).size
+                catch { case NonFatal(e) => RetileKernel.failed(e); 1 }
+        }
     }
 }
 
-/** L2 facade for the part half: piece `i` of a raster, as GTiff bytes (NULL when the raster does not open). */
+/** L2 facade for the part half: piece `i` of a raster, as GTiff bytes (NULL when the raster does not open, or the
+  * window is NULL). The last piece of a raster releases it. */
 class RstRetilePartBytesUdf extends UDF4[Array[Byte], Any, Any, Any, Array[Byte]] {
     override def call(r: Array[Byte], w: Any, h: Any, i: Any): Array[Byte] = {
         if (r == null || i == null) return null
-        val ((tw, th), idx) = (RetileKernel.window(w, h), Coerce.double(i).toInt)
+        val size = RetileKernel.window(w, h)
+        val idx = Coerce.double(i).toInt
+        if (size.isEmpty) { RetileKernel.failed(RetileKernel.NullWindow); return null }
+        val (tw, th) = size.get
         val planned =
             try { val ds = RetileKernel.open(r); Some((ds, ReTile.generateWindows(ds, tw, th))) }
             catch { case NonFatal(e) => RetileKernel.failed(e); None }
@@ -170,22 +197,33 @@ class RstRetilePartBytesUdf extends UDF4[Array[Byte], Any, Any, Any, Array[Byte]
             case None => null
             case Some((ds, windows)) =>
                 val win = windows(idx) // an index the count never gave raises
-                try RetileKernel.cut(ds, win) catch { case NonFatal(e) => RetileKernel.failed(e); null }
+                val piece = try RetileKernel.cut(ds, win) catch { case NonFatal(e) => RetileKernel.failed(e); null }
+                if (idx == windows.length - 1) RetileKernel.release(ds) // the row's last piece: not wanted again
+                piece
         }
     }
 }
 
-/** L2 facade for the array shape: every piece of a raster as one `array<binary>`. A raster that does not open
-  * is an array of one NULL, which the wrapper turns into one error tile. */
+/** L2 facade for the array shape: every piece of a raster as one `array<binary>`. A raster that does not open, or a
+  * NULL window, is an array of one NULL, which the wrapper turns into one error tile. One call is the whole row, so
+  * the raster is released when it returns. */
 class RstRetileArrayBytesUdf extends UDF3[Array[Byte], Any, Any, java.util.List[Array[Byte]]] {
     override def call(r: Array[Byte], w: Any, h: Any): java.util.List[Array[Byte]] = {
         if (r == null) return null
-        val (tw, th) = RetileKernel.window(w, h)
-        try {
-            val ds = RetileKernel.open(r)
-            ReTile.generateWindows(ds, tw, th).map(RetileKernel.cut(ds, _)).asJava
-        } catch {
-            case NonFatal(e) => RetileKernel.failed(e); java.util.Collections.singletonList[Array[Byte]](null)
+        RetileKernel.window(w, h) match {
+            case None =>
+                RetileKernel.failed(RetileKernel.NullWindow)
+                java.util.Collections.singletonList[Array[Byte]](null)
+            case Some((tw, th)) =>
+                var opened: Dataset = null
+                try {
+                    opened = RetileKernel.open(r)
+                    ReTile.generateWindows(opened, tw, th).map(RetileKernel.cut(opened, _)).asJava
+                } catch {
+                    case NonFatal(e) => RetileKernel.failed(e); java.util.Collections.singletonList[Array[Byte]](null)
+                } finally {
+                    if (opened != null) RetileKernel.release(opened)
+                }
         }
     }
 }

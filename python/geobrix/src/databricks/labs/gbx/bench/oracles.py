@@ -43,12 +43,25 @@ class Case:
     )
 
 
-# Rows the JVM tier is known to fail until its facade conforms to the light contract; the
-# JVM parity runs expect these to fail (strictly) and drop the entry when the row passes.
+# Rows a JVM level is known to fail until it conforms to the light contract, as {row: {level: reason}}.
+# The JVM parity runs expect exactly these (level, row) pairs to fail, strictly, and drop an entry
+# when the row passes.
 HEAVY_PENDING = {
-    "bng_digit_res": "heavy refuses a digit-string BNG resolution",
-    "bng_digit_res_quad": "heavy refuses a digit-string BNG resolution",
-    "tcrs_corrupt": "heavy's error tile carries error_message, not last_error",
+    "bng_digit_res": {
+        "L1": "heavy refuses a digit-string BNG resolution",
+        "L2": "the Java UDF refuses a digit-string BNG resolution",
+    },
+    "bng_digit_res_quad": {
+        "L1": "heavy refuses a digit-string BNG resolution",
+        "L2": "the Java UDF refuses a digit-string BNG resolution",
+    },
+    "bng_bad_res_int": {
+        "L1": "heavy answers a wrong cell for an integer resolution BNG does not define"
+    },
+    "bng_bad_easting": {
+        "L1": "heavy fails with an INTERNAL_ERROR that does not name the value"
+    },
+    "tcrs_corrupt": {"L1": "heavy's error tile carries error_message, not last_error"},
 }
 
 B, T, M = "gbx_bng_eastnorthasbng", "gbx_rst_transformcrs", "gbx_st_makevalid"
@@ -79,6 +92,11 @@ MVP_S: Tuple[Case, ...] = (
         ("TQ3080", None, "NT2573"),
     ),
     Case("bng_bad_res", B, (530000.0, 180000.0, "3km"), "raises", "3km"),
+    # A resolution BNG does not define is a parameter error on every level, never a clamped cell.
+    Case("bng_bad_res_int", B, (530000.0, 180000.0, 1000), "raises", "1000"),
+    Case("bng_bad_res_digits", B, (530000.0, 180000.0, "1000"), "raises", "1000"),
+    # A non-number easting is a parameter error too (only NaN and out-of-range values are data errors).
+    Case("bng_bad_easting", B, ("abc", 180000.0, 3), "raises", "abc"),
     # A UC STRING parameter receives an INT literal as its digit string, so every surface
     # accepts the digit-string form of the integer resolution.
     Case("bng_digit_res", B, (530000.0, 180000.0, "3"), "exact", "TQ3080"),

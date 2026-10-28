@@ -216,6 +216,49 @@ def test_pending_heavy_rows_name_real_oracle_rows():
     from databricks.labs.gbx.bench import oracles
 
     assert set(oracles.HEAVY_PENDING) <= {c.cid for c in oracles.MVP_S}
+    assert all(
+        set(levels_) <= {"L1", "L2"} for levels_ in oracles.HEAVY_PENDING.values()
+    )
+
+
+def _declares(fqn, kind):
+    pkg, _, name = fqn.rpartition(".")
+    src = REPO / "src/main/scala" / pkg.replace(".", "/")
+    return any(
+        re.search(rf"^{kind} {name}\b", p.read_text(), re.M)
+        for p in src.glob("*.scala")
+    )
+
+
+@pytest.mark.parametrize(
+    "fqn",
+    [f.levels["L2"]["class"] for f in FNS if "L2" in f.levels]
+    + [caps_mod.BUILDINFO_UDF, caps_mod.GDALPROBE_UDF],
+    ids=lambda fqn: fqn.rpartition(".")[2],
+)
+def test_java_udf_classes_exist_in_source(fqn):
+    """A mistyped class name would read as "no geobrix JAR on classpath" on every standard cluster."""
+    assert _declares(fqn, "class"), fqn
+
+
+@pytest.mark.parametrize(
+    "identity,jar_found",
+    [
+        ("unknown|unknown", False),
+        ("dev|dev", False),
+        ("0.5.3|abc", False),
+        ("0.6.0|abc", True),
+    ],
+)
+def test_jar_identity_is_judged_against_the_wheel(identity, jar_found):
+    """The JVM reports `<version>|<sha256>`; an unknown or development JAR is never used."""
+    from types import SimpleNamespace as NS
+
+    kernels = NS(
+        BuildInfo=NS(identity=lambda: identity), KernelGdal=NS(probe=lambda: "ok:3")
+    )
+    spark = NS(_jvm=NS(com=NS(databricks=NS(labs=NS(gbx=NS(kernels=kernels))))))
+    assert (caps_mod.detect(spark, True).jar is not None) is jar_found
 
 
 @pytest.mark.parametrize(

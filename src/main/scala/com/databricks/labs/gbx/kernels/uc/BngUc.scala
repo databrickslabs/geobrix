@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.kernels.uc
 
 import com.databricks.labs.gbx.gridx.grid.BNG
-import com.databricks.labs.gbx.kernels.KernelGdal
+import com.databricks.labs.gbx.kernels.{Coerce, KernelGdal}
 
 import scala.util.control.NonFatal
 
@@ -10,7 +10,7 @@ import scala.util.control.NonFatal
 object BngUc {
     def eastNorthAsBng(easting: java.lang.Double, northing: java.lang.Double, resolution: String): String = {
         if (easting == null || northing == null || resolution == null) return null
-        val res = if (resolution.matches("-?[0-9]+")) resolution.toInt else BNG.resolutionMap(resolution)
+        val res = Coerce.bngResolution(resolution, digitStrings = true) // PARAMETER: raises, naming the value
         try BNG.format(BNG.pointToCellID(easting, northing, res)) catch { case NonFatal(_) => null }
     }
 

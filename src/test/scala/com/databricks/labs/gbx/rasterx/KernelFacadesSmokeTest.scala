@@ -1,5 +1,10 @@
 package com.databricks.labs.gbx.rasterx
 
+import java.nio.file.Files
+import java.security.MessageDigest
+import java.util.jar.JarOutputStream
+import java.util.zip.ZipEntry
+
 import com.databricks.labs.gbx.kernels.{BuildInfo, KernelGdal, L1Installer}
 import com.databricks.labs.gbx.kernels.uc.BngUc
 import com.databricks.labs.gbx.kernels.udf.{BngEastNorthAsBngUdf, RstTransformCrsBytesUdf}
@@ -26,8 +31,23 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
     private def vsimemEntries(): Set[String] =
         Option(org.gdal.gdal.gdal.ReadDir("/vsimem/")).map(_.toArray.map(_.toString).toSet).getOrElse(Set.empty)
 
-    test("BuildInfo identity has two parts") {
+    test("BuildInfo reads version and sha from the one JAR, and says so when it cannot") {
         assert(BuildInfo.identity().split('|').length == 2)
+        val dir = Files.createTempDirectory("gbx-buildinfo")
+        val jar = dir.resolve("geobrix-9.9.9.jar")
+        val out = new JarOutputStream(Files.newOutputStream(jar))
+        try {
+            out.putNextEntry(new ZipEntry("META-INF/maven/com.databricks.labs/geobrix/pom.properties"))
+            out.write("version=9.9.9\n".getBytes("UTF-8"))
+            out.closeEntry()
+        } finally out.close()
+        val sha = MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(jar)).map("%02x".format(_)).mkString
+        assert(BuildInfo.identityAt(jar.toUri) == s"9.9.9|$sha")
+        assert(BuildInfo.identityAt(dir.toUri) == "dev|dev") // a classes directory is a development run
+        assert(BuildInfo.identityAt(null) == "unknown|unknown") // never a silent dev
+        Files.delete(jar)
+        assert(BuildInfo.identityAt(jar.toUri) == "unknown|unknown")
+        Files.delete(dir)
     }
 
     test("L1Installer installs a companion under the manifest name and reports arities") {
@@ -43,6 +63,12 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         assert(f.call(530000.0, 180000.0, "1km") == "TQ3080")
         assert(f.call(java.math.BigDecimal.valueOf(530000L), 180000.0, Integer.valueOf(3)) == "TQ3080")
         assert(f.call(null, 180000.0, 3) == null && f.call(Double.NaN, 180000.0, 3) == null)
+        // PARAMETER errors raise and name the value; they never become a wrong cell or NULL.
+        for (bad <- Seq[Any](1000, 0, 7, -7, java.lang.Long.valueOf(4294967299L), "3km")) {
+            val e = intercept[Exception](f.call(530000.0, 180000.0, bad))
+            assert(e.getMessage.contains(bad.toString), s"resolution $bad: ${e.getMessage}")
+        }
+        assert(intercept[Exception](f.call("abc", 180000.0, 3)).getMessage.contains("abc"))
     }
 
     test("RstTransformCrsBytesUdf warps bytes and releases its datasets") {
@@ -59,6 +85,10 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
     test("BngUc handler matches L1 and takes digit resolutions") {
         assert(BngUc.eastNorthAsBng(530000.0, 180000.0, "3") == "TQ3080")
         assert(BngUc.eastNorthAsBng(530000.0, 180000.0, "-3") == "TQ38SW")
+        for (bad <- Seq("1000", "0", "99999999999", "3km")) {
+            val e = intercept[Exception](BngUc.eastNorthAsBng(530000.0, 180000.0, bad))
+            assert(e.getMessage.contains(bad), s"resolution $bad: ${e.getMessage}")
+        }
         assert(BngUc.gdalVersion().startsWith("ok:"))
     }
 }

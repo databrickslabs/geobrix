@@ -1098,3 +1098,34 @@ def test_worker_rss_sampler_reports_the_peak_of_matching_processes():
         seen.peak_anon_mb >= 100
     ), seen.peak_anon_mb  # the bytearray is heap, not a file
     assert none.peak_mb == 0.0 and none.peak_anon_mb == 0.0
+
+
+@pytest.mark.skipif(
+    not os.path.exists("/proc/self/smaps_rollup"),
+    reason="the sampler reads smaps_rollup (Linux 4.14+)",
+)
+def test_worker_rss_sampler_counts_pages_shared_with_forked_workers_once():
+    """The daemon forks its workers, which share its copy-on-write pages: summing each
+    process's own RSS counted a 200 MB parent four times (one parent, three forks), the
+    proportional sum counts it about once."""
+    import subprocess
+    import sys
+
+    marker = "gbx-rss-fork-marker"
+    code = (
+        "import os, time\n"
+        "b = bytearray(200 * 1024 * 1024); b[::4096] = b'x' * len(b[::4096])\n"
+        "for _ in range(3):\n"
+        "    if os.fork() == 0:\n"
+        "        time.sleep(2.5)\n"
+        "        os._exit(0)\n"
+        "time.sleep(2.5)\n"
+    )
+    proc = subprocess.Popen([sys.executable, "-c", code, marker])
+    try:
+        with rn.WorkerRssSampler(match=marker, interval_s=0.05) as seen:
+            time.sleep(1.8)
+    finally:
+        proc.kill()
+        proc.wait()
+    assert 150 <= seen.peak_anon_mb < 400, seen.peak_anon_mb  # four counts is 800+

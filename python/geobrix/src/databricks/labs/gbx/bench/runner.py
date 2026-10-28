@@ -125,11 +125,17 @@ class WorkerRssSampler:
 
     ``peak_rss_mb`` is the RSS of this (notebook) process; the commit of a two-phase
     vector writer runs in a separate Python worker on the driver node
-    (``python -m pyspark.daemon``), which that number never sees. This polls
-    ``/proc/<pid>/status`` while the ``with`` block runs, so a bench row can report the
-    memory the commit really used: ``peak_mb`` is the summed resident set (it counts the
-    pages of memory-mapped files the process has touched), ``peak_anon_mb`` the summed
-    anonymous part (heap and buffers, the part that does not shrink under memory pressure).
+    (``python -m pyspark.daemon``), which that number never sees. This polls ``/proc``
+    while the ``with`` block runs, so a bench row can report the memory the commit really
+    used: ``peak_mb`` is the summed resident set (it counts the pages of memory-mapped
+    files the process has touched), ``peak_anon_mb`` the summed anonymous part (heap and
+    buffers, the part that does not shrink under memory pressure).
+
+    Both are PROPORTIONAL (``Pss`` / ``Pss_Anon`` of ``smaps_rollup``): a page that
+    several processes map counts ``1/n`` in each, so the copy-on-write pages the daemon
+    shares with its forked workers are counted once in the sum, not once per process (the
+    plain ``VmRSS`` / ``RssAnon`` sum counted them in every worker). A kernel without
+    ``smaps_rollup`` (before 4.14) falls back to ``VmRSS`` / ``RssAnon``, which overstate.
     Linux only: elsewhere both stay 0.0.
     """
 
@@ -140,6 +146,28 @@ class WorkerRssSampler:
         self._thread = None
         self.peak_mb = 0.0
         self.peak_anon_mb = 0.0
+
+    @staticmethod
+    def _kb_fields(path, wanted):
+        """``{field: kB}`` for the ``wanted`` fields of a ``/proc`` file (``Name:  N kB``)."""
+        found = {}
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                key = line.split(":", 1)[0]
+                if key in wanted:
+                    found[key] = int(line.split()[1])
+        return found
+
+    def _process_kb(self, pid):
+        """(resident kB, anonymous kB) of one process: proportional when the kernel says."""
+        try:
+            got = self._kb_fields(f"/proc/{pid}/smaps_rollup", ("Pss", "Pss_Anon"))
+            if len(got) == 2:
+                return got["Pss"], got["Pss_Anon"]
+        except OSError:
+            pass  # no smaps_rollup (an old kernel), or not ours to read
+        got = self._kb_fields(f"/proc/{pid}/status", ("VmRSS", "RssAnon"))
+        return got.get("VmRSS", 0), got.get("RssAnon", 0)
 
     def _sample_mb(self):
         """(resident MB, anonymous MB) summed over the matching processes now."""
@@ -153,14 +181,11 @@ class WorkerRssSampler:
                 with open(f"/proc/{pid}/cmdline", "rb") as fh:
                     if self._match not in fh.read():
                         continue
-                with open(f"/proc/{pid}/status", encoding="utf-8") as fh:
-                    for line in fh:
-                        if line.startswith("VmRSS:"):
-                            rss_kb += int(line.split()[1])
-                        elif line.startswith("RssAnon:"):
-                            anon_kb += int(line.split()[1])
+                rss, anon = self._process_kb(pid)
             except (OSError, ValueError):
                 continue  # the process ended between listing and reading
+            rss_kb += rss
+            anon_kb += anon
         return rss_kb / 1024, anon_kb / 1024
 
     def _take(self) -> None:

@@ -66,13 +66,23 @@ def _pointascell_udf(lon: pd.Series, lat: pd.Series, res: pd.Series) -> pd.Serie
     lons = lon.to_numpy(dtype=np.float64)
     lats = lat.to_numpy(dtype=np.float64)
     ress = res.to_numpy()
-    out = np.empty(len(lons), dtype=np.int64)
+    # a NULL arrives as NaN (or None) in a batch: a NULL resolution, longitude or latitude
+    # gives a NULL cell (a NaN coordinate used to come out as a made-up cell)
+    null = pd.isna(ress) | np.isnan(lons) | np.isnan(lats)
+    out = np.zeros(len(lons), dtype=np.int64)
     # point_as_cell_vec needs a fixed z per call; group rows by their resolution
     # (typically a single literal => one pass). Bit-identical to the scalar path.
-    for z in np.unique(ress):
-        mask = ress == z
+    for z in np.unique(ress[~null]):
+        mask = ~null & (ress == z)
+        z = _res_or_null(z)  # 3.0 (a NULL made the batch float) -> 3
+        if z != int(z):
+            raise ValueError(
+                f"gbx_quadbin_pointascell: resolution must be a whole number; got {z}"
+            )
         out[mask] = _quadbin.point_as_cell_vec(lons[mask], lats[mask], int(z))
-    return pd.Series(out)
+    cells = pd.Series(out, dtype="Int64")
+    cells[null] = pd.NA
+    return cells
 
 
 @pandas_udf(IntegerType())
@@ -758,9 +768,14 @@ def _custom_pointascell_udf(
 ) -> pd.Series:
     out = []
     for g, spec, r in zip(point, _custom_grid_records(grid), res):
+        r = _res_or_null(r)  # a NULL resolution arrives as NaN in a batch
         if g is None or spec is None or r is None:
             out.append(None)
             continue
+        if r != int(r):
+            raise ValueError(
+                f"gbx_custom_pointascell: resolution must be a whole number; got {r}"
+            )
         pg = parse_geom(g)
         if pg is None or pg.is_empty:
             out.append(None)
@@ -770,7 +785,9 @@ def _custom_pointascell_udf(
         # resolution PARAMETER raises (via point_to_cell_id_or_none);
         # NaN / out-of-bounds coordinate DATA -> None
         out.append(_custom.point_to_cell_id_or_none(conf, x, y, int(r)))
-    return pd.Series(out)
+    # Int64, not the float64 pandas picks for ints beside a None: a cell id past 2**53 would
+    # be rounded to the nearest float in any batch that holds a NULL.
+    return pd.Series(out, dtype="Int64")
 
 
 @pandas_udf(BinaryType())

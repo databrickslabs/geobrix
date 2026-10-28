@@ -6,6 +6,10 @@ from shapely.geometry import box  # noqa: E402
 
 from databricks.labs.gbx.pygx import functions as gx  # noqa: E402
 
+# quadbin cells at zoom 3 of (-122.4194, 37.7749) and (0, 0); custom-grid cells at resolution 3
+QUADBIN_A, QUADBIN_B = 5202501994543054847, 5205105638077628415
+CUSTOM_A, CUSTOM_B = 216172782125308048, 216172782156858408
+
 
 def test_eastnorthasbng_and_cellarea(spark):
     gx.register(spark)
@@ -28,24 +32,38 @@ def test_pointascell_wkt_uses_bng_coords(spark):
 
 def test_a_null_in_an_int_resolution_column_leaves_the_other_rows_alone(spark):
     """A NULL in an INT (or DOUBLE) column makes pandas hand the whole batch over as floats: the
-    resolution is 3.0 and the NULL is NaN. One row of each signature shape that takes a
-    resolution (geometry + res, easting + northing + res) beside the NULL rows."""
+    resolution is 3.0 and the NULL is NaN. One row of each pointascell signature shape that takes
+    a resolution (BNG geometry + res, BNG easting + northing + res, quadbin lon + lat + res,
+    custom point + grid + res) beside the NULL rows: the NULL (a NULL resolution, or row 4's NULL
+    easting / longitude) gives NULL, the rest are unchanged, and a resolution that is not a whole
+    number is refused, not cut to one."""
     gx.register(spark)
+    grid = "gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700)"
     rows = [
-        (1, "POINT(530000 180000)", 530000.0, 180000.0, 3),
-        (2, "POINT(530000 180000)", 530000.0, 180000.0, None),
-        (3, "POINT(325000 673000)", 325000.0, 673000.0, 3),
-        (4, "POINT(530000 180000)", None, 180000.0, 3),
+        (1, "POINT(530000 180000)", 530000.0, 180000.0, -122.4194, 37.7749, 3),
+        (2, "POINT(530000 180000)", 530000.0, 180000.0, -122.4194, 37.7749, None),
+        (3, "POINT(325000 673000)", 325000.0, 673000.0, 0.0, 0.0, 3),
+        (4, "POINT(530000 180000)", None, 180000.0, None, 37.7749, 3),
     ]
     spark.createDataFrame(
-        rows, "id int, wkt string, e double, n double, res int"
-    ).coalesce(1).createOrReplaceTempView("bng_null_res")
+        rows, "id int, wkt string, e double, n double, lon double, lat double, res int"
+    ).coalesce(1).createOrReplaceTempView("grid_null_res")
     got = spark.sql(
         "SELECT id, gbx_bng_pointascell(wkt, res) AS p, "
-        "gbx_bng_eastnorthasbng(e, n, res) AS en FROM bng_null_res ORDER BY id"
+        "gbx_bng_eastnorthasbng(e, n, res) AS en, "
+        "gbx_quadbin_pointascell(lon, lat, res) AS q, "
+        f"gbx_custom_pointascell(wkt, {grid}, res) AS c FROM grid_null_res ORDER BY id"
     ).collect()
     assert [r["p"] for r in got] == ["TQ3080", None, "NT2573", "TQ3080"]
     assert [r["en"] for r in got] == ["TQ3080", None, "NT2573", None]
+    assert [r["q"] for r in got] == [QUADBIN_A, None, QUADBIN_B, None]
+    assert [r["c"] for r in got] == [CUSTOM_A, None, CUSTOM_B, CUSTOM_A]
+    for call in (
+        "gbx_quadbin_pointascell(-122.4194, 37.7749, 3.5)",
+        f"gbx_custom_pointascell('POINT(530000 180000)', {grid}, 3.5)",
+    ):
+        with pytest.raises(Exception, match="3.5"):
+            spark.sql(f"SELECT {call} AS c").collect()
 
 
 def test_aswkb_no_srid_polygon(spark):

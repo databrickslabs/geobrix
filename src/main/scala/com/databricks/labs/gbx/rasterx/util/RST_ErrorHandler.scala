@@ -28,10 +28,13 @@ object RST_ErrorHandler extends Logging {
         metadata.contains("error_message")
     }
 
-    /** Builds metadata map with error message and class name for safeEval error rows. */
+    /** Builds metadata map with error message and class name for safeEval error rows. The reason is under
+      * `error_message` and under `last_error`, the key every other tile operation, the light tier and the
+      * manager's error-tile contract use. */
     private def createErrorMetadata(error: Throwable): Map[String, String] = {
         Map(
           "error_message" -> error.getMessage,
+          "last_error" -> Option(error.getMessage).getOrElse(error.getClass.getName),
           "error_detail" -> error.getStackTrace.mkString("\n"),
           "gdal_error" -> org.gdal.gdal.gdal.GetLastErrorMsg()
         )

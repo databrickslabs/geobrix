@@ -67,11 +67,21 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         assert(L1Installer.install(spark, "gbx_bng_eastnorthasbng", fqn) == "ok")
         assert(L1Installer.install(spark, "gbx_other", fqn) == "name-mismatch:gbx_bng_eastnorthasbng")
         assert(spark.sql("SELECT gbx_bng_eastnorthasbng(530000d, 180000d, 3)").head().getString(0) == "TQ3080")
+        // The same contract as the other levels: digit strings and INT coordinates are accepted; a resolution BNG
+        // does not define, or a non-number, raises and names the value.
+        assert(spark.sql("SELECT gbx_bng_eastnorthasbng(530000, 180000, '-3')").head().getString(0) == "TQ38SW")
+        for (bad <- Seq("1001", "0", "7", "'1001'", "'abc'")) {
+            val e = intercept[Exception](spark.sql(s"SELECT gbx_bng_eastnorthasbng(530000d, 180000d, $bad)").head())
+            assert(e.getMessage.contains(bad.stripPrefix("'").stripSuffix("'")), s"resolution $bad: ${e.getMessage}")
+        }
+        val easting = intercept[Exception](spark.sql("SELECT gbx_bng_eastnorthasbng('abc', 180000d, 3)").head())
+        assert(easting.getMessage.contains("abc"), easting.getMessage)
     }
 
     test("BngEastNorthAsBngUdf coerces SQL values and returns NULL for data errors") {
         val f = new BngEastNorthAsBngUdf()
         assert(f.call(530000.0, 180000.0, "1km") == "TQ3080")
+        assert(f.call(530000.0, 180000.0, "3") == "TQ3080" && f.call(530000.0, 180000.0, "-3") == "TQ38SW") // digits
         assert(f.call(java.math.BigDecimal.valueOf(530000L), 180000.0, Integer.valueOf(3)) == "TQ3080")
         assert(f.call(null, 180000.0, 3) == null && f.call(Double.NaN, 180000.0, 3) == null)
         // PARAMETER errors raise and name the value; they never become a wrong cell or NULL.

@@ -45,6 +45,7 @@ class RST_ErrorHandlerTest extends AnyFunSuite {
         val meta = getMetadata(result)
         meta should contain key "error_message"
         meta("error_message") should include("test error")
+        meta("last_error") should include("test error") // the key the light tier and the manager use
     }
 
     test("safeEval (Any, conf) when eval throws and crashExpressions false should return null") {

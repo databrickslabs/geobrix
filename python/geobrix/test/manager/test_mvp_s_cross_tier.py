@@ -161,6 +161,108 @@ def test_a_missing_or_unloadable_rust_build_falls_back_to_python(tmp_path, monke
         assert list(next(bng_eastnorthasbng_batch([cols]))) == ["TQ3080", None]
 
 
+def _arrow_column(values, all_null=None):
+    """A column typed the way Spark hands it to an Arrow UDF: strings, INTs and DOUBLEs."""
+    import pyarrow as pa
+
+    if any(isinstance(v, str) for v in values):
+        return pa.array(values, pa.string())
+    if any(isinstance(v, int) for v in values) and all(
+        v is None or isinstance(v, int) for v in values
+    ):
+        return pa.array(values, pa.int32())
+    return pa.array(values, pa.float64() if all_null is None else all_null)
+
+
+def _bng_batches():
+    """Every BNG oracle row as one batch of Arrow columns, plus the shapes only an Arrow UDF sees."""
+    import pyarrow as pa
+
+    batches = {}
+    for c in oracles.MVP_S:
+        if c.fn == "gbx_bng_eastnorthasbng":
+            rows = c.args if c.kind == "exact_rows" else (c.args,)
+            e, n, r = (list(col) for col in zip(*rows))
+            batches[c.cid] = (
+                _arrow_column(e),
+                _arrow_column(n),
+                _arrow_column(r, pa.int32()),
+            )
+    batches["int_coordinates"] = tuple(  # the SQL literal 530000 is an INT
+        _arrow_column(v) for v in ([530000, 325000], [180000, 673000], [3, 3])
+    )
+    batches["bigint_coordinates_with_null"] = (
+        pa.array([530000, None, 325000], pa.int64()),
+        pa.array([180000, 5, 673000], pa.int64()),
+        pa.array([3, 3, 3], pa.int32()),
+    )
+    batches["null_coordinates_bad_resolution"] = (
+        pa.array([None, None], pa.float64()),
+        pa.array([None, 1.0], pa.float64()),
+        pa.array(["3km", "3km"]),
+    )
+    batches["float_resolution_with_null"] = (
+        pa.array([530000.0, 530000.0, 325000.0], pa.float64()),
+        pa.array([180000.0, 180000.0, 673000.0], pa.float64()),
+        pa.array([3.0, None, 3.0], pa.float64()),
+    )
+    batches["fractional_resolution"] = tuple(
+        _arrow_column(v) for v in ([530000.0], [180000.0], [3.5])
+    )
+    batches["empty"] = (
+        pa.array([], pa.float64()),
+        pa.array([], pa.float64()),
+        pa.array([], pa.int32()),
+    )
+    return batches
+
+
+def _outcome(call):
+    try:
+        return ("ok", list(call()))
+    except Exception as exc:  # noqa: BLE001 - the error is part of the contract
+        return ("raises", type(exc).__name__, str(exc))
+
+
+@pytest.mark.parametrize("build", ["loaded", "load-failed"])
+def test_c1_and_d_keep_c0s_contract_on_every_input_shape(build, monkeypatch):
+    """c1, d (pandas) and d (the arrow_udf branch of PySpark 4.1+, run through a stub) answer, or raise,
+    exactly as c0 does for the same Arrow batches. `load-failed` is a worker whose Rust build is missing.
+    """
+    from databricks.labs.gbx.pygx import _accel
+    from databricks.labs.gbx.pygx import functions as pygx
+
+    if build == "loaded" and _rs.unavailable_reason():
+        pytest.skip(_rs.unavailable_reason())
+    if build == "load-failed":
+        monkeypatch.setattr(_rs, "_MOD", None)
+        monkeypatch.setattr(_rs, "_WHY", "stub: no build on this worker")
+    monkeypatch.setattr(_accel.F, "arrow_udf", lambda t: lambda f: f, raising=False)
+    d_arrow = _accel._build_d()
+    assert d_arrow is not _accel._d_pandas, "the arrow branch did not build"
+    rungs = {
+        "c1": lambda e, n, r: _accel._c1_batch(
+            e.to_pandas(), n.to_pandas(), r.to_pandas()
+        ),
+        "d-pandas": lambda e, n, r: _accel._d_batch(
+            e.to_pandas(), n.to_pandas(), r.to_pandas()
+        ),
+        "d-arrow": lambda e, n, r: d_arrow(e, n, r).to_pylist(),
+    }
+    differ = {}
+    for cid, (e, n, r) in _bng_batches().items():
+        want = _outcome(
+            lambda: pygx._bng_eastnorthasbng_udf.func(
+                e.to_pandas(), n.to_pandas(), r.to_pandas()
+            )
+        )
+        for rung, call in rungs.items():
+            got = _outcome(lambda: call(e, n, r))
+            if got != want:
+                differ[f"{cid}/{rung}"] = (want, got)
+    assert differ == {}
+
+
 def test_a_memory_error_while_loading_is_not_cached(tmp_path, monkeypatch):
     """Resource exhaustion is never "no build": it propagates, and the next call tries again (AP-10)."""
 

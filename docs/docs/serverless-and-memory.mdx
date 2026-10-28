@@ -87,7 +87,7 @@ For very large vector output, prefer `geojsonl_gbx` (parallel shards, no driver 
 
 ## FILE Delta-table read: the fast path
 
-The fastest way to read rasters or vectors on Serverless — and on classic clusters — is to read from a **FILE-column Delta table**: a `tilesTable` for rasters, or a table produced by `vector_file_write` (or `vector_gbx` with `file_mode="external"`) for vectors. The Delta scan resolves FILE references without per-file opens.
+The fastest way to read rasters or vectors on Serverless — and on classic clusters — is to read from a **FILE-column Delta table**: a tile index read with `read_tiles_table` for rasters, or a table produced by `vector_file_write` (or `vector_gbx` with `file_mode="external"`) for vectors. The Delta scan resolves FILE references without per-file opens.
 
 Measured on 1,000 raster tiles:
 

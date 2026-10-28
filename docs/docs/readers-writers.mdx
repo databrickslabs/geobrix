@@ -92,7 +92,7 @@ Measured on 1,000 raster tiles or 100k vector features; times are whole-job wall
 
 | Source | Read mechanism | Runtime | Serverless | Classic | Default / when |
 |---|---|---|---|---|---|
-| **FILE-column table** *(recommended on Serverless)* | Delta scan of `path` (EXTERNAL) | any | **~2 s** | ~2 s | default for a table source (`vector_file_read(table)`, raster `tilesTable`) |
+| **FILE-column table** *(recommended on Serverless)* | Delta scan of `path` (EXTERNAL) | any | **~2 s** | ~2 s | default for a table source (`vector_file_read(table)`, raster `read_tiles_table`) |
 | **FILE-column table** | Delta scan of FILE `.uri` (MANAGED) | DBR 13.3+ | **~2 s** | ~2 s | auto when the table is MANAGED |
 | **Directory** | `read_files(format=>'file')` — enumerate + FILE refs + size | DBR 13.3+ | ~10 s / 10k *(enumerate)* | ~same | auto dir default on 13.3+ |
 | **Directory** | `list_files` — enumerate (metadata only) | DBR 18+ | ~10 s / 10k *(enumerate)* | ~same | used when `read_files` is unavailable |

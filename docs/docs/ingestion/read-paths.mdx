@@ -93,8 +93,9 @@ reader's `tileSize` option to choose the window size:
 By default each raster file is a single whole-file tile; `tileSize` cuts it into a grid of windows
 (see the [Raster Reader](../readers/raster) for its options). The raster `manifest` and
 `tilesTable` options are rejected by `read_paths`: each input row already names one file, and a
-manifest would be read again for every row. Read those with `spark.read.format("gtiff_gbx")`
-instead. A `.vrt` source reports the `.vrt` file itself as its `_source_path`.
+manifest would be read again for every row. Read a manifest with `spark.read.format("gtiff_gbx")`
+instead, and a tile index with [`read_tiles_table`](../readers/raster#read-tiles-table). A `.vrt`
+source reports the `.vrt` file itself as its `_source_path`.
 
 PMTiles inputs are planned the same way, in groups of `tilesPerPartition` tiles, for an archive
 (`source="archive"`) and for a GeoTIFF it renders (`source="raster"`). A NetCDF file is read whole

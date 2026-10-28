@@ -323,14 +323,21 @@ formats.
   counted from a base with a clock time keeps its time of day as a `TIMESTAMP`. Other variables
   are unchanged.
 
-### Raster readers — pin a `tilesTable` version (new)
+### Raster readers — read a tile index with `read_tiles_table` (fix, new)
 
-- **`versionAsOf` and `timestampAsOf` read a `tilesTable` as it was.** The lightweight raster
-  readers (`raster_gbx`, `gtiff_gbx`, `cog_gbx`) take either option next to `tilesTable` and plan
-  from that Delta version of the tile index, so a pipeline can re-run against the exact table
-  version it used. Setting both, or either without `tilesTable`, raises an error. The table must
-  be a Delta table, and a version or time outside its history fails the read; `versionAsOf` names
-  an exact version. See [Raster Reader](./readers/raster#tiles-table-time-travel).
+- **`read_tiles_table` reads a `tilesTable`.** Reading a tile index with
+  `spark.read.format("raster_gbx").option("tilesTable", ...)` failed on every runtime, because Spark
+  plans the read in a worker that has no Spark session to open the table with. That read now fails
+  with an error that names `read_tiles_table(spark, table, options)`, which reads the table with
+  your session and returns the same `(source, tile)` DataFrame the reader returns. It takes the
+  reader options, `format="gtiff_gbx"` or `"cog_gbx"` for those readers, and `num_partitions` to
+  spread the tiles across tasks. See [Raster Reader](./readers/raster#read-tiles-table).
+- **`versionAsOf` and `timestampAsOf` read a tile index as it was.** Pass either option to
+  `read_tiles_table` and it plans from that Delta version of the index, so a pipeline can re-run
+  against the exact table version it used. Setting both, or either for a manifest or a directory
+  read, raises an error. The table must be a Delta table, and a version or time outside its history
+  fails the read; `versionAsOf` names an exact version. See
+  [Raster Reader](./readers/raster#tiles-table-time-travel).
 
 ### Raster writers
 

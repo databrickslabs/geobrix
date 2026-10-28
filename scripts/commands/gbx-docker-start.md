@@ -1,6 +1,6 @@
 # Start Docker Container
 
-Start geobrix-dev container with proper volume mounts
+Start this checkout's dev container with proper volume mounts
 
 ## Usage
 
@@ -35,10 +35,21 @@ bash scripts/commands/gbx-docker-start.sh --recreate --platform linux/arm64
 GBX_DOCKER_PLATFORM=linux/amd64 bash scripts/commands/gbx-docker-start.sh --recreate
 ```
 
+## Per-worktree container
+
+Each checkout has its own dev container, so a command run in one never stops, recreates or remounts another's.
+
+- **Main checkout:** no setup. The container is `geobrix-dev` on host ports 5005 (JDWP), 8888 (Jupyter) and 4040 (Spark UI), with `sample-data/Volumes` at `/Volumes`.
+- **A linked git worktree** (`git worktree add`) must name its own container in an untracked `<worktree>/.gbx-local.env`. Copy `scripts/docker/gbx-local.env.example` there and set `GBX_DEV_CONTAINER` and the three `GBX_DEV_PORT_*` values (they must differ from every other running container's). Without the file, every command that uses the container refuses to run and says so; commands that need no container are not affected.
+- **What the file can set:** the container name and ports; `GBX_DEV_VOLUMES_DIR` (the host directory mounted at `/Volumes`); `GBX_DEV_EXTRA_MOUNTS` (more `host:container[:ro]` bind mounts, space separated); `GBX_DEV_DOCKER_ENV` (extra `KEY=VALUE` container environment); `GBX_DEV_IMAGE_TAG`; and `GBX_CARGO_REGISTRY` (a crates mirror for the Rust build). Unknown keys are refused, and values are never printed. The file is gitignored and must never be committed.
+- **Seeding a new worktree:** the container mounts the worktree's own `scripts/docker/m2` (the Maven cache and settings) and `sample-data/Volumes`. Copy them from the main checkout once (`cp -cR` makes cheap APFS clones on macOS), then run this command from the worktree.
+- Every `gbx:*` command run from a worktree targets that worktree's container, including the test lock, `gbx:docker:exec` and `gbx:venv:sync --match-container`.
+
 ## Volume Mounts
 
-- `sample-data/Volumes` → `/Volumes` (Unity Catalog volumes)
+- `sample-data/Volumes` → `/Volumes` (Unity Catalog volumes; `GBX_DEV_VOLUMES_DIR` in `.gbx-local.env` changes the host directory)
 - Project root → `/root/geobrix`
+- Anything in `GBX_DEV_EXTRA_MOUNTS`
 - `scripts/docker/m2` → `/root/geobrix/scripts/docker/m2` (Maven cache)
 
 ## Notes

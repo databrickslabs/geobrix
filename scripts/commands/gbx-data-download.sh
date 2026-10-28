@@ -90,7 +90,7 @@ if [[ "$BUNDLE" == "essential" || "$BUNDLE" == "both" ]]; then
     show_separator
     echo ""
     
-    docker exec geobrix-dev python3 /root/geobrix/sample-data/download-essential-bundle.py $FORCE_FLAG
+    docker exec "$GBX_DEV_CONTAINER" python3 /root/geobrix/sample-data/download-essential-bundle.py $FORCE_FLAG
     ESSENTIAL_EXIT=$?
     EXIT_CODE=$((EXIT_CODE + ESSENTIAL_EXIT))
     
@@ -110,7 +110,7 @@ if [[ "$BUNDLE" == "complete" || "$BUNDLE" == "both" ]]; then
     show_separator
     echo ""
     
-    docker exec geobrix-dev python3 /root/geobrix/sample-data/download-complete-bundle.py $FORCE_FLAG
+    docker exec "$GBX_DEV_CONTAINER" python3 /root/geobrix/sample-data/download-complete-bundle.py $FORCE_FLAG
     COMPLETE_EXIT=$?
     EXIT_CODE=$((EXIT_CODE + COMPLETE_EXIT))
     

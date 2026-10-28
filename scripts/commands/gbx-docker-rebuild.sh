@@ -20,7 +20,7 @@ show_help() {
     cat << EOF
 $(print_banner "🐳 GeoBrix: Rebuild Docker Image")
 
-Rebuild geobrix-dev Docker image using scripts/docker/build_smart.sh (multi-stage build).
+Rebuild "$GBX_DEV_CONTAINER" Docker image using scripts/docker/build_smart.sh (multi-stage build).
 Optionally start the container after rebuild.
 
 USAGE:
@@ -31,7 +31,7 @@ OPTIONS:
                          architecture). Each platform builds its own image tag, so both coexist.
     --no-cache           Build without Docker cache (passed to build_smart.sh)
     --no-pull            Do not force-pull latest ubuntu:24.04 (faster, may miss base updates)
-    --keep-container     Do not stop or remove the running geobrix-dev container
+    --keep-container     Do not stop or remove this checkout's running dev container
     --start              Start container after rebuild
     --attach             Attach to container after start (implies --start)
     --log <path>         Write output to log file (filename → test-logs/<name>). Not for a build with
@@ -149,6 +149,7 @@ fi
 # the platform or the package index again are refused for the same reason (they are checked before the
 # container is removed, and build_smart.sh would refuse them too).
 PLATFORM="$(gbx_docker_platform "$PLATFORM_ARG")" || exit 2
+gbx_require_local_env   # a linked worktree with no .gbx-local.env has no container of its own to replace
 gbx_check_docker_flags "${BUILD_EXTRA[@]}" || exit 2
 IMAGE_TAG="$(gbx_dev_image_tag "$PLATFORM")"
 
@@ -168,21 +169,21 @@ echo -e "${CYAN}🧹 Cleaning up existing container...${NC}"
 print_separator
 
 CONTAINER_KEPT=false
-if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^geobrix-dev$'; then
-    CONTAINER_ARCH="$(gbx_container_arch geobrix-dev)"
+if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
+    CONTAINER_ARCH="$(gbx_container_arch "$GBX_DEV_CONTAINER")"
     if [ "$KEEP_CONTAINER" = true ]; then
         CONTAINER_KEPT=true
-        echo -e "${YELLOW}   Keeping the existing geobrix-dev container (--keep-container).${NC}"
+        echo -e "${YELLOW}   Keeping the existing $GBX_DEV_CONTAINER container (--keep-container).${NC}"
     elif [ "$CONTAINER_ARCH" != "$(gbx_platform_arch "$PLATFORM")" ]; then
         CONTAINER_KEPT=true
-        echo -e "${YELLOW}   Keeping the existing geobrix-dev container (it runs ${CONTAINER_ARCH:-an unknown architecture}; this build is $(gbx_platform_arch "$PLATFORM")).${NC}"
+        echo -e "${YELLOW}   Keeping the existing $GBX_DEV_CONTAINER container (it runs ${CONTAINER_ARCH:-an unknown architecture}; this build is $(gbx_platform_arch "$PLATFORM")).${NC}"
     else
-        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^geobrix-dev$'; then
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
             echo -e "${CYAN}   Stopping running container...${NC}"
-            docker stop geobrix-dev 2>/dev/null || true
+            docker stop "$GBX_DEV_CONTAINER" 2>/dev/null || true
         fi
         echo -e "${CYAN}   Removing container...${NC}"
-        docker rm geobrix-dev 2>/dev/null || true
+        docker rm "$GBX_DEV_CONTAINER" 2>/dev/null || true
     fi
 fi
 

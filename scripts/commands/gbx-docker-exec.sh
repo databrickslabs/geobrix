@@ -19,7 +19,7 @@ show_help() {
     cat << EOF
 $(print_banner "🐳 GeoBrix: Docker Exec")
 
-Execute commands or launch interactive shells in geobrix-dev container
+Execute commands or launch interactive shells in the dev container
 
 USAGE:
     bash scripts/commands/gbx-docker-exec.sh [MODE|COMMAND] [OPTIONS]
@@ -59,7 +59,7 @@ EXAMPLES:
     bash scripts/commands/gbx-docker-exec.sh "mvn test" --log maven-test.log
 
 NOTES:
-    - Requires geobrix-dev container to be running
+    - Requires this checkout's dev container to be running
     - A command that runs Maven (mvn) or pytest takes the container test lock first, so it never
       overlaps another test run (see common.sh); everything else runs immediately
     - Interactive shells use -it flag (TTY)
@@ -140,8 +140,8 @@ fi
 check_docker
 
 # Check if container is running
-if ! docker ps --format '{{.Names}}' | grep -q '^geobrix-dev$'; then
-    echo -e "${RED}❌ Container 'geobrix-dev' is not running${NC}"
+if ! docker ps --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
+    echo -e "${RED}❌ Container '$GBX_DEV_CONTAINER' is not running${NC}"
     echo -e "${YELLOW}   Start with: gbx:docker:start${NC}"
     exit 1
 fi
@@ -154,31 +154,31 @@ if [ -n "$MODE" ]; then
             echo -e "${CYAN}🚀 Launching Spark shell...${NC}"
             echo -e "${YELLOW}   (Exit with Ctrl+D or :quit)${NC}"
             echo ""
-            docker exec -it geobrix-dev spark-shell
+            docker exec -it "$GBX_DEV_CONTAINER" spark-shell
             ;;
         pyspark)
             echo -e "${CYAN}🐍 Launching PySpark shell...${NC}"
             echo -e "${YELLOW}   (Exit with Ctrl+D or exit())${NC}"
             echo ""
-            docker exec -it geobrix-dev pyspark
+            docker exec -it "$GBX_DEV_CONTAINER" pyspark
             ;;
         python)
             echo -e "${CYAN}🐍 Launching Python 3 shell...${NC}"
             echo -e "${YELLOW}   (Exit with Ctrl+D or exit())${NC}"
             echo ""
-            docker exec -it geobrix-dev python3
+            docker exec -it "$GBX_DEV_CONTAINER" python3
             ;;
         scala)
             echo -e "${CYAN}⚡ Launching Scala REPL...${NC}"
             echo -e "${YELLOW}   (Exit with Ctrl+D or :quit)${NC}"
             echo ""
-            docker exec -it geobrix-dev scala
+            docker exec -it "$GBX_DEV_CONTAINER" scala
             ;;
         bash)
             echo -e "${CYAN}💻 Launching bash shell...${NC}"
             echo -e "${YELLOW}   (Exit with Ctrl+D or exit)${NC}"
             echo ""
-            docker exec -it geobrix-dev bash
+            docker exec -it "$GBX_DEV_CONTAINER" bash
             ;;
     esac
 elif [ -n "$COMMAND" ]; then
@@ -203,9 +203,9 @@ elif [ -n "$COMMAND" ]; then
     # Without this the wrapper faithfully reports the last pipe stage's status, which
     # silently masks build/test failures piped through head/tail/grep.
     if [ "$INTERACTIVE" = true ]; then
-        docker exec -it geobrix-dev $LOCK_PREFIX bash -c "set -o pipefail; $COMMAND"
+        docker exec -it "$GBX_DEV_CONTAINER" $LOCK_PREFIX bash -c "set -o pipefail; $COMMAND"
     else
-        docker exec geobrix-dev $LOCK_PREFIX bash -c "set -o pipefail; $COMMAND"
+        docker exec "$GBX_DEV_CONTAINER" $LOCK_PREFIX bash -c "set -o pipefail; $COMMAND"
     fi
 
     EXIT_CODE=$?

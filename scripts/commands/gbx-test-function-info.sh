@@ -12,7 +12,7 @@ show_help() {
     echo -e "  ${GREEN}gbx:test:function-info${NC} ${YELLOW}[options]${NC}"
     echo ""
     echo -e "${CYAN}Description:${NC}"
-    echo -e "  Runs inside ${YELLOW}geobrix-dev${NC} Docker container:"
+    echo -e "  Runs inside the ${YELLOW}dev${NC} Docker container:"
     echo -e "  1. ${YELLOW}docs/scripts/generate-function-info.py${NC} to build function-info.json from"
     echo -e "     doc SQL examples (fails if any registered function has no example; fix upstream in docs)."
     echo -e "  2. Pytest in ${YELLOW}docs/tests-function-info/${NC} to print DESCRIBE FUNCTION"
@@ -82,7 +82,7 @@ python3 -m pytest docs/tests-function-info/ -v -s --tb=short
 "
 
 EXIT=0
-docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$RUN_CMD" || EXIT=$?
+docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$RUN_CMD" || EXIT=$?
 
 show_separator
 if [ $EXIT -eq 0 ]; then

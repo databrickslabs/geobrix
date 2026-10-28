@@ -6,8 +6,9 @@ and answers from the JSON state in $FAKE_DOCKER_STATE:
 - images: {ref: {"arch": "arm64"|"amd64"}}; `image inspect` fails for a ref not in it, prints the
   architecture for `--format '{{.Architecture}}'` and a Config.Env document otherwise. `build -t`,
   `tag` and `rmi` keep it current.
-- container: null, or {"image": ref-or-id, "running": bool, "arch": ..., "mount": path}: what
-  `ps`, `inspect`, `stop`, `rm`, `start` and `run` see and change.
+- container: null, or {"name": ..., "image": ref-or-id, "running": bool, "arch": ..., "mount": path}:
+  what `ps`, `inspect`, `stop`, `rm`, `start` and `run` see and change. The name defaults to
+  geobrix-dev and is taken from `--name` on `run`; a call naming another container finds nothing.
 - history: lines printed by `history`. history_rc / inspect_rc: a non-zero exit of `history` / of
   `image inspect` on a checkpoint image (the build could not be read back).
 - container_image_gone: `image inspect` of the container's image fails (its architecture is unknown).
@@ -22,7 +23,7 @@ import os
 import stat
 import sys
 
-CONTAINER = "geobrix-dev"
+DEFAULT_NAME = "geobrix-dev"
 
 
 def main(args):
@@ -42,14 +43,15 @@ def main(args):
 
     cmd = args[0] if args else ""
     container = state.get("container")
+    name = (container or {}).get("name", DEFAULT_NAME)
     if cmd == "info":
         return 0
     if cmd == "ps":
         if container and (container.get("running") or "-a" in args):
-            print(CONTAINER)
+            print(name)
         return 0
     if cmd == "inspect":
-        if not container:
+        if not container or args[-1] != name:
             return 1
         fmt = flag("--format") or ""
         print(container.get("mount", "") if "Mounts" in fmt else container["image"])
@@ -111,14 +113,14 @@ def main(args):
             images.pop(ref, None)
         save()
         return 0
-    if cmd in ("stop", "rm") and args[-1] == CONTAINER:
+    if cmd in ("stop", "rm") and args[-1] == name:
         if cmd == "stop" and container:
             container["running"] = False
         if cmd == "rm":
             state["container"] = None
         save()
         return 0
-    if cmd == "start" and container:
+    if cmd == "start" and container and args[-1] == name:
         container["running"] = True
         save()
         return 0
@@ -133,6 +135,7 @@ def main(args):
     if cmd == "run":
         platform = flag("--platform") or ""
         state["container"] = {
+            "name": flag("--name") or DEFAULT_NAME,
             "image": args[-2],
             "running": True,
             "arch": platform.rsplit("/", 1)[-1],

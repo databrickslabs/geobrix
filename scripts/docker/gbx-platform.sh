@@ -18,7 +18,7 @@
 # Bash 3.2 compatible (macOS /bin/bash).
 
 GBX_DEV_IMAGE_REPO="geobrix-dev"
-GBX_DEV_IMAGE_TAG="ubuntu24-gdal311-spark"
+GBX_DEV_IMAGE_TAG="${GBX_DEV_IMAGE_TAG:-ubuntu24-gdal311-spark}"   # a worktree's .gbx-local.env may name its own (gbx-container.sh)
 GBX_DEV_LEGACY_IMAGE="${GBX_DEV_IMAGE_REPO}:${GBX_DEV_IMAGE_TAG}"
 
 # gbx_normalize_platform <spelling>  ->  linux/arm64 | linux/amd64 (status 2 for anything else)

@@ -174,7 +174,7 @@ gbx_acquire_test_lock
 mkdir -p "$PROJECT_ROOT/sample-data/Volumes/main/default/geobrix_samples"
 
 # Volumes must be mounted so tests can use sample data (minimal bundle in-repo or full at geobrix_samples)
-if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then
+if ! docker exec "$GBX_DEV_CONTAINER" test -d /Volumes 2>/dev/null; then
     echo -e "${RED}❌ /Volumes not found in container. Start the container with the Volumes mount:${NC}"
     echo -e "   ${YELLOW}./scripts/docker/start_docker_with_volumes.sh${NC}"
     echo ""
@@ -206,7 +206,7 @@ echo ""
 SAMPLE_DATA_ROOT_EXPORT=""
 if [ "$SET_SAMPLE_DATA_ROOT" = true ]; then
     if [ "$EXPLICIT_SAMPLE_DATA_ROOT" = true ]; then
-        if ! docker exec geobrix-dev test -d "$SAMPLE_DATA_ROOT/geobrix-examples" 2>/dev/null; then
+        if ! docker exec "$GBX_DEV_CONTAINER" test -d "$SAMPLE_DATA_ROOT/geobrix-examples" 2>/dev/null; then
             echo -e "${RED}❌ Sample data root not found in container: $SAMPLE_DATA_ROOT/geobrix-examples${NC}"
             exit 1
         fi
@@ -271,7 +271,7 @@ echo '━━━━━━━━━━━━━━━━━━━━━━━━�
 python3 -m pytest $TEST_PATH -v $MARKERS $FILTER --tb=short --color=yes $IGNORE_API_ARG
 "
 
-docker exec ${DOCKER_ENV_ARGS[@]+"${DOCKER_ENV_ARGS[@]}"} geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$RUN_CMD"
+docker exec ${DOCKER_ENV_ARGS[@]+"${DOCKER_ENV_ARGS[@]}"} "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$RUN_CMD"
 EXIT_CODE=$?
 
 echo ""

@@ -107,7 +107,7 @@ setup_log_file "$LOG_PATH"
 mkdir -p "$PROJECT_ROOT/sample-data/Volumes/main/default/geobrix_samples"
 
 # Notebook tests need /Volumes so the notebook can use get_volumes_path() and run_*_bundle()
-if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then
+if ! docker exec "$GBX_DEV_CONTAINER" test -d /Volumes 2>/dev/null; then
     echo -e "${RED}❌ /Volumes not found in container. Start the container with the Volumes mount:${NC}"
     echo -e "   ${YELLOW}./scripts/docker/start_docker_with_volumes.sh${NC}"
     echo ""
@@ -159,7 +159,7 @@ python3 /root/geobrix/examples/tests/run_notebooks_cell_by_cell.py ${PATH_ARG:+'
 "
 
 # -t allocates a pseudo-TTY so testbook's Jupyter kernel doesn't hang (common in Docker)
-docker exec -t geobrix-dev /bin/bash -c "$RUN_CMD"
+docker exec -t "$GBX_DEV_CONTAINER" /bin/bash -c "$RUN_CMD"
 EXIT_CODE=$?
 
 echo ""

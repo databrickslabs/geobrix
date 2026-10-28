@@ -55,7 +55,7 @@ echo -e "${CYAN}Running scalastyle on src/main/scala...${NC}"
 echo ""
 show_separator
 
-docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && cd /root/geobrix && mvn scalastyle:check -q"
+docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && cd /root/geobrix && mvn scalastyle:check -q"
 EXIT_CODE=$?
 
 show_separator

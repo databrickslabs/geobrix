@@ -9,30 +9,40 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+# Which dev container THIS checkout uses ($GBX_DEV_CONTAINER, ports, mounts): geobrix-dev for the main
+# checkout, the name in an untracked .gbx-local.env for a linked worktree (scripts/docker/gbx-container.sh).
+# A refused load is not fatal here, so commands that never touch the container run anywhere; every command
+# that does calls check_docker or gbx_require_local_env, which exit with the reason.
+GBX_COMMON_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$GBX_COMMON_ROOT/scripts/docker/gbx-container.sh"
+gbx_load_local_env "$GBX_COMMON_ROOT" 2>/dev/null || true
+export GBX_DEV_CONTAINER
+
 # Maven env for Docker runs: unset conflicting opts, set Jupyter dirs, and tune Maven/JVM for coverage
-# MAVEN_OPTS speeds up builds and scoverage (G1GC + 4G heap when running in geobrix-dev)
+# MAVEN_OPTS speeds up builds and scoverage (G1GC + 4G heap when running in the dev container)
 # LC_ALL: the container has no locale, so the JVM's sun.jnu.encoding would be ASCII and the tests
 # that create non-ASCII file names (NodeFilePathUtilTest) would cancel; every Maven run that
 # executes tests gets the same locale (gbx:test:scala passes it with `docker exec -e` as well).
 export DOCKER_MAVEN_ENV="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && export LC_ALL=C.UTF-8 && export MAVEN_OPTS=\"-Xmx4G -XX:+UseG1GC\""
 
 check_docker() {
+    gbx_require_local_env
     if ! docker ps &> /dev/null; then
         echo -e "${RED}❌ Error: Docker is not running${NC}"
         echo "Start Docker and try again."
         exit 1
     fi
     
-    if ! docker ps -a --format '{{.Names}}' | grep -q '^geobrix-dev$'; then
-        echo -e "${RED}❌ Error: geobrix-dev container not found${NC}"
-        echo "Start the development container first:"
-        echo -e "  ${YELLOW}./scripts/docker/start_docker.sh${NC}"
+    if ! docker ps -a --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
+        echo -e "${RED}❌ Error: $GBX_DEV_CONTAINER container not found${NC}"
+        echo "Start this checkout's development container first:"
+        echo -e "  ${YELLOW}bash scripts/commands/gbx-docker-start.sh${NC}"
         exit 1
     fi
     
-    if ! docker ps --format '{{.Names}}' | grep -q '^geobrix-dev$'; then
+    if ! docker ps --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
         echo -e "${YELLOW}⚠️  Container is not running. Starting...${NC}"
-        docker start geobrix-dev
+        docker start "$GBX_DEV_CONTAINER"
         sleep 2
     fi
 }
@@ -254,7 +264,7 @@ warn_if_docs_server_running() {
 # container's target/ directory and Maven repository, so two overlapping runs corrupt each
 # other. Every such command calls gbx_acquire_test_lock once, right after check_docker (and
 # setup_log_file), and sends its Maven/pytest work through $GBX_LOCK_RUN. The locks live
-# INSIDE geobrix-dev (scripts/docker/gbx-lock.sh), so they cover every caller of the
+# INSIDE the dev container (scripts/docker/gbx-lock.sh), so they cover every caller of the
 # container, whichever host shell or agent started it. There are two, with different owners:
 #
 #   RUN lock   (/tmp/gbx-test.lock)  held for as long as THIS script, or a child of it, lives:
@@ -273,7 +283,7 @@ warn_if_docs_server_running() {
 #
 # What this guarantees: gbx commands never overlap, including after a killed run. What it does
 # not: Maven or pytest started in the container outside a gbx command (an interactive
-# `docker exec geobrix-dev mvn ...`) is not seen; a work process that never ends blocks later
+# `docker exec <container> mvn ...`) is not seen; a work process that never ends blocks later
 # runs until GBX_TEST_LOCK_TIMEOUT (the message names it, so it can be killed). A locked exec
 # must never start another locked exec: it would wait for the lock its own parent holds.
 #
@@ -287,14 +297,14 @@ warn_if_docs_server_running() {
 # A gbx command run by a parent that already holds the lock (gbx:test:docs runs the three doc
 # suites) skips taking it: GBX_TEST_LOCK_HELD_BY carries the parent's pid.
 # ---------------------------------------------------------------------------------------
-GBX_TEST_LOCK_FILE="${GBX_TEST_LOCK_FILE:-/tmp/gbx-test.lock}"        # RUN lock, a path INSIDE geobrix-dev
+GBX_TEST_LOCK_FILE="${GBX_TEST_LOCK_FILE:-/tmp/gbx-test.lock}"        # RUN lock, a path INSIDE the dev container
 GBX_WORK_LOCK_FILE="${GBX_WORK_LOCK_FILE:-/tmp/gbx-work.lock}"        # WORK lock, likewise
 GBX_TEST_LOCK_TIMEOUT="${GBX_TEST_LOCK_TIMEOUT:-3600}"
 GBX_LOCK_NO_WAIT="${GBX_LOCK_NO_WAIT:-false}"
 GBX_CONTAINER_ROOT="${GBX_CONTAINER_ROOT:-/root/geobrix}"             # the repo, as mounted in the container
 GBX_CONTAINER_LOCK="$GBX_CONTAINER_ROOT/scripts/docker/gbx-lock.sh"
 # Prefix for a Maven/pytest `docker exec`, left UNQUOTED on purpose (it is several words):
-#   docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$CMD"
+#   docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$CMD"
 # The `env` words carry this shell's lock overrides into the container: `docker exec` does not
 # pass the host environment, and `run` reads the work-lock file and the timeout from there
 # (`hold` gets the same values through `docker exec -e` in gbx_acquire_test_lock).
@@ -348,7 +358,7 @@ gbx_acquire_test_lock() {
         -e GBX_LOCK_TIMEOUT="$GBX_TEST_LOCK_TIMEOUT" \
         -e GBX_LOCK_NO_WAIT="$GBX_LOCK_NO_WAIT" \
         -e GBX_LOCK_INFO="$info" \
-        geobrix-dev /bin/bash "$GBX_CONTAINER_LOCK" hold \
+        "$GBX_DEV_CONTAINER" /bin/bash "$GBX_CONTAINER_LOCK" hold \
         <&6 >"$status" 2>&1 3>&- 7>&- 6<&- &
     holder_pid=$!
     exec 6<&-
@@ -407,7 +417,7 @@ gbx_acquire_test_lock() {
     trap - TERM INT HUP
     [ -n "$saved_traps" ] && eval "$saved_traps"
     export GBX_TEST_LOCK_HELD_BY="$$"
-    echo -e "${GREEN}🔒 test lock acquired: pid $$ ${GBX_LOCK_CMD} (waited $((SECONDS - start))s; ${GBX_TEST_LOCK_FILE} in geobrix-dev)${NC}"
+    echo -e "${GREEN}🔒 test lock acquired: pid $$ ${GBX_LOCK_CMD} (waited $((SECONDS - start))s; ${GBX_TEST_LOCK_FILE} in ${GBX_DEV_CONTAINER})${NC}"
 }
 
 # Aliases for backward compatibility

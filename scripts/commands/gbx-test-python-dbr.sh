@@ -124,8 +124,9 @@ if ! command -v docker &> /dev/null; then
     exit 1
 fi
 
-if ! docker ps | grep -q geobrix-dev; then
-    print_error "geobrix-dev container is not running"
+gbx_require_local_env
+if ! docker ps --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
+    print_error "$GBX_DEV_CONTAINER container is not running"
     echo -e "${YELLOW}ℹ️  Start it with: gbx:docker:start${NC}"
     exit 1
 fi
@@ -162,10 +163,10 @@ if [ -n "$LOG_FILE" ]; then
     mkdir -p "$(dirname "$LOG_PATH")"
     : > "$LOG_PATH"
     echo -e "${CYAN}📝 Logging to: ${LOG_PATH}${NC}"
-    docker exec geobrix-dev bash -c "$PYTEST_CMD" 2>&1 | tee "$LOG_PATH"
+    docker exec "$GBX_DEV_CONTAINER" bash -c "$PYTEST_CMD" 2>&1 | tee "$LOG_PATH"
     EXIT_CODE=${PIPESTATUS[0]}
 else
-    docker exec geobrix-dev bash -c "$PYTEST_CMD"
+    docker exec "$GBX_DEV_CONTAINER" bash -c "$PYTEST_CMD"
     EXIT_CODE=$?
 fi
 

@@ -98,7 +98,7 @@ PYEOF
 docker cp "$TMPSCRIPT" "geobrix-dev:/tmp/gbx-vec-corpus-gen.py"
 rm -f "$TMPSCRIPT"
 
-docker exec geobrix-dev bash -lc \
+docker exec "$GBX_DEV_CONTAINER" bash -lc \
     "cd /root/geobrix && python3 /tmp/gbx-vec-corpus-gen.py '$FORMAT' '$FEATURES' '$OUT'"
 
 exit $?

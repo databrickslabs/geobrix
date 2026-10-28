@@ -676,60 +676,60 @@ NOT_WORK = [
     # editable-install check
     (
         "gbx-test-python.sh",
-        r'docker exec geobrix-dev /bin/bash -c \\\n"pip show geobrix .*--quiet"',
+        r'docker exec "\$GBX_DEV_CONTAINER" /bin/bash -c \\\n"pip show geobrix .*--quiet"',
     ),
     # test-deps probe
     (
         "gbx-test-python.sh",
-        r'docker exec geobrix-dev /bin/bash -c \\\n"python3 -c \'import importlib\.metadata as m, rio_cogeo.*anywidget==[\d.]+"',
+        r'docker exec "\$GBX_DEV_CONTAINER" /bin/bash -c \\\n"python3 -c \'import importlib\.metadata as m, rio_cogeo.*anywidget==[\d.]+"',
     ),
     # zarr extra pin check
     (
         "gbx-test-python.sh",
-        r"docker exec -i geobrix-dev python3 - >/dev/null 2>&1 <<'PY'",
+        r"docker exec -i \"\$GBX_DEV_CONTAINER\" python3 - >/dev/null 2>&1 <<'PY'",
     ),
     # zarr extra
     (
         "gbx-test-python.sh",
-        r'docker exec geobrix-dev /bin/bash -c \\\n"pip3 install --break-system-packages --quiet -e \'/root/geobrix/python/geobrix\[zarr_dbr19\]\'" \\\n\|\| echo -e .*',
+        r'docker exec "\$GBX_DEV_CONTAINER" /bin/bash -c \\\n"pip3 install --break-system-packages --quiet -e \'/root/geobrix/python/geobrix\[zarr_dbr19\]\'" \\\n\|\| echo -e .*',
     ),
     # reads the pytest summary
     (
         "gbx-test-parity.sh",
-        r'SUMMARY=\$\(docker exec geobrix-dev /bin/bash -c \\\n"tail -6 \$REPORT 2>/dev/null \| \$ANSI_SED \| grep -E \'passed\|failed\|skipped\|no tests ran\'; \$ANSI_SED \$REPORT 2>/dev/null \| grep -E \'\^SKIPPED\'" 2>/dev/null\)',
+        r'SUMMARY=\$\(docker exec "\$GBX_DEV_CONTAINER" /bin/bash -c \\\n"tail -6 \$REPORT 2>/dev/null \| \$ANSI_SED \| grep -E \'passed\|failed\|skipped\|no tests ran\'; \$ANSI_SED \$REPORT 2>/dev/null \| grep -E \'\^SKIPPED\'" 2>/dev/null\)',
     ),
     (
         "gbx-test-python-docs.sh",
-        r"if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then",
+        r"if ! docker exec \"\$GBX_DEV_CONTAINER\" test -d /Volumes 2>/dev/null; then",
     ),
     (
         "gbx-test-python-docs.sh",
-        r'if ! docker exec geobrix-dev test -d "\$SAMPLE_DATA_ROOT/geobrix-examples" 2>/dev/null; then',
+        r'if ! docker exec "\$GBX_DEV_CONTAINER" test -d "\$SAMPLE_DATA_ROOT/geobrix-examples" 2>/dev/null; then',
     ),
     (
         "gbx-test-sql-docs.sh",
-        r"if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then",
+        r"if ! docker exec \"\$GBX_DEV_CONTAINER\" test -d /Volumes 2>/dev/null; then",
     ),
     (
         "gbx-test-docs.sh",
-        r"if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then",
+        r"if ! docker exec \"\$GBX_DEV_CONTAINER\" test -d /Volumes 2>/dev/null; then",
     ),
     (
         "gbx-coverage-scala.sh",
-        r'docker exec geobrix-dev /bin/bash -c "mkdir -p /root/geobrix/coverage-artifacts"',
+        r'docker exec "\$GBX_DEV_CONTAINER" /bin/bash -c "mkdir -p /root/geobrix/coverage-artifacts"',
     ),
     (
         "gbx-coverage-scala.sh",
-        r'docker exec geobrix-dev /bin/bash -c "cp -f /root/geobrix/target/scoverage\.xml /root/geobrix/coverage-artifacts/scoverage-\$\{pkg\}\.xml 2>/dev/null \|\| true"',
+        r'docker exec "\$GBX_DEV_CONTAINER" /bin/bash -c "cp -f /root/geobrix/target/scoverage\.xml /root/geobrix/coverage-artifacts/scoverage-\$\{pkg\}\.xml 2>/dev/null \|\| true"',
     ),
     (
         "gbx-docker-exec.sh",
-        r"docker exec -it geobrix-dev (spark-shell|pyspark|python3|scala|bash)",
+        r"docker exec -it \"\$GBX_DEV_CONTAINER\" (spark-shell|pyspark|python3|scala|bash)",
     ),
     # the lock helper itself (common.sh): holds the RUN lock, runs no work
     (
         "common.sh",
-        r'docker exec -i \\\n(-e [A-Z_]+="[^"]*" \\\n)+geobrix-dev /bin/bash "\$GBX_CONTAINER_LOCK" hold \\\n<&6 >"\$status" 2>&1 3>&- 7>&- 6<&- &',
+        r'docker exec -i \\\n(-e [A-Z_]+="[^"]*" \\\n)+"\$GBX_DEV_CONTAINER" /bin/bash "\$GBX_CONTAINER_LOCK" hold \\\n<&6 >"\$status" 2>&1 3>&- 7>&- 6<&- &',
     ),
 ]
 
@@ -827,10 +827,10 @@ def test_every_docker_exec_in_a_python_helper_is_under_the_work_lock():
 @pytest.mark.parametrize(
     "line",
     [
-        "else docker exec geobrix-dev mvn test",
-        "for x in a; do docker exec geobrix-dev mvn test; done",
-        "{ docker exec geobrix-dev mvn test; }",
-        "elif docker exec geobrix-dev mvn test; then",
+        'else docker exec "$GBX_DEV_CONTAINER" mvn test',
+        'for x in a; do docker exec "$GBX_DEV_CONTAINER" mvn test; done',
+        '{ docker exec "$GBX_DEV_CONTAINER" mvn test; }',
+        'elif docker exec "$GBX_DEV_CONTAINER" mvn test; then',
     ],
     ids=["else", "do", "brace", "elif"],
 )
@@ -845,9 +845,9 @@ def test_a_listed_probe_does_not_exempt_a_longer_exec_that_does_other_work(monke
     monkeypatch.setattr(
         sys.modules[__name__],
         "NOT_WORK",
-        [("gbx-x.sh", r"docker exec geobrix-dev test -d /Volumes")],
+        [("gbx-x.sh", r"docker exec \"\$GBX_DEV_CONTAINER\" test -d /Volumes")],
     )
-    probe = "docker exec geobrix-dev test -d /Volumes"
+    probe = 'docker exec "$GBX_DEV_CONTAINER" test -d /Volumes'
     longer = probe + " && rm -rf /root/geobrix/target"
 
     assert _unwrapped_execs("gbx-x.sh", probe) == []
@@ -856,7 +856,9 @@ def test_a_listed_probe_does_not_exempt_a_longer_exec_that_does_other_work(monke
 
 def test_the_guard_catches_an_unwrapped_pytest_exec_in_gbx_test_python():
     """Mutation: the main pytest exec of gbx:test:python loses its wrapper."""
-    wrapped = 'docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$PYTEST_CMD"'
+    wrapped = (
+        'docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$PYTEST_CMD"'
+    )
     text = _command_text("gbx-test-python.sh")
     assert wrapped in text
     mutated = text.replace(wrapped, wrapped.replace("$GBX_LOCK_RUN ", ""))
@@ -864,13 +866,13 @@ def test_the_guard_catches_an_unwrapped_pytest_exec_in_gbx_test_python():
     bad = _unwrapped_execs("gbx-test-python.sh", mutated)
 
     assert [stmt for _, stmt in bad] == [
-        'docker exec geobrix-dev /bin/bash -c "$PYTEST_CMD"'
+        'docker exec "$GBX_DEV_CONTAINER" /bin/bash -c "$PYTEST_CMD"'
     ]
 
 
 def test_the_guard_catches_the_unwrapped_by_package_maven_exec_in_gbx_coverage_scala():
     """Mutation: the --by-package Maven exec is bare, as it was before the fix."""
-    wrapped = 'docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$MVN_PKG"'
+    wrapped = 'docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$MVN_PKG"'
     text = _command_text("gbx-coverage-scala.sh")
     assert wrapped in text
     mutated = text.replace(wrapped, wrapped.replace("$GBX_LOCK_RUN ", ""))
@@ -878,13 +880,13 @@ def test_the_guard_catches_the_unwrapped_by_package_maven_exec_in_gbx_coverage_s
     bad = _unwrapped_execs("gbx-coverage-scala.sh", mutated)
 
     assert [stmt.split(" ||")[0] for _, stmt in bad] == [
-        'docker exec geobrix-dev /bin/bash -c "$MVN_PKG"'
+        'docker exec "$GBX_DEV_CONTAINER" /bin/bash -c "$MVN_PKG"'
     ]
 
 
 def test_the_guard_catches_the_delta_jar_fetch_outside_the_work_lock():
     """Mutation: fetch-delta-test-jars.sh runs `mvn dependency:get` in the container."""
-    wrapped = "docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash /root/geobrix/scripts/ci/fetch-delta-test-jars.sh"
+    wrapped = 'docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash /root/geobrix/scripts/ci/fetch-delta-test-jars.sh'
     text = _command_text("gbx-test-python.sh")
     assert wrapped in text
     mutated = text.replace(wrapped, wrapped.replace("$GBX_LOCK_RUN ", ""))

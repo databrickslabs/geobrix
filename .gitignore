@@ -75,3 +75,8 @@ test-logs/bench/
 # Per-machine salt for the dev image's package-index fingerprint (normally kept under ~/.cache/geobrix/;
 # ignored here in case GBX_PIP_INDEX_SALT_FILE points into the checkout)
 .pip-index-fpr-salt
+
+# Per-checkout dev container settings (scripts/docker/gbx-local.env.example): untracked, may name internal mirrors
+/.gbx-local.env
+# Build output of the native crates (cargo target, vendored sources)
+/build/

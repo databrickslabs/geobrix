@@ -128,7 +128,7 @@ if [ "$SKIP_BUILD" = true ]; then
     warn_if_jar_stale "$PROJECT_ROOT"
 else
     echo -e "${CYAN}🔨 Building assembly JAR (skipScoverage, no tests)...${NC}"
-    docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c \
+    docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c \
         "$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn -o -q -P skipScoverage clean package -DskipTests"
     BUILD_EXIT=$?
     if [ $BUILD_EXIT -ne 0 ]; then
@@ -195,7 +195,7 @@ for f in "${RUN_FILES[@]}"; do
     [ -n "$KEYWORD" ] && PYTEST_CMD="$PYTEST_CMD -k '$KEYWORD'"
     PYTEST_CMD="$PYTEST_CMD | tee $REPORT"
 
-    docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "set -o pipefail; $PYTEST_CMD"
+    docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "set -o pipefail; $PYTEST_CMD"
     FILE_EXIT=$?
 
     # The pytest summary line, then the skip reasons (-rs): which one explains a skip below.
@@ -204,7 +204,7 @@ for f in "${RUN_FILES[@]}"; do
     # grep on the coloured report matches nothing. The ESC is a literal byte in the sed script
     # (the same on GNU and BSD sed).
     ANSI_SED="sed 's/$(printf '\033')\\[[0-9;]*m//g'"
-    SUMMARY=$(docker exec geobrix-dev /bin/bash -c \
+    SUMMARY=$(docker exec "$GBX_DEV_CONTAINER" /bin/bash -c \
         "tail -6 $REPORT 2>/dev/null | $ANSI_SED | grep -E 'passed|failed|skipped|no tests ran'; $ANSI_SED $REPORT 2>/dev/null | grep -E '^SKIPPED'" 2>/dev/null)
     N_PASSED=$(echo "$SUMMARY" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+' | head -1)
     N_PASSED=${N_PASSED:-0}

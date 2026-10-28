@@ -37,6 +37,10 @@ class DcsCommand:
             self.root / "scripts" / "ci" / "check_jar_packaging.py",
         )
         (self.root / "scripts" / "docker" / "dcs").mkdir(parents=True)
+        shutil.copy(  # common.sh sources it
+            REPO_ROOT / "scripts" / "docker" / "gbx-container.sh",
+            self.root / "scripts" / "docker" / "gbx-container.sh",
+        )
         (self.root / "scripts" / "docker" / "dcs" / "Dockerfile").write_text(
             "FROM scratch\n"
         )
@@ -177,7 +181,8 @@ class ContainerSandbox:
         self.commands = self.root / "scripts" / "commands"
         docker_dir = self.root / "scripts" / "docker"
         docker_dir.mkdir()
-        shutil.copy(REPO_ROOT / "scripts" / "docker" / "gbx-lock.sh", docker_dir)
+        for name in ("gbx-lock.sh", "gbx-container.sh"):
+            shutil.copy(REPO_ROOT / "scripts" / "docker" / name, docker_dir)
         self.bin = tmp_path / "bin"
         self.bin.mkdir()
         self._shim("docker", "_fake_docker_local.py")

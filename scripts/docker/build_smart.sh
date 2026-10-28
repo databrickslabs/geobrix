@@ -3,7 +3,11 @@
 # --- CONFIGURATION ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-# Platform and image-tag resolution shared with the start scripts.
+# This checkout's container settings (the image tag may differ per worktree), then the platform and
+# image-tag resolution shared with the start scripts. The container file comes first: the tag is read
+# when gbx-platform.sh is sourced.
+source "$SCRIPT_DIR/gbx-container.sh"
+gbx_load_local_env "$PROJECT_ROOT" || exit 1
 source "$SCRIPT_DIR/gbx-platform.sh"
 STAGES=(
     "base"

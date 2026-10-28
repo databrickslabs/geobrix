@@ -173,7 +173,7 @@ run_lint_docker() {
     fi
     docker exec -e ISORT_FLAGS="$ISORT_FLAGS" -e BLACK_FLAGS="$BLACK_FLAGS" \
         -e LINT_PKG_PATHS="$pkg_paths" -e LINT_LAKEFLOW_PATHS="$lakeflow_paths" \
-        geobrix-dev /bin/bash -c "$LINT_SCRIPT"
+        "$GBX_DEV_CONTAINER" /bin/bash -c "$LINT_SCRIPT"
 }
 
 run_lint_docker

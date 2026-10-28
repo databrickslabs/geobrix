@@ -5,6 +5,9 @@ set -e
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# This checkout's dev container (gbx-container.sh): geobrix-dev, or the name in a worktree's .gbx-local.env.
+source "$PROJECT_ROOT/scripts/docker/gbx-container.sh"
+gbx_load_local_env "$PROJECT_ROOT" 2>/dev/null || true
 
 # Colors
 RED='\033[0;31m'
@@ -47,7 +50,7 @@ show_help() {
 }
 
 # The local runs go through the gbx commands: they take the container test lock (one Maven or
-# Spark test JVM at a time in geobrix-dev) and set the environment the doc tests need. A raw
+# Spark test JVM at a time in the dev container) and set the environment the doc tests need. A raw
 # `docker exec ... mvn test` here ran unlocked and could overlap another run on target/.
 run_python_tests() {
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -70,6 +73,7 @@ run_scala_tests() {
 }
 
 check_docker() {
+    gbx_require_local_env
     # Check if Docker is running
     if ! docker ps &> /dev/null; then
         echo -e "${RED}❌ Error: Docker is not running${NC}"
@@ -77,18 +81,18 @@ check_docker() {
         exit 1
     fi
     
-    # Check if geobrix-dev container exists
-    if ! docker ps -a --format '{{.Names}}' | grep -q '^geobrix-dev$'; then
-        echo -e "${RED}❌ Error: geobrix-dev container not found${NC}"
+    # Check if the dev container exists
+    if ! docker ps -a --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
+        echo -e "${RED}❌ Error: $GBX_DEV_CONTAINER container not found${NC}"
         echo "Start the development container first:"
-        echo -e "  ${YELLOW}./scripts/docker/start_docker.sh${NC}"
+        echo -e "  ${YELLOW}bash scripts/commands/gbx-docker-start.sh${NC}"
         exit 1
     fi
     
     # Check if container is running
-    if ! docker ps --format '{{.Names}}' | grep -q '^geobrix-dev$'; then
+    if ! docker ps --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
         echo -e "${YELLOW}⚠️  Container is not running. Starting...${NC}"
-        docker start geobrix-dev
+        docker start "$GBX_DEV_CONTAINER"
         sleep 2
     fi
 }

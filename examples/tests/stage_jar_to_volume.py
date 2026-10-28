@@ -18,7 +18,10 @@ from pathlib import Path
 from _artifact_volume import prune_stale
 
 TESTS_DIR = Path(__file__).resolve().parent
-# Container side of the gbx test lock (scripts/docker/gbx-lock.sh, the repo as mounted in geobrix-dev).
+# This checkout's dev container: the command that started this (gbx-data-stage-*.sh) exports it from
+# scripts/docker/gbx-container.sh; a direct run is the main checkout's.
+CONTAINER = os.environ.get("GBX_DEV_CONTAINER") or "geobrix-dev"
+# Container side of the gbx test lock (scripts/docker/gbx-lock.sh, the repo as mounted in the container).
 # The command that started this (gbx-data-stage-*.sh) exports GBX_LOCK_RUN with its lock overrides
 # (work-lock file, timeout); a direct run falls back to the defaults.
 LOCK_RUN = os.environ.get("GBX_LOCK_RUN", "").split() or [
@@ -70,24 +73,24 @@ def main() -> int:
             print("Install databricks-sdk: pip install databricks-sdk", file=sys.stderr)
             return 2
 
-    # Corp firewall blocks repo.maven.apache.org on the host; the geobrix-dev container
+    # Corp firewall blocks repo.maven.apache.org on the host; the dev container
     # has the db-maven-proxy mirror wired up via scripts/docker/m2/settings.xml.
     mvn_cmd = (
         'unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && '
         'export MAVEN_OPTS="-Xmx4G -XX:+UseG1GC" && '
         'cd /root/geobrix && mvn clean package -DskipTests'
     )
-    print("Running in geobrix-dev: mvn clean package -DskipTests ...")
+    print(f"Running in {CONTAINER}: mvn clean package -DskipTests ...")
     # `clean` wipes target/, so this must never overlap a test run: the command
     # (gbx-data-stage-jar.sh / gbx-data-stage-wheel.sh) holds the container run lock, and the
     # Maven process holds the work lock via gbx-lock.sh, so a killed host script cannot free it.
     rc = subprocess.run(
-        ["docker", "exec", "geobrix-dev", *LOCK_RUN, "/bin/bash", "-c", mvn_cmd],
+        ["docker", "exec", CONTAINER, *LOCK_RUN, "/bin/bash", "-c", mvn_cmd],
         cwd=project_root,
         capture_output=False,
     )
     if rc.returncode != 0:
-        print("Maven build failed (is the geobrix-dev container running? try gbx:docker:start)", file=sys.stderr)
+        print(f"Maven build failed (is the {CONTAINER} container running? try gbx:docker:start)", file=sys.stderr)
         return 1
 
     target = project_root / "target"

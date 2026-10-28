@@ -1,6 +1,7 @@
 """A stand-in for the `docker` CLI in the scripts/ci tests of the gbx:test:* commands.
 
-It never reaches a Docker daemon. `docker ps` lists a running geobrix-dev. `docker exec`
+It never reaches a Docker daemon. `docker ps` lists a running container named $FAKE_DOCKER_CONTAINER
+(default geobrix-dev); an `exec` naming another container records an empty command. `docker exec`
 appends the command (one JSON line) to $FAKE_DOCKER_EXEC_LOG -- and its `-e KEY=VALUE` pairs
 to $FAKE_DOCKER_EXEC_LOG.env, same line number -- and then either
 
@@ -11,6 +12,9 @@ to $FAKE_DOCKER_EXEC_LOG.env, same line number -- and then either
 - does nothing, prints $FAKE_DOCKER_EXEC_STDOUT (default nothing) and exits
   $FAKE_DOCKER_EXEC_RC (default 0): the work a command would send into the container (Maven,
   pytest) is recorded, not run.
+
+When $FAKE_DOCKER_EXEC_LOG is set, every call's whole argv is also appended to
+$FAKE_DOCKER_EXEC_LOG.argv (one JSON line each), so a test can see which container each call named.
 
 A path under /root/geobrix is run from $FAKE_DOCKER_ROOT instead (the scratch repo), so the
 real scripts/docker/gbx-lock.sh runs as it does in the container. Every other docker command
@@ -23,7 +27,7 @@ import re
 import subprocess
 import sys
 
-CONTAINER = "geobrix-dev"
+CONTAINER = os.environ.get("FAKE_DOCKER_CONTAINER", "geobrix-dev")
 CONTAINER_REPO = "/root/geobrix"
 LOCK_SCRIPT = "gbx-lock.sh"
 OPTS_WITH_VALUE = {"-e", "--env", "-w", "--workdir", "-u", "--user"}
@@ -32,6 +36,9 @@ OPTS_WITH_VALUE = {"-e", "--env", "-w", "--workdir", "-u", "--user"}
 def main(args):
     if not args:
         return 0
+    if os.environ.get("FAKE_DOCKER_EXEC_LOG"):
+        with open(os.environ["FAKE_DOCKER_EXEC_LOG"] + ".argv", "a") as fh:
+            fh.write(json.dumps(args) + "\n")
     if args[0] == "ps":
         print(CONTAINER)
         return 0

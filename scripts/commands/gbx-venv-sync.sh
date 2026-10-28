@@ -36,7 +36,7 @@ Options:
                    them, and nothing already installed changes version. The names are recorded
                    in <venv>/.gbx-connect-extras for gbx:venv:check.
   --match-container
-                   Build the venv to match the running geobrix-dev container instead of the CI
+                   Build the venv to match the running dev container instead of the CI
                    lock: the container's exact Python patch version (uv fetches it) and the
                    container's exact version of every package the lock names (the lock's version
                    for the few it lacks). Installed by exact version, WITHOUT hashes: the lock's
@@ -82,7 +82,7 @@ if [[ $MATCH -eq 1 ]]; then
     # The container decides the Python patch version and the package versions.
     check_docker
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/gbx-venv-sync.XXXXXX")"
-    docker exec -i geobrix-dev python3 - collect < "$REPORT" > "$WORK/container.json" \
+    docker exec -i "$GBX_DEV_CONTAINER" python3 - collect < "$REPORT" > "$WORK/container.json" \
         || { rm -rf "$WORK"; echo "❌ could not read the container's environment" >&2; exit 1; }
     PYTHON_VERSION="$(sed -n 's/.*"python": "\([^"]*\)".*/\1/p' "$WORK/container.json")"
     [[ -n "$PYTHON_VERSION" ]] || { rm -rf "$WORK"; echo "❌ the container reported no Python version" >&2; exit 1; }

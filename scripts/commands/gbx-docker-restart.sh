@@ -1,5 +1,5 @@
 #!/bin/bash
-# gbx:docker:restart - Restart geobrix-dev container
+# gbx:docker:restart - Restart this checkout's dev container
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,7 +20,7 @@ show_help() {
     cat << EOF
 $(print_banner "🐳 GeoBrix: Restart Docker Container")
 
-Restart geobrix-dev container
+Restart this checkout's dev container
 
 USAGE:
     bash scripts/commands/gbx-docker-restart.sh [OPTIONS]
@@ -99,7 +99,7 @@ check_docker
 print_separator
 
 # Check if container exists
-if ! docker ps -a --format '{{.Names}}' | grep -q '^geobrix-dev$'; then
+if ! docker ps -a --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
     echo -e "${YELLOW}ℹ️  Container doesn't exist, creating new one...${NC}"
     print_separator
     
@@ -116,22 +116,21 @@ if [ "$PRIVILEGED" = true ]; then
     # default or GBX_DOCKER_PLATFORM: a restart must not silently switch architecture; use
     # `gbx:docker:start --recreate --platform <p>` for that). The image must exist BEFORE the working
     # container is stopped and removed.
-    CONTAINER_ARCH="$(gbx_container_arch geobrix-dev)"
-    if [ -z "$CONTAINER_ARCH" ]; then
-        echo -e "${RED}❌ Cannot tell which architecture the existing geobrix-dev container runs; it was left untouched.${NC}"
+    CONTAINER_ARCH="$(gbx_container_arch "$GBX_DEV_CONTAINER")"
+    if ! RESTART_PLATFORM="$(gbx_normalize_platform "$CONTAINER_ARCH")"; then
+        echo -e "${RED}❌ Cannot tell which architecture the existing $GBX_DEV_CONTAINER container runs (image architecture: '${CONTAINER_ARCH:-unreadable}'); it was left untouched.${NC}"
         echo -e "   To replace it on a chosen architecture: ${YELLOW}bash scripts/commands/gbx-docker-start.sh --recreate --platform linux/arm64|linux/amd64${NC}"
         exit 1
     fi
-    RESTART_PLATFORM="linux/$CONTAINER_ARCH"
     echo -e "${CYAN}   Keeping the container's architecture: ${RESTART_PLATFORM}${NC}"
     if ! gbx_require_dev_image "$RESTART_PLATFORM" >/dev/null; then
-        echo -e "${RED}❌ Not recreating: the existing geobrix-dev container was left untouched.${NC}"
+        echo -e "${RED}❌ Not recreating: the existing $GBX_DEV_CONTAINER container was left untouched.${NC}"
         exit 1
     fi
     echo -e "${CYAN}🔄 Recreating container with privileged mode...${NC}"
     print_separator
-    docker stop -t $TIMEOUT geobrix-dev 2>/dev/null || true
-    docker rm geobrix-dev 2>/dev/null || true
+    docker stop -t $TIMEOUT "$GBX_DEV_CONTAINER" 2>/dev/null || true
+    docker rm "$GBX_DEV_CONTAINER" 2>/dev/null || true
     bash "$SCRIPT_DIR/gbx-docker-start.sh" --privileged --platform "$RESTART_PLATFORM" \
         $([ "$ATTACH" = true ] && echo "--attach")
     exit $?
@@ -141,7 +140,7 @@ fi
 echo -e "${CYAN}🔄 Restarting container (timeout: ${TIMEOUT}s)...${NC}"
 print_separator
 
-docker restart -t $TIMEOUT geobrix-dev
+docker restart -t $TIMEOUT "$GBX_DEV_CONTAINER"
 EXIT_CODE=$?
 
 if [ $EXIT_CODE -eq 0 ]; then
@@ -149,13 +148,13 @@ if [ $EXIT_CODE -eq 0 ]; then
     echo -e "${GREEN}✅ Container restarted successfully${NC}"
     echo ""
     echo -e "${CYAN}⚙️  Applying Maven setup (.m2 in project, skipScoverage default)...${NC}"
-    docker exec geobrix-dev /bin/bash -c "sh /root/geobrix/scripts/docker/extras/docker_maven_setup.sh"
+    docker exec "$GBX_DEV_CONTAINER" /bin/bash -c "sh /root/geobrix/scripts/docker/extras/docker_maven_setup.sh"
     print_separator
     
     if [ "$ATTACH" = true ]; then
         echo ""
         echo -e "${CYAN}🔗 Attaching to container...${NC}"
-        docker exec -it geobrix-dev bash
+        docker exec -it "$GBX_DEV_CONTAINER" bash
     fi
 else
     echo ""

@@ -57,5 +57,5 @@ show_banner "📦 GeoBrix: Generate Minimal Bundle"
 check_docker
 setup_log_file "$LOG_PATH"
 
-docker exec geobrix-dev python3 /root/geobrix/sample-data/generate-minimal-bundle.py "${EXTRA_ARGS[@]}"
+docker exec "$GBX_DEV_CONTAINER" python3 /root/geobrix/sample-data/generate-minimal-bundle.py "${EXTRA_ARGS[@]}"
 exit $?

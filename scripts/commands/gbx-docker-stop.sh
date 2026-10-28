@@ -1,5 +1,5 @@
 #!/bin/bash
-# gbx:docker:stop - Stop geobrix-dev container
+# gbx:docker:stop - Stop this checkout's dev container
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,7 +17,7 @@ show_help() {
     cat << EOF
 $(print_banner "🐳 GeoBrix: Stop Docker Container")
 
-Stop geobrix-dev container
+Stop this checkout's dev container
 
 USAGE:
     bash scripts/commands/gbx-docker-stop.sh [OPTIONS]
@@ -79,9 +79,9 @@ echo -e "${CYAN}🔍 Checking container status...${NC}"
 print_separator
 
 # Check if container is running
-if ! docker ps --format '{{.Names}}' | grep -q '^geobrix-dev$'; then
+if ! docker ps --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
     echo ""
-    echo -e "${YELLOW}ℹ️  Container 'geobrix-dev' is not running${NC}"
+    echo -e "${YELLOW}ℹ️  Container '$GBX_DEV_CONTAINER' is not running${NC}"
     print_separator
     exit 0
 fi
@@ -90,10 +90,10 @@ fi
 echo ""
 if [ "$FORCE" = true ]; then
     echo -e "${CYAN}🛑 Force stopping container...${NC}"
-    docker kill geobrix-dev
+    docker kill "$GBX_DEV_CONTAINER"
 else
     echo -e "${CYAN}🛑 Stopping container (timeout: ${TIMEOUT}s)...${NC}"
-    docker stop -t $TIMEOUT geobrix-dev
+    docker stop -t $TIMEOUT "$GBX_DEV_CONTAINER"
 fi
 
 EXIT_CODE=$?

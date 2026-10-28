@@ -17,7 +17,7 @@ show_help() {
     echo -e "                          e.g. python/geobrix/test/zarr/test_manifest.py. The light dirs are _LIGHT_TEST_DIRS in test/conftest.py"
     echo -e "  ${GREEN}--markers <expr>${NC}       Extra pytest marker expression, ANDed with the default 'not integration',"
     echo -e "                          e.g. --markers 'not delta' (runs as -m '(not integration) and (not delta)')"
-    echo -e "  ${GREEN}--docker${NC}               Run in the geobrix-dev container instead of the host venv (default). Only for GDAL"
+    echo -e "  ${GREEN}--docker${NC}               Run in the dev container instead of the host venv (default). Only for GDAL"
     echo -e "                          natives, the JAR and parity"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
     print_lock_help
@@ -119,7 +119,7 @@ if [[ $USE_DOCKER -eq 1 ]]; then
         python3 -m pytest ${TEST_PATHS[*]} -v --tb=short --color=yes -m $MARKERS_Q"
     ENV_ARGS=()
     [[ -n "${PYTEST_ADDOPTS:-}" ]] && ENV_ARGS+=(-e "PYTEST_ADDOPTS=$PYTEST_ADDOPTS")
-    docker exec "${ENV_ARGS[@]}" geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$PYTEST_CMD"
+    docker exec "${ENV_ARGS[@]}" "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$PYTEST_CMD"
     EXIT_CODE=$?
 else
     # Host venv path (default): isolated from system site-packages. run_in_pyrx_venv also

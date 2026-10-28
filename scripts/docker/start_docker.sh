@@ -1,16 +1,13 @@
 #!/bin/bash
-# Starts the geobrix-dev container with the repo bind-mounted at /root/geobrix.
-# The mount source is resolved from git (not $PWD) so the container is always bound
-# to the repository root regardless of which subdirectory you launch from, and so a
-# stale/deleted CWD can't dangle the mount. Run from anywhere inside the repo:
+# Starts this checkout's dev container (geobrix-dev for the main checkout; a linked worktree names its
+# own in .gbx-local.env, see gbx-container.sh) with the repo bind-mounted at /root/geobrix.
+# The mount source is the repository root this script lives in (not $PWD), so the container is always
+# bound to the repository root regardless of which directory you launch from, and a stale/deleted CWD
+# can't dangle the mount. Run from anywhere:
 #   bash scripts/docker/start_docker.sh
 
-# Resolve the repository top-level via git. Errors clearly if not inside a git work tree.
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
-if [ -z "$REPO_ROOT" ] || [ ! -d "$REPO_ROOT" ]; then
-  echo "❌ Not inside a git work tree (or top-level not found). cd into the geobrix repo and retry." >&2
-  exit 1
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Guard against binding to an ephemeral agent worktree (.claude/worktrees/*), which get
 # auto-cleaned out from under a long-lived container and dangle the mount -> exec fails with
@@ -36,11 +33,13 @@ esac
 #
 # Platform: the host's architecture, or $GBX_DOCKER_PLATFORM (linux/arm64 | linux/amd64). The image is
 # geobrix-dev:ubuntu24-gdal311-spark-<arch> (see gbx-platform.sh).
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# Container name, ports and mounts: gbx-container.sh (the defaults above are the main checkout's).
+source "$SCRIPT_DIR/gbx-container.sh"
+gbx_load_local_env "$REPO_ROOT" || exit 1
 source "$SCRIPT_DIR/gbx-platform.sh"
 PLATFORM="$(gbx_docker_platform)" || exit 2
 IMAGE="$(gbx_require_dev_image "$PLATFORM")" || exit 1
 
-docker run --platform "$PLATFORM" --name geobrix-dev -p 5005:5005 -p 8888:8888 -p 4040:4040 \
--v "$REPO_ROOT":/root/geobrix \
+gbx_dev_run_args "$REPO_ROOT" --no-volumes
+docker run --platform "$PLATFORM" "${GBX_DEV_RUN_ARGS[@]}" \
 -itd "$IMAGE" /bin/bash

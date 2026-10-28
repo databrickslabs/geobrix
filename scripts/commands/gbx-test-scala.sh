@@ -110,7 +110,7 @@ if [ "$BY_PACKAGE" = true ]; then
         show_separator
         SUITES="com.databricks.labs.gbx.${pkg}.*"
         MVN_CMD="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn test -PskipScoverage -DskipTests=false -Dsuites='$SUITES' $VERBOSE"
-        if docker exec -e LC_ALL=C.UTF-8 geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$MVN_CMD"; then
+        if docker exec -e LC_ALL=C.UTF-8 "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$MVN_CMD"; then
             echo -e "${GREEN}✅ $pkg passed${NC}"
         else
             echo -e "${RED}❌ $pkg failed${NC}"
@@ -151,7 +151,7 @@ else
     show_separator
     echo ""
 
-    docker exec -e LC_ALL=C.UTF-8 geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$MVN_CMD"
+    docker exec -e LC_ALL=C.UTF-8 "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$MVN_CMD"
     EXIT_CODE=$?
 
     echo ""

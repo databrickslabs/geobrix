@@ -102,8 +102,12 @@ class Sandbox:
             "probe": {a: good_probe(a) for a in ("arm64", "amd64")},
         }
         self.host_arch = host_arch
-        self.cwd = (
-            tmp_path  # start_docker_with_volumes.sh creates sample-data under its cwd
+        self.cwd = tmp_path
+        # These tests run the scripts in place, and this checkout may be a linked worktree with a
+        # .gbx-local.env of its own: pin the container settings to the main checkout's.
+        self.local_env = tmp_path / "gbx-local.env"
+        self.local_env.write_text(
+            f"GBX_DEV_CONTAINER=geobrix-dev\nGBX_DEV_VOLUMES_DIR={tmp_path / 'Volumes'}\n"
         )
 
     def image(self, ref: str, arch: str):
@@ -130,6 +134,7 @@ class Sandbox:
             FAKE_DOCKER_LOG=str(self.log),
             FAKE_DOCKER_STATE=str(self.state_file),
             GBX_PIP_INDEX_SALT_FILE=str(self.salt_file),
+            GBX_LOCAL_ENV_FILE=str(self.local_env),
             TERM="dumb",
         )
         full.update(env or {})
@@ -1043,6 +1048,7 @@ def scratch_tree(tmp_path, pyproj_pin_changed_in: str):
     (root / "python" / "geobrix").mkdir(parents=True)
     for name in (
         "build_smart.sh",
+        "gbx-container.sh",
         "gbx-platform.sh",
         "gbx-native-probe.sh",
         "Dockerfile",

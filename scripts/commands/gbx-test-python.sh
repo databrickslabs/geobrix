@@ -121,7 +121,7 @@ warn_if_jar_stale "$PROJECT_ROOT"
 # pyproject.toml covers the driver (pytest) process only; UDF workers start with the
 # system sys.path, so without an editable install every @f.udf test fails with
 # ModuleNotFoundError. The pip show check is idempotent — near-zero cost when present.
-docker exec geobrix-dev /bin/bash -c \
+docker exec "$GBX_DEV_CONTAINER" /bin/bash -c \
     "pip show geobrix >/dev/null 2>&1 || \
      pip3 install -e /root/geobrix/python/geobrix --no-deps --break-system-packages --quiet"
 
@@ -140,7 +140,7 @@ docker exec geobrix-dev /bin/bash -c \
 # Remove once the image ships these.
 # NOTE: tippecanoe is intentionally excluded — it installs but segfaults natively in-container
 # (exit 139); a pip install cannot fix a native crash.
-docker exec geobrix-dev /bin/bash -c \
+docker exec "$GBX_DEV_CONTAINER" /bin/bash -c \
     "python3 -c 'import importlib.metadata as m, rio_cogeo, skimage, xrspatial, mapbox_vector_tile, netCDF4, rio_tiler, pmtiles, h3, pyarrow, laspy, lazrs, quadbin, numexpr, exifread, tenacity, contextily, anywidget; assert tuple(int(v) for v in m.version(\"lazrs\").split(\".\")[:3]) >= (0, 8, 2)' >/dev/null 2>&1 || \
      pip3 install --break-system-packages --quiet \
        rio-cogeo==7.0.2 scikit-image==0.26.0 xarray-spatial==0.9.9 \
@@ -208,7 +208,7 @@ paths_need_zarr() {
 # True when every pin of the [zarr_dbr19] extra, read from pyproject.toml (the single source),
 # is satisfied by what is installed in the container.
 zarr_extra_installed() {
-    docker exec -i geobrix-dev python3 - >/dev/null 2>&1 <<'PY'
+    docker exec -i "$GBX_DEV_CONTAINER" python3 - >/dev/null 2>&1 <<'PY'
 import importlib.metadata as md
 import tomllib
 
@@ -238,13 +238,13 @@ PY
 #     put on a classpath.
 ensure_zarr_test_env() {
     if ! zarr_extra_installed; then
-        echo -e "${CYAN}📦 Installing the zarr_dbr19 extra into geobrix-dev${NC}"
-        docker exec geobrix-dev /bin/bash -c \
+        echo -e "${CYAN}📦 Installing the zarr_dbr19 extra into $GBX_DEV_CONTAINER${NC}"
+        docker exec "$GBX_DEV_CONTAINER" /bin/bash -c \
             "pip3 install --break-system-packages --quiet -e '/root/geobrix/python/geobrix[zarr_dbr19]'" \
             || echo -e "${YELLOW}⚠️  zarr_dbr19 install failed: zarr tests will fail on import${NC}"
     fi
     local rc=0
-    docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash /root/geobrix/scripts/ci/fetch-delta-test-jars.sh || rc=$?
+    docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash /root/geobrix/scripts/ci/fetch-delta-test-jars.sh || rc=$?
     if [ "$rc" -eq 3 ]; then
         echo -e "${RED}❌ Delta jar sha256 mismatch; refusing to run (see the message above)${NC}"
         exit 1
@@ -282,7 +282,7 @@ run_single() {
         cd /root/geobrix && \
         python3 -m pytest $TEST_PATH -v --tb=short --color=yes $MARKERS $KEYWORD"
 
-    docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$PYTEST_CMD"
+    docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$PYTEST_CMD"
     EXIT_CODE=$?
 
     echo ""
@@ -351,7 +351,7 @@ run_phase() {
     echo -e "${CYAN}  pytest ${args}${NC}"
     show_separator
     echo ""
-    docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "unset JAVA_TOOL_OPTIONS && \
+    docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "unset JAVA_TOOL_OPTIONS && \
         cd /root/geobrix/python/geobrix && \
         python3 -m pytest $args -v --tb=short --color=yes -rfE $MARKERS $KEYWORD" 2>&1 | tee -a "$log"
     return "${PIPESTATUS[0]}"

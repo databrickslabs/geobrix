@@ -21,7 +21,7 @@ show_help() {
     cat << EOF
 $(print_banner "🐳 GeoBrix: Start Docker Container")
 
-Start geobrix-dev container with proper volume mounts
+Start this checkout's dev container with proper volume mounts
 
 USAGE:
     bash scripts/commands/gbx-docker-start.sh [OPTIONS]
@@ -123,6 +123,8 @@ fi
 
 # Resolve the platform now, so a bad value fails before anything is touched.
 PLATFORM="$(gbx_docker_platform "$PLATFORM_ARG")" || exit 2
+# A linked worktree with no .gbx-local.env has no container of its own: refuse before touching docker.
+gbx_require_local_env
 
 # Print banner
 print_banner "🐳 GeoBrix: Start Docker Container"
@@ -137,50 +139,54 @@ print_separator
 echo -e "${CYAN}🔍 Checking container status...${NC}"
 print_separator
 
-# Worktree-aware mount-source check. If a geobrix-dev container exists,
+# Worktree-aware mount-source check. If this checkout's container exists,
 # verify its /root/geobrix mount source matches the current worktree;
 # otherwise recreate so the agent / user gets the right files in-container.
 existing_mount_source() {
-    docker inspect --format '{{ range .Mounts }}{{ if eq .Destination "/root/geobrix" }}{{ .Source }}{{ end }}{{ end }}' geobrix-dev 2>/dev/null
+    docker inspect --format '{{ range .Mounts }}{{ if eq .Destination "/root/geobrix" }}{{ .Source }}{{ end }}{{ end }}' "$GBX_DEV_CONTAINER" 2>/dev/null
 }
 
 # A recreate removes the working container first, so the image it will be recreated from must exist
 # BEFORE anything is stopped or removed; otherwise a missing image leaves no container at all.
 require_image_before_removal() {
     if ! gbx_require_dev_image "$PLATFORM" >/dev/null; then
-        echo -e "${RED}❌ Not recreating: the existing geobrix-dev container was left untouched.${NC}"
+        echo -e "${RED}❌ Not recreating: the existing $GBX_DEV_CONTAINER container was left untouched.${NC}"
         exit 1
     fi
 }
 
-if [ "$RECREATE" = true ] && docker ps -a --format '{{.Names}}' | grep -q '^geobrix-dev$'; then
+if [ "$RECREATE" = true ] && docker ps -a --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
     require_image_before_removal
     echo ""
     echo -e "${CYAN}🔄 Recreating container (--recreate): stopping and removing the existing one...${NC}"
-    docker stop geobrix-dev >/dev/null 2>&1 || true
-    docker rm geobrix-dev >/dev/null 2>&1 || true
+    docker stop "$GBX_DEV_CONTAINER" >/dev/null 2>&1 || true
+    docker rm "$GBX_DEV_CONTAINER" >/dev/null 2>&1 || true
 fi
 
-if docker ps -a --format '{{.Names}}' | grep -q '^geobrix-dev$'; then
+if docker ps -a --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
     EXISTING_MOUNT="$(existing_mount_source)"
     if [ -n "$EXISTING_MOUNT" ] && [ "$EXISTING_MOUNT" != "$PROJECT_ROOT" ]; then
         echo ""
-        echo -e "${YELLOW}⚠️  Existing 'geobrix-dev' container is mounted to a different worktree:${NC}"
+        echo -e "${YELLOW}⚠️  Existing '$GBX_DEV_CONTAINER' container is mounted to a different worktree:${NC}"
         echo -e "   existing: ${YELLOW}$EXISTING_MOUNT${NC}"
         echo -e "   current:  ${YELLOW}$PROJECT_ROOT${NC}"
         # Only the mount is wrong, so the replacement keeps the architecture of the container it replaces
         # unless a platform was asked for (--platform or GBX_DOCKER_PLATFORM).
+        # An architecture that cannot be read, or that this tooling does not build (arm, 386), is refused
+        # before anything is stopped: the replacement would otherwise switch architecture unannounced.
         if [ -z "$PLATFORM_ARG" ] && [ -z "${GBX_DOCKER_PLATFORM:-}" ]; then
-            KEPT_ARCH="$(gbx_container_arch geobrix-dev)"
-            if [ -n "$KEPT_ARCH" ]; then
-                PLATFORM="linux/$KEPT_ARCH"
-                echo -e "   keeping its architecture: ${YELLOW}${PLATFORM}${NC}"
+            KEPT_ARCH="$(gbx_container_arch "$GBX_DEV_CONTAINER")"
+            if ! PLATFORM="$(gbx_normalize_platform "$KEPT_ARCH")"; then
+                echo -e "${RED}❌ Cannot tell which architecture the existing $GBX_DEV_CONTAINER container runs (image architecture: '${KEPT_ARCH:-unreadable}'); it was left untouched.${NC}"
+                echo -e "   To replace it on a chosen architecture: ${YELLOW}bash scripts/commands/gbx-docker-start.sh --recreate --platform linux/arm64|linux/amd64${NC}"
+                exit 1
             fi
+            echo -e "   keeping its architecture: ${YELLOW}${PLATFORM}${NC}"
         fi
         require_image_before_removal
         echo -e "${CYAN}🔄 Recreating container with current worktree mount...${NC}"
-        docker stop geobrix-dev >/dev/null 2>&1 || true
-        docker rm geobrix-dev >/dev/null 2>&1 || true
+        docker stop "$GBX_DEV_CONTAINER" >/dev/null 2>&1 || true
+        docker rm "$GBX_DEV_CONTAINER" >/dev/null 2>&1 || true
         # Fall through to the "create new container" branch below.
     fi
 fi
@@ -189,41 +195,41 @@ fi
 # for (never recreate silently: other runs may be using it).
 warn_if_arch_differs() {
     local have want
-    have="$(gbx_container_arch geobrix-dev)"
+    have="$(gbx_container_arch "$GBX_DEV_CONTAINER")"
     want="$(gbx_platform_arch "$PLATFORM")"
     if [ -n "$have" ] && [ "$have" != "$want" ]; then
-        echo -e "${YELLOW}⚠️  The existing 'geobrix-dev' container runs the ${have} image; ${want} was requested.${NC}"
+        echo -e "${YELLOW}⚠️  The existing '$GBX_DEV_CONTAINER' container runs the ${have} image; ${want} was requested.${NC}"
         echo -e "   Keeping it. To switch (stops the container): ${YELLOW}bash scripts/commands/gbx-docker-start.sh --recreate --platform ${PLATFORM}${NC}"
     fi
 }
 
 # Check if container is already running (with the correct mount)
-if docker ps --format '{{.Names}}' | grep -q '^geobrix-dev$'; then
+if docker ps --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
     echo ""
-    echo -e "${YELLOW}ℹ️  Container 'geobrix-dev' is already running${NC}"
+    echo -e "${YELLOW}ℹ️  Container '$GBX_DEV_CONTAINER' is already running${NC}"
     warn_if_arch_differs
     echo ""
     echo -e "${CYAN}⚙️  Applying Maven setup (.m2 in project, skipScoverage default)...${NC}"
-    docker exec geobrix-dev /bin/bash -c "sh /root/geobrix/scripts/docker/extras/docker_maven_setup.sh"
+    docker exec "$GBX_DEV_CONTAINER" /bin/bash -c "sh /root/geobrix/scripts/docker/extras/docker_maven_setup.sh"
     print_separator
 
     if [ "$ATTACH" = true ]; then
         echo ""
         echo -e "${CYAN}🔗 Attaching to container...${NC}"
-        docker exec -it geobrix-dev bash
+        docker exec -it "$GBX_DEV_CONTAINER" bash
     fi
 
     exit 0
 fi
 
 # Check if container exists but is stopped (and mount matches; mismatch was handled above)
-if docker ps -a --format '{{.Names}}' | grep -q '^geobrix-dev$'; then
+if docker ps -a --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
     echo ""
     warn_if_arch_differs
     echo -e "${CYAN}🚀 Starting existing container...${NC}"
     print_separator
 
-    docker start geobrix-dev
+    docker start "$GBX_DEV_CONTAINER"
     EXIT_CODE=$?
     
     if [ $EXIT_CODE -eq 0 ]; then
@@ -231,13 +237,13 @@ if docker ps -a --format '{{.Names}}' | grep -q '^geobrix-dev$'; then
         echo -e "${GREEN}✅ Container started successfully!${NC}"
         echo ""
         echo -e "${CYAN}⚙️  Applying Maven setup (.m2 in project, skipScoverage default)...${NC}"
-        docker exec geobrix-dev /bin/bash -c "sh /root/geobrix/scripts/docker/extras/docker_maven_setup.sh"
+        docker exec "$GBX_DEV_CONTAINER" /bin/bash -c "sh /root/geobrix/scripts/docker/extras/docker_maven_setup.sh"
         print_separator
         
         if [ "$ATTACH" = true ]; then
             echo ""
             echo -e "${CYAN}🔗 Attaching to container...${NC}"
-            docker exec -it geobrix-dev bash
+            docker exec -it "$GBX_DEV_CONTAINER" bash
         fi
     else
         echo ""
@@ -266,10 +272,10 @@ else
         echo -e "${GREEN}✅ Container created and started!${NC}"
         echo ""
         echo -e "${CYAN}⚙️  Applying Maven setup (.m2 in project, skipScoverage default)...${NC}"
-        docker exec geobrix-dev /bin/bash -c "sh /root/geobrix/scripts/docker/extras/docker_maven_setup.sh"
+        docker exec "$GBX_DEV_CONTAINER" /bin/bash -c "sh /root/geobrix/scripts/docker/extras/docker_maven_setup.sh"
         echo ""
         echo -e "${CYAN}📊 Container details:${NC}"
-        echo -e "   Name:    ${YELLOW}geobrix-dev${NC} (${PLATFORM})"
+        echo -e "   Name:    ${YELLOW}$GBX_DEV_CONTAINER${NC} (${PLATFORM})"
         echo -e "   Status:  ${YELLOW}Running${NC}"
         echo ""
         echo -e "${CYAN}📁 Volume mounts:${NC}"
@@ -281,7 +287,7 @@ else
         if [ "$ATTACH" = true ]; then
             echo ""
             echo -e "${CYAN}🔗 Attaching to container...${NC}"
-            docker exec -it geobrix-dev bash
+            docker exec -it "$GBX_DEV_CONTAINER" bash
         fi
     else
         echo ""

@@ -56,7 +56,7 @@ setup_log_file "$LOG_PATH"
 echo -e "${CYAN}Running generator inside Docker (doc examples → function-info.json)...${NC}"
 show_separator
 
-docker exec geobrix-dev /bin/bash -c "cd /root/geobrix && unset JAVA_TOOL_OPTIONS && python3 docs/scripts/generate-function-info.py"
+docker exec "$GBX_DEV_CONTAINER" /bin/bash -c "cd /root/geobrix && unset JAVA_TOOL_OPTIONS && python3 docs/scripts/generate-function-info.py"
 EXIT=$?
 
 show_separator

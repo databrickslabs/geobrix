@@ -138,7 +138,7 @@ setup_log_file "$LOG_PATH"
 gbx_acquire_test_lock
 
 mkdir -p "$PROJECT_ROOT/sample-data/Volumes/main/default/geobrix_samples"
-if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then
+if ! docker exec "$GBX_DEV_CONTAINER" test -d /Volumes 2>/dev/null; then
     echo -e "${RED}❌ /Volumes not found. Start with: ./scripts/docker/start_docker_with_volumes.sh${NC}"
     exit 1
 fi

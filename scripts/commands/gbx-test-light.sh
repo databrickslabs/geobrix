@@ -18,7 +18,7 @@ show_help() {
     echo -e "${CYAN}Options:${NC}"
     echo -e "  ${GREEN}--path <dir>${NC}           Test directory or file; repeatable (default: every light dir, in the light CI phase order)"
     echo -e "  ${GREEN}--markers <expr>${NC}       Extra pytest marker expression, ANDed with 'not integration' (see gbx:test:pyrx)"
-    echo -e "  ${GREEN}--docker${NC}               Run in the geobrix-dev container instead of the host venv (see gbx:test:pyrx)"
+    echo -e "  ${GREEN}--docker${NC}               Run in the dev container instead of the host venv (see gbx:test:pyrx)"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
     print_lock_help
     echo -e "  ${GREEN}--help${NC}                 Show this help"

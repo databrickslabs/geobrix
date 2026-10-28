@@ -112,7 +112,7 @@ setup_log_file "$LOG_PATH"
 gbx_acquire_test_lock
 
 mkdir -p "$PROJECT_ROOT/sample-data/Volumes/main/default/geobrix_samples"
-if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then
+if ! docker exec "$GBX_DEV_CONTAINER" test -d /Volumes 2>/dev/null; then
     echo -e "${RED}❌ /Volumes not found in container. Start with: ./scripts/docker/start_docker_with_volumes.sh${NC}"
     exit 1
 fi
@@ -152,7 +152,7 @@ echo '━━━━━━━━━━━━━━━━━━━━━━━━�
 python3 -m pytest $TEST_PATH -v $MARKERS --tb=short --color=yes
 "
 
-docker exec ${DOCKER_ENV_ARGS[@]+"${DOCKER_ENV_ARGS[@]}"} geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$RUN_CMD"
+docker exec ${DOCKER_ENV_ARGS[@]+"${DOCKER_ENV_ARGS[@]}"} "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$RUN_CMD"
 EXIT_CODE=$?
 
 echo ""

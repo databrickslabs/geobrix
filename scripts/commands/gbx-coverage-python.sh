@@ -104,7 +104,7 @@ PYTEST_CMD="unset JAVA_TOOL_OPTIONS && \
     --cov-report=term \
     $MIN_COVERAGE"
 
-docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$PYTEST_CMD"
+docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$PYTEST_CMD"
 EXIT_CODE=$?
 
 echo ""

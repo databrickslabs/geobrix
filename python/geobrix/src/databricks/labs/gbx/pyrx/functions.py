@@ -2858,17 +2858,34 @@ def _transformcrs_tile(tile, crs_value, file_ref=None, grid_dirs=None):
         return _serde.build_error_tile(f"RST_TransformCrs: {e}", _tile_cellid(tile))
 
 
+def _empty_tile_out(tile):
+    """What a function returns for a tile with neither raster nor path.
+
+    An error tile (a diagnostic under last_error or error_message) goes out unchanged, so the
+    upstream reason survives every step, as it does on the JVM tier; any other empty tile is NULL.
+    """
+    if tile is None or isinstance(tile, (bytes, bytearray)):
+        return None
+    d = tile.asDict() if hasattr(tile, "asDict") else dict(tile)
+    md = d.get("metadata") or {}
+    return d if ("last_error" in md or "error_message" in md) else None
+
+
 @f.udf(V2_TILE_SCHEMA)
 def _transformcrs_udf(tile, crs_value):
-    if _tile_is_empty(tile) or crs_value is None:
+    if crs_value is None:
         return None
+    if _tile_is_empty(tile):
+        return _empty_tile_out(tile)
     return _transformcrs_tile(tile, crs_value)
 
 
 @f.udf(V2_TILE_SCHEMA)
 def _uf_transformcrs(tile, file_ref, crs_value):
-    if _tile_is_empty(tile) or crs_value is None:
+    if crs_value is None:
         return None
+    if _tile_is_empty(tile):
+        return _empty_tile_out(tile)
     return _transformcrs_tile(tile, crs_value, file_ref=file_ref)
 
 
@@ -2877,8 +2894,10 @@ def _build_uf_transformcrs(grid_dirs):
 
     @f.udf(V2_TILE_SCHEMA)
     def _udf(tile, file_ref, crs_value):
-        if _tile_is_empty(tile) or crs_value is None:
+        if crs_value is None:
             return None
+        if _tile_is_empty(tile):
+            return _empty_tile_out(tile)
         return _transformcrs_tile(
             tile, crs_value, file_ref=file_ref, grid_dirs=grid_dirs
         )
@@ -2891,8 +2910,10 @@ def _build_transformcrs_sql_udf(grid_dirs):
 
     @f.udf(V2_TILE_SCHEMA)
     def _udf(tile, crs_value):
-        if _tile_is_empty(tile) or crs_value is None:
+        if crs_value is None:
             return None
+        if _tile_is_empty(tile):
+            return _empty_tile_out(tile)
         return _transformcrs_tile(tile, crs_value, grid_dirs=grid_dirs)
 
     return _udf

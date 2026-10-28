@@ -37,6 +37,17 @@ def _cases():
                     marks=pytest.mark.integration,
                     id=f"{fn.sql_name}-{level}-sql",
                 )
+        if "L1" in fn.levels and fn.accepts_virtual_tile:
+            # The Catalyst function itself, without the dispatch wrapper in front of it: the error-tile
+            # rows must hold for a RasterX function that receives an error tile directly.
+            yield pytest.param(
+                fn.sql_name,
+                "L1",
+                "raw",
+                "sql",
+                marks=pytest.mark.integration,
+                id=f"{fn.sql_name}-L1-raw-sql",
+            )
 
 
 def _column_function(sql_name):
@@ -48,11 +59,15 @@ def _column_function(sql_name):
 @pytest.mark.parametrize("fn,level,variant,api", list(_cases()))
 def test_mvp_s_oracle_session(request, tmp_path, fn, level, variant, api):
     spark = request.getfixturevalue("spark" if level == "L3" else "jvm_spark")
-    register(spark, only=[fn], _levels={fn: (level, variant)})
-    rows = [c for c in oracles.MVP_S if c.fn == fn]
+    raw = variant == "raw"
+    register(spark, only=[fn], _levels={fn: (level, "-" if raw else variant)})
+    rows = [
+        c for c in oracles.MVP_S if c.fn == fn and (not raw or c.kind == "error_tile")
+    ]
     results = oracles.run_session(
         spark,
         rows,
+        name_of=(lambda f: f"gbx__l1_{f[len('gbx_'):]}") if raw else (lambda f: f),
         tmpdir=str(tmp_path),
         column_of=_column_function if api == "column" else None,
     )

@@ -83,9 +83,7 @@ def install_l2(spark, fn, caps) -> Optional[str]:
             spark.udf.registerJavaFunction(k, spec["class"], spec["returns"])
             light = _install_light_side(spark, fn)
             tile = fn.params[0].name
-            jvm = sqlwrap.tile_from_raster(
-                k + "({tile}.raster, {rest})", tile, fn.sql_name
-            )
+            jvm = sqlwrap.tile_from_raster(k + "({tile}.raster, {rest})", tile)
             _create_wrapper(spark, fn, sqlwrap.tile_dispatch(fn, jvm, light))
             return None
         if fn.min_args != fn.max_args:

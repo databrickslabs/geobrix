@@ -18,6 +18,7 @@ MERC_PROJ = (
 # An error tile (a swallowed failure) carries its diagnostic under this one metadata key on
 # every level. The light tier defines it (`_serde.build_error_tile`); the JVM tier conforms.
 ERROR_TILE_KEY = "last_error"
+UPSTREAM_ERROR = "upstream failure"
 CUSTOM_TMERC = "+proj=tmerc +lat_0=0 +lon_0=1.5 +k=0.9996 +x_0=500000 +y_0=0 +ellps=WGS84 +units=m +no_defs"
 
 
@@ -36,6 +37,7 @@ class Case:
     kind: str
     # exact: the value. raises: a substring the error message must contain (the offending
     # value), so a missing function cannot pass. tile_props: the target CRS, or (CRS, SRID).
+    # error_tile: when set, the reason that must come out unchanged.
     expect: Any = None
     surfaces: Tuple[str, ...] = ("session", "uc")
     geom_srid: int = (
@@ -45,15 +47,8 @@ class Case:
 
 # Rows a JVM level is known to fail until it conforms to the light contract, as {row: {level: reason}}.
 # The parity run expects exactly these (level, row) pairs to fail, strictly, and a row that starts to
-# pass must be dropped from here.
-_EMPTY_RASTER = (
-    "heavy's error tile carries a zero-length raster, light's carries NULL "
-    "(RST_ErrorHandler builds it for every RasterX function)"
-)
-HEAVY_PENDING: Dict[str, Dict[str, str]] = {
-    "tcrs_corrupt": {"L1": _EMPTY_RASTER},
-    "tcrs_bad_crs": {"L1": _EMPTY_RASTER},
-}
+# pass must be dropped from here. Empty while every MVP-S row passes on every level.
+HEAVY_PENDING: Dict[str, Dict[str, str]] = {}
 
 B, T, M = "gbx_bng_eastnorthasbng", "gbx_rst_transformcrs", "gbx_st_makevalid"
 SQUARE = "POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))"
@@ -176,6 +171,25 @@ MVP_S: Tuple[Case, ...] = (
         ("uc",),
     ),
     Case("tcrs_null_tile", T, (None, "EPSG:3857"), "null"),
+    # A tile with neither raster nor path and no diagnostic has nothing to transform: NULL.
+    Case(
+        "tcrs_empty_tile",
+        T,
+        (Build("tile_empty"), "EPSG:3857"),
+        "null",
+        None,
+        ("session",),
+    ),
+    # An error tile IN is the same error tile OUT on every level (the upstream reason survives), and a
+    # tile with no raster never reaches GDAL.
+    Case(
+        "tcrs_error_tile_in",
+        T,
+        (Build("tile_error"), "EPSG:3857"),
+        "error_tile",
+        UPSTREAM_ERROR,
+        ("session",),
+    ),
     Case("tcrs_null_crs", T, (Build("tile_4326"), None), "null"),
     Case(
         "tcrs_corrupt",
@@ -285,6 +299,12 @@ def _build(name: str, tmpdir: str):
         return _tile(_tile_bytes(CUSTOM_TMERC))
     if name == "tile_corrupt":
         return _tile(b"II*\x00not-a-real-tiff")
+    if name == "tile_empty":
+        return _tile()
+    if (
+        name == "tile_error"
+    ):  # what a failed upstream function returns: no raster, no path, the reason
+        return {**_tile(), "metadata": {ERROR_TILE_KEY: UPSTREAM_ERROR}}
     if name == "tile_virtual":
         path = os.path.join(tmpdir, "oracle_4326.tif")
         if not os.path.exists(path):
@@ -430,6 +450,8 @@ def check(case: Case, out, args) -> Optional[str]:
             and _field(out, "path") is None
             and bool(meta.get(ERROR_TILE_KEY))
         )
+        if ok and case.expect is not None and meta.get(ERROR_TILE_KEY) != case.expect:
+            return f"{case.cid}: the reason is {meta.get(ERROR_TILE_KEY)!r}, want {case.expect!r} unchanged"
         return (
             None
             if ok

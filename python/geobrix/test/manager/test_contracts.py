@@ -231,6 +231,44 @@ def test_l2_is_refused_while_proj_grids_are_registered(tmp_path):
     assert any("PROJ grids" in r for r in choice.reasons)
 
 
+def test_tile_reference_compares_a_grid_one_pixel_off_by_pixels():
+    """A grid one pixel larger and shifted by one pixel is not accepted on its mean alone."""
+    import numpy as np
+    from rasterio.crs import CRS
+    from rasterio.io import MemoryFile
+    from rasterio.warp import calculate_default_transform
+
+    from databricks.labs.gbx.bench import oracles
+
+    case = next(c for c in oracles.MVP_S if c.cid == "tcrs_epsg")
+    src_tile = oracles._build("tile_4326", "")
+    with MemoryFile(oracles._raster_of(src_tile)) as mf, mf.open() as src:
+        width, height, ref = oracles._reference_warp(src, "EPSG:3857")
+        transform, _, _ = calculate_default_transform(
+            src.crs, CRS.from_epsg(3857), src.width, src.height, *src.bounds
+        )
+        nodata = src.nodata
+
+    def gtiff(pixels):
+        profile = dict(driver="GTiff", count=1, dtype="float32", nodata=nodata)
+        profile.update(crs=CRS.from_epsg(3857), transform=transform)
+        with MemoryFile() as out:
+            with out.open(
+                height=pixels.shape[0], width=pixels.shape[1], **profile
+            ) as ds:
+                ds.write(pixels[None])
+            return out.read()
+
+    grid = ref.filled(nodata).astype("float32")
+    shifted = np.full((height, width + 1), nodata, dtype="float32")
+    shifted[:, 1:] = grid
+    check = lambda raster: oracles._check_tile(  # noqa: E731
+        case, {"raster": raster}, (src_tile, "EPSG:3857")
+    )
+    assert check(gtiff(grid)) is None
+    assert "pixels match" in check(gtiff(shifted))
+
+
 def test_pending_heavy_rows_name_real_oracle_rows():
     from databricks.labs.gbx.bench import oracles
 

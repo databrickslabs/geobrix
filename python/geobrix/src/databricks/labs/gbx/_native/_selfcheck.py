@@ -94,7 +94,7 @@ def stack():
         "rasterio_gdal": rasterio.__gdal_version__,
         "osgeo_gdal": osgeo["osgeo_gdal"],
         "gdal_array": osgeo["gdal_array"],
-        # osgeo is rasterio's GDAL: the same version and, on Linux, one libgdal mapped
+        # osgeo is rasterio's GDAL: the same version, and each opens a /vsimem file the other wrote
         "shared_libgdal": osgeo["shared"],
         "osgeo_error": osgeo_error,
         "pyogrio_gdal": pyogrio.__gdal_version_string__,

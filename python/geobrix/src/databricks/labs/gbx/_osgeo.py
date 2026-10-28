@@ -13,13 +13,19 @@ Every module of the package gets them here and imports neither package itself (a
   ``utils("samples.validate_cloud_optimized_geotiff")``;
 - ``libgdal_report()``: osgeo's GDAL against rasterio's, for diagnostics; it never refuses.
 
-Both refuse an ``osgeo`` that is not rasterio's GDAL: its ``gdal.VersionInfo()`` must equal
-``rasterio.__gdal_version__`` and, on Linux, the process must map exactly one libgdal. Two GDALs
-in one process share no datasets, ``/vsimem`` files or configuration, so anything handed from one
-to the other fails or reads nothing. The dev container's system ``osgeo`` beside its PyPI rasterio
-is such a pair. ``same_libgdal=False`` lifts the check for a caller that only opens and writes
-files by path and never shares a dataset or a ``/vsimem`` file with rasterio; two callers may (a
-test holds that): the dev-only sample bundle and the test-only COG validator.
+Both refuse an ``osgeo`` that is not rasterio's GDAL. Two GDALs in one process share no datasets,
+``/vsimem`` files or configuration, so anything handed from one to the other fails or reads
+nothing. The dev container's system ``osgeo`` beside its PyPI rasterio is such a pair. The test is
+direct: ``gdal.VersionInfo()`` must equal ``rasterio.__gdal_version__``, and a ``/vsimem`` GeoTIFF
+rasterio writes must open in osgeo, and one osgeo writes must open in rasterio (``/vsimem`` lives
+inside one libgdal). Counting the libgdal files a process maps is no test: a library that bundles
+its own GDAL (fiona, a PyPI pyogrio), loaded first, adds a file while osgeo and rasterio still
+share one GDAL; and off Linux there is nothing to count. The verdict is taken once per process and
+kept: the ``osgeo`` and ``rasterio`` modules a process imported cannot move to another libgdal,
+and nothing loaded later changes whether they share one. ``same_libgdal=False`` lifts the check
+for a caller that only opens and writes files by path and never shares a dataset or a ``/vsimem``
+file with rasterio; two callers may (a test holds that): the dev-only sample bundle and the
+test-only COG validator.
 
 Where ``osgeo`` does not import, or is refused, both raise ``OsgeoUnavailable``, an
 ``ImportError`` whose message names the function and the cause and ends with the fix. ``fn`` is
@@ -65,6 +71,11 @@ def _unavailable(fn: str, exc: ImportError) -> OsgeoUnavailable:
 
 
 def _not_shared(fn: str, r: dict) -> OsgeoUnavailable:
+    why = (
+        "; a /vsimem file one writes does not open in the other"
+        if r["osgeo_gdal"] == r["rasterio_gdal"]
+        else ""
+    )
     maps = (
         ""
         if r["libgdal"] is None
@@ -73,7 +84,7 @@ def _not_shared(fn: str, r: dict) -> OsgeoUnavailable:
     return OsgeoUnavailable(
         f"{fn} needs GDAL's Python bindings (osgeo) on rasterio's GDAL, and this osgeo is another "
         f"GDAL (osgeo GDAL {r['osgeo_gdal']} from {r['osgeo']}, rasterio GDAL "
-        f"{r['rasterio_gdal']} from {r['rasterio']}{maps}). Fix: {_wheels()}; in the dev "
+        f"{r['rasterio_gdal']} from {r['rasterio']}{why}{maps}). Fix: {_wheels()}; in the dev "
         "container, start Python with GBX_NATIVE_ROOT set to a built payload "
         "(build/env-wheel/env6/payload, from gbx:build:wheel --env 6)."
     )
@@ -89,10 +100,52 @@ def mapped_libgdal() -> Optional[List[str]]:
     return sorted(p for p in paths if LIBGDAL.search(p))
 
 
+def vsimem_shared(gdal) -> bool:
+    """True when osgeo's ``gdal`` and rasterio run one GDAL: a 1x1 GeoTIFF rasterio writes to
+    ``/vsimem`` opens in osgeo with its pixel, and one osgeo writes opens in rasterio. Each
+    libgdal has its own ``/vsimem``, so a second GDAL sees neither file."""
+    import uuid
+
+    import numpy as np
+    import rasterio
+    from rasterio.io import MemoryFile
+
+    theirs = f"/vsimem/gbx-osgeo-check-{uuid.uuid4().hex}.tif"
+    gdal.PushErrorHandler("CPLQuietErrorHandler")
+    try:
+        with MemoryFile(ext=".tif") as mem:
+            with mem.open(
+                driver="GTiff", width=1, height=1, count=1, dtype="uint8"
+            ) as dst:
+                dst.write(np.full((1, 1, 1), 7, dtype="uint8"))
+            ds = gdal.Open(mem.name)
+            if ds is None or ds.GetRasterBand(1).ReadRaster() != b"\x07":
+                return False
+            ds = None
+        out = gdal.GetDriverByName("GTiff").Create(theirs, 1, 1, 1, gdal.GDT_Byte)
+        out.GetRasterBand(1).WriteRaster(0, 0, 1, 1, b"\x09")
+        out = None  # closes (and flushes) the dataset
+        with rasterio.open(theirs) as src:
+            return int(src.read(1)[0, 0]) == 9
+    except (
+        Exception
+    ):  # noqa: BLE001 - any failure to see the other's file: not one GDAL
+        return False
+    finally:
+        try:
+            gdal.Unlink(theirs)
+        except (
+            Exception
+        ):  # noqa: BLE001 - nothing was written (osgeo raises with exceptions on)
+            pass
+        gdal.PopErrorHandler()
+
+
 def libgdal_report() -> dict:
     """osgeo's GDAL against rasterio's: both versions and module files, ``gdal_array`` (it
-    imports), ``libgdal`` (the files mapped; None off Linux), ``shared`` (one GDAL) and ``error``
-    (why osgeo does not import, else None)."""
+    imports), ``libgdal`` (the files mapped, a diagnostic; None off Linux), ``shared`` (one GDAL:
+    the same version and the ``/vsimem`` round trip of ``vsimem_shared``) and ``error`` (why
+    osgeo does not import, else None)."""
     import rasterio
 
     r = {
@@ -116,20 +169,21 @@ def libgdal_report() -> dict:
         pass
     else:
         r["gdal_array"] = True
-    mapped = mapped_libgdal()
     version = gdal.VersionInfo("RELEASE_NAME")
     r.update(
         osgeo_gdal=version,
         osgeo=gdal.__file__,
-        libgdal=mapped,
-        shared=version == r["rasterio_gdal"] and (mapped is None or len(mapped) == 1),
+        libgdal=mapped_libgdal(),
+        shared=version == r["rasterio_gdal"] and vsimem_shared(gdal),
     )
     return r
 
 
 @functools.lru_cache(maxsize=1)
 def _same_libgdal_report() -> dict:
-    """``libgdal_report()`` once per process: loaded libraries stay loaded, so the answer holds."""
+    """``libgdal_report()`` once per process. The imported ``osgeo`` and ``rasterio`` cannot move
+    to another libgdal, and a library loaded later does not change whether they share one, so
+    the first answer holds for the life of the process."""
     return libgdal_report()
 
 

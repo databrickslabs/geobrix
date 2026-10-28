@@ -2,17 +2,19 @@
 
 - Where ``osgeo`` does not import (the macOS host, a PyPI install), ``bindings()`` and ``utils()``
   raise an ImportError that names the function, the cause and the fix.
-- An ``osgeo`` that is not rasterio's GDAL (another version, or a second libgdal mapped) is
-  refused the same way, unless the caller passes ``same_libgdal=False``; ``_selfcheck.stack()``
-  reports that mismatch instead of raising.
+- An ``osgeo`` that is not rasterio's GDAL (another version, or the same version that does not
+  open a ``/vsimem`` file rasterio wrote) is refused the same way, unless the caller passes
+  ``same_libgdal=False``; ``_selfcheck.stack()`` reports that mismatch instead of raising. A
+  second libgdal in the process (a GDAL-bundling library) is no refusal on its own.
 - With the env6 payload (``build/env-wheel/env6/payload``, Linux), ``osgeo`` is the payload's build
   of the pinned GDAL, ``osgeo_utils`` imports, and a process that imports rasterio and ``osgeo``
-  maps one libgdal: the payload's.
+  maps one libgdal of the payload, also when a foreign libgdal was loaded before the first check.
 - No other module of the package imports ``osgeo`` or ``osgeo_utils``, and only the sample bundle
   and the test-only COG validator pass ``same_libgdal=False``.
 """
 
 import ast
+import ctypes.util
 import json
 import os
 import platform
@@ -92,21 +94,24 @@ ONE, TWO = ["/x/libgdal.so.39"], ["/x/libgdal.so.39", "/y/libgdal-0a1b2c3d.so.38
 
 
 @pytest.mark.parametrize(
-    "version, mapped, same_libgdal, refused",
+    "version, mapped, round_trip, same_libgdal, refused",
     [
-        ("rasterio's", ONE, True, None),
-        ("rasterio's", None, True, None),  # off Linux: the versions decide
-        ("9.9.9", ONE, True, "osgeo GDAL 9.9.9 from /fake/osgeo/gdal.py"),
-        ("rasterio's", TWO, True, "the process maps 2 libgdal files"),
-        ("9.9.9", TWO, False, None),  # a by-path caller may use another GDAL
+        ("rasterio's", ONE, True, True, None),
+        # a GDAL-bundling library (fiona) loaded first maps a second libgdal; still one GDAL
+        ("rasterio's", TWO, True, True, None),
+        ("9.9.9", ONE, True, True, "osgeo GDAL 9.9.9 from /fake/osgeo/gdal.py"),
+        # the same version, two libgdal (or two dylibs off Linux): /vsimem is not shared
+        ("rasterio's", None, False, True, "a /vsimem file one writes does not open"),
+        ("9.9.9", TWO, False, False, None),  # a by-path caller may use another GDAL
     ],
 )
 def test_osgeo_on_another_gdal_is_refused(
-    fake_osgeo, monkeypatch, version, mapped, same_libgdal, refused
+    fake_osgeo, monkeypatch, version, mapped, round_trip, same_libgdal, refused
 ):
     rasterio = pytest.importorskip("rasterio")
     fake_osgeo(rasterio.__gdal_version__ if version == "rasterio's" else version)
     monkeypatch.setattr(_osgeo, "mapped_libgdal", lambda: mapped)
+    monkeypatch.setattr(_osgeo, "vsimem_shared", lambda gdal: round_trip)
     if refused is None:
         assert _osgeo.bindings("rst_demo", same_libgdal=same_libgdal).gdal_array is None
         return
@@ -135,14 +140,16 @@ def test_selfcheck_stack_reports_another_gdal_instead_of_raising(
         False,
     )
     assert st["libgdal"] == TWO and st["from_payload"]["osgeo_utils"] is False
-    assert "maps 2 libgdal files" in st["osgeo_error"] and "Fix:" in st["osgeo_error"]
+    assert "osgeo GDAL 9.9.9" in st["osgeo_error"] and "Fix:" in st["osgeo_error"]
 
 
 _PROBE = """
-import json, re
+import ctypes, json, os, re
 import databricks.labs.gbx  # activates the payload named by GBX_NATIVE_ROOT
 from databricks.labs.gbx import _osgeo
 import rasterio
+if os.environ.get("FOREIGN_LIBGDAL"):  # a GDAL-bundling library loaded before the first check
+    ctypes.CDLL(os.environ["FOREIGN_LIBGDAL"])
 g = _osgeo.bindings()
 calc = _osgeo.utils("gdal_calc")
 with open("/proc/self/maps") as fh:
@@ -158,7 +165,8 @@ print(json.dumps({
 """
 
 
-def test_the_payload_osgeo_is_the_pinned_gdal_and_rasterio_libgdal():
+@pytest.mark.parametrize("foreign_first", [False, True], ids=["alone", "foreign-first"])
+def test_the_payload_osgeo_is_the_pinned_gdal_and_rasterio_libgdal(foreign_first):
     if not sys.platform.startswith("linux"):
         pytest.skip(
             "the env wheels' payload loads on Linux only (run in the container)"
@@ -173,6 +181,11 @@ def test_the_payload_osgeo_is_the_pinned_gdal_and_rasterio_libgdal():
     ).group(1)
     env = {**os.environ, "GBX_NATIVE_ROOT": str(PAYLOAD)}
     env.pop("GBX_NATIVE_DISABLE", None)
+    if foreign_first:  # the dev image's system GDAL stands in for a fiona-like wheel
+        foreign = ctypes.util.find_library("gdal")
+        if not foreign:
+            pytest.skip("no system libgdal to load as the foreign GDAL")
+        env["FOREIGN_LIBGDAL"] = foreign
     res = subprocess.run(
         [sys.executable, "-c", _PROBE], env=env, capture_output=True, text=True
     )
@@ -181,9 +194,8 @@ def test_the_payload_osgeo_is_the_pinned_gdal_and_rasterio_libgdal():
     assert (got["gdal"], got["rasterio_gdal"], got["gdal_array"]) == (pin, pin, True)
     assert got["osgeo"].startswith(f"{PAYLOAD}/_vendor/{a}/osgeo/")
     assert got["gdal_calc"].startswith(f"{PAYLOAD}/_vendor/common/osgeo_utils/")
-    assert len(got["libgdal"]) == 1 and got["libgdal"][0].startswith(
-        f"{PAYLOAD}/_native/{a}/lib/"
-    ), got
+    ours = [p for p in got["libgdal"] if p.startswith(f"{PAYLOAD}/_native/{a}/lib/")]
+    assert len(ours) == 1 and len(got["libgdal"]) == 1 + foreign_first, got
 
 
 def _osgeo_imports(path):

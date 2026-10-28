@@ -211,7 +211,7 @@ ENV PYZMQ_VERSION=25.1.1
 # characters of the sha256 of the index (a fingerprint, not the index) to this stage only. It changes
 # when the index does, so this layer and the pip steps after it rebuild (GDAL stays cached).
 # Caveat for lock recompiles: the
-# dev proxy (pypi-proxy.dev.databricks.com) is a ROLLING-RECENT mirror that prunes old releases,
+# dev proxy is a ROLLING-RECENT mirror that prunes old releases,
 # so it cannot reproduce runtime-matched locks (e.g. botocore 1.40.x). Authoritative recompiles
 # must run against CI's full-retention JFrog mirror (db-pypi) -- see the note in
 # scripts/security/README.md; the dev proxy and public PyPI are both unsuitable.

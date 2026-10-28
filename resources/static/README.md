@@ -53,7 +53,7 @@ Docker:
 mkdir -p dist
 # If you're on the Databricks corp network, pypi.org is blocked — mount
 # your host ~/.pip/pip.conf so the venv pip routes through
-# pypi-proxy.dev.databricks.com (or whatever mirror your .pip/pip.conf
+# the internal dev package proxy (or whatever mirror your .pip/pip.conf
 # resolves to). On an unrestricted network you can drop the -v line.
 docker run --rm --platform linux/amd64 \
     -v "$PWD":/work -w /work \

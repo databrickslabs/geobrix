@@ -159,7 +159,7 @@ docker exec -it geobrix-dev bash -lc \
 > **Mirror caveat (confirmed 2026-09-11).** `uv` does not read `pip.conf`; the dev
 > container now sets `UV_INDEX_URL` alongside `PIP_INDEX_URL` so both use the corp
 > proxy (takes effect on image rebuild). BUT the dev proxy
-> (`pypi-proxy.dev.databricks.com`) is a **rolling-recent mirror that prunes old
+> is a **rolling-recent mirror that prunes old
 > releases** — it cannot reproduce runtime-matched locks. Example: the light-CI locks
 > (`requirements-light-env{5,6}-ci.txt`) pin `botocore==1.40.70` to match the Serverless
 > base image, but the dev proxy only serves `botocore>=1.42.91`, so an in-container

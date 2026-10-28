@@ -2291,28 +2291,20 @@ class GeoJSONLGbxWriter(DataSourceWriter):
         )
 
     def _infer_geom_crs(self, tbl) -> Tuple[str, Optional[str]]:
+        """Geometry type and CRS from the first non-NULL geometry of ``tbl``, found with an
+        Arrow scan (no Python list of the whole geometry column)."""
+        import pyarrow.compute as pc
+
         geom_type, crs = self.geometry_type_override, None
-        g = tbl.column(self.geom_col).to_pylist()
-        s = (
-            tbl.column(self.srid_col).to_pylist()
-            if self.srid_col in tbl.column_names
-            else []
-        )
-        p = (
-            tbl.column(self.proj_col).to_pylist()
-            if self.proj_col in tbl.column_names
-            else []
-        )
-        for i, gv in enumerate(g):
-            if gv is None:
-                continue
+        col = tbl.column(self.geom_col)
+        if col.null_count < len(col):
+            i = pc.index(pc.is_valid(col), True).as_py()
             if geom_type is None:
-                geom_type = _geometry_type_of(gv)
-            if crs is None:
-                crs = _srid_to_crs(
-                    s[i] if i < len(s) else "", p[i] if i < len(p) else ""
-                )
-            break
+                geom_type = _geometry_type_of(col[i].as_py())
+            names = tbl.column_names
+            s = tbl.column(self.srid_col)[i].as_py() if self.srid_col in names else ""
+            p = tbl.column(self.proj_col)[i].as_py() if self.proj_col in names else ""
+            crs = _srid_to_crs(s, p)
         return geom_type or "Unknown", crs
 
     # ---- executor: partition rows -> one or more GeoJSONL shards in OUTDIR ----

@@ -455,22 +455,40 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
     try:
         ref_crs = _pick_ref_crs(datasets)
         # --- SIZE GATE ---
-        # Estimate the union-extent decoded mosaic size from tile headers (no pixel
-        # read). If it exceeds the per-task memory budget, stream the merge out-of-core
-        # via a VRT + COG instead of building a full numpy array. Any failure in the
-        # gate computation falls back to the in-RAM path rather than crashing.
-        _over_budget = False
+        # The decoded size of the union-extent mosaic comes from the tile headers (no pixel read), and
+        # the canonical COG decision (`materialize_decision`, kind "cog_write") says what to do with it: within
+        # the per-task budget the merge is built in RAM ("stream"); beyond it the merge streams through a VRT
+        # and a COG ("driver": bounded GDAL cache, the mosaic is never decoded whole); beyond the COG
+        # ceiling it stops here ("error"). Tiles a continent apart (or in places far apart once put in one
+        # CRS) make an extent of terabytes that is nearly all NoData: streaming that takes hours and a COG
+        # of gigabytes, so it is refused with a Fix: before anything is opened for reading or written. A
+        # failure to compute the size falls back to the in-RAM path rather than crashing.
+        union = None
         try:
-            _over_budget = _union_decoded_bytes(
-                datasets, ref_crs
-            ) > decoded_budget_bytes("serverless")
+            union = _union_decoded_bytes(datasets, ref_crs)
         except Exception:
             _log.debug(
                 "merge_tiles: size-gate computation failed; falling back to in-RAM path",
                 exc_info=True,
             )
-            _over_budget = False
-        if _over_budget:
+        how = "stream"
+        if union is not None:
+            from databricks.labs.gbx.ds.file_gbx import (
+                _COG_DRIVER_MAX_BYTES,
+                materialize_decision,
+            )
+
+            how = materialize_decision(
+                union, "cog_write", cap_bytes=decoded_budget_bytes("serverless")
+            )
+            if how == "error":
+                raise ValueError(
+                    f"the mosaic of these {len(rasters)} tiles would be {union / 2**30:.0f} GiB decoded, over the "
+                    f"{_COG_DRIVER_MAX_BYTES / 2**30:.0f} GiB a merge can stream: tiles far apart (or far apart "
+                    f"once in one CRS) make an extent that is almost all NoData. Fix: merge the tiles of one "
+                    f"place and one CRS together (key the group by them), or retile first"
+                )
+        if how == "driver":
             # Delegate to the streaming path; close local resources first so
             # the streaming function opens fresh handles independently.
             _close_all(memfiles, datasets)

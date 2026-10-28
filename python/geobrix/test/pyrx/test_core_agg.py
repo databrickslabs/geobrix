@@ -133,6 +133,21 @@ def test_merge_tiles_same_origin_overlap_winner_order_invariant():
 # --- merge_tiles streaming path (Task 3) ------------------------------------
 
 
+def test_merge_tiles_refuses_a_mosaic_it_cannot_stream_before_building_it(monkeypatch):
+    """Two tiles a continent apart make a mosaic of terabytes that is nearly all NoData. The size comes from the
+    headers, and past the COG ceiling the merge stops with a Fix: instead of streaming for ever or allocating.
+    """
+
+    def never(_rasters):
+        raise AssertionError("streamed a mosaic it cannot hold")
+
+    monkeypatch.setattr(agg, "_merge_tiles_streaming", never)
+    near = _ras(np.full((16, 16), 1.0), ulx=0.0, uly=0.0, px=1e-4, epsg=4326)
+    far = _ras(np.full((16, 16), 2.0), ulx=120.0, uly=-60.0, px=1e-4, epsg=4326)
+    with pytest.raises(ValueError, match=r"GiB.*Fix:"):
+        agg.merge_tiles([near, far])
+
+
 def test_merge_streaming_matches_in_ram(monkeypatch):
     """Streaming path produces same extent, band count, and pixel values as in-RAM path.
 

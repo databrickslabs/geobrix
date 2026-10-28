@@ -363,10 +363,10 @@ def test_all_rows_are_result_rows(spark, monkeypatch):
 
 
 def test_fuse_mode_returns_list_of_one(spark, tmp_path):
-    """fuse mode returns a 1-element list (raster_gbx not registered → error row).
+    """fuse mode returns a 1-element list: an empty corpus directory gives one error row, never a raise.
 
-    The corpus is an empty directory: the reader runs in a Python worker, where a directory that is
-    not there is retried with a ~22 s back-off no test patch reaches."""
+    (A directory that is not there would do the same, but the reader runs in a Python worker, where it
+    is retried with a ~22 s back-off no test patch reaches.)"""
     from databricks.labs.gbx.bench.readers import run_raster_decode_read_sweep
 
     rows = run_raster_decode_read_sweep(
@@ -383,8 +383,7 @@ def test_fuse_mode_returns_list_of_one(spark, tmp_path):
     assert len(rows) == 1
     assert rows[0].fn == "gtiff_decode_read"
     assert rows[0].file_mode == "fuse"
-    # On local[2] without raster_gbx registered, we expect an error row.
-    assert rows[0].status in ("ok", "error", "empty")
+    assert rows[0].status == "error" and "No files found" in rows[0].note, rows[0]
 
 
 def test_fuse_mode_skip_ordering_param_accepted(spark, tmp_path):
@@ -406,3 +405,6 @@ def test_fuse_mode_skip_ordering_param_accepted(spark, tmp_path):
         assert (
             len(rows) == 1
         ), f"fuse mode must return 1 row for skip_ordering={skip_val!r}"
+        assert rows[0].status == "error", rows[
+            0
+        ]  # skip_ordering has no meaning for a scan

@@ -74,6 +74,14 @@ def test_conftest_delta_version_matches_the_fetch_script_and_ci_runs_it():
         1
     )
     assert script_version == conftest_version
+    # the formats doc tests find the same jars, in the same repos, at the same version
+    docs = (REPO / "docs/tests/python/formats/conftest.py").read_text()
+    docs_version = re.search(r'^_DELTA_VERSION = "([^"]+)"', docs, re.M).group(1)
+    assert docs_version == script_version
+    for found in ("io/delta/delta-spark_2.13", "io/delta/delta-storage", "GBX_M2_REPO"):
+        assert found in docs and found in conftest, found
+    assert '"scripts" / "docker" / "m2"' in conftest
+    assert '"scripts" / "docker" / "m2"' in docs
     for pin in ("SHA256_DELTA_SPARK", "SHA256_DELTA_STORAGE"):
         assert re.search(rf'^{pin}="[0-9a-f]{{64}}"$', script, re.M), pin
     assert re.search(

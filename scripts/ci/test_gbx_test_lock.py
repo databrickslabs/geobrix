@@ -961,6 +961,85 @@ def test_a_work_lock_failure_during_the_delta_fetch_is_not_called_a_missing_jar(
     ]  # never started
 
 
+def _fetches(sandbox):
+    return [
+        c for c in sandbox.execs() if any("fetch-delta-test-jars.sh" in a for a in c)
+    ]
+
+
+@pytest.mark.parametrize(
+    "args",
+    [[], ["--path", "formats/"], ["--test", "formats/test_zarr_examples.py::test_x"]],
+    ids=["default", "formats-directory", "formats-test"],
+)
+def test_the_docs_command_fetches_the_delta_jars_for_the_formats_tests(sandbox, args):
+    # The formats doc tests keep a Zarr store's manifest in a Delta table, so a fresh container
+    # needs the jars before they run, as gbx:test:python gives the zarr tests.
+    sandbox.run("gbx-test-python-docs.sh", "--skip-build", *args)
+
+    fetches = _fetches(sandbox)
+    assert len(fetches) == 1
+    assert _under_work_lock(fetches[0])
+    # and before the tests, not after
+    execs = sandbox.execs()
+    assert execs.index(fetches[0]) < max(
+        i for i, c in enumerate(execs) if "pytest" in c[-1]
+    )
+
+
+@pytest.mark.parametrize(
+    "args",
+    [["--suite", "readers"], ["--path", "api/"], ["--path", "readers/test_x.py"]],
+    ids=["suite", "other-directory", "other-file"],
+)
+def test_the_docs_command_leaves_the_delta_jars_alone_for_other_targets(sandbox, args):
+    sandbox.run("gbx-test-python-docs.sh", "--skip-build", *args)
+
+    assert _fetches(sandbox) == []
+
+
+@pytest.mark.parametrize(
+    "rc, said",
+    [(3, "sha256 mismatch"), (75, "work lock"), (70, "work lock")],
+)
+def test_the_docs_command_stops_when_the_delta_jars_cannot_be_trusted_or_locked(
+    sandbox, rc, said
+):
+    # A stand-in for the fetch script, run for real under the real work lock.
+    stub = sandbox.root / "scripts" / "ci" / "fetch-delta-test-jars.sh"
+    stub.parent.mkdir(parents=True)
+    stub.write_text(f"#!/bin/bash\nexit {rc}\n")
+
+    res = sandbox.run(
+        "gbx-test-python-docs.sh",
+        "--skip-build",
+        *("--path", "formats/"),
+        FAKE_DOCKER_RUN_MATCHING="fetch-delta-test-jars",
+    )
+
+    assert res.returncode == (1 if rc == 3 else rc), res.output
+    assert said in res.output
+    assert not [c for c in sandbox.execs() if "pytest" in c[-1]]  # never started
+
+
+def test_the_docs_command_only_warns_when_the_delta_jars_are_missing(sandbox):
+    stub = sandbox.root / "scripts" / "ci" / "fetch-delta-test-jars.sh"
+    stub.parent.mkdir(parents=True)
+    stub.write_text("#!/bin/bash\nexit 1\n")
+
+    res = sandbox.run(
+        "gbx-test-python-docs.sh",
+        "--skip-build",
+        *("--path", "formats/"),
+        FAKE_DOCKER_RUN_MATCHING="fetch-delta-test-jars",
+    )
+
+    assert res.returncode == 0, res.output
+    # the tests then fail loudly, naming the jars
+    assert "Delta jars unavailable" in res.output
+    assert [c for c in sandbox.execs() if "pytest" in c[-1]]
+
+
 def test_the_exempt_notebook_runner_installs_geobrix_only_when_it_is_missing(sandbox):
     # It takes no lock, so its `pip install -e` into the shared site-packages must not run on
     # every call (that rewrites the editable install a locked pytest is importing).

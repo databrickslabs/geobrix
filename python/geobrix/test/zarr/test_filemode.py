@@ -35,7 +35,8 @@ from databricks.labs.gbx.zarr.errors import (  # noqa: E402
     ZarrUnsupported,
 )
 
-NOT_VERIFIED = "were not verified here|not available in this release"  # the gate's two texts
+# the gate's two texts
+NOT_VERIFIED = "were not verified here|not available in this release"
 
 
 @pytest.fixture

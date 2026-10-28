@@ -78,7 +78,7 @@ def test_simplify_spec_produces_interactive():
 
 
 # ---------------------------------------------------------------------------
-# Task 11b: audit_layers and dry_run tests
+# audit_layers and dry_run tests
 # ---------------------------------------------------------------------------
 
 

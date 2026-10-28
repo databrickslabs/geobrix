@@ -220,7 +220,7 @@ def _crc32c_extend(data, value: int) -> int:
 
 
 def _tombstone(array, key, identity, write_id, expected) -> dict:
-    """The row that keeps a base shard hidden once nothing is left of it (Ruling Z49)."""
+    """The row that keeps a base shard hidden once nothing is left of it."""
     return {
         "kind": "shard",
         "array": array,
@@ -711,8 +711,8 @@ def _set_properties(
 
 def _delta_vacuum(spark, table: str, store_seconds: int, horizon, dry_run: bool):
     """A ``file_mode="managed"`` store: its files belong to the table, so the vacuum is
-    Delta's. The retention property is set first and a plain ``VACUUM`` follows (Ruling Z10:
-    GeoBrix never sets ``retentionDurationCheck``, so there is no ``RETAIN`` clause)."""
+    Delta's. The retention property is set first and a plain ``VACUUM`` follows (GeoBrix
+    never sets ``retentionDurationCheck``, so there is no ``RETAIN`` clause)."""
     sql_table = M._q(table)
     if not dry_run:
         _set_properties(spark, table, store_seconds, horizon)

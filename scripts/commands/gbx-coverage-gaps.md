@@ -243,7 +243,7 @@ gbx:coverage:scala --report-only --open
 
 ## Strategy
 
-See `.cursor/rules/coverage-strategy.mdc` for:
+The strategy in short:
 - When to run gaps analysis
 - How to interpret results
 - Coverage improvement workflow

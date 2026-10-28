@@ -219,7 +219,7 @@ def test_copy_is_plain_zarr_readable_by_xarray_zarr_tensorstore(
 
     if kind == "managed":
         assert np.isnan(want["t2m"][12:24, 0:5, 0:6]).all()  # the tombstoned chunk
-        # a float _FillValue attribute is stored in the form xarray decodes (Isaac M11);
+        # a float _FillValue attribute is stored in the form xarray decodes;
         # the array's own fill_value is the spec's "NaN"
         assert group["t2m"].attrs["_FillValue"] == NAN_FILL
         assert np.isnan(group["t2m"].fill_value) and group["t2m"].dtype == np.float32
@@ -384,7 +384,7 @@ def test_reference_requires_optimized_shards(spark_delta, drop, tmp_path):
             spark_delta, table, str(tmp_path / "again.json"), method="reference"
         )
 
-    # JSON only (Ruling Z9); access="direct" needs a Volume to name the cloud location of
+    # JSON only; access="direct" needs a Volume to name the cloud location of
     with pytest.raises(ValueError, match="JSON") as bad:
         gbx_zarr_export(
             spark_delta, table, str(tmp_path / "r.parquet"), method="reference"

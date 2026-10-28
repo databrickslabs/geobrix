@@ -769,7 +769,7 @@ def test_a_dry_run_vacuum_restores_nothing_and_reads_a_read_only_root(
 def test_vacuum_of_a_file_mode_managed_store_runs_delta_vacuum(
     spark_delta, drop, tmp_path, monkeypatch
 ):
-    """Ruling Z10: the retention property is set (never below the store's retain), then a
+    """The retention property is set (never below the store's retain), then a
     plain VACUUM runs, never a RETAIN clause, so retentionDurationCheck is never touched.
     GeoBrix does not write the files of a managed store."""
     monkeypatch.setattr(M, "file_column_type", lambda mode: "STRING")  # no FILE in OSS

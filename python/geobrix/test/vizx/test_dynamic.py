@@ -32,7 +32,7 @@ from databricks.labs.gbx.vizx._dynamic import (  # noqa: E402
 from databricks.labs.gbx.vizx._layers import vector_layer  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Task 13b: _TileCache + prefetch worker tests
+# _TileCache + prefetch worker tests
 # ---------------------------------------------------------------------------
 
 

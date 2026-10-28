@@ -54,7 +54,7 @@ def test_a_dict_sets_some_dimensions_and_the_rest_are_balanced():
 
 
 def test_small_arrays_are_clipped_and_their_leading_shard_grows_past_the_extent():
-    """Ruling Z40 (M7): the leading shard grows by whole chunks while it stays within
+    """The leading shard grows by whole chunks while it stays within
     128 MiB, past today's length, so a store created small and appended to along time
     keeps filling the same shards."""
     chunks, shards = chunk_layout((48, 73, 144), DIMS, "float32")
@@ -96,7 +96,7 @@ def test_bad_layouts_are_refused_with_a_fix(args, match):
 
 
 def test_rr1_m5_a_shard_holds_at_most_4096_inner_chunks():
-    """Ruling Z41 (RR1-M5): the leading growth stops at 4,096 inner chunks a shard, so a
+    """The leading growth stops at 4,096 inner chunks a shard, so a
     shard's index stays near 64 KiB (the (12, 5, 6) case grew to 93,204 and 1.5 MB)."""
     import numpy as np
 

@@ -234,7 +234,7 @@ gbx:coverage:baseline scala
 
 ## Strategy
 
-See `.cursor/rules/coverage-strategy.mdc` for:
+The strategy in short:
 - Baseline + incremental pattern
 - When to run baseline vs package-targeted
 - Weekly coverage improvement workflow

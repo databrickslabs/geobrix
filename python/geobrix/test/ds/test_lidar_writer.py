@@ -328,7 +328,7 @@ def test_writer_merge_under_budget_succeeds(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Finding 1 (Isaac): CRS preserved through merge when caller passes crs=None
+# CRS preserved through merge when caller passes crs=None
 # ---------------------------------------------------------------------------
 
 
@@ -385,7 +385,7 @@ def test_merge_preserves_crs_from_parts(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Finding 3 (Isaac): stem-bucketing within a single partition
+# Stem-bucketing within a single partition
 # ---------------------------------------------------------------------------
 
 
@@ -451,7 +451,7 @@ def test_writer_stem_bucketing_multi_key_partition(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Finding 4 (Isaac): heterogeneous point formats in merge directory
+# Heterogeneous point formats in merge directory
 # ---------------------------------------------------------------------------
 
 

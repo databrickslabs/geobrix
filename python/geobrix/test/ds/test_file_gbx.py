@@ -1594,7 +1594,7 @@ def test_ingest_files_custom_file_col():
 
 
 # ---------------------------------------------------------------------------
-# Task 8b: enumerate_files positive filter (extensions / path_glob_filter)
+# enumerate_files positive filter (extensions / path_glob_filter)
 # ---------------------------------------------------------------------------
 
 

@@ -94,7 +94,7 @@ def test_point_to_cell_id_rejects_nan_x_and_y():
     c = _conf()
     with pytest.raises(ValueError):
         _custom.point_to_cell_id(c, float("nan"), 180000.0, 0)
-    # Resolved decision 3: a NaN Y must ALSO raise (heavy typo left Y unguarded).
+    # A NaN Y must ALSO raise (heavy typo left Y unguarded).
     with pytest.raises(ValueError):
         _custom.point_to_cell_id(c, 530000.0, float("nan"), 0)
 

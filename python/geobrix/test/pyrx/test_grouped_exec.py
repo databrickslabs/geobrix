@@ -87,7 +87,7 @@ def test_grouped_map_custom_tile_col(spark, gtiff_bytes):
 
 
 # ---------------------------------------------------------------------------
-# T9b: _make_opener no longer calls worker-side file_supported()
+# _make_opener no longer calls worker-side file_supported()
 # ---------------------------------------------------------------------------
 
 
@@ -96,7 +96,7 @@ def test_make_opener_returns_four_items_not_five():
 
     Under the OLD implementation _make_opener called file_supported() on the
     worker and returned a 5-tuple (file_ok, fr_holder, opener, closer, weigher).
-    The T9b fix removes the worker-side file_supported() call; the opener/closer/
+    The worker-side file_supported() call is gone; the opener/closer/
     weigher are now methods on _OpenerContext, and the FILE capability signal is
     the _file_ref column's presence (has_fr_col) set by the driver.
     """
@@ -105,7 +105,7 @@ def test_make_opener_returns_four_items_not_five():
     ctx = _OpenerContext()
     assert (
         isinstance(ctx.fr_holder, list) and len(ctx.fr_holder) == 1
-    ), "fr_holder must be a one-element list (T9b contract)"
+    ), "fr_holder must be a one-element list (the opener contract)"
     assert callable(ctx.open), "_OpenerContext.open must be callable"
     assert callable(ctx.close), "_OpenerContext.close must be callable"
     assert callable(ctx.weigh), "_OpenerContext.weigh must be callable"

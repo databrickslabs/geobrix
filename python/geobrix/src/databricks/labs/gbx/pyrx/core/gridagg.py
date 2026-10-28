@@ -18,7 +18,7 @@ Mirrors the heavyweight ``RST_{H3,Quadbin,BNG}_RasterToGrid`` families exactly:
   H3/quadbin ids are ``int`` (Long) but BNG ids are rendered to ``str`` via
   ``pygx._bng.format`` at the output boundary.
 
-Two new parameters:
+Two parameters shape the result:
 
 * ``coverage``: ``"sparse"`` (emit only cells with at least one valid pixel) or
   ``"complete"`` (default, matches heavy) -- also emit covering-but-empty cells

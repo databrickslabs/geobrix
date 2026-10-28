@@ -729,15 +729,15 @@ def sparse_orthomosaic(
 
 def _enu_to_utm(xe, ye, ze, ref_lat, ref_lon):
     """Reproject shared-ENU-metre points to the local UTM zone so the exported LAZ
-       carries a real *metric* projected CRS (a geographic CRS would force a coarse
-       LAS scale in degrees). ENU->lon/lat uses the same equirectangular
-       linearisation as the ortho georeferencing; lon/lat->UTM via pyproj.
+    carries a real *metric* projected CRS (a geographic CRS would force a coarse
+    LAS scale in degrees). ENU->lon/lat uses the same equirectangular
+    linearisation as the ortho georeferencing; lon/lat->UTM via pyproj.
 
-       UTM zone selection is :func:`databricks.labs.gbx.core.crs.utm_epsg_for`
+    UTM zone selection is :func:`databricks.labs.gbx.core.crs.utm_epsg_for`
     rather than inline zone arithmetic — this is the one adaptation
-       from ``_enu_to_utm`` in ``config_nb`` cell ``1ee46ad5``; the reprojection
-       itself (``pyproj.Transformer.from_crs(4326, epsg, always_xy=True)``) is
-       unchanged. Returns ``(easting, northing, up, epsg)``.
+    from ``_enu_to_utm`` in ``config_nb`` cell ``1ee46ad5``; the reprojection
+    itself (``pyproj.Transformer.from_crs(4326, epsg, always_xy=True)``) is
+    unchanged. Returns ``(easting, northing, up, epsg)``.
     """
     import pyproj
 

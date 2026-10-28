@@ -578,8 +578,8 @@ _u_skewy = _header_accessor_udf(accessors.skewy, DoubleType())
 _u_format = _header_accessor_udf(accessors.format, StringType())
 _u_width = _header_accessor_udf(accessors.width, IntegerType())
 
-# Back-compat aliases: rst_width/rst_avg were wired to explicit UDF singletons
-# before the FILE-aware factories; keep the names pointing at the factory-built virtual-aware UDFs.
+# Back-compat aliases: these names once pointed at explicit UDF singletons; they now
+# point at the factory-built virtual-aware UDFs.
 _width_header_udf = _u_width
 _avg_pixel_udf = _u_avg
 

@@ -726,13 +726,13 @@ def _whole_res(fn, res) -> int:
 # Same impl-by-shape rule as quadbin/BNG: scalar/bounded geometry ops ->
 # pandas_udf (batched Arrow transfer is the win); ARRAY-returning ops (polyfill/
 # kring) -> plain @udf (row-by-row, OOM-safe at scale). The grid SPEC builder is
-# a validating @udf (Resolved decision 1) returning CUSTOM_GRID_SCHEMA so build-
+# a validating @udf returning CUSTOM_GRID_SCHEMA so build-
 # time bad-bounds errors match heavy Custom_Grid.eval's require(...).
 # ============================================================================
 
 
 # --- custom-grid spec builder -> validating @udf returning CUSTOM_GRID_SCHEMA ---
-# Resolved decision 1 (spec 2026-06-14): eager validation matches heavy
+# Eager validation matches heavy
 # Custom_Grid.eval's require(...) (error-at-build-time parity). The 7-arg form
 # defaults srid to -1 (no CRS), as in Custom_Grid.builder; the Column wrapper
 # always supplies all 8.

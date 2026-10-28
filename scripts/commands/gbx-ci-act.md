@@ -60,4 +60,4 @@ For the gaps, push to a draft PR and let real CI exercise them.
 
 - The runner image is roughly 2 GB; cached locally after first build
 - `act` reuses the image across runs; rebuild via `docker rmi geobrix-ci-runner:local && gbx:ci:act -l`
-- Full mechanics in `scripts/ci-local/README.md`; runbook context in `.cursor/agents/docker.md`
+- Full mechanics in `scripts/ci-local/README.md`

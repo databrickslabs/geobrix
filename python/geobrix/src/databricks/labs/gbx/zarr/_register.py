@@ -575,7 +575,7 @@ def _claim_ledger(spark, root: str, table: str, kind: str) -> bool:
 
     One insert wins. A claimer that finds the row (before or after trying) is refused. A
     commit Delta rejects as a conflict is tried again after a jittered wait, at most
-    ``_write._ATTEMPTS`` times (Ruling Z44); the next look finds the winner. Once its own
+    ``_write._ATTEMPTS`` times; the next look finds the winner. Once its own
     commit landed, the claimer reads the ledger back: if another claim sits ahead of its own
     (Delta let two in), it takes its row out and is refused too.
     """

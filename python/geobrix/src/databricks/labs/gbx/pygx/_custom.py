@@ -16,7 +16,7 @@ Geometry is emitted as plain WKB (NO SRID) / WKT, matching heavy ``JTS.toWKB``
 (line 159, the 2D no-SRID variant). The grid ``srid`` is metadata only and is
 NOT stamped into output geometry.
 
-Resolved decision 3 (spec 2026-06-14): heavy ``pointToCellID`` had a
+NaN guard: heavy ``pointToCellID`` had a
 ``require(!x.isNaN && !x.isNaN, ...)`` typo that left a NaN Y unguarded;
 ``point_to_cell_id`` here (and the heavy fix) guards BOTH x and y.
 """
@@ -203,10 +203,10 @@ def point_to_cell_id(conf: CustomGridConf, x: float, y: float, resolution: int) 
     order as the heavy ``require``s: NaN, max-resolution, x-bounds, y-bounds.
     Heavy uses the geometry's FIRST coordinate (getCoordinate), not the centroid.
 
-    Resolved decision 3: guard BOTH x and y for NaN. The heavy Scala
+    Guard BOTH x and y for NaN. The heavy Scala
     (CustomGridSystem.scala:250) has a ``require(!x.isNaN && !x.isNaN, ...)``
     typo — the second clause repeats ``x``, leaving a NaN Y unguarded. This
-    port (and the heavy fix, CG-T8) guards both; cellPosX/Y truncate toward
+    port (and the heavy fix) guards both; cellPosX/Y truncate toward
     zero (Scala ``Double.toLong``), via ``_trunc_long`` (not ``math.floor``).
     """
     if math.isnan(x) or math.isnan(y):
@@ -290,7 +290,7 @@ def polyfill(conf: CustomGridConf, geometry, resolution: int) -> List[int]:
     """Cell IDs whose CENTER is contained by the geometry (CustomGridSystem.polyfill).
 
     Port of CustomGridSystem.scala:145-178. Mirrors heavy EXACTLY incl. the
-    intentional ``first..last + 1`` bbox over-scan (Resolved decision 3: the
+    intentional ``first..last + 1`` bbox over-scan (the
     over-scan is by design, not a bug — the centroid-containment filter discards
     the extra ring of cells). The cell envelope corners (minX,minY)/(maxX,maxY)
     map to the first/last cell positions; the over-scan iterates one extra cell

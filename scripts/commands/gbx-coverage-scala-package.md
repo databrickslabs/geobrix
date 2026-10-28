@@ -197,7 +197,7 @@ Only tests matching the pattern execute, but coverage is still measured across t
 
 ## Strategy
 
-See `.cursor/rules/coverage-strategy.mdc` for comprehensive guidance on:
+The strategy in short:
 - When to use each coverage command
 - Baseline + incremental pattern
 - Coverage improvement workflow

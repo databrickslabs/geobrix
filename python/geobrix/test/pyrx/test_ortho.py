@@ -25,7 +25,7 @@ def test_apply_sim3_identity():
 
 def test_umeyama_degenerate_input_raises():
     # Fewer than 3 point pairs (2 coincident points from the original brief's
-    # "degenerate" case) — orchestrator ruling: this must RAISE, not silently
+    # "degenerate" case) — this must RAISE, not silently
     # return NaN from a 0/0 scale division.
     src_two = np.array([[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]])
     dst_two = np.array([[0.0, 0.0, 0.0], [2.0, 2.0, 2.0]])

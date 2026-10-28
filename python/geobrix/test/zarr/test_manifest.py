@@ -293,7 +293,7 @@ def test_time_travel_snapshot(spark_delta, table):
     assert old[0]["file"] == "data/t/a.zpack"
 
 
-# --- ruling Z6: a stale commit names every conflicting key ------------------------
+# --- a stale commit names every conflicting key ------------------------
 
 
 def test_stale_commit_lists_every_conflicting_key_and_the_winner(spark_delta, table):
@@ -356,7 +356,7 @@ def test_changed_since_returns_rows_whose_live_write_id_differs(spark_delta, tab
     }
 
 
-# --- ruling Z7: classify by message text, whatever the exception class ------------
+# --- classify by message text, whatever the exception class ------------
 
 _CAS_OSS = "[USER_RAISED_EXCEPTION] GBX_ZARR_CAS chunk t2m c/0/0/1 SQLSTATE: P0001"
 _CAS_COMMIT = (
@@ -470,7 +470,7 @@ def test_commit_maps_concurrent_errors_to_retryable_and_passes_others(
     assert M.snapshot(spark_delta, table).version == before
 
 
-# --- ruling Z8: versions older than the vacuum horizon are gone -------------------
+# --- versions older than the vacuum horizon are gone -------------------
 
 
 def _tag_row(spark, table, tag, write_id="f" * 32):
@@ -1169,7 +1169,7 @@ def test_retain_days_round_up_with_a_floor_of_one(retain, days):
     assert M.retain_days(retain) == days
 
 
-# --- a sharded array's rows always say which shard they lie in (Ruling F6) ----------------
+# --- a sharded array's rows always say which shard they lie in ----------------
 
 
 def _array_row(name, doc_text, wid, expected=None):
@@ -1317,7 +1317,7 @@ def test_the_pruner_keeps_in_so_a_row_without_a_shard_key_is_never_selected(
     )  # only unpruned sees it
 
 
-# --- a chunk or shard row is a whole region or a tombstone (Task 6 carry, Ruling Z49) ------
+# --- a chunk or shard row is a whole region or a tombstone ------
 
 
 @pytest.mark.parametrize("kind", ["chunk", "shard"])
@@ -1407,7 +1407,7 @@ def test_a_shard_tombstone_commits_and_replaces_the_shard_row_it_hides(
     assert (live["origin"], live["identity"]) == ("gbx", "5:10")
 
 
-# --- the writer passes the sharding it knows (follow-up M1, Isaac K20) ---------------------
+# --- the writer passes the sharding it knows ---------------------
 
 
 def test_a_caller_that_knows_the_sharding_spares_the_lookup_and_stays_columnar():
@@ -1515,7 +1515,7 @@ def test_a_check_row_aborts_the_commit_when_the_row_moved(spark_delta, held_shar
     )
 
 
-# --- argument errors carry a Fix: line (fix round 1, M10) -----------------------------------
+# --- argument errors carry a Fix: line -----------------------------------
 
 
 @pytest.mark.parametrize(

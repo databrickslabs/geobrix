@@ -696,7 +696,7 @@ def test_slice_ending_on_origin_plus_360_is_plain_whatever_the_dtype():
         assert lon_ranges(lon, slice(-92.14, 267.85)) == ((1, 36000),)
 
 
-# ---- Task 9 carries (Ruling Z19): seam snap capped by the step, periodic reach, huge ints
+# ---- seam snap capped by the step, periodic reach, huge ints
 
 
 def test_seam_snap_is_capped_by_the_label_step_on_a_float16_axis():

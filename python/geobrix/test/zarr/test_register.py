@@ -1348,7 +1348,7 @@ def test_same_identity_rejects_bad_input():
         _register.same_identity("1:2", "1:2", mtime_resolution_ms=0)
 
 
-# --- Task 9 follow-ups: markers, readers, probes and unreadable documents ----------------
+# --- markers, readers, probes and unreadable documents ----------------
 
 
 def _failing_reads(monkeypatch, failures: int):

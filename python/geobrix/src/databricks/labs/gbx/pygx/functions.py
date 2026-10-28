@@ -264,6 +264,11 @@ def _bng_pointascell_udf(geom: pd.Series, res: pd.Series) -> pd.Series:
             out.append(None)
             continue
         c = pg.centroid
+        # AP-21: a centroid that is not a finite point (inf, NaN) is a data error: NULL, as for an
+        # empty geometry, before _bng.point_to_cell_id (which raises for it) is reached
+        if not (math.isfinite(c.x) and math.isfinite(c.y)):
+            out.append(None)
+            continue
         out.append(_bng.point_as_cell(c.x, c.y, _norm_res(r)))
     return pd.Series(out)
 

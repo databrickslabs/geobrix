@@ -2,7 +2,7 @@ import pytest
 
 shapely = pytest.importorskip("shapely")
 from shapely import from_wkb, get_srid, to_wkb  # noqa: E402
-from shapely.geometry import box  # noqa: E402
+from shapely.geometry import Point, Polygon, box  # noqa: E402
 
 from databricks.labs.gbx.pygx import functions as gx  # noqa: E402
 
@@ -24,6 +24,24 @@ def test_pointascell_wkt_uses_bng_coords(spark):
         "SELECT gbx_bng_pointascell('POINT(530000 180000)', '1km') AS c"
     ).collect()[0]
     assert row["c"] == "TQ3080"
+    # A geometry whose centroid is not a finite point is a data error: NULL (AP-21), as for an
+    # empty geometry. It neither raises nor becomes a cell.
+    inf, nan = float("inf"), float("nan")
+    geoms = [
+        Point(530000, 180000),
+        Point(inf, 0),
+        Point(0, -inf),
+        Point(nan, 0),
+        Polygon([(0, 0), (1, 0), (inf, 1)]),
+        Point(),
+    ]
+    spark.createDataFrame(
+        [(bytes(to_wkb(g)),) for g in geoms], "g binary"
+    ).createOrReplaceTempView("t_pointascell_centroids")
+    got = spark.sql(
+        "SELECT gbx_bng_pointascell(g, '1km') AS c FROM t_pointascell_centroids"
+    ).collect()
+    assert [r["c"] for r in got] == ["TQ3080"] + [None] * (len(geoms) - 1)
 
 
 def test_aswkb_no_srid_polygon(spark):

@@ -117,6 +117,13 @@ CARGO_ROWS = {
         },
         None,
     ),
+    # a georust crate locked at another version than its CRATE_*_VERSION pin (a `cargo update` moved it)
+    "lock-off-the-crate-pin": (
+        {
+            "crate/Cargo.lock": 'version = 4\n\n[[package]]\nname = "gdal-sys"\nversion = "0.11.0"\n'
+        },
+        "crate/Cargo.lock",
+    ),
 }
 
 

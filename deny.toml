@@ -32,6 +32,30 @@ ignore = true
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"
+# GDAL, PROJ, GEOS and SQLite come from the payload (one GDAL per process, shared with rasterio and osgeo), never
+# from a crate's own bundled build. proj-sys also builds its bundled PROJ when pkg-config finds no libproj; that
+# fallback has no feature to ban, so `gbx:build:native --target rust-native` sets the crate's own guard against it
+# and checks that the extension needs the payload's libproj.
+deny = [
+    { crate = "gdal-src", reason = "builds its own GDAL: link the payload's libgdal" },
+    { crate = "geos-src", reason = "builds its own GEOS: link the payload's libgeos_c" },
+]
+
+[[bans.features]]
+crate = "gdal-sys"
+deny = ["bundled"]
+
+[[bans.features]]
+crate = "geos-sys"
+deny = ["static"]
+
+[[bans.features]]
+crate = "proj-sys"
+deny = ["bundled_proj"]
+
+[[bans.features]]
+crate = "libsqlite3-sys"
+deny = ["bundled", "bundled-sqlcipher", "bundled-sqlcipher-vendored-openssl", "bundled-windows"]
 
 [sources]
 unknown-registry = "deny"

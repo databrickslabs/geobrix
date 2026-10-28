@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin==1.15.0"]
+build-backend = "maturin"
+
+[project]
+name = "gbxrs-native-probe"
+version = "0.0.0"
+requires-python = ">=3.12"
+
+[tool.maturin]
+bindings = "pyo3"
+strip = true
+module-name = "_gbx_native_probe"

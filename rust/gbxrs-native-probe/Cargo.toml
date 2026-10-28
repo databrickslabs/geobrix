@@ -1,0 +1,33 @@
+# Not shipped. The proof that a GeoBrix Rust kernel links the payload's own GDAL, PROJ and GEOS (the hashed
+# SONAMEs of build/native/out/<arch>/stage-native/gdal-native) and shares one GDAL with rasterio and osgeo.
+# Built and checked by `gbx:build:native --target rust-native`; the recipe a kernel crate copies is in
+# scripts/commands/gbx-build-native.md ("Rust crates that call GDAL, PROJ or GEOS").
+#
+# The georust crates are pinned exactly here and in scripts/native/pins.conf (CRATE_*_VERSION, audited against
+# Cargo.lock by pins.py). None of their bundled native builds is used (deny.toml bans them):
+#   gdal-sys `bindgen`: 0.12.0's prebuilt bindings stop at GDAL 3.12, so they are generated from the payload's 3.13
+#            headers (libclang comes with the rust-native build stage). Not the high-level `gdal` crate: 0.19.0 does not
+#            compile against GDAL 3.13 (GDT_Byte became GDT_UInt8; GDALRasterIOExtraArg gained bOperateInBufType).
+#            Upstream's master has both fixes and 3.13 prebuilt bindings, unreleased.
+#   geos     `v3_15_0`: the bindings of GEOS 3.15 (hand-written in geos-sys, no bindgen)
+#   proj     no default features: proj-sys's prebuilt bindings are PROJ 9.6's API, which PROJ 9.9 keeps; it links the
+#            payload's libproj through pkg-config and must never fall back to its bundled PROJ source build
+[package]
+name = "gbxrs-native-probe"
+version = "0.0.0"
+edition = "2021"
+license = "LicenseRef-Databricks-Proprietary"
+publish = false
+
+[lib]
+name = "_gbx_native_probe"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "=0.30.1", features = ["extension-module", "abi3-py312"] }
+gdal-sys = { version = "=0.12.0", default-features = false, features = ["bindgen"] }
+geos = { version = "=11.3.1", default-features = false, features = ["v3_15_0"] }
+proj = { version = "=0.31.0", default-features = false }
+
+[profile.release]
+codegen-units = 1

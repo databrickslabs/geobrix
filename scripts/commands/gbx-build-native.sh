@@ -18,7 +18,7 @@ NO_CACHE=()
 
 usage() {
     show_banner "Build the native stack in the manylinux_2_28 container"
-    echo "Usage: bash scripts/commands/gbx-build-native.sh [--arch x86_64|aarch64|both] [--target toolchain|stage-native|bindings] [--no-cache] [--log <path>]"
+    echo "Usage: bash scripts/commands/gbx-build-native.sh [--arch x86_64|aarch64|both] [--target toolchain|stage-native|bindings|rust-native] [--no-cache] [--log <path>]"
     echo ""
     echo "  --arch    x86_64, aarch64 or both (default: this machine's). 'both' builds aarch64 first, then x86_64;"
     echo "            the non-native one runs under emulation and is much slower."
@@ -30,6 +30,10 @@ usage() {
     echo "            bindings     rasterio, pyogrio, pyproj, shapely and netCDF4 built from their sdists against that tree:"
     echo "                         build/native/out/<arch>/bindings/{vendor,dist,wheels}. Verified by scripts/native/test-bindings.sh, which"
     echo "                         runs each binding's own test suite against it and writes p11.json (default)"
+    echo "            rust-native  the toolchain plus libclang, for Rust crates that call the payload's GDAL, PROJ and GEOS; verified by"
+    echo "                         building rust/gbxrs-native-probe against the stage-native tree (scripts/native/build-rust-native.sh),"
+    echo "                         its links, closure and a smoke beside rasterio and osgeo (scripts/native/verify-rust-native.sh), and"
+    echo "                         cargo deny: build/native/out/<arch>/rust-native/payload/_native/<arch>/rs/_gbx_native_probe.abi3.so"
     echo "  --no-cache  Rebuild every layer (a cold build; the seconds it reports are then the full cost)"
     echo "  --log     Log file (filename -> test-logs/<name>; relative -> under test-logs/; absolute as-is)"
     echo ""
@@ -55,7 +59,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$ARCH" in x86_64|aarch64|both) ;; *) echo "--arch must be x86_64, aarch64 or both" >&2; exit 1 ;; esac
-case "$TARGET" in toolchain|stage-native|bindings) ;; *) echo "--target must be toolchain, stage-native or bindings" >&2; exit 1 ;; esac
+case "$TARGET" in toolchain|stage-native|bindings|rust-native) ;; *) echo "--target must be toolchain, stage-native, bindings or rust-native" >&2; exit 1 ;; esac
 
 DOCKERFILE="$PROJECT_ROOT/scripts/native/build.Dockerfile"
 show_banner "Native build: $TARGET ($ARCH)"
@@ -179,6 +183,46 @@ verify_bindings() {
         | tee "$out/test.txt"
 }
 
+# A Rust crate against gdal-native as exported by stage-native (the dev kit), in the rust-native image (the toolchain plus
+# libclang), --network none: build-rust-native.sh builds the probe crate (the recipe a kernel crate follows), then
+# verify-rust-native.sh checks its NEEDED and RUNPATH, ldd and auditwheel closure, and runs the smoke beside rasterio and
+# osgeo (the bindings' vendor tree); then cargo deny, as for the toolchain's smoke crate.
+verify_rust_native() {
+    local a="$1" plat="$2" out="$3" tag="$4"
+    local sn="$GBX_NATIVE_BUILD/out/$a/stage-native/gdal-native" bn="$GBX_NATIVE_BUILD/out/$a/bindings"
+    local crate=rust/gbxrs-native-probe vendor="$GBX_NATIVE_BUILD/vendor/gbxrs-native-probe" work="$GBX_NATIVE_BUILD/work/rust-native-$a"
+    local offline='cp /recipes/cargo-offline.toml $CARGO_HOME/config.toml && cd /src' t0
+    [ -d "$sn" ] || { echo "PRECONDITION MISSING: $sn (build --target stage-native first); the Rust crate was not built"; return 1; }
+    [ -d "$bn/vendor" ] || { echo "PRECONDITION MISSING: $bn/vendor (build --target bindings first); the Rust crate was not built"; return 1; }
+
+    echo "== verify $a: $crate built against $sn in $tag (--network none)"
+    bash scripts/native/cargo-vendor.sh "$crate" "$vendor"
+    rm -rf "$work"
+    mkdir -p "$work"
+    clone "$crate" "$work/crate"
+    rm -rf "$work/crate/target"
+    t0=$(date +%s)
+    docker run --rm --network none --platform "$plat" -v "$work/crate:/src" -v "$vendor:/vendor:ro" -v "$sn:/gdal-native:ro" \
+        -v "$out:/out" -v "$PROJECT_ROOT/scripts/native:/verify:ro" "$tag" bash /verify/build-rust-native.sh /src /gdal-native /out 2>&1 \
+        | tee "$out/build-crate.txt"
+    [ ! -e "$work/crate/target" ] || { echo "VERIFY FAILED: the offline build left $work/crate/target (CARGO_TARGET_DIR not honoured)"; return 1; }
+    echo "RUST_NATIVE_CRATE arch=$a crate=$crate build_seconds=$(($(date +%s) - t0))" | tee -a "$out/build.txt"
+
+    echo "== verify $a: links, closure and the smoke beside rasterio and osgeo (--network none)"
+    t0=$(date +%s)
+    docker run --rm --network none --platform "$plat" -v "$sn:/gdal-native:ro" -v "$bn:/bindings:ro" -v "$out:/out:ro" \
+        -v "$GBX_NATIVE_BUILD/wheelhouse-test/$a:/wheelhouse-test:ro" -v "$PROJECT_ROOT/scripts/native:/verify:ro" "$tag" \
+        bash /verify/verify-rust-native.sh /gdal-native /bindings /out 2>&1 | tee "$out/verify.txt"
+    echo "RUST_NATIVE_VERIFY arch=$a verify_seconds=$(($(date +%s) - t0))" | tee -a "$out/build.txt"
+
+    echo "== verify $a: cargo deny"
+    docker run --rm --network none --platform "$plat" -v "$work/crate:/src" -v "$vendor:/vendor:ro" -v "$PROJECT_ROOT/deny.toml:/deny.toml:ro" "$tag" \
+        bash -lc "$offline && cargo deny --offline --locked --config /deny.toml check licenses bans sources"
+    docker run --rm --platform "$plat" -v "$work/crate:/src" -v "$vendor:/vendor:ro" -v "$PROJECT_ROOT/deny.toml:/deny.toml:ro" "$tag" \
+        bash -lc "$offline && cargo deny --locked --config /deny.toml check -A index-failure advisories"
+    echo "NOTE: yanked crates are NOT checked here (a vendored source has no crates index); the CI job .github/workflows/rust-deny.yml is the gate."
+}
+
 build_arch() {
     local a="$1" plat upper tag out h args=() flag kv t0 t1 t2 size
     case "$a" in x86_64) plat=linux/amd64; upper=X86_64 ;; aarch64) plat=linux/arm64; upper=AARCH64 ;; esac
@@ -223,6 +267,7 @@ build_arch() {
         toolchain) verify_toolchain "$a" "$plat" "$tag" ;;
         stage-native) verify_stage_native "$a" "$plat" "$out" "$h" ;;
         bindings) verify_bindings "$a" "$plat" "$out" "$h" ;;
+        rust-native) verify_rust_native "$a" "$plat" "$out" "$tag" ;;
         *) echo "VERIFY FAILED: no verify for target $TARGET"; return 1 ;;
     esac
     echo "NATIVE_VERIFIED arch=$a target=$TARGET total_seconds=$(($(date +%s) - t0)) image=$tag"

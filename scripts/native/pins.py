@@ -23,8 +23,11 @@ HERE = Path(__file__).resolve().parent
 DEFAULT_ROOT = HERE.parent.parent
 BOUND = ("RASTERIO", "PYOGRIO", "PYPROJ", "SHAPELY", "NETCDF4")
 # X_VERSION keys with no X_SHA256: tools fetched per architecture or from a registry, and versions only compared.
-# Their URLs (RUSTUP_URL, CARGO_DENY_URL) are still checked for the version.
+# Their URLs (RUSTUP_URL, CARGO_DENY_URL) are still checked for the version. The CRATE_<name>_VERSION pins are
+# crates too: their checksums are in each Cargo.lock, which the audit checks against the pin.
 NO_CHECKSUM = {"RUSTUP", "CARGO_DENY", "MATURIN", "PYO3", "NUMPY_BUILD", "PYTHON"}
+CRATE_PIN = re.compile(r"CRATE_([A-Z0-9_]+)_VERSION")
+LOCKED = re.compile(r'(?m)^\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"]+)"')
 PLACEHOLDER = re.compile(r"^$|[<>]|\bTODO\b|\bTBD\b|CHANGEME|\bXXX+\b", re.I)
 SKIP_DIRS = {
     ".git",
@@ -76,6 +79,7 @@ def validate(pins: dict, name: str = "scripts/native/pins.conf") -> list:
             dep = key[: -len("_VERSION")]
             if (
                 dep not in NO_CHECKSUM
+                and not CRATE_PIN.fullmatch(key)
                 and f"{dep}_SHA256" not in pins
                 and f"{dep}_SDIST_SHA256" not in pins
             ):
@@ -208,6 +212,24 @@ def rust_crates(root: Path, pins: dict) -> list:
     return out
 
 
+def crate_locks(root: Path, pins: dict) -> list:
+    """Every Cargo.lock against the CRATE_<name>_VERSION pins: a locked crate of a pinned name at another version."""
+    want = {
+        m.group(1).lower().replace("_", "-"): (key, value)
+        for key, value in pins.items()
+        if (m := CRATE_PIN.fullmatch(key))
+    }
+    out = []
+    for path in walk(root, {"Cargo.lock"}):
+        for name, version in LOCKED.findall(path.read_text()):
+            key, pinned = want.get(name.replace("_", "-"), (None, version))
+            if version != pinned:
+                out.append(
+                    f"{path.relative_to(root)}: locks {name} {version}, pins.conf says {key}={pinned}"
+                )
+    return out
+
+
 def build_requirements(root: Path, pins: dict) -> list:
     path = root / "scripts/native/build-requirements.in"
     if not path.exists():
@@ -294,7 +316,13 @@ def audit(root: Path) -> list:
         return [f"scripts/native/pins.conf: missing under {root}"]
     pins = load_pins(pins_path)
     findings = validate(pins)
-    for check in (rust_toolchain, rust_crates, build_requirements, pom_property):
+    for check in (
+        rust_toolchain,
+        rust_crates,
+        crate_locks,
+        build_requirements,
+        pom_property,
+    ):
         findings += check(root, pins)
     findings += legacy(root)
     findings += build_dockerfile(root)

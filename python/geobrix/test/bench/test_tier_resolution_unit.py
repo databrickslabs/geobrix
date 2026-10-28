@@ -93,8 +93,13 @@ def test_assert_tier_reads_the_printed_plan_of_the_dataframe(plan, expected):
     rd._assert_tier(expected, "fn", _FakeDF(plan))  # passes
     with pytest.raises(
         rd.TierResolutionError, match=f"runs the {expected} implementation"
-    ):
+    ) as refused:
         rd._assert_tier(other, "fn", _FakeDF(plan))
+    # a lightweight plan says which Python node made it so; a heavyweight one has none
+    named = [
+        m for m in rd._PYTHON_PLAN_MARKERS if f"plan node: {m}" in str(refused.value)
+    ]
+    assert bool(named) == (expected == "lightweight"), str(refused.value)
 
 
 def test_bng_explode_sql_takes_each_tiers_form():
@@ -152,11 +157,24 @@ def test_the_explode_leg_raises_before_timing_when_its_query_reaches_the_other_t
     ]
 
 
-def test_the_explode_leg_writes_an_error_row_when_its_function_is_not_registered(
-    monkeypatch,
+@pytest.mark.parametrize(
+    "plan,note",
+    [
+        (
+            "== Analyzed Logical Plan ==\n[UNRESOLVED_ROUTINE] Cannot resolve routine "
+            "`gbx_bng_kringexplode` on search path [`system`.`builtin`]. SQLSTATE: 42883",
+            "not registered",
+        ),
+        (RuntimeError("EXPLAIN failed"), "EXPLAIN failed"),
+    ],
+    ids=["unresolved-routine-in-the-plan", "explain-raises"],
+)
+def test_the_explode_leg_writes_an_error_row_when_its_query_cannot_be_planned(
+    monkeypatch, plan, note
 ):
     """EXPLAIN of an unregistered function does not raise: its plan holds the
-    UNRESOLVED_ROUTINE error. Nothing can be mis-timed, so the run goes on with an error row.
+    UNRESOLVED_ROUTINE error. Nothing can be mis-timed either way, so the run goes on with
+    an error row, whether the plan says so or EXPLAIN itself fails.
     """
 
     class _DF:
@@ -173,14 +191,56 @@ def test_the_explode_leg_writes_an_error_row_when_its_function_is_not_registered
         def createDataFrame(self, data, schema=None):
             return _DF()
 
+        def sql(self, query):
+            if isinstance(self.plan, Exception):
+                raise self.plan
+            return super().sql(query)
+
     timed = []
     monkeypatch.setattr(rd, "_register_bng", lambda spark, api: None)
     monkeypatch.setattr(rd, "time_iters", lambda *a, **k: timed.append(a))
-    spark = _Spark(
-        "== Analyzed Logical Plan ==\n[UNRESOLVED_ROUTINE] Cannot resolve routine "
-        "`gbx_bng_kringexplode` on search path [`system`.`builtin`]. SQLSTATE: 42883"
-    )
-    row = rd.run_bng_kringexplode(spark, "r", 0, 1, api="heavyweight", n_rows=2)
+    row = rd.run_bng_kringexplode(_Spark(plan), "r", 0, 1, api="heavyweight", n_rows=2)
     assert row.status == "error" and row.api == "heavyweight"
-    assert "not registered" in row.note
+    assert note in row.note
     assert not timed
+
+
+class _CountSpark(_FakeSpark):
+    """EXPLAIN answers with a plan; any other query is a DataFrame of ``n_other`` rows."""
+
+    def __init__(self, plan, n_other):
+        super().__init__(plan)
+        self.n_other = n_other
+
+    def sql(self, query):
+        if query.startswith("EXPLAIN"):
+            if isinstance(self.plan, Exception):
+                raise self.plan
+            return super().sql(query)
+        return type("DF", (), {"count": lambda _: self.n_other})()
+
+
+@pytest.mark.parametrize(
+    "plan,n_other,expected",
+    [
+        (HEAVY_GENERATOR, 4, True),  # the other tier is registered and agrees
+        (HEAVY_GENERATOR, 5, "gives 4 rows, the heavyweight form 5"),  # and disagrees
+        (LIGHT_UDTF, 4, False),  # its form plans the same tier: not registered here
+        (
+            RuntimeError("no such function"),
+            4,
+            False,
+        ),  # EXPLAIN fails: nothing to compare
+    ],
+    ids=["agree", "mismatch", "other-tier-not-registered", "explain-raises"],
+)
+def test_the_row_count_check_compares_with_the_other_tiers_form(
+    plan, n_other, expected
+):
+    spark = _CountSpark(plan, n_other)
+    args = (spark, "lightweight", "bng_kringexplode", "v", "gbx_bng_kringexplode(c, 1)")
+    if isinstance(expected, str):
+        with pytest.raises(RuntimeError, match=expected):
+            rd._explode_rows_match(*args, 4)
+    else:
+        assert rd._explode_rows_match(*args, 4) is expected

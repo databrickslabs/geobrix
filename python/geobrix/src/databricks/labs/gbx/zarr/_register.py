@@ -42,13 +42,20 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from databricks.labs.gbx.core._retry import _retry_transient
+from databricks.labs.gbx.zarr import _manifest
+from databricks.labs.gbx.zarr._filemode import FileLayout
 from databricks.labs.gbx.zarr._filemode import resolve as resolve_file_mode
 from databricks.labs.gbx.zarr._keys import KeyEncoding
 from databricks.labs.gbx.zarr._manifest import (
+    _COMMIT_SCHEMA,
     FORMAT_VERSION,
+    ConcurrentCommit,
     StoreProps,
+    _error_text,
+    _lit,
     _q,
     _split_name,
+    classify_commit_error,
     commit,
     create_manifest,
     find_commit_version,
@@ -65,9 +72,11 @@ from databricks.labs.gbx.zarr.errors import (
     ZarrError,
     ZarrOwnershipError,
     ZarrUnsupported,
+    ZarrWriteConflict,
 )
 
 __all__ = [
+    "OWNER_LEDGER",
     "OWNER_MARKER",
     "check_owner_marker",
     "gbx_zarr_register",
@@ -82,6 +91,9 @@ __all__ = [
 _LOG = logging.getLogger(__name__)
 
 OWNER_MARKER = "_gbx_store.json"
+OWNER_LEDGER = (
+    "_gbx_owner"  # a Delta table in the root: the claim itself (see claim_root)
+)
 _MARKER_KINDS = ("overlay", "managed")
 
 # Names a store keeps its metadata under; none of them is a chunk or a child array.
@@ -252,7 +264,8 @@ def _owner_error(marker: str, owner: dict, table: str) -> ZarrOwnershipError:
         f"{os.path.dirname(marker)} is already owned by table "
         f"{owner.get('table')!r} ({owner.get('kind')}), not by {table!r}.",
         fix=f"choose a different root for {table}, or drop {owner.get('table')} and "
-        f"remove {marker} if that store is gone",
+        f"remove {marker} and {os.path.join(os.path.dirname(marker), OWNER_LEDGER)} "
+        "if that store is gone",
     )
 
 
@@ -345,9 +358,10 @@ def _remove_marker_if_ours(marker: str, written: bytes) -> bool:
 
 
 def _claim_marker(root: str, table: str, kind: str) -> bool:
-    """Claim ``root`` for ``table``; ``True`` when this call created the marker.
+    """Write the owner marker of ``root`` for ``table``; ``True`` when this call created it.
 
-    The marker is created exclusively, written with ``os.write`` until every byte is out
+    This is the note in the directory, not the claim: ``claim_root`` calls it once the
+    ownership ledger has named ``table`` the owner. The marker is created exclusively, written with ``os.write`` until every byte is out
     (the count is kept), then read back under ``_retry_transient``, so a FUSE mount that
     misses the new file for a moment does not fail the claim. Only a read-back that parses
     and names another table leaves the marker alone (it is theirs); on any other failure
@@ -408,19 +422,237 @@ def _release_marker(root: str, table: str, kind: str) -> None:
     _remove_marker(marker)
 
 
-def write_owner_marker(root: str, table: str, kind: str) -> None:
-    """Claim ``root`` for ``table`` with the owner marker ``_gbx_store.json``.
+# --- the ownership ledger ----------------------------------------------------------
+#
+# Which table owns a root is decided by a Delta transaction, not by the file system: on a
+# Unity Catalog Volume an exclusive create (``O_EXCL``) is atomic on one node only, so two
+# nodes can both "create" the same marker (measured, Tier 2). The ledger is a small Delta
+# table in the root itself (``<root>/_gbx_owner``, which every claimer of the root shares and
+# needs no catalog grant to reach) with one ``lock`` row, keyed ``owner``, that names the
+# owning table. The row is inserted with the manifest's own compare-and-swap commit (the key
+# "must not exist"), so Delta lets exactly one claimer in; a claimer that loses finds the
+# winner's row and is refused. The marker file is written after the win, as the note a person
+# or an older reader finds in the directory.
+
+_LEDGER_KEY = "owner"
+_LEDGER_DDL = """
+CREATE TABLE IF NOT EXISTS {table} (
+  kind STRING NOT NULL, array STRING, key STRING, shard_key STRING, file STRING,
+  offset BIGINT, length BIGINT, checksum STRING, origin STRING, identity STRING,
+  write_id STRING NOT NULL, tag STRING, meta STRING)
+USING DELTA
+TBLPROPERTIES (
+  'delta.enableDeletionVectors' = 'false',
+  'delta.enableRowTracking' = 'true')
+"""
+
+
+def _ledger_table(root: str) -> str:
+    """The Spark name of the ledger of ``root``: the Delta table at ``<root>/_gbx_owner``."""
+    path = os.path.join(root, OWNER_LEDGER)
+    return "delta.`" + path.replace("`", "``") + "`"
+
+
+def _ledger_exists(spark, ledger: str) -> bool:
+    try:
+        spark.sql(f"DESCRIBE DETAIL {_q(ledger)}").collect()
+        return True
+    except Exception:
+        return False
+
+
+def _create_ledger(spark, ledger: str, root: str) -> None:
+    """Create the ledger table if it is not there. Two claimers can create it at once: the
+    one that loses its first commit finds the table made, which is what it wanted."""
+    for attempt in range(3):
+        try:
+            spark.sql(_LEDGER_DDL.format(table=_q(ledger)))
+            return
+        except Exception as e:
+            if _ledger_exists(spark, ledger):
+                return
+            if attempt == 2:
+                raise ZarrError(
+                    f"GeoBrix cannot create the ownership ledger of {root} "
+                    f"({type(e).__name__}).",
+                    fix="check that the root is on a Volume you can write to, then try again",
+                ) from e
+            time.sleep(0.5 * (attempt + 1))
+
+
+def _held(spark, ledger: str) -> list[dict]:
+    """The claims in the ledger, first claimer first (commit order, then claim id).
+
+    There is one. More than one means Delta admitted two concurrent claims; the commit
+    order they landed in is the same for everyone, so the first still wins."""
+    rows = spark.sql(
+        "SELECT write_id, meta, _metadata.row_commit_version AS v "
+        f"FROM {_q(ledger)} WHERE kind = 'lock' AND tag IS NULL ORDER BY v, write_id"
+    ).collect()
+    return [{**json.loads(r["meta"]), "write_id": r["write_id"]} for r in rows]
+
+
+def _owned_by(owner: dict, root: str, table: str, kind: str) -> bool:
+    """``False`` when ``owner`` is this table and kind (the root is already its own); raises
+    ``ZarrOwnershipError`` naming the owner otherwise."""
+    if owner.get("table") == table and owner.get("kind") == kind:
+        return False
+    raise _owner_error(_marker_path(root), owner, table)
+
+
+def _unlock(spark, ledger: str, write_id: str) -> None:
+    """Delete the claim row ``write_id`` and nothing else (a delete by the row's own id, so
+    it cannot take another claimer's row, even a second one under the same key)."""
+    from databricks.labs.gbx.zarr import _write
+
+    for attempt in range(_write._ATTEMPTS):
+        try:
+            spark.sql(
+                f"DELETE FROM {_q(ledger)} WHERE kind = 'lock' AND write_id = {_lit(write_id)}"
+            )
+            return
+        except Exception as e:
+            if classify_commit_error(_error_text(e)) != "concurrent":
+                raise
+            _write._pause(_write._wait(attempt))
+    raise ZarrOwnershipError(
+        f"GeoBrix could not give back its claim {write_id} in {ledger}: the ledger kept "
+        f"changing under {_write._ATTEMPTS} attempts.",
+        fix=f"delete the directory {ledger.split('`')[1]} if no store owns the root",
+    )
+
+
+def _claim_ledger(spark, root: str, table: str, kind: str) -> bool:
+    """Make ``table`` the owner of ``root`` in its ledger; ``True`` when this call did,
+    ``False`` when the ledger already names this table and kind. Raises
+    ``ZarrOwnershipError`` when another table owns it.
+
+    One insert wins. A claimer that finds the row (before or after trying) is refused. A
+    commit Delta rejects as a conflict is tried again after a jittered wait, at most
+    ``_write._ATTEMPTS`` times (Ruling Z44); the next look finds the winner. Once its own
+    commit landed, the claimer reads the ledger back: if another claim sits ahead of its own
+    (Delta let two in), it takes its row out and is refused too.
+    """
+    from databricks.labs.gbx.zarr import _write
+
+    ledger = _ledger_table(root)
+    _create_ledger(spark, ledger, root)
+    claim_id = uuid.uuid4().hex
+    body = {"table": table, "kind": kind, "format": FORMAT_VERSION}
+    row = {
+        "kind": "lock",
+        "key": _LEDGER_KEY,
+        "meta": json.dumps(body, sort_keys=True),
+        "write_id": claim_id,
+        "op": "upsert",
+        "expected_write_id": None,  # the key must not exist yet
+    }
+    for attempt in range(_write._ATTEMPTS):
+        held = _held(spark, ledger)
+        if held:
+            return _owned_by(held[0], root, table, kind)
+        try:
+            _manifest.commit(
+                spark,
+                ledger,
+                pa.Table.from_pylist([row], schema=_COMMIT_SCHEMA),
+                write_id=claim_id,
+                meta={"mode": "claim", "table": table},
+                files=FileLayout(),
+            )
+        except ConcurrentCommit:
+            _write._pause(_write._wait(attempt))
+            continue
+        except ZarrWriteConflict:
+            _write._pause(_write._wait(attempt))
+            continue  # the key exists now: the next look names its owner
+        except Exception:
+            # the MERGE may have landed and a lookup after it failed: the ledger knows
+            if not any(c["write_id"] == claim_id for c in _held(spark, ledger)):
+                raise
+        landed = _held(spark, ledger)
+        if not landed:
+            raise ZarrError(
+                f"the claim on {root} committed but the ownership ledger does not show it",
+                fix="try the claim again",
+            )
+        first = landed[0]
+        if first["write_id"] == claim_id:
+            return True
+        _unlock(spark, ledger, claim_id)
+        return _owned_by(first, root, table, kind)
+    raise ZarrOwnershipError(
+        f"GeoBrix could not claim {root} for {table!r}: the ownership ledger kept "
+        f"changing under {_write._ATTEMPTS} attempts.",
+        fix="claim the root from one writer at a time, then try again",
+    )
+
+
+def _release_ledger(spark, root: str, table: str, kind: str) -> None:
+    """Take this table's claim out of the ledger, if it holds one. Cleanup: a failure is
+    logged, not raised, since the error being handled is the one to read."""
+    ledger = _ledger_table(root)
+    try:
+        for owner in _held(spark, ledger) if _ledger_exists(spark, ledger) else []:
+            if owner.get("table") == table and owner.get("kind") == kind:
+                _unlock(spark, ledger, owner["write_id"])
+    except Exception:
+        _LOG.warning(
+            "could not release the ownership of %s for %s; delete %s if no store owns it",
+            root,
+            table,
+            os.path.join(root, OWNER_LEDGER),
+            exc_info=True,
+        )
+
+
+def claim_root(spark, root: str, table: str, kind: str) -> bool:
+    """Claim ``root`` for ``table``: the ledger decides, then the marker is written.
+
+    ``True`` when this call made a claim, ``False`` when the root was already this table's.
+    Raises ``ZarrOwnershipError`` when another table owns it (by the ledger, or by a marker
+    that names it), and ``ZarrError`` when the claim cannot be written. A claim that fails
+    after the ledger took it goes back.
+    """
+    if kind not in _MARKER_KINDS:
+        raise ValueError(f"kind must be one of {_MARKER_KINDS}, got {kind!r}")
+    root = _local_root(root)
+    try:
+        os.makedirs(root, exist_ok=True)
+    except OSError as e:
+        raise ZarrError(
+            f"GeoBrix cannot claim {root} with an owner marker ({e}).",
+            fix="check that the root is on a Volume you can write to, then try again",
+        ) from e
+    won = _claim_ledger(spark, root, table, kind)
+    try:
+        made = _claim_marker(root, table, kind)
+    except BaseException:
+        if won:
+            _release_ledger(spark, root, table, kind)
+        raise
+    return won or made
+
+
+def release_root(spark, root: str, table: str, kind: str) -> None:
+    """Give back a claim ``claim_root`` made: the marker, then the ledger row."""
+    root = _local_root(root)
+    _release_marker(root, table, kind)
+    _release_ledger(spark, root, table, kind)
+
+
+def write_owner_marker(spark, root: str, table: str, kind: str) -> None:
+    """Claim ``root`` for ``table`` (``claim_root``), writing the marker
+    ``_gbx_store.json`` once the ownership ledger has named it the owner.
 
     ``table`` is the owner as ``qualified_table_name`` gives it. ``kind`` is
     ``"overlay"`` (a registered store's overlay root) or ``"managed"`` (a managed
     store's data root). Claiming a root the table already owns does nothing; a root owned
     by another table, or by the same table as another kind, raises
-    ``ZarrOwnershipError``. The marker is created exclusively and read back, so two
-    tables racing for one root cannot both win.
+    ``ZarrOwnershipError``. Tables racing for one root cannot both win: the ledger is a
+    Delta table, which decides on every compute where the marker file cannot.
     """
-    if kind not in _MARKER_KINDS:
-        raise ValueError(f"kind must be one of {_MARKER_KINDS}, got {kind!r}")
-    _claim_marker(root, table, kind)
+    claim_root(spark, root, table, kind)
 
 
 # --- metadata ---------------------------------------------------------------------
@@ -1195,7 +1427,9 @@ def gbx_zarr_register(
 
     The table is read-only unless ``writable=True``, which needs an ``overlay_root``:
     a directory (on a Volume) outside the store that this table owns and GeoBrix writes
-    to, recorded by an owner marker so no other table can claim it. ``file_mode`` is
+    to, recorded in an ownership ledger (the Delta table ``_gbx_owner`` in that directory,
+    one winner even when several tables claim it at once) and an owner marker, so no other
+    table can claim it. ``file_mode`` is
     ``"auto"`` (the default: ``"external"`` on a runtime with the File type preview,
     ``"fuse"`` elsewhere, Serverless included), ``"fuse"`` (path strings relative to the
     store root) or ``"external"`` (FILE EXTERNAL references, governed with the table; needs a
@@ -1295,7 +1529,7 @@ def gbx_zarr_register(
     claimed = made = False
     try:
         if overlay:
-            claimed = _claim_marker(overlay, owner, "overlay")
+            claimed = claim_root(spark, overlay, owner, "overlay")
         create_manifest(
             spark,
             table,
@@ -1315,7 +1549,7 @@ def gbx_zarr_register(
         # a table that may hold a commit (the lookup could not tell) keeps its marker
         dropped = _discard(spark, table, write_id) if made else True
         if claimed and dropped:
-            _release_marker(overlay, owner, "overlay")
+            release_root(spark, overlay, owner, "overlay")
         raise
     groups = len({k.rpartition("/")[0] for k in metas} - names)
     _say(

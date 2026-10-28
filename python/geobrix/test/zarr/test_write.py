@@ -1070,6 +1070,8 @@ def test_p9_a_create_whose_commit_landed_keeps_its_marker(
     real, calls = M.find_commit_version, []
 
     def flaky(spark_, table_, write_id, *, since=0):
+        if table_.startswith("delta."):  # the root's ownership ledger, not the manifest
+            return real(spark_, table_, write_id, since=since)
         calls.append(1)
         if len(calls) >= 2 and (how == "always" or len(calls) == 2):
             raise RuntimeError("transient lookup failure")

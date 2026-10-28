@@ -2660,7 +2660,11 @@ def _check_new_root(root: str, owner: str) -> None:
     is empty or holds this table's own marker (a create of this table that stopped
     before its commit)."""
     from databricks.labs.gbx.core._retry import _retry_transient
-    from databricks.labs.gbx.zarr._register import OWNER_MARKER, _check_owner
+    from databricks.labs.gbx.zarr._register import (
+        OWNER_LEDGER,
+        OWNER_MARKER,
+        _check_owner,
+    )
 
     if not os.path.exists(root):
         return
@@ -2673,7 +2677,10 @@ def _check_new_root(root: str, owner: str) -> None:
     if os.path.exists(marker):
         _check_owner(marker, owner, "managed")  # another table's: refused
         return
-    entries = _retry_transient(lambda: sorted(os.listdir(root)))
+    # the ownership ledger is not content: a claim that was given back leaves its table
+    entries = _retry_transient(
+        lambda: sorted(n for n in os.listdir(root) if n != OWNER_LEDGER)
+    )
     if entries:
         shown = ", ".join(entries[:3]) + (" ..." if len(entries) > 3 else "")
         raise ZarrOwnershipError(
@@ -2741,7 +2748,9 @@ def gbx_zarr_write(
     ``mode``:
 
     - ``"create"``: a new managed store, table ``target`` and data root ``root``. The root
-      must not exist, or be empty; it gets an owner marker naming the table. ``chunks``
+      must not exist, or be empty; it gets an ownership ledger (the Delta table
+      ``_gbx_owner``, which decides which table owns the root, one winner even when
+      several claim it at once) and an owner marker naming the table. ``chunks``
       (``"maps"``, ``"series"``, ``"balanced"`` or a dict of dimension to size), ``shards``
       (``None`` computes them, a dict sets some, ``False`` means none) and ``codecs`` (the
       inner chunk's codec chain, as Zarr v3 codec documents or zarr codec objects; default
@@ -2841,12 +2850,12 @@ def gbx_zarr_write(
     Volume.
     """
     from databricks.labs.gbx.zarr._register import (
-        _claim_marker,
         _discard,
         _local_root,
-        _release_marker,
         _table_exists,
+        claim_root,
         qualified_table_name,
+        release_root,
     )
 
     if mode not in _MODES:
@@ -2949,7 +2958,7 @@ def gbx_zarr_write(
     plan.files = FileLayout.of(M.read_props(spark, target) if adopt else new_props)
     claimed = made = False
     try:
-        claimed = _claim_marker(data_root, owner, "managed")
+        claimed = claim_root(spark, data_root, owner, "managed")
         if not adopt:
             M.create_manifest(spark, target, new_props)
             made = True
@@ -2965,5 +2974,5 @@ def gbx_zarr_write(
             else not adopt and not _table_exists(spark, target)
         )
         if claimed and gone:
-            _release_marker(data_root, owner, "managed")
+            release_root(spark, data_root, owner, "managed")
         raise

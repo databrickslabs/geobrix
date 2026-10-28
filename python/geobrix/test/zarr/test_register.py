@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import shutil
+import threading
 import types
 import uuid
 
@@ -25,6 +26,7 @@ from databricks.labs.gbx.zarr._manifest import (  # noqa: E402
 from databricks.labs.gbx.zarr._meta import parse_v2, parse_v3  # noqa: E402
 from databricks.labs.gbx.zarr._register import (  # noqa: E402
     OWNER_MARKER,
+    _claim_marker,
     gbx_zarr_register,
     list_objects,
     read_base_metadata,
@@ -332,7 +334,108 @@ def test_overlay_root_exclusive(spark_delta, era5_v3_unsharded, tmp_path):
     assert not _exists(spark_delta, second)
     assert json.loads((overlay / OWNER_MARKER).read_text())["table"] == owner
 
-    write_owner_marker(str(overlay), owner, "overlay")  # its own table: no error
+    write_owner_marker(spark_delta, str(overlay), owner, "overlay")  # its own: no error
+
+
+def _ledger_owners(spark, root):
+    """The tables the ownership ledger of ``root`` names, first claim first."""
+    root = str(root)
+    if not _register._ledger_exists(spark, _register._ledger_table(root)):
+        return []
+    return [c["table"] for c in _register._held(spark, _register._ledger_table(root))]
+
+
+def test_concurrent_claims_of_one_root_have_exactly_one_winner(
+    spark_delta, tmp_path, monkeypatch
+):
+    """Eight tables claim one root at the same moment, on a file system whose exclusive
+    create is not exclusive: what a Unity Catalog Volume does across nodes (two claimers
+    both created the marker, and the recorded owner was often not the winner). The
+    ownership ledger, a Delta table in the root, lets exactly one in; the rest are refused
+    with a fix, and the marker names the winner."""
+    from databricks.labs.gbx.zarr import _write
+
+    monkeypatch.setattr(_write, "_pause", lambda seconds: None)
+    real_open = os.open
+
+    def not_exclusive(path, flags, *a, **k):
+        if str(path).endswith(OWNER_MARKER):
+            flags &= ~os.O_EXCL
+        return real_open(path, flags, *a, **k)
+
+    monkeypatch.setattr(os, "open", not_exclusive)
+    root = tmp_path / "ov"
+    names = [f"c.s.t{i}" for i in range(8)]
+    barrier, outcome = threading.Barrier(len(names)), {}
+
+    def claim(name):
+        barrier.wait()
+        try:
+            write_owner_marker(spark_delta, str(root), name, "overlay")
+            outcome[name] = None
+        except BaseException as e:  # noqa: BLE001 - reported by the main thread
+            outcome[name] = e
+
+    threads = [threading.Thread(target=claim, args=(n,)) for n in names]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(600)
+    winners = [n for n, e in outcome.items() if e is None]
+    assert len(winners) == 1, outcome
+    for e in (e for e in outcome.values() if e is not None):
+        assert isinstance(e, ZarrOwnershipError) and "Fix:" in str(e)
+        assert winners[0] in str(e)
+    assert json.loads((root / OWNER_MARKER).read_text())["table"] == winners[0]
+    assert _ledger_owners(spark_delta, root) == winners
+
+
+def test_a_claim_that_lands_behind_another_is_taken_back(
+    spark_delta, tmp_path, monkeypatch
+):
+    """Were Delta ever to admit two concurrent claims, the order they committed in decides
+    for every reader: the later claimer takes its row out and is refused."""
+    root = str(tmp_path / "ov")
+    write_owner_marker(spark_delta, root, "c.s.first", "overlay")
+    real_held, looks = _register._held, []
+
+    def blind_held(spark, ledger):  # the claimer's first look misses the winner
+        looks.append(1)
+        return [] if len(looks) == 1 else real_held(spark, ledger)
+
+    def blind_commit(spark, ledger, rows, *, write_id, meta, files):
+        row = rows.to_pylist()[0]
+        spark.sql(  # a second lock row, as if the MERGE had not seen the first
+            f"INSERT INTO {_register._q(ledger)} (kind, key, write_id, meta) "
+            f"VALUES ('lock', 'owner', '{write_id}', '{row['meta']}')"
+        )
+        return 0
+
+    monkeypatch.setattr(_register, "_held", blind_held)
+    monkeypatch.setattr(_register._manifest, "commit", blind_commit)
+    with pytest.raises(ZarrOwnershipError, match="c.s.first"):
+        write_owner_marker(spark_delta, root, "c.s.second", "overlay")
+    monkeypatch.undo()
+    assert _ledger_owners(spark_delta, root) == ["c.s.first"]
+
+
+def test_a_claim_whose_commit_landed_but_whose_lookup_failed_still_wins(
+    spark_delta, tmp_path, monkeypatch
+):
+    """The lookup after the MERGE fails every time: the row is in the ledger, which says so."""
+    real, calls = _register._manifest.find_commit_version, []
+
+    def flaky(*a, **k):
+        calls.append(1)
+        if len(calls) >= 2:
+            raise RuntimeError("transient lookup failure")
+        return real(*a, **k)
+
+    root = str(tmp_path / "ov")
+    monkeypatch.setattr(_register._manifest, "find_commit_version", flaky)
+    assert _register.claim_root(spark_delta, root, "c.s.t", "overlay") is True
+    monkeypatch.undo()
+    assert _ledger_owners(spark_delta, root) == ["c.s.t"]
 
 
 def test_register_never_writes_into_base(spark_delta, era5_v3_sharded, tmp_path):
@@ -391,35 +494,35 @@ def test_table_names_are_qualified_and_lower_cased(spark_delta):
 def test_the_same_name_in_two_schemas_is_two_owners(spark_delta, tmp_path):
     overlay = tmp_path / "overlay"
     first = _register.qualified_table_name(spark_delta, "shared_name")
-    write_owner_marker(str(overlay), first, "overlay")
+    write_owner_marker(spark_delta, str(overlay), first, "overlay")
     spark_delta.sql("CREATE SCHEMA IF NOT EXISTS gbx_zarr_other")
     try:
         spark_delta.sql("USE gbx_zarr_other")
         other = _register.qualified_table_name(spark_delta, "shared_name")
         assert other == "spark_catalog.gbx_zarr_other.shared_name" != first
         with pytest.raises(ZarrOwnershipError, match="already owned"):
-            write_owner_marker(str(overlay), other, "overlay")
+            write_owner_marker(spark_delta, str(overlay), other, "overlay")
     finally:
         spark_delta.sql("USE default")
         spark_delta.sql("DROP SCHEMA IF EXISTS gbx_zarr_other CASCADE")
     # the same table spelled another way is still the owner
     again = _register.qualified_table_name(spark_delta, "DEFAULT.Shared_Name")
-    write_owner_marker(str(overlay), again, "overlay")
+    write_owner_marker(spark_delta, str(overlay), again, "overlay")
 
 
 def test_an_unreadable_owner_marker_is_refused(tmp_path):
     (tmp_path / OWNER_MARKER).write_text("{not json")
     with pytest.raises(ZarrOwnershipError, match="not a readable") as ei:
-        write_owner_marker(str(tmp_path), "c.s.t", "overlay")
+        _claim_marker(str(tmp_path), "c.s.t", "overlay")
     assert "Fix:" in str(ei.value)
 
 
 def test_a_marker_of_another_kind_is_a_conflict(tmp_path):
-    write_owner_marker(str(tmp_path), "c.s.t", "overlay")
+    _claim_marker(str(tmp_path), "c.s.t", "overlay")
     with pytest.raises(ZarrOwnershipError, match="already owned"):
-        write_owner_marker(str(tmp_path), "c.s.t", "managed")
-    with pytest.raises(ValueError, match="kind"):
-        write_owner_marker(str(tmp_path), "c.s.t", "scratch")
+        _claim_marker(str(tmp_path), "c.s.t", "managed")
+    with pytest.raises(ValueError, match="kind"):  # checked before any claim is tried
+        write_owner_marker(None, str(tmp_path), "c.s.t", "scratch")
 
 
 def test_a_marker_that_cannot_be_written_is_a_zarr_error(tmp_path, monkeypatch):
@@ -428,7 +531,7 @@ def test_a_marker_that_cannot_be_written_is_a_zarr_error(tmp_path, monkeypatch):
 
     monkeypatch.setattr(os, "open", refuse)
     with pytest.raises(ZarrError) as ei:
-        write_owner_marker(str(tmp_path / "ov"), "c.s.t", "overlay")
+        _claim_marker(str(tmp_path / "ov"), "c.s.t", "overlay")
     assert "Fix:" in str(ei.value) and "ov" in str(ei.value)
     monkeypatch.undo()
     assert not (tmp_path / "ov" / OWNER_MARKER).exists()
@@ -446,7 +549,7 @@ def test_a_marker_taken_over_before_the_read_back_is_not_removed(tmp_path, monke
 
     monkeypatch.setattr(_register, "_check_owner", taken_over)
     with pytest.raises(ZarrOwnershipError, match="other.s.t"):
-        write_owner_marker(str(overlay), "c.s.t", "overlay")
+        _claim_marker(str(overlay), "c.s.t", "overlay")
     assert (overlay / OWNER_MARKER).read_text() == theirs
 
 
@@ -462,7 +565,7 @@ def test_a_marker_whose_write_fails_is_removed(tmp_path, monkeypatch):
 
     monkeypatch.setattr(os, "write", half_then_full)
     with pytest.raises(ZarrError, match="disk full") as ei:
-        write_owner_marker(str(tmp_path / "ov"), "c.s.t", "overlay")
+        _claim_marker(str(tmp_path / "ov"), "c.s.t", "overlay")
     assert "Fix:" in str(ei.value) and len(calls) == 2
     assert not (tmp_path / "ov" / OWNER_MARKER).exists()
 
@@ -471,7 +574,7 @@ def test_a_foreign_overlay_is_refused_before_the_store_is_read(
     spark_delta, era5_v3_unsharded, tmp_path, monkeypatch
 ):
     overlay = tmp_path / "overlay"
-    write_owner_marker(str(overlay), "someone.else.table", "overlay")
+    _claim_marker(str(overlay), "someone.else.table", "overlay")
 
     def not_reached(*a, **k):
         raise AssertionError("the store was read before the overlay was checked")
@@ -498,7 +601,10 @@ def test_the_marker_is_removed_when_the_manifest_cannot_be_created(
     table = _table("nomanifest")
     fresh, kept = tmp_path / "fresh", tmp_path / "kept"
     write_owner_marker(  # claimed by an earlier attempt of the same table
-        str(kept), _register.qualified_table_name(spark_delta, table), "overlay"
+        spark_delta,
+        str(kept),
+        _register.qualified_table_name(spark_delta, table),
+        "overlay",
     )
     for overlay in (fresh, kept):
         with pytest.raises(RuntimeError, match="create failed"):
@@ -509,8 +615,11 @@ def test_the_marker_is_removed_when_the_manifest_cannot_be_created(
                 writable=True,
                 overlay_root=str(overlay),
             )
+    owner = _register.qualified_table_name(spark_delta, table)
     assert not (fresh / OWNER_MARKER).exists()  # this call made it, so it removed it
+    assert _ledger_owners(spark_delta, fresh) == []  # and its claim in the ledger
     assert (kept / OWNER_MARKER).exists()  # this call did not
+    assert _ledger_owners(spark_delta, kept) == [owner]
     assert not _exists(spark_delta, table)
 
 
@@ -1276,15 +1385,13 @@ def test_a_marker_that_cannot_be_read_back_is_removed_not_left_behind(
     _no_sleep(monkeypatch)
     failed = _failing_reads(monkeypatch, 10)  # the read-back's ten attempts
     with pytest.raises(ZarrError, match="Input/output error") as ei:
-        write_owner_marker(str(tmp_path / "ov"), "c.s.t", "overlay")
+        _claim_marker(str(tmp_path / "ov"), "c.s.t", "overlay")
     assert len(failed) == 10 and "Fix:" in str(ei.value)
     assert not isinstance(ei.value, ZarrOwnershipError)
     assert isinstance(ei.value.__cause__, OSError)
     assert not (tmp_path / "ov" / OWNER_MARKER).exists()
     monkeypatch.undo()
-    write_owner_marker(
-        str(tmp_path / "ov"), "c.s.t", "overlay"
-    )  # nothing is in the way
+    _claim_marker(str(tmp_path / "ov"), "c.s.t", "overlay")  # nothing is in the way
 
 
 def test_only_a_marker_holding_exactly_the_written_bytes_is_removed(tmp_path):
@@ -1308,7 +1415,7 @@ def test_a_writer_checks_the_owner_marker_before_writing(tmp_path, monkeypatch):
     with pytest.raises(ZarrOwnershipError, match="no owner marker") as ei:
         check_owner_marker(str(tmp_path), "c.s.t", "overlay")
     assert "Fix:" in str(ei.value)
-    write_owner_marker(str(tmp_path), "c.s.t", "overlay")
+    _claim_marker(str(tmp_path), "c.s.t", "overlay")
     check_owner_marker(str(tmp_path), "c.s.t", "overlay")  # it is ours
     with pytest.raises(ZarrOwnershipError, match="already owned"):
         check_owner_marker(str(tmp_path), "other.s.t", "overlay")

@@ -336,7 +336,8 @@ formats.
   `tile.window`, relative to its immediate input tile, so windows from different parents can
   repeat (the first piece of every parent sits at the origin). A function that returns one tile
   covering its whole input hands that tile the input's own provenance instead. The lightweight
-  `rst_separatebands` records the 1-based band in `tile.metadata['band']`. The heavyweight
+  `rst_separatebands` records the 1-based band in `tile.metadata['band']`, and the retile functions
+  keep that marker on the pieces they cut from a band. The heavyweight
   retile-family functions record none of these, so set `nameCol` when you write heavyweight
   parts; pixels are identical across tiers. The first tile of a materialized split read is
   indistinguishable from a whole-file read of the same source, so if you write one source both
@@ -494,6 +495,8 @@ formats.
   instead of as valid zeros. The lightweight `rst_initnodata` and `rst_threshold` use the same
   table: a `uint16` source gets 65535, as in the heavyweight tier (`rst_threshold` and
   tessellation failed on it, and `rst_initnodata` set nothing), and a `uint8` source now gets 0.
+  The lightweight `rst_filter` min, max and median of a `uint8` source blank a window with no valid
+  pixel with 0, where they failed on a NoData of -9999 that a `uint8` band cannot hold.
   On an integer band without NoData, heavyweight `rst_initnodata` kept the pixels equal to the
   fallback as valid data with the value moved by one (a `uint8` 0 became 1); it now marks them
   NoData, as the lightweight tier does. A source that carries its own mask band (not an alpha band)

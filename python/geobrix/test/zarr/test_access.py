@@ -448,10 +448,13 @@ def _vending_has_no_network(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _forget_refusals():
-    """A refusal is remembered for the life of the process: every test starts without one."""
+    """A refusal, and a bucket's region, are remembered for the life of the process: every
+    test starts without them."""
     _access._REFUSED.clear()
+    _access._REGIONS.clear()
     yield
     _access._REFUSED.clear()
+    _access._REGIONS.clear()
 
 
 class DatabricksError(Exception):
@@ -644,6 +647,7 @@ def test_direct_is_chosen_after_one_request_and_names_its_region(monkeypatch, tm
     monkeypatch.setattr(_access, "_canary", lambda cfg, path: seen.append((cfg, path)))
 
     def region(env=None, found=None, answer=None):
+        _access._REGIONS.clear()
         for name in ("AWS_REGION", "AWS_DEFAULT_REGION"):
             monkeypatch.delenv(name, raising=False)
         if env:
@@ -675,6 +679,40 @@ def test_direct_is_chosen_after_one_request_and_names_its_region(monkeypatch, tm
         None, VOLUME + "/new", access="direct", operation="WRITE_VOLUME"
     )
     assert cfg.is_direct and cfg.volume_url == f"file://{vol}"
+
+
+def test_a_buckets_region_is_asked_of_s3_once_per_process(monkeypatch):
+    """A network that blocks the question would otherwise cost its 5 s timeout on every vend:
+    the answer, a "no" too, is kept per bucket."""
+    _install(monkeypatch, response=CLOUDS["aws"][0])
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    asked = []
+
+    def discover(found):
+        def ask(bucket):
+            asked.append(bucket)
+            return found
+
+        return ask
+
+    for found in ("eu-west-1", None):
+        _access._REGIONS.clear()
+        asked.clear()
+        monkeypatch.setattr(_access, "_discover_region", discover(found))
+        for _ in range(3):
+            if found:
+                cfg = resolve_access(
+                    None, VOLUME, access="direct", operation="READ_VOLUME"
+                )
+                assert cfg.region == "eu-west-1"
+            else:
+                assert (
+                    resolve_access(
+                        None, VOLUME, access="auto", operation="READ_VOLUME"
+                    ).mode
+                    == "fuse"
+                )
+        assert asked == ["bkt"]
 
 
 def test_the_region_of_a_bucket_is_read_from_the_header_s3_sends(monkeypatch):

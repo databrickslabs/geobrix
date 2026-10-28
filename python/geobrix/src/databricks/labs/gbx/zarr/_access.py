@@ -674,13 +674,21 @@ def _s3_region(response, url: str) -> str:
     if region:
         return str(region)
     bucket = url.partition("://")[2].partition("/")[0]
-    region = _discover_region(bucket)
+    # Asked once per bucket per process, a "no" included: on a network that blocks the
+    # question it would otherwise cost its timeout on every vend.
+    if bucket not in _REGIONS:
+        _REGIONS[bucket] = _discover_region(bucket)
+    region = _REGIONS[bucket]
     if not region:
         raise _Unavailable(
             f"the region of the bucket {bucket!r} is not known: the response has none, "
             "AWS_REGION is not set and the bucket did not say"
         )
     return region
+
+
+# bucket -> its region, or None when S3 did not say
+_REGIONS: dict[str, str | None] = {}
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):

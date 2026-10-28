@@ -20,23 +20,43 @@ const LETTER_MAP: [[&str; 8]; 14] = [
     ["HF", "HG", "HH", "HJ", "HK", "JF", "JG", "JH"],
 ];
 
+/// float64 -> int64 as numpy's `astype(np.int64)` does it, which is the hardware's cast: aarch64
+/// saturates, x86-64 answers i64::MIN ("integer indefinite") for NaN, infinities and out-of-range values.
+fn float_to_i64(x: f64, x86_indefinite: bool) -> i64 {
+    if x86_indefinite && !(i64::MIN as f64..-(i64::MIN as f64)).contains(&x) {
+        i64::MIN
+    } else {
+        x as i64
+    }
+}
+
+fn to_i64(x: f64) -> i64 {
+    float_to_i64(x, cfg!(target_arch = "x86_64"))
+}
+
 fn pow10(e: i32) -> i64 {
     10i64.pow(e as u32)
 }
 
+/// The int64 arithmetic wraps, as numpy's does: an out-of-GB coordinate (an infinity, 1e300) gives a
+/// meaningless id in a debug build as in a release one, never an overflow panic.
 fn encode(el: i64, nl: i64, eb: i64, nb: i64, q: i64, np: i32, res: i32) -> i64 {
     let id = pow10(5 + 2 * np - 2);
     let els = pow10(3 + 2 * np - 2);
     let nls = pow10(1 + 2 * np - 2);
+    let base = id.wrapping_add(el.wrapping_mul(els));
     if res == -1 {
-        (id + el * els).div_euclid(100) + q
+        base.div_euclid(100).wrapping_add(q)
     } else {
-        id + el * els + nl * nls + eb * pow10(np) + nb * 10 + q
+        base.wrapping_add(nl.wrapping_mul(nls))
+            .wrapping_add(eb.wrapping_mul(pow10(np)))
+            .wrapping_add(nb.wrapping_mul(10))
+            .wrapping_add(q)
     }
 }
 
 fn point_to_cell_id(e: f64, n: f64, res: i32) -> i64 {
-    let (ei, ni) = (e.trunc() as i64, n.trunc() as i64);
+    let (ei, ni) = (to_i64(e.trunc()), to_i64(n.trunc()));
     let (el, nl) = (
         (ei as f64 / 100000.0).trunc() as i64,
         (ni as f64 / 100000.0).trunc() as i64,
@@ -161,7 +181,7 @@ fn _gbxrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_cell, point_to_cell_id};
+    use super::{float_to_i64, format_cell, point_to_cell_id};
 
     /// The cases the oracle table does not hold: the 500km special case, quadrants, the 1 m
     /// corner and out-of-GB coordinates (floor-mod). Expected strings are pygx/_bng.py's.
@@ -181,6 +201,57 @@ mod tests {
             let mut got = String::new();
             format_cell(point_to_cell_id(e, n, res), &mut got);
             assert_eq!(got, want, "({e}, {n}) at {res}");
+        }
+    }
+
+    /// The light tier does int64 arithmetic that wraps, so infinities and huge coordinates give a
+    /// cell id (garbage in, garbage out) and never a panic: a debug build must agree with release.
+    #[test]
+    fn non_finite_and_huge_coordinates_wrap_instead_of_panicking() {
+        let values = [
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            1e300,
+            -1e300,
+            9.3e18,
+            5e12,
+            -1e13,
+        ];
+        for res in [-6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6] {
+            for e in values {
+                for n in [180000.0, f64::INFINITY, -1e13] {
+                    let mut cell = String::new();
+                    format_cell(point_to_cell_id(e, n, res), &mut cell);
+                    assert!(!cell.is_empty(), "({e}, {n}) at {res}");
+                }
+            }
+        }
+    }
+
+    /// numpy's float64 -> int64 cast is the hardware's: aarch64 saturates, x86-64 answers i64::MIN
+    /// for anything out of range (and for NaN).
+    #[test]
+    fn out_of_range_casts_follow_the_platform_like_numpy() {
+        let big = [
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            1e300,
+            -1e300,
+            9.3e18,
+            -9.3e18,
+        ];
+        let saturating = [i64::MAX, i64::MIN, i64::MAX, i64::MIN, i64::MAX, i64::MIN];
+        for (x, want) in big.iter().zip(saturating) {
+            assert_eq!(float_to_i64(*x, false), want, "{x} saturates");
+            assert_eq!(
+                float_to_i64(*x, true),
+                i64::MIN,
+                "{x} is the x86-64 indefinite value"
+            );
+        }
+        for indefinite in [false, true] {
+            assert_eq!(float_to_i64(530000.9, indefinite), 530000);
+            assert_eq!(float_to_i64(-1500.5, indefinite), -1500);
         }
     }
 }

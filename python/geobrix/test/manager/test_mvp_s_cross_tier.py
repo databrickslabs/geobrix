@@ -209,6 +209,17 @@ def _bng_batches():
     batches["fractional_resolution"] = tuple(
         _arrow_column(v) for v in ([530000.0], [180000.0], [3.5])
     )
+    # An infinity or a huge coordinate is outside GB. Nothing defines a "right" cell for it, but every rung
+    # answers what c0 answers on this CPU (numpy's int64 cast and wrap-around), in a debug build too.
+    batches["non_finite_and_huge_coordinates"] = (
+        pa.array(
+            [float("inf"), float("-inf"), 1e300, 530000.0, 9.3e18, 5e12], pa.float64()
+        ),
+        pa.array(
+            [180000.0, 180000.0, -1e13, float("inf"), 180000.0, 5e12], pa.float64()
+        ),
+        pa.array([3, -3, 6, 1, -1, 2], pa.int32()),
+    )
     batches["empty"] = (
         pa.array([], pa.float64()),
         pa.array([], pa.float64()),
@@ -218,8 +229,11 @@ def _bng_batches():
 
 
 def _outcome(call):
+    import numpy as np
+
     try:
-        return ("ok", list(call()))
+        with np.errstate(all="ignore"):  # the int64 cast of an infinity warns
+            return ("ok", list(call()))
     except Exception as exc:  # noqa: BLE001 - the error is part of the contract
         return ("raises", type(exc).__name__, str(exc))
 

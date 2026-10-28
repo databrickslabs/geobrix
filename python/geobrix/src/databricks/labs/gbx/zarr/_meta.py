@@ -479,6 +479,50 @@ def _cf_fill_attr(raw, meta: ArrayMeta):
         ) from None
 
 
+_V3_FLOAT_SIZES = {"float16": 2, "float32": 4, "float64": 8}
+
+
+def xarray_fill_form(doc):
+    """``doc``, the ``zarr.json`` of a Zarr v3 array, with a float ``_FillValue`` attribute
+    in the form xarray decodes; ``doc`` itself when there is nothing to change.
+
+    xarray reads a v3 CF ``_FillValue`` attribute as the base64 of a little-endian float64
+    (its ``FillValueCoder``), and ``xarray.open_zarr`` refuses the whole store when it meets
+    a number or ``"NaN"`` there. The array's own ``fill_value`` field is another thing: Zarr
+    writes it as the v3 spec has it (a number, ``"NaN"``, ``"Infinity"``, ``"-Infinity"``),
+    which xarray and zarr both read, and it is left alone. A value that already decodes to
+    eight bytes is kept; one that is not a number is left for the reader to name. Zarr v2
+    needs nothing (xarray masks on the array ``fill_value`` there).
+
+    Every document GeoBrix creates passes through here, so the manifest row and the file a
+    publish or an export writes from it are the same text. ``_cf_fill_attr`` reads the form
+    back.
+    """
+    if not (
+        isinstance(doc, dict)
+        and doc.get("node_type") == "array"
+        and doc.get("data_type") in _V3_FLOAT_SIZES
+        and isinstance(doc.get("attributes"), dict)
+        and "_FillValue" in doc["attributes"]
+    ):
+        return doc
+    value = doc["attributes"]["_FillValue"]
+    if value is None or isinstance(value, bool):
+        return doc
+    if isinstance(value, str):
+        try:
+            if len(base64.b64decode(value, validate=True)) == 8:
+                return doc  # already xarray's form
+        except ValueError:  # binascii.Error is a ValueError
+            pass
+    try:
+        number = _float_fill(value, _V3_FLOAT_SIZES[doc["data_type"]])
+    except (TypeError, ValueError):
+        return doc
+    form = base64.standard_b64encode(struct.pack("<d", number)).decode()
+    return {**doc, "attributes": {**doc["attributes"], "_FillValue": form}}
+
+
 def _check_mask_flag(flag) -> None:
     if flag is not None and not isinstance(flag, (bool, np.bool_)):
         raise ValueError(

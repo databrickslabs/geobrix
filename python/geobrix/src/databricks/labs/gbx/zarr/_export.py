@@ -32,8 +32,6 @@ about 100 MB.
 
 from __future__ import annotations
 
-import base64
-import binascii
 import contextlib
 import heapq
 import json
@@ -41,7 +39,6 @@ import logging
 import math
 import os
 import shutil
-import struct
 import warnings
 from dataclasses import dataclass
 
@@ -53,7 +50,7 @@ from databricks.labs.gbx.ds._listing import to_local_path
 from databricks.labs.gbx.zarr import _manifest as M
 from databricks.labs.gbx.zarr._access import FuseRangeReader, _within
 from databricks.labs.gbx.zarr._maint import _STREAM_WINDOW, _require_files, _stream
-from databricks.labs.gbx.zarr._meta import _float_fill
+from databricks.labs.gbx.zarr._meta import xarray_fill_form
 from databricks.labs.gbx.zarr._read import (
     _ACCESS,
     _open_table,
@@ -86,7 +83,6 @@ _REPORT = pa.schema(
     [("array", pa.string()), ("key", pa.string()), ("nbytes", pa.int64())]
 )
 _REPORT_DDL = "array STRING, key STRING, nbytes BIGINT"
-_FLOAT_TYPES = ("float16", "float32", "float64")
 _OPTIMIZE_FIX = 'run gbx_zarr_optimize first, or use method="copy"'
 
 # a test hook: runs on the driver after the objects are written, before the documents
@@ -422,44 +418,16 @@ def _discard(path: str, remove_dir: bool) -> None:
 # --- the documents ----------------------------------------------------------------------
 
 
-def _xarray_fill(raw: bytes) -> bytes:
-    """The ``zarr.json`` of a Zarr v3 float array with its ``_FillValue`` attribute in the
-    form xarray decodes (Isaac M11).
-
-    xarray stores a v3 CF ``_FillValue`` attribute as the base64 of a little-endian float64
-    (its ``FillValueCoder``) and refuses a number or ``"NaN"`` there. The array's own
-    ``fill_value`` field is a different thing: Zarr writes it as the v3 spec has it (a number,
-    or ``"NaN"``, ``"Infinity"``, ``"-Infinity"``), which both xarray and zarr read, and it
-    is left as it is. Any other document is returned as it came.
-    """
+def _fill_form(raw: bytes) -> bytes:
+    """A ``zarr.json`` with its float ``_FillValue`` attribute in xarray's form
+    (``_meta.xarray_fill_form``). Documents GeoBrix wrote already are; this is for the ones
+    an older write left, and for a registered store's own."""
     try:
         doc = json.loads(raw)
     except ValueError:
         return raw
-    if not (
-        isinstance(doc, dict)
-        and doc.get("node_type") == "array"
-        and doc.get("data_type") in _FLOAT_TYPES
-        and isinstance(doc.get("attributes"), dict)
-        and "_FillValue" in doc["attributes"]
-    ):
-        return raw
-    value = doc["attributes"]["_FillValue"]
-    if isinstance(value, bool) or value is None:
-        return raw
-    size = {"float16": 2, "float32": 4, "float64": 8}[doc["data_type"]]
-    if isinstance(value, str):
-        with contextlib.suppress(binascii.Error, ValueError):
-            if len(base64.b64decode(value, validate=True)) == 8:
-                return raw  # already xarray's form
-    try:
-        number = _float_fill(value, size)
-    except (TypeError, ValueError):
-        return raw  # not a number: leave it for the reader to name
-    doc["attributes"]["_FillValue"] = base64.standard_b64encode(
-        struct.pack("<d", number)
-    ).decode()
-    return json.dumps(doc).encode()
+    fixed = xarray_fill_form(doc)
+    return raw if fixed is doc else json.dumps(fixed).encode()
 
 
 def _consolidated(docs: dict[str, bytes]) -> dict[str, bytes]:
@@ -501,7 +469,7 @@ def _documents(metas: dict[str, bytes]) -> dict[str, bytes]:
     consolidated copy; ``store_documents`` already dropped them), float ``_FillValue``
     attributes in xarray's form, and the consolidated metadata made again from those."""
     docs = {
-        key: _xarray_fill(raw) if key.rpartition("/")[2] == "zarr.json" else raw
+        key: _fill_form(raw) if key.rpartition("/")[2] == "zarr.json" else raw
         for key, raw in metas.items()
     }
     docs.update(_consolidated(docs))

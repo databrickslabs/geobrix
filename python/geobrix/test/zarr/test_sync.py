@@ -17,6 +17,7 @@ import pyarrow as pa
 import pytest
 
 zarr = pytest.importorskip("zarr")
+xr = pytest.importorskip("xarray")
 
 from test.zarr import _helpers as H  # noqa: E402
 
@@ -29,6 +30,7 @@ from databricks.labs.gbx.zarr._register import (  # noqa: E402
 )
 from databricks.labs.gbx.zarr._sync import gbx_zarr_sync, publish  # noqa: E402
 from databricks.labs.gbx.zarr._testing import (  # noqa: E402
+    era5_like_dataset,
     make_era5_like,
     plain_store_rows,
 )
@@ -480,10 +482,23 @@ def test_publish_writes_base_and_repoints(spark_delta, registered, tmp_path, fmt
         mode="update",
         variables=["sp"],
     )
+    # a float variable that carries a NaN _FillValue, as a dataset opened from a file does
+    wide = era5_like_dataset().isel(time=slice(0, 12))[["u10"]].rename(u10="sq")
+    wide["sq"].encoding["_FillValue"] = np.float32("nan")
+    gbx_zarr_write(wide, table, mode="update", variables=["sq"], spark=spark_delta)
     want = original.copy()
     want[12:24, 0:37, 72:144] = 3.0
 
     version = publish(spark_delta, table)
+
+    # the published store opens in xarray, which refuses a v3 float _FillValue that is not
+    # its base64 form for the WHOLE store
+    with xr.open_zarr(str(store), consolidated=True, chunks=None) as opened:
+        np.testing.assert_array_equal(opened.sq.values[0:12], wide.sq.values)
+        assert np.isnan(opened.sq.values[12:]).all()
+        np.testing.assert_array_equal(opened.t2m.values, want)
+        if fmt == 3:
+            assert np.isnan(opened.sq.encoding["_FillValue"])
 
     np.testing.assert_array_equal(zarr.open_array(str(store / "t2m"))[...], want)
     np.testing.assert_array_equal(

@@ -85,6 +85,7 @@ from databricks.labs.gbx.zarr._meta import (
     parse_v2,
     parse_v3,
     with_shape,
+    xarray_fill_form,
 )
 from databricks.labs.gbx.zarr._pack import (
     PackWriter,
@@ -282,7 +283,9 @@ def _codec_chain(codecs) -> list[dict] | None:
 
 
 def _v3_doc(name, dims, shape, dtype, chunks, shards, fill, attrs, codecs) -> dict:
-    """The ``zarr.json`` of a new array, made by zarr itself so it is valid."""
+    """The ``zarr.json`` of a new array, made by zarr itself so it is valid; a float
+    ``_FillValue`` attribute is stored in the form xarray reads (``xarray_fill_form``).
+    """
     import zarr
     from zarr.codecs import BytesCodec, Crc32cCodec, ZstdCodec
     from zarr.storage import MemoryStore
@@ -307,7 +310,7 @@ def _v3_doc(name, dims, shape, dtype, chunks, shards, fill, attrs, codecs) -> di
             doc["codecs"][0]["configuration"]["codecs"] = codecs
         else:
             doc["codecs"] = codecs
-    return doc
+    return xarray_fill_form(doc)  # a float _FillValue attribute the way xarray reads it
 
 
 def _check_doc(meta: ArrayMeta, codecs) -> None:

@@ -44,6 +44,8 @@ SHARDS = {"time": 24, "latitude": 10, "longitude": 12}  # two shards per variabl
 CHUNK = (12, 5, 6)
 WHOLE = (12, 37, 72)  # one inner chunk of the registered cube
 KINDS = ["managed", "registered_v2"]
+# xarray's form of a v3 float _FillValue attribute: base64 of a little-endian float64
+NAN_FILL = base64.standard_b64encode(struct.pack("<d", float("nan"))).decode()
 
 
 def _table(label):
@@ -143,6 +145,20 @@ def _scenario(spark, drop, tmp_path, kind):
     return table, {"u10/0.0.0": (store / "u10" / "0.0.0").read_bytes()}
 
 
+def _leave_a_plain_fill(spark, table):
+    """Put back the ``t2m`` document as an older write left it, a plain ``"NaN"`` fill
+    attribute, after checking that a write now stores xarray's form."""
+    where = "kind = 'array' AND array = 't2m' AND tag IS NULL"
+    doc = json.loads(
+        spark.sql(f"SELECT meta FROM {table} WHERE {where}").first()["meta"]
+    )
+    assert doc["attributes"]["_FillValue"] == NAN_FILL
+    doc["attributes"]["_FillValue"] = "NaN"
+    spark.sql(
+        f"UPDATE {table} SET meta = :meta WHERE {where}", args={"meta": json.dumps(doc)}
+    )
+
+
 def _wants(spark, table, names=("t2m", "u10"), **kw):
     return {n: H.read_variable(spark, table, n, **kw) for n in names}
 
@@ -180,6 +196,8 @@ def test_copy_is_plain_zarr_readable_by_xarray_zarr_tensorstore(
     monkeypatch.setattr(_export, "_TASK_BYTES", 1 << 16)  # several tasks, not one
     table, untouched = _scenario(spark_delta, drop, tmp_path, kind)
     want = _wants(spark_delta, table)
+    if kind == "managed":  # the export still puts such a document right
+        _leave_a_plain_fill(spark_delta, table)
     copy = tmp_path / "copy.zarr"
 
     assert gbx_zarr_export(spark_delta, table, str(copy)) == str(copy)
@@ -201,8 +219,7 @@ def test_copy_is_plain_zarr_readable_by_xarray_zarr_tensorstore(
         assert np.isnan(want["t2m"][12:24, 0:5, 0:6]).all()  # the tombstoned chunk
         # a float _FillValue attribute is stored in the form xarray decodes (Isaac M11);
         # the array's own fill_value is the spec's "NaN"
-        nan = base64.standard_b64encode(struct.pack("<d", float("nan"))).decode()
-        assert group["t2m"].attrs["_FillValue"] == nan
+        assert group["t2m"].attrs["_FillValue"] == NAN_FILL
         assert np.isnan(group["t2m"].fill_value) and group["t2m"].dtype == np.float32
         doc = json.loads((copy / "t2m" / "zarr.json").read_text())
         assert doc["fill_value"] == "NaN"

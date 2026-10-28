@@ -224,6 +224,16 @@ MVP_S: Tuple[Case, ...] = (
         None,
         ("session",),
     ),
+    # A malformed string is refused too, never a NULL: with ANSI off (the warehouse Statement API) the
+    # product casts a bad CRS string to a silent NULL, so UC checks the form before any CRS use.
+    Case(
+        "tcrs_bad_crs_uc",
+        T,
+        (Build("tile_4326"), "EPSG:not-a-crs"),
+        "uc_refused",
+        None,
+        ("uc",),
+    ),
     Case(
         "tcrs_corrupt_uc",
         T,

@@ -611,9 +611,9 @@ class _BngGeomKLoopExplode:
 @udtf(returnType="cellid: string, core: boolean, chip: binary")
 class _BngTessellateExplode:
     def eval(self, geom, res, keep_core_geom=False):
-        # NULL geom, resolution or keep flag -> zero rows, as the heavy generator
-        if geom is None or res is None or keep_core_geom is None:
+        if geom is None or res is None:
             return
+        # a NULL keep_core_geom is the default, false, as in gbx_bng_tessellate on every level
         _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
         try:
             for c, core, chip in _bng.tessellate_str(

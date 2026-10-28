@@ -13,7 +13,7 @@ import org.apache.spark.unsafe.types.UTF8String
 import org.locationtech.jts.geom.Geometry
 
 /** Generator that tessellates a geometry into BNG cells and explodes one row per chip. Arguments: geom, resolution[, keepCoreGeom].
-  * `keepCoreGeom` is optional and defaults to false (as in `gbx_bng_tessellate` and the lightweight tier).
+  * `keepCoreGeom` is optional and defaults to false (as in `gbx_bng_tessellate` and the lightweight tier); a NULL flag is false too.
   *
   * Output columns: `cellid` STRING, `core` BOOLEAN, `chip` BINARY. The chip is WKB whether the geometry is given as WKB
   * or WKT, like the chips of `gbx_bng_tessellate`. With `keepCoreGeom` false a core cell's chip is NULL; border
@@ -56,14 +56,14 @@ case class BNG_TessellateExplode(
         val geomRaw = geom.eval(input)
         val resolutionRaw = resolution.eval(input)
         val keepGeomRaw = keepCoreGeom.eval(input)
-        if (geomRaw == null || resolutionRaw == null || keepGeomRaw == null) {
+        if (geomRaw == null || resolutionRaw == null) {
             return Seq.empty
         }
         val resolutionVal = resolution.dataType match {
             case StringType  => BNG.resolutionMap(resolutionRaw.asInstanceOf[UTF8String].toString)
             case IntegerType => resolutionRaw.asInstanceOf[Int]
         }
-        val keepCoreGeomVal = keepGeomRaw.asInstanceOf[Boolean]
+        val keepCoreGeomVal = keepGeomRaw != null && keepGeomRaw.asInstanceOf[Boolean] // NULL is the default, false
 
         GridErrorHandler.safeEval[IterableOnce[InternalRow]](Iterator.empty) {
             val geometryVal = geom.dataType match {

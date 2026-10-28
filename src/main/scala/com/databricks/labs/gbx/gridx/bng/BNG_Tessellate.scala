@@ -88,7 +88,8 @@ object BNG_Tessellate extends WithExpressionInfo {
       * one the light tier exposes; only requiring 3 args threw IndexOutOfBoundsException. */
     override def builder(): FunctionBuilder = {
         case Seq(g, r)    => new BNG_Tessellate(g, r, Literal(false))
-        case Seq(g, r, k) => new BNG_Tessellate(g, r, k)
+        // A NULL flag is the default (false), as on every other level: an optional argument given as NULL is not a NULL result.
+        case Seq(g, r, k) => new BNG_Tessellate(g, r, Coalesce(Seq(k, Literal(false))))
         case other        =>
             throw new IllegalArgumentException(
               s"$name expects 2 or 3 arguments (geom, resolution[, keepCoreGeom]); got ${other.length}"

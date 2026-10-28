@@ -424,6 +424,15 @@ _TE: Tuple[Case, ...] = (
         geom_srid=27700,
     ),
     Case("te_null", TE, (None, 3), "no_rows"),
+    # A NULL keep_core_geom is the default, false: an optional argument given as NULL is not a NULL result.
+    Case(
+        "te_null_keep",
+        TE,
+        (OFFSET, 3, None),
+        "cells",
+        {"cells": _SIX, "core": 0},
+        geom_srid=27700,
+    ),
     # A resolution BNG does not define is a parameter error: it raises on every level, never zero rows.
     Case("te_bad_res", TE, (OFFSET, "3km"), "raises", "3km", geom_srid=27700),
     # UC takes geometry in SRID 27700 only (BNG cells are 27700): any other is refused with a Fix.
@@ -945,7 +954,13 @@ def run_helpers(spark, cases, tmpdir: Optional[str] = None):
     return out
 
 
-_SQL = {"DOUBLE": "double", "INT": "int", "STRING": "string", "BINARY": "binary"}
+_SQL = {
+    "DOUBLE": "double",
+    "INT": "int",
+    "STRING": "string",
+    "BINARY": "binary",
+    "BOOLEAN": "boolean",
+}
 
 
 def _ddl_type(value, param) -> str:

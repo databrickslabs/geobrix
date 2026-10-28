@@ -1743,12 +1743,13 @@ def read_tiles_table(
     ``skipOrdering``, ``sizeInMB``, ``tileSize`` and the others. ``format`` is
     ``"raster_gbx"``, ``"gtiff_gbx"`` or ``"cog_gbx"``.
 
-    The tiles are spread across tasks by tile, as the reader gives each tile its own task:
-    two tasks per index row up to 256 (a row cut into several tiles by ``tileSize`` or
-    ``sizeInMB`` counts once), so that few tiles share a task, or ``num_partitions`` tasks
-    when given. Inside each task the tiles are ordered by source path, so those of one source
-    that share a task are read one after another (``skipOrdering`` of ``"true"`` leaves
-    that order out). A tile whose file is missing fails the read.
+    The tiles are spread across tasks by tile, not by source file: two tasks per index row,
+    up to 256 (a row cut into several tiles by ``tileSize`` or ``sizeInMB`` counts once), or
+    ``num_partitions`` tasks when given. A tile goes to the task its hash picks, so the tiles of
+    one source file are read in parallel, and some tasks hold several tiles while others hold
+    none. Inside each task the tiles are ordered by source path, so those of one source that
+    share a task are read one after another (``skipOrdering`` of ``"true"`` leaves that order
+    out). A tile whose file is missing fails the read.
 
     Uses only ``spark.read`` and DataFrame operations (Spark Connect and Serverless safe).
     """

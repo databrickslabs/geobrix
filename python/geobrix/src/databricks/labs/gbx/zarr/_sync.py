@@ -88,14 +88,19 @@ _CONSOLIDATED = "consolidated_metadata"
 _AFTER_LOCK = None
 
 # What a publish records an object's identity from: the stat a reader's compare sees (the
-# mount's), taken again until a Volume has settled the object's time (see ``_settled``).
+# mount's), taken again until a Volume has settled the object's time (see ``_settle``).
 # Tests replace the three.
 _stat = os.stat
 _sleep = time.sleep
 _clock = time.monotonic
-_SETTLE_SECONDS = 2.0  # the longest a publish waits, in all, for the times to settle
-_SETTLE_STEP = 0.1  # between two looks at the same objects
+_SETTLE_SECONDS = (
+    2.0  # the longest a publish waits, after its first look, for the times
+)
+_SETTLE_STEP = 0.1  # between two looks at the objects still moving
+_QUIET = 1.0  # a whole second is trusted this long after the object's write
 _VOLUMES = "/Volumes/"
+_WRITTEN: dict[str, float] = {}  # a Volume path -> clock() when its rename returned
+_WRITTEN_MAX = 100_000
 
 _REPORT_DDL = "change STRING, array STRING, key STRING"
 _SYNC_AGAIN = "run gbx_zarr_sync again"
@@ -583,13 +588,11 @@ def _identity_of(path: str) -> str:
     return identity_of(st.st_mtime_ns // 1_000_000, st.st_size)
 
 
-def _settled(path: str, identity: str) -> bool:
-    """Whether ``identity`` is the one a reader will see. A Unity Catalog Volume reports whole
-    seconds only (the time the object reached storage), but just after a rename it still shows
-    the local time, with a fraction: so a fractional time under ``/Volumes`` is not yet the
-    one the mount will keep (measured: it then moves up by 0.3 to 1 s)."""
-    if not os.path.abspath(path).startswith(_VOLUMES):
-        return True
+def _on_volume(path: str) -> bool:
+    return os.path.abspath(path).startswith(_VOLUMES)
+
+
+def _whole_second(identity: str) -> bool:
     return int(identity.partition(":")[0]) % 1000 == 0
 
 
@@ -599,32 +602,51 @@ def _settle(paths) -> dict[str, str]:
     A rename returns before a Volume has settled the object's modification time, so the
     identity read right after it (``_atomic_write``'s) is not the one every later read
     compares with: recorded as it is, it makes every read of the published object raise
-    ``ZarrStoreDrift``. The objects are looked at again, together, until a look changes
-    nothing and no Volume object still shows a fraction of a second; that takes the mount a
-    second at most, and all the objects of a publish wait at once. The wait is bounded by
-    ``_SETTLE_SECONDS``: past it the latest identities are returned, with a warning, and
-    ``gbx_zarr_sync`` puts any that moved right.
+    ``ZarrStoreDrift``. A settled Volume object shows a whole second, so an object that
+    still shows a fraction is looked at again; and a whole second seen less than ``_QUIET``
+    after the object was written (``_WRITTEN``) could be a local time that merely fell on one,
+    so that is looked at again too. Off a Volume an object is final once a second look agrees.
+
+    The first look at every object is free of the bound, however long a big publish takes
+    over it. After it, only the objects still moving are looked at, every ``_SETTLE_STEP``,
+    for at most ``_SETTLE_SECONDS`` in all: past that the latest identities are returned, with
+    a warning, and ``gbx_zarr_sync`` puts any that moved right.
     """
     paths = sorted(set(paths))
     if not paths:
         return {}
+    seen: dict[str, str] = {}
+    pending: set[str] = set()
+
+    def look(p: str) -> None:
+        identity = _retry_transient(lambda: _identity_of(p))
+        if _on_volume(p):
+            done = (
+                _whole_second(identity)
+                and _clock() - _WRITTEN.get(p, float("-inf")) >= _QUIET
+            )
+        else:
+            done = seen.get(p) == identity
+        seen[p] = identity
+        pending.discard(p) if done else pending.add(p)
+
+    for p in paths:
+        look(p)
     deadline = _clock() + _SETTLE_SECONDS
-    seen = {p: _retry_transient(lambda p=p: _identity_of(p)) for p in paths}
-    while _clock() < deadline:
+    while pending and _clock() < deadline:
         _sleep(_SETTLE_STEP)
-        now = {p: _retry_transient(lambda p=p: _identity_of(p)) for p in paths}
-        stable, seen = now == seen, now
-        if stable and all(_settled(p, i) for p, i in seen.items()):
-            return seen
-    loose = [p for p, i in seen.items() if not _settled(p, i)]
-    if loose:
+        for p in sorted(pending):
+            look(p)
+    if pending:
         _LOG.warning(
             "%d object(s) had not settled their modification time after %.0f s (e.g. "
             "%s); if a read reports them as changed, run gbx_zarr_sync",
-            len(loose),
+            len(pending),
             _SETTLE_SECONDS,
-            loose[0],
+            min(pending),
         )
+    for p in paths:
+        _WRITTEN.pop(p, None)
     return seen
 
 
@@ -652,6 +674,12 @@ def _atomic_write(path: str, parts, write_id: str) -> str:
         with contextlib.suppress(OSError):
             os.unlink(temp)
         raise
+    if _on_volume(path):
+        if (
+            len(_WRITTEN) > _WRITTEN_MAX
+        ):  # a long-lived driver: never grow without bound
+            _WRITTEN.clear()
+        _WRITTEN[path] = _clock()
     return _identity_of(path)
 
 

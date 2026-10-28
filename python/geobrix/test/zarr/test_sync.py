@@ -554,14 +554,27 @@ def test_publish_records_the_time_a_volume_settles_on(
 
 
 @pytest.mark.parametrize(
-    "settles_after, warned", [(3, False), (None, True)], ids=["settles", "never-does"]
+    "n, stat_ms, early_whole, never",
+    [
+        (1, 0, False, False),  # the time settles 0.3 s after the rename
+        (1, 0, False, True),  # it never does: bounded, and a warning
+        (600, 5, False, False),  # a big publish: the first look alone takes 3 s
+        (1, 0, True, False),  # a local time that fell on a whole second, then settles
+    ],
+    ids=["settles", "never-does", "big-batch", "whole-second-before-settling"],
 )
-def test_a_volume_object_with_a_fractional_time_is_waited_for_within_a_bound(
-    monkeypatch, caplog, settles_after, warned
+def test_a_volume_object_is_looked_at_until_its_time_has_settled(
+    monkeypatch, caplog, n, stat_ms, early_whole, never
 ):
-    """On a Volume a time with a fraction is not the final one: the object is looked at again
-    until it shows a whole second, for at most ``_SETTLE_SECONDS`` (then it warns)."""
-    path, now, looks = "/Volumes/c/s/v/store/t2m/c/0/0/0", [0.0], [0]
+    """On a Volume a time with a fraction is not the final one, nor is a whole second seen
+    within a second of the write: those objects are looked at again (only those), for at most
+    ``_SETTLE_SECONDS`` after the first look at all of them, then the publish warns."""
+    now, looks = [0.0], [0]
+    base_s = 1_792_741_018
+    paths = [f"/Volumes/c/s/v/store/t2m/c/0/0/{i}" for i in range(n)]
+    written = {p: 0.002 * i for i, p in enumerate(paths)}  # renamed 2 ms apart
+    delay = 0.8 if n > 1 else 0.3
+    settles = {p: None if never else w + delay for p, w in written.items()}
 
     class Stat:
         def __init__(self, ns):
@@ -569,17 +582,26 @@ def test_a_volume_object_with_a_fractional_time_is_waited_for_within_a_bound(
 
     def stat(p):
         looks[0] += 1
-        late = settles_after is not None and looks[0] > settles_after
-        return Stat(1_792_741_019_000_000_000 if late else 1_792_741_018_701_000_000)
+        now[0] += stat_ms / 1000
+        late = settles[p] is not None and now[0] >= settles[p]
+        early = base_s * 10**9 + (0 if early_whole else 701_000_000)
+        return Stat((base_s + 1) * 10**9 if late else early)
 
     monkeypatch.setattr(_sync, "_stat", stat)
     monkeypatch.setattr(_sync, "_sleep", lambda s: now.__setitem__(0, now[0] + s))
     monkeypatch.setattr(_sync, "_clock", lambda: now[0])
+    monkeypatch.setattr(_sync, "_WRITTEN", dict(written), raising=False)
     with caplog.at_level("WARNING", logger=_sync.__name__):
-        got = _sync._settle([path])
-    assert (int(got[path].partition(":")[0]) % 1000 == 0) == (not warned)
-    assert now[0] <= _sync._SETTLE_SECONDS + _sync._SETTLE_STEP  # bounded
-    assert any("settled" in r.getMessage() for r in caplog.records) == warned
+        got = _sync._settle(paths)
+    settled = f"{(base_s + 1) * 1000}:21"
+    early = f"{base_s * 1000 + (0 if early_whole else 701)}:21"
+    assert set(got.values()) == {early if never else settled}
+    assert any("settled" in r.getMessage() for r in caplog.records) == never
+    first_pass = n * stat_ms / 1000
+    assert now[0] <= 2 * first_pass + _sync._SETTLE_SECONDS + _sync._SETTLE_STEP
+    assert (
+        looks[0] < 2 * n or n == 1
+    )  # objects that had settled are not looked at again
 
 
 def test_publish_refuses_after_drift(spark_delta, registered):

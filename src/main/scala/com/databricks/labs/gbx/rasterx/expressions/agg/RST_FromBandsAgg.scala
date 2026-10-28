@@ -177,7 +177,8 @@ case class RST_FromBandsAgg(
      *  so we can always extract the bytes directly from field 1.
      */
     private def serializeTileRow(tileRow: InternalRow): Array[Byte] = {
-        tileRow.getBinary(1)
+        // An error tile has a NULL raster: length 0, which deserialize reads back as an empty array.
+        if (tileRow.isNullAt(1)) Array.emptyByteArray else tileRow.getBinary(1)
     }
 
     /** Deserialize bytes back into a BinaryType tile InternalRow. */

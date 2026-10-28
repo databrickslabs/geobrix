@@ -117,8 +117,12 @@ object RasterDriver {
         }
     }
 
-    /** Open a raster from in-memory bytes (vsimem); avoids temp-file lifecycle. Caller must release. */
-    def readFromBytes(bytes: Array[Byte], options: Map[String, String]): Dataset = {
+    /** Open a raster from in-memory bytes (vsimem); avoids temp-file lifecycle. Caller must release.
+      * Null for NULL bytes: they must never reach `gdal.FileFromMemBuffer`, which crashes the JVM on a null array. */
+    def readFromBytes(bytes: Array[Byte], options: Map[String, String]): Dataset =
+        if (bytes == null) null else openFromBytes(bytes, options)
+
+    private def openFromBytes(bytes: Array[Byte], options: Map[String, String]): Dataset = {
         val driverName = options.getOrElse("driver", "GTiff")
         val isZip = options.getOrElse("isZip", "false").toBoolean
         val extension = GDAL.getExtension(driverName)

@@ -139,7 +139,7 @@ object RST_MergeAgg extends WithExpressionInfo {
       * sorts on -- with no random per-open component.
       */
     private[agg] def contentKey(row: InternalRow): Array[Byte] =
-        V2Tile.getRaster(row)
+        Option(V2Tile.getRaster(row)).getOrElse(Array.emptyByteArray) // an error tile (NULL raster) sorts first and is dropped
 
     /** Unsigned lexicographic ordering of byte arrays (a stable total order on raw content). */
     private[agg] val unsignedBytesOrdering: Ordering[Array[Byte]] = new Ordering[Array[Byte]] {

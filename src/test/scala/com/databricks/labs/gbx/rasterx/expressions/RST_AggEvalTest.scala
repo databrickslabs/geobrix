@@ -531,6 +531,26 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         errVal should include ("RST_MergeAgg")
     }
 
+    test("RST_MergeAgg drops an error tile (NULL raster) member instead of failing the task") {
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        import sc.implicits._
+        functions.register(spark)
+
+        // The error tile is what a heavy function returns for a tile it cannot process: raster NULL, a reason.
+        val good = Seq(tinyGTiffBytes(42)).toDF("content")
+            .select(rst_fromcontent(col("content"), lit("GTiff")).as("tile"))
+        val failed = good.select(rst_transformcrs(col("tile"), lit("EPSG:not-a-crs")).as("tile"))
+        assert(failed.select(col("tile.raster").isNull.as("n")).head().getBoolean(0), "the failed tile must have a NULL raster")
+
+        val row = good.union(failed).groupBy(lit(1).alias("g"))
+            .agg(rst_merge_agg(col("tile")).alias("out"))
+            .select(col("out").as("out"), col("out.metadata").as("md"))
+            .head()
+        assert(row.get(0) != null, "out struct must be non-null (the good tile was merged)")
+        row.getAs[Map[String, String]]("md")("last_error") should include("RST_MergeAgg")
+    }
+
     test("RST_DerivedBandAgg skips a corrupt member and records the drop, does not raise") {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._

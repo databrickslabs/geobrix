@@ -1,14 +1,12 @@
 package com.databricks.labs.gbx.rasterx.util
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
-import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.util.ArrayData
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.unsafe.types.UTF8String
 
-import scala.util.Try
 import scala.util.control.NonFatal
 
 /** Raised by a generator's own argument guard (for example the `gbx_rst_xyzpyramid` tile-count cap) so the
@@ -18,15 +16,10 @@ import scala.util.control.NonFatal
 final class GeneratorGuardException(msg: String) extends IllegalArgumentException(msg)
 
 /**
-  * Wraps raster expression eval so failures produce an error row (with error_message in metadata)
+  * Wraps raster expression eval so failures produce an error row (with error_message and last_error in metadata)
   * instead of failing the task, unless ExpressionConfig.crashExpressions is true.
   */
 object RST_ErrorHandler extends Logging {
-
-    /** True if metadata contains RasterX error keys (e.g. from createErrorMetadata). */
-    private def hasError(metadata: Map[String, String]): Boolean = {
-        metadata.contains("error_message")
-    }
 
     /** Builds metadata map with error message and class name for safeEval error rows. The reason is under
       * `error_message` and under `last_error`, the key every other tile operation, the light tier and the
@@ -49,20 +42,15 @@ object RST_ErrorHandler extends Logging {
             eval()
         } catch {
             case e: VirtualTileException => throw e
-            case e: Throwable =>
-                // Check if input already had error
-                val (cellId, metadata) = Try { // just in case of malformed rows and unexpected errors
-                    val (cellId, ds, metadata) = RasterSerializationUtil.rowToTile(row, rasterType)
-                    RasterDriver.releaseDataset(ds)
-                    (cellId, metadata)
-                }.getOrElse((-1L, Map.empty[String, String]))
-                if (hasError(metadata)) {
-                    // Return input as-is since it already had error
+            case NonFatal(e) =>
+                // Fatal errors (out of memory, stack overflow) fail the task so it can be retried; they are not data.
+                if (RasterSerializationUtil.isErrorTile(row)) {
+                    // The input already is an error tile: it goes out unchanged, so the upstream diagnostic survives.
                     row
                 } else {
-                    // Create new error row
+                    // Create new error row; the cell id is read from the row, never by opening the raster.
                     val errorMetadata = createErrorMetadata(e)
-                    RasterSerializationUtil.tileToRow((cellId, null, errorMetadata), rasterType, null)
+                    RasterSerializationUtil.tileToRow((RasterSerializationUtil.cellIdOf(row), null, errorMetadata), rasterType, null)
                 }
         }
     }
@@ -79,16 +67,10 @@ object RST_ErrorHandler extends Logging {
             eval()
         } catch {
             case e: VirtualTileException => throw e
-            case e: Throwable =>
-                // Check if input already had error
+            case NonFatal(e) =>
+                // Check if an input already was an error tile (read structurally, without opening any raster)
                 val errorIdx = (0 until rows.numElements()).find { i =>
-                    val row = rows.getStruct(i, elementFieldCount)
-                    val metadata = Try { // just in case of malformed rows and unexpected errors
-                        val (_, ds, metadata) = RasterSerializationUtil.rowToTile(row, rasterType)
-                        RasterDriver.releaseDataset(ds)
-                        metadata
-                    }.getOrElse(Map.empty[String, String])
-                    hasError(metadata)
+                    RasterSerializationUtil.isErrorTile(rows.getStruct(i, elementFieldCount))
                 }
                 if (errorIdx.nonEmpty) {
                     // Return the input row that already had the error
@@ -115,14 +97,12 @@ object RST_ErrorHandler extends Logging {
             case e: VirtualTileException =>
                 // Virtual-tile guard must propagate — wrong API usage, not a per-row data error.
                 throw e
-            case t: Throwable =>
+            case NonFatal(t) =>
                 val exprConf = ExpressionConfig.fromB64(conf.toString)
                 if (exprConf.crashExpressions) {
-                    val (cellId, metadata) = Try { // just in case of malformed rows and unexpected errors
-                        val (cellId, ds, metadata) = RasterSerializationUtil.rowToTile(row, rasterType)
-                        RasterDriver.releaseDataset(ds)
-                        (cellId, metadata)
-                    }.getOrElse((-1L, Map.empty[String, String]))
+                    // Cell id and metadata come from the row itself, never by opening the raster.
+                    val cellId = RasterSerializationUtil.cellIdOf(row)
+                    val metadata = RasterSerializationUtil.metadataOf(row)
                     val wrapped = new Error(s"""
                                        |Error during expression evaluation. Cell ID: $cellId
                                        |Metadata: $metadata
@@ -157,7 +137,7 @@ object RST_ErrorHandler extends Logging {
             eval()
         } catch {
             case e: VirtualTileException => throw e
-            case e: Throwable =>
+            case NonFatal(e) =>
                 val errorMetadata = createErrorMetadata(e)
                 val errorTile = RasterSerializationUtil.tileToRow((RasterSerializationUtil.cellIdOf(tileRow), null, errorMetadata), rasterType, null)
                 Seq(InternalRow.fromSeq(Seq(errorTile)))

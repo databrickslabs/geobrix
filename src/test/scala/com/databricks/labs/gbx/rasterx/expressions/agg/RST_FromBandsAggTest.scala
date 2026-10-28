@@ -317,6 +317,18 @@ class RST_FromBandsAggTest extends AnyFunSuite with BeforeAndAfterAll {
         readBandMean(result, 3) shouldBe 30.0 +- 0.5
     }
 
+    test("buffer serde roundtrip carries an error tile (NULL raster) member") {
+        val agg = makeAgg()
+        val buf = agg.createAggregationBuffer()
+        val errorTile = InternalRow.fromSeq(Seq(
+            5L, null, org.apache.spark.sql.catalyst.util.ArrayBasedMapData(Array.empty[UTF8String], Array.empty[UTF8String])))
+
+        agg.updateWithIndex(buf, makeSingleBandTileRow("sE", 11), 1)
+        agg.updateWithIndex(buf, errorTile, 2)
+
+        agg.deserialize(agg.serialize(buf)) should have length 2
+    }
+
     test("buffer serde roundtrip preserves band indices") {
         val tileA = makeSingleBandTileRow("sA", 11)
         val tileB = makeSingleBandTileRow("sB", 22)

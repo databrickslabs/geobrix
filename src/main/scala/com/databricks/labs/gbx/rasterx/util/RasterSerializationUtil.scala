@@ -64,26 +64,57 @@ object RasterSerializationUtil {
             if (row.isNullAt(lyt.cellid)) -1L else row.getLong(lyt.cellid)
         }.getOrElse(-1L)
 
-    /** Deserialize a tile row to (cellId, Dataset, metadata); opens the raster via RasterDriver. */
+    /** Metadata of a tile row, read without opening the raster; empty when the row is null, is not a tile or
+      * has no metadata. */
+    def metadataOf(row: InternalRow): Map[String, String] =
+        Try {
+            val lyt = tileLayout(row)
+            if (row.isNullAt(lyt.metadata)) Map.empty[String, String]
+            else SerializationUtil.createMap[String, String](row.getMap(lyt.metadata))
+        }.getOrElse(Map.empty[String, String])
+
+    /** True for an error tile, found structurally and without GDAL: no pixel data (a NULL raster, or the zero-length
+      * one earlier releases stored), no path, and a diagnostic under `error_message` or `last_error`. The test is
+      * structural because `last_error` alone is also stamped as a warning on good tiles by the merge aggregates. */
+    def isErrorTile(row: InternalRow): Boolean =
+        Try {
+            val lyt = tileLayout(row)
+            val noPixels = row.isNullAt(lyt.raster) || row.getBinary(lyt.raster).isEmpty
+            val metadata = metadataOf(row)
+            noPixels && lyt.path.forall(row.isNullAt) && (metadata.contains("error_message") || metadata.contains("last_error"))
+        }.getOrElse(false)
+
+    /** Deserialize a tile row to (cellId, Dataset, metadata); opens the raster via RasterDriver.
+      * A tile with no raster and no path (an error tile) has nothing to open: the Dataset is null and GDAL is
+      * not called. */
     def rowToTile(row: InternalRow, rasterDT: DataType): (Long, Dataset, Map[String, String]) = {
         val lyt = tileLayout(row)
         guardMaterialized(row, lyt)
-        val cellID = row.getLong(lyt.cellid)
-        val metadataRow = row.getMap(lyt.metadata)
-        val metadata = SerializationUtil.createMap[String, String](metadataRow)
-        val buffer = row.getBinary(lyt.raster)
-        val ds = RasterDriver.readFromBytes(buffer, metadata)
-        (cellID, ds, metadata)
+        if (row.isNullAt(lyt.raster)) {
+            (cellIdOf(row), null, metadataOf(row))
+        } else {
+            val cellID = row.getLong(lyt.cellid)
+            val metadataRow = row.getMap(lyt.metadata)
+            val metadata = SerializationUtil.createMap[String, String](metadataRow)
+            val buffer = row.getBinary(lyt.raster)
+            val ds = RasterDriver.readFromBytes(buffer, metadata)
+            (cellID, ds, metadata)
+        }
     }
 
-    /** Extract and open the raster Dataset from a tile row; caller must release the Dataset. */
+    /** Extract and open the raster Dataset from a tile row; caller must release the Dataset. Null for a tile with
+      * no raster and no path (an error tile). */
     def rowToDS(row: InternalRow, rasterDT: DataType, shared: Boolean = false): Dataset = {
         val lyt = tileLayout(row)
         guardMaterialized(row, lyt)
-        val metadataRow = row.getMap(lyt.metadata)
-        val metadata = SerializationUtil.createMap[String, String](metadataRow)
-        val buffer = row.getBinary(lyt.raster)
-        RasterDriver.readFromBytes(buffer, metadata)
+        if (row.isNullAt(lyt.raster)) {
+            null
+        } else {
+            val metadataRow = row.getMap(lyt.metadata)
+            val metadata = SerializationUtil.createMap[String, String](metadataRow)
+            val buffer = row.getBinary(lyt.raster)
+            RasterDriver.readFromBytes(buffer, metadata)
+        }
     }
 
     /** Serialize (cellId, Dataset, metadata) to an InternalRow; writes raster to bytes. */
@@ -100,12 +131,8 @@ object RasterSerializationUtil {
         clipCrs: Option[String]
     ): InternalRow = {
         val metadata = SerializationUtil.toMapData[String, String](tuple._3)
-        val bytes =
-            if (tuple._2 == null) {
-                Array.emptyByteArray
-            } else {
-                RasterDriver.writeToBytes(tuple._2, tuple._3)
-            }
+        // A null Dataset is an error tile: its raster is NULL, the one form every tier uses.
+        val bytes: Array[Byte] = if (tuple._2 == null) null else RasterDriver.writeToBytes(tuple._2, tuple._3)
         V2Tile.row(
             cellid  = tuple._1,
             raster  = bytes,

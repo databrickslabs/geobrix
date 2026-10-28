@@ -35,9 +35,10 @@ object RST_TryOpen extends WithExpressionInfo {
         RST_ExpressionUtil.init(exprConf)
         Try {
             val ds = RasterSerializationUtil.rowToDS(row, rdt)
+            val opened = ds != null // an error tile (no raster) and unreadable bytes give a null Dataset
             RasterDriver.releaseDataset(ds)
-            true
-        }.toOption.isDefined
+            opened
+        }.toOption.contains(true)
     }
 
     // execute not needed as in order to have an instance of ds the opening already succeeded

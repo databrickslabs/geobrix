@@ -1,6 +1,8 @@
 package com.databricks.labs.gbx.rasterx.util
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
+import com.databricks.labs.gbx.rasterx.expressions.RST_TryOpen
+import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
 import com.databricks.labs.gbx.util.SerializationUtil
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow
@@ -46,6 +48,7 @@ class RST_ErrorHandlerTest extends AnyFunSuite {
         meta should contain key "error_message"
         meta("error_message") should include("test error")
         meta("last_error") should include("test error") // the key the light tier and the manager use
+        result.isNullAt(V2Tile.idx("raster")) shouldBe true // the one error-tile form: a NULL raster
     }
 
     test("safeEval (Any, conf) when eval throws and crashExpressions false should return null") {
@@ -204,6 +207,60 @@ class RST_ErrorHandlerTest extends AnyFunSuite {
             val eval: () => IterableOnce[InternalRow] = () => throw new VirtualTileException("generator virtual guard")
             RST_ErrorHandler.safeEval(eval, row, BinaryType)
         }
+    }
+
+    // ---- an error tile (NULL raster, no path) as INPUT ------------------------------------------------------------
+    // A light error tile looks like this. Reading it used to pass the NULL raster to gdal.FileFromMemBuffer, which
+    // kills the JVM; it must not reach GDAL, and the upstream diagnostic must go out unchanged.
+
+    private def upstreamErrorTile: InternalRow = V2Tile.row(
+      cellid = 9L,
+      metadata = SerializationUtil.toMapData[String, String](Map("last_error" -> "upstream boom"))
+    )
+
+    test("a NULL-raster error tile as input is never opened and its diagnostic propagates unchanged") {
+        val upstream = upstreamErrorTile
+        val (cellId, ds, metadata) = RasterSerializationUtil.rowToTile(upstream, BinaryType)
+        (cellId, ds, metadata("last_error")) shouldBe ((9L, null, "upstream boom"))
+        RasterSerializationUtil.rowToDS(upstream, BinaryType) shouldBe null
+        RasterDriver.readFromBytes(null, Map.empty) shouldBe null
+        RasterSerializationUtil.isErrorTile(upstream) shouldBe true
+        // the row, array and crash overloads hand the upstream tile on instead of replacing its diagnostic
+        val failing: () => InternalRow = () => throw new RuntimeException("later failure")
+        RST_ErrorHandler.safeEval(failing, upstream, BinaryType) shouldBe upstream
+        RST_ErrorHandler.safeEval(failing, new GenericArrayData(Array(minimalRow(), upstream)), BinaryType) shouldBe upstream
+        val crash = new ExpressionConfig(
+          Map("spark.databricks.labs.gbx.expressions.crash.on.error" -> "true"),
+          new SerializableConfiguration(new org.apache.hadoop.conf.Configuration())
+        )
+        val wrapped = intercept[Error] {
+            RST_ErrorHandler.safeEval(() => throw new RuntimeException("fail"), upstream, BinaryType, UTF8String.fromString(crash.toB64))
+        }
+        wrapped.getMessage should (include("Cell ID: 9") and include("upstream boom"))
+        // an error tile is not openable
+        RST_TryOpen.eval(upstream, UTF8String.fromString(crash.toB64), BinaryType) shouldBe false
+        // last_error alone on a tile that still has pixels is a warning (the merge aggregates stamp it), not an error tile
+        val warned = V2Tile.row(
+          cellid = 1L,
+          raster = Array[Byte](1, 2, 3),
+          metadata = SerializationUtil.toMapData[String, String](Map("last_error" -> "skipped 1 corrupt input tile(s)"))
+        )
+        RasterSerializationUtil.isErrorTile(warned) shouldBe false
+    }
+
+    test("safeEval does not turn a fatal error into an error tile (every overload)") {
+        val row = minimalRow()
+        val oom = new OutOfMemoryError("fatal")
+        val tileEval: () => InternalRow = () => throw oom
+        val generatorEval: () => IterableOnce[InternalRow] = () => throw oom
+        intercept[OutOfMemoryError](RST_ErrorHandler.safeEval(tileEval, row, BinaryType))
+        intercept[OutOfMemoryError](RST_ErrorHandler.safeEval(tileEval, new GenericArrayData(Array(row)), BinaryType))
+        intercept[OutOfMemoryError](RST_ErrorHandler.safeEval(generatorEval, row, BinaryType))
+        val conf = new ExpressionConfig(
+          Map("spark.databricks.labs.gbx.expressions.crash.on.error" -> "false"),
+          new SerializableConfiguration(new org.apache.hadoop.conf.Configuration())
+        )
+        intercept[OutOfMemoryError](RST_ErrorHandler.safeEval(() => throw oom, row, BinaryType, UTF8String.fromString(conf.toB64)))
     }
 
     test("safeEval (Any, conf) plain IAE returns null in non-crash mode (F1 regression guard)") {

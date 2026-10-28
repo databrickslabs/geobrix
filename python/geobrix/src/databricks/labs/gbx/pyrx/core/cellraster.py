@@ -233,6 +233,16 @@ class _BngAdapter:
         # x, y are 27700 eastings/northings (src_crs == output srid == 27700).
         return self._b.point_to_cell_id(float(x), float(y), res)
 
+    def pixel_keys(self, x, y, res):
+        """`pixel_key` of arrays: the same encoder core, so the two cannot drift. Raises, as the scalar does, for a
+        coordinate that is not finite."""
+        x, y = np.asarray(x, dtype="float64"), np.asarray(y, dtype="float64")
+        if not (np.isfinite(x).all() and np.isfinite(y).all()):
+            raise ValueError(
+                "Non-finite (NaN or infinite) coordinates are not supported."
+            )
+        return self._b.point_to_cell_id_vec(x, y, res)
+
     def default_pixel_size(self, keys, res, srid, bymin, bymax):
         # BNG has a metric edge (metres); 27700 is metric, so the metre edge IS
         # the pixel size directly -- NO degree conversion (the whole BNG path is
@@ -410,6 +420,29 @@ def compute_gridspec(
     return (xmin, ymin, xmax, ymax, pixel_size, width, height, srid)
 
 
+_BAND_PIXELS = (
+    1 << 20
+)  # pixels indexed at a time, so a huge canvas holds a few arrays of this size, not six of its own
+
+
+def _burn_banded(out, lut, ad, lon, lat, resolution, width):
+    """Write each pixel's cell value into `out` (flat, row-major): the cell index of a band of rows at a time
+    (`ad.pixel_keys`), looked up in the sorted cell ids. A pixel whose cell is not in `lut` keeps its NoData.
+    """
+    if not lut:
+        return
+    keys = np.fromiter(lut.keys(), dtype=np.int64, count=len(lut))
+    vals = np.fromiter(lut.values(), dtype="float64", count=len(lut))
+    order = np.argsort(keys)
+    keys, vals = keys[order], vals[order]
+    step = max(1, _BAND_PIXELS // max(1, width)) * width  # whole rows
+    for lo in range(0, lon.size, step):
+        pk = ad.pixel_keys(lon[lo : lo + step], lat[lo : lo + step], resolution)
+        pos = np.minimum(np.searchsorted(keys, pk), len(keys) - 1)
+        hit = keys[pos] == pk
+        out[lo : lo + pk.size][hit] = vals[pos[hit]]
+
+
 def cells_to_raster(
     cell_values,
     xmin,
@@ -444,13 +477,15 @@ def cells_to_raster(
     lon, lat = _reproject(gx.ravel(), gy.ravel(), srid, ad.src_crs)
 
     out = np.full(lon.size, _NODATA, dtype="float64")
-    # Scalar cell index per pixel (no array API). The grid is bounded to the cells'
-    # padded bbox, so this is O(pixels-in-footprint). PERF FOLLOW-UP: restrict to
-    # pixels within each cell's local window instead of the whole grid.
-    for i in range(lon.size):
-        v = lut.get(ad.pixel_key(float(lon[i]), float(lat[i]), resolution))
-        if v is not None:
-            out[i] = v
+    if hasattr(ad, "pixel_keys"):
+        _burn_banded(out, lut, ad, lon, lat, resolution, width)
+    else:
+        # No array API for this grid: one cell index per pixel. The grid is bounded to the
+        # cells' padded bbox, so this is O(pixels-in-footprint).
+        for i in range(lon.size):
+            v = lut.get(ad.pixel_key(float(lon[i]), float(lat[i]), resolution))
+            if v is not None:
+                out[i] = v
 
     data = out.reshape(height, width)
     decoded_bytes = data.nbytes

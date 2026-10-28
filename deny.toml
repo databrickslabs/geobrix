@@ -1,0 +1,40 @@
+# cargo-deny policy for every GeoBrix Rust crate. Started from `cargo deny init` at the pinned version
+# (CARGO_DENY_VERSION in scripts/native/pins.conf) and cut down to the settings that matter.
+#   licenses, bans, sources  run offline in the build container (scripts/commands/gbx-build-native.sh)
+#   advisories               needs the public advisory database
+# A crate that needs another licence is a decision to take on purpose: add it to `allow` here, in the same change.
+
+[graph]
+all-features = false
+
+[advisories]
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Permissive licences only, consistent with the licence-clean native stack.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+# GeoBrix's own crates are not published (publish = false) and carry the Databricks licence.
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

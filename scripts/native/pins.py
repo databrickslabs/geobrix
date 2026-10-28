@@ -3,6 +3,7 @@
 
     pins.py get KEY                       print one value
     pins.py build-args                    one `--build-arg KEY=VALUE` per line (no licences or URLs)
+    pins.py sources                       one tab-separated `FILE SHA256 URL URL2` line per source tarball (not tools or sdists)
     pins.py validate                      the pin file alone: no placeholder, checksums present and well formed
     pins.py audit [--check] [--root DIR]  every consumer against the pins; --check exits 1 on drift
     pins.py env-check [--check] LABEL=REPORT.json ...
@@ -22,6 +23,7 @@ HERE = Path(__file__).resolve().parent
 DEFAULT_ROOT = HERE.parent.parent
 BOUND = ("RASTERIO", "PYOGRIO", "PYPROJ", "SHAPELY", "NETCDF4")
 # X_VERSION keys with no X_SHA256: tools fetched per architecture or from a registry, and versions only compared.
+# Their URLs (RUSTUP_URL, CARGO_DENY_URL) are still checked for the version.
 NO_CHECKSUM = {"RUSTUP", "CARGO_DENY", "MATURIN", "PYO3", "NUMPY_BUILD", "PYTHON"}
 PLACEHOLDER = re.compile(r"^$|[<>]|\bTODO\b|\bTBD\b|CHANGEME|\bXXX+\b", re.I)
 SKIP_DIRS = {
@@ -72,9 +74,11 @@ def validate(pins: dict, name: str = "scripts/native/pins.conf") -> list:
             out.append(f"{name}: {key} is not a sha512")
         if key.endswith("_VERSION"):
             dep = key[: -len("_VERSION")]
-            if dep in NO_CHECKSUM:
-                continue
-            if f"{dep}_SHA256" not in pins and f"{dep}_SDIST_SHA256" not in pins:
+            if (
+                dep not in NO_CHECKSUM
+                and f"{dep}_SHA256" not in pins
+                and f"{dep}_SDIST_SHA256" not in pins
+            ):
                 out.append(f"{name}: {key} has no {dep}_SHA256")
             # a bump moves the version, the URLs, the file name and the checksum together
             spelled = re.compile(
@@ -351,6 +355,7 @@ def main(argv: list) -> int:
     g = sub.add_parser("get")
     g.add_argument("key")
     sub.add_parser("build-args")
+    sub.add_parser("sources")
     sub.add_parser("validate")
     a = sub.add_parser("audit")
     a.add_argument("--check", action="store_true")
@@ -360,7 +365,7 @@ def main(argv: list) -> int:
     e.add_argument("environments", nargs="+", metavar="LABEL=REPORT.json")
     args = ap.parse_args(argv)
 
-    if args.cmd in ("get", "build-args", "validate"):
+    if args.cmd in ("get", "build-args", "validate", "sources"):
         pins = load_pins(DEFAULT_ROOT / "scripts/native/pins.conf")
     if args.cmd == "get":
         if args.key not in pins:
@@ -372,6 +377,21 @@ def main(argv: list) -> int:
         for k, v in pins.items():
             if not k.endswith(("_LICENSE", "_URL", "_URL2")):
                 print(f"--build-arg {k}={v}")
+        return 0
+    if args.cmd == "sources":
+        for k in sorted(pins):
+            dep = k[: -len("_FILE")] if k.endswith("_FILE") else None
+            if dep and f"{dep}_URL" in pins and f"{dep}_SHA256" in pins:
+                print(
+                    "\t".join(
+                        [
+                            pins[k],
+                            pins[f"{dep}_SHA256"],
+                            pins[f"{dep}_URL"],
+                            pins.get(f"{dep}_URL2", "single-source"),
+                        ]
+                    )
+                )
         return 0
     if args.cmd == "validate":
         findings = validate(pins)

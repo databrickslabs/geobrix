@@ -185,3 +185,15 @@ def test_an_environment_is_checked_against_the_pins(tmp_path, field, name, value
     else:
         assert res.returncode == 1, res.stdout
         assert (name or "python") in res.stdout
+
+
+def test_the_container_build_stays_offline_on_vendored_crates():
+    # The build container compiles Rust from /vendor only. If either setting were lost, cargo would quietly
+    # reach for a registry (or fail only on a machine without network), and the offline guarantee would be gone.
+    config = REPO_ROOT / "scripts/native/cargo-offline.toml"
+    lines = [row.split("#")[0].strip() for row in config.read_text().splitlines()]
+
+    assert "[net]" in lines and "offline = true" in lines
+    assert "[source.crates-io]" in lines
+    assert 'replace-with = "vendored-sources"' in lines
+    assert 'directory = "/vendor"' in lines

@@ -1,0 +1,50 @@
+name: Build GDAL native (x86_64)
+
+# The x86_64 build of the native stack in the pinned manylinux_2_28 container (scripts/native/build.Dockerfile),
+# for when the emulated build on an Apple Silicon machine is too slow or fails. Manual trigger only:
+#   gh workflow run build-gdal-native.yml --ref <branch> -f target=<toolchain|stage-native|bindings>
+#   gh run download <run id> -D build/native/out/x86_64/
+# It uses public package indexes and crate registries (the hashed locks hold against them), no secrets,
+# and uploads what the build wrote to build/native/out/x86_64/.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Build target
+        required: true
+        default: stage-native
+        type: choice
+        options:
+          - toolchain
+          - stage-native
+          - bindings
+
+permissions:
+  contents: read
+
+jobs:
+  build-x86_64:
+    name: Build ${{ inputs.target }} (x86_64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      TARGET: ${{ inputs.target }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Build and verify
+        run: bash scripts/commands/gbx-build-native.sh --arch x86_64 --target "$TARGET" --log "native-$TARGET-x86_64.log"
+
+      - name: Upload the build output
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        with:
+          name: native-${{ inputs.target }}-x86_64
+          path: |
+            build/native/out/x86_64/
+            test-logs/native-*.log
+          if-no-files-found: warn
+          retention-days: 14

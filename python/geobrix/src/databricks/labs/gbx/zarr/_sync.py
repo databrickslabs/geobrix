@@ -37,6 +37,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from databricks.labs.gbx.core._arrow import to_spark_df
+from databricks.labs.gbx.core._retry import _retry_transient
 from databricks.labs.gbx.zarr import _manifest as M
 from databricks.labs.gbx.zarr._access import (
     FuseRangeReader,
@@ -85,6 +86,16 @@ _CONSOLIDATED = "consolidated_metadata"
 
 # Tests set this to run code while a publish holds its lock.
 _AFTER_LOCK = None
+
+# What a publish records an object's identity from: the stat a reader's compare sees (the
+# mount's), taken again until a Volume has settled the object's time (see ``_settled``).
+# Tests replace the three.
+_stat = os.stat
+_sleep = time.sleep
+_clock = time.monotonic
+_SETTLE_SECONDS = 2.0  # the longest a publish waits, in all, for the times to settle
+_SETTLE_STEP = 0.1  # between two looks at the same objects
+_VOLUMES = "/Volumes/"
 
 _REPORT_DDL = "change STRING, array STRING, key STRING"
 _SYNC_AGAIN = "run gbx_zarr_sync again"
@@ -567,9 +578,68 @@ def gbx_zarr_sync(
 # --- publish ----------------------------------------------------------------------
 
 
+def _identity_of(path: str) -> str:
+    st = _stat(path)
+    return identity_of(st.st_mtime_ns // 1_000_000, st.st_size)
+
+
+def _settled(path: str, identity: str) -> bool:
+    """Whether ``identity`` is the one a reader will see. A Unity Catalog Volume reports whole
+    seconds only (the time the object reached storage), but just after a rename it still shows
+    the local time, with a fraction: so a fractional time under ``/Volumes`` is not yet the
+    one the mount will keep (measured: it then moves up by 0.3 to 1 s)."""
+    if not os.path.abspath(path).startswith(_VOLUMES):
+        return True
+    return int(identity.partition(":")[0]) % 1000 == 0
+
+
+def _settle(paths) -> dict[str, str]:
+    """The identity of each of ``paths``, taken once the mount has settled their times.
+
+    A rename returns before a Volume has settled the object's modification time, so the
+    identity read right after it (``_atomic_write``'s) is not the one every later read
+    compares with: recorded as it is, it makes every read of the published object raise
+    ``ZarrStoreDrift``. The objects are looked at again, together, until a look changes
+    nothing and no Volume object still shows a fraction of a second; that takes the mount a
+    second at most, and all the objects of a publish wait at once. The wait is bounded by
+    ``_SETTLE_SECONDS``: past it the latest identities are returned, with a warning, and
+    ``gbx_zarr_sync`` puts any that moved right.
+    """
+    paths = sorted(set(paths))
+    if not paths:
+        return {}
+    deadline = _clock() + _SETTLE_SECONDS
+    seen = {p: _retry_transient(lambda p=p: _identity_of(p)) for p in paths}
+    while _clock() < deadline:
+        _sleep(_SETTLE_STEP)
+        now = {p: _retry_transient(lambda p=p: _identity_of(p)) for p in paths}
+        stable, seen = now == seen, now
+        if stable and all(_settled(p, i) for p, i in seen.items()):
+            return seen
+    loose = [p for p, i in seen.items() if not _settled(p, i)]
+    if loose:
+        _LOG.warning(
+            "%d object(s) had not settled their modification time after %.0f s (e.g. "
+            "%s); if a read reports them as changed, run gbx_zarr_sync",
+            len(loose),
+            _SETTLE_SECONDS,
+            loose[0],
+        )
+    return seen
+
+
+def _restamp(rows: list[dict], base: str) -> None:
+    """Give every object row a publish wrote the identity the mount settled on."""
+    held = [r for r in rows if r.get("identity") and r.get("file")]
+    settled = _settle(os.path.join(base, r["file"]) for r in held)
+    for r in held:
+        r["identity"] = settled[os.path.join(base, r["file"])]
+
+
 def _atomic_write(path: str, parts, write_id: str) -> str:
     """Write ``parts`` (byte strings) to ``path`` through a temp name and a rename, and
-    return the identity of the result."""
+    return the identity of the result as the rename left it. On a Volume that is not final:
+    a caller that records it settles it first (``_restamp``)."""
     folder = os.path.dirname(path)
     os.makedirs(folder, exist_ok=True)
     temp = os.path.join(folder, f".{os.path.basename(path)}.{write_id}.tmp")
@@ -582,8 +652,7 @@ def _atomic_write(path: str, parts, write_id: str) -> str:
         with contextlib.suppress(OSError):
             os.unlink(temp)
         raise
-    st = os.stat(path)
-    return identity_of(st.st_mtime_ns // 1_000_000, st.st_size)
+    return _identity_of(path)
 
 
 def _object_row(kind, array, key, path, base, identity, write_id, expected) -> dict:
@@ -882,6 +951,9 @@ def _publish(spark, table: str, props, lock: str) -> int:
         groups = live.filter(pc.equal(kind, "group")).to_pylist()
         out += _reconsolidate(base, groups, write_id)
 
+    _restamp(
+        out, base
+    )  # after every write: the first ones have had the longest to settle
     out.append(_release_row(lock, write_id))
     meta = {
         "mode": "publish",

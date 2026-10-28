@@ -525,6 +525,63 @@ def test_publish_writes_base_and_repoints(spark_delta, registered, tmp_path, fmt
     assert _changes(gbx_zarr_sync(spark_delta, table)) == set()
 
 
+def test_publish_records_the_time_a_volume_settles_on(
+    spark_delta, registered, monkeypatch
+):
+    """A Volume moves an object's time up to the next whole second after the rename has
+    returned (measured on DBR 19). The identity a publish records must be that one, or every
+    read of what it published raises drift."""
+    store, table = registered(sharded=True, writable=True)
+    _overlay_write(spark_delta, table)
+    real, settled = os.stat, set()
+
+    def late(path):
+        st = real(path)
+        if (
+            path not in settled
+        ):  # the first look sees the local time, the file keeps the next
+            settled.add(path)
+            moved = -(-st.st_mtime_ns // 1_000_000_000) * 1_000_000_000
+            os.utime(path, ns=(st.st_atime_ns, moved))
+        return st
+
+    monkeypatch.setattr(_sync, "_stat", late)
+    publish(spark_delta, table)
+    assert settled  # the objects went through the late stat
+    got = H.read_variable(spark_delta, table, "t2m")
+    np.testing.assert_array_equal(got[12:24, 0:37, 72:144], 3.0)
+    assert _changes(gbx_zarr_sync(spark_delta, table)) == set()
+
+
+@pytest.mark.parametrize(
+    "settles_after, warned", [(3, False), (None, True)], ids=["settles", "never-does"]
+)
+def test_a_volume_object_with_a_fractional_time_is_waited_for_within_a_bound(
+    monkeypatch, caplog, settles_after, warned
+):
+    """On a Volume a time with a fraction is not the final one: the object is looked at again
+    until it shows a whole second, for at most ``_SETTLE_SECONDS`` (then it warns)."""
+    path, now, looks = "/Volumes/c/s/v/store/t2m/c/0/0/0", [0.0], [0]
+
+    class Stat:
+        def __init__(self, ns):
+            self.st_mtime_ns, self.st_size = ns, 21
+
+    def stat(p):
+        looks[0] += 1
+        late = settles_after is not None and looks[0] > settles_after
+        return Stat(1_792_741_019_000_000_000 if late else 1_792_741_018_701_000_000)
+
+    monkeypatch.setattr(_sync, "_stat", stat)
+    monkeypatch.setattr(_sync, "_sleep", lambda s: now.__setitem__(0, now[0] + s))
+    monkeypatch.setattr(_sync, "_clock", lambda: now[0])
+    with caplog.at_level("WARNING", logger=_sync.__name__):
+        got = _sync._settle([path])
+    assert (int(got[path].partition(":")[0]) % 1000 == 0) == (not warned)
+    assert now[0] <= _sync._SETTLE_SECONDS + _sync._SETTLE_STEP  # bounded
+    assert any("settled" in r.getMessage() for r in caplog.records) == warned
+
+
 def test_publish_refuses_after_drift(spark_delta, registered):
     store, table = registered(sharded=True, writable=True)
     _overlay_write(spark_delta, table)

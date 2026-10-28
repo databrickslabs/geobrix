@@ -819,7 +819,7 @@ def test_the_streamed_merge_uses_the_pixel_size_of_a_tile_in_the_reference_crs(
     class Stop(Exception):
         pass
 
-    def spy(src, dst_crs, target_res=None):
+    def spy(src, dst_crs, target_res=None, anchor=None):
         seen.append(target_res)
         raise Stop
 
@@ -880,11 +880,14 @@ def test_a_two_crs_merge_does_not_depend_on_the_byte_order(monkeypatch, streamin
     assert (a[4] == b[4]).all() and (a[3][a[4]] == b[3][b[4]]).all()
 
 
-def test_the_in_ram_and_the_streamed_two_crs_merge_agree(monkeypatch):
-    """The pixel size, the size of the mosaic, its origin and the number of pixels the tiles cover
-    are those of the streamed merge. (Where a tile that is not on the reference grid lands within
-    its pixel is each merge's own rounding, not asserted.)"""
-    group = _two_crs_group("4326")
+@pytest.mark.parametrize("first", ["3857", "4326"])
+def test_the_in_ram_and_the_streamed_two_crs_merge_agree(monkeypatch, first):
+    """The pixel size, the size of the mosaic, its origin and every pixel are those of the
+    streamed merge: the tile in the other CRS is put on the reference tile's pixel grid, so
+    ``rasterio.merge`` (``floor(offset + 0.1)``) and the VRT (``round(offset)``) place it alike.
+    It used to sit one pixel further east streamed (columns 15-26 in RAM, 16-27 streamed).
+    """
+    group = _two_crs_group(first)
     in_ram = _merged_grid(group)
     monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
     streamed = _merged_grid(group)
@@ -892,7 +895,7 @@ def test_the_in_ram_and_the_streamed_two_crs_merge_agree(monkeypatch):
     assert in_ram[2] == pytest.approx(
         streamed[2], rel=1e-12
     )  # a COG writes the origin as text
-    assert in_ram[4].sum() == streamed[4].sum()
+    assert np.array_equal(in_ram[3], streamed[3])
 
 
 @pytest.mark.parametrize("name", ["rgb_nir", "rgba", "gray_x_alpha"])

@@ -14,6 +14,7 @@ These mirror the heavyweight operations:
 """
 
 import logging
+import math
 import os
 import shutil
 import warnings
@@ -73,7 +74,23 @@ def _close_all(memfiles, datasets):
         mf.close()
 
 
-def _reproject_dataset(src, dst_crs, target_res=None):
+def _snap_to_grid(transform, width, height, anchor, res):
+    """``(transform, width, height)`` of the grid of pixel size *res* through *anchor* (a ``(left, top)``
+    corner) that covers the same extent: the origin moves to the grid line at or beyond the extent's
+    top-left corner and the size grows to keep the bottom-right one covered."""
+    rx, ry = res
+    left, top = transform.c, transform.f
+    right, bottom = left + width * transform.a, top + height * transform.e
+    new_left = anchor[0] + math.floor((left - anchor[0]) / rx + 1e-6) * rx
+    new_top = anchor[1] - math.floor((anchor[1] - top) / ry + 1e-6) * ry
+    return (
+        rasterio.Affine(rx, 0.0, new_left, 0.0, -ry, new_top),
+        max(1, math.ceil((right - new_left) / rx - 1e-6)),
+        max(1, math.ceil((new_top - bottom) / ry - 1e-6)),
+    )
+
+
+def _reproject_dataset(src, dst_crs, target_res=None, anchor=None):
     """Reproject an open rasterio dataset to ``dst_crs``; return (memfile, dataset).
 
     Used by merge_tiles to reconcile a group whose tiles span multiple CRSs (e.g. a
@@ -90,6 +107,12 @@ def _reproject_dataset(src, dst_crs, target_res=None):
                     pixel boundaries (fixing sub-pixel drift in the streaming merge
                     path).  ``None`` lets ``calculate_default_transform`` choose the
                     natural resolution.
+        anchor:     Optional ``(left, top)`` corner of the reference tile (with
+                    ``target_res``). The reprojected tile is put on that tile's pixel grid,
+                    so its pixels line up with the reference tile's whatever the merge path:
+                    ``rasterio.merge`` places a tile at ``floor(offset + 0.1)`` pixels and the
+                    streamed VRT at ``round(offset)``, which differ by one pixel for a tile at a
+                    fractional offset (0.5 to 0.9) and agree for a tile on the grid.
     """
     import rasterio
     from rasterio.warp import Resampling, calculate_default_transform, reproject
@@ -98,6 +121,10 @@ def _reproject_dataset(src, dst_crs, target_res=None):
     transform, width, height = calculate_default_transform(
         src.crs, dst_crs, src.width, src.height, *src.bounds, **_res_kwarg
     )
+    if target_res is not None and anchor is not None:
+        transform, width, height = _snap_to_grid(
+            transform, width, height, anchor, target_res
+        )
     out_dtype = src.dtypes[0]
     decoded_bytes = src.count * width * height * np.dtype(out_dtype).itemsize
     profile = _comp.drop_ycbcr(src.profile)
@@ -252,6 +279,11 @@ def _pixel_size(ds):
     return (rx, ry) if rx > 0 and ry > 0 else None
 
 
+def _grid_corner(ds):
+    """``(left, top)`` of *ds*: where the pixel grid a reprojected tile is put on starts."""
+    return ds.transform.c, ds.transform.f
+
+
 def _bounds_in(ds, ref_crs):
     """``(left, bottom, right, top)`` of *ds* in the reference CRS (its own bounds when it is in it)."""
     if ref_crs is None or ds.crs is None or ds.crs == ref_crs:
@@ -313,7 +345,9 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
         try:
             ref_crs = _pick_ref_crs(datasets)
             tile_crses = [ds.crs for ds in datasets]
-            ref_pixel_res = _pixel_size(_reference_tile(datasets, ref_crs))
+            ref_tile = _reference_tile(datasets, ref_crs)
+            ref_pixel_res = _pixel_size(ref_tile)
+            ref_corner = _grid_corner(ref_tile)
             has_mask = [_nodata.has_own_mask(ds) for ds in datasets]
             has_alpha = [_nodata.has_alpha(ds) for ds in datasets]
         finally:
@@ -336,7 +370,7 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
                 with MemoryFile(rb) as src_mf:
                     with src_mf.open() as src:
                         rep_mf, rep_ds = _reproject_dataset(
-                            src, ref_crs, target_res=ref_pixel_res
+                            src, ref_crs, target_res=ref_pixel_res, anchor=ref_corner
                         )
                         try:
                             _write_masked_tile(
@@ -402,6 +436,19 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
     could not separate (it tied on origin and fell back to a per-open
     ``/vsimem/<uuid>`` description, i.e. random). Raw bytes are bitwise-identical
     across tiers, so no cross-tier hash agreement is required.
+
+    PIXEL PLACEMENT (tiles in another CRS): such a tile is reprojected onto the pixel
+    size AND the pixel grid of the reference tile (:func:`_snap_to_grid`; the grid
+    line at or beyond its top-left corner, so it can grow by up to a pixel on each
+    side). The in-RAM merge and the streamed one (a VRT) place a tile by different
+    rounding, ``floor(offset + 0.1)`` pixels in ``rasterio.merge`` and ``round(offset)``
+    in the VRT, so a reprojected tile whose offset from the mosaic origin was
+    fractional (0.5 up to 0.9 of a pixel) landed one pixel further east, and in
+    general one pixel further in any direction, in the streamed mosaic than in the
+    in-RAM one (measured: a 12-pixel 4326 tile merged with a 3857 tile at 50 km
+    pixels sat in columns 15-26 in RAM and 16-27 streamed). On the reference grid
+    every offset is whole and both paths place the tile alike. (Not compared with the
+    heavyweight tier, which warps a tile in another CRS with GDAL's own placement.)
     """
     if not rasters:
         return None
@@ -443,13 +490,16 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
         # tile (a tile in that CRS, whichever stands first in byte order): the merge takes
         # the pixel size of its first tile, which is then that size whichever tile that
         # is, as in the streamed merge. Same-CRS groups are untouched.
-        ref_res = _pixel_size(_reference_tile(datasets, ref_crs))
+        ref_tile = _reference_tile(datasets, ref_crs)
+        ref_res, ref_corner = _pixel_size(ref_tile), _grid_corner(ref_tile)
         merge_ds = []
         for ds in datasets:
             if ref_crs is None or ds.crs == ref_crs:
                 merge_ds.append(ds)
             else:
-                mf, rds = _reproject_dataset(ds, ref_crs, target_res=ref_res)
+                mf, rds = _reproject_dataset(
+                    ds, ref_crs, target_res=ref_res, anchor=ref_corner
+                )
                 extra.append((mf, rds))
                 merge_ds.append(rds)
         ref = merge_ds[0]

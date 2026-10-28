@@ -71,21 +71,20 @@ def encode_tile(
     if str(tile_format).lower() == "cog":
         # Write directly from the decoded array to driver="COG" — no GTiff
         # intermediate so peak = decoded array + COG file bytes (not all three).
-        from rio_cogeo.profiles import cog_profiles
-
         # Resolve "auto" → "ZSTD" for the ZSTD baseline (constraint requirement).
         # Route through the compression authority for size-adaptive levels.
         cog_compression = compression if str(compression).lower() != "auto" else "AUTO"
         compression_str = str(cog_compression).upper()
 
         # If not AUTO, validate compression name (same set as analysis.cog_convert).
-        if compression_str != "AUTO":
-            _profile_check = cog_profiles.get(compression_str.lower())
-            if _profile_check is None:
-                raise ValueError(
-                    f"encode_tile: unknown compression '{cog_compression}'; "
-                    f"valid: {', '.join(sorted(cog_profiles.keys()))}"
-                )
+        if (
+            compression_str != "AUTO"
+            and compression_str.lower() not in _comp.COG_PROFILES
+        ):
+            raise ValueError(
+                f"encode_tile: unknown compression '{cog_compression}'; "
+                f"valid: {', '.join(sorted(_comp.COG_PROFILES))}"
+            )
 
         # Route through the compression authority for proper codec/level/predictor
         # with driver="COG" to ensure LEVEL (not zstd_level) is used.

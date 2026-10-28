@@ -373,8 +373,7 @@ def test_rst_band_requires_two_bands():
 # run the same algorithm. FOUR run pure-core-only (fingerprint=False) because no
 # single literal geometry/observer/point is in-extent across the multi-CRS corpus
 # (clip, sample, viewshed) and/or the engines use different interpolation/scan
-# algorithms (color_relief np.interp vs GDAL DEMProcessing; viewshed xrspatial vs
-# GDAL sweep).
+# algorithms (color_relief np.interp vs GDAL DEMProcessing).
 _COMPLEX_ARG = {
     "rst_evi",
     "rst_savi",

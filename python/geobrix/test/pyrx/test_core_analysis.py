@@ -2,6 +2,7 @@
 cog_convert (rio-cogeo)."""
 
 import math
+import sys
 
 import numpy as np
 import pytest
@@ -346,6 +347,30 @@ def test_cog_convert_unknown_compression_raises():
             analysis.cog_convert(ds, "NOT_A_PROFILE", 512, "AVERAGE")
 
 
+def test_cog_convert_needs_no_rio_cogeo(monkeypatch):
+    """The env wheels ship no rio-cogeo: profile names resolve from a local copy of its list.
+
+    The NULL / Python default ("DEFLATE") and a named codec give the same bytes with rio-cogeo
+    hidden as with it importable, and the local list equals rio-cogeo's when it is installed.
+    """
+    src = make_geotiff_bytes(width=64, height=64)
+    with _serde.open_tile(src) as ds:
+        visible = analysis.cog_convert(ds, "DEFLATE", 256, "AVERAGE")
+    try:
+        from rio_cogeo.profiles import cog_profiles
+
+        assert set(cog_profiles.keys()) == set(analysis._comp.COG_PROFILES)
+    except ImportError:
+        pass
+    monkeypatch.setitem(sys.modules, "rio_cogeo", None)
+    monkeypatch.setitem(sys.modules, "rio_cogeo.profiles", None)
+    with _serde.open_tile(src) as ds:
+        assert analysis.cog_convert(ds, "DEFLATE", 256, "AVERAGE") == visible
+        assert analysis.cog_convert(ds, "lzw", 256, "AVERAGE")[:2] in (b"II", b"MM")
+        with pytest.raises(ValueError, match="valid profiles: deflate"):
+            analysis.cog_convert(ds, "NOT_A_PROFILE", 256, "AVERAGE")
+
+
 # --- contour ----------------------------------------------------------------
 def _ramp_bytes(width=6, height=5, crs="EPSG:32633", ulx=100.0, uly=50.0, px=1.0):
     """A raster whose value equals the column index (a left-to-right ramp).
@@ -546,69 +571,6 @@ def test_viewshed_nonpositive_max_distance_raises():
             analysis.viewshed(ds, ox, oy, 1.0, 0.0, -10.0)
 
 
-# ---------------------------------------------------------------------------
-# Fix 1: viewshed size-gate uses 500 B/px (xrspatial working set), not 4 B/px
-# ---------------------------------------------------------------------------
-
-
-def test_viewshed_medium_dem_routes_to_ctypes(monkeypatch):
-    """A DEM where 500*h*w > monkeypatched budget must use ctypes, not xrspatial.
-
-    Pre-fix the gate used the decoded size (4 B/px for float32), so a 2000×2000
-    DEM at 16 MB decoded would pass under a 64 MiB budget and be routed to
-    xrspatial — which needs ~500 B/px (~2 GB) and would raise MemoryError.
-    Post-fix the gate uses _XRSPATIAL_BYTES_PER_PX * h * w, so the same DEM
-    exceeds the budget and goes to the bounded ctypes engine.
-    """
-    h, w = 80, 80  # 500 * 80 * 80 = 3.2 MB; monkeypatch budget to 1.6 MB → ctypes
-    dem = np.zeros((h, w), dtype="float64")
-    profile = dict(
-        driver="GTiff",
-        width=w,
-        height=h,
-        count=1,
-        dtype="float64",
-        crs="EPSG:3857",
-        transform=from_origin(0.0, float(h), 1.0, 1.0),
-        nodata=None,
-    )
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(dem, 1)
-        src = mf.read()
-
-    ctypes_calls = []
-    xrspatial_calls = []
-    orig_ctypes = analysis._viewshed_gdal_ctypes
-    orig_xrspatial = analysis._viewshed_xrspatial
-
-    def spy_ctypes(ds, *args, **kwargs):
-        ctypes_calls.append(1)
-        return orig_ctypes(ds, *args, **kwargs)
-
-    def spy_xrspatial(ds, *args, **kwargs):
-        xrspatial_calls.append(1)
-        return orig_xrspatial(ds, *args, **kwargs)
-
-    # Budget 1.6 MB < 500*80*80 = 3.2 MB → ctypes path
-    monkeypatch.setattr(analysis, "_viewshed_gdal_ctypes", spy_ctypes)
-    monkeypatch.setattr(analysis, "_viewshed_xrspatial", spy_xrspatial)
-    monkeypatch.setattr(analysis, "decoded_budget_bytes", lambda s: 1_600_000)
-
-    with _serde.open_tile(src) as ds:
-        from rasterio.transform import xy as _xy
-
-        ox, oy = _xy(ds.transform, h // 2, w // 2, offset="center")
-        out = analysis.viewshed(ds, float(ox), float(oy), 2.0, 0.0, None)
-
-    assert len(ctypes_calls) == 1, "medium DEM must route to ctypes engine"
-    assert len(xrspatial_calls) == 0, "medium DEM must not invoke xrspatial"
-
-    with _serde.open_tile(out) as o:
-        arr = o.read(1)
-        assert set(np.unique(arr)).issubset({0, 255})
-
-
 # --- ctypes GDALViewshedGenerate engine -------------------------------------
 
 
@@ -660,28 +622,21 @@ def test_viewshed_gdal_ctypes_occlusion():
     assert out_arr[4, 6] == 0, "cell east of wall (col 6) should be invisible (0)"
 
 
-def test_viewshed_engines_agree_small():
-    """ctypes and xrspatial engines agree on interior cells of a small DEM."""
-    pytest.importorskip("xrspatial")
-
-    src = _dem_with_wall_bytes()
-    with _serde.open_tile(src) as ds:
-        ox, oy = _observer_world_xy(ds, col=0, row=3)
-        ctypes_arr = analysis._viewshed_gdal_ctypes(ds, ox, oy, 1.0, 0.0, None)
-        xrs_arr = analysis._viewshed_xrspatial(ds, ox, oy, 1.0, 0.0, None)
-
-    # Trim 1-pixel border to allow edge-handling differences.
-    interior_c = ctypes_arr[1:-1, 1:-1]
-    interior_x = xrs_arr[1:-1, 1:-1]
-
-    mismatches = int(np.sum(interior_c != interior_x))
-    total = interior_c.size
-    mismatch_frac = mismatches / total if total > 0 else 0.0
-
-    assert mismatch_frac < 0.15, (
-        f"ctypes and xrspatial disagree on {mismatches}/{total} interior cells "
-        f"({mismatch_frac:.1%}); expected < 15% mismatch"
-    )
+def test_viewshed_uses_gdal_for_every_dem_size(monkeypatch):
+    """GDALViewshedGenerate (the heavyweight's call) serves every DEM size; xarray-spatial is
+    never imported (hidden here, so an import would fail)."""
+    monkeypatch.setitem(sys.modules, "xrspatial", None)
+    for src, col, row in (
+        (_dem_with_wall_bytes(), 0, 3),
+        (_dem_ctypes_wall_bytes(), 4, 4),
+    ):
+        with _serde.open_tile(src) as ds:
+            ox, oy = _observer_world_xy(ds, col=col, row=row)
+            out = analysis.viewshed(ds, ox, oy, 1.0, 0.0, None)
+            want = analysis._viewshed_gdal_ctypes(ds, ox, oy, 1.0, 0.0, None)
+        with _serde.open_tile(out) as o:
+            np.testing.assert_array_equal(o.read(1), want)
+        assert want[row, col] == 255 and want[row, -1] == 0
 
 
 # ---------------------------------------------------------------------------

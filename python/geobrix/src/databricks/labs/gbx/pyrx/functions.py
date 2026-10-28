@@ -3711,10 +3711,14 @@ def rst_viewshed(
 ) -> Column:
     """Compute a binary viewshed (255 visible / 0 invisible) from a DEM tile.
 
-    Mirrors the heavyweight ``gbx_rst_viewshed`` (GDAL ViewshedGenerate),
-    implemented with ``xrspatial.viewshed``. ``crs`` declares the source CRS of a
-    plain WKB/WKT observer point (int SRID or CRS string incl. ESRI/WKT); an
-    EWKB/EWKT embedded SRID wins; absent + no SRID -> assumed in the raster CRS.
+    Mirrors the heavyweight ``gbx_rst_viewshed``: both tiers call GDAL's
+    ``GDALViewshedGenerate`` with the same parameters (GVM_Edge, curvature
+    coefficient 0.85714, binary output) for every DEM size, so they give the same
+    mask. The light tier streams the DEM through the bundled libgdal, so its peak
+    memory is about GDAL's block cache whatever the DEM size. ``crs`` declares the
+    source CRS of a plain WKB/WKT observer point (int SRID or CRS string incl.
+    ESRI/WKT); an EWKB/EWKT embedded SRID wins; absent + no SRID -> assumed in the
+    raster CRS.
 
     Args:
         tile:            Tile struct column (the DEM).
@@ -3733,12 +3737,6 @@ def rst_viewshed(
 
     Returns:
         Single-band uint8 (Byte) tile struct: 255 = visible, 0 = invisible.
-
-    PARITY DIVERGENCE: the visibility front-end is xarray-spatial's CPU
-    line-of-sight scan (vertical-angle grid thresholded to a binary mask),
-    not GDAL's GVM_Edge sweep with earth-curvature correction — the binary
-    visible/invisible classification matches but exact edge cells near grazing
-    angles or with curvature can differ.
     """
     oh = (
         f.lit(float(observer_height))

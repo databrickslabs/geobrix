@@ -16,34 +16,22 @@ expressions, implemented without the JAR:
   * ``contour`` uses ``skimage.measure.find_contours`` instead of GDAL's
     ContourGenerateEx.
   * ``viewshed`` uses ``GDALViewshedGenerate`` (via ctypes against the bundled
-    libgdal) for large DEMs, and ``xrspatial.viewshed`` for small ones.  The
-    ctypes engine streams block-by-block (peak RSS ≈ GDAL cache, independent of
-    DEM size); xrspatial is kept for small tiles to avoid ctypes/file overhead.
+    libgdal) for every DEM size, with the heavyweight's parameters, so the two
+    tiers give the same mask. It streams block-by-block (peak RSS ≈ GDAL cache,
+    independent of DEM size).
 """
 
 import math
 import os
-import threading
 
 import numpy as np
 from rasterio.io import MemoryFile
 
 from databricks.labs.gbx.pyrx.core import compression as _comp
-from databricks.labs.gbx.pyrx.core.budget import (
-    _cgroup_task_limit_bytes,
-    decoded_budget_bytes,
-)
 from databricks.labs.gbx.pyrx.core.local_temp import (
     new_local_temp_dir,
     new_local_temp_file,
 )
-
-# Module-level lock used to serialize the ``psutil.virtual_memory`` patch that
-# bypasses xrspatial's system-RAM guard (see ``viewshed()`` below).  The patch is
-# not thread-safe on its own — concurrent Spark Connect UDF workers sharing the
-# same Python process race on the module attribute.  The RLock serialises calls
-# within one process; separate OS processes are unaffected.
-_VIEWSHED_PSUTIL_LOCK = threading.RLock()
 
 # NoData sentinel for the proximity output — mirrors the heavyweight, which sets
 # NODATA=-1.0 so beyond-max / unreachable pixels are distinguishable from
@@ -208,29 +196,20 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
     overview_resampling = str(overview_resampling).upper()
 
     # "AUTO" is a special sentinel meaning "size-adaptive ZSTD" — it bypasses
-    # the cog_profiles validation (which has no "auto" entry) and routes through
+    # the profile-name validation (which has no "auto" entry) and routes through
     # creation_opts(compress="auto", decoded_bytes=...) so size-adaptive level +
     # predictor are preserved, matching the GTiff path's ZSTD baseline.
     _is_auto = compression == "AUTO"
 
-    if not _is_auto:
-        # Validate compression against the same set that rio-cogeo accepts, so
-        # callers passing profile names (e.g. "deflate", "lzw", "raw") still work.
-        # "raw" maps to no compression (omit the compress kwarg for driver="COG").
-        from rio_cogeo.profiles import cog_profiles
-
-        try:
-            _profile_check = cog_profiles.get(compression.lower())
-        except KeyError as exc:
-            raise ValueError(
-                f"rst_cog_convert: unknown compression '{compression}'; "
-                f"valid profiles: {', '.join(sorted(cog_profiles.keys()))}"
-            ) from exc
-        if _profile_check is None:
-            raise ValueError(
-                f"rst_cog_convert: unknown compression '{compression}'; "
-                f"valid profiles: {', '.join(sorted(cog_profiles.keys()))}"
-            )
+    # Validate compression against rio-cogeo's profile names (compression.COG_PROFILES, a
+    # local copy: rio-cogeo itself is not needed), so callers passing profile names (e.g.
+    # "deflate", "lzw", "raw") still work. "raw" maps to no compression (omit the compress
+    # kwarg for driver="COG").
+    if not _is_auto and compression.lower() not in _comp.COG_PROFILES:
+        raise ValueError(
+            f"rst_cog_convert: unknown compression '{compression}'; "
+            f"valid profiles: {', '.join(sorted(_comp.COG_PROFILES))}"
+        )
 
     import rasterio
 
@@ -453,10 +432,12 @@ def contour(ds, levels, interval, base, attr_field):
 # Viewshed helpers
 # ---------------------------------------------------------------------------
 
-# xrspatial.viewshed working set per pixel: event list + status structs + visibility
-# grid.  Empirically ~500 B/px; use this for the size gate so medium DEMs go straight
-# to the bounded ctypes engine instead of hitting xrspatial's own MemoryError guard.
-_XRSPATIAL_BYTES_PER_PX = 500
+# GDALViewshedMode / GDALViewshedOutputType (gdal_alg.h). GVM_Edge is the heavyweight's mode
+# (RST_Viewshed.scala) and the GDAL CLI default; GVOT_NORMAL gives the binary 0/255 mask.
+_GVM_EDGE = 2
+_GVOT_NORMAL = 1
+# GDAL's default earth-curvature coefficient, as the heavyweight passes it.
+_CURV_COEFF = 0.85714
 
 
 def _load_libgdal():
@@ -491,63 +472,10 @@ def _load_libgdal():
     )
 
 
-def _viewshed_xrspatial(
-    ds, observer_x, observer_y, observer_height, target_height, max_distance
-):
-    """xrspatial engine for small DEMs.  Returns a uint8 numpy array (255 visible / 0 invisible).
-
-    Moves the xrspatial imports, NUMBA_CACHE_DIR guard, and _available_memory_bytes
-    patch inside this helper so it can be independently tested and so the ctypes path
-    never pays the numba warm-up cost.
-    """
-    import importlib as _importlib
-    import os as _os
-    import tempfile as _tempfile
-
-    if "NUMBA_DISABLE_JIT" not in _os.environ and "NUMBA_CACHE_DIR" not in _os.environ:
-        _os.environ["NUMBA_CACHE_DIR"] = _tempfile.mkdtemp(prefix="gbx_numba_")
-    import xarray as xr
-    from rasterio.transform import xy as _xy
-    from xrspatial import viewshed as _viewshed
-
-    band = ds.read(1).astype("float64")
-    height, width = band.shape
-    xs, _ = _xy(ds.transform, np.zeros(width), np.arange(width), offset="center")
-    _, ys = _xy(ds.transform, np.arange(height), np.zeros(height), offset="center")
-    xs = np.asarray(xs, dtype="float64")
-    ys = np.asarray(ys, dtype="float64")
-
-    da = xr.DataArray(band, dims=["y", "x"], coords={"y": ys, "x": xs})
-    # xrspatial.viewshed guards against large rasters by checking available RAM.
-    # On a shared Serverless cluster the system-wide RAM probe fires even for tiny
-    # tiles.  Replace the guard with the honest per-task cgroup limit (or 1 GiB
-    # fallback) so it reflects the actual task quota rather than node-total RAM.
-    _xrs_vs_mod = _importlib.import_module("xrspatial.viewshed")
-    with _VIEWSHED_PSUTIL_LOCK:
-        _real_avail_mem_fn = _xrs_vs_mod._available_memory_bytes
-        _xrs_vs_mod._available_memory_bytes = lambda: _cgroup_task_limit_bytes() or (
-            1024**3
-        )
-        try:
-            res = _viewshed(
-                da,
-                x=observer_x,
-                y=observer_y,
-                observer_elev=observer_height,
-                target_elev=target_height,
-                max_distance=max_distance,
-            )
-        finally:
-            _xrs_vs_mod._available_memory_bytes = _real_avail_mem_fn
-    vals = np.asarray(res.values)
-    # Visible cells carry an angle in [0, 180]; invisible/out-of-range carry -1.
-    return np.where(vals >= 0.0, 255, 0).astype("uint8")
-
-
 def _viewshed_gdal_ctypes(
     ds, observer_x, observer_y, observer_height, target_height, max_distance
 ):
-    """GDALViewshedGenerate ctypes engine for large DEMs.
+    """GDALViewshedGenerate ctypes engine (every DEM size; the heavyweight's parameters).
 
     Writes the DEM to a local scratch file, calls GDALViewshedGenerate via ctypes
     against the bundled libgdal, reads the binary 0/255 output, and returns a
@@ -627,7 +555,7 @@ def _viewshed_gdal_ctypes(
             c_d,
             c_d,
             c_d,  # visibleVal, invisibleVal, outOfRangeVal, nodataVal, curvCoeff
-            c_i,  # eMode  (GVM_Max = 3)
+            c_i,  # eMode (GVM_Edge = 2)
             c_d,  # maxDistance (0 = unlimited)
             c_vp,
             c_vp,  # pfnProgress(NULL), pProgressArg(NULL)
@@ -653,12 +581,12 @@ def _viewshed_gdal_ctypes(
                 0.0,
                 0.0,
                 0.0,
-                0.85714,
-                3,  # GVM_Max
+                _CURV_COEFF,
+                _GVM_EDGE,
                 float(max_distance) if max_distance is not None else 0.0,
                 None,
                 None,
-                1,  # GVOT_NORMAL = 1 -> binary 0/255 mask
+                _GVOT_NORMAL,  # binary 0/255 mask
                 None,
             )
             if not out_h:
@@ -683,10 +611,10 @@ def viewshed(ds, observer_x, observer_y, observer_height, target_height, max_dis
     Mirrors the heavyweight ``gbx_rst_viewshed`` (``gdal.ViewshedGenerate``,
     GVOT_NORMAL binary 0/255 mask).
 
-    For small DEMs (decoded size ≤ the Serverless per-task budget) the
-    ``xrspatial.viewshed`` engine is used; for large DEMs ``GDALViewshedGenerate``
-    is called via ctypes against the bundled libgdal, which streams the DEM
-    block-by-block (peak RSS ≈ GDAL cache, independent of DEM size).
+    ``GDALViewshedGenerate`` is called via ctypes against the bundled libgdal for
+    every DEM size, with the heavyweight's parameters (GVM_Edge, curvature
+    coefficient 0.85714, GVOT_NORMAL), so both tiers give the same mask. It streams
+    the DEM block-by-block (peak RSS ≈ GDAL cache, independent of DEM size).
 
     The result is a single-band Byte (uint8) GTiff at the same extent / CRS as
     ``ds`` (no NoData; 0 = invisible).
@@ -703,12 +631,6 @@ def viewshed(ds, observer_x, observer_y, observer_height, target_height, max_dis
 
     Returns:
         Single-band uint8 GTiff bytes (255 visible / 0 invisible).
-
-    Note:
-        When the xrspatial engine is selected, the first call in a Python process
-        compiles the underlying numba kernels — a one-time cost of several seconds,
-        amortised across subsequent calls.  The ctypes (GDAL) engine has no such
-        warm-up cost.
     """
     observer_height = float(observer_height)
     target_height = float(target_height)
@@ -750,7 +672,7 @@ def viewshed(ds, observer_x, observer_y, observer_height, target_height, max_dis
     ys = np.asarray(ys, dtype="float64")
 
     # Graceful out-of-bounds: an observer outside the raster extent has no valid
-    # line-of-sight origin. Both engines produce no visibility in that case. Mirror
+    # line-of-sight origin. GDAL produces no visibility in that case. Mirror
     # with an all-invisible (0) raster rather than crashing the job. Bounds are the
     # min/max pixel-center coords (north-up: ys descends, so use min/max).
     x_lo, x_hi = float(min(xs[0], xs[-1])), float(max(xs[0], xs[-1]))
@@ -758,36 +680,9 @@ def viewshed(ds, observer_x, observer_y, observer_height, target_height, max_dis
     if not (x_lo <= observer_x <= x_hi and y_lo <= observer_y <= y_hi):
         out = np.zeros((height, width), dtype="uint8")
     else:
-        # Gate on xrspatial's real working-set cost (~500 B/px), not the decoded
-        # DEM size (4 B/px for float32). Using the decoded size mis-routes medium
-        # DEMs to xrspatial, which then raises MemoryError internally. Gate on
-        # _XRSPATIAL_BYTES_PER_PX so only genuinely small tiles take the xrspatial
-        # path; keep a MemoryError fallback as a belt-and-suspenders safety net.
-        if _XRSPATIAL_BYTES_PER_PX * ds.height * ds.width <= decoded_budget_bytes(
-            "serverless"
-        ):
-            try:
-                out = _viewshed_xrspatial(
-                    ds,
-                    observer_x,
-                    observer_y,
-                    observer_height,
-                    target_height,
-                    max_distance,
-                )
-            except MemoryError:
-                out = _viewshed_gdal_ctypes(
-                    ds,
-                    observer_x,
-                    observer_y,
-                    observer_height,
-                    target_height,
-                    max_distance,
-                )
-        else:
-            out = _viewshed_gdal_ctypes(
-                ds, observer_x, observer_y, observer_height, target_height, max_distance
-            )
+        out = _viewshed_gdal_ctypes(
+            ds, observer_x, observer_y, observer_height, target_height, max_distance
+        )
 
     decoded_bytes = out.nbytes
     profile = _comp.drop_ycbcr(ds.profile)

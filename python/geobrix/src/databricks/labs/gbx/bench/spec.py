@@ -120,14 +120,12 @@ _SAMPLE_POINT_WKB = shapely.geometry.Point(0.0, 0.0).wkb
 
 # rst_viewshed (timing-only): needs an observer point; like sample, no single
 # world point is in-extent across the multi-CRS corpus, and a fixed (0, 0)
-# observer falls outside the UTM/3857 tile x/y ranges (xrspatial raises
-# "observer (0,0) outside raster x_range"). The core_fn derives the observer
-# from the tile center (``ds.bounds``) so it is in-extent on every CRS.
-# Additionally the pyrx binding documents a parity divergence (xrspatial CPU
-# line-of-sight scan vs GDAL's GVM_Edge sweep with curvature), so the binary
-# masks are not byte-equal even at a shared observer — timing-only on both
-# counts. The col_fn is mode-filtered out (viewshed is pure-core-only), so the
-# static WKB below is unused at runtime and kept only for the col_fn signature.
+# observer falls outside the UTM/3857 tile x/y ranges. The core_fn derives the
+# observer from the tile center (``ds.bounds``) so it is in-extent on every CRS.
+# (Both tiers run GDALViewshedGenerate with the same parameters, so the masks
+# are comparable; the observer is what keeps it timing-only.) The col_fn is
+# mode-filtered out (viewshed is pure-core-only), so the static WKB below is
+# unused at runtime and kept only for the col_fn signature.
 _VIEWSHED_OBSERVER_WKB = shapely.geometry.Point(0.0, 0.0).wkb
 
 # rst_color_relief (timing-only): heavy reads a gdaldem color-table FILE and runs
@@ -1582,7 +1580,6 @@ REGISTRY: Dict[str, FnSpec] = {
     # function in the constant's comment above:
     #   clip, sample, viewshed -- need an in-extent geometry; no single literal
     #                             is in-extent across the multi-CRS corpus
-    #   viewshed (also)        -- documented xrspatial-vs-GDAL parity divergence
     #   color_relief           -- needs a color-table file; GDAL DEMProcessing
     #                             interpolation vs pyrx np.interp diverge
     # --- band-index (indices.py): full comparison ---
@@ -1750,9 +1747,8 @@ REGISTRY: Dict[str, FnSpec] = {
         fingerprint=False,
     ),
     # --- viewshed (analysis.py): timing-only ---
-    # Needs an in-extent observer point (none works across the multi-CRS corpus)
-    # AND the binding documents an xrspatial-vs-GDAL parity divergence in the
-    # binary visibility mask. Timing-only on both counts.
+    # Needs an in-extent observer point (none works across the multi-CRS corpus),
+    # so it is timing-only.
     "rst_viewshed": FnSpec(
         "rst_viewshed",
         "gbx_rst_viewshed",

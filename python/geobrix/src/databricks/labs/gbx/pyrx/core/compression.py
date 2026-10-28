@@ -45,6 +45,26 @@ _AUTO_LADDER = [
 _AUTO_DEFAULT_LEVEL = 6  # used when decoded size is unknown (L6 knee; was 9)
 DEFAULT_COMPRESS = "auto"
 
+# The COG compression profile names a caller may pass to rst_cog_convert and the raster_gbx
+# writer's cog=true path: rio-cogeo 7's `cog_profiles` keys, which those paths validated against
+# (only the name: the creation options come from creation_opts). A local copy, so that the env
+# wheels, which do not ship rio-cogeo, accept the same names; "raw" means no compression.
+COG_PROFILES = frozenset(
+    {
+        "deflate",
+        "jpeg",
+        "lerc",
+        "lerc_deflate",
+        "lerc_zstd",
+        "lzma",
+        "lzw",
+        "packbits",
+        "raw",
+        "webp",
+        "zstd",
+    }
+)
+
 # ZSTD valid level range (rfc 8878 / zstd 1.5.x).
 _ZSTD_MIN_LEVEL = 1
 _ZSTD_MAX_LEVEL = 22

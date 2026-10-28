@@ -481,6 +481,15 @@ formats.
   failed the query with `UDTF_RETURN_SCHEMA_MISMATCH`, because the error tile lacked the newer
   tile-struct fields. They now emit the error row as intended.
 
+### Raster viewshed — GDAL's viewshed on both tiers (behavior change)
+
+- **Light-tier `rst_viewshed` now uses GDAL's viewshed for every DEM size**, with the same settings
+  as the heavyweight tier, so the two tiers return the same visibility mask. Small DEMs were
+  computed with xarray-spatial before, and their edge cells near grazing angles could differ
+  from the heavyweight result. xarray-spatial (and the numba compiler it brought) is no longer
+  needed, there is no first-call compile delay, and a 256 × 256 DEM now takes about 9 ms instead
+  of about 57 ms.
+
 ### Raster tiling and tessellation — tier parity and large rasters (behavior change)
 
 - **Centroid chips are cropped to their cell.** With `assignment='centroid'` (the default),

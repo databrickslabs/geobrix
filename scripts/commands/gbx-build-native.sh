@@ -30,8 +30,9 @@ usage() {
     echo "  --log     Log file (filename -> test-logs/<name>; relative -> under test-logs/; absolute as-is)"
     echo ""
     echo "Image: geobrix-native-build:<target>-<first 12 of sha256 of scripts/native/pins.conf>-<arch>"
-    echo "Output: build/native/out/<arch>/<target>/. Everything the build needs is fetched on the host first"
-    echo "(scripts/native/prefetch.sh) and the container runs with --network none where it builds Rust."
+    echo "Output: build/native/out/<arch>/<target>/. Sources, wheels and tool binaries are fetched and checksummed on"
+    echo "the host first (scripts/native/prefetch.sh). The image build still downloads the Rust toolchain (rustup) and the"
+    echo "JDK (dnf); Rust crates build with --network none from vendored sources."
     echo "Needs no dev container and no container lock. Never pushes an image."
 }
 
@@ -121,6 +122,8 @@ verify_toolchain() {
     rm -rf "$work/crate/target"
     docker run --rm --network none --platform "$plat" -v "$work/crate:/src" -v "$vendor:/vendor:ro" -v "$work/out:/out" "$tag" \
         bash -lc "$offline && maturin build --release --offline --compatibility manylinux_2_28 -i /opt/python/cp312-cp312/bin/python --out /out"
+    # the offline form leaves the mounted crate clean: CARGO_TARGET_DIR points inside the container
+    [ ! -e "$work/crate/target" ] || { echo "VERIFY FAILED: the offline build left $work/crate/target (CARGO_TARGET_DIR not honoured)"; return 1; }
     wheel="$(ls "$work"/out/*-cp312-abi3-manylinux_2_28_"$a".whl 2> /dev/null | head -n 1 || true)"
     [ -n "$wheel" ] || { echo "VERIFY FAILED: no *-cp312-abi3-manylinux_2_28_$a.whl in $work/out"; return 1; }
     echo "wheel: $(basename "$wheel")"
@@ -135,7 +138,8 @@ verify_toolchain() {
     # deny.toml applies to any run that can reach an index).
     docker run --rm --platform "$plat" -v "$work/crate:/src" -v "$vendor:/vendor:ro" -v "$PROJECT_ROOT/deny.toml:/deny.toml:ro" "$tag" \
         bash -lc "$offline && cargo deny --locked --config /deny.toml check -A index-failure advisories"
-    echo "NOTE: yanked crates are not checked in the container (a vendored source has no crates index); the advisory database was"
+    echo "NOTE: yanked crates are NOT checked here (a vendored source has no crates index); advisories ran against the public database."
+    echo "      The CI job .github/workflows/rust-deny.yml runs the full check, yanked crates included, and is the gate."
 }
 
 build_arch() {

@@ -11,6 +11,8 @@
 # runs pass it (generate-lockfile always reads the config). A cargo config of the host that already replaces
 # crates-io (~/.cargo/config.toml, or any .cargo/config.toml above the crate) makes source 1 stop with
 # "already defined"; source 2 then runs under that config.
+# A registry mirror can hide crate versions published in the last 7 days: pick pins at least a week old, or a
+# lock made from the public index fails `cargo vendor --locked` through the mirror (the chain then falls to the git index).
 # The registry address is never printed or written: cargo's stdout (its config snippet) is discarded, its
 # stderr has every URL and the registry host replaced, and Cargo.lock keeps the canonical crates-io source.
 set -euo pipefail

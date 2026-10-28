@@ -6,6 +6,7 @@ name: Build GDAL native (x86_64)
 #   gh run download <run id> -D build/native/out/x86_64/
 # It uses public package indexes and crate registries (the hashed locks hold against them), no secrets,
 # and uploads what the build wrote to build/native/out/x86_64/.
+# Runs on the Databricks-hardened runner group (Labs lockdown policy), like the other workflows.
 on:
   workflow_dispatch:
     inputs:
@@ -25,7 +26,9 @@ permissions:
 jobs:
   build-x86_64:
     name: Build ${{ inputs.target }} (x86_64)
-    runs-on: ubuntu-latest
+    runs-on:
+      group: databrickslabs-protected-runner-group
+      labels: linux-ubuntu-latest
     timeout-minutes: 240
     env:
       TARGET: ${{ inputs.target }}

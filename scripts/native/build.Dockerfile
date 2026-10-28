@@ -1,8 +1,12 @@
 # syntax=docker/dockerfile:1
 # Build container for GeoBrix natives on manylinux_2_28. Every version arrives as a --build-arg from
-# scripts/native/pins.conf; every source, wheel and binary is pre-fetched on the host into the context
-# (scripts/native/prefetch.sh), so a build here never needs a package index or a source mirror.
-# Only the system packages below come from the base image's distribution repositories.
+# scripts/native/pins.conf; every source tarball, wheel and tool binary is pre-fetched on the host into the
+# context (scripts/native/prefetch.sh), so the image build needs no package index and no source mirror.
+# Two things are still downloaded while the image builds, both from public non-index hosts:
+#   - the JDK and a few build packages, by dnf from the base image's distribution repositories;
+#   - the Rust toolchain (rustc, cargo, std, clippy, rustfmt), by `rustup toolchain install` from
+#     static.rust-lang.org; rustup checks the components against a manifest it fetches itself.
+# Nothing is downloaded when the image runs: Rust crates build with --network none from vendored sources.
 ARG MANYLINUX_IMAGE
 FROM ${MANYLINUX_IMAGE} AS toolchain
 ARG GBX_ARCH
@@ -26,6 +30,8 @@ RUN mkdir -p /tmp/swig && tar -xf /src/${SWIG_FILE} -C /tmp/swig --strip-compone
  && ./configure --prefix=/opt/swig --without-pcre && make -j"$(nproc)" && make install && cd / && rm -rf /tmp/swig \
  && echo "${ANT_SHA512}  /src/${ANT_FILE}" | sha512sum -c - && tar -xf /src/${ANT_FILE} -C /opt && ln -s /opt/apache-ant-${ANT_VERSION} /opt/ant
 ENV PATH=/opt/swig/bin:/opt/ant/bin:/opt/rust/cargo/bin:$PATH RUSTUP_HOME=/opt/rust/rustup CARGO_HOME=/opt/rust/cargo
+# Keep cargo's target/ out of a crate that is mounted at /src (override with -e for a cache volume).
+ENV CARGO_TARGET_DIR=/tmp/target
 COPY bin/${GBX_ARCH}/ /tmp/bin/
 COPY rust-toolchain.toml /opt/rust/rust-toolchain.toml
 RUN echo "${RUSTUP_INIT_SHA256}  /tmp/bin/rustup-init" | sha256sum -c - && chmod +x /tmp/bin/rustup-init \

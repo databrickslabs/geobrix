@@ -1,0 +1,42 @@
+name: rust deny
+
+# The supply-chain gate for every GeoBrix Rust crate: advisories, yanked crates, bans, licences and sources, using the
+# policy in deny.toml and the cargo-deny and Rust toolchain pinned in scripts/native/pins.conf (checksum-checked).
+# This is the only place the yanked check runs: the build container uses vendored sources, which have no crates index.
+# Every Cargo.lock in the repository is checked (scripts/native/cargo-deny-ci.sh finds them), so a new crate is picked up
+# without editing this file; a Cargo.toml with no committed Cargo.lock fails the job. Public crates.io and the public
+# advisory database, no secrets. Weekly as well as on pushes: advisories and yanks appear without any change here.
+# Manual run: Actions -> "rust deny" -> Run workflow (workflow_dispatch).
+#
+# Runs on the Databricks-hardened runner group (Labs lockdown policy), like the other workflows.
+# This workflow does not interpolate any github.event.* values into run: blocks.
+on:
+  push:
+    branches-ignore:
+      - "python/**"
+      - "scala/**"
+  pull_request:
+    branches:
+      - "**"
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-deny:
+    name: cargo deny (advisories, yanked, bans, licenses, sources)
+    runs-on:
+      group: databrickslabs-protected-runner-group
+      labels: linux-ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Check every Rust crate
+        run: bash scripts/native/cargo-deny-ci.sh

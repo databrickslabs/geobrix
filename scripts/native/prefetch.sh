@@ -41,7 +41,8 @@ fetch_verified "$OUT/bin/$ARCH/rustup-init" "$(pin "RUSTUP_INIT_SHA256_$UPPER")"
 fetch_verified "$OUT/bin/$ARCH/cargo-deny.tar.gz" "$(pin "CARGO_DENY_SHA256_$UPPER")" \
     "$(pin_url CARGO_DENY_URL "$ARCH-unknown-linux-musl")" || exit 1
 
-# Wheels: stdout is dropped and stderr has every URL redacted, because the index may be an internal one.
+# Wheels: stdout is dropped and stderr has every URL and every host pip names redacted, because the index may be an
+# internal one (pip prints a connection error's host without a scheme: `host='...'`, `Connection to ...`).
 # --no-deps: the lock names every transitive wheel, and the host's own Python (older than 3.12) would
 # otherwise evaluate environment markers such as `tomli; python_version < "3.11"` for itself.
 set +e
@@ -49,7 +50,7 @@ python3 -m pip download -q --disable-pip-version-check --require-hashes --no-dep
     --platform "manylinux_2_28_$ARCH" --platform "manylinux2014_$ARCH" \
     --python-version 3.12 --implementation cp \
     -r "$GBX_NATIVE_DIR/build-requirements-$ARCH.txt" -d "$OUT/wheelhouse/$ARCH" 2>&1 > /dev/null \
-    | sed -E 's#[a-zA-Z+]+://[^ ]+#<url>#g'
+    | sed -E "s#[a-zA-Z+]+://[^ ]+#<url>#g; s#host='[^']*'#host='<host>'#g; s#Connection to [^ ]+#Connection to <host>#g"
 rc=${PIPESTATUS[0]}
 set -e
 if [ "$rc" -ne 0 ]; then

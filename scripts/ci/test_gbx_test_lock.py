@@ -207,6 +207,11 @@ EXEMPT = {
     "no Maven, no Spark JVM on target/. Its editable install of geobrix into the shared "
     "site-packages happens only when geobrix is missing (pip show first), so a routine run "
     "never rewrites it under a locked pytest",
+    "gbx-versions-audit.sh": "--host only reads installed-package and native versions "
+    "(docker exec -i python3 - collect, a script on stdin); it runs no Maven and no pytest and "
+    "writes nothing. 'pytest' in the file is only package-inventory text. Taking the lock would "
+    "queue a read-only audit behind a long test run; the one risk is a probe racing a locked "
+    "pip install and reporting transient drift, which a re-run clears",
 }
 
 

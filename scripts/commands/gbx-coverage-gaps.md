@@ -244,7 +244,7 @@ gbx:coverage:scala --report-only --open
 ## Strategy
 
 The strategy in short:
-- When to run gaps analysis
-- How to interpret results
-- Coverage improvement workflow
-- Integration with development process
+- **When to run it:** after any coverage run. It only reads the coverage file the last run wrote (`target/scoverage.xml` for Scala, `coverage.xml` for Python) and runs no tests, so it takes seconds; with no coverage file it stops and names the coverage command to run first.
+- **How to read it:** packages are listed lowest coverage first, those below `--threshold` (90 unless you change it) are flagged with the number of statements still to cover, and the view stops at the package, so open the HTML report to find the files.
+- **Improvement workflow:** take the lowest package, add tests for it, re-run `gbx:coverage:scala-package <pkg>` (or one test class with `--class`), then run gaps again to see the new numbers.
+- **In the development process:** run it right after the weekly baseline to choose that week's package, and before a PR to check the packages the PR touches.

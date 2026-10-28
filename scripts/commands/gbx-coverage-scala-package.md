@@ -198,7 +198,7 @@ Only tests matching the pattern execute, but coverage is still measured across t
 ## Strategy
 
 The strategy in short:
-- When to use each coverage command
-- Baseline + incremental pattern
-- Coverage improvement workflow
-- Time optimization strategies
+- **Which command:** `gbx:coverage:scala` runs every test (about 10 minutes) for the weekly baseline, a pre-release check or a change across packages; this command runs one package's tests (1-3 minutes) for daily work; `gbx:coverage:scala --report-only` (about 5 seconds) shows the data you already have.
+- **Baseline + incremental:** take the full baseline once a week, then run this command on the package you are improving; it builds incrementally and only runs `mvn clean` first when you pass `--clean`.
+- **Improvement workflow:** `gbx:coverage:gaps scala` names the lowest package, you add tests there and run this command on it, `--report-only --open` shows the uncovered lines, and you repeat until the package passes `--min-coverage`.
+- **Saving time:** `--class <name>` runs a single test class (10-30 seconds) while you write tests, `--parallel` runs the tests in parallel, and the full run stays a weekly job.

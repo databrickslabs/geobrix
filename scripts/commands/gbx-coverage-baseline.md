@@ -235,10 +235,10 @@ gbx:coverage:baseline scala
 ## Strategy
 
 The strategy in short:
-- Baseline + incremental pattern
-- When to run baseline vs package-targeted
-- Weekly coverage improvement workflow
-- Time optimization strategies
+- **Baseline + incremental:** run the whole test suite once for the reference data (Scala about 10 minutes, Python about 30 seconds), then improve it with short runs (`gbx:coverage:scala-package`) instead of repeating the full run.
+- **Baseline or package-targeted:** run the baseline weekly, before a major PR, after a large refactor, or when the coverage data is more than 7 days old; use a package run (1-3 minutes) for daily work on one package, and `--report-only` (about 5 seconds) to look at data you already have.
+- **Weekly workflow:** run the baseline on Monday, run `gbx:coverage:gaps <language>` to find the lowest package, and work on that package with package runs during the week.
+- **Saving time:** do not run the baseline after every change or for a quick status check; `--class` on a package run (10-30 seconds) is the fastest way to see the effect of new tests, and Python is quick enough to baseline whenever you need to.
 
 ## Key Insight
 

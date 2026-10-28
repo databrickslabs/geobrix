@@ -11,8 +11,9 @@ import scala.util.Try
 /** Identity of the running geobrix JAR, for the Python manager's version and sha256 check. Catalyst-free.
   *
   * Both parts come from the ONE file the class was loaded from, so they cannot describe two different JARs.
-  * A classes directory is a development run (`dev|dev`). A JAR whose identity cannot be read, or a class
-  * with no code source, is `unknown|unknown`: never a silent `dev`, and the manager refuses it. */
+  * A classes directory is a development run (`dev|dev`). A JAR without its `pom.properties` is
+  * `unknown|<sha256>`; a file that cannot be read, or a class with no code source, is `unknown|unknown`.
+  * Neither is ever a silent `dev`, and the manager refuses both. */
 object BuildInfo {
     private val PomProps = "META-INF/maven/com.databricks.labs/geobrix/pom.properties"
     private val Dev = "dev"

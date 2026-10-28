@@ -245,6 +245,7 @@ def test_java_udf_classes_exist_in_source(fqn):
     "identity,jar_found",
     [
         ("unknown|unknown", False),
+        ("unknown|abc", False),
         ("dev|dev", False),
         ("0.5.3|abc", False),
         ("0.6.0|abc", True),

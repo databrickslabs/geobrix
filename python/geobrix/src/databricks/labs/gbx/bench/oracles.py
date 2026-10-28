@@ -62,6 +62,7 @@ HEAVY_PENDING = {
         "L1": "heavy fails with an INTERNAL_ERROR that does not name the value"
     },
     "tcrs_corrupt": {"L1": "heavy's error tile carries error_message, not last_error"},
+    "tcrs_bad_crs": {"L1": "heavy's error tile carries error_message, not last_error"},
 }
 
 B, T, M = "gbx_bng_eastnorthasbng", "gbx_rst_transformcrs", "gbx_st_makevalid"
@@ -93,8 +94,8 @@ MVP_S: Tuple[Case, ...] = (
     ),
     Case("bng_bad_res", B, (530000.0, 180000.0, "3km"), "raises", "3km"),
     # A resolution BNG does not define is a parameter error on every level, never a clamped cell.
-    Case("bng_bad_res_int", B, (530000.0, 180000.0, 1000), "raises", "1000"),
-    Case("bng_bad_res_digits", B, (530000.0, 180000.0, "1000"), "raises", "1000"),
+    Case("bng_bad_res_int", B, (530000.0, 180000.0, 1001), "raises", "1001"),
+    Case("bng_bad_res_digits", B, (530000.0, 180000.0, "1001"), "raises", "1001"),
     # A non-number easting is a parameter error too (only NaN and out-of-range values are data errors).
     Case("bng_bad_easting", B, ("abc", 180000.0, 3), "raises", "abc"),
     # A UC STRING parameter receives an INT literal as its digit string, so every surface

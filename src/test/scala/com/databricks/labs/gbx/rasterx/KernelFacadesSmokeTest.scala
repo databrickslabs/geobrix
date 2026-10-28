@@ -1,7 +1,8 @@
 package com.databricks.labs.gbx.rasterx
 
-import java.nio.file.Files
+import java.nio.file.{Files, Paths}
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 import java.util.jar.JarOutputStream
 import java.util.zip.ZipEntry
 
@@ -43,6 +44,16 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         } finally out.close()
         val sha = MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(jar)).map("%02x".format(_)).mkString
         assert(BuildInfo.identityAt(jar.toUri) == s"9.9.9|$sha")
+        val bare = dir.resolve("geobrix-bare.jar") // a JAR that lost its pom.properties: unknown version, real sha
+        val bareOut = new JarOutputStream(Files.newOutputStream(bare))
+        try {
+            bareOut.putNextEntry(new ZipEntry("README"))
+            bareOut.write("x".getBytes("UTF-8"))
+            bareOut.closeEntry()
+        } finally bareOut.close()
+        val bareSha = MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(bare)).map("%02x".format(_)).mkString
+        assert(BuildInfo.identityAt(bare.toUri) == s"unknown|$bareSha")
+        Files.delete(bare)
         assert(BuildInfo.identityAt(dir.toUri) == "dev|dev") // a classes directory is a development run
         assert(BuildInfo.identityAt(null) == "unknown|unknown") // never a silent dev
         Files.delete(jar)
@@ -80,6 +91,28 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         assert(vsimemEntries() == before, "the facade left in-memory GDAL files behind")
         val ds = RasterDriver.readFromBytes(out, Map("driver" -> "GTiff"))
         try assert(ds.GetProjection().contains("Pseudo-Mercator")) finally RasterDriver.releaseDataset(ds)
+    }
+
+    test("the BNG L2 and UC facades run on a slim classpath: no Catalyst, no unsafe, no Kryo") {
+        def where(c: Class[_]): String = Paths.get(c.getProtectionDomain.getCodeSource.getLocation.toURI).toString
+        val classpath = Seq(
+          where(classOf[BngEastNorthAsBngUdf]), // target/classes
+          where(SlimClasspathProbe.getClass), // target/test-classes: the probe only is used
+          where(classOf[scala.collection.immutable.List[_]]), // scala-library
+          where(classOf[org.locationtech.jts.geom.Geometry]), // jts-core
+          where(classOf[org.apache.spark.sql.api.java.UDF3[_, _, _, _]]) // spark-sql-api
+        ).mkString(java.io.File.pathSeparator)
+        val javaBin = Paths.get(System.getProperty("java.home"), "bin", "java").toString
+        val child = new ProcessBuilder(javaBin, "-cp", classpath, SlimClasspathProbe.getClass.getName.stripSuffix("$"))
+            .redirectErrorStream(true).start()
+        val output = scala.io.Source.fromInputStream(child.getInputStream, "UTF-8").mkString
+        assert(child.waitFor(60, TimeUnit.SECONDS) && child.exitValue() == 0, output)
+        val lines = output.linesIterator.toSeq
+        assert(lines.contains("L2 good: TQ3080"), output)
+        assert(lines.contains("UC good: TQ38SW"), output)
+        for (bad <- Seq("L2 bad: ", "UC bad: ")) {
+            assert(lines.exists(l => l.startsWith(bad + "RAISES IllegalStateException") && l.contains("found 1001")), output)
+        }
     }
 
     test("BngUc handler matches L1 and takes digit resolutions") {

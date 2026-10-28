@@ -621,7 +621,7 @@ class _BngTessellateExplode:
 # load-bearing field), exactly like the quadbin cellunion_agg. The group key is
 # the cellid (callers GROUP BY cellid), and core is recoverable from whether the
 # chip equals the full cell, so no information is lost for the swap. Cross-tier
-# parity (Task 9) compares the decoded chip geometry.
+# parity compares the decoded chip geometry.
 
 
 def _fold_chip_geom(chip, op):

@@ -1,4 +1,4 @@
-"""TDD tests for Task 10: FILE-matrix / GeoPackage chunkSize / layout sweep / layout scan
+"""Tests for the FILE-matrix / GeoPackage chunkSize / layout sweep / layout scan
 cells added to build_bench_notebook (bench/cluster.py).
 
 New flags (cfg keys): file_matrix / file_matrix_only, gpkg_chunksize / gpkg_chunksize_only,
@@ -484,7 +484,7 @@ def test_layout_sweep_write_sweep_progress_includes_mode():
 
 
 # ---------------------------------------------------------------------------
-# Vector FILE-column-table read (Task 5)
+# Vector FILE-column-table read
 # ---------------------------------------------------------------------------
 
 

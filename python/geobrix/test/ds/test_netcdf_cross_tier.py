@@ -65,7 +65,7 @@ from rasterio.io import MemoryFile
 
 # Gridded fixtures mounted in the dev container (repo test resources). The coral
 # granule is the canonical shared fixture: light data_vars == {bleaching_alert_area,
-# mask}, which Task 2 reported the heavy filter also enumerated.
+# mask}, which the heavy filter was also seen to enumerate.
 _HERE = Path(__file__).resolve()
 _REPO = _HERE.parents[4]  # .../geobrix
 _CORAL = (
@@ -173,7 +173,7 @@ def _write_scaled_grid(path):
 
     physical = raw * 0.01 + 250.0 for every non-fill cell. Both tiers must
     return that decoded physical value: light via xarray ``mask_and_scale``,
-    heavy via the Task-2 ``applyScale`` (gdal_translate ``-unscale``) path.
+    heavy via the ``applyScale`` (gdal_translate ``-unscale``) path.
 
     TWO data variables are written on purpose. GDAL's netCDF driver only exposes
     a ``SUBDATASETS`` metadata domain (which the heavy ``netcdf_gdal``
@@ -181,7 +181,7 @@ def _write_scaled_grid(path):
     a single-variable file is opened as a plain single-band raster with NO
     subdatasets, so heavy would enumerate zero grids and the gate could not run.
     ``units`` (degrees_north/east) let GDAL derive the CF geotransform so the
-    Task-1 grid filter keeps both variables.
+    grid filter keeps both variables.
     """
     from netCDF4 import Dataset
 
@@ -216,7 +216,7 @@ def _write_scaled_grid(path):
 
 @pytest.mark.integration
 def test_netcdf_gdal_applies_scale_matches_light(spark_with_jar, tmp_path):
-    """Scaled-grid value parity: heavy ``netcdf_gdal`` (Task-2 ``applyScale``)
+    """Scaled-grid value parity: heavy ``netcdf_gdal`` (``applyScale``)
     decodes CF ``scale_factor``/``add_offset`` to the SAME physical values light
     ``netcdf_gbx`` produces via xarray ``mask_and_scale``.
 
@@ -224,7 +224,7 @@ def test_netcdf_gdal_applies_scale_matches_light(spark_with_jar, tmp_path):
     heavy format is genuinely unregistered (no JAR on the classpath); any other
     error, or a zero-row load on this known-non-empty scaled fixture, is a
     FAILURE. If heavy values differ from light beyond tolerance the unscale path
-    is wrong -- fix Task 2, do NOT loosen the tolerance here."""
+    is wrong -- fix the heavy path, do NOT loosen the tolerance here."""
     f = tmp_path / "scaled.nc"
     _write_scaled_grid(str(f))
     path = str(f)
@@ -275,7 +275,7 @@ def test_netcdf_gdal_applies_scale_matches_light(spark_with_jar, tmp_path):
             equal_nan=True,
             err_msg=(
                 f"{v}: scaled-grid physical values differ beyond tolerance -- "
-                "the heavy applyScale (unscale) path is wrong. Fix Task 2, do "
+                "the heavy applyScale (unscale) path is wrong. Fix the heavy path, do "
                 "NOT loosen here."
             ),
         )

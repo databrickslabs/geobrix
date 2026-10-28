@@ -1,4 +1,4 @@
-"""Task 6 (SDD — Phase A native mini-COG mosaic): end-to-end round-trip integration.
+"""End-to-end round-trip integration.
 
 Proves the full native mosaic pipeline composes correctly in a single Docker test:
 

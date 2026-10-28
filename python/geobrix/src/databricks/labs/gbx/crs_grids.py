@@ -57,7 +57,7 @@ def _reregister_active_light_tiers(spark) -> None:
             mod = importlib.import_module(modname)
         except Exception:
             continue
-        if getattr(mod, "_gbx_registered", False):  # set by register() — Task 4
+        if getattr(mod, "_gbx_registered", False):  # set by register()
             mod.register(spark)
 
 

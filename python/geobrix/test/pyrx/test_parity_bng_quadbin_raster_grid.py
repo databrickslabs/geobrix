@@ -1627,7 +1627,7 @@ def test_tessellate_covering_masked_source_parity(
 def test_default_h3_tessellate_2arg_parity(spark_with_jar):
     """2-arg gbx_rst_h3_tessellate(tile, res) is centroid+complete in BOTH tiers.
 
-    Task 8 aligned the light tier's default to match heavy: both now default to
+    The light tier's default matches heavy: both default to
     ``assignment="centroid"`` and ``coverage="complete"``.  This test is the
     regression gate for that alignment: if either tier's default diverges, the
     cell sets produced by the 2-arg call will differ.
@@ -1692,10 +1692,10 @@ def test_default_h3_tessellate_2arg_parity(spark_with_jar):
     )
     assert (
         light_2arg_ids == light_explicit_ids
-    ), "light 2-arg default != explicit centroid+complete — Task-8 alignment broken"
+    ), "light 2-arg default != explicit centroid+complete — default alignment broken"
     assert (
         light_2arg_n == light_explicit_n
-    ), "light 2-arg chip count != explicit centroid+complete — Task-8 alignment broken"
+    ), "light 2-arg chip count != explicit centroid+complete — default alignment broken"
 
 
 # ---------------------------------------------------------------------------

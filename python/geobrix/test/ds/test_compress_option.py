@@ -1,4 +1,4 @@
-"""Task 5: writer compress/compressLevel/predictor option surface + cogCompression alias.
+"""Writer compress/compressLevel/predictor option surface + cogCompression alias.
 
 Writes a real tile DataFrame to a temp dir and reads the output back, asserting
 rasterio.open(out).compression.  No JAR required — uses local PySpark with the

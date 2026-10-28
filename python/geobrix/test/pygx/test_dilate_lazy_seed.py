@@ -1,6 +1,6 @@
 """Unit tests for the lazy boundary-seed infrastructure in _dilate.py.
 
-Task 1 of the boundary-as-line efficiency refactor:
+The boundary-as-line efficiency refactor adds:
   - _classify_cell: extracted per-cell loop body (pure refactor; behavior-identical
     to the original classify() loop)
   - _boundary_cells: O(perimeter) boundary cell set via ring-sampling
@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 from shapely.geometry import box
 
-# _dilate internals below: RED/GREEN trigger (ImportError until Task 1 done).
+# _dilate internals below: RED/GREEN trigger (ImportError until the helpers exist).
 from databricks.labs.gbx.pygx import _dilate as D
 from databricks.labs.gbx.pygx._dilate import (
     _boundary_cells,

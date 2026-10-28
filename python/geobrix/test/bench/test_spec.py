@@ -117,7 +117,7 @@ def test_explicit_functions_filter_ignores_set():
     assert got == {"rst_width"}
 
 
-# --- Task 2: scalar-accessor coverage (15 no-arg accessors) -----------------
+# --- Scalar-accessor coverage (15 no-arg accessors) -----------------
 _SCALAR_ACCESSORS = {
     "rst_format",
     "rst_getnodata",
@@ -173,7 +173,7 @@ def test_scalar_accessors_not_in_core_set():
     assert not (_SCALAR_ACCESSORS & core)
 
 
-# --- Task 3: coordinate / index accessors (7) -------------------------------
+# --- Coordinate / index accessors (7) -------------------------------
 _COORD_ACCESSORS = {
     "rst_rastertoworldcoord",
     "rst_rastertoworldcoordx",
@@ -237,7 +237,7 @@ def test_coord_accessors_not_in_core_set():
     assert not (_COORD_ACCESSORS & core)
 
 
-# --- Task 4: timing-only fingerprint flag + map/struct coverage (6) ---------
+# --- Timing-only fingerprint flag + map/struct coverage (6) ---------
 # Map/struct outputs (metadata maps, georeference dicts, bbox WKB, gdalinfo JSON,
 # per-band histograms) cannot be made byte- or value-identical cross-engine, so
 # they are timed but never compared: fingerprint=False suppresses the fingerprint
@@ -251,7 +251,7 @@ _MAP_STRUCT = {
     "rst_histogram",
 }
 
-# The 6 prior ad-hoc downgrades (Task 2/3) now ride the same flag instead of
+# The 6 prior ad-hoc downgrades now ride the same flag instead of
 # emitting a real-but-suppressed fingerprint.
 _RETROFITTED = {
     "rst_memsize",
@@ -297,7 +297,7 @@ def test_retrofitted_downgrades_are_timing_only():
         assert fs.fingerprint is False, name
 
 
-# --- Task 5: tile-out transforms with scalar / fixed args (13) ---------------
+# --- Tile-out transforms with scalar / fixed args (13) ---------------
 # Each produces a raster tile, so its output is compared via the raster
 # fingerprint (same path as terrain). All are core=False and fingerprint=True
 # (both modes, compared) EXCEPT rst_resample_to_res: a single fixed ground
@@ -367,7 +367,7 @@ def test_rst_band_requires_two_bands():
     assert s.REGISTRY["rst_band"].min_bands == 2
 
 
-# --- Task 6: tile-out transforms with geometry/expression/band-map/func (10) -
+# --- Tile-out transforms with geometry/expression/band-map/func (10) -
 # All produce a raster tile, all core=False. SIX run both modes and are compared
 # (fingerprint=True): the args are CRS-/band-count-independent and the two engines
 # run the same algorithm. FOUR run pure-core-only (fingerprint=False) because no
@@ -406,7 +406,7 @@ _COMPLEX_TIMING_ONLY = {
 
 
 def test_complex_arg_partition_is_total():
-    # the full + timing-only sets exactly partition the 10 Task-6 functions
+    # the full + timing-only sets exactly partition the 10 complex-arg functions
     assert _COMPLEX_FULL | _COMPLEX_TIMING_ONLY == _COMPLEX_ARG
     assert not (_COMPLEX_FULL & _COMPLEX_TIMING_ONLY)
     assert len(_COMPLEX_ARG) == 10
@@ -1128,7 +1128,7 @@ def test_every_fnspec_declares_existing_sources():
             assert (root / p).exists(), f"{f.name}: missing source {p}"
 
 
-# --- Task 3: accessor virtual-tile disposition classification ----------------
+# --- Accessor virtual-tile disposition classification ----------------
 
 
 def test_pixel_reading_accessors_are_materialized():

@@ -2,7 +2,7 @@
 
 ``layer_to_sources_layers(layer, idx)`` converts one :class:`~databricks.labs.gbx.vizx._layers.Layer`
 into the MapLibre GL ``sources`` dict, ``layers`` list, and ``embed_bytes`` integer
-that ``build_html`` (Task 5) stitches together into a self-contained HTML viewer.
+that ``build_html`` stitches together into a self-contained HTML viewer.
 
 ``build_html(prepared, *, basemap, center, zoom)`` assembles N per-layer outputs into
 one self-contained HTML page with SRI-pinned ``<script>`` tags, a CARTO basemap,
@@ -187,7 +187,7 @@ def _json_for_script(obj) -> str:
 
 
 # ---------------------------------------------------------------------------
-# SRI-pinned CDN constants — hashes are finalised in Task 12.
+# SRI-pinned CDN constants.
 # ---------------------------------------------------------------------------
 
 _MAPLIBRE_JS = "https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"
@@ -380,7 +380,7 @@ def build_html(
             if leg:
                 legends.append(leg)
             if "_gbx_pmtiles" in sdef:
-                # Read sidecar WITHOUT mutating the caller's dict — Task 6 calls
+                # Read sidecar WITHOUT mutating the caller's dict — the size check calls
                 # build_html twice (size-check then real build) and must find the
                 # sidecar intact on the second call.
                 info_sc = sdef["_gbx_pmtiles"]
@@ -976,7 +976,7 @@ def prepare_layers(
        ``pmtiles_info`` on potentially-malformed archives and throw).  These are
        immediately routed to the fallback path.
     3. All other layers -> :func:`layer_to_sources_layers` (embed bytes measured).
-    4. **(Simplify hook -- Task 11)** if ``simplify_tiles_spec`` or
+    4. **(Simplify hook)** if ``simplify_tiles_spec`` or
        ``layer.simplify`` is present, invoke :func:`_simplify_layer`.  Since the
        engine is not yet implemented the stub raises :exc:`NotImplementedError`;
        this rung is therefore **not** entered unless a spec is explicitly supplied.
@@ -994,7 +994,7 @@ def prepare_layers(
     Args:
         layers:               A list of :class:`~databricks.labs.gbx.vizx._layers.Layer`.
         max_embed_mb:         HTML size threshold in mebibytes (default ``DEFAULT_MAX_EMBED_MB`` = 8).
-        simplify_tiles_spec:  Optional spec dict passed to the Task-11 simplify
+        simplify_tiles_spec:  Optional spec dict passed to the simplify
                               engine.  Currently wired only; passing a non-``None``
                               value invokes the stub and raises
                               :exc:`NotImplementedError`.
@@ -1060,7 +1060,7 @@ def prepare_layers(
             continue
 
         # ------------------------------------------------------------------ #
-        # Rung 3 -- simplify hook (Task 11).                                 #
+        # Rung 3 -- simplify hook.                                 #
         # Runs BEFORE the raw-oversize bail so an over-budget archive gets a  #
         # chance to be reduced under budget and stay interactive.             #
         # URL-mode pmtiles skip simplify (remote archive, zero embed cost).   #
@@ -1765,7 +1765,7 @@ def _resolve_pmtiles_bytes_or_url(layer) -> dict:
         data.startswith("http://") or data.startswith("https://")
     ):
         # We cannot call pmtiles_info on a remote URL without fetching it.
-        # Report tile_type as "unknown" for the url mode; the Task-5 HTML builder
+        # Report tile_type as "unknown" for the url mode; the HTML builder
         # can default to "vector" or the caller can supply a style.
         return {
             "mode": "url",
@@ -1873,7 +1873,7 @@ def _pmtiles(layer, idx: int) -> tuple[dict, list[dict], int]:
         src[sid]["minzoom"] = int(info["min_zoom"])
     if info.get("max_zoom") is not None:
         src[sid]["maxzoom"] = int(info["max_zoom"])
-    # Sidecar consumed (and popped) by the Task-5 HTML builder.
+    # Sidecar consumed (and popped) by the HTML builder.
     src[sid]["_gbx_pmtiles"] = info
 
     if is_raster:

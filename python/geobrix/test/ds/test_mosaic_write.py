@@ -23,7 +23,7 @@ Coverage:
         GBX_CELLID (valid h3index at the requested resolution) and GBX_GRIDSYSTEM=h3.
     17. Pixels outside the hexagon boundary are set to nodata; interior pixels
         are non-nodata.  Nodata is always present even when the source had none
-        (derived sentinel — Ruling A).
+        (derived sentinel).
     18. Interior pixels match a reference rasterio.warp.reproject (allclose, not
         byte-equal since nearest resampling and windowed source may vary slightly).
 
@@ -475,12 +475,12 @@ def test_single_cog_mode_unchanged(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 8. CogCommitMessage carries mini-COG paths for Task 3
+# 8. CogCommitMessage carries mini-COG paths for the VRT index
 # ---------------------------------------------------------------------------
 
 
 def test_commit_message_paths_are_mini_cog_paths(tmp_path):
-    """CogCommitMessage.paths holds all written mini-COG paths for Task 3 VRT."""
+    """CogCommitMessage.paths holds all written mini-COG paths for the VRT index."""
     src_path = str(tmp_path / "src" / "input.tif")
     _write_src(src_path, w=200, h=120)
     opts = _default_mosaic_opts(tileSize=100)
@@ -889,7 +889,7 @@ def test_quadbin_cell_reproject_correctness(tmp_path, small_source_raster):
 def _write_src_fn():
     """Return a callable that writes a small EPSG:32632 source raster.
 
-    The default source has NO nodata value — exercises Ruling A (derived nodata).
+    The default source has NO nodata value — exercises the derived nodata.
     Signature matches _write_src(path) with default args: 200×120 uint16, nodata=None.
     """
     return _write_src
@@ -899,7 +899,7 @@ def _write_mosaic_for_test(src_path: str, out_dir: str, opts: MosaicOptions) -> 
     """Test helper: drive _write_mosaic_h3 directly, bypassing Spark.
 
     Wraps _make_writer + write() in the same pattern as the quadbin tests.
-    Lives in the test module per Ruling D — NOT in production cog_writer.py.
+    Lives in the test module — NOT in production cog_writer.py.
     """
     os.makedirs(out_dir, exist_ok=True)
     w = _make_writer(out_dir, mosaic_opts=opts)
@@ -943,14 +943,14 @@ def test_h3_write_produces_tagged_4326_minicogs(tmp_path, _write_src_fn):
 
 # ---------------------------------------------------------------------------
 # 17. h3 hex-clip: outside-hex pixels are nodata; interior pixels are not
-#     (exercises Ruling A: source has NO declared nodata → derived sentinel)
+#     (source has NO declared nodata → derived sentinel)
 # ---------------------------------------------------------------------------
 
 
 def test_h3_hex_clip_sets_outside_nodata(tmp_path, _write_src_fn):
     """Pixels outside the hexagon must be nodata; interior pixels non-nodata.
 
-    The source is created WITHOUT a nodata value (Ruling A test case): the writer
+    The source is created WITHOUT a nodata value (derived-nodata case): the writer
     must still hex-clip by deriving a sentinel nodata (dtype max for uint16 = 65535).
     The output file must carry nodata even though the source did not.
     """
@@ -961,7 +961,7 @@ def test_h3_hex_clip_sets_outside_nodata(tmp_path, _write_src_fn):
 
     src_path = str(tmp_path / "src_h3_clip" / "input.tif")
     out_dir = str(tmp_path / "mosaic_h3_clip")
-    _write_src_fn(src_path)  # nodata=None source (Ruling A case)
+    _write_src_fn(src_path)  # nodata=None source (derived-nodata case)
 
     opts = parse_mosaic_options(
         {"vrtMosaic": "true", "gridSystem": "h3", "gridResolution": "5"}
@@ -978,10 +978,10 @@ def test_h3_hex_clip_sets_outside_nodata(tmp_path, _write_src_fn):
         data = ds.read(1)
         nodata = ds.nodata
 
-    # Ruling A: output must always carry a nodata value even for a nodata-less source.
+    # Output must always carry a nodata value even for a nodata-less source.
     assert (
         nodata is not None
-    ), "h3 output must carry a nodata value even when the source had none (Ruling A)"
+    ), "h3 output must carry a nodata value even when the source had none"
 
     # Build the hex polygon from cell_to_boundary [(lat, lon) -> (lon, lat)].
     boundary = _h3.cell_to_boundary(cellid_str)

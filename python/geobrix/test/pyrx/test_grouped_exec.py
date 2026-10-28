@@ -2,9 +2,9 @@
 
 Local Spark (local[2]) always returns file_supported()=False, so all tests
 exercise the fallback opener path over materialized tiles.  The FILE-stream
-fast path is validated on-cluster in Task 9.
+fast path is validated on-cluster.
 
-T9b fix: the worker no longer calls file_supported() to decide the FILE path;
+The worker no longer calls file_supported() to decide the FILE path;
 it keys off _file_ref column presence (has_fr_col) instead, avoiding the
 getActiveSession()==None pitfall on Spark-Connect worker threads.
 """
@@ -220,7 +220,7 @@ def test_grouped_map_unreadable_tile_degrades_gracefully(spark, gtiff_bytes, tmp
 
 
 # ---------------------------------------------------------------------------
-# Task 3: header-vs-pixel view contract (M2)
+# Header-vs-pixel view contract (M2)
 # ---------------------------------------------------------------------------
 
 
@@ -386,7 +386,7 @@ def test_grouped_tile_map_cellid_passed_to_core(spark, gtiff_bytes):
 
 
 # ---------------------------------------------------------------------------
-# Task 4: _make_opener weigher uses real FileRef.size (not STREAM_NOMINAL_BYTES)
+# _make_opener weigher uses real FileRef.size (not STREAM_NOMINAL_BYTES)
 # ---------------------------------------------------------------------------
 
 
@@ -413,7 +413,7 @@ def test_make_opener_weigher_uses_fileref_size():
 
 
 # ---------------------------------------------------------------------------
-# Task 5: byte-identical regression lock on the materialized grouped read path
+# Byte-identical regression lock on the materialized grouped read path
 # ---------------------------------------------------------------------------
 
 

@@ -1,6 +1,6 @@
 """Cross-tier parity: heavy (JAR) vs light (pygx) GridX error-handling contract.
 
-This is the Task-10 spine for the GridX error-handling plan.  It asserts that the
+This is the spine of the GridX error-handling contract.  It asserts that the
 heavy Scala tier (registered ``gbx_bng_*`` / ``gbx_quadbin_*`` SQL, run against the
 staged JAR) and the light pygx tier (its Python UDFs) agree on EVERY degenerate
 input the plan defines:
@@ -238,7 +238,7 @@ def test_bng_kringexplode_zero_rows_both_tiers(spark_with_jar):
 
     Light: direct UDTF call (PySpark UDTF syntax: SELECT ... FROM udtf_name(...)).
     Heavy: ``gbx_bng_kringexplode`` is a Spark Generator expression registered via
-    the JAR; Task 9 confirmed the Spark-4.0 invocation is
+    the JAR; the Spark-4.0 invocation is
     ``SELECT ... FROM gbx_bng_kringexplode(...)`` (NOT LATERAL VIEW).
     """
     from databricks.labs.gbx.gridx.bng import functions as hx

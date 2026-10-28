@@ -2773,7 +2773,7 @@ def rst_polygonize(
 
 
 # ---------------------------------------------------------------------------
-# Terrain analysis (DEM processing) - Wave 8a
+# Terrain analysis (DEM processing)
 #
 # Seven thin wrappers around gdal.DEMProcessing. All take a single source tile
 # and return a derived tile. Defaults match the GDAL conventions.
@@ -2936,7 +2936,7 @@ def rst_color_relief(
 
 
 # ---------------------------------------------------------------------------
-# Spectral indices (Wave 8b)
+# Spectral indices
 #
 # Five thin wrappers that build a per-pixel formula string from user-supplied
 # band indices and delegate to ``gbx_rst_mapalgebra`` internally. All return a

@@ -7,7 +7,7 @@ import { getActiveDataset } from './config/datasets';
 
 const { DEFAULT_MAP_CONTROLS } = uiStateUpdaters;
 
-// Initial map viewport comes from the active dataset registry (Task 5).
+// Initial map viewport comes from the active dataset registry.
 const { longitude, latitude, zoom } = getActiveDataset().defaultViewport;
 
 // Default map controls with AI Assistant and SQL Panel

@@ -1,4 +1,4 @@
-"""Task 3 (SP2-CRS): round-trip regression for writers: _write_lidar, cog_writer, vector, _write_netcdf, gridagg.
+"""Round-trip regression for writers: _write_lidar, cog_writer, vector, _write_netcdf, gridagg.
 
 Each test calls the ACTUAL production writer code path so it would FAIL if
 the corresponding writer fix were reverted (with Tasks 1-2 helpers intact).

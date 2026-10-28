@@ -1,4 +1,4 @@
-"""Task 3: Assert that hot-path light-tier write sites emit ZSTD+predictor.
+"""Assert that hot-path light-tier write sites emit ZSTD+predictor.
 
 Covers:
 - materialize_to_bytes on a virtual tile -> zstd
@@ -256,7 +256,7 @@ def test_auto_level_scales_with_tile_size(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 4: remaining light write sites — one assertion per site-FAMILY
+# Remaining light write sites — one assertion per site-FAMILY
 # ---------------------------------------------------------------------------
 
 # -- edit family (clip_to_geom / update_type / init_nodata / threshold / set_srid / band)

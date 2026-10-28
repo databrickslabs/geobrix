@@ -1040,7 +1040,7 @@ class CogGbxWriter(DataSourceWriter):
         overwrite,
         cog_blocksize=512,
         cog_overview_resampling="AVERAGE",
-        # Unified compression surface (Task 5).
+        # Unified compression surface.
         # ``compress`` = "auto" | "zstd" | "deflate" | "lzw" | "none".
         # Deprecated: ``cog_compression`` is the old option; maps to ``compress``.
         # When compress == "auto", resolves to "ZSTD" (the spec ZSTD baseline).
@@ -1140,7 +1140,7 @@ class CogGbxWriter(DataSourceWriter):
 
         if self.tile_envelope:
             # v2 (source, tile) envelope. driverMode over v2 tiles is a follow-on
-            # (see module docstring / task-5): the path-gather-then-driver-convert
+            # (see module docstring): the path-gather-then-driver-convert
             # path only makes sense for whole-file virtual tiles, and windowed/
             # clipped/materialized tiles would need bytes on the driver. For now
             # v2-tile input runs in DEFAULT (per-partition) mode only.
@@ -1670,7 +1670,7 @@ class CogGbxWriter(DataSourceWriter):
                 src_nodata = src.nodata
                 src_full_window = Window(0, 0, src.width, src.height)
 
-                # Ruling A: derive out_nodata unconditionally — h3 output MUST
+                # Derive out_nodata unconditionally — h3 output MUST
                 # always carry a nodata value so the hex-clip contract is honoured
                 # even when the source has none.
                 # A source with an alpha band that declares no NoData is the exception: a
@@ -1774,7 +1774,7 @@ class CogGbxWriter(DataSourceWriter):
                     )
 
                     # ── Hex-clip: ALWAYS set pixels outside the hexagon to
-                    # out_nodata (unconditional — Ruling A).
+                    # out_nodata (unconditional).
                     # h3.cell_to_boundary returns [(lat, lon), ...]; swap to
                     # (lon, lat) for rasterio (geographic CRS: x=lon, y=lat).
                     boundary = h3.cell_to_boundary(cell.cellid)
@@ -1829,7 +1829,7 @@ class CogGbxWriter(DataSourceWriter):
                         "dtype": out_dtype,
                         "crs": dst_crs,
                         "transform": dst_transform,
-                        "nodata": out_nodata,  # set, except over an alpha band (Ruling A)
+                        "nodata": out_nodata,  # set, except over an alpha band
                     }
                     profile.update(
                         _comp.creation_opts(
@@ -2289,7 +2289,7 @@ class CogGbxWriter(DataSourceWriter):
                 bigtiff=self.cog_bigtiff,
             )
 
-        # ── Task 3: mosaic VRT index ──────────────────────────────────────
+        # ── Mosaic VRT index ──────────────────────────────────────
         # Collect all mini-COG paths written by _write_mosaic() across all
         # partitions and build a single portable VRT index file.
         # Guarded by write_vrt=True (default); mosaic_opts=None (single-COG

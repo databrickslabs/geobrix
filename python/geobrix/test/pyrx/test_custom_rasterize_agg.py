@@ -1,4 +1,4 @@
-"""TDD Stage 3 Task 7: custom rasterize_agg + consolidation-invariance checks.
+"""Custom rasterize_agg + consolidation-invariance checks.
 
 Failing tests before implementation (Step 2 run-to-fail):
   - test_rst_custom_rasterize_agg_presence_mask

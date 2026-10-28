@@ -1,8 +1,6 @@
 """Tests for the budget_for() authority in pyrx/core/budget.py.
 
-Phase 1 covers driver_merge intent only.  Duplicate coverage of the
-_merge_budget_bytes helper in test_lidar_writer.py is intentional — Task 2
-removes those originals once the lidar writer delegates here.
+Covers the driver_merge and dense_alloc intents.
 """
 
 import pytest
@@ -90,7 +88,7 @@ def test_unknown_intent_raises():
         budget_for("no_such_intent", 0)
 
 
-# --- dense_alloc intent (Task 1) ---
+# --- dense_alloc intent ---
 
 _INFRA_GPU1 = {
     "host_ram_available_mb": 30 * 1024,  # 30 GiB available

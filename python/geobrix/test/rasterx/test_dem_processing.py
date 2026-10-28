@@ -1,9 +1,9 @@
-"""End-to-end Python test for the Wave 8a terrain-analysis functions.
+"""End-to-end Python test for the terrain-analysis functions.
 
 One parameterized round-trip across all 7 ``gdal.DEMProcessing`` wrappers:
 load an SRTM elevation tile, apply the function, assert the JVM bindings
-fire and a non-empty raster tile comes back. Following the Wave 8a budget
-guideline, we deliberately cover all 7 functions in one parametrized test
+fire and a non-empty raster tile comes back. To keep the suite lean,
+we deliberately cover all 7 functions in one parametrized test
 rather than 7 near-identical copies.
 """
 

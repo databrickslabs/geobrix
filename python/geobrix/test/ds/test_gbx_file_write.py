@@ -1,4 +1,4 @@
-"""Task 3: generic gbx_file_write composes open_for_write."""
+"""Generic gbx_file_write composes open_for_write."""
 
 from unittest.mock import MagicMock, patch
 

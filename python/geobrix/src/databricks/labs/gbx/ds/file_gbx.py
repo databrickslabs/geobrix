@@ -1682,7 +1682,7 @@ def open_for_read(
 
     Returns:
         The source path unchanged. FILE routing is the caller's responsibility
-        (see Task 4 for reader/writer layer integration). Caller adapts based on
+        (the reader/writer layers integrate it). Caller adapts based on
         the resolved tier and access mode.
 
     Raises:

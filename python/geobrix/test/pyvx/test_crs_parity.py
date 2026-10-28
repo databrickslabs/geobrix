@@ -549,7 +549,7 @@ def test_st_transformcrs_parity_fuzzy_matched_proj4_does_not_leak_into_math(
 def test_st_transformcrs_parity_unresolvable_embedded_srid_returns_null(heavy, light):
     """An SRID in no registry returns NULL on both tiers (data condition, not a param error).
 
-    Pre-Task-2/3 both tiers returned the input unchanged (degrade).  The new contract is
+    Before this contract both tiers returned the input unchanged (degrade).  The new contract is
     NULL: an embedded SRID that cannot be resolved means the CRS of the data is unknown,
     so the result is meaningless and suppressed rather than passed through silently.
     """
@@ -565,7 +565,7 @@ def test_st_transformcrs_parity_unresolvable_embedded_srid_returns_null(heavy, l
 def test_st_transformcrs_parity_unresolvable_source_crs_raises_both_tiers(heavy, light):
     """An explicit source_crs that cannot be resolved RAISES on both tiers (parameter condition).
 
-    Pre-Task-2/3 both tiers returned the input unchanged (degrade).  The new contract treats
+    Before this contract both tiers returned the input unchanged (degrade).  The new contract treats
     an explicit source_crs arg as a PARAMETER: an invalid value is a caller error, not a data
     condition, so both tiers raise rather than silently passing through unprojected bytes.
     """
@@ -582,7 +582,7 @@ def test_st_transformcrs_parity_unresolvable_source_crs_raises_both_tiers(heavy,
 def test_st_transformcrs_parity_no_source_at_all_returns_null(heavy, light, geom):
     """A plain geometry with no source CRS returns NULL on both tiers (data condition).
 
-    Pre-Task-2/3 both tiers returned the input unchanged (degrade).  The new contract is
+    Before this contract both tiers returned the input unchanged (degrade).  The new contract is
     NULL: if there is no source CRS the reprojection is undefined, not a pass-through.
     """
     heavy_value = _heavy_binary(
@@ -594,7 +594,7 @@ def test_st_transformcrs_parity_no_source_at_all_returns_null(heavy, light, geom
 
 
 # ---------------------------------------------------------------------------
-# Shared-corpus parity: the Task-4 gate contract
+# Shared-corpus parity: the gate contract
 # ---------------------------------------------------------------------------
 #
 # These tests assert the OUTCOME CLASS (null / raise / value) agrees across tiers
@@ -805,7 +805,7 @@ def test_st_transformcrs_parity_mixed_dimensionality_wkt_does_not_raise(heavy, l
 def test_st_transformcrs_parity_mixed_dim_wkt_null_cases(heavy, light, geom, source):
     """Mixed-dimensionality WKT x NULL path: both tiers return NULL, no raise.
 
-    Pre-Task-2/3 both tiers returned the input unchanged (degrade).  The new contract is
+    Before this contract both tiers returned the input unchanged (degrade).  The new contract is
     NULL for data conditions (unresolvable embedded SRID, no source CRS).
 
     The test is split from the bad-source-crs case, which now RAISES on both tiers.
@@ -823,7 +823,7 @@ def test_st_transformcrs_parity_mixed_dim_wkt_null_cases(heavy, light, geom, sou
 def test_st_transformcrs_parity_mixed_dim_wkt_bad_source_raises(heavy, light):
     """Mixed-dimensionality WKT x bad explicit source_crs: both tiers RAISE.
 
-    Pre-Task-2/3 both tiers returned the input unchanged (degrade).  The new contract is
+    Before this contract both tiers returned the input unchanged (degrade).  The new contract is
     RAISE for parameter conditions: an explicitly-provided source_crs that cannot be
     resolved is a caller error, so both tiers raise rather than silently degrading.
     """

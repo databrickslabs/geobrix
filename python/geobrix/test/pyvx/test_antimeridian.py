@@ -63,7 +63,7 @@ def test_st_wrapx_inclusive_positive_direction_moves_x_at_origin():
 
 
 # ---------------------------------------------------------------------------
-# st_split acceptance corpus (Task 3)
+# st_split acceptance corpus
 # ---------------------------------------------------------------------------
 
 _MERIDIAN = LineString([(180.0, -90.0), (180.0, 90.0)])

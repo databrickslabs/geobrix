@@ -1,4 +1,4 @@
-"""Task 5 (SP2-CRS): bench CRS round-trip regressions — grouped_file, spec.
+"""Bench CRS round-trip regressions — grouped_file, spec.
 
 These tests are designed so they FAIL if the production edits are reverted:
 

@@ -3,7 +3,7 @@
 Faithful port of ``BNG.polyfill`` (gridx/grid/BNG.scala line 207): seed the queue
 with the cell ids of every geometry coordinate plus the centroid, BFS-expand via
 ``kLoop(.,1)``, and include a cell iff its CENTROID is ``contains``-ed by the
-geometry. Exact cell-set parity vs heavy is the bar (locked in Task 9); these
+geometry. Exact cell-set parity vs heavy is the bar; these
 tests pin the membership semantics that parity depends on.
 """
 

@@ -126,7 +126,7 @@ def plot_interactive(
                               :func:`~databricks.labs.gbx.vizx._layers.as_layers`
                               (GeoDataFrame, bytes pmtiles archive, etc.).
         basemap:              ``"carto-positron"`` (default) or ``"none"``.
-        simplify_tiles_spec:  Optional simplification spec (Task 11, not yet
+        simplify_tiles_spec:  Optional simplification spec (not yet
                               implemented — pass ``None``).
         max_embed_mb:         Maximum HTML embed size in mebibytes. Default
                               ``None`` resolves to 6 MB when ``set_cell_max_output``

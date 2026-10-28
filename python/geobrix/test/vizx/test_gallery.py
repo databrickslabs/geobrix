@@ -384,7 +384,7 @@ def test_plot_gallery_auto_title_n_of_m():
 
 
 # ---------------------------------------------------------------------------
-# Task 2 wiring test: _resolve_sources delegates to list_files (fail-on-revert)
+# Wiring test: _resolve_sources delegates to list_files (fail-on-revert)
 # ---------------------------------------------------------------------------
 
 

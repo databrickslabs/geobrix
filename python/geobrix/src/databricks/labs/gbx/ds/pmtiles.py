@@ -73,7 +73,7 @@ class PMTilesGbxDataSource(DataSource):
 
     def reader(self, schema: StructType) -> DataSourceReader:
         # Per-branch (lazy) imports so the raster reader works before the archive
-        # reader exists (Task 2 lands before Task 3).
+        # reader exists.
         source = self.options.get("source", "raster").lower()
         if source == "raster":
             from databricks.labs.gbx.ds._pmtiles_read import PMtilesRasterReader

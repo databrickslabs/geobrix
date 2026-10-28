@@ -1,8 +1,8 @@
 """Tests for lidar_gbx DataSource writer (sharded parts mode).
 
 TDD: new tests written BEFORE implementation (RED -> GREEN).
-Task 1 test (write_xyz_laz) is retained here; Task 2 adds the DataSource writer tests.
-Task 3 adds singleFile + merge mode tests (M1/M2/M3).
+The write_xyz_laz test, the DataSource writer tests and the singleFile + merge
+mode tests (M1/M2/M3) live here.
 """
 
 import numpy as np
@@ -175,7 +175,7 @@ def test_writer_rejects_partial_rgb(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 3: singleFile mode
+# singleFile mode
 # ---------------------------------------------------------------------------
 
 
@@ -208,7 +208,7 @@ def test_writer_single_file_merges_to_one(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 3: post-hoc merge mode
+# Post-hoc merge mode
 # ---------------------------------------------------------------------------
 
 
@@ -245,7 +245,7 @@ def test_writer_merge_folds_parts_and_deletes(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 4: writer-level gate tests (mergeMaxMB option)
+# Writer-level gate tests (mergeMaxMB option)
 # ---------------------------------------------------------------------------
 
 

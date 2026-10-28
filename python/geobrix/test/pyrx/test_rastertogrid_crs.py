@@ -1,4 +1,4 @@
-"""Task 3 (RasterX CRS-100, Group C): rst_{h3,quadbin}_rastertogrid* must
+"""rst_{h3,quadbin}_rastertogrid* must
 auto-reproject a differently-CRS'd raster to grid-native EPSG:4326 (instead of
 silently treating easting/northing as lon/lat), with a `crs` override for a
 CRS-less-but-known raster, and never error on a CRS-less raster.

@@ -183,7 +183,7 @@ def test_partitions_from_tile_rows_window_only_no_rasterio_open(tmp_path, monkey
 def test_partitions_from_tile_rows_path_only_opens_header(tmp_path, monkeypatch):
     """Row with only path (no window, no dims), materialized case → header read for that file only.
 
-    Note: with emit_virtual=True, Task 5 (lazy planning) makes path-only rows return
+    Note: with emit_virtual=True, lazy planning makes path-only rows return
     window=None without opening the header at plan time — the window is resolved lazily
     in read(). This test uses emit_virtual=False (materialized) to verify the path-only
     header-open behaviour that still applies for non-virtual tiles.
@@ -434,7 +434,7 @@ def test_partitions_manifest_full_spark_read(tmp_path, spark, kind):
 
 
 # ---------------------------------------------------------------------------
-# Task 3: skipOrdering DataSource option
+# skipOrdering DataSource option
 # ---------------------------------------------------------------------------
 
 

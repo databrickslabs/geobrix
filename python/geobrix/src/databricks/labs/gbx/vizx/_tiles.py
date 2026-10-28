@@ -74,7 +74,7 @@ def _collect_bounded(df, tile_col, limit, *, warn_overflow=True):
 
 
 # ---------------------------------------------------------------------------
-# Mosaic (Task 3)
+# Mosaic
 # ---------------------------------------------------------------------------
 
 
@@ -185,7 +185,7 @@ def plot_tiles(
         ``"facet"`` (default) — grid of thumbnail panels, up to ``limit`` tiles.
         ``"first"`` — render only the first tile.
         ``"mosaic"`` — stitch same-CRS tiles into one georeferenced image; raises
-        ``ValueError`` on mixed CRS (Task 3).
+        ``ValueError`` on mixed CRS.
     limit:
         Maximum number of tiles collected from the DataFrame. Defaults to 25 for
         ``facet``, 1 for ``first``, 64 for ``mosaic``. The whole DataFrame is

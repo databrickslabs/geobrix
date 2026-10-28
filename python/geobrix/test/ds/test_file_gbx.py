@@ -136,7 +136,7 @@ def test_detect_tier_both_file_probes_fail_falls_back_to_fuse():
     assert tier == "fuse"
 
 
-# Regression tests for the capability-detection bug (Task 10)
+# Regression tests for the capability-detection bug
 # https://github.com/databrickslabs/geobrix/issues/XXX
 # Bug: PATH_NOT_FOUND proves the function EXISTS, but was treated as "unavailable"
 
@@ -2184,7 +2184,7 @@ def test_resolve_local_path_raises_on_explicit_file_fuse_tier():
 
 
 # ---------------------------------------------------------------------------
-# Task 4 Fix A: _enumerate_fuse prunes hidden directories
+# _enumerate_fuse prunes hidden directories
 # ---------------------------------------------------------------------------
 
 
@@ -2245,7 +2245,7 @@ def test_enumerate_fuse_includes_hidden_subdirectory_files_when_enabled(tmp_path
 
 
 # ---------------------------------------------------------------------------
-# resolve_file_table tests (Task 1 — shared core for FILE-column table reads)
+# resolve_file_table tests (shared core for FILE-column table reads)
 # ---------------------------------------------------------------------------
 
 
@@ -2358,7 +2358,7 @@ def test_resolve_file_table_no_file_typed_column_in_result(spark):
 
 
 # ---------------------------------------------------------------------------
-# gbx_file_read table mode — Task 3: real size + ordering
+# gbx_file_read table mode: real size + ordering
 # ---------------------------------------------------------------------------
 
 
@@ -2384,8 +2384,8 @@ def _make_sized_path_table(spark, name):
 def test_gbx_file_read_table_carries_real_size_and_order(spark):
     """gbx_file_read table mode returns real size (not all NULL) and rows ordered by path.
 
-    The table has a ``size`` column; the pre-Task-3 implementation forced
-    ``CAST(NULL AS BIGINT) AS size``.  After Task 3 the table-mode branch
+    The table has a ``size`` column; the earlier implementation forced
+    ``CAST(NULL AS BIGINT) AS size``.  The table-mode branch now
     delegates to ``resolve_file_table`` so real sizes are carried through.
     Ordering is also asserted: rows must be sorted by path asc, nulls last.
     """

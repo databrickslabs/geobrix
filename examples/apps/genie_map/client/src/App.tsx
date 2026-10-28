@@ -79,7 +79,7 @@ const StyledVerticalResizeHandle = styled(PanelResizeHandle)`
 // ---------------------------------------------------------------------------
 // Registry-driven layer wiring
 //
-// The active dataset (Task 5 registry) is the single source of truth for which
+// The active dataset (from the registry) is the single source of truth for which
 // map layers exist, which source table feeds each, and their zoom-visibility
 // bands. Adding/removing a layer is a registry edit — no changes here.
 // ---------------------------------------------------------------------------

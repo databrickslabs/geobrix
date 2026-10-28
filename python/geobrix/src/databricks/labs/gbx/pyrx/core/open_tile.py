@@ -1016,7 +1016,7 @@ def _tile_to_bytes(vt: VirtualTile) -> Optional[bytes]:
         local_path = _resolve_local_or_windowed(vt, None, stack)
         with rasterio.open(local_path) as src:
             # Resolve window=None → full extent, mirroring open_tile() semantics.
-            # A deferred whole-file virtual tile (Task 2) carries window=None;
+            # A deferred whole-file virtual tile carries window=None;
             # materialising it must produce the same bytes as an explicit full window.
             if vt.window is None:
                 window = Window(0, 0, src.width, src.height)

@@ -342,7 +342,7 @@ def test_aspect_scale_invariant_matches_gdaldem():
     direction). pyrx must match: the angle comes from the raw gradient ratio,
     not the anisotropic geographic scale. This guards against re-introducing the
     dzdx/xs, dzdy/ys division, which shifted the geographic aspect distribution
-    away from heavyweight GDAL (Task 5 acceptance-gate divergence)."""
+    away from heavyweight GDAL (the divergence the tier parity gate caught)."""
     dem = (
         np.tile(np.arange(12, dtype="float32"), (12, 1))
         + np.arange(12, dtype="float32")[:, None]

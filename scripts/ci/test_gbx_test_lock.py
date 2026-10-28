@@ -399,7 +399,7 @@ def _kill_a_run_that_started_work(sandbox, secs):
     )
     _wait_for(lambda: "mvn start-A" in _lines(sandbox))
     _kill_host_side(run)
-    # What Task 43 hit: the host-side lock is gone ...
+    # What a killed host-side wrapper leaves: the host-side lock is gone ...
     _wait_for(lambda: _can_lock(sandbox.lock_file))
     # ... but the work is still running in the container, and still holds its own lock.
     assert not _can_lock(sandbox.work_lock_file)

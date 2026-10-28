@@ -1,4 +1,4 @@
-"""Task 7 tests: plot_interactive on MapLibre GL; folium retired."""
+"""Tests for plot_interactive on MapLibre GL; folium retired."""
 
 import builtins
 

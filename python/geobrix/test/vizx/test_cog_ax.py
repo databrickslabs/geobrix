@@ -1,4 +1,4 @@
-"""TDD test for plot_cog ax= parameter (Task 2: static multi-layer composition)."""
+"""TDD test for plot_cog ax= parameter (static multi-layer composition)."""
 
 import matplotlib
 

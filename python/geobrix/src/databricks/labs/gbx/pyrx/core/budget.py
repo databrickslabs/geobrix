@@ -180,7 +180,7 @@ def plan_layout(
 
 
 # ---------------------------------------------------------------------------
-# Budget authority — driver_merge (Phase 1) + dense_alloc (Phase 2) intents
+# Budget authority — driver_merge + dense_alloc intents
 # ---------------------------------------------------------------------------
 
 _MERGE_FALLBACK_BYTES = 512 * _MIB  # conservative floor if the RAM probe fails

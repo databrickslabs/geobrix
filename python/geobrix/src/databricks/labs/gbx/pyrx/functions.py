@@ -191,7 +191,7 @@ def register(spark: SparkSession = None, only: Optional[List[str]] = None) -> No
     globals()["_gbx_registered"] = True
 
 
-# --- Virtual-aware tile helpers (Increment 4) -------------------------------
+# --- Virtual-aware tile helpers ---------------------------------------------
 # These let a UDF body consume a v1 tile struct, a v2 tile struct, a virtual
 # (bytes-free) tile, or raw bytes uniformly, and shape a tile-returning result
 # via the shared ``open_tile.shape_output`` force-output helper. The operation
@@ -296,7 +296,7 @@ def _shaped_result_row(
     return shaped.to_row()
 
 
-# --- Virtual-aware accessor UDF factories (Increment 4) ---------------------
+# --- Virtual-aware accessor UDF factories -----------------------------------
 # Accessors take the FULL tile struct (not just the raster subfield) so a
 # virtual tile's ``path`` is reachable. HEADER-ONLY accessors answer from the
 # file header via ``open_header`` (no pixel read; window-correct for windowed
@@ -344,7 +344,7 @@ def _pixel_accessor_udf(core_fn, return_type):
     return _udf
 
 
-# --- FILE-aware 2-arg UDF factories (Increment 5 / Task 4) ------------------
+# --- FILE-aware 2-arg UDF factories ------------------
 # These produce UDFs with signature (tile: Struct, file_ref: FileRef|null).
 # The SQL registry keeps pointing at the single-arg ``_u_*`` UDFs (fallback path
 # per spec §4.3); only the public Python Column bindings use ``_uf_*``.
@@ -437,7 +437,7 @@ def _metadata_udf(tile):
         return None
 
 
-# --- FILE-aware 2-arg UDF singletons (Task 4 / Increment 5) ----------------
+# --- FILE-aware 2-arg UDF singletons ----------------
 # Used by the public Python Column bindings; SQL registry still uses ``_u_*``.
 # Header-only (open_header — no pixel read):
 _uf_height = _header_accessor_udf_file(accessors.height, IntegerType())
@@ -579,7 +579,7 @@ _u_format = _header_accessor_udf(accessors.format, StringType())
 _u_width = _header_accessor_udf(accessors.width, IntegerType())
 
 # Back-compat aliases: rst_width/rst_avg were wired to explicit UDF singletons
-# in Task 6; keep the names pointing at the factory-built virtual-aware UDFs.
+# before the FILE-aware factories; keep the names pointing at the factory-built virtual-aware UDFs.
 _width_header_udf = _u_width
 _avg_pixel_udf = _u_avg
 
@@ -6403,7 +6403,7 @@ def rst_color_relief(
 # virtual tile's ``path`` is reachable; the header/pixel split is decided by the
 # factory that built each ``_u_*`` UDF (open_header vs _open).
 #
-# FILE-aware wiring (Task 4): the public Python bindings now call the 2-arg
+# FILE-aware wiring: the public Python bindings now call the 2-arg
 # ``_uf_*`` UDFs (Struct + FileRef), injecting a plan-level file_ref via
 # ``file_ref_arg()``.  When FILE is unsupported (local / non-DBR / env-disabled)
 # ``file_ref_arg`` returns ``F.lit(None)`` and the UDF falls back to the
@@ -7484,7 +7484,7 @@ def _grid_flat_schema(measure_type, cellid_type=LongType()):
 _GRID_FLAT_DOUBLE_SCHEMA = _grid_flat_schema(DoubleType())
 # BNG renders a formatted BNG string (e.g. "TQ3080") as cellID, matching heavy
 # RST_BNG_RasterToGrid* (StringType cellID). All measures -> DOUBLE (count
-# changed from INT to DOUBLE in Stage 2 Task 8 for heavy-tier parity).
+# changed from INT to DOUBLE for heavy-tier parity).
 _GRID_FLAT_STRING_SCHEMA = _grid_flat_schema(DoubleType(), StringType())
 
 

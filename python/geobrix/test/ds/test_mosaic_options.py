@@ -1,4 +1,4 @@
-"""Task 1 (SDD — Phase A native mini-COG mosaic): MosaicOptions parser + validator.
+"""MosaicOptions parser + validator.
 
 Pure-Python tests — no Spark, no JAR required.  Validates the parser for all
 mosaic-mode option combinations and their error conditions.
@@ -309,7 +309,7 @@ def test_quadbin_pyramid_options_deferred():
         )
 
 
-# ── h3 acceptance (Task 2) ───────────────────────────────────────────────────
+# ── h3 acceptance ───────────────────────────────────────────────────
 
 
 def test_h3_requires_grid_resolution():
@@ -368,7 +368,7 @@ def test_h3_pyramid_options_deferred():
         parse_mosaic_options({**base, "gridMinResolution": "5"})
 
 
-# ── bng acceptance (Task 2) ──────────────────────────────────────────────────
+# ── bng acceptance ──────────────────────────────────────────────────
 
 
 def test_bng_gridsystem_accepted_int_index():

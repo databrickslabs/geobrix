@@ -1,4 +1,4 @@
-"""TDD tests for FILE-access matrix fields on ResultRow (Phase 2 bench, Task 1)."""
+"""TDD tests for FILE-access matrix fields on ResultRow."""
 
 import dataclasses
 

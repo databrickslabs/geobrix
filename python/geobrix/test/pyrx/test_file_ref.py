@@ -217,7 +217,7 @@ def test_open_windowed_via_fileref_windowless_full_extent(gtiff_bytes):
 
 
 # ---------------------------------------------------------------------------
-# Tests for open_tile file_ref integration (Task 3)
+# Tests for open_tile file_ref integration
 # ---------------------------------------------------------------------------
 
 
@@ -318,7 +318,7 @@ def test_open_tile_file_ref_degrades_to_fallback(gtiff_bytes):
 
 
 # ---------------------------------------------------------------------------
-# Tests for file_ref_arg injection (Task 4)
+# Tests for file_ref_arg injection
 # ---------------------------------------------------------------------------
 
 

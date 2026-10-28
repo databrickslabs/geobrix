@@ -105,7 +105,7 @@ def test_materialize_strips_pending_keys():
 
 
 # ---------------------------------------------------------------------------
-# Task 2: rst_initnodata records pending nodata on virtual tiles, emits v2
+# rst_initnodata records pending nodata on virtual tiles, emits v2
 # ---------------------------------------------------------------------------
 def _spark():
     return (
@@ -153,7 +153,7 @@ def test_initnodata_materialize_true_bakes_bytes():
 
 
 # ---------------------------------------------------------------------------
-# Task 3: rst_setsrid / rst_band record on virtual, v2 everywhere
+# rst_setsrid / rst_band record on virtual, v2 everywhere
 # ---------------------------------------------------------------------------
 
 
@@ -191,7 +191,7 @@ def test_setsrid_band_v2_struct():
 
 
 # ---------------------------------------------------------------------------
-# Task 4: rst_memsize virtual-aware
+# rst_memsize virtual-aware
 # ---------------------------------------------------------------------------
 
 
@@ -213,7 +213,7 @@ def test_memsize_materialized_is_byte_length():
 
 
 # ---------------------------------------------------------------------------
-# Task 5: accumulated instructions compose + consume-on-materialize invariant
+# Accumulated instructions compose + consume-on-materialize invariant
 # ---------------------------------------------------------------------------
 
 

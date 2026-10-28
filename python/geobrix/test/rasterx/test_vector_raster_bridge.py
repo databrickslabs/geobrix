@@ -1,4 +1,4 @@
-"""End-to-end Python test for the Wave 2 vector<->raster bridge functions.
+"""End-to-end Python test for the vector<->raster bridge functions.
 
 One round-trip test: rasterize a square polygon, then polygonize the resulting
 tile, and assert the burn value survives. This confirms the JVM bindings fire

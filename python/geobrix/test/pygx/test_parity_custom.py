@@ -20,7 +20,7 @@ first (via SQL on the shared names), then register heavy (which OVERWRITES the
 ``test_parity_bng.py`` / ``test_parity_quadbin.py``). The grid spec is built with
 ``gbx_custom_grid(...)`` so the SAME validated STRUCT flows into both tiers.
 
-Coverage (Task 9):
+Coverage:
   * EXACT cell id (``pointascell``) and cell set (``polyfill``, ``kring``).
   * Edge cells: the origin cell ``(100, 100)`` and a max-corner cell near
     ``(999900, 999900)`` — the latter exercises the ``kring`` upper clamp
@@ -401,7 +401,7 @@ def test_custom_y_nan_degrades_to_null_both_tiers(spark_with_jar):
     assert light is None and heavy is None
 
 
-# --- kloop + distance cross-tier parity (Stage 3 / Task 4) ------------------------------------
+# --- kloop + distance cross-tier parity ------------------------------------
 
 
 def test_custom_kloop_distance_parity(spark_with_jar):

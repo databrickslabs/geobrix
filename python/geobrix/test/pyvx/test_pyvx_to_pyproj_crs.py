@@ -1,4 +1,4 @@
-"""Task 5 (SP2-CRS): pyvx/_crs.py uses to_pyproj_crs instead of inline from_authority pattern."""
+"""pyvx/_crs.py uses to_pyproj_crs instead of inline from_authority pattern."""
 
 import pyproj
 

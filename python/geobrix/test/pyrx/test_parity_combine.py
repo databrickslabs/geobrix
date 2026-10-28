@@ -1,7 +1,7 @@
 """Cross-tier (light pyrx vs heavy Scala/GDAL) parity for the combine family
 and rst_align_to.
 
-Stage-3 Phase 4 CAPSTONE (Task 14).  Both tiers run on the SAME in-memory
+Capstone parity check.  Both tiers run on the SAME in-memory
 raster stack and their outputs compared pixel-by-pixel.
 
 Stack layout (2×2 FLOAT64 tiles, row-major, NoData=-9999):

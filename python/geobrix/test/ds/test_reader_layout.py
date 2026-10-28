@@ -1,4 +1,4 @@
-"""Task 8: reader layout conventions — path-ordered partition emission.
+"""Reader layout conventions — path-ordered partition emission.
 
 Verifies:
 - Raster manifest/tilesTable path: partitions sorted by file_path.

@@ -223,13 +223,13 @@ class RasterGbxWriter(DataSourceWriter):
         cog: bool = False,
         cog_blocksize: int = 512,
         cog_overview_resampling: str = "AVERAGE",
-        # Unified compression surface (Task 5).
+        # Unified compression surface.
         # ``compress`` = "auto" (default) | "zstd" | "deflate" | "lzw" | "none".
         # ``compress_level`` and ``predictor`` refine it when compress != "auto".
         # When compress == "auto", explicit level/predictor are ignored (with a
         # UserWarning from the authority).
         # Deprecated: ``cog_compression`` is the old single-codec option accepted
-        # by the pre-Task-5 API; it still works but maps to ``compress`` internally.
+        # by the earlier API; it still works but maps to ``compress`` internally.
         # If BOTH are supplied, ``compress`` wins (callers should migrate).
         compress: str = "auto",
         compress_level: Optional[int] = None,

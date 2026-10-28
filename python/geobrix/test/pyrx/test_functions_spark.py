@@ -933,7 +933,7 @@ def test_rst_xyzpyramid_array(spark):
 
 def test_sql_rst_tilexyz_accepts_rescale(spark):
     # Regression: gbx_rst_tilexyz must accept the optional 8th arg (rescale).
-    # Uses the SQL surface to verify arity after Task 4 registration.
+    # Uses the SQL surface to verify arity after registration.
     prx.register(spark)
     df = _rgb_tile_df(spark)
     df.createOrReplaceTempView("_tilexyz_rescale")
@@ -1969,7 +1969,7 @@ def test_rst_viewshed_column_api(spark):
 
 
 # ---------------------------------------------------------------------------
-# Stage 2 Task 8: coverage/assignment on rastertogrid + tessellate surface
+# Coverage/assignment on rastertogrid + tessellate surface
 # ---------------------------------------------------------------------------
 
 
@@ -2007,7 +2007,7 @@ def test_light_rastertogrid_coverage_assignment_4arg_sql(spark):
 
 
 def test_light_rastertogrid_count_schema_is_double(spark):
-    """After Task 8, rastertogridcount measure column must be DoubleType (not Int/Long)."""
+    """The rastertogridcount measure column must be DoubleType (not Int/Long)."""
     from pyspark.sql.types import DoubleType
 
     df = _tile_df(spark, width=4, height=3, count=1)
@@ -2024,7 +2024,7 @@ def test_light_rastertogrid_count_schema_is_double(spark):
         measure_field = next(fld for fld in schema.fields if fld.name == "measure")
         assert isinstance(
             measure_field.dataType, DoubleType
-        ), f"{name}: measure must be DoubleType after Task 8; got {measure_field.dataType}"
+        ), f"{name}: measure must be DoubleType; got {measure_field.dataType}"
 
 
 def test_light_tessellate_assignment_coverage_4arg_sql(spark):

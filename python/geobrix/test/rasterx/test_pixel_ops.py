@@ -102,7 +102,7 @@ def spark():
     ],
 )
 def test_pixel_ops_roundtrip(spark, label, sql_expr, expected_col, validator):
-    """Each Wave 8d pixel-ops function returns a non-null result via SQL."""
+    """Each pixel-ops function returns a non-null result via SQL."""
     if not Path(SRTM_PATH).exists():
         pytest.skip(f"sample DEM not present: {SRTM_PATH}")
 

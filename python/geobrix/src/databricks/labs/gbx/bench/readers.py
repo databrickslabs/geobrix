@@ -2834,7 +2834,7 @@ def run_vector_table_read_sweep(
     """Time a vector FILE-column-table read via ``vector_file_read`` table mode.
 
     Reads the FILE-column Delta table written by the gpkg write leg (via
-    ``vector_file_write``) back through the Task-2 vector table-read entry:
+    ``vector_file_write``) back through the vector table-read entry:
     ``vector_file_read(spark, table, source_type='table')``.  Measures wall-clock
     read+decode time and feature-count parity.
 

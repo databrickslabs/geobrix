@@ -130,7 +130,7 @@ def test_merge_tiles_same_origin_overlap_winner_order_invariant():
     assert np.all(arr == winner)
 
 
-# --- merge_tiles streaming path (Task 3) ------------------------------------
+# --- merge_tiles streaming path ------------------------------------
 
 
 def test_merge_streaming_matches_in_ram(monkeypatch):
@@ -598,7 +598,7 @@ def test_derivedband_tiles_sum_across_group():
 
 # --- corrupt-member skip in light-tier helpers --------------------------------
 # These tests exercise the skip-and-count behaviour added to _merge_bytes,
-# _combineavg_bytes, and _frombands_bytes (Task 5).  Each helper now wraps the
+# _combineavg_bytes, and _frombands_bytes.  Each helper now wraps the
 # per-member open/materialize in try/except so a corrupt-but-non-empty member is
 # dropped instead of raising.
 
@@ -868,7 +868,7 @@ class TestGroupedAggUdfSkipsCorrupt:
 
 
 # ---------------------------------------------------------------------------
-# Task 8 — aggregators never inject try_to_file (Spark 4 nondeterminism guard)
+# Aggregators never inject try_to_file (Spark 4 nondeterminism guard)
 # ---------------------------------------------------------------------------
 # try_to_file is nondeterministic; Spark 4 rejects nondeterministic expressions
 # as aggregate function arguments (AGGREGATE_FUNCTION_WITH_NONDETERMINISTIC_EXPRESSION).

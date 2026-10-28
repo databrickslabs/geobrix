@@ -1,7 +1,7 @@
 """Cross-tier (light pyrx vs heavy Scala/GDAL) parity for the 10 custom-grid
 raster functions.
 
-THE Phase-3 capstone parity def-of-done (Task 8). Both tiers are run on the SAME
+The capstone parity check. Both tiers are run on the SAME
 in-memory raster + custom-grid struct and their outputs compared:
 
   * 8 custom reducers (``rst_custom_rastertogrid{avg,count,max,min,median,sum,

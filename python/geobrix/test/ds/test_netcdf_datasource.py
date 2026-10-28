@@ -82,7 +82,7 @@ def _write_regular_grid_two(path):
             v[:] = np.arange(12, dtype="float32").reshape(3, 4)
 
 
-# --- raster mode (Task 3) ---------------------------------------------------
+# --- raster mode ---------------------------------------------------
 
 
 def test_raster_schema_matches_tile_schema():
@@ -139,7 +139,7 @@ def test_raster_mode_skips_curvilinear_variable(spark, tmp_path):
     assert df.count() == 0
 
 
-# --- vector mode (Task 4) ---------------------------------------------------
+# --- vector mode ---------------------------------------------------
 
 
 def test_vector_schema_columns(tmp_path):
@@ -315,7 +315,7 @@ def test_vector_bare_load_returns_all_dsg_variables(spark, tmp_path):
     assert df.count() == 5
 
 
-# --- registration (Task 5) --------------------------------------------------
+# --- registration --------------------------------------------------
 
 
 def test_register_exposes_netcdf_gbx(spark, tmp_path):

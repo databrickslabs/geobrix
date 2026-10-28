@@ -1,4 +1,4 @@
-"""TDD tests for Task 8: file_mode labeling on run_grouped_file / _ok_row / _err_row.
+"""Tests for file_mode labeling on run_grouped_file / _ok_row / _err_row.
 
 Tests that ``_ok_row`` / ``_err_row`` accept a ``file_mode`` param and store it
 on the returned ``ResultRow``, and that ``run_grouped_file`` accepts and threads

@@ -426,7 +426,7 @@ def test_auto_does_not_crush_heavy(heavy_registered):
     )
 
 
-# --- Task 3: cross-tier RGBA parity (shape + alpha-position + RGB distribution) ---
+# --- Cross-tier RGBA parity (shape + alpha-position + RGB distribution) ---
 
 
 def _make_uint16_with_nodata_hole(width=64, height=64, lo=8000, hi=12000, nodata=0):

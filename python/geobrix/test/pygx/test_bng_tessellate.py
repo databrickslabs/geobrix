@@ -1,4 +1,4 @@
-"""Spark-free unit tests for BNG tessellation (Task 6).
+"""Spark-free unit tests for BNG tessellation.
 
 Tests the core/border split and the mosaic#423 input-dimension chip filter
 ported from ``BNG.tessellate`` (gridx/grid/BNG.scala). Chips are plain

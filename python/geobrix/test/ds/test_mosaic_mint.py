@@ -1,4 +1,4 @@
-"""Task 4 (SDD — Phase A native mini-COG mosaic): on-demand transient VRT via mint_vrt.
+"""On-demand transient VRT via mint_vrt.
 
 Tests the mint_vrt() public function that builds a TRANSIENT VRT over a
 dynamic tile collection (filtered query result, ad-hoc list, Volume dir).

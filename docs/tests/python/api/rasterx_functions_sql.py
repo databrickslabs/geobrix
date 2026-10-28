@@ -2611,7 +2611,7 @@ rst_polygonize_sql_example_output = """
 
 
 # ============================================================================
-# Terrain Analysis (DEM Processing) - Wave 8a
+# Terrain Analysis (DEM Processing)
 #
 # Seven thin wrappers around gdal.DEMProcessing. Each one takes a single
 # input tile and produces a derived tile. Examples below use the `rasters`
@@ -2754,7 +2754,7 @@ rst_color_relief_sql_example_output = """
 
 
 # ============================================================================
-# Spectral Indices (Multi-band Satellite Math) - Wave 8b
+# Spectral Indices (Multi-band Satellite Math)
 #
 # Five compositions over gbx_rst_mapalgebra that take user-supplied band
 # indices, build a per-pixel formula string, and dispatch to gdal_calc for

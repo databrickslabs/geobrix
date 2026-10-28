@@ -1,8 +1,8 @@
-"""Task 2 tests: rst_crs accessor + summary crs key.
+"""Tests for the rst_crs accessor + summary crs key.
 
 Tests:
 - accessors.crs() returns canonical CRS string (EPSG:x or ESRI:54008).
-- accessors.srid() returns ESRI-aware int code (Task 4 fix: ESRI:54008 → 54008, not None).
+- accessors.srid() returns ESRI-aware int code (ESRI:54008 → 54008, not None).
 - accessors.summary() JSON includes 'coordinateSystem.crs' string.
 - rst_crs Spark Column UDF returns StringType result.
 
@@ -63,7 +63,7 @@ def test_crs_epsg_raster_other():
 
 @pytest.mark.skipif(not os.path.exists(_MODIS_TIF), reason="MODIS TIF not built yet")
 def test_crs_esri_raster():
-    """ESRI:54008 MODIS raster -> srid() == 54008 (Task 4 fix); crs() == 'ESRI:54008'."""
+    """ESRI:54008 MODIS raster -> srid() == 54008; crs() == 'ESRI:54008'."""
     with _ds_from_file(_MODIS_TIF) as ds:
         assert (
             accessors.srid(ds) == 54008
@@ -92,7 +92,7 @@ def test_summary_epsg_includes_crs_key():
 
 @pytest.mark.skipif(not os.path.exists(_MODIS_TIF), reason="MODIS TIF not built yet")
 def test_summary_esri_includes_crs_key():
-    """summary JSON coordinateSystem.crs is non-null for ESRI:54008; epsg == 54008 (Task 4 fix)."""
+    """summary JSON coordinateSystem.crs is non-null for ESRI:54008; epsg == 54008."""
     with _ds_from_file(_MODIS_TIF) as ds:
         info = json.loads(accessors.summary(ds))
     cs = info["coordinateSystem"]

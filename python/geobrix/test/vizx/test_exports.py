@@ -1,4 +1,4 @@
-"""Tests for gbx.vizx public API exports (Task 12)."""
+"""Tests for gbx.vizx public API exports."""
 
 import databricks.labs.gbx.vizx as vizx
 

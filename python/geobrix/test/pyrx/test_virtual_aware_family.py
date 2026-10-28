@@ -412,14 +412,14 @@ def test_transform_identity_virtual_virtualize_dir_is_noop(tmp_path):
 
     NOTE — assertion relaxed from "no new file written" to the load-bearing
     coherence invariant.  ``_transform_bytes`` returns source bytes verbatim on
-    an identity warp (Task 1), but ``_shaped_result_row`` then wraps those bytes
+    an identity warp, but ``_shaped_result_row`` then wraps those bytes
     in a materialised VirtualTile and hands them to ``shape_output``.  Because
     the VirtualTile carries raster bytes (not None), ``shape_output`` writes them
     into ``virtualize_dir`` and returns a light virtual row — it does not detect
     the identity case and skip the write.  The CONTRACT that must hold is that
     the written file round-trips (opens via ``ot._open``) to the source pixels in
     the SOURCE CRS (EPSG the tile was written in), width/height 8x8.  Write-
-    avoidance is a potential future optimisation (Task 3), not a current
+    avoidance is a potential future optimisation, not a current
     invariant.
     """
     tile = _virtual_tile(tmp_path, name="id.tif", epsg=32633)  # virtual, crs=None
@@ -444,7 +444,7 @@ def test_transform_reproject_stamps_target_crs(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# virtualize_dir result coherence (Increment 5, Task 3)
+# virtualize_dir result coherence
 # ---------------------------------------------------------------------------
 def test_merge_virtualize_dir_result_is_coherent(tmp_path):
     """A merge virtualize_dir result opens + matches the materialized merge's
@@ -477,7 +477,7 @@ def test_transform_virtualize_dir_result_is_coherent(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Identity transform into merge preserves overlap winner (Task 4 parity guard)
+# Identity transform into merge preserves overlap winner
 # ---------------------------------------------------------------------------
 def test_identity_transform_preserves_merge_overlap_winner():
     """Identity transform must not re-encode: a materialized identity transform

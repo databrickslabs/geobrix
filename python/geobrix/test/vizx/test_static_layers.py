@@ -1,4 +1,4 @@
-"""Task 3: plot_static multi-layer compositor tests."""
+"""plot_static multi-layer compositor tests."""
 
 import matplotlib
 

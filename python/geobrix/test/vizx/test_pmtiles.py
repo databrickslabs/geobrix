@@ -262,7 +262,7 @@ def test_plot_pmtiles_interactive_routes_through_displayhtml(monkeypatch):
 def test_plot_pmtiles_size_guard_uses_static_fallback(monkeypatch):
     """When the archive exceeds the budget, plot_pmtiles falls back to the static path.
 
-    Task 7: plot_pmtiles delegates entirely to plot_interactive → prepare_layers.
+    plot_pmtiles delegates entirely to plot_interactive → prepare_layers.
     When the budget is exceeded, prepare_layers returns mode='static' and
     plot_interactive calls plot_static. We verify plot_static is called and a
     warning is issued by prepare_layers.
@@ -337,10 +337,10 @@ def test_plot_pmtiles_oversized_without_fallback_raises():
 
 
 def test_plot_pmtiles_unknown_tile_type_treated_as_vector(monkeypatch):
-    """Task 7: unknown tile types are treated as vector (no validation error).
+    """Unknown tile types are treated as vector (no validation error).
 
     The old plot_pmtiles explicitly validated tile type and raised ValueError.
-    After Task 7, plot_pmtiles delegates to plot_interactive → prepare_layers
+    plot_pmtiles now delegates to plot_interactive → prepare_layers
     → layer_to_sources_layers, which treats unknown tile types as vector
     (no raise). This documents the new expected behavior.
     """

@@ -350,7 +350,7 @@ def _draw_one_layer(
 
     Dispatches by lyr.kind:
     - 'vector' / 'grid': resolve via _resolve_gdf, reproject to 3857, plot.
-    - 'raster': delegate to plot_cog (Task 2) with basemap=False and
+    - 'raster': delegate to plot_cog with basemap=False and
       to_crs="EPSG:3857" (a georeferenced path/dataset warps to match the
       vector branch's 3857; a decoded ndarray tile is drawn as-is in pixel
       space -- it has no CRS to warp).

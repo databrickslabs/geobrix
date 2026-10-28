@@ -1,6 +1,6 @@
-"""Task 3 (SDD — Phase A native mini-COG mosaic): VRT index write via commit().
+"""VRT index write via commit().
 
-Tests the mosaic-mode VRT write path in CogGbxWriter.commit() added in Task 3.
+Tests the mosaic-mode VRT write path in CogGbxWriter.commit().
 Pure Python (no Spark, no JAR).
 
 Coverage:
@@ -401,7 +401,7 @@ def test_vrt_multiband_nodata_on_every_band(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 4: quadbin mosaic VRT (EPSG:3857)
+# Quadbin mosaic VRT (EPSG:3857)
 # ---------------------------------------------------------------------------
 # These tests mirror the Phase-A VRT tests but drive the quadbin path:
 # gridSystem='quadbin', gridResolution=12.  Source raster is in EPSG:32630

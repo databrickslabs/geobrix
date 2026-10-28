@@ -74,7 +74,7 @@ def test_close_all_closes_remaining():
 
 
 # ---------------------------------------------------------------------------
-# Task 4: real-size weigher (not STREAM_NOMINAL_BYTES)
+# Real-size weigher (not STREAM_NOMINAL_BYTES)
 # ---------------------------------------------------------------------------
 
 
@@ -94,7 +94,7 @@ def test_lru_weighs_by_real_size():
 
 
 # ---------------------------------------------------------------------------
-# Task 4: staged-temp cleanup on eviction (temp-leak fix)
+# Staged-temp cleanup on eviction (temp-leak fix)
 # ---------------------------------------------------------------------------
 
 

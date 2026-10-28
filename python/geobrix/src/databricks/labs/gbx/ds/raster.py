@@ -1015,7 +1015,7 @@ class RasterGbxReader(DataSourceReader):
             raise ValueError("raster_gbx requires a 'path' (e.g. .load(path)).")
         self.size_mib = int(options.get("sizeInMB", "-1"))
         self.filter_regex = options.get("filterRegex", ".*")
-        # Unified enumeration options (Task 4: session-free file_gbx core).
+        # Unified enumeration options (session-free file_gbx core).
         # These are parsed once in __init__ and consumed by _list_source_files().
         self.recursive = str(options.get("recursive", "true")).lower() == "true"
         self.include_hidden = (

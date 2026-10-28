@@ -628,7 +628,7 @@ def test_rst_polygonize_sql_example(spark):
 
 
 # ============================================================================
-# Terrain Analysis (DEM Processing) - Wave 8a
+# Terrain Analysis (DEM Processing)
 # ============================================================================
 
 
@@ -657,7 +657,7 @@ def test_dem_processing_sql_example(spark, dem_rasters_view, example_attr):
 
 
 # ============================================================================
-# Spectral Indices - Wave 8b
+# Spectral Indices
 # ============================================================================
 
 
@@ -689,7 +689,7 @@ def test_dem_processing_sql_example(spark, dem_rasters_view, example_attr):
     ],
 )
 def test_spectral_indices_sql_example(spark, rasters_view, example_attr, fallback_sql):
-    """Each Wave 8b spectral-index example string exists & executes to non-null tile."""
+    """Each spectral-index example string exists & executes to non-null tile."""
     sql_template = getattr(rasterx_functions_sql, example_attr)()
     # The doc string should reference the SQL function name.
     expected_fn = example_attr.replace("_sql_example", "").replace("_", "_")

@@ -353,7 +353,7 @@ def test_describe_cols_file_type_detection(data_type, expected_is_file):
 
 
 # ---------------------------------------------------------------------------
-# Task 1: byte-identical tile struct after resolve_file_table re-base
+# Byte-identical tile struct after resolve_file_table re-base
 # ---------------------------------------------------------------------------
 
 

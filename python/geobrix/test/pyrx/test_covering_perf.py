@@ -1,4 +1,4 @@
-"""Stage 3, Task 16: O(boundary) covering interior fast-path for the light tier.
+"""O(boundary) covering interior fast-path for the light tier.
 
 TDD guards (per brief):
 1. Result-identity (direct old-path vs fast-path comparison): _covering_band output

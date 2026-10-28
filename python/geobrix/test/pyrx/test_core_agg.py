@@ -372,6 +372,50 @@ def test_merge_streaming_multicrs_produces_valid_output(monkeypatch):
             assert len(valid_pixels) > 0, "output must contain valid pixels"
 
 
+@pytest.mark.parametrize("streamed", [False, True], ids=["in-ram", "streamed"])
+def test_a_tile_in_another_crs_leaves_its_neighbours_pixels_alone(
+    monkeypatch, streamed
+):
+    """A tile with no NoData, reprojected across a UTM zone boundary, is a rotated footprint inside a
+    larger box: the box pixels that no source pixel reaches are not data, and the tile that folds last
+    must not overwrite the valid pixels of the tile beside it with them."""
+    from rasterio.warp import transform as warp_xy
+
+    def tile(epsg, x, y, w, h, value):
+        profile = dict(
+            driver="GTiff",
+            width=w,
+            height=h,
+            count=1,
+            dtype="uint8",
+            crs=f"EPSG:{epsg}",
+            transform=from_origin(x, y, 100.0, 100.0),
+        )
+        with MemoryFile() as mf:
+            with mf.open(**profile) as dst:
+                dst.write(np.full((1, h, w), value, dtype="uint8"))
+            return mf.read()
+
+    (x32,), (y32,) = warp_xy("EPSG:4326", "EPSG:32632", [11.0], [48.0])
+    (x33,), (y33,) = warp_xy("EPSG:4326", "EPSG:32633", [12.0], [48.0])
+    ref = tile(32632, x32, y32 + 20000, 900, 400, 100)  # in the reference CRS
+    other = tile(32633, x33, y33 + 20000, 1000, 400, 200)  # reprojected
+    assert (
+        sorted([ref, other])[0] == ref
+    ), "fixture: the reprojected tile must fold last"
+    if streamed:
+        monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+
+    with MemoryFile(agg.merge_tiles([ref, other])) as mf, mf.open() as ds:
+        left, top = ds.transform.c, ds.transform.f
+        col, row = round((x32 - left) / 100.0), round((top - (y32 + 20000)) / 100.0)
+        beside = ds.read(1)[row : row + 400, col : col + 900]
+    assert set(np.unique(beside)) == {
+        100,
+        200,
+    }  # no zero fill inside the reference tile
+
+
 def test_merge_small_unchanged():
     """Small 2-tile merge uses the in-RAM path (default budget) and returns the correct mosaic.
 

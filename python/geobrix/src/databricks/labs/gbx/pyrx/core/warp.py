@@ -79,6 +79,30 @@ def warped_own_mask(
     return np.where(warped == 0, 0, 255).astype("uint8")
 
 
+def warped_footprint(ds, *, dst_crs, transform, width: int, height: int) -> np.ndarray:
+    """Where a warp of ``ds`` onto the given grid reaches a source pixel: ``(rows, cols)``
+    uint8, 255 covered and 0 not.
+
+    The output of a warp is a box on its grid; what the source does not reach (the corners of
+    the box around a rotated footprint, the pad of a footprint snapped outward) is filled with
+    zeros that read as data when the source declares no NoData to fill with. Memory: the source
+    as one byte per pixel, on top of the output grid.
+    """
+    covered = np.zeros((height, width), dtype="uint8")
+    reproject(
+        source=np.ones((ds.height, ds.width), dtype="uint8"),
+        destination=covered,
+        src_transform=ds.transform,
+        src_crs=ds.crs,
+        dst_transform=transform,
+        dst_crs=dst_crs,
+        resampling=resampling_enum("nearest"),
+        src_nodata=None,
+        dst_nodata=None,
+    )
+    return np.where(covered != 0, 255, 0).astype("uint8")
+
+
 def _warp_bands(ds, profile, *, dst_crs, transform, resampling: str, mark_fill_nodata):
     """GTiff bytes of every band of ``ds`` warped into a new dataset of ``profile``;
     with ``mark_fill_nodata``, by the plan of :func:`_fill_plan`.

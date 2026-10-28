@@ -74,6 +74,16 @@ def _close_all(memfiles, datasets):
         mf.close()
 
 
+def _fill_reads_as_data(src) -> bool:
+    """True when the pixels a warp of *src* does not reach would read as data: *src* has a mask
+    band of its own (which reads ahead of any NoData) or declares no NoData and has no alpha
+    band to carry the fill. A source with a NoData or an alpha band and no mask band is warped
+    with it, and the fill is invalid already."""
+    if _nodata.has_own_mask(src):
+        return True
+    return src.nodata is None and not _nodata.has_alpha(src)
+
+
 def _reproject_dataset(src, dst_crs, target_res=None, anchor=None):
     """Reproject an open rasterio dataset to ``dst_crs``; return (memfile, dataset).
 
@@ -123,14 +133,20 @@ def _reproject_dataset(src, dst_crs, target_res=None, anchor=None):
         _comp.creation_opts(out_dtype, decoded_bytes=decoded_bytes, compress="auto")
     )
     # A source's own mask band (not an alpha band) is warped to the new grid and written
-    # with the pixels; the warp itself leaves the masked pixels as valid zeros.
-    mask = (
-        _warp.warped_own_mask(
+    # with the pixels; the warp itself leaves the masked pixels as valid zeros. The pixels
+    # the warp does not reach are zeros as well, and nothing marks them when the source has
+    # no NoData to fill with (or a mask band, which reads ahead of it) and no alpha band:
+    # the tile is then written with the footprint of the warp as its mask band.
+    mask = None
+    if _nodata.has_own_mask(src):
+        mask = _warp.warped_own_mask(
             src, dst_crs=dst_crs, transform=transform, width=width, height=height
         )
-        if _nodata.has_own_mask(src)
-        else None
-    )
+    if _fill_reads_as_data(src):
+        covered = _warp.warped_footprint(
+            src, dst_crs=dst_crs, transform=transform, width=width, height=height
+        )
+        mask = covered if mask is None else np.where(covered != 0, mask, 0)
     mf = MemoryFile()
     with _comp.internal_mask_env(mask):
         dst = mf.open(**profile)
@@ -338,6 +354,18 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
             ref_corner = _grid_corner(ref_tile)
             has_mask = [_nodata.has_own_mask(ds) for ds in datasets]
             has_alpha = [_nodata.has_alpha(ds) for ds in datasets]
+            # a tile reprojected below is written with the footprint of its warp as a mask
+            # band when its fill would read as data (see :func:`_reproject_dataset`)
+            has_mask = [
+                m
+                or (
+                    ref_crs is not None
+                    and ds.crs is not None
+                    and ds.crs != ref_crs
+                    and _fill_reads_as_data(ds)
+                )
+                for m, ds in zip(has_mask, datasets)
+            ]
         finally:
             _close_all(memfiles, datasets)
 

@@ -14,7 +14,9 @@ Inputs:
   --vendor-pure <dir>  the vendor-pure.txt wheels, fetched and hash-checked on the host by the command
   --jar <path>         the GeoBrix JAR (shipped in _jar/)
   --extra-payload <d>  a tree merged into the payload, only under _native/<arch>/ (the Rust kernels:
-                       _native/<arch>/rs/_gbxrs.abi3.so); repeatable
+                       _native/<arch>/rs/_gbxrs.abi3.so); repeatable. The licence notices of a kernel's
+                       crates go to _native/licenses/rust/<crate>/ (from its Cargo.lock; the sources are
+                       vendored to build/native/vendor/<crate> when absent)
   --allow-dirty        build although the inputs have uncommitted changes (GIT_DIRTY = True)
 
 Before any step: the inputs exist, Docker runs and both toolchain images are there, and the inputs
@@ -123,6 +125,12 @@ GPL_TEXT = re.compile(
     rb"General Public License|\b[AL]?GPL(?:-|v| v)?[0-9]|SPDX-License-Identifier:[^\n]*GPL"
 )
 HASHED_NEED = re.compile(rb"lib[A-Za-z0-9_+]+-[0-9a-f]{8}\.so[.0-9]*")
+# The licence notices of a Rust kernel's crates: the top-level files of each vendored crate whose name starts so,
+# else the files of scripts/native/rust-licenses/<crate>/ (for a crate whose package ships none: gdal-sys, whose
+# MIT LICENSE.txt is georust/gdal's at the release tag v0.19.0).
+RUST_NOTICE = re.compile(r"(LICEN[CS]E|COPYING|NOTICE|UNLICENSE|COPYRIGHT)", re.I)
+RUST_LICENCE_OVERRIDES = REPO / "scripts" / "native" / "rust-licenses"
+RUST_VENDOR = REPO / "build" / "native" / "vendor"
 PY312_LINUX = {
     "python_version": "3.12",
     "python_full_version": "3.12.3",
@@ -580,6 +588,15 @@ def add_payload(args, tree, natives, bindings, version):
                 fail(f"--extra-payload {d}: {rel} is already in the payload")
             (pkg / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(p, pkg / rel)
+            # a kernel built against another gdal-native names libraries this lib/ does not have
+            if p.suffix == ".so":
+                have = {f.name for f in (nat / rel.parts[1] / "lib").iterdir()}
+                stale = {m.decode() for m in HASHED_NEED.findall(p.read_bytes())} - have
+                if stale:
+                    fail(
+                        f"--extra-payload {d}: {rel} needs {sorted(stale)}, not in {rel.parts[1]}/lib: built against another gdal-native"
+                    )
+    add_rust_licences(nat)
     jar = pkg / "_jar" / f"geobrix-{version.split('+')[0]}-jar-with-dependencies.jar"
     jar.parent.mkdir(parents=True)
     with zipfile.ZipFile(args.jar) as zf:
@@ -591,6 +608,83 @@ def add_payload(args, tree, natives, bindings, version):
                 f"{args.jar} has no Spark DataSourceRegister service file: not the GeoBrix JAR"
             )
     shutil.copy2(args.jar, jar)
+
+
+def kernel_crate(module, root=REPO):
+    """The crate under rust/ whose `[lib] name` is `module` (a kernel ships as rs/<module>.abi3.so), or None."""
+    for toml in sorted((root / "rust").glob("*/Cargo.toml")):
+        if tomllib.loads(toml.read_text()).get("lib", {}).get("name") == module:
+            return toml.parent
+    return None
+
+
+def collect_rust_licences(crate, vendor, out, overrides=None):
+    """Copy the licence files of every registry crate in crate/Cargo.lock (build-only ones included: a notice
+    too many is harmless, one missing is not) from `vendor` (cargo vendor --versioned-dirs) to
+    out/<name>-<version>/, write out/INDEX.txt, and return the "<name> <version>" that have none."""
+    overrides = overrides or RUST_LICENCE_OVERRIDES
+    gaps, index = [], []
+    lock = tomllib.loads((crate / "Cargo.lock").read_text())
+    for pkg in sorted(lock.get("package", []), key=lambda p: (p["name"], p["version"])):
+        if not pkg.get("source", "").startswith("registry+"):
+            continue  # the kernel crate itself (GeoBrix's own licence)
+        name, ver = pkg["name"], pkg["version"]
+        src = vendor / f"{name}-{ver}"
+        files = (
+            [p for p in sorted(src.iterdir()) if p.is_file() and RUST_NOTICE.match(p.name)]
+            if src.is_dir()
+            else []
+        )
+        files = files or sorted(p for p in (overrides / name).glob("*") if p.is_file())
+        if not files:
+            gaps.append(f"{name} {ver}")
+            continue
+        manifest = src / "Cargo.toml"
+        declared = (
+            tomllib.loads(manifest.read_text()).get("package", {}).get("license", "?")
+            if manifest.is_file()
+            else "?"
+        )
+        dest = out / f"{name}-{ver}"
+        dest.mkdir(parents=True, exist_ok=True)
+        for f in files:
+            shutil.copyfile(f, dest / f.name)
+        index.append(f"{name} {ver} ({declared}): {', '.join(f.name for f in files)}")
+    if not gaps:
+        (out / "INDEX.txt").write_text(
+            f"The crates compiled into {crate.name} (from its Cargo.lock) and their licence files.\n"
+            + "\n".join(index)
+            + "\n"
+        )
+    return gaps
+
+
+def add_rust_licences(nat, vendor_root=None, root=None, overrides=None):
+    """The licence notices of every Rust kernel the payload carries (_native/<arch>/rs/<module>*.so), under
+    _native/licenses/rust/<crate>/. The kernel crate's locked sources are vendored on the host first when
+    vendor_root has none (scripts/native/cargo-vendor.sh). A crate with no licence file stops the build."""
+    vendor_root, root = vendor_root or RUST_VENDOR, root or REPO
+    for module in sorted({p.name.split(".")[0] for p in nat.glob("*/rs/*.so")}):
+        crate = kernel_crate(module, root)
+        if crate is None:
+            fail(
+                f"_native/<arch>/rs/{module}*.so: no crate under rust/ has [lib] name = \"{module}\" (no licence source)"
+            )
+        out = nat / "licenses" / "rust" / crate.name
+        if out.exists():
+            continue
+        vendor = vendor_root / crate.name
+        if not vendor.is_dir():
+            subprocess.run(
+                ["bash", str(root / "scripts/native/cargo-vendor.sh"), str(crate), str(vendor)],
+                check=True,
+            )
+        gaps = collect_rust_licences(crate, vendor, out, overrides)
+        if gaps:
+            fail(
+                f"{crate.relative_to(root)}/Cargo.lock: no licence file for {', '.join(gaps)} in its vendored "
+                f"sources ({vendor}); add one under scripts/native/rust-licenses/<crate>/"
+            )
 
 
 def pins_of(path):
@@ -816,6 +910,16 @@ def verify_payload(zf, version, epoch):
     ):
         if need not in names:
             fail(f"{need} is not in the wheel")
+    for module in sorted(
+        {
+            n.rsplit("/", 1)[-1].split(".")[0]
+            for n in names
+            if re.match(rf"{PKG}/_native/[^/]+/rs/[^/]+\.so$", n)
+        }
+    ):
+        crate = kernel_crate(module)
+        if crate is None or f"{PKG}/_native/licenses/rust/{crate.name}/INDEX.txt" not in names:
+            fail(f"the Rust kernel {module} ships without its crates' licence notices")
     inner = [
         n
         for n in names

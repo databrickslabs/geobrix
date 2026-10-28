@@ -173,3 +173,77 @@ def test_no_gpl_family_file_ships_with_osgeo(tmp_path, capsys, extra, refused):
     with pytest.raises(SystemExit):
         bew.add_osgeo_utils(natives, pkg)
     assert "BUILD FAILED" in capsys.readouterr().out
+
+
+def _kernel_tree(root, vendored, overrides):
+    """A kernel crate rust/k ([lib] name _k) locking the crates `vendored` names, their vendored sources
+    (with the licence files listed), override licence files, and a payload carrying rs/_k.abi3.so."""
+    crate = root / "rust" / "k"
+    crate.mkdir(parents=True)
+    (crate / "Cargo.toml").write_text('[package]\nname = "k"\n\n[lib]\nname = "_k"\n')
+    reg = "registry+https://github.com/rust-lang/crates.io-index"
+    lock = ['version = 4\n\n[[package]]\nname = "k"\nversion = "0.1.0"\n']
+    for name, files in vendored.items():
+        lock.append(f'[[package]]\nname = "{name}"\nversion = "1.0.0"\nsource = "{reg}"\n')
+        src = root / "vendor" / "k" / f"{name}-1.0.0"
+        src.mkdir(parents=True)
+        (src / "Cargo.toml").write_text(f'[package]\nname = "{name}"\nlicense = "MIT"\n')
+        (src / "lib.rs").write_text("")
+        for f in files:
+            (src / f).write_text(f"{name} licence\n")
+    (crate / "Cargo.lock").write_text("\n".join(lock))
+    for name, files in overrides.items():
+        (root / "overrides" / name).mkdir(parents=True)
+        for f in files:
+            (root / "overrides" / name / f).write_text(f"{name} upstream licence\n")
+    nat = root / "pkg" / "_native"
+    (nat / "aarch64" / "rs").mkdir(parents=True)
+    (nat / "aarch64" / "rs" / "_k.abi3.so").write_bytes(b"\x7fELF")
+    return nat
+
+
+@pytest.mark.parametrize(
+    "vendored, overrides, refused",
+    [
+        ({"a": ["LICENSE-MIT", "LICENSE-APACHE"], "b": ["COPYING"]}, {}, None),
+        ({"a": ["LICENSE-MIT"], "b": ["README.md"]}, {}, "no licence file for b 1.0.0"),
+        # a crate whose package ships no licence file (gdal-sys): its upstream text, kept in the repo
+        ({"a": ["LICENSE-MIT"], "b": []}, {"b": ["LICENSE.txt"]}, None),
+    ],
+    ids=["shipped", "missing", "override"],
+)
+def test_a_rust_kernel_ships_its_crates_licence_notices(
+    tmp_path, capsys, vendored, overrides, refused
+):
+    nat = _kernel_tree(tmp_path, vendored, overrides)
+    run = lambda: bew.add_rust_licences(  # noqa: E731
+        nat, tmp_path / "vendor", tmp_path, tmp_path / "overrides"
+    )
+    if refused:
+        with pytest.raises(SystemExit):
+            run()
+        assert refused in capsys.readouterr().out
+        return
+    run()
+    out = nat / "licenses" / "rust" / "k"
+    shipped = {p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file()}
+    want = {f"{n}-1.0.0/{f}" for n, fs in {**vendored, **overrides}.items() for f in fs}
+    assert shipped == want | {"INDEX.txt"}
+    assert "b 1.0.0 (MIT): " in (out / "INDEX.txt").read_text()
+
+
+@pytest.mark.parametrize(
+    "lock",
+    sorted((bew.REPO / "rust").glob("*/Cargo.lock")),
+    ids=lambda p: p.parent.name,
+)
+def test_every_rust_crate_has_a_licence_file_for_each_crate_it_locks(tmp_path, lock):
+    # Any crate under rust/ can ship as a kernel (the probe in test wheels): every crate its Cargo.lock
+    # locks needs a licence file, or the wheel build stops.
+    vendor = bew.RUST_VENDOR / lock.parent.name
+    if not vendor.is_dir():
+        pytest.skip(
+            f"PRECONDITION MISSING: {vendor} (scripts/native/cargo-vendor.sh "
+            f"{lock.parent.relative_to(bew.REPO)} {vendor.relative_to(bew.REPO)})"
+        )
+    assert bew.collect_rust_licences(lock.parent, vendor, tmp_path / "out") == []

@@ -326,12 +326,17 @@ formats.
 ### Raster readers — read a tile index with `read_tiles_table` (fix, new)
 
 - **`read_tiles_table` reads a `tilesTable`.** Reading a tile index with
-  `spark.read.format("raster_gbx").option("tilesTable", ...)` failed on every runtime, because Spark
+  `spark.read.format("raster_gbx").option("tilesTable", ...)` failed, because Spark
   plans the read in a worker that has no Spark session to open the table with. That read now fails
   with an error that names `read_tiles_table(spark, table, options)`, which reads the table with
   your session and returns the same `(source, tile)` DataFrame the reader returns. It takes the
-  reader options, `format="gtiff_gbx"` or `"cog_gbx"` for those readers, and `num_partitions` to
-  spread the tiles across tasks. See [Raster Reader](./readers/raster#read-tiles-table).
+  reader options (in any case, as Spark gives them to a reader), `format="gtiff_gbx"` or
+  `"cog_gbx"` for those readers, and `num_partitions` to set the number of tasks; by default each
+  tile is read by its own task, up to 256, as the reader does. See
+  [Raster Reader](./readers/raster#read-tiles-table).
+- **A Parquet `manifest` reads through `spark.read`.** It failed the same way as a `tilesTable`,
+  because the Parquet file was read with a Spark session the planner does not have. It is now read
+  without one, from a Parquet file or from the directory Spark writes.
 - **`versionAsOf` and `timestampAsOf` read a tile index as it was.** Pass either option to
   `read_tiles_table` and it plans from that Delta version of the index, so a pipeline can re-run
   against the exact table version it used. Setting both, or either for a manifest or a directory
@@ -881,6 +886,13 @@ formats.
   and `REORG TABLE ... APPLY (PURGE)` never reclaim the bytes of a managed file, and a write
   that fails after its files were made leaves them behind, so a managed store would only grow.
   Asking for it raises `ZarrUnsupported`; use `"auto"`, `"external"` or `"fuse"`.
+- **A store's root belongs to exactly one table, decided by a Delta transaction.** A managed
+  store's data root and a writable registration's overlay root now carry an ownership ledger,
+  the small Delta table `_gbx_owner`, next to the `_gbx_store.json` marker. Two tables that
+  claim one root at the same moment can no longer both win: an exclusive file create is not
+  exclusive across the nodes of a Volume, so the claim is a compare-and-swap insert into the
+  ledger and the marker is written only after it. The loser gets `ZarrOwnershipError`. Leave
+  `_gbx_owner` where it is; delete it, with the marker, only when no store owns the root.
 - **A copy export needs a path every node sees.** `gbx_zarr_export(method="copy")` is written
   by the cluster's tasks, so a `to` on the driver's local disk is refused before any task runs
   (`ValueError`, "export to a /Volumes path"). It used to fail after the work was done, with the

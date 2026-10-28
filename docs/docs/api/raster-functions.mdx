@@ -4178,7 +4178,7 @@ Runs GDAL's viewshed (`GDALViewshedGenerate`) with the same settings as the heav
 :::
 
 :::info Changed in 0.6.0
-With a `maxDistance`, both tiers return the window around the observer (aligned to the DEM's pixel grid), not a raster the size of the DEM; the v0.5.2 light tier stretched that window over the whole DEM on larger DEMs.
+With a `maxDistance`, the light tier now returns the window around the observer (aligned to the DEM's pixel grid), as the heavyweight tier always did; the v0.5.2 light tier stretched that window over the whole DEM on DEMs above its small-DEM limit (about 366 × 366 pixels by default).
 :::
 
 :::note Lightweight Python — virtual-tile force-output
@@ -4205,7 +4205,7 @@ package. Light tier; Serverless-safe; no JAR required.
 :::
 
 :::info Changed in 0.6.0
-The pixel counts now come from the window around each tower (the `radius_m` square, clipped to the DSM), as `rst_viewshed` returns it; in v0.5.2 they were inflated by a stretched mask. A tower standing in no DSM tile has no row, and a NULL `observer_height` is 0.0.
+`visible_px` and `total_px` now come from the window around each tower (the `radius_m` square, clipped to the DSM), as `rst_viewshed` returns it; in v0.5.2 a stretched mask inflated them on DEMs above the same limit. A tower that stands in a grid cell with no DSM tile has no row; one outside the DSM used to get a row with no visible pixels.
 :::
 
 `rst_viewshed_towers` runs a per-tower raster viewshed over a tiled DSM and returns one scalar

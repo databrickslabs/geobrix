@@ -603,10 +603,10 @@ def gbx_zarr_export(
     to})``). It is JSON only, about 100 bytes per object (a million shards: about 100 MB).
     Every shard must be one region: after chunk rows were written over it, run
     ``gbx_zarr_optimize`` first (``ZarrUnsupported`` otherwise). The paths are the bare
-    ``/Volumes`` paths; ``access="direct"`` (cloud URLs) raises ``ZarrAccessUnavailable``, as
-    it does in ``gbx_zarr_read``, since no registration records a cloud location. The reference points at the pack files of the
-    pinned version, and vacuum can delete them: tag the version with ``gbx_zarr_tag`` to
-    keep them.
+    ``/Volumes`` paths; ``access="direct"`` (cloud URLs) raises ``ZarrAccessUnavailable``,
+    as it does in ``gbx_zarr_read``, since no registration records a cloud location. The
+    reference points at the pack files of the pinned version, and vacuum can delete them:
+    tag the version with ``gbx_zarr_tag`` to keep them.
 
     ``method="publish"`` runs ``gbx_zarr_sync.publish`` for a writable registered store and
     returns the version it committed; it takes neither ``to`` nor ``version_as_of``.

@@ -501,7 +501,9 @@ def xarray_fill_form(doc):
     if not (
         isinstance(doc, dict)
         and doc.get("node_type") == "array"
-        and doc.get("data_type") in _V3_FLOAT_SIZES
+        # a dict for a datetime64 array: not a float, and not hashable
+        and isinstance(doc.get("data_type"), str)
+        and doc["data_type"] in _V3_FLOAT_SIZES
         and isinstance(doc.get("attributes"), dict)
         and "_FillValue" in doc["attributes"]
     ):

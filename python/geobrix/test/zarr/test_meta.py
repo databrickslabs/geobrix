@@ -199,7 +199,14 @@ def test_xarray_fill_form_leaves_other_documents_alone():
         "attributes": {"_FillValue": "NaN"},
     }
     plain = {"zarr_format": 3, "node_type": "array", "data_type": "float32"}
-    for doc in (v2, group, plain, [1], None):
+    # zarr 3.4.1 writes the data type of a datetime64 array as a dict
+    when = {
+        "zarr_format": 3,
+        "node_type": "array",
+        "data_type": {"name": "numpy.datetime64", "configuration": {"unit": "ns"}},
+        "attributes": {"_FillValue": "NaN"},
+    }
+    for doc in (v2, group, plain, when, [1], None):
         assert xarray_fill_form(doc) is doc
 
 

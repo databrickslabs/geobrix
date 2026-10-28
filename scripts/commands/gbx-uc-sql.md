@@ -11,8 +11,9 @@ Each statement runs `--repeat` times and every wall time is recorded; the value 
 - `--profile <name>` — Databricks config profile (required; it is never chosen for you, see `databricks auth profiles`)
 - `--warehouse-id ID` — SQL warehouse; default is `GBX_UC_WAREHOUSE_ID` from `examples/tests/databricks_cluster_config.env` (that one key is read, the file is never sourced)
 - `--catalog C`, `--schema S` — default catalog and schema for the statements
-- `--out <json>` — write `{cid: {"value": ..., "wall_s": [...]} | {"error": ...}}` here (bytes are stored as `{"$bytes": "<base64>"}`; `bench.oracles.load_uc_results` reads them back)
+- `--out <json>` — write `{cid: {"value": ..., "wall_s": [...]} | {"error": ...}}` here (rewritten after every statement, so a failure part-way keeps the results so far; bytes are stored as `{"$bytes": "<base64>"}`; `bench.oracles.load_uc_results` reads them back)
 - `--repeat N` — runs per statement (default 1)
+- `--timeout-s N` — cancel a statement still running after N seconds and record a timeout error for it (default 600)
 - `--no-decode-binary` — keep BINARY cells as base64 text
 - `--dry-run` — parse the file and print the plan: no workspace call, no auth
 - `--log <path>` — tee output to `test-logs/<path>`
@@ -21,4 +22,4 @@ Each statement runs `--repeat` times and every wall time is recorded; the value 
 **Interpreter:** the workspace launcher needs `databricks-sdk` and Python 3.11+, chosen by `gbx_python_with_sdk` in `common.sh` (see `gbx:data:stage-jar`). `GBX_PYRX_VENV=<dir>` moves the venv.
 
 **Example:**
-- `bash scripts/commands/gbx-uc-sql.sh --profile oauth-fe --file .superpowers/streamline/uc/mvp_s.sql --out .superpowers/streamline/uc/mvp_s.json --repeat 3`
+- `bash scripts/commands/gbx-uc-sql.sh --profile oauth-fe --file out/mvp_s.sql --out out/mvp_s.json --repeat 3`

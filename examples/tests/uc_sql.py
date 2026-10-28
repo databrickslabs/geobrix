@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python" / "geobrix
 from databricks.labs.gbx.bench import oracles  # noqa: E402
 
 POLL_SECS = 1.0
+DEFAULT_TIMEOUT_S = 600.0
 # pip prints "Looking in indexes: <url>" in some failures; an index URL never reaches a log or a file.
 _INDEX_LINE = re.compile(r"(?m)^.*Looking in indexes:.*$")
 
@@ -37,8 +38,22 @@ def scrub(text: str) -> str:
     return _INDEX_LINE.sub("[package index line removed]", text)
 
 
-def run_once(w, statement: str, warehouse_id: str, catalog: Optional[str], schema: Optional[str]):
-    """Run one statement to a terminal state; return (state, error message, first cell, its type)."""
+class StatementTimeout(Exception):
+    """A statement was still pending or running when its deadline passed (it has been cancelled)."""
+
+
+def run_once(
+    w,
+    statement: str,
+    warehouse_id: str,
+    catalog: Optional[str],
+    schema: Optional[str],
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+):
+    """Run one statement to a terminal state; return (state, error message, first cell, its type).
+
+    Raises StatementTimeout when it is still not terminal `timeout_s` after it was submitted.
+    """
     from databricks.sdk.service.sql import StatementState
 
     api = w.statement_execution
@@ -49,7 +64,17 @@ def run_once(w, statement: str, warehouse_id: str, catalog: Optional[str], schem
         schema=schema,
         wait_timeout="50s",
     )
+    deadline = time.monotonic() + timeout_s
     while resp.status.state in (StatementState.PENDING, StatementState.RUNNING):
+        if time.monotonic() >= deadline:
+            try:
+                api.cancel_execution(resp.statement_id)
+            except Exception:  # noqa: BLE001 - best effort: the timeout is what gets reported
+                pass
+            raise StatementTimeout(
+                f"statement still {resp.status.state.value} after {timeout_s:g}s; cancelled "
+                f"(raise --timeout-s if the warehouse is cold or the statement is slow)"
+            )
         time.sleep(POLL_SECS)
         resp = api.get_statement(resp.statement_id)
     state = resp.status.state
@@ -68,7 +93,12 @@ def run_statements(w, pairs, args) -> dict:
         walls, entry = [], None
         for _ in range(args.repeat):
             t0 = time.perf_counter()
-            state, error, cell, type_name = run_once(w, statement, args.warehouse_id, args.catalog, args.schema)
+            try:
+                state, error, cell, type_name = run_once(
+                    w, statement, args.warehouse_id, args.catalog, args.schema, args.timeout_s
+                )
+            except StatementTimeout as exc:
+                state, error, cell, type_name = None, str(exc), None, None
             walls.append(round(time.perf_counter() - t0, 4))
             if error is not None:
                 entry = {"error": scrub(error)}
@@ -80,6 +110,8 @@ def run_statements(w, pairs, args) -> dict:
             entry["wall_s"] = walls
         results[cid] = entry
         print(summary_line(cid, entry), flush=True)
+        if args.out:  # after every statement: a failure later in the run keeps what is already known
+            oracles.dump_uc_results(results, args.out)
     return results
 
 
@@ -99,6 +131,12 @@ def parse_args(argv=None):
     p.add_argument("--schema", default=None, help="default schema for the statements")
     p.add_argument("--out", default=None, help="write the results here as JSON")
     p.add_argument("--repeat", type=int, default=1, help="runs per statement; wall time of each is recorded")
+    p.add_argument(
+        "--timeout-s",
+        type=float,
+        default=DEFAULT_TIMEOUT_S,
+        help="give up on (and cancel) a statement still running after this many seconds (default 600)",
+    )
     p.add_argument("--profile", default=None, help="Databricks config profile (never chosen for you)")
     p.add_argument(
         "--decode-binary",
@@ -110,6 +148,8 @@ def parse_args(argv=None):
     args = p.parse_args(argv)
     if args.repeat < 1:
         p.error("--repeat must be at least 1")
+    if args.timeout_s <= 0:
+        p.error("--timeout-s must be positive")
     return args
 
 
@@ -138,9 +178,12 @@ def main(argv=None) -> int:
     from databricks.sdk import WorkspaceClient
 
     w = WorkspaceClient(profile=args.profile)
-    results = run_statements(w, pairs, args)
+    try:
+        results = run_statements(w, pairs, args)
+    except Exception as exc:  # noqa: BLE001 - an SDK or network failure: report it, keep the results written so far
+        print(f"stopped: {scrub(f'{type(exc).__name__}: {exc}')}", file=sys.stderr)
+        return 1
     if args.out:
-        oracles.dump_uc_results(results, args.out)
         print(f"wrote {args.out}")
     return 0  # a statement's error is a result (a refusal is an expected one): the oracle judges the file
 

@@ -25,7 +25,10 @@ Options:
   --catalog C            Default catalog for the statements
   --schema S             Default schema for the statements
   --out <json>           Write {cid: {"value": ..., "wall_s": [...]} | {"error": ...}} here
+                         (rewritten after every statement)
   --repeat N             Run each statement N times and record every wall time (default 1)
+  --timeout-s N          Cancel a statement still running after N seconds and record a timeout
+                         error for it (default 600)
   --no-decode-binary     Keep BINARY cells as the API's base64 text (decoded to bytes by default)
   --dry-run              Parse the file and print the plan: no workspace call, no auth
   --log <path>           Write output to a log file (filename -> test-logs/<name>)
@@ -36,8 +39,8 @@ Environment:
                          added on top when the venv lacks it)
 
 Example:
-  bash scripts/commands/gbx-uc-sql.sh --profile oauth-fe --file .superpowers/streamline/uc/mvp_s.sql \
-    --out .superpowers/streamline/uc/mvp_s.json --repeat 3
+  bash scripts/commands/gbx-uc-sql.sh --profile oauth-fe --file out/mvp_s.sql \
+    --out out/mvp_s.json --repeat 3
 HELP
 }
 
@@ -50,7 +53,7 @@ while [[ $# -gt 0 ]]; do case $1 in
         LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
     --warehouse-id) [[ $# -ge 2 ]] || { echo "Option --warehouse-id needs a value" >&2; exit 2; }
         HAVE_WAREHOUSE=true; ARGS+=("$1" "$2"); shift 2 ;;
-    --file|--profile|--catalog|--schema|--out|--repeat)
+    --file|--profile|--catalog|--schema|--out|--repeat|--timeout-s)
         [[ $# -ge 2 ]] || { echo "Option $1 needs a value" >&2; exit 2; }
         ARGS+=("$1" "$2"); shift 2 ;;
     --no-decode-binary|--dry-run) ARGS+=("$1"); shift ;;

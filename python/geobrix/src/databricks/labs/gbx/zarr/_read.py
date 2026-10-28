@@ -694,6 +694,15 @@ def _spark_type(kind: str):
     }[kind]
 
 
+def _table_struct(cfg: _TaskConfig):
+    """The Spark schema of a ``output="table"`` read."""
+    from pyspark.sql import types as T
+
+    return T.StructType(
+        [T.StructField(n, _spark_type(k), True) for n, k in cfg.columns]
+    )
+
+
 def _column_kind(name: str, dtype: np.dtype) -> str:
     """The table column kind for values of ``dtype``; complex and the like are refused."""
     kind = _KINDS.get((dtype.kind, dtype.itemsize))
@@ -808,8 +817,14 @@ def _resolve_axes(src: _Source, variables, sel, isel, decode, flag):
     return dim_coords, stored, coords, axes
 
 
-def _plan(spark, src: _Source, variables, sel, isel, output, decode, flag):
-    """``(units, config)`` for reading ``variables``, or ``([], config)`` for nothing."""
+def _plan(
+    spark, src: _Source, variables, sel, isel, output, decode, flag, *, units=True
+):
+    """``(units, config)`` for reading ``variables``, or ``([], config)`` for nothing.
+
+    ``units=False`` returns the config alone (``[]`` for the units): a task that is handed
+    its unit still needs the config, and has no use for the units it was not handed.
+    """
     arrays = src.arrays
     dim_coords, stored, coords, axes = _resolve_axes(
         src, variables, sel, isel, decode, flag
@@ -836,15 +851,15 @@ def _plan(spark, src: _Source, variables, sel, isel, output, decode, flag):
         columns = _table_columns(variables, arrays, dim_coords, typed, decode, flag)
 
     budget = _budget_bytes()
-    units: list[Unit] = []
-    if output == "blocks":
+    planned: list[Unit] = []
+    if units and output == "blocks":
         for v in variables:
             meta = arrays[v]
             touched = touched_chunks(axes[v], meta.chunks)
             by_key = src.rows(meta, sorted({unit_key(meta, c) for c in touched}))
-            units += plan_units(meta, axes[v], by_key, budget)
-    else:
-        units = _plan_table(src, variables, axes[variables[0]], budget)
+            planned += plan_units(meta, axes[v], by_key, budget)
+    elif units:
+        planned = _plan_table(src, variables, axes[variables[0]], budget)
 
     read = {v: arrays[v] for v in variables}
     cfg = _TaskConfig(
@@ -870,7 +885,7 @@ def _plan(spark, src: _Source, variables, sel, isel, output, decode, flag):
         batch_bytes=max(1, budget // _BATCH_SHARE),
         columns=columns,
     )
-    return units, cfg
+    return planned, cfg
 
 
 def _plan_table(src: _Source, variables, axes, budget) -> list[Unit]:
@@ -957,8 +972,11 @@ class _UnitReader:
             self.store.close()
 
 
-def _run_unit(cfg: _TaskConfig, unit: Unit) -> Iterator[pa.RecordBatch]:
-    reader = _UnitReader(cfg, unit)
+def _run_unit(
+    cfg: _TaskConfig, unit: Unit, engine: str = "zarr"
+) -> Iterator[pa.RecordBatch]:
+    """The batches of one unit. ``engine`` is how a plain store's arrays are opened."""
+    reader = _UnitReader(cfg, unit, engine)
     try:
         for name in (unit.array,) if cfg.output == "blocks" else cfg.variables:
             reader.array(name)  # open before the threads start
@@ -1348,14 +1366,7 @@ def gbx_zarr_read(
         spark, src, names, sel, isel, output, decode, use_zarr_fill_value_as_mask
     )
     reach = source_access(spark, src, access)
-    if output == "blocks":
-        schema = BLOCKS_SCHEMA
-    else:
-        from pyspark.sql import types as T
-
-        schema = T.StructType(
-            [T.StructField(n, _spark_type(k), True) for n, k in cfg.columns]
-        )
+    schema = BLOCKS_SCHEMA if output == "blocks" else _table_struct(cfg)
     if not units:
         return spark.createDataFrame([], schema)
     task, _ = bounded_closure(

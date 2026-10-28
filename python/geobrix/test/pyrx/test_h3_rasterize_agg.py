@@ -105,12 +105,12 @@ def test_rst_h3_rasterize_agg_null_cellid_value_alignment():
         ), f"neither 10.0 nor 20.0 found in output: {sorted(set(covered.tolist()))}"
 
 
-def test_rst_h3_rasterize_agg_null_typed_value_column_is_presence(spark):
-    """A null in a TYPED (Double) value column must burn presence 1.0, not NaN.
+def test_rst_h3_rasterize_agg_null_typed_value_column_burns_nan(spark):
+    """A TYPED (Double) value column that is null for the whole group is data: it burns NaN.
 
-    Regression: pandas delivers a typed null as np.nan, and `np.nan is not None`
-    is True, so the presence guard burned float(np.nan)=NaN. The cluster benchmark
-    surfaced this as a heavy(1.0)-vs-light(NaN) divergence.
+    Only an OMITTED value is the presence mask (1.0); through Spark that arrives as an
+    object column of None, a typed null column as float64 NaN. The heavyweight tier burns 1.0
+    for the typed column too until its null rule follows.
     """
     import numpy as np
     from pyspark.sql.types import (
@@ -127,22 +127,22 @@ def test_rst_h3_rasterize_agg_null_typed_value_column_is_presence(spark):
     schema = StructType(
         [
             StructField("cellid", LongType(), False),
-            StructField("val", DoubleType(), True),  # nullable; all null -> presence
+            StructField("val", DoubleType(), True),  # nullable; all null -> NaN
             StructField("tx", StringType(), False),
         ]
     )
     df = spark.createDataFrame([(int(c), None, "TX1") for c in cells], schema)
-    out = (
-        df.groupBy("tx")
-        .agg(rx.rst_h3_rasterize_agg("cellid", "val").alias("tile"))
-        .collect()
-    )
-    with _serde.open_tile(bytes(out[0]["tile"]["raster"])) as ds:
-        arr = ds.read(1)
-        covered = arr[arr != ds.nodata]
-        assert covered.size >= len(cells)
-        assert not np.isnan(covered).any(), "null value column burned NaN, not presence"
-        assert np.all(covered == 1.0), f"expected all 1.0, got {np.unique(covered)}"
+
+    def burned(agg):
+        out = df.groupBy("tx").agg(agg.alias("tile")).collect()
+        with _serde.open_tile(bytes(out[0]["tile"]["raster"])) as ds:
+            arr = ds.read(1)
+            return arr[arr != ds.nodata]
+
+    typed = burned(rx.rst_h3_rasterize_agg("cellid", "val"))
+    assert typed.size >= len(cells) and np.isnan(typed).all()
+    omitted = burned(rx.rst_h3_rasterize_agg("cellid"))
+    assert omitted.size >= len(cells) and np.all(omitted == 1.0)
 
 
 def test_rst_h3_rasterize_agg_null_cellid_no_precision_loss(spark):

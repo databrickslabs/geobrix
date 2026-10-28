@@ -811,7 +811,7 @@ Combine or merge rasters in group-by (7 total).
 
 <Tier both/> <Impl groupedAgg/>
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`; a group with no number at all is the presence mask and burns `1.0`. The heavyweight tier counts a null value as `1.0` in that comparison.
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. The heavyweight tier counts a null value as `1.0` in that comparison, and burns `1.0` for a column of nulls.
 
 :::note Lightweight tier (pyrx)
 The lightweight implementation is backed by `pygx._bng` cell math and `rasterio`. BNG cell IDs (**STRING**) are parsed via `pygx._bng` to EPSG:27700-native cell geometries and burned into the output band — the output canvas is EPSG:27700 throughout with no warp step (this aggregator takes cellid+value rows, not a raster tile).
@@ -1064,10 +1064,10 @@ _Multi-row fixture: 4 WKB POINT rows with observations 10–40 over a `[0,0,1,1]
 
 <Tier both/> <Impl groupedAgg/>
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`; a group with no number at all is the presence mask and burns `1.0`. The heavyweight tier counts a null value as `1.0` in that comparison.
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. The heavyweight tier counts a null value as `1.0` in that comparison, and burns `1.0` for a column of nulls.
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Aggregate — `groupBy(...).agg(rx.rst_h3_rasterize_agg("cellid", "value", ...))` burns each H3 cell's centroid pixel (or spatial-envelope pixels with `mode='spatial_envelope'`) into one raster tile per group. When `value` is omitted or null, all burned pixels carry `1.0` (presence mask). The extent and pixel size are derived automatically from the H3 resolution unless explicit bounds are supplied; `kring_pad` (default 1) expands the canvas by that many rings to avoid clipping edge cells.
+Powered by **rasterio** + **h3**. Aggregate — `groupBy(...).agg(rx.rst_h3_rasterize_agg("cellid", "value", ...))` burns each H3 cell's centroid pixel (or spatial-envelope pixels with `mode='spatial_envelope'`) into one raster tile per group. When `value` is omitted (or an untyped `NULL`), all burned pixels carry `1.0` (presence mask); a typed column of nulls burns `NaN` in the lightweight tier. The extent and pixel size are derived automatically from the H3 resolution unless explicit bounds are supplied; `kring_pad` (default 1) expands the canvas by that many rings to avoid clipping edge cells.
 :::
 
 :::warning Lightweight SQL returns BINARY (not the tile struct)
@@ -1100,7 +1100,7 @@ The [H3 Rasterize notebook](../notebooks/h3-rasterize) walks this through end to
 
 **Parameters:**
 - `cellid` — H3 cell ID (BIGINT or STRING) to burn (one per row)
-- `value` — numeric burn value; pass `null` for a presence mask (all pixels → `1.0`)
+- `value` — numeric burn value; omit it, or pass an untyped `NULL`, for a presence mask (all pixels → `1.0`)
 - `srid` — EPSG code for the output CRS; defaults to `4326` (WGS 84)
 - `pixel_size` — ground resolution in CRS units (derives from H3 resolution when `null`)
 - `xmin/ymin/xmax/ymax` — output canvas extent; auto-computed from cell bounds + `kring_pad` when `null`
@@ -1157,7 +1157,7 @@ _Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif`. All tabs use the 
 
 <Tier both/> <Impl groupedAgg/>
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`; a group with no number at all is the presence mask and burns `1.0`. The heavyweight tier counts a null value as `1.0` in that comparison.
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. The heavyweight tier counts a null value as `1.0` in that comparison, and burns `1.0` for a column of nulls.
 
 :::note Lightweight tier (pyrx)
 The lightweight implementation is backed by `pygx._quadbin` cell math and `rasterio` — it burns each quadbin cell's geometry/value into the output band via `rasterio.features.rasterize`, matching the heavyweight cell set and burn values exactly.
@@ -1205,10 +1205,10 @@ _Multi-row fixture: 3 quadbin zoom-12 cell rows near central London with burn va
 
 <Tier both/> <Impl groupedAgg/>
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`; a group with no number at all is the presence mask and burns `1.0`. The heavyweight tier counts a null value as `1.0` in that comparison.
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. The heavyweight tier counts a null value as `1.0` in that comparison, and burns `1.0` for a column of nulls.
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** + **pygx** custom-grid cell math. Aggregate — `groupBy(...).agg(rx.rst_custom_rasterize_agg("cellid", "value", ...))` burns each custom-grid cell's centroid pixel (or spatial-envelope pixels with `mode='spatial_envelope'`) into one raster tile per group. Cell IDs are BIGINT encoded by the custom-grid layout. When `value` is omitted or null, all burned pixels carry `1.0` (presence mask). The extent auto-derives from the cell set when canvas parameters are null.
+Powered by **rasterio** + **pygx** custom-grid cell math. Aggregate — `groupBy(...).agg(rx.rst_custom_rasterize_agg("cellid", "value", ...))` burns each custom-grid cell's centroid pixel (or spatial-envelope pixels with `mode='spatial_envelope'`) into one raster tile per group. Cell IDs are BIGINT encoded by the custom-grid layout. When `value` is omitted (or an untyped `NULL`), all burned pixels carry `1.0` (presence mask); a typed column of nulls burns `NaN` in the lightweight tier. The extent auto-derives from the cell set when canvas parameters are null.
 :::
 
 :::warning Lightweight SQL returns BINARY (not the tile struct)
@@ -1237,7 +1237,7 @@ Streaming aggregator that burns custom-grid cell values into one raster tile per
 
 **Signature:** `rst_custom_rasterize_agg(cellid: Column, value: Column, grid: Column, out_srid: Column, pixel_size: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, mode: Column, kring_pad: Column): Column`
 
-**Parameters:** `cellid` — custom-grid cell ID (BIGINT); `value` — numeric burn value (null → `1.0` presence mask); `grid` — custom-grid struct from `gbx_custom_grid(...)`; `out_srid` — EPSG code for the output CRS; `pixel_size` — output raster cell size in target CRS units (null → auto-derived from cell dimensions); `xmin/ymin/xmax/ymax` — output extent (null → auto-derived from the cell set + `kring_pad`); `width/height` — output dimensions in pixels (null → auto-derived); `mode` — `"centroids"` (default) or `"spatial_envelope"`; `kring_pad` — neighbourhood expansion in rings for auto-extent (default 1)
+**Parameters:** `cellid` — custom-grid cell ID (BIGINT); `value` — numeric burn value (omitted or an untyped `NULL` → `1.0` presence mask); `grid` — custom-grid struct from `gbx_custom_grid(...)`; `out_srid` — EPSG code for the output CRS; `pixel_size` — output raster cell size in target CRS units (null → auto-derived from cell dimensions); `xmin/ymin/xmax/ymax` — output extent (null → auto-derived from the cell set + `kring_pad`); `width/height` — output dimensions in pixels (null → auto-derived); `mode` — `"centroids"` (default) or `"spatial_envelope"`; `kring_pad` — neighbourhood expansion in rings for auto-extent (default 1)
 
 <FunctionExamples
   name="rst_custom_rasterize_agg"

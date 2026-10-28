@@ -8813,7 +8813,7 @@ def _dtmfromgeoms_agg_udf(
 _NO_VALUE = object()
 
 
-def _max_value_per_cell(cells, vals, key=None):
+def _max_value_per_cell(cells, vals, key=None, typed=True):
     """``{cell: value}`` for the four cell rasterizers, one value per distinct cell.
 
     The duplicate-cell rule of ``rst_{h3,quadbin,bng,custom}_rasterize_agg``: a cell id
@@ -8824,9 +8824,10 @@ def _max_value_per_cell(cells, vals, key=None):
 
     A null value never wins. A typed Double column delivers a null as ``NaN`` and a real
     ``NaN`` looks the same, so both are read as null: they are ignored whenever the cell
-    has a number, and a cell whose every value is null burns ``NaN``. A group with no
-    number at all (the value omitted, or a column of nulls) is the presence mask: every
-    cell burns ``1.0``.
+    has a number, and a cell whose every value is null burns ``NaN``. ``typed`` is False
+    when the value was omitted (the UDF then receives an object column of ``None``, not a
+    float column): that is the presence mask, every cell burns ``1.0``. A typed column
+    of nulls is data and follows the rule above.
 
     ``key`` maps a raw cell id to the id it is stored under (``adapter.to_key``), so two
     spellings of one cell (``TQ3080`` and ``TQ 3080``, or a quadbin id as signed and
@@ -8841,7 +8842,7 @@ def _max_value_per_cell(cells, vals, key=None):
             best[k] = [cell, v]
         elif v is not None and (cur[1] is None or v > cur[1]):
             cur[1] = v
-    if best and all(v is None for _, v in best.values()):
+    if not typed and all(v is None for _, v in best.values()):
         return {raw: 1.0 for raw, _ in best.values()}
     return {raw: float("nan") if v is None else v for raw, v in best.values()}
 
@@ -8967,7 +8968,9 @@ def _rst_h3_rasterize_agg_udf(
     # A null value arrives as None or np.nan (a typed Double column); the helper reads
     # both as null, and resolves a repeated cell by the id the grid stores it under.
     vals = [None if pd.isna(v) else v for _, v in pairs]
-    cell_values = _max_value_per_cell(cells, vals, cr._adapter("h3").to_key)
+    cell_values = _max_value_per_cell(
+        cells, vals, cr._adapter("h3").to_key, typed=value.dtype != object
+    )
     # Output CRS spec: out_crs (string) wins over the int srid; else grid-native
     # 4326. cellraster accepts an int SRID or a CRS string interchangeably.
     if out_crs is not None and out_crs.iloc[0] is not None:
@@ -9042,7 +9045,9 @@ def _rst_quadbin_rasterize_agg_udf(
     # A null value arrives as None or np.nan (a typed Double column); the helper reads
     # both as null, and resolves a repeated cell by the id the grid stores it under.
     vals = [None if pd.isna(v) else v for _, v in pairs]
-    cell_values = _max_value_per_cell(cells, vals, cr._adapter("quadbin").to_key)
+    cell_values = _max_value_per_cell(
+        cells, vals, cr._adapter("quadbin").to_key, typed=value.dtype != object
+    )
     # Output CRS spec: out_crs (string) wins over the int srid; else grid-native
     # 4326. cellraster accepts an int SRID or a CRS string interchangeably.
     if out_crs is not None and out_crs.iloc[0] is not None:
@@ -9102,7 +9107,9 @@ def _rst_bng_rasterize_agg_udf(
     # A null value arrives as None or np.nan (a typed Double column); the helper reads
     # both as null, and resolves a repeated cell by the id the grid stores it under.
     vals = [None if pd.isna(v) else v for _, v in pairs]
-    cell_values = _max_value_per_cell(cells, vals, cr._adapter("bng").to_key)
+    cell_values = _max_value_per_cell(
+        cells, vals, cr._adapter("bng").to_key, typed=value.dtype != object
+    )
     # BNG is EPSG:27700-native; the srid arg is a no-op (forced 27700). The sample
     # points and output raster are both 27700 -- NO WGS84 hop.
     return _rasterize_agg_body(
@@ -9185,7 +9192,7 @@ def _rst_custom_rasterize_agg_udf(
     # A null value arrives as None or np.nan (a typed Double column); the helper reads
     # both as null. Custom ids are stored as the int they arrive as, so no key is needed.
     vals = [None if pd.isna(v) else v for _, v in pairs]
-    cell_values = _max_value_per_cell(cells, vals)
+    cell_values = _max_value_per_cell(cells, vals, typed=value.dtype != object)
 
     # Extract the grid conf from the first row (per-group constant).
     conf = conf_from_row(grid.iloc[0])

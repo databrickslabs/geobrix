@@ -11,7 +11,8 @@ The UDF bodies are called directly (``.func``) so the row order is exactly the o
 
 A null value never wins: a typed Double column delivers a null as ``NaN``, which looks like
 a real ``NaN``, so both are ignored while the cell has a number, and a cell with only nulls
-burns ``NaN``. A group with no number at all is the presence mask and burns 1.0.
+burns ``NaN``. An omitted value is not a null column: the UDF receives an object column of
+``None``, and that is the presence mask, 1.0 for every cell.
 """
 
 import random
@@ -28,12 +29,20 @@ from databricks.labs.gbx.pyrx import _serde  # noqa: E402
 from databricks.labs.gbx.pyrx import functions as rx  # noqa: E402
 
 
-def _burn(grid, rows):
-    """The first band of the tile one group of ``rows`` produces, in the order given."""
+def _burn(grid, rows, omitted=False):
+    """The first band of the tile one group of ``rows`` produces, in the order given.
+
+    ``omitted``: the value was left out, which reaches the UDF as an object column of None
+    (a typed Double column of nulls is float64 NaN).
+    """
     cellid = pd.Series(
         [c for c, _ in rows], dtype="object" if grid == "bng" else "int64"
     )
-    value = pd.Series([v for _, v in rows], dtype="float64")
+    value = (
+        pd.Series([None] * len(rows), dtype=object)
+        if omitted
+        else pd.Series([v for _, v in rows], dtype="float64")
+    )
     if grid == "custom":
         from pyspark.sql import Row
 
@@ -55,27 +64,6 @@ def test_max_value_per_cell_keeps_the_largest_in_any_order():
     assert rx._max_value_per_cell(cells, vals) == {7: 9.0, 8: -1.0}
     assert rx._max_value_per_cell(cells[::-1], vals[::-1]) == {7: 9.0, 8: -1.0}
     assert rx._max_value_per_cell([], []) == {}
-
-
-def test_max_value_per_cell_ignores_null_unless_every_value_is_null():
-    nan = float("nan")
-    cells, vals = [1, 1, 2, 2, 3], [0.5, nan, nan, None, 4.0]
-    for order in (slice(None), slice(None, None, -1)):
-        got = rx._max_value_per_cell(cells[order], vals[order])
-        assert got[1] == 0.5 and got[3] == 4.0 and np.isnan(got[2])
-    # No number anywhere (the value omitted, or a column of nulls): the presence mask.
-    assert rx._max_value_per_cell([1, 2, 2], [None, nan, None]) == {1: 1.0, 2: 1.0}
-
-
-def test_max_value_per_cell_merges_spellings_of_one_cell():
-    # "TQ3080" and "TQ 3080" are one BNG cell: the largest value wins whatever the order.
-    from databricks.labs.gbx.pyrx.core import cellraster as cr
-
-    key = cr._adapter("bng").to_key
-    cells, vals = ["TQ3080", "TQ 3080", "TQ3081"], [9.0, 2.0, 1.0]
-    for order in (slice(None), slice(None, None, -1)):
-        got = rx._max_value_per_cell(cells[order], vals[order], key)
-        assert sorted(got.values()) == [1.0, 9.0] and len(got) == 2
 
 
 @pytest.mark.parametrize("grid", sorted(dc.GRIDS))
@@ -125,3 +113,26 @@ def test_a_null_value_never_wins_a_repeated_cell(grid):
         ).any(), f"{grid} ({name}): the all-null cell must burn NaN"
     for name in ("reversed", "shuffled"):
         assert np.array_equal(arrays["as given"], arrays[name], equal_nan=True)
+
+
+@pytest.mark.parametrize("grid", sorted(dc.GRIDS))
+def test_a_typed_column_of_nulls_burns_nan_but_an_omitted_value_is_the_presence_mask(
+    grid,
+):
+    rows = [(c, np.nan) for c in dc.GRIDS[grid]()[:3]]
+    typed, nodata = _burn(grid, rows)
+    burned = typed[typed != nodata]
+    assert burned.size and np.isnan(burned).all(), f"{grid}: typed nulls must burn NaN"
+    omitted, nodata = _burn(grid, rows, omitted=True)
+    assert set(omitted[omitted != nodata].tolist()) == {1.0}, f"{grid}: no mask"
+
+
+def test_two_spellings_of_one_bng_cell_burn_the_largest_value_in_any_order():
+    cells = dc.GRIDS["bng"]()
+    spaced = cells[0][:2] + " " + cells[0][2:]  # TQ3080 and TQ 3080 are one cell
+    others = [(c, 4.0 + i) for i, c in enumerate(cells[1:4])]
+    rows = [(cells[0], 9.0), (spaced, 2.0)] + others
+    for order in (rows, rows[::-1]):
+        pixels, nodata = _burn("bng", order)
+        burned = set(pixels[pixels != nodata].tolist())
+        assert 9.0 in burned and 2.0 not in burned, burned

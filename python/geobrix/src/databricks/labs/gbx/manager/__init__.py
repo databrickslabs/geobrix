@@ -50,7 +50,12 @@ def register(
     if target == "uc":
         from databricks.labs.gbx import uc
 
-        uc.verify(spark, catalog, schema, names)
+        uc.verify(
+            spark,
+            catalog,
+            schema,
+            [n for n in names if "L4" in man.functions[n].levels],
+        )
         return {}
     overrides = _levels or {}
     need_jvm = any(lv in man.functions[n].levels for n in names for lv in ("L1", "L2"))

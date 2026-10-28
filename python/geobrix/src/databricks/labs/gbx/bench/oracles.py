@@ -6,6 +6,9 @@ Unity Catalog passes all read these rows, so a level is "correct" exactly when i
 
 from __future__ import annotations
 
+import base64
+import json
+import math
 import os
 import tempfile
 from dataclasses import dataclass
@@ -66,6 +69,8 @@ MVP_S: Tuple[Case, ...] = (
     Case("bng_null_res", B, (530000.0, 180000.0, None), "null"),
     # A NULL in an INT column makes pandas hand the whole batch over as floats (3.0): the
     # valid rows around the NULL must still answer, row by row.
+    # (Session only: the batch is a pandas UDF artifact. A UC Python function runs row by row, and
+    # bng_null_res already pins its NULL.)
     Case(
         "bng_mixed_null_res",
         B,
@@ -76,13 +81,24 @@ MVP_S: Tuple[Case, ...] = (
         ),
         "exact_rows",
         ("TQ3080", None, "NT2573"),
+        ("session",),
     ),
     Case("bng_bad_res", B, (530000.0, 180000.0, "3km"), "raises", "3km"),
     # A resolution BNG does not define is a parameter error on every level, never a clamped cell.
     Case("bng_bad_res_int", B, (530000.0, 180000.0, 1001), "raises", "1001"),
     Case("bng_bad_res_digits", B, (530000.0, 180000.0, "1001"), "raises", "1001"),
     # A non-number easting is a parameter error too (only NaN and out-of-range values are data errors).
-    Case("bng_bad_easting", B, ("abc", 180000.0, 3), "raises", "abc"),
+    # (Session only: UC types easting DOUBLE, so the engine's cast sees 'abc' before any handler runs. The
+    # warehouse Statement API has ANSI off, where that cast is a silent NULL; with ANSI on the engine's
+    # own error names the value. Either way it is the product's behaviour, not GeoBrix's to pin.)
+    Case(
+        "bng_bad_easting",
+        B,
+        ("abc", 180000.0, 3),
+        "raises",
+        "abc",
+        ("session",),
+    ),
     # A UC STRING parameter receives an INT literal as its digit string, so every surface
     # accepts the digit-string form of the integer resolution.
     Case("bng_digit_res", B, (530000.0, 180000.0, "3"), "exact", "TQ3080"),
@@ -571,3 +587,203 @@ def run_session(
         ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
             results.append((case, check_error(case, exc)))
     return results
+
+
+# --- Unity Catalog surface -----------------------------------------------------------------------
+
+
+def _uc_value(arg, param, case: Case):
+    """A session-shaped oracle argument as the UC function receives it."""
+    if arg is None or isinstance(arg, dict):
+        return arg
+    if param.uc == "GEOMETRY" and isinstance(arg, str):
+        from shapely import set_srid, to_wkb
+
+        from databricks.labs.gbx._geom import parse_geom
+
+        return to_wkb(set_srid(parse_geom(arg), case.geom_srid), include_srid=True)
+    if param.uc == "STRING" and not isinstance(arg, str):
+        return str(arg)  # UC has one STRING type: an INT literal arrives as its digits
+    return arg
+
+
+def run_handlers(cases, tmpdir: Optional[str] = None):
+    """T0 for L4: call the UC handlers with Python values. GEOMETRY params get EWKB bytes."""
+    from databricks.labs.gbx import manifest
+
+    tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")
+    man = manifest.load()
+    out = []
+    for case in cases:
+        fn = man.functions[case.fn]
+        if "uc" not in case.surfaces or "L4" not in fn.levels:
+            continue
+        handler = manifest.resolve_ref(fn.levels["L4"]["handler"])
+        args = [resolve_arg(a, tmpdir) for a in case.args]
+        args += [  # the SQL wrapper supplies the DEFAULTs
+            None if p.default is None else p.default.strip("'")
+            for p in fn.params[len(args) :]
+        ]
+        args = [_uc_value(a, p, case) for a, p in zip(args, fn.params)]
+        try:
+            out.append((case, check(case, handler(*args), args)))
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
+            out.append((case, check_error(case, exc)))
+    return out
+
+
+def _sql_literal(value, param, case: Case) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, dict):
+        raster = (
+            "NULL" if value["raster"] is None else "X'" + value["raster"].hex() + "'"
+        )
+        path = "NULL" if value["path"] is None else "'" + value["path"] + "'"
+        return (
+            f"named_struct('cellid', 0L, 'raster', {raster}, 'path', {path}, "
+            "'path_mode', CAST(NULL AS STRING), "
+            "'window', CAST(NULL AS struct<col_off:int,row_off:int,width:int,height:int>), "
+            "'clip_polygon', CAST(NULL AS BINARY), 'clip_crs', CAST(NULL AS STRING), "
+            "'crs', CAST(NULL AS STRING), 'metadata', CAST(map() AS map<string,string>))"
+        )
+    if param.uc == "GEOMETRY":
+        return f"st_geomfromwkt('{value}', {case.geom_srid})"  # integer SRID only (product CRS facts)
+    if isinstance(value, str):
+        return "'" + value.replace("'", "''") + "'"
+    if isinstance(value, float) and math.isnan(value):
+        return "CAST('NaN' AS DOUBLE)"
+    return repr(value)
+
+
+def uc_sql(cases, catalog: str, schema: str, tmpdir: str) -> List[Tuple[str, str]]:
+    """(cid, statement) per UC case: one SELECT each, so a refusal can't hide another case."""
+    from databricks.labs.gbx import manifest
+
+    man = manifest.load()
+    stmts = []
+    for case in cases:
+        if "uc" not in case.surfaces:
+            continue
+        fn = man.functions[case.fn]
+        lits = [
+            _sql_literal(resolve_arg(a, tmpdir), p, case)
+            for a, p in zip(case.args, fn.params)
+        ]
+        call = f"`{catalog}`.`{schema}`.{case.fn}({', '.join(lits)})"
+        if fn.returns_uc == "GEOMETRY":
+            call = f"st_asewkb({call})"
+        stmts.append((case.cid, f"SELECT {call} AS out"))
+    return stmts
+
+
+_CID_MARK = "-- cid: "
+
+
+def uc_sql_text(pairs: Sequence[Tuple[str, str]]) -> str:
+    """The statement file gbx:uc:sql reads: a `-- cid: <id>` line, then the statement."""
+    return "\n\n".join(f"{_CID_MARK}{cid}\n{stmt};" for cid, stmt in pairs) + "\n"
+
+
+def parse_uc_sql(text: str) -> List[Tuple[str, str]]:
+    pairs: List[Tuple[str, str]] = []
+    for line in text.splitlines():
+        if line.startswith(_CID_MARK):
+            pairs.append((line[len(_CID_MARK) :].strip(), ""))
+        elif pairs and line.strip() and not line.startswith("--"):
+            cid, stmt = pairs[-1]
+            pairs[-1] = (cid, f"{stmt}\n{line}" if stmt else line)
+    return [(cid, stmt.strip().rstrip(";").strip()) for cid, stmt in pairs]
+
+
+_INTS = {"BYTE", "TINYINT", "SHORT", "SMALLINT", "INT", "LONG", "BIGINT"}
+_FLOATS = {"FLOAT", "DOUBLE", "DECIMAL"}
+_BINARY_FIELDS = ("raster", "clip_polygon")  # the BINARY fields of a tile struct
+
+
+def decode_uc_cell(raw, type_name: str, *, decode_binary: bool = True):
+    """One cell of a Statement API JSON_ARRAY result -> a Python value.
+
+    The API returns every cell as a string: BINARY as base64, DOUBLE as text (NaN included), and
+    STRUCT / MAP / ARRAY as JSON text.
+    """
+    if raw is None:
+        return None
+    t = type_name.upper()
+    if t == "BINARY":
+        return base64.b64decode(raw) if decode_binary else raw
+    if t in _INTS:
+        return int(raw)
+    if t in _FLOATS:
+        return float(raw)
+    if t == "BOOLEAN":
+        return str(raw).lower() == "true"
+    if t in ("STRUCT", "MAP", "ARRAY"):
+        value = json.loads(raw) if isinstance(raw, str) else raw
+        if decode_binary and isinstance(value, dict):
+            for k in _BINARY_FIELDS:
+                if isinstance(value.get(k), str):
+                    value[k] = base64.b64decode(value[k])
+        return value
+    return raw
+
+
+_BYTES_KEY = "$bytes"
+
+
+def _jsonable(obj):
+    if isinstance(obj, (bytes, bytearray)):
+        return {_BYTES_KEY: base64.b64encode(bytes(obj)).decode("ascii")}
+    if isinstance(obj, dict):
+        return {k: _jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_jsonable(v) for v in obj]
+    return obj
+
+
+def _from_json(obj):
+    if isinstance(obj, dict):
+        if set(obj) == {_BYTES_KEY}:
+            return base64.b64decode(obj[_BYTES_KEY])
+        return {k: _from_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_from_json(v) for v in obj]
+    return obj
+
+
+def dump_uc_results(results: dict, path: str) -> None:
+    """`{cid: {"value": ..., "wall_s": [...]} | {"error": message}}` as JSON; bytes are written as base64."""
+    with open(path, "w") as fh:
+        json.dump(_jsonable(results), fh, indent=1)
+
+
+def load_uc_results(path: str) -> dict:
+    with open(path) as fh:
+        return _from_json(json.load(fh))
+
+
+def check_uc_results(cases, results: dict, tmpdir: str) -> List[str]:
+    """results: {cid: {"value": <decoded>} | {"error": "<message>"}} written by gbx-uc-sql --out.
+
+    A UC case with no result is a failure too: a statement that never ran must not pass.
+    """
+    failures = []
+    by_id = {c.cid: c for c in cases}
+    for cid, r in results.items():
+        case = by_id[cid]
+        args = [resolve_arg(a, tmpdir) for a in case.args]
+        msg = (
+            check_error(case, RuntimeError(r["error"]))
+            if "error" in r
+            else check(case, r["value"], args)
+        )
+        if msg:
+            failures.append(msg)
+    failures += [
+        f"{c.cid}: no result"
+        for c in cases
+        if "uc" in c.surfaces and c.cid not in results
+    ]
+    return failures

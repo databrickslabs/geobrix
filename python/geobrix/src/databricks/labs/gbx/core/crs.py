@@ -7,10 +7,12 @@ else raise (a code in neither registry is invalid). The code sets come from PROJ
 ``proj.db`` via ``pyproj.database.get_codes`` and are built once + cached.
 """
 
+import re
 import threading
 from collections import OrderedDict
+from dataclasses import dataclass
 from functools import lru_cache
-from typing import Optional, Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
 from rasterio.crs import CRS
@@ -387,3 +389,81 @@ def enu_to_lonlat(east, north, ref_lat, ref_lon):
     lon = ref_lon + np.asarray(east, dtype="float64") / (_M_PER_DEG_LAT * cos_ref)
     lat = ref_lat + np.asarray(north, dtype="float64") / _M_PER_DEG_LAT
     return lon, lat
+
+
+# --- UC surface: CRS forms, decided from what the product st_* functions accept -----------------------
+# UC functions accept an INTEGER SRID or an `EPSG:<n>` / `ESRI:<n>` string, converted to its integer
+# BEFORE any product st_* call (the product casts strings to INT; with ANSI off a bad one is a silent
+# NULL). Everything else (WKT, PROJJSON, PROJ4, URN/URL, other authorities, custom) is refused with a
+# Fix:. Outputs carry the integer SRID. This table is the single place that decision lives.
+UC_CRS_FORMS: Tuple[str, ...] = ("srid_int", "epsg_code", "esri_code")
+_UC_CODE = re.compile(r"^(EPSG|ESRI):([0-9]+)$", re.IGNORECASE)
+_UC_DIGITS = re.compile(r"^[0-9]+$")
+
+
+@dataclass(frozen=True)
+class UcCrs:
+    authority: str  # "EPSG" | "ESRI"
+    srid: int  # what product st_* calls and outputs carry
+
+    @property
+    def code(self) -> str:
+        """For GeoBrix's own kernels (rasterio/pyproj), never for product st_* calls."""
+        return f"{self.authority}:{self.srid}"
+
+
+def _known(authority: str, srid: int) -> bool:
+    # The authoritative PROJ registries, as resolve_crs uses them: "EPSG:102003" is not an EPSG code.
+    return srid > 0 and str(srid) in _authority_codes(authority)
+
+
+def _uc_srid_int(value) -> Optional[UcCrs]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) or (
+        isinstance(value, str) and _UC_DIGITS.match(value.strip())
+    ):
+        n = int(value)
+        # An int names one code space; EPSG first, as resolve_crs does.
+        for auth in ("EPSG", "ESRI"):
+            if _known(auth, n):
+                return UcCrs(auth, n)
+    return None
+
+
+def _uc_code(auth: str):
+    def parse(value) -> Optional[UcCrs]:
+        m = _UC_CODE.match(value.strip()) if isinstance(value, str) else None
+        if m and m.group(1).upper() == auth and _known(auth, int(m.group(2))):
+            return UcCrs(auth, int(m.group(2)))
+        return None
+
+    return parse
+
+
+_UC_CRS_VALIDATORS = {
+    "srid_int": _uc_srid_int,
+    "epsg_code": _uc_code("EPSG"),
+    "esri_code": _uc_code("ESRI"),
+}
+_UC_FORM_TEXT = {
+    "srid_int": "an SRID integer",
+    "epsg_code": "'EPSG:<n>'",
+    "esri_code": "'ESRI:<n>'",
+}
+
+
+def parse_uc_crs(value, *, fn: str) -> UcCrs:
+    """The restricted CRS of the UC surface (see UC_CRS_FORMS). Raises ValueError with a Fix:, never returns NULL."""
+    for form in UC_CRS_FORMS:
+        out = _UC_CRS_VALIDATORS[form](value)
+        if out is not None:
+            return out
+    forms = ", ".join(_UC_FORM_TEXT[f] for f in UC_CRS_FORMS)
+    shown = repr(value)
+    shown = shown if len(shown) <= 60 else shown[:57] + "..."
+    raise ValueError(
+        f"{fn}: the UC function takes a CRS as {forms}, for a code PROJ knows; got {shown}. "
+        "A full CRS definition (WKT, PROJJSON, PROJ4, URN or custom) stays outside UC. "
+        f"Fix: use the session function {fn} (after databricks.labs.gbx.register(spark)) or the Python API."
+    )

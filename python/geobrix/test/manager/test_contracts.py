@@ -6,8 +6,10 @@ from pathlib import Path
 import pytest
 
 from databricks.labs.gbx import manifest
+from databricks.labs.gbx.core import crs as gcrs
 from databricks.labs.gbx.manager import capabilities as caps_mod
 from databricks.labs.gbx.manager import levels
+from databricks.labs.gbx.uc import ddl
 
 from .connect_stub import ConnectStub
 
@@ -45,17 +47,8 @@ def _refs(fn):
     return out
 
 
-# databricks.labs.gbx.uc.handlers does not exist yet; remove this marker when it does.
-_L4_PENDING = pytest.mark.xfail(
-    strict=True, reason="the UC handlers module is not written yet"
-)
 REFS = [
-    pytest.param(
-        f.sql_name,
-        ref,
-        id=f"{f.sql_name}-{lvl}-{ref.rpartition(':')[2]}",
-        marks=[_L4_PENDING] if lvl == "L4" else [],
-    )
+    pytest.param(f.sql_name, ref, id=f"{f.sql_name}-{lvl}-{ref.rpartition(':')[2]}")
     for f in FNS
     for lvl, ref in _refs(f)
 ]
@@ -380,3 +373,220 @@ def test_bad_target():
 
     with pytest.raises(ValueError, match="target"):
         manager.register(object(), target="both")
+
+
+UC_FNS = [f for f in FNS if "L4" in f.levels]
+
+
+@pytest.mark.parametrize("fn", UC_FNS, ids=lambda f: f.sql_name)
+def test_uc_ddl_contract(fn):
+    stmts = ddl.function_ddl(
+        fn,
+        "cat",
+        "sch",
+        "file:///Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl",
+        MAN.uc_dependencies,
+        "0.6.0",
+    )
+    impl = stmts[0]
+    assert "environment_version = '6'" in impl and "geobrix @ file:///Volumes/" in impl
+    assert "COMMENT 'geobrix 0.6.0'" in impl and "LANGUAGE PYTHON" in impl
+    assert all("`cat`.`sch`." in s for s in stmts)  # 3-level names only (§2.3)
+    has_default = any(p.default for p in fn.params)
+    assert len(stmts) == (2 if has_default else 1)
+    if has_default:
+        assert (
+            f"gbx__{fn.sql_name[4:]}(" in impl
+            and "LANGUAGE SQL" in stmts[1]
+            and "DEFAULT" in stmts[1]
+        )
+    for p in fn.params:
+        if "GEOMETRY" in p.session or p.uc == "GEOMETRY":
+            assert f"{p.name} GEOMETRY" in impl
+
+
+@pytest.mark.parametrize(
+    "value,want",
+    [
+        (3857, ("EPSG", 3857)),
+        ("3857", ("EPSG", 3857)),
+        ("EPSG:4326", ("EPSG", 4326)),
+        ("epsg:4326", ("EPSG", 4326)),
+        ("ESRI:102003", ("ESRI", 102003)),
+        (102003, ("ESRI", 102003)),
+        ("EPSG:102003", None),  # an ESRI code under the EPSG name is not an EPSG code
+        ("IAU_2015:30100", None),
+        ("urn:ogc:def:crs:EPSG::4326", None),
+        ('GEOGCS["WGS 84"]', None),
+        ("+proj=longlat +datum=WGS84", None),
+        ('{"type": "GeographicCRS"}', None),
+        (0, None),
+        (-1, None),
+        (True, None),
+    ],
+)
+def test_uc_crs_parser_contract(value, want):
+    """User decision (product CRS probe): int SRID or EPSG:/ESRI:<n> only, as an INT; the rest refused."""
+    if want:
+        got = gcrs.parse_uc_crs(value, fn="gbx_x")
+        assert (got.authority, got.srid) == want and isinstance(got.srid, int)
+    else:
+        # Raised, never NULL: with ANSI off a bad string would reach the product st_* as a silent NULL.
+        with pytest.raises(ValueError, match=r"Fix: .*session function gbx_x"):
+            gcrs.parse_uc_crs(value, fn="gbx_x")
+
+
+def test_uc_handlers_import_and_run_in_a_sandbox_without_pyspark():
+    """A UC Python sandbox holds the declared deps only: no pyspark, and none of the light tier's own extras."""
+    import os
+    import subprocess
+    import sys
+
+    from databricks.labs.gbx.bench import oracles
+
+    code = (
+        "import sys, tempfile\n"
+        "for blocked in ('pyspark', 'pandas', 'pyarrow', 'scipy'):\n"
+        "    sys.modules[blocked] = None  # an import of it raises ImportError\n"
+        "from databricks.labs.gbx.bench import oracles\n"
+        "ran = oracles.run_handlers(oracles.MVP_S, tmpdir=tempfile.mkdtemp())\n"
+        "bad = [m for _, m in ran if m]\n"
+        "assert ran and not bad, bad\n"
+        "print(len(ran))\n"
+    )
+    src = (
+        Path(manifest.__file__).resolve().parents[4]
+    )  # the root of the databricks package
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join(
+            filter(None, [str(src), os.environ.get("PYTHONPATH")])
+        ),
+    }
+    out = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True
+    )
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert int(out.stdout) == sum(
+        "uc" in c.surfaces for c in oracles.MVP_S
+    )  # every UC row ran
+
+
+class _UcSpark:
+    """A session stand-in: records statements, answers the information_schema read with `routines`."""
+
+    def __init__(self, routines=None):
+        self.stmts, self.routines = [], routines
+
+    def sql(self, query):
+        self.stmts.append(query)
+        rows = []
+        if "information_schema.routines" in query:
+            rows = [
+                {"routine_name": n, "comment": c}
+                for n, c in (self.routines or {}).items()
+            ]
+        return type("R", (), {"collect": lambda _s, r=rows: r})()
+
+
+ENV6_WHEEL = "geobrix-0.6.0+env6-py3-none-any.whl"
+UC_NAMES = {f.sql_name: "geobrix 0.6.0" for f in UC_FNS}
+
+
+@pytest.mark.parametrize(
+    "files,wheel,error",
+    [
+        (["geobrix-0.6.0-py3-none-any.whl"], "geobrix-0.6.0-py3-none-any.whl", None),
+        ([ENV6_WHEEL], ENV6_WHEEL, None),
+        (["geobrix-0.6.0+env5-py3-none-any.whl", ENV6_WHEEL], ENV6_WHEEL, None),
+        (["geobrix-0.6.0+env5-py3-none-any.whl"], None, re.escape(ENV6_WHEEL)),
+        ([], None, "exactly one"),
+        (["geobrix-0.6.0-py3-none-any.whl", ENV6_WHEEL], None, "exactly one"),
+        (["geobrix-0.5.3-py3-none-any.whl"], None, "exactly one"),
+    ],
+    ids=[
+        "plain",
+        "env6",
+        "env6-beside-env5",
+        "env5-only",
+        "none",
+        "two",
+        "other-version",
+    ],
+)
+def test_uc_install_deploys_one_env6_wheel_and_verifies(
+    tmp_path, monkeypatch, files, wheel, error
+):
+    from databricks.labs.gbx import uc
+
+    for name in files:
+        (tmp_path / name).write_bytes(b"")
+    monkeypatch.setenv("DATABRICKS_ENV_VERSION", "6")
+    spark = _UcSpark(UC_NAMES)
+    if error:
+        with pytest.raises(RuntimeError, match=error):
+            uc.install("cat", "sch", str(tmp_path), spark=spark)
+        assert not spark.stmts  # nothing is created from the wrong wheel
+        return
+    stmts = uc.install("cat", "sch", str(tmp_path), spark=spark)
+    assert spark.stmts[: len(stmts)] == stmts  # every statement ran, in order
+    assert all(f"geobrix @ file://{tmp_path}/{wheel}" in s for s in stmts[:1])
+    assert (
+        "information_schema.routines" in spark.stmts[-1]
+    )  # then the schema was verified
+
+
+def test_uc_install_refuses_a_runtime_that_is_not_env6(tmp_path, monkeypatch):
+    from databricks.labs.gbx import uc
+
+    (tmp_path / ENV6_WHEEL).write_bytes(b"")
+    monkeypatch.setenv("DATABRICKS_ENV_VERSION", "5")
+    monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "client.5.0")
+    with pytest.raises(RuntimeError, match="env 6"):
+        uc.install("cat", "sch", str(tmp_path), spark=_UcSpark(UC_NAMES))
+
+
+def test_uc_install_dry_run_emits_the_ddl_without_a_session_or_a_wheel(monkeypatch):
+    from databricks.labs.gbx import uc
+
+    monkeypatch.delenv("DATABRICKS_ENV_VERSION", raising=False)
+    everything = uc.install("cat", "sch", "/Volumes/c/s/v/dir", dry_run=True)
+    assert len(everything) == sum(
+        2 if any(p.default for p in f.params) else 1 for f in UC_FNS
+    )
+    assert all(ENV6_WHEEL in s for s in everything if "LANGUAGE PYTHON" in s)
+    only = uc.install(
+        "cat",
+        "sch",
+        "/Volumes/c/s/v/dir",
+        only=["gbx_bng_eastnorthasbng"],
+        dry_run=True,
+    )
+    assert len(only) == 1 and "gbx_bng_eastnorthasbng(" in only[0]
+
+
+@pytest.mark.parametrize(
+    "routines,error",
+    [
+        (UC_NAMES, None),
+        ({**UC_NAMES, "gbx_st_makevalid": "geobrix 0.5.3"}, "gbx_st_makevalid"),
+        (
+            {n: c for n, c in UC_NAMES.items() if n != "gbx_st_makevalid"},
+            "gbx_st_makevalid",
+        ),
+    ],
+    ids=["match", "old-version", "missing"],
+)
+def test_register_uc_checks_the_schema_against_this_wheel(routines, error):
+    from databricks.labs.gbx import register
+
+    call = lambda: register(  # noqa: E731
+        _UcSpark(routines), target="uc", catalog="cat", schema="sch"
+    )
+    if error:
+        with pytest.raises(RuntimeError, match=error):
+            call()
+    else:
+        assert call() == {}
+    with pytest.raises(ValueError, match="catalog= and schema="):
+        register(_UcSpark(routines), target="uc")

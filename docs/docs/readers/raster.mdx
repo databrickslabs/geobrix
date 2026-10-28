@@ -57,7 +57,7 @@ prepare-then-read pipeline.
 | `overlapPercent` | `0` | Overlap between adjacent `tileSize` cells, as a percentage of tile size (`overlap_px = ceil(tile_dim · pct/100)`, `step = tile_dim − overlap_px`). Applies to **`tileSize` only** (an error otherwise). Default `0` = non-overlapping grid. |
 | `tilesTable` | _none_ | Delta table to use as a tile index (see [pre-computed tile inputs](#advanced-pre-computed-tile-inputs) below). |
 | `versionAsOf` | _none_ | With `tilesTable`: read this Delta version of the table (a non-negative integer, e.g. `"3"`), so a pipeline re-runs against the exact tile index it used. Mutually exclusive with `timestampAsOf`; an error without `tilesTable`. See [pin a tile index version](#tiles-table-time-travel). |
-| `timestampAsOf` | _none_ | With `tilesTable`: read the table as it was at this time (e.g. `"2026-10-01 00:00:00"`; Delta takes the latest version committed at or before it). Mutually exclusive with `versionAsOf`; an error without `tilesTable`. |
+| `timestampAsOf` | _none_ | With `tilesTable`: read the table as it was at this time (e.g. `"2026-10-01 00:00:00"`): the version current then. The time must fall between the table's first and latest commits, or Delta raises an error; use `versionAsOf` for an exact version. Mutually exclusive with `versionAsOf`; an error without `tilesTable`. |
 | `skipOrdering` | `"false"` | Pass `"true"` to suppress the auto-sort-by-source-path that `tilesTable` reads apply by default. See [tilesTable auto-order](#tiles-table-auto-order) below. |
 
 :::tip Why overlap?
@@ -517,13 +517,17 @@ from the table as it was, set one of two options next to `tilesTable`:
 
 - `versionAsOf` reads that Delta version of the table (a non-negative integer, such as `"3"`).
 - `timestampAsOf` reads the version that was current at that time (such as `"2026-10-01 00:00:00"`).
+  Delta accepts only a time between the table's first and latest commits: a time after the latest
+  commit fails the read, even when the table has not changed since.
 
-Note the version a run used (`DESCRIBE HISTORY` on the table lists them) and pass it to a later run
-to plan from the same tile index. Set at most one of the two, and only with `tilesTable`: a manifest
-or a directory walk has no version, so either option without `tilesTable` is an error. The table
-must be a Delta table. A version that does not exist (or that `VACUUM` has removed), or a time
-before the table's first commit, fails the read. The options pin the tile index only: the index
-lists files, and the pixels are whatever those files hold when the tiles are read.
+To re-run against exactly the tile index an earlier run used, note the version that run read
+(`DESCRIBE HISTORY` on the table lists the versions) and pass it as `versionAsOf`; a timestamp
+depends on commit times and is easy to place outside the table's history. Set at most one of the
+two, and only with `tilesTable`: a manifest or a directory walk has no version, so either option
+without `tilesTable` is an error. The table must be a Delta table. A version that does not exist
+(or that `VACUUM` has removed), or a time outside the table's history, fails the read. The options
+pin the tile index only: the index lists files, and the pixels are whatever those files hold when
+the tiles are read.
 
 ## Next Steps
 

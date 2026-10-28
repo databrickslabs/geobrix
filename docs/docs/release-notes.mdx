@@ -328,8 +328,9 @@ formats.
 - **`versionAsOf` and `timestampAsOf` read a `tilesTable` as it was.** The lightweight raster
   readers (`raster_gbx`, `gtiff_gbx`, `cog_gbx`) take either option next to `tilesTable` and plan
   from that Delta version of the tile index, so a pipeline can re-run against the exact table
-  version it used. Setting both, or either without `tilesTable`, raises an error. See
-  [Raster Reader](./readers/raster#tiles-table-time-travel).
+  version it used. Setting both, or either without `tilesTable`, raises an error. The table must
+  be a Delta table, and a version or time outside its history fails the read; `versionAsOf` names
+  an exact version. See [Raster Reader](./readers/raster#tiles-table-time-travel).
 
 ### Raster writers
 

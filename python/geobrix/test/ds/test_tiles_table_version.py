@@ -1,7 +1,7 @@
 """versionAsOf / timestampAsOf: the raster readers plan from a pinned version of a tilesTable.
 
 The option parsing needs no Spark; the read of a pinned version needs a Delta table, so it
-runs on a local Delta session (the recipe of test/zarr/conftest.py's ``spark_delta``).
+runs on a local Delta session (the recipe of test/zarr/conftest.py).
 """
 
 import uuid
@@ -10,8 +10,7 @@ import pytest
 
 from databricks.labs.gbx.ds.raster import RasterGbxReader
 
-_DELTA_EXT = "io.delta.sql.DeltaSparkSessionExtension"
-_DELTA_CATALOG = "org.apache.spark.sql.delta.catalog.DeltaCatalog"
+from ..zarr.conftest import delta_session
 
 _COLS = ["path", "col_off", "row_off", "width", "height"]
 
@@ -22,36 +21,8 @@ def _tile(name):
 
 @pytest.fixture(scope="module")
 def spark_delta(tmp_path_factory):
-    """Local Spark with OSS Delta; the jars come from PYSPARK_SUBMIT_ARGS (test/conftest.py)."""
-    import logging
-
-    from pyspark.sql import SparkSession
-
-    logging.getLogger("py4j").setLevel(logging.ERROR)
-    active = SparkSession.getActiveSession()
-    if active is not None and _DELTA_EXT not in (
-        active.conf.get("spark.sql.extensions", "") or ""
-    ):
-        active.stop()
-    try:
-        session = (
-            SparkSession.builder.master("local[2]")
-            .appName("gbx-ds-tiles-table-version")
-            .config("spark.sql.extensions", _DELTA_EXT)
-            .config("spark.sql.catalog.spark_catalog", _DELTA_CATALOG)
-            .config("spark.sql.warehouse.dir", str(tmp_path_factory.mktemp("delta_wh")))
-            .config("spark.sql.shuffle.partitions", "2")
-            .config("spark.ui.enabled", "false")
-            .config("spark.delta.logStore.class", "io.delta.storage.LocalLogStore")
-            .getOrCreate()
-        )
-    except Exception as e:  # the JVM could not load the Delta classes
-        raise RuntimeError(
-            "Could not start a Delta-enabled Spark session; the delta-spark jars are "
-            "not on the JVM classpath. Fix: run the test through "
-            "scripts/commands/gbx-test-pyrx.sh (it fetches the jars), or set "
-            "PYSPARK_SUBMIT_ARGS to include them before pytest starts."
-        ) from e
+    """Module scope: the Delta session ends with this file, later ds modules get a plain one."""
+    session = delta_session(tmp_path_factory.mktemp("delta_wh"))
     yield session
     session.stop()
 
@@ -74,6 +45,7 @@ def _planned(options):
     return [p.file_path for p in parts.partitions()]
 
 
+@pytest.mark.delta
 def test_tiles_table_version_as_of(spark_delta, tiles_table):
     stamp_v1 = (
         spark_delta.sql(f"DESCRIBE HISTORY {tiles_table}")
@@ -86,6 +58,9 @@ def test_tiles_table_version_as_of(spark_delta, tiles_table):
 
     assert _planned(base) == [a, b, c]  # no option: the latest version
     assert _planned({**base, "versionAsOf": "0"}) == [a]
+    assert _planned({**base, "versionAsOf": 0}) == [
+        a
+    ]  # a programmatic int 0 is a version
     assert _planned({**base, "versionAsOf": "1"}) == [a, b]
     assert _planned({**base, "versionasof": "1"}) == [a, b]  # Spark lowercases keys
     assert _planned({**base, "timestampAsOf": stamp_v1}) == [a, b]

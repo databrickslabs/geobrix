@@ -124,15 +124,14 @@ def _delta_jars():
 def pytest_collection_finish(session):
     """Put the Delta jars on PYSPARK_SUBMIT_ARGS when a test will run on a Delta session.
 
-    That is every test/zarr test, and any test elsewhere that asks for ``spark_delta``
-    (test/ds/test_tiles_table_version.py defines its own).
+    That is every test/zarr test, and any other test marked ``delta``.
     """
     if "PYSPARK_SUBMIT_ARGS" in os.environ:
         return
     zarr_dir = Path(__file__).resolve().parent / "zarr"
     if not any(
         zarr_dir in Path(item.path).resolve().parents
-        or "spark_delta" in getattr(item, "fixturenames", ())
+        or item.get_closest_marker("delta")
         for item in session.items
     ):
         return

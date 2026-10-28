@@ -953,8 +953,14 @@ def _table_time_travel(options, *, has_tiles_table: bool):
     # them case-insensitively lives with the netcdf reader (which imports this module).
     from databricks.labs.gbx.ds.netcdf import _option
 
-    raw_version = str(_option(options, "versionAsOf", "") or "").strip()
-    timestamp = str(_option(options, "timestampAsOf", "") or "").strip()
+    # None means unset; a programmatic int 0 is a real version, not a blank.
+    raw_version, timestamp = (
+        "" if value is None else str(value).strip()
+        for value in (
+            _option(options, "versionAsOf", None),
+            _option(options, "timestampAsOf", None),
+        )
+    )
     if raw_version and timestamp:
         raise ValueError(
             "raster_gbx: 'versionAsOf' and 'timestampAsOf' are mutually exclusive; "
@@ -969,14 +975,11 @@ def _table_time_travel(options, *, has_tiles_table: bool):
         )
     version = None
     if raw_version:
-        try:
-            version = int(raw_version)
-        except ValueError:
-            version = -1
-        if version < 0:
+        if not (raw_version.isascii() and raw_version.isdigit()):
             raise ValueError(
                 f"raster_gbx: 'versionAsOf' must be a non-negative integer; got {raw_version!r}."
             )
+        version = int(raw_version)
     return version, (timestamp or None)
 
 

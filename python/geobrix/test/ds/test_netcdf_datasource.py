@@ -207,7 +207,7 @@ def test_vector_read_dsg_points(spark, tmp_path):
 def test_vector_reader_types_a_time_a_date_and_a_flag_as_their_cf_attributes_say(
     tmp_path,
 ):
-    """A CF time variable reads as a timestamp (UTC), one in days as a date, a variable that
+    """A CF time variable reads as a timestamp (UTC), a whole-day count in days as a date, a variable that
     flags 0 / 1 as ``false true`` as a boolean, and a NULL stays NULL: not epoch nanoseconds as
     text and a float, which is what the decoded values would give. An int8 with no flag
     attributes is still an integer."""
@@ -234,6 +234,20 @@ def test_vector_reader_types_a_time_a_date_and_a_flag_as_their_cf_attributes_say
             "proleptic_gregorian",
         )
         day[:] = np.ma.masked_array([20513, 0], mask=[False, True])
+        # a day count that is not whole days, or whose base is not midnight, has a time of day
+        half = ds.createVariable("half", "f8", ("obs",), fill_value=-1e30)
+        half.units, half.calendar = ("days since 2020-01-01", "proleptic_gregorian")
+        half[:] = np.ma.masked_array([0.5, 0.0], mask=[False, True])
+        noon = ds.createVariable("noon", "i4", ("obs",))
+        noon.units, noon.calendar = (
+            "days since 2000-01-01 12:00:00",
+            "proleptic_gregorian",
+        )
+        noon[:] = [0, 1]
+        scaled = ds.createVariable("scaled", "i2", ("obs",))
+        scaled.units, scaled.calendar = ("days since 2020-01-01", "proleptic_gregorian")
+        scaled.scale_factor = 0.5
+        scaled[:] = [0.5, 1.0]  # packed as the integers 1 and 2
         ok = ds.createVariable("ok", "i1", ("obs",), fill_value=-127)
         ok.flag_values, ok.flag_meanings = np.array([0, 1], dtype="i1"), "false true"
         ok[:] = np.ma.masked_array([1, 0], mask=[False, True])
@@ -241,9 +255,14 @@ def test_vector_reader_types_a_time_a_date_and_a_flag_as_their_cf_attributes_say
 
     reader = NetcdfVectorReader({"path": str(f)})
     types = {fld.name: fld.dataType.simpleString() for fld in reader.schema().fields}
-    assert [types[c] for c in ("seen", "day", "ok", "qa")] == [
+    assert [
+        types[c] for c in ("seen", "day", "half", "noon", "scaled", "ok", "qa")
+    ] == [
         "timestamp",
         "date",
+        "timestamp",
+        "timestamp",
+        "timestamp",
         "boolean",
         "int",
     ]
@@ -256,6 +275,18 @@ def test_vector_reader_types_a_time_a_date_and_a_flag_as_their_cf_attributes_say
         None,
     ]
     assert [r["day"] for r in rows] == [datetime.date(2026, 3, 1), None]
+    assert [r["half"] for r in rows] == [
+        datetime.datetime(2020, 1, 1, 12, tzinfo=utc),
+        None,
+    ]
+    assert [r["noon"] for r in rows] == [
+        datetime.datetime(2000, 1, 1, 12, tzinfo=utc),
+        datetime.datetime(2000, 1, 2, 12, tzinfo=utc),
+    ]
+    assert [r["scaled"] for r in rows] == [
+        datetime.datetime(2020, 1, 1, 12, tzinfo=utc),
+        datetime.datetime(2020, 1, 2, tzinfo=utc),
+    ]
     assert [r["ok"] for r in rows] == [True, None]
     assert [r["qa"] for r in rows] == [3, 4]
 

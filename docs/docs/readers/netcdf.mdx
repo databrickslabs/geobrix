@@ -214,7 +214,8 @@ curvilinear/swath cell carries its own lon/lat, so each becomes an exact point;
 no target grid or resampling method is chosen for you.
 
 Attribute columns take their type from the variable's CF attributes: a time variable
-is a `TIMESTAMP` (read as UTC), one whose units are `days since …` is a `DATE`, and a
+is a `TIMESTAMP` (read as UTC), except an integer count of whole days (`days since …`, a
+midnight base, no `scale_factor` or `add_offset`), which is a `DATE`; and a
 variable that flags `0` and `1` as `flag_meanings = "false true"` is a `BOOLEAN`
 (`NULL` where the file has a fill value) — the types the [`netcdf_gbx` writer](../writers/netcdf.mdx)
 gives a `TIMESTAMP`, `DATE` or `BOOLEAN` column. Any other variable keeps its numeric type.

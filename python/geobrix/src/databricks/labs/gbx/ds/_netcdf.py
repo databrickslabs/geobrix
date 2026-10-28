@@ -8,6 +8,7 @@ unsupported), derives an affine+CRS for grids, and flattens point/swath data to
 from __future__ import annotations
 
 import logging
+import re
 from contextlib import contextmanager
 from typing import Dict, Iterator, List, Optional, Tuple
 
@@ -374,22 +375,55 @@ def select_variables(ds, options: Dict[str, str], mode: str) -> List[str]:
     return [v for v in requested if v in readable_set]
 
 
-# CF time units that make a decoded time variable a calendar date, not an instant.
+# CF time units that count days from a base: with whole days and a midnight base the values are
+# calendar dates, not instants.
 _DAYS_SINCE = "days since"
+# the clock of a CF base ("2000-01-01 12:00:00", "2000-01-01T00:00:00Z", "... 00:00:00 +05:00")
+_BASE_CLOCK = re.compile(
+    r"^\d{1,4}-\d{1,2}-\d{1,2}(?:[ T](\d{1,2})(?::(\d{1,2}))?(?::(\d{1,2})(?:\.\d+)?)?"
+    r"\s*(Z|UTC|GMT|[+-]\d{1,2}(?::?\d{2})?)?)?$",
+    re.IGNORECASE,
+)
+
+
+def _is_date_axis(var) -> bool:
+    """True when a decoded time variable counts whole days from a midnight base, read from its CF
+    attributes and its stored type (no data read): ``units`` ``days since <date>`` with no time of
+    day or zone offset in the base, stored as an integer with no ``scale_factor`` / ``add_offset``.
+    Anything else (a float count, a scaled one, a base with a clock time) can carry a time of day,
+    which a date would drop."""
+    import numpy as np
+
+    enc = var.encoding
+    units = str(enc.get("units", "")).strip().lower()
+    if not units.startswith(_DAYS_SINCE):
+        return False
+    stored = enc.get("dtype")
+    if stored is None or np.dtype(stored).kind not in "iu":
+        return False
+    if enc.get("scale_factor") is not None or enc.get("add_offset") is not None:
+        return False
+    base = _BASE_CLOCK.match(units[len(_DAYS_SINCE) :].strip())
+    if base is None:
+        return False
+    hour, minute, second, zone = base.groups()
+    if any(int(x or 0) for x in (hour, minute, second)):
+        return False
+    return zone is None or not any(int(x) for x in re.findall(r"\d+", zone))
 
 
 def column_kind(var) -> Optional[str]:
     """What a decoded variable is beyond its numpy type, read from its CF attributes (no data
-    read): ``"timestamp"`` or ``"date"`` for a time variable (``"date"`` when its units are
-    ``days since ...``), ``"boolean"`` for a variable that flags 0 and 1 as ``false true``
-    (``flag_values`` and ``flag_meanings``, which is how ``netcdf_gbx`` writes a BOOLEAN), else
-    ``None``. xarray decodes a time to ``datetime64`` and, with its fill value masked, a flag to
-    a float; the numpy type alone says neither."""
+    read): ``"timestamp"`` or ``"date"`` for a time variable (``"date"`` only for a whole-day
+    count from a midnight base, see :func:`_is_date_axis`), ``"boolean"`` for a variable that
+    flags 0 and 1 as ``false true`` (``flag_values`` and ``flag_meanings``, which is how
+    ``netcdf_gbx`` writes a BOOLEAN), else ``None``. xarray decodes a time to ``datetime64``
+    and, with its fill value masked, a flag to a float; the numpy type alone says neither.
+    """
     import numpy as np
 
     if np.dtype(var.dtype).kind == "M":
-        units = str(var.encoding.get("units", "")).strip().lower()
-        return "date" if units.startswith(_DAYS_SINCE) else "timestamp"
+        return "date" if _is_date_axis(var) else "timestamp"
     meanings = str(var.attrs.get("flag_meanings", "")).split()
     values = np.atleast_1d(var.attrs.get("flag_values", []))
     if meanings == ["false", "true"] and [int(v) for v in values] == [0, 1]:

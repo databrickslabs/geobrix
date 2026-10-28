@@ -311,8 +311,11 @@ formats.
 - **`netcdf_gbx` vector mode reads times, dates and flags as such.** A CF time variable came
   back as a `STRING` of epoch nanoseconds and a 0 / 1 flag as a float, so a `TIMESTAMP`,
   `DATE` or `BOOLEAN` column written by `netcdf_gbx` did not read back as one. A time variable
-  is now a `TIMESTAMP` (UTC), one in `days since …` units a `DATE`, and a variable that flags
-  `0` and `1` as `false true` a `BOOLEAN`; a `NULL` stays `NULL`. Other variables are unchanged.
+  is now a `TIMESTAMP` (UTC), an integer count of whole days (`days since …` from a midnight
+  base, no `scale_factor` or `add_offset`) a `DATE`, and a variable that flags `0` and `1` as
+  `false true` a `BOOLEAN`; a `NULL` stays `NULL`. A day count that is fractional, scaled, or
+  counted from a base with a clock time keeps its time of day as a `TIMESTAMP`. Other variables
+  are unchanged.
 
 ### Raster writers
 

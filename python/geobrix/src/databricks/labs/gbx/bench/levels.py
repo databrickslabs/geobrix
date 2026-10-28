@@ -8,7 +8,7 @@ levels the compute offers and records the attribution split (``attribution.py``)
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Tuple
 
 from databricks.labs.gbx.bench import attribution
@@ -21,6 +21,14 @@ _L3_VARIANTS = (
     "d",
 )  # any other variant is a label: register picks the L3 default
 _PYTHON_LEVELS = ("L3", "DF")  # levels whose body runs in Spark's Python workers
+# What only a Spark Python worker produces: not applicable to a JVM level or a UC function.
+_PYTHON_FIELDS = (
+    "ser_sent_bytes",
+    "ser_recv_bytes",
+    "py_eval_s",
+    "py_eval_frac",
+    "py_worker_rss_mb",
+)
 _NO_PLAN = {**{k: None for k in attribution.METRICS}, "source": "dataframe-form"}
 
 
@@ -31,12 +39,18 @@ class Form:
     level: str  # L1 | L2 | L3 | L4 | DF | JVM-DF
     variant: str  # c0|c1|d, or a shape name (udtf, array_inline, count_part, udaf, ...)
     input: str  # key in levels_forms.INPUTS
-    sql: str = ""  # one-row SELECT over {src} (and {uc} for L4) returning (n, fp)
-    # "module:function" -> f(spark, src) -> (n, fp) or (n, fp, df) for DataFrame forms; the
-    # optional df is the one that ran, and its plan feeds the attribution split.
+    # A one-row SELECT over {src} (and {uc} for L4) returning (n, fp, n_out): the output
+    # count, an order-independent fingerprint, and count(<the output>), which skips NULLs.
+    sql: str = ""
+    # "module:function" -> f(spark, src) -> (n, fp, n_out) or (n, fp, n_out, df) for
+    # DataFrame forms; the optional df is the one that ran, and its plan feeds the split.
     run: str = ""
     computes: Tuple[str, ...] = ("dedicated", "standard", "serverless")
     register: bool = True
+    # A form whose function may return NULL for some rows. Otherwise n_out != n is an error:
+    # an error tile has a NULL raster and costs less than real work, so a form that fails on a
+    # subset would come out faster and still read ok.
+    allows_null: bool = False
 
 
 def detect_compute(spark) -> str:
@@ -67,24 +81,27 @@ def run_mvp(
     `schema` (``catalog.schema``) caches the inputs as Delta tables; None keeps them as temp
     views. `uc` is the ``catalog.schema`` holding the L4 functions (L4 forms are skipped, with a
     row saying so, when it is not given). A form that fails is an ``error`` row, not an exception.
+
+    The timing is the median over the measured iterations; the attribution split is the plan of
+    the LAST measured iteration (one sample), and the worker memory peak covers warmup and all
+    measured iterations. A metric with no value is NULL, with the reason in the row's `note`.
     """
-    from databricks.labs.gbx import register
     from databricks.labs.gbx.bench import levels_forms as lf
-    from databricks.labs.gbx.manifest import resolve_ref
 
     if mvp not in lf.FORMS:
         raise ValueError(
             f"no forms for MVP {mvp!r} yet (have: {', '.join(sorted(lf.FORMS))})"
         )
+    ctx = _Ctx(spark, warmup, measured, corpus, schema, uc, {})
     compute = detect_compute(spark)
     env = capture_env(where)
     out: List[ResultRow] = []
-    registered: Dict[str, Tuple[str, str]] = {}
     for form in lf.FORMS[mvp]:
         if compute not in form.computes or (
             only_levels and form.level not in only_levels
         ):
             continue
+        rows: List[ResultRow] = []
         for scale in scales:
             requested = (base_rows or lf.BASE_ROWS[form.input]) * scale
             base = dict(
@@ -100,105 +117,146 @@ def run_mvp(
                 **env,
             )
             try:
-                if form.level == "L4" and not uc:
-                    out.append(
-                        _row(
-                            base,
-                            note="no UC schema given (--levels-uc)",
-                            status="na_by_design",
-                        )
-                    )
-                    continue
-                src = lf.INPUTS[form.input](spark, requested, corpus, schema)
-                if src is None:
-                    out.append(
-                        _row(
-                            base,
-                            note="input unavailable (no tile corpus)",
-                            status="na_by_design",
-                        )
-                    )
-                    continue
-                if form.register:
-                    want = (
-                        form.level,
-                        form.variant if form.variant in _L3_VARIANTS else "-",
-                    )
-                    if registered.get(form.fn) != want:
-                        forced = (
-                            {form.fn: want}
-                            if form.level in ("L1", "L2", "L3")
-                            else None
-                        )
-                        register(spark, only=[form.fn], _levels=forced)
-                        registered[form.fn] = want
-                holder: Dict = {}
-
-                def _go():
-                    holder["t0"] = time.time()
-                    if form.run:
-                        res = resolve_ref(form.run)(spark, src)
-                        holder["n_fp"] = tuple(res[:2])
-                        if len(res) > 2:
-                            holder["df"] = res[2]
-                    else:
-                        df = spark.sql(form.sql.format(src=src, uc=uc or ""))
-                        r = df.collect()[0]
-                        holder["n_fp"], holder["df"] = (r[0], r[1]), df
-
-                timing = time_iters(_go, warmup, measured)
-                n, fp = holder["n_fp"]
-                if not n or fp is None:
-                    raise ValueError(
-                        f"the form produced no output (n={n}, fingerprint={fp})"
-                    )
-                plan = (
-                    attribution.from_plan(holder["df"], holder["t0"])
-                    if "df" in holder
-                    else dict(_NO_PLAN)
-                )
-                m = {k: plan[k] for k in attribution.METRICS}
-                note = [f"attr={plan['source']}"]
-                note += _python_side(spark, form.level, _go, m)
-                if n < requested:
-                    note.append(f"short input: {n} of {requested} rows")
-                gone = attribution.unavailable(m)
-                if gone:
-                    note.append("unavailable: " + ",".join(gone))
-                out.append(
-                    _row(
-                        {**base, "rows": min(int(n), requested)},
-                        note="; ".join(note),
-                        status="ok",
-                        timing=timing,
-                        fp=str(fp),
-                        m=m,
-                    )
-                )
+                rows.append(_run_one(ctx, form, base, requested))
             except Exception as exc:  # noqa: BLE001 - a failure is a measured outcome
-                out.append(
+                rows.append(
                     _row(
                         base,
                         status="error",
                         failure=f"{type(exc).__name__}: {str(exc)[:300]}",
                     )
                 )
+        out += _guard_sent(rows)
     return out
 
 
-def _python_side(spark, level: str, go, m: Dict) -> List[str]:
-    """Fill the Python-worker measures of `m` for `level`; returns the note tokens."""
-    if level in _PYTHON_LEVELS:
-        prof = attribution.python_eval_s(spark, go)
-        if prof is not None:
-            m["py_eval_s"] = prof
-        m["py_worker_rss_mb"] = attribution.worker_rss_mb(spark, 8)
-        return ["py=" + ("profiler" if prof is not None else "plan")]
-    if level == "L4":  # runs in the engine's sandbox, outside Spark's workers
-        m["py_eval_s"] = m["py_worker_rss_mb"] = None
-    else:  # the JVM: no Python worker is involved
-        m["py_eval_s"] = m["py_worker_rss_mb"] = 0.0
-    return []
+@dataclass
+class _Ctx:
+    spark: object
+    warmup: int
+    measured: int
+    corpus: str
+    schema: Optional[str]
+    uc: Optional[str]
+    registered: Dict[str, Tuple[str, str]]
+
+
+def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
+    from databricks.labs.gbx import register
+    from databricks.labs.gbx.bench import levels_forms as lf
+    from databricks.labs.gbx.manifest import resolve_ref
+
+    spark, uc = ctx.spark, ctx.uc
+    if form.level == "L4" and not uc:
+        return _row(
+            base, note="no UC schema given (--levels-uc)", status="na_by_design"
+        )
+    src = lf.INPUTS[form.input](spark, requested, ctx.corpus, ctx.schema)
+    if src is None:
+        return _row(
+            base, note="input unavailable (no tile corpus)", status="na_by_design"
+        )
+    if form.register:
+        want = (form.level, form.variant if form.variant in _L3_VARIANTS else "-")
+        if ctx.registered.get(form.fn) != want:
+            forced = {form.fn: want} if form.level in ("L1", "L2", "L3") else None
+            register(spark, only=[form.fn], _levels=forced)
+            ctx.registered[form.fn] = want
+    holder: Dict = {}
+
+    def _go():
+        holder["t0"] = time.time()
+        if form.run:
+            res = resolve_ref(form.run)(spark, src)
+            if len(res) < 3:
+                raise ValueError("a run form returns (n, fp, n_out[, df])")
+            holder["n_fp"] = tuple(res[:3])
+            if len(res) > 3:
+                holder["df"] = res[3]
+        else:
+            df = spark.sql(form.sql.format(src=src, uc=uc or ""))
+            r = df.collect()[0]
+            holder["n_fp"], holder["df"] = (r[0], r[1], r[2]), df
+
+    peak = attribution.WorkerPeak(spark) if form.level in _PYTHON_LEVELS else None
+    if peak:
+        peak.start()  # the memory peak is the shape's, not a worker's lifetime
+    timing = time_iters(_go, ctx.warmup, ctx.measured)
+    n, fp, n_out = holder["n_fp"]
+    if n_out != n and not form.allows_null:
+        raise ValueError(f"{n - n_out} of {n} outputs NULL")
+    if not n or fp is None:
+        raise ValueError(f"the form produced no output (n={n}, fingerprint={fp})")
+    # The plan first: the worker read below is a query of its own, and the plan lookup must
+    # not mistake it for the form's.
+    plan = (
+        attribution.from_plan(holder["df"], holder["t0"])
+        if "df" in holder
+        else dict(_NO_PLAN)
+    )
+    rss = peak.read() if peak else None
+    m = {k: plan[k] for k in attribution.METRICS}
+    m["py_worker_rss_mb"] = rss
+    note = [f"attr={plan['source']}"]
+    na: Tuple[str, ...] = ()
+    if form.level in _PYTHON_LEVELS:
+        for k in ("ser_sent_bytes", "ser_recv_bytes"):
+            if m[k] == 0:  # a Python plan that moved no bytes did not report them
+                m[k] = None
+        if rss is None and peak.reason:
+            note.append(f"rss: {peak.reason}")
+    else:  # a JVM level or a UC function: no Spark Python worker is involved
+        na = _PYTHON_FIELDS
+        m.update({k: None for k in na})
+    if n < requested:
+        note.append(f"short input: {n} of {requested} rows")
+    if n_out != n:
+        note.append(f"{n - n_out} of {n} outputs NULL")
+    gone = attribution.unavailable(m, skip=na)
+    if gone:
+        note.append("unavailable: " + ",".join(gone))
+    return _row(
+        {**base, "rows": min(int(n), requested)},
+        note="; ".join(note),
+        status="ok",
+        timing=timing,
+        fp=str(fp),
+        m=m,
+    )
+
+
+def _guard_sent(rows: List[ResultRow]) -> List[ResultRow]:
+    """Keep ser_sent_bytes only if it grows with the row count across the scales.
+
+    Spark's "data sent to Python workers" does not count numeric Arrow input (it stays flat from
+    100k to 1.6M rows of DOUBLEs while the data returned grows 16x), so a figure that does not
+    scale is not the serialization cost. One scale cannot show it either.
+    """
+    ok = [r for r in rows if r.status == "ok" and r.ser_sent_bytes is not None]
+    if not ok:
+        return rows
+    points = sorted((r.rows, r.ser_sent_bytes) for r in ok)
+    why = "one scale: linearity not checked" if len(points) < 2 else ""
+    for (r0, s0), (r1, s1) in zip(points, points[1:]):
+        if not 0.5 * (r1 / r0) <= s1 / s0 <= 2 * (r1 / r0):
+            why = "Spark under-counts numeric pandas input"
+    if not why:
+        return rows
+    drop = {id(r) for r in ok}
+    return [
+        (
+            replace(
+                r, ser_sent_bytes=None, note=f"{r.note}; ser_sent_bytes NULL: {why}"
+            )
+            if id(r) in drop
+            else r
+        )
+        for r in rows
+    ]
+
+
+def _opt(v, cast):
+    return None if v is None else cast(v)
 
 
 def _row(
@@ -236,23 +294,30 @@ def _row(
         output_fingerprint=fp,
         per_tile_avg_s=(med / rows) if rows and med else 0.0,
         per_tile_avg_ms=(med * 1000.0 / rows) if rows and med else 0.0,
-        ser_sent_bytes=int(m.get("ser_sent_bytes") or 0),
-        ser_recv_bytes=int(m.get("ser_recv_bytes") or 0),
-        py_eval_s=float(m.get("py_eval_s") or 0.0),
-        shuffle_bytes=int(m.get("shuffle_bytes") or 0),
-        spill_bytes=int(m.get("spill_bytes") or 0),
-        peak_exec_mem_bytes=int(m.get("peak_exec_mem_bytes") or 0),
-        gc_s=float(m.get("gc_s") or 0.0),
-        py_worker_rss_mb=float(m.get("py_worker_rss_mb") or 0.0),
+        ser_sent_bytes=_opt(m.get("ser_sent_bytes"), int),
+        ser_recv_bytes=_opt(m.get("ser_recv_bytes"), int),
+        py_eval_s=_opt(m.get("py_eval_s"), float),
+        py_eval_frac=_opt(m.get("py_eval_frac"), float),
+        shuffle_bytes=_opt(m.get("shuffle_bytes"), int),
+        spill_bytes=_opt(m.get("spill_bytes"), int),
+        peak_exec_mem_bytes=_opt(m.get("peak_exec_mem_bytes"), int),
+        gc_s=_opt(m.get("gc_s"), float),
+        py_worker_rss_mb=_opt(m.get("py_worker_rss_mb"), float),
         failure_mode=failure,
     )
 
 
 def summarize(rows: List[ResultRow]) -> str:
-    """A markdown table of a levels run: one line per form and scale, the attribution split beside the timing."""
+    """A markdown table of a levels run: one line per form and scale, the attribution split beside the timing.
 
-    def mib(b: int) -> str:
-        return f"{b / 2**20:.1f}"
+    A NULL metric prints as "-".
+    """
+
+    def f(v, fmt):
+        return "-" if v is None else fmt(v)
+
+    def mib(b):
+        return f(b, lambda x: f"{x / 2**20:.1f}")
 
     head = [
         "fn",
@@ -265,6 +330,7 @@ def summarize(rows: List[ResultRow]) -> str:
         "sent_MiB",
         "recv_MiB",
         "py_eval_s",
+        "py_frac",
         "shuffle_MiB",
         "spill_MiB",
         "peak_MiB",
@@ -290,12 +356,13 @@ def summarize(rows: List[ResultRow]) -> str:
             f"{r.throughput_rows_s:.0f}",
             mib(r.ser_sent_bytes),
             mib(r.ser_recv_bytes),
-            f"{r.py_eval_s:.3f}",
+            f(r.py_eval_s, lambda x: f"{x:.3f}"),
+            f(r.py_eval_frac, lambda x: f"{x:.2f}"),
             mib(r.shuffle_bytes),
             mib(r.spill_bytes),
             mib(r.peak_exec_mem_bytes),
-            f"{r.gc_s:.3f}",
-            f"{r.py_worker_rss_mb:.0f}",
+            f(r.gc_s, lambda x: f"{x:.3f}"),
+            f(r.py_worker_rss_mb, lambda x: f"{x:.0f}"),
             r.status,
             (r.failure_mode or r.note).replace("|", "/"),
         ]

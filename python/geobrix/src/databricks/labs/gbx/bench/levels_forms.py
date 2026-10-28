@@ -12,6 +12,9 @@ from typing import Callable, Dict, List, Optional
 
 from databricks.labs.gbx.bench.levels import Form
 
+# Bump when an input recipe (a seed or a shape) changes: it is part of the cached table's name,
+# so a stale table from an older recipe is never reused.
+RECIPE_VERSION = 1
 BASE_ROWS = {
     "bng_points": 1_000_000,
     "invalid_polys": 250_000,
@@ -36,7 +39,7 @@ def _bng_points(spark, n, corpus, schema):
     return _table(
         spark,
         schema,
-        f"mvp_in_bng_points_{n}",
+        f"mvp_in_bng_points_v{RECIPE_VERSION}_{n}",
         lambda: spark.range(n).select(
             (F.rand(7) * 700000).alias("e"), (F.rand(8) * 1300000).alias("n")
         ),
@@ -51,7 +54,7 @@ def _invalid_polys(spark, n, corpus, schema):
     return _table(
         spark,
         schema,
-        f"mvp_in_invalid_polys_{n}",
+        f"mvp_in_invalid_polys_v{RECIPE_VERSION}_{n}",
         lambda: spark.range(n)
         .select(x, y)
         .select(
@@ -77,7 +80,7 @@ def _tiles(virtual: bool):
         return _table(
             spark,
             schema,
-            f"mvp_in_tiles_{'virt' if virtual else 'mat'}_{n}",
+            f"mvp_in_tiles_{'virt' if virtual else 'mat'}_v{RECIPE_VERSION}_{n}",
             lambda: spark.read.format("raster_gbx")
             .option("virtualTiles", str(virtual).lower())
             .load(rows)
@@ -95,18 +98,23 @@ INPUTS: Dict[str, Callable] = {
     "tiles_virt": _tiles(True),
 }
 
-# Each query answers one row (n, fp): the output count and an order-independent fingerprint.
-# The hash is reduced before it is summed: a sum of raw 64-bit hashes overflows under ANSI.
+# Each query answers one row (n, fp, n_out): the output count, an order-independent fingerprint,
+# and count(<the output>), which skips NULLs: n_out != n means some rows came out NULL. The hash
+# is reduced before it is summed: a sum of raw 64-bit hashes overflows under ANSI.
 _BNG = (
-    "SELECT count(*) AS n, sum(pmod(xxhash64(c), 2147483647)) AS fp "
+    "SELECT count(*) AS n, sum(pmod(xxhash64(c), 2147483647)) AS fp, count(c) AS n_out "
     "FROM (SELECT {fn}(e, n, 3) AS c FROM {src})"
 )
-_TCRS = "SELECT count(*) AS n, sum(length(t.raster)) AS fp FROM (SELECT {fn}(tile, 'EPSG:3857') AS t FROM {src})"
+_TCRS = (
+    "SELECT count(*) AS n, sum(length(t.raster)) AS fp, count(t.raster) AS n_out "
+    "FROM (SELECT {fn}(tile, 'EPSG:3857') AS t FROM {src})"
+)
 _MV = (
-    "SELECT count(*) AS n, sum(length(g)) AS fp FROM (SELECT {fn}(wkt) AS g FROM {src})"
+    "SELECT count(*) AS n, sum(length(g)) AS fp, count(g) AS n_out "
+    "FROM (SELECT {fn}(wkt) AS g FROM {src})"
 )
 _MV_UC = (
-    "SELECT count(*) AS n, sum(length(st_asewkb(g))) AS fp FROM "
+    "SELECT count(*) AS n, sum(length(st_asewkb(g))) AS fp, count(g) AS n_out FROM "
     "(SELECT {fn}(st_geomfromwkt(wkt, 4326)) AS g FROM {src})"
 )
 

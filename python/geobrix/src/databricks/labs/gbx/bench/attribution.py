@@ -2,29 +2,27 @@
 
 Where each number comes from depends on the session:
 
-* Classic sessions read the driver's Spark REST API (the plan's SQL metrics, and the stages'
-  GC time).
+* Classic sessions read the driver's Spark REST API: the plan's SQL metrics of the execution
+  the action started, and the GC and run time of the stages of that execution's jobs.
 * Connect sessions (standard access mode, Serverless) read ``df.executionInfo`` (PySpark 4.0+),
   which carries the plan's SQL metrics only.
 
 A Connect session has no ``sparkContext``, ``.rdd``, ``_jvm`` or ``_jsc``, and refuses most
 ``spark.conf.set`` calls, so nothing here touches them there. What cannot be measured is
 ``None`` ("unavailable"), never 0 and never an exception; ``source`` says which API answered.
-A metric the source answers but the plan does not carry (no Python node in an L1 plan) is 0.0.
+A plan metric is None unless some node of the plan reported it: the REST API leaves out a metric
+that was never updated, so on a classic session "no spill" reads as None, not 0.
 """
 
 from __future__ import annotations
 
-import glob
 import json
-import os
-import pstats
 import re
-import tempfile
+import sys
 import time
 import urllib.request
 from datetime import datetime
-from typing import Callable, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from databricks.labs.gbx.manager.capabilities import is_connect
 
@@ -33,6 +31,7 @@ METRICS = (
     "ser_sent_bytes",
     "ser_recv_bytes",
     "py_eval_s",
+    "py_eval_frac",
     "shuffle_bytes",
     "spill_bytes",
     "peak_exec_mem_bytes",
@@ -51,6 +50,10 @@ _BUCKETS = {
 _CONNECT_SCALE = {
     "py_eval_s": 1e-3
 }  # Connect hands over timing metrics in milliseconds
+_PIPELINE_TIME = (
+    "pipelinetime",
+    "duration",
+)  # a whole-stage pipeline's time, key / label
 _UNITS = {
     "b": 1,
     "kib": 1024,
@@ -89,7 +92,10 @@ def _num(text) -> float:
 
 
 def _add(out: Dict, key: str, v: float) -> None:
-    out[key] = max(out[key], v) if key == "peak_exec_mem_bytes" else out[key] + v
+    if out[key] is None:
+        out[key] = v
+    else:
+        out[key] = max(out[key], v) if key == "peak_exec_mem_bytes" else out[key] + v
 
 
 def _epoch(ts) -> float:
@@ -109,20 +115,65 @@ def _get(url: str):
         return json.load(r)
 
 
+def _fraction(py_s: Optional[float], task_s: Optional[float]) -> Optional[float]:
+    """Python task-seconds over executor task-seconds. The REST text rounds to two or three
+    digits, so a run that is all Python can come out a hair over 1: capped there."""
+    if py_s is None or not task_s:
+        return None
+    return min(1.0, py_s / task_s)
+
+
+def _stage_root_seconds(root, graph) -> Optional[float]:
+    """Executor task-seconds from a Connect plan: the pipeline time of every whole-stage node
+    that is the outermost one of its stage. A nested one (the child of a Python node, inside the
+    parent's pipeline) is already counted in its parent; an exchange starts a new stage.
+    """
+    total: List[float] = []
+    seen = set()
+
+    def walk(i, inside: bool) -> None:
+        if i in seen or i not in graph:
+            return
+        seen.add(i)
+        node = graph[i]
+        if "Exchange" in node.name or "QueryStage" in node.name:
+            inside = False
+        elif node.name.startswith("WholeStageCodegen"):
+            if not inside:
+                total.extend(
+                    float(m.value) * 1e-3
+                    for m in node.metrics
+                    if m.name.lower() in _PIPELINE_TIME
+                )
+            inside = True
+        for child in node.children:
+            walk(child, inside)
+
+    walk(root, False)
+    return sum(total) if total else None
+
+
 def _from_execution_info(df, out: Dict) -> bool:
     info = getattr(df, "executionInfo", None)
     metrics = getattr(info, "metrics", None)
     if metrics is None:
         return False
-    for k in _BUCKETS:
-        out[k] = 0.0
-    _, graph = metrics.extract_graph()
+    root, graph = metrics.extract_graph()
     for node in graph.values():
         for m in node.metrics:
             k = _bucket(m.name)
             if k:
                 _add(out, k, float(m.value) * _CONNECT_SCALE.get(k, 1.0))
+    out["py_eval_frac"] = _fraction(out["py_eval_s"], _stage_root_seconds(root, graph))
     return True
+
+
+def _pick_execution(execs: List[Dict], t0: float) -> Optional[Dict]:
+    """The first SQL execution that started at or after `t0` (epoch seconds), not the newest
+    one: a driver whose listener bus lags still lists the previous query as the newest.
+    """
+    mine = [e for e in execs if _epoch(e.get("submissionTime")) >= t0 - 0.05]
+    return min(mine, key=lambda e: e["id"]) if mine else None
 
 
 def _from_rest(df, t0: float, out: Dict) -> bool:
@@ -133,40 +184,47 @@ def _from_rest(df, t0: float, out: Dict) -> bool:
         base = f"{sc.uiWebUrl}/api/v1/applications/{sc.applicationId}"
         deadline = time.time() + _REST_WAIT_S
         while True:
-            execs = _get(f"{base}/sql?details=true&planDescription=false&length=100000")
-            last = max(execs, key=lambda e: e["id"])
-            if last.get("status") != "RUNNING" or time.time() > deadline:
+            mine = _pick_execution(
+                _get(f"{base}/sql?details=true&planDescription=false&length=100000"), t0
+            )
+            if (mine and mine.get("status") != "RUNNING") or time.time() > deadline:
                 break
             time.sleep(0.1)
-        stages = _get(f"{base}/stages?status=complete")
+        if mine is None:
+            return False
+        stages: Dict[int, List[Dict]] = {}
+        for jid in mine.get("successJobIds", []):
+            for sid in _get(f"{base}/jobs/{jid}")["stageIds"]:
+                if sid not in stages:
+                    stages[sid] = [
+                        s
+                        for s in _get(f"{base}/stages/{sid}")
+                        if s["status"] == "COMPLETE"
+                    ]
     except (
         Exception
     ):  # noqa: BLE001 - no UI URL, or not reachable from here: stays unavailable
         return False
-    for k in (*_BUCKETS, "gc_s"):
-        out[k] = 0.0
-    for node in last.get("nodes", []):
+    for node in mine.get("nodes", []):
         for m in node.get("metrics", []):
             k = _bucket(m["name"])
             if k:
                 _add(out, k, _num(m["value"]))
-    out["gc_s"] = (
-        sum(s.get("jvmGcTime", 0) for s in stages if _started_since(s, t0)) / 1000.0
-    )
+    attempts = [a for done in stages.values() for a in done]
+    if attempts:
+        out["gc_s"] = sum(a.get("jvmGcTime", 0) for a in attempts) / 1000.0
+        task_s = sum(a.get("executorRunTime", 0) for a in attempts) / 1000.0
+        out["py_eval_frac"] = _fraction(out["py_eval_s"], task_s)
     return True
 
 
-def _started_since(stage: Dict, t0: float) -> bool:
-    try:
-        return _epoch(stage.get("submissionTime")) >= t0
-    except ValueError:
-        return False
-
-
 def from_plan(df, t0: float) -> Dict[str, Optional[float]]:
-    """The plan's metrics for the query `df` just ran, and the GC time of the stages that
-    started at or after `t0` (epoch seconds). Every key of METRICS, plus ``source``:
-    ``rest`` | ``executionInfo`` | ``none``."""
+    """The plan's metrics for the query `df` just ran, which started at or after `t0` (epoch
+    seconds). Every key of METRICS, plus ``source``: ``rest`` | ``executionInfo`` | ``none``.
+
+    ``py_eval_s`` is Python-worker task-seconds (summed over tasks) and ``py_eval_frac`` that
+    over the execution's executor task-seconds. ``gc_s`` is classic only.
+    """
     out: Dict = {k: None for k in METRICS}
     out["source"] = "none"
     if is_connect(df) or is_connect(getattr(df, "sparkSession", None)):
@@ -177,69 +235,94 @@ def from_plan(df, t0: float) -> Dict[str, Optional[float]]:
     return out
 
 
-def unavailable(measures: Dict) -> List[str]:
-    """The names no source answered (None), for a row's note."""
-    return [k for k, v in measures.items() if k != "source" and v is None]
+def unavailable(measures: Dict, skip=()) -> List[str]:
+    """The names no source answered (None), for a row's note; `skip` are not applicable."""
+    return [
+        k for k, v in measures.items() if k != "source" and v is None and k not in skip
+    ]
 
 
-def python_eval_s(spark, run: Callable[[], object]) -> Optional[float]:
-    """One extra `run()` under the Spark 4 UDF profiler (perf): seconds inside the UDF bodies.
+class WorkerPeak:
+    """Peak RSS (MB) of the Python workers while one shape ran.
 
-    None where profiling cannot be switched on (a Connect/Serverless session refuses the conf)
-    or fails.
-    """
-    if is_connect(spark):
-        return None
-    try:
-        spark.conf.set("spark.sql.pyspark.udf.profiler", "perf")
-    except Exception:  # noqa: BLE001
-        return None
-    try:
-        spark.profile.clear()
-        run()
-        with tempfile.TemporaryDirectory(prefix="gbx-prof-") as d:
-            spark.profile.dump(d, type="perf")
-            return sum(
-                pstats.Stats(p).total_tt for p in glob.glob(os.path.join(d, "*"))
-            )
-    except Exception:  # noqa: BLE001
-        return None
-    finally:
-        try:
-            spark.conf.unset("spark.sql.pyspark.udf.profiler")
-        except Exception:  # noqa: BLE001
-            pass
+    The kernel keeps a high-water mark per process (``VmHWM``) that only grows, and Spark
+    reuses Python workers across queries, so reading it after a shape returns the biggest shape
+    any earlier query ran on that worker. ``start()`` resets it on every worker (writing 5 to
+    ``/proc/self/clear_refs``), ``read()`` collects it afterwards. Both go through a barrier
+    stage with one task per slot, which puts one task on every worker process; a plain job
+    cannot promise that. ``read()`` is None, with the reason in ``reason``, where that is not
+    possible: off Linux, and on a Connect session (it cannot count the slots or reach a
+    worker).
 
-
-def worker_rss_mb(spark, n: int) -> Optional[float]:
-    """Peak RSS (MB) of the Python workers, read in `n` tasks. Approximate: workers are reused,
-    and which ones the tasks land on is up to the scheduler. None where it cannot run.
+    Why not sampling: a sampler would have to run inside the workers during the shape and
+    compete with it for slots. The reset needs no thread, and it costs two short jobs.
     """
 
-    def _rss(it):  # nested: pickled by value, so a worker needs no geobrix to run it
-        import platform
-        import resource
+    # A barrier stage that cannot get a slot per task is retried by the scheduler for minutes. If
+    # a sweep fails, the session is not asked again: one stall per run, not one per form.
+    _failed: Dict[int, str] = {}
 
-        import pandas as pd
+    def __init__(self, spark):
+        self.spark = spark
+        self.reason: Optional[str] = None
+        self._slots = 0
+        if is_connect(spark):
+            self.reason = "a Connect session cannot reach every Python worker"
+        elif not sys.platform.startswith("linux"):
+            self.reason = "per-shape worker memory needs Linux (/proc/self/clear_refs)"
+        elif id(spark) in WorkerPeak._failed:
+            self.reason = WorkerPeak._failed[id(spark)]
+        else:
+            try:
+                sc = spark.sparkContext
+                cpus = max(1, int(sc.getConf().get("spark.task.cpus", "1")))
+                self._slots = max(1, int(sc.defaultParallelism) // cpus)
+            except Exception as exc:  # noqa: BLE001
+                self.reason = f"slot count unavailable ({type(exc).__name__})"
 
-        kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        for _ in it:
-            pass
-        yield pd.DataFrame(
-            {
-                "rss": [
-                    kb / (1024 * 1024) if platform.system() == "Darwin" else kb / 1024
-                ]
-            }
-        )
+    def _sweep(self, reset: bool) -> Optional[float]:
+        def task(
+            it,
+        ):  # nested: pickled by value, so a worker needs no geobrix to run it
+            import pandas as pd  # imported first: part of the baseline, not of the shape
 
-    try:
+            for _ in it:
+                pass
+            hwm = 0.0
+            with open("/proc/self/status") as fh:
+                for line in fh:
+                    if line.startswith("VmHWM:"):
+                        hwm = float(line.split()[1]) / 1024.0
+            if reset:
+                with open("/proc/self/clear_refs", "w") as fh:
+                    fh.write("5")
+            yield pd.DataFrame({"hwm": [hwm]})
+
+        n = self._slots
         row = (
-            spark.range(n, numPartitions=n)
-            .mapInPandas(_rss, "rss double")
-            .agg({"rss": "max"})
+            self.spark.range(n, numPartitions=n)
+            .mapInPandas(task, "hwm double", barrier=True)
+            .agg({"hwm": "max"})
             .first()
         )
         return float(row[0]) if row and row[0] is not None else None
-    except Exception:  # noqa: BLE001
-        return None
+
+    def start(self) -> None:
+        if self.reason is None:
+            try:
+                self._sweep(reset=True)
+            except Exception as exc:  # noqa: BLE001
+                self.reason = (
+                    f"worker reset failed ({type(exc).__name__}: {str(exc)[:120]})"
+                )
+                WorkerPeak._failed[id(self.spark)] = self.reason
+
+    def read(self) -> Optional[float]:
+        if self.reason is not None:
+            return None
+        try:
+            return self._sweep(reset=False)
+        except Exception as exc:  # noqa: BLE001
+            self.reason = f"worker read failed ({type(exc).__name__}: {str(exc)[:120]})"
+            WorkerPeak._failed[id(self.spark)] = self.reason
+            return None

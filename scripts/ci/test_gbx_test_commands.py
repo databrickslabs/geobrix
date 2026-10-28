@@ -1032,6 +1032,29 @@ def test_review_round_skips_the_generated_lock_files_unless_asked(sandbox):
     )  # the caller's config, not ours
 
 
+def test_review_round_keeps_a_relative_report_when_notebooks_are_stripped(sandbox):
+    # A changed .ipynb sends isaac into a scratch worktree that is deleted on exit; a relative
+    # `-o` was written there and lost. The report must land under the caller's directory.
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(sandbox.root)]
+    subprocess.run([*git, "init", "-q"], check=True)
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "base"], check=True)
+    (sandbox.root / "nb.ipynb").write_text(json.dumps({"cells": [], "nbformat": 4}) + "\n")
+    subprocess.run([*git, "add", "nb.ipynb"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "notebook"], check=True)
+    dbexec = sandbox.bin / "dbexec"
+    dbexec.write_text(
+        '#!/bin/sh\nout=""\nwhile [ $# -gt 0 ]; do [ "$1" = "-o" ] && out="$2"; shift; done\n'
+        'mkdir -p "$(dirname "$out")" && echo report > "$out"\necho reviewed\n'
+    )
+    dbexec.chmod(0o755)
+
+    res = sandbox.run("gbx-review-round.sh", "--base", "HEAD~1", "--", "-o", "test-logs/r.md")
+
+    assert res.returncode == 0, res.output
+    assert (sandbox.root / "test-logs" / "r.md").read_text() == "report\n"
+
+
 # ----------------------------------------- host venv curated to match the container (venv check)
 
 

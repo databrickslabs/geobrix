@@ -264,7 +264,7 @@ class RST_ErrorHandlerTest extends AnyFunSuite {
     }
 
     test("safeEval (Any, conf) plain IAE returns null in non-crash mode (F1 regression guard)") {
-        // Proves the broad IAE re-throw from Task 9 has been reverted: ordinary IAEs are swallowed.
+        // Proves the earlier broad IAE re-throw has been reverted: ordinary IAEs are swallowed.
         val row = minimalRow()
         val conf = new ExpressionConfig(
             Map("spark.databricks.labs.gbx.expressions.crash.on.error" -> "false"),

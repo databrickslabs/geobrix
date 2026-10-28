@@ -92,9 +92,8 @@ if [ "$NATIVE" = true ] || [ "$HOST" = true ]; then
     exit $RC
 fi
 
-# Files where pinned versions live. Keep this list in sync with the SECURITY/CI
-# review notes in .superpowers/prompts/security/. New file? Add it here AND remove this line
-# of staleness.
+# Files where pinned versions live (the audit's scope). A new file that pins a version
+# must be added here, or its pins are never audited.
 FILES=(
     ".github/actions/scala_build/action.yml"
     ".github/actions/python_build/action.yml"

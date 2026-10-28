@@ -100,7 +100,7 @@ object BenchDispatch {
   // 2-band corpus).
   private val multiBand: Set[String] = Set("rst_band", "rst_evi", "rst_savi", "rst_index")
 
-  // --- Task 6: complex-arg constants, hardcoded identically to the pyrx side ---
+  // --- complex-arg constants, hardcoded identically to the pyrx side ---
   // The band-map, the map-algebra expression, and the derived-band pixel function
   // cannot ride the stringly-typed bench args map, so they are fixed here exactly
   // as in spec.py (same policy as the convolve kernel).
@@ -143,28 +143,28 @@ object BenchDispatch {
     "rst_tri" -> TER, "rst_tpi" -> TER, "rst_roughness" -> TER,
     "rst_ndvi" -> BM, "rst_ndwi" -> BM, "rst_nbr" -> BM,
     "rst_transform" -> WARP, "rst_transformcrs" -> WARP, "rst_to_webmercator" -> WARP,
-    // scalar accessors (Task 2)
+    // scalar accessors
     "rst_srid" -> ACC, "rst_crs" -> ACC, "rst_pixelwidth" -> ACC, "rst_pixelheight" -> ACC,
     "rst_upperleftx" -> ACC, "rst_upperlefty" -> ACC, "rst_scalex" -> ACC,
     "rst_scaley" -> ACC, "rst_skewx" -> ACC, "rst_skewy" -> ACC,
     "rst_rotation" -> ACC, "rst_isempty" -> ACC, "rst_getnodata" -> ACC,
     "rst_format" -> ACC, "rst_type" -> ACC, "rst_memsize" -> ACC,
-    // coordinate / index accessors (Task 3)
+    // coordinate / index accessors
     "rst_rastertoworldcoord" -> ACC, "rst_rastertoworldcoordx" -> ACC,
     "rst_rastertoworldcoordy" -> ACC, "rst_worldtorastercoord" -> ACC,
     "rst_worldtorastercoordx" -> ACC, "rst_worldtorastercoordy" -> ACC,
     "rst_tilexyz" -> ACC,
-    // map / struct accessors (Task 4): timing-only
+    // map / struct accessors: timing-only
     "rst_metadata" -> ACC, "rst_bandmetadata" -> ACC, "rst_georeference" -> ACC,
     "rst_boundingbox" -> ACC, "rst_summary" -> ACC, "rst_histogram" -> ACC,
-    // tile-out transforms with scalar / fixed args (Task 5)
+    // tile-out transforms with scalar / fixed args
     "rst_band" -> EDIT, "rst_threshold" -> EDIT, "rst_initnodata" -> EDIT,
     "rst_setsrid" -> EDIT, "rst_setcrs" -> EDIT, "rst_updatetype" -> EDIT, "rst_fillnodata" -> FEAT,
     "rst_percentile_stretch" -> EDIT,
     "rst_filter" -> FOCAL, "rst_convolve" -> FOCAL,
     "rst_asformat" -> FMT, "rst_cog_convert" -> FMT,
     "rst_resample" -> RES, "rst_resample_to_res" -> RES, "rst_resample_to_size" -> RES,
-    // tile-out transforms with geometry / expression / band-map / function args (Task 6)
+    // tile-out transforms with geometry / expression / band-map / function args
     "rst_evi" -> BM, "rst_savi" -> BM, "rst_index" -> BM,
     "rst_mapalgebra" -> FMT, "rst_derivedband" -> FMT, "rst_proximity" -> ANALYSIS,
     "rst_clip" -> EDIT, "rst_color_relief" -> TER, "rst_viewshed" -> ANALYSIS,
@@ -496,7 +496,7 @@ object BenchDispatch {
     // mirrors rst_transform's 3857 so the reprojected grid is directly comparable.
     case "rst_transformcrs" => fpDerived(RST_TransformCrs.execute(ds, Map.empty, argS(a, "target_crs", "3857")))
     case "rst_to_webmercator" => fpDerived(RST_ToWebMercator.execute(ds, Map.empty, argS(a, "resampling", "bilinear")))
-    // scalar accessors (Task 2)
+    // scalar accessors
     case "rst_srid"        => BenchFingerprint.ofScalar(RST_SRID.execute(ds))
     // rst_crs: canonical CRS STRING (authority else WKT). ofScalar coerces the
     // String via toString -> a "scalar" fingerprint (CRS-string-comparable).
@@ -518,7 +518,7 @@ object BenchDispatch {
     case "rst_type"        => { RST_Type.execute(ds); BenchFingerprint.empty }
     // timing-only (file size vs in-memory size; not comparable)
     case "rst_memsize"     => { RST_MemSize.execute(ds); BenchFingerprint.empty }
-    // coordinate / index accessors (Task 3).
+    // coordinate / index accessors.
     // raster->world: forward affine; X = pair._1, Y = pair._2; pair as scalar_list.
     case "rst_rastertoworldcoordx" =>
       BenchFingerprint.ofScalar(RST_RasterToWorldCoordX.execute(ds, argI(a, "x", 64), argI(a, "y", 64))._1)
@@ -539,14 +539,14 @@ object BenchDispatch {
       RST_TileXYZ.execute(ds, Map.empty, argI(a, "z", 12), argI(a, "x", 1205),
         argI(a, "y", 1539), argS(a, "format", "PNG"), argI(a, "size", 256), argS(a, "resampling", "bilinear"))
       BenchFingerprint.empty
-    // map / struct accessors (Task 4): timing-only (maps, structs, CRS/JSON bytes).
+    // map / struct accessors: timing-only (maps, structs, CRS/JSON bytes).
     case "rst_metadata"      => { RST_MetaData.execute(ds); BenchFingerprint.empty }
     case "rst_bandmetadata"  => { RST_BandMetaData.execute(ds.GetRasterBand(1)); BenchFingerprint.empty }
     case "rst_georeference"  => { RST_GeoReference.execute(ds); BenchFingerprint.empty }
     case "rst_boundingbox"   => { RST_BoundingBox.execute(ds); BenchFingerprint.empty }
     case "rst_summary"       => { RST_Summary.execute(ds); BenchFingerprint.empty }
     case "rst_histogram"     => { RST_Histogram.execute(ds, 256, None, None, false); BenchFingerprint.empty }
-    // tile-out transforms with scalar / fixed args (Task 5): all produce a raster
+    // tile-out transforms with scalar / fixed args: all produce a raster
     // tile -> fpDerived raster fingerprint (same path as terrain).
     case "rst_band"        => fpDerived(RST_Band.execute(ds, Map.empty, argI(a, "band_index", 2)))
     case "rst_threshold"   => fpDerived(RST_Threshold.execute(ds, argS(a, "op", ">"), argD(a, "value", 0.5)))
@@ -588,7 +588,7 @@ object BenchDispatch {
       RasterDriver.releaseDataset(res._1)
       BenchFingerprint.empty
     // tile-out transforms with geometry / expression / band-map / function args
-    // (Task 6). SIX are full raster comparisons (same algorithm + CRS-independent
+    // SIX are full raster comparisons (same algorithm + CRS-independent
     // args); FOUR are timing-only (no in-extent geometry across the multi-CRS
     // corpus, and/or divergent interpolation/scan engines).
     case "rst_evi" =>
@@ -1150,7 +1150,7 @@ object BenchDispatch {
       case "rst_transform"  => rst_transform(tile, argI(a, "target_srid", 3857))
       case "rst_transformcrs" => rst_transformcrs(tile, argS(a, "target_crs", "3857"))
       case "rst_to_webmercator" => rst_to_webmercator(tile, argS(a, "resampling", "bilinear"))
-      // scalar accessors (Task 2)
+      // scalar accessors
       case "rst_srid"        => rst_srid(tile)
       case "rst_crs"         => rst_crs(tile)
       case "rst_pixelwidth"  => rst_pixelwidth(tile)
@@ -1167,7 +1167,7 @@ object BenchDispatch {
       case "rst_format"      => rst_format(tile)
       case "rst_type"        => rst_type(tile)
       case "rst_memsize"     => rst_memsize(tile)
-      // coordinate / index accessors (Task 3)
+      // coordinate / index accessors
       case "rst_rastertoworldcoordx" => rst_rastertoworldcoordx(tile, argI(a, "x", 64), argI(a, "y", 64))
       case "rst_rastertoworldcoordy" => rst_rastertoworldcoordy(tile, argI(a, "x", 64), argI(a, "y", 64))
       case "rst_rastertoworldcoord"  => rst_rastertoworldcoord(tile, argI(a, "x", 64), argI(a, "y", 64))
@@ -1177,7 +1177,7 @@ object BenchDispatch {
       case "rst_worldtorastercoordy" => rst_worldtorastercoordy(tile, argD(a, "x", -73.985), argD(a, "y", 40.745))
       case "rst_worldtorastercoord"  => rst_worldtorastercoord(tile, argD(a, "x", -73.985), argD(a, "y", 40.745))
       case "rst_tilexyz"             => rst_tilexyz(tile, argI(a, "z", 12), argI(a, "x", 1205), argI(a, "y", 1539))
-      // map / struct accessors (Task 4) are pure-core-only; the column form is here
+      // map / struct accessors are pure-core-only; the column form is here
       // only to keep the match exhaustive (the spark-path runner filters by modes).
       case "rst_metadata"      => rst_metadata(tile)
       case "rst_bandmetadata"  => rst_bandmetadata(tile, 1)
@@ -1185,7 +1185,7 @@ object BenchDispatch {
       case "rst_boundingbox"   => rst_boundingbox(tile)
       case "rst_summary"       => rst_summary(tile)
       case "rst_histogram"     => rst_histogram(tile)
-      // tile-out transforms with scalar / fixed args (Task 5)
+      // tile-out transforms with scalar / fixed args
       case "rst_band"        => rst_band(tile, argI(a, "band_index", 2))
       case "rst_threshold"   => rst_threshold(tile, argS(a, "op", ">"), argD(a, "value", 0.5))
       case "rst_initnodata"  => rst_initnodata(tile)
@@ -1216,7 +1216,7 @@ object BenchDispatch {
         rst_resample_to_res(tile, argD(a, "x_res", 5.0),
           argD(a, "y_res", 5.0), argS(a, "algorithm", "bilinear"))
       // tile-out transforms with geometry / expression / band-map / function args
-      // (Task 6). The full-comparison six run in spark-path; the timing-only four
+      // The full-comparison six run in spark-path; the timing-only four
       // are pure-core-only and their column form is here only to keep the match
       // exhaustive (the spark-path runner filters by modes).
       case "rst_evi" =>

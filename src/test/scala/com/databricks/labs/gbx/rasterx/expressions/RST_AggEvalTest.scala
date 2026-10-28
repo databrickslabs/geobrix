@@ -464,7 +464,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
     }
 
     // =========================================================================
-    // Task 3: corrupt-member skip tests — one per aggregator
+    // Corrupt-member skip tests — one per aggregator
     //
     // A mixed group (one valid tile + one corrupt-bytes tile in the same group)
     // must (a) NOT throw on .collect(), (b) produce a non-null result tile over

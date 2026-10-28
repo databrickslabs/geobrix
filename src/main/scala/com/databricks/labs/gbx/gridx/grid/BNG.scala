@@ -382,7 +382,11 @@ object BNG extends GridSystem {
       *   Cell ID in this grid system.
       */
     def pointToCellID(eastings: Double, northings: Double, resolution: Int): Long = {
-        require(!eastings.isNaN && !northings.isNaN, throw new IllegalStateException("NaN coordinates are not supported."))
+        // NaN and the infinities have no cell: a data error, which every caller turns into NULL.
+        require(
+          java.lang.Double.isFinite(eastings) && java.lang.Double.isFinite(northings),
+          throw new IllegalStateException("Non-finite coordinates are not supported.")
+        )
         val eastingsInt = eastings.toInt
         val northingsInt = northings.toInt
         val eLetter: Int = math.floor(eastingsInt / 100000).toInt

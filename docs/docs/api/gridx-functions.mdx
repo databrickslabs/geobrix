@@ -981,7 +981,7 @@ Powered by the **pure-Python port of `BNG.scala`** (numpy-vectorized encoder). E
 - `resolution` - BNG resolution: integer index (1–6 or negative for quadrant) or string (e.g. '1km', '100m'). See resolutionMap in BNG.
 
 **Returns:**
-- String BNG cell reference
+- String BNG cell reference, or NULL when the easting or northing is NaN or infinite (no cell exists for it)
 
 <FunctionExamples
   name="bng_eastnorthasbng"
@@ -1011,7 +1011,7 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. The point coor
 - `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. '1km', '100m')
 
 **Returns:**
-- String BNG cell reference
+- String BNG cell reference, or NULL when the point's coordinates are NaN or infinite (an empty point, for example)
 
 <FunctionExamples
   name="bng_pointascell"

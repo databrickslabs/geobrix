@@ -53,9 +53,8 @@ class Case:
 
 # Rows a JVM level is known to fail until it conforms to the light contract, as {row: {level: reason}}.
 # The parity run expects exactly these (level, row) pairs to fail, strictly, and a row that starts to
-# pass must be dropped from here.
-_INF = "inf → NULL awaits the BNG.scala isfinite guard + a JAR rebuild"
-HEAVY_PENDING: Dict[str, Dict[str, str]] = {"bng_inf_e": {"L1": _INF, "L2": _INF}}
+# pass must be dropped from here. Empty: every JVM level conforms.
+HEAVY_PENDING: Dict[str, Dict[str, str]] = {}
 
 B, T, M = "gbx_bng_eastnorthasbng", "gbx_rst_transformcrs", "gbx_st_makevalid"
 SQUARE = "POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))"

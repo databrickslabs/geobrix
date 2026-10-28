@@ -197,6 +197,35 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         RetileKernel.clear()
     }
 
+    test("RetileKernel tells two rasters that share a bucket apart by their bytes") {
+        // 512 x 512 int32, uncompressed (1 MiB): above the size the key reads in full
+        def plain(editRow: Int): Array[Byte] = {
+            KernelGdal.ensureInit()
+            val path = s"/vsimem/retile_pair_${java.util.UUID.randomUUID()}.tif"
+            val ds = GDALManager.gtiffDriver().Create(path, 512, 512, 1, gdalconstConstants.GDT_Int32, Array("COMPRESS=NONE"))
+            val pixels = Array.tabulate(512 * 512)(i => (i / 512 * 13 + i % 512 * 7) % 1000)
+            if (editRow >= 0) pixels(editRow * 512 + 10) += 100000
+            ds.GetRasterBand(1).WriteRaster(0, 0, 512, 512, pixels)
+            ds.FlushCache()
+            ds.delete()
+            try org.gdal.gdal.gdal.GetMemFileBuffer(path) finally org.gdal.gdal.gdal.Unlink(path)
+        }
+        val a = plain(-1)
+        // an edited copy whose few changed bytes fall between two sampled blocks: the same bucket, not the same raster
+        val b = (100 until 500 by 7).iterator.map(plain).find(x => RetileKernel.key(x) == RetileKernel.key(a)).get
+        assert(a.length == b.length && a.length > 524288 && !java.util.Arrays.equals(a, b))
+        def pieces(raster: Array[Byte]): Seq[Seq[Byte]] =
+            new RstRetileArrayBytesUdf().call(raster, 256, 256).asScala.map(_.toSeq).toSeq
+        RetileKernel.clear()
+        val ofA = pieces(a)
+        val ofB = pieces(b) // B after A on one thread, as two rows of one task
+        RetileKernel.clear()
+        val ofBAlone = pieces(b)
+        assert(ofA != ofBAlone, "the edit must show in the pieces")
+        assert(ofB == ofBAlone, "B was cut from A's open raster")
+        RetileKernel.clear()
+    }
+
     test("RetileKernel keys a raster by a sample of its bytes, not all of them") {
         val big = Array.tabulate[Byte](1 << 20)(i => (i % 251).toByte)
         def with0(at: Int): Array[Byte] = { val c = big.clone(); c(at) = (c(at) + 1).toByte; c }
@@ -204,7 +233,7 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         // the first byte, a sampled block (65536 is the start of the first), and the length are in the key
         assert(RetileKernel.key(with0(0)) != RetileKernel.key(big) && RetileKernel.key(with0(65540)) != RetileKernel.key(big))
         assert(RetileKernel.key(big.take(big.length - 1)) != RetileKernel.key(big))
-        // a byte between the sampled blocks is not (the price of not reading a 4096 x 4096 tile once per window)
+        // a byte between the sampled blocks is not: the key is a bucket, and `open` confirms a hit against the bytes
         assert(RetileKernel.key(with0(70000)) == RetileKernel.key(big))
         // a small raster is keyed by all of it
         val small = big.take(1000)

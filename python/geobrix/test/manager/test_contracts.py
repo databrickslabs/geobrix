@@ -67,7 +67,11 @@ def test_oracle_rows_fit_signature(fn):
     assert rows, "every manifest function needs oracle rows"
     assert len({c.cid for c in rows}) == len(rows), "oracle row ids must be unique"
     for c in rows:
-        arg_rows = c.args if c.kind == "exact_rows" else (c.args, *c.variants)
+        arg_rows = (
+            c.args
+            if c.kind in ("exact_rows", "windows_batch")
+            else (c.args, *c.variants)
+        )
         assert all(fn.min_args <= len(r) <= fn.max_args for r in arg_rows), c.cid
         assert c.kind != "exact_rows" or len(c.expect) == len(c.args), c.cid
         assert c.surfaces and set(c.surfaces) <= {"session", "uc"}, c.cid

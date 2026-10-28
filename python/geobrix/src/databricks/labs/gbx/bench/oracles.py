@@ -7,6 +7,7 @@ Unity Catalog passes all read these rows, so a level is "correct" exactly when i
 from __future__ import annotations
 
 import base64
+import functools
 import json
 import math
 import os
@@ -38,6 +39,7 @@ class Case:
     # exact | exact_rows | null | raises | uc_refused | error_tile | tile_props | geom_props
     # exact_rows is one batch: `args` is a tuple of argument rows, `expect` one value per row.
     # Generators (MVP-G) also use no_rows | windows | cells, and error_tile means exactly one row.
+    # windows_batch is one task over several tiles: `args` is a tuple of argument rows, as for exact_rows.
     kind: str
     # exact: the value. raises: a substring the error message must contain (the offending
     # value), so a missing function cannot pass. tile_props: the target CRS, or (CRS, SRID).
@@ -449,6 +451,20 @@ MVP_G: Tuple[Case, ...] = (
         [(0, 0, 32, 32), (32, 0, 32, 32), (0, 32, 32, 16), (32, 32, 32, 16)],
         ("session",),
     ),
+    # Two tiles of one size that differ in one pixel, in ONE task: each gets its own windows. A shape that keeps
+    # the last tile's dataset open for the next call must tell them apart by their bytes, and the edit sits
+    # where a sample of the bytes cannot see it.
+    Case(
+        "rt_edit_pair",
+        RT,
+        (
+            (Build("tile_edit_a"), 256, 256),
+            (Build("tile_edit_b"), 256, 256),
+        ),
+        "windows_batch",
+        None,
+        ("session",),
+    ),
     # A NULL tile has nothing to split: no rows, as explode(NULL) gives.
     Case("rt_null", RT, (None, 32, 32), "no_rows", None, ("session",)),
     # An error tile in comes out as the same error tile (the upstream reason survives); a tile that
@@ -532,7 +548,69 @@ def _tile(raster=None, path=None, window=None) -> dict:
     }
 
 
+# The sampling of the retile probes' cache key (pyrx/_mvp_forms.py, RetileKernel): the first and the last
+# 64 KB and 64 blocks of 4 KB between them, nothing at all of a raster up to 512 KB. An edit that sits
+# between two blocks of a raster above that is invisible to a key made of the sample.
+_SAMPLE_HEAD, _SAMPLE_BLOCK, _SAMPLE_BLOCKS, _SAMPLE_WHOLE = 65536, 4096, 64, 524288
+
+
+@functools.lru_cache(maxsize=1)
+def _edit_pair() -> Tuple[bytes, bytes]:
+    """Two 512 x 512 int32 GTiffs (1 MiB each, uncompressed) that differ in ONE pixel, chosen so that the
+    bytes that differ lie between two sampled blocks (see _SAMPLE_*)."""
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx.core.compression import creation_opts
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    n = 512
+    data = np.random.default_rng(7).integers(0, 1000, size=(1, n, n), dtype="int32")
+    profile = dict(
+        driver="GTiff",
+        width=n,
+        height=n,
+        count=1,
+        dtype="int32",
+        crs=resolve_crs("EPSG:4326"),
+        transform=from_origin(-1.0, 52.0, 0.01, 0.01),
+        **creation_opts("int32", compress="none"),
+    )
+
+    def encode(arr) -> bytes:
+        with MemoryFile() as mf:
+            with mf.open(**profile) as ds:
+                ds.write(arr)
+            return mf.read()
+
+    a = encode(data)
+    start = a.find(data[0, 0, :8].tobytes())  # where the pixels begin
+    span = len(a) - 2 * _SAMPLE_HEAD - _SAMPLE_BLOCK
+    block = 20  # the midpoint of the gap between two sampled blocks
+    gap_lo = _SAMPLE_HEAD + span * block // (_SAMPLE_BLOCKS - 1) + _SAMPLE_BLOCK
+    gap_hi = _SAMPLE_HEAD + span * (block + 1) // (_SAMPLE_BLOCKS - 1)
+    idx = (
+        (gap_lo + gap_hi) // 2 - start
+    ) // 4  # the pixel whose 4 bytes lie in the gap
+    edited = data.copy()
+    edited[0, idx // n, idx % n] += 100000
+    b = encode(edited)
+    assert (
+        len(a) == len(b) and len(a) > _SAMPLE_WHOLE
+    ), "the pair must be one size, above the sampled limit"
+    diff = [i for i in range(len(a)) if a[i] != b[i]]
+    assert (
+        diff and gap_lo <= diff[0] and diff[-1] < gap_hi
+    ), "the edit must lie between two sampled blocks"
+    return a, b
+
+
 def _build(name: str, tmpdir: str):
+    if name == "tile_edit_a":
+        return _tile(_edit_pair()[0])
+    if name == "tile_edit_b":
+        return _tile(_edit_pair()[1])
     if name == "tile_4326":
         return _tile(_tile_bytes("EPSG:4326"))
     if name == "tile_3857":
@@ -1074,6 +1152,48 @@ def _window_of(tile, src) -> Tuple[int, int, int, int]:
         return col, row, got.width, got.height
 
 
+def _check_window_batch(case: Case, tiles: list, arg_rows) -> Optional[str]:
+    """Several tiles through one task: every output piece is a window of ONE of them, and together the pieces
+    are exactly the windows of all of them (a piece's pixel sum must be the sum of that window of its tile).
+
+    The pieces carry no link to the tile they came from, so the expectation is the multiset over all the
+    tiles: a dataset kept from the first tile and cut again for the second gives the first tile's window twice
+    and the second's edited one never.
+    """
+    from collections import Counter
+
+    from rasterio.io import MemoryFile
+    from rasterio.windows import Window
+
+    if any(_field(t, "raster") is None for t in tiles):
+        return f"{case.cid}: a piece has no raster"
+    want: Counter = Counter()
+    for tile, tw, th in (r[:3] for r in arg_rows):
+        with MemoryFile(_raster_of(tile)) as mf, mf.open() as src:
+            for row in range(0, src.height, th):
+                for col in range(0, src.width, tw):
+                    win = (
+                        col,
+                        row,
+                        min(tw, src.width - col),
+                        min(th, src.height - row),
+                    )
+                    want[
+                        (
+                            win,
+                            float(src.read(1, window=Window(*win), masked=True).sum()),
+                        )
+                    ] += 1
+    got: Counter = Counter()
+    with MemoryFile(_raster_of(arg_rows[0][0])) as mf, mf.open() as src:
+        for t in tiles:
+            with MemoryFile(bytes(_field(t, "raster"))) as o, o.open() as piece:
+                got[(_window_of(t, src), float(piece.read(1, masked=True).sum()))] += 1
+    if got == want:
+        return None
+    return f"{case.cid}: {sum((want - got).values())} expected pieces missing {sorted((want - got))[:2]}, unexpected {sorted((got - want))[:2]}"
+
+
 def _check_rows(case: Case, rows: list, args) -> Optional[str]:
     """MVP-G: judge the rows a generator produced for one case."""
     from databricks.labs.gbx._geom import parse_geom
@@ -1087,6 +1207,8 @@ def _check_rows(case: Case, rows: list, args) -> Optional[str]:
         if len(rows) != 1:
             return f"{case.cid}: {len(rows)} rows, want the one error tile"
         return check(case, tiles[0], args)
+    if case.kind == "windows_batch":
+        return _check_window_batch(case, tiles, args)
     if case.kind == "windows":
         from rasterio.io import MemoryFile
         from rasterio.windows import Window
@@ -1169,7 +1291,12 @@ def run_rows(
     for case in cases:
         if surface not in case.surfaces:
             continue
-        args = [resolve_arg(a, tmpdir) for a in case.args]
+        batch = case.kind == "windows_batch"
+        arg_rows = [
+            [resolve_arg(a, tmpdir) for a in row]
+            for row in (case.args if batch else (case.args,))
+        ]
+        args = arg_rows[0]
         params = man.functions[case.fn].params
         schema = ", ".join(
             f"c{i} {_ddl_type(v, params[i])}" for i, v in enumerate(args)
@@ -1185,11 +1312,11 @@ def run_rows(
         if pad:
             cols = ", ".join([cols] + [p.default for p in params[len(args) :]])
         try:
-            spark.createDataFrame([tuple(args)], schema).createOrReplaceTempView(
-                "_gbx_oracle"
-            )
+            df = spark.createDataFrame([tuple(r) for r in arg_rows], schema)
+            # one partition: the rows of a batch case go through ONE task, one after the other
+            (df.coalesce(1) if batch else df).createOrReplaceTempView("_gbx_oracle")
             rows = spark.sql(shape_sql.format(fn=name_of(case.fn), args=cols)).collect()
-            out.append((case, _check_rows(case, rows, args)))
+            out.append((case, _check_rows(case, rows, arg_rows if batch else args)))
         except (
             Exception
         ) as exc:  # noqa: BLE001 - the case decides whether an error is expected

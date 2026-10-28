@@ -16,30 +16,36 @@ import scala.util.control.NonFatal
   * once instead of N times (the count+part shape calls once per piece). The cache is per thread, because a GDAL
   * Dataset is not safe to share between tasks, holds at most [[Capacity]] rasters, and is cleared when the Spark
   * task that filled it ends. A raster pushed out is released through [[RasterDriver.releaseDataset]], which frees
-  * its in-memory file. */
+  * its in-memory file. An entry keeps the bytes it was opened from: [[key]] is only a bucket, and a hit is
+  * confirmed against all of them. */
 object RetileKernel {
     val Capacity = 4
     private val log = LoggerFactory.getLogger(RetileKernel.getClass)
-    private val lru = ThreadLocal.withInitial[java.util.LinkedHashMap[String, Dataset]](() =>
-        new java.util.LinkedHashMap[String, Dataset](8, 0.75f, true) {
-            override def removeEldestEntry(e: java.util.Map.Entry[String, Dataset]): Boolean = {
+
+    /** A raster held open, with the bytes it was opened from. */
+    private final case class Held(ds: Dataset, raster: Array[Byte])
+
+    private val lru = ThreadLocal.withInitial[java.util.LinkedHashMap[String, Held]](() =>
+        new java.util.LinkedHashMap[String, Held](8, 0.75f, true) {
+            override def removeEldestEntry(e: java.util.Map.Entry[String, Held]): Boolean = {
                 val drop = size() > Capacity
-                if (drop) RasterDriver.releaseDataset(e.getValue)
+                if (drop) RasterDriver.releaseDataset(e.getValue.ds)
                 drop
             }
         })
     private val registeredFor = new ThreadLocal[AnyRef]()
 
     // A content hash of a 4096 x 4096 tile costs more than cutting all its windows, and the count+part shape asks
-    // once per window. The key is the length, the first and last 64 KB and 64 blocks of 4 KB spread between them
-    // (the whole raster when it is at most 512 KB). Two different rasters of one length that agree on every sampled
-    // byte would share an entry; the inputs of the oracle and the bench do not.
+    // once per window. So the key is only a BUCKET: the length, the first and last 64 KB and 64 blocks of 4 KB
+    // spread between them (the whole raster when it is at most 512 KB). It covers well under 1 % of a large raster,
+    // so an edited copy of a tile usually shares it with the original; `open` therefore compares all the bytes
+    // (Arrays.equals, about half the cost of the argument copy every call already pays) and treats a mismatch as a miss.
     private val Head = 65536
     private val Block = 4096
     private val Blocks = 64
     private val Whole = 524288
 
-    /** The cache key of `raster`: a digest of its length and the sampled bytes. */
+    /** The bucket of `raster`: a digest of its length and the sampled bytes. Equal keys do NOT mean equal rasters. */
     def key(raster: Array[Byte]): String = {
         val md = MessageDigest.getInstance("MD5")
         md.update(java.nio.ByteBuffer.allocate(8).putLong(raster.length.toLong).array())
@@ -54,16 +60,24 @@ object RetileKernel {
         java.util.Base64.getEncoder.encodeToString(md.digest())
     }
 
-    /** The raster behind `raster`, opened now or taken from this thread's cache. Raises when the bytes do not open. */
+    /** The raster behind `raster`, opened now or taken from this thread's cache when it holds these very bytes.
+      * Raises when the bytes do not open. */
     def open(raster: Array[Byte]): Dataset = {
         KernelGdal.ensureInit()
         clearAtTaskEnd()
         val k = key(raster)
         val m = lru.get()
-        Option(m.get(k)).getOrElse {
+        val hit = m.get(k)
+        if (hit != null && java.util.Arrays.equals(hit.raster, raster)) {
+            hit.ds
+        } else {
+            if (hit != null) { // same bucket, other bytes: not this raster, and the old one is not wanted
+                m.remove(k)
+                RasterDriver.releaseDataset(hit.ds)
+            }
             val ds = RasterDriver.readFromBytes(raster, Map("driver" -> "GTiff"))
             if (ds == null) throw new IllegalArgumentException("the raster bytes do not open")
-            m.put(k, ds)
+            m.put(k, Held(ds, raster))
             ds
         }
     }
@@ -74,7 +88,7 @@ object RetileKernel {
     /** Release every raster this thread holds. */
     def clear(): Unit = {
         val m = lru.get()
-        m.values().asScala.foreach(RasterDriver.releaseDataset)
+        m.values().asScala.foreach(h => RasterDriver.releaseDataset(h.ds))
         m.clear()
     }
 
@@ -91,7 +105,7 @@ object RetileKernel {
                 // scalastyle:on classforname
                 val handler = new InvocationHandler {
                     override def invoke(proxy: AnyRef, method: Method, args: Array[AnyRef]): AnyRef = method.getName match {
-                        case "onTaskCompletion" => clear(); null
+                        case "onTaskCompletion" => clear(); registeredFor.remove(); null
                         case "hashCode"         => Int.box(System.identityHashCode(proxy))
                         case "equals"           => Boolean.box(proxy eq args(0))
                         case _                  => null
@@ -102,7 +116,9 @@ object RetileKernel {
                 registeredFor.set(current)
             }
         } catch {
-            case _: ReflectiveOperationException | _: LinkageError => () // no Spark core here
+            // No Spark core here, or a runtime that lets this cleanup fail some other way: the cache is then
+            // bounded by Capacity alone. A LinkageError is fatal to NonFatal, so it is named.
+            case NonFatal(_) | _: LinkageError => ()
         }
 
     /** GTiff bytes of one window `(col_off, row_off, width, height)` of `ds`. */

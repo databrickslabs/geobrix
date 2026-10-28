@@ -27,9 +27,11 @@ _WINDOW_KEYS = ("col_off", "row_off", "width", "height")
 
 
 # A content hash of a 4096 x 4096 tile costs more than cutting all its windows, and the count+part shape asks
-# once per window. The key of a materialized tile is its length, its first and last 64 KB and 64 blocks of 4 KB
-# spread between them (all of it up to 512 KB). Two different rasters of one length that agree on every sampled
-# byte would share an entry; the inputs of the oracle and the bench do not. (The JVM facades key the same way.)
+# once per window. So the key of a materialized tile is only a BUCKET: its length, its first and last 64 KB and
+# 64 blocks of 4 KB spread between them (all of it up to 512 KB). It covers well under 1 % of a large raster, so
+# two different rasters of one size often share it (an edited copy next to its original); an entry therefore
+# keeps the bytes it was opened from, and a hit is confirmed by comparing them all (a memcmp, about half the cost
+# of the argument copy every call already pays). A mismatch is a miss. (The JVM facades do the same.)
 _HEAD, _BLOCK, _BLOCKS, _WHOLE = 65536, 4096, 64, 524288
 
 
@@ -51,8 +53,9 @@ def _digest(data) -> str:
 
 
 def _key(tile):
-    """What identifies the dataset a tile opens: a sample of its bytes, or its file with the window, clip and
-    instructions that change what is read from it."""
+    """The bucket of the dataset a tile opens: a sample of its bytes (confirmed by `_OpenLru` against all of
+    them), or its file with the window, clip and instructions that change what is read from it (exact).
+    """
     if tile["raster"] is not None:
         return _digest(tile["raster"])
     win, clip = tile["window"], tile["clip_polygon"]
@@ -76,16 +79,17 @@ def _task_attempt():
 class _OpenLru:
     """Per-Python-worker LRU of opened datasets: the re-open amortized over the pieces of one tile.
 
-    A worker is reused, so what a task opened must not outlive it: the first call of a new task closes
-    everything the last one left (a Python worker has no task-end hook, so a finished task's datasets
-    stay open, at most `cap` of them, until the next task on this worker starts)."""
+    An entry is (context, dataset, the bytes it was opened from, None for a virtual tile). A worker is
+    reused, so what a task opened must not outlive it: the first call of a new task closes everything the
+    last one left (a Python worker has no task-end hook, so a finished task's datasets stay open, at most
+    `cap` of them with their bytes, until the next task on this worker starts)."""
 
     def __init__(self, cap: int = 4):
         self.cap, self.items, self.task = cap, OrderedDict(), None
 
     def close(self):
         while self.items:
-            _, (ctx, _ds) = self.items.popitem(last=False)
+            _, (ctx, _ds, _raw) = self.items.popitem(last=False)
             ctx.__exit__(None, None, None)
 
     def get(self, tile):
@@ -93,15 +97,22 @@ class _OpenLru:
         if task != self.task:
             self.close()
             self.task = task
-        key = _key(tile)
-        if key in self.items:
-            self.items.move_to_end(key)
-            return self.items[key][1]
+        key, raw = _key(tile), tile["raster"]
+        hit = self.items.get(key)
+        if hit is not None:
+            # the key of bytes is a sample: only the same bytes are the same raster
+            if raw is None or hit[2] == raw:
+                self.items.move_to_end(key)
+                return hit[1]
+            del self.items[
+                key
+            ]  # same bucket, other bytes: a miss, and the old entry is not wanted
+            hit[0].__exit__(None, None, None)
         ctx = ot._open(tile)
         ds = ctx.__enter__()
-        self.items[key] = (ctx, ds)
+        self.items[key] = (ctx, ds, raw)
         while len(self.items) > self.cap:
-            _, (old, _ds) = self.items.popitem(last=False)
+            _, (old, _ds, _raw) = self.items.popitem(last=False)
             old.__exit__(None, None, None)
         return ds
 

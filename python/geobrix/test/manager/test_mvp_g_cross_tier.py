@@ -35,9 +35,10 @@ _ROWS_OF = (
 # functions it answers for (and the case kinds it can judge), the name the SQL calls, whether to fill in
 # the default arguments, and the rows it cannot judge.
 Shape = namedtuple("Shape", "level sql fns kinds name_of pad skip", defaults=((),))
-ANY = ("windows", "no_rows", "error_tile", "cells", "raises")
+ANY = ("windows", "windows_batch", "no_rows", "error_tile", "cells", "raises")
 PROBE = (
     "windows",
+    "windows_batch",
     "no_rows",
 )  # the array / count+part probes split a readable tile; they hold no error contract
 NAMED = {

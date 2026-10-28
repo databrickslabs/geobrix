@@ -138,8 +138,7 @@ light-base = [
 # ---------------------------------------------------------------------------
 # protobuf-5 regime — classic DBR 17.3, DBR 18, Serverless env 5
 # Base images ship protobuf 3.x/4.x; mapbox-vector-tile 2.2 would pull
-# protobuf>=6, so cap at <2.2. idna base is 3.7; cap <3.8 to silence the
-# "core package changed: idna" notebook notice.
+# protobuf>=6, so cap at <2.2. idna is NOT capped (base 3.7): see the note at "httpcore".
 # Canonical body: light_dbr17. Aliases: light_dbr18, light_env5.
 # ---------------------------------------------------------------------------
 # Canonical protobuf-5 runtime extra. Classic DBR 17.3.
@@ -162,8 +161,13 @@ light_dbr17 = [
     # the PEP 728 TypedDict keyword fixed by the typing_extensions floor above (9.0.6, 9.3.0
     # and 9.4.12 all import with it and all fail with 4.12.2), so the cap is lifted.
     "rio-tiler>=9.0,<10",
+    # httpcore and idna are left uncapped on purpose. rio-tiler 9.2+ uses httpx2, whose patched
+    # releases (2.12+, with httpcore2 2.10+) require idna>=3.18. A cap at the runtime's idna
+    # (3.7 here, 3.11 on DBR 19 / env 6) made pip fall back to httpx2 2.3.0, which has two HIGH
+    # advisories, for every user of the light extras. An install now upgrades idna, and Databricks
+    # may show its one-time "a core package changed" notice; idna 3.x keeps the API requests and
+    # urllib3 use.
     "httpcore>=1.0.9",
-    "idna<3.8",                     # DBR 17.3/18/env5 protobuf-5 base idna 3.7
     "mapbox-vector-tile>=2.1,<2.2", # protobuf-5 cap (2.2 would pull protobuf 6)
 ]
 # Classic DBR 18 — identical package set to DBR 17.3 (protobuf-5 regime).
@@ -176,8 +180,8 @@ light_env5 = ["geobrix[light_dbr17]"]
 # ---------------------------------------------------------------------------
 # protobuf-6 regime — classic DBR 19, Serverless env 6 (recommended)
 # Base images ship protobuf 6.x; mapbox-vector-tile 2.2 installs cleanly.
-# idna base is 3.11; cap <3.12 to silence the "core package changed: idna"
-# notebook notice. Env 6 is the recommended Serverless environment.
+# idna is not capped (base 3.11; see [light_dbr17]). Env 6 is the recommended Serverless
+# environment.
 # Canonical body: light_dbr19. Alias: light_env6.
 # ---------------------------------------------------------------------------
 # Canonical protobuf-6 runtime extra. Classic DBR 19.
@@ -195,11 +199,7 @@ light_dbr19 = [
     # rio-tiler capped at the next major, unified across both regimes (see [light_dbr17]).
     "rio-tiler>=9.0,<10",
     "httpcore>=1.0.9",          # DBR 19 / env 6 ship >=1.0.9; floor harmless
-    # idna cap: DBR 19 / env 6 base idna is 3.11; cap <3.12 to silence the
-    # "a core package changed: idna" notebook notice. idna is API-stable 3.x;
-    # the cap is cosmetic but keeps the base idna consistent. Confirmed 2026-08-23:
-    # light_dbr19 also runs on dogfood Serverless env 6 — the notice applies there.
-    "idna<3.12",
+    # idna is not capped (base 3.11): the patched httpx2 needs idna>=3.18. See [light_dbr17].
     # Protobuf-6 floor: require >=2.2 (drops the protobuf-5-era <2.2 cap).
     "mapbox-vector-tile>=2.2",
 ]

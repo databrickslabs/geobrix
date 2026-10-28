@@ -74,6 +74,8 @@ GeoBrix Light uses **explicit, runtime-pinned extras** — every install picks a
 
 *(Full feature set (`_all`) = `[light_envN/_dbrN]` + `[stac]` + `[vizx]` in one install; on env 6 and DBR 19 it also includes the Zarr stack (`[zarr_env6]` / `[zarr_dbr19]`). `[databricks]` is added separately if needed.)*
 
+*Installing any light extra upgrades `idna` (the runtime ships 3.7 or 3.11) and installs `httpx2` and `httpcore2`, which `rio-tiler` uses to read remote rasters and which need `idna` 3.18 or later. On Serverless env 5 and DBR 17.3/18 it also upgrades `anyio`, and on DBR 17.3 `h11`. Databricks may show a one-time "a core package changed" notice; it is harmless, and the restart that follows the install picks up the new versions.*
+
 *The `[stac]` part of `_all` requires `requests` 2.34.2 or later, so an `_all` install raises `requests` wherever the runtime ships an older version (env 6 and DBR 19 ship 2.32.5).*
 
 *`[earthdata]` and `[overture]` are source-specific downloaders kept **outside `_all`** (they change further preinstalled base packages on install). Add either alongside your runtime extra — e.g. `geobrix[light_env6,overture]` — or, to use one with the full feature set, install it as a **separate step after** `_all` (not combined in one command). See **[NASA Earthdata / EMIT](./sample-data/emit-downloader)** and **[Overture Maps](./sample-data/overture-downloader)** for details.*

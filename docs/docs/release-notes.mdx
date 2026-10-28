@@ -859,6 +859,20 @@ formats.
   4.13 floor, `rio-tiler` 9.3 and later import on Serverless environments 5 and 6 and Databricks
   Runtime 17.3, 18 and 19. The extras now allow any `rio-tiler` 9 release, so a new install takes
   9.4 instead of 9.2; no other package in the extras changes.
+- **The lightweight extras no longer hold `idna` at the runtime's version.** `rio-tiler` 9.2 and
+  later fetch remote rasters through `httpx2`, and the fixed releases of `httpx2` (2.12 or later)
+  and `httpcore2` (2.10 or later) need `idna` 3.18 or later. With `idna` held at the runtime's
+  copy (3.7 on Serverless environment 5 and Databricks Runtime 17.3 and 18, 3.11 on environment 6
+  and Databricks Runtime 19), pip fell back to `httpx2` 2.3.0 and `httpcore2` 2.3.0, which have
+  high-severity advisories. Installing a light extra now installs `httpx2` and `httpcore2` 2.16
+  and upgrades `idna` (to 3.20) on every runtime. Because the fixed `httpx2` also needs `anyio`
+  4.10 or later and `httpcore2` needs `h11` 0.16 or later, the install upgrades `anyio` on
+  Serverless environment 5 and Databricks Runtime 17.3 and 18 (they ship 4.6 or 4.7), and `h11`
+  on Databricks Runtime 17.3 (it ships 0.14). Databricks may show its one-time "a core package
+  changed" notice. A `%pip` install restarts Python on Databricks (the steps in
+  [Installation](./installation) end with an explicit restart where they force-reload), so the
+  new versions are in effect afterwards; `requests` and `urllib3` work with the new `idna`
+  unchanged.
 - **Photogrammetry extras:** `pycolmap` and `pycolmap-cuda12` move to 4.2.1.
 - **The GeoBrix JAR no longer bundles the Scala standard library;** Databricks Runtime provides
   it. Nothing changes for users.

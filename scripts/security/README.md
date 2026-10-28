@@ -213,11 +213,12 @@ Intentionally NOT hash-pinned (per maintainer policy):
 
 ### Policy
 
-geobrix pins runtime-sensitive core packages (`urllib3`, `pandas`, `numpy`, `idna`) to
+geobrix pins runtime-sensitive core packages (`urllib3`, `pandas`, `numpy`) to
 the preinstalled version of each DBR/Serverless base so a cluster `%pip install
 geobrix[light_dbrNN]` stays silent (no "a core Python package changed" notice) and the
-installed versions remain base-compatible.  geobrix **never** ships a version newer than
-the base.
+installed versions remain base-compatible.  geobrix does not ship a newer version of these
+than the base.  `idna` is the exception, and is **not** capped: see the httpx2 / httpcore2
+case below.
 
 Per-regime base versions verified 2026-09-03:
 
@@ -227,7 +228,7 @@ Per-regime base versions verified 2026-09-03:
 | DBR 19 / Serverless env 6 | 2.5.0 | `urllib3<2.6` |
 
 `pandas` and `numpy` are capped similarly (`<2.3`/`<2.2` for pb5 regimes, `<2.4`/`<2.4`
-for pb6); `idna` is capped at `<3.8` (pb5) and `<3.12` (pb6).
+for pb6).
 
 ### Consequence for Dependabot triage
 
@@ -253,28 +254,25 @@ base-version fidelity).  These CVEs are resolved when Databricks ships a patched
   for test fidelity; upgrading them past the base triggers the "core package changed"
   cluster notice on DBR.  Patching is a CI-health action, not a 0.6.0 release gate.
 
-- **httpx2 / httpcore2 — 4 HIGH+MED alerts** in the four light locks: the two CI
-  locks (`requirements-light-env5-ci.txt` / `-env6-ci.txt`, which pin
-  rio-tiler 9.4.12 so CI tests what users install) and the two `_all` umbrella locks
-  (`requirements-light-env5-all-ci.txt` / `-env6-all-ci.txt`).  rio-tiler 9.2 and later
-  (9.4.12 is the newest admitted by the `rio-tiler>=9.0,<10` cap) replaced its classic
-  `httpx` client with the `httpx2` distribution.  The patched `httpx2`
-  (`>=2.11` for the MED multipart/header CVEs, `>=2.12` for HIGH
-  CVE-2026-84382 decompression-amplification, plus the paired `httpcore2>=2.10`
-  for HIGH CVE-2026-84381) **requires `idna>=3.18`**, which the base-pinned idna
-  caps (`<3.8` env5 / `<3.12` env6, above) forbid — so the resolver backtracks
-  `httpx2` to 2.3.0 (its last release compatible with an unbounded idna).  rio-tiler
-  itself admits any `httpx2`; the wall is idna.  These CVEs are therefore
-  **inherited transitively from the same base-pinned idna constraint as the
-  urllib3/idna cases above** and clear only when the DBR/Serverless base advances
-  idna to `>=3.18` (letting the geobrix idna cap rise), not by a wheel bump.  The
-  dev-container locks (`requirements-dev-container*.txt`) carry no idna cap, so they
-  resolve the patched `httpx2` / `httpcore2` 2.15.1 with idna 3.20 and have no open
-  alert.  Exposure is the remote-HTTP raster-read path (rio-tiler
-  fetching COG/tiles over HTTPS); reads from trusted UC Volumes / cloud storage do
-  not traverse it.  Confirmed via `uv pip compile` on 2026-09-28: forcing
-  `httpx2>=2.11` fails with *"httpx2>=2.11.0 depends on idna>=3.18 … and
-  geobrix[light-env6-all] depends on idna<3.12"*.
+- **httpx2 / httpcore2 — resolved by lifting the idna cap (2026-10-28).**  rio-tiler 9.2 and
+  later (9.4.12 is the newest admitted by the `rio-tiler>=9.0,<10` cap) fetch remote rasters
+  through `httpx2`.  The patched `httpx2` (`>=2.11` for the MED multipart/header CVEs, `>=2.12`
+  for HIGH CVE-2026-84382 decompression-amplification, plus the paired `httpcore2>=2.10`
+  for HIGH CVE-2026-84381) **requires `idna>=3.18`**.  The extras used to cap idna at the
+  runtime's version (`<3.8` env5 / `<3.12` env6), so pip backtracked to `httpx2` 2.3.0 for every
+  user of a light extra, not only in the CI locks, and the cap held no one at a safe base either
+  (the base idna 3.7 / 3.11 is itself below the 3.15 fix).  The cap was cosmetic (it only
+  silenced Databricks' "a core package changed: idna" notice), so it is gone from
+  `pyproject.toml` and the two light CI `.in` files: the four light locks now carry `httpx2` /
+  `httpcore2` 2.16.0 and idna 3.20, and a light-extra install upgrades the runtime's idna and may
+  show that one-time notice.  idna 3.x keeps the API `requests` (2.32.x) and `urllib3` use:
+  their IDN host encoding gives the same result on 3.7, 3.11 and 3.20, and every runtime's
+  preinstalled package set resolves with idna 3.20.  The patched `httpx2` also needs `anyio>=4.10`
+  and `httpcore2` needs `h11>=0.16`, so the install upgrades `anyio` on env5 / DBR 17.3 / DBR 18
+  (4.6.2 / 4.7.0) and `h11` on DBR 17.3 (0.14.0); the other preinstalled packages do not move
+  (checked with `uv pip compile` against each runtime's package list).  (The earlier hold was confirmed with
+  `uv pip compile` on 2026-09-28: `httpx2>=2.11` failed with *"httpx2>=2.11.0 depends on
+  idna>=3.18 … and geobrix[light-env6-all] depends on idna<3.12"*.)
 
 - **jackson-databind — 2 HIGH alerts** in `pom.xml` (scope `provided`).  The
   `jar-with-dependencies` assembly excludes provided-scope artifacts; Spark/DBR ships its
@@ -311,8 +309,8 @@ release unless a runtime fixes its version:
   `aiohttp`, `multidict`, plus the Jupyter-stack packages in the dev container); `setuptools`,
   `wheel` and `black` moved to patched releases.  Pillow is not a dependency of any shipped extra,
   so the floor is CI-only and the runtime's own pillow (11.1.0 or 12.0.0) is untouched.
-- *Still held on purpose.*  `urllib3`, `idna`, `httpx2` / `httpcore2` and `pyarrow` in the light
-  locks (cases above); `pip` and `pyarrow` in the dev container (the DBR 17.3 install toolchain and
+- *Still held on purpose.*  `urllib3` and `pyarrow` in the light locks (cases above); `pip` and
+  `pyarrow` in the dev container (the DBR 17.3 install toolchain and
   Arrow baseline the tests run on); `torch` in `models_gpu_env5` (pinned to the Serverless GPU base,
   CUDA 12).
 - *Docs and the Genie Map app (npm / pnpm).*  Docusaurus moved to 3.10.2, and `overrides` lift
@@ -321,3 +319,6 @@ release unless a runtime fixes its version:
   has no patched release, is not yet on the package mirror, or needs a major bump of a pinned
   consumer (kepler.gl, the AI tool stack, `@loaders.gl`).
 
+**2026-10-28 idna cap lifted.**  `idna` is no longer capped in any light extra, so the four light
+locks carry `httpx2` / `httpcore2` 2.16.0 and idna 3.20, and the httpx2 / httpcore2 / idna alerts
+on the light locks are cleared (see the httpx2 / httpcore2 case above).

@@ -104,13 +104,12 @@ donfig>=0.8,<1
 # stub + monkeypatch), which is why they stay out of this light lock. tenacity
 # matches requirements-dev-container.in; requests is bumped ABOVE the dev-container
 # pin to clear its CVE (fix 2.33.0). 2.33.0's deps (urllib3<3,>=1.26 / idna<4,>=2.5)
-# stay within the env6 base caps, so this does not disturb the pinned urllib3/idna. ---
+# stay within the env6 urllib3 cap, so this does not disturb the pinned urllib3. ---
 requests==2.34.2
 tenacity==9.1.4
-# MUST match pyproject [light_env6] (alias of [light_dbr19]): idna<3.12
-# Serverless env 6 / DBR 19 base is idna 3.11; cap <3.12 silences the
-# "a core package changed: idna" notebook notice. idna 3.x is API-stable; cosmetic.
-idna<3.12
+# idna is NOT capped, matching pyproject [light_env6]: the patched httpx2 (rio-tiler's HTTP
+# client, 2.12+) requires idna>=3.18, and the runtime base is idna 3.11. The lock resolves it;
+# an install upgrades the runtime's idna (a one-time "core package changed" notice on Databricks).
 # earthaccess is kept here for test/earthdata + test/stac CI coverage; it is now the
 # [earthdata] extra (not part of shipped _all wheels — pulled explicitly by EMIT users).
 # NASA EMIT (CH4) fetch for the sample EmitDownloader (Earthdata-Login auth).

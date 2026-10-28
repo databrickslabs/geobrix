@@ -604,6 +604,28 @@ def test_a_volume_object_is_looked_at_until_its_time_has_settled(
     )  # objects that had settled are not looked at again
 
 
+def test_only_the_objects_a_publish_settles_are_remembered(tmp_path, monkeypatch):
+    """The write times kept for the settle are for the objects a publish records an identity
+    for: a document (or a reference file) is never kept, an object is forgotten once settled,
+    and a long-lived driver evicts the oldest entries instead of growing."""
+    now = [0.0]
+    monkeypatch.setattr(
+        _sync, "_VOLUMES", str(tmp_path) + "/"
+    )  # these paths count as a Volume
+    monkeypatch.setattr(_sync, "_WRITTEN", {})
+    monkeypatch.setattr(_sync, "_WRITTEN_MAX", 4)
+    monkeypatch.setattr(_sync, "_clock", lambda: now[0])
+    monkeypatch.setattr(_sync, "_sleep", lambda s: now.__setitem__(0, now[0] + s))
+    _sync._atomic_write(str(tmp_path / "zarr.json"), [b"{}"], "w1")  # a document
+    assert _sync._WRITTEN == {}
+    objects = [str(tmp_path / "t2m" / "c" / str(i)) for i in range(6)]
+    for o in objects:
+        _sync._atomic_write(o, [b"x"], "w1", track=True)
+    assert list(_sync._WRITTEN) == objects[2:]  # the two oldest were evicted
+    _sync._settle(objects[2:])  # (a local file never shows a whole second: it warns)
+    assert _sync._WRITTEN == {}
+
+
 def test_publish_refuses_after_drift(spark_delta, registered):
     store, table = registered(sharded=True, writable=True)
     _overlay_write(spark_delta, table)

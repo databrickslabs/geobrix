@@ -623,7 +623,8 @@ def _settle(paths) -> dict[str, str]:
         if _on_volume(p):
             done = (
                 _whole_second(identity)
-                and _clock() - _WRITTEN.get(p, float("-inf")) >= _QUIET
+                and _clock() - _WRITTEN.get(os.path.normpath(p), float("-inf"))
+                >= _QUIET
             )
         else:
             done = seen.get(p) == identity
@@ -646,7 +647,7 @@ def _settle(paths) -> dict[str, str]:
             min(pending),
         )
     for p in paths:
-        _WRITTEN.pop(p, None)
+        _WRITTEN.pop(os.path.normpath(p), None)
     return seen
 
 
@@ -658,10 +659,12 @@ def _restamp(rows: list[dict], base: str) -> None:
         r["identity"] = settled[os.path.join(base, r["file"])]
 
 
-def _atomic_write(path: str, parts, write_id: str) -> str:
+def _atomic_write(path: str, parts, write_id: str, *, track: bool = False) -> str:
     """Write ``parts`` (byte strings) to ``path`` through a temp name and a rename, and
     return the identity of the result as the rename left it. On a Volume that is not final:
-    a caller that records it settles it first (``_restamp``)."""
+    a caller that records it settles it first (``_restamp``), and says ``track`` so that the
+    time of the rename is kept for the settle (``_WRITTEN``). A document, which carries no
+    identity, is not tracked."""
     folder = os.path.dirname(path)
     os.makedirs(folder, exist_ok=True)
     temp = os.path.join(folder, f".{os.path.basename(path)}.{write_id}.tmp")
@@ -674,12 +677,10 @@ def _atomic_write(path: str, parts, write_id: str) -> str:
         with contextlib.suppress(OSError):
             os.unlink(temp)
         raise
-    if _on_volume(path):
-        if (
-            len(_WRITTEN) > _WRITTEN_MAX
-        ):  # a long-lived driver: never grow without bound
-            _WRITTEN.clear()
-        _WRITTEN[path] = _clock()
+    if track and _on_volume(path):
+        while len(_WRITTEN) >= _WRITTEN_MAX:  # a long-lived driver: forget the oldest
+            _WRITTEN.pop(next(iter(_WRITTEN)), None)
+        _WRITTEN[os.path.normpath(path)] = _clock()
     return _identity_of(path)
 
 
@@ -716,7 +717,7 @@ def _copy_chunk(reader, base: str, row: dict, write_id: str) -> dict:
     """An unsharded overlay chunk's bytes into the base object at its canonical key."""
     path = os.path.join(base, row["array"], row["key"])
     region = Region(row["file"], row["offset"], row["length"], "gbx")
-    identity = _atomic_write(path, reader.read([region]), write_id)
+    identity = _atomic_write(path, reader.read([region]), write_id, track=True)
     return _object_row(
         "chunk",
         row["array"],
@@ -738,7 +739,7 @@ def _rebuild_shard(store, reader, base: str, array: str, key: str, write_id: str
         for part in shard.pieces(0, shard.size):
             yield reader.read([part])[0] if isinstance(part, Region) else part
 
-    return path, _atomic_write(path, parts(), write_id)
+    return path, _atomic_write(path, parts(), write_id, track=True)
 
 
 def _publish_shards(pool, reader, base, meta, keys, inner, shard_rows, write_id):

@@ -576,6 +576,8 @@ def _delete(base: dict) -> dict:
         kind=base.get("kind"),
         array=base.get("array"),
         key=base.get("key"),
+        shard_key=base.get("shard_key"),
+        identity=base.get("identity"),
         expected_write_id=base.get("write_id"),
     )
 

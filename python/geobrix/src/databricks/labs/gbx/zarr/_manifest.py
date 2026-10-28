@@ -740,8 +740,8 @@ def _commit_source(rows: pa.Table, write_id: str, meta: dict) -> pa.Table:
 
 
 _REGION_FIX = (
-    "write each shard or chunk row with its file, offset and length (> 0), or delete a "
-    "chunk with a tombstone: a chunk row with no file, offset or checksum and length 0"
+    "write each shard or chunk row with its file, offset and length (> 0), or hide an "
+    "object with a tombstone: a row with no file, offset or checksum and length 0"
 )
 
 
@@ -750,10 +750,11 @@ def _require_regions(source: pa.Table) -> None:
 
     A row with a file is a region of it: ``offset`` and ``length`` are set, ``offset`` is
     not negative and ``length`` is positive (a zero-byte region with a file would read as
-    a chunk of nothing). A row without a file is a tombstone, the one way to delete an inner
-    chunk that a live shard row still holds: a ``chunk`` row with no ``offset`` and no
-    ``checksum`` and ``length`` 0. The store reads anything else as drift, so it is never
-    written. Columnar: a commit can carry millions of rows.
+    a chunk of nothing). A row without a file is a tombstone: no ``offset``, no ``checksum``
+    and ``length`` 0. A ``chunk`` tombstone deletes an inner chunk that a live shard row still
+    holds, or hides a chunk object of a registered store; a ``shard`` tombstone hides a shard
+    object of one (``identity`` then names the object it hides). The store reads anything
+    else as drift, so it is never written. Columnar: a commit can carry millions of rows.
     """
     kind, op = source.column("kind"), source.column("op")
     data = pc.and_(
@@ -772,7 +773,7 @@ def _require_regions(source: pa.Table) -> None:
         ),
     )
     bad_tomb = pc.or_(
-        pc.or_(pc.equal(kind, "shard"), pc.is_valid(offset)),
+        pc.is_valid(offset),
         pc.or_(
             pc.fill_null(pc.not_equal(length, 0), True),
             pc.is_valid(source.column("checksum")),
@@ -788,8 +789,6 @@ def _require_regions(source: pa.Table) -> None:
             f"names the file {row['file']!r} with offset {row['offset']} and length "
             f"{row['length']}, which is not a whole region"
         )
-    elif row["kind"] == "shard":
-        problem = "has no file (a shard row always names one)"
     else:
         problem = (
             f"has no file but offset {row['offset']}, length {row['length']} and "

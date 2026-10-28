@@ -26,6 +26,7 @@ from databricks.labs.gbx.zarr._read import BLOCKS_SCHEMA  # noqa: E402
 from databricks.labs.gbx.zarr._register import (  # noqa: E402
     OWNER_MARKER,
     gbx_zarr_register,
+    identity_of,
 )
 from databricks.labs.gbx.zarr._testing import (  # noqa: E402
     era5_like_dataset,
@@ -822,11 +823,12 @@ def test_p1_a_chunk_read_from_a_shard_conflicts_when_that_shard_changes(
     assert np.isnan(got[0:12, 0:37, 0:72]).all()  # A's result alone: fill there
 
 
-def test_an_overwrite_deletes_the_shard_rows_of_a_registered_store(
+def test_an_overwrite_hides_the_shards_of_a_registered_store_with_tombstones(
     spark_delta, drop, tmp_path, no_hooks
 ):
-    """I8(b), pre-ruling (f): every shard row of the variable goes; only the rewritten
-    chunk stays; the base files are untouched."""
+    """I8(b), Ruling Z49: every shard row of the variable becomes a tombstone that keeps the
+    identity of the base shard it hides (a deleted row would let a sync bring the shard
+    back); only the rewritten chunk has data; the base files are untouched."""
     store, table = _registered(spark_delta, drop, tmp_path, "ow")
     before = _files(store)
     wid = uuid.uuid4().hex
@@ -839,12 +841,19 @@ def test_an_overwrite_deletes_the_shard_rows_of_a_registered_store(
         write_id=wid,
     )
     live = spark_delta.sql(
-        f"SELECT kind, key, write_id FROM {table} WHERE array = 't2m' AND tag IS NULL "
-        "AND kind IN ('shard', 'chunk')"
+        f"SELECT kind, key, write_id, file, length, origin, identity FROM {table} "
+        "WHERE array = 't2m' AND tag IS NULL AND kind IN ('shard', 'chunk')"
     ).collect()
-    assert [(r["kind"], r["key"], r["write_id"]) for r in live] == [
-        ("chunk", "c/3/1/1", wid)
-    ]
+    assert {(r["kind"], r["key"], r["write_id"]) for r in live} == {
+        ("chunk", "c/3/1/1", wid),
+        ("shard", "c/0/0/0", wid),
+        ("shard", "c/1/0/0", wid),
+    }
+    for r in live:
+        if r["kind"] == "shard":
+            assert (r["file"], r["length"], r["origin"]) == (None, 0, "gbx")
+            st = (store / "t2m" / r["key"]).stat()
+            assert r["identity"] == identity_of(st.st_mtime_ns // 1_000_000, st.st_size)
     got = _read(spark_delta, table, "t2m")
     assert (got[36:48, 37:73, 72:144] == 5.0).all()
     assert np.isnan(got[:36]).all() and np.isnan(got[36:48, :37]).all()

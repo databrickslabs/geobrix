@@ -340,27 +340,52 @@ def test_sync_ignores_check_rows(spark_delta, registered):
     assert M.snapshot(spark_delta, table).version == version  # nothing was committed
 
 
+@pytest.mark.parametrize("how", ["all-fill write", "overwrite"])
 @pytest.mark.parametrize("sharded", LAYOUTS)
 def test_an_all_fill_write_stays_deleted_through_sync_and_publish(
-    spark_delta, registered, sharded
+    spark_delta, registered, sharded, how
 ):
-    """Writing fill over a chunk of a registered store is a deletion. It is a tombstone, not
-    a missing row, so the base object GeoBrix hid is not brought back by the next sync, and
-    a publish removes it from the store."""
+    """What GeoBrix deletes from a registered store is a tombstone, not a missing row: the
+    base object it hid is not brought back by the next sync, and a publish removes it.
+    That holds for fill written over a chunk, and for an overwrite of the whole variable
+    (unsharded chunks, and shards, are hidden)."""
     store, table = registered(sharded, writable=True)
     t2m = zarr.open_array(str(store / "t2m"), mode="r")
-    want = t2m[...]
-    want[12:24, 0:37, 72:144] = t2m.fill_value
-    gone = store / "t2m" / "c" / "1" / "0" / "1"
-    block = np.full(WHOLE, t2m.fill_value, dtype="float32")
-    gbx_zarr_write(
-        H.blocks_frame(spark_delta, ("t2m", (12, 0, 72), block)), table, mode="update"
-    )
+    fill = t2m.fill_value
+    if how == "overwrite":
+        block = np.full(WHOLE, 5.0, dtype="float32")
+        want = np.full(t2m.shape, fill, dtype="float32")
+        want[0:12, 0:37, 0:72] = 5.0
+        gbx_zarr_write(
+            H.blocks_frame(spark_delta, ("t2m", (0, 0, 0), block)),
+            table,
+            mode="overwrite",
+            variables=["t2m"],
+        )
+        tombstones, objects_left = (2 if sharded else 15), 1
+    else:
+        want = t2m[...]
+        want[12:24, 0:37, 72:144] = fill
+        block = np.full(WHOLE, fill, dtype="float32")
+        gbx_zarr_write(
+            H.blocks_frame(spark_delta, ("t2m", (12, 0, 72), block)),
+            table,
+            mode="update",
+        )
+        tombstones, objects_left = 1, (2 if sharded else 15)
 
-    (tomb,) = _live(spark_delta, table, kind="chunk", array="t2m", origin="gbx")
-    assert (tomb["file"], tomb["offset"], tomb["length"]) == (None, None, 0)
-    # unsharded: the tombstone remembers the base object it hides; in a shard the shard row does
-    assert (tomb["identity"] is not None) == (not sharded)
+    hidden = [
+        r
+        for r in _live(spark_delta, table, array="t2m", origin="gbx")
+        if r["file"] is None
+    ]
+    assert len(hidden) == tombstones
+    assert all((r["offset"], r["length"]) == (None, 0) for r in hidden)
+    # a tombstone remembers the base object it hides, unless a shard row already does
+    assert all(
+        (r["identity"] is not None) == (how == "overwrite" or not sharded)
+        for r in hidden
+    )
     np.testing.assert_array_equal(H.read_variable(spark_delta, table, "t2m"), want)
 
     assert _changes(gbx_zarr_sync(spark_delta, table)) == set()  # not resurrected
@@ -368,10 +393,11 @@ def test_an_all_fill_write_stays_deleted_through_sync_and_publish(
 
     publish(spark_delta, table)
     np.testing.assert_array_equal(zarr.open_array(str(store / "t2m"))[...], want)
+    left = [
+        p for p in (store / "t2m").rglob("*") if p.is_file() and p.name != "zarr.json"
+    ]
+    assert len(left) == objects_left
     assert _live(spark_delta, table, origin="gbx") == []
-    if not sharded:
-        assert not gone.exists()
-        assert _live(spark_delta, table, array="t2m", key="c/1/0/1") == []
     assert _changes(gbx_zarr_sync(spark_delta, table)) == set()
     np.testing.assert_array_equal(H.read_variable(spark_delta, table, "t2m"), want)
 

@@ -2080,7 +2080,7 @@ def _commit_data_rows(plan: _Plan, rows: pa.Table, written: set) -> pa.Table:
       its row, or is a tombstone (under a live shard row, or over a base object it hides);
     - one check row per shard a chunk was read from;
     - in an overwrite, the deletes of every base row of the written variables that no
-      chunk replaced.
+      chunk replaced; a row that hides a base object becomes a tombstone instead.
     """
     w = plan.write_id
     rtype = rows.column("rtype")
@@ -2127,17 +2127,46 @@ def _commit_data_rows(plan: _Plan, rows: pa.Table, written: set) -> pa.Table:
                 value_set=pa.array(sorted(written), pa.string()),
             )
         )
-        n = deletes.num_rows
+        # a row that hides a base object (a registered store's own file, or an overlay row
+        # that remembers one) is not simply deleted: with no row left, the next sync would
+        # list the object as new and bring it back. It becomes a tombstone that keeps the
+        # object's identity. Any other row is deleted.
+        hides = pc.is_valid(deletes.column("identity"))
+        plain = deletes.filter(pc.invert(hides))
+        hidden = deletes.filter(hides)
+        n = plain.num_rows
         if n:
             parts.append(
                 _typed_rows(
                     {
-                        "kind": deletes.column("kind"),
-                        "array": deletes.column("array"),
-                        "key": deletes.column("key"),
+                        "kind": plain.column("kind"),
+                        "array": plain.column("array"),
+                        "key": plain.column("key"),
                         "write_id": _const(w, n),
                         "op": _const("delete", n),
-                        "expected_write_id": deletes.column("expected_write_id"),
+                        "expected_write_id": plain.column("expected_write_id"),
+                    },
+                    n,
+                )
+            )
+        n = hidden.num_rows
+        if n:
+            is_shard = pc.equal(hidden.column("kind"), "shard")
+            parts.append(
+                _typed_rows(
+                    {
+                        "kind": hidden.column("kind"),
+                        "array": hidden.column("array"),
+                        "key": hidden.column("key"),
+                        "shard_key": pc.if_else(
+                            is_shard, hidden.column("key"), hidden.column("shard_key")
+                        ),
+                        "length": pa.array(np.zeros(n, dtype=np.int64)),
+                        "origin": _const("gbx", n),
+                        "identity": hidden.column("identity"),
+                        "write_id": _const(w, n),
+                        "op": _const("upsert", n),
+                        "expected_write_id": hidden.column("expected_write_id"),
                     },
                     n,
                 )

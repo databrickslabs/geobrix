@@ -781,6 +781,12 @@ def _publish(spark, table: str, props, lock: str) -> int:
         live.filter(pc.is_in(kind, value_set=pa.array(list(_DOC_KINDS)))).to_pylist()
     )
     chunks = overlay.filter(pc.equal(overlay.column("kind"), "chunk")).to_pylist()
+    shard_tombstones = overlay.filter(
+        pc.and_(
+            pc.equal(overlay.column("kind"), "shard"),
+            pc.is_null(overlay.column("file")),
+        )
+    ).to_pylist()
     flat = [c for c in chunks if c["shard_key"] is None]
     inner: dict[tuple, list[dict]] = {}
     for c in chunks:
@@ -807,6 +813,15 @@ def _publish(spark, table: str, props, lock: str) -> int:
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(os.path.join(base, c["array"], c["key"]))
             out.append(_delete_of(c, write_id))
+    for (
+        r
+    ) in (
+        shard_tombstones
+    ):  # a shard hidden for good; one with chunks over it is rebuilt
+        if (r["array"], r["key"]) not in inner:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(os.path.join(base, r["array"], r["key"]))
+            out.append(_delete_of(r, write_id))
     by_array: dict[str, list[tuple]] = {}
     for array, key in sorted(inner):
         by_array.setdefault(array, []).append((array, key))

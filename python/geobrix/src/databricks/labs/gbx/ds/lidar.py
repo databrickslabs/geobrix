@@ -759,16 +759,18 @@ def _read_chunk_table(h, local: str, size: int) -> Union[str, _ChunkTable, None]
 
 def check_laz(source, name: str) -> None:
     """Raise a ValueError naming ``name`` when ``source`` (the path or the bytes
-    of a LAS/LAZ file) is a LAZ file the decoder must not be given: a LASzip
-    record that cannot be decoded, a chunk table that is implausible, or (a
-    point format with GPS time) compressed points with a dense run of 0xFF bytes
-    (see :func:`_read_chunk_table`). Callers that read a LAZ file with
-    ``laspy.read`` call this first, since such a file can end the process
-    instead of raising. Anything else passes: an uncompressed file, a file
-    without lazrs as its decoder, and a LAZ file whose table and points are
-    sound as far as these checks go (other damage can still reach the
-    decoder). With laszip as the decoder (no lazrs) only the run of 0xFF
-    bytes is checked."""
+    of a LAS/LAZ file) is a LAZ file the decoder must not be given, such a file
+    being able to end the process instead of raising. Callers that read a LAZ
+    file with ``laspy.read`` call this first.
+
+    What is checked depends on the decoder laspy will pick. With lazrs: a LASzip
+    record that cannot be decoded, a chunk table that is implausible, or (a point
+    format with GPS time) compressed points with a dense run of 0xFF bytes (see
+    :func:`_read_chunk_table`). With laszip and no lazrs: only that run of 0xFF
+    bytes, again for a point format with GPS time. Anything else passes: an
+    uncompressed file, a LAZ file under any other decoder, and a LAZ file whose
+    table and points are sound as far as these checks go (other damage can still
+    reach the decoder)."""
     import laspy
 
     if isinstance(source, (bytes, bytearray, memoryview)):

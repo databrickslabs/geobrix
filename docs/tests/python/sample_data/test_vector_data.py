@@ -15,7 +15,7 @@ _VECTOR_CONSTANTS = [
     ("USAGE_NYC_TAXI_ZONES", "nyc/taxi-zones"),
     ("DOWNLOAD_LONDON_POSTCODES", "london_postcodes"),
     ("USAGE_LONDON_POSTCODES", "london/postcodes"),
-    ("DOWNLOAD_NYC_BOROUGHS", "boro_name"),
+    ("DOWNLOAD_NYC_BOROUGHS", "boroname"),
     ("USAGE_NYC_BOROUGHS", "nyc/boroughs"),
     ("DOWNLOAD_NYC_NTA", "ntaname"),
     ("USAGE_NYC_NTA", "nyc-neighborhoods"),

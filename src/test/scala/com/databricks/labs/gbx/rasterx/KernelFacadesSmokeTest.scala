@@ -7,10 +7,12 @@ import java.util.jar.JarOutputStream
 import java.util.zip.ZipEntry
 
 import com.databricks.labs.gbx.kernels.{BuildInfo, KernelGdal, L1Installer}
+import com.databricks.labs.gbx.kernels.df.ViewshedTowersJvm
 import com.databricks.labs.gbx.kernels.uc.BngUc
 import com.databricks.labs.gbx.kernels.udf.{BngEastNorthAsBngUdf, BngTessellateUdf, RetileKernel, RstMergeArrayBytesUdf, RstRetileArrayBytesUdf, RstRetileCountBytesUdf, RstRetilePartBytesUdf, RstTransformCrsBytesUdf}
 import com.databricks.labs.gbx.rasterx.expressions.agg.mvp.BngRasterizeCellsBytesUdf
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
+import com.databricks.labs.gbx.util.NodeFilePathUtil
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.test.SilentSparkSession
@@ -344,5 +346,40 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         assert(part.call(input, 8, 8, 3).nonEmpty && RetileKernel.cached() == 0, "the last piece left the raster open")
         new RstRetileArrayBytesUdf().call(input, 8, 8) // one call is the whole row
         assert(RetileKernel.cached() == 0 && vsimemEntries() == before, "the array facade left the raster open")
+    }
+
+    test("ViewshedTowersJvm counts a tower's viewshed over two tiles, skips a tower in no tile, and gives back its holds") {
+        // two 32 x 32 tiles of flat ground, 1 m pixels in EPSG:3857, side by side: x 0..32 and 32..64
+        def flat(west: Double): Array[Byte] = {
+            KernelGdal.ensureInit()
+            val ds = GDALManager.memDriver().Create("", 32, 32, 1, gdalconstConstants.GDT_Float32)
+            ds.SetGeoTransform(Array(west, 1.0, 0.0, 32.0, 0.0, -1.0))
+            val sr = new SpatialReference()
+            sr.ImportFromEPSG(3857)
+            ds.SetProjection(sr.ExportToWkt())
+            ds.GetRasterBand(1).WriteRaster(0, 0, 32, 32, Array.fill(32 * 32)(10.0f))
+            try RasterDriver.writeToBytes(ds, Map("driver" -> "GTiff")) finally RasterDriver.releaseDataset(ds)
+        }
+        val dir = Files.createTempDirectory("gbx-towers")
+        val tiles = Map("0,0" -> flat(0.0), "1,0" -> flat(32.0)).map { case (k, bytes) =>
+            val p = dir.resolve(s"dsm_${k.replace(',', '_')}.tif")
+            Files.write(p, bytes)
+            k -> p.toString
+        }
+        val before = vsimemEntries()
+        // "on_edge" stands on the seam of the two tiles; "far" is in the reach of no tile
+        val towers = spark.createDataFrame(Seq(("on_edge", 32.0, 16.0, 5.0), ("far", 1000.0, 1000.0, 5.0)))
+            .toDF("tower_id", "observer_x", "observer_y", "observer_height")
+        val rows = ViewshedTowersJvm.run(spark, towers, tiles.asJava, 0.0, 0.0, 32.0, 100.0, 1.6, 2).collect()
+        try {
+            assert(rows.map(_.getString(0)).toSeq == Seq("on_edge"), "a tower in no tile's reach has no row")
+            val (visible, total) = (rows.head.getLong(3), rows.head.getLong(4))
+            assert(total == 64 * 32 && visible == total, s"flat ground, a mast and a range past both tiles: $visible of $total")
+            for (p <- tiles.values) assert(NodeFilePathUtil.readersOf(p) == 0, s"$p is still held")
+            assert(vsimemEntries() == before, "the step left in-memory GDAL files behind")
+        } finally {
+            tiles.values.foreach(p => Files.deleteIfExists(Paths.get(p)))
+            Files.deleteIfExists(dir)
+        }
     }
 }

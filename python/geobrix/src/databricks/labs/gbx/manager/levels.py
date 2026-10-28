@@ -7,10 +7,12 @@ available here and records one reason per level it had to skip.
 from __future__ import annotations
 
 import importlib.util
+import weakref
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
 from databricks.labs.gbx import manifest
+from databricks.labs.gbx.manager import capabilities, messages
 from databricks.labs.gbx.manager.capabilities import Capabilities
 
 LEVEL_TABLE_VERSION = manifest.load().level_table_version  # one source: the manifest
@@ -24,7 +26,30 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_bng_tessellateexplode": ("L1", "L3"),
     "gbx_rst_merge_agg": ("L1", "L3"),
     "gbx_rst_bng_rasterize_agg": ("L1", "L3"),
+    # A DataFrame helper, not a SQL name: its levels are L3 (all light), L1-steps (the viewshed and the
+    # histogram are Catalyst steps) and JVM-DF (one Scala DataFrame step). The levels leg measures them.
+    "rst_viewshed_towers": ("L3",),
 }
+TOWERS_LEVELS: Tuple[str, ...] = ("L3", "L1-steps", "JVM-DF")
+# The Catalyst steps L1-steps calls by their private session names.
+TOWERS_STEPS: Tuple[Tuple[str, str], ...] = (
+    (
+        "gbx__l1_rst_viewshed",
+        "com.databricks.labs.gbx.rasterx.expressions.analysis.RST_Viewshed",
+    ),
+    (
+        "gbx__l1_rst_histogram",
+        "com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Histogram",
+    ),
+    (
+        "gbx__l1_rst_width",
+        "com.databricks.labs.gbx.rasterx.expressions.accessors.RST_Width",
+    ),
+    (
+        "gbx__l1_rst_height",
+        "com.databricks.labs.gbx.rasterx.expressions.accessors.RST_Height",
+    ),
+)
 L3_ORDER: Tuple[str, ...] = ("d", "c1", "c0")
 NAMES = {"L1": "heavy (Catalyst)", "L2": "heavy (Java UDF)", "L3": "light"}
 
@@ -105,3 +130,61 @@ def select(
             return Choice(level, "-", tuple(reasons))
         reasons.append(f"geobrix: {NAMES[level]} unavailable: {why}")
     raise NoLevelAvailable(fn.sql_name, tuple(reasons))
+
+
+def heavy_unavailable(caps: Capabilities) -> str:
+    """Why this session cannot run a heavy step directly (a Catalyst companion, or a Scala DataFrame step through
+    py4j); "" on a classic session with a matching JAR and loadable GDAL."""
+    if caps.connect:
+        return (
+            caps.jar_reason
+            if caps.serverless
+            else "Spark Connect session (standard access mode)"
+        )
+    return caps.jar_reason if caps.jar is None else caps.gdal_reason
+
+
+_READY: "weakref.WeakKeyDictionary" = (
+    weakref.WeakKeyDictionary()
+)  # session -> the heavy towers levels set up there
+
+
+def _ready(spark) -> set:
+    try:
+        return _READY.setdefault(spark, set())
+    except (
+        TypeError
+    ):  # a session that cannot be weakly referenced is checked every time
+        return set()
+
+
+def towers_level(spark, requested: Optional[str] = None) -> str:
+    """The level `rst_viewshed_towers` runs at: `requested` (testing only), else the first level of its
+    PREFERENCE row. A heavy level this session cannot serve says why, once, and the light one runs. A heavy
+    level is checked and set up once per session, so a later call (a timed one) does none of that.
+    """
+    if requested is not None and requested not in TOWERS_LEVELS:
+        raise ValueError(
+            f"_levels must be one of {', '.join(TOWERS_LEVELS)}; got {requested!r}"
+        )
+    for level in (requested,) if requested else PREFERENCE["rst_viewshed_towers"]:
+        if level == "L3":
+            break
+        if level in _ready(spark):
+            return level
+        why = heavy_unavailable(capabilities.detect(spark, need_jvm=True))
+        if not why and level == "L1-steps":
+            from databricks.labs.gbx.manager import jvm
+
+            why = next(
+                filter(
+                    None,
+                    (jvm.install_private_l1(spark, fqn, n) for n, fqn in TOWERS_STEPS),
+                ),
+                "",
+            )
+        if not why:
+            _ready(spark).add(level)
+            return level
+        messages.say(spark, f"geobrix: heavy unavailable: {why}; using light")
+    return "L3"

@@ -47,6 +47,37 @@ def test_jvm_forms_without_the_jar_are_na_by_design(spark_session_local, tmp_pat
     assert all("no geobrix JAR" in r.note for r in bng)
 
 
+def test_levels_leg_times_the_towers_at_l3_and_not_at_the_jvm_levels_without_a_jar(
+    spark_session_local, tmp_path, monkeypatch
+):
+    """The towers input is a DSM of tiles under the corpus with the towers beside it. L3 runs it and
+    fingerprints one row per tower; L1-steps and JVM-DF are not applicable where there is no JAR.
+    """
+    from databricks.labs.gbx.manager import capabilities
+
+    spark = spark_session_local
+    if capabilities.detect(spark, need_jvm=True).jar is not None:
+        pytest.skip("this session carries the geobrix JAR")
+    monkeypatch.setattr(lf, "_DSM_GRID", 2)
+    monkeypatch.setattr(lf, "_DSM_TILE_PX", 64)
+    monkeypatch.setattr(lf, "_TOWER_RADIUS", 20.0)
+    monkeypatch.setitem(
+        lf.FORMS, "H", [f for f in lf.FORMS["H"] if f.fn == "rst_viewshed_towers"]
+    )
+    rows = run_s(
+        spark, tmp_path, scales=(1,), base_rows=6, mvp="H",
+        only_levels=("L3", "L1-steps", "JVM-DF"),
+    )  # fmt: skip
+    by = {r.level: r for r in rows}
+    assert set(by) == {"L3", "L1-steps", "JVM-DF"}
+    assert (
+        by["L3"].status == "ok" and by["L3"].rows == 6 and by["L3"].output_fingerprint
+    )
+    for level in ("L1-steps", "JVM-DF"):
+        assert by[level].status == "na_by_design", by[level]
+        assert "no geobrix JAR" in by[level].note
+
+
 def test_levels_leg_runs_mvp_s_light_forms(spark_session_local, tmp_path):
     spark = spark_session_local
     # 20k rows and up: Spark's sent-bytes counter stops growing past one 10k-row Arrow batch

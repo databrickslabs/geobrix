@@ -35,6 +35,8 @@ BASE_ROWS = {
     "tiles_grouped_skew": 112,  # half of it is one key: 56 tiles, 896 MiB decoded
     "bng_cells": 1_000_000,
     "bng_cells_skew": 1_000_000,
+    # MVP-H: towers on a DSM of 16 tiles (the tiles are the same at every scale)
+    "dsm_towers": 64,
 }
 
 
@@ -317,6 +319,49 @@ def _bng_cells(skew: bool):
     return build
 
 
+_DSM_GRID, _DSM_TILE_PX = (
+    4,
+    2000,
+)  # tiles per side, and pixels per tile side (1 m pixels)
+_TOWER_RADIUS, _TOWER_MAST = 500.0, 30.0  # metres
+
+
+def _dsm_towers(spark, n, corpus, schema):
+    """`n` towers on a DSM of `_DSM_GRID` x `_DSM_GRID` tiles of `_DSM_TILE_PX` pixels (EPSG:3857, x0 = y0 = 0), the
+    towers at fixed random places at least a radius inside it. The tiles are files under the corpus, written once;
+    their `(tx, ty, path)` manifest is the table beside the towers', named `<towers table>_tiles`.
+    """
+    if not os.path.isdir(corpus):
+        return None
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.bench import oracles
+
+    tiles = oracles.dsm_tile_rows(
+        os.path.join(corpus, "_synth", "dsm_towers", f"v{RECIPE_VERSION}"),
+        _DSM_GRID,
+        _DSM_TILE_PX,
+    )
+    name = f"mvp_in_dsm_towers_v{RECIPE_VERSION}_{n}"
+    _table(
+        spark,
+        schema,
+        name + "_tiles",
+        lambda: spark.createDataFrame(tiles, "tx int, ty int, path string"),
+    )
+    reach = _DSM_GRID * _DSM_TILE_PX - 2 * _TOWER_RADIUS
+    return _table(
+        spark,
+        schema,
+        name,
+        lambda: spark.range(n).select(
+            F.concat(F.lit("t"), F.col("id").cast("string")).alias("tower_cellid"),
+            (F.rand(11) * reach + _TOWER_RADIUS).alias("x"),
+            (F.rand(12) * reach + _TOWER_RADIUS).alias("y"),
+        ),
+    )
+
+
 INPUTS: Dict[str, Callable] = {
     "bng_points": _bng_points,
     "invalid_polys": _invalid_polys,
@@ -332,6 +377,7 @@ INPUTS: Dict[str, Callable] = {
     "tiles_grouped_skew": _grouped_tiles(True),
     "bng_cells": _bng_cells(False),
     "bng_cells_skew": _bng_cells(True),
+    "dsm_towers": _dsm_towers,
     "tiles_big": _tiles(
         False, "big", "big"
     ),  # absent until the 4096 x 4096 tiles are copied to {corpus}/big
@@ -559,6 +605,50 @@ def h_combine_avg(spark, src):
     return _stats(helpers.combine_by_key(spark.table(src), ["key"], stat="avg"), None)
 
 
+def _towers(spark, src, level):
+    """(n, fp, n_out, df) of `rst_viewshed_towers` at `level` over the towers of `src` and the DSM beside them: the
+    tower count, the summed visible pixels, and the non-NULL count of them. The counts differ between levels
+    where their GDAL builds do, so the fingerprints are compared within a level, not across them.
+    """
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.pyrx.functions import rst_viewshed_towers
+
+    done = rst_viewshed_towers(
+        spark.table(src), spark.table(src + "_tiles"), _TOWER_RADIUS, _TOWER_MAST,
+        x0=0.0, y0=0.0, tile_m=float(_DSM_TILE_PX), _levels=level,
+    )  # fmt: skip
+    out = done.agg(F.count(F.lit(1)), F.sum("visible_px"), F.count("visible_px"))
+    r = out.collect()[0]
+    return r[0], r[1], r[2], out
+
+
+def h_towers_l3(spark, src):
+    return _towers(spark, src, "L3")
+
+
+def h_towers_l1_steps(spark, src):
+    return _towers(spark, src, "L1-steps")
+
+
+def h_towers_jvm_df(spark, src):
+    return _towers(spark, src, "JVM-DF")
+
+
+def setup_h_towers_l1_steps(spark):
+    """The Catalyst steps of the L1-steps form under their private names (needs the staged JAR)."""
+    from databricks.labs.gbx.manager import levels
+
+    levels.towers_level(spark, "L1-steps")
+
+
+def setup_h_towers_jvm_df(spark):
+    """The capability check of the JVM-DF form, done once here and not in the timed region."""
+    from databricks.labs.gbx.manager import levels
+
+    levels.towers_level(spark, "JVM-DF")
+
+
 _H = "databricks.labs.gbx.bench.levels_forms:"
 
 
@@ -638,6 +728,7 @@ FORMS["H"] = [
         sql=_COMBINE_SQL,
         setup="register_h_combine_l3",
     ),
+    _h("rst_viewshed_towers", "L3", "h_towers_l3", "dsm_towers", run="h_towers_l3"),
     # The JVM comparators (the staged JAR, a dedicated cluster); last, because they replace the light names.
     _h(
         "gbx_rst_merge_agg",
@@ -655,6 +746,26 @@ FORMS["H"] = [
         "tiles_aligned_mat",
         sql=_COMBINE_SQL,
         setup="register_h_heavy",
+        computes=("dedicated",),
+    ),
+    # The towers' viewshed and histogram as heavy steps, and the whole pipeline as one Scala DataFrame step through
+    # py4j: neither runs on a Connect session, so both are dedicated only.
+    _h(
+        "rst_viewshed_towers",
+        "L1-steps",
+        "h_towers_l1_steps",
+        "dsm_towers",
+        run="h_towers_l1_steps",
+        setup="setup_h_towers_l1_steps",
+        computes=("dedicated",),
+    ),
+    _h(
+        "rst_viewshed_towers",
+        "JVM-DF",
+        "h_towers_jvm_df",
+        "dsm_towers",
+        run="h_towers_jvm_df",
+        setup="setup_h_towers_jvm_df",
         computes=("dedicated",),
     ),
 ]

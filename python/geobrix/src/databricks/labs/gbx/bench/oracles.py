@@ -39,6 +39,7 @@ class Case:
     # exact | exact_rows | null | raises | uc_refused | error_tile | tile_props | geom_props
     # exact_rows is one batch: `args` is a tuple of argument rows, `expect` one value per row.
     # Generators (MVP-G) also use no_rows | windows | cells, and error_tile means exactly one row.
+    # MVP-H's rst_viewshed_towers uses towers (see MVP_H).
     # windows_batch is one task over several tiles: `args` is a tuple of argument rows, as for exact_rows.
     # Aggregates (MVP-A) use merged_equals | pixels | error_group | null; `args[0]` is the group's rows.
     kind: str
@@ -277,9 +278,25 @@ MVP_S: Tuple[Case, ...] = (
 )
 
 
+# The towers of the MVP-H towers row, as (id, x, y) on the 200 m DSM grid of `dsm_tiles_edge`: in one tile, in
+# one tile with the ridge at the edge of its window, 20 m from a ridge that is inside its window (and so across two
+# tiles), on the corner of four tiles, in a tile of NoData, and beyond every tile.
+TOWERS = (
+    ("t1", 100.0, 100.0),
+    ("t2", 300.0, 300.0),
+    ("ridge", 260.0, 100.0),
+    ("corner", 200.0, 200.0),
+    ("nodata", 500.0, 100.0),
+    ("outside", 1000.0, 1000.0),
+)
+DSM_TILE_M = 200.0
+TOWERS_TOLERANCE = 0.005  # of total_px: the levels' GDAL builds differ at edges
+
 # MVP-H: the DataFrame helpers in pyrx/helpers.py (a case's `fn` is the helper's name, not a SQL name).
 # The first arg builds the input rows; the rest are the helper's arguments after the DataFrame and,
-# for the by-key helpers, the method / stat.
+# for the by-key helpers, the method / stat. A towers row (`rst_viewshed_towers`) takes the DSM manifest
+# `(tx, ty, path)` instead of tiles, then the towers, the radius and the mast height; its `expect` is
+# {tower: (visible_px, total_px)}, or None for a tower in no tile's reach (it has no row).
 MVP_H: Tuple[Case, ...] = (
     Case(
         "h_retile",
@@ -380,6 +397,24 @@ MVP_H: Tuple[Case, ...] = (
         (Build("pair_shifted"), "avg"),
         "raises",
         "different geotransform",
+        ("session",),
+    ),
+    # total_px is the pixels of the tiles in the tower's window (1, 1, 2 and 4 tiles of 200 x 200). The ground is flat
+    # except a ridge on the west edge of the odd columns: it hides what is behind it for "ridge" and for nobody else.
+    # A tile of NoData is flat to the viewshed, and a tower with no tile has no row.
+    Case(
+        "h_towers",
+        "rst_viewshed_towers",
+        (Build("dsm_tiles_edge"), TOWERS, 80.0, 20.0),
+        "towers",
+        {
+            "t1": (30967, 40000),
+            "t2": (30967, 40000),
+            "ridge": (57697, 80000),
+            "corner": (119295, 160000),
+            "nodata": (30967, 40000),
+            "outside": None,
+        },
         ("session",),
     ),
 )
@@ -744,8 +779,63 @@ def _build(name: str, tmpdir: str):
     return _build_helper_input(name, tmpdir)
 
 
+def dsm_tile_rows(
+    tmpdir: str, grid: int = 2, size: int = 200, nodata_at: Sequence = ()
+) -> List[Tuple[int, int, str]]:
+    """The `(tx, ty, path)` manifest of a DSM written under `tmpdir`: a `grid` x `grid` block of tiles of `size`
+    pixels at 1 m in EPSG:3857, tile (tx, ty) covering x in [tx*size, (tx+1)*size) and y likewise, plus the
+    tiles in `nodata_at`, which hold NoData only. The ground is flat at 10 m, and every odd-`tx` tile has a
+    30 m ridge on its 5 westernmost columns. A file that is already there is kept, so a re-run writes nothing;
+    each is written locally and copied, as `tmpdir` may be a Volume.
+    """
+    import shutil
+
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx.core.compression import creation_opts
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    os.makedirs(tmpdir, exist_ok=True)
+    cells = {(tx, ty) for tx in range(grid) for ty in range(grid)} | set(nodata_at)
+    rows = []
+    with tempfile.TemporaryDirectory(prefix="gbx-dsm-") as scratch:
+        for tx, ty in sorted(cells):
+            p = os.path.join(tmpdir, f"dsm_{tx}_{ty}.tif")
+            if not os.path.exists(p):
+                z = np.full((1, size, size), 10.0, dtype="float32")
+                if tx % 2 == 1:
+                    z[0, :, :5] = 40.0  # a 30 m ridge along x = tx*size .. tx*size + 5
+                if (tx, ty) in nodata_at:
+                    z[:] = -9999.0
+                prof = dict(
+                    driver="GTiff",
+                    width=size,
+                    height=size,
+                    count=1,
+                    dtype="float32",
+                    nodata=-9999.0,
+                    crs=resolve_crs("EPSG:3857"),
+                    transform=from_origin(tx * size, (ty + 1) * size, 1.0, 1.0),
+                    **creation_opts("float32", compress="zstd"),
+                )
+                local = os.path.join(scratch, os.path.basename(p))
+                with rasterio.open(local, "w", **prof) as ds:
+                    ds.write(z)
+                shutil.copyfile(local, p)  # content only: a Volume takes no copystat
+            rows.append((tx, ty, p))
+    return rows
+
+
 def _build_helper_input(name: str, tmpdir: str):
     """The fixtures of the MVP-H oracle (tiles for the DataFrame helpers)."""
+    if name == "dsm_tiles":  # four tiles, 400 x 400 m
+        return dsm_tile_rows(tmpdir)
+    if (
+        name == "dsm_tiles_edge"
+    ):  # the same four, and a tile of NoData east of them at (2, 0)
+        return dsm_tile_rows(tmpdir, nodata_at=((2, 0),))
     if name == "tile_32":
         return _tile(_tile_bytes("EPSG:4326", 32, 32))
     if name == "quad_tiles":
@@ -1150,6 +1240,39 @@ def _check_helper(case: Case, rows, tiles) -> Optional[str]:
     raise ValueError(case.kind)
 
 
+def run_towers(spark, case: Case, tmpdir: str, level: Optional[str] = None):
+    """MVP-H: `rst_viewshed_towers` over the case's DSM and towers, at `level` (None: the default one).
+    Returns {tower: (visible_px, total_px)}; a tower with no row is not in it."""
+    from databricks.labs.gbx.pyrx.functions import rst_viewshed_towers
+
+    manifest_rows, towers, radius, height = case.args
+    tiles = spark.createDataFrame(
+        resolve_arg(manifest_rows, tmpdir), "tx int, ty int, path string"
+    )
+    sites = spark.createDataFrame(
+        list(towers), "tower_cellid string, x double, y double"
+    )
+    got = rst_viewshed_towers(
+        sites, tiles, radius, height, x0=0.0, y0=0.0, tile_m=DSM_TILE_M, _levels=level
+    )
+    return {r["tower_cellid"]: (r["visible_px"], r["total_px"]) for r in got.collect()}
+
+
+def towers_differ(want: Dict, got: Dict) -> Optional[str]:
+    """None when every tower of `want` ({tower: (visible_px, total_px) or None for no row}) is in `got` within
+    TOWERS_TOLERANCE of its total_px, and `got` holds no other; else the towers that differ, with both counts.
+    """
+    bad = []
+    for k in sorted(set(want) | set(got)):
+        w, g = want.get(k), got.get(k)
+        if (w is None) != (g is None) or (
+            w is not None
+            and any(abs(g[i] - w[i]) > TOWERS_TOLERANCE * w[1] for i in (0, 1))
+        ):
+            bad.append(f"{k}: want {w}, got {g}")
+    return "; ".join(bad) or None
+
+
 def run_helpers(spark, cases, tmpdir: Optional[str] = None):
     """MVP-H: build a (key, tile) DataFrame from the case, call the helper by name, check the rows."""
     from databricks.labs.gbx.manifest import TILE_SQL
@@ -1159,6 +1282,13 @@ def run_helpers(spark, cases, tmpdir: Optional[str] = None):
     out = []
     for case in cases:
         if "session" not in case.surfaces:
+            continue
+        if case.kind == "towers":
+            try:
+                msg = towers_differ(case.expect, run_towers(spark, case, tmpdir))
+                out.append((case, msg and f"{case.cid}: {msg}"))
+            except Exception as exc:  # noqa: BLE001
+                out.append((case, check_error(case, exc)))
             continue
         first = resolve_arg(case.args[0], tmpdir)
         tiles = first if isinstance(first, list) else [first]

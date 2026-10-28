@@ -62,6 +62,14 @@ def available(fn, level: str, caps: Capabilities) -> Optional[str]:
             return f"standard access mode serves scalars only ({fn.sql_name} is a {fn.kind})"
         if level == "L2" and fn.min_args != fn.max_args and "wrapper" not in spec:
             return f"{fn.sql_name}: optional arguments need a SQL wrapper, and this L2 row declares none"
+        if (
+            level == "L2"
+            and fn.levels.get("L3", {}).get("factory_args") == "proj_grid_dirs"
+        ):
+            from databricks.labs.gbx.core import proj_grids
+
+            if proj_grids.get_registered_dirs():  # a Java UDF has no channel for them
+                return f"{fn.sql_name}: PROJ grids are registered and a Java UDF cannot read them"
         wrapper = fn.accepts_virtual_tile or (level == "L2" and "bytes_param" in spec)
         if wrapper and not caps.sql_functions:
             return f"{fn.sql_name} needs a SQL function wrapper, and SQL functions are unavailable here"

@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import tempfile
 from dataclasses import dataclass
-from typing import Any, Callable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 MERC_PROJ = (
     "+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 "
@@ -44,25 +44,15 @@ class Case:
 
 
 # Rows a JVM level is known to fail until it conforms to the light contract, as {row: {level: reason}}.
-# The JVM parity runs expect exactly these (level, row) pairs to fail, strictly, and drop an entry
-# when the row passes.
-HEAVY_PENDING = {
-    "bng_digit_res": {
-        "L1": "heavy refuses a digit-string BNG resolution",
-        "L2": "the Java UDF refuses a digit-string BNG resolution",
-    },
-    "bng_digit_res_quad": {
-        "L1": "heavy refuses a digit-string BNG resolution",
-        "L2": "the Java UDF refuses a digit-string BNG resolution",
-    },
-    "bng_bad_res_int": {
-        "L1": "heavy answers a wrong cell for an integer resolution BNG does not define"
-    },
-    "bng_bad_easting": {
-        "L1": "heavy fails with an INTERNAL_ERROR that does not name the value"
-    },
-    "tcrs_corrupt": {"L1": "heavy's error tile carries error_message, not last_error"},
-    "tcrs_bad_crs": {"L1": "heavy's error tile carries error_message, not last_error"},
+# The parity run expects exactly these (level, row) pairs to fail, strictly, and a row that starts to
+# pass must be dropped from here.
+_EMPTY_RASTER = (
+    "heavy's error tile carries a zero-length raster, light's carries NULL "
+    "(RST_ErrorHandler builds it for every RasterX function)"
+)
+HEAVY_PENDING: Dict[str, Dict[str, str]] = {
+    "tcrs_corrupt": {"L1": _EMPTY_RASTER},
+    "tcrs_bad_crs": {"L1": _EMPTY_RASTER},
 }
 
 B, T, M = "gbx_bng_eastnorthasbng", "gbx_rst_transformcrs", "gbx_st_makevalid"
@@ -386,12 +376,13 @@ def _check_tile(case: Case, out, args) -> Optional[str]:
                 f"{case.cid}: {got.width}x{got.height} vs reference {want_w}x{want_h}"
             )
         g = got.read(1, masked=True)
-        if (
-            g.shape == w.shape
-        ):  # same grid: nearest-neighbour pixels must agree, not just their mean
-            same = (g.filled(-1) == w.filled(-1)).mean()
-            if same < 0.99:
-                return f"{case.cid}: only {same:.1%} of pixels match the reference warp"
+        # Nearest-neighbour pixels must agree, not just their mean. A grid one pixel larger or
+        # smaller than the reference is compared over the rows and columns both have (same
+        # origin), so a size difference never turns the pixel check off.
+        rows, cols = min(g.shape[0], w.shape[0]), min(g.shape[1], w.shape[1])
+        same = (g[:rows, :cols].filled(-1) == w[:rows, :cols].filled(-1)).mean()
+        if same < 0.99:
+            return f"{case.cid}: only {same:.1%} of pixels match the reference warp"
         if g.count() == 0 or abs(float(g.mean()) - float(w.mean())) > 0.01 * max(
             1.0, abs(float(w.mean()))
         ):

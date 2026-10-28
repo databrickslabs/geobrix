@@ -382,6 +382,30 @@ def test_transformcrs_identity_short_circuit():
         np.testing.assert_array_equal(ds.read(), orig_data)
 
 
+@pytest.mark.parametrize(
+    "exc",
+    [ValueError("bad tile"), MemoryError(), RecursionError()],
+    ids=lambda e: type(e).__name__,
+)
+def test_transformcrs_tile_error_tile_is_data_not_exhaustion(monkeypatch, exc):
+    """Like the JVM's NonFatal: a failure on the data is an error tile (the reason under
+    last_error); running out of memory or stack fails the task so it can be retried."""
+    from databricks.labs.gbx.pyrx import functions as pf
+
+    def boom(*_a, **_k):
+        raise exc
+
+    monkeypatch.setattr(pf, "_transformcrs_bytes", boom)
+    tile = {"cellid": 7, "raster": b"x"}
+    if isinstance(exc, (MemoryError, RecursionError)):
+        with pytest.raises(type(exc)):
+            pf._transformcrs_tile(tile, "EPSG:3857")
+        return
+    out = pf._transformcrs_tile(tile, "EPSG:3857")
+    assert out["raster"] is None and out["cellid"] == 7
+    assert "bad tile" in out["metadata"]["last_error"]
+
+
 # ---------------------------------------------------------------------------
 # Spark Column UDF tests
 # ---------------------------------------------------------------------------

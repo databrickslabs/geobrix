@@ -2837,7 +2837,9 @@ def _transformcrs_tile(tile, crs_value, file_ref=None, grid_dirs=None):
 
     An unreadable tile or an unparseable CRS is data, not a task failure: every route
     (SQL and Column API) returns the error tile the JVM tier returns
-    (RST_ErrorHandler.safeEval), with the reason under metadata['last_error'].
+    (RST_ErrorHandler.safeEval), with the reason under metadata['last_error']. Like the
+    JVM's NonFatal, resource exhaustion is not data: a MemoryError or RecursionError fails
+    the task so it can be retried, instead of becoming an error tile.
     """
     try:
         if grid_dirs is not None:
@@ -2850,6 +2852,8 @@ def _transformcrs_tile(tile, crs_value, file_ref=None, grid_dirs=None):
         return VirtualTile(
             cellid=_tile_cellid(tile), raster=new_bytes, metadata={}
         ).to_row()
+    except (MemoryError, RecursionError):
+        raise
     except Exception as e:  # noqa: BLE001
         return _serde.build_error_tile(f"RST_TransformCrs: {e}", _tile_cellid(tile))
 

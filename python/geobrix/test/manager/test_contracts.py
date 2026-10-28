@@ -212,6 +212,25 @@ def test_override_is_honoured(fn):
     assert levels.select(fn, _caps(), override=(forced, "-")).level == forced
 
 
+def test_l2_is_refused_while_proj_grids_are_registered(tmp_path):
+    """A Java UDF has no channel for PROJ grid directories: a warp through it would ignore them."""
+    from databricks.labs.gbx.core import proj_grids
+
+    fn = MAN.functions["gbx_rst_transformcrs"]
+    standard = _caps(
+        connect=True, jar=OK_JAR, jar_reason=""
+    )  # L2 is the heavy option here
+    assert levels.select(fn, standard).level == "L2"
+    saved = proj_grids.get_registered_dirs()
+    proj_grids.set_registered_dirs(str(tmp_path), replace=True)
+    try:
+        choice = levels.select(fn, standard)
+    finally:
+        proj_grids.set_registered_dirs(saved, replace=True)
+    assert choice.level == "L3"
+    assert any("PROJ grids" in r for r in choice.reasons)
+
+
 def test_pending_heavy_rows_name_real_oracle_rows():
     from databricks.labs.gbx.bench import oracles
 

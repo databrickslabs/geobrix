@@ -13,7 +13,8 @@
 #   5 tripwire: the other environment's old extra name fails resolution, naming the other wheel
 #   6 Python 3.11: pip refuses the wheel, and a forced install never activates the payload
 #   7 P8: _selfcheck.light() passes, every binding from the payload (GDAL's own osgeo and osgeo_utils too, and
-#     osgeo_utils.gdal_calc imports), one libgdal mapped (rasterio's and osgeo's), no foreign GDAL library mapped
+#     osgeo_utils.gdal_calc and osgeo.gdal_array import), one libgdal mapped (rasterio's and osgeo's, the same
+#     version), no foreign GDAL library mapped
 set -uo pipefail
 ENV="$1"; VERSION="$2"; OTHER=$((11 - ENV)); ARCH="$(uname -m)"
 PY=/opt/python/cp312-cp312/bin/python PY311=/opt/python/cp311-cp311/bin/python
@@ -97,11 +98,11 @@ from databricks.labs.gbx._native import _selfcheck as s
 r = {"import_s": imp, "stack": s.stack(), "light": s.light(), "payload_mb": s.payload_size_mb(), "closure_mb": s.installed_closure_mb()}
 st = r["stack"]
 r["ok"] = (r["light"]["ok"] and all(st["from_payload"].values()) and st["foreign_libs"] == []
-           and len(st["libgdal"]) == 1 and st["osgeo_gdal"] == st["rasterio_gdal"])
+           and st["shared_libgdal"] and len(st["libgdal"]) == 1 and st["gdal_array"])
 print("P8_RESULT " + json.dumps(r))
 PY
 )"
-echo "$out" | grep -q '^P8_RESULT {"import_s".*"ok": true}$' && ok "7 P8: _selfcheck.light() ok, 5/5 bindings + osgeo + osgeo_utils (gdal_calc) from the payload, one libgdal, no foreign GDAL library" \
+echo "$out" | grep -q '^P8_RESULT {"import_s".*"ok": true}$' && ok "7 P8: _selfcheck.light() ok, 5/5 bindings + osgeo (gdal_array) + osgeo_utils (gdal_calc) from the payload, one libgdal, no foreign GDAL library" \
     || bad "7 P8"
 echo "$out" | grep '^P8_RESULT' || echo "$out" | tail -5
 

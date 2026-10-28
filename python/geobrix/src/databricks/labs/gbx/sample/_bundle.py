@@ -256,13 +256,15 @@ def _create_synthetic_dem_geotiff(
     out_path: Path, minx: float, miny: float, maxx: float, maxy: float
 ) -> bool:
     """Create a small synthetic DEM GeoTIFF (single band, WGS84). Used when .hgt is not supported by GDAL.
-    Fills with an elevation gradient (0–100 m) so the raster is human-viewable."""
-    try:
-        import numpy as np
+    Fills with an elevation gradient (0–100 m) so the raster is human-viewable.
 
-        gdal, _ogr, osr, _array = _osgeo.bindings("the synthetic DEM")
-    except ImportError:
-        return False
+    The bundle's GDAL steps read and write files by path only, sharing nothing with rasterio, so
+    they take another GDAL's osgeo too (``same_libgdal=False``: the dev container's system one).
+    Raises ``OsgeoUnavailable`` (its message ends with the fix) where osgeo does not import.
+    """
+    import numpy as np
+
+    gdal, _ogr, osr, _array = _osgeo.bindings("the synthetic DEM", same_libgdal=False)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     w, h = 64, 64
     res_x = (maxx - minx) / w
@@ -287,13 +289,11 @@ def _create_synthetic_dem_geotiff(
 def _scale_raster_to_viewable_byte(raster_path: Path) -> Optional[Path]:
     """Write a separate Byte 0-255 GeoTIFF for human viewing; keep the original .tif unchanged.
     Uses -scale with no src range so GDAL stretches actual min/max to 0-255 (viewable in QGIS etc.).
+    Raises ``OsgeoUnavailable`` (its message ends with the fix) where osgeo does not import.
     """
     if not raster_path.exists():
         return None
-    try:
-        gdal = _osgeo.bindings("the viewable Byte copy").gdal
-    except ImportError:
-        return None
+    gdal = _osgeo.bindings("the viewable Byte copy", same_libgdal=False).gdal
     out_path = raster_path.parent / (raster_path.stem + "_byte.tif")
     try:
         # -scale with no args: compute src min/max from raster, map to 0-255 (avoids black clips)
@@ -329,11 +329,12 @@ def srtm_hgt_to_geotiff(
 
     Returns:
         True if tif_path was written successfully.
+
+    Raises:
+        OsgeoUnavailable: GDAL's Python bindings do not import here (the message ends with the
+            fix); the bundles record it under the dataset's name.
     """
-    try:
-        gdal = _osgeo.bindings("srtm_hgt_to_geotiff").gdal
-    except ImportError:
-        return False
+    gdal = _osgeo.bindings("srtm_hgt_to_geotiff", same_libgdal=False).gdal
     tif_path.parent.mkdir(parents=True, exist_ok=True)
     # .hgt -> .tif (requires GDAL built with SRTMHGT)
     try:
@@ -618,7 +619,12 @@ def run_essential_bundle(  # noqa: C901
             tmp_file, out, f"Sentinel-2 {region_name}", volume_root=volume_root
         )
         # Generate separate _byte.tif for human viewing; tests use the original .tif
-        byte_path = _scale_raster_to_viewable_byte(tmp_file)
+        try:
+            byte_path = _scale_raster_to_viewable_byte(tmp_file)
+        except _osgeo.OsgeoUnavailable as e:
+            errors.append((f"Sentinel-2 {region_name} (viewable)", str(e)))
+            print(f"⚠️  Sentinel-2 {region_name} (viewable) failed: {e}")
+            byte_path = None
         if byte_path is not None:
             out_byte = out.parent / (out.stem + "_byte.tif")
             _copy_final_to_volumes(

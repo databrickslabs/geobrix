@@ -128,3 +128,48 @@ def test_no_index_host_survives_redaction():
         and "fake-index" not in piped.stdout
         and piped.stdout.count("\n") == len(FAKE)
     )
+
+
+def _osgeo_trees(root, extra):
+    """Both architectures' gdal-native python/ (osgeo_utils, with the left-out scripts) and a
+    payload whose _vendor/<arch>/osgeo is in place; ``extra`` = (rel path, bytes) added to both."""
+    natives, pkg = {}, root / "pkg"
+    for a in bew.ARCHES:
+        py = root / a / "python"
+        (py / "osgeo_utils" / "samples").mkdir(parents=True)
+        (py / "osgeo_utils" / "__init__.py").write_bytes(b"# SPDX-License-Identifier: MIT\n")
+        for name in bew.OSGEO_UTILS_LEFT_OUT:
+            (py / "osgeo_utils" / name).write_bytes(b"# GNU Library General Public License\n")
+        vendor = pkg / "_vendor" / a / "osgeo"
+        vendor.mkdir(parents=True)
+        (vendor / "gdal.py").write_bytes(b"# SWIG-generated\n")
+        (vendor / "_gdal.so").write_bytes(b"\x7fELF\x02\x01 libgdal-0a1b2c3d.so.39")
+        if extra:
+            rel, data = extra
+            out = (pkg / "_vendor" / a / rel) if rel.startswith("osgeo/") else (py / rel)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(data)
+        natives[a] = root / a
+    return natives, pkg
+
+
+@pytest.mark.parametrize(
+    "extra, refused",
+    [
+        (None, False),
+        (("osgeo_utils/samples/x.py", b"# SPDX-License-Identifier: AGPL-3.0-only\n"), True),
+        (("osgeo_utils/y.py", b"# Licensed under GPLv3.\n"), True),
+        (("osgeo_utils/data/notice.txt", b"GNU General Public License v2\n"), True),
+        (("osgeo/_ogr.so", b"\x7fELF\x02\x01 GPL-2.0-or-later"), True),
+    ],
+)
+def test_no_gpl_family_file_ships_with_osgeo(tmp_path, capsys, extra, refused):
+    natives, pkg = _osgeo_trees(tmp_path, extra)
+    if not refused:
+        bew.add_osgeo_utils(natives, pkg)
+        shipped = {p.name for p in (pkg / "_vendor" / "common" / "osgeo_utils").iterdir()}
+        assert shipped == {"__init__.py"}  # the left-out scripts are not copied on
+        return
+    with pytest.raises(SystemExit):
+        bew.add_osgeo_utils(natives, pkg)
+    assert "BUILD FAILED" in capsys.readouterr().out

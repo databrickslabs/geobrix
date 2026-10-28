@@ -88,14 +88,21 @@ def cog_errors(data, strict=True):
     or a path: its errors, and its warnings too when ``strict``. Skips with the helper's reason
     where GDAL's Python bindings do not import (the macOS host, the PyPI-stack CI shard).
 
-    Bytes are written to a file first: the bindings may be another GDAL than rasterio's (the dev
-    container), and a rasterio ``MemoryFile`` lives in rasterio's GDAL only.
+    Bytes are written to a file first, so the validator only opens a path and shares nothing
+    with rasterio: it may run on another GDAL than rasterio's (``same_libgdal=False``; the dev
+    container's system osgeo), where a rasterio ``MemoryFile`` would not be visible.
+
+    GDAL's validator is looser than rio-cogeo's on one check: an untiled file 513 to 1024 pixels
+    wide is no error here (GDAL only errors on stripes wider than 1024). The rows feed COG-driver
+    output, which is tiled; a row on other large output must not rely on that check.
     """
     from databricks.labs.gbx import _osgeo
 
     try:
         validator = _osgeo.utils(
-            "samples.validate_cloud_optimized_geotiff", "the COG check"
+            "samples.validate_cloud_optimized_geotiff",
+            "the COG check",
+            same_libgdal=False,
         )
     except _osgeo.OsgeoUnavailable as exc:
         pytest.skip(str(exc))

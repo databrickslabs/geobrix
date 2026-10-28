@@ -533,3 +533,32 @@ def test_run_complete_bundle_records_a_failed_filegdb_step(
     )
 
     assert ("FileGDB", reported) in result["errors"]
+
+
+def test_the_bundle_gdal_steps_raise_the_missing_osgeo_error(tmp_path, monkeypatch):
+    """Without GDAL's Python bindings the SRTM conversion and the viewable Byte copy raise the
+    helper's error, its Fix: included (the bundles record it under the dataset), instead of a
+    silent False / None."""
+    import sys
+
+    from databricks.labs.gbx import _osgeo
+
+    for name in [n for n in sys.modules if n.split(".")[0] in ("osgeo", "osgeo_utils")]:
+        monkeypatch.delitem(sys.modules, name)
+    monkeypatch.setitem(sys.modules, "osgeo", None)
+    tif = tmp_path / "red.tif"
+    tif.write_bytes(b"II*\x00")
+    for call in (
+        lambda: _bundle_mod.srtm_hgt_to_geotiff(
+            tmp_path / "N40W074.hgt",
+            tmp_path / "srtm.tif",
+            (0, 0, 1, 1),
+            "SRTM",
+            quiet=True,
+        ),
+        lambda: _bundle_mod._scale_raster_to_viewable_byte(tif),
+    ):
+        with pytest.raises(
+            _osgeo.OsgeoUnavailable, match=r"Fix: install the env wheel"
+        ):
+            call()

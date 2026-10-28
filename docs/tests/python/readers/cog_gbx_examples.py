@@ -133,8 +133,11 @@ def halo_mode_prepare_cog(spark, src_path=None):
 
     from databricks.labs.gbx import _osgeo
 
+    # by path only: the validator may run on another GDAL than rasterio's
     validator = _osgeo.utils(
-        "samples.validate_cloud_optimized_geotiff", "halo_mode_prepare_cog"
+        "samples.validate_cloud_optimized_geotiff",
+        "halo_mode_prepare_cog",
+        same_libgdal=False,
     )
     _register(spark)
     src = src_path or SAMPLE_RASTER_SINGLE

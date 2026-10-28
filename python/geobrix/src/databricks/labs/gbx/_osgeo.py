@@ -10,20 +10,33 @@ Every module of the package gets them here and imports neither package itself (a
 - ``bindings(fn)``: ``gdal``, ``ogr``, ``osr`` and ``gdal_array`` (None when it does not import;
   it needs numpy's C API), with GDAL exceptions on;
 - ``utils(name, fn)``: the module ``osgeo_utils.<name>``, e.g.
-  ``utils("samples.validate_cloud_optimized_geotiff")``.
+  ``utils("samples.validate_cloud_optimized_geotiff")``;
+- ``libgdal_report()``: osgeo's GDAL against rasterio's, for diagnostics; it never refuses.
 
-Where ``osgeo`` does not import (a PyPI install, whose rasterio bundles a GDAL without Python
-bindings; the macOS host) both raise ``OsgeoUnavailable``, an ``ImportError`` whose message names
-the function and the cause and ends with the fix. ``fn`` is the name the message starts with.
+Both refuse an ``osgeo`` that is not rasterio's GDAL: its ``gdal.VersionInfo()`` must equal
+``rasterio.__gdal_version__`` and, on Linux, the process must map exactly one libgdal. Two GDALs
+in one process share no datasets, ``/vsimem`` files or configuration, so anything handed from one
+to the other fails or reads nothing. The dev container's system ``osgeo`` beside its PyPI rasterio
+is such a pair. ``same_libgdal=False`` lifts the check for a caller that only opens and writes
+files by path and never shares a dataset or a ``/vsimem`` file with rasterio; two callers may (a
+test holds that): the dev-only sample bundle and the test-only COG validator.
+
+Where ``osgeo`` does not import, or is refused, both raise ``OsgeoUnavailable``, an
+``ImportError`` whose message names the function and the cause and ends with the fix. ``fn`` is
+the name the message starts with.
 """
 
+import functools
 import importlib
+import re
 from types import ModuleType
-from typing import NamedTuple, Optional
+from typing import List, NamedTuple, Optional
+
+LIBGDAL = re.compile(r"/libgdal(-[0-9a-f]{8})?\.so[.\d]*$")
 
 
 class OsgeoUnavailable(ImportError):
-    """GDAL's Python bindings do not import in this environment."""
+    """GDAL's Python bindings do not import in this environment, or are not rasterio's GDAL."""
 
 
 class Bindings(NamedTuple):
@@ -33,25 +46,102 @@ class Bindings(NamedTuple):
     gdal_array: Optional[ModuleType]
 
 
-def _unavailable(fn: str, exc: ImportError) -> OsgeoUnavailable:
+def _wheels() -> str:
     from databricks.labs.gbx import __version__
 
     v = __version__.split("+")[0]
-    return OsgeoUnavailable(
-        f"{fn} needs GDAL's Python bindings (osgeo) from the GeoBrix env wheel, and they do not "
-        f"import here ({exc}). Fix: install the env wheel for the runtime (Linux x86_64 or "
-        f"aarch64, Python 3.12): geobrix-{v}+env6-py3-none-any.whl on DBR 19 and Serverless "
-        f"environment 6, geobrix-{v}+env5-py3-none-any.whl on DBR 17.3, DBR 18 and Serverless "
-        "environment 5."
+    return (
+        "install the env wheel for the runtime (Linux x86_64 or aarch64, Python 3.12): "
+        f"geobrix-{v}+env6-py3-none-any.whl on DBR 19 and Serverless environment 6, "
+        f"geobrix-{v}+env5-py3-none-any.whl on DBR 17.3, DBR 18 and Serverless environment 5"
     )
 
 
-def bindings(fn: str = "this function") -> Bindings:
-    """``gdal``, ``ogr``, ``osr`` and ``gdal_array`` with exceptions on; ``OsgeoUnavailable`` if absent."""
+def _unavailable(fn: str, exc: ImportError) -> OsgeoUnavailable:
+    return OsgeoUnavailable(
+        f"{fn} needs GDAL's Python bindings (osgeo) from the GeoBrix env wheel, and they do not "
+        f"import here ({exc}). Fix: {_wheels()}."
+    )
+
+
+def _not_shared(fn: str, r: dict) -> OsgeoUnavailable:
+    maps = (
+        ""
+        if r["libgdal"] is None
+        else f"; the process maps {len(r['libgdal'])} libgdal files: {', '.join(r['libgdal'])}"
+    )
+    return OsgeoUnavailable(
+        f"{fn} needs GDAL's Python bindings (osgeo) on rasterio's GDAL, and this osgeo is another "
+        f"GDAL (osgeo GDAL {r['osgeo_gdal']} from {r['osgeo']}, rasterio GDAL "
+        f"{r['rasterio_gdal']} from {r['rasterio']}{maps}). Fix: {_wheels()}; in the dev "
+        "container, start Python with GBX_NATIVE_ROOT set to a built payload "
+        "(build/env-wheel/env6/payload, from gbx:build:wheel --env 6)."
+    )
+
+
+def mapped_libgdal() -> Optional[List[str]]:
+    """The libgdal files this process maps (Linux ``/proc/self/maps``), else None."""
+    try:
+        with open("/proc/self/maps") as fh:
+            paths = {ln.split(None, 5)[-1].strip() for ln in fh if "/" in ln}
+    except OSError:
+        return None
+    return sorted(p for p in paths if LIBGDAL.search(p))
+
+
+def libgdal_report() -> dict:
+    """osgeo's GDAL against rasterio's: both versions and module files, ``gdal_array`` (it
+    imports), ``libgdal`` (the files mapped; None off Linux), ``shared`` (one GDAL) and ``error``
+    (why osgeo does not import, else None)."""
+    import rasterio
+
+    r = {
+        "osgeo_gdal": None,
+        "osgeo": None,
+        "rasterio_gdal": rasterio.__gdal_version__,
+        "rasterio": rasterio.__file__,
+        "gdal_array": False,
+        "libgdal": None,
+        "shared": False,
+        "error": None,
+    }
+    try:
+        from osgeo import gdal
+    except ImportError as exc:
+        r.update(libgdal=mapped_libgdal(), error=str(exc))
+        return r
+    try:
+        from osgeo import gdal_array  # noqa: F401
+    except ImportError:
+        pass
+    else:
+        r["gdal_array"] = True
+    mapped = mapped_libgdal()
+    version = gdal.VersionInfo("RELEASE_NAME")
+    r.update(
+        osgeo_gdal=version,
+        osgeo=gdal.__file__,
+        libgdal=mapped,
+        shared=version == r["rasterio_gdal"] and (mapped is None or len(mapped) == 1),
+    )
+    return r
+
+
+@functools.lru_cache(maxsize=1)
+def _same_libgdal_report() -> dict:
+    """``libgdal_report()`` once per process: loaded libraries stay loaded, so the answer holds."""
+    return libgdal_report()
+
+
+def bindings(fn: str = "this function", *, same_libgdal: bool = True) -> Bindings:
+    """``gdal``, ``ogr``, ``osr`` and ``gdal_array`` with exceptions on; ``OsgeoUnavailable`` if
+    absent or (unless ``same_libgdal=False``) not rasterio's GDAL."""
     try:
         from osgeo import gdal, ogr, osr
     except ImportError as exc:
         raise _unavailable(fn, exc) from exc
+    if same_libgdal and not _same_libgdal_report()["shared"]:
+        raise _not_shared(fn, _same_libgdal_report())
     for mod in (gdal, ogr, osr):
         mod.UseExceptions()
     try:
@@ -61,9 +151,12 @@ def bindings(fn: str = "this function") -> Bindings:
     return Bindings(gdal, ogr, osr, gdal_array)
 
 
-def utils(name: str, fn: str = "this function") -> ModuleType:
-    """The module ``osgeo_utils.<name>``; ``OsgeoUnavailable`` when ``osgeo`` or ``osgeo_utils`` is absent."""
-    bindings(fn)
+def utils(
+    name: str, fn: str = "this function", *, same_libgdal: bool = True
+) -> ModuleType:
+    """The module ``osgeo_utils.<name>``; ``OsgeoUnavailable`` as for ``bindings``, or when
+    ``osgeo_utils`` is absent."""
+    bindings(fn, same_libgdal=same_libgdal)
     try:
         importlib.import_module("osgeo_utils")
     except ImportError as exc:

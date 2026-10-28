@@ -26,10 +26,9 @@ def test_halo_mode_prepare_cog(spark):
     from databricks.labs.gbx import _osgeo
 
     try:
-        _osgeo.bindings("the COG check")
-    except _osgeo.OsgeoUnavailable as exc:
+        ex.halo_mode_prepare_cog(spark)
+    except _osgeo.OsgeoUnavailable as exc:  # raised before any work, by the validator lookup
         pytest.skip(str(exc))
-    ex.halo_mode_prepare_cog(spark)
 
 
 def test_halo_mode_bbox_read(spark):

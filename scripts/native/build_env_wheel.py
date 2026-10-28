@@ -103,7 +103,7 @@ GIT_INPUTS = (  # what the wheel is built from, under git
     "python/geobrix/requirements-build.txt",
     "scripts/native",
 )
-SIZE_BUDGET_MB = 100  # the env wheels measured 80 MB (2026-10-28); a payload that grows 25% past that fails
+SIZE_BUDGET_MB = 100  # the env wheels measured 82 MB (2026-10-28, osgeo included); 100 is 25% past 80
 METADATA_URL_HOSTS = {"databricks.com", "github.com", "databrickslabs.github.io"}
 URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://([^/\s\"'<>]+)")
 BANNED = re.compile(
@@ -115,10 +115,13 @@ BANNED = re.compile(
     re.I,
 )
 LIB_NAME = re.compile(r"\.so(\.|$)")
-# GDAL's MIT licence covers osgeo and osgeo_utils except osgeo_utils/gdal_merge.py (LGPL-2.0-or-later,
-# and used by nothing here): it is left out, and no other file of theirs may name a GPL-family licence.
-OSGEO_UTILS_LEFT_OUT = ("gdal_merge.py",)
-GPL_TEXT = re.compile(rb"General Public License|\bL?GPL-[0-9]")
+# GDAL's MIT licence covers osgeo and osgeo_utils except two scripts nothing here uses, which are
+# left out: gdal_merge.py (LGPL-2.0-or-later) and gdal2tiles.py (it embeds JavaScript under CC BY 3.0
+# NZ and Apache-2.0). No other file of theirs, binaries included, may name a GPL-family licence.
+OSGEO_UTILS_LEFT_OUT = ("gdal_merge.py", "gdal2tiles.py")
+GPL_TEXT = re.compile(
+    rb"General Public License|\b[AL]?GPL(?:-|v| v)?[0-9]|SPDX-License-Identifier:[^\n]*GPL"
+)
 HASHED_NEED = re.compile(rb"lib[A-Za-z0-9_+]+-[0-9a-f]{8}\.so[.0-9]*")
 PY312_LINUX = {
     "python_version": "3.12",
@@ -498,9 +501,10 @@ def add_osgeo_utils(natives, pkg):
     dst = pkg / "_vendor" / "common" / "osgeo_utils"
     copy_files(natives[ARCHES[0]] / "python" / "osgeo_utils", dst)
     for name in OSGEO_UTILS_LEFT_OUT:
-        (dst / name).unlink()
+        (dst / name).unlink(missing_ok=True)
     for root in (dst, *(pkg / "_vendor" / a / "osgeo" for a in ARCHES)):
-        gpl = [p.relative_to(pkg) for p in sorted(root.rglob("*.py")) if GPL_TEXT.search(p.read_bytes())]
+        files = sorted(p for p in root.rglob("*") if p.is_file())
+        gpl = [p.relative_to(pkg) for p in files if GPL_TEXT.search(p.read_bytes())]
         if gpl:
             fail(f"{gpl} name a GPL-family licence (GDAL's MIT licence does not cover them)")
 

@@ -271,18 +271,28 @@ def drop_ycbcr(profile: dict, *, unless_jpeg: bool = False) -> dict:
 
 
 def drop_stripe_blocks(profile: dict) -> dict:
-    """Copy of *profile* without ``blockxsize`` / ``blockysize`` when it is not tiled.
+    """Copy of *profile* without ``blockxsize`` when it is not tiled.
 
-    A striped GeoTIFF's profile reports its strip as ``blockxsize`` (the full width) and
-    ``blockysize`` (rows per strip), with ``tiled`` False. Handed to a new GTiff of another
-    size that is both stale and refused by GDAL, which logs ``BLOCKXSIZE can only be used with
-    TILED=YES`` for every dataset written. A tiled profile keeps its blocks.
+    A striped GeoTIFF's profile reports its strip width as ``blockxsize`` (the full width)
+    with ``tiled`` False. GDAL refuses that for a new GTiff, ignoring it and logging
+    ``BLOCKXSIZE can only be used with TILED=YES`` for every dataset written. Only that key
+    goes: ``blockysize`` (rows per strip) is valid untiled and stays, so the output is the
+    same as before, without the log record. A tiled profile is returned unchanged.
     """
     prof = dict(profile)
     if not prof.get("tiled"):
         prof.pop("blockxsize", None)
-        prof.pop("blockysize", None)
     return prof
+
+
+def source_profile(profile: dict, *, unless_jpeg: bool = False) -> dict:
+    """The profile of a source dataset, cleaned to be the base of a new GTiff.
+
+    The one place a writer starts from a source's ``profile``: :func:`drop_ycbcr` (a YCbCr
+    ``photometric`` is valid only with JPEG; ``unless_jpeg`` as there) and
+    :func:`drop_stripe_blocks` (the strip width of an untiled source). Every other key is kept.
+    """
+    return drop_stripe_blocks(drop_ycbcr(profile, unless_jpeg=unless_jpeg))
 
 
 # Keys of a source profile that a write with the COG driver must not inherit: the driver lays the
@@ -385,7 +395,7 @@ def write_gtiff(
     import numpy as np
     from rasterio.io import MemoryFile
 
-    prof = drop_ycbcr(profile)
+    prof = source_profile(profile)
     prof["driver"] = "GTiff"
     dtype = prof.get("dtype", str(np.asarray(data).dtype))
     decoded = data.nbytes if hasattr(data, "nbytes") else None

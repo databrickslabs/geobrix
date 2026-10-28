@@ -125,7 +125,7 @@ def _reproject_dataset(src, dst_crs, target_res=None, anchor=None):
         transform = rasterio.Affine(target_res[0], 0.0, left, 0.0, -target_res[1], top)
     out_dtype = src.dtypes[0]
     decoded_bytes = src.count * width * height * np.dtype(out_dtype).itemsize
-    profile = _comp.drop_stripe_blocks(_comp.drop_ycbcr(src.profile))
+    profile = _comp.source_profile(src.profile)
     profile.update(
         driver="GTiff", crs=dst_crs, transform=transform, width=width, height=height
     )
@@ -194,7 +194,7 @@ def _write_masked_tile(ds, path, mask) -> None:
     (``None``: no mask band), the alpha label kept, with the canonical creation options: never the
     source's codec, so a JPEG tile is not re-compressed lossily."""
     data = ds.read()
-    profile = _comp.drop_stripe_blocks(_comp.drop_ycbcr(ds.profile))
+    profile = _comp.source_profile(ds.profile)
     profile.update(driver="GTiff")
     profile.update(
         _comp.creation_opts(
@@ -558,7 +558,7 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
         own_mask = _union_own_mask(merge_ds) if group_masked else None
         out_dtype = str(mosaic.dtype)
         decoded_bytes = mosaic.nbytes
-        profile = _comp.drop_stripe_blocks(_comp.drop_ycbcr(ref.profile))
+        profile = _comp.source_profile(ref.profile)
         profile.update(
             driver="GTiff",
             height=mosaic.shape[1],
@@ -619,7 +619,7 @@ def combineavg_tiles(rasters: List[bytes]) -> bytes:
                 shape = (ds.count, ds.height, ds.width)
                 sums = np.zeros(shape, dtype="float64")
                 counts = np.zeros(shape, dtype="int64")
-                ref_profile = _comp.drop_stripe_blocks(_comp.drop_ycbcr(ds.profile))
+                ref_profile = _comp.source_profile(ds.profile)
                 ref_labels = list(ds.colorinterp)
                 out_dtype = ds.dtypes[0]
             elif (ds.count, ds.height, ds.width) != shape:
@@ -738,7 +738,7 @@ def frombands_tiles(indexed: List[Tuple[int, bytes]]) -> bytes:
                     )
                     bands.append(dest)
         data = np.stack(bands)
-        profile = _comp.drop_stripe_blocks(_comp.drop_ycbcr(ref.profile))
+        profile = _comp.source_profile(ref.profile)
         profile.update(driver="GTiff", count=data.shape[0])
         # A pixel of the stack is valid when a band of it is (a data band valid, the rule of
         # both tiers), so the stack keeps an own mask only where EVERY tile has one: the union
@@ -973,7 +973,7 @@ def _combine_stat_tiles(rasters: List[bytes], stat: str) -> bytes:
 
         ref = datasets[0]
         out_dtype = ref.dtypes[0]
-        ref_profile = _comp.drop_stripe_blocks(_comp.drop_ycbcr(ref.profile))
+        ref_profile = _comp.source_profile(ref.profile)
 
         # Collect per-tile NoData values and per-band arrays.
         # min/max/count don't accumulate, so float32 decode is safe and faster.
@@ -1151,7 +1151,7 @@ def align_to_tiles(tile_bytes: bytes, ref_bytes: bytes, dst_nodata=None) -> byte
                 src.count * dst_width * dst_height * np.dtype(out_dtype).itemsize
             )
 
-            profile = _comp.drop_stripe_blocks(_comp.drop_ycbcr(src.profile))
+            profile = _comp.source_profile(src.profile)
             profile.update(
                 driver="GTiff",
                 crs=dst_crs,

@@ -1112,3 +1112,43 @@ def test_centroid_tessellate_chips_use_creation_opts(src_compress, coverage):
             empties += int(not (c.read_masks() != 0).any())
     if coverage == "complete":
         assert empties, "the NoData strip must yield synthetic empty chips"
+
+
+# ---------------------------------------------------------------------------
+# A striped source's profile copied into a new GTiff must not log BLOCKXSIZE warnings
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "op", ["resample_to_size", "reproject_to_srid", "build_overviews"]
+)
+def test_a_striped_source_logs_no_blockxsize_warning(op, caplog):
+    """A striped GeoTIFF's profile carries ``blockxsize`` with ``tiled`` False; written to a new
+    GTiff GDAL logs "BLOCKXSIZE can only be used with TILED=YES" for each dataset."""
+    import logging
+
+    from databricks.labs.gbx.pyrx.core import ops, resample, warp
+
+    profile = dict(
+        driver="GTiff",
+        width=64,
+        height=64,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_bounds(0, 0, 1, 1, 64, 64),
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:  # striped: no tiled=True
+            dst.write(np.arange(64 * 64, dtype="uint8").reshape(1, 64, 64) % 251)
+        with mf.open() as ds:
+            assert not ds.profile["tiled"] and ds.profile.get("blockxsize")
+            call = {
+                "resample_to_size": lambda: resample.resample_to_size(ds, 32, 32),
+                "reproject_to_srid": lambda: warp.reproject_to_srid(ds, 3857),
+                "build_overviews": lambda: ops.build_overviews(ds, [2]),
+            }[op]
+            with caplog.at_level(logging.WARNING):
+                assert call()
+    noisy = [r.getMessage() for r in caplog.records if "BLOCKXSIZE" in r.getMessage()]
+    assert noisy == [], noisy

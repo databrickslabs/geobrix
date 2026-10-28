@@ -146,7 +146,7 @@ def encode_tile(
         )
         # The codec is the caller's: a JPEG request keeps its YCbCr photometric,
         # any other codec cannot carry it.
-        profile = _comp.drop_ycbcr(profile, unless_jpeg=True)
+        profile = _comp.source_profile(profile, unless_jpeg=True)
         with _comp.internal_mask_env(mask), MemoryFile() as mf:
             with mf.open(**profile) as out:
                 _comp.match_alpha(out, ds.colorinterp)

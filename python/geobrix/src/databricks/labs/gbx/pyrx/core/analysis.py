@@ -149,7 +149,7 @@ def proximity(ds, target_values, distunits, max_distance):
             )
 
     decoded_bytes = dist.nbytes
-    profile = _comp.drop_ycbcr(ds.profile)
+    profile = _comp.source_profile(ds.profile)
     profile.update(
         driver="GTiff",
         count=1,
@@ -780,7 +780,7 @@ def viewshed(ds, observer_x, observer_y, observer_height, target_height, max_dis
             )
 
     decoded_bytes = out.nbytes
-    profile = _comp.drop_ycbcr(ds.profile)
+    profile = _comp.source_profile(ds.profile)
     profile.update(driver="GTiff", count=1, dtype="uint8", nodata=None)
     profile.update(
         _comp.creation_opts("uint8", decoded_bytes=decoded_bytes, compress="auto")

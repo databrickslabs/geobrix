@@ -16,7 +16,7 @@ def _write_resampled(ds, dst_width: int, dst_height: int, algorithm: str) -> byt
     new_transform = ds.transform * Affine.scale(
         ds.width / dst_width, ds.height / dst_height
     )
-    profile = _comp.drop_ycbcr(ds.profile)
+    profile = _comp.source_profile(ds.profile)
     profile.update(
         driver="GTiff", width=dst_width, height=dst_height, transform=new_transform
     )

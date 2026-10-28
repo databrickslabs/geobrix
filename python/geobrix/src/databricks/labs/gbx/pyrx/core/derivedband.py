@@ -39,7 +39,7 @@ def derivedband(ds, pyfunc: str, func_name: str) -> bytes:
     out_ar = np.zeros((ds.height, ds.width), dtype="float64")
     gt = ds.transform.to_gdal()
     func(in_ar, out_ar, 0, 0, ds.width, ds.height, ds.width, ds.height, 0, gt)
-    profile = _comp.drop_ycbcr(ds.profile)
+    profile = _comp.source_profile(ds.profile)
     profile.update(driver="GTiff", count=1, dtype="float64")
     # The output has one band and no alpha band of its own: where the input is transparent
     # or masked (the rule of both tiers, ``_nodata.valid_mask``) the output is invalid,

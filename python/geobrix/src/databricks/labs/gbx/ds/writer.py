@@ -162,7 +162,7 @@ def _apply_compression(
         )
         # The codec is the caller's: a JPEG request keeps its YCbCr photometric,
         # any other codec cannot carry it.
-        profile = _comp.drop_ycbcr(profile, unless_jpeg=True)
+        profile = _comp.source_profile(profile, unless_jpeg=True)
         with _comp.internal_mask_env(mask), MemoryFile() as out_mf:
             with out_mf.open(**profile) as dst:
                 _comp.match_alpha(dst, src.colorinterp)

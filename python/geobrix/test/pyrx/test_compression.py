@@ -401,3 +401,32 @@ def test_creation_opts_leaves_nbits_alone_when_not_needed():
         assert "nbits" not in C.creation_opts("uint16", compress="deflate", nbits=nbits)
     assert "nbits" not in C.creation_opts("uint8", compress="deflate", nbits=4)
     assert "nbits" not in C.creation_opts("uint16", compress="none", nbits=15)
+
+
+def test_drop_stripe_blocks_drops_only_the_strip_width_of_an_untiled_profile():
+    striped = {"tiled": False, "blockxsize": 64, "blockysize": 8, "compress": "deflate"}
+    assert C.drop_stripe_blocks(striped) == {
+        "tiled": False,
+        "blockysize": 8,
+        "compress": "deflate",
+    }
+    assert striped["blockxsize"] == 64  # the argument is not changed
+    tiled = {"tiled": True, "blockxsize": 256, "blockysize": 256}
+    assert C.drop_stripe_blocks(tiled) == tiled
+    assert C.drop_stripe_blocks({"width": 4}) == {"width": 4}  # no block keys at all
+
+
+def test_source_profile_is_drop_ycbcr_and_drop_stripe_blocks_in_one():
+    prof = {
+        "photometric": "ycbcr",
+        "compress": "jpeg",
+        "tiled": False,
+        "blockxsize": 64,
+        "blockysize": 8,
+    }
+    assert C.source_profile(prof) == {
+        "compress": "jpeg",
+        "tiled": False,
+        "blockysize": 8,
+    }
+    assert C.source_profile(prof, unless_jpeg=True)["photometric"] == "ycbcr"

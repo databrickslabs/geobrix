@@ -203,7 +203,7 @@ def reproject_to_crs(
     )
     out_dtype = ds.dtypes[0]
     decoded_bytes = ds.count * width * height * np.dtype(out_dtype).itemsize
-    profile = _comp.drop_ycbcr(ds.profile)
+    profile = _comp.source_profile(ds.profile)
     profile.update(
         driver="GTiff", crs=dst_crs, transform=transform, width=width, height=height
     )
@@ -255,7 +255,7 @@ def reproject_to_srid(
     )
     out_dtype = ds.dtypes[0]
     decoded_bytes = ds.count * width * height * np.dtype(out_dtype).itemsize
-    profile = _comp.drop_ycbcr(ds.profile)
+    profile = _comp.source_profile(ds.profile)
     profile.update(
         driver="GTiff", crs=dst_crs, transform=transform, width=width, height=height
     )

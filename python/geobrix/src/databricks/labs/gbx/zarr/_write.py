@@ -1815,9 +1815,11 @@ def _base_frame(spark, plan: _Plan, names: list[str], parts=None):
     the write knows which groups it touches. Read by the cluster; never collected."""
     from pyspark.sql import functions as F
 
+    # a FILE column is read as its uri; the readers open that as the bare path
     rows = spark.sql(
-        f"SELECT kind, array, key, shard_key, file, offset, length, origin, identity, "
-        f"write_id FROM {M._q(plan.table)} VERSION AS OF {int(plan.base.version)} "
+        f"SELECT kind, array, key, shard_key, {M.file_select(plan.files)}, offset, length, "
+        f"origin, identity, write_id "
+        f"FROM {M._q(plan.table)} VERSION AS OF {int(plan.base.version)} "
         "WHERE tag IS NULL AND kind IN ('shard', 'chunk')"
     ).where(F.col("array").isin(names))
     part = (
@@ -2928,7 +2930,7 @@ def gbx_zarr_write(
     _check_new_root(data_root, owner)
     # the data root is the filespace of a managed store
     fm = resolve_file_mode(spark, file_mode, has_filespace=True)
-    require_geobrix_files(target, fm, "write")  # before a marker is claimed
+    require_geobrix_files(target, fm, "write", new=True)  # before a marker is claimed
     inp = _create_input(spark, data, tiles, variables)
     plan = _plan_create(target, write_id, data_root, inp, chunks, shards, codecs)
     plan.access = _write_access(spark, plan, access)  # before anything is claimed
@@ -2951,7 +2953,14 @@ def gbx_zarr_write(
         return _write(spark, plan, optimize)
     except BaseException:
         # Only a table this call made, and then dropped, gives its marker back: a table
-        # that may hold a commit, or one another call made, relies on it.
-        if made and _discard(spark, target, write_id) and claimed:
+        # that may hold a commit, or one another call made, relies on it. A CREATE that
+        # failed and left no table (another call's, say, would be there) made none, so
+        # the marker it claimed goes back at once.
+        gone = (
+            _discard(spark, target, write_id)
+            if made
+            else not adopt and not _table_exists(spark, target)
+        )
+        if claimed and gone:
             _release_marker(data_root, owner, "managed")
         raise

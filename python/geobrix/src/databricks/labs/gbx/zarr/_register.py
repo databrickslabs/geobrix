@@ -1220,9 +1220,8 @@ def gbx_zarr_register(
         )
     retain_seconds(retain)
     _q(table)
-    mode = resolve_file_mode(
-        spark, file_mode, has_filespace=bool(overlay_root), registered=True
-    )
+    # a registered store is never managed, so no filespace is on offer: the overlay is not one
+    mode = resolve_file_mode(spark, file_mode, has_filespace=False, registered=True)
     base = _local_root(path)
     overlay = _local_root(overlay_root) if overlay_root else None
     if overlay:

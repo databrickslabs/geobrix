@@ -363,7 +363,9 @@ def test_file_modes_that_need_file_columns_are_not_available_yet(
     table = _table(mode)
     with pytest.raises(ZarrUnsupported) as ei:
         gbx_zarr_register(spark_delta, str(era5_v3_unsharded), table, file_mode=mode)
-    assert "Fix:" in str(ei.value) and "fuse" in ei.value.fix
+    assert "Fix:" in str(ei.value) and (
+        "fuse" in ei.value.fix or "default" in ei.value.fix
+    )
     assert not _exists(spark_delta, table)
 
 

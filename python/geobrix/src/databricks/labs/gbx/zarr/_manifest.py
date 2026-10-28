@@ -448,9 +448,7 @@ def create_manifest(spark, table: str, props: StoreProps) -> None:
     file_type = file_column_type(props.file_mode)
     extra = "".join(
         f",\n  {_lit(k)} = {_lit(v)}"
-        for k, v in table_properties(
-            props.file_mode, props.root, props.overlay_root
-        ).items()
+        for k, v in table_properties(props.file_mode, props.root).items()
     )
     ddl = f"""
 CREATE TABLE {_q(table)} (

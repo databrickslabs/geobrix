@@ -77,7 +77,14 @@ def file_supported(spark) -> bool:
 
 
 def _usable(mode: str, spark) -> bool:
-    return mode in VERIFIED_FILE_MODES and file_supported(spark)
+    """Whether ``auto`` may pick ``mode``: verified, one GeoBrix writes, and supported here.
+    (A mode GeoBrix cannot write must never be chosen for the caller, verified or not.)
+    """
+    return (
+        mode in VERIFIED_FILE_MODES
+        and mode in GEOBRIX_FILE_MODES
+        and file_supported(spark)
+    )
 
 
 def resolve(
@@ -100,7 +107,7 @@ def resolve(
         raise ZarrUnsupported(
             'file_mode="managed" cannot be used for a registered store: managed ingest '
             "copies every file it is given, so the registered store would be duplicated",
-            fix='use file_mode="external" (references without a copy) or "fuse"',
+            fix="use the default file mode",
         )
     if file_mode == "fuse":
         return "fuse"
@@ -130,25 +137,35 @@ def file_column_type(mode: str) -> str:
         ) from None
 
 
-def table_properties(mode: str, root: str, overlay_root: str | None = None) -> dict:
+def table_properties(mode: str, root: str) -> dict:
     """The table properties ``mode`` needs beyond the store's own: a managed table's
-    filespace is the overlay root, else the data root."""
+    filespace is its data root (a registered store is never managed)."""
     if mode != "managed":
         return {}
     from databricks.labs.gbx.pyrx.file_props import FILESPACE_KEY
 
-    return {FILESPACE_KEY: overlay_root or root}
+    return {FILESPACE_KEY: root}
 
 
-def require_geobrix_files(label: str, mode: str, verb: str) -> None:
+def require_geobrix_files(
+    label: str, mode: str, verb: str, *, new: bool = False
+) -> None:
     """Raise ``ZarrUnsupported`` unless GeoBrix itself ``verb``s the files of ``label``
-    (a store, or a call about to create one) in ``mode``."""
-    if mode not in GEOBRIX_FILE_MODES:
+    in ``mode``. ``new``: ``label`` is a store a call is about to create, so the message
+    names the argument and not a store."""
+    if mode in GEOBRIX_FILE_MODES:
+        return
+    if new:
         raise ZarrUnsupported(
-            f"{label} keeps its files in file_mode {mode!r}, which GeoBrix does not "
-            f"{verb} yet",
-            fix=f"use a store with file_mode {' or '.join(map(repr, GEOBRIX_FILE_MODES))}",
+            f"file_mode={mode!r} is not available for {label}: GeoBrix does not {verb} "
+            "the files of that mode yet",
+            fix='pass file_mode="auto" or "fuse"',
         )
+    raise ZarrUnsupported(
+        f"{label} keeps its files in file_mode {mode!r}, which GeoBrix does not "
+        f"{verb} yet",
+        fix=f"use a store with file_mode {' or '.join(map(repr, GEOBRIX_FILE_MODES))}",
+    )
 
 
 def path_of(file_value, root: str | None = None) -> str:
@@ -205,6 +222,7 @@ class FileLayout:
         if origin == "external" and self.base_root:
             return self.base_root
         return self.gbx_root or self.base_root
+
 
 def layout_for(
     kind: str | None, root: str | None, overlay_root: str | None, mode: str

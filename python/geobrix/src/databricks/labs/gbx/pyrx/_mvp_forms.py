@@ -13,17 +13,29 @@ import hashlib
 from collections import OrderedDict
 from contextlib import contextmanager
 
+import numpy as np
+import pandas as pd
 from pyspark.sql import functions as f
 from pyspark.sql.functions import udtf
-from pyspark.sql.types import ArrayType, IntegerType
+from pyspark.sql.types import ArrayType, BinaryType, IntegerType
 
 from databricks.labs.gbx.pygx.functions import _BngTessellateExplode
 from databricks.labs.gbx.pyrx import _serde
+from databricks.labs.gbx.pyrx.core import agg as agg_core
 from databricks.labs.gbx.pyrx.core import budget
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core import tiling
 from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
-from databricks.labs.gbx.pyrx.functions import _cut_tile, _RstRetileUDTF, _tile_cellid
+from databricks.labs.gbx.pyrx.functions import (
+    _NO_VALUE,
+    _cut_tile,
+    _error_tile_of,
+    _max_value_per_cell,
+    _rasterize_agg_body,
+    _RstRetileUDTF,
+    _tile_cellid,
+    _tile_raster_bytes,
+)
 
 _WINDOW_KEYS = ("col_off", "row_off", "width", "height")
 
@@ -207,8 +219,148 @@ bng_tessellateexplode_udtf_arrow = udtf(
     useArrow=True,
 )
 
+# --- MVP-A: aggregates as a finalize over collect_list, a tree of finalizes, and a table function ---------
+#
+# Every form here keeps the contract of `gbx_rst_merge_agg` / `gbx_rst_bng_rasterize_agg` on the light tier, so
+# whichever wins can take the aggregate's place: a repeated cell keeps its largest value, a null value (None or
+# NaN) never wins over a number, and a cell with nothing but nulls burns NaN (`_max_value_per_cell`). They give
+# BINARY, which has no place for an error tile: a group of nothing but error tiles gives NULL.
+
+
+def _keep_larger(best, cell, value):
+    """Fold one (cell, value) into `best` ({cell: value, or None for null}) by the rule of `_max_value_per_cell`.
+
+    The one place a probe form decides what a repeated cell keeps, whether it sees the group at once (the
+    finalize) or a row at a time (the table function)."""
+    v = None if value is None or value != value else float(value)
+    cur = best.get(cell, _NO_VALUE)
+    if cur is _NO_VALUE or (v is not None and (cur is None or v > cur)):
+        best[cell] = v
+
+
+def _burn(best, xmin, ymin, xmax, ymax, width, height):
+    """The canvas of `best` ({cell: value or None}) as GTiff bytes: what the grouped aggregate gives for it."""
+    from databricks.labs.gbx.pyrx.core import cellraster as cr
+
+    ad = cr._adapter("bng")
+    cells = list(best)
+    s = lambda v: pd.Series([v])  # noqa: E731 - _rasterize_agg_body reads .iloc[0]
+    return _rasterize_agg_body(
+        _max_value_per_cell(cells, [best[c] for c in cells], ad.to_key),
+        cells,
+        ad,
+        "bng",
+        27700,
+        s(None),
+        s(xmin),
+        s(ymin),
+        s(xmax),
+        s(ymax),
+        s(width),
+        s(height),
+        s("centroids"),
+        s(0),
+    )
+
+
+@f.udf(BinaryType())
+def bng_rasterize_cells(cells, xmin, ymin, xmax, ymax, width, height):
+    """The finalize of `collect_list(struct(cellid, value))` on an explicit canvas."""
+    best = {}
+    for c in cells or []:
+        if c["cellid"] is not None:
+            _keep_larger(best, c["cellid"], c["value"])
+    return _burn(best, xmin, ymin, xmax, ymax, width, height) if best else None
+
+
+@f.udf(BinaryType())
+def canvas_max(rasters):
+    """Per-pixel max of aligned partial canvases: the tree step above `bng_rasterize_cells`.
+
+    A pixel is the largest number any partial has; NaN there if a partial burned a NaN and none a number; NoData
+    if none has the cell. Associative, so merging partials in any shape equals one pass over the group.
+    """
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.pyrx.core.compression import write_gtiff
+
+    best, seen, profile = None, None, None
+    for r in rasters or []:
+        with MemoryFile(bytes(r)) as mf, mf.open() as ds:
+            a = ds.read(1).astype("float64")
+            present = a != ds.nodata  # a NaN is a cell with a null value: present
+            if best is None:
+                best, seen, profile = (
+                    np.full(a.shape, -np.inf),
+                    np.zeros(a.shape, bool),
+                    ds.profile.copy(),
+                )
+            best = np.fmax(
+                best, np.where(present, a, -np.inf)
+            )  # fmax: a NaN never beats a number
+            seen |= present
+    if best is None:
+        return None
+    out = np.where(best > -np.inf, best, np.where(seen, np.nan, profile["nodata"]))
+    return write_gtiff(profile, out.astype(profile["dtype"])[None, :, :])
+
+
+def _member_bytes(tile):
+    """The raster bytes of a group member, or None for a member an aggregate drops: an error tile (it failed
+    upstream), an empty one, or one that does not open. Not a place to fail: the group still has an answer.
+    """
+    if _error_tile_of(tile) is not None:
+        return None
+    b = _tile_raster_bytes(tile)
+    if b is None:
+        return None
+    try:
+        with _serde.open_tile(b):
+            return b
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@udtf(returnType="key string, raster binary")
+class MergeByKeyTvf:
+    """Holds the bytes of the partition's members, as every merge shape does (`merge_tiles` takes the list)."""
+
+    def __init__(self):
+        self.key, self.rasters = None, []
+
+    def eval(self, row):
+        self.key = row["key"]
+        b = _member_bytes(row["tile"])
+        if b is not None:
+            self.rasters.append(b)
+
+    def terminate(self):
+        if self.rasters:
+            yield self.key, agg_core.merge_tiles(self.rasters)
+
+
+@udtf(returnType="key string, raster binary")
+class BngRasterizeTvf:
+    """Streaming: keeps only cell -> larger value (bounded by the distinct cells), burns once at the end."""
+
+    def __init__(self):
+        self.key, self.best, self.canvas = None, {}, None
+
+    def eval(self, row):
+        self.key = row["key"]
+        if row["cellid"] is None:
+            return
+        _keep_larger(self.best, row["cellid"], row["value"])
+        self.canvas = (row["c4"], row["c5"], row["c6"], row["c7"], row["c8"], row["c9"])
+
+    def terminate(self):
+        if self.best:
+            yield self.key, _burn(self.best, *self.canvas)
+
+
 _L2 = "com.databricks.labs.gbx.kernels.udf."
 _CHIPS = "array<struct<cellid:string,core:boolean,chip:binary>>"
+_L1_AGGREGATES = ("gbx_rst_merge_agg", "gbx_rst_bng_rasterize_agg")
 
 
 def register_probe_forms(spark) -> None:
@@ -216,6 +368,10 @@ def register_probe_forms(spark) -> None:
     spark.udf.register("gbx_mvp_rst_retile_array", retile_array)
     spark.udf.register("gbx_mvp_rst_retile_count", retile_count)
     spark.udf.register("gbx_mvp_rst_retile_part", retile_part)
+    spark.udf.register("gbx_mvp_rst_bng_rasterize_cells", bng_rasterize_cells)
+    spark.udf.register("gbx_mvp_rst_canvas_max", canvas_max)
+    spark.udtf.register("gbx_mvp_rst_merge_tvf", MergeByKeyTvf)
+    spark.udtf.register("gbx_mvp_rst_bng_rasterize_tvf", BngRasterizeTvf)
     spark.udtf.register("gbx_rst_retile_mvp_arrow", retile_udtf_arrow)
     spark.udtf.register(
         "gbx_bng_tessellateexplode_mvp_arrow", bng_tessellateexplode_udtf_arrow
@@ -236,3 +392,28 @@ def register_l2_probes(spark) -> None:
     spark.udf.registerJavaFunction(
         "gbx_mvp_rst_retile_part_l2", _L2 + "RstRetilePartBytesUdf", "binary"
     )
+    spark.udf.registerJavaFunction(
+        "gbx_mvp_rst_merge_array_l2", _L2 + "RstMergeArrayBytesUdf", "binary"
+    )
+    spark.udf.registerJavaFunction(
+        "gbx_mvp_rst_bng_rasterize_cells_l2",
+        "com.databricks.labs.gbx.rasterx.expressions.agg.mvp.BngRasterizeCellsBytesUdf",
+        "binary",
+    )
+
+
+def register_l1_udafs(spark) -> None:
+    """The Catalyst aggregates under their product names; needs the staged JAR (a classic session).
+
+    The manager installs a function whose arities match the manifest's, and the heavy rasterize takes the 12
+    arguments of the signature, not its 13th (`out_crs`), so it never installs this one by default. The
+    shape is timed and judged with the 12 arguments, so the companion goes in directly.
+    """
+    from databricks.labs.gbx import manifest
+
+    inst = spark._jvm.com.databricks.labs.gbx.kernels.L1Installer
+    for name in _L1_AGGREGATES:
+        companion = manifest.load().functions[name].levels["L1"]["companion"]
+        got = str(inst.install(spark._jsparkSession, name, companion))
+        if got != "ok":
+            raise RuntimeError(f"{name}: L1 install gave {got}")

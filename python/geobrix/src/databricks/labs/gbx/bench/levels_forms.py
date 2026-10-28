@@ -30,6 +30,11 @@ BASE_ROWS = {
     # MVP-G: BNG polygons that each cover a handful of cells, and a few big tiles (4096 x 4096)
     "bng_polys": 100_000,
     "tiles_big": 4,
+    # MVP-A: tiles in groups of about 50, and (key, BNG cell, value) rows; each also with half of its rows in one key
+    "tiles_grouped": 2000,
+    "tiles_grouped_skew": 2000,
+    "bng_cells": 1_000_000,
+    "bng_cells_skew": 1_000_000,
 }
 
 
@@ -218,6 +223,60 @@ def _gb_tiles(virtual: bool):
     return build
 
 
+_GROUP_SIZE = 50  # tiles a group holds, about (the key is a hash of the raster)
+_CELL_KEYS = 200  # groups of the BNG cell rows
+
+
+def _grouped_tiles(skew: bool):
+    """`tiles_mat` plus a `key`: a hash of the raster, over n / 50 keys; with `skew`, half the rows are key 0."""
+
+    def build(spark, n, corpus, schema):
+        tiles = _tiles(False)(spark, n, corpus, schema)
+        if tiles is None:
+            return None
+        from pyspark.sql import functions as F
+
+        hashed = F.xxhash64(F.col("tile.raster"))
+        key = F.pmod(hashed, F.lit(max(1, n // _GROUP_SIZE)))
+        if skew:
+            key = F.when(F.pmod(hashed, F.lit(2)) == 0, F.lit(0)).otherwise(key)
+        return _table(
+            spark,
+            schema,
+            f"mvp_in_tiles_grouped_{'skew' if skew else 'even'}_v{RECIPE_VERSION}_{n}",
+            lambda: spark.table(tiles).select(key.cast("string").alias("key"), "tile"),
+        )
+
+    return build
+
+
+def _bng_cells(skew: bool):
+    """`(key, cellid, value)`: random 1 km cells inside the 100 km square TQ, 200 keys; with `skew`, half the rows
+    are key 0 (and so the same few thousand cells over and over)."""
+
+    def build(spark, n, corpus, schema):
+        from pyspark.sql import functions as F
+
+        key = F.floor(F.rand(5) * _CELL_KEYS)
+        if skew:
+            key = F.when(F.rand(6) < 0.5, F.lit(0)).otherwise(key)
+        cell = F.format_string(
+            "TQ%02d%02d", F.floor(F.rand(7) * 100), F.floor(F.rand(8) * 100)
+        )
+        return _table(
+            spark,
+            schema,
+            f"mvp_in_bng_cells_{'skew' if skew else 'even'}_v{RECIPE_VERSION}_{n}",
+            lambda: spark.range(n).select(
+                key.cast("string").alias("key"),
+                cell.alias("cellid"),
+                (F.rand(9) * 100).alias("value"),
+            ),
+        )
+
+    return build
+
+
 INPUTS: Dict[str, Callable] = {
     "bng_points": _bng_points,
     "invalid_polys": _invalid_polys,
@@ -229,6 +288,10 @@ INPUTS: Dict[str, Callable] = {
     "tiles_gb_mat": _gb_tiles(False),
     "tiles_gb_virt": _gb_tiles(True),
     "bng_polys": _bng_polys,
+    "tiles_grouped": _grouped_tiles(False),
+    "tiles_grouped_skew": _grouped_tiles(True),
+    "bng_cells": _bng_cells(False),
+    "bng_cells_skew": _bng_cells(True),
     "tiles_big": _tiles(
         False, "big", "big"
     ),  # absent until the 4096 x 4096 tiles are copied to {corpus}/big
@@ -803,3 +866,192 @@ FORMS["G"] = [
     ),
     _g(TE, "L4", "uc-tvf", "bng_polys", _TE_UC, computes=("serverless", "dedicated")),
 ]
+
+
+# --- MVP-A: aggregates, one form per shape and input ------------------------------------------------------
+#
+# Each query answers (n, fp, n_out) over the groups: the fingerprint is the summed length of the group's raster
+# and n_out counts the rasters that are not NULL, so a form that fails on some groups cannot pass on size.
+# The light forms come first and the JVM ones last: both register the same `gbx_rst_*` names, and a `setup`
+# runs once. The forms of one aggregate do not agree on the bytes of the result (each level encodes with its
+# own writer), so across forms compare `n` and the oracle rows. A form that is not a product function runs
+# under a `gbx_mvp_*` name that its `setup` registers (outside the timed region). The light forms are all
+# `L3`, so the runner records the peak Python worker memory of each: the table function and the finalizes are
+# kept or dropped against the grouped aggregate on that column.
+
+_A = "databricks.labs.gbx.bench.levels_forms:"
+_MA, _BR = "gbx_rst_merge_agg", "gbx_rst_bng_rasterize_agg"
+# xmin, ymin, xmax, ymax, width, height: one 100 km square at 100 m
+_A_CANVAS = (530000.0, 180000.0, 630000.0, 280000.0, 1000, 1000)
+_PAIRS = "collect_list(struct(cellid, value))"
+
+
+def _ma_shapes():
+    """The SQL of each shape of the merge over `(key, tile)`. A result that is a tile struct gives its raster."""
+    return {
+        "grouped": f"SELECT key, {_MA}(tile) AS out FROM {{src}} GROUP BY key",
+        "udaf": f"SELECT key, {_MA}(tile).raster AS out FROM {{src}} GROUP BY key",
+        "finalize": "SELECT key, gbx_rst_merge(collect_list(tile)).raster AS out FROM {src} GROUP BY key",
+        "finalize_l2": "SELECT key, gbx_mvp_rst_merge_array_l2(collect_list(tile.raster)) AS out FROM {src} GROUP BY key",
+        "tvf": (
+            "SELECT key, raster AS out FROM gbx_mvp_rst_merge_tvf("
+            "TABLE(SELECT key, tile FROM {src}) PARTITION BY key)"
+        ),
+    }
+
+
+def _br_shapes(canvas=_A_CANVAS):
+    """The SQL of each shape of the BNG rasterize over `(key, cellid, value)` on `canvas`."""
+    types = ("DOUBLE", "DOUBLE", "DOUBLE", "DOUBLE", "INT", "INT")
+    lits = [f"CAST({v} AS {t})" for v, t in zip(canvas, types)]
+    on = ", ".join(lits)
+    args = f"cellid, value, 27700, NULL, {on}, 'centroids', 0"
+    cols = ", ".join(f"{lit} AS c{i + 4}" for i, lit in enumerate(lits))
+    finalize = (
+        "SELECT key, {fn}(" + _PAIRS + ", " + on + ") AS out FROM {{src}} GROUP BY key"
+    )
+    return {
+        "grouped": f"SELECT key, {_BR}({args}) AS out FROM {{src}} GROUP BY key",
+        "udaf": f"SELECT key, {_BR}({args}).raster AS out FROM {{src}} GROUP BY key",
+        "finalize": finalize.format(fn="gbx_mvp_rst_bng_rasterize_cells"),
+        "finalize_l2": finalize.format(fn="gbx_mvp_rst_bng_rasterize_cells_l2"),
+        # partial canvases per (key, salt), then one per-pixel max per key
+        "tree": (
+            "SELECT key, gbx_mvp_rst_canvas_max(collect_list(p)) AS out FROM ("
+            f"SELECT key, gbx_mvp_rst_bng_rasterize_cells({_PAIRS}, {on}) AS p FROM ("
+            "SELECT *, pmod(xxhash64(cellid, value), 2) AS salt FROM {src}) GROUP BY key, salt) GROUP BY key"
+        ),
+        "tvf": (
+            "SELECT key, raster AS out FROM gbx_mvp_rst_bng_rasterize_tvf("
+            f"TABLE(SELECT key, cellid, value, {cols} FROM {{src}}) PARTITION BY key)"
+        ),
+    }
+
+
+def setup_a_probes(spark):
+    """The light probes (finalizes, tree step, table functions) and the light `gbx_rst_merge` finalize."""
+    from databricks.labs.gbx.pyrx import _mvp_forms
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    _mvp_forms.register_probe_forms(spark)
+    prx.register(spark, only=["gbx_rst_merge"])
+
+
+def setup_a_l2(spark):
+    """The Java UDF finalizes under probe names (needs the JAR)."""
+    from databricks.labs.gbx.pyrx import _mvp_forms
+
+    _mvp_forms.register_l2_probes(spark)
+
+
+def setup_a_udaf(spark):
+    """The Catalyst aggregates under their product names (needs the JAR; classic only)."""
+    from databricks.labs.gbx.pyrx import _mvp_forms
+
+    _mvp_forms.register_l1_udafs(spark)
+
+
+def setup_a_l1_merge(spark):
+    """The Catalyst `gbx_rst_merge` over an array of tiles (needs the JAR; replaces the light finalize)."""
+    inst = spark._jvm.com.databricks.labs.gbx.kernels.L1Installer
+    got = str(
+        inst.install(
+            spark._jsparkSession,
+            "gbx_rst_merge",
+            "com.databricks.labs.gbx.rasterx.expressions.RST_Merge",
+        )
+    )
+    if got != "ok":
+        raise RuntimeError(f"gbx_rst_merge: L1 install gave {got}")
+
+
+def _a(fn, level, variant, inp, inner, *, setup="", register=False, **kw):
+    sql = f"SELECT count(*) AS n, sum(length(out)) AS fp, count(out) AS n_out FROM ({inner})"
+    return Form(
+        "A",
+        fn,
+        level,
+        variant,
+        inp,
+        sql=sql,
+        setup=_A + setup if setup else "",
+        register=register,
+        **kw,
+    )
+
+
+def _a_light(fn, shapes, inputs):
+    """The light forms of one aggregate over each of its inputs. An input's suffix (`-skew`) labels its forms,
+    since a result row carries the form and not the input."""
+    out = []
+    for inp, sfx in inputs:
+        out += [
+            _a(fn, "L3", "c0" + sfx, inp, shapes["grouped"], register=True),
+            _a(
+                fn,
+                "L3",
+                "finalize" + sfx,
+                inp,
+                shapes["finalize"],
+                setup="setup_a_probes",
+            ),
+        ]
+        if "tree" in shapes:
+            out.append(
+                _a(fn, "L3", "tree" + sfx, inp, shapes["tree"], setup="setup_a_probes")
+            )
+        out.append(
+            _a(fn, "L3", "tvf" + sfx, inp, shapes["tvf"], setup="setup_a_probes")
+        )
+    return out
+
+
+def _a_jvm(fn, shapes, inputs):
+    both = ("dedicated", "standard")
+    out = []
+    for inp, sfx in inputs:
+        out += [
+            _a(
+                fn,
+                "L2",
+                "finalize" + sfx,
+                inp,
+                shapes["finalize_l2"],
+                setup="setup_a_l2",
+                computes=both,
+            ),
+            _a(
+                fn,
+                "L1",
+                "udaf" + sfx,
+                inp,
+                shapes["udaf"],
+                setup="setup_a_udaf",
+                computes=("dedicated",),
+            ),
+        ]
+        if (
+            fn == _MA
+        ):  # the Catalyst finalize over an array of tiles; the rasterize has none
+            out.append(
+                _a(
+                    fn,
+                    "L1",
+                    "finalize" + sfx,
+                    inp,
+                    shapes["finalize"],
+                    setup="setup_a_l1_merge",
+                    computes=("dedicated",),
+                )
+            )
+    return out
+
+
+_A_MERGE = (_MA, _ma_shapes(), (("tiles_grouped", ""), ("tiles_grouped_skew", "-skew")))
+_A_RASTERIZE = (_BR, _br_shapes(), (("bng_cells", ""), ("bng_cells_skew", "-skew")))
+FORMS["A"] = (
+    _a_light(*_A_MERGE)
+    + _a_light(*_A_RASTERIZE)
+    + _a_jvm(*_A_MERGE)
+    + _a_jvm(*_A_RASTERIZE)
+)

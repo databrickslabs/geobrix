@@ -40,6 +40,7 @@ class Case:
     # exact_rows is one batch: `args` is a tuple of argument rows, `expect` one value per row.
     # Generators (MVP-G) also use no_rows | windows | cells, and error_tile means exactly one row.
     # windows_batch is one task over several tiles: `args` is a tuple of argument rows, as for exact_rows.
+    # Aggregates (MVP-A) use merged_equals | pixels | error_group | null; `args[0]` is the group's rows.
     kind: str
     # exact: the value. raises: a substring the error message must contain (the offending
     # value), so a missing function cannot pass. tile_props: the target CRS, or (CRS, SRID).
@@ -514,6 +515,58 @@ MVP_G: Tuple[Case, ...] = (
 )
 
 
+# MVP-A: aggregates (a case's `fn` is the aggregate; see `run_groups`). `args[0]` is the group's rows: tiles
+# for the merge, (cellid, value) pairs for the rasterize; the other args are its per-group constants.
+MA, BR = "gbx_rst_merge_agg", "gbx_rst_bng_rasterize_agg"
+# out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad: four 1 km pixels
+CANVAS = (27700, None, 530000.0, 180000.0, 532000.0, 182000.0, 2, 2, "centroids", 0)
+# What a NULL value burns is the one thing the tiers do not share (raster-functions.mdx, rst_bng_rasterize_agg):
+# NaN on the lightweight tier, 1.0 on the heavyweight tier. A shape says which it follows (`run_groups`).
+NULL_BURN = "<the burn of a NULL value>"
+NAN = float("nan")
+MVP_A: Tuple[Case, ...] = (
+    Case(
+        "ma_quad",
+        MA,
+        (Build("quad_tiles"),),
+        "merged_equals",
+        Build("tile_32"),
+        ("session",),
+    ),
+    # An aggregate over nothing but error tiles gives an error tile (the reason kept) where the output is a
+    # tile, and NULL where it is bytes (no place for a reason).
+    Case(
+        "ma_error_only",
+        MA,
+        (Build("tile_error"),),
+        "error_group",
+        UPSTREAM_ERROR,
+        ("session",),
+    ),
+    # A repeated cell keeps its largest value (1.0 < 3.0). A NaN-only cell burns NaN on every tier.
+    Case(
+        "br_dup_max",
+        BR,
+        (
+            (
+                ("TQ3080", 1.0),
+                ("TQ3080", 3.0),
+                ("TQ3180", 2.0),
+                ("TQ3081", None),
+                ("TQ3181", NAN),
+            ),
+        )
+        + CANVAS,
+        "pixels",
+        [[NULL_BURN, NAN], [3.0, 2.0]],
+        ("session",),
+    ),
+    Case("br_empty", BR, ((),) + CANVAS, "null", None, ("session",)),
+    # Rows whose cell id is NULL carry no cell: nothing to burn.
+    Case("br_null_cell", BR, (((None, 1.0),),) + CANVAS, "null", None, ("session",)),
+)
+
+
 def _tile_bytes(
     crs_value: str, w: int = 64, h: int = 48, origin=None, px=None
 ) -> bytes:
@@ -889,6 +942,10 @@ def check(case: Case, out, args) -> Optional[str]:
         return _check_tile(case, out, args)
     if case.kind == "geom_props":
         return _check_geom(case, out)
+    if case.kind == "merged_equals":
+        return _check_merged(case, out)
+    if case.kind == "pixels":
+        return _check_pixels(case, out)
     raise ValueError(case.kind)
 
 
@@ -938,6 +995,30 @@ def _check_merged(case: Case, out) -> Optional[str]:
             if np.array_equal(got.read(), want.read())
             else f"{case.cid}: pixels differ"
         )
+
+
+def _check_pixels(case: Case, out) -> Optional[str]:
+    """The first band of the raster (bytes or a tile) is `case.expect`, pixel by pixel; NaN equals NaN."""
+    import numpy as np
+    from rasterio.io import MemoryFile
+
+    b = _raster_bytes(out)
+    if b is None:
+        return f"{case.cid}: no raster"
+    with MemoryFile(b) as m, m.open() as ds:
+        got = ds.read(1).astype("float64")
+    ok = got.shape == np.shape(case.expect) and np.array_equal(
+        got, np.asarray(case.expect, dtype="float64"), equal_nan=True
+    )
+    return None if ok else f"{case.cid}: pixels {got.tolist()}, want {case.expect}"
+
+
+def _check_error_group(case: Case, out, tile_out: bool) -> Optional[str]:
+    """A group of nothing but error tiles: the error tile (reason `case.expect`) when the result is a tile,
+    NULL when it is bytes (they have no place for a reason)."""
+    if tile_out:
+        return check(replace(case, kind="error_tile"), out, None)
+    return None if out is None else f"{case.cid}: got bytes, want NULL"
 
 
 def _check_helper(case: Case, rows, tiles) -> Optional[str]:
@@ -1338,6 +1419,100 @@ def run_rows(
             (df.coalesce(1) if batch else df).createOrReplaceTempView("_gbx_oracle")
             rows = spark.sql(shape_sql.format(fn=name_of(case.fn), args=cols)).collect()
             out.append((case, _check_rows(case, rows, arg_rows if batch else args)))
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
+            out.append((case, check_error(case, exc)))
+    return out
+
+
+def _typed_literal(value, param, case: Case) -> str:
+    """`value` as a SQL literal of the parameter's type (a bare `1000.0` is a DECIMAL); NULL stays untyped."""
+    lit = _sql_literal(value, param, case)
+    return lit if value is None else f"CAST({lit} AS {_SQL[param.session[0]]})"
+
+
+def group_width(params) -> int:
+    """How many leading parameters one row of an aggregate's group fills: a tile, or a (cellid, value) pair."""
+    return 1 if params[0].session == ("TILE",) else 2
+
+
+def _burn_nulls(expect, null_burn: float):
+    """`expect` (rows of pixels) with the marker of a NULL value's burn replaced by what this tier burns."""
+    return [[null_burn if v == NULL_BURN else v for v in row] for row in expect]
+
+
+def run_groups(
+    spark,
+    cases,
+    shape_sql: str = "SELECT key, {fn}({args}) AS out FROM _gbx_oracle GROUP BY key",
+    tmpdir: Optional[str] = None,
+    null_burn: float = NAN,
+):
+    """Aggregates: `args[0]` is the group's rows, the rest are its constants. The table `_gbx_oracle` has one
+    row per member: a key, the member's columns c0.., then the constants as columns. `shape_sql` takes `{fn}`,
+    `{src}` (that table) and `{args}` (the member columns, then the constants as literals: a Catalyst aggregate
+    reads them when it finishes, with no row to look in) and returns `(key, out)`. `null_burn` is what a NULL
+    value burns on the tier the shape runs.
+    """
+    from pyspark.sql.types import StructType
+
+    from databricks.labs.gbx import manifest
+    from databricks.labs.gbx.manifest import TILE_SQL
+
+    tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")
+    man = manifest.load()
+    out = []
+    for case in cases:
+        if "session" not in case.surfaces:
+            continue
+        params = man.functions[case.fn].params
+        group = resolve_arg(case.args[0], tmpdir)
+        group = (
+            [group] if isinstance(group, dict) else group
+        )  # one tile is a group of one
+        consts = [resolve_arg(a, tmpdir) for a in case.args[1:]]
+        if group_width(params) == 1:
+            rows, first = [("a", t, *consts) for t in group], [f"c0 {TILE_SQL}"]
+        else:
+            rows, first = [("a", c, v, *consts) for c, v in group], [
+                "c0 string",
+                "c1 double",
+            ]
+        n0 = len(first)
+        schema = ", ".join(
+            ["key string"]
+            + first
+            + [
+                f"c{i + n0} {_ddl_type(v, params[i + n0])}"
+                for i, v in enumerate(consts)
+            ]
+        )
+        members = ", ".join(f"c{i}" for i in range(n0))
+        literals = [
+            _typed_literal(v, params[i + n0], case) for i, v in enumerate(consts)
+        ]
+        want = (
+            replace(case, expect=_burn_nulls(case.expect, null_burn))
+            if case.kind == "pixels"
+            else case
+        )
+        try:
+            spark.createDataFrame(rows, schema).createOrReplaceTempView("_gbx_oracle")
+            df = spark.sql(
+                shape_sql.format(
+                    fn=case.fn,
+                    src="_gbx_oracle",
+                    args=", ".join([members] + literals),
+                )
+            )
+            got = df.collect()
+            value = got[0]["out"] if got else None
+            if case.kind == "error_group":
+                tile_out = isinstance(df.schema["out"].dataType, StructType)
+                out.append((case, _check_error_group(want, value, tile_out)))
+            else:
+                out.append((case, check(want, value, case.args)))
         except (
             Exception
         ) as exc:  # noqa: BLE001 - the case decides whether an error is expected

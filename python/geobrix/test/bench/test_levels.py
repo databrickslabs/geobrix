@@ -138,6 +138,61 @@ def test_levels_leg_times_every_light_shape_of_the_generators(
     assert big and {r.status for r in big} == {"na_by_design"}
 
 
+def test_levels_leg_times_every_light_shape_of_the_aggregates(
+    spark_session_local, tmp_path, monkeypatch
+):
+    """The light shapes of one aggregate ask for the same groups in different ways: one fingerprint each (the
+    tree step re-encodes its canvases, so it agrees on the groups only), and each is a form of the Python
+    worker, which is how the runner comes to record its worker memory."""
+    from databricks.labs.gbx.bench import oracles
+
+    (tmp_path / "rows").mkdir()
+    for i in range(2):
+        (tmp_path / "rows" / f"r{i}.tif").write_bytes(
+            oracles._tile_bytes("EPSG:4326", 32, 32)
+        )
+    small = (
+        530000.0,
+        180000.0,
+        532000.0,
+        182000.0,
+        2,
+        2,
+    )  # 2 x 2 pixels: 200 groups stay cheap
+    monkeypatch.setitem(
+        lf.FORMS,
+        "A",
+        lf._a_light(
+            lf._MA,
+            lf._ma_shapes(),
+            (("tiles_grouped", ""), ("tiles_grouped_skew", "-skew")),
+        )
+        + lf._a_light(
+            lf._BR,
+            lf._br_shapes(small),
+            (("bng_cells", ""), ("bng_cells_skew", "-skew")),
+        ),
+    )
+    rows = run_s(spark_session_local, tmp_path, scales=(1,), base_rows=400, mvp="A")
+    bad = [r for r in rows if r.status != "ok"]
+    assert bad == [], [(r.fn, r.form, r.status, r.failure_mode, r.note) for r in bad]
+    assert len(rows) == 14 and {r.level for r in rows} == {"L3"}
+    for fn in (lf._MA, lf._BR):
+        for sfx in ("", "-skew"):
+            mine = {
+                r.form: r
+                for r in rows
+                if r.fn == fn and r.form.endswith("-skew") == bool(sfx)
+            }
+            prints = {
+                f: r.output_fingerprint
+                for f, r in mine.items()
+                if not f.startswith("tree")
+            }
+            assert len(set(prints.values())) == 1, (fn, sfx, prints)
+            assert len({r.rows for r in mine.values()}) == 1
+
+
 class _Forbidden:
     """A Connect-like session. Whatever attribute the code reads that is not set here (a Connect
     session has no sparkContext, _jvm, _jsc, rdd, or settable conf) is recorded: the code under

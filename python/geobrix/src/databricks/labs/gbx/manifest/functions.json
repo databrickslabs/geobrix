@@ -81,6 +81,31 @@
        "L1": {"companion": "com.databricks.labs.gbx.gridx.bng.generators.BNG_TessellateExplode"},
        "L3": {"register": "udtf", "udtf": "databricks.labs.gbx.pygx.functions:_BngTessellateExplode"},
        "L4": {"tvf_over": "gbx_bng_tessellate"}},
-     "oracle": "MVP_G"}
+     "oracle": "MVP_G"},
+    {"sql_name": "gbx_rst_merge_agg", "family": "raster-aggregate", "kind": "aggregate",
+     "params": [{"name": "tile", "session": ["TILE"]}],
+     "min_args": 1, "returns": {"session": "BINARY"},
+     "accepts_virtual_tile": false,
+     "levels": {
+       "L1": {"companion": "com.databricks.labs.gbx.rasterx.expressions.agg.RST_MergeAgg", "needs_gdal": true,
+              "session_returns": "TILE"},
+       "L3": {"register": "udf", "variants": {"c0": "databricks.labs.gbx.pyrx.functions:_merge_agg_udf"},
+              "needs": ["rasterio"]}},
+     "oracle": "MVP_A"},
+    {"sql_name": "gbx_rst_bng_rasterize_agg", "family": "cell-rasterize-aggregate", "kind": "aggregate",
+     "params": [{"name": "cellid", "session": ["STRING"]}, {"name": "value", "session": ["DOUBLE"]},
+                {"name": "out_srid", "session": ["INT"]}, {"name": "pixel_size", "session": ["DOUBLE"]},
+                {"name": "xmin", "session": ["DOUBLE"]}, {"name": "ymin", "session": ["DOUBLE"]},
+                {"name": "xmax", "session": ["DOUBLE"]}, {"name": "ymax", "session": ["DOUBLE"]},
+                {"name": "width", "session": ["INT"]}, {"name": "height", "session": ["INT"]},
+                {"name": "mode", "session": ["STRING"]}, {"name": "kring_pad", "session": ["INT"]},
+                {"name": "out_crs", "session": ["STRING"], "default": "NULL"}],
+     "min_args": 12, "returns": {"session": "BINARY"},
+     "levels": {
+       "L1": {"companion": "com.databricks.labs.gbx.rasterx.expressions.agg.RST_BNG_RasterizeAgg",
+              "needs_gdal": true, "session_returns": "TILE"},
+       "L3": {"register": "udf", "variants": {"c0": "databricks.labs.gbx.pyrx.functions:_rst_bng_rasterize_agg_udf"},
+              "needs": ["rasterio"]}},
+     "oracle": "MVP_A"}
   ]
 }

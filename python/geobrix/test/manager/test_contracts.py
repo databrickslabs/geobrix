@@ -66,13 +66,17 @@ def test_oracle_rows_fit_signature(fn):
     rows = [c for c in getattr(oracles, fn.oracle) if c.fn == fn.sql_name]
     assert rows, "every manifest function needs oracle rows"
     assert len({c.cid for c in rows}) == len(rows), "oracle row ids must be unique"
+    # an aggregate's first argument is the group's rows: one row fills 1 parameter (a tile) or 2 (cellid, value)
+    extra = oracles.group_width(fn.params) - 1 if fn.kind == "aggregate" else 0
     for c in rows:
         arg_rows = (
             c.args
             if c.kind in ("exact_rows", "windows_batch")
             else (c.args, *c.variants)
         )
-        assert all(fn.min_args <= len(r) <= fn.max_args for r in arg_rows), c.cid
+        assert all(
+            fn.min_args <= len(r) + extra <= fn.max_args for r in arg_rows
+        ), c.cid
         assert c.kind != "exact_rows" or len(c.expect) == len(c.args), c.cid
         assert c.surfaces and set(c.surfaces) <= {"session", "uc"}, c.cid
         assert not c.variants or c.kind in ("exact", "null"), c.cid

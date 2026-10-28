@@ -8,8 +8,10 @@ import java.util.zip.ZipEntry
 
 import com.databricks.labs.gbx.kernels.{BuildInfo, KernelGdal, L1Installer}
 import com.databricks.labs.gbx.kernels.uc.BngUc
-import com.databricks.labs.gbx.kernels.udf.{BngEastNorthAsBngUdf, BngTessellateUdf, RetileKernel, RstRetileArrayBytesUdf, RstRetileCountBytesUdf, RstRetilePartBytesUdf, RstTransformCrsBytesUdf}
+import com.databricks.labs.gbx.kernels.udf.{BngEastNorthAsBngUdf, BngTessellateUdf, RetileKernel, RstMergeArrayBytesUdf, RstRetileArrayBytesUdf, RstRetileCountBytesUdf, RstRetilePartBytesUdf, RstTransformCrsBytesUdf}
+import com.databricks.labs.gbx.rasterx.expressions.agg.mvp.BngRasterizeCellsBytesUdf
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
+import org.apache.spark.sql.Row
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.test.SilentSparkSession
 import org.gdal.gdalconst.gdalconstConstants
@@ -20,10 +22,10 @@ import scala.jdk.CollectionConverters._
 /** One smoke per Catalyst-free facade: the JAR identity, the L1 installer, the Java UDFs and the UC Scala handlers. */
 class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
 
-    private def tinyGTiff(fill: Float = 1.0f): Array[Byte] = {
+    private def tinyGTiff(fill: Float = 1.0f, west: Double = -1.0): Array[Byte] = {
         KernelGdal.ensureInit()
         val ds = GDALManager.memDriver().Create("", 16, 16, 1, gdalconstConstants.GDT_Float32)
-        ds.SetGeoTransform(Array(-1.0, 0.125, 0.0, 51.0, 0.0, -0.125))
+        ds.SetGeoTransform(Array(west, 0.125, 0.0, 51.0, 0.0, -0.125))
         val sr = new SpatialReference()
         sr.ImportFromEPSG(4326)
         ds.SetProjection(sr.ExportToWkt())
@@ -103,6 +105,43 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         assert(vsimemEntries() == before, "the facade left in-memory GDAL files behind")
         val ds = RasterDriver.readFromBytes(out, Map("driver" -> "GTiff"))
         try assert(ds.GetProjection().contains("Pseudo-Mercator")) finally RasterDriver.releaseDataset(ds)
+    }
+
+    // The first band of a GTiff as rows of pixels, and its size.
+    private def decode(bytes: Array[Byte]): (Int, Int, Seq[Seq[Double]]) = {
+        val ds = RasterDriver.readFromBytes(bytes, Map("driver" -> "GTiff"))
+        try {
+            val (w, h) = (ds.getRasterXSize, ds.getRasterYSize)
+            val all = new Array[Double](w * h)
+            ds.GetRasterBand(1).ReadRaster(0, 0, w, h, all)
+            (w, h, all.toSeq.grouped(w).toSeq)
+        } finally RasterDriver.releaseDataset(ds)
+    }
+
+    test("RstMergeArrayBytesUdf mosaics rasters in any order, drops one that does not open, and releases its datasets") {
+        val (west, east) = (tinyGTiff(1.0f), tinyGTiff(2.0f, west = 1.0))
+        val f = new RstMergeArrayBytesUdf()
+        val before = vsimemEntries()
+        val out = f.call(Seq(east, west))
+        val (w, h, rows) = decode(out)
+        assert((w, h) == (32, 16) && rows.head.take(16).forall(_ == 1.0f) && rows.head.drop(16).forall(_ == 2.0f))
+        assert(java.util.Arrays.equals(out, f.call(Seq(west, east))), "the order of the input must not matter")
+        assert(decode(f.call(Seq(west, Array[Byte](1, 2, 3))))._1 == 16, "a member that does not open is dropped")
+        assert(f.call(Seq.empty) == null && f.call(null) == null && f.call(Seq(Array[Byte](1, 2, 3))) == null)
+        assert(vsimemEntries() == before, "the facade left in-memory GDAL files behind")
+    }
+
+    test("BngRasterizeCellsBytesUdf burns a canvas: the largest value of a repeated cell, 1.0 for a NULL value") {
+        val f = new BngRasterizeCellsBytesUdf()
+        val cells = Seq(Row("TQ3080", 1.0), Row("TQ3080", 3.0), Row("TQ3180", 2.0), Row("TQ3081", null))
+        def burn(c: Seq[Row]): Array[Byte] = f.call(c, 530000.0, 180000.0, 532000.0, 182000.0, 2, 2)
+        val before = vsimemEntries()
+        assert(decode(burn(cells))._3 == Seq(Seq(1.0, -9999.0), Seq(3.0, 2.0)))
+        assert(decode(burn(cells.reverse))._3 == decode(burn(cells))._3, "the order of the rows must not matter")
+        val nan = decode(burn(Row("TQ3181", Double.NaN) +: cells))._3
+        assert(nan.head(1).isNaN && nan(1) == Seq(3.0, 2.0), "a NaN value burns NaN")
+        assert(burn(Seq(Row(null, 1.0))) == null && burn(Seq.empty) == null, "no cell id, nothing to burn")
+        assert(vsimemEntries() == before, "the facade left in-memory GDAL files behind")
     }
 
     test("the BNG L2 and UC facades run on a slim classpath: no Catalyst, no unsafe, no Kryo") {

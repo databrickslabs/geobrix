@@ -336,7 +336,10 @@ class MergeByKeyTvf:
 
     def terminate(self):
         if self.rasters:
-            yield self.key, agg_core.merge_tiles(self.rasters)
+            try:
+                yield self.key, agg_core.merge_tiles(self.rasters)
+            except agg_core.MosaicTooLarge:
+                pass  # this group has no raster (bytes have no place for a reason); the other groups still merge
 
 
 @udtf(returnType="key string, raster binary")

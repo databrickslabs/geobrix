@@ -1028,7 +1028,12 @@ def _merge_bytes(tiles):
 def _merge_udf(tiles):
     if not tiles:
         return None
-    result = _merge_bytes(tiles)
+    try:
+        result = _merge_bytes(tiles)
+    except agg_core.MosaicTooLarge as exc:
+        return _serde.build_error_tile(
+            str(exc), 0
+        )  # this row's answer, not the query's failure
     if result is None:
         return _error_tile_of_group(
             _only_error_tiles(tiles)
@@ -1047,7 +1052,10 @@ def _merge_v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
     # Force-output variant (Python API only): same mosaic via shape_output.
     if not tiles:
         return None
-    result = _merge_bytes(tiles)
+    try:
+        result = _merge_bytes(tiles)
+    except agg_core.MosaicTooLarge as exc:
+        return _serde.build_error_tile(str(exc), 0)
     if result is None:
         return None
     new_bytes, dropped = result
@@ -1100,7 +1108,10 @@ def _uf_merge(tiles, file_refs):
 
     if not rasters:
         return None
-    new_bytes = agg_core.merge_tiles(rasters)
+    try:
+        new_bytes = agg_core.merge_tiles(rasters)
+    except agg_core.MosaicTooLarge as exc:
+        return _serde.build_error_tile(str(exc), 0)
     tile = _serde.build_tile(new_bytes, "GTiff", 0)
     if dropped:
         tile["metadata"][
@@ -8518,7 +8529,14 @@ def _merge_agg_bytes(tile: pd.Series, error_channel: bool):
         return _error_payload(_only_error_tiles(tile)) if error_channel else None
     # NOTE: drop-count has no metadata carrier at this layer (pandas_udf returns
     # bare bytes; no struct/metadata assembly here). The skip still stops raising.
-    return agg_core.merge_tiles(rasters)
+    try:
+        return agg_core.merge_tiles(rasters)
+    except agg_core.MosaicTooLarge as exc:
+        # This group's answer, not the query's failure: its error tile where the result is a tile, NULL where it
+        # is bytes (they have no place for a reason).
+        if not error_channel:
+            return None
+        return _error_payload([_serde.build_error_tile(str(exc), 0)])
 
 
 @pandas_udf(BinaryType())
@@ -8570,7 +8588,10 @@ def _merge_agg_v2_udf(
     if not rasters:
         return _error_payload(_only_error_tiles(tile))
 
-    merged_bytes = agg_core.merge_tiles(rasters)
+    try:
+        merged_bytes = agg_core.merge_tiles(rasters)
+    except agg_core.MosaicTooLarge as exc:
+        return _error_payload([_serde.build_error_tile(str(exc), 0)])
     vt = VirtualTile(cellid=0, raster=bytes(merged_bytes))
     shaped = ot.shape_output(vt, virtualize_dir=vdir, virtualize_prefix=vprefix)
     # Encode the path into the BinaryType return channel.
@@ -9409,7 +9430,9 @@ def rst_merge_agg(
         a NULL raster and its metadata, ``last_error`` included), also with
         ``virtualize_dir``; the SQL function, which returns BINARY, gives NULL.
         Tiles far apart make a mosaic that is nearly all NoData: past what a
-        merge can stream (10 GiB decoded) the query stops with a ``Fix:``.
+        merge can stream (10 GiB decoded) that group is an error tile whose
+        ``last_error`` says so with a ``Fix:`` (NULL from the SQL function);
+        the other groups still merge.
     """
     tc = _col(tile)
     if virtualize_dir is not None:

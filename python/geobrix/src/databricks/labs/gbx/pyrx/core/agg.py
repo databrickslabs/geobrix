@@ -402,6 +402,12 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
         shutil.rmtree(scratch, ignore_errors=True)
 
 
+class MosaicTooLarge(ValueError):
+    """The mosaic of a group is past what a merge can stream (see :func:`merge_tiles`). It is a ValueError for a
+    caller that lets it stop the query; one whose result is a tile turns it into that group's error tile, and one
+    whose result is bytes into a NULL, so the other groups still merge."""
+
+
 def merge_tiles(rasters: List[bytes]) -> bytes:
     """Merge the group's tile rasters into one spatial mosaic (GTiff bytes).
 
@@ -482,7 +488,7 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
                 union, "cog_write", cap_bytes=decoded_budget_bytes("serverless")
             )
             if how == "error":
-                raise ValueError(
+                raise MosaicTooLarge(
                     f"the mosaic of these {len(rasters)} tiles would be {union / 2**30:.0f} GiB decoded, over the "
                     f"{_COG_DRIVER_MAX_BYTES / 2**30:.0f} GiB a merge can stream: tiles far apart (or far apart "
                     f"once in one CRS) make an extent that is almost all NoData. Fix: merge the tiles of one "

@@ -1416,6 +1416,71 @@ def test_an_aggregate_of_nothing_but_error_tiles_is_the_first_error_tile(
     assert kept["raster"] is not None or kept["path"] is not None
 
 
+def _far_and_near(spark):
+    """A group `far` (two tiles 120 degrees apart: a mosaic of terabytes) beside a group `near` (two adjacent)."""
+    far = [
+        _ras_bytes(np.full((16, 16), v), ulx=x, uly=y, px=1e-4, epsg=4326)
+        for v, x, y in ((1.0, 0.0, 0.0), (2.0, 120.0, -60.0))
+    ]
+    near = [
+        _ras_bytes(np.full((16, 16), v), ulx=x, uly=16.0)
+        for v, x in ((3.0, 0.0), (4.0, 16.0))
+    ]
+    return _tiles_df(spark, [("far", b) for b in far] + [("near", b) for b in near])
+
+
+def _surfaces(spark, df, d):
+    """Each way to merge a group, as (is the result a tile?, the DataFrame of (k, t))."""
+    from databricks.labs.gbx.pyrx import _mvp_forms
+    from databricks.labs.gbx.pyrx.functions import _merge_agg_udf
+
+    df.createOrReplaceTempView("far_and_near")
+    _mvp_forms.register_probe_forms(spark)
+    by = df.groupBy("k")
+    return {
+        "api": (True, by.agg(prx.rst_merge_agg("tile").alias("t"))),
+        "api-virtualize": (
+            True,
+            by.agg(prx.rst_merge_agg("tile", virtualize_dir=str(d)).alias("t")),
+        ),
+        "finalize": (
+            True,
+            by.agg(f.collect_list("tile").alias("ts")).select(
+                "k", prx.rst_merge("ts").alias("t")
+            ),
+        ),
+        "sql-bytes": (False, by.agg(_merge_agg_udf(f.col("tile")).alias("t"))),
+        "tvf": (
+            False,
+            spark.sql(
+                "SELECT key AS k, raster AS t FROM gbx_mvp_rst_merge_tvf("
+                "TABLE(SELECT k AS key, tile FROM far_and_near) PARTITION BY key)"
+            ),
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "surface", ["api", "api-virtualize", "finalize", "sql-bytes", "tvf"]
+)
+def test_a_merge_too_big_to_build_is_that_groups_answer_not_the_querys_failure(
+    spark, tmp_path, surface
+):
+    """One group whose mosaic is past what a merge can stream does not fail the query: where the result is a tile
+    that group is an error tile (a NULL raster and the reason, `Fix:` included), where it is bytes it is NULL, and
+    the other group is merged."""
+    is_tile, out = _surfaces(spark, _far_and_near(spark), tmp_path)[surface]
+    rows = {r["k"]: r["t"] for r in out.collect()}
+    far, near = rows.get("far"), rows["near"]
+    if is_tile:
+        assert far is not None and far["raster"] is None and far["path"] is None
+        assert "GiB" in far["metadata"]["last_error"]
+        assert "Fix:" in far["metadata"]["last_error"]
+        assert near["raster"] is not None or near["path"] is not None
+    else:
+        assert far is None and near is not None
+
+
 # ---------------------------------------------------------------------------
 # Heavyweight-only non-aggregator constructors / array operations
 # (rst_merge, rst_combineavg, rst_frombands, rst_fromfile)

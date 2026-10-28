@@ -594,6 +594,38 @@ def test_the_general_harness_refuses_to_time_a_plan_that_is_not_lightweight(
             )
 
 
+@pytest.mark.parametrize(
+    "name",
+    ["rst_h3_rasterize_agg", "rst_quadbin_rasterize_agg", "rst_bng_rasterize_agg"],
+)
+def test_the_bench_rasterize_input_is_the_presence_mask(spark, name):
+    """The bench times the presence mask: its light col_fn passes the value OMITTED. The
+    streamed value column is typed and all null, which the light tier reads as data and burns
+    as NaN (only an omitted value burns 1.0), so passing that column would give the light tier
+    a NaN fingerprint against the heavyweight tier's 1.0."""
+    import numpy as np
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.pyrx import _serde
+
+    (fs,) = s.select(functions=[name])
+    build = (
+        rn._h3_aggregate_df
+        if fs.input_kind == "h3_aggregate"
+        else rn._grid_aggregate_df
+    )
+    df = build(spark, fs).withColumn("key", F.lit(0))
+    out = (
+        df.groupBy("key")
+        .agg(fs.col_fn(df["cellid"], df["value"], fs.args).alias("out"))
+        .collect()[0]["out"]
+    )
+    with _serde.open_tile(bytes(out["raster"])) as ds:
+        pixels = ds.read(1)
+        burned = pixels[pixels != ds.nodata]
+    assert burned.size and np.all(burned == 1.0), np.unique(burned)
+
+
 def test_run_aggregate_passes_minimal_warmup_fn(tmp_path, spark, monkeypatch):
     # The agg perf loop must hand time_iters a warmup_fn (the minimal one-key-per-partition
     # warm scaled), so the warm-up no longer re-aggregates the full n-key group. Spy on

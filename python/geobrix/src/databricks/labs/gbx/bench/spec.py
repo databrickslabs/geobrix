@@ -3268,8 +3268,11 @@ REGISTRY: Dict[str, FnSpec] = {
     # set onto the SAME canvas, so the consistency fingerprint is cross-tier
     # comparable (the masks match exactly -- see test_h3_rasterize_parity.py). The
     # cell recipe + grid constants are mirrored EXACTLY in BenchDispatch.scala.
-    # value=None -> presence mask (burns 1.0); mode "centroids"; kring_pad 1 (the
-    # grid was snapped with kring_pad=1, so the explicit extent already covers it).
+    # value OMITTED (value=None below, an untyped NULL) -> presence mask (burns 1.0);
+    # mode "centroids"; kring_pad 1 (the grid was snapped with kring_pad=1, so the
+    # explicit extent already covers it). The streamed `value` column is NOT passed:
+    # a typed all-null DOUBLE column is data to the light tier (it burns NaN), only
+    # an omitted value is the mask.
     "rst_h3_rasterize_agg": FnSpec(
         "rst_h3_rasterize_agg",
         "gbx_rst_h3_rasterize_agg",
@@ -3282,11 +3285,12 @@ REGISTRY: Dict[str, FnSpec] = {
             "kring_pad": _H3RAGG_KRING_PAD,
         },
         # col_fn takes (cellid_col, value_col, args); the harness streams the
-        # (cellid, value) rows and the explicit grid rides in args. value=None ->
-        # presence mask (1.0). Grid passed explicitly (NOT auto-derived per tier).
+        # (cellid, value) rows and the explicit grid rides in args. The value is
+        # passed OMITTED (not `v`, a typed all-null column) -> presence mask (1.0).
+        # Grid passed explicitly (NOT auto-derived per tier).
         col_fn=lambda cid, v, a: prx.rst_h3_rasterize_agg(
             cid,
-            value=v,
+            value=None,
             out_srid=F.lit(a["grid"][6]),
             pixel_size=F.lit(a["pixel_size"]),
             xmin=F.lit(a["grid"][0]),
@@ -3317,9 +3321,10 @@ REGISTRY: Dict[str, FnSpec] = {
     # streams (cellid LONG, value DOUBLE) rows from the fixed deterministic cell
     # set (quadbin_rasterize_cells) and uses the 2-arg overload that AUTO-DERIVES
     # the 4326 grid from that cell set -- deterministic given the fixed set, so the
-    # burn is reproducible and cross-tier comparable. value=None -> presence mask
-    # (1.0). Rides input_kind == "grid_aggregate" (the harness streams the LONG
-    # cell rows). Cell recipe mirrored EXACTLY in BenchDispatch.scala.
+    # burn is reproducible and cross-tier comparable. value OMITTED -> presence mask
+    # (1.0), not the streamed all-null column. Rides input_kind == "grid_aggregate"
+    # (the harness streams the LONG cell rows). Cell recipe mirrored EXACTLY in
+    # BenchDispatch.scala.
     "rst_quadbin_rasterize_agg": FnSpec(
         "rst_quadbin_rasterize_agg",
         "gbx_rst_quadbin_rasterize_agg",
@@ -3327,8 +3332,9 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {},
         # col_fn takes (cellid_col, value_col, args); 2-arg overload auto-derives
-        # the grid from the streamed cell set (NOT an explicit grid like H3).
-        col_fn=lambda cid, v, a: prx.rst_quadbin_rasterize_agg(cid, value=v),
+        # the grid from the streamed cell set (NOT an explicit grid like H3). The
+        # value is omitted (the presence mask), not the streamed all-null column.
+        col_fn=lambda cid, v, a: prx.rst_quadbin_rasterize_agg(cid, value=None),
         core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         input_kind="grid_aggregate",
         sources=_CELLRASTER_LIGHT
@@ -3344,7 +3350,7 @@ REGISTRY: Dict[str, FnSpec] = {
     # DOUBLE) rows from the fixed deterministic BNG cell set (bng_rasterize_cells);
     # cellid is an OS grid reference STRING (not a Long). The 2-arg overload
     # auto-derives the 27700-native grid from the cell set (srid forced to 27700).
-    # value=None -> presence mask (1.0). Rides input_kind == "grid_aggregate" (the
+    # value OMITTED -> presence mask (1.0). Rides input_kind == "grid_aggregate" (the
     # harness streams STRING cell rows for BNG). The consistency fingerprint is a
     # raster (the burned tile), so no dggs_grid_str is needed here -- only the
     # rastertogrid/tessellate fns emit string cell-id fingerprints. Cell recipe
@@ -3355,7 +3361,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "dggs",
         ("spark-path",),
         {},
-        col_fn=lambda cid, v, a: prx.rst_bng_rasterize_agg(cid, value=v),
+        col_fn=lambda cid, v, a: prx.rst_bng_rasterize_agg(cid, value=None),
         core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         input_kind="grid_aggregate",
         sources=_CELLRASTER_LIGHT

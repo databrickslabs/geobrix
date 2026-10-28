@@ -778,15 +778,17 @@ def _h3_aggregate_df(spark, fs):
     The fixed CONSISTENCY group is the deterministic H3 cell set from
     ``spec.h3_rasterize_cells()`` (the res-9 NYC cell grid-disk'd to k=10 -- the
     SAME recipe the Scala BenchDispatch h3Aggregate branch generates, so both
-    tiers burn an identical cell set). ``value`` is NULL on every row -> the
-    presence-mask burn (1.0). The explicit grid rides in ``fs.args`` (passed to
+    tiers burn an identical cell set). ``value`` is NULL on every row; the heavy tier
+    burns the presence mask (1.0) from it, and the light col_fn does not pass this
+    column at all (it passes an omitted value): a typed all-null column is data to
+    the light tier and burns NaN. The explicit grid rides in ``fs.args`` (passed to
     both tiers identically), not in this DataFrame. Returns a df with columns
     (cellid LONG, value DOUBLE).
     """
     from pyspark.sql.types import DoubleType, LongType, StructField, StructType
 
     cells = _spec.h3_rasterize_cells()
-    # value=None on every row -> presence mask (heavy + light both burn 1.0).
+    # value=None on every row -> presence mask for heavy (light omits the value).
     rows = [(int(c), None) for c in cells]
     schema = StructType(
         [
@@ -805,7 +807,8 @@ def _grid_aggregate_df(spark, fs):
     RASTERIZE aggs (rst_{quadbin,bng}_rasterize_agg): stream (cellid, value) rows
     from a fixed deterministic cell set and use the 2-arg auto-derive overload (the
     grid is derived from the cell set). ``value`` is NULL on every row ->
-    presence-mask burn (1.0).
+    presence-mask burn (1.0) for heavy; the light col_fn omits the value instead
+    (a typed all-null column burns NaN there).
 
     CELLFILL aggs ({h3,quadbin,bng,custom}_cellfill): stream the fixed cellfill
     corpus, which REUSES the rasterize cell set but NULLs a deterministic subset of

@@ -4,7 +4,9 @@ A write never modifies a file. Each task appends the chunks it encodes to a pack
 pack per array, staged on local disk and then copied to the store with one sequential
 ``shutil.copyfile`` (a Unity Catalog Volume is a FUSE mount: no seeks, no appends):
 ``<root>/data/<array>/<write_id>/part-<uuid>.zpack``. A manifest row then points at each
-chunk as ``(file, offset, length)``, ``file`` relative to the root.
+chunk as ``(file, offset, length)``, ``file`` relative to the root. With direct access the
+pack is put to the Volume's cloud storage with one ``obstore.put`` instead (the object
+appears whole or not at all), at the same path.
 
 ``encode_inner_chunk`` encodes one inner chunk exactly as zarr would store it, through a
 ``zarr`` array over a ``MemoryStore`` with the array's own codecs, so the bytes are a
@@ -24,6 +26,7 @@ from collections import OrderedDict
 import numpy as np
 
 from databricks.labs.gbx.core._retry import _retry_transient
+from databricks.labs.gbx.zarr._access import put_pack, stat_for
 from databricks.labs.gbx.zarr._meta import ArrayMeta, inner_meta_doc
 from databricks.labs.gbx.zarr.errors import ZarrError
 
@@ -33,6 +36,7 @@ __all__ = [
     "crc32c_hex",
     "is_fill",
     "pad_to_chunk",
+    "require_packs",
 ]
 
 _ENCODERS: OrderedDict[str, tuple] = (
@@ -136,19 +140,49 @@ def is_fill(chunk: np.ndarray, fill) -> bool:
     return bool((chunk == fill).all())
 
 
+def require_packs(root: str, files, *, what: str, access=None) -> None:
+    """Raise ``ZarrError`` unless every pack file in ``files`` (paths relative to ``root``)
+    still exists. With direct ``access`` (an ``AccessConfig``) the objects are looked up in
+    the cloud storage, where a pack just put is visible at once; the mount may lag.
+
+    A commit calls this just before it points rows at the packs its files phase wrote: a
+    vacuum forced to delete files younger than the store's retain (``force=True``) can have
+    removed them meanwhile, and a row that points at a missing file is a version that
+    cannot be read. ``what`` names the operation in the message.
+    """
+    gone = []
+    stat = stat_for(access)
+    for f in sorted(set(files)):
+        path = f if os.path.isabs(f) else os.path.join(root, f)
+        try:
+            _retry_transient(lambda p=path: stat(p), attempts=3, backoff=0.2)
+        except FileNotFoundError:
+            gone.append(f)
+    if gone:
+        raise ZarrError(
+            f"{len(gone)} pack file(s) of this {what} are gone before it could commit "
+            f"(e.g. {gone[0]}): a vacuum with force=True removed the files of a write "
+            "that was still running",
+            fix=f"run the {what} again; vacuum without force=True (the store's own "
+            "retain) while writes are running",
+        )
+
+
 class PackWriter:
     """Appends encoded chunks to one new pack file of a write.
 
     ``dest_dir`` is ``<root>/data/<array>/<write_id>`` and ``reader_root`` the store root
     that manifest ``file`` values are relative to. ``add`` returns where the bytes landed
-    in the pack; ``close`` copies the pack to ``dest_dir`` and returns its path relative
-    to ``reader_root`` (``None`` when nothing was added: no file is made). The pack is
-    staged on local disk until then, so a task holds only the chunk it is encoding.
+    in the pack; ``close`` copies the pack to ``dest_dir`` (or, with a direct ``access``,
+    puts it there in the cloud storage) and returns its path relative to ``reader_root``
+    (``None`` when nothing was added: no file is made). The pack is staged on local disk
+    until then, so a task holds only the chunk it is encoding.
     """
 
-    def __init__(self, dest_dir: str, *, reader_root: str):
+    def __init__(self, dest_dir: str, *, reader_root: str, access=None):
         self.dest_dir = dest_dir
         self.reader_root = reader_root
+        self._access = access
         self.name = f"part-{uuid.uuid4().hex}.zpack"
         self.size = 0
         self._local: str | None = None
@@ -185,8 +219,14 @@ class PackWriter:
         self._file.close()
         dest = os.path.join(self.dest_dir, self.name)
         try:
-            _retry_transient(lambda: os.makedirs(self.dest_dir, exist_ok=True))
-            _retry_transient(lambda: shutil.copyfile(self._local, dest))
+            put = self._access is not None and self._access.is_direct
+            # False: the storage refused the credentials and the call is "auto": the mount
+            if not (
+                put
+                and _retry_transient(lambda: put_pack(self._access, self._local, dest))
+            ):
+                _retry_transient(lambda: os.makedirs(self.dest_dir, exist_ok=True))
+                _retry_transient(lambda: shutil.copyfile(self._local, dest))
         except OSError as e:
             raise ZarrError(
                 f"could not write the pack file {dest} ({e})",

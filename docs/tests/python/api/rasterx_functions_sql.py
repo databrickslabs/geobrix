@@ -3741,6 +3741,7 @@ def rst_custom_rastertogridavg_sql_example():
     """Aggregate raster values to custom-grid cells using average (custom grid)"""
     return f"""
 -- heavyweight tier
+-- gbx_rst_fromfile only reads the file (a Python function in both tiers).
 -- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
 -- posexplode the bands and inline the cells for one row per band x cell.
 SELECT b.pos + 1 AS band, c.cellID, c.measure
@@ -3784,6 +3785,7 @@ def rst_custom_rastertogridcount_sql_example():
     """Count raster pixels per custom-grid cell (measure is DOUBLE)"""
     return f"""
 -- heavyweight tier
+-- gbx_rst_fromfile only reads the file (a Python function in both tiers).
 -- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
 -- posexplode the bands and inline the cells for one row per band x cell.
 SELECT b.pos + 1 AS band, c.cellID, c.measure
@@ -3818,6 +3820,7 @@ def rst_custom_rastertogridmax_sql_example():
     """Get maximum raster value per custom-grid cell"""
     return f"""
 -- heavyweight tier
+-- gbx_rst_fromfile only reads the file (a Python function in both tiers).
 -- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
 -- posexplode the bands and inline the cells for one row per band x cell.
 SELECT b.pos + 1 AS band, c.cellID, c.measure
@@ -3852,6 +3855,7 @@ def rst_custom_rastertogridmin_sql_example():
     """Get minimum raster value per custom-grid cell"""
     return f"""
 -- heavyweight tier
+-- gbx_rst_fromfile only reads the file (a Python function in both tiers).
 -- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
 -- posexplode the bands and inline the cells for one row per band x cell.
 SELECT b.pos + 1 AS band, c.cellID, c.measure
@@ -3886,6 +3890,7 @@ def rst_custom_rastertogridmedian_sql_example():
     """Get median raster value per custom-grid cell"""
     return f"""
 -- heavyweight tier
+-- gbx_rst_fromfile only reads the file (a Python function in both tiers).
 -- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
 -- posexplode the bands and inline the cells for one row per band x cell.
 SELECT b.pos + 1 AS band, c.cellID, c.measure
@@ -3920,6 +3925,7 @@ def rst_custom_rastertogridsum_sql_example():
     """Sum raster values per custom-grid cell"""
     return f"""
 -- heavyweight tier
+-- gbx_rst_fromfile only reads the file (a Python function in both tiers).
 -- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
 -- posexplode the bands and inline the cells for one row per band x cell.
 SELECT b.pos + 1 AS band, c.cellID, c.measure
@@ -3954,6 +3960,7 @@ def rst_custom_rastertogridvariance_sql_example():
     """Population variance of raster values per custom-grid cell"""
     return f"""
 -- heavyweight tier
+-- gbx_rst_fromfile only reads the file (a Python function in both tiers).
 -- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
 -- posexplode the bands and inline the cells for one row per band x cell.
 SELECT b.pos + 1 AS band, c.cellID, c.measure
@@ -3988,6 +3995,7 @@ def rst_custom_rastertogridstddev_sql_example():
     """Population standard deviation of raster values per custom-grid cell"""
     return f"""
 -- heavyweight tier
+-- gbx_rst_fromfile only reads the file (a Python function in both tiers).
 -- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
 -- posexplode the bands and inline the cells for one row per band x cell.
 SELECT b.pos + 1 AS band, c.cellID, c.measure
@@ -4022,6 +4030,7 @@ def rst_custom_tessellate_sql_example():
     """Tessellate a raster into custom-grid chips (one chip per overlapping cell)"""
     return f"""
 -- heavyweight tier
+-- gbx_rst_fromfile only reads the file (a Python function in both tiers).
 -- The generator in the select list yields one chip per cell (centroid assignment,
 -- complete coverage by default).
 SELECT gbx_rst_custom_tessellate(

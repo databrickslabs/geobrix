@@ -16,8 +16,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Union
 
-from pmtiles.reader import MemorySource, all_tiles  # noqa: F401
-
 if TYPE_CHECKING:
     import matplotlib.figure
 

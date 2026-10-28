@@ -23,6 +23,7 @@ import os
 import sys
 from pathlib import Path
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
+from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 
 # The Volume dir holding the coral .nc (bare /Volumes path -> remote -> executor readRemote).
 NC_VOLUME_DIR = os.environ.get(
@@ -92,6 +93,7 @@ print("PASS: netcdf_gdal executor-side enumeration + tiling validated on cluster
 
 
 def main() -> int:
+    exit_if_help(__doc__)
     from databricks.sdk import WorkspaceClient
     from databricks.sdk.service import jobs
     from databricks.sdk.service.workspace import ImportFormat

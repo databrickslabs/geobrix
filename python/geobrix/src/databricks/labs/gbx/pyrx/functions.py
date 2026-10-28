@@ -5330,19 +5330,27 @@ class _RstSeparateBandsUDTF:
             return
 
 
-def _cut_tile(raster_bytes, cellid, window, whole_input_of=None):
+def _cut_tile(raster_bytes, cellid, window, whole_input_of=None, band=None):
     """One output tile of a retile-family function.
 
     It records its pixel ``window`` within the INPUT tile, so a writer can tell
-    siblings apart. The one output that covers its whole input (``whole_input_of``
-    is that input tile) is the input itself and keeps the input's provenance
-    instead; see :func:`_serde.inherit_provenance`.
+    siblings apart, and the input's ``band`` marker (see :func:`_serde.band_marker`)
+    when it is a band of its parent, so the pieces of two bands stay apart. The one
+    output that covers its whole input (``whole_input_of`` is that input tile) is
+    the input itself and keeps the input's provenance instead; see
+    :func:`_serde.inherit_provenance`.
     """
     if whole_input_of is not None:
         return _serde.inherit_provenance(
             _serde.build_tile(raster_bytes, "GTiff", cellid), whole_input_of
         )
-    return _serde.build_tile(raster_bytes, "GTiff", cellid, window=window)
+    return _serde.build_tile(
+        raster_bytes,
+        "GTiff",
+        cellid,
+        window=window,
+        extra_metadata=None if band is None else {BAND_METADATA_KEY: band},
+    )
 
 
 @udtf(returnType=V2_TILE_SCHEMA)
@@ -5362,11 +5370,12 @@ class _RstRetileUDTF:
                 cellid = _tile_cellid(
                     tile
                 )  # parent cellid (null -> 0), as heavy stamps
+                band = _serde.band_marker(tile)  # a band of its parent, or None
                 whole = tiling.covers_whole_input(ds, tile_width, tile_height)
                 for win, b in tiling.iter_retile_located(
                     ds, int(tile_width), int(tile_height)
                 ):
-                    yield _cut_tile(b, cellid, win, tile if whole else None)
+                    yield _cut_tile(b, cellid, win, tile if whole else None, band)
         except Exception as e:  # noqa: BLE001
             yield _serde.build_error_tile(f"RST_ReTile: {e}")
             return
@@ -5391,13 +5400,14 @@ class _RstToOverlappingTilesUDTF:
                 cellid = _tile_cellid(
                     tile
                 )  # parent cellid (null -> 0), as heavy stamps
+                band = _serde.band_marker(tile)  # a band of its parent, or None
                 whole = tiling.covers_whole_input(
                     ds, tile_width, tile_height, int(overlap)
                 )
                 for win, b in tiling.iter_to_overlapping_tiles_located(
                     ds, int(tile_width), int(tile_height), int(overlap)
                 ):
-                    yield _cut_tile(b, cellid, win, tile if whole else None)
+                    yield _cut_tile(b, cellid, win, tile if whole else None, band)
         except Exception as e:  # noqa: BLE001
             yield _serde.build_error_tile(f"RST_ToOverlappingTiles: {e}")
             return
@@ -5432,12 +5442,13 @@ class _RstMakeTilesUDTF:
                 cellid = _tile_cellid(
                     tile
                 )  # parent cellid (null -> 0), as heavy stamps
+                band = _serde.band_marker(tile)  # a band of its parent, or None
                 tile_x, tile_y = tiling.make_tiles_size(
                     ds, float(size_in_mb), size_bytes=size_bytes
                 )
                 whole = tiling.covers_whole_input(ds, tile_x, tile_y)
                 for win, b in tiling.iter_retile_located(ds, tile_x, tile_y):
-                    yield _cut_tile(b, cellid, win, tile if whole else None)
+                    yield _cut_tile(b, cellid, win, tile if whole else None, band)
         except Exception as e:  # noqa: BLE001
             yield _serde.build_error_tile(f"RST_MakeTiles: {e}")
             return
@@ -8828,21 +8839,41 @@ def _dtmfromgeoms_agg_udf(
     )
 
 
-def _max_value_per_cell(cells, vals):
-    """``{cell: value}`` keeping the LARGEST value of every cell id that repeats.
+_NO_VALUE = object()
 
-    The duplicate-cell rule of the four cell rasterizers
-    (``rst_{h3,quadbin,bng,custom}_rasterize_agg``), the same as the heavyweight tier,
-    which sorts the group by ``(cellid, value)`` and lets the last write win. Arrival
-    order inside a Spark group is not fixed, so "the last row wins" would change the
-    raster from run to run; the largest value does not depend on order. ``vals`` are
-    plain floats: a null value was already turned into the presence mask (1.0).
+
+def _max_value_per_cell(cells, vals, key=None, typed=True):
+    """``{cell: value}`` for the four cell rasterizers, one value per distinct cell.
+
+    The duplicate-cell rule of ``rst_{h3,quadbin,bng,custom}_rasterize_agg``: a cell id
+    that repeats keeps its LARGEST value, the same as the heavyweight tier, which sorts
+    the group by ``(cellid, value)`` and lets the last write win. Arrival order inside a
+    Spark group is not fixed, so "the last row wins" would change the raster from run to
+    run; the largest value does not depend on order.
+
+    A null value never wins. A typed Double column delivers a null as ``NaN`` and a real
+    ``NaN`` looks the same, so both are read as null: they are ignored whenever the cell
+    has a number, and a cell whose every value is null burns ``NaN``. ``typed`` is False
+    when the value was omitted (the UDF then receives an object column of ``None``, not a
+    float column): that is the presence mask, every cell burns ``1.0``. A typed column
+    of nulls is data and follows the rule above.
+
+    ``key`` maps a raw cell id to the id it is stored under (``adapter.to_key``), so two
+    spellings of one cell (``TQ3080`` and ``TQ 3080``, or a quadbin id as signed and
+    unsigned) are one cell here too. The result is keyed by the raw id first seen.
     """
-    best = {}
+    best = {}  # stored id -> [raw id, value or None]
     for cell, val in zip(cells, vals):
-        if cell not in best or val > best[cell]:
-            best[cell] = val
-    return best
+        k = cell if key is None else key(cell)
+        v = None if val is None or val != val else float(val)
+        cur = best.get(k, _NO_VALUE)
+        if cur is _NO_VALUE:
+            best[k] = [cell, v]
+        elif v is not None and (cur[1] is None or v > cur[1]):
+            cur[1] = v
+    if not typed and all(v is None for _, v in best.values()):
+        return {raw: 1.0 for raw, _ in best.values()}
+    return {raw: float("nan") if v is None else v for raw, v in best.values()}
 
 
 def _rasterize_agg_body(
@@ -8963,10 +8994,12 @@ def _rst_h3_rasterize_agg_udf(
             "rst_h3_rasterize_agg() wrapper which applies this cast automatically."
         )
     cells = [int(c) for c, _ in pairs]
-    # Null value -> presence mask (1.0). A null in a typed (Double) value column
-    # arrives as np.nan, not None, so guard with pd.isna (np.nan is not None).
-    vals = [1.0 if v is None or pd.isna(v) else float(v) for _, v in pairs]
-    cell_values = _max_value_per_cell(cells, vals)
+    # A null value arrives as None or np.nan (a typed Double column); the helper reads
+    # both as null, and resolves a repeated cell by the id the grid stores it under.
+    vals = [None if pd.isna(v) else v for _, v in pairs]
+    cell_values = _max_value_per_cell(
+        cells, vals, cr._adapter("h3").to_key, typed=value.dtype != object
+    )
     # Output CRS spec: out_crs (string) wins over the int srid; else grid-native
     # 4326. cellraster accepts an int SRID or a CRS string interchangeably.
     if out_crs is not None and out_crs.iloc[0] is not None:
@@ -9038,10 +9071,12 @@ def _rst_quadbin_rasterize_agg_udf(
             "rst_quadbin_rasterize_agg() wrapper which applies this cast automatically."
         )
     cells = [int(c) for c, _ in pairs]
-    # Null value -> presence mask (1.0). A null in a typed (Double) value column
-    # arrives as np.nan, not None, so guard with pd.isna (np.nan is not None).
-    vals = [1.0 if v is None or pd.isna(v) else float(v) for _, v in pairs]
-    cell_values = _max_value_per_cell(cells, vals)
+    # A null value arrives as None or np.nan (a typed Double column); the helper reads
+    # both as null, and resolves a repeated cell by the id the grid stores it under.
+    vals = [None if pd.isna(v) else v for _, v in pairs]
+    cell_values = _max_value_per_cell(
+        cells, vals, cr._adapter("quadbin").to_key, typed=value.dtype != object
+    )
     # Output CRS spec: out_crs (string) wins over the int srid; else grid-native
     # 4326. cellraster accepts an int SRID or a CRS string interchangeably.
     if out_crs is not None and out_crs.iloc[0] is not None:
@@ -9098,10 +9133,12 @@ def _rst_bng_rasterize_agg_udf(
     if not pairs:
         return None
     cells = [str(c) for c, _ in pairs]
-    # Null value -> presence mask (1.0). A null in a typed (Double) value column
-    # arrives as np.nan, not None, so guard with pd.isna (np.nan is not None).
-    vals = [1.0 if v is None or pd.isna(v) else float(v) for _, v in pairs]
-    cell_values = _max_value_per_cell(cells, vals)
+    # A null value arrives as None or np.nan (a typed Double column); the helper reads
+    # both as null, and resolves a repeated cell by the id the grid stores it under.
+    vals = [None if pd.isna(v) else v for _, v in pairs]
+    cell_values = _max_value_per_cell(
+        cells, vals, cr._adapter("bng").to_key, typed=value.dtype != object
+    )
     # BNG is EPSG:27700-native; the srid arg is a no-op (forced 27700). The sample
     # points and output raster are both 27700 -- NO WGS84 hop.
     return _rasterize_agg_body(
@@ -9181,10 +9218,10 @@ def _rst_custom_rasterize_agg_udf(
             "rst_custom_rasterize_agg() wrapper which applies this cast automatically."
         )
     cells = [int(c) for c, _ in pairs]
-    # Null value -> presence mask (1.0). A null in a typed (Double) value column
-    # arrives as np.nan, not None, so guard with pd.isna (np.nan is not None).
-    vals = [1.0 if v is None or pd.isna(v) else float(v) for _, v in pairs]
-    cell_values = _max_value_per_cell(cells, vals)
+    # A null value arrives as None or np.nan (a typed Double column); the helper reads
+    # both as null. Custom ids are stored as the int they arrive as, so no key is needed.
+    vals = [None if pd.isna(v) else v for _, v in pairs]
+    cell_values = _max_value_per_cell(cells, vals, typed=value.dtype != object)
 
     # Extract the grid conf from the first row (per-group constant).
     conf = conf_from_row(grid.iloc[0])

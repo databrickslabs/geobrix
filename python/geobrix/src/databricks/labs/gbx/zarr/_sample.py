@@ -32,6 +32,7 @@ The work runs where it is cheapest:
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -40,6 +41,7 @@ from dataclasses import dataclass
 import numpy as np
 import pyarrow as pa
 
+from databricks.labs.gbx.zarr._access import bounded_closure
 from databricks.labs.gbx.zarr._meta import _check_mask_flag
 from databricks.labs.gbx.zarr._plan import Unit, boxes_of, keys_of_boxes, rows_for_boxes
 from databricks.labs.gbx.zarr._read import (
@@ -64,6 +66,8 @@ from databricks.labs.gbx.zarr._read import (
     check_access,
     check_version_args,
     classify_source,
+    plain_direct_error,
+    source_access,
 )
 from databricks.labs.gbx.zarr._select import AxisSel, _axis_of, touched_chunks
 from databricks.labs.gbx.zarr._tiles import _grid_crs, _is_geographic, _spatial_dims
@@ -601,10 +605,16 @@ def _through_spark(df, cfg, units, schema):
     together: hashed over at most ``_MAX_PARTITIONS`` partitions and sorted within each.
     """
     parts = max(1, min(len(units), _MAX_PARTITIONS))
+    task, _ = bounded_closure(
+        df.sparkSession,
+        cfg.read.access,
+        lambda a: _sample_task(
+            dataclasses.replace(cfg, read=dataclasses.replace(cfg.read, access=a)),
+            units,
+        ),
+    )
     return (
-        df.repartition(parts, _UID)
-        .sortWithinPartitions(_UID)
-        .mapInArrow(_sample_task(cfg, units), schema)
+        df.repartition(parts, _UID).sortWithinPartitions(_UID).mapInArrow(task, schema)
     )
 
 
@@ -644,7 +654,17 @@ def gbx_zarr_sample(
     ``gbx_zarr_read``) all give ``NULL``. A point that is not a POINT raises ``ValueError``.
 
     ``method`` is ``"nearest"``; ``"bilinear"`` is planned and raises ``ZarrUnsupported``.
-    ``access`` is ``"auto"`` or ``"fuse"``.
+    ``access`` is ``"auto"``, ``"fuse"`` or ``"direct"``, as in ``gbx_zarr_read`` (direct
+    storage access with Unity Catalog credentials where they can be had). A plain-path store
+    is read through its path (FUSE only), so ``"direct"`` raises for it: register the store
+    to use direct access.
+
+    Direct access sends short-lived (at most one hour), Volume-scoped credentials to the
+    executors. Under memory pressure Spark may write task data, those credentials included,
+    to the local disk of the executors and of the driver: turn on local-disk encryption on
+    clusters that use direct access. ``access="auto"`` is direct access on dedicated
+    compute, where Unity Catalog can issue the credentials, so this applies to the default
+    too; ``access="fuse"`` sends no credentials.
 
     Up to 100,000 points are collected to the driver; if they lie in at most four chunks of
     the grid and the answer is small the driver reads them and returns the result, with no
@@ -658,6 +678,8 @@ def gbx_zarr_sample(
             fix='use method="nearest"; bilinear is planned',
         )
     check_access(access)
+    if access == "direct" and classify_source(source) == "path":
+        raise plain_direct_error(source)  # a plain store has no files to reach directly
     check_version_args(version_as_of, timestamp_as_of)
     _check_mask_flag(use_zarr_fill_value_as_mask)
     if geom_col not in points_df.columns:
@@ -681,6 +703,10 @@ def gbx_zarr_sample(
     src = _open_source(spark, source, kind, version_as_of, timestamp_as_of)
     names = _choose_variables(variables, src)
     cfg = _plan_sample(src, names, sel, crs, use_zarr_fill_value_as_mask)
+    cfg = dataclasses.replace(
+        cfg,
+        read=dataclasses.replace(cfg.read, access=source_access(spark, src, access)),
+    )
     clash = sorted({n for n, _ in cfg.columns} & {*points_df.columns, *_INTERNAL})
     if clash:
         raise ValueError(

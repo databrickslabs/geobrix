@@ -67,13 +67,19 @@ def _pointascell_udf(lon: pd.Series, lat: pd.Series, res: pd.Series) -> pd.Serie
     lons = lon.to_numpy(dtype=np.float64)
     lats = lat.to_numpy(dtype=np.float64)
     ress = res.to_numpy()
-    out = np.empty(len(lons), dtype=np.int64)
+    # a NULL arrives as NaN (or None) in a batch: a NULL resolution, longitude or latitude
+    # gives a NULL cell (a NaN coordinate used to come out as a made-up cell)
+    null = pd.isna(ress) | np.isnan(lons) | np.isnan(lats)
+    out = np.zeros(len(lons), dtype=np.int64)
     # point_as_cell_vec needs a fixed z per call; group rows by their resolution
     # (typically a single literal => one pass). Bit-identical to the scalar path.
-    for z in np.unique(ress):
-        mask = ress == z
-        out[mask] = _quadbin.point_as_cell_vec(lons[mask], lats[mask], int(z))
-    return pd.Series(out)
+    for z in np.unique(ress[~null]):
+        mask = ~null & (ress == z)
+        z = _whole_res("gbx_quadbin_pointascell", _res_or_null(z))  # 3.0, '3' -> 3
+        out[mask] = _quadbin.point_as_cell_vec(lons[mask], lats[mask], z)
+    cells = pd.Series(out, dtype="Int64")
+    cells[null] = pd.NA
+    return cells
 
 
 @pandas_udf(IntegerType())
@@ -256,6 +262,7 @@ def _bng_pointascell_udf(geom: pd.Series, res: pd.Series) -> pd.Series:
     # the EPSG:27700 easting/northing (heavy BNG_PointAsCell semantics).
     out = []
     for g, r in zip(geom, res):
+        r = _res_or_null(r)  # a NULL resolution arrives as NaN in a batch
         if g is None or r is None:
             out.append(None)
             continue
@@ -269,7 +276,7 @@ def _bng_pointascell_udf(geom: pd.Series, res: pd.Series) -> pd.Series:
         if not (math.isfinite(c.x) and math.isfinite(c.y)):
             out.append(None)
             continue
-        out.append(_bng.point_as_cell(c.x, c.y, _norm_res(r)))
+        out.append(_bng.point_as_cell(c.x, c.y, r))
     return pd.Series(out)
 
 
@@ -279,15 +286,16 @@ def _bng_eastnorthasbng_udf(e: pd.Series, n: pd.Series, res: pd.Series) -> pd.Se
     out = []
     for ee, nn, r in zip(e, n, res):
         # A NULL DOUBLE (or INT) arrives in pandas as NaN: NULL in, NULL out.
-        if pd.isna(ee) or pd.isna(nn) or pd.isna(r):
+        r = _res_or_null(r)
+        if pd.isna(ee) or pd.isna(nn) or r is None:
             out.append(None)
             continue
         ee, nn = float(ee), float(nn)
-        # AP-21: an infinity is NULL like NaN, before the resolution is read
+        # AP-21: an infinity is NULL like NaN, before the resolution is checked
         if not (math.isfinite(ee) and math.isfinite(nn)):
             out.append(None)
             continue
-        out.append(_bng.point_as_cell(ee, nn, _norm_res(r)))
+        out.append(_bng.point_as_cell(ee, nn, r))
     return pd.Series(out)
 
 
@@ -688,6 +696,39 @@ def _norm_res(res):
     return res
 
 
+def _res_or_null(res):
+    """The resolution of ONE ROW of a pandas batch, NULL-safe: ``None`` for a NULL, else
+    :func:`_norm_res`.
+
+    A NULL in an INT (or DOUBLE) column makes pandas hand the whole batch over as floats with
+    ``NaN`` for the NULL, so a resolution arrives as ``3.0``, and a NULL as ``nan`` that no
+    ``is None`` test sees (``gbx_bng_pointascell`` failed with "found nan" and took the valid rows
+    of the batch with it). Every light BNG pandas UDF that takes a resolution reads it through
+    this helper; the row-wise UDFs and UDTFs receive Python ints and ``None``.
+    """
+    return None if pd.isna(res) else _norm_res(res)
+
+
+def _whole_res(fn, res) -> int:
+    """A non-NULL resolution as the int an integer-resolution grid (quadbin, custom) takes.
+
+    A whole number is that int, whether it arrives as an int, a float (``3.0``: a NULL in an
+    INT column made pandas hand the batch over as floats) or text (``'3'``, ``' 3 '``,
+    ``'3.0'``: SQL callers pass the resolution as a string). Anything else, ``3.5`` or ``'abc'``,
+    raises naming the value instead of being cut to a whole number. BNG does not come through
+    here: its resolutions are also strings (``'1km'``) that mean something else.
+    """
+    value = res
+    if isinstance(res, str):
+        try:
+            value = float(res.strip())
+        except ValueError:
+            value = None
+    if value is None or not float(value).is_integer():
+        raise ValueError(f"{fn}: resolution must be a whole number; got {res!r}")
+    return int(value)
+
+
 # ============================================================================
 # Custom gridding (gbx_custom_*) — pure-Python port of CustomGridSystem.scala +
 # GridConf.scala. Cell ids are BIGINT; geometry outputs are plain WKB (NO SRID —
@@ -754,9 +795,11 @@ def _custom_pointascell_udf(
 ) -> pd.Series:
     out = []
     for g, spec, r in zip(point, _custom_grid_records(grid), res):
+        r = _res_or_null(r)  # a NULL resolution arrives as NaN in a batch
         if g is None or spec is None or r is None:
             out.append(None)
             continue
+        r = _whole_res("gbx_custom_pointascell", r)
         pg = parse_geom(g)
         if pg is None or pg.is_empty:
             out.append(None)
@@ -765,8 +808,10 @@ def _custom_pointascell_udf(
         x, y = _custom_first_coord(pg)
         # resolution PARAMETER raises (via point_to_cell_id_or_none);
         # NaN / out-of-bounds coordinate DATA -> None
-        out.append(_custom.point_to_cell_id_or_none(conf, x, y, int(r)))
-    return pd.Series(out)
+        out.append(_custom.point_to_cell_id_or_none(conf, x, y, r))
+    # Int64, not the float64 pandas picks for ints beside a None: a cell id past 2**53 would
+    # be rounded to the nearest float in any batch that holds a NULL.
+    return pd.Series(out, dtype="Int64")
 
 
 @pandas_udf(BinaryType())
@@ -999,11 +1044,11 @@ def _h3_cellfill_agg_udf(
     method: pd.Series,
     power: pd.Series,
 ) -> Optional[bytes]:
-    cells = {}
-    for c, v in zip(cellid, value):
-        if pd.isna(c):
-            continue
-        cells[int(c)] = None if pd.isna(v) else float(v)
+    cells = _cellfill.collect(
+        (int(c), None if pd.isna(v) else float(v))
+        for c, v in zip(cellid, value)
+        if not pd.isna(c)
+    )
     if not cells:
         return None
     if len(cells) > 50_000_000:
@@ -1024,11 +1069,11 @@ def _quadbin_cellfill_agg_udf(
     method: pd.Series,
     power: pd.Series,
 ) -> Optional[bytes]:
-    cells = {}
-    for c, v in zip(cellid, value):
-        if pd.isna(c):
-            continue
-        cells[int(c)] = None if pd.isna(v) else float(v)
+    cells = _cellfill.collect(
+        (int(c), None if pd.isna(v) else float(v))
+        for c, v in zip(cellid, value)
+        if not pd.isna(c)
+    )
     if not cells:
         return None
     if len(cells) > 50_000_000:
@@ -1050,14 +1095,14 @@ def _bng_cellfill_agg_udf(
     power: pd.Series,
 ) -> Optional[bytes]:
     # BNG cell IDs arrive as strings (object dtype); None = SQL NULL.
-    cells = {}
-    for c, v in zip(cellid, value):
-        if c is None or pd.isna(c):
-            continue
-        cid_int = _bng.parse_safe(str(c))
-        if cid_int is None:
-            continue
-        cells[cid_int] = None if pd.isna(v) else float(v)
+    parsed = (
+        (_bng.parse_safe(str(c)), v) for c, v in zip(cellid, value) if not pd.isna(c)
+    )
+    cells = _cellfill.collect(
+        (cid_int, None if pd.isna(v) else float(v))
+        for cid_int, v in parsed
+        if cid_int is not None
+    )
     if not cells:
         return None
     if len(cells) > 50_000_000:
@@ -1087,11 +1132,11 @@ def _custom_cellfill_agg_udf(
             break
     if conf is None:
         return None
-    cells = {}
-    for c, v in zip(cellid, value):
-        if pd.isna(c):
-            continue
-        cells[int(c)] = None if pd.isna(v) else float(v)
+    cells = _cellfill.collect(
+        (int(c), None if pd.isna(v) else float(v))
+        for c, v in zip(cellid, value)
+        if not pd.isna(c)
+    )
     if not cells:
         return None
     if len(cells) > 50_000_000:

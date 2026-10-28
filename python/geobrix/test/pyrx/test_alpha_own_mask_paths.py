@@ -15,6 +15,7 @@ import rasterio
 from rasterio.enums import ColorInterp as CI
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
+from scipy import ndimage
 
 from databricks.labs.gbx.pyrx.core import _nodata as nd
 from databricks.labs.gbx.pyrx.core import (
@@ -320,9 +321,10 @@ def test_a_raster_that_is_entirely_transparent_is_empty(name):
 # --- frombands / derivedband stacks ---------------------------------------------------------
 
 
-def _band_tile(value_rows, *, mask_rows=(), alpha=False, nodata=None):
+def _band_tile(value_rows, *, mask_rows=(), alpha=False, nodata=None, top=50):
     """A 12x12 uint8 GTiff of ONE data band (or gray+alpha when ``alpha``): ``value_rows`` hold
-    50, the others 0, and ``mask_rows`` are hidden by an own mask band."""
+    50, the others 0, and ``mask_rows`` are hidden by an own mask band. ``top`` is its upper edge
+    (degrees; pixels are 0.5)."""
     data = np.zeros((2 if alpha else 1, 12, 12), dtype="uint8")
     data[0, list(value_rows), :] = 50
     if alpha:
@@ -334,7 +336,7 @@ def _band_tile(value_rows, *, mask_rows=(), alpha=False, nodata=None):
         count=data.shape[0],
         dtype="uint8",
         crs="EPSG:4326",
-        transform=from_origin(10, 50, 0.5, 0.5),
+        transform=from_origin(10, top, 0.5, 0.5),
         nodata=nodata,
         photometric="MINISBLACK",
     )
@@ -384,6 +386,16 @@ def test_a_stack_keeps_the_mask_the_tiles_share():
     mixed = agg.frombands_tiles([(0, masked[0]), (1, _band_tile((1,))), (2, masked[2])])
     with MemoryFile(mixed) as mf, mf.open() as ds:
         assert nd.valid_mask(ds).all()
+
+
+def test_a_stack_puts_the_mask_of_a_tile_on_another_grid_on_the_first_tiles_grid():
+    """The second tile lies one row lower, so its rows 3-4 hide the stack's rows 4-5: only row 4 is hidden
+    by both tiles, and the stack is invalid only there."""
+    first = _band_tile((1,), mask_rows=(3, 4))
+    lower = _band_tile((1,), mask_rows=(3, 4), top=49.5)
+    out = agg.frombands_tiles([(0, first), (1, lower)])
+    with MemoryFile(out) as mf, mf.open() as ds:
+        assert nd.valid_mask(ds)[:, 0].tolist() == [r != 4 for r in range(12)]
 
 
 def _derive(raw):
@@ -533,6 +545,81 @@ def test_a_merge_keeps_nodata_pixels_invalid_beside_a_tile_with_an_own_mask(
     masked_col, plain_col = (0, 23) if masked_x == 10 else (23, 0)
     assert valid[:, masked_col].tolist() == [r != 3 for r in range(12)]
     assert valid[:, plain_col].tolist() == [r != 7 for r in range(12)]
+
+
+def test_an_in_ram_merge_of_rgba_tiles_with_a_nodata_raises_no_shadow_warning():
+    """A NoData declared beside an alpha band is read (and merged) by the validity rule of both tiers,
+    so the merge must not warn that the NoData shadows the alpha band."""
+    import warnings
+
+    from rasterio.errors import NodataShadowWarning
+
+    tiles = [
+        al.layout_bytes("rgba", nodata=0, transform=from_origin(x, 50, 0.5, 0.5))
+        for x in (10, 12)
+    ]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", NodataShadowWarning)
+        out = agg.merge_tiles(tiles)
+    assert out
+
+
+def _overlap_alpha_tile(
+    x, value, *, layout="gray_x_alpha", clear_cols=(), mask_rows=()
+):
+    """A 12x12 tile of alpha layout ``layout`` at ``x`` degrees: the data bands hold ``value``, the
+    alpha band is 255 except over ``clear_cols`` (0), and ``mask_rows`` are hidden by an own mask band.
+    """
+    count = len(al.LAYOUTS[layout][0])
+    data = np.full((count, 12, 12), value, dtype="uint8")
+    data[-1] = 255
+    data[-1, :, list(clear_cols)] = 0
+    mask = None
+    if mask_rows:
+        mask = np.full((12, 12), 255, dtype="uint8")
+        mask[list(mask_rows), :] = 0
+    return al.layout_bytes(
+        layout,
+        data=data,
+        mask=mask,
+        transform=from_origin(x, 50, 0.5, 0.5),
+    )
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["in-ram", "streaming"])
+@pytest.mark.parametrize(
+    "layout,masked",
+    [("gray_x_alpha", True), ("gray_x_alpha", False), ("rgba", False)],
+    ids=["3-band-own-masks", "3-band-no-mask", "rgba-no-mask"],
+)
+def test_a_merge_shows_the_valid_tile_where_a_later_alpha_tile_is_transparent(
+    monkeypatch, streaming, layout, masked
+):
+    """Two overlapping tiles with an alpha band, with or without an own mask each (a 3-band layout, whose
+    alpha band GDAL's mask ignores, and RGBA, whose colour bands it masks but not the alpha band itself):
+    where one is transparent and the other opaque the mosaic holds the opaque tile's pixels, valid, on both
+    paths. (The byte order puts the transparent tile last, which is the one that used to win.)
+    """
+    if streaming:
+        monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+    rows = (11,) if masked else ()
+    opaque = _overlap_alpha_tile(10, 10, layout=layout, mask_rows=rows)
+    # starts 6 columns in: its first 6 columns lie over the opaque tile and are transparent
+    clear = _overlap_alpha_tile(
+        13, 99, layout=layout, clear_cols=range(6), mask_rows=rows
+    )
+    assert opaque < clear, "fixture: the transparent tile must stand last in byte order"
+    out = agg.merge_tiles([opaque, clear])
+    with MemoryFile(out) as mf, mf.open() as ds:
+        valid = nd.valid_mask(ds)
+        data = ds.read(1)
+        has_mask = nd.has_own_mask(ds)
+    keep = slice(0, 11 if masked else 12)  # all rows, but the one the own masks hide
+    over = (keep, slice(6, 12))
+    assert valid[over].all(), valid[over].tolist()
+    assert (data[over] == 10).all(), data[over].tolist()
+    assert (data[keep, 12:] == 99).all() and valid[keep, 12:].all()
+    assert has_mask == masked  # a mask band only where the group had one
 
 
 def _rgb_merge_tile(x, *, mask_rows=()):
@@ -732,7 +819,7 @@ def test_the_streamed_merge_uses_the_pixel_size_of_a_tile_in_the_reference_crs(
     class Stop(Exception):
         pass
 
-    def spy(src, dst_crs, target_res=None):
+    def spy(src, dst_crs, target_res=None, anchor=None):
         seen.append(target_res)
         raise Stop
 
@@ -793,11 +880,14 @@ def test_a_two_crs_merge_does_not_depend_on_the_byte_order(monkeypatch, streamin
     assert (a[4] == b[4]).all() and (a[3][a[4]] == b[3][b[4]]).all()
 
 
-def test_the_in_ram_and_the_streamed_two_crs_merge_agree(monkeypatch):
-    """The pixel size, the size of the mosaic, its origin and the number of pixels the tiles cover
-    are those of the streamed merge. (Where a tile that is not on the reference grid lands within
-    its pixel is each merge's own rounding, not asserted.)"""
-    group = _two_crs_group("4326")
+@pytest.mark.parametrize("first", ["3857", "4326"])
+def test_the_in_ram_and_the_streamed_two_crs_merge_agree(monkeypatch, first):
+    """The pixel size, the size of the mosaic, its origin and every pixel are those of the
+    streamed merge: the tile in the other CRS is put on the reference tile's pixel grid, so
+    ``rasterio.merge`` (``floor(offset + 0.1)``) and the VRT (``round(offset)``) place it alike.
+    It used to sit one pixel further east streamed (columns 15-26 in RAM, 16-27 streamed).
+    """
+    group = _two_crs_group(first)
     in_ram = _merged_grid(group)
     monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
     streamed = _merged_grid(group)
@@ -805,7 +895,7 @@ def test_the_in_ram_and_the_streamed_two_crs_merge_agree(monkeypatch):
     assert in_ram[2] == pytest.approx(
         streamed[2], rel=1e-12
     )  # a COG writes the origin as text
-    assert in_ram[4].sum() == streamed[4].sum()
+    assert np.array_equal(in_ram[3], streamed[3])
 
 
 @pytest.mark.parametrize("name", ["rgb_nir", "rgba", "gray_x_alpha"])
@@ -994,9 +1084,22 @@ def test_a_convolution_skips_transparent_and_masked_neighbours(name):
         out = focal.convolve(ds, np.ones((3, 3)))
     with MemoryFile(out) as mf, mf.open() as o:
         band1 = o.read(1)
-    # row 1: its window holds rows 0-2: six valid 5s from rows 0 and 1 (edge columns shrink the sum to 4*... by
-    # replicate-edge), none from the hidden row 2. The hidden 99s add nothing anywhere.
-    assert band1.max() <= 9 * 5, band1.tolist()
+    # zero padding at the edges: each pixel sums the 5s of the valid pixels in its 3x3 window, the hidden
+    # rows 2-3 (which hold 99) adding nothing
+    valid = np.ones((6, 6))
+    valid[2:4, :] = 0
+    want = ndimage.correlate(5 * valid, np.ones((3, 3)), mode="constant", cval=0.0)
+    assert (band1 == want).all(), band1.tolist()
+
+
+@pytest.mark.parametrize("name", ["gray_x_alpha", "rgba", "rgb_nir"])
+def test_a_focal_filter_declares_no_nodata_over_an_alpha_band(name):
+    """A 1x1 window over a hidden row holds no valid pixel; only a raster without an alpha band declares
+    a NoData for it (a NoData would shadow the alpha band)."""
+    with MemoryFile(_striped_alpha_raster(name)) as mf, mf.open() as ds:
+        out = focal.filt(ds, 1, "max")
+    with MemoryFile(out) as mf, mf.open() as o:
+        assert (o.nodata is None) == al.LAYOUTS[name][1]
 
 
 @pytest.mark.parametrize("name", ["gray_x_alpha", "rgba", "rgb_nir"])

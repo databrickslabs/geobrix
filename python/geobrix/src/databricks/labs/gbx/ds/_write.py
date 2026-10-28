@@ -10,9 +10,11 @@ Hybrid, mirroring the heavy gdal writer's intent (encoding from tile.metadata):
   is written with it.
 
 Only GTiff (verbatim pass-through) and COG (re-encode, GTiff-structured) are
-validated end-to-end. Other drivers (PNG, PNM, Zarr, etc.) are passed
-best-effort to rasterio with the metadata-derived options and are NOT
-guaranteed to match heavy (heavy special-cases dtype coercion for PNG, etc.).
+validated end-to-end. A Zarr tile (``driver`` Zarr) names its source store, but its
+raster bytes are a GeoTIFF, so it is written as GTiff unless the writer forces a
+driver. Other drivers (PNG, PNM, etc.) are passed best-effort to rasterio with the
+metadata-derived options and are NOT guaranteed to match heavy (heavy special-cases
+dtype coercion for PNG, etc.).
 
 Writer .option()s never carry encoding; only tile.metadata does (like heavy).
 """

@@ -23,7 +23,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from databricks.labs.gbx.zarr._keys import KeyEncoding, chunks_per_shard, encoding_for
-from databricks.labs.gbx.zarr.errors import ZarrUnsupported
+from databricks.labs.gbx.zarr.errors import ZarrUnsupported, ZarrWriteConflict
 
 _V3_DTYPES = {
     "bool": "|b1",
@@ -285,6 +285,110 @@ def doc_bytes(meta: ArrayMeta) -> dict[str, bytes]:
     }
 
 
+def same_layout(a: ArrayMeta, b: ArrayMeta) -> bool:
+    """Whether ``a`` and ``b`` lay out their chunks alike: everything but the shape and the
+    attributes (format, dimensions, dtype, chunking, codecs, fill value, key encoding).
+    """
+
+    def strip(meta):
+        doc = json.loads(json.dumps(meta.doc))
+        if meta.zarr_format == 3:
+            doc.pop("shape", None)
+            doc.pop("attributes", None)
+        else:
+            doc[".zarray"].pop("shape", None)
+            doc.pop(".zattrs", None)
+        return doc
+
+    return (a.zarr_format, a.dims, a.dtype, a.chunks, a.shards) == (
+        b.zarr_format,
+        b.dims,
+        b.dtype,
+        b.chunks,
+        b.shards,
+    ) and strip(a) == strip(b)
+
+
+_ABSENT = object()
+
+
+class _Clash(Exception):
+    """Two writers set one attribute differently; carries the dotted path."""
+
+
+def _merge3(base, mine, theirs, where: str):
+    """Three-way merge of one JSON value: a side that did not change it yields to the
+    other, mappings merge key by key, and two different new values clash."""
+    if mine == theirs or theirs == base:
+        return mine
+    if mine == base:
+        return theirs
+    if isinstance(mine, dict) and isinstance(theirs, dict):
+        old = base if isinstance(base, dict) else {}
+        out = {}
+        for k in dict.fromkeys([*theirs, *mine]):
+            at = f"{where}.{k}" if where else k
+            v = _merge3(
+                old.get(k, _ABSENT), mine.get(k, _ABSENT), theirs.get(k, _ABSENT), at
+            )
+            if v is not _ABSENT:
+                out[k] = v
+        return out
+    raise _Clash(where)
+
+
+def merge_array(
+    base: ArrayMeta | None,
+    mine: ArrayMeta,
+    theirs: ArrayMeta,
+    shape: tuple[int, ...],
+) -> ArrayMeta:
+    """The document of an array this write grows or creates, laid over ``theirs``, the
+    document that is live now.
+
+    ``base`` is the array as this write first read it (``None`` when this write creates
+    it) and ``mine`` as this write planned it. The merge is by document key, so a change
+    another writer made to a key this write did not touch is kept, not overwritten:
+
+    - ``shape`` is ``shape``, which the caller has already made the larger of both;
+    - the attributes merge key by key: one side's change stands when the other left the
+      key alone, and a key both set differently is a conflict;
+    - everything else (the layout) must be what this write's chunks were encoded against.
+      Another writer changing it is a conflict.
+
+    Raises ``ZarrWriteConflict``.
+    """
+    name = mine.name
+    if not same_layout(theirs, mine if base is None else base):
+        raise ZarrWriteConflict(
+            f"another write changed the layout of array {name!r} (its type, chunks or "
+            "codecs) since this write read it",
+            keys=(name,),
+            fix="re-read the store and write again",
+        )
+    try:
+        attrs = _merge3(
+            _ABSENT if base is None else base.attrs, mine.attrs, theirs.attrs, ""
+        )
+    except _Clash as c:
+        raise ZarrWriteConflict(
+            f"another write set the attribute {str(c)!r} of array {name!r} to a "
+            "different value than this write does",
+            keys=(name,),
+            fix="re-read the store and write again, or set the attribute the same way",
+        ) from None
+    out = with_shape(theirs, shape)
+    if attrs == out.attrs:
+        return out
+    doc = copy.deepcopy(out.doc)
+    if out.zarr_format == 3:
+        doc["attributes"] = attrs
+    else:  # the dimension names live in the same document as the attributes
+        dims = {k: v for k, v in doc[".zattrs"].items() if k == "_ARRAY_DIMENSIONS"}
+        doc[".zattrs"] = {**dims, **attrs}
+    return dataclasses.replace(out, attrs=copy.deepcopy(attrs), doc=doc)
+
+
 def inner_meta_doc(meta: ArrayMeta) -> dict:
     """A v3 document for an UNSHARDED array whose chunks are ``meta``'s inner chunks.
 
@@ -373,6 +477,52 @@ def _cf_fill_attr(raw, meta: ArrayMeta):
             "base64-encoded float64",
             fix="store _FillValue as a number, or read the array with decode=False",
         ) from None
+
+
+_V3_FLOAT_SIZES = {"float16": 2, "float32": 4, "float64": 8}
+
+
+def xarray_fill_form(doc):
+    """``doc``, the ``zarr.json`` of a Zarr v3 array, with a float ``_FillValue`` attribute
+    in the form xarray decodes; ``doc`` itself when there is nothing to change.
+
+    xarray reads a v3 CF ``_FillValue`` attribute as the base64 of a little-endian float64
+    (its ``FillValueCoder``), and ``xarray.open_zarr`` refuses the whole store when it meets
+    a number or ``"NaN"`` there. The array's own ``fill_value`` field is another thing: Zarr
+    writes it as the v3 spec has it (a number, ``"NaN"``, ``"Infinity"``, ``"-Infinity"``),
+    which xarray and zarr both read, and it is left alone. A value that already decodes to
+    eight bytes is kept; one that is not a number is left for the reader to name. Zarr v2
+    needs nothing (xarray masks on the array ``fill_value`` there).
+
+    Every document GeoBrix creates passes through here, so the manifest row and the file a
+    publish or an export writes from it are the same text. ``_cf_fill_attr`` reads the form
+    back.
+    """
+    if not (
+        isinstance(doc, dict)
+        and doc.get("node_type") == "array"
+        # a dict for a datetime64 array: not a float, and not hashable
+        and isinstance(doc.get("data_type"), str)
+        and doc["data_type"] in _V3_FLOAT_SIZES
+        and isinstance(doc.get("attributes"), dict)
+        and "_FillValue" in doc["attributes"]
+    ):
+        return doc
+    value = doc["attributes"]["_FillValue"]
+    if value is None or isinstance(value, bool):
+        return doc
+    if isinstance(value, str):
+        try:
+            if len(base64.b64decode(value, validate=True)) == 8:
+                return doc  # already xarray's form
+        except ValueError:  # binascii.Error is a ValueError
+            pass
+    try:
+        number = _float_fill(value, _V3_FLOAT_SIZES[doc["data_type"]])
+    except (TypeError, ValueError):
+        return doc
+    form = base64.standard_b64encode(struct.pack("<d", number)).decode()
+    return {**doc, "attributes": {**doc["attributes"], "_FillValue": form}}
 
 
 def _check_mask_flag(flag) -> None:

@@ -80,7 +80,17 @@ name, falling back to `<partPrefix>-<uuid>`.
 Vector mode writes the DataFrame's attribute columns plus lon/lat as a CF Discrete
 Sampling Geometry file (`featureType="point"`) — one `.nc` per Spark partition. Null
 attribute cells are written as CF fill: an integer `_FillValue` sentinel for integer
-columns, `NaN` for float columns.
+columns, `NaN` for float columns. Four column types have no netCDF type of their own and
+follow CF conventions:
+
+| Column | Written as |
+|---|---|
+| timestamp, timestamp without a time zone | a CF time variable: float64 seconds since `1970-01-01 00:00:00` UTC, with `units` and `calendar` attributes (a timestamp without a time zone is read as UTC) |
+| date | a CF time variable: int32 days since `1970-01-01 00:00:00`, with `units` and `calendar` attributes |
+| string | a text variable (netCDF4); a null is an empty string, because netCDF text has no null |
+| boolean | an int8 variable of 0 and 1, with `flag_values` and `flag_meanings` (`false true`) attributes |
+
+`merge` keeps these attributes when it folds existing parts.
 
 <CodeFromTest code={netcdfWrite} language="python" functionName="WRITE_VECTOR"
   source="docs/tests/python/writers/netcdf_gbx_write_examples.py"

@@ -493,62 +493,14 @@ def test_archive_with_a_garbled_root_length_fails_cleanly(tmp_path):
 
 
 def _with_uncompressed_internals(src, dst):
-    """Rewrite a library-written PMTiles archive (gzip root, leaves, metadata)
-    so its root directory, leaf directories and metadata are stored
-    uncompressed and the header declares ``internal_compression = NONE`` -- the
-    layout the heavyweight writer produces. The tile data is copied unchanged;
-    offsets and lengths are recomputed in the writer's section order (header,
-    root, metadata, leaves, tile data)."""
-    import gzip
-
-    from pmtiles.tile import (
-        Compression,
-        Entry,
-        deserialize_directory,
-        deserialize_header,
-        serialize_directory,
-        serialize_header,
-    )
+    """Write ``src`` (a library-written archive) to ``dst`` with uncompressed
+    directories and metadata, the layout the heavyweight writer produces."""
+    from test.pmtiles_light._archives import uncompressed_internals
 
     with open(src, "rb") as fh:
         raw = fh.read()
-    h = deserialize_header(raw[:127])
-    assert h["internal_compression"] == Compression.GZIP
-
-    def section(offset, length):
-        return raw[offset : offset + length]
-
-    def plain(entries):
-        # serialize_directory gzips; the archive wants the bare varint stream
-        return gzip.decompress(serialize_directory(entries))
-
-    leaves = b""
-    root_entries = []
-    for e in deserialize_directory(section(h["root_offset"], h["root_length"])):
-        if e.run_length > 0:  # tile entry in the root: kept as is
-            root_entries.append(e)
-            continue
-        leaf = plain(
-            deserialize_directory(
-                section(h["leaf_directory_offset"] + e.offset, e.length)
-            )
-        )
-        root_entries.append(Entry(e.tile_id, len(leaves), len(leaf), 0))
-        leaves += leaf
-    root = plain(root_entries)
-    metadata = gzip.decompress(section(h["metadata_offset"], h["metadata_length"]))
-    tiles = section(h["tile_data_offset"], h["tile_data_length"])
-
-    h = dict(h, internal_compression=Compression.NONE)
-    h["root_offset"] = 127
-    h["root_length"] = len(root)
-    h["metadata_offset"] = h["root_offset"] + len(root)
-    h["metadata_length"] = len(metadata)
-    h["leaf_directory_offset"] = h["metadata_offset"] + len(metadata)
-    h["leaf_directory_length"] = len(leaves)
-    h["tile_data_offset"] = h["leaf_directory_offset"] + len(leaves)
     with open(dst, "wb") as fh:
-        fh.write(serialize_header(h) + root + metadata + leaves + tiles)
+        fh.write(uncompressed_internals(raw))
 
 
 def test_uncompressed_variant_is_what_the_heavy_writer_stores(tmp_path):
@@ -628,7 +580,7 @@ def test_read_directory_decodes_by_the_declared_compression():
 
     from pmtiles.tile import Compression, Entry, serialize_directory
 
-    from databricks.labs.gbx.ds._pmtiles_read import _read_directory
+    from databricks.labs.gbx.pmtiles._directory import _read_directory
 
     entries = [Entry(5, 0, 10, 1), Entry(9, 10, 7, 3)]
     gzipped = serialize_directory(entries)
@@ -653,7 +605,7 @@ def test_read_directory_decodes_by_the_declared_compression():
 def test_read_directory_rejects_unsupported_compression(name, value):
     from pmtiles.tile import Compression
 
-    from databricks.labs.gbx.ds._pmtiles_read import _read_directory
+    from databricks.labs.gbx.pmtiles._directory import _read_directory
 
     header = {"internal_compression": Compression[name]}
     with pytest.raises(ValueError) as info:

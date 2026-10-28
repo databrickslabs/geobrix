@@ -86,7 +86,8 @@ _PIECES_ARROW = pa.schema(
 ROWS_DDL = (
     "rtype STRING, kind STRING, array STRING, key STRING, shard_key STRING, "
     "file STRING, offset BIGINT, length BIGINT, checksum STRING, empty BOOLEAN, "
-    "rmw BOOLEAN, expected_write_id STRING, shard_live BOOLEAN, info STRING, "
+    "rmw BOOLEAN, expected_write_id STRING, identity STRING, shard_live BOOLEAN, "
+    "info STRING, "
     "data BINARY"
 )
 ROWS_ARROW = pa.schema(
@@ -103,6 +104,7 @@ ROWS_ARROW = pa.schema(
         ("empty", pa.bool_()),
         ("rmw", pa.bool_()),
         ("expected_write_id", pa.string()),
+        ("identity", pa.string()),  # of the base object a chunk row shadows
         ("shard_live", pa.bool_()),
         ("info", pa.string()),
         ("data", pa.binary()),
@@ -128,6 +130,7 @@ class TaskConfig:
     roll_bytes: int
     fault: tuple | None = None
     unsupported: dict | None = None  # name -> why the store cannot decode that array
+    access: object = None  # AccessConfig: how the files are reached (holds credentials)
 
 
 # --- shared helpers ----------------------------------------------------------------------
@@ -479,7 +482,9 @@ class _Assembler:
         writer = self.writers.get(name)
         if writer is None:
             writer = self.writers[name] = PackWriter(
-                os.path.join(cfg.root, "data", name, cfg.write_id), reader_root=cfg.root
+                os.path.join(cfg.root, "data", name, cfg.write_id),
+                reader_root=cfg.root,
+                access=cfg.access,
             )
         offset, length = writer.add(data)
         base = group.chunks.get(key)
@@ -497,6 +502,10 @@ class _Assembler:
                 empty=empty,
                 rmw=rmw,
                 expected_write_id=None if base is None else base["write_id"],
+                # the row replaces one for the same key: the file it recorded for the
+                # base object (a registered store's own) stays the identity this chunk
+                # shadows, which is how a sync tells that the base changed under it
+                identity=None if base is None else base.get("identity"),
                 shard_live=group.shard is not None and cfg.mode != "overwrite",
             )
         )
@@ -525,7 +534,7 @@ class _Assembler:
         if any(b <= a for a, b in box):
             return out
         if group.store is None:
-            from databricks.labs.gbx.zarr._access import FuseRangeReader
+            from databricks.labs.gbx.zarr._access import reader_for
             from databricks.labs.gbx.zarr._store import ManifestStore
 
             rows = list(group.chunks.values())
@@ -538,7 +547,7 @@ class _Assembler:
                     if k.rpartition("/")[0] == meta.name
                 },
                 rows,
-                FuseRangeReader(cfg.root, base_root=cfg.base_root),
+                reader_for(cfg.access, cfg.root, cfg.base_root),
                 {meta.name: base},
             )
         arr = open_manifest_array(group.store, meta.name)
@@ -570,6 +579,8 @@ def _delete(base: dict) -> dict:
         kind=base.get("kind"),
         array=base.get("array"),
         key=base.get("key"),
+        shard_key=base.get("shard_key"),
+        identity=base.get("identity"),
         expected_write_id=base.get("write_id"),
     )
 

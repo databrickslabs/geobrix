@@ -105,6 +105,34 @@ def test_separatebands_write_to_distinct_files(spark, tmp_path):
     assert sorted(values) == [40, 80, 120]
 
 
+def test_retiled_bands_write_to_distinct_files(spark, tmp_path):
+    """Two bands with identical pixels, each retiled: the pieces differ only by their band
+    marker, which the retile keeps, so every piece still gets its own file."""
+    src = tmp_path / "in" / "scene.tif"
+    src.parent.mkdir()
+    with rasterio.open(
+        str(src),
+        "w",
+        driver="GTiff",
+        width=256,
+        height=256,
+        count=2,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(0, 60, 0.01, 0.01),
+    ) as ds:
+        ds.write(np.full((2, 256, 256), 40, dtype="uint8"))
+
+    files, tiles = _write_chain(
+        spark,
+        src,
+        tmp_path / "out",
+        ["gbx_rst_separatebands(tile)", "gbx_rst_retile(tile, 128, 128)"],
+    )
+
+    assert tiles == 8 and len(files) == 8, f"{tiles} tiles wrote {len(files)} files"
+
+
 def test_materialized_read_keeps_source_name(spark, tmp_path):
     """A whole-file read with virtualTiles=false is one materialized tile with
     window provenance (0,0,W,H): written with cog_gbx and no nameCol it keeps the

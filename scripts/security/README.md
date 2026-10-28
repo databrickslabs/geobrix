@@ -253,22 +253,24 @@ base-version fidelity).  These CVEs are resolved when Databricks ships a patched
   for test fidelity; upgrading them past the base triggers the "core package changed"
   cluster notice on DBR.  Patching is a CI-health action, not a 0.6.0 release gate.
 
-- **httpx2 / httpcore2 — 4 HIGH+MED alerts** in the two `_all` umbrella locks
-  (`requirements-light-env5-all-ci.txt` / `-env6-all-ci.txt`).  rio-tiler 9.2.x
-  (the newest admitted by the `rio-tiler>=9.0,<9.3` cap) replaced its classic
+- **httpx2 / httpcore2 — 4 HIGH+MED alerts** in the four light locks: the two CI
+  locks (`requirements-light-env5-ci.txt` / `-env6-ci.txt`, which pin
+  rio-tiler 9.4.12 so CI tests what users install) and the two `_all` umbrella locks
+  (`requirements-light-env5-all-ci.txt` / `-env6-all-ci.txt`).  rio-tiler 9.2 and later
+  (9.4.12 is the newest admitted by the `rio-tiler>=9.0,<10` cap) replaced its classic
   `httpx` client with the `httpx2` distribution.  The patched `httpx2`
   (`>=2.11` for the MED multipart/header CVEs, `>=2.12` for HIGH
   CVE-2026-84382 decompression-amplification, plus the paired `httpcore2>=2.10`
   for HIGH CVE-2026-84381) **requires `idna>=3.18`**, which the base-pinned idna
   caps (`<3.8` env5 / `<3.12` env6, above) forbid — so the resolver backtracks
   `httpx2` to 2.3.0 (its last release compatible with an unbounded idna).  rio-tiler
-  9.2.x itself admits any `httpx2`; the wall is idna.  These CVEs are therefore
+  itself admits any `httpx2`; the wall is idna.  These CVEs are therefore
   **inherited transitively from the same base-pinned idna constraint as the
   urllib3/idna cases above** and clear only when the DBR/Serverless base advances
   idna to `>=3.18` (letting the geobrix idna cap rise), not by a wheel bump.  The
-  classic-`httpx` explicit locks (`env5-ci` / `env6-ci`, pinned to rio-tiler
-  9.0.6) carry `httpx==0.28.1` with no open alert; `httpx2` appears only in the
-  `_all` resolution.  Exposure is the remote-HTTP raster-read path (rio-tiler
+  dev-container locks (`requirements-dev-container*.txt`) carry no idna cap, so they
+  resolve the patched `httpx2` / `httpcore2` 2.15.1 with idna 3.20 and have no open
+  alert.  Exposure is the remote-HTTP raster-read path (rio-tiler
   fetching COG/tiles over HTTPS); reads from trusted UC Volumes / cloud storage do
   not traverse it.  Confirmed via `uv pip compile` on 2026-09-28: forcing
   `httpx2>=2.11` fails with *"httpx2>=2.11.0 depends on idna>=3.18 … and

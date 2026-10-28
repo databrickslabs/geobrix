@@ -152,9 +152,10 @@ cd /root/geobrix
 # the hash-pinned dev container lockfile). nbformat / nbconvert are also
 # pre-installed there; no ad-hoc pip install needed (would defeat the
 # supply-chain hardening).
-# Only when it is missing: this command takes no container lock (no Maven, no Spark JVM on
+# Only when it is missing or is not the editable install of this checkout (a copy in site-packages
+# would run the notebooks against stale code): this command takes no container lock (no Maven, no Spark JVM on
 # target/), so a routine run must not rewrite the shared site-packages under a locked pytest.
-pip show geobrix >/dev/null 2>&1 || pip install --no-deps -e /root/geobrix/python/geobrix --break-system-packages -q 2>/dev/null || true
+pip show geobrix 2>/dev/null | grep -q '^Editable project location: /root/geobrix/python/geobrix' || pip install --no-deps -e /root/geobrix/python/geobrix --break-system-packages -q 2>/dev/null || true
 python3 /root/geobrix/examples/tests/run_notebooks_cell_by_cell.py ${PATH_ARG:+'$PATH_ARG_ESCAPED'}
 "
 

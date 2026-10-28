@@ -144,6 +144,16 @@ hold() {
     wait "$WATCHER"   # until the host script (and every child of it) has closed the pipe
 }
 
+# At exit of `run`: the holder named in <WORK_LOCK>.info is this process, which is ending. Drop the
+# name unless something else still holds the lock: a child of the work may have kept descriptor 9
+# and outlive this process, and the next waiter should be told who started it.
+clear_own_info() {
+    exec 9>&-
+    exec 8>>"$WORK_LOCK" || return 0
+    if flock -n 8; then rm -f "$WORK_LOCK.info"; fi
+    exec 8>&-
+}
+
 run() {
     [ "$#" -gt 0 ] || { echo "usage: gbx-lock.sh run CMD [ARG...]" >&2; exit 64; }
     exec 9>>"$WORK_LOCK" || die run "cannot open $WORK_LOCK"
@@ -155,7 +165,7 @@ run() {
         wait_lock run 9 || { echo "gbx-lock: timed out waiting for earlier work: $(describe "$WORK_LOCK")"; exit 75; }
     fi
     publish_info "$WORK_LOCK" "pid=$$ cmd=$* since=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    trap 'rm -f "$WORK_LOCK.info"' EXIT   # the holder named there ends with this process
+    trap clear_own_info EXIT
     # Not `exec`: this process stays as the parent. The command inherits descriptor 9 and
     # holds it while it runs, whoever dies; bash and fork() children hold it too.
     "$@"

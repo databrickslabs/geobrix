@@ -114,6 +114,15 @@ def build_tile(
     ).to_row()
 
 
+def band_marker(tile):
+    """The ``band`` marker of *tile* (the 1-based band of its parent that
+    ``rst_separatebands`` records), or None when it has none."""
+    from databricks.labs.gbx.pyrx.core.open_tile import _to_virtual_tile
+    from databricks.labs.gbx.pyrx.core.virtual_tile import BAND_METADATA_KEY
+
+    return (_to_virtual_tile(tile).metadata or {}).get(BAND_METADATA_KEY)
+
+
 def inherit_provenance(row: Dict, tile) -> Dict:
     """Give *row* the provenance of the input *tile* it reproduces.
 

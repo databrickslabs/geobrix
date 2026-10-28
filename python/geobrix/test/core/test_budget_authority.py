@@ -85,8 +85,9 @@ def test_driver_merge_guard_raises_in_task_context(monkeypatch):
 def test_unknown_intent_raises():
     from databricks.labs.gbx.pyrx.core.budget import budget_for
 
+    # worker-side kinds belong to materialize_decision, so they are unknown intents here too
     with pytest.raises(ValueError):
-        budget_for("worker_read", 0)  # Phase 2 intent — not implemented in Phase 1
+        budget_for("no_such_intent", 0)
 
 
 # --- dense_alloc intent (Task 1) ---

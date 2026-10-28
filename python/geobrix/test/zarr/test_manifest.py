@@ -920,9 +920,9 @@ def test_snapshot_of_a_past_version_reads_the_history_once(
     )
     actions = _count_metadata_queries(monkeypatch, spark_delta)
     snap = M.snapshot(spark_delta, table, **kwargs)
-    # one for the table history, one for SHOW TBLPROPERTIES (the timestamp form adds the
-    # one that parses its argument)
-    assert len(actions) <= (2 if how == "version" else 3), len(actions)
+    # one for the table history, one for SHOW TBLPROPERTIES, one probe that Delta still
+    # has the version's files (the timestamp form adds the one that parses its argument)
+    assert len(actions) <= (3 if how == "version" else 4), len(actions)
     assert snap.version == (
         v1 if how == "version" else M.snapshot(spark_delta, table).version
     )
@@ -1278,9 +1278,10 @@ def test_the_pruner_keeps_in_so_a_row_without_a_shard_key_is_never_selected(
     )  # only unpruned sees it
 
 
-# --- a chunk row is a whole region or a tombstone (Task 6 carry) ---------------------------
+# --- a chunk or shard row is a whole region or a tombstone (Task 6 carry, Ruling Z49) ------
 
 
+@pytest.mark.parametrize("kind", ["chunk", "shard"])
 @pytest.mark.parametrize(
     "change, match",
     [
@@ -1300,20 +1301,19 @@ def test_the_pruner_keeps_in_so_a_row_without_a_shard_key_is_never_selected(
         ({"file": None, "offset": None, "length": None, "checksum": None}, "tombstone"),
     ],
 )
-def test_commit_refuses_a_row_that_is_neither_a_region_nor_a_tombstone(change, match):
+def test_commit_refuses_a_row_that_is_neither_a_region_nor_a_tombstone(
+    kind, change, match
+):
     w = uuid.uuid4().hex
-    row = {**_chunk("c/0/0/0", w), **change}
+    base = (
+        _chunk("c/0/0/0", w)
+        if kind == "chunk"
+        else _shard_row("t2m", "c/0/0/0", w, "c/0/0/0")
+    )
+    row = {**base, **change}
     with pytest.raises(ZarrError, match=match) as e:
         M.commit(None, "t", _rows(row), write_id=w, meta={})  # refused before any query
     assert "Fix:" in str(e.value) and "t2m/c/0/0/0" in str(e.value)
-
-
-def test_a_shard_row_always_names_a_file():
-    w = uuid.uuid4().hex
-    row = {**_shard_row("t2m", "c/0/0/0", w, "c/0/0/0"), "file": None, "offset": None}
-    row.update(length=0, checksum=None)
-    with pytest.raises(ZarrError, match="a shard row always names one"):
-        M.commit(None, "t", _rows(row), write_id=w, meta={})
 
 
 def test_a_tombstone_commits_and_hides_the_inner_chunk_a_shard_row_holds(
@@ -1337,6 +1337,35 @@ def test_a_tombstone_commits_and_hides_the_inner_chunk_a_shard_row_holds(
     )
     live = {r["key"]: r for r in _live(spark_delta, table)}
     assert live["c/0/0/1"]["length"] == 0 and live["c/0/0/1"]["file"] is None
+
+
+def test_a_shard_tombstone_commits_and_replaces_the_shard_row_it_hides(
+    spark_delta, table
+):
+    """A registered store's overwrite hides a base shard with a tombstone shard row: no file,
+    no bytes, the identity of the object it hides."""
+    w1, w2 = uuid.uuid4().hex, uuid.uuid4().hex
+    shard = {**_shard_row("t2m", "c/0/0/0", w1, "c/0/0/0"), "identity": "5:10"}
+    M.commit(
+        spark_delta, table, _rows(shard), write_id=w1, meta={}, sharded={"t2m": True}
+    )
+    tomb = {
+        **shard,
+        "file": None,
+        "offset": None,
+        "length": 0,
+        "checksum": None,
+        "write_id": w2,
+        "expected_write_id": w1,
+    }
+    M.commit(
+        spark_delta, table, _rows(tomb), write_id=w2, meta={}, sharded={"t2m": True}
+    )
+    (live,) = M.read_rows(
+        spark_delta, M.snapshot(spark_delta, table), kinds="shard"
+    ).to_pylist()
+    assert (live["file"], live["offset"], live["length"]) == (None, None, 0)
+    assert (live["origin"], live["identity"]) == ("gbx", "5:10")
 
 
 # --- the writer passes the sharding it knows (follow-up M1, Isaac K20) ---------------------

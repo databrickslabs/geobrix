@@ -465,8 +465,8 @@ else:
         # Add features
         for idx, row in boroughs.iterrows():
             feature = ogr.Feature(layer_boroughs.GetLayerDefn())
-            feature.SetField('BORO_NAME', str(row.get('boro_name', '')))
-            feature.SetField('BORO_CODE', str(row.get('boro_code', '')))
+            feature.SetField('BORO_NAME', str(row.get('boroname', '')))
+            feature.SetField('BORO_CODE', str(row.get('borocode', '')))
             feature.SetGeometry(ogr.CreateGeometryFromWkt(row.geometry.wkt))
             layer_boroughs.CreateFeature(feature)
             feature = None
@@ -486,7 +486,7 @@ else:
         for idx, row in zones.iterrows():
             feature = ogr.Feature(layer_zones.GetLayerDefn())
             feature.SetField('ZONE_NAME', str(row.get('zone', '')))
-            feature.SetField('LOCATION_ID', int(row.get('LocationID', 0)))
+            feature.SetField('LOCATION_ID', int(row.get('locationid', 0)))
             feature.SetGeometry(ogr.CreateGeometryFromWkt(row.geometry.wkt))
             layer_zones.CreateFeature(feature)
             feature = None
@@ -503,12 +503,14 @@ else:
             # Add fields
             layer_parks.CreateField(ogr.FieldDefn('PARK_NAME', ogr.OFTString))
             layer_parks.CreateField(ogr.FieldDefn('ACRES', ogr.OFTReal))
+            layer_parks.CreateField(ogr.FieldDefn('BOROUGH', ogr.OFTString))
             
             # Add features (limit to first 100 for size)
             for idx, row in parks.head(100).iterrows():
                 feature = ogr.Feature(layer_parks.GetLayerDefn())
                 feature.SetField('PARK_NAME', str(row.get('name311', '')))
                 feature.SetField('ACRES', float(row.get('acres', 0)))
+                feature.SetField('BOROUGH', str(row.get('borough', '')))
                 feature.SetGeometry(ogr.CreateGeometryFromWkt(row.geometry.wkt))
                 layer_parks.CreateFeature(feature)
                 feature = None
@@ -529,8 +531,8 @@ else:
             # Add features
             for idx, row in subway.iterrows():
                 feature = ogr.Feature(layer_subway.GetLayerDefn())
-                feature.SetField('STATION_NAME', str(row.get('Station_Na', '')))
-                feature.SetField('LINE', str(row.get('Line', '')))
+                feature.SetField('STATION_NAME', str(row.get('stop_name', '')))
+                feature.SetField('LINE', str(row.get('line', '')))
                 feature.SetGeometry(ogr.CreateGeometryFromWkt(row.geometry.wkt))
                 layer_subway.CreateFeature(feature)
                 feature = None

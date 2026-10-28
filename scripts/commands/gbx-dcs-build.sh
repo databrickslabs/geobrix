@@ -72,7 +72,7 @@ die() { cleanup; echo "$1"; exit 1; }
 # trap) would then kill the shell with SIGPIPE, skipping the clean-up and the exit status. Ignored, the write
 # just fails. The clean-up itself writes nothing, so it is done before the closing message.
 trap '' PIPE
-interrupted() { cleanup; docker rmi "$TAG" > /dev/null 2>&1 || true; echo "Interrupted: removed the build's temporary files"; exit "$1"; }
+interrupted() { cleanup; docker rmi "$TAG" > /dev/null 2>&1 || true; echo "Interrupted: removed the build's temporary files" 2> /dev/null || true; exit "$1"; }
 trap 'interrupted 130' INT
 trap 'interrupted 143' TERM
 cp "$PROJECT_ROOT/scripts/docker/dcs/Dockerfile" "$CTX/Dockerfile" || die "PRECONDITION MISSING: could not stage the Dockerfile; gbx:dcs:build not run"

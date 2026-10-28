@@ -208,10 +208,12 @@ def _run_fallback_tile(tile, cellid, view_mode, core_fn):
         open_header,
     )
 
-    header_enough = view_mode == "header" or not _has_pending(
-        _to_virtual_tile(tile).metadata
-    )
-    if _tile_is_windowless_virtual(tile) and not _has_clip(tile) and header_enough:
+    # Pending instructions only concern a virtual tile, so they are read only for one: a
+    # materialized tile with a malformed pending key is read from its bytes, not nulled.
+    windowless = _tile_is_windowless_virtual(tile) and not _has_clip(tile)
+    if windowless and (
+        view_mode == "header" or not _has_pending(_to_virtual_tile(tile).metadata)
+    ):
         with open_header(tile) as ds:
             # The header view of a relabelled source wraps the file's own dataset; the
             # reprojection rule compares the target with the file's CRS (see open_tile).

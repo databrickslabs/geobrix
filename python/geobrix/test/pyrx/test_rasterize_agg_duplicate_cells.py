@@ -8,7 +8,11 @@ heavyweight tier sorts the group by ``(cellid, value)`` before the lookup is bui
 largest value wins; the lightweight tier now follows the same rule.
 
 The UDF bodies are called directly (``.func``) so the row order is exactly the order given.
-A null value is the presence mask (1.0) and is compared as 1.0, like any other value.
+
+A null value never wins: a typed Double column delivers a null as ``NaN``, which looks like
+a real ``NaN``, so both are ignored while the cell has a number, and a cell with only nulls
+burns ``NaN``. An omitted value is not a null column: the UDF receives an object column of
+``None``, and that is the presence mask, 1.0 for every cell.
 """
 
 import random
@@ -25,12 +29,20 @@ from databricks.labs.gbx.pyrx import _serde  # noqa: E402
 from databricks.labs.gbx.pyrx import functions as rx  # noqa: E402
 
 
-def _burn(grid, rows):
-    """The first band of the tile one group of ``rows`` produces, in the order given."""
+def _burn(grid, rows, omitted=False):
+    """The first band of the tile one group of ``rows`` produces, in the order given.
+
+    ``omitted``: the value was left out, which reaches the UDF as an object column of None
+    (a typed Double column of nulls is float64 NaN).
+    """
     cellid = pd.Series(
         [c for c, _ in rows], dtype="object" if grid == "bng" else "int64"
     )
-    value = pd.Series([v for _, v in rows], dtype="float64")
+    value = (
+        pd.Series([None] * len(rows), dtype=object)
+        if omitted
+        else pd.Series([v for _, v in rows], dtype="float64")
+    )
     if grid == "custom":
         from pyspark.sql import Row
 
@@ -68,9 +80,9 @@ def test_repeated_cells_burn_the_largest_value_in_any_row_order(grid):
         arrays[name], nodata = _burn(grid, order)
         covered = set(arrays[name][arrays[name] != nodata].tolist())
         assert covered, f"{grid} ({name}): nothing burned"
-        assert covered <= set(expected.values()), (
-            f"{grid} ({name}): a smaller duplicate was burned: "
-            f"{sorted(covered - set(expected.values()))}"
+        assert covered == set(expected.values()), (
+            f"{grid} ({name}): burned {sorted(covered)}, "
+            f"expected exactly {sorted(set(expected.values()))}"
         )
 
     # The same cells in another order give the same raster, pixel for pixel.
@@ -78,3 +90,49 @@ def test_repeated_cells_burn_the_largest_value_in_any_row_order(grid):
         assert np.array_equal(
             arrays["as given"], arrays[name]
         ), f"{grid}: raster differs between the row order 'as given' and '{name}'"
+
+
+@pytest.mark.parametrize("grid", sorted(dc.GRIDS))
+def test_a_null_value_never_wins_a_repeated_cell(grid):
+    cells = dc.GRIDS[grid]()
+    rows, expected = dc.null_rows(cells)
+    shuffled = list(rows)
+    random.Random(11).shuffle(shuffled)
+    arrays = {}
+    for name, order in {
+        "as given": rows,
+        "reversed": rows[::-1],
+        "shuffled": shuffled,
+    }.items():
+        arrays[name], nodata = _burn(grid, order)
+        burned = arrays[name][arrays[name] != nodata]
+        numbers = {v for v in burned.tolist() if v == v}
+        assert numbers == {v for v in expected.values() if v == v}, f"{grid} ({name})"
+        assert np.isnan(
+            burned
+        ).any(), f"{grid} ({name}): the all-null cell must burn NaN"
+    for name in ("reversed", "shuffled"):
+        assert np.array_equal(arrays["as given"], arrays[name], equal_nan=True)
+
+
+@pytest.mark.parametrize("grid", sorted(dc.GRIDS))
+def test_a_typed_column_of_nulls_burns_nan_but_an_omitted_value_is_the_presence_mask(
+    grid,
+):
+    rows = [(c, np.nan) for c in dc.GRIDS[grid]()[:3]]
+    typed, nodata = _burn(grid, rows)
+    burned = typed[typed != nodata]
+    assert burned.size and np.isnan(burned).all(), f"{grid}: typed nulls must burn NaN"
+    omitted, nodata = _burn(grid, rows, omitted=True)
+    assert set(omitted[omitted != nodata].tolist()) == {1.0}, f"{grid}: no mask"
+
+
+def test_two_spellings_of_one_bng_cell_burn_the_largest_value_in_any_order():
+    cells = dc.GRIDS["bng"]()
+    spaced = cells[0][:2] + " " + cells[0][2:]  # TQ3080 and TQ 3080 are one cell
+    others = [(c, 4.0 + i) for i, c in enumerate(cells[1:4])]
+    rows = [(cells[0], 9.0), (spaced, 2.0)] + others
+    for order in (rows, rows[::-1]):
+        pixels, nodata = _burn("bng", order)
+        burned = set(pixels[pixels != nodata].tolist())
+        assert 9.0 in burned and 2.0 not in burned, burned

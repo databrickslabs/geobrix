@@ -23,6 +23,9 @@ from pyspark.sql import SparkSession
 
 from databricks.labs.gbx.stac import StacClient
 
+# search_one retries a failing catalog with tenacity's exponential wait (4 s and up).
+pytestmark = pytest.mark.usefixtures("no_backoff_sleep")
+
 _ITEM = {
     "id": "S2_X",
     "collection": "sentinel-2-l2a",

@@ -1239,9 +1239,7 @@ if _jpg_files:
 
 _CELL_PMTILES = """# PMTiles benchmark: light pmtiles_gbx vs heavy pmtiles (both on-cluster) + parity check
 from databricks.labs.gbx.bench import readers as _rd
-from pmtiles.reader import MemorySource, Reader as _PMReader
-import pmtiles.reader as _pmr
-import gzip as _gz
+from databricks.labs.gbx.pmtiles._directory import iter_tiles as _iter_tiles
 import os as _os
 import shutil as _sh
 # Both pmtiles writers are two-phase (executor-write -> driver-merge), so their
@@ -1274,23 +1272,12 @@ if HEAVYWEIGHT:
     _sink([_r]); hw.append(_r); _pmtiles_rows.append(_r)
 # Parity check: decode all tiles from both archives and compare (z,x,y) keys+bytes.
 if LIGHTWEIGHT and HEAVYWEIGHT and _pl and _ph:
-    # The Python pmtiles Reader gzip-decompresses directories unconditionally, but
-    # PMTiles directories may be uncompressed (the heavy Scala writer uses
-    # internal_compression=NONE). Patch deserialize_directory to fall back to the
-    # raw bytes (re-gzip so the lib's own parser still runs) -> reads both tiers.
-    _orig_dd = _pmr.deserialize_directory
-    def _dd_compat(_buf):
-        try:
-            return _orig_dd(_buf)
-        except Exception:
-            return _orig_dd(_gz.compress(bytes(_buf)))
-    _pmr.deserialize_directory = _dd_compat
-
     def _decode_any(path):
         # Return {(z,x,y): bytes} for every tile in path (file or dir of *.pmtiles).
-        # Read the whole archive into memory (sequential) and use MemorySource:
-        # the DBFS/Volumes paths are cloud object storage and do not support the
-        # mmap/seek that MmapSource needs.
+        # Read the whole archive into memory (sequential): the DBFS/Volumes paths
+        # are cloud object storage and do not support the seek that a lazy
+        # reader needs. iter_tiles reads the directories by the header, so it
+        # decodes the heavy writer's uncompressed ones as well as the light gzip.
         import os as _os2
         if _os2.path.isfile(path):
             files = [path]
@@ -1301,19 +1288,8 @@ if LIGHTWEIGHT and HEAVYWEIGHT and _pl and _ph:
         for _pf in files:
             with open(_pf, "rb") as _fh:
                 _data = _fh.read()
-            _rdr = _PMReader(MemorySource(_data))
-            # min/max zoom live in the PMTiles header (not metadata); the Reader
-            # tile accessor is .get(z, x, y) (returns None when absent).
-            _hdr = _rdr.header()
-            _zmin = int(_hdr["min_zoom"])
-            _zmax = int(_hdr["max_zoom"])
-            for _z in range(_zmin, _zmax + 1):
-                _side = 2 ** _z
-                for _x in range(_side):
-                    for _y in range(_side):
-                        _b = _rdr.get(_z, _x, _y)
-                        if _b is not None:
-                            tiles[(_z, _x, _y)] = bytes(_b)
+            for _key, _b in _iter_tiles(_data):
+                tiles[_key] = bytes(_b)
         return tiles
     _verdict_path = "/dbfs/tmp/gbx_bench/parity_verdict.txt"
     try:

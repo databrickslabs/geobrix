@@ -714,6 +714,22 @@ def test_lidar_laz_declaring_a_huge_point_count_fabricates_none(tmp_path):
     )
 
 
+def test_lidar_laz_without_lazrs_still_caps_a_huge_point_count_by_file_size(
+    tmp_path, monkeypatch
+):
+    """With no chunk table to take the limit from (lazrs is not the decoder), a header
+    count beyond what the bytes of the file could hold is capped by the file's size."""
+    from databricks.labs.gbx.ds import lidar
+
+    path = _laz(tmp_path / "a.laz")
+    _declare_points(path, 10**9)
+    monkeypatch.setattr(lidar, "_read_chunk_table", lambda *a: None)
+    rows, recs = _read(tmp_path, path, "lidar_gbx")
+    assert len(rows) == 5000 and _at_offset_corner(rows) == []
+    (capped,) = [r for r in recs if "can hold" in r["error_message"]]
+    assert capped["error_class"] == Q.RECORDS_NOT_READ
+
+
 def test_lidar_valid_laz_reads_every_point_and_no_record(tmp_path):
     path = _laz(tmp_path / "a.laz")
     rows, recs = _read(tmp_path, path, "lidar_gbx")
@@ -1147,7 +1163,18 @@ def test_lidar_variable_chunk_laz_with_a_bad_size_for_its_unused_last_chunk_is_r
     assert rows == 120_000 and recs == []
 
 
-@pytest.mark.parametrize("where", ["valid", "offset_minus_one", "offset_past_file"])
+# Each refusal of the chunk-table check and the words that name it; "valid" is let through.
+_CHUNK_TABLE_VERDICTS = {
+    "offset_past_file": "chunk table offset",
+    "ends_in_points": "ends before its point data",
+    "empty_table": "chunk table is empty",
+    "huge_chunk": "declares a chunk of 5000000 points",
+}
+
+
+@pytest.mark.parametrize(
+    "where", ["valid", "offset_minus_one", *_CHUNK_TABLE_VERDICTS], ids=str
+)
 def test_lidar_chunk_table_problem_verdicts(tmp_path, where):
     """The check itself (it reads three small pieces of the file and never calls
     the decoder, so it is safe to run in this process): a table it lets through
@@ -1156,10 +1183,15 @@ def test_lidar_chunk_table_problem_verdicts(tmp_path, where):
 
     from databricks.labs.gbx.ds.lidar import _ChunkTable, _read_chunk_table
 
-    path = _laz(tmp_path / "c.laz", 120_000)
+    # a fixed-chunk file keeps no point count per chunk; only a variable-chunk one can lie
+    # about one
+    if where == "huge_chunk":
+        path = str(_variable_chunk_laz(tmp_path / "c.laz"))
+    else:
+        path = _laz(tmp_path / "c.laz", 120_000)
     at, _, _ = _chunk_table(path)
+    start = _start_of_points(path)
     with open(path, "r+b") as fh:
-        start = struct.unpack("<I", (fh.seek(96), fh.read(4))[1])[0]
         fh.seek(start)
         if where == "offset_minus_one":  # the real offset in the last 8 bytes
             fh.write(struct.pack("<q", -1))
@@ -1167,6 +1199,14 @@ def test_lidar_chunk_table_problem_verdicts(tmp_path, where):
             fh.write(struct.pack("<q", at))
         elif where == "offset_past_file":
             fh.write(struct.pack("<q", 1 << 40))
+        elif where == "ends_in_points":  # a truncated upload: not even the table offset
+            fh.truncate(start + 4)
+        elif where == "empty_table":  # no chunks, for a header that declares points
+            fh.seek(at + 4)
+            fh.write(struct.pack("<I", 0))
+    if where == "huge_chunk":  # 5 million points is more than a chunk may decode to
+        entries = _chunk_entries(path)
+        _replace_chunk_table(path, [n for _, n in entries], [5_000_000] * len(entries))
     with laspy.open(path) as r:
         result = _read_chunk_table(r.header, path, os.path.getsize(path))
     if where in ("valid", "offset_minus_one"):
@@ -1174,7 +1214,7 @@ def test_lidar_chunk_table_problem_verdicts(tmp_path, where):
         assert len(result.entries) == 3  # 120,000 points in chunks of 50,000
         assert result.chunk_size == 50_000 and result.item_size == 34
     else:
-        assert isinstance(result, str) and "chunk table offset" in result
+        assert isinstance(result, str) and _CHUNK_TABLE_VERDICTS[where] in result
 
 
 def test_lidar_laz_whose_laszip_record_cannot_be_decoded_is_one_bad_record(tmp_path):

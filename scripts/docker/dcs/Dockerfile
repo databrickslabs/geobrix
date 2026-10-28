@@ -53,7 +53,7 @@ COPY geobrix-${GEOBRIX_VERSION}-py3-none-any.whl /tmp/geobrix-wheel/
 # "Looking in indexes: <url>" into the build log. Its output goes to a file that is printed through
 # redact_pip_log.py (bind-mounted from the build context, so it is not in the image), so a warning or an
 # error from a failing install ("Could not fetch URL <index>/...") does not name the index either; the
-# install's exit status is checked after the print.
+# install's exit status is checked after the print and becomes the step's own.
 RUN --mount=type=secret,id=pip_index_url \
     --mount=type=bind,source=redact_pip_log.py,target=/mnt/redact_pip_log.py \
     if [ -s /run/secrets/pip_index_url ]; then export PIP_INDEX_URL="$(cat /run/secrets/pip_index_url)"; fi && \
@@ -63,7 +63,7 @@ RUN --mount=type=secret,id=pip_index_url \
         "geobrix[light_env6,vizx] @ file:///tmp/geobrix-wheel/geobrix-${GEOBRIX_VERSION}-py3-none-any.whl" \
         > /tmp/pip-install.log 2>&1 || pip_rc=$?; } && \
     /databricks/python3/bin/python /mnt/redact_pip_log.py /tmp/pip-install.log && \
-    [ "$pip_rc" -eq 0 ] && \
+    { [ "$pip_rc" -eq 0 ] || exit "$pip_rc"; } && \
     /databricks/python3/bin/python -m pip check && \
     rm -rf /tmp/geobrix-wheel /tmp/base-constraints.txt /tmp/pip-install.log
 # Dedicated clusters load /databricks/jars; one GeoBrix JAR per cluster, so never also attach it as a library.

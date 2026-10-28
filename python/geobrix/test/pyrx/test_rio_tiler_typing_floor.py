@@ -15,12 +15,20 @@ The floor is the PEP 728 minimum on purpose. On the 4.12.2 bases pip upgrades to
 release under any floor of 4.13 or higher, so raising it gains nothing there; DBR 19, DBR 19 ML
 and env 6 preinstall 4.15.0, so a floor above 4.15.0 would move it there for no gain. The floor
 has no upper bound: a cap would downgrade a later base.
+
+The reads above are static. ``test_rio_tiler_imports_at_the_declared_typing_extensions_floor``
+installs the floor for real; it needs the package index, so it is marked ``integration`` and runs
+on demand.
 """
 
 import re
+import shutil
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
+import pytest
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 from packaging.version import Version
@@ -151,3 +159,61 @@ def test_the_installed_typing_extensions_accepts_extra_items():
         name: str
 
     assert Probe.__required_keys__ == frozenset({"name"})
+
+
+# What uv prints when it cannot reach the index (not when it cannot solve).
+INDEX_UNREACHABLE = (
+    "request failed after",
+    "failed to fetch",
+    "error sending request",
+    "tcp connect error",
+    "dns error",
+    "timed out",
+)
+
+
+def _without_urls(text):
+    # uv names the index in its errors; keep it out of test output.
+    return re.sub(r"\S+://\S+", "<url>", text)[-800:]
+
+
+@pytest.mark.integration
+def test_rio_tiler_imports_at_the_declared_typing_extensions_floor(tmp_path):
+    # The CI locks resolve typing_extensions to the newest release, so only a fresh
+    # environment at the declared floor shows whether the floor is high enough.
+    uv = shutil.which("uv")
+    if uv is None:
+        pytest.skip("uv is not installed")
+    rio_tiler = next(
+        r for r in _closure("light_dbr17") if canonicalize_name(r.name) == "rio-tiler"
+    )
+    venv = tmp_path / "venv"
+    subprocess.run(
+        [uv, "venv", "--python", sys.executable, str(venv)],
+        check=True,
+        capture_output=True,
+    )
+    py = str(venv / "bin" / "python")
+    install = subprocess.run(
+        [
+            uv,
+            "pip",
+            "install",
+            "--python",
+            py,
+            f"typing_extensions=={_floor('light_dbr17')}",
+            str(rio_tiler),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if install.returncode != 0:
+        unreachable = [m for m in INDEX_UNREACHABLE if m in install.stderr.lower()]
+        if unreachable:  # no package index: nothing to judge
+            pytest.skip(f"the package index is not reachable ({unreachable[0]})")
+        # Anything else (a floor the closure cannot satisfy, say) is what this test is for.
+        pytest.fail("uv could not install the floor: " + _without_urls(install.stderr))
+    probe = subprocess.run(
+        [py, "-c", "import rio_tiler, rio_tiler.io"], capture_output=True, text=True
+    )
+    assert probe.returncode == 0, _without_urls(probe.stderr)

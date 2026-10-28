@@ -36,13 +36,14 @@ def _rebuild_with_max_zoom(raw: bytes, keep_max_z: int) -> bytes:
     Preserves tile type and tile content; the header bounds/zoom range are
     recomputed from the kept tiles via the shared header builder.
     """
-    from pmtiles.reader import MemorySource, Reader, all_tiles
+    from pmtiles.reader import MemorySource, Reader
     from pmtiles.tile import Compression, zxy_to_tileid
     from pmtiles.writer import Writer
 
     from databricks.labs.gbx.ds.tiles._header import build_header_info, sniff_tile_type
     from databricks.labs.gbx.ds.tiles.grid import SlippyGrid
     from databricks.labs.gbx.pmtiles import pmtiles_info
+    from databricks.labs.gbx.pmtiles._directory import iter_tiles
 
     info = pmtiles_info(raw)
     metadata = info.get("metadata") or {}
@@ -57,7 +58,7 @@ def _rebuild_with_max_zoom(raw: bytes, keep_max_z: int) -> bytes:
 
     kept = []  # (z, x, y, payload)
     first_payload = None
-    for (z, x, y), payload in all_tiles(MemorySource(raw)):
+    for (z, x, y), payload in iter_tiles(raw):
         if z > keep_max_z:
             continue
         if first_payload is None:

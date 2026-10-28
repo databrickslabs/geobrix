@@ -14,7 +14,26 @@ before calling :func:`fill`; parity decoders call :func:`decode` and re-render.
 from __future__ import annotations
 
 import struct
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
+
+
+def collect(
+    pairs: Iterable[Tuple[int, Optional[float]]],
+) -> Dict[int, Optional[float]]:
+    """``{cell_id: value}`` from ``(cell_id, value)`` pairs, one value per distinct cell.
+
+    A cell id that repeats keeps its LARGEST non-null value, the same rule the cell
+    rasterizers use for a repeated cell; ``None`` (covered but missing) survives only
+    when every value of the cell is ``None``. Arrival order inside a Spark group is not
+    fixed, so "the last row wins" gave a different fill from run to run.
+    """
+    cells: Dict[int, Optional[float]] = {}
+    for cell_id, value in pairs:
+        if cell_id not in cells or (
+            value is not None and (cells[cell_id] is None or value > cells[cell_id])
+        ):
+            cells[cell_id] = value
+    return cells
 
 
 def fill(
@@ -37,8 +56,9 @@ def fill(
     - A None cell with no valid neighbour within k rings stays None.
     - k_loop rings are disjoint hollow rings — no double-counting.
     - Only in-group (present in *cells*) neighbours contribute.
-    - Duplicate cell-ID tie-break: last-write-wins (matches heavy ``toMap``);
-      callers build the dict in row-arrival order.
+    - A cell id that repeats keeps its LARGEST non-null value (see :func:`collect`),
+      so the result does not depend on row-arrival order; callers build *cells*
+      with :func:`collect`.
 
     Args:
         cells: ``{int_cell_id: Optional[float]}`` — None = covered-but-missing.

@@ -253,6 +253,55 @@ def test_valid_mask_applies_the_alpha_band_at_every_band_count(
     assert (windowed == got[1:, 1:]).all()
 
 
+@pytest.mark.parametrize("name", list(al.LAYOUTS))
+def test_read_valid_judges_a_band_by_the_alpha_band_beside_its_own_mask(name):
+    """``read_valid`` is a band's float64 data with its validity by the rule of both tiers: opaque
+    where the raster has an alpha band (also at 3 bands, where GDAL's own mask ignores it).
+    """
+    with MemoryFile(al.layout_bytes(name)) as mf, mf.open() as ds:
+        data, valid = nd.read_valid(ds, 1)
+        raw = ds.read(1)
+    assert data.dtype == np.float64 and (data == raw).all()
+    rows = (1, 3) if al.LAYOUTS[name][1] else (0, 1, 2, 3)  # the pattern's opaque rows
+    assert [bool(r.all()) for r in valid] == [i in rows for i in range(4)], name
+
+
+@pytest.mark.parametrize(
+    "name,all_labels,want",
+    [
+        ("rgba", False, [None, None, None, ColorInterp.alpha]),
+        ("rgba_x", False, [None, None, None, ColorInterp.undefined, None]),
+        ("rgb_nir", False, [None, None, None, None]),
+        (
+            "rgba",
+            True,
+            [
+                *(ColorInterp.red, ColorInterp.green, ColorInterp.blue),
+                ColorInterp.alpha,
+            ],
+        ),
+        (
+            "rgba_x",
+            True,
+            [
+                *(ColorInterp.red, ColorInterp.green, ColorInterp.blue),
+                *([ColorInterp.undefined] * 2),
+            ],
+        ),
+        (
+            "gray_x_alpha",
+            True,
+            [ColorInterp.gray, ColorInterp.undefined, ColorInterp.alpha],
+        ),
+    ],
+)
+def test_carried_labels_copy_alpha_only_from_the_alpha_band(name, all_labels, want):
+    """The copy rule of the light tier: alpha only on the alpha band, an alpha label anywhere else
+    is data (undefined), and with ``all_labels`` the plain colour labels are copied too.
+    """
+    assert nd.carried_labels(al.LAYOUTS[name][0], all_labels) == want
+
+
 def test_valid_mask_of_a_raster_that_is_only_an_alpha_band():
     """With no data band to mask, the alpha band decides: valid where it is not 0."""
     data = np.array([[[0, 255], [7, 0]]], dtype="uint8")

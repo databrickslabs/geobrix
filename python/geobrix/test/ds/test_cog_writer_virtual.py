@@ -20,6 +20,7 @@ import pytest
 import rasterio
 from pyspark.sql.types import StringType, StructField, StructType
 from rasterio.transform import from_origin
+from shapely import box, to_wkb
 
 from databricks.labs.gbx.ds.cog_writer import CogGbxWriter, assert_path_schema
 from databricks.labs.gbx.ds.raster import reader_schema, reader_schema_v2
@@ -480,15 +481,21 @@ def test_whole_file_virtual_keeps_source_stem_name(tmp_path):
 # -- provenance-marked parts of one source (window / clip / band) ------------
 
 
-def _part_row(source, *, window=None, band=None, path=None, metadata=None, value=10):
+def _part_row(
+    source, *, window=None, band=None, clip=None, path=None, metadata=None, value=10
+):
     """A materialized tile row cut out of ``source``: bytes set, plus the provenance
-    a tile function stamps (window within its parent, or a 1-based band marker)."""
+    a tile function stamps (window within its parent, a 1-based band marker, or a clip).
+    """
     row = _v2_row(
         7, raster=_gtiff_bytes(value), window=window, path=path, metadata=metadata
     )
     row["source"] = source
     if band is not None:
         row["tile"]["metadata"]["band"] = str(band)
+    if clip is not None:
+        row["tile"]["clip_polygon"] = to_wkb(box(*clip))
+        row["tile"]["clip_crs"] = "EPSG:4326"
     return row
 
 
@@ -499,15 +506,25 @@ def _stem(writer, row):
     return os.path.basename(writer._out_path_for(vt, row))
 
 
-def test_windows_of_one_source_with_identical_bytes_get_distinct_names(tmp_path):
-    """Sibling windows share the parent's cellid and source. Even byte-identical
-    windows (e.g. all-NoData) are different places, so the window is part of the
-    name's key."""
+@pytest.mark.parametrize(
+    "parts",
+    [
+        # Sibling windows share the parent's cellid and source; even byte-identical ones
+        # (all-NoData) are different places, so the window is part of the name's key.
+        [dict(window=(256, 0, 256, 256)), dict(window=(0, 256, 256, 256))],
+        # Band tiles have the parent's cellid, source and extent: the band marker tells
+        # them apart, even when the bands hold identical pixels.
+        [dict(band=1), dict(band=2), dict(band=3)],
+        # Clip-only parts have no window and no band: only the clip polygon tells them apart.
+        [dict(clip=(0, 0, 1, 1)), dict(clip=(1, 1, 2, 2))],
+    ],
+    ids=["windows", "bands", "clips"],
+)
+def test_parts_of_one_source_with_identical_bytes_get_distinct_names(tmp_path, parts):
     w = CogGbxWriter(str(tmp_path / "out"), _v2_schema(), overwrite=True)
-    a = _stem(w, _part_row("/data/parent.tif", window=(256, 0, 256, 256)))
-    b = _stem(w, _part_row("/data/parent.tif", window=(0, 256, 256, 256)))
-    assert a != b
-    assert a.startswith("parent_") and b.startswith("parent_")
+    names = {_stem(w, _part_row("/data/parent.tif", **kw)) for kw in parts}
+    assert len(names) == len(parts)
+    assert all(n.startswith("parent_") for n in names)
 
 
 def test_pathless_origin_window_is_a_part(tmp_path):
@@ -517,15 +534,6 @@ def test_pathless_origin_window_is_a_part(tmp_path):
     w = CogGbxWriter(str(tmp_path / "out"), _v2_schema(), overwrite=True)
     origin = _stem(w, _part_row("/data/parent.tif", window=(0, 0, 256, 256)))
     assert origin.startswith("parent_")
-
-
-def test_band_tiles_of_one_source_get_distinct_names(tmp_path):
-    """Band tiles have the parent's cellid, source and extent: the band marker is
-    what tells them apart, even when the bands hold identical pixels."""
-    w = CogGbxWriter(str(tmp_path / "out"), _v2_schema(), overwrite=True)
-    names = {_stem(w, _part_row("/data/parent.tif", band=band)) for band in (1, 2, 3)}
-    assert len(names) == 3
-    assert all(n.startswith("parent_") for n in names)
 
 
 def test_part_name_is_deterministic(tmp_path):

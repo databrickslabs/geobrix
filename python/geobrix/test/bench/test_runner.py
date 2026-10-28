@@ -547,6 +547,90 @@ def test_run_spark_path_tile_aggregators_produce_raster_fingerprints(tmp_path, s
         assert parsed["kind"] == "raster", (name, parsed.get("kind"))
 
 
+def test_the_general_harness_refuses_to_time_a_plan_that_is_not_lightweight(
+    tmp_path, spark
+):
+    """The harness records every spark-path row as lightweight. A Column whose plan holds no
+    Python node (what a heavyweight function registered under the same SQL name plans as) is
+    refused, on the scalar path and the aggregate path, by the run-stopping tier error.
+    """
+    import dataclasses
+
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.bench import readers as rd
+
+    corpus = dg.generate_corpus(
+        out_dir=tmp_path,
+        seed=8,
+        tile_px=[32],
+        bands=[2],
+        dtypes=["float32"],
+        srids=[4326],
+        nodata_fracs=[0.0],
+        row_rows=4,
+        row_tile_px=32,
+        row_bands=2,
+        row_dtype="float32",
+    )
+    (scalar,) = s.select(functions=["rst_width"])
+    (agg,) = s.select(functions=["rst_merge_agg"])
+    not_light = [
+        dataclasses.replace(scalar, col_fn=lambda t, a: F.length(t["raster"])),
+        dataclasses.replace(agg, col_fn=lambda t, a: F.first(t)),
+    ]
+    for fs in not_light:
+        with pytest.raises(rd.TierResolutionError, match="heavyweight implementation"):
+            rn.run_spark_path(
+                spark=spark,
+                corpus_root=tmp_path,
+                corpus=corpus,
+                fnspecs=[fs],
+                run_id="t",
+                row_counts=[2],
+                warmup=0,
+                measured=1,
+                where="venv",
+            )
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "rst_h3_rasterize_agg",
+        "rst_quadbin_rasterize_agg",
+        "rst_bng_rasterize_agg",
+        "rst_custom_rasterize_agg",
+    ],
+)
+def test_the_bench_rasterize_input_is_the_presence_mask(spark, name):
+    """The bench times the presence mask: its light col_fn passes the value OMITTED. The
+    streamed value column is typed and all null, which the light tier reads as data and burns
+    as NaN (only an omitted value burns 1.0), so passing that column would give the light tier
+    a NaN fingerprint against the heavyweight tier's 1.0."""
+    import numpy as np
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.pyrx import _serde
+
+    (fs,) = s.select(functions=[name])
+    build = (
+        rn._h3_aggregate_df
+        if fs.input_kind == "h3_aggregate"
+        else rn._grid_aggregate_df
+    )
+    df = build(spark, fs).withColumn("key", F.lit(0))
+    out = (
+        df.groupBy("key")
+        .agg(fs.col_fn(df["cellid"], df["value"], fs.args).alias("out"))
+        .collect()[0]["out"]
+    )
+    with _serde.open_tile(bytes(out["raster"])) as ds:
+        pixels = ds.read(1)
+        burned = pixels[pixels != ds.nodata]
+    assert burned.size and np.all(burned == 1.0), np.unique(burned)
+
+
 def test_run_aggregate_passes_minimal_warmup_fn(tmp_path, spark, monkeypatch):
     # The agg perf loop must hand time_iters a warmup_fn (the minimal one-key-per-partition
     # warm scaled), so the warm-up no longer re-aggregates the full n-key group. Spy on
@@ -1014,3 +1098,34 @@ def test_worker_rss_sampler_reports_the_peak_of_matching_processes():
         seen.peak_anon_mb >= 100
     ), seen.peak_anon_mb  # the bytearray is heap, not a file
     assert none.peak_mb == 0.0 and none.peak_anon_mb == 0.0
+
+
+@pytest.mark.skipif(
+    not os.path.exists("/proc/self/smaps_rollup"),
+    reason="the sampler reads smaps_rollup (Linux 4.14+)",
+)
+def test_worker_rss_sampler_counts_pages_shared_with_forked_workers_once():
+    """The daemon forks its workers, which share its copy-on-write pages: summing each
+    process's own RSS counted a 200 MB parent four times (one parent, three forks), the
+    proportional sum counts it about once."""
+    import subprocess
+    import sys
+
+    marker = "gbx-rss-fork-marker"
+    code = (
+        "import os, time\n"
+        "b = bytearray(200 * 1024 * 1024); b[::4096] = b'x' * len(b[::4096])\n"
+        "for _ in range(3):\n"
+        "    if os.fork() == 0:\n"
+        "        time.sleep(2.5)\n"
+        "        os._exit(0)\n"
+        "time.sleep(2.5)\n"
+    )
+    proc = subprocess.Popen([sys.executable, "-c", code, marker])
+    try:
+        with rn.WorkerRssSampler(match=marker, interval_s=0.05) as seen:
+            time.sleep(1.8)
+    finally:
+        proc.kill()
+        proc.wait()
+    assert 150 <= seen.peak_anon_mb < 400, seen.peak_anon_mb  # four counts is 800+

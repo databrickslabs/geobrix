@@ -14,6 +14,7 @@ from databricks.labs.gbx.zarr._meta import (
     parse_v2,
     parse_v3,
     with_shape,
+    xarray_fill_form,
 )
 from databricks.labs.gbx.zarr.errors import ZarrUnsupported
 
@@ -134,6 +135,79 @@ def test_cf_decode_reads_xarray_base64_fill_attr(era5_v3_unsharded):
     assert out[0] == 1.0 and np.isnan(out[1])
     # the store's own t2m attribute (NaN) decodes without error
     assert np.isnan(cf_decode(np.array([np.nan], dtype="<f4"), m)[0])
+
+
+def _b64(value, fmt="<d"):
+    return base64.standard_b64encode(struct.pack(fmt, value)).decode()
+
+
+@pytest.mark.parametrize(
+    "dtype, given, want",
+    [
+        ("float32", "NaN", _b64(float("nan"))),
+        ("float32", float("nan"), _b64(float("nan"))),
+        ("float64", -9999.0, _b64(-9999.0)),
+        ("float32", -9999, _b64(-9999.0)),
+        ("float32", "Infinity", _b64(float("inf"))),
+        ("float32", "-Infinity", _b64(float("-inf"))),
+        (
+            "float32",
+            "0xc61c4000",
+            _b64(-10000.0),
+        ),  # the v3 spec's big-endian bit pattern
+        ("float16", 0.5, _b64(0.5)),
+        ("float32", _b64(-9999.0), None),  # already xarray's form: unchanged
+        ("float32", None, None),
+        ("float32", "not a number", None),  # left for the reader to name
+        ("float32", True, None),
+        ("int16", -1, None),  # integers keep a plain number
+    ],
+)
+def test_xarray_fill_form_of_a_v3_float_fill_attribute(dtype, given, want):
+    """The one place a v3 float ``_FillValue`` attribute gets xarray's base64 form; the
+    reader ``_cf_fill_attr`` takes it back. The array's own ``fill_value`` is not touched.
+    """
+    doc = {
+        "zarr_format": 3,
+        "node_type": "array",
+        "data_type": dtype,
+        "fill_value": "NaN" if dtype.startswith("float") else 0,
+        "attributes": {"units": "K", "_FillValue": given},
+    }
+    out = xarray_fill_form(doc)
+    if want is None:
+        assert out is doc
+        return
+    assert out["attributes"] == {"units": "K", "_FillValue": want}
+    assert out["fill_value"] == doc["fill_value"]
+    assert repr(doc["attributes"]["_FillValue"]) == repr(
+        given
+    )  # the caller's stays theirs
+    assert xarray_fill_form(out) is out  # and it is stable
+    back = parse_v3("n", {**out, "chunk_grid": _GRID, "codecs": [], "shape": [1]})
+    assert back.attrs["_FillValue"] == want
+
+
+_GRID = {"name": "regular", "configuration": {"chunk_shape": [1]}}
+
+
+def test_xarray_fill_form_leaves_other_documents_alone():
+    v2 = {".zarray": {"fill_value": "NaN"}, ".zattrs": {"_FillValue": "NaN"}}
+    group = {
+        "zarr_format": 3,
+        "node_type": "group",
+        "attributes": {"_FillValue": "NaN"},
+    }
+    plain = {"zarr_format": 3, "node_type": "array", "data_type": "float32"}
+    # zarr 3.4.1 writes the data type of a datetime64 array as a dict
+    when = {
+        "zarr_format": 3,
+        "node_type": "array",
+        "data_type": {"name": "numpy.datetime64", "configuration": {"unit": "ns"}},
+        "attributes": {"_FillValue": "NaN"},
+    }
+    for doc in (v2, group, plain, when, [1], None):
+        assert xarray_fill_form(doc) is doc
 
 
 def _int_meta(era5_v3_unsharded, attrs):

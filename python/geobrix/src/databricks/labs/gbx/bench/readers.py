@@ -60,12 +60,23 @@ def _impl_of_plan(plan: str, generator: bool = False) -> str:
     The bench inputs are plain DataFrames, so a Python node in the plan can only
     come from a lightweight function. With ``generator=True`` a heavyweight plan
     must also run a ``Generate``; otherwise the result is ``"unknown"``.
+
+    The test is PLAN-WIDE: a Python node anywhere in the plan, including the one that
+    builds the input, marks the whole plan lightweight. A heavyweight leg whose input is
+    made by a lightweight-only helper (``gbx_rst_fromfile`` is a Python UDF) therefore
+    reads as lightweight and is refused; build such an input before the timed plan, or
+    read it with the heavyweight reader. :func:`_python_node_in` names the node.
     """
     if any(m in plan for m in _PYTHON_PLAN_MARKERS):
         return "lightweight"
     if generator and "Generate" not in plan:
         return "unknown"
     return "heavyweight"
+
+
+def _python_node_in(plan: str) -> str:
+    """The first Python plan-node marker found in ``plan``, else ``""``."""
+    return next((m for m in _PYTHON_PLAN_MARKERS if m in plan), "")
 
 
 def _plan_text(df) -> str:
@@ -79,19 +90,27 @@ def _plan_text(df) -> str:
     return buf.getvalue()
 
 
-def _require_tier(api: str, fn: str, resolved: str, query: str = "") -> None:
-    """Raise :class:`TierResolutionError` unless the query resolved to ``api``."""
+def _require_tier(
+    api: str, fn: str, resolved: str, query: str = "", node: str = ""
+) -> None:
+    """Raise :class:`TierResolutionError` unless the query resolved to ``api``.
+
+    ``query`` is the SQL that was planned and ``node`` the Python plan node that made it
+    read as lightweight; each is named in the message when known.
+    """
     if resolved != api:
         where = f" Query: {query}" if query else ""
+        why = f" (plan node: {node})" if node else ""
         raise TierResolutionError(
-            f"{fn}: the {api} leg's query runs the {resolved} implementation; "
+            f"{fn}: the {api} leg's query runs the {resolved} implementation{why}; "
             f"refusing to time it.{where}"
         )
 
 
 def _assert_tier(api: str, fn: str, df, generator: bool = False) -> None:
     """Check the plan of the DataFrame a leg is about to time runs ``api``'s implementation."""
-    _require_tier(api, fn, _impl_of_plan(_plan_text(df), generator))
+    plan = _plan_text(df)
+    _require_tier(api, fn, _impl_of_plan(plan, generator), node=_python_node_in(plan))
 
 
 def _explode_impl(spark, sql: str) -> str:
@@ -6768,9 +6787,10 @@ def _run_bng_explode(
 
     ``build()`` returns the ``(rows, schema)`` input corpus, registered as ``view``;
     ``call`` is the SQL call over that view's columns. Before timing, the leg reads
-    the plan of its query and raises :class:`TierResolutionError` unless it runs
-    ``api``'s implementation. Records ``rows`` = number of input rows. Returns one
-    ResultRow (mode="spark-path", category="grid").
+    the plan of its query: a query that runs the OTHER tier's implementation raises
+    :class:`TierResolutionError`, and one that runs neither (the function is not
+    registered) gives an error row. Records ``rows`` = number of input rows. Returns
+    one ResultRow (mode="spark-path", category="grid").
     """
     env = capture_env(where)
     cat = "grid"
@@ -6810,7 +6830,9 @@ def _run_bng_explode(
     sql = _bng_explode_sql(api, view, call)
     try:
         resolved = _explode_impl(spark, sql)
-    except Exception as e:  # noqa: BLE001 -- e.g. the function is not registered
+    except (
+        Exception
+    ) as e:  # noqa: BLE001 -- EXPLAIN itself failed (an unregistered function does not)
         return _tin_result_row(
             run_id=run_id,
             api=api,
@@ -6820,6 +6842,21 @@ def _run_bng_explode(
             rows=n,
             status="error",
             note=str(e),
+            warmup=warmup,
+        )
+    if resolved == "unknown":
+        # EXPLAIN does not raise for a function that is not registered: it prints the
+        # [UNRESOLVED_ROUTINE] error in the plan, which has no Python node and no Generate.
+        # Nothing was resolved, so nothing can be mis-timed: an error row, not an abort.
+        return _tin_result_row(
+            run_id=run_id,
+            api=api,
+            fn=fn,
+            category=cat,
+            env=env,
+            rows=n,
+            status="error",
+            note=f"{fn} is not registered for the {api} tier (the plan runs no {api} function)",
             warmup=warmup,
         )
     _require_tier(api, fn, resolved, sql)

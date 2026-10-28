@@ -24,16 +24,14 @@ from databricks.labs.gbx.pyrx.core._nodata import (
 from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 
 
-def _nodata_value(ds, default: float = -9999.0) -> float:
+def _nodata_value(ds, default: float = -9999.0, dtype: str = None) -> float:
     """The source's NoData, else *default* when the band type can hold it, else the type's fallback
-    (``fallback_nodata``): a ``uint8`` raster cannot carry -9999."""
+    (``fallback_nodata``): a ``uint8`` raster cannot carry -9999. *dtype* is the type of the output
+    (the source's when omitted)."""
     if ds.nodata is not None:
         return ds.nodata
-    return (
-        default
-        if nodata_fits_dtype(default, ds.dtypes[0])
-        else fallback_nodata(ds.dtypes[0])
-    )
+    dtype = dtype or ds.dtypes[0]
+    return default if nodata_fits_dtype(default, dtype) else fallback_nodata(dtype)
 
 
 def _out_profile(ds, dtype: str, nd: float, set_nodata: bool) -> dict:
@@ -58,7 +56,8 @@ def filt(ds, kernel_size, operation: str) -> bytes:
     size = int(kernel_size)
     op = str(operation)
     box = np.ones((size, size), dtype="float64")
-    nd = _nodata_value(ds, default=-9999.0)
+    out_dtype = "float32" if op == "mean" else ds.dtypes[0]
+    nd = _nodata_value(ds, default=-9999.0, dtype=out_dtype)
     out_bands, any_invalid = [], False
     for i in range(1, ds.count + 1):
         data, valid = read_valid(ds, i)
@@ -104,7 +103,6 @@ def filt(ds, kernel_size, operation: str) -> bytes:
             res = np.where(invalid, nd, res)
         any_invalid = any_invalid or bool(invalid.any())
         out_bands.append(res)
-    out_dtype = "float32" if op == "mean" else ds.dtypes[0]
     out = np.stack(out_bands)
     # a raster with an alpha band declares none: a NoData would shadow it (the all-invalid windows
     # are written with the value ``nd`` all the same)

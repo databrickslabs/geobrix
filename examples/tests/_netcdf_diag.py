@@ -12,6 +12,7 @@ import os
 import sys
 from pathlib import Path
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
+from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 
 NC_DIR = os.environ.get(
     "GBX_NETCDF_VALIDATE_DIR",
@@ -127,6 +128,7 @@ dbutils.notebook.exit(json.dumps(out, default=str))
 
 
 def main() -> int:
+    exit_if_help(__doc__)
     from databricks.sdk import WorkspaceClient
     from databricks.sdk.service import jobs
     from databricks.sdk.service.workspace import ImportFormat

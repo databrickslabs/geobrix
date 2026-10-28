@@ -30,6 +30,7 @@ from pyspark.sql.types import (
     StringType,
     StructField,
     StructType,
+    TimestampNTZType,
     TimestampType,
 )
 
@@ -828,7 +829,7 @@ _OUTPUT_GEOM_NAME = {"GPKG": "geom", "OpenFileGDB": "SHAPE"}
 _GDB_TARGET_ALL = "ALL"
 _GDB_TARGET_PRO_3_2 = "ARCGIS_PRO_3_2_OR_LATER"
 _GDB_TARGET_CHOICES = ("auto", _GDB_TARGET_ALL, _GDB_TARGET_PRO_3_2)
-_GDB_PRO_3_2_TYPES = (LongType, DateType, TimestampType)
+_GDB_PRO_3_2_TYPES = (LongType, DateType, TimestampType, TimestampNTZType)
 
 # Layer name a FileGDB gets when the writer is not given ``layerName``.
 _GDB_DEFAULT_LAYER = "layer"
@@ -2186,6 +2187,13 @@ class VectorGbxWriter(DataSourceWriter):
                 break
         geom_type = geom_type or "Unknown"
         if self.driver == "OpenFileGDB" and geom_type == "Unknown":
+            if self.geometry_type_override is not None:
+                # the option itself says Unknown (any other type would not be "Unknown")
+                raise ValueError(
+                    "file_gdb_gbx: geometryType='Unknown' is not a type a FileGDB layer can "
+                    "have. Name one (for example geometryType='Point'), or leave the option "
+                    "out to take the type from the first geometry."
+                )
             raise ValueError(
                 "file_gdb_gbx: every geometry is NULL, so the geometry type of the layer "
                 "cannot be inferred, and a FileGDB layer needs one. Set the geometryType "
@@ -2283,28 +2291,20 @@ class GeoJSONLGbxWriter(DataSourceWriter):
         )
 
     def _infer_geom_crs(self, tbl) -> Tuple[str, Optional[str]]:
+        """Geometry type and CRS from the first non-NULL geometry of ``tbl``, found with an
+        Arrow scan (no Python list of the whole geometry column)."""
+        import pyarrow.compute as pc
+
         geom_type, crs = self.geometry_type_override, None
-        g = tbl.column(self.geom_col).to_pylist()
-        s = (
-            tbl.column(self.srid_col).to_pylist()
-            if self.srid_col in tbl.column_names
-            else []
-        )
-        p = (
-            tbl.column(self.proj_col).to_pylist()
-            if self.proj_col in tbl.column_names
-            else []
-        )
-        for i, gv in enumerate(g):
-            if gv is None:
-                continue
+        col = tbl.column(self.geom_col)
+        if col.null_count < len(col):
+            i = pc.index(pc.is_valid(col), True).as_py()
             if geom_type is None:
-                geom_type = _geometry_type_of(gv)
-            if crs is None:
-                crs = _srid_to_crs(
-                    s[i] if i < len(s) else "", p[i] if i < len(p) else ""
-                )
-            break
+                geom_type = _geometry_type_of(col[i].as_py())
+            names = tbl.column_names
+            s = tbl.column(self.srid_col)[i].as_py() if self.srid_col in names else ""
+            p = tbl.column(self.proj_col)[i].as_py() if self.proj_col in names else ""
+            crs = _srid_to_crs(s, p)
         return geom_type or "Unknown", crs
 
     # ---- executor: partition rows -> one or more GeoJSONL shards in OUTDIR ----

@@ -125,11 +125,17 @@ class WorkerRssSampler:
 
     ``peak_rss_mb`` is the RSS of this (notebook) process; the commit of a two-phase
     vector writer runs in a separate Python worker on the driver node
-    (``python -m pyspark.daemon``), which that number never sees. This polls
-    ``/proc/<pid>/status`` while the ``with`` block runs, so a bench row can report the
-    memory the commit really used: ``peak_mb`` is the summed resident set (it counts the
-    pages of memory-mapped files the process has touched), ``peak_anon_mb`` the summed
-    anonymous part (heap and buffers, the part that does not shrink under memory pressure).
+    (``python -m pyspark.daemon``), which that number never sees. This polls ``/proc``
+    while the ``with`` block runs, so a bench row can report the memory the commit really
+    used: ``peak_mb`` is the summed resident set (it counts the pages of memory-mapped
+    files the process has touched), ``peak_anon_mb`` the summed anonymous part (heap and
+    buffers, the part that does not shrink under memory pressure).
+
+    Both are PROPORTIONAL (``Pss`` / ``Pss_Anon`` of ``smaps_rollup``): a page that
+    several processes map counts ``1/n`` in each, so the copy-on-write pages the daemon
+    shares with its forked workers are counted once in the sum, not once per process (the
+    plain ``VmRSS`` / ``RssAnon`` sum counted them in every worker). A kernel without
+    ``smaps_rollup`` (before 4.14) falls back to ``VmRSS`` / ``RssAnon``, which overstate.
     Linux only: elsewhere both stay 0.0.
     """
 
@@ -140,6 +146,28 @@ class WorkerRssSampler:
         self._thread = None
         self.peak_mb = 0.0
         self.peak_anon_mb = 0.0
+
+    @staticmethod
+    def _kb_fields(path, wanted):
+        """``{field: kB}`` for the ``wanted`` fields of a ``/proc`` file (``Name:  N kB``)."""
+        found = {}
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                key = line.split(":", 1)[0]
+                if key in wanted:
+                    found[key] = int(line.split()[1])
+        return found
+
+    def _process_kb(self, pid):
+        """(resident kB, anonymous kB) of one process: proportional when the kernel says."""
+        try:
+            got = self._kb_fields(f"/proc/{pid}/smaps_rollup", ("Pss", "Pss_Anon"))
+            if len(got) == 2:
+                return got["Pss"], got["Pss_Anon"]
+        except OSError:
+            pass  # no smaps_rollup (an old kernel), or not ours to read
+        got = self._kb_fields(f"/proc/{pid}/status", ("VmRSS", "RssAnon"))
+        return got.get("VmRSS", 0), got.get("RssAnon", 0)
 
     def _sample_mb(self):
         """(resident MB, anonymous MB) summed over the matching processes now."""
@@ -153,14 +181,11 @@ class WorkerRssSampler:
                 with open(f"/proc/{pid}/cmdline", "rb") as fh:
                     if self._match not in fh.read():
                         continue
-                with open(f"/proc/{pid}/status", encoding="utf-8") as fh:
-                    for line in fh:
-                        if line.startswith("VmRSS:"):
-                            rss_kb += int(line.split()[1])
-                        elif line.startswith("RssAnon:"):
-                            anon_kb += int(line.split()[1])
+                rss, anon = self._process_kb(pid)
             except (OSError, ValueError):
                 continue  # the process ended between listing and reading
+            rss_kb += rss
+            anon_kb += anon
         return rss_kb / 1024, anon_kb / 1024
 
     def _take(self) -> None:
@@ -778,15 +803,17 @@ def _h3_aggregate_df(spark, fs):
     The fixed CONSISTENCY group is the deterministic H3 cell set from
     ``spec.h3_rasterize_cells()`` (the res-9 NYC cell grid-disk'd to k=10 -- the
     SAME recipe the Scala BenchDispatch h3Aggregate branch generates, so both
-    tiers burn an identical cell set). ``value`` is NULL on every row -> the
-    presence-mask burn (1.0). The explicit grid rides in ``fs.args`` (passed to
+    tiers burn an identical cell set). ``value`` is NULL on every row; the heavy tier
+    burns the presence mask (1.0) from it, and the light col_fn does not pass this
+    column at all (it passes an omitted value): a typed all-null column is data to
+    the light tier and burns NaN. The explicit grid rides in ``fs.args`` (passed to
     both tiers identically), not in this DataFrame. Returns a df with columns
     (cellid LONG, value DOUBLE).
     """
     from pyspark.sql.types import DoubleType, LongType, StructField, StructType
 
     cells = _spec.h3_rasterize_cells()
-    # value=None on every row -> presence mask (heavy + light both burn 1.0).
+    # value=None on every row -> presence mask for heavy (light omits the value).
     rows = [(int(c), None) for c in cells]
     schema = StructType(
         [
@@ -802,10 +829,12 @@ def _grid_aggregate_df(spark, fs):
 
     Two families ride input_kind == "grid_aggregate":
 
-    RASTERIZE aggs (rst_{quadbin,bng}_rasterize_agg): stream (cellid, value) rows
-    from a fixed deterministic cell set and use the 2-arg auto-derive overload (the
-    grid is derived from the cell set). ``value`` is NULL on every row ->
-    presence-mask burn (1.0).
+    RASTERIZE aggs (rst_{quadbin,bng,custom}_rasterize_agg): stream (cellid, value) rows
+    from a fixed deterministic cell set and use the auto-derive overload (the raster
+    grid is derived from the cell set; the custom one also gets its grid struct from
+    the spec's col_fn). ``value`` is NULL on every row ->
+    presence-mask burn (1.0) for heavy; the light col_fn omits the value instead
+    (a typed all-null column burns NaN there).
 
     CELLFILL aggs ({h3,quadbin,bng,custom}_cellfill): stream the fixed cellfill
     corpus, which REUSES the rasterize cell set but NULLs a deterministic subset of
@@ -843,6 +872,8 @@ def _grid_aggregate_df(spark, fs):
                 else _spec.quadbin_cellfill_cells()
             )
             rows = [(int(c), v) for c, v in cells]
+        elif fs.name == "rst_custom_rasterize_agg":
+            rows = [(int(c), None) for c in _spec.custom_rasterize_cells()]
         else:  # rst_quadbin_rasterize_agg
             rows = [(int(c), None) for c in _spec.quadbin_rasterize_cells()]
     schema = StructType(
@@ -1149,6 +1180,11 @@ def _run_aggregate(  # noqa: C901
         )
         _warm_scaled = _warm_keys.crossJoin(F.broadcast(group_df))
         try:
+            _assert_lightweight(
+                fs,
+                scaled,
+                lambda d: d.groupBy("key").agg(_agg_col(d).alias("out")),
+            )
 
             def job(_df=scaled):
                 _df.groupBy("key").agg(_agg_col(_df).alias("out")).write.format(
@@ -1633,6 +1669,27 @@ def _run_sp_creation(
     return rows
 
 
+def _assert_lightweight(fs, df, build) -> None:
+    """Refuse to time ``build(df)`` unless its plan runs the LIGHTWEIGHT implementation of ``fs``.
+
+    The general function harness times the lightweight tier (every row it writes says so),
+    through the Column API or by SQL name. Both tiers register the same ``gbx_*`` names and
+    the later registration replaces the earlier, so a heavyweight function registered after
+    the lightweight ones would be timed and recorded as lightweight. ``TierResolutionError``
+    (a ``BaseException``) gets past the per-function error rows and stops the run. The
+    heavyweight tier's timings come from ``HeavyRunner`` (Scala), which has no such check yet.
+
+    The plan is read over an EMPTY DataFrame of ``df``'s schema, not over ``df``: the corpus
+    input is cached and built by a Python UDF, whose node is part of the printed plan of
+    anything selected from it and would make every plan read as lightweight.
+    """
+    from databricks.labs.gbx.bench.readers import _assert_tier
+
+    _assert_tier(
+        "lightweight", fs.name, build(df.sparkSession.createDataFrame([], df.schema))
+    )
+
+
 def _run_sp_scalar_fn(
     fs,
     run_id,
@@ -1688,6 +1745,14 @@ def _run_sp_scalar_fn(
         # repartition by F.rand() not the tile struct (avoid hashing the raster payload).
         df = _src.repartition(max(1, _parts), F.rand())
         try:
+
+            _assert_lightweight(
+                fs,
+                df,
+                lambda d: d.select(
+                    fs.col_fn(input_col_fn(fs.name, _kind, d), fs.args).alias("out")
+                ),
+            )
 
             def job(_df=df, _fs=fs, _k=_kind):
                 c = _fs.col_fn(input_col_fn(_fs.name, _k, _df), _fs.args)

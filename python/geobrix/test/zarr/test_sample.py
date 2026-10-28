@@ -227,9 +227,9 @@ def test_bilinear_unsupported():
     assert e.value.fix == 'use method="nearest"; bilinear is planned'
     with pytest.raises(
         ZarrAccessUnavailable
-    ) as e:  # Ruling Z1: FUSE until direct access
+    ) as e:  # a plain store has no direct access
         gbx_zarr_sample(None, None, "/nowhere", access="direct")
-    assert e.value.fix == 'use access="auto" or "fuse"'
+    assert 'access="auto"' in e.value.fix
 
 
 # --- the function, on Spark -------------------------------------------------------------

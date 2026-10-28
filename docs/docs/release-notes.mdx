@@ -291,6 +291,14 @@ formats.
   read back with `Not a gzipped file`. The reader now decodes directories by the compression the
   archive header declares: none and gzip are read, and any other compression fails the read with an
   error that names it.
+- **`pmtiles_info` and the `gbx.vizx` PMTiles viewers read the same archives (fix).** They failed
+  with `Not a gzipped file` on an archive written by the heavyweight `pmtiles` writer, and a
+  viewer could show no tiles instead of an error. They now decode directories by the compression
+  the archive header declares, as `pmtiles_gbx` does, so none and gzip are read. `pmtiles_info`
+  fails with `internal compression ... is not supported` on an archive that declares its directory
+  compression as unknown, brotli or zstd, including an archive that declares unknown but stores
+  gzip directories, which it used to read; the viewers treat such an archive as unreadable.
+  `pmtiles_info` also no longer imports PySpark or rasterio.
 
 ### NetCDF reader
 
@@ -303,6 +311,15 @@ formats.
 
 ### Raster writers
 
+- **The lightweight `rst_asformat(tile, 'COG')` writes a Cloud Optimized GeoTIFF.** It used to
+  fail with `driver 'COG' is not available in this GDAL build`, although the COG driver is
+  present. The tile now comes out with the COG layout (`LAYOUT=COG`, 512-pixel blocks,
+  size-adaptive ZSTD, and overviews when the tile is larger than 512 pixels), as
+  `rst_cog_convert` writes it; other output formats are unchanged. The heavyweight
+  `rst_asformat` still writes a plain GeoTIFF for `'COG'`; a later release fixes that.
+- **The lightweight `rst_cog_convert` keeps the colour interpretation of RGB tiles.** The red,
+  green and blue bands of a COG it wrote were left unlabelled (only an alpha band was kept);
+  they now keep their red, green and blue labels, as in the source tile.
 - **The heavyweight `gdal` writer writes Zarr with its default options.** The default compression,
   DEFLATE, is a TIFF codec name the Zarr driver does not have, so a Zarr write failed with
   `Compressor/decompressor for DEFLATE not available` unless the tile's `compression` named a Zarr
@@ -328,7 +345,8 @@ formats.
   `tile.window`, relative to its immediate input tile, so windows from different parents can
   repeat (the first piece of every parent sits at the origin). A function that returns one tile
   covering its whole input hands that tile the input's own provenance instead. The lightweight
-  `rst_separatebands` records the 1-based band in `tile.metadata['band']`. The heavyweight
+  `rst_separatebands` records the 1-based band in `tile.metadata['band']`, and the retile functions
+  keep that marker on the pieces they cut from a band. The heavyweight
   retile-family functions record none of these, so set `nameCol` when you write heavyweight
   parts; pixels are identical across tiers. The first tile of a materialized split read is
   indistinguishable from a whole-file read of the same source, so if you write one source both
@@ -359,6 +377,14 @@ formats.
   on Serverless compute with `AssertionError`, because those workers have no session time zone
   for PySpark to type the column with. Timestamps are now read and written as UTC, and a
   written timestamp is exact on a worker whose time zone is not UTC.
+- **`netcdf_gbx` writes timestamp, date, string and boolean attributes.** A vector write with
+  a column of one of these types failed (in the task for the default write, when the files were
+  merged for `singleFile`). A timestamp is now written as a CF time variable (seconds since
+  1970-01-01 00:00:00 UTC, with `units` and `calendar` attributes; a timestamp without a time
+  zone is the same number of seconds, read as UTC), a date the same in days, a
+  string as a text variable (a null is an empty string), and a boolean as an int8 0 or 1 with
+  `flag_values` and `flag_meanings`. A null timestamp, date or boolean is the fill value, and
+  `merge` keeps the attributes. See [NetCDF Writer](./writers/netcdf).
 
 ### Grid explode functions — `bng_tessellateexplode` columns (behavior change)
 
@@ -408,6 +434,22 @@ formats.
   collection's polygons, at any nesting depth, so two polygons that share an edge give the same cells
   as the polygon they form. A line or point in the collection can remain in the chip of a cell the
   polygons also touch, but never yields a cell of its own.
+
+### Grid functions — a NULL resolution in a batch (fix)
+
+- **`bng_pointascell` and `bng_eastnorthasbng` answer the rows beside a NULL.** In the lightweight
+  tier, a NULL in the `resolution` column (an `INT`) of a batch made every value arrive as a float,
+  so `bng_pointascell` failed the whole batch (`BNG resolution not supported; found nan`) and
+  `bng_eastnorthasbng` did too when the resolution was NULL. A NULL resolution, easting or
+  northing now gives a NULL cell and the other rows of the batch are answered as usual.
+- **`quadbin_pointascell` and `custom_pointascell` answer the rows beside a NULL too.** They
+  failed the same way on a NULL `resolution`, and `quadbin_pointascell` answered a NULL longitude
+  or latitude with a made-up cell. A NULL now gives a NULL cell. A resolution that is not a whole
+  number (3.5) is refused instead of being cut to 3, as `bng_pointascell` and `custom_pointascell`
+  already did in the heavyweight tier. The heavyweight `quadbin_pointascell` still cuts such a
+  resolution to a whole number, so pass an `INT` resolution there until a later release makes it
+  refuse one too. `custom_pointascell` no longer rounds a cell id above 2^53 to the nearest float
+  when its batch holds a NULL.
 
 ### Raster tiling functions
 
@@ -481,6 +523,8 @@ formats.
   instead of as valid zeros. The lightweight `rst_initnodata` and `rst_threshold` use the same
   table: a `uint16` source gets 65535, as in the heavyweight tier (`rst_threshold` and
   tessellation failed on it, and `rst_initnodata` set nothing), and a `uint8` source now gets 0.
+  The lightweight `rst_filter` min, max and median of a `uint8` source blank a window with no valid
+  pixel with 0, where they failed on a NoData of -9999 that a `uint8` band cannot hold.
   On an integer band without NoData, heavyweight `rst_initnodata` kept the pixels equal to the
   fallback as valid data with the value moved by one (a `uint8` 0 became 1); it now marks them
   NoData, as the lightweight tier does. A source that carries its own mask band (not an alpha band)
@@ -560,10 +604,10 @@ formats.
   pixels stay invalid beside a tile that has a mask band, and the result no longer depends on how
   large the group is, and whose index VRT carries the colour interpretation; the `pmtiles_gbx` reader's RGB sibling of an RGBA source;
   and the `netcdf_gbx` `bandDim` stack (four `uint8` steps used to read the fourth as alpha). The
-  h3 cells of a source with an alpha band declare no NoData over it: their pixels outside the
-  hexagon are written transparent, and each cell carries its hexagon as a mask band, so the index
-  VRT composites the cells by it (the corners of a cell's bounding box no longer overwrite its
-  neighbours).
+  h3 cells of a source with an alpha band and no NoData of its own declare none over it: their
+  pixels outside the hexagon are written transparent, and each cell carries its hexagon as a mask
+  band, so the index VRT composites the cells by it (the corners of a cell's bounding box no
+  longer overwrite its neighbours). A NoData the source does declare is kept on its cells.
 - **Chips copy the colour interpretation of every band.** Tessellation chips and clips used to
   copy only the alpha label, so RGB, and the data bands of a gray-plus-extra-plus-alpha or a
   16-bit RGBA raster, followed GDAL's defaults for a new GeoTIFF. Both tiers now label each band
@@ -593,7 +637,12 @@ formats.
   measures its size or picks its pixel size in the units of whichever tile sorts first (a few
   pixels could be sent to the streamed merge, with 0.5 degrees read as 0.5 metres): the tile in the
   other system is reprojected onto the pixel size of a tile in the reference system, and the
-  mosaic has that size, in memory and streamed alike, whichever tile sorts first;
+  mosaic has that size, in memory and streamed alike, whichever tile sorts first. That tile is also
+  put on the reference tile's pixel grid, because the in-memory merge and the streamed one round a
+  fractional offset differently and placed the two tiles one pixel further apart when streamed (the
+  tile in the reference system sat in columns 15 to 26 in memory and 16 to 27 streamed, beside the
+  reprojected one); the reprojected tile can grow by up to a pixel on each side (the heavyweight
+  `gbx_rst_merge_agg` does not merge tiles in two coordinate systems: it returns one of them);
   `gbx_rst_filter` of a raster with no declared NoData no longer returns NaN for every window; and
   `gbx_rst_convolve` writes each block's result where the block is (it wrote it shifted and left
   the rest as the input), and in both tiers adds only the neighbours that are on the raster, so
@@ -682,8 +731,19 @@ formats.
   `rst_bng_rasterize_agg` and `rst_custom_rasterize_agg` burned whichever row arrived last in the
   lightweight tier, and the order of the rows inside a group is not fixed, so the same data could
   give a different raster from one run to the next. Both tiers now burn the largest value of the
-  cell. A null value is the presence mask and counts as `1.0`. A cell that appears once, or whose
-  rows all carry the same value, burns as before.
+  cell. A cell that appears once, or whose rows all carry the same value, burns as before. Two
+  spellings of one BNG cell, such as `TQ3080` and `TQ 3080`, are one cell.
+- **In the lightweight rasterizers a null value never wins.** A null value, or a `NaN`, is ignored
+  whenever the cell has a number, so a cell with the values `0.5` and `NULL` burns `0.5`, not
+  `1.0`; a cell whose values are all null burns `NaN`, also when the whole `value` column is null.
+  Only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`; a `DOUBLE`
+  column of nulls is data. The heavyweight tier still counts a null value as `1.0`, a column of
+  nulls included.
+- **The lightweight `*_cellfill` aggregates give the same fill whatever order the rows arrive
+  in.** When a cell id repeated in a group, `h3_cellfill`, `quadbin_cellfill`, `bng_cellfill` and
+  `custom_cellfill` used the row that arrived last. They now use the cell's largest non-null
+  value, and a cell stays `NULL` only when every one of its values is null. The heavyweight tier
+  still keeps the row it receives last.
 
 ### Registered PROJ grids and raster CRS transforms
 
@@ -727,6 +787,32 @@ formats.
   `/Volumes` paths as the lightweight readers. The `gdal` raster reader needed no change, and
   other compute is unchanged.
 
+### Zarr stores — direct storage access (new)
+
+- **`access="direct"` reads and writes a Zarr store's files straight from the Volume's cloud
+  storage.** `gbx_zarr_read`, `gbx_zarr_sample`, `gbx_zarr_write` and `gbx_zarr_export` take
+  `access="auto"` (the default), `"fuse"` or `"direct"`. Direct access asks Unity Catalog for
+  temporary credentials for the Volume on the driver and reads byte ranges with obstore, which is
+  several times faster than the Volume mount for many small ranges. `"auto"` uses it where the
+  credentials can be had (dedicated compute) and the Volume mount everywhere else, Serverless
+  included, without an error. An explicit `"direct"` raises `ZarrAccessUnavailable` where they
+  cannot be had, and for a plain-path store, which is read through its path: register the store
+  with `gbx_zarr_register` to use direct access.
+- **Direct access sends credentials to the executors.** They are short-lived (at most one hour)
+  and cover only the one Volume. Under memory pressure Spark may write task data, those
+  credentials included, to the local disk of the executors and of the driver, so turn on
+  local-disk encryption on clusters that use direct access. `access="auto"` is direct access on
+  dedicated compute, where Unity Catalog can issue the credentials, so this applies to the
+  default too. `access="fuse"` sends no credentials. `gbx_zarr_export` asks for credentials on
+  the driver only, to name the cloud location of each file in a reference; it sends none to the
+  executors and writes none to the reference file.
+- **Credentials that expire during a long job do not fail it under `"auto"`.** The work carries
+  on through the Volume mount; with `"direct"` the call raises and says the credentials expired.
+- **A refused or failed pack upload can leave an incomplete multipart upload in the bucket.**
+  The uploaded parts stay in the bucket, and are billed, until they are removed. GeoBrix does
+  not clean them up, so add a lifecycle rule to the bucket that aborts incomplete multipart
+  uploads (`AbortIncompleteMultipartUpload`, after a few days).
+
 ### Dependencies
 
 - **GeoBrix no longer installs PySpark (breaking for local installs).** On Databricks the
@@ -756,6 +842,12 @@ formats.
   `typing_extensions` (a pure-Python package with no dependencies) to the latest release.
   Serverless environment 6, Databricks Runtime 19 and Databricks Runtime 19 ML already ship 4.15
   and install exactly as before.
+- **`rio-tiler` is no longer held below 9.3.** The lightweight extras allowed `rio-tiler` 9.0 up
+  to, but not including, 9.3, because 9.3.0 failed to import on Python 3.12: the same
+  `typing_extensions` problem as above, not a fault in `rio-tiler`. With the `typing_extensions`
+  4.13 floor, `rio-tiler` 9.3 and later import on Serverless environments 5 and 6 and Databricks
+  Runtime 17.3, 18 and 19. The extras now allow any `rio-tiler` 9 release, so a new install takes
+  9.4 instead of 9.2; no other package in the extras changes.
 - **Photogrammetry extras:** `pycolmap` and `pycolmap-cuda12` move to 4.2.1.
 - **The GeoBrix JAR no longer bundles the Scala standard library;** Databricks Runtime provides
   it. Nothing changes for users.

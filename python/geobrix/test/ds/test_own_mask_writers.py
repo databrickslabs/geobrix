@@ -167,7 +167,12 @@ GRID_MODES = {
 
 
 def _grid_source(
-    tmp_path, mode, name, masked=GRID_MASKED, transparent=GRID_TRANSPARENT
+    tmp_path,
+    mode,
+    name,
+    masked=GRID_MASKED,
+    transparent=GRID_TRANSPARENT,
+    nodata=None,
 ):
     _, crs, origin = GRID_MODES[mode]
     raw = al.row_coded(
@@ -176,6 +181,7 @@ def _grid_source(
         height=GRID_ROWS,
         masked_rows=masked,
         transparent_rows=transparent,
+        nodata=nodata,
         crs=crs,
         transform=from_origin(origin[0], origin[1], 100.0, 100.0),
     )
@@ -236,6 +242,29 @@ def test_grid_mosaic_cells_keep_the_mask_and_the_alpha_band(tmp_path, mode, name
     assert seen_hidden and seen_visible, "fixture: the cells must hold both"
 
 
+@pytest.mark.parametrize("mode", ["quadbin", "bng"])
+def test_grid_mosaic_cells_of_a_source_with_nodata_beside_its_mask_hide_the_masked_rows(
+    tmp_path, mode
+):
+    """With a NoData declared beside the own mask the masked source pixels are set to it before the warp:
+    they come out as that NoData, invalid: none of a hidden row's values (which differ from the NoData) is
+    left in any pixel."""
+    tiles = _grid_tiles(
+        tmp_path, mode, _grid_source(tmp_path, mode, "rgb_nir", nodata=7)
+    )
+    assert tiles
+    hidden_codes = [100 + r for r in _interior(GRID_MASKED)]
+    seen_valid = seen_nodata = 0
+    for tile in tiles:
+        with rasterio.open(tile) as out:
+            assert out.nodata == 7
+            data, valid = out.read(1).astype("int64"), nd.valid_mask(out)
+        assert not np.isin(data, hidden_codes).any(), os.path.basename(tile)
+        seen_valid += int(valid.sum())
+        seen_nodata += int(((data == 7) & ~valid).sum())
+    assert seen_valid and seen_nodata, "fixture: the cells must hold both"
+
+
 @pytest.mark.parametrize("name", ["rgba", "gray_x_alpha"])
 def test_h3_cells_of_an_alpha_source_declare_no_nodata(tmp_path, name):
     """h3 cells always declare a NoData for the pixels outside the hexagon, which would
@@ -252,13 +281,30 @@ def test_h3_cells_of_an_alpha_source_declare_no_nodata(tmp_path, name):
         assert not valid[clear].any()
 
 
-def _half_hidden_source(tmp_path, mode, name, hide):
-    """A 640x320 source (64 x 32 km) of one value, whose left half is hidden by the mask
+def test_h3_cells_of_an_alpha_source_keep_a_nodata_the_source_declares(tmp_path):
+    """Only a source with an alpha band and no NoData of its own gets cells without one: a NoData
+    the source declares is kept, and the pixels outside the hexagon carry it (and are invalid).
+    """
+    src = _grid_source(tmp_path, "h3", "rgba", nodata=7)
+    tiles = _grid_tiles(tmp_path, "h3", src)
+    assert tiles
+    for tile in tiles:
+        with rasterio.open(tile) as out:
+            assert out.nodata == 7
+            outside = (out.read(1) == 7) & (out.read(out.count) == 7)
+            valid = nd.valid_mask(out)
+        assert outside.any() and not valid[outside].any()
+
+
+def _half_hidden_source(tmp_path, mode, name, hide, hidden_value=50):
+    """A 640x320 source (64 x 32 km) of one value (50), whose left half is hidden by the mask
     (``hide="masked"``) or by alpha 0 (``"transparent"``), or not hidden at all (``None``).
+    The hidden half holds ``hidden_value``.
     """
     _, crs, origin = GRID_MODES[mode]
     width, height = 640, 320
     data = np.full((len(al.LAYOUTS[name][0]), height, width), 50, dtype="uint8")
+    data[:, :, : width // 2] = hidden_value
     mask = None
     left = np.arange(width)[None, :] < width // 2
     if hide == "masked":
@@ -350,6 +396,136 @@ def test_the_mosaic_vrt_of_the_cells_of_an_opaque_source_is_valid_inside_the_sou
     assert (
         valid.all()
     ), f"{int((~valid).sum())} of {valid.size} pixels inside the source are invalid"
+
+
+def test_quadbin_cells_average_only_the_valid_pixels_of_a_masked_source(tmp_path):
+    """A masked pixel's value must not reach the average that resamples its neighbours: the
+    hidden half holds 250 and the visible half 50, so every valid pixel of every cell is 50 (or
+    the 0 a cell holds outside the source), never a mix, including the ones on the boundary.
+    """
+    src = _half_hidden_source(
+        tmp_path, "quadbin", "rgb_nir", "masked", hidden_value=250
+    )
+    tiles = _grid_tiles(tmp_path, "quadbin", src)
+    assert tiles
+    seen = 0
+    for tile in tiles:
+        with rasterio.open(tile) as out:
+            data, valid = out.read(), nd.valid_mask(out)
+        seen += int(valid.sum())
+        assert np.isin(
+            data[:, valid], (0, 50)
+        ).all(), f"{os.path.basename(tile)}: blends"
+    assert seen
+
+
+@pytest.mark.parametrize("mode", ["quadbin", "bng"])
+def test_the_mosaic_vrt_of_the_cells_of_a_masked_source_is_invalid_where_it_is_hidden(
+    tmp_path, mode
+):
+    """The index VRT carries the union of the cells' mask bands: inside the hidden half of the source it
+    is invalid, inside the visible half valid."""
+    from rasterio.warp import transform_bounds
+
+    from databricks.labs.gbx.ds.cog_writer import _build_mosaic_vrt
+
+    src_path = _half_hidden_source(tmp_path, mode, "rgb_nir", "masked")
+    vrt_path = _build_mosaic_vrt(
+        _grid_tiles(tmp_path, mode, src_path), str(tmp_path / "out")
+    )
+    with rasterio.open(src_path) as src, rasterio.open(vrt_path) as vrt:
+        left, bottom, right, top = src.bounds
+        w, h = right - left, top - bottom
+
+        def valid_in(x0, x1):  # a rectangle of the source, as a window of the VRT
+            box = transform_bounds(
+                src.crs,
+                vrt.crs,
+                left + x0 * w,
+                bottom + 0.2 * h,
+                left + x1 * w,
+                top - 0.2 * h,
+            )
+            return nd.valid_mask(vrt, window=vrt.window(*box))
+
+        hidden, visible = valid_in(0.1, 0.35), valid_in(0.65, 0.9)
+    assert hidden.size > 1000 and visible.size > 1000
+    assert not hidden.any() and visible.all()
+
+
+def test_the_valid_pixel_average_holds_a_few_bytes_per_source_pixel():
+    """The masked path of the quadbin average works with one byte per source pixel for the validity and
+    for the ones of the coverage, and one more copy of the band being summed at its own dtype; it used to
+    hold float64 copies of each (about 24 B per source pixel at its peak)."""
+    import tracemalloc
+
+    from rasterio.transform import from_bounds
+    from rasterio.warp import transform_bounds
+    from rasterio.windows import Window
+
+    from databricks.labs.gbx.ds.cog_writer import _average_reproject
+
+    n = 1500
+    mask = np.full((n, n), 255, dtype="uint8")
+    mask[:, : n // 2] = 0
+    raw = al.layout_bytes(
+        "rgb_nir",
+        data=np.full((4, n, n), 50, dtype="uint8"),
+        mask=mask,
+        crs="EPSG:32630",
+        transform=from_origin(500000.0, 5700000.0, 100.0, 100.0),
+    )
+    with MemoryFile(raw) as mf, mf.open() as src:
+        src_data = src.read()
+        dst = np.zeros((4, 100, 100), dtype="uint8")
+        cell = from_bounds(
+            *transform_bounds(src.crs, "EPSG:3857", *src.bounds), 100, 100
+        )
+        tracemalloc.start()
+        only_hidden = _average_reproject(
+            src, Window(0, 0, n, n), src_data, None, dst, cell, "EPSG:3857"
+        )
+        _, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+    assert only_hidden is not None and (dst == 50).any()  # the masked path ran
+    assert peak < 8 * n * n, f"{peak / (n * n):.1f} B per source pixel"
+
+
+def test_the_mosaic_vrt_of_a_masked_and_an_unmasked_tile_hides_what_each_hides(
+    tmp_path,
+):
+    """The writer's commit step builds ONE index VRT over the cells of every source it was given, masked
+    or not. A tile with a mask band and a tile whose NoData rows are NoData in its only band both stay
+    invalid where they should: the union mask takes band 1's mask of the tile without one, which is the
+    rule when its bands share their NoData pixels."""
+    from databricks.labs.gbx.ds.cog_writer import _build_mosaic_vrt
+
+    out_dir = tmp_path / "out"  # the VRT names its tiles relative to itself
+    out_dir.mkdir()
+    masked = out_dir / "masked.tif"
+    masked.write_bytes(_masked_bytes())
+    data = np.full((1, H, W), 9, dtype="uint16")
+    data[0, 5, :] = 7  # NoData row
+    plain = out_dir / "plain.tif"
+    with rasterio.open(
+        plain,
+        "w",
+        driver="GTiff",
+        width=W,
+        height=H,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:32632",
+        transform=from_origin(400000.0 + 10.0 * W, 5000000.0, 10.0, 10.0),
+        nodata=7,
+    ) as dst:
+        dst.write(data)
+    vrt_path = _build_mosaic_vrt([str(masked), str(plain)], str(out_dir))
+    with rasterio.open(vrt_path) as vrt:
+        valid = nd.valid_mask(vrt)
+    assert valid.shape == (H, 2 * W)
+    assert valid[:, 0].tolist() == [r not in MASKED_ROWS for r in range(H)]
+    assert valid[:, W].tolist() == [r != 5 for r in range(H)]
 
 
 def test_the_mosaic_vrt_labels_a_non_last_alpha_band_as_data(tmp_path):

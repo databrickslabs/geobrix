@@ -16,12 +16,14 @@ These mirror the heavyweight operations:
 import logging
 import os
 import shutil
+import warnings
 from typing import List, Tuple
 
 import numpy as np
 import rasterio
 import shapely.wkb
 from rasterio.enums import ColorInterp
+from rasterio.errors import NodataShadowWarning
 from rasterio.features import rasterize as _rasterize
 from rasterio.io import MemoryFile
 from rasterio.merge import merge as _rio_merge
@@ -35,6 +37,7 @@ from databricks.labs.gbx.pyrx.core import derivedband as _derivedband
 from databricks.labs.gbx.pyrx.core import warp as _warp
 from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
 from databricks.labs.gbx.pyrx.core.budget import decoded_budget_bytes
+from databricks.labs.gbx.pyrx.core.cellraster import snap_bounds
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
 
 _log = logging.getLogger(__name__)
@@ -71,7 +74,7 @@ def _close_all(memfiles, datasets):
         mf.close()
 
 
-def _reproject_dataset(src, dst_crs, target_res=None):
+def _reproject_dataset(src, dst_crs, target_res=None, anchor=None):
     """Reproject an open rasterio dataset to ``dst_crs``; return (memfile, dataset).
 
     Used by merge_tiles to reconcile a group whose tiles span multiple CRSs (e.g. a
@@ -88,6 +91,12 @@ def _reproject_dataset(src, dst_crs, target_res=None):
                     pixel boundaries (fixing sub-pixel drift in the streaming merge
                     path).  ``None`` lets ``calculate_default_transform`` choose the
                     natural resolution.
+        anchor:     Optional ``(left, top)`` corner of the reference tile (with
+                    ``target_res``). The reprojected tile is put on that tile's pixel grid,
+                    so its pixels line up with the reference tile's whatever the merge path:
+                    ``rasterio.merge`` places a tile at ``floor(offset + 0.1)`` pixels and the
+                    streamed VRT at ``round(offset)``, which differ by one pixel for a tile at a
+                    fractional offset (0.5 to 0.9) and agree for a tile on the grid.
     """
     import rasterio
     from rasterio.warp import Resampling, calculate_default_transform, reproject
@@ -96,6 +105,14 @@ def _reproject_dataset(src, dst_crs, target_res=None):
     transform, width, height = calculate_default_transform(
         src.crs, dst_crs, src.width, src.height, *src.bounds, **_res_kwarg
     )
+    if target_res is not None and anchor is not None:
+        # The grid line at or beyond the tile's top-left corner, the size grown to cover it.
+        left, bottom = transform.c, transform.f + height * transform.e
+        right, top = left + width * transform.a, transform.f
+        left, _, _, top, width, height = snap_bounds(
+            left, bottom, right, top, target_res, anchor=anchor, tol=1e-6
+        )
+        transform = rasterio.Affine(target_res[0], 0.0, left, 0.0, -target_res[1], top)
     out_dtype = src.dtypes[0]
     decoded_bytes = src.count * width * height * np.dtype(out_dtype).itemsize
     profile = _comp.drop_ycbcr(src.profile)
@@ -135,6 +152,19 @@ def _reproject_dataset(src, dst_crs, target_res=None):
     return mf, dst
 
 
+def _merge_pixels(datasets):
+    """``rasterio.merge`` of the tiles' pixels, the last tile that is valid at a pixel winning.
+
+    A tile with a NoData declared beside an alpha band makes the merge's own masked read warn that
+    the NoData shadows the alpha band. The warning is dropped: the merge only picks which tile's
+    pixels land where, and the mosaic's validity is judged afterwards by the rule of both tiers
+    (:func:`_nodata.valid_mask`, which reads the alpha values itself).
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", NodataShadowWarning)
+        return _rio_merge(datasets, method="last")
+
+
 def _valid_u8(ds) -> np.ndarray:
     """``(rows, cols)`` uint8 (255 valid, 0 invalid) validity of *ds* by THE rule of both tiers,
     :func:`_nodata.valid_mask`: valid when any data band is (its NoData, its own mask band) and, with an
@@ -144,9 +174,9 @@ def _valid_u8(ds) -> np.ndarray:
 
 
 def _write_masked_tile(ds, path, mask) -> None:
-    """Write *ds* to *path* as a GTiff whose own mask band is *mask* (``None``: no mask band), the alpha
-    label kept, with the canonical creation options: never the source's codec, so a JPEG tile is not
-    re-compressed lossily."""
+    """Write *ds* to *path* (a file path, or a ``MemoryFile``) as a GTiff whose own mask band is *mask*
+    (``None``: no mask band), the alpha label kept, with the canonical creation options: never the
+    source's codec, so a JPEG tile is not re-compressed lossily."""
     data = ds.read()
     profile = _comp.drop_ycbcr(ds.profile)
     profile.update(driver="GTiff")
@@ -155,7 +185,12 @@ def _write_masked_tile(ds, path, mask) -> None:
             profile["dtype"], decoded_bytes=data.nbytes, compress="auto"
         )
     )
-    with _comp.internal_mask_env(mask), rasterio.open(path, "w", **profile) as dst:
+    out = (
+        path.open(**profile)
+        if isinstance(path, MemoryFile)
+        else rasterio.open(path, "w", **profile)
+    )
+    with _comp.internal_mask_env(mask), out as dst:
         _comp.match_alpha(dst, ds.colorinterp)
         dst.write(data)
         if mask is not None:
@@ -232,6 +267,11 @@ def _pixel_size(ds):
     return (rx, ry) if rx > 0 and ry > 0 else None
 
 
+def _grid_corner(ds):
+    """``(left, top)`` of *ds*: where the pixel grid a reprojected tile is put on starts."""
+    return ds.transform.c, ds.transform.f
+
+
 def _bounds_in(ds, ref_crs):
     """``(left, bottom, right, top)`` of *ds* in the reference CRS (its own bounds when it is in it)."""
     if ref_crs is None or ds.crs is None or ds.crs == ref_crs:
@@ -273,7 +313,11 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
     MASKS: when some tile has an own mask band the mosaic carries the union of the tiles' masks
     (``mask,1`` of each scratch tile), which is band 1's mask alone for a tile without one. Each such
     tile is rewritten with its validity by the rule of both tiers (:func:`_valid_u8`: any band) as its
-    mask, so a pixel with data in one band only stays valid, as in the in-RAM merge.
+    mask, so a pixel with data in one band only stays valid, as in the in-RAM merge. So is every tile with
+    an alpha band, in any group: GDAL's mask of a tile with its own mask band, or of a 3-band gray+x+alpha
+    one, does not follow the alpha band, and that of RGBA leaves the alpha band itself out, so a
+    transparent pixel of a later tile would hide an opaque one under it. A group with no mask band of its
+    own gets no mask band in the mosaic (the alpha band carries it).
 
     MEMORY: peak RSS ≈ one tile's encoded bytes (decoded too, for a tile written with a mask) +
     GDAL's COG cache (≤200 MiB); the full decoded mosaic array is NEVER allocated.
@@ -289,8 +333,11 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
         try:
             ref_crs = _pick_ref_crs(datasets)
             tile_crses = [ds.crs for ds in datasets]
-            ref_pixel_res = _pixel_size(_reference_tile(datasets, ref_crs))
+            ref_tile = _reference_tile(datasets, ref_crs)
+            ref_pixel_res = _pixel_size(ref_tile)
+            ref_corner = _grid_corner(ref_tile)
             has_mask = [_nodata.has_own_mask(ds) for ds in datasets]
+            has_alpha = [_nodata.has_alpha(ds) for ds in datasets]
         finally:
             _close_all(memfiles, datasets)
 
@@ -311,18 +358,22 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
                 with MemoryFile(rb) as src_mf:
                     with src_mf.open() as src:
                         rep_mf, rep_ds = _reproject_dataset(
-                            src, ref_crs, target_res=ref_pixel_res
+                            src, ref_crs, target_res=ref_pixel_res, anchor=ref_corner
                         )
                         try:
                             _write_masked_tile(
                                 rep_ds,
                                 tile_path,
-                                _valid_u8(rep_ds) if group_masked else None,
+                                (
+                                    _valid_u8(rep_ds)
+                                    if group_masked or has_alpha[i]
+                                    else None
+                                ),
                             )
                         finally:
                             rep_ds.close()
                             rep_mf.close()
-            elif group_masked and not has_mask[i]:
+            elif (group_masked and not has_mask[i]) or has_alpha[i]:
                 with MemoryFile(rb) as src_mf, src_mf.open() as src:
                     _write_masked_tile(src, tile_path, _valid_u8(src))
             else:
@@ -335,7 +386,9 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
         # VRT emits ComplexSource entries (with <NODATA> masking) in tile_paths order;
         # GDAL last-valid-source-wins on overlapping pixels (ComplexSource skips nodata
         # values), matching method="last" nodata handling in the in-RAM path.
-        vrt_path = _build_mosaic_vrt(tile_paths, scratch)
+        # The mosaic carries a mask band only where the group had one; a tile with an alpha band was
+        # rewritten with its validity as its mask so that it is composited by it, not by that band.
+        vrt_path = _build_mosaic_vrt(tile_paths, scratch, carry_mask=group_masked)
 
         # Stream-convert the VRT to a COG (bounded GDAL cache; never decodes
         # the full mosaic into a numpy array).
@@ -371,6 +424,24 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
     could not separate (it tied on origin and fell back to a per-open
     ``/vsimem/<uuid>`` description, i.e. random). Raw bytes are bitwise-identical
     across tiers, so no cross-tier hash agreement is required.
+
+    PIXEL PLACEMENT (tiles in another CRS): such a tile is reprojected onto the pixel
+    size AND the pixel grid of the reference tile (:func:`cellraster.snap_bounds`; the grid
+    line at or beyond its top-left corner, so it can grow by up to a pixel on each
+    side). The in-RAM merge and the streamed one (a VRT) place a tile by different
+    rounding, ``floor(offset + 0.1)`` pixels in ``rasterio.merge`` and ``round(offset)``
+    in the VRT. A reprojected tile whose corner is off the reference grid can set the
+    mosaic's origin, which makes the offset of every other tile from it fractional: at
+    0.5 to 0.9 of a pixel the two merges put that tile one pixel apart (measured: a
+    12-pixel 4326 tile, reprojected, beside a 12-pixel 3857 tile at 50 km pixels; the
+    3857 tile covered columns 15-26 in RAM and 16-27 streamed, the reprojected one 0-12
+    in both). On the reference grid every offset is whole and both paths agree.
+
+    TIER DIFFERENCE (tiles in another CRS): the heavyweight ``gbx_rst_merge_agg`` does not
+    merge them. It builds a ``gdalbuildvrt`` mosaic, which skips a tile whose projection
+    differs, and returns ONE tile, the one that sorts first in byte order (probed against
+    the JVM tier: a 4326 and a 3857 tile gave a single 12 x 12 tile). Here both are
+    mosaicked, so there is nothing in the heavyweight output to place them against.
     """
     if not rasters:
         return None
@@ -412,13 +483,16 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
         # tile (a tile in that CRS, whichever stands first in byte order): the merge takes
         # the pixel size of its first tile, which is then that size whichever tile that
         # is, as in the streamed merge. Same-CRS groups are untouched.
-        ref_res = _pixel_size(_reference_tile(datasets, ref_crs))
+        ref_tile = _reference_tile(datasets, ref_crs)
+        ref_res, ref_corner = _pixel_size(ref_tile), _grid_corner(ref_tile)
         merge_ds = []
         for ds in datasets:
             if ref_crs is None or ds.crs == ref_crs:
                 merge_ds.append(ds)
             else:
-                mf, rds = _reproject_dataset(ds, ref_crs, target_res=ref_res)
+                mf, rds = _reproject_dataset(
+                    ds, ref_crs, target_res=ref_res, anchor=ref_corner
+                )
                 extra.append((mf, rds))
                 merge_ds.append(rds)
         ref = merge_ds[0]
@@ -426,12 +500,23 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
         # tiles' masks, built from the masks themselves (:func:`_union_own_mask`), never from the
         # pixel values: a valid pixel of 0 stays valid. Tiles without one are merged as before,
         # with no mask band.
-        mosaic, out_transform = _rio_merge(merge_ds, method="last")
-        own_mask = (
-            _union_own_mask(merge_ds)
-            if any(_nodata.has_own_mask(d) for d in merge_ds)
-            else None
-        )
+        # The pixels are composited by the tiles' validity, as the mask union is: a tile with an alpha band
+        # is merged as a copy whose mask band is its validity, since GDAL's mask of one with its own mask
+        # band, or of a 3-band gray+x+alpha one, ignores the alpha band, and that of RGBA leaves the alpha
+        # band itself out (a transparent pixel of a later tile would hide an opaque one under it, or keep
+        # the colours and zero the alpha). The mosaic gets a mask band only if a tile had one.
+        group_masked = any(_nodata.has_own_mask(d) for d in merge_ds)
+        composite = []
+        for d in merge_ds:
+            if _nodata.has_alpha(d):
+                copy_mf = MemoryFile()
+                _write_masked_tile(d, copy_mf, _valid_u8(d))
+                copy = copy_mf.open()
+                extra.append((copy_mf, copy))
+                d = copy
+            composite.append(d)
+        mosaic, out_transform = _merge_pixels(composite)
+        own_mask = _union_own_mask(merge_ds) if group_masked else None
         out_dtype = str(mosaic.dtype)
         decoded_bytes = mosaic.nbytes
         profile = _comp.drop_ycbcr(ref.profile)

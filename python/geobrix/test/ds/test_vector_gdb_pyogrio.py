@@ -31,6 +31,7 @@ from pyspark.sql.types import (
     StringType,
     StructField,
     StructType,
+    TimestampNTZType,
     TimestampType,
 )
 from shapely import (
@@ -135,7 +136,7 @@ def test_geometry_types(tmp_path, geom, allowed):
     assert set(got["name"]) == {"g0", "g1", "g2"}
     for g in got.geometry:
         assert g.geom_type in allowed
-        assert g.equals(geom) or g.bounds == geom.bounds
+        assert g.equals(geom)  # the same shape, not just the same bounds
 
 
 def test_default_layer_name_and_layername_option(tmp_path):
@@ -523,8 +524,9 @@ def test_target_version_auto_with_only_strings_writes_no_client_stamp(tmp_path):
         (LongType(), 2**53 + 1),
         (DateType(), datetime.date(2020, 1, 2)),
         (TimestampType(), datetime.datetime(2020, 1, 2, 3, 4, 5)),
+        (TimestampNTZType(), datetime.datetime(2020, 1, 2, 3, 4, 5)),
     ],
-    ids=["long", "date", "timestamp"],
+    ids=["long", "date", "timestamp", "timestamp_ntz"],
 )
 def test_target_version_auto_stamps_for_long_date_and_timestamp(tmp_path, field, value):
     out = _gdb_with(tmp_path, field, value)
@@ -745,6 +747,17 @@ def test_only_null_geometries_raise_a_clear_error_naming_the_option(tmp_path):
         _write_gdb(tmp_path / "allnull.gdb", _schema(_NAME), [rows])
     msg = str(ei.value)
     assert "geometryType" in msg and "NULL" in msg
+
+
+def test_an_unknown_geometry_type_option_is_not_blamed_on_null_geometries(tmp_path):
+    """geometryType='Unknown' is not a type a FileGDB layer can have; with real geometries
+    the error must say so, not that every geometry is NULL."""
+    with pytest.raises(ValueError) as ei:
+        _write_gdb(
+            tmp_path / "unk.gdb", _schema(_NAME), [_pts(2)], {"geometryType": "Unknown"}
+        )
+    msg = str(ei.value)
+    assert "Unknown" in msg and "every geometry is NULL" not in msg
 
 
 def test_only_null_geometries_write_when_the_type_is_given(tmp_path):

@@ -88,6 +88,7 @@ if ! command -v dbexec >/dev/null 2>&1; then
     exit 2
 fi
 
+CALLER_DIR="$PWD"
 cd "$PROJECT_ROOT" || exit 2
 
 # Resolve the base ref (default: the branch's upstream = your unpushed commits).
@@ -170,18 +171,42 @@ if [[ ${#NOTEBOOKS[@]} -gt 0 && "$KEEP_OUTPUTS" -ne 1 ]]; then
     ISAAC_ARGS=(review --uncommitted)
     echo -e "${CYAN}Notebook outputs stripped${NC} for review (${#NOTEBOOKS[@]} .ipynb; --keep-outputs to include them)."
 fi
-# Skip the generated lock files by default (Isaac opt_out.paths in the layered config). A config
-# the caller passes after `--` (-c/--config) is theirs to manage, so none is added then.
+# Report every severity, and skip the generated lock files by default (Isaac opt_out.paths in the
+# layered config). One config is passed: isaac-review-local.yaml (all severities + the opt_out), or with
+# --include-generated isaac-review-severities.yaml (all severities only), so that mode does not fall back
+# to Isaac's critical/major-only threshold. A config the caller passes after `--` (-c/--config) is
+# theirs to manage, so none is added then.
 HAS_OWN_CONFIG=0
 for a in ${PASSTHRU[@]+"${PASSTHRU[@]}"}; do
     case "$a" in -c|--config|-c=*|--config=*) HAS_OWN_CONFIG=1 ;; esac
 done
-if [[ "$INCLUDE_GENERATED" -ne 1 && "$HAS_OWN_CONFIG" -ne 1 ]]; then
-    ISAAC_ARGS+=(-c "$SCRIPT_DIR/isaac-review-local.yaml")
+if [[ "$HAS_OWN_CONFIG" -ne 1 ]]; then
+    if [[ "$INCLUDE_GENERATED" -eq 1 ]]; then
+        ISAAC_ARGS+=(-c "$SCRIPT_DIR/isaac-review-severities.yaml")
+    else
+        ISAAC_ARGS+=(-c "$SCRIPT_DIR/isaac-review-local.yaml")
+    fi
 fi
 [[ "$FULL" -eq 1 ]] && ISAAC_ARGS+=(--full)
 [[ -n "$RULE" ]] && ISAAC_ARGS+=(--run-rule "$RULE")
-[[ ${#PASSTHRU[@]} -gt 0 ]] && ISAAC_ARGS+=("${PASSTHRU[@]}")
+# isaac resolves a relative -o/--output against its own working directory, which is the scratch
+# worktree (deleted on exit) when notebook outputs are stripped: anchor it to the caller's directory.
+if [[ ${#PASSTHRU[@]} -gt 0 ]]; then
+    for i in "${!PASSTHRU[@]}"; do
+        case "${PASSTHRU[$i]}" in
+            -o|--output)
+                j=$((i + 1))
+                if [[ -n "${PASSTHRU[$j]:-}" && "${PASSTHRU[$j]}" != /* ]]; then
+                    PASSTHRU[$j]="$CALLER_DIR/${PASSTHRU[$j]}"
+                fi ;;
+            -o=*|--output=*)
+                if [[ "${PASSTHRU[$i]#*=}" != /* ]]; then
+                    PASSTHRU[$i]="${PASSTHRU[$i]%%=*}=$CALLER_DIR/${PASSTHRU[$i]#*=}"
+                fi ;;
+        esac
+    done
+    ISAAC_ARGS+=("${PASSTHRU[@]}")
+fi
 
 echo -e "${CYAN}Running:${NC} dbexec repo run isaac ${ISAAC_ARGS[*]}"
 show_separator

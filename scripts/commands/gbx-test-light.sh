@@ -1,8 +1,8 @@
 #!/bin/bash
 # gbx:test:light - Run the light-tier Python tests (pyrx, pyvx, pygx, ds, zarr, ...) natively on
 # the host. A thin front for gbx:test:pyrx, whose default is only test/pyrx: with no --path this
-# runs every light dir in one pytest process, in the order of the light CI phase's pytest line
-# (.github/actions/pyrx_build/action.yml). The order matters: the dirs share a process, and
+# runs every light dir in one pytest process, in the order of the unsharded pytest line
+# of the light CI action (.github/actions/pyrx_build/action.yml; CI itself runs the dirs as parallel shards). The order matters: the dirs share a process, and
 # test/pyvx registers PROJ grids before test/bench builds rasters on worker threads.
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -16,8 +16,9 @@ show_help() {
     echo -e "  ${GREEN}gbx:test:light${NC} ${YELLOW}[options]${NC}"
     echo ""
     echo -e "${CYAN}Options:${NC}"
-    echo -e "  ${GREEN}--path <dir>${NC}           Test directory or file; repeatable (default: every light dir, in the light CI phase order)"
-    echo -e "  ${GREEN}--markers <expr>${NC}       Extra pytest marker expression, ANDed with 'not integration' (see gbx:test:pyrx)"
+    echo -e "  ${GREEN}--path <dir>${NC}           Test directory or file; repeatable (default: every light dir, in one process, in the unsharded CI order)"
+    echo -e "  ${GREEN}--markers <expr>${NC}       Extra pytest marker expression, ANDed with '(not integration) and (not perf)' (see gbx:test:pyrx)"
+    echo -e "  ${GREEN}--perf${NC}                 Also run the perf-marked cases (slow tessellate / geomk / merge cases), which the unit loop skips; pass it on a full run before a push"
     echo -e "  ${GREEN}--docker${NC}               Run in the dev container instead of the host venv (see gbx:test:pyrx)"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
     print_lock_help

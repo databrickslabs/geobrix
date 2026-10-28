@@ -402,6 +402,13 @@ _SALVAGE_POINTS = 1000
 _GIVE_UP_CHUNKS = 3
 _GIVE_UP_POINTS = 250_000
 
+# The fewest bytes a LAZ point can take, so a header count beyond (bytes of point data /
+# this) cannot be in the file. Only used when lazrs is not the decoder and there is no
+# chunk table to read the limit from. Identical points compress to about 0.007 bytes each
+# (measured with the point formats 0, 1, 3, 6 and 8, 50,000 to a million points): a bound
+# of half a byte, which this once was, cut such a file off after 1,220 of 50,000 points.
+_MIN_LAZ_POINT_BYTES = 1 / 1024
+
 # Limits for the sanity check of a LAZ chunk table (_read_chunk_table): plausibility
 # bounds on numbers read from the file, far above anything a writer produces and far
 # below what would exhaust a worker; not a memory budget.
@@ -677,10 +684,48 @@ def _chunk_table_in(h, record: _LaszipRecord, f, size: int) -> Union[str, _Chunk
     )
 
 
+def _laszip_scans(h) -> bool:
+    """True for a LAZ file with GPS time that ``laszip``, not lazrs, would decode.
+
+    laspy picks the first backend it can import (lazrs, then laszip). The laszip
+    decoder overflows its stack on a run of 0xFF as lazrs does, but with no lazrs
+    there is no chunk table to read, so such a file is scanned as a whole.
+    """
+    if not h.are_points_compressed or "gps_time" not in h.point_format.dimension_names:
+        return False
+    from laspy.compression import LazBackend
+
+    available = LazBackend.detect_available()
+    return LazBackend.Laszip in available and not (
+        LazBackend.Lazrs in available or LazBackend.LazrsParallel in available
+    )
+
+
+def _laszip_only_problem(h, f, size: int) -> Optional[str]:
+    """:data:`_DENSE_FF_PROBLEM` when the compressed points of the open file ``f``
+    (``size`` bytes) hold a dense run of 0xFF, else None; for a file that
+    :func:`_laszip_scans`.
+
+    Without lazrs the chunk table cannot be read, so every byte from the start of
+    the compressed points to the table is scanned and the uncompressed first record
+    of each chunk is not left out, as :func:`_dense_ff_in` does with the table. A
+    record is far smaller than a 256-byte block, so only one that is mostly 0xFF
+    (extra bytes all 255, say) can be mistaken for damage."""
+    start = int(h.offset_to_point_data)
+    found = _find_chunk_table(f, start, size)
+    end = size if isinstance(found, str) else found[0]
+    room = end - (start + 8)
+    if room <= 0:
+        return None
+    return _DENSE_FF_PROBLEM if _dense_ff_in(f, start, [(0, room)], 0) else None
+
+
 def _read_chunk_table(h, local: str, size: int) -> Union[str, _ChunkTable, None]:
     """The chunk table of a LAZ file when it can be handed to the decoder; a str
     saying why not when it cannot; None for a file that is not LAZ, or when lazrs
-    (so no abort to guard against) is not the decoder.
+    is not the decoder (no chunk table to hand over: the points of a file that
+    laszip decodes are scanned for 0xFF runs all the same, see
+    :func:`_laszip_only_problem`).
 
     lazrs reserves memory for numbers it reads out of the file (the chunk count,
     each chunk's byte count and point count, the chunk size of the LASzip record)
@@ -699,10 +744,14 @@ def _read_chunk_table(h, local: str, size: int) -> Union[str, _ChunkTable, None]
     chunks), and for a format with GPS time one more sequential read of the
     compressed points."""
     record = _laszip_record(h)
-    if record is None or isinstance(record, str):
+    if record is None and not _laszip_scans(h):
+        return None
+    if isinstance(record, str):
         return record
     f = _listing._retry_transient(lambda: open(local, "rb"))
     with f:
+        if record is None:  # laszip decodes: scanned, but there is no table to return
+            return _laszip_only_problem(h, f, size)
         return _chunk_table_in(h, record, f, size)
 
 
@@ -716,7 +765,8 @@ def check_laz(source, name: str) -> None:
     instead of raising. Anything else passes: an uncompressed file, a file
     without lazrs as its decoder, and a LAZ file whose table and points are
     sound as far as these checks go (other damage can still reach the
-    decoder)."""
+    decoder). With laszip as the decoder (no lazrs) only the run of 0xFF
+    bytes is checked."""
     import laspy
 
     if isinstance(source, (bytes, bytearray, memoryview)):
@@ -728,10 +778,15 @@ def check_laz(source, name: str) -> None:
         h = laspy.LasHeader.read_from(f, read_evlrs=False)  # points only
         record = _laszip_record(h)
         if record is None:
-            return
-        found = (
-            record if isinstance(record, str) else _chunk_table_in(h, record, f, size)
-        )
+            if not _laszip_scans(h):
+                return
+            found = _laszip_only_problem(h, f, size)
+        else:
+            found = (
+                record
+                if isinstance(record, str)
+                else _chunk_table_in(h, record, f, size)
+            )
     if isinstance(found, str):
         raise ValueError(f"{name}: not read, {found}")
 
@@ -800,6 +855,15 @@ def _readable_points(
     offset = int(h.offset_to_point_data)
     if h.are_points_compressed:
         if table is None:  # lazrs is not the decoder: its own errors, then salvage
+            most = int((size - offset) / _MIN_LAZ_POINT_BYTES)
+            if total > most:
+                hook(
+                    None,
+                    _quarantine.RECORDS_NOT_READ,
+                    f"the header declares {total} points, more than a {size}-byte LAZ "
+                    f"file can hold; at most {most} were read",
+                )
+                return max(0, most)
             return total
         # lazrs gives ``chunk_size`` points for every entry of a fixed-size table,
         # the partial last chunk's too (verified on lazrs 0.8.2: a 5,000-point file

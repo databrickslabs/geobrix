@@ -11,7 +11,6 @@ and directories, straight from the source.
 from __future__ import annotations
 
 import contextlib
-import gzip
 import logging
 import os
 from functools import lru_cache
@@ -20,6 +19,11 @@ from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 from pyspark.sql.datasource import DataSourceReader, InputPartition
 
 from databricks.labs.gbx.ds import _listing, _quarantine, _xyz_mosaic
+from databricks.labs.gbx.pmtiles._directory import (
+    _iter_entries,
+    _read_directory,
+    _read_header,
+)
 from databricks.labs.gbx.pyrx.core.local_temp import (
     StageCache,
     copy_source_sequential,
@@ -28,7 +32,6 @@ from databricks.labs.gbx.pyrx.core.local_temp import (
 
 _LOG = logging.getLogger(__name__)
 
-_HEADER_LEN = 127  # PMTiles v3 fixed header
 _MAX_DEPTH = 4  # directory nesting the PMTiles v3 spec allows (root + leaves)
 _DIR_CACHE = 8  # deserialized directories kept per partition read
 
@@ -85,63 +88,18 @@ def _range_source(fh) -> Callable[[int, int], bytes]:
     return get_bytes
 
 
-def _read_header(get_bytes) -> dict:
-    from pmtiles.tile import deserialize_header
-
-    return deserialize_header(get_bytes(0, _HEADER_LEN))
-
-
-def _read_directory(get_bytes, header: dict, offset: int, length: int) -> list:
-    """The ``pmtiles.tile.Entry`` list of the directory at ``offset``/``length``,
-    decoded by the archive's declared ``internal_compression``. The library's
-    ``deserialize_directory`` always gunzips, but the spec allows uncompressed
-    directories (the heavyweight pmtiles writer stores them so). Only none and
-    gzip are readable; any other compression is refused rather than guessed."""
-    from pmtiles.tile import Compression, deserialize_directory
-
-    raw = get_bytes(offset, length)
-    comp = header["internal_compression"]
-    if comp is Compression.GZIP:
-        return deserialize_directory(raw)
-    if comp is Compression.NONE:
-        # The library has no raw parser; a directory is a few KB, so re-gzipping
-        # (cheapest level) it for the library's own parser costs nothing.
-        return deserialize_directory(gzip.compress(raw, compresslevel=1))
-    raise ValueError(
-        f"pmtiles_gbx: internal compression {comp.value} ({comp.name}) is not supported"
-    )
-
-
-def _iter_tile_ids(get_bytes, header: dict, offset: int, length: int):
-    """(z, x, y) of every addressed tile under one directory, in tile-id order.
-    Reads directories only -- never tile data. Same traversal (and order) as
-    ``pmtiles.reader.all_tiles``."""
-    from pmtiles.tile import tileid_to_zxy
-
-    for entry in _read_directory(get_bytes, header, offset, length):
-        if entry.run_length > 0:
-            for i in range(entry.run_length):
-                yield tileid_to_zxy(entry.tile_id + i)
-        else:
-            yield from _iter_tile_ids(
-                get_bytes,
-                header,
-                header["leaf_directory_offset"] + entry.offset,
-                entry.length,
-            )
-
-
 def _list_tiles(path: str) -> List[Tuple[int, int, int]]:
     """Every addressed tile of an archive, from its header and directories
     (a few sequential section reads, no tile data)."""
     with _listing._retry_transient(lambda: open(path, "rb")) as fh:
         get_bytes = _range_source(fh)
         header = _read_header(get_bytes)
-        return list(
-            _iter_tile_ids(
+        return [
+            zxy
+            for zxy, _entry in _iter_entries(
                 get_bytes, header, header["root_offset"], header["root_length"]
             )
-        )
+        ]
 
 
 class _TileLookup:

@@ -58,6 +58,7 @@ or ``spark.conf.set``; ``spark.sql.shuffle.partitions`` is read through a guarde
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import math
@@ -74,6 +75,7 @@ import pyarrow.compute as pc
 from databricks.labs.gbx.core._arrow import to_spark_df
 from databricks.labs.gbx.zarr import _manifest as M
 from databricks.labs.gbx.zarr import _write_tiles
+from databricks.labs.gbx.zarr._access import bounded_closure, resolve_access
 from databricks.labs.gbx.zarr._layout import chunk_layout, coordinate_chunks
 from databricks.labs.gbx.zarr._meta import (
     ArrayMeta,
@@ -81,11 +83,18 @@ from databricks.labs.gbx.zarr._meta import (
     decode_coord,
     doc_bytes,
     is_time_coord,
+    merge_array,
     parse_v2,
     parse_v3,
     with_shape,
+    xarray_fill_form,
 )
-from databricks.labs.gbx.zarr._pack import PackWriter, crc32c_hex, encode_inner_chunk
+from databricks.labs.gbx.zarr._pack import (
+    PackWriter,
+    crc32c_hex,
+    encode_inner_chunk,
+    require_packs,
+)
 from databricks.labs.gbx.zarr._plan import unit_key
 from databricks.labs.gbx.zarr._write_tasks import (
     PIECES_DDL,
@@ -101,7 +110,6 @@ from databricks.labs.gbx.zarr._write_tasks import (
     part_of,
 )
 from databricks.labs.gbx.zarr.errors import (
-    ZarrAccessUnavailable,
     ZarrError,
     ZarrGridMismatch,
     ZarrOwnershipError,
@@ -276,7 +284,9 @@ def _codec_chain(codecs) -> list[dict] | None:
 
 
 def _v3_doc(name, dims, shape, dtype, chunks, shards, fill, attrs, codecs) -> dict:
-    """The ``zarr.json`` of a new array, made by zarr itself so it is valid."""
+    """The ``zarr.json`` of a new array, made by zarr itself so it is valid; a float
+    ``_FillValue`` attribute is stored in the form xarray reads (``xarray_fill_form``).
+    """
     import zarr
     from zarr.codecs import BytesCodec, Crc32cCodec, ZstdCodec
     from zarr.storage import MemoryStore
@@ -301,7 +311,7 @@ def _v3_doc(name, dims, shape, dtype, chunks, shards, fill, attrs, codecs) -> di
             doc["codecs"][0]["configuration"]["codecs"] = codecs
         else:
             doc["codecs"] = codecs
-    return doc
+    return xarray_fill_form(doc)  # a float _FillValue attribute the way xarray reads it
 
 
 def _check_doc(meta: ArrayMeta, codecs) -> None:
@@ -432,28 +442,6 @@ def _explicit_shards(
                 )
             out[i] = size
     return tuple(out)
-
-
-def _same_layout(a: ArrayMeta, b: ArrayMeta) -> bool:
-    """Everything but the shape: what a rebase may not change under a write."""
-
-    def strip(meta):
-        doc = json.loads(json.dumps(meta.doc))
-        if meta.zarr_format == 3:
-            doc.pop("shape", None)
-            doc.pop("attributes", None)
-        else:
-            doc[".zarray"].pop("shape", None)
-            doc.pop(".zattrs", None)
-        return doc
-
-    return (a.zarr_format, a.dims, a.dtype, a.chunks, a.shards) == (
-        b.zarr_format,
-        b.dims,
-        b.dtype,
-        b.chunks,
-        b.shards,
-    ) and strip(a) == strip(b)
 
 
 def _doc_keys(meta: ArrayMeta) -> list[str]:
@@ -888,6 +876,10 @@ class _Plan:
     single_pass: bool = False
     region: dict = field(default_factory=dict)
     store_labels: dict = field(default_factory=dict)  # decoded coordinates at the base
+    planned: dict | None = None  # name -> ArrayMeta as planned, before any rebase
+    access: object = (
+        None  # AccessConfig: how the tasks reach the files (holds credentials)
+    )
 
 
 def _as_numbers(values):
@@ -1905,8 +1897,12 @@ def _write_files(spark, plan: _Plan) -> pa.Table:
         batch_bytes=sizes["batch_bytes"],
         roll_bytes=sizes["roll_bytes"],
         fault=_FAULT,
+        access=plan.access,
     )
-    pieces = frame.mapInArrow(explode_function(cfg), PIECES_DDL)
+    # the explode stage touches no storage: it never carries the credentials
+    pieces = frame.mapInArrow(
+        explode_function(dataclasses.replace(cfg, access=None)), PIECES_DDL
+    )
     parts, nbytes = _planned(plan)
     if plan.mode != "create" and base_names:
         # an overwrite deletes every row its input does not replace: it needs them all
@@ -1925,7 +1921,12 @@ def _write_files(spark, plan: _Plan) -> pa.Table:
         if n is None
         else pieces.repartition(n, "variable", "part")
     ).sortWithinPartitions("variable", "part", "ord", "key")
-    return grouped.mapInArrow(assemble_function(cfg), ROWS_DDL).toArrow()
+    assemble, plan.access = bounded_closure(
+        spark,
+        plan.access,
+        lambda a: assemble_function(dataclasses.replace(cfg, access=a)),
+    )
+    return grouped.mapInArrow(assemble, ROWS_DDL).toArrow()
 
 
 # --- after the files: side rows, coordinates ---------------------------------------------
@@ -2087,6 +2088,7 @@ def _chunk_rows(chunks: pa.Table, w: str, tomb, delete) -> pa.Table:
             "write_id": _const(w, n),
             "op": pc.if_else(delete, _const("delete", n), _const("upsert", n)),
             "expected_write_id": chunks.column("expected_write_id"),
+            "identity": chunks.column("identity"),
         },
         n,
     )
@@ -2096,10 +2098,10 @@ def _commit_data_rows(plan: _Plan, rows: pa.Table, written: set) -> pa.Table:
     """The data rows to commit, column by column (a commit can carry millions):
 
     - each chunk with the base write_id of its key; a chunk of fill is dropped, or deletes
-      its row, or is a tombstone under a live shard row;
+      its row, or is a tombstone (under a live shard row, or over a base object it hides);
     - one check row per shard a chunk was read from;
     - in an overwrite, the deletes of every base row of the written variables that no
-      chunk replaced.
+      chunk replaced; a row that hides a base object becomes a tombstone instead.
     """
     w = plan.write_id
     rtype = rows.column("rtype")
@@ -2109,7 +2111,11 @@ def _commit_data_rows(plan: _Plan, rows: pa.Table, written: set) -> pa.Table:
         empty = pc.fill_null(chunks.column("empty"), False)
         live = pc.is_valid(chunks.column("expected_write_id"))
         held = pc.fill_null(chunks.column("shard_live"), False)
-        tomb = pc.and_(empty, held)
+        # an unsharded chunk row that shadows a base object (a registered store's own file)
+        # must not simply go: with no row left, the next sync would list that object as new
+        # and bring its old values back. It becomes a tombstone that remembers the object.
+        shadows = pc.is_valid(chunks.column("identity"))
+        tomb = pc.and_(empty, pc.or_(held, shadows))
         delete = pc.and_(pc.and_(empty, pc.invert(tomb)), live)
         keep = pc.invert(pc.and_(pc.and_(empty, pc.invert(tomb)), pc.invert(live)))
         parts.append(
@@ -2142,17 +2148,46 @@ def _commit_data_rows(plan: _Plan, rows: pa.Table, written: set) -> pa.Table:
                 value_set=pa.array(sorted(written), pa.string()),
             )
         )
-        n = deletes.num_rows
+        # a row that hides a base object (a registered store's own file, or an overlay row
+        # that remembers one) is not simply deleted: with no row left, the next sync would
+        # list the object as new and bring it back. It becomes a tombstone that keeps the
+        # object's identity. Any other row is deleted.
+        hides = pc.is_valid(deletes.column("identity"))
+        plain = deletes.filter(pc.invert(hides))
+        hidden = deletes.filter(hides)
+        n = plain.num_rows
         if n:
             parts.append(
                 _typed_rows(
                     {
-                        "kind": deletes.column("kind"),
-                        "array": deletes.column("array"),
-                        "key": deletes.column("key"),
+                        "kind": plain.column("kind"),
+                        "array": plain.column("array"),
+                        "key": plain.column("key"),
                         "write_id": _const(w, n),
                         "op": _const("delete", n),
-                        "expected_write_id": deletes.column("expected_write_id"),
+                        "expected_write_id": plain.column("expected_write_id"),
+                    },
+                    n,
+                )
+            )
+        n = hidden.num_rows
+        if n:
+            is_shard = pc.equal(hidden.column("kind"), "shard")
+            parts.append(
+                _typed_rows(
+                    {
+                        "kind": hidden.column("kind"),
+                        "array": hidden.column("array"),
+                        "key": hidden.column("key"),
+                        "shard_key": pc.if_else(
+                            is_shard, hidden.column("key"), hidden.column("shard_key")
+                        ),
+                        "length": pa.array(np.zeros(n, dtype=np.int64)),
+                        "origin": _const("gbx", n),
+                        "identity": hidden.column("identity"),
+                        "write_id": _const(w, n),
+                        "op": _const("upsert", n),
+                        "expected_write_id": hidden.column("expected_write_id"),
                     },
                     n,
                 )
@@ -2268,6 +2303,9 @@ def _patch_rows(spark, plan, snap, docs, patch, writers, rebase, tools):
     fill = 0 if meta.fill_value is None else meta.fill_value
     current = {k: np.full(meta.chunks, fill, dtype=native) for k in chunks}
     live: dict[str, str] = {}
+    shadowed: dict[str, str | None] = (
+        {}
+    )  # key -> identity of the base object it shadows
     base_meta = None if docs is None else docs.arrays.get(patch.name)
     if snap is not None and base_meta is not None:
         kw = {"keys": keys}
@@ -2277,6 +2315,7 @@ def _patch_rows(spark, plan, snap, docs, patch, writers, rebase, tools):
             spark, snap, kinds=["shard", "chunk"], arrays=[patch.name], **kw
         ).to_pylist()
         live = {r["key"]: r["write_id"] for r in rows if r["kind"] == "chunk"}
+        shadowed = {r["key"]: r["identity"] for r in rows if r["kind"] == "chunk"}
         store = ManifestStore(
             docs.metas,
             rows,
@@ -2327,6 +2366,7 @@ def _patch_rows(spark, plan, snap, docs, patch, writers, rebase, tools):
             writer = writers[patch.name] = PackWriter(
                 os.path.join(plan.root, "data", patch.name, plan.write_id),
                 reader_root=plan.root,
+                access=plan.access,
             )
         offset, length = writer.add(data)
         out.append(
@@ -2342,6 +2382,7 @@ def _patch_rows(spark, plan, snap, docs, patch, writers, rebase, tools):
                 "origin": "gbx",
                 "op": "upsert",
                 "expected_write_id": live.get(key),
+                "identity": shadowed.get(key),
             }
         )
     return out
@@ -2365,33 +2406,40 @@ def _conflict(rows: list[dict], message=None) -> ZarrWriteConflict:
 def _rebase(spark, plan: _Plan, latest) -> tuple[pa.Table, pa.Table]:
     """Doc and coordinate rows again, over ``latest``.
 
-    - The arrays this write changes keep their layout (a change is a conflict) and take
-      the maximum shape; an array it creates takes the latest extents of its dimensions.
+    - An array this write changes is rebuilt over the document that is live now
+      (``merge_array``): the larger shape, and whatever another writer did to its
+      attributes, are kept; a different layout, or an attribute both set differently, is a
+      conflict. An array it creates takes the latest extents of its dimensions.
     - An append grows every array on its dimension, including ones created meanwhile.
     - Coordinate chunks are read-modified-written over the latest ones.
     - Every metadata expectation is the latest write_id.
     """
     docs = _docs_at(spark, latest)
     latest_ext = _extents_of(docs.arrays)
+    if plan.planned is None:  # the first rebase: the arrays still are as planned
+        plan.planned = dict(plan.arrays)
+    base_arrays = plan.docs.arrays if plan.docs is not None else {}
+
+    def merged(name: str, shape) -> ArrayMeta:
+        theirs, mine = docs.arrays.get(name), plan.planned.get(name)
+        if theirs is None:
+            return with_shape(mine, shape)
+        if mine is None:  # created by another write, not planned by this one
+            return with_shape(theirs, shape)
+        return merge_array(base_arrays.get(name), mine, theirs, shape)
+
     for name in list(plan.changed):
-        mine, theirs = plan.arrays[name], docs.arrays.get(name)
-        if theirs is not None and not _same_layout(mine, theirs):
-            raise ZarrWriteConflict(
-                f"another write changed the layout of array {name!r} (its type, chunks or "
-                "codecs) since this write read it",
-                keys=(name,),
-                fix="re-read the store and write again",
-            )
+        cur, theirs = plan.arrays[name], docs.arrays.get(name)
+        same_rank = theirs is not None and len(theirs.shape) == len(cur.shape)
         shape = tuple(
             max(
                 n,
-                theirs.shape[i] if theirs is not None else 0,
+                theirs.shape[i] if same_rank else 0,  # another rank: a layout conflict
                 latest_ext.get(d, 0) if name in plan.created else 0,
             )
-            for i, (d, n) in enumerate(zip(mine.dims, mine.shape))
+            for i, (d, n) in enumerate(zip(cur.dims, cur.shape))
         )
-        if shape != mine.shape:
-            plan.arrays[name] = with_shape(mine, shape)
+        plan.arrays[name] = merged(name, shape)
     for patch in plan.patches:
         mine, theirs = plan.arrays[patch.name], docs.arrays.get(patch.name)
         if theirs is not None and theirs.shape[0] > mine.shape[0]:
@@ -2402,13 +2450,13 @@ def _rebase(spark, plan: _Plan, latest) -> tuple[pa.Table, pa.Table]:
         for name, theirs in docs.arrays.items():
             if d not in theirs.dims:
                 continue
-            mine = plan.arrays.get(name, theirs)
+            cur = plan.arrays.get(name, theirs)
             shape = tuple(
                 max(a, b, target if dim == d else 0)
-                for dim, a, b in zip(theirs.dims, mine.shape, theirs.shape)
+                for dim, a, b in zip(theirs.dims, cur.shape, theirs.shape)
             )
-            if shape != mine.shape or name not in plan.arrays:
-                plan.arrays[name] = with_shape(mine, shape)
+            if name not in plan.arrays or shape != cur.shape or name in plan.changed:
+                plan.arrays[name] = merged(name, shape)
             if shape != theirs.shape and name not in plan.changed:
                 plan.changed.append(name)
     return (
@@ -2428,6 +2476,16 @@ def _wait(attempt: int) -> float:
     return random.uniform(0.2, 1.0) * min(2**attempt, _MAX_WAIT_SECONDS)
 
 
+def _require_packs(plan: _Plan, rows: pa.Table) -> None:
+    """The pack files the rows point at must still be there (see ``require_packs``)."""
+    live = rows.filter(
+        pc.and_(pc.equal(rows.column("op"), "upsert"), pc.is_valid(rows.column("file")))
+    )
+    require_packs(
+        plan.root, live.column("file").to_pylist(), what="write", access=plan.access
+    )
+
+
 def _commit(spark, plan: _Plan, data_rows: pa.Table, stats: dict) -> int:
     """Phase 2: the CAS commit, rebasing metadata at most ``_ATTEMPTS`` times."""
     ids = plan.docs.ids if plan.docs is not None else {}
@@ -2444,6 +2502,7 @@ def _commit(spark, plan: _Plan, data_rows: pa.Table, stats: dict) -> int:
     sharded = {n: m.shard is not None for n, m in plan.arrays.items()}
     if plan.mode == "create":
         rows = pa.concat_tables([docs_rows, coord_rows, data_rows])
+        _require_packs(plan, rows)
         return M.commit(
             spark, plan.table, rows, write_id=plan.write_id, meta=meta, sharded=sharded
         )
@@ -2461,6 +2520,7 @@ def _commit(spark, plan: _Plan, data_rows: pa.Table, stats: dict) -> int:
             docs_rows, coord_rows = _rebase(spark, plan, latest)
             sharded = {n: m.shard is not None for n, m in plan.arrays.items()}
             rows = pa.concat_tables([docs_rows, coord_rows, data_rows])
+        _require_packs(plan, rows)
         try:
             return M.commit(
                 spark,
@@ -2488,8 +2548,20 @@ def _commit(spark, plan: _Plan, data_rows: pa.Table, stats: dict) -> int:
     )
 
 
-def _write(spark, plan: _Plan) -> int:
-    """Files, then the commit."""
+def _touched_shards(data_rows: pa.Table) -> set:
+    """``(array, shard_key)`` of every shard that has a chunk row in ``data_rows``."""
+    chunks = data_rows.filter(pc.equal(data_rows.column("kind"), "chunk"))
+    chunks = chunks.filter(pc.is_valid(chunks.column("shard_key")))
+    return set(
+        zip(
+            chunks.column("array").to_pylist(),
+            chunks.column("shard_key").to_pylist(),
+        )
+    )
+
+
+def _write(spark, plan: _Plan, optimize: bool = False) -> int:
+    """Files, then the commit; with ``optimize``, then the fold of the shards it touched."""
     rows = _write_files(spark, plan)
     if _BEFORE_COMMIT is not None:
         _BEFORE_COMMIT(plan.write_id)
@@ -2519,10 +2591,44 @@ def _write(spark, plan: _Plan) -> int:
         ),
         "variables": written | {p.name for p in plan.patches},
     }
-    return _commit(spark, plan, data_rows, stats)
+    version = _commit(spark, plan, data_rows, stats)
+    if optimize:
+        _fold_touched(
+            spark, plan.table, version, _touched_shards(data_rows), plan.access
+        )
+    return version
+
+
+def _fold_touched(spark, table: str, version: int, shards: set, access=None) -> None:
+    """``gbx_zarr_optimize`` for exactly the shards a write touched, right after its commit.
+
+    The write is already committed and stays so; a fold that fails says that, and a write
+    retried with the same ``write_id`` is recognised and not repeated."""
+    from databricks.labs.gbx.zarr._maint import _optimize
+
+    try:
+        _optimize(spark, table, shards=shards, access=access)
+    except ZarrError as e:
+        raise ZarrError(
+            f"the write committed (version {version}) but folding its shards failed: "
+            f"{e.message}",
+            fix=f"run gbx_zarr_optimize({table!r}); the write itself is done. {e.fix}",
+        ) from e
 
 
 # --- the public function ---------------------------------------------------------------
+
+
+def _write_access(spark, plan: _Plan, access: str):
+    """How this write's tasks reach the store's files (``resolve_access``, on the driver):
+    the credentials cover the Volume of ``plan.root`` and a registered store's base."""
+    return resolve_access(
+        spark,
+        plan.root,
+        access=access,
+        operation="WRITE_VOLUME",
+        also=[plan.base_root] if plan.base_root else [],
+    )
 
 
 def _session(data, spark):
@@ -2699,8 +2805,26 @@ def gbx_zarr_write(
     is refused, so give them a deterministic input (a table is best). Errors raised while
     Spark runs the write arrive as ``pyspark.errors.PythonException`` with the GeoBrix
     error name and its ``Fix:`` line in the message; a failed write commits nothing.
-    ``access`` is ``"auto"`` or ``"fuse"``; ``optimize`` arrives with
-    ``gbx_zarr_optimize``.
+    ``access`` is how the tasks reach the store's files: ``"fuse"`` through the Volume mount,
+    ``"direct"`` straight against the Volume's cloud storage with temporary credentials Unity
+    Catalog vends to the driver for this call (each pack is one ``obstore.put``; raises
+    ``ZarrAccessUnavailable`` where the credentials cannot be had), ``"auto"`` direct where
+    they can be had and the mount elsewhere (Serverless), without an error. ``optimize=True`` runs ``gbx_zarr_optimize`` on
+    exactly the shards the write touched, right after its commit (a few small writes into a
+    big shard cost one fold of that shard); the version returned is the write's own, and the
+    fold, if it commits, is the next one. Content is the same either way.
+
+    Direct access sends short-lived (at most one hour), Volume-scoped credentials to the
+    executors. Under memory pressure Spark may write task data, those credentials included,
+    to the local disk of the executors and of the driver: turn on local-disk encryption on
+    clusters that use direct access. ``access="auto"`` is direct access on dedicated
+    compute, where Unity Catalog can issue the credentials, so this applies to the default
+    too; ``access="fuse"`` sends no credentials.
+
+    A pack upload that is refused or fails part way can leave an incomplete multipart upload
+    in the bucket. GeoBrix does not clean it up: add a bucket lifecycle rule that aborts
+    incomplete multipart uploads (``AbortIncompleteMultipartUpload``) to the bucket of the
+    Volume.
     """
     from databricks.labs.gbx.zarr._filemode import resolve as resolve_file_mode
     from databricks.labs.gbx.zarr._register import (
@@ -2716,19 +2840,8 @@ def gbx_zarr_write(
         raise ValueError(f"mode must be one of {_MODES}, got {mode!r}. Fix: pass one.")
     if access not in _ACCESS:
         raise ValueError(
-            f"access must be one of {_ACCESS}, got {access!r}. Fix: pass 'auto' or 'fuse'."
-        )
-    if access == "direct":
-        raise ZarrAccessUnavailable(
-            "direct storage access is not available yet: files are written through the "
-            "Volume mount",
-            fix='use access="auto" or "fuse"',
-        )
-    if optimize:
-        raise ZarrUnsupported(
-            "optimize=True folds chunk rows into shards, which arrives with "
-            "gbx_zarr_optimize",
-            fix="write with optimize=False",
+            f"access must be one of {_ACCESS}, got {access!r}. "
+            "Fix: pass 'auto', 'fuse' or 'direct'."
         )
     if mode == "create":
         if not root:
@@ -2793,7 +2906,8 @@ def gbx_zarr_write(
             owner,
             tiles,
         )
-        return _write(spark, plan)
+        plan.access = _write_access(spark, plan, access)
+        return _write(spark, plan, optimize)
 
     data_root = _local_root(root)
     adopt = exists and _adoptable(spark, target, data_root, owner)
@@ -2807,6 +2921,7 @@ def gbx_zarr_write(
     fm = resolve_file_mode(spark, file_mode, has_filespace=False)
     inp = _create_input(spark, data, tiles, variables)
     plan = _plan_create(target, write_id, data_root, inp, chunks, shards, codecs)
+    plan.access = _write_access(spark, plan, access)  # before anything is claimed
     claimed = made = False
     try:
         claimed = _claim_marker(data_root, owner, "managed")
@@ -2824,7 +2939,7 @@ def gbx_zarr_write(
                 ),
             )
             made = True
-        return _write(spark, plan)
+        return _write(spark, plan, optimize)
     except BaseException:
         # Only a table this call made, and then dropped, gives its marker back: a table
         # that may hold a commit, or one another call made, relies on it.

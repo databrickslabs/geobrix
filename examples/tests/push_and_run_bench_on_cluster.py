@@ -40,6 +40,7 @@ import os
 import sys
 from pathlib import Path
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
+from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 
 # Load config from .env in same dir
 TESTS_DIR = Path(__file__).resolve().parent
@@ -88,6 +89,28 @@ def _geobrix_version() -> str:
                         if v:
                             return v
     return "0.4.0"
+
+
+_BENCH_SRC = TESTS_DIR.parent.parent / "python/geobrix/src/databricks/labs/gbx/bench"
+
+
+def _unknown_bng_names(functions: str) -> list:
+    """The ``bng_*`` names in a ``--functions`` list that no BNG bench leg or registered bench
+    function answers to.
+
+    The on-cluster notebook rejects such a name too, but only after the job has started; this
+    stops a typo before anything is submitted. The names come from the same source files the
+    cluster run reads (the leg table in ``cluster.py``, the registry in ``spec.py``), read as text
+    so the launcher needs no Spark.
+    """
+    import re
+
+    cluster = (_BENCH_SRC / "cluster.py").read_text()
+    spec = (_BENCH_SRC / "spec.py").read_text()
+    legs = re.findall(r'^\s*\("(bng_\w+)", dict\(', cluster, re.M)
+    registered = re.findall(r'^    "(bng_\w+)": FnSpec\(', spec, re.M)
+    known = set(legs) | set(registered)
+    return [x for x in functions.split(",") if x.startswith("bng_") and x not in known]
 
 
 def _arg(flag: str, default: str) -> str:
@@ -231,6 +254,7 @@ def _expected_rows(
 
 
 def main() -> int:
+    exit_if_help(__doc__)
     # Force line-buffered stdout so the run URL + interim progress heartbeats appear
     # LIVE, not all at once at exit. Python block-buffers stdout when it isn't a TTY
     # (piped to a file, a log, or a background task), which otherwise hides every
@@ -396,6 +420,14 @@ def main() -> int:
             run_id = f"{run_id}-netcdf-writer"
     functions = _arg("--functions", "")
     sel = _arg("--set", "core")
+    unknown_bng = _unknown_bng_names(functions)
+    if unknown_bng:
+        print(
+            "ERROR: --functions names no BNG leg or bench function: "
+            + ", ".join(unknown_bng),
+            file=sys.stderr,
+        )
+        return 2
 
     # --redo-functions <csv>: force re-run this explicit list of fns for the selected
     # (run_id, api, mode) by purging their existing rows first, leaving every other fn's rows

@@ -28,6 +28,7 @@ of tile numbers into ``mapInArrow``), so no tile passes through the driver.
 
 from __future__ import annotations
 
+import dataclasses
 import itertools
 import json
 import logging
@@ -40,6 +41,13 @@ from dataclasses import dataclass
 import numpy as np
 import pyarrow as pa
 
+from databricks.labs.gbx.zarr._access import (
+    FUSE,
+    AccessConfig,
+    bounded_closure,
+    reader_for,
+    resolve_access,
+)
 from databricks.labs.gbx.zarr._meta import (
     ArrayMeta,
     _check_mask_flag,
@@ -142,18 +150,44 @@ def classify_source(source: str, source_type: str = "auto") -> str:
 
 
 def check_access(access) -> None:
-    """Refuse an ``access`` the readers do not offer: files are read through the Volume
-    mount (``auto`` and ``fuse``) until direct storage access exists."""
+    """Refuse an ``access`` that is not ``"auto"``, ``"fuse"`` or ``"direct"``. Whether
+    direct access is available is decided later, by ``source_access`` (``resolve_access``).
+    """
     if access not in _ACCESS:
         raise ValueError(
-            f"access must be one of {_ACCESS}, got {access!r}. Fix: pass 'auto' or 'fuse'."
+            f"access must be one of {_ACCESS}, got {access!r}. "
+            "Fix: pass 'auto', 'fuse' or 'direct'."
         )
-    if access == "direct":
-        raise ZarrAccessUnavailable(
-            "direct storage access is not available yet: files are read through the "
-            "Volume mount",
-            fix='use access="auto" or "fuse"',
-        )
+
+
+def plain_direct_error(root: str) -> ZarrAccessUnavailable:
+    return ZarrAccessUnavailable(
+        f"direct storage access applies to the files of a managed or registered store; "
+        f"the plain store {root} is read through its path (FUSE only)",
+        fix="register the store with gbx_zarr_register to use direct access, or use "
+        'access="auto" or "fuse"',
+    )
+
+
+def source_access(spark, src, access: str, *, operation: str = "READ_VOLUME"):
+    """The ``AccessConfig`` the tasks read ``src`` with (``resolve_access`` on the driver).
+
+    The files of a managed or registered store are read through ``resolve_access``: direct
+    when the credentials can be had and ``access`` is not ``"fuse"``. A plain store is read
+    by zarr itself from its path, so ``"direct"`` has nothing to apply to and raises
+    ``ZarrAccessUnavailable``; ``"auto"`` reads the path, and no credentials are asked for.
+    """
+    if src.kind == "plain":
+        if access == "direct":
+            raise plain_direct_error(src.root)
+        return FUSE
+    return resolve_access(
+        spark,
+        src.root,
+        access=access,
+        operation=operation,
+        also=[src.base_root] if src.base_root else [],
+    )
 
 
 def check_version_args(version_as_of, timestamp_as_of) -> None:
@@ -586,6 +620,9 @@ class _TaskConfig:
     flag: bool | None
     batch_bytes: int  # a batch is flushed once its cells reach this many bytes
     columns: tuple[tuple[str, str], ...] = ()  # table: (name, kind) per column
+    access: AccessConfig | None = (
+        None  # how the files are reached; holds the credentials
+    )
 
 
 # table column kinds by (numpy kind, itemsize): the Spark type each one is, and Arrow's
@@ -875,10 +912,9 @@ class _UnitReader:
     def __init__(self, cfg: _TaskConfig, unit: Unit, engine: str = "zarr"):
         self.cfg, self.store, self._open, self._engine = cfg, None, {}, engine
         if cfg.kind == "table":
-            from databricks.labs.gbx.zarr._access import FuseRangeReader
             from databricks.labs.gbx.zarr._store import ManifestStore
 
-            reader = FuseRangeReader(cfg.root, base_root=cfg.base_root)
+            reader = reader_for(cfg.access, cfg.root, cfg.base_root)
             self.store = ManifestStore(cfg.docs, list(unit.rows), reader, cfg.arrays)
 
     def array(self, name: str):
@@ -1218,8 +1254,22 @@ def gbx_zarr_read(
     a variable with no such grid is left out, with a warning; one named in ``variables``
     raises.
 
-    ``access`` is ``"auto"`` or ``"fuse"`` (files are read through the Volume mount);
-    ``"direct"`` is not available yet.
+    ``access`` is how the tasks reach the store's files: ``"fuse"`` reads them through the
+    Volume mount; ``"direct"`` reads byte ranges straight from the Volume's cloud storage with
+    temporary credentials Unity Catalog vends to the driver for this call (many small ranges
+    are several times faster than through the mount), and raises ``ZarrAccessUnavailable``
+    where they cannot be had (Serverless, no SDK, no permission, a path that is not on a
+    Volume); ``"auto"`` (the default) is direct where the credentials can be had and the
+    mount everywhere else, without an error. A plain-path store is read through its path (FUSE
+    only), so ``"direct"`` raises for it: register the store to use direct access. Virtual
+    tiles are opened later, over the mount, so ``"direct"`` needs ``virtual_tiles=False``.
+
+    Direct access sends short-lived (at most one hour), Volume-scoped credentials to the
+    executors. Under memory pressure Spark may write task data, those credentials included,
+    to the local disk of the executors and of the driver: turn on local-disk encryption on
+    clusters that use direct access. ``access="auto"`` is direct access on dedicated
+    compute, where Unity Catalog can issue the credentials, so this applies to the default
+    too; ``access="fuse"`` sends no credentials.
 
     An array GeoBrix cannot decode (a string coordinate, or one whose metadata is corrupt)
     does not fail the read, on a table or a plain path: it is left out, its dimension gets
@@ -1250,6 +1300,8 @@ def gbx_zarr_read(
                 )
     _check_mask_flag(use_zarr_fill_value_as_mask)
     kind = classify_source(source, source_type)
+    if kind == "path" and access == "direct":
+        raise plain_direct_error(source)
     if output == "tiles":
         from databricks.labs.gbx.zarr._tiles import check_tile_args
 
@@ -1259,6 +1311,14 @@ def gbx_zarr_read(
                 f"virtual_tiles must be True or False, got {virtual_tiles!r}. "
                 "Fix: pass virtual_tiles=True for tiles that read their chunks when "
                 "opened, or False for tiles that hold their bytes."
+            )
+        if virtual_tiles and access == "direct":
+            raise ZarrAccessUnavailable(
+                "virtual tiles read their chunks when a function opens them, in a later "
+                "job and without this call's credentials, so they cannot use direct "
+                "storage access",
+                fix="use virtual_tiles=False to read the tiles now with direct access, or "
+                'access="auto" or "fuse"',
             )
 
     src = _open_source(spark, source, kind, version_as_of, timestamp_as_of)
@@ -1276,10 +1336,13 @@ def gbx_zarr_read(
             band_dim,
             tile_size,
         )
-        return _tiles_frame(spark, plans, virtual_tiles)
+        # a virtual tile reads nothing now, and is opened later over the mount
+        reach = FUSE if virtual_tiles else source_access(spark, src, access)
+        return _tiles_frame(spark, plans, virtual_tiles, reach)
     units, cfg = _plan(
         spark, src, names, sel, isel, output, decode, use_zarr_fill_value_as_mask
     )
+    reach = source_access(spark, src, access)
     if output == "blocks":
         schema = BLOCKS_SCHEMA
     else:
@@ -1290,7 +1353,10 @@ def gbx_zarr_read(
         )
     if not units:
         return spark.createDataFrame([], schema)
-    return _work_frame(spark, units).mapInArrow(_task_function(cfg), schema)
+    task, _ = bounded_closure(
+        spark, reach, lambda a: _task_function(dataclasses.replace(cfg, access=a))
+    )
+    return _work_frame(spark, units).mapInArrow(task, schema)
 
 
 # --- tiles ---------------------------------------------------------------------------
@@ -1418,8 +1484,10 @@ def _plan_tile_set(
     return plans
 
 
-def _tile_batches(plan, ids: list[int], virtual: bool) -> Iterator[pa.RecordBatch]:
-    from databricks.labs.gbx.zarr._tiles import source_of, tile_rows
+def _tile_batches(
+    plan, ids: list[int], virtual: bool, access=None
+) -> Iterator[pa.RecordBatch]:
+    from databricks.labs.gbx.zarr._tiles import source_of, tile_access, tile_rows
 
     if not virtual:
         from databricks.labs.gbx.pyrx.core.open_tile import materialize_to_bytes
@@ -1428,17 +1496,20 @@ def _tile_batches(plan, ids: list[int], virtual: bool) -> Iterator[pa.RecordBatc
     for lo in range(0, len(ids), step):
         rows = tile_rows(plan, ids[lo : lo + step])
         if not virtual:
-            rows = [
-                materialize_to_bytes(VirtualTile.from_row(r)).to_row() for r in rows
-            ]
+            with tile_access(access):
+                rows = [
+                    materialize_to_bytes(VirtualTile.from_row(r)).to_row() for r in rows
+                ]
         yield pa.RecordBatch.from_pylist(
             [{"source": source_of(r), "tile": r} for r in rows], schema=_TILES_ARROW
         )
 
 
-def _tile_task(plans, virtual: bool):
-    """The function ``mapInArrow`` runs: tile numbers in, tile rows out. The plans are its
-    closure, so the tiles are made where they are used and never pass through the driver.
+def _tile_task(plans, virtual: bool, access=None):
+    """The function ``mapInArrow`` runs: tile numbers in, tile rows out. The plans (and the
+    ``access`` a materialized tile is read with) are its closure, so the tiles are made
+    where they are used and never pass through the driver. A virtual tile carries no
+    credentials: it is opened later, over the mount.
     """
     offsets = list(itertools.accumulate((p.n_tiles for p in plans), initial=0))
 
@@ -1448,12 +1519,12 @@ def _tile_task(plans, virtual: bool):
             for plan, lo, hi in zip(plans, offsets, offsets[1:]):
                 mine = [i - lo for i in ids if lo <= i < hi]
                 if mine:
-                    yield from _tile_batches(plan, mine, virtual)
+                    yield from _tile_batches(plan, mine, virtual, access)
 
     return run
 
 
-def _tiles_frame(spark, plans, virtual: bool):
+def _tiles_frame(spark, plans, virtual: bool, access=None):
     """The ``(source, tile)`` DataFrame of the plans' tiles, made in tasks."""
     from databricks.labs.gbx.ds.raster import reader_schema_v2
 
@@ -1463,7 +1534,8 @@ def _tiles_frame(spark, plans, virtual: bool):
         return spark.createDataFrame([], schema)
     per_task = _TILES_PER_TASK if virtual else _MATERIALIZED_PER_TASK
     tiles = spark.range(total, numPartitions=-(-total // per_task))
-    return tiles.mapInArrow(_tile_task(plans, virtual), schema)
+    task, _ = bounded_closure(spark, access, lambda a: _tile_task(plans, virtual, a))
+    return tiles.mapInArrow(task, schema)
 
 
 # --- block helpers -------------------------------------------------------------------

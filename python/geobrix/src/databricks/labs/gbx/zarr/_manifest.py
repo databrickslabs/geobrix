@@ -53,8 +53,11 @@ __all__ = [
     "classify_commit_error",
     "parse_cas_failure",
     "check_tag",
+    "files_gone",
     "retain_seconds",
     "retain_days",
+    "property_retain_seconds",
+    "HORIZON_PROP",
 ]
 
 KINDS = ("group", "array", "shard", "chunk", "commit", "lock")
@@ -324,6 +327,30 @@ def _error_text(exc: BaseException) -> str:
     return "\n".join(parts)
 
 
+# Text of a read whose Delta data files are gone: Delta's own VACUUM (or Unity Catalog's
+# predictive optimization) removed the files of an old version, which its log still lists.
+_FILES_GONE_MARKS = (
+    "FileNotFoundException",
+    "FILE_NOT_EXIST",
+    "FILE_NOT_FOUND",
+    "No such file or directory",
+)
+
+
+def files_gone(text: str) -> bool:
+    """Whether the error ``text`` of a read says a data file of the table is missing."""
+    return any(mark in text for mark in _FILES_GONE_MARKS)
+
+
+def _version_gone(table: str, version: int) -> ZarrVersionUnavailable:
+    return ZarrVersionUnavailable(
+        f"version {version} of {table} can no longer be read: Delta has removed its data "
+        "files (its own VACUUM, or predictive optimization, ran with a shorter retention "
+        "than this store promises)",
+        fix=_UNAVAILABLE_FIX,
+    )
+
+
 def classify_commit_error(text: str) -> str | None:
     """``"cas"`` for a failed expectation, ``"concurrent"`` for a retryable Delta conflict.
 
@@ -455,16 +482,23 @@ def _effective_horizon(props: dict[str, str]) -> datetime | None:
         found.append(_parse_horizon(props[HORIZON_PROP]))
     retain = props.get(PROP_PREFIX + "retain")
     if retain:
-        try:
-            window = timedelta(seconds=retain_seconds(retain))
-        except ValueError:
-            raise ZarrError(
-                f"table property {PROP_PREFIX}retain is not a duration: {retain!r}",
-                fix=f"set it with ALTER TABLE ... SET TBLPROPERTIES "
-                f"('{PROP_PREFIX}retain' = '7 days')",
-            ) from None
+        window = timedelta(seconds=property_retain_seconds(retain))
         found.append(datetime.now(timezone.utc) - window)
     return max(found) if found else None
+
+
+def property_retain_seconds(retain: str) -> int:
+    """Seconds in the ``geobrix.zarr.retain`` table property; a value that is not a
+    duration raises ``ZarrError`` (the property is edited by hand, ``retain_seconds``
+    is for what a caller passes)."""
+    try:
+        return retain_seconds(retain)
+    except ValueError:
+        raise ZarrError(
+            f"table property {PROP_PREFIX}retain is not a duration: {retain!r}",
+            fix=f"set it with ALTER TABLE ... SET TBLPROPERTIES "
+            f"('{PROP_PREFIX}retain' = '7 days')",
+        ) from None
 
 
 def _timestamp_micros(spark, value) -> int:
@@ -574,6 +608,16 @@ def snapshot(
                 "window), so its files may have been removed",
                 fix=_UNAVAILABLE_FIX,
             )
+    if picked != max(v for v, _ in history):
+        # Delta may have dropped the files of an older version its log still lists
+        try:
+            spark.sql(
+                f"SELECT kind FROM {_q(table)} VERSION AS OF {picked} LIMIT 1"
+            ).collect()
+        except Exception as e:
+            if files_gone(_error_text(e)):
+                raise _version_gone(table, picked) from e
+            raise
     return Snapshot(table=table, version=picked, tag=None)
 
 
@@ -636,7 +680,14 @@ def read_rows(
             cond = cond & F.col(column).isin(values)
         else:
             df = _pruned(spark, df, column, values)
-    return df.where(cond).toArrow()
+    try:
+        return df.where(cond).toArrow()
+    except Exception as e:
+        if files_gone(_error_text(e)) and snap.version < _latest_version(
+            spark, snap.table
+        ):
+            raise _version_gone(snap.table, snap.version) from e
+        raise
 
 
 # --- commit -----------------------------------------------------------------------
@@ -740,8 +791,8 @@ def _commit_source(rows: pa.Table, write_id: str, meta: dict) -> pa.Table:
 
 
 _REGION_FIX = (
-    "write each shard or chunk row with its file, offset and length (> 0), or delete a "
-    "chunk with a tombstone: a chunk row with no file, offset or checksum and length 0"
+    "write each shard or chunk row with its file, offset and length (> 0), or hide an "
+    "object with a tombstone: a row with no file, offset or checksum and length 0"
 )
 
 
@@ -750,10 +801,11 @@ def _require_regions(source: pa.Table) -> None:
 
     A row with a file is a region of it: ``offset`` and ``length`` are set, ``offset`` is
     not negative and ``length`` is positive (a zero-byte region with a file would read as
-    a chunk of nothing). A row without a file is a tombstone, the one way to delete an inner
-    chunk that a live shard row still holds: a ``chunk`` row with no ``offset`` and no
-    ``checksum`` and ``length`` 0. The store reads anything else as drift, so it is never
-    written. Columnar: a commit can carry millions of rows.
+    a chunk of nothing). A row without a file is a tombstone: no ``offset``, no ``checksum``
+    and ``length`` 0. A ``chunk`` tombstone deletes an inner chunk that a live shard row still
+    holds, or hides a chunk object of a registered store; a ``shard`` tombstone hides a shard
+    object of one (``identity`` then names the object it hides). The store reads anything
+    else as drift, so it is never written. Columnar: a commit can carry millions of rows.
     """
     kind, op = source.column("kind"), source.column("op")
     data = pc.and_(
@@ -772,7 +824,7 @@ def _require_regions(source: pa.Table) -> None:
         ),
     )
     bad_tomb = pc.or_(
-        pc.or_(pc.equal(kind, "shard"), pc.is_valid(offset)),
+        pc.is_valid(offset),
         pc.or_(
             pc.fill_null(pc.not_equal(length, 0), True),
             pc.is_valid(source.column("checksum")),
@@ -788,8 +840,6 @@ def _require_regions(source: pa.Table) -> None:
             f"names the file {row['file']!r} with offset {row['offset']} and length "
             f"{row['length']}, which is not a whole region"
         )
-    elif row["kind"] == "shard":
-        problem = "has no file (a shard row always names one)"
     else:
         problem = (
             f"has no file but offset {row['offset']}, length {row['length']} and "

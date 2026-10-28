@@ -20,13 +20,13 @@ from test.zarr import _helpers as H  # noqa: E402
 
 import pandas as pd  # noqa: E402
 
-from databricks.labs.gbx.zarr import _read as _read_mod  # noqa: E402
 from databricks.labs.gbx.zarr import _write  # noqa: E402
 from databricks.labs.gbx.zarr._manifest import find_commit_version  # noqa: E402
-from databricks.labs.gbx.zarr._read import BLOCKS_SCHEMA, block_to_numpy  # noqa: E402
+from databricks.labs.gbx.zarr._read import BLOCKS_SCHEMA  # noqa: E402
 from databricks.labs.gbx.zarr._register import (  # noqa: E402
     OWNER_MARKER,
     gbx_zarr_register,
+    identity_of,
 )
 from databricks.labs.gbx.zarr._testing import (  # noqa: E402
     era5_like_dataset,
@@ -99,51 +99,13 @@ def _create(spark, drop, tmp_path, ds=None, label="s", **kw):
 
 
 def _read(spark, table, name):
-    """Variable ``name`` of the store assembled from its blocks (NaN where none).
-
-    The blocks come from the read's own planner and task body, run in this process
-    (``_helpers.run``): the manifest is queried for real, but no Spark job decodes the
-    chunks, which is most of a read's cost on a local session. The Spark-distributed read
-    has its end-to-end tests in test_read.py.
-    """
-    src = _read_mod._open_source(spark, table, "table", None, None)
-    names = _read_mod._choose_variables([name], src)
-    units, cfg = _read_mod._plan(spark, src, names, None, None, "blocks", True, None)
-    rows = [r for b in H.run(units, cfg) for r in b.to_pylist()]
-    stops = [r["stop"] for r in rows]
-    shape = tuple(max(s[i] for s in stops) for i in range(len(stops[0])))
-    first = block_to_numpy(rows[0])
-    out = np.full(shape, np.nan if first.dtype.kind == "f" else 0, dtype=first.dtype)
-    if first.dtype.kind == "M":
-        out = np.full(shape, np.datetime64("NaT"), dtype=first.dtype)
-    for r in rows:
-        out[tuple(slice(a, b) for a, b in zip(r["start"], r["stop"]))] = block_to_numpy(
-            r
-        )
-    return out
+    """Variable ``name`` of the store assembled from its blocks (NaN where none)."""
+    return H.read_variable(spark, table, name)
 
 
 def _blocks(spark, *blocks):
     """A blocks DataFrame of ``(variable, start, values)``; values are decoded values."""
-    rows = []
-    for name, start, values in blocks:
-        values = np.ascontiguousarray(values)
-        rows.append(
-            (
-                name,
-                [name] if name in DIMS else list(DIMS[-values.ndim :]),
-                list(start),
-                [a + n for a, n in zip(start, values.shape)],
-                None,
-                None,
-                values.dtype.str,
-                list(values.shape),
-                values.tobytes(),
-                None,
-                None,
-            )
-        )
-    return spark.createDataFrame(rows, BLOCKS_SCHEMA)
+    return H.blocks_frame(spark, *blocks)
 
 
 def _rows_of(spark, table, write_id, kind="chunk"):
@@ -596,6 +558,7 @@ def test_the_write_module_uses_no_api_that_spark_connect_forbids():
         "_write_tasks.py",
         "_pack.py",
         "_layout.py",
+        "_maint.py",
     ):
         path = pathlib.Path(_write.__file__).parent / name
         for node in ast.walk(ast.parse(path.read_text())):
@@ -861,11 +824,12 @@ def test_p1_a_chunk_read_from_a_shard_conflicts_when_that_shard_changes(
     assert np.isnan(got[0:12, 0:37, 0:72]).all()  # A's result alone: fill there
 
 
-def test_an_overwrite_deletes_the_shard_rows_of_a_registered_store(
+def test_an_overwrite_hides_the_shards_of_a_registered_store_with_tombstones(
     spark_delta, drop, tmp_path, no_hooks
 ):
-    """I8(b), pre-ruling (f): every shard row of the variable goes; only the rewritten
-    chunk stays; the base files are untouched."""
+    """I8(b), Ruling Z49: every shard row of the variable becomes a tombstone that keeps the
+    identity of the base shard it hides (a deleted row would let a sync bring the shard
+    back); only the rewritten chunk has data; the base files are untouched."""
     store, table = _registered(spark_delta, drop, tmp_path, "ow")
     before = _files(store)
     wid = uuid.uuid4().hex
@@ -878,12 +842,19 @@ def test_an_overwrite_deletes_the_shard_rows_of_a_registered_store(
         write_id=wid,
     )
     live = spark_delta.sql(
-        f"SELECT kind, key, write_id FROM {table} WHERE array = 't2m' AND tag IS NULL "
-        "AND kind IN ('shard', 'chunk')"
+        f"SELECT kind, key, write_id, file, length, origin, identity FROM {table} "
+        "WHERE array = 't2m' AND tag IS NULL AND kind IN ('shard', 'chunk')"
     ).collect()
-    assert [(r["kind"], r["key"], r["write_id"]) for r in live] == [
-        ("chunk", "c/3/1/1", wid)
-    ]
+    assert {(r["kind"], r["key"], r["write_id"]) for r in live} == {
+        ("chunk", "c/3/1/1", wid),
+        ("shard", "c/0/0/0", wid),
+        ("shard", "c/1/0/0", wid),
+    }
+    for r in live:
+        if r["kind"] == "shard":
+            assert (r["file"], r["length"], r["origin"]) == (None, 0, "gbx")
+            st = (store / "t2m" / r["key"]).stat()
+            assert r["identity"] == identity_of(st.st_mtime_ns // 1_000_000, st.st_size)
     got = _read(spark_delta, table, "t2m")
     assert (got[36:48, 37:73, 72:144] == 5.0).all()
     assert np.isnan(got[:36]).all() and np.isnan(got[36:48, :37]).all()
@@ -1330,6 +1301,46 @@ def test_m14_a_losing_create_keeps_the_marker_the_winner_relies_on(
 # --- the rest of the rebase loop, and the marker wiring (M1) ---------------------------------
 
 
+def _edit_array_doc(spark, table, array, edit):
+    """Commit a change to the live ``zarr.json`` of ``array``, as another writer would."""
+    import pyarrow as pa
+
+    row = spark.sql(
+        f"SELECT meta, write_id FROM {table} WHERE kind = 'array' AND array = '{array}' "
+        "AND tag IS NULL"
+    ).first()
+    doc = json.loads(row["meta"])
+    edit(doc)
+    w = uuid.uuid4().hex
+    return M.commit(
+        spark,
+        table,
+        pa.Table.from_pylist(
+            [
+                dict(
+                    kind="array",
+                    array=array,
+                    key="zarr.json",
+                    write_id=w,
+                    op="upsert",
+                    expected_write_id=row["write_id"],
+                    meta=json.dumps(doc),
+                )
+            ]
+        ),
+        write_id=w,
+        meta={},
+    )
+
+
+def _live_doc(spark, table, array):
+    row = spark.sql(
+        f"SELECT meta FROM {table} WHERE kind = 'array' AND array = '{array}' "
+        "AND tag IS NULL"
+    ).first()
+    return json.loads(row["meta"])
+
+
 def test_a_rebase_refuses_a_layout_another_write_changed(
     spark_delta, drop, tmp_path, no_hooks
 ):
@@ -1339,35 +1350,13 @@ def test_a_rebase_refuses_a_layout_another_write_changed(
 
     def relayout(wid):
         if wid == app and not ran:
-            row = spark_delta.sql(
-                f"SELECT meta, write_id FROM {table} WHERE kind = 'array' AND array = 't2m'"
-            ).first()
-            doc = json.loads(row["meta"])
-            doc["codecs"][0]["configuration"]["codecs"][1]["configuration"]["level"] = 9
-            w = uuid.uuid4().hex
-            import pyarrow as pa
 
-            ran.append(
-                M.commit(
-                    spark_delta,
-                    table,
-                    pa.Table.from_pylist(
-                        [
-                            dict(
-                                kind="array",
-                                array="t2m",
-                                key="zarr.json",
-                                write_id=w,
-                                op="upsert",
-                                expected_write_id=row["write_id"],
-                                meta=json.dumps(doc),
-                            )
-                        ]
-                    ),
-                    write_id=w,
-                    meta={},
-                )
-            )
+            def edit(doc):
+                doc["codecs"][0]["configuration"]["codecs"][1]["configuration"][
+                    "level"
+                ] = 9
+
+            ran.append(_edit_array_doc(spark_delta, table, "t2m", edit))
 
     no_hooks.setattr(_write, "_BEFORE_COMMIT", relayout)
     with pytest.raises(ZarrWriteConflict, match="layout"):
@@ -1378,6 +1367,69 @@ def test_a_rebase_refuses_a_layout_another_write_changed(
             write_id=app,
             spark=spark_delta,
         )
+
+
+def test_m22_a_rebase_keeps_an_attribute_another_write_set(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """M22: the append's rebase builds the grown document over the live one, so an
+    attribute set on an array meanwhile (a key the append never touches) survives."""
+    ds = _dataset(hours=48)
+    table, _, _ = _create(spark_delta, drop, tmp_path, ds.isel(time=slice(0, 24)))
+    app, ran = uuid.uuid4().hex, []
+
+    def annotate(wid):
+        if wid == app and not ran:
+            ran.append(
+                _edit_array_doc(
+                    spark_delta,
+                    table,
+                    "t2m",
+                    lambda doc: doc["attributes"].update(source="reanalysis"),
+                )
+            )
+
+    no_hooks.setattr(_write, "_BEFORE_COMMIT", annotate)
+    gbx_zarr_write(
+        ds.isel(time=slice(24, 48)),
+        table,
+        mode="append",
+        write_id=app,
+        spark=spark_delta,
+    )
+    doc = _live_doc(spark_delta, table, "t2m")
+    assert doc["shape"][0] == 48
+    assert doc["attributes"]["source"] == "reanalysis" and doc["attributes"]["units"]
+    np.testing.assert_array_equal(_read(spark_delta, table, "t2m"), ds.t2m.values)
+
+
+@pytest.mark.parametrize("same", [True, False])
+def test_m22_two_writers_creating_one_array_clash_only_on_different_attributes(
+    spark_delta, drop, tmp_path, no_hooks, same
+):
+    """M22: both writers create ``sp`` (the second only its document: its values are all
+    fill). Equal documents merge; an attribute they set differently is a conflict."""
+    ds = _dataset(hours=24)
+    table, _, _ = _create(spark_delta, drop, tmp_path, ds)
+    first = ds[["t2m"]].rename({"t2m": "sp"}).isel(time=slice(0, 12)) * 0 + 1.0
+    first["sp"].attrs = {"units": "Pa"}
+    second = first * np.nan
+    second["sp"].attrs = {"units": "Pa" if same else "hPa"}
+    b, ran = uuid.uuid4().hex, []
+
+    def other_first(wid):
+        if wid == b and not ran:
+            ran.append(gbx_zarr_write(first, table, mode="update", spark=spark_delta))
+
+    no_hooks.setattr(_write, "_BEFORE_COMMIT", other_first)
+    if same:
+        gbx_zarr_write(second, table, mode="update", write_id=b, spark=spark_delta)
+        assert _live_doc(spark_delta, table, "sp")["attributes"]["units"] == "Pa"
+    else:
+        with pytest.raises(ZarrWriteConflict, match="units") as e:
+            gbx_zarr_write(second, table, mode="update", write_id=b, spark=spark_delta)
+        assert e.value.keys == ("sp",) and "Fix:" in str(e.value)
+        assert _live_doc(spark_delta, table, "sp")["attributes"]["units"] == "Pa"
 
 
 def test_the_rebase_loop_gives_up_after_its_attempt_bound(

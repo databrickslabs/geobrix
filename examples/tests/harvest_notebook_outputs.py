@@ -62,6 +62,15 @@ def _items(results) -> list:
     return data if isinstance(data, list) else []
 
 
+def _readable(results) -> bool:
+    """False for a result of a command this tool cannot read: one that is neither a list of items
+    nor the ``raw`` exit value of a ``dbutils.notebook.exit`` cell (an error result, for one). Its
+    cell keeps the outputs it has, instead of being cleared as if it had printed nothing."""
+    if not isinstance(results, dict) or results.get("type") == "raw":
+        return True
+    return isinstance(results.get("data"), list)
+
+
 def to_outputs(results: dict | None) -> list[dict]:
     """Convert a command's ``results`` to nbformat v4 outputs (``SUPPORTED`` item types)."""
     outs = []
@@ -85,7 +94,8 @@ def apply_outputs(nb: dict, model: dict) -> tuple[int, list[int]]:
     """Set outputs on local code cells matched (by source) to executed commands.
 
     A cell whose results include an item type ``to_outputs`` can't convert (e.g. a
-    ``display()`` table) is left untouched rather than losing that output.
+    ``display()`` table), or whose result is not a list of items (an error result), is left
+    untouched rather than losing that output.
     Returns ``(n_updated, indices_of_local_code_cells_not_updated)``.
     """
     executed = {}
@@ -101,8 +111,13 @@ def apply_outputs(nb: dict, model: dict) -> tuple[int, list[int]]:
         if key.startswith(("%pip", "%restart_python", "%run")):
             continue
         cmd = executed.pop(key, None)
-        items = _items((cmd or {}).get("results"))
-        if cmd is None or any(it.get("type") not in SUPPORTED for it in items):
+        results = (cmd or {}).get("results")
+        items = _items(results)
+        if (
+            cmd is None
+            or not _readable(results)
+            or any(it.get("type") not in SUPPORTED for it in items)
+        ):
             unmatched.append(i)
             continue
         cell["outputs"] = to_outputs(cmd.get("results"))

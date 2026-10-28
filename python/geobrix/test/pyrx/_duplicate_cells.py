@@ -3,15 +3,17 @@
 A cell id that repeats in a group burns the LARGEST of its values. These builders give the
 unit test (the lightweight UDF bodies, row order controlled) and the cross-tier parity test
 (both tiers through Spark) the same cells, the same repeated rows and the same expectation.
+``null_rows`` is the lightweight tier only: the heavyweight tier still counts a null value as
+``1.0`` in the comparison, so the null rule is not part of the cross-tier rows.
 """
 
 import numpy as np
 
 # Every "largest" value is above 5000 and every smaller duplicate is below 3000, so a
-# smaller duplicate can never be mistaken for the expected one. Two special cells burn
-# 1.0 (a null value is the presence mask) and -2.0 (largest means largest, not magnitude).
+# smaller duplicate can never be mistaken for the expected one. One special cell burns
+# -2.0 (largest means largest, not magnitude).
 LOW_A, LOW_B, TOP = 1000.0, 2000.0, 5000.0
-SMALLER = {LOW_A + i for i in range(6)} | {LOW_B + i for i in range(6)} | {0.5, -5.0}
+SMALLER = {LOW_A + i for i in range(6)} | {LOW_B + i for i in range(6)} | {-5.0}
 
 # The custom grid of the custom-grid parity suite: 60 km square, resolution 1 = 10 km cells.
 CUSTOM_GRID = dict(
@@ -78,13 +80,25 @@ GRIDS = {
 def duplicate_rows(cells):
     """``([(cell, value)], {cell: expected burn})`` with every cell repeated."""
     rows, expected = [], {}
-    for i, cell in enumerate(cells[:-2]):
+    for i, cell in enumerate(cells[:-1]):
         top = TOP + i
         rows += [(cell, LOW_A + i), (cell, top), (cell, LOW_B + i)]
         expected[cell] = top
-    null_cell, negative_cell = cells[-2], cells[-1]
-    rows += [(null_cell, 0.5), (null_cell, np.nan)]
-    expected[null_cell] = 1.0
+    negative_cell = cells[-1]
     rows += [(negative_cell, -5.0), (negative_cell, -2.0)]
     expected[negative_cell] = -2.0
     return rows, expected
+
+
+def null_rows(cells):
+    """``([(cell, value)], {cell: expected burn})`` for cells that hold a null (``NaN``).
+
+    A null never wins, so a cell with a number burns the largest number, and a cell
+    whose every value is null burns ``NaN``. The other cell is a plain control.
+    """
+    with_number, only_null, mixed, plain = cells[:4]
+    rows = [(with_number, 0.5), (with_number, np.nan)]
+    rows += [(only_null, np.nan), (only_null, np.nan)]
+    rows += [(mixed, np.nan), (mixed, -3.0), (mixed, -7.0), (mixed, np.nan)]
+    rows += [(plain, 4.0)]
+    return rows, {with_number: 0.5, only_null: np.nan, mixed: -3.0, plain: 4.0}

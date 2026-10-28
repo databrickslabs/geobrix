@@ -74,6 +74,15 @@ def test_apply_outputs_keeps_cells_with_unsupported_result_types():
     assert nb["cells"][0]["outputs"] == kept
 
 
+def test_apply_outputs_keeps_the_outputs_of_a_cell_whose_result_is_not_a_list_of_items():
+    kept = [{"output_type": "stream", "name": "stdout", "text": ["old\n"]}]
+    nb = {"cells": [_code("fails()", kept)]}
+    model = {"commands": [{"position": 1, "command": "fails()",
+                           "results": {"type": "error", "summary": "boom"}}]}
+    assert apply_outputs(nb, model) == (0, [0])
+    assert nb["cells"][0]["outputs"] == kept
+
+
 def test_apply_outputs_tolerates_the_result_of_a_notebook_exit_cell():
     """A cell that ends in dbutils.notebook.exit(value) comes back with ``results`` of type
     "raw" whose ``data`` is the exit value (a string), not a list of items: it has no

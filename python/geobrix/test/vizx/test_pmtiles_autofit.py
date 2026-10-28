@@ -98,6 +98,24 @@ def test_autofit_drops_high_zoom_until_under_budget():
     assert report["fits"] is True
 
 
+def test_autofit_reduces_an_uncompressed_directory_archive():
+    """The heavy writer stores directories uncompressed (internal_compression
+    NONE); the reducer keeps the same tiles from it as from the gzip form."""
+    from test.pmtiles_light._archives import uncompressed_internals
+
+    archive = _multi_zoom_archive()
+    plain = uncompressed_internals(archive)
+    target_mb = (len(archive) * 0.6) / 1_048_576  # forces a downzoom (drops z2)
+
+    reduced, report = autofit_archive(plain, max_embed_mb=target_mb)
+    want, want_report = autofit_archive(archive, max_embed_mb=target_mb)
+
+    assert report["dropped_zooms"], "this test needs an actual reduction"
+    for key in ("dropped_zooms", "original_max_zoom", "kept_max_zoom", "fits"):
+        assert report[key] == want_report[key], key
+    assert _tile_zooms(reduced) == _tile_zooms(want)
+
+
 def test_autofit_preserves_source_data_bounds():
     """Downzoom must keep the SOURCE data bounds, not recompute a huge coarse-tile extent.
 

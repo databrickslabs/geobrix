@@ -115,7 +115,7 @@ FROM rasters;
 **Available functions:**
 - `gbx_rst_h3_tessellate(tile, resolution, [assignment], [coverage])` — UDTF, one chip per cell
 - `gbx_rst_h3_rastertogrid{avg,count,max,min,median,sum,stddev,variance}(tile, resolution, [coverage], [assignment])` — scalar aggregation
-- `gbx_rst_h3_rasterize_agg` — grouped (`GROUP BY`) aggregator: rasterizes each cell's `value` (or a `1.0` presence mask when null) at the cell location into one tile per group (cells→raster inverse direction). See the reference for the full signature.
+- `gbx_rst_h3_rasterize_agg` — grouped (`GROUP BY`) aggregator: rasterizes each cell's `value` (or a `1.0` presence mask when omitted) at the cell location into one tile per group (cells→raster inverse direction). See the reference for the full signature.
 - `gbx_h3_cellfill(cellid, value, [k], [method], [power])` — post-aggregation cell-space fill
 
 **Lineage:** the raster-to-H3 technique was pioneered by [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/) (`rst_tessellate`, `rst_rastertogridavg`/`count`/`max`/`min`/`median`). Databricks has since adopted the same grid for vector operations — see the H3 geospatial functions reference ([AWS](https://docs.databricks.com/aws/en/sql/language-manual/sql-ref-h3-geospatial-functions) · [Azure](https://learn.microsoft.com/azure/databricks/sql/language-manual/sql-ref-h3-geospatial-functions) · [GCP](https://docs.databricks.com/gcp/en/sql/language-manual/sql-ref-h3-geospatial-functions)):
@@ -162,7 +162,7 @@ See the [Helios notebooks](../notebooks/helios) for a worked example of `gbx_rst
 **Available functions:**
 - `gbx_rst_quadbin_tessellate(tile, resolution, [assignment], [coverage])` — UDTF, one chip per cell
 - `gbx_rst_quadbin_rastertogrid{avg,count,max,min,median,sum,stddev,variance}(tile, resolution, [coverage], [assignment])` — scalar aggregation
-- `gbx_rst_quadbin_rasterize_agg` — grouped (`GROUP BY`) aggregator: rasterizes each cell's `value` (or a `1.0` presence mask when null) at the cell location into one tile per group (cells→raster inverse direction). See the reference for the full signature.
+- `gbx_rst_quadbin_rasterize_agg` — grouped (`GROUP BY`) aggregator: rasterizes each cell's `value` (or a `1.0` presence mask when omitted) at the cell location into one tile per group (cells→raster inverse direction). See the reference for the full signature.
 - `gbx_quadbin_cellfill(cellid, value, [k], [method], [power])` — post-aggregation cell-space fill
 
 </TabItem>
@@ -177,7 +177,7 @@ See the [Helios notebooks](../notebooks/helios) for a worked example of `gbx_rst
 **Available functions:**
 - `gbx_rst_bng_tessellate(tile, resolution, [assignment], [coverage])` — UDTF, one chip per cell
 - `gbx_rst_bng_rastertogrid{avg,count,max,min,median,sum,stddev,variance}(tile, resolution, [coverage], [assignment])` — scalar aggregation
-- `gbx_rst_bng_rasterize_agg` — grouped (`GROUP BY`) aggregator: rasterizes each cell's `value` (or a `1.0` presence mask when null) at the cell location into one tile per group (cells→raster inverse direction). See the reference for the full signature.
+- `gbx_rst_bng_rasterize_agg` — grouped (`GROUP BY`) aggregator: rasterizes each cell's `value` (or a `1.0` presence mask when omitted) at the cell location into one tile per group (cells→raster inverse direction). See the reference for the full signature.
 - `gbx_bng_cellfill(cellid, value, [k], [method], [power])` — post-aggregation cell-space fill
 
 </TabItem>
@@ -192,7 +192,7 @@ See the [Helios notebooks](../notebooks/helios) for a worked example of `gbx_rst
 **Available functions:**
 - `gbx_rst_custom_tessellate(tile, grid, resolution, [assignment], [coverage])` — UDTF, one chip per cell
 - `gbx_rst_custom_rastertogrid{avg,count,max,min,median,sum,stddev,variance}(tile, grid, resolution, [coverage], [assignment])` — scalar aggregation
-- `gbx_rst_custom_rasterize_agg` — grouped (`GROUP BY`) aggregator: rasterizes each cell's `value` (or a `1.0` presence mask when null) at the cell location into one tile per group (cells→raster inverse direction). See the reference for the full signature.
+- `gbx_rst_custom_rasterize_agg` — grouped (`GROUP BY`) aggregator: rasterizes each cell's `value` (or a `1.0` presence mask when omitted) at the cell location into one tile per group (cells→raster inverse direction). See the reference for the full signature.
 - `gbx_custom_cellfill(cellid, value, grid, [k], [method], [power])` — post-aggregation cell-space fill
 
 </TabItem>

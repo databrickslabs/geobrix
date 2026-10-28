@@ -15,8 +15,12 @@ show_help() {
     echo -e "${CYAN}Options:${NC}"
     echo -e "  ${GREEN}--path <dir>${NC}           Test directory or file; repeatable. Any light dir (default: python/geobrix/test/pyrx/)"
     echo -e "                          e.g. python/geobrix/test/zarr/test_manifest.py. The light dirs are _LIGHT_TEST_DIRS in test/conftest.py"
-    echo -e "  ${GREEN}--markers <expr>${NC}       Extra pytest marker expression, ANDed with the default 'not integration',"
-    echo -e "                          e.g. --markers 'not delta' (runs as -m '(not integration) and (not delta)')"
+    echo -e "  ${GREEN}--markers <expr>${NC}       Extra pytest marker expression, ANDed with the default '(not integration) and (not perf)',"
+    echo -e "                          e.g. --markers 'not delta' (runs as -m '((not integration) and (not perf)) and (not delta)')"
+    echo -e "  ${GREEN}--perf${NC}                 Also run the perf-marked cases (slow tessellate / geomk / streamed-merge cases, some of them"
+    echo -e "                          correctness oracles); the default unit loop skips them, CI runs them. Pass it on the full run before a push"
+    echo -e "  ${GREEN}--with-integration${NC}     Also run the integration-marked tests (they need the network or a long setup, e.g. installing a"
+    echo -e "                          package into a scratch venv); CI and the default loop exclude them. Combine with --path/--markers to pick one"
     echo -e "  ${GREEN}--docker${NC}               Run in the dev container instead of the host venv (default). Only for GDAL"
     echo -e "                          natives, the JAR and parity"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
@@ -49,6 +53,8 @@ TEST_PATHS=()
 LOG_PATH=""
 USE_DOCKER=0
 EXTRA_MARKERS=""
+WITH_PERF=0
+WITH_INTEGRATION=0
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -65,6 +71,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --docker)
             USE_DOCKER=1
+            shift
+            ;;
+        --perf)
+            WITH_PERF=1
+            shift
+            ;;
+        --with-integration)
+            WITH_INTEGRATION=1
             shift
             ;;
         --log)
@@ -99,9 +113,18 @@ fi
 show_banner "GeoBrix: Light-tier Tests (pyrx, zarr, ...; no JAR)"
 setup_log_file "$LOG_PATH"
 
-# The marker expression: integration tests are always excluded; --markers narrows further.
-MARKERS="not integration"
-[[ -n "$EXTRA_MARKERS" ]] && MARKERS="(not integration) and ($EXTRA_MARKERS)"
+# The marker expression: integration tests and the perf-marked cases are excluded by default (the
+# unit loop; --with-integration and --perf include them); --markers narrows further.
+EXCLUDES=()
+[[ $WITH_INTEGRATION -eq 1 ]] || EXCLUDES+=("not integration")
+[[ $WITH_PERF -eq 1 ]] || EXCLUDES+=("not perf")
+BASE_MARKERS=""
+for e in "${EXCLUDES[@]}"; do BASE_MARKERS="${BASE_MARKERS:+$BASE_MARKERS and }($e)"; done
+[[ ${#EXCLUDES[@]} -eq 1 ]] && BASE_MARKERS="${EXCLUDES[0]}"
+MARKERS="$BASE_MARKERS"
+if [[ -n "$EXTRA_MARKERS" ]]; then
+    MARKERS="${BASE_MARKERS:+($BASE_MARKERS) and }($EXTRA_MARKERS)"
+fi
 MARKERS_Q="$(printf '%q' "$MARKERS")"   # one shell word inside the `bash -c` command string below
 
 echo -e "${CYAN}Test path: ${YELLOW}${TEST_PATHS[*]}${NC}"
@@ -139,6 +162,18 @@ if [ $EXIT_CODE -eq 0 ]; then
     echo -e "${GREEN}Light-tier tests passed!${NC}"
 else
     echo -e "${RED}Light-tier tests failed (exit code: $EXIT_CODE)${NC}"
+fi
+if [ $EXIT_CODE -eq 5 ]; then
+    # pytest exit 5: nothing was collected under the marker expression. A file whose only tests are
+    # perf-marked (test_geomk_golden.py) or integration-marked lands here, with no other sign of why.
+    OPT_INS=""
+    [ $WITH_PERF -eq 0 ] && OPT_INS="--perf (the perf-marked cases)"
+    [ $WITH_INTEGRATION -eq 0 ] && OPT_INS="${OPT_INS:+$OPT_INS or }--with-integration (the integration-marked tests)"
+    if [ -n "$OPT_INS" ]; then
+        echo -e "${YELLOW}No tests ran: every selected test is excluded by the markers. Skipped by default: add $OPT_INS.${NC}"
+    else
+        echo -e "${YELLOW}No tests ran: every selected test is excluded by --markers.${NC}"
+    fi
 fi
 show_separator
 

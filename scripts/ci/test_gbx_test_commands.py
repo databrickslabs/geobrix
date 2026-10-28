@@ -311,7 +311,7 @@ def _fake_venv(sandbox, venv=None):
         f'printf "%s\\n" "$TZ" >> "{log}.tz"\n'
         f'printf "%s\\n" "$@" > "{log}.argv"\n'  # one word per line: the last call's arguments
         '[ "$1" = "-" ] && cat > /dev/null\n'
-        "exit 0\n"
+        'exit "${FAKE_PYTHON_RC:-0}"\n'
     )
     python.chmod(0o755)
     (bin_dir / "activate").write_text(f'export PATH="{bin_dir}:$PATH"\n')
@@ -355,15 +355,23 @@ def test_markers_narrow_the_default_and_pytest_addopts_reaches_pytest(sandbox):
 
     sandbox.run("gbx-test-pyrx.sh", "--path", path, "--markers", "not delta")
     words = argv.read_text().splitlines()
-    assert _last_m(words) == "(not integration) and (not delta)"
+    assert _last_m(words) == "((not integration) and (not perf)) and (not delta)"
 
     sandbox.run("gbx-test-light.sh", "--path", path, "--markers", "slow or fast")
     words = argv.read_text().splitlines()
-    assert _last_m(words) == "(not integration) and (slow or fast)"
+    assert _last_m(words) == "((not integration) and (not perf)) and (slow or fast)"
 
-    sandbox.run("gbx-test-pyrx.sh", "--path", path)  # no --markers: unchanged
+    sandbox.run("gbx-test-pyrx.sh", "--path", path)  # no --markers: the unit loop skips perf
+    words = argv.read_text().splitlines()
+    assert _last_m(words) == "(not integration) and (not perf)"
+
+    sandbox.run("gbx-test-pyrx.sh", "--path", path, "--perf")  # opt in to the perf cases
     words = argv.read_text().splitlines()
     assert _last_m(words) == "not integration"
+
+    sandbox.run("gbx-test-pyrx.sh", "--path", path, "--with-integration")  # opt in to the network tests
+    words = argv.read_text().splitlines()
+    assert _last_m(words) == "not perf"
 
     # --docker: the marker is still one word in the container's command, and the caller's
     # PYTEST_ADDOPTS (--durations, --junitxml) is passed into the container.
@@ -378,8 +386,29 @@ def test_markers_narrow_the_default_and_pytest_addopts_reaches_pytest(sandbox):
         if "pytest" in c[-1]
     ][-1]
     words = shlex.split(command[-1])
-    assert _last_m(words) == "(not integration) and (not delta)"
+    assert _last_m(words) == "((not integration) and (not perf)) and (not delta)"
     assert env["PYTEST_ADDOPTS"] == "--durations=5"
+
+
+def test_a_run_that_selects_nothing_says_which_cases_are_skipped(sandbox):
+    # A file whose only tests are perf- or integration-marked exits 5 (no tests collected) with no other sign why.
+    _fake_venv(sandbox)
+    path = "python/geobrix/test/pygx/test_geomk_golden.py"
+
+    res = sandbox.run("gbx-test-pyrx.sh", "--path", path, FAKE_PYTHON_RC="5")
+    assert res.returncode == 5 and "--perf" in res.output.split("exit code: 5")[-1]
+
+    res = sandbox.run("gbx-test-pyrx.sh", "--path", path, "--perf", FAKE_PYTHON_RC="5")
+    assert res.returncode == 5 and "--perf" not in res.output.split("exit code: 5")[-1]
+    assert "--with-integration" in res.output.split("exit code: 5")[-1]  # integration still skipped
+
+    res = sandbox.run(
+        "gbx-test-pyrx.sh",
+        *("--path", path, "--perf", "--with-integration"),
+        FAKE_PYTHON_RC="5",
+    )
+    hint = res.output.split("exit code: 5")[-1]
+    assert res.returncode == 5 and "--perf" not in hint and "--with-integration" not in hint
 
 
 def test_the_host_run_pins_utc_as_the_container_and_ci_do(sandbox):
@@ -789,6 +818,13 @@ def test_the_sdk_is_pinned_and_an_interpreter_older_than_3_11_is_passed_over(
         ("gbx-bench-cluster.sh", [], {}, "push_and_run_bench_on_cluster", []),
         ("gbx-test-bundle-databricks.sh", [], {}, "push_and_run_bundle_on_cluster", []),
         (
+            "gbx-test-bundle-databricks.sh",
+            ["--local"],
+            {},
+            "test_bundle_on_databricks",
+            ["pytest"],  # --local runs the bundle under pytest, which the SDK layer does not carry
+        ),
+        (
             "gbx-test-primitive-databricks.sh",
             [],
             {},
@@ -951,6 +987,10 @@ def test_ci_status_help_is_help_not_the_run_limit(tmp_path):
     )
 
     assert bad.returncode == 1 and "Unknown option" in bad.stderr
+    letters = subprocess.run(
+        ["bash", str(command), "abc"], env=env, capture_output=True, text=True
+    )
+    assert letters.returncode == 1 and "abc" in letters.stderr  # a LIMIT must be a number
     assert not (tmp_path / "gh.log").exists()
 
 
@@ -983,11 +1023,43 @@ def test_review_round_skips_the_generated_lock_files_unless_asked(sandbox):
     assert (
         '"third_party/go/vendor/**"' in text
     )  # Isaac's own defaults are repeated: lists replace
+    for severity in ("critical", "major", "minor", "info"):
+        assert f"    {severity}: true" in text  # all severities are reported, not just the top two
 
-    assert "-c" not in review("--include-generated")
+    # --include-generated keeps the lock files in, and still reports every severity
+    words = review("--include-generated")
+    config = Path(words[words.index("-c") + 1])
+    assert config == sandbox.commands / "isaac-review-severities.yaml"
+    text = config.read_text()
+    assert "\nopt_out:" not in text  # the lock files stay in
+    for severity in ("critical", "major", "minor", "info"):
+        assert f"    {severity}: true" in text
     assert (
         review("--", "-c", "mine.yaml").count("-c") == 1
     )  # the caller's config, not ours
+
+
+def test_review_round_keeps_a_relative_report_when_notebooks_are_stripped(sandbox):
+    # A changed .ipynb sends isaac into a scratch worktree that is deleted on exit; a relative
+    # `-o` was written there and lost. The report must land under the caller's directory.
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(sandbox.root)]
+    subprocess.run([*git, "init", "-q"], check=True)
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "base"], check=True)
+    (sandbox.root / "nb.ipynb").write_text(json.dumps({"cells": [], "nbformat": 4}) + "\n")
+    subprocess.run([*git, "add", "nb.ipynb"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "notebook"], check=True)
+    dbexec = sandbox.bin / "dbexec"
+    dbexec.write_text(
+        '#!/bin/sh\nout=""\nwhile [ $# -gt 0 ]; do [ "$1" = "-o" ] && out="$2"; shift; done\n'
+        'mkdir -p "$(dirname "$out")" && echo report > "$out"\necho reviewed\n'
+    )
+    dbexec.chmod(0o755)
+
+    res = sandbox.run("gbx-review-round.sh", "--base", "HEAD~1", "--", "-o", "test-logs/r.md")
+
+    assert res.returncode == 0, res.output
+    assert (sandbox.root / "test-logs" / "r.md").read_text() == "report\n"
 
 
 # ----------------------------------------- host venv curated to match the container (venv check)
@@ -1101,6 +1173,7 @@ def test_venv_sync_match_container_builds_on_the_containers_python_and_versions(
     lock.write_text(
         "numpy==2.3.4 \\\n    --hash=sha256:aa\nonlylock==9.9 \\\n    --hash=sha256:bb\n"
         "pyspark==4.0.0 \\\n    --hash=sha256:cc\n"
+        'marked==1.0 ; python_version < "3.13" \\\n    --hash=sha256:dd\n'
     )
 
     res = sandbox.run(
@@ -1121,6 +1194,7 @@ def test_venv_sync_match_container_builds_on_the_containers_python_and_versions(
     assert (
         "onlylock==9.9" in first
     )  # a package the container lacks keeps the lock's version
+    assert 'marked==1.0 ; python_version < "3.13"' in first  # environment markers are kept
     # Matching can pull in packages the lock does not name at their newest: they are pinned too.
     pins = next(r for r in reqs if "onlylock" not in r)
     assert pins.split() == [

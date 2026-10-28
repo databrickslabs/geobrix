@@ -2168,9 +2168,9 @@ rio-cogeo==7.0.2 \
     --hash=sha256:1426faea08ae0970707d3534119164d99969ee15181b06d94c5f84645f82537f \
     --hash=sha256:1454ff94dca8652db68862d667bf47e54ecabfe8872c939f2c16ebb62d432f69
     # via geobrix
-rio-tiler==9.2.1 \
-    --hash=sha256:daf3c8d91dc417be2660ca23c0e65d8a7ef1f49512699e726f1adda880c40945 \
-    --hash=sha256:eeaa6bd1a6e6f092eab810524e5f2fae360538349a88d1a1350e2dd38e413063
+rio-tiler==9.4.12 \
+    --hash=sha256:103a3df350ea1c756c78570f4a4bacbe0d769808d879766bcbf880f3daa73372 \
+    --hash=sha256:e0076a986e901f1782fe41f4582a01b5592dfaa702b743fc7c0624a063f0a093
     # via geobrix
 rpds-py==2026.6.3 \
     --hash=sha256:0be972be84cfcaf46c8c6edf690ca0f154ac17babf1f6a955a51579b34ad2dc5 \

@@ -604,6 +604,61 @@ def bng_rasterize_cells() -> List[str]:
     return sorted(_bng.format(c) for c in _bng.k_ring(center, _BNGRAGG_K))
 
 
+# --- rst_custom_rasterize_agg: fixed custom grid + cell set (LIGHTWEIGHT ONLY) -
+# The heavyweight BenchDispatch has no custom-grid branch (the grid is a STRUCT
+# argument), so this spec times the lightweight tier only (fingerprint=False).
+#   GRID: a BNG-shaped 27700 grid -- bounds 0..700000 x 0..1300000, root cells of
+#   100 km split 10 ways per resolution, so resolution 2 is 1 km cells.
+#   CELL SET RECIPE: the res-2 cell at (530000, 180000) (central London), kRing'd to
+#   k=3 -> 49 cells (the same shape as the quadbin and BNG sets). The aggregator
+#   auto-derives its raster grid from the cell set, as quadbin and BNG do.
+_CUSTOMRAGG_GRID = dict(
+    bound_x_min=0,
+    bound_x_max=700000,
+    bound_y_min=0,
+    bound_y_max=1300000,
+    cell_splits=10,
+    root_cell_size_x=100000,
+    root_cell_size_y=100000,
+    srid=27700,
+)
+_CUSTOMRAGG_RES = 2
+_CUSTOMRAGG_EASTING = 530000.0
+_CUSTOMRAGG_NORTHING = 180000.0
+_CUSTOMRAGG_K = 3
+_CUSTOMRAGG_N_CELLS = (2 * _CUSTOMRAGG_K + 1) * (2 * _CUSTOMRAGG_K + 1)  # 49
+
+
+def custom_rasterize_cells() -> List[int]:
+    """The fixed deterministic custom-grid cell-id set the bench rasterizes.
+
+    The res-2 central-London cell of ``_CUSTOMRAGG_GRID``, kRing'd to k=3. Cell ids
+    are BIGINTs (``pygx._custom``); deterministic + order-stable (sorted).
+    """
+    from databricks.labs.gbx.pygx import _custom
+
+    conf = _custom.CustomGridConf(**_CUSTOMRAGG_GRID)
+    center = _custom.point_to_cell_id(
+        conf, _CUSTOMRAGG_EASTING, _CUSTOMRAGG_NORTHING, _CUSTOMRAGG_RES
+    )
+    return sorted(_custom.k_ring(conf, center, _CUSTOMRAGG_K))
+
+
+def custom_grid_column():
+    """The ``_CUSTOMRAGG_GRID`` grid spec as a struct literal Column (CUSTOM_GRID_SCHEMA).
+
+    A literal, not ``gbx_custom_grid(...)``, so the leg needs no registered UDF.
+    """
+    g = _CUSTOMRAGG_GRID
+    longs = ("bound_x_min", "bound_x_max", "bound_y_min", "bound_y_max")
+    return F.struct(
+        *[
+            (F.lit(v).cast("long") if k in longs else F.lit(v)).alias(k)
+            for k, v in g.items()
+        ]
+    )
+
+
 # --- cellfill grouped aggregators: fixed deterministic (cellid, value) corpus --
 # PARITY CONTRACT (must stay byte-for-byte in sync with the Scala BenchDispatch
 # cellfill block -- search "cellfill: fixed (cellid, value) corpus"):
@@ -3268,8 +3323,11 @@ REGISTRY: Dict[str, FnSpec] = {
     # set onto the SAME canvas, so the consistency fingerprint is cross-tier
     # comparable (the masks match exactly -- see test_h3_rasterize_parity.py). The
     # cell recipe + grid constants are mirrored EXACTLY in BenchDispatch.scala.
-    # value=None -> presence mask (burns 1.0); mode "centroids"; kring_pad 1 (the
-    # grid was snapped with kring_pad=1, so the explicit extent already covers it).
+    # value OMITTED (value=None below, an untyped NULL) -> presence mask (burns 1.0);
+    # mode "centroids"; kring_pad 1 (the grid was snapped with kring_pad=1, so the
+    # explicit extent already covers it). The streamed `value` column is NOT passed:
+    # a typed all-null DOUBLE column is data to the light tier (it burns NaN), only
+    # an omitted value is the mask.
     "rst_h3_rasterize_agg": FnSpec(
         "rst_h3_rasterize_agg",
         "gbx_rst_h3_rasterize_agg",
@@ -3282,11 +3340,12 @@ REGISTRY: Dict[str, FnSpec] = {
             "kring_pad": _H3RAGG_KRING_PAD,
         },
         # col_fn takes (cellid_col, value_col, args); the harness streams the
-        # (cellid, value) rows and the explicit grid rides in args. value=None ->
-        # presence mask (1.0). Grid passed explicitly (NOT auto-derived per tier).
+        # (cellid, value) rows and the explicit grid rides in args. The value is
+        # passed OMITTED (not `v`, a typed all-null column) -> presence mask (1.0).
+        # Grid passed explicitly (NOT auto-derived per tier).
         col_fn=lambda cid, v, a: prx.rst_h3_rasterize_agg(
             cid,
-            value=v,
+            value=None,
             out_srid=F.lit(a["grid"][6]),
             pixel_size=F.lit(a["pixel_size"]),
             xmin=F.lit(a["grid"][0]),
@@ -3301,9 +3360,9 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         input_kind="h3_aggregate",
         # Float burn order can differ across tiers, but the burn is a discrete LUT
-        # lookup (last-wins on a canonical (cellId, value) sort, identical both
-        # tiers), so the masks/values are exact -- keep the global tol. Loosen only
-        # if the cluster run shows a near-miss.
+        # lookup (a repeated cell burns its largest value, identical both tiers),
+        # so the masks/values are exact -- keep the global tol. Loosen only if the
+        # cluster run shows a near-miss.
         sources=_CELLRASTER_LIGHT
         + (
             _PYRX_SERDE,
@@ -3317,9 +3376,10 @@ REGISTRY: Dict[str, FnSpec] = {
     # streams (cellid LONG, value DOUBLE) rows from the fixed deterministic cell
     # set (quadbin_rasterize_cells) and uses the 2-arg overload that AUTO-DERIVES
     # the 4326 grid from that cell set -- deterministic given the fixed set, so the
-    # burn is reproducible and cross-tier comparable. value=None -> presence mask
-    # (1.0). Rides input_kind == "grid_aggregate" (the harness streams the LONG
-    # cell rows). Cell recipe mirrored EXACTLY in BenchDispatch.scala.
+    # burn is reproducible and cross-tier comparable. value OMITTED -> presence mask
+    # (1.0), not the streamed all-null column. Rides input_kind == "grid_aggregate"
+    # (the harness streams the LONG cell rows). Cell recipe mirrored EXACTLY in
+    # BenchDispatch.scala.
     "rst_quadbin_rasterize_agg": FnSpec(
         "rst_quadbin_rasterize_agg",
         "gbx_rst_quadbin_rasterize_agg",
@@ -3327,8 +3387,9 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {},
         # col_fn takes (cellid_col, value_col, args); 2-arg overload auto-derives
-        # the grid from the streamed cell set (NOT an explicit grid like H3).
-        col_fn=lambda cid, v, a: prx.rst_quadbin_rasterize_agg(cid, value=v),
+        # the grid from the streamed cell set (NOT an explicit grid like H3). The
+        # value is omitted (the presence mask), not the streamed all-null column.
+        col_fn=lambda cid, v, a: prx.rst_quadbin_rasterize_agg(cid, value=None),
         core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         input_kind="grid_aggregate",
         sources=_CELLRASTER_LIGHT
@@ -3344,7 +3405,7 @@ REGISTRY: Dict[str, FnSpec] = {
     # DOUBLE) rows from the fixed deterministic BNG cell set (bng_rasterize_cells);
     # cellid is an OS grid reference STRING (not a Long). The 2-arg overload
     # auto-derives the 27700-native grid from the cell set (srid forced to 27700).
-    # value=None -> presence mask (1.0). Rides input_kind == "grid_aggregate" (the
+    # value OMITTED -> presence mask (1.0). Rides input_kind == "grid_aggregate" (the
     # harness streams STRING cell rows for BNG). The consistency fingerprint is a
     # raster (the burned tile), so no dggs_grid_str is needed here -- only the
     # rastertogrid/tessellate fns emit string cell-id fingerprints. Cell recipe
@@ -3355,7 +3416,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "dggs",
         ("spark-path",),
         {},
-        col_fn=lambda cid, v, a: prx.rst_bng_rasterize_agg(cid, value=v),
+        col_fn=lambda cid, v, a: prx.rst_bng_rasterize_agg(cid, value=None),
         core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         input_kind="grid_aggregate",
         sources=_CELLRASTER_LIGHT
@@ -3546,18 +3607,20 @@ REGISTRY: Dict[str, FnSpec] = {
         core=False,
     ),
     # rst_custom_rasterize_agg: like rst_bng_rasterize_agg/rst_quadbin_rasterize_agg,
-    # a GRID aggregator that needs a custom-grid struct.  The col_fn uses the Python
-    # API (prx.rst_custom_rasterize_agg) which requires both cellid and grid struct
-    # columns; the bench harness's grid_aggregate input_kind only streams cellid rows.
-    # Registered with fingerprint=False (timing-only) until the bench input harness
-    # is extended to carry the grid struct column (Task 18).
+    # a GRID aggregator that needs a custom-grid struct.  The col_fn passes the
+    # fixed grid (custom_grid_column) as a struct literal and the value OMITTED (the
+    # presence mask, like h3/quadbin/bng); the harness streams the custom cell set
+    # (custom_rasterize_cells).  fingerprint=False (timing-only): the heavyweight
+    # BenchDispatch has no custom-grid branch to compare against.
     "rst_custom_rasterize_agg": FnSpec(
         "rst_custom_rasterize_agg",
         "gbx_rst_custom_rasterize_agg",
         "dggs",
         ("spark-path",),
         {},
-        col_fn=lambda cid, v, a: prx.rst_custom_rasterize_agg(cid, None, value=v),
+        col_fn=lambda cid, v, a: prx.rst_custom_rasterize_agg(
+            cid, custom_grid_column(), value=None
+        ),
         core_fn=lambda t, a: t,
         input_kind="grid_aggregate",
         fingerprint=False,

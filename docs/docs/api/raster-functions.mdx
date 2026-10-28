@@ -811,7 +811,7 @@ Combine or merge rasters in group-by (7 total).
 
 <Tier both/> <Impl groupedAgg/>
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in, in both tiers. A null value counts as `1.0` (the presence mask).
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. The heavyweight tier counts a null value as `1.0` in that comparison, and burns `1.0` for a column of nulls.
 
 :::note Lightweight tier (pyrx)
 The lightweight implementation is backed by `pygx._bng` cell math and `rasterio`. BNG cell IDs (**STRING**) are parsed via `pygx._bng` to EPSG:27700-native cell geometries and burned into the output band — the output canvas is EPSG:27700 throughout with no warp step (this aggregator takes cellid+value rows, not a raster tile).
@@ -834,7 +834,7 @@ GROUP BY cell_id
 ```
 :::
 
-Streaming aggregator that burns BNG cell geometry/value pairs (one row per cell) into a single rasterized tile per group. The input raster is automatically reprojected to **EPSG:27700** (British National Grid) before rasterization. BNG cell IDs are **STRING**. The inverse of `rst_bng_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, this one synthesizes a raster from per-cell values.
+Streaming aggregator that burns BNG cell geometry/value pairs (one row per cell) into a single rasterized tile per group. The output tile is always in EPSG:27700 (British National Grid). BNG cell IDs are **STRING**. The inverse of `rst_bng_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, this one synthesizes a raster from per-cell values.
 
 :::note Lightweight-only `out_crs` parameter (no-op for BNG)
 The lightweight **Python** binding accepts an optional trailing `out_crs` (string CRS) argument that the heavyweight/Scala tier does not — but for BNG it is a **no-op**: the output is always EPSG:27700. Both `out_srid` and `out_crs` are ignored here (they exist only for signature parity with the H3/quadbin aggregators).
@@ -1064,10 +1064,10 @@ _Multi-row fixture: 4 WKB POINT rows with observations 10–40 over a `[0,0,1,1]
 
 <Tier both/> <Impl groupedAgg/>
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in, in both tiers. A null value counts as `1.0` (the presence mask).
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. The heavyweight tier counts a null value as `1.0` in that comparison, and burns `1.0` for a column of nulls.
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Aggregate — `groupBy(...).agg(rx.rst_h3_rasterize_agg("cellid", "value", ...))` burns each H3 cell's centroid pixel (or spatial-envelope pixels with `mode='spatial_envelope'`) into one raster tile per group. When `value` is omitted or null, all burned pixels carry `1.0` (presence mask). The extent and pixel size are derived automatically from the H3 resolution unless explicit bounds are supplied; `kring_pad` (default 1) expands the canvas by that many rings to avoid clipping edge cells.
+Powered by **rasterio** + **h3**. Aggregate — `groupBy(...).agg(rx.rst_h3_rasterize_agg("cellid", "value", ...))` burns each H3 cell's centroid pixel (or spatial-envelope pixels with `mode='spatial_envelope'`) into one raster tile per group. When `value` is omitted (or an untyped `NULL`), all burned pixels carry `1.0` (presence mask); a typed column of nulls burns `NaN` in the lightweight tier. The extent and pixel size are derived automatically from the H3 resolution unless explicit bounds are supplied; `kring_pad` (default 1) expands the canvas by that many rings to avoid clipping edge cells.
 :::
 
 :::warning Lightweight SQL returns BINARY (not the tile struct)
@@ -1100,7 +1100,7 @@ The [H3 Rasterize notebook](../notebooks/h3-rasterize) walks this through end to
 
 **Parameters:**
 - `cellid` — H3 cell ID (BIGINT or STRING) to burn (one per row)
-- `value` — numeric burn value; pass `null` for a presence mask (all pixels → `1.0`)
+- `value` — numeric burn value; omit it, or pass an untyped `NULL`, for a presence mask (all pixels → `1.0`)
 - `srid` — EPSG code for the output CRS; defaults to `4326` (WGS 84)
 - `pixel_size` — ground resolution in CRS units (derives from H3 resolution when `null`)
 - `xmin/ymin/xmax/ymax` — output canvas extent; auto-computed from cell bounds + `kring_pad` when `null`
@@ -1124,7 +1124,7 @@ _Multi-row fixture: 3 H3 resolution-9 cell rows with burn values 1.0/2.0/3.0. Al
 <Tier both/> <Impl groupedAgg/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** (`rasterio.merge`). Aggregate — `groupBy(...).agg(rx.rst_merge_agg("tile"))` merges the group's tiles into one mosaic tile (output spans the union extent).
+Powered by **rasterio** (`rasterio.merge`). Aggregate — `groupBy(...).agg(rx.rst_merge_agg("tile"))` merges the group's tiles into one mosaic tile (output spans the union extent). A tile in a different CRS is reprojected onto the pixel size and the pixel grid of a tile in the reference CRS, so a mosaic built in memory and one streamed from disk (when it is too large for memory) place the tiles on the same pixels. The reprojected tile can grow by up to a pixel on each side to stay on that grid. The heavyweight `gbx_rst_merge_agg` does not merge tiles in different CRSs: it returns one tile (the one that sorts first) and leaves the others out.
 :::
 
 :::warning Lightweight SQL returns BINARY (not the tile struct)
@@ -1157,7 +1157,7 @@ _Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif`. All tabs use the 
 
 <Tier both/> <Impl groupedAgg/>
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in, in both tiers. A null value counts as `1.0` (the presence mask).
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. The heavyweight tier counts a null value as `1.0` in that comparison, and burns `1.0` for a column of nulls.
 
 :::note Lightweight tier (pyrx)
 The lightweight implementation is backed by `pygx._quadbin` cell math and `rasterio` — it burns each quadbin cell's geometry/value into the output band via `rasterio.features.rasterize`, matching the heavyweight cell set and burn values exactly.
@@ -1180,7 +1180,7 @@ GROUP BY cell_id
 ```
 :::
 
-Streaming aggregator that burns quadbin cell geometry/value pairs (one row per cell) into a single rasterized tile per group. The input raster is interpreted as EPSG:4326 (lon/lat); resolution is the quadbin zoom level (0..26). The inverse of `rst_quadbin_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, this one synthesizes a raster from per-cell values.
+Streaming aggregator that burns quadbin cell geometry/value pairs (one row per cell) into a single rasterized tile per group. Quadbin cells are defined in EPSG:4326 lon/lat; their geometry is reprojected to `out_srid`, so the output tile is in that CRS (`pixel_size`, the extent and `width`/`height` are given in it). The cell IDs carry their zoom level (0..26). The inverse of `rst_quadbin_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, this one synthesizes a raster from per-cell values.
 
 :::note Lightweight-only `out_crs` parameter
 The lightweight **Python** binding accepts an optional trailing `out_crs` (string CRS) argument that the heavyweight/Scala tier does not. When supplied it overrides the integer `out_srid` for the output CRS; the heavyweight tier accepts only the integer `out_srid` (its `builder()` is strictly 12-argument). This is a lightweight superset, not a heavyweight regression.
@@ -1205,10 +1205,10 @@ _Multi-row fixture: 3 quadbin zoom-12 cell rows near central London with burn va
 
 <Tier both/> <Impl groupedAgg/>
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in, in both tiers. A null value counts as `1.0` (the presence mask).
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. The heavyweight tier counts a null value as `1.0` in that comparison, and burns `1.0` for a column of nulls.
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** + **pygx** custom-grid cell math. Aggregate — `groupBy(...).agg(rx.rst_custom_rasterize_agg("cellid", "value", ...))` burns each custom-grid cell's centroid pixel (or spatial-envelope pixels with `mode='spatial_envelope'`) into one raster tile per group. Cell IDs are BIGINT encoded by the custom-grid layout. When `value` is omitted or null, all burned pixels carry `1.0` (presence mask). The extent auto-derives from the cell set when canvas parameters are null.
+Powered by **rasterio** + **pygx** custom-grid cell math. Aggregate — `groupBy(...).agg(rx.rst_custom_rasterize_agg("cellid", "value", ...))` burns each custom-grid cell's centroid pixel (or spatial-envelope pixels with `mode='spatial_envelope'`) into one raster tile per group. Cell IDs are BIGINT encoded by the custom-grid layout. When `value` is omitted (or an untyped `NULL`), all burned pixels carry `1.0` (presence mask); a typed column of nulls burns `NaN` in the lightweight tier. The extent auto-derives from the cell set when canvas parameters are null.
 :::
 
 :::warning Lightweight SQL returns BINARY (not the tile struct)
@@ -1237,7 +1237,7 @@ Streaming aggregator that burns custom-grid cell values into one raster tile per
 
 **Signature:** `rst_custom_rasterize_agg(cellid: Column, value: Column, grid: Column, out_srid: Column, pixel_size: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, mode: Column, kring_pad: Column): Column`
 
-**Parameters:** `cellid` — custom-grid cell ID (BIGINT); `value` — numeric burn value (null → `1.0` presence mask); `grid` — custom-grid struct from `gbx_custom_grid(...)`; `out_srid` — EPSG code for the output CRS; `pixel_size` — output raster cell size in target CRS units (null → auto-derived from cell dimensions); `xmin/ymin/xmax/ymax` — output extent (null → auto-derived from the cell set + `kring_pad`); `width/height` — output dimensions in pixels (null → auto-derived); `mode` — `"centroids"` (default) or `"spatial_envelope"`; `kring_pad` — neighbourhood expansion in rings for auto-extent (default 1)
+**Parameters:** `cellid` — custom-grid cell ID (BIGINT); `value` — numeric burn value (omitted or an untyped `NULL` → `1.0` presence mask); `grid` — custom-grid struct from `gbx_custom_grid(...)`; `out_srid` — EPSG code for the output CRS; `pixel_size` — output raster cell size in target CRS units (null → auto-derived from cell dimensions); `xmin/ymin/xmax/ymax` — output extent (null → auto-derived from the cell set + `kring_pad`); `width/height` — output dimensions in pixels (null → auto-derived); `mode` — `"centroids"` (default) or `"spatial_envelope"`; `kring_pad` — neighbourhood expansion in rings for auto-extent (default 1)
 
 <FunctionExamples
   name="rst_custom_rasterize_agg"
@@ -2720,7 +2720,11 @@ Warp a tile to match the grid of a reference tile exactly — same CRS, extent, 
 <Tier both/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio**. Output formats are limited to rasterio's bundled-GDAL writable driver set; the tile is re-encoded in the requested format.
+Powered by **rasterio**. Output formats are limited to rasterio's bundled-GDAL writable driver set; the tile is re-encoded in the requested format. `'COG'` produces a Cloud Optimized GeoTIFF (512-pixel blocks, size-adaptive ZSTD compression, and overviews when the tile is larger than 512 pixels), the same layout as [`rst_cog_convert`](#rst_cog_convert).
+:::
+
+:::note Heavyweight tier
+`'COG'` does not produce a Cloud Optimized GeoTIFF in the heavyweight tier yet: the tile is written as a plain GeoTIFF. Use the lightweight tier when you need the COG layout from `rst_asformat`.
 :::
 
 :::note Lightweight Python — virtual-tile force-output
@@ -3112,7 +3116,7 @@ The **envelope** is portable, but the **calc expression language is not fully po
 <Tier both/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** (`rasterio.merge`). Takes an `ARRAY<tile>` (in one row) and mosaics them into a single tile spanning the union extent (first-tile-wins on overlap, in array order).
+Powered by **rasterio** (`rasterio.merge`). Takes an `ARRAY<tile>` (in one row) and mosaics them into a single tile spanning the union extent (first-tile-wins on overlap, in array order). Tiles in a different CRS are reprojected onto the pixel size and grid of a tile in the reference CRS and mosaicked with it; the heavyweight tier does not merge tiles in different CRSs and returns one of them.
 :::
 
 :::note Lightweight Python — virtual-tile force-output

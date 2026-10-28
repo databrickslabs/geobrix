@@ -34,6 +34,7 @@ if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
 from test_notebook_via_script import run_notebook_cell_by_cell
+from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 
 
 def _create_venv_and_run(venv_root: Path, path_arg: str | None) -> int:
@@ -163,6 +164,7 @@ def _run_pytest(path_arg: str) -> int:
 
 
 def main() -> int:
+    exit_if_help(__doc__)
     use_isolated_env = os.environ.get("GBX_NOTEBOOK_ISOLATED_ENV") == "1"
     already_isolated = os.environ.get("GBX_NOTEBOOK_ISOLATED") == "1"
     path_arg = sys.argv[1] if len(sys.argv) > 1 else None

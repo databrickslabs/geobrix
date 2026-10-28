@@ -166,6 +166,7 @@ anyio==4.13.0 \
     # via
     #   -c requirements-dev-container.txt
     #   httpx
+    #   httpx2
     #   jupyter-server
 argon2-cffi==25.1.0 \
     --hash=sha256:694ae5cc8a42f4c4e2bf2ca0e64e51e23a040c6a517a85074683d3959e1346c1 \
@@ -1254,6 +1255,7 @@ h11==0.16.0 \
     # via
     #   -c requirements-dev-container.txt
     #   httpcore
+    #   httpcore2
 h3==4.5.0 \
     --hash=sha256:0b17cf243923e9554ba4d8c6a5b5ade3cf302751155edbc2cc5821e7dc859dea \
     --hash=sha256:17d3793e6bdeec1c1dbf5fd92cb8aad42dc64918646f5b69216fb0cf28dbd3f7 \
@@ -1297,20 +1299,32 @@ httpcore==1.0.9 \
     # via
     #   -c requirements-dev-container.txt
     #   httpx
+httpcore2==2.15.1 \
+    --hash=sha256:730f603058c260a3288378217b464713350c23e3b8fe8bba753701054032d98a \
+    --hash=sha256:a94b6b3e6260e1a3f035915408d3dcd7dc8e844c2b544b642e227cf98a747af0
+    # via
+    #   -c requirements-dev-container.txt
+    #   httpx2
 httpx==0.28.1 \
     --hash=sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc \
     --hash=sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad
     # via
     #   -c requirements-dev-container.txt
     #   jupyterlab
+httpx2==2.15.1 \
+    --hash=sha256:75841cd83d16b417f7d6da8f2089ce8120806efdbf96af37d46c5129c49015be \
+    --hash=sha256:ff75485308fbe441e75b1218546e4e78d884df41e1a9741c1f79335ed8fcfef7
+    # via
+    #   -c requirements-dev-container.txt
     #   rio-tiler
-idna==3.13 \
-    --hash=sha256:585ea8fe5d69b9181ec1afba340451fba6ba764af97026f92a91d4eef164a242 \
-    --hash=sha256:892ea0cde124a99ce773decba204c5552b69c3c67ffd5f232eb7696135bc8bb3
+idna==3.20 \
+    --hash=sha256:a7db850025b95ded1eae8a46181a1a6c56c92c96f0e2b005d9ff8dc0210cab44 \
+    --hash=sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
     # via
     #   -c requirements-dev-container.txt
     #   anyio
     #   httpx
+    #   httpx2
     #   jsonschema
     #   requests
     #   yarl
@@ -3666,9 +3680,9 @@ rio-cogeo==7.0.2 \
     # via
     #   -c requirements-dev-container.txt
     #   -r requirements-dev-container.in
-rio-tiler==9.0.6 \
-    --hash=sha256:20aa64760a2dd8ee40fb3b925d62fc0a87b9e01f352456fa96d4fd5e41b19c78 \
-    --hash=sha256:6c86d6e98692d0e851bd29cc47e237aedd82450b019192f791d5a77a7b5043be
+rio-tiler==9.4.12 \
+    --hash=sha256:103a3df350ea1c756c78570f4a4bacbe0d769808d879766bcbf880f3daa73372 \
+    --hash=sha256:e0076a986e901f1782fe41f4582a01b5592dfaa702b743fc7c0624a063f0a093
     # via
     #   -c requirements-dev-container.txt
     #   -r requirements-dev-container.in
@@ -4168,6 +4182,13 @@ traitlets==5.15.0 \
     #   nbclient
     #   nbconvert
     #   nbformat
+truststore==0.10.5 \
+    --hash=sha256:30d36967ccaded5cbb38d602c433f53600036c79d502f4533a49b60a03bbefcd \
+    --hash=sha256:9aaaedaefaf06d8b206278cf8b5012bc897f485a874503501e12d776df78951c
+    # via
+    #   -c requirements-dev-container.txt
+    #   httpcore2
+    #   httpx2
 typing-extensions==4.15.0 \
     --hash=sha256:0cea48d173cc12fa28ecabc3b837ea3cf6f38c6d1136f85cbaaf598984861466 \
     --hash=sha256:f0fa19c6845758ab08074a0cfa8b7aecb71c999ca73d62883bc25cc018c4e548
@@ -4178,6 +4199,7 @@ typing-extensions==4.15.0 \
     #   anyio
     #   beautifulsoup4
     #   earthaccess
+    #   httpx2
     #   numcodecs
     #   obstore
     #   pqdm

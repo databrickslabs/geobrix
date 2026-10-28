@@ -10,6 +10,13 @@ inputs:
   python_version:
     description: 'Python version (matches the job matrix).'
     default: '3.12.3'
+  dirs:
+    description: >
+      Space-separated light test dirs (relative to python/geobrix) this job runs in one pytest
+      process, e.g. 'test/pyrx'. The CI workflow shards the light tier across parallel jobs and
+      gives each its share (see the `pyrx` job matrix in .github/workflows/build_main.yml).
+      Empty runs every light dir in one process.
+    default: ''
 runs:
   using: "composite"
   steps:
@@ -66,6 +73,8 @@ runs:
         python -m build
     - name: Run pyrx tests (no JAR)
       shell: bash
+      env:
+        SHARD_DIRS: ${{ inputs.dirs }}
       run: |
         cd python/geobrix
         # pyproject sets pythonpath=["src"]; exclude integration (network) tests.
@@ -89,7 +98,17 @@ runs:
         # manager (the per-surface function manifest: contracts generated from it, plus the
         # oracle tables that every implementation level is judged against; pure Python,
         # local Spark only for the oracle runs).
-        # All dirs run in ONE process, so state one dir leaves behind reaches the
-        # next: e.g. test/pyvx registers PROJ grids before test/bench builds rasters
-        # on worker threads (see test/conftest.py for the maintained condition).
-        pytest test/pyrx test/ds test/pyvx test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample test/bench test/core test/models test/zarr test/manager -m "not integration" -v
+        #
+        # CI shards the light tier: each parallel job passes its dirs in `dirs`, and
+        # scripts/ci/test_ci_light_shards.py fails unless the shards together cover exactly the dirs of
+        # _LIGHT_TEST_DIRS in test/conftest.py, each once. A shard runs its dirs in ONE
+        # process, so state one dir leaves behind reaches the next: test/pyvx registers PROJ
+        # grids before test/bench builds rasters on worker threads (see test/conftest.py for
+        # the maintained condition), so those two stay in one shard, pyvx first.
+        if [ -n "$SHARD_DIRS" ]; then
+          pytest $SHARD_DIRS -m "not integration" -v
+        else
+          # No shard given: every light dir in one process. gbx:test:python and gbx:test:light
+          # read this line, so keep it a plain `pytest test/... -m ...` and in step with the shards.
+          pytest test/pyrx test/ds test/pyvx test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample test/bench test/core test/models test/zarr test/manager -m "not integration" -v
+        fi

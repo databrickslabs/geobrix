@@ -50,7 +50,7 @@ budget authority raises if invoked from a task context.
 **Overriding.** Every budget-using reader/writer/function honors an explicit override with the
 precedence **option/arg → environment variable → computed default**. For the `lidar_gbx` merge the
 option is `mergeMaxMB` (MiB); the environment override is `GBX_LIDAR_MERGE_MAX_MB` / `GBX_MERGE_MAX_MB`.
-Raising a *worker_read* budget above the Serverless cap is at your own risk (OOM); driver-side
+Raising a worker-side read budget above the Serverless cap is at your own risk (OOM); driver-side
 overrides are safe (the driver has the RAM).
 
 ## Vector memory profile

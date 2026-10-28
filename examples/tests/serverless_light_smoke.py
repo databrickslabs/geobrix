@@ -26,8 +26,6 @@ import sys
 import time
 from pathlib import Path
 
-from databricks.sdk import WorkspaceClient
-from databricks.sdk.service import compute, jobs, workspace
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
 
 # All workspace-specific values (profile, Volume coordinates) come from the
@@ -101,10 +99,13 @@ def _mint_token() -> str:
     return json.loads(out)["access_token"] if out.strip().startswith("{") else ""
 
 
-def _client() -> WorkspaceClient:
+def _client():
     """Authenticate with a CLI-minted bearer token (reliable here — the SDK's
     profile path rotates the single-use refresh token on each client and breaks
-    across repeated runs). Falls back to profile/default chain if no token."""
+    across repeated runs). Falls back to profile/default chain if no token.
+    The SDK is imported here, not at module level, so ``--help`` needs none."""
+    from databricks.sdk import WorkspaceClient
+
     host, tok = _host_from_cfg(), _mint_token()
     if host and tok:
         return WorkspaceClient(host=host, token=tok)
@@ -402,10 +403,12 @@ def main():
     ap.add_argument("--func-validate", action="store_true",
                     help="real subprocess install + exercise the API in-session")
     ap.add_argument("--env-deps", action="store_true",
-                    help="install via the job Environment spec deps (not %pip); probe-only notebook")
+                    help="install via the job Environment spec deps (not %%pip); probe-only notebook")
     ap.add_argument("--isolate-register", action="store_true",
                     help="env-deps + wrap register to pinpoint the failing UDF registration")
     args = ap.parse_args()
+
+    from databricks.sdk.service import compute, jobs, workspace
 
     w = _client()
     if args.isolate_register:

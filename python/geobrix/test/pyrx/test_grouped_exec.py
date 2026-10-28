@@ -480,13 +480,19 @@ def _dispatch_header(ds, cellid):
     return (ds.crs.to_epsg(), ds.width, ds.height)
 
 
-def test_dispatch_materialized_tile_reads_its_bytes_not_its_path(tmp_path):
+@pytest.mark.parametrize(
+    "metadata",
+    [{}, {"pending_srid": "not-a-number"}],
+    ids=["plain", "malformed-pending-key"],
+)
+def test_dispatch_materialized_tile_reads_its_bytes_not_its_path(tmp_path, metadata):
     """A materialized tile that keeps ``path`` as provenance is read from its bytes.
 
     Reader tiles, ``materialize=True`` outputs and whole-input retile outputs all
     carry the source ``path`` next to computed bytes. The bytes here differ from
     the path file (CRS and size), so a FILE fast path that followed the path would
-    return the source's values.
+    return the source's values. Pending instructions only concern a virtual tile, so a
+    hand-built materialized tile with a malformed pending key is read, not nulled.
     """
     from databricks.labs.gbx.pyrx.grouped_exec import _dispatch_tile, _OpenerContext
 
@@ -495,7 +501,9 @@ def test_dispatch_materialized_tile_reads_its_bytes_not_its_path(tmp_path):
     src = tmp_path / "source_4326.tif"
     src.write_bytes(make_geotiff_bytes(width=4, height=3, epsg=4326))
     computed = make_geotiff_bytes(width=6, height=5, epsg=3857)
-    tile = VirtualTile(cellid=1, raster=computed, path=str(src)).to_row()
+    tile = VirtualTile(
+        cellid=1, raster=computed, path=str(src), metadata=metadata
+    ).to_row()
 
     for view in ("header", "pixels"):
         lru = _SourceStubLRU()

@@ -14,7 +14,7 @@ The functions here read and write the shard index itself: ``index_nbytes``,
 from __future__ import annotations
 
 import bisect
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -40,13 +40,20 @@ class Region:
 
     ``file`` is a manifest ``file`` value (relative to the store, or absolute);
     ``origin`` is the manifest ``origin`` of the row it came from, which says which
-    root a relative ``file`` is under.
+    root a relative ``file`` is under. ``identity`` is the manifest ``identity`` of an
+    external file (``"<mtime_ms>:<size>"``, as listed when it was registered or synced):
+    a reader checks it against the file before reading. ``None`` for files GeoBrix wrote.
     """
 
     file: str
     offset: int
     length: int
     origin: str = "gbx"
+    identity: str | None = None
+
+    def part(self, offset: int, length: int) -> "Region":
+        """``length`` bytes at ``offset`` of the same file, with the same origin and identity."""
+        return replace(self, offset=offset, length=length)
 
 
 def _index_layout(index_codecs) -> tuple[str, bool]:
@@ -183,6 +190,6 @@ class VirtualShard:
             region = self._regions[j]
             skip = pos - self._starts[j]
             take = min(region.length - skip, stop - pos)
-            out.append(Region(region.file, region.offset + skip, take, region.origin))
+            out.append(region.part(region.offset + skip, take))
             pos += take
         return out

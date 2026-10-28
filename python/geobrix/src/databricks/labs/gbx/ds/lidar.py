@@ -19,6 +19,7 @@ from typing import (
     NamedTuple,
     Optional,
     Sequence,
+    Tuple,
     Union,
 )
 
@@ -403,8 +404,9 @@ _GIVE_UP_CHUNKS = 3
 _GIVE_UP_POINTS = 250_000
 
 # The fewest bytes a LAZ point can take, so a header count beyond (bytes of point data /
-# this) cannot be in the file. Only used when lazrs is not the decoder and there is no
-# chunk table to read the limit from. Identical points compress to about 0.007 bytes each
+# this) cannot be in the file. Only used when lazrs is not the decoder AND the points a chunk
+# table holds cannot be read from the file (chunks of varying size, a table that cannot be
+# found; see _laz_point_room). Identical points compress to about 0.007 bytes each
 # (measured with the point formats 0, 1, 3, 6 and 8, 50,000 to a million points): a bound
 # of half a byte, which this once was, cut such a file off after 1,220 of 50,000 points.
 _MIN_LAZ_POINT_BYTES = 1 / 1024
@@ -842,6 +844,32 @@ def _out_of_bounds(cols, keep, bounds, start, hook) -> np.ndarray:
     return out
 
 
+def _laz_point_room(h, local: str, size: int) -> Tuple[int, bool]:
+    """``(points, from_table)``: the most points a LAZ file can hold when lazrs is not the decoder.
+
+    The chunk table says: its chunk count (``_find_chunk_table``, plain struct reads) times the
+    points per chunk of the LASzip record (the u32 at byte 12, which laspy parses without lazrs),
+    the bound the lazrs branch takes from the decoded table. ``from_table`` is False when it cannot
+    be read: chunks that vary in size (all ones at byte 12, as COPC files have), no LASzip record,
+    a table that cannot be found or is empty. The bytes of point data over the fewest a point
+    takes (:data:`_MIN_LAZ_POINT_BYTES`) are the answer then."""
+    start = int(h.offset_to_point_data)
+    by_size = int((size - start) / _MIN_LAZ_POINT_BYTES)
+    laszip = h.vlrs.get("LasZipVlr")
+    record = bytes(laszip[0].record_data) if laszip else b""
+    if len(record) < 16:
+        return by_size, False
+    chunk_size = struct.unpack_from("<I", record, 12)[0]
+    if chunk_size in (0, _VARIABLE_CHUNK_SIZE):
+        return by_size, False
+    f = _listing._retry_transient(lambda: open(local, "rb"))
+    with f:
+        found = _find_chunk_table(f, start, size)
+    if isinstance(found, str) or found[1] == 0:
+        return by_size, False
+    return int(found[1]) * chunk_size, True
+
+
 def _readable_points(
     h, local: str, size: int, hook, table: Optional[_ChunkTable]
 ) -> int:
@@ -855,13 +883,17 @@ def _readable_points(
     offset = int(h.offset_to_point_data)
     if h.are_points_compressed:
         if table is None:  # lazrs is not the decoder: its own errors, then salvage
-            most = int((size - offset) / _MIN_LAZ_POINT_BYTES)
+            most, from_table = _laz_point_room(h, local, size)
             if total > most:
+                why = (
+                    f"more than the {most} its chunk table holds"
+                    if from_table
+                    else f"more than a {size}-byte LAZ file can hold"
+                )
                 hook(
                     None,
                     _quarantine.RECORDS_NOT_READ,
-                    f"the header declares {total} points, more than a {size}-byte LAZ "
-                    f"file can hold; at most {most} were read",
+                    f"the header declares {total} points, {why}; at most {most} were read",
                 )
                 return max(0, most)
             return total

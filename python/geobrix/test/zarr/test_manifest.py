@@ -920,9 +920,9 @@ def test_snapshot_of_a_past_version_reads_the_history_once(
     )
     actions = _count_metadata_queries(monkeypatch, spark_delta)
     snap = M.snapshot(spark_delta, table, **kwargs)
-    # one for the table history, one for SHOW TBLPROPERTIES (the timestamp form adds the
-    # one that parses its argument)
-    assert len(actions) <= (2 if how == "version" else 3), len(actions)
+    # one for the table history, one for SHOW TBLPROPERTIES, one probe that Delta still
+    # has the version's files (the timestamp form adds the one that parses its argument)
+    assert len(actions) <= (3 if how == "version" else 4), len(actions)
     assert snap.version == (
         v1 if how == "version" else M.snapshot(spark_delta, table).version
     )

@@ -53,6 +53,7 @@ __all__ = [
     "classify_commit_error",
     "parse_cas_failure",
     "check_tag",
+    "files_gone",
     "retain_seconds",
     "retain_days",
     "property_retain_seconds",
@@ -326,6 +327,30 @@ def _error_text(exc: BaseException) -> str:
     return "\n".join(parts)
 
 
+# Text of a read whose Delta data files are gone: Delta's own VACUUM (or Unity Catalog's
+# predictive optimization) removed the files of an old version, which its log still lists.
+_FILES_GONE_MARKS = (
+    "FileNotFoundException",
+    "FILE_NOT_EXIST",
+    "FILE_NOT_FOUND",
+    "No such file or directory",
+)
+
+
+def files_gone(text: str) -> bool:
+    """Whether the error ``text`` of a read says a data file of the table is missing."""
+    return any(mark in text for mark in _FILES_GONE_MARKS)
+
+
+def _version_gone(table: str, version: int) -> ZarrVersionUnavailable:
+    return ZarrVersionUnavailable(
+        f"version {version} of {table} can no longer be read: Delta has removed its data "
+        "files (its own VACUUM, or predictive optimization, ran with a shorter retention "
+        "than this store promises)",
+        fix=_UNAVAILABLE_FIX,
+    )
+
+
 def classify_commit_error(text: str) -> str | None:
     """``"cas"`` for a failed expectation, ``"concurrent"`` for a retryable Delta conflict.
 
@@ -583,6 +608,16 @@ def snapshot(
                 "window), so its files may have been removed",
                 fix=_UNAVAILABLE_FIX,
             )
+    if picked != max(v for v, _ in history):
+        # Delta may have dropped the files of an older version its log still lists
+        try:
+            spark.sql(
+                f"SELECT kind FROM {_q(table)} VERSION AS OF {picked} LIMIT 1"
+            ).collect()
+        except Exception as e:
+            if files_gone(_error_text(e)):
+                raise _version_gone(table, picked) from e
+            raise
     return Snapshot(table=table, version=picked, tag=None)
 
 
@@ -645,7 +680,14 @@ def read_rows(
             cond = cond & F.col(column).isin(values)
         else:
             df = _pruned(spark, df, column, values)
-    return df.where(cond).toArrow()
+    try:
+        return df.where(cond).toArrow()
+    except Exception as e:
+        if files_gone(_error_text(e)) and snap.version < _latest_version(
+            spark, snap.table
+        ):
+            raise _version_gone(snap.table, snap.version) from e
+        raise
 
 
 # --- commit -----------------------------------------------------------------------

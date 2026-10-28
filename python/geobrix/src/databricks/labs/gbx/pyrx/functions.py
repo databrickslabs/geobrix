@@ -10,6 +10,7 @@ from databricks.labs.gbx import _pyspark  # noqa: F401
 
 # isort: split
 
+import json
 from typing import List, Optional
 
 import pandas as pd
@@ -8405,10 +8406,11 @@ def _tile_raster_bytes(row):
     return None
 
 
-# An aggregate over nothing but error tiles gives an error tile where its result is a tile (its reasons survive), but
-# the BINARY a grouped-agg UDF returns has no place for one. The Python API's variants spell it as this prefix, the
-# cell id and the reasons; the scalar that wraps the result turns it back into the error tile. No GTiff starts with a
-# NUL byte (II or MM), so a payload is never mistaken for a raster. The SQL variants give NULL instead.
+# An aggregate over nothing but error tiles gives the first member's error tile as it is where its result is a
+# tile (every key of its metadata, so the upstream diagnostic survives), but the BINARY a grouped-agg UDF returns
+# has no place for one. The Python API's variants spell it as this prefix and the tile's cell id and metadata
+# (JSON); the scalar that wraps the result turns it back into the error tile. No GTiff starts with a NUL byte (II
+# or MM), so a payload is never mistaken for a raster. The SQL variants give NULL instead.
 _ERROR_MAGIC = b"\x00GBXERR:"
 
 
@@ -8421,19 +8423,19 @@ def _only_error_tiles(tiles):
 
 
 def _error_tile_of_group(errors):
-    """One error tile for the error tiles of a group: their reasons (distinct, in order) and the cell id they
-    share (else -1). None for no errors."""
-    if not errors:
-        return None
-    reasons = dict.fromkeys(
-        (e.get("metadata") or {}).get("last_error")
-        or (e.get("metadata") or {}).get("error_message")
-        for e in errors
-    )
-    ids = {int(e.get("cellid") or 0) for e in errors}
-    return _serde.build_error_tile(
-        "; ".join(map(str, reasons)), ids.pop() if len(ids) == 1 else -1
-    )
+    """The first of a group's error tiles (`errors`, from :func:`_error_tile_of`), as it is. "First" is
+    canonical, not arrival order: the least by cell id, then by the metadata sorted (the heavy tier orders them the
+    same way). None for no errors."""
+
+    def order(e):
+        md = e.get("metadata") or {}
+        cellid = e.get("cellid")
+        return (
+            -1 if cellid is None else int(cellid),
+            "\0".join(f"{k}={v}" for k, v in sorted(md.items())),
+        )
+
+    return min(errors, key=order, default=None)
 
 
 def _error_payload(errors):
@@ -8441,20 +8443,20 @@ def _error_payload(errors):
     tile = _error_tile_of_group(errors)
     if tile is None:
         return None
-    return (
-        _ERROR_MAGIC
-        + tile["cellid"].to_bytes(8, "big", signed=True)
-        + tile["metadata"]["last_error"].encode("utf-8")
-    )
+    cellid = tile.get("cellid")
+    return _ERROR_MAGIC + json.dumps(
+        {
+            "cellid": -1 if cellid is None else int(cellid),
+            "metadata": dict(tile.get("metadata") or {}),
+        }
+    ).encode("utf-8")
 
 
 def _tile_of_error_payload(payload):
-    cellid = int.from_bytes(
-        payload[len(_ERROR_MAGIC) : len(_ERROR_MAGIC) + 8], "big", signed=True
-    )
-    return _serde.build_error_tile(
-        payload[len(_ERROR_MAGIC) + 8 :].decode("utf-8"), cellid
-    )
+    body = json.loads(payload[len(_ERROR_MAGIC) :].decode("utf-8"))
+    tile = _serde.build_error_tile("", body["cellid"])
+    tile["metadata"] = body["metadata"]
+    return tile
 
 
 # --- scalar as_tile UDFs: wrap an aggregated BINARY result into a tile struct
@@ -8568,7 +8570,7 @@ def _merge_agg_v2_udf(
         except Exception:  # noqa: BLE001
             continue
     if not rasters:
-        return None
+        return _error_payload(_only_error_tiles(tile))
 
     merged_bytes = agg_core.merge_tiles(rasters)
     vt = VirtualTile(cellid=0, raster=bytes(merged_bytes))
@@ -8582,13 +8584,17 @@ def _as_virtual_tile_from_path_udf(encoded):
     """Decode a ``_merge_agg_v2_udf`` BinaryType result into a V2 tile struct.
 
     When the bytes start with ``_VTPATH_MAGIC`` the payload is a file path
-    and the result is a path-only (bytes-free) virtual tile.  Any other
+    and the result is a path-only (bytes-free) virtual tile; with
+    ``_ERROR_MAGIC`` it is the error tile of a group of nothing but error
+    tiles (see :func:`_error_payload`).  Any other
     non-null payload is treated as raw GTiff bytes (fallback, same as
     ``_as_tile_udf``).
     """
     if encoded is None:
         return None
     eb = bytes(encoded)
+    if eb.startswith(_ERROR_MAGIC):
+        return _tile_of_error_payload(eb)
     if eb.startswith(_VTPATH_MAGIC):
         path = eb[len(_VTPATH_MAGIC) :].decode("utf-8")
         vt = VirtualTile(cellid=0, path=path)
@@ -9400,7 +9406,12 @@ def rst_merge_agg(
 
     Returns:
         Tile struct spanning the union extent, or NULL on an empty group.
-        With ``virtualize_dir`` the tile is path-only (bytes-free).
+        With ``virtualize_dir`` the tile is path-only (bytes-free). A group of
+        nothing but error tiles gives the first of them as it is (an error tile:
+        a NULL raster and its metadata, ``last_error`` included), also with
+        ``virtualize_dir``; the SQL function, which returns BINARY, gives NULL.
+        Tiles far apart make a mosaic that is nearly all NoData: past what a
+        merge can stream (10 GiB decoded) the query stops with a ``Fix:``.
     """
     tc = _col(tile)
     if virtualize_dir is not None:

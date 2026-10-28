@@ -88,7 +88,7 @@ case class RST_DerivedBandAgg(
                     case _ => dropped += 1; None
                 }
             }
-            val onlyErrors = if (tiles.isEmpty) RST_ErrorHandler.errorTileOfGroup(buffer, rasterType) else null
+            val onlyErrors = if (tiles.isEmpty) RST_ErrorHandler.errorTileOfGroup(buffer) else null
             buffer.clear()
 
             if (tiles.isEmpty) {

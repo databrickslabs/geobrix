@@ -91,7 +91,7 @@ case class RST_MergeAgg(
                 }
 
             if (tiles.isEmpty) {
-                RST_ErrorHandler.errorTileOfGroup(buffer, rasterType) // NULL unless every member is an error tile
+                RST_ErrorHandler.errorTileOfGroup(buffer) // NULL unless every member is an error tile
             } else {
                 // If merging multiple index rasters, the index value is dropped
                 val idx: Long = if (tiles.map(_._1).groupBy(identity).size == 1) tiles.head._1 else -1L

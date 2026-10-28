@@ -551,7 +551,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         row.getAs[Map[String, String]]("md")("last_error") should include("RST_MergeAgg")
     }
 
-    test("an aggregate of nothing but error tiles is an error tile with the members' reason") {
+    test("an aggregate of nothing but error tiles is the first member's error tile, unchanged") {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
@@ -559,25 +559,35 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
 
         val good = Seq(tinyGTiffBytes(42)).toDF("content")
             .select(rst_fromcontent(col("content"), lit("GTiff")).as("tile"))
-        val failed = good.select(rst_transformcrs(col("tile"), lit("EPSG:not-a-crs")).as("tile"))
-        val reason = failed.select(col("tile.metadata")("last_error").as("e")).head().getString(0)
-        assert(reason != null && reason.nonEmpty, "the failed tile must say why")
+        // two error tiles with different reasons, computed once so both aggregates see the same rows
+        def failed(crs: String) = good.select(rst_transformcrs(col("tile"), lit(crs)).as("tile")).cache()
+        val (bad1, bad2) = (failed("EPSG:not-a-crs"), failed("EPSG:also-not-one"))
+        def metadata(df: org.apache.spark.sql.DataFrame) =
+            df.select(col("tile.metadata").as("md")).head().getAs[Map[String, String]]("md")
+        val (md1, md2) = (metadata(bad1), metadata(bad2))
+        assert(md1("last_error") != md2("last_error") && md1.contains("error_message"), "two reasons to tell apart")
+        // the first in canonical order: the cell id, then the metadata sorted
+        def order(md: Map[String, String]) = md.toSeq.sorted.map { case (k, v) => s"$k=$v" }.mkString("\u0000")
+        val first = Seq(md1, md2).minBy(order)
 
-        // Two members, so the single-member shortcut does not hide the rule; one readable member, an ordinary group.
-        val twoErrors = failed.union(failed)
+        // One member or two, the answer is a member as it is: every key, not a rebuilt tile that kept the reason only.
         for (agg <- Seq(
                rst_merge_agg(col("tile")),
                rst_combineavg_agg(col("tile")),
                rst_derivedband_agg(col("tile"), doublePyFunc, "myfunc")
              )) {
-            val row = twoErrors.groupBy(lit(1).alias("g"))
-                .agg(agg.alias("out"))
-                .select(col("out.raster").as("raster"), col("out.metadata").as("md"))
-                .head()
-            assert(row.isNullAt(0), "an error tile has no raster")
-            row.getAs[Map[String, String]]("md")("last_error") should include(reason)
+            def answer(df: org.apache.spark.sql.DataFrame) = {
+                val row = df.groupBy(lit(1).alias("g"))
+                    .agg(agg.alias("out"))
+                    .select(col("out.raster").as("raster"), col("out.metadata").as("md"))
+                    .head()
+                assert(row.isNullAt(0), "an error tile has no raster")
+                row.getAs[Map[String, String]]("md")
+            }
+            assert(answer(bad1) == md1)
+            assert(answer(bad1.union(bad2)) == first)
         }
-        val mixed = good.union(failed).groupBy(lit(1).alias("g"))
+        val mixed = good.union(bad1).groupBy(lit(1).alias("g"))
             .agg(rst_derivedband_agg(col("tile"), doublePyFunc, "myfunc").alias("out"))
             .select(col("out.raster").isNotNull.as("ok")).head()
         assert(mixed.getBoolean(0), "one readable member makes it an ordinary group")

@@ -46,9 +46,17 @@ jobs:
           git push origin HEAD:${{ github.head_ref }}
   # Lightweight, JAR-free raster API (pyrx). Runs FIRST and gates the heavy
   # build below (fail-fast): no Scala JAR, no apt/native GDAL — just rasterio's
-  # bundled GDAL + pyspark local. Minutes, not the 10–15 min heavyweight build.
+  # bundled GDAL + pyspark local.
+  #
+  # Sharded: the light test dirs run as parallel jobs (the `shard` matrix), each in one pytest
+  # process, instead of one ~1 h process. `build` needs this job, so it starts only after ALL
+  # shards pass. scripts/ci/test_ci_light_shards.py fails unless the shards together hold exactly
+  # the light dirs of python/geobrix/test/conftest.py (_LIGHT_TEST_DIRS), each once, and the
+  # heavy build's LIGHT_IGNORES lists the same set. A new light dir goes into ONE shard here.
+  # Keep pyvx before bench in one shard: pyvx leaves the PROJ grids bench relies on (the guard
+  # checks that too).
   pyrx:
-    name: Lightweight (pyrx) tests
+    name: Lightweight (pyrx) tests - ${{ matrix.shard.name }} (${{ matrix.python }})
     runs-on:
       group: databrickslabs-protected-runner-group
       labels: linux-ubuntu-latest
@@ -59,8 +67,21 @@ jobs:
       # Required by .github/actions/jfrog-{auth,pip-bootstrap}: OIDC token exchange for pip via JFrog.
       id-token: write
     strategy:
+      # Let every shard finish so one push reports all the failing shards, not just the first.
+      fail-fast: false
       matrix:
         python: [ 3.12.3 ]
+        shard:
+          - name: pyrx
+            dirs: test/pyrx
+          # Also runs the tests of the scripts themselves (shortest shard).
+          - name: ds
+            dirs: test/ds
+            scripts_ci: true
+          - name: rest
+            dirs: >-
+              test/pyvx test/pygx test/pmtiles_light test/stac test/earthdata test/vizx
+              test/sample test/bench test/core test/models test/zarr
     steps:
       - name: checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -68,14 +89,46 @@ jobs:
           token: ${{ secrets.REPO_ACCESS_TOKEN || secrets.GITHUB_TOKEN }}
       - name: Create pip cache key file
         run: echo "pyrx-${{ github.ref }}-${{ matrix.python }}" > .ci-pip-cache-key
+      # test/bench (~6 of the ~59 light minutes) guards the bench harness only, so it runs when
+      # something it covers changed in the pushed range / the PR: the bench code, its tests, the
+      # shared light conftest, or this CI wiring (so a wiring change proves the whole pipeline).
+      # Fail safe: a first push of a branch, a manual run, or a base commit that cannot be
+      # fetched all run it (scripts/ci/paths_changed.py), and so does a crash of the check
+      # itself (continue-on-error leaves the output unset, which is not 'false'). Only the
+      # shard holding test/bench asks.
+      - name: Decide whether test/bench runs
+        id: bench
+        if: contains(matrix.shard.dirs, 'test/bench')
+        continue-on-error: true
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          BASE=""
+          case "$EVENT_NAME" in
+            push) BASE="$PUSH_BEFORE" ;;
+            pull_request) BASE="$PR_BASE" ;;
+          esac
+          python3 scripts/ci/paths_changed.py "$BASE" HEAD \
+            python/geobrix/src/databricks/labs/gbx/bench \
+            python/geobrix/test/bench \
+            python/geobrix/test/conftest.py \
+            .github/actions/pyrx_build/action.yml \
+            .github/workflows/build_main.yml \
+            scripts/ci/paths_changed.py
       - name: build + test pyrx (lightweight)
         uses: ./.github/actions/pyrx_build
         with:
           python_version: ${{ matrix.python }}
-      # Tests of the scripts themselves: the JAR packaging check and the gbx:dcs:build /
-      # gbx:dcs:publish gates. Stdlib + pytest (from the pyrx install above); the DCS commands
-      # run against a fake docker on PATH, so no Docker daemon or registry is involved.
-      - name: test scripts/ci (JAR packaging check, DCS build/publish gates)
+          dirs: ${{ matrix.shard.dirs }}
+          skip_dirs: ${{ steps.bench.outputs.changed == 'false' && 'test/bench' || '' }}
+      # Tests of the scripts themselves: the JAR packaging check, the gbx:dcs:build /
+      # gbx:dcs:publish gates and the CI shard guard. Stdlib + pytest (from the pyrx install
+      # above); the DCS commands run against a fake docker on PATH, so no Docker daemon or
+      # registry is involved. Run once, in one shard.
+      - name: test scripts/ci (JAR packaging check, DCS build/publish gates, shard guard)
+        if: matrix.shard.scripts_ci
         run: python -m pytest scripts/ci -v
 
   build:

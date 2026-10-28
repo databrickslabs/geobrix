@@ -941,6 +941,45 @@ def _read_gbx_member_tags(member_path: str) -> dict:
     return tags_out
 
 
+def _table_time_travel(options, *, has_tiles_table: bool):
+    """The ``versionAsOf`` / ``timestampAsOf`` options of a reader: ``(version, timestamp)``.
+
+    Both are ``None`` when unset (a blank value counts as unset). Only one may be set, and
+    only with ``tilesTable``: they pin the Delta version of the table the tiles are read
+    from, and a manifest or a directory walk has no version. The timestamp goes to Delta as
+    given; Delta rejects a malformed one, or one before the table's first commit.
+    """
+    # Spark hands a reader its options with lowercase keys; the helper that matches
+    # them case-insensitively lives with the netcdf reader (which imports this module).
+    from databricks.labs.gbx.ds.netcdf import _option
+
+    raw_version = str(_option(options, "versionAsOf", "") or "").strip()
+    timestamp = str(_option(options, "timestampAsOf", "") or "").strip()
+    if raw_version and timestamp:
+        raise ValueError(
+            "raster_gbx: 'versionAsOf' and 'timestampAsOf' are mutually exclusive; "
+            "supply at most one."
+        )
+    given = "versionAsOf" if raw_version else "timestampAsOf" if timestamp else None
+    if given and not has_tiles_table:
+        raise ValueError(
+            f"raster_gbx: '{given}' requires 'tilesTable'; it pins the version of the "
+            "table the tiles are read from, so it does not apply to 'manifest' or to a "
+            "directory walk."
+        )
+    version = None
+    if raw_version:
+        try:
+            version = int(raw_version)
+        except ValueError:
+            version = -1
+        if version < 0:
+            raise ValueError(
+                f"raster_gbx: 'versionAsOf' must be a non-negative integer; got {raw_version!r}."
+            )
+    return version, (timestamp or None)
+
+
 class RasterGbxReader(DataSourceReader):
     def __init__(self, options: Dict[str, str]):
         self.path = options.get("path")
@@ -1007,6 +1046,11 @@ class RasterGbxReader(DataSourceReader):
                 "raster_gbx: 'manifest' and 'tilesTable' are mutually exclusive; "
                 "supply at most one."
             )
+        # Delta time travel on the tilesTable: re-plan from the exact table version a
+        # pipeline used (as the Zarr reader's version_as_of / timestamp_as_of does).
+        self.version_as_of, self.timestamp_as_of = _table_time_travel(
+            options, has_tiles_table=bool(self.tiles_table)
+        )
 
     def _list_source_files(self) -> list:
         """Enumerate source files via the session-free file_gbx core.
@@ -1052,7 +1096,16 @@ class RasterGbxReader(DataSourceReader):
                     raise RuntimeError(
                         "raster_gbx: 'tilesTable' requires an active SparkSession."
                     )
-                tile_rows = spark.table(self.tiles_table).collect()
+                table_reader = spark.read
+                if self.version_as_of is not None:
+                    table_reader = table_reader.option(
+                        "versionAsOf", str(self.version_as_of)
+                    )
+                elif self.timestamp_as_of is not None:
+                    table_reader = table_reader.option(
+                        "timestampAsOf", self.timestamp_as_of
+                    )
+                tile_rows = table_reader.table(self.tiles_table).collect()
             parts = _partitions_from_tile_rows(
                 tile_rows,
                 emit_virtual=self.emit_virtual,

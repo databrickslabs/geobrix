@@ -56,6 +56,8 @@ prepare-then-read pipeline.
 | `tileSize` | _none_ | Cut the whole raster into a regular fixed-size pixel grid: `"w,h"` (e.g. `"512,512"`) or a single `"512"` for square tiles. One tile per grid cell; edge cells are clamped to the extent. Mutually exclusive with `clipPolygons` and `windows`. Materialized tiles are guarded to the ~2 GB Spark-cell limit (a too-large `tileSize` raises a clear error); virtual tiles (`virtualTiles=true`) carry no bytes and are unguarded. |
 | `overlapPercent` | `0` | Overlap between adjacent `tileSize` cells, as a percentage of tile size (`overlap_px = ceil(tile_dim · pct/100)`, `step = tile_dim − overlap_px`). Applies to **`tileSize` only** (an error otherwise). Default `0` = non-overlapping grid. |
 | `tilesTable` | _none_ | Delta table to use as a tile index (see [pre-computed tile inputs](#advanced-pre-computed-tile-inputs) below). |
+| `versionAsOf` | _none_ | With `tilesTable`: read this Delta version of the table (a non-negative integer, e.g. `"3"`), so a pipeline re-runs against the exact tile index it used. Mutually exclusive with `timestampAsOf`; an error without `tilesTable`. See [pin a tile index version](#tiles-table-time-travel). |
+| `timestampAsOf` | _none_ | With `tilesTable`: read the table as it was at this time (e.g. `"2026-10-01 00:00:00"`; Delta takes the latest version committed at or before it). Mutually exclusive with `versionAsOf`; an error without `tilesTable`. |
 | `skipOrdering` | `"false"` | Pass `"true"` to suppress the auto-sort-by-source-path that `tilesTable` reads apply by default. See [tilesTable auto-order](#tiles-table-auto-order) below. |
 
 :::tip Why overlap?
@@ -507,6 +509,21 @@ the table is updated incrementally and you run periodic `OPTIMIZE` as part of ma
 :::note Coordinate reference systems
 Raster readers extract the CRS from each file's spatial reference metadata and store it as a canonical string in `tile.metadata` and the `tile.crs` field (e.g. `"EPSG:4326"`, `"ESRI:54008"`) — ESRI and OGC authorities are preserved. The `clipCrs` option declares the CRS of a plain WKT/WKB clip polygon; an embedded SRID in an EWKT/EWKB polygon always takes precedence. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
 :::
+
+### Pin a tile index version: `versionAsOf` and `timestampAsOf` {#tiles-table-time-travel}
+
+A `tilesTable` is a Delta table, so its contents change as files are added to it. To plan a read
+from the table as it was, set one of two options next to `tilesTable`:
+
+- `versionAsOf` reads that Delta version of the table (a non-negative integer, such as `"3"`).
+- `timestampAsOf` reads the version that was current at that time (such as `"2026-10-01 00:00:00"`).
+
+Note the version a run used (`DESCRIBE HISTORY` on the table lists them) and pass it to a later run
+to plan from the same tile index. Set at most one of the two, and only with `tilesTable`: a manifest
+or a directory walk has no version, so either option without `tilesTable` is an error. The table
+must be a Delta table. A version that does not exist (or that `VACUUM` has removed), or a time
+before the table's first commit, fails the read. The options pin the tile index only: the index
+lists files, and the pixels are whatever those files hold when the tiles are read.
 
 ## Next Steps
 

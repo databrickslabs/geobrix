@@ -23,9 +23,13 @@
 # `scripts/docker/build_smart.sh --no-cache`, smoke-test.
 
 # --- toolchain ---
+# pip stays at the DBR 17.3 version: `gbx:test:python` installs the extras with it, so extras
+# resolution is exercised the way a DBR 17.3 / env 5 cluster's pip would do it (the Dockerfile
+# bootstraps this exact release by hash). setuptools and wheel are security-patched releases:
+# nothing under test resolves through them.
 pip==25.0.1
-setuptools==74.0.0
-wheel==0.45.1
+setuptools==84.2.1
+wheel==0.46.2
 cython==3.0.12
 build==1.6.1
 
@@ -88,7 +92,7 @@ scikit-image==0.26.0
 xarray-spatial==0.9.9
 
 # --- lint tooling ---
-black==26.3.1
+black==26.10.1
 isort==8.0.1
 flake8==7.3.0
 
@@ -115,12 +119,32 @@ ipython==8.30.0
 ipykernel==6.29.5
 ipywidgets==7.8.1
 # jupyterlab is not used directly, but ipywidgets 7 -> widgetsnbextension -> notebook
-# requires it; pinned here so it stays explicit and version-audited.
-jupyterlab==4.3.4
-jupyter_server==2.14.1
-jupyter_core==5.7.2
+# requires it; pinned here so it stays explicit and version-audited. The server side of the
+# Jupyter stack (jupyterlab, jupyter_server, tornado, nbconvert) is held at security-patched
+# releases above the DBR 17.3 versions: no GeoBrix code or test goes through it, and the
+# container's notebook runs are not a DBR fidelity target. jupyterlab 4.6.x is the line that
+# carries the patched notebook 7.6.3 (pulled through ipywidgets 7 -> widgetsnbextension), and
+# it still resolves with ipywidgets 7 and pyzmq 25.
+jupyterlab==4.6.4
+jupyter_server==2.21.1
+jupyter_core==5.9.1
 jupyter_client==8.6.3
-tornado==6.4.2
+tornado==6.5.10
 nbformat==5.10.4
-nbconvert==7.16.4
+nbconvert==7.17.2
 pyzmq==25.1.1
+
+# --- transitive packages floored at their security-patched releases ---
+# Nothing here declares these; the Jupyter, STAC and viz closures pull them. A floor stops a
+# regenerated lock from resolving below the patched release. pyarrow stays at the DBR 17.3 value
+# above on purpose: the dev container is the Arrow / pandas baseline the Python tests run against.
+pillow>=13.0.0
+certifi>=2026.10.19
+urllib3>=2.8.0
+aiohttp>=3.14.4
+multidict>=6.9.1
+anyio>=4.14.2
+geopy>=2.5.0
+mistune>=3.3.0
+bleach>=6.4.0
+soupsieve>=2.9.0,<3

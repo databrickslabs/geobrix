@@ -165,23 +165,26 @@ ENV MAVEN_HOME="$ROOTDIR/share/maven"
 # scripts/geobrix-gdal-init.sh, and examples/tests/requirements.txt.
 # Run `gbx:versions:audit` after edits to confirm coverage.
 # DBR-aligned values: https://docs.databricks.com/aws/en/release-notes/runtime/17.3lts
+# Exceptions, held at security-patched releases above the DBR 17.3 value: setuptools, wheel and the
+# server side of the Jupyter stack (jupyterlab, jupyter_server, jupyter_core, tornado, nbconvert). pip, numpy,
+# pandas and pyarrow stay at the DBR 17.3 values: they are the baseline the tests run against.
 ENV SPARK_VERSION=4.0.0
 ENV NUMPY_VERSION=2.1.3
 ENV PANDAS_VERSION=2.2.3
-ENV SETUPTOOLS_VERSION=74.0.0
+ENV SETUPTOOLS_VERSION=84.2.1
 ENV PIP_VERSION=25.0.1
-ENV WHEEL_VERSION=0.45.1
+ENV WHEEL_VERSION=0.46.2
 ENV REQUESTS_VERSION=2.34.2
 ENV IPYTHON_VERSION=8.30.0
 ENV IPYKERNEL_VERSION=6.29.5
 ENV IPYWIDGETS_VERSION=7.8.1
-ENV JUPYTERLAB_VERSION=4.3.4
-ENV JUPYTER_SERVER_VERSION=2.14.1
-ENV JUPYTER_CORE_VERSION=5.7.2
+ENV JUPYTERLAB_VERSION=4.6.4
+ENV JUPYTER_SERVER_VERSION=2.21.1
+ENV JUPYTER_CORE_VERSION=5.9.1
 ENV JUPYTER_CLIENT_VERSION=8.6.3
-ENV TORNADO_VERSION=6.4.2
+ENV TORNADO_VERSION=6.5.10
 ENV NBFORMAT_VERSION=5.10.4
-ENV NBCONVERT_VERSION=7.16.4
+ENV NBCONVERT_VERSION=7.17.2
 # Not in DBR; pinned to a stable PyPI version. build/pytest-cov also match CI.
 # 1.5.0 (released 2026-04-30) is too new for some private PyPI mirrors that
 # embargo recent releases; 1.4.4 is the broadly-available latest.

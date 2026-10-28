@@ -19,7 +19,7 @@
 
 # --- build backend (for `python -m build` lightweight wheel) ---
 build==1.6.1
-setuptools==83.0.0
+setuptools==84.2.1
 wheel==0.46.2
 
 # --- runtime: pyspark local mode + pandas_udf (Arrow) ---
@@ -159,3 +159,16 @@ exifread>=3.0,<4
 # --- test runner (light-CI only; dev-container / notebooks harness stay on 8.4.2
 # until a coordinated all-manifests bump). 9.1.1 is the latest stable. ---
 pytest==9.1.1
+
+# --- transitive packages floored at their security-patched releases ---
+# GeoBrix declares none of these directly: certifi comes in through requests and httpx2, pillow
+# through matplotlib, scikit-image, imageio and contextily, aiohttp and multidict through
+# earthaccess -> s3fs -> aiobotocore.
+# A floor stops a regenerated lock from resolving below the patched release. CI-only: the
+# shipped extras (pyproject.toml) keep their ranges, and pip leaves the runtime's own pillow
+# (11.1.0 on DBR 17.3/18/env 5, 12.0.0 on DBR 19/env 6) in place, because nothing GeoBrix
+# installs requires a newer one.
+pillow>=13.0.0
+certifi>=2026.10.19
+aiohttp>=3.14.4
+multidict>=6.9.1

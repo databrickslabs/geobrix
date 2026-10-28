@@ -29,3 +29,10 @@
 # runtime; see pyproject.toml). This lock is for local/manual verification off-cluster,
 # so pin it explicitly — same floor the base dependency used to carry.
 pyspark>=4.0.0
+
+# pillow is resolved through [vizx] (matplotlib, scikit-image, imageio, contextily) and certifi
+# through requests and httpx2; the floors keep a regenerated lock at the security-patched
+# releases. CI-only: the extras in pyproject.toml are unchanged, and pip leaves the runtime's own
+# pillow and certifi in place.
+pillow>=13.0.0
+certifi>=2026.10.19

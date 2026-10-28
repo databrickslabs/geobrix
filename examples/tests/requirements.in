@@ -16,5 +16,13 @@
 # tests in DBR.
 pytest==9.1.1
 nbformat==5.10.4
-nbconvert==7.16.4
+nbconvert==7.17.2
 testbook==0.4.2
+
+# --- transitive packages floored at their security-patched releases ---
+# nbconvert, nbclient and jupyter-client pull these; a floor stops a regenerated lock from
+# resolving below the patched release. The harness runs on the host and does not mirror a DBR.
+tornado>=6.5.9
+mistune>=3.3.0
+bleach>=6.4.0
+soupsieve>=2.9.0,<3

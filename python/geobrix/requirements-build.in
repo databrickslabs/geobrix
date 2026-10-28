@@ -15,5 +15,5 @@
 # backend version produced any given wheel. If you bump a version here,
 # bump it there too (and vice versa) — they're a paired set.
 build==1.6.1
-setuptools==80.9.0  # >= 77.0.0 required to parse PEP 639 SPDX license strings (matches requirements-ci.in note)
-wheel==0.45.1
+setuptools==84.2.1  # >= 77.0.0 required to parse PEP 639 SPDX license strings (matches requirements-ci.in note)
+wheel==0.46.2

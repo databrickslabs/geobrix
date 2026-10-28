@@ -301,3 +301,23 @@ The two `_all` umbrella locks were **not** recompiled: their only outstanding al
 base-pinned `urllib3`/`idna` and the idna-blocked `httpx2`/`httpcore2` cases above (0
 clearable), so a recompile would clear nothing and only float unrelated transitives.  The
 remaining light-lock alerts are all base-pinned/idna-blocked and deferred per the cases above.
+
+**2026-10-28 dependency refresh.**  Every pin with an open alert was moved past its patched
+release unless a runtime fixes its version:
+
+- *CI and dev locks (pip).*  The four light CI locks, `requirements-ci`, `requirements-build`,
+  both dev-container locks and `examples/tests/requirements.txt` were recompiled.  Floors in the
+  `.in` files keep transitive packages at their patched releases (`pillow>=13`, `certifi`,
+  `aiohttp`, `multidict`, plus the Jupyter-stack packages in the dev container); `setuptools`,
+  `wheel` and `black` moved to patched releases.  Pillow is not a dependency of any shipped extra,
+  so the floor is CI-only and the runtime's own pillow (11.1.0 or 12.0.0) is untouched.
+- *Still held on purpose.*  `urllib3`, `idna`, `httpx2` / `httpcore2` and `pyarrow` in the light
+  locks (cases above); `pip` and `pyarrow` in the dev container (the DBR 17.3 install toolchain and
+  Arrow baseline the tests run on); `torch` in `models_gpu_env5` (pinned to the Serverless GPU base,
+  CUDA 12).
+- *Docs and the Genie Map app (npm / pnpm).*  Docusaurus moved to 3.10.2, and `overrides` lift
+  `serialize-javascript`, `tinypool` and `uuid` (docs) and about twenty transitive packages
+  (Genie Map, in `pnpm.overrides`) to patched releases within their major lines.  What remains
+  has no patched release, is not yet on the package mirror, or needs a major bump of a pinned
+  consumer (kepler.gl, the AI tool stack, `@loaders.gl`).
+

@@ -6,6 +6,10 @@
 # GDAL's COG driver and GDALViewshedGenerate do their work.
 
 # The runtime's preinstalled versions as the floor, the next minor as the cap: nothing moves.
+# These are FROZEN-BASE caps, deliberate: this wheel targets frozen runtime bases (DBR 17.3, DBR 18, Serverless
+# environment 5), so a cap cannot downgrade the runtime's numpy, pandas, pyarrow, scipy, protobuf or urllib3, and
+# it stops a transitive requirement from upgrading one. (The extras follow another rule: a package the runtimes
+# preinstall gets a floor only there; see gbx:build:wheel.)
 # (DBR 17.3 ships pyarrow 19.0.1, DBR 18 and env 5 ship 21.0.0.)
 numpy>=2.1.3,<2.2
 pandas>=2.2.3,<2.3

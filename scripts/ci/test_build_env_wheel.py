@@ -405,7 +405,7 @@ def test_no_extra_caps_a_package_the_runtimes_preinstall(env):
     [
         (6, "extra-stac.txt", "requests>=2.34.2", "would move it"),  # the plain [stac]'s floor: past the fix
         (5, "extra-stac.txt", "requests>=2.32.3", "needs a floor of at least 2.32.4"),  # CVE-2024-47081
-        (6, "extra-stac.txt", "requests>=2.32.5,<2.33", "so no cap"),  # env6 is not a frozen base
+        (6, "extra-stac.txt", "requests>=2.32.5,<2.33", "so no cap"),  # an extra caps no base package but FROZEN_BASE_CAPS
         (5, "extra-stac.txt", "requests>=2.32.4,<2.34", "so no cap"),  # only the documented frozen-base cap
         (5, "extra-databricks.txt", "databricks-sdk>=0.49.0,<0.68", "so no cap"),
         (6, "extra-stac.txt", "tenacity>=9.1.2,<9.2", "so no cap"),

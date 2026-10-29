@@ -193,12 +193,17 @@ def g_h3_band_stack(cx, cy, color, tint):
 # ---------------------------------------------------------------------------
 
 def g_zarr_cube(cx, cy, color, tint):
-    """Three offset grid slabs (one per variable) with chunk lines, labeled by variable."""
+    """Three offset grid slabs (one per variable) with chunk lines, labeled by variable.
+
+    The slabs are drawn back to front; each label sits where no other slab's edge or chunk line
+    crosses it (the front slab's top-left corner, the bottom-right strip of the others).
+    """
     labels = ["t2m", "u10", "v10"]
     opacities = [0.20, 0.36, 0.56]
     w, h = 120, 84
     skew = 16
-    out = []
+    mono_font = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+    out, texts = [], []
     for i, (lbl, opacity) in enumerate(zip(labels, opacities)):
         x = cx - w / 2 + (2 - i) * skew - skew
         y = cy - h / 2 + (2 - i) * skew - skew - 10
@@ -214,11 +219,53 @@ def g_zarr_cube(cx, cy, color, tint):
             f'<line x1="{x}" y1="{y + h / 2}" x2="{x + w}" y2="{y + h / 2}" '
             f'stroke="{color}" stroke-opacity="0.6" stroke-width="1.2"/>'
         )
-        out.append(
-            f'<text x="{x + 8}" y="{y + 15}" '
-            f'font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" '
+        if i == len(labels) - 1:  # the front slab: its top-left corner is clear
+            tx, ty, anchor = x + 8, y + 15, "start"
+        else:  # a slab behind: the strip below the next slab is clear
+            tx, ty, anchor = x + w - 7, y + h - 4, "end"
+        texts.append(
+            f'<text x="{tx}" y="{ty}" text-anchor="{anchor}" font-family="{mono_font}" '
             f'font-size="11" font-weight="700" fill="{color}">{esc(lbl)}</text>'
         )
+    return "".join(out + texts)
+
+
+def g_sites_series(cx, cy, color, tint):
+    """A map frame with sampled sites, and the hourly series of one site below it."""
+    out = []
+    mx, my, mw, mh = cx - 66, cy - 86, 132, 66
+    out.append(
+        f'<rect x="{mx}" y="{my}" rx="6" ry="6" width="{mw}" height="{mh}" '
+        f'fill="{tint}" stroke="{color}" stroke-width="2"/>'
+    )
+    sites = [(0.14, 0.30), (0.33, 0.68), (0.52, 0.24), (0.70, 0.58), (0.86, 0.36), (0.42, 0.46)]
+    for k, (fx, fy) in enumerate(sites):
+        r = 5 if k == len(sites) - 1 else 3.5
+        out.append(
+            f'<circle cx="{mx + fx * mw:.1f}" cy="{my + fy * mh:.1f}" r="{r}" fill="{color}"/>'
+        )
+    # a dashed lead from the highlighted site down to its series
+    sx, sy = mx + sites[-1][0] * mw, my + sites[-1][1] * mh
+    out.append(
+        f'<line x1="{sx:.1f}" y1="{sy + 6:.1f}" x2="{sx:.1f}" y2="{cy + 2}" '
+        f'stroke="{color}" stroke-width="1.5" stroke-dasharray="3 3"/>'
+    )
+    # the series: axes and a polyline
+    ax, ay, aw, ah = cx - 66, cy + 8, 132, 52
+    out.append(
+        f'<line x1="{ax}" y1="{ay + ah}" x2="{ax + aw}" y2="{ay + ah}" '
+        f'stroke="{color}" stroke-opacity="0.6" stroke-width="1.5"/>'
+        f'<line x1="{ax}" y1="{ay}" x2="{ax}" y2="{ay + ah}" '
+        f'stroke="{color}" stroke-opacity="0.6" stroke-width="1.5"/>'
+    )
+    ys = [0.62, 0.40, 0.48, 0.22, 0.30, 0.12, 0.34, 0.26, 0.46]
+    pts = " ".join(
+        f"{ax + 8 + k * (aw - 16) / (len(ys) - 1):.1f},{ay + v * ah:.1f}" for k, v in enumerate(ys)
+    )
+    out.append(
+        f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="2.2" '
+        f'stroke-linejoin="round" stroke-linecap="round"/>'
+    )
     return "".join(out)
 
 
@@ -404,7 +451,7 @@ ZARR_WEATHER_FEATURES = dict(
         Stage(
             title="Read and sample",
             subtitle="A box as blocks and a table; 100 sites' hourly series to a features table",
-            glyph=eo.g_timeseries_in_hex,
+            glyph=g_sites_series,
             chip_text="gbx_zarr_sample",
         ),
         Stage(

@@ -376,8 +376,10 @@ def _jxl():
 
     a = (np.arange(64 * 64, dtype=np.uint16).reshape(64, 64) * 13) % 4096
     path = os.path.join(tempfile.mkdtemp(prefix="gbx-jxl-"), "t.tif")
-    with open_data(path, "w", driver="GTiff", width=64, height=64, count=1, dtype="uint16", compress="JXL",
-                   JXL_LOSSLESS="YES") as ds:  # fmt: skip
+    jxl = dict(compress="JXL", JXL_LOSSLESS="YES")
+    with open_data(
+        path, "w", driver="GTiff", width=64, height=64, count=1, dtype="uint16", **jxl
+    ) as ds:
         ds.write(a, 1)
     with open_data(path) as ds:
         back, comp = ds.read(1), ds.compression
@@ -421,8 +423,11 @@ def _regexp_and_calc():
     src.GetRasterBand(1).WriteArray(a)
     src.GetRasterBand(2).WriteArray(b)
     src = None
-    with gdal.Run("raster", "calc", input=f"A={os.path.join(d, 'ab.tif')}", calc="(A[1]-A[2])/(A[1]+A[2])",
-                  dialect="muparser", output_data_type="Float32", output=os.path.join(d, "c.tif")):  # fmt: skip
+    ab, c = os.path.join(d, "ab.tif"), os.path.join(d, "c.tif")
+    calc = dict(dialect="muparser", output_data_type="Float32", output=c)
+    with gdal.Run(
+        "raster", "calc", input=f"A={ab}", calc="(A[1]-A[2])/(A[1]+A[2])", **calc
+    ):
         pass
     out = gdal.Open(os.path.join(d, "c.tif"))  # keep the dataset while its band is read
     got = out.GetRasterBand(1).ReadAsArray()

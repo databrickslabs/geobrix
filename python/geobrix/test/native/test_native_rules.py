@@ -88,16 +88,17 @@ def test_the_data_rule(environ, gdal_data, proj_data):
     assert env.get("PROJ_LIB") == environ.get("PROJ_LIB")
 
 
-HOOK_CASES = [  # modules imported after activation, modules imported before it, registrations
-    (
-        ["json", "netCDF4", "rasterio"],
-        [],
-        1,
-    ),  # the first binding that reaches the payload's HDF5, once
-    (["json", "numpy", "shapely"], [], 0),  # none of them reaches it: nothing is loaded
+# modules imported after activation, modules imported before it, registrations
+HOOK_CASES = [
+    # the first binding that reaches the payload's HDF5, once
+    (["json", "netCDF4", "rasterio"], [], 1),
+    # none of them reaches it: nothing is loaded
+    (["json", "numpy", "shapely"], [], 0),
     (["osgeo.gdal"], [], 1),
-    (["databricks.labs.gbx._rs"], [], 1),  # a Rust kernel links the payload's libgdal
-    ([], ["rasterio"], 1),  # imported before activation: registered at once, no hook
+    # a Rust kernel links the payload's libgdal
+    (["databricks.labs.gbx._rs"], [], 1),
+    # imported before activation: registered at once, no hook
+    ([], ["rasterio"], 1),
 ]
 
 

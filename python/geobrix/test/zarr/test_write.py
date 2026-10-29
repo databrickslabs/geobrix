@@ -2482,3 +2482,113 @@ def test_a_traced_aligned_create_reports_each_task_and_its_packs(
         assert t["packs"] and all(
             p["bytes"] > 0 and p["how"] == "copy" for p in t["packs"]
         )
+
+
+def _failing_nested_create(
+    spark, drop, tmp_path, no_hooks, label, seeded=None, wid=None
+):
+    """A create of the nested variable grp/sub/x from one block (one task, kept so, packs
+    closing at once) that fails on its fifth chunk, after four packs are written."""
+    table, root = _table(label), tmp_path / f"root_{label}"
+    drop(table)
+    sizes = _write._sizes
+    no_hooks.setattr(_write, "_sizes", lambda: {**sizes(), "roll_bytes": 1})
+    no_hooks.setattr(_write, "_spread_out", lambda spark, plan, frame: frame)
+    no_hooks.setattr(_write, "_FAULT", ("grp/sub/x", "c/1/0/0"))
+    if seeded is not None:
+        real = _write._write_files
+
+        def seeding(spark_, plan):
+            seeded(root)
+            return real(spark_, plan)
+
+        no_hooks.setattr(_write, "_write_files", seeding)
+    blocks = _blocks(spark, ("grp/sub/x", (0, 0, 0), _cube_values())).coalesce(1)
+    with pytest.raises(Exception, match="test fault"):
+        gbx_zarr_write(
+            blocks,
+            table,
+            root=str(root),
+            chunks=CHUNKS,
+            shards=False,
+            write_id=wid,
+            spark=spark,
+        )
+    return table, root
+
+
+def test_a_failed_create_of_a_nested_variable_leaves_nothing_and_runs_again(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    table, root = _failing_nested_create(spark_delta, drop, tmp_path, no_hooks, "nest")
+    assert not (
+        root / "data"
+    ).exists()  # data/grp/sub/x/<write_id> and its parents went
+    no_hooks.setattr(_write, "_FAULT", None)
+    gbx_zarr_write(
+        _blocks(spark_delta, ("grp/sub/x", (0, 0, 0), _cube_values())),
+        table,
+        root=str(root),
+        chunks=CHUNKS,
+        shards=False,
+        spark=spark_delta,
+    )
+    np.testing.assert_array_equal(
+        _read(spark_delta, table, "grp/sub/x"), _cube_values()
+    )
+
+
+def test_a_failed_nested_create_keeps_another_writes_packs_and_user_files(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    keep = []
+
+    def seed(root):
+        keep[:] = [
+            root / "data" / "grp" / "sub" / "x" / ("0" * 32) / "part-other.zpack",
+            root / "data" / "grp" / "notes.txt",
+            root / "data" / "grp" / "sub" / "mine.txt",
+        ]
+        for f in keep:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(b"keep me")
+
+    wid = uuid.uuid4().hex
+    _, root = _failing_nested_create(
+        spark_delta, drop, tmp_path, no_hooks, "nestk", seeded=seed, wid=wid
+    )
+    assert keep and all(f.read_bytes() == b"keep me" for f in keep)
+    assert not (root / "data" / "grp" / "sub" / "x" / wid).exists()
+
+
+def test_an_aligned_create_whose_input_changes_between_passes_is_refused(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """The pack stage trusts the position pass: if the input it then evaluates holds other
+    blocks (a non-deterministic source), a piece that is not a whole chunk must stop the
+    write, never be stored as one. The plan here sees whole-chunk blocks while the frame the
+    pack stage gets holds half-chunk blocks of the same cube."""
+    chunks, shards, cut = ALIGNED["one-chunk-blocks"]
+    half = _cut_blocks(spark_delta, (6, 5, 6), _cube_values())
+    real = _write._planned_blocks
+
+    def changed(data, variables, seen=None, known=None):
+        inp = real(data, variables, seen=seen, known=known)
+        inp.frame = half  # what the second evaluation of the input yields
+        return inp
+
+    no_hooks.setattr(_write, "_planned_blocks", changed)
+    no_hooks.setattr(_write, "explode_function", _refuse("explode"))
+    table, root = _table("chg"), tmp_path / "root_chg"
+    drop(table)
+    with pytest.raises(Exception, match="changed between the two passes"):
+        gbx_zarr_write(
+            _cut_blocks(spark_delta, cut, _cube_values()),
+            table,
+            root=str(root),
+            chunks=chunks,
+            shards=shards,
+            spark=spark_delta,
+        )
+    assert not spark_delta.catalog.tableExists(table)
+    assert not (root / "data").exists()

@@ -2553,7 +2553,7 @@ def _coordinate_rows(spark, plan: _Plan, snap, docs: _Docs | None, *, rebase=Fal
                 (FuseRangeReader, open_manifest_array, read_box, ManifestStore),
             )
         # one pack per coordinate, each a copy to the store: made side by side
-        with ThreadPoolExecutor(max(1, len(writers))) as pool:
+        with ThreadPoolExecutor(max(1, min(16, len(writers)))) as pool:
             list(pool.map(PackWriter.close, writers.values()))
     except BaseException:
         for writer in writers.values():
@@ -2965,34 +2965,44 @@ def _check_new_root(root: str, owner: str) -> None:
         )
 
 
-def _remove_write_files(root: str, write_id: str) -> None:
-    """Remove the pack files a failed create wrote (``<root>/data/<array>/<write_id>``),
-    and the array directories that leaves empty, so the root is empty again and the same
-    create can run again there. Only this write's directories are touched; nothing
-    references them, since the create committed nothing. Cleanup: a failure is logged.
-    """
+def _written_arrays(plan: _Plan) -> set:
+    """Every array a write may have put packs of: its arrays (data and coordinates, nested
+    names such as ``grp/sub/x`` included) and the coordinates it patches."""
+    return (
+        set(plan.arrays)
+        | set(plan.task_arrays)
+        | set(plan.coords)
+        | {p.name for p in plan.patches}
+    )
+
+
+def _remove_write_files(root: str, write_id: str, arrays) -> None:
+    """Remove the pack files a failed create wrote, ``<root>/data/<array>/<write_id>`` for
+    each of ``arrays`` (the write's own, nested names included), and the parent directories
+    that leaves empty up to ``data``, so the root is empty again and the same create can run
+    again there. Only this write's directories are touched; nothing references them, since
+    the create committed nothing. Cleanup: a failure is logged."""
     import shutil
 
-    data = os.path.join(root, "data")
-    try:
-        names = os.listdir(data)
-    except OSError:
-        return
-    for name in names:
-        array_dir = os.path.join(data, name)
+    data = os.path.normpath(os.path.join(root, "data"))
+    for name in sorted(set(arrays)):
+        target = os.path.normpath(os.path.join(data, name, write_id))
+        if not target.startswith(data + os.sep):
+            continue  # a name that does not stay under data/ is not a pack directory
         try:
-            shutil.rmtree(os.path.join(array_dir, write_id), ignore_errors=False)
+            shutil.rmtree(target)
         except FileNotFoundError:
-            pass
-        except OSError:
-            _LOG.warning(
-                "could not remove %s", os.path.join(array_dir, write_id), exc_info=True
-            )
             continue
-        try:
-            os.rmdir(array_dir)  # only when now empty
         except OSError:
-            pass
+            _LOG.warning("could not remove %s", target, exc_info=True)
+            continue
+        parent = os.path.dirname(target)
+        while parent != data and parent.startswith(data + os.sep):
+            try:
+                os.rmdir(parent)  # only when now empty
+            except OSError:
+                break
+            parent = os.path.dirname(parent)
     try:
         os.rmdir(data)
     except OSError:
@@ -3285,6 +3295,6 @@ def gbx_zarr_write(
             else not adopt and not _table_exists(spark, target)
         )
         if claimed and gone:
-            _remove_write_files(data_root, write_id)
+            _remove_write_files(data_root, write_id, _written_arrays(plan))
             release_root(spark, data_root, owner, "managed")
         raise

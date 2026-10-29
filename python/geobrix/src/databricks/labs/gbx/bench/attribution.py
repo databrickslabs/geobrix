@@ -271,6 +271,36 @@ _NO_REST_REASON = (
     "the Spark REST API did not answer for the shape's jobs, so whether a worker that ran it "
     "exited cannot be ruled out"
 )
+# A read that stops early (CollectLimit: take, head, first, limit; GlobalLimit and LocalLimit;
+# TakeOrderedAndProject) can end a worker before the read without failing a task.
+_EARLY_STOP = re.compile(
+    r"\b(CollectLimit|GlobalLimit|LocalLimit|TakeOrderedAndProject)\b"
+)
+_EARLY_STOP_REASON = (
+    "an early-stop plan can end a worker before the read ({node} in the physical plan), so "
+    "its peak may be lost"
+)
+_NO_PLAN_REASON = (
+    "the shape's physical plan could not be read, so an early stop, which can end a worker "
+    "before the read, cannot be ruled out"
+)
+
+
+def _early_stop_node(df) -> Optional[str]:
+    """The first early-stop node in the physical plan of `df`: "" when there is none, None when the
+    plan text cannot be read. The text is the extended plan `explain` prints (`readers._plan_text`,
+    which the bench's other plan checks read; it works on Connect too)."""
+    from databricks.labs.gbx.bench.readers import _plan_text
+
+    try:
+        text = _plan_text(df)
+    except Exception:  # noqa: BLE001 - no plan text: an early stop cannot be ruled out
+        return None
+    _, found, physical = text.partition("== Physical Plan ==")
+    if not found:
+        return None
+    m = _EARLY_STOP.search(physical)
+    return m.group(1) if m else ""
 
 
 def _worker_finder():
@@ -341,8 +371,7 @@ def _surveyor(find_workers):
 
     ``scope`` names the executor (host and JVM). ``members`` maps ``scope:pid:start`` (the start
     time tells a reused pid) to the process's CPU ticks (``utime + stime``), its high-water mark
-    in MB, whether it is a zombie, whether it is a daemon (the process that forks workers), and
-    ``via``: the key of the daemon it was forked by, which names its pool ("" when it has none).
+    in MB, whether it is a zombie, and whether it is a daemon (the process that forks workers).
     """
 
     def stat(pid):
@@ -370,18 +399,12 @@ def _surveyor(find_workers):
 
         jvm, parents, daemons = find_workers(me)
         scope = f"{socket.gethostname()}:{jvm}"
-        seen = {}
+        members = {}
         for pid in parents:
             info = stat(pid)
             if info is not None:
-                seen[pid] = info
-        members = {}
-        for pid, info in seen.items():
-            owner, via = parents[pid], ""
-            if owner in daemons and owner in seen:
-                via = f"{scope}:{owner}:{seen[owner]['start']}"
-            info.update(pid=pid, daemon=pid in daemons, via=via)
-            members[f"{scope}:{pid}:{info['start']}"] = info
+                info.update(pid=pid, daemon=pid in daemons)
+                members[f"{scope}:{pid}:{info['start']}"] = info
         return scope, members
 
     return survey, alive
@@ -390,34 +413,30 @@ def _surveyor(find_workers):
 def _read_judge():
     """``judge(scope, members, baseline)`` -> ``(hwm, ran, lost)`` for one executor.
 
-    `baseline` is what the reset noted: ``cpu`` (worker -> CPU ticks), ``via`` (worker -> its
-    daemon, which names its pool) and ``daemons``. A daemon is not a worker: only the processes
-    it forks are counted. The shape's pools are the daemons that have a worker new since the
-    reset or with CPU ticks past its entry (it ran), and only those are judged. Another pool's
-    idle worker, the warm-up of an earlier test or a straggler of an earlier form, neither
-    counts toward the reading nor voids it. ``hwm`` and ``ran`` are the highest mark, and the
-    count, of the live workers of those pools that ran. ``lost`` counts their workers that have
-    exited since the reset (gone, or zombies), and with them their marks. Spark stops a worker
-    that has idled 60 s, and nothing the kernel keeps says whether one that has gone was idle or
-    had run: the daemon ignores SIGCHLD, so its ``cutime + cstime`` never gets a reaped child's
-    CPU time. Any worker of the shape's pools that has gone voids the reading.
+    `baseline` is what the reset noted: ``cpu`` (worker -> CPU ticks) and ``daemons``. A daemon is
+    not a worker: only the processes it forks are counted. ``hwm`` and ``ran`` are the highest
+    mark, and the count, of the live workers that are new or whose CPU ticks passed their entry:
+    those ran the shape. ``lost`` counts the workers that have exited since the reset (gone, or
+    zombies), and with them their marks. Any worker that was there at the reset voids the reading,
+    whichever pool it is in: nothing the kernel keeps says whether a worker that has gone had run
+    (the daemon ignores SIGCHLD, so its ``cutime + cstime`` never gets a reaped child's CPU time),
+    and Spark stops an idle worker after 60 s, of any pool. So another pool's idle worker voids it
+    too, because the judge cannot tell that it did not run.
     """
 
     def judge(scope, members, baseline):
-        cpu0, via0, daemons0 = baseline["cpu"], baseline["via"], baseline["daemons"]
-        workers = {k: m for k, m in members.items() if not m["daemon"]}
-        pools = {m["via"] for k, m in workers.items() if m["cpu"] > cpu0.get(k, -1)}
+        cpu0, daemons0 = baseline["cpu"], baseline["daemons"]
         hwm, ran, lost = 0.0, 0, 0
-        for key, m in workers.items():
-            if m["via"] not in pools:
-                continue
+        for key, m in members.items():
+            if m["daemon"]:
+                continue  # a daemon is not a worker: the processes it forks are
             if m["zombie"]:
                 lost += 1
             elif m["cpu"] > cpu0.get(key, -1):  # a new worker has no entry
                 hwm, ran = max(hwm, m["mb"]), ran + 1
         for key in cpu0:
             gone = key.startswith(f"{scope}:") and key not in members
-            if gone and key not in daemons0 and via0[key] in pools:
+            if gone and key not in daemons0:
                 lost += 1
         return hwm, ran, lost
 
@@ -428,7 +447,7 @@ def _sweep_task(reset, survey, alive, judge, baseline):
     """The barrier task of one sweep, over the shape's Python workers of its executor.
 
     With `reset` it clears each worker's high-water mark and returns (as ``ticks``) what to
-    compare with later: each process's CPU ticks (``m,<key>,<ticks>,<1 for a daemon>,<daemon>``); how many
+    compare with later: each process's CPU ticks (``m,<key>,<ticks>,<1 for a daemon>``); how many
     live workers it could not reset is ``missed``. Without, it returns what `_read_judge` makes
     of them against `baseline`: the highest ``VmHWM`` (MB) of the workers that ran since
     (``hwm``, ``ran`` of them), and ``lost`` workers that have exited. An idle worker's RSS,
@@ -440,7 +459,7 @@ def _sweep_task(reset, survey, alive, judge, baseline):
         for key, m in members.items():
             if m["zombie"]:
                 continue  # gone, with nothing to reset
-            ticks.append(f"m,{key},{m['cpu']},{int(m['daemon'])},{m['via']}")
+            ticks.append(f"m,{key},{m['cpu']},{int(m['daemon'])}")
             try:
                 with open(f"/proc/{m['pid']}/clear_refs", "w") as fh:
                     fh.write("5")
@@ -575,9 +594,9 @@ class WorkerPeak:
     run (the daemon ignores SIGCHLD, so a reaped worker's CPU time is not added to the daemon's).
     So the reading is never a bare maximum over the workers that are left:
 
-    - a worker of the shape's pool that was there at the reset and has gone voids it. The shape's
-      pool is the daemon whose workers ran; another pool's idle worker, which Spark also stops
-      after 60 s, neither counts nor voids. A daemon is not a worker.
+    - a worker that was there at the reset, in any pool, and has gone voids it. Spark stops an
+      idle pool's workers after 60 s, so an idle worker of another pool counts too: the judge
+      cannot tell that it did not run. A daemon is not a worker.
     - for every shape, the Spark REST API's jobs and stages of the shape must show no failed or
       killed task and no retry (a worker that was killed, and its task run again on a new one,
       leaves nothing else), and must answer: an empty or missing reply voids it.
@@ -586,21 +605,23 @@ class WorkerPeak:
       its tasks must show every executor releasing a worker at least every 50 s (and the first
       read after the last), or the reading is NULL. That leaves 10 s of margin, for a task that
       ends that long after its worker is released.
+    - the physical plan of the DataFrame the shape ran must hold no early stop (CollectLimit,
+      GlobalLimit, LocalLimit, TakeOrderedAndProject): a read that stops early ends its workers
+      without failing a task (``take``, ``head``, ``first``, ``limit``), so the plan decides it.
 
-    Not covered: a worker that the JVM destroys without failing a task (a read that stops early,
-    such as ``limit``) while another worker of the pool ran on. If every worker that ran is gone,
-    nothing is left to count and the reading is NULL.
+    Not covered: an early stop in a query that the DataFrame does not return (a ``run`` callable
+    that reads rows on the side). None of the bench's forms does one; the plan check cannot see it.
 
-    ``read()`` is None, with the reason in ``reason``, wherever the reset cannot be shown to
+    ``read(df)`` is None, with the reason in ``reason``, wherever the reset cannot be shown to
     reach every worker: off Linux, on a Connect session, when the Spark REST API does not give
     the executors' slots, when they differ from ``defaultParallelism`` (a stale
     ``spark.default.parallelism`` would leave an executor without a task and still read a
     number), when a live worker's counter cannot be reset, when the sweep did not get a pool of
     its own, and when no slot frees up within ``TIMEOUT_S`` (a busy cluster). It is also None,
     saying so, in each case above, when an executor that held workers at the reset is gone, when
-    workers exit with their task (``spark.python.worker.reuse=false``), and when no Python worker
-    ran during the shape (a plan with no Python in it). It is not a number that leaves out a
-    worker that ran.
+    workers exit with their task (``spark.python.worker.reuse=false``), when no Python worker ran
+    during the shape (a plan with no Python in it), when the physical plan has an early stop, and
+    when the plan cannot be read. It is not a number that leaves out a worker that ran.
 
     Why not sampling: a sampler would have to run inside the workers during the shape and
     compete with it for slots. The reset needs no thread, and it costs two short jobs. It
@@ -616,7 +637,7 @@ class WorkerPeak:
         self.reason: Optional[str] = None
         self._slots = 0
         # what the reset noted: worker -> CPU ticks, and the daemons
-        self._baseline: Dict = {"cpu": {}, "via": {}, "daemons": set()}
+        self._baseline: Dict = {"cpu": {}, "daemons": set()}
         self._scopes: set = set()  # the executors that held workers at the reset
         self._t0: Optional[float] = None  # when the reset ended
         if is_connect(spark):
@@ -739,14 +760,11 @@ class WorkerPeak:
                 missed = sum(r.missed for r in rows)
                 if missed:
                     raise RuntimeError(f"{missed} live Python worker(s) not resettable")
-                self._baseline = {"cpu": {}, "via": {}, "daemons": set()}
+                self._baseline = {"cpu": {}, "daemons": set()}
                 for r in rows:
                     for entry in filter(None, r.ticks.split(";")):
-                        _, key, ticks, daemon, via = entry.split(
-                            ","
-                        )  # "m,key,cpu,daemon,via"
+                        _, key, ticks, daemon = entry.split(",")  # "m,key,cpu,daemon"
                         self._baseline["cpu"][key] = int(ticks)
-                        self._baseline["via"][key] = via
                         if daemon == "1":
                             self._baseline["daemons"].add(key)
                 self._scopes = {r.scope for r in rows}
@@ -767,8 +785,18 @@ class WorkerPeak:
         except Exception:  # noqa: BLE001 - no answer: no way to rule it out
             return _NO_REST_REASON
 
-    def read(self) -> Optional[float]:
+    def read(self, df) -> Optional[float]:
+        """The shape's peak (MB), or None with the reason in ``reason``. `df` is the DataFrame the
+        shape ran: its physical plan is checked for an early stop before any worker is read.
+        """
         if self.reason is not None:
+            return None
+        node = _early_stop_node(df) if df is not None else None
+        if node is None:
+            self.reason = _NO_PLAN_REASON
+            return None
+        if node:
+            self.reason = _EARLY_STOP_REASON.format(node=node)
             return None
         try:
             rows = self._sweep(reset=False)

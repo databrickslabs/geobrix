@@ -380,7 +380,7 @@ def test_connect_session_records_unavailable_metrics_instead_of_failing():
         _Forbidden()
     )  # nothing reaches every worker from Connect
     peak.start()
-    assert peak.read() is None and "Connect" in peak.reason
+    assert peak.read(None) is None and "Connect" in peak.reason
     # Two stages (an exchange between them); the Python stage's pipeline holds a nested one.
     graph = {
         0: _Node("AdaptiveSparkPlan", {}, [1]),
@@ -443,6 +443,75 @@ def _pool_workers(marker):
             continue  # exited while we looked, or not ours to read
     daemon = {p for p, a in argv.items() if b"pyspark.daemon" in a and p in pool}
     return [(p, rss.get(p, 0)) for p in daemon if ppid[p] in daemon]
+
+
+_SWEEP_MARK = (
+    b"GBX_PEAK_SWEEP=1"  # the worker sweeps' environment entry (bench/attribution.py)
+)
+
+
+def _forked_workers():
+    """{pid: environ} of the Python workers below this process that are not the worker sweeps' own:
+    the processes a `pyspark.daemon` forked. The JVM's daemons (whose parent is no daemon) are left out,
+    they last as long as the session. Reads /proc only."""
+    procs = {}
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/stat") as fh:
+                ppid = int(fh.read().rsplit(")", 1)[1].split()[1])
+            with open(f"/proc/{name}/cmdline", "rb") as fh:
+                argv = fh.read()
+            with open(f"/proc/{name}/environ", "rb") as fh:
+                environ = fh.read().split(b"\0")
+        except (OSError, ValueError, IndexError):
+            continue  # exited while we looked, or not ours to read
+        procs[int(name)] = (ppid, argv, environ)
+
+    def daemon(pid):
+        return pid in procs and b"pyspark.daemon" in procs[pid][1]
+
+    children = {}
+    for pid, (ppid, _, _) in procs.items():
+        children.setdefault(ppid, []).append(pid)
+    below, todo = set(), [os.getpid()]
+    while todo:
+        for child in children.get(todo.pop(), []):
+            if child not in below:
+                below.add(child)
+                todo.append(child)
+    return {
+        pid: procs[pid][2]
+        for pid in below
+        if daemon(pid) and daemon(procs[pid][0]) and _SWEEP_MARK not in procs[pid][2]
+    }
+
+
+def _settle(timeout=100.0):
+    """Ends the Python workers that earlier tests left, before this test's reset.
+
+    The reset notes every live worker, and a worker of any pool that is stopped after the reset voids
+    the reading (the judge cannot tell that it did not run). Spark stops an idle pool's workers 60 to 70 s
+    after the pool's last release. A test pool (GBX_TEST_POOL) is never used again, so its workers are
+    killed at once. The default pool's are waited for: Spark still holds them, and a killed one would be
+    handed to the next user of that pool.
+    """
+    end = time.time() + timeout
+    while True:
+        workers = _forked_workers()
+        if not workers:
+            return
+        for pid, environ in workers.items():
+            if any(e.startswith(b"GBX_TEST_POOL=") for e in environ):
+                try:
+                    os.kill(pid, 9)
+                except OSError:
+                    pass  # gone meanwhile
+        assert (
+            time.time() < end
+        ), f"workers of an earlier test did not stop: {sorted(workers)}"
+        time.sleep(0.5)
 
 
 class _Shapes:
@@ -514,11 +583,12 @@ class _Shapes:
         assert peak.reason is None, peak.reason
         peak.start()
         df.collect()
-        return peak.read()
+        return peak.read(df)
 
 
 @LINUX
 def test_worker_peak_is_the_shapes_not_the_workers_lifetime(spark_session_local):
+    _settle()
     with _own_worker_pool(spark_session_local):
         s = _Shapes(spark_session_local)
         heavy, trivial = s.heavy_shape(), s.trivial_shape()
@@ -535,6 +605,7 @@ def test_worker_peak_reaches_every_python_worker_not_one_per_slot(spark_session_
     # first-in-first-out: a sweep that only reads and resets the process it runs in lands on other
     # workers than the shape did, and a shape that held 400 MB read as the pool's baseline
     # (125 MB here, 245 MB in the full file, 298 MB on the CI runner).
+    _settle()
     with _own_worker_pool(spark_session_local) as pool:
         s = _Shapes(spark_session_local)
         warm, heavy, trivial = (
@@ -556,6 +627,7 @@ def test_worker_peak_leaves_out_idle_workers_that_hold_memory(spark_session_loca
     # Idle pooled workers hold about 250 MB each, left by earlier shapes. A trivial shape runs on
     # one lean worker (the pool hands out first-in-first-out, and the fat ones went to the back),
     # so its reading is that worker's, not the 250 MB the pool holds.
+    _settle()
     with _own_worker_pool(spark_session_local) as pool:
         s = _Shapes(spark_session_local)
         warm, fat, trivial = (
@@ -573,14 +645,16 @@ def test_worker_peak_leaves_out_idle_workers_that_hold_memory(spark_session_loca
 
 @LINUX
 def test_worker_peak_is_none_when_no_python_worker_ran(spark_session_local):
+    _settle()
     spark = spark_session_local
     peak = attribution.WorkerPeak(spark)
     assert peak.reason is None, peak.reason
     peak.start()
-    spark.range(1000, numPartitions=4).selectExpr(
+    df = spark.range(1000, numPartitions=4).selectExpr(
         "sum(id)"
-    ).collect()  # no Python in the plan
-    assert peak.read() is None and "no Python worker ran" in peak.reason
+    )  # no Python in the plan
+    df.collect()
+    assert peak.read(df) is None and "no Python worker ran" in peak.reason
 
 
 def _until(cond, what, timeout=90.0):
@@ -668,6 +742,7 @@ def test_worker_peak_is_none_when_a_worker_that_was_there_exits_before_the_read(
     # is gone by the read. The reading used to be the live workers' (54 MB). Nothing the kernel
     # keeps says whether a worker that has gone had run, so an idle one voids the reading too.
     spark = spark_session_local
+    _settle()
     with _own_worker_pool(spark) as pool:
         s = _Shapes(spark)
         held = _Held(spark, tmp_path)
@@ -699,7 +774,7 @@ def test_worker_peak_is_none_when_a_worker_that_was_there_exits_before_the_read(
         held.go()
         thread.join()
     assert "error" not in box, box
-    assert peak.read() is None and "exited before the read" in peak.reason
+    assert peak.read(shape) is None and "exited before the read" in peak.reason
 
 
 def _tasks_done(spark):
@@ -721,6 +796,9 @@ def test_worker_peak_is_none_after_spark_stops_a_finished_worker(
     from pyspark.sql import functions as F
 
     spark = spark_session_local
+    # Settled first: the other perf test's idle worker, left in its own pool, would be stopped by Spark
+    # during this shape and read as lost (it was, before the judge looked at every pool).
+    _settle()
     with _own_worker_pool(spark):
         s = _Shapes(spark)
 
@@ -743,7 +821,7 @@ def test_worker_peak_is_none_after_spark_stops_a_finished_worker(
     peak = attribution.WorkerPeak(spark)
     peak.start()
     shape.collect()
-    assert peak.read() is None
+    assert peak.read(shape) is None
     assert (
         "exited before the read" if pool == "warm" else "may have exited"
     ) in peak.reason
@@ -842,6 +920,7 @@ def test_a_long_shape_reads_only_if_the_pool_never_idled_for_a_minute(
     spark_session_local, monkeypatch, gap, reads
 ):
     # The shape was quick; only its task end times (here made up) say how it looked to the pool.
+    _settle()
     with _own_worker_pool(spark_session_local):
         s = _Shapes(spark_session_local)
         warm, shape = s.trivial_shape(s.slots), s.heavy_shape()
@@ -857,7 +936,7 @@ def test_a_long_shape_reads_only_if_the_pool_never_idled_for_a_minute(
         f"{spark_session_local.sparkContext.applicationId}/executors")][0]  # fmt: skip
     ends = {ex: [now - 300 + i * gap for i in range(int(300 / gap) + 1)]}
     monkeypatch.setattr(attribution, "_get", _fake_rest(ends))
-    got = peak.read()
+    got = peak.read(shape)
     assert (got is not None and got >= 400) is reads, (got, peak.reason)
     assert reads or "may have exited" in peak.reason
 
@@ -904,7 +983,7 @@ thread = threading.Thread(target=killer)
 thread.start()
 shape.collect()  # the killed task is retried on a new worker that holds nothing
 thread.join()
-print(json.dumps({"peak": peak.read(), "reason": peak.reason}))
+print(json.dumps({"peak": peak.read(shape), "reason": peak.reason}))
 """
 
 
@@ -931,12 +1010,15 @@ def test_worker_peak_is_none_when_a_task_is_retried_after_its_worker_was_killed(
 
 
 @LINUX
+@pytest.mark.parametrize("pool", ["warm", "cold"])
 def test_worker_peak_is_none_when_a_read_that_stops_early_destroys_the_workers(
-    spark_session_local,
+    spark_session_local, pool
 ):
-    # `limit` makes the JVM stop reading, and Spark destroys the workers without failing a task.
-    # The pool's new daemon was counted as a worker that ran (51 MB); a daemon is not a worker.
+    # `limit` makes the JVM stop reading: Spark destroys the heavy worker without failing a task, and
+    # another action of the session runs on a worker that stays. The reading was that worker's (51 MB).
+    # The physical plan of the shape holds the early stop, and the plan decides it.
     spark = spark_session_local
+    _settle()
     from pyspark.sql import functions as F
 
     @F.udf("long")
@@ -948,20 +1030,29 @@ def test_worker_peak_is_none_when_a_read_that_stops_early_destroys_the_workers(
         return x
 
     with _own_worker_pool(spark):
+        s = _Shapes(spark)
+        warm = s.trivial_shape(s.slots) if pool == "warm" else None
         shape = spark.range(1000, numPartitions=2).select(first_is_heavy("id")).limit(1)
+        other = s.trivial_shape(s.slots)  # the second action, on the same pool
+    if warm is not None:
+        warm.collect()
     peak = attribution.WorkerPeak(spark)
+    assert peak.reason is None, peak.reason
     peak.start()
-    shape.collect()
-    assert peak.read() is None and peak.reason
+    shape.collect()  # the limit ends the read: the heavy worker goes, and no task fails
+    other.collect()  # another action of the session, on a worker that stays
+    assert peak.read(shape) is None
+    assert "an early-stop plan can end a worker before the read" in peak.reason
 
 
 @LINUX
-def test_worker_peak_stands_when_another_pools_idle_worker_exits(
+def test_worker_peak_is_none_when_another_pools_idle_worker_exits(
     spark_session_local, tmp_path
 ):
-    # The pool of an earlier test still holds idle workers, and Spark stops them (killed here).
-    # They are not the shape's pool: they neither void the reading nor count toward it.
+    # The pool of an earlier test still holds idle workers, and Spark stops them (killed here). They did
+    # not run this shape, but the reading cannot tell that: any worker that was there at the reset voids it.
     spark = spark_session_local
+    _settle()
     with _own_worker_pool(spark) as other:
         warm = _Shapes(spark).two_workers_per_task()
     with _own_worker_pool(spark):
@@ -983,7 +1074,94 @@ def test_worker_peak_stands_when_another_pools_idle_worker_exits(
         held.go()
         thread.join()
     assert "error" not in box, box
-    assert peak.read() >= 400 and peak.reason is None
+    assert peak.read(shape) is None and peak.reason == attribution._LOST_REASON
+
+
+@LINUX
+def test_worker_peak_is_none_when_one_of_two_pools_runners_exits(
+    spark_session_local, tmp_path
+):
+    # A shape on two worker environments. Pool A's tasks each hold 400 MB and return, so every runner of
+    # pool A is idle afterwards; Spark's idle stop takes them (killed here) while pool B's work runs on.
+    # The reading was pool B's small mark (51.6 MB) with no reason: the judge skipped pool A, since none
+    # of its runners was left to show it had run. Any worker that was there at the reset voids the reading.
+    from pyspark.sql import functions as F
+
+    spark = spark_session_local
+    _settle()
+    where = tmp_path / "a"
+    where.mkdir()
+    w = str(where)
+    with _own_worker_pool(spark):
+        s = _Shapes(spark)
+        warm_a = s.two_workers_per_task()  # leaves idle workers of pool A at the reset
+
+        @F.udf("long")
+        def hog(x):
+            import os
+
+            b = bytearray(400 * 1024 * 1024)
+            for i in range(0, len(b), 4096):
+                b[i] = 1  # touch every page
+            with open(f"{w}/pid{x}", "w") as fh:
+                fh.write(str(os.getpid()))
+            return x
+
+        shape_a = spark.range(s.slots, numPartitions=s.slots).select(hog("id"))
+
+    @F.udf("long")
+    def busy(x):
+        return sum(range(3_000_000))  # CPU time, so that pool B's worker shows it ran
+
+    with _own_worker_pool(spark):
+        warm_b = spark.range(1, numPartitions=1).select(busy("id"))
+        shape_b = spark.range(1, numPartitions=1).select(busy("id"))
+    warm_a.collect()
+    warm_b.collect()  # pool B's worker is there at the reset too
+    peak = attribution.WorkerPeak(spark)
+    assert peak.reason is None, peak.reason
+    peak.start()
+    shape_a.collect()  # every task of pool A ran, and its worker is now idle
+    shape_b.collect()  # pool B's worker ran too
+    doomed = [int((where / f"pid{x}").read_text()) for x in range(s.slots)]
+    for pid in doomed:
+        os.kill(pid, 9)
+    _until(lambda: all(_gone(pid) for pid in doomed), "the daemons to reap them")
+    assert peak.read(shape_a) is None and peak.reason == attribution._LOST_REASON
+
+
+@LINUX
+def test_the_reading_is_none_when_the_plan_is_not_given_or_stops_early(
+    spark_session_local,
+):
+    spark = spark_session_local
+    peak = attribution.WorkerPeak(spark)
+    assert peak.read(None) is None and peak.reason == attribution._NO_PLAN_REASON
+    peak = attribution.WorkerPeak(spark)
+    limited = spark.range(100, numPartitions=2).limit(3)
+    assert peak.read(limited) is None
+    assert peak.reason == attribution._EARLY_STOP_REASON.format(node="CollectLimit")
+
+
+@pytest.mark.parametrize(
+    "build, names",
+    [
+        (lambda s: s.range(100, numPartitions=2).select("id"), ("",)),
+        (lambda s: s.range(100, numPartitions=2).limit(3), ("CollectLimit",)),
+        (
+            lambda s: s.range(100, numPartitions=2).orderBy("id").limit(3),
+            ("TakeOrderedAndProject",),
+        ),
+        (
+            lambda s: s.range(100, numPartitions=2).limit(3).agg({"id": "count"}),
+            ("GlobalLimit", "LocalLimit"),
+        ),
+        (lambda s: s.sql("SELECT id FROM range(100) LIMIT 2"), ("CollectLimit",)),
+    ],
+)
+def test_an_early_stop_is_found_in_the_physical_plan(spark_session_local, build, names):
+    assert attribution._early_stop_node(build(spark_session_local)) in names
+    assert attribution._early_stop_node(None) is None  # a plan that cannot be read
 
 
 @pytest.mark.parametrize(
@@ -992,8 +1170,8 @@ def test_worker_peak_stands_when_another_pools_idle_worker_exits(
         ("nothing moved", {"w1": (5, 0), "w2": (7, 0), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (0, 0, 0)),
         ("a worker ran and is alive", {"w1": (9, 400), "w2": (7, 0), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (400, 1, 0)),
         ("a worker of the pool that ran has gone", {"w1": (9, 400), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (400, 1, 1)),
-        ("a worker has gone and nothing ran", {"w1": (5, 0), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (0, 0, 0)),
-        ("another pool's straggler has gone", {"w1": (9, 400), "w2": (7, 0), "d": (100, 0), "e": (50, 0)}, (400, 1, 0)),
+        ("a worker has gone and nothing ran", {"w1": (5, 0), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (0, 0, 1)),
+        ("another pool's straggler has gone", {"w1": (9, 400), "w2": (7, 0), "d": (100, 0), "e": (50, 0)}, (400, 1, 1)),
         ("another pool's fat idle worker is not counted", {"w1": (9, 90), "w2": (7, 0), "x1": (3, 250), "d": (100, 0), "e": (50, 0)}, (90, 1, 0)),
         ("a new worker ran", {"w1": (5, 0), "w2": (7, 0), "w3": (2, 80), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (80, 1, 0)),
         ("a zombie of a pool that ran", {"w1": (9, 0, "z"), "w2": (7, 0), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (0, 0, 1)),
@@ -1002,24 +1180,16 @@ def test_worker_peak_stands_when_another_pools_idle_worker_exits(
         ("only the daemons have gone", {"w1": (5, 0), "w2": (7, 0), "x1": (3, 0)}, (0, 0, 0)),
     ],
 )  # fmt: skip
-def test_the_read_counts_the_workers_of_the_pool_that_ran_that_have_gone(
+def test_the_read_counts_the_workers_that_ran_and_voids_any_that_have_gone(
     case, members, want
 ):
-    """The judgement on synthetic /proc numbers. The baseline: workers w1 (5 ticks) and w2 (7)
-    of daemon d (100), and x1 (3) of daemon e (50). A worker of a pool that ran that has gone voids
-    the reading; a daemon never counts."""
+    """The judgement on synthetic /proc numbers. The baseline: workers w1 (5 ticks) and w2 (7) of
+    daemon d (100), and x1 (3) of daemon e (50). Any worker that was there at the reset and has gone
+    voids the reading, whichever pool it is in; a daemon never counts."""
     scope = "h:1"
     key = lambda k: f"{scope}:{k}"  # noqa: E731
-    pool = {"w": key("d"), "x": key("e")}
     baseline = {
         "cpu": {key("w1"): 5, key("w2"): 7, key("x1"): 3, key("d"): 100, key("e"): 50},
-        "via": {
-            key("w1"): key("d"),
-            key("w2"): key("d"),
-            key("x1"): key("e"),
-            key("d"): "",
-            key("e"): "",
-        },
         "daemons": {key("d"), key("e")},
     }
     live = {
@@ -1028,7 +1198,6 @@ def test_the_read_counts_the_workers_of_the_pool_that_ran_that_have_gone(
             "mb": v[1],
             "zombie": len(v) > 2,
             "daemon": k in "def",
-            "via": pool.get(k[0], "") if k not in "def" else "",
         }
         for k, v in members.items()
     }
@@ -1054,7 +1223,7 @@ from databricks.labs.gbx.bench import attribution
 sys.platform = "linux"  # the slot check runs before any worker is touched
 p = attribution.WorkerPeak(spark)
 p.start()
-print(json.dumps({"peak": p.read(), "reason": p.reason}))
+print(json.dumps({"peak": p.read(spark.range(1)), "reason": p.reason}))
 """
 
 
@@ -1136,7 +1305,11 @@ def test_a_busy_cluster_cannot_stall_the_worker_reset(spark_session_local, monke
     time.sleep(1.5)  # every slot is taken
     peak, t0 = attribution.WorkerPeak(spark), time.time()
     peak.start()
-    assert time.time() - t0 < 6 and peak.read() is None and "timed out" in peak.reason
+    assert (
+        time.time() - t0 < 6
+        and peak.read(spark.range(1)) is None
+        and "timed out" in peak.reason
+    )
     busy.join()
 
 

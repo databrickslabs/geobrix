@@ -2336,3 +2336,116 @@ def test_a_coordinate_copy_that_fails_fails_the_commit(
             _dataset(), table, root=str(root), chunks=CHUNKS, spark=spark_delta
         )
     assert not spark_delta.catalog.tableExists(table)
+
+
+def test_a_create_from_blocks_with_a_scalar_variable(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """A store read as blocks can hold a scalar (a CF grid mapping, ``dims=[]``): a create
+    from a 2-D ``t2m`` block and a scalar ``crs`` block writes both. The position pass's
+    partition count treats only one-dimension blocks as possible coordinates."""
+    t2m = np.arange(120, dtype="float32").reshape(10, 12)
+    crs = np.array(4326, dtype="int32")
+    rows = [
+        (
+            "t2m",
+            ["latitude", "longitude"],
+            [0, 0],
+            [10, 12],
+            None,
+            None,
+            t2m.dtype.str,
+            [10, 12],
+            t2m.tobytes(),
+            None,
+            None,
+        ),
+        (
+            "crs",
+            [],
+            [],
+            [],
+            None,
+            None,
+            crs.dtype.str,
+            [],
+            crs.tobytes(),
+            None,
+            json.dumps({"grid_mapping_name": "latitude_longitude"}),
+        ),
+    ]
+    table, root = _table("scl"), tmp_path / "root_scl"
+    drop(table)
+    gbx_zarr_write(
+        spark_delta.createDataFrame(rows, BLOCKS_SCHEMA),
+        table,
+        root=str(root),
+        chunks={"latitude": 5, "longitude": 6},
+        shards=False,
+        spark=spark_delta,
+    )
+    np.testing.assert_array_equal(_read(spark_delta, table, "t2m"), t2m)
+    arrays = {
+        r["array"]
+        for r in spark_delta.sql(
+            f"SELECT array FROM {table} WHERE kind = 'array' AND tag IS NULL"
+        ).collect()
+    }
+    assert {"t2m", "crs"} <= arrays
+
+
+def test_the_partition_count_takes_a_scalar_block_as_data():
+    import pyarrow as pa
+
+    seen = pa.table(
+        {
+            "variable": ["t2m", "crs", "time"],
+            "dims": pa.array([["time", "y"], [], ["time"]], pa.list_(pa.string())),
+            _write._PID: [0, 1, 2],
+        }
+    )
+    assert _write._spread_of(seen) == {"blocks": 2, "partitions": 2}
+
+
+def test_a_failed_create_removes_only_its_own_files(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """The cleanup after a failed create removes this write's pack directory and nothing
+    else: another write's pack, a user's file in data/, in an array directory and beside
+    data/ all stay."""
+    chunks, shards, cut = ALIGNED["one-shard-blocks"]
+    table, root = _table("neg"), tmp_path / "root_neg"
+    drop(table)
+    other = root / "data" / "t2m" / ("0" * 32) / "part-other.zpack"
+    keep = [
+        other,
+        root / "data" / "notes.txt",
+        root / "data" / "t2m" / "mine.txt",
+        root / "user" / "f.txt",
+    ]
+    real = _write._write_files
+
+    def seeded(spark, plan):
+        for f in keep:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(b"keep me")
+        return real(spark, plan)
+
+    sizes = _write._sizes
+    no_hooks.setattr(_write, "_sizes", lambda: {**sizes(), "roll_bytes": 1})
+    no_hooks.setattr(_write, "_spread_out", lambda spark, plan, frame: frame)
+    no_hooks.setattr(_write, "_write_files", seeded)
+    no_hooks.setattr(_write, "_FAULT", ("t2m", "c/1/0/0"))
+    wid = uuid.uuid4().hex
+    with pytest.raises(Exception, match="test fault"):
+        gbx_zarr_write(
+            _cut_blocks(spark_delta, cut, _cube_values()).coalesce(1),
+            table,
+            root=str(root),
+            chunks=chunks,
+            shards=shards,
+            write_id=wid,
+            spark=spark_delta,
+        )
+    assert all(f.read_bytes() == b"keep me" for f in keep)
+    assert not (root / "data" / "t2m" / wid).exists()  # this write's packs went

@@ -549,7 +549,7 @@ one cluster, from 7.2 s to 25.5 s.
 - **A create has a fixed cost**: claiming its root, creating the manifest table and the commit (the checks
   before them take another 0.1-0.6 s). In the warm runs its median was 9.0 s through the Volume, 8.0 s
   direct to storage and 8.4 s on Serverless (7.4-10.5 s in all); the first create on new compute, which
-  ran cold, took 20.8-38.3 s. Through the Volume the commit's coordinate files cost 0.5-0.8 s against
+  ran cold, took 20.8-38.3 s, and the direct leg's first create (the cluster's second) 21.0 s. Through the Volume the commit's coordinate files cost 0.5-0.8 s against
   0.1-0.2 s direct. A write that is not a create pays the commit part of it, so write a store in a few
   large writes rather than many small ones.
 - **A plain `xarray.to_zarr` is faster and gives none of the guarantees**: no versions, no all-or-nothing

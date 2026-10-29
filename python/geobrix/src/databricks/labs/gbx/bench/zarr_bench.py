@@ -668,7 +668,7 @@ _FIXED_STEPS = ("setup: ownership claim", "setup: create table", "commit")
 def w1_fixed(phases: dict) -> float:
     """A create's fixed cost (part 2 of the W1 gate): its ownership claim, CREATE TABLE and
     commit, from one run's phase timers. As the gate words it: the checks before them (table
-    check, root check, file mode, access: 0.1-0.6 s in the 22b runs) and the position pass
+    check, root check, file mode, access: 0.1-0.6 s in measured runs) and the position pass
     are not in it."""
     return round(sum(phases.get(k, 0.0) for k in _FIXED_STEPS), 2)
 

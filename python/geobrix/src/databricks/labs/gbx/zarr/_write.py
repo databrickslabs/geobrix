@@ -700,10 +700,18 @@ def _spread_of(seen: pa.Table) -> dict:
     """``{"blocks", "partitions"}`` of a position pass: its data blocks (not coordinate
     blocks: one dimension, named like it) and the distinct partitions they came from."""
     dims = seen.column("dims")
-    one = pc.equal(pc.fill_null(pc.list_value_length(dims), 0), 1)
-    first = pc.list_element(pc.fill_null(dims, pa.scalar([""], dims.type)), 0)
-    coord = pc.and_(one, pc.equal(first, seen.column("variable")))
-    data = seen.filter(pc.invert(pc.fill_null(coord, False)))
+    one = pc.fill_null(pc.equal(pc.list_value_length(dims), 1), False)
+    # the first dimension is taken only of one-dimension blocks: a scalar (dims=[], a CF
+    # grid mapping) has none, and is data
+    coord = np.zeros(seen.num_rows, dtype=bool)
+    idx = np.flatnonzero(one.to_numpy(zero_copy_only=False))
+    if idx.size:
+        sub = seen.take(pa.array(idx))
+        first = pc.list_element(sub.column("dims"), 0)
+        coord[idx] = pc.fill_null(
+            pc.equal(first, sub.column("variable")), False
+        ).to_numpy(zero_copy_only=False)
+    data = seen.filter(pa.array(~coord))
     return {
         "blocks": data.num_rows,
         "partitions": len(pc.unique(data.column(_PID))) if data.num_rows else 0,

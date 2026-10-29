@@ -56,7 +56,9 @@ setup_log_file "$LOG_PATH"
 echo -e "${CYAN}Running generator inside Docker (doc examples → function-info.json)...${NC}"
 show_separator
 
-docker exec "$GBX_DEV_CONTAINER" /bin/bash -c "cd /root/geobrix && unset JAVA_TOOL_OPTIONS && python3 docs/scripts/generate-function-info.py"
+# The checkout as mounted in the container (GBX_CONTAINER_ROOT, default /root/geobrix): check_docker has already
+# refused a container that mounts another tree, so the generator reads and writes this checkout.
+docker exec "$GBX_DEV_CONTAINER" /bin/bash -c "cd \"$GBX_CONTAINER_ROOT\" && unset JAVA_TOOL_OPTIONS && python3 docs/scripts/generate-function-info.py"
 EXIT=$?
 
 show_separator

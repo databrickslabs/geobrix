@@ -849,8 +849,15 @@ formats.
   value, and a cell stays `NULL` only when every one of its values is null. The heavyweight tier
   still keeps the row it receives last.
 
-### Registered PROJ grids and raster CRS transforms
+### PROJ data and CRS transforms (fix)
 
+- **Lightweight CRS lookups work on the driver of a standard-access cluster.** On DBR 19 in
+  standard access, a lightweight function that resolves a CRS on the driver, such as
+  `gbx_zarr_sample`, failed with `CRSError: ... Cannot find proj.db`. The runtime sets
+  `PROJ_DATA=/databricks/native/proj-data`, which the notebook's user cannot read there, and
+  GeoBrix kept any `PROJ_DATA` that was set. GeoBrix now uses its bundled PROJ data whenever the
+  `PROJ_DATA` that is set holds no `proj.db` the process can read. Functions that resolve the CRS
+  in their Spark tasks were not affected.
 - **Lightweight raster CRS transforms work after `register_proj_grids`.** After you called
   `gbx.register_proj_grids`, raster transforms such as `rst_transformcrs` could fail on Spark
   workers with `Cannot find proj.db`, and the registered grids were not applied to them. GeoBrix

@@ -2,7 +2,8 @@
 
 rasterio's manylinux/macOS wheels ship their own GDAL + PROJ data. We point
 GDAL_DATA / PROJ_DATA at those bundled paths *only if unset*, so pyrx does not
-collide with any cluster-level GDAL installed by the heavyweight init script.
+collide with any cluster-level GDAL installed by the heavyweight init script, and
+PROJ_DATA also when it names no proj.db this process can read (see configure_gdal_env).
 Registered PROJ grid dirs are merged with the PROJ data into one directory, which
 becomes PROJ_DATA (rasterio reads PROJ_DATA as a single path; see _proj_data_dir).
 """
@@ -55,6 +56,27 @@ def _bundled_proj_data() -> Optional[str]:
         return None
     except Exception:
         return None
+
+
+def _readable_proj_data(value: str) -> bool:
+    """True when a directory of ``value`` (``os.pathsep``-joined) holds a ``proj.db`` this
+    process can read."""
+    for d in (value or "").split(os.pathsep):
+        db = os.path.join(d, "proj.db")
+        if d and os.path.isfile(db) and os.access(db, os.R_OK):
+            return True
+    return False
+
+
+def _set_rasterio_proj_search_path(path: str) -> None:
+    """Point rasterio's GDAL at ``path`` now: rasterio applies ``PROJ_DATA`` as GDAL's PROJ
+    search path when it is imported (and again when a ``rasterio.Env`` starts), so a value
+    replaced after the import still holds for a CRS built outside an Env."""
+    try:
+        from rasterio._env import set_proj_data_search_path
+    except Exception:
+        return
+    set_proj_data_search_path(path)
 
 
 def _search_order(base: str, extra: Sequence[str]) -> List[str]:
@@ -288,6 +310,8 @@ def configure_gdal_env(extra_proj_dirs: Optional[Sequence[str]] = None) -> None:
     directory exported as PROJ_DATA; see _proj_data_dir for why it is not a joined list.
     Registered dirs are also pushed into pyproj's search path so the light vector
     (pyproj) transform path finds them — the env var alone does not reach pyproj.
+    A PROJ_DATA / PROJ_LIB that holds no proj.db this process can read is replaced by
+    the bundled PROJ data (a readable one is never changed).
     """
     if not os.environ.get("GDAL_DATA"):
         p = _bundled_gdal_data()
@@ -301,6 +325,16 @@ def configure_gdal_env(extra_proj_dirs: Optional[Sequence[str]] = None) -> None:
 
     current = os.environ.get("PROJ_DATA") or os.environ.get("PROJ_LIB") or ""
     base = _PROJ_DATA_BASES.get(current, current)  # unwrap a merged dir set earlier
+    if base and not _readable_proj_data(base):
+        # A PROJ data dir this process cannot read is no PROJ data at all: rasterio would
+        # take it as GDAL's PROJ search path and fail every CRS lookup ("Cannot find
+        # proj.db"). DBR 19 exports PROJ_DATA=/databricks/native/proj-data, which the
+        # unprivileged notebook user of a standard-access cluster cannot read. Use the
+        # bundled data instead, here and in the search path rasterio set at its import.
+        p = _bundled_proj_data()
+        if p:
+            os.environ["PROJ_DATA"] = base = p
+            _set_rasterio_proj_search_path(p)
     if not base:
         p = _bundled_proj_data()
         if p:

@@ -1,4 +1,8 @@
 import os
+import subprocess
+import sys
+
+import pytest
 
 from databricks.labs.gbx.pyrx import _env
 
@@ -22,3 +26,39 @@ def test_configure_gdal_env_is_idempotent_and_respects_existing():
 def test_assert_rasterio_available_returns_versions():
     gdal_ver, rio_ver = _env.assert_rasterio_available()
     assert gdal_ver and rio_ver
+
+
+@pytest.mark.parametrize("make_dir", [False, True], ids=["missing", "without-proj-db"])
+def test_a_proj_data_this_process_cannot_read_still_resolves_epsg_4326(
+    tmp_path, make_dir
+):
+    """DBR 19 exports PROJ_DATA=/databricks/native/proj-data, which the notebook user of a
+    standard-access cluster cannot read. rasterio took it as its PROJ search path at
+    import, so every light CRS lookup on the driver failed with "Cannot find proj.db".
+    A fresh interpreter starts with that environment, as the driver does."""
+    unreadable = tmp_path / "proj-data"
+    if make_dir:
+        unreadable.mkdir()
+    env = {k: v for k, v in os.environ.items() if k not in ("PROJ_DATA", "PROJ_LIB")}
+    env["PROJ_DATA"] = str(unreadable)
+    code = "\n".join(
+        [
+            "import os, rasterio",
+            "from rasterio.crs import CRS",
+            "from databricks.labs.gbx.core.crs import crs_to_canonical, resolve_crs",
+            "print(crs_to_canonical(resolve_crs('EPSG:4326')))",
+            "print(CRS.from_epsg(27700).to_epsg())",
+            "with rasterio.Env():",
+            "    print(CRS.from_user_input('EPSG:3857').to_epsg())",
+            f"print(os.environ['PROJ_DATA'] != {str(unreadable)!r})",
+        ]
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert out.returncode == 0, out.stderr[-3000:]
+    assert out.stdout.split() == ["EPSG:4326", "27700", "3857", "True"]

@@ -530,7 +530,7 @@ def _found_ledger(spark, root: str, claim_id: str, body: dict, table: str) -> bo
     (and may have landed all the same). The caller then claims through the
     ledger with the same ``claim_id``, which finds the winner, or this claim if it landed.
     """
-    if _ledger_state(root) != "absent":
+    if _ledger_state(spark, root) != "absent":
         return False
     commit_meta = json.dumps({"mode": "claim", "table": table}, sort_keys=True)
     rows = (
@@ -562,42 +562,97 @@ def _ledger_table(root: str) -> str:
     return "delta.`" + path.replace("`", "``") + "`"
 
 
-_DELTA_LOG = "_delta_log"
-_FIRST_VERSION = "00000000000000000000.json"
+# A ledger is told from a founder's leftovers by asking Delta, never by reading its log's
+# files: a missing or empty directory is "absent" (a plain directory check, so a new root's
+# claim asks Delta nothing); a directory with content is "delta" when DESCRIBE DETAIL answers,
+# and "founding" when Delta answers that the path is not a Delta table.
+_NOT_A_DELTA_TABLE = ("DELTA_MISSING_DELTA_TABLE",)
 
 
-def _ledger_state(root: str) -> str:
+class _LedgerUnreadable(ZarrError):
+    """The ledger directory cannot be listed for a reason that is not a transient miss."""
+
+
+def _error_condition(e: BaseException) -> str | None:
+    """The error class (condition) Spark gives an exception, classic or Connect."""
+    for name in ("getCondition", "getErrorClass"):
+        get = getattr(e, name, None)
+        if callable(get):
+            try:
+                found = get()
+            except Exception:  # noqa: BLE001 - only the class is wanted
+                found = None
+            if found:
+                return str(found)
+    return None
+
+
+def _not_a_delta_table(e: BaseException) -> bool:
+    condition = _error_condition(e)
+    if condition is not None:
+        return condition in _NOT_A_DELTA_TABLE
+    return "is not a Delta table" in _error_text(
+        e
+    )  # no class on the error: its message
+
+
+def _ledger_state(spark, root: str) -> str:
     """What the ledger directory of ``root`` holds: ``"absent"`` (no directory, or an empty
-    one), ``"delta"`` (a Delta table: its first version is in the log) or ``"founding"``
-    (files but no first version: a founder's CREATE TABLE AS SELECT has written its data and
-    not yet committed, or died before it did). Read through the mount."""
+    one), ``"delta"`` (Delta describes it: a ledger, whatever its log retention has kept) or
+    ``"founding"`` (content, and Delta says it is not a Delta table: a founder's CREATE TABLE
+    AS SELECT has written its data and not yet committed, or died before it did). A listing
+    that fails for a reason other than a missing entry, and any other error from Delta, raise
+    ``ZarrError``."""
     path = os.path.join(root, OWNER_LEDGER)
 
-    def look() -> str:
+    def has_content() -> bool:
         try:
-            names = os.listdir(path)
+            return bool(os.listdir(path))
         except FileNotFoundError:
-            return "absent"
-        if not names:
-            return "absent"
-        if _DELTA_LOG in names and _FIRST_VERSION in os.listdir(
-            os.path.join(path, _DELTA_LOG)
-        ):
-            return "delta"
-        return "founding"
+            return False
+        except (PermissionError, NotADirectoryError) as e:
+            raise _LedgerUnreadable(
+                f"cannot list the ownership ledger directory {path} ({e}).",
+                fix="check that the root is on a Volume you can read and write, then try "
+                "again",
+            ) from e
 
-    return _retry_transient(look)
+    try:
+        content = _retry_transient(has_content)
+    except OSError as e:
+        raise ZarrError(
+            f"cannot list the ownership ledger directory {path} ({e}).",
+            fix="check that the root is on a Volume you can read and write, then try again",
+        ) from e
+    if not content:
+        return "absent"
+    try:
+        spark.sql(f"DESCRIBE DETAIL {_q(_ledger_table(root))}").collect()
+        return "delta"
+    except Exception as e:  # noqa: BLE001 - classified below
+        if _not_a_delta_table(e):
+            return "founding"
+        raise ZarrError(
+            f"cannot tell whether {path} is an ownership ledger: Delta reported "
+            f"{type(e).__name__}: {_error_text(e)[:300]}",
+            fix="check that the root is on a Volume you can read and write and that the "
+            "session can read Delta tables there, then try again",
+        ) from e
 
 
 def _stuck(root: str, attempts: int) -> ZarrOwnershipError:
+    """The error of a root whose ledger directory Delta still does not take for a table after
+    the claim's whole jittered budget (``attempts`` looks: about 3 minutes, at most 4.5).
+    """
     ledger = os.path.join(root, OWNER_LEDGER)
     return ZarrOwnershipError(
-        f"{ledger} holds files but no Delta log after {attempts} looks: another call's "
-        "claim is still creating the ownership ledger of the root, or it stopped before "
-        "it committed.",
-        fix=f"if no create, register, write or maintenance call on {root} is running, "
-        f"delete the directory {ledger} (without a Delta log it holds no claim, so no "
-        "store owns the root by it) and try again; otherwise wait for that call to end",
+        f"{ledger} holds files that Delta does not take for a table, after waiting about 3 "
+        f"minutes (at most 4.5; {attempts} looks): another call's claim is still creating "
+        "the ownership ledger of the root, or it stopped before it committed.",
+        fix=f"if no create, register, write or maintenance call on {root} is running, it is "
+        f"safe to delete the directory {ledger}: Delta holds no table there, so it holds no "
+        "claim and no store owns the root by it; then try again. Otherwise wait for that "
+        "call to end",
     )
 
 
@@ -622,7 +677,7 @@ def _create_ledger(spark, ledger: str, root: str) -> None:
 
     failures = 0
     for attempt in range(_write._ATTEMPTS):
-        state = _ledger_state(root)
+        state = _ledger_state(spark, root)
         if state == "delta":
             return
         if state == "founding":
@@ -634,7 +689,7 @@ def _create_ledger(spark, ledger: str, root: str) -> None:
         except Exception as e:
             if _ledger_exists(spark, ledger):
                 return
-            if _ledger_state(root) == "founding":
+            if _ledger_state(spark, root) == "founding":
                 _write._pause(_write._wait(attempt))
                 continue
             failures += 1

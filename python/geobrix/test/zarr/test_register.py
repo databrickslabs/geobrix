@@ -591,7 +591,7 @@ def test_a_root_whose_founder_never_commits_is_refused_with_a_fix(
         _register.claim_root(spark_delta, str(root), "c.s.t", "overlay")
     assert len(pauses) == _write._ATTEMPTS
     assert OWNER_LEDGER in str(ei.value) and str(ledger) in ei.value.fix
-    assert "delete" in ei.value.fix and "Delta log" in ei.value.fix
+    assert "delete" in ei.value.fix and "Delta holds no table" in ei.value.fix
     assert not (root / OWNER_MARKER).exists()
     shutil.rmtree(ledger)
     assert _register.claim_root(spark_delta, str(root), "c.s.t", "overlay") is True
@@ -656,6 +656,121 @@ def test_a_founded_ledger_has_the_schema_of_a_created_one(spark_delta, tmp_path)
         ]
 
     assert schema(founded) == schema(created)
+
+
+def test_a_ledger_whose_first_log_version_was_retired_is_still_a_ledger(
+    spark_delta, tmp_path, monkeypatch
+):
+    """Delta's log cleanup removes old version files once a checkpoint covers them. A ledger
+    in that state (made here by Delta itself: checkpoints every 2 commits, a one-day log
+    retention, the early versions dated 40 days back) is asked of Delta, not of its files:
+    it is a ledger, its owner claims it again at once and another table is refused by name,
+    with no wait."""
+    from databricks.labs.gbx.zarr import _write
+
+    root = tmp_path / "ov"
+    ledger = _register._ledger_table(str(root))
+    body = json.dumps(
+        {"table": "c.s.t", "kind": "overlay", "format": "1"}, sort_keys=True
+    )
+    spark_delta.sql(  # a ledger with c.s.t's claim, made to checkpoint and clean early
+        f"CREATE TABLE {ledger} USING DELTA TBLPROPERTIES ("
+        "'delta.enableDeletionVectors' = 'false', 'delta.enableRowTracking' = 'true', "
+        "'delta.checkpointInterval' = '2', 'delta.logRetentionDuration' = 'interval 1 days') "
+        "AS SELECT CAST('lock' AS STRING) AS kind, CAST(NULL AS STRING) AS array, "
+        "'owner' AS key, CAST(NULL AS STRING) AS shard_key, CAST(NULL AS STRING) AS file, "
+        "CAST(NULL AS BIGINT) AS offset, CAST(NULL AS BIGINT) AS length, "
+        "CAST(NULL AS STRING) AS checksum, CAST(NULL AS STRING) AS origin, "
+        "CAST(NULL AS STRING) AS identity, 'a' AS write_id, CAST(NULL AS STRING) AS tag, "
+        f"'{body}' AS meta"
+    )
+    _register._claim_marker(str(root), "c.s.t", "overlay")
+    insert = f"INSERT INTO {ledger} (kind, key, write_id) VALUES ('commit', 'k{{}}', 'w{{}}')"
+    for i in range(3):
+        spark_delta.sql(insert.format(i, i))
+    log_dir = root / OWNER_LEDGER / "_delta_log"
+    past = __import__("time").time() - 40 * 86400
+    for f in log_dir.iterdir():
+        os.utime(f, (past, past))
+    for i in range(3, 6):
+        spark_delta.sql(insert.format(i, i))  # the next checkpoint cleans the old log
+    assert not (log_dir / ("0" * 20 + ".json")).exists(), sorted(  # version 0 is gone
+        p.name for p in log_dir.iterdir()
+    )
+    assert _register._ledger_state(spark_delta, str(root)) == "delta"
+    pauses = []
+    monkeypatch.setattr(_write, "_pause", pauses.append)
+    assert _register.claim_root(spark_delta, str(root), "c.s.t", "overlay") is False
+    with pytest.raises(ZarrOwnershipError, match="c.s.t"):
+        _register.claim_root(spark_delta, str(root), "c.s.other", "overlay")
+    assert pauses == []
+
+
+def test_a_founders_directory_with_data_files_and_no_log_is_founding(
+    spark_delta, tmp_path
+):
+    assert _register._ledger_state(spark_delta, str(tmp_path)) == "absent"
+    (tmp_path / OWNER_LEDGER).mkdir()
+    assert _register._ledger_state(spark_delta, str(tmp_path)) == "absent"  # empty
+    _stray_founding(tmp_path / "f")
+    assert _register._ledger_state(spark_delta, str(tmp_path / "f")) == "founding"
+
+
+def test_the_stuck_root_fix_says_when_deleting_is_safe_and_how_long_it_waited(tmp_path):
+    ledger = _stray_founding(tmp_path / "a")
+    err = _register._stuck(str(tmp_path / "a"), 20)
+    assert "safe to delete" in err.fix and str(ledger) in err.fix
+    assert "no create, register, write or maintenance call" in err.fix
+    assert "3 minutes" in str(err) and "4.5" in str(err)
+
+
+def test_an_unreadable_ledger_directory_is_a_zarr_error_with_a_fix(
+    spark_delta, tmp_path, monkeypatch
+):
+    """A refused listing is not retried as a transient miss and does not escape raw."""
+    from databricks.labs.gbx.zarr.errors import ZarrError
+
+    real = os.listdir
+
+    def refused(path):
+        if str(path).endswith(OWNER_LEDGER):
+            raise PermissionError(13, "Permission denied", str(path))
+        return real(path)
+
+    monkeypatch.setattr(os, "listdir", refused)
+    with pytest.raises(ZarrError) as ei:
+        _register._ledger_state(spark_delta, str(tmp_path))
+    assert "Fix:" in str(ei.value) and OWNER_LEDGER in str(ei.value)
+
+
+def test_a_delta_error_that_is_not_a_missing_table_is_a_zarr_error(tmp_path):
+    """Only Delta's "not a Delta table" means a founder is in flight; any other error from
+    the question is raised with a Fix, not guessed at."""
+    from databricks.labs.gbx.zarr.errors import ZarrError
+
+    class Session:
+        def sql(self, text):
+            raise RuntimeError("the warehouse is unreachable")
+
+    _stray_founding(tmp_path)
+    with pytest.raises(ZarrError, match="unreachable") as ei:
+        _register._ledger_state(Session(), str(tmp_path))
+    assert "Fix:" in str(ei.value)
+
+
+def test_the_zarr_package_reads_no_delta_log_files():
+    """Ledgers and manifests are asked of Delta, never read from its log's files: no zarr
+    module names the log directory or a log version file."""
+    import pathlib
+
+    pkg = pathlib.Path(_register.__file__).parent
+    hits = [
+        f"{f.name}: {needle}"
+        for f in sorted(pkg.glob("*.py"))
+        for needle in ("_delta_log", "0" * 20)
+        if needle in f.read_text()
+    ]
+    assert hits == []
 
 
 def test_register_never_writes_into_base(spark_delta, era5_v3_sharded, tmp_path):

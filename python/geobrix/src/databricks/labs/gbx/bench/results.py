@@ -116,8 +116,9 @@ class ResultRow:
     spill_bytes: Optional[int] = None
     peak_exec_mem_bytes: Optional[int] = None
     gc_s: Optional[float] = None
-    # Peak RSS (MB) of the Python workers while the shape ran: the kernel's high-water mark,
-    # reset on every worker just before. NULL on a Connect session and off Linux.
+    # Peak RSS (MB) of the Python workers that ran the shape: the kernel's high-water mark, reset
+    # on every worker just before; an idle pooled worker, whatever RSS it holds, is not counted.
+    # NULL on a Connect session, off Linux, and when no Python worker ran during the shape.
     py_worker_rss_mb: Optional[float] = None
     # Why an error row failed ("ExceptionType: message"); "" on every other row.
     failure_mode: str = ""

@@ -1,5 +1,6 @@
 """The levels leg: forms timed per level, with the attribution split beside the timing."""
 
+import contextlib
 import dataclasses
 import json
 import os
@@ -8,6 +9,7 @@ import sys
 import threading
 import time
 import types
+import uuid
 
 import pytest
 
@@ -404,106 +406,181 @@ def test_connect_session_records_unavailable_metrics_instead_of_failing():
     assert _Forbidden.touched == []  # nothing a Connect session refuses was even tried
 
 
-def _peak_shapes(spark):
-    """(peak_of, heavy, light): a UDF that holds 400 MB, one that holds nothing, and the worker
-    peak WorkerPeak reads for a query run between its reset and its read."""
-    from pyspark.sql import functions as F
-
-    @F.udf("long")
-    def heavy(x):
-        b = bytearray(400 * 1024 * 1024)
-        for i in range(0, len(b), 4096):
-            b[i] = 1  # touch every page
-        return len(b)
-
-    @F.udf("long")
-    def light(x):
-        return x
-
-    def peak_of(df):
-        peak = attribution.WorkerPeak(spark)
-        assert peak.reason is None, peak.reason
-        peak.start()
-        df.collect()
-        return peak.read()
-
-    return peak_of, heavy, light
+@contextlib.contextmanager
+def _own_worker_pool(spark):
+    """Python UDFs built inside run in workers of their own: Spark keeps a pool per worker
+    environment, so what a test reads does not depend on what earlier tests left in the session's
+    pool. Yields the pool's marker."""
+    marker = uuid.uuid4().hex
+    env = spark.sparkContext.environment
+    env["GBX_TEST_POOL"] = marker
+    try:
+        yield marker
+    finally:
+        env.pop("GBX_TEST_POOL", None)
 
 
-def _python_workers():
-    """The Python worker processes of this machine's Spark sessions: the `pyspark.daemon`
-    processes whose parent is a `pyspark.daemon` too (the daemon's forked children)."""
-    ppid, argv = {}, {}
+def _pool_workers(marker):
+    """(pid, RSS in MB) of the Python workers a test pool holds: the `pyspark.daemon` processes
+    that were started with its marker and whose parent is a `pyspark.daemon` too (the forked
+    children)."""
+    ppid, argv, rss, pool = {}, {}, {}, set()
     for d in (d for d in os.listdir("/proc") if d.isdigit()):
         try:
             with open(f"/proc/{d}/cmdline", "rb") as fh:
                 argv[int(d)] = fh.read()
             with open(f"/proc/{d}/stat") as fh:
                 ppid[int(d)] = int(fh.read().rsplit(")", 1)[1].split()[1])
+            with open(f"/proc/{d}/environ", "rb") as fh:
+                if f"GBX_TEST_POOL={marker}".encode() in fh.read().split(b"\0"):
+                    pool.add(int(d))
+            with open(f"/proc/{d}/status") as fh:
+                rss[int(d)] = max(
+                    (int(x.split()[1]) // 1024 for x in fh if x.startswith("VmRSS:")),
+                    default=0,
+                )
         except (OSError, ValueError, IndexError):
-            continue  # exited while we looked
-    daemon = {p for p, a in argv.items() if b"pyspark.daemon" in a}
-    return [p for p in daemon if ppid[p] in daemon]
+            continue  # exited while we looked, or not ours to read
+    daemon = {p for p, a in argv.items() if b"pyspark.daemon" in a and p in pool}
+    return [(p, rss.get(p, 0)) for p in daemon if ppid[p] in daemon]
 
 
-def _assert_the_peak_is_the_shapes(spark, heavy_partitions, warm=None):
-    """A shape that holds 400 MB reads at least that; a trivial shape after it does not inherit it.
+class _Shapes:
+    """The UDFs and readings of the worker-peak tests. Build the queries inside
+    `_own_worker_pool`: a UDF takes the pool of the environment it is first used in."""
 
-    The second reading is held against a trivial shape's own, taken first on the same workers:
-    a pool that earlier tests left holding 250 MB reads that, whatever runs, but never the
-    400 MB more that a heavy shape adds. `warm` runs before any reading."""
-    from pyspark.sql import functions as F
+    def __init__(self, spark):
+        import pandas as pd
+        from pyspark.sql import functions as F
 
-    peak_of, heavy, light = _peak_shapes(spark)
-    if warm:
-        warm(light)
-    trivial = spark.range(1000, numPartitions=4).select(F.sum(light("id")))
-    floor = peak_of(trivial)
+        self.spark, self.F = spark, F
+        self.slots = spark.sparkContext.defaultParallelism
 
-    assert (
-        peak_of(
-            spark.range(heavy_partitions, numPartitions=heavy_partitions).select(
-                heavy("id")
-            )
+        @F.udf("long")
+        def heavy(x):
+            b = bytearray(400 * 1024 * 1024)
+            for i in range(0, len(b), 4096):
+                b[i] = 1  # touch every page
+            return len(b)
+
+        @F.udf("long")
+        def idle_fat(x):
+            import builtins
+
+            # holds 250 MB for the life of this worker, which then sits idle in the pool
+            builtins._gbx_hold = bytearray(250 * 1024 * 1024)
+            for i in range(0, len(builtins._gbx_hold), 4096):
+                builtins._gbx_hold[i] = 1
+            return 1
+
+        @F.udf("long")
+        def light(x):
+            return x
+
+        @F.pandas_udf("long")
+        def plus1(s: pd.Series) -> pd.Series:
+            return s + 1
+
+        self.heavy, self.idle_fat, self.light, self.plus1 = (
+            heavy,
+            idle_fat,
+            light,
+            plus1,
         )
-        >= 400
-    )
-    assert peak_of(trivial) < floor + 100
+
+    def heavy_shape(self):
+        return self.spark.range(self.slots, numPartitions=self.slots).select(
+            self.heavy("id")
+        )
+
+    def trivial_shape(self, partitions=4):
+        rows = self.spark.range(1000, numPartitions=partitions)
+        return rows.select(self.F.sum(self.light("id")))
+
+    def two_workers_per_task(self):
+        """A pandas UDF over a Python UDF takes two workers per task: the pool is left with more
+        idle workers than slots."""
+        rows = self.spark.range(4 * self.slots, numPartitions=2 * self.slots)
+        return rows.select(self.plus1(self.light("id")))
+
+    def fat_idle_workers(self):
+        """One 250 MB worker per slot, then idle."""
+        return self.spark.range(self.slots, numPartitions=self.slots).select(
+            self.idle_fat("id")
+        )
+
+    def peak_of(self, df):
+        peak = attribution.WorkerPeak(self.spark)
+        assert peak.reason is None, peak.reason
+        peak.start()
+        df.collect()
+        return peak.read()
 
 
 @LINUX
 def test_worker_peak_is_the_shapes_not_the_workers_lifetime(spark_session_local):
-    _assert_the_peak_is_the_shapes(spark_session_local, heavy_partitions=4)
+    with _own_worker_pool(spark_session_local):
+        s = _Shapes(spark_session_local)
+        heavy, trivial = s.heavy_shape(), s.trivial_shape()
+
+    assert s.peak_of(heavy) >= 400
+    # a trivial shape after it does not inherit the 400 MB
+    assert s.peak_of(trivial) < 150
 
 
 @LINUX
 def test_worker_peak_reaches_every_python_worker_not_one_per_slot(spark_session_local):
-    # A query with two Python evaluators in each task (a pandas UDF over a Python UDF) takes two
-    # workers per task, so the pool is left with more idle workers than the session has slots.
-    # Spark hands idle workers out first-in-first-out: a sweep that only reads and resets the
-    # process it runs in lands on other workers than the shape did, and a shape that held 400 MB
-    # read as the pool's baseline (125 MB here, 245 MB in the full file, 298 MB on the CI runner).
-    import pandas as pd
-    from pyspark.sql import functions as F
+    # A query with two Python evaluators in each task takes two workers per task, so the pool is
+    # left with more idle workers than the session has slots. Spark hands idle workers out
+    # first-in-first-out: a sweep that only reads and resets the process it runs in lands on other
+    # workers than the shape did, and a shape that held 400 MB read as the pool's baseline
+    # (125 MB here, 245 MB in the full file, 298 MB on the CI runner).
+    with _own_worker_pool(spark_session_local) as pool:
+        s = _Shapes(spark_session_local)
+        warm, heavy, trivial = (
+            s.two_workers_per_task(),
+            s.heavy_shape(),
+            s.trivial_shape(),
+        )
+    warm.collect()
+    assert (
+        len(_pool_workers(pool)) > s.slots
+    ), "the warm-up left no more workers than slots"
 
+    assert s.peak_of(heavy) >= 400
+    assert s.peak_of(trivial) < 150
+
+
+@LINUX
+def test_worker_peak_leaves_out_idle_workers_that_hold_memory(spark_session_local):
+    # Idle pooled workers hold about 250 MB each, left by earlier shapes. A trivial shape runs on
+    # one lean worker (the pool hands out first-in-first-out, and the fat ones went to the back),
+    # so its reading is that worker's, not the 250 MB the pool holds.
+    with _own_worker_pool(spark_session_local) as pool:
+        s = _Shapes(spark_session_local)
+        warm, fat, trivial = (
+            s.two_workers_per_task(),
+            s.fat_idle_workers(),
+            s.trivial_shape(1),
+        )
+    warm.collect()
+    fat.collect()
+    held = [mb for _, mb in _pool_workers(pool) if mb >= 200]
+    assert len(held) >= s.slots, "the pool holds no idle workers of 250 MB"
+
+    assert s.peak_of(trivial) < 150
+
+
+@LINUX
+def test_worker_peak_is_none_when_no_python_worker_ran(spark_session_local):
     spark = spark_session_local
-    slots = spark.sparkContext.defaultParallelism
-
-    @F.pandas_udf("long")
-    def plus1(s: pd.Series) -> pd.Series:
-        return s + 1
-
-    def two_workers_per_task(light):
-        spark.range(4 * slots, numPartitions=2 * slots).select(
-            plus1(light("id"))
-        ).collect()
-        assert (
-            len(_python_workers()) > slots
-        ), "the warm-up left no more workers than slots"
-
-    _assert_the_peak_is_the_shapes(
-        spark, heavy_partitions=slots, warm=two_workers_per_task
-    )
+    peak = attribution.WorkerPeak(spark)
+    assert peak.reason is None, peak.reason
+    peak.start()
+    spark.range(1000, numPartitions=4).selectExpr(
+        "sum(id)"
+    ).collect()  # no Python in the plan
+    assert peak.read() is None and "no Python worker ran" in peak.reason
 
 
 _N1 = """

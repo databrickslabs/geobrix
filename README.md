@@ -101,6 +101,7 @@ Lightweight (`*_gbx`) formats are pure-Python (no JAR); each pairs with a heavyw
 | GeoTIFF | `gtiff_gbx` | `gtiff_gdal` |
 | COG | `cog_gbx` | — (light-only) |
 | NetCDF | `netcdf_gbx` | `netcdf_gdal` / `netcdf_ogr` |
+| Zarr | `zarr_gbx` (plain stores), `gbx_zarr_read` | — (light-only) |
 | PMTiles | `pmtiles_gbx` | — (light-only) |
 | File lister | `file_gbx` | — (light-only) |
 | LiDAR (LAS/LAZ) | `lidar_gbx` | — (light-only) |
@@ -119,6 +120,7 @@ Lightweight (`*_gbx`) formats are pure-Python (no JAR); each pairs with a heavyw
 | Raster (generic) | `raster_gbx` | `gdal` |
 | GeoTIFF | `gtiff_gbx` | `gtiff_gdal` |
 | COG | `cog_gbx` | — (light-only) |
+| Zarr | `gbx_zarr_write` | — (light-only) |
 | PMTiles | `pmtiles_gbx` | `pmtiles` |
 | NetCDF | `netcdf_gbx` | — (light-only) |
 | LiDAR (LAS/LAZ) | `lidar_gbx` | — (light-only) |

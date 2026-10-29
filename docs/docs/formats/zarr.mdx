@@ -499,7 +499,11 @@ optimize after many small appends, especially for reads from a Volume; it change
   read only as blocks.
 - **Tiles.** `output="tiles"` needs the coordinates to form a regular grid.
 - **Codecs.** The codecs that zarr-python, numcodecs and zarrs can decode. Writes use `zstd` and `crc32c`
-  unless you pass `codecs`.
+  unless you pass `codecs`. A Zarr v3 array that has any codec beside `sharding_indexed` in its own codec
+  list (a transpose before it, a compressor after it) is not supported: registering the store records it as
+  an array GeoBrix cannot decode, a default read leaves it out with a warning, and naming it in `variables`
+  raises `ZarrUnsupported`. Rewrite the array so that `sharding_indexed` is its only outer codec, with
+  compression and other codecs inside it. zarr-python does not write that layout.
 - **File modes.** `external` is a preview that needs a workspace with the File type preview and compute
   that supports `FILE` values; `managed` is not available (see [File modes](#file-modes)).
 - **Outside writers.** GeoBrix detects writes that other tools make to a registered store; it cannot make

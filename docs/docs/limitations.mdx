@@ -99,6 +99,33 @@ fewer files/rows, so each task decodes less at once). See the Databricks docs on
 [configuring Spark properties for Serverless](https://docs.databricks.com/aws/en/spark/conf) for the
 full allowlist.
 
+## Zarr Stores
+
+GeoBrix reads, registers and writes [Zarr stores](./formats/zarr) within these limits. The
+[Limits](./formats/zarr#limits) section of that page repeats them beside the rest of the transactional model.
+
+- **Runtimes.** Databricks Runtime 19 and Serverless environment 6 (Python 3.12), in the lightweight tier only.
+  Databricks Runtime 17.3 and 18 and Serverless environment 5 are not supported. The heavyweight tier reads
+  Zarr data only as materialized GeoBrix tiles.
+- **Data types.** Numeric types and CF times. Strings and objects are not supported: an array GeoBrix cannot
+  decode is left out of reads, and complex arrays can be read only as blocks.
+- **Tiles.** `output="tiles"` needs the coordinates to form a regular grid. Read an irregular or curvilinear
+  grid as blocks or a table.
+- **Codecs.** The codecs that zarr-python, numcodecs and zarrs can decode. Writes use `zstd` and `crc32c`
+  unless you pass `codecs`. A Zarr v3 array that has any codec beside `sharding_indexed` in its own codec list
+  (a transpose before it, a compressor after it) is not supported: registering the store records the array as
+  one GeoBrix cannot decode, a default read leaves it out with a warning, and naming it in `variables` raises
+  `ZarrUnsupported`. Rewrite the array so that `sharding_indexed` is its only outer codec, with compression and
+  other codecs inside it. zarr-python does not write that layout.
+- **Reading with GDAL.** A GDAL before 3.13 cannot read sharded Zarr v3 stores, or ones that use the `crc32c`
+  codec, which `gbx_zarr_write` writes by default. See [Zarr in the Raster Reader](./readers/raster).
+- **File modes.** `file_mode="external"` is a preview that needs a workspace with the File type preview and
+  compute that supports `FILE` values; `"auto"` uses path strings (`"fuse"`) everywhere else.
+  `file_mode="managed"` is not available.
+- **Cloud storage.** Direct storage access (`access="direct"`) has been measured on AWS only. Azure and
+  Google Cloud storage are not measured yet: pass `access="fuse"` to read and write through the Volume mount,
+  which sends no credentials.
+
 ## Format Support
 
 - [OGR](./readers/vector) - focus is on named vector readers in GDAL's OGR package.

@@ -174,6 +174,37 @@ The two filters are **mutually exclusive** and are ANDed with `include_hidden`: 
 See [`file_gbx` Reader](./readers/file) for enumeration and read-mode details, and
 [`file_gbx` Writer](./writers/file) for write-mode and ingest options.
 
+## Delta-indexed collections
+
+Two parts of GeoBrix keep a Delta table as the **index** of a collection of files and leave the bytes in
+the files:
+
+- a **FILE-column table** has one row per raster or vector file on a Volume, with a `FILE` reference (a path
+  string where FILE is not available). The `*_gbx` writers make one through `file_gbx` and readers scan it
+  (see [Read-options matrix](#read-options-matrix)). A **tile index** (`tilesTable`) is the same idea with an
+  optional pixel window on each row, read with [`read_tiles_table`](./readers/raster#read-tiles-table);
+- the **manifest table of a [Zarr store](./formats/zarr)** has one row per chunk or shard (the file, offset and
+  length that hold it), per array and group document, and one `commit` row for each write.
+
+It is one pattern, and in both the collection is a table. SQL, Unity Catalog grants and Delta's own tools work
+on it. A reader plans from the table rather than from a directory listing, so it never walks the files to find
+them. The table has versions that you can read as they were: `versionAsOf` and `timestampAsOf` on
+`read_tiles_table`, `version_as_of` and `timestamp_as_of` on [`gbx_zarr_read`](./readers/zarr#choosing-the-source).
+
+What differs is who looks after the files.
+
+| | FILE-column table or tile index | Zarr store manifest |
+|---|---|---|
+| One row is | A file, or a window of one | A chunk or shard, at an offset in a pack file |
+| Made by | The `*_gbx` writers; you, for a tile index | `gbx_zarr_register` and `gbx_zarr_write` |
+| Files | Referenced. An earlier version of the table lists the files it listed, but a file replaced since is replaced for every version | Written only by GeoBrix, each into a new pack file that is never changed. An earlier version reads the bytes it did, while it is within `retain` or tagged |
+| Writes | A Delta transaction on the table | One Delta transaction for each write, with a compare-and-swap on every key it replaces, so concurrent writers either land or get a clear conflict error |
+| Cleaning up | Yours | `gbx_zarr_vacuum` deletes the files that no readable version needs |
+
+A FILE-column table suits files that other tools produce and own. A Zarr store suits a cube that jobs also
+write back to, and that needs all-or-nothing writes and versions. [Choosing a Format](./formats/overview) shows where each
+format fits.
+
 ## Next Steps
 
 - [Readers Overview](./readers/overview) — every reader, tier differences, output schemas, options.

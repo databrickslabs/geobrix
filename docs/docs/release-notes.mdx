@@ -392,10 +392,11 @@ formats.
 ### Raster writers
 
 - **The lightweight COG writers write `raw` and `none` uncompressed.** `raster_gbx` with
-  `cog=true`, `cog_gbx` and `rst_cog_convert(tile, 'RAW')` named no codec for `raw` or `none`, and
-  the COG driver then compresses with LZW, so the file came out LZW-compressed. A COG written from a
-  tile whose `compression` metadata says `raw` or `none` kept the source's codec for the same
-  reason. They now write no compression. The GeoTIFF path already did.
+  `cog=true`, `cog_gbx` and `rst_cog_convert` (which now takes `'NONE'` as well as `'RAW'`) named
+  no codec for `raw` or `none`, and the COG driver then compresses with LZW, so the file came out
+  LZW-compressed. A COG written from a tile whose `compression` metadata says `raw` or `none` kept
+  the source's codec for the same reason. They now write no compression. The GeoTIFF path already
+  did.
 - **The heavyweight `gdal` writer writes Zarr with its default options.** The default compression,
   DEFLATE, is a TIFF codec name the Zarr driver does not have, so a Zarr write failed with
   `Compressor/decompressor for DEFLATE not available` unless the tile's `compression` named a Zarr
@@ -736,14 +737,15 @@ formats.
   reprojected tile now carries the footprint of the warp as its mask, so the pixels it does not
   reach are invalid; the mosaic of such a group has a mask band, and a pixel no tile covers is
   invalid in it.
-- **A streamed lightweight merge skips each tile's own NoData.** When a group of tiles is too
+- **A streamed lightweight merge reads each tile by its own NoData.** When a group of tiles is too
   large to merge in memory, `gbx_rst_merge` and `gbx_rst_merge_agg` stream it through a mosaic
   index, and that index applied the NoData of the tile that sorts first to every tile. A tile with
   a NoData beside a tile with none then painted its fill over the other tile where they overlap
-  (a one-column strip beside a tile reprojected onto the reference grid), and a valid pixel of a later tile that equals the first tile's NoData was skipped. Each tile is now
-  read by its own NoData, as the in-memory merge does, so the two paths give the same pixels. They
-  still differ in layout: the streamed result is a Cloud Optimized GeoTIFF (tiled, with overviews)
-  and the in-memory one a striped GeoTIFF.
+  (a one-column strip beside a tile reprojected onto the reference grid), and a valid pixel of a
+  later tile that equals the first tile's NoData was skipped. Each tile is now read by its own
+  NoData, as the in-memory merge does, so the two paths give the same pixels. They still differ in
+  layout: the streamed result is a Cloud Optimized GeoTIFF (tiled, with overviews) and the
+  in-memory one a striped GeoTIFF.
 - **The `cog_gbx` mosaic index masks a multi-band tile by every band.** Where a source with a
   mask band and a source without one are written together, a pixel of the tile without one was
   invalid when band 1 alone was NoData there. It is invalid now only where every band is NoData,

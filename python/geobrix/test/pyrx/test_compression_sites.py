@@ -1346,22 +1346,24 @@ def _no_codec_apply_compression(name, tmp_path):
     return _apply_compression(_deflate_tiled_src(), name, None, None)
 
 
+# every spelling of "no compression" is accepted at every site, in either case
+_NO_CODEC_NAMES = ["raw", "none", "RAW", "NONE"]
 _NO_CODEC_SITES = {
-    "cog_convert": (_no_codec_cog_convert, ["raw", "RAW"]),
-    "cog_convert_file": (_no_codec_cog_convert_file, ["raw", "RAW"]),
-    "encode_tile_cog": (_no_codec_encode_tile("cog"), ["raw", "none"]),
-    "encode_tile_gtiff": (_no_codec_encode_tile("gtiff"), ["raw", "none"]),
-    "tile_to_bytes_cog": (_no_codec_tile_to_bytes_cog, ["raw", "none"]),
-    "apply_compression": (_no_codec_apply_compression, ["raw", "none"]),
+    "cog_convert": _no_codec_cog_convert,
+    "cog_convert_file": _no_codec_cog_convert_file,
+    "encode_tile_cog": _no_codec_encode_tile("cog"),
+    "encode_tile_gtiff": _no_codec_encode_tile("gtiff"),
+    "tile_to_bytes_cog": _no_codec_tile_to_bytes_cog,
+    "apply_compression": _no_codec_apply_compression,
 }
 
 
 @pytest.mark.parametrize(
     "site,name",
-    [(s, n) for s, (_, names) in _NO_CODEC_SITES.items() for n in names],
+    [(s, n) for s in _NO_CODEC_SITES for n in _NO_CODEC_NAMES],
 )
 def test_a_no_codec_name_writes_no_compression(site, name, tmp_path):
     """Read back ``COMPRESSION``: absent. The COG driver gave LZW for an omitted COMPRESS, and a
     site that starts from the source's profile kept the source's DEFLATE."""
-    out = _NO_CODEC_SITES[site][0](name, tmp_path)
+    out = _NO_CODEC_SITES[site](name, tmp_path)
     _assert_no_codec(out, context=f"{site}({name})")

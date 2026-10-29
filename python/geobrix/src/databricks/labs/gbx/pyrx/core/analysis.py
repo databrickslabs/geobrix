@@ -174,8 +174,8 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
       * ``compression`` (default ``"DEFLATE"``): GDAL COG compression name.
         Accepted values are the same profile names accepted by rio-cogeo:
         ``deflate``, ``lzw``, ``zstd``, ``jpeg``, ``webp``, ``packbits``,
-        ``lzma``, ``lerc``, ``lerc_deflate``, ``lerc_zstd``, ``raw``.
-        Unknown values raise ``ValueError``.
+        ``lzma``, ``lerc``, ``lerc_deflate``, ``lerc_zstd``, ``raw``; ``none`` is read as
+        ``raw`` (no compression). Unknown values raise ``ValueError``.
       * ``blocksize`` (default 512): internal tile size; must be ``> 0``.
       * ``overview_resampling`` (default ``"AVERAGE"``): downsampling algorithm
         for the auto-generated overview pyramid (e.g. ``"AVERAGE"``,
@@ -205,6 +205,8 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
     if overview_resampling is None or str(overview_resampling).strip() == "":
         raise ValueError("rst_cog_convert: overview_resampling must be non-empty")
     compression = str(compression).upper()
+    if compression == "NONE":
+        compression = "RAW"  # the rio-cogeo profile table calls "no compression" raw
     overview_resampling = str(overview_resampling).upper()
 
     # "AUTO" is a special sentinel meaning "size-adaptive ZSTD" — it bypasses
@@ -216,7 +218,8 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
     if not _is_auto:
         # Validate compression against the same set that rio-cogeo accepts, so
         # callers passing profile names (e.g. "deflate", "lzw", "raw") still work.
-        # "raw" maps to no compression (omit the compress kwarg for driver="COG").
+        # "raw" (and "none", read as "raw" above) means no compression: the authority emits
+        # compress=none below, since the COG driver compresses with LZW when none is named.
         from rio_cogeo.profiles import cog_profiles
 
         try:

@@ -118,7 +118,7 @@ def _apply_compression(
     dtype-appropriate predictors. Returns the re-encoded GTiff bytes.
 
     When compress='auto', this will return ZSTD+predictor output. When
-    compress='none', the output has no compression keys.
+    compress='none', the output has no compression (the profile carries compress=none).
 
     Fast-path: when compress='auto' and *raster_bytes* are already
     ZSTD-compressed, returns *raster_bytes* unchanged (no re-encode).  This

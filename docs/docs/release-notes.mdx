@@ -243,14 +243,22 @@ formats.
   did not parse as one. It now fails the write, and the error names the column and the value, with
   a `Fix:` that says how to write the layer's CRS. A grid named by a file path in that column is
   refused the same way.
-- **The raster driver policy is on for the whole process.** From the first GeoBrix GDAL use, the
-  drivers that run stored pipelines, index other rasters or reach a network API are unavailable to
-  the process, and a raster GeoBrix reads is identified before it is opened. Set
-  `GBX_GDAL_DRIVER_POLICY=off` (or `spark.databricks.labs.gbx.gdal.driver_policy=off` on the JVM)
-  to turn it off. See [Security § 7](./security#7-raster-data-other-principals-can-write).
-- **`out_crs` on the heavyweight `gbx_rst_bng_rasterize_agg` is refused when it is not NULL.** The
-  heavyweight aggregate used to ignore the argument. BNG output is always EPSG:27700, and the
-  lightweight tier still accepts the argument and ignores it, so pass NULL on either tier.
+- **The raster driver policy is on for the whole process.** From GeoBrix's import, the drivers
+  that run stored pipelines, index other rasters, reach a network API, or act on what a file
+  names (`KMLSUPEROVERLAY`, `ESRIC`, `MRF`) are unavailable to the process, and every raster
+  GeoBrix opens is opened with the allowed drivers only. With the env wheel, a raster is also
+  identified before it is opened. Set `GBX_GDAL_DRIVER_POLICY=off` (or
+  `spark.databricks.labs.gbx.gdal.driver_policy=off` in the cluster's Spark config) before the
+  first GDAL use to turn it off. See [Security § 7](./security#7-raster-data-other-principals-can-write),
+  which says which install paths get the full defence.
+- **`spark.gdal.GDAL_SKIP` can no longer re-enable a refused driver (behavior change).** Its value
+  now adds to the refused drivers instead of replacing them, and `spark.gdal.*` cannot turn the
+  VRT raw-band or Python settings back on. Use the documented switch,
+  `spark.databricks.labs.gbx.gdal.driver_policy=off`, to turn the policy off.
+- **`out_crs` on `gbx_rst_bng_rasterize_agg` is refused on both tiers when it is not NULL.** BNG
+  output is always EPSG:27700. Both tiers used to accept the argument and ignore it; both now refuse
+  a non-NULL value with the same message. Pass NULL, and reproject the tile with
+  `gbx_rst_transformcrs` when another CRS is wanted.
 
 ### Heavyweight vector readers — `layerNumber` reads the layer it names (fix)
 

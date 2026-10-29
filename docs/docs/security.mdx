@@ -261,18 +261,56 @@ for the full how-to.
 
 GeoBrix reads rasters that anyone who can write a table or a Volume can name, and a raster
 file can name more: a VRT names its sources, a tile index names its tiles, a pipeline names
-its inputs. GDAL opens all of them. So GeoBrix applies a driver policy at its first use of
-GDAL in each process, on both tiers, before any raster is opened:
+its inputs, a super-overlay names the documents it links. GDAL opens all of them. So GeoBrix
+applies a driver policy to each process, on both tiers, before any raster is opened:
 
 - **The refused drivers are removed from GDAL.** The stored-pipeline driver (`GDALG`), the
   tile indexes and catalogs that open other rasters (`GTI`, `STACTA`, `STACIT`), the service
-  drivers (`WMS`, `WMTS`, `WCS`, `OGCAPI`, `HTTP`) and the network APIs (`PLMOSAIC`,
-  `PLSCENES`, `EEDAI`, `DAAS`, `NGW`, and the OGR network drivers `WFS`, `CSW`, `EEDA`) are
-  not registered, so GDAL cannot open them at any depth.
+  drivers (`WMS`, `WMTS`, `WCS`, `OGCAPI`, `HTTP`), the network APIs (`PLMOSAIC`,
+  `PLSCENES`, `EEDAI`, `DAAS`, `NGW`, and the OGR network drivers `WFS`, `CSW`, `EEDA`), and
+  three drivers that act on what a file names: `KMLSUPEROVERLAY` (it fetches a `NetworkLink`
+  or `Icon` `href` over HTTP), `ESRIC` (it fetches a coordinate reference system that its
+  `conf.xml` gives as an http(s) URL) and `MRF` (it opens a source its file names and, on a
+  read, writes cache files at paths its file names). They are not registered, so GDAL cannot
+  open them at any depth.
 - **The VRT settings that read a file's bytes as pixels, or run code, are off**
   (`GDAL_VRT_ENABLE_RAWRASTERBAND=NO`, `GDAL_VRT_ENABLE_PYTHON=NO`).
-- **Every open of a raster GeoBrix makes is identified first, with the allowed drivers, and
-  opened with the one it identified.** Every other raster GDAL reads is allowed.
+- **Every raster GeoBrix opens is opened with the allowed drivers only.** Every raster driver
+  GDAL has that is not refused is allowed, and GDAL is given that list on every read, including
+  the rasters GeoBrix hands to rio-tiler or copies to a COG. Where the full defence applies
+  (below), a named file is also identified first, with the allowed drivers, and opened with the
+  driver identified.
+
+GeoBrix sets the policy when it is imported, in the environment GDAL reads when it registers
+its drivers, and completes it at its first GDAL use.
+
+**Full and partial defence.** Which one a Python process gets depends on the GDAL its rasterio
+runs.
+
+- The **full** defence is the env wheel's: its vendored rasterio and osgeo share one GDAL, so
+  GeoBrix also deregisters any refused driver that was registered before it ran, and identifies
+  a file before it opens it.
+- The **partial** defence is a process whose rasterio brings its own GDAL (the PyPI wheel). The
+  refused drivers are kept out of GDAL's registration and every open uses the allowed drivers
+  only, but a driver that rasterio registered before GeoBrix was imported cannot be removed.
+  GeoBrix then warns once and names those drivers. To avoid it, import `databricks.labs.gbx`
+  before rasterio opens anything, or install the env wheel.
+
+| Install path | Python GDAL | Defence |
+|---|---|---|
+| The env wheel for the runtime, installed by file: `geobrix-<version>+env6-py3-none-any.whl` (Serverless environment 6, DBR 19) or `geobrix-<version>+env5-py3-none-any.whl` (Serverless environment 5, DBR 17.3 and 18) | the wheel's vendored rasterio and osgeo | full |
+| The plain wheel with a light extra: `geobrix[light_env6]`, `[light_env5]`, `[light_dbr17]`, `[light_dbr18]` or `[light_dbr19]` (the commands on the [installation](./installation) page) | PyPI rasterio | partial |
+| The [DCS image](./installation/dcs.mdx): the plain wheel with `[light_env6,vizx]` | PyPI rasterio | partial |
+| `pip install geobrix`, with no extra | no rasterio: the lightweight tier opens no raster | none |
+| A partial path where rasterio registered GDAL's drivers before GeoBrix was imported | rasterio's own GDAL | partial, with the warning |
+
+The JVM side is the same on every install path: the GeoBrix JAR skips the refused drivers and
+sets the two VRT settings when the JVM's GDAL starts, whichever GDAL it loads.
+
+A `spark.gdal.GDAL_SKIP` value adds to the refused drivers; it cannot remove one. In a Python
+process a `GDAL_SKIP` environment value adds to them the same way. Neither
+`spark.gdal.GDAL_VRT_ENABLE_RAWRASTERBAND` nor `spark.gdal.GDAL_VRT_ENABLE_PYTHON` turns
+those settings back on. The switch below is the one way to turn the policy off.
 
 A refused raster raises an error (a query error on a read, an error tile on a virtual tile)
 whose message names what was refused and says why GeoBrix does not open it.
@@ -282,11 +320,12 @@ the driver and on each executor), that process no longer finds the refused drive
 code in it. On the JVM the same drivers are skipped when GDAL starts, as on the
 [raster reader](./readers/raster) page.
 
-**To turn the policy off**, set one switch, on either tier. In a Python process, set
-`GBX_GDAL_DRIVER_POLICY=off` in the environment before GeoBrix is imported. On the JVM, set it
-in the environment, or set `spark.databricks.labs.gbx.gdal.driver_policy=off` in the session
-conf (the JVM reads both). Off means GDAL is left as GDAL has it, with no refused driver removed
-and no VRT setting changed.
+**To turn the policy off**, set one switch, on either tier, before the process's first GDAL
+use: a change later in the session has no effect. In a Python process, set
+`GBX_GDAL_DRIVER_POLICY=off` in the environment before GeoBrix is imported. On the JVM, set
+`spark.databricks.labs.gbx.gdal.driver_policy=off` in the cluster's Spark config, or
+`GBX_GDAL_DRIVER_POLICY=off` in the cluster's environment. Off means GDAL is left as GDAL has
+it, with no refused driver removed and no VRT setting changed.
 Only turn it off for data you trust: a virtual tile or a raster from another principal can then
 run a stored pipeline or read a raw band.
 

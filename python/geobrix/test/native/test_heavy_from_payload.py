@@ -154,10 +154,7 @@ def test_the_session_conf_alone_loads_the_payload(
 
 
 def test_a_second_gdal_in_the_jvm_is_refused(native_dir):
-    if not os.path.exists(SYSTEM_JNI):
-        pytest.skip(
-            f"PRECONDITION MISSING: a system GDAL JNI at {SYSTEM_JNI}; the guard not run"
-        )
+    _system_gdal_or_skip()  # a system JNI of another GDAL, loaded first
     res = _java(native_dir, "DoubleLoadProbe", SYSTEM_JNI, native_dir)
     assert res.returncode == 3, res.stdout + res.stderr
     assert "a different GDAL is already loaded" in res.stderr, res.stderr

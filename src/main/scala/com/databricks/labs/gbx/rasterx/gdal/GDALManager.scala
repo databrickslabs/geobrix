@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.rasterx.gdal
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
+import org.apache.spark.SparkEnv
 import org.apache.spark.internal.Logging
 import org.gdal.gdal.gdal
 
@@ -26,13 +27,16 @@ import scala.util.{Success, Try}
 object GDALManager extends Logging {
 
     /**
-      * The drivers the driver policy refuses (the manifest's `gdal.raster_drivers.refused` plus the OGR network drivers,
-      * held equal by a test): stored
-      * pipelines (GDALG), tile indexes and catalogs that open other rasters they name (GTI, STACTA, STACIT), and the
-      * network APIs that can trigger outbound HTTP at open time. Skipped by default (never registered), so a nested
-      * source cannot open them either; users can override via `spark.gdal.GDAL_SKIP`.
+      * The drivers the driver policy refuses (the manifest's `gdal.raster_drivers.refused`, held equal by a test): stored
+      * pipelines (GDALG), tile indexes and catalogs that open other rasters they name (GTI, STACTA, STACIT), the network
+      * APIs that can trigger outbound HTTP at open time, and the drivers that fetch a URL their own file names
+      * (KMLSUPEROVERLAY, and ESRIC's CRS URL) or open a source their file names and write cache files on read (MRF).
+      * Skipped at GDAL's registration, so a nested source cannot open them either. A `spark.gdal.GDAL_SKIP` value adds
+      * to this list and cannot remove a name from it; the one switch that turns the skip off is [[PolicyConf]] (or
+      * [[PolicyEnv]]).
       */
-    val DefaultSkippedDrivers = "GDALG GTI STACTA STACIT WMS WMTS WCS WFS HTTP CSW OGCAPI PLMOSAIC PLSCENES EEDAI EEDA DAAS NGW"
+    val DefaultSkippedDrivers =
+        "GDALG GTI STACTA STACIT WMS WMTS WCS WFS HTTP CSW OGCAPI PLMOSAIC PLSCENES EEDAI EEDA DAAS NGW KMLSUPEROVERLAY MRF ESRIC"
 
     /** The env wheel's `_native/<arch>` directory (Python `_native.native_dir()`); its `lib/` holds the JNI. */
     val NativeDirKey = "spark.databricks.labs.gbx.native.dir"
@@ -65,17 +69,54 @@ object GDALManager extends Logging {
     private val pythonLock = new Object
     @volatile private var pythonDepth = 0
 
-    /** The one switch of the process-level driver policy (AP-43): `GBX_GDAL_DRIVER_POLICY=off` in the environment, or
-      * `spark.databricks.labs.gbx.gdal.driver_policy=off` in the session conf (the same name the light tier reads).
-      * Off: no refused driver is skipped and the raw-band setting is left as GDAL has it. Read at the first init. */
+    /** The one switch of the process-level driver policy: `GBX_GDAL_DRIVER_POLICY=off` in the environment, or
+      * `spark.databricks.labs.gbx.gdal.driver_policy=off` in the conf (the same name the light tier reads). Off: no
+      * refused driver is skipped and the raw-band setting is left as GDAL has it. Read once, at the JVM's first GDAL use
+      * ([[init]] or [[initOgr]]); a later change has no effect on that JVM. */
     val PolicyEnv = "GBX_GDAL_DRIVER_POLICY"
     val PolicyConf = "spark.databricks.labs.gbx.gdal.driver_policy"
     @volatile private var policyOn = true
+    // the policy is decided once per JVM, by its first GDAL use (init or initOgr); a later use cannot change GDAL
+    private var policyDecided = false
 
-    private def policyFrom(config: ExpressionConfig): Boolean = {
+    /** On unless the switch is off: the environment, the caller's config, else the JVM's Spark conf (the cluster's
+      * SparkConf on an executor, where a runtime `spark.conf.set` does not reach). */
+    private def policyFrom(config: Option[ExpressionConfig]): Boolean = {
         val env = Option(System.getenv(PolicyEnv))
-        val conf = config.configs.get(PolicyConf)
+        val conf = config
+            .flatMap(_.configs.get(PolicyConf))
+            .orElse(Option(SparkEnv.get).flatMap(_.conf.getOption(PolicyConf)))
         !(env.exists(_.trim.equalsIgnoreCase("off")) || conf.exists(_.trim.equalsIgnoreCase("off")))
+    }
+
+    /** Decide the policy at the JVM's first GDAL use: the first decision holds (later configs are logged, not applied). */
+    private def decidePolicy(config: Option[ExpressionConfig]): Unit = {
+        if (!policyDecided) {
+            policyOn = policyFrom(config)
+            policyDecided = true
+        } else if (config.exists(c => policyFrom(Some(c)) != policyOn)) {
+            logWarning("the GDAL driver policy was set by this JVM's first GDAL use; a later config's switch is not applied")
+        }
+    }
+
+    /** The driver policy's GDAL settings: the one choke point, applied by every GDAL init path, [[init]] and [[initOgr]]
+      * alike (OGRRegisterAll is GDALAllRegister in GDAL 3.13, and GDAL_SKIP is read at that registration). With the
+      * switch on, GDAL_SKIP is the refused list plus any name already set (a user's `spark.gdal.GDAL_SKIP` adds to it). */
+    private def applyDriverPolicy(): Unit = {
+        if (policyOn) {
+            gdal.SetConfigOption("GDAL_SKIP", skipList(Option(gdal.GetConfigOption("GDAL_SKIP"))))
+            gdal.SetConfigOption("GDAL_VRT_ENABLE_RAWRASTERBAND", "NO")
+        }
+        // Off by default; flipped on only around PixelCombineRasters.combine() via withVrtPython. A VRT's Python pixel
+        // function runs code from the file, so it is off for the process whatever the switch.
+        gdal.SetConfigOption("GDAL_VRT_ENABLE_PYTHON", "NO")
+    }
+
+    /** The refused drivers, then the names of `current` not among them (GDAL splits GDAL_SKIP on spaces and commas). */
+    private[gdal] def skipList(current: Option[String]): String = {
+        val refused = DefaultSkippedDrivers.split(" ").toSeq
+        val extra = current.toSeq.flatMap(_.split("[ ,]+")).map(_.trim).filter(_.nonEmpty).filterNot(refused.contains)
+        (refused ++ extra.distinct).mkString(" ")
     }
 
     /**
@@ -103,7 +144,7 @@ object GDALManager extends Logging {
         lock.synchronized {
             if (!isEnabled) {
                 Try {
-                    policyOn = policyFrom(config)
+                    decidePolicy(Some(config))
                     loadSharedObjects(config.getSharedObjects.values, config.nativeDir)
                     configureGDAL(config)
                     gdal.AllRegister()
@@ -155,6 +196,10 @@ object GDALManager extends Logging {
         ensureJniLoaded(None) // else GDAL's classes would load a JNI by name on their own
         lock.synchronized {
             if (!ogrEnabled) {
+                // A JVM whose first GDAL use is an OGR writer applies the same policy as init: the skip is set before the
+                // registration that RegisterAll triggers.
+                decidePolicy(None)
+                applyDriverPolicy()
                 org.gdal.ogr.ogr.RegisterAll()
                 ogrEnabled = true
             }
@@ -205,6 +250,8 @@ object GDALManager extends Logging {
                 .stripPrefix("spark.gdal.")
             if (gdalKey != "PROJ_GRID_DIRS") gdal.SetConfigOption(gdalKey, value)
         }
+        // The policy's settings win over the spark.gdal.* conf just applied, unless the documented switch is off.
+        applyDriverPolicy()
         // Prepend user-supplied PROJ grid dirs to the in-JVM PROJ search path.
         val dirs = gridDirs(config)
         if (dirs.nonEmpty) {
@@ -226,20 +273,14 @@ object GDALManager extends Logging {
     def configureGDAL(CPL_TMPDIR: String, GDAL_PAM_PROXY_DIR: String, CPL_DEBUG: String = "OFF",
                       logCPL: Boolean = false): Unit = {
         // Must be set BEFORE gdal.AllRegister() in init; skipped drivers are never registered. Refused drivers are
-        // gone for every GDAL path of the JVM, nested sources included (AP-43); the switch turns that off.
-        if (policyOn) gdal.SetConfigOption("GDAL_SKIP", DefaultSkippedDrivers)
+        // gone for every GDAL path of the JVM, nested sources included; the switch turns that off.
+        applyDriverPolicy()
         // PROJ and GDAL data: the loaded payload's, else the system PROJ's data dir (the system GDAL finds GDAL_DATA).
         val choice = loaded.getOrElse(NativeChoice(LegacyJni, None, None))
         if (choice.projData.isEmpty) gdal.SetConfigOption("PROJ_LIB", "/usr/share/proj")
         applyNativeData(choice)
         // a reset keeps the PROJ grid directories already applied in this JVM (a union: none is dropped)
         if (appliedGridDirs.nonEmpty) setProjSearchPath((appliedGridDirs :+ baseProjData).distinct)
-        // Off by default; flipped on only around PixelCombineRasters.combine() via withVrtPython. A VRT's raw band reads
-        // a file's bytes without a driver, so it is off for the process too (AP-43), with the switch on.
-        if (policyOn) {
-            gdal.SetConfigOption("GDAL_VRT_ENABLE_PYTHON", "NO")
-            gdal.SetConfigOption("GDAL_VRT_ENABLE_RAWRASTERBAND", "NO")
-        } else gdal.SetConfigOption("GDAL_VRT_ENABLE_PYTHON", "NO")
         gdal.SetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "YES")
         gdal.SetConfigOption("CPL_TMPDIR", CPL_TMPDIR)
         gdal.SetConfigOption("GDAL_PAM_PROXY_DIR", GDAL_PAM_PROXY_DIR)

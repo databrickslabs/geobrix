@@ -30,10 +30,10 @@ def test_the_engine_rows_carry_a_gdal_block_and_the_pin_is_the_build_pin():
     assert MAN.gdal.pin == pin
     # The production allowlist holds only the spec rows' algorithms (the bench's floor extends it for itself).
     assert set(MAN.gdal.allow) == {f.gdal.alg for f in ENGINE_FNS}
-    # The virtual-tile policy (design section 4, AP-40, I-2): the allowlist of the drivers the readers emit virtual
-    # tiles for, and the refused drivers, pinned as sets: an over-broad list fails, a subset check would not.
+    # The virtual-tile policy (design section 4): the allowlist of the drivers the readers emit virtual tiles for, and
+    # the refused drivers, pinned as sets: an over-broad list fails, a subset check would not.
     assert set(MAN.gdal.refused_drivers) == REFUSED_DRIVERS
-    # AP-43: the allowed class is every raster driver a reader can read, so the formats GeoBrix reads are allowed
+    # the allowed class is every raster driver a reader can read, so the formats GeoBrix reads are allowed
     assert {"GTiff", "VRT", "PNG", "netCDF"} <= set(MAN.gdal.allowed_drivers)
 
 
@@ -55,15 +55,40 @@ REFUSED_DRIVERS = {
     "EEDA",
     "DAAS",
     "NGW",
+    "KMLSUPEROVERLAY",  # a NetworkLink or Icon href is fetched
+    "ESRIC",  # an http(s) CRS in its conf.xml is fetched
+    "MRF",  # opens a source its file names and writes the cache files its file names, on read
 }
 
 
 def test_the_classes_are_disjoint_and_the_refused_class_is_the_pinned_set():
-    """The classification (AP-43) pins the refused class as a set, and no driver is both allowed and refused. The
+    """The classification pins the refused class as a set, and no driver is both allowed and refused. The
     enumeration of the payload's registered rasters, which fails on an unclassified one, is in test_driver_policy.py.
     """
     assert not set(MAN.gdal.allowed_drivers) & set(MAN.gdal.refused_drivers)
     assert set(MAN.gdal.refused_drivers) == REFUSED_DRIVERS
+
+
+AUDIT_LINE = re.compile(r"^\s*#\s{3}(\w+): (none|path)\.", re.M)
+AUDIT_REFUSED = re.compile(r"^\s*#\s{3}(\w+): (fetch|write) \(refused\)", re.M)
+# an allowed driver whose audit line says it fetches: each is a named, reasoned exception
+AUDIT_ALLOWED_FETCH = re.compile(
+    r"^\s*#\s{3}(\w+): path\.(?:.*\n\s*#\s{5}.*)*?\bfetches\b", re.M
+)
+
+
+def test_every_allowed_driver_has_a_remote_fetch_audit_line():
+    """The audit of GDAL 3.13.3's source is one line per allowed driver, in the classification's comment, and each
+    driver refused for a fetch or a write names its evidence. A driver added to `allowed` without a line fails here, and
+    so does a new allowed driver whose line says it fetches.
+    """
+    src = Path(manifest.__file__).read_text()
+    audited = [m.group(1) for m in AUDIT_LINE.finditer(src)]
+    assert sorted(audited) == sorted(MAN.gdal.allowed_drivers)
+    refused_for = {m.group(1): m.group(2) for m in AUDIT_REFUSED.finditer(src)}
+    assert refused_for == {"KMLSUPEROVERLAY": "fetch", "ESRIC": "fetch", "MRF": "write"}
+    assert set(refused_for) <= set(MAN.gdal.refused_drivers)
+    assert {m.group(1) for m in AUDIT_ALLOWED_FETCH.finditer(src)} == {"netCDF"}
 
 
 def test_the_jvm_skips_exactly_the_refused_drivers():
@@ -71,7 +96,7 @@ def test_the_jvm_skips_exactly_the_refused_drivers():
     text = (
         REPO / "src/main/scala/com/databricks/labs/gbx/rasterx/gdal/GDALManager.scala"
     ).read_text()
-    skipped = re.search(r'val DefaultSkippedDrivers = "([^"]*)"', text)
+    skipped = re.search(r'val DefaultSkippedDrivers\s*=\s*"([^"]*)"', text)
     assert skipped is not None
     assert set(skipped.group(1).split()) == set(MAN.gdal.refused_drivers)
 

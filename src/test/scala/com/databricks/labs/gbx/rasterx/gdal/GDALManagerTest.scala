@@ -70,10 +70,12 @@ class GDALManagerTest extends AnyFunSuite with BeforeAndAfterAll {
         )
         try {
             GDALManager.configureGDAL(config)
-            gdal.GetConfigOption("GDAL_SKIP") shouldBe "FOO"
+            // the driver policy wins over the conf: the conf's names are added to the refused list, never in its place
+            gdal.GetConfigOption("GDAL_SKIP") shouldBe s"${GDALManager.DefaultSkippedDrivers} FOO"
             gdal.GetConfigOption("GDAL_HTTP_TIMEOUT") shouldBe "42"
         } finally {
             // restore defaults so later tests / suites see the hardened config
+            gdal.SetConfigOption("GDAL_SKIP", null)
             GDALManager.configureGDAL("/tmp", "/tmp")
         }
     }

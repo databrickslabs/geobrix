@@ -138,9 +138,163 @@ class GdalSection:
     pin: str
     deny: frozenset
     allow: Mapping[str, Tuple[str, ...]]
-    # The driver classification (AP-43, design section 4): EVERY raster driver the payload's GDAL registers is in
-    # `allowed` (a GeoBrix reader can read it) or in `refused` (a stored pipeline, an index, a service, a network API).
-    # A test enumerates the payload and fails on an unclassified driver. Opens are restricted to `allowed`.
+    # The driver classification, design section 4: EVERY raster driver the payload's GDAL registers is in `allowed` (a
+    # GeoBrix reader can read it) or in `refused`. A test enumerates the payload and fails on an unclassified driver.
+    # Opens are restricted to `allowed`; `refused` is skipped at GDAL's registration (deregistered where it is not).
+    #
+    # The remote-fetch audit of the classification, GDAL 3.13.3's source (frmts/<driver>, gcore, port, ogr, and
+    # ogr/ogrsf_frmts for GPKG, OpenFileGDB and CAD). One line per driver, the verdict first:
+    #   fetch  the driver turns a URL read from the file into a network request, with no path scheme in the data.
+    #   write  the driver writes files the data names when it is read.
+    #   path   the driver's source handles a remote name itself (a /vsicurl/ or http(s) name, a URL-valued href).
+    #   none   none of the markers below is in its source.
+    # The markers: /vsicurl, /vsicurl_streaming, CPLHTTP*, VSICurl*, http(s) literals in code, and SetFromUserInput on
+    # a value read from the file without SET_FROM_USER_INPUT_LIMITATIONS (OGRSpatialReference fetches an http(s) CRS
+    # definition: ogrspatialreference.cpp:4252-4257, 4543). Every driver that opens a file the data names (a VRT
+    # source, a header's data file, a manifest's href) opens it through GDAL's file layer, so a /vsicurl/ name there is
+    # fetched: that is the path-scheme question, which this classification does not decide, for "none" as for "path".
+    #   KMLSUPEROVERLAY: fetch (refused). A NetworkLink or Icon href starting with http is opened as
+    #     /vsicurl_streaming/<href> (kmlsuperoverlaydataset.cpp:1315-1317, 1771-1772, 1838-1840, 2701-2702).
+    #   ESRIC: fetch (refused). The conf.xml SpatialReference.WKT goes to SetFromUserInput with no limitations
+    #     (esric_dataset.cpp:315-317), so an http(s) value is fetched at open. No GeoBrix reader needs ESRIC.
+    #   MRF: write (refused). A CachedSource.Source the file names (marfa_dataset.cpp:1519) is opened with
+    #     GDALOpenShared (1669), and a read of a missing tile fetches it from that source (mrf_band.cpp:1061-1065) and
+    #     writes it to the DataFile and IndexFile the file names (mrf_band.cpp:871; marfa_dataset.cpp:1033-1039,
+    #     1104-1131, 1196, 1243-1275: opened for append or created, folders made). No GeoBrix reader needs MRF.
+    #   AAIGrid: none.
+    #   ACE2: none.
+    #   ADRG: none.
+    #   AIG: none.
+    #   AirSAR: none.
+    #   BAG: none.
+    #   BIGGIF: none.
+    #   BMP: none.
+    #   BSB: none.
+    #   BT: none.
+    #   BYN: none.
+    #   CAD: none.
+    #   CALS: none.
+    #   CEOS: none.
+    #   COASP: none.
+    #   COG: none.
+    #   COSAR: none.
+    #   CPG: none.
+    #   CTG: none.
+    #   DERIVED: none.
+    #   DIMAP: path. DATA_FILE_PATH.href and COMPONENT_PATH.href name the files it opens (dimapdataset.cpp:624, 657,
+    #     715, 825, 1197).
+    #   DOQ1: none.
+    #   DOQ2: none.
+    #   DTED: none.
+    #   E57: none.
+    #   ECRGTOC: none.
+    #   EHdr: none.
+    #   EIR: none.
+    #   ENVI: none.
+    #   ERS: none.
+    #   ESAT: none.
+    #   FAST: none.
+    #   GFF: none.
+    #   GIF: none.
+    #   GPKG: path. a GPKG:/vsicurl/ subdataset name is opened (ogrgeopackagedatasource.cpp:1339-1340); metadata
+    #     URIs are compared only.
+    #   GRASSASCIIGrid: none.
+    #   GRIB: none.
+    #   GS7BG: none.
+    #   GSAG: none.
+    #   GSBG: none.
+    #   GSC: none.
+    #   GTX: none.
+    #   GTiff: none.
+    #   GXF: none.
+    #   GenBin: none.
+    #   HDF5: path. a /vsicurl/ subdataset name is opened (hdf5drivercore.cpp:203-206).
+    #   HDF5Image: none.
+    #   HF2: none.
+    #   HFA: none.
+    #   ILWIS: none.
+    #   IRIS: none.
+    #   ISCE: none.
+    #   ISG: none.
+    #   ISIS2: none.
+    #   ISIS3: none.
+    #   JAXAPALSAR: none.
+    #   JDEM: none.
+    #   JP2OpenJPEG: none.
+    #   JPEG: none.
+    #   JPEGXL: none.
+    #   KRO: none.
+    #   L1B: none.
+    #   LAN: none.
+    #   LCP: none.
+    #   LIBERTIFF: none.
+    #   LOSLAS: none.
+    #   Leveller: none.
+    #   MAP: none.
+    #   MBTiles: path. a /vsicurl/ name only switches a read cache on (mbtilesdataset.cpp:2769, 2918).
+    #   MEM: none.
+    #   MFF: none.
+    #   MFF2: none.
+    #   MSGN: none.
+    #   MiraMonRaster: none.
+    #   NDF: none.
+    #   NGSGEOID: none.
+    #   NITF: none.
+    #   NOAA_B: none.
+    #   NSIDCbin: none.
+    #   NTv2: none.
+    #   NUMPY: none.
+    #   NWT_GRC: none.
+    #   NWT_GRD: none.
+    #   OpenFileGDB: path. a /vsicurl/ directory name is probed for its table files
+    #     (ogropenfilegdbdrivercore.cpp:40-46).
+    #   PAux: none.
+    #   PCIDSK: none.
+    #   PCRaster: none.
+    #   PDF: none.
+    #   PDS: none.
+    #   PDS4: path. a PDS4:/vsicurl/ subdataset name is opened (pds4dataset.cpp:1742-1743); an http TEMPLATE is a
+    #     creation option (4526-4529).
+    #   PNG: none.
+    #   PNM: none.
+    #   PRF: none.
+    #   RCM: none.
+    #   RIK: none.
+    #   RMF: none.
+    #   ROI_PAC: none.
+    #   RPFTOC: none.
+    #   RRASTER: none.
+    #   RS2: none.
+    #   RST: none.
+    #   S102: none.
+    #   S104: none.
+    #   S111: none.
+    #   SAFE: path. byteStream.fileLocation.href names the files it opens (safedataset.cpp:1077, 1110, 1117).
+    #   SAGA: none.
+    #   SAR_CEOS: none.
+    #   SENTINEL2: none.
+    #   SIGDEM: none.
+    #   SNAP_TIFF: none.
+    #   SNODAS: none.
+    #   SRP: none.
+    #   SRTMHGT: none.
+    #   TGA: none.
+    #   TIL: none.
+    #   TSX: none.
+    #   Terragen: none.
+    #   USGSDEM: none.
+    #   VICAR: none.
+    #   VRT: path. a SourceFilename names a file GDAL opens (vrtsources.cpp:206-207, 347-349).
+    #   WEBP: none.
+    #   XYZ: none.
+    #   ZMap: none.
+    #   Zarr: path. a plain http(s) name is refused by the driver (zarrdriver.cpp:373-377); a /vsicurl/ name is
+    #     opened.
+    #   netCDF: path. a plain http(s) or /vsicurl/ name opens through libnetcdf's DAP client
+    #     (netcdfdrivercore.cpp:269-273, netcdfdataset.cpp:8187-8188). It also fetches: a variable's crs attribute
+    #     that is an http(s) URL (and contains GEOGCS, PROJCS or EPSG:) goes to SetFromUserInput with no limitations
+    #     (netcdfdataset.cpp:3530-3538), whose http branch fetches it (ogrspatialreference.cpp:4252-4257, 4543). Kept
+    #     allowed: GeoBrix's netCDF readers need it.
     allowed_drivers: Tuple[str, ...] = ()
     refused_drivers: Tuple[str, ...] = ()
 

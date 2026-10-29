@@ -255,7 +255,7 @@ def test_the_runner_dir_defaults_to_the_callers_own_workspace_home(monkeypatch):
     path = _job_submit.runner_dir(_workspace_of("someone.else@example.com"))
 
     assert path.startswith("/Workspace/Users/someone.else@example.com/")
-    assert path.endswith("/sample-data/tests")
+    assert path == "/Workspace/Users/someone.else@example.com/GeoBrix/runners"
 
 
 @pytest.mark.parametrize("override", ["/Workspace/Users/me@x.com/mine", "/Shared/runners"])

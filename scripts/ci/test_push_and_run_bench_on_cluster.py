@@ -193,6 +193,12 @@ def test_a_job_cluster_is_on_demand_when_asked(launch, sdk, on_demand):
         assert aws is None
 
 
+@pytest.mark.parametrize("other", [["--serverless"], ["--existing-cluster-id", "0101-x"]])
+def test_on_demand_without_a_job_cluster_is_refused(launch, sdk, other):
+    assert launch("--on-demand", "--zarr-only", "--no-wait", *other, "--run-id", "t5") == 2
+    assert sdk.submits == []
+
+
 def test_a_finished_run_removes_its_notebook(launch, sdk):
     assert launch("--serverless", "--zarr-only", "--run-id", "t4") == 0
 

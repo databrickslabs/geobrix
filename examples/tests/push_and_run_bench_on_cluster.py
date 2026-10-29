@@ -589,6 +589,13 @@ def main() -> int:
     if new_cluster and serverless:
         print("ERROR: --new-cluster and --serverless are exclusive.", file=sys.stderr)
         return 2
+    if on_demand and not new_cluster:
+        print(
+            "ERROR: --on-demand applies to a job cluster made for the run: pass "
+            "--new-cluster with it.",
+            file=sys.stderr,
+        )
+        return 2
 
     host = os.environ.get("DATABRICKS_HOST")
     token = os.environ.get("DATABRICKS_TOKEN")

@@ -30,7 +30,7 @@ wheel==0.46.2
 pyspark==4.0.0
 numpy==2.3.4
 pandas==2.3.3
-pyarrow==21.0.0
+pyarrow==25.0.1
 # urllib3 pinned to the Serverless env 6 / DBR 19 base version; cap <2.6 (pyproject [light_dbr19]).
 urllib3==2.5.0
 

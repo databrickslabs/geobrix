@@ -107,6 +107,7 @@ from databricks.labs.gbx.zarr._write_tasks import (
     block_hash,
     block_is_stored,
     chunk_grid,
+    delete_row,
     explode_function,
     extent,
     part_of,
@@ -1906,11 +1907,13 @@ def _write_files(spark, plan: _Plan) -> pa.Table:
         explode_function(dataclasses.replace(cfg, access=None)), PIECES_DDL
     )
     parts, nbytes = _planned(plan)
-    if plan.mode != "create" and base_names:
-        # an overwrite deletes every row its input does not replace: it needs them all
-        scope = None if plan.mode == "overwrite" else parts
-        if scope is None or scope:
-            pieces = pieces.unionByName(_base_frame(spark, plan, base_names, scope))
+    # base rows of the groups the input touches: those groups when the blocks were planned
+    # ahead, else (one pass) every candidate group, narrowed after the shuffle. An
+    # overwrite's untouched groups are deleted at commit (_untouched_deletes).
+    unscoped = False
+    if plan.mode != "create" and base_names and (parts is None or parts):
+        pieces = pieces.unionByName(_base_frame(spark, plan, base_names, parts))
+        unscoped = parts is None
     n = _partitions(spark, parts, nbytes, sizes["budget"])
     _LOG.info(
         "gbx_zarr_write %s (%s): %s shuffle partitions",
@@ -1923,12 +1926,75 @@ def _write_files(spark, plan: _Plan) -> pa.Table:
         if n is None
         else pieces.repartition(n, "variable", "part")
     ).sortWithinPartitions("variable", "part", "ord", "key")
+    if unscoped:
+        grouped = _touched_groups(grouped)
     assemble, plan.access = bounded_closure(
         spark,
         plan.access,
         lambda a: assemble_function(dataclasses.replace(cfg, access=a)),
     )
     return grouped.mapInArrow(assemble, ROWS_DDL).toArrow()
+
+
+_HIT = "__gbx_hit"
+
+
+def _touched_groups(grouped):
+    """``grouped`` with only the base rows of the groups that also have a piece or a side
+    row. A one-pass write unions every candidate group's base rows, because which groups
+    its blocks reach is known only once they are cut; this drops the others in Spark,
+    before the assemble stage sees them. The frame is already partitioned and sorted by
+    ``(variable, part)``, so the window adds no shuffle and no sort."""
+    from pyspark.sql import Window
+    from pyspark.sql import functions as F
+
+    piece = (F.col("kind") != F.lit("base")).cast("int")
+    hit = F.max(piece).over(Window.partitionBy("variable", "part"))
+    return grouped.withColumn(_HIT, hit).where(F.col(_HIT) == 1).drop(_HIT)
+
+
+def _untouched_deletes(spark, plan: _Plan, rows: pa.Table, written: set) -> pa.Table:
+    """An overwrite replaces whole variables: every base row of a variable it writes goes,
+    unless a chunk replaced it. The tasks delete within the groups the input touched (they
+    saw only those); this reads the base rows of the written variables in every other
+    group, on the cluster, and returns them as delete rows (``ROWS_ARROW``). Nothing of a
+    variable the write does not replace is read."""
+    if plan.mode != "overwrite" or plan.docs is None:
+        return ROWS_ARROW.empty_table()
+    names = sorted(
+        n for n in written if n in plan.task_arrays and n in plan.docs.arrays
+    )
+    if not names:
+        return ROWS_ARROW.empty_table()
+    chunks = rows.filter(
+        pc.and_(
+            pc.equal(rows.column("rtype"), "chunk"),
+            pc.is_in(
+                rows.column("array"),
+                value_set=pa.array(names, rows.schema.field("array").type),
+            ),
+        )
+    )
+    touched = (
+        pa.table(
+            {
+                "variable": chunks.column("array"),
+                "part": pc.coalesce(chunks.column("shard_key"), chunks.column("key")),
+            }
+        )
+        .group_by(["variable", "part"])
+        .aggregate([])
+    )
+    base = _base_frame(spark, plan, names)
+    if touched.num_rows:
+        seen = to_spark_df(spark, touched, "variable STRING, part STRING")
+        base = base.join(seen, ["variable", "part"], "left_anti")
+    gone = [
+        json.loads(r) for r in base.select("row").toArrow().column("row").to_pylist()
+    ]
+    if not gone:
+        return ROWS_ARROW.empty_table()
+    return pa.Table.from_pylist([delete_row(b) for b in gone], schema=ROWS_ARROW)
 
 
 # --- after the files: side rows, coordinates ---------------------------------------------
@@ -2588,6 +2654,9 @@ def _write(spark, plan: _Plan, optimize: bool = False) -> int:
         lo_hi[1] = max(lo_hi[1], patch.start + len(patch.values))
     _apply_coordinates(plan, side["coords"])
     written = set(side["variables"]) | set(plan.dataset_vars)
+    gone = _untouched_deletes(spark, plan, rows, written)
+    if gone.num_rows:
+        rows = pa.concat_tables([rows, gone.cast(rows.schema)])
     data_rows = _commit_data_rows(plan, rows, written)
     chunk_rows = rows.filter(pc.equal(rows.column("rtype"), "chunk"))
     stats = {

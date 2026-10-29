@@ -433,9 +433,9 @@ class _Assembler:
         if self.cfg.mode == "overwrite":
             for key, base in sorted(group.chunks.items()):
                 if key not in group.rewritten:
-                    self.out.append(_delete(base))
+                    self.out.append(delete_row(base))
             if group.shard is not None:
-                self.out.append(_delete(group.shard))
+                self.out.append(delete_row(group.shard))
         if group.store is not None:
             group.store.close()
         self.group = None
@@ -573,7 +573,8 @@ def _row(rtype: str, **values) -> dict:
     return {name: values.get(name) for name in ROWS_ARROW.names} | {"rtype": rtype}
 
 
-def _delete(base: dict) -> dict:
+def delete_row(base: dict) -> dict:
+    """The delete row (``ROWS_ARROW``) of a base manifest row, expecting its write_id."""
     return _row(
         "delete",
         kind=base.get("kind"),

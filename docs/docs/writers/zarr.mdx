@@ -150,9 +150,10 @@ An `overwrite` replaces the variables it names:
 - **It is required to create a variable the store lacks.** A new variable is created on the store's
   dimensions, with the layout and codecs of a new array and the attributes of its first block. Without
   `variables=` the writer only knows the arrays the store already has, and refuses a block of any other.
-- **It narrows the work.** Without it every decodable array of the store is a candidate, and the write
-  shuffles the manifest rows of all of them against the input, even when the input holds one variable.
-  On a large store always name the variables you write.
+- **It narrows the work.** Without it every decodable array of the store is a candidate: the write reads
+  the manifest rows of all of them and moves them through its shuffle, and only then keeps the rows of
+  the chunks its input touches. Naming the variables leaves the other arrays' rows out from the start,
+  so on a large store name the variables you write.
 
 <CodeFromTest code={zarrWrite} language="python" functionName="add_a_variable"
   source="docs/tests/python/writers/zarr_write_examples.py"

@@ -11,6 +11,7 @@ import json
 import uuid
 
 import numpy as np
+import pyarrow.compute as pa_compute
 import pytest
 
 zarr = pytest.importorskip("zarr")
@@ -329,6 +330,57 @@ def test_overwrite_replaces_variable(spark_delta, drop, tmp_path, no_hooks):
         "AND tag IS NULL"
     ).collect()
     assert [r["write_id"] for r in live] == [wid]  # no row of the first write is left
+
+
+@pytest.mark.parametrize("mode", ["update", "overwrite"])
+def test_a_one_chunk_write_reads_only_its_own_group_of_the_manifest(
+    spark_delta, drop, tmp_path, no_hooks, mode
+):
+    """A one-chunk update or overwrite from blocks, with ``variables=None``: the assemble
+    stage gets the base rows of that chunk's group only, not the manifest of every array
+    it might have written, and the driver collects no delete row of an array the write
+    does not replace. The overwrite still replaces the whole of the variable it writes.
+    """
+    ds = _dataset()
+    table, _, _ = _create(spark_delta, drop, tmp_path, ds, shards=False)
+    fed, collected = {}, {}
+    frame_class = type(spark_delta.range(1))  # the session's DataFrame implementation
+    real_map, real_rows = frame_class.mapInArrow, _write._commit_data_rows
+
+    def counting_map(df, func, schema, *a, **k):
+        if schema == _write.ROWS_DDL:  # the assemble stage's input
+            fed.update(
+                {r["kind"]: r["count"] for r in df.groupBy("kind").count().collect()}
+            )
+        return real_map(df, func, schema, *a, **k)
+
+    def recording_rows(plan, rows, written):
+        collected["deletes"] = (
+            rows.filter(pa_compute.equal(rows.column("rtype"), "delete"))
+            .column("array")
+            .to_pylist()
+        )
+        return real_rows(plan, rows, written)
+
+    no_hooks.setattr(frame_class, "mapInArrow", counting_map)
+    no_hooks.setattr(_write, "_commit_data_rows", recording_rows)
+    one = np.full((12, 5, 6), 7.0, dtype="float32")  # chunk c/0/0/0 of t2m, whole
+    gbx_zarr_write(_blocks(spark_delta, ("t2m", (0, 0, 0), one)), table, mode=mode)
+
+    assert fed.get("base") == 1  # the chunk's own row; t2m and u10 have 16 rows each
+    assert "u10" not in collected["deletes"]
+    got = _read(spark_delta, table, "t2m")
+    assert (got[0:12, 0:5, 0:6] == 7.0).all()
+    if mode == "update":
+        want = ds.t2m.values.copy()
+        want[0:12, 0:5, 0:6] = 7.0
+        np.testing.assert_array_equal(got, want)
+    else:  # the other 15 chunks of t2m are gone: the variable was replaced
+        rest = got.copy()
+        rest[0:12, 0:5, 0:6] = np.nan
+        assert np.isnan(rest).all()
+        assert sorted(collected["deletes"]) == ["t2m"] * 15
+    np.testing.assert_array_equal(_read(spark_delta, table, "u10"), ds.u10.values)
 
 
 # --- idempotency and read-only stores ------------------------------------------------------

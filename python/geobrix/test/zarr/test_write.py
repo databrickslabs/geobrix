@@ -1163,7 +1163,8 @@ def test_p9_a_create_whose_commit_landed_keeps_its_marker(
     spark_delta, drop, tmp_path, no_hooks, how
 ):
     """I7: the lookup after the MERGE fails (a transient error once, or every time). The
-    commit is in, so the marker must stay and the store stays writable."""
+    commit is in, so the marker must stay and the store stays writable. A new store's
+    commit looks its write_id up only after the MERGE, so every lookup is one of those."""
     root, table = tmp_path / f"r9{how}", _table(f"p9{how}")
     drop(table)
     real, calls = M.find_commit_version, []
@@ -1172,7 +1173,7 @@ def test_p9_a_create_whose_commit_landed_keeps_its_marker(
         if table_.startswith("delta."):  # the root's ownership ledger, not the manifest
             return real(spark_, table_, write_id, since=since)
         calls.append(1)
-        if len(calls) >= 2 and (how == "always" or len(calls) == 2):
+        if how == "always" or len(calls) == 1:
             raise RuntimeError("transient lookup failure")
         return real(spark_, table_, write_id, since=since)
 

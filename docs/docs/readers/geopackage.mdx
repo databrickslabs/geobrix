@@ -72,6 +72,19 @@ df.write.mode("overwrite").saveAsTable("main.geo.districts")        # Delta tabl
 
 Reading a folder fans the files across the cluster (one partition per file), so ingest scales with the data — unlike a single-node `pyogrio.read_*` that parses one file on one machine. See [Benchmarking](../api/benchmarking) for light-vs-heavy ingest figures.
 
+### Regular-expression filters (REGEXP)
+
+`REGEXP` is an operator of GDAL's SQLite SQL dialect. It is available when GDAL is built with PCRE2, as the GeoBrix env
+wheels' GDAL is. On a GeoPackage, select with `sql_dialect="INDIRECT_SQLITE"`. A GeoPackage is itself an SQLite
+database, so the plain `SQLITE` dialect, like the readers' `where` option, runs in the file's own SQLite, which has no
+`REGEXP`. For files that are not SQLite databases (Shapefile, GeoJSON, FlatGeobuf, ...), `sql_dialect="SQLITE"` takes
+`REGEXP` directly.
+
+<CodeFromTest code={geopackageGbx} language="python" functionName="REGEXP_GPKG"
+  source="docs/tests/python/readers/geopackage_gbx_examples.py"
+  testFile="docs/tests/python/readers/test_geopackage_gbx_examples.py"
+  outputConstant="REGEXP_GPKG_output" />
+
 </TabItem>
 <TabItem value="heavyweight" label="Heavyweight · gpkg_ogr">
 

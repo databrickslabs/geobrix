@@ -786,6 +786,13 @@ formats.
   workers with `Cannot find proj.db`, and the registered grids were not applied to them. GeoBrix
   now points `PROJ_DATA` at a single directory that combines the PROJ data and the registered
   grids. See [Registering custom grid files](./api/coordinate-reference-systems#registering-custom-grid-files).
+- **British National Grid coordinates move with OSTN15 (behavior change).** The GeoBrix env wheels
+  ship Ordnance Survey's OSTN15 grid, so transforms between EPSG:27700 and WGS 84 or ETRS89 now
+  use OSTN15, the definitive OSGB36 transformation, instead of PROJ's Helmert approximation. The
+  results are within millimetres of Ordnance Survey's own test points, and differ from the
+  Helmert values you got before by about 1.7 m in central London and by up to about 5 m elsewhere
+  in Great Britain. Results you stored from earlier versions differ by that much. See
+  [Grids that ship with GeoBrix](./api/coordinate-reference-systems#grids-that-ship-with-geobrix).
 
 ### Python bindings
 

@@ -51,108 +51,177 @@ WARP_DATASET = (
 )
 WARP_RESOLVED = "a warp option whose CRS is a resolved CRS (the canonical resolver's AUTH:CODE, or its WKT file)"
 
-SCALA_ALLOW = {
+# The Scala sites are allowlisted by exact source line (I-B): a new line in an allowlisted file is a new site. The one
+# file-level entry is the canonical resolver itself. Each site is classified by its class (the constants above).
+SCALA_FILE_ALLOW = {
     "operations/SpatialRefOps.scala": "the canonical resolver: every CRS text is parsed here, classified first",
-    # --- integer SRIDs (an int names no file; see INT_EPSG) ---
-    "rasterx/expressions/RST_Transform.scala": INT_EPSG,
-    "rasterx/expressions/RST_BinPoints.scala": INT_EPSG,
-    "rasterx/expressions/agg/RasterizeBurn.scala": INT_EPSG,
-    "rasterx/expressions/agg/RST_Custom_RasterizeAgg.scala": INT_EPSG,
-    "rasterx/expressions/agg/RST_H3_RasterizeAgg.scala": INT_EPSG,
-    "rasterx/expressions/agg/RST_Quadbin_RasterizeAgg.scala": INT_EPSG,
-    "rasterx/expressions/grid/GridReprojection.scala": GRID_INT,
-    "rasterx/expressions/grid/RST_H3_CellBBox.scala": CONST_CRS,
-    "rasterx/operations/CustomGridBounds.scala": GRID_INT,
-    "rasterx/operations/RasterTessellate.scala": GRID_INT,
-    "rasterx/expressions/grid/RasterToGridGeneric.scala": GRID_INT,
-    "rasterx/expressions/RST_Clip.scala": DATASET_INT,
-    # --- constants ---
-    "rasterx/gdal/GDAL.scala": CONST_CRS,
-    "rasterx/expressions/vector/RST_Isoband.scala": CONST_CRS,
-    "rasterx/expressions/vector/RST_Polygonize.scala": CONST_CRS,
-    "vectorx/mvt/MvtWriter.scala": CONST_CRS,
-    # --- a dataset's own SRS, re-parsed from GDAL's export ---
-    "rasterx/expressions/RST_AlignTo.scala": DATASET_WKT,
-    "rasterx/expressions/RST_Chm.scala": DATASET_WKT,
-    "rasterx/operations/RasterAlignment.scala": DATASET_WKT,
-    "rasterx/expressions/accessors/RST_Crs.scala": DATASET_WKT,
-    "rasterx/expressions/accessors/RST_SRID.scala": DATASET_WKT,
-    # --- GDAL warp and translate options ---
-    "rasterx/expressions/web/RST_TileXYZ.scala": WARP_CONST,
-    "rasterx/expressions/web/RST_ToWebMercator.scala": WARP_CONST,
-    "rasterx/operator/GDALWarp.scala": WARP_CONST,
-    "rasterx/operations/RasterProject.scala": WARP_RESOLVED,
 }
-# A line-level allowlist for the sites a file-level entry would be too broad for (a new site in these files is new).
-SCALA_LINE_ALLOW = {
-    ("rasterx/expressions/RST_AlignTo.scala", "sr.ImportFromWkt(wkt)"): DATASET_WKT,
+SCALA_SITES = {
     (
         "rasterx/expressions/RST_AlignTo.scala",
         'val tSrs = srsToken.map(t => s"-t_srs $t ").getOrElse("")',
-    ): WARP_DATASET,
-    ("rasterx/expressions/RST_Chm.scala", "sr.ImportFromWkt(wkt)"): DATASET_WKT,
+    ): DATASET_WKT,
+    ("rasterx/expressions/RST_AlignTo.scala", "sr.ImportFromWkt(wkt)"): DATASET_WKT,
+    ("rasterx/expressions/RST_BinPoints.scala", "sr.ImportFromEPSG(srid)"): INT_EPSG,
     (
         "rasterx/expressions/RST_Chm.scala",
         'val tSrs = srsToken.map(t => s"-t_srs $t ").getOrElse("")',
-    ): WARP_DATASET,
+    ): DATASET_WKT,
+    ("rasterx/expressions/RST_Chm.scala", "sr.ImportFromWkt(wkt)"): DATASET_WKT,
+    (
+        "rasterx/expressions/RST_Clip.scala",
+        "if (dsEpsgCode != 0) geomSR.ImportFromEPSG(dsEpsgCode)",
+    ): DATASET_INT,
+    (
+        "rasterx/expressions/RST_Clip.scala",
+        "else geomSR.ImportFromWkt(dsSR.ExportToWkt())",
+    ): DATASET_WKT,
+    (
+        "rasterx/expressions/RST_Transform.scala",
+        "val rc = dstSR.ImportFromEPSG(srid)",
+    ): INT_EPSG,
+    (
+        "rasterx/expressions/accessors/RST_Crs.scala",
+        "val sr = new SpatialReference(proj)",
+    ): DATASET_WKT,
+    (
+        "rasterx/expressions/accessors/RST_SRID.scala",
+        "val proj = new SpatialReference(ds.GetProjection())",
+    ): DATASET_WKT,
+    (
+        "rasterx/expressions/agg/RST_Custom_RasterizeAgg.scala",
+        "val srcSR = new SpatialReference(); srcSR.ImportFromEPSG(gridCrs)",
+    ): INT_EPSG,
+    (
+        "rasterx/expressions/agg/RST_Custom_RasterizeAgg.scala",
+        "val dstSR = new SpatialReference(); dstSR.ImportFromEPSG(srid)",
+    ): INT_EPSG,
+    (
+        "rasterx/expressions/agg/RST_H3_RasterizeAgg.scala",
+        "val srcSR = new SpatialReference(); srcSR.ImportFromEPSG(H3.crsID)",
+    ): INT_EPSG,
+    (
+        "rasterx/expressions/agg/RST_H3_RasterizeAgg.scala",
+        "val dstSR = new SpatialReference(); dstSR.ImportFromEPSG(srid)",
+    ): INT_EPSG,
+    (
+        "rasterx/expressions/agg/RST_Quadbin_RasterizeAgg.scala",
+        "val srcSR = new SpatialReference(); srcSR.ImportFromEPSG(CRS_ID)",
+    ): INT_EPSG,
+    (
+        "rasterx/expressions/agg/RST_Quadbin_RasterizeAgg.scala",
+        "val dstSR = new SpatialReference(); dstSR.ImportFromEPSG(srid)",
+    ): INT_EPSG,
+    (
+        "rasterx/expressions/agg/RasterizeBurn.scala",
+        "val s = new SpatialReference(); s.ImportFromEPSG(srid); s",
+    ): INT_EPSG,
+    (
+        "rasterx/expressions/agg/RasterizeBurn.scala",
+        "val d = new SpatialReference(); d.ImportFromEPSG(grid.crsSrid); d",
+    ): INT_EPSG,
     (
         "rasterx/expressions/grid/GridReprojection.scala",
-        "srcSR.ImportFromWkt(srcWkt)",
+        "val dstSR = new SpatialReference(); dstSR.ImportFromEPSG(gridSrid)",
+    ): GRID_INT,
+    (
+        "rasterx/expressions/grid/GridReprojection.scala",
+        "val srcSR = new SpatialReference(); srcSR.ImportFromWkt(srcWkt)",
     ): DATASET_WKT,
     (
         "rasterx/expressions/grid/GridReprojection.scala",
-        's"gdalwarp -t_srs EPSG:$gridSrid -r near"',
+        'val (result, _) = WarpSource.warpFillAsNoData(ds, resultPath, s"gdalwarp -t_srs EPSG:$gridSrid -r near")',
     ): GRID_INT,
+    (
+        "rasterx/expressions/grid/RST_H3_CellBBox.scala",
+        "val gridSR = new SpatialReference(); gridSR.ImportFromEPSG(H3.crsID)",
+    ): CONST_CRS,
+    (
+        "rasterx/expressions/grid/RST_H3_CellBBox.scala",
+        "val srcSR = new SpatialReference(); srcSR.ImportFromEPSG(H3.crsID)",
+    ): CONST_CRS,
+    (
+        "rasterx/expressions/grid/RasterToGridGeneric.scala",
+        "sr.ImportFromEPSG(crsSrid)",
+    ): GRID_INT,
+    (
+        "rasterx/expressions/vector/RST_Isoband.scala",
+        "val outSr = if (srcSrs != null) srcSrs else { sr.ImportFromEPSG(4326); sr }",
+    ): CONST_CRS,
+    (
+        "rasterx/expressions/vector/RST_Polygonize.scala",
+        "val outSr = if (srcSrs != null) srcSrs else { sr.ImportFromEPSG(4326); sr }",
+    ): CONST_CRS,
+    (
+        "rasterx/expressions/web/RST_TileXYZ.scala",
+        'command = s"gdalwarp -t_srs EPSG:3857 -te $xmin $ymin $xmax $ymax -ts $size $size -r $resampling -dstalpha"',
+    ): WARP_CONST,
+    (
+        "rasterx/expressions/web/RST_ToWebMercator.scala",
+        'command = s"gdalwarp -t_srs EPSG:3857 -r $resampling"',
+    ): WARP_CONST,
+    ("rasterx/gdal/GDAL.scala", "wsg84.ImportFromEPSG(4326)"): CONST_CRS,
+    ("rasterx/gdal/GDAL.scala", "epsg3857.ImportFromEPSG(3857)"): CONST_CRS,
+    (
+        "rasterx/operations/CustomGridBounds.scala",
+        "gridSR.ImportFromEPSG(grid.crsSrid)",
+    ): GRID_INT,
+    (
+        "rasterx/operations/RasterAlignment.scala",
+        "val sa = new SpatialReference(); sa.ImportFromWkt(wa)",
+    ): DATASET_WKT,
+    (
+        "rasterx/operations/RasterAlignment.scala",
+        "val sb = new SpatialReference(); sb.ImportFromWkt(wb)",
+    ): DATASET_WKT,
+    (
+        "rasterx/operations/RasterAlignment.scala",
+        "val sr = new SpatialReference(); sr.ImportFromWkt(wkt)",
+    ): DATASET_WKT,
+    (
+        "rasterx/operations/RasterProject.scala",
+        'command = s"gdalwarp -t_srs $authName:$authCode"',
+    ): WARP_RESOLVED,
+    (
+        "rasterx/operations/RasterProject.scala",
+        'command = s"gdalwarp -t_srs ${wktFile.toString}"',
+    ): WARP_RESOLVED,
+    (
+        "rasterx/operations/RasterTessellate.scala",
+        "sr.ImportFromEPSG(27700)",
+    ): CONST_CRS,
     (
         "rasterx/operations/RasterTessellate.scala",
         "s.ImportFromWkt(srcWkt)",
     ): DATASET_WKT,
-    ("rasterx/operations/RasterTessellate.scala", "ImportFromEPSG(27700)"): CONST_CRS,
     (
         "rasterx/operations/RasterTessellate.scala",
-        '"gdalwarp -t_srs EPSG:27700 -r near"',
+        'val (result, _) = WarpSource.warpFillAsNoData(ds, resultPath, "gdalwarp -t_srs EPSG:27700 -r near")',
     ): WARP_CONST,
-    ("rasterx/operations/RasterAlignment.scala", "sa.ImportFromWkt(wa)"): DATASET_WKT,
-    ("rasterx/operations/RasterAlignment.scala", "sb.ImportFromWkt(wb)"): DATASET_WKT,
-    ("rasterx/operations/RasterAlignment.scala", "sr.ImportFromWkt(wkt)"): DATASET_WKT,
     (
-        "rasterx/expressions/RST_Clip.scala",
-        "geomSR.ImportFromEPSG(dsEpsgCode)",
-    ): DATASET_INT,
-    (
-        "rasterx/expressions/RST_Clip.scala",
-        "geomSR.ImportFromWkt(dsSR.ExportToWkt())",
-    ): DATASET_WKT,
+        "rasterx/operations/RasterTessellate.scala",
+        "sr.ImportFromEPSG(grid.crsSrid)",
+    ): GRID_INT,
     ("rasterx/operator/GDALWarp.scala", 'srsVec.add("-s_srs")'): WARP_CONST,
-    (
-        "rasterx/operations/RasterProject.scala",
-        's"gdalwarp -t_srs $authName:$authCode"',
-    ): WARP_RESOLVED,
-    (
-        "rasterx/operations/RasterProject.scala",
-        's"gdalwarp -t_srs ${wktFile.toString}"',
-    ): WARP_RESOLVED,
-    ("rasterx/expressions/RST_Chm.scala", 'Some(x) => s"-t_srs $x"'): WARP_RESOLVED,
-    (
-        "rasterx/expressions/web/RST_TileXYZ.scala",
-        's"gdalwarp -t_srs EPSG:3857 -te $xmin $ymin $xmax $ymax -ts $size $size -r $resampling -dstalpha"',
-    ): WARP_CONST,
+    ("vectorx/mvt/MvtWriter.scala", "srs.ImportFromEPSG(3857)"): CONST_CRS,
 }
+
+
+def _scala_hits_in(rel: str, text: str):
+    for lineno, line in enumerate(text.split("\n"), 1):
+        if SCALA_COMMENT.match(line) or not SCALA_PARSE.search(line):
+            continue
+        yield rel, lineno, line.strip()
 
 
 def _scala_hits():
     for path in sorted(SCALA_ROOT.rglob("*.scala")):
         rel = path.relative_to(SCALA_ROOT).as_posix()
-        for lineno, line in enumerate(path.read_text().splitlines(), 1):
-            if SCALA_COMMENT.match(line) or not SCALA_PARSE.search(line):
-                continue
-            yield rel, lineno, line.strip()
+        yield from _scala_hits_in(rel, path.read_text())
 
 
 def _scala_allowed(rel: str, line: str) -> bool:
-    if rel in SCALA_ALLOW:
-        return True
-    return any(r == rel and needle in line for (r, needle) in SCALA_LINE_ALLOW)
+    return rel in SCALA_FILE_ALLOW or (rel, line) in SCALA_SITES
 
 
 # ---- Python ------------------------------------------------------------------------------------------------------
@@ -164,6 +233,7 @@ PY_CRS_CLASS_PARSE = {
     "from_epsg",
     "from_wkt",
 }
+PY_CONSTRUCTORS = {"CRS", "SpatialReference"}
 PY_OSR_PARSE = {
     "SetFromUserInput",
     "ImportFromProj4",
@@ -220,16 +290,16 @@ def _receiver_text(node) -> str:
     return ""
 
 
-def _python_hits():
-    for path in sorted(PY_ROOT.rglob("*.py")):
-        rel = path.relative_to(PY_ROOT).as_posix()
-        text = path.read_text()
-        lines = text.split("\n")  # the AST's line numbers count "\n" only
-        for node in ast.walk(ast.parse(text)):
-            if not (
-                isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-            ):
-                continue
+def _python_sites_in(text: str):
+    """(line, source text) of every CRS parse call in `text`: a constructor by its bare name or its module (m-A)."""
+    lines = text.split("\n")  # the AST's line numbers count "\n" only
+    for node in ast.walk(ast.parse(text)):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name):
+            # a constructor by its bare name: CRS(value), SpatialReference(value)
+            site = node.func.id in PY_CONSTRUCTORS and bool(node.args)
+        elif isinstance(node.func, ast.Attribute):
             attr = node.func.attr
             recv = _receiver_text(node.func.value)
             site = (
@@ -237,9 +307,20 @@ def _python_hits():
                 or (attr == "from_crs" and recv.split(".")[-1] == "Transformer")
                 or attr == "to_crs"
                 or attr in PY_OSR_PARSE
+                # a constructor reached through a module: pyproj.CRS(value), osr.SpatialReference(value)
+                or (attr in PY_CONSTRUCTORS and bool(node.args))
             )
-            if site:
-                yield rel, node.lineno, lines[node.lineno - 1].strip()
+        else:
+            continue
+        if site:
+            yield node.lineno, lines[node.lineno - 1].strip()
+
+
+def _python_hits():
+    for path in sorted(PY_ROOT.rglob("*.py")):
+        rel = path.relative_to(PY_ROOT).as_posix()
+        for lineno, line in _python_sites_in(path.read_text()):
+            yield rel, lineno, line
 
 
 PY_ALLOW_FILES = {
@@ -290,4 +371,39 @@ def test_the_geojsonl_writer_parses_its_crs_through_the_resolver():
     """C-2's site: the writer's PROJ4 and SRID columns go through SpatialRefOps.resolveCrs, never ImportFromProj4."""
     text = (SCALA_ROOT / "vectorx/ds/geojsonl/GeoJSONL_RowWriter.scala").read_text()
     assert "ImportFromProj4" not in text
-    assert "SpatialRefOps.resolveCrs(proj4)" in text
+    # the PROJ4 and SRID columns both go through resolveLoudly, which calls the canonical resolver (m-C: loud, with a Fix)
+    assert "SpatialRefOps.resolveCrs(value)" in text
+    assert 'resolveLoudly(proj4, "PROJ4")' in text
+
+
+def test_a_planted_user_text_parse_in_an_allowlisted_file_is_flagged():
+    """I-B: the allowlist is by line. The reviewer's mutation, a PROJ4 parse of a user column inside RST_Transform.scala
+    (a file the allowlist names), is a new site; the file's own lines are allowed as they stand.
+    """
+    rel = "rasterx/expressions/RST_Transform.scala"
+    real = (SCALA_ROOT / rel).read_text()
+    assert [
+        l for _, _, l in _scala_hits_in(rel, real) if not _scala_allowed(rel, l)
+    ] == []
+    anchor = "        val rc = dstSR.ImportFromEPSG(srid)\n"
+    assert real.count(anchor) == 1
+    planted = real.replace(anchor, anchor + "        dstSR.ImportFromProj4(userCol)\n")
+    new = [
+        (n, l) for _, n, l in _scala_hits_in(rel, planted) if not _scala_allowed(rel, l)
+    ]
+    assert [l for _, l in new] == ["dstSR.ImportFromProj4(userCol)"], new
+
+
+def test_a_planted_constructor_parse_is_flagged():
+    """m-A: a constructor that parses a value is a parse site, by its bare name or its module: pyproj.CRS(value) and
+    osr.SpatialReference(value). A reasoned constructor with no value (CRS() ) is not.
+    """
+    planted = (
+        "import pyproj\nfrom osgeo import osr\n"
+        "def f(user):\n"
+        "    a = pyproj.CRS(user)\n"
+        "    b = osr.SpatialReference(user)\n"
+        "    c = osr.SpatialReference()\n"
+    )
+    found = [line for _, line in _python_sites_in(planted)]
+    assert found == ["a = pyproj.CRS(user)", "b = osr.SpatialReference(user)"], found

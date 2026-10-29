@@ -36,6 +36,8 @@ def audited_copy(tmp_path: Path) -> Path:
     paths = ["scripts/native/pins.conf", "scripts/native/rust-pins.conf"]
     paths += ["scripts/native/legacy-consumers.txt", "rust-toolchain.toml"]
     paths += [str(p.relative_to(REPO_ROOT)) for p in REPO_ROOT.glob("rust/*/Cargo.lock")]
+    java = f"gdal-{pin('GDAL_VERSION')}-gbx{pin('GBX_NATIVE_REVISION')}.jar"
+    paths += ["pom.xml", f"scripts/native/maven/{java}"]
     for line in (
         (REPO_ROOT / "scripts/native/legacy-consumers.txt").read_text().splitlines()
     ):
@@ -84,6 +86,11 @@ def test_the_repository_passes_the_audit():
             "scripts/native/rust-pins.conf",
             (r"(?m)^(CRATE_GEOS_VERSION=.*)$", r"\1\nCRATE_GDAL_VERSION=0.19.0"),
         ),
+        # the committed GDAL Java classes are not the bytes the pin names (restaged, not re-pinned)
+        (
+            "scripts/native/rust-pins.conf",
+            (r"(?m)^(GDAL_JAVA_JAR_SHA256=).*", r"\g<1>" + "0" * 64),
+        ),
     ],
     ids=[
         "rust-channel",
@@ -92,6 +99,7 @@ def test_the_repository_passes_the_audit():
         "version-without-url",
         "crate-pin-in-pins-conf",
         "stale-crate-pin",
+        "java-classes-sha",
     ],
 )
 def test_drift_is_reported(tmp_path, rel, change):

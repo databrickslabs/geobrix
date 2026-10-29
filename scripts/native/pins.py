@@ -3,7 +3,8 @@
 
 scripts/native/pins.conf pins GDAL, PROJ, GEOS, every library they are built from and the build toolchain; its
 KEY=VALUE lines are the cache key of the GDAL build. scripts/native/rust-pins.conf pins what feeds no GDAL build
-(PyO3, the georust crates, the rust-native stage's libclang), so a crate bump never rebuilds GDAL.
+(PyO3, the georust crates, the rust-native stage's libclang, the checksum of the GDAL Java classes jar), so a crate
+bump never rebuilds GDAL.
 
     pins.py get KEY                       print one value (from either file)
     pins.py build-args                    one `--build-arg KEY=VALUE` per line of pins.conf (no licences or URLs)
@@ -332,6 +333,21 @@ def pom_property(root: Path, pins: dict) -> list:
     return []
 
 
+def java_classes(root: Path, pins: dict) -> list:
+    """The GDAL Java classes pom.xml installs: the committed jar holds the bytes rust-pins.conf pins."""
+    want = pins.get("GDAL_JAVA_JAR_SHA256")
+    if want is None:
+        return [f"{RUST_PINS}: GDAL_JAVA_JAR_SHA256 is missing"]
+    rel = f"scripts/native/maven/gdal-{pins['GDAL_VERSION']}-gbx{pins['GBX_NATIVE_REVISION']}.jar"
+    path = root / rel
+    if not path.exists():
+        return [f"{rel}: missing (scripts/native/java_jar.py stage writes it)"]
+    got = hashlib.sha256(path.read_bytes()).hexdigest()
+    if got != want:
+        return [f"{rel}: sha256 is {got}, {RUST_PINS} says GDAL_JAVA_JAR_SHA256={want}"]
+    return []
+
+
 def legacy(root: Path) -> list:
     path = root / "scripts/native/legacy-consumers.txt"
     out = []
@@ -403,6 +419,7 @@ def audit(root: Path) -> list:
         crate_locks,
         build_requirements,
         pom_property,
+        java_classes,
     ):
         findings += check(root, pins)
     findings += legacy(root)

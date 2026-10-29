@@ -486,11 +486,14 @@ def _release_marker(root: str, table: str, kind: str) -> None:
 # no MERGE, no read back. A founder that does not land claims through the ledger as above.
 
 _LEDGER_KEY = "owner"
+# No NOT NULL: a ledger founded by CREATE TABLE AS SELECT cannot declare one (Spark refuses a
+# column list there, and Delta makes a written DataFrame's columns nullable), so the ledger
+# made here has the same schema. Every writer of a ledger sets kind and write_id.
 _LEDGER_DDL = """
 CREATE TABLE IF NOT EXISTS {table} (
-  kind STRING NOT NULL, array STRING, key STRING, shard_key STRING, file STRING,
+  kind STRING, array STRING, key STRING, shard_key STRING, file STRING,
   offset BIGINT, length BIGINT, checksum STRING, origin STRING, identity STRING,
-  write_id STRING NOT NULL, tag STRING, meta STRING)
+  write_id STRING, tag STRING, meta STRING)
 USING DELTA
 TBLPROPERTIES (
   'delta.enableDeletionVectors' = 'false',
@@ -522,11 +525,12 @@ def _found_ledger(spark, root: str, claim_id: str, body: dict, table: str) -> bo
     writes) are the table's first version, which Delta lets one creator write, so a claim
     that lands this way is the first and is not read back.
 
-    ``False`` on any failure: the ledger is there already, a concurrent founder won, or the
-    statement failed (and may have landed all the same). The caller then claims through the
+    ``False`` when the ledger directory is not absent (``_ledger_state``), and on any failure
+    of the statement (logged at WARNING): a concurrent founder won, or the statement failed
+    (and may have landed all the same). The caller then claims through the
     ledger with the same ``claim_id``, which finds the winner, or this claim if it landed.
     """
-    if os.path.exists(os.path.join(root, OWNER_LEDGER)):
+    if _ledger_state(root) != "absent":
         return False
     commit_meta = json.dumps({"mode": "claim", "table": table}, sort_keys=True)
     rows = (
@@ -542,7 +546,13 @@ def _found_ledger(spark, root: str, claim_id: str, body: dict, table: str) -> bo
         )
         return True
     except Exception as e:  # noqa: BLE001 - the ledger decides, below
-        _LOG.debug("founding the ledger of %s did not land: %s", root, e)
+        _LOG.warning(
+            "founding the ownership ledger of %s did not land (%s: %s); claiming through "
+            "the ledger instead",
+            root,
+            type(e).__name__,
+            e,
+        )
         return False
 
 
@@ -550,6 +560,45 @@ def _ledger_table(root: str) -> str:
     """The Spark name of the ledger of ``root``: the Delta table at ``<root>/_gbx_owner``."""
     path = os.path.join(root, OWNER_LEDGER)
     return "delta.`" + path.replace("`", "``") + "`"
+
+
+_DELTA_LOG = "_delta_log"
+_FIRST_VERSION = "00000000000000000000.json"
+
+
+def _ledger_state(root: str) -> str:
+    """What the ledger directory of ``root`` holds: ``"absent"`` (no directory, or an empty
+    one), ``"delta"`` (a Delta table: its first version is in the log) or ``"founding"``
+    (files but no first version: a founder's CREATE TABLE AS SELECT has written its data and
+    not yet committed, or died before it did). Read through the mount."""
+    path = os.path.join(root, OWNER_LEDGER)
+
+    def look() -> str:
+        try:
+            names = os.listdir(path)
+        except FileNotFoundError:
+            return "absent"
+        if not names:
+            return "absent"
+        if _DELTA_LOG in names and _FIRST_VERSION in os.listdir(
+            os.path.join(path, _DELTA_LOG)
+        ):
+            return "delta"
+        return "founding"
+
+    return _retry_transient(look)
+
+
+def _stuck(root: str, attempts: int) -> ZarrOwnershipError:
+    ledger = os.path.join(root, OWNER_LEDGER)
+    return ZarrOwnershipError(
+        f"{ledger} holds files but no Delta log after {attempts} looks: another call's "
+        "claim is still creating the ownership ledger of the root, or it stopped before "
+        "it committed.",
+        fix=f"if no create, register, write or maintenance call on {root} is running, "
+        f"delete the directory {ledger} (without a Delta log it holds no claim, so no "
+        "store owns the root by it) and try again; otherwise wait for that call to end",
+    )
 
 
 def _ledger_exists(spark, ledger: str) -> bool:
@@ -562,21 +611,41 @@ def _ledger_exists(spark, ledger: str) -> bool:
 
 def _create_ledger(spark, ledger: str, root: str) -> None:
     """Create the ledger table if it is not there. Two claimers can create it at once: the
-    one that loses its first commit finds the table made, which is what it wanted."""
-    for attempt in range(3):
+    one that loses its first commit finds the table made, which is what it wanted.
+
+    A ledger directory with files but no Delta log is a founder's statement in flight
+    (``_ledger_state``): it is waited for, on the claim's jittered budget
+    (``_write._ATTEMPTS``), and not created over. A root still in that state after the
+    budget raises ``ZarrOwnershipError`` naming the directory and when deleting it is safe.
+    """
+    from databricks.labs.gbx.zarr import _write
+
+    failures = 0
+    for attempt in range(_write._ATTEMPTS):
+        state = _ledger_state(root)
+        if state == "delta":
+            return
+        if state == "founding":
+            _write._pause(_write._wait(attempt))
+            continue
         try:
             spark.sql(_LEDGER_DDL.format(table=_q(ledger)))
             return
         except Exception as e:
             if _ledger_exists(spark, ledger):
                 return
-            if attempt == 2:
+            if _ledger_state(root) == "founding":
+                _write._pause(_write._wait(attempt))
+                continue
+            failures += 1
+            if failures == 3:
                 raise ZarrError(
                     f"GeoBrix cannot create the ownership ledger of {root} "
                     f"({type(e).__name__}).",
                     fix="check that the root is on a Volume you can write to, then try again",
                 ) from e
-            time.sleep(0.5 * (attempt + 1))
+            time.sleep(0.5 * failures)
+    raise _stuck(root, _write._ATTEMPTS)
 
 
 def _held(spark, ledger: str) -> list[dict]:

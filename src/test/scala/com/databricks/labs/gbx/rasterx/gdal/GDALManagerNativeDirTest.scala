@@ -19,8 +19,9 @@ class GDALManagerNativeDirTest extends AnyFunSuite {
         files: Set[String] = Set(jni, "/r/_native/x86_64/lib/libgdalalljni.so", legacy),
         real: Map[String, String] = Map.empty,
         mapped: Seq[String] = Nil,
-        libraryPath: Seq[String] = Nil
-    ) = GDALManager.resolveNative(conf, env, arch, files, p => real.getOrElse(p, p), mapped, libraryPath)
+        libraryPath: Seq[String] = Nil,
+        sha: Map[String, String] = Map.empty
+    ) = GDALManager.resolveNative(conf, env, arch, files, p => real.getOrElse(p, p), mapped, libraryPath, p => sha.getOrElse(p, p))
 
     private def refusal(r: Either[String, NativeChoice]): String = r.left.getOrElse(fail(s"expected a refusal, got $r"))
 
@@ -48,6 +49,11 @@ class GDALManagerNativeDirTest extends AnyFunSuite {
         refusal(resolve(Some(dir), libraryPath = Seq("/usr/local/lib", "/usr/lib"))) should (include(legacy)
             and include(s"$dir/lib"))
         resolve(Some(dir), libraryPath = Seq(s"$dir/lib", "/usr/lib")).isRight shouldBe true
+        // a byte-identical copy of the same JNI there is the same GDAL
+        resolve(Some(dir), libraryPath = Seq("/usr/lib"), sha = Map(legacy -> "same", jni -> "same")).isRight shouldBe true
+        // nothing set and no system JNI: the fix is the env wheel's directory, not installing a system GDAL
+        val none = refusal(resolve(files = Set.empty))
+        none should (include(GDALManager.NativeDirKey) and include("_native.native_dir()") and not include ("install GDAL"))
     }
 
 }

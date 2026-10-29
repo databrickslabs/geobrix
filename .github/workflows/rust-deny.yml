@@ -4,11 +4,15 @@ name: rust deny
 # policy in deny.toml and the cargo-deny and Rust toolchain pinned in scripts/native/pins.conf (checksum-checked).
 # This is the only place the yanked check runs: the build container uses vendored sources, which have no crates index.
 # Every Cargo.lock in the repository is checked (scripts/native/cargo-deny-ci.sh finds them), so a new crate is picked up
-# without editing this file; a Cargo.toml with no committed Cargo.lock fails the job. Public crates.io and the public
-# advisory database, no secrets. Weekly as well as on pushes: advisories and yanks appear without any change here.
+# without editing this file; a Cargo.toml with no committed Cargo.lock fails the job. The crates are the public
+# crates.io ones (through the mirror below) and the advisory database is the public one; no repository secrets.
+# Weekly as well as on pushes: advisories and yanks appear without any change here.
 # Manual run: Actions -> "rust deny" -> Run workflow (workflow_dispatch).
 #
-# Runs on the Databricks-hardened runner group (Labs lockdown policy), like the other workflows.
+# Runs on the Databricks-hardened runner group (Labs lockdown policy), like the other workflows. That group does
+# not reach index.crates.io (TLS is reset), so the crates come from the JFrog db-cargo-remote mirror through the same
+# OIDC login the other workflows use (.github/actions/jfrog-auth, then .github/actions/jfrog-cargo). The mirror serves a
+# crate version only 7 days after its release: a Cargo.lock that pins anything younger fails to resolve until it ages.
 # This workflow does not interpolate any github.event.* values into run: blocks.
 on:
   push:
@@ -32,11 +36,28 @@ jobs:
       group: databrickslabs-protected-runner-group
       labels: linux-ubuntu-latest
     timeout-minutes: 20
+    # The JFrog OIDC exchange runs in the protected environment, as in every other workflow that uses jfrog-auth.
+    environment: runtime
+    permissions:
+      contents: read
+      # Required by .github/actions/jfrog-auth: GitHub OIDC token exchange for crates via JFrog.
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           persist-credentials: false
+
+      - name: Authenticate for JFrog (crates via OIDC)
+        id: jfrog
+        uses: ./.github/actions/jfrog-auth
+
+      # Replaces crates-io with the JFrog registry in ${RUNNER_TEMP}/cargo-home and points GBX_HOST_CARGO_HOME at it,
+      # which is the CARGO_HOME that cargo-deny-ci.sh uses (cargo and cargo-deny both read the crates through it).
+      - name: Configure Cargo for JFrog
+        uses: ./.github/actions/jfrog-cargo
+        with:
+          jfrog-access-token: ${{ steps.jfrog.outputs.jfrog-access-token }}
 
       - name: Check every Rust crate
         run: bash scripts/native/cargo-deny-ci.sh

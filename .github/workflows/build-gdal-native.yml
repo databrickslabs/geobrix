@@ -4,9 +4,12 @@ name: Build GDAL native (x86_64)
 # for when the emulated build on an Apple Silicon machine is too slow or fails. Manual trigger only:
 #   gh workflow run build-gdal-native.yml --ref <branch> -f target=<toolchain|stage-native|bindings>
 #   gh run download <run id> -D build/native/out/x86_64/
-# It uses public package indexes and crate registries (the hashed locks hold against them), no secrets,
+# It uses public package indexes and crate registries (the hashed locks hold against them), no repository secrets,
 # and uploads what the build wrote to build/native/out/x86_64/.
-# Runs on the Databricks-hardened runner group (Labs lockdown policy), like the other workflows.
+# Runs on the Databricks-hardened runner group (Labs lockdown policy), like the other workflows. That group does not
+# reach index.crates.io, and the toolchain and bindings targets vendor their Rust crates on the runner, so the crates
+# come from the JFrog mirror through the OIDC login the other workflows use (jfrog-auth, then jfrog-cargo). The mirror
+# serves a crate version only 7 days after its release.
 on:
   workflow_dispatch:
     inputs:
@@ -30,6 +33,12 @@ jobs:
       group: databrickslabs-protected-runner-group
       labels: linux-ubuntu-latest
     timeout-minutes: 240
+    # The JFrog OIDC exchange runs in the protected environment, as in every other workflow that uses jfrog-auth.
+    environment: runtime
+    permissions:
+      contents: read
+      # Required by .github/actions/jfrog-auth: GitHub OIDC token exchange for crates via JFrog.
+      id-token: write
     env:
       TARGET: ${{ inputs.target }}
     steps:
@@ -37,6 +46,17 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           persist-credentials: false
+
+      - name: Authenticate for JFrog (crates via OIDC)
+        id: jfrog
+        uses: ./.github/actions/jfrog-auth
+
+      # Points GBX_HOST_CARGO_HOME (the CARGO_HOME of install-host-rust.sh and cargo-vendor.sh) at a cargo config that
+      # replaces crates-io with the JFrog registry.
+      - name: Configure Cargo for JFrog
+        uses: ./.github/actions/jfrog-cargo
+        with:
+          jfrog-access-token: ${{ steps.jfrog.outputs.jfrog-access-token }}
 
       - name: Build and verify
         run: bash scripts/commands/gbx-build-native.sh --arch x86_64 --target "$TARGET" --log "native-$TARGET-x86_64.log"

@@ -1,0 +1,54 @@
+name: 'Configure Cargo for JFrog'
+description: 'Route crates.io through the JFrog db-cargo-remote mirror, with the token from jfrog-auth.'
+# Why: the Databricks-hardened runner groups reset TLS to index.crates.io (the first run of rust-deny.yml died with
+# "download of config.json failed ... SSL connect error"), and go/hardened-gha routes every package fetch through
+# JFrog. .github/actions/jfrog-auth configures mvn/pip/uv/npm/sbt/bun but not cargo, so this composite does the
+# cargo part: crates-io is replaced by the JFrog sparse registry, and the token goes in cargo's credentials file.
+#
+# Where it writes: ${RUNNER_TEMP}/cargo-home (config.toml and credentials.toml), and it exports GBX_HOST_CARGO_HOME
+# to that directory. scripts/native/cargo-deny-ci.sh and scripts/native/cargo-vendor.sh both use GBX_HOST_CARGO_HOME
+# as their CARGO_HOME, and cargo reads $CARGO_HOME/config.toml and $CARGO_HOME/credentials.toml, so the lookup does
+# not depend on cargo also finding ~/.cargo above the working directory.
+#
+# Things to know:
+#  - Run this _after_ .github/actions/jfrog-auth, and pass its jfrog-access-token output.
+#  - JFrog serves a crate version only 7 days after it was published, and does not substitute an older one: a
+#    Cargo.lock that pins a version younger than a week fails to resolve until it ages (see the Rust pins).
+#  - The token is masked in the logs by jfrog-auth; this action never prints it.
+inputs:
+  jfrog-access-token:
+    description: "Access token from .github/actions/jfrog-auth (its jfrog-access-token output)"
+    required: true
+runs:
+  using: "composite"
+  steps:
+    - name: Configure Cargo for JFrog
+      shell: bash
+      env:
+        JFROG_ACCESS_TOKEN: "${{ inputs.jfrog-access-token }}"
+      run: |
+        set -euo pipefail
+        umask 077
+        CARGO_DIR="${RUNNER_TEMP}/cargo-home"
+        mkdir -p "${CARGO_DIR}"
+
+        cat > "${CARGO_DIR}/config.toml" << 'EOF'
+        [source.crates-io]
+        replace-with = "jfrog"
+
+        [source.jfrog]
+        registry = "sparse+https://databricks.jfrog.io/artifactory/api/cargo/db-cargo-remote/index/"
+
+        [registries.jfrog]
+        index = "sparse+https://databricks.jfrog.io/artifactory/api/cargo/db-cargo-remote/index/"
+        credential-provider = ["cargo:token"]
+        EOF
+
+        cat > "${CARGO_DIR}/credentials.toml" << EOF
+        [registries.jfrog]
+        token = "Bearer ${JFROG_ACCESS_TOKEN}"
+        EOF
+
+        printf '%s=%s\n' 'GBX_HOST_CARGO_HOME' "${CARGO_DIR}" >> "${GITHUB_ENV}"
+        printf '%s=%s\n' 'CARGO_REGISTRIES_JFROG_TOKEN' "Bearer ${JFROG_ACCESS_TOKEN}" >> "${GITHUB_ENV}"
+        printf '::debug::%s\n' 'Configured JFrog access for cargo.'

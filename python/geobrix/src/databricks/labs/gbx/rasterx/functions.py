@@ -2034,6 +2034,7 @@ def rst_bng_rasterize_agg(
     height: ColLike = None,
     mode: ColLike = None,
     kring_pad: ColLike = None,
+    out_crs: ColLike = None,
 ) -> Column:
     """Rasterize a group's BNG grid cells into one tile (pixel-centroid burn).
 
@@ -2069,6 +2070,9 @@ def rst_bng_rasterize_agg(
         mode:       Sampling mode string (default ``"centroids"``).
         kring_pad:  K-ring expansion around each cell before rasterizing
                     (default ``1``; ``0`` = no expansion).
+        out_crs:    Ignored — BNG output is always EPSG:27700. Accepted, as on the
+                    lightweight tier, for signature parity with the H3 and quadbin
+                    aggregators.
 
     Returns:
         Column of raster tile — the v2 tile struct with fields
@@ -2092,6 +2096,7 @@ def rst_bng_rasterize_agg(
         _c(height, f.lit(None).cast("int")),
         _c(mode, f.lit("centroids")),
         _c(kring_pad, f.lit(1)),
+        _c(out_crs, f.lit(None).cast("string")),
     )
 
 

@@ -91,7 +91,7 @@
     },
     "gbx_rst_bng_rasterize_agg": {
       "examples": "Examples:\n      > SELECT region_id, gbx_rst_bng_rasterize_agg( cellid, burn_value, 27700, cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as int), cast(null as int), 'centroids', cast(0 as int) ) AS tile FROM bng_cell_values GROUP BY region_id;",
-      "usage_args": "cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad",
+      "usage_args": "cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs]",
       "bindings": [
         "sql",
         "python-light",

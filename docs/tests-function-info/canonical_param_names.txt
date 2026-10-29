@@ -90,7 +90,7 @@ gbx_rst_bng_rastertogridmin	tile, resolution, [coverage], [assignment]
 gbx_rst_bng_rastertogridsum	tile, resolution, [coverage], [assignment]
 gbx_rst_bng_rastertogridvariance	tile, resolution, [coverage], [assignment]
 gbx_rst_bng_rastertogridstddev	tile, resolution, [coverage], [assignment]
-gbx_rst_bng_rasterize_agg	cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad
+gbx_rst_bng_rasterize_agg	cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs]
 gbx_rst_bng_tessellate	tile, resolution, [assignment], [coverage]
 gbx_rst_quadbin_rasterize_agg	cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad
 gbx_rst_quadbin_tessellate	tile, resolution, [assignment], [coverage]

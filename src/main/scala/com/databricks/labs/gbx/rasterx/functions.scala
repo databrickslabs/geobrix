@@ -341,6 +341,16 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
             cellid, value, out_srid, pixelSize, xmin, ymin, xmax, ymax, width, height, mode, kringPad
         ))
 
+    /** As above, with the trailing `out_crs` (accepted and not read: BNG output is always EPSG:27700). */
+    def rst_bng_rasterize_agg(
+        cellid: Column, value: Column, out_srid: Column, pixelSize: Column,
+        xmin: Column, ymin: Column, xmax: Column, ymax: Column,
+        width: Column, height: Column, mode: Column, kringPad: Column, outCrs: Column
+    ): Column =
+        ColumnAdapter(RST_BNG_RasterizeAgg.name, Seq(
+            cellid, value, out_srid, pixelSize, xmin, ymin, xmax, ymax, width, height, mode, kringPad, outCrs
+        ))
+
     /** UDAF: rasterize a group's custom-grid cells into one tile (pixel-centroid burn).
      *  Requires a `grid` struct column (produced by `gbx_custom_grid(...)`).
      *  Auto-derives the extent from the cell set; value omitted -> presence mask (1.0). */

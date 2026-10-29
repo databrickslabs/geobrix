@@ -12,10 +12,11 @@ the other dimensions (time, level), carrying the point's own columns:
 2. **Group.** Points are grouped by the inner chunk of the grid they fall in. One unit of
    work is one spatial chunk with every selected position of the other dimensions, and it
    ships the manifest rows of exactly the objects it reads.
-3. **Read.** A unit reads the cells of its points, not the boxes around them
-   (``_engine.read_points``): a plain store through a vectorized index, a manifest store by
-   decoding only the chunks that hold a cell. Missing data is masked as ``gbx_zarr_read``
-   masks it (``_read._table_values``).
+3. **Read.** A unit reads the cells of its points (``_engine.read_points``): a plain store
+   through a vectorized index, a manifest store by decoding only the chunks that hold a
+   cell. Points that need half or more of the cells of the box around them read that box
+   once and gather from it instead (``_read_cells``), which measured faster there. Missing
+   data is masked as ``gbx_zarr_read`` masks it (``_read._table_values``).
 
 The work runs where it is cheapest:
 
@@ -34,6 +35,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import math
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -87,6 +89,10 @@ _SPREAD = (
     64  # unmapped points are spread over this many pseudo-chunks, so none is skewed
 )
 _CELL_BYTES = 64  # working bytes per sampled cell: indices, values and Arrow columns
+# A unit whose points need at least this share of the cells of the box around them reads the
+# box and gathers (see _read_cells); never for a box larger than _DENSE_BOX_BYTES.
+_DENSE = 0.5
+_DENSE_BOX_BYTES = 256 << 20
 _UID, _ROW, _COL = "__gbx_uid", "__gbx_r", "__gbx_c"
 _INTERNAL = (_UID, _ROW, _COL)
 _PERIOD = 360.0
@@ -468,12 +474,44 @@ def _cells(
     return out
 
 
+def _read_cells(arr, meta, cells: list[np.ndarray], n_points: int, n_steps: int):
+    """The values at ``cells``: a vectorized point read, or, when the points need at least
+    ``_DENSE`` of the cells of the box around them (and the box is at most
+    ``_DENSE_BOX_BYTES``), one read of that box and a gather from it.
+
+    MEASURED on the ERA5 cube on Serverless (one 90 x 90 chunk, 744 steps, over a Volume;
+    two runs): with every cell of the chunk, the box read took 0.21-0.23 s against
+    0.68-1.01 s for the point read with the zarr engine, and 0.07-0.10 s against 0.90-0.92 s
+    with tensorstore; at half the cells the zarr engine broke even (0.41 s against 0.37 s)
+    and tensorstore's box read was 5.8x faster; with the zarr engine, at 10 to 2,000 points
+    the point read was as fast or up to 2.1x faster (tensorstore's box read already won from
+    1,000 points; the one threshold keeps the zarr engine, which the tasks use, from losing).
+    """
+    from databricks.labs.gbx.zarr import _engine
+
+    if cells[0].size:
+        lo = [int(c.min()) for c in cells]
+        hi = [int(c.max()) + 1 for c in cells]
+        box_cells = math.prod(b - a for a, b in zip(lo, hi))
+        nbytes = box_cells * np.dtype(meta.dtype).itemsize
+        if nbytes <= _DENSE_BOX_BYTES and n_points * n_steps >= _DENSE * box_cells:
+            box = _engine.read_box(arr, tuple(slice(a, b) for a, b in zip(lo, hi)))
+            return box[tuple(c - a for c, a in zip(cells, lo))]
+    return _engine.read_points(arr, cells)
+
+
 def _sampled(cfg: _SampleConfig, reader: _UnitReader, pool, row, col) -> pa.RecordBatch:
-    from databricks.labs.gbx.zarr._engine import read_points
+    n_points = int(np.unique(row * (int(col.max()) + 1) + col).size) if row.size else 0
 
     def one(v: str):
         meta = cfg.read.arrays[v]
-        stored = read_points(reader.array(v), _cells(cfg, meta, row, col))
+        stored = _read_cells(
+            reader.array(v),
+            meta,
+            _cells(cfg, meta, row, col),
+            n_points,
+            cfg.n_steps,
+        )
         return _table_values(stored, meta, True, cfg.read.flag)
 
     read = list(pool.map(one, cfg.variables))

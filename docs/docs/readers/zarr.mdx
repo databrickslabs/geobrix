@@ -322,9 +322,11 @@ selected position of those dimensions, so one point's time series is its rows.
 
 Up to 100,000 points are collected to the driver. If they lie in at most four chunks and the answer
 is small, the driver reads them and no Spark job runs; otherwise Spark reads each chunk once for all
-its points. **Above 100,000 points `points_df` is evaluated more than once** (up to about three
-times, because the chunks to read are planned from a first pass over the geometry column), so it must
-be deterministic. Write it to a table first, rather than sampling a random or time-dependent query.
+its points. Within a chunk, scattered points are read cell by cell; points that need half or more of
+the cells of the box around them read the box once and take their cells from it, which is faster there.
+**Above 100,000 points `points_df` is evaluated more than once** (up to about three times, because
+the chunks to read are planned from a first pass over the geometry column), so it must be
+deterministic. Write it to a table first, rather than sampling a random or time-dependent query.
 
 ## Access
 

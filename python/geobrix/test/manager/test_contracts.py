@@ -238,8 +238,9 @@ def test_override_is_honoured(fn):
 
 
 def test_l2_is_refused_while_proj_grids_are_registered(tmp_path):
-    """A Java UDF has no channel for PROJ grid directories: a warp through it would ignore them. The JVM engine is
-    refused too, until the JVM's GDAL takes the session's configuration whichever expression initializes it.
+    """A Java UDF has no channel for PROJ grid directories: a warp through it would ignore them. The JVM engine
+    keeps L1: every GDALManager.init adds a configuration's grid directories to PROJ's search path, also after
+    an earlier init without them (GDALManagerProjGridsSpec holds that).
     """
     from databricks.labs.gbx.core import proj_grids
 
@@ -256,8 +257,7 @@ def test_l2_is_refused_while_proj_grids_are_registered(tmp_path):
         proj_grids.set_registered_dirs(saved, replace=True)
     assert choice.level == "L3"
     assert any("PROJ grids" in r for r in choice.reasons)
-    # The JVM engine cannot be sure to read them either (the probe may initialize the JVM's GDAL first): with
-    # grids registered, L1 runs the row's own companion, never the engine.
+    # The JVM engine reads them: with grids registered, L1 still runs the engine.
     dedicated = _caps(jar=OK_JAR, jar_reason="", jvm_gdal=MAN.gdal.pin)
     assert levels.select(fn, dedicated).variant == levels.ENGINE
     proj_grids.set_registered_dirs(str(tmp_path), replace=True)
@@ -266,7 +266,7 @@ def test_l2_is_refused_while_proj_grids_are_registered(tmp_path):
         why = levels.engine_unavailable(fn, "L1", dedicated)
     finally:
         proj_grids.set_registered_dirs(saved, replace=True)
-    assert (choice.level, choice.variant) == ("L1", "-") and "PROJ grids" in why
+    assert (choice.level, choice.variant) == ("L1", levels.ENGINE) and why is None
 
 
 def test_tile_reference_compares_a_grid_one_pixel_off_by_pixels():

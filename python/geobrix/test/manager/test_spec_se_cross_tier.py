@@ -37,7 +37,7 @@ def _session(request, level):
         pytest.skip(
             f"PRECONDITION MISSING: the JVM runs GDAL {caps.jvm_gdal or caps.gdal_reason}, not "
             f"{MAN.gdal.pin}; it needs GBX_NATIVE_ROOT set to a payload whose bundled _jar is this session's JAR "
-            "(rebuild the env wheel with the staged JAR when the reason names a sha)"
+            "(gbx:test:parity refreshes the payload's _jar from the staged JAR; by hand, copy the JAR into its _jar/)"
         )
     return spark
 

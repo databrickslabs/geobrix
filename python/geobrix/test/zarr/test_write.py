@@ -2449,3 +2449,36 @@ def test_a_failed_create_removes_only_its_own_files(
         )
     assert all(f.read_bytes() == b"keep me" for f in keep)
     assert not (root / "data" / "t2m" / wid).exists()  # this write's packs went
+
+
+def test_a_traced_aligned_create_reports_each_task_and_its_packs(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """With the measurement switch on, each pack-stage task's digest row says where and when
+    it ran and what each pack it wrote cost; with it off (as in production), nothing."""
+    seen = []
+    real = _write._side_info
+
+    def captured(rows):
+        seen.extend(
+            json.loads(t)
+            for t in rows.filter(pa_compute.equal(rows.column("rtype"), "digest"))
+            .column("info")
+            .to_pylist()
+        )
+        return real(rows)
+
+    no_hooks.setattr(_write, "_side_info", captured)
+    chunks, shards, cut = ALIGNED["one-shard-blocks"]
+    _create_cut(spark_delta, drop, tmp_path, "notrace", chunks, shards, cut)
+    assert seen and not any("trace" in i for i in seen)
+    seen.clear()
+    no_hooks.setattr(_write, "_TRACE", True)
+    _create_cut(spark_delta, drop, tmp_path, "trace", chunks, shards, cut)
+    traced = [i["trace"] for i in seen if i.get("variables")]
+    assert len(traced) == 2  # two blocks, one task each here
+    for t in traced:
+        assert t["host"] and t["end"] >= t["start"] and "partition" in t
+        assert t["packs"] and all(
+            p["bytes"] > 0 and p["how"] == "copy" for p in t["packs"]
+        )

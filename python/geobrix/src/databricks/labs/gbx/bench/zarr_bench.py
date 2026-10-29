@@ -21,6 +21,7 @@ cold/warm split survives in the results table. Nothing here calls ``spark.conf.s
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import hashlib
 import json
@@ -547,6 +548,7 @@ class _Phases:
 
     def __init__(self):
         self.t: dict = {}
+        self.traces: list = []  # per-task traces of the pack stage (_write._TRACE)
         self._lock = threading.Lock()
         self._reals: list = []
 
@@ -639,6 +641,9 @@ def _count_tasks(ph: "_Phases", _write) -> None:
         with ph._lock:
             ph.t["files: data tasks"] = float(len(data))
             ph.t["files: most blocks in a task"] = float(max(data, default=0))
+            ph.traces = [
+                i["trace"] for i in infos if "trace" in i and i.get("variables")
+            ]
         return real(rows)
 
     _write._side_info = counted
@@ -856,6 +861,219 @@ def _w1_row(cfg, fn, nt, nbytes, gate_key, leg) -> ResultRow:
         note_cap=1 << 16,  # every run's phases
         cold=walls[0] if len(walls) > 1 else None,
     )
+
+
+# --- W1D: the direct leg of W1 against plain object-store puts on the same nodes ---------------
+
+
+_W1D_PACK_BYTES = (
+    87_000_000  # a W1 block's pack (16 zstd chunks of a 24 x 721 x 1440 float32 shard)
+)
+
+
+def _plain_puts(
+    spark, cfg: ZarrBenchConfig, access, n: int, ny: int, nx: int, size: int, tag: str
+):
+    """The same-node baseline of the direct leg: ``n`` tasks, one per partition as the cube's
+    blocks are, each computing its block of the field (as the GeoBrix input does), staging
+    ``size`` bytes of it on local disk, and putting them with ONE plain ``obstore.put``
+    (obstore's defaults: multipart for a file this size) to the scratch Volume, with the
+    store and credentials direct access vends. Returns ``(wall_s, records)``; a record is one
+    task: host, process, partition, attempt, wall-clock start and end, and the seconds of
+    the generate, stage and put steps."""
+    from databricks.labs.gbx.zarr._access import bounded_closure
+
+    dest = os.path.join(cfg.scratch, "w1d", tag)
+
+    def build(a):
+        def task(batches):
+            import socket
+
+            import obstore
+            import pyarrow as pa
+            from pyspark import TaskContext
+
+            from databricks.labs.gbx.zarr._access import _make_store
+
+            ctx = TaskContext.get()
+            out = []
+            for b in batches:
+                for i in b.column("id").to_pylist():
+                    start = time.time()
+                    data = field(i * 24, (i + 1) * 24, ny, nx).tobytes()[:size]
+                    gen = time.time()
+                    fd, local = tempfile.mkstemp(suffix=".bin")
+                    with os.fdopen(fd, "wb") as fh:
+                        fh.write(data)
+                    staged = time.time()
+                    with open(local, "rb") as fh:
+                        obstore.put(
+                            _make_store(a),
+                            a.key_of(os.path.join(dest, f"part-{i}.bin")),
+                            fh,
+                        )
+                    end = time.time()
+                    os.remove(local)
+                    out.append(
+                        json.dumps(
+                            {
+                                "host": socket.gethostname(),
+                                "pid": os.getpid(),
+                                "partition": ctx.partitionId() if ctx else None,
+                                "attempt": ctx.attemptNumber() if ctx else None,
+                                "start": start,
+                                "end": end,
+                                "gen_s": round(gen - start, 3),
+                                "stage_s": round(staged - gen, 3),
+                                "put_s": round(end - staged, 3),
+                                "bytes": len(data),
+                            }
+                        )
+                    )
+            yield pa.RecordBatch.from_pylist(
+                [{"rec": r} for r in out], schema=pa.schema([("rec", pa.string())])
+            )
+
+        return task
+
+    task, _ = bounded_closure(spark, access, build)
+    t = time.perf_counter()
+    rows = _one_per_task(spark, n).mapInArrow(task, "rec STRING").collect()
+    wall = round(time.perf_counter() - t, 3)
+    shutil.rmtree(dest, ignore_errors=True)
+    return wall, [json.loads(r["rec"]) for r in rows]
+
+
+def _spread_txt(values) -> str:
+    if not values:
+        return "[]"
+    med, lo, hi = _spread(values)
+    return f"median {med:.2f} (min {lo:.2f}, max {hi:.2f})"
+
+
+def run_w1d(spark, cfg: ZarrBenchConfig) -> List[ResultRow]:
+    """W1D: the DBR 19 direct leg of W1 (traced: every pack-stage task's host, times and puts)
+    in alternation with ``_plain_puts`` on the same nodes, ``cfg.reps`` runs each (the first
+    cold), so the two spreads can be told apart. Also times an owner's claim of a root that
+    already has a ledger (the ledger-state check asks Delta)."""
+    from databricks.labs.gbx.zarr import _register, _write, gbx_zarr_write
+    from databricks.labs.gbx.zarr._access import resolve_access
+
+    case = zarr_case("W1")
+    nt, ny, nx = cfg.w1_shape
+    block = int(case.args["chunks"]["time"])
+    nbytes = nt * ny * nx * 4
+    chunks, shards = dict(case.args["chunks"]), dict(case.args["shards"])
+    if (ny, nx) != (721, 1440):
+        chunks = {"time": block, "latitude": -(-ny // 4), "longitude": -(-nx // 4)}
+        shards = {"time": block, "latitude": 4 * chunks["latitude"]}
+        shards["longitude"] = 4 * chunks["longitude"]
+    n = -(-nt // block)
+    leg = {"walls": [], "phases": [], "at": [], "check": "", "traces": []}
+    puts = {"walls": [], "records": []}
+    reclaims: list = []
+    made, err = 0, None
+    access = None
+    real_trace = _write._TRACE
+    _write._TRACE = True
+    try:
+        for rep in range(cfg.reps):
+            for which in _leg_order(("gbx", "puts"), rep):
+                tag = f"{cfg.run_id}_w1d_{which}_{rep}_{uuid.uuid4().hex[:6]}"
+                if which == "puts":
+                    if access is None:
+                        os.makedirs(os.path.join(cfg.scratch, "w1d"), exist_ok=True)
+                        access = resolve_access(
+                            spark,
+                            os.path.join(cfg.scratch, "w1d"),
+                            access="direct",
+                            operation="WRITE_VOLUME",
+                        )
+                    wall, recs = _plain_puts(
+                        spark, cfg, access, n, ny, nx, _W1D_PACK_BYTES, tag
+                    )
+                    puts["walls"].append(wall)
+                    puts["records"].append(recs)
+                    made += 1
+                    continue
+                table = f"{cfg.schema}.t22c_{tag}".replace("-", "_")
+                root = os.path.join(cfg.scratch, "w1d", tag)
+                ph = _w1_phases()
+                try:
+                    data = _cube_blocks(spark, nt, ny, nx, block)
+                    t = time.perf_counter()
+                    gbx_zarr_write(
+                        data,
+                        table,
+                        mode="create",
+                        root=root,
+                        chunks=chunks,
+                        shards=shards,
+                        access="direct",
+                        spark=spark,
+                    )
+                    leg["walls"].append(round(time.perf_counter() - t, 3))
+                    made += 1
+                    leg["at"].append(made)
+                    leg["phases"].append({k: round(v, 2) for k, v in ph.t.items()})
+                    leg["traces"].append(ph.traces)
+                    if rep == 0:
+                        leg["check"] = _w1_check(spark, table, ny, nx)
+                    owner = _register.qualified_table_name(spark, table)
+                    t = time.perf_counter()
+                    _register.claim_root(
+                        spark, root, owner, "managed"
+                    )  # its own: no claim
+                    reclaims.append(round(time.perf_counter() - t, 3))
+                finally:
+                    ph.restore()
+                    _drop(spark, table, root)
+    except Exception as e:  # noqa: BLE001
+        err = e
+    finally:
+        _write._TRACE = real_trace
+    out = []
+    if err is not None or not leg["walls"]:
+        out.append(
+            _error_row(cfg, "gbx_zarr_write[W1D,direct]", err or ValueError("no run"))
+        )
+        return out
+    row = _w1_row(cfg, "gbx_zarr_write[W1D,direct]", nt, nbytes, "dbr19_direct", leg)
+    gbx_puts = [p["s"] for run in leg["traces"][1:] for t in run for p in t["packs"]]
+    gbx_task = [
+        round(t["end"] - t["start"], 3) for run in leg["traces"][1:] for t in run
+    ]
+    out.append(
+        dataclasses.replace(
+            row,
+            note=row.note
+            + f"; warm pack puts {_spread_txt(gbx_puts)} s over {len(gbx_puts)} puts; warm "
+            f"task wall {_spread_txt(gbx_task)} s; owner re-claim of an existing root "
+            f"{reclaims} s; TRACES per run (host, partition, start, end, packs) "
+            f"{json.dumps(leg['traces'])}",
+        )
+    )
+    warm = puts["walls"][1:] or puts["walls"]
+    put_s = [r["put_s"] for run in puts["records"][1:] for r in run]
+    task_s = [
+        round(r["end"] - r["start"], 3) for run in puts["records"][1:] for r in run
+    ]
+    out.append(
+        _row(
+            cfg,
+            "obstore.put[W1D,baseline]",
+            warm,
+            n,
+            f"plain obstore.put of {_W1D_PACK_BYTES} bytes a task, {n} tasks one per partition, "
+            f"field computed in-task, direct-access store and credentials; stage wall per run "
+            f"{puts['walls']} (run 1 cold), warm {_spread_txt(warm)} s; warm puts "
+            f"{_spread_txt(put_s)} s over {len(put_s)}; warm task wall {_spread_txt(task_s)} s; "
+            f"RECORDS per run {json.dumps(puts['records'])}",
+            note_cap=1 << 18,
+            cold=puts["walls"][0] if len(puts["walls"]) > 1 else None,
+        )
+    )
+    return out
 
 
 def _w1_check(spark, table, ny, nx, t=7) -> str:
@@ -1255,7 +1473,14 @@ def _probe_row(cfg, fn, payload, wall) -> ResultRow:
 def run_zarr_cases(spark, cfg: ZarrBenchConfig, sink=None) -> List[ResultRow]:
     """Run the selected cases, then the two probes; ``sink(rows)`` gets each case's rows as
     it finishes (the notebook streams them to the results table)."""
-    legs = {"R1": run_r1, "R2": run_r2, "R3": run_r3, "W1": run_w1, "W2": run_w2}
+    legs = {
+        "R1": run_r1,
+        "R2": run_r2,
+        "R3": run_r3,
+        "W1": run_w1,
+        "W2": run_w2,
+        "W1D": run_w1d,  # the direct leg beside plain object-store puts (investigation)
+    }
     rows: List[ResultRow] = []
     for case in cfg.cases:
         print(f"ZARR {case}: starting", flush=True)

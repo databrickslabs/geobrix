@@ -281,3 +281,76 @@ def test_legs_and_probe_variants_take_turns():
         "c",
         "a",
     ]
+
+
+def test_the_plain_put_baseline_puts_one_object_a_task(spark, tmp_path):
+    """W1D's baseline: one task per block, each putting ``size`` bytes with plain obstore
+    through the direct-access store (a file:// store here), timed per step."""
+    from databricks.labs.gbx.bench import zarr_bench as zb
+    from databricks.labs.gbx.zarr._access import AccessConfig
+
+    cloud = tmp_path / "cloud"
+    cloud.mkdir()
+    url = f"file://{cloud}"
+    cfg = zb.ZarrBenchConfig("/s", "/c", str(tmp_path / "mount"), "c.s", "r")
+    access = AccessConfig(
+        "direct", url, {"k": "x"}, "aws", str(tmp_path / "mount"), url
+    )
+    wall, recs = zb._plain_puts(spark, cfg, access, 3, 6, 8, 100, "t")
+    assert wall > 0 and len(recs) == 3
+    assert sorted(r["partition"] for r in recs) == [0, 1, 2]
+    assert all(r["bytes"] == 100 and r["put_s"] >= 0 and r["host"] for r in recs)
+    puts = sorted(p.name for p in cloud.rglob("part-*.bin"))
+    assert puts == ["part-0.bin", "part-1.bin", "part-2.bin"]
+
+
+def test_w1d_alternates_the_traced_create_and_the_plain_puts(monkeypatch):
+    import databricks.labs.gbx.zarr as gz
+    import databricks.labs.gbx.zarr._access as acc
+    from databricks.labs.gbx.bench import zarr_bench as zb
+    from databricks.labs.gbx.zarr import _register
+
+    seen, current = [], {}
+
+    class Phases:
+        def __init__(self):
+            self.t, self.traces = {}, []
+            current["ph"] = self
+
+        def restore(self):
+            pass
+
+    def write(data, table, *, access, **kw):
+        assert access == "direct"
+        seen.append("gbx")
+        current["ph"].t.update({"files": 8.0, "commit": 4.0})
+        current["ph"].traces = [
+            {
+                "host": "h",
+                "start": 0.0,
+                "end": 3.0,
+                "packs": [{"bytes": 9, "s": 1.5, "how": "put"}],
+            }
+        ]
+
+    def puts(spark, cfg, access, n, ny, nx, size, tag):
+        seen.append("puts")
+        return 5.0, [{"put_s": 1.0, "start": 0.0, "end": 2.0} for _ in range(n)]
+
+    monkeypatch.setattr(zb, "_w1_phases", Phases)
+    monkeypatch.setattr(zb, "_cube_blocks", lambda *a, **k: None)
+    monkeypatch.setattr(zb, "_w1_check", lambda *a, **k: "verify OK")
+    monkeypatch.setattr(zb, "_drop", lambda *a, **k: None)
+    monkeypatch.setattr(zb, "_plain_puts", puts)
+    monkeypatch.setattr(gz, "gbx_zarr_write", write)
+    monkeypatch.setattr(acc, "resolve_access", lambda *a, **k: "cfg")
+    monkeypatch.setattr(_register, "qualified_table_name", lambda spark, t: t)
+    monkeypatch.setattr(_register, "claim_root", lambda *a, **k: False)
+    monkeypatch.setattr(zb.os, "makedirs", lambda *a, **k: None)
+    cfg = zb.ZarrBenchConfig("/s", "/c", "/tmp", "c.s", "r", reps=4)
+    rows = {r.fn: r for r in zb.run_w1d(None, cfg)}
+    assert seen == ["gbx", "puts", "puts", "gbx", "gbx", "puts", "puts", "gbx"]
+    gbx, base = rows["gbx_zarr_write[W1D,direct]"], rows["obstore.put[W1D,baseline]"]
+    assert "warm pack puts median 1.50" in gbx.note and "owner re-claim" in gbx.note
+    assert base.measured_iters == 3 and "cold_s=5.0" in base.note
+    assert "warm puts median 1.00" in base.note

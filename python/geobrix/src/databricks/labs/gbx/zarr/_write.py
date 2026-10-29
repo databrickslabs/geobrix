@@ -155,6 +155,10 @@ _CHANGED_INPUT_FIX = (
 # planned). _BEFORE_COMMIT: called with the write_id on the driver after the files are
 # written and before the commit, to let another write land in between.
 _FAULT = None
+# Measurement hook (the bench sets it, never production): each pack-stage task reports in its
+# digest row where and when it ran and, for each pack, its bytes and the seconds its copy or
+# put took (``_write_tasks._Trace``).
+_TRACE = False
 _BEFORE_COMMIT = None
 
 
@@ -2028,6 +2032,7 @@ def _write_files(spark, plan: _Plan) -> pa.Table:
         batch_bytes=sizes["batch_bytes"],
         roll_bytes=sizes["roll_bytes"],
         fault=_FAULT,
+        trace=_TRACE,
         access=plan.access,
     )
     if _aligned(plan):

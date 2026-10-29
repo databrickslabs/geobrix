@@ -136,6 +136,7 @@ class TaskConfig:
     batch_bytes: int
     roll_bytes: int
     fault: tuple | None = None
+    trace: bool = False  # report per-task placement and per-pack timings (_Trace)
     unsupported: dict | None = None  # name -> why the store cannot decode that array
     access: object = None  # AccessConfig: how the files are reached (holds credentials)
 
@@ -373,14 +374,67 @@ def _block_pieces(cfg: TaskConfig, row: dict, buf, seen: dict):
 # --- packs ---------------------------------------------------------------------------------
 
 
+class _Trace:
+    """Where and when one task ran and what its pack writes cost (``TaskConfig.trace``): the
+    host, process, partition and attempt; wall-clock start and end; for each pack its bytes,
+    the seconds its copy (mount) or put (direct) took, and which of the two it was."""
+
+    def __init__(self):
+        import socket
+        import time as _time
+
+        self._time = _time.time
+        self.info = {
+            "host": socket.gethostname(),
+            "pid": os.getpid(),
+            "start": _time.time(),
+        }
+        try:
+            from pyspark import TaskContext
+
+            ctx = TaskContext.get()
+            if ctx is not None:
+                self.info["partition"] = ctx.partitionId()
+                self.info["attempt"] = ctx.attemptNumber()
+                self.info["stage"] = ctx.stageId()
+        except Exception:  # noqa: BLE001 - placement is best effort
+            pass
+        self.packs: list[dict] = []
+
+    def close(self, writer: PackWriter) -> None:
+        start = self._time()
+        writer.close()
+        self.packs.append(
+            {
+                "bytes": writer.size,
+                "s": round(self._time() - start, 4),
+                "how": (
+                    "put"
+                    if (writer._access is not None and writer._access.is_direct)
+                    else "copy"
+                ),
+            }
+        )
+
+    def done(self) -> dict:
+        return {**self.info, "end": self._time(), "packs": self.packs}
+
+
 class _Packs:
     """The pack files one task writes: one open per variable at a time, each closed (and
     a new one begun) once it holds ``roll_bytes``."""
 
-    def __init__(self, cfg: TaskConfig):
+    def __init__(self, cfg: TaskConfig, trace: "_Trace | None" = None):
         self.cfg = cfg
         self.open: dict[str, PackWriter] = {}
         self.full: list[PackWriter] = []
+        self.trace = trace
+
+    def _close(self, writer: PackWriter) -> None:
+        if self.trace is None or writer._closed:
+            writer.close()
+        else:
+            self.trace.close(writer)
 
     def put(self, name: str, data: bytes) -> tuple[str, int, int]:
         """Append one encoded chunk of ``name``: ``(file, offset, length)`` of its bytes."""
@@ -395,16 +449,16 @@ class _Packs:
         offset, length = writer.add(data)
         file = writer.path
         if writer.size >= cfg.roll_bytes:
-            writer.close()
+            self._close(writer)
             self.full.append(writer)
             del self.open[name]
         return file, offset, length
 
     def finish(self) -> None:
         for w in list(self.open.values()):
-            w.close()
+            self._close(w)
         for w in self.full:
-            w.close()
+            self._close(w)
 
     def abort(self) -> None:
         for w in [*self.open.values(), *self.full]:
@@ -695,7 +749,8 @@ def pack_function(cfg: TaskConfig):
     write stops, as its digest check would."""
 
     def run(batches):
-        packs = _Packs(cfg)
+        trace = _Trace() if cfg.trace else None
+        packs = _Packs(cfg, trace)
         out: list[dict] = []
         seen = {"count": 0, "hash": 0, "region": {}, "variables": set()}
         try:
@@ -723,6 +778,8 @@ def pack_function(cfg: TaskConfig):
             "region": seen["region"],
             "variables": sorted(seen["variables"]),
         }
+        if trace is not None:
+            info["trace"] = trace.done()
         out.append(_row("digest", info=json.dumps(info)))
         yield from _yield_rows(out, cfg)
 

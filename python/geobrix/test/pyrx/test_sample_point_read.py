@@ -408,3 +408,20 @@ def test_a_copy_that_cannot_be_removed_while_open_is_removed_on_close(
     ]
     ot._TASK_SOURCES.reset()
     assert sorted(os.listdir(staged)) == []
+
+
+def test_an_interrupted_open_leaves_no_local_copy(
+    tmp_path, in_one_task, staged, monkeypatch
+):
+    """The staged copy goes when its open is interrupted too (a BaseException such as
+    KeyboardInterrupt, not only an Exception)."""
+    from databricks.labs.gbx.pyrx import _env
+
+    def _interrupted(*a, **kw):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(_env, "open_raster", _interrupted)
+    tile = _tile(_write(tmp_path / "k.tif", np.ones((1, 16, 16), "float32"), block=16))
+    with pytest.raises(KeyboardInterrupt):
+        SAMPLE(tile, _wkb(*_centre(1, 1)))
+    assert sorted(os.listdir(staged)) == []

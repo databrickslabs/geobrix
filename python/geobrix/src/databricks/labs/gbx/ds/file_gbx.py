@@ -1579,17 +1579,18 @@ class _OpenerContext:
         )
 
         local_path, is_temp = _stage(uri)
+        opened = False
         try:
             ds = open_raster(local_path)
-        except Exception:
-            # not a raster GDAL can open (a corrupt file the probe could not read either):
+            opened = True
+        finally:
+            # not opened (a corrupt file the probe could not read either, or an interrupt):
             # the copy just made would otherwise stay on local disk, once per attempt
-            if is_temp:
+            if is_temp and not opened:
                 try:
                     os.remove(local_path)
                 except OSError:
                     pass
-            raise
         if is_temp:
             self._staged_temps[id(ds)] = local_path
             if self._unlink_staged:

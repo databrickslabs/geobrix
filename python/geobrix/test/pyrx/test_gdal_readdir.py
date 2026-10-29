@@ -360,9 +360,9 @@ def test_a_folder_past_gdals_listing_limit_opens_with_by_name_checks(
     that stops past the limit, and its files keep the process value (TRUE); a later open
     does not list it again."""
     readdir(None)
-    assert _env._listing_cap() == 1000
+    assert _env.listing_cap() == 1000
     monkeypatch.setenv("GDAL_READDIR_LIMIT_ON_OPEN", "0")
-    assert _env._listing_cap() is None  # 0: no limit, as in GDAL
+    assert _env.listing_cap() is None  # 0: no limit, as in GDAL
     monkeypatch.setenv("GDAL_READDIR_LIMIT_ON_OPEN", "5")
     a = _plain_tiff(tmp_path / "a.tif")
     for i in range(6):
@@ -371,8 +371,7 @@ def test_a_folder_past_gdals_listing_limit_opens_with_by_name_checks(
     assert _env.readdir_mode(a) is None
     assert _env.readdir_mode(a) is None
     assert _env._LISTINGS.listings - before == 1
-    held = _env._LISTINGS._names[os.path.realpath(tmp_path)][0]
-    assert held is _env._TOO_LARGE
+    assert os.path.realpath(tmp_path) in _env._LISTINGS._too_large
     monkeypatch.setenv("GDAL_READDIR_LIMIT_ON_OPEN", "10")
     _env._LISTINGS.clear()
     assert _env.readdir_mode(a) == "EMPTY_DIR"
@@ -481,16 +480,20 @@ def test_no_reachable_thread_setter_lists_nothing_and_checks_by_name(
 
 
 def test_a_folder_is_listed_at_its_second_open(tmp_path, readdir, monkeypatch):
-    """The first open of a folder by a worker keeps TRUE and lists nothing; the second
-    lists the folder and takes its per-file value."""
+    """The first file of a folder a worker opens keeps TRUE and lists nothing; the second
+    distinct file lists the folder and takes its per-file value. Reopening the same file
+    lists nothing however often (the rule counts distinct files)."""
     readdir(None)
     monkeypatch.setattr(_env._LISTINGS, "list_after_opens", _env._LIST_AFTER_OPENS)
     a = _plain_tiff(tmp_path / "a.tif")
+    b = _plain_tiff(tmp_path / "b.tif")
     before = _env._LISTINGS.listings
-    assert _env.readdir_mode(a) is None
+    for _ in range(5):
+        assert _env.readdir_mode(a) is None
     assert _env._LISTINGS.listings == before
-    assert _env.readdir_mode(a) == "EMPTY_DIR"
+    assert _env.readdir_mode(b) == "EMPTY_DIR"
     assert _env._LISTINGS.listings == before + 1
+    assert _env.readdir_mode(a) == "EMPTY_DIR"
 
 
 def test_a_folder_opened_once_is_never_listed(tmp_path, readdir, monkeypatch):
@@ -543,7 +546,7 @@ def test_a_tile_whose_folder_is_past_the_cap_opens_without_a_listing(
     )
     assert scans == []
     assert {m for n, m in opens_seen if n == "a.tif"} == {"TRUE"}
-    assert _env._LISTINGS._names[os.path.realpath(tmp_path)][0] is _env._TOO_LARGE
+    assert os.path.realpath(tmp_path) in _env._LISTINGS._too_large
 
 
 @pytest.mark.parametrize("count", ["3", None], ids=["small count", "no count"])
@@ -637,3 +640,213 @@ def test_a_reader_tile_past_the_cap_reaches_the_open_as_a_hint(
         assert ds.width == 8
     assert scans == []
     assert {m for n, m in opens_seen if n == "t0.tif"} == {"TRUE"}
+
+
+@pytest.mark.parametrize(
+    "name, folder, want",
+    [
+        ("x.gti.gpkg", ["x.gti.gpkg"], "TRUE"),
+        ("x.xml", ["x.xml", "y.tif"], "TRUE"),
+        ("x.safe", ["x.safe"], "TRUE"),
+        ("x.img", ["x.img"], "TRUE"),
+        ("x.zarr", ["x.zarr"], "TRUE"),
+        ("x.unknown", ["x.unknown"], "TRUE"),
+        ("x", ["x"], "TRUE"),
+        ("x.tif", ["x.tif", "y.tif"], "EMPTY_DIR"),
+        ("x.TIFF", ["x.TIFF"], "EMPTY_DIR"),
+        ("x.nc", ["x.nc"], "EMPTY_DIR"),
+        ("x.grib2", ["x.grib2"], "EMPTY_DIR"),
+    ],
+)
+def test_only_an_allowlisted_single_file_format_skips_the_look_up(name, folder, want):
+    """EMPTY_DIR is for formats that open no other file (_EMPTY_DIR_EXTS), compared
+    case-insensitively; every other kind (a GTI, a VRT written as .xml, a .SAFE, an HFA
+    .img, a .zarr, an unknown extension) checks its sidecars by name."""
+    assert _env.readdir_mode_for(name, folder) == want
+
+
+def test_an_xml_vrt_keeps_its_sources_sidecars(tmp_path, readdir):
+    """A VRT named .xml (GDAL opens a VRT by its content) is not allowlisted, so its
+    source finds its .ovr by name."""
+    from rasterio.vrt import WarpedVRT
+
+    (tmp_path / "A").mkdir()
+    (tmp_path / "B").mkdir()
+    src = tmp_path / "A" / "base.tif"
+    with rasterio.open(
+        src,
+        "w",
+        driver="GTiff",
+        width=512,
+        height=512,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:32633",
+        transform=from_origin(500000.0, 5000000.0, 10.0, 10.0),
+    ) as dst:
+        dst.write(np.ones((1, 512, 512), "uint16"))
+    with rasterio.Env(TIFF_USE_OVR=True):
+        with rasterio.open(src, "r+") as ds:
+            ds.build_overviews([2, 4])
+    with rasterio.open(src) as s, WarpedVRT(s, crs="EPSG:32633") as v:
+        xml = v.tags(ns="xml:VRT")["xml:VRT"]
+    vrt = tmp_path / "B" / "w.xml"
+    vrt.write_text(xml)
+    readdir(None)
+    assert _env.readdir_mode(vrt) == "TRUE"
+    with _env.open_raster(vrt) as ds:
+        assert ds.overviews(1) == [2, 4]
+
+
+def test_a_hinted_tile_on_the_grouped_file_path_does_no_scan(
+    tmp_path, readdir, scans, opens_seen
+):
+    """The grouped executor's FILE fast path hands the tile's count on before the LRU
+    opens the source: a count past the cap, no scan, TRUE."""
+    from databricks.labs.gbx.pyrx.grouped_exec import (
+        OpenResourceLRU,
+        _OpenerContext,
+        _run_file_fast_path,
+    )
+
+    readdir(None)
+    a = _plain_tiff(tmp_path / "a.tif")
+    ctx = _OpenerContext()
+    lru = OpenResourceLRU(opener=ctx.open, closer=ctx.close, weigher=ctx.weigh)
+    try:
+        width = _run_file_fast_path(
+            ctx.fr_holder,
+            ctx.size_holder,
+            lru,
+            str(a),
+            None,
+            _hinted_tile(a, "40000"),
+            0,
+            "header",
+            lambda ds, cellid: ds.width,
+        )
+    finally:
+        lru.close_all()
+    assert width == 8
+    assert scans == []
+    assert {m for n, m in opens_seen if n == "a.tif"} == {"TRUE"}
+
+
+def test_a_folder_that_cannot_be_listed_is_not_tried_on_every_open(
+    tmp_path, readdir, monkeypatch
+):
+    """A failed listing is remembered for _UNLISTABLE_LISTING_RETRY_S: the opens meanwhile
+    keep TRUE without a scan; after it the folder is tried again."""
+    readdir(None)
+    clock = {"t": 5000.0}
+    monkeypatch.setattr(_env, "_now", lambda: clock["t"])
+    a = _plain_tiff(tmp_path / "a.tif")
+    calls = []
+    failing = {"on": True}
+    real = _env._LISTINGS._list
+
+    def _list(folder):
+        calls.append(folder)
+        return None if failing["on"] else real(folder)
+
+    monkeypatch.setattr(_env._LISTINGS, "_list", _list)
+    for _ in range(4):
+        assert _env.readdir_mode(a) is None
+    assert len(calls) == 1
+    failing["on"] = False
+    clock["t"] += _env._UNLISTABLE_LISTING_RETRY_S
+    assert _env.readdir_mode(a) == "EMPTY_DIR"
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize(
+    "count, too_large",
+    [
+        ("40000", True),
+        (" 40000 ", True),
+        ("9" * 40, True),
+        ("４００００", False),  # unicode digits: not a plain ASCII count
+        ("inf", False),
+        (float("inf"), False),
+        (40000.0, False),
+        (40000, False),  # the metadata map holds strings
+        ("-40000", False),
+        ("4e4", False),
+    ],
+)
+def test_only_a_plain_decimal_count_is_taken_as_a_hint(
+    tmp_path, readdir, count, too_large
+):
+    readdir(None)
+    a = _plain_tiff(tmp_path / "a.tif")
+    _env.note_folder_files(a, count)  # never raises (OverflowError, ValueError)
+    assert (os.path.realpath(tmp_path) in _env._LISTINGS._too_large) is too_large
+
+
+@pytest.mark.parametrize(
+    "raw, cap",
+    [
+        (None, 1000),
+        ("5", 5),
+        ("5.5", 5),
+        (" 12x", 12),
+        ("+7", 7),
+        ("abc", None),
+        ("0", None),
+        ("-3", None),
+        ("", None),
+    ],
+)
+def test_the_listing_cap_is_read_as_gdal_reads_it(monkeypatch, raw, cap):
+    """GDAL reads GDAL_READDIR_LIMIT_ON_OPEN with atoi and treats 0 or less as no limit."""
+    if raw is None:
+        monkeypatch.delenv("GDAL_READDIR_LIMIT_ON_OPEN", raising=False)
+    else:
+        monkeypatch.setenv("GDAL_READDIR_LIMIT_ON_OPEN", raw)
+    assert _env.listing_cap() == cap
+
+
+def test_too_large_marks_are_kept_apart_from_the_listings(
+    tmp_path, readdir, monkeypatch
+):
+    """Too-large folders go into their own bounded set, so they do not push listings out
+    of the 64-folder LRU (and are capped themselves)."""
+    readdir(None)
+    monkeypatch.setattr(_env._LISTINGS, "max_folders", 2)
+    monkeypatch.setattr(_env._LISTINGS, "max_too_large", 3)
+    listed = []
+    for i in range(2):
+        (tmp_path / f"l{i}").mkdir()
+        listed.append(_plain_tiff(tmp_path / f"l{i}" / "a.tif"))
+        assert _env.readdir_mode(listed[-1]) == "EMPTY_DIR"
+    for i in range(5):
+        (tmp_path / f"big{i}").mkdir()
+        _env.note_folder_files(_plain_tiff(tmp_path / f"big{i}" / "a.tif"), "40000")
+    assert list(_env._LISTINGS._names) == [os.path.realpath(p.parent) for p in listed]
+    assert list(_env._LISTINGS._too_large) == [
+        os.path.realpath(tmp_path / f"big{i}") for i in (2, 3, 4)
+    ]
+
+
+def test_a_single_file_read_carries_no_folder_count(tmp_path, monkeypatch):
+    """read_paths plans one file at a time (the reader's path is the file, never its
+    folder), so it has no count of the folder: its tiles of a folder past the cap carry no
+    path_folder_files and behave as without the hint, while a folder read stamps them.
+    Everything else in the tile is the same."""
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+    monkeypatch.setenv("GDAL_READDIR_LIMIT_ON_OPEN", "2")
+    for i in range(3):
+        _plain_tiff(tmp_path / f"t{i}.tif")
+    names = V2_TILE_SCHEMA.fieldNames()
+
+    def _tiles(path):
+        r = RasterGbxReader({"path": str(path), "virtualTiles": "true"})
+        return [dict(zip(names, row[1])) for p in r.partitions() for row in r.read(p)]
+
+    (folder_tile,) = [t for t in _tiles(tmp_path) if t["path"].endswith("t0.tif")]
+    (file_tile,) = _tiles(tmp_path / "t0.tif")
+    assert folder_tile["metadata"].pop(_env.FOLDER_FILES_KEY) == "3"
+    assert _env.FOLDER_FILES_KEY not in file_tile["metadata"]
+    assert folder_tile == file_tile

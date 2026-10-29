@@ -1109,7 +1109,7 @@ class RasterGbxReader(DataSourceReader):
         for f in files:
             d = os.path.dirname(f)
             folder_files[d] = folder_files.get(d, 0) + 1
-        cap = _env._listing_cap()
+        cap = _env.listing_cap()
         self._folder_files = {
             d: n for d, n in folder_files.items() if cap is not None and n > cap
         }

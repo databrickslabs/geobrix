@@ -300,7 +300,7 @@ RasterX exposes both names through parallel functions. See the [RasterX Function
 from databricks.labs.gbx.pyrx import functions as rx   # or ...rasterx — same names
 
 df.select(
-    rx.rst_srid("tile").alias("srid"),                       # 4326, or None for ESRI:54008
+    rx.rst_srid("tile").alias("srid"),                       # 4326, or 54008 for ESRI:54008 (both tiers)
     rx.rst_crs("tile").alias("crs"),                         # "EPSG:4326" / "ESRI:54008"
 )
 

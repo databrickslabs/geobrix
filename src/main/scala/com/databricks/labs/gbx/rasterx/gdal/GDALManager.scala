@@ -387,7 +387,8 @@ object GDALManager extends Logging {
         try {
             val v = gdal.VersionInfo("RELEASE_NAME")
             // reading one constant initializes the class, which reads every constant from the JNI
-            if (org.gdal.gdalconst.gdalconstConstants.GDT_Byte < 0) throw new UnsatisfiedLinkError("GDT_Byte < 0")
+            val byteType = org.gdal.gdalconst.gdalconstConstants.GDT_Byte
+            logDebug(s"GDAL $v: GDAL's Java classes reach the JNI (GDT_Byte = $byteType)")
             v
         } catch {
             case e: UnsatisfiedLinkError =>
@@ -405,14 +406,12 @@ object GDALManager extends Logging {
       */
     private[gdal] def sessionNativeDir(): Option[String] = {
         val task = Option(org.apache.spark.TaskContext.get()).flatMap(t => Option(t.getLocalProperty(NativeDirKey)))
-        val session =
-            if (task.isDefined) None
-            else
-                try SessionConf.get(NativeDirKey)
-                catch {
-                    case _: LinkageError => None
-                    case NonFatal(_)     => None
-                }
+        def session: Option[String] =
+            try SessionConf.get(NativeDirKey)
+            catch {
+                case _: LinkageError => None
+                case NonFatal(_)     => None
+            }
         task.orElse(session).filter(_.nonEmpty)
     }
 

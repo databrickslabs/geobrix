@@ -3,6 +3,8 @@
 # differ, the oldest (databricks-sdk: DBR 19's; env 6 ships 0.122.0). gbx:build:wheel checks every core.txt range,
 # every vendored package's requirement and every extra against them, and the --verify install uses them as
 # constraints (the runtime's base, offline).
+# Every package an extra names that a runtime preinstalls is here: such an extra gets a floor and no cap
+# (gbx:build:wheel). imageio is DBR 19 ML's and env 6 ML's only.
 numpy==2.3.4
 pandas==2.3.3
 pyarrow==21.0.0
@@ -12,3 +14,5 @@ click==8.2.1
 requests==2.32.5
 tenacity==9.1.2
 databricks-sdk==0.108.0
+matplotlib==3.10.6
+imageio==2.37.2

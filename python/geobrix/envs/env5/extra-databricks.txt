@@ -1,4 +1,4 @@
-# [databricks]: the Databricks SDK, for the sample-data uploads to Unity Catalog Volumes. Every runtime preinstalls
-# it, so it is held there: the oldest preinstalled version as the floor (DBR 17.3 ships 0.49.0, DBR 18 and
-# Serverless environment 5 ship 0.67.0), the next minor above the newest as the cap. Installing it moves nothing.
-databricks-sdk>=0.49.0,<0.68
+# [databricks]: the Databricks SDK, for the sample-data uploads to Unity Catalog Volumes. Every runtime preinstalls it,
+# so it gets a floor only, the oldest preinstalled version (DBR 17.3 ships 0.49.0, DBR 18 and Serverless environment 5
+# ship 0.67.0), and no cap: a cap under a later runtime's SDK would be a downgrade. Installing it moves nothing.
+databricks-sdk>=0.49.0

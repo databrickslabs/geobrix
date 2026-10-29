@@ -1,11 +1,14 @@
-# [vizx]: visualization helpers (gbx.vizx), the committed pyproject's [vizx] as it stands.
+# [vizx]: visualization helpers (gbx.vizx), the committed pyproject's [vizx].
 # geopandas and contextily require rasterio, pyogrio, pyproj and shapely by distribution name, so
 # this extra installs their PyPI wheels too; the vendored builds stay first on sys.path.
-matplotlib>=3.7,<4
+# Except: the runtimes preinstall matplotlib (and DBR 19 ML / env 6 ML imageio,
+# 2.37.2: a floor below that keeps the runtimes without it free): a floor only, the oldest
+# preinstalled version, and no cap (a cap under a later runtime's version would be a downgrade).
+matplotlib>=3.10.6
 geopandas>=1.1.4,<2
 mapclassify>=2.6,<3
 contextily>=1.5,<2
 anywidget>=0.9,<1
 tippecanoe>=2.72.0,<3
-imageio>=2.28,<3
+imageio>=2.28
 imageio-ffmpeg>=0.4,<2

@@ -373,17 +373,31 @@ def test_each_committed_extra_moves_nothing_and_names_no_vendored_package(env):
                 assert r.specifier.contains(base[dep]), (name, str(r), str(base[dep]))
 
 
-@pytest.mark.parametrize("env", [5, 6])
-def test_stac_pins_the_requests_security_floor_uncapped(env):
-    # CVE-2024-47081 (requests < 2.32.4 leaks ~/.netrc credentials to another host); gbx.stac fetches catalog hrefs
+@pytest.mark.parametrize("env, cap", [(5, "<2.33"), (6, None)])
+def test_stac_pins_the_requests_security_floor(env, cap):
+    # CVE-2024-47081 (requests < 2.32.4 leaks ~/.netrc credentials to another host); gbx.stac fetches catalog hrefs.
+    # env5's frozen bases get a patch move (cap <2.33); env6's runtimes already have 2.32.5: no cap.
     (r,) = [
         r
         for r in bew.reqs_of(bew.PYDIR / "envs" / f"env{env}" / "extra-stac.txt")
         if r.name == "requests"
     ]
     assert not r.specifier.contains("2.32.3") and r.specifier.contains("2.32.5"), str(r)
-    assert all(s.operator in (">=", ">") for s in r.specifier), str(r)  # no cap
+    assert sorted(str(s) for s in r.specifier if s.operator.startswith("<")) == ([cap] if cap else [])
     assert bew.SECURITY_FLOORS["requests"][0] == "2.32.4"
+    assert bew.FROZEN_BASE_CAPS == {5: {"requests": "<2.33"}}
+
+
+@pytest.mark.parametrize("env", [5, 6])
+def test_no_extra_caps_a_package_the_runtimes_preinstall(env):
+    envdir = bew.PYDIR / "envs" / f"env{env}"
+    base = bew.pins_of(envdir / "base.txt")
+    for f in sorted(envdir.glob("extra-*.txt")):
+        for r in bew.reqs_of(f):
+            dep = bew.canonicalize_name(r.name)
+            caps = [str(s) for s in r.specifier if s.operator in ("<", "<=", "==", "~=")]
+            if dep in base:
+                assert caps in ([], [bew.FROZEN_BASE_CAPS.get(env, {}).get(dep)]), (f.name, str(r))
 
 
 @pytest.mark.parametrize(
@@ -391,7 +405,11 @@ def test_stac_pins_the_requests_security_floor_uncapped(env):
     [
         (6, "extra-stac.txt", "requests>=2.34.2", "would move it"),  # the plain [stac]'s floor: past the fix
         (5, "extra-stac.txt", "requests>=2.32.3", "needs a floor of at least 2.32.4"),  # CVE-2024-47081
-        (5, "extra-stac.txt", "requests>=2.32.4,<2.33", "must not be capped"),
+        (6, "extra-stac.txt", "requests>=2.32.5,<2.33", "so no cap"),  # env6 is not a frozen base
+        (5, "extra-stac.txt", "requests>=2.32.4,<2.34", "so no cap"),  # only the documented frozen-base cap
+        (5, "extra-databricks.txt", "databricks-sdk>=0.49.0,<0.68", "so no cap"),
+        (6, "extra-stac.txt", "tenacity>=9.1.2,<9.2", "so no cap"),
+        (6, "extra-vizx.txt", "matplotlib>=3.10.6,<4", "so no cap"),
         (6, "extra-databricks.txt", "requests>=2.0", "needs a floor of at least 2.32.4"),  # any extra naming it
         (5, "extra-databricks.txt", "databricks-sdk>=0.67", "would move it"),  # above DBR 17.3's 0.49.0
         (6, "extra-zarr.txt", "shapely>=2", "which the wheel vendors"),

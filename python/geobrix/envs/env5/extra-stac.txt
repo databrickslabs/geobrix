@@ -1,10 +1,13 @@
-# [stac]: the STAC client (gbx.stac): the plain wheel's [stac], with tenacity held at the runtimes' version (floor =
-# the preinstalled version, cap = the next minor; base.txt). pystac comes from core.txt.
+# [stac]: the STAC client (gbx.stac): the plain wheel's [stac]. pystac comes from core.txt.
+# Packages the runtimes preinstall get a floor only, never a cap: a cap under a later runtime's version would be a
+# downgrade (gbx:build:wheel refuses one). tenacity: the runtimes' 9.0.0.
 # requests is the one deliberate move of a preinstalled package: DBR 17.3, DBR 18 and Serverless environment 5 ship
 # requests 2.32.3, which has CVE-2024-47081 (a URL can make it send ~/.netrc credentials for one host to another, and
-# gbx.stac fetches catalog-supplied hrefs through it). 2.32.4 fixes it, so the floor is 2.32.4 (gbx:build:wheel
-# SECURITY_FLOORS). No cap: a cap under a later runtime's requests would downgrade it.
+# gbx.stac fetches catalog-supplied hrefs through it). 2.32.4 fixes it (gbx:build:wheel SECURITY_FLOORS). The <2.33 cap
+# is the one cap on a preinstalled package (gbx:build:wheel FROZEN_BASE_CAPS): these runtimes are frozen LTS bases, so
+# the cap cannot downgrade the runtime, only a user who upgraded requests past 2.32 themselves, and it keeps the move a
+# patch move (2.32.3 -> 2.32.5) instead of a jump to the newest requests.
 pystac-client>=0.7,<1
 planetary-computer>=1.0,<2
-tenacity>=9.0.0,<9.1
-requests>=2.32.4
+tenacity>=9.0.0
+requests>=2.32.4,<2.33

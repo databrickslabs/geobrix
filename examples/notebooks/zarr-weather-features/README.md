@@ -29,8 +29,8 @@ features need, so that it stays readable for training.
 
 The whole walk-through. It registers the sample cube as a writable store (7 arrays in 19 objects,
 nothing copied), reads a box over Europe as six blocks and as 25,584 cells, samples 100 sites
-into a 4,800-row features table, writes `wind_speed` back as version 2 (one pack file of about
-1.4 MB in the overlay), reads version 1 to show the store before the write, maps one hour of wind
+into a 4,800-row features table, writes `wind_speed` back as version 2 (its file lands in the
+overlay, never in the cube), reads version 1 to show the store before the write, maps one hour of wind
 speed over the whole grid and clipped to Australia, and tags version 2 `training`; the features
 reproduce from the tag with no row different. A last check confirms the cube's files are
 unchanged. The committed outputs are from a run on Serverless environment 6.
@@ -129,8 +129,10 @@ Tagged version: outlives retain and vacuum; the features reproduce from it     [
 - **Name a new variable.** An `update` that creates a variable the store lacks needs
   `variables=[...]`; without it the writer knows only the store's arrays and refuses the block.
 - **Longitudes 0 to 359.** The sample cube's longitude axis runs from 0 to 359, so its tiles are
-  `EPSG:4326` with x from 0 to 360 and are not shifted into -180..180. Points and polygons use the
-  same convention.
+  `EPSG:4326` with x above 180: they reach x = 359.5 and are not shifted into -180..180. Points
+  and polygons use the same 0 to 359 longitudes.
+- **No colour scale on the maps.** `plot_raster` draws none; the values quoted for the clipped
+  map come from the `rst_avg` and `rst_max` statistics the notebook prints.
 - **Versions last for `retain`.** Old versions stay readable for the store's `retain` period
   (7 days by default); a tag keeps one for as long as the tag exists.
 

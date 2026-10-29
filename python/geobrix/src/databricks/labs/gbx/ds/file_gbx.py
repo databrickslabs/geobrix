@@ -1161,19 +1161,37 @@ def _fuse_direct_disabled() -> bool:
     return os.environ.get("GBX_DISABLE_FUSE_DIRECT") == "1"
 
 
+def _remote_configured() -> bool:
+    """True when this process is set up for Spark Connect (SPARK_REMOTE and the like)."""
+    try:
+        from pyspark.sql.utils import is_remote
+    except ImportError:  # cannot tell: let the builder decide, as before
+        return True
+    return bool(is_remote())
+
+
 def _resolve_session_for_cap() -> Optional["SparkSession"]:
     """Resolve the active SparkSession for baking the connect-aware stream cap.
 
     Mirrors the session-resolution in file_supported(): tries getActiveSession()
-    first, falls back to getOrCreate(), returns None if both fail.  None is an
+    first; with Spark Connect configured it falls back to getOrCreate() (a Connect
+    client session is cheap, and it is what tells Serverless's 64 MiB cap from the
+    classic 256 MiB). Returns None otherwise, and when getOrCreate() fails.  None is an
     acceptable result — _connect_aware_lru_sizing(None) returns the 256 MiB classic
-    cap as a safe fallback (same as the non-Connect branch).
+    cap, the very value a classic session would give.
+
+    Without Connect it never creates a session: a classic session would only say "classic",
+    while building one starts a JVM and leaves a process-wide ``local[*]`` session behind,
+    which the next ``SparkSession.builder.master(...).getOrCreate()`` of the same process
+    then silently reuses (its master and settings ignored).
 
     Worker-safe: no .rdd / _jvm / conf.set.
     """
     sess = SparkSession.getActiveSession()
     if sess is not None:
         return sess
+    if not _remote_configured():
+        return None
     try:
         return SparkSession.builder.getOrCreate()
     except Exception:

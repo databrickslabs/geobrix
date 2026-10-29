@@ -252,11 +252,31 @@ def test_vector_reader_types_a_time_a_date_and_a_flag_as_their_cf_attributes_say
         ok.flag_values, ok.flag_meanings = np.array([0, 1], dtype="i1"), "false true"
         ok[:] = np.ma.masked_array([1, 0], mask=[False, True])
         ds.createVariable("qa", "i1", ("obs",))[:] = [3, 4]
+        # a flag_values that is not a numeric list (text, or a NaN) is a malformed attribute: the
+        # variable stays the number it is, and the read does not fail on it
+        for name, values in (
+            ("flag_text", "0 1"),
+            ("flag_nan", np.array([0.0, np.nan])),
+        ):
+            bad = ds.createVariable(name, "i1", ("obs",))
+            bad.flag_values, bad.flag_meanings = values, "false true"
+            bad[:] = [0, 1]
 
     reader = NetcdfVectorReader({"path": str(f)})
     types = {fld.name: fld.dataType.simpleString() for fld in reader.schema().fields}
     assert [
-        types[c] for c in ("seen", "day", "half", "noon", "scaled", "ok", "qa")
+        types[c]
+        for c in (
+            "seen",
+            "day",
+            "half",
+            "noon",
+            "scaled",
+            "ok",
+            "qa",
+            "flag_text",
+            "flag_nan",
+        )
     ] == [
         "timestamp",
         "date",
@@ -264,6 +284,8 @@ def test_vector_reader_types_a_time_a_date_and_a_flag_as_their_cf_attributes_say
         "timestamp",
         "timestamp",
         "boolean",
+        "int",
+        "int",
         "int",
     ]
     (part,) = reader.partitions()

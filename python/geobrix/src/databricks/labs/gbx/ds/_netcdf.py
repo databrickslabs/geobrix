@@ -426,8 +426,12 @@ def column_kind(var) -> Optional[str]:
         return "date" if _is_date_axis(var) else "timestamp"
     meanings = str(var.attrs.get("flag_meanings", "")).split()
     values = np.atleast_1d(var.attrs.get("flag_values", []))
-    if meanings == ["false", "true"] and [int(v) for v in values] == [0, 1]:
-        return "boolean"
+    if meanings == ["false", "true"]:
+        try:
+            if [int(v) for v in values] == [0, 1]:
+                return "boolean"
+        except (ValueError, TypeError, OverflowError):
+            pass  # flag_values that is text or holds a NaN or infinity is malformed: not a flag
     return None
 
 

@@ -409,13 +409,14 @@ formats.
 - **The lightweight tier lists each folder once per worker, not at every open.** GDAL lists a
   raster's folder at every open to look for its sidecar files. On a Volume, a folder of 745 hourly
   GeoTIFFs took 0.3 s to 10 s per open on a Serverless worker. GeoBrix now lists a folder once per
-  Python worker, at the worker's second open of one of its files, and then tells GDAL, for each
-  open, where to look. A file with no sidecar in the folder is opened without any sidecar look-up:
-  a median of about 165 ms per open of a fresh file on Serverless, against about 415 ms with GDAL
-  checking each sidecar by name. A file with sidecars (external overviews, masks, `.aux.xml`,
-  world files) still finds them, and so do the files a VRT opens. `rst_avg` on a whole hourly file
-  took about 290 ms to 370 ms a call instead of about 630 ms to 670 ms. Before a folder is listed,
-  and in a folder of more than 1,000 files (GDAL's own `GDAL_READDIR_LIMIT_ON_OPEN`), sidecars are
+  Python worker, when the worker opens a second, different file of it, and then tells GDAL, for
+  each open, where to look. A GeoTIFF, PNG, JPEG, JPEG 2000, netCDF, HDF or GRIB file with no
+  sidecar in the folder is opened without any sidecar look-up: a median of about 165 ms per open
+  of a fresh file on Serverless, against about 415 ms with GDAL checking each sidecar by name. A
+  file with sidecars (external overviews, masks, `.aux.xml`, world files) still finds them, and so
+  do the files a VRT or another multi-file dataset opens. `rst_avg` on a whole hourly file took
+  about 290 ms to 370 ms a call instead of about 630 ms to 670 ms. Before a folder is listed, and
+  in a folder of more than 1,000 files (GDAL's own `GDAL_READDIR_LIMIT_ON_OPEN`), sidecars are
   checked by name; finding that a folder is that large costs one listing per worker (about 2 s for
   5,000 files and 14.5 s for 40,000 on Serverless), except for tiles read with `raster_gbx`, which
   carry the reader's count of such a folder in their metadata (`path_folder_files`) and skip the
@@ -424,14 +425,17 @@ formats.
   seconds) or the worker restarts. See [Sidecar files and folder
   listings](./api/performance#sidecar-files-and-folder-listings).
 - **Importing the lightweight tier sets `GDAL_DISABLE_READDIR_ON_OPEN=TRUE` for the whole Python
-  process**, unless it is set already. Your own rasterio, GDAL or Fiona code in that process and
-  the programs it starts (`gdalinfo`, `tippecanoe`) then check sidecars by name too, so a sidecar
-  whose name mixes case (`x.Tfw`) is found only with `NO`. Set `GDAL_DISABLE_READDIR_ON_OPEN=NO`
-  before the import to keep GDAL's listing, or `YES` for the checks by name without GeoBrix's
-  per-file choice; any value you set before the import, or in a `rasterio.Env` around your reads,
-  is used for every open. When the outermost `rasterio.Env` that names the option exits, rasterio
-  keeps the value it found on entry as a GDAL configuration option for the process, and a later
-  change of the environment variable no longer has an effect.
+  process**, unless it is set already (`databricks.labs.gbx.pyrx`, or anything that imports
+  `databricks.labs.gbx.core.crs`). Your own rasterio, GDAL or Fiona code in that process and the
+  programs it starts (`gdalinfo`, `tippecanoe`) then check sidecars by name too, so a sidecar
+  whose name mixes case (`x.Tfw`), or a vendor metadata file whose name differs in case from the
+  one GDAL builds, is found only with `NO`. Set `GDAL_DISABLE_READDIR_ON_OPEN=NO` to keep GDAL's
+  listing, or `YES` for the checks by name without GeoBrix's per-file choice, in the environment
+  of the Python workers (a cluster or job environment variable) before GeoBrix is imported there;
+  a notebook's `os.environ` does not reach the workers. any value you set before the import, or in
+  a `rasterio.Env` around your reads, is used for every open. When the outermost `rasterio.Env`
+  that names the option exits, rasterio keeps the value it found on entry as a GDAL configuration
+  option for the process, and a later change of the environment variable no longer has an effect.
 - **A local copy of a Volume file is removed from disk as soon as it is opened.** When a Volume
   file cannot be read directly, the lightweight tier copies it to local disk. The copy that
   `rst_sample` keeps open for a task now leaves the disk at once: its space comes back when the

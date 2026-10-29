@@ -51,6 +51,7 @@ path is not intended for large tiles.
 import h3
 import numpy as np
 
+from databricks.labs.gbx._gdal_policy import open_bytes
 from databricks.labs.gbx.pygx import _bng, _quadbin
 from databricks.labs.gbx.pyrx.core._nodata import band_valid_mask
 
@@ -465,7 +466,7 @@ def _warp_to_4326_if_needed(ds, crs):
     if override == _WGS84:
         return None  # override says it is already 4326
     stamped = _stamp_crs_bytes(ds, override)
-    with MemoryFile(stamped) as mf, mf.open() as stamped_ds:
+    with MemoryFile(stamped) as mf, open_bytes(mf) as stamped_ds:
         return warp.reproject_to_crs(
             stamped_ds, "EPSG:4326", resampling="nearest", mark_fill_nodata=True
         )
@@ -601,7 +602,7 @@ def raster_to_grid(
         return _run(ds)
     from rasterio.io import MemoryFile
 
-    with MemoryFile(warped_bytes) as mf, mf.open() as work_ds:
+    with MemoryFile(warped_bytes) as mf, open_bytes(mf) as work_ds:
         return _run(work_ds)
 
 
@@ -641,7 +642,7 @@ def _raster_to_bng(
         from databricks.labs.gbx.pyrx.core.crs import resolve_crs
 
         stamped = _stamp_crs_bytes(ds, resolve_crs(crs))
-        with MemoryFile(stamped) as _mf, _mf.open() as _stamped_ds:
+        with MemoryFile(stamped) as _mf, open_bytes(_mf) as _stamped_ds:
             return _raster_to_bng(
                 _stamped_ds,
                 resolution,
@@ -711,7 +712,7 @@ def _raster_to_bng(
     warped_bytes = warp.reproject_to_srid(
         ds, 27700, resampling="nearest", mark_fill_nodata=True
     )
-    with MemoryFile(warped_bytes) as mf, mf.open() as work_ds:
+    with MemoryFile(warped_bytes) as mf, open_bytes(mf) as work_ds:
         return _run(work_ds)
 
 

@@ -33,6 +33,11 @@ echo "ok: layout: _native/$ARCH/lib ($(ls "$T/gbx/_native/$ARCH/lib" | wc -l) fi
 
 "$PY" /verify/p11_probe.py closure --root "$T/gbx" --arch "$ARCH"
 
+# the bindings' debug symbols (the tarball packed beside this tree) symbolize an exported address of a shipped module
+dbg="$(ls "$B"/bindings-*"$ARCH"*-debuginfo.tar.xz 2> /dev/null | head -n 1)"
+[ -n "$dbg" ] || fail "no bindings debuginfo tarball in $B"
+bash /verify/symbolize-check.sh "$(ls "$B"/vendor/rasterio/_base*.so | head -n 1)" PyInit__base "$dbg" || fail "the bindings' debug symbols"
+
 # the three environments; every one is installed from the hashed wheelhouse, offline
 mkvenv() { # DIR LOCK
     "$PY" -m venv "$1"

@@ -21,8 +21,8 @@ object OGR_SchemaInference extends Serializable {
     /** Registers all OGR drivers once per JVM via the process-wide guard (thread-safe). */
     final def enableOGRDrivers(force: Boolean = false): Unit = {
         if (force) {
-            // Explicit force re-registration (rare; e.g. tests). RegisterAll is additive/idempotent.
-            ogr.RegisterAll()
+            // Explicit force re-registration (rare; e.g. tests), through the driver policy's choke point.
+            GDALManager.reregisterOgr()
         } else {
             GDALManager.initOgr()
         }

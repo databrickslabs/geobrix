@@ -17,6 +17,7 @@ from typing import Callable, Optional
 
 import requests
 
+from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
 
@@ -44,11 +45,10 @@ def read_validate(path: str) -> bool:
     It rejects throttled bodies and header-only truncation but does not catch
     corruption confined to large data sections.
     """
-    import rasterio
     from rasterio.windows import Window
 
     try:
-        with rasterio.open(path) as ds:
+        with open_data(path) as ds:
             ds.read(1, window=Window(0, 0, min(512, ds.width), min(512, ds.height)))
         return True
     except Exception:
@@ -89,7 +89,7 @@ def windowed_download(
     from databricks.labs.gbx.ds._window import window_for_bbox
 
     with rasterio.Env(GDAL_CACHEMAX=128):
-        with rasterio.open(href) as src:
+        with open_data(href) as src:
             win = window_for_bbox(src, bbox, bbox_crs)
             if win is None:
                 raise ValueError(f"bbox {bbox} does not overlap the asset {href!r}")
@@ -129,7 +129,7 @@ def windowed_download(
                     out_dtype, decoded_bytes=decoded_bytes, compress="auto"
                 )
             )
-            with rasterio.open(outpath, "w", **profile) as dst:
+            with open_data(outpath, "w", **profile) as dst:
                 dst.write(data)
     return outpath
 

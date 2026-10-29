@@ -34,9 +34,17 @@ final case class SpecParam(name: String, sessionType: String, default: Option[St
 /** A manifest row that carries a `gdal` block: what the JVM needs to bind and run it. */
 final case class SpecFunction(sqlName: String, params: Seq[SpecParam], minArgs: Int, gdal: GdalSpec)
 
-/** The manifest's top-level `gdal` section (mirrors `manifest.GdalSection`). `virtualRefuse` is the virtual-tile
-  * driver policy: a virtual tile opens with every raster driver but these (stored pipelines, the service drivers). */
-final case class GdalSection(pin: String, deny: Set[String], allow: Map[String, Seq[String]], virtualRefuse: Set[String])
+/** The manifest's top-level `gdal` section (mirrors `manifest.GdalSection`). The driver classification: every
+  * raster driver the payload's GDAL registers is in `allowedDrivers` (a reader can read it) or `refusedDrivers` (a
+  * pipeline, an index, a service or a network API; never registered where the engine runs, see
+  * [[com.databricks.labs.gbx.rasterx.gdal.GDALManager.DefaultSkippedDrivers]]). */
+final case class GdalSection(
+    pin: String,
+    deny: Set[String],
+    allow: Map[String, Seq[String]],
+    allowedDrivers: Seq[String],
+    refusedDrivers: Seq[String]
+)
 
 /** The GDAL spec engine's specs, read from the copy of `functions.json` the build packs into the JAR, never from
   * a caller, so a spec cannot be forged from SQL. The parse refuses any key outside the closed vocabulary, as the
@@ -45,7 +53,8 @@ object GdalSpecs {
 
     val Resource = "/com/databricks/labs/gbx/manifest/functions.json"
 
-    private val SectionKeys = Set("pin", "deny", "allow", "virtual_tile_refuse")
+    private val SectionKeys = Set("pin", "deny", "allow", "raster_drivers")
+    private val RasterDriverKeys = Set("allowed", "refused")
     private val OutKeys = Set("kind", "dtype")
     private val BlockKeys = Set("alg", "in", "out", "write", "args", "needs_crs", "gdal_min")
     private val ArgKeys = Set("arg", "const", "from", "type", "map", "null", "with", "bad")
@@ -131,15 +140,30 @@ object GdalSpecs {
         )
     }
 
+    private def names(s: JsonNode, key: String): Seq[String] =
+        Option(s.get(key)).map(_.elements.asScala.map(_.asText).toSeq).getOrElse(Nil)
+
     /** The whole manifest: its `gdal` section and every row that has a `gdal` block. */
     def parse(root: JsonNode): (GdalSection, Map[String, SpecFunction]) = {
         val s = root.get("gdal")
         closed(s, SectionKeys, "section")
+        val drivers = Option(s.get("raster_drivers")).getOrElse(throw new IllegalArgumentException(
+          "gdal spec: the section needs raster_drivers (allowed and refused)"))
+        closed(drivers, RasterDriverKeys, "raster_drivers")
+        val allowedDrivers = names(drivers, "allowed")
+        val refusedDrivers = names(drivers, "refused")
+        // the two classes are disjoint and free of repeats, as the Python parser holds them
+        require(
+          allowedDrivers.toSet.intersect(refusedDrivers.toSet).isEmpty &&
+            allowedDrivers.distinct.size == allowedDrivers.size && refusedDrivers.distinct.size == refusedDrivers.size,
+          s"gdal spec: the raster driver classes must be disjoint and free of repeats: $allowedDrivers / $refusedDrivers"
+        )
         val section = GdalSection(
           pin = s.get("pin").asText,
           deny = s.get("deny").elements.asScala.map(_.asText).toSet,
           allow = s.get("allow").fields.asScala.map(e => e.getKey -> e.getValue.elements.asScala.map(_.asText).toSeq).toMap,
-          virtualRefuse = Option(s.get("virtual_tile_refuse")).map(_.elements.asScala.map(_.asText).toSet).getOrElse(Set.empty)
+          allowedDrivers = allowedDrivers,
+          refusedDrivers = refusedDrivers
         )
         val fns = root.get("functions").elements.asScala.filter(_.has("gdal")).map { r =>
             val params = r.get("params").elements.asScala.map { p =>

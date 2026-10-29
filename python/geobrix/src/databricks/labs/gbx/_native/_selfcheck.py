@@ -26,6 +26,8 @@ import re
 import sys
 import tempfile
 
+from databricks.labs.gbx._gdal_policy import open_data
+
 WIDTH, HEIGHT = 388, 385  # uint16, values (r * WIDTH + c) % 65535
 EPSG = 32630
 ORIGIN = (699960.0, 5700000.0)
@@ -271,10 +273,18 @@ def _payload_lib(prefix):
 
 
 def _netcdf_filters():
-    """zstd, blosc and bzip2 netCDF-4 variables written by netCDF4 read back the same through netCDF4 and GDAL."""
+    """zstd, blosc and bzip2 netCDF-4 variables written by netCDF4 read back the same through netCDF4 and GDAL,
+    with the payload's filter plugins registered with its own netCDF-C/HDF5 and nothing put in the
+    environment (``HDF5_PLUGIN_PATH`` is unchanged here and in a child process)."""
+    import subprocess
+
     import netCDF4
     import numpy as np
     import rasterio
+
+    from databricks.labs.gbx import _native
+
+    env_before = os.environ.get("HDF5_PLUGIN_PATH")
 
     a = (np.arange(64 * 48, dtype=np.float32).reshape(64, 48) % 251) * 0.5
     out, d = {}, tempfile.mkdtemp(prefix="gbx-nc-filters-")
@@ -289,7 +299,7 @@ def _netcdf_filters():
         with netCDF4.Dataset(path) as nc:
             back = np.asarray(nc["v"][:])
         with rasterio.Env(GDAL_NETCDF_BOTTOMUP="NO"):
-            with rasterio.open(f'NETCDF:"{path}":v') as ds:
+            with open_data(f'NETCDF:"{path}":v') as ds:
                 gdal_back = ds.read(1)
         key = codec.split("_")[0]
         if (
@@ -300,17 +310,33 @@ def _netcdf_filters():
             return False, {
                 "codec": codec,
                 "filters": used,
-                "plugin_path": os.environ.get("HDF5_PLUGIN_PATH"),
+                "registered": _native.hdf5_plugin_path(),
             }
         out[codec] = os.path.getsize(path)
-    return True, {"bytes": out, "plugin_path": os.environ.get("HDF5_PLUGIN_PATH")}
+    registered = _native.hdf5_plugin_path() or []
+    child = subprocess.run(
+        [sys.executable, "-c", "import os; print(os.environ.get('HDF5_PLUGIN_PATH'))"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    ).stdout.strip()
+    env_after = os.environ.get("HDF5_PLUGIN_PATH")
+    return (
+        _native.hdf5_plugin_dir() in registered
+        and env_after == env_before
+        and child == str(env_before)
+    ), {
+        "bytes": out,
+        "registered": registered,
+        "hdf5_plugin_path_env": env_after,
+        "child_env": child,
+    }
 
 
 def _grids():
     """OSTN15 against Ordnance Survey's test points; OSGM15 and EGM96 heights both ways at a node; no network."""
     import numpy as np
     import pyproj
-    import rasterio
 
     t = pyproj.Transformer.from_crs("EPSG:27700", "EPSG:4258", always_xy=True)
     errs = []
@@ -324,7 +350,7 @@ def _grids():
     share = pyproj.datadir.get_data_dir().split(os.pathsep)[0]
     heights = {}
     for grid, src, dst in GEOIDS:
-        with rasterio.open(os.path.join(share, grid)) as ds:
+        with open_data(os.path.join(share, grid)) as ds:
             r, c = ds.height // 2, ds.width // 2
             v = ds.read(1, window=((r, r + 1), (c, c + 50)))[0]
             c += int(np.argmax(v != ds.nodata)) if ds.nodata is not None else 0
@@ -347,14 +373,13 @@ def _grids():
 def _jxl():
     """GTiff COMPRESS=JXL, lossless, UInt16: written and read back exactly."""
     import numpy as np
-    import rasterio
 
     a = (np.arange(64 * 64, dtype=np.uint16).reshape(64, 64) * 13) % 4096
     path = os.path.join(tempfile.mkdtemp(prefix="gbx-jxl-"), "t.tif")
-    with rasterio.open(path, "w", driver="GTiff", width=64, height=64, count=1, dtype="uint16", compress="JXL",
-                       JXL_LOSSLESS="YES") as ds:  # fmt: skip
+    with open_data(path, "w", driver="GTiff", width=64, height=64, count=1, dtype="uint16", compress="JXL",
+                   JXL_LOSSLESS="YES") as ds:  # fmt: skip
         ds.write(a, 1)
-    with rasterio.open(path) as ds:
+    with open_data(path) as ds:
         back, comp = ds.read(1), ds.compression
     return np.array_equal(back, a) and str(comp).upper().endswith("JXL"), {
         "compression": str(comp)
@@ -411,13 +436,15 @@ def _libraries():
     """libjpeg-turbo has its SIMD dispatcher; libcurl speaks HTTP/2; GDAL_HTTP_VERSION is left to GDAL."""
     import ctypes
 
-    jpeg = open(_payload_lib("libjpeg.so."), "rb").read()
+    jpeg = open(
+        _payload_lib("libjpeg.so."), "rb"
+    ).read()  # the dispatcher is compiled in (verify-native times it)
     curl = ctypes.CDLL(_payload_lib("libcurl.so."))
     curl.curl_version.restype = ctypes.c_char_p
     version = curl.curl_version().decode()
     simd = b"JSIMD_FORCENONE" in jpeg
     return simd and "nghttp2/" in version and "GDAL_HTTP_VERSION" not in os.environ, {
-        "jpeg_simd": simd,
+        "jpeg_simd_compiled": simd,
         "curl": version,
         "gdal_http_version": os.environ.get("GDAL_HTTP_VERSION"),
     }

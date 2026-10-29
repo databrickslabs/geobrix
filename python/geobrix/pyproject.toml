@@ -435,6 +435,8 @@ markers = [
     "integration: tests that need network or long-running setup (excluded from CI)",
     "perf: slow tessellate / geomk / streamed-merge cases (some are correctness oracles that are only slow, some bound memory); skipped by gbx:test:pyrx and gbx:test:light by default (--perf includes them), still run by CI",
     "delta: tests that run on the local Spark/Delta session (test/zarr marks them in its conftest.py, other tests mark themselves); -m 'not delta' is the fast, Spark-free inner loop",
+    "gdal_policy: a row of the GDAL driver policy; the policy_meta row fails if one skipped where the payload is present",
+    "policy_meta: the one meta-row that checks the gdal_policy rows' outcomes (runs after them, see test/conftest.py)",
     "connect: tests that use the spark_connect_local fixture (marked in test/conftest.py, not by hand); they cannot share a process with classic-session tests, so gbx:test:pyrx / gbx:test:light run them in a second pytest process and gbx:test:parity leaves them out",
 ]
 filterwarnings = [

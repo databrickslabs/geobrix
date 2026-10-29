@@ -31,9 +31,9 @@ import hashlib
 from pathlib import Path
 from typing import List
 
-import rasterio
 from rasterio.transform import Affine
 
+from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.bench import manifest as _m
 from databricks.labs.gbx.pyrx.core.compression import source_profile
 
@@ -75,7 +75,7 @@ def synthesize(src_path: str, fn: str, out_dir: str) -> List[str]:
 
 def _write(profile: dict, bands: list, path: Path) -> None:
     """Write ``bands`` (list of 2-D arrays) to ``path`` as a GTiff."""
-    with rasterio.open(path, "w", **profile) as dst:
+    with open_data(path, "w", **profile) as dst:
         for i, arr in enumerate(bands, start=1):
             dst.write(arr, i)
 
@@ -83,7 +83,7 @@ def _write(profile: dict, bands: list, path: Path) -> None:
 def _synth_frombands(src_path: str, out: Path) -> List[str]:
     """Split the N-band source into N single-band GTiffs (band order preserved)."""
     paths: List[str] = []
-    with rasterio.open(src_path) as ds:
+    with open_data(src_path) as ds:
         n = ds.count
         for b in range(1, n + 1):
             p = out / f"band_{b:02d}.tif"
@@ -99,7 +99,7 @@ def _synth_frombands(src_path: str, out: Path) -> List[str]:
 def _synth_combineavg(src_path: str, out: Path) -> List[str]:
     """Two ALIGNED copies of the source (identical grid) for a per-pixel mean."""
     paths: List[str] = []
-    with rasterio.open(src_path) as ds:
+    with open_data(src_path) as ds:
         data = ds.read()
         profile = source_profile(ds.profile, unless_jpeg=True)
         profile.update(driver="GTiff")
@@ -121,7 +121,7 @@ def _synth_merge(src_path: str, out: Path) -> List[str]:
     CRS are unchanged so both copies snap onto one common grid for the mosaic.
     """
     paths: List[str] = []
-    with rasterio.open(src_path) as ds:
+    with open_data(src_path) as ds:
         data = ds.read()
         base = ds.transform
         w, h = ds.width, ds.height

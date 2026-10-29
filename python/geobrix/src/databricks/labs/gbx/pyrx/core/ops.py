@@ -12,6 +12,7 @@ import shapely.wkb
 from rasterio.enums import Resampling
 from rasterio.io import MemoryFile
 
+from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core.analysis import cog_convert
@@ -171,10 +172,10 @@ def build_overviews(ds, levels, resampling: str = "average") -> bytes:
     # embed internally; then read the bytes (with their .ovr) back.
     tmp = new_local_temp_file(suffix=".tif")
     try:
-        with rasterio.open(tmp, "w", **profile) as dst:
+        with open_data(tmp, "w", **profile) as dst:
             _comp.match_alpha(dst, ds.colorinterp)
             dst.write(data)
-        with rasterio.open(tmp, "r+") as dst:
+        with open_data(tmp, "r+") as dst:
             dst.build_overviews(levels, resampling_enum)
             dst.update_tags(ns="rio_overview", resampling=key)
         with open(tmp, "rb") as fh:

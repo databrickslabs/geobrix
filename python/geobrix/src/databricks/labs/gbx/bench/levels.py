@@ -246,7 +246,8 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
         if "df" in holder
         else dict(_NO_PLAN)
     )
-    rss = peak.read() if peak else None
+    # the reading takes the DataFrame, whose plan decides an early stop
+    rss = peak.read(holder.get("df")) if peak else None
     m = {k: plan[k] for k in attribution.METRICS}
     m["py_worker_rss_mb"] = rss
     note = [f"attr={plan['source']}"]

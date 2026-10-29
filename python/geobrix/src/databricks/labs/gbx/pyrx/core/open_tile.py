@@ -29,6 +29,7 @@ from rasterio.io import DatasetReader, MemoryFile
 from rasterio.vrt import WarpedVRT
 from rasterio.windows import Window
 
+from databricks.labs.gbx._gdal_policy import open_bytes, open_data, refusals_named
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import _clip
 from databricks.labs.gbx.pyrx.core import _nodata as _nd
@@ -285,7 +286,7 @@ def _warp_bytes(win_bytes: bytes, want_crs) -> bytes:
     and the warp carries it; without one the mask is warped to the output grid and
     written as the output's own mask band.
     """
-    with MemoryFile(win_bytes) as mf, mf.open() as wds:
+    with MemoryFile(win_bytes) as mf, open_bytes(mf) as wds:
         mask_band = _nd.has_own_mask(wds) and wds.nodata is None
         with WarpedVRT(wds, crs=want_crs) as vrt:
             prof = _comp.source_profile(vrt.profile)
@@ -369,14 +370,14 @@ def _zarr_tile_bytes(tile: VirtualTile, pending) -> bytes:
     data = _zarr_tiles.zarr_tile_dataset_bytes(tile)
     if not _has_pending(tile.metadata) and not tile.crs:
         return data  # nothing to apply
-    with MemoryFile(data) as mf, mf.open() as src:
+    with MemoryFile(data) as mf, open_bytes(mf) as src:
         window = Window(0, 0, src.width, src.height)
         return _tile_window_bytes(tile, src, window, pending)
 
 
 def _clip_bytes(tile_bytes: bytes, tile: VirtualTile) -> bytes:
     """``tile_bytes`` clipped to the tile's ``clip_polygon`` (a disjoint clip: a 1x1 NoData)."""
-    with MemoryFile(tile_bytes) as mf, mf.open() as wds:
+    with MemoryFile(tile_bytes) as mf, open_bytes(mf) as wds:
         clipped = _clip.clip_dataset(wds, tile.clip_polygon, tile.clip_crs)
         return _empty_dataset_bytes(wds) if clipped is None else clipped
 
@@ -420,7 +421,7 @@ def _empty_dataset_bytes(ref) -> bytes:
 def _open_bytes(stack: ExitStack, raster_bytes: bytes) -> DatasetReader:
     """Open standalone raster bytes on the stack so it lives until the stack exits."""
     mf = stack.enter_context(MemoryFile(raster_bytes))
-    return stack.enter_context(mf.open())
+    return stack.enter_context(open_bytes(mf))
 
 
 @contextmanager
@@ -472,7 +473,7 @@ def open_tile(tile: VirtualTile, file_ref=None) -> Iterator[DatasetReader]:
         # (as_local_file → tile.path) and today's plain tile.path read (file_ref=None).
         local_path = _resolve_local_or_windowed(tile, file_ref, stack)
 
-        with rasterio.open(local_path) as src:
+        with open_data(local_path) as src:
             # Resolve window=None → full extent, mirroring open_header() semantics.
             if tile.window is None:
                 window = Window(0, 0, src.width, src.height)
@@ -482,7 +483,9 @@ def open_tile(tile: VirtualTile, file_ref=None) -> Iterator[DatasetReader]:
             # The pending_srid relabel counts as the source's CRS in the warp
             # decision (see _warp_pending): a tile with pending_srid=3857 and
             # crs=4326 is warped although the file itself is 4326.
-            tile_bytes = _tile_window_bytes(tile, src, window, pending)
+            # a pixel read is where GDAL stops a raw band or a pipeline nested in the VRT: its refusal names the reason
+            with refusals_named(f"the tile {tile.path}"):
+                tile_bytes = _tile_window_bytes(tile, src, window, pending)
         # src is closed here; we hold only standalone bytes.
 
         wds = _open_bytes(stack, tile_bytes)
@@ -742,7 +745,7 @@ def open_header(tile, file_ref=None) -> Iterator[DatasetReader]:
             src = _zarr_tiles.zarr_tile_header_view(vt)
         else:
             local_path = _resolve_local_or_windowed(vt, file_ref, stack)
-            src = stack.enter_context(rasterio.open(local_path))
+            src = stack.enter_context(open_data(local_path))
 
         # Parse pending instructions to reflect band-select / setsrid / nodata in header.
         bands, raw_nodata, srid, crs_str = _parse_pending(vt.metadata)
@@ -883,7 +886,7 @@ def _windowed_materialize_bytes(tile: VirtualTile) -> bytes:
         # Resolve the local path — same as open_tile's local-path branch.
         local_path = _resolve_local_or_windowed(tile, None, stack)
 
-        with rasterio.open(local_path) as src:
+        with open_data(local_path) as src:
             # Resolve window → same semantics as open_tile.
             if tile.window is None:
                 window = Window(0, 0, src.width, src.height)
@@ -1014,7 +1017,7 @@ def _tile_to_bytes(vt: VirtualTile) -> Optional[bytes]:
     with ExitStack() as stack:
         pending = _parse_pending(vt.metadata)
         local_path = _resolve_local_or_windowed(vt, None, stack)
-        with rasterio.open(local_path) as src:
+        with open_data(local_path) as src:
             # Resolve window=None → full extent, mirroring open_tile() semantics.
             # A deferred whole-file virtual tile carries window=None;
             # materialising it must produce the same bytes as an explicit full window.
@@ -1030,7 +1033,7 @@ def _tile_to_bytes(vt: VirtualTile) -> Optional[bytes]:
 
         # Clip path: open tile_bytes temporarily to clip, return clipped bytes directly.
         with MemoryFile(tile_bytes) as mf:
-            with mf.open() as wds:
+            with open_bytes(mf) as wds:
                 clipped = _clip.clip_dataset(wds, vt.clip_polygon, vt.clip_crs)
                 if clipped is None:
                     return _empty_dataset_bytes(wds)

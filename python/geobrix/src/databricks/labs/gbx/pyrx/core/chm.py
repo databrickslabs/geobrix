@@ -9,6 +9,7 @@ the output.  Output sentinel is -9999 (Float32).
 import numpy as np
 from rasterio.io import MemoryFile
 
+from databricks.labs.gbx._gdal_policy import open_bytes
 from databricks.labs.gbx.pyrx.core import agg
 from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 
@@ -41,12 +42,12 @@ def chm(dsm_bytes: bytes, dem_bytes: bytes) -> bytes:
         return None
 
     with MemoryFile(bytes(aligned_dsm)) as dsm_mf:
-        with dsm_mf.open() as dsm_ds:
+        with open_bytes(dsm_mf) as dsm_ds:
             A = dsm_ds.read(1).astype("float64")
             nod_a = dsm_ds.nodata
 
     with MemoryFile(bytes(dem_bytes)) as dem_mf:
-        with dem_mf.open() as dem_ds:
+        with open_bytes(dem_mf) as dem_ds:
             D = dem_ds.read(1).astype("float64")
             nod_d = dem_ds.nodata
             profile = dem_ds.profile.copy()

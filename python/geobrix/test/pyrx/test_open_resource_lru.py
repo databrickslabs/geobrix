@@ -327,7 +327,15 @@ def test_connect_aware_lru_sizing_both_env_overrides(monkeypatch):
 
 def test_open_via_file_ref_respects_stream_max_bytes(monkeypatch):
     """_open_via_file_ref uses passed stream_max_bytes threshold."""
+    from databricks.labs.gbx.ds import file_gbx
     from databricks.labs.gbx.pyrx.grouped_exec import _open_via_file_ref
+
+    # The stream is opened through open_data (the driver policy), which imports rasterio itself: the fake rasterio the
+    # test passes is reached through open_data's module-level name in file_gbx.
+    current = {}
+    monkeypatch.setattr(
+        file_gbx, "open_data", lambda fp, mode="r", **kw: current["rio"].open(fp)
+    )
 
     # Fake FileRef with size just under threshold
     class FakeFileRef:
@@ -372,6 +380,7 @@ def test_open_via_file_ref_respects_stream_max_bytes(monkeypatch):
     # Test 1: File UNDER threshold with tiled=True → uses stream
     fr = FakeFileRef(50 * 1024**2)
     rstio = FakeRasterio()
+    current["rio"] = rstio
     ds, stream = _open_via_file_ref(fr, rstio, stream_max_bytes=100 * 1024**2)
     assert fr.stream_opened, "should open stream for file < threshold"
     assert stream is not None, "stream path should return stream"
@@ -380,6 +389,7 @@ def test_open_via_file_ref_respects_stream_max_bytes(monkeypatch):
     # Test 2: File OVER threshold → uses FUSE
     fr2 = FakeFileRef(150 * 1024**2)
     rstio2 = FakeRasterio()
+    current["rio"] = rstio2
     ds2, stream2 = _open_via_file_ref(fr2, rstio2, stream_max_bytes=100 * 1024**2)
     assert fr2.fuse_opened, "should use FUSE for file > threshold"
     assert stream2 is None, "FUSE path should return None stream"

@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.vectorx.ds.geojsonl
 
+import com.databricks.labs.gbx.operations.SpatialRefOps
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.util.HadoopUtils
 import org.apache.hadoop.fs.Path
@@ -173,26 +174,32 @@ class GeoJSONL_RowWriter(
         }
     }
 
-    /** Build the layer SRS from the captured srid code (EPSG) or PROJ4 fallback; null if CRS-less. */
+    /** Build the layer SRS from the captured srid code (EPSG) or PROJ4 fallback; null if CRS-less. Both are CRS text a
+      * row supplies, so both go through the canonical resolver ([[SpatialRefOps.resolveCrs]]): a value that names a
+      * file or a grid by path is refused with a `Fix:`, not handed to OGR. An integer code OGR does not know falls
+      * back to the PROJ4 column, as it always has. */
     private def buildSrs(): SpatialReference = {
-        if (sridCode != null && sridCode.nonEmpty && sridCode != "0") {
-            val srs = new SpatialReference()
-            Try(srs.ImportFromEPSG(sridCode.toInt)) match {
-                case scala.util.Success(_) => srs
-                case scala.util.Failure(_) => srs.delete(); fromProj4()
-            }
-        } else fromProj4()
+        val code = Option(sridCode).map(_.trim).filter(c => c.nonEmpty && c != "0")
+        code.flatMap { c =>
+            if (Try(c.toInt).isSuccess) Try(SpatialRefOps.resolveCrs(c)).toOption
+            else Some(resolveLoudly(c, "srid"))
+        }.getOrElse(fromProj4())
     }
 
-    private def fromProj4(): SpatialReference = {
-        if (proj4 != null && proj4.nonEmpty) {
-            val srs = new SpatialReference()
-            Try(srs.ImportFromProj4(proj4)) match {
-                case scala.util.Success(_) => srs
-                case scala.util.Failure(_) => srs.delete(); null
-            }
-        } else null
-    }
+    private def fromProj4(): SpatialReference =
+        if (proj4 != null && proj4.nonEmpty) resolveLoudly(proj4, "PROJ4") else null
+
+    /** A CRS a row supplies, or an error: bad data is loud, with a `Fix:` that names the column. */
+    private def resolveLoudly(value: String, column: String): SpatialReference =
+        try SpatialRefOps.resolveCrs(value)
+        catch {
+            case e: IllegalArgumentException =>
+                throw new IllegalArgumentException(
+                  s"geojsonl_ogr: the $column column's value '$value' is not a CRS GeoBrix reads (${e.getMessage}). " +
+                      "Fix: write the layer's CRS as an EPSG code, an AUTHORITY:CODE, WKT or PROJJSON, or drop the column.",
+                  e
+                )
+        }
 
     /** Geometry type: explicit override (name), else the first non-null feature's WKB type, else unknown. */
     private def inferGeomType(srs: SpatialReference): Int = {

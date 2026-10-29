@@ -12,6 +12,7 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Callable, Dict, List
 
+from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.bench import manifest as m
 from databricks.labs.gbx.bench import spec as _spec
 from databricks.labs.gbx.bench import synth as _synth
@@ -734,7 +735,6 @@ def _geometry_aggregate_df(spark, root, corpus, fs):
     aligns with the heavy tier). Returns ``(df, extent_tuple)`` where df has columns
     (geom_wkb BINARY, value DOUBLE) and extent is (xmin,ymin,xmax,ymax,w,h,srid).
     """
-    import rasterio
     from pyspark.sql.types import BinaryType, DoubleType, StructField, StructType
 
     geom_corpus = _load_geometry_corpus(root)
@@ -752,7 +752,7 @@ def _geometry_aggregate_df(spark, root, corpus, fs):
     src_rel = gset.source_tile
     from databricks.labs.gbx.core.crs import authority_srid_of
 
-    with rasterio.open(root / src_rel) as ds:
+    with open_data(root / src_rel) as ds:
         left, bottom, right, top = ds.bounds
         epsg = authority_srid_of(ds.crs)
         extent = (

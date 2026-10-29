@@ -38,6 +38,7 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
+from databricks.labs.gbx import _gdal_policy
 from databricks.labs.gbx.ds import _arrow_utc, _listing, _quarantine
 
 _LOG = logging.getLogger(__name__)
@@ -972,7 +973,7 @@ def _bad_lines(path, local, mtime_us, declared, state, bad) -> None:
 
 
 def _gpkg_fids(name, layer, where=None, max_features=None) -> list:
-    import pyogrio
+    pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
 
     kw = {"layer": layer, "columns": [], "read_geometry": False, "return_fids": True}
     if where:
@@ -994,7 +995,7 @@ class _GpkgGaps:
         self.first_error = ""
 
     def max_fid(self):
-        import pyogrio
+        pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
 
         _, tbl = pyogrio.read_arrow(
             self.name,
@@ -1009,7 +1010,7 @@ class _GpkgGaps:
     def starts(self, k) -> bool:
         """True if a read of ``fid >= k`` starts, with geometry and attributes
         as the resumed read will (a garbled cell can read without them)."""
-        import pyogrio
+        pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
 
         try:
             pyogrio.read_arrow(

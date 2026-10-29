@@ -1,12 +1,15 @@
 package com.databricks.labs.gbx.rasterx.gdal
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
+import org.apache.spark.SparkEnv
 import org.apache.spark.internal.Logging
 import org.gdal.gdal.gdal
 
 import java.io.File
 import java.nio.file.{Files, Paths}
+import java.security.MessageDigest
 import scala.jdk.CollectionConverters._
+import scala.util.control.NonFatal
 import scala.util.{Success, Try}
 
 /**
@@ -17,16 +20,23 @@ import scala.util.{Success, Try}
   * [[com.databricks.labs.gbx.rasterx.functions.register]] or when the first raster expression
   * runs on an executor.
   *
-  * Which GDAL: the JNI of the env wheel's payload named by [[NativeDirKey]], else by `GBX_NATIVE_ROOT`, else the
-  * system's `/usr/lib/libgdalalljni.so` ([[resolveNative]]). One GDAL per JVM: a second one is refused.
+  * Which GDAL: the JNI of the env wheel's payload named by [[NativeDirKey]] (from the caller's ExpressionConfig, else
+  * the session: [[sessionNativeDir]]), else by `GBX_NATIVE_ROOT`, else the system's `/usr/lib/libgdalalljni.so`
+  * ([[resolveNative]]). One GDAL per JVM: a second one is refused, also when a later configuration names it.
   */
 object GDALManager extends Logging {
 
     /**
-      * Network-capable GDAL drivers that can trigger outbound HTTP at parse time.
-      * Skipped by default (never registered); users can override via `spark.gdal.GDAL_SKIP`.
+      * The drivers the driver policy refuses (the manifest's `gdal.raster_drivers.refused`, held equal by a test): stored
+      * pipelines (GDALG), tile indexes and catalogs that open other rasters they name (GTI, STACTA, STACIT), the network
+      * APIs that can trigger outbound HTTP at open time, and the drivers that fetch a URL their own file names
+      * (KMLSUPEROVERLAY, and ESRIC's CRS URL) or open a source their file names and write cache files on read (MRF).
+      * Skipped at GDAL's registration, so a nested source cannot open them either. A `spark.gdal.GDAL_SKIP` value adds
+      * to this list and cannot remove a name from it; the one switch that turns the skip off is [[PolicyConf]] (or
+      * [[PolicyEnv]]).
       */
-    val DefaultSkippedDrivers = "WMS WMTS WCS WFS HTTP CSW OGCAPI"
+    val DefaultSkippedDrivers =
+        "GDALG GTI STACTA STACIT WMS WMTS WCS WFS HTTP CSW OGCAPI PLMOSAIC PLSCENES EEDAI EEDA DAAS NGW KMLSUPEROVERLAY MRF ESRIC"
 
     /** The env wheel's `_native/<arch>` directory (Python `_native.native_dir()`); its `lib/` holds the JNI. */
     val NativeDirKey = "spark.databricks.labs.gbx.native.dir"
@@ -41,16 +51,73 @@ object GDALManager extends Logging {
     // CA stores, the first that exists wins (the payload's curl has no compiled-in CA path); as _native/_rules.py
     private val SystemCa = Seq("/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/cert.pem")
     private val OneGdal = "Use one GDAL per cluster: the env wheel's or the system one, not both."
+    private val FindDir =
+        s"""set $NativeDirKey to the env wheel's native directory (python -c "from databricks.labs.gbx import """ +
+            """_native; print(_native.native_dir())")"""
 
     var isEnabled = false
     @volatile private var loaded: Option[NativeChoice] = None
-    private val lock = AnyRef
+    // conf dirs already found to name the loaded JNI: a later init with one of them is a lock-free no-op
+    @volatile private var sameAsLoaded: Set[String] = Set.empty
+    // PROJ grid directories already on the PROJ search path, in the order applied (a union: none is dropped)
+    @volatile private var appliedGridDirs: Seq[String] = Nil
+    private val lock = new Object
 
     /** Tracks whether OGR drivers have been registered in this JVM. See [[initOgr]]. */
     @volatile private var ogrEnabled = false
 
     private val pythonLock = new Object
     @volatile private var pythonDepth = 0
+
+    /** The one switch of the process-level driver policy: `GBX_GDAL_DRIVER_POLICY=off` in the environment, or
+      * `spark.databricks.labs.gbx.gdal.driver_policy=off` in the conf (the same name the light tier reads). Off: no
+      * refused driver is skipped and the raw-band setting is left as GDAL has it. Read once, at the JVM's first GDAL use
+      * ([[init]] or [[initOgr]]); a later change has no effect on that JVM. */
+    val PolicyEnv = "GBX_GDAL_DRIVER_POLICY"
+    val PolicyConf = "spark.databricks.labs.gbx.gdal.driver_policy"
+    @volatile private var policyOn = true
+    // the policy is decided once per JVM, by its first GDAL use (init or initOgr); a later use cannot change GDAL
+    private var policyDecided = false
+
+    /** On unless the switch is off: the environment, the caller's config, else the JVM's Spark conf (the cluster's
+      * SparkConf on an executor, where a runtime `spark.conf.set` does not reach). */
+    private def policyFrom(config: Option[ExpressionConfig]): Boolean = {
+        val env = Option(System.getenv(PolicyEnv))
+        val conf = config
+            .flatMap(_.configs.get(PolicyConf))
+            .orElse(Option(SparkEnv.get).flatMap(_.conf.getOption(PolicyConf)))
+        !(env.exists(_.trim.equalsIgnoreCase("off")) || conf.exists(_.trim.equalsIgnoreCase("off")))
+    }
+
+    /** Decide the policy at the JVM's first GDAL use: the first decision holds (later configs are logged, not applied). */
+    private def decidePolicy(config: Option[ExpressionConfig]): Unit = {
+        if (!policyDecided) {
+            policyOn = policyFrom(config)
+            policyDecided = true
+        } else if (config.exists(c => policyFrom(Some(c)) != policyOn)) {
+            logWarning("the GDAL driver policy was set by this JVM's first GDAL use; a later config's switch is not applied")
+        }
+    }
+
+    /** The driver policy's GDAL settings: the one choke point, applied by every GDAL init path, [[init]] and [[initOgr]]
+      * alike (OGRRegisterAll is GDALAllRegister in GDAL 3.13, and GDAL_SKIP is read at that registration). With the
+      * switch on, GDAL_SKIP is the refused list plus any name already set (a user's `spark.gdal.GDAL_SKIP` adds to it). */
+    private def applyDriverPolicy(): Unit = {
+        if (policyOn) {
+            gdal.SetConfigOption("GDAL_SKIP", skipList(Option(gdal.GetConfigOption("GDAL_SKIP"))))
+            gdal.SetConfigOption("GDAL_VRT_ENABLE_RAWRASTERBAND", "NO")
+        }
+        // Off by default; flipped on only around PixelCombineRasters.combine() via withVrtPython. A VRT's Python pixel
+        // function runs code from the file, so it is off for the process whatever the switch.
+        gdal.SetConfigOption("GDAL_VRT_ENABLE_PYTHON", "NO")
+    }
+
+    /** The refused drivers, then the names of `current` not among them (GDAL splits GDAL_SKIP on spaces and commas). */
+    private[gdal] def skipList(current: Option[String]): String = {
+        val refused = DefaultSkippedDrivers.split(" ").toSeq
+        val extra = current.toSeq.flatMap(_.split("[ ,]+")).map(_.trim).filter(_.nonEmpty).filterNot(refused.contains)
+        (refused ++ extra.distinct).mkString(" ")
+    }
 
     /**
       * Bracket `block` with `GDAL_VRT_ENABLE_PYTHON=YES` so a VRT with a `<PixelFunctionLanguage>Python</...>`
@@ -69,14 +136,19 @@ object GDALManager extends Logging {
         }
     }
 
-    /** Initialize GDAL once per process; idempotent after first success. */
-    def init(config: ExpressionConfig): Unit =
+    /** Initialize GDAL once per process; idempotent after first success. Every call checks that `config` names the
+      * GDAL already loaded (a JVM cannot change GDAL) and puts any PROJ grid directories it brings that are not yet
+      * on PROJ's search path there. */
+    def init(config: ExpressionConfig): Unit = {
+        ensureJniLoaded(config.nativeDir)
         lock.synchronized {
             if (!isEnabled) {
                 Try {
+                    decidePolicy(Some(config))
                     loadSharedObjects(config.getSharedObjects.values, config.nativeDir)
                     configureGDAL(config)
                     gdal.AllRegister()
+                    appliedGridDirs = gridDirs(config)
                     isEnabled = true
                 } match {
                     case Success(_)                    => logInfo("GDAL environment enabled successfully.")
@@ -86,8 +158,29 @@ object GDALManager extends Logging {
                         isEnabled = false
                         throw exception
                 }
+            } else {
+                val fresh = gridDirs(config).filterNot(appliedGridDirs.contains)
+                if (fresh.nonEmpty) {
+                    val current = Option(gdal.GetConfigOption("PROJ_DATA")).map(_.split(":").toSeq).getOrElse(Seq(baseProjData))
+                    setProjSearchPath((fresh ++ appliedGridDirs ++ current).distinct)
+                    appliedGridDirs = appliedGridDirs ++ fresh
+                    logInfo(s"PROJ grid directories added to the search path: ${fresh.mkString(", ")}")
+                }
             }
         }
+    }
+
+    private def gridDirs(config: ExpressionConfig): Seq[String] =
+        config.configs.get("spark.databricks.labs.gbx.gdal.PROJ_GRID_DIRS").toSeq.flatMap(_.split(":")).filter(_.nonEmpty)
+
+    private def baseProjData: String = loaded.flatMap(_.projData).getOrElse("/usr/share/proj")
+
+    /** PROJ_DATA/PROJ_LIB for GDAL, and OSRSetPROJSearchPaths, which reaches PROJ contexts that already exist. */
+    private def setProjSearchPath(dirs: Seq[String]): Unit = {
+        gdal.SetConfigOption("PROJ_DATA", dirs.mkString(":"))
+        gdal.SetConfigOption("PROJ_LIB", dirs.mkString(":")) // legacy alias PROJ still honors
+        org.gdal.osr.osr.SetPROJSearchPaths(new java.util.Vector[String](dirs.asJava))
+    }
 
     /**
       * Register OGR (vector) drivers once per JVM; idempotent after first success.
@@ -99,13 +192,31 @@ object GDALManager extends Logging {
       * exactly once under the shared `lock` (mirroring [[init]]) closes that race: after the
       * first call every task sees a fully-registered registry and never re-registers.
       */
-    def initOgr(): Unit =
+    def initOgr(): Unit = {
+        ensureJniLoaded(None) // else GDAL's classes would load a JNI by name on their own
         lock.synchronized {
             if (!ogrEnabled) {
+                // A JVM whose first GDAL use is an OGR writer applies the same policy as init: the skip is set before the
+                // registration that RegisterAll triggers.
+                decidePolicy(None)
+                applyDriverPolicy()
                 org.gdal.ogr.ogr.RegisterAll()
                 ogrEnabled = true
             }
         }
+    }
+
+    /** Run OGR's registration again (a caller that forces it), under the same lock and driver policy as [[initOgr]]:
+      * the skip list is applied first, so a forced registration never brings a refused driver back. */
+    def reregisterOgr(): Unit = {
+        ensureJniLoaded(None)
+        lock.synchronized {
+            decidePolicy(None)
+            applyDriverPolicy()
+            org.gdal.ogr.ogr.RegisterAll()
+            ogrEnabled = true
+        }
+    }
 
     /**
       * Returns the GTiff driver via a guarded lookup (REQUIRED for thread-safety).
@@ -151,15 +262,20 @@ object GDALManager extends Logging {
                 .stripPrefix("spark.gdal.")
             if (gdalKey != "PROJ_GRID_DIRS") gdal.SetConfigOption(gdalKey, value)
         }
+        // The policy's settings win over the spark.gdal.* conf just applied, unless the documented switch is off.
+        applyDriverPolicy()
         // Prepend user-supplied PROJ grid dirs to the in-JVM PROJ search path.
-        config.configs.get("spark.databricks.labs.gbx.gdal.PROJ_GRID_DIRS").foreach { dirs =>
+        val dirs = gridDirs(config)
+        if (dirs.nonEmpty) {
             val existing = Option(gdal.GetConfigOption("PROJ_DATA")).getOrElse("/usr/share/proj")
-            val prepended = (dirs.split(":").toSeq :+ existing).distinct.mkString(":")
-            gdal.SetConfigOption("PROJ_DATA", prepended)
-            gdal.SetConfigOption("PROJ_LIB", prepended) // legacy alias PROJ still honors
+            setProjSearchPath((dirs ++ existing.split(":")).distinct)
         }
         // The payload's curl has no compiled-in CA path: GDAL gets the system store, unless the user named a bundle
-        // (GDAL reads these three as config options or environment variables, in this order).
+        // (GDAL reads these three as config options or environment variables, in this order). This is _rules.py's
+        // GDAL_CURL_CA_BUNDLE rule. Its PROJ_CURL_CA_BUNDLE half cannot be applied here: PROJ reads it only from the
+        // process environment (or proj.ini's ca_bundle_path), GDAL forwards no CA to PROJ, and the Java bindings have
+        // no proj_context_set_ca_bundle_path. PROJ's network is off by default; a JVM that turns it on
+        // (PROJ_NETWORK=ON) needs PROJ_CURL_CA_BUNDLE in its environment (spark.executorEnv / the cluster's).
         if (loaded.exists(_.projData.isDefined) &&
             Seq("GDAL_CURL_CA_BUNDLE", "CURL_CA_BUNDLE", "SSL_CERT_FILE").forall(k => gdal.GetConfigOption(k) == null)) {
             SystemCa.find(p => Files.isRegularFile(Paths.get(p))).foreach(gdal.SetConfigOption("GDAL_CURL_CA_BUNDLE", _))
@@ -168,14 +284,15 @@ object GDALManager extends Logging {
 
     def configureGDAL(CPL_TMPDIR: String, GDAL_PAM_PROXY_DIR: String, CPL_DEBUG: String = "OFF",
                       logCPL: Boolean = false): Unit = {
-        // Must be set BEFORE gdal.AllRegister() in init; skipped drivers are never registered.
-        gdal.SetConfigOption("GDAL_SKIP", DefaultSkippedDrivers)
+        // Must be set BEFORE gdal.AllRegister() in init; skipped drivers are never registered. Refused drivers are
+        // gone for every GDAL path of the JVM, nested sources included; the switch turns that off.
+        applyDriverPolicy()
         // PROJ and GDAL data: the loaded payload's, else the system PROJ's data dir (the system GDAL finds GDAL_DATA).
         val choice = loaded.getOrElse(NativeChoice(LegacyJni, None, None))
         if (choice.projData.isEmpty) gdal.SetConfigOption("PROJ_LIB", "/usr/share/proj")
         applyNativeData(choice)
-        // Off by default; flipped on only around PixelCombineRasters.combine() via withVrtPython.
-        gdal.SetConfigOption("GDAL_VRT_ENABLE_PYTHON", "NO")
+        // a reset keeps the PROJ grid directories already applied in this JVM (a union: none is dropped)
+        if (appliedGridDirs.nonEmpty) setProjSearchPath((appliedGridDirs :+ baseProjData).distinct)
         gdal.SetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "YES")
         gdal.SetConfigOption("CPL_TMPDIR", CPL_TMPDIR)
         gdal.SetConfigOption("GDAL_PAM_PROXY_DIR", GDAL_PAM_PROXY_DIR)
@@ -214,8 +331,15 @@ object GDALManager extends Logging {
                     logError(s"Error: ${exception.getMessage}")
             }
         }
-        ensureJniLoaded(nativeDir)
-        sharedObjects.foreach(loadOrNoop)
+        val c = ensureJniLoaded(nativeDir)
+        if (sharedObjects.nonEmpty) {
+            // a user-named library may pull in its own libgdal: one the JNI load had not mapped is a second GDAL,
+            // for the payload's and the system's GDAL alike
+            val before = mappedLibgdal().map(realPathOf).toSet
+            sharedObjects.foreach(loadOrNoop)
+            val added = mappedLibgdal().filterNot(p => before.contains(realPathOf(p)))
+            if (added.nonEmpty) throw new IllegalStateException(differentGdal(added, c.jni.stripSuffix(s"/$JniName")))
+        }
     }
 
     /**
@@ -226,7 +350,8 @@ object GDALManager extends Logging {
       * `/usr/lib/libgdalalljni.so` (or the first on the library path); a payload's data is `<dir>/../share/{proj,gdal}`,
       * also when the system JNI is a link into a payload (DCS, init script). Refused: a missing JNI; a libgdal mapped
       * from outside the chosen payload; another `libgdalalljni.so` first on the library path, because GDAL's Java
-      * classes `System.loadLibrary` it by name on first use and would map a second GDAL.
+      * classes `System.loadLibrary` it by name on first use and would map a second GDAL. `jniIdentity` decides "another"
+      * after `realPath` (a byte-identical copy of the same build is the same JNI).
       */
     def resolveNative(
         confDir: Option[String],
@@ -235,7 +360,8 @@ object GDALManager extends Logging {
         exists: String => Boolean,
         realPath: String => String,
         mappedLibgdal: Seq[String],
-        libraryPath: Seq[String] = Nil
+        libraryPath: Seq[String] = Nil,
+        jniIdentity: String => String = identity
     ): Either[String, NativeChoice] = {
         val onPath = libraryPath.map(d => s"${d.stripSuffix("/")}/$JniName").find(exists)
         val chosen = (confDir.filter(_.nonEmpty), envRoot.filter(_.nonEmpty)) match {
@@ -247,8 +373,8 @@ object GDALManager extends Logging {
             case (None, None)       =>
                 Some(LegacyJni).filter(exists).orElse(onPath)
                     .toRight(
-                      s"geobrix: no GDAL JNI: $LegacyJni is missing and java.library.path has none. Fix: set $NativeDirKey " +
-                          "to the env wheel's _native/<arch> directory, or install GDAL on the cluster."
+                      s"geobrix: no GDAL JNI: $NativeDirKey and GBX_NATIVE_ROOT are unset, and $LegacyJni is missing. " +
+                          s"Fix: install the GeoBrix env wheel and $FindDir."
                     )
                     .map(jni =>
                         realPath(jni) match {
@@ -260,42 +386,65 @@ object GDALManager extends Logging {
         chosen.flatMap { c =>
             val libDir = c.jni.stripSuffix(s"/$JniName")
             val foreign = if (c.projData.isDefined) foreignLibgdal(mappedLibgdal, c, realPath) else Nil
-            val shadow = onPath.filter(p => realPath(p) != realPath(c.jni))
+            val shadow = onPath.filterNot(p => sameJni(p, c.jni, realPath, jniIdentity))
             if (foreign.nonEmpty) Left(differentGdal(foreign, libDir))
             else if (shadow.isDefined) Left(
               s"geobrix: a different GDAL is on this JVM's library path (${shadow.get}), and GDAL's Java classes load it " +
-                  s"by name; expected one from $libDir. $OneGdal (Or put $libDir first on java.library.path.)"
+                  s"by name; expected one from $libDir. $OneGdal Fix: remove that GDAL from the cluster, or make " +
+                  s"${shadow.get} a link to $libDir/$JniName."
             )
             else Right(c)
         }
     }
 
+    private def sameJni(a: String, b: String, realPath: String => String, jniIdentity: String => String): Boolean = {
+        val (ra, rb) = (realPath(a), realPath(b))
+        ra == rb || jniIdentity(ra) == jniIdentity(rb)
+    }
+
     /**
       * Load the GDAL JNI once per JVM (under the init lock) and return what was loaded. `confDir` is the
-      * [[NativeDirKey]] value, None where the caller has no ExpressionConfig. Throws IllegalStateException with
-      * [[resolveNative]]'s refusal, and when `confDir` names another JNI than the one already loaded.
+      * [[NativeDirKey]] value of the caller's ExpressionConfig; None (no ExpressionConfig: KernelGdal, the vector
+      * writers, OGR) uses the session's ([[sessionNativeDir]]). Throws IllegalStateException with
+      * [[resolveNative]]'s refusal, and when `confDir` names another JNI than the one already loaded (a JVM cannot
+      * unload a GDAL).
       */
     def ensureJniLoaded(confDir: Option[String]): NativeChoice = loaded match {
-        case Some(c) if confDir.forall(_.isEmpty) => c
-        case _                                    =>
+        case Some(c) if confDir.forall(d => d.isEmpty || sameAsLoaded.contains(d)) => c
+        case _                                                                      =>
             lock.synchronized {
                 loaded match {
                     case Some(c) =>
-                        confDir.map(d => s"${d.stripSuffix("/")}/lib/$JniName").filter(j => realPathOf(j) != realPathOf(c.jni))
-                            .foreach(j => throw new IllegalStateException(differentGdal(Seq(c.jni), j.stripSuffix(s"/$JniName"))))
+                        confDir.filter(_.nonEmpty).foreach { d =>
+                            val j = s"${d.stripSuffix("/")}/lib/$JniName"
+                            if (!Files.exists(Paths.get(j))) {
+                                throw new IllegalStateException(
+                                  s"geobrix: no GDAL JNI at $j (from $NativeDirKey); this JVM runs the GDAL loaded from " +
+                                      s"${c.jni}. Fix: $FindDir."
+                                )
+                            }
+                            if (!sameJni(j, c.jni, realPathOf, jniIdentityOf)) throw new IllegalStateException(laterGdal(c.jni, j))
+                            sameAsLoaded += d
+                        }
                         c
                     case None    =>
+                        val dir = confDir.filter(_.nonEmpty).orElse(sessionNativeDir())
+                        val env = sys.env.get("GBX_NATIVE_ROOT").filter(_.nonEmpty)
                         val c = resolveNative(
-                          confDir,
-                          sys.env.get("GBX_NATIVE_ROOT"),
+                          dir,
+                          env,
                           System.getProperty("os.arch", ""),
                           p => Files.exists(Paths.get(p)),
                           realPathOf,
                           mappedLibgdal(),
-                          libraryPath()
+                          libraryPath(),
+                          jniIdentityOf
                         ) match {
                             case Right(choice) => choice
                             case Left(refusal) => throw new IllegalStateException(refusal)
+                        }
+                        if (dir.isEmpty && env.isEmpty) {
+                            logInfo(s"No $NativeDirKey and no GBX_NATIVE_ROOT: this JVM runs the system GDAL (${c.jni})")
                         }
                         System.load(c.jni)
                         // GDAL's Java classes System.loadLibrary their JNI by name on first use: run that now, so the
@@ -306,13 +455,63 @@ object GDALManager extends Logging {
                         }
                         val foreign = if (c.projData.isDefined) foreignLibgdal(mappedLibgdal(), c, realPathOf) else Nil
                         if (foreign.nonEmpty) throw new IllegalStateException(differentGdal(foreign, c.jni.stripSuffix(s"/$JniName")))
+                        val version = bindCheck(c)
                         applyNativeData(c) // before any driver registers: GDAL fixes its data path at the first lookup
                         loaded = Some(c)
-                        logInfo(s"GDAL JNI loaded from ${c.jni} (${gdal.VersionInfo("RELEASE_NAME")})")
+                        dir.foreach(d => sameAsLoaded += d)
+                        logInfo(s"GDAL JNI loaded from ${c.jni} ($version)")
                         c
                 }
             }
     }
+
+    /** The GDAL release, once GDAL's Java classes have called into the JNI just loaded (their constants class reads
+      * every constant from it). They cannot when they are another GDAL version than the JNI, or when another class
+      * loader holds them (a second gdal jar on the class path): a clear refusal instead of a later link error. */
+    private def bindCheck(c: NativeChoice): String =
+        try {
+            val v = gdal.VersionInfo("RELEASE_NAME")
+            // reading one constant initializes the class, which reads every constant from the JNI
+            val byteType = org.gdal.gdalconst.gdalconstConstants.GDT_Byte
+            logDebug(s"GDAL $v: GDAL's Java classes reach the JNI (GDT_Byte = $byteType)")
+            v
+        } catch {
+            case e: UnsatisfiedLinkError =>
+                throw new IllegalStateException(
+                  s"geobrix: GDAL's Java classes cannot use the GDAL loaded from ${c.jni} (${e.getMessage}): they are " +
+                      "another GDAL version than that JNI, or another class loader loaded them. Fix: use the GDAL " +
+                      "classes the GeoBrix JAR bundles, with the env wheel's GDAL, and no other gdal jar on the class path."
+                )
+        }
+
+    /**
+      * The session's [[NativeDirKey]] for a caller with no ExpressionConfig: on an executor the task's local property
+      * (Spark SQL hands a task the session's `spark.*` settings), on the driver the active session's conf. Spark SQL
+      * is reached only here, and its absence (UC Scala) is no error.
+      */
+    private[gdal] def sessionNativeDir(): Option[String] = {
+        val task = Option(org.apache.spark.TaskContext.get()).flatMap(t => Option(t.getLocalProperty(NativeDirKey)))
+        def session: Option[String] =
+            try SessionConf.get(NativeDirKey)
+            catch {
+                case _: LinkageError => None
+                case NonFatal(_)     => None
+            }
+        task.orElse(session).filter(_.nonEmpty)
+    }
+
+    /** Kept apart so `GDALManager` loads no Spark SQL class until a no-config load asks for the session's conf. */
+    private object SessionConf {
+        def get(key: String): Option[String] =
+            org.apache.spark.sql.SparkSession.getActiveSession
+                .orElse(org.apache.spark.sql.SparkSession.getDefaultSession)
+                .flatMap(_.conf.getOption(key))
+    }
+
+    private def laterGdal(loadedJni: String, requested: String): String =
+        s"geobrix: this JVM already runs the GDAL loaded from $loadedJni, and a later configuration names $requested; " +
+            s"a JVM cannot unload a GDAL. Fix: set $NativeDirKey before the first GDAL use in this JVM (a new session " +
+            s"or cluster). $OneGdal"
 
     /** [[ensureJniLoaded]] for the payload directory `dir`. */
     def loadNativeFrom(dir: String): Unit = ensureJniLoaded(Some(dir))
@@ -330,6 +529,9 @@ object GDALManager extends Logging {
             case _                   => None
         }
 
+    /** Mapped libgdal files outside the chosen JNI's directory. By real path, not content: a mapped libgdal file is
+      * one the dynamic linker opened, and a copy of the same build cannot add one (its JNI NEEDs the same hashed
+      * SONAME, which the linker reuses once loaded), so a second file here is a second GDAL. */
     private def foreignLibgdal(mapped: Seq[String], c: NativeChoice, realPath: String => String): Seq[String] = {
         val lib = realPath(c.jni).stripSuffix(JniName)
         mapped.filterNot(p => realPath(p).startsWith(lib))
@@ -348,6 +550,11 @@ object GDALManager extends Logging {
     }
 
     private def realPathOf(p: String): String = Try(Paths.get(p).toRealPath().toString).getOrElse(p)
+
+    /** A JNI's identity beyond its path: its bytes' sha256 (1.5 MB, read only when two real paths differ). */
+    private def jniIdentityOf(p: String): String =
+        Try(MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(Paths.get(p))).map("%02x".format(_)).mkString)
+            .getOrElse(p)
 
     /** The libgdal files this process maps (Linux `/proc/self/maps`; empty elsewhere). */
     private def mappedLibgdal(): Seq[String] =

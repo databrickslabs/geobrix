@@ -18,7 +18,7 @@ import pandas as pd
 from pyspark.sql import functions as F
 from pyspark.sql.types import BinaryType, StringType, StructField, StructType
 
-from databricks.labs.gbx import manifest
+from databricks.labs.gbx import _gdal_policy, manifest
 from databricks.labs.gbx.engine import run
 from databricks.labs.gbx.pyrx._serde import V2_TILE_SCHEMA
 
@@ -54,6 +54,11 @@ def _setup(grid_dirs: Tuple[str, ...]) -> None:
     _env.configure_gdal_env(list(grid_dirs))
 
 
+_chain_text = (
+    _gdal_policy.chain_text
+)  # the shared mapping (engine and light tier read one chain)
+
+
 def _virtual_raster(fn, tile, read_cap: Optional[int]) -> bytes:
     """A virtual tile's window as GeoTIFF bytes, read under the engine's input rules: its file (and a VRT's
     sources) must open with a driver the virtual-tile policy allows, and its decoded window must fit this compute's
@@ -87,13 +92,24 @@ def _virtual_raster(fn, tile, read_cap: Optional[int]) -> bytes:
                 )
             with ot._open(vt) as ds:
                 return prx._dataset_to_gtiff_bytes(ds)
-    except run.DataError:
-        raise
     except (MemoryError, RecursionError):
         raise
     except (
         Exception
     ) as exc:  # noqa: BLE001 - an unreadable virtual tile is data, as on every light function
+        # a source the policy stopped while GDAL read the tile: GDAL's message is in the chain (rasterio's read
+        # failure, or the DataError the read raised), so the reason is judged on the whole chain
+        text = _chain_text(exc)
+        what = run.policy_reason(text)
+        if what is not None:
+            raise run.DataError(
+                f"{fn.sql_name}: the virtual tile reads {what}, which GeoBrix does not open for a virtual tile "
+                f"(GDAL: {text})"
+            ) from None
+        if isinstance(
+            exc, run.DataError
+        ):  # a refusal the engine already named (the file, the read cap)
+            raise
         raise run.DataError(
             f"{fn.sql_name}: the virtual tile could not be read ({exc})"
         ) from None

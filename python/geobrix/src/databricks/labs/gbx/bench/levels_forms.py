@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 from typing import Callable, Dict, List, Optional
 
+from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.bench.levels import Form
 
 # Bump when an input recipe (a seed or a shape) changes: it is part of the cached table's name,
@@ -203,11 +204,10 @@ def _gb_tiles(virtual: bool):
         sources = _corpus_rows(corpus)
         if not sources:
             return None
-        import rasterio
 
         gb = []
         for p in sources:
-            with rasterio.open(p) as ds:
+            with open_data(p) as ds:
                 if ds.crs is not None and ds.crs.to_epsg() == 27700:
                     gb.append(p)
             if len(gb) >= n:
@@ -245,7 +245,6 @@ def _plan_grouped_tiles(sources, n, skew):
     not one group too big to hold. At 4x and 16x `hot` is 3.5 and 14 GiB, which no merge shape can hold: those
     points are the memory cliff, not a comparison.
     """
-    import rasterio
 
     n = min(n, len(sources))
     half = n // 2
@@ -253,7 +252,7 @@ def _plan_grouped_tiles(sources, n, skew):
     by_crs: Dict[Optional[int], List[str]] = {}
     hot_crs = None
     for p in sources:
-        with rasterio.open(p) as ds:
+        with open_data(p) as ds:
             crs = ds.crs.to_epsg() if ds.crs else None
         hot_crs = crs if not by_crs else hot_crs
         by_crs.setdefault(crs, []).append(p)

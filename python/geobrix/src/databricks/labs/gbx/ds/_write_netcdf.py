@@ -18,6 +18,7 @@ from typing import Iterator, List, Optional
 from pyspark.sql.datasource import DataSourceWriter, WriterCommitMessage
 from pyspark.sql.types import StructType
 
+from databricks.labs.gbx._gdal_policy import open_bytes
 from databricks.labs.gbx.ds import _scratch
 from databricks.labs.gbx.ds.writer import (  # noqa: F401
     _glob_merge_inputs,
@@ -600,7 +601,7 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
         for row in iterator:
             source = row["source"]
             raster_bytes = bytes(row["tile"]["raster"])
-            with MemoryFile(raster_bytes) as mf, mf.open() as ds:
+            with MemoryFile(raster_bytes) as mf, open_bytes(mf) as ds:
                 arr = ds.read(1)
                 transform = ds.transform
                 crs_canonical = _crs_canonical_str(ds.crs)
@@ -688,7 +689,7 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
         for row in iterator:
             source = row["source"]
             raster_bytes = bytes(row["tile"]["raster"])
-            with MemoryFile(raster_bytes) as mf, mf.open() as ds:
+            with MemoryFile(raster_bytes) as mf, open_bytes(mf) as ds:
                 arr = ds.read(1)
                 transform = ds.transform
                 crs_canonical = _crs_canonical_str(ds.crs)

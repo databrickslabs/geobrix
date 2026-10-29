@@ -73,6 +73,7 @@ from pyspark.sql.datasource import (
 )
 from pyspark.sql.types import BinaryType, StringType, StructField, StructType
 
+from databricks.labs.gbx._gdal_policy import open_bytes, open_data
 from databricks.labs.gbx.ds import _encode, _listing
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import budget
@@ -340,14 +341,13 @@ def _clip_partitions(
 
     Fields: window=envelope, clip_polygon=<WKB bytes>, clip_crs=<resolved>.
     """
-    import rasterio
     import shapely.wkb
 
     from databricks.labs.gbx._geom import parse_geom
     from databricks.labs.gbx.ds._window import window_for_geom
 
     parts: list = []
-    with rasterio.open(file_path) as ds:
+    with open_data(file_path) as ds:
         for raw in clip_polygons:
             geom = parse_geom(raw)
             if geom is None:
@@ -396,7 +396,6 @@ def _plan_partitions_for_file(
     All window planning happens here so each worker task handles exactly one
     (file, window) pair.
     """
-    import rasterio
 
     # ------------------------------------------------------------------
     # virtualTiles short-circuit: bytes-free partitions.
@@ -421,7 +420,7 @@ def _plan_partitions_for_file(
         # file once — but only on this opt-in path; the no-split default below
         # keeps its lazy, header-free fast path.
         if budget_bytes > 0:
-            with rasterio.open(file_path) as ds:
+            with open_data(file_path) as ds:
                 width, height = ds.width, ds.height
                 bands = ds.count
                 itemsize = _numpy_itemsize(ds.dtypes[0])
@@ -489,7 +488,7 @@ def _plan_partitions_for_file(
         from rasterio.windows import Window as _W
 
         parts = []
-        with rasterio.open(file_path) as ds:
+        with open_data(file_path) as ds:
             full = _W(0, 0, ds.width, ds.height)
             for c, r, w, h in windows:
                 try:
@@ -524,7 +523,7 @@ def _plan_partitions_for_file(
         from databricks.labs.gbx.pyrx.core.tiling import plan_grid_windows
 
         tw, th = int(tile_size[0]), int(tile_size[1])
-        with rasterio.open(file_path) as ds:
+        with open_data(file_path) as ds:
             W, H = ds.width, ds.height
             bands = ds.count
             itemsize = _numpy_itemsize(ds.dtypes[0])
@@ -556,7 +555,7 @@ def _plan_partitions_for_file(
     # ------------------------------------------------------------------
     # Normal path: read header metadata, decide whole vs split.
     # ------------------------------------------------------------------
-    with rasterio.open(file_path) as ds:
+    with open_data(file_path) as ds:
         width, height, driver = ds.width, ds.height, ds.driver
         bands = ds.count
         itemsize = _numpy_itemsize(ds.dtypes[0])
@@ -934,11 +933,10 @@ def _read_gbx_member_tags(member_path: str) -> dict:
 
     Connect-safe: pure rasterio, no Spark session, no ``_jvm``.
     """
-    import rasterio
 
     tags_out: dict = {}
     try:
-        with rasterio.open(member_path) as ds:
+        with open_data(member_path) as ds:
             raw = ds.tags()
             if "GBX_CELLID" in raw:
                 tags_out["cellid"] = raw["GBX_CELLID"]
@@ -1316,7 +1314,7 @@ class RasterGbxReader(DataSourceReader):
                 # window is already set by the planner; dims are needed for
                 # metadata and to confirm the window fits the source extent.
                 file_size = os.path.getsize(partition.file_path)
-                with rasterio.open(partition.file_path) as ds:
+                with open_data(partition.file_path) as ds:
                     meta = {
                         "sourcePath": partition.file_path,
                         "driver": ds.driver,
@@ -1362,7 +1360,7 @@ class RasterGbxReader(DataSourceReader):
 
             with _RASTER_STAGE.use(partition.file_path) as local_path:
                 with rasterio.Env(GDAL_CACHEMAX=128):
-                    with rasterio.open(local_path) as ds:
+                    with open_data(local_path) as ds:
                         tile_crs = crs_to_canonical(ds.crs)
                         _cellid, win_bytes, meta = _encode.encode_tile(
                             ds,
@@ -1371,7 +1369,7 @@ class RasterGbxReader(DataSourceReader):
                             all_parents=partition.all_parents,
                             tile_format="gtiff",
                         )
-            with MemoryFile(win_bytes) as mf, mf.open() as wds:
+            with MemoryFile(win_bytes) as mf, open_bytes(mf) as wds:
                 clipped = _clip.clip_dataset(
                     wds, partition.clip_polygon, partition.clip_crs
                 )
@@ -1405,7 +1403,7 @@ class RasterGbxReader(DataSourceReader):
         if partition.is_passthrough:
             from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
 
-            with rasterio.open(partition.file_path) as ds:
+            with open_data(partition.file_path) as ds:
                 tile_crs = crs_to_canonical(ds.crs)
                 width, height = ds.width, ds.height
                 compression = str(ds.profile.get("compress") or "DEFLATE").upper()
@@ -1444,7 +1442,7 @@ class RasterGbxReader(DataSourceReader):
 
         with _RASTER_STAGE.use(partition.file_path) as local_path:
             with rasterio.Env(GDAL_CACHEMAX=128):
-                with rasterio.open(local_path) as ds:
+                with open_data(local_path) as ds:
                     tile_crs = crs_to_canonical(ds.crs)
                     cellid, raster_bytes, meta = _encode.encode_tile(
                         ds,
@@ -1479,12 +1477,11 @@ class RasterGbxReader(DataSourceReader):
     # ------------------------------------------------------------------
     def _read_legacy(self, partition: "_FilePartition") -> Iterator[Tuple]:
         """Reproduce original one-file-yields-all-tiles behaviour for _FilePartition."""
-        import rasterio
 
         source = _listing.to_spark_uri(partition.file_path)
 
         size_bytes = os.path.getsize(partition.file_path)
-        with rasterio.open(partition.file_path) as ds:
+        with open_data(partition.file_path) as ds:
             width, height, driver = ds.width, ds.height, ds.driver
             bands = ds.count
             itemsize = _numpy_itemsize(ds.dtypes[0])
@@ -1540,7 +1537,7 @@ class RasterGbxReader(DataSourceReader):
                 open(local_path, "wb") as _dst,
             ):
                 shutil.copyfileobj(_src, _dst, length=8 * 1024 * 1024)
-            with rasterio.open(local_path) as ds:
+            with open_data(local_path) as ds:
                 if whole:
                     plan_tiles = [(0, 0, width, height)]
                 else:

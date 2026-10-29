@@ -34,6 +34,7 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
+from databricks.labs.gbx import _gdal_policy
 from databricks.labs.gbx.ds import _arrow_utc, _quarantine, _scratch
 from databricks.labs.gbx.pyrx.core.local_temp import (
     StageCache,
@@ -257,7 +258,7 @@ def _family(driver: str) -> Tuple[str, ...]:
 def _known_drivers() -> Dict[str, str]:
     """{lower-case name: GDAL name} for every OGR driver (plus the family names,
     which need not be installed: FileGDB is read with OpenFileGDB)."""
-    import pyogrio
+    pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
 
     names = set(pyogrio.list_drivers()) | {d for f in _DRIVER_FAMILIES for d in f}
     return {n.lower(): n for n in names}
@@ -318,7 +319,7 @@ def _forcible(driver: str, path: str) -> List[str]:
 def _detect(name: str, layer):
     """(driver GDAL opens ``name`` with or None, its read_info or None, the open
     error or None)."""
-    import pyogrio
+    pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
     from pyogrio.errors import DataLayerError, DataSourceError
 
     try:
@@ -344,7 +345,8 @@ def _featureless(name: str, info: Dict, layer) -> bool:
     if info.get("geometry_type") not in (None, "Unknown"):
         return False
     import pyarrow.compute as pc
-    import pyogrio
+
+    pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
     from pyogrio.errors import DataLayerError, DataSourceError
 
     try:
@@ -598,7 +600,7 @@ def _read_gdb_items_domains(
     Domain definitions live as XML in the GDB_Items system table (one
     ``*CodedValueDomain*`` / ``*RangeDomain*`` document per domain). Parsed with
     defusedxml -- the XML comes from an untrusted file."""
-    import pyogrio
+    pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
     from defusedxml import ElementTree
 
     _, tbl = pyogrio.read_arrow(
@@ -637,7 +639,7 @@ def _read_gpkg_domains(
     Read through GDAL (pyogrio ``sql=``) like the layer itself, so any path the
     reader can open works. GDAL also writes a ``_<domain>_domain_description``
     row per domain (the domain's own description, not a code), which is skipped."""
-    import pyogrio
+    pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
 
     try:
         _, tbl = pyogrio.read_arrow(
@@ -1212,7 +1214,7 @@ class VectorGbxReader(DataSourceReader):
     def _gdal_readonly_safe() -> None:
         # Reading a GeoPackage (SQLite) from read-only object storage (a Volume) must
         # not attempt a journal/checkpoint write. DELETE journal mode avoids that.
-        import pyogrio
+        pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
 
         pyogrio.set_gdal_config_options({"OGR_SQLITE_JOURNAL": "DELETE"})
 
@@ -1303,7 +1305,7 @@ class VectorGbxReader(DataSourceReader):
             # the error _info_for raises from the same open at schema time.
             return ""
         self._gdal_readonly_safe()
-        import pyogrio
+        pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
         from pyogrio.errors import DataLayerError, DataSourceError
 
         got, info, err = _detect(_zip_vsi(local), self._layer())
@@ -1336,7 +1338,7 @@ class VectorGbxReader(DataSourceReader):
         """read_info of the opened ``name``. A name outside the reader's family
         extensions that no GDAL prefix can force the driver onto, and that GDAL
         cannot open, is explained like any file of another format."""
-        import pyogrio
+        pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
         from pyogrio.errors import DataSourceError
 
         try:
@@ -1436,7 +1438,7 @@ class VectorGbxReader(DataSourceReader):
         """_description_fields for schema(): field domain metadata comes from a
         zero-feature Arrow read (pyogrio.read_info does not expose it)."""
         self._gdal_readonly_safe()
-        import pyogrio
+        pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
 
         with self._staged(path) as _p, _naming(path):
             _, tbl = pyogrio.read_arrow(
@@ -1543,7 +1545,7 @@ class VectorGbxReader(DataSourceReader):
         import pyarrow as pa
 
         self._gdal_readonly_safe()
-        import pyogrio
+        pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
 
         kw: Dict = {
             "layer": partition.layer,
@@ -2013,7 +2015,8 @@ class VectorGbxWriter(DataSourceWriter):
         import pyarrow as pa
         import pyarrow.feather as feather
         import pyarrow.ipc as ipc
-        import pyogrio
+
+        pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
 
         drop = {c for c in (self.srid_col, self.proj_col) if c}
         out_geom = _output_geom_name(self.driver, self.geom_col)
@@ -2058,7 +2061,7 @@ class VectorGbxWriter(DataSourceWriter):
         Accepts tables as an iterable (list or generator). For generators, the first
         table is read explicitly to detect Arrow-write support, then remaining tables
         are streamed to avoid whole-dataset materialization (bounded memory)."""
-        import pyogrio
+        pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
 
         # Convert to iterator so we can pull the first table explicitly
         it = iter(tables)
@@ -2102,7 +2105,7 @@ class VectorGbxWriter(DataSourceWriter):
 
     def _write_one_arrow(self, tbl, local_out, out_geom, kw, append):
         """Write one table via the Arrow path, handling geom column rename."""
-        import pyogrio
+        pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
 
         t = self._drop_meta_cols(tbl)
         # Rename the input geom column to the format-canonical output name
@@ -2315,7 +2318,7 @@ class GeoJSONLGbxWriter(DataSourceWriter):
 
     # ---- executor: partition rows -> one or more GeoJSONL shards in OUTDIR ----
     def write(self, iterator: Iterator) -> WriterCommitMessage:
-        import pyogrio
+        pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
         from shapely import from_wkt, to_wkb
 
         idx = {n: i for i, n in enumerate(self._col_order)}

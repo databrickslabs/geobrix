@@ -36,7 +36,8 @@ def _session(request, level):
     if caps.jvm_gdal != MAN.gdal.pin:
         pytest.skip(
             f"PRECONDITION MISSING: the JVM runs GDAL {caps.jvm_gdal or caps.gdal_reason}, not "
-            f"{MAN.gdal.pin}; start the session with GBX_NATIVE_ROOT set to the payload"
+            f"{MAN.gdal.pin}; it needs GBX_NATIVE_ROOT set to a payload whose bundled _jar is this session's JAR "
+            "(gbx:test:parity refreshes the payload's _jar from the staged JAR; by hand, copy the JAR into its _jar/)"
         )
     return spark
 
@@ -125,6 +126,88 @@ def test_l1_and_l3_give_the_same_pixels(request, tmp_path):
                     f"{case.cid}: metadata {dict(base['metadata'])} vs {dict(other['metadata'])}"
                 )
     assert differ == []
+
+
+@pytest.mark.integration
+def test_a_registered_grid_reaches_l1_after_an_earlier_gdal_init(request, tmp_path):
+    """A target CRS whose grid is only in a registered directory: L1 gives L3's tile, byte for byte, though the JVM's
+    GDAL was initialized (by the capability probe) before the grid was registered."""
+    import shutil
+    import uuid
+    from pathlib import Path
+
+    from databricks.labs.gbx import crs_grids
+    from databricks.labs.gbx.core import proj_grids
+    from databricks.labs.gbx.manager import levels
+
+    grid = (
+        Path(__file__).resolve().parents[4]
+        / "sample-data/Volumes/main/geobrix_samples/geobrix-examples/proj-grids/synthetic.gsb"
+    )
+    if not grid.is_file():
+        pytest.skip("PRECONDITION MISSING: the synthetic.gsb fixture; this row not run")
+    # Every precondition skips with its reason: the L3 engine (the payload's osgeo), the staged JAR in this session,
+    # then (in _session) the JVM on the pinned GDAL and (below) the L1 engine itself.
+    why = run.unavailable_reason()
+    if why:
+        pytest.skip(f"PRECONDITION MISSING: the L3 engine: {why}; this row not run")
+    staged = sorted(
+        (Path(__file__).resolve().parents[2] / "lib").glob(
+            "geobrix-*-jar-with-dependencies.jar"
+        )
+    )
+    if not staged or str(staged[-1]) not in request.getfixturevalue("spark").conf.get(
+        "spark.jars", ""
+    ):
+        pytest.skip(
+            "PRECONDITION MISSING: the staged JAR in this session (gbx-test-parity.sh); this row not run"
+        )
+    # the probe in _session initializes the JVM's GDAL, with no grid registered yet
+    _session(request, "L1")
+    spark = request.getfixturevalue("jvm_spark")
+    fn = MAN.functions["gbx_rst_transformcrs"]
+    why = levels.engine_unavailable(fn, "L1", capabilities.detect(spark, need_jvm=True))
+    if why:
+        pytest.skip(f"PRECONDITION MISSING: the L1 engine: {why}; this row not run")
+    name = f"gbx_se_{uuid.uuid4().hex}.gsb"  # a name PROJ has never looked up in either process
+    (tmp_path / "grids").mkdir()
+    shutil.copy(grid, tmp_path / "grids" / name)
+    # tile_4326 lies inside the grid's box (50..53 N, 1 W..1 E)
+    case = oracles.Case(
+        "se_tcrs_registered_grid",
+        fn.sql_name,
+        (
+            oracles.Build("tile_4326"),
+            f"+proj=longlat +ellps=GRS80 +nadgrids={name} +no_defs +type=crs",
+        ),
+        "tile_props",
+        None,
+        ("session",),
+    )
+    saved = proj_grids.get_registered_dirs()
+    crs_grids.register_proj_grids(spark, str(tmp_path / "grids"))
+    outs = {}
+    try:
+        rows = oracles._argument_rows(case, str(tmp_path))
+        schema = ", ".join(
+            f"c{i} {oracles._ddl_type(v, fn.params[i])}" for i, v in enumerate(rows[0])
+        )
+        spark.createDataFrame([tuple(rows[0])], schema).createOrReplaceTempView(
+            "_gbx_grid"
+        )
+        for level, variant in (("L1", "engine"), ("L3", "engine-c0")):
+            register(spark, only=[fn.sql_name], _levels={fn.sql_name: (level, variant)})
+            (r,) = spark.sql(
+                f"SELECT {fn.sql_name}(c0, c1) AS out FROM _gbx_grid"
+            ).collect()
+            outs[level] = r["out"]
+    finally:
+        crs_grids.register_proj_grids(spark, list(saved), replace=True)
+    for level in outs:
+        assert (
+            outs[level]["raster"] is not None
+        ), f"{level}: {dict(outs[level]['metadata'])}"
+    assert bytes(outs["L1"]["raster"]) == bytes(outs["L3"]["raster"])
 
 
 @pytest.mark.integration

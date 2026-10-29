@@ -18,6 +18,7 @@ from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from pyspark.sql.datasource import DataSourceReader, InputPartition
 
+from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.ds import _listing, _quarantine, _xyz_mosaic
 from databricks.labs.gbx.pmtiles._directory import (
     _iter_entries,
@@ -178,7 +179,6 @@ class PMtilesRasterReader(DataSourceReader):
 
     def partitions(self) -> Sequence[InputPartition]:
         import morecantile
-        import rasterio
         from rasterio.warp import transform_bounds
 
         sources = _listing.list_files(self.path, self.filter_regex)
@@ -188,7 +188,7 @@ class PMtilesRasterReader(DataSourceReader):
         # per-source WGS84 bounds, to attach only intersecting sources to each chunk
         src_bounds = []
         for p in sources:
-            with rasterio.open(p) as ds:
+            with open_data(p) as ds:
                 src_bounds.append(
                     (p, transform_bounds(ds.crs, "EPSG:4326", *ds.bounds))
                 )

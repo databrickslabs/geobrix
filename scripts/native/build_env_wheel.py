@@ -105,7 +105,7 @@ GIT_INPUTS = (  # what the wheel is built from, under git
     "python/geobrix/requirements-build.txt",
     "scripts/native",
 )
-SIZE_BUDGET_MB = 100  # the env wheels measured 82 MB (2026-10-28, osgeo included); 100 is 25% past 80
+SIZE_BUDGET_MB = 100  # the env wheels measured 97.0 MB (2026-10-28: JPEG XL, the PROJ grids, the HDF5 plugins)
 METADATA_URL_HOSTS = {"databricks.com", "github.com", "databrickslabs.github.io"}
 URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://([^/\s\"'<>]+)")
 BANNED = re.compile(
@@ -136,6 +136,16 @@ RUST_STD_NOTICE = RUST_LICENCE_OVERRIDES / "rust-std"
 # Per architecture beside lib/: netCDF-C's HDF5 filter plugins (HDF5_PLUGIN_PATH) and PROJ's grid downloader
 NATIVE_EXTRAS = ("hdf5-plugins", "bin/projsync")
 FILTER_PLUGINS = ("lib__nch5zstd.so", "lib__nch5blosc.so", "lib__nch5bzip2.so")
+# What the vendored trees (_vendor/<arch>, _vendor/common) never import at run time, and so do not ship: Cython
+# sources and the C/C++ Cython generated from them (build inputs only; about 5.9 MB of rasterio's per wheel), and a
+# vendored package's own top-level test suite with its fixtures (pyogrio/tests, shapely/tests). A module such as
+# shapely/testing.py stays: users' tests import it.
+NOT_SHIPPED_SUFFIXES = (".c", ".cpp", ".pyx", ".pxd", ".pxi")
+NOT_SHIPPED_DIRS = ("tests",)
+# GDAL is built with its own copies of these (GDAL_USE_TIFF_INTERNAL, GDAL_USE_GEOTIFF_INTERNAL: the GTiff JXL codec
+# needs them). Their notices are licenses/libtiff and licenses/libgeotiff (the same versions as the pins); the external
+# libtiff in lib/ is PROJ's, and no external libgeotiff ships.
+GDAL_INTERNAL = ("libtiff", "libgeotiff")
 # MANIFEST.json version keys whose licence directory is named otherwise (the build's dependency names)
 LICENCE_DIRS = {"cblosc": "c-blosc", "libjpeg_turbo": "libjpeg-turbo", "netcdf_c": "netcdf-c"}
 RUST_VENDOR = REPO / "build" / "native" / "vendor"
@@ -455,10 +465,20 @@ def write_build_info(tree, env, version, natives, dirty, epoch):
     )
 
 
-def copy_files(src, dst, skip_dirs=()):
+def not_shipped(rel):
+    """True for a path inside a vendored tree (``<package>/...``) that no run time imports (see NOT_SHIPPED_*)."""
+    parts = Path(rel).parts
+    return rel.endswith(NOT_SHIPPED_SUFFIXES) or (
+        len(parts) > 2 and parts[1] in NOT_SHIPPED_DIRS
+    )
+
+
+def copy_files(src, dst, skip_dirs=(), vendored=False):
     for p in sorted(Path(src).rglob("*")):
         rel = p.relative_to(src)
         if rel.parts and rel.parts[0] in skip_dirs:
+            continue
+        if vendored and p.is_file() and not_shipped(rel.as_posix()):
             continue
         if p.is_symlink():
             fail(f"{p} is a symlink (a wheel cannot hold one)")
@@ -505,7 +525,7 @@ def add_osgeo(natives, bindings, vendor, a):
     """GDAL's own bindings from gdal-native: osgeo into _vendor/<arch> beside the five."""
     if (vendor / "osgeo").exists():
         fail(f"{bindings[a]}/vendor already holds osgeo")
-    copy_files(natives[a] / "python" / "osgeo", vendor / "osgeo")
+    copy_files(natives[a] / "python" / "osgeo", vendor / "osgeo", vendored=True)
     set_rpath(bindings[a], a, vendor / "osgeo", f"_vendor/{a}/osgeo")
 
 
@@ -515,7 +535,7 @@ def add_osgeo_utils(natives, pkg):
     if trees[ARCHES[0]] != trees[ARCHES[1]]:
         fail("python/osgeo_utils differs between the architectures")
     dst = pkg / "_vendor" / "common" / "osgeo_utils"
-    copy_files(natives[ARCHES[0]] / "python" / "osgeo_utils", dst)
+    copy_files(natives[ARCHES[0]] / "python" / "osgeo_utils", dst, vendored=True)
     for name in OSGEO_UTILS_LEFT_OUT:
         (dst / name).unlink(missing_ok=True)
     for root in (dst, *(pkg / "_vendor" / a / "osgeo" for a in ARCHES)):
@@ -560,7 +580,7 @@ def add_payload(args, tree, natives, bindings, version):
                 (nat / a / extra).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, nat / a / extra)
         vendor = pkg / "_vendor" / a
-        copy_files(bindings[a] / "vendor", vendor)
+        copy_files(bindings[a] / "vendor", vendor, vendored=True)
         if list(vendor.rglob("*.dist-info")):
             fail(f"{bindings[a]}/vendor holds a dist-info")
         add_osgeo(natives, bindings, vendor, a)
@@ -587,6 +607,10 @@ def add_payload(args, tree, natives, bindings, version):
     for name in ("osgeo", "osgeo_utils"):
         (nat / "licenses" / name).mkdir()
         shutil.copy2(gdal_licence, nat / "licenses" / name / "LICENSE.TXT")
+    add_gdal_internal_note(
+        nat / "licenses",
+        json.loads((natives[ARCHES[0]] / "MANIFEST.json").read_text()).get("versions", {}),
+    )
 
     for d in args.extra_payload:
         for p in sorted(d.rglob("*")):
@@ -626,6 +650,21 @@ def add_payload(args, tree, natives, bindings, version):
                 f"{args.jar} has no Spark DataSourceRegister service file: not the GeoBrix JAR"
             )
     shutil.copy2(args.jar, jar)
+
+
+def add_gdal_internal_note(licenses, versions):
+    """licenses/gdal/INTERNAL-COPIES.txt: the libraries compiled into libgdal from GDAL's own source tree, each with
+    the directory of its licence, which must hold a file (so the internal copy's notice cannot disappear with the
+    external library)."""
+    lines = [
+        "GDAL in this payload is built with its own copies of these libraries, compiled into libgdal (their symbols",
+        "renamed inside it); each one's licence is the directory named:",
+    ]
+    for dep in GDAL_INTERNAL:
+        if not any(p.is_file() for p in (licenses / dep).glob("*")):
+            fail(f"GDAL's internal {dep} has no licence in {licenses / dep}")
+        lines.append(f"  {dep} {versions.get(dep, '?')}: ../{dep}/")
+    (licenses / "gdal" / "INTERNAL-COPIES.txt").write_text("\n".join(lines) + "\n")
 
 
 def kernel_crate(module, root=REPO):
@@ -800,6 +839,8 @@ def add_vendor_pure(args, tree, env, bindings):
                     continue
                 if "/" not in n and not n.endswith(".py"):
                     continue  # a top-level README or CHANGELOG: not importable, not shipped
+                if not_shipped(n):
+                    continue
                 if not n.endswith("/"):
                     (common / n).parent.mkdir(parents=True, exist_ok=True)
                     (common / n).write_bytes(zf.read(n))
@@ -952,6 +993,7 @@ def verify_payload(zf, version, epoch):
         f"{PKG}/_build_info.py",
         f"{PKG}/_native/share/proj/proj.db",
         f"{PKG}/_native/licenses/proj-grids/NOTICE.txt",
+        f"{PKG}/_native/licenses/gdal/INTERNAL-COPIES.txt",
         f"{PKG}/_native/__init__.py",
         f"{PKG}/_native/_rules.py",
         f"{PKG}/_native/_selfcheck.py",
@@ -989,6 +1031,10 @@ def verify_payload(zf, version, epoch):
         fail(f"{left_in} is in the wheel (GDAL's MIT licence does not cover it)")
     if any(re.search(r"(pkgconfig|cmake)/", n) for n in names):
         fail("the wheel holds pkgconfig or cmake files")
+    vendored = [n.split("/_vendor/", 1)[1].split("/", 1) for n in names if "/_vendor/" in n]
+    unused = [f"{tree}/{rel}" for tree, rel in (v for v in vendored if len(v) == 2) if not_shipped(rel)]
+    if unused:
+        fail(f"{len(unused)} vendored file(s) no run time imports are in the wheel, e.g. {unused[:3]}")
     stamp = zip_date_time(epoch)
     off = [i.filename for i in zf.infolist() if i.date_time != stamp]
     if off:

@@ -96,3 +96,12 @@ def test_literal_arguments_are_bound_once(monkeypatch):
     ]
     assert len(calls) == 1
     assert [r[0] for r in rows] == [f"--input=/vsimem/r{i}/in0.tif" for i in range(3)]
+
+
+def test_the_engine_settings_table_is_the_golden_one():
+    """The engine's GDAL settings, applied thread-local per call on both tiers: the golden table, which the
+    JVM's GdalSpecEngine reads too (GdalSpecSmokeTest). Removing a setting from either table fails here.
+    """
+    from databricks.labs.gbx.engine import run
+
+    assert run.ENGINE_SETTINGS == GOLDEN["engine_settings"]

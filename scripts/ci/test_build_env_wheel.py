@@ -232,7 +232,10 @@ def test_a_rust_kernel_ships_its_crates_licence_notices(
     want = {f"{n}-1.0.0/{f}" for n, fs in {**vendored, **overrides}.items() for f in fs}
     # the Rust standard library is compiled into every kernel: its MIT / Apache-2.0 notice ships too
     std = bew.rust_std_version()
-    want |= {f"rust-std-{std}/{f}" for f in ("LICENSE-MIT", "LICENSE-APACHE", "NOTICE.txt")}
+    want |= {
+        f"rust-std-{std}/{f}"
+        for f in ("LICENSE-MIT", "LICENSE-APACHE", "NOTICE.txt", "COPYRIGHT-library.html")
+    }
     assert shipped == want | {"INDEX.txt"}
     assert "b 1.0.0 (MIT): " in (out / "INDEX.txt").read_text()
     assert f"rust-std {std} (MIT OR Apache-2.0): " in (out / "INDEX.txt").read_text()
@@ -268,3 +271,49 @@ def test_the_extracted_payload_keeps_executables_executable(tmp_path):
     native = tmp_path / "payload" / "_native" / "x86_64"
     assert os.access(native / "bin" / "projsync", os.X_OK)
     assert not os.access(native / "lib" / "libx.so.1", os.X_OK)
+
+
+@pytest.mark.parametrize(
+    "rel, pruned",
+    [
+        ("rasterio/_io.c", True),  # Cython-generated C and C++: build inputs only
+        ("rasterio/_features.cpp", True),
+        ("rasterio/_base.pyx", True),
+        ("rasterio/_base.pxd", True),
+        ("pyproj/proj.pxi", True),
+        ("pyogrio/tests/conftest.py", True),  # a vendored package's own test suite and fixtures
+        ("shapely/tests/geometry/test_point.py", True),
+        ("rasterio/_io.cpython-312-aarch64-linux-gnu.so", False),
+        ("rasterio/rio/main.py", False),
+        ("shapely/testing.py", False),  # imported by users' tests: a module, not the suite
+        ("pyogrio/_io.pyi", False),
+        ("osgeo_utils/samples/validate_cloud_optimized_geotiff.py", False),
+        ("netCDF4/__init__.py", False),
+    ],
+)
+def test_the_vendored_trees_drop_what_no_runtime_imports(rel, pruned):
+    assert bew.not_shipped(rel) is pruned
+
+
+def test_gdals_own_libtiff_and_libgeotiff_are_in_the_licence_index(tmp_path):
+    # GDAL is built with its internal libtiff and libgeotiff: the index says so, and names their licences
+    lic = tmp_path / "licenses"
+    for d in ("gdal", "libtiff", "libgeotiff"):
+        (lic / d).mkdir(parents=True)
+        (lic / d / "LICENSE").write_text(f"{d} licence\n")
+    bew.add_gdal_internal_note(lic, {"libtiff": "4.7.2", "libgeotiff": "1.7.4", "gdal": "3.13.3"})
+    note = (lic / "gdal" / "INTERNAL-COPIES.txt").read_text()
+    assert "libtiff 4.7.2" in note and "libgeotiff 1.7.4" in note and "../libgeotiff/" in note
+    (lic / "libgeotiff" / "LICENSE").unlink()  # the internal copy's notice must not go missing silently
+    with pytest.raises(SystemExit):
+        bew.add_gdal_internal_note(lic, {"libtiff": "4.7.2", "libgeotiff": "1.7.4"})
+
+
+def test_the_rust_std_notice_is_the_pinned_toolchains():
+    # where the pinned toolchain is installed on this host, the committed notice is its own file
+    std = bew.rust_std_version()
+    home = Path(os.environ.get("GBX_HOST_RUSTUP_HOME", Path.home() / ".cache/geobrix/rustup"))
+    docs = sorted(home.glob(f"toolchains/{std}-*/share/doc/rust/COPYRIGHT-library.html"))
+    if not docs:
+        pytest.skip(f"PRECONDITION MISSING: the Rust {std} toolchain (scripts/native/install-host-rust.sh)")
+    assert (bew.RUST_STD_NOTICE / "COPYRIGHT-library.html").read_bytes() == docs[0].read_bytes()

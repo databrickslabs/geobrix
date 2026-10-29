@@ -2,8 +2,9 @@
 
 Used by ``_gbx_native_path`` (interpreter start, through ``geobrix-native.pth``; it loads this file
 by path so that no geobrix package is imported) and by ``databricks.labs.gbx._native.activate``
-(``import databricks.labs.gbx``). Pure standard library (``os``, ``sys``); imports nothing from
-geobrix; never raises for any input it is given.
+(``import databricks.labs.gbx``). Pure standard library (``os``, ``sys``; ``json`` and ``ctypes``
+only when the filter plugins are registered); imports nothing from geobrix; never raises for any
+input it is given.
 
 The rules:
 
@@ -16,9 +17,16 @@ The rules:
   copies. ``PYTHONPATH`` entries stay ahead of them. With no such entry they are appended.
 - **Data.** ``GDAL_DATA`` and ``PROJ_DATA`` point at ``_native/share``, each only when unset;
   ``PROJ_DATA`` is not set when the user set ``PROJ_LIB`` (PROJ's older name, still read).
-- **HDF5 filter plugins.** ``HDF5_PLUGIN_PATH`` points at ``_native/<arch>/hdf5-plugins`` (netCDF-C's
-  zstd, blosc, bzip2, ... filters) only when unset, so a user's own plugin directory wins. HDF5 and
-  netCDF-C read it when they first load a filter, so it is set before any binding is imported.
+- **HDF5 filter plugins.** ``_native/<arch>/hdf5-plugins`` (netCDF-C's zstd, blosc, bzip2, szip,
+  ... filters) is registered with the payload's OWN netCDF-C and HDF5, never through the
+  environment: ``HDF5_PLUGIN_PATH`` is never set, so it reaches no other HDF5 in the process (a
+  user's h5py) and no child process. Activation installs a meta-path hook that only watches: on the
+  first import of a payload binding that reaches the payload's HDF5 (netCDF4, rasterio, osgeo,
+  pyogrio, a Rust kernel) it loads the payload's libnetcdf, calls ``nc_initialize()`` (which sets
+  HDF5's plugin path from the user's ``HDF5_PLUGIN_PATH``, else netCDF-C's compiled-in default),
+  appends the payload's directory through netCDF-C's own plugin-path API (which syncs HDF5 and
+  NCZarr), and from then on does nothing (it stays as the marker that registration happened). A user's ``HDF5_PLUGIN_PATH`` directories therefore come first and
+  the payload's filters fill the gaps; ``GBX_NATIVE_DISABLE=1`` turns all of it off.
 - **HTTP version.** ``GDAL_HTTP_VERSION`` is never set. Unset, GDAL leaves the version to the
   payload's curl, which offers HTTP/2 to an https server by ALPN (HTTP/1.1 where the server has
   no HTTP/2); a user's value (``1.1``, ``2TLS``, ...) decides it.
@@ -44,6 +52,10 @@ SYSTEM_CA = (
 CA_VARS = ("GDAL_CURL_CA_BUNDLE", "PROJ_CURL_CA_BUNDLE")
 USER_CA = ("CURL_CA_BUNDLE", "SSL_CERT_FILE")  # in the order they are taken
 SITE_DIRS = ("site-packages", "dist-packages")
+# The payload's bindings whose import loads the payload's libhdf5 (directly, or through libgdal): the first one
+# imported registers the filter plugins. A Rust kernel (databricks.labs.gbx._rs) links libgdal too.
+HDF5_USERS = ("netCDF4", "rasterio", "osgeo", "pyogrio")
+HDF5_USERS_FULL = ("databricks.labs.gbx._rs",)
 
 
 def interpreter_ok(cache_tag=None):
@@ -79,10 +91,86 @@ def set_data_dirs(env, share):
         env.setdefault("PROJ_DATA", os.path.join(share, "proj"))
 
 
-def set_plugin_path(env, plugins):
-    """``HDF5_PLUGIN_PATH`` at the payload's filter plugins, when unset and they exist."""
-    if os.path.isdir(plugins):
-        env.setdefault("HDF5_PLUGIN_PATH", plugins)
+def payload_lib(root, arch, soname_prefix):
+    """The payload library whose original SONAME starts with ``soname_prefix`` (``libnetcdf.so.``), by its
+    hashed name from ``_native/<arch>/MANIFEST.json``; None when there is none."""
+    import json
+
+    native = os.path.join(root, "_native", arch)
+    with open(os.path.join(native, "MANIFEST.json")) as fh:
+        names = json.load(fh).get("sonames", {})
+    hit = next(
+        (new for old, new in names.items() if old.startswith(soname_prefix)), None
+    )
+    return os.path.join(native, "lib", hit) if hit else None
+
+
+def register_hdf5_plugins(root, arch):
+    """Append ``_native/<arch>/hdf5-plugins`` to the plugin path of the payload's own netCDF-C (which
+    syncs it to the payload's HDF5 and to NCZarr), after netCDF-C has set its initial path. Returns the
+    plugin path now in force (a list of directories), or None where the payload has no plugins or
+    they cannot be registered. Idempotent; never raises."""
+    try:
+        plugins = os.path.join(root, "_native", arch, "hdf5-plugins")
+        lib = (
+            payload_lib(root, arch, "libnetcdf.so.") if os.path.isdir(plugins) else None
+        )
+        if lib is None:
+            return None
+        import ctypes
+
+        nc = ctypes.CDLL(lib)
+        if nc.nc_initialize() != 0:
+            return None
+        n = nc.ncaux_plugin_path_stringlen()
+        buf = ctypes.create_string_buffer(max(n, 0) + 1)
+        if n > 0 and nc.ncaux_plugin_path_stringget(len(buf), buf) != 0:
+            return None
+        dirs = [d for d in buf.value.decode(errors="replace").split(";") if d]
+        if plugins not in dirs:
+            dirs.append(plugins)
+            joined = ";".join(dirs).encode()
+            if nc.ncaux_plugin_path_stringset(len(joined), joined) != 0:
+                return None
+        return dirs
+    except (
+        Exception
+    ):  # noqa: BLE001 - activation never raises; a filtered read then names the missing filter
+        return None
+
+
+class _Hdf5PluginHook:
+    """A ``sys.meta_path`` finder that only watches: the first import of a payload binding that reaches
+    the payload's HDF5 registers the filter plugins. It finds nothing, and once done it stays as the
+    process's marker, so the second activator (the .pth one, then the import-time one) adds nothing.
+    """
+
+    gbx_hdf5_hook = True
+
+    def __init__(self, root, arch, done=False):
+        self.root, self.arch, self.done = root, arch, done
+
+    def find_spec(self, name, path=None, target=None):
+        if not self.done and (
+            name.partition(".")[0] in HDF5_USERS or name in HDF5_USERS_FULL
+        ):
+            self.done = True
+            register_hdf5_plugins(self.root, self.arch)
+        return None
+
+
+def install_hdf5_hook(root, arch, meta_path=None, modules=None):
+    """Register the filter plugins now when a binding that reaches the payload's HDF5 is already
+    imported, else install the hook that registers them on the first such import (once).
+    """
+    meta_path = sys.meta_path if meta_path is None else meta_path
+    modules = sys.modules if modules is None else modules
+    if any(getattr(f, "gbx_hdf5_hook", False) for f in meta_path):
+        return
+    loaded = any(m in modules for m in HDF5_USERS + HDF5_USERS_FULL)
+    meta_path.insert(0, _Hdf5PluginHook(root, arch, done=loaded))
+    if loaded:
+        register_hdf5_plugins(root, arch)
 
 
 def ca_for(env, candidates=SYSTEM_CA, fallback=None):
@@ -125,6 +213,6 @@ def activate(root, arch, path=None, env=None, candidates=SYSTEM_CA, fallback=Non
         [os.path.join(root, "_vendor", arch), os.path.join(root, "_vendor", "common")],
     )
     set_data_dirs(env, os.path.join(root, "_native", "share"))
-    set_plugin_path(env, os.path.join(root, "_native", arch, "hdf5-plugins"))
     set_ca(env, candidates, fallback)
+    install_hdf5_hook(root, arch)
     return True

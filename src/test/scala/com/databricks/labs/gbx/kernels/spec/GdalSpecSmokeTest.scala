@@ -81,7 +81,7 @@ class GdalSpecSmokeTest extends AnyFunSuite {
           s"""{"gdal": $section, "functions": [{"sql_name": "f", "min_args": 1, "params": [""" +
               """{"name": "tile", "session": ["TILE"]}, {"name": "unit", "session": ["STRING"]}], """ + s""""gdal": $block}]}"""
         )
-        val section = """{"pin": "3.13.3", "deny": [], "allow": {}}"""
+        val section = """{"pin": "3.13.3", "deny": [], "allow": {}, "raster_drivers": {"allowed": [], "refused": []}}"""
         val block = """{"alg": "raster slope", "in": {"tile": "raster"}, "out": {"kind": "raster"}, "write": "tile", """ +
             """"args": [{"arg": "unit", "from": "unit", "type": "choice", "map": {"degrees": "degree"}}]}"""
         assert(GdalSpecs.parse(root(section, block))._2.contains("f")) // the control
@@ -96,13 +96,26 @@ class GdalSpecSmokeTest extends AnyFunSuite {
         }
     }
 
-    test("the level knob and the virtual-tile policy are the light tier's") {
+    test("the level knob, the virtual-tile policy and the engine's settings are the light tier's") {
         for (c <- golden.get("zstd_knob").elements.asScala) {
             val got = OperatorOptions.engineZstdLevel(c.get("decoded_bytes").asLong, Some(c.get("knob").asText))
             assert(got == c.get("level").asInt, s"GBX_ZSTD_LEVEL=${c.get("knob")}")
         }
-        val refuse = GdalSpecs.section.virtualRefuse
-        assert((GDALManager.DefaultSkippedDrivers.split(" ").toSet + "GDALG").subsetOf(refuse), refuse)
+        // The virtual-tile policy: the allowlist, and the refused drivers pinned as a set; the JVM skips exactly
+        // those, so none is registered, and a nested source cannot open one.
+        val section = GdalSpecs.section
+        assert(section.allowedDrivers.contains("GTiff") && section.allowedDrivers.contains("VRT"), section.allowedDrivers)
+        assert(!section.allowedDrivers.exists(section.refusedDrivers.contains), "a driver in both classes")
+        assert(section.refusedDrivers.toSet == GDALManager.DefaultSkippedDrivers.split(" ").toSet, section.refusedDrivers)
+        KernelGdal.ensureInit()
+        for (name <- section.refusedDrivers) assert(gdal.GetDriverByName(name) == null, s"$name is registered")
+        // The process-level settings of the driver policy are set at the first GDAL use, on the JVM too.
+        if (sys.env.get(GDALManager.PolicyEnv).forall(!_.trim.equalsIgnoreCase("off"))) {
+            assert(gdal.GetConfigOption("GDAL_VRT_ENABLE_RAWRASTERBAND") == "NO", "the raw-band setting is not applied")
+        }
+        // The engine's settings: the golden table, which the Python suite reads too.
+        val settings = golden.get("engine_settings").fields.asScala.map(e => e.getKey -> e.getValue.asText).toMap
+        assert(GdalSpecEngine.EngineSettings.toMap == settings, GdalSpecEngine.EngineSettings)
     }
 
     test("the argv, the write profile and the refusals are the golden ones") {
@@ -123,6 +136,22 @@ class GdalSpecSmokeTest extends AnyFunSuite {
             assert(want.isInstance(e) && e.getMessage.contains(c.get("names").asText) && e.getMessage.contains(fn.sqlName),
               s"${c.get("id").asText}: $e")
         }
+    }
+
+    test("the bound argv is cached per (spec, values, inputs, section), and the cache is bounded (M7)") {
+        val fn = GdalSpecs.function("gbx_rst_slope")
+        // a key no other row binds: an input width of 641
+        val props = Seq(RasterProps(641, 480, 1, "Float32"))
+        val before = GdalSpecArgv.cachedTemplates
+        for (i <- 0 until 3) {
+            GdalSpecArgv.build(fn, Map[String, Any]("unit" -> "degrees", "xscale" -> 2.0, "yscale" -> 0.5), props,
+              Seq(s"/vsimem/r$i/in0.tif"), s"/vsimem/r$i/out.tif")
+        }
+        assert(GdalSpecArgv.cachedTemplates == before + 1, "three binds of one literal set cache one template")
+        for (i <- 0 until 600) {
+            GdalSpecArgv.build(fn, Map[String, Any]("unit" -> "degrees", "xscale" -> (i + 1).toDouble, "yscale" -> 1.0), props)
+        }
+        assert(GdalSpecArgv.cachedTemplates <= 512, GdalSpecArgv.cachedTemplates)
     }
 
     /** A 64 x 64 Float32 GeoTIFF in EPSG:3857 (a slope of `k`), through the GTiff driver on /vsimem. */

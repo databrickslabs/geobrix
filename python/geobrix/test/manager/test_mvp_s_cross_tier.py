@@ -162,12 +162,18 @@ def test_a_missing_or_unloadable_rust_build_falls_back_to_python(tmp_path, monke
 
 
 def test_a_linux_wheel_without_the_native_payload_is_not_an_error(monkeypatch):
-    """No `_native` module in the wheel ("cannot import name", an ImportError) means no Rust build."""
+    """No `_native` module in the wheel ("cannot import name", an ImportError) means no Rust build, whatever
+    payload GBX_NATIVE_ROOT names in this environment."""
     import sys
+
+    import databricks.labs.gbx as gbx
 
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(_rs, "_MOD", None)
     monkeypatch.setattr(_rs, "_WHY", None)
+    # the wheel without the payload: its `_native` module is absent
+    monkeypatch.delattr(gbx, "_native", raising=False)
+    monkeypatch.setitem(sys.modules, "databricks.labs.gbx._native", None)
     assert _rs._rs_dir() is None
     assert "no Rust build" in _rs.unavailable_reason()
 

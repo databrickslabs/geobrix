@@ -151,6 +151,31 @@ if [ "$SKIP_BUILD" != true ]; then
     fi
 fi
 
+# --- Step 2b: the payload's bundled _jar is this JAR ----------------------------------
+# The L1 rows compare the JVM's JAR with the payload's bundled _jar (capabilities.detect: a sha gate), so a payload
+# whose _jar is an older build skips every L1 row and the run did not run. When GBX_NATIVE_ROOT names a payload that
+# has a _jar/, refresh that _jar from the JAR just staged (the same JAR the JVM loads). Without GBX_NATIVE_ROOT there
+# is no payload to compare with, and nothing changes.
+gbx_native_env_args
+if [ -n "${GBX_NATIVE_ROOT:-}" ]; then
+    echo -e "${CYAN}🔁 Refreshing the payload's bundled _jar from the staged JAR (${GBX_NATIVE_ROOT})...${NC}"
+    if ! docker exec ${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"} "$GBX_DEV_CONTAINER" /bin/bash -c '
+        set -e
+        jar=$(ls /root/geobrix/python/geobrix/lib/geobrix-*-jar-with-dependencies.jar 2>/dev/null | head -n 1)
+        [ -n "$jar" ] || { echo "no staged JAR under python/geobrix/lib"; exit 1; }
+        if [ -d "$GBX_NATIVE_ROOT/_jar" ]; then
+            rm -f "$GBX_NATIVE_ROOT"/_jar/geobrix-*-jar-with-dependencies.jar
+            cp "$jar" "$GBX_NATIVE_ROOT/_jar/"
+            echo "_jar now $(basename "$jar")"
+        else
+            echo "payload has no _jar/ directory; nothing refreshed"
+        fi
+    '; then
+        echo -e "${RED}❌ Could not refresh the payload's _jar; the L1 rows would not run.${NC}"
+        exit 1
+    fi
+fi
+
 # --- Step 3: run each parity suite in its OWN process, integration ENABLED ------------
 RUN_FILES=()
 add_run_file() {   # once each, in the order given
@@ -258,6 +283,7 @@ if [ ${#TOTAL_SKIPPED_FILES[@]} -gt 0 ]; then
         echo -e "     • ${YELLOW}sample data missing${NC} (start the container with the sample-data mounts: ${GREEN}gbx:docker:start${NC})"
     fi
     echo -e "     • no JAR staged in python/geobrix/lib/ (run without ${GREEN}--skip-build${NC})"
+    echo -e "     • the payload's bundled _jar is not this JAR (Step 2b refreshes it when GBX_NATIVE_ROOT names a payload)"
     echo -e "     • a JAR-free Spark session already live in the same process"
     echo -e "     • the suite's own dependency guard (e.g. mapbox-vector-tile) is unmet"
     EXIT_CODE=1

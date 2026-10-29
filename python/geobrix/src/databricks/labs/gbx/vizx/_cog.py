@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import warnings
 
+from databricks.labs.gbx._gdal_policy import open_bytes, open_data
+
 
 def _strip_scheme(path: str) -> str:
     for scheme in ("dbfs:", "file:"):
@@ -182,7 +184,7 @@ def plot_tile(
 
     assert_viz_available()
     raw = tile if isinstance(tile, (bytes, bytearray)) else tile["raster"]
-    with MemoryFile(bytes(raw)) as mf, mf.open() as ds:
+    with MemoryFile(bytes(raw)) as mf, open_bytes(mf) as ds:
         # Group G: canonical CRS for the basemap; `crs` overrides a CRS-less tile.
         crs = _resolve_plot_crs(ds.crs, crs)
         if window_bounds is not None:
@@ -314,7 +316,7 @@ def plot_cog(
     from databricks.labs.gbx.vizx._raster import _decimated_read
 
     p = _strip_scheme(str(path))
-    with rasterio.open(p) as src:
+    with open_data(p) as src:
         warp_crs = None
         if to_crs is not None and src.crs is not None:
             from databricks.labs.gbx.core.crs import crs_equal, resolve_crs

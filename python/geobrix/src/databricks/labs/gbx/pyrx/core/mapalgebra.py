@@ -12,6 +12,7 @@ import numexpr as ne
 import numpy as np
 from rasterio.io import MemoryFile
 
+from databricks.labs.gbx._gdal_policy import open_bytes
 from databricks.labs.gbx.pyrx.core._nodata import emit, read_masked
 
 _VARS = string.ascii_uppercase  # A..Z (up to 26 inputs)
@@ -136,7 +137,7 @@ def mapalgebra(rasters, expression: str) -> bytes:
         def _open(raster_index):
             if raster_index not in opened:
                 mf = MemoryFile(bytes(rasters[raster_index]))
-                opened[raster_index] = (mf, mf.open())
+                opened[raster_index] = (mf, open_bytes(mf))
             return opened[raster_index][1]
 
         # Open the first raster first so it is always the georeference template,

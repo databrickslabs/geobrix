@@ -19,10 +19,10 @@ import time
 from pathlib import Path
 
 import numpy as np
-import rasterio
 from PIL import Image as PILImage
 from rasterio.transform import from_origin
 
+from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.core.crs import enu_to_lonlat, resolve_crs, utm_epsg_for
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 from databricks.labs.gbx.pyrx.imagery import read_fused_ply, zbuffer_ortho
@@ -174,7 +174,7 @@ def rasterize_enu_ortho(
     tmp_ortho = new_local_temp_file(suffix=".tif")
     tmp_dsm = new_local_temp_file(suffix=".tif")
     try:
-        with rasterio.open(
+        with open_data(
             tmp_ortho,
             "w",
             driver="GTiff",
@@ -191,7 +191,7 @@ def rasterize_enu_ortho(
                 dst_f.write(rgb[band], band + 1)
         shutil.copy(tmp_ortho, str(out_ortho))
 
-        with rasterio.open(
+        with open_data(
             tmp_dsm,
             "w",
             driver="GTiff",
@@ -705,7 +705,7 @@ def sparse_orthomosaic(
     out_tiff.parent.mkdir(parents=True, exist_ok=True)
     local_tif = new_local_temp_file(suffix=".tif")
     try:
-        with rasterio.open(
+        with open_data(
             local_tif,
             "w",
             driver="GTiff",

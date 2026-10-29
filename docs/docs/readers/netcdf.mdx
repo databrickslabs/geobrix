@@ -302,6 +302,32 @@ DataFrames (the default raster mode) or from point DataFrames (vector mode), wit
 page for the full write options, single-file/merge semantics, and round-trip
 guarantees.
 
+## Compressed netCDF-4 variables (zstd, blosc, bzip2)
+
+NetCDF-4 files can compress a variable with zstd, blosc or bzip2 as well as the built-in deflate. Those three are HDF5
+*filter plugins*, loaded at run time, and the GeoBrix env wheels ship them (with szip, shuffle and fletcher32) beside
+their GDAL.
+
+**Lightweight tier.** Nothing to set up. The first time GeoBrix's netCDF4, rasterio or GDAL bindings are imported,
+the plugins are registered with GeoBrix's own netCDF and HDF5 libraries. The `HDF5_PLUGIN_PATH` environment variable
+is **not** set, so other HDF5 libraries in the same process (for example h5py's) and child processes are not
+affected. If you set `HDF5_PLUGIN_PATH` yourself, your directories are searched first and GeoBrix's plugins fill in the
+filters yours lack. `GBX_NATIVE_DISABLE=1` turns the env wheel's native payload, plugins included, off.
+
+**Heavyweight tier.** The JVM reads `HDF5_PLUGIN_PATH` once, when it starts, and nothing can register the plugins
+inside it afterwards. So reading zstd, blosc or bzip2 netCDF-4 with `netcdf_gdal` / `netcdf_ogr` needs the variable
+set for the cluster's processes:
+
+- On a classic cluster with the env wheel installed, run `from databricks.labs.gbx import _native; print(_native.hdf5_plugin_dir())`
+  in a notebook on that cluster. Add the printed directory to the cluster's environment variables
+  (`spark_env_vars`) as `HDF5_PLUGIN_PATH=<that directory>`, then restart the cluster. The path depends on where the
+  wheel is installed and on the architecture (`x86_64` or `aarch64`), so read it on the cluster itself. Set this way,
+  the variable applies to every process on the cluster, including any other HDF5 such as h5py's.
+- The GeoBrix DCS images set it for you.
+
+Without it, a heavyweight read of such a variable fails with an HDF5 "filter" error, while the lightweight tier reads
+it.
+
 :::note Coordinate reference systems
 The lightweight `netcdf_gbx` reader reads the CRS from CF `crs_wkt` (or `crs_canonical`) grid-mapping attributes and stores it as a canonical string in `tile.metadata` and `tile.crs`. The `spatial_epsg` attribute is also read, but for non-EPSG CRS the authoritative form is `crs_canonical` — `spatial_epsg` may carry an ESRI code in its value (since its name implies EPSG) so always prefer `crs_canonical` for non-EPSG CRSes. ESRI and OGC authorities are preserved. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
 :::

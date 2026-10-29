@@ -244,6 +244,30 @@ formats.
   longer leaves a staging folder in the driver's temp directory for each read, or keeps the
   inspected dataset open.
 
+### Spatial reference and driver policy (behavior change)
+
+- **A GeoJSON Lines write with a bad CRS column fails.** The `geojsonl_ogr` writer used to write a
+  layer without a CRS when its `proj4` column (or its SRID column, when it is not an integer code)
+  did not parse as one. It now fails the write, and the error names the column and the value, with
+  a `Fix:` that says how to write the layer's CRS. A grid named by a file path in that column is
+  refused the same way.
+- **The raster driver policy is on for the whole process.** From GeoBrix's import, the drivers
+  that run stored pipelines, index other rasters, reach a network API, or act on what a file
+  names (`KMLSUPEROVERLAY`, `ESRIC`, `MRF`) are unavailable to the process, and every raster
+  GeoBrix opens is opened with the allowed drivers only. With the env wheel, a raster is also
+  identified before it is opened. Set `GBX_GDAL_DRIVER_POLICY=off` (or
+  `spark.databricks.labs.gbx.gdal.driver_policy=off` in the cluster's Spark config) before the
+  first GDAL use to turn it off. See [Security § 7](./security#7-raster-data-other-principals-can-write),
+  which says which install paths get the full defence.
+- **`spark.gdal.GDAL_SKIP` can no longer re-enable a refused driver (behavior change).** Its value
+  now adds to the refused drivers instead of replacing them, and `spark.gdal.*` cannot turn the
+  VRT raw-band or Python settings back on. Use the documented switch,
+  `spark.databricks.labs.gbx.gdal.driver_policy=off`, to turn the policy off.
+- **`out_crs` on `gbx_rst_bng_rasterize_agg` is refused on both tiers when it is not NULL.** BNG
+  output is always EPSG:27700. Both tiers used to accept the argument and ignore it; both now refuse
+  a non-NULL value with the same message. Pass NULL, and reproject the tile with
+  `gbx_rst_transformcrs` when another CRS is wanted.
+
 ### Heavyweight vector readers — `layerNumber` reads the layer it names (fix)
 
 - **`layerNumber` picks the layer the heavyweight vector readers return.** A read with a
@@ -878,6 +902,13 @@ formats.
   workers with `Cannot find proj.db`, and the registered grids were not applied to them. GeoBrix
   now points `PROJ_DATA` at a single directory that combines the PROJ data and the registered
   grids. See [Registering custom grid files](./api/coordinate-reference-systems#registering-custom-grid-files).
+- **British National Grid coordinates move with OSTN15 (behavior change).** The GeoBrix env wheels
+  ship Ordnance Survey's OSTN15 grid, so transforms between EPSG:27700 and WGS 84 or ETRS89 now
+  use OSTN15, the definitive OSGB36 transformation, instead of PROJ's Helmert approximation. The
+  results are within millimetres of Ordnance Survey's own test points, and differ from the
+  Helmert values you got before by about 1.7 m in central London and by up to about 5 m elsewhere
+  in Great Britain. Results you stored from earlier versions differ by that much. See
+  [Grids that ship with GeoBrix](./api/coordinate-reference-systems#grids-that-ship-with-geobrix).
 
 ### Python bindings
 

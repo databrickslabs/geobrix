@@ -29,8 +29,8 @@ from typing import Any, Callable, Literal, Optional
 from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql import functions as F
 
-# Re-export listing helpers for backward compatibility
-from databricks.labs.gbx.ds._listing import (
+from databricks.labs.gbx._gdal_policy import open_bytes, open_data
+from databricks.labs.gbx.ds._listing import (  # re-exported for backward compatibility
     _retry_transient,
     list_files,
     to_local_path,
@@ -1086,7 +1086,6 @@ def open_windowed_via_fileref(file_ref, window, pending, tile_crs=None):
     # The broad except converts any failure here to FileRefReadError so the
     # caller can degrade to the local-file path.  The yield is OUTSIDE this
     # handler so that caller-body exceptions propagate unchanged (not wrapped).
-    import rasterio
     from rasterio.io import MemoryFile
     from rasterio.windows import Window
 
@@ -1095,7 +1094,7 @@ def open_windowed_via_fileref(file_ref, window, pending, tile_crs=None):
         if not stream.seekable():
             raise FileRefReadError("FileRef stream is not seekable")
 
-        with rasterio.open(stream) as src:
+        with open_data(stream) as src:
             # Reprojection check: if tile_crs requests a different CRS than
             # the source (after any pending_srid relabel), the FILE path cannot
             # warp — raise FileRefReadError to degrade to the local-file path.
@@ -1137,7 +1136,7 @@ def open_windowed_via_fileref(file_ref, window, pending, tile_crs=None):
     # Yield phase: outside the broad handler so that caller-body exceptions
     # propagate unchanged (not converted to FileRefReadError → RuntimeError).
     with MemoryFile(tile_bytes) as mf:
-        with mf.open() as ds:
+        with open_bytes(mf) as ds:
             yield ds
 
 
@@ -1162,19 +1161,37 @@ def _fuse_direct_disabled() -> bool:
     return os.environ.get("GBX_DISABLE_FUSE_DIRECT") == "1"
 
 
+def _remote_configured() -> bool:
+    """True when this process is set up for Spark Connect (SPARK_REMOTE and the like)."""
+    try:
+        from pyspark.sql.utils import is_remote
+    except ImportError:  # cannot tell: let the builder decide, as before
+        return True
+    return bool(is_remote())
+
+
 def _resolve_session_for_cap() -> Optional["SparkSession"]:
     """Resolve the active SparkSession for baking the connect-aware stream cap.
 
     Mirrors the session-resolution in file_supported(): tries getActiveSession()
-    first, falls back to getOrCreate(), returns None if both fail.  None is an
+    first; with Spark Connect configured it falls back to getOrCreate() (a Connect
+    client session is cheap, and it is what tells Serverless's 64 MiB cap from the
+    classic 256 MiB). Returns None otherwise, and when getOrCreate() fails.  None is an
     acceptable result — _connect_aware_lru_sizing(None) returns the 256 MiB classic
-    cap as a safe fallback (same as the non-Connect branch).
+    cap, the very value a classic session would give.
+
+    Without Connect it never creates a session: a classic session would only say "classic",
+    while building one starts a JVM and leaves a process-wide ``local[*]`` session behind,
+    which the next ``SparkSession.builder.master(...).getOrCreate()`` of the same process
+    then silently reuses (its master and settings ignored).
 
     Worker-safe: no .rdd / _jvm / conf.set.
     """
     sess = SparkSession.getActiveSession()
     if sess is not None:
         return sess
+    if not _remote_configured():
+        return None
     try:
         return SparkSession.builder.getOrCreate()
     except Exception:
@@ -1293,11 +1310,10 @@ def _probe_direct_open(path: str) -> None:
 
     Raises on failure after retries; returns ``None`` on success.
     """
-    import rasterio
     from rasterio.windows import Window
 
     def _do() -> None:
-        with rasterio.open(path) as ds:
+        with open_data(path) as ds:
             ds.read(1, window=Window(0, 0, 1, 1))
 
     _retry_transient(_do)
@@ -1469,13 +1485,13 @@ def _open_via_file_ref(fr, rasterio, stream_max_bytes=_GBX_STREAM_MAX_BYTES):
     """
     if fr.size <= stream_max_bytes:
         stream = fr.open()
-        ds = rasterio.open(stream)
+        ds = open_data(stream)
         if ds.profile.get("tiled", False):
             return ds, stream  # tiled/COG: seekable stream is efficient
         ds.close()
         stream.close()  # striped: release the stream before FUSE fallback
     local_path = fr.as_local_file()
-    return rasterio.open(local_path), None  # FUSE path: no stream
+    return open_data(local_path), None  # FUSE path: no stream
 
 
 class _OpenerContext:
@@ -1535,7 +1551,7 @@ class _OpenerContext:
         )
 
         local_path, is_temp = _stage(uri)
-        ds = rasterio.open(local_path)
+        ds = open_data(local_path)
         if is_temp:
             self._staged_temps[id(ds)] = local_path
         return ds
@@ -1671,7 +1687,7 @@ def open_for_read(
       `_stage_local_if_needed` probe→stage fallback for eventual-consistency.
 
     This is the base resolver; layer-specific callers (rasterio openers, vector readers) wrap it
-    and adapt to their I/O contract (e.g., rasterio.open(handle) for raster tile reads).
+    and adapt to their I/O contract (e.g., open_data(handle) for raster tile reads).
 
     Args:
         source: A path string (bare FUSE `/Volumes/...` or scheme-qualified `dbfs:/...`, `s3://...`).

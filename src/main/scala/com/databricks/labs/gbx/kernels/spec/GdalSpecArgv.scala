@@ -56,6 +56,8 @@ object GdalSpecArgv {
     private val templates = new java.util.LinkedHashMap[(String, Map[String, Any], Seq[RasterProps], GdalSection), Option[Seq[String]]](
       64, 0.75f, true
     )
+    /** The templates cached now, for the smoke test's bound-and-bounded row (M7). */
+    private[spec] def cachedTemplates: Int = templates.synchronized(templates.size)
 
     private final case class Calc(expr: String, dialect: String, variables: Seq[(String, Int)])
 

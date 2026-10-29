@@ -118,7 +118,19 @@ class ResultRow:
     gc_s: Optional[float] = None
     # Peak RSS (MB) of the Python workers that ran the shape: the kernel's high-water mark, reset
     # on every worker just before; an idle pooled worker, whatever RSS it holds, is not counted.
-    # NULL on a Connect session, off Linux, and when no Python worker ran during the shape.
+    # NULL, with the reason in the row's note, rather than a number that may leave a worker out:
+    # on a Connect session, off Linux, with spark.python.worker.reuse=false, when no Python worker
+    # ran during the shape, when the shape's physical plan has an early stop (CollectLimit,
+    # GlobalLimit, LocalLimit or TakeOrderedAndProject: it can end a worker before the read) or
+    # cannot be read, when a worker that was there at the reset has exited, in any pool (Spark
+    # stops an idle one after 60 s), when the Spark REST API shows a failed, killed or retried task,
+    # gives no answer, or leaves a 50 s wait between task ends in a shape longer than that, when the
+    # executors' slots disagree with the default parallelism or a worker cannot be reset, when an
+    # executor that held workers is gone, when the shape ran Python workers in more than one
+    # environment (a worker of one can exit unseen), and when no slot frees up within 60 s (a busy
+    # cluster). Known limits, not NULL: a non-limit consumer that stops reading early without
+    # failing a task can end a worker unseen; a JVM tail over 10 s after a task's Python output
+    # defeats the 50 s guard's margin.
     py_worker_rss_mb: Optional[float] = None
     # Why an error row failed ("ExceptionType: message"); "" on every other row.
     failure_mode: str = ""

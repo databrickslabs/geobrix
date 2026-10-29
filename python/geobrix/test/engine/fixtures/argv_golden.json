@@ -115,5 +115,10 @@
     {"knob": "23", "decoded_bytes": 1000, "level": 6},
     {"knob": "0", "decoded_bytes": 2147483648, "level": 1},
     {"knob": "²", "decoded_bytes": 1000, "level": 6}
-  ]
+  ],
+  "engine_settings": {
+    "GDAL_NUM_THREADS": "1",
+    "GDAL_VRT_ENABLE_PYTHON": "NO",
+    "GDAL_VRT_ENABLE_RAWRASTERBAND": "NO"
+  }
 }

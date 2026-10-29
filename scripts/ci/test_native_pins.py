@@ -116,6 +116,50 @@ def test_drift_is_reported(tmp_path, rel, change):
     assert rel in res.stdout + res.stderr
 
 
+def test_the_gdal_java_jar_installs_only_with_its_pin_and_names_its_build(tmp_path):
+    """java_jar.py install writes the pinned jar and a pom into a Maven repository, and refuses a jar whose sha256
+    is not the pin (nothing written); the audit holds the build the jar records to pins.conf's GDAL_VERSION."""
+    import hashlib
+    import zipfile
+
+    java_jar = REPO_ROOT / "scripts" / "native" / "java_jar.py"
+    version = f"{pin('GDAL_VERSION')}-gbx{pin('GBX_NATIVE_REVISION')}"
+    rel = f"scripts/native/maven/gdal-{version}.jar"
+
+    def install(root, repo):
+        return subprocess.run(
+            [sys.executable, str(java_jar), "install", "--root", str(root), "--repo", str(repo)],
+            capture_output=True,
+            text=True,
+        )
+
+    res = install(REPO_ROOT, tmp_path / "m2")
+    dest = tmp_path / "m2" / "org" / "gdal" / "gdal" / version
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert (dest / f"gdal-{version}.jar").read_bytes() == (REPO_ROOT / rel).read_bytes()
+    assert f"<version>{version}</version>" in (dest / f"gdal-{version}.pom").read_text()
+
+    root = audited_copy(tmp_path)
+    jar = root / rel
+    jar.write_bytes(jar.read_bytes() + b"\0")
+    res = install(root, tmp_path / "m2-tampered")
+    assert res.returncode == 1 and "INSTALL REFUSED" in res.stdout, res.stdout
+    assert not (tmp_path / "m2-tampered").exists()
+
+    # a jar recording another GDAL than the pin, re-pinned: the audit still drifts, naming both
+    with zipfile.ZipFile(REPO_ROOT / rel) as z:
+        content = {i.filename: z.read(i) for i in z.infolist()}
+    content["META-INF/gbx-gdal.properties"] = b"gdal.version=9.9.9\n"
+    with zipfile.ZipFile(jar, "w") as z:
+        for name, data in content.items():
+            z.writestr(name, data)
+    pins_file = root / "scripts" / "native" / "rust-pins.conf"
+    sha = hashlib.sha256(jar.read_bytes()).hexdigest()
+    pins_file.write_text(re.sub(r"(?m)^GDAL_JAVA_JAR_SHA256=.*$", f"GDAL_JAVA_JAR_SHA256={sha}", pins_file.read_text()))
+    res = pins("audit", "--check", "--root", str(root))
+    assert res.returncode == 1 and "GDAL 9.9.9" in res.stdout, res.stdout
+
+
 CARGO_ROWS = {
     "pyo3-as-a-table": (
         {

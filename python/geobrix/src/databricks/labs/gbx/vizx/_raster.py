@@ -9,6 +9,8 @@ import os
 
 import numpy as np
 
+from databricks.labs.gbx._gdal_policy import open_bytes, open_data
+
 # ---------------------------------------------------------------------------
 # emphasis styling defaults (raster tier)
 # ---------------------------------------------------------------------------
@@ -674,7 +676,7 @@ def plot_raster(
         from rasterio.io import MemoryFile
 
         with MemoryFile(bytes(raster_bytes)) as mf:
-            with mf.open() as src:
+            with open_bytes(mf) as src:
                 data, transform, scale = _decimated_read(src, max_pixels)
                 return _render(
                     data,
@@ -694,9 +696,8 @@ def plot_raster(
                 )
     else:
         # Virtual tile path: open the file on-the-fly and read the window
-        import rasterio
 
-        with rasterio.open(path) as src:
+        with open_data(path) as src:
             data, transform, scale = _read_windowed(src, max_pixels, window=window)
             return _render(
                 data,
@@ -761,7 +762,7 @@ def plot_mask_layers(
     handles = []
     for (label, raster_bytes), color in zip(layers, colors):
         with MemoryFile(bytes(raster_bytes)) as mf:
-            with mf.open() as src:
+            with open_bytes(mf) as src:
                 data, transform, _ = _decimated_read(src, max_pixels)
         band = data[0]
         if isinstance(band, np.ma.MaskedArray):
@@ -811,7 +812,6 @@ def plot_file(
     from databricks.labs.gbx.vizx._env import assert_viz_available
 
     assert_viz_available()
-    import rasterio
 
     # On Databricks, Volume/DBFS paths are often scheme-qualified (e.g.
     # "dbfs:/Volumes/.../x.tif" or "file:///Volumes/.../x.tif"), but the FUSE
@@ -826,7 +826,7 @@ def plot_file(
     if path.startswith("//"):
         path = "/" + path.lstrip("/")
 
-    with rasterio.open(path) as src:
+    with open_data(path) as src:
         data, transform, scale = _decimated_read(src, max_pixels)
         return _render(
             data,
@@ -963,7 +963,7 @@ def plot_mosaic(
     import rasterio
 
     vrt_path = _resolve_vrt_path(vrt)
-    with rasterio.open(vrt_path) as src:
+    with open_data(vrt_path) as src:
         window = None
         if bbox is not None:
             from rasterio.windows import Window, from_bounds

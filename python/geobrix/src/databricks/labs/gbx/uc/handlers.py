@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import math
 
+from databricks.labs.gbx._gdal_policy import open_bytes
+
 
 class _Refusal(ValueError):
     """Input the UC surface does not serve; the message ends with a Fix: line."""
@@ -88,7 +90,7 @@ def _warp(raster: bytes, crs, fn: str) -> bytes:
     from databricks.labs.gbx.core.crs import authority_srid_of
     from databricks.labs.gbx.pyrx.core import warp
 
-    with MemoryFile(raster) as mf, mf.open() as ds:
+    with MemoryFile(raster) as mf, open_bytes(mf) as ds:
         if authority_srid_of(ds.crs) is None:
             raise _refuse(fn, "the raster's CRS is missing or has no authority code")
         return warp.reproject_to_crs(ds, crs.code)

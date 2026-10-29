@@ -113,7 +113,7 @@ def minted_vrt(tile_paths: List[str]) -> Iterator[str]:
     with rasterio for a windowed read, and discarding it::
 
         with minted_vrt(tile_paths) as vrt_path:
-            with rasterio.open(vrt_path) as ds:
+            with open_data(vrt_path) as ds:
                 data = ds.read(window=viewport)
 
     For a VRT that must PERSIST — reopened later, or read from workers or an

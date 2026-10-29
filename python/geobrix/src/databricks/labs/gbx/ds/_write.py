@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
+from databricks.labs.gbx._gdal_policy import open_bytes
 from databricks.labs.gbx.pyrx.core.compression import (
     creation_opts as _canonical_creation_opts,
 )
@@ -36,8 +37,8 @@ def _tile_creation_opts(
     Compression and predictor are delegated to canonical creation_opts
     (pyrx/core/compression.py), which mirrors heavy OperatorOptions.appendOptions.
     ZSTD default level 9 matches heavy OperatorOptions :77; DEFLATE default 6
-    matches heavy :86.  Blocksize stays here (canonical does not
-    compute blocksize).
+    matches heavy :86.  Blocksize stays here: the canonical helper does not
+    compute blocksize.
     """
     compress = str(meta.get("compression", "DEFLATE")).lower()
     try:
@@ -86,7 +87,7 @@ def tile_to_bytes(
         source_profile,
     )
 
-    with MemoryFile(raster_bytes) as src_mf, src_mf.open() as src:
+    with MemoryFile(raster_bytes) as src_mf, open_bytes(src_mf) as src:
         data = src.read()
         # The COG driver lays the file out and picks its codec itself: it takes none of the
         # source's layout keys. Another driver starts from the source profile as a new GTiff.

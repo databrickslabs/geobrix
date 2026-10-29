@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import List, Optional, Sequence, Tuple
 
+from databricks.labs.gbx._gdal_policy import open_data
+
 BBox = Tuple[float, float, float, float]
 
 
@@ -32,12 +34,11 @@ def enumerate_tiles(bbox: BBox, min_z: int, max_z: int) -> List[Tuple[int, int, 
 
 def source_bounds_union(paths: Sequence[str]) -> BBox:
     """EPSG:4326 union of the source rasters' bounds."""
-    import rasterio
     from rasterio.warp import transform_bounds
 
     ws = ss = es = ns = None
     for p in paths:
-        with rasterio.open(p) as ds:
+        with open_data(p) as ds:
             w, s, e, n = transform_bounds(ds.crs, "EPSG:4326", *ds.bounds)
         ws = w if ws is None else min(ws, w)
         ss = s if ss is None else min(ss, s)
@@ -62,8 +63,12 @@ def render_tile(
     from rio_tiler.io import Reader
     from rio_tiler.mosaic import mosaic_reader
 
+    from databricks.labs.gbx._gdal_policy import open_data
+
     def _read(path, tx, ty, tz):
-        with Reader(path) as cog:
+        # The source is opened through open_data (the driver policy) and handed to rio-tiler, which would otherwise
+        # open it by name with GDAL's whole driver registry.
+        with open_data(path) as ds, Reader(path, dataset=ds) as cog:
             return cog.tile(tx, ty, tz)
 
     try:
@@ -90,13 +95,12 @@ def to_render_rgb(path: str) -> str:
     Operates on a LOCAL path (rasterio does random-access reads) — callers must stage
     Volume bytes to local disk SEQUENTIALLY first (FUSE-safe), then call this.
     """
-    import rasterio
     from rasterio.enums import ColorInterp
 
     from databricks.labs.gbx.pyrx.core import _nodata
     from databricks.labs.gbx.pyrx.core import compression as _comp
 
-    with rasterio.open(path) as src:
+    with open_data(path) as src:
         if src.count < 4 or ColorInterp.alpha not in src.colorinterp:
             return path
         out_dtype = src.dtypes[0]
@@ -109,7 +113,7 @@ def to_render_rgb(path: str) -> str:
             _comp.creation_opts(out_dtype, decoded_bytes=data.nbytes, compress="auto")
         )
     out = path + ".rgb.tif"
-    with _comp.internal_mask_env(mask), rasterio.open(out, "w", **profile) as dst:
+    with _comp.internal_mask_env(mask), open_data(out, "w", **profile) as dst:
         dst.write(data)
         dst.colorinterp = [ColorInterp.red, ColorInterp.green, ColorInterp.blue]
         if mask is not None:

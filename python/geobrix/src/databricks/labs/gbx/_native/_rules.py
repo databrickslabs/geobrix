@@ -16,7 +16,10 @@ The rules:
   installed package, so the payload's bindings (which must match its GDAL) win over a user's own
   copies. ``PYTHONPATH`` entries stay ahead of them. With no such entry they are appended.
 - **Data.** ``GDAL_DATA`` and ``PROJ_DATA`` point at ``_native/share``, each only when unset;
-  ``PROJ_DATA`` is not set when the user set ``PROJ_LIB`` (PROJ's older name, still read).
+  ``PROJ_DATA`` is not set when the user set ``PROJ_LIB`` (PROJ's older name, still read). A ``PROJ_DATA`` or
+  ``PROJ_LIB`` whose directories hold no ``proj.db`` this process can read counts as unset (DBR 19's
+  ``/databricks/native/proj-data`` on a standard-access driver); an unreadable ``PROJ_DATA`` is removed, and a
+  readable value is never changed. The readability probe never raises.
 - **HDF5 filter plugins.** ``_native/<arch>/hdf5-plugins`` (netCDF-C's zstd, blosc, bzip2, szip,
   ... filters) is registered with the payload's OWN netCDF-C and HDF5, never through the
   environment: ``HDF5_PLUGIN_PATH`` is never set, so it reaches no other HDF5 in the process (a
@@ -85,9 +88,29 @@ def insert_vendor(path, dirs):
     return new
 
 
+def proj_db_readable(value):
+    """True when a directory of ``value`` (``os.pathsep``-joined) holds a ``proj.db`` this process can read.
+    Never raises: a probe that fails (EACCES and the like) means not readable."""
+    for d in (value or "").split(os.pathsep):
+        if not d:
+            continue
+        db = os.path.join(d, "proj.db")
+        try:
+            if os.path.isfile(db) and os.access(db, os.R_OK):
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
 def set_data_dirs(env, share):
     env.setdefault("GDAL_DATA", os.path.join(share, "gdal"))
-    if "PROJ_LIB" not in env:
+    # A PROJ_DATA or PROJ_LIB with no proj.db this process can read is no PROJ data, so it counts as unset: DBR 19
+    # exports PROJ_DATA=/databricks/native/proj-data, which the notebook user of a standard-access cluster cannot
+    # read, and the vendored pyproj (no data dir of its own) then fails at import. A readable value is kept.
+    if "PROJ_DATA" in env and not proj_db_readable(env["PROJ_DATA"]):
+        del env["PROJ_DATA"]
+    if not ("PROJ_LIB" in env and proj_db_readable(env["PROJ_LIB"])):
         env.setdefault("PROJ_DATA", os.path.join(share, "proj"))
 
 

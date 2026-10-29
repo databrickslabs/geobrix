@@ -29,7 +29,8 @@ every installed package). It runs at interpreter start through ``geobrix-native.
 environment where ``.pth`` files are not processed); the second run changes nothing. Both apply
 the one set of rules in ``_native/_rules.py``: where the payload can load (Linux, x86_64 or
 aarch64, CPython 3.12), the ``sys.path`` position, ``GDAL_DATA``/``PROJ_DATA`` (never over a
-user's value, nor ``PROJ_DATA`` over a user's ``PROJ_LIB``) and the CA bundle our curl uses (it
+user's value, nor ``PROJ_DATA`` over a user's ``PROJ_LIB``; a ``PROJ_DATA``/``PROJ_LIB`` with no ``proj.db`` this
+process can read counts as unset) and the CA bundle our curl uses (it
 has no compiled-in CA path): a user's ``GDAL_CURL_CA_BUNDLE``/``PROJ_CURL_CA_BUNDLE`` is never
 touched; otherwise they get the user's ``CURL_CA_BUNDLE`` or ``SSL_CERT_FILE``, else the system
 store (where Databricks admins add corporate CAs), else certifi's (this import-time activation

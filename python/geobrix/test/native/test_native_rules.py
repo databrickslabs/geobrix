@@ -2,8 +2,9 @@
 
 The CA rows: a user's ``GDAL_CURL_CA_BUNDLE``/``PROJ_CURL_CA_BUNDLE`` is never touched; otherwise
 both get the user's ``CURL_CA_BUNDLE``, else the user's ``SSL_CERT_FILE``, else the system store;
-``CURL_CA_BUNDLE`` is never set. The data rows: ``GDAL_DATA``/``PROJ_DATA`` only when unset, and no
-``PROJ_DATA`` over a user's ``PROJ_LIB``. The plugin rows: the payload's HDF5 filter plugins are
+``CURL_CA_BUNDLE`` is never set. The data rows: ``GDAL_DATA``/``PROJ_DATA`` only when unset, no
+``PROJ_DATA`` over a user's ``PROJ_LIB``, and a ``PROJ_DATA``/``PROJ_LIB`` with no readable ``proj.db`` counts as
+unset (with a payload: a real unreadable directory, and ``import pyproj`` in a fresh interpreter). The plugin rows: the payload's HDF5 filter plugins are
 registered with the payload's own netCDF-C/HDF5 on the first import of a binding that reaches them,
 once, and ``HDF5_PLUGIN_PATH`` is never set. Then both activators (the startup module, loaded from
 ``src/`` by path as the ``.pth`` imports it, and the import-time ``_native.activate``) apply the
@@ -13,7 +14,10 @@ other than the payload's CPython 3.12.
 
 import importlib.util
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import types
 from pathlib import Path
 
@@ -73,19 +77,159 @@ def test_the_ca_rule(tmp_path, environ, store, gdal, proj):
     assert env.get("CURL_CA_BUNDLE") == environ.get("CURL_CA_BUNDLE")  # never ours
 
 
-DATA_CASES = [  # the user's environment, GDAL_DATA after, PROJ_DATA after
+# The user's environment, GDAL_DATA after, PROJ_DATA after. "<ok>" is a directory holding a proj.db this process
+# can read; "<missing>" does not exist; "<empty>" exists with no proj.db. A PROJ_DATA or PROJ_LIB with no readable
+# proj.db is no PROJ data (DBR 19 exports PROJ_DATA=/databricks/native/proj-data, which a standard-access notebook
+# user cannot read): it is treated as unset. A readable one is kept.
+DATA_CASES = [
     ({}, "<share>/gdal", "<share>/proj"),
-    ({"PROJ_LIB": "/u/proj"}, "<share>/gdal", None),
-    ({"GDAL_DATA": "/u/gdal", "PROJ_DATA": "/u/proj"}, "/u/gdal", "/u/proj"),
+    ({"PROJ_LIB": "<ok>"}, "<share>/gdal", None),
+    ({"GDAL_DATA": "/u/gdal", "PROJ_DATA": "<ok>"}, "/u/gdal", "<ok>"),
+    ({"PROJ_DATA": "<missing>"}, "<share>/gdal", "<share>/proj"),
+    ({"PROJ_DATA": "<empty>"}, "<share>/gdal", "<share>/proj"),
+    ({"PROJ_DATA": ""}, "<share>/gdal", "<share>/proj"),
+    ({"PROJ_LIB": "<missing>"}, "<share>/gdal", "<share>/proj"),
+    # the readable PROJ_LIB is the user's: the unreadable PROJ_DATA goes, so PROJ falls back to it
+    ({"PROJ_DATA": "<missing>", "PROJ_LIB": "<ok>"}, "<share>/gdal", None),
+    # one readable directory of an os.pathsep list is enough
+    (
+        {"PROJ_DATA": f"<missing>{os.pathsep}<ok>"},
+        "<share>/gdal",
+        f"<missing>{os.pathsep}<ok>",
+    ),
 ]
 
 
+def _proj_dirs(tmp_path):
+    ok, empty = tmp_path / "ok", tmp_path / "empty"
+    ok.mkdir()
+    empty.mkdir()
+    (ok / "proj.db").write_bytes(b"SQLite format 3\x00")
+    return {
+        "<ok>": str(ok),
+        "<missing>": str(tmp_path / "missing"),
+        "<empty>": str(empty),
+    }
+
+
+def _fill(value, dirs):
+    for k, v in dirs.items():
+        value = value.replace(k, v) if value else value
+    return value
+
+
 @pytest.mark.parametrize("environ, gdal_data, proj_data", DATA_CASES)
-def test_the_data_rule(environ, gdal_data, proj_data):
-    env = dict(environ)
+def test_the_data_rule(tmp_path, environ, gdal_data, proj_data):
+    dirs = _proj_dirs(tmp_path)
+    env = {k: _fill(v, dirs) for k, v in environ.items()}
     _rules.set_data_dirs(env, "<share>")
-    assert (env.get("GDAL_DATA"), env.get("PROJ_DATA")) == (gdal_data, proj_data)
-    assert env.get("PROJ_LIB") == environ.get("PROJ_LIB")
+    assert (env.get("GDAL_DATA"), env.get("PROJ_DATA")) == (
+        gdal_data,
+        _fill(proj_data, dirs),
+    )
+    assert env.get("PROJ_LIB") == _fill(environ.get("PROJ_LIB"), dirs)
+
+
+def test_a_proj_db_probe_that_raises_is_unreadable_and_never_raises(
+    tmp_path, monkeypatch
+):
+    # Python 3.12's Path.exists raises on EACCES; os.access and isfile must not take activation down either
+    dirs = _proj_dirs(tmp_path)
+
+    def denied(*a, **k):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(_rules.os, "access", denied)
+    env = {"PROJ_DATA": dirs["<ok>"]}
+    _rules.set_data_dirs(env, "<share>")
+    assert env["PROJ_DATA"] == "<share>/proj"
+
+
+# The DBR 19 standard-access driver, for real: the runtime's PROJ_DATA names a directory this process cannot read
+# (EACCES), and the vendored pyproj, which has no data dir of its own, falls through to PROJ_DATA. A fresh
+# interpreter activates a copy of the payload as the .pth does, then imports pyproj and resolves EPSG:4326. Root
+# reads a mode-000 directory, so under root the child runs as nobody (and the copies live where nobody can reach).
+PYPROJ_PROBE = r"""
+import os, sys
+sys.path.insert(0, sys.argv[1])
+import _gbx_native_path  # what geobrix-native.pth runs at interpreter start
+assert _gbx_native_path.ACTIVE, "the payload copy did not activate"
+import pyproj
+from pyproj import datadir
+print("RESULT", pyproj.__file__, pyproj.CRS.from_epsg(4326).to_epsg(), os.environ.get("PROJ_DATA"), datadir.get_data_dir())
+"""
+
+
+def _drop_to_nobody():
+    os.setgroups([])
+    os.setgid(65534)
+    os.setuid(65534)
+
+
+@pytest.mark.parametrize("runtime_proj_data", ["unreadable", "readable"])
+def test_import_pyproj_beside_the_runtimes_proj_data(runtime_proj_data):
+    root = os.environ.get("GBX_NATIVE_ROOT")
+    arch = os.uname().machine if hasattr(os, "uname") else ""
+    if not (
+        sys.platform.startswith("linux")
+        and root
+        and Path(root, "_vendor", arch, "pyproj").is_dir()
+    ):
+        pytest.skip(
+            "PRECONDITION MISSING: GBX_NATIVE_ROOT naming an env-wheel payload, on Linux; this row not run"
+        )
+    root = Path(root)
+    base = Path(
+        tempfile.mkdtemp(dir="/tmp")
+    )  # pytest's tmp dirs are 0700: nobody could not reach them
+    runtime = base / "proj-data"
+    try:
+        os.chmod(base, 0o755)
+        payload = base / "payload"
+        for rel in (f"_native/{arch}/lib", "_native/share", f"_vendor/{arch}/pyproj"):
+            shutil.copytree(root / rel, payload / rel)
+        shutil.copy2(
+            root / "_native" / arch / "MANIFEST.json", payload / "_native" / arch
+        )
+        src = base / "src"
+        (src / "databricks/labs/gbx/_native").mkdir(parents=True)
+        shutil.copy2(SRC / "_gbx_native_path.py", src)
+        shutil.copy2(
+            SRC / "databricks/labs/gbx/_native/_rules.py",
+            src / "databricks/labs/gbx/_native",
+        )
+        runtime.mkdir()  # the runtime's own PROJ data: a real proj.db
+        shutil.copy2(root / "_native/share/proj/proj.db", runtime)
+        if runtime_proj_data == "unreadable":
+            runtime.chmod(0o000)
+        env = {k: v for k, v in os.environ.items() if k not in _ENV}
+        env.update(GBX_NATIVE_ROOT=str(payload), PROJ_DATA=str(runtime), HOME=str(base))
+        res = subprocess.run(
+            [sys.executable, "-I", "-c", PYPROJ_PROBE, str(src)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            cwd=str(base),
+            preexec_fn=_drop_to_nobody if os.geteuid() == 0 else None,
+        )
+    finally:
+        if runtime.exists():
+            runtime.chmod(0o755)
+        shutil.rmtree(base, ignore_errors=True)
+    out = res.stdout + res.stderr
+    line = next(
+        (ln for ln in res.stdout.splitlines() if ln.startswith("RESULT ")), None
+    )
+    assert line, out[-3000:]
+    module, epsg, proj_data, data_dir = line.split()[1:]
+    assert module.startswith(f"{payload}/_vendor/{arch}/") and epsg == "4326", line
+    want = (
+        f"{payload}/_native/share/proj"
+        if runtime_proj_data == "unreadable"
+        else str(runtime)
+    )
+    assert proj_data == want and data_dir == want, line
 
 
 # modules imported after activation, modules imported before it, registrations

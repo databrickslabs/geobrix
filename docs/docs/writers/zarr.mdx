@@ -178,14 +178,20 @@ and the table is read once for the data.
 
 A `create` writes blocks that each cover whole chunks (whole shards, in a sharded array) where they are
 made: the task that holds a block encodes it and writes it to a data file of its own, and nothing is
-shuffled. Other blocks, such as one that cuts across a chunk or a shard, or two that overlap, are cut into
-pieces, regrouped by chunk through a shuffle and assembled. The store is the same either way: the same
-documents, the same chunk rows, the same bytes in every chunk; only the data file a chunk sits in differs.
+shuffled. This is decided for the whole create, every variable at once: if any block cuts across a chunk
+or a shard, or two blocks overlap, all of them are cut into pieces, regrouped by chunk through a shuffle
+and assembled. The store is the same either way: the same documents, the same chunk rows, the same bytes
+in every chunk; only the data file a chunk sits in differs.
 
 To write the faster way, start every block on a chunk boundary (a shard boundary, for a sharded array)
-and end it on one or at the edge of the array. A 1 GB create of blocks of one shard each wrote its data
-files at 94 MB/s through the Volume and 116 MB/s direct to storage on Databricks Runtime 19, and at
-89 MB/s on Serverless; see [Zarr Stores](../formats/zarr#performance).
+and end it on one or at the edge of the array. The blocks are written by the tasks that hold them, so an
+input that keeps its blocks in few partitions (a single one, say) is first spread out by block, and many
+tasks write at once. A block of several shards writes their chunks in its own order, so one shard's
+chunks do not sit side by side in the data file and a read of that shard takes more, smaller reads; a
+block of one shard keeps them together. A 1 GB create of blocks of one shard each wrote its data
+files at a median 119 MB/s through the Volume and 80 MB/s direct to storage on Databricks Runtime 19
+(direct runs from 39 to 139 MB/s), and at 122 MB/s on Serverless; see
+[Zarr Stores](../formats/zarr#performance).
 
 An `xarray.Dataset` and a DataFrame of tiles are planned on the driver from what they hold, so neither
 has a pass of this kind.

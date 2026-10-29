@@ -327,9 +327,9 @@ more of the cells of the box around them, and the box fits in half of a task's d
 (32 MiB on Serverless and 768 MiB on Databricks Runtime 19 in these measurements), the box is read once
 and every point takes its cells from it; a chunk whose box is larger is read cell by cell. On the ERA5 store
 of the [Zarr Stores performance figures](../formats/zarr#performance) (one 90 x 90 chunk of 2-metre
-temperature, all 744 hours) on Serverless, points on a quarter of the chunk's cells took 0.37 s this way
-against 1.8 s cell by cell, and points on every cell 0.57 s against 6.5 s; at one point in a hundred
-cells, reading cell by cell was the faster (0.20 s against 0.36 s).
+temperature, all 744 hours) on Serverless, points on a quarter of the chunk's cells took 0.44 s this way
+against 1.7 s cell by cell, and points on every cell 0.55 s against 6.7 s; at one point in 81 cells
+(100 points), reading cell by cell was the faster (0.26 s against 0.40 s).
 **Above 100,000 points `points_df` is evaluated more than once** (up to about three times, because
 the chunks to read are planned from a first pass over the geometry column), so it must be
 deterministic. Write it to a table first, rather than sampling a random or time-dependent query.

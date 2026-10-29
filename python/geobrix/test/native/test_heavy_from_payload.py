@@ -20,6 +20,7 @@ second GDAL otherwise). An image whose ``/usr/lib/libgdalalljni.so`` is a link t
 or one with no system GDAL (Databricks runtimes), needs no such setting.
 """
 
+import glob
 import os
 import re
 import subprocess
@@ -38,6 +39,9 @@ JARS = sorted(
     (REPO / "python" / "geobrix" / "lib").glob("geobrix-*-jar-with-dependencies.jar")
 )
 SYSTEM_JNI = "/usr/lib/libgdalalljni.so"
+# The dev image's own GDAL 3.11 JNI (scripts/docker/Dockerfile links SYSTEM_JNI to it). gbx:docker:start re-links
+# SYSTEM_JNI into the env6 payload; this file stays, so the guard rows still have a second GDAL to refuse.
+IMAGE_JNI = "/usr/local/lib/jni/libgdalalljni.so"
 LIBGDAL = re.compile(r"/libgdal(-[0-9a-f]{8})?\.so(\.\d+)+$")
 DEV_LIBRARY_PATH = "/usr/local/lib:/usr/lib:/usr/java/packages/lib:/usr/lib64:/lib64:/lib:/usr/local/hadoop/lib/native"
 CONSTANTS = "org/gdal/gdalconst/gdalconstConstants.class"
@@ -68,10 +72,19 @@ def native_dir():
     return d
 
 
-def _java(native_dir, main, *args, classes=None, payload_first=True, first_on_cp=None):
+def _java(
+    native_dir,
+    main,
+    *args,
+    classes=None,
+    payload_first=True,
+    first_on_cp=None,
+    library_path=None,
+):
     """`main` in a fresh JVM on the staged JAR and pyspark's jars, with no GBX_NATIVE_ROOT in its environment and,
-    unless `payload_first` is False (the JVM's default library path), the payload's lib/ first on the library path.
-    `first_on_cp` goes ahead of the JAR on the class path."""
+    unless `payload_first` is False (the JVM's default library path), the payload's lib/ first on the library path;
+    `library_path` replaces that path. `first_on_cp` goes ahead of the JAR on the class path.
+    """
     import pyspark
 
     cp = f"{JARS[-1]}:{os.path.join(os.path.dirname(pyspark.__file__), 'jars', '*')}"
@@ -80,9 +93,15 @@ def _java(native_dir, main, *args, classes=None, payload_first=True, first_on_cp
     drop = {"GBX_NATIVE_ROOT", "GDAL_DATA", "PROJ_DATA", "PROJ_LIB"}
     env = {k: v for k, v in os.environ.items() if k not in drop}
     lib = (
-        [f"-Djava.library.path={os.path.join(native_dir, 'lib')}:{DEV_LIBRARY_PATH}"]
-        if payload_first
-        else []
+        [f"-Djava.library.path={library_path}"]
+        if library_path
+        else (
+            [
+                f"-Djava.library.path={os.path.join(native_dir, 'lib')}:{DEV_LIBRARY_PATH}"
+            ]
+            if payload_first
+            else []
+        )
     )
     target = [main] if classes else [str(HERE.parent / f"{main}.java")]
     return subprocess.run(
@@ -117,16 +136,25 @@ def _switched():
         return jar.read(CONSTANTS) == build.read(CONSTANTS)
 
 
+def _linked():
+    """True where SYSTEM_JNI is a link into a payload (the dev container after gbx:docker:start, DCS, init)."""
+    return os.path.exists(SYSTEM_JNI) and "/_native/" in os.path.realpath(SYSTEM_JNI)
+
+
 def _system_gdal_or_skip():
-    """Skip unless the JVM's default library path finds a system JNI of another GDAL than the payload's."""
-    if not os.path.exists(SYSTEM_JNI):
+    """A system JNI of another GDAL than the payload's: SYSTEM_JNI, or, where SYSTEM_JNI is linked into the payload,
+    the image's own JNI it was linked away from (IMAGE_JNI). Skips when there is none.
+    """
+    jni = IMAGE_JNI if _linked() else SYSTEM_JNI
+    if not os.path.exists(jni):
         pytest.skip(
-            f"PRECONDITION MISSING: a system GDAL JNI at {SYSTEM_JNI}; this row not run"
+            f"PRECONDITION MISSING: a system GDAL JNI at {jni}; this row not run"
         )
-    if "/_native/" in os.path.realpath(SYSTEM_JNI):
+    if "/_native/" in os.path.realpath(jni):
         pytest.skip(
-            f"PRECONDITION MISSING: {SYSTEM_JNI} is a payload's JNI, not a second GDAL; this row not run"
+            f"PRECONDITION MISSING: {jni} is a payload's JNI, not a second GDAL; this row not run"
         )
+    return jni
 
 
 # kernel: KernelGdal on the driver; writer: a vector writer's load on a task; writer-no-session: the same with no
@@ -154,8 +182,8 @@ def test_the_session_conf_alone_loads_the_payload(
 
 
 def test_a_second_gdal_in_the_jvm_is_refused(native_dir):
-    _system_gdal_or_skip()  # a system JNI of another GDAL, loaded first
-    res = _java(native_dir, "DoubleLoadProbe", SYSTEM_JNI, native_dir)
+    jni = _system_gdal_or_skip()  # a system JNI of another GDAL, loaded first
+    res = _java(native_dir, "DoubleLoadProbe", jni, native_dir)
     assert res.returncode == 3, res.stdout + res.stderr
     assert "a different GDAL is already loaded" in res.stderr, res.stderr
 
@@ -164,9 +192,27 @@ def test_the_system_gdal_is_named_and_other_gdal_classes_are_refused(
     native_dir, conf_only_probe
 ):
     """No conf and no GBX_NATIVE_ROOT: the JVM says it runs the system GDAL; with the payload build's GDAL classes
-    ahead of the JAR's, which that JNI cannot serve, GDALManager refuses them with a Fix.
+    ahead of the JAR's, which that JNI cannot serve, GDALManager refuses them with a Fix. Where SYSTEM_JNI is linked
+    into the payload (so the system GDAL is the payload's), the image's 3.11 JNI first on the JVM's library path is
+    the other GDAL: GDAL's classes would load it by name, and GDALManager refuses it with a Fix before anything loads.
     """
-    _system_gdal_or_skip()
+    jni = _system_gdal_or_skip()
+    if _linked():
+        res = _java(
+            native_dir,
+            "ConfOnlyProbe",
+            "kernel",
+            "",
+            classes=conf_only_probe,
+            library_path=f"{os.path.dirname(jni)}:{DEV_LIBRARY_PATH}",
+        )
+        refused = (
+            "RESULT error:" in res.stdout
+            and f"a different GDAL is on this JVM's library path ({jni})" in res.stdout
+            and "Fix:" in res.stdout
+        )
+        assert refused, res.stdout + res.stderr[-3000:]
+        return
     res = _java(
         native_dir,
         "ConfOnlyProbe",
@@ -188,8 +234,39 @@ def test_the_system_gdal_is_named_and_other_gdal_classes_are_refused(
 def test_a_shared_object_that_maps_a_second_gdal_is_refused_on_the_system_gdal(
     native_dir, conf_only_probe
 ):
-    """A JVM on the system GDAL whose sharedobjects conf names a library that maps another libgdal is refused."""
-    _system_gdal_or_skip()
+    """A JVM on the system GDAL whose sharedobjects conf names a library that maps another libgdal is refused. Where
+    SYSTEM_JNI is linked into the payload, the system GDAL is the payload's and the other libgdal is the image's.
+    """
+    jni = _system_gdal_or_skip()
+    if _linked():
+        found = glob.glob("/usr/local/lib/libgdal.so.*") + glob.glob(
+            "/usr/lib/*/libgdal.so.*"
+        )
+        other = sorted(
+            {
+                os.path.realpath(p)
+                for p in found
+                if "/_native/" not in os.path.realpath(p)
+            }
+        )
+        if not other:
+            pytest.skip(
+                f"PRECONDITION MISSING: the libgdal of {jni}, outside the payload; this row not run"
+            )
+        res = _java(
+            native_dir,
+            "ConfOnlyProbe",
+            "shared",
+            "",
+            other[0],
+            classes=conf_only_probe,
+            payload_first=False,
+        )
+        assert (
+            "RESULT error:java.lang.IllegalStateException: geobrix: a different GDAL is already loaded"
+            in res.stdout
+        ), (res.stdout + res.stderr[-3000:])
+        return
     if _switched():
         pytest.skip(
             "PRECONDITION MISSING: the JAR's GDAL classes are the payload build's, which the system JNI cannot serve; "
@@ -299,8 +376,6 @@ def test_a_shared_object_that_maps_a_second_gdal_is_refused_on_the_payload(
     native_dir, conf_only_probe
 ):
     """A JVM on the payload's GDAL whose sharedobjects conf names another libgdal is refused (also after the switch)."""
-    import glob
-
     found = glob.glob("/usr/local/lib/libgdal.so.*") + glob.glob(
         "/usr/lib/*/libgdal.so.*"
     )

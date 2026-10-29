@@ -49,6 +49,7 @@ __all__ = [
 ]
 
 _MB = 1e6  # throughput in decimal MB/s, as the prototype reported it
+_R2_COG_HOURS = 4  # hourly files the rst_sample baseline reads (one task each)
 _DIMS = ("time", "latitude", "longitude")
 
 
@@ -73,7 +74,7 @@ class ZarrBenchConfig:
     where: str = "cluster"
     w1_shape: tuple = (240, 721, 1440)
     w1_access: tuple = ("fuse", "direct")
-    r2_budget_s: float = 900.0  # the baseline's three runs must fit, else fewer hours
+    r2_budget_s: float = 600.0  # the baseline's three runs must fit, else fewer points
     cases: tuple = ("R1", "R2", "R3", "W1", "W2")
 
 
@@ -277,41 +278,45 @@ def run_r2(spark, cfg: ZarrBenchConfig) -> List[ResultRow]:
         _register_light(spark)
         files = _cog_manifest(cfg.cog_dir)["files"]
 
-        def job(hours):
+        # The baseline is one Python call per point and hour, so it is measured on a few
+        # hourly files (one task each, side by side) and as many points as the budget
+        # allows; the full workload is reported as an extrapolation from that.
+        hours = min(_R2_COG_HOURS, len(files))
+
+        def job(n):
             tiles = _cog_frame(spark, files[:hours])
             _noop(
-                tiles.crossJoin(F.broadcast(points)).select(
+                tiles.crossJoin(F.broadcast(points.limit(n))).select(
                     prx.rst_sample(F.col("tile"), F.col("geom")).alias("v")
                 )
             )
 
-        probe_h = min(24, len(files))
-        probe = _walls(lambda: job(probe_h), 1)[0]  # cold, untimed for the result
-        per_hour = probe / probe_h
-        hours = len(files)
-        for h in (len(files), 168, 72, 24):
-            if h <= len(files) and per_hour * h * cfg.reps <= cfg.r2_budget_s:
-                hours = h
-                break
-        else:
-            hours = probe_h
-        walls = _walls(lambda: job(hours), cfg.reps)
+        probe = _walls(lambda: job(10), 1)[0]  # cold, sizes the measured run
+        per_point = probe / 10
+        n = next(
+            (
+                p
+                for p in (n_pts, 300, 100, 30)
+                if p * per_point * cfg.reps <= cfg.r2_budget_s
+            ),
+            10,
+        )
+        walls = _walls(lambda: job(n), cfg.reps)
         med = statistics.median(walls)
-        full = med * len(files) / hours
+        per_sample = med / n  # seconds per point in one task (one hourly file)
+        full = per_sample * n_pts * len(files)
         out.append(
             _row(
                 cfg,
                 fn,
                 walls,
-                n_pts * hours,
-                f"rst_sample over {hours} of {len(files)} hourly GeoTIFFs x {n_pts} "
-                f"points (cross join); probe {probe:.1f} s for {probe_h} h; the "
-                f"{len(files)} h time is "
-                + (
-                    "MEASURED"
-                    if hours == len(files)
-                    else f"EXTRAPOLATED linearly: {full:.1f} s"
-                ),
+                n * hours,
+                f"rst_sample over {hours} hourly GeoTIFFs (one task each) x {n} of "
+                f"{n_pts} points (cross join); probe {probe:.1f} s for 10 points; "
+                f"{per_sample:.3f} task-seconds per point-hour; the {n_pts} points x "
+                f"{len(files)} h workload is EXTRAPOLATED: {full:.0f} task-seconds "
+                f"({full / 4:.0f} s on 4 task slots)",
+                tput_rows=(n * hours / med) if med else 0.0,
             )
         )
     except Exception as e:  # noqa: BLE001

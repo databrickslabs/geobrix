@@ -1000,7 +1000,9 @@ def main() -> int:
         or None
     )
     me = w.current_user.me()
-    default_path = f"/Users/{me.user_name}/geobrix_bench_runner.ipynb"
+    # One notebook per run id: a job reads its notebook when it is submitted, so two launches
+    # sharing one path made the earlier job run the later launch's notebook.
+    default_path = f"/Users/{me.user_name}/geobrix_bench_runner_{run_id}.ipynb"
     notebook_path = notebook_path_from_env or default_path
     if not notebook_path.endswith(".ipynb"):
         notebook_path = notebook_path.rstrip("/") + ".ipynb"

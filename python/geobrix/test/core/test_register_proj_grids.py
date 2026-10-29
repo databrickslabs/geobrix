@@ -15,15 +15,15 @@ def _clear():
 
 def _fake_jvm():
     """A minimal stand-in for spark._jvm whose ProjGridRegistry.set() is a no-op,
-    so _apply_heavy takes the heavy-tier-active branch without a real JVM."""
+    so _apply_heavy takes the heavy-tier-active branch without a real JVM. Its
+    PythonUtils.toSeq stands in for Spark's list-to-Seq conversion."""
     reg = types.SimpleNamespace(set=lambda dirs, replace: None)
     ops = types.SimpleNamespace(ProjGridRegistry=reg)
-    return types.SimpleNamespace(
-        com=types.SimpleNamespace(
-            databricks=types.SimpleNamespace(
-                labs=types.SimpleNamespace(gbx=types.SimpleNamespace(operations=ops))
-            )
-        )
+    utils = types.SimpleNamespace(toSeq=lambda xs: list(xs))
+    ns = types.SimpleNamespace
+    return ns(
+        com=ns(databricks=ns(labs=ns(gbx=ns(operations=ops)))),
+        org=ns(apache=ns(spark=ns(api=ns(python=ns(PythonUtils=utils))))),
     )
 
 

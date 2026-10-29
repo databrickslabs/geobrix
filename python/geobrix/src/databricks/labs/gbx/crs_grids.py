@@ -82,27 +82,22 @@ def _warn_heavy_volume_grids(result) -> None:
         )
 
 
-def _scala_seq(jvm, items: list):
-    """`items` as the Scala Seq ProjGridRegistry.set takes: py4j hands a Python list over as a java.util.List,
-    which matches no `set`, so the call failed and the heavy tier never had the grids.
-    """
-    try:
-        return jvm.org.apache.spark.api.python.PythonUtils.toSeq(items)
-    except Exception:  # no Spark JVM (a stand-in): the list itself
-        return items
-
-
 def _apply_heavy(spark, result) -> None:
-    """Set the heavy-tier JVM grid registry if a JVM is present (best-effort)."""
+    """Set the heavy-tier JVM grid registry when this session has a JVM with the GeoBrix JAR.
+
+    Two cases are quiet, by design: no JVM (Spark Connect, Serverless, or no session: ``spark._jvm`` is absent) and
+    a JVM without the GeoBrix JAR (a light-only session: py4j resolves the class name to a ``JavaPackage``). Any
+    other failure raises: a swallowed one once left the JVM without the grids, silently.
+    """
     jvm = getattr(spark, "_jvm", None)
     if jvm is None:
         return
-    try:
-        reg = jvm.com.databricks.labs.gbx.operations.ProjGridRegistry
-        # push the full de-duped set (idempotent replace)
-        reg.set(_scala_seq(jvm, list(result)), True)
-    except Exception:
-        return  # heavy classes absent (light-only session) → no-op
+    reg = jvm.com.databricks.labs.gbx.operations.ProjGridRegistry
+    if type(reg).__name__ == "JavaPackage":
+        return
+    # ProjGridRegistry.set takes a Scala Seq: py4j would hand a Python list over as a java.util.List, which matches
+    # no `set`. Push the full de-duped set (an idempotent replace).
+    reg.set(jvm.org.apache.spark.api.python.PythonUtils.toSeq(list(result)), True)
     # Heavy tier IS active: warn if any registered dir is a Volume executors can't read.
     _warn_heavy_volume_grids(result)
 

@@ -56,7 +56,19 @@ ac() {
     make install
 }
 
-b_zlib() { enter zlib "$ZLIB_FILE"; lic; ./configure --prefix="$P" --libdir="$P/lib" --shared; make -j"$JOBS"; make install; rm -f "$P/lib/libz.a"; finish; }
+# --zprefix: every zlib symbol is z_-prefixed, and the installed zconf.h says so to every consumer built against
+# $P/include, so a system libz.so.1 already in a process's global scope (Ubuntu's /usr/bin/python3.12, the Databricks
+# runtimes' Python, NEEDs it) cannot interpose on the payload's zlib calls: hashed SONAMEs stop SONAME reuse, not symbol
+# interposition. A consumer compiled against another zlib.h fails to link only if it is an executable: a shared library
+# links with the unprefixed names undefined and binds them to whatever libz is global at load time. The gate for that is
+# verify-native.sh row 18 (no payload symbol binds to the system zlib or expat), not the link.
+b_zlib() {
+    enter zlib "$ZLIB_FILE"; lic
+    ./configure --prefix="$P" --libdir="$P/lib" --shared --zprefix; make -j"$JOBS"; make install; rm -f "$P/lib/libz.a"
+    nm -D --defined-only "$P/lib/libz.so.$ZLIB_VERSION" | awk '{s = $3; sub(/@.*/, "", s)} s == "z_inflate" {ok = 1} s == "inflate" {bad = 1} END {exit !(ok && !bad)}' \
+        || { echo "BUILD FAILED: zlib's symbols are not z_-prefixed"; exit 1; }
+    finish
+}
 b_libdeflate() { enter libdeflate "$LIBDEFLATE_FILE"; lic; cm . -DLIBDEFLATE_BUILD_STATIC_LIB=OFF -DLIBDEFLATE_BUILD_GZIP=OFF; finish; }
 b_zstd() { enter zstd "$ZSTD_FILE"; lic; cm build/cmake -DZSTD_BUILD_PROGRAMS=OFF -DZSTD_BUILD_STATIC=OFF -DZSTD_BUILD_TESTS=OFF; finish; }
 b_xz() {
@@ -159,12 +171,16 @@ b_curl() {
         -DUSE_NGHTTP2=ON -DCURL_ZSTD=ON -DCURL_BROTLI=OFF -DUSE_LIBIDN2=OFF -DCURL_CA_BUNDLE=none -DCURL_CA_PATH=none \
         -DCURL_DISABLE_LDAP=ON -DCURL_DISABLE_LDAPS=ON -DBUILD_STATIC_LIBS=OFF -DENABLE_CURL_MANUAL=OFF \
         -DBUILD_LIBCURL_DOCS=OFF -DBUILD_MISC_DOCS=OFF
-    grep -qi "HTTP2.*ON\|nghttp2" _cmake.log || { echo "BUILD FAILED: curl did not find nghttp2"; exit 1; }
+    grep -q "Features:.* HTTP2" _cmake.log || { echo "BUILD FAILED: curl was configured without HTTP2: $(grep -m1 'Features:' _cmake.log)"; exit 1; }
     finish
 }
+# expat static and hidden: EXPAT_SHARED_LIBS=OFF compiles it -fvisibility=hidden (no XML_ENABLE_VISIBILITY), and
+# build-gdal.sh links it with --exclude-libs. Only libgdal uses it, so it ships inside libgdal, where a system
+# libexpat.so.1 in the global scope cannot interpose on it (no shared libexpat ships any more).
 b_expat() {
     enter expat "$EXPAT_FILE"; lic
-    cm . -DEXPAT_BUILD_TOOLS=OFF -DEXPAT_BUILD_EXAMPLES=OFF -DEXPAT_BUILD_TESTS=OFF -DEXPAT_BUILD_DOCS=OFF
+    cm . -DEXPAT_BUILD_TOOLS=OFF -DEXPAT_BUILD_EXAMPLES=OFF -DEXPAT_BUILD_TESTS=OFF -DEXPAT_BUILD_DOCS=OFF -DEXPAT_SHARED_LIBS=OFF
+    { [ -f "$P/lib/libexpat.a" ] && [ -z "$(ls "$P"/lib/libexpat.so* 2> /dev/null)" ]; } || { echo "BUILD FAILED: expat is not static only"; exit 1; }
     finish
 }
 b_openjpeg() { enter openjpeg "$OPENJPEG_FILE"; lic; cm . -DBUILD_CODEC=OFF -DBUILD_STATIC_LIBS=OFF; finish; }
@@ -176,20 +192,23 @@ b_hdf5() {
     finish
 }
 # The HDF5 filter plugins (zstd, blosc, bzip2, szip, deflate, shuffle, fletcher32, and NCZarr's two) go to
-# $P/hdf5-plugins, which staging ships as gdal-native/hdf5-plugins/ (HDF5_PLUGIN_PATH points there at run time).
+# /usr/local/hdf5/lib/plugin, HDF5's own default plugin directory, which NETCDF_WITH_PLUGIN_DIR also makes libnetcdf's
+# compiled-in default search path (so no build-prefix path is baked into libnetcdf, and a DCS image can install them
+# there for the JVM). Staging ships them as gdal-native/hdf5-plugins/; at run time the env wheel registers that
+# directory with the payload's own netCDF-C, never through HDF5_PLUGIN_PATH.
 # bzip2 is netCDF-C's own embedded copy (plugins/BZIP2_LICENSE): its install rule skips that plugin, so it is copied.
 # The system libbz2 is never looked for (it is not in the manylinux policy set).
 b_netcdf-c() {
     enter netcdf-c "$NETCDF_C_FILE"; lic
     cp plugins/BZIP2_LICENSE "$P/share/licenses/netcdf-c/"
     cm . -DNETCDF_ENABLE_TESTS=OFF -DNETCDF_BUILD_UTILITIES=OFF -DNETCDF_ENABLE_HDF5=ON -DNETCDF_ENABLE_DAP=ON \
-        -DNETCDF_ENABLE_PLUGINS=ON -DNETCDF_PLUGIN_INSTALL=ON -DNETCDF_WITH_PLUGIN_DIR="$P/hdf5-plugins" \
+        -DNETCDF_ENABLE_PLUGINS=ON -DNETCDF_PLUGIN_INSTALL=ON -DNETCDF_WITH_PLUGIN_DIR=/usr/local/hdf5/lib/plugin \
         -DNETCDF_ENABLE_FILTER_ZSTD=ON -DNETCDF_ENABLE_FILTER_BLOSC=ON -DNETCDF_ENABLE_FILTER_BZ2=ON -DNETCDF_ENABLE_FILTER_SZIP=ON \
         -DCMAKE_DISABLE_FIND_PACKAGE_Bz2=ON
-    cp _build/plugins/lib__nch5bzip2.so "$P/hdf5-plugins/"
+    cp _build/plugins/lib__nch5bzip2.so /usr/local/hdf5/lib/plugin/
     local p
     for p in h5zstd h5blosc h5bzip2 h5szip h5deflate h5shuffle h5fletcher32 zhdf5filters zstdfilters; do
-        [ -f "$P/hdf5-plugins/lib__nc$p.so" ] || { echo "BUILD FAILED: netCDF-C plugin lib__nc$p.so not installed: $(ls "$P/hdf5-plugins")"; exit 1; }
+        [ -f "/usr/local/hdf5/lib/plugin/lib__nc$p.so" ] || { echo "BUILD FAILED: netCDF-C plugin lib__nc$p.so not installed: $(ls /usr/local/hdf5/lib/plugin)"; exit 1; }
     done
     finish
 }
@@ -219,7 +238,12 @@ b_proj-grids() {
     cat >> "$d/NOTICE.txt" <<'EOF'
 
 uk_os_OSTN15_NTv2_OSGBtoETRS.tif and uk_os_OSGM15_GB.tif: "Derived from work by Ordnance Survey. The 2-Clause BSD
-License". us_nga_egm96_15.tif: "Derived from work by NGA. Public Domain".
+License". The copyright notice Ordnance Survey requires with the BSD licence when the transformation is incorporated
+into other software ("OSTN15 NTv2 Transformation Data Format and User Guide", p. 3, in OS's OSTN15-NTv2.zip):
+
+    © Copyright and database rights Ordnance Survey Limited 2016. All rights reserved.
+
+us_nga_egm96_15.tif: "Derived from work by NGA. Public Domain".
 
 The 2-Clause BSD License
 

@@ -301,9 +301,13 @@ def test_gdals_own_libtiff_and_libgeotiff_are_in_the_licence_index(tmp_path):
     for d in ("gdal", "libtiff", "libgeotiff"):
         (lic / d).mkdir(parents=True)
         (lic / d / "LICENSE").write_text(f"{d} licence\n")
-    bew.add_gdal_internal_note(lic, {"libtiff": "4.7.2", "libgeotiff": "1.7.4", "gdal": "3.13.3"})
+    # the versions are MANIFEST.json's gdal_internal (what libgdal compiled in), which must name exactly both
+    bew.add_gdal_internal_note(lic, {"libtiff": "4.7.2", "libgeotiff": "1.7.4"})
     note = (lic / "gdal" / "INTERNAL-COPIES.txt").read_text()
     assert "libtiff 4.7.2" in note and "libgeotiff 1.7.4" in note and "../libgeotiff/" in note
+    for internal in (None, {"libtiff": "4.7.2"}, {"libtiff": "4.7.2", "libgeotiff": "1.7.4", "zlib": "1.3.2"}):
+        with pytest.raises(SystemExit):  # a gdal-native from before the key, or a key that drifted
+            bew.add_gdal_internal_note(lic, internal)
     (lic / "libgeotiff" / "LICENSE").unlink()  # the internal copy's notice must not go missing silently
     with pytest.raises(SystemExit):
         bew.add_gdal_internal_note(lic, {"libtiff": "4.7.2", "libgeotiff": "1.7.4"})

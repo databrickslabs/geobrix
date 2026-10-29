@@ -13,6 +13,7 @@
 #  13 the PROJ grids: files, licences, OSTN15 against Ordnance Survey's test points (and not the Helmert fallback),
 #     OSGM15 and EGM96 heights both ways, PROJ_NETWORK off      14 projsync      15 curl with HTTP/2 (nghttp2)
 #  16 the HDF5 filter plugins     17 split debug symbols: none in the tree, a debug file per build-id, one address symbolized
+#  18 symbol isolation: the system zlib and expat in a process's global scope interpose on nothing of the payload's
 set -uo pipefail
 
 R="$(cd "${1:-/gdal-native}" && pwd)"
@@ -668,5 +669,45 @@ addr="$(readelf --dyn-syms -W "$R/lib/$LIBGDAL" | awk '$8 == "GDALOpenEx" && !a 
 sym="$(addr2line -f -C -e "$WORK/dbg/.build-id/${gid:0:2}/${gid:2}.debug" "0x$addr" | tr '\n' ' ')"
 case "$sym" in GDALOpenEx*gcore/*:[0-9]*) ;; *) fail "addr2line of GDALOpenEx (0x$addr) with libgdal's debug file gives '$sym'" ;; esac
 ok "symbolized: libgdal 0x$addr -> $sym (debug file .build-id/${gid:0:2}/${gid:2}.debug, $(stat -c %s "$WORK/dbg/.build-id/${gid:0:2}/${gid:2}.debug") bytes)"
+
+# --- 18 symbol isolation: a process may already hold the SYSTEM zlib and expat in its global scope (Ubuntu's
+# /usr/bin/python3.12, the Databricks runtimes' Python, NEEDs libz.so.1 and libexpat.so.1), and a global symbol of the same
+# name interposes on the payload's (hashed SONAMEs stop SONAME reuse, not that). The payload's zlib exports z_-prefixed
+# names only (--zprefix; every consumer was compiled against that zconf.h) and expat is static and local to libgdal. With
+# the system copies loaded RTLD_GLOBAL first, no payload file binds a symbol to them, KML (expat) and DEFLATE (zlib) still
+# work, and curl reports the pinned zlib. (Before this build: 94 such bindings, curl reported the system's zlib/1.2.11.)
+LIBZ="$(sonm libz.so.)"
+nm -D --defined-only "$R/lib/$LIBZ" | awk '{s = $3; sub(/@.*/, "", s)} s == "inflate" || s == "deflate" {bad = 1} s == "z_inflate" {ok = 1} END {exit !(ok && !bad)}' \
+    || fail "lib/$LIBZ does not export z_-prefixed zlib symbols only"
+[ -z "$(sonm libexpat.so.)" ] || fail "libexpat still ships as a shared library"
+n_xml="$(readelf --dyn-syms -W "$R/lib/$LIBGDAL" | awk '$8 ~ /^XML_/ {n++} END {print n + 0}')"
+[ "$n_xml" = 0 ] || fail "libgdal exports or imports $n_xml expat XML_* symbols (expat is not local to it)"
+cat > "$WORK/interpose.py" <<'EOF'
+import ctypes, os, sys, tempfile
+for name in ("libz.so.1", "libexpat.so.1"):  # the system copies first, in the global scope
+    ctypes.CDLL(name, mode=ctypes.RTLD_GLOBAL)
+from osgeo import gdal, ogr
+gdal.UseExceptions(); ogr.UseExceptions()
+d = tempfile.mkdtemp()
+ds = ogr.GetDriverByName("KML").CreateDataSource(d + "/t.kml")
+lyr = ds.CreateLayer("t", None, ogr.wkbPoint)
+for i in range(3):
+    f = ogr.Feature(lyr.GetLayerDefn()); f.SetGeometry(ogr.CreateGeometryFromWkt(f"POINT ({i} {i})")); lyr.CreateFeature(f)
+ds = None
+back = ogr.Open(d + "/t.kml")  # keep the dataset while its layer is used
+assert back.GetLayer(0).GetFeatureCount() == 3
+src = gdal.GetDriverByName("MEM").Create("", 64, 64, 1); src.GetRasterBand(1).Fill(7)
+gdal.GetDriverByName("GTiff").CreateCopy(d + "/z.tif", src, options=["COMPRESS=DEFLATE"]).Close()
+z = gdal.Open(d + "/z.tif")
+assert z.GetRasterBand(1).Checksum() == src.GetRasterBand(1).Checksum()
+curl = ctypes.CDLL(os.path.join(os.environ["ROOT"], "lib", os.environ["LIBCURL"])); curl.curl_version.restype = ctypes.c_char_p
+print(curl.curl_version().decode())
+EOF
+LIBCURL="$LIBCURL" ROOT="$R" LD_DEBUG=bindings LD_DEBUG_OUTPUT="$WORK/bind" pyo "$WORK/interpose.py" > "$WORK/interpose.txt" 2>&1 \
+    || fail "KML and DEFLATE beside the system zlib and expat: $(tail -c 500 "$WORK/interpose.txt")"
+n_sys="$(cat "$WORK"/bind.* 2> /dev/null | grep "binding file $R/" | grep -cE " to /(usr/)?lib[^ ]*/lib(z|expat)\.so")"
+[ "$n_sys" = 0 ] || fail "$n_sys symbols of payload files bind to the system zlib or expat, e.g. $(cat "$WORK"/bind.* | grep "binding file $R/" | grep -m1 -E " to /(usr/)?lib[^ ]*/lib(z|expat)\.so")"
+grep -q "zlib/${ZLIB_VERSION}" "$WORK/interpose.txt" || fail "curl does not run on the payload's zlib ${ZLIB_VERSION}: $(cat "$WORK/interpose.txt")"
+ok "symbol isolation: zlib exports z_* only, expat is local to libgdal; with the system libz.so.1 and libexpat.so.1 loaded first, 0 payload symbols bind to them, KML and DEFLATE work, $(grep -o 'zlib/[0-9.]*' "$WORK/interpose.txt")"
 
 echo "VERIFY OK arch=$ARCH gdal=$GDAL_VERSION raster_drivers=$nr vector_drivers=$nv"

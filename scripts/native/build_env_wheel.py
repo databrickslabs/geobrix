@@ -133,7 +133,8 @@ RUST_LICENCE_OVERRIDES = REPO / "scripts" / "native" / "rust-licenses"
 # The Rust standard library is compiled into every kernel: its MIT / Apache-2.0 notice (the pinned toolchain's own
 # licence texts) goes in each kernel's index as rust-std-<toolchain version>/.
 RUST_STD_NOTICE = RUST_LICENCE_OVERRIDES / "rust-std"
-# Per architecture beside lib/: netCDF-C's HDF5 filter plugins (HDF5_PLUGIN_PATH) and PROJ's grid downloader
+# Per architecture beside lib/: netCDF-C's HDF5 filter plugins (registered with the payload's netCDF-C at run time,
+# never through HDF5_PLUGIN_PATH) and PROJ's grid downloader
 NATIVE_EXTRAS = ("hdf5-plugins", "bin/projsync")
 FILTER_PLUGINS = ("lib__nch5zstd.so", "lib__nch5blosc.so", "lib__nch5bzip2.so")
 # What the vendored trees (_vendor/<arch>, _vendor/common) never import at run time, and so do not ship: Cython
@@ -609,7 +610,7 @@ def add_payload(args, tree, natives, bindings, version):
         shutil.copy2(gdal_licence, nat / "licenses" / name / "LICENSE.TXT")
     add_gdal_internal_note(
         nat / "licenses",
-        json.loads((natives[ARCHES[0]] / "MANIFEST.json").read_text()).get("versions", {}),
+        json.loads((natives[ARCHES[0]] / "MANIFEST.json").read_text()).get("gdal_internal"),
     )
 
     for d in args.extra_payload:
@@ -652,10 +653,16 @@ def add_payload(args, tree, natives, bindings, version):
     shutil.copy2(args.jar, jar)
 
 
-def add_gdal_internal_note(licenses, versions):
+def add_gdal_internal_note(licenses, internal):
     """licenses/gdal/INTERNAL-COPIES.txt: the libraries compiled into libgdal from GDAL's own source tree, each with
-    the directory of its licence, which must hold a file (so the internal copy's notice cannot disappear with the
-    external library)."""
+    its version and the directory of its licence, which must hold a file (so the internal copy's notice cannot
+    disappear with the external library). `internal` is MANIFEST.json's `gdal_internal` ({library: version}), which
+    must name exactly GDAL_INTERNAL."""
+    if not isinstance(internal, dict) or set(internal) != set(GDAL_INTERNAL):
+        fail(
+            f"MANIFEST.json gdal_internal is {internal!r}, not {{{', '.join(GDAL_INTERNAL)}}}: a gdal-native from before"
+            " the symbol-isolation build (rebuild it with gbx:build:native --target stage-native)"
+        )
     lines = [
         "GDAL in this payload is built with its own copies of these libraries, compiled into libgdal (their symbols",
         "renamed inside it); each one's licence is the directory named:",
@@ -663,7 +670,7 @@ def add_gdal_internal_note(licenses, versions):
     for dep in GDAL_INTERNAL:
         if not any(p.is_file() for p in (licenses / dep).glob("*")):
             fail(f"GDAL's internal {dep} has no licence in {licenses / dep}")
-        lines.append(f"  {dep} {versions.get(dep, '?')}: ../{dep}/")
+        lines.append(f"  {dep} {internal[dep]}: ../{dep}/")
     (licenses / "gdal" / "INTERNAL-COPIES.txt").write_text("\n".join(lines) + "\n")
 
 
@@ -983,6 +990,14 @@ def verify_payload(zf, version, epoch):
             d = LICENCE_DIRS.get(dep, dep)
             if not any(n.startswith(f"{PKG}/_native/licenses/{d}/") for n in names):
                 fail(f"{dep} ({manifest['versions'][dep]}) has no licence in _native/licenses/{d}/")
+        # and one per library compiled into libgdal from GDAL's own tree (gdal_internal), named in INTERNAL-COPIES.txt
+        note_name = f"{PKG}/_native/licenses/gdal/INTERNAL-COPIES.txt"
+        note = zf.read(note_name).decode() if note_name in names else ""
+        for dep, ver in manifest.get("gdal_internal", {}).items():
+            if not any(n.startswith(f"{PKG}/_native/licenses/{dep}/") for n in names):
+                fail(f"GDAL's internal {dep} ({ver}) has no licence in _native/licenses/{dep}/")
+            if f"  {dep} {ver}: ../{dep}/" not in note:
+                fail(f"GDAL's internal {dep} {ver} is not in licenses/gdal/INTERNAL-COPIES.txt")
     for need in (
         f"{PKG}/_vendor/common/osgeo_utils/gdal_calc.py",
         f"{PKG}/_native/licenses/osgeo/LICENSE.TXT",

@@ -20,6 +20,10 @@ export CPPFLAGS="-I$P/include"
 export CFLAGS="-O2 -g1 -fPIC"
 export CXXFLAGS="-O2 -g1 -fPIC"
 export LDFLAGS="-L$P/lib -Wl,-rpath,$P/lib -Wl,--build-id=sha1"
+# One fixed build time (2026-01-01T00:00:00Z) for everything that embeds one: OpenSSL's "built on" string, __DATE__ and
+# __TIME__ (GCC honours SOURCE_DATE_EPOCH) and CMake's string(TIMESTAMP). Then an unchanged input rebuilds to the same
+# bytes and keeps its hashed SONAME (libcrypto and libnetcdf changed on every rebuild before).
+export SOURCE_DATE_EPOCH=1767225600
 export LIBRARY_PATH="$P/lib"
 
 # check_unused <cmake log> <-DNAME=VALUE ...>: fail when cmake reports one of the given options as unused.

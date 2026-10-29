@@ -4,7 +4,8 @@
 #               Every library but the JNI has a hashed name (libgdal-<sha256[:8]>.so.39), so it shares no SONAME with a system one
 #   lib-dev/    symlinks for linking only (libgdal.so, libgdal.so.39 and libgdal-<hash>.so.39 -> ../lib/libgdal-<hash>.so.39); never packaged
 #   bin/        gdalinfo ogrinfo projinfo gdal projsync, and gdal-config geos-config nc-config made relocatable
-#   hdf5-plugins/  netCDF-C's HDF5 filter plugins (zstd, blosc, bzip2, szip, ...), loaded by path: HDF5_PLUGIN_PATH points here
+#   hdf5-plugins/  netCDF-C's HDF5 filter plugins (zstd, blosc, bzip2, szip, ...), from /usr/local/hdf5/lib/plugin (HDF5's default
+#               directory); at run time the env wheel registers this directory with the payload's own netCDF-C
 #   include/    the headers of GDAL, PROJ, GEOS and every library built for them
 #   share/      gdal, proj (with the curated grids: OSTN15, OSGM15, EGM96)
 #   java/       gdal-<GDAL_VERSION>.jar
@@ -73,7 +74,7 @@ for r in ("libgdal.so", "libproj.so", "libgeos_c.so", "libnetcdf.so", "libhdf5_h
         sys.exit(f"STAGE FAILED: no {r}.* in the prefix")
     roots.append(libs[matches[0]])
 roots += [os.path.join(site, f) for f in os.listdir(site) if f.endswith(".so")]
-plugins = os.path.join(prefix, "hdf5-plugins")
+plugins = "/usr/local/hdf5/lib/plugin"  # build-deps.sh b_netcdf-c
 roots += [os.path.join(plugins, f) for f in os.listdir(plugins) if f.endswith(".so")]
 keep, todo = {}, list(roots)
 while todo:
@@ -108,7 +109,7 @@ for b in gdalinfo ogrinfo projinfo gdal projsync gdal-config geos-config nc-conf
     [ -f "$P/bin/$b" ] || fail "no $P/bin/$b"
     cp "$P/bin/$b" "$OUT/bin/$b"
 done
-cp "$P"/hdf5-plugins/*.so "$OUT/hdf5-plugins/"
+cp /usr/local/hdf5/lib/plugin/*.so "$OUT/hdf5-plugins/"
 for p in zstd blosc bzip2; do [ -f "$OUT/hdf5-plugins/lib__nch5$p.so" ] || fail "no HDF5 filter plugin lib__nch5$p.so"; done
 cp -R "$P/include" "$OUT/include"
 cp -R "$P/share/licenses/." "$OUT/licenses/"
@@ -295,6 +296,8 @@ manifest = {
     "sonames": renamed["sonames"],
     "jni": renamed["jni"],
     "proj_grids": grids,
+    # compiled into libgdal from GDAL's own tree (GDAL_USE_TIFF_INTERNAL / GDAL_USE_GEOTIFF_INTERNAL), at the pinned versions
+    "gdal_internal": {"libtiff": p["LIBTIFF_VERSION"], "libgeotiff": p["LIBGEOTIFF_VERSION"]},
     "hdf5_plugins": sorted(os.listdir(os.path.join(out, "hdf5-plugins"))),
     "build_ids": build_ids,
     "drivers": {

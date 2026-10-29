@@ -41,6 +41,8 @@ opts+=(-DBUILD_JAVA_BINDINGS=ON -DSWIG_EXECUTABLE=/opt/swig/bin/swig
        -DBUILD_PYTHON_BINDINGS=ON -DPython_EXECUTABLE=/opt/python/cp312-cp312/bin/python -DGDAL_PYTHON_INSTALL_PREFIX="$P"
        -DGDAL_JAVA_GENERATE_JAVADOC=OFF -DBUILD_TESTING=OFF)
 
+# expat is static (build-deps.sh): keep every symbol of it local to libgdal, so none can be interposed or exported
+export LDFLAGS="$LDFLAGS -Wl,--exclude-libs,libexpat.a"
 cmake -G Ninja -S . -B _build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$P" -DCMAKE_INSTALL_LIBDIR=lib \
     "${opts[@]}" 2>&1 | tee _cmake.log
 check_unused _cmake.log "${opts[@]}"
@@ -48,6 +50,10 @@ if grep -q "Cannot build JXL as a TIFF codec" _cmake.log; then echo "BUILD FAILE
 cmake --build _build --parallel "$JOBS"
 cmake --install _build
 
+lg="$(ls "$P"/lib/libgdal.so.*.*.* | head -n 1)"
+if readelf -d "$lg" | grep -q 'NEEDED.*libexpat'; then echo "BUILD FAILED: libgdal NEEDs a shared libexpat"; exit 1; fi
+n_xml="$(readelf --dyn-syms -W "$lg" | awk '$8 ~ /^XML_/ {n++} END {print n + 0}')"
+[ "$n_xml" = 0 ] || { echo "BUILD FAILED: libgdal exports or imports $n_xml expat XML_* symbols"; exit 1; }
 echo "gdal $(($(date +%s) - T0))" >> "$P/share/gbx/build-seconds.txt"
 cd /
 rm -rf "${WORK:?}/gdal"

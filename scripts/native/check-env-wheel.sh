@@ -15,10 +15,10 @@
 #   7 selfcheck: _selfcheck.light() passes, every binding from the payload (GDAL's own osgeo and osgeo_utils too, and
 #     osgeo_utils.gdal_calc and osgeo.gdal_array import), one libgdal mapped (rasterio's and osgeo's, the same
 #     version), no foreign GDAL library mapped
-#   8 natives: _selfcheck.natives() passes: netCDF-4 zstd/blosc/bzip2 through netCDF4 and GDAL (HDF5_PLUGIN_PATH set by the
-#     activation), OSTN15 against Ordnance Survey's test points, OSGM15 and EGM96 heights, PROJ network off, GTiff JXL,
-#     REGEXP and muparser, libjpeg-turbo SIMD, curl HTTP/2 with GDAL_HTTP_VERSION unset, projsync (its CDN listing is
-#     skipped here: --network none)
+#   8 natives: _selfcheck.natives() passes: netCDF-4 zstd/blosc/bzip2 through netCDF4 and GDAL (the filter plugins
+#     registered with the payload's own netCDF-C, HDF5_PLUGIN_PATH unset here and in a child), OSTN15 against Ordnance
+#     Survey's test points, OSGM15 and EGM96 heights, PROJ network off, GTiff JXL, REGEXP and muparser, libjpeg-turbo's
+#     SIMD dispatcher, curl HTTP/2 with GDAL_HTTP_VERSION unset, projsync (its CDN listing is skipped here: --network none)
 set -uo pipefail
 ENV="$1"; VERSION="$2"; OTHER=$((11 - ENV)); ARCH="$(uname -m)"
 PY=/opt/python/cp312-cp312/bin/python PY311=/opt/python/cp311-cp311/bin/python

@@ -14,7 +14,9 @@ installed package, so ``import rasterio`` serves the payload's build (which must
 payload's GDAL) even before geobrix is imported, and even when the user has another rasterio,
 pyogrio, pyproj, shapely, netCDF4, osgeo, rio-tiler, morecantile or mapbox-vector-tile installed
 (``GBX_NATIVE_DISABLE=1`` turns the payload off). It sets ``GDAL_DATA``, ``PROJ_DATA`` and the
-GDAL and PROJ CA bundles where the user has not (the user's own CA wins), and ``ACTIVE = True``.
+GDAL and PROJ CA bundles where the user has not (the user's own CA wins), arranges for the
+payload's HDF5 filter plugins to be registered with the payload's own netCDF-C on the first import
+of a binding that reaches them (no environment variable is set), and ``ACTIVE = True``.
 """
 
 import os

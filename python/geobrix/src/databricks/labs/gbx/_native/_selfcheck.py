@@ -271,10 +271,18 @@ def _payload_lib(prefix):
 
 
 def _netcdf_filters():
-    """zstd, blosc and bzip2 netCDF-4 variables written by netCDF4 read back the same through netCDF4 and GDAL."""
+    """zstd, blosc and bzip2 netCDF-4 variables written by netCDF4 read back the same through netCDF4 and GDAL,
+    with the payload's filter plugins registered with its own netCDF-C/HDF5 and nothing put in the
+    environment (``HDF5_PLUGIN_PATH`` is unchanged here and in a child process)."""
+    import subprocess
+
     import netCDF4
     import numpy as np
     import rasterio
+
+    from databricks.labs.gbx import _native
+
+    env_before = os.environ.get("HDF5_PLUGIN_PATH")
 
     a = (np.arange(64 * 48, dtype=np.float32).reshape(64, 48) % 251) * 0.5
     out, d = {}, tempfile.mkdtemp(prefix="gbx-nc-filters-")
@@ -300,10 +308,27 @@ def _netcdf_filters():
             return False, {
                 "codec": codec,
                 "filters": used,
-                "plugin_path": os.environ.get("HDF5_PLUGIN_PATH"),
+                "registered": _native.hdf5_plugin_path(),
             }
         out[codec] = os.path.getsize(path)
-    return True, {"bytes": out, "plugin_path": os.environ.get("HDF5_PLUGIN_PATH")}
+    registered = _native.hdf5_plugin_path() or []
+    child = subprocess.run(
+        [sys.executable, "-c", "import os; print(os.environ.get('HDF5_PLUGIN_PATH'))"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    ).stdout.strip()
+    env_after = os.environ.get("HDF5_PLUGIN_PATH")
+    return (
+        _native.hdf5_plugin_dir() in registered
+        and env_after == env_before
+        and child == str(env_before)
+    ), {
+        "bytes": out,
+        "registered": registered,
+        "hdf5_plugin_path_env": env_after,
+        "child_env": child,
+    }
 
 
 def _grids():
@@ -411,13 +436,15 @@ def _libraries():
     """libjpeg-turbo has its SIMD dispatcher; libcurl speaks HTTP/2; GDAL_HTTP_VERSION is left to GDAL."""
     import ctypes
 
-    jpeg = open(_payload_lib("libjpeg.so."), "rb").read()
+    jpeg = open(
+        _payload_lib("libjpeg.so."), "rb"
+    ).read()  # the dispatcher is compiled in (verify-native times it)
     curl = ctypes.CDLL(_payload_lib("libcurl.so."))
     curl.curl_version.restype = ctypes.c_char_p
     version = curl.curl_version().decode()
     simd = b"JSIMD_FORCENONE" in jpeg
     return simd and "nghttp2/" in version and "GDAL_HTTP_VERSION" not in os.environ, {
-        "jpeg_simd": simd,
+        "jpeg_simd_compiled": simd,
         "curl": version,
         "gdal_http_version": os.environ.get("GDAL_HTTP_VERSION"),
     }

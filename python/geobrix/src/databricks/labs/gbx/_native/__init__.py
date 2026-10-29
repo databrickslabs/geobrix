@@ -6,8 +6,10 @@ Layout under the payload root (``databricks/labs/gbx/`` in an installed env whee
     _native/<arch>/lib/       GDAL, PROJ, GEOS, HDF5, netCDF and the libraries they need (hashed
                               SONAMEs, RUNPATH $ORIGIN) and libgdalalljni.so, the JNI
     _native/<arch>/rs/        the Rust kernels (_gbxrs.abi3.so), when the wheel carries them
-    _native/<arch>/hdf5-plugins/  netCDF-C's HDF5 filter plugins (zstd, blosc, bzip2, ...):
-                              ``HDF5_PLUGIN_PATH`` points here unless the user set it
+    _native/<arch>/hdf5-plugins/  netCDF-C's HDF5 filter plugins (zstd, blosc, bzip2, ...),
+                              registered with the payload's own netCDF-C/HDF5 on the first
+                              import of a binding that reaches them (``hdf5_plugin_path()``);
+                              ``HDF5_PLUGIN_PATH`` is never set
     _native/<arch>/bin/projsync   PROJ's grid downloader (``projsync_path()``)
     _native/<arch>/MANIFEST.json  the build record: versions, the original -> hashed SONAME map,
                               the build-id of every file (its debug symbols are a separate tarball)
@@ -162,6 +164,30 @@ def projsync_path(
     d = native_dir(root, machine)
     p = os.path.join(d, "bin", "projsync") if d else None
     return p if p and os.access(p, os.X_OK) else None
+
+
+def hdf5_plugin_dir(
+    root: Optional[str] = None, machine: Optional[str] = None
+) -> Optional[str]:
+    """``<root>/_native/<arch>/hdf5-plugins`` (netCDF-C's HDF5 filter plugins), or None.
+
+    The Python side registers it with the payload's own netCDF-C/HDF5 by itself. A JVM loading the
+    payload's GDAL (the heavyweight tier) cannot: give the JVM ``HDF5_PLUGIN_PATH`` set to this
+    directory (on a classic cluster, in its ``spark_env_vars``) to read zstd, blosc or bzip2 netCDF-4.
+    """
+    d = native_dir(root, machine)
+    p = os.path.join(d, "hdf5-plugins") if d else None
+    return p if p and os.path.isdir(p) else None
+
+
+def hdf5_plugin_path(
+    root: Optional[str] = None, machine: Optional[str] = None
+) -> Optional[List[str]]:
+    """The plugin path the payload's netCDF-C and HDF5 now search (the user's ``HDF5_PLUGIN_PATH``
+    directories first, then the payload's), registering the payload's directory if that has not
+    happened yet; None where the payload cannot load."""
+    a = arch(machine)
+    return _rules.register_hdf5_plugins(root or payload_root(), a) if a else None
 
 
 def jar_path(root: Optional[str] = None) -> Optional[str]:

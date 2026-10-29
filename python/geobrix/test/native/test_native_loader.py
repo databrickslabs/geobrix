@@ -68,6 +68,9 @@ def test_the_payload_is_used_only_where_it_can_load(tmp_path, monkeypatch):
     ]
     site = "/venv/lib/python3.12/site-packages"
     monkeypatch.setattr(sys, "path", [*stdlib, site, "/src"])
+    monkeypatch.setattr(
+        sys, "meta_path", list(sys.meta_path)
+    )  # the filter-plugin hook goes here
     for k in _ENV:
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setattr(_native, "_SYSTEM_CA", [str(bundle)])

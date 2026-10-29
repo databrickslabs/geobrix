@@ -21,6 +21,11 @@ bash scripts/commands/gbx-test-notebooks-serverless.sh [OPTIONS]
 - `--extra-deps CSV` – Additional pip requirements (comma-separated).
 - `--wheel VOLPATH` – Volume path to the geobrix wheel.
 - `--env-version VER` – Serverless environment version (default: `6`).
+- `--existing-cluster-id ID` – Run on an existing (warm) classic cluster instead of Serverless; the notebook's `%pip` cells are kept and install its deps (`--extras`/`--wheel`/`--env-version` do not apply).
+- `--new-cluster` – Run each notebook on a classic job cluster made for its run, which Databricks terminates when the run ends. The notebook's `%pip` cells are kept and install its deps (`--extras`/`--wheel`/`--env-version` do not apply); the task has `max_retries=0`, and the runner prints the job cluster's id. Exclusive with `--existing-cluster-id` and `--hardware-accelerator`.
+  - `--access-mode dedicated|standard` – `dedicated` (default) is single-user for the caller; `standard` is `USER_ISOLATION`.
+  - `--spark-version VER` (default `19.x-scala2.13`), `--node-type TYPE` (default `m5d.xlarge`, x86_64), `--num-workers N` (default `1`).
+  - Runs submitted at the same time need their own `--ws-dir`: a job reads its notebook when it starts, so two launches of one notebook into one folder can run each other's copy.
 - `--profile PROFILE` – Databricks config profile (default: `oauth-fe` or `DATABRICKS_CONFIG_PROFILE`).
 - `--poll-secs N` – Polling interval in seconds (default: `20`).
 - `--no-strip-pip` – Do NOT strip `%pip`/`%restart_python` cells from uploaded notebooks.
@@ -52,6 +57,12 @@ bash scripts/commands/gbx-test-notebooks-serverless.sh
 bash scripts/commands/gbx-test-notebooks-serverless.sh \
   --notebook 'examples/notebooks/helios/01. Vector Engine (MVT).ipynb' \
   --extras light_env6
+
+# Run a probe notebook on a DBR 19 standard-access job cluster (terminated with its run)
+bash scripts/commands/gbx-test-notebooks-serverless.sh \
+  --notebook examples/tests/probe_proj_data_access.ipynb \
+  --new-cluster --access-mode standard \
+  --ws-dir /Users/me@example.com/GeoBrix/probe-standard
 
 # Run nb04 with output harvesting, forcing compute with FORCE_RELOAD=True
 bash scripts/commands/gbx-test-notebooks-serverless.sh \

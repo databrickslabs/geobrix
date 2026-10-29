@@ -320,6 +320,10 @@ def fake_sdk(monkeypatch):
 
     compute = types.ModuleType("databricks.sdk.service.compute")
     compute.Environment = container("Environment")
+    compute.ClusterSpec = container("ClusterSpec")
+    compute.DataSecurityMode = SimpleNamespace(
+        SINGLE_USER="SINGLE_USER", USER_ISOLATION="USER_ISOLATION"
+    )
     jobs = types.ModuleType("databricks.sdk.service.jobs")
     for name in ("SubmitTask", "NotebookTask", "JobEnvironment", "Compute"):
         setattr(jobs, name, container(name))
@@ -361,6 +365,40 @@ def test_run_one_makes_one_run_when_the_first_submit_response_is_lost(
     assert ok is True
     assert len(w.jobs.runs) == 1
     assert len({c["idempotency_token"] for c in w.jobs.calls}) == 1
+
+
+@pytest.mark.parametrize(
+    "access_mode, security, single_user",
+    [("dedicated", "SINGLE_USER", "me@example.com"), ("standard", "USER_ISOLATION", None)],
+)
+def test_a_new_cluster_run_gets_a_job_cluster_in_its_access_mode(
+    fake_sdk, access_mode, security, single_user
+):
+    w = fake_workspace()
+
+    ok = rns.run_one(
+        w,
+        pathlib.Path("my nb.ipynb"),
+        "/ws",
+        deps=["geobrix.whl"],
+        env_version="6",
+        poll_secs=0,
+        strip_pip=False,
+        job_cluster=rns.JobCluster(access_mode=access_mode, user_name="me@example.com"),
+    )
+
+    assert ok is True
+    (call,) = w.jobs.calls
+    (task,) = call["tasks"]
+    spec = task.new_cluster
+    assert (spec.data_security_mode, spec.single_user_name) == (security, single_user)
+    assert (spec.spark_version, spec.node_type_id, spec.num_workers) == (
+        rns.DEFAULT_SPARK_VERSION,
+        rns.DEFAULT_NODE_TYPE,
+        1,
+    )
+    assert task.max_retries == 0
+    assert not hasattr(task, "existing_cluster_id") and "environments" not in call
 
 
 # ----------------------------------------------------- every launcher goes through it

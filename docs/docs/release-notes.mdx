@@ -417,10 +417,12 @@ formats.
   took about 290 ms to 370 ms a call instead of about 630 ms to 670 ms. Before a folder is listed,
   and in a folder of more than 1,000 files (GDAL's own `GDAL_READDIR_LIMIT_ON_OPEN`), sidecars are
   checked by name; finding that a folder is that large costs one listing per worker (about 2 s for
-  5,000 files and 14.5 s for 40,000 on Serverless). A sidecar added to a folder after a worker
-  listed it is not seen by that worker until the folder is listed again (a file missing from the
-  listing triggers that, at most every 10 seconds) or the worker restarts. See [Sidecar files and
-  folder listings](./api/performance#sidecar-files-and-folder-listings).
+  5,000 files and 14.5 s for 40,000 on Serverless), except for tiles read with `raster_gbx`, which
+  carry the reader's count of such a folder in their metadata (`path_folder_files`) and skip the
+  listing. A sidecar added to a folder after a worker listed it is not seen by that worker until
+  the folder is listed again (a file missing from the listing triggers that, at most every 10
+  seconds) or the worker restarts. See [Sidecar files and folder
+  listings](./api/performance#sidecar-files-and-folder-listings).
 - **Importing the lightweight tier sets `GDAL_DISABLE_READDIR_ON_OPEN=TRUE` for the whole Python
   process**, unless it is set already. Your own rasterio, GDAL or Fiona code in that process and
   the programs it starts (`gdalinfo`, `tippecanoe`) then check sidecars by name too, so a sidecar

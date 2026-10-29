@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -362,6 +363,87 @@ def test_a_linked_worktree_uses_the_container_that_mounts_it(tmp_path):
 
     assert res.returncode == 0, res.output
     assert [c[1] for c in sb.of("exec")] == ["gbx-dev-wt"]
+
+
+# --- one directory, two spellings: Docker reports a mount as given (macOS: /tmp/<x>), the scripts' root
+# is the physical path git and pwd give (/private/tmp/<x>, since /tmp is a symlink there) -----------------
+
+
+def _spelled_checkout(sb: Sandbox, tmp_path: Path, kind: str):
+    """(the root the scripts run from, the container's /root/geobrix mount: the same directory spelled another
+    way). `main-symlink`: a plain checkout reached through a symlinked parent; `linked-symlink`: a linked
+    worktree likewise; `linked-macos-tmp`: a linked worktree under macOS's /tmp, mounted as /tmp/<x>.
+    """
+    if kind == "linked-macos-tmp":
+        if not Path("/tmp").is_symlink():
+            pytest.skip(
+                "PRECONDITION MISSING: /tmp is not a symlink on this host (macOS only)"
+            )
+        base = Path(tempfile.mkdtemp(dir="/tmp")).resolve()  # /private/tmp/tmpXXXX
+        wt = linked_checkout(sb, base, "gbx-dev-wt", mount=f"/tmp/{base.name}/wt")
+        return wt, f"/tmp/{base.name}/wt", base
+    alias = tmp_path / "alias"
+    alias.symlink_to(tmp_path)
+    if kind == "main-symlink":
+        sb.image(f"{TAG}-arm64", "arm64")
+        sb.container("arm64", mount=str(alias / "repo"))
+        return sb.repo, str(alias / "repo"), None
+    wt = linked_checkout(sb, tmp_path, "gbx-dev-wt", mount=str(alias / "wt"))
+    return wt, str(alias / "wt"), None
+
+
+@pytest.mark.parametrize("kind", ["main-symlink", "linked-symlink", "linked-macos-tmp"])
+def test_one_directory_spelled_two_ways_keeps_its_container(tmp_path, kind):
+    sb = Sandbox(tmp_path, "arm64")
+    root, mount, cleanup = _spelled_checkout(sb, tmp_path, kind)
+    try:
+        assert mount != str(root) and os.path.samefile(
+            mount, root
+        )  # one directory, two strings
+
+        res = sb.run(root / "scripts" / "commands" / "gbx-docker-start.sh")
+
+        assert res.returncode == 0, res.output
+        assert "different worktree" not in res.output
+        assert [c[0] for c in sb.calls if c[0] in ("stop", "rm", "run")] == []
+        assert sb.final_state()["container"]["running"] is True
+        # and the commands use it
+        res = sb.run(root / "scripts" / "commands" / "gbx-docker-exec.sh", "echo hi")
+        assert res.returncode == 0, res.output
+    finally:
+        if cleanup:
+            shutil.rmtree(cleanup, ignore_errors=True)
+
+
+@pytest.mark.parametrize("kind", ["main", "linked"])
+def test_another_directory_of_the_same_name_is_still_another_worktree(tmp_path, kind):
+    """A mount that exists, ends in the same name, and is another directory: the main checkout recreates its
+    container on its own mount, as before; a linked worktree refuses and leaves it alone, as before.
+    """
+    sb = Sandbox(tmp_path, "arm64")
+    if kind == "main":
+        other = tmp_path / "elsewhere" / "repo"
+        other.mkdir(parents=True)
+        sb.image(f"{TAG}-arm64", "arm64")
+        sb.container("arm64", mount=str(other))
+        root = sb.repo
+    else:
+        other = tmp_path / "elsewhere" / "wt"
+        other.mkdir(parents=True)
+        root = linked_checkout(sb, tmp_path, "gbx-dev-wt", mount=str(other))
+
+    res = sb.run(root / "scripts" / "commands" / "gbx-docker-start.sh")
+
+    if kind == "main":
+        assert res.returncode == 0, res.output
+        assert "different worktree" in res.output
+        assert [c[0] for c in sb.calls if c[0] in ("stop", "rm")] == ["stop", "rm"]
+        assert sb.of("run")
+    else:
+        assert res.returncode == 1, res.output
+        assert str(other) in res.output and "left untouched" in res.output
+        assert [c[0] for c in sb.calls if c[0] in ("stop", "rm", "run", "start")] == []
+        assert sb.final_state()["container"]["running"] is True
 
 
 # --- a container whose architecture cannot be used is left alone ---------------------------------------

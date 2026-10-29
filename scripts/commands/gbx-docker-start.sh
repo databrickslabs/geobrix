@@ -176,7 +176,9 @@ fi
 
 if docker ps -a --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
     EXISTING_MOUNT="$(existing_mount_source)"
-    if [ -n "$EXISTING_MOUNT" ] && [ "$EXISTING_MOUNT" != "$PROJECT_ROOT" ]; then
+    # Compared as directories, not strings: Docker gives a mount as it was given (/tmp/<x> on macOS), this
+    # script's root is the physical path (/private/tmp/<x>), and the two are one worktree (gbx_same_dir).
+    if [ -n "$EXISTING_MOUNT" ] && ! gbx_same_dir "$EXISTING_MOUNT" "$PROJECT_ROOT"; then
         echo ""
         echo -e "${YELLOW}⚠️  Existing '$GBX_DEV_CONTAINER' container is mounted to a different worktree:${NC}"
         echo -e "   existing: ${YELLOW}$EXISTING_MOUNT${NC}"

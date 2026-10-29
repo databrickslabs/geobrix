@@ -68,6 +68,16 @@ gbx_load_local_env() {
 
 gbx_require_local_env() { [ -z "${GBX_LOCAL_ENV_ERROR:-}" ] || { echo "ERROR: $GBX_LOCAL_ENV_ERROR" >&2; exit 1; }; }
 
+# gbx_canonical_dir <path>: the physical path of a directory (symlinks resolved), or <path> as given when it is
+# not a directory here (and "" for ""). Docker reports a bind mount's source as it was given (/tmp/<x> on macOS)
+# while git and `pwd -P` give the physical path (/private/tmp/<x>: /tmp is a symlink there), so a mount source and
+# a checkout root are compared through this: two spellings of one directory are equal, other directories differ.
+gbx_canonical_dir() {
+    [ -n "$1" ] || return 0
+    (cd "$1" 2>/dev/null && pwd -P) || printf '%s\n' "$1"
+}
+gbx_same_dir() { [ "$(gbx_canonical_dir "$1")" = "$(gbx_canonical_dir "$2")" ]; }
+
 # The host directory a container binds at /root/geobrix ("" when it has none).
 gbx_container_mount_source() {
     docker inspect --format '{{ range .Mounts }}{{ if eq .Destination "/root/geobrix" }}{{ .Source }}{{ end }}{{ end }}' "$1" 2>/dev/null
@@ -81,7 +91,7 @@ gbx_require_owned_container() {
     [ "${GBX_LINKED_WORKTREE:-false}" = true ] || return 0
     docker ps -a --format '{{.Names}}' 2>/dev/null | grep -Fxq -- "$GBX_DEV_CONTAINER" || return 0
     src="$(gbx_container_mount_source "$GBX_DEV_CONTAINER")"
-    if [ -n "$src" ] && { [ "$src" = "$root" ] || [ "$(cd "$src" 2>/dev/null && pwd -P)" = "$(cd "$root" && pwd -P)" ]; }; then
+    if [ -n "$src" ] && gbx_same_dir "$src" "$root"; then
         return 0
     fi
     echo "ERROR: the container $GBX_DEV_CONTAINER mounts ${src:-nothing} at /root/geobrix, not this worktree ($root); it was left untouched." >&2

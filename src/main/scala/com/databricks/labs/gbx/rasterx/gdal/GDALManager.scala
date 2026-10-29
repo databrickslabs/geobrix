@@ -206,6 +206,18 @@ object GDALManager extends Logging {
         }
     }
 
+    /** Run OGR's registration again (a caller that forces it), under the same lock and driver policy as [[initOgr]]:
+      * the skip list is applied first, so a forced registration never brings a refused driver back. */
+    def reregisterOgr(): Unit = {
+        ensureJniLoaded(None)
+        lock.synchronized {
+            decidePolicy(None)
+            applyDriverPolicy()
+            org.gdal.ogr.ogr.RegisterAll()
+            ogrEnabled = true
+        }
+    }
+
     /**
       * Returns the GTiff driver via a guarded lookup (REQUIRED for thread-safety).
       *

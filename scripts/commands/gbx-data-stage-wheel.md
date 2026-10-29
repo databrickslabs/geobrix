@@ -7,8 +7,12 @@ Builds the JAR first (via stage-jar: `mvn clean package` + JAR upload) unless **
 ## Usage
 
 ```bash
-bash scripts/commands/gbx-data-stage-wheel.sh
+bash scripts/commands/gbx-data-stage-wheel.sh [--profile NAME] [--log PATH] [--no-wait]
 ```
+
+`--profile NAME` picks the Databricks config profile for the uploads. Without it the profile is
+`DATABRICKS_CONFIG_PROFILE` from the environment, else from `examples/tests/databricks_cluster_config.env`.
+An option the command does not know is an error (exit 2), never ignored.
 
 ## Config
 

@@ -914,6 +914,30 @@ def test_a_local_only_wheel_build_needs_no_sdk_so_it_stays_on_python3(sandbox):
     assert not uv_log.exists() and not venv_calls.exists()
 
 
+def test_stage_wheel_profile_reaches_the_launcher_and_an_unknown_option_is_refused(sandbox):
+    # --profile was dropped by a catch-all `*) shift`, so staging used the config file's profile
+    # while the caller believed it chose one. It must set the launcher's profile, and anything the
+    # command does not know must fail instead of being ignored.
+    python3 = sandbox.bin / "python3"
+    seen = sandbox.root / "profile.log"
+    python3.write_text(
+        '#!/bin/sh\necho "${DATABRICKS_CONFIG_PROFILE:-unset}" >> "%s"\nexit 0\n' % seen
+    )
+    python3.chmod(0o755)
+    env = dict(GBX_BUNDLE_SKIP_JAR="1", GBX_BUNDLE_SKIP_WHEEL_UPLOAD="1")
+
+    res = sandbox.run("gbx-data-stage-wheel.sh", "--profile", "oauth-fe", **env)
+
+    assert res.returncode == 0, res.output
+    assert seen.read_text().split() == ["oauth-fe"]
+
+    seen.unlink()
+    res = sandbox.run("gbx-data-stage-wheel.sh", "--not-an-option", **env)
+
+    assert res.returncode == 2 and "Unknown option: --not-an-option" in res.output, res.output
+    assert not seen.exists()  # the launcher never ran
+
+
 def test_a_launcher_runs_on_the_venv_itself_when_it_has_the_sdk(sandbox):
     python, calls = _venv_python(sandbox, sdk=True)
     uv_log = _fake_uv(sandbox)

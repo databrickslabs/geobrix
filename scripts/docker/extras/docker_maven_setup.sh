@@ -32,7 +32,6 @@ if [ -f "$CONF/settings.xml" ] && [ ! -f "$CONF/settings.xml.BAK" ]; then
     mv "$CONF/settings.xml" "$CONF/settings.xml.BAK"
 fi
 cp "$SETTINGS" "$CONF/settings.xml"
-echo "    Active Maven profile(s):"
 # Fully qualified, version-pinned plugin coordinates: the short `help:` prefix does not resolve
 # in geobrix-dev. Prefix lookup reads each repository's plugin-group maven-metadata.xml, and the
 # db-maven-proxy mirror answers that request with an empty 105-byte stub, so Maven reports
@@ -45,6 +44,7 @@ cd "$ROOT"
 # project-local repository, sha256-checked against their pin, with no Maven plugin, before Maven resolves anything.
 echo "    GDAL Java classes:"
 python3 "$ROOT/scripts/native/java_jar.py" install --repo "$ROOT/scripts/docker/m2" || exit 1
+echo "    Active Maven profile(s):"
 if ! profiles_out="$(mvn -B "org.apache.maven.plugins:maven-help-plugin:${HELP_PLUGIN}:active-profiles" 2>&1)"; then
     echo "$profiles_out"
     exit 1

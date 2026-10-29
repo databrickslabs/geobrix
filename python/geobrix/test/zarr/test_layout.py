@@ -113,3 +113,20 @@ def test_rr1_m5_a_shard_holds_at_most_4096_inner_chunks():
         {"name": "crc32c"},
     )
     assert index_nbytes(per_shard, codecs) == 65540  # about 64 KiB, not 1.5 MB
+    # an explicit shards= is held to the same cap, with a Fix
+    from databricks.labs.gbx.zarr import _write
+
+    spec = _write._NewArray(
+        "t2m", DIMS, (48, 10, 12), np.dtype("float32"), {}, float("nan"), False
+    )
+    kw = dict(
+        fmt=3,
+        chunks={"time": 12, "latitude": 5, "longitude": 6},
+        codecs=None,
+        separator="/",
+    )
+    meta = _write._new_meta(spec, shards={"time": 12 * 1024}, **kw)  # 1024 x 2 x 2
+    assert meta.shard is not None
+    with pytest.raises(ValueError, match="4100 inner chunks") as e:
+        _write._new_meta(spec, shards={"time": 12 * 1025}, **kw)
+    assert "Fix:" in str(e.value) and "4096" in str(e.value)

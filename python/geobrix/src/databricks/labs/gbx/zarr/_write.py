@@ -78,7 +78,11 @@ from databricks.labs.gbx.zarr import _write_tiles
 from databricks.labs.gbx.zarr._access import bounded_closure, resolve_access
 from databricks.labs.gbx.zarr._filemode import FileLayout, require_geobrix_files
 from databricks.labs.gbx.zarr._filemode import resolve as resolve_file_mode
-from databricks.labs.gbx.zarr._layout import chunk_layout, coordinate_chunks
+from databricks.labs.gbx.zarr._layout import (
+    check_shard,
+    chunk_layout,
+    coordinate_chunks,
+)
 from databricks.labs.gbx.zarr._meta import (
     ArrayMeta,
     cf_encode,
@@ -444,6 +448,7 @@ def _explicit_shards(
                     f"chunk size {inner[i]}. Fix: pass a multiple of the chunk size."
                 )
             out[i] = size
+    check_shard(inner, out)
     return tuple(out)
 
 

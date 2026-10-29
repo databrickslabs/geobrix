@@ -500,6 +500,11 @@ optimize after many small appends, especially for reads from a Volume; it change
   cannot decode is left out of reads and registered without being readable, and a complex array cannot
   be read as a table (a table has no column for complex numbers; read it as blocks).
 - **Tiles.** `output="tiles"` needs the coordinates to form a regular grid.
+- **Inner chunks per shard.** A shard that `gbx_zarr_write` creates holds at most 4,096 inner chunks.
+  Every read of a shard fetches or builds its index, 16 bytes per inner chunk, so a shard of many tiny
+  chunks makes every read slow: reading one chunk from a shard of 93,312 chunks took about 0.3 s, against
+  13 ms at 4,096. The computed layout stays within the limit, and a `shards=` that goes beyond it raises
+  `ValueError` with a `Fix:`. A registered store's shards are read as they are.
 - **Codecs.** The codecs that zarr-python, numcodecs and zarrs can decode. Writes use `zstd` and `crc32c`
   unless you pass `codecs`. A Zarr v3 array that has any codec beside `sharding_indexed` in its own codec
   list (a transpose before it, a compressor after it) is not supported: registering the store records it as

@@ -251,6 +251,7 @@ nothing.
 | `ValueError` | The DataFrame lacks the blocks columns | `pass the output of gbx_zarr_read(output='blocks'), or a DataFrame in BLOCKS_SCHEMA` |
 | `ValueError` | `shards` is not `None`, `False` or a dict | `pass shards={'time': 48} or None` |
 | `ValueError` | A shard size is not a multiple of the chunk size | `pass a multiple of the chunk size` |
+| `ValueError` | A shard of the given `shards` holds more than 4,096 inner chunks | `pass smaller shards= sizes, or larger chunks=.` |
 | `ValueError` | An `append` finds no CF time dimension | `pass append_dim='<dimension>'` |
 | `ValueError` | The first label to append is not after the store's last | `use mode="update" to rewrite existing steps or fill a gap an earlier append left` |
 | `ZarrError` | The target table of an `append`, `update` or `overwrite` does not exist | `create the store with mode='create' (or register an existing one)` |

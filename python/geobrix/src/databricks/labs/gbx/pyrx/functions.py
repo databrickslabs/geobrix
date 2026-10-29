@@ -2998,10 +2998,12 @@ def _buildoverviews_v2_udf(
 
 @f.udf(ArrayType(DoubleType()))
 def _sample_udf(tile, geom_wkb, crs=None):
-    # PIXEL accessor: needs the window pixels, so use the virtual-aware
-    # _tile_is_empty guard (a virtual tile has raster None but a path -> NOT
-    # empty) and open via ot._open below. A bytes-only guard would drop a
-    # virtual input before ever materialising its window.
+    # PIXEL accessor: needs pixels, so use the virtual-aware _tile_is_empty guard
+    # (a virtual tile has raster None but a path -> NOT empty). A bytes-only guard
+    # would drop a virtual input before ever reading it. ot.open_tile_points reads
+    # only the pixel at the point from a virtual tile's source (opened once per
+    # task), not its whole window: decoding and re-encoding the window per call
+    # cost about a second a point on an hourly global GeoTIFF on Databricks.
     if _tile_is_empty(tile) or geom_wkb is None:
         return None
     from databricks.labs.gbx._geom import parse_geom
@@ -3014,7 +3016,7 @@ def _sample_udf(tile, geom_wkb, crs=None):
     geom = parse_geom(geom_wkb)
     if geom is None:
         return None
-    with ot._open(tile) as ds:
+    with ot.open_tile_points(tile) as ds:
         return ops_core.sample(ds, geom, geom_crs=crs)
 
 

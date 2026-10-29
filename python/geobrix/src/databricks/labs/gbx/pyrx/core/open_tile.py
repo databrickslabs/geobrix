@@ -16,6 +16,7 @@ after the caller exits. This avoids the "dataset closed" trap of yielding out of
 a nested ``with`` that has already closed.
 """
 
+import atexit
 import os
 import shutil
 from contextlib import ExitStack, contextmanager
@@ -26,6 +27,7 @@ import rasterio
 import rasterio.windows
 from rasterio.coords import BoundingBox
 from rasterio.io import DatasetReader, MemoryFile
+from rasterio.transform import TransformMethodsMixin
 from rasterio.vrt import WarpedVRT
 from rasterio.windows import Window
 
@@ -696,6 +698,24 @@ def _is_full_extent(window, src) -> bool:
     return c == 0 and r == 0 and w == src.width and h == src.height
 
 
+def _header_pending(metadata):
+    """``(bands|None, pending_crs|None, pending_nodata|None)``: what a view of a source
+    presents for the tile's pending instructions (see :class:`_WindowHeaderView`).
+
+    ``pending_crs`` is the resolved CRS a pending ``rst_setsrid`` relabels the source to
+    (``pending_crs`` supersedes ``pending_srid``). ``pending_nodata`` is the raw pending
+    value: the view applies the same ensure/preserve and dtype-fit rule as
+    ``_window_dataset_bytes``, so a view and the window's pixels agree on NoData.
+    """
+    bands, nodata, srid, crs_str = _parse_pending(metadata)
+    pending_crs = None
+    if crs_str is not None or srid is not None:
+        from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+        pending_crs = resolve_crs(crs_str if crs_str is not None else srid)
+    return bands, pending_crs, nodata
+
+
 @contextmanager
 def open_header(tile, file_ref=None) -> Iterator[DatasetReader]:
     """Context manager yielding an open dataset for **header/metadata access only**.
@@ -745,19 +765,8 @@ def open_header(tile, file_ref=None) -> Iterator[DatasetReader]:
             src = stack.enter_context(rasterio.open(local_path))
 
         # Parse pending instructions to reflect band-select / setsrid / nodata in header.
-        bands, raw_nodata, srid, crs_str = _parse_pending(vt.metadata)
+        bands, pending_crs, pending_nodata = _header_pending(vt.metadata)
         pending_count = len(bands) if bands else None
-        # pending_crs: pending_crs (string) supersedes pending_srid.
-        pending_crs = None
-        if crs_str is not None or srid is not None:
-            from databricks.labs.gbx.pyrx.core.crs import resolve_crs
-
-            pending_crs = resolve_crs(crs_str if crs_str is not None else srid)
-
-        # pending_nodata is passed to _WindowHeaderView, which applies the same
-        # ensure/preserve+dtype-fit logic as _window_dataset_bytes so header and
-        # pixel views agree on nodata.
-        pending_nodata = raw_nodata  # may be None
 
         any_pending = (
             pending_count is not None
@@ -792,6 +801,182 @@ def open_header(tile, file_ref=None) -> Iterator[DatasetReader]:
                 pending_crs=pending_crs,
                 pending_nodata=pending_nodata,
             )
+
+
+# ---------------------------------------------------------------------------
+# Point reads: the pixels of a virtual tile at a few points (rst_sample)
+# ---------------------------------------------------------------------------
+
+
+def _task_attempt_id():
+    """The attempt id of the Spark task this code runs in, or None outside a task."""
+    try:
+        from pyspark import TaskContext
+
+        ctx = TaskContext.get()
+    except Exception:  # noqa: BLE001 - no pyspark, or not in a Spark task
+        return None
+    return None if ctx is None else ctx.taskAttemptId()
+
+
+class _TaskSources:
+    """The open sources of virtual tiles, shared by the point reads of one Spark task.
+
+    A scalar UDF is called once a row, so ``rst_sample`` over N points of one file opens
+    the file N times unless something outlives the call. Within one task attempt the opened
+    sources are held in an ``OpenResourceLRU`` (``ds.file_gbx``: the per-partition LRU of
+    the grouped ops, with its opener, which probes a FUSE path and stages it when direct
+    reads fail, and its closer, which removes a staged copy), keyed by path. A new task
+    attempt closes the last one's sources first, so nothing is reused across tasks, where a
+    file may have been rewritten. Outside a task (a driver call) each read opens the source
+    and closes it.
+    """
+
+    def __init__(self):
+        self._task = None
+        self._lru = None
+
+    @contextmanager
+    def source(self, path: str):
+        """Yield the open source at *path*: from the task's LRU, or opened for this call."""
+        from databricks.labs.gbx.ds.file_gbx import (
+            OpenResourceLRU,
+            _lru_sizing,
+            _OpenerContext,
+        )
+
+        task = _task_attempt_id()
+        if task != self._task:
+            self.reset()
+        if task is None:
+            opener = _OpenerContext()
+            src = opener.open(path)
+            try:
+                yield src
+            finally:
+                opener.close(src)
+            return
+        if self._lru is None:
+            from databricks.labs.gbx.pyrx.core.budget import runtime_kind
+
+            opener = _OpenerContext()
+            _, max_bytes, max_count = _lru_sizing(runtime_kind() == "serverless")
+            self._lru = OpenResourceLRU(
+                max_bytes=max_bytes,
+                max_count=max_count,
+                opener=opener.open,
+                closer=opener.close,
+                weigher=opener.weigh,
+            )
+            self._task = task
+        yield self._lru.get(path)
+
+    def reset(self) -> None:
+        """Close every held source (a new task, the end of the worker)."""
+        if self._lru is not None:
+            self._lru.close_all()
+        self._lru = None
+        self._task = None
+
+
+_TASK_SOURCES = _TaskSources()
+atexit.register(_TASK_SOURCES.reset)
+
+
+class _WindowPointView(TransformMethodsMixin, _WindowHeaderView):
+    """The dataset ``open_tile`` yields for a virtual tile, for reads of a few pixels.
+
+    The header is the window's (``_WindowHeaderView``: dims, transform, and the pending
+    band-select / NoData / SRID), ``index`` maps a point to the window's row and column, and
+    ``read`` / ``sample`` read the pixels from the source, offset by the window and mapped to
+    the selected bands. GDAL then decodes only the blocks that hold the points, where
+    ``open_tile`` decodes the whole window and encodes it again as a GeoTIFF. Unmasked reads
+    only: a source with its own mask band is not given this view (see :func:`_point_view`).
+    """
+
+    def __init__(self, src, window: Window, bands=None, pending_crs=None, nodata=None):
+        super().__init__(
+            src,
+            window,
+            pending_count=len(bands) if bands else None,
+            pending_crs=pending_crs,
+            pending_nodata=nodata,
+        )
+        self._bands = list(bands) if bands else list(src.indexes)
+
+    @property
+    def indexes(self):
+        return tuple(range(1, len(self._bands) + 1))
+
+    @property
+    def dtypes(self):
+        return tuple(self._src.dtypes[b - 1] for b in self._bands)
+
+    def read(self, indexes=None, window=None, masked=False):
+        if masked:
+            raise NotImplementedError("_WindowPointView reads unmasked pixels only")
+        one = isinstance(indexes, int)
+        wanted = self.indexes if indexes is None else [indexes] if one else indexes
+        win = window or Window(0, 0, self.width, self.height)
+        data = self._src.read(
+            [self._bands[i - 1] for i in wanted],
+            window=Window(
+                self._window.col_off + win.col_off,
+                self._window.row_off + win.row_off,
+                win.width,
+                win.height,
+            ),
+        )
+        return data[0] if one else data
+
+    def sample(self, xy, indexes=None, masked=False):
+        from rasterio.sample import sample_gen
+
+        if masked:
+            raise NotImplementedError("_WindowPointView samples unmasked pixels only")
+        return sample_gen(self, xy, indexes=indexes)
+
+
+def _point_view(tile: VirtualTile, src) -> Optional[_WindowPointView]:
+    """A :class:`_WindowPointView` of *tile*'s window of the open *src*, or None when the
+    window must be materialised: a reprojection is pending (the pixels are a warp's), the
+    source has its own mask band (a pending NoData marks its masked pixels), or the window
+    is not inside the source."""
+    if _warp_pending(tile, src) or _nd.has_own_mask(src):
+        return None
+    c, r, w, h = tile.window or (0, 0, src.width, src.height)
+    if c < 0 or r < 0 or c + w > src.width or r + h > src.height:
+        return None
+    bands, pending_crs, nodata = _header_pending(tile.metadata)
+    return _WindowPointView(src, Window(c, r, w, h), bands, pending_crs, nodata)
+
+
+@contextmanager
+def open_tile_points(tile) -> Iterator:
+    """``open_tile`` for an op that reads the pixels at a few points (``rst_sample``).
+
+    Yields what ``open_tile`` would, with the same pixel values at every point: for a
+    virtual tile of a file (no clip; no pending reprojection), a :class:`_WindowPointView`
+    of its window of the source, so a point costs the read of the block holding it, and the
+    source is opened once per Spark task (:class:`_TaskSources`); for any other tile
+    (materialized, Zarr-backed, clipped, reprojected), ``open_tile`` itself.
+    """
+    vt = _to_virtual_tile(tile)
+    if (
+        not vt.is_virtual()
+        or _zarr_tiles.is_zarr_tile(vt)
+        or vt.clip_polygon is not None
+    ):
+        with open_tile(vt) as ds:
+            yield ds
+        return
+    with _TASK_SOURCES.source(vt.path) as src:
+        view = _point_view(vt, src)
+        if view is not None:
+            yield view
+            return
+    with open_tile(vt) as ds:
+        yield ds
 
 
 def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:

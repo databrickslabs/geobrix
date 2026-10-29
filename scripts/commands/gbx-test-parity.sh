@@ -155,11 +155,12 @@ fi
 # The L1 rows compare the JVM's JAR with the payload's bundled _jar (capabilities.detect: a sha gate), so a payload
 # whose _jar is an older build skips every L1 row and the run did not run. When GBX_NATIVE_ROOT names a payload that
 # has a _jar/, refresh that _jar from the JAR just staged (the same JAR the JVM loads). Without GBX_NATIVE_ROOT there
-# is no payload to compare with, and nothing changes.
+# is no payload to compare with, and nothing changes. The copy runs under the work lock: it replaces a JAR that
+# another session's test run in this container may be loading.
 gbx_native_env_args
 if [ -n "${GBX_NATIVE_ROOT:-}" ]; then
     echo -e "${CYAN}🔁 Refreshing the payload's bundled _jar from the staged JAR (${GBX_NATIVE_ROOT})...${NC}"
-    if ! docker exec ${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"} "$GBX_DEV_CONTAINER" /bin/bash -c '
+    if ! docker exec ${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"} "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c '
         set -e
         jar=$(ls /root/geobrix/python/geobrix/lib/geobrix-*-jar-with-dependencies.jar 2>/dev/null | head -n 1)
         [ -n "$jar" ] || { echo "no staged JAR under python/geobrix/lib"; exit 1; }

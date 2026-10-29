@@ -28,19 +28,72 @@ def test_the_engine_rows_carry_a_gdal_block_and_the_pin_is_the_build_pin():
         r"^GDAL_VERSION=(\S+)$", (REPO / "scripts/native/pins.conf").read_text(), re.M
     ).group(1)
     assert MAN.gdal.pin == pin
-    # The production allowlist holds only the spec rows' algorithms (the bench's floor extends it for itself), and
-    # the virtual-tile policy refuses stored pipelines and every service driver.
+    # The production allowlist holds only the spec rows' algorithms (the bench's floor extends it for itself).
     assert set(MAN.gdal.allow) == {f.gdal.alg for f in ENGINE_FNS}
-    assert {
-        "GDALG",
-        "WMS",
-        "WMTS",
-        "WCS",
-        "WFS",
-        "HTTP",
-        "CSW",
-        "OGCAPI",
-    } <= MAN.gdal.virtual_refuse
+    # The virtual-tile policy (design section 4, AP-40, I-2): the allowlist of the drivers the readers emit virtual
+    # tiles for, and the refused drivers, pinned as sets: an over-broad list fails, a subset check would not.
+    assert set(MAN.gdal.virtual_drivers) == {"GTiff", "VRT"}
+    assert set(MAN.gdal.refused_drivers) == REFUSED_DRIVERS
+
+
+REFUSED_DRIVERS = {
+    "GDALG",  # a stored pipeline
+    "GTI",
+    "STACTA",  # tile indexes and catalogs: each opens other rasters it names
+    "STACIT",
+    "WMS",
+    "WMTS",
+    "WCS",
+    "WFS",
+    "HTTP",
+    "CSW",
+    "OGCAPI",  # network APIs
+    "PLMOSAIC",
+    "PLSCENES",
+    "EEDAI",
+    "EEDA",
+    "DAAS",
+    "NGW",
+}
+
+
+def test_the_allowlist_is_the_set_the_readers_emit():
+    """Drift: the engine's virtual-tile allowlist equals the drivers the readers' virtual tiles point at (ds/paths)."""
+    from databricks.labs.gbx.ds import paths
+
+    emitted = {d for drivers in paths.VIRTUAL_TILE_DRIVERS.values() for d in drivers}
+    assert set(MAN.gdal.virtual_drivers) == emitted
+    assert set(paths.VIRTUAL_TILE_DRIVERS) <= set(paths.DEFAULT_GLOBS) | {"cog_writer"}
+
+
+def test_the_jvm_skips_exactly_the_refused_drivers():
+    """Drift: GDALManager's GDAL_SKIP default (registered at GDAL init) is the manifest's refused set."""
+    text = (
+        REPO / "src/main/scala/com/databricks/labs/gbx/rasterx/gdal/GDALManager.scala"
+    ).read_text()
+    skipped = re.search(r'val DefaultSkippedDrivers = "([^"]*)"', text)
+    assert skipped is not None
+    assert set(skipped.group(1).split()) == set(MAN.gdal.refused_drivers)
+
+
+@pytest.mark.parametrize(
+    "raw,named",
+    [
+        ({"pin": "3.13.3", "deny": [], "allow": {}, "allowlist": {}}, "allowlist"),
+        (
+            {
+                "pin": "3.13.3",
+                "virtual_tile_drivers": ["GTiff"],
+                "refused_drivers": ["GTiff"],
+            },
+            "GTiff",
+        ),
+    ],
+    ids=["a section key outside the vocabulary", "a driver on both lists"],
+)
+def test_a_section_outside_the_vocabulary_is_refused_at_load(raw, named):
+    with pytest.raises(ValueError, match=re.escape(named)):
+        manifest._parse_gdal_section(raw)
 
 
 @pytest.mark.parametrize("fn", ENGINE_FNS, ids=lambda f: f.sql_name)
@@ -110,6 +163,16 @@ REFUSED_BLOCKS = [
     ),
     ("a VRT write profile", _row(write="vrt"), "vrt"),
     ("a GDALG write profile", _row(write="gdalg"), "gdalg"),
+    (
+        "an out key outside the vocabulary",
+        _row(out={"kind": "raster", "dtyp": "Float32"}),
+        "dtyp",
+    ),
+    (
+        "a binder with no type",
+        _row(args=[{"arg": "unit", "from": "unit"}]),
+        "unit",
+    ),
 ]
 
 

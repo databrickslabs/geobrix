@@ -74,6 +74,24 @@ SUPPORTED_FORMATS = (
 # variable and slice in one pass), so it is spread by file like the vector readers.
 TWO_STAGE_FORMATS = ("raster_gbx", "gtiff_gbx", "cog_gbx", "pmtiles_gbx")
 
+# The GDAL drivers each producer's virtual tiles (bytes-free path tiles) point at. Their union is the GDAL spec
+# engine's virtual-tile allowlist (manifest `gdal.virtual_tile_drivers`, design section 4): a drift test holds the two
+# equal, so a reader that starts emitting another driver's path must add it to both. A producer absent here emits no
+# path tile of a raster file: netcdf_gbx and pmtiles_gbx materialize their bytes, and a Zarr tile is decoded by
+# GeoBrix (no GDAL driver opens it).
+VIRTUAL_TILE_DRIVERS = {
+    "raster_gbx": (
+        "GTiff",
+        "VRT",
+    ),  # .tif/.tiff tiles; a VRT's member files, which are GTiff
+    "gtiff_gbx": ("GTiff",),
+    "cog_gbx": ("GTiff",),
+    "cog_writer": (
+        "GTiff",
+        "VRT",
+    ),  # the COG writer's mosaic index, and mint_vrt (ds/_mosaic.py)
+}
+
 # read_paths(on_error=...): "fail" an error fails the read (naming the file);
 # "skip" logs and skips bad records (see _quarantine) and reads everything else.
 ON_ERROR_MODES = ("fail", "skip")

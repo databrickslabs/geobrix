@@ -54,6 +54,17 @@ def _setup(grid_dirs: Tuple[str, ...]) -> None:
     _env.configure_gdal_env(list(grid_dirs))
 
 
+def _chain_text(exc: BaseException) -> str:
+    """The messages of an exception and of what it was raised after. rasterio reports a failed read as 'Read failed.
+    See previous exception' with GDAL's own message in the exception before it, so the reason is read from both.
+    """
+    parts, cur = [], exc
+    while cur is not None and len(parts) < 8:
+        parts.append(str(cur))
+        cur = cur.__cause__ or cur.__context__
+    return " | ".join(parts)
+
+
 def _virtual_raster(fn, tile, read_cap: Optional[int]) -> bytes:
     """A virtual tile's window as GeoTIFF bytes, read under the engine's input rules: its file (and a VRT's
     sources) must open with a driver the virtual-tile policy allows, and its decoded window must fit this compute's
@@ -87,13 +98,24 @@ def _virtual_raster(fn, tile, read_cap: Optional[int]) -> bytes:
                 )
             with ot._open(vt) as ds:
                 return prx._dataset_to_gtiff_bytes(ds)
-    except run.DataError:
-        raise
     except (MemoryError, RecursionError):
         raise
     except (
         Exception
     ) as exc:  # noqa: BLE001 - an unreadable virtual tile is data, as on every light function
+        # a source the policy stopped while GDAL read the tile: GDAL's message is in the chain (rasterio's read
+        # failure, or the DataError the read raised), so the reason is judged on the whole chain
+        text = _chain_text(exc)
+        what = run.policy_reason(text)
+        if what is not None:
+            raise run.DataError(
+                f"{fn.sql_name}: the virtual tile reads {what}, which GeoBrix does not open for a virtual tile "
+                f"(GDAL: {text})"
+            ) from None
+        if isinstance(
+            exc, run.DataError
+        ):  # a refusal the engine already named (the file, the read cap)
+            raise
         raise run.DataError(
             f"{fn.sql_name}: the virtual tile could not be read ({exc})"
         ) from None

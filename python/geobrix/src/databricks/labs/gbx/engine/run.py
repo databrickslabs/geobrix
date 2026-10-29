@@ -16,13 +16,17 @@ exactly as the JVM's binding is, so one argv has one outcome on both tiers:
 - a map-algebra expression GDAL cannot evaluate is a parameter error, found by a dry run once per expression.
 
 The engine's own GDAL settings (``ENGINE_SETTINGS``) are thread-local for the call, so the user's process keeps its
-own configuration; ``virtual_source`` applies the virtual-tile driver policy before a virtual tile is read.
+own configuration. The virtual-tile driver policy (design section 4) has two GDAL-level parts: a virtual tile's own
+file must identify with a driver on the manifest's allowlist (``virtual_source``), and the manifest's refused drivers
+are deregistered from this process once, before the engine's first call (``apply_driver_policy``), because GDAL
+opens a VRT's sources, an index's tiles and a pipeline's inputs itself, through the same registry.
 """
 
 from __future__ import annotations
 
 import contextlib
 import functools
+import os
 import threading
 import uuid
 from dataclasses import dataclass
@@ -41,17 +45,20 @@ _TIFF_MAGIC = (
 )  # TIFF and BigTIFF, both byte orders
 # The engine's GDAL settings, set thread-local for each call on both tiers (the JVM's GdalSpecEngine applies the
 # same table), so they never change the user's process: one thread per call (a Spark task is one core), no Python
-# in a VRT pixel function, and no VRT raw band (it reads a file's bytes as pixels without a driver, so the virtual-tile
-# driver policy could not judge it). Process-wide settings stay as the process has them: GDAL_CACHEMAX (GDALManager's
-# 512 MB on the JVM, GDAL's default in Python), GDAL_PAM_ENABLED (on: a tile's NoData may live in its .aux.xml; the
-# engine's own sidecars are under the call's prefix and go with it) and GDAL_SKIP, which only acts when drivers
-# register; the virtual-tile driver policy refuses those drivers instead.
+# in a VRT pixel function, and no VRT raw band (it reads a file's bytes as pixels without a driver, which a driver
+# policy cannot judge). Process-wide settings stay as the process has them: GDAL_CACHEMAX (GDALManager's 512 MB on the
+# JVM, GDAL's default in Python), GDAL_PAM_ENABLED (on: a tile's NoData may live in its .aux.xml; the engine's own
+# sidecars are under the call's prefix and go with it) and GDAL_SKIP, which only acts when drivers register (the
+# policy deregisters the refused drivers instead). Pinned by a golden row, read by both suites.
 ENGINE_SETTINGS = {
     "GDAL_NUM_THREADS": "1",
     "GDAL_VRT_ENABLE_PYTHON": "NO",
     "GDAL_VRT_ENABLE_RAWRASTERBAND": "NO",
 }
-_VRT_NESTING = 8  # a VRT of VRTs deeper than this is refused
+# The opt-out of the registry part of the driver policy (documented on the security page): "off" leaves the refused
+# drivers registered, so a VRT's source, an index's tile or a pipeline's input may use them. The top-level allowlist
+# still applies to a virtual tile's own file.
+POLICY_OPT_OUT = "GBX_ENGINE_DRIVER_POLICY"
 _validated: dict = (
     {}
 )  # dry-run outcomes of map-algebra expressions, by (expression, inputs)
@@ -136,28 +143,82 @@ def _gdal_status():
 
 @functools.lru_cache(maxsize=1)
 def virtual_drivers() -> tuple:
-    """The drivers a virtual tile may be opened with: every raster driver a GeoBrix reader can emit a virtual tile
-    for (``raster_gbx`` opens any GDAL raster driver; Zarr tiles are decoded by GeoBrix, not opened by a driver)
-    minus the manifest's ``virtual_tile_refuse`` list (stored pipelines and the service drivers).
+    """The drivers a virtual tile's own file may open with: the manifest's allowlist (``virtual_tile_drivers``), the
+    drivers the GeoBrix readers emit virtual tiles for (``ds/paths.VIRTUAL_TILE_DRIVERS``). Any other driver is
+    refused by default."""
+    return tuple(manifest.load().gdal.virtual_drivers)
+
+
+def refused_drivers() -> tuple:
+    """The drivers the policy refuses everywhere the engine runs (``refused_drivers``): stored pipelines, tile indexes,
+    catalogs and the network APIs. Deregistered from the process by ``apply_driver_policy``.
     """
+    return tuple(manifest.load().gdal.refused_drivers)
+
+
+@functools.lru_cache(maxsize=1)
+def apply_driver_policy() -> None:
+    """Deregister the refused drivers from this process's GDAL, once, before the engine's first call (on each worker
+    too: a Python worker runs the engine itself).
+
+    GDAL opens a VRT's sources, a tile index's tiles and a pipeline's inputs through the process's driver registry,
+    with no driver list of its own, so a refused driver nested in a virtual tile is opened unless it is not
+    registered. Process-wide, as the JVM's ``GDALManager`` skips the same drivers at its registration. Opt out with
+    ``GBX_ENGINE_DRIVER_POLICY=off`` (documented on the security page).
+    """
+    if os.environ.get(POLICY_OPT_OUT, "").strip().lower() == "off":
+        return
     gdal = _gdal()
-    refuse = manifest.load().gdal.virtual_refuse
-    names = []
-    for i in range(gdal.GetDriverCount()):
-        d = gdal.GetDriver(i)
-        if d.GetMetadataItem(gdal.DCAP_RASTER) == "YES" and d.ShortName not in refuse:
-            names.append(d.ShortName)
-    return tuple(names)
+    for name in refused_drivers():
+        drv = gdal.GetDriverByName(name)
+        if drv is not None:
+            prefix = drv.GetMetadataItem("DMD_CONNECTION_PREFIX")
+            if (
+                prefix
+            ):  # a name like GTI:/path is then no file: GDAL reports it as missing (see policy_reason)
+                _deregistered_prefixes.add(prefix)
+            drv.Deregister()
 
 
-def virtual_source(sql_name: str, path: str, depth: int = 0) -> None:
-    """Raise DataError unless `path` (a virtual tile's file) opens with a driver the virtual-tile policy allows,
-    and, for a VRT, unless every one of its sources does too. Only headers are read: a refused driver (a GDALG
-    pipeline, a service) is identified, never opened."""
-    if depth > _VRT_NESTING:
-        raise DataError(
-            f"{sql_name}: the virtual tile's VRT nests more than {_VRT_NESTING} levels"
-        )
+# The connection prefixes of the drivers apply_driver_policy deregistered (GTI:, WMTS:, ...), recorded from GDAL's
+# own driver metadata before the drivers go.
+_deregistered_prefixes: set = set()
+
+
+# GDAL's messages for a source a virtual tile opens on its own, that the policy stopped, and what GeoBrix calls it.
+# Each text is GDAL 3.13.3's own (`not recognized` is the message for a driver that is not registered, or does not
+# identify the file; the others are the engine's VRT settings). Pinned by the oracle rows that read them.
+_NESTED_REFUSALS = (
+    (
+        "not recognized as being in a supported file format",
+        "a source GDAL has no driver for here",
+    ),
+    ("VRTRawRasterBand support has been disabled", "a VRT raw band"),
+    ("explicitly disabled", "a VRT Python pixel function"),
+    ("uses inline code in the VRT", "a VRT Python pixel function"),
+)
+
+
+def policy_reason(message: str) -> Optional[str]:
+    """What the policy refused, for a GDAL message raised while a virtual tile was read, or None when the message is
+    not one of the policy's refusals (a missing file, a corrupt one)."""
+    if "No such file or directory" in message and any(
+        f"{prefix}" in message for prefix in _deregistered_prefixes
+    ):  # a deregistered driver's name (GTI:/path): no driver takes it, so GDAL finds no file under that name
+        return "a source GDAL has no driver for here"
+    for needle, what in _NESTED_REFUSALS:
+        if needle in message:
+            return what
+    return None
+
+
+def virtual_source(sql_name: str, path: str) -> None:
+    """Raise DataError unless `path` (a virtual tile's own file) identifies with a driver on the virtual-tile
+    allowlist, and, for a VRT, opens as a VRT. Only the header is read: a driver off the allowlist is identified,
+    never opened. Its sources are not walked here: GDAL opens them when the tile is read, and the refused drivers are
+    not registered then (``apply_driver_policy``); a source with a driver off the allowlist is read as GDAL allows.
+    """
+    apply_driver_policy()
     with engine_settings(), _gdal_status() as gdal:
         drv = gdal.IdentifyDriverEx(
             path, gdal.OF_RASTER, allowed_drivers=list(virtual_drivers())
@@ -166,11 +227,13 @@ def virtual_source(sql_name: str, path: str, depth: int = 0) -> None:
             gdal.ErrorReset()
             other = gdal.IdentifyDriverEx(path, gdal.OF_RASTER)
             what = (
-                f"a {other.ShortName} file, which GeoBrix does not open for a virtual tile"
+                f"a {other.ShortName} file"
                 if other is not None
-                else "not a raster GDAL can read"
+                else "a file no driver on the virtual-tile allowlist reads"
             )
-            raise DataError(f"{sql_name}: the virtual tile's file {path} is {what}")
+            raise DataError(
+                f"{sql_name}: the virtual tile's file {path} is {what}, which GeoBrix does not open for a virtual tile"
+            )
         if drv.ShortName != "VRT":
             return
         ds = gdal.OpenEx(
@@ -180,14 +243,7 @@ def virtual_source(sql_name: str, path: str, depth: int = 0) -> None:
             raise DataError(
                 f"{sql_name}: {gdal.GetLastErrorMsg() or path + ' is not a readable VRT'}"
             )
-        files = [
-            f
-            for f in (ds.GetFileList() or [])
-            if f != path and not f.endswith(".aux.xml")
-        ]
         ds = None
-    for f in files:
-        virtual_source(sql_name, f, depth + 1)
 
 
 def _props(gdal, sql_name: str, name: str, needs_crs: bool) -> argv_mod.RasterProps:
@@ -287,6 +343,7 @@ def run(
     """One call of `fn`'s spec over `rasters` (GeoTIFF bytes) with `values` (param -> value): its Result, or
     None for a NULL result. Raises ParamError for a value the function refuses. `section` is the allowlist
     (default the manifest's `gdal` section)."""
+    apply_driver_policy()
     block = fn.gdal
     prefix = f"{PREFIX}/{uuid.uuid4().hex}"
     names = [f"{prefix}/in{i}.tif" for i in range(len(rasters))]

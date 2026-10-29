@@ -45,7 +45,7 @@ class Case:
     kind: str
     # exact: the value. raises: a substring the error message must contain (the offending
     # value), so a missing function cannot pass. tile_props: the target CRS, or (CRS, SRID).
-    # error_tile: when set, the reason that must come out unchanged.
+    # error_tile: when set, the reason that must come out unchanged. error_tile_has: a substring the reason must hold.
     expect: Any = None
     surfaces: Tuple[str, ...] = ("session", "uc")
     geom_srid: int = (
@@ -693,6 +693,11 @@ MVP_A: Tuple[Case, ...] = (
 # numpy for map algebra. `error_fix` is an error tile whose reason carries a `Fix:`. gbx_rst_transformcrs keeps
 # its MVP_S rows, which every engine level runs as they are, plus the one row of a tile with no CRS.
 SL, MALG = "gbx_rst_slope", "gbx_rst_mapalgebra"
+# The virtual-tile policy's reasons (engine/run.py), as the rows read them: the file is off the allowlist or refused
+# (a driver identifies it, or none does), or a source GDAL opened on its own is one the policy stopped.
+_VT_POLICY = "which GeoBrix does not open for a virtual tile"
+_VT_TOP = f"a file no driver on the virtual-tile allowlist reads, {_VT_POLICY}"
+_VT_NESTED = f"a source GDAL has no driver for here, {_VT_POLICY}"
 NORM_DIFF = '{"calc": "norm_diff", "dialect": "builtin"}'
 SPEC_SE: Tuple[Case, ...] = (
     # Horn's slope with no edges: the 1-pixel border and the neighbours of the NoData hole are NoData.
@@ -792,36 +797,96 @@ SPEC_SE: Tuple[Case, ...] = (
         "slope",
         ("session",),
     ),
+    # The policy's refusals (design section 4): each row's reason is the policy's own text (error_tile_has), so a row
+    # cannot pass on a different error. A file of no allowed driver is refused by its identity; a source GDAL opens
+    # on its own is refused by the registry (no driver there), or by the engine's settings (a raw band, a Python
+    # pixel function).
     Case(
         "se_slope_virtual_gdalg",
         SL,
         (Build("dem_gdalg"), "degrees"),
-        "error_tile",
-        None,
+        "error_tile_has",
+        _VT_TOP,
         ("session",),
     ),
     Case(
         "se_slope_virtual_vrt_gdalg",
         SL,
         (Build("dem_vrt_gdalg"), "degrees"),
-        "error_tile",
-        None,
+        "error_tile_has",
+        _VT_NESTED,
+        ("session",),
+    ),
+    Case(
+        "se_slope_virtual_inline_gdalg",
+        SL,
+        (Build("dem_inline_gdalg"), "degrees"),
+        "error_tile_has",
+        _VT_NESTED,
+        ("session",),
+    ),
+    Case(
+        "se_slope_virtual_gti_gdalg",
+        SL,
+        (Build("dem_vrt_gti_gdalg"), "degrees"),
+        "error_tile_has",
+        _VT_NESTED,
+        ("session",),
+    ),
+    Case(
+        "se_slope_virtual_gti",
+        SL,
+        (Build("dem_gti"), "degrees"),
+        "error_tile_has",
+        _VT_TOP,
+        ("session",),
+    ),
+    Case(
+        "se_slope_virtual_stacta",
+        SL,
+        (Build("dem_stacta"), "degrees"),
+        "error_tile_has",
+        _VT_TOP,
+        ("session",),
+    ),
+    Case(
+        "se_slope_virtual_network_api",
+        SL,
+        (Build("dem_eedai"), "degrees"),
+        "error_tile_has",
+        _VT_TOP,
+        ("session",),
+    ),
+    Case(
+        "se_slope_virtual_png",
+        SL,
+        (Build("dem_png"), "degrees"),
+        "error_tile_has",
+        f"a PNG file, {_VT_POLICY}",
         ("session",),
     ),
     Case(
         "se_slope_virtual_vrt_python",
         SL,
         (Build("dem_vrt_python"), "degrees"),
-        "error_tile",
-        None,
+        "error_tile_has",
+        f"a VRT Python pixel function, {_VT_POLICY}",
         ("session",),
     ),
     Case(
         "se_slope_virtual_vrt_raw",
         SL,
         (Build("dem_vrt_raw"), "degrees"),
-        "error_tile",
-        None,
+        "error_tile_has",
+        f"a VRT raw band, {_VT_POLICY}",
+        ("session",),
+    ),
+    Case(
+        "se_slope_virtual_inline_raw",
+        SL,
+        (Build("dem_inline_raw"), "degrees"),
+        "error_tile_has",
+        f"a VRT raw band, {_VT_POLICY}",
         ("session",),
     ),
     Case(
@@ -1035,6 +1100,47 @@ def _gtiff(bands, crs_value: Optional[str], nodata=-9999.0) -> bytes:
         return mf.read()
 
 
+def _vrt_body(source_xml: str) -> str:
+    """A one-band 64 x 64 VRT on the DEM's grid (EPSG:3857) whose SimpleSource is `source_xml` (a SourceFilename)."""
+    return (
+        '<VRTDataset rasterXSize="64" rasterYSize="64"><SRS>EPSG:3857</SRS>'
+        "<GeoTransform>400000, 10, 0, 5760000, 0, -10</GeoTransform>"
+        '<VRTRasterBand dataType="Float32" band="1"><NoDataValue>-9999</NoDataValue><SimpleSource>'
+        f"{source_xml}<SourceBand>1</SourceBand></SimpleSource></VRTRasterBand></VRTDataset>"
+    )
+
+
+def _vrt_nested(inner: str) -> str:
+    """The same grid's VRT whose only source is `inner`, a VRTDataset inline in the SimpleSource (GDAL opens the
+    inline source itself; a walk of the file's SourceFilename members never sees it)."""
+    return _vrt_body(inner)
+
+
+def _gti_index(path: str, location: str) -> str:
+    """A GeoPackage tile index (GTI's `location` field) with one tile over the DEM's extent, located at `location`."""
+    from osgeo import ogr, osr
+
+    if os.path.exists(path):
+        os.remove(path)
+    ds = ogr.GetDriverByName("GPKG").CreateDataSource(path)
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(3857)
+    srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    lyr = ds.CreateLayer("tiles", srs, ogr.wkbPolygon)
+    lyr.CreateField(ogr.FieldDefn("location", ogr.OFTString))
+    feat = ogr.Feature(lyr.GetLayerDefn())
+    feat.SetField("location", location)
+    feat.SetGeometry(
+        ogr.CreateGeometryFromWkt(
+            "POLYGON((400000 5759360,400640 5759360,400640 5760000,400000 5760000,400000 5759360))"
+        )
+    )
+    lyr.CreateFeature(feat)
+    feat = None
+    ds = None
+    return path
+
+
 def _se_virtual(name: str, tmpdir: str):
     """The virtual-tile fixtures of SPEC_SE: files under `tmpdir`, the tile pointing at them."""
     dem = os.path.join(tmpdir, "se_dem.tif")
@@ -1042,16 +1148,18 @@ def _se_virtual(name: str, tmpdir: str):
         with open(dem, "wb") as fh:
             fh.write(_se_build("dem_3857")["raster"])
     gdalg = os.path.join(tmpdir, "se_dem.gdalg.json")
+    gdalg_text = (
+        json.dumps(  # the pipeline, every nested fixture names it, so it always exists
+            {
+                "type": "gdal_streamed_alg",
+                "command_line": f"gdal raster pipeline read {dem} ! slope",
+            }
+        )
+    )
+    with open(gdalg, "w") as fh:
+        fh.write(gdalg_text)
     files = {
-        "dem_gdalg": (
-            gdalg,
-            json.dumps(
-                {
-                    "type": "gdal_streamed_alg",
-                    "command_line": f"gdal raster read {dem} ! slope",
-                }
-            ),
-        ),
+        "dem_gdalg": (gdalg, gdalg_text),
         "dem_vrt": (os.path.join(tmpdir, "se_dem.vrt"), _vrt(dem)),
         "dem_vrt_gdalg": (os.path.join(tmpdir, "se_dem_gdalg.vrt"), _vrt(gdalg)),
         "dem_vrt_python": (
@@ -1061,6 +1169,71 @@ def _se_virtual(name: str, tmpdir: str):
     }
     if name == "dem_missing":
         return _tile(None, os.path.join(tmpdir, "se_no_such_dem.tif"), None)
+    # The policy's refusals (design section 4). Each file is a benign fixture: a pipeline, an index over it, a PNG, a
+    # raw band over a file of known bytes, a connection string that names no collection.
+    if (
+        name == "dem_inline_gdalg"
+    ):  # a VRT whose only source is an inline VRT over the pipeline
+        path = os.path.join(tmpdir, "se_dem_inline_gdalg.vrt")
+        with open(path, "w") as fh:
+            fh.write(
+                _vrt_nested(
+                    _vrt_body(
+                        f'<SourceFilename relativeToVRT="0">{gdalg}</SourceFilename>'
+                    )
+                )
+            )
+        return _tile(None, path, None)
+    if name in (
+        "dem_gti",
+        "dem_vrt_gti_gdalg",
+    ):  # a tile index whose one tile is the pipeline
+        idx = _gti_index(os.path.join(tmpdir, "se_index.gpkg"), gdalg)
+        if name == "dem_gti":  # named by its GTI: prefix, as the tile's own file
+            return _tile(None, "GTI:" + idx, None)
+        path = os.path.join(tmpdir, "se_dem_gti.vrt")  # a VRT whose source is the index
+        with open(path, "w") as fh:
+            fh.write(_vrt("GTI:" + idx))
+        return _tile(None, path, None)
+    if (
+        name == "dem_stacta"
+    ):  # a STAC tiled-asset catalog as the tile's file (refused as the file, never opened)
+        return _tile(None, "STACTA:" + os.path.join(tmpdir, "se_catalog.json"), None)
+    if (
+        name == "dem_eedai"
+    ):  # a network API's connection string, naming no collection that exists
+        return _tile(None, "EEDAI:se-no-such-collection", None)
+    if (
+        name == "dem_png"
+    ):  # a driver GeoBrix does not emit virtual tiles for (not on the allowlist)
+        import numpy as np
+        import rasterio
+
+        path = os.path.join(tmpdir, "se_dem.png")
+        with rasterio.open(
+            path, "w", driver="PNG", width=64, height=64, count=1, dtype="uint8"
+        ) as dst:
+            dst.write(np.arange(64 * 64, dtype="uint8").reshape(1, 64, 64))
+        return _tile(None, path, None)
+    if (
+        name == "dem_inline_raw"
+    ):  # an inline raw band over a sibling file of known bytes (GDAL's default: sibling)
+        import struct
+
+        with open(os.path.join(tmpdir, "se_dem_inline_raw.bin"), "wb") as fh:
+            fh.write(struct.pack("<f", 3.0) * (64 * 64))
+        raw = (
+            '<VRTDataset rasterXSize="64" rasterYSize="64"><SRS>EPSG:3857</SRS>'
+            "<GeoTransform>400000, 10, 0, 5760000, 0, -10</GeoTransform>"
+            '<VRTRasterBand dataType="Float32" band="1" subClass="VRTRawRasterBand">'
+            '<SourceFilename relativeToVRT="1">se_dem_inline_raw.bin</SourceFilename>'
+            "<ImageOffset>0</ImageOffset><PixelOffset>4</PixelOffset><LineOffset>256</LineOffset>"
+            "<ByteOrder>LSB</ByteOrder></VRTRasterBand></VRTDataset>"
+        )
+        path = os.path.join(tmpdir, "se_dem_inline_raw.vrt")
+        with open(path, "w") as fh:
+            fh.write(_vrt_nested(raw))
+        return _tile(None, path, None)
     if name == "dem_vrt_raw":  # a raw band over a sibling file of float32 bytes
         with open(os.path.join(tmpdir, "se_dem_raw.bin"), "wb") as fh:
             fh.write(bytes(64 * 64 * 4))
@@ -1572,6 +1745,22 @@ def check(case: Case, out, args) -> Optional[str]:
             None
             if ok
             else f"{case.cid}: got {out!r}, want an error tile (no raster, no path, metadata[{ERROR_TILE_KEY!r}] set)"
+        )
+    if case.kind == "error_tile_has":
+        # an error tile whose reason says `case.expect` (a substring: a policy reason names the file, the GDAL text)
+        meta = _field(out, "metadata") or {}
+        reason = str(meta.get(ERROR_TILE_KEY) or "")
+        if (
+            out is None
+            or _field(out, "raster") is not None
+            or _field(out, "path") is not None
+            or not reason
+        ):
+            return f"{case.cid}: got {out!r}, want an error tile with a reason"
+        return (
+            None
+            if str(case.expect) in reason
+            else f"{case.cid}: the reason is {reason!r}, want it to say {str(case.expect)!r}"
         )
     if case.kind == "tile_props":
         return _check_tile(case, out, args)

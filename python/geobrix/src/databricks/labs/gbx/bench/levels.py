@@ -20,7 +20,10 @@ _L3_VARIANTS = (
     "c0",
     "c1",
     "d",
-)  # any other variant is a label: register picks the L3 default
+    "engine",
+    "engine-c0",
+    "engine-c1",
+)  # any other variant is a label: register picks the level's default
 _PYTHON_LEVELS = (
     "L3",
     "DF",
@@ -200,7 +203,10 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
             base, note="input unavailable (no tile corpus)", status="na_by_design"
         )
     if form.register:
-        want = (form.level, form.variant if form.variant in _L3_VARIANTS else "-")
+        variant = form.variant.split("@")[
+            0
+        ]  # "<variant>@<label>": the label only names the input
+        want = (form.level, variant if variant in _L3_VARIANTS else "-")
         if ctx.registered.get(form.fn) != want:
             forced = {form.fn: want} if form.level in ("L1", "L2", "L3") else None
             register(spark, only=[form.fn], _levels=forced)

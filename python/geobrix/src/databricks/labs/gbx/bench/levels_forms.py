@@ -1214,3 +1214,251 @@ FORMS["A"] = (
     + _a_jvm(*_A_MERGE)
     + _a_jvm(*_A_RASTERIZE)
 )
+
+
+# --- SE, the GDAL spec engine: each of its functions on the engine and on its own implementation --------------------
+#
+# Inputs: DEM tiles (one band, Float32, EPSG:3857) of 256, 512 and 1024 pixels for slope and the floor; pairs of
+# them for map algebra; the corpus tiles for transformcrs (as the S forms). The floor is the engine running
+# `raster select --band=1`: the per-row cost of the engine itself (the /vsimem write, the header read, the
+# algorithm, one GTiff encode), with next to no raster work. The forms of today's implementations go under private
+# names, so a later engine registration never measures them by mistake.
+
+_SE_SIZES = (256, 512, 1024)
+BASE_ROWS.update(
+    {"se_dem_256": 64, "se_dem_512": 32, "se_dem_1024": 16, "se_pair_512": 32}
+)
+
+
+def _se_dem_tile(size: int, seed: int) -> dict:
+    import numpy as np
+
+    from databricks.labs.gbx.bench import oracles
+
+    rng = np.random.default_rng(seed)
+    yy, xx = np.mgrid[0:size, 0:size].astype("float64")
+    z = (
+        100.0
+        + 0.5 * xx
+        + 0.3 * yy
+        + 10.0 * np.sin(xx / (7.0 + seed)) * np.cos(yy / 5.0)
+        + rng.normal(0.0, 0.1, (size, size))
+    )
+    return oracles._tile(oracles._gtiff(z[np.newaxis], "EPSG:3857"))
+
+
+def _se_dems(size: int):
+    def build(spark, n, corpus, schema):
+        from databricks.labs.gbx.manifest import TILE_SQL
+
+        tiles = [_se_dem_tile(size, s) for s in range(4)]  # four distinct tiles, cycled
+        return _table(
+            spark,
+            schema,
+            f"mvp_in_se_dem{size}_v{RECIPE_VERSION}_{n}",
+            lambda: spark.createDataFrame(
+                [(tiles[i % 4],) for i in range(n)], f"tile {TILE_SQL}"
+            ).repartition(max(1, min(n, 8))),
+        )
+
+    return build
+
+
+def _se_pairs(size: int):
+    def build(spark, n, corpus, schema):
+        from databricks.labs.gbx.manifest import TILE_SQL
+
+        tiles = [_se_dem_tile(size, s) for s in range(4)]
+        return _table(
+            spark,
+            schema,
+            f"mvp_in_se_pair{size}_v{RECIPE_VERSION}_{n}",
+            lambda: spark.createDataFrame(
+                [([tiles[i % 4], tiles[(i + 1) % 4]],) for i in range(n)],
+                f"tiles array<{TILE_SQL}>",
+            ).repartition(max(1, min(n, 8))),
+        )
+
+    return build
+
+
+INPUTS.update({f"se_dem_{s}": _se_dems(s) for s in _SE_SIZES})
+INPUTS["se_pair_512"] = _se_pairs(512)
+
+
+def _se_floor_function():
+    """The floor's spec: `raster select --band=1` on slope's signature (a bench spec, not a SQL function)."""
+    import dataclasses
+
+    from databricks.labs.gbx import manifest
+
+    return dataclasses.replace(
+        manifest.load().functions["gbx_rst_slope"],
+        sql_name="gbx_bench_engine_floor",
+        gdal=manifest.parse_gdal_spec(
+            {
+                "alg": "raster select",
+                "in": {"tile": "raster"},
+                "out": {"kind": "raster", "dtype": "input"},
+                "write": "tile",
+                "args": [{"arg": "band", "const": 1}],
+            }
+        ),
+    )
+
+
+SE_FLOOR = _se_floor_function()
+_SE_FLOOR_REF = "databricks.labs.gbx.bench.levels_forms:SE_FLOOR"
+
+
+def setup_se_floor(spark):
+    """The floor's row-wise and batch UDFs under their own names."""
+    from databricks.labs.gbx.engine import l3 as engine_l3
+
+    spark.udf.register(
+        "gbx_bench_floor_c0", engine_l3.c0("gbx_bench_engine_floor", (), _SE_FLOOR_REF)
+    )
+    spark.udf.register(
+        "gbx_bench_floor_c1", engine_l3.c1("gbx_bench_engine_floor", (), _SE_FLOOR_REF)
+    )
+
+
+def setup_se_slope_today(spark):
+    """Today's slope: the Catalyst RST_Slope under its private name, the light numpy UDF under a bench name."""
+    from databricks.labs.gbx.manager import jvm
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    spark.udf.register("gbx_bench_slope_l3_today", prx._slope_udf)
+    why = jvm.install_private_l1(
+        spark,
+        "com.databricks.labs.gbx.rasterx.expressions.dem.RST_Slope",
+        "gbx__l1_rst_slope",
+    )
+    if why:
+        raise RuntimeError(why)
+
+
+def setup_se_slope_light_today(spark):
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    spark.udf.register("gbx_bench_slope_l3_today", prx._slope_udf)
+
+
+_SE_FP = (
+    "SELECT count(*) AS n, sum(length(t.raster)) AS fp, count(t.raster) AS n_out "
+    "FROM (SELECT {call} AS t FROM {{src}})"
+)
+_SE_SLOPE = _SE_FP.format(
+    call="{fn}(tile, 'degrees', CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE))"
+)
+_SE_SLOPE_L1_TODAY = _SE_FP.format(call="gbx__l1_rst_slope(tile, 'degrees')")
+_SE_SLOPE_L3_TODAY = _SE_FP.format(
+    call="gbx_bench_slope_l3_today(tile, 'degrees', CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE))"
+)
+_SE_FLOOR_C0 = _SE_FP.format(call="gbx_bench_floor_c0(tile)")
+_SE_FLOOR_C1 = (
+    "SELECT count(*) AS n, sum(length(r.raster)) AS fp, count(r.raster) AS n_out FROM "
+    "(SELECT gbx_bench_floor_c1(tile.raster, 'degrees', CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE)) AS r "
+    "FROM {src})"
+)
+_SE_TCRS = _SE_FP.format(call="{fn}(tile, 'EPSG:3857')")
+# The call is inserted as it is; the run formats the query with {src}, so the JSON braces are doubled once.
+_SE_MA_TODAY = _SE_FP.format(call="""{fn}(tiles, '{{"calc": "(A - B) / (A + B)"}}')""")
+_SE_MA_ENGINE = _SE_FP.format(
+    call="""{fn}(tiles, '{{"calc": "norm_diff", "dialect": "builtin"}}')"""
+)
+
+
+def _se(fn, level, variant, inp, sql, *, setup="", register=True, **kw):
+    return Form(
+        "SE",
+        fn,
+        level,
+        variant,
+        inp,
+        sql.replace("{fn}", fn),
+        setup=("databricks.labs.gbx.bench.levels_forms:" + setup) if setup else "",
+        register=register,
+        **kw,
+    )
+
+
+_SL, _MALG = "gbx_rst_slope", "gbx_rst_mapalgebra"
+_DED = ("dedicated",)
+# Today's forms first: they live under private names that the engine registrations after them do not replace.
+# A label `<variant>@<size>` registers `<variant>` (see levels._run_one) and names the tile size.
+FORMS["SE"] = (
+    [
+        _se(
+            _SL,
+            "L1",
+            f"today@{s}",
+            f"se_dem_{s}",
+            _SE_SLOPE_L1_TODAY,
+            setup="setup_se_slope_today",
+            register=False,
+            computes=_DED,
+        )
+        for s in _SE_SIZES
+    ]
+    + [
+        _se(
+            _SL,
+            "L3",
+            f"today@{s}",
+            f"se_dem_{s}",
+            _SE_SLOPE_L3_TODAY,
+            setup="setup_se_slope_light_today",
+            register=False,
+        )
+        for s in _SE_SIZES
+    ]
+    + [
+        _se(
+            _SL,
+            "L3",
+            f"floor-c0@{s}",
+            f"se_dem_{s}",
+            _SE_FLOOR_C0,
+            setup="setup_se_floor",
+            register=False,
+        )
+        for s in _SE_SIZES
+    ]
+    + [
+        _se(
+            _SL,
+            "L3",
+            f"floor-c1@{s}",
+            f"se_dem_{s}",
+            _SE_FLOOR_C1,
+            setup="setup_se_floor",
+            register=False,
+        )
+        for s in _SE_SIZES
+    ]
+    + [
+        _se(_SL, "L1", f"engine@{s}", f"se_dem_{s}", _SE_SLOPE, computes=_DED)
+        for s in _SE_SIZES
+    ]
+    + [
+        _se(_SL, "L3", f"{v}@{s}", f"se_dem_{s}", _SE_SLOPE)
+        for v in ("engine-c0", "engine-c1")
+        for s in _SE_SIZES
+    ]
+    + [
+        _se(T, "L1", "-", "tiles_mat", _SE_TCRS, computes=_DED),
+        _se(T, "L2", "-", "tiles_mat", _SE_TCRS, computes=("dedicated", "standard")),
+        _se(T, "L3", "-", "tiles_mat", _SE_TCRS),
+        _se(T, "L1", "engine", "tiles_mat", _SE_TCRS, computes=_DED),
+        _se(T, "L3", "engine-c0", "tiles_mat", _SE_TCRS),
+        _se(T, "L3", "engine-c1", "tiles_mat", _SE_TCRS),
+        _se(T, "L1", "engine", "tiles_virt", _SE_TCRS, computes=_DED),
+        _se(T, "L3", "engine-c1", "tiles_virt", _SE_TCRS),
+        _se(_MALG, "L1", "-", "se_pair_512", _SE_MA_TODAY, computes=_DED),
+        _se(_MALG, "L3", "-", "se_pair_512", _SE_MA_TODAY),
+        _se(_MALG, "L1", "engine", "se_pair_512", _SE_MA_ENGINE, computes=_DED),
+        _se(_MALG, "L3", "engine-c0", "se_pair_512", _SE_MA_ENGINE),
+        _se(_MALG, "L3", "engine-c1", "se_pair_512", _SE_MA_ENGINE),
+    ]
+)

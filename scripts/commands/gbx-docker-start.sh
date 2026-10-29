@@ -65,6 +65,8 @@ NOTES:
       would use, has a Maven other than the version maven-wrapper.properties pins: the pom
       then fails every build in it; the fix it names is gbx:docker:rebuild
     - Mounts sample-data/Volumes to /Volumes
+    - Links /usr/lib/libgdalalljni.so to the env6 payload's JNI on every start (the JAR's GDAL Java
+      classes are the native build's); with no payload yet it is left as it is, and the fix printed
     - Checks if container already running
     - Starts existing container if stopped
 
@@ -233,6 +235,7 @@ if docker ps --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
     echo ""
     echo -e "${CYAN}⚙️  Applying Maven setup (.m2 in project, skipScoverage default)...${NC}"
     docker exec "$GBX_DEV_CONTAINER" /bin/bash -c "sh /root/geobrix/scripts/docker/extras/docker_maven_setup.sh"
+    docker exec "$GBX_DEV_CONTAINER" /bin/bash /root/geobrix/scripts/docker/extras/docker_native_jni.sh
     print_separator
 
     if [ "$ATTACH" = true ]; then
@@ -261,6 +264,7 @@ if docker ps -a --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
         echo ""
         echo -e "${CYAN}⚙️  Applying Maven setup (.m2 in project, skipScoverage default)...${NC}"
         docker exec "$GBX_DEV_CONTAINER" /bin/bash -c "sh /root/geobrix/scripts/docker/extras/docker_maven_setup.sh"
+        docker exec "$GBX_DEV_CONTAINER" /bin/bash /root/geobrix/scripts/docker/extras/docker_native_jni.sh
         print_separator
         
         if [ "$ATTACH" = true ]; then
@@ -298,6 +302,7 @@ else
         echo ""
         echo -e "${CYAN}⚙️  Applying Maven setup (.m2 in project, skipScoverage default)...${NC}"
         docker exec "$GBX_DEV_CONTAINER" /bin/bash -c "sh /root/geobrix/scripts/docker/extras/docker_maven_setup.sh"
+        docker exec "$GBX_DEV_CONTAINER" /bin/bash /root/geobrix/scripts/docker/extras/docker_native_jni.sh
         echo ""
         echo -e "${CYAN}📊 Container details:${NC}"
         echo -e "   Name:    ${YELLOW}$GBX_DEV_CONTAINER${NC} (${PLATFORM})"

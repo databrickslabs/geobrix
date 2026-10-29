@@ -150,6 +150,7 @@ if [ $EXIT_CODE -eq 0 ]; then
     echo ""
     echo -e "${CYAN}⚙️  Applying Maven setup (.m2 in project, skipScoverage default)...${NC}"
     docker exec "$GBX_DEV_CONTAINER" /bin/bash -c "sh /root/geobrix/scripts/docker/extras/docker_maven_setup.sh"
+    docker exec "$GBX_DEV_CONTAINER" /bin/bash /root/geobrix/scripts/docker/extras/docker_native_jni.sh
     print_separator
     
     if [ "$ATTACH" = true ]; then

@@ -720,15 +720,18 @@ grep -q "zlib/${ZLIB_VERSION}" "$WORK/interpose.txt" || fail "curl does not run 
 # not all load: no undefined (imported) unprefixed zlib API name and no expat XML_* name. One would bind to whatever
 # libz.so.1 / libexpat.so.1 is global at load time.
 ZAPI='^((adler32|crc32|compress|uncompress|deflate|inflate|gz)[A-Za-z0-9_]*|get_crc_table|zError|zlibCompileFlags|zlibVersion|XML_[A-Za-z0-9_]*)$'
-n_elf=0; bad_imp=""
-for f in "$R"/lib/* "$R"/hdf5-plugins/*; do
+n_elf=0; bad_imp=""; bad_nm=""
+for f in "$R"/lib/* "$R"/hdf5-plugins/* "$R"/bin/*; do
     [ -f "$f" ] && head -c 4 "$f" | grep -q "ELF" || continue
     n_elf=$((n_elf + 1))
-    imp="$(nm -D --undefined-only "$f" 2> /dev/null | awk '{s = $NF; sub(/@.*/, "", s); print s}' | grep -E "$ZAPI" | head -n 3 | tr '\n' ' ')"
+    # an nm that fails is a failed check, not a clean file
+    syms="$(nm -D --undefined-only "$f" 2>&1)" || { bad_nm="$bad_nm ${f#"$R"/}"; continue; }
+    imp="$(printf '%s\n' "$syms" | awk '{s = $NF; sub(/@.*/, "", s); print s}' | grep -E "$ZAPI" | head -n 3 | tr '\n' ' ')"
     [ -z "$imp" ] || bad_imp="$bad_imp ${f#"$R"/}: $imp;"
 done
-[ "$n_elf" -gt 0 ] || fail "the static zlib/expat import scan found no ELF file in lib/ or hdf5-plugins/"
+[ -z "$bad_nm" ] || fail "nm could not read the dynamic symbols of:$bad_nm"
+[ "$n_elf" -gt 0 ] || fail "the static zlib/expat import scan found no ELF file in lib/, hdf5-plugins/ or bin/"
 [ -z "$bad_imp" ] || fail "payload files import unprefixed zlib or expat symbols:$bad_imp"
-ok "symbol isolation: zlib exports z_* only, expat is local to libgdal; with the system libz.so.1 and libexpat.so.1 loaded first, 0 payload symbols bind to them ($n_pay payload bindings captured, $n_z z_* to lib/$LIBZ), KML and DEFLATE work, $(grep -o 'zlib/[0-9.]*' "$WORK/interpose.txt"); no unprefixed zlib or expat import in $n_elf ELF files of lib/ and hdf5-plugins/"
+ok "symbol isolation: zlib exports z_* only, expat is local to libgdal; with the system libz.so.1 and libexpat.so.1 loaded first, 0 payload symbols bind to them ($n_pay payload bindings captured, $n_z z_* to lib/$LIBZ), KML and DEFLATE work, $(grep -o 'zlib/[0-9.]*' "$WORK/interpose.txt"); no unprefixed zlib or expat import in $n_elf ELF files of lib/, hdf5-plugins/ and bin/"
 
 echo "VERIFY OK arch=$ARCH gdal=$GDAL_VERSION raster_drivers=$nr vector_drivers=$nv"

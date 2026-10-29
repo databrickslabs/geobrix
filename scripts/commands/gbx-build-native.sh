@@ -176,8 +176,12 @@ pack_debuginfo() {
         done < "$out/build-ids.txt"
         [ "$missing" = 0 ] || return 1
     fi
-    # no extended attributes (macOS adds com.apple.provenance, which GNU tar warns about on extraction)
-    COPYFILE_DISABLE=1 tar --no-xattrs -C "$out/debuginfo" -cJf "$tarball" .build-id
+    # byte-reproducible: sorted, mtimes at the build's SOURCE_DATE_EPOCH, owner 0, normalized modes, no extended
+    # attributes (macOS adds com.apple.provenance), whatever the host's tar (bsdtar has no --sort or --mtime)
+    local epoch
+    epoch="$(sed -n 's/^export SOURCE_DATE_EPOCH=//p' "$PROJECT_ROOT/scripts/native/build-lib.sh")"
+    [[ "$epoch" =~ ^[0-9]+$ ]] || { echo "BUILD FAILED: no SOURCE_DATE_EPOCH in scripts/native/build-lib.sh"; return 1; }
+    python3 "$PROJECT_ROOT/scripts/native/repro_tar.py" "$out/debuginfo" .build-id "$tarball" "$epoch" || return 1
     rm -rf "$out/debuginfo"
     echo "NATIVE_DEBUGINFO arch=$a tarball=$(basename "$tarball") bytes=$(wc -c < "$tarball" | tr -d ' ')" | tee -a "$out/build.txt"
 }

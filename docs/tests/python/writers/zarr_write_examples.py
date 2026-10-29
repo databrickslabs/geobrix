@@ -60,7 +60,7 @@ CLEAR_A_STALE_LOCK_output = """
 wait for the publish to finish. If it was killed and none is running, clear the lock with gbx_zarr_sync('weather_lock', break_lock=True), then publish again with gbx_zarr_export('weather_lock', method="publish"); a lock can be broken once it is at least 1 hour old
 """
 RECOVER_A_PUBLISH_output = """
-re-read the store at its latest version and write again
+the objects this publish already wrote are in the store, so run gbx_zarr_sync('weather_conflict') to record them, then publish again
 +------+-----+-------+
 |change|array|    key|
 +------+-----+-------+

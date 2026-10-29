@@ -249,14 +249,86 @@ def test_publish_writes_the_overlay_into_the_store(
 # --- the page (no Spark) ------------------------------------------------------------------
 
 
-def _constants():
-    """Every string literal of the package, and every literal piece of its f-strings."""
-    out = []
+def _text(node, named):
+    """A string expression of the package as text, with ``{…}`` where an f-string inserts a
+    value; ``None`` for anything that is not built from literals and module-level names."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        return "".join(
+            v.value if isinstance(v, ast.Constant) else "{…}" for v in node.values
+        )
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _text(node.left, named), _text(node.right, named)
+        return None if left is None or right is None else left + right
+    if isinstance(node, ast.Name):
+        return named.get(node.id)
+    return None
+
+
+def _fix_texts():
+    """Every fix the package gives: the ``fix=`` of a ``ZarrError``, and what follows ``Fix: ``
+    in the message of a ``ValueError``."""
+    out = set()
     for path in PKG.glob("*.py"):
-        for node in ast.walk(ast.parse(path.read_text())):
-            if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                out.append(node.value)
+        tree = ast.parse(path.read_text())
+        named = {}
+        for node in tree.body:
+            if (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+            ):
+                value = _text(node.value, named)
+                if value is not None:
+                    named[node.targets[0].id] = value
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                for kw in node.keywords:
+                    if kw.arg == "fix" and _text(kw.value, named) is not None:
+                        out.add(_text(kw.value, named))
+            if isinstance(node, (ast.Constant, ast.JoinedStr)):
+                value = _text(node, named)
+                if value and "Fix: " in value:
+                    out.add(value.split("Fix: ", 1)[1])
     return out
+
+
+_WILDCARD = re.compile(r"'?<[^>]*>'?")  # <name> in a cell: a value the message fills in
+_FILLED = r"'?(?:\{…\}|<[^>]*>)'?"  # what <name> matches in the source: {…}, or text in <>
+
+
+def _ends_at_a_boundary(cell, rest):
+    """Whether a cell may stop where ``rest`` (the rest of the fix) goes on: at the end, after a
+    sentence (or the cell's own full stop), or before a clause in parentheses."""
+    if rest in ("", "."):
+        return True
+    if rest in ("; {…}", ": {…}"):  # the instruction itself is what follows: spell it out
+        return False
+    if cell.endswith((".", ";")):
+        return rest[:1].isspace()
+    return rest.startswith(("; ", ". ", " ("))
+
+
+def _starts_a_fix(cell, fixes):
+    """Whether ``cell`` is the start of one of ``fixes``, ending at a boundary of the text.
+
+    ``<name>`` in a cell stands for a value the message fills in (``{…}`` in the source). A cell
+    that covers a whole fix may also spell out what a ``{…}`` of the source stands for.
+    """
+    literal = _WILDCARD.split(cell)
+    start = re.compile(_FILLED.join(re.escape(p) for p in literal), re.S)
+    covered = _WILDCARD.sub("X", cell).rstrip(".")
+    for fix in fixes:
+        if fix.startswith("{…}"):  # a fix that is only a filled-in value says nothing
+            continue
+        m = start.match(fix)
+        if m and _ends_at_a_boundary(cell, fix[m.end() :]):
+            return True
+        whole = ".+?".join(re.escape(p) for p in fix.rstrip(".").split("{…}"))
+        if "{…}" in fix and re.fullmatch(whole, covered, re.S):
+            return True
+    return False
 
 
 @pytest.mark.structure
@@ -309,22 +381,41 @@ def test_signatures_on_the_page_are_the_signatures_in_the_package():
 
 
 @pytest.mark.structure
-def test_every_fix_the_page_quotes_is_in_the_package():
-    """The ``Fix:`` columns quote the start of the fix text in backticks; each must still be
-    a string of the package, so a reworded fix cannot leave the page behind."""
+def test_every_fix_the_page_quotes_is_the_start_of_a_fix_in_the_package():
+    """A "The fix says" cell is the start of the real fix, not a piece from its middle or its
+    end, and stops at a boundary of it (the end, a sentence or a parenthesis), never mid-clause."""
     text = PAGE.read_text()
-    constants = _constants()
-    quoted = []
+    fixes = _fix_texts()
+    cells = []
     for table in re.findall(
-        r"^\| Error \| Raised when \| The fix says \|\n\|[-| ]+\|\n((?:\|.*\n)+)", text, re.M
+        r"^\| Error \| Raised when \| The fix says \|\n\|[-| ]+\|\n((?:\|.*\n)+)",
+        text,
+        re.M,
     ):
         for row in table.strip().splitlines():
-            cells = [c.strip() for c in row.strip().strip("|").split("|")]
-            assert len(cells) == 3 and cells[2].startswith("`"), row
-            quoted.append(cells[2].strip("`"))
-    assert len(quoted) >= 40, f"expected the error tables, found {len(quoted)} fixes"
-    missing = [q for q in quoted if not any(q in c for c in constants)]
-    assert not missing, f"not in the package: {missing}"
+            cols = [c.strip() for c in row.strip().strip("|").split("|")]
+            assert len(cols) == 3 and cols[2].startswith("`"), row
+            cells.append(cols[2].strip("`"))
+    assert len(cells) >= 40, f"expected the error tables, found {len(cells)} fixes"
+    wrong = [c for c in cells if not _starts_a_fix(c, fixes)]
+    assert not wrong, f"not the start of a fix of the package: {wrong}"
+
+
+@pytest.mark.structure
+def test_the_fix_guard_rejects_a_tail_a_middle_and_a_cut_in_a_clause():
+    fixes = {
+        "append {…} labels on the store's step",
+        "run gbx_zarr_sync({…}), then publish again",
+        "wait for the publish to finish. If it was killed, clear the lock with x",
+        "the files were vacuumed; export a later version or a tag",
+    }
+    assert _starts_a_fix("append '<dimension>' labels on the store's step", fixes)
+    assert _starts_a_fix("run gbx_zarr_sync('<table>'), then publish again", fixes)
+    assert _starts_a_fix("wait for the publish to finish.", fixes)  # a sentence
+    assert _starts_a_fix("the files were vacuumed; export a later version or a tag", {"the files were vacuumed; {…}"})
+    assert not _starts_a_fix("labels on the store's step", fixes)  # a tail
+    assert not _starts_a_fix("then publish again", fixes)  # a tail
+    assert not _starts_a_fix("wait for the publish to finish. If it was killed, clear", fixes)
 
 
 @pytest.mark.structure

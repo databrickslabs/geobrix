@@ -262,7 +262,7 @@ The GDAL reader can work with [many GDAL raster drivers](https://gdal.org/driver
 - **GRIB/GRIB2** (.grb, .grib2) - Meteorological data
 - **JPEG2000** (.jp2) - High-compression imagery
 - **ENVI** (.hdr) - Remote sensing format
-- **Zarr** - Cloud-native array storage. For Zarr cubes use `gbx_zarr_read` instead of GDAL (see [Zarr stores](../formats/zarr)); the GDAL versions GeoBrix ships cannot read sharded Zarr v3 stores
+- **Zarr** - Cloud-native array storage. For Zarr cubes use `gbx_zarr_read` instead of GDAL (see [Zarr stores](../formats/zarr)); GDAL before 3.13 cannot read sharded Zarr v3 stores, or ones that use the `crc32c` codec, which `gbx_zarr_write` writes by default
 - **And 150+ more formats**
 
 :::note Format Availability

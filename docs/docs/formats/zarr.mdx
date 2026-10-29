@@ -374,7 +374,7 @@ refuses a version that vacuum has already removed.
   testFile="docs/tests/python/formats/test_zarr_examples.py" />
 
 **Export** takes a version out of GeoBrix. `method="copy"` writes a plain Zarr store at canonical keys,
-in the store's own format, with the metadata written last, so any Zarr tool can open it and a reader
+in the store's own format, with the metadata written last, so any Zarr v3 tool can open it and a reader
 never sees a half-written store. The target must be empty. Shards that are already in standard form are
 copied as bytes, without decoding.
 

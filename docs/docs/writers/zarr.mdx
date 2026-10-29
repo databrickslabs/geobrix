@@ -83,8 +83,8 @@ a round trip. The last two dimensions are the spatial ones; any before them are 
 | `"balanced"` | 24 leading steps, spatial tiles sized to fill the rest | Both |
 
 Only the first leading dimension takes the preset's step; any other leading dimension has chunks of 1. A
-size in a dict is used as given (an append dimension may want chunks longer than today's data), and a
-size is clipped to the dimension's length otherwise. A shard is always a whole number of chunks, and
+`chunks` dict sets the dimensions it names, as given (an append dimension may want chunks longer than
+today's data), and leaves the others at the `"balanced"` size; presets are clipped to a dimension's length. A shard is always a whole number of chunks, and
 the leading dimension's shard grows by whole chunks past the current length, so a store created small
 and appended to along time keeps filling the same shards. Coordinates are written as one unsharded chunk,
 long enough that appends keep landing in it.
@@ -297,11 +297,10 @@ describes what it does and guarantees). The limits:
   `gbx_zarr_sync` and publish again.
 - **A write that lands on the table during a publish makes the publish fail.** The publish commits with a
   compare-and-swap on the overlay rows it turns into store objects, so if a writer replaced one of them
-  after the publish read it, the commit raises `ZarrWriteConflict` and the table does not move. The
-  objects the publish had already written are in the store: run `gbx_zarr_sync`, which lists them (the
-  change is `both` for a key the overlay also changed, and the overlay still wins), then publish again.
-  The `Fix:` of that error is the generic "re-read the store at its latest version and write again";
-  for a publish, sync first, as below.
+  after the publish read it, or Delta rejects the commit because a writer really raced it, the publish
+  raises `ZarrWriteConflict` and the table does not move. The objects the publish had already written are
+  in the store, and the `Fix:` says to run `gbx_zarr_sync`, which lists them (the change is `both` for a key
+  the overlay also changed, and the overlay still wins), then publish again. The lock is released.
 
 <CodeFromTest code={zarrWrite} language="python" functionName="recover_a_publish"
   source="docs/tests/python/writers/zarr_write_examples.py"
@@ -320,7 +319,9 @@ describes what it does and guarantees). The limits:
 
 A publish records the identity of each object it wrote only after the Volume has settled the object's
 modification time (a Volume moves it to the next whole second a moment after the write), so a read right
-after a publish does not report drift. The version `gbx_zarr_export(..., method="publish")` returns is the
+after a publish does not report drift. After looking at each object once it waits, up to 2 seconds in all, for
+the times still moving to settle; an object whose time has not settled by then is recorded as it is, with a
+warning, and `gbx_zarr_sync` puts its identity right. The version `gbx_zarr_export(..., method="publish")` returns is the
 commit that turned the overlay rows into store objects.
 
 ## Folding after a write
@@ -354,8 +355,9 @@ Files anywhere else under the root, and any other store's root, are never touche
 
 ## Errors
 
-Every error GeoBrix raises ends with a `Fix:` that says how to resolve it. A mistake in the call is raised
-on the driver before any file is written. An error raised while Spark runs the write arrives from the
+Every error GeoBrix defines is a `ZarrError` and ends with a `Fix:` that says how to resolve it; a bad
+argument is a `ValueError` that ends the same way. A mistake in the call is raised on the driver before any
+file is written. An error raised while Spark runs the write arrives from the
 action as a `pyspark.errors.PythonException`, with the GeoBrix error name and its `Fix:` line in the
 message; a failed write commits nothing. The full list, with the cause of each, is in the
 [Zarr Function Reference](../api/zarr-functions#errors).

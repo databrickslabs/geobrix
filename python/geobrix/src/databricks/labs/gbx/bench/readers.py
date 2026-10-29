@@ -8696,6 +8696,111 @@ def stage_exif_corpus(
     return staged
 
 
+ZARR_COG_MANIFEST = "cog_hourly_manifest.json"
+
+
+def stage_zarr_cog_corpus(
+    spark, store: str, corpus_dir: str, variable: str = "t2m", block: int = 24
+) -> dict:
+    """Copy ``variable`` of the plain Zarr store ``store`` to one tiled GeoTIFF per time
+    step under ``corpus_dir``, for the Zarr bench's COG comparisons (R1-R3).
+
+    Bench-only helper. Idempotent: when ``corpus_dir`` already holds the manifest
+    (``cog_hourly_manifest.json``) nothing is written and the manifest is returned. Each
+    file is one hour, EPSG:4326, float32, 512 x 512 tiles, written with the canonical
+    ``write_gtiff`` (ZSTD and the float predictor). Longitudes go from the store's 0..360
+    to -180..180 (columns rolled), the usual layout of a global GeoTIFF; the manifest
+    records the roll, the files in time order and their times.
+
+    One Spark task copies ``block`` steps (one time chunk of the store, so each chunk is
+    decoded once), writing each file in one sequential write (a Volume rejects seeks).
+    """
+    import json
+
+    import pandas as pd
+
+    manifest = os.path.join(corpus_dir, ZARR_COG_MANIFEST)
+    if os.path.exists(manifest):
+        with open(manifest) as fh:
+            man = json.load(fh)
+        print(
+            f"stage_zarr_cog_corpus: {len(man['files'])} file(s) already staged under "
+            f"{corpus_dir}; nothing written",
+            flush=True,
+        )
+        return man
+
+    import numpy as np
+    import xarray as xr
+
+    ds = xr.open_zarr(store, consolidated=None)
+    times = [str(t) for t in ds["time"].values.astype("datetime64[s]")]
+    lat = ds["latitude"].values.astype("float64")
+    lon = ds["longitude"].values.astype("float64")
+    roll = -int(np.argmax(lon >= 180.0)) if (lon >= 180.0).any() else 0
+    dx, dy = float(lon[1] - lon[0]), float(lat[0] - lat[1])
+    west = float(np.roll(np.where(lon >= 180.0, lon - 360.0, lon), roll)[0]) - dx / 2
+    north = float(lat[0]) + dy / 2
+    os.makedirs(corpus_dir, exist_ok=True)
+    names = [f"{variable}_{t.replace(':', '')}.tif" for t in times]
+    n_blocks = -(-len(times) // block)
+
+    def copy(batches):
+        import zarr
+        from rasterio.transform import from_origin
+
+        from databricks.labs.gbx.pyrx.core.compression import write_gtiff
+
+        arr = zarr.open_array(os.path.join(store, variable), mode="r")
+        profile = {
+            "driver": "GTiff",
+            "dtype": "float32",
+            "count": 1,
+            "height": int(arr.shape[1]),
+            "width": int(arr.shape[2]),
+            "crs": "EPSG:4326",
+            "transform": from_origin(west, north, dx, dy),
+            "tiled": True,
+            "blockxsize": 512,
+            "blockysize": 512,
+        }
+        for pdf in batches:
+            done = []
+            for b in pdf["id"]:
+                lo, hi = int(b) * block, min((int(b) + 1) * block, arr.shape[0])
+                slab = np.asarray(arr[lo:hi], dtype="float32")
+                for i, step in enumerate(range(lo, hi)):
+                    data = np.roll(slab[i], roll, axis=1)[None]
+                    with open(os.path.join(corpus_dir, names[step]), "wb") as fh:
+                        fh.write(write_gtiff(profile, data))
+                    done.append(step)
+            yield pd.DataFrame({"step": done})
+
+    steps = (
+        spark.range(n_blocks)
+        .repartition(n_blocks, "id")
+        .mapInPandas(copy, "step long")
+        .count()
+    )
+    man = {
+        "store": store,
+        "variable": variable,
+        "files": [os.path.join(corpus_dir, n) for n in names],
+        "times": times,
+        "lon_roll": roll,
+        "transform": [west, dx, north, dy],
+        "crs": "EPSG:4326",
+        "tile": [512, 512],
+    }
+    with open(manifest, "w") as fh:
+        json.dump(man, fh)
+    print(
+        f"stage_zarr_cog_corpus: {steps} GeoTIFF(s) of {variable} staged under {corpus_dir}",
+        flush=True,
+    )
+    return man
+
+
 def _write_striped_gtiff(
     path: str, width: int, height: int, bands: int, dtype: str
 ) -> None:

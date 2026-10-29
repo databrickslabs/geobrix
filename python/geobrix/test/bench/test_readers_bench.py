@@ -1,5 +1,6 @@
 """Unit test: reader bench pure-local path produces a ResultRow with timing."""
 
+import os
 from unittest.mock import patch
 
 import numpy as np
@@ -273,3 +274,29 @@ def test_stage_exif_corpus_writes_readable_jpegs(tmp_path):
     assert len(jpgs) == 3
     with Image.open(str(jpgs[0])) as img:
         assert img.size[0] > 0 and img.size[1] > 0
+
+
+def test_stage_zarr_cog_corpus_copies_each_step_once(spark, tmp_path):
+    """One tiled GeoTIFF per step of a Zarr store, longitudes moved to -180..180, the same
+    values; a second call finds the manifest and writes nothing."""
+    import pytest
+
+    pytest.importorskip("zarr")
+    from databricks.labs.gbx.zarr._testing import era5_like_dataset, make_era5_like
+
+    ds = era5_like_dataset(hours=4, step=10.0, variables=("t2m",))
+    store = make_era5_like(
+        tmp_path / "s.zarr", dataset=ds, sharded=False, chunks=(2, 19, 36)
+    )
+    out = tmp_path / "cog"
+    man = readers.stage_zarr_cog_corpus(spark, str(store), str(out), block=3)
+    assert len(man["files"]) == 4 and man["lon_roll"] == -18  # 180 E is column 18
+    with rasterio.open(man["files"][2]) as src:
+        assert src.profile["tiled"] and src.crs.to_epsg() == 4326
+        assert src.bounds.left == -185.0  # half a 10-degree cell west of -180
+        np.testing.assert_array_equal(
+            src.read(1), np.roll(ds.t2m.values[2], -18, axis=1)
+        )
+    stamp = {f: (out / f).stat().st_mtime_ns for f in os.listdir(out)}
+    assert readers.stage_zarr_cog_corpus(spark, str(store), str(out)) == man
+    assert {f: (out / f).stat().st_mtime_ns for f in os.listdir(out)} == stamp

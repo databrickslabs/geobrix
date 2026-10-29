@@ -429,3 +429,59 @@ def test_bng_grid_cell_rejects_an_unknown_bng_name():
 def test_bng_grid_cell_ignores_bng_functions_of_the_function_benchmark():
     """bng_cellfill is a registered bench function, not a BNG leg: all legs run."""
     assert len(_bng_cell_legs("bng_cellfill")) == 23
+
+
+@pytest.mark.parametrize(
+    "serverless, extras, want",
+    [
+        (True, "", "geobrix[light_env6,zarr_env6]"),
+        (False, "", "geobrix[light_dbr19,zarr_dbr19]"),
+        (False, "light_dbr19,zarr_dbr19,vizx", "geobrix[light_dbr19,zarr_dbr19,vizx]"),
+    ],
+)
+def test_the_zarr_cell_runs_alone_with_the_runtime_zarr_extras(
+    serverless, extras, want
+):
+    """--zarr-only: one Zarr cell carrying the launcher's settings, no function sections,
+    and the install cell adds the runtime's Zarr extras (or --extras)."""
+    zarr = dict(
+        zarr_store="/Volumes/c/s/v/era5.zarr",
+        zarr_cog_dir="/Volumes/c/s/v/cog",
+        zarr_scratch="/Volumes/c/s/v/scratch",
+        zarr_schema="c.scratch",
+        zarr_cases="R1,W1",
+        zarr_reps=3,
+    )
+    nb = cl.build_bench_notebook(
+        _cfg(
+            heavyweight=False,
+            modes="spark-path",
+            zarr_only=True,
+            serverless=serverless,
+            extras=extras,
+            **zarr,
+        )
+    )
+    srcs = ["".join(c["source"]) for c in nb["cells"]]
+    assert want in srcs[0] and "geobrix[light-dbr19]" not in srcs[0]
+    assert not _section_cells(nb)
+    (cell,) = [s for s in srcs if "_zb.run_zarr_cases" in s]
+    assert "'cases': ('R1', 'W1')" in cell and f"'serverless': {serverless}" in cell
+    assert "'store': '/Volumes/c/s/v/era5.zarr'" in cell
+    compile(cell, "zarr_cell", "exec")
+    # on Serverless the job environment can install everything: the cell only reports it
+    if serverless:
+        env = cl.build_bench_notebook(
+            _cfg(
+                heavyweight=False,
+                zarr_only=True,
+                serverless=True,
+                env_deps=True,
+                **zarr,
+            )
+        )
+        assert "installed by the job environment" in "".join(env["cells"][0]["source"])
+    # without a Zarr leg the install cell is unchanged
+    assert "geobrix[light-dbr19]" in "".join(
+        cl.build_bench_notebook(_cfg())["cells"][0]["source"]
+    )

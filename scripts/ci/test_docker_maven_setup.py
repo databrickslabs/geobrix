@@ -29,18 +29,28 @@ def checkout(tmp_path, with_default=True, m2_settings=None):
     (conf / "settings.xml").write_text(IMAGE_SETTINGS)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    calls = tmp_path / "calls.log"
     mvn = bin_dir / "mvn"
-    mvn.write_text('#!/bin/sh\necho "The following profiles are active:"\necho " - skipScoverage"\n')
+    mvn.write_text(
+        f'#!/bin/sh\necho "mvn $*" >> "{calls}"\necho "The following profiles are active:"\necho " - skipScoverage"\n'
+    )
     mvn.chmod(0o755)
+    # the GDAL Java classes installer (scripts/native/java_jar.py): logged, exit code from FAKE_INSTALL_RC
+    py = bin_dir / "python3"
+    py.write_text(
+        f'#!/bin/sh\necho "python3 $*" >> "{calls}"\nexit "${{FAKE_INSTALL_RC:-0}}"\n'
+    )
+    py.chmod(0o755)
     return root, conf, bin_dir
 
 
-def run(root, conf, bin_dir):
+def run(root, conf, bin_dir, **extra):
     env = dict(
         os.environ,
         GBX_CONTAINER_ROOT=str(root),
         GBX_MAVEN_CONF_DIR=str(conf),
         PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        **extra,
     )
     return subprocess.run(["sh", str(SETUP)], env=env, capture_output=True, text=True)
 
@@ -80,3 +90,24 @@ def test_without_any_settings_the_image_settings_stay_in_place(tmp_path):
     assert res.returncode == 1
     assert (conf / "settings.xml").read_text() == IMAGE_SETTINGS
     assert not (conf / "settings.xml.BAK").exists()
+
+
+def test_the_gdal_java_classes_are_installed_before_maven_resolves_anything(tmp_path):
+    # pom.xml's org.gdal:gdal is the native build's jar, in no repository: java_jar.py puts it into the project's
+    # local repository (the settings' localRepository) before the first mvn call
+    root, conf, bin_dir = checkout(tmp_path)
+    res = run(root, conf, bin_dir)
+    assert res.returncode == 0, res.stdout + res.stderr
+    calls = (tmp_path / "calls.log").read_text().splitlines()
+    install = f"python3 {root}/scripts/native/java_jar.py install --repo {root}/scripts/docker/m2"
+    assert calls[0] == install, calls
+    assert calls[1].startswith("mvn ") and len(calls) == 2
+
+
+def test_a_refused_install_stops_the_setup_before_maven(tmp_path):
+    root, conf, bin_dir = checkout(tmp_path)
+    res = run(root, conf, bin_dir, FAKE_INSTALL_RC="1")
+    assert res.returncode == 1
+    assert [
+        c.split()[0] for c in (tmp_path / "calls.log").read_text().splitlines()
+    ] == ["python3"]

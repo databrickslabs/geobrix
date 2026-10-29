@@ -25,6 +25,9 @@ on:
       - '.maven-keys.list'
       - '.github/workflows/verify-maven-pgp.yml'
       - 'scripts/security/maven-pgp-*'
+      - 'scripts/native/maven/**'
+      - 'scripts/native/rust-pins.conf'
+      - 'scripts/native/java_jar.py'
       - '.mvn/wrapper/**'
       - 'mvnw'
   pull_request:
@@ -34,6 +37,9 @@ on:
       - '.maven-keys.list'
       - '.github/workflows/verify-maven-pgp.yml'
       - 'scripts/security/maven-pgp-*'
+      - 'scripts/native/maven/**'
+      - 'scripts/native/rust-pins.conf'
+      - 'scripts/native/java_jar.py'
       - '.mvn/wrapper/**'
       - 'mvnw'
   workflow_dispatch: {}
@@ -80,6 +86,12 @@ jobs:
         uses: ./.github/actions/maven-wrapper
         with:
           jfrog-access-token: ${{ steps.jfrog.outputs.jfrog-access-token }}
+
+      # GDAL's Java classes come from the GeoBrix native build (scripts/native/maven), in no repository: install them
+      # sha256-checked against their pin and with no Maven plugin, before the PGP gate resolves anything. Their
+      # keysmap entry is noSig, so the pin checked here is their trust anchor.
+      - name: Install GDAL's Java classes from the native build
+        run: python3 scripts/native/java_jar.py install
 
       - name: Verify Maven dependency PGP signatures
         run: ./scripts/security/maven-pgp-verify

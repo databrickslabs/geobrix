@@ -77,6 +77,11 @@
         <spec2.version>4.2.0</spec2.version>
         <!-- Lint: set -Dscalastyle.fail=false in CI when lint should not fail the build (e.g. non-main PRs) -->
         <scalastyle.fail>true</scalastyle.fail>
+        <!-- GDAL's Java classes from the native build that makes the env wheel's JNI: <GDAL_VERSION>-gbx<GBX_NATIVE_REVISION>
+             of scripts/native/pins.conf (pins.py audit checks it). The jar is scripts/native/maven/gdal-<this>.jar, in no
+             repository: `python3 scripts/native/java_jar.py install` puts it into the local one, sha256-checked against
+             its pin, once per checkout and after every bump (the dev container's Maven setup and CI run it). -->
+        <gdal.java.version>3.13.3-gbx1</gdal.java.version>
     </properties>
 
     <dependencies>
@@ -187,7 +192,7 @@
         <dependency>
             <groupId>org.gdal</groupId>
             <artifactId>gdal</artifactId>
-            <version>3.11.0</version>
+            <version>${gdal.java.version}</version>
         </dependency>
 
     </dependencies>

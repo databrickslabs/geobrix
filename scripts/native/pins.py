@@ -329,8 +329,10 @@ def pom_property(root: Path, pins: dict) -> list:
         r"<gdal\.java\.version>([^<]*)</gdal\.java\.version>", path.read_text()
     )
     want = f"{pins['GDAL_VERSION']}-gbx{pins['GBX_NATIVE_REVISION']}"
-    if m and m.group(1) != want:
-        return [f"pom.xml: gdal.java.version is {m.group(1)}, pins.conf says {want}"]
+    if not m or m.group(1) != want:
+        return [
+            f"pom.xml: gdal.java.version is {m.group(1) if m else 'missing'}, pins.conf says {want}"
+        ]
     return []
 
 

@@ -15,35 +15,23 @@ REPO = Path(__file__).resolve().parents[4]
 def payload_jvm_conf() -> dict:
     """The Spark conf that runs a test JVM on the env wheel payload's GDAL, when GBX_NATIVE_ROOT names a payload.
 
-    GDALManager loads the payload's JNI by path (GBX_NATIVE_ROOT); the GDAL Java classes must be that build's and
-    must live in GDALManager's class loader, because a JNI binds to the class loader that loaded it. So the
-    payload build's GDAL classes and then the staged JAR go on the driver's class path (one loader, the build's
-    classes first), and the payload's JNI first on the library path, so GDAL's own load by name finds the same
-    file. Empty when there is no payload, no Java classes built from it, or no staged JAR.
+    GDALManager loads the JNI of ``spark.databricks.labs.gbx.native.dir`` (the payload's ``_native/<arch>``) by
+    path, and the JAR's GDAL Java classes come from that build. Those classes also load the first
+    ``libgdalalljni.so`` on the JVM's library path by name, and the dev image's system JNI is on it, so the
+    payload's ``lib/`` goes first there (GDALManager refuses a second GDAL otherwise; an image whose
+    ``/usr/lib/libgdalalljni.so`` is the payload's needs no such entry). Empty when there is no payload.
     """
     root = os.environ.get("GBX_NATIVE_ROOT")
     if not root:
         return {}
-    from databricks.labs.gbx import _native, manifest
+    from databricks.labs.gbx import _native
 
     d = _native.native_dir(root)
     if not d or not os.path.isfile(os.path.join(d, "lib", "libgdalalljni.so")):
         return {}
-    arch = os.path.basename(d)
-    jar = (
-        REPO
-        / "build/native/out"
-        / arch
-        / "stage-native/gdal-native/java"
-        / f"gdal-{manifest.load().gdal.pin}.jar"
-    )
-    if not jar.is_file() or not STAGED_JARS:
-        return {}
     return {
+        "spark.databricks.labs.gbx.native.dir": d,
         "spark.driver.extraLibraryPath": os.path.join(d, "lib"),
-        "spark.driver.extraClassPath": os.pathsep.join(
-            [str(jar), str(STAGED_JARS[-1])]
-        ),
     }
 
 

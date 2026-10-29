@@ -41,6 +41,10 @@ HELP_PLUGIN="3.5.1"
 # No -q: the plugin reports through the INFO log, so -q printed an empty list under the heading above.
 # Show just the profile lines on success; on failure show everything Maven said and stop.
 cd "$ROOT"
+# GDAL's Java classes come from the native build (scripts/native/maven), in no repository: put them into the
+# project-local repository, sha256-checked against their pin, with no Maven plugin, before Maven resolves anything.
+echo "    GDAL Java classes:"
+python3 "$ROOT/scripts/native/java_jar.py" install --repo "$ROOT/scripts/docker/m2" || exit 1
 if ! profiles_out="$(mvn -B "org.apache.maven.plugins:maven-help-plugin:${HELP_PLUGIN}:active-profiles" 2>&1)"; then
     echo "$profiles_out"
     exit 1

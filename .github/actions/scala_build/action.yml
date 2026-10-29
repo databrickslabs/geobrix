@@ -58,6 +58,11 @@ runs:
           uses: ./.github/actions/maven-wrapper
           with:
             jfrog-access-token: ${{ steps.jfrog.outputs.jfrog-access-token }}
+        # GDAL's Java classes come from the GeoBrix native build (scripts/native/maven), in no repository: install
+        # them sha256-checked against their pin and with no Maven plugin, before the PGP gate resolves anything.
+        - name: Install GDAL's Java classes from the native build
+          shell: bash
+          run: python3 scripts/native/java_jar.py install
         # Verify the PGP signature of every Maven dependency / plugin against
         # .maven-keys.list BEFORE any other ./mvnw call resolves or compiles them.
         # This is the "verify before use" gate — if Maven Central / the JFrog

@@ -68,7 +68,7 @@ light-base = [
     "shapely>=2.1.0",
     "numpy>=1.24.0",
     "pandas>=2.0.0",
-    "pyarrow>=11.0.0",
+    "pyarrow>=25.0.1",
     # Cap <2 to guard against a future scipy 2.x major at resolve time (no 2.x
     # exists yet — a no-op today, like the pyproj<4 / rio-tiler<9.3 pins). scipy is
     # floor-only elsewhere and floats to latest on the dev-container / transitive

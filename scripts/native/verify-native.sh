@@ -14,6 +14,7 @@
 #     OSGM15 and EGM96 heights both ways, PROJ_NETWORK off      14 projsync      15 curl with HTTP/2 (nghttp2)
 #  16 the HDF5 filter plugins     17 split debug symbols: none in the tree, a debug file per build-id, one address symbolized
 #  18 symbol isolation: the system zlib and expat in a process's global scope interpose on nothing of the payload's
+#     (a positive control: payload bindings were captured; and no payload ELF file imports an unprefixed zlib/expat name)
 set -uo pipefail
 
 R="$(cd "${1:-/gdal-native}" && pwd)"
@@ -707,7 +708,27 @@ LIBCURL="$LIBCURL" ROOT="$R" LD_DEBUG=bindings LD_DEBUG_OUTPUT="$WORK/bind" pyo 
     || fail "KML and DEFLATE beside the system zlib and expat: $(tail -c 500 "$WORK/interpose.txt")"
 n_sys="$(cat "$WORK"/bind.* 2> /dev/null | grep "binding file $R/" | grep -cE " to /(usr/)?lib[^ ]*/lib(z|expat)\.so")"
 [ "$n_sys" = 0 ] || fail "$n_sys symbols of payload files bind to the system zlib or expat, e.g. $(cat "$WORK"/bind.* | grep "binding file $R/" | grep -m1 -E " to /(usr/)?lib[^ ]*/lib(z|expat)\.so")"
+# The positive control: 0 bindings to the system copies means nothing only if the loader's bindings were captured, and
+# the payload's own zlib must be the one bound (z_* names, to lib/<hashed libz>).
+n_pay="$(cat "$WORK"/bind.* 2> /dev/null | grep "binding file $R/" | grep -c " to $R/")"
+# (a library is mapped under the path its loader found it by, such as $R/python/osgeo/../../lib/<libz>)
+n_z="$(cat "$WORK"/bind.* 2> /dev/null | grep "binding file $R/" | grep " to $R/" | grep "/$LIBZ \[" | grep -c "symbol \`z_")"
+{ [ "$n_pay" -gt 0 ] && [ "$n_z" -gt 0 ]; } \
+    || fail "the interposition check captured no bindings to the payload (payload files: $n_pay; z_* to lib/$LIBZ: $n_z): LD_DEBUG gave nothing to count"
 grep -q "zlib/${ZLIB_VERSION}" "$WORK/interpose.txt" || fail "curl does not run on the payload's zlib ${ZLIB_VERSION}: $(cat "$WORK/interpose.txt")"
-ok "symbol isolation: zlib exports z_* only, expat is local to libgdal; with the system libz.so.1 and libexpat.so.1 loaded first, 0 payload symbols bind to them, KML and DEFLATE work, $(grep -o 'zlib/[0-9.]*' "$WORK/interpose.txt")"
+# Statically, for every ELF file the payload ships in lib/ (the JNI included) and hdf5-plugins/, which that process does
+# not all load: no undefined (imported) unprefixed zlib API name and no expat XML_* name. One would bind to whatever
+# libz.so.1 / libexpat.so.1 is global at load time.
+ZAPI='^((adler32|crc32|compress|uncompress|deflate|inflate|gz)[A-Za-z0-9_]*|get_crc_table|zError|zlibCompileFlags|zlibVersion|XML_[A-Za-z0-9_]*)$'
+n_elf=0; bad_imp=""
+for f in "$R"/lib/* "$R"/hdf5-plugins/*; do
+    [ -f "$f" ] && head -c 4 "$f" | grep -q "ELF" || continue
+    n_elf=$((n_elf + 1))
+    imp="$(nm -D --undefined-only "$f" 2> /dev/null | awk '{s = $NF; sub(/@.*/, "", s); print s}' | grep -E "$ZAPI" | head -n 3 | tr '\n' ' ')"
+    [ -z "$imp" ] || bad_imp="$bad_imp ${f#"$R"/}: $imp;"
+done
+[ "$n_elf" -gt 0 ] || fail "the static zlib/expat import scan found no ELF file in lib/ or hdf5-plugins/"
+[ -z "$bad_imp" ] || fail "payload files import unprefixed zlib or expat symbols:$bad_imp"
+ok "symbol isolation: zlib exports z_* only, expat is local to libgdal; with the system libz.so.1 and libexpat.so.1 loaded first, 0 payload symbols bind to them ($n_pay payload bindings captured, $n_z z_* to lib/$LIBZ), KML and DEFLATE work, $(grep -o 'zlib/[0-9.]*' "$WORK/interpose.txt"); no unprefixed zlib or expat import in $n_elf ELF files of lib/ and hdf5-plugins/"
 
 echo "VERIFY OK arch=$ARCH gdal=$GDAL_VERSION raster_drivers=$nr vector_drivers=$nv"

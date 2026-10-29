@@ -283,7 +283,11 @@ build_arch() {
     if grep -Eq "^FROM .* AS export-$TARGET\$" "$DOCKERFILE"; then
         rm -rf "$out"
         mkdir -p "$out"
-        docker buildx build --platform "$plat" -f "$DOCKERFILE" "${args[@]}" --target "export-$TARGET" --output "type=local,dest=$out" "$GBX_NATIVE_BUILD/ctx/$a"
+        # The export reads the image just built (a named build context for the $TARGET stage), never the build cache:
+        # after a --no-cache build the cache also holds the previous build's layers, and the export picked those, so
+        # the tree written out was not the image's.
+        docker buildx build --platform "$plat" -f "$DOCKERFILE" "${args[@]}" --build-context "$TARGET=docker-image://$tag" \
+            --target "export-$TARGET" --output "type=local,dest=$out" "$GBX_NATIVE_BUILD/ctx/$a"
     fi
     t2=$(date +%s)
     size="$(docker image inspect --format '{{.Size}}' "$tag")"

@@ -12,7 +12,7 @@ bash scripts/commands/gbx-build-native.sh [--arch x86_64|aarch64|both] [--target
 
 - `--arch x86_64|aarch64|both` - default: this machine's architecture. `both` builds aarch64 first, then x86_64. The architecture that is not the host's runs under emulation and is much slower.
 - `--target toolchain|stage-native|bindings|rust-native` - default `bindings`. A target whose stage is not in `build.Dockerfile` yet stops with `PRECONDITION MISSING`. `stage-native`, `bindings` (which builds on `stage-native`, cached) and `rust-native` build on the toolchain image `geobrix-native-build:toolchain-<hash>-<arch>`: it is built first when missing, and an existing one is used as it is; a change to the toolchain stage or to a file it copies changes `<hash>`, so the next build makes a new toolchain image.
-- `--no-cache` - Rebuild every layer. A cold build's seconds are the full cost; a cached one reports only the layers that changed.
+- `--no-cache` - Rebuild every layer. A cold build's seconds are the full cost; a cached one reports only the layers that changed. The tree written to `build/native/out/<arch>/<target>/` is always the image just built (the export reads that image, not the build cache).
 - `--log <path>` - Write output to a log file (filename goes to `test-logs/<name>`, relative paths go under `test-logs/`, absolute paths are used as-is)
 - `--help` - Display help message
 
@@ -69,7 +69,7 @@ Per architecture, `scripts/native/verify-native.sh` runs in the toolchain image 
 15. libcurl is built with nghttp2 (`curl_version()` names it).
 16. `hdf5-plugins/` holds the zstd, blosc and bzip2 plugins (their closure is checked in 4).
 17. Debug symbols: no ELF file in the tree has `.debug_*` sections or a symbol table; every file's build-id is in `MANIFEST.json` (`build_ids`) and has its `.build-id/<xx>/<rest>.debug` in the tarball; the address of `GDALOpenEx` in the shipped (renamed, re-pathed) libgdal symbolizes with its debug file to `GDALOpenEx` in `gcore/`.
-18. Symbol isolation: `lib/`'s zlib exports `z_`-prefixed names only, no shared libexpat ships and libgdal exports or imports no `XML_*` symbol; then, with the system `libz.so.1` and `libexpat.so.1` loaded `RTLD_GLOBAL` first (what Ubuntu's and the runtimes' Python do), a KML write and read (expat) and a DEFLATE GeoTIFF round trip (zlib) work, `LD_DEBUG=bindings` shows no symbol of a payload file bound to the system zlib or expat, and curl reports the pinned zlib.
+18. Symbol isolation: `lib/`'s zlib exports `z_`-prefixed names only, no shared libexpat ships and libgdal exports or imports no `XML_*` symbol; then, with the system `libz.so.1` and `libexpat.so.1` loaded `RTLD_GLOBAL` first (what Ubuntu's and the runtimes' Python do), a KML write and read (expat) and a DEFLATE GeoTIFF round trip (zlib) work, `LD_DEBUG=bindings` shows no symbol of a payload file bound to the system zlib or expat (and, as the positive control, that it captured payload bindings, the payload's own `z_*` among them), and curl reports the pinned zlib. Statically, no ELF file in `lib/` (the JNI included) or `hdf5-plugins/` imports an unprefixed zlib name or an expat `XML_*` name.
 
 ### Debug symbols, and symbolizing a crash
 

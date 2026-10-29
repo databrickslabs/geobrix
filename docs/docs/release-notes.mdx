@@ -390,6 +390,19 @@ formats.
   DEM. Release v0.5.2 is affected; earlier releases are not, and neither is a call without a max
   distance.
 
+### Raster functions — `rst_sample` on virtual tiles (fix)
+
+- **The lightweight `rst_sample` on a virtual tile reads the pixel at its point and opens the
+  file once per task.** Each call used to open the tile's file twice, decode the tile's whole
+  window and encode it again before reading one pixel. An open of a file on a Volume is slow on
+  Databricks, so 100 points on each of four hourly global GeoTIFFs (721 by 1440 pixels) took
+  about a second a point. A call now reads only the block that holds its point, and the points of
+  one file in a task share one open of it: the same 400 samples take 2.5 s on Databricks Runtime
+  19, about 25 ms a point with the job's fixed cost, and on Serverless a point after the first in
+  a task takes about half a millisecond. The values are unchanged. Clipped or reprojected
+  virtual tiles, Zarr-backed and materialized tiles, and files with their own mask band are read
+  as before. Releases v0.5.0 to v0.5.2 are affected.
+
 ### Raster writers
 
 - **The lightweight COG writers write `raw` and `none` uncompressed.** `raster_gbx` with

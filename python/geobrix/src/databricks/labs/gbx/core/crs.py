@@ -85,14 +85,86 @@ def _is_intlike(value) -> bool:
     return False
 
 
+# The CRS strings resolve_crs parses, besides an int SRID. GDAL's universal parser reads a file when a string
+# names one (a relative name included), and PROJ opens a grid named by path, so anything else is refused: a CRS
+# value never reaches a file or the network. The JVM's SpatialRefOps.resolveCrs applies the same rule.
+_AUTH_CODE = re.compile(r"[A-Za-z][A-Za-z0-9_]*::?[A-Za-z0-9_.\-]+")
+_URL = re.compile(
+    r"[A-Za-z][A-Za-z0-9+.\-]*://"
+)  # a value that IS a URL (PROJJSON's $schema is not one)
+_WKT_START = re.compile(r"[A-Za-z][A-Za-z0-9_]*\s*\[")
+_URN_PREFIXES = ("urn:ogc:def:crs:", "urn:ogc:def:crs,crs:", "urn:x-ogc:def:crs:")
+_NAMED_CRS = frozenset({"WGS84", "WGS72", "NAD27", "NAD83"})
+# Grid (and init file) parameters, which PROJ opens by name: a bare name is looked up on PROJ's search path, the
+# registered grid directories included; a path is refused.
+_PROJ_GRID_PARAM = re.compile(
+    r"\+?\b(nadgrids|geoidgrids|grids|init)\s*=\s*([^\s\"\]]+)", re.I
+)
+_WKT_GRID_PARAM = re.compile(
+    r'(?:PROJ4_GRIDS"\s*,\s*"|PARAMETERFILE\s*\[\s*"[^"]*"\s*,\s*")([^"]*)"', re.I
+)
+_JSON_STRING_VALUE = re.compile(r'"value"\s*:\s*"([^"]*)"')
+CRS_FIX = "Fix: pass EPSG:<code> (or another AUTHORITY:CODE), an integer SRID, WKT, PROJJSON or a +proj string"
+
+
+def _names_a_path(value: str) -> bool:
+    """True for a grid value (or a comma list of them) that names a file by path rather than by grid name."""
+    items = [i.strip().lstrip("@") for i in value.split(",")]
+    return any("/" in i or "\\" in i or i.startswith(".") for i in items if i)
+
+
+def crs_text_kind(value: str) -> str:
+    """The kind of CRS string ``value`` is: ``auth`` (``EPSG:4326``), ``wkt``, ``projjson``, ``proj``, ``urn`` or
+    ``named`` (``WGS84``). Raises ValueError, naming what the value is and with a ``Fix:``, for anything else (a
+    file name, a URL) and for a grid or init file named by path; such a value is never read.
+    """
+    v = value.strip()
+    if not v:
+        raise ValueError(f"resolve_crs: the CRS value is empty. {CRS_FIX}")
+    if _URL.match(v) or v.lower().startswith("www."):
+        raise ValueError(
+            f"resolve_crs: '{value}' is a URL; a CRS value is never fetched. {CRS_FIX}"
+        )
+    if v.startswith("{"):
+        kind = "projjson"
+        grids = _JSON_STRING_VALUE.findall(v)
+    elif v.startswith("+") or "+proj=" in v:
+        kind = "proj"
+        grids = []
+    elif _WKT_START.match(v):
+        kind = "wkt"
+        grids = _WKT_GRID_PARAM.findall(v)
+    elif v.lower().startswith(_URN_PREFIXES):
+        return "urn"
+    elif v.upper() in _NAMED_CRS:
+        return "named"
+    elif _AUTH_CODE.fullmatch(v):
+        return "auth"
+    else:
+        raise ValueError(
+            f"resolve_crs: '{value}' is not a CRS GeoBrix reads (it looks like a file or CRS name); a CRS "
+            f"value is never read from a file. {CRS_FIX}"
+        )
+    grids += [g for _, g in _PROJ_GRID_PARAM.findall(v)]
+    bad = [g for g in grids if _names_a_path(g)]
+    if bad:
+        raise ValueError(
+            f"resolve_crs: '{value}' names a grid or init file by path ({bad[0]}); a CRS value never names a "
+            "file. Fix: register the grid's directory with register_proj_grids and name the grid alone, or "
+            "pass EPSG:<code>"
+        )
+    return kind
+
+
 def resolve_crs(value: Union[int, str]) -> CRS:
     """Resolve a SRID int or CRS string to a rasterio CRS.
 
     Integer (or int-castable string): classified via the authoritative PROJ code sets —
     EPSG code -> ``EPSG:<n>``; else ESRI code -> ``ESRI:<n>``; else ``ValueError``.
-    Any other string: parsed as a CRS definition (``EPSG:x`` / ``ESRI:x`` / WKT / PROJ4).
-    Raises for a code in neither registry, or for unparseable garbage — intended (this is
-    the apply moment; callers guard ``0``/absent as "no CRS" before calling).
+    Any other string is one of the kinds ``crs_text_kind`` accepts (``AUTH:CODE``, WKT, PROJJSON, a PROJ string,
+    an OGC URN, ``WGS84``-style names), parsed by that kind's own importer, so it is never read from a file or a
+    URL; anything else raises with a ``Fix:``. Raises for a code in neither registry, or for unparseable
+    garbage — intended (this is the apply moment; callers guard ``0``/absent as "no CRS" before calling).
     """
     if _is_intlike(value):
         n = str(int(str(value).strip()))
@@ -101,7 +173,23 @@ def resolve_crs(value: Union[int, str]) -> CRS:
         if n in _esri_codes():
             return CRS.from_authority("ESRI", int(n))
         raise ValueError(f"resolve_crs: {n} is not a valid EPSG or ESRI code")
-    return CRS.from_user_input(value)
+    if isinstance(value, CRS):
+        return value
+    if not isinstance(value, str):
+        if isinstance(value, dict):  # PROJ parameters as a mapping
+            crs_text_kind(" ".join(f"+{k}={v}" for k, v in value.items()))
+        return CRS.from_user_input(value)
+    kind = crs_text_kind(value)
+    v = value.strip()
+    if kind == "auth":
+        auth, _, code = v.partition(":")
+        return CRS.from_authority(auth.upper(), code.lstrip(":"))
+    if kind == "wkt":
+        return CRS.from_wkt(v)
+    if kind == "proj":
+        return CRS.from_proj4(v)
+    # PROJJSON, an OGC URN or a named CRS: GDAL parses these before it would try a file.
+    return CRS.from_user_input(v)
 
 
 def authority_srid_of(crs: Optional[CRS]) -> Optional[int]:

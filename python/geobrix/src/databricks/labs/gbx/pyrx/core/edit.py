@@ -219,9 +219,9 @@ def set_srid(ds, srid: int) -> bytes:
 def set_crs(ds, crs_value) -> bytes:
     """Stamp the CRS WITHOUT reprojecting.
 
-    Accepts an int EPSG code, an int-castable string (``"4326"``), or any
-    string accepted by ``rasterio.crs.CRS.from_user_input`` (``"ESRI:54008"``,
-    WKT, PROJ4, …).  Pixel values and the GeoTransform are unchanged; only the
+    Accepts an int EPSG code, an int-castable string (``"4326"``), or a CRS
+    string (``"ESRI:54008"``, WKT, PROJJSON, PROJ4; never a file name or
+    URL).  Pixel values and the GeoTransform are unchanged; only the
     CRS metadata is rewritten.  Use ``rst_transformcrs`` for an actual
     reprojecting warp.
 

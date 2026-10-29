@@ -1,3 +1,4 @@
+import pyproj
 import pytest
 from rasterio.crs import CRS
 
@@ -75,3 +76,57 @@ def test_resolve_deprecated_epsg_still_epsg():
     # EPSG:4226 (Cape, deprecated) is a classic deprecated geographic CRS.
     c = C.resolve_crs(4226)
     assert c.to_authority()[0] == "EPSG"
+
+
+_WKT_32633 = CRS.from_epsg(32633).to_wkt()
+_GRID_WKT = CRS.from_epsg(4326).to_wkt()[:-1] + ',EXTENSION["PROJ4_GRIDS","{}"]]'
+CRS_VALUES = [
+    # (value, accepted?, what the refusal names)
+    ("secret_crs", False, "file"),
+    ("./secret_crs", False, "file"),
+    ("{abs}", False, "file"),
+    (
+        "+proj=longlat +datum=WGS84 +nadgrids=/etc/hostname +type=crs",
+        False,
+        "/etc/hostname",
+    ),
+    (
+        "+proj=longlat +datum=WGS84 +geoidgrids=./egm96.gtx +type=crs",
+        False,
+        "./egm96.gtx",
+    ),
+    (_GRID_WKT.format("/etc/hostname"), False, "/etc/hostname"),
+    ("+proj=longlat +datum=WGS84 +init=/tmp/epsg:4326", False, "/tmp/epsg:4326"),
+    ("http://example.com/crs.wkt", False, "URL"),
+    ("+proj=merc +a=6378137 +b=6378137 +nadgrids=@null +wktext +no_defs", True, None),
+    (
+        "+proj=longlat +datum=WGS84 +nadgrids=@gbx_registered_grid.gsb +type=crs",
+        True,
+        None,
+    ),
+    ("EPSG:3857", True, None),
+    ("esri:102003", True, None),
+    ("OGC:CRS84", True, None),
+    (_WKT_32633, True, None),
+    (pyproj.CRS.from_epsg(3857).to_json(), True, None),
+]
+
+
+@pytest.mark.parametrize("value,accepted,named", CRS_VALUES)
+def test_a_crs_value_never_reaches_a_file_or_the_network(
+    tmp_path, monkeypatch, value, accepted, named
+):
+    """The one matrix of the rule: a file name, a URL or a grid named by path is refused (with what it is and a
+    Fix), never read; the CRS spellings GeoBrix documents, bare and optional grid names included, resolve.
+    """
+    secret = tmp_path / "secret_crs"
+    secret.write_text(_WKT_32633)  # a planted file the parser must never read
+    monkeypatch.chdir(tmp_path)
+    value = value.replace("{abs}", str(secret))
+    if accepted:
+        assert C.resolve_crs(value) is not None
+        return
+    with pytest.raises(ValueError) as exc:
+        C.resolve_crs(value)
+    msg = str(exc.value)
+    assert (named if named in ("file", "URL") else named) in msg and "Fix:" in msg

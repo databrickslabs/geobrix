@@ -3371,9 +3371,9 @@ def rst_setcrs(
 ) -> Column:
     """Stamp the CRS WITHOUT reprojecting, accepting any CRS string.
 
-    Accepts an int EPSG code, an int-castable string (``"4326"``), or any
-    string accepted by ``rasterio.crs.CRS.from_user_input`` such as
-    ``"ESRI:54008"``, WKT, or PROJ4 strings.  Pixel values and the
+    Accepts an int EPSG code, an int-castable string (``"4326"``), or a CRS
+    string: ``"ESRI:54008"``, WKT, PROJJSON or PROJ4 (never a file name or URL,
+    and no grid named by path).  Pixel values and the
     GeoTransform are unchanged; only the CRS metadata is rewritten.  Use
     ``rst_transformcrs`` for an actual reprojecting warp.
 
@@ -3404,9 +3404,9 @@ def rst_transformcrs(
 ) -> Column:
     """Reproject the raster to a string-given target CRS.
 
-    Accepts any CRS descriptor accepted by ``rasterio.crs.CRS.from_user_input``:
-    int EPSG, int-castable string, authority string (``"EPSG:3857"``,
-    ``"ESRI:54008"``), WKT, or PROJ4.  Unlike ``rst_transform`` (int EPSG only)
+    Accepts int EPSG, an int-castable string, an authority string (``"EPSG:3857"``,
+    ``"ESRI:54008"``), WKT, PROJJSON or PROJ4 (never a file name or URL, and no grid
+    named by path).  Unlike ``rst_transform`` (int EPSG only)
     this supports non-EPSG targets such as ESRI codes or custom projections.
 
     Pixel-producing: always materializes (a new reprojected tile is emitted).

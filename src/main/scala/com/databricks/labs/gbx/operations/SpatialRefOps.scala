@@ -34,16 +34,71 @@ object SpatialRefOps {
         }
     }
 
+    // The CRS strings resolveCrs parses, besides an int SRID (mirrors the light `core.crs.crs_text_kind`). GDAL's
+    // universal parser reads a file when a string names one (a relative name included), and PROJ opens a grid named
+    // by path, so anything else is refused: a CRS value never reaches a file or the network.
+    private val AuthCode = "[A-Za-z][A-Za-z0-9_]*::?[A-Za-z0-9_.\\-]+".r
+    private val Url = "[A-Za-z][A-Za-z0-9+.\\-]*://".r // a value that IS a URL (PROJJSON's $schema is not one)
+    private val WktStart = "[A-Za-z][A-Za-z0-9_]*\\s*\\[".r
+    private val UrnPrefixes = Seq("urn:ogc:def:crs:", "urn:ogc:def:crs,crs:", "urn:x-ogc:def:crs:")
+    private val NamedCrs = Set("WGS84", "WGS72", "NAD27", "NAD83")
+    private val ProjGridParam = "(?i)\\+?\\b(nadgrids|geoidgrids|grids|init)\\s*=\\s*([^\\s\"\\]]+)".r
+    private val WktGridParam = "(?i)(?:PROJ4_GRIDS\"\\s*,\\s*\"|PARAMETERFILE\\s*\\[\\s*\"[^\"]*\"\\s*,\\s*\")([^\"]*)\"".r
+    private val JsonStringValue = "\"value\"\\s*:\\s*\"([^\"]*)\"".r
+    val CrsFix = "Fix: pass EPSG:<code> (or another AUTHORITY:CODE), an integer SRID, WKT, PROJJSON or a +proj string"
+    /** Parse options that keep OSR from reading a file or fetching a URL, whatever the string says. */
+    private def noAccess = new java.util.Vector[String](java.util.List.of("ALLOW_FILE_ACCESS=NO", "ALLOW_NETWORK_ACCESS=NO"))
+
+    private def namesAPath(value: String): Boolean =
+        value.split(",").map(_.trim.stripPrefix("@")).filter(_.nonEmpty)
+            .exists(i => i.contains("/") || i.contains("\\") || i.startsWith("."))
+
+    /** The kind of a CRS string: `auth`, `wkt`, `projjson`, `proj`, `urn` or `named`. Throws IllegalArgumentException,
+      * naming what the value is and with a `Fix:`, for anything else (a file name, a URL) and for a grid or init file
+      * named by path. */
+    def crsTextKind(value: String): String = {
+        val v = value.trim
+        // scalastyle:off caselocale
+        val lower = v.toLowerCase
+        // scalastyle:on caselocale
+        if (v.isEmpty) throw new IllegalArgumentException(s"resolveCrs: the CRS value is empty. $CrsFix")
+        if (Url.findPrefixOf(v).isDefined || lower.startsWith("www.")) {
+            throw new IllegalArgumentException(s"resolveCrs: '$value' is a URL; a CRS value is never fetched. $CrsFix")
+        }
+        val (kind, grids) =
+            if (v.startsWith("{")) ("projjson", JsonStringValue.findAllMatchIn(v).map(_.group(1)).toSeq)
+            else if (v.startsWith("+") || v.contains("+proj=")) ("proj", Seq.empty[String])
+            else if (WktStart.findPrefixOf(v).isDefined) ("wkt", WktGridParam.findAllMatchIn(v).map(_.group(1)).toSeq)
+            else if (UrnPrefixes.exists(p => lower.startsWith(p))) return "urn"
+            // scalastyle:off caselocale
+            else if (NamedCrs(v.toUpperCase)) return "named"
+            // scalastyle:on caselocale
+            else if (AuthCode.pattern.matcher(v).matches) return "auth"
+            else throw new IllegalArgumentException(
+              s"resolveCrs: '$value' is not a CRS GeoBrix reads (it looks like a file or CRS name); a CRS value is never " +
+                  s"read from a file. $CrsFix"
+            )
+        val bad = (grids ++ ProjGridParam.findAllMatchIn(v).map(_.group(2))).filter(namesAPath)
+        if (bad.nonEmpty) {
+            throw new IllegalArgumentException(
+              s"resolveCrs: '$value' names a grid or init file by path (${bad.head}); a CRS value never names a file. " +
+                  "Fix: register the grid's directory with register_proj_grids and name the grid alone, or pass EPSG:<code>"
+            )
+        }
+        kind
+    }
+
     /** Resolves a CRS string to a SpatialReference — the ONE place the heavy-tier
-      * int-cast rule lives (mirrors the light `pyrx.core.crs.resolve_crs`):
+      * int-cast rule lives (mirrors the light `core.crs.resolve_crs`):
       *   - an int-castable string (e.g. `"4326"`, `" 32633 "`) → `ImportFromEPSG(int)`;
-      *   - otherwise → `SetFromUserInput(value)`, GDAL's universal parser that accepts
-      *     `EPSG:x` / `ESRI:x` / WKT / PROJ4 / auth strings.
-      * Throws IllegalArgumentException if the value cannot be resolved to a valid CRS. */
+      *   - otherwise one of the kinds [[crsTextKind]] accepts (`EPSG:x` / `ESRI:x` / WKT / PROJJSON / PROJ4 / an OGC
+      *     URN / `WGS84`), parsed by `SetFromUserInput` with file and network access off.
+      * Throws IllegalArgumentException if the value cannot be resolved to a valid CRS, or names a file or URL. */
     def resolveCrs(value: String): SpatialReference = {
         require(value != null, "resolveCrs: CRS value is null")
         val trimmed = value.trim
         require(trimmed.nonEmpty, "resolveCrs: CRS value is empty")
+        if (Try(trimmed.toInt).isFailure) crsTextKind(trimmed)
         val sr = new SpatialReference()
         Try(trimmed.toInt).toOption match {
             case Some(epsg) =>
@@ -66,7 +121,7 @@ object SpatialRefOps {
                 // SetFromUserInput returns a non-zero OGRERR for unparseable input, but
                 // the GDAL Java binding may ALSO throw a native RuntimeException before
                 // returning; normalise both into a clean IllegalArgumentException.
-                val rc = Try(sr.SetFromUserInput(trimmed)).recover {
+                val rc = Try(sr.SetFromUserInput(trimmed, noAccess)).recover {
                     case e: Throwable =>
                         sr.delete()
                         throw new IllegalArgumentException(

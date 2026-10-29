@@ -2070,9 +2070,9 @@ def rst_bng_rasterize_agg(
         mode:       Sampling mode string (default ``"centroids"``).
         kring_pad:  K-ring expansion around each cell before rasterizing
                     (default ``1``; ``0`` = no expansion).
-        out_crs:    Ignored — BNG output is always EPSG:27700. Accepted, as on the
-                    lightweight tier, for signature parity with the H3 and quadbin
-                    aggregators.
+        out_crs:    Must be NULL on this (heavyweight) tier: a non-NULL value is
+                    refused with a parameter error. BNG output is always EPSG:27700;
+                    the lightweight tier accepts the argument and ignores it.
 
     Returns:
         Column of raster tile — the v2 tile struct with fields

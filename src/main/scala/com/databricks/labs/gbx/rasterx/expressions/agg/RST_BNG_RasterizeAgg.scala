@@ -7,7 +7,7 @@ import com.databricks.labs.gbx.util.SerializationUtil
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.aggregate.{ImperativeAggregate, TypedImperativeAggregate}
-import org.apache.spark.sql.catalyst.expressions.Expression
+import org.apache.spark.sql.catalyst.expressions.{Expression, Literal}
 import org.apache.spark.sql.types._
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream, DataInputStream, DataOutputStream}
@@ -123,6 +123,7 @@ case class RST_BNG_RasterizeAgg(
     heightExpr:    Expression,
     modeExpr:      Expression,
     kringPadExpr:  Expression,
+    outCrsExpr:    Expression = Literal.create(null, StringType),
     exprConfExpr:  Expression = ExpressionConfigExpr(),
     mutableAggBufferOffset: Int = 0,
     inputAggBufferOffset:   Int = 0
@@ -139,11 +140,11 @@ case class RST_BNG_RasterizeAgg(
         cellidExpr, valueExpr, outSridExpr, pixelSizeExpr,
         xminExpr, yminExpr, xmaxExpr, ymaxExpr,
         widthExpr, heightExpr, modeExpr, kringPadExpr,
-        exprConfExpr
+        outCrsExpr, exprConfExpr
     )
 
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): RST_BNG_RasterizeAgg =
-        copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5), nc(6), nc(7), nc(8), nc(9), nc(10), nc(11), nc(12))
+        copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5), nc(6), nc(7), nc(8), nc(9), nc(10), nc(11), nc(12), nc(13))
 
     override def withNewMutableAggBufferOffset(n: Int): ImperativeAggregate =
         copy(mutableAggBufferOffset = n)
@@ -159,6 +160,8 @@ case class RST_BNG_RasterizeAgg(
      *  [[BNG.parse]]; the accumulator stays Long-keyed so the serde is unchanged.
      */
     override def update(buffer: BNGRasterizeAcc, input: InternalRow): BNGRasterizeAcc = {
+        // out_crs is refused, not ignored (AP-43): a value the engine never reads would be a silent defect.
+        if (outCrsExpr.eval(input) != null) throw new IllegalArgumentException(RST_BNG_RasterizeAgg.OutCrsRefusal)
         val raw = cellidExpr.eval(input)
         if (raw == null) return buffer
         val cellId = raw match {
@@ -261,12 +264,22 @@ object RST_BNG_RasterizeAgg extends WithExpressionInfo {
     /** NoData fill value, matching the lightweight tier (`cellraster._NODATA`). */
     val NoData: Double = -9999.0
 
-    /** 12 arguments, or 13 with the trailing `out_crs`. BNG output is always EPSG:27700, so `out_crs`, like
-     *  `out_srid`, is accepted for signature parity with the light tier (whose `out_crs` is the same no-op) and not
-     *  read. */
+    /** The refusal of a non-NULL `out_crs` on the heavy tier (AP-43). BNG output is always EPSG:27700; the light tier
+      * takes the argument and ignores it (documented), so the two tiers differ only here, and the message says so. */
+    val OutCrsRefusal: String = "gbx_rst_bng_rasterize_agg: out_crs is not supported on the heavy tier, where the " +
+        "output is always EPSG:27700. Fix: pass NULL for out_crs (the light tier also gives EPSG:27700 for it)."
+
+    /** 12 arguments, or 13 with the trailing `out_crs`, which must be NULL: a non-NULL value is refused (AP-43). */
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => c.length match {
-        case 12 | 13 => RST_BNG_RasterizeAgg(
+        case 12 => RST_BNG_RasterizeAgg(
             c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7), c(8), c(9), c(10), c(11))
+        case 13 =>
+            c(12) match {
+                case Literal(v, _) if v != null => throw new IllegalArgumentException(OutCrsRefusal)
+                case _ =>
+            }
+            RST_BNG_RasterizeAgg(
+                c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7), c(8), c(9), c(10), c(11), c(12))
         case n => throw new IllegalArgumentException(
             s"$name expects 12 or 13 arguments " +
             s"(cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad[, out_crs]); got $n")

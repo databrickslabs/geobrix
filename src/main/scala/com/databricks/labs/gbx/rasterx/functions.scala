@@ -341,7 +341,8 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
             cellid, value, out_srid, pixelSize, xmin, ymin, xmax, ymax, width, height, mode, kringPad
         ))
 
-    /** As above, with the trailing `out_crs` (accepted and not read: BNG output is always EPSG:27700). */
+    /** As above, with the trailing `out_crs`: a non-NULL value is refused (BNG output is always EPSG:27700; the light
+      * tier takes the argument and ignores it). */
     def rst_bng_rasterize_agg(
         cellid: Column, value: Column, out_srid: Column, pixelSize: Column,
         xmin: Column, ymin: Column, xmax: Column, ymax: Column,

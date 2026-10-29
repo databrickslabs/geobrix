@@ -159,7 +159,9 @@ if [[ ${#NOTEBOOKS[@]} -gt 0 && "$KEEP_OUTPUTS" -ne 1 ]]; then
     trap 'git -C "$PROJECT_ROOT" worktree remove --force "$REVIEW_DIR" >/dev/null 2>&1' EXIT
     git worktree add --quiet --detach "$REVIEW_DIR" "$MERGE_BASE" || exit 2
     strip_outputs "$REVIEW_DIR" "${NOTEBOOKS[@]}"
-    git -C "$REVIEW_DIR" commit -q -a --allow-empty \
+    # The scratch commit never leaves this machine, so it carries its own identity: a checkout with no
+    # git user configured (a CI runner) must still be able to review.
+    git -C "$REVIEW_DIR" -c user.name=gbx-review -c user.email=gbx-review@localhost commit -q -a --allow-empty \
         -m "chore(review): scratch base with notebook outputs stripped" \
         -m "Local and detached, never pushed: lets isaac review without multi-MB outputs." \
         >/dev/null || exit 2

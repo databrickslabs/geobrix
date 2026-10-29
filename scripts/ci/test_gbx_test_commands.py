@@ -1145,7 +1145,19 @@ def test_review_round_keeps_a_relative_report_when_notebooks_are_stripped(sandbo
     )
     dbexec.chmod(0o755)
 
-    res = sandbox.run("gbx-review-round.sh", "--base", "HEAD~1", "--", "-o", "test-logs/r.md")
+    # No git identity anywhere (a CI runner): the scratch base must bring its own. useConfigOnly
+    # stops git from guessing one from the user and host name, which a developer's machine can.
+    no_identity = dict(
+        HOME=str(sandbox.root / "empty-home"),
+        GIT_CONFIG_GLOBAL="/dev/null",
+        GIT_CONFIG_NOSYSTEM="1",
+        GIT_CONFIG_COUNT="1",
+        GIT_CONFIG_KEY_0="user.useConfigOnly",
+        GIT_CONFIG_VALUE_0="true",
+    )
+    res = sandbox.run(
+        "gbx-review-round.sh", "--base", "HEAD~1", "--", "-o", "test-logs/r.md", **no_identity
+    )
 
     assert res.returncode == 0, res.output
     assert (sandbox.root / "test-logs" / "r.md").read_text() == "report\n"

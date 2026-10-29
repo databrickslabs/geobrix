@@ -90,8 +90,10 @@ _SPREAD = (
 )
 _CELL_BYTES = 64  # working bytes per sampled cell: indices, values and Arrow columns
 # A unit whose points need at least this share of the cells of the box around them reads the
-# box once and gathers (see _unit_boxes).
-_DENSE = 0.5
+# box once and gathers (see _unit_boxes). MEASURED on the ERA5 cube on Serverless (one 90 x 90
+# chunk, 744 steps): the box was faster from 12% of the cells up (2x there, 4x at 25%), the
+# point reads at 1% (by 0.07 s).
+_DENSE = 0.1
 _BOX_SHARE = 2  # a dense unit's boxes hold at most this fraction of the decoded budget
 _UID, _ROW, _COL = "__gbx_uid", "__gbx_r", "__gbx_c"
 _INTERNAL = (_UID, _ROW, _COL)

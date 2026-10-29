@@ -22,8 +22,10 @@ SCHEMA_VERSION = 1
 # The closed vocabulary of keys a function's per-level spec may carry. A mistyped key
 # would be read with `.get` and silently drop a guard, so a contract test rejects any key
 # outside this table; add a key here in the same change that first uses it.
+# `engine` marks a level that runs the row's `gdal` block on the GDAL spec engine where that engine can serve,
+# and its own implementation (the other keys) elsewhere.
 LEVEL_KEYS = {
-    "L1": frozenset({"companion", "needs_gdal", "session_returns"}),
+    "L1": frozenset({"companion", "needs_gdal", "session_returns", "engine"}),
     "L2": frozenset({"class", "returns", "bytes_param", "needs_gdal", "wrapper"}),
     "L3": frozenset(
         {
@@ -35,18 +37,48 @@ LEVEL_KEYS = {
             "udtf",
             "returns",
             "needs",
+            "engine",
         }
     ),
-    "L4": frozenset({"handler", "deps", "tvf_over"}),
+    "L4": frozenset({"handler", "deps", "tvf_over", "engine"}),
 }
 # Keys every spec of that level must carry.
 LEVEL_REQUIRED = {
-    "L1": frozenset({"companion"}),
     "L2": frozenset({"class", "returns"}),
     "L3": frozenset({"register"}),
 }
 # Levels whose spec must carry at least one of these keys.
-LEVEL_REQUIRED_ANY = {"L4": frozenset({"handler", "tvf_over"})}
+LEVEL_REQUIRED_ANY = {
+    "L1": frozenset({"companion", "engine"}),
+    "L4": frozenset({"handler", "tvf_over"}),
+}
+
+# The closed vocabulary of a row's `gdal` block (the GDAL spec engine's spec): what `parse_gdal_spec` accepts.
+GDAL_KEYS = frozenset({"alg", "in", "out", "write", "args", "needs_crs", "gdal_min"})
+GDAL_ARG_KEYS = frozenset(
+    {"arg", "const", "from", "type", "map", "null", "with", "bad"}
+)
+GDAL_IN_KINDS = frozenset({"raster", "rasters", "text"})
+GDAL_OUT_KINDS = frozenset({"raster", "features", "json"})
+GDAL_BINDERS = frozenset(
+    {
+        "double",
+        "int",
+        "bool",
+        "choice",
+        "crs",
+        "geom_wkt",
+        "double_list",
+        "calc_envelope",
+        "text_vsimem",
+        "observer_xy",
+        "size_from_factor",
+    }
+)
+GDAL_NULL = frozenset({"omit", "null_result", "raise"})
+GDAL_BAD = frozenset({"raise", "data"})
+# Write profiles: `tile` is a GTiff with the engine's creation options. No profile writes VRT or GDALG.
+GDAL_WRITE = frozenset({"tile"})
 
 # The v2 tile struct as a SQL type (== V2_TILE_SCHEMA.simpleString(); a contract test pins it).
 TILE_SQL = (
@@ -63,6 +95,121 @@ class Param:
     uc: str
     default: Optional[str] = None
     uc_crs: bool = False
+
+
+@dataclass(frozen=True)
+class GdalArg:
+    """One argument of a spec's template: a fixed value (`const`; True is a bare flag) or a param bound
+    through a binder (`source`, `type`)."""
+
+    arg: str
+    const: Any = None
+    source: Optional[str] = None
+    type: Optional[str] = None
+    map: Mapping[str, str] = MappingProxyType({})
+    null: str = "null_result"
+    with_: Optional[str] = None
+    bad: str = "raise"
+
+
+@dataclass(frozen=True)
+class GdalSpec:
+    """A row's `gdal` block: the algorithm, its inputs and output, the write profile and the argument
+    template. Both tiers turn it into the same argv."""
+
+    alg: str
+    inputs: Tuple[Tuple[str, str], ...]  # (param, input kind)
+    out_kind: str
+    out_dtype: str  # a GDAL type name, or "input" (the first input's band type)
+    write: str
+    args: Tuple[GdalArg, ...]
+    needs_crs: bool = (
+        False  # the input must carry a CRS (a tile without one is a data error)
+    )
+    gdal_min: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class GdalSection:
+    """The manifest's top-level `gdal` section: the GDAL release the specs are checked against, the
+    arguments no spec or caller may set, and the algorithms (with their arguments) the engine runs.
+    """
+
+    pin: str
+    deny: frozenset
+    allow: Mapping[str, Tuple[str, ...]]
+
+
+def _closed(raw: Mapping, keys: frozenset, what: str) -> None:
+    extra = sorted(set(raw) - keys)
+    if extra:
+        raise ValueError(f"gdal spec: unknown {what} key(s) {extra}")
+
+
+def _one_of(value, allowed: frozenset, what: str) -> str:
+    if value not in allowed:
+        raise ValueError(f"gdal spec: {what} {value!r} is not one of {sorted(allowed)}")
+    return value
+
+
+def _parse_gdal_arg(raw: Mapping) -> GdalArg:
+    _closed(raw, GDAL_ARG_KEYS, "argument")
+    name = raw.get("arg")
+    if not isinstance(name, str) or not name:
+        raise ValueError(f"gdal spec: an argument needs a name ({dict(raw)})")
+    if ("const" in raw) == ("from" in raw):
+        raise ValueError(
+            f"gdal spec: argument {name!r} needs exactly one of const and from"
+        )
+    if "from" in raw:
+        _one_of(raw.get("type"), GDAL_BINDERS, f"binder of {name!r}")
+    return GdalArg(
+        arg=name,
+        const=raw.get("const"),
+        source=raw.get("from"),
+        type=raw.get("type"),
+        map=MappingProxyType(dict(raw.get("map", {}))),
+        null=_one_of(
+            raw.get("null", "null_result"), GDAL_NULL, f"null rule of {name!r}"
+        ),
+        with_=raw.get("with"),
+        bad=_one_of(raw.get("bad", "raise"), GDAL_BAD, f"bad rule of {name!r}"),
+    )
+
+
+def parse_gdal_spec(raw: Mapping) -> GdalSpec:
+    """A row's `gdal` block -> GdalSpec. Refuses any key or word outside the closed vocabulary, so a
+    mistyped key can never be read as absent."""
+    _closed(raw, GDAL_KEYS, "block")
+    out = raw.get("out") or {}
+    _closed(out, frozenset({"kind", "dtype"}), "out")
+    inputs = tuple(
+        (p, _one_of(k, GDAL_IN_KINDS, f"input kind of {p!r}"))
+        for p, k in (raw.get("in") or {}).items()
+    )
+    return GdalSpec(
+        alg=str(raw.get("alg", "")),
+        inputs=inputs,
+        out_kind=_one_of(out.get("kind"), GDAL_OUT_KINDS, "output kind"),
+        out_dtype=str(out.get("dtype", "input")),
+        write=_one_of(raw.get("write"), GDAL_WRITE, "write profile"),
+        args=tuple(_parse_gdal_arg(a) for a in raw.get("args", ())),
+        needs_crs=bool(raw.get("needs_crs", False)),
+        gdal_min=raw.get("gdal_min"),
+    )
+
+
+def _parse_gdal_section(raw: Optional[Mapping]) -> Optional[GdalSection]:
+    if raw is None:
+        return None
+    _closed(raw, frozenset({"pin", "deny", "allow"}), "section")
+    return GdalSection(
+        pin=str(raw["pin"]),
+        deny=frozenset(raw.get("deny", ())),
+        allow=MappingProxyType(
+            {alg: tuple(args) for alg, args in raw.get("allow", {}).items()}
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -89,6 +236,8 @@ class Function:
     oracle: str
     # A generator's output columns as (name, SQL type): what its UC table function RETURNS.
     columns: Tuple[Tuple[str, str], ...] = ()
+    # The GDAL spec engine's spec for this row (its `gdal` block), when the row has one.
+    gdal: Optional[GdalSpec] = None
 
     @property
     def max_args(self) -> int:
@@ -101,10 +250,13 @@ class Manifest:
     uc_dependencies: Mapping[str, str]
     level_table_version: str
     helpers: Tuple[Helper, ...] = ()
+    gdal: Optional[GdalSection] = None
 
 
 def sql_type(t: str) -> str:
     """Symbolic manifest type -> SQL type text."""
+    if t == "ARRAY<TILE>":
+        return f"array<{TILE_SQL}>"
     return TILE_SQL if t == "TILE" else t
 
 
@@ -148,6 +300,7 @@ def load() -> Manifest:
             _freeze(r["levels"]),
             r["oracle"],
             tuple((c[0], c[1]) for c in r.get("columns", [])),
+            parse_gdal_spec(r["gdal"]) if "gdal" in r else None,
         )
     return Manifest(
         MappingProxyType(fns),
@@ -156,6 +309,7 @@ def load() -> Manifest:
         tuple(
             Helper(h["name"], h["module"], h["status"]) for h in raw.get("helpers", [])
         ),
+        _parse_gdal_section(raw.get("gdal")),
     )
 
 

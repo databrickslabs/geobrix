@@ -87,7 +87,9 @@ def test_oracle_rows_fit_signature(fn):
 
 
 @pytest.mark.parametrize(
-    "fn", [f for f in FNS if "L1" in f.levels], ids=lambda f: f.sql_name
+    "fn",
+    [f for f in FNS if "companion" in f.levels.get("L1", {})],
+    ids=lambda f: f.sql_name,
 )
 def test_l1_companion_exists_in_source(fn):
     fqn = fn.levels["L1"]["companion"]
@@ -182,12 +184,17 @@ def _l1_shape_ok(fn):
             "stale-jar",
             dict(jar=None, jar_reason="JAR 0.5.3 on classpath != wheel 0.6.0"),
         ),
-        ("dedicated", dict(jar=OK_JAR, jar_reason="")),
-        ("standard", dict(connect=True, jar=OK_JAR, jar_reason="")),
+        ("dedicated", dict(jar=OK_JAR, jar_reason="", jvm_gdal=MAN.gdal.pin)),
+        (
+            "standard",
+            dict(connect=True, jar=OK_JAR, jar_reason="", jvm_gdal=MAN.gdal.pin),
+        ),
         (
             "no-gdal",
             dict(jar=OK_JAR, jar_reason="", gdal_reason="GDAL natives not loadable"),
         ),
+        # A dedicated JVM on another GDAL than the pin: no engine at L1, the row's own L1 where it has one.
+        ("other-jvm-gdal", dict(jar=OK_JAR, jar_reason="", jvm_gdal="3.11.4")),
     ],
     ids=lambda c: c[0],
 )
@@ -215,6 +222,10 @@ def test_level_selection_contract(fn, case):
         assert (choice.level == "L1") == _l1_shape_ok(fn)
     if name == "no-gdal" and fn.levels.get("L1", {}).get("needs_gdal"):
         assert choice.level == "L3"
+    if name == "other-jvm-gdal" and pref[0] == "L1":
+        own_l1 = "companion" in fn.levels["L1"]
+        assert (choice.level == "L1") == (_l1_shape_ok(fn) and own_l1)
+        assert choice.variant != levels.ENGINE or choice.level != "L1"
 
 
 @pytest.mark.parametrize(

@@ -57,6 +57,47 @@ object OperatorOptions {
         }
     }
 
+    /**
+      * The `--creation-option` values of a GDAL spec engine output (the `tile` write profile), in order. The codec,
+      * level and predictor are the light tier's canonical rule (`pyrx.core.compression.creation_opts` with
+      * `compress="auto"`: ZSTD on the decoded-size ladder, the dtype's predictor, the `GBX_ZSTD_LEVEL` knob); the
+      * tiling is [[appendOptions]]'s. Mirrors `compression.engine_creation_options`; one golden fixture holds both.
+      */
+    def engineCreationOptions(gdalType: String, decodedBytes: Long, width: Int, height: Int): Seq[String] = {
+        val predictor = gdalType match {
+            case "Float32" | "Float64"     => "3"
+            case "Byte" | "UInt8" | "Int8" => "1"
+            case _                         => "2"
+        }
+        val blk = math.max(64, math.min(512, math.min(width, height))) / 16 * 16
+        Seq(
+          "COMPRESS=ZSTD",
+          s"PREDICTOR=$predictor",
+          s"ZSTD_LEVEL=${engineZstdLevel(decodedBytes)}",
+          "TILED=YES",
+          s"BLOCKXSIZE=$blk",
+          s"BLOCKYSIZE=$blk",
+          "BIGTIFF=IF_SAFER"
+        )
+    }
+
+    /** `compression.auto_level`: `GBX_ZSTD_LEVEL` (`fast` 1, `max` 9, or 1..22) when set, else 6 up to 128 MiB
+      * decoded, 3 up to 1 GiB, 1 above. */
+    private[operator] def engineZstdLevel(decodedBytes: Long, knob: Option[String] = sys.env.get("GBX_ZSTD_LEVEL")): Int = {
+        // scalastyle:off caselocale
+        val k = knob.map(_.trim.toLowerCase)
+        // scalastyle:on caselocale
+        k match {
+            case Some("fast") => 1
+            case Some("max")  => 9
+            case Some(v) if v.nonEmpty && v.length <= 2 && v.forall(_.isDigit) && v.toInt >= 1 && v.toInt <= 22 => v.toInt
+            case _ =>
+                if (decodedBytes <= 128L * 1024 * 1024) 6
+                else if (decodedBytes <= 1024L * 1024 * 1024) 3
+                else 1
+        }
+    }
+
     /** Splits command by spaces and returns options as Vector (args after first token). */
     def parseOptions(command: String): java.util.Vector[String] = {
         val args = command.split(" ")

@@ -27,6 +27,9 @@ class Capabilities:
     jar_reason: str  # "" when the JAR is usable
     gdal_reason: str  # "" when GDAL natives load in the JVM
     sql_functions: bool  # CREATE TEMPORARY FUNCTION ... RETURN works here
+    jvm_gdal: str = (
+        ""  # the GDAL release the JVM loaded ("" when not probed or not loadable)
+    )
 
 
 def is_connect(spark) -> bool:
@@ -91,7 +94,8 @@ def _identity(spark, connect: bool) -> Tuple[Optional[str], str]:
         return None, "no geobrix JAR on classpath"
 
 
-def _gdal(spark, connect: bool) -> str:
+def _gdal(spark, connect: bool) -> Tuple[str, str]:
+    """(reason, release): "" and the JVM's GDAL release when the natives load, else why not and ""."""
     try:
         if not connect:
             r = str(spark._jvm.com.databricks.labs.gbx.kernels.KernelGdal.probe())
@@ -99,8 +103,10 @@ def _gdal(spark, connect: bool) -> str:
             spark.udf.registerJavaFunction("gbx__gdalprobe", GDALPROBE_UDF, "string")
             r = str(spark.sql("SELECT gbx__gdalprobe() AS g").first()["g"])
     except Exception:  # noqa: BLE001
-        return "GDAL natives not loadable"
-    return "" if r.startswith("ok:") else f"GDAL natives not loadable ({r[:120]})"
+        return "GDAL natives not loadable", ""
+    if r.startswith("ok:"):
+        return "", r[len("ok:") :]
+    return f"GDAL natives not loadable ({r[:120]})", ""
 
 
 def _sql_functions(spark) -> bool:
@@ -134,6 +140,6 @@ def detect(spark, need_jvm: bool) -> Capabilities:
             reason = f"JAR sha256 {sha[:12]} != bundled {expected[:12]}"
         else:
             jar = JarIdentity(version, sha)
-    gdal_reason = _gdal(spark, connect) if jar is not None else reason
+    gdal_reason, jvm_gdal = _gdal(spark, connect) if jar is not None else (reason, "")
     sqlf = _sql_functions(spark)
-    return Capabilities(connect, False, jar, reason, gdal_reason, sqlf)
+    return Capabilities(connect, False, jar, reason, gdal_reason, sqlf, jvm_gdal)

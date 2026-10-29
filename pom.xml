@@ -195,6 +195,20 @@
     <build>
         <sourceDirectory>src/main/scala</sourceDirectory>
         <testSourceDirectory>src/test/scala</testSourceDirectory>
+        <resources>
+            <resource>
+                <directory>${basedir}/src/main/resources</directory>
+            </resource>
+            <!-- The function manifest, packed into the JAR: the GDAL spec engine reads its specs from this copy,
+                 and the manager refuses a JAR that is not the wheel's, so the two copies cannot drift. -->
+            <resource>
+                <directory>${basedir}/python/geobrix/src/databricks/labs/gbx/manifest</directory>
+                <targetPath>com/databricks/labs/gbx/manifest</targetPath>
+                <includes>
+                    <include>functions.json</include>
+                </includes>
+            </resource>
+        </resources>
         <plugins>
             <!-- Add docs/tests/scala as additional test source directory -->
             <plugin>

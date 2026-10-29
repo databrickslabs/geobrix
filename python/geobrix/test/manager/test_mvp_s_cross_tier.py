@@ -89,7 +89,7 @@ def test_mvp_s_oracle_session(request, tmp_path, fn, level, variant, api):
 def test_l1_arity_contract(jvm_spark):
     installer = jvm_spark._jvm.com.databricks.labs.gbx.kernels.L1Installer
     for fn in manifest.load().functions.values():
-        if "L1" in fn.levels:
+        if "companion" in fn.levels.get("L1", {}):  # an engine-only L1 has no companion
             want = ",".join(str(n) for n in range(fn.min_args, fn.max_args + 1))
             got = str(
                 installer.acceptedArities(

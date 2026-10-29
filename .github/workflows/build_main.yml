@@ -85,7 +85,7 @@ jobs:
           - name: rest
             dirs: >-
               test/pyvx test/pygx test/pmtiles_light test/stac test/earthdata test/vizx
-              test/sample test/bench test/core test/models test/manager
+              test/sample test/bench test/core test/models test/manager test/engine
     steps:
       - name: checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2

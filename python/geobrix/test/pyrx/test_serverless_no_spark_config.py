@@ -3,7 +3,7 @@
 Serverless / Spark Connect FORBIDS mutating Spark configuration at runtime
 (`spark.conf.set(...)`) and does not expose the JVM bridge (`spark._jvm`,
 `sparkContext`, `.rdd`). Serverless is a target environment for the light
-product, so the pyrx + pyvx PRODUCT and the gbx.ds DataSources must never do any
+product, so the pyrx + pyvx PRODUCT, the GDAL spec engine and the gbx.ds DataSources must never do any
 of those — they may only register UDFs / UDTFs / DataSources and build Column
 expressions.
 (The bench *harness* under `gbx.bench` legitimately tunes configs from a repo
@@ -18,6 +18,7 @@ import re
 from pathlib import Path
 
 import databricks.labs.gbx.ds as gbx_ds
+import databricks.labs.gbx.engine as gbx_engine
 import databricks.labs.gbx.pyrx as pyrx
 import databricks.labs.gbx.pyvx as pyvx
 
@@ -39,6 +40,7 @@ _ROOTS = (
     Path(pyrx.__file__).resolve().parent,
     Path(pyvx.__file__).resolve().parent,
     Path(gbx_ds.__file__).resolve().parent,
+    Path(gbx_engine.__file__).resolve().parent,  # the GDAL spec engine's light tier
 )
 
 

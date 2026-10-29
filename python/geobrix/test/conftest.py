@@ -39,7 +39,7 @@ CONDITION TO MAINTAIN (every light-tier addition must do ALL THREE):
      directly.
 Light test dirs so far: pyrx, pyvx, pygx, pmtiles_light, stac, earthdata, vizx,
 sample, models, zarr, manager (contracts generated from the per-surface function
-manifest, plus the oracle tables), plus bench + ds + core (the tier-neutral
+manifest, plus the oracle tables), engine (the GDAL spec engine), plus bench + ds + core (the tier-neutral
 gbx.core.crs resolver imports rasterio, so test/core is light-tier too).
 
 ``bench`` is a light dir (its modules import rasterio/shapely/h3/quadbin via the
@@ -77,6 +77,7 @@ _LIGHT_TEST_DIRS = [
     "models",
     "zarr",
     "manager",
+    "engine",
 ]
 
 # Skip the light-tier suites when their dependencies are not installed.

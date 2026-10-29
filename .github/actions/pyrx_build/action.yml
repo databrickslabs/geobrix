@@ -110,5 +110,5 @@ runs:
         else
           # No shard given: every light dir in one process. gbx:test:python and gbx:test:light
           # read this line, so keep it a plain `pytest test/... -m ...` and in step with the shards.
-          pytest test/pyrx test/ds test/pyvx test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample test/bench test/core test/models test/zarr test/manager -m "not integration" -v
+          pytest test/pyrx test/ds test/pyvx test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample test/bench test/core test/models test/zarr test/manager test/engine -m "not integration" -v
         fi

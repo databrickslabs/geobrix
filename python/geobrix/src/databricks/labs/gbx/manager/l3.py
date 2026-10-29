@@ -73,3 +73,48 @@ def register_l3(spark, fn, variant: str, name: Optional[str] = None) -> None:
         spark.udtf.register(name, resolve_ref(spec["udtf"]))
     else:
         raise ValueError(f"{fn.sql_name}: unknown L3 registration")
+
+
+def register_l3_engine(
+    spark, fn, form: str = "engine", name: Optional[str] = None
+) -> str:
+    """Register `fn`'s GDAL spec engine UDFs under `name` (default its SQL name); returns the form used.
+
+    ``engine-c1`` (and ``engine``, the default, where SQL functions work on a classic session): the batch UDF
+    behind a wrapper that sends virtual, NULL and error tiles to the row-wise UDF. ``engine-c0`` (and the
+    default anywhere else, Spark Connect included): the row-wise UDF alone.
+    """
+    from databricks.labs.gbx.engine import l3 as engine_l3
+    from databricks.labs.gbx.manager import capabilities, jvm, sqlwrap
+
+    grid = _factory_args("proj_grid_dirs")[0]
+    name = name or fn.sql_name
+    wrapped = form == "engine-c1" or (
+        form == "engine"
+        and not capabilities.is_connect(spark)
+        and capabilities._sql_functions(spark)
+    )
+    if not wrapped:
+        spark.udf.register(name, engine_l3.c0(fn.sql_name, grid))
+        return "engine-c0"
+    c0_name, c1_name = jvm._priv(fn, "L3"), jvm._priv(fn, "L3c1")
+    spark.udf.register(c0_name, engine_l3.c0(fn.sql_name, grid))
+    spark.udf.register(c1_name, engine_l3.c1(fn.sql_name, grid))
+    first = fn.params[0].name
+    if fn.gdal.inputs[0][1] == "rasters":
+        ddl = sqlwrap.tiles_dispatch(
+            fn,
+            sqlwrap.tile_from_result(
+                c1_name + "(transform({tiles}, gbx_t -> gbx_t.raster), {rest})",
+                "{tiles}[0]",
+            ),
+            c0_name,
+        )
+    else:
+        ddl = sqlwrap.tile_dispatch(
+            fn,
+            sqlwrap.tile_from_result(c1_name + "({tile}.raster, {rest})", first),
+            c0_name,
+        )
+    jvm._create_wrapper(spark, fn, ddl)
+    return "engine-c1"

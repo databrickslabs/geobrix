@@ -268,6 +268,47 @@ def _codec_opts(dtype, decoded_bytes, compress, level, predictor, driver) -> dic
     return {"compress": c}
 
 
+# GDAL type names -> the numpy names creation_opts takes (GDAL 3.13 calls Byte UInt8 too).
+_GDAL_DTYPES = {
+    "Byte": "uint8",
+    "UInt8": "uint8",
+    "Int8": "int8",
+    "UInt16": "uint16",
+    "Int16": "int16",
+    "UInt32": "uint32",
+    "Int32": "int32",
+    "UInt64": "uint64",
+    "Int64": "int64",
+    "Float32": "float32",
+    "Float64": "float64",
+}
+
+
+def engine_creation_options(
+    gdal_dtype: str, decoded_bytes: int, width: int, height: int
+) -> list:
+    """The `--creation-option` values of a GDAL spec engine output (the `tile` write profile), in order.
+
+    The codec, level and predictor are ``creation_opts(dtype, decoded_bytes, "auto")`` (ZSTD on the size ladder,
+    the dtype's predictor); the tiling is the heavy tier's (``OperatorOptions.appendOptions``): 512-pixel blocks
+    capped to the raster, at least 64, floored to a multiple of 16, and BigTIFF when needed. The JVM's
+    ``OperatorOptions.engineCreationOptions`` gives the same list (one golden fixture holds both).
+    """
+    opts = creation_opts(
+        _GDAL_DTYPES.get(gdal_dtype, gdal_dtype.lower()), decoded_bytes, "auto"
+    )
+    blk = max(64, min(512, int(width), int(height))) // 16 * 16
+    return [
+        f"COMPRESS={opts['compress'].upper()}",
+        f"PREDICTOR={opts['predictor']}",
+        f"ZSTD_LEVEL={opts['zstd_level']}",
+        "TILED=YES",
+        f"BLOCKXSIZE={blk}",
+        f"BLOCKYSIZE={blk}",
+        "BIGTIFF=IF_SAFER",
+    ]
+
+
 def drop_ycbcr(profile: dict, *, unless_jpeg: bool = False) -> dict:
     """Copy of *profile* without a YCbCr ``photometric``.
 

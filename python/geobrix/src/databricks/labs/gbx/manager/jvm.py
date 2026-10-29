@@ -70,14 +70,43 @@ def install_l1(spark, fn, caps) -> Optional[str]:
         if r != "ok":
             return r
         light = _install_light_side(spark, fn)
-        _create_wrapper(
-            spark,
-            fn,
-            sqlwrap.tile_dispatch(fn, _priv(fn, "L1") + "({tile}, {rest})", light),
-        )
+        if _is_tiles(fn):
+            ddl = sqlwrap.tiles_dispatch(
+                fn, _priv(fn, "L1") + "({tiles}, {rest})", light
+            )
+        else:
+            ddl = sqlwrap.tile_dispatch(fn, _priv(fn, "L1") + "({tile}, {rest})", light)
+        _create_wrapper(spark, fn, ddl)
         return None
     except Exception as exc:  # noqa: BLE001 - any failure is a fallback reason
         return f"{fn.sql_name}: heavy install failed ({type(exc).__name__}: {str(exc)[:160]})"
+
+
+def _is_tiles(fn) -> bool:
+    return fn.params[0].session[0] == "ARRAY<TILE>"
+
+
+def install_l1_engine(spark, fn, caps) -> Optional[str]:
+    """Install `fn`'s GDAL spec engine expression (``GdalSpecExpr``, read from the JAR's copy of the manifest).
+    A row that takes virtual tiles gets it under its private name, the engine's row-wise light UDF beside it, and
+    the dispatch wrapper under the SQL name."""
+    try:
+        _point_jvm_at_payload(spark)
+        inst = spark._jvm.com.databricks.labs.gbx.kernels.L1Installer
+        target = _priv(fn, "L1") if fn.accepts_virtual_tile else fn.sql_name
+        r = str(inst.installSpec(spark._jsparkSession, target, fn.sql_name))
+        if r != "ok" or not fn.accepts_virtual_tile:
+            return None if r == "ok" else r
+        light = _priv(fn, "L3")
+        l3.register_l3_engine(spark, fn, "engine-c0", name=light)
+        if _is_tiles(fn):
+            ddl = sqlwrap.tiles_dispatch(fn, target + "({tiles}, {rest})", light)
+        else:
+            ddl = sqlwrap.tile_dispatch(fn, target + "({tile}, {rest})", light)
+        _create_wrapper(spark, fn, ddl)
+        return None
+    except Exception as exc:  # noqa: BLE001 - any failure is a fallback reason
+        return f"{fn.sql_name}: heavy engine install failed ({type(exc).__name__}: {str(exc)[:160]})"
 
 
 def install_l2(spark, fn, caps) -> Optional[str]:

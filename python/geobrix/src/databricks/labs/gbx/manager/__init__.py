@@ -85,10 +85,23 @@ def _install(spark, fn, choice: Choice, caps, forced: bool) -> Choice:
 
     reasons = list(choice.reasons)
     level = choice.level
+    spec = fn.levels.get(level, {})
+    if spec.get("engine") and choice.variant not in levels.ENGINE_L3:
+        why = levels.engine_unavailable(fn, level, caps)
+        if why:
+            messages.say(
+                spark,
+                f"geobrix: {fn.sql_name} runs without the GDAL spec engine at {levels.NAMES[level]} ({why})",
+            )
     if level in ("L1", "L2"):
         from databricks.labs.gbx.manager import jvm
 
-        why = (jvm.install_l1 if level == "L1" else jvm.install_l2)(spark, fn, caps)
+        install = jvm.install_l1 if level == "L1" else jvm.install_l2
+        if level == "L1" and (
+            choice.variant == levels.ENGINE or "companion" not in spec
+        ):
+            install = jvm.install_l1_engine
+        why = install(spark, fn, caps)
         if why is None:
             for r in reasons:
                 messages.say(spark, f"{r}; using {levels.NAMES[level]}")
@@ -97,6 +110,18 @@ def _install(spark, fn, choice: Choice, caps, forced: bool) -> Choice:
             raise RuntimeError(f"{fn.sql_name}: forced {level} failed: {why}")
         reasons.append(f"geobrix: {levels.NAMES[level]} unavailable: {why}")
         level = "L3"
+    l3_spec = fn.levels["L3"]
+    on_engine = (forced and choice.variant in levels.ENGINE_L3) or (
+        not forced
+        and l3_spec.get("engine")
+        and levels.engine_unavailable(fn, "L3", caps) is None
+    )
+    if on_engine:
+        form = choice.variant if choice.variant in levels.ENGINE_L3 else levels.ENGINE
+        variant = l3.register_l3_engine(spark, fn, form)
+        for r in reasons:
+            messages.say(spark, f"{r}; using {levels.NAMES['L3']}")
+        return Choice("L3", variant, tuple(reasons))
     variant, skip = (
         (choice.variant, None)
         if forced and choice.variant != "-"

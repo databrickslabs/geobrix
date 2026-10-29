@@ -688,6 +688,142 @@ MVP_A: Tuple[Case, ...] = (
 )
 
 
+# The GDAL spec engine's first three functions. kind `ref` compares the output's first band, and its NoData
+# mask, with an independent reference (`expect` names it, see _REFS): the light tier's numpy Horn for slope,
+# numpy for map algebra. `error_fix` is an error tile whose reason carries a `Fix:`. gbx_rst_transformcrs keeps
+# its MVP_S rows, which every engine level runs as they are, plus the one row of a tile with no CRS.
+SL, MALG = "gbx_rst_slope", "gbx_rst_mapalgebra"
+NORM_DIFF = '{"calc": "norm_diff", "dialect": "builtin"}'
+SPEC_SE: Tuple[Case, ...] = (
+    # Horn's slope with no edges: the 1-pixel border and the neighbours of the NoData hole are NoData.
+    Case(
+        "se_slope_deg", SL, (Build("dem_3857"), "degrees"), "ref", "slope", ("session",)
+    ),
+    Case(
+        "se_slope_pct", SL, (Build("dem_3857"), "percent"), "ref", "slope", ("session",)
+    ),
+    Case(
+        "se_slope_scales",
+        SL,
+        (Build("dem_3857"), "degrees", 2.0, 0.5),
+        "ref",
+        "slope",
+        ("session",),
+    ),
+    Case(
+        "se_slope_half_scale",
+        SL,
+        (Build("dem_3857"), "degrees", 2.0, None),
+        "raises",
+        "yscale",
+        ("session",),
+    ),
+    # An unknown unit is a parameter error (it was silently degrees on the heavy tier).
+    Case(
+        "se_slope_bad_unit",
+        SL,
+        (Build("dem_3857"), "radians"),
+        "raises",
+        "radians",
+        ("session",),
+    ),
+    Case(
+        "se_slope_null_unit", SL, (Build("dem_3857"), None), "null", None, ("session",)
+    ),
+    Case(
+        "se_slope_error_in",
+        SL,
+        (Build("tile_error"), "degrees"),
+        "error_tile",
+        UPSTREAM_ERROR,
+        ("session",),
+    ),
+    Case("se_slope_null", SL, (None, "degrees"), "null", None, ("session",)),
+    Case(
+        "se_slope_corrupt",
+        SL,
+        (Build("tile_corrupt"), "degrees"),
+        "error_tile",
+        None,
+        ("session",),
+    ),
+    # Reprojecting a tile with no CRS is an error tile that says how to set one (heavy assumed EPSG:4326).
+    Case(
+        "se_tcrs_no_crs",
+        T,
+        (Build("tile_nocrs"), "EPSG:3857"),
+        "error_fix",
+        None,
+        ("session",),
+    ),
+    # norm_diff over two tiles, A then B, NoData in either one NoData out: the builtin dialect, which this GDAL
+    # build has; the muparser rows below need it (MUPARSER_ROWS).
+    Case(
+        "se_ma_norm_diff",
+        MALG,
+        (Build("se_pair"), NORM_DIFF),
+        "ref",
+        "norm_diff",
+        ("session",),
+    ),
+    Case(
+        "se_ma_times2", MALG, (Build("se_one"), "A * 2"), "ref", "times2", ("session",)
+    ),
+    Case(
+        "se_ma_nd_two_tiles",
+        MALG,
+        (Build("se_pair"), "(A - B) / (A + B)"),
+        "ref",
+        "norm_diff",
+        ("session",),
+    ),
+    Case(
+        "se_ma_multiband",
+        MALG,
+        (
+            Build("se_four_band"),
+            '{"calc": "(A-B)/(A+B)", "A_index": 0, "B_index": 0, "A_band": 4, "B_band": 3}',
+        ),
+        "ref",
+        "nd_bands_4_3",
+        ("session",),
+    ),
+    # GDAL's own run refuses an expression it cannot evaluate: data, so an error tile (today every muparser
+    # expression is refused this way, the build having no muparser).
+    Case(
+        "se_ma_bad_syntax",
+        MALG,
+        (Build("se_one"), "A +* 2"),
+        "error_tile",
+        None,
+        ("session",),
+    ),
+    Case(
+        "se_ma_extra_options",
+        MALG,
+        (Build("se_one"), '{"calc": "A*2", "extra_options": "--hideNoData"}'),
+        "raises",
+        "extra_options",
+        ("session",),
+    ),
+    Case(
+        "se_ma_unbound", MALG, (Build("se_one"), "A + C"), "raises", "C", ("session",)
+    ),
+    Case(
+        "se_ma_error_in",
+        MALG,
+        (Build("se_error_pair"), NORM_DIFF),
+        "error_tile",
+        UPSTREAM_ERROR,
+        ("session",),
+    ),
+    Case("se_ma_null", MALG, (None, NORM_DIFF), "null", None, ("session",)),
+)
+# Rows that need GDAL's muparser expression dialect, absent from this GDAL build until the native rebuild that
+# adds it; they are strict expected failures until then.
+MUPARSER_ROWS = frozenset({"se_ma_times2", "se_ma_nd_two_tiles", "se_ma_multiband"})
+
+
 def _tile_bytes(
     crs_value: str, w: int = 64, h: int = 48, origin=None, px=None
 ) -> bytes:
@@ -799,7 +935,70 @@ def _edit_pair() -> Tuple[bytes, bytes]:
     return a, b
 
 
+def _gtiff(bands, crs_value: Optional[str], nodata=-9999.0) -> bytes:
+    """A float32 GeoTIFF of `bands` (a (count, h, w) array) on a 10 m grid, in `crs_value` (None: no CRS)."""
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx.core.compression import creation_opts
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    count, h, w = bands.shape
+    profile = dict(
+        driver="GTiff",
+        width=w,
+        height=h,
+        count=count,
+        dtype="float32",
+        nodata=nodata,
+        transform=from_origin(400000.0, 5760000.0, 10.0, 10.0),
+        **creation_opts("float32", compress="zstd"),
+    )
+    if crs_value:
+        profile["crs"] = resolve_crs(crs_value)
+    with MemoryFile() as mf:
+        with mf.open(**profile) as ds:
+            ds.write(bands.astype("float32"))
+        return mf.read()
+
+
+def _se_build(name: str):
+    """The spec engine rows' fixtures (SPEC_SE)."""
+    import numpy as np
+
+    y, x = np.mgrid[0:48, 0:64].astype("float64")
+    a = 10.0 + (x * 7 + y * 3) % 13
+    b = 5.0 + (x * 5 + y * 11) % 7
+    a[5:8, 5:8] = -9999.0
+    b[30:32, 40:44] = -9999.0
+    if name == "dem_3857":  # a smooth surface with a 3 x 3 NoData hole
+        yy, xx = np.mgrid[0:64, 0:64].astype("float64")
+        z = 0.5 * xx + 0.3 * yy + 10.0 * np.sin(xx / 7.0) * np.cos(yy / 5.0) + 100.0
+        z[20:23, 30:33] = -9999.0
+        return _tile(_gtiff(z[np.newaxis], "EPSG:3857"))
+    if name == "tile_nocrs":  # a geotransform, but no CRS
+        return _tile(_gtiff(a[np.newaxis], None))
+    if name == "se_pair":
+        return [
+            _tile(_gtiff(a[np.newaxis], "EPSG:3857")),
+            _tile(_gtiff(b[np.newaxis], "EPSG:3857")),
+        ]
+    if name == "se_one":
+        return [_tile(_gtiff(a[np.newaxis], "EPSG:3857"))]
+    if name == "se_four_band":
+        return [_tile(_gtiff(np.stack([a, b, a + 1.0, b + 20.0]), "EPSG:3857"))]
+    if name == "se_error_pair":
+        return [
+            {**_tile(), "metadata": {ERROR_TILE_KEY: UPSTREAM_ERROR}},
+            _se_build("se_one")[0],
+        ]
+    return None
+
+
 def _build(name: str, tmpdir: str):
+    se = _se_build(name)
+    if se is not None:
+        return se
     if name == "tile_edit_a":
         return _tile(_edit_pair()[0])
     if name == "tile_edit_b":
@@ -1105,6 +1304,80 @@ def _check_tile(case: Case, out, args) -> Optional[str]:
     return None
 
 
+def _masked_band(raster: bytes, band: int = 1):
+    from rasterio.io import MemoryFile
+
+    with MemoryFile(bytes(raster)) as mf, mf.open() as ds:
+        return ds.read(band, masked=True)
+
+
+def _ref_slope(args):
+    """The light tier's numpy Horn (pyrx.core.terrain), independent of GDAL: (values, NoData mask)."""
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.pyrx.core import terrain
+
+    unit = args[1] if len(args) > 1 else "degrees"
+    xs, ys = (args[2], args[3]) if len(args) > 3 else (None, None)
+    with MemoryFile(_raster_of(args[0])) as mf, mf.open() as ds:
+        ref = terrain.slope(ds, unit=unit, xscale=xs, yscale=ys)
+    g = _masked_band(ref)
+    return g.data.astype("float64"), g.mask
+
+
+def _ref_bands(args, pairs):
+    """[(tile index, band)] of the map-algebra inputs as float64 arrays and their union NoData mask."""
+    import numpy as np
+
+    bands = [_masked_band(_raster_of(args[0][i]), b) for i, b in pairs]
+    mask = np.zeros(bands[0].shape, dtype=bool)
+    for m in bands:
+        mask |= np.ma.getmaskarray(m)
+    return [m.data.astype("float64") for m in bands], mask
+
+
+def _ref_norm_diff(args, pairs=((0, 1), (1, 1))):
+    (a, b), mask = _ref_bands(args, pairs)
+    return (a - b) / (a + b), mask
+
+
+def _ref_times2(args):
+    (a,), mask = _ref_bands(args, ((0, 1),))
+    return a * 2, mask
+
+
+_REFS = {
+    "slope": _ref_slope,
+    "norm_diff": _ref_norm_diff,
+    "times2": _ref_times2,
+    "nd_bands_4_3": lambda args: _ref_norm_diff(args, ((0, 4), (0, 3))),
+}
+
+
+def _check_ref(case: Case, out, args) -> Optional[str]:
+    """The output's first band equals the reference (to float32 rounding) on the same NoData mask."""
+    import numpy as np
+
+    raster = _field(out, "raster")
+    if raster is None:
+        return f"{case.cid}: no raster in the result (metadata={_field(out, 'metadata')!r})"
+    want, want_mask = _REFS[case.expect](args)
+    got = _masked_band(raster)
+    if got.shape != want.shape:
+        return f"{case.cid}: shape {got.shape} vs reference {want.shape}"
+    off = int((np.ma.getmaskarray(got) != want_mask).sum())
+    if off:
+        return (
+            f"{case.cid}: the NoData mask differs from the reference at {off} pixel(s)"
+        )
+    ok = ~want_mask
+    close = np.isclose(got.data[ok].astype("float64"), want[ok], rtol=1e-4, atol=1e-3)
+    if not close.all():
+        worst = float(np.max(np.abs(got.data[ok] - want[ok])))
+        return f"{case.cid}: {int((~close).sum())} pixel(s) differ from the reference (max |d| {worst:.3g})"
+    return None
+
+
 def _check_geom(case: Case, out) -> Optional[str]:
     from databricks.labs.gbx._geom import parse_geom
 
@@ -1154,6 +1427,15 @@ def check(case: Case, out, args) -> Optional[str]:
         )
     if case.kind == "tile_props":
         return _check_tile(case, out, args)
+    if case.kind == "ref":
+        return _check_ref(case, out, args)
+    if case.kind == "error_fix":
+        reason = (_field(out, "metadata") or {}).get(ERROR_TILE_KEY) or ""
+        if out is None or _field(out, "raster") is not None or "Fix:" not in reason:
+            return (
+                f"{case.cid}: got {out!r}, want an error tile whose reason has a Fix:"
+            )
+        return None
     if case.kind == "geom_props":
         return _check_geom(case, out)
     if case.kind == "merged_equals":
@@ -1431,6 +1713,8 @@ _SQL = {
 def _ddl_type(value, param) -> str:
     from databricks.labs.gbx.manifest import TILE_SQL
 
+    if param.session[0] == "ARRAY<TILE>":
+        return f"array<{TILE_SQL}>"
     if isinstance(value, dict) or "TILE" in param.session:
         return TILE_SQL
     if isinstance(value, bool):

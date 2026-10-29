@@ -1,4 +1,4 @@
-"""The virtual-tile policy on the engine's L3 input path, without Spark (design section 4; AP-40, AP-43).
+"""The virtual-tile policy on the engine's L3 input path, without Spark (design section 4).
 
 Each row feeds one virtual tile through ``l3._inputs`` (the engine's read of a virtual tile) and asserts the policy's
 own reason, so a row cannot pass on some other error. The GDAL rows need the payload's osgeo (the container with
@@ -13,6 +13,10 @@ import pytest
 from databricks.labs.gbx import _gdal_policy, manifest
 from databricks.labs.gbx.bench import oracles
 from databricks.labs.gbx.engine import l3, run
+
+# The rows of the GDAL driver policy: a skip where the payload is present fails the meta-row in
+# test_driver_policy.py.
+pytestmark = pytest.mark.gdal_policy
 
 MAN = manifest.load()
 FN = MAN.functions["gbx_rst_slope"]
@@ -77,7 +81,7 @@ def test_the_engine_settings_are_thread_local_and_restored():
 
 
 def test_the_allowlist_is_the_allowed_class_and_is_not_the_refused_one():
-    """The engine's virtual-tile allowlist is the manifest's allowed class (AP-43): a refused driver is never on it."""
+    """The engine's virtual-tile allowlist is the manifest's allowed class: a refused driver is never on it."""
     assert set(run.virtual_drivers()) == set(MAN.gdal.allowed_drivers)
     assert not set(run.virtual_drivers()) & set(run.refused_drivers())
 
@@ -127,7 +131,7 @@ def test_a_valid_virtual_tile_is_still_read(tmp_path):
 
 
 def test_a_png_virtual_tile_is_read_because_GeoBrix_reads_PNG(tmp_path):
-    """AP-43: the allowed class is every raster driver a reader can read, so a PNG (not a GeoTIFF, not a VRT) is a
+    """The allowed class is every raster driver a reader can read, so a PNG (not a GeoTIFF, not a VRT) is a
     raster GeoBrix opens: the tile is read, not refused. (The earlier allowlist refused it; the classification does not.)
     """
     _skip_without_gdal()

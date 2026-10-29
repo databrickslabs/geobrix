@@ -84,6 +84,14 @@ _LIGHT_TEST_DIRS = [
 if importlib.util.find_spec("rasterio") is None:
     collect_ignore = list(_LIGHT_TEST_DIRS)
 
+# The driver policy before any rasterio import. Importing the package serves the env wheel's payload and sets the
+# policy's registration-time part (databricks/labs/gbx/__init__.py), so every session that collects a light dir has
+# them before a test module imports rasterio. A rasterio imported first is the PyPI one (another GDAL: partial mode),
+# and the policy rows would skip; the meta-row in test/engine/test_driver_policy.py fails if that happens where the
+# payload is present.
+if importlib.util.find_spec("rasterio") is not None:
+    import databricks.labs.gbx  # noqa: E402,F401
+
 
 # ---------------------------------------------------------------------------
 # Local Delta Lake for test/zarr (the transactional manifest is a Delta table).
@@ -167,18 +175,34 @@ def _importable(name):
         return False
 
 
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Keep the outcome of each GDAL driver-policy row on the item (``gbx_policy_outcome``) for the meta-row."""
+    outcome = yield
+    rep = outcome.get_result()
+    if "gdal_policy" in item.keywords and (
+        rep.when == "call" or (rep.when == "setup" and rep.skipped)
+    ):
+        item.gbx_policy_outcome = rep.outcome
+
+
 def pytest_collection_modifyitems(items):
     """Mark the tests that use the local Connect session `connect`, and order them last (stable for the rest).
 
     The marker is what lets gbx:test:pyrx / gbx:test:light run them in a pytest process of their own and
-    gbx:test:parity leave them out (the container has no gRPC client): no test carries it by hand.
+    gbx:test:parity leave them out (the container has no gRPC client): no test carries it by hand. The policy meta-row
+    (marker `policy_meta`) runs after the policy rows and before the Connect rows, so it sees their outcomes.
     """
     for item in items:
         if "spark_connect_local" in getattr(item, "fixturenames", ()):
             item.add_marker(pytest.mark.connect)
-    items.sort(
-        key=lambda item: "spark_connect_local" in getattr(item, "fixturenames", ())
-    )
+
+    def rank(item):
+        if "spark_connect_local" in getattr(item, "fixturenames", ()):
+            return 2
+        return 1 if "policy_meta" in item.keywords else 0
+
+    items.sort(key=rank)
 
 
 @pytest.fixture

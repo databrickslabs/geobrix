@@ -7,11 +7,12 @@ from databricks.labs.gbx import _env_guard, _native  # noqa: E402
 _env_guard.check()
 _native.activate(by="import")
 
-# The process-level driver policy (AP-43): the first GeoBrix GDAL use is no later than this import, on the payload's GDAL
-# when there is one. Idempotent; a process without rasterio gets nothing to defend.
+# The process-level driver policy: its registration-time part is set here, in the environment GDAL reads when it
+# registers its drivers, so a rasterio or osgeo that registers them later never registers a refused one. It imports no
+# GDAL; the activation (the mode, the deregistration, the partial-mode check) runs at the first GeoBrix GDAL use.
 from databricks.labs.gbx import _gdal_policy  # noqa: E402
 
-_gdal_policy.activate()
+_gdal_policy.prepare()
 
 from databricks.labs.gbx.crs_grids import register_proj_grids  # noqa: E402
 

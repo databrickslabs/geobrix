@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 
 def _bundled_gdal_data() -> Optional[str]:
-    """Return rasterio's bundled GDAL data dir, or None.
+    """Return rasterio's bundled GDAL data dir, else the env wheel's payload share (``_native/share/gdal``), or None.
 
     Use GDALDataFinder().search() (a deterministic filesystem search) rather than
     get_gdal_data(), which reflects GDAL's *runtime* config state — that returns
@@ -30,9 +30,17 @@ def _bundled_gdal_data() -> Optional[str]:
         from rasterio._env import GDALDataFinder
 
         path = GDALDataFinder().search()
-        return path if path and os.path.isdir(path) else None
+        if path and os.path.isdir(path):
+            return path
     except Exception:
-        return None
+        pass
+    # The env wheel's rasterio ships no GDAL data: its GDAL reads the payload's share (_native/share/gdal), the same
+    # directory the activation points GDAL_DATA at.
+    from databricks.labs.gbx import _native
+
+    native = _native.native_dir()
+    share = os.path.join(os.path.dirname(native), "share", "gdal") if native else None
+    return share if share and os.path.isdir(share) else None
 
 
 def _bundled_proj_data() -> Optional[str]:

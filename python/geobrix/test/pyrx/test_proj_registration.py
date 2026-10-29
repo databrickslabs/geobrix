@@ -1,4 +1,4 @@
-"""A PROJ grid directory registered after the process's first PROJ use reaches GDAL's transforms (I-C).
+"""A PROJ grid directory registered after the process's first PROJ use reaches GDAL's transforms.
 
 The first CRS operation builds the process's default PROJ context with its search path. Setting PROJ_DATA afterwards
 changes nothing for that context; osr.SetPROJSearchPaths does. configure_gdal_env sets both, so a registration made after
@@ -63,8 +63,9 @@ def _run(code: str = CODE, *args: str) -> str:
 
 
 def _payload_mode_in_a_fresh_process() -> str:
-    """The driver policy's mode in a process that imports GeoBrix first, as product code does. This test's own process
-    cannot answer it: pytest's pyrx conftest imports rasterio before GeoBrix, which binds rasterio to another GDAL.
+    """The driver policy's mode in a process that imports GeoBrix first, as product code does. Asked in a fresh process
+    because the answer depends on the import order, and this test's own process is not in the order product code uses:
+    the root conftest imports GeoBrix first, but a pytest process may have bound rasterio before this module ran.
     """
     probe = (
         "from databricks.labs.gbx import _gdal_policy\n"

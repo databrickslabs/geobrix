@@ -113,18 +113,25 @@ def spark_with_jar():
                 "python/geobrix/test/pyrx/test_binpoints_agg_cross_tier.py --with-integration"
             )
 
-    session = (
+    # With a payload named (GBX_NATIVE_ROOT), the JVM runs the payload's GDAL (the manager conftest's conf): the
+    # system library path would mix in a second GDAL, which GDALManager refuses. Without one, the system GDAL as before.
+    from test.manager.conftest import payload_jvm_conf
+
+    payload = payload_jvm_conf()
+    builder = (
         SparkSession.builder.master("local[2]")
         .appName("gbx-binpoints-agg-cross-tier-parity")
         .config("spark.sql.shuffle.partitions", "2")
-        .config(
+    )
+    if not payload:
+        builder = builder.config(
             "spark.driver.extraJavaOptions",
             "-Djava.library.path=/usr/local/lib:/usr/lib:/usr/java/packages/lib:"
             "/usr/lib64:/lib64:/lib:/usr/local/hadoop/lib/native",
         )
-        .config("spark.jars", str(_JARS[-1]))
-        .getOrCreate()
-    )
+    for key, value in payload.items():
+        builder = builder.config(key, value)
+    session = builder.config("spark.jars", str(_JARS[-1])).getOrCreate()
     yield session
 
 

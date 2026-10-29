@@ -30,10 +30,9 @@ KEY = "GDAL_DISABLE_READDIR_ON_OPEN"
 
 @pytest.fixture(autouse=True)
 def fresh_listings(monkeypatch):
-    """A fresh listing cache that lists a folder at its first open, in the caller's thread
-    (the rows that check the background listing set the defaults back)."""
+    """A fresh listing cache that lists a folder at its first open (the row that checks the
+    second-open rule sets the default back)."""
     _env._LISTINGS.clear()
-    monkeypatch.setattr(_env._LISTINGS, "background", False)
     monkeypatch.setattr(_env._LISTINGS, "list_after_opens", 1)
     yield
     _env._LISTINGS.clear()
@@ -481,42 +480,25 @@ def test_no_reachable_thread_setter_lists_nothing_and_checks_by_name(
     assert [m for n, m in opens_seen if n == "a.tif"] == ["TRUE"]
 
 
-def test_the_first_opens_of_a_folder_do_not_wait_for_its_listing(
-    tmp_path, readdir, monkeypatch
-):
-    """On a Volume the listing costs as much as the whole folder (14.5 s for 40,000 files)
-    however early the scan stops, so it never holds an open up: the first open of a folder
-    keeps TRUE, the second asks for the listing in the background and keeps TRUE too, and
-    the opens after it is held take their per-file value."""
-    import time
-
+def test_a_folder_is_listed_at_its_second_open(tmp_path, readdir, monkeypatch):
+    """The first open of a folder by a worker keeps TRUE and lists nothing; the second
+    lists the folder and takes its per-file value."""
     readdir(None)
-    monkeypatch.setattr(_env._LISTINGS, "background", True)
     monkeypatch.setattr(_env._LISTINGS, "list_after_opens", _env._LIST_AFTER_OPENS)
-    real_list = _env._LISTINGS._list
-
-    def _slow_list(folder):
-        time.sleep(0.5)
-        return real_list(folder)
-
-    monkeypatch.setattr(_env._LISTINGS, "_list", _slow_list)
     a = _plain_tiff(tmp_path / "a.tif")
-    for _ in range(_env._LIST_AFTER_OPENS):
-        t0 = time.perf_counter()
-        assert _env.readdir_mode(a) is None
-        assert time.perf_counter() - t0 < 0.25
-    _env._LISTINGS.wait()
+    before = _env._LISTINGS.listings
+    assert _env.readdir_mode(a) is None
+    assert _env._LISTINGS.listings == before
     assert _env.readdir_mode(a) == "EMPTY_DIR"
+    assert _env._LISTINGS.listings == before + 1
 
 
 def test_a_folder_opened_once_is_never_listed(tmp_path, readdir, monkeypatch):
     """One scene a folder: a folder this worker opens one file of is not listed at all."""
     readdir(None)
-    monkeypatch.setattr(_env._LISTINGS, "background", True)
     monkeypatch.setattr(_env._LISTINGS, "list_after_opens", _env._LIST_AFTER_OPENS)
     before = _env._LISTINGS.listings
     for i in range(5):
         (tmp_path / str(i)).mkdir()
         assert _env.readdir_mode(_plain_tiff(tmp_path / str(i) / "a.tif")) is None
-    _env._LISTINGS.wait()
     assert _env._LISTINGS.listings == before

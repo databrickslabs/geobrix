@@ -409,17 +409,18 @@ formats.
 - **The lightweight tier lists each folder once per worker, not at every open.** GDAL lists a
   raster's folder at every open to look for its sidecar files. On a Volume, a folder of 745 hourly
   GeoTIFFs took 0.3 s to 10 s per open on a Serverless worker. GeoBrix now lists a folder once per
-  Python worker, in the background, once the worker has opened two of its files, and then tells
-  GDAL, for each open, where to look. A file with no sidecar in the folder is opened without any
-  sidecar look-up: a median of about 165 ms per open of a fresh file on Serverless, against about
-  415 ms with GDAL checking each sidecar by name. A file with sidecars (external overviews, masks,
-  `.aux.xml`, world files) still finds them, and so do the files a VRT opens. `rst_avg` on a whole
-  hourly file took about 290 ms to 370 ms a call instead of about 630 ms to 670 ms. No open waits
-  for a listing; until it is ready, and in a folder of more than 1,000 files (GDAL's own
-  `GDAL_READDIR_LIMIT_ON_OPEN`), sidecars are checked by name. A sidecar added to a folder after a
-  worker listed it is not seen by that worker until the folder is listed again (a file missing
-  from the listing triggers that, at most every 10 seconds) or the worker restarts. See [Sidecar
-  files and folder listings](./api/performance#sidecar-files-and-folder-listings).
+  Python worker, at the worker's second open of one of its files, and then tells GDAL, for each
+  open, where to look. A file with no sidecar in the folder is opened without any sidecar look-up:
+  a median of about 165 ms per open of a fresh file on Serverless, against about 415 ms with GDAL
+  checking each sidecar by name. A file with sidecars (external overviews, masks, `.aux.xml`,
+  world files) still finds them, and so do the files a VRT opens. `rst_avg` on a whole hourly file
+  took about 290 ms to 370 ms a call instead of about 630 ms to 670 ms. Before a folder is listed,
+  and in a folder of more than 1,000 files (GDAL's own `GDAL_READDIR_LIMIT_ON_OPEN`), sidecars are
+  checked by name; finding that a folder is that large costs one listing per worker (about 2 s for
+  5,000 files and 14.5 s for 40,000 on Serverless). A sidecar added to a folder after a worker
+  listed it is not seen by that worker until the folder is listed again (a file missing from the
+  listing triggers that, at most every 10 seconds) or the worker restarts. See [Sidecar files and
+  folder listings](./api/performance#sidecar-files-and-folder-listings).
 - **Importing the lightweight tier sets `GDAL_DISABLE_READDIR_ON_OPEN=TRUE` for the whole Python
   process**, unless it is set already. Your own rasterio, GDAL or Fiona code in that process and
   the programs it starts (`gdalinfo`, `tippecanoe`) then check sidecars by name too, so a sidecar

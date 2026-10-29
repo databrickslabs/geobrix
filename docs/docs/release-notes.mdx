@@ -405,15 +405,18 @@ formats.
 
 ### Lightweight raster opens — no folder listing (behavior change)
 
-- **The lightweight tier sets GDAL's `GDAL_DISABLE_READDIR_ON_OPEN` to `TRUE`.** GDAL lists a
-  raster's folder at every open to look for its sidecar files. On a Volume, a folder of 745
-  hourly GeoTIFFs took 0.3 s to 10 s per open on a Serverless worker. GDAL now checks each
-  sidecar by name instead, so external overviews, masks, `.aux.xml` and world files are still
-  found. The check GeoBrix makes before it reads a Volume file directly opens the file without
-  looking for sidecars, in about 10 ms instead of about 330 ms. `rst_avg` over 720 windows of
-  720 of those files took 62 s instead of 81 s on Serverless. A value you set yourself is kept,
-  and `NO` restores the listing. A sidecar whose extension mixes case (`.Tfw`) is found only with
-  `NO`. See [Sidecar files and folder listings](./api/performance#sidecar-files-and-folder-listings).
+- **The lightweight tier lists each folder once per worker, not at every open.** GDAL lists a
+  raster's folder at every open to look for its sidecar files. On a Volume, a folder of 745 hourly
+  GeoTIFFs took 0.3 s to 10 s per open on a Serverless worker. GeoBrix now lists a folder once per
+  Python worker and, for each open, tells GDAL where to look. A file with no sidecar in the folder
+  is opened without any sidecar look-up: a median of about 165 ms per open of a fresh file on
+  Serverless, against about 415 ms with GDAL checking each sidecar by name. A file with sidecars
+  (external overviews, masks, `.aux.xml`, world files) still finds them. `rst_avg` on a whole
+  hourly file took about 290 ms to 370 ms a call instead of about 630 ms to 670 ms. A sidecar
+  added to a folder after a worker listed it is not seen by that worker until the folder is listed
+  again (a file missing from the listing triggers that) or the worker restarts. A value of
+  `GDAL_DISABLE_READDIR_ON_OPEN` other than `TRUE` that you set yourself is used for every open.
+  See [Sidecar files and folder listings](./api/performance#sidecar-files-and-folder-listings).
 - **A local copy of a Volume file is removed from disk as soon as it is opened.** When a Volume
   file cannot be read directly, the lightweight tier copies it to local disk. The copy that
   `rst_sample` keeps open for a task now leaves the disk at once: its space comes back when the

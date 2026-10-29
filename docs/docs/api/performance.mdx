@@ -59,11 +59,17 @@ Opening a large source via byte-range buffers it into executor RAM, and for a **
 
 ### Sidecar files and folder listings
 
-When GDAL opens a raster it looks for the raster's sidecar files: external overviews (`.ovr`), masks (`.msk`), `.aux.xml` metadata and world files (`.tfw`, `.wld`). By default it lists the whole folder to find them, at every open. On a Volume that listing gets slower the more files share the folder: for a folder of 745 GeoTIFFs on a Serverless worker it took from 0.3 s to 10 s per open in our runs.
+When GDAL opens a raster it looks for the raster's sidecar files: external overviews (`.ovr`), masks (`.msk`), `.aux.xml` metadata and world files (`.tfw`, `.wld`). By default it lists the whole folder to find them, at every open. On a Volume that listing gets slower the more files share the folder: for a folder of 745 GeoTIFFs on a Serverless worker it took from 0.3 s to 10 s per open in our runs. Checking each sidecar by name instead (GDAL's `GDAL_DISABLE_READDIR_ON_OPEN=TRUE`, 5 to 7 names an open) costs about as much there, because a check for a file that does not exist is slow too.
 
-The lightweight tier sets GDAL's `GDAL_DISABLE_READDIR_ON_OPEN` option to `TRUE`. GDAL then lists nothing and checks each sidecar by name (5 to 7 names per open), so overviews, masks and world files are still found, and the cost of an open no longer depends on the size of the folder. Before it reads a Volume file directly, GeoBrix checks that the file can be read: that check opens the file without looking for sidecars at all, in about 10 ms where it took about 330 ms with the listing.
+The lightweight tier lists each folder once per Python worker and uses that listing to decide, for each open, where GDAL looks:
 
-If you set `GDAL_DISABLE_READDIR_ON_OPEN` yourself (an environment variable on the executors, or a `rasterio.Env` around your own reads), GeoBrix keeps your value. `NO` restores GDAL's listing. `EMPTY_DIR` is the fastest, but GDAL then ignores every sidecar, so a world file or an external overview is not used. With `TRUE`, GDAL checks a sidecar's extension in lower case and in upper case only, so a sidecar whose extension mixes case (`.Tfw`) is found only with `NO`.
+- **No file in the folder can be a sidecar of this one:** GDAL looks for none. On a Serverless worker an open of a fresh file in the 745-file folder took a median of about 165 ms this way, against about 415 ms with the checks by name.
+- **The file has sidecars GDAL finds by name** (for example `x.tif.ovr`, `x.tif.aux.xml`, `x.tfw`): GDAL checks the names.
+- **Anything else** (a sidecar whose name mixes case, such as `x.Tfw`; another file with the same name and a different extension; or a vendor metadata file such as `METADATA.DIM` or `*_MTL.txt` in the folder): GDAL lists the folder itself and matches names in any case, as it does by default.
+
+The first open in a folder pays for the listing (about 0.4 s for the 745-file folder). A file missing from the listing (written after it) makes the worker list the folder again. A sidecar added to a folder after a worker listed it is not seen by that worker until the folder is listed again or the worker restarts: to pick up a new world file or overview at once, start a new job, or set `GDAL_DISABLE_READDIR_ON_OPEN` yourself. Files read through a cloud path (`/vsis3/`, `s3://`, ...) are opened with the checks by name. The check GeoBrix makes before it reads a Volume file directly never looks for sidecars.
+
+If you set `GDAL_DISABLE_READDIR_ON_OPEN` yourself to a value other than `TRUE` (an environment variable on the executors, or a `rasterio.Env` around your own reads), GeoBrix uses your value for every open: `NO` for GDAL's own listing at each open, `YES` for the checks by name, `EMPTY_DIR` to ignore sidecars.
 
 ### Per-partition open-amortization (the grouped executor)
 

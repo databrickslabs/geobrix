@@ -208,7 +208,7 @@ def untag_a_version(spark, table):
 
 
 def export_a_copy(spark, table, to):
-    """gbx_zarr_export(method="copy"): a plain Zarr store that any Zarr tool opens."""
+    """gbx_zarr_export(method="copy"): a plain Zarr store, in the store's own format."""
     from databricks.labs.gbx.zarr import gbx_zarr_export
 
     path = gbx_zarr_export(spark, table, to)  # `to` must not exist, or be empty

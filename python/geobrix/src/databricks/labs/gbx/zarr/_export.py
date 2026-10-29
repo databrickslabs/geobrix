@@ -1,7 +1,9 @@
 """``gbx_zarr_export``: a store version as a plain Zarr copy, a reference file or a publish.
 
-**copy** writes the version at canonical keys, in the store's own format, so any Zarr reader
-opens it with no GeoBrix and no Delta. Each object is one shard (or one chunk of an
+**copy** writes the version at canonical keys, in the store's own format (a copy of a Zarr v2
+store is v2, of a v3 store is v3), so any tool that reads that format opens it with no GeoBrix
+and no Delta. A store ``gbx_zarr_write`` made is v3, sharded, with ``crc32c`` by default, which a
+GDAL before 3.13 cannot read. Each object is one shard (or one chunk of an
 unsharded array). A shard whose rows are one standard shard is copied byte for byte; a
 shard with chunk rows laid over it (appends and updates not yet folded by
 ``gbx_zarr_optimize``), or made of chunk rows alone, is assembled from them without
@@ -631,11 +633,12 @@ def gbx_zarr_export(
     consolidated metadata) into the directory ``to``, which must not exist or be empty
     (``ValueError``). The cluster's tasks write the objects, so ``to`` must be a path every
     node sees: a ``/Volumes`` path (``ValueError`` before any task runs for a path local to
-    the driver, unless the session is single-node). Any Zarr tool opens it. Shards that are already standard shards are
-    copied as bytes; chunk rows are assembled into shards without decoding; deleted chunks
-    and shards are left out, so readers see the fill value. Float ``_FillValue`` attributes
-    of Zarr v3 arrays are written in the form xarray reads. If the copy fails nothing is
-    left in ``to``.
+    the driver, unless the session is single-node). Any tool that reads the store's format opens it
+    (a GDAL before 3.13 cannot read the sharded v3 stores with ``crc32c`` that ``gbx_zarr_write``
+    makes). Shards that are already standard shards are copied as bytes; chunk rows are
+    assembled into shards without decoding; deleted chunks and shards are left out, so readers
+    see the fill value. Float ``_FillValue`` attributes of Zarr v3 arrays are written in the
+    form xarray reads. If the copy fails nothing is left in ``to``.
 
     ``method="reference"`` writes the kerchunk (version 1) JSON file ``to`` (a ``.json``
     path): the metadata as strings and each shard or chunk as ``[absolute_path, offset,

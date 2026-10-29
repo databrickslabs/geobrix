@@ -1508,6 +1508,11 @@ def _open_via_file_ref(fr, rasterio, stream_max_bytes=_GBX_STREAM_MAX_BYTES):
         return rasterio.open(local_path), None  # FUSE path: no stream
 
 
+# Drivers that read a dataset through the one file handle they opened and never open the
+# path again by name: a staged copy of such a file may be removed from disk once it is open.
+_SINGLE_HANDLE_DRIVERS = frozenset(("GTiff", "COG"))
+
+
 class _OpenerContext:
     """Per-partition opener/closer/weigher state for the FILE-capable LRU.
 
@@ -1535,12 +1540,16 @@ class _OpenerContext:
     - ``_unlinked_sizes``: id(ds) → size of a staged copy removed from disk as soon as it
       was opened (``unlink_staged``); ``weigh`` uses it.
 
-    ``unlink_staged``: remove a staged copy from disk once it is open (POSIX: the open
-    handle still reads it, and its space comes back when the handle closes, however the
-    process ends). For holders that outlive a task: a PySpark worker exits with
-    ``os._exit`` and runs no ``atexit`` handler, so a copy left on disk would stay there.
-    Where the remove fails (a platform that cannot remove an open file) the copy is
-    removed by ``close`` as usual.
+    ``unlink_staged``: remove a staged copy from disk once it is open, when the dataset's
+    driver reads through the one handle it opened (``_SINGLE_HANDLE_DRIVERS``: GTiff,
+    COG). POSIX: the open handle still reads the file, and its space comes back when the
+    handle closes, however the process ends. For holders that outlive a task: a PySpark
+    worker exits with ``os._exit`` and runs no ``atexit`` handler, so a copy left on disk
+    would stay there. Any other driver may open the file again by name (a netCDF or HDF
+    subdataset, ``NETCDF:"<path>":var``; a fallback that reopens ``ds.name``), so its copy
+    stays on disk and ``close`` removes it (an eviction, the task-attempt boundary, the end
+    of the worker's Python process). Where the remove fails (a platform that cannot remove
+    an open file) the copy is removed by ``close`` as usual.
     """
 
     def __init__(
@@ -1593,7 +1602,7 @@ class _OpenerContext:
                     pass
         if is_temp:
             self._staged_temps[id(ds)] = local_path
-            if self._unlink_staged:
+            if self._unlink_staged and ds.driver in _SINGLE_HANDLE_DRIVERS:
                 try:
                     size = os.path.getsize(local_path)
                     os.remove(local_path)

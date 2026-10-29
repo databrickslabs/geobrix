@@ -190,6 +190,12 @@ def _matrix_cases(tmp_path):
         "own mask": (_tile(str(masked)), [_centre(10, 10), _centre(200, 10)]),
         # a pending NoData on an own-mask source: the masked pixels (columns < 150) take it,
         # so the masked point reads None where the raw pixel has a value
+        # a window running past the file's edge: not the point view (it would read past
+        # the source), the window materialized as open_tile does
+        "window past the edge": (
+            _tile(plain, window=(600, 500, 200, 200)),
+            [_centre(650, 550), _centre(699, 599)],
+        ),
         "own mask + pending nodata": (
             _tile(str(masked), metadata={"pending_nodata": "255"}),
             [_centre(10, 10), _centre(200, 10)],
@@ -215,6 +221,7 @@ def _matrix_cases(tmp_path):
         "pending srid",
         "own mask",
         "own mask + pending nodata",
+        "window past the edge",
         "clip",
         "warp target",
     ],
@@ -232,7 +239,13 @@ def test_a_point_read_matches_the_materialized_tile(
     counters.update(encodes=0)
     got = [SAMPLE(tile, g) for g in geoms]
     assert got == want
-    fallbacks = ("own mask", "own mask + pending nodata", "clip", "warp target")
+    fallbacks = (
+        "own mask",
+        "own mask + pending nodata",
+        "window past the edge",
+        "clip",
+        "warp target",
+    )
     assert (counters["encodes"] > 0) == (case in fallbacks)
     if case == "own mask + pending nodata":
         assert want[0] == [None] and None not in want[1]  # the mask decides the value
@@ -425,3 +438,65 @@ def test_an_interrupted_open_leaves_no_local_copy(
     with pytest.raises(KeyboardInterrupt):
         SAMPLE(tile, _wkb(*_centre(1, 1)))
     assert sorted(os.listdir(staged)) == []
+
+
+def _netcdf(tmp_path, name="n.nc"):
+    """A one-variable netCDF file (``Band1``) of a small float32 ramp, via GDAL CreateCopy."""
+    import rasterio.shutil
+
+    tif = _write(
+        tmp_path / f"{name}.src.tif",
+        np.arange(16 * 16, dtype="float32").reshape(1, 16, 16),
+        block=16,
+    )
+    out = tmp_path / name
+    rasterio.shutil.copy(tif, str(out), driver="netCDF")
+    os.remove(tif)
+    return str(out)
+
+
+def test_a_staged_netcdf_copy_stays_on_disk_for_a_reopen_by_name(tmp_path, staged):
+    """Only a GTiff/COG copy is removed from disk once open: a netCDF dataset may be opened
+    again by name (its subdataset, NETCDF:"<path>":var), so its copy stays until the handle
+    closes."""
+    from databricks.labs.gbx.ds.file_gbx import _OpenerContext
+
+    path = _netcdf(tmp_path)
+    ctx = _OpenerContext(unlink_staged=True)
+    ds = ctx.open(path)
+    try:
+        assert ds.driver == "netCDF" and len(os.listdir(staged)) == 1
+        with rasterio.open(f'NETCDF:"{ds.name}":Band1') as sub:
+            assert sub.shape == (16, 16)
+    finally:
+        ctx.close(ds)
+    assert os.listdir(staged) == []
+
+
+def test_a_staged_gtiff_copy_is_unlinked_at_open_and_weighed_by_its_size(
+    tmp_path, staged
+):
+    """A GTiff copy leaves the disk at open, and the LRU still weighs it by its size."""
+    from databricks.labs.gbx.ds.file_gbx import _OpenerContext
+
+    path = _write(tmp_path / "g.tif", np.ones((1, 64, 64), "float32"), block=32)
+    ctx = _OpenerContext(unlink_staged=True)
+    ds = ctx.open(path)
+    try:
+        assert ds.driver == "GTiff" and os.listdir(staged) == []
+        assert ctx.weigh(ds, path) == os.path.getsize(path)
+    finally:
+        ctx.close(ds)
+
+
+def test_no_netcdf_copy_is_left_after_the_task_boundary(tmp_path, in_one_task, staged):
+    """The netCDF copy the task cache keeps is removed when the next task attempt starts."""
+    nc = _tile(_netcdf(tmp_path))
+    gt = _tile(_write(tmp_path / "g.tif", np.ones((1, 16, 16), "float32"), block=16))
+    assert SAMPLE(nc, _wkb(*_centre(2, 3))) == [float(3 * 16 + 2)]
+    assert len(os.listdir(staged)) == 1  # kept while the task holds the handle
+    in_one_task(2)
+    assert SAMPLE(gt, _wkb(*_centre(2, 3))) == [1.0]
+    assert (
+        os.listdir(staged) == []
+    )  # the netCDF copy closed with task 1; the GTiff unlinked

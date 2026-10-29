@@ -769,7 +769,9 @@ def test_a_folder_that_cannot_be_listed_is_not_tried_on_every_open(
         ("inf", False),
         (float("inf"), False),
         (40000.0, False),
-        (40000, False),  # the metadata map holds strings
+        (40000, True),  # the reader's own int count (partition.folder_files)
+        (True, False),  # a bool is not a count
+        (-40000, False),
         ("-40000", False),
         ("4e4", False),
     ],
@@ -850,3 +852,93 @@ def test_a_single_file_read_carries_no_folder_count(tmp_path, monkeypatch):
     assert folder_tile["metadata"].pop(_env.FOLDER_FILES_KEY) == "3"
     assert _env.FOLDER_FILES_KEY not in file_tile["metadata"]
     assert folder_tile == file_tile
+
+
+def test_the_readers_own_opens_take_its_int_count(
+    tmp_path, readdir, monkeypatch, scans
+):
+    """raster_gbx hands the int count it planned with to note_folder_files: the planner's
+    header opens (a tileSize plan) and read()'s opens of a folder past the cap do no scan.
+    """
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    readdir(None)
+    monkeypatch.setenv("GDAL_READDIR_LIMIT_ON_OPEN", "2")
+    for i in range(3):
+        _plain_tiff(tmp_path / f"t{i}.tif")
+    reader = RasterGbxReader(
+        {"path": str(tmp_path), "virtualTiles": "true", "tileSize": "4"}
+    )
+    parts = reader.partitions()
+    rows = [row for p in parts for row in reader.read(p)]
+    assert len(rows) == 3 * 4
+    assert scans == []
+
+
+def test_the_fuse_fallback_of_a_file_ref_open_takes_its_per_file_value(
+    tmp_path, readdir, opens_seen
+):
+    """_open_via_file_ref's FUSE branch (a file over the stream threshold) opens with the
+    value of open_raster's rule for its folder: EMPTY_DIR here."""
+    import rasterio as _rio
+
+    from databricks.labs.gbx.ds.file_gbx import _open_via_file_ref
+
+    readdir(None)
+    a = _plain_tiff(tmp_path / "a.tif")
+    (tmp_path / "other.json").write_text("{}")
+
+    class _Ref:
+        size = 10**12
+
+        def as_local_file(self):
+            return str(a)
+
+    ds, stream = _open_via_file_ref(_Ref(), _rio, stream_max_bytes=1)
+    with ds:
+        assert stream is None and ds.width == 8
+    assert [m for n, m in opens_seen if n == "a.tif"] == ["EMPTY_DIR"]
+
+
+def test_a_value_set_after_configure_decides_the_open(
+    tmp_path, readdir, monkeypatch, opens_seen
+):
+    """The option changed after configure_gdal_env (the environment variable, or a GDAL
+    config option) to something other than TRUE: no per-file choice, the user's value.
+    """
+    from rasterio._env import del_gdal_config, set_gdal_config
+
+    readdir(None)
+    a = _plain_tiff(tmp_path / "a.tif")
+    monkeypatch.setenv(KEY, "NO")
+    assert _env.readdir_mode(a) is None
+    with _env.open_raster(a):
+        pass
+    monkeypatch.setenv(KEY, "TRUE")
+    set_gdal_config(KEY, "YES")
+    try:
+        assert _env.readdir_mode(a) is None
+    finally:
+        del_gdal_config(KEY)
+    assert [m for n, m in opens_seen if n == "a.tif"] == ["NO"]
+
+
+def test_a_libgdal_that_is_not_rasterios_turns_the_per_open_value_off(
+    readdir, monkeypatch, caplog
+):
+    """The libgdal reached through ctypes must be the one rasterio uses: a value set
+    through another copy would not reach the open, so the feature is turned off."""
+    import logging
+
+    from databricks.labs.gbx.pyrx.core import analysis
+
+    class _OtherGdal:
+        def __init__(self):
+            self.CPLSetThreadLocalConfigOption = lambda key, value: None
+            self.CPLGetThreadLocalConfigOption = lambda key, default: None
+
+    monkeypatch.setattr(analysis, "_load_libgdal", lambda: _OtherGdal())
+    monkeypatch.setattr(_env, "_THREAD_CONFIG", None)
+    with caplog.at_level(logging.DEBUG, logger=_env.__name__):
+        assert _env._thread_config() is None
+    assert "is not rasterio's" in caplog.text

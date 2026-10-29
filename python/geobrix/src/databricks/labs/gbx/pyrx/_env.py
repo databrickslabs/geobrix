@@ -74,13 +74,31 @@ def _readable_proj_data(value: str) -> bool:
 
 def _set_rasterio_proj_search_path(path: str) -> None:
     """Point rasterio's GDAL at ``path`` now: rasterio applies ``PROJ_DATA`` as GDAL's PROJ
-    search path when it is imported (and again when a ``rasterio.Env`` starts), so a value
-    replaced after the import still holds for a CRS built outside an Env."""
+    search path when it is imported (and again when its first ``rasterio.Env`` of the
+    process starts), so a value replaced after the import still holds for a CRS built
+    outside an Env."""
     try:
         from rasterio._env import set_proj_data_search_path
     except Exception:
         return
     set_proj_data_search_path(path)
+
+
+# The PROJ search path configure_gdal_env last gave rasterio's GDAL (None: never).
+_RASTERIO_PROJ_PATH: Optional[str] = None
+
+
+def _point_rasterio_at(path: str) -> None:
+    """``_set_rasterio_proj_search_path(path)`` once per new value: every PROJ_DATA that
+    configure_gdal_env exports (the bundled data in place of an unreadable dir, a merged
+    dir of registered grids) must reach rasterio's search path too, or a transform built
+    without a new rasterio.Env misses the registered grids and PROJ takes a lower-accuracy
+    operation, or none. Not repeated for the same value (configure_gdal_env runs per row).
+    """
+    global _RASTERIO_PROJ_PATH
+    if path and path != _RASTERIO_PROJ_PATH:
+        _set_rasterio_proj_search_path(path)
+        _RASTERIO_PROJ_PATH = path
 
 
 def _search_order(base: str, extra: Sequence[str]) -> List[str]:
@@ -647,15 +665,20 @@ def note_folder_files(path, count) -> None:
     between two correct modes: a count over the listing cap (listing_cap, the same
     GDAL_READDIR_LIMIT_ON_OPEN) holds the folder as too large without listing it, and its
     files keep TRUE (by-name checks), as GDAL itself does past that limit; anything else
-    (a count at or under the cap, none, or one that is not a plain ASCII decimal string)
-    does nothing, so
+    (a count at or under the cap, none, or one that is neither a non-negative int nor a
+    plain ASCII decimal string) does nothing, so
     the folder is listed as without a hint and its listing decides per file. A hint never
     yields EMPTY_DIR: only a real listing of the folder can (readdir_mode_for).
     """
-    text = count.strip() if isinstance(count, str) else None
-    if not text or not (text.isascii() and text.isdigit()):
-        return  # not a plain decimal count (None, a float, "inf", unicode digits): no hint
-    n = int(text)
+    if isinstance(count, int) and not isinstance(count, bool):
+        n = count  # the reader's own count (partition.folder_files)
+    else:
+        text = count.strip() if isinstance(count, str) else None
+        if not text or not (text.isascii() and text.isdigit()):
+            return  # not a plain decimal count (None, float, "inf", unicode): no hint
+        n = int(text)
+    if n < 0:
+        return
     cap = listing_cap()
     if cap is None or n <= cap:
         return
@@ -847,7 +870,7 @@ def configure_gdal_env(extra_proj_dirs: Optional[Sequence[str]] = None) -> None:
         p = _bundled_proj_data()
         if p:
             os.environ["PROJ_DATA"] = base = p
-            _set_rasterio_proj_search_path(p)
+            _point_rasterio_at(p)
     if not base:
         p = _bundled_proj_data()
         if p:
@@ -857,6 +880,9 @@ def configure_gdal_env(extra_proj_dirs: Optional[Sequence[str]] = None) -> None:
         merged = _proj_data_dir(base, extra_proj_dirs)
         if merged:
             os.environ["PROJ_DATA"] = merged
+            # rasterio applied the PROJ_DATA of its import (or the bundled data above) as
+            # GDAL's search path; the merged dir holds the registered grids as well
+            _point_rasterio_at(merged)
         _register_pyproj_search_dirs(extra_proj_dirs)
     elif base and not os.environ.get("PROJ_DATA") and not os.environ.get("PROJ_LIB"):
         os.environ["PROJ_DATA"] = base

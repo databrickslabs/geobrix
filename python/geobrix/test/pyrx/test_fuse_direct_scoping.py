@@ -400,7 +400,7 @@ def test_open_tile_routing_depends_only_on_file_ref_presence(gtiff_bytes, monkey
     With file_ref present: stream path regardless of GBX_DISABLE_FUSE_DIRECT.
 
     This confirms the revert: the worker-side env-var gate (GBX_PREFER_FUSE_VOLUMES
-    in the prior B1 commit) is gone — routing is now purely structural (None vs ref).
+    in an earlier commit) is gone — routing is now purely structural (None vs ref).
     """
     from databricks.labs.gbx.pyrx.core.open_tile import open_tile
 

@@ -20,7 +20,7 @@ first (via SQL on the shared names), then register heavy (which OVERWRITES the
 ``test_parity_bng.py`` / ``test_parity_quadbin.py``). The grid spec is built with
 ``gbx_custom_grid(...)`` so the SAME validated STRUCT flows into both tiers.
 
-Coverage (Task 9):
+Coverage:
   * EXACT cell id (``pointascell``) and cell set (``polyfill``, ``kring``).
   * Edge cells: the origin cell ``(100, 100)`` and a max-corner cell near
     ``(999900, 999900)`` — the latter exercises the ``kring`` upper clamp
@@ -32,13 +32,13 @@ Coverage (Task 9):
     CRS must yield identical cell ids (srid is metadata only).
   * All-4-encodings geom input (WKB/EWKB/WKT/EWKT) for ``pointascell`` and
     ``polyfill`` — identical results within each tier AND light == heavy.
-  * Y-NaN lock-in (Resolved decision 3): light ``point_to_cell_id`` rejects a
+  * Y-NaN lock-in: light ``point_to_cell_id`` rejects a
     NaN Y, and heavy ``gbx_custom_pointascell`` rejects a NaN-Y point — locking
-    the CG-T8 fix cross-tier.
+    that fix cross-tier.
 
 Heavy requires the geobrix JAR (Scala/JTS). The JAR is present in the geobrix-dev
 Docker container; this test auto-skips when the JAR is not staged under
-``python/geobrix/lib/``. The staged JAR MUST contain the CG-T8 NaN-Y fix
+``python/geobrix/lib/``. The staged JAR MUST contain the NaN-Y fix
 (rebuild + restage if stale) for the Y-NaN heavy lock-in to pass.
 
 Run in geobrix-dev Docker:
@@ -280,7 +280,7 @@ def test_custom_full_parity(spark_with_jar):
 
 
 def test_custom_pointascell_polyfill_all_four_encodings(spark_with_jar):
-    """Geom-input consistency (Resolved decision 2): WKB/EWKB/WKT/EWKT of the same
+    """Geom-input consistency: WKB/EWKB/WKT/EWKT of the same
     geometry yield identical pointascell id AND polyfill cell-set, in BOTH tiers."""
     spark = spark_with_jar
 
@@ -358,14 +358,14 @@ def test_custom_pointascell_polyfill_all_four_encodings(spark_with_jar):
     )
 
 
-# --- Y-NaN lock-in (Resolved decision 3) ----------------------------------------------------
+# --- Y-NaN lock-in ----------------------------------------------------
 
 
 def test_custom_y_nan_degrades_to_null_both_tiers(spark_with_jar):
     """A NaN coordinate never becomes a cell, and through SQL it is a DATA error:
     both tiers return NULL for that row instead of failing the query.
 
-    The core cell lookups reject NaN in both X and Y (the CG-T8 fix closed a heavy
+    The core cell lookups reject NaN in both X and Y (the fix closed a heavy
     ``!x.isNaN && !x.isNaN`` typo that let a NaN Y through). Since 72097a43 the
     registered ``gbx_custom_pointascell`` calls the *OrNull lookup on both tiers, so a
     bad coordinate degrades to NULL while parameter errors (resolution, grid spec)
@@ -401,7 +401,7 @@ def test_custom_y_nan_degrades_to_null_both_tiers(spark_with_jar):
     assert light is None and heavy is None
 
 
-# --- kloop + distance cross-tier parity (Stage 3 / Task 4) ------------------------------------
+# --- kloop + distance cross-tier parity ------------------------------------
 
 
 def test_custom_kloop_distance_parity(spark_with_jar):

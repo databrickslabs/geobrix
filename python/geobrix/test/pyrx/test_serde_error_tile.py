@@ -14,4 +14,4 @@ def test_build_error_tile_shape():
 
 # The `raster`-nullable assertion formerly here targeted the removed legacy
 # TILE_SCHEMA constant. The v2 schema's field contract (raster nullable) is now
-# asserted by G1 (test_v2_tile_output_invariant.py) against V2_TILE_SCHEMA.
+# asserted by test_v2_tile_output_invariant.py against V2_TILE_SCHEMA.

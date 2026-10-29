@@ -37,12 +37,14 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from databricks.labs.gbx.core._arrow import to_spark_df
+from databricks.labs.gbx.core._retry import _retry_transient
 from databricks.labs.gbx.zarr import _manifest as M
 from databricks.labs.gbx.zarr._access import (
     FuseRangeReader,
     check_identity,
     identities_match,
 )
+from databricks.labs.gbx.zarr._filemode import FileLayout
 from databricks.labs.gbx.zarr._meta import doc_bytes, same_layout, with_shape
 from databricks.labs.gbx.zarr._register import (
     _chunk_rows,
@@ -84,6 +86,21 @@ _CONSOLIDATED = "consolidated_metadata"
 
 # Tests set this to run code while a publish holds its lock.
 _AFTER_LOCK = None
+
+# What a publish records an object's identity from: the stat a reader's compare sees (the
+# mount's), taken again until a Volume has settled the object's time (see ``_settle``).
+# Tests replace the three.
+_stat = os.stat
+_sleep = time.sleep
+_clock = time.monotonic
+_SETTLE_SECONDS = (
+    2.0  # the longest a publish waits, after its first look, for the times
+)
+_SETTLE_STEP = 0.1  # between two looks at the objects still moving
+_QUIET = 1.0  # a whole second is trusted this long after the object's write
+_VOLUMES = "/Volumes/"
+_WRITTEN: dict[str, float] = {}  # a Volume path -> clock() when its rename returned
+_WRITTEN_MAX = 100_000
 
 _REPORT_DDL = "change STRING, array STRING, key STRING"
 _SYNC_AGAIN = "run gbx_zarr_sync again"
@@ -388,7 +405,9 @@ def _release_row_of(lock: dict, write_id: str) -> dict:
     }
 
 
-def _break_lock(spark, table: str, lock: dict, break_lock: bool) -> None:
+def _break_lock(
+    spark, table: str, lock: dict, break_lock: bool, files: FileLayout | None = None
+) -> None:
     """Clear a lock a sync found, or refuse: only on request, and only an old one."""
     if not (break_lock and _breakable(lock)):
         raise _locked(table, lock, break_lock)
@@ -400,20 +419,23 @@ def _break_lock(spark, table: str, lock: dict, break_lock: bool) -> None:
             pa.Table.from_pylist([_release_row_of(lock, wid)]),
             write_id=wid,
             meta={"mode": "publish-lock-broken"},
+            files=files,
         )
     except (ZarrWriteConflict, M.ConcurrentCommit):
         raise _locked(table, lock) from None  # it changed under us: look again
     _LOG.warning("broke the publish lock of %s (taken %s ago)", table, _lock_age(lock))
 
 
-def _take_lock(spark, table: str, break_lock: bool = False) -> str:
+def _take_lock(
+    spark, table: str, break_lock: bool = False, files: FileLayout | None = None
+) -> str:
     """Insert the publish lock row; returns its ``write_id``.
 
     The insert is a compare-and-swap against "no lock", so of two publishes one gets the
     row and the other ``ZarrWriteConflict``. A lock that is there is replaced only with
     ``break_lock=True`` and only when it is old enough (``_LOCK_BREAK_AFTER_SECONDS``).
     """
-    held = _locks(spark, M.snapshot(spark, table))
+    held = _locks(spark, M.snapshot(spark, table, files=files))
     expected = None
     if held:
         if not (break_lock and _breakable(held[0])):
@@ -438,9 +460,10 @@ def _take_lock(spark, table: str, break_lock: bool = False) -> str:
             pa.Table.from_pylist([row]),
             write_id=lock,
             meta={"mode": "publish-lock"},
+            files=files,
         )
     except (ZarrWriteConflict, M.ConcurrentCommit):
-        now = _locks(spark, M.snapshot(spark, table))
+        now = _locks(spark, M.snapshot(spark, table, files=files))
         raise _locked(table, now[0] if now else {}) from None
     return lock
 
@@ -455,7 +478,7 @@ def _release_row(lock: str, write_id: str) -> dict:
     }
 
 
-def _release(spark, table: str, lock: str) -> None:
+def _release(spark, table: str, lock: str, files: FileLayout | None = None) -> None:
     """Drop the lock row on a publish that stopped short; never hides the error that did."""
     wid = uuid.uuid4().hex
     try:
@@ -465,6 +488,7 @@ def _release(spark, table: str, lock: str) -> None:
             pa.Table.from_pylist([_release_row(lock, wid)]),
             write_id=wid,
             meta={"mode": "publish-release"},
+            files=files,
         )
     except Exception:
         _LOG.warning(
@@ -480,7 +504,7 @@ def _release(spark, table: str, lock: str) -> None:
 
 
 def _registered(spark, table: str, what: str) -> M.StoreProps:
-    props = M.read_props(spark, table)
+    props = M.read_props(spark, table, need_file=True)
     if props.kind != "registered":
         raise ZarrUnsupported(
             f"{what} applies to a store registered in place, and {table} holds its own data",
@@ -489,13 +513,26 @@ def _registered(spark, table: str, what: str) -> M.StoreProps:
     return props
 
 
-def _commit_diff(spark, table: str, diff: _Diff, arrays: dict, mode: str) -> int:
+def _commit_diff(
+    spark,
+    table: str,
+    diff: _Diff,
+    arrays: dict,
+    mode: str,
+    files: FileLayout | None = None,
+) -> int:
     rows = pa.Table.from_pylist(diff.rows, schema=M._COMMIT_SCHEMA)
     meta = {"mode": mode, **diff.counts()}
     sharded = {name: m.shard is not None for name, m in arrays.items()}
     try:
         return M.commit(
-            spark, table, rows, write_id=diff.write_id, meta=meta, sharded=sharded
+            spark,
+            table,
+            rows,
+            write_id=diff.write_id,
+            meta=meta,
+            sharded=sharded,
+            files=files,
         )
     except (ZarrWriteConflict, M.ConcurrentCommit):
         raise ZarrWriteConflict(
@@ -528,14 +565,15 @@ def gbx_zarr_sync(
     ``break_lock=True`` clears it and the sync goes on. A younger lock is never broken.
     """
     props = _registered(spark, table, "gbx_zarr_sync")
-    held = _locks(spark, M.snapshot(spark, table))
+    files = FileLayout.of(props)
+    held = _locks(spark, M.snapshot(spark, table, files=files))
     if held:
-        _break_lock(spark, table, held[0], break_lock)
-    snap = M.snapshot(spark, table)
+        _break_lock(spark, table, held[0], break_lock, files)
+    snap = M.snapshot(spark, table, files=files)
     live = M.read_rows(spark, snap, kinds=_LIVE_KINDS)
     diff, arrays = _compare(spark, props.root, live, uuid.uuid4().hex)
     if diff:
-        version = _commit_diff(spark, table, diff, arrays, "sync")
+        version = _commit_diff(spark, table, diff, arrays, "sync", files)
         _say(f"synced {table} at version {version}: {diff.counts()}")
     else:
         _say(f"{table} is up to date")
@@ -545,9 +583,88 @@ def gbx_zarr_sync(
 # --- publish ----------------------------------------------------------------------
 
 
-def _atomic_write(path: str, parts, write_id: str) -> str:
+def _identity_of(path: str) -> str:
+    st = _stat(path)
+    return identity_of(st.st_mtime_ns // 1_000_000, st.st_size)
+
+
+def _on_volume(path: str) -> bool:
+    return os.path.abspath(path).startswith(_VOLUMES)
+
+
+def _whole_second(identity: str) -> bool:
+    return int(identity.partition(":")[0]) % 1000 == 0
+
+
+def _settle(paths) -> dict[str, str]:
+    """The identity of each of ``paths``, taken once the mount has settled their times.
+
+    A rename returns before a Volume has settled the object's modification time, so the
+    identity read right after it (``_atomic_write``'s) is not the one every later read
+    compares with: recorded as it is, it makes every read of the published object raise
+    ``ZarrStoreDrift``. A settled Volume object shows a whole second, so an object that
+    still shows a fraction is looked at again; and a whole second seen less than ``_QUIET``
+    after the object was written (``_WRITTEN``) could be a local time that merely fell on one,
+    so that is looked at again too. Off a Volume an object is final once a second look agrees.
+
+    The first look at every object is free of the bound, however long a big publish takes
+    over it. After it, only the objects still moving are looked at, every ``_SETTLE_STEP``,
+    for at most ``_SETTLE_SECONDS`` in all: past that the latest identities are returned, with
+    a warning, and ``gbx_zarr_sync`` puts any that moved right.
+    """
+    paths = sorted(set(paths))
+    if not paths:
+        return {}
+    seen: dict[str, str] = {}
+    pending: set[str] = set()
+
+    def look(p: str) -> None:
+        identity = _retry_transient(lambda: _identity_of(p))
+        if _on_volume(p):
+            done = (
+                _whole_second(identity)
+                and _clock() - _WRITTEN.get(os.path.normpath(p), float("-inf"))
+                >= _QUIET
+            )
+        else:
+            done = seen.get(p) == identity
+        seen[p] = identity
+        pending.discard(p) if done else pending.add(p)
+
+    for p in paths:
+        look(p)
+    deadline = _clock() + _SETTLE_SECONDS
+    while pending and _clock() < deadline:
+        _sleep(_SETTLE_STEP)
+        for p in sorted(pending):
+            look(p)
+    if pending:
+        _LOG.warning(
+            "%d object(s) had not settled their modification time after %.0f s (e.g. "
+            "%s); if a read reports them as changed, run gbx_zarr_sync",
+            len(pending),
+            _SETTLE_SECONDS,
+            min(pending),
+        )
+    for p in paths:
+        _WRITTEN.pop(os.path.normpath(p), None)
+    return seen
+
+
+def _restamp(rows: list[dict], base: str) -> None:
+    """Give every object row a publish wrote the identity the mount settled on."""
+    held = [r for r in rows if r.get("identity") and r.get("file")]
+    settled = _settle(os.path.join(base, r["file"]) for r in held)
+    for r in held:
+        r["identity"] = settled[os.path.join(base, r["file"])]
+
+
+def _atomic_write(path: str, parts, write_id: str, *, track: bool = False) -> str:
     """Write ``parts`` (byte strings) to ``path`` through a temp name and a rename, and
-    return the identity of the result."""
+    return the identity of the result as the rename left it. On a Volume that is not final:
+    a caller that records it settles it first (``_restamp``), and says ``track`` so that the
+    time of the rename is kept for the settle (``_WRITTEN``). A document, which carries no
+    identity, is not tracked."""
     folder = os.path.dirname(path)
     os.makedirs(folder, exist_ok=True)
     temp = os.path.join(folder, f".{os.path.basename(path)}.{write_id}.tmp")
@@ -560,8 +677,11 @@ def _atomic_write(path: str, parts, write_id: str) -> str:
         with contextlib.suppress(OSError):
             os.unlink(temp)
         raise
-    st = os.stat(path)
-    return identity_of(st.st_mtime_ns // 1_000_000, st.st_size)
+    if track and _on_volume(path):
+        while len(_WRITTEN) >= _WRITTEN_MAX:  # a long-lived driver: forget the oldest
+            _WRITTEN.pop(next(iter(_WRITTEN)), None)
+        _WRITTEN[os.path.normpath(path)] = _clock()
+    return _identity_of(path)
 
 
 def _object_row(kind, array, key, path, base, identity, write_id, expected) -> dict:
@@ -597,7 +717,7 @@ def _copy_chunk(reader, base: str, row: dict, write_id: str) -> dict:
     """An unsharded overlay chunk's bytes into the base object at its canonical key."""
     path = os.path.join(base, row["array"], row["key"])
     region = Region(row["file"], row["offset"], row["length"], "gbx")
-    identity = _atomic_write(path, reader.read([region]), write_id)
+    identity = _atomic_write(path, reader.read([region]), write_id, track=True)
     return _object_row(
         "chunk",
         row["array"],
@@ -619,7 +739,7 @@ def _rebuild_shard(store, reader, base: str, array: str, key: str, write_id: str
         for part in shard.pieces(0, shard.size):
             yield reader.read([part])[0] if isinstance(part, Region) else part
 
-    return path, _atomic_write(path, parts(), write_id)
+    return path, _atomic_write(path, parts(), write_id, track=True)
 
 
 def _publish_shards(pool, reader, base, meta, keys, inner, shard_rows, write_id):
@@ -703,6 +823,28 @@ def _reconsolidate(base: str, groups: list[dict], write_id: str) -> list[dict]:
     return out
 
 
+def _publish_conflict(table: str, err: Exception) -> ZarrWriteConflict:
+    """What a publish says when its commit meets another: a writer replaced rows it turns
+    into store objects, or Delta rejected its MERGE for a concurrent commit.
+
+    A commit's own fix ("re-read the store and write again") is wrong here: by now the
+    publish has written its files into the store, so the table has to be told about them.
+    What the conflict reported (keys, winner, rows) is kept.
+    """
+    if isinstance(err, ZarrWriteConflict):
+        why, extra = err.message, dict(
+            keys=err.keys, winner=err.winner, conflicts=err.conflicts
+        )
+    else:
+        why, extra = str(err).split(" Fix:")[0], {}
+    return ZarrWriteConflict(
+        f"the publish of {table} did not commit: {why}",
+        fix="the objects this publish already wrote are in the store, so run "
+        f"gbx_zarr_sync({table!r}) to record them, then publish again",
+        **extra,
+    )
+
+
 def publish(spark, table: str, *, break_lock: bool = False) -> int:
     """Write the overlay of a registered, writable store into the store itself.
 
@@ -728,7 +870,7 @@ def publish(spark, table: str, *, break_lock: bool = False) -> int:
     refuses it. Once the lock is at least an hour old, ``break_lock=True`` replaces it; a
     younger lock is never broken, since its publish may still be writing.
     """
-    props = M.read_props(spark, table)
+    props = M.read_props(spark, table, need_file=True)
     if props.kind != "registered":
         raise ZarrReadOnly(
             f"{table} holds its own data, so there is no store to publish into",
@@ -742,25 +884,27 @@ def publish(spark, table: str, *, break_lock: bool = False) -> int:
             fix="register the store with writable=True and an overlay_root",
         )
     check_owner_marker(
-        props.overlay_root, qualified_table_name(spark, table), "overlay"
+        props.overlay_root, qualified_table_name(spark, table), "overlay", spark
     )
-    snap = M.snapshot(spark, table)
+    files = FileLayout.of(props)
+    snap = M.snapshot(spark, table, files=files)
     ours = M.read_rows(spark, snap, kinds=_LIVE_KINDS)
     if not pc.any(pc.equal(ours.column("origin"), "gbx")).as_py():
         return snap.version
-    lock = _take_lock(spark, table, break_lock)
+    lock = _take_lock(spark, table, break_lock, files)
     try:
         if _AFTER_LOCK is not None:
             _AFTER_LOCK()
         return _publish(spark, table, props, lock)
     except BaseException:
-        _release(spark, table, lock)
+        _release(spark, table, lock, files)
         raise
 
 
 def _publish(spark, table: str, props, lock: str) -> int:
     base, write_id = props.root, uuid.uuid4().hex
-    live = M.read_rows(spark, M.snapshot(spark, table), kinds=_LIVE_KINDS)
+    files = FileLayout.of(props)
+    live = M.read_rows(spark, M.snapshot(spark, table, files=files), kinds=_LIVE_KINDS)
     diff, _ = _compare(spark, base, live, write_id)
     if diff:
         shown = ", ".join(
@@ -858,6 +1002,9 @@ def _publish(spark, table: str, props, lock: str) -> int:
         groups = live.filter(pc.equal(kind, "group")).to_pylist()
         out += _reconsolidate(base, groups, write_id)
 
+    _restamp(
+        out, base
+    )  # after every write: the first ones have had the longest to settle
     out.append(_release_row(lock, write_id))
     meta = {
         "mode": "publish",
@@ -866,11 +1013,15 @@ def _publish(spark, table: str, props, lock: str) -> int:
         "documents": len(docs),
     }
     sharded = {name: m.shard is not None for name, m in arrays.items()}
-    return M.commit(
-        spark,
-        table,
-        pa.Table.from_pylist(out, schema=M._COMMIT_SCHEMA),
-        write_id=write_id,
-        meta=meta,
-        sharded=sharded,
-    )
+    try:
+        return M.commit(
+            spark,
+            table,
+            pa.Table.from_pylist(out, schema=M._COMMIT_SCHEMA),
+            write_id=write_id,
+            meta=meta,
+            sharded=sharded,
+            files=files,
+        )
+    except (ZarrWriteConflict, M.ConcurrentCommit) as e:
+        raise _publish_conflict(table, e) from e

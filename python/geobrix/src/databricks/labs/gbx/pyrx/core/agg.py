@@ -74,6 +74,16 @@ def _close_all(memfiles, datasets):
         mf.close()
 
 
+def _fill_reads_as_data(src) -> bool:
+    """True when the pixels a warp of *src* does not reach would read as data: *src* has a mask
+    band of its own (which reads ahead of any NoData) or declares no NoData and has no alpha
+    band to carry the fill. A source with a NoData or an alpha band and no mask band is warped
+    with it, and the fill is invalid already."""
+    if _nodata.has_own_mask(src):
+        return True
+    return src.nodata is None and not _nodata.has_alpha(src)
+
+
 def _reproject_dataset(src, dst_crs, target_res=None, anchor=None):
     """Reproject an open rasterio dataset to ``dst_crs``; return (memfile, dataset).
 
@@ -115,7 +125,7 @@ def _reproject_dataset(src, dst_crs, target_res=None, anchor=None):
         transform = rasterio.Affine(target_res[0], 0.0, left, 0.0, -target_res[1], top)
     out_dtype = src.dtypes[0]
     decoded_bytes = src.count * width * height * np.dtype(out_dtype).itemsize
-    profile = _comp.drop_ycbcr(src.profile)
+    profile = _comp.source_profile(src.profile)
     profile.update(
         driver="GTiff", crs=dst_crs, transform=transform, width=width, height=height
     )
@@ -123,14 +133,20 @@ def _reproject_dataset(src, dst_crs, target_res=None, anchor=None):
         _comp.creation_opts(out_dtype, decoded_bytes=decoded_bytes, compress="auto")
     )
     # A source's own mask band (not an alpha band) is warped to the new grid and written
-    # with the pixels; the warp itself leaves the masked pixels as valid zeros.
-    mask = (
-        _warp.warped_own_mask(
+    # with the pixels; the warp itself leaves the masked pixels as valid zeros. The pixels
+    # the warp does not reach are zeros as well, and nothing marks them when the source has
+    # no NoData to fill with (or a mask band, which reads ahead of it) and no alpha band:
+    # the tile is then written with the footprint of the warp as its mask band.
+    mask = None
+    if _nodata.has_own_mask(src):
+        mask = _warp.warped_own_mask(
             src, dst_crs=dst_crs, transform=transform, width=width, height=height
         )
-        if _nodata.has_own_mask(src)
-        else None
-    )
+    if _fill_reads_as_data(src):
+        covered = _warp.warped_footprint(
+            src, dst_crs=dst_crs, transform=transform, width=width, height=height
+        )
+        mask = covered if mask is None else np.where(covered != 0, mask, 0)
     mf = MemoryFile()
     with _comp.internal_mask_env(mask):
         dst = mf.open(**profile)
@@ -178,7 +194,7 @@ def _write_masked_tile(ds, path, mask) -> None:
     (``None``: no mask band), the alpha label kept, with the canonical creation options: never the
     source's codec, so a JPEG tile is not re-compressed lossily."""
     data = ds.read()
-    profile = _comp.drop_ycbcr(ds.profile)
+    profile = _comp.source_profile(ds.profile)
     profile.update(driver="GTiff")
     profile.update(
         _comp.creation_opts(
@@ -338,6 +354,18 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
             ref_corner = _grid_corner(ref_tile)
             has_mask = [_nodata.has_own_mask(ds) for ds in datasets]
             has_alpha = [_nodata.has_alpha(ds) for ds in datasets]
+            # a tile reprojected below is written with the footprint of its warp as a mask
+            # band when its fill would read as data (see :func:`_reproject_dataset`)
+            has_mask = [
+                m
+                or (
+                    ref_crs is not None
+                    and ds.crs is not None
+                    and ds.crs != ref_crs
+                    and _fill_reads_as_data(ds)
+                )
+                for m, ds in zip(has_mask, datasets)
+            ]
         finally:
             _close_all(memfiles, datasets)
 
@@ -443,6 +471,20 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
     3857 tile covered columns 15-26 in RAM and 16-27 streamed, the reprojected one 0-12
     in both). On the reference grid every offset is whole and both paths agree.
 
+    MASKS (tiles in another CRS): the pixels of the reprojected tile's box that the warp does not
+    reach are zeros, which read as data unless the tile has a NoData, an alpha band or a mask band
+    to mark them. A tile with none of those, and every tile with a mask band of its own, is
+    written with the footprint of its warp as its mask band (:func:`_reproject_dataset`), so it
+    does not overwrite the pixels of the tile beside it, and the mosaic then carries a mask band
+    (a pixel no tile reaches is invalid). A group whose tiles are all in the reference CRS is
+    merged as before: a gap between tiles with no NoData is zeros, valid.
+
+    IN RAM AND STREAMED: the two merges give the same grid, NoData and pixels, tile by tile: each
+    source is skipped where it is NoData by ITS OWN NoData (``rasterio.merge`` reads every source
+    that way, and the streamed mosaic index takes the NoData of each tile, not of the first). They
+    differ in layout, so never in a byte comparison: the in-RAM result is a striped zstd GeoTIFF, the
+    streamed one a Cloud Optimized GeoTIFF (512-pixel tiles, overviews, DEFLATE).
+
     TIER DIFFERENCE (tiles in another CRS): the heavyweight ``gbx_rst_merge_agg`` does not
     merge them. It builds a ``gdalbuildvrt`` mosaic, which skips a tile whose projection
     differs, and returns ONE tile, the one that sorts first in byte order (probed against
@@ -534,16 +576,19 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
         for d in merge_ds:
             if _nodata.has_alpha(d):
                 copy_mf = MemoryFile()
+                # Listed before the write, so the ``finally`` closes it even if the write
+                # fails (rasterio's MemoryFile frees its in-memory file only on close()).
+                extra.append((copy_mf, None))
                 _write_masked_tile(d, copy_mf, _valid_u8(d))
                 copy = copy_mf.open()
-                extra.append((copy_mf, copy))
+                extra[-1] = (copy_mf, copy)
                 d = copy
             composite.append(d)
         mosaic, out_transform = _merge_pixels(composite)
         own_mask = _union_own_mask(merge_ds) if group_masked else None
         out_dtype = str(mosaic.dtype)
         decoded_bytes = mosaic.nbytes
-        profile = _comp.drop_ycbcr(ref.profile)
+        profile = _comp.source_profile(ref.profile)
         profile.update(
             driver="GTiff",
             height=mosaic.shape[1],
@@ -563,7 +608,8 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
             return out_mf.read()
     finally:
         for mf, rds in extra:
-            rds.close()
+            if rds is not None:
+                rds.close()
             mf.close()
         _close_all(memfiles, datasets)
 
@@ -603,7 +649,7 @@ def combineavg_tiles(rasters: List[bytes]) -> bytes:
                 shape = (ds.count, ds.height, ds.width)
                 sums = np.zeros(shape, dtype="float64")
                 counts = np.zeros(shape, dtype="int64")
-                ref_profile = _comp.drop_ycbcr(ds.profile)
+                ref_profile = _comp.source_profile(ds.profile)
                 ref_labels = list(ds.colorinterp)
                 out_dtype = ds.dtypes[0]
             elif (ds.count, ds.height, ds.width) != shape:
@@ -722,7 +768,7 @@ def frombands_tiles(indexed: List[Tuple[int, bytes]]) -> bytes:
                     )
                     bands.append(dest)
         data = np.stack(bands)
-        profile = _comp.drop_ycbcr(ref.profile)
+        profile = _comp.source_profile(ref.profile)
         profile.update(driver="GTiff", count=data.shape[0])
         # A pixel of the stack is valid when a band of it is (a data band valid, the rule of
         # both tiers), so the stack keeps an own mask only where EVERY tile has one: the union
@@ -1018,7 +1064,7 @@ def _combine_stat_tiles(rasters: List[bytes], stat: str) -> bytes:
 
         ref = datasets[0]
         out_dtype = ref.dtypes[0]
-        ref_profile = _comp.drop_ycbcr(ref.profile)
+        ref_profile = _comp.source_profile(ref.profile)
 
         nodatas = [ds.nodata for ds in datasets]  # header values, no pixel read
         any_nodata = any(nd is not None for nd in nodatas)
@@ -1143,7 +1189,7 @@ def align_to_tiles(tile_bytes: bytes, ref_bytes: bytes, dst_nodata=None) -> byte
                 src.count * dst_width * dst_height * np.dtype(out_dtype).itemsize
             )
 
-            profile = _comp.drop_ycbcr(src.profile)
+            profile = _comp.source_profile(src.profile)
             profile.update(
                 driver="GTiff",
                 crs=dst_crs,

@@ -17,6 +17,14 @@ def test_a_mistyped_bng_name_is_refused_and_every_real_one_is_not():
         "bng_kringexplod",
         "bng_nope",
     ]
+    # a list typed with spaces after the commas is the same list
+    assert launcher._unknown_bng_names("rst_width, bng_nope , bng_cellfill") == [
+        "bng_nope"
+    ]
+    assert launcher._function_names(" rst_width, bng_nope ,, ") == [
+        "rst_width",
+        "bng_nope",
+    ]
 
     # every leg the bench can run is read from the table (a reformatted table would flag them all)
     readers = (launcher._BENCH_SRC / "readers.py").read_text()

@@ -732,15 +732,26 @@ def test_only_null_geometries_raise_a_clear_error_naming_the_option(tmp_path):
     assert "geometryType" in msg and "NULL" in msg
 
 
-def test_an_unknown_geometry_type_option_is_not_blamed_on_null_geometries(tmp_path):
-    """geometryType='Unknown' is not a type a FileGDB layer can have; with real geometries
-    the error must say so, not that every geometry is NULL."""
+@pytest.mark.parametrize("spelling", ["Unknown", "unknown", " UNKNOWN "])
+def test_an_unknown_geometry_type_option_is_not_blamed_on_null_geometries(
+    tmp_path, spelling
+):
+    """geometryType='Unknown' (in any case) is not a type a FileGDB layer can have; with real
+    geometries the error must say so, not that every geometry is NULL."""
     with pytest.raises(ValueError) as ei:
         _write_gdb(
-            tmp_path / "unk.gdb", _schema(_NAME), [_pts(2)], {"geometryType": "Unknown"}
+            tmp_path / "unk.gdb", _schema(_NAME), [_pts(2)], {"geometryType": spelling}
         )
     msg = str(ei.value)
     assert "Unknown" in msg and "every geometry is NULL" not in msg
+
+
+def test_an_empty_geometry_type_option_is_taken_as_not_given(tmp_path):
+    """geometryType='' names no type: the layer takes the type of its first geometry."""
+    out = _write_gdb(
+        tmp_path / "empty.gdb", _schema(_NAME), [_pts(2)], {"geometryType": ""}
+    )
+    assert pyogrio.read_info(out)["geometry_type"] == "Point"
 
 
 def test_only_null_geometries_write_when_the_type_is_given(tmp_path):

@@ -43,7 +43,7 @@ Then the MERGE is retried, at most ``_ATTEMPTS`` (20) times with jitter. Data fi
 never rewritten. Appenders to one array all change the array documents and the time chunk,
 so Delta lands one of them per round; each failed attempt means another writer landed, so
 N simultaneous appenders need at most N attempts (measured on Databricks: eight need up to
-eight, and a bound of five gave up on three of them).
+eight and sixteen up to twelve, all landing; a bound of five gave up on three of eight).
 
 **Empty chunks.** A chunk whose every cell is the fill value is not stored, in every mode,
 as zarr does by default (``write_empty_chunks=False``). The chunk's row is deleted; under a
@@ -76,6 +76,8 @@ from databricks.labs.gbx.core._arrow import to_spark_df
 from databricks.labs.gbx.zarr import _manifest as M
 from databricks.labs.gbx.zarr import _write_tiles
 from databricks.labs.gbx.zarr._access import bounded_closure, resolve_access
+from databricks.labs.gbx.zarr._filemode import FileLayout, require_geobrix_files
+from databricks.labs.gbx.zarr._filemode import resolve as resolve_file_mode
 from databricks.labs.gbx.zarr._layout import chunk_layout, coordinate_chunks
 from databricks.labs.gbx.zarr._meta import (
     ArrayMeta,
@@ -880,6 +882,7 @@ class _Plan:
     access: object = (
         None  # AccessConfig: how the tasks reach the files (holds credentials)
     )
+    files: object = None  # FileLayout: how the manifest keeps its files
 
 
 def _as_numbers(values):
@@ -1221,27 +1224,22 @@ def _plan_create(table, write_id, root, inp: _Input, chunks, shards, codecs) -> 
     return plan
 
 
-def _write_roots(table, props, owner) -> tuple[str, str | None]:
+def _write_roots(spark, table, props, owner) -> tuple[str, str | None]:
     """``(root, base_root)``: where this write's files go, and a registered store's own
     files. Refuses a read-only registration, and a root whose owner marker is not ours.
     """
     from databricks.labs.gbx.zarr._register import check_owner_marker
 
-    if props.file_mode != "fuse":
-        raise ZarrUnsupported(
-            f"{table} keeps its files in file_mode {props.file_mode!r}, which GeoBrix does "
-            "not write yet",
-            fix="write to a store with file_mode 'fuse'",
-        )
+    require_geobrix_files(table, props.file_mode, "write")
     if props.kind == "registered":
         if not props.writable or not props.overlay_root:
             raise ZarrReadOnly(
                 f"{table} is a read-only registration of {props.root}",
                 fix="register the store with writable=True and an overlay_root",
             )
-        check_owner_marker(props.overlay_root, owner, "overlay")
+        check_owner_marker(props.overlay_root, owner, "overlay", spark)
         return props.overlay_root, props.root
-    check_owner_marker(props.root, owner, "managed")
+    check_owner_marker(props.root, owner, "managed", spark)
     return props.root, None
 
 
@@ -1376,8 +1374,9 @@ def _tile_frame(spark, prep):
 def _plan_existing(
     spark, table, write_id, mode, props, data, variables, append_dim, owner, tiles=None
 ) -> _Plan:
-    root, base_root = _write_roots(table, props, owner)
-    base = M.snapshot(spark, table)
+    root, base_root = _write_roots(spark, table, props, owner)
+    files = FileLayout.of(props)
+    base = M.snapshot(spark, table, files=files)
     docs = _docs_at(spark, base)
     arrays = dict(docs.arrays)
     fmt = 3 if any(k.endswith("zarr.json") for k in docs.metas) else 2
@@ -1406,6 +1405,7 @@ def _plan_existing(
         extents=extents,
         fmt=fmt,
         separator=separator,
+        files=files,
     )
     labels = None
     if _is_xarray(data):
@@ -1815,9 +1815,11 @@ def _base_frame(spark, plan: _Plan, names: list[str], parts=None):
     the write knows which groups it touches. Read by the cluster; never collected."""
     from pyspark.sql import functions as F
 
+    # a FILE column is read as its uri; the readers open that as the bare path
     rows = spark.sql(
-        f"SELECT kind, array, key, shard_key, file, offset, length, origin, identity, "
-        f"write_id FROM {M._q(plan.table)} VERSION AS OF {int(plan.base.version)} "
+        f"SELECT kind, array, key, shard_key, {M.file_select(plan.files)}, offset, length, "
+        f"origin, identity, write_id "
+        f"FROM {M._q(plan.table)} VERSION AS OF {int(plan.base.version)} "
         "WHERE tag IS NULL AND kind IN ('shard', 'chunk')"
     ).where(F.col("array").isin(names))
     part = (
@@ -2504,12 +2506,18 @@ def _commit(spark, plan: _Plan, data_rows: pa.Table, stats: dict) -> int:
         rows = pa.concat_tables([docs_rows, coord_rows, data_rows])
         _require_packs(plan, rows)
         return M.commit(
-            spark, plan.table, rows, write_id=plan.write_id, meta=meta, sharded=sharded
+            spark,
+            plan.table,
+            rows,
+            write_id=plan.write_id,
+            meta=meta,
+            sharded=sharded,
+            files=plan.files,
         )
     base = plan.base
     for attempt in range(_ATTEMPTS):
         rows = pa.concat_tables([docs_rows, coord_rows, data_rows])
-        latest = M.snapshot(spark, plan.table)
+        latest = M.snapshot(spark, plan.table, files=plan.files)
         if latest.version != plan.base.version:
             stale = M.changed_since(spark, plan.table, base, rows).to_pylist()
             data_stale = [
@@ -2529,6 +2537,7 @@ def _commit(spark, plan: _Plan, data_rows: pa.Table, stats: dict) -> int:
                 write_id=plan.write_id,
                 meta=meta,
                 sharded=sharded,
+                files=plan.files,
             )
         except M.ConcurrentCommit:
             _pause(_wait(attempt))
@@ -2647,11 +2656,15 @@ def _session(data, spark):
 
 
 def _check_new_root(root: str, owner: str) -> None:
-    """``create`` makes a new data root (spec 8.1): an existing root is refused unless it
+    """``create`` makes a new data root: an existing root is refused unless it
     is empty or holds this table's own marker (a create of this table that stopped
     before its commit)."""
     from databricks.labs.gbx.core._retry import _retry_transient
-    from databricks.labs.gbx.zarr._register import OWNER_MARKER, _check_owner
+    from databricks.labs.gbx.zarr._register import (
+        OWNER_LEDGER,
+        OWNER_MARKER,
+        _check_owner,
+    )
 
     if not os.path.exists(root):
         return
@@ -2664,7 +2677,10 @@ def _check_new_root(root: str, owner: str) -> None:
     if os.path.exists(marker):
         _check_owner(marker, owner, "managed")  # another table's: refused
         return
-    entries = _retry_transient(lambda: sorted(os.listdir(root)))
+    # the ownership ledger is not content: a claim that was given back leaves its table
+    entries = _retry_transient(
+        lambda: sorted(n for n in os.listdir(root) if n != OWNER_LEDGER)
+    )
     if entries:
         shown = ", ".join(entries[:3]) + (" ..." if len(entries) > 3 else "")
         raise ZarrOwnershipError(
@@ -2732,12 +2748,19 @@ def gbx_zarr_write(
     ``mode``:
 
     - ``"create"``: a new managed store, table ``target`` and data root ``root``. The root
-      must not exist, or be empty; it gets an owner marker naming the table. ``chunks``
+      must not exist, or be empty; it gets an ownership ledger (the Delta table
+      ``_gbx_owner``, which decides which table owns the root, one winner even when
+      several claim it at once) and an owner marker naming the table. ``chunks``
       (``"maps"``, ``"series"``, ``"balanced"`` or a dict of dimension to size), ``shards``
       (``None`` computes them, a dict sets some, ``False`` means none) and ``codecs`` (the
       inner chunk's codec chain, as Zarr v3 codec documents or zarr codec objects; default
       ``bytes`` + ``zstd`` level 3 + ``crc32c``) lay out each array; coordinates are one
-      unsharded chunk. ``file_mode`` and ``retain`` are the store's.
+      unsharded chunk. ``file_mode`` is ``"auto"`` (the default: ``"external"`` on a runtime with
+      the File type preview, ``"fuse"`` elsewhere, Serverless included), ``"fuse"`` (the
+      manifest keeps path strings) or ``"external"`` (FILE EXTERNAL values, governed with
+      the table; needs the preview, ``ZarrUnsupported`` otherwise). ``"managed"`` is not
+      available in this release: Delta VACUUM does not reclaim a managed file's bytes. ``retain``
+      is the store's.
     - ``"append"``: extend along ``append_dim`` (default: the first dimension labelled by
       CF times). The input must carry that dimension's labels, all after the store's last;
       on a regular axis they land at their step (so appends may arrive out of order), else
@@ -2795,9 +2818,10 @@ def gbx_zarr_write(
     that changed the same chunks since this one read them (or a shard a chunk was read
     from, or a coordinate label to another value) raises ``ZarrWriteConflict``, and nothing
     of this write is visible. One that changed only metadata is rebased and the commit
-    retried, at most twenty times (every lost round means another writer landed, so up to
-    twenty simultaneous appenders to one array all land). Examples are another append's
-    shape, a shared coordinate chunk, or an array created meanwhile.
+    retried, at most twenty times (every lost round means another writer landed, so the last
+    of N simultaneous appenders needs about N attempts; sixteen simultaneous appenders to one
+    array were measured to all land, and more than the bound allows can exhaust it). Examples
+    are another append's shape, a shared coordinate chunk, or an array created meanwhile.
 
     A blocks DataFrame is read once for ``update`` and ``overwrite``. ``create`` and
     ``append`` first read its block positions (never the ``data`` column; an append also
@@ -2826,14 +2850,13 @@ def gbx_zarr_write(
     incomplete multipart uploads (``AbortIncompleteMultipartUpload``) to the bucket of the
     Volume.
     """
-    from databricks.labs.gbx.zarr._filemode import resolve as resolve_file_mode
     from databricks.labs.gbx.zarr._register import (
-        _claim_marker,
         _discard,
         _local_root,
-        _release_marker,
         _table_exists,
+        claim_root,
         qualified_table_name,
+        release_root,
     )
 
     if mode not in _MODES:
@@ -2893,7 +2916,7 @@ def gbx_zarr_write(
                 f"{target} does not exist",
                 fix="create the store with mode='create' (or register an existing one)",
             )
-        props = M.read_props(spark, target)
+        props = M.read_props(spark, target, need_file=True)
         plan = _plan_existing(
             spark,
             target,
@@ -2918,31 +2941,41 @@ def gbx_zarr_write(
             "or 'overwrite'",
         )
     _check_new_root(data_root, owner)
-    fm = resolve_file_mode(spark, file_mode, has_filespace=False)
+    # the data root is the filespace of a managed store
+    fm = resolve_file_mode(spark, file_mode, has_filespace=True)
+    require_geobrix_files(target, fm, "write", new=True)  # before a marker is claimed
     inp = _create_input(spark, data, tiles, variables)
     plan = _plan_create(target, write_id, data_root, inp, chunks, shards, codecs)
     plan.access = _write_access(spark, plan, access)  # before anything is claimed
+    new_props = M.StoreProps(
+        kind="managed",
+        root=data_root,
+        overlay_root=None,
+        writable=True,
+        file_mode=fm,
+        retain=retain,
+    )
+    # an adopted table keeps the mode it was made with
+    plan.files = FileLayout.of(
+        M.read_props(spark, target, need_file=True) if adopt else new_props
+    )
     claimed = made = False
     try:
-        claimed = _claim_marker(data_root, owner, "managed")
+        claimed = claim_root(spark, data_root, owner, "managed")
         if not adopt:
-            M.create_manifest(
-                spark,
-                target,
-                M.StoreProps(
-                    kind="managed",
-                    root=data_root,
-                    overlay_root=None,
-                    writable=True,
-                    file_mode=fm,
-                    retain=retain,
-                ),
-            )
+            M.create_manifest(spark, target, new_props)
             made = True
         return _write(spark, plan, optimize)
     except BaseException:
         # Only a table this call made, and then dropped, gives its marker back: a table
-        # that may hold a commit, or one another call made, relies on it.
-        if made and _discard(spark, target, write_id) and claimed:
-            _release_marker(data_root, owner, "managed")
+        # that may hold a commit, or one another call made, relies on it. A CREATE that
+        # failed and left no table (another call's, say, would be there) made none, so
+        # the marker it claimed goes back at once.
+        gone = (
+            _discard(spark, target, write_id)
+            if made
+            else not adopt and not _table_exists(spark, target)
+        )
+        if claimed and gone:
+            release_root(spark, data_root, owner, "managed")
         raise

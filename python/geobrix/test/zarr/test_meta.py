@@ -383,7 +383,7 @@ def test_parse_keeps_its_own_copy_of_the_document(era5_v3_sharded, era5_v2):
     assert m2.doc[".zattrs"]["units"] == "K"
 
 
-# --- Task 9 carries: time-unit errors, time fill, use_zarr_fill_value_as_mask (Ruling Z13) ---
+# --- time-unit errors, time fill, use_zarr_fill_value_as_mask ---
 
 
 def _time_meta(era5_v3_sharded, **attrs):
@@ -445,6 +445,16 @@ def test_time_coordinate_zarr_v2_fill_value_masks_to_nat_unless_turned_off(era5_
     assert kept[1] == np.datetime64("1899-12-31T23", "ns")  # -1 hour: a real time
 
 
+@pytest.mark.parametrize("flag", ["yes", 1, 0.0, [True]])
+def test_a_mask_flag_that_is_not_a_bool_says_how_to_fix_it(flag):
+    from databricks.labs.gbx.zarr._meta import _check_mask_flag
+
+    with pytest.raises(ValueError, match="Fix: pass True, False or leave it None"):
+        _check_mask_flag(flag)
+    for fine in (None, True, False):
+        _check_mask_flag(fine)
+
+
 def test_use_zarr_fill_value_as_mask_follows_xarray(era5_v3_unsharded, era5_v2):
     za = json.loads((era5_v2 / "t2m" / ".zarray").read_text())
     za.update(dtype="<i2", fill_value=0)
@@ -479,7 +489,7 @@ def test_use_zarr_fill_value_as_mask_must_be_a_bool_or_none(era5_v3_unsharded):
         cf_decode(np.array([0], dtype="<i2"), m, use_zarr_fill_value_as_mask="yes")
 
 
-# --- Task 9 fix round 1: exact integers, masks as masks ---------------------------------
+# --- exact integers, masks as masks ---------------------------------
 
 
 def _packed_meta(era5_v3_unsharded, dtype, attrs, fill=0):
@@ -614,7 +624,7 @@ def xr_time(path):
     ).time.values
 
 
-# --- Task 9 fix round 2: xarray's _Unsigned and dtype:bool coders, one reinterpretation ----
+# --- xarray's _Unsigned and dtype:bool coders, one reinterpretation ----
 
 
 def _stored(tmp_path, fmt, values, dtype, attrs, name="v"):
@@ -802,7 +812,7 @@ def test_a_string_fill_matches_nothing_exactly_as_it_does_in_xarray(
     np.testing.assert_array_equal(out, _xarray_values(path))
 
 
-# --- Task 9 follow-ups: rank mismatch, scalar fills, byte order, _Unsigned corners ----------
+# --- rank mismatch, scalar fills, byte order, _Unsigned corners ----------
 
 
 @pytest.mark.parametrize("fmt", [2, 3])
@@ -973,7 +983,7 @@ def test_unsigned_with_a_scale_factor_masks_the_reinterpreted_values(
 def test_a_bool_dtype_array_is_masked_before_the_cast_in_a_table_not_in_blocks(
     tmp_path, fmt, fill, masked
 ):
-    """Ruling Z36: an integer array read as booleans (``dtype: "bool"``) whose fill is a
+    """An integer array read as booleans (``dtype: "bool"``) whose fill is a
     stored value. The table finds the missing cells on the integers, before the cast, so
     they are NULL; blocks keep xarray's rule, which casts the NaN of a masked cell to True.
     """
@@ -1024,7 +1034,7 @@ def test_cf_encode_refuses_times_its_units_cannot_hold(tmp_path):
 def test_cf_encode_takes_singular_and_rewritten_time_unit_names(
     tmp_path, units, values, stored
 ):
-    """RR2-I1: xarray reads 'hour' as 'hours' (and rewrites the text); the same unit is
+    """Xarray reads 'hour' as 'hours' (and rewrites the text); the same unit is
     not a mismatch."""
     from databricks.labs.gbx.zarr._meta import cf_encode
 
@@ -1036,7 +1046,7 @@ def test_cf_encode_takes_singular_and_rewritten_time_unit_names(
 
 @pytest.mark.parametrize("fill", [None, int(np.iinfo("i8").min)])
 def test_cf_encode_stores_an_all_nat_block_as_the_fill(tmp_path, fill):
-    """RR2-M1: a block of nothing but missing times is the fill, as a mixed one's NaT is
+    """A block of nothing but missing times is the fill, as a mixed one's NaT is
     (xarray's encoder fails on it). An integer time array with no _FillValue has no cell
     for a missing time (xarray would store the smallest integer, which a read refuses as
     out of range), so NaT is refused there."""
@@ -1063,7 +1073,7 @@ def test_cf_encode_stores_an_all_nat_block_as_the_fill(tmp_path, fill):
 
 @pytest.mark.parametrize("units", ["h since 2023-01-01", "hrs since 2023-01-01"])
 def test_cf_encode_refuses_time_units_xarray_cannot_read(tmp_path, units):
-    """RR2-M2: a unit name xarray does not know is a typed refusal, not a KeyError."""
+    """A unit name xarray does not know is a typed refusal, not a KeyError."""
     from databricks.labs.gbx.zarr._meta import cf_encode
     from databricks.labs.gbx.zarr.errors import ZarrUnsupported
 

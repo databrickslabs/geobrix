@@ -61,6 +61,9 @@ NOTES:
       \$GBX_DOCKER_PLATFORM, else this host's architecture
     - An existing container is kept as is, even when it runs the other architecture (a warning says so);
       --recreate replaces it
+    - Warns (never blocks) when the image behind the container, or the one a new or recreated container
+      would use, has a Maven other than the version maven-wrapper.properties pins: the pom
+      then fails every build in it; the fix it names is gbx:docker:rebuild
     - Mounts sample-data/Volumes to /Volumes
     - Checks if container already running
     - Starts existing container if stopped
@@ -153,10 +156,14 @@ existing_mount_source() {
 # A recreate removes the working container first, so the image it will be recreated from must exist
 # BEFORE anything is stopped or removed; otherwise a missing image leaves no container at all.
 require_image_before_removal() {
-    if ! gbx_require_dev_image "$PLATFORM" >/dev/null; then
+    local image
+    if ! image="$(gbx_require_dev_image "$PLATFORM")"; then
         echo -e "${RED}❌ Not recreating: the existing $GBX_DEV_CONTAINER container was left untouched.${NC}"
         exit 1
     fi
+    # Warn only: an image whose Maven is not the pinned one gives a container that fails the pom's
+    # version check at its first build, and a Maven patched into the old container is lost on recreate.
+    gbx_warn_if_image_maven_differs "$image"
 }
 
 if [ "$RECREATE" = true ] && docker ps -a --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
@@ -207,11 +214,20 @@ warn_if_arch_differs() {
     fi
 }
 
+# An existing container keeps the image it was created from; say (warn only) when that image's Maven is
+# not the version the repo pins, since the pom's check then stops every build in it.
+warn_if_maven_differs() {
+    local image
+    image="$(docker inspect --format '{{.Image}}' "$GBX_DEV_CONTAINER" 2>/dev/null)" || return 0
+    gbx_warn_if_image_maven_differs "$image"
+}
+
 # Check if container is already running (with the correct mount)
 if docker ps --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
     echo ""
     echo -e "${YELLOW}ℹ️  Container '$GBX_DEV_CONTAINER' is already running${NC}"
     warn_if_arch_differs
+    warn_if_maven_differs
     echo ""
     echo -e "${CYAN}⚙️  Applying Maven setup (.m2 in project, skipScoverage default)...${NC}"
     docker exec "$GBX_DEV_CONTAINER" /bin/bash -c "sh /root/geobrix/scripts/docker/extras/docker_maven_setup.sh"
@@ -230,6 +246,7 @@ fi
 if docker ps -a --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
     echo ""
     warn_if_arch_differs
+    warn_if_maven_differs
     echo -e "${CYAN}🚀 Starting existing container...${NC}"
     print_separator
 
@@ -262,6 +279,8 @@ else
     [ "$PRIVILEGED" = true ] && echo -e "${YELLOW}   (privileged mode)${NC}"
     print_separator
     
+    gbx_warn_if_image_maven_differs "$(gbx_dev_run_image "$PLATFORM")"
+
     # Use the existing start script
     cd "$PROJECT_ROOT"
     if [ "$PRIVILEGED" = true ]; then

@@ -1,4 +1,4 @@
-"""TDD: coverage/assignment params in gridagg.raster_to_grid (Stage 2, Task 7).
+"""TDD: coverage/assignment params in gridagg.raster_to_grid.
 
 Four required checks (brief):
   (a) sparse+centroid == pre-edit golden (backward compat; cell set + measures)

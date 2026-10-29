@@ -31,7 +31,7 @@ _ALLOWLIST = {
     # a length it can measure. The open is on front-door-obtained bytes, not on
     # tile["raster"].
     "_serde.open_tile(raster)": 1,
-    # _merge_bytes / _combineavg_bytes / _frombands_bytes (Task 5 corrupt-skip):
+    # _merge_bytes / _combineavg_bytes / _frombands_bytes (corrupt-skip):
     # each helper validates that a member's bytes are openable before adding them
     # to the collective list that agg_core opens all-at-once. The variable
     # `candidate` holds front-door-obtained bytes (ot.materialize_to_bytes(vt).raster

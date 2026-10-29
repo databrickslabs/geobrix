@@ -642,7 +642,7 @@ def test_table_blocks_and_xarray_agree_on_an_unsigned_time_coordinate(tmp_path, 
     assert row["coord_stop"][0].startswith("2000-01-01T10:00")
 
 
-# --- Task 9 follow-ups: planning branches and docstrings ---------------------------------
+# --- planning branches and docstrings ---------------------------------
 
 
 def _group(path, **arrays):
@@ -815,9 +815,9 @@ def test_a_time_column_exists_only_where_the_values_are_times(tmp_path):
 def test_a_bool_dtype_array_whose_fill_is_a_stored_value_is_null_in_a_table(
     tmp_path, how
 ):
-    """Ruling Z36. [0, 1, 1, 0] read as booleans with a stored 0 as an explicit fill: the
+    """[0, 1, 1, 0] read as booleans with a stored 0 as an explicit fill: the
     table masks on the integers, before the cast, so those cells are NULL. Blocks (and
-    xarray) cast the masked cell's NaN to True. Ruling Z38(2): the Zarr v2 fill_value alone
+    xarray) cast the masked cell's NaN to True. The Zarr v2 fill_value alone
     is not a fill for such an array (its 0 is the stored False), so nothing is masked;
     xarray does mask it."""
     fmt = 3 if how.startswith("v3") else 2
@@ -867,7 +867,7 @@ def test_the_work_frame_docstring_says_units_are_broadcast_once_per_executor():
 def test_a_v2_bool_dtype_array_masks_only_on_an_explicit_fill(
     tmp_path, attrs, table_values, block_values
 ):
-    """Carry Z38(2): an integer v2 array read as booleans never masks on its fill_value."""
+    """An integer v2 array read as booleans never masks on its fill_value."""
     path = tmp_path / "flags.zarr"
     g = zarr.open_group(str(path), mode="w", zarr_format=2)
     arr = g.create_array(

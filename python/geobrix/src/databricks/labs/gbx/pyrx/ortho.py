@@ -734,7 +734,7 @@ def _enu_to_utm(xe, ye, ze, ref_lat, ref_lon):
     linearisation as the ortho georeferencing; lon/lat->UTM via pyproj.
 
     UTM zone selection is :func:`databricks.labs.gbx.core.crs.utm_epsg_for`
-    (Task 1) rather than inline zone arithmetic — this is the one adaptation
+    rather than inline zone arithmetic — this is the one adaptation
     from ``_enu_to_utm`` in ``config_nb`` cell ``1ee46ad5``; the reprojection
     itself (``pyproj.Transformer.from_crs(4326, epsg, always_xy=True)``) is
     unchanged. Returns ``(easting, northing, up, epsg)``.

@@ -21,17 +21,28 @@ import numbers
 import re
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 import pyarrow as pa
 import pyarrow.compute as pc
 
 from databricks.labs.gbx.core._arrow import to_spark_df
+from databricks.labs.gbx.zarr._filemode import (
+    FileLayout,
+    file_column_type,
+    layout_for,
+    path_of,
+    relative_to,
+    require_file_compute,
+    require_geobrix_files,
+    table_properties,
+)
 from databricks.labs.gbx.zarr._meta import is_sharded_doc
 from databricks.labs.gbx.zarr.errors import (
     ZarrError,
     ZarrOwnershipError,
+    ZarrStoreDrift,
     ZarrUnsupported,
     ZarrVersionUnavailable,
     ZarrWriteConflict,
@@ -58,6 +69,8 @@ __all__ = [
     "retain_days",
     "property_retain_seconds",
     "HORIZON_PROP",
+    "file_layout",
+    "file_select",
 ]
 
 KINDS = ("group", "array", "shard", "chunk", "commit", "lock")
@@ -122,11 +135,11 @@ _ROW_TRACKING_FIX = "check that delta.enableRowTracking is true on the manifest 
 # appeared aborts the MERGE like any other stale expectation.
 _MERGE_SQL = """
 MERGE INTO {table} AS t
-USING {view} AS s
+USING {source} AS s
 ON t.kind = s.kind AND t.array <=> s.array AND t.key <=> s.key AND t.tag IS NULL AND s.tag IS NULL
 WHEN MATCHED AND s.op = 'delete' AND t.write_id = s.expected_write_id THEN DELETE
 WHEN MATCHED AND s.op = 'upsert' AND t.write_id = s.expected_write_id THEN UPDATE SET
-  shard_key = s.shard_key, file = s.file, offset = s.offset, length = s.length, checksum = s.checksum,
+  shard_key = s.shard_key, file = {file_value}, offset = s.offset, length = s.length, checksum = s.checksum,
   origin = s.origin, identity = s.identity, write_id = s.write_id, meta = s.meta
 WHEN MATCHED AND s.op = 'check' AND t.write_id = s.expected_write_id THEN UPDATE SET
   write_id = t.write_id
@@ -134,7 +147,7 @@ WHEN MATCHED THEN UPDATE SET
   kind = raise_error(concat('GBX_ZARR_CAS ', s.kind, ' ', coalesce(s.array, ''), ' ', coalesce(s.key, '')))
 WHEN NOT MATCHED AND s.op = 'upsert' AND s.expected_write_id IS NULL THEN INSERT
   (kind, array, key, shard_key, file, offset, length, checksum, origin, identity, write_id, tag, meta)
-  VALUES (s.kind, s.array, s.key, s.shard_key, s.file, s.offset, s.length, s.checksum, s.origin,
+  VALUES (s.kind, s.array, s.key, s.shard_key, {file_value}, s.offset, s.length, s.checksum, s.origin,
           s.identity, s.write_id, NULL, s.meta)
 WHEN NOT MATCHED AND NOT (s.op = 'check' AND s.expected_write_id IS NULL) THEN INSERT (kind, write_id)
   VALUES (raise_error(concat('GBX_ZARR_CAS ', s.kind, ' ', coalesce(s.array, ''), ' ', coalesce(s.key, ''))), s.write_id)
@@ -147,6 +160,42 @@ LEFT JOIN {table} AS t
   ON t.kind = s.kind AND t.array <=> s.array AND t.key <=> s.key AND t.tag IS NULL
 WHERE t.write_id IS DISTINCT FROM s.expected_write_id
 """
+
+
+# A FILE column is not written from a string: the MERGE source gets the row's absolute path
+# (``file_path``) and the target value is ``try_to_file`` of it. ``try_to_file`` returns NULL
+# for a path that is not a file, which would store a live row as if it were a tombstone, so a
+# missing file aborts the MERGE instead (``GBX_ZARR_FILE_MISSING <path>``).
+_FILE_GONE_RE = re.compile(r"GBX_ZARR_FILE_MISSING (\S+)")
+_FILE_GONE_FIX = (
+    "write the store again, or run gbx_zarr_sync if the files changed outside GeoBrix"
+)
+
+
+def _merge_sql(table: str, view: str, layout: FileLayout) -> str:
+    """The commit MERGE for ``view`` into ``table``, with the ``file`` value the layout's
+    mode stores: the path string as it is (``fuse``) or a ``try_to_file`` reference
+    (``external``). A ``managed`` table is refused: GeoBrix does not create its files.
+    """
+    require_geobrix_files(table, layout.mode, "write")
+    if layout.mode == "fuse":
+        return _MERGE_SQL.format(table=table, source=view, file_value="s.file")
+    ext = _lit((layout.root_of("external") or "").rstrip("/") + "/")
+    own = _lit((layout.root_of("gbx") or "").rstrip("/") + "/")
+    absolute = (
+        "CASE WHEN startswith(v.file, '/') THEN v.file "
+        f"WHEN v.origin = 'external' THEN concat({ext}, v.file) "
+        f"ELSE concat({own}, v.file) END"
+    )
+    return _MERGE_SQL.format(
+        table=table,
+        source=f"(SELECT v.*, {absolute} AS file_path FROM {view} AS v)",
+        file_value=(
+            "CASE WHEN s.file_path IS NULL THEN NULL ELSE coalesce("
+            "try_to_file(s.file_path), raise_error(concat("
+            "'GBX_ZARR_FILE_MISSING ', s.file_path))) END"
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -164,6 +213,8 @@ class Snapshot:
     table: str
     version: int
     tag: str | None = None  # set when read via version_as_of="tag:<name>"
+    # how the table keeps its files, read with the snapshot; None: ``read_rows`` looks it up
+    files: FileLayout | None = field(default=None, compare=False, repr=False)
 
 
 class ConcurrentCommit(Exception):
@@ -254,7 +305,8 @@ def check_tag(name) -> str:
     if not isinstance(name, str) or not _TAG_RE.fullmatch(name):
         raise ValueError(
             f"tag names are 1-128 characters of A-Z a-z 0-9 . _ : / @ + = -, "
-            f"starting with a letter or digit; got {name!r}"
+            f"starting with a letter or digit; got {name!r}. "
+            "Fix: pass a name like 'two-days' or 'release/1.0'."
         )
     return name
 
@@ -282,6 +334,11 @@ def _check_props(props: StoreProps) -> None:
         raise ValueError(
             f"file_mode must be one of {FILE_MODES} (resolved, never 'auto'), "
             f"got {props.file_mode!r}"
+        )
+    if props.kind == "registered" and props.file_mode == "managed":
+        raise ValueError(
+            "a registered store cannot be file_mode 'managed': managed ingest copies "
+            "every file, so the base store would be duplicated"
         )
     if props.overlay_root and not (props.kind == "registered" and props.writable):
         raise ValueError("overlay_root is only for a writable registered store")
@@ -379,7 +436,10 @@ def _store_key(array, key) -> str:
 
 
 def create_manifest(spark, table: str, props: StoreProps) -> None:
-    """Create the manifest table (fuse file mode) with the store's properties.
+    """Create the manifest table with the store's properties.
+
+    The ``file`` column's type follows ``props.file_mode``: STRING (``fuse``), FILE
+    EXTERNAL or FILE MANAGED; a managed table also declares its filespace.
 
     Raises ``ZarrOwnershipError`` when the table already exists.
     """
@@ -387,10 +447,15 @@ def create_manifest(spark, table: str, props: StoreProps) -> None:
     days = retain_days(props.retain)
     log_days = max(30, days)
     writable = "true" if props.writable else "false"
+    file_type = file_column_type(props.file_mode)
+    extra = "".join(
+        f",\n  {_lit(k)} = {_lit(v)}"
+        for k, v in table_properties(props.file_mode, props.root).items()
+    )
     ddl = f"""
 CREATE TABLE {_q(table)} (
   kind STRING NOT NULL, array STRING, key STRING, shard_key STRING,
-  file STRING, offset BIGINT, length BIGINT, checksum STRING,
+  file {file_type}, offset BIGINT, length BIGINT, checksum STRING,
   origin STRING, identity STRING, write_id STRING NOT NULL, tag STRING, meta STRING)
 USING DELTA
 CLUSTER BY (array, shard_key)
@@ -406,7 +471,7 @@ TBLPROPERTIES (
   '{PROP_PREFIX}overlay_root' = {_lit(props.overlay_root or "")},
   '{PROP_PREFIX}writable' = '{writable}',
   '{PROP_PREFIX}file_mode' = {_lit(props.file_mode)},
-  '{PROP_PREFIX}retain' = {_lit(props.retain)})
+  '{PROP_PREFIX}retain' = {_lit(props.retain)}{extra})
 """
     try:
         spark.sql(ddl)
@@ -424,8 +489,53 @@ def _tblprops(spark, table: str) -> dict[str, str]:
     return {r["key"]: r["value"] for r in rows}
 
 
-def read_props(spark, table: str) -> StoreProps:
-    """The store properties recorded on the manifest table."""
+def _layout_of(tp: dict[str, str]) -> FileLayout:
+    """How the table with properties ``tp`` keeps its files. A table without the
+    properties is a plain one: ``fuse``."""
+    return layout_for(
+        tp.get(PROP_PREFIX + "kind"),
+        tp.get(PROP_PREFIX + "root") or None,
+        tp.get(PROP_PREFIX + "overlay_root") or None,
+        tp.get(PROP_PREFIX + "file_mode", "fuse"),
+    )
+
+
+def file_layout(spark, table: str) -> FileLayout:
+    """How ``table`` keeps its files (one ``SHOW TBLPROPERTIES``)."""
+    return _layout_of(_tblprops(spark, table))
+
+
+def file_select(layout: FileLayout) -> str:
+    """The select item that reads a manifest's ``file`` as a string: the column itself, or
+    the ``uri`` of a FILE value (a FILE value cannot be collected as a whole)."""
+    return "file" if layout.mode == "fuse" else "file.uri AS file"
+
+
+def _stored_files(rows: pa.Table, layout: FileLayout) -> pa.Table:
+    """``rows`` read with ``file_select``, with ``file`` back to the path relative to the
+    root it lies under: the form every mode hands the rest of the store."""
+    if layout.mode == "fuse" or "file" not in rows.column_names:
+        return rows
+    origins = (
+        rows.column("origin").to_pylist()
+        if "origin" in rows.column_names
+        else [None] * rows.num_rows
+    )
+    paths = [
+        None if uri is None else relative_to(path_of(uri), layout.root_of(origin))
+        for uri, origin in zip(rows.column("file").to_pylist(), origins)
+    ]
+    return rows.set_column(
+        rows.schema.get_field_index("file"), "file", pa.array(paths, pa.string())
+    )
+
+
+def read_props(spark, table: str, *, need_file: bool = False) -> StoreProps:
+    """The store properties recorded on the manifest table.
+
+    ``need_file``: the call is about to read, write or maintain the store, so a store that
+    keeps FILE values must be on compute that supports them (``ZarrUnsupported`` otherwise,
+    with a Fix, before any file is written)."""
     tp = _tblprops(spark, table)
     fmt = tp.get(PROP_PREFIX + "format")
     if fmt is None:
@@ -438,7 +548,7 @@ def read_props(spark, table: str) -> StoreProps:
             f"{table} uses manifest format {fmt}, this GeoBrix reads format {FORMAT_VERSION}",
             fix="upgrade GeoBrix to a release that reads this manifest format",
         )
-    return StoreProps(
+    props = StoreProps(
         kind=tp[PROP_PREFIX + "kind"],
         root=tp[PROP_PREFIX + "root"],
         overlay_root=tp.get(PROP_PREFIX + "overlay_root") or None,
@@ -446,6 +556,9 @@ def read_props(spark, table: str) -> StoreProps:
         file_mode=tp[PROP_PREFIX + "file_mode"],
         retain=tp[PROP_PREFIX + "retain"],
     )
+    if need_file:
+        require_file_compute(spark, table, props.file_mode)
+    return props
 
 
 # --- snapshots --------------------------------------------------------------------
@@ -501,6 +614,12 @@ def property_retain_seconds(retain: str) -> int:
         ) from None
 
 
+_NOT_A_TIMESTAMP = (
+    "timestamp_as_of {!r} is not a timestamp. "
+    "Fix: pass a timestamp string such as '2023-01-01 06:00:00', or a datetime."
+)
+
+
 def _timestamp_micros(spark, value) -> int:
     """``value`` (a str or datetime) as microseconds since the epoch, parsed by Spark."""
     from pyspark.sql import functions as F
@@ -511,17 +630,26 @@ def _timestamp_micros(spark, value) -> int:
     try:
         parsed = spark.range(1).select(F.unix_micros(col)).first()[0]
     except Exception as e:  # ANSI mode raises on an unparseable string
-        raise ValueError(f"timestamp_as_of {value!r} is not a timestamp") from e
+        raise ValueError(_NOT_A_TIMESTAMP.format(value)) from e
     if parsed is None:  # ANSI off: unparseable becomes NULL
-        raise ValueError(f"timestamp_as_of {value!r} is not a timestamp")
+        raise ValueError(_NOT_A_TIMESTAMP.format(value))
     return int(parsed)
 
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_BAD_VERSION = (
+    "version_as_of must be an int or 'tag:<name>', got {!r}. "
+    "Fix: pass a version number (gbx_zarr_history lists them) or a tag as 'tag:<name>'."
+)
 
 
 def snapshot(
-    spark, table: str, *, version_as_of=None, timestamp_as_of=None
+    spark,
+    table: str,
+    *,
+    version_as_of=None,
+    timestamp_as_of=None,
+    files: FileLayout | None = None,
 ) -> Snapshot:
     """Pin a version of the manifest.
 
@@ -536,35 +664,41 @@ def snapshot(
     The version live at the horizon, everything after it and every tag stay readable.
     Other versions on the table (OPTIMIZE, property changes) are not GeoBrix commits;
     ``find_commit_version`` and the commit rows identify those.
+
+    The snapshot carries how the table keeps its files (``Snapshot.files``): pass ``files``
+    (``FileLayout.of(read_props(...))``) when the properties were read already, else one
+    ``SHOW TBLPROPERTIES`` finds it.
     """
     if version_as_of is not None and timestamp_as_of is not None:
-        raise ValueError("pass version_as_of or timestamp_as_of, not both")
+        raise ValueError(
+            "pass version_as_of or timestamp_as_of, not both. "
+            "Fix: name the version one way."
+        )
     tag, version = None, None
     if isinstance(version_as_of, str):
         if not version_as_of.startswith("tag:"):
-            raise ValueError(
-                f"version_as_of must be an int or 'tag:<name>', got {version_as_of!r}"
-            )
+            raise ValueError(_BAD_VERSION.format(version_as_of))
         tag = check_tag(version_as_of[len("tag:") :])
     elif version_as_of is not None:
         if isinstance(version_as_of, bool) or not isinstance(
             version_as_of, numbers.Integral
         ):
-            raise ValueError(
-                f"version_as_of must be an int or 'tag:<name>', got {version_as_of!r}"
-            )
+            raise ValueError(_BAD_VERSION.format(version_as_of))
         version = int(version_as_of)
     if timestamp_as_of is not None and not isinstance(timestamp_as_of, (str, datetime)):
         raise ValueError(
-            f"timestamp_as_of must be a str or datetime, got {timestamp_as_of!r}"
+            f"timestamp_as_of must be a str or datetime, got {timestamp_as_of!r}. "
+            "Fix: pass a timestamp string such as '2023-01-01 06:00:00', or a datetime."
         )
 
     from pyspark.sql import functions as F
 
     if version is None and timestamp_as_of is None:  # the latest, or a tag read there
         latest = _latest_version(spark, table)
+        if files is None:
+            files = file_layout(spark, table)
         if tag is None:
-            return Snapshot(table=table, version=latest)
+            return Snapshot(table=table, version=latest, files=files)
         present = (
             spark.sql(f"SELECT tag FROM {_q(table)} VERSION AS OF {latest}")
             .where(F.col("tag") == F.lit(tag))
@@ -576,9 +710,10 @@ def snapshot(
                 f"tag {tag!r} does not exist in {table}",
                 fix="pick an existing tag, or create it with gbx_zarr_tag",
             )
-        return Snapshot(table=table, version=latest, tag=tag)
+        return Snapshot(table=table, version=latest, tag=tag, files=files)
 
-    horizon = _effective_horizon(_tblprops(spark, table))
+    tp = _tblprops(spark, table)
+    horizon = _effective_horizon(tp)
     # (version, commit time in microseconds): read once, then decided here
     history = [
         (int(r["version"]), int(r["micros"]))
@@ -618,7 +753,9 @@ def snapshot(
             if files_gone(_error_text(e)):
                 raise _version_gone(table, picked) from e
             raise
-    return Snapshot(table=table, version=picked, tag=None)
+    return Snapshot(
+        table=table, version=picked, tag=None, files=files or _layout_of(tp)
+    )
 
 
 # Longest list sent as an IN predicate. Longer ones become a semi-join against a small
@@ -668,7 +805,10 @@ def read_rows(
         if bad:
             raise ValueError(f"unknown kind(s) {bad}; expected some of {KINDS}")
         cond = cond & F.col("kind").isin(kinds)
-    cols = ", ".join(MANIFEST_COLUMNS)
+    layout = snap.files if snap.files is not None else file_layout(spark, snap.table)
+    cols = ", ".join(
+        file_select(layout) if c == "file" else c for c in MANIFEST_COLUMNS
+    )
     df = spark.sql(
         f"SELECT {cols} FROM {_q(snap.table)} VERSION AS OF {int(snap.version)}"
     )
@@ -681,7 +821,7 @@ def read_rows(
         else:
             df = _pruned(spark, df, column, values)
     try:
-        return df.where(cond).toArrow()
+        return _stored_files(df.where(cond).toArrow(), layout)
     except Exception as e:
         if files_gone(_error_text(e)) and snap.version < _latest_version(
             spark, snap.table
@@ -851,7 +991,13 @@ def _require_regions(source: pa.Table) -> None:
     )
 
 
-def _sharded_arrays(spark, table: str, source: pa.Table, names: list[str]) -> set[str]:
+def _sharded_arrays(
+    spark,
+    table: str,
+    source: pa.Table,
+    names: list[str],
+    files: FileLayout | None = None,
+) -> set[str]:
     """Which of the arrays ``names`` are sharded: by the array document this commit writes,
     else by the one the table holds now. An array nobody has described is not, and neither
     is a Zarr v2 array (a ``.zarray`` document): v2 has no sharding."""
@@ -872,7 +1018,7 @@ def _sharded_arrays(spark, table: str, source: pa.Table, names: list[str]) -> se
             docs.setdefault(row["array"], None)
     missing = [n for n in names if n not in docs]
     if missing:
-        snap = Snapshot(table, _latest_version(spark, table))
+        snap = Snapshot(table, _latest_version(spark, table), files=files)
         for row in read_rows(spark, snap, kinds="array", arrays=missing).to_pylist():
             if row["key"] == "zarr.json":
                 docs[row["array"]] = row["meta"]
@@ -887,7 +1033,11 @@ def _sharded_arrays(spark, table: str, source: pa.Table, names: list[str]) -> se
 
 
 def _require_shard_keys(
-    spark, table: str, source: pa.Table, sharded: dict | None = None
+    spark,
+    table: str,
+    source: pa.Table,
+    sharded: dict | None = None,
+    files: FileLayout | None = None,
 ) -> None:
     """Refuse an upserted shard or chunk row of a sharded array that has no ``shard_key``.
 
@@ -922,7 +1072,7 @@ def _require_shard_keys(
         known = {n: bool(v) for n, v in (sharded or {}).items()}
         ask = sorted(n for n in names if n is not None and n not in known)
         if ask:
-            hits = _sharded_arrays(spark, table, source, ask)
+            hits = _sharded_arrays(spark, table, source, ask, files)
             known.update({n: n in hits for n in ask})
         bad = [n for n in names if n is not None and known.get(n)]
         if not bad:
@@ -1070,6 +1220,7 @@ def commit(
     write_id: str,
     meta: dict,
     sharded: dict | None = None,
+    files: FileLayout | None = None,
 ) -> int:
     """Commit ``rows`` plus a commit row in one MERGE; returns the Delta version.
 
@@ -1083,19 +1234,23 @@ def commit(
     ``ZarrWriteConflict`` listing every key that changed; a Delta conflict with a
     concurrent commit raises the retryable ``ConcurrentCommit``. A ``write_id`` that
     already committed returns its existing version, so retries are idempotent, even when a
-    twin of the same write lands between the check and the MERGE.
+    twin of the same write lands between the check and the MERGE. ``files`` is how the
+    table keeps its files (``FileLayout.of(read_props(...))``); without it one
+    ``SHOW TBLPROPERTIES`` finds out.
     """
     _check_write_id(write_id)
     source = _commit_source(rows, write_id, meta)
     _require_regions(source)
-    _require_shard_keys(spark, table, source, sharded)
+    _require_shard_keys(spark, table, source, sharded, files)
     existing = find_commit_version(spark, table, write_id)
     if existing is not None:
         return existing
     sql_table = _q(table)
+    layout = files if files is not None else file_layout(spark, table)
+    require_geobrix_files(table, layout.mode, "write")  # before any temp view is made
 
     def merge(view: str) -> None:
-        spark.sql(_MERGE_SQL.format(table=sql_table, view=view))
+        spark.sql(_merge_sql(sql_table, view, layout))
 
     try:
         _with_view(spark, source, _COMMIT_SCHEMA, merge)
@@ -1116,6 +1271,12 @@ def commit(
             raise ConcurrentCommit(
                 f"Delta reported {mark} committing to {table}: a concurrent commit "
                 "touched the same files or rows. Fix: read the store again and retry."
+            ) from e
+        gone = _FILE_GONE_RE.search(text)
+        if gone:
+            raise ZarrStoreDrift(
+                f"{gone.group(1)} is not a file any more, so {table} cannot point at it",
+                fix=_FILE_GONE_FIX,
             ) from e
         raise
     version = _landed(spark, table, write_id)

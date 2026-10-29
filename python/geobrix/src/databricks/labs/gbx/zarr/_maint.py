@@ -50,14 +50,18 @@ from databricks.labs.gbx.core._arrow import to_spark_df
 from databricks.labs.gbx.core._retry import _retry_transient
 from databricks.labs.gbx.zarr import _manifest as M
 from databricks.labs.gbx.zarr._access import identities_match, reader_for
+from databricks.labs.gbx.zarr._filemode import (
+    FileLayout,
+    path_of,
+    require_geobrix_files,
+)
 from databricks.labs.gbx.zarr._pack import PackWriter, require_packs
-from databricks.labs.gbx.zarr._register import OWNER_MARKER, identity_of
+from databricks.labs.gbx.zarr._register import holds_store, identity_of
 from databricks.labs.gbx.zarr._shard import Region
 from databricks.labs.gbx.zarr._store import ManifestStore
 from databricks.labs.gbx.zarr.errors import (
     ZarrError,
     ZarrReadOnly,
-    ZarrUnsupported,
     ZarrVersionUnavailable,
     ZarrWriteConflict,
 )
@@ -99,11 +103,15 @@ def _utcnow() -> datetime:
 # --- shared -----------------------------------------------------------------------------
 
 
-def _roots(spark, table: str, props) -> tuple[str | None, str | None]:
+def _roots(
+    spark, table: str, props, *, restore: bool = True
+) -> tuple[str | None, str | None]:
     """``(owned root, base root)`` of a store, the owner marker of the owned root verified.
 
     The owned root is where GeoBrix put its files: a managed store's data root, a writable
     registration's overlay root; ``None`` for a read-only registration, which owns none.
+    A missing marker is written again from the ownership ledger unless ``restore`` is off
+    (a dry run writes nothing).
     """
     from databricks.labs.gbx.zarr._register import (
         check_owner_marker,
@@ -114,9 +122,9 @@ def _roots(spark, table: str, props) -> tuple[str | None, str | None]:
     if props.kind == "registered":
         if not props.writable or not props.overlay_root:
             return None, props.root
-        check_owner_marker(props.overlay_root, owner, "overlay")
+        check_owner_marker(props.overlay_root, owner, "overlay", spark, restore=restore)
         return props.overlay_root, props.root
-    check_owner_marker(props.root, owner, "managed")
+    check_owner_marker(props.root, owner, "managed", spark, restore=restore)
     return props.root, None
 
 
@@ -212,7 +220,7 @@ def _crc32c_extend(data, value: int) -> int:
 
 
 def _tombstone(array, key, identity, write_id, expected) -> dict:
-    """The row that keeps a base shard hidden once nothing is left of it (Ruling Z49)."""
+    """The row that keeps a base shard hidden once nothing is left of it."""
     return {
         "kind": "shard",
         "array": array,
@@ -359,13 +367,8 @@ def _optimize(
             f"target_file_mb must be a whole number of MB, at least 1; got "
             f"{target_file_mb!r}. Fix: pass target_file_mb=128."
         )
-    props = M.read_props(spark, table)
-    if props.file_mode != "fuse":
-        raise ZarrUnsupported(
-            f"{table} keeps its files in file_mode {props.file_mode!r}, which GeoBrix does "
-            "not write yet",
-            fix="optimize a store with file_mode 'fuse'",
-        )
+    props = M.read_props(spark, table, need_file=True)
+    require_geobrix_files(table, props.file_mode, "write")
     root, base = _roots(spark, table, props)
     if root is None:
         raise ZarrReadOnly(
@@ -373,7 +376,8 @@ def _optimize(
             "put the folded shards",
             fix="register the store with writable=True and an overlay_root",
         )
-    snap = M.snapshot(spark, table)
+    files = FileLayout.of(props)
+    snap = M.snapshot(spark, table, files=files)
     docs = _write._docs_at(spark, snap)
     names = _array_names(variables, docs)
     wanted = None if shards is None else {s for s in shards if s[0] in names}
@@ -464,6 +468,7 @@ def _optimize(
                 write_id=write_id,
                 meta=meta,
                 sharded=sharded,
+                files=files,
             )
         except M.ConcurrentCommit:
             # the same rows, once more: a stale one now fails as a conflict
@@ -485,7 +490,7 @@ def _optimize(
             fix="retry once the other writers are done",
         )
     _warn_skipped(table, skipped)
-    return M.snapshot(spark, table).version
+    return M.snapshot(spark, table, files=files).version
 
 
 def _warn_skipped(table: str, skipped: list) -> None:
@@ -537,16 +542,17 @@ def _list_packs(root: str) -> list[tuple[str, float]]:
 
     Only the layout a writer of this store produces is listed,
     ``data/<array>/<write_id>/part-<id>.zpack``: any other file under ``data/`` is somebody
-    else's and is never a candidate. A directory that holds an owner marker is another
-    store's root (one can be created, or an overlay registered, under this store's
-    ``data/``): it is not entered. Links and anything that is not a plain file are left alone.
+    else's and is never a candidate. A directory that holds an ownership ledger or an owner
+    marker is another store's root (one can be created, or an overlay registered, under
+    this store's ``data/``): it is not entered. Links and anything that is not a plain
+    file are left alone.
     """
     top = os.path.join(root, "data")
 
     def walk():
         out = []
         for folder, dirs, names in os.walk(top, followlinks=False):
-            if OWNER_MARKER in names:
+            if holds_store([*dirs, *names]):
                 dirs[:] = []
                 continue
             for name in names:
@@ -562,15 +568,23 @@ def _list_packs(root: str) -> list[tuple[str, float]]:
     return _retry_transient(walk) if os.path.isdir(top) else []
 
 
-def _files_at(spark, table: str, version: int, root: str, tag: str | None = None):
+def _files_at(
+    spark,
+    table: str,
+    version: int,
+    root: str,
+    tag: str | None = None,
+    files: FileLayout | None = None,
+):
     """The pack files the live rows of ``version`` (or its ``tag`` rows) point at.
 
     Raises ``ZarrVersionUnavailable`` when Delta no longer has the version's data files.
     """
     where = "tag IS NULL" if tag is None else f"tag = {M._lit(tag)}"
+    select = M.file_select(files or M.file_layout(spark, table))
     try:
         rows = spark.sql(
-            f"SELECT DISTINCT file FROM {M._q(table)} VERSION AS OF {int(version)} "
+            f"SELECT DISTINCT {select} FROM {M._q(table)} VERSION AS OF {int(version)} "
             f"WHERE {where} AND kind IN ('shard', 'chunk') AND file IS NOT NULL "
             "AND coalesce(origin, 'gbx') = 'gbx'"
         ).toArrow()
@@ -583,10 +597,12 @@ def _files_at(spark, table: str, version: int, root: str, tag: str | None = None
             fix=f"check that SELECT * FROM {table} VERSION AS OF {version} runs, then "
             "run the vacuum again",
         ) from e
-    return {_rel(f, root) for f in rows.column("file").to_pylist()}
+    return {_rel(path_of(f), root) for f in rows.column("file").to_pylist()}
 
 
-def _protected(spark, table: str, root: str, horizon: datetime):
+def _protected(
+    spark, table: str, root: str, horizon: datetime, files: FileLayout | None = None
+):
     """What a vacuum may not delete, as ``(live, tagged, window files, commit versions,
     oldest)``.
 
@@ -601,8 +617,10 @@ def _protected(spark, table: str, root: str, horizon: datetime):
     """
     from pyspark.sql import functions as F
 
+    files = files or M.file_layout(spark, table)
+    select = M.file_select(files)
     rows = spark.sql(
-        f"SELECT DISTINCT file, tag IS NOT NULL AS tagged FROM {M._q(table)} "
+        f"SELECT DISTINCT {select}, tag IS NOT NULL AS tagged FROM {M._q(table)} "
         "WHERE kind IN ('shard', 'chunk') AND file IS NOT NULL "
         "AND coalesce(origin, 'gbx') = 'gbx'"
     ).toArrow()
@@ -610,7 +628,7 @@ def _protected(spark, table: str, root: str, horizon: datetime):
     for f, is_tag in zip(
         rows.column("file").to_pylist(), rows.column("tagged").to_pylist()
     ):
-        (tagged if is_tag else live).add(_rel(f, root))
+        (tagged if is_tag else live).add(_rel(path_of(f), root))
     tagged -= live
 
     history = [
@@ -634,7 +652,7 @@ def _protected(spark, table: str, root: str, horizon: datetime):
     if oldest is not None:
         for v in sorted(v for v, _ in history if v >= oldest):
             try:
-                window |= _files_at(spark, table, v, root)
+                window |= _files_at(spark, table, v, root, files=files)
             except ZarrVersionUnavailable:
                 continue  # Delta dropped its files: nobody can read it
             oldest = v
@@ -646,7 +664,7 @@ def _protected(spark, table: str, root: str, horizon: datetime):
             )
         for _, (v, mode) in versions.items():
             if mode == "restore" and v is not None and v > oldest:
-                window |= _files_at(spark, table, v, root)
+                window |= _files_at(spark, table, v, root, files=files)
     return live, tagged, window, versions, oldest
 
 
@@ -693,8 +711,8 @@ def _set_properties(
 
 def _delta_vacuum(spark, table: str, store_seconds: int, horizon, dry_run: bool):
     """A ``file_mode="managed"`` store: its files belong to the table, so the vacuum is
-    Delta's. The retention property is set first and a plain ``VACUUM`` follows (Ruling Z10:
-    GeoBrix never sets ``retentionDurationCheck``, so there is no ``RETAIN`` clause)."""
+    Delta's. The retention property is set first and a plain ``VACUUM`` follows (GeoBrix
+    never sets ``retentionDurationCheck``, so there is no ``RETAIN`` clause)."""
     sql_table = M._q(table)
     if not dry_run:
         _set_properties(spark, table, store_seconds, horizon)
@@ -798,9 +816,9 @@ def gbx_zarr_vacuum(
     is not this table's (``ZarrOwnershipError``), are never touched. Old versions you want to
     keep indefinitely are tagged (``gbx_zarr_tag``). In ``file_mode="managed"`` the table
     owns the files and this runs Delta's ``VACUUM`` (a ``retain`` shorter than the store's
-    changes nothing there); other file modes raise ``ZarrUnsupported``.
+    changes nothing there). ``fuse`` and ``external`` stores are vacuumed by GeoBrix.
     """
-    props = M.read_props(spark, table)
+    props = M.read_props(spark, table, need_file=True)
     seconds, store_seconds = _check_retain(table, props, retain, force)
     now = _utcnow()
     tp = M._tblprops(spark, table)
@@ -811,17 +829,12 @@ def gbx_zarr_vacuum(
     )
     if props.file_mode == "managed":
         return _delta_vacuum(spark, table, store_seconds, horizon, dry_run)
-    if props.file_mode != "fuse":
-        raise ZarrUnsupported(
-            f"{table} keeps its files in file_mode {props.file_mode!r}, which GeoBrix "
-            "does not vacuum yet",
-            fix="vacuum a store with file_mode 'fuse' (or 'managed', where Delta does)",
-        )
+    require_geobrix_files(table, props.file_mode, "vacuum")
 
-    root, _ = _roots(spark, table, props)
+    root, _ = _roots(spark, table, props, restore=not dry_run)
     if root is None:
         return _report(spark, [])
-    kept = _protected(spark, table, root, horizon)
+    kept = _protected(spark, table, root, horizon, FileLayout.of(props))
     # a write that has not committed may still be running: its files keep the store's retain
     stale = now - timedelta(seconds=seconds if force else store_seconds)
     decided, doomed = _decide(_list_packs(root), kept, now, now - _GRACE, stale)
@@ -877,11 +890,13 @@ _COLUMNS = ", ".join(M.MANIFEST_COLUMNS)
 
 
 def _commit_source_sql(write_id: str, meta: dict) -> str:
-    """One ``commit`` row as a SELECT in the manifest's column order."""
+    """One ``commit`` row as a SELECT in the manifest's column order. ``file`` is a bare
+    NULL, which a UNION takes the type of the rows' own ``file`` from: STRING, or a FILE
+    value."""
     wid = M._lit(write_id)
     return (
         f"SELECT 'commit' AS kind, CAST(NULL AS STRING) AS array, {wid} AS key, "
-        "CAST(NULL AS STRING) AS shard_key, CAST(NULL AS STRING) AS file, "
+        "CAST(NULL AS STRING) AS shard_key, NULL AS file, "
         "CAST(NULL AS BIGINT) AS offset, CAST(NULL AS BIGINT) AS length, "
         "CAST(NULL AS STRING) AS checksum, CAST(NULL AS STRING) AS origin, "
         f"CAST(NULL AS STRING) AS identity, {wid} AS write_id, "
@@ -910,17 +925,22 @@ def gbx_zarr_tag(spark, table: str, name: str, *, version_as_of=None) -> None:
     ``ZarrVersionUnavailable``.
     """
     M.check_tag(name)
-    props = M.read_props(spark, table)
+    props = M.read_props(spark, table, need_file=True)
     if _tag_exists(spark, table, name):
         raise ValueError(
             f"tag {name!r} already exists in {table}. Fix: pick another name, or remove "
             "it first with gbx_zarr_untag."
         )
-    snap = M.snapshot(spark, table, version_as_of=version_as_of)
+    files = FileLayout.of(props)
+    snap = M.snapshot(spark, table, version_as_of=version_as_of, files=files)
     if version_as_of is not None:  # a tag must not pin a version whose files are gone
         root = _files_root(props)
         _require_exist(
-            _files_at(spark, table, snap.version, root, tag=snap.tag) if root else (),
+            (
+                _files_at(spark, table, snap.version, root, tag=snap.tag, files=files)
+                if root
+                else ()
+            ),
             root,
             table,
             version_as_of,
@@ -956,7 +976,7 @@ def gbx_zarr_untag(spark, table: str, name: str) -> None:
     the next vacuum unless a live row or another tag still points at them. A tag that does
     not exist raises ``ZarrVersionUnavailable``."""
     M.check_tag(name)
-    M.read_props(spark, table)
+    M.read_props(spark, table, need_file=True)
     if not _tag_exists(spark, table, name):
         raise ZarrVersionUnavailable(
             f"tag {name!r} does not exist in {table}",
@@ -994,7 +1014,7 @@ def gbx_zarr_history(spark, table: str):
     """
     from pyspark.sql import functions as F
 
-    M.read_props(spark, table)
+    M.read_props(spark, table, need_file=True)
     sql_table = M._q(table)
     commits = spark.sql(
         f"SELECT _metadata.row_commit_version AS version, key AS write_id, meta "
@@ -1197,29 +1217,36 @@ def gbx_zarr_restore(
             "pass version_as_of or timestamp_as_of. Fix: give the version, tag or time "
             "to restore."
         )
-    props = M.read_props(spark, table)
+    props = M.read_props(spark, table, need_file=True)
     if props.kind == "registered" and not props.writable:
         raise ZarrReadOnly(
             f"{table} is a read-only registration of {props.root}, so it cannot be "
             "restored",
             fix="register the store with writable=True and an overlay_root",
         )
+    files = FileLayout.of(props)
     target = M.snapshot(
-        spark, table, version_as_of=version_as_of, timestamp_as_of=timestamp_as_of
+        spark,
+        table,
+        version_as_of=version_as_of,
+        timestamp_as_of=timestamp_as_of,
+        files=files,
     )
     label = target.version if target.tag is None else f"tag:{target.tag}"
     want = M.read_rows(spark, target, kinds=_DATA_KINDS)
     write_id = uuid.uuid4().hex
     meta = {"mode": "restore", "from": label, "write_id": write_id}
     for attempt in range(_write._ATTEMPTS):
-        latest = M.snapshot(spark, table)
+        latest = M.snapshot(spark, table, files=files)
         live = M.read_rows(spark, latest, kinds=_DATA_KINDS)
         rows, upserts = _restore_rows(live, want, write_id)
         if rows.num_rows == 0:
             return latest.version
         _require_files(upserts, props, table, label)
         try:
-            return M.commit(spark, table, rows, write_id=write_id, meta=meta)
+            return M.commit(
+                spark, table, rows, write_id=write_id, meta=meta, files=files
+            )
         except M.ConcurrentCommit:
             # re-read the live rows and work out the changes again
             _write._pause(_write._wait(attempt))

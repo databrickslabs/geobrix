@@ -461,6 +461,36 @@ def test_a_merge_keeps_the_alpha_band_and_the_mask(monkeypatch, name, streaming)
     assert valid[:, 23].tolist() == [r in _want_rows(name) for r in range(H)]
 
 
+def test_a_merge_closes_the_memory_file_of_an_alpha_copy_whose_write_fails(monkeypatch):
+    """The in-memory copy of an alpha tile is closed even when writing it raises."""
+    made = []
+
+    class Spy(MemoryFile):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            made.append(self)
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("write failed")
+
+    monkeypatch.setattr(agg, "MemoryFile", Spy)
+    monkeypatch.setattr(agg, "_write_masked_tile", fail)
+    tiles = [
+        al.row_coded(
+            "rgba",
+            height=H,
+            masked_rows=MASKED,
+            transparent_rows=TRANSPARENT,
+            transform=from_origin(x, 50, 0.5, 0.5),
+        )
+        for x in (10, 16)
+    ]
+    with pytest.raises(RuntimeError, match="write failed"):
+        agg.merge_tiles(tiles)
+    spied = [m for m in made if type(m) is Spy]
+    assert spied and all(m.closed for m in spied)
+
+
 @pytest.mark.parametrize("streaming", [False, True], ids=["in-ram", "streaming"])
 def test_a_merge_keeps_valid_zero_pixels_when_a_tile_has_an_own_mask(
     monkeypatch, streaming
@@ -749,6 +779,10 @@ def _assert_rows_valid_as_their_source(raster_bytes, name):
     assert (
         valid[covered] == want[covered]
     ).all(), f"{int((valid[covered] != want[covered]).sum())} pixels differ in validity"
+    # the corners of the warp: no tile reaches them, so the mosaic's mask calls them invalid
+    assert not valid[
+        ~covered
+    ].any(), f"{int(valid[~covered].sum())} uncovered pixels are valid"
 
 
 def _crs_tile(srid, x, width, extra_entries=False):
@@ -896,6 +930,66 @@ def test_the_in_ram_and_the_streamed_two_crs_merge_agree(monkeypatch, first):
         streamed[2], rel=1e-12
     )  # a COG writes the origin as text
     assert np.array_equal(in_ram[3], streamed[3])
+
+
+def _overlap_tile(x_col, values, *, nodata=None, tag=None):
+    """A one-row uint8 tile at pixel column ``x_col`` (50 km pixels, EPSG:3857) holding ``values``."""
+    prof = dict(
+        driver="GTiff",
+        width=len(values),
+        height=1,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:3857",
+        transform=from_origin(
+            1_000_000.0 + x_col * 50_000.0, 6_000_000.0, 50_000.0, 50_000.0
+        ),
+    )
+    if nodata is not None:
+        prof["nodata"] = nodata
+    with MemoryFile() as mf:
+        with mf.open(**prof) as dst:
+            dst.write(np.array([values], dtype="uint8")[None])
+            if tag:
+                dst.update_tags(note=tag)
+        return mf.read()
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["in-ram", "streaming"])
+@pytest.mark.parametrize("nodata_sorts", ["first", "last"])
+def test_a_merge_masks_each_tile_by_its_own_nodata_in_ram_and_streamed(
+    monkeypatch, streaming, nodata_sorts
+):
+    """The NoData of each tile decides which of ITS pixels are skipped, not the NoData of the tile that
+    stands first in byte order: the streamed merge used to apply the first tile's to every tile. A
+    tile with a NoData (0) beside a tile with none, overlapping them: its NoData pixels (columns 6-7)
+    let the plain tile show, and a valid 0 of the plain tile (column 5) is data, not NoData. Whichever
+    tile folds last wins a column both have data in; the two paths agree on every pixel.
+    """
+    if streaming:
+        monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+    nodata_values = [50] * 6 + [0, 0]  # columns 0-7; columns 6-7 are NoData
+    plain_values = [0] + [7] * 7  # columns 5-12; column 5 is a valid 0
+    # tags move a tile within the byte order; try them until the wanted tile sorts where wanted
+    for tag_a, tag_b in [
+        (None, None),
+        ("x", None),
+        (None, "x"),
+        ("x" * 40, None),
+        (None, "x" * 40),
+    ]:
+        a = _overlap_tile(0, nodata_values, nodata=0, tag=tag_a)
+        b = _overlap_tile(5, plain_values, tag=tag_b)
+        order = sorted([a, b])
+        if (order[0] is a) == (nodata_sorts == "first"):
+            break
+    else:
+        pytest.skip("could not put the tiles in the wanted byte order")
+    out = agg.merge_tiles([a, b])
+    with MemoryFile(out) as mf, mf.open() as ds:
+        row = ds.read(1)[0].tolist()
+    plain_wins_col5 = nodata_sorts == "first"  # the tile that sorts last folds last
+    assert row == [50] * 5 + [0 if plain_wins_col5 else 50] + [7] * 7
 
 
 @pytest.mark.parametrize("name", ["rgb_nir", "rgba", "gray_x_alpha"])

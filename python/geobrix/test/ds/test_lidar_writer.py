@@ -1,8 +1,8 @@
 """Tests for lidar_gbx DataSource writer (sharded parts mode).
 
 TDD: new tests written BEFORE implementation (RED -> GREEN).
-Task 1 test (write_xyz_laz) is retained here; Task 2 adds the DataSource writer tests.
-Task 3 adds singleFile + merge mode tests (M1/M2/M3).
+The write_xyz_laz test, the DataSource writer tests and the singleFile + merge
+mode tests (M1/M2/M3) live here.
 """
 
 import numpy as np
@@ -175,7 +175,7 @@ def test_writer_rejects_partial_rgb(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 3: singleFile mode
+# singleFile mode
 # ---------------------------------------------------------------------------
 
 
@@ -208,7 +208,7 @@ def test_writer_single_file_merges_to_one(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 3: post-hoc merge mode
+# Post-hoc merge mode
 # ---------------------------------------------------------------------------
 
 
@@ -245,7 +245,7 @@ def test_writer_merge_folds_parts_and_deletes(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 4: writer-level gate tests (mergeMaxMB option)
+# Writer-level gate tests (mergeMaxMB option)
 # ---------------------------------------------------------------------------
 
 
@@ -328,14 +328,14 @@ def test_writer_merge_under_budget_succeeds(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Finding 1 (Isaac): CRS preserved through merge when caller passes crs=None
+# CRS preserved through merge when caller passes crs=None
 # ---------------------------------------------------------------------------
 
 
 def test_merge_preserves_crs_from_parts(spark, tmp_path):
     """Parts written with EPSG:32611; merge with no crs= option must infer it
     from the first part's header and tag the merged file identically.
-    TDD: verifies _merge_laz_parts CRS-inference path (Finding 1)."""
+    TDD: verifies _merge_laz_parts CRS-inference path."""
     import glob as _g
     import os as _os
 
@@ -385,14 +385,14 @@ def test_merge_preserves_crs_from_parts(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Finding 3 (Isaac): stem-bucketing within a single partition
+# Stem-bucketing within a single partition
 # ---------------------------------------------------------------------------
 
 
 def test_writer_stem_bucketing_multi_key_partition(spark, tmp_path):
     """Multiple (group,cluster) keys forced into ONE partition via repartition(1)
     must each produce a distinct, correctly-named .laz with the right point count.
-    TDD: verifies Finding 3 stem-bucketing within a partition."""
+    TDD: verifies stem-bucketing within a partition."""
     import glob as _g
     import os as _os
 
@@ -451,14 +451,14 @@ def test_writer_stem_bucketing_multi_key_partition(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Finding 4 (Isaac): heterogeneous point formats in merge directory
+# Heterogeneous point formats in merge directory
 # ---------------------------------------------------------------------------
 
 
 def test_writer_merge_rejects_heterogeneous_formats(spark, tmp_path):
     """A directory mixing RGB (fmt 2) and XYZ-only (fmt 0) parts must raise a
     clear ValueError naming the conflicting formats.
-    TDD: verifies Finding 4 homogeneity check in _commit_merge."""
+    TDD: verifies the homogeneity check in _commit_merge."""
     import glob as _g
     import os as _os
 

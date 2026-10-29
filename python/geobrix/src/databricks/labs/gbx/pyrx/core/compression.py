@@ -10,8 +10,8 @@ import warnings
 _FLOAT = {"float32", "float64"}
 _SMALL_INT = {"uint8", "int8"}
 
-# Grounded by .superpowers/sdd/2026-09-10-grid-fidelity-stage3/followup-compression-matrix-report.md
-# (full ZSTD level sweep across 11 tile types, rasterio 1.5.0/GDAL 3.12, Darwin arm64).
+# Grounded by a full ZSTD level sweep across 11 tile types (rasterio 1.5.0/GDAL 3.12,
+# Darwin arm64).
 #
 # Key finding: L6 is the universal knee.
 #   - L9 and L12 add nothing over L6 on output size for any tile type tested.
@@ -175,7 +175,9 @@ def creation_opts(
         'zstd' — explicit ZSTD; level defaults to _AUTO_DEFAULT_LEVEL.
         'deflate' — DEFLATE; level (zlevel) defaults to 6.
         'lzw' — LZW; predictor derived from dtype.
-        'none'/'raw' — no compression.
+        'none'/'raw' — no compression, emitted as ``compress=none`` for every driver: the
+        COG driver compresses with LZW when COMPRESS is absent, and a profile copied from a
+        compressed source would keep that source's codec.
         Any other string — passed through as-is (no predictor assumption).
     level:
         Optional level override. Ignored (with UserWarning) when compress='auto'.
@@ -241,7 +243,7 @@ def _codec_opts(dtype, decoded_bytes, compress, level, predictor, driver) -> dic
 
     c = str(compress).lower()
     if c in ("none", "raw"):
-        return {}  # no compression keys
+        return {"compress": "none"}  # no level / predictor keys either
 
     if c == "zstd":
         opts = {"compress": "zstd"}
@@ -331,6 +333,54 @@ def drop_ycbcr(profile: dict, *, unless_jpeg: bool = False) -> dict:
     return prof
 
 
+def drop_stripe_blocks(profile: dict) -> dict:
+    """Copy of *profile* without ``blockxsize`` when it is not tiled.
+
+    A striped GeoTIFF's profile reports its strip width as ``blockxsize`` (the full width)
+    with ``tiled`` False. GDAL refuses that for a new GTiff, ignoring it and logging
+    ``BLOCKXSIZE can only be used with TILED=YES`` for every dataset written. Only that key
+    goes: ``blockysize`` (rows per strip) is valid untiled and stays, so the output is the
+    same as before, without the log record. A tiled profile is returned unchanged.
+    """
+    prof = dict(profile)
+    if not prof.get("tiled"):
+        prof.pop("blockxsize", None)
+    return prof
+
+
+def source_profile(profile: dict, *, unless_jpeg: bool = False) -> dict:
+    """The profile of a source dataset, cleaned to be the base of a new GTiff.
+
+    The one place a writer starts from a source's ``profile``: :func:`drop_ycbcr` (a YCbCr
+    ``photometric`` is valid only with JPEG; ``unless_jpeg`` as there) and
+    :func:`drop_stripe_blocks` (the strip width of an untiled source). Every other key is kept.
+    """
+    return drop_stripe_blocks(drop_ycbcr(profile, unless_jpeg=unless_jpeg))
+
+
+# Keys of a source profile that a write with the COG driver must not inherit: the driver lays the
+# file out and picks the photometric itself, and warns once per key it is handed (TILED,
+# BLOCKXSIZE, BLOCKYSIZE, PHOTOMETRIC); the codec keys are replaced by ``creation_opts(driver="COG")``.
+_COG_OWN_KEYS = (
+    "tiled",
+    "blockxsize",
+    "blockysize",
+    "photometric",
+    "compress",
+    "predictor",
+    "zstd_level",
+    "zlevel",
+    "LEVEL",
+)
+
+
+def cog_profile(profile: dict) -> dict:
+    """Copy of the source *profile* for a write with ``driver="COG"``: without the layout and codec keys
+    of the source (:data:`_COG_OWN_KEYS`). The caller adds ``driver="COG"``, ``blocksize``,
+    ``overview_resampling`` and ``creation_opts(..., driver="COG")``."""
+    return {k: v for k, v in profile.items() if k not in _COG_OWN_KEYS}
+
+
 def match_alpha(dst, alpha_like, all_labels: bool = False) -> None:
     """Label the bands of the new dataset *dst* alpha exactly where *alpha_like* does.
 
@@ -408,7 +458,7 @@ def write_gtiff(
     import numpy as np
     from rasterio.io import MemoryFile
 
-    prof = drop_ycbcr(profile)
+    prof = source_profile(profile)
     prof["driver"] = "GTiff"
     dtype = prof.get("dtype", str(np.asarray(data).dtype))
     decoded = data.nbytes if hasattr(data, "nbytes") else None

@@ -1,4 +1,4 @@
-"""End-to-end Python tests for the 3 Wave 5 web-mercator tile functions.
+"""End-to-end Python tests for the 3 web-mercator tile functions.
 
 One smoke / round-trip test per function — confirms the JVM bindings fire and
 the Long-overload eval entry points accept PySpark int inputs (LongType).

@@ -115,13 +115,13 @@ print(f"   Path: {output_file}")
 # Verify
 nyc_boroughs = spark.read.format("geojson_ogr").load(str(output_file))
 print(f"   Boroughs: {nyc_boroughs.count()}")
-nyc_boroughs.select("boro_name", "boro_code").show()"""
+nyc_boroughs.select("boroname", "borocode").show()"""
 
 DOWNLOAD_NYC_BOROUGHS_output = """✅ Downloaded NYC Boroughs (12.3 KB)
    Path: /Volumes/.../nyc/boroughs/nyc_boroughs.geojson
    Boroughs: 5
 +----------+---------+
-|boro_name |boro_code|
+|boroname  |borocode |
 +----------+---------+
 |Manhattan |1        |
 |Bronx     |2        |
@@ -278,7 +278,7 @@ DOWNLOAD_NYC_PARKS_output = """✅ Downloaded NYC Parks Shapefile (5.2 MB)
 +------------------+--------+-----+"""
 
 USAGE_NYC_PARKS = """sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
-parks = spark.read.format("shapefile_ogr").load(f"{sample_path}/nyc/parks/*.shp")"""
+parks = spark.read.format("shapefile_ogr").load(f"{sample_path}/nyc/parks/")"""
 
 DOWNLOAD_NYC_SUBWAY = """# Download NYC Subway Stations Shapefile
 import requests
@@ -315,14 +315,14 @@ if shp_files:
     # Verify
     subway = spark.read.format("shapefile_ogr").load(shp_file)
     print(f"   Stations: {subway.count()}")
-    subway.select("Station_Na", "Line").show(5)"""
+    subway.select("stop_name", "line").show(5)"""
 
 DOWNLOAD_NYC_SUBWAY_output = """✅ Downloaded NYC Subway Stations Shapefile (1.1 MB)
    Path: .../nyc/subway/
    Shapefile: .../nyc/subway/geo_export_....shp
    Stations: 2120
 +------------------+------------------+
-|Station_Na        |Line              |
+|stop_name         |line              |
 +------------------+------------------+
 |72 St             |N Q R W           |
 |Lexington Av/63   |F Q               |
@@ -330,7 +330,7 @@ DOWNLOAD_NYC_SUBWAY_output = """✅ Downloaded NYC Subway Stations Shapefile (1.
 +------------------+------------------+"""
 
 USAGE_NYC_SUBWAY = """sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
-subway = spark.read.format("shapefile_ogr").load(f"{sample_path}/nyc/subway/*.shp")"""
+subway = spark.read.format("shapefile_ogr").load(f"{sample_path}/nyc/subway/")"""
 
 CREATE_GEOPACKAGE_NYC = """# Create NYC Multi-Layer GeoPackage
 # Requires: Essential Bundle and Complete Bundle shapefiles already downloaded

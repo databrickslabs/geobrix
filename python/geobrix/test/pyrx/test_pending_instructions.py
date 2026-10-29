@@ -105,7 +105,7 @@ def test_materialize_strips_pending_keys():
 
 
 # ---------------------------------------------------------------------------
-# Task 2: rst_initnodata records pending nodata on virtual tiles, emits v2
+# rst_initnodata records pending nodata on virtual tiles, emits v2
 # ---------------------------------------------------------------------------
 def _spark():
     return (
@@ -153,7 +153,7 @@ def test_initnodata_materialize_true_bakes_bytes():
 
 
 # ---------------------------------------------------------------------------
-# Task 3: rst_setsrid / rst_band record on virtual, v2 everywhere
+# rst_setsrid / rst_band record on virtual, v2 everywhere
 # ---------------------------------------------------------------------------
 
 
@@ -191,7 +191,7 @@ def test_setsrid_band_v2_struct():
 
 
 # ---------------------------------------------------------------------------
-# Task 4: rst_memsize virtual-aware
+# rst_memsize virtual-aware
 # ---------------------------------------------------------------------------
 
 
@@ -213,7 +213,7 @@ def test_memsize_materialized_is_byte_length():
 
 
 # ---------------------------------------------------------------------------
-# Task 5: accumulated instructions compose + consume-on-materialize invariant
+# Accumulated instructions compose + consume-on-materialize invariant
 # ---------------------------------------------------------------------------
 
 
@@ -327,7 +327,7 @@ def test_pending_nodata_uint16_no_nodata_leaves_unset():
 
 
 # ---------------------------------------------------------------------------
-# Finding 1 fix: eager path (edit.init_nodata) also guards dtype
+# Fix: eager path (edit.init_nodata) also guards dtype
 # ---------------------------------------------------------------------------
 
 
@@ -379,7 +379,7 @@ def test_eager_init_nodata_preserves_existing():
 
 
 # ---------------------------------------------------------------------------
-# Finding 2 fix: pending_bands stacking guard
+# Fix: pending_bands stacking guard
 # ---------------------------------------------------------------------------
 
 
@@ -397,7 +397,7 @@ def test_band_stacking_guard_raises():
 
 
 # ---------------------------------------------------------------------------
-# Finding 3 fix: setsrid + warp compose (pending_srid vs tile.crs)
+# Fix: setsrid + warp compose (pending_srid vs tile.crs)
 # ---------------------------------------------------------------------------
 
 
@@ -426,7 +426,7 @@ def test_setsrid_and_warp_compose():
 
 
 # ---------------------------------------------------------------------------
-# Finding 4 fix: open_header nodata consistency
+# Fix: open_header nodata consistency
 # ---------------------------------------------------------------------------
 
 

@@ -424,7 +424,7 @@ def test_stage_local_force_stage_env_always_copies(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Task 4: GBX_STAGE_MAX_BYTES guard
+# GBX_STAGE_MAX_BYTES guard
 # ---------------------------------------------------------------------------
 
 
@@ -447,7 +447,7 @@ def test_stage_local_respects_max_bytes(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 2 wiring tests: _collect_sources delegates to list_files (fail-on-revert)
+# Wiring tests: _collect_sources delegates to list_files (fail-on-revert)
 # ---------------------------------------------------------------------------
 
 

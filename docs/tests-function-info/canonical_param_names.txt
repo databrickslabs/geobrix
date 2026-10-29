@@ -11,11 +11,11 @@
 #               Matches the v1/v2 tile struct field, Mosaic convention, and product.
 #               cellid1/cellid2 for bare-id pairs.
 #   *_chip    — left_chip / right_chip / input_chip are STRUCT inputs {cellid, core, chip},
-#               NOT scalar cell IDs. NEVER rename to cellid. See R4c ruling.
+#               NOT scalar cell IDs. NEVER rename to cellid.
 #   out_srid / out_crs — output-direction prefix on 9 output-producing rasterization functions.
 #               Bare srid/crs would be ambiguous vs the input geometry's embedded CRS.
 #   *_array   — points_array / breaklines_array are ArrayType inputs (not single geometries).
-#               See N9 ruling. Do not drop the _array suffix.
+#               Do not drop the _array suffix.
 #   [c1]/[c2] in gbx_rst_evi — EVI formula atmospheric correction coefficients (C1≈6.0,
 #               C2≈7.5 MODIS-canonical), NOT cell IDs. Left as c1/c2 per domain semantics.
 #   cellid — canonical single lowercase token for a bare BNG/quadbin cell id, on params AND

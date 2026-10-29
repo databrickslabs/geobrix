@@ -102,7 +102,7 @@ def to_render_rgb(path: str) -> str:
         out_dtype = src.dtypes[0]
         data = src.read([1, 2, 3])
         mask = src.read_masks(1) if _nodata.has_own_mask(src) else None
-        profile = src.profile.copy()
+        profile = _comp.source_profile(src.profile)
         profile.update(count=3)
         profile.pop("nodata", None)
         profile.update(

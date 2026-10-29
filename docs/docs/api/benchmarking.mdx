@@ -236,10 +236,11 @@ df = spark.read.format("raster_gbx") \
 
 # Option 2 — tile INDEX in a Delta table: path (+ optional window) per tile —
 #            a saved file listing, NOT tile pixels; the reader still reads the files
-df = spark.read.format("raster_gbx") \
-    .option("tilesTable", "geospatial.myschema.tile_index") \
-    .option("virtualTiles", "true") \
-    .load("/")
+from databricks.labs.gbx.ds.raster import read_tiles_table
+
+df = read_tiles_table(
+    spark, "geospatial.myschema.tile_index", {"virtualTiles": "true"}
+)
 ```
 
 Both options reduce planning to a single file or table read (**~37× faster** than the

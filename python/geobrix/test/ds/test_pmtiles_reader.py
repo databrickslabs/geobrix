@@ -1,6 +1,6 @@
 """Integration tests for the pmtiles_gbx raster reader (source="raster").
 
-Task 2: per-tile mosaic pyramid reader — enumerate tiles, fan out into
+Per-tile mosaic pyramid reader — enumerate tiles, fan out into
 InputPartitions, render via _xyz_mosaic core, emit (z, x, y, bytes) rows.
 """
 
@@ -611,7 +611,7 @@ def test_read_directory_rejects_unsupported_compression(name, value):
     with pytest.raises(ValueError) as info:
         _read_directory(lambda o, n: b"", header, 127, 10)
     assert str(info.value) == (
-        f"pmtiles_gbx: internal compression {value} ({name}) is not supported"
+        f"pmtiles: internal compression {value} ({name}) is not supported"
     )
 
 

@@ -621,7 +621,7 @@ def test_directory_deletes_are_read_only_errors_too(era5_v2):
         assert "Fix:" in str(ei.value)
 
 
-# --- Isaac B22/B23: drift that only a read can see ----------------------------------
+# --- drift that only a read can see ----------------------------------
 
 
 @pytest.mark.parametrize(
@@ -682,7 +682,7 @@ def test_a_shard_index_that_points_outside_the_shard_is_drift(tmp_path):
     assert "gbx_zarr_sync" in ei.value.fix
 
 
-# --- Task 8 N2: an array GeoBrix cannot decode reads as an error, never as fill ------
+# --- an array GeoBrix cannot decode reads as an error, never as fill ------
 
 
 def _with_strings(tmp_path):

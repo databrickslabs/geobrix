@@ -451,6 +451,8 @@ def _simplify_raster(source, spec: dict, out_path: str | None) -> Union[bytes, s
 
         else:
             # File path source
+            from databricks.labs.gbx.pyrx.core import compression as _comp
+
             src_path = str(source)
             with rasterio.open(src_path) as src:
                 scale = max(src.width, src.height) / raster_max_px
@@ -465,9 +467,7 @@ def _simplify_raster(source, spec: dict, out_path: str | None) -> Union[bytes, s
                 transform = src.transform * src.transform.scale(
                     src.width / new_w, src.height / new_h
                 )
-                profile = src.profile.copy()
-
-            from databricks.labs.gbx.pyrx.core import compression as _comp
+                profile = _comp.source_profile(src.profile)
 
             # Route through the compression authority (auto = ZSTD + dtype predictor,
             # size-adaptive level). This is a small (<=raster_max_px) in-cluster render

@@ -1,4 +1,4 @@
-"""Writing GeoBrix tiles into Zarr: ``gbx_zarr_write`` with a tile column (spec 8.6).
+"""Writing GeoBrix tiles into Zarr: ``gbx_zarr_write`` with a tile column.
 
 The grid rules run without Spark (``place`` and the planner are pure functions of a tile's
 facts); the Spark tests keep one run per behaviour: tiles read from a store, changed by an

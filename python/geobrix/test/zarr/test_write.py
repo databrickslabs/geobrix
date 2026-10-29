@@ -24,6 +24,7 @@ from databricks.labs.gbx.zarr import _write  # noqa: E402
 from databricks.labs.gbx.zarr._manifest import find_commit_version  # noqa: E402
 from databricks.labs.gbx.zarr._read import BLOCKS_SCHEMA  # noqa: E402
 from databricks.labs.gbx.zarr._register import (  # noqa: E402
+    OWNER_LEDGER,
     OWNER_MARKER,
     gbx_zarr_register,
     identity_of,
@@ -827,7 +828,7 @@ def test_p1_a_chunk_read_from_a_shard_conflicts_when_that_shard_changes(
 def test_an_overwrite_hides_the_shards_of_a_registered_store_with_tombstones(
     spark_delta, drop, tmp_path, no_hooks
 ):
-    """I8(b), Ruling Z49: every shard row of the variable becomes a tombstone that keeps the
+    """Every shard row of the variable becomes a tombstone that keeps the
     identity of the base shard it hides (a deleted row would let a sync bring the shard
     back); only the rewritten chunk has data; the base files are untouched."""
     store, table = _registered(spark_delta, drop, tmp_path, "ow")
@@ -1014,7 +1015,7 @@ def test_p4_a_new_variable_in_a_registered_v2_store(
 def test_p5_the_rebase_after_a_merge_level_conflict(
     spark_delta, drop, tmp_path, no_hooks, how
 ):
-    """I8(a): the two branches that react at the MERGE. Day 3 lands inside day 2's commit
+    """The two branches that react at the MERGE. Day 3 lands inside day 2's commit
     call: as a row-level conflict (ConcurrentCommit), or before the MERGE runs so it aborts
     on metadata only. Day 2 rebases and lands either way."""
     ds = _dataset(hours=72)
@@ -1024,7 +1025,7 @@ def test_p5_the_rebase_after_a_merge_level_conflict(
     two, three = uuid.uuid4().hex, uuid.uuid4().hex
     real, calls = M.commit, []
 
-    def racing(spark_, table_, rows, *, write_id, meta, sharded=None):
+    def racing(spark_, table_, rows, *, write_id, meta, sharded=None, **kw):
         calls.append(write_id)
         if write_id == two and calls.count(two) == 1:
             gbx_zarr_write(
@@ -1032,7 +1033,9 @@ def test_p5_the_rebase_after_a_merge_level_conflict(
             )
             if how == "concurrent":
                 raise M.ConcurrentCommit("simulated row-level conflict. Fix: retry.")
-        return real(spark_, table_, rows, write_id=write_id, meta=meta, sharded=sharded)
+        return real(
+            spark_, table_, rows, write_id=write_id, meta=meta, sharded=sharded, **kw
+        )
 
     no_hooks.setattr(_write.M, "commit", racing)
     no_hooks.setattr(_write, "_pause", lambda s: None)
@@ -1068,6 +1071,8 @@ def test_p9_a_create_whose_commit_landed_keeps_its_marker(
     real, calls = M.find_commit_version, []
 
     def flaky(spark_, table_, write_id, *, since=0):
+        if table_.startswith("delta."):  # the root's ownership ledger, not the manifest
+            return real(spark_, table_, write_id, since=since)
         calls.append(1)
         if len(calls) >= 2 and (how == "always" or len(calls) == 2):
             raise RuntimeError("transient lookup failure")
@@ -1106,7 +1111,7 @@ def test_p9_a_create_whose_commit_landed_keeps_its_marker(
 
 
 def test_p10_an_append_of_fill_stores_no_chunk(spark_delta, drop, tmp_path, no_hooks):
-    """M2 (Ruling Z40): chunks of fill are dropped in every mode."""
+    """Chunks of fill are dropped in every mode."""
     table, _, _ = _create(spark_delta, drop, tmp_path)
     nxt = _dataset(hours=24, start="2023-01-03")
     nxt["t2m"][:] = np.nan
@@ -1196,7 +1201,7 @@ def test_an_append_grows_an_array_created_after_its_base(
 def test_m11_two_writers_setting_one_label_differently_conflict(
     spark_delta, drop, tmp_path, no_hooks, same
 ):
-    """M11 (Ruling Z40): a coordinate cell both writers set is data: different values
+    """A coordinate cell both writers set is data: different values
     conflict, equal values merge."""
     ds = _dataset(hours=24)
     table, _, _ = _create(spark_delta, drop, tmp_path, ds)
@@ -1226,7 +1231,7 @@ def test_m11_two_writers_setting_one_label_differently_conflict(
         np.testing.assert_array_equal(_read(spark_delta, table, "longitude"), theirs)
 
 
-# --- create edge cases (I6, M14) ------------------------------------------------------------
+# --- create edge cases ------------------------------------------------------------
 
 
 def test_i6_create_refuses_an_existing_root_that_is_not_its_own(
@@ -1298,7 +1303,7 @@ def test_m14_a_losing_create_keeps_the_marker_the_winner_relies_on(
     assert (root / OWNER_MARKER).exists()
 
 
-# --- the rest of the rebase loop, and the marker wiring (M1) ---------------------------------
+# --- the rest of the rebase loop, and the marker wiring ---------------------------------
 
 
 def _edit_array_doc(spark, table, array, edit):
@@ -1372,7 +1377,7 @@ def test_a_rebase_refuses_a_layout_another_write_changed(
 def test_m22_a_rebase_keeps_an_attribute_another_write_set(
     spark_delta, drop, tmp_path, no_hooks
 ):
-    """M22: the append's rebase builds the grown document over the live one, so an
+    """The append's rebase builds the grown document over the live one, so an
     attribute set on an array meanwhile (a key the append never touches) survives."""
     ds = _dataset(hours=48)
     table, _, _ = _create(spark_delta, drop, tmp_path, ds.isel(time=slice(0, 24)))
@@ -1407,7 +1412,7 @@ def test_m22_a_rebase_keeps_an_attribute_another_write_set(
 def test_m22_two_writers_creating_one_array_clash_only_on_different_attributes(
     spark_delta, drop, tmp_path, no_hooks, same
 ):
-    """M22: both writers create ``sp`` (the second only its document: its values are all
+    """Both writers create ``sp`` (the second only its document: its values are all
     fill). Equal documents merge; an attribute they set differently is a conflict."""
     ds = _dataset(hours=24)
     table, _, _ = _create(spark_delta, drop, tmp_path, ds)
@@ -1464,11 +1469,13 @@ def test_a_writer_that_loses_seven_rounds_still_lands(
     table, _, _ = _create(spark_delta, drop, tmp_path)
     real, calls, pauses = M.commit, [], []
 
-    def lose_seven_rounds(spark_, table_, rows, *, write_id, meta, sharded=None):
+    def lose_seven_rounds(spark_, table_, rows, *, write_id, meta, sharded=None, **kw):
         calls.append(write_id)
         if len(calls) <= 7:
             raise M.ConcurrentCommit("lost this round. Fix: retry.")
-        return real(spark_, table_, rows, write_id=write_id, meta=meta, sharded=sharded)
+        return real(
+            spark_, table_, rows, write_id=write_id, meta=meta, sharded=sharded, **kw
+        )
 
     no_hooks.setattr(_write.M, "commit", lose_seven_rounds)
     no_hooks.setattr(_write, "_pause", pauses.append)
@@ -1508,32 +1515,39 @@ def test_the_wait_between_attempts_is_capped(spark_delta, drop, tmp_path, no_hoo
     assert pauses == sorted(pauses)  # and it never shrinks
 
 
-def test_a_write_to_a_root_whose_marker_is_gone_is_refused(
+def test_a_root_that_lost_its_marker_is_reclaimed_by_its_owner(
     spark_delta, drop, tmp_path, no_hooks
 ):
+    """The marker is the note beside the claim. With the claim (the ledger) still naming the
+    table, a write puts the note back. With neither left, the table's own properties still
+    name the root and no other table holds it, so the write claims it again (the same
+    compare-and-swap a new claim goes through) instead of leaving the table stuck."""
+    import shutil
     import types
 
     from databricks.labs.gbx.core import _retry
 
     no_hooks.setattr(_retry, "time", types.SimpleNamespace(sleep=lambda s: None))
     table, root, version = _create(spark_delta, drop, tmp_path)
+    block = _blocks(spark_delta, ("t2m", (0, 0, 0), np.ones((12, 5, 6), "float32")))
     (root / OWNER_MARKER).unlink()
-    with pytest.raises(ZarrOwnershipError, match="no owner marker"):
-        gbx_zarr_write(
-            _blocks(spark_delta, ("t2m", (0, 0, 0), np.ones((12, 5, 6), "float32"))),
-            table,
-            mode="update",
-        )
-    assert _latest(spark_delta, table) == version
+    version = gbx_zarr_write(block, table, mode="update")
+    assert json.loads((root / OWNER_MARKER).read_text())["table"].endswith(table)
+
+    (root / OWNER_MARKER).unlink()
+    shutil.rmtree(root / OWNER_LEDGER)
+    assert gbx_zarr_write(block, table, mode="update") > version
+    assert json.loads((root / OWNER_MARKER).read_text())["table"].endswith(table)
+    assert (root / OWNER_LEDGER).is_dir()
 
 
-# --- fix round 2 (Ruling Z41) ------------------------------------------------------------------
+# --- naming variables keeps what their dimensions need ------------------------------------------------------------------
 
 
 def test_p13_naming_variables_keeps_the_coordinate_blocks_of_their_dimensions(
     spark_delta, drop, tmp_path, no_hooks
 ):
-    """RR1-I1: ``variables=["t2m"]`` with blocks of t2m and time. An append finds its
+    """``variables=["t2m"]`` with blocks of t2m and time. An append finds its
     labels, a create makes the time array, an update patches the labels; a coordinate no
     named variable uses is left out."""
     ds = _dataset(hours=48)
@@ -1592,7 +1606,7 @@ def test_p13_naming_variables_keeps_the_coordinate_blocks_of_their_dimensions(
 def test_rr1_m3_disjoint_read_modify_writers_of_one_shard_need_no_guard(
     spark_delta, drop, tmp_path, no_hooks
 ):
-    """RR1-M3: chunks with rows of their own are guarded by those rows; the shard is not
+    """Chunks with rows of their own are guarded by those rows; the shard is not
     checked. Two partial writers of different chunks in one registered shard both land,
     each on its first commit, and neither commit carries a check row."""
     store, table = _registered(spark_delta, drop, tmp_path, "m3")
@@ -1608,9 +1622,11 @@ def test_rr1_m3_disjoint_read_modify_writers_of_one_shard_need_no_guard(
     blocks_b = _blocks(spark_delta, ("t2m", (12, 0, 0), part))
     real, calls, ran = M.commit, [], []
 
-    def recording(spark_, table_, rows, *, write_id, meta, sharded=None):
+    def recording(spark_, table_, rows, *, write_id, meta, sharded=None, **kw):
         calls.append((write_id, rows.column("op").to_pylist()))
-        return real(spark_, table_, rows, write_id=write_id, meta=meta, sharded=sharded)
+        return real(
+            spark_, table_, rows, write_id=write_id, meta=meta, sharded=sharded, **kw
+        )
 
     def a_first(wid):
         if wid == b and not ran:
@@ -1632,7 +1648,7 @@ def test_rr1_m3_disjoint_read_modify_writers_of_one_shard_need_no_guard(
 def test_rr1_m4_an_overwrite_starts_a_partly_covered_chunk_from_fill(
     spark_delta, drop, tmp_path, no_hooks
 ):
-    """Ruling (b): an overwrite replaces the variable, so the cells of a chunk it covers
+    """An overwrite replaces the variable, so the cells of a chunk it covers
     only in part read as fill, not as the base, and nothing is read."""
     table, _, _ = _create(spark_delta, drop, tmp_path)
     wid = uuid.uuid4().hex

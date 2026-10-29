@@ -1,4 +1,4 @@
-"""Task 3 tests: rst_setcrs / rst_transformcrs + tile.crs population in readers.
+"""Tests for rst_setcrs / rst_transformcrs + tile.crs population in readers.
 
 Tests:
 - rst_setcrs(tile, "ESRI:54008") -> CRS relabeled; pixels unchanged; rst_crs reads back.

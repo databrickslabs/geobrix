@@ -1,6 +1,6 @@
 """CRS-string handling for non-EPSG CRS (ESRI:54008, WKT-stored) through the pyrx pipeline.
 
-Task 4 TDD tests — cover the 6 bug sites:
+TDD tests — cover the 6 bug sites:
   1. agg._pick_ref_crs: deterministic for all-non-EPSG groups
   2. warp.reproject_to_srid: identity check uses CRS-object comparison
   3. functions._transform_bytes: same CRS-object identity check (via reproject_to_srid path)

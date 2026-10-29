@@ -1,7 +1,7 @@
 """Light-tier gbx_<grid>_cellfill grouped aggregator tests.
 
 Mirrors heavy CellFillTest assertions (same inputs/expected values) so
-cross-tier parity (Task 11) is satisfiable by construction.
+cross-tier parity is satisfiable by construction.
 
 Pure-Python tests drive ``_cellfill.fill`` directly (no Spark).
 SQL tests drive the registered ``gbx_<grid>_cellfill`` pandas_udf and decode

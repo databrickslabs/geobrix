@@ -82,7 +82,7 @@ def _write_regular_grid_two(path):
             v[:] = np.arange(12, dtype="float32").reshape(3, 4)
 
 
-# --- raster mode (Task 3) ---------------------------------------------------
+# --- raster mode ---------------------------------------------------
 
 
 def test_raster_schema_matches_tile_schema():
@@ -139,7 +139,7 @@ def test_raster_mode_skips_curvilinear_variable(spark, tmp_path):
     assert df.count() == 0
 
 
-# --- vector mode (Task 4) ---------------------------------------------------
+# --- vector mode ---------------------------------------------------
 
 
 def test_vector_schema_columns(tmp_path):
@@ -204,6 +204,115 @@ def test_vector_read_dsg_points(spark, tmp_path):
     assert rows[1]["qa_value"] == 1  # ch4==1 -> qa 1
 
 
+def test_vector_reader_types_a_time_a_date_and_a_flag_as_their_cf_attributes_say(
+    tmp_path,
+):
+    """A CF time variable reads as a timestamp (UTC), a whole-day count in days as a date, a variable that
+    flags 0 / 1 as ``false true`` as a boolean, and a NULL stays NULL: not epoch nanoseconds as
+    text and a float, which is what the decoded values would give. An int8 with no flag
+    attributes is still an integer."""
+    import datetime
+
+    from databricks.labs.gbx.ds._netcdf_vector import NetcdfVectorReader
+
+    f = tmp_path / "cf.nc"
+    with Dataset(str(f), "w") as ds:
+        ds.createDimension("obs", 2)
+        for name, v in (("latitude", [50.0, 51.0]), ("longitude", [10.0, 11.0])):
+            var = ds.createVariable(name, "f8", ("obs",))
+            var.standard_name = name
+            var[:] = v
+        seen = ds.createVariable("seen", "f8", ("obs",), fill_value=-1e30)
+        seen.units, seen.calendar = (
+            "seconds since 1970-01-01 00:00:00",
+            "proleptic_gregorian",
+        )
+        seen[:] = np.ma.masked_array([1772368215.25, 0.0], mask=[False, True])
+        day = ds.createVariable("day", "i4", ("obs",), fill_value=-9999)
+        day.units, day.calendar = (
+            "days since 1970-01-01 00:00:00",
+            "proleptic_gregorian",
+        )
+        day[:] = np.ma.masked_array([20513, 0], mask=[False, True])
+        # a day count that is not whole days, or whose base is not midnight, has a time of day
+        half = ds.createVariable("half", "f8", ("obs",), fill_value=-1e30)
+        half.units, half.calendar = ("days since 2020-01-01", "proleptic_gregorian")
+        half[:] = np.ma.masked_array([0.5, 0.0], mask=[False, True])
+        noon = ds.createVariable("noon", "i4", ("obs",))
+        noon.units, noon.calendar = (
+            "days since 2000-01-01 12:00:00",
+            "proleptic_gregorian",
+        )
+        noon[:] = [0, 1]
+        scaled = ds.createVariable("scaled", "i2", ("obs",))
+        scaled.units, scaled.calendar = ("days since 2020-01-01", "proleptic_gregorian")
+        scaled.scale_factor = 0.5
+        scaled[:] = [0.5, 1.0]  # packed as the integers 1 and 2
+        ok = ds.createVariable("ok", "i1", ("obs",), fill_value=-127)
+        ok.flag_values, ok.flag_meanings = np.array([0, 1], dtype="i1"), "false true"
+        ok[:] = np.ma.masked_array([1, 0], mask=[False, True])
+        ds.createVariable("qa", "i1", ("obs",))[:] = [3, 4]
+        # a flag_values that is not a numeric list (text, or a NaN) is a malformed attribute: the
+        # variable stays the number it is, and the read does not fail on it
+        for name, values in (
+            ("flag_text", "0 1"),
+            ("flag_nan", np.array([0.0, np.nan])),
+        ):
+            bad = ds.createVariable(name, "i1", ("obs",))
+            bad.flag_values, bad.flag_meanings = values, "false true"
+            bad[:] = [0, 1]
+
+    reader = NetcdfVectorReader({"path": str(f)})
+    types = {fld.name: fld.dataType.simpleString() for fld in reader.schema().fields}
+    assert [
+        types[c]
+        for c in (
+            "seen",
+            "day",
+            "half",
+            "noon",
+            "scaled",
+            "ok",
+            "qa",
+            "flag_text",
+            "flag_nan",
+        )
+    ] == [
+        "timestamp",
+        "date",
+        "timestamp",
+        "timestamp",
+        "timestamp",
+        "boolean",
+        "int",
+        "int",
+        "int",
+    ]
+    (part,) = reader.partitions()
+    names = [fld.name for fld in reader.schema().fields]
+    rows = [dict(zip(names, r)) for r in reader.read(part)]
+    utc = datetime.timezone.utc
+    assert [r["seen"] for r in rows] == [
+        datetime.datetime(2026, 3, 1, 12, 30, 15, 250000, tzinfo=utc),
+        None,
+    ]
+    assert [r["day"] for r in rows] == [datetime.date(2026, 3, 1), None]
+    assert [r["half"] for r in rows] == [
+        datetime.datetime(2020, 1, 1, 12, tzinfo=utc),
+        None,
+    ]
+    assert [r["noon"] for r in rows] == [
+        datetime.datetime(2000, 1, 1, 12, tzinfo=utc),
+        datetime.datetime(2000, 1, 2, 12, tzinfo=utc),
+    ]
+    assert [r["scaled"] for r in rows] == [
+        datetime.datetime(2020, 1, 1, 12, tzinfo=utc),
+        datetime.datetime(2020, 1, 2, tzinfo=utc),
+    ]
+    assert [r["ok"] for r in rows] == [True, None]
+    assert [r["qa"] for r in rows] == [3, 4]
+
+
 def test_vector_read_curvilinear_to_points(spark, tmp_path):
     f = tmp_path / "curv.nc"
     _write_curvilinear(str(f))
@@ -228,7 +337,7 @@ def test_vector_bare_load_returns_all_dsg_variables(spark, tmp_path):
     assert df.count() == 5
 
 
-# --- registration (Task 5) --------------------------------------------------
+# --- registration --------------------------------------------------
 
 
 def test_register_exposes_netcdf_gbx(spark, tmp_path):

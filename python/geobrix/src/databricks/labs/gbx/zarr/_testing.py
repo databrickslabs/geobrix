@@ -1,6 +1,8 @@
-"""Helpers shared by the Zarr tests, the doc tests and the bench harness.
+"""Helpers shared by the Zarr tests, the doc tests, the bench harness and the sample cube.
 
-Not public API. ``make_era5_like`` writes a small synthetic stand-in for an ERA5
+Not public API. It ships in the wheel because ``sample/zarr_era5.py`` (the bundle's ERA5-like
+Zarr cube) builds on ``era5_like_dataset`` and ``make_era5_like``; keep their keywords.
+``make_era5_like`` writes a small synthetic stand-in for an ERA5
 reanalysis cube (hourly 2 m temperature and 10 m wind on a regular 2.5 degree grid)
 in any of the three layouts GeoBrix has to handle: Zarr v3 with sharding, Zarr v3
 without it, and Zarr v2. ``plain_store_rows`` reads such a store back as manifest rows
@@ -25,46 +27,72 @@ NOISE_SEED = 7
 
 TIME_UNITS = "hours since 1900-01-01"
 
+# The fields of the cube in the order their noise is drawn, with the standard deviation of
+# that noise and the attributes each variable carries.
+_FIELDS = ("t2m", "u10", "v10", "msl")
+_NOISE_STD = {"t2m": 0.5, "u10": 0.8, "v10": 0.8, "msl": 50.0}
+_ATTRS = {
+    "t2m": {"units": "K", "long_name": "2 metre temperature"},
+    "u10": {"units": "m s-1", "long_name": "10 metre U wind component"},
+    "v10": {"units": "m s-1", "long_name": "10 metre V wind component"},
+    "msl": {"units": "Pa", "long_name": "Mean sea level pressure"},
+}
 
-def era5_like_dataset(latitude=None):
-    """The in-memory ERA5-like ``xarray.Dataset`` (float32 ``t2m`` and ``u10``).
+
+def era5_like_dataset(
+    latitude=None, *, hours=TIME_STEPS, step=2.5, variables=("t2m", "u10"), noise=1.0
+):
+    """The in-memory ERA5-like ``xarray.Dataset`` (float32, default ``t2m`` and ``u10``).
 
     The fields are smooth in space and time plus seeded noise (seed 7), so two calls
     return identical arrays. ``time`` is a datetime64 coordinate; ``make_era5_like``
-    encodes it to CF int64 hours. ``latitude`` replaces the regular 2.5 degree latitudes
-    (73 values) with the given ones, for an irregular axis such as a Gaussian grid.
+    encodes it to CF int64 hours. ``latitude`` replaces the regular latitudes with the
+    given ones, for an irregular axis such as a Gaussian grid; it needs one value per
+    latitude row.
+
+    The defaults are the test cube: 48 hours on a 2.5 degree grid (73 x 144), ``t2m`` and
+    ``u10``. ``hours`` and ``step`` (degrees) resize it, ``variables`` picks from
+    ``t2m``, ``u10``, ``v10`` and ``msl`` (kept in that order), and ``noise`` scales the
+    seeded noise (0 for none). The noise of each variable is drawn in that fixed order
+    whatever ``variables`` holds, so a variable has the same noise in every call.
     """
     import numpy as np
     import pandas as pd
     import xarray as xr
 
-    time = pd.date_range("2023-01-01", periods=TIME_STEPS, freq="h")
-    lat = np.linspace(90.0, -90.0, LATITUDES)
+    unknown = set(variables) - set(_FIELDS)
+    if unknown:
+        raise ValueError(f"unknown variables {sorted(unknown)}; pick from {_FIELDS}")
+    n_lat, n_lon = round(180 / step) + 1, round(360 / step)
+    shape = (hours, n_lat, n_lon)
+    time = pd.date_range("2023-01-01", periods=hours, freq="h")
+    lat = np.linspace(90.0, -90.0, n_lat)
     if latitude is not None:
         lat = np.asarray(latitude, dtype="float64")
-        if lat.shape != (LATITUDES,):
-            raise ValueError(f"latitude needs {LATITUDES} values, got {lat.shape}")
-    lon = np.arange(LONGITUDES) * 2.5
+        if lat.shape != (n_lat,):
+            raise ValueError(f"latitude needs {n_lat} values, got {lat.shape}")
+    lon = np.arange(n_lon) * step
     rng = np.random.default_rng(NOISE_SEED)
 
     la = np.deg2rad(lat)[None, :, None]
     lo = np.deg2rad(lon)[None, None, :]
-    hour = np.arange(TIME_STEPS)[:, None, None]
-    t2m = 288.0 + 15.0 * np.cos(la) + 4.0 * np.sin(2 * np.pi * hour / 24 + lo)
-    u10 = 5.0 * np.sin(2 * la) * np.cos(lo + 2 * np.pi * hour / 48)
-    t2m = (t2m + rng.normal(0.0, 0.5, SHAPE)).astype("float32")
-    u10 = (u10 + rng.normal(0.0, 0.8, SHAPE)).astype("float32")
-
+    hour = np.arange(hours)[:, None, None]
+    base = {
+        "t2m": 288.0 + 15.0 * np.cos(la) + 4.0 * np.sin(2 * np.pi * hour / 24 + lo),
+        "u10": 5.0 * np.sin(2 * la) * np.cos(lo + 2 * np.pi * hour / 48),
+        "v10": 4.0 * np.cos(2 * la) * np.sin(lo - 2 * np.pi * hour / 48),
+        "msl": 101325.0
+        + 1500.0 * np.cos(3 * la) * np.cos(2 * lo + 2 * np.pi * hour / 48),
+    }
     dims = ("time", "latitude", "longitude")
+    data = {}
+    for name in _FIELDS:
+        spread = _NOISE_STD[name] * noise
+        noisy = base[name] + rng.normal(0.0, spread, shape)
+        if name in variables:
+            data[name] = (dims, noisy.astype("float32"), dict(_ATTRS[name]))
     return xr.Dataset(
-        {
-            "t2m": (dims, t2m, {"units": "K", "long_name": "2 metre temperature"}),
-            "u10": (
-                dims,
-                u10,
-                {"units": "m s-1", "long_name": "10 metre U wind component"},
-            ),
-        },
+        data,
         coords={
             "time": ("time", time, {"long_name": "time"}),
             "latitude": (
@@ -82,11 +110,19 @@ def era5_like_dataset(latitude=None):
 
 
 def make_era5_like(
-    path, *, zarr_format: int = 3, sharded: bool | None = None, latitude=None
+    path,
+    *,
+    zarr_format: int = 3,
+    sharded: bool | None = None,
+    latitude=None,
+    dataset=None,
+    chunks=None,
+    shards=None,
+    compressor=None,
 ) -> Path:
     """Write the ERA5-like cube to ``path`` as a Zarr store and return the path.
 
-    Layouts (``t2m`` and ``u10``; chunks always ``(12, 37, 72)``):
+    Layouts (every data variable; chunks ``(12, 37, 72)`` unless ``chunks`` says otherwise):
 
     - ``zarr_format=3, sharded=True``: shards ``(24, 74, 144)``, zstd.
     - ``zarr_format=3, sharded=False``: one object per chunk, zstd.
@@ -100,6 +136,12 @@ def make_era5_like(
     ``time`` is CF-encoded int64 ``hours since 1900-01-01`` (standard calendar);
     ``latitude`` and ``longitude`` carry ``degrees_north`` / ``degrees_east`` units.
     Metadata is not consolidated. ``latitude`` is passed to ``era5_like_dataset``.
+
+    ``dataset`` writes that ``xarray.Dataset`` (dims ``time``, ``latitude``, ``longitude``)
+    in place of the default cube, and then ``latitude`` must stay unset. ``chunks`` and
+    ``shards`` replace the defaults above (shards need whole multiples of the chunks), and
+    ``compressor`` replaces the codec: a ``zarr.codecs`` codec for v3, a ``numcodecs``
+    codec for v2.
     """
     if zarr_format not in (2, 3):
         raise ValueError(f"zarr_format must be 2 or 3, got {zarr_format!r}")
@@ -107,28 +149,35 @@ def make_era5_like(
         sharded = zarr_format == 3
     if sharded and zarr_format != 3:
         raise ValueError("Zarr v2 has no sharding; use zarr_format=3 with sharded=True")
+    if dataset is not None and latitude is not None:
+        raise ValueError("latitude belongs to the default cube; pass it in the dataset")
 
     import numcodecs
     from zarr.codecs import ZstdCodec
 
+    chunks = INNER_CHUNKS if chunks is None else tuple(chunks)
     if zarr_format == 3:
-        var_enc = {"chunks": INNER_CHUNKS, "compressors": (ZstdCodec(level=3),)}
+        codec = ZstdCodec(level=3) if compressor is None else compressor
+        var_enc = {"chunks": chunks, "compressors": (codec,)}
         if sharded:
-            var_enc["shards"] = SHARDS
+            var_enc["shards"] = SHARDS if shards is None else tuple(shards)
     else:
+        codec = numcodecs.Blosc(cname="lz4") if compressor is None else compressor
         var_enc = {
-            "chunks": INNER_CHUNKS,
-            "compressors": (numcodecs.Blosc(cname="lz4"),),
+            "chunks": chunks,
+            "compressors": (codec,),
             "chunk_key_encoding": {"name": "v2", "separator": "."},
         }
-    encoding = {name: dict(var_enc) for name in ("t2m", "u10")}
+    if dataset is None:
+        dataset = era5_like_dataset(latitude)
+    encoding = {name: dict(var_enc) for name in dataset.data_vars}
     encoding["time"] = {"units": TIME_UNITS, "calendar": "standard", "dtype": "int64"}
     # CF: coordinate variables carry no _FillValue.
     encoding["latitude"] = {"_FillValue": None}
     encoding["longitude"] = {"_FillValue": None}
 
     path = Path(path)
-    era5_like_dataset(latitude).to_zarr(
+    dataset.to_zarr(
         str(path),
         mode="w",
         zarr_format=zarr_format,

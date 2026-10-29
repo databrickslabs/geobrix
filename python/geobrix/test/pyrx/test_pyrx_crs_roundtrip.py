@@ -1,4 +1,4 @@
-"""Task 4 (SP2-CRS): pyrx core CRS round-trip regressions — srid(), crs_equal, authority_srid_of.
+"""pyrx core CRS round-trip regressions — srid(), crs_equal, authority_srid_of.
 
 These tests exercise PRODUCTION CODE PATHS so each would FAIL if the corresponding
 production edit were reverted:

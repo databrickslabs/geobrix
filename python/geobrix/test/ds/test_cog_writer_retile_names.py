@@ -9,6 +9,7 @@ import glob
 import os
 
 import numpy as np
+import pytest
 import rasterio
 from rasterio.transform import from_origin
 
@@ -105,32 +106,46 @@ def test_separatebands_write_to_distinct_files(spark, tmp_path):
     assert sorted(values) == [40, 80, 120]
 
 
-def test_retiled_bands_write_to_distinct_files(spark, tmp_path):
-    """Two bands with identical pixels, each retiled: the pieces differ only by their band
-    marker, which the retile keeps, so every piece still gets its own file."""
+@pytest.mark.parametrize(
+    "cut, side, expected",
+    [
+        ("gbx_rst_retile(tile, 128, 128)", 256, 8),
+        ("gbx_rst_tooverlappingtiles(tile, 128, 128, 0)", 256, 8),
+        # maketiles splits only a band over its budget of whole megabytes: 1536 x 1536
+        # incompressible bytes are 2.4 MB, so each band is cut in 4.
+        ("gbx_rst_maketiles(tile, 1)", 1536, 8),
+    ],
+    ids=["retile", "tooverlappingtiles", "maketiles"],
+)
+def test_retiled_bands_write_to_distinct_files(spark, tmp_path, cut, side, expected):
+    """Two bands with identical pixels, each cut: the pieces differ only by their band
+    marker, which every cut keeps, so every piece still gets its own file."""
     src = tmp_path / "in" / "scene.tif"
     src.parent.mkdir()
     with rasterio.open(
         str(src),
         "w",
         driver="GTiff",
-        width=256,
-        height=256,
+        width=side,
+        height=side,
         count=2,
         dtype="uint8",
         crs="EPSG:4326",
         transform=from_origin(0, 60, 0.01, 0.01),
     ) as ds:
-        ds.write(np.full((2, 256, 256), 40, dtype="uint8"))
+        plane = np.random.default_rng(7).integers(0, 256, (side, side), dtype="uint8")
+        ds.write(np.stack([plane, plane]))
 
     files, tiles = _write_chain(
         spark,
         src,
         tmp_path / "out",
-        ["gbx_rst_separatebands(tile)", "gbx_rst_retile(tile, 128, 128)"],
+        ["gbx_rst_separatebands(tile)", cut],
     )
 
-    assert tiles == 8 and len(files) == 8, f"{tiles} tiles wrote {len(files)} files"
+    assert (
+        tiles == expected and len(files) == expected
+    ), f"{tiles} tiles wrote {len(files)} files"
 
 
 def test_materialized_read_keeps_source_name(spark, tmp_path):

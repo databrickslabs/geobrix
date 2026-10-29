@@ -152,6 +152,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# One spelling of the target for every comparison below: a "." or "./" segment names the same
+# directory (`--path .` is the whole suite, `--path ./readers` is readers/), and pytest collects it
+# alike, so the api/ exclusion and the Zarr gate must not read them as other paths.
+TEST_PATH="$(printf '%s' "$TEST_PATH" | sed -E 's#/(\./)+#/#g; s#/\.$#/#')"
+
 # When running the default full suite (entire docs/tests/python/), exclude api/
 # so gbx:test:python-docs and gbx:test:sql-docs stay isolated. Use --suite api to run SQL/API tests.
 SKIP_SQL_TESTS=false
@@ -180,6 +185,14 @@ if ! docker exec "$GBX_DEV_CONTAINER" test -d /Volumes 2>/dev/null; then
     echo ""
     echo "Then run this command again so tests can run."
     exit 1
+fi
+
+# The Zarr doc tests (formats/, plus the Zarr examples of readers/, writers/ and api/) keep a store's
+# manifest in a Delta table: they need the zarr extra and the delta-spark jars (fetched and sha256-
+# checked, a no-op when they are there), as every command that runs a Zarr test arranges
+# (ensure_zarr_test_env in common.sh). Only a target that covers a Zarr doc test pays for it.
+if zarr_doc_tests_selected "$TEST_PATH" "$BASE"; then
+    ensure_zarr_test_env "the Zarr doc tests"
 fi
 
 echo -e "${CYAN}🎯 Test path: ${YELLOW}$TEST_PATH${NC}"

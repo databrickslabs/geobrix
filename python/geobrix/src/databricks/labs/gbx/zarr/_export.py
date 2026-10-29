@@ -25,7 +25,7 @@ sharded array must hold each shard as one region (``gbx_zarr_optimize`` folds th
 pins the version, but vacuum can delete the pack files it points at: tag the version
 (``gbx_zarr_tag``) to keep them. The reference is JSON only (Parquet references do not
 support Zarr v3, measured), at about 100 bytes per object: a million shards make a file of
-about 100 MB.
+about 100 MB. A reader needs fsspec 2024.12.0 or later (see ``gbx_zarr_export``).
 
 **publish** is ``gbx_zarr_sync.publish``.
 """
@@ -55,6 +55,7 @@ from databricks.labs.gbx.zarr._access import (
     _within,
     resolve_access,
 )
+from databricks.labs.gbx.zarr._filemode import require_geobrix_files
 from databricks.labs.gbx.zarr._maint import _STREAM_WINDOW, _require_files, _stream
 from databricks.labs.gbx.zarr._meta import xarray_fill_form
 from databricks.labs.gbx.zarr._read import (
@@ -133,6 +134,36 @@ def _check_arguments(source, to, method, version_as_of, access) -> None:
                 f".json, got {to!r}; Parquet references do not support Zarr v3. "
                 "Fix: pass a path ending in .json."
             )
+
+
+# Paths every node of a cluster mounts: a Unity Catalog Volume, and DBFS through its mount.
+_SHARED_ROOTS = ("/Volumes/", "/dbfs/")
+
+
+def _single_node(spark) -> bool:
+    """Whether every task of ``spark`` runs on this machine: a ``local[...]`` master (a test,
+    a single-node cluster). A session that will not say counts as a cluster."""
+    try:
+        return str(spark.conf.get("spark.master", "")).startswith("local")
+    except Exception:
+        return False
+
+
+def _check_shared_target(spark, path: str, to: str) -> None:
+    """Refuse a copy ``to`` that only the machine it names can see, before any task runs.
+
+    The tasks write the objects, so on a cluster a driver-local directory would receive
+    some of them on each executor (where the driver cannot find them) and the copy would
+    fail after the work was done, leaving the strays behind."""
+    shared = os.path.normpath(os.path.abspath(path)).startswith(_SHARED_ROOTS)
+    if shared or _single_node(spark):
+        return
+    raise ValueError(
+        f"{to} is not a path every node of the cluster sees, and the copy is written by "
+        "the tasks: the objects would land on the executors' own disks. "
+        "Fix: export to a /Volumes path, for example "
+        "/Volumes/<catalog>/<schema>/<volume>/<dir>."
+    )
 
 
 def _check_copy_target(path: str, to: str) -> None:
@@ -598,7 +629,9 @@ def gbx_zarr_export(
 
     ``method="copy"`` writes a plain Zarr store (the store's own format, canonical keys,
     consolidated metadata) into the directory ``to``, which must not exist or be empty
-    (``ValueError``). Any Zarr tool opens it. Shards that are already standard shards are
+    (``ValueError``). The cluster's tasks write the objects, so ``to`` must be a path every
+    node sees: a ``/Volumes`` path (``ValueError`` before any task runs for a path local to
+    the driver, unless the session is single-node). Any Zarr tool opens it. Shards that are already standard shards are
     copied as bytes; chunk rows are assembled into shards without decoding; deleted chunks
     and shards are left out, so readers see the fill value. Float ``_FillValue`` attributes
     of Zarr v3 arrays are written in the form xarray reads. If the copy fails nothing is
@@ -609,6 +642,12 @@ def gbx_zarr_export(
     length]`` into the store's own files, so nothing is copied; open it with fsspec's
     ``reference`` file system (``xarray.open_zarr("reference://", storage_options={"fo":
     to})``). It is JSON only, about 100 bytes per object (a million shards: about 100 MB).
+    **The reading compute needs fsspec 2024.12.0 or later.** Databricks runtimes preinstall
+    2023.5.0, which cannot open a reference: it fails with ``ReferenceNotReachable``
+    ("'LocalFileSystem' object has no attribute '_cat_file'"). Upgrade fsspec where the
+    reference is read (``%pip install "fsspec>=2024.12.0"``); GeoBrix does not pin it, since
+    the runtime shares fsspec with s3fs, gcsfs and adlfs. 2024.10.0 and older fail, 2024.12.0
+    and newer open it (measured with zarr 3.4 and xarray 2026.9, local paths).
     Every shard must be one region: after chunk rows were written over it, run
     ``gbx_zarr_optimize`` first (``ZarrUnsupported`` otherwise). The paths are the bare
     ``/Volumes`` paths for ``access="auto"`` and ``"fuse"``, so a reference reads the same on
@@ -636,16 +675,12 @@ def gbx_zarr_export(
         return publish(spark, source)
     path = to_local_path(to)
     if method == "copy":
+        _check_shared_target(spark, path, to)
         _check_copy_target(path, to)
     else:
         _check_reference_target(path, to)
-    props = M.read_props(spark, source)
-    if props.file_mode != "fuse":
-        raise ZarrUnsupported(
-            f"{source} keeps its files in file_mode {props.file_mode!r}, which GeoBrix "
-            "does not read yet",
-            fix="export a store with file_mode 'fuse'",
-        )
+    props = M.read_props(spark, source, need_file=True)
+    require_geobrix_files(source, props.file_mode, "export")
     src = _open_table(spark, source, version_as_of, None)
     reach = FUSE
     if method == "reference" and access == "direct":

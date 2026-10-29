@@ -1,11 +1,11 @@
 """Group 1 FILE/FileRef extension tests for remaining light-tier scalar accessors.
 
 Covers:
-  - Task 1: pixel accessors (rst_avg, rst_min, rst_max, rst_median, rst_pixelcount)
-  - Task 2: header accessors (rst_type, rst_getnodata)
-  - Task 3: rst_histogram and coord fns (rst_rastertoworldcoordx/y, rst_worldtorastercoordx/y)
+  - Pixel accessors (rst_avg, rst_min, rst_max, rst_median, rst_pixelcount)
+  - Header accessors (rst_type, rst_getnodata)
+  - rst_histogram and coord fns (rst_rastertoworldcoordx/y, rst_worldtorastercoordx/y)
 
-Each task verifies:
+Each group verifies:
   (a) the _open / open_header path already accepts file_ref — FILE branch == fallback
   (b) the _uf_* singleton exists after implementation
 """
@@ -35,7 +35,7 @@ class _StubFileRef:
 
 
 # ---------------------------------------------------------------------------
-# Task 1 — pixel accessors
+# Pixel accessors
 # ---------------------------------------------------------------------------
 
 
@@ -91,7 +91,7 @@ def test_rst_avg_public_binding_uses_file_ref_arg(spark):
 
 
 # ---------------------------------------------------------------------------
-# Task 2 — header accessors
+# Header accessors
 # ---------------------------------------------------------------------------
 
 
@@ -135,7 +135,7 @@ def test_rst_type_binding_uses_uf_type():
 
 
 # ---------------------------------------------------------------------------
-# Task 3 — rst_histogram and coord fns
+# rst_histogram and coord fns
 # ---------------------------------------------------------------------------
 
 
@@ -169,7 +169,7 @@ def test_rst_histogram_binding_uses_uf_histogram_udf():
 # Group 2 — Single-input tile-producing ops
 # ---------------------------------------------------------------------------
 
-# Task 5 — rst_initnodata
+# rst_initnodata
 
 
 def test_rst_initnodata_file_ref_equals_fallback(gtiff_bytes):
@@ -197,7 +197,7 @@ def test_rst_initnodata_file_ref_equals_fallback(gtiff_bytes):
             assert exp_ds.nodata == got_ds.nodata
 
 
-# Task 6 — rst_clip (C1-guard exercise)
+# rst_clip (C1-guard exercise)
 
 
 def test_rst_clip_binding_uses_uf_clip():
@@ -262,7 +262,7 @@ def test_rst_clip_file_ref_equals_fallback(gtiff_bytes):
         os.remove(tmp)
 
 
-# Task 7 — remaining tile-producing ops
+# Remaining tile-producing ops
 
 
 def test_rst_resample_file_ref_equals_fallback(gtiff_bytes):
@@ -517,7 +517,7 @@ def test_group2_singletons_exist():
 # Group 3 — Multi-input / array / aggregators
 # ---------------------------------------------------------------------------
 
-# Task 9 — rst_frombands (ARRAY input, FILE-ARRAY injection)
+# rst_frombands (ARRAY input, FILE-ARRAY injection)
 
 
 def test_rst_frombands_binding_uses_uf_frombands():
@@ -569,7 +569,7 @@ def test_rst_frombands_file_ref_equals_fallback(gtiff_bytes):
         os.remove(tmp2)
 
 
-# Task 10 — rst_merge and rst_combineavg
+# rst_merge and rst_combineavg
 
 
 def test_rst_merge_binding_uses_uf_merge():
@@ -609,7 +609,7 @@ def test_rst_merge_file_ref_equals_fallback(gtiff_bytes):
         os.remove(tmp)
 
 
-# Task 11 — rst_mapalgebra (FILE-array + expression arg)
+# rst_mapalgebra (FILE-array + expression arg)
 
 
 def test_rst_mapalgebra_binding_uses_uf_mapalgebra():
@@ -652,8 +652,8 @@ def test_rst_mapalgebra_file_ref_equals_fallback(gtiff_bytes):
         os.remove(tmp)
 
 
-# Task 12 — grouped aggregators (FILE-aware frombands)
-# _merge_agg_file_udf and _combineavg_agg_file_udf were removed in Task 8:
+# Grouped aggregators (FILE-aware frombands)
+# _merge_agg_file_udf and _combineavg_agg_file_udf were removed:
 # aggregators now always open tiles via FUSE (tile.path as EXTERNAL), avoiding
 # nondeterministic try_to_file in .agg() (Spark 4 restriction).
 

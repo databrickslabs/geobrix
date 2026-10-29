@@ -1,7 +1,6 @@
 """Tests for exif_gbx DataSource — metadata mode (header-only, one row per file).
 
-Task 2 of the v0.5.2 photogrammetry phase: EXIF/GPS telemetry extraction
-without decoding pixels.
+EXIF/GPS telemetry extraction without decoding pixels.
 """
 
 import inspect

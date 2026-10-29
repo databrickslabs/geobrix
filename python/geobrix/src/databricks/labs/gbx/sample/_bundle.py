@@ -133,6 +133,13 @@ def _path_exists_for_skip(path: Path | str) -> tuple[bool, Optional[float]]:
         raise
 
 
+def _already_here(label: str, size_mb: Optional[float]) -> str:
+    """The line a step prints for a file it leaves alone. A file that is present but whose size
+    cannot be read (a FUSE mount) is still present: it is skipped, the size left out."""
+    size = "" if size_mb is None else f" {size_mb:.1f} MB"
+    return f"⏭️  {label}:{size} (already exists)"
+
+
 def _copy_final_to_volumes(
     temp_file: Path,
     volumes_subpath: Path,
@@ -154,8 +161,8 @@ def _copy_final_to_volumes(
     """
     dest = Path(volumes_subpath)
     exists_skip, size_mb = _path_exists_for_skip(dest)
-    if exists_skip and size_mb is not None:
-        print(f"⏭️  {description}: {size_mb:.1f} MB (already exists)")
+    if exists_skip:
+        print(_already_here(description, size_mb))
         return dest
     # On cluster, /Volumes/... is FUSE-mounted; use pathlib + shutil (no SDK).
     _ensure_dir(dest.parent, volume_root=volume_root)
@@ -582,8 +589,8 @@ def run_essential_bundle(  # noqa: C901
     ) -> Optional[Path]:
         out = vol(f"{subfolder}/{filename}")
         exists_skip, size_mb = _path_exists_for_skip(out)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  Sentinel-2 {region_name}: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here(f"Sentinel-2 {region_name}", size_mb))
             return out
         if not pystac_client or not planetary_computer:
             raise RuntimeError(
@@ -640,8 +647,8 @@ def run_essential_bundle(  # noqa: C901
     try:
         dest = vol_dir_resolve("nyc/taxi-zones") / "nyc_taxi_zones.geojson"
         exists_skip, size_mb = _path_exists_for_skip(dest)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  NYC Taxi Zones: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here("NYC Taxi Zones", size_mb))
         else:
             print("⬇️  Downloading NYC Taxi Zones...")
             t = tmp_dir_resolve("nyc", "taxi-zones") / "nyc_taxi_zones.geojson"
@@ -663,8 +670,8 @@ def run_essential_bundle(  # noqa: C901
     try:
         dest = vol("nyc/boroughs/nyc_boroughs.geojson")
         exists_skip, size_mb = _path_exists_for_skip(dest)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  NYC Boroughs: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here("NYC Boroughs", size_mb))
         else:
             print("⬇️  Downloading NYC Boroughs...")
             t = tmp_path("nyc", "boroughs", "nyc_boroughs.geojson")
@@ -685,8 +692,8 @@ def run_essential_bundle(  # noqa: C901
     try:
         dest = vol("london/postcodes/london_postcodes.geojson")
         exists_skip, size_mb = _path_exists_for_skip(dest)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  London Postcodes: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here("London Postcodes", size_mb))
         else:
             print("⬇️  Downloading London Postcodes...")
             t = tmp_path("london", "postcodes", "london_postcodes.geojson")
@@ -723,8 +730,8 @@ def run_essential_bundle(  # noqa: C901
     try:
         dest = vol("nyc/elevation/srtm_n40w074.tif")
         exists_skip, size_mb = _path_exists_for_skip(dest)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  SRTM NYC: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here("SRTM NYC", size_mb))
         else:
             print("⬇️  Downloading SRTM NYC...")
             t_hgt = tmp_path("nyc", "elevation", "srtm_n40w074.hgt")
@@ -745,8 +752,8 @@ def run_essential_bundle(  # noqa: C901
     try:
         dest = vol("london/elevation/srtm_n51w001.tif")
         exists_skip, size_mb = _path_exists_for_skip(dest)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  SRTM London: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here("SRTM London", size_mb))
         else:
             print("⬇️  Downloading SRTM London...")
             t_hgt = tmp_path("london", "elevation", "srtm_n51w001.hgt")
@@ -838,8 +845,8 @@ def run_complete_bundle(  # noqa: C901
     try:
         dest = vol("nyc/neighborhoods/nyc_nta.geojson")
         exists_skip, size_mb = _path_exists_for_skip(dest)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  NYC Neighborhoods: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here("NYC Neighborhoods", size_mb))
         else:
             print("⬇️  Downloading NYC Neighborhoods...")
             t = tmp_path("nyc", "neighborhoods", "nyc_nta.geojson")
@@ -861,8 +868,8 @@ def run_complete_bundle(  # noqa: C901
     try:
         dest = vol("nyc/elevation/srtm_n40w073.tif")
         exists_skip, size_mb = _path_exists_for_skip(dest)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  SRTM NYC East: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here("SRTM NYC East", size_mb))
         else:
             print("⬇️  Downloading SRTM NYC East...")
             t_hgt = tmp_path("nyc", "elevation", "srtm_n40w073.hgt")
@@ -882,8 +889,8 @@ def run_complete_bundle(  # noqa: C901
     try:
         out_geojson = vol("london/boroughs/london_boroughs.geojson")
         exists_skip, size_mb = _path_exists_for_skip(out_geojson)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  London Boroughs: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here("London Boroughs", size_mb))
         else:
             print("⬇️  Downloading London Boroughs...")
             url = "https://data.london.gov.uk/download/statistical-gis-boundary-files-london/9ba8c833-6370-4b11-abdc-314aa020d5e0/statistical-gis-boundaries-london.zip"
@@ -955,8 +962,8 @@ def run_complete_bundle(  # noqa: C901
     try:
         parks_zip_dest = vol("nyc/parks/nyc_parks.shp.zip")
         exists_skip, size_mb = _path_exists_for_skip(parks_zip_dest)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  NYC Parks: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here("NYC Parks", size_mb))
         else:
             print("⬇️  Downloading NYC Parks...")
             url = "https://data.cityofnewyork.us/api/geospatial/enfh-gkve?method=export&format=Shapefile"
@@ -997,8 +1004,8 @@ def run_complete_bundle(  # noqa: C901
     try:
         subway_zip_dest = vol("nyc/subway/nyc_subway.shp.zip")
         exists_skip, size_mb = _path_exists_for_skip(subway_zip_dest)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  NYC Subway: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here("NYC Subway", size_mb))
         else:
             print("⬇️  Downloading NYC Subway...")
             url = "https://data.ny.gov/api/geospatial/i9wp-a4ja?method=export&format=Shapefile"
@@ -1036,8 +1043,8 @@ def run_complete_bundle(  # noqa: C901
     try:
         gpkg_dest = vol("nyc/geopackage/nyc_complete.gpkg")
         exists_skip, size_mb = _path_exists_for_skip(gpkg_dest)
-        if exists_skip and size_mb is not None:
-            print(f"⏭️  Multi-Layer GeoPackage: {size_mb:.1f} MB (already exists)")
+        if exists_skip:
+            print(_already_here("Multi-Layer GeoPackage", size_mb))
         else:
             print("⬇️  Building Multi-Layer GeoPackage...")
             import geopandas as gpd

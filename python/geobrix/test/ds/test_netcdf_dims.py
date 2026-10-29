@@ -554,6 +554,29 @@ def test_banddim_with_dimindex_pins_level(tmp_path):
         np.testing.assert_allclose(rds.read(3).mean(), 21.0, atol=1e-4)
 
 
+def test_dimindex_and_banddim_are_honored_through_spark_read(spark, tmp_path):
+    """Spark hands a reader its options case-insensitively (as lowercase keys); the
+    camel-case names dimIndex and bandDim were then never found and silently ignored."""
+    from databricks.labs.gbx.ds.register import register
+
+    p = str(tmp_path / "g.nc")
+    _write_4d_grid(p)
+    register(spark, only=["netcdf"])
+    rows = (
+        spark.read.format("netcdf_gbx")
+        .option("bandDim", "time")
+        .option("dimIndex", "level=1")
+        .load(p)
+        .collect()
+    )
+    assert len(rows) == 1
+    with MemoryFile(bytes(rows[0]["tile"]["raster"])) as mf, mf.open() as rds:
+        assert rds.count == 3  # bandDim: time stacked as bands
+        # dimIndex: level 1, so band k = t*10+1 (level 0 would read 0, 10, 20)
+        got = [float(rds.read(b).mean()) for b in (1, 2, 3)]
+    np.testing.assert_allclose(got, [1.0, 11.0, 21.0], atol=1e-4)
+
+
 def test_banddim_with_fanout_two_rows(tmp_path):
     """bandDim='time' + fanout='level' → 2 rows, each a 3-band tile."""
     p = str(tmp_path / "g.nc")

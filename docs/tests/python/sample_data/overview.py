@@ -14,13 +14,13 @@ elevation = spark.read.format("gdal").load(f"{sample_path}/nyc/elevation/srtm_n4
 
 # Spatial join and compute statistics
 borough_elevation = boroughs.join(elevation, "spatial_intersect") \\
-    .groupBy("boro_name") \\
+    .groupBy("boroname") \\
     .agg(rx.rst_avg("tile").alias("avg_elevation"))
 borough_elevation.show()"""
 
 GEOGRAPHIC_COHERENCE_NYC_ZONAL_output = """
 +----------+-----------------+
-|boro_name |avg_elevation    |
+|boroname  |avg_elevation    |
 +----------+-----------------+
 |Manhattan |45.2             |
 |Bronx     |38.1             |

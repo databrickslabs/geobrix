@@ -219,7 +219,7 @@ def test_copy_is_plain_zarr_readable_by_xarray_zarr_tensorstore(
 
     if kind == "managed":
         assert np.isnan(want["t2m"][12:24, 0:5, 0:6]).all()  # the tombstoned chunk
-        # a float _FillValue attribute is stored in the form xarray decodes (Isaac M11);
+        # a float _FillValue attribute is stored in the form xarray decodes;
         # the array's own fill_value is the spec's "NaN"
         assert group["t2m"].attrs["_FillValue"] == NAN_FILL
         assert np.isnan(group["t2m"].fill_value) and group["t2m"].dtype == np.float32
@@ -283,6 +283,49 @@ def test_copy_target_must_be_empty(spark_delta, drop, tmp_path, monkeypatch):
         assert "Fix:" in str(e.value)
 
 
+class _Reached(Exception):
+    """The export got past its argument checks (to the store read)."""
+
+
+@pytest.mark.parametrize(
+    "master, to, refused",
+    [
+        ("spark://10.0.0.4:7077", "/tmp/export/copy", True),
+        ("spark://10.0.0.4:7077", "file:/local_disk0/copy", True),
+        ("spark://10.0.0.4:7077", "/Volumes/../tmp/export/copy", True),  # not a Volume
+        ("spark://10.0.0.4:7077", "/Volumes/c/s/v/copy", False),
+        ("spark://10.0.0.4:7077", "dbfs:/Volumes/c/s/v/copy", False),
+        ("local[*, 4]", "/tmp/export/copy", False),  # one machine: every task sees it
+        (None, "/tmp/export/copy", True),  # a session that cannot tell its master
+    ],
+)
+def test_a_copy_target_must_be_where_every_node_sees_it(
+    monkeypatch, master, to, refused
+):
+    """The tasks write the objects, so on a cluster a driver-local ``to`` strands them on the
+    executors: refused before any task runs."""
+    import types
+
+    def get(key, default=None):
+        if master is None:
+            raise RuntimeError("CONFIG_NOT_AVAILABLE")
+        return master
+
+    spark = types.SimpleNamespace(conf=types.SimpleNamespace(get=get))
+
+    def reached(*a, **k):
+        raise _Reached()
+
+    monkeypatch.setattr(_export.M, "read_props", reached)
+    if refused:
+        with pytest.raises(ValueError, match="every node") as e:
+            gbx_zarr_export(spark, "gbx_zarr_export_t", to)
+        assert "Fix:" in str(e.value) and "/Volumes" in e.value.args[0]
+    else:
+        with pytest.raises(_Reached):
+            gbx_zarr_export(spark, "gbx_zarr_export_t", to)
+
+
 # --- reference --------------------------------------------------------------------------
 
 
@@ -341,7 +384,7 @@ def test_reference_requires_optimized_shards(spark_delta, drop, tmp_path):
             spark_delta, table, str(tmp_path / "again.json"), method="reference"
         )
 
-    # JSON only (Ruling Z9); access="direct" needs a Volume to name the cloud location of
+    # JSON only; access="direct" needs a Volume to name the cloud location of
     with pytest.raises(ValueError, match="JSON") as bad:
         gbx_zarr_export(
             spark_delta, table, str(tmp_path / "r.parquet"), method="reference"

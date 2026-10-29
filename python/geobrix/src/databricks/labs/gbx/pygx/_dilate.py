@@ -1,7 +1,10 @@
 """Grid-agnostic geometry dilation engine (frontier BFS) + covering classifier.
 
 Shared by every light-tier geom-aware kring/kloop (quadbin, custom, BNG-light, h3).
-See .superpowers/specs/2026-09-11-geom-aware-kring-kloop-design.md §4/§5.
+``classify`` partitions a geometry's candidate cells into the nine membership sets
+(P, S, H, each under the cover / centroid / core basis); ``mode_setup`` and
+``dilate`` then grow a shell ring by ring from the seed cells the mode and coverage
+choose, admitting only cells the mode allows.
 """
 
 from dataclasses import dataclass, field

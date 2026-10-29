@@ -1,6 +1,6 @@
 """Verify raster parity gate: decoded-pixel comparison vs byte-identical.
 
-Task 7 verification: after T6 (both tiers now ZSTD+predictor), the parity gate
+Both tiers now write ZSTD+predictor, so the parity gate
 must compare decoded pixels (not file bytes) because light auto-levels (L16 for small
 tiles) while heavy fixed-levels (L9). Same pixels, different bytes -> a byte-identical
 gate would FAIL even though tiles are semantically identical.

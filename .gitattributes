@@ -3,3 +3,6 @@
 # clones stay light; LFS pulls the bytes on demand. See
 # resources/static/README.md for how to rebuild it.
 resources/static/geobrix-gdal-platform-noble.tar.gz filter=lfs diff=lfs merge=lfs -text
+
+# Maven wrapper: a POSIX shell script, LF only (a CRLF checkout breaks the shebang).
+/mvnw text eol=lf

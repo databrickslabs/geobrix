@@ -63,10 +63,15 @@ import json
 import logging
 import os
 import shutil
-from typing import Dict, Iterator, Optional, Sequence, Tuple
+from typing import Dict, Iterator, Mapping, Optional, Sequence, Tuple
 
-from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
-from pyspark.sql.types import StringType, StructField, StructType
+from pyspark.sql.datasource import (
+    CaseInsensitiveDict,
+    DataSource,
+    DataSourceReader,
+    InputPartition,
+)
+from pyspark.sql.types import BinaryType, StringType, StructField, StructType
 
 from databricks.labs.gbx.ds import _encode, _listing
 from databricks.labs.gbx.pyrx import _serde
@@ -724,8 +729,9 @@ def _read_manifest_rows(manifest_path: str) -> list:
     ``window`` ([col_off, row_off, width, height]), ``width``, ``height``,
     ``bands``, ``dtype``, ``srid``.
 
-    Parquet: read via ``spark.table()`` / ``spark.read.parquet(...)`` on the
-    driver (Connect-safe); returns a list of ``pyspark.sql.Row`` objects.
+    Parquet (a file, or the directory Spark writes): read with pyarrow, with no Spark
+    session (``partitions()`` runs in a worker that has none); returns a list of dicts,
+    a ``window`` struct column being a dict (see :func:`_row_to_window`).
     """
     import os as _os
 
@@ -733,14 +739,9 @@ def _read_manifest_rows(manifest_path: str) -> list:
     if not _os.path.exists(local):
         raise FileNotFoundError(f"raster_gbx: manifest not found: {manifest_path!r}")
     if local.endswith(".parquet"):
-        from pyspark.sql import SparkSession
+        import pyarrow.parquet as pq
 
-        spark = SparkSession.getActiveSession()
-        if spark is None:
-            raise RuntimeError(
-                "raster_gbx: reading a Parquet manifest requires an active SparkSession."
-            )
-        return spark.read.parquet(local).collect()
+        return pq.read_table(local).to_pylist()
     # JSON (default)
     with open(local) as fh:
         return json.load(fh)
@@ -749,13 +750,21 @@ def _read_manifest_rows(manifest_path: str) -> list:
 def _row_to_window(w) -> Optional[Tuple[int, int, int, int]]:
     """Normalise a manifest row's ``window`` value to a 4-int tuple or None.
 
-    Accepts: None, a 4-element list/tuple [c, r, w, h], or a Spark Row /
-    namedtuple with fields ``col_off``, ``row_off``, ``width``, ``height``.
+    Accepts: None, a 4-element list/tuple [c, r, w, h], a mapping (an Arrow struct)
+    or a Spark Row / namedtuple, the last two with fields ``col_off``, ``row_off``,
+    ``width``, ``height``.
     """
     if w is None:
         return None
     if isinstance(w, (list, tuple)):
         return tuple(int(v) for v in w)  # type: ignore[return-value]
+    if isinstance(w, Mapping):
+        return (
+            int(w["col_off"]),
+            int(w["row_off"]),
+            int(w["width"]),
+            int(w["height"]),
+        )
     # Spark Row / namedtuple
     return (int(w.col_off), int(w.row_off), int(w.width), int(w.height))
 
@@ -788,7 +797,9 @@ def _partitions_from_tile_rows(
     """
     result: list = []
     for row in rows:
-        r: dict = row.asDict() if hasattr(row, "asDict") else dict(row)
+        # recursive: a nested ``window`` Row becomes a mapping, read by field name (a Row
+        # is a tuple, so as it stands its fields would be taken by position).
+        r: dict = row.asDict(recursive=True) if hasattr(row, "asDict") else dict(row)
         path = str(r.get("path") or "")
         if not path:
             raise ValueError(
@@ -941,6 +952,62 @@ def _read_gbx_member_tags(member_path: str) -> dict:
     return tags_out
 
 
+def _table_time_travel(options, *, has_tiles_table: bool):
+    """The ``versionAsOf`` / ``timestampAsOf`` options of a reader: ``(version, timestamp)``.
+
+    Both are ``None`` when unset (a blank value counts as unset). Only one may be set, and
+    only with ``tilesTable``: they pin the Delta version of the table the tiles are read
+    from, and a manifest or a directory walk has no version. The timestamp goes to Delta as
+    given; Delta rejects a malformed one, or one before the table's first commit.
+    """
+    # Spark hands a reader its options with lowercase keys; the helper that matches
+    # them case-insensitively lives with the netcdf reader (which imports this module).
+    from databricks.labs.gbx.ds.netcdf import _option
+
+    # None means unset; a programmatic int 0 is a real version, not a blank.
+    raw_version, timestamp = (
+        "" if value is None else str(value).strip()
+        for value in (
+            _option(options, "versionAsOf", None),
+            _option(options, "timestampAsOf", None),
+        )
+    )
+    if raw_version and timestamp:
+        raise ValueError(
+            "raster_gbx: 'versionAsOf' and 'timestampAsOf' are mutually exclusive; "
+            "supply at most one."
+        )
+    given = "versionAsOf" if raw_version else "timestampAsOf" if timestamp else None
+    if given and not has_tiles_table:
+        raise ValueError(
+            f"raster_gbx: '{given}' requires 'tilesTable'; it pins the version of the "
+            "table the tiles are read from, so it does not apply to 'manifest' or to a "
+            "directory walk."
+        )
+    version = None
+    if raw_version:
+        if not (raw_version.isascii() and raw_version.isdigit()):
+            raise ValueError(
+                f"raster_gbx: 'versionAsOf' must be a non-negative integer; got {raw_version!r}."
+            )
+        version = int(raw_version)
+    return version, (timestamp or None)
+
+
+def _read_tile_index(spark, table: str, version_as_of, timestamp_as_of):
+    """The tile-index table as a DataFrame, at the pinned Delta version if one is given.
+
+    Uses only ``spark.read`` and the session it is given, so it runs on a Spark Connect
+    client as well as on a classic session.
+    """
+    table_reader = spark.read
+    if version_as_of is not None:
+        table_reader = table_reader.option("versionAsOf", str(version_as_of))
+    elif timestamp_as_of is not None:
+        table_reader = table_reader.option("timestampAsOf", timestamp_as_of)
+    return table_reader.table(table)
+
+
 class RasterGbxReader(DataSourceReader):
     def __init__(self, options: Dict[str, str]):
         self.path = options.get("path")
@@ -948,7 +1015,7 @@ class RasterGbxReader(DataSourceReader):
             raise ValueError("raster_gbx requires a 'path' (e.g. .load(path)).")
         self.size_mib = int(options.get("sizeInMB", "-1"))
         self.filter_regex = options.get("filterRegex", ".*")
-        # Unified enumeration options (Task 4: session-free file_gbx core).
+        # Unified enumeration options (session-free file_gbx core).
         # These are parsed once in __init__ and consumed by _list_source_files().
         self.recursive = str(options.get("recursive", "true")).lower() == "true"
         self.include_hidden = (
@@ -998,15 +1065,20 @@ class RasterGbxReader(DataSourceReader):
         # from those sources instead of walking self.path.
         self.manifest = options.get("manifest")
         self.tiles_table = options.get("tilesTable")
-        # skipOrdering: when True, suppress the T8 sort-by-source-path at the end
+        # skipOrdering: when True, suppress the sort-by-source-path at the end
         # of partitions() so rows are returned in manifest/table/walk enumeration
-        # order.  Default False preserves today's always-on sort (B-ORDERHOME).
+        # order.  Default False preserves today's always-on sort.
         self.skip_ordering = str(options.get("skipOrdering", "false")).lower() == "true"
         if self.manifest and self.tiles_table:
             raise ValueError(
                 "raster_gbx: 'manifest' and 'tilesTable' are mutually exclusive; "
                 "supply at most one."
             )
+        # Delta time travel on the tilesTable: re-plan from the exact table version a
+        # pipeline used (as the Zarr reader's version_as_of / timestamp_as_of does).
+        self.version_as_of, self.timestamp_as_of = _table_time_travel(
+            options, has_tiles_table=bool(self.tiles_table)
+        )
 
     def _list_source_files(self) -> list:
         """Enumerate source files via the session-free file_gbx core.
@@ -1037,6 +1109,31 @@ class RasterGbxReader(DataSourceReader):
         files = [f for f in files if not f.lower().endswith(".vrt")]
         return files
 
+    def _plan_tile_rows(self, rows, budget_bytes: int) -> list:
+        """Partitions for pre-computed tile rows (a manifest or a tile index).
+
+        The one place those rows are decoded, for ``partitions()`` and for
+        :func:`read_tiles_table`.
+        """
+        parts = _partitions_from_tile_rows(
+            rows,
+            emit_virtual=self.emit_virtual,
+            budget_bytes=budget_bytes,
+            clip_polygons=self.clip_polygons,
+            clip_crs=self.clip_crs,
+            windows=self.windows,
+            tile_size=self.tile_size,
+            overlap_percent=self.overlap_percent,
+        )
+        # Layout convention: sort by source file path so tiles from the
+        # same file are adjacent. Maximises per-worker open/stage cache reuse
+        # when a worker processes consecutive partitions from the same source.
+        # None-safe: place None values at the end (deterministic ordering).
+        # skipOrdering=True bypasses this sort (opt-out for pre-ordered tables).
+        if self.skip_ordering:
+            return parts
+        return sorted(parts, key=lambda p: (p.file_path is None, p.file_path or ""))
+
     def partitions(self) -> Sequence[InputPartition]:
         resolved_budget = _resolved_budget(self.size_mib, self.strategy)
 
@@ -1049,28 +1146,21 @@ class RasterGbxReader(DataSourceReader):
 
                 spark = SparkSession.getActiveSession()
                 if spark is None:
+                    # The planner worker that runs partitions() for spark.read has no
+                    # session, so the table cannot be read here; read_tiles_table reads
+                    # it with the caller's session and plans the same tiles.
                     raise RuntimeError(
-                        "raster_gbx: 'tilesTable' requires an active SparkSession."
+                        "raster_gbx: 'tilesTable' cannot be read through spark.read: the "
+                        "read is planned in a worker that has no Spark session to open "
+                        "the table with. Fix: read the tile index with "
+                        "read_tiles_table(spark, table, options) from "
+                        "databricks.labs.gbx.ds.raster; it takes these same options "
+                        "(and format='gtiff_gbx' or 'cog_gbx' for those readers)."
                     )
-                tile_rows = spark.table(self.tiles_table).collect()
-            parts = _partitions_from_tile_rows(
-                tile_rows,
-                emit_virtual=self.emit_virtual,
-                budget_bytes=resolved_budget,
-                clip_polygons=self.clip_polygons,
-                clip_crs=self.clip_crs,
-                windows=self.windows,
-                tile_size=self.tile_size,
-                overlap_percent=self.overlap_percent,
-            )
-            # Layout convention (T8): sort by source file path so tiles from the
-            # same file are adjacent. Maximises per-worker open/stage cache reuse
-            # when a worker processes consecutive partitions from the same source.
-            # None-safe: place None values at the end (deterministic ordering).
-            # skipOrdering=True bypasses this sort (opt-out for pre-ordered tables).
-            if self.skip_ordering:
-                return parts
-            return sorted(parts, key=lambda p: (p.file_path is None, p.file_path or ""))
+                tile_rows = _read_tile_index(
+                    spark, self.tiles_table, self.version_as_of, self.timestamp_as_of
+                ).collect()
+            return self._plan_tile_rows(tile_rows, resolved_budget)
 
         # VRT expansion: when the path is a .vrt file, parse the VRT XML to
         # enumerate member paths instead of walking a directory.  Each member
@@ -1116,7 +1206,7 @@ class RasterGbxReader(DataSourceReader):
             )
 
         # Default path: walk self.path and plan partitions per file.
-        # Layout convention (T8): sort the final list by file_path so tiles
+        # Layout convention: sort the final list by file_path so tiles
         # from the same source are always adjacent, regardless of walk order.
         # Maximises per-worker rasterio open/stage cache reuse.
         # To control task parallelism or re-align after a join, use
@@ -1548,3 +1638,158 @@ class RasterGbxDataSource(DataSource):
             compress_level=_compress_level,
             predictor=_predictor,
         )
+
+
+# ---------------------------------------------------------------------------
+# read_tiles_table: read a tile index (tilesTable) with the caller's session
+# ---------------------------------------------------------------------------
+
+# Readers that take a tile index: the catch-all and the two that extend it.
+_TILE_INDEX_FORMATS = ("raster_gbx", "gtiff_gbx", "cog_gbx")
+
+# The columns of a tile index that _partitions_from_tile_rows reads; the rest of the
+# table (FILE columns included) is not sent through Arrow.
+_TILE_INDEX_COLUMNS = ("path", "window", "col_off", "row_off", "width", "height")
+
+# Most tasks read_tiles_table uses by default: more only adds shuffle and scheduling work.
+# The default is two tasks per index row up to this many. Tiles are assigned to tasks by a
+# hash of the tile, so several share a task while others get none; twice as many tasks as
+# rows leaves fewer tasks without a tile and fewer tiles to a task than one task per row.
+_DEFAULT_MAX_TASKS = 256
+
+# Tile-index rows decoded at a time: a path-only row cut into windows (tileSize,
+# sizeInMB) fans out, so this bounds the partitions held in memory at once.
+_PLAN_CHUNK_ROWS = 256
+
+# One row per reader partition: its source path and the pickled partition.
+_TILE_PLAN_SCHEMA = StructType(
+    [StructField("path", StringType(), True), StructField("part", BinaryType(), True)]
+)
+
+
+def _plan_tile_index(reader, budget_bytes: int):
+    """``mapInArrow`` function: tile-index rows -> one ``(path, part)`` row per reader
+    partition, decoded by the reader that ``spark.read`` would have used."""
+    import pickle
+
+    import pyarrow as pa
+
+    out = _arrow_schema(_TILE_PLAN_SCHEMA)
+
+    def _plan(batches):
+        for batch in batches:
+            rows = batch.to_pylist()
+            for i in range(0, len(rows), _PLAN_CHUNK_ROWS):
+                parts = reader._plan_tile_rows(
+                    rows[i : i + _PLAN_CHUNK_ROWS], budget_bytes
+                )
+                if parts:
+                    yield pa.RecordBatch.from_arrays(
+                        [
+                            pa.array([p.file_path for p in parts], pa.string()),
+                            pa.array([pickle.dumps(p) for p in parts], pa.binary()),
+                        ],
+                        schema=out,
+                    )
+
+    return _plan
+
+
+def _read_tile_parts(reader, schema: StructType):
+    """``mapInArrow`` function: planned ``(path, part)`` rows -> the reader's rows."""
+    import pickle
+
+    from databricks.labs.gbx.ds.paths import _read_partition
+
+    def _read(batches):
+        want = _arrow_schema(schema)
+        for batch in batches:
+            for blob in batch.column("part").to_pylist():
+                part = pickle.loads(blob)
+                # A tile whose file is gone fails the read, as it does in the reader.
+                yield from _read_partition(
+                    reader, part, part.file_path, None, schema, want, False
+                )
+
+    return _read
+
+
+def _arrow_schema(schema: StructType):
+    from databricks.labs.gbx.ds.paths import _arrow_schema as arrow_schema
+
+    return arrow_schema(schema)
+
+
+def read_tiles_table(
+    spark,
+    table: str,
+    options: Optional[dict] = None,
+    *,
+    format: str = "raster_gbx",
+    num_partitions: Optional[int] = None,
+):
+    """Read the tiles a Delta tile index lists, with the caller's session.
+
+    ``spark.read.format("raster_gbx").option("tilesTable", table)`` cannot read the table:
+    the read is planned in a worker that has no Spark session. This function reads the
+    table with ``spark``, decodes its rows into tiles exactly as the reader decodes a
+    ``tilesTable`` (``path`` plus a ``window`` struct or flat ``col_off``, ``row_off``,
+    ``width`` and ``height`` columns, or whole files), and returns what the reader returns:
+    a DataFrame of ``(source, tile)``. Nothing is collected to the driver: the table is
+    decoded and read in tasks.
+
+    ``options`` are the reader's options, as on the Raster Reader page: ``virtualTiles``,
+    ``versionAsOf`` or ``timestampAsOf`` (read a pinned version of the table),
+    ``skipOrdering``, ``sizeInMB``, ``tileSize`` and the others. ``format`` is
+    ``"raster_gbx"``, ``"gtiff_gbx"`` or ``"cog_gbx"``.
+
+    The tiles are spread across tasks by tile, not by source file: two tasks per index row,
+    up to 256 (a row cut into several tiles by ``tileSize`` or ``sizeInMB`` counts once), or
+    ``num_partitions`` tasks when given. A tile goes to the task its hash picks, so the tiles of
+    one source file are read in parallel, and some tasks hold several tiles while others hold
+    none. Inside each task the tiles are ordered by source path, so those of one source that
+    share a task are read one after another (``skipOrdering`` of ``"true"`` leaves that order
+    out). A tile whose file is missing fails the read.
+
+    Uses only ``spark.read`` and DataFrame operations (Spark Connect and Serverless safe).
+    """
+    name = (format or "").strip().lower()
+    name = name if name.endswith("_gbx") else name + "_gbx"
+    if name not in _TILE_INDEX_FORMATS:
+        raise ValueError(
+            f"read_tiles_table reads a tile index with {', '.join(_TILE_INDEX_FORMATS)}; "
+            f"got {format!r}. Fix: pass one of those as format."
+        )
+    from databricks.labs.gbx.ds.paths import resolve_format
+
+    # Spark hands a reader its options case-insensitively; so does this.
+    source = resolve_format(name)(
+        CaseInsensitiveDict({**(options or {}), "path": "/", "tilesTable": table})
+    )
+    schema = source.schema()
+    reader = source.reader(schema)
+    budget_bytes = _resolved_budget(reader.size_mib, reader.strategy)
+
+    index = _read_tile_index(spark, table, reader.version_as_of, reader.timestamp_as_of)
+    if "path" not in index.columns:
+        raise ValueError(
+            f"{name}: the tile index {table!r} has no 'path' column (it has "
+            f"{index.columns}). Fix: read a table with one row per tile and a 'path' "
+            "column."
+        )
+    index = index.select(*[c for c in _TILE_INDEX_COLUMNS if c in index.columns])
+    planned = index.mapInArrow(
+        _plan_tile_index(reader, budget_bytes), _TILE_PLAN_SCHEMA
+    )
+    # Tiles spread by the per-tile key over two tasks per index row (up to the cap). An
+    # explicit count, repartition(N, column): the Serverless fan-out rule, and AQE does
+    # not coalesce it.
+    tasks = (
+        int(num_partitions)
+        if num_partitions
+        else max(1, min(2 * index.count(), _DEFAULT_MAX_TASKS))
+    )
+    planned = planned.repartition(tasks, "part")
+    if not reader.skip_ordering:
+        planned = planned.sortWithinPartitions("path")
+    return planned.mapInArrow(_read_tile_parts(reader, schema), schema)

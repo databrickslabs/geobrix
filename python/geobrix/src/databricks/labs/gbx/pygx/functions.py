@@ -635,7 +635,7 @@ class _BngTessellateExplode:
 # load-bearing field), exactly like the quadbin cellunion_agg. The group key is
 # the cellid (callers GROUP BY cellid), and core is recoverable from whether the
 # chip equals the full cell, so no information is lost for the swap. Cross-tier
-# parity (Task 9) compares the decoded chip geometry.
+# parity compares the decoded chip geometry.
 
 
 def _fold_chip_geom(chip, op):
@@ -678,7 +678,7 @@ def _dilate_check_mode(mode):
     """Raise ValueError for an unknown dilation mode (parameter error).
 
     ``None`` is allowed and treated as the default mode by callers.
-    Tasks 5/6/7 reuse this helper — keep it at module scope.
+    Other dilation functions reuse this helper — keep it at module scope.
     """
     if mode is not None and mode not in _MODES:
         raise ValueError(f"unknown mode {mode!r}; expected one of {_MODES}")
@@ -740,13 +740,13 @@ def _whole_res(fn, res) -> int:
 # Same impl-by-shape rule as quadbin/BNG: scalar/bounded geometry ops ->
 # pandas_udf (batched Arrow transfer is the win); ARRAY-returning ops (polyfill/
 # kring) -> plain @udf (row-by-row, OOM-safe at scale). The grid SPEC builder is
-# a validating @udf (Resolved decision 1) returning CUSTOM_GRID_SCHEMA so build-
+# a validating @udf returning CUSTOM_GRID_SCHEMA so build-
 # time bad-bounds errors match heavy Custom_Grid.eval's require(...).
 # ============================================================================
 
 
 # --- custom-grid spec builder -> validating @udf returning CUSTOM_GRID_SCHEMA ---
-# Resolved decision 1 (spec 2026-06-14): eager validation matches heavy
+# Eager validation matches heavy
 # Custom_Grid.eval's require(...) (error-at-build-time parity). The 7-arg form
 # defaults srid to -1 (no CRS), as in Custom_Grid.builder; the Column wrapper
 # always supplies all 8.

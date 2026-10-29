@@ -18,13 +18,13 @@ Mirrors the heavyweight ``RST_{H3,Quadbin,BNG}_RasterToGrid`` families exactly:
   H3/quadbin ids are ``int`` (Long) but BNG ids are rendered to ``str`` via
   ``pygx._bng.format`` at the output boundary.
 
-Two new parameters (Stage 2, Task 7):
+Two parameters shape the result:
 
 * ``coverage``: ``"sparse"`` (emit only cells with at least one valid pixel) or
   ``"complete"`` (default, matches heavy) -- also emit covering-but-empty cells
   carrying ``None`` (or ``0.0`` for ``count``).
 * ``assignment``: ``"centroid"`` (default) -- bin each valid pixel to the cell
-  containing its centroid (pre-Stage-2 behaviour); ``"covering"`` -- distribute
+  containing its centroid (the original behaviour); ``"covering"`` -- distribute
   each pixel's value across every cell that overlaps its rectangular footprint,
   weighted by the intersection-area fraction. Weighted reducers mirror the heavy
   tier exactly (see ``_weighted_reduce``).
@@ -245,7 +245,7 @@ def _covering_band(
     matches the heavy tier's O(pixels) loop and is suitable for small/coarse
     tiles only.
 
-    Interior fast-path (O(boundary) optimisation, mirrors heavy Task 15):
+    Interior fast-path (O(boundary) optimisation, mirrors the heavy tier):
     For exact-geometry grids (``_COVERING_FAST_PATH_EXACT``: custom, quadbin,
     bng), a pixel whose four corners all encode to the SAME cell is unambiguously
     interior -- its intersection area equals the pixel area, so the weight is
@@ -421,10 +421,10 @@ def _stamp_crs_bytes(ds, target_crs) -> bytes:
     from rasterio.io import MemoryFile
 
     from databricks.labs.gbx.pyrx.core._nodata import has_own_mask
-    from databricks.labs.gbx.pyrx.core.compression import match_alpha
+    from databricks.labs.gbx.pyrx.core.compression import match_alpha, source_profile
 
     own_mask = has_own_mask(ds)
-    profile = ds.profile.copy()
+    profile = source_profile(ds.profile, unless_jpeg=True)
     profile.update(driver="GTiff", crs=target_crs)
     with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
         with MemoryFile() as mf:
@@ -502,7 +502,7 @@ def raster_to_grid(
                     ``"median"``, ``"sum"``, ``"variance"``, ``"stddev"``.
         coverage:   ``"complete"`` (default) -- also emit covered-but-empty
                     cells (measure=None, or 0.0 for count); ``"sparse"`` -- emit
-                    only cells with at least one valid pixel (pre-Stage-2
+                    only cells with at least one valid pixel (the original
                     behaviour).
         assignment: ``"centroid"`` (default) -- bin each valid pixel to the cell
                     containing its centroid; ``"covering"`` -- distribute each

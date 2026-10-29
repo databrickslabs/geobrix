@@ -1239,12 +1239,12 @@ def test_in_target_domain_bounds_absent_returns_none():
 
 
 # ---------------------------------------------------------------------------
-# Task 2: st_transformcrs data→NULL, parameter→raise, domain check
+# st_transformcrs data→NULL, parameter→raise, domain check
 # ---------------------------------------------------------------------------
 
 
-def _ewkb_task2(lon, lat, srid):
-    """EWKB POINT with embedded SRID — helper for Task-2 tests."""
+def _ewkb_point(lon, lat, srid):
+    """EWKB POINT with embedded SRID — helper for the transformcrs tests."""
     import shapely as _sh
 
     return to_wkb(_sh.set_srid(Point(lon, lat), srid), include_srid=True)
@@ -1256,18 +1256,18 @@ def test_transformcrs_unparseable_data_returns_none():
 
 def test_transformcrs_out_of_domain_returns_none():
     # POINT(150 -80) SRID=4326 -> EPSG:27700 is finite but ~16,500km outside GB.
-    g = _ewkb_task2(150.0, -80.0, 4326)
+    g = _ewkb_point(150.0, -80.0, 4326)
     assert _crs.st_transformcrs(g, "EPSG:27700") is None
 
 
 def test_transformcrs_in_domain_succeeds():
-    g = _ewkb_task2(-0.13, 51.5, 4326)  # London, inside GB
+    g = _ewkb_point(-0.13, 51.5, 4326)  # London, inside GB
     out = _crs.st_transformcrs(g, "EPSG:27700")
     assert out is not None and isinstance(out, (bytes, bytearray))
 
 
 def test_transformcrs_embedded_srid_unresolvable_returns_none():
-    g = _ewkb_task2(1.0, 1.0, 99999)  # SRID 99999 rides in the geometry = DATA
+    g = _ewkb_point(1.0, 1.0, 99999)  # SRID 99999 rides in the geometry = DATA
     assert _crs.st_transformcrs(g, "EPSG:3857") is None
 
 
@@ -1283,7 +1283,7 @@ def test_transformcrs_no_source_crs_returns_none():
 
 
 def test_transformcrs_bad_target_raises():
-    g = _ewkb_task2(-0.13, 51.5, 4326)
+    g = _ewkb_point(-0.13, 51.5, 4326)
     with pytest.raises(ValueError):
         _crs.st_transformcrs(g, "EPSG:99999")
 

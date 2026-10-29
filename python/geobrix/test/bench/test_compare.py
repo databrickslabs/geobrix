@@ -117,7 +117,7 @@ def test_empty_fingerprint_is_na():
 
 
 def test_timing_only_empty_both_sides_is_na_not_divergent():
-    # Task 4: a timing-only fn (fingerprint=False) emits "" on BOTH engines.
+    # A timing-only fn (fingerprint=False) emits "" on BOTH engines.
     # Empty-vs-empty must compare as `na` (timed, not compared), never divergent.
     cls, delta, ndc, note = c.compare_fingerprints("", "")
     assert cls == "na"

@@ -1129,3 +1129,32 @@ def test_worker_rss_sampler_counts_pages_shared_with_forked_workers_once():
         proc.kill()
         proc.wait()
     assert 150 <= seen.peak_anon_mb < 400, seen.peak_anon_mb  # four counts is 800+
+
+
+@pytest.mark.parametrize(
+    "smaps, want",
+    [
+        (
+            {"Pss": 120, "Pss_Anon": 80},
+            (120, 80),
+        ),  # proportional, when the kernel has both
+        (OSError("no smaps_rollup"), (300, 200)),  # an old kernel, or not ours to read
+        ({"Pss": 120}, (300, 200)),  # no Pss_Anon: not proportional, so the plain sums
+    ],
+    ids=["proportional", "no-smaps-rollup", "pss-without-anon"],
+)
+def test_process_kb_uses_the_resident_set_when_smaps_rollup_cannot_say(
+    monkeypatch, smaps, want
+):
+    """Which fields one process is read from: Pss / Pss_Anon when smaps_rollup gives both,
+    else VmRSS / RssAnon of /proc/<pid>/status."""
+
+    def fields(path, wanted):
+        if path.endswith("smaps_rollup"):
+            if isinstance(smaps, OSError):
+                raise smaps
+            return dict(smaps)
+        return {"VmRSS": 300, "RssAnon": 200}
+
+    monkeypatch.setattr(rn.WorkerRssSampler, "_kb_fields", staticmethod(fields))
+    assert rn.WorkerRssSampler()._process_kb(1234) == want

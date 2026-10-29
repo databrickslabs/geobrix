@@ -16,7 +16,7 @@ def test_predictor_for_dtype():
 
 def test_auto_level_scales_down_with_size():
     # New ladder: ≤128 MiB → L6, ≤1 GiB → L3, >1 GiB → L1
-    # Grounded by .superpowers/sdd/2026-09-10-grid-fidelity-stage3/followup-compression-matrix-report.md:
+    # Grounded by a ZSTD level sweep across 11 tile types (see the ladder in compression.py):
     # L6 is the universal knee; L9/L12 add nothing; L16 often regresses.
     small = C.auto_level(1 * 1024**2)  # 1 MiB -> L6 (<=128 MiB)
     mid = C.auto_level(200 * 1024**2)  # 200 MiB -> L3 (<=1 GiB)
@@ -53,6 +53,17 @@ def test_creation_opts_none():
     assert "zstd_level" not in o and "zlevel" not in o
 
 
+@pytest.mark.parametrize("driver", ["GTiff", "COG"])
+@pytest.mark.parametrize("name", ["raw", "none", "RAW", "NONE"])
+def test_creation_opts_no_codec_names_say_none_explicitly(name, driver):
+    """'raw' and 'none' mean no compression for every driver. The key is emitted, not omitted:
+    the COG driver compresses with LZW when COMPRESS is absent, and a profile copied from a
+    compressed source would keep its codec."""
+    assert C.creation_opts("uint16", compress=name, driver=driver) == {
+        "compress": "none"
+    }
+
+
 def test_auto_plus_explicit_level_warns():
     with pytest.warns(UserWarning, match="auto"):
         C.creation_opts("int16", decoded_bytes=1024, compress="auto", level=22)
@@ -73,6 +84,29 @@ def test_creation_opts_cog_driver_emits_level_not_zstd_level():
     assert "LEVEL" in o  # COG driver option
     assert "zstd_level" not in o  # GTiff-only option
     assert o["LEVEL"] == str(C.auto_level(1 * 1024**2))
+
+
+def test_cog_profile_drops_the_layout_and_codec_keys_of_a_source():
+    # the COG driver lays the file out itself and takes its codec from creation_opts(driver="COG")
+    source = dict(
+        driver="GTiff",
+        width=4,
+        count=3,
+        dtype="uint8",
+        nodata=0,
+        interleave="pixel",
+        tiled=True,
+        blockxsize=256,
+        blockysize=256,
+        photometric="rgb",
+        compress="deflate",
+        zlevel=6,
+        predictor=2,
+    )
+    assert C.cog_profile(source) == dict(
+        driver="GTiff", width=4, count=3, dtype="uint8", nodata=0, interleave="pixel"
+    )
+    assert "tiled" in source  # the source is left as it was
 
 
 def test_creation_opts_gtiff_driver_emits_zstd_level():
@@ -226,7 +260,7 @@ def test_creation_opts_gtiff_deflate_uses_zlevel():
 
 # ---------------------------------------------------------------------------
 # Missing matrix: explicit ZSTD predictor for float32/uint8; full LZW matrix
-# (T3 completeness additions — these test canonical which is already correct;
+# (completeness additions — these test canonical which is already correct;
 # they are regression guards, not red→green drivers)
 # ---------------------------------------------------------------------------
 
@@ -253,7 +287,7 @@ def test_creation_opts_explicit_zstd_uint8_predictor_1():
 def test_creation_opts_explicit_deflate_uint8_predictor_1():
     """Explicit compress='deflate' + uint8 must derive predictor=1.
 
-    DIV-2 guard: pre-fold _write.py used '3 if _is_float else 2', returning 2 for uint8.
+    Regression guard: pre-fold _write.py used '3 if _is_float else 2', returning 2 for uint8.
     Canonical creation_opts must return predictor=1 (matching heavy OperatorOptions).
     """
     o = C.creation_opts("uint8", compress="deflate", level=6)
@@ -331,9 +365,9 @@ def test_cog_predictor_hygiene_int8_auto_omits_predictor():
 
 
 def test_cog_predictor_hygiene_float32_preserves_predictor_3():
-    """DIV-1 guard: COG + float32 must still emit predictor=3.
+    """Regression guard: COG + float32 must still emit predictor=3.
 
-    This is the SP3 DIV-1 regression guard.  The hygiene fix must not affect
+    The hygiene fix must not affect
     the floating-point predictor case.
     """
     o = C.creation_opts(
@@ -342,7 +376,7 @@ def test_cog_predictor_hygiene_float32_preserves_predictor_3():
     assert o["compress"] == "zstd"
     assert (
         o.get("predictor") == "3"
-    ), f"DIV-1 guard: COG float32 must have predictor='3', got {o.get('predictor')!r}"
+    ), f"COG float32 must have predictor='3', got {o.get('predictor')!r}"
 
 
 def test_cog_predictor_hygiene_int16_preserves_predictor_2():
@@ -378,3 +412,155 @@ def test_creation_opts_leaves_nbits_alone_when_not_needed():
         assert "nbits" not in C.creation_opts("uint16", compress="deflate", nbits=nbits)
     assert "nbits" not in C.creation_opts("uint8", compress="deflate", nbits=4)
     assert "nbits" not in C.creation_opts("uint16", compress="none", nbits=15)
+
+
+def test_drop_stripe_blocks_drops_only_the_strip_width_of_an_untiled_profile():
+    striped = {"tiled": False, "blockxsize": 64, "blockysize": 8, "compress": "deflate"}
+    assert C.drop_stripe_blocks(striped) == {
+        "tiled": False,
+        "blockysize": 8,
+        "compress": "deflate",
+    }
+    assert striped["blockxsize"] == 64  # the argument is not changed
+    tiled = {"tiled": True, "blockxsize": 256, "blockysize": 256}
+    assert C.drop_stripe_blocks(tiled) == tiled
+    assert C.drop_stripe_blocks({"width": 4}) == {"width": 4}  # no block keys at all
+
+
+def test_source_profile_is_drop_ycbcr_and_drop_stripe_blocks_in_one():
+    prof = {
+        "photometric": "ycbcr",
+        "compress": "jpeg",
+        "tiled": False,
+        "blockxsize": 64,
+        "blockysize": 8,
+    }
+    assert C.source_profile(prof) == {
+        "compress": "jpeg",
+        "tiled": False,
+        "blockysize": 8,
+    }
+    assert C.source_profile(prof, unless_jpeg=True)["photometric"] == "ycbcr"
+
+
+def test_drop_ycbcr_is_called_only_inside_the_compression_module():
+    """A writer starts from a source's profile through ``source_profile`` (``drop_ycbcr`` plus
+    ``drop_stripe_blocks``), never by calling ``drop_ycbcr`` itself: one call site per rule, so a site
+    cannot pick up the YCbCr photometric fix and miss the strip-width one."""
+    import ast
+    import pathlib
+
+    src = pathlib.Path(C.__file__).parents[2]  # .../databricks/labs/gbx
+    offenders = []
+    for path in sorted(src.rglob("*.py")):
+        if path.name == "compression.py":
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Call):
+                fn = node.func
+                name = (
+                    fn.attr
+                    if isinstance(fn, ast.Attribute)
+                    else getattr(fn, "id", None)
+                )
+                if name == "drop_ycbcr":
+                    offenders.append(f"{path.relative_to(src)}:{node.lineno}")
+    assert offenders == [], offenders
+
+
+# A function that copies a source dataset's profile must also clean it (``source_profile``,
+# ``cog_profile``) or hand it to ``write_gtiff``, which does. These copy a profile for another use.
+_PROFILE_CLEANERS = {"source_profile", "cog_profile", "write_gtiff"}
+_PROFILE_COPY_EXCEPTIONS = {
+    (
+        "pyrx/core/open_tile.py",
+        "profile",
+    ): "a read-only view of a window; nothing is written",
+    (
+        "pyrx/core/open_tile.py",
+        "materialize_array",
+    ): "returns the profile to its caller",
+    (
+        "pyrx/core/focal.py",
+        "_out_profile",
+    ): "drops tiled, blockxsize, blockysize and interleave itself",
+}
+
+
+def _copies_of_a_dataset_profile(tree):
+    """``(line, enclosing function)`` of ``x.profile.copy()``, ``dict(x.profile)`` and ``{**x.profile}``."""
+    import ast
+
+    def is_profile(node):
+        return isinstance(node, ast.Attribute) and node.attr == "profile"
+
+    found = []
+
+    def visit(node, func):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            func = node
+        hit = (
+            isinstance(node, ast.Call)
+            and (
+                (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "copy"
+                    and is_profile(node.func.value)
+                )
+                or (
+                    isinstance(node.func, ast.Name)
+                    and node.func.id == "dict"
+                    and any(is_profile(a) for a in node.args)
+                )
+            )
+        ) or (
+            isinstance(node, ast.Dict)
+            and any(k is None and is_profile(v) for k, v in zip(node.keys, node.values))
+        )
+        if hit:
+            found.append((node.lineno, func))
+        for child in ast.iter_child_nodes(node):
+            visit(child, func)
+
+    visit(tree, None)
+    return found
+
+
+def _called_names(func):
+    import ast
+
+    return {
+        (
+            n.func.attr
+            if isinstance(n.func, ast.Attribute)
+            else getattr(n.func, "id", None)
+        )
+        for n in ast.walk(func)
+        if isinstance(n, ast.Call)
+    }
+
+
+def test_a_profile_copied_from_a_source_is_cleaned_before_it_is_written():
+    """A writer that starts from ``ds.profile.copy()`` and never cleans it logs GDAL's BLOCKXSIZE
+    warning for a striped source and fails on a JPEG/YCbCr one (15 sites did before ``source_profile``
+    was applied to them). New writers go through ``source_profile`` / ``cog_profile`` /
+    ``write_gtiff``; the few that copy a profile for another use are listed with their reason.
+    """
+    import ast
+    import pathlib
+
+    src = pathlib.Path(C.__file__).parents[2]  # .../databricks/labs/gbx
+    offenders, used = [], set()
+    for path in sorted(src.rglob("*.py")):
+        rel = path.relative_to(src).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for lineno, func in _copies_of_a_dataset_profile(tree):
+            name = func.name if func is not None else "<module>"
+            if (rel, name) in _PROFILE_COPY_EXCEPTIONS:
+                used.add((rel, name))
+            elif func is None or not (_called_names(func) & _PROFILE_CLEANERS):
+                offenders.append(f"{rel}:{lineno} in {name}")
+    assert offenders == [], offenders
+    assert used == set(
+        _PROFILE_COPY_EXCEPTIONS
+    ), "a listed exception no longer copies a profile"

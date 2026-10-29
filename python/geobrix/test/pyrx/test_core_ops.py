@@ -117,10 +117,12 @@ def test_as_format_to_png():
             assert o.driver == "PNG"
 
 
-def test_as_format_to_cog_is_a_real_cog():
+def test_as_format_to_cog_is_a_real_cog(caplog):
     # COG has no Create(): the output must be a Cloud Optimized GeoTIFF
     # (LAYOUT=COG) that keeps the RGB(A) colour interpretation, the NoData and
-    # the CRS, with 512 blocks and overviews on a tile larger than one block.
+    # the CRS, with 512 blocks and overviews on a tile larger than one block, and
+    # that GDAL has no complaint about (the source's own block and tiling options
+    # are not the COG driver's).
     from rasterio.enums import ColorInterp
 
     labels = [
@@ -157,6 +159,40 @@ def test_as_format_to_cog_is_a_real_cog():
         assert o.crs.to_epsg() == 32618
         assert o.transform == profile["transform"]
         assert np.array_equal(o.read(), data)
+    assert not [r for r in caplog.records if "creation option" in r.getMessage()]
+
+
+@pytest.mark.parametrize(
+    "name,driver,dtype",
+    [
+        ("png", "PNG", "uint8"),
+        ("cog", "GTiff", "float32"),
+        ("GSBG", "GSBG", "float32"),
+        ("VICAR", "VICAR", "float32"),
+    ],
+)
+def test_as_format_takes_any_case_and_a_driver_with_no_file_extension(
+    name, driver, dtype
+):
+    # GDAL looks a driver up in any case; a driver with no extension of its own (Surfer
+    # grids, VICAR) is no less a raster driver, and COG opens as GTiff.
+    profile = dict(
+        driver="GTiff",
+        width=16,
+        height=16,
+        count=1,
+        dtype=dtype,
+        crs="EPSG:4326",
+        transform=from_origin(10.0, 50.0, 0.5, 0.5),
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write((np.arange(256) % 7).reshape(1, 16, 16).astype(dtype))
+        src = mf.read()
+    with _serde.open_tile(src) as ds:
+        out = ops_core.as_format(ds, name)
+    with _serde.open_tile(out) as o:
+        assert (o.driver, o.shape) == (driver, (16, 16))
 
 
 def test_as_format_bad_driver_raises():

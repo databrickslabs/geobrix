@@ -1,4 +1,4 @@
-"""TDD Stage 3 Task 6: custom-grid raster_to_grid + iter_tessellate (light tier).
+"""Custom-grid raster_to_grid + iter_tessellate (light tier).
 
 Failing state before implementation:
   - raster_to_grid(grid="custom") raises ValueError("unknown grid")

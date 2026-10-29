@@ -10,7 +10,7 @@ constrained secret access).
 
 ### Heavy jobs — `larger-runners` / `larger`
 
-Jobs that run mvn install, GDAL setup, or pytest:
+Jobs that run ./mvnw install, GDAL setup, or pytest:
 
 ```yaml
 runs-on:
@@ -70,7 +70,7 @@ Total cache size for the repo is **capped** (default 10 GB; orgs can change this
 ### 2. Memory in a single job
 
 - `MAVEN_OPTS=-Xmx4g` gives the main Maven JVM 4 GB heap.  
-- `mvn -T 1C` runs up to 4 parallel builders (1 per vCPU), each of which can start test JVMs.
+- `./mvnw -T 1C` (the pinned Maven) runs up to 4 parallel builders (1 per vCPU), each of which can start test JVMs.
 
 On a 16 GB runner, 4 GB for Maven + several test JVMs can approach 16 GB. If you see **OOM or instability** in the Scala/scoverage job, consider:
 

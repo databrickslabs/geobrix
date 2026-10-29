@@ -1,0 +1,89 @@
+---
+sidebar_position: 1
+title: Choosing a Format
+---
+
+# Choosing a Format
+
+_Since:_ **v0.6.0** (the format selection guide that used to sit on the Raster reader page, expanded)
+
+Geospatial data arrives in a handful of shapes: pictures of the ground (**raster**), labelled
+multi-dimensional cubes (**array**), features with geometry (**vector**) and pre-rendered map
+tiles (**tile**). This page helps you pick the format to store, exchange and process each of them
+in, and shows for every format the reader, the writer and the functions that work on it.
+
+Two tiers run the readers and writers: the **lightweight** tier (pure Python, no JAR, runs on
+Serverless) and the **heavyweight** tier (GDAL and OGR on the JVM). Where a format has both, the
+two are held to the same results; see [Choosing an Execution Tier](../api/execution-tiers).
+
+## The short version
+
+- **Start with GeoTIFF**, and use **COG** when the files sit in cloud storage and are read in pieces.
+- **Use Zarr for cubes** that many jobs read slices of, or write results back to: weather, climate and
+  other gridded data with a time dimension. GeoBrix makes Zarr stores transactional, versioned and
+  safe for concurrent writers. See [Zarr stores](./zarr).
+- **NetCDF, HDF5 and GRIB2** are what data providers publish. Read them where they are; move the
+  data to Zarr or Delta when you need to write back or fan out at scale.
+- **Keep vector data in Delta tables** with `GEOMETRY` or `GEOGRAPHY` columns, and use the
+  Databricks built-in `ST_*` functions. Use GeoPackage, Shapefile, GeoJSON and File Geodatabase to
+  exchange data with other tools.
+- **Use PMTiles** to serve a tile pyramid from a single file in object storage.
+
+## Raster formats
+
+| Format | Good for | Tiers | Read | Write | Functions |
+|---|---|---|---|---|---|
+| **GeoTIFF / COG** | Imagery, elevation models, any single raster. COG adds internal tiling and overviews, so a reader fetches only the pieces it needs. | Both | [`gtiff_gbx`](../readers/geotiff) and [`cog_gbx`](../readers/cog); heavyweight `gtiff_gdal` | [`gtiff_gbx`](../writers/geotiff) and [`cog_gbx`](../writers/cog); heavyweight `gtiff_gdal` | [RasterX `rst_*`](../api/raster-functions) |
+| **JPEG 2000** | High-compression imagery. | Both | the [generic raster reader](../readers/raster): `raster_gbx` or `gdal` | the [generic raster writer](../writers/raster) | [RasterX `rst_*`](../api/raster-functions) |
+
+## Array formats
+
+Array formats hold gridded data with more than two dimensions: time, level, band, latitude and
+longitude together.
+
+| Format | Good for | Tiers | Read | Write | Functions |
+|---|---|---|---|---|---|
+| **[Zarr](./zarr)** | Large cubes that many jobs read slices of in parallel and write back to, with versions, tags and concurrent writers. | Lightweight | [`gbx_zarr_read`](../readers/zarr), [`gbx_zarr_sample`](../readers/zarr#sampling-at-points), and the [`zarr_gbx`](../readers/zarr#the-zarr_gbx-datasource) DataSource for plain stores | [`gbx_zarr_write`](../writers/zarr) | `rst_*` on Zarr tiles; the [Zarr functions](../api/zarr-functions): `gbx_zarr_register`, `gbx_zarr_sync`, `gbx_zarr_optimize`, `gbx_zarr_vacuum`, `gbx_zarr_tag`, `gbx_zarr_untag`, `gbx_zarr_history`, `gbx_zarr_restore`, `gbx_zarr_export` |
+| **NetCDF / HDF5** | Self-describing scientific files from data providers. | Both | [`netcdf_gbx`](../readers/netcdf) (lightweight), `netcdf_gdal` and `netcdf_ogr` (heavyweight); HDF5 through the [generic raster reader](../readers/raster) | [`netcdf_gbx`](../writers/netcdf) | [RasterX `rst_*`](../api/raster-functions) |
+| **GRIB2** | Weather model output, such as NOAA HRRR or ECMWF. | Both | the [generic raster reader](../readers/raster) | | [RasterX `rst_*`](../api/raster-functions) |
+
+## Vector formats
+
+| Format | Good for | Tiers | Read | Write | Functions |
+|---|---|---|---|---|---|
+| **Delta or Parquet with `GEOMETRY` / `GEOGRAPHY`** | Analytics at scale. The natural home for vector data in Databricks. | Built in | Spark, `spark.read.table` | Spark | Databricks [`ST_*` and H3 functions](../databricks-spatial); GeoBrix adds [`gbx_st_*`](../api/vectorx-functions) |
+| **GeoPackage** | Exchange of one or more layers in a single file. | Both | [`gpkg_gbx`](../readers/geopackage); heavyweight `gpkg_ogr` | [`gpkg_gbx`](../writers/geopackage) | [`gbx_st_*`](../api/vectorx-functions) |
+| **Shapefile** | Exchange with older tools. | Both | [`shapefile_gbx`](../readers/shapefile); heavyweight `shapefile_ogr` | [`shapefile_gbx`](../writers/shapefile) | [`gbx_st_*`](../api/vectorx-functions) |
+| **File Geodatabase** | Esri data. | Both | [`file_gdb_gbx`](../readers/filegdb); heavyweight `file_gdb_ogr` | [`file_gdb_gbx`](../writers/filegdb) | [`gbx_st_*`](../api/vectorx-functions) |
+| **GeoJSON / GeoJSONL** | Web exchange. GeoJSONL (one feature per line) shards and streams. | Both | [`geojson_gbx`](../readers/geojson) and [`geojsonl_gbx`](../writers/geojsonl); heavyweight `geojson_ogr` and `geojsonl_ogr` | [`geojson_gbx`](../writers/geojson); [`geojsonl_gbx`](../writers/geojsonl) and heavyweight `geojsonl_ogr` | [`gbx_st_*`](../api/vectorx-functions) |
+
+## Tile formats
+
+| Format | Good for | Tiers | Read | Write | Functions |
+|---|---|---|---|---|---|
+| **PMTiles** | A raster or vector tile pyramid in one file that a web map reads straight from object storage. | Both | [`pmtiles_gbx`](../readers/pmtiles) | [`pmtiles_gbx`](../writers/pmtiles); heavyweight `pmtiles` | [`gbx_pmtiles_agg`](../api/pmtiles-functions), and `gbx_st_asmvt` for vector tiles |
+
+Point clouds and images with positions have their own readers: [LiDAR](../readers/lidar) (LAS and
+LAZ, which feed the DSM and CHM functions) and [EXIF](../readers/exif) (drone and camera images).
+
+## How the raster and array formats compare
+
+| Format | Size | Compression | Multi-band | Time series | Cloud-friendly |
+|---|---|---|---|---|---|
+| **GeoTIFF** | Good | Good | Yes | No | Yes (COG) |
+| **NetCDF** | Excellent | Good | Yes | Yes | Moderate |
+| **HDF5** | Excellent | Good | Yes | Yes | Poor |
+| **GRIB2** | Excellent | Excellent | Yes | Yes | Poor |
+| **JPEG 2000** | Excellent | Excellent | Yes | No | Moderate |
+| **Zarr** | Excellent | Good | Yes | Yes | Excellent |
+
+"Cloud-friendly" means a reader can fetch just the part it needs from object storage. For how Zarr
+compares in more detail, including writes and versions, see [Why Zarr](./zarr#why-zarr).
+
+## Delta-indexed collections
+
+Several GeoBrix tools keep a Delta table as the index of a collection of files: a table with a
+`FILE` column that points at rasters or vectors on a Volume, and the manifest table of a
+[Zarr store](./zarr) that points at its chunks and shards. It is one pattern. The files stay
+immutable and the table says which of them make up the collection, at which version, so you can
+query, govern and time-travel the collection with SQL. See [Readers & Writers](../readers-writers).

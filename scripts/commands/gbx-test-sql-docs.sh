@@ -117,6 +117,14 @@ if ! docker exec "$GBX_DEV_CONTAINER" test -d /Volumes 2>/dev/null; then
     exit 1
 fi
 
+# api/ holds the Zarr function reference's doc tests (api/test_zarr_functions_examples.py), which
+# keep a store's manifest in a Delta table: they need the zarr extra and the delta-spark jars, as
+# gbx:test:python-docs arranges for the Zarr tests it runs (one helper, ensure_zarr_test_env in
+# common.sh). A run of other api/ files pays nothing.
+if zarr_doc_tests_selected "$TEST_PATH" "$BASE"; then
+    ensure_zarr_test_env "the Zarr doc tests"
+fi
+
 echo -e "${CYAN}🎯 Test path: ${YELLOW}$TEST_PATH${NC}"
 [ "$SKIP_BUILD" = true ] && echo -e "${CYAN}⏭️  Skipping build (--skip-build)${NC}"
 # The container's pytest reads the deadline from this variable (docs/tests/python/deadline_guard.py)

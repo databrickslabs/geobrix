@@ -29,7 +29,15 @@ const sidebars = {
     'quick-start',
     'databricks-spatial',
     'serverless-and-memory',
-    'release-notes',
+    {
+      type: 'category',
+      label: 'Release Notes',
+      collapsed: true,
+      link: { type: 'doc', id: 'release-notes' },
+      items: [
+        'release-notes-0-5-and-earlier',
+      ],
+    },
     {
       type: 'category',
       label: 'Examples',
@@ -93,6 +101,15 @@ const sidebars = {
     },
     {
       type: 'category',
+      label: 'Formats',
+      collapsed: true,
+      link: { type: 'doc', id: 'formats/overview' },
+      items: [
+        'formats/zarr',
+      ],
+    },
+    {
+      type: 'category',
       label: 'Readers & Writers',
       collapsed: true,
       link: { type: 'doc', id: 'readers-writers' },
@@ -105,7 +122,7 @@ const sidebars = {
           items: [
             'readers/overview',
             { type: 'category', label: 'General', collapsed: true, items: ['readers/raster', 'readers/vector'] },
-            { type: 'category', label: 'Named', collapsed: true, items: ['readers/geotiff', 'readers/cog', 'readers/netcdf', 'readers/pmtiles', 'readers/shapefile', 'readers/geojson', 'readers/geopackage', 'readers/filegdb', 'readers/lidar', 'readers/exif'] },
+            { type: 'category', label: 'Named', collapsed: true, items: ['readers/geotiff', 'readers/cog', 'readers/netcdf', 'readers/zarr', 'readers/pmtiles', 'readers/shapefile', 'readers/geojson', 'readers/geopackage', 'readers/filegdb', 'readers/lidar', 'readers/exif'] },
             'readers/file',
           ],
         },
@@ -116,7 +133,7 @@ const sidebars = {
           items: [
             'writers/overview',
             { type: 'category', label: 'General', collapsed: true, items: ['writers/raster', 'writers/vector'] },
-            { type: 'category', label: 'Named', collapsed: true, items: ['writers/geotiff', 'writers/cog', 'writers/netcdf', 'writers/lidar', 'writers/pmtiles', 'writers/shapefile', 'writers/geojson', 'writers/geojsonl', 'writers/geopackage', 'writers/filegdb'] },
+            { type: 'category', label: 'Named', collapsed: true, items: ['writers/geotiff', 'writers/cog', 'writers/netcdf', 'writers/zarr', 'writers/lidar', 'writers/pmtiles', 'writers/shapefile', 'writers/geojson', 'writers/geojsonl', 'writers/geopackage', 'writers/filegdb'] },
             'writers/file',
           ],
         },
@@ -175,6 +192,7 @@ const sidebars = {
           ],
         },
         { type: 'doc', id: 'api/pmtiles-functions', label: 'PMTiles' },
+        { type: 'doc', id: 'api/zarr-functions', label: 'Zarr' },
         { type: 'doc', id: 'api/stac', label: 'STAC' },
         {
           type: 'category',

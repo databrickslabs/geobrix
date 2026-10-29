@@ -106,7 +106,7 @@ def read_file_table(
         spark: Active SparkSession.
         table: Fully-qualified or unqualified Delta table name.
         skip_ordering: Passed through to :func:`resolve_file_table`.  Default
-            ``False`` preserves (and centralises) the T8 sort-by-source
+            ``False`` preserves (and centralises) the sort-by-source
             convention for table reads.
     """
     # Delegate FILE-column detection + path resolution + ordering to the

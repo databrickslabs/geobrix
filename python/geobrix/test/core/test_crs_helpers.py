@@ -1,4 +1,4 @@
-"""Task 1 (SP2-CRS): new core/crs.py helpers — to_pyproj_crs, crs_equal, crs_to_proj4, shim."""
+"""New core/crs.py helpers — to_pyproj_crs, crs_equal, crs_to_proj4, shim."""
 
 import warnings
 

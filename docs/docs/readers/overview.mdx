@@ -49,8 +49,8 @@ An unrecognized format raises `ValueError`.
 :::
 
 :::tip On Serverless, read from a FILE-column table
-The **Delta-scan FILE-column-table read path** is the recommended read path on Serverless: a `tilesTable`
-(raster) or `vector_file_read(table)` (vector) scans the Delta table and resolves FILE references without
+The **Delta-scan FILE-column-table read path** is the recommended read path on Serverless: a tile index read
+with `read_tiles_table` (raster) or `vector_file_read(table)` (vector) scans the Delta table and resolves FILE references without
 per-tile opens — measured at **~1.8–2 s** for 1,000 raster tiles or 100k vector features on both
 Serverless and classic clusters.
 
@@ -75,6 +75,7 @@ See the full [capability tiers & read-options matrix](../readers-writers#capabil
 | [COG Reader](./cog) | `cog_gbx` | Pure-Python cloud-optimized GeoTIFF reader — windowed/overview-aware reads |
 | [NetCDF Reader](./netcdf) | `netcdf_gbx` | Pure-Python CF NetCDF reader — CF grids (raster) or CF-DSG points (vector) |
 | [File Reader](./file) | `file_gbx` | Pure-Python file lister — enumerates matching paths as rows (read-only) |
+| [Zarr Reader](./zarr) | `zarr_gbx` | Pure-Python reader for Zarr v2 and v3 stores (light-only): blocks, a table of cells or GeoBrix tiles, by label or position; `gbx_zarr_read` adds versions and sampling |
 | [PMTiles Reader](./pmtiles) | `pmtiles_gbx` | Pure-Python PMTiles reader — mosaic pyramid from rasters (`source="raster"`) or tiles from an archive (`source="archive"`) |
 | [LiDAR Reader](./lidar) | `lidar_gbx` | Pure-Python LAS/LAZ point-cloud reader (light-only; no heavyweight tier) |
 | [EXIF/GPS Reader](./exif) | `exif_gbx` | Pure-Python EXIF/GPS telemetry reader for drone/camera images (light-only; no heavyweight tier) |
@@ -114,9 +115,10 @@ Both the raster and vector light-tier readers can read directly from a FILE-colu
 (a table whose rows carry FILE references to geospatial files) in addition to Volume paths.
 Both auto-order by the resolved source path by default. The ordering effect differs by format:
 
-- **Raster (`tilesTable`)** — a single GeoTIFF can produce many tile rows; auto-ordering
-  groups those tiles together so each executor opens the source file once and reads all its
-  windows, amortizing the open cost. See [Raster Reader → tilesTable auto-order](./raster#tiles-table-auto-order).
+- **Raster (`read_tiles_table`, `manifest`)** — a single GeoTIFF can produce many tile rows;
+  auto-ordering puts those tiles next to each other (in a `manifest` read, in adjacent partitions;
+  in `read_tiles_table`, inside each task), so a worker opens the source file once for the windows
+  it reads, amortizing the open cost. See [Raster Reader → tile index auto-order](./raster#tiles-table-auto-order).
 - **Vector (`vector_file_read`)** — one vector file maps to exactly one table row (one FILE
   ref). Every source opens exactly once regardless of row order, so auto-ordering is a
   **deterministic, cross-format-consistent default**, not a throughput lever. See

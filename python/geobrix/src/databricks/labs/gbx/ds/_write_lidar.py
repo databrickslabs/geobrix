@@ -474,7 +474,7 @@ def _merge_laz_parts_seam(
     )
 
     if len(kx) == 0:
-        return 0  # nothing survived; caller (Task 6) retains parts, skips publish
+        return 0  # nothing survived; caller retains parts, skips publish
     if has_rgb:
         write_xyzrgb_laz(
             tmp_path,

@@ -152,7 +152,7 @@ def test_shapefile_gbx_reads_directory_of_shp_zip(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# FILE access mode tests (Task 2: make access option honest — managed/external
+# FILE access mode tests (the access option is honest — managed/external
 # reject with a pointer to vector_file_read; auto/fuse read via FUSE unchanged)
 # ---------------------------------------------------------------------------
 
@@ -346,9 +346,9 @@ def test_vector_access_invalid_option_raises():
 
 
 def test_vector_read_does_not_reprobe_file_access_tier(tmp_path):
-    """read() works correctly after Task 2: access='managed' rejects at __init__ time.
+    """read() works correctly: access='managed' rejects at __init__ time.
 
-    After Task 2, access='managed'/'external' raise at __init__ with a pointer
+    access='managed'/'external' raise at __init__ with a pointer
     to vector_file_read.  The FUSE path (access='auto') must still read data
     normally.  This is the regression guard that the full read path works.
     """
@@ -373,7 +373,7 @@ def test_vector_read_does_not_reprobe_file_access_tier(tmp_path):
 def test_vector_auto_access_fuse_runtime_reads_correctly(tmp_path):
     """access='auto' reads data correctly (no error).
 
-    After Task 4 no tier probe is made in __init__, so no mock is needed.
+    No tier probe is made in __init__, so no mock is needed.
     """
     from databricks.labs.gbx.ds.vector import VectorGbxReader
 
@@ -387,14 +387,14 @@ def test_vector_auto_access_fuse_runtime_reads_correctly(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 4 (no-reprobe) + Task 2 (managed/external rejection) regression guards
+# No-reprobe + managed/external rejection regression guards
 # ---------------------------------------------------------------------------
 
 
 def test_vector_reader_managed_external_rejected_unconditionally(tmp_path):
     """access='managed'/'external' must ALWAYS raise with a pointer to vector_file_read.
 
-    After Task 2, the DataSource reader is declared FUSE-only.  The rejection is
+    The DataSource reader is declared FUSE-only.  The rejection is
     unconditional — it does not matter what tier the runtime is, nor whether a
     SparkSession is present.  The old test (no_false_break_on_connect) asserted
     that managed/external did NOT raise; that behavior is now intentionally changed.

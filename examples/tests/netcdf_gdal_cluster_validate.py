@@ -22,7 +22,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from _job_submit import submit_once  # sibling module (script dir is on sys.path)
+from _job_submit import runner_dir, submit_once  # sibling module (script dir is on sys.path)
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 
 # The Volume dir holding the coral .nc (bare /Volumes path -> remote -> executor readRemote).
@@ -107,11 +107,7 @@ def main() -> int:
 
     w = WorkspaceClient(profile=profile) if profile else WorkspaceClient()
 
-    runner_dir = os.environ.get(
-        "GBX_RUNNER_DIR",
-        "/Workspace/Users/mjohns@databricks.com/GeoBrix/gbx-beta-dbr-v0.2.0/sample-data/tests",
-    )
-    notebook_path = "/" + f"{runner_dir}/netcdf_gdal_cluster_validate".strip().removeprefix("/Workspace").lstrip("/")
+    notebook_path = "/" + f"{runner_dir(w)}/netcdf_gdal_cluster_validate".strip().removeprefix("/Workspace").lstrip("/")
     try:
         w.workspace.mkdirs(str(Path(notebook_path).parent))
     except Exception:

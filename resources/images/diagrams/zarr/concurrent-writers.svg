@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 840" width="1500" height="840" style="font-family: Inter, -apple-system, system-ui, sans-serif;"><defs><marker id="arrow-5A6878" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5A6878"/></marker><marker id="arrow-1F6FB5" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1F6FB5"/></marker><marker id="arrow-7A5AA6" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#7A5AA6"/></marker><marker id="arrow-2F8F4E" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2F8F4E"/></marker><marker id="arrow-D2441F" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#D2441F"/></marker><marker id="arrow-0F8E8B" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0F8E8B"/></marker><marker id="arrow-B7791F" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#B7791F"/></marker><marker id="arrow-1B3139" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1B3139"/></marker><marker id="arrow-5A6878" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5A6878"/></marker><filter id="shadow" x="-5%" y="-5%" width="110%" height="115%"><feDropShadow dx="0" dy="2" stdDeviation="5" flood-color="#0F1B2A" flood-opacity="0.08"/></filter><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FAFBFC"/><stop offset="1" stop-color="#F1F4F8"/></linearGradient><pattern id="hatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="7" stroke="#D2441F" stroke-width="2" stroke-opacity="0.45"/></pattern></defs><rect width="1500" height="840" fill="url(#bg)"/>
+<text x="40" y="60" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="28" font-weight="800" fill="#0F1B2A" text-anchor="start">When two writers meet</text><text x="40" y="88" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="14" font-weight="400" fill="#3F4D5E" text-anchor="start">The manifest decides, row by row: different chunks land, shared metadata rebases, the same chunk conflicts</text>
+<rect x="40" y="120" width="450" height="670" rx="14" ry="14" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#shadow)"/>
+<rect x="40" y="120" width="450" height="6" rx="3" fill="#2F8F4E"/>
+<text x="60" y="156" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="19" font-weight="800" fill="#0F1B2A" text-anchor="start">Different chunks</text>
+<text x="60" y="178.0" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="400" fill="#5A6878" text-anchor="start">Two writers touch different inner chunks</text>
+<text x="60" y="232" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="800" fill="#7A5AA6" text-anchor="start" letter-spacing="1.2">MANIFEST</text>
+<line x1="102" y1="244" x2="102" y2="626" stroke="#7A5AA6" stroke-width="3"/>
+<circle cx="102" cy="280" r="9" fill="#7A5AA6"/>
+<text x="86" y="285" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#7A5AA6" text-anchor="end">v10</text>
+<circle cx="102" cy="400" r="9" fill="#7A5AA6"/>
+<text x="86" y="405" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#7A5AA6" text-anchor="end">v11</text>
+<circle cx="102" cy="590" r="9" fill="#7A5AA6"/>
+<text x="86" y="595" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#7A5AA6" text-anchor="end">v12</text>
+<rect x="192" y="220" width="75" height="24" rx="12" fill="#1F6FB5"/><text x="229.5" y="236.3" text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#FFFFFF">writer A</text>
+<rect x="342" y="220" width="75" height="24" rx="12" fill="#0F8E8B"/><text x="379.5" y="236.3" text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#FFFFFF">writer B</text>
+<line x1="230" y1="246" x2="230" y2="626" stroke="#1F6FB5" stroke-width="1.5" stroke-dasharray="4 4"/>
+<line x1="380" y1="246" x2="380" y2="626" stroke="#0F8E8B" stroke-width="1.5" stroke-dasharray="4 4"/>
+<line x1="114" y1="280" x2="380" y2="280" stroke="#7A8794" stroke-width="1.5" stroke-dasharray="3 3"/>
+<text x="305.0" y="300" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#5A6878" text-anchor="middle">both read v10</text>
+<text x="238" y="324" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#1F6FB5" text-anchor="start">write packs</text>
+<text x="388" y="324" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#0F8E8B" text-anchor="start">write packs</text>
+<path d="M 230 400 H 114" fill="none" stroke="#1F6FB5" stroke-width="2.6" marker-end="url(#arrow-1F6FB5)"/>
+<text x="126" y="390" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#1F6FB5" text-anchor="start">A lands: v11</text>
+<path d="M 380 590 H 114" fill="none" stroke="#0F8E8B" stroke-width="2.6" marker-end="url(#arrow-0F8E8B)"/>
+<text x="126" y="580" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#0F8E8B" text-anchor="start">B lands: v12</text>
+<rect x="60" y="678" width="410" height="92" rx="9" ry="9" fill="#DCEFE0" stroke="#2F8F4E" stroke-width="1.3"/>
+<text x="74" y="702" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="13" font-weight="800" fill="#2F8F4E" text-anchor="start">Row-level concurrency</text>
+<text x="74" y="722" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="400" fill="#1B3139" text-anchor="start">Each writer's rows are different rows, so Delta lands both</text><text x="74" y="738" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="400" fill="#1B3139" text-anchor="start">with no retry and no wait. Different chunks never contend.</text>
+<rect x="515" y="120" width="450" height="670" rx="14" ry="14" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#shadow)"/>
+<rect x="515" y="120" width="450" height="6" rx="3" fill="#B7791F"/>
+<text x="535" y="156" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="19" font-weight="800" fill="#0F1B2A" text-anchor="start">Shared metadata</text>
+<text x="535" y="178.0" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="400" fill="#5A6878" text-anchor="start">Two appends change the array's shape and a shared coordinate</text><text x="535" y="195.04" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="400" fill="#5A6878" text-anchor="start">chunk</text>
+<text x="535" y="232" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="800" fill="#7A5AA6" text-anchor="start" letter-spacing="1.2">MANIFEST</text>
+<line x1="577" y1="244" x2="577" y2="626" stroke="#7A5AA6" stroke-width="3"/>
+<circle cx="577" cy="280" r="9" fill="#7A5AA6"/>
+<text x="561" y="285" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#7A5AA6" text-anchor="end">v10</text>
+<circle cx="577" cy="400" r="9" fill="#7A5AA6"/>
+<text x="561" y="405" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#7A5AA6" text-anchor="end">v11</text>
+<circle cx="577" cy="590" r="9" fill="#7A5AA6"/>
+<text x="561" y="595" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#7A5AA6" text-anchor="end">v12</text>
+<rect x="667" y="220" width="75" height="24" rx="12" fill="#1F6FB5"/><text x="704.5" y="236.3" text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#FFFFFF">writer A</text>
+<rect x="817" y="220" width="75" height="24" rx="12" fill="#0F8E8B"/><text x="854.5" y="236.3" text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#FFFFFF">writer B</text>
+<line x1="705" y1="246" x2="705" y2="626" stroke="#1F6FB5" stroke-width="1.5" stroke-dasharray="4 4"/>
+<line x1="855" y1="246" x2="855" y2="626" stroke="#0F8E8B" stroke-width="1.5" stroke-dasharray="4 4"/>
+<line x1="589" y1="280" x2="855" y2="280" stroke="#7A8794" stroke-width="1.5" stroke-dasharray="3 3"/>
+<text x="780.0" y="300" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#5A6878" text-anchor="middle">both read v10</text>
+<text x="713" y="324" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#1F6FB5" text-anchor="start">write packs</text>
+<text x="863" y="324" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#0F8E8B" text-anchor="start">write packs</text>
+<path d="M 705 400 H 589" fill="none" stroke="#1F6FB5" stroke-width="2.6" marker-end="url(#arrow-1F6FB5)"/>
+<text x="601" y="390" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#1F6FB5" text-anchor="start">A lands: v11</text>
+<rect x="775" y="424" width="180" height="150" rx="8" ry="8" fill="#FBF1DC" stroke="#B7791F" stroke-width="1.4"/>
+<text x="787" y="444" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="800" fill="#B7791F" text-anchor="start" letter-spacing="1.2">B REBASES</text>
+<text x="787" y="462" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#1B3139" text-anchor="start">1 re-read the latest</text><text x="787" y="475" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#1B3139" text-anchor="start">version</text>
+<text x="787" y="494" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#1B3139" text-anchor="start">2 check none of its data</text><text x="787" y="507" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#1B3139" text-anchor="start">keys moved</text>
+<text x="787" y="526" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#1B3139" text-anchor="start">3 recompute the shape and</text><text x="787" y="539" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#1B3139" text-anchor="start">the shared chunk</text>
+<text x="787" y="558" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#1B3139" text-anchor="start">4 retry the MERGE</text>
+<path d="M 855 590 H 589" fill="none" stroke="#0F8E8B" stroke-width="2.6" marker-end="url(#arrow-0F8E8B)"/>
+<text x="601" y="580" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#0F8E8B" text-anchor="start">B lands: v12</text>
+<rect x="535" y="678" width="410" height="92" rx="9" ry="9" fill="#FBF1DC" stroke="#B7791F" stroke-width="1.3"/>
+<text x="549" y="702" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="13" font-weight="800" fill="#B7791F" text-anchor="start">Metadata conflicts rebase</text>
+<text x="549" y="722" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="400" fill="#1B3139" text-anchor="start">B's data files are never rewritten. Up to 20 attempts, with</text><text x="549" y="738" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="400" fill="#1B3139" text-anchor="start">a jittered wait capped at 16 s; each lost round means</text><text x="549" y="754" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="400" fill="#1B3139" text-anchor="start">another writer landed.</text>
+<rect x="990" y="120" width="450" height="670" rx="14" ry="14" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#shadow)"/>
+<rect x="990" y="120" width="450" height="6" rx="3" fill="#D2441F"/>
+<text x="1010" y="156" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="19" font-weight="800" fill="#0F1B2A" text-anchor="start">The same chunk</text>
+<text x="1010" y="178.0" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="400" fill="#5A6878" text-anchor="start">Two writes change cells of one inner chunk</text>
+<text x="1010" y="232" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="800" fill="#7A5AA6" text-anchor="start" letter-spacing="1.2">MANIFEST</text>
+<line x1="1052" y1="244" x2="1052" y2="626" stroke="#7A5AA6" stroke-width="3"/>
+<circle cx="1052" cy="280" r="9" fill="#7A5AA6"/>
+<text x="1036" y="285" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#7A5AA6" text-anchor="end">v10</text>
+<circle cx="1052" cy="400" r="9" fill="#7A5AA6"/>
+<text x="1036" y="405" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#7A5AA6" text-anchor="end">v11</text>
+<circle cx="1052" cy="590" r="9" fill="#7A5AA6"/>
+<text x="1036" y="595" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#7A5AA6" text-anchor="end">v12</text>
+<rect x="1142" y="220" width="75" height="24" rx="12" fill="#1F6FB5"/><text x="1179.5" y="236.3" text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#FFFFFF">writer A</text>
+<rect x="1292" y="220" width="75" height="24" rx="12" fill="#0F8E8B"/><text x="1329.5" y="236.3" text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#FFFFFF">writer B</text>
+<line x1="1180" y1="246" x2="1180" y2="626" stroke="#1F6FB5" stroke-width="1.5" stroke-dasharray="4 4"/>
+<line x1="1330" y1="246" x2="1330" y2="626" stroke="#0F8E8B" stroke-width="1.5" stroke-dasharray="4 4"/>
+<line x1="1064" y1="280" x2="1330" y2="280" stroke="#7A8794" stroke-width="1.5" stroke-dasharray="3 3"/>
+<text x="1255.0" y="300" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#5A6878" text-anchor="middle">both read v10</text>
+<text x="1188" y="324" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#1F6FB5" text-anchor="start">write packs</text>
+<text x="1338" y="324" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#0F8E8B" text-anchor="start">write packs</text>
+<path d="M 1180 400 H 1064" fill="none" stroke="#1F6FB5" stroke-width="2.6" marker-end="url(#arrow-1F6FB5)"/>
+<text x="1076" y="390" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#1F6FB5" text-anchor="start">A lands: v11</text>
+<rect x="1250" y="424" width="180" height="128" rx="8" ry="8" fill="#FCE9E2" stroke="#D2441F" stroke-width="1.6"/>
+<text x="1262" y="444" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="800" fill="#D2441F" text-anchor="start" letter-spacing="1.2">B's MERGE FAILS</text>
+<text x="1262" y="464" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#1B3139" text-anchor="start">Its compare-and-swap</text><text x="1262" y="478" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#1B3139" text-anchor="start">expected the chunk as v10</text><text x="1262" y="492" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#1B3139" text-anchor="start">had it. A changed it.</text>
+<text x="1262" y="532" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="700" fill="#D2441F" text-anchor="start">ZarrWriteConflict</text>
+<path d="M 1330 552 V 598" fill="none" stroke="#D2441F" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrow-D2441F)"/>
+<rect x="1238" y="604" width="184" height="24" rx="6" fill="#FFFFFF"/>
+<text x="1330" y="621" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#D2441F" text-anchor="middle">nothing of B is visible</text>
+<rect x="1010" y="678" width="410" height="92" rx="9" ry="9" fill="#FCE9E2" stroke="#D2441F" stroke-width="1.3"/>
+<text x="1024" y="702" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="13" font-weight="800" fill="#D2441F" text-anchor="start">A true overlap is an error</text>
+<text x="1024" y="722" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="400" fill="#1B3139" text-anchor="start">The error names the keys and the winning write. B reads the</text><text x="1024" y="738" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="400" fill="#1B3139" text-anchor="start">region again and writes again; GeoBrix never merges two</text><text x="1024" y="754" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="400" fill="#1B3139" text-anchor="start">writers' cells silently.</text>
+<text x="1460" y="818" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#7A8794" text-anchor="end">GeoBrix · Zarr stores</text>
+</svg>

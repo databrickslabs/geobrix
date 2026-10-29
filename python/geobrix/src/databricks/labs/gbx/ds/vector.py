@@ -549,6 +549,12 @@ def _zip_gdb_bundle(gdb_dir: str, zip_path: str) -> None:
                 zf.write(full, arcname=os.path.join(base, rel))  # "<name>.gdb/<rel>"
 
 
+def _geometry_type_option(value) -> Optional[str]:
+    """The ``geometryType`` writer option: ``None`` when it is not given or is blank (the type is
+    then taken from the first geometry), else the text without the blanks around it."""
+    return str(value).strip() or None if value is not None else None
+
+
 def _geometry_type_of(wkb: bytes) -> str:
     """OGR geometry-type name (e.g. 'Point', 'MultiPolygon') from a WKB blob."""
     from shapely import from_wkb
@@ -1498,7 +1504,7 @@ class VectorGbxReader(DataSourceReader):
         # Random-access formats (GPKG/FileGDB) are staged to worker-local temp first so
         # GDAL can seek; the stream reads the local copy.
         #
-        # Layout convention (T8): _members() returns paths sorted alphabetically so
+        # Layout convention: _members() returns paths sorted alphabetically so
         # partitions are emitted in source-path order. When a worker pulls consecutive
         # tasks from the same source file the per-worker staged-file cache (_VEC_STAGE)
         # is reused, paying the copy cost only once per source.
@@ -1827,7 +1833,7 @@ class VectorGbxWriter(DataSourceWriter):
             self.path = _resolve_single_file_output(self.path, self._file_name, ext)
 
         self.overwrite = overwrite
-        self.geometry_type_override = opts.get("geometrytype")
+        self.geometry_type_override = _geometry_type_option(opts.get("geometrytype"))
         self.layer_name = opts.get("layername")
         self.geom_col, self.srid_col, self.proj_col, self.attr_cols = _writer_col_roles(
             schema,
@@ -2186,7 +2192,7 @@ class VectorGbxWriter(DataSourceWriter):
             if geom_type is not None and crs is not None:
                 break
         geom_type = geom_type or "Unknown"
-        if self.driver == "OpenFileGDB" and geom_type == "Unknown":
+        if self.driver == "OpenFileGDB" and geom_type.lower() == "unknown":
             if self.geometry_type_override is not None:
                 # the option itself says Unknown (any other type would not be "Unknown")
                 raise ValueError(
@@ -2249,7 +2255,7 @@ class GeoJSONLGbxWriter(DataSourceWriter):
         # Strip a dbfs:/file: scheme so all os.* writes hit the bare FUSE path.
         self.path = to_local_path(path)
         self.overwrite = overwrite
-        self.geometry_type_override = opts.get("geometrytype")
+        self.geometry_type_override = _geometry_type_option(opts.get("geometrytype"))
         self.layer_name = opts.get("layername")
         mrpf = opts.get("maxrecordsperfile")
         self.max_records_per_file = int(mrpf) if mrpf else 0

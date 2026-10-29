@@ -221,7 +221,7 @@ def _window_dataset_bytes(
     # src.read with indexes as a list always returns 3D (bands, h, w); the
     # 2D-collapse path is unreachable here and has been removed.
     data = src.read(window=window, indexes=indexes)
-    profile = _comp.drop_ycbcr(src.profile)
+    profile = _comp.source_profile(src.profile)
     count = len(bands) if bands else src.count
     profile.update(
         driver="GTiff",
@@ -288,7 +288,7 @@ def _warp_bytes(win_bytes: bytes, want_crs) -> bytes:
     with MemoryFile(win_bytes) as mf, mf.open() as wds:
         mask_band = _nd.has_own_mask(wds) and wds.nodata is None
         with WarpedVRT(wds, crs=want_crs) as vrt:
-            prof = _comp.drop_ycbcr(vrt.profile)
+            prof = _comp.source_profile(vrt.profile)
             prof.update(driver="GTiff")
             data = vrt.read()
             mask = _warped_mask(wds, vrt) if mask_band else None
@@ -804,7 +804,7 @@ def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:
         return _materialize_zarr(tile)
     with open_tile(tile) as ds:
         data = ds.read()
-        profile = _comp.drop_ycbcr(ds.profile)
+        profile = _comp.source_profile(ds.profile)
         profile.update(driver="GTiff")
         # A source's own mask band travels with the bytes (the heavy tier reads them).
         mask = ds.read_masks(1) if _nd.has_own_mask(ds) else None
@@ -908,7 +908,7 @@ def _windowed_materialize_bytes(tile: VirtualTile) -> bytes:
 
             # Build the exact profile that _window_dataset_bytes / materialize_to_bytes
             # would produce.
-            profile = _comp.drop_ycbcr(src.profile)
+            profile = _comp.source_profile(src.profile)
             profile.update(
                 driver="GTiff",
                 height=int(window.height),
@@ -1016,7 +1016,7 @@ def _tile_to_bytes(vt: VirtualTile) -> Optional[bytes]:
         local_path = _resolve_local_or_windowed(vt, None, stack)
         with rasterio.open(local_path) as src:
             # Resolve window=None → full extent, mirroring open_tile() semantics.
-            # A deferred whole-file virtual tile (Task 2) carries window=None;
+            # A deferred whole-file virtual tile carries window=None;
             # materialising it must produce the same bytes as an explicit full window.
             if vt.window is None:
                 window = Window(0, 0, src.width, src.height)

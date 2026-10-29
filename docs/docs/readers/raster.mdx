@@ -55,8 +55,10 @@ prepare-then-read pipeline.
 | `clipCrs` | _none_ | CRS for `clipPolygons` that lack an embedded SRID (e.g. `"EPSG:27700"`). Precedence: an EWKB/EWKT polygon's embedded SRID → `clipCrs` → the raster's CRS. |
 | `tileSize` | _none_ | Cut the whole raster into a regular fixed-size pixel grid: `"w,h"` (e.g. `"512,512"`) or a single `"512"` for square tiles. One tile per grid cell; edge cells are clamped to the extent. Mutually exclusive with `clipPolygons` and `windows`. Materialized tiles are guarded to the ~2 GB Spark-cell limit (a too-large `tileSize` raises a clear error); virtual tiles (`virtualTiles=true`) carry no bytes and are unguarded. |
 | `overlapPercent` | `0` | Overlap between adjacent `tileSize` cells, as a percentage of tile size (`overlap_px = ceil(tile_dim · pct/100)`, `step = tile_dim − overlap_px`). Applies to **`tileSize` only** (an error otherwise). Default `0` = non-overlapping grid. |
-| `tilesTable` | _none_ | Delta table to use as a tile index (see [pre-computed tile inputs](#advanced-pre-computed-tile-inputs) below). |
-| `skipOrdering` | `"false"` | Pass `"true"` to suppress the auto-sort-by-source-path that `tilesTable` reads apply by default. See [tilesTable auto-order](#tiles-table-auto-order) below. |
+| `tilesTable` | _none_ | Delta table to use as a tile index. `spark.read` cannot read the table (the read is planned in a worker that has no Spark session), so passing it there raises an error: read the index with [`read_tiles_table`](#read-tiles-table) instead. |
+| `versionAsOf` | _none_ | For a tile index: read this Delta version of the table (a non-negative integer, e.g. `"3"`), so a pipeline re-runs against the exact tile index it used. Mutually exclusive with `timestampAsOf`; an error without a tile index. See [pin a tile index version](#tiles-table-time-travel). |
+| `timestampAsOf` | _none_ | For a tile index: read the table as it was at this time (e.g. `"2026-10-01 00:00:00"`): the version current then. The time must fall between the table's first and latest commits, or Delta raises an error; use `versionAsOf` for an exact version. Mutually exclusive with `versionAsOf`; an error without a tile index. |
+| `skipOrdering` | `"false"` | Pass `"true"` to suppress the auto-sort-by-source-path that `manifest` and tile-index reads apply by default. See [tile index auto-order](#tiles-table-auto-order) below. |
 
 :::tip Why overlap?
 A hard tiling grid can slice straight through a spatial feature (a field, a building, an airport)
@@ -260,7 +262,7 @@ The GDAL reader can work with [many GDAL raster drivers](https://gdal.org/driver
 - **GRIB/GRIB2** (.grb, .grib2) - Meteorological data
 - **JPEG2000** (.jp2) - High-compression imagery
 - **ENVI** (.hdr) - Remote sensing format
-- **Zarr** - Cloud-native array storage
+- **Zarr** - Cloud-native array storage. For Zarr cubes use `gbx_zarr_read` instead of GDAL (see [Zarr stores](../formats/zarr)); GDAL before 3.13 cannot read sharded Zarr v3 stores, or ones that use the `crc32c` codec, which `gbx_zarr_write` writes by default
 - **And 150+ more formats**
 
 :::note Format Availability
@@ -396,23 +398,12 @@ The `hrrr-weather` dataset is included in the **complete** sample-data bundle, n
   outputConstant="READ_GRIB2_output"
 />
 
-### Format Selection Guide
+### Which format to use
 
-| Format | Size | Compression | Multi-Band | Time-Series | Cloud-Friendly |
-|--------|------|-------------|------------|-------------|----------------|
-| **GeoTIFF** | Good | Good | Yes | No | Yes (COG) |
-| **NetCDF** | Excellent | Good | Yes | Yes | Moderate |
-| **HDF5** | Excellent | Good | Yes | Yes | Poor |
-| **GRIB2** | Excellent | Excellent | Yes | Yes | Poor |
-| **JPEG2000** | Excellent | Excellent | Yes | No | Moderate |
-| **Zarr** | Excellent | Good | Yes | Yes | Excellent |
-
-**General Rules**:
-- Start with **GeoTIFF** (use COG for cloud)
-- Use **NetCDF** for multi-dimensional scientific data
-- Use **HDF5** when required by data provider (e.g., MODIS)
-- Use **GRIB2** for weather models
-- Use **Zarr** for cloud-native analysis at scale
+See [Choosing a Format](../formats/overview) for the selection guide: how raster, array, vector and
+tile formats compare, and the reader, writer and functions for each. In short, start with GeoTIFF
+(COG for cloud storage), use NetCDF, HDF5 or GRIB2 when a data provider publishes them, and use
+[Zarr](../formats/zarr) for large cubes that you read in slices and write back to.
 
 ## Common functions: used vs excluded
 
@@ -427,12 +418,12 @@ primitives. The table below shows which are active in this reader and which are 
 
 ## Advanced: pre-computed tile inputs (`manifest` / tile index) {#advanced-pre-computed-tile-inputs}
 
-The default directory read is fast — a stat-free listing plans ~10k files in ~1.5 s — so most reads need nothing special. The `manifest` and `tilesTable` options are an optional optimization for two specific cases:
+The default directory read is fast — a stat-free listing plans ~10k files in ~1.5 s — so most reads need nothing special. A `manifest` and a tile index (`tilesTable`) are an optional optimization for two specific cases:
 
 - **Pre-computed windows you already maintain** — a manifest or tile index lets the reader use your saved file listing directly, skipping the directory walk entirely.
 - **Very large tile counts** where even a fast listing accumulates across many repeated job runs.
 
-Both options reduce plan time from the directory walk (~1.5 s at 10k files) to a single file or table read. See [Benchmarking → Reader plan-time listing](../api/benchmarking#reader-plan-time-listing) for the measured numbers.
+Both reduce plan time from the directory walk (~1.5 s at 10k files) to a single file or table read. See [Benchmarking → Reader plan-time listing](../api/benchmarking#reader-plan-time-listing) for the measured numbers.
 
 - **`manifest` option** — supply a JSON or Parquet file listing `path` + `window` for each tile; the reader skips the directory walk and header opens entirely.
   ```python
@@ -441,35 +432,60 @@ Both options reduce plan time from the directory walk (~1.5 s at 10k files) to a
       .option("virtualTiles", "true") \
       .load("/Volumes/catalog/schema/vol/rasters")
   ```
-- **`tilesTable` option** — point to a Delta table that serves as a **tile index**: one row per tile with a `path` column (+ optional `window` / dimension columns). It is a catalog of file *references*, **not** the tile pixels — the reader still opens each referenced file and extracts its window; it only skips discovering the files by walking the directory.
+- **Tile index (`tilesTable`)** — a Delta table that serves as a **tile index**: one row per tile with a `path` column (+ optional `window` / dimension columns). It is a catalog of file *references*, **not** the tile pixels — the reader still opens each referenced file and extracts its window; it only skips discovering the files by walking the directory. Read it with [`read_tiles_table`](#read-tiles-table), not `spark.read`:
   ```python
-  spark.read.format("raster_gbx") \
-      .option("tilesTable", "geospatial.myschema.tile_index") \
-      .option("virtualTiles", "true") \
-      .load("/")
+  from databricks.labs.gbx.ds.raster import read_tiles_table
+
+  df = read_tiles_table(
+      spark, "geospatial.myschema.tile_index", {"virtualTiles": "true"}
+  )
   ```
 - **Fewer, larger COGs** — consolidate small files into Cloud-Optimized GeoTIFFs using the [COG Writer](../writers/cog); the reader then opens a small number of large files whose headers are comparatively cheap.
 
 **A tile index is not a materialized-tile table.** `manifest` / `tilesTable` catalog *where the rasters are* (paths, plus optional windows) — essentially a saved file listing. The raster bytes stay in files and are read lazily (especially with `virtualTiles=true`); the index only lets the reader skip re-walking the directory. That is different from an ingest that has already **decoded** rasters into a Delta table with a tile-struct/bytes column — if you have that, read it directly with `spark.table(...)`; you don't need a reader at all.
 
-### tilesTable auto-order and `skipOrdering` {#tiles-table-auto-order}
+### Read a tile index: `read_tiles_table` {#read-tiles-table}
 
-When `tilesTable` is set, the reader **auto-orders tiles by source path** before planning
-partitions. This groups all tiles from the same source GeoTIFF into adjacent partitions, so a
-worker that opens a large raster once can decode all its windows without reopening it. For a
-table with many tiles per source file (a common windowed-GeoTIFF ingest), this amortization
-meaningfully reduces open overhead — each file is opened once per partition instead of once per
-tile.
-
-Pass `skipOrdering="true"` when the table is already physically ordered (e.g. written with
-`layout="order"` or `layout="cluster"`) or when you apply ordering downstream:
+`spark.read.format("raster_gbx").option("tilesTable", ...)` cannot read the table: Spark plans
+the read in a worker that has no Spark session to open the table with, so the read fails with an
+error that points here. `read_tiles_table` reads the table with **your** session and returns the
+DataFrame the reader would return: the same `(source, tile)` columns, one row per tile, planned
+and read in tasks, with the table never collected to the driver. It needs no JAR, and it uses
+only `spark.read` and DataFrame operations, with no `sparkContext`, RDD or JVM access, so it works
+over Spark Connect.
 
 ```python
-spark.read.format("raster_gbx") \
-    .option("tilesTable", "geospatial.myschema.tile_index") \
-    .option("skipOrdering", "true") \
-    .option("virtualTiles", "true") \
-    .load("/")
+read_tiles_table(spark, table, options=None, *, format="raster_gbx", num_partitions=None)
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `spark` | _required_ | The session that reads the table. |
+| `table` | _required_ | The Delta tile index: a `path` column, and either a `window` struct or flat `col_off`, `row_off`, `width` and `height` columns for one tile per row. A row with only a `path` is a whole file (cut by `tileSize` or `sizeInMB` when you set them). |
+| `options` | `None` | Dict of the reader options on this page, for example `virtualTiles`, `versionAsOf`, `timestampAsOf`, `skipOrdering`, `tileSize`, `sizeInMB`. |
+| `format` | `"raster_gbx"` | `"raster_gbx"`, `"gtiff_gbx"` or `"cog_gbx"`. |
+| `num_partitions` | `None` | The number of tasks that read the tiles. By default two tasks per index row, up to 256, so the tiles of one source file are read in parallel and fewer of them share a task (a row cut into several tiles by `tileSize` or `sizeInMB` counts once). Tiles are spread by tile, not by source file. |
+
+A tile whose file is missing fails the read.
+
+### Tile index auto-order and `skipOrdering` {#tiles-table-auto-order}
+
+A `manifest` read **auto-orders tiles by source path** before planning partitions. This groups all
+tiles from the same source GeoTIFF into adjacent partitions, so a worker that opens a large raster
+once can decode all its windows without reopening it. For a manifest with many tiles per source
+file (a common windowed-GeoTIFF ingest), this amortization meaningfully reduces open overhead.
+
+`read_tiles_table` spreads the tiles across tasks by tile, so that a source with many tiles is read
+in parallel, and **orders the tiles by source path inside each task**: the tiles of one source that
+share a task are read one after another and reuse the opened file. Pass `skipOrdering="true"` to
+leave that ordering out, for example when you order the tiles downstream:
+
+```python
+read_tiles_table(
+    spark,
+    "geospatial.myschema.tile_index",
+    {"skipOrdering": "true", "virtualTiles": "true"},
+)
 ```
 
 #### Durable co-location: `CLUSTER BY` + `OPTIMIZE`
@@ -496,9 +512,9 @@ OPTIMIZE geospatial.myschema.tile_index;
 ```
 
 With `layout="cluster"`, `OPTIMIZE` physically co-locates tiles from the same source into the
-same data files. Subsequent reads with `tilesTable` have source-adjacent rows from the
-start — `skipOrdering="true"` is safe once the table has been optimized, and it avoids
-re-sorting an already-ordered scan.
+same data files, so a scan of the index touches fewer files per source. `read_tiles_table` spreads
+the tiles across tasks by tile whatever the layout of the table, so the layout does not change
+which task reads a tile.
 
 `layout="order"` (insert-time `ORDER BY path`) is the simpler default: no DDL change, no
 `OPTIMIZE` required. It works well for tables that are built once. Use `layout="cluster"` when
@@ -507,6 +523,31 @@ the table is updated incrementally and you run periodic `OPTIMIZE` as part of ma
 :::note Coordinate reference systems
 Raster readers extract the CRS from each file's spatial reference metadata and store it as a canonical string in `tile.metadata` and the `tile.crs` field (e.g. `"EPSG:4326"`, `"ESRI:54008"`) — ESRI and OGC authorities are preserved. The `clipCrs` option declares the CRS of a plain WKT/WKB clip polygon; an embedded SRID in an EWKT/EWKB polygon always takes precedence. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
 :::
+
+### Pin a tile index version: `versionAsOf` and `timestampAsOf` {#tiles-table-time-travel}
+
+A tile index is a Delta table, so its contents change as files are added to it. To plan a read
+from the table as it was, pass one of two options to [`read_tiles_table`](#read-tiles-table):
+
+- `versionAsOf` reads that Delta version of the table (a non-negative integer, such as `"3"`).
+- `timestampAsOf` reads the version that was current at that time (such as `"2026-10-01 00:00:00"`).
+  Delta accepts only a time between the table's first and latest commits: a time after the latest
+  commit fails the read, even when the table has not changed since.
+
+```python
+df = read_tiles_table(
+    spark, "geospatial.myschema.tile_index", {"virtualTiles": "true", "versionAsOf": "3"}
+)
+```
+
+To re-run against exactly the tile index an earlier run used, note the version that run read
+(`DESCRIBE HISTORY` on the table lists the versions) and pass it as `versionAsOf`; a timestamp
+depends on commit times and is easy to place outside the table's history. Set at most one of the
+two, and only for a tile index: a manifest or a directory walk has no version, so either option
+there is an error. The table must be a Delta table. A version that does not exist
+(or that `VACUUM` has removed), or a time outside the table's history, fails the read. The options
+pin the tile index only: the index lists files, and the pixels are whatever those files hold when
+the tiles are read.
 
 ## Next Steps
 

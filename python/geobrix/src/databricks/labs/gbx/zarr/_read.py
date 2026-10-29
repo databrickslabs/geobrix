@@ -332,11 +332,16 @@ def _open_source(spark, source, kind, version_as_of, timestamp_as_of) -> _Source
 
 
 def _open_table(spark, table, version_as_of, timestamp_as_of) -> _Source:
+    from databricks.labs.gbx.zarr._filemode import FileLayout
     from databricks.labs.gbx.zarr._manifest import read_props, read_rows, snapshot
 
-    props = read_props(spark, table)
+    props = read_props(spark, table, need_file=True)
     snap = snapshot(
-        spark, table, version_as_of=version_as_of, timestamp_as_of=timestamp_as_of
+        spark,
+        table,
+        version_as_of=version_as_of,
+        timestamp_as_of=timestamp_as_of,
+        files=FileLayout.of(props),
     )
     metas = {}
     for row in read_rows(spark, snap, kinds=["group", "array"]).to_pylist():
@@ -689,6 +694,15 @@ def _spark_type(kind: str):
     }[kind]
 
 
+def _table_struct(cfg: _TaskConfig):
+    """The Spark schema of a ``output="table"`` read."""
+    from pyspark.sql import types as T
+
+    return T.StructType(
+        [T.StructField(n, _spark_type(k), True) for n, k in cfg.columns]
+    )
+
+
 def _column_kind(name: str, dtype: np.dtype) -> str:
     """The table column kind for values of ``dtype``; complex and the like are refused."""
     kind = _KINDS.get((dtype.kind, dtype.itemsize))
@@ -803,8 +817,14 @@ def _resolve_axes(src: _Source, variables, sel, isel, decode, flag):
     return dim_coords, stored, coords, axes
 
 
-def _plan(spark, src: _Source, variables, sel, isel, output, decode, flag):
-    """``(units, config)`` for reading ``variables``, or ``([], config)`` for nothing."""
+def _plan(
+    spark, src: _Source, variables, sel, isel, output, decode, flag, *, units=True
+):
+    """``(units, config)`` for reading ``variables``, or ``([], config)`` for nothing.
+
+    ``units=False`` returns the config alone (``[]`` for the units): a task that is handed
+    its unit still needs the config, and has no use for the units it was not handed.
+    """
     arrays = src.arrays
     dim_coords, stored, coords, axes = _resolve_axes(
         src, variables, sel, isel, decode, flag
@@ -831,15 +851,15 @@ def _plan(spark, src: _Source, variables, sel, isel, output, decode, flag):
         columns = _table_columns(variables, arrays, dim_coords, typed, decode, flag)
 
     budget = _budget_bytes()
-    units: list[Unit] = []
-    if output == "blocks":
+    planned: list[Unit] = []
+    if units and output == "blocks":
         for v in variables:
             meta = arrays[v]
             touched = touched_chunks(axes[v], meta.chunks)
             by_key = src.rows(meta, sorted({unit_key(meta, c) for c in touched}))
-            units += plan_units(meta, axes[v], by_key, budget)
-    else:
-        units = _plan_table(src, variables, axes[variables[0]], budget)
+            planned += plan_units(meta, axes[v], by_key, budget)
+    elif units:
+        planned = _plan_table(src, variables, axes[variables[0]], budget)
 
     read = {v: arrays[v] for v in variables}
     cfg = _TaskConfig(
@@ -865,7 +885,7 @@ def _plan(spark, src: _Source, variables, sel, isel, output, decode, flag):
         batch_bytes=max(1, budget // _BATCH_SHARE),
         columns=columns,
     )
-    return units, cfg
+    return planned, cfg
 
 
 def _plan_table(src: _Source, variables, axes, budget) -> list[Unit]:
@@ -952,8 +972,11 @@ class _UnitReader:
             self.store.close()
 
 
-def _run_unit(cfg: _TaskConfig, unit: Unit) -> Iterator[pa.RecordBatch]:
-    reader = _UnitReader(cfg, unit)
+def _run_unit(
+    cfg: _TaskConfig, unit: Unit, engine: str = "zarr"
+) -> Iterator[pa.RecordBatch]:
+    """The batches of one unit. ``engine`` is how a plain store's arrays are opened."""
+    reader = _UnitReader(cfg, unit, engine)
     try:
         for name in (unit.array,) if cfg.output == "blocks" else cfg.variables:
             reader.array(name)  # open before the threads start
@@ -1343,14 +1366,7 @@ def gbx_zarr_read(
         spark, src, names, sel, isel, output, decode, use_zarr_fill_value_as_mask
     )
     reach = source_access(spark, src, access)
-    if output == "blocks":
-        schema = BLOCKS_SCHEMA
-    else:
-        from pyspark.sql import types as T
-
-        schema = T.StructType(
-            [T.StructField(n, _spark_type(k), True) for n, k in cfg.columns]
-        )
+    schema = BLOCKS_SCHEMA if output == "blocks" else _table_struct(cfg)
     if not units:
         return spark.createDataFrame([], schema)
     task, _ = bounded_closure(
@@ -1418,12 +1434,24 @@ def _grid_mapping_attrs(src: _Source, meta: ArrayMeta) -> dict | None:
 
 
 def _plan_tile_set(
-    spark, src, names, explicit, sel, isel, decode, flag, band_dim, tile_size
+    spark,
+    src,
+    names,
+    explicit,
+    sel,
+    isel,
+    decode,
+    flag,
+    band_dim,
+    tile_size,
+    cap_bytes=None,
 ):
     """The ``TilePlan`` of each of ``names`` that has a regular 2-D grid.
 
     A variable named in ``variables`` (``explicit``) that cannot be tiled raises; one picked
     by default is left out with a warning, as a variable GeoBrix cannot decode is.
+    ``cap_bytes`` is the largest tile a task may hold, for a caller that has no session to
+    measure it with; by default it is measured from ``spark``.
     """
     from databricks.labs.gbx.ds.file_gbx import _connect_aware_lru_sizing
     from databricks.labs.gbx.zarr._tiles import plan_tiles
@@ -1437,7 +1465,7 @@ def _plan_tile_set(
         )
     # the largest tile a task may hold (64 MiB on Spark Connect, 256 MiB on classic): a task
     # cannot measure it, so the driver does, and it travels with the tiles
-    cap = _connect_aware_lru_sizing(spark)[0]
+    cap = _connect_aware_lru_sizing(spark)[0] if cap_bytes is None else cap_bytes
     plans, left_out = [], {}
     for v in names:
         meta = arrays[v]

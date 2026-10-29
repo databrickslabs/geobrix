@@ -5,8 +5,8 @@ Bins (x, y, z) arrays into a ``width_px x height_px`` grid over the extent
 Empty cells (no points) are filled with NoData (-9999.0). Returns single-band
 Float32 GTiff bytes.
 
-This module is intentionally Spark-free: no pyspark import. Task 6 wraps
-``bin_points`` in UDFs (``gbx_rst_binpoints`` / ``_agg``).
+This module is intentionally Spark-free: no pyspark import. The
+SQL functions wrap ``bin_points`` in UDFs (``gbx_rst_binpoints`` / ``_agg``).
 """
 
 from __future__ import annotations

@@ -263,7 +263,7 @@ def test_register_enables_coord_structs_sql(spark):
     assert (rc["x"], rc["y"]) == (2, 1)
 
 
-# --- Tier 2: grouped aggregators via SQL GROUP BY ---------------------------
+# --- Grouped aggregators via SQL GROUP BY ---------------------------
 def _agg_ras_bytes(data, ulx=0.0, uly=10.0, px=1.0, epsg=32633, nodata=-9999.0):
     import numpy as np
     from rasterio.io import MemoryFile

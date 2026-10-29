@@ -43,7 +43,7 @@ PORTFOLIO_META = json.dumps({
 
 
 # ---------------------------------------------------------------------------
-# Task 5.1 — portfolio_mvt_tiles: the three-layer MVT pyramid.
+# portfolio_mvt_tiles: the three-layer MVT pyramid.
 # ---------------------------------------------------------------------------
 @dp.materialized_view(
     name="portfolio_mvt_tiles",
@@ -101,7 +101,7 @@ def portfolio_mvt_tiles():
 
 
 # ---------------------------------------------------------------------------
-# Task 5.2 — pmtiles_shards: fanout to bounded per-shard PMTiles archives.
+# pmtiles_shards: fanout to bounded per-shard PMTiles archives.
 #
 # Fully LAZY: the returned plan reads portfolio_mvt_tiles, so Lakeflow infers the
 # dependency and executes it AFTER that MV is materialized (an eager collect in the
@@ -195,7 +195,7 @@ def pmtiles_shards():
 
 
 # ---------------------------------------------------------------------------
-# Task 5.3 — overview_manifest: one light PMTiles archive of the whole cascade.
+# overview_manifest: one light PMTiles archive of the whole cascade.
 #
 # Same lazy-plan + UDF-write contract as pmtiles_shards (see the note above): the
 # single archive is folded over the z <= overview_max_z slice of portfolio_mvt_tiles

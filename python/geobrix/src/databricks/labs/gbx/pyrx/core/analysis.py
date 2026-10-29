@@ -137,7 +137,7 @@ def proximity(ds, target_values, distunits, max_distance):
             )
 
     decoded_bytes = dist.nbytes
-    profile = _comp.drop_ycbcr(ds.profile)
+    profile = _comp.source_profile(ds.profile)
     profile.update(
         driver="GTiff",
         count=1,
@@ -162,8 +162,8 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
       * ``compression`` (default ``"DEFLATE"``): GDAL COG compression name.
         Accepted values are the same profile names accepted by rio-cogeo:
         ``deflate``, ``lzw``, ``zstd``, ``jpeg``, ``webp``, ``packbits``,
-        ``lzma``, ``lerc``, ``lerc_deflate``, ``lerc_zstd``, ``raw``.
-        Unknown values raise ``ValueError``.
+        ``lzma``, ``lerc``, ``lerc_deflate``, ``lerc_zstd``, ``raw``; ``none`` is read as
+        ``raw`` (no compression). Unknown values raise ``ValueError``.
       * ``blocksize`` (default 512): internal tile size; must be ``> 0``.
       * ``overview_resampling`` (default ``"AVERAGE"``): downsampling algorithm
         for the auto-generated overview pyramid (e.g. ``"AVERAGE"``,
@@ -193,6 +193,8 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
     if overview_resampling is None or str(overview_resampling).strip() == "":
         raise ValueError("rst_cog_convert: overview_resampling must be non-empty")
     compression = str(compression).upper()
+    if compression == "NONE":
+        compression = "RAW"  # the rio-cogeo profile table calls "no compression" raw
     overview_resampling = str(overview_resampling).upper()
 
     # "AUTO" is a special sentinel meaning "size-adaptive ZSTD" — it bypasses
@@ -203,8 +205,9 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
 
     # Validate compression against rio-cogeo's profile names (compression.COG_PROFILES, a
     # local copy: rio-cogeo itself is not needed), so callers passing profile names (e.g.
-    # "deflate", "lzw", "raw") still work. "raw" maps to no compression (omit the compress
-    # kwarg for driver="COG").
+    # "deflate", "lzw", "raw") still work. "raw" (and "none", read as "raw" above) means no
+    # compression: the authority emits compress=none below, since the COG driver compresses
+    # with LZW when none is named.
     if not _is_auto and compression.lower() not in _comp.COG_PROFILES:
         raise ValueError(
             f"rst_cog_convert: unknown compression '{compression}'; "
@@ -218,7 +221,8 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
     data = ds.read()
 
     # Route compression through the authority for codec/level/predictor.
-    # Map "RAW" -> "none" so the authority emits no compression keys.
+    # Map "RAW" -> "none": the authority emits compress=none (the COG driver
+    # would otherwise default to LZW).
     # "AUTO" is passed through directly so creation_opts picks size-adaptive
     # ZSTD level from decoded_bytes (the ZSTD baseline, same as the GTiff path).
     _comp_arg = "none" if compression == "RAW" else compression.lower()
@@ -226,16 +230,14 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
         str(ds.dtypes[0]), decoded_bytes=data.nbytes, compress=_comp_arg, driver="COG"
     )
 
-    profile = ds.profile.copy()
+    # The source's layout and codec keys are not the COG driver's (cog_profile); merge the authority
+    # options (codec + level + predictor); for RAW that is compress=none alone.
+    profile = _comp.cog_profile(ds.profile)
     profile.update(
         driver="COG",
         blocksize=blocksize,
         overview_resampling=overview_resampling,
     )
-    # Remove stale compression keys from the source profile before merging authority opts.
-    for _k in ("compress", "predictor", "zstd_level", "zlevel"):
-        profile.pop(_k, None)
-    # Merge authority options (codec + level + predictor); RAW path emits empty dict.
     profile.update(_comp_opts)
 
     tmp = new_local_temp_file(suffix=".tif")
@@ -322,7 +324,8 @@ def cog_convert_file(
         _src_nbits = _src.tags(1, ns="IMAGE_STRUCTURE").get("NBITS")
 
     # Route compression through the authority for codec/level/predictor.
-    # Map "RAW" -> "none" so the authority emits no compression keys.
+    # Map "RAW" -> "none": the authority emits compress=none (the COG driver
+    # would otherwise default to LZW).
     _comp_arg = (
         "none" if str(compression).upper() == "RAW" else str(compression).lower()
     )
@@ -341,7 +344,7 @@ def cog_convert_file(
         overview_resampling=str(overview_resampling).upper(),
         bigtiff=bigtiff_val,
     )
-    # Merge authority options (codec + level + predictor); RAW path emits empty dict.
+    # Merge authority options (codec + level + predictor); RAW is compress=none alone.
     creation.update(_comp_opts)
 
     with rasterio.Env(GDAL_CACHEMAX=200):
@@ -680,7 +683,7 @@ def viewshed(ds, observer_x, observer_y, observer_height, target_height, max_dis
         )
 
     decoded_bytes = out.nbytes
-    profile = _comp.drop_ycbcr(ds.profile)
+    profile = _comp.source_profile(ds.profile)
     # The output's own grid: writing a window into the DEM's full-size profile would make
     # GDAL resample it up to the DEM's size.
     profile.update(

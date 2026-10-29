@@ -1,4 +1,4 @@
-"""G1 — standing invariant: every registered light-tier function that RETURNS a
+"""Standing invariant: every registered light-tier function that RETURNS a
 raster tile emits the 9-field ``V2_TILE_SCHEMA``.
 
 Two guards, both data-driven so they cannot go stale:
@@ -21,7 +21,7 @@ Two guards, both data-driven so they cannot go stale:
    cannot see the INTERNAL functional-form UDF (``_as_tile_cellid_envelope_udf``)
    because it is not registered — this static guard catches a regression there too.
 
-Replaces per-function schema assertions (folded in — see Task 6 consolidation).
+Replaces per-function schema assertions (folded in).
 """
 
 import re

@@ -1,7 +1,7 @@
-"""Unit tests for the FILE-table writer SQL builders (Task 4).
+"""Unit tests for the FILE-table writer SQL builders.
 
 These are pure string assertions — no Spark session required.
-Execution against a real FILE table is verified in Task 9 (dogfood DBR-19).
+Execution against a real FILE table is verified on Databricks Runtime 19.
 """
 
 from unittest.mock import MagicMock
@@ -304,7 +304,7 @@ def test_write_file_table_plain_layout_no_order_by():
 
 
 # ---------------------------------------------------------------------------
-# Task 5: build_create_sql/write_file_table compose file_gbx._validate_layout
+# build_create_sql/write_file_table compose file_gbx._validate_layout
 # ---------------------------------------------------------------------------
 
 

@@ -35,6 +35,7 @@ import rasterio
 from rasterio.transform import Affine
 
 from databricks.labs.gbx.bench import manifest as _m
+from databricks.labs.gbx.pyrx.core.compression import source_profile
 
 # Recipes and their output filenames. The element ORDER is the band/merge order
 # the consuming function relies on (frombands element 0 -> band 1, etc.).
@@ -89,7 +90,7 @@ def _synth_frombands(src_path: str, out: Path) -> List[str]:
             paths.append(str(p))
             if p.exists():
                 continue
-            profile = ds.profile.copy()
+            profile = source_profile(ds.profile, unless_jpeg=True)
             profile.update(driver="GTiff", count=1)
             _write(profile, [ds.read(b)], p)
     return paths
@@ -100,7 +101,7 @@ def _synth_combineavg(src_path: str, out: Path) -> List[str]:
     paths: List[str] = []
     with rasterio.open(src_path) as ds:
         data = ds.read()
-        profile = ds.profile.copy()
+        profile = source_profile(ds.profile, unless_jpeg=True)
         profile.update(driver="GTiff")
         for i in range(2):
             p = out / f"copy_{i}.tif"
@@ -134,7 +135,7 @@ def _synth_merge(src_path: str, out: Path) -> List[str]:
             paths.append(str(p))
             if p.exists():
                 continue
-            profile = ds.profile.copy()
+            profile = source_profile(ds.profile, unless_jpeg=True)
             profile.update(driver="GTiff", transform=tr)
             _write(profile, [data[b] for b in range(data.shape[0])], p)
     return paths

@@ -14,12 +14,15 @@
 # URLs for our direct dependencies are listed at the top of
 # .maven-keys.list.
 #
-# Requires: mvn (run inside the geobrix-dev container or any environment
-# with Maven 3.8+ and network access to Maven Central / db-maven-proxy).
+# Requires: the pinned Maven. Inside the geobrix-dev container run it as
+# `GBX_MVN=mvn ./scripts/security/maven-pgp-bootstrap` (the image installs the version the
+# wrapper pins, and the container reaches the Maven mirror). Anywhere else it runs ./mvnw,
+# which needs a JDK and network access to the pinned distribution.
 
 set -eu
 
 root="$(git rev-parse --show-toplevel)"
+mvn_cmd="${GBX_MVN:-${root}/mvnw}"
 log="${root}/target/pgpverify-bootstrap.log"
 
 mkdir -p "${root}/target"
@@ -32,7 +35,7 @@ mkdir -p "${root}/target"
     # pgpverify-maven-plugin >= 1.13 (emits "Parameter 'failNoKey' is unknown").
     # Missing-keysmap-entry behavior in 1.19.1 is controlled by the keysmap
     # file itself, not by mojo parameters.
-    mvn -B -q -Pverify-pgp verify \
+    "${mvn_cmd}" -B -q -Pverify-pgp verify \
         -DskipTests \
         -Dscoverage.skip \
         -Dscalastyle.skip=true \
@@ -86,6 +89,6 @@ awk '
 ' "${log}" | sort
 
 printf '\n' >&2
-printf 'Draft written above. Full mvn log: %s\n' "${log}" >&2
+printf 'Draft written above. Full Maven log: %s\n' "${log}" >&2
 printf 'Cross-check every fingerprint against the project trust anchors\n' >&2
 printf 'listed at the top of .maven-keys.list before committing.\n' >&2

@@ -1087,6 +1087,29 @@ def test_vector_write_attribute_types_follow_cf_conventions(spark, tmp_path, how
     assert [int(x) for x in got["ok"] if x is not None] == [1]
     assert [got[c].count(None) for c in ("seen", "ntz", "day", "ok")] == [1, 1, 1, 1]
 
+    # and netcdf_gbx reads it back as the types it was written from. A timestamp collects as a
+    # naive datetime in the session's zone, so each instant is expected in that zone (the
+    # process zone, which is the session's: the same on UTC, where nothing moves).
+    def collected(instant):
+        return instant.astimezone().replace(tzinfo=None)
+
+    back = (
+        spark.read.format("netcdf_gbx")
+        .option("mode", "vector")
+        .load(str(out))
+        .collect()
+    )
+    assert {(r["seen"], r["ntz"], r["day"], r["label"], r["ok"]) for r in back} == {
+        (
+            collected(seen_at),
+            collected(wall_clock.replace(tzinfo=utc)),
+            datetime.date(2026, 3, 1),
+            "north",
+            True,
+        ),
+        (None, None, None, "", None),
+    }
+
 
 # ---------------------------------------------------------------------------
 # merge / keepParts / fileName / partPrefix

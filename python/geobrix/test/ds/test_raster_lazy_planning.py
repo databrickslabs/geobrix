@@ -127,9 +127,9 @@ def test_plan_partitions_tilesize_still_reads_header_at_plan(tmp_path, monkeypat
 
 
 def test_read_defers_window_via_spark(tmp_path, spark):
-    """Virtual passthrough read via Spark → tile.window is None (deferred, Task 2).
+    """Virtual passthrough read via Spark → tile.window is None (deferred).
 
-    Task 2 deferred the rasterio.open even further: read() now emits window=None
+    read() defers the rasterio.open even further: it emits window=None
     for whole-file virtual tiles instead of filling in the concrete dims eagerly.
     The window is resolved lazily at the first pixel op (open_tile / open_windowed_via_fileref).
     """
@@ -150,7 +150,7 @@ def test_read_defers_window_via_spark(tmp_path, spark):
     assert len(rows) == 1
     tile = rows[0]["tile"]
     assert tile["raster"] is None, "Virtual tile must have no raster bytes"
-    # Task 2: window stays None (deferred) — resolved lazily by open_tile
+    # window stays None (deferred) — resolved lazily by open_tile
     assert (
         tile["window"] is None
     ), "whole-file virtual tile must have deferred window=None"
@@ -188,7 +188,7 @@ def test_read_lazy_window_three_files(tmp_path, spark):
     for i, (w, h) in enumerate(sizes):
         key = str(tmp_path / f"raster_{i}.tif")
         tile = by_path[key]
-        # Task 2: window is deferred (None) — dims must NOT come from the tile row
+        # window is deferred (None) — dims must NOT come from the tile row
         assert tile["window"] is None, f"raster_{i}.tif: window must be deferred"
         # Round-trip via open_tile resolves the full extent correctly
         vt = VirtualTile.from_row(tile)

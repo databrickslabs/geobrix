@@ -1,11 +1,11 @@
-"""Assert pyrx exposes the Phase 0 (Tier-0 + Tier-1) function names with the
+"""Assert pyrx exposes the accessor, coordinate-transform and constructor function names with the
 same signatures as the heavyweight rasterx bindings."""
 
 import inspect
 
 from databricks.labs.gbx.pyrx import functions as prx
 
-# Phase 0 scope: accessors + coordinate transforms + constructor.
+# Scope: accessors + coordinate transforms + constructor.
 PHASE0 = {
     "rst_fromcontent": ("content", "driver"),
     "rst_width": ("tile",),

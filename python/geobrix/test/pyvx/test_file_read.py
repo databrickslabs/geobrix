@@ -1,4 +1,4 @@
-"""Task 6/Task-2: vector_file_read — function-layer FILE read (parity with raster)
+"""vector_file_read — function-layer FILE read (parity with raster)
 and table mode (FILE-column-table read gap closure).
 """
 
@@ -190,7 +190,7 @@ def test_vector_file_read_gpkg_wkt_mode(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 2: table mode for vector_file_read
+# Table mode for vector_file_read
 # (FILE-column-table read gap, plain-path branch, no FILE support needed locally)
 # ---------------------------------------------------------------------------
 

@@ -1,4 +1,4 @@
-"""Task 7: vector_file_write — function-layer FILE write."""
+"""vector_file_write — function-layer FILE write."""
 
 from unittest.mock import MagicMock, patch
 

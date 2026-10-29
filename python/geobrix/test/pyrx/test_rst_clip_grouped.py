@@ -1,7 +1,7 @@
 """Tests for rst_clip_grouped — first pixel op via the grouped executor.
 
 Exercises the materialized-tile fallback path (local[2], no FILE type needed).
-FILE fast-path is validated on-cluster in Task 9.
+FILE fast-path is validated on-cluster.
 
 Key proof: rst_clip_grouped pixel-equals the scalar rst_clip on the same
 materialized tile (same clip geometry, same all_touched flag).
@@ -168,7 +168,7 @@ def test_rst_clip_grouped_parity_with_scalar(spark, raster_bytes, clip_geom_wkb)
 
 
 # ---------------------------------------------------------------------------
-# Task 6: parity tests for the remaining FILE-aware pixel-op _grouped variants
+# Parity tests for the remaining FILE-aware pixel-op _grouped variants
 # ---------------------------------------------------------------------------
 # Shared helpers
 

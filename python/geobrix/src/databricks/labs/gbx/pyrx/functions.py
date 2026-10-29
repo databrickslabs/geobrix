@@ -54,6 +54,7 @@ from databricks.labs.gbx.pyrx.core import warp, xyz
 from databricks.labs.gbx.pyrx.core.compression import (
     internal_mask_env,
     match_alpha,
+    source_profile,
     write_gtiff,
 )
 from databricks.labs.gbx.pyrx.core.escape import rst_apply, tile_to_numpy  # noqa: F401
@@ -192,7 +193,7 @@ def register(spark: SparkSession = None, only: Optional[List[str]] = None) -> No
     globals()["_gbx_registered"] = True
 
 
-# --- Virtual-aware tile helpers (Increment 4) -------------------------------
+# --- Virtual-aware tile helpers ---------------------------------------------
 # These let a UDF body consume a v1 tile struct, a v2 tile struct, a virtual
 # (bytes-free) tile, or raw bytes uniformly, and shape a tile-returning result
 # via the shared ``open_tile.shape_output`` force-output helper. The operation
@@ -236,7 +237,7 @@ def _dataset_to_gtiff_bytes(ds) -> bytes:
     from rasterio.io import MemoryFile
 
     data = ds.read()
-    profile = ds.profile.copy()
+    profile = source_profile(ds.profile, unless_jpeg=True)
     profile.update(driver="GTiff")
     # The source's own mask band (not an alpha band) is part of the raster: carry it.
     mask = ds.read_masks(1) if _nodata.has_own_mask(ds) else None
@@ -297,7 +298,7 @@ def _shaped_result_row(
     return shaped.to_row()
 
 
-# --- Virtual-aware accessor UDF factories (Increment 4) ---------------------
+# --- Virtual-aware accessor UDF factories -----------------------------------
 # Accessors take the FULL tile struct (not just the raster subfield) so a
 # virtual tile's ``path`` is reachable. HEADER-ONLY accessors answer from the
 # file header via ``open_header`` (no pixel read; window-correct for windowed
@@ -345,10 +346,10 @@ def _pixel_accessor_udf(core_fn, return_type):
     return _udf
 
 
-# --- FILE-aware 2-arg UDF factories (Increment 5 / Task 4) ------------------
+# --- FILE-aware 2-arg UDF factories ------------------
 # These produce UDFs with signature (tile: Struct, file_ref: FileRef|null).
-# The SQL registry keeps pointing at the single-arg ``_u_*`` UDFs (fallback path
-# per spec §4.3); only the public Python Column bindings use ``_uf_*``.
+# The SQL registry keeps pointing at the single-arg ``_u_*`` UDFs (fallback path,
+# no FILE acceleration for SQL); only the public Python Column bindings use ``_uf_*``.
 def _header_accessor_udf_file(core_fn, return_type):
     """Struct + FileRef accepting header-only accessor UDF (2-arg).
 
@@ -438,7 +439,7 @@ def _metadata_udf(tile):
         return None
 
 
-# --- FILE-aware 2-arg UDF singletons (Task 4 / Increment 5) ----------------
+# --- FILE-aware 2-arg UDF singletons ----------------
 # Used by the public Python Column bindings; SQL registry still uses ``_u_*``.
 # Header-only (open_header — no pixel read):
 _uf_height = _header_accessor_udf_file(accessors.height, IntegerType())
@@ -579,8 +580,8 @@ _u_skewy = _header_accessor_udf(accessors.skewy, DoubleType())
 _u_format = _header_accessor_udf(accessors.format, StringType())
 _u_width = _header_accessor_udf(accessors.width, IntegerType())
 
-# Back-compat aliases: rst_width/rst_avg were wired to explicit UDF singletons
-# in Task 6; keep the names pointing at the factory-built virtual-aware UDFs.
+# Back-compat aliases: these names once pointed at explicit UDF singletons; they now
+# point at the factory-built virtual-aware UDFs.
 _width_header_udf = _u_width
 _avg_pixel_udf = _u_avg
 
@@ -3022,8 +3023,10 @@ def _asformat_udf(tile, new_format):
     if _tile_is_empty(tile) or new_format is None:
         return None
     new_bytes = _asformat_bytes(tile, new_format)
-    # metadata.driver must reflect the requested output format.
-    return _serde.build_tile(new_bytes, str(new_format), _tile_cellid(tile))
+    # metadata.driver is the driver the bytes open as (COG opens as GTiff).
+    return _serde.build_tile(
+        new_bytes, ops_core.written_driver(new_format), _tile_cellid(tile)
+    )
 
 
 @f.udf(V2_TILE_SCHEMA)
@@ -3475,16 +3478,18 @@ def rst_asformat(
     virtualize_prefix: Optional[str] = None,
     materialize: Optional[bool] = None,
 ) -> Column:
-    """Re-encode the raster to another GDAL driver (e.g. 'PNG', 'GTiff').
+    """Re-encode the raster to another GDAL driver (e.g. 'PNG', 'GTiff', 'COG').
 
     Mirrors the heavyweight ``gbx_rst_asformat``: the output tile's raster
     bytes are encoded in ``new_format`` and the tile metadata ``driver``
-    reflects it. Raises if the requested driver is unavailable in this GDAL
-    build.
+    reflects it. ``'COG'`` writes a Cloud Optimized GeoTIFF (512-pixel
+    blocks, overviews, size-adaptive ZSTD) as ``rst_cog_convert`` does; its
+    metadata ``driver`` is ``'GTiff'``, which is what the bytes open as.
+    Raises if the requested driver is unavailable in this GDAL build.
 
     Args:
         tile:       Tile struct column.
-        new_format: GDAL driver short name (e.g. 'GTiff', 'PNG').
+        new_format: GDAL driver short name, in any case (e.g. 'GTiff', 'PNG', 'COG').
         virtualize_dir:    Force-output (light-tier, Python API only): write the
             result to a durable path and return a light virtual tile.
         virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
@@ -6612,18 +6617,18 @@ def rst_color_relief(
     return _color_relief_udf(_col(tile), ctp)
 
 
-# --- Tier 0: accessors ------------------------------------------------------
+# --- Accessors ------------------------------------------------------
 # Accessor wrappers pass the FULL tile struct (not the raster subfield) so a
 # virtual tile's ``path`` is reachable; the header/pixel split is decided by the
 # factory that built each ``_u_*`` UDF (open_header vs _open).
 #
-# FILE-aware wiring (Task 4): the public Python bindings now call the 2-arg
+# FILE-aware wiring: the public Python bindings now call the 2-arg
 # ``_uf_*`` UDFs (Struct + FileRef), injecting a plan-level file_ref via
 # ``file_ref_arg()``.  When FILE is unsupported (local / non-DBR / env-disabled)
 # ``file_ref_arg`` returns ``F.lit(None)`` and the UDF falls back to the
 # plain-path read — identical to the previous single-arg path.
 # The SQL registry keeps pointing at the single-arg ``_u_*`` UDFs (fallback,
-# no FILE acceleration for SQL per spec §4.3).
+# no FILE acceleration for SQL).
 def rst_width(tile: ColLike) -> Column:
     from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
 
@@ -6736,7 +6741,7 @@ def rst_getnodata(tile: ColLike) -> Column:
     return _uf_getnodata(tc, file_ref_arg(tc))
 
 
-# --- Tier 1: coordinate transforms -----------------------------------------
+# --- Coordinate transforms -----------------------------------------
 # HEADER-ONLY accessors: pass the FULL tile struct (not the raster subfield) so
 # a virtual tile's ``path`` is reachable; the UDF resolves via open_header.
 def rst_rastertoworldcoordx(tile: ColLike, x: ColLike, y: ColLike) -> Column:
@@ -7698,7 +7703,7 @@ def _grid_flat_schema(measure_type, cellid_type=LongType()):
 _GRID_FLAT_DOUBLE_SCHEMA = _grid_flat_schema(DoubleType())
 # BNG renders a formatted BNG string (e.g. "TQ3080") as cellID, matching heavy
 # RST_BNG_RasterToGrid* (StringType cellID). All measures -> DOUBLE (count
-# changed from INT to DOUBLE in Stage 2 Task 8 for heavy-tier parity).
+# changed from INT to DOUBLE for heavy-tier parity).
 _GRID_FLAT_STRING_SCHEMA = _grid_flat_schema(DoubleType(), StringType())
 
 
@@ -8526,7 +8531,7 @@ rst_bng_rastertogridstddev.__doc__ = _BNG_RASTERTOGRID_DOC.format(
 
 
 # ---------------------------------------------------------------------------
-# Tier 2: grouped aggregators (rst_*_agg)
+# Grouped aggregators (rst_*_agg)
 # ---------------------------------------------------------------------------
 # Spark 4.0 forbids a Python aggregate from returning a StructType, but allows
 # a grouped-agg pandas_udf to return BINARY and a scalar UDF to wrap that result

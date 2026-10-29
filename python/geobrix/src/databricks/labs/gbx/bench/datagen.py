@@ -16,6 +16,7 @@ from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.bench import manifest as m
+from databricks.labs.gbx.pyrx.core.compression import cog_profile as _cog_profile
 from databricks.labs.gbx.pyrx.core.compression import creation_opts as _comp_opts
 
 # CRS -> (origin_x, origin_y, pixel_size in CRS units) for a consistent affine.
@@ -700,7 +701,7 @@ def generate_cog_multiwindow_corpus(
         # rio-cogeo's ~10x -- acceptable for the tile sizes used here.
         with MemoryFile(tile_bytes) as mf:
             with mf.open() as src:
-                cog_profile = src.profile.copy()
+                cog_profile = _cog_profile(src.profile)
                 cog_profile.update(
                     driver="COG",
                     BLOCKSIZE=tile_size,

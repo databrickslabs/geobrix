@@ -59,7 +59,7 @@ def test_manifest_array_matches_zarr_direct(fixture, pipeline, request):
 
 
 def test_the_auto_pipeline_is_the_native_engine(era5_v3_sharded):
-    """G1: zarr-python over a ManifestStore opens a file per chunk and was many times
+    """zarr-python over a ManifestStore opens a file per chunk and was many times
     slower than tensorstore, so ``auto`` is the native engine."""
     store = _manifest(era5_v3_sharded)
     assert open_manifest_array(store, "t2m").pipeline == "native"
@@ -405,7 +405,7 @@ def test_plain_zarr_engine_uses_zarrs_when_it_can(era5_v3_sharded):
 
 
 def test_plain_zarr_engine_can_decode_with_zarr_default(era5_v3_sharded):
-    """The zarrs pipeline is a choice, not a given: G1 found it slower than zarr's own
+    """The zarrs pipeline is a choice, not a given: a benchmark found it slower than zarr's own
     on box reads over a Volume, so a caller can measure and pick."""
     path = era5_v3_sharded
     default = open_plain_array(str(path), "t2m", engine="zarr", pipeline="default")

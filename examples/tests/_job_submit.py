@@ -14,11 +14,16 @@ request made instead of creating another.
 * it retries only transient failures (network errors, 429/5xx), with the same token;
 * anything else raises at once.
 
+``runner_dir`` is the other thing the launchers share: the workspace folder they upload
+their runner notebook into. It is ``GBX_RUNNER_DIR`` when the caller set it, and the
+caller's own workspace home otherwise.
+
 Pure Python: no databricks-sdk import, so it is testable without a workspace.
 """
 
 from __future__ import annotations
 
+import os
 import time
 import uuid
 
@@ -49,6 +54,24 @@ _LOCAL_FILE_ERRORS = (
     NotADirectoryError,
     FileExistsError,
 )
+
+
+# Under the caller's workspace home, version-less like the other launchers' folders
+# (run_notebooks_serverless.py uses GeoBrix/serverless-run).
+RUNNER_SUBDIR = "GeoBrix/runners"
+
+
+def runner_dir(w) -> str:
+    """The workspace folder a launcher uploads its runner notebook into.
+
+    ``GBX_RUNNER_DIR`` when the caller set it (an empty value counts as not set); otherwise
+    ``/Workspace/Users/<you>/GeoBrix/runners`` for the user ``w`` is signed in as. The user is looked
+    up (``w.current_user.me()``) only when there is no override, so an override makes no call.
+    """
+    override = os.environ.get("GBX_RUNNER_DIR")
+    if override:
+        return override
+    return f"/Workspace/Users/{w.current_user.me().user_name}/{RUNNER_SUBDIR}"
 
 
 def new_idempotency_token() -> str:

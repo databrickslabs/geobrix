@@ -1,0 +1,526 @@
+---
+sidebar_position: 2
+title: Zarr Stores
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import zarrExamples from '!!raw-loader!../../tests/python/formats/zarr_examples.py';
+
+# Zarr Stores: transactional, versioned, in place
+
+_Since:_ **v0.6.0** · _(lightweight tier only; no JAR)_
+
+[Zarr](https://zarr.dev) stores N-dimensional arrays as many small objects in object storage, which
+makes it the format of choice for large weather, climate and earth-observation cubes. Plain Zarr has
+no transactions: two jobs that write to one store can lose each other's updates, and a reader can
+see a half-written store.
+
+GeoBrix adds the missing layer. It reads and samples Zarr stores of any origin, registers an existing
+store **in place** without copying it, and lets you **write to a store transactionally**: every write
+is all-or-nothing, concurrent writers do not corrupt each other, and every version of the store stays
+readable for the store's `retain` period (7 days by default), and for as long as you like if you tag it.
+
+This page explains how the model works and what it guarantees. The examples run against a small
+sample cube, and every block of code on this page is run by the documentation tests.
+
+## What you need
+
+Install the extra that matches your runtime. Zarr runs on Databricks Runtime 19 and Serverless
+environment 6, in the lightweight tier, so there is no JAR to install.
+
+```bash
+pip install "geobrix[light_env6,zarr_env6]"     # Serverless environment 6
+pip install "geobrix[light_dbr19,zarr_dbr19]"   # Databricks Runtime 19
+```
+
+The examples use `cube`, `table` and `root`: the path of a Zarr store, the Unity Catalog name of a
+store's manifest table, and a directory on a Volume that GeoBrix writes a store's files to. The `cube`
+path below exists once the sample cube has been generated into your sample-data Volume (next);
+until then, point `cube` at any Zarr store.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="SETUP" />
+
+The sample cube is two days of made-up hourly weather on a one-degree global grid: `time` (48 steps) by
+`latitude` (181) by `longitude` (360), with the variables `t2m` (2 m temperature), `u10` and `v10`
+(10 m wind) and `msl` (mean sea level pressure). It is generated, not downloaded, and takes seconds:
+
+<CodeFromTest code={zarrExamples} language="python" functionName="make_the_sample_cube"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+It writes the cube twice: `era5_like_v3.zarr` (Zarr v3 with sharding) and `era5_like_v2.zarr`
+(Zarr v2).
+
+## Why Zarr
+
+| | **Zarr** | **GeoTIFF / COG** | **NetCDF / HDF5** | **GRIB2** | **Delta table, one row per cell** |
+|---|---|---|---|---|---|
+| Shape | Any number of dimensions | Bands of a 2-D grid | Any number of dimensions | A sequence of 2-D fields | Rows and columns; the grid is lost |
+| Layout | One object per chunk, or per shard of chunks | One file; a COG is tiled inside | One file, chunked inside | One file of messages | Parquet files |
+| Reading a slice from object storage | Fetches only the chunks the slice touches | A COG fetches the tiles it needs | Possible with range-read tooling; many readers copy the whole file | Needs an index of the messages | Scans and filters rows |
+| Several writers at once | Safe only for different chunks, and only if none changes the metadata | One file, one writer | One file, one writer | One file, one writer | Yes (Delta transactions) |
+| All-or-nothing writes | No | No | No | No | Yes |
+| Versions and time travel | No | No | No | No | Yes |
+| Best for | Cubes read and written at scale | Imagery and single surfaces | Files from data providers | Weather model output | Tabular analytics on cells |
+
+Zarr's strength is the layout: a job reads only the chunks it needs, and many jobs read different
+chunks at once. Its weakness is that the layout has no commit. GeoBrix keeps the layout and adds the
+commit, so a store gets the guarantees of the last column without turning an array into rows.
+
+**What GeoBrix adds**
+
+- **Register in place.** Point a table at an existing store; nothing is copied.
+- **Three ways to read.** N-dimensional blocks, a long table with a column per dimension, or
+  [GeoBrix raster tiles](../api/virtual-tiles), so every `rst_*` function works on a cube without
+  converting it to GeoTIFF. Select by label or by position. See the [Zarr Reader](../readers/zarr).
+- **Sample.** Read the time series at points, with the same geometry inputs as `rst_sample`
+  ([sampling at points](../readers/zarr#sampling-at-points)).
+- **Write back transactionally.** Create, append, update and overwrite, with history, time travel,
+  tags, restore, export and lifecycle management. See the [Zarr Writer](../writers/zarr).
+- **Concurrent writers.** Writers that touch different chunks both land; writers that only change the
+  store's shape or coordinates are rebased automatically; writers that meet on one chunk get a clear error.
+
+A selection reads as a table, one row per cell, with a column per dimension and per variable:
+
+<CodeFromTest code={zarrExamples} language="python" functionName="read_a_selection"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="READ_A_SELECTION_output" />
+
+Label slices include both ends and follow the axis order, which is why latitude runs from 60 down to 40.
+Points are sampled the same way, at the nearest cell:
+
+<CodeFromTest code={zarrExamples} language="python" functionName="sample_a_time_series"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="SAMPLE_A_TIME_SERIES_output" />
+
+## Store kinds
+
+A Zarr store GeoBrix works with is one of four kinds. They differ in where the bytes live, whether a
+manifest table exists, and who may write.
+
+| Kind | Created by | Where the bytes live | Versions and transactions | Who may write |
+|---|---|---|---|---|
+| **Plain store** | Anyone: xarray, a vendor, any Zarr tool | The store's own objects | None. GeoBrix reads the current bytes. | Not GeoBrix |
+| **Registered, read-only** | `gbx_zarr_register(spark, path, table)` | The store's own objects, **not copied** | Yes, in the manifest table | Nobody through GeoBrix |
+| **Registered, writable** | `gbx_zarr_register(spark, path, table, writable=True, overlay_root=...)` | The store's own objects, plus an **overlay** of new pack files | Yes | Anyone with `MODIFY` on the table and write access to the overlay root's Volume; the store itself is never written |
+| **Managed** | `gbx_zarr_write(..., mode="create")` | Pack files GeoBrix wrote under the store's root | Yes | Anyone with `MODIFY` on the table and write access to the root's Volume |
+
+![The four kinds of Zarr store side by side: a plain store with only its own objects and no manifest table; a read-only registered store whose Delta manifest table points at the store's objects without copying them; a writable registered store whose manifest points at the store's objects and at an overlay root of immutable pack files, with the store's objects locked against writes; and a managed store whose manifest points at pack files under a data root. A banner explains that many registrations of one store are independent branches and that every root has exactly one owner.](../../../resources/images/diagrams/zarr/store-kinds.png)
+
+### How a store is made of files and rows
+
+Every byte GeoBrix writes goes into a new **pack file** that is never modified again, under
+`data/<array>/<write_id>/part-*.zpack` in the store's root. A **manifest** is a Delta table with one
+row per chunk or shard (and per array and group document) that says which file, offset and length hold
+it, plus one `commit` row for every write. A version of the store **is** a version of that Delta table,
+and one Delta transaction is one store transaction.
+
+Because files are immutable and rows are versioned, a reader that pins a version sees a consistent
+snapshot no matter what writers do meanwhile.
+
+### Create a managed store
+
+A managed store is made by writing blocks, here the first 12 hours of two variables together with the
+coordinates that label them:
+
+<CodeFromTest code={zarrExamples} language="python" functionName="create_a_store"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+The new array layout defaults to chunks of about 4 MiB decoded, grouped into shards of up to 128 MiB,
+with `bytes`, `zstd` (level 3) and `crc32c` codecs. `chunks` takes a preset (`"maps"` for large spatial
+tiles, `"series"` for long time series at small tiles, `"balanced"` for both) or a size per dimension.
+
+### Register a store in place
+
+Registering lists a store once and records every object with its identity; it copies nothing and
+writes nothing to the store. Many tables can register one store, each with its own history, grants and
+(if writable) overlay root.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="register_in_place"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+GeoBrix prints one progress line per step while it registers a big store. A registration reads
+Zarr v2 and v3 stores alike.
+
+A **writable** registration needs an `overlay_root`, a directory outside the store that this table owns.
+Writes go there, as new pack files in the base array's own codecs and key encoding, and the overlay
+rows replace the store's rows for the keys they touch. The store itself is never written, except by an
+explicit publish (below).
+
+<CodeFromTest code={zarrExamples} language="python" functionName="register_with_an_overlay"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+The same call that updates a managed store (shown in [Transactions](#transactions)) updates this
+registration; its files land in the overlay and the store is byte for byte what it was.
+
+Registrations of one store behave like **branches**: each sees the store plus only its own writes, and
+there is no merge between them.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="compare_branches"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="COMPARE_BRANCHES_output" />
+
+### Outside changes: drift, sync and publish
+
+GeoBrix cannot make other tools' writes to a registered store transactional, but it detects them. Every
+read checks the identity of the objects it touches (their modification time and size on a Volume). If
+another tool changed one, the read stops and says so, instead of returning bytes the manifest never
+saw. `gbx_zarr_sync` lists the store again, records what changed, appeared or disappeared as one new
+version, and lists any keys that both the store and the overlay changed (the overlay still wins).
+The store's shape becomes the larger of the store's and the overlay's, so days a data provider appended
+show up. A change to the array's data type, chunk grid or codecs cannot be synced; register the store
+again.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="detect_outside_changes"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="DETECT_OUTSIDE_CHANGES_output" />
+
+(The progress lines GeoBrix prints while it syncs are left out above.)
+
+**Publish** writes a writable registration's overlay into the store itself, so that every Zarr reader
+sees it. It needs write access to the store, takes a lock so two publishes cannot interleave, and
+refuses if the store changed since the last sync. Publish is **not atomic for plain readers**: it
+writes the chunks first and the metadata last, so a plain reader that opens the store while it runs
+can see some chunks of the new version. Other registrations of that store see drift on their next
+read, and older versions that pointed at objects the publish overwrote can no longer be read.
+GeoBrix records the identity of each published object only after the Volume has settled its
+modification time (a Volume moves it to the next whole second a moment after the write), so a read
+right after a publish does not report drift.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="publish_the_overlay"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+### One owner per root
+
+Every root GeoBrix writes to, a managed store's root or a writable registration's overlay root, has
+exactly one owner. The owner is decided by a Delta transaction, not by the file system: a small Delta
+table inside the root, `_gbx_owner`, records the owner through a compare-and-swap, so when two tables
+claim a root at the same moment exactly one wins, on every kind of compute. A marker file,
+`_gbx_store.json`, names the owner as well; it is advisory, and a run that changes the store (not a
+dry run) restores it from the ledger if it goes missing.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="refuse_a_second_owner"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+The error names the table that owns the root and how to fix the conflict. A vacuum never enters a
+directory that holds `_gbx_owner` or `_gbx_store.json`, so one store's vacuum can never delete
+another store's files.
+
+## File modes
+
+`file_mode` decides how the manifest refers to a store's files, and so who deletes superseded files.
+It matches the `file_mode` of `gbx_file_write`.
+
+| `file_mode` | The manifest's `file` column | Who deletes superseded files | Where it runs |
+|---|---|---|---|
+| `fuse` | Path strings, relative to the store's root | GeoBrix `gbx_zarr_vacuum` | Everywhere, Serverless included |
+| `external` | `FILE EXTERNAL` references, governed with the table | GeoBrix `gbx_zarr_vacuum` | Compute that supports `FILE` values, in a workspace with the File type preview (**preview**) |
+| `managed` | `FILE MANAGED` values | The table | **Not available in this release** |
+| `auto` (default) | `external` on compute that supports `FILE` values, otherwise `fuse`; it never fails | | |
+
+`managed` is not available because Delta's `VACUUM` does not reclaim the bytes of a managed file, so a
+managed store would only grow. A registered store is never `managed`: managed ingest would copy the
+store.
+
+**A `FILE` store needs `FILE`-capable compute.** A store whose files are `FILE` values (`external`) must
+be written, maintained and read on compute that supports them. Other compute refuses up front with a
+`Fix:` that tells you what to do: use a Databricks Runtime 19 dedicated cluster (single user, with
+`fileReferenceCreationMode=MANAGED`) in a workspace with the preview; or copy the data out with
+`gbx_zarr_export(method="copy")` and register the copy with `file_mode="fuse"`; or create stores that
+other compute also uses with `file_mode="fuse"`. Reads of a store return the same cells in every mode.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="create_with_a_file_mode"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+Asking for `managed` fails before anything is written:
+
+<CodeFromTest code={zarrExamples} language="python" functionName="managed_is_not_available"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="MANAGED_IS_NOT_AVAILABLE_output" />
+
+## Transactions
+
+A write happens in two phases, and only the second one is visible.
+
+![A write in two phases. Phase one, distributed and invisible: the driver plans against a base version of the manifest and picks a write_id; executor tasks encode the chunks, fully covered chunks fresh and partly covered ones by read-modify-write at the base version; each task writes one immutable pack file for each array it holds to the Volume and returns small manifest rows to the driver. Phase two, atomic: the driver commits one Delta MERGE with a compare-and-swap on each replaced key, the changed array and coordinate rows and a commit row keyed by the write_id, and the manifest moves to the next version, visible whole. A failure before the MERGE leaves only unreferenced packs for vacuum; running a write again with the same write_id returns the version it already committed.](../../../resources/images/diagrams/zarr/write-commit.png)
+
+1. **Files.** The input is grouped by the shard it belongs to. Each task encodes the chunks it owns and
+   writes **one pack file for each array it holds**, each in a single sequential write. A chunk the input covers completely is
+   encoded fresh; a chunk it only partly covers is read at the base version, patched and re-encoded.
+   Each task hands back a small manifest row for every chunk it wrote.
+2. **Commit.** The driver collects the rows and runs **one Delta MERGE**. It writes the chunk rows with
+   a compare-and-swap (CAS) on every key it replaces (the `write_id` the key had in the base version, or
+   "still absent" for a new key), the changed array and coordinate rows, and a `commit` row keyed by
+   the write's `write_id`.
+
+Until the MERGE commits nothing is visible. If anything fails before it, the version has not moved and
+the packs are unreferenced files that a later vacuum removes. After it commits, the whole write is
+visible at once.
+
+The four modes are `create`, `append` (extend one dimension, by default the first time dimension),
+`update` (write into the existing extent) and `overwrite` (replace whole variables; older versions
+stay readable until vacuumed). Writing a variable the store lacks creates it on the store's dimensions.
+Appends label the new steps: they must come after the store's last, and on a regular axis they land
+at their step, so appends may arrive out of order.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="append_hours"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+### Concurrent writers
+
+![What happens when two writers meet, in three panels. When two writers touch different chunks, both MERGEs land without a retry because Delta applies them at row level. When two appends change shared metadata, the array shape and a shared coordinate chunk, the second writer rebases: it re-reads the latest version, checks that none of its own data keys moved, recomputes the shape and the shared chunk, and retries, up to twenty attempts, without rewriting its data files. When two writes change the same chunk, the second fails its compare-and-swap and raises ZarrWriteConflict, naming the keys and the winning write, and nothing of it becomes visible.](../../../resources/images/diagrams/zarr/concurrent-writers.png)
+
+The manifest decides, row by row.
+
+- **Different data.** Writers that touch different chunks touch different rows, so Delta lands both
+  without a retry.
+- **Shared metadata.** Two appenders both change the array's shape, and often a shared coordinate
+  chunk. When a writer finds that another has committed those rows first, it **rebases**: it re-reads
+  the latest version, checks that none of the data keys it replaces has changed since its base (the
+  CAS), recomputes the shape (the maximum extent) and redoes the coordinate chunk, and retries the
+  MERGE. Its data files are never rewritten. A rebase retries up to 20 times with a jittered wait.
+  Every lost round means another writer landed, so the last of N simultaneous appenders needs about
+  N attempts; in GeoBrix's checks, 8 appenders to one array at the same moment all landed.
+- **The same chunk.** If another writer committed a change to a chunk this write also touches, after
+  this write's base version, the write raises `ZarrWriteConflict`. That includes two partial writes to
+  different cells of one chunk, because each is a read-modify-write of the whole chunk.
+
+Two jobs appending at the same moment, as they would from two clusters:
+
+<CodeFromTest code={zarrExamples} language="python" functionName="append_from_two_writers"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+Both appends land, in whichever order they reach the commit, and the store ends with all 48 hours in
+the right place.
+
+An update that corrects a region reads the blocks, changes them and writes them back by position:
+
+<CodeFromTest code={zarrExamples} language="python" functionName="update_a_region"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+A conflict names the keys and the write that got there first. Nothing of the losing write is visible,
+so the safe response is to read the region again and write again:
+
+<CodeFromTest code={zarrExamples} language="python" functionName="handle_a_conflict"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+A write can also carry its own **`write_id`** (32 lowercase hex characters). Writing again with an id that
+has already committed returns that version and writes nothing, so a job that is retried after a
+timeout cannot apply the same write twice:
+
+<CodeFromTest code={zarrExamples} language="python" functionName="retry_with_a_write_id"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+Errors raised while Spark runs a read or a write reach the driver as a `PythonException`; its message
+keeps the GeoBrix error name and the `Fix:` line. Every GeoBrix Zarr error ends with a `Fix:` that says
+how to resolve it.
+
+## Snapshots, time travel and tags
+
+A **store version is the manifest's Delta version**. A read pins one version when it is planned (the
+latest, or the one you ask for), and because files are immutable that is a consistent snapshot even
+while writers keep committing.
+
+`gbx_zarr_history` returns one row per commit, built from the commit rows, with the mode, the variables
+written and the region of each dimension the write covered (`[start, stop)` in cells):
+
+<CodeFromTest code={zarrExamples} language="python" functionName="read_history"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="READ_HISTORY_output" />
+
+Read an older version by number (`version_as_of=1`), by time (`timestamp_as_of`), or by tag
+(`version_as_of="tag:name"`).
+
+A **tag** names a version so that it outlives everything else. It copies that version's manifest rows
+into the table as current rows labelled with the tag, so a tagged version survives GeoBrix's vacuum
+and Delta's own `VACUUM` and history expiry. The cost is one manifest row per chunk or shard in the
+tagged version, for each tag. `gbx_zarr_untag` removes a tag and makes its files collectable by the
+next vacuum.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="tag_a_version"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+One cell's time series at four points in the store's history:
+
+<CodeFromTest code={zarrExamples} language="python" functionName="time_travel"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="TIME_TRAVEL_output" />
+
+**Restore** makes the live store equal an older version again, as a **new commit**: nothing is copied
+and nothing is removed, so the older versions stay readable and the restore can itself be undone. It
+refuses a version that vacuum has already removed.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="restore_a_version"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+**Export** takes a version out of GeoBrix. `method="copy"` writes a plain Zarr store at canonical keys,
+in the store's own format, with the metadata written last, so any Zarr v3 tool can open it and a reader
+never sees a half-written store. The target must be empty. Shards that are already in standard form are
+copied as bytes, without decoding.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="export_a_version"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+`method="reference"` writes a small JSON file that maps each key to a file, offset and length in the
+store's own files (nothing is copied), which xarray opens through fsspec's `reference` file system. The
+compute that **reads** a reference needs `fsspec` 2024.12.0 or later; GeoBrix does not pin it, because the
+runtime shares fsspec with other libraries, and Databricks runtimes preinstall an older one that
+cannot open a reference. Every shard must be one contiguous region, so run `gbx_zarr_optimize` first,
+and because a reference points at the pack files of one version, tag that version so a vacuum
+cannot delete them.
+
+## Lifecycle and retention
+
+Immutable files mean old files pile up: every update, overwrite and failed write leaves packs that no
+current row needs. `gbx_zarr_vacuum` deletes the files that no readable version needs.
+
+![The timeline of a vacuum. Versions v1 to v8 run left to right, with the retain window, seven days by default, shaded at the right and the horizon, the later of the last vacuum's and the moment retain ago, where it starts; v4, the version live at the horizon, stays readable, and versions older than it raise ZarrVersionUnavailable. A pack replaced before the horizon is superseded and deleted; a pack replaced inside the window is retained because a readable version, v4, still uses it; packs that live rows point at are live; a pack that a tag row points at is tagged and kept until the tag is removed; the pack of a write that never committed is uncommitted and is kept for the retain period and then deleted; a pack younger than one hour is recent and always kept. Below, the manifest table's own retention properties keep Delta history at least as long as the store's retain, and predictive optimization may vacuum the table itself.](../../../resources/images/diagrams/zarr/retention-timeline.png)
+
+A file is kept while **any** of these is true:
+
+- **live**: a current row points at it;
+- **tagged**: a tag row points at it;
+- **retained**: a version within `retain` points at it (`retain` is `"7 days"` unless you set it when
+  you created or registered the store);
+- **recent**: it is under one hour old, because the write that made it may still be running. The files of
+  a write that never committed are kept for the store's `retain`, too.
+
+Everything else is **superseded** (it was replaced by a newer version, and only versions older than
+`retain` used it) or **uncommitted** (its write failed, was retried or lost a conflict). `dry_run=True`
+lists what would go and changes nothing. A `retain` under one hour is refused unless `force=True`,
+and a `retain` longer than the store's is refused too, since versions older than the store's own
+`retain` are not readable anyway.
+
+Time travel needs two things: the files, and the manifest's own Delta history. When a store is created or
+registered, GeoBrix sets the manifest table's `delta.deletedFileRetentionDuration` to at least the
+store's `retain` and `delta.logRetentionDuration` to the larger of 30 days and `retain`, and vacuum keeps
+them aligned; it never lowers a value you raised.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="show_retention"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="SHOW_RETENTION_output" />
+
+**Time travel stops at `retain`, with or without a vacuum.** GeoBrix promises a version only as far
+back as the **horizon**: the later of the horizon a vacuum recorded and the moment `retain` ago. A read
+by version number or by timestamp of a version older than the one that was live at the horizon raises
+`ZarrVersionUnavailable` with a `Fix:`, even if no vacuum has ever run, because Delta's own maintenance
+may already have removed the files. The latest version and every tagged version are always readable.
+This store keeps its versions for two seconds so the example is quick (the default is `"7 days"`):
+
+<CodeFromTest code={zarrExamples} language="python" functionName="time_travel_stops_at_retain"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="TIME_TRAVEL_STOPS_AT_RETAIN_output" />
+
+**Predictive optimization** can run `VACUUM` on a Unity Catalog managed table by itself. In GeoBrix's
+own checks it kept a table's files for at least 7 days even when the table asked for less, so a store
+whose `retain` is shorter than that can still find Delta history for a version whose files are
+gone. That is why the horizon, and not Delta's history, decides what is readable. A vacuum that
+deletes records its horizon on the table before it removes anything. To keep a version for good, tag it.
+
+The vacuum below ran a week after the store was written (in the documentation tests, the clock is moved on). It
+lists first, then deletes. The tag keeps its files, the live rows keep theirs, and the packs that
+only older versions used go, as does the pack of the conflict example's losing write, which never
+committed:
+
+<CodeFromTest code={zarrExamples} language="python" functionName="vacuum_the_store"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="VACUUM_THE_STORE_output" />
+
+A vacuum only touches the pack files GeoBrix wrote under the store's own root. It never deletes the
+objects of a registered store, anything else in a root, or anything in a directory that another store
+owns. A dry run changes nothing at all.
+
+## Chunk rows and shard rows
+
+Zarr v3 groups many small **inner chunks** into one **shard** object. The manifest has a row for each
+of two things:
+
+- a **shard row** points at a whole shard in one object: that is how a registered store of shards begins;
+- a **chunk row** points at one inner chunk inside a pack file.
+
+![Chunk rows over a shard row, in three stages. First, a store of shards has one shard row pointing at one shard object that holds eight inner chunks. After appends and updates, the shard row is still there but chunk rows laid over it point at replacement chunks in small packs, and one chunk is a deleted tombstone; a read lays the chunk rows over the shard's bytes. After optimize, a single shard row points at a new pack that holds all eight inner chunks again, and the chunk rows and the deleted chunk are folded away.](../../../resources/images/diagrams/zarr/chunk-vs-shard-rows.png)
+
+A write adds chunk rows, one for each chunk it changes, in packs it has just written. That keeps
+a small append or update cheap, because nothing already written is rewritten, and a new managed store is
+chunk rows only. The price is on the read side: a shard is now spread over many small objects, and on a
+Volume every object costs a round trip.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="count_manifest_rows"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="COUNT_MANIFEST_ROWS_before_output" />
+
+`gbx_zarr_optimize` folds them back. For every shard that has chunk rows, it copies the shard's bytes
+without decoding them into one new pack, as a standard Zarr v3 shard, and commits **one shard row in
+place of the chunk rows**, with the same compare-and-swap as a write. Deleted chunks are folded away. A shard
+whose rows changed while the optimize ran is skipped, with a warning, and folded the next time.
+`gbx_zarr_write(..., optimize=True)` folds the shards a write touched right after it commits. Run
+optimize after many small appends, especially for reads from a Volume; it changes no cell.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="optimize_the_store"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+<CodeFromTest code={zarrExamples} language="python" functionName="count_manifest_rows"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="COUNT_MANIFEST_ROWS_after_output" />
+
+## Limits
+
+- **Runtimes.** Databricks Runtime 19 and Serverless environment 6 (Python 3.12), lightweight tier only. The
+  heavyweight tier reads Zarr data only as materialized GeoBrix tiles.
+- **Data types.** Numeric types and CF times. Strings and objects are not supported: an array GeoBrix
+  cannot decode is left out of reads and registered without being readable, and complex arrays can be
+  read only as blocks.
+- **Tiles.** `output="tiles"` needs the coordinates to form a regular grid.
+- **Codecs.** The codecs that zarr-python, numcodecs and zarrs can decode. Writes use `zstd` and `crc32c`
+  unless you pass `codecs`.
+- **File modes.** `external` is a preview that needs a workspace with the File type preview and compute
+  that supports `FILE` values; `managed` is not available (see [File modes](#file-modes)).
+- **Outside writers.** GeoBrix detects writes that other tools make to a registered store; it cannot make
+  them transactional. On a Volume the identity of an object is its modification time and size, which is
+  weaker than a content hash. A publish is not atomic for plain readers.
+- **Many simultaneous appenders.** A rebase retries up to 20 times, and the last of N simultaneous
+  appenders needs about N attempts. A burst of more than about twenty writers
+  appending to one array at the same instant can exhaust that, and the last of them fails with
+  `ZarrWriteConflict` and a `Fix:`; run it again.
+- **Direct storage access.** `access="auto"` reads and writes cloud storage directly where Unity Catalog
+  can issue temporary credentials (dedicated compute), and through the Volume mount elsewhere, including
+  Serverless. Direct access sends short-lived, Volume-scoped credentials (at most one hour) to the
+  executors, and under memory pressure Spark may spill task data, those credentials included, to local disk:
+  turn on local-disk encryption on clusters that use it, or pass `access="fuse"`, which sends none.
+- **Incomplete uploads.** A pack upload that is refused or fails part way can leave an incomplete multipart
+  upload in the bucket. GeoBrix does not clean it up: add a bucket lifecycle rule that aborts incomplete
+  multipart uploads (`AbortIncompleteMultipartUpload`) to the bucket of the Volume.
+- **Branches.** Registrations of one store do not merge.
+- **Version history is bounded by `retain`.** Tag a version to keep it indefinitely.
+
+See also [Choosing a Format](./overview), the [Zarr Reader](../readers/zarr), the
+[Zarr Writer](../writers/zarr) and the [Zarr Function Reference](../api/zarr-functions) for every
+option, return value and error, [Virtual Tiles](../api/virtual-tiles) for the tiles a Zarr read
+returns, and [Limitations](../limitations).

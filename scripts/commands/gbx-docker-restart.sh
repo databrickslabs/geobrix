@@ -123,10 +123,11 @@ if [ "$PRIVILEGED" = true ]; then
         exit 1
     fi
     echo -e "${CYAN}   Keeping the container's architecture: ${RESTART_PLATFORM}${NC}"
-    if ! gbx_require_dev_image "$RESTART_PLATFORM" >/dev/null; then
+    if ! RESTART_IMAGE="$(gbx_require_dev_image "$RESTART_PLATFORM")"; then
         echo -e "${RED}❌ Not recreating: the existing $GBX_DEV_CONTAINER container was left untouched.${NC}"
         exit 1
     fi
+    gbx_warn_if_image_maven_differs "$RESTART_IMAGE"
     echo -e "${CYAN}🔄 Recreating container with privileged mode...${NC}"
     print_separator
     docker stop -t $TIMEOUT "$GBX_DEV_CONTAINER" 2>/dev/null || true

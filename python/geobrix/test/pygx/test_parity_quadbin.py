@@ -354,7 +354,7 @@ def test_null_geom_propagation(spark_with_jar):
     assert light == heavy
 
 
-# --- kloop cross-tier parity (Stage 3 / Task 4) -----------------------------------------------
+# --- kloop cross-tier parity -----------------------------------------------
 
 
 def test_quadbin_kloop_parity(spark_with_jar):

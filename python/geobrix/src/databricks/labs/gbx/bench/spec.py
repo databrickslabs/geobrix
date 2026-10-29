@@ -47,6 +47,7 @@ from databricks.labs.gbx.pyrx.core import (
     warp,
     xyz,
 )
+from databricks.labs.gbx.pyrx.core.compression import source_profile
 from databricks.labs.gbx.pyvx import functions as pyvx
 
 # Fixed 3x3 normalised mean kernel for rst_convolve. Hardcoded identically here
@@ -55,7 +56,7 @@ from databricks.labs.gbx.pyvx import functions as pyvx
 # documentation (a 2-D kernel cannot ride the stringly-typed Scala args map).
 _CONVOLVE_KERNEL = [[1.0 / 9.0] * 3 for _ in range(3)]
 
-# --- Task 6: complex-arg constants (geometry / expression / band-map / func) -
+# --- Complex-arg constants (geometry / expression / band-map / func) -
 # Each of these rides identically through the pyrx core_fn, the pyrx col_fn, AND
 # the Scala BenchDispatch case (same as the convolve kernel) — a stringly-typed
 # bench args map cannot carry a band-map, an expression's variable bindings, or a
@@ -157,7 +158,7 @@ def _synthetic_rgb_tile(ds) -> bytes:
     rgb = (rng.rand(h, w, 3) * 255).astype(np.uint8)
 
     # Build a 3-band GTiff with the input tile's geotransform and CRS
-    profile = ds.profile.copy()
+    profile = source_profile(ds.profile, unless_jpeg=True)
     profile.update(driver="GTiff", count=3, dtype="uint8")
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
@@ -192,7 +193,7 @@ def _ds_to_gtiff_bytes(ds) -> bytes:
     """
     from rasterio.io import MemoryFile
 
-    profile = ds.profile.copy()
+    profile = source_profile(ds.profile, unless_jpeg=True)
     profile.update(driver="GTiff")
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
@@ -1115,7 +1116,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core=False,
         fingerprint=False,
     ),
-    # --- coordinate / index accessors (Task 3) ----------------------------------
+    # --- coordinate / index accessors ----------------------------------
     # raster->world is the forward geotransform (pure affine): rasterio.xy and
     # GDAL.toWorldCoord agree for any pixel index in any CRS, so these compare in
     # both modes. The pixel index {x:64, y:64} is inside every corpus tile (256px
@@ -1225,7 +1226,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core=False,
         fingerprint=False,
     ),
-    # --- map / struct accessors (Task 4): timing-only ---------------------------
+    # --- map / struct accessors: timing-only ---------------------------
     # These return maps (metadata, bandmetadata, histogram), structs/dicts
     # (georeference), CRS/encoding-dependent bytes (boundingbox WKB) or
     # gdalinfo-style JSON (summary). None can be made byte- or value-identical
@@ -1311,7 +1312,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core=False,
         fingerprint=False,
     ),
-    # --- Task 5: tile-out transforms with scalar / fixed args (13) -----------
+    # --- Tile-out transforms with scalar / fixed args (13) -----------
     # Each returns a raster tile, so the runner fingerprints the output as a
     # raster (same path as terrain). All run both modes and are compared, EXCEPT
     # rst_resample_to_res (see below). Fixed scalar args are identical across the
@@ -1567,7 +1568,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core=False,
         fingerprint=False,
     ),
-    # --- Task 6: tile-out transforms with geometry / expression / band-map /
+    # --- Tile-out transforms with geometry / expression / band-map /
     # function args (10) --------------------------------------------------------
     # SIX are full raster comparisons (both modes): the arguments are CRS- and
     # band-count-independent and the two engines run the *same* algorithm.
@@ -2073,7 +2074,7 @@ REGISTRY: Dict[str, FnSpec] = {
     ),
     # rst_align_to: takes two tiles (source + reference) — no standard input_kind
     # for a two-tile function; fingerprint=False until the runner gains a
-    # two-tile input_kind (Task 18 reconciles).  Sources are declared here.
+    # two-tile input_kind.  Sources are declared here.
     "rst_align_to": FnSpec(
         "rst_align_to",
         "gbx_rst_align_to",
@@ -3424,7 +3425,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         core=False,
     ),
-    # --- Custom-grid raster functions (Task 8, Stage 3) ---
+    # --- Custom-grid raster functions ---
     # The 10 custom-grid raster functions: 8 rastertogrid aggs, tessellate, and
     # rasterize_agg.  These require a custom-grid struct argument (from
     # gbx_custom_grid(...)) that the bench runner's udtf-LATERAL SQL renderer
@@ -3433,7 +3434,7 @@ REGISTRY: Dict[str, FnSpec] = {
     # simple scalars (int/float/str/bool).  The FnSpecs are registered here with
     # their correct ``sources`` tuples (for change-aware benchmarking) and
     # ``fingerprint=False`` (timing-only; no cross-engine comparison) until the
-    # bench framework is extended to support struct-literal grid arguments (Task 18).
+    # bench framework is extended to support struct-literal grid arguments.
     # The ``col_fn`` uses prx.rst_custom_rastertogrid* which raises NotImplementedError
     # (correct: these are UDTF-only); the ``core_fn`` placeholder is never invoked
     # because core=False.
@@ -3638,7 +3639,7 @@ REGISTRY: Dict[str, FnSpec] = {
     # deterministic input), so they are compared through the dggs cell-set
     # fingerprint (cell count + sorted cell-id hash + order-independent agg over
     # filled values) -- NOT the raster fingerprint. Cross-tier cell-set identity
-    # is proven by the Task-10 cellfill parity tests. They ride input_kind ==
+    # is proven by the cellfill parity tests. They ride input_kind ==
     # "grid_aggregate" (the harness streams the fixed (cellid, value) corpus,
     # which CONTAINS NULLs so the fill does real work -- see cellfill_cells above)
     # and are spark-path-only (grouped UDAF; no single-row pure-core analogue).
@@ -3708,7 +3709,7 @@ REGISTRY: Dict[str, FnSpec] = {
     # cellid + value columns -- same limitation as the custom raster aggregators).
     # The grid struct is passed as F.lit(None) so the col_fn is callable for the
     # FnSpec contract and timing leg; it is never fingerprint-compared. Full-parity
-    # awaits the bench framework carrying a struct-literal grid column (Task 18).
+    # awaits the bench framework carrying a struct-literal grid column.
     "custom_cellfill": FnSpec(
         "custom_cellfill",
         "gbx_custom_cellfill",

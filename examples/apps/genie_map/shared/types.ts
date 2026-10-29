@@ -31,7 +31,7 @@ export interface PointDataRow {
 export type LayerKind = 'h3' | 'point';
 export type H3Source = 'cells' | 'points';
 
-// Dynamic, density-aware H3 config (spec §4). Resolution is picked at query time
+// Dynamic, density-aware H3 config. Resolution is picked at query time
 // from BOTH zoom (a max-res ceiling) AND density (target on-screen cell count).
 export interface H3ResConfig {
   source: H3Source;         // 'cells' → coarsen-only via h3_toparent (from a stored cell col);

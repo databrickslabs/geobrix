@@ -57,7 +57,7 @@ All Maven/test/doc/coverage work runs inside the **`geobrix-dev` Docker containe
 
 ## Commands (the `gbx:*` palette)
 
-**82 `gbx:*` commands** in `scripts/commands/` (each a `.md` registration + a `.sh` implementation). They handle Docker setup, env vars, log paths (`--log filename` → `test-logs/filename`; relative → under `test-logs/`; absolute → as-is), and profile selection. **If a command fails, fix the command** — don't work around it (procedure in `.claude/rules/gbx-commands.md`).
+**85 `gbx:*` commands** in `scripts/commands/` (each a `.md` registration + a `.sh` implementation). They handle Docker setup, env vars, log paths (`--log filename` → `test-logs/filename`; relative → under `test-logs/`; absolute → as-is), and profile selection. **If a command fails, fix the command** — don't work around it (procedure in `.claude/rules/gbx-commands.md`).
 
 - **Tests**: `gbx:test:scala`, `gbx:test:python`, `gbx:test:scala-docs`, `gbx:test:python-docs`, `gbx:test:sql-docs`, `gbx:test:docs`, `gbx:test:function-info`, `gbx:test:notebooks`, `gbx:test:bindings`
   - Single Scala suite: `gbx:test:scala --suite 'com.databricks.labs.gbx.gridx.*'` or `--suites 'A,B'`
@@ -66,7 +66,7 @@ All Maven/test/doc/coverage work runs inside the **`geobrix-dev` Docker containe
 - **Coverage**: `gbx:coverage:scala-package <pkg>` (1–3 min), `gbx:coverage:gaps` (fast), `gbx:coverage:baseline` (~10 min). Full `gbx:coverage:scala` ~10 min — use `--parallel` or `--report-only`.
 - **Docs**: `gbx:docs:dev` (hot reload, port 3000 — reserved for the user; agents use `--port 3001`), `gbx:docs:start` / `gbx:docs:stop`, `gbx:docs:function-info` (regenerate `function-info.json` — in Docker, or it leaks host paths).
 - **Lint**: `gbx:lint:scalastyle` (matches CI — run before push), `gbx:lint:python` (isort/black/flake8; `--fix` on host). Pre-push includes `gbx:lint:python --check`, not just scalastyle.
-- **Data**: `gbx:data:download --bundle {essential|complete}`, `gbx:data:generate-minimal-bundle`, `gbx:data:stage-wheel`, `gbx:data:stage-jar`
+- **Data**: `gbx:data:download --bundle {essential|complete}`, `gbx:data:generate-minimal-bundle`, `gbx:data:stage-wheel`, `gbx:data:stage-jar`, `gbx:data:stage-sample --profile <name>` (one bundle dataset dir to a Volume; default the Zarr ERA5-like cube — generate it first with `gbx:data:generate-minimal-bundle --zarr-only`)
 - **CI**: `gbx:ci:push`, `gbx:ci:status`, `gbx:ci:watch`, `gbx:ci:logs`, `gbx:ci:docs`. Dev-branch CI is **not a gate** — batch and push; don't chase red→green on it.
 - **Docker**: `gbx:docker:start`, `gbx:docker:exec "<cmd>"`, `gbx:docker:attach`
 - **DCS image**: `gbx:dcs:build` (local build + in-image checks, tags `<ver>-env6-<arm|x86>-rc`), `gbx:dcs:publish` (`--candidate` / `--release`; run by the release owner only — agents never push or log in)

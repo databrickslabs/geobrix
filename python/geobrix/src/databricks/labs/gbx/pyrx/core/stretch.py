@@ -10,8 +10,8 @@ import numpy as np
 from databricks.labs.gbx.pyrx.core._nodata import band_valid_mask
 from databricks.labs.gbx.pyrx.core.compression import (
     creation_opts,
-    drop_ycbcr,
     match_alpha,
+    source_profile,
 )
 
 # Percentiles are estimated from at most this many valid samples per band. The
@@ -61,7 +61,7 @@ def percentile_stretch(ds, lo_pct: float, hi_pct: float) -> bytes:
         datas.append(ds.read(b))
         valids.append(band_valid_mask(ds, b))  # NoData, own mask and transparency
 
-    profile = drop_ycbcr(ds.profile)
+    profile = source_profile(ds.profile)
     profile.update(driver="GTiff", count=count, dtype="uint8", nodata=0)
     # Bands are written one at a time to keep the working set to a single band, so
     # the canonical options are applied directly rather than through write_gtiff.

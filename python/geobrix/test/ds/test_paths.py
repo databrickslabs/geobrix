@@ -477,8 +477,11 @@ def test_read_stage_skips_a_file_deleted_after_planning(tmp_path, caplog, monkey
 @pytest.mark.parametrize("opt", ["manifest", "tilesTable", "TILESTABLE"])
 def test_read_paths_rejects_manifest_options_for_raster(spark, tmp_path, opt, fmt):
     a = _tif(str(tmp_path / "a.tif"))
-    with pytest.raises(ValueError, match=f"(?i){opt}"):
+    with pytest.raises(ValueError, match=f"(?i){opt}") as info:
         P.read_paths(_paths_df(spark, [a]), fmt, {opt: "x"})
+    # and says where to read it instead: a tile index has its own function
+    fix = "spark.read.format" if opt == "manifest" else "read_tiles_table"
+    assert fix in str(info.value).split("Fix:")[-1]
 
 
 # --- schema file pick (folder schema_path) ----------------------------------

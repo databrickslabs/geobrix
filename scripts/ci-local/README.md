@@ -13,6 +13,8 @@ Validate `.github/workflows/*.yml` changes locally before pushing. Catches ~80% 
 | `jfrog-auth-stub/action.yml` | No-op composite action. Copied by `run-act.sh` into a sibling workspace mirror (`.cache/act-workspace/`) where it overlays the real one — see "How real `.github/` stays untouched" below. |
 | `run-act.sh` | Pre-flight checks + image build + workspace-mirror prep + `act` invocation. |
 
+The image bakes the Maven version the wrapper pins (`.mvn/wrapper/maven-wrapper.properties`), and `run-act.sh` writes an `./mvnw` into the mirror that runs it: real CI downloads the pinned Maven through JFrog, which this image cannot. An image built before that change has apt's older Maven and fails the pom's version check: `docker rmi geobrix-ci-runner:local`, then re-run. (`gbx:ci:act` only builds the image when it is missing, so it does not notice an old one.)
+
 ## Quick start
 
 ```bash

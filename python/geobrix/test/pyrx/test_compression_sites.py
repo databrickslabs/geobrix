@@ -1,4 +1,4 @@
-"""Task 3: Assert that hot-path light-tier write sites emit ZSTD+predictor.
+"""Assert that hot-path light-tier write sites emit ZSTD+predictor.
 
 Covers:
 - materialize_to_bytes on a virtual tile -> zstd
@@ -15,10 +15,12 @@ inconsistently across GDAL builds).
 
 from __future__ import annotations
 
+import pathlib
+
 import numpy as np
 import pytest
 import rasterio
-from rasterio.enums import Compression
+from rasterio.enums import ColorInterp, Compression
 from rasterio.io import MemoryFile
 from rasterio.transform import from_bounds
 from rasterio.windows import Window
@@ -256,7 +258,7 @@ def test_auto_level_scales_with_tile_size(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 4: remaining light write sites — one assertion per site-FAMILY
+# Remaining light write sites — one assertion per site-FAMILY
 # ---------------------------------------------------------------------------
 
 # -- edit family (clip_to_geom / update_type / init_nodata / threshold / set_srid / band)
@@ -360,7 +362,7 @@ def test_proximity_is_zstd(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# tile_to_bytes wiring (T1 fail-on-revert: DIV-1 and DIV-2 guards)
+# tile_to_bytes wiring (fail-on-revert guards: ZSTD float and DEFLATE uint8 predictors)
 # ---------------------------------------------------------------------------
 
 
@@ -387,7 +389,7 @@ def _make_src_bytes_write(dtype: str, sz: int = 32) -> bytes:
 
 
 def test_tile_to_bytes_cog_zstd_float32_predictor_3():
-    """T1 / DIV-1 fail-on-revert: COG+ZSTD float32 must carry predictor=3.
+    """Fail-on-revert: COG+ZSTD float32 must carry predictor=3.
 
     Before the fold, _write.py::_creation_opts omitted predictor for ZSTD entirely
     (lines 36-38: only opts["zstd_level"] was set).  After the fold, creation_opts
@@ -409,13 +411,13 @@ def test_tile_to_bytes_cog_zstd_float32_predictor_3():
             "PREDICTOR"
         )
         assert pred is not None and int(pred) == 3, (
-            f"DIV-1 guard: expected predictor=3 for float32 ZSTD COG, got {pred!r}. "
+            f"expected predictor=3 for float32 ZSTD COG, got {pred!r}. "
             "Reverting the _write.py fold removes this predictor."
         )
 
 
 def test_tile_to_bytes_cog_deflate_uint8_predictor_1():
-    """T1 / DIV-2 fail-on-revert: COG+DEFLATE uint8 must not carry predictor=2.
+    """Fail-on-revert: COG+DEFLATE uint8 must not carry predictor=2.
 
     Before the fold, _write.py used `'3' if _is_float(dtype) else '2'` which
     returned 2 for uint8.  Canonical predictor_for('uint8') returns 1.
@@ -444,9 +446,9 @@ def test_tile_to_bytes_cog_deflate_uint8_predictor_1():
             "PREDICTOR"
         )
         # pred is None means no prediction (GDAL default), which is correct for uint8.
-        # pred == "2" means STANDARD differencing, which is wrong for uint8 (DIV-2 guard).
+        # pred == "2" means STANDARD differencing, which is wrong for uint8.
         assert pred is None or int(pred) == 1, (
-            f"DIV-2 guard: expected predictor=1 or None (no prediction) for uint8 DEFLATE COG, "
+            f"expected predictor=1 or None (no prediction) for uint8 DEFLATE COG, "
             f"got {pred!r}. Pre-fold code returned 2 for uint8 (non-float non-small-int branch)."
         )
 
@@ -927,6 +929,24 @@ def _case_tile_to_bytes_cog(tmp_path):
     return tile_to_bytes(0, _ycbcr_src(), meta, force_driver="COG")
 
 
+def _case_windowed_download(tmp_path):
+    from databricks.labs.gbx.stac._download import windowed_download
+
+    path = _ycbcr_path(tmp_path)
+    out = windowed_download(
+        path,
+        str(tmp_path / "out.tif"),
+        (500000.0, 4490000.0, 500640.0, 4490640.0),
+    )
+    return pathlib.Path(out).read_bytes()
+
+
+def _case_simplify_raster(tmp_path):
+    from databricks.labs.gbx.vizx._simplify import _simplify_raster
+
+    return _simplify_raster(_ycbcr_path(tmp_path), {"raster_max_px": 64}, None)
+
+
 def _case_apply_compression(tmp_path):
     from databricks.labs.gbx.ds.writer import _apply_compression
 
@@ -962,6 +982,8 @@ _YCBCR_OPS = [
     (_case_encode_tile_cog, 3),
     (_case_tile_to_bytes_cog, 3),
     (_case_apply_compression, 3),
+    (_case_windowed_download, 3),
+    (_case_simplify_raster, 3),
 ]
 
 
@@ -1112,3 +1134,236 @@ def test_centroid_tessellate_chips_use_creation_opts(src_compress, coverage):
             empties += int(not (c.read_masks() != 0).any())
     if coverage == "complete":
         assert empties, "the NoData strip must yield synthetic empty chips"
+
+
+# ---------------------------------------------------------------------------
+# A striped source's profile copied into a new GTiff must not log BLOCKXSIZE warnings
+# ---------------------------------------------------------------------------
+
+
+def _striped_source(count=1, alpha=False) -> bytes:
+    """A 64x64 uint8 GTiff written striped: no ``tiled=True``, so its profile carries ``blockxsize``."""
+    profile = dict(
+        driver="GTiff",
+        width=64,
+        height=64,
+        count=count,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_bounds(0, 0, 1, 1, 64, 64),
+    )
+    data = np.arange(count * 64 * 64, dtype="uint8").reshape(count, 64, 64) % 251
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(data)
+            if alpha:
+                dst.colorinterp = [
+                    ColorInterp.red,
+                    ColorInterp.green,
+                    ColorInterp.blue,
+                    ColorInterp.alpha,
+                ][:count]
+        return mf.read()
+
+
+def _striped_path(tmp_path, **kw) -> str:
+    p = tmp_path / "striped.tif"
+    p.write_bytes(_striped_source(**kw))
+    return str(p)
+
+
+# site -> (how it takes its source, call). "ds" is an open dataset, "bytes" the file's bytes and
+# "path" a file on disk; ``tmp_path`` is for sites that write beside their input.
+def _striped_sites():
+    from databricks.labs.gbx.bench import grouped_file, spec, synth
+    from databricks.labs.gbx.ds import _write, _xyz_mosaic
+    from databricks.labs.gbx.pyrx import functions as F
+    from databricks.labs.gbx.pyrx.core import gridagg, ops, resample, tiling, warp
+    from databricks.labs.gbx.stac import _download
+    from databricks.labs.gbx.vizx import _simplify
+
+    return {
+        "resample_to_size": (
+            "ds",
+            lambda ds, tp: resample.resample_to_size(ds, 32, 32),
+        ),
+        "reproject_to_srid": ("ds", lambda ds, tp: warp.reproject_to_srid(ds, 3857)),
+        "build_overviews": ("ds", lambda ds, tp: ops.build_overviews(ds, [2])),
+        "dataset_to_gtiff_bytes": ("ds", lambda ds, tp: F._dataset_to_gtiff_bytes(ds)),
+        "stamp_crs_bytes": (
+            "ds",
+            lambda ds, tp: gridagg._stamp_crs_bytes(ds, "EPSG:3857"),
+        ),
+        "encoded_size_bytes": ("ds", lambda ds, tp: tiling._encoded_size_bytes(ds)),
+        "as_format_gtiff": ("ds", lambda ds, tp: ops.as_format(ds, "GTiff")),
+        "tile_to_bytes_cog": (
+            "bytes",
+            lambda b, tp: _write.tile_to_bytes(0, b, {"compression": "ZSTD"}, "COG"),
+        ),
+        "windowed_download": (
+            "path",
+            lambda p, tp: _download.windowed_download(
+                p, str(tp / "out.tif"), (0.0, 0.0, 0.5, 0.5)
+            ),
+        ),
+        "simplify_raster": (
+            "path",
+            lambda p, tp: _simplify._simplify_raster(p, {"raster_max_px": 32}, None),
+        ),
+        "bench_synth_combineavg": (
+            "path",
+            lambda p, tp: synth.synthesize(p, "combineavg", str(tp / "synth")),
+        ),
+        "bench_window_gtiff_bytes": (
+            "path",
+            lambda p, tp: grouped_file._window_gtiff_bytes(p, (0, 0, 32, 32)),
+        ),
+        "bench_synthetic_rgb_tile": ("ds", lambda ds, tp: spec._synthetic_rgb_tile(ds)),
+        "bench_ds_to_gtiff_bytes": ("ds", lambda ds, tp: spec._ds_to_gtiff_bytes(ds)),
+        "to_render_rgb": (
+            "rgba-path",
+            lambda p, tp: _xyz_mosaic.to_render_rgb(p),
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        "resample_to_size",
+        "reproject_to_srid",
+        "build_overviews",
+        "dataset_to_gtiff_bytes",
+        "stamp_crs_bytes",
+        "encoded_size_bytes",
+        "as_format_gtiff",
+        "tile_to_bytes_cog",
+        "windowed_download",
+        "simplify_raster",
+        "bench_synth_combineavg",
+        "bench_window_gtiff_bytes",
+        "bench_synthetic_rgb_tile",
+        "bench_ds_to_gtiff_bytes",
+        "to_render_rgb",
+    ],
+)
+def test_a_striped_source_logs_no_blockxsize_warning(op, caplog, tmp_path):
+    """A striped GeoTIFF's profile carries ``blockxsize`` with ``tiled`` False; written to a new
+    GTiff GDAL logs "BLOCKXSIZE can only be used with TILED=YES" for each dataset."""
+    import logging
+
+    kind, call = _striped_sites()[op]
+    if kind == "rgba-path":
+        arg = _striped_path(tmp_path, count=4, alpha=True)
+    else:
+        arg = _striped_path(tmp_path) if kind == "path" else _striped_source()
+    with MemoryFile(_striped_source()) as mf, mf.open() as ds:
+        assert not ds.profile["tiled"] and ds.profile.get("blockxsize")
+        if kind == "ds":
+            arg = ds
+        with caplog.at_level(logging.WARNING):
+            assert call(arg, tmp_path)
+    noisy = [r.getMessage() for r in caplog.records if "BLOCKXSIZE" in r.getMessage()]
+    assert noisy == [], noisy
+
+
+# ---------------------------------------------------------------------------
+# The codec names that mean "no compression" write none at every site that accepts them
+# ---------------------------------------------------------------------------
+
+
+def _deflate_tiled_src(dtype="uint16", sz=64) -> bytes:
+    """A tiled DEFLATE GTiff: a codec to inherit by mistake, and not the COG driver's default (LZW)."""
+    a = (np.arange(sz * sz, dtype="int64").reshape(1, sz, sz) % 251).astype(dtype)
+    prof = dict(
+        driver="GTiff",
+        width=sz,
+        height=sz,
+        count=1,
+        dtype=dtype,
+        crs="EPSG:32630",
+        transform=from_bounds(500000, 5500000, 500640, 5500640, sz, sz),
+        compress="deflate",
+        tiled=True,
+        blockxsize=16,
+        blockysize=16,
+    )
+    with MemoryFile() as mf:
+        with mf.open(**prof) as d:
+            d.write(a)
+        return mf.read()
+
+
+def _assert_no_codec(b: bytes, *, context: str) -> None:
+    with MemoryFile(bytes(b)) as m, m.open() as ds:
+        img = ds.tags(ns="IMAGE_STRUCTURE")
+        assert "COMPRESSION" not in img, f"{context}: {img}"
+        assert ds.compression in (
+            None,
+            Compression.none,
+        ), f"{context}: {ds.compression}"
+
+
+def _no_codec_cog_convert(name, tmp_path):
+    from databricks.labs.gbx.pyrx.core.analysis import cog_convert
+
+    with MemoryFile(_deflate_tiled_src()) as m, m.open() as ds:
+        return cog_convert(ds, name, 16, "AVERAGE")
+
+
+def _no_codec_cog_convert_file(name, tmp_path):
+    from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
+
+    src, dst = tmp_path / "src.tif", tmp_path / "dst.tif"
+    src.write_bytes(_deflate_tiled_src())
+    cog_convert_file(str(src), str(dst), name, 16, "AVERAGE")
+    return dst.read_bytes()
+
+
+def _no_codec_encode_tile(fmt):
+    def run(name, tmp_path):
+        from databricks.labs.gbx.ds._encode import encode_tile
+
+        src = tmp_path / "src.tif"
+        src.write_bytes(_deflate_tiled_src())
+        with rasterio.open(src) as ds:
+            return encode_tile(ds, (0, 0, 64, 64), str(src), "", name, fmt, 16)[1]
+
+    return run
+
+
+def _no_codec_tile_to_bytes_cog(name, tmp_path):
+    from databricks.labs.gbx.ds._write import tile_to_bytes
+
+    return tile_to_bytes(
+        0, _deflate_tiled_src(), {"compression": name}, force_driver="COG"
+    )
+
+
+def _no_codec_apply_compression(name, tmp_path):
+    from databricks.labs.gbx.ds.writer import _apply_compression
+
+    return _apply_compression(_deflate_tiled_src(), name, None, None)
+
+
+# every spelling of "no compression" is accepted at every site, in either case
+_NO_CODEC_NAMES = ["raw", "none", "RAW", "NONE"]
+_NO_CODEC_SITES = {
+    "cog_convert": _no_codec_cog_convert,
+    "cog_convert_file": _no_codec_cog_convert_file,
+    "encode_tile_cog": _no_codec_encode_tile("cog"),
+    "encode_tile_gtiff": _no_codec_encode_tile("gtiff"),
+    "tile_to_bytes_cog": _no_codec_tile_to_bytes_cog,
+    "apply_compression": _no_codec_apply_compression,
+}
+
+
+@pytest.mark.parametrize(
+    "site,name",
+    [(s, n) for s in _NO_CODEC_SITES for n in _NO_CODEC_NAMES],
+)
+def test_a_no_codec_name_writes_no_compression(site, name, tmp_path):
+    """Read back ``COMPRESSION``: absent. The COG driver gave LZW for an omitted COMPRESS, and a
+    site that starts from the source's profile kept the source's DEFLATE."""
+    out = _NO_CODEC_SITES[site](name, tmp_path)
+    _assert_no_codec(out, context=f"{site}({name})")

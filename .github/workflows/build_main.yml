@@ -164,7 +164,7 @@ jobs:
           GBX_SAMPLE_DATA_ROOT: ${{ runner.temp }}/geobrix-sample-data
         run: |
           mkdir -p "$GBX_SAMPLE_DATA_ROOT"
-          sudo -E mvn -C -q test -Dsuites='tests.docs.scala.*,docs.tests.scala.*' -DfailIfNoTests=false -Dscoverage.skip
+          sudo -E ./mvnw -C -q test -Dsuites='tests.docs.scala.*,docs.tests.scala.*' -DfailIfNoTests=false -Dscoverage.skip
       - name: upload artifacts
         uses: ./.github/actions/upload_artifacts
 

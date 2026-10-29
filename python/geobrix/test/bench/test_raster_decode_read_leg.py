@@ -1,4 +1,4 @@
-"""Tests for run_raster_decode_read_sweep (Task C: raster decode-read throughput leg).
+"""Tests for run_raster_decode_read_sweep (the raster decode-read throughput leg).
 
 Covers:
   - managed/external: monkeypatched read_file_table returns tiles → "ok"

@@ -152,6 +152,10 @@ FROM gdal-builder AS final-base
 # apache-maven-<version>-bin.tar.gz.sha512 (archive.apache.org, downloads.apache.org and
 # dlcdn.apache.org agree for 3.9.16); scripts/ci/test_dev_dockerfile.py keeps a table of the
 # version/hash pairs and fails when only one of the two changes.
+# CI runs the same version through the Maven wrapper (.mvn/wrapper/maven-wrapper.properties); the
+# wrapper cannot download inside this container (Maven Central is blocked), which is why the image
+# installs Maven itself. scripts/ci/test_maven_wrapper.py fails when MAVEN_VERSION and the
+# wrapper's version differ, so bump both together (and pom.xml's enforcer floor).
 ARG MAVEN_VERSION=3.9.16
 ARG MAVEN_SHA512=831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6
 RUN mkdir -p $ROOTDIR/share/maven \

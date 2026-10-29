@@ -3299,7 +3299,7 @@ _CELL_RASTER_DECODE_READ = """# Raster pixel-decode throughput benchmark: rst_av
 # Reads GeoTIFF tiles from the layout-sweep FILE tables (or a Volume dir for fuse) and
 # forces actual pixel decode via rst_avg -- NOT enumeration (gbx_file_read+count).
 # For managed/external: also emits an ordering-amortization comparison (auto-order vs
-# skipOrdering=True) to measure the T8 same-source sort payoff on open/LRU reuse.
+# skipOrdering=True) to measure the same-source sort payoff on open/LRU reuse.
 # Skipped cleanly when FILE_FILESPACE is not set (no FILE tables were provisioned).
 from databricks.labs.gbx.bench import readers as _rd
 from databricks.labs.gbx.bench import results

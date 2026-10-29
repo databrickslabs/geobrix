@@ -95,11 +95,11 @@ def test_virtual_emits_bytes_free_rows(spark, tmp_path):
         t = r["tile"]
         assert t["raster"] is None  # bytes-free
         assert t["path"] is not None
-        # Task 2: window is deferred (None) for whole-file virtual tiles.
+        # window is deferred (None) for whole-file virtual tiles.
         assert (
             t["window"] is None
         ), "whole-file virtual tile must have window=None (deferred)"
-        # Task 2: width/height/count/driver omitted; sourcePath, format, path_file_size present.
+        # width/height/count/driver omitted; sourcePath, format, path_file_size present.
         assert t["metadata"] is not None
         assert "sourcePath" in t["metadata"]
         assert "format" in t["metadata"]
@@ -140,7 +140,7 @@ def test_raster_gbx_defaults_to_virtual(spark, tmp_path):
     t = rows[0]["tile"]
     assert t["raster"] is None, "raster_gbx must default to virtual (bytes-free)"
     assert t["path"] is not None
-    # Task 2: whole-file virtual tiles have deferred window (None)
+    # Whole-file virtual tiles have deferred window (None)
     assert t["window"] is None, "whole-file virtual tile must have deferred window=None"
 
 
@@ -154,7 +154,7 @@ def test_gtiff_gbx_defaults_to_virtual(spark, tmp_path):
     t = rows[0]["tile"]
     assert t["raster"] is None, "gtiff_gbx must default to virtual (bytes-free)"
     assert t["path"] is not None
-    # Task 2: whole-file virtual tiles have deferred window (None)
+    # Whole-file virtual tiles have deferred window (None)
     assert t["window"] is None, "whole-file virtual tile must have deferred window=None"
 
 
@@ -168,7 +168,7 @@ def test_cog_gbx_defaults_to_virtual(spark, tmp_path):
     t = rows[0]["tile"]
     assert t["raster"] is None, "cog_gbx must default to virtual (bytes-free)"
     assert t["path"] is not None
-    # Task 2: whole-file virtual tiles have deferred window (None)
+    # Whole-file virtual tiles have deferred window (None)
     assert t["window"] is None, "whole-file virtual tile must have deferred window=None"
 
 
@@ -308,14 +308,14 @@ def test_materialized_tile_has_tile_size_metadata(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 2: deferred header open — no rasterio.open for whole-file virtual tiles
+# Deferred header open — no rasterio.open for whole-file virtual tiles
 # ---------------------------------------------------------------------------
 
 
 def test_read_wholefile_virtual_no_rasterio_open(tmp_path, monkeypatch):
     """Whole-file virtual tile: read() emits 0 rasterio.open calls.
 
-    The per-tile FUSE header open is the ~74s/1k Serverless cost; Task 2 defers
+    The per-tile FUSE header open is the ~74s/1k Serverless cost; read() defers
     it by emitting window=None with only the metadata knowable from the path.
     """
     import rasterio as _rasterio

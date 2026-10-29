@@ -130,7 +130,7 @@ def test_merge_tiles_same_origin_overlap_winner_order_invariant():
     assert np.all(arr == winner)
 
 
-# --- merge_tiles streaming path (Task 3) ------------------------------------
+# --- merge_tiles streaming path ------------------------------------
 
 
 def test_merge_tiles_refuses_a_mosaic_it_cannot_stream_before_building_it(monkeypatch):
@@ -387,6 +387,72 @@ def test_merge_streaming_multicrs_produces_valid_output(monkeypatch):
             assert len(valid_pixels) > 0, "output must contain valid pixels"
 
 
+@pytest.mark.parametrize("streamed", [False, True], ids=["in-ram", "streamed"])
+def test_a_tile_in_another_crs_leaves_its_neighbours_pixels_alone(
+    monkeypatch, streamed
+):
+    """A tile with no NoData, reprojected across a UTM zone boundary, is a rotated footprint inside a
+    larger box: the box pixels that no source pixel reaches are not data, and the tile that folds last
+    must not overwrite the valid pixels of the tile beside it with them."""
+    from rasterio.warp import transform as warp_xy
+
+    def tile(epsg, x, y, w, h, value):
+        profile = dict(
+            driver="GTiff",
+            width=w,
+            height=h,
+            count=1,
+            dtype="uint8",
+            crs=f"EPSG:{epsg}",
+            transform=from_origin(x, y, 100.0, 100.0),
+        )
+        with MemoryFile() as mf:
+            with mf.open(**profile) as dst:
+                dst.write(np.full((1, h, w), value, dtype="uint8"))
+            return mf.read()
+
+    (x32,), (y32,) = warp_xy("EPSG:4326", "EPSG:32632", [11.0], [48.0])
+    (x33,), (y33,) = warp_xy("EPSG:4326", "EPSG:32633", [12.0], [48.0])
+    ref = tile(32632, x32, y32 + 20000, 900, 400, 100)  # in the reference CRS
+    other = tile(32633, x33, y33 + 20000, 1000, 400, 200)  # reprojected
+    assert (
+        sorted([ref, other])[0] == ref
+    ), "fixture: the reprojected tile must fold last"
+    if streamed:
+        monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+
+    with MemoryFile(agg.merge_tiles([ref, other])) as mf, mf.open() as ds:
+        left, top = ds.transform.c, ds.transform.f
+        col, row = round((x32 - left) / 100.0), round((top - (y32 + 20000)) / 100.0)
+        beside = ds.read(1)[row : row + 400, col : col + 900]
+    assert set(np.unique(beside)) == {
+        100,
+        200,
+    }  # no zero fill inside the reference tile
+
+
+def test_a_merge_across_crs_of_striped_tiles_logs_no_blockxsize_warning(caplog):
+    """A striped GeoTIFF reports its strip as blockxsize; copied into the reprojected tile and the
+    mosaic it made GDAL log "BLOCKXSIZE can only be used with TILED=YES" for each dataset.
+    """
+    import logging
+
+    a = _ras(
+        np.arange(16).reshape(4, 4), ulx=500000.0, uly=4000000.0, px=10.0, epsg=32633
+    )
+    b = _ras(
+        np.arange(16).reshape(4, 4), ulx=500100.0, uly=4000000.0, px=10.0, epsg=32634
+    )
+    for merge in (agg.merge_tiles, agg._merge_tiles_streaming):
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            merge([a, b])
+        noisy = [
+            r.getMessage() for r in caplog.records if "BLOCKXSIZE" in r.getMessage()
+        ]
+        assert noisy == [], (merge.__name__, noisy)
+
+
 def test_merge_small_unchanged():
     """Small 2-tile merge uses the in-RAM path (default budget) and returns the correct mosaic.
 
@@ -547,7 +613,7 @@ def test_derivedband_tiles_sum_across_group():
 
 # --- corrupt-member skip in light-tier helpers --------------------------------
 # These tests exercise the skip-and-count behaviour added to _merge_bytes,
-# _combineavg_bytes, and _frombands_bytes (Task 5).  Each helper now wraps the
+# _combineavg_bytes, and _frombands_bytes.  Each helper now wraps the
 # per-member open/materialize in try/except so a corrupt-but-non-empty member is
 # dropped instead of raising.
 
@@ -817,7 +883,7 @@ class TestGroupedAggUdfSkipsCorrupt:
 
 
 # ---------------------------------------------------------------------------
-# Task 8 — aggregators never inject try_to_file (Spark 4 nondeterminism guard)
+# Aggregators never inject try_to_file (Spark 4 nondeterminism guard)
 # ---------------------------------------------------------------------------
 # try_to_file is nondeterministic; Spark 4 rejects nondeterministic expressions
 # as aggregate function arguments (AGGREGATE_FUNCTION_WITH_NONDETERMINISTIC_EXPRESSION).

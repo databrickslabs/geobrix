@@ -286,7 +286,7 @@ def test_plot_mosaic_bad_emphasis_raises():
 
 
 # ---------------------------------------------------------------------------
-# Task 2 wiring test: _resolve_vrt_path delegates to list_files (fail-on-revert)
+# Wiring test: _resolve_vrt_path delegates to list_files (fail-on-revert)
 # ---------------------------------------------------------------------------
 
 

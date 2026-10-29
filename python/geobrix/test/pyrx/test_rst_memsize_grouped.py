@@ -80,7 +80,7 @@ def test_grouped_equals_per_row_for_virtual_tiles(spark, tmp_path):
 def test_grouped_equals_per_row_for_windowless_virtual_tiles(spark, tmp_path):
     """PROOF: grouped == per_row == full-source footprint for windowless virtual tiles.
 
-    Task 1 relaxed the 'virtual tile requires a window' invariant; window=None
+    A virtual tile does not require a window; window=None
     means the full source.  The fallback must use open_header (not _open, which
     raises ValueError for windowless tiles) so grouped matches per-row rst_memsize.
     """

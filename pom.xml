@@ -275,8 +275,11 @@
                         </goals>
                         <configuration>
                             <rules>
+                                <!-- The floor is the version .mvn/wrapper/maven-wrapper.properties pins,
+                                     so a different Maven cannot build what CI builds. -->
                                 <requireMavenVersion>
-                                    <version>[3.8.0,)</version>
+                                    <version>[3.9.16,)</version>
+                                    <message>This repo needs the Maven version pinned in .mvn/wrapper/maven-wrapper.properties or newer. On the host and in CI, run ./mvnw instead of mvn (it downloads and checksum-verifies the pinned Maven). Inside the geobrix-dev container ./mvnw cannot work; the image's Maven is out of date, so rebuild the image with gbx:docker:rebuild.</message>
                                 </requireMavenVersion>
                                 <requireJavaVersion>
                                     <version>[17,)</version>

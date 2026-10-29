@@ -241,7 +241,7 @@ def test_synthetic_empties_are_1x1_at_the_cell_centroid_pixel():
                 h3s = h3.int_to_str(cellid & 0xFFFFFFFFFFFFFFFF)
                 cx, cy = T._cell_geom(h3s, "h3").centroid.coords[
                     0
-                ]  # D2: polygon centroid, grid CRS
+                ]  # polygon centroid, grid CRS
                 col_f, row_f = ~ds.transform * (cx, cy)
                 col = min(max(math.floor(col_f), 0), ds.width - 1)
                 row = min(max(math.floor(row_f), 0), ds.height - 1)

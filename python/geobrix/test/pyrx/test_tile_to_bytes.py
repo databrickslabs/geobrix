@@ -204,7 +204,7 @@ def test_mapalgebra_bytes_virtual_matches_materialized(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 2: window=None deferred whole-file virtual tile
+# window=None deferred whole-file virtual tile
 # ---------------------------------------------------------------------------
 
 
@@ -213,11 +213,11 @@ def test_tile_to_bytes_window_none_full_extent(tmp_path):
 
     A whole-file virtual tile emitted by the deferred read() path carries
     window=None; _tile_to_bytes must resolve that to the full source extent
-    (mirrors the open_tile() fix from Task 1) rather than raising ValueError.
+    (mirrors open_tile()) rather than raising ValueError.
     """
     path = _write_src(tmp_path, "wn.tif", w=W, h=H)
 
-    # Deferred whole-file virtual tile (Task 2: read() emits window=None)
+    # Deferred whole-file virtual tile (read() emits window=None)
     vt_none = VirtualTile(cellid=0, path=path, window=None)
 
     # Explicit full-extent tile (reference for byte-identical comparison)

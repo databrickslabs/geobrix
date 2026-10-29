@@ -1,7 +1,5 @@
 """TDD tests for the writer-layout effects leg (scan/pruning/shuffle-input).
 
-Task 9 of the GeoBrix Phase-2 bench plan.
-
 Verifies ``run_layout_scan_comparison``:
 - emits exactly one ``"layout-scan"`` ResultRow per layout
 - records the ``layout`` field from the ``tables_by_layout`` mapping

@@ -176,59 +176,9 @@ paths_need_zarr() {
     return 1
 }
 
-# True when every pin of the [zarr_dbr19] extra, read from pyproject.toml (the single source),
-# is satisfied by what is installed in the container.
-zarr_extra_installed() {
-    docker exec -i "$GBX_DEV_CONTAINER" python3 - >/dev/null 2>&1 <<'PY'
-import importlib.metadata as md
-import tomllib
-
-from packaging.requirements import Requirement
-
-with open("/root/geobrix/python/geobrix/pyproject.toml", "rb") as f:
-    pins = tomllib.load(f)["project"]["optional-dependencies"]["zarr_dbr19"]
-for pin in map(Requirement, pins):
-    # PackageNotFoundError (not installed) is a non-zero exit too.
-    if not pin.specifier.contains(md.version(pin.name), prereleases=True):
-        raise SystemExit(f"{pin.name} {md.version(pin.name)} does not satisfy {pin}")
-PY
-}
-
-# Everything test/zarr needs that the base dev image does not carry. Called only when test/zarr
-# is among the selected tests, so other runs pay nothing.
-#   * the [zarr_dbr19] extra. The pins are NOT repeated here: pip installs the extra from
-#     pyproject.toml, so a pin change reaches the container without touching this script.
-#     `-e` re-resolves only that extra for the already-editable geobrix. Remove once the dev
-#     image bakes it in (requirements-dev-container.txt).
-#   * the OSS Delta Lake jars, which the manifest tests run against in a local Spark session
-#     (test/conftest.py puts them on the JVM classpath when test/zarr is collected). They are
-#     not a pip package and Spark's Ivy resolver cannot reach the dev proxy, so
-#     scripts/ci/fetch-delta-test-jars.sh fetches them with Maven and checks their sha256.
-#     A missing jar is a warning (unrelated suites still run, and the Delta-backed zarr tests
-#     fail loudly, naming it); a sha256 MISMATCH (exit 3) aborts, so tampered jars are never
-#     put on a classpath.
-ensure_zarr_test_env() {
-    if ! zarr_extra_installed; then
-        echo -e "${CYAN}📦 Installing the zarr_dbr19 extra into $GBX_DEV_CONTAINER${NC}"
-        docker exec "$GBX_DEV_CONTAINER" /bin/bash -c \
-            "pip3 install --break-system-packages --quiet -e '/root/geobrix/python/geobrix[zarr_dbr19]'" \
-            || echo -e "${YELLOW}⚠️  zarr_dbr19 install failed: zarr tests will fail on import${NC}"
-    fi
-    local rc=0
-    docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash /root/geobrix/scripts/ci/fetch-delta-test-jars.sh || rc=$?
-    if [ "$rc" -eq 3 ]; then
-        echo -e "${RED}❌ Delta jar sha256 mismatch; refusing to run (see the message above)${NC}"
-        exit 1
-    elif [ "$rc" -eq 75 ] || [ "$rc" -eq 70 ]; then
-        # The work-lock wrapper, not the fetch: earlier work is still running in the container
-        # (75, timed out) or the lock file cannot be used (70). The pytest exec below would stop
-        # the same way, so say so instead of calling it a missing Delta jar.
-        echo -e "${RED}❌ Could not take the container work lock (exit $rc; see the message above); not running${NC}"
-        exit "$rc"
-    elif [ "$rc" -ne 0 ]; then
-        echo -e "${YELLOW}⚠️  Delta jars unavailable: Delta-backed zarr tests will fail (see scripts/ci/fetch-delta-test-jars.sh)${NC}"
-    fi
-}
+# What test/zarr needs that the base dev image does not carry (the zarr extra, the Delta jars) is
+# set up by ensure_zarr_test_env in common.sh, shared with the commands that run the Zarr doc tests.
+# It is called only when test/zarr is among the selected tests, so other runs pay nothing.
 
 # ---------------------------------------------------------------------------------------
 # Single run: --path given → one pytest process over exactly the paths asked for.

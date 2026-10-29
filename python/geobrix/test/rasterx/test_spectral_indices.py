@@ -1,8 +1,8 @@
-"""End-to-end Python test for the Wave 8b spectral-index functions.
+"""End-to-end Python test for the spectral-index functions.
 
 One parameterized round-trip across all 5 wrappers: load a multi-band MODIS
 tile, apply the function, assert the JVM bindings fire and a non-empty raster
-tile comes back. Following the Wave 8a budget guideline we deliberately cover
+tile comes back. To keep the suite lean we deliberately cover
 all 5 functions in one parametrized test rather than 5 near-identical copies.
 """
 

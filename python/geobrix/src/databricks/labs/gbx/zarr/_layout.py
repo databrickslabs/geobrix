@@ -89,7 +89,7 @@ def shard_layout(
     stays within the cap, past the dimension's current length if need be: a store created
     small and appended to along time keeps filling the same shards, as the brief's rule
     and the append workload want. A shard never holds more than ``SHARD_MAX_CHUNKS``
-    inner chunks (Ruling Z41): the spatial shard is halved further if it alone has more,
+    inner chunks: the spatial shard is halved further if it alone has more,
     and the leading growth stops there.
     """
     shape, chunks = tuple(int(n) for n in shape), tuple(int(c) for c in chunks)

@@ -45,7 +45,7 @@ def test_resolved_budget_strategy_used_when_no_size_mib():
 
 
 # ---------------------------------------------------------------------------
-# _read_manifest_rows (JSON path only — Parquet needs Spark; tested in Task 4)
+# _read_manifest_rows (JSON; a Parquet manifest is read in the spark.read test below)
 # ---------------------------------------------------------------------------
 
 
@@ -133,6 +133,22 @@ def test_partitions_from_tile_rows_window_and_dims_no_rasterio_open(
     assert parts[1].window == (0, 0, 8, 6)
 
 
+def test_a_spark_row_window_is_read_by_field_name_not_by_position():
+    """The window struct of a table row (a Spark Row, which is a tuple) whose fields are in
+    another order than col_off, row_off, width, height."""
+    from pyspark.sql import Row
+
+    from databricks.labs.gbx.ds.raster import _partitions_from_tile_rows
+
+    row = Row(
+        path="/data/a.tif", window=Row(width=1024, height=512, col_off=0, row_off=256)
+    )
+    parts = _partitions_from_tile_rows(
+        [row], emit_virtual=True, budget_bytes=0, clip_polygons=[], windows=[]
+    )
+    assert [p.window for p in parts] == [(0, 256, 1024, 512)]
+
+
 def test_partitions_from_tile_rows_window_only_no_rasterio_open(tmp_path, monkeypatch):
     """Row with path + window but no dims → still no rasterio.open (window is enough)."""
     _write_sample(tmp_path / "a.tif", width=4, height=3)
@@ -167,7 +183,7 @@ def test_partitions_from_tile_rows_window_only_no_rasterio_open(tmp_path, monkey
 def test_partitions_from_tile_rows_path_only_opens_header(tmp_path, monkeypatch):
     """Row with only path (no window, no dims), materialized case → header read for that file only.
 
-    Note: with emit_virtual=True, Task 5 (lazy planning) makes path-only rows return
+    Note: with emit_virtual=True, lazy planning makes path-only rows return
     window=None without opening the header at plan time — the window is resolved lazily
     in read(). This test uses emit_virtual=False (materialized) to verify the path-only
     header-open behaviour that still applies for non-virtual tiles.
@@ -378,15 +394,27 @@ def test_partitions_tiles_table_end_to_end(tmp_path, spark):
     assert parts[0].window == (0, 0, 4, 3)
 
 
-def test_partitions_manifest_full_spark_read(tmp_path, spark):
-    """End-to-end Spark read with manifest option emits correct virtual tiles."""
+@pytest.mark.parametrize("kind", ["json", "parquet"])
+def test_partitions_manifest_full_spark_read(tmp_path, spark, kind):
+    """End-to-end Spark read with manifest option emits correct virtual tiles.
+
+    The planner worker has no Spark session, so a Parquet manifest (here the directory
+    Spark writes, with a ``window`` struct) is read without one.
+    """
     from databricks.labs.gbx.ds.raster import RasterGbxDataSource
 
     _write_sample(tmp_path / "raster.tif", width=4, height=3)
-    manifest = [{"path": str(tmp_path / "raster.tif"), "window": [0, 0, 4, 3]}]
-    manifest_file = str(tmp_path / "manifest.json")
-    with open(manifest_file, "w") as f:
-        json.dump(manifest, f)
+    path = str(tmp_path / "raster.tif")
+    if kind == "json":
+        manifest_file = str(tmp_path / "manifest.json")
+        with open(manifest_file, "w") as f:
+            json.dump([{"path": path, "window": [0, 0, 4, 3]}], f)
+    else:
+        manifest_file = str(tmp_path / "manifest.parquet")
+        spark.createDataFrame(
+            [(path, (0, 0, 4, 3))],
+            "path string, window struct<col_off:int,row_off:int,width:int,height:int>",
+        ).coalesce(1).write.parquet(manifest_file)
 
     spark.dataSource.register(RasterGbxDataSource)
     rows = (
@@ -400,21 +428,21 @@ def test_partitions_manifest_full_spark_read(tmp_path, spark):
     assert len(rows) == 1
     tile = rows[0]["tile"]
     assert tile["raster"] is None  # virtual: no bytes
-    assert tile["path"] == str(tmp_path / "raster.tif")
+    assert tile["path"] == path
     assert tile["window"]["width"] == 4
     assert tile["window"]["height"] == 3
 
 
 # ---------------------------------------------------------------------------
-# Task 3: skipOrdering DataSource option
+# skipOrdering DataSource option
 # ---------------------------------------------------------------------------
 
 
 def test_raster_tilestable_skip_ordering_option_manifest_path(tmp_path):
-    """skipOrdering='true' on the manifest/tilesTable path suppresses the T8 sort.
+    """skipOrdering='true' on the manifest/tilesTable path suppresses the sort by source path.
 
     Uses a manifest (no Spark table needed) since both manifest and tilesTable
-    share the same sort gate at the end of the Approach-1 branch.
+    share the same sort gate at the end of the pre-computed tile input branch.
 
     Checks:
     - Default (no skipOrdering): partitions sorted by file_path asc.

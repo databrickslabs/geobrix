@@ -1,4 +1,4 @@
-"""Task 9: Light pygx registered UDFs degrade bad cell-id/geometry DATA to NULL.
+"""Light pygx registered UDFs degrade bad cell-id/geometry DATA to NULL.
 
 Parameter errors (bad resolution, bad grid spec) must still raise.
 """

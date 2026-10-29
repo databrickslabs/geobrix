@@ -75,6 +75,8 @@ def encode_tile(
         # Route through the compression authority for size-adaptive levels.
         cog_compression = compression if str(compression).lower() != "auto" else "AUTO"
         compression_str = str(cog_compression).upper()
+        if compression_str == "NONE":
+            compression_str = "RAW"  # the COG profile names call "no compression" raw
 
         # If not AUTO, validate compression name (same set as analysis.cog_convert).
         if (
@@ -98,7 +100,9 @@ def encode_tile(
             driver="COG",
         )
 
-        profile = ds.profile.copy()
+        # The source's layout and codec keys are not the COG driver's (cog_profile); merge the
+        # authority options (codec + level + predictor).
+        profile = _comp.cog_profile(ds.profile)
         profile.update(
             driver="COG",
             width=win_w,
@@ -107,10 +111,6 @@ def encode_tile(
             blocksize=cog_blocksize,
             overview_resampling=str(cog_overview_resampling).upper(),
         )
-        # Remove stale compression keys from the source profile before merging authority opts.
-        for _k in ("compress", "predictor", "zstd_level", "zlevel", "LEVEL"):
-            profile.pop(_k, None)
-        # Merge authority options (codec + level + predictor)
         profile.update(_comp_opts)
 
         tmp = new_local_temp_file(suffix=".tif")
@@ -147,7 +147,7 @@ def encode_tile(
         )
         # The codec is the caller's: a JPEG request keeps its YCbCr photometric,
         # any other codec cannot carry it.
-        profile = _comp.drop_ycbcr(profile, unless_jpeg=True)
+        profile = _comp.source_profile(profile, unless_jpeg=True)
         with _comp.internal_mask_env(mask), MemoryFile() as mf:
             with mf.open(**profile) as out:
                 _comp.match_alpha(out, ds.colorinterp)

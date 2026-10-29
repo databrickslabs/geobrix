@@ -125,11 +125,18 @@ def _delta_jars():
 
 
 def pytest_collection_finish(session):
-    """Put the Delta jars on PYSPARK_SUBMIT_ARGS when test/zarr tests will run."""
+    """Put the Delta jars on PYSPARK_SUBMIT_ARGS when a test will run on a Delta session.
+
+    That is every test/zarr test, and any other test marked ``delta``.
+    """
     if "PYSPARK_SUBMIT_ARGS" in os.environ:
         return
     zarr_dir = Path(__file__).resolve().parent / "zarr"
-    if not any(zarr_dir in Path(item.path).resolve().parents for item in session.items):
+    if not any(
+        zarr_dir in Path(item.path).resolve().parents
+        or item.get_closest_marker("delta")
+        for item in session.items
+    ):
         return
     jars = _delta_jars()
     if jars:
@@ -144,7 +151,7 @@ def pytest_collection_finish(session):
 
 
 # ---------------------------------------------------------------------------
-# Local Spark Connect (Tier 1): the plan shapes a Connect client sends, with no cluster.
+# Local Spark Connect: the plan shapes a Connect client sends, with no cluster.
 #
 # `SparkSession.builder.remote("local[2]")` starts a Connect server inside a regular local
 # PySpark session of THIS process and returns a Connect client for it. Two consequences:

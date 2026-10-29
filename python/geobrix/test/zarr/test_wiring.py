@@ -74,6 +74,14 @@ def test_conftest_delta_version_matches_the_fetch_script_and_ci_runs_it():
         1
     )
     assert script_version == conftest_version
+    # the Zarr doc tests find the same jars, in the same repos, at the same version
+    docs = (REPO / "docs/tests/python/zarr_delta.py").read_text()
+    docs_version = re.search(r'^_DELTA_VERSION = "([^"]+)"', docs, re.M).group(1)
+    assert docs_version == script_version
+    for found in ("io/delta/delta-spark_2.13", "io/delta/delta-storage", "GBX_M2_REPO"):
+        assert found in docs and found in conftest, found
+    assert '"scripts" / "docker" / "m2"' in conftest
+    assert '"scripts" / "docker" / "m2"' in docs
     for pin in ("SHA256_DELTA_SPARK", "SHA256_DELTA_STORAGE"):
         assert re.search(rf'^{pin}="[0-9a-f]{{64}}"$', script, re.M), pin
     assert re.search(
@@ -104,14 +112,32 @@ def test_delta_jars_reach_the_classpath_only_when_zarr_tests_run(tmp_path, monke
     monkeypatch.setenv("PYSPARK_SUBMIT_ARGS", "x")  # records the original for teardown
     monkeypatch.delenv("PYSPARK_SUBMIT_ARGS")
 
-    def session(*paths):
-        return SimpleNamespace(items=[SimpleNamespace(path=p) for p in paths])
+    def item(path, delta=False):
+        marker = SimpleNamespace(name="delta") if delta else None
+        return SimpleNamespace(
+            path=path,
+            get_closest_marker=lambda name: marker if name == "delta" else None,
+        )
+
+    def session(*items):
+        return SimpleNamespace(
+            items=[i if isinstance(i, SimpleNamespace) else item(i) for i in items]
+        )
 
     ds_test = PKG / "test" / "ds" / "test_x.py"
     zarr_test = PKG / "test" / "zarr" / ".." / "zarr" / "test_x.py"  # needs resolving
 
     conftest.pytest_collection_finish(session(ds_test))
-    assert "PYSPARK_SUBMIT_ARGS" not in os.environ, "no zarr test collected"
+    assert (
+        "PYSPARK_SUBMIT_ARGS" not in os.environ
+    ), "no zarr or delta-marked test collected"
+
+    conftest.pytest_collection_finish(
+        session(item(ds_test, delta=True))
+    )  # a ds test marked delta
+    assert (
+        shlex.split(os.environ.pop("PYSPARK_SUBMIT_ARGS"))[0] == "--driver-class-path"
+    )
 
     conftest.pytest_collection_finish(session(ds_test, zarr_test))
     args = shlex.split(os.environ["PYSPARK_SUBMIT_ARGS"])  # as PySpark splits it

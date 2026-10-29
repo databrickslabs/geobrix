@@ -1,4 +1,4 @@
-"""T2 fail-on-revert wiring tests for bench compression consumers.
+"""Fail-on-revert wiring tests for bench compression consumers.
 
 test/bench runs in the light CI phase (.github/actions/pyrx_build). Run directly:
     gbx:test:python --path python/geobrix/test/bench/test_bench_compression_wiring.py
@@ -23,7 +23,7 @@ def test_compression_sweep_predictor_for_is_canonical():
 
 
 def test_datagen_cog_write_large_raster_has_predictor(tmp_path):
-    """Fail-on-revert (GAP-3 / COG is_cog key-mapping): datagen COG output must
+    """Fail-on-revert (COG is_cog key-mapping): datagen COG output must
     carry ZSTD + predictor, set via creation_opts(driver='COG').
 
     Old code: {"COMPRESS": compress} — no predictor, no LEVEL key.
@@ -57,7 +57,7 @@ def test_datagen_cog_write_large_raster_has_predictor(tmp_path):
             "PREDICTOR"
         )
         assert pred is not None and int(pred) == 3, (
-            f"GAP-3 guard: expected predictor=3 for float32 ZSTD COG from "
+            f"expected predictor=3 for float32 ZSTD COG from "
             f"write_large_raster_streamed, got {pred!r}. "
             "Old code used 'COMPRESS': compress with no predictor key."
         )

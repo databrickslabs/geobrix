@@ -118,7 +118,7 @@ def _apply_compression(
     dtype-appropriate predictors. Returns the re-encoded GTiff bytes.
 
     When compress='auto', this will return ZSTD+predictor output. When
-    compress='none', the output has no compression keys.
+    compress='none', the output has no compression (the profile carries compress=none).
 
     Fast-path: when compress='auto' and *raster_bytes* are already
     ZSTD-compressed, returns *raster_bytes* unchanged (no re-encode).  This
@@ -162,7 +162,7 @@ def _apply_compression(
         )
         # The codec is the caller's: a JPEG request keeps its YCbCr photometric,
         # any other codec cannot carry it.
-        profile = _comp.drop_ycbcr(profile, unless_jpeg=True)
+        profile = _comp.source_profile(profile, unless_jpeg=True)
         with _comp.internal_mask_env(mask), MemoryFile() as out_mf:
             with out_mf.open(**profile) as dst:
                 _comp.match_alpha(dst, src.colorinterp)
@@ -223,13 +223,13 @@ class RasterGbxWriter(DataSourceWriter):
         cog: bool = False,
         cog_blocksize: int = 512,
         cog_overview_resampling: str = "AVERAGE",
-        # Unified compression surface (Task 5).
+        # Unified compression surface.
         # ``compress`` = "auto" (default) | "zstd" | "deflate" | "lzw" | "none".
         # ``compress_level`` and ``predictor`` refine it when compress != "auto".
         # When compress == "auto", explicit level/predictor are ignored (with a
         # UserWarning from the authority).
         # Deprecated: ``cog_compression`` is the old single-codec option accepted
-        # by the pre-Task-5 API; it still works but maps to ``compress`` internally.
+        # by the earlier API; it still works but maps to ``compress`` internally.
         # If BOTH are supplied, ``compress`` wins (callers should migrate).
         compress: str = "auto",
         compress_level: Optional[int] = None,

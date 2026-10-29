@@ -155,6 +155,44 @@ def held_shard(spark_delta):
 # --- the brief's five -------------------------------------------------------------
 
 
+def test_a_read_or_commit_adds_no_query_for_the_file_layout(
+    spark_delta, table, monkeypatch
+):
+    """How the table keeps its files comes with the properties a caller read already: a read
+    asks for them once (``read_props``), and a commit given the layout asks for nothing.
+    """
+    from databricks.labs.gbx.zarr._filemode import FileLayout
+    from databricks.labs.gbx.zarr._read import _open_table
+
+    seen = []
+    real = spark_delta.sql
+    monkeypatch.setattr(
+        spark_delta,
+        "sql",
+        lambda text, *a, **k: seen.append(text) or real(text, *a, **k),
+    )
+
+    def shows():
+        return sum("SHOW TBLPROPERTIES" in q for q in seen)
+
+    _open_table(spark_delta, table, None, None)
+    assert shows() == 1  # read_props; the snapshot reuses its layout
+
+    files = FileLayout.of(M.read_props(spark_delta, table))
+    seen.clear()
+    w = uuid.uuid4().hex
+    M.commit(
+        spark_delta,
+        table,
+        _rows(_chunk("c/0/0/0", w)),
+        write_id=w,
+        meta={},
+        files=files,
+    )
+    assert M.snapshot(spark_delta, table, files=files).files == files
+    assert shows() == 0
+
+
 def test_create_sets_properties_and_refuses_existing(spark_delta, table):
     props = M.read_props(spark_delta, table)
     assert props == PROPS
@@ -255,7 +293,7 @@ def test_time_travel_snapshot(spark_delta, table):
     assert old[0]["file"] == "data/t/a.zpack"
 
 
-# --- ruling Z6: a stale commit names every conflicting key ------------------------
+# --- a stale commit names every conflicting key ------------------------
 
 
 def test_stale_commit_lists_every_conflicting_key_and_the_winner(spark_delta, table):
@@ -318,7 +356,7 @@ def test_changed_since_returns_rows_whose_live_write_id_differs(spark_delta, tab
     }
 
 
-# --- ruling Z7: classify by message text, whatever the exception class ------------
+# --- classify by message text, whatever the exception class ------------
 
 _CAS_OSS = "[USER_RAISED_EXCEPTION] GBX_ZARR_CAS chunk t2m c/0/0/1 SQLSTATE: P0001"
 _CAS_COMMIT = (
@@ -432,7 +470,7 @@ def test_commit_maps_concurrent_errors_to_retryable_and_passes_others(
     assert M.snapshot(spark_delta, table).version == before
 
 
-# --- ruling Z8: versions older than the vacuum horizon are gone -------------------
+# --- versions older than the vacuum horizon are gone -------------------
 
 
 def _tag_row(spark, table, tag, write_id="f" * 32):
@@ -604,11 +642,27 @@ def test_snapshot_unknown_version_is_unavailable_with_a_fix(spark_delta, table):
         dict(version_as_of="tag:it's"),
         dict(version_as_of=True),
         dict(version_as_of=1.5),
+        dict(timestamp_as_of=5),
     ],
 )
 def test_snapshot_rejects_malformed_arguments(kwargs):
-    with pytest.raises(ValueError):
+    with pytest.raises(
+        ValueError, match="Fix: "
+    ) as e:  # every argument error says how to fix it
         M.snapshot(None, "t", **kwargs)
+    assert str(e.value).rstrip().endswith(".")
+
+
+def test_a_timestamp_that_is_not_one_says_how_to_fix_it(spark_delta, table):
+    with pytest.raises(ValueError, match="is not a timestamp. Fix: pass a timestamp"):
+        M.snapshot(spark_delta, table, timestamp_as_of="not a time")
+
+
+@pytest.mark.parametrize("name", ["", "-leading", "has space", "x" * 129, 5, None])
+def test_a_malformed_tag_name_says_how_to_fix_it(name):
+    with pytest.raises(ValueError, match="Fix: pass a name") as e:
+        M.check_tag(name)
+    assert "starting with a letter or digit" in str(e.value)
 
 
 def test_read_rows_filters_and_tag_snapshots(spark_delta, table):
@@ -976,7 +1030,8 @@ def test_a_user_named_table_is_quoted_everywhere(spark_delta):
         spark_delta.sql(f"DROP TABLE IF EXISTS {name}")
 
 
-def test_registered_props_round_trip(spark_delta):
+def test_registered_props_round_trip(spark_delta, monkeypatch):
+    monkeypatch.setattr(M, "file_column_type", lambda mode: "STRING")  # no FILE in OSS
     props = M.StoreProps(
         kind="registered",
         root="/Volumes/c/s/v/it's\\here",
@@ -1130,7 +1185,7 @@ def test_retain_days_round_up_with_a_floor_of_one(retain, days):
     assert M.retain_days(retain) == days
 
 
-# --- a sharded array's rows always say which shard they lie in (Ruling F6) ----------------
+# --- a sharded array's rows always say which shard they lie in ----------------
 
 
 def _array_row(name, doc_text, wid, expected=None):
@@ -1278,7 +1333,7 @@ def test_the_pruner_keeps_in_so_a_row_without_a_shard_key_is_never_selected(
     )  # only unpruned sees it
 
 
-# --- a chunk or shard row is a whole region or a tombstone (Task 6 carry, Ruling Z49) ------
+# --- a chunk or shard row is a whole region or a tombstone ------
 
 
 @pytest.mark.parametrize("kind", ["chunk", "shard"])
@@ -1368,7 +1423,7 @@ def test_a_shard_tombstone_commits_and_replaces_the_shard_row_it_hides(
     assert (live["origin"], live["identity"]) == ("gbx", "5:10")
 
 
-# --- the writer passes the sharding it knows (follow-up M1, Isaac K20) ---------------------
+# --- the writer passes the sharding it knows ---------------------
 
 
 def test_a_caller_that_knows_the_sharding_spares_the_lookup_and_stays_columnar():
@@ -1476,7 +1531,7 @@ def test_a_check_row_aborts_the_commit_when_the_row_moved(spark_delta, held_shar
     )
 
 
-# --- argument errors carry a Fix: line (fix round 1, M10) -----------------------------------
+# --- argument errors carry a Fix: line -----------------------------------
 
 
 @pytest.mark.parametrize(

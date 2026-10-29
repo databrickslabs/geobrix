@@ -64,6 +64,38 @@ def test_writer_arrow_table_all_null_column_keeps_declared_type():
     assert tbl.schema.field("tlid").type == pa.int64()
 
 
+def test_the_type_and_crs_come_from_the_first_non_null_geometry():
+    # A leading NULL geometry carries its own (here 4326) srid; the type and the CRS are those
+    # of the first geometry that exists, read from the same row.
+    from types import SimpleNamespace
+
+    import pyarrow as pa
+
+    from databricks.labs.gbx.ds.vector import GeoJSONLGbxWriter
+
+    writer = SimpleNamespace(
+        geometry_type_override=None,
+        geom_col="geom_0",
+        srid_col="geom_0_srid",
+        proj_col="geom_0_srid_proj",
+    )
+
+    def infer(wkbs, srids):
+        tbl = pa.table(
+            {
+                "geom_0": pa.array(wkbs, pa.binary()),
+                "geom_0_srid": pa.array(srids, pa.string()),
+                "geom_0_srid_proj": pa.array([""] * len(wkbs), pa.string()),
+            }
+        )
+        return GeoJSONLGbxWriter._infer_geom_crs(writer, tbl)
+
+    point = bytes(to_wkb(Point(530000.0, 180000.0)))
+    assert infer([None, point], ["4326", "27700"]) == ("Point", "EPSG:27700")
+    assert infer([point, point], ["27700", "4326"]) == ("Point", "EPSG:27700")
+    assert infer([None, None], ["4326", "27700"]) == ("Unknown", None)
+
+
 def test_all_null_attr_column_writes_and_roundtrips(spark, tmp_path):
     # End-to-end regression for a TIGER-style column (e.g. PLUS4L) that is null
     # for every row: the geojsonl write must not raise the pyogrio FieldError.

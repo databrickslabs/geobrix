@@ -1,7 +1,7 @@
 """Register the light DataSources with a Spark session.
 
 Mirrors pyrx.functions.register: call once, consciously. The format strings
-raster_gbx / gtiff_gbx / pmtiles_gbx / lidar_gbx do not collide with the
+raster_gbx / gtiff_gbx / pmtiles_gbx / lidar_gbx / zarr_gbx do not collide with the
 Scala-registered gdal / gtiff_gdal, so both tiers coexist.
 """
 
@@ -28,6 +28,7 @@ from databricks.labs.gbx.ds.vector import (
     ShapefileGbxDataSource,
     VectorGbxDataSource,
 )
+from databricks.labs.gbx.zarr.datasource import ZarrGbxDataSource
 
 _SOURCES = (
     RasterGbxDataSource,
@@ -44,6 +45,7 @@ _SOURCES = (
     FileGdbGbxDataSource,
     LidarGbxDataSource,
     ExifGbxDataSource,
+    ZarrGbxDataSource,
 )
 
 
@@ -51,12 +53,12 @@ def register(
     spark: Optional[SparkSession] = None, only: Optional[List[str]] = None
 ) -> None:
     """Register the light DataSources (raster_gbx, gtiff_gbx, pmtiles_gbx, the
-    vector readers/writers, lidar_gbx, and exif_gbx). Uses the active session if
-    not given.
+    vector readers/writers, lidar_gbx, exif_gbx, and zarr_gbx). Uses the active
+    session if not given.
 
     Args:
         spark: Spark session (active session if not provided).
-        only: Optional list of format names to register (instead of all 14).
+        only: Optional list of format names to register (instead of all 15).
             Accepts the format name with or without the ``_gbx`` suffix
             (``raster`` or ``raster_gbx``), case-insensitively. ``None`` registers
             everything; ``[]`` registers nothing. An unrecognized format raises

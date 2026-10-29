@@ -28,6 +28,20 @@ from databricks.labs.gbx.ds.raster import RasterGbxReader, _FilePartition, reade
 _BANDDIM_WARN_BYTES: int = 256 * 1024 * 1024
 
 
+def _option(options: "object", name: str, default: str = "") -> str:
+    """Option ``name`` of a reader, whatever the case of the key.
+
+    Spark hands a Python reader its options case-insensitively: ``dict(options)`` of
+    them has lowercase keys (``dimindex``), while the option names here are camel case
+    (``dimIndex``). A plain dict (a test, a direct call) keeps the case it was given.
+    """
+    want = name.lower()
+    for key, value in dict(options).items():
+        if str(key).lower() == want:
+            return value
+    return default
+
+
 def _parse_dim_index(raw: str) -> Dict[str, int]:
     """Parse the ``dimIndex`` option string (e.g. ``"time=2,level=1"``) into a
     mapping of dim name → integer index.
@@ -257,9 +271,9 @@ class NetcdfRasterReader(RasterGbxReader):
         from itertools import product as _product
 
         # Parse dimIndex, fanout, and bandDim options.
-        dim_index = _parse_dim_index(self.options.get("dimIndex", ""))
-        fanout_dims = _parse_fanout(self.options.get("fanout", ""))
-        band_dim = self.options.get("bandDim", "").strip()
+        dim_index = _parse_dim_index(_option(self.options, "dimIndex"))
+        fanout_dims = _parse_fanout(_option(self.options, "fanout"))
+        band_dim = _option(self.options, "bandDim").strip()
 
         # Overlap guards.
         overlap_df = set(dim_index) & set(fanout_dims)

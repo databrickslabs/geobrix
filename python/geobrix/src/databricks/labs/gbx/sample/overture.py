@@ -88,10 +88,10 @@ def _run_overture_download(cli, *, bbox_str, type_, local_out, retries=2):
     )
 
 
-# Spark schema for discover() output — pinned; SP2/SP3 depend on it.
+# Spark schema for discover() output — pinned: callers depend on these names.
 _DISCOVER_COLS = ["theme", "type", "href", "asset_bbox", "release"]
 
-# Columns for the download() metadata output — pinned; Tasks 6-10 + SP3 depend on it.
+# Columns for the download() metadata output — pinned: callers depend on these names.
 _META_COLS = [
     "theme",
     "type",

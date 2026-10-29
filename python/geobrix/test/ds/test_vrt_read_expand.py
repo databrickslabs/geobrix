@@ -1,4 +1,4 @@
-"""Task 5 (SDD — Phase A/B native mini-COG mosaic): VRT expansion in the reader.
+"""VRT expansion in the reader.
 
 Tests that raster_gbx (and cog_gbx) detect a .vrt path at load time, parse the
 VRT XML to enumerate member mini-COG paths, and emit one whole-file virtual tile
@@ -364,7 +364,7 @@ def test_parse_vrt_members_uses_defusedxml(tmp_path):
 
 # ---------------------------------------------------------------------------
 # 9-11. Quadbin VRT expansion surfaces cellid + gridSystem in tile.metadata
-#       (Task 5 — Phase B quadbin mini-COG mosaic reader)
+#       (quadbin mini-COG mosaic reader)
 # ---------------------------------------------------------------------------
 
 
@@ -390,7 +390,7 @@ def _write_qb_src(path: str) -> None:
         ds.write(data)
 
 
-def _build_quadbin_mosaic_for_t5(base_dir: pathlib.Path):
+def _build_quadbin_mosaic(base_dir: pathlib.Path):
     """Build a quadbin mini-COG mosaic; return (vrt_path, member_paths).
 
     Uses gridSystem='quadbin', gridResolution=12 so ≥2 cells are produced and
@@ -421,13 +421,13 @@ def _build_quadbin_mosaic_for_t5(base_dir: pathlib.Path):
 def test_vrt_quadbin_cellid_in_metadata(spark, tmp_path):
     """Expanding a quadbin mosaic.vrt surfaces cellid and gridSystem in tile.metadata.
 
-    Each member was written with GBX_CELLID and GBX_GRIDSYSTEM='quadbin' COG tags
-    (Task 3).  The VRT expansion must read those tags and propagate them into the
+    Each member was written with GBX_CELLID and GBX_GRIDSYSTEM='quadbin' COG tags.
+    The VRT expansion must read those tags and propagate them into the
     virtual tile row's metadata dict so downstream ops can dispatch by cell.
     """
     base_dir = tmp_path / "t9_qb"
     base_dir.mkdir()
-    vrt_path, members = _build_quadbin_mosaic_for_t5(base_dir)
+    vrt_path, members = _build_quadbin_mosaic(base_dir)
 
     spark.dataSource.register(RasterGbxDataSource)
     rows = spark.read.format("raster_gbx").load(vrt_path).collect()
@@ -482,7 +482,7 @@ def test_vrt_cog_gbx_quadbin_cellid(spark, tmp_path):
     """
     base_dir = tmp_path / "t11_cog"
     base_dir.mkdir()
-    vrt_path, members = _build_quadbin_mosaic_for_t5(base_dir)
+    vrt_path, members = _build_quadbin_mosaic(base_dir)
 
     spark.dataSource.register(CogGbxDataSource)
     rows = spark.read.format("cog_gbx").load(vrt_path).collect()

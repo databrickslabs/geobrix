@@ -10,7 +10,7 @@ from databricks.labs.gbx.pygx import functions as gx  # noqa: E402
 _GRID = "gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700)"
 
 
-# --- Task 6: validating grid-spec builder ---------------------------------
+# --- Validating grid-spec builder ---------------------------------
 
 
 def test_custom_grid_struct_shape(spark):
@@ -44,12 +44,12 @@ def test_custom_grid_validation_raises(spark):
         ).collect()  # cell_splits < 2
 
 
-# --- Task 7: consuming functions ------------------------------------------
+# --- Consuming functions ------------------------------------------
 
 
 def test_pointascell_wkt_and_wkb(spark):
     gx.register(spark)
-    # WKT input (Resolved decision 2: all 4 encodings accepted).
+    # WKT input (all 4 geometry encodings are accepted).
     r1 = spark.sql(
         f"SELECT gbx_custom_pointascell('POINT(530000 180000)', {_GRID}, 0) AS c"
     ).collect()[0]

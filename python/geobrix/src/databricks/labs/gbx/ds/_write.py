@@ -36,7 +36,7 @@ def _tile_creation_opts(
     Compression and predictor are delegated to canonical creation_opts
     (pyrx/core/compression.py), which mirrors heavy OperatorOptions.appendOptions.
     ZSTD default level 9 matches heavy OperatorOptions :77; DEFLATE default 6
-    matches heavy :86.  Blocksize (GAP-1 / D2 — stays here; canonical does not
+    matches heavy :86.  Blocksize stays here (canonical does not
     compute blocksize).
     """
     compress = str(meta.get("compression", "DEFLATE")).lower()
@@ -51,7 +51,7 @@ def _tile_creation_opts(
     opts: Dict[str, str] = dict(
         _canonical_creation_opts(dtype, compress=compress, level=level, driver=driver)
     )
-    # Blocksize: tile-dimension-aware clamping (D2 — stays at this call site).
+    # Blocksize: tile-dimension-aware clamping (stays at this call site).
     try:
         blk = int(meta.get("blocksize", "512"))
     except ValueError:
@@ -79,11 +79,22 @@ def tile_to_bytes(
     from rasterio.io import MemoryFile
 
     from databricks.labs.gbx.pyrx.core import _nodata
-    from databricks.labs.gbx.pyrx.core.compression import internal_mask_env, match_alpha
+    from databricks.labs.gbx.pyrx.core.compression import (
+        cog_profile,
+        internal_mask_env,
+        match_alpha,
+        source_profile,
+    )
 
     with MemoryFile(raster_bytes) as src_mf, src_mf.open() as src:
         data = src.read()
-        profile = src.profile.copy()
+        # The COG driver lays the file out and picks its codec itself: it takes none of the
+        # source's layout keys. Another driver starts from the source profile as a new GTiff.
+        profile = (
+            cog_profile(src.profile)
+            if str(driver).upper() == "COG"
+            else source_profile(src.profile, unless_jpeg=True)
+        )
         profile["driver"] = driver
         profile.update(
             _tile_creation_opts(driver, metadata, src.dtypes[0], src.width, src.height)

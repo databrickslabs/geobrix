@@ -491,21 +491,27 @@ def test_the_valid_pixel_average_holds_a_few_bytes_per_source_pixel():
     assert peak < 8 * n * n, f"{peak / (n * n):.1f} B per source pixel"
 
 
+@pytest.mark.parametrize(
+    "nodata_rows",
+    [[{5}], [{5, 6}, {5, 7}]],
+    ids=["one-band", "bands-differ"],
+)
 def test_the_mosaic_vrt_of_a_masked_and_an_unmasked_tile_hides_what_each_hides(
-    tmp_path,
+    tmp_path, nodata_rows
 ):
     """The writer's commit step builds ONE index VRT over the cells of every source it was given, masked
-    or not. A tile with a mask band and a tile whose NoData rows are NoData in its only band both stay
-    invalid where they should: the union mask takes band 1's mask of the tile without one, which is the
-    rule when its bands share their NoData pixels."""
+    or not. A tile with a mask band and a tile without one both stay invalid where they should: a pixel
+    of the unmasked tile is invalid when NoData in EVERY band (the rule of both tiers), not when it is
+    NoData in band 1 alone."""
     from databricks.labs.gbx.ds.cog_writer import _build_mosaic_vrt
 
     out_dir = tmp_path / "out"  # the VRT names its tiles relative to itself
     out_dir.mkdir()
     masked = out_dir / "masked.tif"
     masked.write_bytes(_masked_bytes())
-    data = np.full((1, H, W), 9, dtype="uint16")
-    data[0, 5, :] = 7  # NoData row
+    data = np.full((len(nodata_rows), H, W), 9, dtype="uint16")
+    for band, rows in enumerate(nodata_rows):
+        data[band, sorted(rows), :] = 7  # NoData rows of this band
     plain = out_dir / "plain.tif"
     with rasterio.open(
         plain,
@@ -513,7 +519,7 @@ def test_the_mosaic_vrt_of_a_masked_and_an_unmasked_tile_hides_what_each_hides(
         driver="GTiff",
         width=W,
         height=H,
-        count=1,
+        count=len(nodata_rows),
         dtype="uint16",
         crs="EPSG:32632",
         transform=from_origin(400000.0 + 10.0 * W, 5000000.0, 10.0, 10.0),

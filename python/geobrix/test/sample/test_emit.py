@@ -253,7 +253,7 @@ def test_exports_from_sample():
 
 
 # ---------------------------------------------------------------------------
-# Task 2 wiring test: load_plume_metadata routes through list_files (fail-on-revert)
+# Wiring test: load_plume_metadata routes through list_files (fail-on-revert)
 # ---------------------------------------------------------------------------
 
 

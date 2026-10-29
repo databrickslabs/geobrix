@@ -528,7 +528,8 @@ def xarray_fill_form(doc):
 def _check_mask_flag(flag) -> None:
     if flag is not None and not isinstance(flag, (bool, np.bool_)):
         raise ValueError(
-            f"use_zarr_fill_value_as_mask must be True, False or None, got {flag!r}"
+            f"use_zarr_fill_value_as_mask must be True, False or None, got {flag!r}. "
+            "Fix: pass True, False or leave it None (xarray's default)."
         )
 
 

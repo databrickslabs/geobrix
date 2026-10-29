@@ -1,0 +1,372 @@
+---
+sidebar_position: 11
+sidebar_label: Zarr
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import zarrRead from '!!raw-loader!../../tests/python/readers/zarr_read_examples.py';
+
+# Zarr Reader
+
+_Since:_ lightweight `zarr_gbx` **v0.6.0** · _(light-only — no heavyweight tier)_
+
+Read a [Zarr](https://zarr.dev) store, or a cut of one, into Spark. Three entry points share one
+reader:
+
+| Entry point | Reads | Use it for |
+|---|---|---|
+| [`gbx_zarr_read`](../api/zarr-functions#gbx_zarr_read) | A plain store (a path), or the manifest table of a managed or registered store | Everything: versions, selections by label or position, and the three outputs (blocks, a table of cells, GeoBrix tiles) |
+| `spark.read.format("zarr_gbx")` | A plain store (a path) | A read that is a Spark source, with no call to a function. A DataSource has no session to read a manifest with, so it reads plain stores only |
+| [`gbx_zarr_sample`](../api/zarr-functions#gbx_zarr_sample) | A plain store or a table, at the points of a DataFrame | The time series at a set of points |
+
+All three run in the lightweight tier, so there is no JAR to install: install the
+`zarr_env6` (Serverless environment 6) or `zarr_dbr19` (Databricks Runtime 19) extra, as
+[Zarr Stores](../formats/zarr#what-you-need) describes. To write a store back see the
+[Zarr Writer](../writers/zarr); for every parameter, return value and error see the
+[Zarr Function Reference](../api/zarr-functions). The examples use two names that stand for
+what is yours:
+
+<CodeFromTest code={zarrRead} language="python" functionName="SETUP" />
+
+The sample cube is the one [Zarr Stores](../formats/zarr#what-you-need) generates: two days of
+made-up hourly weather on a one-degree global grid, `time` (48) by `latitude` (181) by
+`longitude` (360), with the variables `t2m`, `u10`, `v10` and `msl`. Every code block on this
+page is run by the documentation tests.
+
+## Choosing the source
+
+`gbx_zarr_read(spark, source, ...)` takes the source as a string. `source_type="auto"` (the
+default) treats a string that starts with `/` or has a URI scheme (`dbfs:/`, `file:/`, `s3://`) as
+the path of a plain store, and anything else as the name of a manifest table. Pass
+`source_type="path"` or `"table"` to say which.
+
+- **A plain store** is read as it is on disk, with whatever bytes are there. It has no versions.
+- **A table** is a managed store, or a store registered in place. A read pins **one version** of the
+  manifest when it is planned: the latest, or the one named by `version_as_of` (a version number
+  or `"tag:<name>"`) or `timestamp_as_of`. Pass one of the two, not both. Whatever commits
+  meanwhile, the read sees one consistent snapshot.
+
+<CodeFromTest code={zarrRead} language="python" functionName="read_a_version"
+  source="docs/tests/python/readers/zarr_read_examples.py"
+  testFile="docs/tests/python/readers/test_zarr_read_examples.py"
+  outputConstant="READ_A_VERSION_output" />
+
+A version older than the store's `retain` period raises `ZarrVersionUnavailable`; see
+[Snapshots, time travel and tags](../formats/zarr#snapshots-time-travel-and-tags). A store made
+with `file_mode="external"` holds `FILE` values in its manifest and must be read on compute that
+supports them; other compute refuses with a `ZarrUnsupported` whose `Fix:` names the options (see
+[File modes](../formats/zarr#file-modes)).
+
+## Choosing what to read
+
+`variables` is a name or a list of names. The default is every gridded variable: coordinate
+arrays, the arrays that CF `coordinates` and `bounds` attributes name, and scalars are left out. An array GeoBrix cannot
+decode (a string coordinate, say) does not fail the read: it is left out and named only if you ask
+for it, select by its labels, or need its labels for a table.
+
+`sel` selects by **label** and `isel` by **position**. Each is a dict of dimension to a value:
+
+| Value | `sel` (labels) | `isel` (positions) |
+|---|---|---|
+| A scalar | The exact label, else the nearest label within half the axis step. The dimension stays, with length one | An index. The dimension stays, with length one |
+| A `slice(a, b)` | Both ends included, in the order of the axis, so a descending latitude takes `slice(60, 50)`. A time takes ISO strings | `start:stop` with the end excluded. A step other than 1 is refused |
+| A list | Those labels; the output follows the array's order, not the list's | Those positions |
+
+A longitude axis that covers the whole circle is periodic: a slice may cross its seam, so
+`slice(-10, 10)` on a 0 to 360 axis is the labels from 350 round to 10. A label that is not on the
+axis raises `ValueError` when it is a scalar, and selects nothing when it is a slice. Variables
+that lack a selected dimension are read whole along the others.
+
+<CodeFromTest code={zarrRead} language="python" functionName="select_by_label_or_position"
+  source="docs/tests/python/readers/zarr_read_examples.py"
+  testFile="docs/tests/python/readers/test_zarr_read_examples.py"
+  outputConstant="SELECT_output" />
+
+## Output: blocks
+
+`output="blocks"` (the default) returns one row per variable and touched chunk, holding that
+chunk's selected cells. It is the form to write back with [`gbx_zarr_write`](../writers/zarr), and
+the form that keeps every dtype, including complex ones.
+
+| Column | Type | Holds |
+|---|---|---|
+| `variable` | `STRING` | The array's name |
+| `dims` | `ARRAY<STRING>` | Its dimension names, in order |
+| `start`, `stop` | `ARRAY<BIGINT>` | Where the block sits in the array, per dimension: `[start, stop)` in cells |
+| `coord_start`, `coord_stop` | `ARRAY<STRING>` | The first and last label of each dimension |
+| `dtype` | `STRING` | The NumPy dtype of `data`, such as `<f4` |
+| `shape` | `ARRAY<BIGINT>` | The block's shape |
+| `data` | `BINARY` | The cells, C-order bytes |
+| `fill_value` | `STRING` | What a never-written cell holds |
+| `attrs` | `STRING` | The array's attributes, as JSON |
+
+`block_to_numpy(row)` turns a row into a NumPy array of the block's shape and dtype (a writable
+copy), and `block_to_xarray(row)` into a named `xarray.DataArray`. A block carries the first and last
+label of each dimension rather than every label, so the `DataArray` has no coordinates attached.
+
+<CodeFromTest code={zarrRead} language="python" functionName="read_blocks"
+  source="docs/tests/python/readers/zarr_read_examples.py"
+  testFile="docs/tests/python/readers/test_zarr_read_examples.py"
+  outputConstant="READ_BLOCKS_output" />
+
+`decode=True` (the default) applies the CF conventions the array declares: scale and offset,
+missing values to NaN, and times to `datetime64[ns]`. The attributes it used are dropped from the
+block's `attrs`. `decode=False` returns the stored values. A time axis that is not in the standard
+calendars, or outside the years 1678 to 2262, raises `ZarrUnsupported`; read it with `decode=False`.
+
+## Output: a table of cells
+
+`output="table"` returns one row per selected cell, with a column per dimension and a column per
+variable. A dimension's column holds its labels, or the position as `BIGINT` when the dimension
+has no coordinate array. The variables must share their dimensions and shape. Row order is not
+defined.
+
+<CodeFromTest code={zarrRead} language="python" functionName="read_a_table"
+  source="docs/tests/python/readers/zarr_read_examples.py"
+  testFile="docs/tests/python/readers/test_zarr_read_examples.py"
+  outputConstant="READ_A_TABLE_output" />
+
+### Column types
+
+A column keeps the type of the values it was made from, so a table never widens a count to a
+double:
+
+| Stored | Column |
+|---|---|
+| `int8` | `TINYINT` |
+| `int16`, `uint8` | `SMALLINT` |
+| `int32`, `uint16` | `INT` |
+| `int64`, `uint32` | `BIGINT` |
+| `uint64` | `DECIMAL(20,0)` |
+| `bool` | `BOOLEAN` |
+| `float16`, `float32` | `FLOAT` |
+| `float64` | `DOUBLE` |
+| CF times | `TIMESTAMP`, in UTC, truncated to the microsecond |
+| A packed array (`scale_factor`, `add_offset`) | `FLOAT` or `DOUBLE`, since it decodes to floating point |
+
+A time column is a UTC instant. It does not move with the session time zone, and a time finer than
+a microsecond is truncated. Complex arrays raise `ZarrUnsupported`: read them as blocks.
+
+### Missing data is `NULL`
+
+A cell equal to the array's `_FillValue` or `missing_value` is `NULL`. The comparison is made on the
+stored values, before any scaling or cast, so an integer array stays an integer array:
+
+<CodeFromTest code={zarrRead} language="python" functionName="read_missing_data"
+  source="docs/tests/python/readers/zarr_read_examples.py"
+  testFile="docs/tests/python/readers/test_zarr_read_examples.py"
+  outputConstant="READ_MISSING_DATA_output" />
+
+With `decode=False` the table holds the stored values and nothing is `NULL`. A few details
+decide which cells count as missing:
+
+- **A NaN fill value gives `NULL` cells.** Where the fill is NaN, every NaN cell is missing. A NaN that
+  is data beside a numeric fill stays NaN.
+- **The array's `fill_value` is only a marker where xarray's rule says so.** Zarr v2 has no
+  `_FillValue` attribute, so `use_zarr_fill_value_as_mask=None` (the default, xarray's own) masks on
+  the array `fill_value` for Zarr v2 and not for Zarr v3. An integer v2 array whose `fill_value` is
+  `0` therefore reads its zeros as `NULL` by default. `use_zarr_fill_value_as_mask=False` keeps them,
+  and `True` masks on `fill_value` in either version. The `zarr_gbx` DataSource has no option for
+  this and uses the default.
+- **An integer array read as booleans** (a `dtype` attribute of `"bool"`) is masked only on an
+  explicit `_FillValue` or `missing_value`, never on the array's `fill_value`: zarr's default of `0`
+  is a stored `False`, not a missing cell.
+
+<CodeFromTest code={zarrRead} language="python" functionName="keep_zero_counts"
+  source="docs/tests/python/readers/zarr_read_examples.py"
+  testFile="docs/tests/python/readers/test_zarr_read_examples.py"
+  outputConstant="KEEP_ZEROS_output" />
+
+:::note Where tables differ from xarray
+GeoBrix follows the Zarr store's own semantics, which differ from xarray's in three places.
+
+- **Masked integers stay integers.** xarray decodes a masked integer array to floating point so
+  that the missing cells can be NaN. A table keeps the integer type and writes `NULL`.
+- **The mask flag.** `xarray.open_zarr` ignores `use_zarr_fill_value_as_mask` for the arrays it
+  opens; `gbx_zarr_read` honours it, as `ZarrStore` does.
+- **Booleans with a stored fill.** For an integer array read as booleans that has an explicit fill, a
+  cell equal to the fill is `NULL` in a table. Blocks follow xarray, which casts the masked cell's NaN
+  to `True`. Neither marks the array's default `fill_value` of `0` as missing.
+:::
+
+## Output: GeoBrix tiles
+
+`output="tiles"` returns the `(source, tile)` DataFrame the other raster readers return, so every
+`rst_*` function applies to Zarr data without converting the cube to GeoTIFF. Each selected 2-D
+plane of each variable (the plane of its latitude and longitude, or `y` and `x`) is cut into
+windows, one inner chunk each. Every selected position along the other dimensions makes its own
+tile, and the tile's metadata says which: `zarr_array`, `sliceDims` (such as `time=0`) and
+`sliceCoord_<dim>` (the label), as the NetCDF reader writes them.
+
+- `tile_size=(width, height)`, in cells, overrides the window. A window never crosses the longitude
+  seam. The largest tile a task may hold is 64 MiB decoded on Serverless and 256 MiB on classic
+  clusters.
+- `band_dim="time"` stacks one dimension as the bands of one tile instead of making a tile for each
+  position.
+- **Tiles are north-up**: when latitude ascends, the rows are flipped. The CRS is the array's
+  `grid_mapping`, or `EPSG:4326` for a plain latitude and longitude grid, and NoData is NaN for
+  floating-point cells.
+- **A 0 to 360 longitude axis** gives `EPSG:4326` tiles with x above 180: a cube whose longitude runs
+  from 0 to 359 has tiles that reach x = 359.5, and GeoBrix does not shift them into -180..180. Keep
+  that in mind when you combine the tiles with rasters in the usual -180..180 convention.
+- The coordinates must form a **regular grid** over the selected cells (a constant step; what lies
+  outside the selection does not matter). An irregular or curvilinear grid raises `ZarrUnsupported`:
+  read it as blocks or a table. A variable with no such grid is left out with a warning, unless you
+  named it in `variables`, which raises.
+
+<CodeFromTest code={zarrRead} language="python" functionName="read_tiles"
+  source="docs/tests/python/readers/zarr_read_examples.py"
+  testFile="docs/tests/python/readers/test_zarr_read_examples.py"
+  outputConstant="READ_TILES_output" />
+
+### Virtual tiles and the `rst_*` functions
+
+With `virtual_tiles=True` (the default) a tile holds no pixels. It names its window and the storage
+objects behind it, and reads them when a function opens it. A table of tiles can therefore be
+saved and read back by tasks that have no session, as long as the store stays on a Volume and,
+for a table, the pinned version stays readable. The lightweight `rst_*` functions open a tile on
+demand and read only the chunks its window touches; a header function such as `rst_crs` or
+`rst_width` reads no chunk at all.
+
+<CodeFromTest code={zarrRead} language="python" functionName="measure_tiles"
+  source="docs/tests/python/readers/zarr_read_examples.py"
+  testFile="docs/tests/python/readers/test_zarr_read_examples.py"
+  outputConstant="MEASURE_TILES_output" />
+
+`band_dim` stacks a dimension as bands, so six hours become the six bands of one tile:
+
+<CodeFromTest code={zarrRead} language="python" functionName="stack_time_as_bands"
+  source="docs/tests/python/readers/zarr_read_examples.py"
+  testFile="docs/tests/python/readers/test_zarr_read_examples.py"
+  outputConstant="STACK_BANDS_output" />
+
+### Materialize for the heavyweight tier
+
+The heavyweight tier operates only on materialized tiles: a virtual tile passed to a `gbx_rst_*`
+function raises an error that says to materialize it (see
+[Virtual Tiles](../api/virtual-tiles#tiers-light-tiles-vs-heavy-tiles)). `virtual_tiles=False` reads
+each tile now and holds its pixels as GeoTIFF bytes, which both tiers accept. It costs the read up
+front and the memory of the pixels, so keep the windows small.
+
+<CodeFromTest code={zarrRead} language="python" functionName="materialize_tiles"
+  source="docs/tests/python/readers/zarr_read_examples.py"
+  testFile="docs/tests/python/readers/test_zarr_read_examples.py"
+  outputConstant="MATERIALIZE_TILES_output" />
+
+### Writing tiles back
+
+A tile cut from Zarr still carries where it came from, so it can be written back to the array it
+was cut from. A pixel-producing `rst_*` function (a map algebra, a clip, a resample) returns a fresh
+tile **without that provenance**. Put the provenance back with `withField("metadata", ...)`, or give
+[`gbx_zarr_write`](../writers/zarr#tiles) `dim_cols` and `variables=` to say where the tile goes.
+[The Zarr Writer](../writers/zarr#tiles) shows both.
+
+## The `zarr_gbx` DataSource
+
+`spark.read.format("zarr_gbx")` reads a plain store with no table, no session call and no JAR.
+Register the lightweight DataSources once per session. Options are strings, like the other
+`*_gbx` readers.
+
+<CodeFromTest code={zarrRead} language="python" functionName="read_with_the_datasource"
+  source="docs/tests/python/readers/zarr_read_examples.py"
+  testFile="docs/tests/python/readers/test_zarr_read_examples.py"
+  outputConstant="DATASOURCE_output" />
+
+| Option | Default | Description |
+|---|---|---|
+| `variables` | every gridded variable | Comma-separated arrays to read. |
+| `sel` | whole axes | JSON, dimension to a label: `{"latitude": [60, 50], "time": "2023-01-01T05"}`. A list of two is an inclusive slice, a scalar is the nearest label, and a list of any other length is those labels. |
+| `isel` | whole axes | JSON, dimension to a position, with the same shapes. A list of two is a `start:stop` slice, the stop excluded. |
+| `output` | `blocks` | `blocks`, `tiles` or `table`, as in `gbx_zarr_read`. |
+| `virtualTiles` | `true` | `output=tiles` only. `false` materializes each tile. |
+| `dimIndex` | — | `dim=index,...`: pin dimensions to one position, as `netcdf_gbx` does. |
+| `fanout` | — | `output=tiles` only. The dimensions to expand into one tile for each position. |
+| `bandDim` | — | `output=tiles` only. One dimension to stack as the bands of each tile. |
+| `tileSize` | one inner chunk | `output=tiles` only. `w,h` (or one `n`) in cells. |
+| `access` | `auto` | `auto` or `fuse`: the store is read through its path. `direct` raises `ZarrAccessUnavailable`, because direct access needs credentials that Unity Catalog issues to a session, and this reader has none. |
+| `engine` | `auto` | `auto` (zarr-python), `zarr` or `tensorstore`: how a task opens the arrays of a `blocks` or `table` read. Not for tiles. |
+
+`fanout`, `dimIndex` and `bandDim` follow `netcdf_gbx`: give any of them and every other
+non-spatial dimension that is not pinned, selected or stacked is read at index 0. Give none and
+every selected position of every such dimension is expanded, which is what `gbx_zarr_read` does.
+An option that does not go with another (`dimIndex` and `sel` on one dimension, `fanout` on a
+non-tile read) raises `ValueError` with a `Fix:`. The reader defines no push-down filters, so
+prune with `sel`, `isel` and `variables`.
+
+## Sampling at points
+
+`gbx_zarr_sample(spark, points_df, source, ...)` reads a store at the points of a DataFrame, with
+the same geometry inputs as `rst_sample`: a POINT column of WKB, EWKB, WKT or EWKT. The result has
+every column of `points_df`, then a column for each dimension that `sel` leaves in (time as
+`TIMESTAMP`), then a column per variable, typed as in a table read. A point is repeated for each
+selected position of those dimensions, so one point's time series is its rows.
+
+<CodeFromTest code={zarrRead} language="python" functionName="sample_at_points"
+  source="docs/tests/python/readers/zarr_read_examples.py"
+  testFile="docs/tests/python/readers/test_zarr_read_examples.py"
+  outputConstant="SAMPLE_output" />
+
+- Points are moved to the store's CRS and read at the **nearest cell** (`method="nearest"`;
+  `"bilinear"` is planned and raises `ZarrUnsupported`). `crs` is the CRS of points that carry no
+  SRID of their own; an EWKB or EWKT SRID wins, and a point with neither is taken to be in the
+  store's CRS.
+- A point outside the grid (more than half a cell beyond its first or last cell), a missing or empty
+  geometry, and a cell equal to the fill value all give `NULL`. A geometry that is not a POINT raises
+  `ValueError`.
+- `variables` defaults to every gridded variable, which must share a grid.
+
+<CodeFromTest code={zarrRead} language="python" functionName="sample_projected_points"
+  source="docs/tests/python/readers/zarr_read_examples.py"
+  testFile="docs/tests/python/readers/test_zarr_read_examples.py"
+  outputConstant="SAMPLE_PROJECTED_output" />
+
+Up to 100,000 points are collected to the driver. If they lie in at most four chunks and the answer
+is small, the driver reads them and no Spark job runs; otherwise Spark reads each chunk once for all
+its points. **Above 100,000 points `points_df` is evaluated more than once** (up to about three
+times, because the chunks to read are planned from a first pass over the geometry column), so it must
+be deterministic. Write it to a table first, rather than sampling a random or time-dependent query.
+
+## Access
+
+`access` is how the tasks reach a store's files:
+
+| `access` | Meaning |
+|---|---|
+| `"auto"` (default) | Direct where Unity Catalog can issue credentials (dedicated compute), through the Volume mount everywhere else, Serverless included. Never an error. |
+| `"fuse"` | Through the Volume mount. Sends no credentials. |
+| `"direct"` | Byte ranges straight from the Volume's cloud storage, with short-lived credentials the driver asks Unity Catalog for. Several times faster than the mount for many small ranges. Raises `ZarrAccessUnavailable` where the credentials cannot be had (Serverless, no permission, a path that is not on a Volume). |
+
+A plain store is read through its path, so `"direct"` raises for it: register the store to use direct
+access. Virtual tiles are opened later, over the mount, so `"direct"` needs `virtual_tiles=False`.
+Direct access sends credentials of at most one hour, scoped to the Volume, to the executors, and under
+memory pressure Spark may spill task data, those credentials included, to local disk: turn on local-disk
+encryption on clusters that use it, or pass `access="fuse"`.
+
+## Errors
+
+A mistake in the call (a bad argument, an unknown variable, a version that does not exist) is raised
+on the driver at once, as a `Zarr*` error or a `ValueError`, and its message ends with a `Fix:` that
+says how to resolve it:
+
+<CodeFromTest code={zarrRead} language="python" functionName="ask_for_an_unknown_variable"
+  source="docs/tests/python/readers/zarr_read_examples.py"
+  testFile="docs/tests/python/readers/test_zarr_read_examples.py"
+  outputConstant="UNKNOWN_VARIABLE_output" />
+
+The DataFrame is lazy, so an error raised while Spark runs the read (a file that went missing, a chunk
+that cannot be decoded, a registered store another tool changed) arrives from the action that triggers
+it, such as `collect` or `write`, as a `pyspark.errors.PythonException`. Its message keeps the
+GeoBrix error name and the `Fix:` line:
+
+<CodeFromTest code={zarrRead} language="python" functionName="read_a_changed_store"
+  source="docs/tests/python/readers/zarr_read_examples.py"
+  testFile="docs/tests/python/readers/test_zarr_read_examples.py"
+  outputConstant="EXECUTOR_ERROR_output" />
+
+## Next Steps
+
+- [Zarr Writer](../writers/zarr) — create, append, update and overwrite a store transactionally.
+- [Zarr Function Reference](../api/zarr-functions) — every function, parameter and error.
+- [Zarr Stores](../formats/zarr) — the transactional model: versions, tags, retention, file modes.
+- [Virtual Tiles](../api/virtual-tiles) — how a tile that holds no pixels is opened.
+- [Readers Overview](./overview) — all readers, with their tiers and options.

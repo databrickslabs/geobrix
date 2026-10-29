@@ -1,3 +1,4 @@
+import pytest
 from pyspark.sql import functions as f
 
 from databricks.labs.gbx.pyrx import functions as prx
@@ -932,7 +933,7 @@ def test_rst_xyzpyramid_array(spark):
 
 def test_sql_rst_tilexyz_accepts_rescale(spark):
     # Regression: gbx_rst_tilexyz must accept the optional 8th arg (rescale).
-    # Uses the SQL surface to verify arity after Task 4 registration.
+    # Uses the SQL surface to verify arity after registration.
     prx.register(spark)
     df = _rgb_tile_df(spark)
     df.createOrReplaceTempView("_tilexyz_rescale")
@@ -1182,6 +1183,18 @@ def test_rst_asformat_gtiff(spark):
     assert out.select(prx.rst_width("t").alias("w")).first()["w"] == 4
 
 
+@pytest.mark.parametrize(
+    "requested,stamped",
+    [("GTiff", "GTiff"), ("COG", "GTiff"), ("cog", "GTiff")],
+)
+def test_rst_asformat_stamps_the_driver_the_bytes_open_as(spark, requested, stamped):
+    # COG is a layout of a GeoTIFF: rst_cog_convert stamps GTiff, so does rst_asformat, and a
+    # writer then passes the COG bytes through instead of re-encoding them with its own defaults.
+    df = _tile_df(spark, width=4, height=3)
+    out = df.select(prx.rst_asformat("tile", requested).alias("t"))
+    assert out.select("t.metadata").first()["metadata"]["driver"] == stamped
+
+
 def test_rst_buildoverviews(spark):
     df = _tile_df(spark, width=64, height=64)
     out = df.select(
@@ -1223,7 +1236,7 @@ def test_rst_rastertoworldcoord_struct_roundtrip(spark):
 
 
 # ---------------------------------------------------------------------------
-# Tier 2: grouped aggregators (rst_*_agg) via .agg()
+# Grouped aggregators (rst_*_agg) via .agg()
 # ---------------------------------------------------------------------------
 import numpy as np  # noqa: E402
 import pytest  # noqa: E402
@@ -2092,7 +2105,7 @@ def test_rst_viewshed_column_api(spark):
 
 
 # ---------------------------------------------------------------------------
-# Stage 2 Task 8: coverage/assignment on rastertogrid + tessellate surface
+# Coverage/assignment on rastertogrid + tessellate surface
 # ---------------------------------------------------------------------------
 
 
@@ -2130,7 +2143,7 @@ def test_light_rastertogrid_coverage_assignment_4arg_sql(spark):
 
 
 def test_light_rastertogrid_count_schema_is_double(spark):
-    """After Task 8, rastertogridcount measure column must be DoubleType (not Int/Long)."""
+    """The rastertogridcount measure column must be DoubleType (not Int/Long)."""
     from pyspark.sql.types import DoubleType
 
     df = _tile_df(spark, width=4, height=3, count=1)
@@ -2147,7 +2160,7 @@ def test_light_rastertogrid_count_schema_is_double(spark):
         measure_field = next(fld for fld in schema.fields if fld.name == "measure")
         assert isinstance(
             measure_field.dataType, DoubleType
-        ), f"{name}: measure must be DoubleType after Task 8; got {measure_field.dataType}"
+        ), f"{name}: measure must be DoubleType; got {measure_field.dataType}"
 
 
 def test_light_tessellate_assignment_coverage_4arg_sql(spark):

@@ -218,7 +218,7 @@ def test_tessellate_reprojects_cell_for_non_4326_raster():
 # FILE-aware UDTF guard tests: file_ref=NULL (FILE unavailable on local[2]).
 # Confirms that the new file_ref eval parameter is a transparent FUSE fallback
 # — output is unchanged vs. pre-refactor when FILE is not available.
-# The FILE stream fast path is exercised on-cluster (Task 9).
+# The FILE stream fast path is exercised on-cluster.
 # ---------------------------------------------------------------------------
 
 

@@ -2834,7 +2834,7 @@ def run_vector_table_read_sweep(
     """Time a vector FILE-column-table read via ``vector_file_read`` table mode.
 
     Reads the FILE-column Delta table written by the gpkg write leg (via
-    ``vector_file_write``) back through the Task-2 vector table-read entry:
+    ``vector_file_write``) back through the vector table-read entry:
     ``vector_file_read(spark, table, source_type='table')``.  Measures wall-clock
     read+decode time and feature-count parity.
 
@@ -3036,7 +3036,7 @@ def run_raster_decode_read_sweep(
 
     **Ordering-amortization comparison** (``skip_ordering=None``, the default, for
     managed/external):
-    Runs the decode job **twice** — once with the T8 auto-order (same-source tiles
+    Runs the decode job **twice** — once with the automatic order (same-source tiles
     grouped → ``open_windowed_via_fileref`` reuse across consecutive tiles in a source
     file, amortising the open cost) and once with ``skipOrdering=True`` (random order,
     no batching).  Returns **two** ``ResultRow`` objects so the ordering payoff is

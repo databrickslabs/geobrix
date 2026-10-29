@@ -1,4 +1,4 @@
-"""Task 6 (RasterX CRS-100, Group B): out_srid/out_crs + Rule-2 reprojection.
+"""Tests for out_srid/out_crs + Rule-2 reprojection.
 
 Produce-new-raster functions (rst_rasterize, ...) take out_srid/out_crs (output
 CRS, string or int); the geometry is reprojected from its source CRS into the
@@ -93,7 +93,7 @@ def test_rasterize_reprojects_ewkb_source_into_output():
         assert np.any(data == 5.0), "reprojected geometry should burn inside the extent"
 
 
-# --- Group B (B4): grid rasterize_agg output CRS via cellraster ------------
+# --- Grid rasterize_agg output CRS via cellraster ------------
 
 
 def test_cellraster_grid_out_crs_string_and_int_and_esri():
@@ -116,7 +116,7 @@ def test_cellraster_grid_out_crs_string_and_int_and_esri():
             assert ds.crs is not None and ds.crs.to_authority() == want, (spec, ds.crs)
 
 
-# --- Task 7: gbx_h3_cell_bbox + rst_h3_gridspec output CRS -----------------
+# --- gbx_h3_cell_bbox + rst_h3_gridspec output CRS -----------------
 
 
 def test_h3_cell_bbox_out_crs(spark):

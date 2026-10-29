@@ -382,7 +382,7 @@ def test_auto_does_not_crush_heavy(heavy_registered):
     """Confirm heavy auto does NOT produce a crushed output (hi<80 diagnostic).
 
     This is the minimal smoke test that the heavy JAR carries the rescale fix.
-    If this fails, the JAR predates the Scala rescale commits (Tasks 1-3).
+    If this fails, the JAR predates the Scala rescale commits.
     """
     from pyspark.sql import functions as f
 
@@ -420,13 +420,13 @@ def test_auto_does_not_crush_heavy(heavy_registered):
     )
     assert heavy_spread > 100, (
         f"heavy tier STILL crushed under auto rescale (spread={heavy_spread}). "
-        "The staged JAR likely predates the Scala rescale commits (Tasks 1-3). "
+        "The staged JAR likely predates the Scala rescale commits. "
         "Rebuild: gbx:docker:exec 'mvn clean package -PskipScoverage -DskipTests' "
         "then copy target/geobrix-0.6.0-jar-with-dependencies.jar to python/geobrix/lib/"
     )
 
 
-# --- Task 3: cross-tier RGBA parity (shape + alpha-position + RGB distribution) ---
+# --- Cross-tier RGBA parity (shape + alpha-position + RGB distribution) ---
 
 
 def _make_uint16_with_nodata_hole(width=64, height=64, lo=8000, hi=12000, nodata=0):

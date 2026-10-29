@@ -27,6 +27,7 @@ _Parenthetical `(x.y.z)` is the GeoBrix release each reader/writer first shipped
 | [GeoTIFF](./readers/geotiff) | `gtiff_gbx` (0.4.0) | `gtiff_gdal` (0.2.0) |
 | [COG](./readers/cog) | `cog_gbx` (0.5.0) | — (light-only) |
 | [NetCDF](./readers/netcdf) | `netcdf_gbx` (0.4.1) | `netcdf_gdal` / `netcdf_ogr` (0.4.3) |
+| [Zarr](./readers/zarr) | `zarr_gbx` (0.6.0) | — (light-only) |
 | [PMTiles](./readers/pmtiles) | `pmtiles_gbx` (0.4.0) | — (light-only) |
 | [File lister](./readers/file) | `file_gbx` (0.5.0) | — (light-only) |
 | [LiDAR (LAS/LAZ)](./readers/lidar) | `lidar_gbx` (0.5.2) | — (light-only) |
@@ -48,6 +49,7 @@ for the column contract, single-file vs sharded trade-offs, and per-format detai
 | [Raster (generic)](./writers/raster) | `raster_gbx` (0.4.0) | `gdal` (0.2.0) |
 | [GeoTIFF](./writers/geotiff) | `gtiff_gbx` (0.4.0) | `gtiff_gdal` (0.2.0) |
 | [COG](./writers/cog) | `cog_gbx` (0.5.0) | — (light-only) |
+| [Zarr](./writers/zarr) | `gbx_zarr_write` (0.6.0) | — (light-only) |
 | [PMTiles](./writers/pmtiles) | `pmtiles_gbx` (0.4.0) | `pmtiles` (0.4.0) |
 | [NetCDF](./writers/netcdf) | `netcdf_gbx` (0.4.1) | — (light-only) |
 | [LiDAR (LAS/LAZ)](./writers/lidar) | `lidar_gbx` (0.5.2) | — (light-only) |
@@ -92,7 +94,7 @@ Measured on 1,000 raster tiles or 100k vector features; times are whole-job wall
 
 | Source | Read mechanism | Runtime | Serverless | Classic | Default / when |
 |---|---|---|---|---|---|
-| **FILE-column table** *(recommended on Serverless)* | Delta scan of `path` (EXTERNAL) | any | **~2 s** | ~2 s | default for a table source (`vector_file_read(table)`, raster `tilesTable`) |
+| **FILE-column table** *(recommended on Serverless)* | Delta scan of `path` (EXTERNAL) | any | **~2 s** | ~2 s | default for a table source (`vector_file_read(table)`, raster `read_tiles_table`) |
 | **FILE-column table** | Delta scan of FILE `.uri` (MANAGED) | DBR 13.3+ | **~2 s** | ~2 s | auto when the table is MANAGED |
 | **Directory** | `read_files(format=>'file')` — enumerate + FILE refs + size | DBR 13.3+ | ~10 s / 10k *(enumerate)* | ~same | auto dir default on 13.3+ |
 | **Directory** | `list_files` — enumerate (metadata only) | DBR 18+ | ~10 s / 10k *(enumerate)* | ~same | used when `read_files` is unavailable |

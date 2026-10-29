@@ -2,9 +2,9 @@ from databricks.labs.gbx.pyrx import _serde
 
 from .conftest import make_geotiff_bytes
 
-# NOTE: the tile-output schema contract is asserted by G1
+# NOTE: the tile-output schema contract is asserted by the v2 tile-output invariant
 # (test_v2_tile_output_invariant.py::test_v2_schema_field_contract) and the
-# light≡heavy parity guard (G2, test_rasterx/test_tile_schema_parity.py). The
+# light≡heavy parity guard (test_rasterx/test_tile_schema_parity.py). The
 # former per-function 3-field assertion here was removed when build_tile moved
 # to the 8-field v2 struct.
 

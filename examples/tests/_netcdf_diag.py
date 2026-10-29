@@ -11,7 +11,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from _job_submit import submit_once  # sibling module (script dir is on sys.path)
+from _job_submit import runner_dir, submit_once  # sibling module (script dir is on sys.path)
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 
 NC_DIR = os.environ.get(
@@ -136,8 +136,7 @@ def main() -> int:
     profile = os.environ.get("DATABRICKS_CONFIG_PROFILE")
     cluster_id = os.environ.get("CLUSTER_ID")
     w = WorkspaceClient(profile=profile) if profile else WorkspaceClient()
-    runner_dir = os.environ.get("GBX_RUNNER_DIR", "/Workspace/Users/mjohns@databricks.com/GeoBrix/gbx-beta-dbr-v0.2.0/sample-data/tests")
-    nb_path = "/" + f"{runner_dir}/_netcdf_diag".strip().removeprefix("/Workspace").lstrip("/")
+    nb_path = "/" + f"{runner_dir(w)}/_netcdf_diag".strip().removeprefix("/Workspace").lstrip("/")
     try:
         w.workspace.mkdirs(str(Path(nb_path).parent))
     except Exception:

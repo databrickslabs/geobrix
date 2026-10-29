@@ -151,7 +151,7 @@ class TestMaterializeDecisionCogWrite:
 class TestCogWriterSizeGateRouting:
     """CogGbxWriter routes correctly based on source size vs. executor cap."""
 
-    # B1. Small source → executor conversion (cog_convert_file called)
+    # Small source → executor conversion (cog_convert_file called)
 
     def test_small_source_uses_executor_conversion(self, tmp_path):
         """A real small source routes to executor cog_convert_file (default path)."""
@@ -184,7 +184,7 @@ class TestCogWriterSizeGateRouting:
         assert len(msg.paths) == 1
         assert msg.pending_paths == [], "small source must NOT be deferred to driver"
 
-    # B2. Large source → auto driver-side; INFO logged; cog_convert_file NOT called
+    # Large source → auto driver-side; INFO logged; cog_convert_file NOT called
 
     def test_large_source_auto_routes_to_driver(self, tmp_path, monkeypatch, caplog):
         """With GBX_STREAM_MAX_BYTES=1, any file triggers the driver-side auto-route.
@@ -235,7 +235,7 @@ class TestCogWriterSizeGateRouting:
             f"{[r.message for r in caplog.records]}"
         )
 
-    # B3. Beyond-driver-bound → StageTooLargeError raised from write()
+    # Beyond-driver-bound → StageTooLargeError raised from write()
 
     def test_beyond_driver_bound_raises_stage_too_large(self, tmp_path, monkeypatch):
         """When source size exceeds _COG_DRIVER_MAX_BYTES, write() raises StageTooLargeError."""
@@ -253,7 +253,7 @@ class TestCogWriterSizeGateRouting:
         with pytest.raises(StageTooLargeError):
             w.write(iter([{"path": str(src)}]))
 
-    # B4. Explicit driverMode=True → unchanged (gathers all paths regardless of size)
+    # Explicit driverMode=True → unchanged (gathers all paths regardless of size)
 
     def test_explicit_driver_mode_unchanged(self, tmp_path, monkeypatch):
         """driverMode=True still gathers all paths regardless of size."""
@@ -282,7 +282,7 @@ class TestCogWriterSizeGateRouting:
             msg.pending_paths == []
         ), "driverMode=True must not populate pending_paths"
 
-    # B5. commit() processes pending_paths via prepare_cogs in default mode
+    # commit() processes pending_paths via prepare_cogs in default mode
 
     def test_commit_processes_pending_paths(self, tmp_path, monkeypatch):
         """commit() calls prepare_cogs for pending_paths from auto-routed messages."""
@@ -334,7 +334,7 @@ class TestCogWriterSizeGateRouting:
             str(src) in s or s == str(src) for s in sources_passed
         ), f"prepare_cogs must receive the pending source path; got {sources_passed}"
 
-    # B7. Fix 1c — driver-captured cap passed into materialize_decision
+    # The driver-captured cap is passed into materialize_decision
 
     def test_cog_writer_captures_cap_in_init(self, tmp_path, monkeypatch):
         """CogGbxWriter captures the connect-aware cap in __init__ (driver-side)."""
@@ -380,7 +380,7 @@ class TestCogWriterSizeGateRouting:
         assert seen["cap_bytes"] == 777777
         assert seen["kind"] == "cog_write"
 
-    # B6. commit() in default mode does NOT call prepare_cogs for empty pending_paths
+    # commit() in default mode does NOT call prepare_cogs for empty pending_paths
 
     def test_commit_no_pending_skips_prepare_cogs(self, tmp_path):
         """commit() must not call prepare_cogs when pending_paths is empty."""

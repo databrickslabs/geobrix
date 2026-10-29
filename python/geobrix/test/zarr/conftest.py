@@ -42,18 +42,16 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.delta)
 
 
-@pytest.fixture(scope="package")
-def spark_delta(tmp_path_factory):
+def delta_session(warehouse_dir):
     """A local-mode Spark session with Delta Lake enabled (OSS delta-spark 4.0.x).
 
-    One session for the whole directory (package scope): a JVM start costs seconds, and
-    every module used to pay it. The tests clean up after themselves (tables dropped, the
-    session time zone and current schema restored), so they share it safely. The engine
-    runs without whole-stage codegen and adaptive execution: with a few rows per query,
-    compiling and re-planning cost more than they save, and every commit and read in
-    these suites is dozens of such queries. Delta uses its local log store (single-JVM
-    tests only) and Hadoop its checksum-free local file system, which spawn far fewer
-    child processes; none of this changes what a commit, a conflict or a read returns.
+    Shared by this directory's ``spark_delta`` fixture and the Delta test in test/ds, so the
+    recipe lives once; the caller owns the session and stops it. The engine runs without
+    whole-stage codegen and adaptive execution: with a few rows per query, compiling and
+    re-planning cost more than they save, and every commit and read in these suites is
+    dozens of such queries. Delta uses its local log store (single-JVM tests only) and
+    Hadoop its checksum-free local file system, which spawn far fewer child processes;
+    none of this changes what a commit, a conflict or a read returns.
 
     The Delta extension is a static conf, so a live session without it is stopped
     first; a session that already has it is reused. Without the Delta jars on the
@@ -75,7 +73,7 @@ def spark_delta(tmp_path_factory):
             .appName("gbx-zarr-tests")
             .config("spark.sql.extensions", _DELTA_EXT)
             .config("spark.sql.catalog.spark_catalog", _DELTA_CATALOG)
-            .config("spark.sql.warehouse.dir", str(tmp_path_factory.mktemp("delta_wh")))
+            .config("spark.sql.warehouse.dir", str(warehouse_dir))
             .config("spark.sql.shuffle.partitions", "2")
             .config("spark.databricks.delta.snapshotPartitions", "2")
             .config("spark.sql.execution.arrow.pyspark.enabled", "true")
@@ -104,6 +102,18 @@ def spark_delta(tmp_path_factory):
             "scripts/commands/gbx-test-python.sh (it fetches the jars), or set "
             "PYSPARK_SUBMIT_ARGS to include them before pytest starts."
         ) from e
+    return session
+
+
+@pytest.fixture(scope="package")
+def spark_delta(tmp_path_factory):
+    """The local Delta session (:func:`delta_session`), one for the whole directory.
+
+    Package scope: a JVM start costs seconds, and every module used to pay it. The tests
+    clean up after themselves (tables dropped, the session time zone and current schema
+    restored), so they share it safely.
+    """
+    session = delta_session(tmp_path_factory.mktemp("delta_wh"))
     yield session
     session.stop()
 

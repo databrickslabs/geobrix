@@ -442,13 +442,12 @@ def _build_mosaic_vrt(
     7. When a tile has its own (per-dataset) mask band the mosaic gets a mask band: the
        union of the tiles' masks (``mask,1`` of each tile), a pixel no tile covers being
        invalid. GDAL reads that mask ahead of the NoData, as it does for any raster.
-       ``mask,1`` is band 1's mask, which for a tile WITHOUT a mask band is its NoData (or
-       alpha) on band 1 alone, not the any-band rule of ``_nodata.valid_mask``. Masked and
-       unmasked tiles do mix: the writer's commit step builds one index over the cells of every
-       source it was given. When a pixel of an unmasked tile can be NoData in one band only,
-       write that tile with its validity as its mask first, as the streamed merge of
-       ``pyrx.core.agg`` does; for a tile whose bands share their NoData pixels (or that has
-       none) the two agree.
+       A tile with a mask band of its own, or an alpha band, has one mask for all its bands.
+       A tile WITHOUT one has a mask per band (its NoData), and is valid at a pixel where ANY
+       band is (the rule of ``_nodata.valid_mask``), so each of its bands is a source of the
+       mosaic's mask band: a pixel is invalid only where every band of every tile that covers
+       it is NoData. Masked and unmasked tiles do mix: the writer's commit step builds one
+       index over the cells of every source it was given.
 
     Assumptions (valid for Phase A native-pixel tiling):
     - All tiles share the same CRS, pixel size, band count, and dtype.
@@ -473,6 +472,7 @@ def _build_mosaic_vrt(
     str
         Absolute path to the written ``mosaic.vrt``.
     """
+    import copy
     import xml.etree.ElementTree as ET
 
     import rasterio
@@ -497,6 +497,7 @@ def _build_mosaic_vrt(
                     "nodatavals": ds.nodatavals,  # tuple, one per band (None where unset)
                     "colorinterp": list(ds.colorinterp),
                     "own_mask": _nodata.has_own_mask(ds),
+                    "alpha": _nodata.has_alpha(ds),
                 }
             )
 
@@ -615,9 +616,13 @@ def _build_mosaic_vrt(
                     "ySize": str(tile_h),
                 },
             )
-            # Skip this tile's nodata pixels when compositing (transparent overlap).
-            if band_nodata is not None:
-                ET.SubElement(src_el, "NODATA").text = repr(float(band_nodata))
+            # Skip this tile's nodata pixels when compositing (transparent overlap): the tile's
+            # OWN NoData, as the in-RAM merge reads each source by its own, not that of the
+            # first tile (a tile with none would otherwise paint its fill over its neighbour,
+            # and a valid pixel equal to the first tile's NoData would be skipped).
+            tile_nodata = meta["nodatavals"][band_idx - 1]
+            if tile_nodata is not None:
+                ET.SubElement(src_el, "NODATA").text = repr(float(tile_nodata))
             # A tile with its own mask band is composited by it: its masked pixels (the
             # corners of an h3 cell's bounding box, for a cell of an alpha source, which
             # declares no NoData) do not overwrite a neighbour's pixels.
@@ -657,6 +662,12 @@ def _build_mosaic_vrt(
             )
             # an invalid pixel of one tile does not hide a valid pixel of another
             ET.SubElement(src_el, "NODATA").text = "0"
+            # a tile with a mask band per band: each of its other bands can make a pixel valid
+            if not (meta["own_mask"] or meta["alpha"]):
+                for band in range(2, meta["count"] + 1):
+                    more = copy.deepcopy(src_el)
+                    more.find("SourceBand").text = f"mask,{band}"
+                    mask_band.append(more)
 
     # ── Step 5: write XML to disk ──────────────────────────────────────────
     tree = ET.ElementTree(root)
@@ -1033,7 +1044,7 @@ class CogGbxWriter(DataSourceWriter):
         overwrite,
         cog_blocksize=512,
         cog_overview_resampling="AVERAGE",
-        # Unified compression surface (Task 5).
+        # Unified compression surface.
         # ``compress`` = "auto" | "zstd" | "deflate" | "lzw" | "none".
         # Deprecated: ``cog_compression`` is the old option; maps to ``compress``.
         # When compress == "auto", resolves to "ZSTD" (the spec ZSTD baseline).
@@ -1051,7 +1062,7 @@ class CogGbxWriter(DataSourceWriter):
         cog_bigtiff="YES",
         # Mosaic mode (Phase A: native mini-COG + VRT).  ``None`` = single-COG
         # mode (default, unchanged behaviour).  Set by CogGbxDataSource.writer()
-        # after calling parse_mosaic_options(); Tasks 2–3 read self.mosaic_opts.
+        # after calling parse_mosaic_options(); the mosaic write path reads self.mosaic_opts.
         mosaic_opts: Optional[MosaicOptions] = None,
     ):
         assert_path_schema(schema)
@@ -1074,7 +1085,7 @@ class CogGbxWriter(DataSourceWriter):
         self.driver_mode = driver_mode
         self.driver_mode_verbose = driver_mode_verbose
         self.cog_bigtiff = cog_bigtiff
-        # Mosaic mode: None = single-COG (unchanged); set for Tasks 2–3 to read.
+        # Mosaic mode: None = single-COG (unchanged); read by the mosaic write path.
         self.mosaic_opts = mosaic_opts
         # Driver-capture the connect-aware materialize cap. __init__ runs on the
         # DRIVER (DataSource V2 contract) where a live session is present; the
@@ -1133,7 +1144,7 @@ class CogGbxWriter(DataSourceWriter):
 
         if self.tile_envelope:
             # v2 (source, tile) envelope. driverMode over v2 tiles is a follow-on
-            # (see module docstring / task-5): the path-gather-then-driver-convert
+            # (see module docstring): the path-gather-then-driver-convert
             # path only makes sense for whole-file virtual tiles, and windowed/
             # clipped/materialized tiles would need bytes on the driver. For now
             # v2-tile input runs in DEFAULT (per-partition) mode only.
@@ -1378,7 +1389,7 @@ class CogGbxWriter(DataSourceWriter):
                     # Build GTiff bytes for this window.  Profile mirrors
                     # _window_dataset_bytes / materialize_to_bytes for fidelity:
                     # same driver, height, width, count, transform, compression.
-                    profile = _comp.drop_ycbcr(src.profile)
+                    profile = _comp.source_profile(src.profile)
                     # A tiled/COG source carries tiled=True + blockxsize/blockysize
                     # (e.g. 512) and possibly interleave. A partial-edge tile whose
                     # dims are smaller than those block dims conflicts when written
@@ -1663,7 +1674,7 @@ class CogGbxWriter(DataSourceWriter):
                 src_nodata = src.nodata
                 src_full_window = Window(0, 0, src.width, src.height)
 
-                # Ruling A: derive out_nodata unconditionally — h3 output MUST
+                # Derive out_nodata unconditionally — h3 output MUST
                 # always carry a nodata value so the hex-clip contract is honoured
                 # even when the source has none.
                 # A source with an alpha band that declares no NoData is the exception: a
@@ -1767,7 +1778,7 @@ class CogGbxWriter(DataSourceWriter):
                     )
 
                     # ── Hex-clip: ALWAYS set pixels outside the hexagon to
-                    # out_nodata (unconditional — Ruling A).
+                    # out_nodata (unconditional).
                     # h3.cell_to_boundary returns [(lat, lon), ...]; swap to
                     # (lon, lat) for rasterio (geographic CRS: x=lon, y=lat).
                     boundary = h3.cell_to_boundary(cell.cellid)
@@ -1822,7 +1833,7 @@ class CogGbxWriter(DataSourceWriter):
                         "dtype": out_dtype,
                         "crs": dst_crs,
                         "transform": dst_transform,
-                        "nodata": out_nodata,  # set, except over an alpha band (Ruling A)
+                        "nodata": out_nodata,  # set, except over an alpha band
                     }
                     profile.update(
                         _comp.creation_opts(
@@ -2282,7 +2293,7 @@ class CogGbxWriter(DataSourceWriter):
                 bigtiff=self.cog_bigtiff,
             )
 
-        # ── Task 3: mosaic VRT index ──────────────────────────────────────
+        # ── Mosaic VRT index ──────────────────────────────────────
         # Collect all mini-COG paths written by _write_mosaic() across all
         # partitions and build a single portable VRT index file.
         # Guarded by write_vrt=True (default); mosaic_opts=None (single-COG

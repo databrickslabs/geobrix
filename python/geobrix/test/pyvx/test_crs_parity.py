@@ -101,7 +101,7 @@ _RD_LON, _RD_LAT = 5.39, 52.16
 
 # A WKT body whose parts disagree about dimensionality — no WKT parser accepts it as-is.
 # Coordinates (15, 51) / (16, 52) are inside EPSG:32633's area_of_use (lon 12°–18°E).
-# Changed from (11, 42)/(12, 43) after Tasks 2+3 added the domain-check: the old coords
+# Changed from (11, 42)/(12, 43) after the domain-check was added: the old coords
 # (lon 11°/12°E) sit outside or on the boundary of EPSG:32633, so both tiers returned NULL.
 _MIXED_DIM_WKT = "GEOMETRYCOLLECTION Z (POINT Z (15 51 5), POINT (16 52))"
 
@@ -195,7 +195,7 @@ def light():
 
 def _ewkb(srid: int, geom=None) -> bytes:
     # POINT(15, 51): lon=15°E lat=51°N — inside EPSG:32633 (UTM33N, lon 12°–18°E).
-    # Changed from (11, 42) after Tasks 2+3 added the domain-check: lon=11°E is outside
+    # Changed from (11, 42) after the domain-check was added: lon=11°E is outside
     # EPSG:32633's bounds, so the old point was NULL'd by the domain guard on both tiers.
     g = Point(15.0, 51.0) if geom is None else geom
     return to_wkb(shapely.set_srid(g, srid), include_srid=True)
@@ -549,7 +549,7 @@ def test_st_transformcrs_parity_fuzzy_matched_proj4_does_not_leak_into_math(
 def test_st_transformcrs_parity_unresolvable_embedded_srid_returns_null(heavy, light):
     """An SRID in no registry returns NULL on both tiers (data condition, not a param error).
 
-    Pre-Task-2/3 both tiers returned the input unchanged (degrade).  The new contract is
+    Before this contract both tiers returned the input unchanged (degrade).  The new contract is
     NULL: an embedded SRID that cannot be resolved means the CRS of the data is unknown,
     so the result is meaningless and suppressed rather than passed through silently.
     """
@@ -565,7 +565,7 @@ def test_st_transformcrs_parity_unresolvable_embedded_srid_returns_null(heavy, l
 def test_st_transformcrs_parity_unresolvable_source_crs_raises_both_tiers(heavy, light):
     """An explicit source_crs that cannot be resolved RAISES on both tiers (parameter condition).
 
-    Pre-Task-2/3 both tiers returned the input unchanged (degrade).  The new contract treats
+    Before this contract both tiers returned the input unchanged (degrade).  The new contract treats
     an explicit source_crs arg as a PARAMETER: an invalid value is a caller error, not a data
     condition, so both tiers raise rather than silently passing through unprojected bytes.
     """
@@ -582,7 +582,7 @@ def test_st_transformcrs_parity_unresolvable_source_crs_raises_both_tiers(heavy,
 def test_st_transformcrs_parity_no_source_at_all_returns_null(heavy, light, geom):
     """A plain geometry with no source CRS returns NULL on both tiers (data condition).
 
-    Pre-Task-2/3 both tiers returned the input unchanged (degrade).  The new contract is
+    Before this contract both tiers returned the input unchanged (degrade).  The new contract is
     NULL: if there is no source CRS the reprojection is undefined, not a pass-through.
     """
     heavy_value = _heavy_binary(
@@ -594,11 +594,11 @@ def test_st_transformcrs_parity_no_source_at_all_returns_null(heavy, light, geom
 
 
 # ---------------------------------------------------------------------------
-# Shared-corpus parity: the Task-4 gate contract
+# Shared-corpus parity: the gate contract
 # ---------------------------------------------------------------------------
 #
 # These tests assert the OUTCOME CLASS (null / raise / value) agrees across tiers
-# for the error-handling corpus introduced in Tasks 2 + 3.  The fixture helpers below
+# for the error-handling corpus.  The fixture helpers below
 # encode the specific geometries the brief specifies; the assertions delegate to
 # `assert_geom_parity` for value cases and use plain None checks for null cases.
 
@@ -628,7 +628,7 @@ def test_transformcrs_parity_out_of_domain_both_null(heavy, light):
 
     POINT(150, -80) is legitimately parseable and carries a resolvable SRID, but lon=150°E
     and lat=-80°S lie far outside EPSG:27700's (British National Grid) area_of_use.  The
-    domain check introduced in Tasks 2+3 must suppress this on both tiers.
+    domain check must suppress this on both tiers.
     """
     g = _ewkb_point(150.0, -80.0, 4326)
     light_result = light._udf_st_transformcrs(g, "EPSG:27700")
@@ -805,7 +805,7 @@ def test_st_transformcrs_parity_mixed_dimensionality_wkt_does_not_raise(heavy, l
 def test_st_transformcrs_parity_mixed_dim_wkt_null_cases(heavy, light, geom, source):
     """Mixed-dimensionality WKT x NULL path: both tiers return NULL, no raise.
 
-    Pre-Task-2/3 both tiers returned the input unchanged (degrade).  The new contract is
+    Before this contract both tiers returned the input unchanged (degrade).  The new contract is
     NULL for data conditions (unresolvable embedded SRID, no source CRS).
 
     The test is split from the bad-source-crs case, which now RAISES on both tiers.
@@ -823,7 +823,7 @@ def test_st_transformcrs_parity_mixed_dim_wkt_null_cases(heavy, light, geom, sou
 def test_st_transformcrs_parity_mixed_dim_wkt_bad_source_raises(heavy, light):
     """Mixed-dimensionality WKT x bad explicit source_crs: both tiers RAISE.
 
-    Pre-Task-2/3 both tiers returned the input unchanged (degrade).  The new contract is
+    Before this contract both tiers returned the input unchanged (degrade).  The new contract is
     RAISE for parameter conditions: an explicitly-provided source_crs that cannot be
     resolved is a caller error, so both tiers raise rather than silently degrading.
     """
@@ -1053,7 +1053,7 @@ def test_light_sql_surface_declares_binary(spark_with_jar, light):
 # CRS code runs and both heavy functions answer with the 3D geometry.
 _UNIFORM_ZM_SHAPES = [
     # Coordinates (15, 51) / (16, 52) are inside EPSG:32633's area_of_use (lon 12°–18°E).
-    # Changed from (11, 42)/(12, 43) after Tasks 2+3 added the domain-check.
+    # Changed from (11, 42)/(12, 43) after the domain-check was added.
     ("point", "POINT ZM (15 51 5 99)"),
     ("linestring", "LINESTRING ZM (15 51 5 99, 16 52 6 98)"),
     ("polygon", "POLYGON ZM ((15 51 5 99, 16 51 5 98, 16 52 5 97, 15 51 5 99))"),

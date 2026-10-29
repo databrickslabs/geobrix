@@ -24,7 +24,7 @@ reads only the stores it knows (local files, object stores, HTTP) and has no way
 ``ManifestStore``; zarr then quietly uses its own pipeline. So asking for
 ``pipeline="zarrs"`` on a manifest array is an error rather than a silent no-op, and the
 zarrs pipeline only ever decodes plain stores on a local path, which is where
-``engine="zarr"`` uses it. (Performance gate G1 found zarr-python over a ``ManifestStore``
+``engine="zarr"`` uses it. (A benchmark found zarr-python over a ``ManifestStore``
 many times slower than tensorstore on the same shards, because it opens a file per
 chunk; the native engine is the answer.)
 
@@ -397,7 +397,7 @@ def open_plain_array(
 
     ``pipeline`` is how the zarr engine decodes: ``"zarrs"``, ``"default"`` (zarr's own)
     or ``"auto"`` (zarrs when it is installed). Naming one makes the automatic engine
-    zarr; with ``engine="tensorstore"`` it is an error. Gate G1 measured zarrs slower than
+    zarr; with ``engine="tensorstore"`` it is an error. A benchmark measured zarrs slower than
     zarr's own pipeline for box reads over a Volume, so a reader that depends on it
     should measure.
     """

@@ -122,7 +122,7 @@ Commands follow **`gbx:<category>:<action>`**:
 |----------|---------|
 | `test` | Run tests (Scala, Python, docs, SQL docs, notebooks, function-info) |
 | `coverage` | Code coverage (Scala/Python, unit/docs, gaps, baseline, package-targeted) |
-| `data` | Sample data: download (essential/complete bundle), generate minimal bundle, stage JAR/wheel to Volume |
+| `data` | Sample data: download (essential/complete bundle), generate minimal bundle, stage sample data and JAR/wheel to Volume |
 | `docs` | Documentation server (start, stop, restart, dev, serve-local, static-build, function-info) |
 | `docker` | Container lifecycle (exec, start, stop, restart, rebuild, attach) |
 | `ci` | CI / GitHub Actions: push, trigger, status, watch, logs, docs menu, setup |
@@ -161,12 +161,13 @@ Use the following by task; always prefer the command over manual shell for these
 
 **Data**
 
-Doc tests use the **in-repo minimal bundle** (no download step). Generate it once with `gbx:data:generate-minimal-bundle`; the Docker Volumes mount makes it available to tests. For full sample data locally, use `gbx:data:download`. Minimal-bundle Sentinel-2 rasters (and `*_byte.tif` variants) may appear black in QGIS or other viewers; the full-size Essential/Complete bundle rasters are the ones suited for visual inspection.
+Doc tests use the **in-repo minimal bundle** (no download step). Generate it once with `gbx:data:generate-minimal-bundle`; the Docker Volumes mount makes it available to tests. The one exception is the synthetic Zarr ERA5-like cube (`global/era5-weather/`): it is gitignored, so a fresh clone does not have it. Generate it with `gbx:data:generate-minimal-bundle --zarr-only`, or in a notebook with `write_era5_cube` from `databricks.labs.gbx.sample.zarr_era5` (`tree_digest` hashes a written store; two runs give the same digest). For full sample data locally, use `gbx:data:download`. Minimal-bundle Sentinel-2 rasters (and `*_byte.tif` variants) may appear black in QGIS or other viewers; the full-size Essential/Complete bundle rasters are the ones suited for visual inspection.
 
 | Command | When to use | What it does |
 |---------|-------------|--------------|
 | `gbx:data:download` | Need full sample data locally | Downloads essential and/or complete bundle to `sample-data/` |
-| `gbx:data:generate-minimal-bundle` | CI or doc tests; after full bundle if needed | Generates minimal bundle under `sample-data/Volumes/.../test-data/geobrix-examples/` by bbox extraction (NYC/London, `--bbox-size`, `--max-rows`); doc test commands use this, not a download step |
+| `gbx:data:generate-minimal-bundle` | CI or doc tests; after full bundle if needed | Generates minimal bundle under `sample-data/Volumes/.../test-data/geobrix-examples/` by bbox extraction (NYC/London, `--bbox-size`, `--max-rows`) plus a small synthetic ERA5-like Zarr cube (`global/era5-weather/`; `--zarr-only` writes just the cube); doc test commands use this, not a download step |
+| `gbx:data:stage-sample` | Stage a sample dataset (default: the Zarr ERA5-like cube) to a Volume | Needs `--profile`; uploads `global/era5-weather/` of the minimal bundle to `<volume-root>/geobrix-examples/` (default Volume `/Volumes/geospatial_docs/geobrix/sample-data`) and checks every size. Deletes only stale files inside the uploaded part of each `*.zarr` store (the whole store, or only the array with `--path <store>.zarr/<array>`), never other files, other datasets or the rest of the Volume; `--path` must be relative with no `..`; `--dry-run` lists the files and the stores it would prune without contacting a workspace (no `uv` or SDK needed) |
 | `gbx:data:stage-wheel` | Stage built JAR and wheel to Volumes | Builds JAR first (stage-jar) unless `GBX_BUNDLE_SKIP_JAR_UPLOAD=1` or `GBX_BUNDLE_SKIP_JAR=1` (either skips the JAR build and upload), then clears `python/geobrix/dist`, runs `python3 -m build`, stages wheel to `GBX_ARTIFACT_VOLUME/` (init-script dir; holds exactly one `geobrix-*.whl`) and the bundle volroot (bundle/%pip path); set `GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1` to skip wheel |
 | `gbx:data:stage-jar` | Stage built JAR to Volumes | Runs `mvn clean package -DskipTests`, stages product JAR to `GBX_ARTIFACT_VOLUME/` (init-script dir; holds exactly one `geobrix-*-jar-with-dependencies.jar`) and bench tests.jar to bundle volroot; set `GBX_BUNDLE_SKIP_JAR_UPLOAD=1` to build locally and skip the upload, or `GBX_BUNDLE_SKIP_JAR=1` to skip build and upload |
 
@@ -269,7 +270,7 @@ The **Scala** and **Python** build actions (`.github/actions/scala_build/` and `
 
 - **Apt** — Both actions restore `.cache/apt-archives` at the start of the GDAL step and save it at the end. Workflows cache `.cache/apt-archives` with a key derived from both action files, so one cache serves Scala and Python; changing either action’s apt steps invalidates the cache.
 - **Pip** — Both use the same pip cache key (`.ci-pip-cache-key`, created by the workflow from ref + matrix). That avoids duplicate pip installs when Scala runs first and Python reuses the same interpreter and cache.
-- **Maven** — Scala uses `setup-java` with `cache: 'maven'` and `cache-dependency-path: 'pom.xml'`.
+- **Maven** — Scala uses `setup-java` with `cache: 'maven'` and `cache-dependency-path: 'pom.xml'`. Every Maven call in CI is `./mvnw`, which runs the version pinned in `.mvn/wrapper/maven-wrapper.properties`; the dev image installs the same version, and `pom.xml` requires it as a minimum.
 
 The two actions intentionally mirror each other (same apt repos, same GDAL/natives, same pip stack: numpy, pyspark, gdal). Scala adds JDK, Maven, `zip`/`unzip`, and the JNI `.so` copy; Python adds pytest and `pip install python/geobrix[dev]`. **Lint (ScalaStyle, isort/black/flake8)** runs in CI on every build, but the build **fails on lint errors only for PRs targeting main**; pushes and PRs to other branches do not fail on lint. Config: `scalastyle-config.xml`, `python/geobrix/pyproject.toml`. Use **`gbx:lint:scalastyle`** and **`gbx:lint:python`** locally (or **`gbx:lint:python --fix`** with dev deps on the host). A future refactor could extract a single “setup GDAL + pip” composite used by both; for now the duplication is small and the structure is aligned for easy comparison.
 

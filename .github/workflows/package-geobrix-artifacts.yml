@@ -184,7 +184,13 @@ jobs:
           python-version: ${{ matrix.python }}
 
       - name: Authenticate for JFrog
+        id: jfrog
         uses: ./.github/actions/jfrog-auth
+
+      - name: Install the pinned Maven (wrapper)
+        uses: ./.github/actions/maven-wrapper
+        with:
+          jfrog-access-token: ${{ steps.jfrog.outputs.jfrog-access-token }}
 
       - name: Verify Maven dependency PGP signatures
         shell: bash
@@ -193,7 +199,7 @@ jobs:
       - name: build scala JAR (skip tests, no GDAL install)
         shell: bash
         run: |
-          mvn -C -q clean package -DskipTests -Dscoverage.skip -Dscalastyle.fail=false
+          ./mvnw -C -q clean package -DskipTests -Dscoverage.skip -Dscalastyle.fail=false
           ls -lh target/geobrix-*-jar-with-dependencies.jar
           python3 scripts/ci/check_jar_packaging.py target/geobrix-*-jar-with-dependencies.jar
 

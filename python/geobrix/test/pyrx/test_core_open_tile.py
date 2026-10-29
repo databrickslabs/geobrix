@@ -140,7 +140,7 @@ def test_open_tile_windowless_reads_full_extent(tmp_path):
 def test_tile_to_bytes_windowless_virtual_reads_full_extent(tmp_path):
     """_tile_to_bytes on a window=None virtual tile reads the full file extent.
 
-    Task 2 changed the behavior: window=None is now resolved to the full source
+    window=None is resolved to the full source
     extent rather than raising ValueError.  A deferred whole-file virtual tile
     (emitted by read() without an eager header open) must materialise correctly.
     """

@@ -6,8 +6,6 @@ pages (`docs/docs/api/*-functions.mdx`): **SQL** (default) / **Python (light)** 
 exists because the standard was learned the slow way through review — follow it up-front so the
 work is *standardizing*, not *figuring out how to standardize*.
 
-Full design notes are kept in the internal planning tree (`.superpowers/specs/`, not committed).
-
 ## The one rule everything follows
 
 **For each function there is ONE example, shared across all four tabs.** Same input fixture,

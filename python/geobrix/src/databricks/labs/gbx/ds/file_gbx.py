@@ -57,6 +57,7 @@ __all__ = [
     "_COG_DRIVER_MAX_BYTES",
     "_FILE_SUPPORT_CACHE",
     "_connect_aware_lru_sizing",
+    "session_free_stream_cap",
     "_open_via_file_ref",
     "_OpenerContext",
     "OpenResourceLRU",
@@ -592,7 +593,7 @@ def _accept_basename(
 
 
 # ---------------------------------------------------------------------------
-# Positive path filter helpers (Task 8b)
+# Positive path filter helpers
 # ---------------------------------------------------------------------------
 
 
@@ -1406,7 +1407,11 @@ def _connect_aware_lru_sizing(spark) -> tuple[int, int, int]:
         - Serverless worst case: 4 × 64 MiB = 256 MiB, well under ~1 GB task.
     """
     is_connect = spark is not None and "connect" in type(spark).__module__
+    return _lru_sizing(is_connect)
 
+
+def _lru_sizing(is_connect: bool) -> tuple[int, int, int]:
+    """``_connect_aware_lru_sizing`` once it is known whether the runtime is Connect."""
     # Read raw os.environ to distinguish "explicitly set" from "default".
     # Module-level constants already baked the env-or-default at import.
     stream_max_bytes_env = os.environ.get("GBX_STREAM_MAX_BYTES")
@@ -1424,6 +1429,21 @@ def _connect_aware_lru_sizing(spark) -> tuple[int, int, int]:
     max_count = 4
 
     return stream_max_bytes, lru_max_bytes, max_count
+
+
+def session_free_stream_cap() -> int:
+    """The stream cap (bytes) for code that has no session: a Python DataSource reader plans
+    in a worker with none, and ``_resolve_session_for_cap`` there starts a session of its
+    own (seconds) that is not the query's.
+
+    The runtime comes from the session-free probe ``raster_gbx`` sizes its tiles by
+    (``pyrx.core.budget.runtime_kind``): 64 MiB on Serverless, 256 MiB on classic, with
+    ``GBX_STREAM_MAX_BYTES`` winning in both. An undetected runtime is Serverless, the
+    safe side.
+    """
+    from databricks.labs.gbx.pyrx.core.budget import runtime_kind
+
+    return _lru_sizing(runtime_kind() == "serverless")[0]
 
 
 def _open_via_file_ref(fr, rasterio, stream_max_bytes=_GBX_STREAM_MAX_BYTES):
@@ -1662,7 +1682,7 @@ def open_for_read(
 
     Returns:
         The source path unchanged. FILE routing is the caller's responsibility
-        (see Task 4 for reader/writer layer integration). Caller adapts based on
+        (the reader/writer layers integrate it). Caller adapts based on
         the resolved tier and access mode.
 
     Raises:
@@ -2131,7 +2151,7 @@ def resolve_file_table(
     **Ordering:** unless ``skip_ordering=True``, the result is sorted by
     ``source`` ascending with NULLs last (``F.col("source").asc_nulls_last()``)
     so that tiles from the same source file land in the same partition, which
-    amortizes per-source open costs (the T8 convention for table reads).
+    amortizes per-source open costs (the sort-by-source convention for table reads).
 
     Args:
         spark: Active SparkSession (driver-side; never called from a worker).

@@ -123,7 +123,7 @@ def test_list_files_strips_file_scheme(tree):
 
 
 # ---------------------------------------------------------------------------
-# T1 additions: recursive=False, raise_on_empty=False, internal retry, multi-ext
+# Additions: recursive=False, raise_on_empty=False, internal retry, multi-ext
 # ---------------------------------------------------------------------------
 
 
@@ -177,7 +177,7 @@ def test_multi_extension_alternation_regex(tree):
 
 
 # ---------------------------------------------------------------------------
-# Item 1 (SP4 final-fix): non-recursive call on a genuinely missing directory
+# Non-recursive call on a genuinely missing directory
 # ---------------------------------------------------------------------------
 # Before this fix, the non-recursive branch called os.listdir(missing) which raised
 # FileNotFoundError, and _retry_transient caught it and retried 10× (~22 s of linear

@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 830" width="1500" height="830" style="font-family: Inter, -apple-system, system-ui, sans-serif;"><defs><marker id="arrow-5A6878" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5A6878"/></marker><marker id="arrow-1F6FB5" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1F6FB5"/></marker><marker id="arrow-7A5AA6" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#7A5AA6"/></marker><marker id="arrow-2F8F4E" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2F8F4E"/></marker><marker id="arrow-D2441F" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#D2441F"/></marker><marker id="arrow-0F8E8B" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0F8E8B"/></marker><marker id="arrow-B7791F" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#B7791F"/></marker><marker id="arrow-1B3139" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1B3139"/></marker><marker id="arrow-5A6878" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5A6878"/></marker><filter id="shadow" x="-5%" y="-5%" width="110%" height="115%"><feDropShadow dx="0" dy="2" stdDeviation="5" flood-color="#0F1B2A" flood-opacity="0.08"/></filter><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FAFBFC"/><stop offset="1" stop-color="#F1F4F8"/></linearGradient><pattern id="hatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="7" stroke="#D2441F" stroke-width="2" stroke-opacity="0.45"/></pattern></defs><rect width="1500" height="830" fill="url(#bg)"/>
+<text x="40" y="60" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="28" font-weight="800" fill="#0F1B2A" text-anchor="start">What a vacuum keeps</text><text x="40" y="88" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="14" font-weight="400" fill="#3F4D5E" text-anchor="start">A file goes only when no readable version, no tag and no write in flight needs it</text>
+<rect x="740" y="134" width="700" height="448" rx="10" fill="#E3EEF8" fill-opacity="0.55"/>
+<text x="1090.0" y="154" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#1F6FB5" text-anchor="middle">retain window (default 7 days): every version here stays readable</text>
+<text x="485.0" y="154" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#7A8794" text-anchor="middle">older than retain</text>
+<line x1="230" y1="180" x2="1440" y2="180" stroke="#1B3139" stroke-width="2.5" marker-end="url(#arrow-1B3139)"/>
+<text x="1440" y="202" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#1B3139" text-anchor="end">now</text>
+<text x="230" y="202" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="400" fill="#5A6878" text-anchor="start">time →</text>
+<circle cx="270" cy="180" r="8" fill="#7A5AA6"/>
+<text x="270" y="166" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#7A5AA6" text-anchor="middle">v1</text>
+<circle cx="390" cy="180" r="8" fill="#7A5AA6"/>
+<text x="390" y="166" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#7A5AA6" text-anchor="middle">v2</text>
+<circle cx="520" cy="180" r="8" fill="#7A5AA6"/>
+<text x="520" y="166" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#7A5AA6" text-anchor="middle">v3</text>
+<circle cx="640" cy="180" r="8" fill="#7A5AA6"/>
+<text x="640" y="166" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#7A5AA6" text-anchor="middle">v4</text>
+<circle cx="840" cy="180" r="8" fill="#7A5AA6"/>
+<text x="840" y="166" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#7A5AA6" text-anchor="middle">v5</text>
+<circle cx="990" cy="180" r="8" fill="#7A5AA6"/>
+<text x="990" y="166" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#7A5AA6" text-anchor="middle">v6</text>
+<circle cx="1140" cy="180" r="8" fill="#7A5AA6"/>
+<text x="1140" y="166" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#7A5AA6" text-anchor="middle">v7</text>
+<circle cx="1300" cy="180" r="8" fill="#7A5AA6"/>
+<text x="1300" y="166" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#7A5AA6" text-anchor="middle">v8</text>
+<circle cx="640" cy="180" r="11.5" fill="none" stroke="#0F8E8B" stroke-width="2.5"/>
+<text x="726" y="206" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="700" fill="#0F8E8B" text-anchor="end">v4 is live at the horizon: it stays readable</text>
+<line x1="740" y1="164" x2="740" y2="592" stroke="#D2441F" stroke-width="2.4" stroke-dasharray="7 5"/>
+<text x="732" y="610" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#D2441F" text-anchor="end">the horizon</text>
+<text x="732" y="626" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#5A6878" text-anchor="end">versions older than the one live here raise ZarrVersionUnavailable</text>
+<text x="216" y="250" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#1B3139" text-anchor="end">pack of v1's chunks</text>
+<rect x="270" y="230" width="250" height="30" rx="7" ry="7" fill="#FCE9E2" stroke="#D2441F" stroke-width="1.8" stroke-dasharray="5 3"/>
+<rect x="270" y="230" width="250" height="30" rx="7" fill="url(#hatch)"/>
+<text x="280" y="250" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#D2441F" text-anchor="start">superseded</text>
+<text x="532" y="250" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="400" fill="#1B3139" text-anchor="start">replaced before the horizon: deleted</text>
+<text x="216" y="302" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#1B3139" text-anchor="end">pack of v2's chunks</text>
+<rect x="390" y="282" width="450" height="30" rx="7" ry="7" fill="#E3EEF8" stroke="#1F6FB5" stroke-width="1.8"/>
+<text x="400" y="302" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#1F6FB5" text-anchor="start">retained</text>
+<text x="852" y="302" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="400" fill="#1B3139" text-anchor="start">replaced at v5, inside the window: v4, live at the horizon, still reads it</text>
+<text x="216" y="354" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#1B3139" text-anchor="end">pack of v3's chunks</text>
+<rect x="520" y="334" width="920" height="30" rx="7" ry="7" fill="#DCEFE0" stroke="#2F8F4E" stroke-width="1.8"/>
+<text x="530" y="354" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#2F8F4E" text-anchor="start">live</text>
+<text x="756" y="354" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="400" fill="#1B3139" text-anchor="start">a current row points at it</text>
+<text x="216" y="406" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#1B3139" text-anchor="end">pack of v4's chunks</text>
+<rect x="640" y="386" width="800" height="30" rx="7" ry="7" fill="#DCEFE0" stroke="#2F8F4E" stroke-width="1.8"/>
+<text x="650" y="406" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#2F8F4E" text-anchor="start">live</text>
+<text x="756" y="406" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="400" fill="#1B3139" text-anchor="start">a current row points at it</text>
+<text x="216" y="458" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#1B3139" text-anchor="end">tagged version</text>
+<rect x="270" y="438" width="1170" height="30" rx="7" ry="7" fill="#E4F3F2" stroke="#0F8E8B" stroke-width="1.8"/>
+<text x="280" y="458" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#0F8E8B" text-anchor="start">tagged</text>
+<text x="756" y="458" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="400" fill="#1B3139" text-anchor="start">a tag row points at it: kept until the tag is removed</text>
+<text x="216" y="510" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#1B3139" text-anchor="end">failed write</text>
+<rect x="990" y="490" width="450" height="30" rx="7" ry="7" fill="#FBF1DC" stroke="#B7791F" stroke-width="1.8"/>
+<text x="1000" y="510" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#B7791F" text-anchor="start">uncommitted</text>
+<text x="1100" y="510" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="400" fill="#1B3139" text-anchor="start">never committed: kept for retain, then deleted</text>
+<text x="216" y="562" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#1B3139" text-anchor="end">write in flight</text>
+<rect x="1380" y="542" width="60" height="30" rx="7" ry="7" fill="#EEF1F5" stroke="#7A8794" stroke-width="1.8"/>
+<text x="1390" y="562" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="800" fill="#7A8794" text-anchor="start">recent</text>
+<text x="1368" y="562" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="400" fill="#1B3139" text-anchor="end">under 1 hour old: always kept</text>
+<rect x="40" y="652" width="1420" height="130" rx="12" ry="12" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#shadow)"/>
+<text x="60" y="680" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="14" font-weight="800" fill="#0F1B2A" text-anchor="start">The manifest table keeps its own history to match</text>
+<text x="60.0" y="710" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="700" fill="#7A5AA6" text-anchor="start">geobrix.zarr.retain</text>
+<text x="60.0" y="732" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="800" fill="#0F1B2A" text-anchor="start">7 days</text>
+<text x="60.0" y="750" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="400" fill="#3F4D5E" text-anchor="start">how long old versions stay readable</text>
+<text x="405.0" y="710" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="700" fill="#7A5AA6" text-anchor="start">delta.deletedFileRetentionDuration</text>
+<text x="405.0" y="732" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="800" fill="#0F1B2A" text-anchor="start">at least retain</text>
+<text x="405.0" y="750" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="400" fill="#3F4D5E" text-anchor="start">never lowered below the store's retain</text>
+<text x="750.0" y="710" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="700" fill="#7A5AA6" text-anchor="start">delta.logRetentionDuration</text>
+<text x="750.0" y="732" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="800" fill="#0F1B2A" text-anchor="start">max(30 days, retain)</text>
+<text x="750.0" y="750" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="400" fill="#3F4D5E" text-anchor="start">Delta history lasts at least as long</text>
+<text x="1095.0" y="710" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#7A5AA6" text-anchor="start">predictive optimization</text>
+<text x="1095.0" y="732" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="800" fill="#0F1B2A" text-anchor="start">may VACUUM the table</text>
+<text x="1095.0" y="750" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="400" fill="#3F4D5E" text-anchor="start">so GeoBrix sets the properties on the left and</text><text x="1095.0" y="764" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="400" fill="#3F4D5E" text-anchor="start">honours its own horizon</text>
+<text x="1460" y="808" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#7A8794" text-anchor="end">GeoBrix · Zarr stores</text>
+</svg>

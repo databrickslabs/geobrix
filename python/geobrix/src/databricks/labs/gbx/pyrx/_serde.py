@@ -15,7 +15,7 @@ a plain materialized tile. The ``build_tile`` helper now emits the full v2 struc
 ``TILE_SCHEMA`` below is the legacy 3-field struct, retained **only as a
 read/load INPUT schema** for the reader/writer v1 path (GeoBrix reads/loads v1 OR
 v2 tiles, and OUTPUTS only v2). No tile-returning function emits it — outputs are
-always ``V2_TILE_SCHEMA`` (enforced by G1, test_v2_tile_output_invariant.py).
+always ``V2_TILE_SCHEMA`` (enforced by test_v2_tile_output_invariant.py).
 """
 
 # Before the pyspark imports: one clear error when PySpark is missing.

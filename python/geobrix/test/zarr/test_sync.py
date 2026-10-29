@@ -525,6 +525,107 @@ def test_publish_writes_base_and_repoints(spark_delta, registered, tmp_path, fmt
     assert _changes(gbx_zarr_sync(spark_delta, table)) == set()
 
 
+def test_publish_records_the_time_a_volume_settles_on(
+    spark_delta, registered, monkeypatch
+):
+    """A Volume moves an object's time up to the next whole second after the rename has
+    returned (measured on DBR 19). The identity a publish records must be that one, or every
+    read of what it published raises drift."""
+    store, table = registered(sharded=True, writable=True)
+    _overlay_write(spark_delta, table)
+    real, settled = os.stat, set()
+
+    def late(path):
+        st = real(path)
+        if (
+            path not in settled
+        ):  # the first look sees the local time, the file keeps the next
+            settled.add(path)
+            moved = -(-st.st_mtime_ns // 1_000_000_000) * 1_000_000_000
+            os.utime(path, ns=(st.st_atime_ns, moved))
+        return st
+
+    monkeypatch.setattr(_sync, "_stat", late)
+    publish(spark_delta, table)
+    assert settled  # the objects went through the late stat
+    got = H.read_variable(spark_delta, table, "t2m")
+    np.testing.assert_array_equal(got[12:24, 0:37, 72:144], 3.0)
+    assert _changes(gbx_zarr_sync(spark_delta, table)) == set()
+
+
+@pytest.mark.parametrize(
+    "n, stat_ms, early_whole, never",
+    [
+        (1, 0, False, False),  # the time settles 0.3 s after the rename
+        (1, 0, False, True),  # it never does: bounded, and a warning
+        (600, 5, False, False),  # a big publish: the first look alone takes 3 s
+        (1, 0, True, False),  # a local time that fell on a whole second, then settles
+    ],
+    ids=["settles", "never-does", "big-batch", "whole-second-before-settling"],
+)
+def test_a_volume_object_is_looked_at_until_its_time_has_settled(
+    monkeypatch, caplog, n, stat_ms, early_whole, never
+):
+    """On a Volume a time with a fraction is not the final one, nor is a whole second seen
+    within a second of the write: those objects are looked at again (only those), for at most
+    ``_SETTLE_SECONDS`` after the first look at all of them, then the publish warns."""
+    now, looks = [0.0], [0]
+    base_s = 1_792_741_018
+    paths = [f"/Volumes/c/s/v/store/t2m/c/0/0/{i}" for i in range(n)]
+    written = {p: 0.002 * i for i, p in enumerate(paths)}  # renamed 2 ms apart
+    delay = 0.8 if n > 1 else 0.3
+    settles = {p: None if never else w + delay for p, w in written.items()}
+
+    class Stat:
+        def __init__(self, ns):
+            self.st_mtime_ns, self.st_size = ns, 21
+
+    def stat(p):
+        looks[0] += 1
+        now[0] += stat_ms / 1000
+        late = settles[p] is not None and now[0] >= settles[p]
+        early = base_s * 10**9 + (0 if early_whole else 701_000_000)
+        return Stat((base_s + 1) * 10**9 if late else early)
+
+    monkeypatch.setattr(_sync, "_stat", stat)
+    monkeypatch.setattr(_sync, "_sleep", lambda s: now.__setitem__(0, now[0] + s))
+    monkeypatch.setattr(_sync, "_clock", lambda: now[0])
+    monkeypatch.setattr(_sync, "_WRITTEN", dict(written), raising=False)
+    with caplog.at_level("WARNING", logger=_sync.__name__):
+        got = _sync._settle(paths)
+    settled = f"{(base_s + 1) * 1000}:21"
+    early = f"{base_s * 1000 + (0 if early_whole else 701)}:21"
+    assert set(got.values()) == {early if never else settled}
+    assert any("settled" in r.getMessage() for r in caplog.records) == never
+    first_pass = n * stat_ms / 1000
+    assert now[0] <= 2 * first_pass + _sync._SETTLE_SECONDS + _sync._SETTLE_STEP
+    assert (
+        looks[0] < 2 * n or n == 1
+    )  # objects that had settled are not looked at again
+
+
+def test_only_the_objects_a_publish_settles_are_remembered(tmp_path, monkeypatch):
+    """The write times kept for the settle are for the objects a publish records an identity
+    for: a document (or a reference file) is never kept, an object is forgotten once settled,
+    and a long-lived driver evicts the oldest entries instead of growing."""
+    now = [0.0]
+    monkeypatch.setattr(
+        _sync, "_VOLUMES", str(tmp_path) + "/"
+    )  # these paths count as a Volume
+    monkeypatch.setattr(_sync, "_WRITTEN", {})
+    monkeypatch.setattr(_sync, "_WRITTEN_MAX", 4)
+    monkeypatch.setattr(_sync, "_clock", lambda: now[0])
+    monkeypatch.setattr(_sync, "_sleep", lambda s: now.__setitem__(0, now[0] + s))
+    _sync._atomic_write(str(tmp_path / "zarr.json"), [b"{}"], "w1")  # a document
+    assert _sync._WRITTEN == {}
+    objects = [str(tmp_path / "t2m" / "c" / str(i)) for i in range(6)]
+    for o in objects:
+        _sync._atomic_write(o, [b"x"], "w1", track=True)
+    assert list(_sync._WRITTEN) == objects[2:]  # the two oldest were evicted
+    _sync._settle(objects[2:])  # (a local file never shows a whole second: it warns)
+    assert _sync._WRITTEN == {}
+
+
 def test_publish_refuses_after_drift(spark_delta, registered):
     store, table = registered(sharded=True, writable=True)
     _overlay_write(spark_delta, table)
@@ -568,4 +669,71 @@ def test_concurrent_publish_conflicts(spark_delta, registered, monkeypatch):
         release.set()
         thread.join(300)
     assert "error" not in out and out["version"]
+    assert _live(spark_delta, table, kind="lock") == []
+
+
+def _publish_whose_commit_meets(spark, table, monkeypatch, landing):
+    """Run ``publish`` with ``landing()`` happening after its files are in the store and
+    before its commit: the way a write that reads the overlay before the publish does.
+    """
+    original, fired = _sync._restamp, []
+
+    def land_first(rows, base):
+        if not fired:
+            fired.append(1)
+            landing()
+        return original(rows, base)
+
+    monkeypatch.setattr(_sync, "_restamp", land_first)
+    return publish(spark, table)
+
+
+def test_a_write_that_lands_during_a_publish_fails_it_with_a_publish_fix(
+    spark_delta, registered, monkeypatch
+):
+    """The generic fix of a conflicting commit ("re-read ... and write again") is wrong for a
+    publish: its files are already in the store, so it says to sync and publish again.
+    """
+    store, table = registered(sharded=True, writable=True)
+    _overlay_write(spark_delta, table, value=3.0)
+    with pytest.raises(ZarrWriteConflict) as e:
+        _publish_whose_commit_meets(
+            spark_delta,
+            table,
+            monkeypatch,
+            lambda: _overlay_write(spark_delta, table, value=5.0),
+        )
+    err = e.value
+    assert "already wrote" in err.fix and "in the store" in err.fix
+    assert f"gbx_zarr_sync({table!r})" in err.fix and "publish again" in err.fix
+    assert "write again" not in err.fix
+    assert err.keys and err.winner  # what the conflicting commit told, kept
+    assert _live(spark_delta, table, kind="lock") == []  # the lock is released
+    monkeypatch.undo()
+    gbx_zarr_sync(spark_delta, table)  # what the Fix says, then it goes through
+    publish(spark_delta, table)
+    np.testing.assert_array_equal(
+        zarr.open_array(str(store / "t2m"))[12:24, 0:37, 72:144], 5.0
+    )
+
+
+def test_a_delta_rejection_of_the_publish_commit_is_a_zarr_error_with_the_publish_fix(
+    spark_delta, registered, monkeypatch
+):
+    """``commit`` raises ``ConcurrentCommit`` (not a ``ZarrError``) when Delta rejects the
+    MERGE of a writer that really raced it; a publish says what to do about it."""
+    _, table = registered(sharded=True, writable=True)
+    _overlay_write(spark_delta, table)
+    real = M.commit
+
+    def rejected(spark, name, rows, *, write_id, meta, **kw):
+        if meta.get("mode") == "publish":
+            raise M.ConcurrentCommit("Delta reported ConcurrentAppendException")
+        return real(spark, name, rows, write_id=write_id, meta=meta, **kw)
+
+    monkeypatch.setattr(M, "commit", rejected)
+    with pytest.raises(ZarrWriteConflict) as e:
+        publish(spark_delta, table)
+    assert "already wrote" in e.value.fix and "publish again" in e.value.fix
+    assert "ConcurrentAppendException" in str(e.value)
     assert _live(spark_delta, table, kind="lock") == []

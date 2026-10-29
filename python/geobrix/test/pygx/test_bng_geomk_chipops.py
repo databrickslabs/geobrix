@@ -1,4 +1,4 @@
-"""Spark-free unit tests for BNG geometry-centric neighborhood + chip ops (Task 7).
+"""Spark-free unit tests for BNG geometry-centric neighborhood + chip ops.
 
 Covers ``geometryKRing``/``geometryKLoop`` (the k_ring/k_loop of cells covering a
 geometry) and the chip-struct ops ``cellIntersection``/``cellUnion`` ported from
@@ -282,7 +282,7 @@ def test_geomkring_boundary_out_grid_aligned_excludes_interior():
 
 
 # ---------------------------------------------------------------------------
-# Mode param — Task 3
+# Mode param
 # ---------------------------------------------------------------------------
 
 

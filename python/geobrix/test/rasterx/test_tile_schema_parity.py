@@ -1,4 +1,4 @@
-"""G2 — standing parity guard: the light-tier v2 tile schema equals the heavy-tier
+"""Standing parity guard: the light-tier v2 tile schema equals the heavy-tier
 v2 tile schema, field-for-field.
 
 Prevents the two tiers silently diverging — the class of bug that left the light

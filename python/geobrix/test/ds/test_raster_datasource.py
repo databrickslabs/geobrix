@@ -110,7 +110,7 @@ def test_read_directory_one_partition_per_file(spark, tmp_path):
 def test_corrupt_file_fails_fast_materialized(spark, tmp_path):
     """A corrupt file raises at collect() time when using materialised tiles.
 
-    Task 2 note: with virtualTiles=true (the default), read() now defers the
+    Note: with virtualTiles=true (the default), read() defers the
     rasterio.open for whole-file virtual tiles, so a corrupt file only raises
     when the tile is materialized by a downstream pixel op (not at collect()
     time).  This test uses virtualTiles=false to preserve "fails fast" coverage
@@ -445,7 +445,7 @@ def test_file_and_cog_registered():
 
 
 # ---------------------------------------------------------------------------
-# Task 4: session-free enumeration via file_gbx core
+# Session-free enumeration via file_gbx core
 # ---------------------------------------------------------------------------
 
 

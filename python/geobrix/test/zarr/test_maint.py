@@ -19,6 +19,7 @@ xr = pytest.importorskip("xarray")
 
 from test.zarr import _helpers as H  # noqa: E402
 
+from databricks.labs.gbx.zarr import _filemode as FM  # noqa: E402
 from databricks.labs.gbx.zarr import _maint  # noqa: E402
 from databricks.labs.gbx.zarr import _write  # noqa: E402
 from databricks.labs.gbx.zarr import _manifest as M  # noqa: E402
@@ -625,7 +626,14 @@ def test_a_write_in_flight_keeps_its_files_from_a_vacuum_unless_forced(
 
 @pytest.mark.parametrize(
     "case",
-    ["registered", "foreign-owner", "read-only", "foreign-file", "nested-store"],
+    [
+        "registered",
+        "foreign-owner",
+        "read-only",
+        "foreign-file",
+        "nested-store",
+        "nested-store-no-marker",
+    ],
 )
 def test_vacuum_never_touches_base_or_unowned_root(
     spark_delta, drop, tmp_path, no_hooks, monkeypatch, case
@@ -646,7 +654,7 @@ def test_vacuum_never_touches_base_or_unowned_root(
             gbx_zarr_vacuum(spark_delta, table)
         assert any((root / "data").rglob("*.zpack"))
         return
-    if case == "nested-store":
+    if case.startswith("nested-store"):
         table, root, _ = _store(spark_delta, drop, tmp_path, label="outer")
         inner = _table("inner")
         drop(inner)
@@ -654,12 +662,18 @@ def test_vacuum_never_touches_base_or_unowned_root(
         gbx_zarr_write(
             _cube(), inner, root=str(nested), chunks=CHUNKS, spark=spark_delta
         )
+        bare = case.endswith(
+            "no-marker"
+        )  # the marker is the note: the ledger still claims
+        if bare:
+            (nested / OWNER_MARKER).unlink()
         for p in nested.rglob("*"):
             os.utime(p, (old, old))
         mine = _hashes(nested)
         got = _reasons(gbx_zarr_vacuum(spark_delta, table))
         assert not [f for f in got if f.startswith("data/nested/")]
-        assert _hashes(nested) == mine and OWNER_MARKER in mine
+        assert _hashes(nested) == mine and (OWNER_MARKER in mine) == (not bare)
+        assert any(f.endswith(".zpack") for f in mine)
         assert H.read_variable(spark_delta, inner, "t2m").shape == (48, 10, 12)
         return
     store = make_era5_like(tmp_path / "base.zarr", zarr_format=3)
@@ -720,12 +734,46 @@ def test_vacuum_retain_floor_and_malformed_retain(
         gbx_zarr_vacuum(spark_delta, table)
 
 
-def test_vacuum_of_a_file_mode_managed_store_runs_delta_vacuum(
+def test_a_dry_run_vacuum_restores_nothing_and_reads_a_read_only_root(
     spark_delta, drop, tmp_path
 ):
-    """Ruling Z10: the retention property is set (never below the store's retain), then a
+    """`dry_run=True` changes nothing: with the marker gone it reads the ledger and passes,
+    without writing the marker (so it also works on a root it cannot write). A real run puts
+    the marker back. With neither marker nor ledger a dry run cannot show who owns the root,
+    and says so."""
+    import shutil
+
+    table, root, _ = _store(spark_delta, drop, tmp_path)
+    (root / OWNER_MARKER).unlink()
+    listing = sorted(p.relative_to(root).as_posix() for p in root.rglob("*"))
+    root.chmod(0o555)
+    try:
+        rows = gbx_zarr_vacuum(spark_delta, table, dry_run=True).collect()
+    finally:
+        root.chmod(0o755)
+    assert (
+        rows
+        and sorted(p.relative_to(root).as_posix() for p in root.rglob("*")) == listing
+    )
+    assert not (root / OWNER_MARKER).exists()
+
+    shutil.rmtree(root / "_gbx_owner")
+    with pytest.raises(ZarrOwnershipError, match="no owner marker") as e:
+        gbx_zarr_vacuum(spark_delta, table, dry_run=True)
+    assert "dry run" in e.value.fix and not (root / OWNER_MARKER).exists()
+
+    gbx_zarr_vacuum(spark_delta, table)  # a real run claims the root again
+    assert (root / OWNER_MARKER).exists() and (root / "_gbx_owner").is_dir()
+
+
+def test_vacuum_of_a_file_mode_managed_store_runs_delta_vacuum(
+    spark_delta, drop, tmp_path, monkeypatch
+):
+    """The retention property is set (never below the store's retain), then a
     plain VACUUM runs, never a RETAIN clause, so retentionDurationCheck is never touched.
-    Another file mode that GeoBrix does not write yet is refused."""
+    GeoBrix does not write the files of a managed store."""
+    monkeypatch.setattr(M, "file_column_type", lambda mode: "STRING")  # no FILE in OSS
+    monkeypatch.setattr(FM, "file_supported", lambda spark: True)  # a FILE runtime
     table = _table("fm")
     drop(table)
     M.create_manifest(
@@ -743,15 +791,8 @@ def test_vacuum_of_a_file_mode_managed_store_runs_delta_vacuum(
     assert props[M.HORIZON_PROP]
     assert {r["reason"] for r in rows} <= {"delta"}
 
-    other = _table("fe")
-    drop(other)
-    M.create_manifest(
-        spark_delta,
-        other,
-        M.StoreProps("managed", str(tmp_path / "fe"), None, True, "external", "7 days"),
-    )
-    with pytest.raises(ZarrUnsupported, match="external"):
-        gbx_zarr_vacuum(spark_delta, other)
+    with pytest.raises(ZarrUnsupported, match="managed"):
+        gbx_zarr_optimize(spark_delta, table)
 
 
 # --- history -----------------------------------------------------------------------------

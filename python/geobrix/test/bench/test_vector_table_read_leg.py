@@ -1,4 +1,4 @@
-"""Tests for run_vector_table_read_sweep (Task 5: vector FILE-column-table read leg).
+"""Tests for run_vector_table_read_sweep (vector FILE-column-table read leg).
 
 Covers:
   - fuse mode returns na_by_design without calling vector_file_read

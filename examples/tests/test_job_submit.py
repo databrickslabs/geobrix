@@ -11,6 +11,7 @@ saw an error and retried.
 
 import ast
 import pathlib
+import re
 import sys
 import types
 from itertools import count
@@ -232,6 +233,79 @@ def test_local_file_errors_are_not_retried(exc):
         _job_submit.submit_once(w, run_name="nb")
 
     assert len(attempts) == 1
+
+
+# ------------------------------------------- where a launcher uploads its runner notebook
+
+
+def _workspace_of(user_name, calls=None):
+    """A workspace client whose current user is ``user_name`` (no network)."""
+
+    def me():
+        if calls is not None:
+            calls.append("me")
+        return SimpleNamespace(user_name=user_name)
+
+    return SimpleNamespace(current_user=SimpleNamespace(me=me))
+
+
+def test_the_runner_dir_defaults_to_the_callers_own_workspace_home(monkeypatch):
+    monkeypatch.delenv("GBX_RUNNER_DIR", raising=False)
+
+    path = _job_submit.runner_dir(_workspace_of("someone.else@example.com"))
+
+    assert path.startswith("/Workspace/Users/someone.else@example.com/")
+    assert path == "/Workspace/Users/someone.else@example.com/GeoBrix/runners"
+
+
+@pytest.mark.parametrize("override", ["/Workspace/Users/me@x.com/mine", "/Shared/runners"])
+def test_a_runner_dir_the_caller_passed_wins_and_asks_nobody(monkeypatch, override):
+    monkeypatch.setenv("GBX_RUNNER_DIR", override)
+    calls = []
+
+    path = _job_submit.runner_dir(_workspace_of("someone.else@example.com", calls))
+
+    assert path == override
+    assert calls == []  # the current user is looked up only when it is needed
+
+
+def test_an_empty_runner_dir_counts_as_not_passed(monkeypatch):
+    monkeypatch.setenv("GBX_RUNNER_DIR", "")
+
+    path = _job_submit.runner_dir(_workspace_of("a@b.com"))
+
+    assert path.startswith("/Workspace/Users/a@b.com/")
+
+
+def test_no_launcher_or_smoke_notebook_names_a_real_workspace_user():
+    """A hard-coded home folder only works for its owner. The example env file's
+    ``your-email@...`` placeholder and ``example.com`` addresses in usage text are fine."""
+    pattern = re.compile(r"/Users/(?!your-email@)[\w.+-]+@databricks\.com")
+    hits = [
+        f"{path.name}:{n}"
+        for path in sorted([*TESTS_DIR.glob("*.py"), *TESTS_DIR.glob("*.ipynb")])
+        if path.name != pathlib.Path(__file__).name
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if pattern.search(line)
+    ]
+    assert hits == []
+
+
+@pytest.mark.parametrize(
+    "launcher",
+    [
+        "_netcdf_diag.py",
+        "_stage_bench_corpora.py",
+        "_stage_distinct_var_corpus.py",
+        "_stage_s5p_netcdf_corpus.py",
+        "netcdf_gdal_cluster_validate.py",
+    ],
+)
+def test_the_launchers_that_upload_a_runner_notebook_ask_for_the_runner_dir(launcher):
+    source = (TESTS_DIR / launcher).read_text(encoding="utf-8")
+
+    assert "runner_dir(w)" in source
+    assert 'environ.get("GBX_RUNNER_DIR"' not in source  # the override lives in the helper
 
 
 # ------------------------------------------------------ the notebook runner end to end

@@ -231,7 +231,7 @@ def _encoded_size_bytes(ds) -> int:
     # or returned to callers. Compression here would only change the estimate
     # vs the uncompressed-size contract heavy uses.
     """
-    profile = ds.profile.copy()
+    profile = _comp.source_profile(ds.profile, unless_jpeg=True)
     profile.update(driver="GTiff")
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:

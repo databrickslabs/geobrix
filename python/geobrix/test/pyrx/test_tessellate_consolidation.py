@@ -41,7 +41,7 @@ _GOLDEN = {
     ("quadbin", "centroid"): {"count": 30, "digest": "ab5d473d48ab0f7d"},
     ("bng", "covering"): {"count": 9, "digest": "3ad7e348dd33093d"},
     ("bng", "centroid"): {"count": 9, "digest": "3ad7e348dd33093d"},
-    # Custom entries: captured 2026-09-10 from the verified-correct Task 8 implementation.
+    # Custom entries: captured 2026-09-10 from the verified-correct implementation.
     # Grid: no-CRS raster (32×32 px, origin (0,200), px=6.25) over bounds (0,0,200,200),
     # cell_splits=2, root_cell_size=200, srid=-1, resolution=1 → 4 cells of 100×100.
     # Sanity: 6.25m pixels are well within 100m cells; no boundary overlap.
@@ -202,7 +202,7 @@ def test_iter_tessellate_invalid_grid_raises():
 
 
 # ---------------------------------------------------------------------------
-# Custom-grid golden regression tests (Task 8)
+# Custom-grid golden regression tests
 # ---------------------------------------------------------------------------
 
 

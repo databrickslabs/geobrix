@@ -700,8 +700,8 @@ def iter_tessellate(
         coverage:   Controls whether covered-but-empty (all-NoData) cells are
                     emitted.  ``None`` (default) uses the mode-appropriate
                     legacy default: ``"complete"`` for covering (preserves the
-                    pre-Task-8 behaviour of emitting all-NoData chips) and
-                    ``"sparse"`` for centroid (preserves the pre-Task-8
+                    earlier behaviour of emitting all-NoData chips) and
+                    ``"sparse"`` for centroid (preserves the earlier
                     behaviour of emitting only cells with valid pixels).
                     Pass explicitly to override.
         conf:       ``CustomGridConf`` instance.  Required when

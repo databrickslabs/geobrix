@@ -132,6 +132,14 @@ rsync -a \
     --from0 --files-from=- \
     "$PROJECT_ROOT/" "$WORKSPACE/"
 
+# Real CI runs every Maven call as ./mvnw, which downloads the pinned Maven through JFrog. Neither
+# is available in the local runner image, which bakes the same Maven version (Dockerfile.gha-runner)
+# plus the proxy settings. Give the mirror an ./mvnw that runs it. rsync hardlinked the real
+# mvnw into the mirror, so unlink it first: writing through the link would replace the real file.
+rm -f "$WORKSPACE/mvnw"
+printf '#!/bin/sh\nexec mvn "$@"\n' > "$WORKSPACE/mvnw"
+chmod +x "$WORKSPACE/mvnw"
+
 # Now drop .github/ in fresh, with stub overlays applied.
 cp -R "$PROJECT_ROOT/.github" "$WORKSPACE/.github"
 cp "$STUB_FILE" "$WORKSPACE/.github/actions/jfrog-auth/action.yml"
@@ -197,8 +205,8 @@ echo "🔧 Patching mvn invocations: add -Dscoverage.scalacPluginVersion=2.3.0 i
 for af in "$WORKSPACE"/.github/actions/scala_build/action.yml; do
     [ -f "$af" ] || continue
     sed -i.bak \
-        -e 's|mvn -T 1C -C -q clean scoverage:test|mvn -T 1C -C -q -Dscoverage.scalacPluginVersion=2.3.0 clean scoverage:test|g' \
-        -e 's|mvn -C -q scoverage:report-only|mvn -C -q -Dscoverage.scalacPluginVersion=2.3.0 scoverage:report-only|g' \
+        -e 's|\./mvnw -T 1C -C -q clean scoverage:test|./mvnw -T 1C -C -q -Dscoverage.scalacPluginVersion=2.3.0 clean scoverage:test|g' \
+        -e 's|\./mvnw -C -q scoverage:report-only|./mvnw -C -q -Dscoverage.scalacPluginVersion=2.3.0 scoverage:report-only|g' \
         "$af"
     if ! diff -q "$af.bak" "$af" >/dev/null 2>&1; then
         echo "   patched: $(basename "$(dirname "$af")")/$(basename "$af")"

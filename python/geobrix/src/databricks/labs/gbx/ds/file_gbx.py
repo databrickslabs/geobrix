@@ -1309,14 +1309,20 @@ def _probe_direct_open(path: str) -> None:
     consistency misses (``FileNotFoundError`` / ``OSError``) do not
     immediately trigger a full-file copy.
 
+    The open runs with ``GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR``: a one-pixel read needs
+    no sidecar file, and GDAL then neither lists the folder (about 10 s on a Serverless
+    worker for a folder of 745 files) nor checks each sidecar by name. The real open that
+    follows keeps the process setting (``pyrx._env.configure_gdal_env``).
+
     Raises on failure after retries; returns ``None`` on success.
     """
     import rasterio
     from rasterio.windows import Window
 
     def _do() -> None:
-        with rasterio.open(path) as ds:
-            ds.read(1, window=Window(0, 0, 1, 1))
+        with rasterio.Env(GDAL_DISABLE_READDIR_ON_OPEN="EMPTY_DIR"):
+            with rasterio.open(path) as ds:
+                ds.read(1, window=Window(0, 0, 1, 1))
 
     _retry_transient(_do)
 
@@ -1520,17 +1526,30 @@ class _OpenerContext:
       prevent stream leaks alongside the DatasetReader.
     - ``_fuse_sources``: set of id(ds) for FUSE-opened handles — FUSE handles don't
       buffer into executor RAM, so ``weigh`` returns a small nominal for them.
+    - ``_unlinked_sizes``: id(ds) → size of a staged copy removed from disk as soon as it
+      was opened (``unlink_staged``); ``weigh`` uses it.
+
+    ``unlink_staged``: remove a staged copy from disk once it is open (POSIX: the open
+    handle still reads it, and its space comes back when the handle closes, however the
+    process ends). For holders that outlive a task: a PySpark worker exits with
+    ``os._exit`` and runs no ``atexit`` handler, so a copy left on disk would stay there.
+    Where the remove fails (a platform that cannot remove an open file) the copy is
+    removed by ``close`` as usual.
     """
 
-    def __init__(self, stream_max_bytes: int = _GBX_STREAM_MAX_BYTES):
+    def __init__(
+        self, stream_max_bytes: int = _GBX_STREAM_MAX_BYTES, unlink_staged: bool = False
+    ):
         # Mutable FileRef slot; a list so the partition loop can rebind it.
         self.fr_holder: "list[Any]" = [None]
         # Mutable size slot for metadata-derived tile size; a list to mirror fr_holder.
         self.size_holder: "list[int | None]" = [None]
         self._staged_temps: "dict[int, str]" = {}
+        self._unlinked_sizes: "dict[int, int]" = {}
         self._streams: "dict[int, Any]" = {}
         self._fuse_sources: "set[int]" = set()
         self._stream_max_bytes = stream_max_bytes
+        self._unlink_staged = unlink_staged
 
     def open(self, uri: str):
         import rasterio
@@ -1556,10 +1575,20 @@ class _OpenerContext:
         ds = rasterio.open(local_path)
         if is_temp:
             self._staged_temps[id(ds)] = local_path
+            if self._unlink_staged:
+                try:
+                    size = os.path.getsize(local_path)
+                    os.remove(local_path)
+                except OSError:
+                    pass  # stays in _staged_temps: close removes it
+                else:
+                    del self._staged_temps[id(ds)]
+                    self._unlinked_sizes[id(ds)] = size
         return ds
 
     def close(self, src) -> None:
         tmp = self._staged_temps.pop(id(src), None)
+        self._unlinked_sizes.pop(id(src), None)
         stream = self._streams.pop(id(src), None)
         self._fuse_sources.discard(id(src))
         try:
@@ -1594,7 +1623,9 @@ class _OpenerContext:
                 return int(fr.size)
             except Exception:
                 pass
-        # Staged fallback: use the on-disk size of the temp copy.
+        # Staged fallback: use the size of the temp copy (on disk, or open but unlinked).
+        if id(src) in self._unlinked_sizes:
+            return self._unlinked_sizes[id(src)]
         tmp = self._staged_temps.get(id(src))
         if tmp:
             try:

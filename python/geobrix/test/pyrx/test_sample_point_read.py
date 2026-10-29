@@ -7,6 +7,8 @@ point on Databricks. The rows here hold the point read to its budget and to the 
 the materialized tile.
 """
 
+import os
+
 import numpy as np
 import pytest
 import rasterio
@@ -287,3 +289,74 @@ def test_in_a_spark_task_the_points_of_a_tile_share_one_open(spark, tmp_path):
         (c, r, float(data[0, r, c])) for c, r in cells
     )
     assert max(o["s"]["opens"] for o in out) == 1
+
+
+@pytest.fixture
+def staged(tmp_path, monkeypatch):
+    """Every Volume probe fails, so each source is copied to local disk: the copies go to
+    the returned directory (``GBX_LOCAL_TEMP_DIR``)."""
+    from databricks.labs.gbx.ds import file_gbx
+
+    def _no_direct_reads(path):
+        raise OSError("no random access")
+
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    monkeypatch.setenv("GBX_LOCAL_TEMP_DIR", str(stage))
+    monkeypatch.setattr(file_gbx, "_is_fuse_path", lambda p: True)
+    monkeypatch.setattr(file_gbx, "_probe_direct_open", _no_direct_reads)
+    return stage
+
+
+def test_a_task_leaves_no_local_copy_on_disk(tmp_path, in_one_task, staged):
+    """A source the probe could not read directly is copied to local disk; the task's
+    handle on the copy reads it, but the copy is no longer on disk (unlinked once open), so
+    its space comes back when the handle closes: on eviction (the 5th source of 4 slots),
+    at the next task, or however the worker exits."""
+    data = np.arange(32 * 32, dtype="float32").reshape(1, 32, 32)
+    tiles = [
+        _tile(_write(tmp_path / f"s{i}.tif", data + i, block=16)) for i in range(5)
+    ]
+    pt = _wkb(*_centre(3, 2))
+    for i, tile in enumerate(tiles):
+        assert SAMPLE(tile, pt) == [float(2 * 32 + 3 + i)]
+        assert sorted(os.listdir(staged)) == []
+        if i == 0:
+            first = list(ot._TASK_SOURCES._lru._store.values())[0][0]
+    assert first.closed  # evicted: its copy's space is released
+    in_one_task(2)
+    assert SAMPLE(tiles[4], pt) == [float(2 * 32 + 3 + 4)]
+    assert sorted(os.listdir(staged)) == []
+
+
+def test_a_worker_that_ends_with_os_exit_leaves_no_local_copy(tmp_path, staged):
+    """A PySpark worker ends with ``os._exit`` (``pyspark/daemon.py``), which runs no
+    ``atexit`` handler: the copy a task made must already be off the disk."""
+    import subprocess
+    import sys
+
+    path = _write(tmp_path / "w.tif", np.ones((1, 16, 16), "float32"), block=16)
+    code = "\n".join(
+        [
+            "import os, shapely",
+            "from databricks.labs.gbx.ds import file_gbx",
+            "from databricks.labs.gbx.pyrx import functions as prx",
+            "from databricks.labs.gbx.pyrx.core import open_tile as ot",
+            "def _no(p):",
+            "    raise OSError('no random access')",
+            "file_gbx._is_fuse_path = lambda p: True",
+            "file_gbx._probe_direct_open = _no",
+            "ot._task_attempt_id = lambda: 7",
+            f"tile = {_tile(path)!r}",
+            "pt = shapely.to_wkb(shapely.Point(500005.0, 4999995.0))",
+            "print(prx._sample_udf.func(tile, pt), flush=True)",
+            "os._exit(0)",
+        ]
+    )
+    env = dict(os.environ, GBX_LOCAL_TEMP_DIR=str(staged))
+    out = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True
+    )
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert out.stdout.strip() == "[1.0]"
+    assert sorted(os.listdir(staged)) == []

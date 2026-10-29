@@ -300,6 +300,19 @@ def _register_pyproj_search_dirs(extra_proj_dirs: Sequence[str]) -> None:
         set_data_dir(os.pathsep.join(parts + added))
 
 
+# To find the sidecar files of a raster it opens (external overviews .ovr, masks .msk,
+# .aux.xml, world files), GDAL lists the file's folder by default. Over a Volume's FUSE
+# mount that listing is slow and grows with the folder: about 10 s for one open in a
+# folder of 745 GeoTIFFs on a Serverless worker. With TRUE GDAL reads no listing and
+# checks each sidecar by name instead (GDALOpenInfo leaves the sibling list NULL, and
+# CPLCheckForFile, GDALReadWorldFile2 and the .aux.xml lookup then stat each candidate,
+# lower- and upper-case extension), so sidecars are still found. EMPTY_DIR would hide
+# them; only the direct-read probe (ds.file_gbx._probe_direct_open) uses it. A value set
+# by the user, NO included, is kept. GDAL reads the variable at each open, and a
+# rasterio.Env value wins over it.
+_READDIR_ON_OPEN = "GDAL_DISABLE_READDIR_ON_OPEN"
+
+
 def configure_gdal_env(extra_proj_dirs: Optional[Sequence[str]] = None) -> None:
     """Idempotently set GDAL_DATA / PROJ_DATA, adding custom grid dirs.
 
@@ -312,7 +325,13 @@ def configure_gdal_env(extra_proj_dirs: Optional[Sequence[str]] = None) -> None:
     (pyproj) transform path finds them — the env var alone does not reach pyproj.
     A PROJ_DATA / PROJ_LIB that holds no proj.db this process can read is replaced by
     the bundled PROJ data (a readable one is never changed).
+
+    GDAL_DISABLE_READDIR_ON_OPEN is set to TRUE unless it is set already (see
+    _READDIR_ON_OPEN).
     """
+    if _READDIR_ON_OPEN not in os.environ:
+        os.environ[_READDIR_ON_OPEN] = "TRUE"
+
     if not os.environ.get("GDAL_DATA"):
         p = _bundled_gdal_data()
         if p:

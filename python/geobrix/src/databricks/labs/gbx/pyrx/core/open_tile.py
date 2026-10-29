@@ -826,10 +826,12 @@ class _TaskSources:
     the file N times unless something outlives the call. Within one task attempt the opened
     sources are held in an ``OpenResourceLRU`` (``ds.file_gbx``: the per-partition LRU of
     the grouped ops, with its opener, which probes a FUSE path and stages it when direct
-    reads fail, and its closer, which removes a staged copy), keyed by path. A new task
-    attempt closes the last one's sources first, so nothing is reused across tasks, where a
-    file may have been rewritten. Outside a task (a driver call) each read opens the source
-    and closes it.
+    reads fail), keyed by path. A new task attempt closes the last one's sources first, so
+    nothing is reused across tasks, where a file may have been rewritten. A staged copy is
+    removed from disk as soon as it is open (``unlink_staged``): the handle may be held
+    until the worker ends, and a PySpark worker ends with ``os._exit``, which runs no
+    ``atexit`` handler. Outside a task (a driver call) each read opens the source and
+    closes it.
     """
 
     def __init__(self):
@@ -859,7 +861,8 @@ class _TaskSources:
         if self._lru is None:
             from databricks.labs.gbx.pyrx.core.budget import runtime_kind
 
-            opener = _OpenerContext()
+            # a staged copy comes off the disk once open: the handle outlives the task
+            opener = _OpenerContext(unlink_staged=True)
             _, max_bytes, max_count = _lru_sizing(runtime_kind() == "serverless")
             self._lru = OpenResourceLRU(
                 max_bytes=max_bytes,

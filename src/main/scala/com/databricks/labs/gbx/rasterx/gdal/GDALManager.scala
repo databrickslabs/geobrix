@@ -94,7 +94,11 @@ object GDALManager extends Logging {
       * conf there, not a failed GDAL start-up. */
     private def clusterConf(key: String): Option[String] =
         try Option(SparkEnv.get).flatMap(_.conf.getOption(key))
-        catch { case _: LinkageError => None }
+        catch {
+            case e: LinkageError =>
+                logDebug(s"No SparkEnv on this classpath ($e): $key is read from the environment and the config only")
+                None
+        }
 
     /** Decide the policy at the JVM's first GDAL use: the first decision holds (later configs are logged, not applied). */
     private def decidePolicy(config: Option[ExpressionConfig]): Unit = {

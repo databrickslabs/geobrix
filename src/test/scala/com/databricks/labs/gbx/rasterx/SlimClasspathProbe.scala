@@ -50,6 +50,8 @@ object SlimClasspathProbe {
             KernelGdal.ensureInit()
             "loaded " + GDALManager.ensureJniLoaded(None).jni
         })
+        // the driver policy decided without a cluster conf: on (fail-closed), so GDAL_SKIP names the refused drivers
+        println("GDAL_SKIP: " + attempt(String.valueOf(org.gdal.gdal.gdal.GetConfigOption("GDAL_SKIP"))))
         // scalastyle:on println
     }
 

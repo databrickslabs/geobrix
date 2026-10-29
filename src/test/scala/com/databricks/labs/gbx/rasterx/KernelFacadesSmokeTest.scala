@@ -201,6 +201,9 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         // failed GDAL start-up.
         val lines = runSlim("start-up").linesIterator.toSeq
         assert(lines.exists(_.startsWith("no-config start-up: loaded ")), lines.mkString("\n"))
+        // with no cluster conf the policy stays on (fail-closed): GDAL skips every refused driver
+        val skipped = lines.find(_.startsWith("GDAL_SKIP: ")).map(_.stripPrefix("GDAL_SKIP: ").split(" ").toSet)
+        assert(skipped.exists(s => GDALManager.DefaultSkippedDrivers.split(" ").forall(s.contains)), lines.mkString("\n"))
     }
 
     test("the BNG L2 and UC facades run on a slim classpath: no Catalyst, no unsafe, no Kryo") {

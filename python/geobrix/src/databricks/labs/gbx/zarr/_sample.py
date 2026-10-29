@@ -490,8 +490,8 @@ def _unit_boxes(cfg: _SampleConfig, reader: _UnitReader, pool, row, col):
     """
     from databricks.labs.gbx.zarr._engine import read_box
 
-    if not row.size or not cfg.box_bytes:
-        return None
+    if not row.size or not cfg.n_steps or not cfg.box_bytes:
+        return None  # nothing to read, or no step selected (an empty box)
     ndim = len(cfg.read.arrays[cfg.variables[0]].dims)
     lo, hi = [0] * ndim, [0] * ndim
     lo[cfg.ypos], hi[cfg.ypos] = int(row.min()), int(row.max()) + 1

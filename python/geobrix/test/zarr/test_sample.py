@@ -446,3 +446,17 @@ def test_sample_on_a_spark_connect_client(
         str(era5_v3_sharded),
     )
     _check_against_numpy(df, era5_v3_sharded, xs, ys)
+
+
+def test_a_unit_with_no_selected_step_is_not_read_as_a_box():
+    """No step selected: the box would be empty (and its bounds undefined), so the unit is
+    not dense, whatever else it holds."""
+    import types
+
+    import numpy as np
+
+    from databricks.labs.gbx.zarr import _sample
+
+    cfg = types.SimpleNamespace(n_steps=0, box_bytes=1 << 20)
+    rows = np.array([3, 4])
+    assert _sample._unit_boxes(cfg, None, None, rows, rows) is None

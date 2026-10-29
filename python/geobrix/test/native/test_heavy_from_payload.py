@@ -296,3 +296,32 @@ def test_light_and_heavy_give_the_oracle_answer(spark, native_dir, tmp_path):
     assert libgdal[0].startswith(
         os.path.join(os.path.realpath(native_dir), "lib", "libgdal-")
     ), libgdal
+
+
+def test_a_shared_object_that_maps_a_second_gdal_is_refused_on_the_payload(
+    native_dir, conf_only_probe
+):
+    """A JVM on the payload's GDAL whose sharedobjects conf names another libgdal is refused (also after the switch)."""
+    import glob
+
+    found = glob.glob("/usr/local/lib/libgdal.so.*") + glob.glob(
+        "/usr/lib/*/libgdal.so.*"
+    )
+    system = sorted({os.path.realpath(p) for p in found} - {""})
+    system = [p for p in system if "/_native/" not in p]
+    if not system:
+        pytest.skip(
+            "PRECONDITION MISSING: a libgdal outside the payload to name; this row not run"
+        )
+    res = _java(
+        native_dir,
+        "ConfOnlyProbe",
+        "shared",
+        native_dir,
+        system[0],
+        classes=conf_only_probe,
+    )
+    assert (
+        "RESULT error:java.lang.IllegalStateException: geobrix: a different GDAL is already loaded"
+        in res.stdout
+    ), (res.stdout + res.stderr[-3000:])

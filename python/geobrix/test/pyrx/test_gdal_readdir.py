@@ -70,6 +70,11 @@ def readdir(monkeypatch):
         return os.environ.get(KEY)
 
     yield _set
+    # an outermost rasterio.Env naming the option re-sets, on exit, the value it found as a
+    # process-wide config option, which would shadow the environment in later tests
+    from rasterio._env import del_gdal_config
+
+    del_gdal_config(KEY)
 
 
 def _tile(path):
@@ -245,12 +250,14 @@ def test_a_case_mixed_sidecar_opens_with_gdals_listing(tmp_path, readdir, opens_
 
 
 def test_a_file_written_after_the_listing_lists_the_folder_again(
-    tmp_path, readdir, opens_seen
+    tmp_path, readdir, opens_seen, monkeypatch
 ):
     """A file missing from the held listing lists its folder again, so a GeoTIFF and its
     world file written later are seen. A sidecar written later for a file the listing
-    already holds is not seen until the folder is listed again."""
+    already holds is not seen until the folder is listed again. (No re-list interval here;
+    see the next row.)"""
     readdir(None)
+    monkeypatch.setattr(_env._LISTINGS, "relist_interval_s", 0.0)
     a = _plain_tiff(tmp_path / "a.tif", georef=False)
     assert _georef(_tile(a)) == Affine.identity()
     (tmp_path / "a.tfw").write_text("\n".join(str(v) for v in _TFW) + "\n")
@@ -264,19 +271,26 @@ def test_a_file_written_after_the_listing_lists_the_folder_again(
     assert modes == ["EMPTY_DIR", "EMPTY_DIR", "TRUE", "TRUE"]
 
 
-def test_a_users_value_decides_every_open(tmp_path, readdir, opens_seen):
-    """``NO`` in the environment, or a ``rasterio.Env`` around the call: no per-file
-    choice is made, GDAL opens with the user's value."""
+def test_a_users_value_decides_every_open(tmp_path, readdir, opens_seen, monkeypatch):
+    """A value the user set decides every open, ``TRUE`` included: in the environment
+    before ``configure_gdal_env`` runs, or in a ``rasterio.Env`` around the call."""
     a = _plain_tiff(tmp_path / "a.tif")
     readdir("NO")
     with ot.open_header(_tile(a)):
         pass
     readdir(None)
     with rasterio.Env(GDAL_DISABLE_READDIR_ON_OPEN="TRUE"):
-        assert _env.readdir_mode(a) == "EMPTY_DIR"  # an Env with our own value
+        assert (
+            _env.readdir_mode(a) is None
+        )  # an Env with the process value: still the user's
     with rasterio.Env(GDAL_DISABLE_READDIR_ON_OPEN="NO"):
         with ot.open_header(_tile(a)):
             pass
+    # TRUE in the environment before configure_gdal_env: the user's, no per-file choice
+    monkeypatch.setattr(_env, "_READDIR_SET_HERE", False)
+    monkeypatch.setenv(KEY, "TRUE")
+    _env.configure_gdal_env()
+    assert _env._READDIR_SET_HERE is False and _env.readdir_mode(a) is None
     assert [m for n, m in opens_seen if n == "a.tif"] == ["NO", "NO"]
 
 
@@ -303,6 +317,8 @@ def test_a_users_value_decides_every_open(tmp_path, readdir, opens_seen):
         ("x.tif", ["x.tif", "y.tif", "y.tif.aux.xml", "y.tif.ovr"], "EMPTY_DIR"),
         ("x.tif", ["x.tif", "x.tif.aux.xml", "y.tif.aux.xml"], "TRUE"),
         ("x.tif", ["x.tif", "x.XML"], "TRUE"),
+        ("x.vrt", ["x.vrt", "y.tif"], "TRUE"),
+        ("x.GTI", ["x.GTI"], "TRUE"),
     ],
 )
 def test_the_value_an_open_takes_from_the_folder_listing(name, folder, want):
@@ -327,3 +343,135 @@ def test_the_listings_held_are_capped(tmp_path, readdir, monkeypatch):
         assert _env.readdir_mode(p) == "EMPTY_DIR"
     held = list(_env._LISTINGS._names)
     assert held == [os.path.realpath(tmp_path / "1"), os.path.realpath(tmp_path / "2")]
+    for i in range(3, 12):  # folder strings remembered: at most 4 x max_folders
+        (tmp_path / str(i)).mkdir()
+        _env.readdir_mode(_plain_tiff(tmp_path / str(i) / "a.tif"))
+    assert len(_env._LISTINGS._resolved) == 8
+
+
+def test_a_folder_past_gdals_listing_limit_opens_with_by_name_checks(
+    tmp_path, readdir, monkeypatch
+):
+    """GDAL drops a listing longer than GDAL_READDIR_LIMIT_ON_OPEN (1000 unless set) and
+    checks sidecars by name. A folder past that limit is held as too large, after a scan
+    that stops past the limit, and its files keep the process value (TRUE); a later open
+    does not list it again."""
+    readdir(None)
+    assert _env._listing_cap() == 1000
+    monkeypatch.setenv("GDAL_READDIR_LIMIT_ON_OPEN", "0")
+    assert _env._listing_cap() is None  # 0: no limit, as in GDAL
+    monkeypatch.setenv("GDAL_READDIR_LIMIT_ON_OPEN", "5")
+    a = _plain_tiff(tmp_path / "a.tif")
+    for i in range(6):
+        (tmp_path / f"f{i}.json").write_text("{}")
+    before = _env._LISTINGS.listings
+    assert _env.readdir_mode(a) is None
+    assert _env.readdir_mode(a) is None
+    assert _env._LISTINGS.listings - before == 1
+    held = _env._LISTINGS._names[os.path.realpath(tmp_path)][0]
+    assert held is _env._TOO_LARGE
+    monkeypatch.setenv("GDAL_READDIR_LIMIT_ON_OPEN", "10")
+    _env._LISTINGS.clear()
+    assert _env.readdir_mode(a) == "EMPTY_DIR"
+
+
+def test_a_missing_file_lists_its_folder_again_at_most_once_an_interval(
+    tmp_path, readdir, monkeypatch
+):
+    """A folder that grows during a run is not scanned again for every new file: within
+    the interval a file missing from the listing keeps the process value (TRUE, by-name
+    checks, correct); after it the folder is listed again."""
+    readdir(None)
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(_env, "_now", lambda: clock["t"])
+    _plain_tiff(tmp_path / "a.tif")
+    assert _env.readdir_mode(tmp_path / "a.tif") == "EMPTY_DIR"
+    before = _env._LISTINGS.listings
+    for i in range(5):
+        _plain_tiff(tmp_path / f"n{i}.tif")
+        assert _env.readdir_mode(tmp_path / f"n{i}.tif") is None
+    assert _env._LISTINGS.listings == before
+    clock["t"] += _env._RELIST_INTERVAL_S
+    assert _env.readdir_mode(tmp_path / "n4.tif") == "EMPTY_DIR"
+    assert _env._LISTINGS.listings == before + 1
+
+
+def test_a_warped_vrt_keeps_its_sources_sidecars(tmp_path, readdir):
+    """A warped VRT opens its source while it opens: under EMPTY_DIR the source's external
+    .ovr is lost and the VRT has no overviews (checked: ``[]``). A VRT is never given
+    EMPTY_DIR, so its source finds the .ovr by name."""
+    from rasterio.vrt import WarpedVRT
+
+    (tmp_path / "A").mkdir()
+    (tmp_path / "B").mkdir()
+    src = tmp_path / "A" / "base.tif"
+    with rasterio.open(
+        src,
+        "w",
+        driver="GTiff",
+        width=512,
+        height=512,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:32633",
+        transform=from_origin(500000.0, 5000000.0, 10.0, 10.0),
+    ) as dst:
+        dst.write(np.ones((1, 512, 512), "uint16"))
+    with rasterio.Env(TIFF_USE_OVR=True):
+        with rasterio.open(src, "r+") as ds:
+            ds.build_overviews([2, 4])
+    with rasterio.open(src) as s, WarpedVRT(s, crs="EPSG:32633") as v:
+        xml = v.tags(ns="xml:VRT")["xml:VRT"]
+    vrt = tmp_path / "B" / "w.vrt"
+    vrt.write_text(xml)
+    readdir(None)
+    assert _env.readdir_mode(vrt) == "TRUE"
+    with _env.open_raster(vrt) as ds:
+        assert ds.overviews(1) == [2, 4]
+    with _env.readdir_option("EMPTY_DIR"):  # what EMPTY_DIR would do
+        ds = rasterio.open(vrt)
+    with ds:
+        assert ds.overviews(1) == []
+
+
+def test_the_threads_value_comes_back_when_the_open_fails(tmp_path, readdir):
+    """``readdir_option`` puts the thread's previous value back when ``rasterio.open``
+    raises (a file GDAL cannot open)."""
+    readdir(None)
+    bad = tmp_path / "bad.tif"
+    bad.write_bytes(b"not a raster")
+    assert _env.readdir_mode(bad) == "EMPTY_DIR"
+    with pytest.raises(rasterio.errors.RasterioIOError):
+        _env.open_raster(bad)
+    setter, getter = _env._thread_config()
+    assert getter(KEY.encode(), None) is None
+    assert get_gdal_config(KEY, normalize=False) == "TRUE"
+
+
+def test_no_reachable_thread_setter_lists_nothing_and_checks_by_name(
+    tmp_path, readdir, monkeypatch, opens_seen, caplog
+):
+    """When the libgdal rasterio uses cannot be reached through ctypes, no folder is
+    listed and every open checks sidecars by name (the process TRUE); the reason is
+    logged at debug."""
+    import logging
+
+    from databricks.labs.gbx.pyrx.core import analysis
+
+    readdir(None)
+    a = _plain_tiff(tmp_path / "a.tif")
+
+    def _unreachable():
+        raise OSError("no libgdal here")
+
+    monkeypatch.setattr(analysis, "_load_libgdal", _unreachable)
+    monkeypatch.setattr(_env, "_THREAD_CONFIG", None)
+    with caplog.at_level(logging.DEBUG, logger=_env.__name__):
+        assert _env._thread_config() is None
+    assert "no libgdal here" in caplog.text
+    before = _env._LISTINGS.listings
+    assert _env.readdir_mode(a) is None
+    with _env.open_raster(a):
+        pass
+    assert _env._LISTINGS.listings == before
+    assert [m for n, m in opens_seen if n == "a.tif"] == ["TRUE"]

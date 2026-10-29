@@ -9,6 +9,7 @@ becomes PROJ_DATA (rasterio reads PROJ_DATA as a single path; see _proj_data_dir
 """
 
 import hashlib
+import logging
 import os
 import shutil
 import stat
@@ -17,6 +18,8 @@ import time
 import warnings
 from contextlib import contextmanager
 from typing import Dict, List, Optional, Sequence, Tuple
+
+_log = logging.getLogger(__name__)
 
 
 def _bundled_gdal_data() -> Optional[str]:
@@ -340,6 +343,8 @@ _STEM_SIDECAR_EXTS = ("wld", "tab", "xml", "hdr", "aux")
 # *.PVL, *_rpc.txt, *_METADATA.XML) are candidates of the raster itself.
 _VENDOR_METADATA_EXTS = frozenset((".txt", ".dim", ".pass", ".rpc", ".hdr"))
 _VENDOR_METADATA_PREFIXES = ("dim_", "rpc_")
+# Formats whose file names other rasters that GDAL opens with it (readdir_mode_for).
+_MULTI_SOURCE_EXTS = (".vrt", ".gti")
 
 
 def _vendor_metadata(low_name: str) -> bool:
@@ -389,29 +394,66 @@ def readdir_mode_for(name: str, folder_names) -> str:
     if vendor:
         return "NO"
     if not candidates:
-        return "EMPTY_DIR"
+        # A VRT or GTI opens other files, some while it opens (a warped VRT opens its
+        # source then): those would take EMPTY_DIR too and lose their own sidecars (an
+        # external .ovr: the warped VRT's overviews go). They check their sidecars by name.
+        return "TRUE" if name.lower().endswith(_MULTI_SOURCE_EXTS) else "EMPTY_DIR"
     exact = _stat_sidecars(name)
     return "TRUE" if all(c in exact for c in candidates) else "NO"
+
+
+# A folder listing that held more names than GDAL itself would use (see _listing_cap).
+_TOO_LARGE = "too large"
+# A file missing from a held listing lists its folder again at most this often. A listing
+# of a folder at the cap (1,000 names) cost 0.25-0.9 s on a Serverless worker; once per
+# 10 s keeps that under a tenth of the time of a worker that opens new files of a growing
+# folder all the time, and a file written meanwhile is opened with TRUE (by-name checks:
+# correct, just not the faster EMPTY_DIR) until the next listing.
+_RELIST_INTERVAL_S = 10.0
+
+
+def _listing_cap() -> Optional[int]:
+    """GDAL's own limit on a folder listing, GDAL_READDIR_LIMIT_ON_OPEN (1000 unless set):
+    past it GDAL drops the listing and checks sidecars by name (gcore/gdalopeninfo.cpp,
+    GetSiblingFiles). None for no limit (a value of 0 or less, as in GDAL)."""
+    raw = None
+    try:
+        from rasterio.env import get_gdal_config
+
+        raw = get_gdal_config("GDAL_READDIR_LIMIT_ON_OPEN", normalize=False)
+    except Exception:  # noqa: BLE001
+        raw = os.environ.get("GDAL_READDIR_LIMIT_ON_OPEN")
+    try:
+        cap = int(raw) if raw not in (None, "") else 1000
+    except (TypeError, ValueError):
+        cap = 1000
+    return cap if cap > 0 else None
 
 
 class _FolderListings:
     """The names in each folder, listed once per process (os.scandir), most recent last.
 
     Keyed by the folder's resolved path (resolved once per folder string: a FUSE stat costs
-    milliseconds). At most ``max_folders`` are held (least recently used dropped first), and
-    a folder of more than ``max_entries`` names is not held. A file missing from a held
-    listing lists the folder again, once, so files written later are seen; a sidecar written
+    milliseconds; at most ``4 * max_folders`` folder strings are remembered). At most
+    ``max_folders`` listings are held, the least recently used dropped first. A folder with
+    more names than GDAL's own listing limit (_listing_cap) is held as ``_TOO_LARGE`` (the
+    scan stops past the cap): its files are opened with TRUE, as GDAL itself does there. A
+    file missing from a held listing lists the folder again, at most once per
+    ``relist_interval_s`` per folder, so files written later are seen; a sidecar written
     after the folder was listed is not, until the folder is listed again (a file missing
     from it, or a new worker).
     """
 
-    def __init__(self, max_folders: int = 64, max_entries: int = 50_000):
+    def __init__(
+        self, max_folders: int = 64, relist_interval_s: float = _RELIST_INTERVAL_S
+    ):
         from collections import OrderedDict
 
         self.max_folders = max_folders
-        self.max_entries = max_entries
-        self._names: "OrderedDict[str, frozenset]" = OrderedDict()
-        self._resolved: Dict[str, str] = {}
+        self.relist_interval_s = relist_interval_s
+        # key -> (frozenset of names | _TOO_LARGE, time listed)
+        self._names: "OrderedDict[str, tuple]" = OrderedDict()
+        self._resolved: "OrderedDict[str, str]" = OrderedDict()
         self._lock = threading.Lock()
         self.listings = 0
 
@@ -420,39 +462,54 @@ class _FolderListings:
             self._names.clear()
             self._resolved.clear()
 
-    def _list(self, folder: str) -> Optional[frozenset]:
+    def _list(self, folder: str):
+        cap = _listing_cap()
         names = []
         try:
             with os.scandir(folder) as it:
                 for entry in it:
                     names.append(entry.name)
-                    if len(names) > self.max_entries:
-                        return None
+                    if cap is not None and len(names) > cap:
+                        self.listings += 1
+                        return _TOO_LARGE
         except OSError:
             return None
         self.listings += 1
         return frozenset(names)
 
-    def names(self, folder: str, must_hold: str) -> Optional[frozenset]:
-        """The names in *folder*, listed again once when *must_hold* is not among them;
-        None when the folder cannot be listed or is too large to hold."""
+    def _key(self, folder: str) -> str:
         with self._lock:
             key = self._resolved.get(folder)
-        if key is None:
-            key = os.path.realpath(folder)
-            with self._lock:
-                self._resolved[folder] = key
+            if key is not None:
+                self._resolved.move_to_end(folder)
+                return key
+        key = os.path.realpath(folder)
         with self._lock:
-            names = self._names.get(key)
-            if names is not None:
+            self._resolved[folder] = key
+            while len(self._resolved) > 4 * self.max_folders:
+                self._resolved.popitem(last=False)
+        return key
+
+    def names(self, folder: str, must_hold: str):
+        """The names in *folder* (a frozenset), ``_TOO_LARGE``, or None when the folder
+        cannot be listed. Listed again when *must_hold* is not among the names held, unless
+        the folder was listed less than ``relist_interval_s`` ago."""
+        key = self._key(folder)
+        with self._lock:
+            held = self._names.get(key)
+            if held is not None:
                 self._names.move_to_end(key)
-        if names is not None and must_hold in names:
-            return names
+        if held is not None:
+            names, listed_at = held
+            if names is _TOO_LARGE or must_hold in names:
+                return names
+            if _now() - listed_at < self.relist_interval_s:
+                return names  # the caller finds must_hold missing: TRUE for this open
         names = self._list(folder)
         if names is None:
             return None
         with self._lock:
-            self._names[key] = names
+            self._names[key] = (names, _now())
             self._names.move_to_end(key)
             while len(self._names) > self.max_folders:
                 self._names.popitem(last=False)
@@ -470,26 +527,44 @@ def _is_plain_file_path(path: str) -> bool:
     return ":" not in head
 
 
+def _user_env_sets_readdir() -> bool:
+    """True when a rasterio.Env the caller entered names GDAL_DISABLE_READDIR_ON_OPEN."""
+    try:
+        from rasterio.env import getenv, hasenv
+
+        return hasenv() and _READDIR_ON_OPEN in getenv()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def readdir_mode(path) -> Optional[str]:
     """The GDAL_DISABLE_READDIR_ON_OPEN value for one light-tier open of *path*, or None to
-    leave the open to the current setting: a value the user set (environment or
-    rasterio.Env), a cloud or /vsi path (TRUE, no listing), or a folder that cannot be
-    listed. See _READDIR_ON_OPEN and readdir_mode_for."""
-    if not _READDIR_SET_HERE:
+    leave the open to the current setting. None when the user set the option (in the
+    environment before configure_gdal_env ran, any value; in a rasterio.Env around the
+    call; or as a GDAL config option since), for a cloud, /vsi, DRIVER: or non-path
+    *path* (TRUE, no listing), when the thread-local setter cannot be reached, for a folder
+    that cannot be listed or is larger than GDAL's listing limit, and for a file missing
+    from its folder's listing. See _READDIR_ON_OPEN and readdir_mode_for."""
+    if not _READDIR_SET_HERE or _user_env_sets_readdir():
         return None
     try:
         from rasterio.env import get_gdal_config
 
         if get_gdal_config(_READDIR_ON_OPEN, normalize=False) != _READDIR_PROCESS_VALUE:
-            return None  # set by the user since (an environment variable or an Env)
+            return None  # set by the user since (an environment variable or an option)
     except Exception:  # noqa: BLE001 - no rasterio: nothing to decide
         return None
-    p = os.fspath(path)
+    try:
+        p = os.fspath(path)
+    except TypeError:  # a file-like object: rasterio.open takes it, nothing to list
+        return None
     if not isinstance(p, str) or not _is_plain_file_path(p):
         return None
+    if _thread_config() is None:
+        return None  # no per-open value can be set: do not list for nothing
     folder, name = os.path.split(os.path.abspath(p))
     names = _LISTINGS.names(folder, name)
-    if names is None or name not in names:
+    if names is None or names is _TOO_LARGE or name not in names:
         return None
     return readdir_mode_for(name, names)
 
@@ -533,8 +608,21 @@ def _thread_config():
                 setter(b"GBX_THREAD_CONFIG_CHECK", None)
             if same_gdal:
                 _THREAD_CONFIG = (setter, getter)
-        except Exception:  # noqa: BLE001 - no reachable libgdal: no per-open value
+            else:
+                _log.debug(
+                    "GDAL_DISABLE_READDIR_ON_OPEN per open: off (the libgdal reached "
+                    "through ctypes is not rasterio's); opens check sidecars by name"
+                )
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - no reachable libgdal: no per-open value
             _THREAD_CONFIG = False
+            _log.debug(
+                "GDAL_DISABLE_READDIR_ON_OPEN per open: off (%s: %s); opens check "
+                "sidecars by name",
+                type(exc).__name__,
+                exc,
+            )
     return _THREAD_CONFIG or None
 
 

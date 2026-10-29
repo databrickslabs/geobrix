@@ -188,6 +188,12 @@ def _matrix_cases(tmp_path):
             [(lon[0], lat[0], 4326), _centre(400, 300)],
         ),
         "own mask": (_tile(str(masked)), [_centre(10, 10), _centre(200, 10)]),
+        # a pending NoData on an own-mask source: the masked pixels (columns < 150) take it,
+        # so the masked point reads None where the raw pixel has a value
+        "own mask + pending nodata": (
+            _tile(str(masked), metadata={"pending_nodata": "255"}),
+            [_centre(10, 10), _centre(200, 10)],
+        ),
         "clip": (
             _tile(plain, clip_polygon=clip, clip_crs="EPSG:32633"),
             [_centre(350, 300), _centre(100, 100)],
@@ -208,6 +214,7 @@ def _matrix_cases(tmp_path):
         "reprojected point",
         "pending srid",
         "own mask",
+        "own mask + pending nodata",
         "clip",
         "warp target",
     ],
@@ -225,7 +232,10 @@ def test_a_point_read_matches_the_materialized_tile(
     counters.update(encodes=0)
     got = [SAMPLE(tile, g) for g in geoms]
     assert got == want
-    assert (counters["encodes"] > 0) == (case in ("own mask", "clip", "warp target"))
+    fallbacks = ("own mask", "own mask + pending nodata", "clip", "warp target")
+    assert (counters["encodes"] > 0) == (case in fallbacks)
+    if case == "own mask + pending nodata":
+        assert want[0] == [None] and None not in want[1]  # the mask decides the value
     if case != "outside the file":
         assert any(v is not None and None not in v for v in want), "a vacuous case"
 
@@ -359,4 +369,42 @@ def test_a_worker_that_ends_with_os_exit_leaves_no_local_copy(tmp_path, staged):
     )
     assert out.returncode == 0, out.stderr[-2000:]
     assert out.stdout.strip() == "[1.0]"
+    assert sorted(os.listdir(staged)) == []
+
+
+def test_a_failed_open_leaves_no_local_copy(tmp_path, in_one_task, staged):
+    """A Volume file the probe cannot read is copied to local disk; when it is no raster
+    at all the open of the copy raises, and the copy is removed with it (once per Spark
+    attempt otherwise, with no cleanup when the worker ends)."""
+    bad = tmp_path / "bad.tif"
+    bad.write_bytes(b"not a raster" * 100)
+    with pytest.raises(rasterio.errors.RasterioIOError):
+        SAMPLE(_tile(str(bad)), _wkb(*_centre(1, 1)))
+    assert sorted(os.listdir(staged)) == []
+
+
+def test_a_copy_that_cannot_be_removed_while_open_is_removed_on_close(
+    tmp_path, in_one_task, staged, monkeypatch
+):
+    """Where an open file cannot be removed (Windows), the copy stays on disk while the
+    task holds it and is removed when the handle closes."""
+    from databricks.labs.gbx.ds import file_gbx
+
+    real_remove = os.remove
+    refused = []
+
+    def _remove(path):
+        if not refused:  # the remove right after the open
+            refused.append(path)
+            raise PermissionError("in use")
+        return real_remove(path)
+
+    monkeypatch.setattr(file_gbx.os, "remove", _remove)
+    data = np.arange(16 * 16, dtype="float32").reshape(1, 16, 16)
+    tile = _tile(_write(tmp_path / "c.tif", data, block=16))
+    assert SAMPLE(tile, _wkb(*_centre(2, 3))) == [float(3 * 16 + 2)]
+    assert len(refused) == 1 and sorted(os.listdir(staged)) == [
+        os.path.basename(refused[0])
+    ]
+    ot._TASK_SOURCES.reset()
     assert sorted(os.listdir(staged)) == []

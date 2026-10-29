@@ -194,9 +194,10 @@ class RST_AccessorsExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
 
     test("RST_SRID should return the spatial reference ID of the raster") {
         val srid = RST_SRID.execute(ds)
-        // If no EPSG authority, return 0
-        // This is expected and handled correctly throughout the codebase
-        srid shouldBe 0
+        // The MODIS fixture's World Sinusoidal: GDAL 3.13 identifies it as ESRI:54008, so its SRID is that ESRI code,
+        // as the light tier gives (test_crs_accessors) and rst_srid documents ("an EPSG or ESRI code"). GDAL 3.11 did
+        // not identify it and gave 0. A CRS with no authority code still gives 0.
+        srid shouldBe 54008
     }
 
     test("RST_Subdatasets should return a map of subdatasets" ) {

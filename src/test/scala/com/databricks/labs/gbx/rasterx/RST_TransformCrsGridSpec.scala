@@ -212,9 +212,12 @@ class RST_TransformCrsGridSpec extends AnyFunSuite with BeforeAndAfterAll {
         // the grid dir landed on PROJ_DATA/PROJ_LIB, ahead of the stock dir — Task 8's prepend,
         // verified end-to-end in a live session (not just the unit-level GDALManagerProjGridsSpec).
         val projData = gdal.GetConfigOption("PROJ_DATA")
+        // the stock dir is the loaded GDAL's: the payload's share/proj (its JNI, or /usr/lib/libgdalalljni.so linked
+        // into a payload, as in the dev container), else the system PROJ's /usr/share/proj
+        val stock = GDALManager.ensureJniLoaded(None).projData.getOrElse("/usr/share/proj")
         projData should include(gridDir)
-        projData should include("/usr/share/proj")
-        projData.indexOf(gridDir) should be < projData.indexOf("/usr/share/proj")
+        projData should include(stock)
+        projData.indexOf(gridDir) should be < projData.indexOf(stock)
         gdal.GetConfigOption("PROJ_LIB") should include(gridDir)
     }
 

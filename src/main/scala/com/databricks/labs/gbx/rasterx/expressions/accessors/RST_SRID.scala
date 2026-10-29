@@ -53,8 +53,8 @@ object RST_SRID extends WithExpressionInfo {
         val proj = new SpatialReference(ds.GetProjection())
         Try(proj.AutoIdentifyEPSG())
 
-        // Try to get the top-level PROJCS/GEOGCS authority code
-        // Returns 0 if no authority is found (e.g., for ESRI projections like ESRI:54008)
+        // The top-level PROJCS/GEOGCS authority code: an EPSG or ESRI one (GDAL 3.13 identifies ESRI:54008, for one), as
+        // the light tier's srid() gives; 0 when the CRS carries no authority code
         val authority = Option(proj.GetAuthorityCode(null))
         authority match {
             case Some(code) if code.nonEmpty => code.toInt

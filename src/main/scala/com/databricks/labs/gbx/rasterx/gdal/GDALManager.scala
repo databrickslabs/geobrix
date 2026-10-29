@@ -26,7 +26,8 @@ import scala.util.{Success, Try}
 object GDALManager extends Logging {
 
     /**
-      * The drivers the virtual-tile policy refuses (the manifest's `gdal.refused_drivers`, held equal by a test): stored
+      * The drivers the driver policy refuses (the manifest's `gdal.raster_drivers.refused` plus the OGR network drivers,
+      * held equal by a test): stored
       * pipelines (GDALG), tile indexes and catalogs that open other rasters they name (GTI, STACTA, STACIT), and the
       * network APIs that can trigger outbound HTTP at open time. Skipped by default (never registered), so a nested
       * source cannot open them either; users can override via `spark.gdal.GDAL_SKIP`.
@@ -64,6 +65,19 @@ object GDALManager extends Logging {
     private val pythonLock = new Object
     @volatile private var pythonDepth = 0
 
+    /** The one switch of the process-level driver policy (AP-43): `GBX_GDAL_DRIVER_POLICY=off` in the environment, or
+      * `spark.databricks.labs.gbx.gdal.driver_policy=off` in the session conf (the same name the light tier reads).
+      * Off: no refused driver is skipped and the raw-band setting is left as GDAL has it. Read at the first init. */
+    val PolicyEnv = "GBX_GDAL_DRIVER_POLICY"
+    val PolicyConf = "spark.databricks.labs.gbx.gdal.driver_policy"
+    @volatile private var policyOn = true
+
+    private def policyFrom(config: ExpressionConfig): Boolean = {
+        val env = Option(System.getenv(PolicyEnv))
+        val conf = config.configs.get(PolicyConf)
+        !(env.exists(_.trim.equalsIgnoreCase("off")) || conf.exists(_.trim.equalsIgnoreCase("off")))
+    }
+
     /**
       * Bracket `block` with `GDAL_VRT_ENABLE_PYTHON=YES` so a VRT with a `<PixelFunctionLanguage>Python</...>`
       * band can evaluate, then reset to `NO`. Safe for concurrent Spark tasks in the same JVM via a
@@ -89,6 +103,7 @@ object GDALManager extends Logging {
         lock.synchronized {
             if (!isEnabled) {
                 Try {
+                    policyOn = policyFrom(config)
                     loadSharedObjects(config.getSharedObjects.values, config.nativeDir)
                     configureGDAL(config)
                     gdal.AllRegister()
@@ -210,16 +225,21 @@ object GDALManager extends Logging {
 
     def configureGDAL(CPL_TMPDIR: String, GDAL_PAM_PROXY_DIR: String, CPL_DEBUG: String = "OFF",
                       logCPL: Boolean = false): Unit = {
-        // Must be set BEFORE gdal.AllRegister() in init; skipped drivers are never registered.
-        gdal.SetConfigOption("GDAL_SKIP", DefaultSkippedDrivers)
+        // Must be set BEFORE gdal.AllRegister() in init; skipped drivers are never registered. Refused drivers are
+        // gone for every GDAL path of the JVM, nested sources included (AP-43); the switch turns that off.
+        if (policyOn) gdal.SetConfigOption("GDAL_SKIP", DefaultSkippedDrivers)
         // PROJ and GDAL data: the loaded payload's, else the system PROJ's data dir (the system GDAL finds GDAL_DATA).
         val choice = loaded.getOrElse(NativeChoice(LegacyJni, None, None))
         if (choice.projData.isEmpty) gdal.SetConfigOption("PROJ_LIB", "/usr/share/proj")
         applyNativeData(choice)
         // a reset keeps the PROJ grid directories already applied in this JVM (a union: none is dropped)
         if (appliedGridDirs.nonEmpty) setProjSearchPath((appliedGridDirs :+ baseProjData).distinct)
-        // Off by default; flipped on only around PixelCombineRasters.combine() via withVrtPython.
-        gdal.SetConfigOption("GDAL_VRT_ENABLE_PYTHON", "NO")
+        // Off by default; flipped on only around PixelCombineRasters.combine() via withVrtPython. A VRT's raw band reads
+        // a file's bytes without a driver, so it is off for the process too (AP-43), with the switch on.
+        if (policyOn) {
+            gdal.SetConfigOption("GDAL_VRT_ENABLE_PYTHON", "NO")
+            gdal.SetConfigOption("GDAL_VRT_ENABLE_RAWRASTERBAND", "NO")
+        } else gdal.SetConfigOption("GDAL_VRT_ENABLE_PYTHON", "NO")
         gdal.SetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "YES")
         gdal.SetConfigOption("CPL_TMPDIR", CPL_TMPDIR)
         gdal.SetConfigOption("GDAL_PAM_PROXY_DIR", GDAL_PAM_PROXY_DIR)

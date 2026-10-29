@@ -81,7 +81,7 @@ class GdalSpecSmokeTest extends AnyFunSuite {
           s"""{"gdal": $section, "functions": [{"sql_name": "f", "min_args": 1, "params": [""" +
               """{"name": "tile", "session": ["TILE"]}, {"name": "unit", "session": ["STRING"]}], """ + s""""gdal": $block}]}"""
         )
-        val section = """{"pin": "3.13.3", "deny": [], "allow": {}}"""
+        val section = """{"pin": "3.13.3", "deny": [], "allow": {}, "raster_drivers": {"allowed": [], "refused": []}}"""
         val block = """{"alg": "raster slope", "in": {"tile": "raster"}, "out": {"kind": "raster"}, "write": "tile", """ +
             """"args": [{"arg": "unit", "from": "unit", "type": "choice", "map": {"degrees": "degree"}}]}"""
         assert(GdalSpecs.parse(root(section, block))._2.contains("f")) // the control
@@ -104,10 +104,15 @@ class GdalSpecSmokeTest extends AnyFunSuite {
         // The virtual-tile policy (I-2, AP-40): the allowlist, and the refused drivers pinned as a set; the JVM skips
         // exactly those, so none is registered, and a nested source cannot open one (C-1).
         val section = GdalSpecs.section
-        assert(section.virtualDrivers == Seq("GTiff", "VRT"), section.virtualDrivers)
+        assert(section.allowedDrivers.contains("GTiff") && section.allowedDrivers.contains("VRT"), section.allowedDrivers)
+        assert(!section.allowedDrivers.exists(section.refusedDrivers.contains), "a driver in both classes")
         assert(section.refusedDrivers.toSet == GDALManager.DefaultSkippedDrivers.split(" ").toSet, section.refusedDrivers)
         KernelGdal.ensureInit()
         for (name <- section.refusedDrivers) assert(gdal.GetDriverByName(name) == null, s"$name is registered")
+        // The process-level settings of the driver policy (AP-43) are set at the first GDAL use, on the JVM too.
+        if (sys.env.get(GDALManager.PolicyEnv).forall(!_.trim.equalsIgnoreCase("off"))) {
+            assert(gdal.GetConfigOption("GDAL_VRT_ENABLE_RAWRASTERBAND") == "NO", "the raw-band setting is not applied")
+        }
         // The engine's settings (I-3): the golden table, which the Python suite reads too.
         val settings = golden.get("engine_settings").fields.asScala.map(e => e.getKey -> e.getValue.asText).toMap
         assert(GdalSpecEngine.EngineSettings.toMap == settings, GdalSpecEngine.EngineSettings)

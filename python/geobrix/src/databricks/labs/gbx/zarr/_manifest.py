@@ -1221,6 +1221,7 @@ def commit(
     meta: dict,
     sharded: dict | None = None,
     files: FileLayout | None = None,
+    fresh: bool = False,
 ) -> int:
     """Commit ``rows`` plus a commit row in one MERGE; returns the Delta version.
 
@@ -1236,13 +1237,16 @@ def commit(
     already committed returns its existing version, so retries are idempotent, even when a
     twin of the same write lands between the check and the MERGE. ``files`` is how the
     table keeps its files (``FileLayout.of(read_props(...))``); without it one
-    ``SHOW TBLPROPERTIES`` finds out.
+    ``SHOW TBLPROPERTIES`` finds out. ``fresh`` is for the first commit to a table the
+    caller made itself: no commit of ``write_id`` is looked for before the MERGE (one can
+    only be there if a twin of this write adopted the table meanwhile, and then the MERGE
+    aborts on its commit row and the lookup after the abort returns that version).
     """
     _check_write_id(write_id)
     source = _commit_source(rows, write_id, meta)
     _require_regions(source)
     _require_shard_keys(spark, table, source, sharded, files)
-    existing = find_commit_version(spark, table, write_id)
+    existing = None if fresh else find_commit_version(spark, table, write_id)
     if existing is not None:
         return existing
     sql_table = _q(table)

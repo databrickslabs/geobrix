@@ -66,6 +66,7 @@ import os
 import random
 import time
 import uuid
+import weakref
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -113,6 +114,7 @@ from databricks.labs.gbx.zarr._write_tasks import (
     chunk_grid,
     explode_function,
     extent,
+    pack_function,
     part_of,
 )
 from databricks.labs.gbx.zarr.errors import (
@@ -232,11 +234,25 @@ def _shuffle_partitions(spark) -> int | None:
     return n if n > 0 else None
 
 
+_USERS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
 def _current_user(spark):
+    """The session's user, which a commit records: asked once per session (``None`` when
+    the session cannot say, asked again next time)."""
     try:
-        return spark.sql("SELECT current_user()").first()[0]
+        return _USERS[spark]
+    except (KeyError, TypeError):
+        pass
+    try:
+        user = spark.sql("SELECT current_user()").first()[0]
     except Exception:
         return None
+    try:
+        _USERS[spark] = user
+    except TypeError:  # a session that cannot be weakly referenced is asked each time
+        pass
+    return user
 
 
 def _is_xarray(data) -> bool:
@@ -888,6 +904,7 @@ class _Plan:
         None  # AccessConfig: how the tasks reach the files (holds credentials)
     )
     files: object = None  # FileLayout: how the manifest keeps its files
+    fresh: bool = False  # create: this call made the table, nothing is committed to it
 
 
 def _as_numbers(values):
@@ -1711,6 +1728,36 @@ def _coverage(meta: ArrayMeta, starts: np.ndarray, stops: np.ndarray):
     return set(covered), partial
 
 
+def _aligned(plan: _Plan) -> bool:
+    """Whether a create's blocks can be packed by the tasks that make them, with no shuffle:
+    a blocks input planned ahead, each block starting on the grid of its array's units
+    (shards of a sharded array, chunks otherwise) and stopping on it or at the array's edge,
+    and no chunk covered by two blocks. Every piece of such a block is a whole chunk, and a
+    shard's chunks come from one block, so they share a pack as they do after the shuffle.
+    Anything else (blocks across units, overlapping blocks, an empty block) is assembled.
+    """
+    if plan.mode != "create" or plan.frame is None or not plan.boxes:
+        return False
+    for name, (starts, stops) in plan.boxes.items():
+        meta = plan.task_arrays.get(name)
+        if meta is None or not len(starts) or not (stops > starts).all():
+            return False
+        chunks = np.array(meta.chunks, dtype=np.int64)
+        unit = chunks
+        if meta.shard is not None:
+            unit = chunks * np.array(meta.shard.cps, dtype=np.int64)
+        shape = np.array(meta.shape, dtype=np.int64)
+        if (starts % unit).any() or ((stops % unit != 0) & (stops != shape)).any():
+            return False
+        # whole chunks only: the blocks are disjoint exactly when their chunk counts add up
+        # to the chunks they touch together
+        counts = np.prod(-(-stops // chunks) - starts // chunks, axis=1)
+        touched, _ = _coverage(meta, starts, stops)
+        if int(counts.sum()) != len(touched):
+            return False
+    return True
+
+
 def _planned(plan: _Plan):
     """``(parts, nbytes)`` of a write whose blocks are known ahead: the ``(variable,
     part)`` groups it touches and their decoded bytes; ``(None, None)`` for one pass."""
@@ -1869,8 +1916,9 @@ def _base_frame(spark, plan: _Plan, names: list[str], parts=None):
 
 
 def _write_files(spark, plan: _Plan) -> pa.Table:
-    """Phase 1: the explode and assemble stages. Returns their rows (``ROWS_ARROW``):
-    chunks, guards, deletes, coordinate blocks and digests."""
+    """Phase 1: the explode and assemble stages, or for an aligned create (``_aligned``)
+    the one pack stage. Returns their rows (``ROWS_ARROW``): chunks, guards, deletes,
+    coordinate blocks and digests."""
     sizes = _sizes()
     frame = plan.frame
     if frame is None and plan.dataset_vars:
@@ -1906,6 +1954,18 @@ def _write_files(spark, plan: _Plan) -> pa.Table:
         fault=_FAULT,
         access=plan.access,
     )
+    if _aligned(plan):
+        _LOG.info(
+            "gbx_zarr_write %s (create): every block is whole units, packed where it is "
+            "made (no shuffle)",
+            plan.table,
+        )
+        packed, plan.access = bounded_closure(
+            spark,
+            plan.access,
+            lambda a: pack_function(dataclasses.replace(cfg, access=a)),
+        )
+        return frame.mapInArrow(packed, ROWS_DDL).toArrow()
     # the explode stage touches no storage: it never carries the credentials
     pieces = frame.mapInArrow(
         explode_function(dataclasses.replace(cfg, access=None)), PIECES_DDL
@@ -2641,6 +2701,7 @@ def _commit(spark, plan: _Plan, data_rows: pa.Table, stats: dict) -> int:
             meta=meta,
             sharded=sharded,
             files=plan.files,
+            fresh=plan.fresh,
         )
     base = plan.base
     for attempt in range(_ATTEMPTS):
@@ -3095,7 +3156,7 @@ def gbx_zarr_write(
         claimed = claim_root(spark, data_root, owner, "managed")
         if not adopt:
             M.create_manifest(spark, target, new_props)
-            made = True
+            made = plan.fresh = True
         return _write(spark, plan, optimize)
     except BaseException:
         # Only a table this call made, and then dropped, gives its marker back: a table

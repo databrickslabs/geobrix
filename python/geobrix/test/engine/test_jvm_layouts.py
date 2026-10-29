@@ -16,6 +16,8 @@ import pytest
 
 from ..manager.conftest import REPO, STAGED_JARS
 
+SYSTEM_JNI = "/usr/lib/libgdalalljni.so"
+
 # One script, run as `python -c SCRIPT <layout>` in a fresh JVM: the L1 engine's slope on a 64 x 64 DEM.
 PROBE = r"""
 import sys
@@ -59,6 +61,20 @@ def _staged_jar():
     if not os.environ.get("GBX_NATIVE_ROOT"):
         pytest.skip(
             "PRECONDITION MISSING: GBX_NATIVE_ROOT (the env wheel payload); layout rows not run"
+        )
+    # Neither layout puts the payload's lib/ on the JVM's library path, so the first libgdalalljni.so there must be
+    # the payload's own (gbx:docker:start links SYSTEM_JNI to it once the env6 payload is built); another one is a
+    # second GDAL, which GDALManager refuses.
+    from databricks.labs.gbx import _native
+
+    d = _native.native_dir(os.environ["GBX_NATIVE_ROOT"])
+    jni = os.path.join(d or "", "lib", "libgdalalljni.so")
+    if os.path.exists(SYSTEM_JNI) and os.path.realpath(SYSTEM_JNI) != os.path.realpath(
+        jni
+    ):
+        pytest.skip(
+            f"PRECONDITION MISSING: {SYSTEM_JNI} is not the payload's JNI ({jni}); run gbx:docker:start after "
+            "building the env6 payload; layout rows not run"
         )
     return str(STAGED_JARS[-1])
 

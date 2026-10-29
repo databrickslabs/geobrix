@@ -200,6 +200,19 @@ class RST_AccessorsExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         srid shouldBe 54008
     }
 
+    test("RST_SRID is 0 for a CRS whose authority code is not a number (OGC:CRS84), not an error") {
+        val sr = new org.gdal.osr.SpatialReference()
+        sr.SetFromUserInput("OGC:CRS84")
+        val mem = GDALManager.memDriver().Create("", 2, 2, 1)
+        try {
+            mem.SetGeoTransform(Array(0.0, 1.0, 0.0, 2.0, 0.0, -1.0))
+            mem.SetProjection(sr.ExportToWkt())
+            RST_SRID.execute(mem) shouldBe 0
+        } finally {
+            mem.delete(); sr.delete()
+        }
+    }
+
     test("RST_Subdatasets should return a map of subdatasets" ) {
         val netcdfPath = this.getClass
             .getResource(

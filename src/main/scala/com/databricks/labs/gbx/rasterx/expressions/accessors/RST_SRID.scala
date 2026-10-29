@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.rasterx.expressions.accessors
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
+import com.databricks.labs.gbx.operations.SpatialRefOps
 import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
@@ -53,13 +54,11 @@ object RST_SRID extends WithExpressionInfo {
         val proj = new SpatialReference(ds.GetProjection())
         Try(proj.AutoIdentifyEPSG())
 
-        // The top-level PROJCS/GEOGCS authority code: an EPSG or ESRI one (GDAL 3.13 identifies ESRI:54008, for one), as
-        // the light tier's srid() gives; 0 when the CRS carries no authority code
-        val authority = Option(proj.GetAuthorityCode(null))
-        authority match {
-            case Some(code) if code.nonEmpty => code.toInt
-            case _                           => 0  // Default to 0 for non-EPSG projections
-        }
+        // The top-level PROJCS/GEOGCS authority code when it is a number: an EPSG or ESRI one (GDAL 3.13 identifies
+        // ESRI:54008, for one), as the light tier's srid() gives (core.crs.authority_srid_of). 0 (the light tier: NULL)
+        // when the CRS has no authority code, or a code that is not a number (OGC:CRS84, IGNF:LAMB93), which no SRID
+        // slot can hold.
+        SpatialRefOps.authoritySridOf(proj).getOrElse(0)
     }
 
     override def name: String = "gbx_rst_srid"

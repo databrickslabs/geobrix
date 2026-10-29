@@ -138,4 +138,21 @@ class GeoJSONLWriterTest extends PlanTest with SilentSparkSession {
         an[IllegalArgumentException] should be thrownBy
             GeoJSONL_DataSource.resolveRoles(bad, Some("the_geom"), None, None)
     }
+
+    test("the writer's PROJ4 column goes through the canonical resolver: a grid named by path is refused (C-2)") {
+        spark.sparkContext.setLogLevel("ERROR")
+        val out = Files.createTempDirectory("gbx_geojsonl_refused_").toFile
+        out.delete()
+        // The PROJ4 string names a grid by path: OGR's ImportFromProj4 would open it; the resolver refuses it with a Fix.
+        val proj = "+proj=longlat +datum=WGS84 +nadgrids=/etc/hostname +no_defs"
+        val df = spark.createDataFrame(Seq(("a", 1, JTS.toWKB(gf.createPoint(new Coordinate(0.1, 40.0))), "0", proj)))
+            .toDF("name", "pop", "geom_0", "geom_0_srid", "geom_0_srid_proj")
+        val e = intercept[Exception] {
+            df.write.format("geojsonl_ogr").mode("overwrite").save(out.getAbsolutePath)
+        }
+        val messages = Iterator.iterate[Throwable](e)(_.getCause).takeWhile(_ != null).map(_.getMessage).toSeq
+        assert(messages.exists(m => m != null && m.contains("names a grid or init file by path") && m.contains("Fix:")),
+          messages.mkString(" | "))
+        assert(!out.exists() || shards(out).isEmpty, "a refused CRS wrote a shard")
+    }
 }

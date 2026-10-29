@@ -466,3 +466,101 @@ def test_drop_ycbcr_is_called_only_inside_the_compression_module():
                 if name == "drop_ycbcr":
                     offenders.append(f"{path.relative_to(src)}:{node.lineno}")
     assert offenders == [], offenders
+
+
+# A function that copies a source dataset's profile must also clean it (``source_profile``,
+# ``cog_profile``) or hand it to ``write_gtiff``, which does. These copy a profile for another use.
+_PROFILE_CLEANERS = {"source_profile", "cog_profile", "write_gtiff"}
+_PROFILE_COPY_EXCEPTIONS = {
+    (
+        "pyrx/core/open_tile.py",
+        "profile",
+    ): "a read-only view of a window; nothing is written",
+    (
+        "pyrx/core/open_tile.py",
+        "materialize_array",
+    ): "returns the profile to its caller",
+    (
+        "pyrx/core/focal.py",
+        "_out_profile",
+    ): "drops tiled, blockxsize, blockysize and interleave itself",
+}
+
+
+def _copies_of_a_dataset_profile(tree):
+    """``(line, enclosing function)`` of ``x.profile.copy()``, ``dict(x.profile)`` and ``{**x.profile}``."""
+    import ast
+
+    def is_profile(node):
+        return isinstance(node, ast.Attribute) and node.attr == "profile"
+
+    found = []
+
+    def visit(node, func):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            func = node
+        hit = (
+            isinstance(node, ast.Call)
+            and (
+                (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "copy"
+                    and is_profile(node.func.value)
+                )
+                or (
+                    isinstance(node.func, ast.Name)
+                    and node.func.id == "dict"
+                    and any(is_profile(a) for a in node.args)
+                )
+            )
+        ) or (
+            isinstance(node, ast.Dict)
+            and any(k is None and is_profile(v) for k, v in zip(node.keys, node.values))
+        )
+        if hit:
+            found.append((node.lineno, func))
+        for child in ast.iter_child_nodes(node):
+            visit(child, func)
+
+    visit(tree, None)
+    return found
+
+
+def _called_names(func):
+    import ast
+
+    return {
+        (
+            n.func.attr
+            if isinstance(n.func, ast.Attribute)
+            else getattr(n.func, "id", None)
+        )
+        for n in ast.walk(func)
+        if isinstance(n, ast.Call)
+    }
+
+
+def test_a_profile_copied_from_a_source_is_cleaned_before_it_is_written():
+    """A writer that starts from ``ds.profile.copy()`` and never cleans it logs GDAL's BLOCKXSIZE
+    warning for a striped source and fails on a JPEG/YCbCr one (15 sites did before ``source_profile``
+    was applied to them). New writers go through ``source_profile`` / ``cog_profile`` /
+    ``write_gtiff``; the few that copy a profile for another use are listed with their reason.
+    """
+    import ast
+    import pathlib
+
+    src = pathlib.Path(C.__file__).parents[2]  # .../databricks/labs/gbx
+    offenders, used = [], set()
+    for path in sorted(src.rglob("*.py")):
+        rel = path.relative_to(src).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for lineno, func in _copies_of_a_dataset_profile(tree):
+            name = func.name if func is not None else "<module>"
+            if (rel, name) in _PROFILE_COPY_EXCEPTIONS:
+                used.add((rel, name))
+            elif func is None or not (_called_names(func) & _PROFILE_CLEANERS):
+                offenders.append(f"{rel}:{lineno} in {name}")
+    assert offenders == [], offenders
+    assert used == set(
+        _PROFILE_COPY_EXCEPTIONS
+    ), "a listed exception no longer copies a profile"

@@ -1069,8 +1069,10 @@ def test_the_docs_command_only_warns_when_the_delta_jars_are_missing(sandbox):
     [
         (".", True),
         ("./", True),
-        ("./formats/", True),
-        ("formats/.", True),
+        ("./readers", True),  # a whole Zarr-bearing directory, spelled with a dot
+        ("./writers/", True),
+        ("api/.", True),
+        ("./formats/", True),  # matched by the old glob too: guards against over-matching
         ("./ingestion/", False),
         ("quickstart/./test_x.py", False),
     ],

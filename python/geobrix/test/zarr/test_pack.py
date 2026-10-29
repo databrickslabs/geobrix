@@ -140,3 +140,29 @@ def test_crc32c_and_fill_checks():
     assert not is_fill(np.array([np.nan, 1.0]), float("nan"))
     assert is_fill(np.zeros(3, "i2"), 0) and not is_fill(np.array([0, 1]), 0)
     assert not is_fill(np.zeros(3), None)  # no fill value: nothing is fill
+
+
+def test_a_commit_looks_its_packs_up_side_by_side(monkeypatch):
+    """``require_packs`` asks for every pack at once (a mount stat or an object head is a
+    round trip each), and still names the ones that are gone."""
+    import threading
+    import time
+
+    from databricks.labs.gbx.zarr import _pack
+    from databricks.labs.gbx.zarr.errors import ZarrError
+
+    threads, lock = set(), threading.Lock()
+
+    def stat(path):
+        with lock:
+            threads.add(threading.get_ident())
+        time.sleep(0.05)
+        if path.endswith("gone.zpack"):
+            raise FileNotFoundError(path)
+
+    monkeypatch.setattr(_pack, "stat_for", lambda access: stat)
+    files = [f"data/t/{i}.zpack" for i in range(8)]
+    _pack.require_packs("/r", files, what="write")
+    assert len(threads) > 1
+    with pytest.raises(ZarrError, match=r"1 pack file\(s\).*data/t/gone.zpack"):
+        _pack.require_packs("/r", [*files, "data/t/gone.zpack"], what="write")

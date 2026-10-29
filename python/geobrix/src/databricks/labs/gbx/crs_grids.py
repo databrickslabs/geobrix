@@ -162,7 +162,7 @@ def register_proj_grids(
     session-start contract in the docs.
     """
     result = proj_grids.set_registered_dirs(dirs, replace=replace)
-    # The driver's own PROJ context takes the union now, as every worker's does on its first UDF (I-C): a context built
+    # The driver's own PROJ context takes the union now, as every worker's does on its first UDF: a context built
     # before this registration keeps its search path, so the environment variable alone would not reach it.
     from databricks.labs.gbx.pyrx import _env
 

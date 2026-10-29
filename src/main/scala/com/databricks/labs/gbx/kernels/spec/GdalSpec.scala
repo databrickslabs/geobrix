@@ -34,7 +34,7 @@ final case class SpecParam(name: String, sessionType: String, default: Option[St
 /** A manifest row that carries a `gdal` block: what the JVM needs to bind and run it. */
 final case class SpecFunction(sqlName: String, params: Seq[SpecParam], minArgs: Int, gdal: GdalSpec)
 
-/** The manifest's top-level `gdal` section (mirrors `manifest.GdalSection`). The driver classification (AP-43): every
+/** The manifest's top-level `gdal` section (mirrors `manifest.GdalSection`). The driver classification: every
   * raster driver the payload's GDAL registers is in `allowedDrivers` (a reader can read it) or `refusedDrivers` (a
   * pipeline, an index, a service or a network API; never registered where the engine runs, see
   * [[com.databricks.labs.gbx.rasterx.gdal.GDALManager.DefaultSkippedDrivers]]). */
@@ -152,7 +152,7 @@ object GdalSpecs {
         closed(drivers, RasterDriverKeys, "raster_drivers")
         val allowedDrivers = names(drivers, "allowed")
         val refusedDrivers = names(drivers, "refused")
-        // the two classes are disjoint and free of repeats, as the Python parser holds them (AP-43)
+        // the two classes are disjoint and free of repeats, as the Python parser holds them
         require(
           allowedDrivers.toSet.intersect(refusedDrivers.toSet).isEmpty &&
             allowedDrivers.distinct.size == allowedDrivers.size && refusedDrivers.distinct.size == refusedDrivers.size,

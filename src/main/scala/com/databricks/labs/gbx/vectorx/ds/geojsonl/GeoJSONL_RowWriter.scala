@@ -189,7 +189,7 @@ class GeoJSONL_RowWriter(
     private def fromProj4(): SpatialReference =
         if (proj4 != null && proj4.nonEmpty) resolveLoudly(proj4, "PROJ4") else null
 
-    /** A CRS a row supplies, or an error: bad data is loud (m-C), with a `Fix:` that names the column. */
+    /** A CRS a row supplies, or an error: bad data is loud, with a `Fix:` that names the column. */
     private def resolveLoudly(value: String, column: String): SpatialReference =
         try SpatialRefOps.resolveCrs(value)
         catch {

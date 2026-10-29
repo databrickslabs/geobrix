@@ -1,4 +1,4 @@
-"""The L1 engine on the JVM layouts a user runs it on (I-4): the staged JAR alone on the user's classpath, and on the
+"""The L1 engine on the JVM layouts a user runs it on: the staged JAR alone on the user's classpath, and on the
 driver's system classpath. Each layout is one JVM, so each row runs in a subprocess.
 
 The JAR bundles GDAL's Java classes built against GDAL 3.11, so on these layouts GDALManager refuses the JVM's GDAL

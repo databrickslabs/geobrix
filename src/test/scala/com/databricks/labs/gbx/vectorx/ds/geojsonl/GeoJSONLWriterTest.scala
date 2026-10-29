@@ -139,7 +139,7 @@ class GeoJSONLWriterTest extends PlanTest with SilentSparkSession {
             GeoJSONL_DataSource.resolveRoles(bad, Some("the_geom"), None, None)
     }
 
-    test("the writer's PROJ4 column goes through the canonical resolver: a grid named by path is refused (C-2)") {
+    test("the writer's PROJ4 column goes through the canonical resolver: a grid named by path is refused") {
         spark.sparkContext.setLogLevel("ERROR")
         val out = Files.createTempDirectory("gbx_geojsonl_refused_").toFile
         out.delete()
@@ -156,7 +156,7 @@ class GeoJSONLWriterTest extends PlanTest with SilentSparkSession {
         assert(!out.exists() || shards(out).isEmpty, "a refused CRS wrote a shard")
     }
 
-    test("an unparseable PROJ4 column is loud: the write fails with the column and a Fix (m-C)") {
+    test("an unparseable PROJ4 column is loud: the write fails with the column and a Fix") {
         spark.sparkContext.setLogLevel("ERROR")
         val out = Files.createTempDirectory("gbx_geojsonl_bad_").toFile
         out.delete()

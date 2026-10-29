@@ -1137,7 +1137,7 @@ def test_worker_peak_is_none_when_one_of_two_pools_runners_exits(
 def test_worker_peak_is_none_when_two_environments_start_cold_and_one_goes_idle(
     spark_session_local, tmp_path, how
 ):
-    # I-5: a shape on two worker environments, both cold, so neither pool has a baseline. Pool A's two
+    # A shape on two worker environments, both cold, so neither pool has a baseline. Pool A's two
     # tasks hold 400 MB and return; then pool A's workers go: killed here, or stopped by Spark's idle stop
     # while pool B keeps releasing (the idle variant, as the probe ran it). The reading was pool B's small
     # mark (55.07 MB, no reason). Two pools that ran on one executor are two environments: NULL.

@@ -99,7 +99,7 @@ def test_literal_arguments_are_bound_once(monkeypatch):
 
 
 def test_the_engine_settings_table_is_the_golden_one():
-    """The engine's GDAL settings, applied thread-local per call on both tiers (I-3): the golden table, which the
+    """The engine's GDAL settings, applied thread-local per call on both tiers: the golden table, which the
     JVM's GdalSpecEngine reads too (GdalSpecSmokeTest). Removing a setting from either table fails here.
     """
     from databricks.labs.gbx.engine import run

@@ -101,19 +101,19 @@ class GdalSpecSmokeTest extends AnyFunSuite {
             val got = OperatorOptions.engineZstdLevel(c.get("decoded_bytes").asLong, Some(c.get("knob").asText))
             assert(got == c.get("level").asInt, s"GBX_ZSTD_LEVEL=${c.get("knob")}")
         }
-        // The virtual-tile policy (I-2, AP-40): the allowlist, and the refused drivers pinned as a set; the JVM skips
-        // exactly those, so none is registered, and a nested source cannot open one (C-1).
+        // The virtual-tile policy: the allowlist, and the refused drivers pinned as a set; the JVM skips exactly
+        // those, so none is registered, and a nested source cannot open one.
         val section = GdalSpecs.section
         assert(section.allowedDrivers.contains("GTiff") && section.allowedDrivers.contains("VRT"), section.allowedDrivers)
         assert(!section.allowedDrivers.exists(section.refusedDrivers.contains), "a driver in both classes")
         assert(section.refusedDrivers.toSet == GDALManager.DefaultSkippedDrivers.split(" ").toSet, section.refusedDrivers)
         KernelGdal.ensureInit()
         for (name <- section.refusedDrivers) assert(gdal.GetDriverByName(name) == null, s"$name is registered")
-        // The process-level settings of the driver policy (AP-43) are set at the first GDAL use, on the JVM too.
+        // The process-level settings of the driver policy are set at the first GDAL use, on the JVM too.
         if (sys.env.get(GDALManager.PolicyEnv).forall(!_.trim.equalsIgnoreCase("off"))) {
             assert(gdal.GetConfigOption("GDAL_VRT_ENABLE_RAWRASTERBAND") == "NO", "the raw-band setting is not applied")
         }
-        // The engine's settings (I-3): the golden table, which the Python suite reads too.
+        // The engine's settings: the golden table, which the Python suite reads too.
         val settings = golden.get("engine_settings").fields.asScala.map(e => e.getKey -> e.getValue.asText).toMap
         assert(GdalSpecEngine.EngineSettings.toMap == settings, GdalSpecEngine.EngineSettings)
     }

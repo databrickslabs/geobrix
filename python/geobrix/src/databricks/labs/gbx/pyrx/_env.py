@@ -15,6 +15,7 @@ import stat
 import threading
 import time
 import warnings
+from contextlib import contextmanager
 from typing import Dict, List, Optional, Sequence, Tuple
 
 
@@ -302,15 +303,269 @@ def _register_pyproj_search_dirs(extra_proj_dirs: Sequence[str]) -> None:
 
 # To find the sidecar files of a raster it opens (external overviews .ovr, masks .msk,
 # .aux.xml, world files), GDAL lists the file's folder by default. Over a Volume's FUSE
-# mount that listing is slow and grows with the folder: about 10 s for one open in a
-# folder of 745 GeoTIFFs on a Serverless worker. With TRUE GDAL reads no listing and
-# checks each sidecar by name instead (GDALOpenInfo leaves the sibling list NULL, and
-# CPLCheckForFile, GDALReadWorldFile2 and the .aux.xml lookup then stat each candidate,
-# lower- and upper-case extension), so sidecars are still found. EMPTY_DIR would hide
-# them; only the direct-read probe (ds.file_gbx._probe_direct_open) uses it. A value set
-# by the user, NO included, is kept. GDAL reads the variable at each open, and a
-# rasterio.Env value wins over it.
+# mount that listing is slow and grows with the folder: 0.3 s to 10 s for one open in a
+# folder of 745 GeoTIFFs on a Serverless worker. configure_gdal_env sets the option to
+# TRUE for the process: GDAL then reads no listing and checks each sidecar by name
+# (GDALOpenInfo leaves the sibling list NULL; CPLCheckForFile, GDALReadWorldFile2 and the
+# .aux.xml lookup stat each candidate, lower- and upper-case extension), so sidecars are
+# still found, at 5 to 7 name checks an open, which on Serverless FUSE cost about what the
+# listing did. open_raster goes one step further for the light tier's own opens of local
+# and Volume files: it lists each folder once per process (_FolderListings) and opens a
+# file the listing shows no sidecar for with EMPTY_DIR (GDAL checks nothing), a file with
+# sidecars GDAL finds by name with TRUE, and anything else with NO (GDAL's own listing,
+# which matches names case-insensitively). A value set by the user, NO included, is kept
+# and decides every open. GDAL reads the option at each open, and a rasterio.Env value
+# wins over the environment variable.
 _READDIR_ON_OPEN = "GDAL_DISABLE_READDIR_ON_OPEN"
+_READDIR_PROCESS_VALUE = "TRUE"
+# True once configure_gdal_env set the option (it was not set by the user): only then does
+# open_raster choose a value per open.
+_READDIR_SET_HERE = False
+
+# The sidecar suffixes GDAL looks for by exact name when it has no sibling list (TRUE): the
+# file's name plus a suffix, and the file's stem with another extension. From GDAL 3.13
+# (the same in 3.12): .aux.xml (gcore/gdalpamdataset.cpp:898-909); .ovr/.OVR
+# (gcore/gdaldefaultoverviews.cpp:267-284); .msk/.MSK (:1614-1631); .aux/.AUX
+# (:313-325, gcore/gdal_misc.cpp:4541-4572 and :4660-4671); world files, the derived first+last+"w"
+# extension, extension+"w" and "wld", each lower then upper case (gcore/gdal_misc.cpp:
+# 2680-2771; frmts/gtiff/gtiffdataset_read.cpp:6096-6106); .tab (gdal_misc.cpp:2465-2500),
+# .xml and .hdr (gtiffdataset_read.cpp:4219-4262, 4281, 6741).
+_NAME_SIDECARS = (".aux.xml", ".ovr", ".OVR", ".msk", ".MSK", ".aux", ".AUX")
+_STEM_SIDECAR_EXTS = ("wld", "tab", "xml", "hdr", "aux")
+# The vendor metadata files GDAL's metadata readers look for under names not made from the
+# raster's stem (gcore/mdreader/reader_*.cpp): summary.txt (ALOS), *_MTL.txt (Landsat),
+# DIM_*.XML and RPC_*.XML (Pleiades), METADATA.DIM (SPOT), *.pass and *.rpc (EROS), and
+# the .txt / .hdr files ALOS derives. A folder holding any of them is left to GDAL's own
+# listing (NO), as without GeoBrix. The readers' stem-named files (*.IMD, *.RPB, *.XML,
+# *.PVL, *_rpc.txt, *_METADATA.XML) are candidates of the raster itself.
+_VENDOR_METADATA_EXTS = frozenset((".txt", ".dim", ".pass", ".rpc", ".hdr"))
+_VENDOR_METADATA_PREFIXES = ("dim_", "rpc_")
+
+
+def _vendor_metadata(low_name: str) -> bool:
+    """True for a (lower-cased) folder entry a GDAL metadata reader may look for."""
+    ext = os.path.splitext(low_name)[1]
+    if ext in _VENDOR_METADATA_EXTS:
+        return True
+    return ext == ".xml" and low_name.startswith(_VENDOR_METADATA_PREFIXES)
+
+
+def _stat_sidecars(name: str) -> frozenset:
+    """Every sidecar name GDAL checks by exact name for the file *name* (see above)."""
+    stem, dot, ext = name.rpartition(".")
+    if not dot:
+        stem, ext = name, ""
+    exts = list(_STEM_SIDECAR_EXTS)
+    if len(ext) >= 2:
+        exts += [ext[0] + ext[-1] + "w", ext + "w"]
+    names = {name + s for s in _NAME_SIDECARS}
+    for e in exts:
+        names.update((f"{stem}.{e.lower()}", f"{stem}.{e.upper()}"))
+    return frozenset(names)
+
+
+def readdir_mode_for(name: str, folder_names) -> str:
+    """The GDAL_DISABLE_READDIR_ON_OPEN value an open of the file *name* takes, given the
+    names in its folder: ``EMPTY_DIR`` when nothing in the folder can be a sidecar of it,
+    ``TRUE`` when every candidate is a name GDAL checks by exact name, else ``NO``.
+
+    A candidate is a folder entry, other than the file, whose name starts, in any case,
+    with the file's stem and then ``.`` or ``_``. A candidate GDAL would not find by exact
+    name (``x.Tfw`` beside ``x.tif``, ``x.png``, ``x_rpc.txt``) or a vendor metadata file
+    anywhere in the folder leaves the open to GDAL's own listing (``NO``).
+    """
+    stem = name.rpartition(".")[0] or name
+    prefix = stem.lower()
+    candidates = []
+    vendor = False
+    for other in folder_names:
+        if other == name:
+            continue
+        low = other.lower()
+        if low.startswith(prefix) and low[len(prefix) : len(prefix) + 1] in (".", "_"):
+            candidates.append(other)
+        if _vendor_metadata(low):
+            vendor = True
+    if vendor:
+        return "NO"
+    if not candidates:
+        return "EMPTY_DIR"
+    exact = _stat_sidecars(name)
+    return "TRUE" if all(c in exact for c in candidates) else "NO"
+
+
+class _FolderListings:
+    """The names in each folder, listed once per process (os.scandir), most recent last.
+
+    Keyed by the folder's resolved path (resolved once per folder string: a FUSE stat costs
+    milliseconds). At most ``max_folders`` are held (least recently used dropped first), and
+    a folder of more than ``max_entries`` names is not held. A file missing from a held
+    listing lists the folder again, once, so files written later are seen; a sidecar written
+    after the folder was listed is not, until the folder is listed again (a file missing
+    from it, or a new worker).
+    """
+
+    def __init__(self, max_folders: int = 64, max_entries: int = 50_000):
+        from collections import OrderedDict
+
+        self.max_folders = max_folders
+        self.max_entries = max_entries
+        self._names: "OrderedDict[str, frozenset]" = OrderedDict()
+        self._resolved: Dict[str, str] = {}
+        self._lock = threading.Lock()
+        self.listings = 0
+
+    def clear(self) -> None:
+        with self._lock:
+            self._names.clear()
+            self._resolved.clear()
+
+    def _list(self, folder: str) -> Optional[frozenset]:
+        names = []
+        try:
+            with os.scandir(folder) as it:
+                for entry in it:
+                    names.append(entry.name)
+                    if len(names) > self.max_entries:
+                        return None
+        except OSError:
+            return None
+        self.listings += 1
+        return frozenset(names)
+
+    def names(self, folder: str, must_hold: str) -> Optional[frozenset]:
+        """The names in *folder*, listed again once when *must_hold* is not among them;
+        None when the folder cannot be listed or is too large to hold."""
+        with self._lock:
+            key = self._resolved.get(folder)
+        if key is None:
+            key = os.path.realpath(folder)
+            with self._lock:
+                self._resolved[folder] = key
+        with self._lock:
+            names = self._names.get(key)
+            if names is not None:
+                self._names.move_to_end(key)
+        if names is not None and must_hold in names:
+            return names
+        names = self._list(folder)
+        if names is None:
+            return None
+        with self._lock:
+            self._names[key] = names
+            self._names.move_to_end(key)
+            while len(self._names) > self.max_folders:
+                self._names.popitem(last=False)
+        return names
+
+
+_LISTINGS = _FolderListings()
+
+
+def _is_plain_file_path(path: str) -> bool:
+    """A local or Volume file path; not a GDAL /vsi path, URL or DRIVER:... string."""
+    if path.startswith("/vsi") or "://" in path:
+        return False
+    head = path.split("/", 1)[0]
+    return ":" not in head
+
+
+def readdir_mode(path) -> Optional[str]:
+    """The GDAL_DISABLE_READDIR_ON_OPEN value for one light-tier open of *path*, or None to
+    leave the open to the current setting: a value the user set (environment or
+    rasterio.Env), a cloud or /vsi path (TRUE, no listing), or a folder that cannot be
+    listed. See _READDIR_ON_OPEN and readdir_mode_for."""
+    if not _READDIR_SET_HERE:
+        return None
+    try:
+        from rasterio.env import get_gdal_config
+
+        if get_gdal_config(_READDIR_ON_OPEN, normalize=False) != _READDIR_PROCESS_VALUE:
+            return None  # set by the user since (an environment variable or an Env)
+    except Exception:  # noqa: BLE001 - no rasterio: nothing to decide
+        return None
+    p = os.fspath(path)
+    if not isinstance(p, str) or not _is_plain_file_path(p):
+        return None
+    folder, name = os.path.split(os.path.abspath(p))
+    names = _LISTINGS.names(folder, name)
+    if names is None or name not in names:
+        return None
+    return readdir_mode_for(name, names)
+
+
+# CPLSetThreadLocalConfigOption / CPLGetThreadLocalConfigOption of the libgdal rasterio
+# uses, through ctypes: (setter, getter), False when they cannot be reached, None before the
+# first look. A rasterio.Env is no use for a per-open value: on exit the outermost Env sets
+# the value it found on entry as a process-wide GDAL config option (rasterio/env.py,
+# Env.__exit__ with _discovered_options), and from then on that option shadows the
+# environment variable, including a value the user sets later. In the main thread
+# rasterio's own set_gdal_config is process-wide too.
+_THREAD_CONFIG = None
+
+
+def _thread_config():
+    """``(set, get)`` for this thread's GDAL config options, or None (see _THREAD_CONFIG).
+    Checked once: a value set through it must be what rasterio's GDAL reads."""
+    global _THREAD_CONFIG
+    if _THREAD_CONFIG is None:
+        _THREAD_CONFIG = False
+        try:
+            import ctypes
+
+            from rasterio.env import get_gdal_config
+
+            from databricks.labs.gbx.pyrx.core.analysis import _load_libgdal
+
+            lib = _load_libgdal()
+            setter = lib.CPLSetThreadLocalConfigOption
+            setter.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+            setter.restype = None
+            getter = lib.CPLGetThreadLocalConfigOption
+            getter.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+            getter.restype = ctypes.c_char_p
+            setter(b"GBX_THREAD_CONFIG_CHECK", b"1")
+            try:
+                same_gdal = (
+                    get_gdal_config("GBX_THREAD_CONFIG_CHECK", normalize=False) == "1"
+                )
+            finally:
+                setter(b"GBX_THREAD_CONFIG_CHECK", None)
+            if same_gdal:
+                _THREAD_CONFIG = (setter, getter)
+        except Exception:  # noqa: BLE001 - no reachable libgdal: no per-open value
+            _THREAD_CONFIG = False
+    return _THREAD_CONFIG or None
+
+
+@contextmanager
+def readdir_option(mode: Optional[str]):
+    """Run the block with GDAL_DISABLE_READDIR_ON_OPEN = *mode* for this thread only, and
+    restore the thread's previous value after it. ``None`` leaves the setting alone. When
+    the thread-local setter cannot be reached the block runs under the current setting:
+    a by-name sidecar check (TRUE) in place of the value asked for."""
+    tc = _thread_config() if mode is not None else None
+    if tc is None:
+        yield
+        return
+    setter, getter = tc
+    key = _READDIR_ON_OPEN.encode()
+    prev = getter(key, None)
+    setter(key, mode.encode())
+    try:
+        yield
+    finally:
+        setter(key, prev)
+
+
+def open_raster(path, *args, **kwargs):
+    """``rasterio.open(path, ...)`` with GDAL_DISABLE_READDIR_ON_OPEN chosen for this file
+    (readdir_mode), for this open only: GDAL decides which sidecars to look for when it
+    opens the file, so the dataset returned keeps that choice."""
+    import rasterio
+
+    with readdir_option(readdir_mode(path)):
+        return rasterio.open(path, *args, **kwargs)
 
 
 def configure_gdal_env(extra_proj_dirs: Optional[Sequence[str]] = None) -> None:
@@ -329,8 +584,10 @@ def configure_gdal_env(extra_proj_dirs: Optional[Sequence[str]] = None) -> None:
     GDAL_DISABLE_READDIR_ON_OPEN is set to TRUE unless it is set already (see
     _READDIR_ON_OPEN).
     """
+    global _READDIR_SET_HERE
     if _READDIR_ON_OPEN not in os.environ:
-        os.environ[_READDIR_ON_OPEN] = "TRUE"
+        os.environ[_READDIR_ON_OPEN] = _READDIR_PROCESS_VALUE
+        _READDIR_SET_HERE = True
 
     if not os.environ.get("GDAL_DATA"):
         p = _bundled_gdal_data()

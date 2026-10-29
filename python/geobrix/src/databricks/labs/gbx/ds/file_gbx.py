@@ -1309,18 +1309,21 @@ def _probe_direct_open(path: str) -> None:
     consistency misses (``FileNotFoundError`` / ``OSError``) do not
     immediately trigger a full-file copy.
 
-    The open runs with ``GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR``: a one-pixel read needs
-    no sidecar file, and GDAL then neither lists the folder (about 10 s on a Serverless
-    worker for a folder of 745 files) nor checks each sidecar by name. The real open that
-    follows keeps the process setting (``pyrx._env.configure_gdal_env``).
+    The open runs with ``GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR`` for this thread
+    (``pyrx._env.readdir_option``): a one-pixel read needs no sidecar file, and GDAL then
+    neither lists the folder (0.3 s to 10 s on a Serverless worker for a folder of 745
+    files) nor checks each sidecar by name. The real open that follows takes its own value
+    (``pyrx._env.open_raster``).
 
     Raises on failure after retries; returns ``None`` on success.
     """
     import rasterio
     from rasterio.windows import Window
 
+    from databricks.labs.gbx.pyrx._env import readdir_option
+
     def _do() -> None:
-        with rasterio.Env(GDAL_DISABLE_READDIR_ON_OPEN="EMPTY_DIR"):
+        with readdir_option("EMPTY_DIR"):
             with rasterio.open(path) as ds:
                 ds.read(1, window=Window(0, 0, 1, 1))
 
@@ -1498,8 +1501,11 @@ def _open_via_file_ref(fr, rasterio, stream_max_bytes=_GBX_STREAM_MAX_BYTES):
             return ds, stream  # tiled/COG: seekable stream is efficient
         ds.close()
         stream.close()  # striped: release the stream before FUSE fallback
+    from databricks.labs.gbx.pyrx._env import readdir_mode, readdir_option
+
     local_path = fr.as_local_file()
-    return rasterio.open(local_path), None  # FUSE path: no stream
+    with readdir_option(readdir_mode(local_path)):  # as open_raster, on *rasterio*
+        return rasterio.open(local_path), None  # FUSE path: no stream
 
 
 class _OpenerContext:
@@ -1567,12 +1573,13 @@ class _OpenerContext:
                 pass  # all FILE paths failed → staging fallback
         # Staging fallback: fr unavailable or all FILE paths raised.
         # Import from preparer shim so test monkeypatches still work
+        from databricks.labs.gbx.pyrx._env import open_raster
         from databricks.labs.gbx.pyrx.core.preparer import (
             _stage_local_if_needed as _stage,
         )
 
         local_path, is_temp = _stage(uri)
-        ds = rasterio.open(local_path)
+        ds = open_raster(local_path)
         if is_temp:
             self._staged_temps[id(ds)] = local_path
             if self._unlink_staged:

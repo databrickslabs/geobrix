@@ -61,8 +61,9 @@ class GDALManagerProjGridsSpec extends AnyFunSuite with BeforeAndAfterAll {
     test("configureGDAL skips PROJ_DATA prepend when PROJ_GRID_DIRS is absent") {
         val config = ExpressionConfig(Map.empty, null)
         GDALManager.configureGDAL(config)
-        // PROJ_LIB is reset to /usr/share/proj by the base configureGDAL call
-        gdal.GetConfigOption("PROJ_LIB") shouldBe "/usr/share/proj"
+        // PROJ_LIB ends at /usr/share/proj after the base configureGDAL call (grid dirs an init applied earlier in
+        // this JVM stay ahead of it)
+        gdal.GetConfigOption("PROJ_LIB").split(":").last shouldBe "/usr/share/proj"
     }
 
     test("a later init's PROJ grid dirs reach PROJ, after an earlier init without them") {
@@ -87,6 +88,9 @@ class GDALManagerProjGridsSpec extends AnyFunSuite with BeforeAndAfterAll {
         val ct = Try(osr.CreateCoordinateTransformation(src, dst)).toOption.flatMap(Option(_))
         withClue(s"no transform through $name on $dir: ") { ct should not be empty }
         ct.get.TransformPoint(0.0, 51.5)(1) shouldBe (51.5 + 30.0 / 3600.0 +- 1e-6)
+        // a base reset keeps the applied grid dirs on the search path
+        GDALManager.configureGDAL("/tmp", "/tmp")
+        Seq("PROJ_DATA", "PROJ_LIB").foreach(k => gdal.GetConfigOption(k) should include(dir.toString))
     }
 
 }

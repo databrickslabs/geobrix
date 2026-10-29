@@ -94,6 +94,12 @@ class GDALManagerTest extends AnyFunSuite with BeforeAndAfterAll {
         e.getMessage should (include(loaded) and include(s"$other/lib/libgdalalljni.so") and include("Fix:"))
         val same = dirWith(p => Files.createSymbolicLink(p, Paths.get(loaded)))
         GDALManager.init(ExpressionConfig(Map(GDALManager.NativeDirKey -> same), null))
+        // a later dir with no JNI at all says so, not "another GDAL"
+        val empty = Files.createTempDirectory("gbx_native_dir_empty").toString
+        val missing = intercept[IllegalStateException] {
+            GDALManager.init(ExpressionConfig(Map(GDALManager.NativeDirKey -> empty), null))
+        }
+        missing.getMessage should include(s"no GDAL JNI at $empty/lib/libgdalalljni.so")
     }
 
 }

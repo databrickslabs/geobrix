@@ -54,7 +54,7 @@ object GDALManager extends Logging {
     @volatile private var sameAsLoaded: Set[String] = Set.empty
     // PROJ grid directories already on the PROJ search path, in the order applied (a union: none is dropped)
     @volatile private var appliedGridDirs: Seq[String] = Nil
-    private val lock = AnyRef
+    private val lock = new Object
 
     /** Tracks whether OGR drivers have been registered in this JVM. See [[initOgr]]. */
     @volatile private var ogrEnabled = false
@@ -214,6 +214,8 @@ object GDALManager extends Logging {
         val choice = loaded.getOrElse(NativeChoice(LegacyJni, None, None))
         if (choice.projData.isEmpty) gdal.SetConfigOption("PROJ_LIB", "/usr/share/proj")
         applyNativeData(choice)
+        // a reset keeps the PROJ grid directories already applied in this JVM (a union: none is dropped)
+        if (appliedGridDirs.nonEmpty) setProjSearchPath((appliedGridDirs :+ baseProjData).distinct)
         // Off by default; flipped on only around PixelCombineRasters.combine() via withVrtPython.
         gdal.SetConfigOption("GDAL_VRT_ENABLE_PYTHON", "NO")
         gdal.SetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "YES")
@@ -256,10 +258,12 @@ object GDALManager extends Logging {
         }
         val c = ensureJniLoaded(nativeDir)
         if (sharedObjects.nonEmpty) {
+            // a user-named library may pull in its own libgdal: one the JNI load had not mapped is a second GDAL,
+            // for the payload's and the system's GDAL alike
+            val before = mappedLibgdal().map(realPathOf).toSet
             sharedObjects.foreach(loadOrNoop)
-            // a user-named library may pull in its own libgdal: the same one-GDAL check as the JNI load
-            val foreign = if (c.projData.isDefined) foreignLibgdal(mappedLibgdal(), c, realPathOf) else Nil
-            if (foreign.nonEmpty) throw new IllegalStateException(differentGdal(foreign, c.jni.stripSuffix(s"/$JniName")))
+            val added = mappedLibgdal().filterNot(p => before.contains(realPathOf(p)))
+            if (added.nonEmpty) throw new IllegalStateException(differentGdal(added, c.jni.stripSuffix(s"/$JniName")))
         }
     }
 
@@ -338,6 +342,12 @@ object GDALManager extends Logging {
                     case Some(c) =>
                         confDir.filter(_.nonEmpty).foreach { d =>
                             val j = s"${d.stripSuffix("/")}/lib/$JniName"
+                            if (!Files.exists(Paths.get(j))) {
+                                throw new IllegalStateException(
+                                  s"geobrix: no GDAL JNI at $j (from $NativeDirKey); this JVM runs the GDAL loaded from " +
+                                      s"${c.jni}. Fix: $FindDir."
+                                )
+                            }
                             if (!sameJni(j, c.jni, realPathOf, jniIdentityOf)) throw new IllegalStateException(laterGdal(c.jni, j))
                             sameAsLoaded += d
                         }

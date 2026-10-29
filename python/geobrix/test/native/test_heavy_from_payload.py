@@ -68,17 +68,25 @@ def native_dir():
     return d
 
 
-def _java(native_dir, main, *args, classes=None):
-    """`main` in a fresh JVM on the staged JAR and pyspark's jars, with the payload's lib/ first on the library path
-    and no GBX_NATIVE_ROOT in its environment."""
+def _java(native_dir, main, *args, classes=None, payload_first=True, first_on_cp=None):
+    """`main` in a fresh JVM on the staged JAR and pyspark's jars, with no GBX_NATIVE_ROOT in its environment and,
+    unless `payload_first` is False (the JVM's default library path), the payload's lib/ first on the library path.
+    `first_on_cp` goes ahead of the JAR on the class path."""
     import pyspark
 
     cp = f"{JARS[-1]}:{os.path.join(os.path.dirname(pyspark.__file__), 'jars', '*')}"
-    env = {k: v for k, v in os.environ.items() if k != "GBX_NATIVE_ROOT"}
-    lib = f"-Djava.library.path={os.path.join(native_dir, 'lib')}:{DEV_LIBRARY_PATH}"
+    cp = ":".join(str(x) for x in (first_on_cp, classes, cp) if x)
+    # as on an executor: no payload root and none of the data paths the Python activation set in this process
+    drop = {"GBX_NATIVE_ROOT", "GDAL_DATA", "PROJ_DATA", "PROJ_LIB"}
+    env = {k: v for k, v in os.environ.items() if k not in drop}
+    lib = (
+        [f"-Djava.library.path={os.path.join(native_dir, 'lib')}:{DEV_LIBRARY_PATH}"]
+        if payload_first
+        else []
+    )
     target = [main] if classes else [str(HERE.parent / f"{main}.java")]
     return subprocess.run(
-        ["java", lib, "-cp", f"{classes}:{cp}" if classes else cp, *target, *args],
+        ["java", *lib, "-cp", cp, *target, *args],
         capture_output=True,
         text=True,
         timeout=600,
@@ -103,7 +111,27 @@ def conf_only_probe(native_dir, tmp_path_factory):
     return out
 
 
-@pytest.mark.parametrize("first_user", ["kernel", "writer"])
+def _switched():
+    """True when the staged JAR bundles the payload build's GDAL classes (pom.xml's gdal.java.version)."""
+    with zipfile.ZipFile(JARS[-1]) as jar, zipfile.ZipFile(_build_classes()) as build:
+        return jar.read(CONSTANTS) == build.read(CONSTANTS)
+
+
+def _system_gdal_or_skip():
+    """Skip unless the JVM's default library path finds a system JNI of another GDAL than the payload's."""
+    if not os.path.exists(SYSTEM_JNI):
+        pytest.skip(
+            f"PRECONDITION MISSING: a system GDAL JNI at {SYSTEM_JNI}; this row not run"
+        )
+    if "/_native/" in os.path.realpath(SYSTEM_JNI):
+        pytest.skip(
+            f"PRECONDITION MISSING: {SYSTEM_JNI} is a payload's JNI, not a second GDAL; this row not run"
+        )
+
+
+# kernel: KernelGdal on the driver; writer: a vector writer's load on a task; writer-no-session: the same with no
+# session visible (as on an executor), so only the task's local property carries the conf; ogr: initOgr first.
+@pytest.mark.parametrize("first_user", ["kernel", "writer", "writer-no-session", "ogr"])
 def test_the_session_conf_alone_loads_the_payload(
     native_dir, conf_only_probe, first_user
 ):
@@ -112,6 +140,12 @@ def test_the_session_conf_alone_loads_the_payload(
     )
     lines = res.stdout.splitlines()
     assert f"RESULT ok:{_pin('GDAL_VERSION')}" in lines, res.stdout + res.stderr[-3000:]
+    if first_user == "writer-no-session":
+        assert "SESSIONS_VISIBLE false" in lines, res.stdout
+    if (
+        first_user == "ogr"
+    ):  # GDALManager loaded it, with the payload's data, before OGR registered
+        assert f"GDAL_DATA {native_dir}/../share/gdal" in lines, res.stdout
     mapped = [ln.split(" ", 1)[1] for ln in lines if ln.startswith("MAPPED ")]
     assert len(set(mapped)) == 1, mapped
     assert mapped[0].startswith(
@@ -129,19 +163,70 @@ def test_a_second_gdal_in_the_jvm_is_refused(native_dir):
     assert "a different GDAL is already loaded" in res.stderr, res.stderr
 
 
+def test_the_system_gdal_is_named_and_other_gdal_classes_are_refused(
+    native_dir, conf_only_probe
+):
+    """No conf and no GBX_NATIVE_ROOT: the JVM says it runs the system GDAL; with the payload build's GDAL classes
+    ahead of the JAR's, which that JNI cannot serve, GDALManager refuses them with a Fix.
+    """
+    _system_gdal_or_skip()
+    res = _java(
+        native_dir,
+        "ConfOnlyProbe",
+        "kernel",
+        "",
+        classes=conf_only_probe,
+        payload_first=False,
+        first_on_cp=_build_classes(),
+    )
+    named = "this JVM runs the system GDAL" in res.stderr
+    refused = (
+        "RESULT error:IllegalStateException:geobrix: GDAL's Java classes cannot use the GDAL loaded from"
+        in res.stdout
+        and "Fix:" in res.stdout
+    )
+    assert (named, refused) == (True, True), res.stdout + res.stderr[-3000:]
+
+
+def test_a_shared_object_that_maps_a_second_gdal_is_refused_on_the_system_gdal(
+    native_dir, conf_only_probe
+):
+    """A JVM on the system GDAL whose sharedobjects conf names a library that maps another libgdal is refused."""
+    _system_gdal_or_skip()
+    if _switched():
+        pytest.skip(
+            "PRECONDITION MISSING: the JAR's GDAL classes are the payload build's, which the system JNI cannot serve; "
+            "this row not run"
+        )
+    other = sorted(Path(native_dir, "lib").glob("libgdal-*.so.*"))
+    res = _java(
+        native_dir,
+        "ConfOnlyProbe",
+        "shared",
+        "",
+        str(other[0]),
+        classes=conf_only_probe,
+        payload_first=False,
+    )
+    assert (
+        "RESULT error:java.lang.IllegalStateException: geobrix: a different GDAL is already loaded"
+        in (res.stdout)
+    ), (res.stdout + res.stderr[-3000:])
+
+
 @pytest.fixture(scope="module")
 def spark(native_dir):
-    with zipfile.ZipFile(JARS[-1]) as jar, zipfile.ZipFile(_build_classes()) as build:
-        if jar.read(CONSTANTS) != build.read(CONSTANTS):
-            pytest.skip(
-                "PRECONDITION MISSING: the staged JAR's GDAL classes are not the payload build's "
-                "(pom.xml's gdal.java.version); the oracle not run"
-            )
+    if not _switched():
+        pytest.skip(
+            "PRECONDITION MISSING: the staged JAR's GDAL classes are not the payload build's "
+            "(pom.xml's gdal.java.version); the oracle not run"
+        )
     from pyspark.sql import SparkSession
 
     if SparkSession.getActiveSession() is not None:
         pytest.skip(
-            "A Spark session is already live; run this file alone (gbx-test-parity.sh --path ...)"
+            "PRECONDITION MISSING: a Spark session is already live; run this file alone "
+            "(gbx-test-parity.sh --path ...); the oracle not run"
         )
     root = os.environ.pop(
         "GBX_NATIVE_ROOT"

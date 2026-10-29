@@ -166,3 +166,17 @@ def test_a_commit_looks_its_packs_up_side_by_side(monkeypatch):
     assert len(threads) > 1
     with pytest.raises(ZarrError, match=r"1 pack file\(s\).*data/t/gone.zpack"):
         _pack.require_packs("/r", [*files, "data/t/gone.zpack"], what="write")
+
+
+def test_a_pack_lookup_error_that_is_not_a_missing_file_fails_the_check(monkeypatch):
+    """Looked up side by side, a pack whose lookup fails for another reason (a refused
+    request) raises that error: it is not reported as gone, nor swallowed."""
+    from databricks.labs.gbx.zarr import _pack
+
+    def stat(path):
+        if path.endswith("3.zpack"):
+            raise PermissionError(13, "refused", path)
+
+    monkeypatch.setattr(_pack, "stat_for", lambda access: stat)
+    with pytest.raises(PermissionError, match="refused"):
+        _pack.require_packs("/r", [f"data/t/{i}.zpack" for i in range(8)], what="write")

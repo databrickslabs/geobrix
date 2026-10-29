@@ -1939,6 +1939,12 @@ ALIGNED = {
         {"time": 12, "latitude": 10, "longitude": 12},
         (12, 10, 12),
     ),
+    # latitude 10 = a shard of 8 and an edge shard of 2 (one partial chunk of 4)
+    "edge-shards": (
+        {"time": 12, "latitude": 4, "longitude": 6},
+        {"time": 12, "latitude": 8, "longitude": 12},
+        (12, 8, 12),
+    ),
 }
 MISALIGNED = {
     "half-chunks": ({"time": 12, "latitude": 5, "longitude": 6}, False, (6, 5, 6)),
@@ -2163,3 +2169,170 @@ def test_a_commit_writes_its_coordinate_packs_side_by_side(
     np.testing.assert_array_equal(
         _read(spark_delta, table, "latitude"), _dataset().latitude.values
     )
+
+
+def _pack_files(spark, table, name="t2m"):
+    return {
+        r["file"]
+        for r in spark.sql(
+            f"SELECT file FROM {table} WHERE kind = 'chunk' AND array = '{name}' "
+            "AND file IS NOT NULL AND tag IS NULL"
+        ).collect()
+    }
+
+
+def test_an_aligned_create_from_one_partition_still_fans_out(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """Eight whole-chunk blocks in one input partition: the pack stage runs where the blocks
+    are, so they are first repartitioned by block, and more than one task packs them."""
+    no_hooks.setattr(_write, "explode_function", _refuse("explode"))
+    table, root = _table("fan"), tmp_path / "root_fan"
+    drop(table)
+    chunks, shards, cut = ALIGNED["one-chunk-blocks"]
+    gbx_zarr_write(
+        _cut_blocks(spark_delta, cut, _cube_values()).coalesce(1),
+        table,
+        root=str(root),
+        chunks=chunks,
+        shards=shards,
+        spark=spark_delta,
+    )
+    assert len(_pack_files(spark_delta, table)) > 1
+    np.testing.assert_array_equal(_read(spark_delta, table, "t2m"), _cube_values())
+
+
+def test_spread_out_moves_only_an_input_too_narrow_for_its_blocks():
+    class Frame:
+        def __init__(self):
+            self.calls = []
+
+        def repartition(self, *args):
+            self.calls.append(args)
+            return self
+
+    class Session:
+        conf = types.SimpleNamespace(get=lambda key, default=None: "8")
+
+    def plan(blocks, partitions):
+        return types.SimpleNamespace(
+            spread={"blocks": blocks, "partitions": partitions}, table="t"
+        )
+
+    for blocks, parts, want in [
+        (40, 1, (8, "variable", "start")),
+        (40, 4, (8, "variable", "start")),
+        (40, 5, None),
+        (2, 1, (2, "variable", "start")),
+        (8, 8, None),
+    ]:
+        frame = Frame()
+        _write._spread_out(Session(), plan(blocks, parts), frame)
+        assert frame.calls == ([want] if want else []), (blocks, parts)
+    frame = Frame()
+    _write._spread_out(Session(), types.SimpleNamespace(spread=None, table="t"), frame)
+    assert frame.calls == []  # positions from elsewhere (tiles): left as they are
+
+
+def test_the_position_pass_counts_the_partitions_holding_data_blocks():
+    import pyarrow as pa
+
+    seen = pa.table(
+        {
+            "variable": ["t2m", "t2m", "t2m", "time", "u10"],
+            "dims": [
+                ["time", "y"],
+                ["time", "y"],
+                ["time", "y"],
+                ["time"],
+                ["time", "y"],
+            ],
+            _write._PID: [0, 0, 3, 5, 3],
+        }
+    )
+    assert _write._spread_of(seen) == {
+        "blocks": 4,
+        "partitions": 2,
+    }  # "time" is a coordinate
+
+
+def test_overlapping_aligned_blocks_walk_their_coverage_once(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    real, calls = _write._coverage, []
+
+    def counted(*a, **k):
+        calls.append(1)
+        return real(*a, **k)
+
+    no_hooks.setattr(_write, "_coverage", counted)
+    one = np.ones((12, 5, 6), "float32")
+    with pytest.raises(Exception, match="more than once"):
+        gbx_zarr_write(
+            _blocks(spark_delta, ("t2m", (0, 0, 0), one), ("t2m", (0, 0, 0), one)),
+            _table("cov"),
+            root=str(tmp_path / "root_cov"),
+            chunks=CHUNKS,
+            shards=False,
+            spark=spark_delta,
+        )
+    assert calls == [1]  # the alignment check and the shuffle sizing share it
+
+
+def test_an_aligned_create_that_fails_in_its_pack_stage_leaves_nothing(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """A pack task fails after it has written packs: the create raises, its packs are
+    removed, the new table is dropped and the root given back, so the same create runs
+    again at the same root. One task (one partition, kept so) packs block 0 into packs
+    that close at once (1-byte roll), then fails on block 1."""
+    from databricks.labs.gbx.zarr import _register
+
+    chunks, shards, cut = ALIGNED["one-shard-blocks"]
+    table, root = _table("pkf"), tmp_path / "root_pkf"
+    drop(table)
+    sizes = _write._sizes
+    no_hooks.setattr(_write, "_sizes", lambda: {**sizes(), "roll_bytes": 1})
+    no_hooks.setattr(_write, "_spread_out", lambda spark, plan, frame: frame)
+    no_hooks.setattr(_write, "explode_function", _refuse("explode"))
+    no_hooks.setattr(_write, "_FAULT", ("t2m", "c/1/0/0"))
+    with pytest.raises(Exception, match="test fault"):
+        gbx_zarr_write(
+            _cut_blocks(spark_delta, cut, _cube_values()).coalesce(1),
+            table,
+            root=str(root),
+            chunks=chunks,
+            shards=shards,
+            spark=spark_delta,
+        )
+    assert not spark_delta.catalog.tableExists(table)
+    assert not (root / OWNER_MARKER).exists()
+    assert not (root / "data").exists()  # block 0's packs were written, then removed
+    ledger = _register._ledger_table(str(root))
+    assert _register._held(spark_delta, ledger) == []
+    no_hooks.setattr(_write, "_FAULT", None)
+    _create_cut(spark_delta, drop, tmp_path, "pkf", chunks, shards, cut)
+
+
+def test_a_coordinate_copy_that_fails_fails_the_commit(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """An error that is not a missing file, raised in one of the side-by-side coordinate
+    copies, fails the commit: nothing is committed and the new table is dropped."""
+    from databricks.labs.gbx.zarr.errors import ZarrError
+
+    real = _write.PackWriter.close
+
+    def close(self):
+        if "/data/latitude/" in self.dest_dir:
+            raise ZarrError("could not write the pack file (test)", fix="none")
+        return real(self)
+
+    no_hooks.setattr(_write.PackWriter, "close", close)
+    table, root = _table("cpf"), tmp_path / "root_cpf"
+    drop(table)
+    with pytest.raises(ZarrError, match="could not write the pack file"):
+        gbx_zarr_write(
+            _dataset(), table, root=str(root), chunks=CHUNKS, spark=spark_delta
+        )
+    assert not spark_delta.catalog.tableExists(table)

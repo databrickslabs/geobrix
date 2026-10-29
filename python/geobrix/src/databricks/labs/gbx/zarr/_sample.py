@@ -14,7 +14,7 @@ the other dimensions (time, level), carrying the point's own columns:
    ships the manifest rows of exactly the objects it reads.
 3. **Read.** A unit reads the cells of its points (``_engine.read_points``): a plain store
    through a vectorized index, a manifest store by decoding only the chunks that hold a
-   cell. A unit whose points need half or more of the cells of the box around them reads
+   cell. A unit whose points need a tenth or more of the cells of the box around them reads
    that box once and gathers from it instead (``_unit_boxes``), which measured faster. Missing
    data is masked as ``gbx_zarr_read`` masks it (``_read._table_values``).
 

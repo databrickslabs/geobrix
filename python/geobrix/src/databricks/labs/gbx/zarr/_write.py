@@ -506,6 +506,9 @@ class _Input:
     frame: object = None  # blocks: the blocks to write
     digest: tuple | None = None  # blocks: (count, hash) of the planned blocks
     known: dict = field(default_factory=dict)  # coordinates the driver holds already
+    # blocks: {"blocks": data blocks, "partitions": input partitions holding them}, from
+    # the position pass; None when the positions came from elsewhere (tiles)
+    spread: dict | None = None
 
 
 def _wanted(names, variables) -> list[str]:
@@ -640,7 +643,10 @@ def _planned_blocks(data, variables, seen=None, known=None) -> _Input:
     from pyspark.sql import functions as F
 
     frame = _blocks_frame(data, variables)
-    vars_ = _position_pass(frame) if seen is None else _summarize_positions(seen)
+    spread: dict = {}
+    vars_ = (
+        _position_pass(frame, spread) if seen is None else _summarize_positions(seen)
+    )
     names = _names(variables)
     if names is not None:
         missing = [n for n in names if n not in vars_]
@@ -657,14 +663,24 @@ def _planned_blocks(data, variables, seen=None, known=None) -> _Input:
             frame = frame.where(F.col("variable").isin(keep))
             vars_ = {n: vars_[n] for n in keep}
     return _Input(
-        "blocks", vars_, {}, frame=frame, digest=_digest_of(vars_), known=known or {}
+        "blocks",
+        vars_,
+        {},
+        frame=frame,
+        digest=_digest_of(vars_),
+        known=known or {},
+        spread=spread or None,
     )
 
 
-def _position_pass(frame) -> dict[str, _Var]:
+_PID = "__gbx_pid"
+
+
+def _position_pass(frame, spread: dict | None = None) -> dict[str, _Var]:
     """The variables of a blocks frame from one pass over its block positions. Only
     position, type and attribute columns are selected, never ``data``: a staged input is
-    not read for its bytes here."""
+    not read for its bytes here. ``spread``, when given, gets how many data blocks there are
+    and how many input partitions hold them (the same pass: each row's partition id)."""
     from pyspark.sql import functions as F
 
     cols = [F.col(c) for c in ("variable", "dims", "start", "stop", "dtype", "shape")]
@@ -674,7 +690,24 @@ def _position_pass(frame) -> dict[str, _Var]:
             if opt in frame.columns
             else F.lit(None).cast("string").alias(opt)
         )
-    return _summarize_positions(frame.select(*cols).toArrow())
+    seen = frame.select(*cols, F.spark_partition_id().alias(_PID)).toArrow()
+    if spread is not None:
+        spread.update(_spread_of(seen))
+    return _summarize_positions(seen)
+
+
+def _spread_of(seen: pa.Table) -> dict:
+    """``{"blocks", "partitions"}`` of a position pass: its data blocks (not coordinate
+    blocks: one dimension, named like it) and the distinct partitions they came from."""
+    dims = seen.column("dims")
+    one = pc.equal(pc.fill_null(pc.list_value_length(dims), 0), 1)
+    first = pc.list_element(pc.fill_null(dims, pa.scalar([""], dims.type)), 0)
+    coord = pc.and_(one, pc.equal(first, seen.column("variable")))
+    data = seen.filter(pc.invert(pc.fill_null(coord, False)))
+    return {
+        "blocks": data.num_rows,
+        "partitions": len(pc.unique(data.column(_PID))) if data.num_rows else 0,
+    }
 
 
 def _summarize_positions(seen: pa.Table) -> dict[str, _Var]:
@@ -906,6 +939,8 @@ class _Plan:
     )
     files: object = None  # FileLayout: how the manifest keeps its files
     fresh: bool = False  # create: this call made the table, nothing is committed to it
+    spread: dict | None = None  # create: how the input holds its blocks (_Input.spread)
+    coverage: dict = field(default_factory=dict)  # variable -> _coverage of its boxes
 
 
 def _as_numbers(values):
@@ -1213,6 +1248,7 @@ def _plan_create(table, write_id, root, inp: _Input, chunks, shards, codecs) -> 
         offsets=offsets,
         extents=extents,
         digest=inp.digest,
+        spread=inp.spread,
     )
     chunks_codecs = _codec_chain(codecs)
     for v in inp.vars.values():
@@ -1753,10 +1789,41 @@ def _aligned(plan: _Plan) -> bool:
         # whole chunks only: the blocks are disjoint exactly when their chunk counts add up
         # to the chunks they touch together
         counts = np.prod(-(-stops // chunks) - starts // chunks, axis=1)
-        touched, _ = _coverage(meta, starts, stops)
+        touched, _ = _plan_coverage(plan, name)
         if int(counts.sum()) != len(touched):
             return False
     return True
+
+
+def _spread_out(spark, plan: _Plan, frame):
+    """An aligned create's blocks, repartitioned by block when the input holds them in at
+    most half the partitions the write could use (the blocks, up to the session's
+    parallelism): the pack stage runs where the blocks are, so an input of one partition would
+    encode and pack every block in one task, and on Serverless a repartition by column is
+    how work fans out. Hashing the block keys fills about two thirds of the partitions, so an
+    input spread wider than half is left where it is, with nothing moved."""
+    spread = plan.spread or {}
+    blocks, parts = spread.get("blocks", 0), spread.get("partitions", 0)
+    want = min(blocks, _shuffle_partitions(spark) or _DEFAULT_PARTITIONS)
+    if not parts or parts * 2 > want:
+        return frame
+    _LOG.info(
+        "gbx_zarr_write %s (create): %d blocks in %d input partition(s), packed in %d",
+        plan.table,
+        blocks,
+        parts,
+        want,
+    )
+    return frame.repartition(want, "variable", "start")
+
+
+def _plan_coverage(plan: _Plan, name: str):
+    """``_coverage`` of the planned boxes of ``name``, walked once per write (both the
+    alignment check and the shuffle sizing ask for it)."""
+    if name not in plan.coverage:
+        starts, stops = plan.boxes[name]
+        plan.coverage[name] = _coverage(plan.task_arrays[name], starts, stops)
+    return plan.coverage[name]
 
 
 def _planned(plan: _Plan):
@@ -1767,7 +1834,7 @@ def _planned(plan: _Plan):
     parts, nbytes = set(), 0
     for name, (starts, stops) in plan.boxes.items():
         meta = plan.task_arrays[name]
-        touched, _ = _coverage(meta, starts, stops)
+        touched, _ = _plan_coverage(plan, name)
         parts.update((name, part_of(meta, c)[0]) for c in touched)
         nbytes += len(touched) * math.prod(meta.chunks) * meta.itemsize
     return parts, nbytes
@@ -1966,7 +2033,7 @@ def _write_files(spark, plan: _Plan) -> pa.Table:
             plan.access,
             lambda a: pack_function(dataclasses.replace(cfg, access=a)),
         )
-        return frame.mapInArrow(packed, ROWS_DDL).toArrow()
+        return _spread_out(spark, plan, frame).mapInArrow(packed, ROWS_DDL).toArrow()
     # the explode stage touches no storage: it never carries the credentials
     pieces = frame.mapInArrow(
         explode_function(dataclasses.replace(cfg, access=None)), PIECES_DDL
@@ -2885,6 +2952,40 @@ def _check_new_root(root: str, owner: str) -> None:
         )
 
 
+def _remove_write_files(root: str, write_id: str) -> None:
+    """Remove the pack files a failed create wrote (``<root>/data/<array>/<write_id>``),
+    and the array directories that leaves empty, so the root is empty again and the same
+    create can run again there. Only this write's directories are touched; nothing
+    references them, since the create committed nothing. Cleanup: a failure is logged.
+    """
+    import shutil
+
+    data = os.path.join(root, "data")
+    try:
+        names = os.listdir(data)
+    except OSError:
+        return
+    for name in names:
+        array_dir = os.path.join(data, name)
+        try:
+            shutil.rmtree(os.path.join(array_dir, write_id), ignore_errors=False)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            _LOG.warning(
+                "could not remove %s", os.path.join(array_dir, write_id), exc_info=True
+            )
+            continue
+        try:
+            os.rmdir(array_dir)  # only when now empty
+        except OSError:
+            pass
+    try:
+        os.rmdir(data)
+    except OSError:
+        pass
+
+
 def _adoptable(spark, table: str, root: str, owner: str) -> bool:
     """Whether an existing ``table`` is this create's own, left empty by a crash: a
     managed manifest of this root, with no commit, whose root marker names it."""
@@ -3171,5 +3272,6 @@ def gbx_zarr_write(
             else not adopt and not _table_exists(spark, target)
         )
         if claimed and gone:
+            _remove_write_files(data_root, write_id)
             release_root(spark, data_root, owner, "managed")
         raise

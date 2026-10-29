@@ -601,7 +601,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     args.out.mkdir(parents=True, exist_ok=True)
-    print(f"Generating minimal bundle at {args.out.relative_to(SCRIPT_DIR)}")
+    try:
+        shown = args.out.relative_to(SCRIPT_DIR)
+    except ValueError:  # --out outside sample-data/
+        shown = args.out
+    print(f"Generating minimal bundle at {shown}")
     print(f"  NYC center: ({args.nyc_lon}, {args.nyc_lat}), London: ({args.london_lon}, {args.london_lat})")
     print(f"  bbox_size={args.bbox_size}, max_rows={args.max_rows}")
     ok = run(
@@ -610,7 +614,9 @@ def main(argv: list[str] | None = None) -> int:
         args.london_lon, args.london_lat,
         args.bbox_size, args.max_rows,
     )
-    ok &= run_zarr_era5(args.out)
+    # The cube is made from code and needs xarray and zarr: without them it is skipped (the
+    # message says so), which leaves the clipped datasets complete, so it does not fail the run.
+    run_zarr_era5(args.out)
     return 0 if ok else 1
 
 

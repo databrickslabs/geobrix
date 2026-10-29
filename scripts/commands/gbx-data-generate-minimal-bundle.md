@@ -24,7 +24,7 @@ bash scripts/commands/gbx-data-generate-minimal-bundle.sh [OPTIONS]
 
 ## Zarr ERA5-like cube
 
-Besides the clipped datasets, the bundle holds a small synthetic weather cube, `global/era5-weather/`: `era5_like_v3.zarr` (Zarr v3, sharded) and `era5_like_v2.zarr` (Zarr v2). Two days of hourly `t2m`, `u10`, `v10` and `msl` on a 1 degree global grid, about 7 MB for the pair. It is made from code (`databricks.labs.gbx.sample.zarr_era5`) with a fixed seed, so a run in one environment writes the same bytes; it needs no source bundle, so `--zarr-only` writes just the cube. A normal run writes it after the clipped datasets. Needs `xarray` and `zarr` in the container. The cube is gitignored (a fresh clone and CI do not have it): run this command to create it, then `gbx:data:stage-sample` to put it on a Volume.
+Besides the clipped datasets, the bundle holds a small synthetic weather cube, `global/era5-weather/`: `era5_like_v3.zarr` (Zarr v3, sharded) and `era5_like_v2.zarr` (Zarr v2). Two days of hourly `t2m`, `u10`, `v10` and `msl` on a 1 degree global grid, about 7 MB for the pair. It is made from code (`databricks.labs.gbx.sample.zarr_era5`) with a fixed seed, so a run in one environment writes the same bytes; it needs no source bundle, so `--zarr-only` writes just the cube. A normal run writes it after the clipped datasets. Needs `xarray` and `zarr` in the container: without them a normal run says it skipped the cube and still exits 0 when the clipped datasets were written, and `--zarr-only` exits 1. The cube is gitignored (a fresh clone and CI do not have it): run this command to create it, then `gbx:data:stage-sample` to put it on a Volume.
 
 ## Requires
 

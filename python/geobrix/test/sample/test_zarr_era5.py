@@ -74,3 +74,43 @@ def test_minimal_bundle_script_writes_the_cube_into_the_bundle_layout(tmp_path):
     base = tmp_path / BUNDLE_SUBDIR
     assert (base / V3_NAME / "zarr.json").is_file()
     assert (base / V2_NAME / ".zgroup").is_file()
+
+
+def _bundle_script():
+    script = (
+        Path(__file__).resolve().parents[4] / "sample-data/generate-minimal-bundle.py"
+    )
+    if not script.is_file():
+        pytest.skip("sample-data/generate-minimal-bundle.py is not in this checkout")
+    spec = importlib.util.spec_from_file_location("generate_minimal_bundle", script)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.mark.parametrize(
+    "clipped, cube, exit_code",
+    [
+        (True, True, 0),
+        (
+            True,
+            False,
+            0,
+        ),  # no xarray or zarr: the cube is skipped, the bundle is complete
+        (False, True, 1),  # a clipped dataset failed
+        (False, False, 1),
+    ],
+    ids=["all-written", "cube-skipped", "clip-failed", "both"],
+)
+def test_a_normal_bundle_run_fails_only_when_a_clipped_dataset_does(
+    tmp_path, monkeypatch, clipped, cube, exit_code
+):
+    mod = _bundle_script()
+    source = tmp_path / "source"
+    source.mkdir()
+    monkeypatch.setattr(mod, "run", lambda *args: clipped)
+    monkeypatch.setattr(mod, "run_zarr_era5", lambda out: cube)
+
+    assert (
+        mod.main(["--source", str(source), "--out", str(tmp_path / "out")]) == exit_code
+    )

@@ -1018,6 +1018,8 @@ def extract_payload(zf, payload):
         out = payload / Path(n).relative_to(PKG)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(zf.read(n))
+        if (zf.getinfo(n).external_attr >> 16) & 0o111:  # bin/projsync: executable, as pip installs it
+            out.chmod(0o755)
 
 
 def verify(args, whl, env, version, extras, epoch):

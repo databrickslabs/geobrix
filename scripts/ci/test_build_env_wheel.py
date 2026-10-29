@@ -7,8 +7,10 @@
 """
 
 import importlib.util
+import os
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -251,3 +253,18 @@ def test_every_rust_crate_has_a_licence_file_for_each_crate_it_locks(tmp_path, l
             f"{lock.parent.relative_to(bew.REPO)} {vendor.relative_to(bew.REPO)})"
         )
     assert bew.collect_rust_licences(lock.parent, vendor, tmp_path / "out") == []
+
+
+def test_the_extracted_payload_keeps_executables_executable(tmp_path):
+    # GBX_NATIVE_ROOT payloads (the dev container) run bin/projsync from the extracted tree, as pip's install does
+    whl = tmp_path / "w.whl"
+    with zipfile.ZipFile(whl, "w") as zf:
+        for name, mode in (("bin/projsync", 0o755), ("lib/libx.so.1", 0o644)):
+            info = zipfile.ZipInfo(f"{bew.PKG}/_native/x86_64/{name}")
+            info.external_attr = (0o100000 | mode) << 16
+            zf.writestr(info, b"\x7fELF")
+    with zipfile.ZipFile(whl) as zf:
+        bew.extract_payload(zf, tmp_path / "payload")
+    native = tmp_path / "payload" / "_native" / "x86_64"
+    assert os.access(native / "bin" / "projsync", os.X_OK)
+    assert not os.access(native / "lib" / "libx.so.1", os.X_OK)

@@ -430,37 +430,66 @@ def _listing_cap() -> Optional[int]:
     return cap if cap > 0 else None
 
 
+# A folder is listed once this worker has opened this many of its files: a folder it opens
+# one file of (one scene a folder) is never listed.
+_LIST_AFTER_OPENS = 2
+
+
 class _FolderListings:
     """The names in each folder, listed once per process (os.scandir), most recent last.
 
+    The listing never holds an open up: on a Volume the FUSE mount fetches the whole folder
+    before it returns the first name, so stopping the scan early saves no time (a fresh-file
+    first open took 2.1 s in a 5,000-file folder and 14.5 s in a 40,000-file one when it
+    waited). A folder is listed by one background thread, once this worker has opened
+    ``list_after_opens`` of its files; until its listing is held its files are opened with
+    the process TRUE (by-name checks), as without the listing.
+
     Keyed by the folder's resolved path (resolved once per folder string: a FUSE stat costs
-    milliseconds; at most ``4 * max_folders`` folder strings are remembered). At most
-    ``max_folders`` listings are held, the least recently used dropped first. A folder with
-    more names than GDAL's own listing limit (_listing_cap) is held as ``_TOO_LARGE`` (the
-    scan stops past the cap): its files are opened with TRUE, as GDAL itself does there. A
-    file missing from a held listing lists the folder again, at most once per
-    ``relist_interval_s`` per folder, so files written later are seen; a sidecar written
-    after the folder was listed is not, until the folder is listed again (a file missing
-    from it, or a new worker).
+    milliseconds; at most ``4 * max_folders`` folder strings and open counts are kept). At
+    most ``max_folders`` listings are held, the least recently used dropped first. A folder
+    with more names than GDAL's own listing limit (_listing_cap) is held as ``_TOO_LARGE``:
+    its files keep TRUE, as GDAL itself checks by name past that limit. A file missing from
+    a held listing has the folder listed again, at most once per ``relist_interval_s``; a
+    sidecar written after the folder was listed is not seen until the folder is listed
+    again (a file missing from it, or a new worker). ``background=False`` lists in the
+    caller's thread, at once (tests).
     """
 
     def __init__(
-        self, max_folders: int = 64, relist_interval_s: float = _RELIST_INTERVAL_S
+        self,
+        max_folders: int = 64,
+        relist_interval_s: float = _RELIST_INTERVAL_S,
+        list_after_opens: int = _LIST_AFTER_OPENS,
+        background: bool = True,
     ):
         from collections import OrderedDict
 
         self.max_folders = max_folders
         self.relist_interval_s = relist_interval_s
+        self.list_after_opens = list_after_opens
+        self.background = background
         # key -> (frozenset of names | _TOO_LARGE, time listed)
         self._names: "OrderedDict[str, tuple]" = OrderedDict()
         self._resolved: "OrderedDict[str, str]" = OrderedDict()
+        self._opens: "OrderedDict[str, int]" = OrderedDict()
+        self._pending: set = set()
+        self._queue = None
         self._lock = threading.Lock()
         self.listings = 0
 
     def clear(self) -> None:
+        self.wait()
         with self._lock:
             self._names.clear()
             self._resolved.clear()
+            self._opens.clear()
+
+    def wait(self) -> None:
+        """Return once every listing asked for so far is held (or failed)."""
+        q = self._queue
+        if q is not None:
+            q.join()
 
     def _list(self, folder: str):
         cap = _listing_cap()
@@ -490,30 +519,83 @@ class _FolderListings:
                 self._resolved.popitem(last=False)
         return key
 
-    def names(self, folder: str, must_hold: str):
-        """The names in *folder* (a frozenset), ``_TOO_LARGE``, or None when the folder
-        cannot be listed. Listed again when *must_hold* is not among the names held, unless
-        the folder was listed less than ``relist_interval_s`` ago."""
-        key = self._key(folder)
-        with self._lock:
-            held = self._names.get(key)
-            if held is not None:
-                self._names.move_to_end(key)
-        if held is not None:
-            names, listed_at = held
-            if names is _TOO_LARGE or must_hold in names:
-                return names
-            if _now() - listed_at < self.relist_interval_s:
-                return names  # the caller finds must_hold missing: TRUE for this open
+    def _store(self, key: str, folder: str) -> None:
         names = self._list(folder)
-        if names is None:
-            return None
         with self._lock:
+            self._pending.discard(key)
+            if names is None:
+                return
             self._names[key] = (names, _now())
             self._names.move_to_end(key)
             while len(self._names) > self.max_folders:
                 self._names.popitem(last=False)
-        return names
+
+    def _serve(self, q) -> None:
+        while True:
+            key, folder = q.get()
+            try:
+                self._store(key, folder)
+            except Exception:  # noqa: BLE001 - a failed listing leaves TRUE in place
+                with self._lock:
+                    self._pending.discard(key)
+            finally:
+                q.task_done()
+
+    def _request(self, key: str, folder: str) -> None:
+        with self._lock:
+            if key in self._pending:
+                return
+            self._pending.add(key)
+            if self.background and self._queue is None:
+                import queue
+
+                self._queue = queue.Queue()
+                threading.Thread(
+                    target=self._serve,
+                    args=(self._queue,),
+                    name="gbx-folder-listing",
+                    daemon=True,
+                ).start()
+            q = self._queue if self.background else None
+        if q is None:
+            self._store(key, folder)
+        else:
+            q.put((key, folder))
+
+    def _held(self, key: str):
+        with self._lock:
+            held = self._names.get(key)
+            if held is not None:
+                self._names.move_to_end(key)
+            return held
+
+    def names(self, folder: str, must_hold: str):
+        """The names held for *folder* (a frozenset), ``_TOO_LARGE``, or None when no
+        listing is held yet. Asks for a listing (in the background) at the folder's
+        ``list_after_opens``-th open, and again when *must_hold* is missing from the names
+        held and the folder was listed at least ``relist_interval_s`` ago."""
+        key = self._key(folder)
+        held = self._held(key)
+        if held is None:
+            with self._lock:
+                opens = self._opens.get(key, 0) + 1
+                self._opens[key] = opens
+                self._opens.move_to_end(key)
+                while len(self._opens) > 4 * self.max_folders:
+                    self._opens.popitem(last=False)
+            if opens < self.list_after_opens:
+                return None
+            self._request(key, folder)
+            held = self._held(key)  # listed already when not in the background
+            return None if held is None else held[0]
+        names, listed_at = held
+        if names is _TOO_LARGE or must_hold in names:
+            return names
+        if _now() - listed_at >= self.relist_interval_s:
+            self._request(key, folder)
+            held = self._held(key)
+            names = held[0] if held is not None else names
+        return names  # without must_hold the caller keeps TRUE for this open
 
 
 _LISTINGS = _FolderListings()

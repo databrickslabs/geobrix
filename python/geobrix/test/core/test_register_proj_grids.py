@@ -99,3 +99,52 @@ def test_projsync_path_is_the_payloads(monkeypatch):
         _native, "projsync_path", lambda: "/payload/_native/x86_64/bin/projsync"
     )
     assert crs_grids.projsync_path() == "/payload/_native/x86_64/bin/projsync"
+
+
+def _jvm_with(reg):
+    """A stand-in JVM whose ProjGridRegistry is `reg`."""
+    jvm = _fake_jvm()
+    jvm.com.databricks.labs.gbx.operations.ProjGridRegistry = reg
+    return jvm
+
+
+def test_apply_heavy_quiet_only_where_heavy_cannot_run(tmp_path, monkeypatch, caplog):
+    """The heavy push is quiet when the JVM has no GeoBrix JAR (a JavaPackage) or the access mode refuses py4j (one
+    INFO line), and raises on anything else; the light registration stands in every quiet case.
+    """
+    import logging
+
+    from py4j.protocol import Py4JError
+
+    class JavaPackage:  # py4j's stand-in for a class name the JVM does not have
+        def set(self, *_):
+            raise AssertionError("a JavaPackage is never called")
+
+    d = str(tmp_path)
+    assert crs_grids.register_proj_grids(_FakeSpark(_jvm_with(JavaPackage())), d) == [d]
+
+    def refuse(*_):
+        raise Py4JError(
+            "An error occurred while calling z:com.databricks.labs.gbx.operations.ProjGridRegistry.set. Trace:\n"
+            "py4j.security.Py4JSecurityException: Method public static scala.collection.immutable.Seq "
+            "com.databricks.labs.gbx.operations.ProjGridRegistry.set(...) is not whitelisted on class class ..."
+        )
+
+    monkeypatch.setattr(crs_grids, "_heavy_refusal_logged", False)
+    refused = _FakeSpark(_jvm_with(types.SimpleNamespace(set=refuse)))
+    with caplog.at_level(logging.INFO, logger="databricks.labs.gbx.crs_grids"):
+        assert crs_grids.register_proj_grids(refused, d, replace=True) == [d]
+        crs_grids.register_proj_grids(refused, d, replace=True)
+    lines = [r.getMessage() for r in caplog.records if "access mode" in r.getMessage()]
+    assert len(lines) == 1 and "unavailable" in lines[0], lines
+    assert proj_grids.get_registered_dirs() == [d]
+
+    def broken(*_):
+        raise Py4JError(
+            "An error occurred while calling ProjGridRegistry.set: something else"
+        )
+
+    with pytest.raises(Py4JError, match="something else"):
+        crs_grids.register_proj_grids(
+            _FakeSpark(_jvm_with(types.SimpleNamespace(set=broken))), d
+        )

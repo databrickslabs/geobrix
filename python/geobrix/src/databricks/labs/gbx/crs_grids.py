@@ -7,6 +7,7 @@ so on the heavyweight tier grids must live on a cluster-local path.
 """
 
 import importlib
+import logging
 import os
 import warnings
 from typing import List, Optional, Sequence, Union
@@ -82,22 +83,53 @@ def _warn_heavy_volume_grids(result) -> None:
         )
 
 
+_LOG = logging.getLogger(__name__)
+_heavy_refusal_logged = False
+
+
+def _is_py4j_refusal(exc: BaseException) -> bool:
+    """A cluster in standard (shared) access mode refuses py4j calls to classes it has not allowed. py4j has no Python
+    class for it: the refusal is a ``Py4JError`` whose text names the JVM's ``py4j.security.Py4JSecurityException``
+    ("... is not whitelisted")."""
+    try:
+        from py4j.protocol import Py4JError
+    except ImportError:  # no py4j, so no py4j refusal
+        return False
+    text = str(exc)
+    return isinstance(exc, Py4JError) and (
+        "Py4JSecurityException" in text or "is not whitelisted" in text
+    )
+
+
 def _apply_heavy(spark, result) -> None:
     """Set the heavy-tier JVM grid registry when this session has a JVM with the GeoBrix JAR.
 
-    Two cases are quiet, by design: no JVM (Spark Connect, Serverless, or no session: ``spark._jvm`` is absent) and
-    a JVM without the GeoBrix JAR (a light-only session: py4j resolves the class name to a ``JavaPackage``). Any
-    other failure raises: a swallowed one once left the JVM without the grids, silently.
+    Three cases are quiet, by design: no JVM (Spark Connect, Serverless, or no session: ``spark._jvm`` is absent); a
+    JVM without the GeoBrix JAR (a light-only session: py4j resolves the class name to a ``JavaPackage``); and a
+    cluster whose access mode refuses py4j calls to GeoBrix classes (one INFO line says so). In each, the light-tier
+    registration stands. Any other failure raises: a swallowed one once left the JVM without the grids, silently.
     """
+    global _heavy_refusal_logged
     jvm = getattr(spark, "_jvm", None)
     if jvm is None:
         return
-    reg = jvm.com.databricks.labs.gbx.operations.ProjGridRegistry
-    if type(reg).__name__ == "JavaPackage":
+    try:
+        reg = jvm.com.databricks.labs.gbx.operations.ProjGridRegistry
+        if type(reg).__name__ == "JavaPackage":
+            return
+        # ProjGridRegistry.set takes a Scala Seq: py4j would hand a Python list over as a java.util.List, which
+        # matches no `set`. Push the full de-duped set (an idempotent replace).
+        reg.set(jvm.org.apache.spark.api.python.PythonUtils.toSeq(list(result)), True)
+    except Exception as exc:
+        if not _is_py4j_refusal(exc):
+            raise
+        if not _heavy_refusal_logged:
+            _heavy_refusal_logged = True
+            _LOG.info(
+                "geobrix: heavy-tier PROJ grid registration is unavailable in this cluster's access mode (py4j "
+                "refused the call); the light tier has the grid directories."
+            )
         return
-    # ProjGridRegistry.set takes a Scala Seq: py4j would hand a Python list over as a java.util.List, which matches
-    # no `set`. Push the full de-duped set (an idempotent replace).
-    reg.set(jvm.org.apache.spark.api.python.PythonUtils.toSeq(list(result)), True)
     # Heavy tier IS active: warn if any registered dir is a Volume executors can't read.
     _warn_heavy_volume_grids(result)
 

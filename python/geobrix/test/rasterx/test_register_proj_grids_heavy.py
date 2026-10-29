@@ -56,27 +56,37 @@ def test_heavy_apply_sets_jvm_registry(monkeypatch):
     assert calls["replace"] is True
 
 
+# Run in its own Python process: a JVM started in the test process stays up after spark.stop() and fixes the driver
+# options of every later session there (the P9 file's library path, for one).
+_REAL_JVM = """
+import sys
+from pyspark.sql import SparkSession
+from databricks.labs.gbx import crs_grids
+spark = SparkSession.builder.master("local[1]").config("spark.jars", sys.argv[1]).getOrCreate()
+crs_grids.register_proj_grids(spark, sys.argv[2], replace=True)
+print("REGISTRY " + spark._jvm.com.databricks.labs.gbx.operations.ProjGridRegistry.get().mkString("|"))
+spark.stop()
+"""
+
+
 @pytest.mark.integration
 def test_register_proj_grids_reaches_the_real_jvm_registry(tmp_path):
+    import os
+    import subprocess
+    import sys
+
     if not JARS:
         pytest.skip(
             "PRECONDITION MISSING: the staged JAR (gbx-test-parity.sh stages it); this row not run"
         )
-    from pyspark.sql import SparkSession
-
-    if SparkSession.getActiveSession() is not None:
-        pytest.skip(
-            "PRECONDITION MISSING: a Spark session is already live; run this file alone"
-        )
-    spark = (
-        SparkSession.builder.master("local[1]")
-        .config("spark.jars", str(JARS[-1]))
-        .getOrCreate()
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)}
+    res = subprocess.run(
+        [sys.executable, "-c", _REAL_JVM, str(JARS[-1]), str(tmp_path)],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        env=env,
     )
-    reg = spark._jvm.com.databricks.labs.gbx.operations.ProjGridRegistry
-    try:
-        crs_grids.register_proj_grids(spark, str(tmp_path), replace=True)
-        assert reg.get().mkString("\n").split("\n") == [str(tmp_path)]
-    finally:
-        reg.set(spark._jvm.org.apache.spark.api.python.PythonUtils.toSeq([]), True)
-        spark.stop()
+    assert f"REGISTRY {tmp_path}" in res.stdout.splitlines(), (
+        res.stdout + res.stderr[-3000:]
+    )

@@ -182,12 +182,24 @@ class GeoJSONL_RowWriter(
         val code = Option(sridCode).map(_.trim).filter(c => c.nonEmpty && c != "0")
         code.flatMap { c =>
             if (Try(c.toInt).isSuccess) Try(SpatialRefOps.resolveCrs(c)).toOption
-            else Some(SpatialRefOps.resolveCrs(c))
+            else Some(resolveLoudly(c, "srid"))
         }.getOrElse(fromProj4())
     }
 
     private def fromProj4(): SpatialReference =
-        if (proj4 != null && proj4.nonEmpty) SpatialRefOps.resolveCrs(proj4) else null
+        if (proj4 != null && proj4.nonEmpty) resolveLoudly(proj4, "PROJ4") else null
+
+    /** A CRS a row supplies, or an error: bad data is loud (m-C), with a `Fix:` that names the column. */
+    private def resolveLoudly(value: String, column: String): SpatialReference =
+        try SpatialRefOps.resolveCrs(value)
+        catch {
+            case e: IllegalArgumentException =>
+                throw new IllegalArgumentException(
+                  s"geojsonl_ogr: the $column column's value '$value' is not a CRS GeoBrix reads (${e.getMessage}). " +
+                      "Fix: write the layer's CRS as an EPSG code, an AUTHORITY:CODE, WKT or PROJJSON, or drop the column.",
+                  e
+                )
+        }
 
     /** Geometry type: explicit override (name), else the first non-null feature's WKB type, else unknown. */
     private def inferGeomType(srs: SpatialReference): Int = {

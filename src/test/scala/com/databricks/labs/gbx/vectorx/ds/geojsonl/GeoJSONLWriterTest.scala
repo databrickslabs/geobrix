@@ -155,4 +155,18 @@ class GeoJSONLWriterTest extends PlanTest with SilentSparkSession {
           messages.mkString(" | "))
         assert(!out.exists() || shards(out).isEmpty, "a refused CRS wrote a shard")
     }
+
+    test("an unparseable PROJ4 column is loud: the write fails with the column and a Fix (m-C)") {
+        spark.sparkContext.setLogLevel("ERROR")
+        val out = Files.createTempDirectory("gbx_geojsonl_bad_").toFile
+        out.delete()
+        val df = spark.createDataFrame(Seq(("a", 1, JTS.toWKB(gf.createPoint(new Coordinate(0.1, 40.0))), "0",
+            "this is not a coordinate system")))
+            .toDF("name", "pop", "geom_0", "geom_0_srid", "geom_0_srid_proj")
+        val e = intercept[Exception] {
+            df.write.format("geojsonl_ogr").mode("overwrite").save(out.getAbsolutePath)
+        }
+        val messages = Iterator.iterate[Throwable](e)(_.getCause).takeWhile(_ != null).map(_.getMessage).toSeq
+        assert(messages.exists(m => m != null && m.contains("PROJ4 column") && m.contains("Fix:")), messages.mkString(" | "))
+    }
 }

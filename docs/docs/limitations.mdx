@@ -108,7 +108,8 @@ GeoBrix reads, registers and writes [Zarr stores](./formats/zarr) within these l
   Databricks Runtime 17.3 and 18 and Serverless environment 5 are not supported. The heavyweight tier reads
   Zarr data only as materialized GeoBrix tiles.
 - **Data types.** Numeric types and CF times. Strings and objects are not supported: an array GeoBrix cannot
-  decode is left out of reads, and complex arrays can be read only as blocks.
+  decode is left out of reads, and a complex array cannot be read as a table (a table has no column for
+  complex numbers; read it as blocks).
 - **Tiles.** `output="tiles"` needs the coordinates to form a regular grid. Read an irregular or curvilinear
   grid as blocks or a table.
 - **Codecs.** The codecs that zarr-python, numcodecs and zarrs can decode. Writes use `zstd` and `crc32c`

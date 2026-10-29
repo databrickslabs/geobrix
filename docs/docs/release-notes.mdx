@@ -940,9 +940,9 @@ formats.
   nodes of a Volume, so the claim is a compare-and-swap insert into the ledger and the marker is
   written only after it. The loser gets `ZarrOwnershipError`. Leave `_gbx_owner` where it is;
   delete it, with the marker, only when no store owns the root.
-- **Zarr support has limits.** It needs Databricks Runtime 19 or Serverless environment 6 and the
-  lightweight tier, reads numeric types and CF times, and needs a regular grid to return tiles.
-  See [Known Limitations](./limitations#zarr-stores).
+- **Zarr support has limits.** It reads numeric types and CF times, needs a regular grid to return
+  tiles, and direct storage access has been measured on AWS only. See
+  [Known Limitations](./limitations#zarr-stores).
 
 ### Zarr stores — direct storage access (new)
 

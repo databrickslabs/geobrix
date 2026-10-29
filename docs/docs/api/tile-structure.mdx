@@ -140,8 +140,8 @@ table: see [Zarr tiles](./virtual-tiles#zarr-tiles).
 | `sliceCoord_<dim>` | The label at that position, for each dimension that has coordinates; a time is ISO text such as `2023-01-01T05:00:00.000000000` |
 | `zarr_meta` | JSON: the array's metadata, cut to what decoding needs (data type, chunk and shard layout, codecs, fill value, CF attributes) |
 | `zarr_refs` | JSON: for each band of the tile, the storage objects its window needs, each with a file, an offset and a length, taken from the manifest at the pinned version. Empty for a plain store, which has no manifest |
-| `zarr_root` | The directory the files are read from: the store for a plain store, the store's root for a managed one, the overlay root for a writable registration |
-| `zarr_base_root` | A registered store only: the store's own directory, where its original objects are |
+| `zarr_root` | The directory the files are read from: the store itself for a plain store or a read-only registration, the store's root for a managed one, the overlay root for a writable registration |
+| `zarr_base_root` | A registered store only: the store's own directory, where its original objects are (the same as `zarr_root` for a read-only registration) |
 | `zarr_table`, `zarr_version` | The manifest table and the version the read was pinned to. Both are empty for a plain store |
 | `zarr_gt`, `zarr_crs` | The geotransform of the whole plane (six comma-separated numbers, north-up) and its CRS |
 | `width`, `height` | The size of the whole plane in cells; the tile's `window` is a part of it |

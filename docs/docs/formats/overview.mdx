@@ -86,5 +86,5 @@ Several GeoBrix tools keep a Delta table as the index of a collection of files: 
 `FILE` column that points at rasters or vectors on a Volume, and the manifest table of a
 [Zarr store](./zarr) that points at its chunks and shards. It is one pattern. The bytes stay
 in the files and the table says which of them make up the collection, at which version, so you can
-query, govern and time-travel the collection with SQL. See
+query and govern the collection with SQL and read the index as it was at an earlier version. See
 [Delta-indexed collections](../readers-writers#delta-indexed-collections).

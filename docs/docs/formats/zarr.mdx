@@ -497,8 +497,8 @@ optimize after many small appends, especially for reads from a Volume; it change
 - **Runtimes.** Databricks Runtime 19 and Serverless environment 6 (Python 3.12), lightweight tier only. The
   heavyweight tier reads Zarr data only as materialized GeoBrix tiles.
 - **Data types.** Numeric types and CF times. Strings and objects are not supported: an array GeoBrix
-  cannot decode is left out of reads and registered without being readable, and complex arrays can be
-  read only as blocks.
+  cannot decode is left out of reads and registered without being readable, and a complex array cannot
+  be read as a table (a table has no column for complex numbers; read it as blocks).
 - **Tiles.** `output="tiles"` needs the coordinates to form a regular grid.
 - **Codecs.** The codecs that zarr-python, numcodecs and zarrs can decode. Writes use `zstd` and `crc32c`
   unless you pass `codecs`. A Zarr v3 array that has any codec beside `sharding_indexed` in its own codec
@@ -506,6 +506,8 @@ optimize after many small appends, especially for reads from a Volume; it change
   an array GeoBrix cannot decode, a default read leaves it out with a warning, and naming it in `variables`
   raises `ZarrUnsupported`. Rewrite the array so that `sharding_indexed` is its only outer codec, with
   compression and other codecs inside it. zarr-python does not write that layout.
+- **Reading with GDAL.** A GDAL before 3.13 cannot read sharded Zarr v3 stores, or ones that use the
+  `crc32c` codec, which `gbx_zarr_write` writes by default; see [the Raster Reader](../readers/raster).
 - **File modes.** `external` is a preview that needs a workspace with the File type preview and compute
   that supports `FILE` values; `managed` is not available (see [File modes](#file-modes)).
 - **Outside writers.** GeoBrix detects writes that other tools make to a registered store; it cannot make
@@ -519,7 +521,9 @@ optimize after many small appends, especially for reads from a Volume; it change
   can issue temporary credentials (dedicated compute), and through the Volume mount elsewhere, including
   Serverless. Direct access sends short-lived, Volume-scoped credentials (at most one hour) to the
   executors, and under memory pressure Spark may spill task data, those credentials included, to local disk:
-  turn on local-disk encryption on clusters that use it, or pass `access="fuse"`, which sends none.
+  turn on local-disk encryption on clusters that use it, or pass `access="fuse"`, which sends none. Direct
+  access has been measured on AWS only; Azure and Google Cloud storage are not measured yet, and
+  `access="fuse"` reads and writes through the Volume mount there.
 - **Incomplete uploads.** A pack upload that is refused or fails part way can leave an incomplete multipart
   upload in the bucket. GeoBrix does not clean it up: add a bucket lifecycle rule that aborts incomplete
   multipart uploads (`AbortIncompleteMultipartUpload`) to the bucket of the Volume.

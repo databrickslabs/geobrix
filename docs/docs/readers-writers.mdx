@@ -191,15 +191,16 @@ on it. A reader plans from the table rather than from a directory listing, so it
 them. The table has versions that you can read as they were: `versionAsOf` and `timestampAsOf` on
 `read_tiles_table`, `version_as_of` and `timestamp_as_of` on [`gbx_zarr_read`](./readers/zarr#choosing-the-source).
 
-What differs is who looks after the files.
+What differs is who looks after the files, and a Zarr store comes in two kinds: one you create, whose
+files GeoBrix writes, and one you register in place, whose files other tools own.
 
-| | FILE-column table or tile index | Zarr store manifest |
-|---|---|---|
-| One row is | A file, or a window of one | A chunk or shard, at an offset in a pack file |
-| Made by | The `*_gbx` writers; you, for a tile index | `gbx_zarr_register` and `gbx_zarr_write` |
-| Files | Referenced. An earlier version of the table lists the files it listed, but a file replaced since is replaced for every version | Written only by GeoBrix, each into a new pack file that is never changed. An earlier version reads the bytes it did, while it is within `retain` or tagged |
-| Writes | A Delta transaction on the table | One Delta transaction for each write, with a compare-and-swap on every key it replaces, so concurrent writers either land or get a clear conflict error |
-| Cleaning up | Yours | `gbx_zarr_vacuum` deletes the files that no readable version needs |
+| | FILE-column table or tile index | Zarr store you create | Zarr store you register |
+|---|---|---|---|
+| Made by | The `*_gbx` writers; you, for a tile index | `gbx_zarr_write` with `mode="create"` | `gbx_zarr_register` |
+| One row is | A file, or a window of one | A chunk or shard at an offset in a pack file that GeoBrix wrote | A chunk or shard at an offset in the store's own objects; for a writable registration, a pack file in its overlay is the same as in the previous column |
+| Files | Referenced. An earlier version of the table lists the files it listed, but a file replaced since is replaced for every version | Written only by GeoBrix, each into a new pack file that is never changed. An earlier version reads the bytes it did, while it is within `retain` or tagged | The store's objects belong to the tools that wrote them. GeoBrix copies nothing and writes nothing in the store (an explicit publish aside), records each object's identity, and a read stops with `ZarrStoreDrift` if another tool changed one |
+| Writes | A Delta transaction on the table | One Delta transaction for each write, with a compare-and-swap on every key it replaces, so concurrent writers either land or get a clear conflict error | None through GeoBrix for a read-only registration. A writable one writes new pack files to its overlay, in the same transactions |
+| Cleaning up | Yours | `gbx_zarr_vacuum` deletes the files that no readable version needs | `gbx_zarr_vacuum` deletes only the packs GeoBrix wrote to the overlay; it never touches the store's own objects |
 
 A FILE-column table suits files that other tools produce and own. A Zarr store suits a cube that jobs also
 write back to, and that needs all-or-nothing writes and versions. [Choosing a Format](./formats/overview) shows where each

@@ -155,6 +155,23 @@ def test_a_virtual_tile_is_virtual_and_a_materialized_one_is_a_geotiff(spark, cu
     assert {k for k in virtual.metadata if k.startswith("zarr_")} <= set(held.metadata)
 
 
+def test_zarr_root_is_the_store_for_a_read_only_registration_and_the_overlay_for_a_writable_one(
+    spark, copy_of_cube, new_table, tmp_path
+):
+    read_only = new_table("rootro")
+    gbx_zarr_register(spark, copy_of_cube, read_only)
+    meta = first_tile(spark, read_only, isel={"time": 0}).metadata
+    assert meta["zarr_root"] == meta["zarr_base_root"] == copy_of_cube
+
+    writable = new_table("rootrw")
+    overlay = str(tmp_path / "overlay")
+    gbx_zarr_register(
+        spark, copy_of_cube, writable, writable=True, overlay_root=overlay
+    )
+    meta = first_tile(spark, writable, isel={"time": 0}).metadata
+    assert meta["zarr_root"] == overlay and meta["zarr_base_root"] == copy_of_cube
+
+
 # --- what the virtual tiles page says ------------------------------------------------------
 
 
@@ -166,14 +183,27 @@ def test_a_virtual_tile_cannot_use_direct_access(spark, copy_of_cube, new_table)
     assert "virtual_tiles=False" in str(err.value)
 
 
-def test_a_store_at_a_cloud_url_cannot_be_opened_as_a_tile(spark, cube):
-    from databricks.labs.gbx.pyrx.core.open_tile import materialize_to_bytes
-
-    row = first_tile(spark, cube, isel={"time": 0}).asDict(recursive=True)
-    row["metadata"]["zarr_root"] = "s3://bucket/era5.zarr"
-    with pytest.raises(ZarrAccessUnavailable) as err:
-        materialize_to_bytes(VirtualTile.from_row(row))
-    assert "materialize the tiles, or keep the store on a Volume" in str(err.value)
+def test_a_store_at_a_cloud_url_is_refused_by_every_public_call(
+    spark, cube, new_table, tmp_path
+):
+    """No tile is made for a cloud URL: the calls that make a store's tiles refuse it first."""
+    url = "s3://bucket/era5.zarr"
+    for output in ("tiles", "blocks"):
+        with pytest.raises(ZarrUnsupported) as err:
+            gbx_zarr_read(spark, url, output=output)
+        assert "/Volumes/<catalog>/<schema>/<volume>/..." in str(err.value)
+    with pytest.raises(ZarrUnsupported) as err:
+        gbx_zarr_register(spark, url, new_table("cloud"))
+    assert "/Volumes/<catalog>/<schema>/<volume>/..." in str(err.value)
+    blocks = gbx_zarr_read(
+        spark,
+        cube,
+        variables=["t2m", "time", "latitude", "longitude"],
+        sel={"time": "2023-01-01T00:00"},
+    )
+    with pytest.raises(ZarrUnsupported) as err:
+        gbx_zarr_write(blocks, new_table("cloud_w"), mode="create", root=url)
+    assert "/Volumes/<catalog>/<schema>/<volume>/..." in str(err.value)
 
 
 def test_a_file_a_tile_names_that_has_gone_is_drift(spark, copy_of_cube, new_table):
@@ -185,6 +215,31 @@ def test_a_file_a_tile_names_that_has_gone_is_drift(spark, copy_of_cube, new_tab
     shutil.rmtree(Path(copy_of_cube) / "t2m")
     with pytest.raises(ZarrStoreDrift):
         materialize_to_bytes(VirtualTile.from_row(row))
+
+
+def test_a_complex_array_reads_as_blocks_but_not_as_a_table(spark, tmp_path):
+    import numpy as np
+
+    values = np.arange(16).reshape(1, 4, 4)
+    ds = xr.Dataset(
+        {
+            "c": (
+                ("time", "latitude", "longitude"),
+                (values + 1j * values).astype("complex64"),
+            )
+        },
+        coords={
+            "time": np.array(["2023-01-01"], dtype="datetime64[ns]"),
+            "latitude": [3.0, 2.0, 1.0, 0.0],
+            "longitude": [0.0, 1.0, 2.0, 3.0],
+        },
+    )
+    path = str(tmp_path / "complex.zarr")
+    ds.to_zarr(path, zarr_format=3, consolidated=False)
+    assert gbx_zarr_read(spark, path, variables=["c"]).count() == 1
+    with pytest.raises(ZarrUnsupported) as err:
+        gbx_zarr_read(spark, path, variables=["c"], output="table").count()
+    assert "complex numbers" in str(err.value)
 
 
 # --- the codec limit on the limitations page -------------------------------------------

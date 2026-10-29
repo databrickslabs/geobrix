@@ -162,10 +162,13 @@ verify_toolchain() {
 
 # The split debug symbols as exported (debuginfo/.build-id/<xx>/<rest>.debug) into one tarball per architecture and
 # target, beside the tree and never inside it (no wheel reads it). Unpack it anywhere and point a debugger at it by
-# build-id. A build-ids.txt (`<path> <build-id>`, the bindings) must have a debug file for every line.
+# build-id. A build-ids.txt (`<path> <build-id>`, the bindings) must have a debug file for every line. The name carries
+# the arch and the first 12 hex of ANCHOR, the build-id of the build's key file (libgdal for gdal-native, rasterio's
+# _base module for the bindings): each version's GitHub release attaches these tarballs as assets under these names.
 pack_debuginfo() {
-    local a="$1" out="$2" name="$3" tarball id missing=0
-    tarball="$out/$name-$a-debuginfo.tar.xz"
+    local a="$1" out="$2" name="$3" anchor="$4" tarball id missing=0
+    [[ "$anchor" =~ ^[0-9a-f]{12,}$ ]] || { echo "BUILD FAILED: no build-id to name the $TARGET debuginfo tarball by ('$anchor')"; return 1; }
+    tarball="$out/$name-$a-${anchor:0:12}-debuginfo.tar.xz"
     [ -d "$out/debuginfo/.build-id" ] || { echo "BUILD FAILED: the $TARGET export has no debuginfo/.build-id"; return 1; }
     if [ -f "$out/build-ids.txt" ]; then
         while read -r _ id; do
@@ -183,7 +186,7 @@ pack_debuginfo() {
 # (the debuginfo tarball beside it is mounted too: it checks every build-id has its debug file and symbolizes one address).
 verify_stage_native() {
     local a="$1" plat="$2" out="$3" h="$4" dbg
-    dbg="$(ls "$out"/gdal-native-*-"$a"-debuginfo.tar.xz)"
+    dbg="$(ls "$out"/gdal-native-*-"$a"-*debuginfo.tar.xz)"
     echo "== verify $a: $out/gdal-native in geobrix-native-build:toolchain-$h-$a (--network none)"
     docker run --rm --network none --platform "$plat" -v "$out/gdal-native:/gdal-native:ro" -v "$dbg:/debuginfo.tar.xz:ro" \
         -v "$PROJECT_ROOT/scripts/native:/verify:ro" \
@@ -290,8 +293,12 @@ build_arch() {
     case "$TARGET" in
         toolchain) verify_toolchain "$a" "$plat" "$tag" ;;
         stage-native) pack_debuginfo "$a" "$out" "gdal-native-$(pin GDAL_VERSION)-gbx$(pin GBX_NATIVE_REVISION)" \
+                "$(python3 -c 'import json, sys; m = json.load(open(sys.argv[1]))["build_ids"]
+print(next((v for k, v in m.items() if k.startswith("lib/libgdal-")), ""))' "$out/gdal-native/MANIFEST.json")" \
             && verify_stage_native "$a" "$plat" "$out" "$h" ;;
-        bindings) pack_debuginfo "$a" "$out" "bindings-gbx$(pin GBX_NATIVE_REVISION)" && verify_bindings "$a" "$plat" "$out" "$h" ;;
+        bindings) pack_debuginfo "$a" "$out" "bindings-gbx$(pin GBX_NATIVE_REVISION)" \
+                "$(awk '$1 ~ /^rasterio\/_base[.]/ {print $2}' "$out/build-ids.txt" | head -n 1)" \
+            && verify_bindings "$a" "$plat" "$out" "$h" ;;
         rust-native) verify_rust_native "$a" "$plat" "$out" "$tag" ;;
         *) echo "VERIFY FAILED: no verify for target $TARGET"; return 1 ;;
     esac

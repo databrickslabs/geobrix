@@ -417,13 +417,18 @@ for i in range(4):
         enc.append(e); dec.append(d)
 print(f"{statistics.median(enc):.4f} {statistics.median(dec):.4f}")
 EOF
-simd="$(pyo "$WORK/jpeg_simd.py" 2>&1)" || fail "JPEG-in-TIFF timing: $simd"
-scalar="$(JSIMD_FORCENONE=1 pyo "$WORK/jpeg_simd.py" 2>&1)" || fail "JPEG-in-TIFF timing (JSIMD_FORCENONE=1): $scalar"
-# the gain is checked on the better of encode and decode (under x86_64 emulation decoding gains least), and neither may be slower
-ratio="$($PY -c 'import sys; s, f = [list(map(float, a.split())) for a in sys.argv[1:3]]; print(f"{f[0] / s[0]:.2f} {f[1] / s[1]:.2f}")' "$simd" "$scalar")"
-$PY -c 'import sys; e, d = map(float, sys.argv[1].split()); sys.exit(0 if max(e, d) >= 1.15 and min(e, d) >= 0.95 else 1)' "$ratio" \
-    || fail "JPEG-in-TIFF is not faster with SIMD than with JSIMD_FORCENONE=1 (encode/decode s: SIMD $simd, scalar $scalar)"
-ok "libjpeg-turbo SIMD: the dispatcher is compiled in, and 2048x2048 RGB JPEG-in-TIFF encodes ${ratio% *}x and decodes ${ratio#* }x faster than with JSIMD_FORCENONE=1 (encode/decode s, median of 3: SIMD $simd, scalar $scalar)"
+# the gain is checked on the better of encode and decode (under x86_64 emulation decoding gains least), and neither may be
+# slower. A timing can lose to a busy machine: a pair that misses is measured once more before the row fails.
+simd_pair() {
+    simd="$(pyo "$WORK/jpeg_simd.py" 2>&1)" || fail "JPEG-in-TIFF timing: $simd"
+    scalar="$(JSIMD_FORCENONE=1 pyo "$WORK/jpeg_simd.py" 2>&1)" || fail "JPEG-in-TIFF timing (JSIMD_FORCENONE=1): $scalar"
+    ratio="$($PY -c 'import sys; s, f = [list(map(float, a.split())) for a in sys.argv[1:3]]; print(f"{f[0] / s[0]:.2f} {f[1] / s[1]:.2f}")' "$simd" "$scalar")"
+    $PY -c 'import sys; e, d = map(float, sys.argv[1].split()); sys.exit(0 if max(e, d) >= 1.15 and min(e, d) >= 0.95 else 1)' "$ratio"
+}
+attempts=1
+simd_pair || { attempts=2; simd_pair; } \
+    || fail "JPEG-in-TIFF is not faster with SIMD than with JSIMD_FORCENONE=1, twice (encode/decode s: SIMD $simd, scalar $scalar)"
+ok "libjpeg-turbo SIMD: the dispatcher is compiled in, and 2048x2048 RGB JPEG-in-TIFF encodes ${ratio% *}x and decodes ${ratio#* }x faster than with JSIMD_FORCENONE=1 (encode/decode s, median of 3: SIMD $simd, scalar $scalar; measured $attempts time(s))"
 
 # --- 10 JPEG XL: the JPEGXL driver writes and reads a .jxl, and the GTiff JXL codec (GDAL's internal libtiff) round-trips
 # Byte, UInt16 and Float32 losslessly, and lossily (JXL_LOSSLESS=NO) to a smaller file with a small error. Lossy JXL is

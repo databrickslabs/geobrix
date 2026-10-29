@@ -8,7 +8,9 @@ texts: the real repo must have no problems, and each way of drifting is reproduc
 text and must be reported.
 """
 
+import os
 import re
+import shutil
 import stat
 import subprocess
 
@@ -383,3 +385,45 @@ def test_each_drift_is_reported(name):
     assert files != REAL, f"the mutation {name!r} changed nothing"
     found = problems(files)
     assert any(expected in p for p in found), (expected, found)
+
+
+# ------------------------------------------- fetch-delta-test-jars.sh runs the Maven GBX_MVN names
+
+
+def _fetch_delta_jars(tmp_path, **env):
+    """Run a copy of the script on a tree with no Maven repository holding the jars: its own
+    repo root, an empty home and an empty GBX_M2_REPO, so it has to fetch."""
+    script = tmp_path / "scripts" / "ci" / "fetch-delta-test-jars.sh"
+    script.parent.mkdir(parents=True)
+    shutil.copy(REPO_ROOT / "scripts" / "ci" / "fetch-delta-test-jars.sh", script)
+    (tmp_path / "home").mkdir()
+    (tmp_path / "m2").mkdir()
+    full = dict(os.environ, HOME=str(tmp_path / "home"), GBX_M2_REPO=str(tmp_path / "m2"))
+    full.pop("GBX_MVN", None)
+    full.update(env)
+    return subprocess.run(
+        ["bash", str(script)], env=full, capture_output=True, text=True, timeout=60
+    )
+
+
+def test_the_delta_fetch_runs_the_maven_gbx_mvn_names(tmp_path):
+    argv_log = tmp_path / "argv.log"
+    mvn = tmp_path / "stub-mvn"
+    mvn.write_text(f'#!/bin/sh\nfor a in "$@"; do echo "$a"; done > "{argv_log}"\nexit 0\n')
+    mvn.chmod(0o755)
+
+    res = _fetch_delta_jars(tmp_path, GBX_MVN=str(mvn))
+
+    argv = argv_log.read_text().split()
+    assert "-C" in argv and f"-Dmaven.repo.local={tmp_path / 'm2'}" in argv
+    assert "org.apache.maven.plugins:maven-dependency-plugin:3.7.0:get" in argv
+    assert any(a.startswith("-Dartifact=io.delta:delta-spark_2.13:") for a in argv)
+    # the stub put no jars in the repository: the script says so and fails
+    assert res.returncode == 1 and "mvn succeeded but the jars are not in any repo" in res.stderr
+
+
+def test_the_delta_fetch_names_a_missing_maven_and_fails(tmp_path):
+    res = _fetch_delta_jars(tmp_path, GBX_MVN=str(tmp_path / "no-such-maven"))
+
+    assert res.returncode == 1
+    assert "no-such-maven is not available" in res.stderr

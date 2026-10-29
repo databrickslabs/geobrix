@@ -1081,7 +1081,19 @@ def test_review_round_keeps_a_relative_report_when_notebooks_are_stripped(
     )
     dbexec.chmod(0o755)
 
-    res = sandbox.run("gbx-review-round.sh", "--base", "HEAD~1", "--", *output_args)
+    # No git identity anywhere (a CI runner): the scratch base must bring its own. useConfigOnly
+    # stops git from guessing one from the user and host name, which a developer's machine can.
+    no_identity = dict(
+        HOME=str(sandbox.root / "empty-home"),
+        GIT_CONFIG_GLOBAL="/dev/null",
+        GIT_CONFIG_NOSYSTEM="1",
+        GIT_CONFIG_COUNT="1",
+        GIT_CONFIG_KEY_0="user.useConfigOnly",
+        GIT_CONFIG_VALUE_0="true",
+    )
+    res = sandbox.run(
+        "gbx-review-round.sh", "--base", "HEAD~1", "--", *output_args, **no_identity
+    )
 
     assert res.returncode == 0, res.output
     assert (sandbox.root / "test-logs" / "r.md").read_text() == "report\n"
@@ -1245,3 +1257,69 @@ def test_no_command_hard_codes_a_package_index():
         if literal_index.search(line)
     ]
     assert offenders == [], offenders
+
+
+# ------------------------------------------------ gbx:data:stage-sample (the .sh around the launcher)
+
+
+def _stage_sample_sandbox(sandbox):
+    """The command with a stub launcher that records its argv, and a `uv` that records its own.
+
+    The launcher itself is tested in test_stage_sample_to_volume.py; here only the script around it:
+    which interpreter it picks, what it hands on, and that --help runs nothing."""
+    launcher = sandbox.root / "examples" / "tests" / "stage_sample_to_volume.py"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text(
+        "import json, os, sys\n"
+        'open(os.environ["STUB_LOG"], "a").write(json.dumps(sys.argv[1:]) + "\\n")\n'
+    )
+    uv = sandbox.bin / "uv"
+    uv.write_text('#!/bin/sh\necho "$@" >> "$UV_LOG"\nexit 1\n')
+    uv.chmod(0o755)
+    stub_log, uv_log = sandbox.root / "launcher.log", sandbox.root / "uv.log"
+    env = dict(
+        STUB_LOG=str(stub_log),
+        UV_LOG=str(uv_log),
+        GBX_PYRX_VENV=str(sandbox.root / "no-venv"),  # so the SDK python comes from uv, not a venv
+    )
+    return env, stub_log, uv_log
+
+
+def test_stage_sample_help_exits_zero_and_runs_nothing(sandbox):
+    env, stub_log, uv_log = _stage_sample_sandbox(sandbox)
+
+    res = sandbox.run("gbx-data-stage-sample.sh", "--help", **env)
+
+    assert res.returncode == 0, res.output
+    assert "--dry-run" in res.output and "--profile" in res.output
+    assert not stub_log.exists() and not uv_log.exists()
+
+
+def test_stage_sample_dry_run_needs_neither_uv_nor_the_sdk_and_keeps_the_log_out_of_the_launcher(
+    sandbox,
+):
+    env, stub_log, uv_log = _stage_sample_sandbox(sandbox)
+
+    res = sandbox.run(
+        "gbx-data-stage-sample.sh", "--dry-run", "--path", "x", "--log", "l.log", **env
+    )
+
+    # uv is present here and fails every call: a dry run must not call it
+    assert res.returncode == 0, res.output
+    assert not uv_log.exists(), uv_log.read_text()
+    assert json.loads(stub_log.read_text()) == ["--dry-run", "--path", "x"]  # no --log
+    assert (sandbox.root / "test-logs" / "l.log").exists()
+
+
+def test_stage_sample_without_dry_run_runs_the_launcher_on_the_sdk_python(sandbox):
+    env, stub_log, uv_log = _stage_sample_sandbox(sandbox)
+
+    res = sandbox.run("gbx-data-stage-sample.sh", "--profile", "p", **env)
+
+    # the fake uv fails, so the launcher never runs and the command exits non-zero
+    assert res.returncode != 0
+    assert not stub_log.exists()
+    call = uv_log.read_text().split()
+    assert call[:2] == ["run", "--no-project"]
+    assert call[-4] == "python" and call[-3].endswith("examples/tests/stage_sample_to_volume.py")
+    assert call[-2:] == ["--profile", "p"]

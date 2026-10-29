@@ -145,14 +145,29 @@ def test_a_registered_grid_reaches_l1_after_an_earlier_gdal_init(request, tmp_pa
     )
     if not grid.is_file():
         pytest.skip("PRECONDITION MISSING: the synthetic.gsb fixture; this row not run")
-    _session(
-        request, "L1"
-    )  # the probe initializes the JVM's GDAL, with no grid registered yet
+    # Every precondition skips with its reason: the L3 engine (the payload's osgeo), the staged JAR in this session,
+    # then (in _session) the JVM on the pinned GDAL and (below) the L1 engine itself.
+    why = run.unavailable_reason()
+    if why:
+        pytest.skip(f"PRECONDITION MISSING: the L3 engine: {why}; this row not run")
+    staged = sorted(
+        (Path(__file__).resolve().parents[2] / "lib").glob(
+            "geobrix-*-jar-with-dependencies.jar"
+        )
+    )
+    if not staged or str(staged[-1]) not in request.getfixturevalue("spark").conf.get(
+        "spark.jars", ""
+    ):
+        pytest.skip(
+            "PRECONDITION MISSING: the staged JAR in this session (gbx-test-parity.sh); this row not run"
+        )
+    # the probe in _session initializes the JVM's GDAL, with no grid registered yet
+    _session(request, "L1")
     spark = request.getfixturevalue("jvm_spark")
     fn = MAN.functions["gbx_rst_transformcrs"]
     why = levels.engine_unavailable(fn, "L1", capabilities.detect(spark, need_jvm=True))
     if why:
-        pytest.skip(f"PRECONDITION MISSING: {why}")
+        pytest.skip(f"PRECONDITION MISSING: the L1 engine: {why}; this row not run")
     name = f"gbx_se_{uuid.uuid4().hex}.gsb"  # a name PROJ has never looked up in either process
     (tmp_path / "grids").mkdir()
     shutil.copy(grid, tmp_path / "grids" / name)

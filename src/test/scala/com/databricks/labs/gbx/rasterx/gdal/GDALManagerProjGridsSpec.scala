@@ -12,6 +12,10 @@ import scala.util.Try
 
 class GDALManagerProjGridsSpec extends AnyFunSuite with BeforeAndAfterAll {
 
+    // The PROJ data dir of the GDAL this JVM runs: the payload's share/proj (its JNI, or /usr/lib/libgdalalljni.so
+    // linked into a payload, as in the dev container), else the system PROJ's /usr/share/proj.
+    private def baseProjDir: String = GDALManager.ensureJniLoaded(None).projData.getOrElse("/usr/share/proj")
+
     override def beforeAll(): Unit = {
         GDALManager.loadSharedObjects(Iterable.empty[String])
         GDALManager.configureGDAL("/tmp", "/tmp")
@@ -28,10 +32,10 @@ class GDALManagerProjGridsSpec extends AnyFunSuite with BeforeAndAfterAll {
             val projData = gdal.GetConfigOption("PROJ_DATA")
             projData should include("/Volumes/a")
             projData should include("/Volumes/b")
-            // Standard PROJ dir must still be present
-            projData should include("/usr/share/proj")
-            // User dirs must appear before the standard dir
-            projData.indexOf("/Volumes/a") should be < projData.indexOf("/usr/share/proj")
+            // The GDAL's own PROJ dir must still be present
+            projData should include(baseProjDir)
+            // User dirs must appear before it
+            projData.indexOf("/Volumes/a") should be < projData.indexOf(baseProjDir)
             // PROJ_LIB (legacy alias) must also carry the prepended value
             gdal.GetConfigOption("PROJ_LIB") should include("/Volumes/a")
         } finally {
@@ -61,9 +65,9 @@ class GDALManagerProjGridsSpec extends AnyFunSuite with BeforeAndAfterAll {
     test("configureGDAL skips PROJ_DATA prepend when PROJ_GRID_DIRS is absent") {
         val config = ExpressionConfig(Map.empty, null)
         GDALManager.configureGDAL(config)
-        // PROJ_LIB ends at /usr/share/proj after the base configureGDAL call (grid dirs an init applied earlier in
-        // this JVM stay ahead of it)
-        gdal.GetConfigOption("PROJ_LIB").split(":").last shouldBe "/usr/share/proj"
+        // PROJ_LIB ends at the GDAL's own PROJ dir after the base configureGDAL call (grid dirs an init applied earlier
+        // in this JVM stay ahead of it)
+        gdal.GetConfigOption("PROJ_LIB").split(":").last shouldBe baseProjDir
     }
 
     test("a later init's PROJ grid dirs reach PROJ, after an earlier init without them") {

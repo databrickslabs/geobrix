@@ -19,9 +19,25 @@
       "raster reproject": ["output-crs", "resampling"],
       "raster calc": ["calc", "dialect", "output-data-type", "nodata", "propagate-nodata"]
     },
-    "virtual_tile_drivers": ["GTiff", "VRT"],
-    "refused_drivers": ["GDALG", "GTI", "STACTA", "STACIT", "WMS", "WMTS", "WCS", "WFS", "HTTP", "CSW", "OGCAPI",
-                        "PLMOSAIC", "PLSCENES", "EEDAI", "EEDA", "DAAS", "NGW"]
+    "raster_drivers": {
+      "allowed": [
+        "AAIGrid", "ACE2", "ADRG", "AIG", "AirSAR", "BAG", "BIGGIF", "BMP", "BSB", "BT", "BYN", "CAD", "CALS",
+        "CEOS", "COASP", "COG", "COSAR", "CPG", "CTG", "DERIVED", "DIMAP", "DOQ1", "DOQ2", "DTED", "E57",
+        "ECRGTOC", "EHdr", "EIR", "ENVI", "ERS", "ESAT", "ESRIC", "FAST", "GFF", "GIF", "GPKG",
+        "GRASSASCIIGrid", "GRIB", "GS7BG", "GSAG", "GSBG", "GSC", "GTX", "GTiff", "GXF", "GenBin", "HDF5",
+        "HDF5Image", "HF2", "HFA", "ILWIS", "IRIS", "ISCE", "ISG", "ISIS2", "ISIS3", "JAXAPALSAR", "JDEM",
+        "JP2OpenJPEG", "JPEG", "JPEGXL", "KMLSUPEROVERLAY", "KRO", "L1B", "LAN", "LCP", "LIBERTIFF", "LOSLAS",
+        "Leveller", "MAP", "MBTiles", "MEM", "MFF", "MFF2", "MRF", "MSGN", "MiraMonRaster", "NDF", "NGSGEOID",
+        "NITF", "NOAA_B", "NSIDCbin", "NTv2", "NUMPY", "NWT_GRC", "NWT_GRD", "OpenFileGDB", "PAux", "PCIDSK",
+        "PCRaster", "PDF", "PDS", "PDS4", "PNG", "PNM", "PRF", "RCM", "RIK", "RMF", "ROI_PAC", "RPFTOC",
+        "RRASTER", "RS2", "RST", "S102", "S104", "S111", "SAFE", "SAGA", "SAR_CEOS", "SENTINEL2", "SIGDEM",
+        "SNAP_TIFF", "SNODAS", "SRP", "SRTMHGT", "TGA", "TIL", "TSX", "Terragen", "USGSDEM", "VICAR", "VRT",
+        "WEBP", "XYZ", "ZMap", "Zarr", "netCDF"
+      ],
+      "refused": [
+        "CSW", "DAAS", "EEDA", "EEDAI", "GDALG", "GTI", "HTTP", "NGW", "OGCAPI", "PLMOSAIC", "PLSCENES", "STACIT", "STACTA", "WCS", "WFS", "WMS", "WMTS"
+      ]
+    }
   },
   "functions": [
     {"sql_name": "gbx_bng_eastnorthasbng", "family": "bng-scalar", "kind": "scalar",

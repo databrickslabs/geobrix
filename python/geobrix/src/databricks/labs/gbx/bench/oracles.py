@@ -15,6 +15,8 @@ import tempfile
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from databricks.labs.gbx._gdal_policy import open_data
+
 MERC_PROJ = (
     "+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 "
     "+units=m +nadgrids=@null +wktext +no_defs"
@@ -858,14 +860,6 @@ SPEC_SE: Tuple[Case, ...] = (
         ("session",),
     ),
     Case(
-        "se_slope_virtual_png",
-        SL,
-        (Build("dem_png"), "degrees"),
-        "error_tile_has",
-        f"a PNG file, {_VT_POLICY}",
-        ("session",),
-    ),
-    Case(
         "se_slope_virtual_vrt_python",
         SL,
         (Build("dem_vrt_python"), "degrees"),
@@ -1207,10 +1201,9 @@ def _se_virtual(name: str, tmpdir: str):
         name == "dem_png"
     ):  # a driver GeoBrix does not emit virtual tiles for (not on the allowlist)
         import numpy as np
-        import rasterio
 
         path = os.path.join(tmpdir, "se_dem.png")
-        with rasterio.open(
+        with open_data(
             path, "w", driver="PNG", width=64, height=64, count=1, dtype="uint8"
         ) as dst:
             dst.write(np.arange(64 * 64, dtype="uint8").reshape(1, 64, 64))
@@ -1360,11 +1353,10 @@ def _build(name: str, tmpdir: str):
 def _dsm_tile_is_whole(path: str, size: int) -> bool:
     """True when `path` opens as a `size` x `size` raster whose last row reads: a copy that an interrupted run left
     half-written does not."""
-    import rasterio
     from rasterio.windows import Window
 
     try:
-        with rasterio.open(path) as ds:
+        with open_data(path) as ds:
             last = ds.read(1, window=Window(0, size - 1, size, 1))
             return (ds.width, ds.height) == (size, size) and last.shape == (1, size)
     except Exception:  # noqa: BLE001 - absent, not a raster, cut short: write it again
@@ -1384,7 +1376,6 @@ def dsm_tile_rows(
     import shutil
 
     import numpy as np
-    import rasterio
     from rasterio.transform import from_origin
 
     from databricks.labs.gbx.pyrx.core.compression import creation_opts
@@ -1414,7 +1405,7 @@ def dsm_tile_rows(
                     **creation_opts("float32", compress="zstd"),
                 )
                 local = os.path.join(scratch, os.path.basename(p))
-                with rasterio.open(local, "w", **prof) as ds:
+                with open_data(local, "w", **prof) as ds:
                     ds.write(z)
                 shutil.copyfile(local, p)  # content only: a Volume takes no copystat
                 os.remove(local)
@@ -1437,9 +1428,8 @@ def _build_helper_input(name: str, tmpdir: str):
         path = next(p for tx, ty, p in rows if (tx, ty) == (1, 1))
         data = bytearray(open(path, "rb").read())
         if name.endswith("garbled"):
-            import rasterio
 
-            with rasterio.open(path) as ds:
+            with open_data(path) as ds:
                 at = int(ds.get_tag_item("BLOCK_OFFSET_0_15", "TIFF", bidx=1))
                 n = int(ds.get_tag_item("BLOCK_SIZE_0_15", "TIFF", bidx=1))
             data[at : at + n] = b"\xff" * n
@@ -1909,9 +1899,8 @@ def _check_helper(case: Case, rows, tiles) -> Optional[str]:
         )
         return None if wins == sorted(case.expect) else f"{case.cid}: windows {wins}"
     if case.kind == "virtual_cover":
-        import rasterio
 
-        with rasterio.open(tiles[0]["path"]) as src:
+        with open_data(tiles[0]["path"]) as src:
             seen = np.zeros((src.height, src.width), dtype=bool)
         for t in ts:
             w = t["window"]

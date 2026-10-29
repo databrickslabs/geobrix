@@ -32,8 +32,9 @@ def test_the_engine_rows_carry_a_gdal_block_and_the_pin_is_the_build_pin():
     assert set(MAN.gdal.allow) == {f.gdal.alg for f in ENGINE_FNS}
     # The virtual-tile policy (design section 4, AP-40, I-2): the allowlist of the drivers the readers emit virtual
     # tiles for, and the refused drivers, pinned as sets: an over-broad list fails, a subset check would not.
-    assert set(MAN.gdal.virtual_drivers) == {"GTiff", "VRT"}
     assert set(MAN.gdal.refused_drivers) == REFUSED_DRIVERS
+    # AP-43: the allowed class is every raster driver a reader can read, so the formats GeoBrix reads are allowed
+    assert {"GTiff", "VRT", "PNG", "netCDF"} <= set(MAN.gdal.allowed_drivers)
 
 
 REFUSED_DRIVERS = {
@@ -57,13 +58,12 @@ REFUSED_DRIVERS = {
 }
 
 
-def test_the_allowlist_is_the_set_the_readers_emit():
-    """Drift: the engine's virtual-tile allowlist equals the drivers the readers' virtual tiles point at (ds/paths)."""
-    from databricks.labs.gbx.ds import paths
-
-    emitted = {d for drivers in paths.VIRTUAL_TILE_DRIVERS.values() for d in drivers}
-    assert set(MAN.gdal.virtual_drivers) == emitted
-    assert set(paths.VIRTUAL_TILE_DRIVERS) <= set(paths.DEFAULT_GLOBS) | {"cog_writer"}
+def test_the_classes_are_disjoint_and_the_refused_class_is_the_pinned_set():
+    """The classification (AP-43) pins the refused class as a set, and no driver is both allowed and refused. The
+    enumeration of the payload's registered rasters, which fails on an unclassified one, is in test_driver_policy.py.
+    """
+    assert not set(MAN.gdal.allowed_drivers) & set(MAN.gdal.refused_drivers)
+    assert set(MAN.gdal.refused_drivers) == REFUSED_DRIVERS
 
 
 def test_the_jvm_skips_exactly_the_refused_drivers():
@@ -83,8 +83,7 @@ def test_the_jvm_skips_exactly_the_refused_drivers():
         (
             {
                 "pin": "3.13.3",
-                "virtual_tile_drivers": ["GTiff"],
-                "refused_drivers": ["GTiff"],
+                "raster_drivers": {"allowed": ["GTiff"], "refused": ["GTiff"]},
             },
             "GTiff",
         ),

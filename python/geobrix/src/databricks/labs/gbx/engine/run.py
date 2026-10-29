@@ -26,13 +26,12 @@ from __future__ import annotations
 
 import contextlib
 import functools
-import os
 import threading
 import uuid
 from dataclasses import dataclass
 from typing import Mapping, Optional, Sequence
 
-from databricks.labs.gbx import manifest
+from databricks.labs.gbx import _gdal_policy, manifest
 from databricks.labs.gbx.engine import argv as argv_mod
 from databricks.labs.gbx.engine.spec import OUTPUT_FORMATS, DataError, ParamError
 
@@ -55,10 +54,6 @@ ENGINE_SETTINGS = {
     "GDAL_VRT_ENABLE_PYTHON": "NO",
     "GDAL_VRT_ENABLE_RAWRASTERBAND": "NO",
 }
-# The opt-out of the registry part of the driver policy (documented on the security page): "off" leaves the refused
-# drivers registered, so a VRT's source, an index's tile or a pipeline's input may use them. The top-level allowlist
-# still applies to a virtual tile's own file.
-POLICY_OPT_OUT = "GBX_ENGINE_DRIVER_POLICY"
 _validated: dict = (
     {}
 )  # dry-run outcomes of map-algebra expressions, by (expression, inputs)
@@ -141,75 +136,25 @@ def _gdal_status():
         yield gdal
 
 
-@functools.lru_cache(maxsize=1)
 def virtual_drivers() -> tuple:
-    """The drivers a virtual tile's own file may open with: the manifest's allowlist (``virtual_tile_drivers``), the
-    drivers the GeoBrix readers emit virtual tiles for (``ds/paths.VIRTUAL_TILE_DRIVERS``). Any other driver is
-    refused by default."""
-    return tuple(manifest.load().gdal.virtual_drivers)
+    """The drivers a virtual tile's own file may open with: every raster driver GeoBrix opens (the manifest's
+    classification, ``_gdal_policy.allowed_names``). The refused drivers are gone from the process at activation.
+    """
+    return _gdal_policy.allowed_names()
 
 
 def refused_drivers() -> tuple:
-    """The drivers the policy refuses everywhere the engine runs (``refused_drivers``): stored pipelines, tile indexes,
-    catalogs and the network APIs. Deregistered from the process by ``apply_driver_policy``.
-    """
-    return tuple(manifest.load().gdal.refused_drivers)
+    """The drivers the policy refuses (``_gdal_policy.refused_names``)."""
+    return _gdal_policy.refused_names()
 
 
-@functools.lru_cache(maxsize=1)
-def apply_driver_policy() -> None:
-    """Deregister the refused drivers from this process's GDAL, once, before the engine's first call (on each worker
-    too: a Python worker runs the engine itself).
-
-    GDAL opens a VRT's sources, a tile index's tiles and a pipeline's inputs through the process's driver registry,
-    with no driver list of its own, so a refused driver nested in a virtual tile is opened unless it is not
-    registered. Process-wide, as the JVM's ``GDALManager`` skips the same drivers at its registration. Opt out with
-    ``GBX_ENGINE_DRIVER_POLICY=off`` (documented on the security page).
-    """
-    if os.environ.get(POLICY_OPT_OUT, "").strip().lower() == "off":
-        return
-    gdal = _gdal()
-    for name in refused_drivers():
-        drv = gdal.GetDriverByName(name)
-        if drv is not None:
-            prefix = drv.GetMetadataItem("DMD_CONNECTION_PREFIX")
-            if (
-                prefix
-            ):  # a name like GTI:/path is then no file: GDAL reports it as missing (see policy_reason)
-                _deregistered_prefixes.add(prefix)
-            drv.Deregister()
+def apply_driver_policy() -> dict:
+    """The process's driver policy: activated at package import, idempotent (``_gdal_policy.activate``)."""
+    return _gdal_policy.activate()
 
 
-# The connection prefixes of the drivers apply_driver_policy deregistered (GTI:, WMTS:, ...), recorded from GDAL's
-# own driver metadata before the drivers go.
-_deregistered_prefixes: set = set()
-
-
-# GDAL's messages for a source a virtual tile opens on its own, that the policy stopped, and what GeoBrix calls it.
-# Each text is GDAL 3.13.3's own (`not recognized` is the message for a driver that is not registered, or does not
-# identify the file; the others are the engine's VRT settings). Pinned by the oracle rows that read them.
-_NESTED_REFUSALS = (
-    (
-        "not recognized as being in a supported file format",
-        "a source GDAL has no driver for here",
-    ),
-    ("VRTRawRasterBand support has been disabled", "a VRT raw band"),
-    ("explicitly disabled", "a VRT Python pixel function"),
-    ("uses inline code in the VRT", "a VRT Python pixel function"),
-)
-
-
-def policy_reason(message: str) -> Optional[str]:
-    """What the policy refused, for a GDAL message raised while a virtual tile was read, or None when the message is
-    not one of the policy's refusals (a missing file, a corrupt one)."""
-    if "No such file or directory" in message and any(
-        f"{prefix}" in message for prefix in _deregistered_prefixes
-    ):  # a deregistered driver's name (GTI:/path): no driver takes it, so GDAL finds no file under that name
-        return "a source GDAL has no driver for here"
-    for needle, what in _NESTED_REFUSALS:
-        if needle in message:
-            return what
-    return None
+# What the policy refused, for a GDAL message raised while a virtual tile was read (the shared mapping).
+policy_reason = _gdal_policy.policy_reason
 
 
 def virtual_source(sql_name: str, path: str) -> None:

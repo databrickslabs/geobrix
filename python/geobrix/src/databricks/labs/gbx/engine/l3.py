@@ -18,7 +18,7 @@ import pandas as pd
 from pyspark.sql import functions as F
 from pyspark.sql.types import BinaryType, StringType, StructField, StructType
 
-from databricks.labs.gbx import manifest
+from databricks.labs.gbx import _gdal_policy, manifest
 from databricks.labs.gbx.engine import run
 from databricks.labs.gbx.pyrx._serde import V2_TILE_SCHEMA
 
@@ -54,15 +54,9 @@ def _setup(grid_dirs: Tuple[str, ...]) -> None:
     _env.configure_gdal_env(list(grid_dirs))
 
 
-def _chain_text(exc: BaseException) -> str:
-    """The messages of an exception and of what it was raised after. rasterio reports a failed read as 'Read failed.
-    See previous exception' with GDAL's own message in the exception before it, so the reason is read from both.
-    """
-    parts, cur = [], exc
-    while cur is not None and len(parts) < 8:
-        parts.append(str(cur))
-        cur = cur.__cause__ or cur.__context__
-    return " | ".join(parts)
+_chain_text = (
+    _gdal_policy.chain_text
+)  # the shared mapping (engine and light tier read one chain)
 
 
 def _virtual_raster(fn, tile, read_cap: Optional[int]) -> bytes:

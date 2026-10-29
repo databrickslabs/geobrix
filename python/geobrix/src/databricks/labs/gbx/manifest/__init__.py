@@ -138,12 +138,10 @@ class GdalSection:
     pin: str
     deny: frozenset
     allow: Mapping[str, Tuple[str, ...]]
-    # The virtual-tile driver policy (design section 4). `virtual_drivers`: the drivers a virtual tile may be opened
-    # with, the ones the GeoBrix readers emit virtual tiles for (an allowlist: any other driver is refused).
-    # `refused_drivers`: drivers that run a stored pipeline, open rasters named in their own index, or reach a
-    # network API; they are never registered where the engine runs (GDALManager's GDAL_SKIP on the JVM, the
-    # engine's driver policy on Python), so no nested open (a VRT source, an index member) can use them either.
-    virtual_drivers: Tuple[str, ...] = ()
+    # The driver classification (AP-43, design section 4): EVERY raster driver the payload's GDAL registers is in
+    # `allowed` (a GeoBrix reader can read it) or in `refused` (a stored pipeline, an index, a service, a network API).
+    # A test enumerates the payload and fails on an unclassified driver. Opens are restricted to `allowed`.
+    allowed_drivers: Tuple[str, ...] = ()
     refused_drivers: Tuple[str, ...] = ()
 
 
@@ -209,17 +207,15 @@ def parse_gdal_spec(raw: Mapping) -> GdalSpec:
 def _parse_gdal_section(raw: Optional[Mapping]) -> Optional[GdalSection]:
     if raw is None:
         return None
-    _closed(
-        raw,
-        frozenset({"pin", "deny", "allow", "virtual_tile_drivers", "refused_drivers"}),
-        "section",
-    )
-    virtual = tuple(raw.get("virtual_tile_drivers", ()))
-    refused = tuple(raw.get("refused_drivers", ()))
-    both = sorted(set(virtual) & set(refused))
-    if both or len(set(virtual)) != len(virtual) or len(set(refused)) != len(refused):
+    _closed(raw, frozenset({"pin", "deny", "allow", "raster_drivers"}), "section")
+    drivers = raw.get("raster_drivers", {})
+    _closed(drivers, frozenset({"allowed", "refused"}), "raster_drivers")
+    allowed = tuple(drivers.get("allowed", ()))
+    refused = tuple(drivers.get("refused", ()))
+    both = sorted(set(allowed) & set(refused))
+    if both or len(set(allowed)) != len(allowed) or len(set(refused)) != len(refused):
         raise ValueError(
-            f"gdal spec: the virtual-tile lists must be disjoint and free of repeats (both: {both})"
+            f"gdal spec: the raster driver lists must be disjoint and free of repeats (both: {both})"
         )
     return GdalSection(
         pin=str(raw["pin"]),
@@ -227,7 +223,7 @@ def _parse_gdal_section(raw: Optional[Mapping]) -> Optional[GdalSection]:
         allow=MappingProxyType(
             {alg: tuple(args) for alg, args in raw.get("allow", {}).items()}
         ),
-        virtual_drivers=virtual,
+        allowed_drivers=allowed,
         refused_drivers=refused,
     )
 

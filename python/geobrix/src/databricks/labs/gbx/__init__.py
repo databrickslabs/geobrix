@@ -7,6 +7,12 @@ from databricks.labs.gbx import _env_guard, _native  # noqa: E402
 _env_guard.check()
 _native.activate(by="import")
 
+# The process-level driver policy (AP-43): the first GeoBrix GDAL use is no later than this import, on the payload's GDAL
+# when there is one. Idempotent; a process without rasterio gets nothing to defend.
+from databricks.labs.gbx import _gdal_policy  # noqa: E402
+
+_gdal_policy.activate()
+
 from databricks.labs.gbx.crs_grids import register_proj_grids  # noqa: E402
 
 

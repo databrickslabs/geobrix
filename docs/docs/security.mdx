@@ -257,6 +257,33 @@ switch to `GDAL_VRT_ENABLE_PYTHON=TRUSTED_MODULES` with a narrow
 [RasterX Function Reference § VRT Python pixel functions](./api/raster-functions#vrt-python-pixel-functions)
 for the full how-to.
 
+### 7. Virtual tiles from data other principals can write
+
+A virtual tile is a path to a raster file and a window, not its bytes. Anyone who can write
+a table or a Volume can name any file in it, so the GDAL spec engine (the functions it
+serves, such as `gbx_rst_slope`) applies a driver policy before it reads one:
+
+- **The tile's own file must be a GeoTIFF or a GDAL VRT.** Any other format is refused, and
+  the reason names the format.
+- **GDAL opens a VRT's sources, a tile index's tiles and a pipeline's inputs itself.** The
+  drivers that run stored pipelines (`GDALG`), index or catalog other rasters (`GTI`,
+  `STACTA`, `STACIT`) or reach a network API (`WMS`, `WMTS`, `WCS`, `WFS`, `HTTP`, `CSW`,
+  `OGCAPI`, `PLMOSAIC`, `PLSCENES`, `EEDAI`, `EEDA`, `DAAS`, `NGW`) are deregistered from the
+  Python process, so GDAL cannot open them at any depth.
+- **A VRT's raw bands and inline Python pixel functions are off while the tile is read**
+  (`GDAL_VRT_ENABLE_RAWRASTERBAND=NO`, `GDAL_VRT_ENABLE_PYTHON=NO`).
+
+A refused tile is an error tile whose reason says what was refused; the query continues.
+
+The deregistration is process-wide: once the engine runs in a Python process (on the driver
+and on each executor), that process no longer finds those drivers, for any code in it. On
+the JVM the same drivers are skipped when GDAL starts, as on the
+[raster reader](./readers/raster) page.
+
+To keep the drivers for your own code in that process, set `GBX_ENGINE_DRIVER_POLICY=off` in
+its environment before the engine first runs. The allowlist still applies to a virtual tile's
+own file; only the deregistration is off, so a VRT source of one of those drivers can open.
+
 ## Next steps
 
 - [Databricks Container Service](./installation/dcs.mdx) — the preferred heavyweight packaging,

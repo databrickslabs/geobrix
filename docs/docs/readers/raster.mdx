@@ -236,7 +236,7 @@ GeoBrix is currently most focused on support for GeoTIFF format. While the GDAL 
 The generic `gdal` reader accepts any GDAL-supported format (~150+ drivers). Individual GDAL drivers have historically had parser vulnerabilities, so a malformed file from an untrusted source can exercise bugs deep inside the native library.
 
 - Only load raster files from sources you trust. For third-party data, prefer validating with `gdalinfo` (or a sandboxed job) before ingesting into production pipelines.
-- Network-capable drivers (`WMS`, `WMTS`, `WCS`, `WFS`, `HTTP`, `CSW`, `OGCAPI`) are **disabled by default** because they can trigger outbound HTTP fetches at open time. To re-enable them, set `spark.gdal.GDAL_SKIP=""` (disable all skipping) or a narrower space-separated list in your Spark cluster config. See [Configure Cluster](../installation/init-script.mdx#4-configure-cluster) for cluster configuration guidance.
+- Network-capable drivers (`WMS`, `WMTS`, `WCS`, `WFS`, `HTTP`, `CSW`, `OGCAPI`, `PLMOSAIC`, `PLSCENES`, `EEDAI`, `EEDA`, `DAAS`, `NGW`) and the drivers that run stored pipelines or index other rasters (`GDALG`, `GTI`, `STACTA`, `STACIT`) are **disabled by default**: they can trigger outbound HTTP fetches at open time, or open rasters that their own files name. To re-enable them, set `spark.gdal.GDAL_SKIP=""` (disable all skipping) or a narrower space-separated list in your Spark cluster config. The [Security](../security#7-virtual-tiles-from-data-other-principals-can-write) page covers the same drivers for virtual tiles. See [Configure Cluster](../installation/init-script.mdx#4-configure-cluster) for cluster configuration guidance.
 :::
 
 ## Format Name

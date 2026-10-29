@@ -8,7 +8,20 @@ sidebar_label: Zarr Weather Features
 
 An end-to-end example showing how to run a feature workflow on a weather cube stored as Zarr, with GeoBrix's [transactional Zarr stores](../formats/zarr): every write is all-or-nothing, every version of the store stays readable, and the cube itself is never copied.
 
-The single notebook works on the GeoBrix sample cube: two days of made-up hourly ERA5-like weather on a one-degree global grid, `time` (48) by `latitude` (181) by `longitude` (360), with 2 m temperature `t2m`, the 10 m wind components `u10` and `v10`, and mean sea level pressure `msl`. It **registers** the cube in place as a Unity Catalog manifest table with `gbx_zarr_register`, **reads** a box over Europe with `gbx_zarr_read` as N-dimensional blocks and as a table of cells, and **samples** the hourly series at 100 sites into a features table with `gbx_zarr_sample`. It then **derives** wind speed from `u10` and `v10` block by block and **writes it back** to the store as a new variable with `gbx_zarr_write(mode="update")`, in one transaction. It **reads the history** with `gbx_zarr_history` and the store as it was before the write with `version_as_of`, **maps** one hour of the new variable as GeoBrix raster tiles (the whole grid, then clipped to a polygon around Australia with `rst_clip`), and **tags** the version the training features need with `gbx_zarr_tag`, so that it stays readable after the store's `retain` period.
+The notebook uses the GeoBrix sample cube: two days of synthetic, ERA5-like hourly weather on a global one-degree grid.
+
+- **Dimensions:** `time` (48 hours) × `latitude` (181) × `longitude` (360).
+- **Variables:** 2 m temperature (`t2m`), the 10 m wind components (`u10` and `v10`), and mean sea level pressure (`msl`).
+
+It takes the cube through seven steps:
+
+1. **Register** the cube in place as a Unity Catalog manifest table, without copying it: `gbx_zarr_register`.
+2. **Read** a box over Europe, first as N-dimensional blocks and then as a table of cells: `gbx_zarr_read`.
+3. **Sample** the hourly series at 100 sites into a features table: `gbx_zarr_sample`.
+4. **Write back** a new variable. Wind speed is computed from `u10` and `v10`, block by block, and added to the store in one transaction: `gbx_zarr_write(mode="update")`.
+5. **Look back** at the store's history, and read the store as it was before the write: `gbx_zarr_history` and `version_as_of`.
+6. **Map** one hour of wind speed as raster tiles, first the whole grid and then clipped to a polygon around Australia: `gbx_zarr_read(output="tiles")` and `rst_clip`.
+7. **Tag** the version the features came from, so it stays readable after the store's `retain` period: `gbx_zarr_tag`.
 
 ![Zarr weather features: register a cube in place, read and sample it, write a derived variable back, map it as tiles, tag the version](../../../resources/images/diagrams/zarr-weather-features/zarr-weather-features.png)
 

@@ -823,6 +823,28 @@ def _reconsolidate(base: str, groups: list[dict], write_id: str) -> list[dict]:
     return out
 
 
+def _publish_conflict(table: str, err: Exception) -> ZarrWriteConflict:
+    """What a publish says when its commit meets another: a writer replaced rows it turns
+    into store objects, or Delta rejected its MERGE for a concurrent commit.
+
+    A commit's own fix ("re-read the store and write again") is wrong here: by now the
+    publish has written its files into the store, so the table has to be told about them.
+    What the conflict reported (keys, winner, rows) is kept.
+    """
+    if isinstance(err, ZarrWriteConflict):
+        why, extra = err.message, dict(
+            keys=err.keys, winner=err.winner, conflicts=err.conflicts
+        )
+    else:
+        why, extra = str(err).split(" Fix:")[0], {}
+    return ZarrWriteConflict(
+        f"the publish of {table} did not commit: {why}",
+        fix="the objects this publish already wrote are in the store, so run "
+        f"gbx_zarr_sync({table!r}) to record them, then publish again",
+        **extra,
+    )
+
+
 def publish(spark, table: str, *, break_lock: bool = False) -> int:
     """Write the overlay of a registered, writable store into the store itself.
 
@@ -991,12 +1013,15 @@ def _publish(spark, table: str, props, lock: str) -> int:
         "documents": len(docs),
     }
     sharded = {name: m.shard is not None for name, m in arrays.items()}
-    return M.commit(
-        spark,
-        table,
-        pa.Table.from_pylist(out, schema=M._COMMIT_SCHEMA),
-        write_id=write_id,
-        meta=meta,
-        sharded=sharded,
-        files=files,
-    )
+    try:
+        return M.commit(
+            spark,
+            table,
+            pa.Table.from_pylist(out, schema=M._COMMIT_SCHEMA),
+            write_id=write_id,
+            meta=meta,
+            sharded=sharded,
+            files=files,
+        )
+    except (ZarrWriteConflict, M.ConcurrentCommit) as e:
+        raise _publish_conflict(table, e) from e

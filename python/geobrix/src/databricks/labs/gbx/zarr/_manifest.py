@@ -305,7 +305,8 @@ def check_tag(name) -> str:
     if not isinstance(name, str) or not _TAG_RE.fullmatch(name):
         raise ValueError(
             f"tag names are 1-128 characters of A-Z a-z 0-9 . _ : / @ + = -, "
-            f"starting with a letter or digit; got {name!r}"
+            f"starting with a letter or digit; got {name!r}. "
+            "Fix: pass a name like 'two-days' or 'release/1.0'."
         )
     return name
 
@@ -613,6 +614,12 @@ def property_retain_seconds(retain: str) -> int:
         ) from None
 
 
+_NOT_A_TIMESTAMP = (
+    "timestamp_as_of {!r} is not a timestamp. "
+    "Fix: pass a timestamp string such as '2023-01-01 06:00:00', or a datetime."
+)
+
+
 def _timestamp_micros(spark, value) -> int:
     """``value`` (a str or datetime) as microseconds since the epoch, parsed by Spark."""
     from pyspark.sql import functions as F
@@ -623,13 +630,17 @@ def _timestamp_micros(spark, value) -> int:
     try:
         parsed = spark.range(1).select(F.unix_micros(col)).first()[0]
     except Exception as e:  # ANSI mode raises on an unparseable string
-        raise ValueError(f"timestamp_as_of {value!r} is not a timestamp") from e
+        raise ValueError(_NOT_A_TIMESTAMP.format(value)) from e
     if parsed is None:  # ANSI off: unparseable becomes NULL
-        raise ValueError(f"timestamp_as_of {value!r} is not a timestamp")
+        raise ValueError(_NOT_A_TIMESTAMP.format(value))
     return int(parsed)
 
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_BAD_VERSION = (
+    "version_as_of must be an int or 'tag:<name>', got {!r}. "
+    "Fix: pass a version number (gbx_zarr_history lists them) or a tag as 'tag:<name>'."
+)
 
 
 def snapshot(
@@ -659,25 +670,25 @@ def snapshot(
     ``SHOW TBLPROPERTIES`` finds it.
     """
     if version_as_of is not None and timestamp_as_of is not None:
-        raise ValueError("pass version_as_of or timestamp_as_of, not both")
+        raise ValueError(
+            "pass version_as_of or timestamp_as_of, not both. "
+            "Fix: name the version one way."
+        )
     tag, version = None, None
     if isinstance(version_as_of, str):
         if not version_as_of.startswith("tag:"):
-            raise ValueError(
-                f"version_as_of must be an int or 'tag:<name>', got {version_as_of!r}"
-            )
+            raise ValueError(_BAD_VERSION.format(version_as_of))
         tag = check_tag(version_as_of[len("tag:") :])
     elif version_as_of is not None:
         if isinstance(version_as_of, bool) or not isinstance(
             version_as_of, numbers.Integral
         ):
-            raise ValueError(
-                f"version_as_of must be an int or 'tag:<name>', got {version_as_of!r}"
-            )
+            raise ValueError(_BAD_VERSION.format(version_as_of))
         version = int(version_as_of)
     if timestamp_as_of is not None and not isinstance(timestamp_as_of, (str, datetime)):
         raise ValueError(
-            f"timestamp_as_of must be a str or datetime, got {timestamp_as_of!r}"
+            f"timestamp_as_of must be a str or datetime, got {timestamp_as_of!r}. "
+            "Fix: pass a timestamp string such as '2023-01-01 06:00:00', or a datetime."
         )
 
     from pyspark.sql import functions as F

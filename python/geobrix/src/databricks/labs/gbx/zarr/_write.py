@@ -43,7 +43,7 @@ Then the MERGE is retried, at most ``_ATTEMPTS`` (20) times with jitter. Data fi
 never rewritten. Appenders to one array all change the array documents and the time chunk,
 so Delta lands one of them per round; each failed attempt means another writer landed, so
 N simultaneous appenders need at most N attempts (measured on Databricks: eight need up to
-eight, and a bound of five gave up on three of them).
+eight and sixteen up to twelve, all landing; a bound of five gave up on three of eight).
 
 **Empty chunks.** A chunk whose every cell is the fill value is not stored, in every mode,
 as zarr does by default (``write_empty_chunks=False``). The chunk's row is deleted; under a
@@ -2819,9 +2819,9 @@ def gbx_zarr_write(
     from, or a coordinate label to another value) raises ``ZarrWriteConflict``, and nothing
     of this write is visible. One that changed only metadata is rebased and the commit
     retried, at most twenty times (every lost round means another writer landed, so the last
-    of N simultaneous appenders needs about N attempts; eight simultaneous appenders to one
-    array were measured to all land). Examples are another append's
-    shape, a shared coordinate chunk, or an array created meanwhile.
+    of N simultaneous appenders needs about N attempts; sixteen simultaneous appenders to one
+    array were measured to all land, and more than the bound allows can exhaust it). Examples
+    are another append's shape, a shared coordinate chunk, or an array created meanwhile.
 
     A blocks DataFrame is read once for ``update`` and ``overwrite``. ``create`` and
     ``append`` first read its block positions (never the ``data`` column; an append also

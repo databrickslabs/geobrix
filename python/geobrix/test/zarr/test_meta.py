@@ -445,6 +445,16 @@ def test_time_coordinate_zarr_v2_fill_value_masks_to_nat_unless_turned_off(era5_
     assert kept[1] == np.datetime64("1899-12-31T23", "ns")  # -1 hour: a real time
 
 
+@pytest.mark.parametrize("flag", ["yes", 1, 0.0, [True]])
+def test_a_mask_flag_that_is_not_a_bool_says_how_to_fix_it(flag):
+    from databricks.labs.gbx.zarr._meta import _check_mask_flag
+
+    with pytest.raises(ValueError, match="Fix: pass True, False or leave it None"):
+        _check_mask_flag(flag)
+    for fine in (None, True, False):
+        _check_mask_flag(fine)
+
+
 def test_use_zarr_fill_value_as_mask_follows_xarray(era5_v3_unsharded, era5_v2):
     za = json.loads((era5_v2 / "t2m" / ".zarray").read_text())
     za.update(dtype="<i2", fill_value=0)

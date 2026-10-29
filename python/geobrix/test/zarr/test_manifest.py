@@ -642,11 +642,27 @@ def test_snapshot_unknown_version_is_unavailable_with_a_fix(spark_delta, table):
         dict(version_as_of="tag:it's"),
         dict(version_as_of=True),
         dict(version_as_of=1.5),
+        dict(timestamp_as_of=5),
     ],
 )
 def test_snapshot_rejects_malformed_arguments(kwargs):
-    with pytest.raises(ValueError):
+    with pytest.raises(
+        ValueError, match="Fix: "
+    ) as e:  # every argument error says how to fix it
         M.snapshot(None, "t", **kwargs)
+    assert str(e.value).rstrip().endswith(".")
+
+
+def test_a_timestamp_that_is_not_one_says_how_to_fix_it(spark_delta, table):
+    with pytest.raises(ValueError, match="is not a timestamp. Fix: pass a timestamp"):
+        M.snapshot(spark_delta, table, timestamp_as_of="not a time")
+
+
+@pytest.mark.parametrize("name", ["", "-leading", "has space", "x" * 129, 5, None])
+def test_a_malformed_tag_name_says_how_to_fix_it(name):
+    with pytest.raises(ValueError, match="Fix: pass a name") as e:
+        M.check_tag(name)
+    assert "starting with a letter or digit" in str(e.value)
 
 
 def test_read_rows_filters_and_tag_snapshots(spark_delta, table):

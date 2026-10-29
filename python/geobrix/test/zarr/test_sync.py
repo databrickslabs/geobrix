@@ -670,3 +670,70 @@ def test_concurrent_publish_conflicts(spark_delta, registered, monkeypatch):
         thread.join(300)
     assert "error" not in out and out["version"]
     assert _live(spark_delta, table, kind="lock") == []
+
+
+def _publish_whose_commit_meets(spark, table, monkeypatch, landing):
+    """Run ``publish`` with ``landing()`` happening after its files are in the store and
+    before its commit: the way a write that reads the overlay before the publish does.
+    """
+    original, fired = _sync._restamp, []
+
+    def land_first(rows, base):
+        if not fired:
+            fired.append(1)
+            landing()
+        return original(rows, base)
+
+    monkeypatch.setattr(_sync, "_restamp", land_first)
+    return publish(spark, table)
+
+
+def test_a_write_that_lands_during_a_publish_fails_it_with_a_publish_fix(
+    spark_delta, registered, monkeypatch
+):
+    """The generic fix of a conflicting commit ("re-read ... and write again") is wrong for a
+    publish: its files are already in the store, so it says to sync and publish again.
+    """
+    store, table = registered(sharded=True, writable=True)
+    _overlay_write(spark_delta, table, value=3.0)
+    with pytest.raises(ZarrWriteConflict) as e:
+        _publish_whose_commit_meets(
+            spark_delta,
+            table,
+            monkeypatch,
+            lambda: _overlay_write(spark_delta, table, value=5.0),
+        )
+    err = e.value
+    assert "already wrote" in err.fix and "in the store" in err.fix
+    assert f"gbx_zarr_sync({table!r})" in err.fix and "publish again" in err.fix
+    assert "write again" not in err.fix
+    assert err.keys and err.winner  # what the conflicting commit told, kept
+    assert _live(spark_delta, table, kind="lock") == []  # the lock is released
+    monkeypatch.undo()
+    gbx_zarr_sync(spark_delta, table)  # what the Fix says, then it goes through
+    publish(spark_delta, table)
+    np.testing.assert_array_equal(
+        zarr.open_array(str(store / "t2m"))[12:24, 0:37, 72:144], 5.0
+    )
+
+
+def test_a_delta_rejection_of_the_publish_commit_is_a_zarr_error_with_the_publish_fix(
+    spark_delta, registered, monkeypatch
+):
+    """``commit`` raises ``ConcurrentCommit`` (not a ``ZarrError``) when Delta rejects the
+    MERGE of a writer that really raced it; a publish says what to do about it."""
+    _, table = registered(sharded=True, writable=True)
+    _overlay_write(spark_delta, table)
+    real = M.commit
+
+    def rejected(spark, name, rows, *, write_id, meta, **kw):
+        if meta.get("mode") == "publish":
+            raise M.ConcurrentCommit("Delta reported ConcurrentAppendException")
+        return real(spark, name, rows, write_id=write_id, meta=meta, **kw)
+
+    monkeypatch.setattr(M, "commit", rejected)
+    with pytest.raises(ZarrWriteConflict) as e:
+        publish(spark_delta, table)
+    assert "already wrote" in e.value.fix and "publish again" in e.value.fix
+    assert "ConcurrentAppendException" in str(e.value)
+    assert _live(spark_delta, table, kind="lock") == []

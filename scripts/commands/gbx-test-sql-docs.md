@@ -57,6 +57,10 @@ bash scripts/commands/gbx-test-sql-docs.sh --skip-build --timeout 900
 bash scripts/commands/gbx-test-sql-docs.sh
 ```
 
+## Before pytest: the Zarr doc tests
+
+`api/` holds the Zarr function reference's doc tests (`api/test_zarr_functions_examples.py`), which keep a store's manifest in a Delta table. When the target covers one (the default `api/`, the whole suite, or any path or `--test` that names `zarr`) the command first installs the `zarr_dbr19` extra into the container when its pins are not met, and runs `scripts/ci/fetch-delta-test-jars.sh` under the work lock (a no-op when `scripts/docker/m2` already holds the delta-spark jars; a sha256 mismatch, exit 3, aborts; a missing jar is a warning and the Zarr tests then fail naming it). It is the same step, from the same helper (`ensure_zarr_test_env` in `common.sh`), that `gbx:test:python-docs` and `gbx:test:python` run. A run of other `api/` files pays nothing.
+
 ## Test layout
 
 - **Source:** `docs/tests/python/api/` (SQL API Reference and Python API examples).

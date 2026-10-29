@@ -205,33 +205,9 @@ paths_need_zarr() {
     return 1
 }
 
-# Everything test/zarr needs that the base dev image does not carry. Called only when test/zarr
-# is among the selected tests, so other runs pay nothing.
-#   * the [zarr_dbr19] extra (ensure_zarr_extra in common.sh, shared with gbx:test:python-docs).
-#   * the OSS Delta Lake jars, which the manifest tests run against in a local Spark session
-#     (test/conftest.py puts them on the JVM classpath when test/zarr is collected). They are
-#     not a pip package and Spark's Ivy resolver cannot reach the dev proxy, so
-#     scripts/ci/fetch-delta-test-jars.sh fetches them with Maven and checks their sha256.
-#     A missing jar is a warning (unrelated suites still run, and the Delta-backed zarr tests
-#     fail loudly, naming it); a sha256 MISMATCH (exit 3) aborts, so tampered jars are never
-#     put on a classpath.
-ensure_zarr_test_env() {
-    ensure_zarr_extra
-    local rc=0
-    docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash /root/geobrix/scripts/ci/fetch-delta-test-jars.sh || rc=$?
-    if [ "$rc" -eq 3 ]; then
-        echo -e "${RED}❌ Delta jar sha256 mismatch; refusing to run (see the message above)${NC}"
-        exit 1
-    elif [ "$rc" -eq 75 ] || [ "$rc" -eq 70 ]; then
-        # The work-lock wrapper, not the fetch: earlier work is still running in the container
-        # (75, timed out) or the lock file cannot be used (70). The pytest exec below would stop
-        # the same way, so say so instead of calling it a missing Delta jar.
-        echo -e "${RED}❌ Could not take the container work lock (exit $rc; see the message above); not running${NC}"
-        exit "$rc"
-    elif [ "$rc" -ne 0 ]; then
-        echo -e "${YELLOW}⚠️  Delta jars unavailable: Delta-backed zarr tests will fail (see scripts/ci/fetch-delta-test-jars.sh)${NC}"
-    fi
-}
+# What test/zarr needs that the base dev image does not carry (the zarr extra, the Delta jars) is
+# set up by ensure_zarr_test_env in common.sh, shared with the commands that run the Zarr doc tests.
+# It is called only when test/zarr is among the selected tests, so other runs pay nothing.
 
 # ---------------------------------------------------------------------------------------
 # Single run: --path given → one pytest process over exactly the paths asked for.

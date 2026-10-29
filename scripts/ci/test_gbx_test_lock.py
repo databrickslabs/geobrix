@@ -905,11 +905,11 @@ def test_the_guard_catches_the_unwrapped_by_package_maven_exec_in_gbx_coverage_s
 def test_the_guard_catches_the_delta_jar_fetch_outside_the_work_lock():
     """Mutation: fetch-delta-test-jars.sh runs `mvn dependency:get` in the container."""
     wrapped = "docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash /root/geobrix/scripts/ci/fetch-delta-test-jars.sh"
-    text = _command_text("gbx-test-python.sh")
+    text = _command_text("common.sh")  # the one helper every Zarr-testing command calls
     assert wrapped in text
     mutated = text.replace(wrapped, wrapped.replace("$GBX_LOCK_RUN ", ""))
 
-    bad = _unwrapped_execs("gbx-test-python.sh", mutated)
+    bad = _unwrapped_execs("common.sh", mutated)
 
     assert len(bad) == 1 and "fetch-delta-test-jars.sh" in bad[0][1]
 
@@ -1144,6 +1144,126 @@ def test_the_docs_command_does_not_look_at_the_zarr_extra_for_other_targets(sand
     sandbox.run("gbx-test-python-docs.sh", "--skip-build", *("--suite", "quickstart"))
 
     assert _pin_check_execs(sandbox) == [] and _extra_installs(sandbox) == []
+
+
+# --- gbx:test:sql-docs runs api/, which holds the Zarr function reference's doc tests ----------
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        [],
+        ["--path", "api/"],
+        ["--path", "./api/"],
+        ["--path", "api/test_zarr_functions_examples.py"],
+        ["--test", "api/test_zarr_functions_examples.py::test_x"],
+    ],
+    ids=["default", "api-directory", "dot-api-directory", "zarr-file", "zarr-test"],
+)
+def test_the_sql_docs_command_sets_up_the_zarr_tests_before_it_runs_them(sandbox, args):
+    # api/ holds api/test_zarr_functions_examples.py, which needs the zarr extra and the Delta
+    # jars; the python-docs command excludes api/ by default, so this is the command that runs it.
+    sandbox.run("gbx-test-sql-docs.sh", "--skip-build", *args)
+
+    (fetch,) = _fetches(sandbox)
+    assert _under_work_lock(fetch)
+    assert len(_pin_check_execs(sandbox)) == 1  # it looked at the extra
+    execs = sandbox.execs()
+    assert execs.index(fetch) < max(i for i, c in enumerate(execs) if "pytest" in c[-1])
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--path", "api/test_sql_api.py"],
+        ["--test", "api/test_sql_api.py::test_x"],
+        ["--path", "api/test_rasterx_functions_sql.py"],
+    ],
+    ids=["sql-file", "sql-test", "other-file"],
+)
+def test_the_sql_docs_command_leaves_the_image_alone_for_other_api_tests(sandbox, args):
+    sandbox.run("gbx-test-sql-docs.sh", "--skip-build", *args)
+
+    assert _fetches(sandbox) == []
+    assert _pin_check_execs(sandbox) == [] and _extra_installs(sandbox) == []
+
+
+def test_the_sql_docs_command_installs_the_zarr_extra_a_stale_image_lacks(sandbox):
+    python3 = sandbox.bin / "python3"
+    python3.write_text("#!/bin/sh\nexit 1\n")
+    python3.chmod(0o755)
+
+    res = sandbox.run(
+        "gbx-test-sql-docs.sh", "--skip-build", FAKE_DOCKER_RUN_MATCHING="^-$"
+    )
+
+    assert res.returncode == 0, res.output
+    (install,) = _extra_installs(sandbox)
+    assert "zarr_dbr19" in install[-1]
+    execs = sandbox.execs()
+    assert (
+        execs.index(install)
+        < execs.index(_fetches(sandbox)[0])
+        < max(i for i, c in enumerate(execs) if "pytest" in c[-1])
+    )
+
+
+@pytest.mark.parametrize(
+    "rc, said", [(3, "sha256 mismatch"), (75, "work lock"), (70, "work lock")]
+)
+def test_the_sql_docs_command_stops_when_the_delta_jars_cannot_be_trusted_or_locked(
+    sandbox, rc, said
+):
+    stub = sandbox.root / "scripts" / "ci" / "fetch-delta-test-jars.sh"
+    stub.parent.mkdir(parents=True)
+    stub.write_text(f"#!/bin/bash\nexit {rc}\n")
+
+    res = sandbox.run(
+        "gbx-test-sql-docs.sh",
+        "--skip-build",
+        FAKE_DOCKER_RUN_MATCHING="fetch-delta-test-jars",
+    )
+
+    assert res.returncode == (1 if rc == 3 else rc), res.output
+    assert said in res.output
+    assert not [c for c in sandbox.execs() if "pytest" in c[-1]]  # never started
+
+
+def test_the_sql_docs_command_only_warns_when_the_delta_jars_are_missing(sandbox):
+    stub = sandbox.root / "scripts" / "ci" / "fetch-delta-test-jars.sh"
+    stub.parent.mkdir(parents=True)
+    stub.write_text("#!/bin/bash\nexit 1\n")
+
+    res = sandbox.run(
+        "gbx-test-sql-docs.sh",
+        "--skip-build",
+        FAKE_DOCKER_RUN_MATCHING="fetch-delta-test-jars",
+    )
+
+    assert res.returncode == 0, res.output
+    assert "Delta jars unavailable: the Zarr doc tests will fail" in res.output
+    assert [c for c in sandbox.execs() if "pytest" in c[-1]]
+
+
+def test_the_zarr_test_setup_is_one_helper_not_a_copy_in_each_command():
+    # Four commands run Zarr tests; the fetch, the hash check and the extra check live in
+    # common.sh once, so a change (a new pin, a new exit code) reaches all of them.
+    commands = REPO_ROOT / "scripts" / "commands"
+    holders = sorted(
+        p.name
+        for p in commands.glob("*.sh")
+        if any(
+            "fetch-delta-test-jars.sh" in stmt
+            for _, stmt in _docker_exec_statements(p.read_text())
+        )
+    )
+    assert holders == ["common.sh"], holders
+    for name in (
+        "gbx-test-python.sh",
+        "gbx-test-python-docs.sh",
+        "gbx-test-sql-docs.sh",
+    ):
+        assert "ensure_zarr_test_env" in (commands / name).read_text(), name
 
 
 def test_the_exempt_notebook_runner_installs_geobrix_only_when_it_is_missing(sandbox):

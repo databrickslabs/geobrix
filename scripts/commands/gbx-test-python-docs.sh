@@ -188,29 +188,11 @@ if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then
 fi
 
 # The Zarr doc tests (formats/, plus the Zarr examples of readers/, writers/ and api/) keep a store's
-# manifest in a Delta table, so they need the delta-spark jars on the JVM classpath. Fetch them (and
-# check their sha256) first, as gbx:test:python does for the zarr tests: a fresh container, or one
-# whose scripts/docker/m2 was cleared, would otherwise fail every one of them. It does nothing when
-# the jars are already there. Only a target that covers a Zarr doc test needs it: the full suite,
-# formats/, a whole readers/ writers/ or api/ directory, or any path that names zarr.
-if [[ "$TEST_PATH" == "${BASE}/" || "$TEST_PATH" == *"/formats"* || "$TEST_PATH" == *zarr* \
-      || "$TEST_PATH" =~ ^${BASE}/(readers|writers|api)/?$ ]]; then
-    # A dev image built before the zarr extra was baked in would make the Zarr tests skip on their
-    # importorskip, which exits 0: install it first, as gbx:test:python does.
-    ensure_zarr_extra
-    FETCH_RC=0
-    docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash /root/geobrix/scripts/ci/fetch-delta-test-jars.sh || FETCH_RC=$?
-    if [ "$FETCH_RC" -eq 3 ]; then
-        echo -e "${RED}❌ Delta jar sha256 mismatch; refusing to run (see the message above)${NC}"
-        exit 1
-    elif [ "$FETCH_RC" -eq 75 ] || [ "$FETCH_RC" -eq 70 ]; then
-        # The work-lock wrapper, not the fetch: earlier work is still running in the container
-        # (75, timed out) or the lock file cannot be used (70).
-        echo -e "${RED}❌ Could not take the container work lock (exit $FETCH_RC; see the message above); not running${NC}"
-        exit "$FETCH_RC"
-    elif [ "$FETCH_RC" -ne 0 ]; then
-        echo -e "${YELLOW}⚠️  Delta jars unavailable: the Zarr doc tests will fail (see scripts/ci/fetch-delta-test-jars.sh)${NC}"
-    fi
+# manifest in a Delta table: they need the zarr extra and the delta-spark jars (fetched and sha256-
+# checked, a no-op when they are there), as every command that runs a Zarr test arranges
+# (ensure_zarr_test_env in common.sh). Only a target that covers a Zarr doc test pays for it.
+if zarr_doc_tests_selected "$TEST_PATH" "$BASE"; then
+    ensure_zarr_test_env "the Zarr doc tests"
 fi
 
 echo -e "${CYAN}🎯 Test path: ${YELLOW}$TEST_PATH${NC}"

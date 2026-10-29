@@ -539,10 +539,51 @@ ensure_zarr_extra() {
     fi
 }
 
+# Everything a Zarr test needs that the base dev image does not carry. Call it only when the tests
+# about to run include a Zarr test, so other runs pay nothing. Shared by every command that runs
+# one (gbx:test:python, gbx:test:python-docs, gbx:test:sql-docs), so there is one copy.
+#   * the [zarr_dbr19] extra (ensure_zarr_extra above).
+#   * the OSS Delta Lake jars, which the manifest tests run against in a local Spark session
+#     (the test conftests put them on the JVM classpath). They are not a pip package and Spark's
+#     Ivy resolver cannot reach the dev proxy, so scripts/ci/fetch-delta-test-jars.sh fetches them
+#     with Maven and checks their sha256. A missing jar is a warning (unrelated suites still run,
+#     and the Delta-backed Zarr tests fail loudly, naming it); a sha256 MISMATCH (exit 3) aborts,
+#     so tampered jars are never put on a classpath.
+# $1 names what will fail without the jars, for the warning (default: the Delta-backed zarr tests).
+ensure_zarr_test_env() {
+    local what="${1:-Delta-backed zarr tests}"
+    ensure_zarr_extra
+    local rc=0
+    docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash /root/geobrix/scripts/ci/fetch-delta-test-jars.sh || rc=$?
+    if [ "$rc" -eq 3 ]; then
+        echo -e "${RED}❌ Delta jar sha256 mismatch; refusing to run (see the message above)${NC}"
+        exit 1
+    elif [ "$rc" -eq 75 ] || [ "$rc" -eq 70 ]; then
+        # The work-lock wrapper, not the fetch: earlier work is still running in the container
+        # (75, timed out) or the lock file cannot be used (70). The pytest exec that follows would
+        # stop the same way, so say so instead of calling it a missing Delta jar.
+        echo -e "${RED}❌ Could not take the container work lock (exit $rc; see the message above); not running${NC}"
+        exit "$rc"
+    elif [ "$rc" -ne 0 ]; then
+        echo -e "${YELLOW}⚠️  Delta jars unavailable: ${what} will fail (see scripts/ci/fetch-delta-test-jars.sh)${NC}"
+    fi
+}
+
+# True when a doc-test target ($1, a container path under $2 = docs/tests/python) covers a Zarr doc
+# test: the whole suite, formats/, a whole readers/, writers/ or api/ directory, or any path that
+# names zarr. One rule for the commands that run doc tests (gbx:test:python-docs, gbx:test:sql-docs).
+# A "." or "./" segment names the same directory, so it is read as the path it names.
+zarr_doc_tests_selected() {
+    local path base="$2"
+    path="$(printf '%s' "$1" | sed -E 's#/(\./)+#/#g; s#/\.$#/#')"
+    [[ "$path" == "${base}/" || "$path" == *"/formats"* || "$path" == *zarr* \
+        || "$path" =~ ^${base}/(readers|writers|api)/?$ ]]
+}
+
 # Export helpers + color vars so they survive any subshell that doesn't re-source this file
 # (observed on macOS bash 3.2: "show_separator: command not found" mid-script).
 export RED GREEN YELLOW BLUE CYAN NC GBX_DATABRICKS_SDK_SPEC DOCKER_MAVEN_ENV GBX_TEST_LOCK_FILE GBX_WORK_LOCK_FILE GBX_TEST_LOCK_TIMEOUT GBX_LOCK_NO_WAIT GBX_LOCK_CMD GBX_CONTAINER_ROOT GBX_CONTAINER_LOCK GBX_LOCK_RUN
 export -f check_docker resolve_log_path setup_log_file show_banner show_separator \
           print_report_link open_report generate_timestamp warn_if_jar_stale \
           print_banner print_separator setup_log run_in_pyrx_venv _gbx_py_ok gbx_python_with_sdk validate_set \
-          print_lock_help _gbx_lock_abort gbx_acquire_test_lock zarr_extra_installed ensure_zarr_extra 2>/dev/null || true
+          print_lock_help _gbx_lock_abort gbx_acquire_test_lock zarr_extra_installed ensure_zarr_extra ensure_zarr_test_env zarr_doc_tests_selected 2>/dev/null || true

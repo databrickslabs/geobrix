@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.kernels
 
-import com.databricks.labs.gbx.expressions.WithExpressionInfo
+import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, WithExpressionInfo}
+import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.kernels.spec.{GdalSpecArgv, GdalSpecExpr, GdalSpecs, RasterProps, SpecDataException, SpecFunction}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.FunctionIdentifier
@@ -52,8 +53,9 @@ object L1Installer {
     /** Install the GDAL spec engine expression of `sqlName` ([[GdalSpecExpr]]; its spec read from the JAR's copy of
       * the manifest, never from the caller) under `name`: `sqlName`, or its private `gbx__l1_<x>`. The builder takes
       * `min_args` to all of the manifest's arguments and fills the rest from the manifest's SQL defaults (parsed
-      * once, here, by the session's parser). When every argument but the input is a literal it is bound once, at
-      * analysis, so a value the function refuses fails the query before it runs. `"ok"`, or why not. */
+      * once, here, by the session's parser), then the session's configuration ([[ExpressionConfigExpr]]). When every
+      * argument but the input is a literal it is bound once, at analysis, so a value the function refuses fails the
+      * query before it runs. `"ok"`, or why not. */
     def installSpec(spark: SparkSession, name: String, sqlName: String): String = {
         val fn = Try(GdalSpecs.function(sqlName)) match {
             case scala.util.Success(f) => f
@@ -69,8 +71,8 @@ object L1Installer {
                 )
             }
             val all = args ++ defaults.drop(args.length).map(_.get)
-            bindLiterals(fn, all)
-            GdalSpecExpr(sqlName, all)
+            bindLiterals(spark, fn, all)
+            GdalSpecExpr(sqlName, all :+ ExpressionConfigExpr())
         }
         val usage = s"$name(${fn.params.map(_.name).mkString(", ")}) - GDAL '${fn.gdal.alg}' on the GDAL spec engine."
         val info = new ExpressionInfo(classOf[GdalSpecExpr].getName, null, name, usage, "", "", "", "", "0.6.0", "", "built-in")
@@ -86,10 +88,10 @@ object L1Installer {
 
     /** Bind the literal arguments of a one-raster spec on placeholder input props: the binders' refusals (an unknown
       * choice, a half-given pair) are raised now. A data error (a CRS GDAL cannot parse) stays one: an error tile per
-      * row. */
-    private def bindLiterals(fn: SpecFunction, all: Seq[Expression]): Unit =
+      * row. GDAL is initialized from the session's configuration, as the expression initializes it on an executor. */
+    private def bindLiterals(spark: SparkSession, fn: SpecFunction, all: Seq[Expression]): Unit =
         if (fn.gdal.inputs.head._2 == "raster" && all.tail.forall(_.foldable)) {
-            KernelGdal.ensureInit()
+            GDALManager.init(ExpressionConfig(spark))
             val values = fn.params.tail.zip(all.tail).map { case (p, e) => p.name -> literal(e.eval()) }.toMap
             try GdalSpecArgv.build(fn, values, Seq(RasterProps(1, 1, 1, "Float32")))
             catch { case _: SpecDataException => () }

@@ -756,8 +756,84 @@ SPEC_SE: Tuple[Case, ...] = (
         None,
         ("session",),
     ),
-    # norm_diff over two tiles, A then B, NoData in either one NoData out: the builtin dialect, which this GDAL
-    # build has; the muparser rows below need it (MUPARSER_ROWS).
+    # A target CRS that names a grid by path is refused before GDAL or PROJ sees it: an error tile (the value is
+    # data) with a Fix, the same on every level.
+    Case(
+        "se_tcrs_grid_path",
+        T,
+        (
+            Build("tile_4326"),
+            "+proj=longlat +datum=WGS84 +nadgrids=/etc/hostname +type=crs",
+        ),
+        "error_fix",
+        None,
+        ("session",),
+    ),
+    # A bare grid name PROJ cannot find: every level gives the same outcome.
+    Case(
+        "se_tcrs_missing_grid",
+        T,
+        (
+            Build("tile_4326"),
+            "+proj=longlat +datum=WGS84 +nadgrids=gbx_no_such_grid.gsb +type=crs",
+        ),
+        "error_tile",
+        None,
+        ("session",),
+    ),
+    # Virtual tiles: a VRT is read (the policy allows it); a stored GDAL pipeline, a VRT over one, a VRT with a
+    # Python pixel function, a VRT raw band (a file's bytes read with no driver) and a missing file are error
+    # tiles, never run and never a failed query.
+    Case(
+        "se_slope_virtual_vrt",
+        SL,
+        (Build("dem_vrt"), "degrees"),
+        "ref",
+        "slope",
+        ("session",),
+    ),
+    Case(
+        "se_slope_virtual_gdalg",
+        SL,
+        (Build("dem_gdalg"), "degrees"),
+        "error_tile",
+        None,
+        ("session",),
+    ),
+    Case(
+        "se_slope_virtual_vrt_gdalg",
+        SL,
+        (Build("dem_vrt_gdalg"), "degrees"),
+        "error_tile",
+        None,
+        ("session",),
+    ),
+    Case(
+        "se_slope_virtual_vrt_python",
+        SL,
+        (Build("dem_vrt_python"), "degrees"),
+        "error_tile",
+        None,
+        ("session",),
+    ),
+    Case(
+        "se_slope_virtual_vrt_raw",
+        SL,
+        (Build("dem_vrt_raw"), "degrees"),
+        "error_tile",
+        None,
+        ("session",),
+    ),
+    Case(
+        "se_slope_virtual_missing",
+        SL,
+        (Build("dem_missing"), "degrees"),
+        "error_tile",
+        None,
+        ("session",),
+    ),
+    # norm_diff over two tiles, A then B, NoData in either one NoData out: the builtin dialect; the rows below use
+    # muparser, which the pinned GDAL build carries (the native self-check holds it).
     Case(
         "se_ma_norm_diff",
         MALG,
@@ -788,14 +864,14 @@ SPEC_SE: Tuple[Case, ...] = (
         "nd_bands_4_3",
         ("session",),
     ),
-    # GDAL's own run refuses an expression it cannot evaluate: data, so an error tile (today every muparser
-    # expression is refused this way, the build having no muparser).
+    # A literal expression GDAL cannot evaluate is a parameter error, found by the engine's dry run (muparser's
+    # message names the fault).
     Case(
         "se_ma_bad_syntax",
         MALG,
         (Build("se_one"), "A +* 2"),
-        "error_tile",
-        None,
+        "raises",
+        "Unexpected",
         ("session",),
     ),
     Case(
@@ -819,9 +895,6 @@ SPEC_SE: Tuple[Case, ...] = (
     ),
     Case("se_ma_null", MALG, (None, NORM_DIFF), "null", None, ("session",)),
 )
-# Rows that need GDAL's muparser expression dialect, absent from this GDAL build until the native rebuild that
-# adds it; they are strict expected failures until then.
-MUPARSER_ROWS = frozenset({"se_ma_times2", "se_ma_nd_two_tiles", "se_ma_multiband"})
 
 
 def _tile_bytes(
@@ -962,7 +1035,80 @@ def _gtiff(bands, crs_value: Optional[str], nodata=-9999.0) -> bytes:
         return mf.read()
 
 
-def _se_build(name: str):
+def _se_virtual(name: str, tmpdir: str):
+    """The virtual-tile fixtures of SPEC_SE: files under `tmpdir`, the tile pointing at them."""
+    dem = os.path.join(tmpdir, "se_dem.tif")
+    if not os.path.exists(dem):
+        with open(dem, "wb") as fh:
+            fh.write(_se_build("dem_3857")["raster"])
+    gdalg = os.path.join(tmpdir, "se_dem.gdalg.json")
+    files = {
+        "dem_gdalg": (
+            gdalg,
+            json.dumps(
+                {
+                    "type": "gdal_streamed_alg",
+                    "command_line": f"gdal raster read {dem} ! slope",
+                }
+            ),
+        ),
+        "dem_vrt": (os.path.join(tmpdir, "se_dem.vrt"), _vrt(dem)),
+        "dem_vrt_gdalg": (os.path.join(tmpdir, "se_dem_gdalg.vrt"), _vrt(gdalg)),
+        "dem_vrt_python": (
+            os.path.join(tmpdir, "se_dem_python.vrt"),
+            _vrt(dem, python=True),
+        ),
+    }
+    if name == "dem_missing":
+        return _tile(None, os.path.join(tmpdir, "se_no_such_dem.tif"), None)
+    if name == "dem_vrt_raw":  # a raw band over a sibling file of float32 bytes
+        with open(os.path.join(tmpdir, "se_dem_raw.bin"), "wb") as fh:
+            fh.write(bytes(64 * 64 * 4))
+        files[name] = (
+            os.path.join(tmpdir, "se_dem_raw.vrt"),
+            _vrt("se_dem_raw.bin")
+            .replace(
+                '<VRTRasterBand dataType="Float32" band="1">',
+                '<VRTRasterBand dataType="Float32" band="1" subClass="VRTRawRasterBand">'
+                '<SourceFilename relativeToVRT="1">se_dem_raw.bin</SourceFilename><ImageOffset>0</ImageOffset>'
+                "<PixelOffset>4</PixelOffset><LineOffset>256</LineOffset><ByteOrder>LSB</ByteOrder>",
+            )
+            .split("<NoDataValue>")[0]
+            + "</VRTRasterBand></VRTDataset>",
+        )
+    if (
+        name == "dem_vrt_gdalg"
+    ):  # the pipeline the VRT points at must exist, or nothing is tested
+        _se_virtual("dem_gdalg", tmpdir)
+    path, text = files[name]
+    with open(path, "w") as fh:
+        fh.write(text)
+    return _tile(None, path, None)
+
+
+def _vrt(source: str, python: bool = False) -> str:
+    """A one-band 64 x 64 VRT over `source` (EPSG:3857, the DEM's grid); with `python`, a derived band whose pixel
+    function is inline Python."""
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    band = (
+        '<VRTRasterBand dataType="Float32" band="1" subClass="VRTDerivedRasterBand">'
+        "<PixelFunctionType>f</PixelFunctionType><PixelFunctionLanguage>Python</PixelFunctionLanguage>"
+        "<PixelFunctionCode><![CDATA[\ndef f(in_ar, out_ar, *args, **kwargs):\n    out_ar[:] = in_ar[0]\n]]>"
+        "</PixelFunctionCode>"
+        if python
+        else '<VRTRasterBand dataType="Float32" band="1">'
+    )
+    return (
+        f'<VRTDataset rasterXSize="64" rasterYSize="64"><SRS>{resolve_crs("EPSG:3857").to_wkt()}</SRS>'
+        "<GeoTransform>400000, 10, 0, 5760000, 0, -10</GeoTransform>"
+        f"{band}<NoDataValue>-9999</NoDataValue><SimpleSource>"
+        f'<SourceFilename relativeToVRT="0">{source}</SourceFilename><SourceBand>1</SourceBand>'
+        "</SimpleSource></VRTRasterBand></VRTDataset>"
+    )
+
+
+def _se_build(name: str, tmpdir: Optional[str] = None):
     """The spec engine rows' fixtures (SPEC_SE)."""
     import numpy as np
 
@@ -992,11 +1138,13 @@ def _se_build(name: str):
             {**_tile(), "metadata": {ERROR_TILE_KEY: UPSTREAM_ERROR}},
             _se_build("se_one")[0],
         ]
+    if name.startswith("dem_") and name != "dem_3857" and tmpdir is not None:
+        return _se_virtual(name, tmpdir)
     return None
 
 
 def _build(name: str, tmpdir: str):
-    se = _se_build(name)
+    se = _se_build(name, tmpdir)
     if se is not None:
         return se
     if name == "tile_edit_a":

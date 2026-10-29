@@ -3,8 +3,11 @@ package com.databricks.labs.gbx.kernels.spec
 import com.databricks.labs.gbx.rasterx.operations.SpatialRefOps
 import com.databricks.labs.gbx.rasterx.operator.OperatorOptions
 import com.fasterxml.jackson.databind.{JsonNode, ObjectMapper}
+import org.gdal.gdal.gdal
+import org.gdal.gdalconst.gdalconstConstants
 
 import java.util.Locale
+import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 import scala.util.matching.Regex
 
@@ -32,6 +35,10 @@ object GdalSpecArgv {
     val Threaded: Set[String] = Set("raster reproject")
     /** Output formats the engine writes. Never VRT or GDALG. */
     val OutputFormats: Set[String] = Set("GTiff", "MEM")
+    /** The fix for a CRS GDAL cannot build (`engine/argv.CRS_BUILD_FIX`). */
+    val CrsBuildFix: String =
+        "Fix: pass EPSG:<code>, WKT or PROJJSON that GDAL can build; for a grid, register its directory with " +
+            "register_proj_grids, or mark it optional (@name)"
 
     val ItemSize: Map[String, Int] = Map(
       "Byte" -> 1, "UInt8" -> 1, "Int8" -> 1, "UInt16" -> 2, "Int16" -> 2, "Float16" -> 2, "UInt32" -> 4,
@@ -43,6 +50,12 @@ object GdalSpecArgv {
     /** A map-algebra variable: one capital letter that is not part of a longer name, a number or an indexed V[n]. */
     private val Var: Regex = """(?<![A-Za-z0-9_\]])([A-Z])(?![A-Za-z0-9_\[])""".r
     private val Dialects = Seq("muparser", "builtin")
+    /** The envelope's closed vocabulary: calc, dialect, and per variable V_index / V_band. */
+    private val EnvelopeKeys: Set[String] = Set("calc", "dialect") ++ Vars.flatMap(v => Seq(s"${v}_index", s"${v}_band"))
+    private val TemplateCacheSize = 512
+    private val templates = new java.util.LinkedHashMap[(String, Map[String, Any], Seq[RasterProps], GdalSection), Option[Seq[String]]](
+      64, 0.75f, true
+    )
 
     private final case class Calc(expr: String, dialect: String, variables: Seq[(String, Int)])
 
@@ -105,15 +118,25 @@ object GdalSpecArgv {
                 throw fail(fn, a, s"${a.source.get} must be one of $allowed (got '$value')")
             }
         case "crs" =>
-            try checkValue(fn.sqlName, a.source.get, value)
-            catch { case e: SpecParamException => throw fail(fn, a, e.getMessage.split(": ", 2)(1)) }
+            // The canonical resolver refuses a file name, a URL or a grid named by path, and parses with file and
+            // network access off; the light binder (`engine/argv.canonical_crs`) makes the same OSR calls and judges
+            // them the same way: a failing return, or a failure GDAL reports during the parse (PROJ cannot build the
+            // CRS, e.g. a required grid it cannot find), refuses the value.
             val sr =
-                try SpatialRefOps.resolveCrs(value.toString)
-                catch {
+                try {
+                    checkValue(fn.sqlName, a.source.get, value)
+                    gdal.ErrorReset()
+                    SpatialRefOps.resolveCrs(value.toString)
+                } catch {
                     case NonFatal(e) =>
-                        throw fail(fn, a, s"${a.source.get} is not a CRS GDAL can parse (got '$value': ${e.getMessage})")
+                        throw fail(fn, a, s"${a.source.get}: ${e.getMessage.stripPrefix(fn.sqlName + ": ").stripPrefix("resolveCrs: ")}")
                 }
-            try Some(SpatialRefOps.crsToCanonical(sr)) finally sr.delete()
+            try {
+                if (gdal.GetLastErrorType() >= gdalconstConstants.CE_Failure) {
+                    throw fail(fn, a, s"${a.source.get}: GDAL cannot build the CRS (${gdal.GetLastErrorMsg()}). $CrsBuildFix")
+                }
+                Some(SpatialRefOps.crsToCanonical(sr))
+            } finally sr.delete()
         case other => throw new IllegalArgumentException(s"${fn.sqlName}: binder '$other' is not built in this release")
     }
 
@@ -123,7 +146,9 @@ object GdalSpecArgv {
       * (see `engine/argv.py:_calc_binding`, which this mirrors). */
     private def calcBinding(fn: SpecFunction, a: SpecArg, value: Any, inputs: Seq[RasterProps]): Calc = {
         var s = value.toString.trim
-        checkValue(fn.sqlName, a.source.get, s)
+        if (inputs.length > Vars.length) {
+            throw new SpecParamException(s"${fn.sqlName}: map algebra takes at most ${Vars.length} rasters (A to Z); got ${inputs.length}")
+        }
         val bindings = scala.collection.mutable.LinkedHashMap.empty[String, (Int, Int)]
         var dialect = "muparser"
         if (s.startsWith("{")) {
@@ -139,6 +164,13 @@ object GdalSpecArgv {
                 throw new SpecParamException(
                   s"${fn.sqlName}: extra_options is not supported (gdal_calc flags have no place in GDAL's " +
                       "raster calc). Fix: express the computation in calc"
+                )
+            }
+            val unknown = env.fieldNames.asScala.filterNot(EnvelopeKeys).toSeq.sorted
+            if (unknown.nonEmpty) {
+                throw new SpecParamException(
+                  s"${fn.sqlName}: the expression envelope has unknown key(s) ${unknown.mkString(", ")}; it takes calc, " +
+                      "dialect, and V_index / V_band for a variable V from A to Z"
                 )
             }
             if (env.has("dialect")) {
@@ -169,6 +201,7 @@ object GdalSpecArgv {
             }
             s = env.get("calc").asText
         }
+        checkValue(fn.sqlName, a.source.get, s)
         val positional = inputs.indices.map(i => Vars(i).toString -> (i, 1)).toMap
         if (dialect == "builtin") {
             if (bindings.exists { case (v, b) => !positional.get(v).contains(b) }) {
@@ -187,27 +220,19 @@ object GdalSpecArgv {
         Calc(expr, dialect, resolved.toSeq.sortBy(_._1).map { case (v, (i, _)) => v -> i })
     }
 
-    /** The argv for one call of `fn`, or None when a NULL value makes the result NULL.
-      *
-      * `values` maps the function's params to this call's values (String, Double, Boolean or null); `inputs` are the
-      * input rasters' header props; `names` their `/vsimem` names (default the placeholders `<input>`, or
-      * `<input0>`, `<input1>`, ... for an array of rasters). Throws SpecParamException (raise) or SpecDataException (an
-      * error tile) when a binder refuses a value.
-      */
-    def build(
-        fn: SpecFunction,
-        values: Map[String, Any],
-        inputs: Seq[RasterProps],
-        names: Seq[String] = Nil,
-        output: String = "<output>",
-        section: GdalSection = GdalSpecs.section
-    ): Option[Seq[String]] = {
+    /** True when this call binds a value to a `bad: data` argument: GDAL refusing the argv is then that value's fault,
+      * a data error (an error tile), not a parameter error. Mirrors `engine/argv.data_bound`. */
+    def dataBound(fn: SpecFunction, values: Map[String, Any]): Boolean =
+        fn.gdal.args.exists(a => a.bad == "data" && a.source.exists(s => !isNull(values.getOrElse(s, null))))
+
+    private def placeholders(fn: SpecFunction, n: Int): Seq[String] =
+        if (fn.gdal.inputs.head._2 == "raster") Seq("<input>") else (0 until n).map(i => s"<input$i>")
+
+    /** The argv with the placeholder input and output names, bound once per distinct (spec, values, input props),
+      * so a literal argument is resolved once, not per row. */
+    private def template(fn: SpecFunction, values: Map[String, Any], inputs: Seq[RasterProps], section: GdalSection): Option[Seq[String]] = {
         val block = fn.gdal
-        val inKind = block.inputs.head._2
-        val inNames =
-            if (names.nonEmpty) names
-            else if (inKind == "raster") Seq("<input>")
-            else inputs.indices.map(i => s"<input$i>")
+        val inNames = placeholders(fn, inputs.length)
         val byArg = block.args.map(a => a.arg -> a).toMap
         var calc: Option[Calc] = None
         val tokens = scala.collection.mutable.ArrayBuffer.empty[String]
@@ -250,10 +275,46 @@ object GdalSpecArgv {
         val decoded = inputs.map(r => r.width.toLong * r.height * r.bands * ItemSize.getOrElse(r.dtype, 8)).sum
         val creation = OperatorOptions.engineCreationOptions(dtype, decoded, first.width, first.height)
         Some(
-          ins ++ Seq("--input-format=GTiff") ++ tokens ++ Seq(s"--output=$output", "--output-format=GTiff") ++
+          ins ++ Seq("--input-format=GTiff") ++ tokens ++ Seq("--output=<output>", "--output-format=GTiff") ++
               creation.map(o => s"--creation-option=$o") ++
               (if (Threaded(block.alg)) Seq("--num-threads=1") else Nil) ++ Seq("--quiet")
         )
+    }
+
+    /** The argv for one call of `fn`, or None when a NULL value makes the result NULL.
+      *
+      * `values` maps the function's params to this call's values (String, Double, Boolean or null); `inputs` are the
+      * input rasters' header props; `names` their `/vsimem` names (default the placeholders `<input>`, or `<input0>`,
+      * `<input1>`, ... for an array of rasters). Throws SpecParamException (raise) or SpecDataException (an error tile)
+      * when a binder refuses a value. Mirrors `engine/argv.build`, its cache included.
+      */
+    def build(
+        fn: SpecFunction,
+        values: Map[String, Any],
+        inputs: Seq[RasterProps],
+        names: Seq[String] = Nil,
+        output: String = "<output>",
+        section: GdalSection = GdalSpecs.section
+    ): Option[Seq[String]] = {
+        val key = (fn.sqlName, values, inputs, section)
+        val cached = templates.synchronized(Option(templates.get(key))).getOrElse {
+            val t = template(fn, values, inputs, section)
+            templates.synchronized {
+                templates.put(key, t)
+                while (templates.size > TemplateCacheSize) templates.remove(templates.keySet.iterator.next)
+            }
+            t
+        }
+        cached.map { tokens =>
+            val real = (placeholders(fn, inputs.length).zip(if (names.nonEmpty) names else placeholders(fn, inputs.length)) :+
+                ("<output>" -> output)).toMap
+            tokens.map { tok =>
+                if (tok.startsWith("--input=") || tok.startsWith("--output=")) {
+                    val i = tok.lastIndexOf('=')
+                    tok.substring(0, i + 1) + real.getOrElse(tok.substring(i + 1), tok.substring(i + 1))
+                } else tok
+            }
+        }
     }
 
 }

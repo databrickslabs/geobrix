@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.kernels.spec
 
+import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, RasterSerializationUtil, V2Tile, VirtualTileException}
 import com.databricks.labs.gbx.util.SerializationUtil
 import org.apache.spark.sql.catalyst.InternalRow
@@ -12,8 +13,10 @@ import org.apache.spark.unsafe.types.UTF8String
 /** The GDAL spec engine as one Catalyst expression: every scalar row with a `gdal` block, by its SQL name.
   *
   * The spec comes from the JAR's copy of the manifest ([[GdalSpecs]]); the children are the function's arguments,
-  * cast to its session types. Each row runs [[GdalSpecEngine.run]] (a new algorithm per row; no state shared but
-  * GDAL's per-thread last error), so the work is GDAL-bound and codegen buys nothing.
+  * cast to its session types, then the session's encoded [[ExpressionConfig]] (an `ExpressionConfigExpr`, as every
+  * raster expression carries), decoded once per JVM, which initializes GDAL when the engine is the JVM's first GDAL
+  * user. Each row runs [[GdalSpecEngine.run]] (a new algorithm per row; no state shared but GDAL's per-thread last
+  * error), so the work is GDAL-bound and codegen buys nothing.
   *
   * The error map is the light tier's (`engine/l3.py`): a NULL input or a NULL-result argument gives NULL; an error
   * tile in comes out unchanged; a tile with neither raster nor path is NULL; GDAL's run failing, or a `bad: data`
@@ -26,9 +29,13 @@ case class GdalSpecExpr(sqlName: String, children: Seq[Expression]) extends Expr
 
     @transient private lazy val fn: SpecFunction = GdalSpecs.function(sqlName)
     private lazy val tiles: Boolean = GdalSpecs.function(sqlName).gdal.inputs.head._2 == "rasters"
+    /** The function's arguments; the last child is the session's encoded configuration. */
+    private def args: Seq[Expression] = children.init
+    @transient private lazy val conf: Option[ExpressionConfig] =
+        Option(children.last.eval(null)).map(b64 => GdalSpecExpr.config(b64.toString))
 
     override def inputTypes: Seq[DataType] =
-        children.head.dataType +: GdalSpecs.function(sqlName).params.tail.take(children.length - 1).map(p =>
+        (children.head.dataType +: GdalSpecs.function(sqlName).params.tail.take(children.length - 2).map(p =>
             p.sessionType match {
                 case "STRING"  => StringType
                 case "DOUBLE"  => DoubleType
@@ -36,7 +43,7 @@ case class GdalSpecExpr(sqlName: String, children: Seq[Expression]) extends Expr
                 case "BOOLEAN" => BooleanType
                 case other     => throw new IllegalArgumentException(s"$sqlName: session type $other is not bound")
             }
-        )
+        )) :+ StringType
 
     override def dataType: DataType = RST_ExpressionUtil.v2TileType
     override def nullable: Boolean = true
@@ -93,9 +100,19 @@ case class GdalSpecExpr(sqlName: String, children: Seq[Expression]) extends Expr
         inputs(first) match {
             case Left(passthrough) => passthrough
             case Right((rasters, cellid)) =>
-                val values = fn.params.tail.zip(children.tail).map { case (p, c) => p.name -> scalaValue(c.eval(input)) }.toMap
-                GdalSpecEngine.run(fn, rasters, values).map(tile(cellid, _)).orNull
+                val values = fn.params.tail.zip(args.tail).map { case (p, c) => p.name -> scalaValue(c.eval(input)) }.toMap
+                GdalSpecEngine.run(fn, rasters, values, conf).map(tile(cellid, _)).orNull
         }
     }
+
+}
+
+object GdalSpecExpr {
+
+    /** The session configurations this JVM has decoded, by their encoding: each one is decoded once per JVM, not per
+      * task. A session has one, so the map stays as small as the sessions that used the engine here. */
+    private val configs = new java.util.concurrent.ConcurrentHashMap[String, ExpressionConfig]()
+
+    private[spec] def config(b64: String): ExpressionConfig = configs.computeIfAbsent(b64, b => ExpressionConfig.fromB64(b))
 
 }

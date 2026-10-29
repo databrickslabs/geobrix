@@ -1,8 +1,17 @@
 package com.databricks.labs.gbx.kernels.spec
 
+import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.kernels.KernelGdal
+import com.databricks.labs.gbx.operations.SpatialRefOps
+import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.rasterx.operator.OperatorOptions
+import com.databricks.labs.gbx.rasterx.util.V2Tile
 import com.fasterxml.jackson.databind.{JsonNode, ObjectMapper}
+import org.apache.hadoop.conf.Configuration
+import org.apache.spark.sql.catalyst.expressions.Literal
+import org.apache.spark.sql.types.{DoubleType, StringType}
+import org.apache.spark.unsafe.types.UTF8String
+import org.apache.spark.util.SerializableConfiguration
 import org.gdal.gdal.gdal
 import org.gdal.gdalconst.gdalconstConstants
 import org.gdal.osr.SpatialReference
@@ -29,6 +38,72 @@ class GdalSpecSmokeTest extends AnyFunSuite {
 
     private def props(node: JsonNode): Seq[RasterProps] =
         node.elements.asScala.map(p => RasterProps(p.get(0).asInt, p.get(1).asInt, p.get(2).asInt, p.get(3).asText)).toSeq
+
+    // First, so the engine is this JVM's first GDAL user when the suite runs alone.
+    test("a JVM whose first GDAL user is the engine sees the session's PROJ grid dirs") {
+        assume(!GDALManager.isEnabled, "PRECONDITION MISSING: GDAL is already initialized in this JVM; run the suite alone")
+        val dir = Files.createTempDirectory("gbx-se-grids").toString
+        val conf = new ExpressionConfig(Map("spark.databricks.labs.gbx.gdal.PROJ_GRID_DIRS" -> dir),
+          new SerializableConfiguration(new Configuration(false)))
+        val expr = GdalSpecExpr("gbx_rst_slope", Seq(
+          Literal(V2Tile.row(cellid = 7L, raster = Array[Byte](1, 2, 3, 4)), V2Tile.schema),
+          Literal(UTF8String.fromString("degrees"), StringType), Literal(null, DoubleType), Literal(null, DoubleType),
+          Literal(UTF8String.fromString(conf.toB64), StringType)
+        ))
+        assert(expr.eval(null) != null) // an error tile: the bytes are not a GeoTIFF, but GDAL was initialized first
+        val projData = String.valueOf(gdal.GetConfigOption("PROJ_DATA"))
+        assert(projData.split(":").head == dir, s"PROJ_DATA=$projData")
+    }
+
+    test("the canonical CRS resolver never reads a file a CRS value names") {
+        KernelGdal.ensureInit()
+        val dir = Files.createTempDirectory("gbx-se-crs")
+        val file = dir.resolve("secret.prj")
+        val wgs84 = new SpatialReference()
+        wgs84.ImportFromEPSG(4326)
+        Files.write(file, wgs84.ExportToWkt().getBytes("UTF-8"))
+        wgs84.delete()
+        try {
+            for (v <- Seq(file.toString, s"+proj=longlat +datum=WGS84 +nadgrids=$dir/grid.gsb +no_defs")) {
+                val e = intercept[IllegalArgumentException](SpatialRefOps.resolveCrs(v))
+                assert(e.getMessage.contains("Fix:"), s"$v: ${e.getMessage}")
+            }
+            SpatialRefOps.resolveCrs("+proj=longlat +datum=WGS84 +nadgrids=@null +no_defs").delete() // no path: allowed
+        } finally {
+            Files.deleteIfExists(file)
+            Files.deleteIfExists(dir)
+        }
+    }
+
+    test("the manifest parser is closed: section keys, out keys, and a bound argument's type") {
+        val m = new ObjectMapper()
+        def root(section: String, block: String): JsonNode = m.readTree(
+          s"""{"gdal": $section, "functions": [{"sql_name": "f", "min_args": 1, "params": [""" +
+              """{"name": "tile", "session": ["TILE"]}, {"name": "unit", "session": ["STRING"]}], """ + s""""gdal": $block}]}"""
+        )
+        val section = """{"pin": "3.13.3", "deny": [], "allow": {}}"""
+        val block = """{"alg": "raster slope", "in": {"tile": "raster"}, "out": {"kind": "raster"}, "write": "tile", """ +
+            """"args": [{"arg": "unit", "from": "unit", "type": "choice", "map": {"degrees": "degree"}}]}"""
+        assert(GdalSpecs.parse(root(section, block))._2.contains("f")) // the control
+        val refused = Seq(
+          "section key" -> root(section.stripSuffix("}") + """, "allowlist": {}}""", block),
+          "out key" -> root(section, block.replace(""""kind": "raster"}""", """"kind": "raster", "dtyp": "Float32"}""")),
+          "needs a type" -> root(section, block.replace(""", "type": "choice"""", ""))
+        )
+        for ((what, r) <- refused) {
+            val e = intercept[IllegalArgumentException](GdalSpecs.parse(r))
+            assert(e.getMessage.contains(what), s"$what: ${e.getMessage}")
+        }
+    }
+
+    test("the level knob and the virtual-tile policy are the light tier's") {
+        for (c <- golden.get("zstd_knob").elements.asScala) {
+            val got = OperatorOptions.engineZstdLevel(c.get("decoded_bytes").asLong, Some(c.get("knob").asText))
+            assert(got == c.get("level").asInt, s"GBX_ZSTD_LEVEL=${c.get("knob")}")
+        }
+        val refuse = GdalSpecs.section.virtualRefuse
+        assert((GDALManager.DefaultSkippedDrivers.split(" ").toSet + "GDALG").subsetOf(refuse), refuse)
+    }
 
     test("the argv, the write profile and the refusals are the golden ones") {
         KernelGdal.ensureInit() // the CRS binder parses with OSR

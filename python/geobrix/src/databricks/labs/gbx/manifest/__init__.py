@@ -138,6 +138,9 @@ class GdalSection:
     pin: str
     deny: frozenset
     allow: Mapping[str, Tuple[str, ...]]
+    # The virtual-tile driver policy: a virtual tile opens with every raster driver but these (stored pipelines and
+    # the service drivers, GDALManager's GDAL_SKIP list); both tiers read this one list.
+    virtual_refuse: frozenset = frozenset()
 
 
 def _closed(raw: Mapping, keys: frozenset, what: str) -> None:
@@ -202,13 +205,14 @@ def parse_gdal_spec(raw: Mapping) -> GdalSpec:
 def _parse_gdal_section(raw: Optional[Mapping]) -> Optional[GdalSection]:
     if raw is None:
         return None
-    _closed(raw, frozenset({"pin", "deny", "allow"}), "section")
+    _closed(raw, frozenset({"pin", "deny", "allow", "virtual_tile_refuse"}), "section")
     return GdalSection(
         pin=str(raw["pin"]),
         deny=frozenset(raw.get("deny", ())),
         allow=MappingProxyType(
             {alg: tuple(args) for alg, args in raw.get("allow", {}).items()}
         ),
+        virtual_refuse=frozenset(raw.get("virtual_tile_refuse", ())),
     )
 
 

@@ -1311,15 +1311,38 @@ SE_FLOOR = _se_floor_function()
 _SE_FLOOR_REF = "databricks.labs.gbx.bench.levels_forms:SE_FLOOR"
 
 
+def _se_bench_section():
+    """The manifest's allowlist plus the floor's `raster select`: a bench-only extension, never the product's."""
+    import dataclasses
+    from types import MappingProxyType
+
+    from databricks.labs.gbx import manifest
+
+    section = manifest.load().gdal
+    return dataclasses.replace(
+        section, allow=MappingProxyType({**section.allow, "raster select": ("band",)})
+    )
+
+
+SE_SECTION = _se_bench_section()
+_SE_SECTION_REF = "databricks.labs.gbx.bench.levels_forms:SE_SECTION"
+
+
 def setup_se_floor(spark):
     """The floor's row-wise and batch UDFs under their own names."""
     from databricks.labs.gbx.engine import l3 as engine_l3
 
     spark.udf.register(
-        "gbx_bench_floor_c0", engine_l3.c0("gbx_bench_engine_floor", (), _SE_FLOOR_REF)
+        "gbx_bench_floor_c0",
+        engine_l3.c0(
+            "gbx_bench_engine_floor", (), _SE_FLOOR_REF, section_ref=_SE_SECTION_REF
+        ),
     )
     spark.udf.register(
-        "gbx_bench_floor_c1", engine_l3.c1("gbx_bench_engine_floor", (), _SE_FLOOR_REF)
+        "gbx_bench_floor_c1",
+        engine_l3.c1(
+            "gbx_bench_engine_floor", (), _SE_FLOOR_REF, section_ref=_SE_SECTION_REF
+        ),
     )
 
 

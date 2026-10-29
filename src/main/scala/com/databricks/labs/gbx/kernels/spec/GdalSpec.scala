@@ -34,8 +34,9 @@ final case class SpecParam(name: String, sessionType: String, default: Option[St
 /** A manifest row that carries a `gdal` block: what the JVM needs to bind and run it. */
 final case class SpecFunction(sqlName: String, params: Seq[SpecParam], minArgs: Int, gdal: GdalSpec)
 
-/** The manifest's top-level `gdal` section (mirrors `manifest.GdalSection`). */
-final case class GdalSection(pin: String, deny: Set[String], allow: Map[String, Seq[String]])
+/** The manifest's top-level `gdal` section (mirrors `manifest.GdalSection`). `virtualRefuse` is the virtual-tile
+  * driver policy: a virtual tile opens with every raster driver but these (stored pipelines, the service drivers). */
+final case class GdalSection(pin: String, deny: Set[String], allow: Map[String, Seq[String]], virtualRefuse: Set[String])
 
 /** The GDAL spec engine's specs, read from the copy of `functions.json` the build packs into the JAR, never from
   * a caller, so a spec cannot be forged from SQL. The parse refuses any key outside the closed vocabulary, as the
@@ -44,6 +45,8 @@ object GdalSpecs {
 
     val Resource = "/com/databricks/labs/gbx/manifest/functions.json"
 
+    private val SectionKeys = Set("pin", "deny", "allow", "virtual_tile_refuse")
+    private val OutKeys = Set("kind", "dtype")
     private val BlockKeys = Set("alg", "in", "out", "write", "args", "needs_crs", "gdal_min")
     private val ArgKeys = Set("arg", "const", "from", "type", "map", "null", "with", "bad")
     private val InKinds = Set("raster", "rasters", "text")
@@ -94,6 +97,9 @@ object GdalSpecs {
         if (a.has("const") == a.has("from")) {
             throw new IllegalArgumentException(s"gdal spec: argument '$name' needs exactly one of const and from")
         }
+        if (a.has("from") && !a.has("type")) {
+            throw new IllegalArgumentException(s"gdal spec: argument '$name' binds a param and needs a type")
+        }
         val const = Option(a.get("const"))
         val choices = Option(a.get("map")).map(_.fields.asScala.map(e => e.getKey -> e.getValue.asText).toSeq).getOrElse(Nil)
         SpecArg(
@@ -113,6 +119,7 @@ object GdalSpecs {
     def parseSpec(g: JsonNode): GdalSpec = {
         closed(g, BlockKeys, "block")
         val out = g.get("out")
+        closed(out, OutKeys, "out")
         GdalSpec(
           alg = text(g, "alg", ""),
           inputs = g.get("in").fields.asScala.map(e => e.getKey -> oneOf(e.getValue.asText, InKinds, s"input kind of '${e.getKey}'")).toSeq,
@@ -127,10 +134,12 @@ object GdalSpecs {
     /** The whole manifest: its `gdal` section and every row that has a `gdal` block. */
     def parse(root: JsonNode): (GdalSection, Map[String, SpecFunction]) = {
         val s = root.get("gdal")
+        closed(s, SectionKeys, "section")
         val section = GdalSection(
           pin = s.get("pin").asText,
           deny = s.get("deny").elements.asScala.map(_.asText).toSet,
-          allow = s.get("allow").fields.asScala.map(e => e.getKey -> e.getValue.elements.asScala.map(_.asText).toSeq).toMap
+          allow = s.get("allow").fields.asScala.map(e => e.getKey -> e.getValue.elements.asScala.map(_.asText).toSeq).toMap,
+          virtualRefuse = Option(s.get("virtual_tile_refuse")).map(_.elements.asScala.map(_.asText).toSet).getOrElse(Set.empty)
         )
         val fns = root.get("functions").elements.asScala.filter(_.has("gdal")).map { r =>
             val params = r.get("params").elements.asScala.map { p =>

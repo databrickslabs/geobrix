@@ -61,3 +61,38 @@ def test_a_null_required_value_is_a_null_result():
         )
         is None
     )
+
+
+@pytest.mark.parametrize("case", GOLDEN["zstd_knob"], ids=lambda c: repr(c["knob"]))
+def test_the_level_knob_reads_as_on_the_jvm(case, monkeypatch):
+    """GBX_ZSTD_LEVEL: fast, max, or plain digits 1..22; anything else is the size ladder (both tiers)."""
+    import warnings
+
+    from databricks.labs.gbx.pyrx.core.compression import auto_level
+
+    monkeypatch.setenv("GBX_ZSTD_LEVEL", case["knob"])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert auto_level(case["decoded_bytes"]) == case["level"]
+
+
+def test_literal_arguments_are_bound_once(monkeypatch):
+    """The argv of one (spec, values, input props) is bound once and reused per row with that row's file names."""
+    fn = MAN.functions["gbx_rst_transformcrs"]
+    calls = []
+    real = argv._template
+    monkeypatch.setattr(argv, "_template", lambda *a: calls.append(a) or real(*a))
+    monkeypatch.setattr(argv, "_templates", argv.OrderedDict())
+    props = [argv.RasterProps(64, 48, 1, "Float32")]
+    rows = [
+        argv.build(
+            fn,
+            {"target_crs": "EPSG:3857"},
+            props,
+            [f"/vsimem/r{i}/in0.tif"],
+            f"/vsimem/r{i}/out.tif",
+        )
+        for i in range(3)
+    ]
+    assert len(calls) == 1
+    assert [r[0] for r in rows] == [f"--input=/vsimem/r{i}/in0.tif" for i in range(3)]

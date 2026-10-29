@@ -15,11 +15,11 @@ REPO = Path(__file__).resolve().parents[4]
 def payload_jvm_conf() -> dict:
     """The Spark conf that runs a test JVM on the env wheel payload's GDAL, when GBX_NATIVE_ROOT names a payload.
 
-    The JAR's GDALManager loads the system JNI until it learns to load the payload's (a natives-plan task), so a
-    session started with GBX_NATIVE_ROOT puts the payload's JNI first on the JVM's library path and the same
-    build's GDAL Java classes ahead of the JAR's. The JNI the GDAL classes bind is then the payload's, the GDAL
-    the light tier's osgeo runs; the system libgdal is still mapped (GDALManager loads it by path) but no
-    class calls into it. Empty when there is no payload, or no Java classes built from it.
+    GDALManager loads the payload's JNI by path (GBX_NATIVE_ROOT); the GDAL Java classes must be that build's and
+    must live in GDALManager's class loader, because a JNI binds to the class loader that loaded it. So the
+    payload build's GDAL classes and then the staged JAR go on the driver's class path (one loader, the build's
+    classes first), and the payload's JNI first on the library path, so GDAL's own load by name finds the same
+    file. Empty when there is no payload, no Java classes built from it, or no staged JAR.
     """
     root = os.environ.get("GBX_NATIVE_ROOT")
     if not root:
@@ -37,11 +37,13 @@ def payload_jvm_conf() -> dict:
         / "stage-native/gdal-native/java"
         / f"gdal-{manifest.load().gdal.pin}.jar"
     )
-    if not jar.is_file():
+    if not jar.is_file() or not STAGED_JARS:
         return {}
     return {
         "spark.driver.extraLibraryPath": os.path.join(d, "lib"),
-        "spark.driver.extraClassPath": str(jar),
+        "spark.driver.extraClassPath": os.pathsep.join(
+            [str(jar), str(STAGED_JARS[-1])]
+        ),
     }
 
 

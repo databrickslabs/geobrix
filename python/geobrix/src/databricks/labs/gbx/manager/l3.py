@@ -84,10 +84,14 @@ def register_l3_engine(
     behind a wrapper that sends virtual, NULL and error tiles to the row-wise UDF. ``engine-c0`` (and the
     default anywhere else, Spark Connect included): the row-wise UDF alone.
     """
+    from databricks.labs.gbx.ds.file_gbx import report_detected_cap
     from databricks.labs.gbx.engine import l3 as engine_l3
     from databricks.labs.gbx.manager import capabilities, jvm, sqlwrap
 
     grid = _factory_args("proj_grid_dirs")[0]
+    cap = report_detected_cap(
+        spark
+    )  # the connect-aware read cap, which a worker cannot measure itself
     name = name or fn.sql_name
     wrapped = form == "engine-c1" or (
         form == "engine"
@@ -95,10 +99,10 @@ def register_l3_engine(
         and capabilities._sql_functions(spark)
     )
     if not wrapped:
-        spark.udf.register(name, engine_l3.c0(fn.sql_name, grid))
+        spark.udf.register(name, engine_l3.c0(fn.sql_name, grid, read_cap=cap))
         return "engine-c0"
     c0_name, c1_name = jvm._priv(fn, "L3"), jvm._priv(fn, "L3c1")
-    spark.udf.register(c0_name, engine_l3.c0(fn.sql_name, grid))
+    spark.udf.register(c0_name, engine_l3.c0(fn.sql_name, grid, read_cap=cap))
     spark.udf.register(c1_name, engine_l3.c1(fn.sql_name, grid))
     first = fn.params[0].name
     if fn.gdal.inputs[0][1] == "rasters":

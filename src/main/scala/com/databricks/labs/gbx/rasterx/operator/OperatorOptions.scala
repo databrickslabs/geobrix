@@ -81,16 +81,16 @@ object OperatorOptions {
         )
     }
 
-    /** `compression.auto_level`: `GBX_ZSTD_LEVEL` (`fast` 1, `max` 9, or 1..22) when set, else 6 up to 128 MiB
-      * decoded, 3 up to 1 GiB, 1 above. */
-    private[operator] def engineZstdLevel(decodedBytes: Long, knob: Option[String] = sys.env.get("GBX_ZSTD_LEVEL")): Int = {
-        // scalastyle:off caselocale
-        val k = knob.map(_.trim.toLowerCase)
-        // scalastyle:on caselocale
+    /** `compression.auto_level`: `GBX_ZSTD_LEVEL` (`fast` 1, `max` 9, or plain ASCII digits naming 1..22, leading
+      * zeros allowed) when set, else 6 up to 128 MiB decoded, 3 up to 1 GiB, 1 above. Any other knob is the ladder.
+      * The golden fixture's `zstd_knob` rows hold both tiers to the same reading. */
+    private[gbx] def engineZstdLevel(decodedBytes: Long, knob: Option[String] = sys.env.get("GBX_ZSTD_LEVEL")): Int = {
+        val k = knob.map(_.trim.toLowerCase(java.util.Locale.ROOT))
+        val digits = k.filter(v => v.nonEmpty && v.forall(c => c >= '0' && c <= '9')).map(_.dropWhile(_ == '0'))
         k match {
             case Some("fast") => 1
             case Some("max")  => 9
-            case Some(v) if v.nonEmpty && v.length <= 2 && v.forall(_.isDigit) && v.toInt >= 1 && v.toInt <= 22 => v.toInt
+            case _ if digits.exists(d => d.nonEmpty && d.length <= 2 && d.toInt >= 1 && d.toInt <= 22) => digits.get.toInt
             case _ =>
                 if (decodedBytes <= 128L * 1024 * 1024) 6
                 else if (decodedBytes <= 1024L * 1024 * 1024) 3

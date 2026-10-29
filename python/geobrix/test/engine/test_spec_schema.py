@@ -28,6 +28,19 @@ def test_the_engine_rows_carry_a_gdal_block_and_the_pin_is_the_build_pin():
         r"^GDAL_VERSION=(\S+)$", (REPO / "scripts/native/pins.conf").read_text(), re.M
     ).group(1)
     assert MAN.gdal.pin == pin
+    # The production allowlist holds only the spec rows' algorithms (the bench's floor extends it for itself), and
+    # the virtual-tile policy refuses stored pipelines and every service driver.
+    assert set(MAN.gdal.allow) == {f.gdal.alg for f in ENGINE_FNS}
+    assert {
+        "GDALG",
+        "WMS",
+        "WMTS",
+        "WCS",
+        "WFS",
+        "HTTP",
+        "CSW",
+        "OGCAPI",
+    } <= MAN.gdal.virtual_refuse
 
 
 @pytest.mark.parametrize("fn", ENGINE_FNS, ids=lambda f: f.sql_name)

@@ -12,7 +12,7 @@ Both run ``engine.run`` on each row: the same argv, the same GDAL, the same erro
 
 from __future__ import annotations
 
-from typing import Optional, Sequence, Tuple
+from typing import Optional, Tuple
 
 import pandas as pd
 from pyspark.sql import functions as F
@@ -54,21 +54,72 @@ def _setup(grid_dirs: Tuple[str, ...]) -> None:
     _env.configure_gdal_env(list(grid_dirs))
 
 
-def _raster_of(tile) -> bytes:
-    """The GeoTIFF bytes of a tile: its own, or a virtual tile's window read through open_tile."""
+def _virtual_raster(fn, tile, read_cap: Optional[int]) -> bytes:
+    """A virtual tile's window as GeoTIFF bytes, read under the engine's input rules: its file (and a VRT's
+    sources) must open with a driver the virtual-tile policy allows, and its decoded window must fit this compute's
+    read cap, judged from the header before any pixel is read. Any failure is a DataError (an error tile).
+    """
+    from databricks.labs.gbx.ds.file_gbx import materialize_decision
+    from databricks.labs.gbx.engine.argv import _ITEMSIZE
     from databricks.labs.gbx.pyrx import functions as prx
     from databricks.labs.gbx.pyrx.core import open_tile as ot
+    from databricks.labs.gbx.zarr import _tiles as zarr_tiles
 
-    d = tile.asDict() if hasattr(tile, "asDict") else dict(tile)
-    if d.get("raster") is not None:
-        return bytes(d["raster"])
-    with ot._open(tile) as ds:
-        return prx._dataset_to_gtiff_bytes(ds)
+    vt = ot._to_virtual_tile(tile)
+    try:
+        if not zarr_tiles.is_zarr_tile(
+            vt
+        ):  # a Zarr tile is decoded by GeoBrix, not opened by a GDAL driver
+            run.virtual_source(fn.sql_name, vt.path)
+        with run.engine_settings():
+            with ot.open_header(vt) as h:
+                dtype = str(h.dtypes[0])
+                size = (
+                    h.width
+                    * h.height
+                    * h.count
+                    * _ITEMSIZE.get(_GDAL_TYPE.get(dtype, dtype), 8)
+                )
+            if materialize_decision(size, "ingest", cap_bytes=read_cap) == "error":
+                raise run.DataError(
+                    f"{fn.sql_name}: the virtual tile is {size // 2**20} MiB decoded, over this compute's read "
+                    "cap. Fix: retile it first (gbx_rst_retile) so each tile is smaller"
+                )
+            with ot._open(vt) as ds:
+                return prx._dataset_to_gtiff_bytes(ds)
+    except run.DataError:
+        raise
+    except (MemoryError, RecursionError):
+        raise
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - an unreadable virtual tile is data, as on every light function
+        raise run.DataError(
+            f"{fn.sql_name}: the virtual tile could not be read ({exc})"
+        ) from None
 
 
-def _inputs(fn, first) -> Tuple[Optional[Sequence[bytes]], object, Optional[int]]:
+# numpy dtype names -> GDAL type names, for the item size of a header's band type
+_GDAL_TYPE = {
+    "uint8": "Byte",
+    "int8": "Int8",
+    "uint16": "UInt16",
+    "int16": "Int16",
+    "uint32": "UInt32",
+    "int32": "Int32",
+    "uint64": "UInt64",
+    "int64": "Int64",
+    "float32": "Float32",
+    "float64": "Float64",
+    "complex64": "CFloat32",
+    "complex128": "CFloat64",
+}
+
+
+def _inputs(fn, first, read_cap: Optional[int] = None):
     """(rasters, passthrough, cellid): the rasters to run on, or (None, what to return as it is, None) for a
-    NULL, empty or error input (an error tile comes out unchanged; NULL and an empty tile give NULL).
+    NULL, empty or error input (an error tile comes out unchanged; NULL and an empty tile give NULL). A virtual
+    tile is read by ``_virtual_raster`` (DataError when it is refused or unreadable).
     """
     from databricks.labs.gbx.pyrx import functions as prx
 
@@ -81,7 +132,14 @@ def _inputs(fn, first) -> Tuple[Optional[Sequence[bytes]], object, Optional[int]
             return None, err, None
         if t is None or prx._tile_is_empty(t):
             return None, None, None
-    return [_raster_of(t) for t in tiles], None, prx._tile_cellid(tiles[0])
+    rasters = []
+    for t in tiles:
+        d = t.asDict() if hasattr(t, "asDict") else dict(t)
+        raw = d.get("raster")
+        rasters.append(
+            bytes(raw) if raw is not None else _virtual_raster(fn, t, read_cap)
+        )
+    return rasters, None, prx._tile_cellid(tiles[0])
 
 
 def _sql_default(text: Optional[str]):
@@ -104,10 +162,23 @@ def _function(sql_name: str, fn_ref: Optional[str]):
     )
 
 
-def c0(sql_name: str, grid_dirs: Tuple[str, ...] = (), fn_ref: Optional[str] = None):
+def _section(section_ref: Optional[str]):
+    """The allowlist the engine checks against: the manifest's `gdal` section, or the one `section_ref` names (the
+    bench's, which adds its floor's algorithm)."""
+    return manifest.resolve_ref(section_ref) if section_ref else None
+
+
+def c0(
+    sql_name: str,
+    grid_dirs: Tuple[str, ...] = (),
+    fn_ref: Optional[str] = None,
+    read_cap: Optional[int] = None,
+    section_ref: Optional[str] = None,
+):
     """The row-wise engine UDF of `sql_name`: (tile or tiles, the other arguments...) -> tile. Registered on its
     own (no SQL wrapper), it is called with the arguments the caller wrote: the rest take the manifest's
-    defaults."""
+    defaults. `read_cap` is the decoded size a virtual tile may have here (the driver's connect-aware cap,
+    ``ds.file_gbx.report_detected_cap``); a worker cannot measure it itself."""
     fn = _function(sql_name, fn_ref)
     names = [p.name for p in fn.params[1:]]
     defaults = [_sql_default(p.default) for p in fn.params[1:]]
@@ -115,16 +186,31 @@ def c0(sql_name: str, grid_dirs: Tuple[str, ...] = (), fn_ref: Optional[str] = N
     @F.udf(V2_TILE_SCHEMA, useArrow=True)
     def _c0(first, *args):
         _setup(grid_dirs)
-        rasters, passthrough, cellid = _inputs(fn, first)
+        values = dict(zip(names, list(args) + defaults[len(args) :]))
+        try:
+            rasters, passthrough, cellid = _inputs(fn, first, read_cap)
+        except run.DataError as exc:
+            return _tile(run.Result(None, str(exc), None), _cellid_of(fn, first))
         if rasters is None:
             return passthrough
-        values = dict(zip(names, list(args) + defaults[len(args) :]))
-        return _tile(run.run(fn, rasters, values), cellid)
+        return _tile(run.run(fn, rasters, values, _section(section_ref)), cellid)
 
     return _c0
 
 
-def _batch(fn, names, rasters, args):
+def _cellid_of(fn, first) -> int:
+    """The cell id of the (first) input tile, for an error tile."""
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    t = (
+        first
+        if fn.gdal.inputs[0][1] == "raster"
+        else (list(first)[0] if first else None)
+    )
+    return prx._tile_cellid(t) if t is not None else 0
+
+
+def _batch(fn, names, rasters, args, section=None):
     """The engine over a batch. A NULL input is a NULL result: Spark runs a UDF it lifted out of the wrapper's
     CASE on every row, with NULL for the rows another branch serves."""
     out = {"raster": [], "error": [], "command": []}
@@ -133,14 +219,19 @@ def _batch(fn, names, rasters, args):
         if r is not None:
             tiles = [r] if fn.gdal.inputs[0][1] == "raster" else list(r)
             values = {n: a[i] for n, a in zip(names, args)}
-            res = run.run(fn, [bytes(t) for t in tiles], values)
+            res = run.run(fn, [bytes(t) for t in tiles], values, section)
         out["raster"].append(None if res is None else res.raster)
         out["error"].append(None if res is None else res.error)
         out["command"].append(None if res is None else res.command)
     return out
 
 
-def c1(sql_name: str, grid_dirs: Tuple[str, ...] = (), fn_ref: Optional[str] = None):
+def c1(
+    sql_name: str,
+    grid_dirs: Tuple[str, ...] = (),
+    fn_ref: Optional[str] = None,
+    section_ref: Optional[str] = None,
+):
     """The batch engine UDF of `sql_name`: (raster bytes or an array of them, the other arguments...) ->
     struct<raster, error, command>; all three NULL for a NULL result. PySpark 4.1+ `arrow_udf` where present
     (no pandas hop), else `pandas_udf`. The caller sends only materialized rasters (the wrapper's CASE).
@@ -153,7 +244,13 @@ def c1(sql_name: str, grid_dirs: Tuple[str, ...] = (), fn_ref: Optional[str] = N
 
         def _c1_arrow(rasters, *args):
             _setup(grid_dirs)
-            cols = _batch(fn, names, rasters.to_pylist(), [a.to_pylist() for a in args])
+            cols = _batch(
+                fn,
+                names,
+                rasters.to_pylist(),
+                [a.to_pylist() for a in args],
+                _section(section_ref),
+            )
             return pa.StructArray.from_arrays(
                 [
                     pa.array(cols["raster"], pa.binary()),
@@ -171,6 +268,8 @@ def c1(sql_name: str, grid_dirs: Tuple[str, ...] = (), fn_ref: Optional[str] = N
             [None if pd.isna(v) else v for v in a] if a.dtype.kind == "f" else list(a)
             for a in args
         ]
-        return pd.DataFrame(_batch(fn, names, list(rasters), vals))
+        return pd.DataFrame(
+            _batch(fn, names, list(rasters), vals, _section(section_ref))
+        )
 
     return F.pandas_udf(_c1, RESULT)

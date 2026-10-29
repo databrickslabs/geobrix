@@ -17,9 +17,9 @@
     "allow": {
       "raster slope": ["band", "unit", "xscale", "yscale", "gradient-alg", "no-edges"],
       "raster reproject": ["output-crs", "resampling"],
-      "raster calc": ["calc", "dialect", "output-data-type", "nodata", "propagate-nodata"],
-      "raster select": ["band"]
-    }
+      "raster calc": ["calc", "dialect", "output-data-type", "nodata", "propagate-nodata"]
+    },
+    "virtual_tile_refuse": ["GDALG", "WMS", "WMTS", "WCS", "WFS", "HTTP", "CSW", "OGCAPI"]
   },
   "functions": [
     {"sql_name": "gbx_bng_eastnorthasbng", "family": "bng-scalar", "kind": "scalar",

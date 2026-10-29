@@ -97,7 +97,8 @@ def auto_level(decoded_bytes) -> int:
     - ``fast``: fixed L1 — highest throughput, ~5–13 % larger output vs L6.
     - ``max``: fixed L9 — heavy-parity ceiling; same output size as L6 on all tile
       types tested; use only when heavy-tier parity is a hard requirement.
-    - An integer string in [1, 22] (e.g. ``"3"``): that fixed level, size-independent.
+    - A plain integer string in [1, 22] (ASCII digits only, e.g. ``"3"``): that fixed level,
+      size-independent. The JVM (``OperatorOptions.engineZstdLevel``) reads the knob the same way.
     - Any other value: emits a ``UserWarning`` and falls back to the ladder.
 
     The knob does **not** affect ``compress='zstd', level=N`` or any other explicit
@@ -118,26 +119,25 @@ def auto_level(decoded_bytes) -> int:
             return 1
         elif key == "max":
             return 9
+        elif key.isascii() and key.isdigit():  # plain digits only, as the JVM reads it
+            lvl = int(key)
+            if _ZSTD_MIN_LEVEL <= lvl <= _ZSTD_MAX_LEVEL:
+                return lvl
+            warnings.warn(
+                f"GBX_ZSTD_LEVEL={raw!r} is out of range "
+                f"[{_ZSTD_MIN_LEVEL}, {_ZSTD_MAX_LEVEL}]; "
+                "falling back to size-adaptive ladder.",
+                UserWarning,
+                stacklevel=2,
+            )
         else:
-            try:
-                lvl = int(key)
-                if _ZSTD_MIN_LEVEL <= lvl <= _ZSTD_MAX_LEVEL:
-                    return lvl
-                warnings.warn(
-                    f"GBX_ZSTD_LEVEL={raw!r} is out of range "
-                    f"[{_ZSTD_MIN_LEVEL}, {_ZSTD_MAX_LEVEL}]; "
-                    "falling back to size-adaptive ladder.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-            except ValueError:
-                warnings.warn(
-                    f"GBX_ZSTD_LEVEL={raw!r} is not a recognised value "
-                    "(expected 'default', 'fast', 'max', or an integer 1–22); "
-                    "falling back to size-adaptive ladder.",
-                    UserWarning,
-                    stacklevel=2,
-                )
+            warnings.warn(
+                f"GBX_ZSTD_LEVEL={raw!r} is not a recognised value "
+                "(expected 'default', 'fast', 'max', or an integer 1–22); "
+                "falling back to size-adaptive ladder.",
+                UserWarning,
+                stacklevel=2,
+            )
     # Size-adaptive ladder (default path, or fallback after bad knob value).
     if decoded_bytes is None:
         return _AUTO_DEFAULT_LEVEL

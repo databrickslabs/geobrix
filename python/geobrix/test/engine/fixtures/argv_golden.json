@@ -1,5 +1,5 @@
 {
-  "_doc": "The GDAL spec engine's argv for (manifest spec, bound values, input properties), on both tiers. test_argv_golden.py (Python) and GdalSpecSmokeTest (Scala) read this file; a change here is a change of the engine contract. `inputs` are (width, height, bands, GDAL type) of each input raster. GBX_ZSTD_LEVEL must be unset.",
+  "_doc": "The GDAL spec engine's argv for (manifest spec, bound values, input properties), on both tiers. test_argv_golden.py (Python) and GdalSpecSmokeTest (Scala) read this file; a change here is a change of the engine contract. `inputs` are (width, height, bands, GDAL type) of each input raster. GBX_ZSTD_LEVEL must be unset, except in the `zstd_knob` rows, which set it.",
   "argv": [
     {"id": "slope_default", "fn": "gbx_rst_slope",
      "values": {"unit": "degrees", "xscale": null, "yscale": null},
@@ -95,6 +95,25 @@
      "values": {"expression": "A + C"},
      "inputs": [[64, 48, 1, "Float32"]], "names": "C", "error": "param"},
     {"id": "transformcrs_path_value", "fn": "gbx_rst_transformcrs", "values": {"target_crs": "/etc/proj/epsg.json"},
-     "inputs": [[64, 48, 1, "Float32"]], "names": "/etc/proj/epsg.json", "error": "data"}
+     "inputs": [[64, 48, 1, "Float32"]], "names": "/etc/proj/epsg.json", "error": "data"},
+    {"id": "transformcrs_relative_file", "fn": "gbx_rst_transformcrs", "values": {"target_crs": "secret_crs"}, "inputs": [[64, 48, 1, "Float32"]], "names": "secret_crs", "error": "data"},
+    {"id": "transformcrs_nadgrids_path", "fn": "gbx_rst_transformcrs", "values": {"target_crs": "+proj=longlat +datum=WGS84 +nadgrids=/etc/hostname +type=crs"}, "inputs": [[64, 48, 1, "Float32"]], "names": "/etc/hostname", "error": "data"},
+    {"id": "transformcrs_wkt_grid_path", "fn": "gbx_rst_transformcrs", "values": {"target_crs": "GEOGCS[\"WGS 84\",DATUM[\"WGS_1984\",SPHEROID[\"WGS 84\",6378137,298.257223563]],PRIMEM[\"Greenwich\",0],UNIT[\"degree\",0.0174532925199433],EXTENSION[\"PROJ4_GRIDS\",\"/etc/hostname\"]]"}, "inputs": [[64, 48, 1, "Float32"]], "names": "/etc/hostname", "error": "data"},
+    {"id": "mapalgebra_unknown_envelope_key", "fn": "gbx_rst_mapalgebra", "values": {"expression": "{\"calc\": \"A*2\", \"A_bnad\": 4}"}, "inputs": [[64, 48, 1, "Float32"]], "names": "A_bnad", "error": "param"},
+    {"id": "mapalgebra_calc_names_a_file", "fn": "gbx_rst_mapalgebra", "values": {"expression": "{\"calc\": \"@/etc/hostname\"}"}, "inputs": [[64, 48, 1, "Float32"]], "names": "@/etc/hostname", "error": "param"},
+    {"id": "mapalgebra_too_many_rasters", "fn": "gbx_rst_mapalgebra", "values": {"expression": "{\"calc\": \"sum\", \"dialect\": \"builtin\"}"}, "inputs": [[64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"], [64, 48, 1, "Float32"]], "names": "27", "error": "param"}
+  ],
+  "zstd_knob": [
+    {"knob": "3", "decoded_bytes": 1000, "level": 3},
+    {"knob": " 22 ", "decoded_bytes": 1000, "level": 22},
+    {"knob": "007", "decoded_bytes": 1000, "level": 7},
+    {"knob": "fast", "decoded_bytes": 1000, "level": 1},
+    {"knob": "MAX", "decoded_bytes": 1000, "level": 9},
+    {"knob": "default", "decoded_bytes": 268435456, "level": 3},
+    {"knob": "+5", "decoded_bytes": 1000, "level": 6},
+    {"knob": "1_0", "decoded_bytes": 1000, "level": 6},
+    {"knob": "23", "decoded_bytes": 1000, "level": 6},
+    {"knob": "0", "decoded_bytes": 2147483648, "level": 1},
+    {"knob": "²", "decoded_bytes": 1000, "level": 6}
   ]
 }

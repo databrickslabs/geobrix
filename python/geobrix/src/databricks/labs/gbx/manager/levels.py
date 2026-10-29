@@ -94,6 +94,12 @@ def engine_unavailable(fn, level: str, caps: Capabilities) -> Optional[str]:
         pin = manifest.load().gdal.pin
         if caps.jvm_gdal != pin:
             return f"the JVM's GDAL is {caps.jvm_gdal or 'unknown'}; the GDAL spec engine needs {pin}"
+        from databricks.labs.gbx.core import proj_grids
+
+        if proj_grids.get_registered_dirs():
+            # The JVM applies the session's GDAL configuration only at its first GDAL init, which the capability
+            # probe may already have made without it, so registered grids cannot be guaranteed on the JVM yet.
+            return f"{fn.sql_name}: PROJ grids are registered and the JVM engine cannot be sure to read them"
         return None
     if level == "L3":
         from databricks.labs.gbx.engine import run

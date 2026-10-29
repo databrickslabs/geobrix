@@ -8,10 +8,13 @@ format and creation options, ``--num-threads`` where the algorithm has it, and `
 
 from __future__ import annotations
 
+import functools
 import json
 import math
 import re
 import string
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -47,6 +50,14 @@ _VARS = string.ascii_uppercase
 # A map-algebra variable: one capital letter that is not part of a longer name, a number or an indexed V[n].
 _VAR = re.compile(r"(?<![A-Za-z0-9_\]])([A-Z])(?![A-Za-z0-9_\[])")
 _DIALECTS = ("muparser", "builtin")
+# The envelope's closed vocabulary: calc, dialect, and per variable V_index / V_band.
+_ENVELOPE_KEYS = frozenset(
+    {"calc", "dialect"} | {f"{v}_{k}" for v in _VARS for k in ("index", "band")}
+)
+_TEMPLATE_CACHE_SIZE = 512
+_templates: "OrderedDict" = OrderedDict()
+_templates_lock = threading.Lock()
+_MISSING = object()
 
 
 @dataclass(frozen=True)
@@ -114,19 +125,71 @@ def _bind_value(fn, arg, value) -> Optional[str]:
     if t == "crs":
         try:
             check_value(fn.sql_name, arg.source, value)
-        except ParamError as exc:
-            raise _fail(fn, arg, str(exc).split(": ", 1)[1]) from None
-        from databricks.labs.gbx.core.crs import crs_to_canonical, resolve_crs
-
-        try:
-            return crs_to_canonical(resolve_crs(value))
-        except Exception as exc:  # noqa: BLE001 - any parse failure is this value's
+            return canonical_crs(str(value))
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - any refusal or parse failure is this value's
             raise _fail(
-                fn,
-                arg,
-                f"{arg.source} is not a CRS GDAL can parse (got '{value}': {exc})",
+                fn, arg, f"{arg.source}: {str(exc).removeprefix('resolve_crs: ')}"
             ) from None
     raise ValueError(f"{fn.sql_name}: binder '{t}' is not built in this release")
+
+
+@functools.lru_cache(maxsize=1)
+def _osgeo():
+    """osgeo (GDAL's own CRS parser, the JVM's too), or None where this process has no osgeo."""
+    from databricks.labs.gbx import _osgeo as osgeo
+
+    try:
+        return osgeo.bindings("the GDAL spec engine")
+    except ImportError:
+        return None
+
+
+CRS_BUILD_FIX = (
+    "Fix: pass EPSG:<code>, WKT or PROJJSON that GDAL can build; for a grid, register its directory with "
+    "register_proj_grids, or mark it optional (@name)"
+)
+
+
+@functools.lru_cache(maxsize=256)
+def canonical_crs(text: str) -> str:
+    """The one form a target CRS takes in the argv, on both tiers: ``AUTHORITY:CODE`` when the parsed CRS carries
+    that authority node exactly (no identification, no fuzzy match), else its WKT.
+
+    The value must be a kind ``core.crs.crs_text_kind`` accepts (never a file, a URL or a grid named by path), and
+    it is parsed by OSR with file and network access off, then exported by OSR: the calls the JVM's
+    ``SpatialRefOps.resolveCrs`` / ``crsToCanonical`` make on the same GDAL, so both tiers bind the same text.
+    The parse is judged as the JVM judges it, with osr's exceptions off: a failing return, or a failure GDAL
+    reports during it (PROJ cannot build the CRS, e.g. a required grid it cannot find, which would otherwise
+    leave a reprojection without its datum shift), refuses the value. Without osgeo (a host that cannot run the
+    engine) the canonical resolver and the strict authority rule stand in.
+    """
+    from databricks.labs.gbx.core.crs import _is_intlike, crs_text_kind, resolve_crs
+
+    v = text.strip()
+    if not _is_intlike(v):
+        crs_text_kind(v)
+    b = _osgeo()
+    if b is None:
+        crs = resolve_crs(v)
+        auth = crs.to_authority(confidence_threshold=100)
+        return f"{auth[0]}:{auth[1]}" if auth else crs.to_wkt()
+    gdal, osr = b.gdal, b.osr
+    with osr.ExceptionMgr(useExceptions=False), gdal.ExceptionMgr(useExceptions=False):
+        gdal.ErrorReset()
+        sr = osr.SpatialReference()
+        if _is_intlike(v):
+            rc = sr.ImportFromEPSG(int(v))
+        else:
+            rc = sr.SetFromUserInput(
+                v, options=["ALLOW_FILE_ACCESS=NO", "ALLOW_NETWORK_ACCESS=NO"]
+            )
+        if rc != 0 or gdal.GetLastErrorType() >= gdal.CE_Failure:
+            why = gdal.GetLastErrorMsg() or f"OGR error {rc}"
+            raise ValueError(f"GDAL cannot build the CRS ({why}). {CRS_BUILD_FIX}")
+        name, code = sr.GetAuthorityName(None), sr.GetAuthorityCode(None)
+        return f"{name}:{code}" if name and code else sr.ExportToWkt()
 
 
 def _calc_binding(fn, arg, value, inputs: Sequence[RasterProps]) -> _Calc:
@@ -138,7 +201,10 @@ def _calc_binding(fn, arg, value, inputs: Sequence[RasterProps]) -> _Calc:
     ``norm_diff``) over the inputs in variable order. ``extra_options`` (gdal_calc flags) is refused.
     """
     s = str(value).strip()
-    check_value(fn.sql_name, arg.source, s)
+    if len(inputs) > len(_VARS):
+        raise ParamError(
+            f"{fn.sql_name}: map algebra takes at most {len(_VARS)} rasters (A to Z); got {len(inputs)}"
+        )
     bindings: Dict[str, Tuple[int, int]] = {}
     dialect = "muparser"
     if s.startswith("{"):
@@ -156,6 +222,12 @@ def _calc_binding(fn, arg, value, inputs: Sequence[RasterProps]) -> _Calc:
             raise ParamError(
                 f"{fn.sql_name}: extra_options is not supported (gdal_calc flags have no place in GDAL's "
                 "raster calc). Fix: express the computation in calc"
+            )
+        unknown = sorted(set(env) - _ENVELOPE_KEYS)
+        if unknown:
+            raise ParamError(
+                f"{fn.sql_name}: the expression envelope has unknown key(s) {', '.join(unknown)}; it takes calc, "
+                "dialect, and V_index / V_band for a variable V from A to Z"
             )
         dialect = env.get("dialect", "muparser")
         if dialect not in _DIALECTS:
@@ -182,6 +254,7 @@ def _calc_binding(fn, arg, value, inputs: Sequence[RasterProps]) -> _Calc:
                 )
             bindings[var] = (idx, band)
         s = env["calc"]
+    check_value(fn.sql_name, arg.source, s)
     positional = {_VARS[i]: (i, 1) for i in range(len(inputs))}
     if dialect == "builtin":
         if any(positional.get(v) != b for v, b in bindings.items()):
@@ -201,30 +274,28 @@ def _calc_binding(fn, arg, value, inputs: Sequence[RasterProps]) -> _Calc:
     return _Calc(expr, dialect, tuple((v, i) for v, (i, _) in sorted(resolved.items())))
 
 
-def build(
-    fn,
-    values: Mapping[str, Any],
-    inputs: Sequence[RasterProps],
-    names: Optional[Sequence[str]] = None,
-    output: str = "<output>",
-) -> Optional[List[str]]:
-    """The argv for one call of `fn`, or None when a NULL value makes the result NULL.
+def data_bound(fn, values: Mapping[str, Any]) -> bool:
+    """True when this call binds a value to a ``bad: data`` argument: GDAL refusing the argv is then that value's
+    fault, a data error (an error tile), not a parameter error."""
+    return any(
+        a.bad == "data" and not _is_null(values.get(a.source))
+        for a in fn.gdal.args
+        if a.source is not None
+    )
 
-    `values` maps the function's params to this call's values; `inputs` are the input rasters' header props;
-    `names` the inputs' `/vsimem` names (default the placeholders ``<input>``, or ``<input0>``, ``<input1>``,
-    ... for an array of rasters, the form ``last_command`` shows). Raises ParamError (raise) or DataError (an
-    error tile) when a binder refuses a value.
-    """
+
+def _template(fn, values, inputs, section) -> Optional[List[str]]:
+    """The argv with the placeholder input and output names: bound once per distinct (spec, values, input props),
+    so a literal argument is resolved once, not per row."""
     from databricks.labs.gbx.pyrx.core.compression import engine_creation_options
 
     block = fn.gdal
     in_kind = block.inputs[0][1]
-    if names is None:
-        names = (
-            ["<input>"]
-            if in_kind == "raster"
-            else [f"<input{i}>" for i in range(len(inputs))]
-        )
+    names = (
+        ["<input>"]
+        if in_kind == "raster"
+        else [f"<input{i}>" for i in range(len(inputs))]
+    )
     by_arg = {a.arg: a for a in block.args}
     calc: Optional[_Calc] = None
     tokens: List[str] = []
@@ -256,7 +327,7 @@ def build(
         text = _bind_value(fn, a, v)
         if text is not None:
             tokens.append(f"--{a.arg}" if a.type == "bool" else f"--{a.arg}={text}")
-    guard_tokens(manifest.load().gdal, block.alg, tokens)
+    guard_tokens(section, block.alg, tokens)
     if calc is not None:
         ins = [f"--input={v}={names[i]}" for v, i in calc.variables]
     else:
@@ -271,8 +342,60 @@ def build(
         ins
         + ["--input-format=GTiff"]
         + tokens
-        + [f"--output={output}", "--output-format=GTiff"]
+        + ["--output=<output>", "--output-format=GTiff"]
         + [f"--creation-option={o}" for o in creation]
         + (["--num-threads=1"] if block.alg in THREADED else [])
         + ["--quiet"]
     )
+
+
+def build(
+    fn,
+    values: Mapping[str, Any],
+    inputs: Sequence[RasterProps],
+    names: Optional[Sequence[str]] = None,
+    output: str = "<output>",
+    section=None,
+) -> Optional[List[str]]:
+    """The argv for one call of `fn`, or None when a NULL value makes the result NULL.
+
+    `values` maps the function's params to this call's values; `inputs` are the input rasters' header props;
+    `names` the inputs' `/vsimem` names (default the placeholders ``<input>``, or ``<input0>``, ``<input1>``,
+    ... for an array of rasters, the form ``last_command`` shows). `section` is the manifest's `gdal` section (the
+    allowlist), by default the manifest's own. Raises ParamError (raise) or DataError (an error tile) when a binder
+    refuses a value.
+    """
+    section = section if section is not None else manifest.load().gdal
+    try:
+        key = (id(fn), id(section), tuple(sorted(values.items())), tuple(inputs))
+        hash(key)
+    except TypeError:  # an unhashable value: bind it without the cache
+        key = None
+    with _templates_lock:
+        cached = _templates.get(key, _MISSING) if key is not None else _MISSING
+        if cached is not _MISSING:
+            _templates.move_to_end(key)
+    if cached is _MISSING:
+        cached = _template(fn, values, inputs, section)
+        if key is not None:
+            with _templates_lock:
+                _templates[key] = cached
+                while len(_templates) > _TEMPLATE_CACHE_SIZE:
+                    _templates.popitem(last=False)
+    if cached is None or (names is None and output == "<output>"):
+        return None if cached is None else list(cached)
+    in_kind = fn.gdal.inputs[0][1]
+    placeholders = (
+        ["<input>"]
+        if in_kind == "raster"
+        else [f"<input{i}>" for i in range(len(inputs))]
+    )
+    real = {**dict(zip(placeholders, names or placeholders)), "<output>": output}
+
+    def fill(tok: str) -> str:
+        if tok.startswith(("--input=", "--output=")):
+            head, _, ph = tok.rpartition("=")
+            return f"{head}={real.get(ph, ph)}"
+        return tok
+
+    return [fill(tok) for tok in cached]

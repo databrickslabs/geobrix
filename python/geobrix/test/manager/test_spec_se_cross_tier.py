@@ -62,28 +62,7 @@ def _mark(level):
     ],
 )
 def test_spec_se_oracle(request, tmp_path, fn, level, variant):
-    rows = [c for c in _rows(fn) if c.cid not in oracles.MUPARSER_ROWS]
-    assert _run(request, tmp_path, fn, level, variant, rows) == {}
-
-
-@pytest.mark.parametrize(
-    "cid,level,variant",
-    [
-        pytest.param(
-            cid,
-            lv,
-            var,
-            marks=_mark(lv)
-            + [pytest.mark.xfail(strict=True, reason="needs muparser (N5)")],
-            id=f"{cid}-{lv}-{var}",
-        )
-        for cid in sorted(oracles.MUPARSER_ROWS)
-        for lv, var in LEVELS
-    ],
-)
-def test_spec_se_muparser_rows(request, tmp_path, cid, level, variant):
-    (case,) = [c for c in oracles.SPEC_SE if c.cid == cid]
-    assert _run(request, tmp_path, case.fn, level, variant, [case]) == {}
+    assert _run(request, tmp_path, fn, level, variant, _rows(fn)) == {}
 
 
 # One success row per function: the same input through every engine level.
@@ -92,6 +71,8 @@ SAME_PIXELS = [
     "se_slope_scales",
     "tcrs_epsg",
     "tcrs_esri102003",
+    "tcrs_proj4",
+    "tcrs_wkt",
     "se_ma_norm_diff",
 ]
 
@@ -158,3 +139,23 @@ def test_l1_refuses_a_literal_it_cannot_bind_when_the_query_is_analyzed(request)
         spark.sql(
             "SELECT gbx__l1_rst_slope(tile, 'radians') FROM _gbx_lit"
         )  # analyzed, never run
+
+
+def test_a_virtual_tile_over_the_read_cap_is_refused_from_its_header(
+    request, tmp_path, monkeypatch
+):
+    """The read cap (the driver's, captured when the engine registers) is applied to a virtual tile's decoded window
+    from its header, before its pixels are read: over it, an error tile with a Fix, not a failed query.
+    """
+    spark = _session(request, "L3")
+    monkeypatch.setenv(
+        "GBX_STREAM_MAX_BYTES", "1024"
+    )  # the 64 x 64 Float32 DEM is 16 KiB decoded
+    register(
+        spark, only=["gbx_rst_slope"], _levels={"gbx_rst_slope": ("L3", "engine-c0")}
+    )
+    tile = oracles._build("dem_vrt", str(tmp_path))
+    df = spark.createDataFrame([(tile,)], f"tile {manifest.TILE_SQL}")
+    (r,) = df.selectExpr("gbx_rst_slope(tile) AS s").collect()
+    reason = r["s"]["metadata"]["last_error"]
+    assert r["s"]["raster"] is None and "read cap" in reason and "Fix:" in reason

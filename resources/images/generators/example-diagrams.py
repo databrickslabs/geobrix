@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate conceptual pipeline diagrams for example notebooks.
 
-Renders two SVGs (xview-clipping, h3-rasterize) + matching PNGs.
+Renders three SVGs (xview-clipping, h3-rasterize, zarr-weather-features) + matching PNGs.
 
 Re-render after editing:
 
@@ -16,9 +16,15 @@ Re-render after editing:
         --force-device-scale-factor=2 --window-size=1500,820 \
         --screenshot=resources/images/diagrams/h3-rasterize/h3-rasterize.png \
         resources/images/diagrams/h3-rasterize/h3-rasterize.svg
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+        --headless --disable-gpu --hide-scrollbars \
+        --force-device-scale-factor=2 --window-size=1500,820 \
+        --screenshot=resources/images/diagrams/zarr-weather-features/zarr-weather-features.png \
+        resources/images/diagrams/zarr-weather-features/zarr-weather-features.svg
     python3 -c "
 from PIL import Image, ImageChops
-for p in ['resources/images/diagrams/xview/xview-clipping.png', 'resources/images/diagrams/h3-rasterize/h3-rasterize.png']:
+for p in ['resources/images/diagrams/xview/xview-clipping.png', 'resources/images/diagrams/h3-rasterize/h3-rasterize.png',
+          'resources/images/diagrams/zarr-weather-features/zarr-weather-features.png']:
     img = Image.open(p).convert('RGB')
     diff = ImageChops.difference(img, Image.new('RGB', img.size, (255,255,255)))
     bbox = diff.getbbox()
@@ -183,6 +189,73 @@ def g_h3_band_stack(cx, cy, color, tint):
 
 
 # ---------------------------------------------------------------------------
+# 4b. g_zarr_cube — a time x latitude x longitude cube of chunk slabs
+# ---------------------------------------------------------------------------
+
+def g_zarr_cube(cx, cy, color, tint):
+    """Three offset grid slabs (one per variable) with chunk lines, labeled by variable."""
+    labels = ["t2m", "u10", "v10"]
+    opacities = [0.20, 0.36, 0.56]
+    w, h = 120, 84
+    skew = 16
+    out = []
+    for i, (lbl, opacity) in enumerate(zip(labels, opacities)):
+        x = cx - w / 2 + (2 - i) * skew - skew
+        y = cy - h / 2 + (2 - i) * skew - skew - 10
+        out.append(
+            f'<rect x="{x}" y="{y}" rx="4" ry="4" width="{w}" height="{h}" '
+            f'fill="{color}" fill-opacity="{opacity:.2f}" '
+            f'stroke="{color}" stroke-width="2"/>'
+        )
+        # chunk grid: 2 x 2 inner chunks per slab
+        out.append(
+            f'<line x1="{x + w / 2}" y1="{y}" x2="{x + w / 2}" y2="{y + h}" '
+            f'stroke="{color}" stroke-opacity="0.6" stroke-width="1.2"/>'
+            f'<line x1="{x}" y1="{y + h / 2}" x2="{x + w}" y2="{y + h / 2}" '
+            f'stroke="{color}" stroke-opacity="0.6" stroke-width="1.2"/>'
+        )
+        out.append(
+            f'<text x="{x + 8}" y="{y + 15}" '
+            f'font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" '
+            f'font-size="11" font-weight="700" fill="{color}">{esc(lbl)}</text>'
+        )
+    return "".join(out)
+
+
+def g_wind_from_components(cx, cy, color, tint):
+    """Two component grids (u10, v10) combine into one derived grid (wind_speed)."""
+    out = []
+
+    def grid(x, y, w, h, label, opacity):
+        out.append(
+            f'<rect x="{x}" y="{y}" rx="4" ry="4" width="{w}" height="{h}" '
+            f'fill="{color}" fill-opacity="{opacity:.2f}" stroke="{color}" stroke-width="2"/>'
+            f'<line x1="{x + w / 2}" y1="{y}" x2="{x + w / 2}" y2="{y + h}" '
+            f'stroke="{color}" stroke-opacity="0.6" stroke-width="1.2"/>'
+            f'<line x1="{x}" y1="{y + h / 2}" x2="{x + w}" y2="{y + h / 2}" '
+            f'stroke="{color}" stroke-opacity="0.6" stroke-width="1.2"/>'
+            f'<text x="{x + w / 2}" y="{y + h + 15}" text-anchor="middle" '
+            f'font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" '
+            f'font-size="11" font-weight="700" fill="{color}">{esc(label)}</text>'
+        )
+
+    grid(cx - 78, cy - 82, 56, 40, "u10", 0.22)
+    grid(cx + 22, cy - 82, 56, 40, "v10", 0.22)
+    out.append(
+        f'<text x="{cx}" y="{cy - 55}" text-anchor="middle" '
+        f'font-family="Inter, sans-serif" font-size="20" font-weight="800" '
+        f'fill="{color}">+</text>'
+    )
+    out.append(
+        f'<line x1="{cx}" y1="{cy - 18}" x2="{cx}" y2="{cy - 2}" '
+        f'stroke="{color}" stroke-width="2.5" stroke-linecap="round"/>'
+        f'<polygon points="{cx},{cy + 6} {cx - 6},{cy - 3} {cx + 6},{cy - 3}" fill="{color}"/>'
+    )
+    grid(cx - 50, cy + 12, 100, 44, "wind_speed", 0.55)
+    return "".join(out)
+
+
+# ---------------------------------------------------------------------------
 # 5. render_diagram — full SVG builder
 # ---------------------------------------------------------------------------
 
@@ -314,6 +387,50 @@ H3_RASTERIZE = dict(
     footer_note="databrickslabs/geobrix · SRTM · San Francisco",
 )
 
+ZARR_WEATHER_FEATURES = dict(
+    badge_label="Zr",
+    title="Weather features from a Zarr cube",
+    subtitle="Register in place → sample → write back → map as tiles → tag a version",
+    series_text="Zarr · Weather features",
+    accent="#7A5AA6",
+    tint="#ECE5F5",
+    stages=[
+        Stage(
+            title="Register in place",
+            subtitle="The cube becomes a Delta manifest of its own files; nothing is copied",
+            glyph=g_zarr_cube,
+            chip_text="gbx_zarr_register",
+        ),
+        Stage(
+            title="Read and sample",
+            subtitle="A box as blocks and a table; 100 sites' hourly series to a features table",
+            glyph=eo.g_timeseries_in_hex,
+            chip_text="gbx_zarr_sample",
+        ),
+        Stage(
+            title="Write wind speed back",
+            subtitle="wind_speed from u10 and v10, block by block, in one transactional update",
+            glyph=g_wind_from_components,
+            chip_text="gbx_zarr_write",
+        ),
+        Stage(
+            title="Map as raster tiles",
+            subtitle="One hour of wind speed as GeoBrix tiles, clipped to a polygon",
+            glyph=eo.g_clip_with_buffer,
+            chip_text="rst_clip",
+        ),
+        Stage(
+            title="History and tag",
+            subtitle="Every write is a version; tag the one the training features need",
+            glyph=lambda cx, cy, c, t: eo.g_delta_table(cx, cy, c, t, label="tag:training"),
+            chip_text="gbx_zarr_tag",
+        ),
+    ],
+    footer_chips=["gbx_zarr_register", "gbx_zarr_read", "gbx_zarr_sample",
+                  "gbx_zarr_write", "gbx_zarr_history", "gbx_zarr_tag", "rst_clip"],
+    footer_note="databrickslabs/geobrix · synthetic ERA5-like cube",
+)
+
 
 # ---------------------------------------------------------------------------
 # Main
@@ -325,14 +442,17 @@ if __name__ == "__main__":
     _NAME_TO_SUBDIR = {
         "xview-clipping": os.path.join(here, "..", "diagrams", "xview"),
         "h3-rasterize":   os.path.join(here, "..", "diagrams", "h3-rasterize"),
+        "zarr-weather-features": os.path.join(here, "..", "diagrams", "zarr-weather-features"),
     }
 
     diagrams = [
         ("xview-clipping", XVIEW_CLIPPING),
         ("h3-rasterize",   H3_RASTERIZE),
+        ("zarr-weather-features", ZARR_WEATHER_FEATURES),
     ]
 
     for name, kwargs in diagrams:
+        os.makedirs(_NAME_TO_SUBDIR[name], exist_ok=True)
         svg_path = os.path.join(_NAME_TO_SUBDIR[name], f"{name}.svg")
         svg = render_diagram(**kwargs)
         with open(svg_path, "w", encoding="utf-8") as f:

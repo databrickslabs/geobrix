@@ -67,6 +67,7 @@ import random
 import time
 import uuid
 import weakref
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -2471,8 +2472,9 @@ def _coordinate_rows(spark, plan: _Plan, snap, docs: _Docs | None, *, rebase=Fal
                 rebase,
                 (FuseRangeReader, open_manifest_array, read_box, ManifestStore),
             )
-        for writer in writers.values():
-            writer.close()
+        # one pack per coordinate, each a copy to the store: made side by side
+        with ThreadPoolExecutor(max(1, len(writers))) as pool:
+            list(pool.map(PackWriter.close, writers.values()))
     except BaseException:
         for writer in writers.values():
             writer.abort()

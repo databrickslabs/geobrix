@@ -1164,7 +1164,8 @@ def test_p9_a_create_whose_commit_landed_keeps_its_marker(
 ):
     """I7: the lookup after the MERGE fails (a transient error once, or every time). The
     commit is in, so the marker must stay and the store stays writable. A new store's
-    commit looks its write_id up only after the MERGE, so every lookup is one of those."""
+    commit looks its write_id up only after the MERGE, so every lookup is one of those.
+    """
     root, table = tmp_path / f"r9{how}", _table(f"p9{how}")
     drop(table)
     real, calls = M.find_commit_version, []
@@ -2137,3 +2138,28 @@ def _write_id_of(spark, table):
     return spark.sql(
         f"SELECT key FROM {table} WHERE kind = 'commit' AND tag IS NULL"
     ).first()["key"]
+
+
+def test_a_commit_writes_its_coordinate_packs_side_by_side(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """Each coordinate a write sets gets a pack of its own, a copy to the store each: the
+    copies run side by side (a dataset with three coordinates: three at once)."""
+    import threading
+    import time as _time
+
+    real, threads, lock = _write.PackWriter.close, set(), threading.Lock()
+
+    def close(self):
+        if "/data/t2m/" not in self.dest_dir and "/data/u10/" not in self.dest_dir:
+            with lock:
+                threads.add(threading.get_ident())
+            _time.sleep(0.05)
+        return real(self)
+
+    no_hooks.setattr(_write.PackWriter, "close", close)
+    table, _, _ = _create(spark_delta, drop, tmp_path, label="coords")
+    assert len(threads) > 1
+    np.testing.assert_array_equal(
+        _read(spark_delta, table, "latitude"), _dataset().latitude.values
+    )

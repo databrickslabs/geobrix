@@ -31,6 +31,11 @@ Usage:
                 4-8 min job-cluster startup; overrides the CLUSTER_ID env var),
               --truncate-results (clear only this run_id + this invocation's tier(s)),
               --truncate-all (empty the whole table -> only the current run remains)
+
+     Without --run-id a launch gets an id of its own (cluster-<date>-<time>-<4 hex>), so
+     the rows of an earlier run are reached only by naming its id: --resume and
+     --truncate-results need an explicit --run-id (with a fresh id, --truncate-results
+     has nothing to clear).
 """
 
 from __future__ import annotations

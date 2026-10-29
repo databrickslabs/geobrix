@@ -45,6 +45,9 @@ __all__ = [
     "run_zarr_cases",
     "sample_density_probe",
     "shard_index_probe",
+    "update_window_probe",
+    "w1_fixed",
+    "w1_fixed_verdict",
     "w1_verdict",
 ]
 
@@ -515,6 +518,19 @@ class _Phases:
         self._reals.append((mod, name, real))
         return real
 
+    def flag(self, mod, name, label):
+        """Record ``label`` as 1.0 when ``mod.name`` last returned true, else 0.0."""
+        real = getattr(mod, name)
+
+        def recorded(*a, **k):
+            out = real(*a, **k)
+            with self._lock:
+                self.t[label] = 1.0 if out else 0.0
+            return out
+
+        setattr(mod, name, recorded)
+        self._reals.append((mod, name, real))
+
     def restore(self):
         for mod, name, real in reversed(self._reals):
             setattr(mod, name, real)
@@ -523,8 +539,9 @@ class _Phases:
 
 def _w1_phases():
     """The create's steps, timed: setup (table check, root check, file mode, access, the
-    ownership claim, CREATE TABLE), the position pass, the files phase, and the commit with
-    its MERGE."""
+    ownership claim and its parts, CREATE TABLE), the position pass, the files phase (and
+    whether its blocks were packed where made: ``files: packed`` is 1), and the commit
+    with its parts. A part's time is inside its step's."""
     from databricks.labs.gbx.zarr import _manifest, _register, _write
 
     ph = _Phases()
@@ -534,13 +551,23 @@ def _w1_phases():
         (_write, "resolve_file_mode", "setup: file mode"),
         (_write, "_write_access", "setup: access"),
         (_register, "claim_root", "setup: ownership claim"),
+        (_register, "_found_ledger", "claim: found ledger"),
+        (_register, "_create_ledger", "claim: create ledger"),
+        (_register, "_held", "claim: read ledger"),
+        (_register, "_claim_marker", "claim: marker"),
         (_manifest, "create_manifest", "setup: create table"),
         (_write, "_planned_blocks", "position pass"),
         (_write, "_write_files", "files"),
         (_write, "_commit", "commit"),
-        (_manifest, "commit", "commit: merge"),
+        (_write, "_coordinate_rows", "commit: coordinates"),
+        (_write, "_current_user", "commit: user"),
+        (_write, "_require_packs", "commit: pack check"),
+        (_manifest, "commit", "commit: manifest"),
+        (_manifest, "find_commit_version", "commit: version lookups"),
+        (_manifest, "_with_view", "commit: merge"),
     ):
         ph.wrap(mod, name, label)
+    ph.flag(_write, "_aligned", "files: packed")
     return ph
 
 
@@ -552,12 +579,28 @@ def _drop(spark, table: str, root: str) -> None:
 
 
 def w1_verdict(mb_s: float, gate_key: str) -> tuple[str, float]:
-    """``("PASS" | "MISS", floor)``: the W1 gate for ``gate_key`` (``dbr19_fuse``,
-    ``dbr19_direct`` or ``serverless``): within the case's tolerance of the prototype.
+    """``("PASS" | "MISS", floor)``: part 1 of the W1 gate for ``gate_key``
+    (``dbr19_fuse``, ``dbr19_direct`` or ``serverless``): the files phase's MB/s within
+    the case's tolerance of the prototype.
     """
     case = zarr_case("W1")
     floor = case.args["gate_mb_s"][gate_key] * (1.0 - case.args["gate_tolerance"])
     return ("PASS" if mb_s >= floor else "MISS"), round(floor, 1)
+
+
+_FIXED_STEPS = ("setup: ownership claim", "setup: create table", "commit")
+
+
+def w1_fixed(phases: dict) -> float:
+    """A create's fixed cost (part 2 of the W1 gate): its ownership claim, CREATE TABLE and
+    commit, from one run's phase timers."""
+    return round(sum(phases.get(k, 0.0) for k in _FIXED_STEPS), 2)
+
+
+def w1_fixed_verdict(seconds: float) -> tuple[str, float]:
+    """``("PASS" | "MISS", limit)``: part 2 of the W1 gate."""
+    limit = float(zarr_case("W1").args["fixed_cost_s"])
+    return ("PASS" if seconds <= limit else "MISS"), limit
 
 
 def run_w1(spark, cfg: ZarrBenchConfig) -> List[ResultRow]:
@@ -610,16 +653,25 @@ def run_w1(spark, cfg: ZarrBenchConfig) -> List[ResultRow]:
                 phases.append({k: round(v, 2) for k, v in ph.t.items()})
             med = statistics.median(walls)
             mb_s = nbytes / _MB / med
-            verdict, floor = w1_verdict(mb_s, gate_key)
+            files_s = statistics.median(p.get("files", 0.0) for p in phases)
+            files_mb_s = nbytes / _MB / files_s if files_s else 0.0
+            verdict, floor = w1_verdict(files_mb_s, gate_key)
+            fixed = [w1_fixed(p) for p in phases]
+            fixed_verdict, limit = w1_fixed_verdict(statistics.median(fixed))
             out.append(
                 _row(
                     cfg,
                     fn,
                     walls,
                     nt,
-                    f"{mb_s:.1f} MB/s ({nbytes / 1e9:.3f} GB uncompressed); gate "
-                    f"{gate_key} >= {floor} MB/s: {verdict}; phases {phases}; {check}",
-                    tput_rows=mb_s,
+                    f"{mb_s:.1f} MB/s end to end ({nbytes / 1e9:.3f} GB uncompressed); "
+                    f"files phase median {files_s:.2f} s = {files_mb_s:.1f} MB/s, gate "
+                    f"{gate_key} >= {floor} MB/s: {verdict}; fixed cost (claim + create "
+                    f"table + commit) per run {fixed} s, median "
+                    f"{statistics.median(fixed):.2f} s, gate <= {limit:.0f} s: "
+                    f"{fixed_verdict}; phases {phases}; {check}",
+                    tput_rows=files_mb_s,
+                    note_cap=1 << 16,  # every run's phases
                 )
             )
         except Exception as e:  # noqa: BLE001
@@ -656,15 +708,18 @@ def _w1_check(spark, table, ny, nx, t=7) -> str:
     generator (run 1 only)."""
     from databricks.labs.gbx.zarr import gbx_zarr_read
 
-    steps = [t] if isinstance(t, int) else list(t)
+    steps = sorted([t] if isinstance(t, int) else list(t))
     y, x = ny // 3, nx // 5
-    got = gbx_zarr_read(
-        spark,
-        table,
-        variables="t2m",
-        isel={"time": steps, "latitude": y, "longitude": x},
-        output="table",
-    ).collect()
+    got = sorted(  # a table's rows come in no set order: compare them step by step
+        gbx_zarr_read(
+            spark,
+            table,
+            variables="t2m",
+            isel={"time": steps, "latitude": y, "longitude": x},
+            output="table",
+        ).collect(),
+        key=lambda r: r["time"],
+    )
     want = [float(field(s, s + 1, ny, nx)[0, y, x]) for s in steps]
     ok = len(got) == len(steps) and all(
         np.isclose(r["t2m"], w) for r, w in zip(got, want)
@@ -895,13 +950,14 @@ def shard_index_probe(directory: str, counts=(256, 1024, 4096, 16384, 93312), re
 
 
 def sample_density_probe(
-    store, variable="t2m", counts=(10, 100, 1000, 2000, 4050, 8100), reps=3
+    store, variable="t2m", counts=(10, 100, 1000, 2000, 3000, 4050, 8100), reps=3
 ):
     """``gbx_zarr_sample``'s own read of one spatial chunk of ``store`` with every time step,
     for each number of points in the chunk: the shipped ``_sample_points`` path (the
-    driver's plan, a task's unit read, its batches), with the dense switch as shipped and
-    with it turned off (every unit read point by point), on the zarr engine (Spark tasks)
-    and tensorstore (the driver route)."""
+    driver's plan, a task's unit read, its batches), with the dense switch as shipped, with
+    it turned off (every unit read point by point) and with it always on (every unit whose
+    box fits the budget read as one box), on the zarr engine (Spark tasks) and tensorstore
+    (the driver route)."""
     import shapely
 
     from databricks.labs.gbx.zarr import _read, _sample
@@ -934,23 +990,90 @@ def sample_density_probe(
         for engine in ("zarr", "auto"):
             shipped = _walls(lambda: run(engine), reps)
             real = _sample._DENSE
-            _sample._DENSE = float("inf")  # the switch off: point reads only
             try:
+                _sample._DENSE = float("inf")  # the switch off: point reads only
                 off = _walls(lambda: run(engine), reps)
+                _sample._DENSE = 0.0  # the switch on: a box wherever it fits
+                box = _walls(lambda: run(engine), reps)
             finally:
                 _sample._DENSE = real
             out.append(
                 {
                     "engine": "zarr" if engine == "zarr" else "tensorstore",
                     "points": int(n),
+                    "density": round(n / (hy * hx), 3),
                     "units": int(len(units)),
                     "shipped_s": shipped,
                     "points_only_s": off,
+                    "box_only_s": box,
                     "batch_cells": int(cfg.batch_cells),
                     "box_bytes": int(cfg.box_bytes),
                 }
             )
     return out
+
+
+def update_window_probe(spark, cfg: ZarrBenchConfig, nt: int = 96, reps: int = 3):
+    """What the narrowing window of a one-pass update costs: a store of ``nt`` steps of the
+    W1 cube (one shard per 24 steps), updated whole from blocks (a one-pass write, every
+    shard touched), its files phase timed with the window (``_touched_groups``, as shipped)
+    and without it, the two alternated ``reps`` times. Each group the window buffers is a
+    shard: its base rows and its encoded chunks."""
+    from databricks.labs.gbx.zarr import _write, gbx_zarr_write
+
+    case = zarr_case("W1")
+    _, ny, nx = cfg.w1_shape
+    chunks, shards = dict(case.args["chunks"]), dict(case.args["shards"])
+    if (ny, nx) != (721, 1440):  # a smaller cube (local runs): one shard per block
+        chunks = {"time": 24, "latitude": -(-ny // 4), "longitude": -(-nx // 4)}
+        shards = {"time": 24, "latitude": 4 * chunks["latitude"]}
+        shards["longitude"] = 4 * chunks["longitude"]
+    tag = f"{cfg.run_id}_upd_{uuid.uuid4().hex[:6]}"
+    table = f"{cfg.schema}.t22b_{tag}".replace("-", "_")
+    root = os.path.join(cfg.scratch, "upd", tag)
+    times: dict = {"window": [], "no window": []}
+    real = _write._touched_groups
+    try:
+        gbx_zarr_write(
+            _cube_blocks(spark, nt, ny, nx, 24),
+            table,
+            mode="create",
+            root=root,
+            chunks=chunks,
+            shards=shards,
+            spark=spark,
+        )
+        for _ in range(reps):
+            for variant in ("window", "no window"):
+                ph = _Phases()
+                ph.wrap(_write, "_write_files", "files")
+                if variant == "no window":
+                    _write._touched_groups = lambda grouped: grouped
+                try:
+                    gbx_zarr_write(
+                        _cube_blocks(spark, nt, ny, nx, 24, coords=()),
+                        table,
+                        mode="update",
+                        spark=spark,
+                    )
+                finally:
+                    _write._touched_groups = real
+                    ph.restore()
+                times[variant].append(round(ph.t["files"], 2))
+    finally:
+        _write._touched_groups = real
+        _drop(spark, table, root)
+    groups = -(-nt // 24)
+    return [
+        {
+            "variant": v,
+            "files_s": t,
+            "median_s": statistics.median(t),
+            "groups": groups,
+            "group_mb": round(24 * ny * nx * 4 / _MB, 1),
+        }
+        for v, t in times.items()
+    ]
 
 
 def _chunk_shape(store, variable):
@@ -997,6 +1120,7 @@ def run_zarr_cases(spark, cfg: ZarrBenchConfig, sink=None) -> List[ResultRow]:
             lambda: shard_index_probe(os.path.join(cfg.scratch, "b")),
         ),
         ("probe_sample_density", lambda: sample_density_probe(cfg.store, cfg.variable)),
+        ("probe_update_window", lambda: update_window_probe(spark, cfg)),
     ):
         try:
             os.makedirs(os.path.join(cfg.scratch, "b"), exist_ok=True)

@@ -4383,6 +4383,9 @@ ZARR_CASES = {
                 "serverless": 137.0,
             },
             "gate_tolerance": 0.25,
+            # the gate restated (Ruling ZT-W1): the files phase is held to the floors above;
+            # the fixed cost of a create (ownership claim + CREATE TABLE + commit) to this
+            "fixed_cost_s": 10.0,
         },
         sources=_ZARR_WRITE,
     ),

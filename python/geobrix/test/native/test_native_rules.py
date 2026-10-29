@@ -91,21 +91,22 @@ DATA_CASES = [
     ({"PROJ_LIB": "<missing>"}, "<share>/gdal", "<share>/proj"),
     # the readable PROJ_LIB is the user's: the unreadable PROJ_DATA goes, so PROJ falls back to it
     ({"PROJ_DATA": "<missing>", "PROJ_LIB": "<ok>"}, "<share>/gdal", None),
-    # one readable directory of an os.pathsep list is enough
-    (
-        {"PROJ_DATA": f"<missing>{os.pathsep}<ok>"},
-        "<share>/gdal",
-        f"<missing>{os.pathsep}<ok>",
-    ),
+    # only the readable directories of an os.pathsep list stay, in order (pyproj checks each one in turn, and its
+    # Path.exists() raises on an unreadable one)
+    ({"PROJ_DATA": f"<missing>{os.pathsep}<ok>"}, "<share>/gdal", "<ok>"),
+    ({"PROJ_DATA": f"<ok>{os.pathsep}<empty>"}, "<share>/gdal", "<ok>"),
+    ({"PROJ_DATA": f"<ok>{os.pathsep}<ok2>"}, "<share>/gdal", f"<ok>{os.pathsep}<ok2>"),
 ]
 
 
 def _proj_dirs(tmp_path):
-    ok, empty = tmp_path / "ok", tmp_path / "empty"
-    ok.mkdir()
-    empty.mkdir()
-    (ok / "proj.db").write_bytes(b"SQLite format 3\x00")
+    ok, ok2, empty = tmp_path / "ok", tmp_path / "ok2", tmp_path / "empty"
+    for d in (ok, ok2, empty):
+        d.mkdir()
+    for d in (ok, ok2):
+        (d / "proj.db").write_bytes(b"SQLite format 3\x00")
     return {
+        "<ok2>": str(ok2),
         "<ok>": str(ok),
         "<missing>": str(tmp_path / "missing"),
         "<empty>": str(empty),
@@ -128,6 +129,13 @@ def test_the_data_rule(tmp_path, environ, gdal_data, proj_data):
         _fill(proj_data, dirs),
     )
     assert env.get("PROJ_LIB") == _fill(environ.get("PROJ_LIB"), dirs)
+
+
+def test_a_proj_lib_list_keeps_its_readable_entries(tmp_path):
+    dirs = _proj_dirs(tmp_path)
+    env = {"PROJ_LIB": f"{dirs['<missing>']}{os.pathsep}{dirs['<ok>']}"}
+    _rules.set_data_dirs(env, "<share>")
+    assert env == {"GDAL_DATA": "<share>/gdal", "PROJ_LIB": dirs["<ok>"]}
 
 
 def test_a_proj_db_probe_that_raises_is_unreadable_and_never_raises(
@@ -166,7 +174,17 @@ def _drop_to_nobody():
     os.setuid(65534)
 
 
-@pytest.mark.parametrize("runtime_proj_data", ["unreadable", "readable"])
+# PROJ_DATA as the runtime sets it: "unr" a mode-000 directory with a proj.db (EACCES for the child), "ok" a readable
+# one; a list keeps its readable entries in order. The PROJ_DATA expected after activation, "payload" = the payload's.
+PROJ_DATA_ROWS = {
+    "unr": "payload",
+    "ok": "ok",
+    f"unr{os.pathsep}ok": "ok",
+    f"ok{os.pathsep}unr": "ok",
+}
+
+
+@pytest.mark.parametrize("runtime_proj_data", list(PROJ_DATA_ROWS))
 def test_import_pyproj_beside_the_runtimes_proj_data(runtime_proj_data):
     root = os.environ.get("GBX_NATIVE_ROOT")
     arch = os.uname().machine if hasattr(os, "uname") else ""
@@ -182,7 +200,7 @@ def test_import_pyproj_beside_the_runtimes_proj_data(runtime_proj_data):
     base = Path(
         tempfile.mkdtemp(dir="/tmp")
     )  # pytest's tmp dirs are 0700: nobody could not reach them
-    runtime = base / "proj-data"
+    runtime = {"unr": base / "proj-unr", "ok": base / "proj-ok"}
     try:
         os.chmod(base, 0o755)
         payload = base / "payload"
@@ -198,12 +216,15 @@ def test_import_pyproj_beside_the_runtimes_proj_data(runtime_proj_data):
             SRC / "databricks/labs/gbx/_native/_rules.py",
             src / "databricks/labs/gbx/_native",
         )
-        runtime.mkdir()  # the runtime's own PROJ data: a real proj.db
-        shutil.copy2(root / "_native/share/proj/proj.db", runtime)
-        if runtime_proj_data == "unreadable":
-            runtime.chmod(0o000)
+        for d in runtime.values():  # the runtime's own PROJ data: a real proj.db
+            d.mkdir()
+            shutil.copy2(root / "_native/share/proj/proj.db", d)
+        runtime["unr"].chmod(0o000)
+        proj_data = os.pathsep.join(
+            str(runtime[k]) for k in runtime_proj_data.split(os.pathsep)
+        )
         env = {k: v for k, v in os.environ.items() if k not in _ENV}
-        env.update(GBX_NATIVE_ROOT=str(payload), PROJ_DATA=str(runtime), HOME=str(base))
+        env.update(GBX_NATIVE_ROOT=str(payload), PROJ_DATA=proj_data, HOME=str(base))
         res = subprocess.run(
             [sys.executable, "-I", "-c", PYPROJ_PROBE, str(src)],
             env=env,
@@ -214,8 +235,8 @@ def test_import_pyproj_beside_the_runtimes_proj_data(runtime_proj_data):
             preexec_fn=_drop_to_nobody if os.geteuid() == 0 else None,
         )
     finally:
-        if runtime.exists():
-            runtime.chmod(0o755)
+        if runtime["unr"].exists():
+            runtime["unr"].chmod(0o755)
         shutil.rmtree(base, ignore_errors=True)
     out = res.stdout + res.stderr
     line = next(
@@ -224,10 +245,9 @@ def test_import_pyproj_beside_the_runtimes_proj_data(runtime_proj_data):
     assert line, out[-3000:]
     module, epsg, proj_data, data_dir = line.split()[1:]
     assert module.startswith(f"{payload}/_vendor/{arch}/") and epsg == "4326", line
+    expect = PROJ_DATA_ROWS[runtime_proj_data]
     want = (
-        f"{payload}/_native/share/proj"
-        if runtime_proj_data == "unreadable"
-        else str(runtime)
+        f"{payload}/_native/share/proj" if expect == "payload" else str(runtime[expect])
     )
     assert proj_data == want and data_dir == want, line
 

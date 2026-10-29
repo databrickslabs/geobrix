@@ -17,9 +17,9 @@ The rules:
   copies. ``PYTHONPATH`` entries stay ahead of them. With no such entry they are appended.
 - **Data.** ``GDAL_DATA`` and ``PROJ_DATA`` point at ``_native/share``, each only when unset;
   ``PROJ_DATA`` is not set when the user set ``PROJ_LIB`` (PROJ's older name, still read). A ``PROJ_DATA`` or
-  ``PROJ_LIB`` whose directories hold no ``proj.db`` this process can read counts as unset (DBR 19's
-  ``/databricks/native/proj-data`` on a standard-access driver); an unreadable ``PROJ_DATA`` is removed, and a
-  readable value is never changed. The readability probe never raises.
+  ``PROJ_LIB`` keeps only its directories that hold a ``proj.db`` this process can read, in order (DBR 19's
+  ``/databricks/native/proj-data`` on a standard-access driver is not one); a ``PROJ_DATA`` with none counts as
+  unset and is removed, and an all-readable value is never changed. The readability probe never raises.
 - **HDF5 filter plugins.** ``_native/<arch>/hdf5-plugins`` (netCDF-C's zstd, blosc, bzip2, szip,
   ... filters) is registered with the payload's OWN netCDF-C and HDF5, never through the
   environment: ``HDF5_PLUGIN_PATH`` is never set, so it reaches no other HDF5 in the process (a
@@ -103,14 +103,27 @@ def proj_db_readable(value):
     return False
 
 
+def readable_proj_dirs(value):
+    """The directories of ``value`` (``os.pathsep``-joined), in order, that hold a ``proj.db`` this process can read."""
+    return [d for d in (value or "").split(os.pathsep) if d and proj_db_readable(d)]
+
+
 def set_data_dirs(env, share):
     env.setdefault("GDAL_DATA", os.path.join(share, "gdal"))
-    # A PROJ_DATA or PROJ_LIB with no proj.db this process can read is no PROJ data, so it counts as unset: DBR 19
-    # exports PROJ_DATA=/databricks/native/proj-data, which the notebook user of a standard-access cluster cannot
-    # read, and the vendored pyproj (no data dir of its own) then fails at import. A readable value is kept.
-    if "PROJ_DATA" in env and not proj_db_readable(env["PROJ_DATA"]):
-        del env["PROJ_DATA"]
-    if not ("PROJ_LIB" in env and proj_db_readable(env["PROJ_LIB"])):
+    # A PROJ_DATA or PROJ_LIB directory with no proj.db this process can read is no PROJ data: DBR 19 exports
+    # PROJ_DATA=/databricks/native/proj-data, which the notebook user of a standard-access cluster cannot read, and
+    # the vendored pyproj (no data dir of its own) checks each entry in order with Path.exists(), which raises on
+    # EACCES. So only the readable entries stay, in order; a PROJ_DATA with none counts as unset (and goes), and a
+    # PROJ_LIB with none is left to PROJ_DATA, which PROJ and pyproj read first. A readable value is kept as it is.
+    for key in ("PROJ_DATA", "PROJ_LIB"):
+        if key in env:
+            keep = readable_proj_dirs(env[key])
+            if keep:
+                if keep != env[key].split(os.pathsep):
+                    env[key] = os.pathsep.join(keep)
+            elif key == "PROJ_DATA":
+                del env["PROJ_DATA"]
+    if not ("PROJ_LIB" in env and readable_proj_dirs(env["PROJ_LIB"])):
         env.setdefault("PROJ_DATA", os.path.join(share, "proj"))
 
 

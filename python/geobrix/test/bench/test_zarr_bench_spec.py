@@ -6,6 +6,8 @@ binding, so the function-coverage check (``REGISTRY == registered_rst()``) is un
 
 import types
 
+import pytest
+
 from databricks.labs.gbx.bench import spec as s
 
 
@@ -178,3 +180,104 @@ def test_the_write_cube_makes_one_block_per_task():
 
     zb._cube_blocks(Spark(), 240, 721, 1440, 24)
     assert calls == [(0, 10, 1, 10)]
+
+
+def test_run_w1_judges_each_leg_by_its_warm_runs_in_alternating_order(monkeypatch):
+    """1 cold + 5 warm runs a leg: the legs alternate (FUSE first in odd repetitions, direct
+    first in even ones, counting from 1), the cold run is each leg's first, and the row's
+    throughput and both verdicts come from the median of the WARM files phase and fixed
+    cost, with the first-three verdict beside it."""
+    import databricks.labs.gbx.zarr as gz
+    from databricks.labs.gbx.bench import zarr_bench as zb
+
+    # files phase / fixed parts per create, in each leg's own run order (run 1 cold)
+    plan = {
+        "fuse": [
+            (30.0, 9.0),
+            (10.0, 3.0),
+            (10.5, 3.2),
+            (9.5, 3.1),
+            (11.0, 3.3),
+            (12.0, 3.4),
+        ],
+        "direct": [
+            (25.0, 8.0),
+            (8.0, 2.0),
+            (8.2, 2.1),
+            (8.4, 2.2),
+            (8.6, 2.3),
+            (8.8, 2.4),
+        ],
+    }
+    seen, current = [], {}
+
+    class Phases:
+        def __init__(self):
+            self.t = {}
+            current["ph"] = self
+
+        def restore(self):
+            pass
+
+    def write(data, table, *, access, **kw):
+        files, part = plan[access][sum(1 for a in seen if a == access)]
+        seen.append(access)
+        current["ph"].t.update(
+            {
+                "files": files,
+                "setup: ownership claim": part,
+                "setup: create table": part,
+                "commit": part,
+            }
+        )
+
+    monkeypatch.setattr(zb, "_w1_phases", Phases)
+    monkeypatch.setattr(zb, "_cube_blocks", lambda *a, **k: None)
+    monkeypatch.setattr(zb, "_w1_check", lambda *a, **k: "verify OK")
+    monkeypatch.setattr(zb, "_drop", lambda *a, **k: None)
+    monkeypatch.setattr(zb, "_plain_w1", lambda *a, **k: 5.0)
+    monkeypatch.setattr(gz, "gbx_zarr_write", write)
+    cfg = zb.ZarrBenchConfig(
+        "/s", "/c", "/tmp", "c.s", "r", reps=6, w1_shape=(240, 721, 1440)
+    )
+    rows = {r.fn: r for r in zb.run_w1(None, cfg)}
+    assert seen == ["fuse", "direct", "direct", "fuse"] * 3
+    fuse, direct = rows["gbx_zarr_write[W1,fuse]"], rows["gbx_zarr_write[W1,direct]"]
+    mb = 240 * 721 * 1440 * 4 / 1e6
+    assert fuse.throughput_rows_s == pytest.approx(
+        mb / 10.5
+    )  # warm files [10, 10.5, 9.5, 11, 12]
+    assert direct.throughput_rows_s == pytest.approx(mb / 8.4)
+    assert fuse.measured_iters == 5 and "cold_s=" in fuse.note
+    assert "part 1 >= 81.8 MB/s: PASS" in fuse.note  # 94.9 MB/s warm
+    assert "fixed cost median 9.60" in fuse.note and "part 2 <= 10 s: PASS" in fuse.note
+    assert "create #1 on this compute" in fuse.note and "create #2" in direct.note
+    assert "FIRST THREE (cold included): files 94.9 MB/s PASS" in fuse.note
+
+
+def test_every_bench_row_names_the_wheel_it_ran():
+    from databricks.labs.gbx.bench import zarr_bench as zb
+
+    cfg = zb.ZarrBenchConfig("/s", "/c", "/tmp", "c.s", "r")
+    row = zb._row(cfg, "f", [1.0], 1, "x")
+    assert row.note.startswith(f"wheel_record={zb.wheel_fingerprint()}; ")
+    assert zb._error_row(cfg, "f", ValueError("e")).note.startswith("wheel_record=")
+    wheel = "databricks/labs/gbx/a.py,sha256=x,1\ngeobrix.dist-info/RECORD,,\n"
+    installed = wheel + "databricks/labs/gbx/__pycache__/a.cpython-312.pyc,,\n"
+    assert zb.record_fingerprint(wheel) == zb.record_fingerprint(installed)
+
+
+def test_legs_and_probe_variants_take_turns():
+    from databricks.labs.gbx.bench import zarr_bench as zb
+
+    assert [zb._leg_order(("fuse", "direct"), r) for r in range(3)] == [
+        ("fuse", "direct"),
+        ("direct", "fuse"),
+        ("fuse", "direct"),
+    ]
+    assert [zb._rotated(("a", "b", "c"), i)[0] for i in range(4)] == [
+        "a",
+        "b",
+        "c",
+        "a",
+    ]

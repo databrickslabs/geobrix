@@ -21,6 +21,8 @@ cold/warm split survives in the results table. Nothing here calls ``spark.conf.s
 
 from __future__ import annotations
 
+import functools
+import hashlib
 import json
 import os
 import shutil
@@ -106,9 +108,18 @@ def _row(
     status: str = "ok",
     tput_rows: Optional[float] = None,
     note_cap: int = 2000,
+    cold: Optional[float] = None,
 ) -> ResultRow:
+    """A result row. ``walls`` are the timed runs; with ``cold`` (the leg's first run, on
+    compute that had not run it before) they are the warm runs after it, and the medians are
+    theirs. Every note starts with the installed wheel's fingerprint (``wheel_record``).
+    """
     med = statistics.median(walls) if walls else 0.0
-    walls_txt = f"walls_s={walls} (run 1 cold)" if walls else "walls_s=[]"
+    if cold is not None:
+        walls_txt = f"cold_s={cold}; warm_s={walls}"
+    else:
+        walls_txt = f"walls_s={walls} (run 1 cold)" if walls else "walls_s=[]"
+    walls_txt = f"wheel_record={wheel_fingerprint()}; {walls_txt}"
     return ResultRow(
         run_id=cfg.run_id,
         api="lightweight",
@@ -137,6 +148,34 @@ def _row(
         avg_wall_clock_s=(sum(walls) / len(walls)) if walls else 0.0,
         **capture_env(cfg.where),
     )
+
+
+@functools.lru_cache(maxsize=1)
+def wheel_fingerprint() -> str:
+    """The first 16 hex digits of the sha256 of the installed geobrix ``RECORD`` (the list of
+    every installed file with its own sha256), ``"unknown"`` when there is none (a source
+    tree on the path). Two runs with one fingerprint ran the same wheel contents; the
+    staging side computes it from the wheel file the same way (``record_fingerprint``).
+    """
+    from importlib.metadata import PackageNotFoundError, distribution
+
+    try:
+        text = distribution("geobrix").read_text("RECORD")
+    except PackageNotFoundError:
+        return "unknown"
+    return record_fingerprint(text) if text else "unknown"
+
+
+def record_fingerprint(record_text: str) -> str:
+    """``wheel_fingerprint`` of a ``RECORD`` text: its lines that name a package file (the
+    installed one also lists the ``.pyc`` files and installer lines a wheel lacks), sorted.
+    """
+    lines = sorted(
+        line
+        for line in record_text.splitlines()
+        if line.startswith("databricks/") and not line.split(",")[0].endswith(".pyc")
+    )
+    return hashlib.sha256("\n".join(lines).encode()).hexdigest()[:16]
 
 
 def _error_row(cfg: ZarrBenchConfig, fn: str, e: BaseException) -> ResultRow:
@@ -560,6 +599,7 @@ def _w1_phases():
         (_write, "_write_access", "setup: access"),
         (_register, "claim_root", "setup: ownership claim"),
         (_register, "_found_ledger", "claim: found ledger"),
+        (_register, "_ledger_state", "claim: ledger dir check"),
         (_register, "_create_ledger", "claim: create ledger"),
         (_register, "_held", "claim: read ledger"),
         (_register, "_claim_marker", "claim: marker"),
@@ -576,7 +616,33 @@ def _w1_phases():
     ):
         ph.wrap(mod, name, label)
     ph.flag(_write, "_aligned", "files: packed")
+    _count_tasks(ph, _write)
     return ph
+
+
+def _count_tasks(ph: "_Phases", _write) -> None:
+    """Record, from the digest rows the files phase returns (one per task), how many tasks
+    made data blocks (``files: data tasks``) and the most blocks one of them made
+    (``files: most blocks in a task``, coordinate blocks included)."""
+    import pyarrow.compute as pc
+
+    real = _write._side_info
+
+    def counted(rows):
+        infos = [
+            json.loads(t)
+            for t in rows.filter(pc.equal(rows.column("rtype"), "digest"))
+            .column("info")
+            .to_pylist()
+        ]
+        data = [i["count"] for i in infos if i.get("variables")]
+        with ph._lock:
+            ph.t["files: data tasks"] = float(len(data))
+            ph.t["files: most blocks in a task"] = float(max(data, default=0))
+        return real(rows)
+
+    _write._side_info = counted
+    ph._reals.append((_write, "_side_info", real))
 
 
 def _drop(spark, table: str, root: str) -> None:
@@ -601,7 +667,9 @@ _FIXED_STEPS = ("setup: ownership claim", "setup: create table", "commit")
 
 def w1_fixed(phases: dict) -> float:
     """A create's fixed cost (part 2 of the W1 gate): its ownership claim, CREATE TABLE and
-    commit, from one run's phase timers."""
+    commit, from one run's phase timers. As the gate words it: the checks before them (table
+    check, root check, file mode, access: 0.1-0.6 s in the 22b runs) and the position pass
+    are not in it."""
     return round(sum(phases.get(k, 0.0) for k in _FIXED_STEPS), 2)
 
 
@@ -629,61 +697,52 @@ def run_w1(spark, cfg: ZarrBenchConfig) -> List[ResultRow]:
         }
     out = []
     accesses = ("auto",) if cfg.serverless else tuple(cfg.w1_access)
-    for access in accesses:
-        gate_key = "serverless" if cfg.serverless else f"dbr19_{access}"
-        fn = f"{case.name}[W1,{access}]"
-        walls, phases = [], []
-        try:
-            for rep in range(cfg.reps):
-                tag = f"{cfg.run_id}_{access}_{rep}_{uuid.uuid4().hex[:6]}"
-                table = f"{cfg.schema}.t22_w1_{tag}".replace("-", "_")
-                root = os.path.join(cfg.scratch, "w1", tag)
-                ph = _w1_phases()
-                try:
-                    data = _cube_blocks(spark, nt, ny, nx, block)
-                    t = time.perf_counter()
-                    gbx_zarr_write(
-                        data,
-                        table,
-                        mode="create",
-                        root=root,
-                        chunks=chunks,
-                        shards=shards,
-                        access=access,
-                        spark=spark,
-                    )
-                    walls.append(round(time.perf_counter() - t, 3))
-                finally:
-                    ph.restore()
-                    if rep == 0:
-                        check = _w1_check(spark, table, ny, nx)
-                    _drop(spark, table, root)
-                phases.append({k: round(v, 2) for k, v in ph.t.items()})
-            med = statistics.median(walls)
-            mb_s = nbytes / _MB / med
-            files_s = statistics.median(p.get("files", 0.0) for p in phases)
-            files_mb_s = nbytes / _MB / files_s if files_s else 0.0
-            verdict, floor = w1_verdict(files_mb_s, gate_key)
-            fixed = [w1_fixed(p) for p in phases]
-            fixed_verdict, limit = w1_fixed_verdict(statistics.median(fixed))
-            out.append(
-                _row(
-                    cfg,
-                    fn,
-                    walls,
-                    nt,
-                    f"{mb_s:.1f} MB/s end to end ({nbytes / 1e9:.3f} GB uncompressed); "
-                    f"files phase median {files_s:.2f} s = {files_mb_s:.1f} MB/s, gate "
-                    f"{gate_key} >= {floor} MB/s: {verdict}; fixed cost (claim + create "
-                    f"table + commit) per run {fixed} s, median "
-                    f"{statistics.median(fixed):.2f} s, gate <= {limit:.0f} s: "
-                    f"{fixed_verdict}; phases {phases}; {check}",
-                    tput_rows=files_mb_s,
-                    note_cap=1 << 16,  # every run's phases
+    legs = {
+        a: {"walls": [], "phases": [], "at": [], "check": "", "error": None}
+        for a in accesses
+    }
+    made = 0  # creates run on this compute so far
+    for rep in range(cfg.reps):
+        for access in _leg_order(accesses, rep):
+            leg = legs[access]
+            if leg["error"] is not None:
+                continue
+            tag = f"{cfg.run_id}_{access}_{rep}_{uuid.uuid4().hex[:6]}"
+            table = f"{cfg.schema}.t22_w1_{tag}".replace("-", "_")
+            root = os.path.join(cfg.scratch, "w1", tag)
+            ph = _w1_phases()
+            try:
+                data = _cube_blocks(spark, nt, ny, nx, block)
+                t = time.perf_counter()
+                gbx_zarr_write(
+                    data,
+                    table,
+                    mode="create",
+                    root=root,
+                    chunks=chunks,
+                    shards=shards,
+                    access=access,
+                    spark=spark,
                 )
-            )
-        except Exception as e:  # noqa: BLE001
-            out.append(_error_row(cfg, fn, e))
+                leg["walls"].append(round(time.perf_counter() - t, 3))
+                made += 1
+                leg["at"].append(made)
+                leg["phases"].append({k: round(v, 2) for k, v in ph.t.items()})
+                if rep == 0:
+                    leg["check"] = _w1_check(spark, table, ny, nx)
+            except Exception as e:  # noqa: BLE001
+                leg["error"] = e
+            finally:
+                ph.restore()
+                _drop(spark, table, root)
+    for access in accesses:
+        leg = legs[access]
+        fn = f"{case.name}[W1,{access}]"
+        if leg["error"] is not None:
+            out.append(_error_row(cfg, fn, leg["error"]))
+            continue
+        gate_key = "serverless" if cfg.serverless else f"dbr19_{access}"
+        out.append(_w1_row(cfg, fn, nt, nbytes, gate_key, leg))
     fn = "xarray.to_zarr[W1]"
     try:
         walls = []
@@ -693,22 +752,110 @@ def run_w1(spark, cfg: ZarrBenchConfig) -> List[ResultRow]:
                 walls.append(_plain_w1(spark, path, nt, ny, nx, block, chunks, shards))
             finally:
                 shutil.rmtree(path, ignore_errors=True)
-        med = statistics.median(walls)
-        mb_s = nbytes / _MB / med
+        warm = walls[1:] or walls
+        lo, hi = min(warm), max(warm)
+        mb_s = nbytes / _MB / statistics.median(warm)
         out.append(
             _row(
                 cfg,
                 fn,
-                walls,
+                warm,
                 nt,
-                f"{mb_s:.1f} MB/s; xarray.to_zarr region writes, one task per "
-                f"{block} steps, sharded like the GeoBrix store",
+                f"WARM median {statistics.median(warm):.2f} s (min {lo:.2f}, max {hi:.2f}) "
+                f"= {mb_s:.1f} MB/s; xarray.to_zarr region writes, one task per {block} "
+                "steps, sharded like the GeoBrix store",
                 tput_rows=mb_s,
+                cold=walls[0] if len(walls) > 1 else None,
             )
         )
     except Exception as e:  # noqa: BLE001
         out.append(_error_row(cfg, fn, e))
     return out
+
+
+def _leg_order(accesses, rep: int) -> tuple:
+    """The legs of repetition ``rep`` (from 0) in the order they run: as given in even
+    repetitions, reversed in odd ones, so that no leg always runs first."""
+    return tuple(accesses) if rep % 2 == 0 else tuple(reversed(accesses))
+
+
+def _rotated(seq, i: int) -> tuple:
+    """``seq`` rotated by ``i``: the order a probe runs its variants in at step ``i``, so that
+    no variant always runs first."""
+    seq = tuple(seq)
+    k = i % len(seq) if seq else 0
+    return seq[k:] + seq[:k]
+
+
+def _spread(values) -> tuple:
+    return statistics.median(values), min(values), max(values)
+
+
+def w1_summary(nbytes: float, gate_key: str, walls, phases) -> dict:
+    """Both gate parts of one W1 leg. ``verdict``: over its WARM runs (every run after its
+    first, the cold one), the median with min and max (``statistics.median``). ``first3``:
+    the earlier protocol, the median of its first three runs (the cold one included), kept
+    for comparison."""
+    files = [p.get("files", 0.0) for p in phases]
+    fixed = [w1_fixed(p) for p in phases]
+    warm = slice(1, None) if len(files) > 1 else slice(None)
+
+    def parts(f, x):
+        f_med, f_min, f_max = _spread(f)
+        mb = nbytes / _MB / f_med if f_med else 0.0
+        x_med, x_min, x_max = _spread(x)
+        v1, floor = w1_verdict(mb, gate_key)
+        v2, limit = w1_fixed_verdict(x_med)
+        return {
+            "runs": len(f),
+            "files_s": (f_med, f_min, f_max),
+            "files_mb_s": mb,
+            "part1": v1,
+            "floor": floor,
+            "fixed_s": (x_med, x_min, x_max),
+            "part2": v2,
+            "limit": limit,
+        }
+
+    return {
+        "cold": {"wall": walls[0], "files": files[0], "fixed": fixed[0]},
+        "warm": parts(files[warm], fixed[warm]),
+        "first3": parts(files[:3], fixed[:3]),
+        "files": files,
+        "fixed": fixed,
+    }
+
+
+def _w1_row(cfg, fn, nt, nbytes, gate_key, leg) -> ResultRow:
+    walls, phases = leg["walls"], leg["phases"]
+    sm = w1_summary(nbytes, gate_key, walls, phases)
+    w, f3 = sm["warm"], sm["first3"]
+
+    def triple(t):
+        return f"{t[0]:.2f} (min {t[1]:.2f}, max {t[2]:.2f})"
+
+    note = (
+        f"{gate_key}; WARM ({w['runs']} runs after the cold one): files phase median "
+        f"{triple(w['files_s'])} s = {w['files_mb_s']:.1f} MB/s, part 1 >= {w['floor']} "
+        f"MB/s: {w['part1']}; fixed cost median {triple(w['fixed_s'])} s, part 2 <= "
+        f"{w['limit']:.0f} s: {w['part2']}. COLD (this leg's first create, create "
+        f"#{leg['at'][0]} on this compute): wall {sm['cold']['wall']} s, files "
+        f"{sm['cold']['files']} s, fixed {sm['cold']['fixed']} s. FIRST THREE (cold "
+        f"included): files {f3['files_mb_s']:.1f} MB/s {f3['part1']}, fixed "
+        f"{f3['fixed_s'][0]:.2f} s {f3['part2']}. files per run {sm['files']}; fixed per "
+        f"run {sm['fixed']}; create # on this compute per run {leg['at']}; phases "
+        f"{phases}; {leg['check']}"
+    )
+    return _row(
+        cfg,
+        fn,
+        walls[1:] or walls,
+        nt,
+        note,
+        tput_rows=w["files_mb_s"],
+        note_cap=1 << 16,  # every run's phases
+        cold=walls[0] if len(walls) > 1 else None,
+    )
 
 
 def _w1_check(spark, table, ny, nx, t=7) -> str:
@@ -996,15 +1143,16 @@ def sample_density_probe(
                 pass
 
         for engine in ("zarr", "auto"):
-            shipped = _walls(lambda: run(engine), reps)
             real = _sample._DENSE
+            switch = {"shipped": real, "points_only": float("inf"), "box_only": 0.0}
+            took, order = {}, _rotated(switch, len(out))
             try:
-                _sample._DENSE = float("inf")  # the switch off: point reads only
-                off = _walls(lambda: run(engine), reps)
-                _sample._DENSE = 0.0  # the switch on: a box wherever it fits
-                box = _walls(lambda: run(engine), reps)
+                for variant in order:  # no variant always first
+                    _sample._DENSE = switch[variant]
+                    took[variant] = _walls(lambda: run(engine), reps)
             finally:
                 _sample._DENSE = real
+            shipped, off, box = took["shipped"], took["points_only"], took["box_only"]
             out.append(
                 {
                     "engine": "zarr" if engine == "zarr" else "tensorstore",
@@ -1014,6 +1162,7 @@ def sample_density_probe(
                     "shipped_s": shipped,
                     "points_only_s": off,
                     "box_only_s": box,
+                    "order": list(order),
                     "batch_cells": int(cfg.batch_cells),
                     "box_bytes": int(cfg.box_bytes),
                 }
@@ -1051,8 +1200,8 @@ def update_window_probe(spark, cfg: ZarrBenchConfig, nt: int = 96, reps: int = 3
             shards=shards,
             spark=spark,
         )
-        for _ in range(reps):
-            for variant in ("window", "no window"):
+        for i in range(reps):
+            for variant in _rotated(("window", "no window"), i):
                 ph = _Phases()
                 ph.wrap(_write, "_write_files", "files")
                 if variant == "no window":

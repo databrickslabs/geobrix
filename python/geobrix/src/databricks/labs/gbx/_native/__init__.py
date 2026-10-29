@@ -6,8 +6,13 @@ Layout under the payload root (``databricks/labs/gbx/`` in an installed env whee
     _native/<arch>/lib/       GDAL, PROJ, GEOS, HDF5, netCDF and the libraries they need (hashed
                               SONAMEs, RUNPATH $ORIGIN) and libgdalalljni.so, the JNI
     _native/<arch>/rs/        the Rust kernels (_gbxrs.abi3.so), when the wheel carries them
-    _native/<arch>/MANIFEST.json  the build record: versions, the original -> hashed SONAME map
-    _native/share/{gdal,proj} GDAL and PROJ data (identical for both architectures)
+    _native/<arch>/hdf5-plugins/  netCDF-C's HDF5 filter plugins (zstd, blosc, bzip2, ...):
+                              ``HDF5_PLUGIN_PATH`` points here unless the user set it
+    _native/<arch>/bin/projsync   PROJ's grid downloader (``projsync_path()``)
+    _native/<arch>/MANIFEST.json  the build record: versions, the original -> hashed SONAME map,
+                              the build-id of every file (its debug symbols are a separate tarball)
+    _native/share/{gdal,proj} GDAL and PROJ data (identical for both architectures); share/proj
+                              holds the OSTN15, OSGM15 and EGM96 grids
     _native/licenses/         the licence of every native library and vendored binding
     _vendor/<arch>/           rasterio, pyogrio, pyproj, shapely, netCDF4 built against _native,
                               and GDAL's own osgeo from the same build
@@ -143,6 +148,20 @@ def libgdal_path(
         if os.path.isfile(os.path.join(d, "lib", n))
     ]
     return hits[0] if hits else None
+
+
+def projsync_path(
+    root: Optional[str] = None, machine: Optional[str] = None
+) -> Optional[str]:
+    """PROJ's grid downloader from the payload (``_native/<arch>/bin/projsync``), or None.
+
+    It fetches grids from the PROJ CDN into a directory, e.g. ``[projsync_path(), "--source-id",
+    "uk_os", "--target-dir", "/Volumes/<catalog>/<schema>/proj-grids"]`` with ``subprocess``;
+    register that directory with ``register_proj_grids``. Needs network access to the CDN.
+    """
+    d = native_dir(root, machine)
+    p = os.path.join(d, "bin", "projsync") if d else None
+    return p if p and os.access(p, os.X_OK) else None
 
 
 def jar_path(root: Optional[str] = None) -> Optional[str]:

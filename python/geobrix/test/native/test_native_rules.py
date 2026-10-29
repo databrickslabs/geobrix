@@ -3,9 +3,11 @@
 The CA rows: a user's ``GDAL_CURL_CA_BUNDLE``/``PROJ_CURL_CA_BUNDLE`` is never touched; otherwise
 both get the user's ``CURL_CA_BUNDLE``, else the user's ``SSL_CERT_FILE``, else the system store;
 ``CURL_CA_BUNDLE`` is never set. The data rows: ``GDAL_DATA``/``PROJ_DATA`` only when unset, and no
-``PROJ_DATA`` over a user's ``PROJ_LIB``. Then both activators (the startup module, loaded from
+``PROJ_DATA`` over a user's ``PROJ_LIB``. The plugin rows: ``HDF5_PLUGIN_PATH`` is the payload's
+filter plugins only when unset and when they exist. Then both activators (the startup module, loaded from
 ``src/`` by path as the ``.pth`` imports it, and the import-time ``_native.activate``) apply the
-rules, and do nothing at all on an interpreter other than the payload's CPython 3.12.
+rules (and leave ``GDAL_HTTP_VERSION`` to GDAL's default), and do nothing at all on an interpreter
+other than the payload's CPython 3.12.
 """
 
 import importlib.util
@@ -32,6 +34,8 @@ _ENV = (
     "GBX_NATIVE_DISABLE",
     "GBX_NATIVE_PTH",
     "GBX_NATIVE_ROOT",
+    "HDF5_PLUGIN_PATH",
+    "GDAL_HTTP_VERSION",
 )
 
 CA_CASES = [  # the user's environment, a system store exists, GDAL's bundle after, PROJ's after
@@ -83,6 +87,24 @@ def test_the_data_rule(environ, gdal_data, proj_data):
     assert env.get("PROJ_LIB") == environ.get("PROJ_LIB")
 
 
+PLUGIN_CASES = [  # the user's environment, the plugin directory exists, HDF5_PLUGIN_PATH after
+    ({}, True, "<plugins>"),
+    ({"HDF5_PLUGIN_PATH": "/u/plugins"}, True, "/u/plugins"),
+    ({"HDF5_PLUGIN_PATH": ""}, True, ""),
+    ({}, False, None),
+]
+
+
+@pytest.mark.parametrize("environ, exists, after", PLUGIN_CASES)
+def test_the_plugin_rule(tmp_path, environ, exists, after):
+    plugins = tmp_path / "hdf5-plugins"
+    if exists:
+        plugins.mkdir()
+    env = dict(environ)
+    _rules.set_plugin_path(env, str(plugins))
+    assert env.get("HDF5_PLUGIN_PATH") == {"<plugins>": str(plugins)}.get(after, after)
+
+
 def _startup_module(monkeypatch):
     """``_gbx_native_path`` from src/, as the .pth imports it (loading it runs it: disabled here)."""
     monkeypatch.setenv("GBX_NATIVE_DISABLE", "1")
@@ -106,6 +128,7 @@ def test_both_activators_apply_the_rules_only_on_cpython_312(
     root = tmp_path / "gbx"
     for d in (
         "_native/x86_64/lib",
+        "_native/x86_64/hdf5-plugins",
         "_native/share/gdal",
         "_native/share/proj",
         "_vendor/x86_64",
@@ -153,6 +176,7 @@ def test_both_activators_apply_the_rules_only_on_cpython_312(
             == "/u/ssl.pem"
         )
         assert os.environ["PROJ_DATA"] == f"{root}/_native/share/proj"
+        assert os.environ["HDF5_PLUGIN_PATH"] == f"{root}/_native/x86_64/hdf5-plugins"
     else:
         assert sys.path == [stdlib, site]
         assert not {
@@ -160,4 +184,7 @@ def test_both_activators_apply_the_rules_only_on_cpython_312(
             "PROJ_DATA",
             "GDAL_CURL_CA_BUNDLE",
             "PROJ_CURL_CA_BUNDLE",
+            "HDF5_PLUGIN_PATH",
         } & set(os.environ)
+    # the HTTP version is GDAL's and curl's choice (or the user's GDAL_HTTP_VERSION); the payload never decides it
+    assert "GDAL_HTTP_VERSION" not in os.environ

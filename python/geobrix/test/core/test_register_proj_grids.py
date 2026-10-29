@@ -89,3 +89,13 @@ def test_register_proj_grids_light_only_no_heavy_warn(recwarn):
     # register_proj_grids on a light-only session must not emit the heavy-volume warning.
     crs_grids.register_proj_grids(spark=None, dirs="/Volumes/c/s/proj-grids")
     assert not any("heavyweight tier" in str(w.message) for w in recwarn.list)
+
+
+def test_projsync_path_is_the_payloads(monkeypatch):
+    # the public accessor hands back the env wheel's projsync (None without the payload)
+    from databricks.labs.gbx import _native
+
+    monkeypatch.setattr(
+        _native, "projsync_path", lambda: "/payload/_native/x86_64/bin/projsync"
+    )
+    assert crs_grids.projsync_path() == "/payload/_native/x86_64/bin/projsync"

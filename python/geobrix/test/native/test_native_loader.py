@@ -37,6 +37,9 @@ def _payload(root):
         "sonames": {"libgdal.so.39": "libgdal-0a1b2c3d.so.39"},
     }
     (root / "_native" / "x86_64" / "MANIFEST.json").write_text(json.dumps(manifest))
+    (root / "_native" / "x86_64" / "bin").mkdir()
+    (root / "_native" / "x86_64" / "bin" / "projsync").write_bytes(b"\x7fELF")
+    (root / "_native" / "x86_64" / "bin" / "projsync").chmod(0o755)
     for d in (
         "_native/share/gdal",
         "_native/share/proj",
@@ -98,6 +101,7 @@ def test_the_payload_is_used_only_where_it_can_load(tmp_path, monkeypatch):
         == f"{r}/_native/x86_64/lib/libgdal-0a1b2c3d.so.39"
     )
     assert _native.jar_path(r) == f"{r}/_jar/geobrix-0.6.0-jar-with-dependencies.jar"
+    assert _native.projsync_path(r, "x86_64") == f"{r}/_native/x86_64/bin/projsync"
 
     # A second call changes nothing.
     before = _state()
@@ -122,6 +126,7 @@ def test_the_payload_is_used_only_where_it_can_load(tmp_path, monkeypatch):
     assert (
         _native.native_dir(r, "arm64") is None
         and _native.libgdal_path(r, "arm64") is None
+        and _native.projsync_path(r, "arm64") is None
     )
     monkeypatch.setattr(sys, "platform", "linux")
     assert _native.activate(root=r, machine="riscv64") is False

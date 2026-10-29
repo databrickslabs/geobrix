@@ -4,6 +4,10 @@
   whether it came from the payload, and the libgdal files the process maps (one: the payload's).
   An ``osgeo`` on another GDAL than rasterio's is reported (both versions and files), not raised.
 - ``light()``: raster, vector, CRS, geometry and netCDF checks in this process, no Spark.
+- ``natives()``: the payload's build options, no Spark: netCDF-4 zstd/blosc/bzip2 through netCDF4 and
+  GDAL (the HDF5 filter plugins), the PROJ grids (OSTN15 against Ordnance Survey's test points, OSGM15
+  and EGM96 heights, no network), GTiff JXL, REGEXP (PCRE2) and muparser, libjpeg-turbo SIMD and curl
+  HTTP/2 (with ``GDAL_HTTP_VERSION`` left unset), and projsync.
 - ``light_sql(spark)`` / ``heavy_sql(spark, scratch_dir)``: the same GeoTIFF through the light and
   the heavy SQL functions; heavy also reads a Shapefile and checks the driver JVM's GDAL.
 - ``install_paths(spark)``: where the driver and each executor import geobrix from.
@@ -234,6 +238,233 @@ def light():
         "transform": _run(_transform),
         "geometry": _run(_geometry),
         "netcdf": _run(_netcdf),
+    }
+    return {"ok": all(c["ok"] for c in checks.values()), "checks": checks}
+
+
+# ---- natives(): the build options of the payload (one row each), in this process, no Spark; the same call on Databricks.
+
+# (E, N) OSGB36 / British National Grid -> (lat, lon) ETRS89: Ordnance Survey's OSTN15 test data
+# (OSTN15_TestInput_OSGBtoETRS.txt / OSTN15_TestOutput_OSGBtoETRS.txt in OS's OSTN15-NTv2.zip), points TP01, TP09, TP16,
+# TP26 and TP40. With the OSTN15 grid PROJ matches them to a few millimetres; its Helmert fallback misses by metres.
+OSTN15_TEST_POINTS = [
+    ((91492.146, 11318.804), (49.92226393730, -6.29977752014)),
+    ((530624.974, 178388.464), (51.48936564950, -0.11992557180)),
+    ((357455.843, 383290.436), (53.34480280190, -2.64049320810)),
+    ((256340.925, 664697.269), (55.85399952950, -4.29649016251)),
+    ((395999.668, 1138728.951), (60.13308091660, -2.07382822798)),
+]
+GEOIDS = (  # grid, ellipsoidal CRS, compound CRS with the orthometric height
+    ("uk_os_OSGM15_GB.tif", "EPSG:4937", "EPSG:4258+5701"),
+    ("us_nga_egm96_15.tif", "EPSG:4979", "EPSG:4326+5773"),
+)
+
+
+def _payload_lib(prefix):
+    from databricks.labs.gbx import _native
+
+    d = _native.native_dir()
+    names = json.load(open(os.path.join(d, "MANIFEST.json")))["sonames"]
+    return os.path.join(
+        d, "lib", next(v for k, v in names.items() if k.startswith(prefix))
+    )
+
+
+def _netcdf_filters():
+    """zstd, blosc and bzip2 netCDF-4 variables written by netCDF4 read back the same through netCDF4 and GDAL."""
+    import netCDF4
+    import numpy as np
+    import rasterio
+
+    a = (np.arange(64 * 48, dtype=np.float32).reshape(64, 48) % 251) * 0.5
+    out, d = {}, tempfile.mkdtemp(prefix="gbx-nc-filters-")
+    for codec in ("zstd", "blosc_lz4", "bzip2"):
+        path = os.path.join(d, f"{codec}.nc")
+        with netCDF4.Dataset(path, "w", format="NETCDF4") as nc:
+            nc.createDimension("y", 64)
+            nc.createDimension("x", 48)
+            v = nc.createVariable("v", "f4", ("y", "x"), compression=codec, complevel=4)
+            v[:] = a
+            used = v.filters()
+        with netCDF4.Dataset(path) as nc:
+            back = np.asarray(nc["v"][:])
+        with rasterio.Env(GDAL_NETCDF_BOTTOMUP="NO"):
+            with rasterio.open(f'NETCDF:"{path}":v') as ds:
+                gdal_back = ds.read(1)
+        key = codec.split("_")[0]
+        if (
+            not used.get(key)
+            or not np.array_equal(back, a)
+            or not np.array_equal(gdal_back, a)
+        ):
+            return False, {
+                "codec": codec,
+                "filters": used,
+                "plugin_path": os.environ.get("HDF5_PLUGIN_PATH"),
+            }
+        out[codec] = os.path.getsize(path)
+    return True, {"bytes": out, "plugin_path": os.environ.get("HDF5_PLUGIN_PATH")}
+
+
+def _grids():
+    """OSTN15 against Ordnance Survey's test points; OSGM15 and EGM96 heights both ways at a node; no network."""
+    import numpy as np
+    import pyproj
+    import rasterio
+
+    t = pyproj.Transformer.from_crs("EPSG:27700", "EPSG:4258", always_xy=True)
+    errs = []
+    for (e, n), (lat, lon) in OSTN15_TEST_POINTS:
+        x, y = t.transform(e, n)
+        errs.append(
+            math.hypot(
+                (y - lat) * 111320.0, (x - lon) * 111320.0 * math.cos(math.radians(lat))
+            )
+        )
+    share = pyproj.datadir.get_data_dir().split(os.pathsep)[0]
+    heights = {}
+    for grid, src, dst in GEOIDS:
+        with rasterio.open(os.path.join(share, grid)) as ds:
+            r, c = ds.height // 2, ds.width // 2
+            v = ds.read(1, window=((r, r + 1), (c, c + 50)))[0]
+            c += int(np.argmax(v != ds.nodata)) if ds.nodata is not None else 0
+            n_ = float(ds.read(1, window=((r, r + 1), (c, c + 1)))[0, 0])
+            lon, lat = ds.xy(r, c)
+        fwd = pyproj.Transformer.from_crs(src, dst, always_xy=True)
+        h_ = fwd.transform(lon, lat, 100.0)[2]
+        back = fwd.transform(lon, lat, h_, direction="INVERSE")[2]
+        heights[grid] = {"N": round(n_, 4), "H": round(h_, 4), "back": round(back, 4)}
+        if abs(h_ - (100.0 - n_)) > 1e-3 or abs(back - 100.0) > 1e-3 or abs(n_) < 1:
+            return False, {"grid": grid, **heights[grid]}
+    network = pyproj.network.is_network_enabled()
+    return max(errs) < 0.01 and not network, {
+        "ostn15_max_error_mm": round(max(errs) * 1000, 2),
+        "heights": heights,
+        "network": network,
+    }
+
+
+def _jxl():
+    """GTiff COMPRESS=JXL, lossless, UInt16: written and read back exactly."""
+    import numpy as np
+    import rasterio
+
+    a = (np.arange(64 * 64, dtype=np.uint16).reshape(64, 64) * 13) % 4096
+    path = os.path.join(tempfile.mkdtemp(prefix="gbx-jxl-"), "t.tif")
+    with rasterio.open(path, "w", driver="GTiff", width=64, height=64, count=1, dtype="uint16", compress="JXL",
+                       JXL_LOSSLESS="YES") as ds:  # fmt: skip
+        ds.write(a, 1)
+    with rasterio.open(path) as ds:
+        back, comp = ds.read(1), ds.compression
+    return np.array_equal(back, a) and str(comp).upper().endswith("JXL"), {
+        "compression": str(comp)
+    }
+
+
+def _regexp_and_calc():
+    """REGEXP (PCRE2) on a GPKG through GDAL's SQLite dialect (INDIRECT_SQLITE: GDAL builds PCRE2 into its SQLite
+    driver only, so a GPKG's own SQL has REGEXP only once that driver has run in the process), and
+    `gdal raster calc --dialect=muparser` (osgeo's gdal.Run)."""
+    import numpy as np
+
+    from databricks.labs.gbx._osgeo import bindings
+
+    b = bindings("natives")
+    gdal, ogr = b.gdal, b.ogr
+    d = tempfile.mkdtemp(prefix="gbx-regexp-")
+    ds = ogr.GetDriverByName("GPKG").CreateDataSource(os.path.join(d, "r.gpkg"))
+    lyr = ds.CreateLayer("t", None, ogr.wkbPoint)
+    lyr.CreateField(ogr.FieldDefn("name", ogr.OFTString))
+    for v in ("cafe", "car", "bar"):
+        f = ogr.Feature(lyr.GetLayerDefn())
+        f.SetField("name", v)
+        lyr.CreateFeature(f)
+    ds = None
+    ds = ogr.Open(os.path.join(d, "r.gpkg"))
+    rs = ds.ExecuteSQL(
+        "SELECT name FROM t WHERE name REGEXP '^ca' ORDER BY name",
+        dialect="INDIRECT_SQLITE",
+    )
+    names = [r.GetField(0) for r in rs]
+    ds.ReleaseResultSet(rs)
+    ds = None
+    a = np.full((8, 8), 30.0, np.float32)
+    b = np.full((8, 8), 10.0, np.float32)
+    src = gdal.GetDriverByName("GTiff").Create(
+        os.path.join(d, "ab.tif"), 8, 8, 2, gdal.GDT_Float32
+    )
+    src.GetRasterBand(1).WriteArray(a)
+    src.GetRasterBand(2).WriteArray(b)
+    src = None
+    with gdal.Run("raster", "calc", input=f"A={os.path.join(d, 'ab.tif')}", calc="(A[1]-A[2])/(A[1]+A[2])",
+                  dialect="muparser", output_data_type="Float32", output=os.path.join(d, "c.tif")):  # fmt: skip
+        pass
+    out = gdal.Open(os.path.join(d, "c.tif"))  # keep the dataset while its band is read
+    got = out.GetRasterBand(1).ReadAsArray()
+    return names == ["cafe", "car"] and np.allclose(got, 0.5), {
+        "regexp": names,
+        "calc": float(got[0, 0]),
+    }
+
+
+def _libraries():
+    """libjpeg-turbo has its SIMD dispatcher; libcurl speaks HTTP/2; GDAL_HTTP_VERSION is left to GDAL."""
+    import ctypes
+
+    jpeg = open(_payload_lib("libjpeg.so."), "rb").read()
+    curl = ctypes.CDLL(_payload_lib("libcurl.so."))
+    curl.curl_version.restype = ctypes.c_char_p
+    version = curl.curl_version().decode()
+    simd = b"JSIMD_FORCENONE" in jpeg
+    return simd and "nghttp2/" in version and "GDAL_HTTP_VERSION" not in os.environ, {
+        "jpeg_simd": simd,
+        "curl": version,
+        "gdal_http_version": os.environ.get("GDAL_HTTP_VERSION"),
+    }
+
+
+def _projsync():
+    """projsync runs; it lists the CDN's uk_os files when there is network (else skipped, with the reason)."""
+    import subprocess
+
+    from databricks.labs.gbx import _native
+
+    tool = _native.projsync_path()
+    if tool is None:
+        return False, {"error": "no projsync in the payload"}
+    usage = subprocess.run([tool, "--help"], capture_output=True, text=True, timeout=60)
+    ok = (
+        "--target-dir" in usage.stdout + usage.stderr
+    )  # it prints its usage and exits 1
+    try:
+        r = subprocess.run(
+            [tool, "--list-files", "--source-id", "uk_os"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        listed = r.returncode == 0 and "uk_os_OSTN15_NTv2_OSGBtoETRS.tif" in r.stdout
+        listing = (
+            {"list_files": listed}
+            if listed
+            else {"list_files": "skipped", "reason": (r.stderr or r.stdout)[-200:]}
+        )
+    except subprocess.TimeoutExpired:
+        listing = {
+            "list_files": "skipped",
+            "reason": "timed out after 60 s (no network)",
+        }
+    return ok, {"tool": tool, **listing}
+
+
+def natives():
+    checks = {
+        "netcdf_filters": _run(_netcdf_filters),
+        "grids": _run(_grids),
+        "jxl": _run(_jxl),
+        "regexp_and_calc": _run(_regexp_and_calc),
+        "libraries": _run(_libraries),
+        "projsync": _run(_projsync),
     }
     return {"ok": all(c["ok"] for c in checks.values()), "checks": checks}
 

@@ -9,7 +9,7 @@ so on the heavyweight tier grids must live on a cluster-local path.
 import importlib
 import os
 import warnings
-from typing import List, Sequence, Union
+from typing import List, Optional, Sequence, Union
 
 from databricks.labs.gbx.core import proj_grids
 
@@ -94,6 +94,20 @@ def _apply_heavy(spark, result) -> None:
         return  # heavy classes absent (light-only session) → no-op
     # Heavy tier IS active: warn if any registered dir is a Volume executors can't read.
     _warn_heavy_volume_grids(result)
+
+
+def projsync_path() -> Optional[str]:
+    """PROJ's grid downloader, ``projsync``, as the GeoBrix env wheel installs it, or None (no env
+    wheel, or not on Linux x86_64/aarch64).
+
+    Run it to fetch grids from the PROJ CDN (cdn.proj.org, so it needs network access) into a local
+    directory or a Volume, e.g. ``subprocess.run([projsync_path(), "--source-id", "uk_os",
+    "--target-dir", "/Volumes/<catalog>/<schema>/proj-grids"], check=True)``, then register that
+    directory with :func:`register_proj_grids`. ``--list-files`` lists what the CDN offers.
+    """
+    from databricks.labs.gbx import _native
+
+    return _native.projsync_path()
 
 
 def register_proj_grids(

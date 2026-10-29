@@ -228,8 +228,12 @@ def test_a_rust_kernel_ships_its_crates_licence_notices(
     out = nat / "licenses" / "rust" / "k"
     shipped = {p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file()}
     want = {f"{n}-1.0.0/{f}" for n, fs in {**vendored, **overrides}.items() for f in fs}
+    # the Rust standard library is compiled into every kernel: its MIT / Apache-2.0 notice ships too
+    std = bew.rust_std_version()
+    want |= {f"rust-std-{std}/{f}" for f in ("LICENSE-MIT", "LICENSE-APACHE", "NOTICE.txt")}
     assert shipped == want | {"INDEX.txt"}
     assert "b 1.0.0 (MIT): " in (out / "INDEX.txt").read_text()
+    assert f"rust-std {std} (MIT OR Apache-2.0): " in (out / "INDEX.txt").read_text()
 
 
 @pytest.mark.parametrize(

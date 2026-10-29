@@ -130,6 +130,14 @@ HASHED_NEED = re.compile(rb"lib[A-Za-z0-9_+]+-[0-9a-f]{8}\.so[.0-9]*")
 # MIT LICENSE.txt is georust/gdal's at the release tag v0.19.0).
 RUST_NOTICE = re.compile(r"(LICEN[CS]E|COPYING|NOTICE|UNLICENSE|COPYRIGHT)", re.I)
 RUST_LICENCE_OVERRIDES = REPO / "scripts" / "native" / "rust-licenses"
+# The Rust standard library is compiled into every kernel: its MIT / Apache-2.0 notice (the pinned toolchain's own
+# licence texts) goes in each kernel's index as rust-std-<toolchain version>/.
+RUST_STD_NOTICE = RUST_LICENCE_OVERRIDES / "rust-std"
+# Per architecture beside lib/: netCDF-C's HDF5 filter plugins (HDF5_PLUGIN_PATH) and PROJ's grid downloader
+NATIVE_EXTRAS = ("hdf5-plugins", "bin/projsync")
+FILTER_PLUGINS = ("lib__nch5zstd.so", "lib__nch5blosc.so", "lib__nch5bzip2.so")
+# MANIFEST.json version keys whose licence directory is named otherwise (the build's dependency names)
+LICENCE_DIRS = {"cblosc": "c-blosc", "libjpeg_turbo": "libjpeg-turbo", "netcdf_c": "netcdf-c"}
 RUST_VENDOR = REPO / "build" / "native" / "vendor"
 PY312_LINUX = {
     "python_version": "3.12",
@@ -542,6 +550,15 @@ def add_payload(args, tree, natives, bindings, version):
             fail(
                 f"{a}: lib/ holds {sorted(have ^ want)} beyond or short of MANIFEST.json's libraries"
             )
+        for extra in NATIVE_EXTRAS:
+            src = natives[a] / extra
+            if not src.exists():
+                fail(f"{src} is missing (gdal-native from before netCDF plugins and projsync)")
+            if src.is_dir():
+                copy_files(src, nat / a / extra)
+            else:
+                (nat / a / extra).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, nat / a / extra)
         vendor = pkg / "_vendor" / a
         copy_files(bindings[a] / "vendor", vendor)
         if list(vendor.rglob("*.dist-info")):
@@ -549,7 +566,8 @@ def add_payload(args, tree, natives, bindings, version):
         add_osgeo(natives, bindings, vendor, a)
         # The bindings record hashed SONAMEs, which change with every gdal-native rebuild: a binding
         # tree linked against another build names libraries this lib/ does not have.
-        for so in vendor.rglob("*.so"):
+        elfs = [*vendor.rglob("*.so"), *(nat / a / "hdf5-plugins").glob("*.so"), nat / a / "bin" / "projsync"]
+        for so in elfs:
             stale = {m.decode() for m in HASHED_NEED.findall(so.read_bytes())} - have
             if stale:
                 fail(
@@ -618,6 +636,11 @@ def kernel_crate(module, root=REPO):
     return None
 
 
+def rust_std_version(root=REPO):
+    """The pinned Rust toolchain (rust-toolchain.toml), whose standard library every kernel links."""
+    return tomllib.loads((root / "rust-toolchain.toml").read_text())["toolchain"]["channel"]
+
+
 def collect_rust_licences(crate, vendor, out, overrides=None):
     """Copy the licence files of every registry crate in crate/Cargo.lock (build-only ones included: a notice
     too many is harmless, one missing is not) from `vendor` (cargo vendor --versioned-dirs) to
@@ -650,6 +673,16 @@ def collect_rust_licences(crate, vendor, out, overrides=None):
         for f in files:
             shutil.copyfile(f, dest / f.name)
         index.append(f"{name} {ver} ({declared}): {', '.join(f.name for f in files)}")
+    std = rust_std_version()
+    files = sorted(p for p in RUST_STD_NOTICE.glob("*") if p.is_file())
+    if not files:
+        gaps.append(f"rust-std {std}")
+    else:
+        dest = out / f"rust-std-{std}"
+        dest.mkdir(parents=True, exist_ok=True)
+        for f in files:
+            shutil.copyfile(f, dest / f.name)
+        index.append(f"rust-std {std} (MIT OR Apache-2.0): {', '.join(f.name for f in files)}")
     if not gaps:
         (out / "INDEX.txt").write_text(
             f"The crates compiled into {crate.name} (from its Cargo.lock) and their licence files.\n"
@@ -895,6 +928,20 @@ def verify_payload(zf, version, epoch):
         for binding in ("rasterio", "osgeo"):
             if f"{PKG}/_vendor/{a}/{binding}/__init__.py" not in names:
                 fail(f"{a}: the vendored {binding} is not in the wheel")
+        for plugin in FILTER_PLUGINS:
+            if f"{PKG}/_native/{a}/hdf5-plugins/{plugin}" not in names:
+                fail(f"{a}: the HDF5 filter plugin {plugin} is not in the wheel")
+        projsync = f"{PKG}/_native/{a}/bin/projsync"
+        if projsync not in names or not (zf.getinfo(projsync).external_attr >> 16) & 0o111:
+            fail(f"{a}: {projsync} is not in the wheel as an executable")
+        for grid in manifest.get("proj_grids", {}):
+            if f"{PKG}/_native/share/proj/{grid}" not in names:
+                fail(f"the PROJ grid {grid} is not in the wheel")
+        # the licence index: one directory per library the build record names (gdal-native's own names)
+        for dep in manifest.get("versions", {}):
+            d = LICENCE_DIRS.get(dep, dep)
+            if not any(n.startswith(f"{PKG}/_native/licenses/{d}/") for n in names):
+                fail(f"{dep} ({manifest['versions'][dep]}) has no licence in _native/licenses/{d}/")
     for need in (
         f"{PKG}/_vendor/common/osgeo_utils/gdal_calc.py",
         f"{PKG}/_native/licenses/osgeo/LICENSE.TXT",
@@ -904,6 +951,7 @@ def verify_payload(zf, version, epoch):
         "_gbx_native_path.py",
         f"{PKG}/_build_info.py",
         f"{PKG}/_native/share/proj/proj.db",
+        f"{PKG}/_native/licenses/proj-grids/NOTICE.txt",
         f"{PKG}/_native/__init__.py",
         f"{PKG}/_native/_rules.py",
         f"{PKG}/_native/_selfcheck.py",

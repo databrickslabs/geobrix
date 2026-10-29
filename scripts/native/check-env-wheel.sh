@@ -15,6 +15,10 @@
 #   7 selfcheck: _selfcheck.light() passes, every binding from the payload (GDAL's own osgeo and osgeo_utils too, and
 #     osgeo_utils.gdal_calc and osgeo.gdal_array import), one libgdal mapped (rasterio's and osgeo's, the same
 #     version), no foreign GDAL library mapped
+#   8 natives: _selfcheck.natives() passes: netCDF-4 zstd/blosc/bzip2 through netCDF4 and GDAL (HDF5_PLUGIN_PATH set by the
+#     activation), OSTN15 against Ordnance Survey's test points, OSGM15 and EGM96 heights, PROJ network off, GTiff JXL,
+#     REGEXP and muparser, libjpeg-turbo SIMD, curl HTTP/2 with GDAL_HTTP_VERSION unset, projsync (its CDN listing is
+#     skipped here: --network none)
 set -uo pipefail
 ENV="$1"; VERSION="$2"; OTHER=$((11 - ENV)); ARCH="$(uname -m)"
 PY=/opt/python/cp312-cp312/bin/python PY311=/opt/python/cp311-cp311/bin/python
@@ -22,7 +26,7 @@ WHL="/dist/geobrix-$VERSION+env$ENV-py3-none-any.whl"
 FAILS=0
 ok() { echo "ok: $*"; }
 bad() { echo "CHECK FAILED: $*"; FAILS=$((FAILS + 1)); }
-unset SSL_CERT_FILE CURL_CA_BUNDLE GDAL_CURL_CA_BUNDLE PROJ_CURL_CA_BUNDLE GDAL_DATA PROJ_DATA PROJ_LIB LD_LIBRARY_PATH
+unset SSL_CERT_FILE CURL_CA_BUNDLE GDAL_CURL_CA_BUNDLE PROJ_CURL_CA_BUNDLE GDAL_DATA PROJ_DATA PROJ_LIB LD_LIBRARY_PATH HDF5_PLUGIN_PATH GDAL_HTTP_VERSION
 pipq() { "$1" -m pip --disable-pip-version-check "${@:2}"; }
 
 V=/tmp/v
@@ -105,6 +109,17 @@ PY
 echo "$out" | grep -q '^P8_RESULT {"import_s".*"ok": true}$' && ok "7 selfcheck: _selfcheck.light() ok, 5/5 bindings + osgeo (gdal_array) + osgeo_utils (gdal_calc) from the payload, one libgdal, no foreign GDAL library" \
     || bad "7 selfcheck"
 echo "$out" | grep '^P8_RESULT' || echo "$out" | tail -5
+
+out="$("$V/bin/python" - 2>&1 <<'PY'
+import json
+import databricks.labs.gbx  # noqa: F401
+from databricks.labs.gbx._native import _selfcheck as s
+print("N5_RESULT " + json.dumps(s.natives()))
+PY
+)"
+echo "$out" | grep -q '^N5_RESULT {"ok": true' && ok "8 natives: netCDF zstd/blosc/bzip2 via netCDF4 and GDAL, OSTN15/OSGM15/EGM96, JXL, REGEXP, muparser, JPEG SIMD, curl HTTP/2, projsync" \
+    || bad "8 natives"
+echo "$out" | grep '^N5_RESULT' || echo "$out" | tail -5
 
 echo "ENV_WHEEL_VERIFIED env=$ENV arch=$ARCH failures=$FAILS"
 [ "$FAILS" = 0 ]

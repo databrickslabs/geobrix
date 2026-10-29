@@ -16,6 +16,12 @@ The rules:
   copies. ``PYTHONPATH`` entries stay ahead of them. With no such entry they are appended.
 - **Data.** ``GDAL_DATA`` and ``PROJ_DATA`` point at ``_native/share``, each only when unset;
   ``PROJ_DATA`` is not set when the user set ``PROJ_LIB`` (PROJ's older name, still read).
+- **HDF5 filter plugins.** ``HDF5_PLUGIN_PATH`` points at ``_native/<arch>/hdf5-plugins`` (netCDF-C's
+  zstd, blosc, bzip2, ... filters) only when unset, so a user's own plugin directory wins. HDF5 and
+  netCDF-C read it when they first load a filter, so it is set before any binding is imported.
+- **HTTP version.** ``GDAL_HTTP_VERSION`` is never set. Unset, GDAL leaves the version to the
+  payload's curl, which offers HTTP/2 to an https server by ALPN (HTTP/1.1 where the server has
+  no HTTP/2); a user's value (``1.1``, ``2TLS``, ...) decides it.
 - **CA.** For each of ``GDAL_CURL_CA_BUNDLE`` and ``PROJ_CURL_CA_BUNDLE``: a value the user set is
   never touched (even an empty one); otherwise it gets the user's ``CURL_CA_BUNDLE``, else the
   user's ``SSL_CERT_FILE`` (a non-empty value), else the first system store that exists, else the
@@ -73,6 +79,12 @@ def set_data_dirs(env, share):
         env.setdefault("PROJ_DATA", os.path.join(share, "proj"))
 
 
+def set_plugin_path(env, plugins):
+    """``HDF5_PLUGIN_PATH`` at the payload's filter plugins, when unset and they exist."""
+    if os.path.isdir(plugins):
+        env.setdefault("HDF5_PLUGIN_PATH", plugins)
+
+
 def ca_for(env, candidates=SYSTEM_CA, fallback=None):
     """The bundle our GDAL and PROJ get when their own variable is unset, or None."""
     for name in USER_CA:
@@ -113,5 +125,6 @@ def activate(root, arch, path=None, env=None, candidates=SYSTEM_CA, fallback=Non
         [os.path.join(root, "_vendor", arch), os.path.join(root, "_vendor", "common")],
     )
     set_data_dirs(env, os.path.join(root, "_native", "share"))
+    set_plugin_path(env, os.path.join(root, "_native", arch, "hdf5-plugins"))
     set_ca(env, candidates, fallback)
     return True

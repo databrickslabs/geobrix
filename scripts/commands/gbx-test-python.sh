@@ -205,30 +205,9 @@ paths_need_zarr() {
     return 1
 }
 
-# True when every pin of the [zarr_dbr19] extra, read from pyproject.toml (the single source),
-# is satisfied by what is installed in the container.
-zarr_extra_installed() {
-    docker exec -i geobrix-dev python3 - >/dev/null 2>&1 <<'PY'
-import importlib.metadata as md
-import tomllib
-
-from packaging.requirements import Requirement
-
-with open("/root/geobrix/python/geobrix/pyproject.toml", "rb") as f:
-    pins = tomllib.load(f)["project"]["optional-dependencies"]["zarr_dbr19"]
-for pin in map(Requirement, pins):
-    # PackageNotFoundError (not installed) is a non-zero exit too.
-    if not pin.specifier.contains(md.version(pin.name), prereleases=True):
-        raise SystemExit(f"{pin.name} {md.version(pin.name)} does not satisfy {pin}")
-PY
-}
-
 # Everything test/zarr needs that the base dev image does not carry. Called only when test/zarr
 # is among the selected tests, so other runs pay nothing.
-#   * the [zarr_dbr19] extra. The pins are NOT repeated here: pip installs the extra from
-#     pyproject.toml, so a pin change reaches the container without touching this script.
-#     `-e` re-resolves only that extra for the already-editable geobrix. Remove once the dev
-#     image bakes it in (requirements-dev-container.txt).
+#   * the [zarr_dbr19] extra (ensure_zarr_extra in common.sh, shared with gbx:test:python-docs).
 #   * the OSS Delta Lake jars, which the manifest tests run against in a local Spark session
 #     (test/conftest.py puts them on the JVM classpath when test/zarr is collected). They are
 #     not a pip package and Spark's Ivy resolver cannot reach the dev proxy, so
@@ -237,12 +216,7 @@ PY
 #     fail loudly, naming it); a sha256 MISMATCH (exit 3) aborts, so tampered jars are never
 #     put on a classpath.
 ensure_zarr_test_env() {
-    if ! zarr_extra_installed; then
-        echo -e "${CYAN}📦 Installing the zarr_dbr19 extra into geobrix-dev${NC}"
-        docker exec geobrix-dev /bin/bash -c \
-            "pip3 install --break-system-packages --quiet -e '/root/geobrix/python/geobrix[zarr_dbr19]'" \
-            || echo -e "${YELLOW}⚠️  zarr_dbr19 install failed: zarr tests will fail on import${NC}"
-    fi
+    ensure_zarr_extra
     local rc=0
     docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash /root/geobrix/scripts/ci/fetch-delta-test-jars.sh || rc=$?
     if [ "$rc" -eq 3 ]; then

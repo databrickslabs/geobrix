@@ -45,6 +45,7 @@ Use `--skip-build` when the tree is already built to avoid extra time. Doc tests
 3. **Maven** – `mvn package -DskipTests`.
 4. **Python build** – `python3 -m build` in `python/geobrix/`, then `pip install -e python/geobrix`. Use `--skip-build` when already built.
 5. **Delta jars (Zarr doc tests only)** – When the target covers a Zarr doc test (the full suite, `--path formats/`, a whole `readers/`, `writers/` or `api/` directory, or any path or `--test` that names `zarr`) the command first runs `scripts/ci/fetch-delta-test-jars.sh` in the container, under the work lock: the Zarr examples keep a store's manifest in a Delta table and need the delta-spark jars on the JVM classpath. It does nothing when `scripts/docker/m2` already holds them; a sha256 mismatch (exit 3) aborts, and a missing jar is a warning (the Zarr tests then fail naming it).
+6. **Zarr extra (Zarr doc tests only)** – Under the same condition the command first checks that every pin of the `zarr_dbr19` extra in `pyproject.toml` is installed in the container and installs the extra when it is not (an image built before it was baked in would otherwise skip the Zarr tests with exit 0).
 
 ## Usage
 

@@ -152,6 +152,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# One spelling of the target for every comparison below: a "." or "./" segment names the same
+# directory (`--path .` is the whole suite, `--path ./readers` is readers/), and pytest collects it
+# alike, so the api/ exclusion and the Zarr gate must not read them as other paths.
+TEST_PATH="$(printf '%s' "$TEST_PATH" | sed -E 's#/(\./)+#/#g; s#/\.$#/#')"
+
 # When running the default full suite (entire docs/tests/python/), exclude api/
 # so gbx:test:python-docs and gbx:test:sql-docs stay isolated. Use --suite api to run SQL/API tests.
 SKIP_SQL_TESTS=false
@@ -190,6 +195,9 @@ fi
 # formats/, a whole readers/ writers/ or api/ directory, or any path that names zarr.
 if [[ "$TEST_PATH" == "${BASE}/" || "$TEST_PATH" == *"/formats"* || "$TEST_PATH" == *zarr* \
       || "$TEST_PATH" =~ ^${BASE}/(readers|writers|api)/?$ ]]; then
+    # A dev image built before the zarr extra was baked in would make the Zarr tests skip on their
+    # importorskip, which exits 0: install it first, as gbx:test:python does.
+    ensure_zarr_extra
     FETCH_RC=0
     docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash /root/geobrix/scripts/ci/fetch-delta-test-jars.sh || FETCH_RC=$?
     if [ "$FETCH_RC" -eq 3 ]; then

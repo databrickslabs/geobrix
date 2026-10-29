@@ -507,10 +507,42 @@ gbx_python_with_sdk() {
     fi
 }
 
+# True when every pin of the [zarr_dbr19] extra, read from pyproject.toml (the single source),
+# is satisfied by what is installed in the container. Used by the commands that run Zarr tests.
+zarr_extra_installed() {
+    docker exec -i geobrix-dev python3 - >/dev/null 2>&1 <<'PY'
+import importlib.metadata as md
+import tomllib
+
+from packaging.requirements import Requirement
+
+with open("/root/geobrix/python/geobrix/pyproject.toml", "rb") as f:
+    pins = tomllib.load(f)["project"]["optional-dependencies"]["zarr_dbr19"]
+for pin in map(Requirement, pins):
+    # PackageNotFoundError (not installed) is a non-zero exit too.
+    if not pin.specifier.contains(md.version(pin.name), prereleases=True):
+        raise SystemExit(f"{pin.name} {md.version(pin.name)} does not satisfy {pin}")
+PY
+}
+
+# Install the [zarr_dbr19] extra into geobrix-dev when its pins are not all met: a dev image built
+# before it was baked in (requirements-dev-container.txt) would otherwise make a Zarr test skip on
+# its importorskip, or fail on import. The pins are NOT repeated here: pip installs the extra from
+# pyproject.toml, so a pin change reaches the container without touching this file. `-e`
+# re-resolves only that extra for the already-editable geobrix. Remove once no image lacks it.
+ensure_zarr_extra() {
+    if ! zarr_extra_installed; then
+        echo -e "${CYAN}📦 Installing the zarr_dbr19 extra into geobrix-dev${NC}"
+        docker exec geobrix-dev /bin/bash -c \
+            "pip3 install --break-system-packages --quiet -e '/root/geobrix/python/geobrix[zarr_dbr19]'" \
+            || echo -e "${YELLOW}⚠️  zarr_dbr19 install failed: zarr tests will fail on import${NC}"
+    fi
+}
+
 # Export helpers + color vars so they survive any subshell that doesn't re-source this file
 # (observed on macOS bash 3.2: "show_separator: command not found" mid-script).
 export RED GREEN YELLOW BLUE CYAN NC GBX_DATABRICKS_SDK_SPEC DOCKER_MAVEN_ENV GBX_TEST_LOCK_FILE GBX_WORK_LOCK_FILE GBX_TEST_LOCK_TIMEOUT GBX_LOCK_NO_WAIT GBX_LOCK_CMD GBX_CONTAINER_ROOT GBX_CONTAINER_LOCK GBX_LOCK_RUN
 export -f check_docker resolve_log_path setup_log_file show_banner show_separator \
           print_report_link open_report generate_timestamp warn_if_jar_stale \
           print_banner print_separator setup_log run_in_pyrx_venv _gbx_py_ok gbx_python_with_sdk validate_set \
-          print_lock_help _gbx_lock_abort gbx_acquire_test_lock 2>/dev/null || true
+          print_lock_help _gbx_lock_abort gbx_acquire_test_lock zarr_extra_installed ensure_zarr_extra 2>/dev/null || true

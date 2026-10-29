@@ -705,12 +705,12 @@ NOT_WORK = [
     ),
     # zarr extra pin check
     (
-        "gbx-test-python.sh",
+        "common.sh",
         r"docker exec -i geobrix-dev python3 - >/dev/null 2>&1 <<'PY'",
     ),
     # zarr extra
     (
-        "gbx-test-python.sh",
+        "common.sh",
         r'docker exec geobrix-dev /bin/bash -c \\\n"pip3 install --break-system-packages --quiet -e \'/root/geobrix/python/geobrix\[zarr_dbr19\]\'" \\\n\|\| echo -e .*',
     ),
     # reads the pytest summary
@@ -1062,6 +1062,86 @@ def test_the_docs_command_only_warns_when_the_delta_jars_are_missing(sandbox):
     # the tests then fail loudly, naming the jars
     assert "Delta jars unavailable" in res.output
     assert [c for c in sandbox.execs() if "pytest" in c[-1]]
+
+
+@pytest.mark.parametrize(
+    "path, fetches",
+    [
+        (".", True),
+        ("./", True),
+        ("./formats/", True),
+        ("formats/.", True),
+        ("./ingestion/", False),
+        ("quickstart/./test_x.py", False),
+    ],
+)
+def test_the_docs_command_reads_a_dot_segment_as_the_path_it_names(
+    sandbox, path, fetches
+):
+    # `.` is the whole suite and `./formats/` is formats/: the Zarr gate must not read them as
+    # other paths, or pytest collects the Zarr tests on a container that lacks the jars.
+    sandbox.run("gbx-test-python-docs.sh", "--skip-build", "--path", path)
+
+    assert bool(_fetches(sandbox)) is fetches
+
+
+@pytest.mark.parametrize(
+    "path, api_excluded",
+    [(".", True), ("./", True), ("./api/", False), ("api/.", False)],
+)
+def test_the_whole_suite_leaves_api_to_the_sql_docs_however_it_is_spelled(
+    sandbox, path, api_excluded
+):
+    sandbox.run("gbx-test-python-docs.sh", "--skip-build", "--path", path)
+
+    (pytest_run,) = [c[-1] for c in sandbox.execs() if "pytest" in c[-1]]
+    assert ("--ignore=/root/geobrix/docs/tests/python/api" in pytest_run) is api_excluded
+
+
+def _pin_check_execs(sandbox):
+    return [c for c in sandbox.execs() if c == ["python3", "-"]]
+
+
+def _extra_installs(sandbox):
+    return [c for c in sandbox.execs() if any("pip3 install" in a for a in c)]
+
+
+def test_the_docs_command_installs_the_zarr_extra_a_stale_image_lacks(sandbox):
+    # A container built before the extra was baked in would skip the Zarr doc tests (importorskip)
+    # and exit 0. Run the pin check for real, on a python3 that fails it.
+    python3 = sandbox.bin / "python3"
+    python3.write_text("#!/bin/sh\nexit 1\n")
+    python3.chmod(0o755)
+
+    res = sandbox.run(
+        "gbx-test-python-docs.sh",
+        "--skip-build",
+        *("--path", "formats/"),
+        FAKE_DOCKER_RUN_MATCHING="^-$",
+    )
+
+    assert res.returncode == 0, res.output
+    (install,) = _extra_installs(sandbox)
+    assert "zarr_dbr19" in install[-1]
+    execs = sandbox.execs()
+    assert (
+        execs.index(install)
+        < execs.index(_fetches(sandbox)[0])
+        < max(i for i, c in enumerate(execs) if "pytest" in c[-1])
+    )  # before the jars, and both before the tests
+
+
+def test_the_docs_command_leaves_the_image_alone_when_the_zarr_extra_is_there(sandbox):
+    sandbox.run("gbx-test-python-docs.sh", "--skip-build", *("--path", "formats/"))
+
+    assert len(_pin_check_execs(sandbox)) == 1  # it looked
+    assert _extra_installs(sandbox) == []  # the pins held: nothing installed
+
+
+def test_the_docs_command_does_not_look_at_the_zarr_extra_for_other_targets(sandbox):
+    sandbox.run("gbx-test-python-docs.sh", "--skip-build", *("--suite", "quickstart"))
+
+    assert _pin_check_execs(sandbox) == [] and _extra_installs(sandbox) == []
 
 
 def test_the_exempt_notebook_runner_installs_geobrix_only_when_it_is_missing(sandbox):

@@ -40,6 +40,9 @@ case class ExpressionConfig(
         })
     }
 
+    /** The env wheel's `_native/<arch>` directory whose GDAL this JVM loads (see GDALManager.resolveNative). */
+    def nativeDir: Option[String] = configs.get(com.databricks.labs.gbx.rasterx.gdal.GDALManager.NativeDirKey)
+
     /** If true, expression errors surface as exceptions; if false, return null and optionally log. */
     def crashExpressions: Boolean = {
         configs.getOrElse("spark.databricks.labs.gbx.expressions.crash.on.error", "false").toBoolean

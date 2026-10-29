@@ -275,34 +275,17 @@ object MvtWriter {
         case other                                   => feat.SetField(fieldName, other.toString)
     }
 
-    @volatile private var nativeLoaded: Boolean = false
-    private val nativeLock = new Object
-
     /**
       * Ensure the GDAL JNI shared library is loaded on this JVM (executor or driver).
       *
       * `ogr.RegisterAll()` and `ogr.GetDriverByName` both require `libgdalalljni.so`
-      * to have been `System.load`-ed first. RasterX does this via
-      * `GDALManager.loadSharedObjects` when its `register(spark)` runs, but VectorX
-      * has no equivalent yet — and the call has to happen on the *executor* JVM
-      * before any OGR access, not just on the driver. Idempotent guard avoids
-      * reloading the library.
+      * to have been `System.load`-ed first, on the *executor* JVM before any OGR access,
+      * not just on the driver. GDALManager loads it once per JVM (the same GDAL RasterX
+      * uses); with no ExpressionConfig here, from `GBX_NATIVE_ROOT` or the system JNI.
       *
       * Package-private so `MvtDecoder` (same package) can call the shared guard
       * without duplicating the load path.
       */
-    private[mvt] def ensureNativeLoaded(): Unit = {
-        if (!nativeLoaded) {
-            nativeLock.synchronized {
-                if (!nativeLoaded) {
-                    val path = "/usr/lib/libgdalalljni.so"
-                    Try {
-                        if (Files.exists(Paths.get(path))) System.load(path)
-                    } // any failure surfaces as the original UnsatisfiedLinkError below
-                    nativeLoaded = true
-                }
-            }
-        }
-    }
+    private[mvt] def ensureNativeLoaded(): Unit = GDALManager.ensureJniLoaded(None)
 
 }

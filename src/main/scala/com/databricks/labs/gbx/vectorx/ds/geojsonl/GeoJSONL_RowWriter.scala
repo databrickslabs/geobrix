@@ -12,7 +12,7 @@ import org.gdal.ogr.ogrConstants._
 import org.gdal.ogr.{Feature, FieldDefn, Geometry}
 import org.gdal.osr.SpatialReference
 
-import java.nio.file.{Files, Paths}
+import java.nio.file.Files
 import java.util.Locale
 import scala.collection.mutable
 import scala.util.Try
@@ -259,23 +259,11 @@ class GeoJSONL_RowWriter(
 
 object GeoJSONL_RowWriter {
 
-    @volatile private var nativeLoaded: Boolean = false
-    private val nativeLock = new Object
-
     /**
       * Ensure the GDAL JNI shared library is loaded on this JVM before any OGR access. Mirrors
       * `MvtWriter.ensureNativeLoaded` - `GetDriverByName` / `RegisterAll` require
       * `libgdalalljni.so` to be `System.load`-ed first, and it must happen on the executor JVM.
+      * GDALManager loads it once per JVM, the same GDAL RasterX uses.
       */
-    private[geojsonl] def ensureNativeLoaded(): Unit = {
-        if (!nativeLoaded) {
-            nativeLock.synchronized {
-                if (!nativeLoaded) {
-                    val path = "/usr/lib/libgdalalljni.so"
-                    Try { if (Files.exists(Paths.get(path))) System.load(path) }
-                    nativeLoaded = true
-                }
-            }
-        }
-    }
+    private[geojsonl] def ensureNativeLoaded(): Unit = GDALManager.ensureJniLoaded(None)
 }

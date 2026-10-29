@@ -1,4 +1,4 @@
-"""Structural guard (C-2): every CRS parse site in the Scala and Python sources is the canonical resolver's, or an
+"""Structural guard: every CRS parse site in the Scala and Python sources is the canonical resolver's, or an
 allowlisted site with its reason. A new site outside the allowlist fails, in either language.
 
 - Scala (src/main/scala): a grep for the OSR parse calls (ImportFrom*, SetFromUserInput), `new SpatialReference(text)`
@@ -6,14 +6,16 @@ allowlisted site with its reason. A new site outside the allowlist fails, in eit
 - Python (python/geobrix/src): an AST walk for the parse calls (`CRS.from_*`, `Transformer.from_crs`, `to_crs`, and the
   osr methods), so a string in a call is found, not a line of text.
 
-The allowlist is by exact line: a new call on an allowlisted file is still a new site. A site is allowlisted only
-with its reason. The canonical resolvers (SpatialRefOps, core/crs.py) are the one place a CRS text is parsed on the
-user's path. This guard does not follow a CRS value into a keyword argument of a library call (rasterio's `crs=`);
-those values are resolved by their callers, which the C-2 sweep reviewed.
+The allowlist is keyed by file, the exact source text of the line, and the number of times that line occurs in the
+file: a new call in an allowlisted file is a new site, and so is a verbatim copy of an allowlisted line. A site is
+allowlisted only with its reason. The canonical resolvers (SpatialRefOps, core/crs.py) are the one place a CRS text is
+parsed on the user's path. This guard does not follow a CRS value into a keyword argument of a library call
+(rasterio's `crs=`); those values are resolved by their callers, which the sweep of every parse site reviewed.
 """
 
 import ast
 import re
+from collections import Counter
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[4]
@@ -51,8 +53,9 @@ WARP_DATASET = (
 )
 WARP_RESOLVED = "a warp option whose CRS is a resolved CRS (the canonical resolver's AUTH:CODE, or its WKT file)"
 
-# The Scala sites are allowlisted by exact source line (I-B): a new line in an allowlisted file is a new site. The one
-# file-level entry is the canonical resolver itself. Each site is classified by its class (the constants above).
+# The Scala sites are allowlisted by file and exact source line, each expected once unless SCALA_COUNTS says otherwise:
+# a new line, or a second copy of an allowed one, is a new site. The one file-level entry is the canonical resolver
+# itself. Each site is classified by its class (the constants above).
 SCALA_FILE_ALLOW = {
     "operations/SpatialRefOps.scala": "the canonical resolver: every CRS text is parsed here, classified first",
 }
@@ -220,8 +223,26 @@ def _scala_hits():
         yield from _scala_hits_in(rel, path.read_text())
 
 
+# (file, line) -> how many times the line occurs, where that is not once
+SCALA_COUNTS: dict = {}
+
+
 def _scala_allowed(rel: str, line: str) -> bool:
     return rel in SCALA_FILE_ALLOW or (rel, line) in SCALA_SITES
+
+
+def _drift(hits, file_allow, sites, counts):
+    """(new sites, wrong counts): the hits outside file_allow that sites does not list, and each listed site whose
+    number of occurrences differs from its expected count (1 unless counts says otherwise).
+    """
+    found = Counter((rel, line) for rel, _n, line in hits if rel not in file_allow)
+    new = sorted(k for k in found if k not in sites)
+    wrong = {
+        k: (found.get(k, 0), counts.get(k, 1))
+        for k in sites
+        if found.get(k, 0) != counts.get(k, 1)
+    }
+    return new, wrong
 
 
 # ---- Python ------------------------------------------------------------------------------------------------------
@@ -242,15 +263,11 @@ PY_OSR_PARSE = {
     "ImportFromESRI",
 }
 PY_ALLOW_BY_LINE = {
-    ("engine/argv.py", "sr.SetFromUserInput("): (
+    ("engine/argv.py", "rc = sr.SetFromUserInput("): (
         "the engine's binder: crs_text_kind classifies the value first (never a file, a URL or a grid by path), then "
         "OSR parses it with file and network access off"
     ),
-    ("engine/argv.py", "sr.ImportFromEPSG(int(v))"): INT_EPSG,
-    (
-        "core/crs.py",
-        "CRS.from_user_input(value)",
-    ): "the canonical resolver (core/crs.py)",
+    ("engine/argv.py", "rc = sr.ImportFromEPSG(int(v))"): INT_EPSG,
     ("bench/oracles.py", "dst_crs = CRS.from_user_input(target_crs)"): (
         "the oracle's independent reference: rasterio parses the case's fixed CRS by design (it must not call gbx "
         "code); the values are the oracle's own constants"
@@ -278,7 +295,17 @@ PY_ALLOW_BY_LINE = {
     ("vizx/_dynamic.py", "first_source = _gdf_for(layer).to_crs(4326)"): VIEWER_CONST,
     ("vizx/_maplibre.py", "gdf = _gdf_for(layer).to_crs(4326)"): VIEWER_CONST,
     ("vizx/_maplibre.py", "source = _gdf_for(layer).to_crs(4326)"): VIEWER_CONST,
-    ("vizx/_static_map.py", "plot_gdf = gdf.to_crs(3857)"): VIEWER_CONST,
+    (
+        "vizx/_static_map.py",
+        "plot_gdf = gdf.to_crs(3857) if gdf.crs is not None else gdf",
+    ): VIEWER_CONST,
+}
+# (file, line) -> how many times the line occurs, where that is not once
+PY_COUNTS = {
+    (
+        "vizx/_static_map.py",
+        "plot_gdf = gdf.to_crs(3857) if gdf.crs is not None else gdf",
+    ): 2,
 }
 
 
@@ -291,7 +318,7 @@ def _receiver_text(node) -> str:
 
 
 def _python_sites_in(text: str):
-    """(line, source text) of every CRS parse call in `text`: a constructor by its bare name or its module (m-A)."""
+    """(line, source text) of every CRS parse call in `text`: a constructor by its bare name or its module."""
     lines = text.split("\n")  # the AST's line numbers count "\n" only
     for node in ast.walk(ast.parse(text)):
         if not isinstance(node, ast.Call):
@@ -329,33 +356,59 @@ PY_ALLOW_FILES = {
 
 
 def _python_allowed(rel: str, line: str) -> bool:
-    if rel in PY_ALLOW_FILES:
-        return True
-    return any(r == rel and needle in line for (r, needle) in PY_ALLOW_BY_LINE)
+    return rel in PY_ALLOW_FILES or (rel, line) in PY_ALLOW_BY_LINE
 
 
 def test_the_scala_parse_sites_are_the_allowlisted_ones():
     hits = list(_scala_hits())
     assert hits, "the scan found no CRS parse site: the guard's pattern is wrong"
-    new = [(rel, n, line) for rel, n, line in hits if not _scala_allowed(rel, line)]
+    new, wrong = _drift(hits, SCALA_FILE_ALLOW, SCALA_SITES, SCALA_COUNTS)
     assert new == [], (
         "new CRS parse site(s), outside the allowlist (route through SpatialRefOps.resolveCrs or add a reasoned entry):\n"
-        + "\n".join(f"  {rel}:{n}: {line}" for rel, n, line in new)
+        + "\n".join(f"  {rel}: {line}" for rel, line in new)
     )
+    assert (
+        wrong == {}
+    ), f"allowlisted CRS parse line count differs (found, listed): {wrong}"
 
 
 def test_the_python_parse_sites_are_the_allowlisted_ones():
     hits = list(_python_hits())
     assert hits, "the scan found no CRS parse site: the guard's pattern is wrong"
-    new = [(rel, n, line) for rel, n, line in hits if not _python_allowed(rel, line)]
+    new, wrong = _drift(hits, PY_ALLOW_FILES, PY_ALLOW_BY_LINE, PY_COUNTS)
     assert new == [], (
         "new CRS parse site(s), outside the allowlist (route through resolve_crs or add a reasoned entry):\n"
-        + "\n".join(f"  {rel}:{n}: {line}" for rel, n, line in new)
+        + "\n".join(f"  {rel}: {line}" for rel, line in new)
     )
+    assert (
+        wrong == {}
+    ), f"allowlisted CRS parse line count differs (found, listed): {wrong}"
+
+
+def test_a_verbatim_copy_of_an_allowlisted_parse_line_is_a_new_site():
+    """The allowlists are keyed by occurrence count, in both languages: a second copy of an allowed line fails."""
+    rel = "vectorx/mvt/MvtWriter.scala"
+    line = "srs.ImportFromEPSG(3857)"
+    text = (SCALA_ROOT / rel).read_text()
+    hits = [h for h in _scala_hits() if h[0] != rel] + list(
+        _scala_hits_in(rel, text + "\n" + line + "\n")
+    )
+    _new, wrong = _drift(hits, SCALA_FILE_ALLOW, SCALA_SITES, SCALA_COUNTS)
+    assert wrong == {(rel, line): (2, 1)}
+    prel, pline = (
+        "pyrx/ortho.py",
+        "tf = pyproj.Transformer.from_crs(4326, epsg, always_xy=True)",
+    )
+    ptext = (PY_ROOT / prel).read_text() + "\n\ndef _copy(epsg):\n    " + pline + "\n"
+    phits = [h for h in _python_hits() if h[0] != prel] + [
+        (prel, n, ln) for n, ln in _python_sites_in(ptext)
+    ]
+    _new, pwrong = _drift(phits, PY_ALLOW_FILES, PY_ALLOW_BY_LINE, PY_COUNTS)
+    assert pwrong == {(prel, pline): (2, 1)}
 
 
 def test_the_guard_finds_a_planted_unrouted_parse():
-    """The guard is not vacuous: a raw ImportFromProj4 of a column value, the C-2 shape, is a hit."""
+    """The guard is not vacuous: a raw ImportFromProj4 of a column value (the GeoJSONL writer's old shape) is a hit."""
     text = "val srs = new SpatialReference()\nsrs.ImportFromProj4(proj4)\n"
     found = [ln for ln in text.splitlines() if SCALA_PARSE.search(ln)]
     assert found == ["srs.ImportFromProj4(proj4)"]
@@ -368,17 +421,17 @@ def test_the_guard_finds_a_planted_unrouted_parse():
 
 
 def test_the_geojsonl_writer_parses_its_crs_through_the_resolver():
-    """C-2's site: the writer's PROJ4 and SRID columns go through SpatialRefOps.resolveCrs, never ImportFromProj4."""
+    """The GeoJSONL writer's PROJ4 and SRID columns go through SpatialRefOps.resolveCrs, never ImportFromProj4."""
     text = (SCALA_ROOT / "vectorx/ds/geojsonl/GeoJSONL_RowWriter.scala").read_text()
     assert "ImportFromProj4" not in text
-    # the PROJ4 and SRID columns both go through resolveLoudly, which calls the canonical resolver (m-C: loud, with a Fix)
+    # the PROJ4 and SRID columns both go through resolveLoudly, which calls the canonical resolver (loud, with a Fix)
     assert "SpatialRefOps.resolveCrs(value)" in text
     assert 'resolveLoudly(proj4, "PROJ4")' in text
 
 
 def test_a_planted_user_text_parse_in_an_allowlisted_file_is_flagged():
-    """I-B: the allowlist is by line. The reviewer's mutation, a PROJ4 parse of a user column inside RST_Transform.scala
-    (a file the allowlist names), is a new site; the file's own lines are allowed as they stand.
+    """The allowlist is by line: a PROJ4 parse of a user column planted inside RST_Transform.scala (a file the
+    allowlist names) is a new site; the file's own lines are allowed as they stand.
     """
     rel = "rasterx/expressions/RST_Transform.scala"
     real = (SCALA_ROOT / rel).read_text()
@@ -395,7 +448,7 @@ def test_a_planted_user_text_parse_in_an_allowlisted_file_is_flagged():
 
 
 def test_a_planted_constructor_parse_is_flagged():
-    """m-A: a constructor that parses a value is a parse site, by its bare name or its module: pyproj.CRS(value) and
+    """A constructor that parses a value is a parse site, by its bare name or its module: pyproj.CRS(value) and
     osr.SpatialReference(value). A reasoned constructor with no value (CRS() ) is not.
     """
     planted = (

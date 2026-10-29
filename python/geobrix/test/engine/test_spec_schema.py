@@ -69,26 +69,72 @@ def test_the_classes_are_disjoint_and_the_refused_class_is_the_pinned_set():
     assert set(MAN.gdal.refused_drivers) == REFUSED_DRIVERS
 
 
-AUDIT_LINE = re.compile(r"^\s*#\s{3}(\w+): (none|path)\.", re.M)
-AUDIT_REFUSED = re.compile(r"^\s*#\s{3}(\w+): (fetch|write) \(refused\)", re.M)
-# an allowed driver whose audit line says it fetches: each is a named, reasoned exception
-AUDIT_ALLOWED_FETCH = re.compile(
-    r"^\s*#\s{3}(\w+): path\.(?:.*\n\s*#\s{5}.*)*?\bfetches\b", re.M
-)
+_ENTRY = re.compile(r"^\s*#   (\w+): (none|path|fetch|write)\b(.*)$")
+_CONTINUATION = re.compile(r"^\s*#     (.*)$")
+_FETCH_WORD = re.compile(r"\bfetch(es|ed|ing)?\b", re.I)
+
+
+def audit_entries(src: str) -> dict:
+    """The audit comment's entries: driver -> (verdict, the entry's text, its first line and continuation lines)."""
+    entries, cur = {}, None
+    for line in src.splitlines():
+        m = _ENTRY.match(line)
+        if m:
+            cur = m.group(1)
+            entries[cur] = (m.group(2), m.group(3))
+            continue
+        c = _CONTINUATION.match(line)
+        if c and cur is not None:
+            verdict, text = entries[cur]
+            entries[cur] = (verdict, f"{text} {c.group(1)}")
+        else:
+            cur = None
+    return entries
+
+
+def allowed_that_fetch(entries: dict) -> set:
+    """The allowed drivers (none or path) whose entry says, anywhere in it, that the driver fetches."""
+    return {
+        name
+        for name, (verdict, text) in entries.items()
+        if verdict in ("none", "path") and _FETCH_WORD.search(text)
+    }
 
 
 def test_every_allowed_driver_has_a_remote_fetch_audit_line():
-    """The audit of GDAL 3.13.3's source is one line per allowed driver, in the classification's comment, and each
-    driver refused for a fetch or a write names its evidence. A driver added to `allowed` without a line fails here, and
-    so does a new allowed driver whose line says it fetches.
+    """The audit of GDAL 3.13.3's source is one entry per allowed driver, in the classification's comment, and each
+    driver refused for a fetch or a write names its evidence. A driver added to `allowed` without an entry fails
+    here, and so does an allowed driver other than netCDF whose entry says it fetches.
     """
-    src = Path(manifest.__file__).read_text()
-    audited = [m.group(1) for m in AUDIT_LINE.finditer(src)]
-    assert sorted(audited) == sorted(MAN.gdal.allowed_drivers)
-    refused_for = {m.group(1): m.group(2) for m in AUDIT_REFUSED.finditer(src)}
+    entries = audit_entries(Path(manifest.__file__).read_text())
+    allowed = sorted(n for n, (v, _) in entries.items() if v in ("none", "path"))
+    assert allowed == sorted(MAN.gdal.allowed_drivers)
+    refused_for = {n: v for n, (v, text) in entries.items() if v in ("fetch", "write")}
     assert refused_for == {"KMLSUPEROVERLAY": "fetch", "ESRIC": "fetch", "MRF": "write"}
+    assert all("(refused)" in entries[n][1] for n in refused_for)
     assert set(refused_for) <= set(MAN.gdal.refused_drivers)
-    assert {m.group(1) for m in AUDIT_ALLOWED_FETCH.finditer(src)} == {"netCDF"}
+    assert allowed_that_fetch(entries) == {"netCDF"}
+
+
+@pytest.mark.parametrize(
+    "old,new",
+    [
+        ("#   ZMap: none.", "#   ZMap: none. It fetches the URL its header names."),
+        (
+            "#   VRT: path. a SourceFilename",
+            "#   VRT: path. it fetches a SourceFilename",
+        ),
+    ],
+    ids=["a none entry", "a path entry's first line"],
+)
+def test_the_fetch_detector_sees_the_word_anywhere_in_an_allowed_entry(old, new):
+    src = Path(manifest.__file__).read_text()
+    assert src.count(old) == 1
+    driver = old.split()[1].rstrip(":")
+    assert allowed_that_fetch(audit_entries(src.replace(old, new))) == {
+        "netCDF",
+        driver,
+    }
 
 
 def test_the_jvm_skips_exactly_the_refused_drivers():

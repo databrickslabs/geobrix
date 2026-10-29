@@ -41,13 +41,22 @@ RUN echo "${RUSTUP_INIT_SHA256}  /tmp/bin/rustup-init" | sha256sum -c - && chmod
  && cd /opt/rust && rustup toolchain install && rustup default "${RUST_TOOLCHAIN}" && rustc --version | grep -q " ${RUST_TOOLCHAIN} " \
  && echo "${CARGO_DENY_SHA256}  /tmp/bin/cargo-deny.tar.gz" | sha256sum -c - \
  && tar -xzf /tmp/bin/cargo-deny.tar.gz -C /tmp/bin && find /tmp/bin -name cargo-deny -type f -exec cp {} /opt/rust/cargo/bin/ \; && rm -rf /tmp/bin
+# NASM, for libjpeg-turbo's x86_64 SIMD code (aarch64 uses NEON intrinsics: no assembler needed). Last in the stage, with
+# its ARGs declared here, so adding it left every layer above cached. The source is bind-mounted (no layer).
+ARG NASM_FILE
+ARG NASM_SHA256
+RUN --mount=type=bind,source=src,target=/src if [ "${GBX_ARCH}" = x86_64 ]; then \
+    echo "${NASM_SHA256}  /src/${NASM_FILE}" | sha256sum -c - && mkdir -p /tmp/nasm && tar -xf "/src/${NASM_FILE}" -C /tmp/nasm --strip-components=1 \
+ && cd /tmp/nasm && ./configure --prefix=/opt/nasm && make -j"$(nproc)" && make install && cd / && rm -rf /tmp/nasm \
+ && /opt/nasm/bin/nasm -v; fi
+ENV PATH=/opt/nasm/bin:$PATH
 
 # What the toolchain image holds, one line each, written out by `--target export-toolchain`.
 FROM toolchain AS manifest-toolchain
 RUN { echo "arch $(uname -m)"; grep PRETTY_NAME /etc/os-release; echo "glibc $(ldd --version | head -1)"; \
       $PY --version; $PY -m pip freeze; echo "$(rpm -q java-17-openjdk-devel)"; javac -version 2>&1; \
       swig -version | grep -i "SWIG Version"; ant -version; rustup --version 2>&1 | head -1; rustc --version; cargo --version; \
-      rustup target list --installed; cargo-deny --version; } > /toolchain-manifest.txt
+      rustup target list --installed; cargo-deny --version; if command -v nasm > /dev/null; then nasm -v; fi; } > /toolchain-manifest.txt
 
 FROM scratch AS export-toolchain
 COPY --from=manifest-toolchain /toolchain-manifest.txt /
@@ -71,12 +80,14 @@ COPY recipes/build-gdal.sh /recipes/
 RUN --mount=type=bind,source=src,target=/src --mount=type=tmpfs,target=/tmp/gbx-build,size=6442450944 bash /recipes/build-gdal.sh
 
 # ---------- stage-native: the relocatable gdal-native/ tree (written to /stage/gdal-native) ----------
+# and its split debug symbols (/stage/debuginfo/.build-id/<xx>/<rest>.debug), kept out of the tree
 FROM gdal AS stage-native
 COPY recipes/stage-payload.sh recipes/set-rpath.py recipes/rename-sonames.py /recipes/
 RUN bash /recipes/stage-payload.sh
 
 FROM scratch AS export-stage-native
 COPY --from=stage-native /stage/gdal-native /gdal-native
+COPY --from=stage-native /stage/debuginfo /debuginfo
 
 # ---------- bindings: rasterio, pyogrio, pyproj, shapely and netCDF4 built from their sdists against the staged tree ----------
 # They link through gdal-native's lib-dev/ (so each records the hashed SONAME of every library) and are packaged by

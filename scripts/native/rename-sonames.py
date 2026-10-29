@@ -9,11 +9,12 @@ of the same name, and libgdal then runs on whatever the process loaded first. A 
 
 For each file in lib/ except libgdalalljni.so (the Java bindings load it by that name):
   libgdal.so.39 -> libgdal-<sha256[:8] of the file>.so.39      (<stem>-<hash>.so<rest>)
-with `patchelf --set-soname`, then `patchelf --replace-needed` in every ELF file under lib/, bin/ and python/ (the
-JNI and the osgeo extension modules included). The text files that name a library (lib/cmake, lib/pkgconfig, bin/*-config)
-are rewritten to the new names, and lib-dev/ (symlinks for linking) is rebuilt: for each library its original linker
-name (libgdal.so), its original SONAME (libgdal.so.39) and its new name all point at ../lib/<new>, so `-lgdal` finds it
-and the program records the NEW SONAME in its NEEDED. --map-out writes {"sonames": {old: new}, "jni": name} as JSON.
+with `patchelf --set-soname`, then `patchelf --replace-needed` in every ELF file under lib/, bin/, python/ and
+hdf5-plugins/ (the JNI, the osgeo extension modules and the HDF5 filter plugins included). The text files that name a
+library (lib/cmake, lib/pkgconfig, bin/*-config) are rewritten to the new names, and lib-dev/ (symlinks for linking) is
+rebuilt: for each library its original linker name (libgdal.so), its original SONAME (libgdal.so.39) and its new name
+all point at ../lib/<new>, so `-lgdal` finds it and the program records the NEW SONAME in its NEEDED. --map-out writes
+{"sonames": {old: new}, "jni": name} as JSON.
 
 Fails (`RENAME FAILED: ...`, exit 1) if a library is not named after its SONAME, is already renamed, or any ELF still
 needs an old name afterwards. Needs patchelf and readelf (the build container has both).
@@ -100,7 +101,7 @@ def main():
 
     # 3. NEEDED in every ELF file that links against them
     patched = 0
-    for path in elf_files(tree, ("lib", "bin", "python")):
+    for path in elf_files(tree, ("lib", "bin", "python", "hdf5-plugins")):
         pairs = [(n, renames[n]) for n in needed(path) if n in renames]
         if pairs:
             cmd = []

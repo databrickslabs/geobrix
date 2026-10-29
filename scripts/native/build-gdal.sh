@@ -24,9 +24,16 @@ known="$(grep -rhoiE 'gdal_check_package\( *[A-Za-z0-9_]+' --include=CMakeLists.
 
 opts=(-DGDAL_USE_EXTERNAL_LIBS=OFF)
 # ICONV is glibc's iconv (no library is linked): Shapefile/DBF code pages need it. LIBAEC adds CCSDS to GRIB (libaec is already built for HDF5)
-for x in ZLIB DEFLATE ZSTD LIBLZMA LZ4 BLOSC PNG JPEG WEBP LERC TIFF GEOTIFF SQLITE3 CURL OPENSSL EXPAT OPENJPEG HDF5 NETCDF GEOS ICONV LIBAEC; do
+# JXL (+ JXL_THREADS): the JPEGXL driver and the GTiff JXL codec. PCRE2: REGEXP in the SQLite dialect and GPKG. MUPARSER:
+# VRT expressions and `gdal raster calc --dialect=muparser`.
+for x in ZLIB DEFLATE ZSTD LIBLZMA LZ4 BLOSC PNG JPEG WEBP LERC SQLITE3 CURL OPENSSL EXPAT OPENJPEG HDF5 NETCDF GEOS ICONV LIBAEC \
+         JXL JXL_THREADS PCRE2 MUPARSER; do
     opts+=("-DGDAL_USE_$x=ON")
 done
+# GDAL's own copies of libtiff (the same 4.7.2) and libgeotiff: GDAL builds the GTiff JXL codec only with them
+# ("Cannot build JXL as a TIFF codec as it requires building with -DGDAL_USE_TIFF_INTERNAL=ON", frmts/gtiff). Their
+# symbols are renamed inside libgdal, so the external libtiff PROJ links (grid files) loads beside them without a clash.
+opts+=(-DGDAL_USE_TIFF_INTERNAL=ON -DGDAL_USE_GEOTIFF_INTERNAL=ON)
 for x in POPPLER PODOFO PDFIUM SPATIALITE MYSQL ODBC FILEGDB ECW MRSID KDU LURATECH OCI HEIF SFCGAL; do
     if printf '%s\n' "$known" | grep -qx "$x"; then opts+=("-DGDAL_USE_$x=OFF"); else echo "note: GDAL has no package $x; no switch set"; fi
 done
@@ -37,6 +44,7 @@ opts+=(-DBUILD_JAVA_BINDINGS=ON -DSWIG_EXECUTABLE=/opt/swig/bin/swig
 cmake -G Ninja -S . -B _build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$P" -DCMAKE_INSTALL_LIBDIR=lib \
     "${opts[@]}" 2>&1 | tee _cmake.log
 check_unused _cmake.log "${opts[@]}"
+if grep -q "Cannot build JXL as a TIFF codec" _cmake.log; then echo "BUILD FAILED: gdal: no GTiff JXL codec ($(grep -m1 'Cannot build JXL' _cmake.log))"; exit 1; fi
 cmake --build _build --parallel "$JOBS"
 cmake --install _build
 

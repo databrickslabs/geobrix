@@ -6,7 +6,7 @@
 #   /wheelhouse-test (ro)    the hashed test environment (test-requirements{,-newclick}-<arch>.txt)
 #   /wheelhouse-pypi (ro)    the same five versions as PyPI wheels: the baseline
 #   /verify (ro)             scripts/native
-# It assembles the payload layout (`_native/<arch>/lib`, `_native/share`, `_vendor/<arch>` side by side), checks the ELF
+# It assembles the payload layout (`_native/<arch>/{lib,hdf5-plugins}`, `_native/share`, `_vendor/<arch>` side by side), checks the ELF
 # closure of the vendored tree, makes three venvs (click 8.2.1; the newest click rasterio accepts; the PyPI wheels as the
 # baseline), and p11_probe.py runs each binding's own suite against the vendored package and classifies every failure
 # (flaky, click-attributable, environmental, regression). Prints `ok: <check>` / `TEST FAILED: <what>`.
@@ -25,6 +25,7 @@ source /verify/pins.conf
 rm -rf "$T"
 mkdir -p "$T/gbx/_native/$ARCH" "$T/gbx/_vendor" "$T/plug" "$T/work" "$T/src" "$T/distinfo"
 cp -a "$GN/lib" "$T/gbx/_native/$ARCH/lib"
+cp -a "$GN/hdf5-plugins" "$T/gbx/_native/$ARCH/hdf5-plugins"
 cp -a "$GN/share" "$T/gbx/_native/share"
 cp -a "$B/vendor" "$T/gbx/_vendor/$ARCH"
 cp /verify/p11_probe.py "$T/plug/"

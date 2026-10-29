@@ -109,9 +109,11 @@ verify_toolchain() {
     docker run --rm --network none --platform "$plat" \
         -e GBX_ARCH="$a" -e WANT_RUST="$(pin RUST_TOOLCHAIN)" -e WANT_MATURIN="$(pin MATURIN_VERSION)" \
         -e WANT_NUMPY="$(pin NUMPY_BUILD_VERSION)" -e WANT_SWIG="$(pin SWIG_VERSION)" -e WANT_ANT="$(pin ANT_VERSION)" \
-        -e WANT_JDK="$(pin JDK_MAJOR)" -e WANT_DENY="$(pin CARGO_DENY_VERSION)" "$tag" bash -lc '
+        -e WANT_JDK="$(pin JDK_MAJOR)" -e WANT_DENY="$(pin CARGO_DENY_VERSION)" -e WANT_NASM="$(pin NASM_VERSION)" "$tag" bash -lc '
         set -e
         test "$(uname -m)" = "$GBX_ARCH"
+        # NASM (libjpeg-turbo SIMD) on x86_64 only; aarch64 needs none
+        if [ "$GBX_ARCH" = x86_64 ]; then nasm -v | grep -q "version $WANT_NASM "; else ! command -v nasm > /dev/null; fi
         test "$(rustc --version | cut -d" " -f2)" = "$WANT_RUST"
         test "$(maturin --version | cut -d" " -f2)" = "$WANT_MATURIN"
         $PY -c "import numpy, sys; assert numpy.__version__ == sys.argv[1], numpy.__version__" "$WANT_NUMPY"
@@ -158,12 +160,34 @@ verify_toolchain() {
     echo "      The CI job .github/workflows/rust-deny.yml runs the full check, yanked crates included, and is the gate."
 }
 
-# gdal-native/ as exported, mounted read-only into the toolchain image with no network: the oracle is verify-native.sh.
+# The split debug symbols as exported (debuginfo/.build-id/<xx>/<rest>.debug) into one tarball per architecture and
+# target, beside the tree and never inside it (no wheel reads it). Unpack it anywhere and point a debugger at it by
+# build-id. A build-ids.txt (`<path> <build-id>`, the bindings) must have a debug file for every line.
+pack_debuginfo() {
+    local a="$1" out="$2" name="$3" tarball id missing=0
+    tarball="$out/$name-$a-debuginfo.tar.xz"
+    [ -d "$out/debuginfo/.build-id" ] || { echo "BUILD FAILED: the $TARGET export has no debuginfo/.build-id"; return 1; }
+    if [ -f "$out/build-ids.txt" ]; then
+        while read -r _ id; do
+            [ -f "$out/debuginfo/.build-id/${id:0:2}/${id:2}.debug" ] || { echo "BUILD FAILED: no debug file for build-id $id"; missing=1; }
+        done < "$out/build-ids.txt"
+        [ "$missing" = 0 ] || return 1
+    fi
+    # no extended attributes (macOS adds com.apple.provenance, which GNU tar warns about on extraction)
+    COPYFILE_DISABLE=1 tar --no-xattrs -C "$out/debuginfo" -cJf "$tarball" .build-id
+    rm -rf "$out/debuginfo"
+    echo "NATIVE_DEBUGINFO arch=$a tarball=$(basename "$tarball") bytes=$(wc -c < "$tarball" | tr -d ' ')" | tee -a "$out/build.txt"
+}
+
+# gdal-native/ as exported, mounted read-only into the toolchain image with no network: the oracle is verify-native.sh
+# (the debuginfo tarball beside it is mounted too: it checks every build-id has its debug file and symbolizes one address).
 verify_stage_native() {
-    local a="$1" plat="$2" out="$3" h="$4"
+    local a="$1" plat="$2" out="$3" h="$4" dbg
+    dbg="$(ls "$out"/gdal-native-*-"$a"-debuginfo.tar.xz)"
     echo "== verify $a: $out/gdal-native in geobrix-native-build:toolchain-$h-$a (--network none)"
-    docker run --rm --network none --platform "$plat" -v "$out/gdal-native:/gdal-native:ro" -v "$PROJECT_ROOT/scripts/native:/verify:ro" \
-        "geobrix-native-build:toolchain-$h-$a" bash /verify/verify-native.sh /gdal-native 2>&1 | tee "$out/verify.txt"
+    docker run --rm --network none --platform "$plat" -v "$out/gdal-native:/gdal-native:ro" -v "$dbg:/debuginfo.tar.xz:ro" \
+        -v "$PROJECT_ROOT/scripts/native:/verify:ro" \
+        "geobrix-native-build:toolchain-$h-$a" bash /verify/verify-native.sh /gdal-native /debuginfo.tar.xz 2>&1 | tee "$out/verify.txt"
 }
 
 # The bindings against gdal-native as exported by stage-native (the tree the bindings were linked against), with the
@@ -265,8 +289,9 @@ build_arch() {
 
     case "$TARGET" in
         toolchain) verify_toolchain "$a" "$plat" "$tag" ;;
-        stage-native) verify_stage_native "$a" "$plat" "$out" "$h" ;;
-        bindings) verify_bindings "$a" "$plat" "$out" "$h" ;;
+        stage-native) pack_debuginfo "$a" "$out" "gdal-native-$(pin GDAL_VERSION)-gbx$(pin GBX_NATIVE_REVISION)" \
+            && verify_stage_native "$a" "$plat" "$out" "$h" ;;
+        bindings) pack_debuginfo "$a" "$out" "bindings-gbx$(pin GBX_NATIVE_REVISION)" && verify_bindings "$a" "$plat" "$out" "$h" ;;
         rust-native) verify_rust_native "$a" "$plat" "$out" "$tag" ;;
         *) echo "VERIFY FAILED: no verify for target $TARGET"; return 1 ;;
     esac

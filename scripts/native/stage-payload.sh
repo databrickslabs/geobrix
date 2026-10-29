@@ -3,24 +3,29 @@
 #   lib/        one file per SONAME (a wheel holds no symlinks), RUNPATH $ORIGIN, with libgdalalljni.so; lib/pkgconfig, lib/cmake.
 #               Every library but the JNI has a hashed name (libgdal-<sha256[:8]>.so.39), so it shares no SONAME with a system one
 #   lib-dev/    symlinks for linking only (libgdal.so, libgdal.so.39 and libgdal-<hash>.so.39 -> ../lib/libgdal-<hash>.so.39); never packaged
-#   bin/        gdalinfo ogrinfo projinfo, and gdal-config geos-config nc-config made relocatable
+#   bin/        gdalinfo ogrinfo projinfo gdal projsync, and gdal-config geos-config nc-config made relocatable
+#   hdf5-plugins/  netCDF-C's HDF5 filter plugins (zstd, blosc, bzip2, szip, ...), loaded by path: HDF5_PLUGIN_PATH points here
 #   include/    the headers of GDAL, PROJ, GEOS and every library built for them
-#   share/      gdal, proj
+#   share/      gdal, proj (with the curated grids: OSTN15, OSGM15, EGM96)
 #   java/       gdal-<GDAL_VERSION>.jar
 #   python/     osgeo, osgeo_utils (RUNPATH $ORIGIN/../../lib)
-#   licenses/   one directory per library built from source
-#   MANIFEST.json   versions, revision, arch, the SONAME map (original -> hashed), driver lists, build seconds, sizes, sha256 of every file
+#   licenses/   one directory per library built from source (and proj-grids/)
+#   MANIFEST.json   versions, revision, arch, the SONAME map (original -> hashed), driver lists, build seconds, sizes, the
+#               GNU build-id of every ELF file, sha256 of every file
+# and, outside the tree, /stage/debuginfo/.build-id/<xx>/<rest>.debug: the debug symbols of every ELF file in it (built -g1),
+# split off with `objcopy --only-keep-debug` before the files are stripped, so the tree (and a wheel) carries none.
 # Runs in the build container after build-gdal.sh. Every check that can fail prints `STAGE FAILED: <what>` and exits 1.
 set -euo pipefail
 source /recipes/pins.conf
 
 P=/opt/gbx-native
 OUT=/stage/gdal-native
+DBG=/stage/debuginfo
 PY=/opt/python/cp312-cp312/bin/python
 fail() { echo "STAGE FAILED: $*"; exit 1; }
 
-rm -rf "$OUT"
-mkdir -p "$OUT"/{lib,lib-dev,bin,share,java,python,licenses}
+rm -rf "$OUT" "$DBG"
+mkdir -p "$OUT"/{lib,lib-dev,bin,share,java,python,licenses,hdf5-plugins} "$DBG/.build-id"
 
 # --- lib/: the libraries the roots need, one file per SONAME. The roots are what a GDAL, PROJ, GEOS or netCDF consumer loads.
 $PY - "$P" "$OUT/lib" <<'PYEOF'
@@ -68,6 +73,8 @@ for r in ("libgdal.so", "libproj.so", "libgeos_c.so", "libnetcdf.so", "libhdf5_h
         sys.exit(f"STAGE FAILED: no {r}.* in the prefix")
     roots.append(libs[matches[0]])
 roots += [os.path.join(site, f) for f in os.listdir(site) if f.endswith(".so")]
+plugins = os.path.join(prefix, "hdf5-plugins")
+roots += [os.path.join(plugins, f) for f in os.listdir(plugins) if f.endswith(".so")]
 keep, todo = {}, list(roots)
 while todo:
     path = todo.pop()
@@ -93,10 +100,16 @@ find "$OUT/python" -name __pycache__ -prune -exec rm -rf {} +
 [ -f "$P/share/java/gdal-${GDAL_VERSION}.jar" ] || fail "no $P/share/java/gdal-${GDAL_VERSION}.jar: $(ls "$P/share/java" 2>&1 | tr '\n' ' ')"
 cp "$P/share/java/gdal-${GDAL_VERSION}.jar" "$OUT/java/gdal-${GDAL_VERSION}.jar"
 cp -R "$P/share/gdal" "$P/share/proj" "$OUT/share/"
-for b in gdalinfo ogrinfo projinfo gdal-config geos-config nc-config; do
+for g in "$PROJGRID_OSTN15_FILE" "$PROJGRID_OSGM15_FILE" "$PROJGRID_EGM96_FILE"; do
+    [ -f "$OUT/share/proj/$g" ] || fail "the PROJ grid $g is not in share/proj"
+done
+# gdal: the unified command line (`gdal raster calc` ...); projsync: fetches further grids from cdn.proj.org
+for b in gdalinfo ogrinfo projinfo gdal projsync gdal-config geos-config nc-config; do
     [ -f "$P/bin/$b" ] || fail "no $P/bin/$b"
     cp "$P/bin/$b" "$OUT/bin/$b"
 done
+cp "$P"/hdf5-plugins/*.so "$OUT/hdf5-plugins/"
+for p in zstd blosc bzip2; do [ -f "$OUT/hdf5-plugins/lib__nch5$p.so" ] || fail "no HDF5 filter plugin lib__nch5$p.so"; done
 cp -R "$P/include" "$OUT/include"
 cp -R "$P/share/licenses/." "$OUT/licenses/"
 for d in "$OUT"/licenses/*/; do
@@ -184,11 +197,22 @@ if left:
     sys.exit("STAGE FAILED: the build prefix is still named in " + ", ".join(sorted(left)))
 PYEOF
 
-# --- strip, then hashed SONAMEs (rename-sonames.py also rebuilds lib-dev/), then RUNPATH relative to lib/ for every ELF
-# file (set-rpath.py fails on any it cannot set). The hash is taken from the stripped bytes.
+# --- split the debug symbols off (debuginfo/.build-id/<xx>/<rest>.debug, the layout gdb and addr2line look up by build-id),
+# strip, then hashed SONAMEs (rename-sonames.py also rebuilds lib-dev/), then RUNPATH relative to lib/ for every ELF file
+# (set-rpath.py fails on any it cannot set). The hash is taken from the stripped bytes. patchelf keeps the build-id note and
+# the addresses of the code, so a debug file still matches its library afterwards (verify-native.sh symbolizes one).
+n_dbg=0
 while IFS= read -r f; do
-    if head -c 4 "$f" | grep -q 'ELF'; then strip --strip-unneeded "$f"; fi
-done < <(find "$OUT/lib" "$OUT/bin" "$OUT/python" -type f)
+    head -c 4 "$f" | grep -q 'ELF' || continue
+    id="$(readelf -n "$f" 2> /dev/null | awk '/Build ID:/ && !id {id = $3} END {print id}')"
+    [ -n "$id" ] || fail "${f#"$OUT"/} has no GNU build-id, so its debug symbols could not be found by it"
+    [ ! -e "$DBG/.build-id/${id:0:2}/${id:2}.debug" ] || fail "${f#"$OUT"/} shares its build-id $id with another file"
+    mkdir -p "$DBG/.build-id/${id:0:2}"
+    objcopy --only-keep-debug "$f" "$DBG/.build-id/${id:0:2}/${id:2}.debug"
+    strip --strip-unneeded "$f"
+    n_dbg=$((n_dbg + 1))
+done < <(find "$OUT/lib" "$OUT/bin" "$OUT/python" "$OUT/hdf5-plugins" -type f)
+echo "debuginfo: $n_dbg ELF files split, $(du -sb "$DBG" | cut -f1) bytes of debug symbols in $DBG"
 $PY /recipes/rename-sonames.py --tree "$OUT" --map-out /stage/sonames.json
 $PY /recipes/set-rpath.py --tree "$OUT" --tree-at gdal-native --lib-at gdal-native/lib
 
@@ -211,8 +235,28 @@ def pins():
 
 p = pins()
 deps = ["GDAL", "PROJ", "GEOS", "LIBGEOTIFF", "LIBTIFF", "SQLITE", "OPENSSL", "CURL", "ZLIB", "LIBDEFLATE", "ZSTD", "XZ", "LZ4",
-        "CBLOSC", "LIBPNG", "LIBJPEG_TURBO", "LIBWEBP", "LERC", "EXPAT", "OPENJPEG", "LIBAEC", "HDF5", "NETCDF_C"]
+        "CBLOSC", "LIBPNG", "LIBJPEG_TURBO", "LIBWEBP", "LERC", "EXPAT", "OPENJPEG", "LIBAEC", "HDF5", "NETCDF_C",
+        "NGHTTP2", "PCRE2", "MUPARSER", "HIGHWAY", "BROTLI", "LCMS2", "LIBJXL"]
 versions = {d.lower(): p[d + "_VERSION"] for d in deps}
+grids = {p[f"PROJGRID_{k}_FILE"]: {"sha256": p[f"PROJGRID_{k}_SHA256"], "license": p[f"PROJGRID_{k}_LICENSE"]}
+         for k in ("OSTN15", "OSGM15", "EGM96")}
+
+# the GNU build-id of every ELF file (the key of its debug file in the debuginfo tarball), each with a debug file
+build_ids, no_debug = {}, []
+for root, _d, names in os.walk(out):
+    for n in sorted(names):
+        path = os.path.join(root, n)
+        if os.path.islink(path) or open(path, "rb").read(4) != b"\x7fELF":
+            continue
+        m = re.search(r"Build ID: ([0-9a-f]+)", subprocess.run(["readelf", "-n", path], capture_output=True, text=True).stdout)
+        rel = os.path.relpath(path, out)
+        if not m:
+            sys.exit(f"STAGE FAILED: {rel} has no build-id")
+        build_ids[rel] = m.group(1)
+        if not os.path.isfile(f"/stage/debuginfo/.build-id/{m.group(1)[:2]}/{m.group(1)[2:]}.debug"):
+            no_debug.append(rel)
+if no_debug:
+    sys.exit("STAGE FAILED: no debug file for " + ", ".join(no_debug))
 
 def formats(tool):
     res = subprocess.run([os.path.join(out, "bin", tool), "--formats"], capture_output=True, text=True, env=env)
@@ -250,6 +294,9 @@ manifest = {
     "versions": versions,
     "sonames": renamed["sonames"],
     "jni": renamed["jni"],
+    "proj_grids": grids,
+    "hdf5_plugins": sorted(os.listdir(os.path.join(out, "hdf5-plugins"))),
+    "build_ids": build_ids,
     "drivers": {
         "raster_count": len(raster), "vector_count": len(vector),
         "raster": raster, "vector": vector,

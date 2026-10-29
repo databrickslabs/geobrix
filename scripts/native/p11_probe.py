@@ -10,8 +10,8 @@ Driver (stdlib only), run by test-bindings.sh inside the build container with --
 and a pytest plugin (`-p p11_probe`) that logs one JSON line per test phase to $P11_LOG.
 
 What `run` does, per binding (shapely, pyogrio, pyproj, rasterio, netcdf4):
-  1. the binding's own suite against the vendored package (PYTHONPATH=_vendor/<arch>, GDAL_DATA and PROJ_DATA of the
-     payload, a venv with the hashed test requirements and click 8.2.1);
+  1. the binding's own suite against the vendored package (PYTHONPATH=_vendor/<arch>, GDAL_DATA, PROJ_DATA and
+     HDF5_PLUGIN_PATH of the payload, a venv with the hashed test requirements and click 8.2.1);
   2. every failure again in the same environment (flaky) and, for rasterio, again with the newest click rasterio
      accepts: a failure that passes there is click-attributable, a `cli_failure` when it comes from the `rio` command line
      (a test_rio_*/test_cli_* file, or a traceback through rasterio/rio or click), else a `library_failure`;
@@ -202,7 +202,7 @@ def env_for(mode, arch):
         k: v
         for k, v in os.environ.items()
         if k
-        not in ("PYTHONPATH", "GDAL_DATA", "PROJ_DATA", "PROJ_LIB", "LD_LIBRARY_PATH")
+        not in ("PYTHONPATH", "GDAL_DATA", "PROJ_DATA", "PROJ_LIB", "LD_LIBRARY_PATH", "HDF5_PLUGIN_PATH")
     }
     env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
     if TOOLS_BIN:
@@ -211,6 +211,8 @@ def env_for(mode, arch):
         env["PYTHONPATH"] = f"{T}/gbx/_vendor/{arch}:{T}/distinfo:{T}/plug"
         env["GDAL_DATA"] = f"{T}/gbx/_native/share/gdal"
         env["PROJ_DATA"] = f"{T}/gbx/_native/share/proj"
+        # the payload's HDF5 filter plugins (zstd, blosc, bzip2, ...), as the env wheel's activation sets them
+        env["HDF5_PLUGIN_PATH"] = f"{T}/gbx/_native/{arch}/hdf5-plugins"
     else:  # the PyPI wheels carry their own data
         env["PYTHONPATH"] = f"{T}/plug"
     return env

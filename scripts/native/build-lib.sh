@@ -14,9 +14,12 @@ mkdir -p "$P/lib" "$P/include" "$P/share/licenses" "$P/share/gbx"
 export PKG_CONFIG_PATH="$P/lib/pkgconfig:$P/share/pkgconfig"
 export CMAKE_PREFIX_PATH="$P"
 export CPPFLAGS="-I$P/include"
-export CFLAGS="-O2 -g0 -fPIC"
-export CXXFLAGS="-O2 -g0 -fPIC"
-export LDFLAGS="-L$P/lib -Wl,-rpath,$P/lib"
+# -g1: function names and line tables (enough to symbolize a crash backtrace), no local variables. It does not change
+# the generated code. stage-payload.sh splits it into the debuginfo tarball and ships the stripped files; every file
+# carries a build-id (the linker's default here), which is how a debugger finds its debug file.
+export CFLAGS="-O2 -g1 -fPIC"
+export CXXFLAGS="-O2 -g1 -fPIC"
+export LDFLAGS="-L$P/lib -Wl,-rpath,$P/lib -Wl,--build-id=sha1"
 export LIBRARY_PATH="$P/lib"
 
 # check_unused <cmake log> <-DNAME=VALUE ...>: fail when cmake reports one of the given options as unused.

@@ -583,6 +583,236 @@ def test_worker_peak_is_none_when_no_python_worker_ran(spark_session_local):
     assert peak.read() is None and "no Python worker ran" in peak.reason
 
 
+def _until(cond, what, timeout=90.0):
+    end = time.time() + timeout
+    while not cond():
+        assert time.time() < end, f"timed out waiting for {what}"
+        time.sleep(0.1)
+
+
+def _in_background(df):
+    """df.collect() on a thread of its own; (thread, dict that holds an error, if any)."""
+    box = {}
+
+    def run():
+        try:
+            df.collect()
+        except Exception as exc:  # noqa: BLE001
+            box["error"] = exc
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    return thread, box
+
+
+def _gone(pid):
+    return not os.path.exists(f"/proc/{pid}")
+
+
+class _Held:
+    """A shape whose tasks write their worker's pid to `where` and wait for the file ``go``.
+    With `early` the first task holds 400 MB and returns at once and the others hold nothing;
+    without, every task holds 400 MB until ``go``."""
+
+    def __init__(self, spark, where, wait_s=120):
+        from pyspark.sql import functions as F
+
+        self.spark, self.where, self.F = spark, str(where), F
+        self.slots = spark.sparkContext.defaultParallelism
+        where = self.where
+
+        @F.udf("long")
+        def held(x, early):
+            import os
+            import time as t
+
+            first = early and x == 0
+            if first or not early:
+                b = bytearray(400 * 1024 * 1024)
+                for i in range(0, len(b), 4096):
+                    b[i] = 1  # touch every page
+            with open(f"{where}/pid{x}", "w") as fh:
+                fh.write(str(os.getpid()))
+            end = t.time() + wait_s
+            while not first and not os.path.exists(f"{where}/go") and t.time() < end:
+                t.sleep(0.1)
+            return 0
+
+        self.held = held
+
+    def shape(self, early):
+        rows = self.spark.range(self.slots, numPartitions=self.slots)
+        return rows.select(self.held("id", self.F.lit(early)))
+
+    def pids(self):
+        out = {}
+        for name in os.listdir(self.where):
+            if name.startswith("pid"):
+                with open(f"{self.where}/{name}") as fh:
+                    text = fh.read()
+                if text:
+                    out[name] = int(text)
+        return out
+
+    def go(self):
+        open(f"{self.where}/go", "w").close()
+
+
+@LINUX
+@pytest.mark.parametrize("victim", ["the worker that ran", "an idle worker"])
+def test_worker_peak_is_none_when_a_worker_that_was_there_exits_before_the_read(
+    spark_session_local, tmp_path, victim
+):
+    # One task holds 400 MB and returns; the others run on. The finished worker is idle, and
+    # Spark stops an idle worker after 60 s (killed here: it is gone just the same), so its peak
+    # is gone by the read. The reading used to be the live workers' (54 MB). Nothing the kernel
+    # keeps says whether a worker that has gone had run, so an idle one voids the reading too.
+    spark = spark_session_local
+    with _own_worker_pool(spark) as pool:
+        s = _Shapes(spark)
+        held = _Held(spark, tmp_path)
+        warm = (
+            s.two_workers_per_task()
+            if victim == "an idle worker"
+            else s.trivial_shape(s.slots)
+        )
+        shape = held.shape(early=victim == "the worker that ran")
+    warm.collect()
+    peak = attribution.WorkerPeak(spark)
+    assert peak.reason is None, peak.reason
+    peak.start()
+    thread, box = _in_background(shape)
+    try:
+        if victim == "the worker that ran":
+            _until(lambda: "pid0" in held.pids(), "the first task to finish")
+            _until(lambda: _tasks_done(spark) >= 1, "its result to reach the driver")
+            doomed = [held.pids()["pid0"]]
+        else:
+            _until(lambda: len(held.pids()) == s.slots, "every task to be running")
+            busy = set(held.pids().values())
+            doomed = [pid for pid, _ in _pool_workers(pool) if pid not in busy]
+            assert doomed, "the pool holds no idle worker"
+        for pid in doomed:
+            os.kill(pid, 9)
+        _until(lambda: all(_gone(pid) for pid in doomed), "the daemon to reap them")
+    finally:
+        held.go()
+        thread.join()
+    assert "error" not in box, box
+    assert peak.read() is None and "exited before the read" in peak.reason
+
+
+def _tasks_done(spark):
+    tracker = spark.sparkContext.statusTracker()
+    infos = [tracker.getStageInfo(i) for i in tracker.getActiveStageIds()]
+    return max([i.numCompletedTasks for i in infos if i] or [0])
+
+
+@LINUX
+@pytest.mark.perf
+@pytest.mark.parametrize("pool", ["warm", "cold"])
+def test_worker_peak_is_none_after_spark_stops_a_finished_worker(
+    spark_session_local, pool
+):
+    # The real thing, with nothing killed by hand: one task holds 400 MB and returns, the other
+    # sleeps past Spark's 60 s idle timeout, and the finished worker is stopped. It read 54 MB.
+    # With a warm pool the worker was there at the reset; with a cold one it was created by the
+    # shape, and only the task end times show that a worker went idle long enough.
+    from pyspark.sql import functions as F
+
+    spark = spark_session_local
+    with _own_worker_pool(spark):
+        s = _Shapes(spark)
+
+        @F.udf("long")
+        def uneven(x):
+            import time as t
+
+            if x == 0:
+                b = bytearray(400 * 1024 * 1024)
+                for i in range(0, len(b), 4096):
+                    b[i] = 1
+                return len(b)
+            t.sleep(85)
+            return 0
+
+        warm = s.trivial_shape(s.slots)
+        shape = spark.range(s.slots, numPartitions=s.slots).select(uneven("id"))
+    if pool == "warm":
+        warm.collect()
+    peak = attribution.WorkerPeak(spark)
+    peak.start()
+    shape.collect()
+    assert peak.read() is None
+    assert (
+        "exited before the read" if pool == "warm" else "may have exited"
+    ) in peak.reason
+
+
+@LINUX
+@pytest.mark.parametrize("gap, reads", [(10.0, True), (70.0, False)])
+def test_a_long_shape_reads_only_if_the_pool_never_idled_for_a_minute(
+    spark_session_local, monkeypatch, gap, reads
+):
+    # The shape was quick; only its task end times (here made up) say how it looked to the pool.
+    with _own_worker_pool(spark_session_local):
+        s = _Shapes(spark_session_local)
+        warm, shape = s.trivial_shape(s.slots), s.heavy_shape()
+    warm.collect()
+    peak = attribution.WorkerPeak(spark_session_local)
+    peak.start()
+    shape.collect()
+    peak._t0 -= 300  # as if the shape had run for five minutes
+    now = time.time()
+    ends = [
+        now - 300 + i * gap for i in range(int(300 / gap) + 1)
+    ]  # one every `gap` seconds
+    monkeypatch.setattr(attribution, "_task_ends", lambda base, t0, t1: {"0": ends})
+    got = peak.read()
+    assert (got is not None and got >= 400) is reads, (got, peak.reason)
+    assert reads or "may have exited" in peak.reason
+
+
+@pytest.mark.parametrize(
+    "case, members, want",
+    [
+        ("nothing moved", {"w1": (5, 0), "w2": (7, 0), "d": (100, 0)}, (0, 0, 0)),
+        ("a worker ran and is alive", {"w1": (9, 400), "w2": (7, 0), "d": (100, 0)}, (400, 1, 0)),
+        ("a worker has gone", {"w1": (5, 0), "d": (100, 0)}, (0, 0, 1)),
+        ("a new worker ran", {"w1": (5, 0), "w2": (7, 0), "d": (100, 0), "w3": (2, 80)}, (80, 1, 0)),
+        ("a zombie", {"w1": (5, 0, "z"), "w2": (7, 0), "d": (100, 0)}, (0, 0, 1)),
+        ("every worker and the daemon have gone", {}, (0, 0, 2)),
+        ("only the daemon has gone", {"w1": (5, 0), "w2": (7, 0)}, (0, 0, 0)),
+    ],
+)  # fmt: skip
+def test_the_read_counts_the_workers_that_have_gone(case, members, want):
+    """The judgement on synthetic /proc numbers. The baseline: workers w1 (5 ticks) and w2 (7)
+    and their daemon d (100); a worker that has gone voids the reading, a daemon alone does not.
+    """
+    scope = "h:1"
+    key = lambda k: f"{scope}:{k}"  # noqa: E731
+    baseline = {
+        "cpu": {key("w1"): 5, key("w2"): 7, key("d"): 100},
+        "daemons": {key("d")},
+    }
+    live = {
+        key(k): {"cpu": v[0], "mb": v[1], "zombie": len(v) > 2, "daemon": k == "d"}
+        for k, v in members.items()
+    }
+    got = attribution._read_judge()(scope, live, baseline)
+    assert got == want, case
+
+
+def test_the_longest_wait_between_task_ends_is_per_executor_and_runs_to_the_read():
+    gap = attribution._longest_release_gap
+    assert gap({"0": [10.0, 12.0, 80.0]}, 90.0) == 68.0  # 12 -> 80
+    assert gap({"1": [11.0, 12.5]}, 100.0) == 87.5  # 12.5 -> the read
+    assert (
+        gap({"0": [10.0, 12.0, 80.0], "1": [11.0, 12.5]}, 90.0) == 77.5
+    )  # the worst of both
+    assert gap({}, 100.0) == 0.0  # no task ended: no worker was released
+
+
 _N1 = """
 import json, sys
 from pyspark.sql import SparkSession

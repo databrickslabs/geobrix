@@ -248,26 +248,42 @@ def unavailable(measures: Dict, skip=()) -> List[str]:
 # separate from the shape's (Spark keeps one pool per Python executable and worker environment), so
 # a sweep never lends its CPU time or its memory to a worker that ran the shape.
 _SWEEP_ENV = "GBX_PEAK_SWEEP"
+_PEAK_JOB_GROUP = "gbx-worker-peak-"
+# Spark stops a Python worker that has been idle for 60 s; a shorter wait rules that out.
+_IDLE_STOP_S = 50.0
+_LOST_REASON = (
+    "a Python worker that ran the shape exited before the read (Spark stops idle workers "
+    "after 60 s), so its peak is lost"
+)
+_MAYBE_LOST_REASON = (
+    "a task of the shape ended more than 50 s before the read (Spark stops a worker that "
+    "idles for 60 s), so a worker that ran it may have exited and taken its peak"
+)
 
 
 def _worker_finder():
     """A function that lists the Python workers of the shape: every ``python -m pyspark.daemon``
     / ``pyspark.worker`` process below the executor's JVM that is not one of the sweep's own.
+    It returns the JVM's pid, ``{worker pid: parent pid}`` and the daemons' pids (the workers
+    that the JVM itself started with ``python -m pyspark.daemon``).
 
     A factory, so that what it returns is pickled by value and a worker needs no geobrix to run
     it; it reads only /proc.
     """
 
-    def is_worker(
+    def module(
         pid,
     ):  # the daemon and the workers it forks both run `python -m pyspark.daemon`
         try:
             with open(f"/proc/{pid}/cmdline", "rb") as fh:
                 args = fh.read().split(b"\0")
         except OSError:
-            return False
+            return None
         at = args.index(b"-m") + 1 if b"-m" in args else len(args)
-        return args[at : at + 1] in ([b"pyspark.daemon"], [b"pyspark.worker"])
+        return (args[at : at + 1] or [None])[0]
+
+    def is_worker(pid):
+        return module(pid) in (b"pyspark.daemon", b"pyspark.worker")
 
     def is_sweep(pid):  # started with the sweep's worker environment
         try:
@@ -293,82 +309,184 @@ def _worker_finder():
         for entry in os.listdir("/proc"):
             if entry.isdigit():
                 children.setdefault(parent(int(entry)), []).append(int(entry))
-        workers, todo = set(), [jvm]
+        workers, daemons, todo = {}, set(), [jvm]
         while todo:
-            for pid in children.get(todo.pop(), []):
+            owner = todo.pop()
+            for pid in children.get(owner, []):
                 if is_worker(pid) and not is_sweep(pid):
-                    workers.add(pid)
+                    workers[pid] = owner
+                    if owner == jvm and module(pid) == b"pyspark.daemon":
+                        daemons.add(pid)
                     todo.append(pid)  # the daemon's workers
-        return sorted(workers)
+        return jvm, workers, daemons
 
     return find
 
 
-def _sweep_task(reset, find_workers, baseline):
-    """The barrier task of one sweep, over the shape's Python workers of its executor.
+def _surveyor(find_workers):
+    """``survey(me)`` and ``alive(pid)``: what an executor's shape workers have used, as
+    ``(scope, members)``.
 
-    With `reset` it clears each worker's high-water mark and returns (as ``ticks``) the CPU time
-    each had used by then; how many live workers it could not reset is ``missed``. Without,
-    it returns the highest ``VmHWM`` (MB) of the workers that ran since: new ones, and those
-    whose CPU time (``utime + stime``) is past its `baseline` entry. An idle worker's RSS,
-    whatever it holds from earlier shapes, is not the shape's. ``ran`` counts those workers.
+    ``scope`` names the executor (host and JVM). ``members`` maps ``scope:pid:start`` (the start
+    time tells a reused pid) to the process's CPU ticks (``utime + stime``), its high-water mark
+    in MB, whether it is a zombie, and whether it is a daemon (the process that forks workers).
     """
 
-    def inspect(
-        pid,
-    ):  # (high-water MB, CPU ticks, start time), or None for a process that has gone
+    def stat(pid):
         try:
+            with open(f"/proc/{pid}/stat") as fh:  # "pid (comm) S ppid ..."
+                f = fh.read().rsplit(")", 1)[1].split()
             with open(f"/proc/{pid}/status") as fh:
                 lines = fh.read().splitlines()
-            with open(f"/proc/{pid}/stat") as fh:  # "pid (comm) S ppid ..."
-                stat = fh.read().rsplit(")", 1)[1].split()
         except (OSError, IndexError):
             return None
-        if any(ln.startswith("State:") and "Z" in ln.split()[1:2] for ln in lines):
-            return None  # a zombie has no memory to read
-        mb = max(
-            (float(ln.split()[1]) / 1024.0 for ln in lines if ln.startswith("VmHWM:")),
-            default=0.0,
-        )
-        return mb, int(stat[11]) + int(stat[12]), stat[19]
+        mb = [float(ln.split()[1]) / 1024.0 for ln in lines if ln.startswith("VmHWM:")]
+        return {
+            "zombie": f[0] == "Z",
+            "start": f[19],
+            "cpu": int(f[11]) + int(f[12]),
+            "mb": max(mb, default=0.0),
+        }
+
+    def alive(pid):  # a process that has gone, or is a zombie, is not
+        info = stat(pid)
+        return info is not None and not info["zombie"]
+
+    def survey(me):
+        import socket
+
+        jvm, parents, daemons = find_workers(me)
+        scope = f"{socket.gethostname()}:{jvm}"
+        members = {}
+        for pid in parents:
+            info = stat(pid)
+            if info is not None:
+                info.update(pid=pid, daemon=pid in daemons)
+                members[f"{scope}:{pid}:{info['start']}"] = info
+        return scope, members
+
+    return survey, alive
+
+
+def _read_judge():
+    """``judge(scope, members, baseline)`` -> ``(hwm, ran, lost)`` for one executor.
+
+    `baseline` is what the reset noted: ``cpu`` (worker -> CPU ticks) and ``daemons``. ``hwm``
+    and ``ran`` are the highest mark, and the count, of the live workers that are new or whose
+    CPU ticks passed their entry: those ran the shape. ``lost`` counts the workers that have
+    exited since the reset (gone, or zombies), and with them their marks. Spark stops a worker
+    that has idled 60 s, and nothing the kernel keeps says whether one that has gone was idle
+    or had run: the daemon ignores SIGCHLD, so its ``cutime + cstime`` never gets a reaped
+    child's CPU time. Any worker that has gone voids the reading.
+    """
+
+    def judge(scope, members, baseline):
+        cpu0, daemons0 = baseline["cpu"], baseline["daemons"]
+        hwm, ran, lost = 0.0, 0, 0
+        for key, m in members.items():
+            if m["zombie"]:
+                lost += 1
+            elif m["cpu"] > cpu0.get(key, -1):  # a new worker has no entry
+                hwm, ran = max(hwm, m["mb"]), ran + 1
+        for key in cpu0:
+            if (
+                key.startswith(f"{scope}:")
+                and key not in members
+                and key not in daemons0
+            ):
+                lost += 1
+        return hwm, ran, lost
+
+    return judge
+
+
+def _sweep_task(reset, survey, alive, judge, baseline):
+    """The barrier task of one sweep, over the shape's Python workers of its executor.
+
+    With `reset` it clears each worker's high-water mark and returns (as ``ticks``) what to
+    compare with later: each worker's CPU ticks (``m,<key>,<ticks>,<1 for a daemon>``); how many
+    live workers it could not reset is ``missed``. Without, it returns what `_read_judge` makes
+    of them against `baseline`: the highest ``VmHWM`` (MB) of the workers that ran since
+    (``hwm``, ``ran`` of them), and ``lost`` workers that have exited. An idle worker's RSS,
+    whatever it holds from earlier shapes, is not the shape's.
+    """
+
+    def note(members):  # -> (live workers not reset, what to compare with later)
+        missed, ticks = 0, []
+        for key, m in members.items():
+            if m["zombie"]:
+                continue  # gone, with nothing to reset
+            ticks.append(f"m,{key},{m['cpu']},{int(m['daemon'])}")
+            try:
+                with open(f"/proc/{m['pid']}/clear_refs", "w") as fh:
+                    fh.write("5")
+            except OSError:
+                missed += alive(m["pid"])  # it exited meanwhile: not missed
+        return missed, ticks
 
     def task(it):  # nested: pickled by value, so a worker needs no geobrix
         import os
-        import socket
 
         import pandas as pd  # imported first: part of the baseline, not of the shape
 
         for _ in it:
             pass
-        host = socket.gethostname()
-        hwm, missed, ran, ticks = 0.0, 0, 0, []
-        for pid in find_workers(os.getpid()):
-            seen = inspect(pid)
-            if seen is None:
-                continue  # exited while we looked: nothing left to read or reset
-            mb, cpu, started = seen
-            key = f"{host}:{pid}:{started}"  # the start time tells a reused pid
-            if not reset:
-                if cpu > baseline.get(key, -1):
-                    hwm, ran = max(hwm, mb), ran + 1
-                continue
-            ticks.append(f"{key}={cpu}")
-            try:
-                with open(f"/proc/{pid}/clear_refs", "w") as fh:
-                    fh.write("5")
-            except OSError:
-                missed += inspect(pid) is not None  # it exited meanwhile: not missed
+        scope, members = survey(os.getpid())
+        hwm, ran, lost, missed, ticks = 0.0, 0, 0, 0, []
+        if reset:
+            missed, ticks = note(members)
+        else:
+            hwm, ran, lost = judge(scope, members, baseline)
         yield pd.DataFrame(
             {
                 "hwm": [hwm],
                 "missed": [missed],
                 "ran": [ran],
+                "lost": [lost],
+                "scope": [scope],
                 "own_pool": [int(os.environ.get(_SWEEP_ENV) == "1")],
                 "ticks": [";".join(ticks)],
             }
         )
 
     return task
+
+
+def _longest_release_gap(ends: Dict[str, List[float]], t1: float) -> float:
+    """The longest time, on any executor, from the end of a task to the end of the next one
+    there (or to `t1`). Spark stops a Python worker only when the pool has seen no worker
+    released for 60 s, so a shorter gap everywhere rules out that a worker went idle and was
+    stopped."""
+    worst = 0.0
+    for times in ends.values():
+        times = sorted(times)
+        for here, after in zip(times, times[1:] + [t1]):
+            worst = max(worst, after - here)
+    return worst
+
+
+def _task_ends(base: str, t0: float, t1: float) -> Dict[str, List[float]]:
+    """Executor -> end times (epoch seconds) of the tasks that ended in [t0, t1], from the Spark
+    REST API at `base`, leaving out the jobs of the worker sweeps themselves."""
+    ends: Dict[str, List[float]] = {}
+    for job in _get(f"{base}/jobs"):
+        done = _epoch(job.get("completionTime"))
+        if (job.get("jobGroup") or "").startswith(_PEAK_JOB_GROUP) or (
+            done and done < t0
+        ):
+            continue
+        for sid in job.get("stageIds", []):
+            for attempt in _get(f"{base}/stages/{sid}"):
+                url = (
+                    f"{base}/stages/{sid}/{attempt['attemptId']}/taskList?length=100000"
+                )
+                for task in _get(url):
+                    if task.get("duration") is None:
+                        continue  # still running
+                    end = _epoch(task["launchTime"]) + task["duration"] / 1000.0
+                    if t0 <= end <= t1 + 1.0:
+                        ends.setdefault(str(task["executorId"]), []).append(end)
+    return ends
 
 
 class WorkerPeak:
@@ -390,8 +508,16 @@ class WorkerPeak:
     as the pool's 125 MB). Each task therefore looks at every Python worker of its executor: the
     ``python -m pyspark.daemon`` / ``pyspark.worker`` processes below the executor's JVM. The
     tasks run in Python workers of their own (a worker environment variable keys a separate
-    pool), so the sweep's own CPU time never makes a bystander look busy. A worker that exits
-    during the shape takes its mark with it.
+    pool), so the sweep's own CPU time never makes a bystander look busy.
+
+    A worker that exits takes its mark with it, and Spark stops an idle worker after 60 s: in a
+    long shape, a worker whose task finished early is gone before the read, and nothing the
+    kernel keeps says whether it had run (the daemon ignores SIGCHLD, so a reaped worker's CPU
+    time is not added to the daemon's). So ``read()`` is NULL when a worker that was there at the
+    reset is gone. A worker created during the shape leaves no trace if it exits; but Spark
+    stops one only after the pool has seen no worker released for 60 s, so when the shape ran
+    longer than that the Spark REST API's task end times must show every executor releasing a
+    worker at least every 50 s, or the reading is NULL too.
 
     ``read()`` is None, with the reason in ``reason``, wherever the reset cannot be shown to
     reach every worker: off Linux, on a Connect session, when the Spark REST API does not give
@@ -399,7 +525,10 @@ class WorkerPeak:
     ``spark.default.parallelism`` would leave an executor without a task and still read a
     number), when a live worker's counter cannot be reset, when the sweep did not get a pool of
     its own, and when no slot frees up within ``TIMEOUT_S`` (a busy cluster). It is also None,
-    saying so, when no Python worker ran during the shape (a plan with no Python in it).
+    saying so, when a worker exited before the read (above; also a crashed one), when an
+    executor that held workers at the reset is gone, when workers exit with their task
+    (``spark.python.worker.reuse=false``), and when no Python worker ran during the shape (a plan
+    with no Python in it). It is not a number that leaves out a worker that ran.
 
     Why not sampling: a sampler would have to run inside the workers during the shape and
     compete with it for slots. The reset needs no thread, and it costs two short jobs. It
@@ -414,15 +543,31 @@ class WorkerPeak:
         self.spark = spark
         self.reason: Optional[str] = None
         self._slots = 0
-        self._baseline: Dict[str, int] = {}  # worker -> CPU ticks at the reset
+        # what the reset noted: worker -> CPU ticks, and the daemons
+        self._baseline: Dict = {"cpu": {}, "daemons": set()}
+        self._scopes: set = set()  # the executors that held workers at the reset
+        self._t0: Optional[float] = None  # when the reset ended
         if is_connect(spark):
             self.reason = "a Connect session cannot reach every Python worker"
         elif not sys.platform.startswith("linux"):
             self.reason = "per-shape worker memory needs Linux (/proc/self/clear_refs)"
         elif id(spark) in WorkerPeak._failed:
             self.reason = WorkerPeak._failed[id(spark)]
+        elif self._workers_exit_with_their_task():
+            self.reason = (
+                "workers exit with their task (spark.python.worker.reuse=false)"
+            )
         else:
             self._slots, self.reason = self._count_slots()
+
+    def _workers_exit_with_their_task(self) -> bool:
+        try:
+            conf = self.spark.sparkContext.getConf()
+            return conf.get("spark.python.worker.reuse", "true").lower() == "false"
+        except (
+            Exception
+        ):  # noqa: BLE001 - _count_slots reports a context it cannot reach
+            return False
 
     def _count_slots(self):
         """(slots, reason): the executors' task slots from the REST API, which must agree with
@@ -463,7 +608,7 @@ class WorkerPeak:
         """run() as a job group cancelled after TIMEOUT_S: a barrier stage waits for a free slot
         on every worker, and a busy cluster would hold the whole run."""
         sc = self.spark.sparkContext
-        group = f"gbx-worker-peak-{uuid.uuid4().hex[:8]}"
+        group = f"{_PEAK_JOB_GROUP}{uuid.uuid4().hex[:8]}"
         fired = threading.Event()
 
         def cancel():
@@ -489,8 +634,10 @@ class WorkerPeak:
             )  # PySpark has no clearJobGroup
 
     def _sweep(self, reset: bool) -> List:
-        """One row per task: hwm, missed, ran, own_pool and ticks (see `_sweep_task`)."""
+        """One row per task: hwm, missed, ran, lost, scope, own_pool, ticks (see `_sweep_task`)."""
         n, sc = self._slots, self.spark.sparkContext
+        survey, alive = _surveyor(_worker_finder())
+        task = _sweep_task(reset, survey, alive, _read_judge(), self._baseline)
 
         def run():
             sc.environment[_SWEEP_ENV] = (
@@ -498,8 +645,9 @@ class WorkerPeak:
             )
             try:
                 df = self.spark.range(n, numPartitions=n).mapInPandas(
-                    _sweep_task(reset, _worker_finder(), self._baseline),
-                    "hwm double, missed long, ran long, own_pool long, ticks string",
+                    task,
+                    "hwm double, missed long, ran long, lost long, scope string, "
+                    "own_pool long, ticks string",
                     barrier=True,
                 )
             finally:
@@ -519,23 +667,45 @@ class WorkerPeak:
                 missed = sum(r.missed for r in rows)
                 if missed:
                     raise RuntimeError(f"{missed} live Python worker(s) not resettable")
-                self._baseline = {
-                    k: int(v)
-                    for r in rows
-                    for k, _, v in (e.partition("=") for e in r.ticks.split(";") if e)
-                }
+                self._baseline = {"cpu": {}, "daemons": set()}
+                for r in rows:
+                    for entry in filter(None, r.ticks.split(";")):
+                        _, key, ticks, daemon = entry.split(",")  # "m,key,cpu,daemon"
+                        self._baseline["cpu"][key] = int(ticks)
+                        if daemon == "1":
+                            self._baseline["daemons"].add(key)
+                self._scopes = {r.scope for r in rows}
+                self._t0 = time.time()
             except Exception as exc:  # noqa: BLE001
                 self._fail("reset", exc)
+
+    def _released_often_enough(self, t1: float) -> bool:
+        """False when a worker may have idled out the pool's 60 s and been stopped since the reset."""
+        if self._t0 is None or t1 - self._t0 <= _IDLE_STOP_S:
+            return True
+        sc = self.spark.sparkContext
+        try:
+            base = f"{sc.uiWebUrl}/api/v1/applications/{sc.applicationId}"
+            ends = _task_ends(base, self._t0, t1)
+        except Exception:  # noqa: BLE001 - no task times: no way to rule it out
+            return False
+        return _longest_release_gap(ends, t1) <= _IDLE_STOP_S
 
     def read(self) -> Optional[float]:
         if self.reason is not None:
             return None
+        t1 = time.time()
         try:
             rows = self._sweep(reset=False)
         except Exception as exc:  # noqa: BLE001
             self._fail("read", exc)
             return None
-        if not sum(r.ran for r in rows):
+        if sum(r.lost for r in rows) or self._scopes - {r.scope for r in rows}:
+            self.reason = _LOST_REASON
+        elif not self._released_often_enough(t1):
+            self.reason = _MAYBE_LOST_REASON
+        elif not sum(r.ran for r in rows):
             self.reason = "no Python worker ran during the shape"
-            return None
-        return max(r.hwm for r in rows)
+        else:
+            return max(r.hwm for r in rows)
+        return None

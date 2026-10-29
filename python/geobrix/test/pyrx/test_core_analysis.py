@@ -849,3 +849,48 @@ def test_viewshed_gdal_bounds_peak_rss():
         f"peak RSS delta {delta_bytes / 1e6:.1f} MB ≥ decoded DEM "
         f"{decoded_dem_bytes / 1e6:.0f} MB — engine may be loading the full band"
     )
+
+
+class _ShiftedDem:
+    """The open DEM with its geotransform moved by ``dc`` columns east and ``dr`` rows south: what a
+    window GDAL placed correctly looks like when the DEM's own grid says otherwise."""
+
+    def __init__(self, ds, dc, dr):
+        from rasterio import Affine
+
+        self._ds = ds
+        self.transform = ds.transform * Affine.translation(dc, dr)
+
+    def __getattr__(self, name):
+        return getattr(self._ds, name)
+
+
+@pytest.mark.parametrize(
+    "dc, dr",
+    [(1000, 0), (0, 1000), (-1000, 0), (0, -1000)],
+    ids=["left-of", "above", "past-the-right-edge", "past-the-bottom-edge"],
+)
+def test_viewshed_ctypes_refuses_a_window_that_falls_outside_the_dem(dc, dr):
+    """GDAL crops its window to the DEM, so a window outside it means the grids disagree: the engine
+    raises rather than writing the mask at a wrapped or overflowing offset."""
+    dem = np.zeros((150, 150), dtype="float32")
+    profile = dict(
+        driver="GTiff",
+        width=150,
+        height=150,
+        count=1,
+        dtype="float32",
+        crs="EPSG:27700",
+        transform=from_origin(1000.0, 5000.0, 1.0, 1.0),
+        nodata=None,
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(dem, 1)
+        src = mf.read()
+    with _serde.open_tile(src) as ds:
+        ox, oy = 1075.0, 4925.0  # mid-DEM, so GDAL's own window lies wholly inside it
+        with pytest.raises(RuntimeError, match=r"window at pixel \(.*\) falls outside"):
+            analysis._viewshed_gdal_ctypes(
+                _ShiftedDem(ds, dc, dr), ox, oy, 10.0, 0.0, 30.0
+            )

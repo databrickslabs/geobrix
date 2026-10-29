@@ -441,3 +441,28 @@ def test_source_profile_is_drop_ycbcr_and_drop_stripe_blocks_in_one():
         "blockysize": 8,
     }
     assert C.source_profile(prof, unless_jpeg=True)["photometric"] == "ycbcr"
+
+
+def test_drop_ycbcr_is_called_only_inside_the_compression_module():
+    """A writer starts from a source's profile through ``source_profile`` (``drop_ycbcr`` plus
+    ``drop_stripe_blocks``), never by calling ``drop_ycbcr`` itself: one call site per rule, so a site
+    cannot pick up the YCbCr photometric fix and miss the strip-width one."""
+    import ast
+    import pathlib
+
+    src = pathlib.Path(C.__file__).parents[2]  # .../databricks/labs/gbx
+    offenders = []
+    for path in sorted(src.rglob("*.py")):
+        if path.name == "compression.py":
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Call):
+                fn = node.func
+                name = (
+                    fn.attr
+                    if isinstance(fn, ast.Attribute)
+                    else getattr(fn, "id", None)
+                )
+                if name == "drop_ycbcr":
+                    offenders.append(f"{path.relative_to(src)}:{node.lineno}")
+    assert offenders == [], offenders

@@ -230,3 +230,34 @@ def test_read_tiles_table_spreads_the_tiles_of_one_source(spark_delta, tmp_path)
     assert len(by_task) > 1
     # two tasks per index row by default, so fewer tiles share a task than with one per row
     assert tasks == 2 * len(rows)
+
+
+@pytest.mark.parametrize("fmt", ["gdal", "ogr", "png_gbx", "", None])
+def test_read_tiles_table_refuses_a_format_that_reads_no_tile_index(fmt):
+    """Only the raster_gbx reader and the two that extend it take a tile index; the error names
+    the three and says what to pass. It is raised before the table is touched: no session needed.
+    """
+    from databricks.labs.gbx.ds.raster import read_tiles_table
+
+    with pytest.raises(
+        ValueError, match=r"raster_gbx, gtiff_gbx, cog_gbx.*Fix: pass one of"
+    ):
+        read_tiles_table(None, "any_table", format=fmt)
+
+
+@pytest.mark.delta
+def test_read_tiles_table_refuses_an_index_with_no_path_column(spark_delta):
+    """A table with no ``path`` column is not a tile index: the error lists the columns it has."""
+    from databricks.labs.gbx.ds.raster import read_tiles_table
+
+    name = f"gbx_tiles_nopath_{uuid.uuid4().hex[:8]}"
+    spark_delta.createDataFrame([(1, 2)], ["file", "col_off"]).write.format(
+        "delta"
+    ).saveAsTable(name)
+    try:
+        with pytest.raises(
+            ValueError, match=r"no 'path' column .*'file'.*Fix: read a table"
+        ):
+            read_tiles_table(spark_delta, name)
+    finally:
+        spark_delta.sql(f"DROP TABLE IF EXISTS {name}")

@@ -779,6 +779,10 @@ def _assert_rows_valid_as_their_source(raster_bytes, name):
     assert (
         valid[covered] == want[covered]
     ).all(), f"{int((valid[covered] != want[covered]).sum())} pixels differ in validity"
+    # the corners of the warp: no tile reaches them, so the mosaic's mask calls them invalid
+    assert not valid[
+        ~covered
+    ].any(), f"{int(valid[~covered].sum())} uncovered pixels are valid"
 
 
 def _crs_tile(srid, x, width, extra_entries=False):

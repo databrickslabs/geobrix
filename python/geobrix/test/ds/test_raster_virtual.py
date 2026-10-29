@@ -312,28 +312,17 @@ def test_materialized_tile_has_tile_size_metadata(spark, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_read_wholefile_virtual_no_rasterio_open(tmp_path, monkeypatch):
+def test_read_wholefile_virtual_no_rasterio_open(tmp_path, named_raster_reads):
     """Whole-file virtual tile: read() emits 0 rasterio.open calls.
 
     The per-tile FUSE header open is the ~74s/1k Serverless cost; read() defers
     it by emitting window=None with only the metadata knowable from the path.
     """
-    import rasterio as _rasterio
-
     from databricks.labs.gbx.ds.raster import RasterGbxReader, _TilePartition
 
     path = write_striped_gtiff(str(tmp_path / "src.tif"), 256, 256)
 
-    open_call_count = [0]
-    _original_open = _rasterio.open
-
-    def _counting_open(*args, **kwargs):
-        open_call_count[0] += 1
-        return _original_open(*args, **kwargs)
-
-    # Patch rasterio.open on the module object — the local `import rasterio`
-    # inside read() returns the same cached module, so this intercepts it.
-    monkeypatch.setattr(_rasterio, "open", _counting_open)
+    opened = named_raster_reads
 
     reader = RasterGbxReader({"path": str(tmp_path)})
     partition = _TilePartition(
@@ -344,9 +333,9 @@ def test_read_wholefile_virtual_no_rasterio_open(tmp_path, monkeypatch):
 
     rows = list(reader.read(partition))
 
-    assert open_call_count[0] == 0, (
+    assert len(opened) == 0, (
         f"Expected 0 rasterio.open calls for whole-file virtual tile, "
-        f"got {open_call_count[0]}"
+        f"got {len(opened)}"
     )
     assert len(rows) == 1, "read() must emit exactly one row"
     source, tile_row = rows[0]
@@ -367,22 +356,13 @@ def test_read_wholefile_virtual_no_rasterio_open(tmp_path, monkeypatch):
     assert "driver" not in meta, "driver must NOT be in deferred metadata"
 
 
-def test_read_materialized_still_opens_header(tmp_path, monkeypatch):
+def test_read_materialized_still_opens_header(tmp_path, named_raster_reads):
     """Byte-identical guard: virtualTiles=false (materialized) still opens the header."""
-    import rasterio as _rasterio
-
     from databricks.labs.gbx.ds.raster import RasterGbxReader, _TilePartition
 
     path = write_striped_gtiff(str(tmp_path / "src.tif"), 256, 256)
 
-    open_call_count = [0]
-    _original_open = _rasterio.open
-
-    def _counting_open(*args, **kwargs):
-        open_call_count[0] += 1
-        return _original_open(*args, **kwargs)
-
-    monkeypatch.setattr(_rasterio, "open", _counting_open)
+    opened = named_raster_reads
 
     reader = RasterGbxReader({"path": str(tmp_path)})
     # Materialized tile: emit_virtual=False
@@ -395,28 +375,19 @@ def test_read_materialized_still_opens_header(tmp_path, monkeypatch):
 
     rows = list(reader.read(partition))
 
-    assert open_call_count[0] > 0, "materialized path must still open the header"
+    assert len(opened) > 0, "materialized path must still open the header"
     assert len(rows) == 1
     source, tile_row = rows[0]
     assert tile_row[1] is not None, "materialized tile must have raster bytes"
 
 
-def test_read_tilesize_virtual_still_opens_header(tmp_path, monkeypatch):
+def test_read_tilesize_virtual_still_opens_header(tmp_path, named_raster_reads):
     """Byte-identical guard: tileSize virtual tiles (window≠None) keep the header open."""
-    import rasterio as _rasterio
-
     from databricks.labs.gbx.ds.raster import RasterGbxReader, _TilePartition
 
     path = write_striped_gtiff(str(tmp_path / "src.tif"), 256, 256)
 
-    open_call_count = [0]
-    _original_open = _rasterio.open
-
-    def _counting_open(*args, **kwargs):
-        open_call_count[0] += 1
-        return _original_open(*args, **kwargs)
-
-    monkeypatch.setattr(_rasterio, "open", _counting_open)
+    opened = named_raster_reads
 
     reader = RasterGbxReader({"path": str(tmp_path)})
     # tile_size virtual tile: window is already set (not whole-file)
@@ -429,7 +400,7 @@ def test_read_tilesize_virtual_still_opens_header(tmp_path, monkeypatch):
     rows = list(reader.read(partition))
 
     assert (
-        open_call_count[0] > 0
+        len(opened) > 0
     ), "non-whole-file virtual tile (explicit window) must still open the header"
     assert len(rows) == 1
     source, tile_row = rows[0]

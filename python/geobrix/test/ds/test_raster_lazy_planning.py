@@ -26,18 +26,13 @@ def _write_sample(path, width=4, height=3, epsg=4326):
 # ---------------------------------------------------------------------------
 
 
-def test_plan_partitions_virtual_passthrough_no_rasterio_open(tmp_path, monkeypatch):
+def test_plan_partitions_virtual_passthrough_no_rasterio_open(
+    tmp_path, named_raster_reads
+):
     """virtualTiles=True, no split, no AOI → rasterio.open NOT called at plan time."""
     _write_sample(tmp_path / "raster.tif", width=4, height=3)
 
-    open_calls = []
-    real_open = rasterio.open
-
-    def _mock_open(p, *a, **kw):
-        open_calls.append(str(p))
-        return real_open(p, *a, **kw)
-
-    monkeypatch.setattr(rasterio, "open", _mock_open)
+    open_calls = named_raster_reads
 
     from databricks.labs.gbx.ds.raster import _plan_partitions_for_file
 
@@ -56,19 +51,12 @@ def test_plan_partitions_virtual_passthrough_no_rasterio_open(tmp_path, monkeypa
     assert parts[0].is_passthrough is False
 
 
-def test_plan_partitions_virtual_three_files_zero_opens(tmp_path, monkeypatch):
+def test_plan_partitions_virtual_three_files_zero_opens(tmp_path, named_raster_reads):
     """Three files in a directory → zero header opens during partitions()."""
     for i in range(3):
         _write_sample(tmp_path / f"raster_{i}.tif", width=4, height=3)
 
-    open_calls = []
-    real_open = rasterio.open
-
-    def _mock_open(p, *a, **kw):
-        open_calls.append(str(p))
-        return real_open(p, *a, **kw)
-
-    monkeypatch.setattr(rasterio, "open", _mock_open)
+    open_calls = named_raster_reads
 
     from databricks.labs.gbx.ds.raster import RasterGbxReader
 
@@ -89,18 +77,13 @@ def test_plan_partitions_virtual_three_files_zero_opens(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_plan_partitions_tilesize_still_reads_header_at_plan(tmp_path, monkeypatch):
+def test_plan_partitions_tilesize_still_reads_header_at_plan(
+    tmp_path, named_raster_reads
+):
     """tileSize requires dims at plan time → rasterio.open IS called."""
     _write_sample(tmp_path / "raster.tif", width=8, height=6)
 
-    open_calls = []
-    real_open = rasterio.open
-
-    def _mock_open(p, *a, **kw):
-        open_calls.append(str(p))
-        return real_open(p, *a, **kw)
-
-    monkeypatch.setattr(rasterio, "open", _mock_open)
+    open_calls = named_raster_reads
 
     from databricks.labs.gbx.ds.raster import RasterGbxReader
 

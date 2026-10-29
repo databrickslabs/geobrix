@@ -80,20 +80,13 @@ def test_read_manifest_rows_json_not_found():
 
 
 def test_partitions_from_tile_rows_window_and_dims_no_rasterio_open(
-    tmp_path, monkeypatch
+    tmp_path, named_raster_reads
 ):
     """Row with path + window + dims → _TilePartition built without rasterio.open."""
     _write_sample(tmp_path / "a.tif", width=4, height=3)
     _write_sample(tmp_path / "b.tif", width=8, height=6)
 
-    open_calls = []
-    real_open = rasterio.open
-
-    def _mock_open(p, *a, **kw):
-        open_calls.append(p)
-        return real_open(p, *a, **kw)
-
-    monkeypatch.setattr(rasterio, "open", _mock_open)
+    open_calls = named_raster_reads
 
     from databricks.labs.gbx.ds.raster import _partitions_from_tile_rows
 
@@ -149,18 +142,13 @@ def test_a_spark_row_window_is_read_by_field_name_not_by_position():
     assert [p.window for p in parts] == [(0, 256, 1024, 512)]
 
 
-def test_partitions_from_tile_rows_window_only_no_rasterio_open(tmp_path, monkeypatch):
+def test_partitions_from_tile_rows_window_only_no_rasterio_open(
+    tmp_path, named_raster_reads
+):
     """Row with path + window but no dims → still no rasterio.open (window is enough)."""
     _write_sample(tmp_path / "a.tif", width=4, height=3)
 
-    open_calls = []
-    real_open = rasterio.open
-
-    def _mock_open(p, *a, **kw):
-        open_calls.append(p)
-        return real_open(p, *a, **kw)
-
-    monkeypatch.setattr(rasterio, "open", _mock_open)
+    open_calls = named_raster_reads
 
     from databricks.labs.gbx.ds.raster import _partitions_from_tile_rows
 
@@ -180,7 +168,7 @@ def test_partitions_from_tile_rows_window_only_no_rasterio_open(tmp_path, monkey
     assert parts[0].window == (0, 0, 4, 3)
 
 
-def test_partitions_from_tile_rows_path_only_opens_header(tmp_path, monkeypatch):
+def test_partitions_from_tile_rows_path_only_opens_header(tmp_path, named_raster_reads):
     """Row with only path (no window, no dims), materialized case → header read for that file only.
 
     Note: with emit_virtual=True, lazy planning makes path-only rows return
@@ -190,14 +178,7 @@ def test_partitions_from_tile_rows_path_only_opens_header(tmp_path, monkeypatch)
     """
     _write_sample(tmp_path / "a.tif", width=4, height=3)
 
-    open_calls = []
-    real_open = rasterio.open
-
-    def _mock_open(p, *a, **kw):
-        open_calls.append(str(p))
-        return real_open(p, *a, **kw)
-
-    monkeypatch.setattr(rasterio, "open", _mock_open)
+    open_calls = named_raster_reads
 
     from databricks.labs.gbx.ds.raster import _partitions_from_tile_rows
 
@@ -220,19 +201,14 @@ def test_partitions_from_tile_rows_path_only_opens_header(tmp_path, monkeypatch)
     assert len(parts) >= 1
 
 
-def test_partitions_from_tile_rows_unlisted_file_never_opened(tmp_path, monkeypatch):
+def test_partitions_from_tile_rows_unlisted_file_never_opened(
+    tmp_path, named_raster_reads
+):
     """A file on disk that is NOT in the manifest is never opened."""
     _write_sample(tmp_path / "in_manifest.tif", width=4, height=3)
     _write_sample(tmp_path / "not_in_manifest.tif", width=4, height=3)
 
-    open_calls = []
-    real_open = rasterio.open
-
-    def _mock_open(p, *a, **kw):
-        open_calls.append(str(p))
-        return real_open(p, *a, **kw)
-
-    monkeypatch.setattr(rasterio, "open", _mock_open)
+    open_calls = named_raster_reads
 
     from databricks.labs.gbx.ds.raster import _partitions_from_tile_rows
 
@@ -257,7 +233,7 @@ def test_partitions_from_tile_rows_unlisted_file_never_opened(tmp_path, monkeypa
 # ---------------------------------------------------------------------------
 
 
-def test_partitions_manifest_json_end_to_end(tmp_path, monkeypatch):
+def test_partitions_manifest_json_end_to_end(tmp_path, named_raster_reads):
     """RasterGbxReader with manifest= option → correct partitions, 0 rasterio.open."""
     _write_sample(tmp_path / "r0.tif", width=4, height=3)
     _write_sample(tmp_path / "r1.tif", width=8, height=6)
@@ -270,14 +246,7 @@ def test_partitions_manifest_json_end_to_end(tmp_path, monkeypatch):
     with open(manifest_file, "w") as f:
         json.dump(manifest, f)
 
-    open_calls = []
-    real_open = rasterio.open
-
-    def _mock_open(p, *a, **kw):
-        open_calls.append(str(p))
-        return real_open(p, *a, **kw)
-
-    monkeypatch.setattr(rasterio, "open", _mock_open)
+    open_calls = named_raster_reads
 
     from databricks.labs.gbx.ds.raster import RasterGbxReader
 

@@ -234,6 +234,48 @@ def no_backoff_sleep(monkeypatch):
         monkeypatch.setattr(tenacity.nap, "time", quick)
 
 
+@pytest.fixture
+def named_raster_reads(monkeypatch):
+    """The paths of the rasters read by name while the test runs (a list, filled as they open).
+
+    GeoBrix reads a raster through the driver policy (``_gdal_policy.open_data``). In its full mode that ends in
+    ``rasterio.open``; in its partial mode (a PyPI rasterio: CI's light phase, the dev image) it ends in rasterio's
+    ``DatasetReader`` with the allowed drivers, so a spy on ``rasterio.open`` alone sees no read there. This counts
+    the restricted open both modes share, and a read-mode ``rasterio.open`` made outside it (the policy switched
+    off), once each. A write is not a read, and an open of bytes (a ``MemoryFile``) is not an open by name: neither
+    is counted, so a test may write its fixture rasters after asking for this.
+    """
+    import threading
+
+    import rasterio
+
+    from databricks.labs.gbx import _gdal_policy
+
+    calls, inside = [], threading.local()
+    real_restricted, real_open = _gdal_policy._open_restricted, rasterio.open
+
+    def _record(fp):
+        if isinstance(fp, (str, os.PathLike)):
+            calls.append(os.fspath(fp))
+
+    def restricted(fp, *args, **kwargs):
+        _record(fp)
+        inside.depth = getattr(inside, "depth", 0) + 1
+        try:
+            return real_restricted(fp, *args, **kwargs)
+        finally:
+            inside.depth -= 1
+
+    def opened(fp, mode="r", *args, **kwargs):
+        if not getattr(inside, "depth", 0) and str(mode).startswith("r"):
+            _record(fp)
+        return real_open(fp, mode, *args, **kwargs)
+
+    monkeypatch.setattr(_gdal_policy, "_open_restricted", restricted)
+    monkeypatch.setattr(rasterio, "open", opened)
+    return calls
+
+
 @pytest.fixture(scope="session")
 def spark_connect_local():
     """A local Spark Connect session (`remote("local[2]")`), started once per session."""

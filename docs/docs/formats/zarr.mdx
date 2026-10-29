@@ -512,17 +512,13 @@ measured on Databricks to show the shape of the trade-offs; they are not a guara
 | One hour of the whole globe | `gbx_zarr_read` | 3.2 s | 3.0 s |
 | | GeoTIFF: `raster_gbx` and `rst_avg` | 1.9 s | 3.3 s |
 | 1,000 points, every hour (744,000 values) | `gbx_zarr_sample` | 24 s | 16.5 s |
-| | GeoTIFF: `raster_gbx`, crossed with the points, and `rst_sample` | about 1.0 s of task time per point and hour | about 1.2 s of task time per point and hour |
 | 30 days over Europe (35-72 N, 10 W-40 E) | `gbx_zarr_read` | 4.8 s | 4.4 s |
 | | GeoTIFF: 720 windows, `raster_gbx` and `rst_avg` | 232 s | 83 s |
 
-The GeoTIFF time series was measured on 4 hours and 100 points (30 on Serverless) and is given per
-value: at that rate the whole workload is some 760,000 task-seconds, against 24 s for the store.
-
 - **A single map** is quick either way, but this store keeps 24 hours in each inner chunk, so one hour
   reads 24 hours of chunks. A store that is read mostly as maps should be written with `chunks="maps"`.
-- **A time series at points** is where the store wins most: it reads each chunk once for all the points
-  in it, while one GeoTIFF per hour means one file and one read per point and hour.
+- **A time series at points** reads each chunk once for all the points in it, whatever the number of
+  hours.
 - **A box over many hours** reads only the chunks the box touches, in a few large reads; the GeoTIFFs
   need one file per hour.
 
@@ -541,16 +537,17 @@ over the block positions, 8.8 s writing the data files, and 6.0 s for the commit
 4-core worker, writing the data files took most of it (28-46 s through the Volume, 24-27 s direct to
 storage): the blocks pass through Spark, into a shuffle and out of it, before they are written.
 
-- **A create has a fixed cost** of about 15 s for setting up and committing, whatever its size, and a
-  write that is not a create pays the commit part of it. Write a store in a few large writes rather than
-  many small ones.
+- **A create has a fixed cost** for setting up and committing: about 12-20 s in these runs, measured on
+  a 1 GB create. A write that is not a create pays the commit part of it, so write a store in a few
+  large writes rather than many small ones.
 - **A plain `xarray.to_zarr` is faster and gives none of the guarantees**: no versions, no all-or-nothing
   commit, no safe concurrent writers.
 - **An input that is expensive to compute** is evaluated twice by a create or an append (once for its
   positions). Write it to a table first; see the [Zarr Writer](../writers/zarr).
-- **Concurrent appenders** land one per round, each rebasing on the others, and the last of eight needed
-  seven attempts. On Serverless eight at once took 132 s against 215 s one after another; on Runtime 19
-  with one 4-core worker they took 216 s against 178 s, the eight sharing four cores.
+- **Concurrent appenders** land one per round, each rebasing on the others after a jittered wait that
+  doubles with every lost round (up to 16 s), and the last of eight needed seven attempts. On Serverless
+  eight at once took 132 s against 215 s one after another; on Runtime 19 with one 4-core worker they
+  took 216 s against 178 s, the eight sharing four cores as well as waiting between attempts.
 
 ## Limits
 
@@ -562,8 +559,8 @@ storage): the blocks pass through Spark, into a shuffle and out of it, before th
 - **Tiles.** `output="tiles"` needs the coordinates to form a regular grid.
 - **Inner chunks per shard.** A shard that `gbx_zarr_write` creates holds at most 4,096 inner chunks.
   Every read of a shard fetches or builds its index, 16 bytes per inner chunk, so a shard of many tiny
-  chunks makes every read slow: on a Volume, reading one chunk of a shard of 93,312 chunks took 0.9-1.2 s,
-  against 0.11-0.14 s at 4,096. The computed layout stays within the limit, and a `shards=` that goes
+  chunks makes every read slow: on a Volume, reading one chunk of a shard of 93,312 chunks took a median
+  of 0.93-1.18 s, against 0.10-0.14 s at 4,096 (four runs on two runtimes). The computed layout stays within the limit, and a `shards=` that goes
   beyond it raises `ValueError` with a `Fix:`. A registered store's shards are read as they are.
 - **Codecs.** The codecs that zarr-python, numcodecs and zarrs can decode. Writes use `zstd` and `crc32c`
   unless you pass `codecs`. A Zarr v3 array that has any codec beside `sharding_indexed` in its own codec

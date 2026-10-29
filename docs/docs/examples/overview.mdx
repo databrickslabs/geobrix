@@ -19,6 +19,7 @@ End-to-end, runnable notebook walkthroughs. Each links to the notebook source on
 | [Helios — Tiling to PMTiles](../notebooks/helios) | Four-notebook San Francisco series: vector, raster basemap, terrain scoring, and a sharded PMTiles mosaic. |
 | [Vapor-Eyes — Permian Methane](../notebooks/vapor-eyes) | Screen a satellite methane signal over the Permian Basin down to the leaking operator. |
 | [Orthomosaic Photogrammetry](../notebooks/orthomosaic) | Build a georeferenced orthomosaic from a drone image dataset: `exif_gbx` telemetry extraction, GSD estimation, sparse SfM, orthomosaic GeoTIFF, COG conversion, and PMTiles packaging — capped off with an optional GeoSAM segmentation step (`gbx.models`) that turns the published orthomosaic into georeferenced object polygons, in-notebook or via a served GPU endpoint. |
+| [Weather Features with Zarr](../notebooks/zarr-weather-features) | Register an ERA5-like weather cube in place as a transactional Zarr store, sample 100 sites into a features table, write a derived wind speed back as a new variable in one transaction, read an earlier version, map it as raster tiles clipped with `rst_clip`, and tag the version for training. |
 
 :::tip Lakeflow SDP pipelines
 [Wireless Coverage](../notebooks/wireless-coverage?flavor=lakeflow) and

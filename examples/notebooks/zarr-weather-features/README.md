@@ -138,6 +138,7 @@ Tagged version: outlives retain and vacuum; the features reproduce from it     [
 
 ## Related resources
 
+- [Weather Features with Zarr example page](https://databrickslabs.github.io/geobrix/docs/notebooks/zarr-weather-features)
 - [Zarr Stores](https://databrickslabs.github.io/geobrix/docs/formats/zarr) — the transactional model: versions, tags, retention, file modes
 - [Virtual Tiles](https://databrickslabs.github.io/geobrix/docs/api/virtual-tiles) — how a tile that holds no pixels is opened
 - [GeoBrix RasterX API](https://databrickslabs.github.io/geobrix/docs/api/raster-functions)

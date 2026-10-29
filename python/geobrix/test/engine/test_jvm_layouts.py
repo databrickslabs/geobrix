@@ -1,10 +1,11 @@
 """The L1 engine on the JVM layouts a user runs it on: the staged JAR alone on the user's classpath, and on the
 driver's system classpath. Each layout is one JVM, so each row runs in a subprocess.
 
-The JAR bundles GDAL's Java classes built against GDAL 3.11, so on these layouts GDALManager refuses the JVM's GDAL
-("a different GDAL is ..."), and the L1 engine cannot run. The rows are strict xfails until B2's pom switch (Step 4)
-makes the JAR carry the payload's GDAL 3.13.3 classes; then they XPASS, and the xfail goes. The harness layout
-(conftest.payload_jvm_conf) is the one the green L1 rows run on.
+The JAR bundles GDAL's Java classes from the native build that also makes the env wheel's JNI (pom.xml
+gdal.java.version), so on these layouts the JVM runs the payload's GDAL (GBX_NATIVE_ROOT) and the L1 engine runs.
+Neither layout sets the payload's lib/ on the library path: GDAL's classes load the first libgdalalljni.so there by
+name, which in the dev container is the payload's (gbx:docker:start links /usr/lib/libgdalalljni.so to it). The
+harness layout (conftest.payload_jvm_conf) is the one the other L1 rows run on.
 """
 
 import os
@@ -63,11 +64,6 @@ def _staged_jar():
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(
-    strict=True,
-    reason="needs the B2 pom switch (Step 4): the JAR bundles GDAL 3.11's Java classes, so GDALManager refuses "
-    "the payload's GDAL on this layout",
-)
 @pytest.mark.parametrize("layout", ["user-jars", "sys-jar"])
 def test_the_l1_engine_runs_on_the_layout(layout):
     jar = _staged_jar()

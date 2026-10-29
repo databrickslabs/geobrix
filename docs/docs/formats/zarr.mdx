@@ -540,7 +540,11 @@ create): 2.5 s for the first pass over the block positions, 2.1 s claiming its r
 ledger, 1.8 s creating the manifest table, 8.1 s writing the data files, and 4.6 s for the commit (3.0 s
 of it the MERGE into the manifest). On Runtime 19 through the Volume (19.3 s) the same steps took 1.7 s,
 2.3 s, 1.8 s, 8.4 s and 4.9 s. Direct to storage, writing the data files varied most from run to run on
-one cluster, from 7.2 s to 25.5 s.
+one cluster, from 7.2 s to 25.5 s; measured again on a second cluster, beside plain object-store puts of
+the same size on the same nodes, it took a median 6.7 s (149 MB/s), from 5.3 s to 29.7 s. Its slow runs
+spent their time in the executors' JVM garbage collection, while Spark handed each 100 MB block from the
+step that computed it to the step that writes it; the writes themselves took 0.6-2.6 s each, and the
+plain puts, which never cross that step, 0.5-4.9 s.
 
 - **Blocks that are whole shards are written where they are made.** Each block of this cube is one
   shard (24 hours of the whole globe), so the task that makes a block encodes it and writes its data

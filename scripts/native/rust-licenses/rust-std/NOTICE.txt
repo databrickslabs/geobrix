@@ -1,6 +1,8 @@
 The Rust Standard Library is compiled into every GeoBrix Rust kernel.
 
-"The Rust Standard Library is dual-licensed under Apache 2.0 and MIT terms." (COPYRIGHT-library.html, "Short version",
-in the pinned Rust toolchain's share/doc/rust/.) LICENSE-MIT and LICENSE-APACHE are that toolchain's
-share/doc/rust/licenses/MIT.txt and Apache-2.0.txt, identical in its aarch64-unknown-linux-gnu and aarch64-apple-darwin
-builds. COPYRIGHT-library.html also lists the notices of the files and crates the standard library itself includes.
+"The Rust Standard Library is dual-licensed under Apache 2.0 and MIT terms." (COPYRIGHT-library.html, "Short version".)
+COPYRIGHT-library.html is the pinned Rust toolchain's share/doc/rust/COPYRIGHT-library.html: the standard library's own
+notice, with the notices of the files and crates it includes (compiler_builtins, hashbrown, ...). LICENSE-MIT and
+LICENSE-APACHE are the same toolchain's share/doc/rust/licenses/MIT.txt and Apache-2.0.txt, the MIT text with its
+copyright line filled in as COPYRIGHT-library.html states it. All three are identical in the toolchain's
+aarch64-unknown-linux-gnu, x86_64-unknown-linux-gnu and aarch64-apple-darwin builds.

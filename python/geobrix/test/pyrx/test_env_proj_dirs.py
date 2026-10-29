@@ -117,6 +117,27 @@ def test_multi_path_base_is_merged_too(monkeypatch, base, tmp_path):
     assert _resolves_to(proj_data, "extra.json", extra_base)
 
 
+def test_a_users_grid_directory_survives_activation_and_the_registered_union(
+    monkeypatch, base, tmp_path
+):
+    # A user's PROJ_DATA of a grid directory then the PROJ data (/my/grids:/usr/share/proj): the payload's activation
+    # keeps the grid directory (it holds no proj.db, but it is readable), and register_proj_grids' union of the
+    # registered dirs and that base still reaches the user's grid, the registered one and proj.db.
+    from databricks.labs.gbx._native import _rules
+
+    user_grids = _mkdir_with(tmp_path / "my_grids", "user.gsb")
+    env = {"PROJ_DATA": os.pathsep.join([str(user_grids), str(base)])}
+    _rules.set_data_dirs(env, str(tmp_path / "payload_share"))
+    assert env["PROJ_DATA"] == os.pathsep.join([str(user_grids), str(base)])
+    monkeypatch.setenv("PROJ_DATA", env["PROJ_DATA"])
+    registered = _mkdir_with(tmp_path / "registered", "reg.gsb")
+    _env.configure_gdal_env(extra_proj_dirs=[str(registered)])
+    proj_data = os.environ["PROJ_DATA"]
+    assert _resolves_to(proj_data, "user.gsb", user_grids)
+    assert _resolves_to(proj_data, "reg.gsb", registered)
+    assert _resolves_to(proj_data, "proj.db", base)
+
+
 def test_missing_registered_dir_is_skipped(base, tmp_path):
     missing = tmp_path / "does_not_exist"
     with pytest.warns(RuntimeWarning, match="does_not_exist"):

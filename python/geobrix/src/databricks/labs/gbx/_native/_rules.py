@@ -17,9 +17,10 @@ The rules:
   copies. ``PYTHONPATH`` entries stay ahead of them. With no such entry they are appended.
 - **Data.** ``GDAL_DATA`` and ``PROJ_DATA`` point at ``_native/share``, each only when unset;
   ``PROJ_DATA`` is not set when the user set ``PROJ_LIB`` (PROJ's older name, still read). A ``PROJ_DATA`` or
-  ``PROJ_LIB`` keeps only its directories that hold a ``proj.db`` this process can read, in order (DBR 19's
-  ``/databricks/native/proj-data`` on a standard-access driver is not one); a ``PROJ_DATA`` with none counts as
-  unset and is removed, and an all-readable value is never changed. The readability probe never raises.
+  ``PROJ_LIB`` drops the entries that exist but this process cannot read (DBR 19's ``/databricks/native/proj-data``
+  on a standard-access driver) and keeps every other one in order, grid directories included; a ``PROJ_DATA`` left
+  with no ``proj.db`` gets the user's readable ``PROJ_LIB`` data directories, else ``_native/share/proj``, appended.
+  A value with a readable ``proj.db`` and nothing unreadable in it is never changed. The probes never raise.
 - **HDF5 filter plugins.** ``_native/<arch>/hdf5-plugins`` (netCDF-C's zstd, blosc, bzip2, szip,
   ... filters) is registered with the payload's OWN netCDF-C and HDF5, never through the
   environment: ``HDF5_PLUGIN_PATH`` is never set, so it reaches no other HDF5 in the process (a
@@ -88,43 +89,71 @@ def insert_vendor(path, dirs):
     return new
 
 
-def proj_db_readable(value):
-    """True when a directory of ``value`` (``os.pathsep``-joined) holds a ``proj.db`` this process can read.
-    Never raises: a probe that fails (EACCES and the like) means not readable."""
-    for d in (value or "").split(os.pathsep):
-        if not d:
-            continue
+def proj_entry(d):
+    """What a ``PROJ_DATA``/``PROJ_LIB`` entry is to this process: ``"db"`` (a directory holding a readable
+    ``proj.db``), ``"dir"`` (a readable directory without one: a grid directory), ``"missing"`` (nothing there), or
+    ``"unreadable"`` (there, but this process cannot read it or its ``proj.db``: the entry pyproj's ``Path.exists()``
+    raises on, EACCES). Never raises."""
+    try:
+        os.stat(d)
+    except (FileNotFoundError, NotADirectoryError):
+        return "missing"
+    except (OSError, ValueError):
+        return "unreadable"
+    try:
+        if os.path.isdir(d) and not os.access(d, os.R_OK | os.X_OK):
+            return "unreadable"
         db = os.path.join(d, "proj.db")
         try:
-            if os.path.isfile(db) and os.access(db, os.R_OK):
-                return True
-        except (OSError, ValueError):
-            continue
-    return False
+            os.stat(db)
+        except (FileNotFoundError, NotADirectoryError):
+            return "dir"
+        return "db" if os.access(db, os.R_OK) else "unreadable"
+    except (OSError, ValueError):
+        return "unreadable"
 
 
-def readable_proj_dirs(value):
-    """The directories of ``value`` (``os.pathsep``-joined), in order, that hold a ``proj.db`` this process can read."""
-    return [d for d in (value or "").split(os.pathsep) if d and proj_db_readable(d)]
+def proj_db_readable(value):
+    """True when a directory of ``value`` (``os.pathsep``-joined) holds a ``proj.db`` this process can read."""
+    return any(proj_entry(d) == "db" for d in (value or "").split(os.pathsep) if d)
+
+
+def usable_proj_dirs(value):
+    """The entries of ``value`` (``os.pathsep``-joined), in order, but those that exist and this process cannot read."""
+    return [
+        d
+        for d in (value or "").split(os.pathsep)
+        if d and proj_entry(d) != "unreadable"
+    ]
 
 
 def set_data_dirs(env, share):
     env.setdefault("GDAL_DATA", os.path.join(share, "gdal"))
-    # A PROJ_DATA or PROJ_LIB directory with no proj.db this process can read is no PROJ data: DBR 19 exports
-    # PROJ_DATA=/databricks/native/proj-data, which the notebook user of a standard-access cluster cannot read, and
-    # the vendored pyproj (no data dir of its own) checks each entry in order with Path.exists(), which raises on
-    # EACCES. So only the readable entries stay, in order; a PROJ_DATA with none counts as unset (and goes), and a
-    # PROJ_LIB with none is left to PROJ_DATA, which PROJ and pyproj read first. A readable value is kept as it is.
-    for key in ("PROJ_DATA", "PROJ_LIB"):
-        if key in env:
-            keep = readable_proj_dirs(env[key])
-            if keep:
-                if keep != env[key].split(os.pathsep):
-                    env[key] = os.pathsep.join(keep)
-            elif key == "PROJ_DATA":
-                del env["PROJ_DATA"]
-    if not ("PROJ_LIB" in env and readable_proj_dirs(env["PROJ_LIB"])):
-        env.setdefault("PROJ_DATA", os.path.join(share, "proj"))
+    # PROJ_DATA / PROJ_LIB. DBR 19 exports PROJ_DATA=/databricks/native/proj-data, which the notebook user of a
+    # standard-access cluster cannot read, and the vendored pyproj (no data dir of its own) checks each entry in order
+    # with Path.exists(), which raises on EACCES. So an entry that exists but cannot be read goes; every other entry
+    # stays, in order (a grid directory holds no proj.db, and a missing one costs nothing). Then PROJ must still find
+    # a proj.db: a PROJ_DATA left with none gets the user's readable PROJ_LIB data directories, else the payload's
+    # share/proj, appended; a PROJ_DATA left empty goes; with no PROJ_DATA and no readable PROJ_LIB data directory,
+    # PROJ_DATA is the payload's share/proj. A value with a readable proj.db and nothing unreadable is kept as it is.
+    proj = os.path.join(share, "proj")
+    lib = None
+    if "PROJ_LIB" in env:
+        lib = usable_proj_dirs(env["PROJ_LIB"])
+        if lib and lib != env["PROJ_LIB"].split(os.pathsep):
+            env["PROJ_LIB"] = os.pathsep.join(lib)
+    lib_db = [d for d in (lib or []) if proj_entry(d) == "db"]
+    if "PROJ_DATA" in env:
+        data = usable_proj_dirs(env["PROJ_DATA"])
+        if not data:
+            del env["PROJ_DATA"]
+        else:
+            if not any(proj_entry(d) == "db" for d in data):
+                data = data + (lib_db or [proj])
+            if data != env["PROJ_DATA"].split(os.pathsep):
+                env["PROJ_DATA"] = os.pathsep.join(data)
+    if "PROJ_DATA" not in env and not lib_db:
+        env["PROJ_DATA"] = proj
 
 
 def payload_lib(root, arch, soname_prefix):

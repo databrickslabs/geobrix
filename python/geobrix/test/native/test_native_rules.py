@@ -77,40 +77,76 @@ def test_the_ca_rule(tmp_path, environ, store, gdal, proj):
     assert env.get("CURL_CA_BUNDLE") == environ.get("CURL_CA_BUNDLE")  # never ours
 
 
-# The user's environment, GDAL_DATA after, PROJ_DATA after. "<ok>" is a directory holding a proj.db this process
-# can read; "<missing>" does not exist; "<empty>" exists with no proj.db. A PROJ_DATA or PROJ_LIB with no readable
-# proj.db is no PROJ data (DBR 19 exports PROJ_DATA=/databricks/native/proj-data, which a standard-access notebook
-# user cannot read): it is treated as unset. A readable one is kept.
+# The user's environment, GDAL_DATA after, PROJ_DATA after. "<ok>"/"<ok2>" are directories holding a proj.db this
+# process can read; "<grids>" a readable grid directory (a .gsb, no proj.db); "<empty>" an empty one; "<missing>"
+# does not exist; "<unr>" exists with a proj.db this process cannot read (EACCES; simulated, see _unreadable).
+# DBR 19 exports PROJ_DATA=/databricks/native/proj-data, which a standard-access notebook user cannot read: an entry
+# that exists but cannot be read goes, every other one stays in order, and PROJ must still find a proj.db.
 DATA_CASES = [
     ({}, "<share>/gdal", "<share>/proj"),
     ({"PROJ_LIB": "<ok>"}, "<share>/gdal", None),
     ({"GDAL_DATA": "/u/gdal", "PROJ_DATA": "<ok>"}, "/u/gdal", "<ok>"),
-    ({"PROJ_DATA": "<missing>"}, "<share>/gdal", "<share>/proj"),
-    ({"PROJ_DATA": "<empty>"}, "<share>/gdal", "<share>/proj"),
     ({"PROJ_DATA": ""}, "<share>/gdal", "<share>/proj"),
     ({"PROJ_LIB": "<missing>"}, "<share>/gdal", "<share>/proj"),
-    # the readable PROJ_LIB is the user's: the unreadable PROJ_DATA goes, so PROJ falls back to it
-    ({"PROJ_DATA": "<missing>", "PROJ_LIB": "<ok>"}, "<share>/gdal", None),
-    # only the readable directories of an os.pathsep list stay, in order (pyproj checks each one in turn, and its
-    # Path.exists() raises on an unreadable one)
-    ({"PROJ_DATA": f"<missing>{os.pathsep}<ok>"}, "<share>/gdal", "<ok>"),
-    ({"PROJ_DATA": f"<ok>{os.pathsep}<empty>"}, "<share>/gdal", "<ok>"),
+    # unreadable: it goes, and the payload's data, or the user's readable PROJ_LIB, serves
+    ({"PROJ_DATA": "<unr>"}, "<share>/gdal", "<share>/proj"),
+    ({"PROJ_DATA": "<unr>", "PROJ_LIB": "<ok>"}, "<share>/gdal", None),
+    ({"PROJ_DATA": f"<unr>{os.pathsep}<ok>"}, "<share>/gdal", "<ok>"),
+    ({"PROJ_DATA": f"<ok>{os.pathsep}<unr>"}, "<share>/gdal", "<ok>"),
+    # grid directories and missing ones stay (PROJ accepts them); with no proj.db left, a data directory is appended
+    (
+        {"PROJ_DATA": f"<grids>{os.pathsep}<ok>"},
+        "<share>/gdal",
+        f"<grids>{os.pathsep}<ok>",
+    ),
+    (
+        {"PROJ_DATA": f"<ok>{os.pathsep}<empty>"},
+        "<share>/gdal",
+        f"<ok>{os.pathsep}<empty>",
+    ),
+    (
+        {"PROJ_DATA": f"<missing>{os.pathsep}<ok>"},
+        "<share>/gdal",
+        f"<missing>{os.pathsep}<ok>",
+    ),
     ({"PROJ_DATA": f"<ok>{os.pathsep}<ok2>"}, "<share>/gdal", f"<ok>{os.pathsep}<ok2>"),
+    ({"PROJ_DATA": "<grids>"}, "<share>/gdal", f"<grids>{os.pathsep}<share>/proj"),
+    ({"PROJ_DATA": "<missing>"}, "<share>/gdal", f"<missing>{os.pathsep}<share>/proj"),
+    (
+        {"PROJ_DATA": f"<grids>{os.pathsep}<unr>", "PROJ_LIB": "<ok>"},
+        "<share>/gdal",
+        f"<grids>{os.pathsep}<ok>",
+    ),
 ]
 
 
 def _proj_dirs(tmp_path):
-    ok, ok2, empty = tmp_path / "ok", tmp_path / "ok2", tmp_path / "empty"
-    for d in (ok, ok2, empty):
-        d.mkdir()
-    for d in (ok, ok2):
-        (d / "proj.db").write_bytes(b"SQLite format 3\x00")
-    return {
-        "<ok2>": str(ok2),
-        "<ok>": str(ok),
-        "<missing>": str(tmp_path / "missing"),
-        "<empty>": str(empty),
-    }
+    names = ("ok", "ok2", "grids", "empty", "unr")
+    for n in names:
+        (tmp_path / n).mkdir()
+    for n in ("ok", "ok2", "unr"):
+        (tmp_path / n / "proj.db").write_bytes(b"SQLite format 3\x00")
+    (tmp_path / "grids" / "my_grid.gsb").write_bytes(b"NUM_OREC")
+    dirs = {f"<{n}>": str(tmp_path / n) for n in names}
+    dirs["<missing>"] = str(tmp_path / "missing")
+    return dirs
+
+
+@pytest.fixture
+def _unreadable(monkeypatch):
+    """Make "<unr>" (and what is under it) unreadable to os.access, as a mode-000 directory is to a non-root user
+    (the container runs as root, which reads anything; the subprocess row below does it for real, as nobody).
+    """
+    real = os.access
+    holder = {}
+
+    def access(path, mode, *a, **k):
+        if holder.get("unr") and str(path).startswith(holder["unr"]):
+            return False
+        return real(path, mode, *a, **k)
+
+    monkeypatch.setattr(_rules.os, "access", access)
+    return holder
 
 
 def _fill(value, dirs):
@@ -120,8 +156,9 @@ def _fill(value, dirs):
 
 
 @pytest.mark.parametrize("environ, gdal_data, proj_data", DATA_CASES)
-def test_the_data_rule(tmp_path, environ, gdal_data, proj_data):
+def test_the_data_rule(tmp_path, _unreadable, environ, gdal_data, proj_data):
     dirs = _proj_dirs(tmp_path)
+    _unreadable["unr"] = dirs["<unr>"]
     env = {k: _fill(v, dirs) for k, v in environ.items()}
     _rules.set_data_dirs(env, "<share>")
     assert (env.get("GDAL_DATA"), env.get("PROJ_DATA")) == (
@@ -131,11 +168,15 @@ def test_the_data_rule(tmp_path, environ, gdal_data, proj_data):
     assert env.get("PROJ_LIB") == _fill(environ.get("PROJ_LIB"), dirs)
 
 
-def test_a_proj_lib_list_keeps_its_readable_entries(tmp_path):
+def test_a_proj_lib_list_drops_only_its_unreadable_entries(tmp_path, _unreadable):
     dirs = _proj_dirs(tmp_path)
-    env = {"PROJ_LIB": f"{dirs['<missing>']}{os.pathsep}{dirs['<ok>']}"}
+    _unreadable["unr"] = dirs["<unr>"]
+    env = {"PROJ_LIB": os.pathsep.join([dirs["<unr>"], dirs["<grids>"], dirs["<ok>"]])}
     _rules.set_data_dirs(env, "<share>")
-    assert env == {"GDAL_DATA": "<share>/gdal", "PROJ_LIB": dirs["<ok>"]}
+    assert env == {
+        "GDAL_DATA": "<share>/gdal",
+        "PROJ_LIB": os.pathsep.join([dirs["<grids>"], dirs["<ok>"]]),
+    }
 
 
 def test_a_proj_db_probe_that_raises_is_unreadable_and_never_raises(
@@ -181,6 +222,7 @@ PROJ_DATA_ROWS = {
     "ok": "ok",
     f"unr{os.pathsep}ok": "ok",
     f"ok{os.pathsep}unr": "ok",
+    f"grids{os.pathsep}ok": f"grids{os.pathsep}ok",  # a grid directory (no proj.db) stays
 }
 
 
@@ -200,7 +242,11 @@ def test_import_pyproj_beside_the_runtimes_proj_data(runtime_proj_data):
     base = Path(
         tempfile.mkdtemp(dir="/tmp")
     )  # pytest's tmp dirs are 0700: nobody could not reach them
-    runtime = {"unr": base / "proj-unr", "ok": base / "proj-ok"}
+    runtime = {
+        "unr": base / "proj-unr",
+        "ok": base / "proj-ok",
+        "grids": base / "grids",
+    }
     try:
         os.chmod(base, 0o755)
         payload = base / "payload"
@@ -216,9 +262,17 @@ def test_import_pyproj_beside_the_runtimes_proj_data(runtime_proj_data):
             SRC / "databricks/labs/gbx/_native/_rules.py",
             src / "databricks/labs/gbx/_native",
         )
-        for d in runtime.values():  # the runtime's own PROJ data: a real proj.db
+        for (
+            k,
+            d,
+        ) in (
+            runtime.items()
+        ):  # the runtime's own PROJ data: a real proj.db; and a grid directory
             d.mkdir()
-            shutil.copy2(root / "_native/share/proj/proj.db", d)
+            if k == "grids":
+                (d / "my_grid.gsb").write_bytes(b"NUM_OREC")
+            else:
+                shutil.copy2(root / "_native/share/proj/proj.db", d)
         runtime["unr"].chmod(0o000)
         proj_data = os.pathsep.join(
             str(runtime[k]) for k in runtime_proj_data.split(os.pathsep)
@@ -247,9 +301,12 @@ def test_import_pyproj_beside_the_runtimes_proj_data(runtime_proj_data):
     assert module.startswith(f"{payload}/_vendor/{arch}/") and epsg == "4326", line
     expect = PROJ_DATA_ROWS[runtime_proj_data]
     want = (
-        f"{payload}/_native/share/proj" if expect == "payload" else str(runtime[expect])
+        f"{payload}/_native/share/proj"
+        if expect == "payload"
+        else os.pathsep.join(str(runtime[k]) for k in expect.split(os.pathsep))
     )
-    assert proj_data == want and data_dir == want, line
+    # pyproj takes PROJ_DATA's first entry that holds a proj.db, or the list itself
+    assert proj_data == want and data_dir in (want, str(runtime["ok"])), line
 
 
 # modules imported after activation, modules imported before it, registrations

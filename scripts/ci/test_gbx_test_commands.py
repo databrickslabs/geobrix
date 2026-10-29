@@ -924,18 +924,33 @@ def test_stage_wheel_profile_reaches_the_launcher_and_an_unknown_option_is_refus
         '#!/bin/sh\necho "${DATABRICKS_CONFIG_PROFILE:-unset}" >> "%s"\nexit 0\n' % seen
     )
     python3.chmod(0o755)
-    env = dict(GBX_BUNDLE_SKIP_JAR="1", GBX_BUNDLE_SKIP_WHEEL_UPLOAD="1")
+    # a profile the host cannot have, so an ignored --profile cannot pass by luck
+    env = dict(
+        GBX_BUNDLE_SKIP_JAR="1",
+        GBX_BUNDLE_SKIP_WHEEL_UPLOAD="1",
+        DATABRICKS_CONFIG_PROFILE="from-env",
+    )
 
     res = sandbox.run("gbx-data-stage-wheel.sh", "--profile", "oauth-fe", **env)
 
     assert res.returncode == 0, res.output
-    assert seen.read_text().split() == ["oauth-fe"]
+    assert seen.read_text().split() == ["oauth-fe"]  # --profile wins over the environment
 
     seen.unlink()
-    res = sandbox.run("gbx-data-stage-wheel.sh", "--not-an-option", **env)
+    res = sandbox.run("gbx-data-stage-wheel.sh", **env)
 
-    assert res.returncode == 2 and "Unknown option: --not-an-option" in res.output, res.output
-    assert not seen.exists()  # the launcher never ran
+    assert res.returncode == 0, res.output
+    assert seen.read_text().split() == ["from-env"]  # without --profile, the environment's
+
+    for args in (["--not-an-option"], ["--profile"], ["--profile", "--no-wait"]):
+        seen.unlink(missing_ok=True)
+        res = sandbox.run("gbx-data-stage-wheel.sh", *args, **env)
+
+        want = "Unknown option: --not-an-option" if args[0] != "--profile" else (
+            "--profile needs a profile name"
+        )
+        assert res.returncode == 2 and want in res.output, (args, res.output)
+        assert not seen.exists(), args  # the launcher never ran
 
 
 def test_a_launcher_runs_on_the_venv_itself_when_it_has_the_sdk(sandbox):

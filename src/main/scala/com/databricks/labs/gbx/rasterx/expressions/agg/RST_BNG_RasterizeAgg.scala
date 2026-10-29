@@ -80,7 +80,7 @@ object BNGRasterizeAcc {
 }
 
 /** UDAF: `gbx_rst_bng_rasterize_agg(cellid, value, srid, pixel_size, xmin, ymin,
- *  xmax, ymax, width, height, mode, kring_pad)`.
+ *  xmax, ymax, width, height, mode, kring_pad[, out_crs])`.
  *
  *  Streams `(cellid STRING, value DOUBLE)` per row; the remaining ten arguments are
  *  per-group constants (Literal or constant expressions). The BNG `cellid` is a STRING
@@ -261,12 +261,15 @@ object RST_BNG_RasterizeAgg extends WithExpressionInfo {
     /** NoData fill value, matching the lightweight tier (`cellraster._NODATA`). */
     val NoData: Double = -9999.0
 
+    /** 12 arguments, or 13 with the trailing `out_crs`. BNG output is always EPSG:27700, so `out_crs`, like
+     *  `out_srid`, is accepted for signature parity with the light tier (whose `out_crs` is the same no-op) and not
+     *  read. */
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => c.length match {
-        case 12 => RST_BNG_RasterizeAgg(
+        case 12 | 13 => RST_BNG_RasterizeAgg(
             c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7), c(8), c(9), c(10), c(11))
         case n => throw new IllegalArgumentException(
-            s"$name expects 12 arguments " +
-            s"(cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad); got $n")
+            s"$name expects 12 or 13 arguments " +
+            s"(cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad[, out_crs]); got $n")
     }
 
     /** Resolution of a cell set (derived from each cell's Long id); throws on a mixed-resolution set. */

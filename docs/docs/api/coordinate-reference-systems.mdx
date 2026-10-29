@@ -187,6 +187,18 @@ If a transformation's grid file is not found, PROJ falls back to a **lower-accur
 `PROJ_NETWORK=ON` needs outbound network access to the PROJ CDN, which is typically unavailable on Serverless. There, stage the grid files you need to a Volume and use `gbx.register_proj_grids` to point PROJ at them — see [Registering custom grid files](#registering-custom-grid-files) below.
 :::
 
+### Grids that ship with GeoBrix
+
+The GeoBrix env wheels carry three PROJ grids in their PROJ data directory, so these transformations run at full accuracy with no download and no setup:
+
+| Grid | Transformation | Licence |
+|---|---|---|
+| `uk_os_OSTN15_NTv2_OSGBtoETRS.tif` | OSGB36 ↔ ETRS89 with OSTN15, the definitive transformation of the British National Grid (EPSG:27700) | BSD 2-Clause (Ordnance Survey) |
+| `uk_os_OSGM15_GB.tif` | ETRS89 ellipsoidal heights ↔ ODN orthometric heights in Great Britain (OSGM15) | BSD 2-Clause (Ordnance Survey) |
+| `us_nga_egm96_15.tif` | WGS 84 ellipsoidal heights ↔ EGM96 heights, worldwide | Public domain (NGA) |
+
+With OSTN15, EPSG:27700 to ETRS89 matches Ordnance Survey's published test points to within a few millimetres; without it, PROJ falls back to a Helmert approximation that can be several metres off. The geoid grids turn an ellipsoidal height into an orthometric one and back, for example `EPSG:4937` to `EPSG:4258+5701` (ETRS89 + ODN height) or `EPSG:4979` to `EPSG:4326+5773` (WGS 84 + EGM96 height). `PROJ_NETWORK` stays off, so nothing is downloaded unless you turn it on.
+
 ## Registering custom grid files
 
 When your workflow depends on a datum-grid transform — OSGB36↔ETRS89 via OSTN15, NAD27↔NAD83 via NADCON, a national geoid grid, or any CRS whose WKT or PROJ4 string references a grid file — you can stage the grid files to a Unity Catalog Volume and register the directory with GeoBrix once at session start. After that, every **lightweight-tier** CRS-handling function across all packages finds the files automatically on the PROJ search path. Volume-hosted grids are a lightweight-tier capability; the heavyweight tier reads grids from a cluster-local path instead — see [Tier support](#tier-support) below.
@@ -202,6 +214,10 @@ databricks fs cp OSTN15_NTv2_OSGBtoETRS.gsb \
 ```
 
 GeoBrix recognizes files ending in `.gsb` (NTv2), `.tif` (PROJ geoid/deformation), `.gtx`, or `.gsa`.
+
+### Fetch grids from the PROJ CDN with projsync
+
+The GeoBrix env wheels also install PROJ's grid downloader, `projsync`. `databricks.labs.gbx.crs_grids.projsync_path()` returns its path (or `None` without an env wheel). From a notebook or job with access to `cdn.proj.org`, run it with Python's `subprocess`: `--list-files --source-id uk_os` lists what the CDN has for one agency, and `--source-id uk_os --target-dir /Volumes/<catalog>/<schema>/proj-grids` downloads those grids into a Volume (`--bbox west,south,east,north` limits the download to grids that cover an area). Then register the directory with `register_proj_grids`, below. Download once and keep the Volume: the workers need no network access afterwards.
 
 ### Call register_proj_grids once at session start
 

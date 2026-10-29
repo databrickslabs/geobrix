@@ -82,6 +82,16 @@ def _warn_heavy_volume_grids(result) -> None:
         )
 
 
+def _scala_seq(jvm, items: list):
+    """`items` as the Scala Seq ProjGridRegistry.set takes: py4j hands a Python list over as a java.util.List,
+    which matches no `set`, so the call failed and the heavy tier never had the grids.
+    """
+    try:
+        return jvm.org.apache.spark.api.python.PythonUtils.toSeq(items)
+    except Exception:  # no Spark JVM (a stand-in): the list itself
+        return items
+
+
 def _apply_heavy(spark, result) -> None:
     """Set the heavy-tier JVM grid registry if a JVM is present (best-effort)."""
     jvm = getattr(spark, "_jvm", None)
@@ -89,7 +99,8 @@ def _apply_heavy(spark, result) -> None:
         return
     try:
         reg = jvm.com.databricks.labs.gbx.operations.ProjGridRegistry
-        reg.set(list(result), True)  # push the full de-duped set (idempotent replace)
+        # push the full de-duped set (idempotent replace)
+        reg.set(_scala_seq(jvm, list(result)), True)
     except Exception:
         return  # heavy classes absent (light-only session) → no-op
     # Heavy tier IS active: warn if any registered dir is a Volume executors can't read.

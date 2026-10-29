@@ -112,6 +112,11 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers",
+        "delta_session: starts its own local Spark session with Delta Lake (zarr_delta.py), "
+        "which replaces the shared one; the root conftest runs these tests last",
+    )
+    config.addinivalue_line(
+        "markers",
         "deadline(seconds): fail the test if it is still running after this many "
         "seconds (default: GBX_DOC_TEST_TIMEOUT_S, else 600)",
     )
@@ -157,6 +162,10 @@ def pytest_collection_modifyitems(config, items):
         # Auto-mark slow tests
         if "slow" in item.name.lower() or "batch" in item.name.lower():
             item.add_marker(pytest.mark.slow)
+
+    # The Zarr doc tests start a Delta session of their own and stop the shared one: they go last.
+    own = [i for i in items if i.get_closest_marker("delta_session")]
+    items[:] = [i for i in items if i not in own] + own
 
 
 @pytest.fixture

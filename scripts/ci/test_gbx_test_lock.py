@@ -969,12 +969,31 @@ def _fetches(sandbox):
 
 @pytest.mark.parametrize(
     "args",
-    [[], ["--path", "formats/"], ["--test", "formats/test_zarr_examples.py::test_x"]],
-    ids=["default", "formats-directory", "formats-test"],
+    [
+        [],
+        ["--path", "formats/"],
+        ["--test", "formats/test_zarr_examples.py::test_x"],
+        ["--suite", "readers"],
+        ["--path", "writers/"],
+        ["--path", "api/"],
+        ["--path", "readers/test_zarr_read_examples.py"],
+        ["--test", "api/test_zarr_functions_examples.py::test_x"],
+    ],
+    ids=[
+        "default",
+        "formats-directory",
+        "formats-test",
+        "readers-suite",
+        "writers-directory",
+        "api-directory",
+        "zarr-readers-file",
+        "zarr-api-test",
+    ],
 )
-def test_the_docs_command_fetches_the_delta_jars_for_the_formats_tests(sandbox, args):
-    # The formats doc tests keep a Zarr store's manifest in a Delta table, so a fresh container
-    # needs the jars before they run, as gbx:test:python gives the zarr tests.
+def test_the_docs_command_fetches_the_delta_jars_for_the_zarr_tests(sandbox, args):
+    # The Zarr doc tests (formats/ and the Zarr examples of readers/, writers/ and api/) keep a
+    # store's manifest in a Delta table, so a fresh container needs the jars before they run,
+    # as gbx:test:python gives the zarr tests.
     sandbox.run("gbx-test-python-docs.sh", "--skip-build", *args)
 
     fetches = _fetches(sandbox)
@@ -989,8 +1008,13 @@ def test_the_docs_command_fetches_the_delta_jars_for_the_formats_tests(sandbox, 
 
 @pytest.mark.parametrize(
     "args",
-    [["--suite", "readers"], ["--path", "api/"], ["--path", "readers/test_x.py"]],
-    ids=["suite", "other-directory", "other-file"],
+    [
+        ["--suite", "quickstart"],
+        ["--path", "ingestion/"],
+        ["--path", "readers/test_x.py"],
+        ["--test", "api/test_x.py::test_y"],
+    ],
+    ids=["suite", "other-directory", "other-reader-file", "other-api-test"],
 )
 def test_the_docs_command_leaves_the_delta_jars_alone_for_other_targets(sandbox, args):
     sandbox.run("gbx-test-python-docs.sh", "--skip-build", *args)

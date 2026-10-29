@@ -182,12 +182,14 @@ if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then
     exit 1
 fi
 
-# The formats doc tests keep a Zarr store's manifest in a Delta table, so they need the delta-spark
-# jars on the JVM classpath. Fetch them (and check their sha256) first, as gbx:test:python does for
-# the zarr tests: a fresh container, or one whose scripts/docker/m2 was cleared, would otherwise fail
-# every formats test. It does nothing when the jars are already there. Only a target that covers the
-# formats tests needs it (the full suite, --path formats/, --test formats/...).
-if [[ "$TEST_PATH" == "${BASE}/" || "$TEST_PATH" == *"/formats"* ]]; then
+# The Zarr doc tests (formats/, plus the Zarr examples of readers/, writers/ and api/) keep a store's
+# manifest in a Delta table, so they need the delta-spark jars on the JVM classpath. Fetch them (and
+# check their sha256) first, as gbx:test:python does for the zarr tests: a fresh container, or one
+# whose scripts/docker/m2 was cleared, would otherwise fail every one of them. It does nothing when
+# the jars are already there. Only a target that covers a Zarr doc test needs it: the full suite,
+# formats/, a whole readers/ writers/ or api/ directory, or any path that names zarr.
+if [[ "$TEST_PATH" == "${BASE}/" || "$TEST_PATH" == *"/formats"* || "$TEST_PATH" == *zarr* \
+      || "$TEST_PATH" =~ ^${BASE}/(readers|writers|api)/?$ ]]; then
     FETCH_RC=0
     docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash /root/geobrix/scripts/ci/fetch-delta-test-jars.sh || FETCH_RC=$?
     if [ "$FETCH_RC" -eq 3 ]; then
@@ -199,7 +201,7 @@ if [[ "$TEST_PATH" == "${BASE}/" || "$TEST_PATH" == *"/formats"* ]]; then
         echo -e "${RED}❌ Could not take the container work lock (exit $FETCH_RC; see the message above); not running${NC}"
         exit "$FETCH_RC"
     elif [ "$FETCH_RC" -ne 0 ]; then
-        echo -e "${YELLOW}⚠️  Delta jars unavailable: the formats doc tests will fail (see scripts/ci/fetch-delta-test-jars.sh)${NC}"
+        echo -e "${YELLOW}⚠️  Delta jars unavailable: the Zarr doc tests will fail (see scripts/ci/fetch-delta-test-jars.sh)${NC}"
     fi
 fi
 

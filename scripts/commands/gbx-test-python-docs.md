@@ -17,6 +17,7 @@ Runs Python documentation tests from `docs/tests/python/` using pytest **inside 
 | API tests only | `--suite api` | ~3–5 min |
 | Readers only | `--suite readers` | ~2–4 min |
 | Formats (Zarr) only | `--path formats/` | ~3–5 min |
+| One Zarr page | `--path readers/test_zarr_read_examples.py` (or `writers/test_zarr_write_examples.py`, `api/test_zarr_functions_examples.py`) | ~2–4 min |
 | Ingestion pages only | `--suite ingestion` | ~1–2 min |
 | RasterX only | `--suite rasterx` | ~1–2 min |
 | Advanced only | `--suite advanced` | ~1 min |
@@ -43,7 +44,7 @@ Use `--skip-build` when the tree is already built to avoid extra time. Doc tests
 2. **Sample data** – By default the command sets `GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data` in the container so doc tests use the minimal bundle (host path `sample-data/Volumes/main/default/test-data`). This is required for remote/CI. Use `--no-sample-data-root` to leave it unset. No download step; use `gbx:data:generate-minimal-bundle` once if needed.
 3. **Maven** – `mvn package -DskipTests`.
 4. **Python build** – `python3 -m build` in `python/geobrix/`, then `pip install -e python/geobrix`. Use `--skip-build` when already built.
-5. **Delta jars (formats tests only)** – When the target covers `docs/tests/python/formats/` (the full suite, `--path formats/`, `--test formats/...`) the command first runs `scripts/ci/fetch-delta-test-jars.sh` in the container, under the work lock: the Zarr examples keep a store's manifest in a Delta table and need the delta-spark jars on the JVM classpath. It does nothing when `scripts/docker/m2` already holds them; a sha256 mismatch (exit 3) aborts, and a missing jar is a warning (the formats tests then fail naming it).
+5. **Delta jars (Zarr doc tests only)** – When the target covers a Zarr doc test (the full suite, `--path formats/`, a whole `readers/`, `writers/` or `api/` directory, or any path or `--test` that names `zarr`) the command first runs `scripts/ci/fetch-delta-test-jars.sh` in the container, under the work lock: the Zarr examples keep a store's manifest in a Delta table and need the delta-spark jars on the JVM classpath. It does nothing when `scripts/docker/m2` already holds them; a sha256 mismatch (exit 3) aborts, and a missing jar is a warning (the Zarr tests then fail naming it).
 
 ## Usage
 

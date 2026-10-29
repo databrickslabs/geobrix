@@ -3,7 +3,7 @@
 Every code block on ``docs/docs/formats/zarr.mdx`` is a function of ``zarr_examples.py``;
 these tests run each one against the real sample cube on a local Delta session and assert
 what the page says it does. The manifest of a Zarr store is a Delta table, so the session is
-the Delta one from ``conftest.py``.
+the Delta one from ``zarr_delta.py`` (via ``conftest.py``).
 
 Run the whole file: the store tests tell one story and each starts from the store the one
 before it left (create, append, tag, update, ..., vacuum). The registered-store tests at the
@@ -35,6 +35,8 @@ import zarr_examples as ex  # noqa: E402
 
 xr = pytest.importorskip("xarray")
 pytest.importorskip("zarr")
+
+pytestmark = pytest.mark.delta_session  # runs after the tests that use the shared session
 
 from databricks.labs.gbx.zarr import (  # noqa: E402
     BLOCKS_SCHEMA,

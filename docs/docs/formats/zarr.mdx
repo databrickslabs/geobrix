@@ -72,10 +72,11 @@ commit, so a store gets the guarantees of the last column without turning an arr
 - **Register in place.** Point a table at an existing store; nothing is copied.
 - **Three ways to read.** N-dimensional blocks, a long table with a column per dimension, or
   [GeoBrix raster tiles](../api/virtual-tiles), so every `rst_*` function works on a cube without
-  converting it to GeoTIFF. Select by label or by position.
-- **Sample.** Read the time series at points, with the same geometry inputs as `rst_sample`.
+  converting it to GeoTIFF. Select by label or by position. See the [Zarr Reader](../readers/zarr).
+- **Sample.** Read the time series at points, with the same geometry inputs as `rst_sample`
+  ([sampling at points](../readers/zarr#sampling-at-points)).
 - **Write back transactionally.** Create, append, update and overwrite, with history, time travel,
-  tags, restore, export and lifecycle management.
+  tags, restore, export and lifecycle management. See the [Zarr Writer](../writers/zarr).
 - **Concurrent writers.** Writers that touch different chunks both land; writers that only change the
   store's shape or coordinates are rebased automatically; writers that meet on one chunk get a clear error.
 
@@ -519,5 +520,7 @@ optimize after many small appends, especially for reads from a Volume; it change
 - **Branches.** Registrations of one store do not merge.
 - **Version history is bounded by `retain`.** Tag a version to keep it indefinitely.
 
-See also [Choosing a Format](./overview), [Virtual Tiles](../api/virtual-tiles) for the tiles a Zarr
-read returns, and [Limitations](../limitations).
+See also [Choosing a Format](./overview), the [Zarr Reader](../readers/zarr), the
+[Zarr Writer](../writers/zarr) and the [Zarr Function Reference](../api/zarr-functions) for every
+option, return value and error, [Virtual Tiles](../api/virtual-tiles) for the tiles a Zarr read
+returns, and [Limitations](../limitations).

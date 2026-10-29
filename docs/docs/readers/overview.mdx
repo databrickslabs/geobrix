@@ -75,6 +75,7 @@ See the full [capability tiers & read-options matrix](../readers-writers#capabil
 | [COG Reader](./cog) | `cog_gbx` | Pure-Python cloud-optimized GeoTIFF reader — windowed/overview-aware reads |
 | [NetCDF Reader](./netcdf) | `netcdf_gbx` | Pure-Python CF NetCDF reader — CF grids (raster) or CF-DSG points (vector) |
 | [File Reader](./file) | `file_gbx` | Pure-Python file lister — enumerates matching paths as rows (read-only) |
+| [Zarr Reader](./zarr) | `zarr_gbx` | Pure-Python reader for Zarr v2 and v3 stores (light-only): blocks, a table of cells or GeoBrix tiles, by label or position; `gbx_zarr_read` adds versions and sampling |
 | [PMTiles Reader](./pmtiles) | `pmtiles_gbx` | Pure-Python PMTiles reader — mosaic pyramid from rasters (`source="raster"`) or tiles from an archive (`source="archive"`) |
 | [LiDAR Reader](./lidar) | `lidar_gbx` | Pure-Python LAS/LAZ point-cloud reader (light-only; no heavyweight tier) |
 | [EXIF/GPS Reader](./exif) | `exif_gbx` | Pure-Python EXIF/GPS telemetry reader for drone/camera images (light-only; no heavyweight tier) |

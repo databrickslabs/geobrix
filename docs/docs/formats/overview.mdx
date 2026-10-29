@@ -43,7 +43,7 @@ longitude together.
 
 | Format | Good for | Tiers | Read | Write | Functions |
 |---|---|---|---|---|---|
-| **[Zarr](./zarr)** | Large cubes that many jobs read slices of in parallel and write back to, with versions, tags and concurrent writers. | Lightweight | `gbx_zarr_read`, `gbx_zarr_sample`, and the `zarr_gbx` DataSource for plain stores | `gbx_zarr_write` | `rst_*` on Zarr tiles; `gbx_zarr_register`, `gbx_zarr_sync`, `gbx_zarr_optimize`, `gbx_zarr_vacuum`, `gbx_zarr_tag`, `gbx_zarr_untag`, `gbx_zarr_history`, `gbx_zarr_restore`, `gbx_zarr_export` |
+| **[Zarr](./zarr)** | Large cubes that many jobs read slices of in parallel and write back to, with versions, tags and concurrent writers. | Lightweight | [`gbx_zarr_read`](../readers/zarr), [`gbx_zarr_sample`](../readers/zarr#sampling-at-points), and the [`zarr_gbx`](../readers/zarr#the-zarr_gbx-datasource) DataSource for plain stores | [`gbx_zarr_write`](../writers/zarr) | `rst_*` on Zarr tiles; the [Zarr functions](../api/zarr-functions): `gbx_zarr_register`, `gbx_zarr_sync`, `gbx_zarr_optimize`, `gbx_zarr_vacuum`, `gbx_zarr_tag`, `gbx_zarr_untag`, `gbx_zarr_history`, `gbx_zarr_restore`, `gbx_zarr_export` |
 | **NetCDF / HDF5** | Self-describing scientific files from data providers. | Both | [`netcdf_gbx`](../readers/netcdf) (lightweight), `netcdf_gdal` and `netcdf_ogr` (heavyweight); HDF5 through the [generic raster reader](../readers/raster) | [`netcdf_gbx`](../writers/netcdf) | [RasterX `rst_*`](../api/raster-functions) |
 | **GRIB2** | Weather model output, such as NOAA HRRR or ECMWF. | Both | the [generic raster reader](../readers/raster) | | [RasterX `rst_*`](../api/raster-functions) |
 

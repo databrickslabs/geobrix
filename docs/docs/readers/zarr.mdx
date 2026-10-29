@@ -322,8 +322,10 @@ selected position of those dimensions, so one point's time series is its rows.
 
 Up to 100,000 points are collected to the driver. If they lie in at most four chunks and the answer
 is small, the driver reads them and no Spark job runs; otherwise Spark reads each chunk once for all
-its points. Within a chunk, scattered points are read cell by cell; points that need half or more of
-the cells of the box around them read the box once and take their cells from it, which is faster there.
+its points. Within a chunk, scattered points are read cell by cell. When a chunk's points need half or
+more of the cells of the box around them, the box is read once and every point takes its cells from it:
+on the ERA5 store on Serverless (one 90 x 90 chunk, all 744 hours), points on half of the chunk's cells
+took 0.42 s this way against 3.3 s cell by cell, and points on every cell 0.55 s against 6.5 s.
 **Above 100,000 points `points_df` is evaluated more than once** (up to about three times, because
 the chunks to read are planned from a first pass over the geometry column), so it must be
 deterministic. Write it to a table first, rather than sampling a random or time-dependent query.

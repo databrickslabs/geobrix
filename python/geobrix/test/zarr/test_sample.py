@@ -155,6 +155,44 @@ def test_a_dense_sample_reads_its_box_once(
     assert (used["box"] > 0, used["points"] > 0) == (dense, not dense)
 
 
+def test_a_dense_unit_is_read_once_across_its_batches(tmp_path, monkeypatch):
+    """The dense decision is made for the whole unit: with batches of two points, a unit of
+    every cell of a chunk (plus two points given twice, and the fill cell) still reads its
+    box once, and each batch gathers from it; the fill cell is NULL, the repeats repeat.
+    """
+    from databricks.labs.gbx.zarr import _engine
+
+    data = _regional(tmp_path / "r.zarr")
+    cells = [(j, i) for j in range(5) for i in range(5)] + [(0, 0), (4, 4)]
+    points = [
+        _wkb(10.0 + i, 50.0 - j) for j, i in cells
+    ]  # chunk (0, 0), fill at (2, 3)
+    used = {"box": 0, "points": 0}
+    real_box, real_points = _engine.read_box, _engine.read_points
+
+    def box(arr, *a, **k):
+        used["box"] += len(arr.shape) == 3
+        return real_box(arr, *a, **k)
+
+    def point(arr, *a, **k):
+        used["points"] += len(arr.shape) == 3
+        return real_points(arr, *a, **k)
+
+    monkeypatch.setattr(_engine, "read_box", box)
+    monkeypatch.setattr(_engine, "read_points", point)
+    _, table = H.sample_table(tmp_path / "r.zarr", points, batch_cells=6)
+
+    assert used == {"box": 1, "points": 0}  # 14 batches, one read
+    got = _by_point(table, "v", 3)
+    null = table.column("v").is_null().to_numpy(zero_copy_only=False).reshape(-1, 3)
+    for n, (j, i) in enumerate(cells):
+        if (j, i) == (2, 3):
+            assert null[n].all()
+        else:
+            assert not null[n].any()
+            np.testing.assert_array_equal(got[n], data[:, j, i])
+
+
 def _regional(path):
     """A v3 store of 3 steps over latitude 50..41 (descending) and longitude 10..19, whose
     cell ``(j, i)`` at step ``t`` holds ``1000 t + 10 j + i`` except one fill cell."""

@@ -174,6 +174,19 @@ and the table is read once for the data.
   source="docs/tests/python/writers/zarr_write_examples.py"
   testFile="docs/tests/python/writers/test_zarr_write_examples.py" />
 
+### Blocks on the store's grid
+
+A `create` writes blocks that each cover whole chunks (whole shards, in a sharded array) where they are
+made: the task that holds a block encodes it and writes it to a data file of its own, and nothing is
+shuffled. Other blocks, such as one that cuts across a chunk or a shard, or two that overlap, are cut into
+pieces, regrouped by chunk through a shuffle and assembled. The store is the same either way: the same
+documents, the same chunk rows, the same bytes in every chunk; only the data file a chunk sits in differs.
+
+To write the faster way, start every block on a chunk boundary (a shard boundary, for a sharded array)
+and end it on one or at the edge of the array. A 1 GB create of blocks of one shard each wrote its data
+files at 94 MB/s through the Volume and 116 MB/s direct to storage on Databricks Runtime 19, and at
+89 MB/s on Serverless; see [Zarr Stores](../formats/zarr#performance).
+
 An `xarray.Dataset` and a DataFrame of tiles are planned on the driver from what they hold, so neither
 has a pass of this kind.
 

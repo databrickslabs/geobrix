@@ -320,12 +320,16 @@ selected position of those dimensions, so one point's time series is its rows.
   testFile="docs/tests/python/readers/test_zarr_read_examples.py"
   outputConstant="SAMPLE_PROJECTED_output" />
 
-Up to 100,000 points are collected to the driver. If they lie in at most four chunks and the answer
-is small, the driver reads them and no Spark job runs; otherwise Spark reads each chunk once for all
-its points. Within a chunk, scattered points are read cell by cell. When a chunk's points need half or
-more of the cells of the box around them, the box is read once and every point takes its cells from it:
-on the ERA5 store on Serverless (one 90 x 90 chunk, all 744 hours), points on half of the chunk's cells
-took 0.42 s this way against 3.3 s cell by cell, and points on every cell 0.55 s against 6.5 s.
+Up to 100,000 points are collected to the driver. If they lie in at most four chunks and the answer is
+small, the driver reads them and no Spark job runs; otherwise Spark reads each chunk once for all its
+points. Within a chunk, scattered points are read cell by cell. When a chunk's points need a tenth or
+more of the cells of the box around them, and the box fits in half of a task's decoded-data budget
+(32 MiB on Serverless and 768 MiB on Databricks Runtime 19 in these measurements), the box is read once
+and every point takes its cells from it; a chunk whose box is larger is read cell by cell. On the ERA5 store
+of the [Zarr Stores performance figures](../formats/zarr#performance) (one 90 x 90 chunk of 2-metre
+temperature, all 744 hours) on Serverless, points on a quarter of the chunk's cells took 0.37 s this way
+against 1.8 s cell by cell, and points on every cell 0.57 s against 6.5 s; at one point in a hundred
+cells, reading cell by cell was the faster (0.20 s against 0.36 s).
 **Above 100,000 points `points_df` is evaluated more than once** (up to about three times, because
 the chunks to read are planned from a first pass over the geometry column), so it must be
 deterministic. Write it to a table first, rather than sampling a random or time-dependent query.

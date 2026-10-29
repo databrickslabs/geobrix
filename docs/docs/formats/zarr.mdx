@@ -501,8 +501,9 @@ measured on Databricks to show the shape of the trade-offs; they are not a guara
   0.25-degree global grid (721 x 1440), float32. As Zarr, a v3 store with inner chunks of 24 x 90 x 90
   cells in shards of 168 x 360 x 360, compressed with zstd. For comparison, the same values as one tiled
   GeoTIFF per hour (512 x 512 tiles, ZSTD), read with the [Raster Reader](../readers/raster).
-- **Compute.** Databricks Runtime 19 on one 4-core worker (`m5d.xlarge`) with dedicated access, and
-  Serverless environment 6.
+- **Compute.** The reads ran on Databricks Runtime 19 with one 4-core worker (`m5d.xlarge`), the writes
+  on Databricks Runtime 19 with two 4-core workers (`m6gd.xlarge`, on demand), both with dedicated
+  access; and both on Serverless environment 6.
 - **Method.** Each figure is the median of three runs; the first of the three ran cold.
 
 ### Reads
@@ -526,28 +527,35 @@ measured on Databricks to show the shape of the trade-offs; they are not a guara
 
 | Write | With | Runtime 19, through the Volume | Runtime 19, direct to storage | Serverless |
 |---|---|---|---|---|
-| Create a 1 GB cube (240 x 721 x 1440, float32, from 10 tasks) | `gbx_zarr_write` | 60 s (16.5 MB/s) | 47 s (21 MB/s) | 31 s (32 MB/s) |
-| | plain `xarray.to_zarr`, no transaction | 9.9 s (101 MB/s) | | 7.4 s (135 MB/s) |
-| Eight appends of one day each (100 MB) | `gbx_zarr_write`, all at once | 216 s | | 132 s |
-| | `gbx_zarr_write`, one after another | 178 s | | 215 s |
+| Create a 1 GB cube (240 x 721 x 1440, float32, from 10 tasks) | `gbx_zarr_write` | 25 s | 19 s | 28 s |
+| | of which writing the data files | 10.6 s (94 MB/s) | 8.6 s (116 MB/s) | 11.2 s (89 MB/s) |
+| | plain `xarray.to_zarr`, no transaction | 6.6 s (151 MB/s) | | 6.3 s (158 MB/s) |
+| Eight appends of one day each (100 MB) | `gbx_zarr_write`, all at once | 166 s | | 132 s |
+| | `gbx_zarr_write`, one after another | 147 s | | 150 s |
 
-Where the time of a create goes, in a warm run on Serverless (26 s): 8.7 s setting the store up (6.6 s
-claiming its root in the ownership ledger, 1.8 s creating the manifest table), 2.7 s for the first pass
-over the block positions, 8.8 s writing the data files, and 6.0 s for the commit. On Runtime 19 with one
-4-core worker, writing the data files took most of it (28-46 s through the Volume, 24-27 s direct to
-storage): the blocks pass through Spark, into a shuffle and out of it, before they are written.
+Where the time of a create goes, in a warm run on Serverless (20.6 s): 2.5 s for the first pass over the
+block positions, 2.2 s claiming its root in the ownership ledger, 1.6 s creating the manifest table,
+9.3 s writing the data files, and 4.5 s for the commit (3.0 s of it the MERGE into the manifest). On
+Runtime 19 direct to storage (18.8 s) the same steps took 2.1 s, 2.5 s, 1.6 s, 8.1 s and 4.1 s.
 
-- **A create has a fixed cost** for setting up and committing: about 12-20 s in these runs, measured on
-  a 1 GB create. A write that is not a create pays the commit part of it, so write a store in a few
-  large writes rather than many small ones.
+- **Blocks that are whole shards are written where they are made.** Each block of this cube is one
+  shard (24 hours of the whole globe), so the task that makes a block encodes it and writes its data
+  file, and nothing is shuffled. Blocks that cut across chunks or shards are regrouped first, which
+  costs more; see the [Zarr Writer](../writers/zarr#blocks-on-the-stores-grid).
+- **A create has a fixed cost**: claiming its root, creating the manifest table and the commit. In the
+  warm runs it took 8.1-8.7 s direct to storage and 8.3 s on Serverless, and 10.8-13.1 s through the
+  Volume; in the first run on new compute, which ran cold, 20.6-30.2 s. A write that is not a create
+  pays the commit part of it, so write a store in a few large writes rather than many small ones.
 - **A plain `xarray.to_zarr` is faster and gives none of the guarantees**: no versions, no all-or-nothing
   commit, no safe concurrent writers.
 - **An input that is expensive to compute** is evaluated twice by a create or an append (once for its
-  positions). Write it to a table first; see the [Zarr Writer](../writers/zarr).
+  positions). This cube is computed in the tasks, so its first pass took 2-8 s in the warm runs and
+  15-31 s in the cold ones. Write such an input to a table first; see the [Zarr Writer](../writers/zarr).
 - **Concurrent appenders** land one per round, each rebasing on the others after a jittered wait that
-  doubles with every lost round (up to 16 s), and the last of eight needed seven attempts. On Serverless
-  eight at once took 132 s against 215 s one after another; on Runtime 19 with one 4-core worker they
-  took 216 s against 178 s, the eight sharing four cores as well as waiting between attempts.
+  doubles with every lost round (up to 16 s). The last of eight needed
+  seven or eight attempts. On Serverless eight at once took 132 s against 150 s one after another; on
+  Runtime 19 with two 4-core workers they took 166 s against 147 s, the eight sharing eight cores as well
+  as waiting between attempts.
 
 ## Limits
 
@@ -560,8 +568,9 @@ storage): the blocks pass through Spark, into a shuffle and out of it, before th
 - **Inner chunks per shard.** A shard that `gbx_zarr_write` creates holds at most 4,096 inner chunks.
   Every read of a shard fetches or builds its index, 16 bytes per inner chunk, so a shard of many tiny
   chunks makes every read slow: on a Volume, reading one chunk of a shard of 93,312 chunks took a median
-  of 0.93-1.18 s, against 0.10-0.14 s at 4,096 (four runs on two runtimes). The computed layout stays within the limit, and a `shards=` that goes
-  beyond it raises `ValueError` with a `Fix:`. A registered store's shards are read as they are.
+  of 0.87-1.24 s, against 0.10-0.15 s at 4,096 (eight runs on two runtimes). The computed layout stays
+  within the limit, and a `shards=` that goes beyond it raises `ValueError` with a `Fix:`. A registered
+  store's shards are read as they are.
 - **Codecs.** The codecs that zarr-python, numcodecs and zarrs can decode. Writes use `zstd` and `crc32c`
   unless you pass `codecs`. A Zarr v3 array that has any codec beside `sharding_indexed` in its own codec
   list (a transpose before it, a compressor after it) is not supported: registering the store records it as

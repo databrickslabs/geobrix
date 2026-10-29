@@ -63,8 +63,12 @@ def render_tile(
     from rio_tiler.io import Reader
     from rio_tiler.mosaic import mosaic_reader
 
+    from databricks.labs.gbx._gdal_policy import open_data
+
     def _read(path, tx, ty, tz):
-        with Reader(path) as cog:
+        # The source is opened through open_data (the driver policy) and handed to rio-tiler, which would otherwise
+        # open it by name with GDAL's whole driver registry.
+        with open_data(path) as ds, Reader(path, dataset=ds) as cog:
             return cog.tile(tx, ty, tz)
 
     try:

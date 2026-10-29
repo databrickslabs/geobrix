@@ -824,9 +824,8 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
                 # would wrongly use the 256 MiB classic cap. The virtual default
                 # (materialize=False) never reaches this branch.
                 import numpy as _np_cap
-                import rasterio as _rio_cap
 
-                with _rio_cap.open(staged) as _hsrc:
+                with open_data(staged) as _hsrc:
                     _decoded_bytes = (
                         _hsrc.count
                         * _hsrc.width

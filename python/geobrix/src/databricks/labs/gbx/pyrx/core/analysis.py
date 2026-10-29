@@ -343,8 +343,10 @@ def cog_convert_file(
     # Merge authority options (codec + level + predictor); RAW path emits empty dict.
     creation.update(_comp_opts)
 
-    with rasterio.Env(GDAL_CACHEMAX=200):
-        rio_shutil.copy(src_path, dst_path, driver="COG", **creation)
+    # The source is copied from an open_data dataset (the driver policy), not by name: GDAL's copy would open the name
+    # with GDAL's whole driver registry.
+    with open_data(src_path) as _src, rasterio.Env(GDAL_CACHEMAX=200):
+        rio_shutil.copy(_src, dst_path, driver="COG", **creation)
 
 
 def contour(ds, levels, interval, base, attr_field):
@@ -496,11 +498,10 @@ def _viewshed_gdal_ctypes(
 
         # Stage the DEM to a local scratch file without loading the whole band into
         # Python memory.  Preferred path: rasterio.shutil.copy streams GDAL-to-GDAL
-        # (block-by-block internally, no numpy array).  ds.name is the GDAL-native
-        # path: "/vsimem/..." for MemoryFile-backed tiles, or a real path for
-        # file-backed datasets — both are valid GDAL source identifiers.
+        # from the open dataset (block-by-block internally, no numpy array), so the
+        # source is never reopened by name.
         # Fallback: windowed block copy (O(block_size) peak RAM) for the rare case
-        # where ds.name is empty or the copy fails (e.g., unusual source format).
+        # where the copy fails (e.g., unusual source format).
         import rasterio.shutil as _rio_shutil
 
         dem_profile = {
@@ -515,14 +516,13 @@ def _viewshed_gdal_ctypes(
         if ds.nodata is not None:
             dem_profile["nodata"] = ds.nodata
 
-        src_name = getattr(ds, "name", None) or ""
-        if src_name:
-            try:
-                _rio_shutil.copy(src_name, dem_path, driver="GTiff")
-                src_name = dem_path  # success — dem_path is ready
-            except Exception:
-                src_name = ""
-        if not src_name:
+        # The DEM is copied from the dataset the caller opened (open_data), not reopened by its name.
+        try:
+            _rio_shutil.copy(ds, dem_path, driver="GTiff")
+            copied = True
+        except Exception:
+            copied = False
+        if not copied:
             # Windowed block copy: each read is bounded by ds.block_shapes[0].
             with _rasterio.open(dem_path, "w", **dem_profile) as wdst:
                 for _, window in ds.block_windows(1):

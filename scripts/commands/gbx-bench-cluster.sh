@@ -88,7 +88,8 @@ Options:
   --new-cluster         Run on a job cluster made for this run; it ends with the run.
                         --spark-version (default 19.x-scala2.13), --node-type (default
                         m6gd.xlarge), --num-workers (default 1), --access-mode
-                        dedicated|standard (default dedicated)
+                        dedicated|standard (default dedicated), --on-demand (AWS: every
+                        node on demand, none of them a spot node taken back mid-run)
   --serverless          Submit to Serverless compute (light-only, no JAR). Skips --cluster-id.
                         Profile must point to a workspace that supports Serverless jobs (e.g. dogfood).
   --env-version <N>     Serverless environment version to pin (default 6; env v6 = protobuf-6 regime).

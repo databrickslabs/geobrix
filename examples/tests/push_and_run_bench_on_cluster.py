@@ -572,8 +572,10 @@ def main() -> int:
     # --new-cluster: run on a job cluster made for this run (it ends with the run) instead of
     # an existing cluster: --spark-version (default 19.x-scala2.13), --node-type (default
     # m6gd.xlarge), --num-workers (default 1), --access-mode dedicated|standard (default
-    # dedicated).
+    # dedicated), --on-demand (AWS: every node on demand, so no spot node is taken back
+    # during a measurement; default: the workspace's spot/on-demand policy).
     new_cluster = "--new-cluster" in sys.argv
+    on_demand = "--on-demand" in sys.argv
     spark_version = _arg("--spark-version", "19.x-scala2.13")
     node_type = _arg("--node-type", "m6gd.xlarge")
     num_workers = int(_arg("--num-workers", "1"))
@@ -909,7 +911,7 @@ def main() -> int:
         print("gbx:bench:cluster pre-flight (JOB CLUSTER, ends with the run)")
         print(
             f"  new cluster: {spark_version} {node_type} x {num_workers} worker(s), "
-            f"{access_mode} access"
+            f"{access_mode} access{', on demand' if on_demand else ''}"
         )
     else:
         print("gbx:bench:cluster pre-flight")
@@ -1185,6 +1187,14 @@ def main() -> int:
                             me.user_name if access_mode == "dedicated" else None
                         ),
                         custom_tags={"gbx_bench": run_id[:64]},
+                        aws_attributes=(
+                            compute.AwsAttributes(
+                                availability=compute.AwsAvailability.ON_DEMAND,
+                                first_on_demand=num_workers + 1,
+                            )
+                            if on_demand
+                            else None
+                        ),
                     ),
                     notebook_task=jobs.NotebookTask(
                         notebook_path=notebook_path,

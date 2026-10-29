@@ -77,6 +77,8 @@ def sdk(monkeypatch):
     compute.DataSecurityMode = SimpleNamespace(
         SINGLE_USER="SINGLE_USER", USER_ISOLATION="USER_ISOLATION"
     )
+    compute.AwsAttributes = _Rec
+    compute.AwsAvailability = SimpleNamespace(ON_DEMAND="ON_DEMAND")
     jobs = types.ModuleType("databricks.sdk.service.jobs")
     jobs.JobEnvironment = jobs.SubmitTask = jobs.NotebookTask = _Rec
     jobs.Source = SimpleNamespace(WORKSPACE="WORKSPACE")
@@ -175,6 +177,20 @@ def test_a_job_cluster_carries_its_access_mode_and_no_retries(launch, sdk, acces
         "m6gd.xlarge",
         1,
     )
+
+
+@pytest.mark.parametrize("on_demand", [False, True])
+def test_a_job_cluster_is_on_demand_when_asked(launch, sdk, on_demand):
+    """``--on-demand`` puts every node of the job cluster (driver and workers) on demand,
+    so no spot node is taken back during a measurement; without it the workspace decides."""
+    args = ("--new-cluster", "--zarr-only", "--no-wait", "--num-workers", "2")
+    assert launch(*args, *(["--on-demand"] if on_demand else []), "--run-id", "t4") == 0
+    (task,) = sdk.submits[0]["tasks"]
+    aws = task.new_cluster.aws_attributes
+    if on_demand:
+        assert (aws.availability, aws.first_on_demand) == ("ON_DEMAND", 3)
+    else:
+        assert aws is None
 
 
 def test_a_finished_run_removes_its_notebook(launch, sdk):

@@ -502,3 +502,138 @@ def test_a_folder_opened_once_is_never_listed(tmp_path, readdir, monkeypatch):
         (tmp_path / str(i)).mkdir()
         assert _env.readdir_mode(_plain_tiff(tmp_path / str(i) / "a.tif")) is None
     assert _env._LISTINGS.listings == before
+
+
+def _hinted_tile(path, count):
+    tile = _tile(path)
+    if count is not None:
+        tile["metadata"] = {_env.FOLDER_FILES_KEY: count}
+    return tile
+
+
+@pytest.fixture
+def scans(monkeypatch):
+    """How many folder scans the listing cache makes."""
+    calls = []
+    real = _env._LISTINGS._list
+
+    def _list(folder):
+        calls.append(folder)
+        return real(folder)
+
+    monkeypatch.setattr(_env._LISTINGS, "_list", _list)
+    return calls
+
+
+def test_a_tile_whose_folder_is_past_the_cap_opens_without_a_listing(
+    tmp_path, readdir, opens_seen, scans
+):
+    """The reader's count of files in the tile's folder (path_folder_files) past the cap:
+    the folder is held as too large without being scanned, and the opens of the tile
+    (open_tile, open_header, rst_sample) keep TRUE."""
+    readdir(None)
+    a = _plain_tiff(tmp_path / "a.tif")
+    tile = _hinted_tile(a, "40000")
+    with ot._open(tile) as ds:
+        assert ds.read(1).sum() == 64
+    with ot.open_header(tile) as ds:
+        assert ds.width == 8
+    assert prx._sample_udf.func(
+        tile, shapely.to_wkb(shapely.Point(500005.0, 4999995.0))
+    )
+    assert scans == []
+    assert {m for n, m in opens_seen if n == "a.tif"} == {"TRUE"}
+    assert _env._LISTINGS._names[os.path.realpath(tmp_path)][0] is _env._TOO_LARGE
+
+
+@pytest.mark.parametrize("count", ["3", None], ids=["small count", "no count"])
+def test_a_small_or_missing_count_lists_the_folder_as_before(
+    tmp_path, readdir, opens_seen, scans, count
+):
+    readdir(None)
+    a = _plain_tiff(tmp_path / "a.tif")
+    with ot._open(_hinted_tile(a, count)):
+        pass
+    assert scans == [str(tmp_path)]
+    assert {m for n, m in opens_seen if n == "a.tif"} == {"EMPTY_DIR"}
+
+
+@pytest.mark.parametrize(
+    "count", ["0", "-5", "1", "1000", "1001", "40000", "abc", "", "1e9", "9" * 40]
+)
+def test_a_crafted_count_never_gives_empty_dir_without_a_listing(
+    tmp_path, readdir, monkeypatch, count
+):
+    """The count is data: whatever it says, with no listing possible (every scan fails)
+    the open never takes EMPTY_DIR; a count can only hold the folder as too large."""
+    readdir(None)
+    monkeypatch.setattr(_env._LISTINGS, "_list", lambda folder: None)
+    a = _plain_tiff(tmp_path / "a.tif")
+    _env.note_folder_files(a, count)
+    for _ in range(3):
+        assert _env.readdir_mode(a) is None
+
+
+def test_a_listing_held_outranks_a_count(tmp_path, readdir):
+    """A count past the cap for a folder already listed leaves the listing in place."""
+    readdir(None)
+    a = _plain_tiff(tmp_path / "a.tif")
+    assert _env.readdir_mode(a) == "EMPTY_DIR"
+    _env.note_folder_files(a, "40000")
+    assert _env.readdir_mode(a) == "EMPTY_DIR"
+
+
+def test_the_reader_stamps_its_folder_count_on_virtual_tiles(tmp_path, monkeypatch):
+    """raster_gbx counts the files it listed in each folder and stamps the count of a
+    folder past GDAL's listing limit on each virtual tile of it (whole-file and windowed),
+    under path_folder_files; a folder at or under the limit gets no key (nothing changes on
+    a worker), so its tiles stay the ones read_paths plans."""
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+    monkeypatch.setenv("GDAL_READDIR_LIMIT_ON_OPEN", "2")
+    (tmp_path / "sub").mkdir()
+    for i in range(3):
+        _plain_tiff(tmp_path / f"t{i}.tif")
+    _plain_tiff(tmp_path / "sub" / "s.tif")
+    names = V2_TILE_SCHEMA.fieldNames()
+    for options, kind in (({}, "whole"), ({"tileSize": "4"}, "windowed")):
+        reader = RasterGbxReader(
+            {"path": str(tmp_path), "virtualTiles": "true", **options}
+        )
+        tiles = [
+            dict(zip(names, row[1]))
+            for p in reader.partitions()
+            for row in reader.read(p)
+        ]
+        assert tiles and all(t["raster"] is None for t in tiles), kind
+        counts = {
+            os.path.basename(t["path"]): t["metadata"].get(_env.FOLDER_FILES_KEY)
+            for t in tiles
+        }
+        assert counts == {"t0.tif": "3", "t1.tif": "3", "t2.tif": "3", "s.tif": None}
+
+
+def test_a_reader_tile_past_the_cap_reaches_the_open_as_a_hint(
+    tmp_path, readdir, monkeypatch, scans, opens_seen
+):
+    """Round trip: raster_gbx stamps the count, and an open of the tile it emitted (on a
+    worker, with no listing held) skips the scan when the count is past the cap."""
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+    readdir(None)
+    monkeypatch.setenv("GDAL_READDIR_LIMIT_ON_OPEN", "2")
+    for i in range(3):
+        _plain_tiff(tmp_path / f"t{i}.tif")
+    reader = RasterGbxReader({"path": str(tmp_path), "virtualTiles": "true"})
+    names = V2_TILE_SCHEMA.fieldNames()
+    tiles = [
+        dict(zip(names, row[1])) for p in reader.partitions() for row in reader.read(p)
+    ]
+    _env._LISTINGS.clear()  # a worker: nothing held
+    scans.clear()
+    with ot._open(tiles[0]) as ds:
+        assert ds.width == 8
+    assert scans == []
+    assert {m for n, m in opens_seen if n == "t0.tif"} == {"TRUE"}

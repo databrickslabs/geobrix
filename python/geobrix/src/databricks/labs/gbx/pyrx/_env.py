@@ -519,6 +519,18 @@ class _FolderListings:
                 self._names.popitem(last=False)
         return names
 
+    def mark_too_large(self, folder: str) -> None:
+        """Hold *folder* as ``_TOO_LARGE`` without listing it (see note_folder_files),
+        unless a listing of it is held already: a real listing outranks a hint."""
+        key = self._key(folder)
+        with self._lock:
+            if key in self._names:
+                self._names.move_to_end(key)
+                return
+            self._names[key] = (_TOO_LARGE, _now())
+            while len(self._names) > self.max_folders:
+                self._names.popitem(last=False)
+
     def names(self, folder: str, must_hold: str):
         """The names held for *folder* (a frozenset), ``_TOO_LARGE``, or None (not listed
         yet, or cannot be listed). Lists the folder at its ``list_after_opens``-th open,
@@ -547,6 +559,40 @@ class _FolderListings:
 
 
 _LISTINGS = _FolderListings()
+
+# The tile metadata key the raster_gbx reader stamps on each virtual tile it emits: the
+# number of files it found in the folder of the tile's path when it listed the folder at
+# planning time (only files the reader accepted, so never more than the folder holds).
+FOLDER_FILES_KEY = "path_folder_files"
+
+
+def note_folder_files(path, count) -> None:
+    """Take *count*, a tile's ``path_folder_files``, as a hint about the folder of *path*.
+
+    The value is data (a tile row can carry anything), so it is only ever allowed to choose
+    between two correct modes: a count over the listing cap (_listing_cap, the same
+    GDAL_READDIR_LIMIT_ON_OPEN) holds the folder as too large without listing it, and its
+    files keep TRUE (by-name checks), as GDAL itself does past that limit; anything else
+    (a count at or under the cap, none, or one that is not an integer) does nothing, so
+    the folder is listed as without a hint and its listing decides per file. A hint never
+    yields EMPTY_DIR: only a real listing of the folder can (readdir_mode_for).
+    """
+    if count is None:
+        return
+    try:
+        n = int(count)
+    except (TypeError, ValueError):
+        return
+    cap = _listing_cap()
+    if cap is None or n <= cap:
+        return
+    try:
+        p = os.fspath(path)
+    except TypeError:
+        return
+    if not isinstance(p, str) or not _is_plain_file_path(p):
+        return
+    _LISTINGS.mark_too_large(os.path.dirname(os.path.abspath(p)))
 
 
 def _is_plain_file_path(path: str) -> bool:

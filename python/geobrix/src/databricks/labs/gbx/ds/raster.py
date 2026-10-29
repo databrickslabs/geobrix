@@ -74,7 +74,7 @@ from pyspark.sql.datasource import (
 from pyspark.sql.types import BinaryType, StringType, StructField, StructType
 
 from databricks.labs.gbx.ds import _encode, _listing
-from databricks.labs.gbx.pyrx import _serde
+from databricks.labs.gbx.pyrx import _env, _serde
 from databricks.labs.gbx.pyrx._env import open_raster
 from databricks.labs.gbx.pyrx.core import budget
 from databricks.labs.gbx.pyrx.core.local_temp import (
@@ -235,6 +235,9 @@ class _TilePartition(InputPartition):
         # (native tiles).  A non-empty dict is merged into tile.metadata in
         # read() so downstream ops can dispatch by cell without re-opening.
         "vrt_tags",
+        # Files the planner found in this file's folder (None when not planned from a
+        # folder listing); stamped on virtual tiles as metadata["path_folder_files"].
+        "folder_files",
     )
 
     def __init__(
@@ -271,6 +274,7 @@ class _TilePartition(InputPartition):
         self.size_mib = size_mib
         self.tile_format = tile_format
         self.vrt_tags: Optional[dict] = None
+        self.folder_files: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1095,6 +1099,20 @@ class RasterGbxReader(DataSourceReader):
             extensions=self.extensions,
             path_glob_filter=self.path_glob_filter,
         )
+        # Files per folder, from this listing (only files it accepted, so never more than
+        # the folder holds), kept for the folders past GDAL's listing limit: stamped on their
+        # virtual tiles as a hint that lets a worker skip listing such a folder
+        # (pyrx._env.note_folder_files). A count at or under the limit changes nothing on
+        # a worker, so it is not stamped, and the tile stays the one read_paths plans for
+        # the same file.
+        folder_files: Dict[str, int] = {}
+        for f in files:
+            d = os.path.dirname(f)
+            folder_files[d] = folder_files.get(d, 0) + 1
+        cap = _env._listing_cap()
+        self._folder_files = {
+            d: n for d, n in folder_files.items() if cap is not None and n > cap
+        }
         if self.filter_regex and self.filter_regex != ".*":
             import re as _re
 
@@ -1212,20 +1230,24 @@ class RasterGbxReader(DataSourceReader):
         # on the read result; n is a parallelism signal (classic ≈ 3–5× cores),
         # never n = file_count.
         files = self._list_source_files()
+        folder_files = getattr(self, "_folder_files", {})
         result: list = []
         for f in files:
-            result.extend(
-                _plan_partitions_for_file(
-                    file_path=f,
-                    budget_bytes=resolved_budget,
-                    clip_polygons=self.clip_polygons,
-                    clip_crs=self.clip_crs,
-                    windows=self.windows,
-                    tile_size=self.tile_size,
-                    overlap_percent=self.overlap_percent,
-                    emit_virtual=self.emit_virtual,
-                )
+            n = folder_files.get(os.path.dirname(f))
+            _env.note_folder_files(f, n)  # the planner's own header opens
+            parts = _plan_partitions_for_file(
+                file_path=f,
+                budget_bytes=resolved_budget,
+                clip_polygons=self.clip_polygons,
+                clip_crs=self.clip_crs,
+                windows=self.windows,
+                tile_size=self.tile_size,
+                overlap_percent=self.overlap_percent,
+                emit_virtual=self.emit_virtual,
             )
+            for p in parts:
+                p.folder_files = n
+            result.extend(parts)
         # None-safe: place None values at the end (deterministic ordering).
         # skipOrdering=True bypasses this sort (opt-out for pre-ordered input).
         if self.skip_ordering:
@@ -1253,6 +1275,8 @@ class RasterGbxReader(DataSourceReader):
             return
 
         source = _listing.to_spark_uri(partition.file_path)
+        folder_files = getattr(partition, "folder_files", None)
+        _env.note_folder_files(partition.file_path, folder_files)
 
         # ------------------------------------------------------------------
         # Virtual tile: bytes-free emission (path + whole-file window).
@@ -1290,6 +1314,8 @@ class RasterGbxReader(DataSourceReader):
                     "format": "gtiff",
                     "path_file_size": str(file_size),
                 }
+                if folder_files is not None:
+                    meta[_env.FOLDER_FILES_KEY] = str(folder_files)
                 # Propagate VRT member tags (cellid, gridSystem) when present.
                 # Set by partitions() for quadbin mini-COG members; absent for
                 # native tiles and for partitions built outside the VRT branch.
@@ -1324,6 +1350,8 @@ class RasterGbxReader(DataSourceReader):
                         "count": str(ds.count),
                         "path_file_size": str(file_size),
                     }
+                    if folder_files is not None:
+                        meta[_env.FOLDER_FILES_KEY] = str(folder_files)
                     win = (
                         partition.window
                     )  # always set for non-whole-file virtual tiles

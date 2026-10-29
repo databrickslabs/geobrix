@@ -32,7 +32,11 @@ from rasterio.vrt import WarpedVRT
 from rasterio.windows import Window
 
 from databricks.labs.gbx.pyrx import _serde
-from databricks.labs.gbx.pyrx._env import open_raster
+from databricks.labs.gbx.pyrx._env import (
+    FOLDER_FILES_KEY,
+    note_folder_files,
+    open_raster,
+)
 from databricks.labs.gbx.pyrx.core import _clip
 from databricks.labs.gbx.pyrx.core import _nodata as _nd
 from databricks.labs.gbx.pyrx.core import compression as _comp
@@ -522,6 +526,9 @@ def _resolve_local_or_windowed(tile: VirtualTile, file_ref, stack: ExitStack) ->
     this helper is called; if the FILE attempt succeeds, this helper is never
     reached.
     """
+    # the reader's count of files in the tile's folder: lets open_raster skip listing a
+    # folder past GDAL's listing limit (a hint only; see _env.note_folder_files)
+    note_folder_files(tile.path, (tile.metadata or {}).get(FOLDER_FILES_KEY))
     if file_ref is not None:
         try:
             raw = file_ref.as_local_file()
@@ -974,6 +981,7 @@ def open_tile_points(tile) -> Iterator:
         with open_tile(vt) as ds:
             yield ds
         return
+    note_folder_files(vt.path, (vt.metadata or {}).get(FOLDER_FILES_KEY))
     with _TASK_SOURCES.source(vt.path) as src:
         view = _point_view(vt, src)
         if view is not None:

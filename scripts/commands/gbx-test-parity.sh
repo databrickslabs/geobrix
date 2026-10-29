@@ -200,7 +200,9 @@ for f in "${RUN_FILES[@]}"; do
     [ -n "$KEYWORD" ] && PYTEST_CMD="$PYTEST_CMD -k '$KEYWORD'"
     PYTEST_CMD="$PYTEST_CMD | tee $REPORT"
 
-    docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "set -o pipefail; $PYTEST_CMD"
+    gbx_native_env_args
+    docker exec ${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"} "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN \
+        /bin/bash -c "set -o pipefail; $PYTEST_CMD"
     FILE_EXIT=$?
 
     # The pytest summary line, then the skip reasons (-rs): which one explains a skip below.

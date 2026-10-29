@@ -164,7 +164,9 @@ run_pass() {
         pytest_cmd="unset JAVA_TOOL_OPTIONS && cd /root/geobrix && \
             python3 -m pytest ${paths[*]} -v --tb=short --color=yes -m $markers_q"
         [[ -n "${PYTEST_ADDOPTS:-}" ]] && env_args+=(-e "PYTEST_ADDOPTS=$PYTEST_ADDOPTS")
-        docker exec "${env_args[@]}" "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$pytest_cmd"
+        gbx_native_env_args
+        env_args+=(${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"})
+        docker exec ${env_args[@]+"${env_args[@]}"} "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$pytest_cmd"
     else
         # Host venv path (default): isolated from system site-packages. run_in_pyrx_venv also
         # points PYSPARK_PYTHON at the venv python so Spark workers match the driver.

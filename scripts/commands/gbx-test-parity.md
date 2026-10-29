@@ -17,6 +17,10 @@ bash scripts/commands/gbx-test-parity.sh [OPTIONS]
 - `--no-wait` - Fail at once (exit 75) if another test run holds the container lock, instead of waiting for it (see "One test run at a time")
 - `--help` - Display help message
 
+## The native payload
+
+Set `GBX_NATIVE_ROOT` in the calling shell to run the container's pytest on a native payload, for example `GBX_NATIVE_ROOT=build/env-wheel/env6/payload` (from `gbx:build:wheel --env 6`). The command passes it into the container as its `/root/geobrix` path (a path under this checkout, relative or absolute; any other absolute path is taken as a container path), so the run's Python serves the payload's bindings (its `osgeo` and rasterio on one GDAL). Unset, nothing is passed.
+
 ## Why this command exists
 
 Parity suites are marked `@pytest.mark.integration` and need the assembly JAR staged in `python/geobrix/lib/`, because they start a Spark session with `spark.jars` pointing at it to call the heavy tier. In a normal `gbx:test:python` run they are excluded by the default `not integration` marker filter, and even with `--with-integration` they self-skip when no JAR is staged.

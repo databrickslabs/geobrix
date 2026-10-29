@@ -516,6 +516,23 @@ gbx_python_with_sdk() {
     fi
 }
 
+# gbx_native_env_args: GBX_NATIVE_ENV_ARGS, the `docker exec` arguments that give a container pytest run the
+# caller's GBX_NATIVE_ROOT (a native payload, e.g. build/env-wheel/env6/payload), so the run's Python and the JVM it
+# starts use that payload's GDAL. A path under this checkout (relative to it or absolute) becomes its /root/geobrix
+# path; any other absolute path is taken as a path inside the container. Empty when GBX_NATIVE_ROOT is unset.
+gbx_native_env_args() {
+    GBX_NATIVE_ENV_ARGS=()
+    [ -n "${GBX_NATIVE_ROOT:-}" ] || return 0
+    local p="$GBX_NATIVE_ROOT" root="$GBX_COMMON_ROOT"
+    case "$p" in
+        /root/geobrix|/root/geobrix/*) ;;
+        "$root"/*) p="/root/geobrix/${p#"$root"/}" ;;
+        /*) ;;
+        *) p="/root/geobrix/${p#./}" ;;
+    esac
+    GBX_NATIVE_ENV_ARGS=(-e "GBX_NATIVE_ROOT=${p%/}")
+}
+
 # gbx_ensure_container_python_deps: make the dev container able to run geobrix's Python tests.
 # Called by every command that runs them in the container (gbx:test:python, gbx:test:parity), so a
 # fresh container works whichever runs first. Idempotent and near-zero cost when everything is

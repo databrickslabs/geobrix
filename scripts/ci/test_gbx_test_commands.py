@@ -390,6 +390,31 @@ def test_markers_narrow_the_default_and_pytest_addopts_reaches_pytest(sandbox):
     assert env["PYTEST_ADDOPTS"] == "--durations=5"
 
 
+def test_a_native_payload_reaches_the_container_pytest_runs(sandbox):
+    # GBX_NATIVE_ROOT names a payload under the checkout (relative or absolute): the container's pytest gets its
+    # /root/geobrix path, on the light run and on the parity run; unset, nothing is passed.
+    path = "python/geobrix/test/zarr/test_keys.py"
+
+    def pytest_env():
+        return [e for c, e in zip(sandbox.execs(), sandbox.exec_envs()) if "pytest" in c[-1]][-1]
+
+    sandbox.run("gbx-test-pyrx.sh", "--docker", "--path", path, GBX_NATIVE_ROOT="build/env-wheel/env6/payload")
+    assert pytest_env()["GBX_NATIVE_ROOT"] == "/root/geobrix/build/env-wheel/env6/payload"
+    sandbox.run("gbx-test-pyrx.sh", "--docker", "--path", path)
+    assert "GBX_NATIVE_ROOT" not in pytest_env()
+    tree = sandbox.root / "t"
+    tree.mkdir()
+    (tree / "test_x_cross_tier.py").write_text("def test_x():\n    pass\n")
+    _parity_sandbox(sandbox, tree)
+    payload = str(sandbox.root / "build" / "env-wheel" / "env6" / "payload")
+    res = sandbox.run(
+        "gbx-test-parity.sh", "--skip-build", GBX_NATIVE_ROOT=payload,
+        FAKE_DOCKER_EXEC_STDOUT="== 3 passed in 1.00s ==",
+    )
+    assert res.returncode == 0, res.output
+    assert pytest_env()["GBX_NATIVE_ROOT"] == "/root/geobrix/build/env-wheel/env6/payload"
+
+
 def _markers_of_calls(log):
     """The `-m` expression of every pytest process the fake venv python was started for, in order."""
     calls = [line.split("|", 2)[2] for line in log.read_text().splitlines()]

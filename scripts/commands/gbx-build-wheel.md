@@ -85,7 +85,7 @@ Only then is the wheel moved to `dist/env<N>/`, which keeps no other wheel. The 
 
 The core.txt wheelhouse for that architecture (with `base.txt` as constraints) is fetched on the host into `build/env-wheel/wheelhouse/env<N>/<arch>/`, kept while core.txt and base.txt are unchanged. Then, in the architecture's toolchain image (AlmaLinux 8, the manylinux_2_28 floor), `--network none`, `scripts/native/check-env-wheel.sh` prints `ok: <check>` or `CHECK FAILED: <what>` for:
 
-1. a fresh CPython 3.12 venv installs the wheel offline, and the runtime's base versions do not move (a `base.txt` package the core install does not need, one only an extra holds, is not installed and is listed);
+1. a fresh CPython 3.12 venv installs the wheel offline, and the runtime's base versions do not move (`scripts/native/base_held.py`: a `base.txt` package that only an extra names, such as `[stac]`'s requests, is not installed by the core install and is listed; one `core.txt` needs that is missing, or one at another version, fails);
 2. `import rasterio, shapely, pyproj, pyogrio, netCDF4, osgeo.gdal` with no geobrix import serves the payload's builds (the `.pth`), placed just before site-packages;
 3. with `GBX_NATIVE_PTH=0`, `import databricks.labs.gbx` first activates the payload (`activated_by == "import"`);
 4. a user `SSL_CERT_FILE` survives `import rasterio` and `pyogrio` for GDAL and PROJ; without one, the system store;

@@ -1,15 +1,15 @@
 # What the env5 runtimes (DBR 17.3, DBR 18, Serverless environment 5) preinstall, for the packages
 # core.txt bounds, the vendored packages need and the extras hold (extra-*.txt). Exact versions; where the
-# runtimes differ, the oldest: pyarrow and databricks-sdk are DBR 17.3's (DBR 18 and env 5 ship pyarrow
-# 21.0.0 and databricks-sdk 0.67.0). gbx:build:wheel checks every core.txt range, every vendored package's
-# requirement and every extra against them, and the --verify install uses them as constraints (the runtime's base,
-# offline).
+# runtimes differ, the oldest: pyarrow, scipy, click and databricks-sdk are DBR 17.3's (DBR 18 and env 5 ship
+# pyarrow 21.0.0, scipy 1.15.3, click 8.1.8 and databricks-sdk 0.67.0). gbx:build:wheel checks every core.txt
+# range, every vendored package's requirement and every extra against them, and the --verify install uses them as
+# constraints (the runtime's base, offline).
 numpy==2.1.3
 pandas==2.2.3
 pyarrow==19.0.1
 scipy==1.15.1
 protobuf==5.29.4
-click==8.1.8
+click==8.1.7
 requests==2.32.3
 tenacity==9.0.0
 databricks-sdk==0.49.0

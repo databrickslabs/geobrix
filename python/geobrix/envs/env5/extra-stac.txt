@@ -1,7 +1,10 @@
-# [stac]: the STAC client (gbx.stac): the plain wheel's [stac], with the packages the runtimes preinstall held at
-# their versions (floor = the preinstalled version, cap = the next minor; base.txt). The plain extra's
-# requests>=2.34.2 floor would move the runtimes' requests 2.32.3, so it is not here. pystac comes from core.txt.
+# [stac]: the STAC client (gbx.stac): the plain wheel's [stac], with tenacity held at the runtimes' version (floor =
+# the preinstalled version, cap = the next minor; base.txt). pystac comes from core.txt.
+# requests is the one deliberate move of a preinstalled package: DBR 17.3, DBR 18 and Serverless environment 5 ship
+# requests 2.32.3, which has CVE-2024-47081 (a URL can make it send ~/.netrc credentials for one host to another, and
+# gbx.stac fetches catalog-supplied hrefs through it). 2.32.4 fixes it, so the floor is 2.32.4 (gbx:build:wheel
+# SECURITY_FLOORS). No cap: a cap under a later runtime's requests would downgrade it.
 pystac-client>=0.7,<1
 planetary-computer>=1.0,<2
 tenacity>=9.0.0,<9.1
-requests>=2.32.3,<2.33
+requests>=2.32.4

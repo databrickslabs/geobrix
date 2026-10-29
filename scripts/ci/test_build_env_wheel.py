@@ -361,20 +361,38 @@ def test_each_committed_extra_moves_nothing_and_names_no_vendored_package(env):
     }
     assert pure <= VENDORED
     bew.check_extras(env, VENDORED)  # passes on the committed files
-    # each extra that names a preinstalled package holds it: the runtime's version is admitted
+    # each extra that names a preinstalled package holds it (the runtime's version is admitted), except a move up to a
+    # security floor that the runtime's version lacks
     base = bew.pins_of(envdir / "base.txt")
     for name in names:
         for r in bew.reqs_of(envdir / f"extra-{name}.txt"):
             dep = bew.canonicalize_name(r.name)
             assert dep not in VENDORED, (name, dep)
-            if dep in base:
+            floor = bew.SECURITY_FLOORS.get(dep)
+            if dep in base and not (floor and base[dep] < bew.Version(floor[0])):
                 assert r.specifier.contains(base[dep]), (name, str(r), str(base[dep]))
+
+
+@pytest.mark.parametrize("env", [5, 6])
+def test_stac_pins_the_requests_security_floor_uncapped(env):
+    # CVE-2024-47081 (requests < 2.32.4 leaks ~/.netrc credentials to another host); gbx.stac fetches catalog hrefs
+    (r,) = [
+        r
+        for r in bew.reqs_of(bew.PYDIR / "envs" / f"env{env}" / "extra-stac.txt")
+        if r.name == "requests"
+    ]
+    assert not r.specifier.contains("2.32.3") and r.specifier.contains("2.32.5"), str(r)
+    assert all(s.operator in (">=", ">") for s in r.specifier), str(r)  # no cap
+    assert bew.SECURITY_FLOORS["requests"][0] == "2.32.4"
 
 
 @pytest.mark.parametrize(
     "env, file, line, refused",
     [
-        (6, "extra-stac.txt", "requests>=2.34.2", "would move it"),  # the plain [stac]'s floor
+        (6, "extra-stac.txt", "requests>=2.34.2", "would move it"),  # the plain [stac]'s floor: past the fix
+        (5, "extra-stac.txt", "requests>=2.32.3", "needs a floor of at least 2.32.4"),  # CVE-2024-47081
+        (5, "extra-stac.txt", "requests>=2.32.4,<2.33", "must not be capped"),
+        (6, "extra-databricks.txt", "requests>=2.0", "needs a floor of at least 2.32.4"),  # any extra naming it
         (5, "extra-databricks.txt", "databricks-sdk>=0.67", "would move it"),  # above DBR 17.3's 0.49.0
         (6, "extra-zarr.txt", "shapely>=2", "which the wheel vendors"),
         (5, "extra-stac.txt", "GDAL==3.13.3", "which the wheel vendors"),  # osgeo's distribution
@@ -439,3 +457,45 @@ def test_the_wheel_metadata_carries_exactly_the_envs_extras(tmp_path, capsys, en
         with pytest.raises(SystemExit):  # an extra missing from the wheel (and its file list) is caught
             check(tuple(e for e in bew.EXTRAS[env] if e != dropped))
         assert "declares" in capsys.readouterr().out
+
+
+# --- --verify check 1 (scripts/native/base_held.py) ------------------------------------------------------------
+
+_bh_spec = importlib.util.spec_from_file_location("base_held", NATIVE / "base_held.py")
+base_held = importlib.util.module_from_spec(_bh_spec)
+_bh_spec.loader.exec_module(base_held)
+
+
+def _installed(env, **changes):
+    """A version() lookup: every base.txt package at its base version, then `changes` (None = not installed)."""
+    have = dict(base_held.pins(bew.PYDIR / "envs" / f"env{env}" / "base.txt"))
+    have.update({k.replace("_", "-"): v for k, v in changes.items()})
+
+    def version(name):
+        if have.get(name) is None:
+            raise base_held.md.PackageNotFoundError(name)
+        return have[name]
+
+    return version
+
+
+@pytest.mark.parametrize(
+    "env, changes, verdict",
+    [
+        # the core install of env5: [stac]'s requests and tenacity and [databricks]'s SDK are not needed by it
+        (5, {"requests": None, "tenacity": None, "databricks_sdk": None},
+         "ok; not needed by the core install: requests, tenacity, databricks-sdk"),
+        (6, {}, "ok"),
+        (6, {"numpy": None}, "missing: numpy (base 2.3.4)"),  # core.txt needs numpy: a missing one fails
+        (6, {"click": "8.5.0"}, "moved: click==8.5.0 (base 8.2.1)"),
+        (5, {"requests": "2.32.5"}, "moved: requests==2.32.5 (base 2.32.3)"),  # an installed extra-only one still counts
+    ],
+)  # fmt: skip
+def test_verify_check_1_lists_only_what_just_an_extra_holds(env, changes, verdict):
+    envdir = bew.PYDIR / "envs" / f"env{env}"
+    assert base_held.judge(envdir, version=_installed(env, **changes)) == verdict
+
+
+def test_verify_check_1_runs_base_held():
+    text = (NATIVE / "check-env-wheel.sh").read_text()
+    assert '"$V/bin/python" /check/base_held.py /env' in text

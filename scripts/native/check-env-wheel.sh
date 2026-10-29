@@ -7,7 +7,8 @@
 # Each check prints `ok: <check>` or `CHECK FAILED: <what>`; the last line is
 # `ENV_WHEEL_VERIFIED env=<ENV> arch=<arch> failures=<n>` and the exit status is 1 when any check failed.
 #   1 a fresh cp312 venv installs the wheel offline, with the runtime's base versions as constraints, and every
-#     base package it installs is at its base version (one the core install does not need is listed, not failed)
+#     base package it installs is at its base version, every one core.txt needs is installed, and one only an
+#     extra names is listed (base_held.py)
 #   2 the bindings (osgeo too) import before geobrix, through geobrix-native.pth alone, from the payload
 #   3 without the .pth (GBX_NATIVE_PTH=0), `import databricks.labs.gbx` first activates the payload
 #   4 CA: a user SSL_CERT_FILE survives `import rasterio` for GDAL and PROJ; without one, the system store
@@ -32,21 +33,12 @@ pipq() { "$1" -m pip --disable-pip-version-check "${@:2}"; }
 
 V=/tmp/v
 if $PY -m venv "$V" && pipq "$V/bin/python" install -q --no-index --find-links /wheelhouse -c /env/base.txt "$WHL"; then
-    # A base.txt package the core install does not need (one only an extra holds, such as requests) is not
-    # installed: not moved, and listed. One installed at another version moved.
-    got="$("$V/bin/python" -c 'import importlib.metadata as m
-pins = [l.split("==") for l in open("/env/base.txt") if "==" in l and not l.startswith("#")]
-def have(n):
-    try:
-        return m.version(n)
-    except m.PackageNotFoundError:
-        return None
-bad = [f"{n}=={have(n)} (base {v.strip()})" for n, v in pins if have(n) not in (None, v.strip())]
-idle = [n for n, _ in pins if have(n) is None]
-print("moved: " + "; ".join(bad) if bad else "ok" + ("; not needed by the core install: " + ", ".join(idle) if idle else ""))')"
+    # base_held.py: every base package installed is at its base version, every one core.txt needs is installed, and
+    # one only an extra names (requests, held by [stac]) is not installed by the core install and is listed.
+    got="$("$V/bin/python" /check/base_held.py /env 2>&1)"
     case "$got" in
         ok*) ok "1 offline install into a fresh venv, the runtime's base versions held ($(pipq "$V/bin/python" list 2>/dev/null | tail -n +3 | wc -l | tr -d ' ') distributions)${got#ok}" ;;
-        *) bad "1 the base versions moved: ${got#moved: }" ;;
+        *) bad "1 the runtime's base did not hold: $got" ;;
     esac
 else
     bad "1 the wheel does not install offline from the wheelhouse"; echo "ENV_WHEEL_VERIFIED env=$ENV arch=$ARCH failures=$FAILS"; exit 1

@@ -106,6 +106,11 @@ RELY_ON_BASE = {
 EXTRAS = {5: ("databricks", "stac", "vizx"), 6: ("databricks", "stac", "vizx", "zarr")}
 # The distribution name of the vendored osgeo (GDAL's own bindings): not a wheel in the vendored set, so named here.
 VENDORED_DISTS = {"gdal"}
+# Security floors: the only packages an extra may move off a runtime's preinstalled version, and only up to the fix.
+# An extra that names one must have a floor at or above it and no cap (a cap under a later runtime's version would
+# be a downgrade). requests < 2.32.4 sends ~/.netrc credentials for one host to another for a crafted URL, and
+# gbx.stac fetches catalog-supplied hrefs through requests; env5's runtimes ship 2.32.3.
+SECURITY_FLOORS = {"requests": ("2.32.4", "CVE-2024-47081")}
 GIT_INPUTS = (  # what the wheel is built from, under git
     "python/geobrix/src",
     "python/geobrix/envs",
@@ -817,7 +822,12 @@ def check_requirements(env, vendored):
 def check_extras(env, vendored, envdir=None):
     """The env's extra-<name>.txt files are EXTRAS[env], and none names a vendored distribution (pip would install
     PyPI's copy beside the vendored build: two GDALs, or a second PROJ, on disk) or excludes the version base.txt
-    says the runtime preinstalls (installing the extra would move it)."""
+    says the runtime preinstalls (installing the extra would move it), except up to a SECURITY_FLOORS fix, which an
+    extra naming that package must have, uncapped.
+
+    These are rules on the names an extra lists, not on what they pull in: [vizx] passes while geopandas and
+    contextily install PyPI's rasterio, pyogrio, pyproj and shapely. The transitive no-pull / no-move rule gets its
+    committed test in task PK-1 (R3/R4), resolving each extra against the runtimes' preinstalled sets."""
     envdir = envdir or PYDIR / "envs" / f"env{env}"
     base = pins_of(envdir / "base.txt")
     names = tuple(sorted(p.stem.removeprefix("extra-") for p in envdir.glob("extra-*.txt")))
@@ -830,7 +840,18 @@ def check_extras(env, vendored, envdir=None):
                 fail(
                     f"env{env}/extra-{name}.txt names {dep}, which the wheel vendors: pip would install PyPI's {dep} beside it"
                 )
+            floor = SECURITY_FLOORS.get(dep)
+            if floor:
+                lows = [Version(s.version) for s in r.specifier if s.operator in (">=", ">")]
+                if not lows or max(lows) < Version(floor[0]):
+                    fail(f"env{env}/extra-{name}.txt {r}: {dep} needs a floor of at least {floor[0]} ({floor[1]})")
+                caps = [str(s) for s in r.specifier if s.operator in ("<", "<=", "==", "~=", "===")]
+                if caps:
+                    fail(f"env{env}/extra-{name}.txt {r}: {dep} has a security floor and must not be capped ({caps})")
             if dep in base and not r.specifier.contains(base[dep], prereleases=True):
+                # a move is allowed only to reach a security fix the runtime's version lacks, and only to the floor
+                if floor and base[dep] < Version(floor[0]) and r.specifier.contains(floor[0], prereleases=True):
+                    continue
                 fail(
                     f"env{env}/extra-{name}.txt {r} does not admit the runtime's {dep} {base[dep]} (base.txt): [{name}] would move it"
                 )

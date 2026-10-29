@@ -57,6 +57,14 @@ The 256 MiB stream cutoff (`GBX_STREAM_MAX_BYTES`) is an optional environment ov
 Opening a large source via byte-range buffers it into executor RAM, and for a **large striped GeoTIFF** parsing the strip-offset table over byte-range can reach **47–54 seconds per open at 10 GB, consuming 10 GB of executor RAM**. That is exactly why GeoBrix routes large or striped sources to FUSE (lazy, low-RAM) automatically rather than streaming them. For best windowed-read throughput, **prefer COGs** — a tiled COG under the threshold takes the fast stream path and amortizes across its windows.
 :::
 
+### Sidecar files and folder listings
+
+When GDAL opens a raster it looks for the raster's sidecar files: external overviews (`.ovr`), masks (`.msk`), `.aux.xml` metadata and world files (`.tfw`, `.wld`). By default it lists the whole folder to find them, at every open. On a Volume that listing gets slower the more files share the folder: for a folder of 745 GeoTIFFs on a Serverless worker it took from 0.3 s to 10 s per open in our runs.
+
+The lightweight tier sets GDAL's `GDAL_DISABLE_READDIR_ON_OPEN` option to `TRUE`. GDAL then lists nothing and checks each sidecar by name (5 to 7 names per open), so overviews, masks and world files are still found, and the cost of an open no longer depends on the size of the folder. Before it reads a Volume file directly, GeoBrix checks that the file can be read: that check opens the file without looking for sidecars at all, in about 10 ms where it took about 330 ms with the listing.
+
+If you set `GDAL_DISABLE_READDIR_ON_OPEN` yourself (an environment variable on the executors, or a `rasterio.Env` around your own reads), GeoBrix keeps your value. `NO` restores GDAL's listing. `EMPTY_DIR` is the fastest, but GDAL then ignores every sidecar, so a world file or an external overview is not used. With `TRUE`, GDAL checks a sidecar's extension in lower case and in upper case only, so a sidecar whose extension mixes case (`.Tfw`) is found only with `NO`.
+
 ### Per-partition open-amortization (the grouped executor)
 
 GeoBrix's grouped executor holds a small per-partition LRU cache of open stream handles, keyed by source path. The first access for a source in a partition opens it (cache miss); all subsequent windows from that source in the same partition are cache hits (~2 ms each). When tiles are sorted by source path within each partition, even a partition holding several sources fully amortizes at LRU size ~2.

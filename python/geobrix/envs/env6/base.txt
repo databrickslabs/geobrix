@@ -1,6 +1,7 @@
 # What the env6 runtimes (DBR 19, Serverless environment 6) preinstall, for the packages core.txt
-# bounds and the vendored packages need. Exact versions. gbx:build:wheel checks every core.txt range
-# and every vendored package's requirement against them, and the --verify install uses them as
+# bounds, the vendored packages need and the extras hold (extra-*.txt). Exact versions; where the runtimes
+# differ, the oldest (databricks-sdk: DBR 19's; env 6 ships 0.122.0). gbx:build:wheel checks every core.txt range,
+# every vendored package's requirement and every extra against them, and the --verify install uses them as
 # constraints (the runtime's base, offline).
 numpy==2.3.4
 pandas==2.3.3
@@ -8,3 +9,6 @@ pyarrow==21.0.0
 scipy==1.16.3
 protobuf==6.33.5
 click==8.2.1
+requests==2.32.5
+tenacity==9.1.2
+databricks-sdk==0.108.0

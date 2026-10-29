@@ -1,0 +1,4 @@
+# [databricks]: the Databricks SDK, for the sample-data uploads to Unity Catalog Volumes. Every runtime preinstalls
+# it, so it is held there: the oldest preinstalled version as the floor (DBR 19 and DBR 19 ML ship 0.108.0,
+# Serverless environment 6 ships 0.122.0), the next minor above the newest as the cap. Installing it moves nothing.
+databricks-sdk>=0.108.0,<0.123

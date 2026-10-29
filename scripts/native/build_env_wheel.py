@@ -37,11 +37,12 @@ Steps (each prints `== <n> ...`; a failure prints `BUILD FAILED: <what>`, a miss
   4 the vendored pure-Python wheels into _vendor/common without their dist-info (licences to
     _vendor/licenses); every Requires-Dist of a vendored package must be another vendored package
     at a version it accepts, or a core.txt name whose base version (base.txt) or floor it accepts
-    and whose cap is no higher than its own, or click at the base version;
+    and whose cap is no higher than its own, or click at the base version; the extra-<name>.txt files
+    must be EXTRAS[env], and no extra may name a vendored distribution or exclude a base.txt version;
   5 python -m build --wheel --no-isolation, with SOURCE_DATE_EPOCH = HEAD's commit time;
   6 wheel unpack, add geobrix-native.pth (`import _gbx_native_path`), wheel pack (same epoch, so the
     same tree gives the same bytes);
-  7 verify the wheel (metadata against the env files, the payload, the JAR, the licence guard, the
+  7 verify the wheel (metadata against the env files and EXTRAS, the payload, the JAR, the licence guard, the
     URLs in the metadata, the size) and extract its payload to build/env-wheel/env<N>/payload/,
     the GBX_NATIVE_ROOT layout;
   8 per architecture, in that architecture's toolchain image (--network none): auditwheel show on a
@@ -97,6 +98,14 @@ TRIPWIRES = {  # the other environment's old extra names -> geobrix==<version>+e
 RELY_ON_BASE = {
     "click"
 }  # preinstalled on every runtime; core.txt may still declare it
+# The feature extras each env wheel declares, one envs/env<N>/extra-<name>.txt each (Ruling NP-30). [zarr] is env6's
+# only: Zarr targets DBR 19 and env 6. The plain wheel's [overture] and [earthdata] are not here: each moves a package
+# the runtimes preinstall (overturemaps needs click>=8.3 and tqdm>=4.67.3; earthaccess's s3fs pins fsspec to its own
+# release, and holding fsspec moves botocore instead), and overturemaps needs shapely by name, which would install
+# PyPI's beside the vendored build.
+EXTRAS = {5: ("databricks", "stac", "vizx"), 6: ("databricks", "stac", "vizx", "zarr")}
+# The distribution name of the vendored osgeo (GDAL's own bindings): not a wheel in the vendored set, so named here.
+VENDORED_DISTS = {"gdal"}
 GIT_INPUTS = (  # what the wheel is built from, under git
     "python/geobrix/src",
     "python/geobrix/envs",
@@ -802,6 +811,29 @@ def check_requirements(env, vendored):
                 fail(
                     f"vendored {name} requires {r}: neither vendored, in env{env}/core.txt, nor preinstalled (click)"
                 )
+    check_extras(env, set(vendored) | VENDORED_DISTS)
+
+
+def check_extras(env, vendored, envdir=None):
+    """The env's extra-<name>.txt files are EXTRAS[env], and none names a vendored distribution (pip would install
+    PyPI's copy beside the vendored build: two GDALs, or a second PROJ, on disk) or excludes the version base.txt
+    says the runtime preinstalls (installing the extra would move it)."""
+    envdir = envdir or PYDIR / "envs" / f"env{env}"
+    base = pins_of(envdir / "base.txt")
+    names = tuple(sorted(p.stem.removeprefix("extra-") for p in envdir.glob("extra-*.txt")))
+    if names != EXTRAS[env]:
+        fail(f"env{env} has the extras {list(names)}; the env{env} wheel declares {list(EXTRAS[env])} (EXTRAS)")
+    for name in names:
+        for r in reqs_of(envdir / f"extra-{name}.txt"):
+            dep = canonicalize_name(r.name)
+            if dep in vendored:
+                fail(
+                    f"env{env}/extra-{name}.txt names {dep}, which the wheel vendors: pip would install PyPI's {dep} beside it"
+                )
+            if dep in base and not r.specifier.contains(base[dep], prereleases=True):
+                fail(
+                    f"env{env}/extra-{name}.txt {r} does not admit the runtime's {dep} {base[dep]} (base.txt): [{name}] would move it"
+                )
 
 
 def add_vendor_pure(args, tree, env, bindings):
@@ -950,6 +982,8 @@ def verify_metadata(zf, env, version, extras):
     declared = {norm_extra(e) for e in meta.get_all("Provides-Extra") or []}
     if declared != {norm_extra(e) for e in (*extras, *TRIPWIRES[env])}:
         fail(f"Provides-Extra {sorted(declared)}")
+    if {norm_extra(e) for e in extras} != {norm_extra(e) for e in EXTRAS[env]}:
+        fail(f"the wheel's extras are {sorted(extras)}, the env{env} wheel declares {list(EXTRAS[env])} (EXTRAS)")
     for name in extras:
         want = {canon(r) for r in reqs_of(envdir / f"extra-{name}.txt")}
         if by_extra.get(norm_extra(name)) != want:

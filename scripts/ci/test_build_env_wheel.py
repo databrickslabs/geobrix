@@ -321,3 +321,121 @@ def test_the_rust_std_notice_is_the_pinned_toolchains():
     if not docs:
         pytest.skip(f"PRECONDITION MISSING: the Rust {std} toolchain (scripts/native/install-host-rust.sh)")
     assert (bew.RUST_STD_NOTICE / "COPYRIGHT-library.html").read_bytes() == docs[0].read_bytes()
+
+
+# --- the feature extras (NP-30): each env's set, and their rules -------------------------------------------------
+
+# What the env wheel vendors, by distribution name: the five bindings, the vendor-pure packages, osgeo's GDAL.
+VENDORED = {
+    "rasterio",
+    "pyogrio",
+    "pyproj",
+    "shapely",
+    "netcdf4",
+    "rio-tiler",
+    "morecantile",
+    "mapbox-vector-tile",
+    "gdal",
+}
+
+
+def _env_copy(tmp_path, env):
+    src = bew.PYDIR / "envs" / f"env{env}"
+    dst = tmp_path / f"env{env}"
+    dst.mkdir()
+    for f in src.glob("*.txt"):
+        (dst / f.name).write_text(f.read_text())
+    return dst
+
+
+@pytest.mark.parametrize("env", [5, 6])
+def test_each_committed_extra_moves_nothing_and_names_no_vendored_package(env):
+    envdir = bew.PYDIR / "envs" / f"env{env}"
+    names = sorted(p.stem.removeprefix("extra-") for p in envdir.glob("extra-*.txt"))
+    assert tuple(names) == bew.EXTRAS[env]
+    assert ("zarr" in names) == (env == 6)  # Zarr targets DBR 19 / env 6 only
+    pure = {
+        bew.canonicalize_name(ln.split("==")[0])
+        for ln in (envdir / "vendor-pure.txt").read_text().splitlines()
+        if ln.strip() and not ln.startswith("#")
+    }
+    assert pure <= VENDORED
+    bew.check_extras(env, VENDORED)  # passes on the committed files
+    # each extra that names a preinstalled package holds it: the runtime's version is admitted
+    base = bew.pins_of(envdir / "base.txt")
+    for name in names:
+        for r in bew.reqs_of(envdir / f"extra-{name}.txt"):
+            dep = bew.canonicalize_name(r.name)
+            assert dep not in VENDORED, (name, dep)
+            if dep in base:
+                assert r.specifier.contains(base[dep]), (name, str(r), str(base[dep]))
+
+
+@pytest.mark.parametrize(
+    "env, file, line, refused",
+    [
+        (6, "extra-stac.txt", "requests>=2.34.2", "would move it"),  # the plain [stac]'s floor
+        (5, "extra-databricks.txt", "databricks-sdk>=0.67", "would move it"),  # above DBR 17.3's 0.49.0
+        (6, "extra-zarr.txt", "shapely>=2", "which the wheel vendors"),
+        (5, "extra-stac.txt", "GDAL==3.13.3", "which the wheel vendors"),  # osgeo's distribution
+        (6, "extra-overture.txt", "overturemaps>=1.0.2,<2", "declares"),  # not one of EXTRAS[6]
+        (5, "extra-zarr.txt", "zarr>=3.4.1,<3.5", "declares"),  # env6 only
+    ],
+)
+def test_an_extra_that_moves_vendors_or_is_unexpected_is_refused(tmp_path, capsys, env, file, line, refused):
+    envdir = _env_copy(tmp_path, env)
+    with open(envdir / file, "a") as fh:
+        fh.write(line + "\n")
+    with pytest.raises(SystemExit):
+        bew.check_extras(env, VENDORED, envdir)
+    assert refused in capsys.readouterr().out
+
+
+def test_a_missing_extra_is_refused(tmp_path, capsys):
+    envdir = _env_copy(tmp_path, 6)
+    (envdir / "extra-zarr.txt").unlink()
+    with pytest.raises(SystemExit):
+        bew.check_extras(6, VENDORED, envdir)
+    assert "declares" in capsys.readouterr().out
+
+
+def _metadata(env, version, extras):
+    """A METADATA as setuptools writes it for the env wheel: core.txt unmarked, one marked block per extra,
+    the tripwires."""
+    envdir = bew.PYDIR / "envs" / f"env{env}"
+    template = bew.tomllib.loads((bew.PYDIR / "envs" / "pyproject.env.toml").read_text())["project"]
+    lines = [
+        "Metadata-Version: 2.4",
+        "Name: geobrix",
+        f"Version: {version}",
+        f"Requires-Python: {template['requires-python']}",
+    ]
+    lines += [f"Requires-Dist: {r}" for r in bew.reqs_of(envdir / "core.txt")]
+    other = 11 - env
+    for name in (*extras, *bew.TRIPWIRES[env]):
+        lines.append(f"Provides-Extra: {name}")
+        reqs = (
+            bew.reqs_of(envdir / f"extra-{name}.txt")
+            if name in extras
+            else [Requirement(f"geobrix=={version.split('+')[0]}+env{other}")]
+        )
+        lines += [f'Requires-Dist: {r}; extra == "{name}"' for r in reqs]
+    return "\n".join(lines) + "\n"
+
+
+@pytest.mark.parametrize("env", [5, 6])
+def test_the_wheel_metadata_carries_exactly_the_envs_extras(tmp_path, capsys, env):
+    version = f"0.6.0+env{env}"
+
+    def check(extras):
+        whl = tmp_path / f"w{len(extras)}.whl"
+        with zipfile.ZipFile(whl, "w") as zf:
+            zf.writestr(f"geobrix-{version}.dist-info/METADATA", _metadata(env, version, extras))
+        with zipfile.ZipFile(whl) as zf:
+            bew.verify_metadata(zf, env, version, extras)
+
+    check(bew.EXTRAS[env])  # every extra, each as its file says: passes
+    for dropped in bew.EXTRAS[env]:
+        with pytest.raises(SystemExit):  # an extra missing from the wheel (and its file list) is caught
+            check(tuple(e for e in bew.EXTRAS[env] if e != dropped))
+        assert "declares" in capsys.readouterr().out

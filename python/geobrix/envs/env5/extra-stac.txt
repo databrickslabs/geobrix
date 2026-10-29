@@ -1,0 +1,7 @@
+# [stac]: the STAC client (gbx.stac): the plain wheel's [stac], with the packages the runtimes preinstall held at
+# their versions (floor = the preinstalled version, cap = the next minor; base.txt). The plain extra's
+# requests>=2.34.2 floor would move the runtimes' requests 2.32.3, so it is not here. pystac comes from core.txt.
+pystac-client>=0.7,<1
+planetary-computer>=1.0,<2
+tenacity>=9.0.0,<9.1
+requests>=2.32.3,<2.33

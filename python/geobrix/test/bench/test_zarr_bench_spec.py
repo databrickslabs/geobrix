@@ -33,3 +33,14 @@ def test_zarr_cases_declared():
     gate = cases["W1"].args["gate_mb_s"]
     assert gate == {"dbr19_fuse": 109.0, "dbr19_direct": 143.0, "serverless": 137.0}
     assert cases["W1"].args["gate_tolerance"] == 0.25
+
+
+def test_the_geotiff_time_series_baseline_is_bounded():
+    """One rst_sample call per point and hour cost 1-2.5 s on Databricks, so the baseline reads
+    four hourly files and as many points as three runs fit in the budget (else 10)."""
+    from databricks.labs.gbx.bench import zarr_bench as zb
+
+    assert zb._R2_COG_HOURS == 4
+    assert zb._r2_points(1.0, 3, 600.0, 1000) == 100  # 300 x 3 s > 600 s
+    assert zb._r2_points(0.001, 3, 600.0, 1000) == 1000
+    assert zb._r2_points(100.0, 3, 600.0, 1000) == 10

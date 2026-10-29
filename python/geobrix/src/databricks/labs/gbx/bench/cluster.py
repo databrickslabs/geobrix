@@ -3457,7 +3457,11 @@ else:
     def _zsink(rows):
         _sink(rows)
         lw.extend(rows)
-    _zrows = _zb.run_zarr_cases(spark, _zcfg, sink=_zsink)
+    try:
+        _zrows = _zb.run_zarr_cases(spark, _zcfg, sink=_zsink)
+    finally:
+        import shutil as _zsh
+        _zsh.rmtree(_zcfg.scratch, ignore_errors=True)  # the legs' own scratch, emptied by them
     _show_md(f"zarr benchmark -- {RUN_ID}", results.summarize(_zrows))
 """
 

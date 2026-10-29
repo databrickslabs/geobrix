@@ -16,7 +16,8 @@ the configured Volume. Reads examples/tests/databricks_cluster_config.env.
 Usage: bash scripts/commands/gbx-bench-cluster.sh [options]
 Options:
   --cluster-id <id>     Target cluster (overrides CLUSTER_ID from config)
-  --run-id <id>         Run id (default cluster)
+  --run-id <id>         Run id (default: one of its own per launch, cluster-<date>-<time>-<4 hex>;
+                        --resume needs the run id it resumes)
   --functions <csv>     rst_* names (overrides --set); with --grid-bng-only, bng_* names
                         pick which BNG legs run (no bng_* name = all legs)
   --set <core|full>     Selection tier: core (fast default) or full (default core)

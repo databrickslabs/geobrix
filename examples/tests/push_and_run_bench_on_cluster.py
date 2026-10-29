@@ -38,6 +38,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
+import uuid
 from pathlib import Path
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
@@ -125,6 +127,21 @@ def _arg(flag: str, default: str) -> str:
         if i + 1 < len(sys.argv):
             return sys.argv[i + 1]
     return default
+
+
+def _default_run_id() -> str:
+    """A run id of its own for a launch that names none: its rows, its out_dir and its
+    notebook are then never another launch's."""
+    return f"cluster-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
+
+
+def _remove_notebook(w, path: str) -> None:
+    """Delete the run's notebook once the run has ended (its output stays with the run)."""
+    try:
+        w.workspace.delete(path)
+        print(f"Removed the run's notebook {path}")
+    except Exception as e:  # noqa: BLE001 - best effort; say what is left
+        print(f"WARNING: could not remove {path} ({e}); delete it by hand.", file=sys.stderr)
 
 
 def _discover_warehouse(w):
@@ -401,7 +418,14 @@ def main() -> int:
     # e.g. after a code/JAR fix); --no-fix-errors keeps them as-is and skips them.
     fix_errors = "--no-fix-errors" not in sys.argv
 
-    run_id = _arg("--run-id", "cluster")
+    run_id = _arg("--run-id", "") or _default_run_id()
+    if resume and "--run-id" not in sys.argv:
+        print(
+            "ERROR: --resume needs the --run-id of the run to resume (a launch without "
+            "--run-id gets an id of its own).",
+            file=sys.stderr,
+        )
+        return 2
     # Keep reader/writer benchmarks SEPARABLE from the function benchmarks: an *-only run
     # gets its own run_id suffix (unless --run-id was given explicitly) so its rows land in
     # a distinct partition of the results table instead of commingling with the function
@@ -994,18 +1018,17 @@ def main() -> int:
             )
             return 2
 
-    # Notebook path: env override or per-user default.
+    # Notebook path: one per run id, under the per-user default or the env override (a
+    # prefix). A job reads its notebook when it is submitted, so two launches sharing one
+    # path made the earlier job run the later launch's notebook.
     notebook_path_from_env = (
         _strip_invisible(os.environ.get("GBX_BENCH_RUNNER_NOTEBOOK_PATH") or "").strip()
         or None
     )
     me = w.current_user.me()
-    # One notebook per run id: a job reads its notebook when it is submitted, so two launches
-    # sharing one path made the earlier job run the later launch's notebook.
-    default_path = f"/Users/{me.user_name}/geobrix_bench_runner_{run_id}.ipynb"
-    notebook_path = notebook_path_from_env or default_path
-    if not notebook_path.endswith(".ipynb"):
-        notebook_path = notebook_path.rstrip("/") + ".ipynb"
+    base = notebook_path_from_env or f"/Users/{me.user_name}/geobrix_bench_runner"
+    base = base.rstrip("/").removesuffix(".ipynb")
+    notebook_path = f"{base}_{run_id}.ipynb"
     # Ensure it doesn't have the /Workspace prefix for the SDK calls.
     notebook_path = "/" + notebook_path.strip().removeprefix("/Workspace").lstrip("/")
 
@@ -1295,6 +1318,7 @@ def main() -> int:
         time.sleep(POLL_SECS)
 
     run_id_remote = remote_run_id
+    _remove_notebook(w, notebook_path)  # the run has ended; its output stays with it
     state = run.state
     if state and getattr(state, "life_cycle_state", None):
         lc = (

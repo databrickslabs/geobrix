@@ -102,6 +102,7 @@ def _row(
     note: str,
     status: str = "ok",
     tput_rows: Optional[float] = None,
+    note_cap: int = 2000,
 ) -> ResultRow:
     med = statistics.median(walls) if walls else 0.0
     walls_txt = f"walls_s={walls} (run 1 cold)" if walls else "walls_s=[]"
@@ -128,7 +129,7 @@ def _row(
         ),
         peak_rss_mb=peak_rss_mb(),
         status=status,
-        note=f"{walls_txt}; {note}"[:2000],
+        note=f"{walls_txt}; {note}"[:note_cap],
         iter_total_wall_clock_s=sum(walls),
         avg_wall_clock_s=(sum(walls) / len(walls)) if walls else 0.0,
         **capture_env(cfg.where),
@@ -292,15 +293,7 @@ def run_r2(spark, cfg: ZarrBenchConfig) -> List[ResultRow]:
             )
 
         probe = _walls(lambda: job(10), 1)[0]  # cold, sizes the measured run
-        per_point = probe / 10
-        n = next(
-            (
-                p
-                for p in (n_pts, 300, 100, 30)
-                if p * per_point * cfg.reps <= cfg.r2_budget_s
-            ),
-            10,
-        )
+        n = _r2_points(probe / 10, cfg.reps, cfg.r2_budget_s, n_pts)
         walls = _walls(lambda: job(n), cfg.reps)
         med = statistics.median(walls)
         per_sample = med / n  # seconds per point in one task (one hourly file)
@@ -322,6 +315,15 @@ def run_r2(spark, cfg: ZarrBenchConfig) -> List[ResultRow]:
     except Exception as e:  # noqa: BLE001
         out.append(_error_row(cfg, fn, e))
     return out
+
+
+def _r2_points(per_point: float, reps: int, budget_s: float, n_pts: int) -> int:
+    """Points the GeoTIFF baseline of R2 measures: the most of ``n_pts``, 300, 100 and 30
+    whose ``reps`` runs fit ``budget_s`` at ``per_point`` seconds a point, else 10."""
+    for p in (n_pts, 300, 100, 30):
+        if p * per_point * reps <= budget_s:
+            return p
+    return 10
 
 
 # --- R3: a 30-day box ------------------------------------------------------------------------
@@ -650,19 +652,25 @@ def run_w1(spark, cfg: ZarrBenchConfig) -> List[ResultRow]:
 
 
 def _w1_check(spark, table, ny, nx, t=7) -> str:
-    """One cell of the written cube at step ``t`` against the generator (run 1 only)."""
+    """One cell of the written cube at each step of ``t`` (an int or a list) against the
+    generator (run 1 only)."""
     from databricks.labs.gbx.zarr import gbx_zarr_read
 
+    steps = [t] if isinstance(t, int) else list(t)
     y, x = ny // 3, nx // 5
     got = gbx_zarr_read(
         spark,
         table,
         variables="t2m",
-        isel={"time": t, "latitude": y, "longitude": x},
+        isel={"time": steps, "latitude": y, "longitude": x},
         output="table",
-    ).first()["t2m"]
-    want = float(field(t, t + 1, ny, nx)[0, y, x])
-    return f"verify cell ({t},{y},{x}): {'OK' if np.isclose(got, want) else 'DIFF'}"
+    ).collect()
+    want = [float(field(s, s + 1, ny, nx)[0, y, x]) for s in steps]
+    ok = len(got) == len(steps) and all(
+        np.isclose(r["t2m"], w) for r, w in zip(got, want)
+    )
+    where = steps[0] if len(steps) == 1 else steps
+    return f"verify cell ({where},{y},{x}): {'OK' if ok else 'DIFF'}"
 
 
 def _plain_w1(spark, path, nt, ny, nx, block, chunks, shards) -> float:
@@ -775,12 +783,9 @@ def run_w2(spark, cfg: ZarrBenchConfig) -> List[ResultRow]:
                                     f.result()
                         walls.append(round(time.perf_counter() - t, 3))
                         tries.append(sorted(attempts.values()))
-                        if (
-                            rep == 0
-                        ):  # the last appended step holds the generator's values
-                            check = _w1_check(
-                                spark, table, ny, nx, t=(writers + 1) * day - 1
-                            )
+                        if rep == 0:  # the last step of every appended day
+                            last = [(d + 1) * day - 1 for d in range(1, writers + 1)]
+                            check = _w1_check(spark, table, ny, nx, t=last)
                     finally:
                         _drop(spark, table, root)
                 out.append(
@@ -890,47 +895,59 @@ def shard_index_probe(directory: str, counts=(256, 1024, 4096, 16384, 93312), re
 
 
 def sample_density_probe(
-    store, variable="t2m", counts=(1, 10, 100, 1000, 2000, 4050, 8100), reps=3
+    store, variable="t2m", counts=(10, 100, 1000, 2000, 4050, 8100), reps=3
 ):
-    """One spatial inner chunk of ``store`` with every time step: the points of a sample
-    task read with a vectorized index (``read_points``, what ``gbx_zarr_sample`` does)
-    against one box read of the chunk and a numpy gather, for each number of points in
-    the chunk, with the zarr engine (Spark tasks) and tensorstore (the driver)."""
-    from databricks.labs.gbx.zarr._engine import open_plain_array, read_box, read_points
+    """``gbx_zarr_sample``'s own read of one spatial chunk of ``store`` with every time step,
+    for each number of points in the chunk: the shipped ``_sample_points`` path (the
+    driver's plan, a task's unit read, its batches), with the dense switch as shipped and
+    with it turned off (every unit read point by point), on the zarr engine (Spark tasks)
+    and tensorstore (the driver route)."""
+    import shapely
 
+    from databricks.labs.gbx.zarr import _read, _sample
+
+    src = _read._open_source(None, store, "path", None, None)
+    names = _read._choose_variables(variable, src)
+    cfg = _sample._plan_sample(src, names, None, None, None)
+    _, lat, lon = _coords(store)
+    cy, cx = _chunk_shape(store, variable)[1:]
+    y0, x0 = (len(lat) // 3 // cy) * cy, (len(lon) // 2 // cx) * cx
+    hy, hx = min(cy, len(lat) - y0), min(cx, len(lon) - x0)
+    rng = np.random.default_rng(7)
+    lon180 = np.where(lon >= 180.0, lon - 360.0, lon)
     out = []
-    for engine in ("zarr", "tensorstore"):
-        try:
-            arr = open_plain_array(store, variable, engine=engine)
-        except Exception as e:  # noqa: BLE001
-            out.append({"engine": engine, "error": f"{type(e).__name__}: {e}"})
-            continue
-        nt, ny, nx = arr.shape
-        meta_chunks = _chunk_shape(store, variable)
-        cy, cx = meta_chunks[1], meta_chunks[2]
-        y0, x0 = (ny // 3 // cy) * cy, (nx // 2 // cx) * cx
-        hy, hx = min(cy, ny - y0), min(cx, nx - x0)
-        rng = np.random.default_rng(7)
-        for n in counts:
-            n = min(n, hy * hx)
-            flat = rng.choice(hy * hx, size=n, replace=False)
-            ys, xs = y0 + flat // hx, x0 + flat % hx
-            t_idx = np.repeat(np.arange(nt), n)
-            coords = [t_idx, np.tile(ys, nt), np.tile(xs, nt)]
-            v = _walls(lambda: read_points(arr, coords), reps)
-            b = _walls(
-                lambda: read_box(
-                    arr, (slice(0, nt), slice(y0, y0 + hy), slice(x0, x0 + hx))
-                )[:, ys - y0, xs - x0],
-                reps,
-            )
+    for n in counts:
+        n = min(n, hy * hx)
+        flat = rng.choice(hy * hx, size=n, replace=False)
+        ys, xs = y0 + flat // hx, x0 + flat % hx
+        points = [
+            shapely.to_wkb(shapely.Point(float(lon180[x]), float(lat[y])))
+            for y, x in zip(ys, xs)
+        ]
+        uid, row, col = cfg.grid.map(points, None)
+        units = _sample._units(src, cfg, np.unique(uid[uid >= 0]))
+
+        def run(engine):
+            for _ in _sample._sample_points(cfg, units, uid, row, col, engine):
+                pass
+
+        for engine in ("zarr", "auto"):
+            shipped = _walls(lambda: run(engine), reps)
+            real = _sample._DENSE
+            _sample._DENSE = float("inf")  # the switch off: point reads only
+            try:
+                off = _walls(lambda: run(engine), reps)
+            finally:
+                _sample._DENSE = real
             out.append(
                 {
-                    "engine": engine,
+                    "engine": "zarr" if engine == "zarr" else "tensorstore",
                     "points": int(n),
-                    "cells": int(n * nt),
-                    "vindex_s": v,
-                    "box_gather_s": b,
+                    "units": int(len(units)),
+                    "shipped_s": shipped,
+                    "points_only_s": off,
+                    "batch_cells": int(cfg.batch_cells),
+                    "box_bytes": int(cfg.box_bytes),
                 }
             )
     return out
@@ -946,7 +963,10 @@ def _chunk_shape(store, variable):
 
 
 def _probe_row(cfg, fn, payload, wall) -> ResultRow:
-    return _row(cfg, fn, [round(wall, 3)], len(payload), json.dumps(payload))
+    # the whole payload: a probe's figures are its result (a 2,000-character cap cut one)
+    return _row(
+        cfg, fn, [round(wall, 3)], len(payload), json.dumps(payload), note_cap=1 << 20
+    )
 
 
 # --- all of it ----------------------------------------------------------------------------------

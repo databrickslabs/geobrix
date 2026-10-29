@@ -502,7 +502,7 @@ def restore_a_version(spark, table):
 
 
 def export_a_version(spark, table, to):
-    """Copy the store out as a plain Zarr store that any Zarr tool opens."""
+    """Copy the store out as a plain Zarr store, in the store's own format."""
     import xarray as xr
 
     from databricks.labs.gbx.zarr import gbx_zarr_export

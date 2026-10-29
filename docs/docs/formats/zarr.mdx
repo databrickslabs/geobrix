@@ -374,8 +374,10 @@ refuses a version that vacuum has already removed.
   testFile="docs/tests/python/formats/test_zarr_examples.py" />
 
 **Export** takes a version out of GeoBrix. `method="copy"` writes a plain Zarr store at canonical keys,
-in the store's own format, with the metadata written last, so any Zarr v3 tool can open it and a reader
-never sees a half-written store. The target must be empty. Shards that are already in standard form are
+in the store's own format (a copy of a Zarr v2 store is Zarr v2, and of a v3 store is v3), with the
+metadata written last, so a reader never sees a half-written store. Any tool that reads that format
+opens the copy. A store that `gbx_zarr_write` made is Zarr v3 with sharding and the `crc32c` codec by
+default, and a GDAL before 3.13 cannot read those. The target must be empty. Shards that are already in standard form are
 copied as bytes, without decoding.
 
 <CodeFromTest code={zarrExamples} language="python" functionName="export_a_version"

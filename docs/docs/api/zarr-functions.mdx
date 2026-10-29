@@ -588,9 +588,11 @@ Exports a version of the store whose manifest table is `source`. Returns the pat
 | `version_as_of` | `int` or `str` | The version to export, an int or `"tag:<name>"`. Default: the latest. Not for `"publish"`. |
 | `access` | `str` | `"reference"` only. With `"direct"`, the reference names the cloud URL of each file (`s3://`, `abfss://`, `gs://`) for readers outside Databricks. |
 
-- **`copy`** writes a plain Zarr store at canonical keys, in the store's own format, with the metadata written last,
-  so any Zarr v3 tool opens it (a GDAL before 3.13 does not: see [the Raster Reader](../readers/raster)) and a reader never sees a half-written store. `to` must be a path every node
-  sees, such as a `/Volumes` path. Shards that are already in standard form are copied as bytes. Deleted chunks are left out, so readers see
+- **`copy`** writes a plain Zarr store at canonical keys, in the store's own format (a copy of a Zarr v2 store is
+  Zarr v2, and of a v3 store is v3), with the metadata written last, so a reader never sees a half-written store.
+  Any tool that reads that format opens it. A store `gbx_zarr_write` made is Zarr v3, with sharding and the
+  `crc32c` codec by default, and a GDAL before 3.13 cannot read those (see [the Raster Reader](../readers/raster)).
+  `to` must be a path every node sees, such as a `/Volumes` path. Shards that are already in standard form are copied as bytes. Deleted chunks are left out, so readers see
   the fill value. If the copy fails nothing is left in `to`.
 - **`reference`** writes a kerchunk (version 1) JSON file that maps each key to a file, offset and length in
   the store's own files; nothing is copied. Every shard must be one region, so run

@@ -31,8 +31,10 @@ from databricks.labs.gbx.zarr import (  # noqa: E402
     ZarrAccessUnavailable,
     ZarrStoreDrift,
     ZarrUnsupported,
+    gbx_zarr_export,
     gbx_zarr_read,
     gbx_zarr_register,
+    gbx_zarr_write,
 )
 
 DOCS = Path(__file__).resolve().parents[3] / "docs"
@@ -223,6 +225,43 @@ def test_registering_a_store_with_an_outer_codec_leaves_the_array_unreadable(
     }
     with pytest.raises(ZarrUnsupported):
         gbx_zarr_read(spark, table, variables=["msl"])
+
+
+# --- the format of an export (formats/zarr and api/zarr-functions) ------------------------
+
+
+def test_a_copy_keeps_the_stores_format_and_a_written_store_is_v3_with_crc32c(
+    spark, cube, new_table, tmp_path
+):
+    import zarr
+
+    # a Zarr v2 store, registered in place and copied out, is still Zarr v2
+    v2 = tmp_path / "v2.zarr"
+    shutil.copytree(Path(cube).parent / "era5_like_v2.zarr", v2)
+    registered = new_table("v2copy")
+    gbx_zarr_register(spark, str(v2), registered)
+    out2 = tmp_path / "v2-out"
+    gbx_zarr_export(spark, registered, str(out2))
+    assert (out2 / ".zgroup").is_file() and (out2 / "t2m" / ".zarray").is_file()
+    assert not (out2 / "zarr.json").exists()
+    assert zarr.open_group(str(out2), mode="r").metadata.zarr_format == 2
+
+    # a store gbx_zarr_write made is Zarr v3, sharded, with crc32c in its inner codecs
+    written = new_table("v3write")
+    blocks = gbx_zarr_read(
+        spark,
+        cube,
+        variables=["t2m", "time", "latitude", "longitude"],
+        sel={"time": slice("2023-01-01T00:00", "2023-01-01T11:00")},
+    )
+    gbx_zarr_write(blocks, written, mode="create", root=str(tmp_path / "root"))
+    out3 = tmp_path / "v3-out"
+    gbx_zarr_export(spark, written, str(out3))
+    doc = json.loads((out3 / "t2m" / "zarr.json").read_text())
+    assert doc["zarr_format"] == 3
+    assert [c["name"] for c in doc["codecs"]] == ["sharding_indexed"]
+    inner = doc["codecs"][0]["configuration"]["codecs"]
+    assert [c["name"] for c in inner] == ["bytes", "zstd", "crc32c"]
 
 
 # --- the pages ----------------------------------------------------------------------------

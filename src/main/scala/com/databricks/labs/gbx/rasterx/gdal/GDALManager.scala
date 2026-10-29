@@ -26,10 +26,12 @@ import scala.util.{Success, Try}
 object GDALManager extends Logging {
 
     /**
-      * Network-capable GDAL drivers that can trigger outbound HTTP at parse time.
-      * Skipped by default (never registered); users can override via `spark.gdal.GDAL_SKIP`.
+      * The drivers the virtual-tile policy refuses (the manifest's `gdal.refused_drivers`, held equal by a test): stored
+      * pipelines (GDALG), tile indexes and catalogs that open other rasters they name (GTI, STACTA, STACIT), and the
+      * network APIs that can trigger outbound HTTP at open time. Skipped by default (never registered), so a nested
+      * source cannot open them either; users can override via `spark.gdal.GDAL_SKIP`.
       */
-    val DefaultSkippedDrivers = "WMS WMTS WCS WFS HTTP CSW OGCAPI"
+    val DefaultSkippedDrivers = "GDALG GTI STACTA STACIT WMS WMTS WCS WFS HTTP CSW OGCAPI PLMOSAIC PLSCENES EEDAI EEDA DAAS NGW"
 
     /** The env wheel's `_native/<arch>` directory (Python `_native.native_dir()`); its `lib/` holds the JNI. */
     val NativeDirKey = "spark.databricks.labs.gbx.native.dir"

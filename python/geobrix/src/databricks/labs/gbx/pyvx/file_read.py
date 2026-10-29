@@ -22,6 +22,7 @@ from __future__ import annotations
 
 # Before the pyspark imports: one clear error when PySpark is missing.
 from databricks.labs.gbx import _pyspark  # noqa: F401
+from databricks.labs.gbx import _gdal_policy
 
 # isort: split
 
@@ -120,7 +121,8 @@ def _make_vector_decode_fn(as_wkb: bool, layer):
     def _map(pdf_iter):
         import numpy as np
         import pandas as pd
-        import pyogrio
+
+        pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
         import shapely
 
         from databricks.labs.gbx.ds import vector as _vec

@@ -253,6 +253,107 @@ def test_a_payload_rasterio_used_before_the_import_loses_the_refused_drivers_at_
     assert "AFTER False" in out, out[-800:]
 
 
+_PAYLOAD_FIRST = (
+    "import os, platform, sys\n"
+    "root = os.environ['GBX_NATIVE_ROOT']\n"
+    "os.environ.setdefault('PROJ_DATA', os.path.join(root, '_native', 'share', 'proj'))\n"
+    "os.environ.setdefault('GDAL_DATA', os.path.join(root, '_native', 'share', 'gdal'))\n"
+    "sys.path[:0] = [os.path.join(root, '_vendor', platform.machine()), os.path.join(root, '_vendor', 'common')]\n"
+)
+
+
+@pytest.mark.integration
+def test_a_payload_pyogrio_imported_before_geobrix_loses_the_refused_drivers_at_the_import():
+    """pyogrio registers every GDAL driver at its import, and the env wheel's pyogrio shares the payload's libgdal: a
+    GeoBrix import after it sees the mapped libgdal and deregisters the refused drivers at once (the module names it
+    checked before missed pyogrio). The start-up hook is simulated by putting the payload's bindings first on
+    sys.path."""
+    _payload_or_skip()
+    code = _PAYLOAD_FIRST + (
+        "import pyogrio\n"
+        "d = pyogrio.list_drivers()\n"
+        "print('BEFORE', 'WFS' in d, 'GDALG' in d, pyogrio.__file__.startswith(root))\n"
+        "import databricks.labs.gbx\n"
+        "d = pyogrio.list_drivers()\n"
+        "print('AFTER', 'WFS' in d, 'GDALG' in d)\n"
+    )
+    out = _run(code)
+    assert "BEFORE True True True" in out, out[-800:]
+    assert "AFTER False False" in out, out[-800:]
+
+
+@pytest.mark.integration
+def test_geobrix_vector_reads_activate_the_policy_before_their_first_pyogrio_open(
+    tmp_path,
+):
+    """GeoBrix's own pyogrio reads take pyogrio from the policy (``_gdal_policy.pyogrio()``), so the policy is active
+    before the first one: a process that only imported GeoBrix has no state yet, and has one after the read.
+    """
+    _payload_or_skip()
+    src = tmp_path / "empty.geojson"
+    src.write_text('{"type": "FeatureCollection", "features": []}')
+    code = (
+        "import databricks.labs.gbx\n"
+        "from databricks.labs.gbx import _gdal_policy as p\n"
+        "print('BEFORE', p._STATE is None)\n"
+        "from databricks.labs.gbx.ds import vector as v\n"
+        f"v._detect({str(src)!r}, None)\n"
+        "print('AFTER', p._STATE is not None and p._STATE['mode'])\n"
+    )
+    out = _run(code)
+    assert "BEFORE True" in out, out[-800:]
+    assert "AFTER full" in out, out[-800:]
+
+
+@pytest.mark.parametrize("name", ["missing.mrf", "tiles_wms", "a.gti"])
+def test_a_missing_file_stays_a_missing_file_error(tmp_path, name):
+    """A missing file is the binding's own I/O error (an OSError, which the read retries catch), even when its name
+    ends like a refused driver's prefix; it is not reported as a policy refusal."""
+    _rasterio_or_skip()
+    with pytest.raises(OSError) as raised:
+        _gdal_policy.open_data(str(tmp_path / name))
+    assert not isinstance(raised.value, _gdal_policy.DriverPolicyError)
+    assert "No such file or directory" in str(raised.value)
+
+
+def test_tile_bytes_open_with_the_allowed_drivers_only(tmp_path):
+    """Where GDALG did register (rasterio first, a partial process), bytes that are a stored pipeline open with GDALG
+    through a plain MemoryFile open, and are refused through open_bytes, which every GeoBrix tile-byte read uses.
+    """
+    _rasterio_or_skip()
+    dem = tmp_path / "dem.tif"
+    code = (
+        _REGISTERED_FIRST + "import json\n"
+        "import numpy as np\n"
+        "from rasterio.io import MemoryFile\n"
+        "from rasterio.transform import from_origin\n"
+        f"dem = {str(dem)!r}\n"
+        "with rasterio.open(dem, 'w', driver='GTiff', width=4, height=4, count=1, dtype='float32',\n"
+        "                   crs='EPSG:32631', transform=from_origin(0, 4, 1, 1)) as w:\n"
+        "    w.write(np.arange(16, dtype='float32').reshape(1, 4, 4))\n"
+        "raw = json.dumps({'type': 'gdal_streamed_alg', 'command_line': 'gdal raster pipeline read ' + dem + ' ! slope',\n"
+        "                  'relative_paths_relative_to_this_file': False}).encode()\n"
+        "with MemoryFile(raw, ext='.gdalg.json') as mf, mf.open() as plain:\n"
+        "    print('PLAIN', plain.driver)\n"
+        "from databricks.labs.gbx._gdal_policy import open_bytes\n"
+        "try:\n"
+        "    with MemoryFile(raw, ext='.gdalg.json') as mf, open_bytes(mf) as ds:\n"
+        "        print('OPENED', ds.driver)\n"
+        "except Exception as exc:\n"
+        "    print('REFUSED ' + str(exc))\n"
+        "try:\n"
+        "    open_bytes(raw).close()\n"
+        "    print('OPENED raw')\n"
+        "except Exception as exc:\n"
+        "    print('REFUSED raw ' + str(exc))\n"
+    )
+    out = _partial_run(code)
+    assert "PLAIN GDALG" in out, out[-800:]
+    assert "REFUSED " in out and "OPENED GDALG" not in out, out[-800:]
+    assert "is not a raster any driver GeoBrix opens reads" in out, out[-800:]
+    assert "REFUSED raw" in out, out[-800:]
+
+
 def _partial_run(code: str) -> str:
     """A fresh process with no payload (GBX_NATIVE_DISABLE): rasterio is the PyPI or the system one, the partial mode.
     These rows need no payload, so they run wherever rasterio is installed."""

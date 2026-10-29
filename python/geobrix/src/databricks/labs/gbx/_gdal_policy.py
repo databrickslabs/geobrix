@@ -8,18 +8,21 @@ where GeoBrix first touches GDAL, not per call:
   is served). It imports nothing from GDAL (the light tier's lazy-import contract holds). It puts ``GDAL_SKIP`` (the
   refused list, added to a user's value) and the two VRT settings in the process environment. GDAL reads ``GDAL_SKIP``
   when it registers its drivers, so a rasterio or osgeo that registers them after this import (rasterio does at its
-  first open or ``rasterio.Env``, osgeo at its import) never registers a refused one. Where rasterio or osgeo is
-  loaded already, it runs ``activate()`` at once (the binding is imported, so this costs no lazy import).
+  first open or ``rasterio.Env``, osgeo and pyogrio at their import) never registers a refused one. Where a GDAL is
+  loaded already (a libgdal is mapped into the process, or a GDAL binding is imported where ``/proc`` is absent), it
+  runs ``activate()`` at once, which imports rasterio and osgeo to compare their libgdal.
 - ``activate()`` runs at the first GeoBrix use that needs GDAL (an open made through ``open_data``, the engine's GDAL,
   ``state()``). It is idempotent and thread-safe. Where the payload's osgeo shares rasterio's libgdal ("full"), it
   deregisters any refused driver still registered and sets ``GDAL_VRT_ENABLE_RAWRASTERBAND=NO`` and
   ``GDAL_VRT_ENABLE_PYTHON=NO`` for the process. Without it ("partial": a PyPI rasterio, a dev host), the settings go
   through rasterio's config; a refused driver cannot be deregistered there, so if rasterio registered its drivers
   before GeoBrix was imported, ``activate()`` warns once, names the drivers and the fix.
-- ``open_data(fp, mode, **kw)`` is the only way GeoBrix opens a raster by rasterio. Every read is an open with the
-  allowed drivers as GDAL's driver list, never with the whole registry. In full mode a named file is first identified
-  with the allowed drivers and opened with the one identified, so identify and open cannot disagree. A file no allowed
-  driver reads is refused with the policy's reason.
+- ``open_data(fp, mode, **kw)`` is the only way GeoBrix opens a raster by rasterio, and ``open_bytes(data)`` the only
+  way it opens raster bytes. Every read is an open with the allowed drivers as GDAL's driver list, never with the
+  whole registry. In full mode a named file is first identified with the allowed drivers and opened with the one
+  identified, so identify and open cannot disagree. A file no allowed driver reads is refused with the policy's
+  reason; a missing file stays the binding's own I/O error.
+- ``pyogrio()`` returns pyogrio after ``activate()``: GeoBrix's vector reads take it from there.
 
 One switch turns the whole defence off, on both tiers: ``GBX_GDAL_DRIVER_POLICY=off`` in the environment, or
 ``spark.databricks.labs.gbx.gdal.driver_policy=off`` in the session conf (the JVM's ``GDALManager`` reads it).
@@ -58,8 +61,9 @@ _NESTED_REFUSALS = (
     ("uses inline code in the VRT", "a VRT Python pixel function", False),
 )
 
-# GDAL's message for a file no driver in the open's list reads (GDAL 3.13.3's own text).
+# GDAL's message for a file no driver in the open's list reads, and for a missing one (GDAL 3.13.3's own text).
 _NOT_RECOGNIZED = "not recognized as being in a supported file format"
+_MISSING = "No such file or directory"
 
 _LOCK = threading.RLock()
 _STATE: Optional[Dict] = None
@@ -76,10 +80,11 @@ def gap_warning(names) -> str:
     return (
         "GeoBrix's GDAL driver policy cannot remove these drivers from this process: "
         f"{', '.join(names)}. rasterio registered GDAL's drivers (an open, or a rasterio.Env) before "
-        "databricks.labs.gbx was imported, so a VRT or an index another principal wrote can still reach them; "
-        "GeoBrix's own opens still use only the allowed drivers. Fix: import databricks.labs.gbx before rasterio "
-        "opens anything, or install the GeoBrix env wheel for the runtime (its vendored rasterio is the one the "
-        "policy fully covers)."
+        "databricks.labs.gbx was imported. GeoBrix opens each raster file and each tile's bytes with the allowed "
+        "drivers only, but a source that a VRT or an index names is opened through GDAL's whole registry, so a file "
+        "another principal wrote can still reach them. Fix: import databricks.labs.gbx before rasterio opens "
+        "anything, or install the GeoBrix env wheel for the runtime (its vendored rasterio is the one the policy "
+        "fully covers)."
     )
 
 
@@ -132,9 +137,25 @@ def policy_reason(message: str, nested: bool = True) -> Optional[str]:
     return None
 
 
+# The GDAL bindings that register GDAL's drivers when they load, for a process with no /proc/self/maps.
+_GDAL_BINDINGS = ("rasterio", "osgeo", "pyogrio", "fiona")
+
+
+def _gdal_loaded() -> bool:
+    """Whether a GDAL is in the process already: a libgdal mapped (Linux ``/proc/self/maps``, which sees a binding
+    whatever its module name), else a GDAL binding imported."""
+    from databricks.labs.gbx import _osgeo
+
+    mapped = _osgeo.mapped_libgdal()
+    if mapped is not None:
+        return bool(mapped)
+    return any(m in sys.modules for m in _GDAL_BINDINGS)
+
+
 def prepare() -> None:
-    """The registration-time part of the policy, applied at package import (see the module docstring). Idempotent. It
-    imports neither rasterio nor osgeo: it sets the environment their driver registration reads.
+    """The registration-time part of the policy, applied at package import (see the module docstring). Idempotent.
+    It imports no GDAL binding itself, and sets the environment their driver registration reads; only where a GDAL is
+    loaded already does it run ``activate()``, which imports rasterio and osgeo.
     """
     global _PREPARED
     with _LOCK:
@@ -145,9 +166,9 @@ def prepare() -> None:
             return
         _DEREGISTERED_PREFIXES.update(f"{name}:" for name in refused_names())
         _skip_at_registration()
-        if any(m in sys.modules for m in ("rasterio", "osgeo")):
-            # a binding is loaded already, and may have registered GDAL's drivers: the skip cannot reach those, so
-            # the activation (the deregistration, or the partial-mode warning) runs now, not at the first open
+        if _gdal_loaded():
+            # a GDAL is loaded already (rasterio, osgeo, pyogrio, fiona ...), and may have registered its drivers: the
+            # skip cannot reach those, so the activation (the deregistration, or the partial-mode warning) runs now
             activate()
 
 
@@ -167,6 +188,15 @@ def activate() -> Dict:
 def state() -> Dict:
     """The state ``activate()`` settled on (activating it first if needed)."""
     return activate()
+
+
+def pyogrio():
+    """pyogrio, with the policy active first: GeoBrix's vector reads take the module from here, so the refused drivers
+    are gone before their first open."""
+    activate()
+    import pyogrio as module
+
+    return module
 
 
 def _skip_at_registration() -> None:
@@ -271,6 +301,10 @@ def _refusal(
     text = chain_text(exc)
     if _NOT_RECOGNIZED in text and (path is None or path in text):
         return DriverPolicyError(f"{_not_a_raster(what)} (GDAL: {text})")
+    if _MISSING in text and path is not None and not _exists(path):
+        # a missing file stays the binding's own I/O error (an OSError, which the read retries catch), even when its
+        # name ends like a refused driver's prefix (missing.mrf, tiles_wms, a.gti)
+        return None
     reason = policy_reason(text, nested=True)
     if reason is None:
         return None
@@ -305,7 +339,9 @@ def _read_with(fp, drivers: list, kwargs: dict):
     if isinstance(fp, file_types):
         return fp.open(driver=drivers, **kwargs)
     if hasattr(fp, "read"):
-        # a file-like: as rasterio.open, its bytes go in a MemoryFile that the dataset owns (closed with it)
+        # a file-like: as rasterio 1.4+'s open, its bytes go in a MemoryFile that the dataset owns (closed with it).
+        # rasterio 1.3's open streamed a file-like through FilePath instead; this reads it whole and seeks back, so a
+        # non-seekable stream is not supported here (no GeoBrix caller passes one).
         memfile = rio_io.MemoryFile(fp.read())
         fp.seek(0)
         ds = memfile.open(driver=drivers, **kwargs)
@@ -369,6 +405,27 @@ def open_data(fp, mode: str = "r", **kwargs):
         raise DriverPolicyError(
             f"{what}: opened by driver {ds.driver}, {REFUSED_PHRASE}"
         )
+    return ds
+
+
+def open_bytes(data, **kwargs):
+    """A read of raster bytes under the driver policy: ``data`` is bytes (a tile's raster, an intermediate GeoBrix
+    wrote) or a ``MemoryFile``. The open uses the allowed drivers as GDAL's driver list and checks the driver it
+    reports, as ``open_data`` does. Bytes are held in a ``MemoryFile`` that the returned dataset owns (closed with
+    it); a ``MemoryFile`` passed in stays the caller's. Use it as ``with open_bytes(raw) as ds:``.
+    """
+    import rasterio.io as rio_io
+
+    owned = not isinstance(data, rio_io.MemoryFile)
+    memfile = rio_io.MemoryFile(data) if owned else data
+    try:
+        ds = open_data(memfile, "r", **kwargs)
+    except BaseException:
+        if owned:
+            memfile.close()
+        raise
+    if owned:
+        ds._env.enter_context(memfile)
     return ds
 
 

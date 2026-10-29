@@ -284,22 +284,36 @@ _NO_PLAN_REASON = (
     "the shape's physical plan could not be read, so an early stop, which can end a worker "
     "before the read, cannot be ruled out"
 )
+# Two pools that ran are two worker environments. Once a worker of one has gone, the other pool's
+# releases can hide its idle stop from the REST guard, and the judge has no baseline for a cold pool.
+_MULTI_ENV_REASON = "the shape ran Python workers in more than one environment; a worker of one can exit unseen"
+
+
+def _physical_text(df) -> str:
+    """The physical plan of a classic DataFrame that has run, as text: the JVM's executed plan. It is
+    not `explain`: `explain` starts a Python worker in the default pool when none is running, and that
+    worker, new since the reset, would be counted as a second environment. On Connect (where
+    `readers._plan_text` is the bench's plan text, and works) `explain` is used."""
+    jdf = getattr(df, "_jdf", None)
+    if jdf is not None:
+        return jdf.queryExecution().executedPlan().toString()
+    from databricks.labs.gbx.bench.readers import _plan_text
+
+    return _plan_text(df)
 
 
 def _early_stop_node(df) -> Optional[str]:
     """The first early-stop node in the physical plan of `df`: "" when there is none, None when the
-    plan text cannot be read. The text is the extended plan `explain` prints (`readers._plan_text`,
-    which the bench's other plan checks read; it works on Connect too)."""
-    from databricks.labs.gbx.bench.readers import _plan_text
-
+    plan cannot be read (no DataFrame, or no plan text)."""
+    if df is None:
+        return None
     try:
-        text = _plan_text(df)
+        text = _physical_text(df)
     except Exception:  # noqa: BLE001 - no plan text: an early stop cannot be ruled out
         return None
-    _, found, physical = text.partition("== Physical Plan ==")
-    if not found:
+    if not text.strip():
         return None
-    m = _EARLY_STOP.search(physical)
+    m = _EARLY_STOP.search(text)
     return m.group(1) if m else ""
 
 
@@ -371,7 +385,8 @@ def _surveyor(find_workers):
 
     ``scope`` names the executor (host and JVM). ``members`` maps ``scope:pid:start`` (the start
     time tells a reused pid) to the process's CPU ticks (``utime + stime``), its high-water mark
-    in MB, whether it is a zombie, and whether it is a daemon (the process that forks workers).
+    in MB, whether it is a zombie, whether it is a daemon (the process that forks workers), and its
+    parent ``ppid`` (a worker's pool is its daemon).
     """
 
     def stat(pid):
@@ -403,7 +418,7 @@ def _surveyor(find_workers):
         for pid in parents:
             info = stat(pid)
             if info is not None:
-                info.update(pid=pid, daemon=pid in daemons)
+                info.update(pid=pid, daemon=pid in daemons, ppid=parents[pid])
                 members[f"{scope}:{pid}:{info['start']}"] = info
         return scope, members
 
@@ -411,7 +426,7 @@ def _surveyor(find_workers):
 
 
 def _read_judge():
-    """``judge(scope, members, baseline)`` -> ``(hwm, ran, lost)`` for one executor.
+    """``judge(scope, members, baseline)`` -> ``(hwm, ran, lost, envs)`` for one executor.
 
     `baseline` is what the reset noted: ``cpu`` (worker -> CPU ticks) and ``daemons``. A daemon is
     not a worker: only the processes it forks are counted. ``hwm`` and ``ran`` are the highest
@@ -422,23 +437,32 @@ def _read_judge():
     (the daemon ignores SIGCHLD, so its ``cutime + cstime`` never gets a reaped child's CPU time),
     and Spark stops an idle worker after 60 s, of any pool. So another pool's idle worker voids it
     too, because the judge cannot tell that it did not run.
+
+    ``envs`` counts the pools (a pool is one daemon, and the workers it forked) that ran: a daemon
+    that is new since the reset, or a pool with a worker that is new or whose ticks moved. Two
+    pools that ran are two worker environments, and a worker of one can exit unseen when the other
+    keeps releasing (the cold case has no baseline to show it), so the reading is NULL then.
     """
 
     def judge(scope, members, baseline):
         cpu0, daemons0 = baseline["cpu"], baseline["daemons"]
-        hwm, ran, lost = 0.0, 0, 0
+        hwm, ran, lost, pools = 0.0, 0, 0, set()
         for key, m in members.items():
             if m["daemon"]:
+                if key not in daemons0:  # a pool started since the reset ran
+                    pools.add(m["pid"])
                 continue  # a daemon is not a worker: the processes it forks are
             if m["zombie"]:
                 lost += 1
+                pools.add(m["ppid"])
             elif m["cpu"] > cpu0.get(key, -1):  # a new worker has no entry
                 hwm, ran = max(hwm, m["mb"]), ran + 1
+                pools.add(m["ppid"])
         for key in cpu0:
             gone = key.startswith(f"{scope}:") and key not in members
             if gone and key not in daemons0:
                 lost += 1
-        return hwm, ran, lost
+        return hwm, ran, lost, len(pools)
 
     return judge
 
@@ -475,17 +499,18 @@ def _sweep_task(reset, survey, alive, judge, baseline):
         for _ in it:
             pass
         scope, members = survey(os.getpid())
-        hwm, ran, lost, missed, ticks = 0.0, 0, 0, 0, []
+        hwm, ran, lost, envs, missed, ticks = 0.0, 0, 0, 0, 0, []
         if reset:
             missed, ticks = note(members)
         else:
-            hwm, ran, lost = judge(scope, members, baseline)
+            hwm, ran, lost, envs = judge(scope, members, baseline)
         yield pd.DataFrame(
             {
                 "hwm": [hwm],
                 "missed": [missed],
                 "ran": [ran],
                 "lost": [lost],
+                "envs": [envs],
                 "scope": [scope],
                 "own_pool": [int(os.environ.get(_SWEEP_ENV) == "1")],
                 "ticks": [";".join(ticks)],
@@ -608,9 +633,21 @@ class WorkerPeak:
     - the physical plan of the DataFrame the shape ran must hold no early stop (CollectLimit,
       GlobalLimit, LocalLimit, TakeOrderedAndProject): a read that stops early ends its workers
       without failing a task (``take``, ``head``, ``first``, ``limit``), so the plan decides it.
+    - the shape must have run Python workers in one environment only. A pool is one daemon and the
+      workers it forks; a pool counts as having run when its daemon is new since the reset, or when
+      one of its workers is new or its CPU ticks moved. Two pools that ran on one executor read NULL:
+      a cold pool has no baseline, so a worker of one can exit unseen while the other keeps
+      releasing (the REST guard takes its gaps across both pools).
 
-    Not covered: an early stop in a query that the DataFrame does not return (a ``run`` callable
-    that reads rows on the side). None of the bench's forms does one; the plan check cannot see it.
+    Known limits, documented and not coded (each is a NULL-or-number edge, not a checked path):
+
+    - a consumer other than a limit node that stops reading early without failing a task (for
+      example a sort-merge join that exhausts one side over sorted input) can end a worker unseen;
+    - a JVM tail of more than 10 s after a task's Python output ends defeats the margin of the
+      50 s guard (the 60 s is OSS Spark 4.0.0's idle constant, not checked on DBR);
+    - ``read(df)`` handed a different query than the one that ran: the plan check sees only ``df``,
+      so an early stop in another query, or a ``run`` callable that reads rows on the side, is not
+      seen. None of the bench's forms does one.
 
     ``read(df)`` is None, with the reason in ``reason``, wherever the reset cannot be shown to
     reach every worker: off Linux, on a Connect session, when the Spark REST API does not give
@@ -620,8 +657,9 @@ class WorkerPeak:
     its own, and when no slot frees up within ``TIMEOUT_S`` (a busy cluster). It is also None,
     saying so, in each case above, when an executor that held workers at the reset is gone, when
     workers exit with their task (``spark.python.worker.reuse=false``), when no Python worker ran
-    during the shape (a plan with no Python in it), when the physical plan has an early stop, and
-    when the plan cannot be read. It is not a number that leaves out a worker that ran.
+    during the shape (a plan with no Python in it), when the physical plan has an early stop, when
+    the plan cannot be read, and when the shape ran Python workers in more than one environment.
+    It is not a number that leaves out a worker that ran.
 
     Why not sampling: a sampler would have to run inside the workers during the shape and
     compete with it for slots. The reset needs no thread, and it costs two short jobs. It
@@ -727,7 +765,7 @@ class WorkerPeak:
             )  # PySpark has no clearJobGroup
 
     def _sweep(self, reset: bool) -> List:
-        """One row per task: hwm, missed, ran, lost, scope, own_pool, ticks (see `_sweep_task`)."""
+        """One row per task: hwm, missed, ran, lost, envs, scope, own_pool, ticks (see `_sweep_task`)."""
         n, sc = self._slots, self.spark.sparkContext
         survey, alive = _surveyor(_worker_finder())
         task = _sweep_task(reset, survey, alive, _read_judge(), self._baseline)
@@ -739,7 +777,7 @@ class WorkerPeak:
             try:
                 df = self.spark.range(n, numPartitions=n).mapInPandas(
                     task,
-                    "hwm double, missed long, ran long, lost long, scope string, "
+                    "hwm double, missed long, ran long, lost long, envs long, scope string, "
                     "own_pool long, ticks string",
                     barrier=True,
                 )
@@ -807,6 +845,8 @@ class WorkerPeak:
         t1 = time.time()
         if sum(r.lost for r in rows) or self._scopes - {r.scope for r in rows}:
             self.reason = _LOST_REASON
+        elif any(r.envs > 1 for r in rows):
+            self.reason = _MULTI_ENV_REASON
         elif not sum(r.ran for r in rows):
             self.reason = "no Python worker ran during the shape"
         else:

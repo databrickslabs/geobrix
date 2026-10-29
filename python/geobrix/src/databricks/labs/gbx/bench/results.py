@@ -126,7 +126,11 @@ class ResultRow:
     # stops an idle one after 60 s), when the Spark REST API shows a failed, killed or retried task,
     # gives no answer, or leaves a 50 s wait between task ends in a shape longer than that, when the
     # executors' slots disagree with the default parallelism or a worker cannot be reset, when an
-    # executor that held workers is gone, and when no slot frees up within 60 s (a busy cluster).
+    # executor that held workers is gone, when the shape ran Python workers in more than one
+    # environment (a worker of one can exit unseen), and when no slot frees up within 60 s (a busy
+    # cluster). Known limits, not NULL: a non-limit consumer that stops reading early without
+    # failing a task can end a worker unseen; a JVM tail over 10 s after a task's Python output
+    # defeats the 50 s guard's margin.
     py_worker_rss_mb: Optional[float] = None
     # Why an error row failed ("ExceptionType: message"); "" on every other row.
     failure_mode: str = ""

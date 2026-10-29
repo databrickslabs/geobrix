@@ -1131,6 +1131,65 @@ def test_worker_peak_is_none_when_one_of_two_pools_runners_exits(
 
 
 @LINUX
+@pytest.mark.parametrize(
+    "how", ["killed", pytest.param("idle", marks=pytest.mark.perf)]
+)
+def test_worker_peak_is_none_when_two_environments_start_cold_and_one_goes_idle(
+    spark_session_local, tmp_path, how
+):
+    # I-5: a shape on two worker environments, both cold, so neither pool has a baseline. Pool A's two
+    # tasks hold 400 MB and return; then pool A's workers go: killed here, or stopped by Spark's idle stop
+    # while pool B keeps releasing (the idle variant, as the probe ran it). The reading was pool B's small
+    # mark (55.07 MB, no reason). Two pools that ran on one executor are two environments: NULL.
+    from pyspark.sql import functions as F
+
+    spark = spark_session_local
+    _settle()
+    w = str(tmp_path)
+
+    @F.udf("long")
+    def hog(x):
+        import os
+
+        b = bytearray(400 * 1024 * 1024)
+        for i in range(0, len(b), 4096):
+            b[i] = 1  # touch every page
+        with open(f"{w}/pid{x}", "w") as fh:
+            fh.write(str(os.getpid()))
+        return x
+
+    @F.udf("long")
+    def busy(x):
+        import time as t
+
+        end = t.process_time() + 0.4  # CPU time past the CPU-tick filter
+        while t.process_time() < end:
+            pass
+        return x
+
+    with _own_worker_pool(spark):
+        shape_a = spark.range(2, numPartitions=2).select(hog("id"))
+    with _own_worker_pool(spark):
+        shape_b = spark.range(1, numPartitions=1).select(busy("id"))
+    peak = attribution.WorkerPeak(spark)
+    assert peak.reason is None, peak.reason
+    peak.start()  # both pools are cold: neither exists at the reset
+    shape_a.collect()
+    pids = [int((tmp_path / f"pid{x}").read_text()) for x in (0, 1)]
+    if how == "killed":
+        for pid in pids:
+            os.kill(pid, 9)
+        _until(lambda: all(_gone(pid) for pid in pids), "the daemons to reap them")
+        shape_b.collect()
+    else:
+        for _ in range(8):  # pool B releases every 10 s for 80 s; pool A idles out
+            shape_b.collect()
+            time.sleep(10)
+        _until(lambda: all(_gone(pid) for pid in pids), "pool A's idle stop", 60.0)
+    assert peak.read(shape_a) is None and peak.reason == attribution._MULTI_ENV_REASON
+
+
+@LINUX
 def test_the_reading_is_none_when_the_plan_is_not_given_or_stops_early(
     spark_session_local,
 ):
@@ -1167,17 +1226,19 @@ def test_an_early_stop_is_found_in_the_physical_plan(spark_session_local, build,
 @pytest.mark.parametrize(
     "case, members, want",
     [
-        ("nothing moved", {"w1": (5, 0), "w2": (7, 0), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (0, 0, 0)),
-        ("a worker ran and is alive", {"w1": (9, 400), "w2": (7, 0), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (400, 1, 0)),
-        ("a worker of the pool that ran has gone", {"w1": (9, 400), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (400, 1, 1)),
-        ("a worker has gone and nothing ran", {"w1": (5, 0), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (0, 0, 1)),
-        ("another pool's straggler has gone", {"w1": (9, 400), "w2": (7, 0), "d": (100, 0), "e": (50, 0)}, (400, 1, 1)),
-        ("another pool's fat idle worker is not counted", {"w1": (9, 90), "w2": (7, 0), "x1": (3, 250), "d": (100, 0), "e": (50, 0)}, (90, 1, 0)),
-        ("a new worker ran", {"w1": (5, 0), "w2": (7, 0), "w3": (2, 80), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (80, 1, 0)),
-        ("a zombie of a pool that ran", {"w1": (9, 0, "z"), "w2": (7, 0), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (0, 0, 1)),
-        ("an idle zombie beside a worker that ran", {"w1": (5, 0, "z"), "w2": (9, 60), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (60, 1, 1)),
-        ("a new daemon is not a worker", {"w1": (5, 0), "w2": (7, 0), "x1": (3, 0), "d": (100, 0), "e": (50, 0), "f": (7, 51)}, (0, 0, 0)),
-        ("only the daemons have gone", {"w1": (5, 0), "w2": (7, 0), "x1": (3, 0)}, (0, 0, 0)),
+        ("nothing moved", {"w1": (5, 0), "w2": (7, 0), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (0, 0, 0, 0)),
+        ("a worker ran and is alive", {"w1": (9, 400), "w2": (7, 0), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (400, 1, 0, 1)),
+        ("a worker of the pool that ran has gone", {"w1": (9, 400), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (400, 1, 1, 1)),
+        ("a worker has gone and nothing ran", {"w1": (5, 0), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (0, 0, 1, 0)),
+        ("another pool's straggler has gone", {"w1": (9, 400), "w2": (7, 0), "d": (100, 0), "e": (50, 0)}, (400, 1, 1, 1)),
+        ("another pool's fat idle worker is not counted", {"w1": (9, 90), "w2": (7, 0), "x1": (3, 250), "d": (100, 0), "e": (50, 0)}, (90, 1, 0, 1)),
+        ("a new worker ran", {"w1": (5, 0), "w2": (7, 0), "w3": (2, 80), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (80, 1, 0, 1)),
+        ("a zombie of a pool that ran", {"w1": (9, 0, "z"), "w2": (7, 0), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (0, 0, 1, 1)),
+        ("an idle zombie beside a worker that ran", {"w1": (5, 0, "z"), "w2": (9, 60), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (60, 1, 1, 1)),
+        ("a new daemon is not a worker", {"w1": (5, 0), "w2": (7, 0), "x1": (3, 0), "d": (100, 0), "e": (50, 0), "f": (7, 51)}, (0, 0, 0, 1)),
+        ("only the daemons have gone", {"w1": (5, 0), "w2": (7, 0), "x1": (3, 0)}, (0, 0, 0, 0)),
+        ("two environments ran, both warm", {"w1": (9, 400), "w2": (7, 0), "x1": (7, 60), "d": (100, 0), "e": (50, 0)}, (400, 2, 0, 2)),
+        ("a second environment's new daemon", {"w1": (9, 400), "w2": (7, 0), "x1": (3, 0), "d": (100, 0), "e": (50, 0), "f": (7, 51)}, (400, 1, 0, 2)),
     ],
 )  # fmt: skip
 def test_the_read_counts_the_workers_that_ran_and_voids_any_that_have_gone(
@@ -1185,22 +1246,31 @@ def test_the_read_counts_the_workers_that_ran_and_voids_any_that_have_gone(
 ):
     """The judgement on synthetic /proc numbers. The baseline: workers w1 (5 ticks) and w2 (7) of
     daemon d (100), and x1 (3) of daemon e (50). Any worker that was there at the reset and has gone
-    voids the reading, whichever pool it is in; a daemon never counts."""
+    voids the reading, whichever pool it is in; a daemon never counts. ``envs`` counts the pools that
+    ran: a daemon new since the reset, or a pool with a worker that is new or whose ticks moved.
+    """
     scope = "h:1"
     key = lambda k: f"{scope}:{k}"  # noqa: E731
+    pid_of = {
+        "d": 100,
+        "e": 200,
+        "f": 300,
+    }  # the daemons' pids; a worker's ppid is its pool's
     baseline = {
         "cpu": {key("w1"): 5, key("w2"): 7, key("x1"): 3, key("d"): 100, key("e"): 50},
         "daemons": {key("d"), key("e")},
     }
-    live = {
-        key(k): {
+    live = {}
+    for k, v in members.items():
+        daemon = k in "def"
+        live[key(k)] = {
             "cpu": v[0],
             "mb": v[1],
             "zombie": len(v) > 2,
-            "daemon": k in "def",
+            "daemon": daemon,
+            "pid": pid_of[k] if daemon else 0,
+            "ppid": 1 if daemon else pid_of[{"w": "d", "x": "e"}[k[0]]],
         }
-        for k, v in members.items()
-    }
     assert attribution._read_judge()(scope, live, baseline) == want, case
 
 

@@ -152,3 +152,29 @@ def test_the_w1_gate_has_two_parts():
     assert zb.w1_fixed(phases) == 7.25
     assert zb.w1_fixed_verdict(10.0) == ("PASS", 10.0)
     assert zb.w1_fixed_verdict(10.01)[0] == "MISS"
+
+
+def test_the_write_cube_makes_one_block_per_task():
+    """W1 says ten tasks: each block of the cube (and of the xarray baseline) is made by a
+    task of its own, from a range split one id per partition; no hashed repartition."""
+    from databricks.labs.gbx.bench import zarr_bench as zb
+
+    calls = []
+
+    class Frame:
+        def mapInArrow(self, fn, schema):
+            return self
+
+        def unionByName(self, other):
+            return self
+
+    class Spark:
+        def range(self, *args):
+            calls.append(args)
+            return Frame()
+
+        def createDataFrame(self, rows, schema):
+            return Frame()
+
+    zb._cube_blocks(Spark(), 240, 721, 1440, 24)
+    assert calls == [(0, 10, 1, 10)]

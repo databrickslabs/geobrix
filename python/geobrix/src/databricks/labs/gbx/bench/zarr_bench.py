@@ -446,6 +446,14 @@ def _coord_block(name, values, start=0):
     )
 
 
+def _one_per_task(spark, n: int):
+    """``n`` ids, one in each of ``n`` partitions, so each block is made by a task of its
+    own. A range split ``n`` ways does that with no shuffle; ``repartition(n, "id")`` hashes
+    the ids, and ten of them land in seven partitions (three tasks make two blocks each).
+    """
+    return spark.range(0, n, 1, n)
+
+
 def _cube_blocks(spark, nt, ny, nx, block, t_start=0, coords=("time", "lat", "lon")):
     """A blocks DataFrame of the throughput cube's steps ``[t_start, t_start + nt)``: one
     ``t2m`` block per ``block`` steps, made in its own task, plus coordinate blocks."""
@@ -481,7 +489,7 @@ def _cube_blocks(spark, nt, ny, nx, block, t_start=0, coords=("time", "lat", "lo
                     schema=_blocks_arrow(),
                 )
 
-    data = spark.range(n).repartition(n, "id").mapInArrow(gen, BLOCKS_SCHEMA)
+    data = _one_per_task(spark, n).mapInArrow(gen, BLOCKS_SCHEMA)
     t, la, lo = _labels(nt, ny, nx, t_start)
     want = {"time": ("time", t, t_start), "lat": ("latitude", la, 0)}
     want["lon"] = ("longitude", lo, 0)
@@ -768,7 +776,7 @@ def _plain_w1(spark, path, nt, ny, nx, block, chunks, shards) -> float:
             yield pd.DataFrame({"id": pdf["id"]})
 
     t0 = time.perf_counter()
-    spark.range(n).repartition(n, "id").mapInPandas(task, "id long").collect()
+    _one_per_task(spark, n).mapInPandas(task, "id long").collect()
     return round(time.perf_counter() - t0, 3)
 
 

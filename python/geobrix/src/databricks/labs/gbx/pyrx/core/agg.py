@@ -30,6 +30,7 @@ from rasterio.merge import merge as _rio_merge
 from rasterio.transform import from_bounds
 from rasterio.warp import Resampling, reproject
 
+from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.ds.cog_writer import _build_mosaic_vrt
 from databricks.labs.gbx.pyrx.core import _nodata
 from databricks.labs.gbx.pyrx.core import compression as _comp
@@ -188,7 +189,7 @@ def _write_masked_tile(ds, path, mask) -> None:
     out = (
         path.open(**profile)
         if isinstance(path, MemoryFile)
-        else rasterio.open(path, "w", **profile)
+        else open_data(path, "w", **profile)
     )
     with _comp.internal_mask_env(mask), out as dst:
         _comp.match_alpha(dst, ds.colorinterp)

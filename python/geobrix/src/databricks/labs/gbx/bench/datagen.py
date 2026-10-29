@@ -15,6 +15,7 @@ import shapely.geometry
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
+from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.bench import manifest as m
 from databricks.labs.gbx.pyrx.core.compression import creation_opts as _comp_opts
 
@@ -531,7 +532,7 @@ def _write_geometry_corpus(out_dir, corpus: m.Corpus, seed: int) -> m.GeometryCo
         if te.srid in seen_srid:
             continue
         seen_srid.add(te.srid)
-        with rasterio.open(out_dir / te.path) as ds:
+        with open_data(out_dir / te.path) as ds:
             gset = generate_geometry_corpus(ds, te.srid, seed + te.cellid)
         # Record the corpus-relative tile path (not the absolute ds.name) so the
         # heavy tier resolves it under the same corpus root.
@@ -611,7 +612,7 @@ def validity_gate(root, corpus: m.Corpus, nodata_warn_threshold: float = 0.9):
             problems.append(f"missing: {te.path}")
             continue
         try:
-            with rasterio.open(p) as ds:
+            with open_data(p) as ds:
                 if ds.width != te.tile_px or ds.height != te.tile_px:
                     problems.append(
                         f"{te.path}: size {ds.width}x{ds.height} != {te.tile_px}"
@@ -715,7 +716,7 @@ def generate_cog_multiwindow_corpus(
                 fd, tmp_cog = tempfile.mkstemp(suffix=".tif")
                 os.close(fd)
                 try:
-                    with rasterio.open(tmp_cog, "w", **cog_profile) as dst:
+                    with open_data(tmp_cog, "w", **cog_profile) as dst:
                         dst.write(src.read())
                     shutil.copy(tmp_cog, str(dest))
                 finally:
@@ -844,7 +845,7 @@ def write_large_raster_streamed(
                 "blockxsize": block_size,
                 "blockysize": block_size,
             }
-            with rasterio.open(tmp_tif, "w", **tiled_profile) as dst:
+            with open_data(tmp_tif, "w", **tiled_profile) as dst:
                 for y_off in range(0, height, block_size):
                     bh = min(block_size, height - y_off)
                     for x_off in range(0, width, block_size):
@@ -862,8 +863,8 @@ def write_large_raster_streamed(
                 "BLOCKSIZE": block_size,
                 **_comp_opts(dtype, compress=compress.lower(), driver="COG"),
             }
-            with rasterio.open(tmp_tif) as src:
-                with rasterio.open(tmp_cog, "w", **cog_profile) as dst:
+            with open_data(tmp_tif) as src:
+                with open_data(tmp_cog, "w", **cog_profile) as dst:
                     for _, window in src.block_windows(1):
                         dst.write(src.read(window=window), window=window)
             # Step 3: sequential copy to dest (FUSE-safe; no backward seeks).
@@ -886,7 +887,7 @@ def write_large_raster_streamed(
                 "driver": "GTiff",
                 **_comp_opts(dtype, compress=compress.lower()),
             }
-            with rasterio.open(tmp_tif, "w", **strip_profile) as dst:
+            with open_data(tmp_tif, "w", **strip_profile) as dst:
                 for y_off in range(0, height, strip_rows):
                     bh = min(strip_rows, height - y_off)
                     block = _make_block(bands, bh, width)

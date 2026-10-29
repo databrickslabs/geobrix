@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.bench.results import ResultRow
 from databricks.labs.gbx.bench.runner import (
     WorkerRssSampler,
@@ -144,12 +145,11 @@ def measure_parallelism(spark, df):
 
 def _read_one_file_light(file_path: str, size_mib: int) -> int:
     """Open a raster file, compute tiles, return tile count."""
-    import rasterio
 
     from databricks.labs.gbx.pyrx.core import tiling as core_tiling
 
     size_bytes = os.path.getsize(file_path)
-    with rasterio.open(file_path) as ds:
+    with open_data(file_path) as ds:
         tiles = core_tiling.make_tiles(ds, size_in_mb=size_mib, size_bytes=size_bytes)
         return len(tiles)
 
@@ -8708,7 +8708,6 @@ def _write_striped_gtiff(
     while the cluster profile uses VIIRS/UK-scale sizes (> 1 GB).
     """
     import numpy as np
-    import rasterio
     from rasterio.transform import from_origin
 
     data = np.zeros((bands, height, width), dtype=dtype)
@@ -8728,7 +8727,7 @@ def _write_striped_gtiff(
         # Explicit STRIP layout — no tiling, no blockxsize/blockysize.
         tiled=False,
     )
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_data(path, "w", **profile) as ds:
         ds.write(data)
 
 
@@ -8758,7 +8757,6 @@ def _write_tiled_cog(
     import tempfile
 
     import numpy as np
-    import rasterio
     from rasterio.transform import from_origin
 
     from databricks.labs.gbx.pyrx.core.analysis import cog_convert
@@ -8782,10 +8780,10 @@ def _write_tiled_cog(
             crs="EPSG:4326",
             transform=from_origin(0.0, 60.0, 0.01, 0.01),
         )
-        with rasterio.open(tmp_path, "w", **profile) as ds_tmp:
+        with open_data(tmp_path, "w", **profile) as ds_tmp:
             ds_tmp.write(data)
         # Convert to real COG (tiled + overviews) using the shared converter.
-        with rasterio.open(tmp_path) as ds_src:
+        with open_data(tmp_path) as ds_src:
             cog_bytes = cog_convert(ds_src, "DEFLATE", cog_blocksize, "AVERAGE")
     finally:
         os.unlink(tmp_path)

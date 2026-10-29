@@ -17,6 +17,7 @@ import rasterio
 from rasterio.io import MemoryFile
 from rasterio.windows import Window
 
+from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.pyrx.core import cog as _cog
 from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
@@ -117,7 +118,7 @@ def encode_tile(
         try:
             with (
                 _comp.internal_mask_env(mask),
-                rasterio.open(tmp, "w", **profile) as out,
+                open_data(tmp, "w", **profile) as out,
             ):
                 _comp.match_alpha(out, ds.colorinterp)
                 out.write(data)

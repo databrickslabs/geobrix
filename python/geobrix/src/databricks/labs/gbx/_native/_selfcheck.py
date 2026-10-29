@@ -26,6 +26,8 @@ import re
 import sys
 import tempfile
 
+from databricks.labs.gbx._gdal_policy import open_data
+
 WIDTH, HEIGHT = 388, 385  # uint16, values (r * WIDTH + c) % 65535
 EPSG = 32630
 ORIGIN = (699960.0, 5700000.0)
@@ -297,7 +299,7 @@ def _netcdf_filters():
         with netCDF4.Dataset(path) as nc:
             back = np.asarray(nc["v"][:])
         with rasterio.Env(GDAL_NETCDF_BOTTOMUP="NO"):
-            with rasterio.open(f'NETCDF:"{path}":v') as ds:
+            with open_data(f'NETCDF:"{path}":v') as ds:
                 gdal_back = ds.read(1)
         key = codec.split("_")[0]
         if (
@@ -335,7 +337,6 @@ def _grids():
     """OSTN15 against Ordnance Survey's test points; OSGM15 and EGM96 heights both ways at a node; no network."""
     import numpy as np
     import pyproj
-    import rasterio
 
     t = pyproj.Transformer.from_crs("EPSG:27700", "EPSG:4258", always_xy=True)
     errs = []
@@ -349,7 +350,7 @@ def _grids():
     share = pyproj.datadir.get_data_dir().split(os.pathsep)[0]
     heights = {}
     for grid, src, dst in GEOIDS:
-        with rasterio.open(os.path.join(share, grid)) as ds:
+        with open_data(os.path.join(share, grid)) as ds:
             r, c = ds.height // 2, ds.width // 2
             v = ds.read(1, window=((r, r + 1), (c, c + 50)))[0]
             c += int(np.argmax(v != ds.nodata)) if ds.nodata is not None else 0
@@ -372,14 +373,13 @@ def _grids():
 def _jxl():
     """GTiff COMPRESS=JXL, lossless, UInt16: written and read back exactly."""
     import numpy as np
-    import rasterio
 
     a = (np.arange(64 * 64, dtype=np.uint16).reshape(64, 64) * 13) % 4096
     path = os.path.join(tempfile.mkdtemp(prefix="gbx-jxl-"), "t.tif")
-    with rasterio.open(path, "w", driver="GTiff", width=64, height=64, count=1, dtype="uint16", compress="JXL",
-                       JXL_LOSSLESS="YES") as ds:  # fmt: skip
+    with open_data(path, "w", driver="GTiff", width=64, height=64, count=1, dtype="uint16", compress="JXL",
+                   JXL_LOSSLESS="YES") as ds:  # fmt: skip
         ds.write(a, 1)
-    with rasterio.open(path) as ds:
+    with open_data(path) as ds:
         back, comp = ds.read(1), ds.compression
     return np.array_equal(back, a) and str(comp).upper().endswith("JXL"), {
         "compression": str(comp)

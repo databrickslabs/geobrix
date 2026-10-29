@@ -29,8 +29,8 @@ from typing import Any, Callable, Literal, Optional
 from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql import functions as F
 
-# Re-export listing helpers for backward compatibility
-from databricks.labs.gbx.ds._listing import (
+from databricks.labs.gbx._gdal_policy import open_data
+from databricks.labs.gbx.ds._listing import (  # re-exported for backward compatibility
     _retry_transient,
     list_files,
     to_local_path,
@@ -1085,7 +1085,6 @@ def open_windowed_via_fileref(file_ref, window, pending, tile_crs=None):
     # The broad except converts any failure here to FileRefReadError so the
     # caller can degrade to the local-file path.  The yield is OUTSIDE this
     # handler so that caller-body exceptions propagate unchanged (not wrapped).
-    import rasterio
     from rasterio.io import MemoryFile
     from rasterio.windows import Window
 
@@ -1094,7 +1093,7 @@ def open_windowed_via_fileref(file_ref, window, pending, tile_crs=None):
         if not stream.seekable():
             raise FileRefReadError("FileRef stream is not seekable")
 
-        with rasterio.open(stream) as src:
+        with open_data(stream) as src:
             # Reprojection check: if tile_crs requests a different CRS than
             # the source (after any pending_srid relabel), the FILE path cannot
             # warp — raise FileRefReadError to degrade to the local-file path.
@@ -1310,11 +1309,10 @@ def _probe_direct_open(path: str) -> None:
 
     Raises on failure after retries; returns ``None`` on success.
     """
-    import rasterio
     from rasterio.windows import Window
 
     def _do() -> None:
-        with rasterio.open(path) as ds:
+        with open_data(path) as ds:
             ds.read(1, window=Window(0, 0, 1, 1))
 
     _retry_transient(_do)
@@ -1467,13 +1465,13 @@ def _open_via_file_ref(fr, rasterio, stream_max_bytes=_GBX_STREAM_MAX_BYTES):
     """
     if fr.size <= stream_max_bytes:
         stream = fr.open()
-        ds = rasterio.open(stream)
+        ds = open_data(stream)
         if ds.profile.get("tiled", False):
             return ds, stream  # tiled/COG: seekable stream is efficient
         ds.close()
         stream.close()  # striped: release the stream before FUSE fallback
     local_path = fr.as_local_file()
-    return rasterio.open(local_path), None  # FUSE path: no stream
+    return open_data(local_path), None  # FUSE path: no stream
 
 
 class _OpenerContext:
@@ -1533,7 +1531,7 @@ class _OpenerContext:
         )
 
         local_path, is_temp = _stage(uri)
-        ds = rasterio.open(local_path)
+        ds = open_data(local_path)
         if is_temp:
             self._staged_temps[id(ds)] = local_path
         return ds
@@ -1669,7 +1667,7 @@ def open_for_read(
       `_stage_local_if_needed` probe→stage fallback for eventual-consistency.
 
     This is the base resolver; layer-specific callers (rasterio openers, vector readers) wrap it
-    and adapt to their I/O contract (e.g., rasterio.open(handle) for raster tile reads).
+    and adapt to their I/O contract (e.g., open_data(handle) for raster tile reads).
 
     Args:
         source: A path string (bare FUSE `/Volumes/...` or scheme-qualified `dbfs:/...`, `s3://...`).

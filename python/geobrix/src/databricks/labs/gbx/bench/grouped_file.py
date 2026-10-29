@@ -37,6 +37,8 @@ import os
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from databricks.labs.gbx._gdal_policy import open_data
+
 from .results import ResultRow
 from .runner import capture_env, peak_rss_mb, time_iters
 
@@ -172,10 +174,9 @@ def _clip_geom_from_source(src_path):
     in a multiwindow corpus share one georeferencing transform).  Serverless-safe
     -- pure rasterio, no Spark.
     """
-    import rasterio
     from shapely.geometry import box
 
-    with rasterio.open(str(src_path)) as ds:
+    with open_data(str(src_path)) as ds:
         b = ds.bounds
         crs = ds.crs
         crs_str = None
@@ -193,13 +194,12 @@ def _window_gtiff_bytes(src_path, window) -> bytes:
     Used to build the ``materialized`` mode's inline raster: the same pixels a
     virtual tile would read lazily, baked into the row.
     """
-    import rasterio
     from rasterio.io import MemoryFile
     from rasterio.windows import Window
     from rasterio.windows import transform as window_transform
 
     col_off, row_off, width, height = window
-    with rasterio.open(str(src_path)) as ds:
+    with open_data(str(src_path)) as ds:
         win = Window(col_off, row_off, width, height)
         data = ds.read(window=win)
         profile = ds.profile.copy()

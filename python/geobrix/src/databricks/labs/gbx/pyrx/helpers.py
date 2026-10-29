@@ -26,6 +26,8 @@ from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 from pyspark.sql.types import BinaryType, StructField, StructType
 
+from databricks.labs.gbx._gdal_policy import open_data
+
 __all__ = [
     "retile_virtual",
     "bng_tessellate_virtual",
@@ -583,8 +585,6 @@ def _vrt_mosaic(members, cap_bytes: int):
     import os
     import shutil
 
-    import rasterio
-
     from databricks.labs.gbx.ds._mosaic import minted_vrt
     from databricks.labs.gbx.ds.file_gbx import materialize_decision
     from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
@@ -594,7 +594,7 @@ def _vrt_mosaic(members, cap_bytes: int):
         return None
     for path, window in members:
         if window is not None:
-            with rasterio.open(path) as src:
+            with open_data(path) as src:
                 if tuple(window) != (0, 0, src.width, src.height):
                     raise ValueError(
                         f"merge_by_key(method='vrt') mosaics whole files, and a member is the window "

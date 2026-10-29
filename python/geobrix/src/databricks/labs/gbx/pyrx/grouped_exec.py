@@ -19,8 +19,8 @@ from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 from pyspark.sql.types import StructField, StructType
 
-# Re-export the FILE read engine from the unified base for backward compatibility
-from databricks.labs.gbx.ds.file_gbx import (  # noqa: F401
+from databricks.labs.gbx._gdal_policy import open_data
+from databricks.labs.gbx.ds.file_gbx import (  # noqa: F401 (re-exported for backward compatibility)
     GBX_LRU_MAX_BYTES,
     GBX_STREAM_MAX_BYTES,
     STREAM_NOMINAL_BYTES,
@@ -153,7 +153,7 @@ def _run_file_fast_path(
             pending = (bands, raw_nodata, srid, crs_str)
             b = _window_dataset_bytes(src, win, pending)
             with ExitStack() as _stk:
-                ds = _stk.enter_context(rasterio.open(rasterio.io.MemoryFile(b)))
+                ds = _stk.enter_context(open_data(rasterio.io.MemoryFile(b)))
                 return core_fn(ds, cellid)
         else:
             # view="header": read-free header view.

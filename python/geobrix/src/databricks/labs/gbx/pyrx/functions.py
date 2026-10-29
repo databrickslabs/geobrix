@@ -31,6 +31,7 @@ from pyspark.sql.types import (
 )
 
 from databricks.labs.gbx import _register
+from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx._udf import ColLike, _col, _crs_col
 from databricks.labs.gbx.pyrx.core import _nodata, accessors
@@ -875,10 +876,9 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
     # NULL: that field doubles as open_tile's warp-target, so setting it to the
     # source CRS would make a later rst_setsrid see pending_srid != crs and warp
     # spuriously. The source CRS stays implicit in the path.
-    import rasterio
 
     try:
-        with rasterio.open(local) as src:
+        with open_data(local) as src:
             width, height, count = src.width, src.height, src.count
     except Exception:  # noqa: BLE001 — null-on-error, matching heavyweight
         return None

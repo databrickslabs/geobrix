@@ -27,6 +27,8 @@ import json
 import warnings as _warnings
 from typing import TYPE_CHECKING, Any
 
+from databricks.labs.gbx._gdal_policy import open_data
+
 if TYPE_CHECKING:
     from databricks.labs.gbx.vizx._layers import Layer
 
@@ -1533,7 +1535,6 @@ def _raster_to_image(
         return png_b64, corners
 
     # --- rasterio path (path or bytes) -------------------------------------
-    import rasterio
     from rasterio.io import MemoryFile
 
     if isinstance(data, (bytes, bytearray)):
@@ -1552,7 +1553,7 @@ def _raster_to_image(
                 break
         if path.startswith("//"):
             path = "/" + path.lstrip("/")
-        with rasterio.open(path) as src:
+        with open_data(path) as src:
             png_b64, corners = _src_to_png_b64(src, raster_max_px)
         return png_b64, corners
     else:

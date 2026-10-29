@@ -70,6 +70,7 @@ from typing import Any, Dict, Iterator, List, Optional
 from pyspark.sql.datasource import DataSourceWriter, WriterCommitMessage
 from pyspark.sql.types import StructType
 
+from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.ds import _listing
 from databricks.labs.gbx.ds.file_gbx import (
     _COG_DRIVER_MAX_BYTES,
@@ -475,8 +476,6 @@ def _build_mosaic_vrt(
     """
     import xml.etree.ElementTree as ET
 
-    import rasterio
-
     from databricks.labs.gbx.pyrx.core import _nodata
 
     vrt_out = os.path.join(out_dir, "mosaic.vrt")
@@ -484,7 +483,7 @@ def _build_mosaic_vrt(
     # ── Step 1: collect tile metadata ─────────────────────────────────────
     metas = []
     for path in tile_paths:
-        with rasterio.open(path) as ds:
+        with open_data(path) as ds:
             metas.append(
                 {
                     "path": path,
@@ -1277,7 +1276,6 @@ class CogGbxWriter(DataSourceWriter):
         if self.mosaic_opts.grid_system == "bng":
             return self._write_mosaic_bng(iterator)
         import numpy as np
-        import rasterio
 
         from databricks.labs.gbx.pyrx.core import _nodata
         from databricks.labs.gbx.pyrx.core import compression as _comp
@@ -1299,7 +1297,7 @@ class CogGbxWriter(DataSourceWriter):
             # collide on identical tile_<row>_<col>.tif names (silent data loss).
             srcdisc = _source_discriminator(src_path)
 
-            with rasterio.open(src_path) as src:
+            with open_data(src_path) as src:
                 src_width, src_height = src.width, src.height
                 count = src.count
                 out_dtype = src.dtypes[0]
@@ -1431,7 +1429,6 @@ class CogGbxWriter(DataSourceWriter):
             Written paths in ``msg.paths``; ``pending_paths`` is always empty.
         """
         import numpy as np
-        import rasterio
         from rasterio.transform import from_bounds as transform_from_bounds
         from rasterio.warp import calculate_default_transform, transform_bounds
         from rasterio.windows import Window
@@ -1452,7 +1449,7 @@ class CogGbxWriter(DataSourceWriter):
             src_path = _listing.to_local_path(str(row["path"]))
             srcdisc = _source_discriminator(src_path)
 
-            with rasterio.open(src_path) as src:
+            with open_data(src_path) as src:
                 count = src.count
                 out_dtype = src.dtypes[0]
                 src_nodata = src.nodata
@@ -1629,7 +1626,6 @@ class CogGbxWriter(DataSourceWriter):
         """
         import h3
         import numpy as np
-        import rasterio
         from rasterio.features import geometry_mask
         from rasterio.transform import from_bounds as transform_from_bounds
         from rasterio.warp import (
@@ -1657,7 +1653,7 @@ class CogGbxWriter(DataSourceWriter):
             src_path = _listing.to_local_path(str(row["path"]))
             srcdisc = _source_discriminator(src_path)
 
-            with rasterio.open(src_path) as src:
+            with open_data(src_path) as src:
                 count = src.count
                 out_dtype = src.dtypes[0]
                 src_nodata = src.nodata
@@ -1877,7 +1873,6 @@ class CogGbxWriter(DataSourceWriter):
             Written paths in ``msg.paths``; ``pending_paths`` is always empty.
         """
         import numpy as np
-        import rasterio
         from rasterio.transform import from_bounds as transform_from_bounds
         from rasterio.warp import (
             Resampling,
@@ -1903,7 +1898,7 @@ class CogGbxWriter(DataSourceWriter):
             src_path = _listing.to_local_path(str(row["path"]))
             srcdisc = _source_discriminator(src_path)
 
-            with rasterio.open(src_path) as src:
+            with open_data(src_path) as src:
                 count = src.count
                 out_dtype = src.dtypes[0]
                 src_nodata = src.nodata

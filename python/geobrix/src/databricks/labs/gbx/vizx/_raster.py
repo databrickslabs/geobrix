@@ -9,6 +9,8 @@ import os
 
 import numpy as np
 
+from databricks.labs.gbx._gdal_policy import open_data
+
 # ---------------------------------------------------------------------------
 # emphasis styling defaults (raster tier)
 # ---------------------------------------------------------------------------
@@ -694,9 +696,8 @@ def plot_raster(
                 )
     else:
         # Virtual tile path: open the file on-the-fly and read the window
-        import rasterio
 
-        with rasterio.open(path) as src:
+        with open_data(path) as src:
             data, transform, scale = _read_windowed(src, max_pixels, window=window)
             return _render(
                 data,
@@ -811,7 +812,6 @@ def plot_file(
     from databricks.labs.gbx.vizx._env import assert_viz_available
 
     assert_viz_available()
-    import rasterio
 
     # On Databricks, Volume/DBFS paths are often scheme-qualified (e.g.
     # "dbfs:/Volumes/.../x.tif" or "file:///Volumes/.../x.tif"), but the FUSE
@@ -826,7 +826,7 @@ def plot_file(
     if path.startswith("//"):
         path = "/" + path.lstrip("/")
 
-    with rasterio.open(path) as src:
+    with open_data(path) as src:
         data, transform, scale = _decimated_read(src, max_pixels)
         return _render(
             data,
@@ -963,7 +963,7 @@ def plot_mosaic(
     import rasterio
 
     vrt_path = _resolve_vrt_path(vrt)
-    with rasterio.open(vrt_path) as src:
+    with open_data(vrt_path) as src:
         window = None
         if bbox is not None:
             from rasterio.windows import Window, from_bounds

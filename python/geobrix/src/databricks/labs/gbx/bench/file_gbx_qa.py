@@ -23,6 +23,8 @@ import time
 import traceback
 from typing import Any, Dict, List, Optional
 
+from databricks.labs.gbx._gdal_policy import open_data
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -53,7 +55,6 @@ def _make_tiny_cog(out_path: str, px: int = 64) -> None:
     import tempfile
 
     import numpy as np
-    import rasterio
     from rasterio.transform import from_bounds
 
     from databricks.labs.gbx.core.crs import resolve_crs
@@ -76,7 +77,7 @@ def _make_tiny_cog(out_path: str, px: int = 64) -> None:
     fd, tmp = tempfile.mkstemp(suffix=".tif")
     os.close(fd)
     try:
-        with rasterio.open(tmp, "w", **profile) as dst:
+        with open_data(tmp, "w", **profile) as dst:
             dst.write(data)
         shutil.copy(tmp, out_path)
     finally:
@@ -107,9 +108,8 @@ def _make_tiny_geojson(out_path: str) -> int:
 
 def _read_raster_pixels(path: str) -> bytes:
     """Read a raster at *path* via rasterio and return band-1 bytes (for checksum)."""
-    import rasterio
 
-    with rasterio.open(path) as ds:
+    with open_data(path) as ds:
         return ds.read(1).tobytes()
 
 
@@ -281,7 +281,6 @@ def _check_vector_reader(
 
 def _build_raster_tile_df(spark, raster_path: str):
     """Build a one-row tile DataFrame from *raster_path* for write tests."""
-    import rasterio
     from pyspark.sql.types import (
         BinaryType,
         IntegerType,
@@ -292,7 +291,7 @@ def _build_raster_tile_df(spark, raster_path: str):
         StructType,
     )
 
-    with rasterio.open(raster_path) as ds:
+    with open_data(raster_path) as ds:
         w, h = ds.width, ds.height
         crs = ds.crs
         from databricks.labs.gbx.core.crs import crs_to_canonical

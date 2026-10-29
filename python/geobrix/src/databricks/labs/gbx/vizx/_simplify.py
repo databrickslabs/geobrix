@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 from typing import Union
 
+from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.pyrx.core.local_temp import local_temp_root
 
 log = logging.getLogger(__name__)
@@ -382,7 +383,6 @@ def _simplify_raster(source, spec: dict, out_path: str | None) -> Union[bytes, s
     import numpy as np
 
     try:
-        import rasterio
         from rasterio.enums import Resampling
         from rasterio.transform import from_bounds
     except ImportError as exc:
@@ -446,13 +446,13 @@ def _simplify_raster(source, spec: dict, out_path: str | None) -> Union[bytes, s
                     str(resized.dtype), decoded_bytes=resized.nbytes, compress="auto"
                 )
             )
-            with rasterio.open(out_cog, "w", **_profile) as dst:
+            with open_data(out_cog, "w", **_profile) as dst:
                 dst.write(resized.astype(resized.dtype))
 
         else:
             # File path source
             src_path = str(source)
-            with rasterio.open(src_path) as src:
+            with open_data(src_path) as src:
                 scale = max(src.width, src.height) / raster_max_px
                 if scale > 1:
                     new_h = max(1, int(src.height / scale))
@@ -486,7 +486,7 @@ def _simplify_raster(source, spec: dict, out_path: str | None) -> Union[bytes, s
                 blockysize=256,
             )
             profile.update(_comp_opts)
-            with rasterio.open(out_cog, "w", **profile) as dst:
+            with open_data(out_cog, "w", **profile) as dst:
                 dst.write(data)
 
         log.info(

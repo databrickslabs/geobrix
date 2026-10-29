@@ -12,6 +12,7 @@ import numpy as np
 from shapely import wkb as _wkb
 from shapely.geometry import box
 
+from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.core.crs import authority_srid_of
 from databricks.labs.gbx.pyrx.core._nodata import band_valid_mask, valid_mask
 from databricks.labs.gbx.pyrx.core.compression import write_gtiff
@@ -246,7 +247,6 @@ def getsubdataset(ds, name: str):
     Mirrors heavyweight RST_GetSubdataset: builds ``<driver>:<path>:<name>`` and
     opens it. Raises ValueError if no subdataset matches ``name``.
     """
-    import rasterio
 
     subs = ds.subdatasets or []
     # Match the subdataset URI whose trailing token equals the requested name.
@@ -261,7 +261,7 @@ def getsubdataset(ds, name: str):
             f"gbx_rst_getsubdataset: no subdataset named '{name}' "
             f"(available: {subs})"
         )
-    with rasterio.open(match) as sub:
+    with open_data(match) as sub:
         profile = sub.profile
         profile.update(driver="GTiff")
         return write_gtiff(profile, sub.read(), alpha_like=sub.colorinterp)

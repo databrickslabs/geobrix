@@ -27,6 +27,7 @@ import os
 import numpy as np
 from rasterio.io import MemoryFile
 
+from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core.local_temp import (
     new_local_temp_dir,
@@ -211,8 +212,6 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
             f"valid profiles: {', '.join(sorted(_comp.COG_PROFILES))}"
         )
 
-    import rasterio
-
     # Read decoded data from the source dataset FIRST, then free it after
     # writing to minimise concurrent-buffer overlap.
     data = ds.read()
@@ -240,7 +239,7 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
 
     tmp = new_local_temp_file(suffix=".tif")
     try:
-        with rasterio.open(tmp, "w", **profile) as dst:
+        with open_data(tmp, "w", **profile) as dst:
             _comp.match_alpha(dst, ds.colorinterp, all_labels=True)
             dst.write(data)
         # Free the decoded array before reading the output bytes back so
@@ -317,7 +316,7 @@ def cog_convert_file(
     # Source dtype (predictor) and sample depth: a band tagged NBITS (e.g. 15-bit
     # Sentinel-2 uint16) is carried into the copy, and the authority must account
     # for it when choosing a predictor.
-    with rasterio.open(src_path) as _src:
+    with open_data(src_path) as _src:
         _src_dtype = _src.dtypes[0]
         _src_nbits = _src.tags(1, ns="IMAGE_STRUCTURE").get("NBITS")
 

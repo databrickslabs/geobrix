@@ -307,3 +307,19 @@ print(next((v for k, v in m.items() if k.startswith("lib/libgdal-")), ""))' "$ou
 
 if [ "$ARCH" = both ]; then ARCHES=(aarch64 x86_64); else ARCHES=("$ARCH"); fi
 for a in "${ARCHES[@]}"; do build_arch "$a"; done
+
+# The GDAL Java classes the JAR bundles (scripts/native/maven) must be the ones this build gives: a stage-native build
+# that changes them fails here until they are re-staged and re-pinned (java_jar.py stage, GDAL_JAVA_JAR_SHA256). The
+# check needs both architectures' stage-native output (an older one of the other architecture is fine: the classes
+# do not depend on it).
+if [ "$TARGET" = stage-native ]; then
+    if [ -f "$GBX_NATIVE_BUILD/out/aarch64/stage-native/gdal-native/MANIFEST.json" ] \
+        && [ -f "$GBX_NATIVE_BUILD/out/x86_64/stage-native/gdal-native/MANIFEST.json" ]; then
+        python3 "$PROJECT_ROOT/scripts/native/java_jar.py" stage --check --root "$PROJECT_ROOT" || {
+            echo "VERIFY FAILED: re-stage the GDAL Java classes (python3 scripts/native/java_jar.py stage) and re-pin GDAL_JAVA_JAR_SHA256"
+            exit 1
+        }
+    else
+        echo "NOTE: GDAL's Java classes not checked: java_jar.py stage --check needs both architectures' stage-native output"
+    fi
+fi

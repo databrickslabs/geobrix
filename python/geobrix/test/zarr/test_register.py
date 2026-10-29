@@ -438,6 +438,57 @@ def test_a_claim_whose_commit_landed_but_whose_lookup_failed_still_wins(
     assert _ledger_owners(spark_delta, root) == ["c.s.t"]
 
 
+def test_a_failed_commit_is_the_error_raised_when_the_lookup_after_it_fails_too(
+    spark_delta, tmp_path, monkeypatch
+):
+    """The claim's commit fails with an error that is not a conflict, and the look that asks
+    whether it landed fails as well: the commit error is the one to read, not the lookup's.
+    """
+    real_held, looks = _register._held, []
+
+    def held(spark, ledger):
+        looks.append(1)
+        if len(looks) == 1:
+            return real_held(spark, ledger)
+        raise RuntimeError("lookup failed")
+
+    def commit(*a, **k):
+        raise RuntimeError("commit failed")
+
+    root = str(tmp_path / "ov")
+    monkeypatch.setattr(_register, "_held", held)
+    monkeypatch.setattr(_register._manifest, "commit", commit)
+    with pytest.raises(RuntimeError, match="commit failed"):
+        _register.claim_root(spark_delta, root, "c.s.t", "overlay")
+    monkeypatch.undo()
+    assert _ledger_owners(spark_delta, root) == []
+
+
+def test_a_claim_whose_read_back_fails_leaves_no_row_behind(
+    spark_delta, tmp_path, monkeypatch
+):
+    """The claim lands, then the read that confirms it fails: the claimer takes its own row out
+    before it raises, so the ledger does not name a table whose create failed (every other table
+    would be refused the root until someone cleaned it up)."""
+    real_held, looks = _register._held, []
+
+    def held(spark, ledger):
+        looks.append(1)
+        if (
+            len(looks) == 2
+        ):  # the first look is before the claim, the second confirms it
+            raise RuntimeError("read-back failed")
+        return real_held(spark, ledger)
+
+    root = str(tmp_path / "ov")
+    monkeypatch.setattr(_register, "_held", held)
+    with pytest.raises(RuntimeError, match="read-back failed"):
+        _register.claim_root(spark_delta, root, "c.s.t", "overlay")
+    monkeypatch.undo()
+    assert _ledger_owners(spark_delta, root) == []
+    assert _register.claim_root(spark_delta, root, "c.s.other", "overlay") is True
+
+
 def test_register_never_writes_into_base(spark_delta, era5_v3_sharded, tmp_path):
     base = tmp_path / "base.zarr"
     shutil.copytree(era5_v3_sharded, base)

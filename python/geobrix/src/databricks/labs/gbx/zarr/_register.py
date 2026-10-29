@@ -568,6 +568,15 @@ def _unlock(spark, ledger: str, write_id: str) -> None:
     )
 
 
+def _take_back(spark, ledger: str, write_id: str) -> None:
+    """Delete this call's claim row while another error is being raised; a failure here is
+    logged, not raised (the error being handled is the one to read)."""
+    try:
+        _unlock(spark, ledger, write_id)
+    except Exception as e:  # noqa: BLE001 - cleanup
+        _LOG.warning("could not take claim %s back out of %s: %s", write_id, ledger, e)
+
+
 def _claim_ledger(spark, root: str, table: str, kind: str) -> bool:
     """Make ``table`` the owner of ``root`` in its ledger; ``True`` when this call did,
     ``False`` when the ledger already names this table and kind. Raises
@@ -612,11 +621,26 @@ def _claim_ledger(spark, root: str, table: str, kind: str) -> bool:
         except ZarrWriteConflict:
             _write._pause(_write._wait(attempt))
             continue  # the key exists now: the next look names its owner
-        except Exception:
+        except Exception as commit_error:
             # the MERGE may have landed and a lookup after it failed: the ledger knows
-            if not any(c["write_id"] == claim_id for c in _held(spark, ledger)):
+            try:
+                landed_anyway = any(
+                    c["write_id"] == claim_id for c in _held(spark, ledger)
+                )
+            except Exception:
+                # the ledger cannot be read either: the commit error is the one to report. A row
+                # that did land is taken out if it can be (best effort; the ledger is unreadable).
+                _take_back(spark, ledger, claim_id)
+                raise commit_error from None
+            if not landed_anyway:
                 raise
-        landed = _held(spark, ledger)
+        try:
+            landed = _held(spark, ledger)
+        except Exception:
+            # this call's row is in the ledger and the read that would confirm it failed: take it
+            # out before raising, or the ledger names a table whose create failed
+            _take_back(spark, ledger, claim_id)
+            raise
         if not landed:
             raise ZarrError(
                 f"the claim on {root} committed but the ownership ledger does not show it",

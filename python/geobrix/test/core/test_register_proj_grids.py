@@ -120,6 +120,9 @@ def test_apply_heavy_quiet_only_where_heavy_cannot_run(tmp_path, monkeypatch, ca
         def set(self, *_):
             raise AssertionError("a JavaPackage is never called")
 
+    # The heavy push is the row's subject. A light tier an earlier test registered in this process would be
+    # re-registered on the stand-in session, which has no `udf`: that step is not this row's.
+    monkeypatch.setattr(crs_grids, "_reregister_active_light_tiers", lambda spark: None)
     d = str(tmp_path)
     assert crs_grids.register_proj_grids(_FakeSpark(_jvm_with(JavaPackage())), d) == [d]
 

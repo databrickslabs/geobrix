@@ -244,19 +244,120 @@ def unavailable(measures: Dict, skip=()) -> List[str]:
     ]
 
 
+def _worker_finder():
+    """A function that lists the Python workers beside the process it runs in: every
+    ``python -m pyspark.daemon`` / ``pyspark.worker`` process below the executor's JVM.
+
+    A factory, so that what it returns is pickled by value and a worker needs no geobrix to run
+    it; it reads only /proc.
+    """
+
+    def is_worker(
+        pid,
+    ):  # the daemon and the workers it forks both run `python -m pyspark.daemon`
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                args = fh.read().split(b"\0")
+        except OSError:
+            return False
+        at = args.index(b"-m") + 1 if b"-m" in args else len(args)
+        return args[at : at + 1] in ([b"pyspark.daemon"], [b"pyspark.worker"])
+
+    def parent(pid):
+        try:
+            with open(f"/proc/{pid}/stat") as fh:  # "pid (comm) S ppid ..."
+                return int(fh.read().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            return 0
+
+    def find(me):
+        import os
+
+        jvm = parent(me)  # the executor: the first ancestor that is no Python worker
+        while jvm > 1 and is_worker(jvm):
+            jvm = parent(jvm)
+        children = {}
+        for entry in os.listdir("/proc"):
+            if entry.isdigit():
+                children.setdefault(parent(int(entry)), []).append(int(entry))
+        workers, todo = {me}, [jvm]
+        while todo:
+            for pid in children.get(todo.pop(), []):
+                if is_worker(pid):
+                    workers.add(pid)
+                    todo.append(pid)  # the daemon's workers
+        return sorted(workers)
+
+    return find
+
+
+def _sweep_task(reset, find_workers):
+    """The barrier task of one sweep: the highest ``VmHWM`` (MB) of the Python workers of its
+    executor and, when `reset`, how many of them it could not reset (it resets the rest).
+    """
+
+    def high_water(pid):  # MB, or None for a process that has exited (or is a zombie)
+        try:
+            with open(f"/proc/{pid}/status") as fh:
+                lines = fh.read().splitlines()
+        except OSError:
+            return None
+        if any(ln.startswith("State:") and "Z" in ln.split()[1:2] for ln in lines):
+            return None
+        return max(
+            (float(ln.split()[1]) / 1024.0 for ln in lines if ln.startswith("VmHWM:")),
+            default=0.0,
+        )
+
+    def task(it):  # nested: pickled by value, so a worker needs no geobrix to run it
+        import os
+
+        import pandas as pd  # imported first: part of the baseline, not of the shape
+
+        for _ in it:
+            pass
+        hwm, missed = 0.0, 0
+        for pid in find_workers(os.getpid()):
+            mb = high_water(pid)
+            if mb is None:
+                continue  # exited while we looked: nothing left to read or reset
+            hwm = max(hwm, mb)
+            if reset:
+                try:
+                    with open(f"/proc/{pid}/clear_refs", "w") as fh:
+                        fh.write("5")
+                except OSError:
+                    missed += (
+                        high_water(pid) is not None
+                    )  # it exited meanwhile: not missed
+        yield pd.DataFrame({"hwm": [hwm], "missed": [missed]})
+
+    return task
+
+
 class WorkerPeak:
     """Peak RSS (MB) of the Python workers while one shape ran.
 
     The kernel keeps a high-water mark per process (``VmHWM``) that only grows, and Spark
     reuses Python workers across queries, so reading it after a shape returns the biggest shape
     any earlier query ran on that worker. ``start()`` resets it on every worker (writing 5 to
-    ``/proc/self/clear_refs``), ``read()`` collects it afterwards. Both go through a barrier
-    stage with one task per slot, which puts one task on every worker process; a plain job
-    cannot promise that. ``read()`` is None, with the reason in ``reason``, wherever the reset
-    cannot be shown to reach every worker: off Linux, on a Connect session, when the Spark REST
-    API does not give the executors' slots, when they differ from ``defaultParallelism`` (a
-    stale ``spark.default.parallelism`` would reset only some workers and still read a number),
-    and when no slot frees up within ``TIMEOUT_S`` (a busy cluster).
+    ``/proc/<pid>/clear_refs``), ``read()`` collects it afterwards.
+
+    Both go through a barrier stage with one task per slot, which puts a task on every
+    executor. A task does not read only its own process: Spark keeps idle Python workers in a
+    pool and hands them out first-in-first-out, and a query with several Python evaluators per
+    task (a pandas UDF over a Python UDF) leaves more idle workers than slots, so one task per
+    slot would land on other workers than the shape's tasks did (a shape that held 400 MB read
+    as the pool's 125 MB). Each task therefore reads, and resets, every Python worker of its
+    executor: the ``python -m pyspark.daemon`` / ``pyspark.worker`` processes below the
+    executor's JVM. A worker that exits during the shape takes its high-water mark with it.
+
+    ``read()`` is None, with the reason in ``reason``, wherever the reset cannot be shown to
+    reach every worker: off Linux, on a Connect session, when the Spark REST API does not give
+    the executors' slots, when they differ from ``defaultParallelism`` (a stale
+    ``spark.default.parallelism`` would leave an executor without a task and still read a
+    number), when a live worker's counter cannot be reset, and when no slot frees up within
+    ``TIMEOUT_S`` (a busy cluster).
 
     Why not sampling: a sampler would have to run inside the workers during the shape and
     compete with it for slots. The reset needs no thread, and it costs two short jobs. It
@@ -344,37 +445,28 @@ class WorkerPeak:
                 "spark.jobGroup.id", None
             )  # PySpark has no clearJobGroup
 
-    def _sweep(self, reset: bool) -> Optional[float]:
-        def task(
-            it,
-        ):  # nested: pickled by value, so a worker needs no geobrix to run it
-            import pandas as pd  # imported first: part of the baseline, not of the shape
-
-            for _ in it:
-                pass
-            hwm = 0.0
-            with open("/proc/self/status") as fh:
-                for line in fh:
-                    if line.startswith("VmHWM:"):
-                        hwm = float(line.split()[1]) / 1024.0
-            if reset:
-                with open("/proc/self/clear_refs", "w") as fh:
-                    fh.write("5")
-            yield pd.DataFrame({"hwm": [hwm]})
+    def _sweep(self, reset: bool):
+        """(peak MB over every Python worker, live workers whose counter could not be reset)."""
+        from pyspark.sql import functions as F
 
         n = self._slots
+        task = _sweep_task(reset, _worker_finder())
         row = self._bounded(
             lambda: self.spark.range(n, numPartitions=n)
-            .mapInPandas(task, "hwm double", barrier=True)
-            .agg({"hwm": "max"})
+            .mapInPandas(task, "hwm double, missed long", barrier=True)
+            .agg(
+                F.max("hwm"), F.sum("missed")
+            )  # by expression: a dict does not keep its order
             .first()
         )
-        return float(row[0]) if row and row[0] is not None else None
+        return (float(row[0] or 0.0), int(row[1] or 0)) if row else (0.0, 0)
 
     def start(self) -> None:
         if self.reason is None:
             try:
-                self._sweep(reset=True)
+                _, missed = self._sweep(reset=True)
+                if missed:
+                    raise RuntimeError(f"{missed} live Python worker(s) not resettable")
             except Exception as exc:  # noqa: BLE001
                 self._fail("reset", exc)
 
@@ -382,7 +474,7 @@ class WorkerPeak:
         if self.reason is not None:
             return None
         try:
-            return self._sweep(reset=False)
+            return self._sweep(reset=False)[0]
         except Exception as exc:  # noqa: BLE001
             self._fail("read", exc)
             return None

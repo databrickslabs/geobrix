@@ -404,11 +404,10 @@ def test_connect_session_records_unavailable_metrics_instead_of_failing():
     assert _Forbidden.touched == []  # nothing a Connect session refuses was even tried
 
 
-@LINUX
-def test_worker_peak_is_the_shapes_not_the_workers_lifetime(spark_session_local):
+def _peak_shapes(spark):
+    """(peak_of, heavy, light): a UDF that holds 400 MB, one that holds nothing, and the worker
+    peak WorkerPeak reads for a query run between its reset and its read."""
     from pyspark.sql import functions as F
-
-    spark = spark_session_local
 
     @F.udf("long")
     def heavy(x):
@@ -423,13 +422,88 @@ def test_worker_peak_is_the_shapes_not_the_workers_lifetime(spark_session_local)
 
     def peak_of(df):
         peak = attribution.WorkerPeak(spark)
+        assert peak.reason is None, peak.reason
         peak.start()
         df.collect()
         return peak.read()
 
-    assert peak_of(spark.range(4, numPartitions=4).select(heavy("id"))) >= 400
-    # a trivial shape after it does not inherit the 400 MB
-    assert peak_of(spark.range(1000, numPartitions=4).select(F.sum(light("id")))) < 150
+    return peak_of, heavy, light
+
+
+def _python_workers():
+    """The Python worker processes of this machine's Spark sessions: the `pyspark.daemon`
+    processes whose parent is a `pyspark.daemon` too (the daemon's forked children)."""
+    ppid, argv = {}, {}
+    for d in (d for d in os.listdir("/proc") if d.isdigit()):
+        try:
+            with open(f"/proc/{d}/cmdline", "rb") as fh:
+                argv[int(d)] = fh.read()
+            with open(f"/proc/{d}/stat") as fh:
+                ppid[int(d)] = int(fh.read().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            continue  # exited while we looked
+    daemon = {p for p, a in argv.items() if b"pyspark.daemon" in a}
+    return [p for p in daemon if ppid[p] in daemon]
+
+
+def _assert_the_peak_is_the_shapes(spark, heavy_partitions, warm=None):
+    """A shape that holds 400 MB reads at least that; a trivial shape after it does not inherit it.
+
+    The second reading is held against a trivial shape's own, taken first on the same workers:
+    a pool that earlier tests left holding 250 MB reads that, whatever runs, but never the
+    400 MB more that a heavy shape adds. `warm` runs before any reading."""
+    from pyspark.sql import functions as F
+
+    peak_of, heavy, light = _peak_shapes(spark)
+    if warm:
+        warm(light)
+    trivial = spark.range(1000, numPartitions=4).select(F.sum(light("id")))
+    floor = peak_of(trivial)
+
+    assert (
+        peak_of(
+            spark.range(heavy_partitions, numPartitions=heavy_partitions).select(
+                heavy("id")
+            )
+        )
+        >= 400
+    )
+    assert peak_of(trivial) < floor + 100
+
+
+@LINUX
+def test_worker_peak_is_the_shapes_not_the_workers_lifetime(spark_session_local):
+    _assert_the_peak_is_the_shapes(spark_session_local, heavy_partitions=4)
+
+
+@LINUX
+def test_worker_peak_reaches_every_python_worker_not_one_per_slot(spark_session_local):
+    # A query with two Python evaluators in each task (a pandas UDF over a Python UDF) takes two
+    # workers per task, so the pool is left with more idle workers than the session has slots.
+    # Spark hands idle workers out first-in-first-out: a sweep that only reads and resets the
+    # process it runs in lands on other workers than the shape did, and a shape that held 400 MB
+    # read as the pool's baseline (125 MB here, 245 MB in the full file, 298 MB on the CI runner).
+    import pandas as pd
+    from pyspark.sql import functions as F
+
+    spark = spark_session_local
+    slots = spark.sparkContext.defaultParallelism
+
+    @F.pandas_udf("long")
+    def plus1(s: pd.Series) -> pd.Series:
+        return s + 1
+
+    def two_workers_per_task(light):
+        spark.range(4 * slots, numPartitions=2 * slots).select(
+            plus1(light("id"))
+        ).collect()
+        assert (
+            len(_python_workers()) > slots
+        ), "the warm-up left no more workers than slots"
+
+    _assert_the_peak_is_the_shapes(
+        spark, heavy_partitions=slots, warm=two_workers_per_task
+    )
 
 
 _N1 = """

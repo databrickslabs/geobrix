@@ -26,6 +26,7 @@ import hashlib
 import importlib.util
 import re
 import sys
+import zipfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -345,6 +346,15 @@ def java_classes(root: Path, pins: dict) -> list:
     got = hashlib.sha256(path.read_bytes()).hexdigest()
     if got != want:
         return [f"{rel}: sha256 is {got}, {RUST_PINS} says GDAL_JAVA_JAR_SHA256={want}"]
+    # the build the classes came from (java_jar.py stage records it in the jar)
+    try:
+        with zipfile.ZipFile(path) as z:
+            props = z.read("META-INF/gbx-gdal.properties").decode()
+    except (KeyError, zipfile.BadZipFile):
+        return [f"{rel}: no META-INF/gbx-gdal.properties (restage it with scripts/native/java_jar.py stage)"]
+    built = dict(ln.split("=", 1) for ln in props.splitlines() if "=" in ln).get("gdal.version")
+    if built != pins["GDAL_VERSION"]:
+        return [f"{rel}: holds the classes of GDAL {built}, pins.conf says GDAL_VERSION={pins['GDAL_VERSION']}"]
     return []
 
 

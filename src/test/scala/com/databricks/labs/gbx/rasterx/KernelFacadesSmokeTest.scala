@@ -153,7 +153,10 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         assert(vsimemEntries() == before, "the facade left in-memory GDAL files behind")
     }
 
-    test("the BNG L2 and UC facades run on a slim classpath: no Catalyst, no unsafe, no Kryo") {
+    /** [[SlimClasspathProbe]] with `args` in a child JVM whose classpath is the facades, scala-library, JTS, the GDAL bindings,
+      * spark-sql-api with what its `Row` needs, and what the GDAL start-up needs of Spark core, Hadoop and log4j: no
+      * Catalyst, no unsafe types, no Kryo, and no spark-network-common. Its output, once it exited 0. */
+    private def runSlim(args: String*): String = {
         def where(c: Class[_]): String = Paths.get(c.getProtectionDomain.getCodeSource.getLocation.toURI).toString
         // scalastyle:off classforname
         def whereNamed(name: String): String = where(Class.forName(name)) // a class that is private[spark]
@@ -184,10 +187,24 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
           where(classOf[org.apache.logging.log4j.core.Filter]) // log4j-core
         ).distinct.mkString(java.io.File.pathSeparator)
         val javaBin = Paths.get(System.getProperty("java.home"), "bin", "java").toString
-        val child = new ProcessBuilder(javaBin, "-cp", classpath, SlimClasspathProbe.getClass.getName.stripSuffix("$"))
+        val child = new ProcessBuilder((Seq(javaBin, "-cp", classpath, SlimClasspathProbe.getClass.getName.stripSuffix("$")) ++ args): _*)
             .redirectErrorStream(true).start()
         val output = scala.io.Source.fromInputStream(child.getInputStream, "UTF-8").mkString
         assert(child.waitFor(60, TimeUnit.SECONDS) && child.exitValue() == 0, output)
+        output
+    }
+
+    test("the facades' GDAL start-up on a slim classpath reads no Spark class it cannot load") {
+        // KernelGdal's start-up (a Java UDF or UC handler: no session, an empty configuration). The driver policy's switch
+        // falls back to the JVM's SparkConf (SparkEnv); Spark core is on this classpath but spark-network-common is not,
+        // so loading SparkEnv fails (NoClassDefFoundError: ...SecretKeyHolder). That must mean "no cluster conf", not a
+        // failed GDAL start-up.
+        val lines = runSlim("start-up").linesIterator.toSeq
+        assert(lines.exists(_.startsWith("no-config start-up: loaded ")), lines.mkString("\n"))
+    }
+
+    test("the BNG L2 and UC facades run on a slim classpath: no Catalyst, no unsafe, no Kryo") {
+        val output = runSlim()
         val lines = output.linesIterator.toSeq
         assert(lines.contains("L2 good: TQ3080"), output)
         assert(lines.contains("UC good: TQ38SW"), output)

@@ -85,9 +85,16 @@ object GDALManager extends Logging {
         val env = Option(System.getenv(PolicyEnv))
         val conf = config
             .flatMap(_.configs.get(PolicyConf))
-            .orElse(Option(SparkEnv.get).flatMap(_.conf.getOption(PolicyConf)))
+            .orElse(clusterConf(PolicyConf))
         !(env.exists(_.trim.equalsIgnoreCase("off")) || conf.exists(_.trim.equalsIgnoreCase("off")))
     }
+
+    /** `key` in the JVM's SparkConf, or None. A slim classpath (a Unity Catalog or standard-mode sandbox running the
+      * facades) has Spark core without spark-network-common, so loading SparkEnv fails (SecretKeyHolder): no cluster
+      * conf there, not a failed GDAL start-up. */
+    private def clusterConf(key: String): Option[String] =
+        try Option(SparkEnv.get).flatMap(_.conf.getOption(key))
+        catch { case _: LinkageError => None }
 
     /** Decide the policy at the JVM's first GDAL use: the first decision holds (later configs are logged, not applied). */
     private def decidePolicy(config: Option[ExpressionConfig]): Unit = {

@@ -1,9 +1,10 @@
 package com.databricks.labs.gbx.rasterx
 
+import com.databricks.labs.gbx.kernels.KernelGdal
 import com.databricks.labs.gbx.kernels.uc.BngUc
 import com.databricks.labs.gbx.kernels.udf.{BngEastNorthAsBngUdf, BngTessellateUdf, RstMergeArrayBytesUdf}
 import com.databricks.labs.gbx.rasterx.expressions.agg.mvp.BngRasterizeCellsBytesUdf
-import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import org.apache.spark.sql.Row
 
 import scala.jdk.CollectionConverters._
@@ -39,7 +40,20 @@ object SlimClasspathProbe {
         } finally RasterDriver.releaseDataset(ds)
     }
 
-    def main(args: Array[String]): Unit = {
+    def main(args: Array[String]): Unit =
+        if (args.headOption.contains("start-up")) startUp() else facades()
+
+    /** The facades' GDAL start-up (KernelGdal: no session, an empty configuration), then the JNI it loaded. */
+    private def startUp(): Unit = {
+        // scalastyle:off println
+        println("no-config start-up: " + attempt {
+            KernelGdal.ensureInit()
+            "loaded " + GDALManager.ensureJniLoaded(None).jni
+        })
+        // scalastyle:on println
+    }
+
+    private def facades(): Unit = {
         val udf = new BngEastNorthAsBngUdf()
         val tessellate = new BngTessellateUdf()
         val offset = "POLYGON((530100 180100, 532900 180100, 532900 181900, 530100 181900, 530100 180100))"

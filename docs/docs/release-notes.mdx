@@ -1012,10 +1012,14 @@ formats.
   and `light_env6_all` include it. There is no bare `zarr` extra, and Databricks Runtime 17.3
   and 18 and Serverless environment 5 are not supported. The extra pins `zarr>=3.4.1,<3.5`,
   `numcodecs>=0.17,<0.18`, `zarrs>=0.2.3,<0.3`, `tensorstore>=0.1.85,<0.2`, `obstore>=0.11,<0.13`,
-  `ml_dtypes>=0.5,<1`, `msgspec>=0.19,<1` and `donfig>=0.8,<1`. Each is capped below its next
-  minor (or major) release because `zarrs` builds on `zarr` internals and states no ceiling for
-  `zarr`. GeoBrix reads cloud storage with `obstore` and adds no `fsspec`, `s3fs` or `gcsfs`. See
-  [Zarr Stores](./formats/zarr#what-you-need).
+  `ml_dtypes>=0.5,<1`, `msgspec>=0.19,<1` and `donfig>=0.8,<1`. None of these packages is
+  preinstalled on Databricks Runtime 19, Databricks Runtime 19 ML or Serverless environment 6,
+  and the packages they need that the runtimes do ship (`numpy`, `typing_extensions`,
+  `packaging`, `google-crc32c` and `pyyaml`) are already new enough, so one set of pins serves
+  all three and installing the extra changes no package the runtime provides. Each is capped
+  below its next minor (or major) release because `zarrs` builds on `zarr` internals and states
+  no ceiling for `zarr`. GeoBrix reads cloud storage with `obstore` and adds no `fsspec`,
+  `s3fs` or `gcsfs`. See [Zarr Stores](./formats/zarr#what-you-need).
 - **GeoBrix no longer installs PySpark (breaking for local installs).** On Databricks the
   runtime provides PySpark, so `%pip install geobrix[...]` no longer downloads a second copy.
   If you run GeoBrix against a local Spark session, install `pyspark>=4.0.0` alongside it. See

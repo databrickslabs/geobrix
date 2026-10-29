@@ -103,6 +103,9 @@ PACKAGES=(
     "maven:::MAVEN_VERSION=|distributionUrl=|<version>\[3\.[0-9.]+,\)</version>:::.mvn/wrapper (CI); scripts/ci/test_maven_wrapper.py keeps them equal"
     # Geospatial — geopandas not in DBR; pinned to be pandas-2.2 compatible
     "geopandas:::geopandas(==|_VERSION=):::current stable, compatible with DBR pandas 2.2"
+    # Zarr extra ([zarr_dbr19] / [zarr_env6]) — none of these is preinstalled on DBR 19, env 6 or DBR 19 ML;
+    # the pins are floors + next-minor caps. Matches only the extra's own entries in pyproject.toml.
+    "zarr:::^ +\"(zarr|numcodecs|zarrs|tensorstore|obstore|ml_dtypes|msgspec|donfig)>=:::Zarr runtime-deps report (not in DBR 19 / env 6 / DBR 19 ML); python/geobrix/pyproject.toml [zarr_dbr19]"
 )
 
 print_package() {

@@ -479,6 +479,11 @@ def _release_marker(root: str, table: str, kind: str) -> None:
 # "must not exist"), so Delta lets exactly one claimer in; a claimer that loses finds the
 # winner's row and is refused. The marker file is written after the win, as the note a person
 # or an older reader finds in the directory.
+#
+# A root with no ledger yet (every new store's) is claimed by founding it: one CREATE TABLE AS
+# SELECT writes the table with the claim in it. Delta writes a table's first version once, so
+# exactly one founder lands, and its row sits ahead of any row added later: no read before,
+# no MERGE, no read back. A founder that does not land claims through the ledger as above.
 
 _LEDGER_KEY = "owner"
 _LEDGER_DDL = """
@@ -491,6 +496,54 @@ TBLPROPERTIES (
   'delta.enableDeletionVectors' = 'false',
   'delta.enableRowTracking' = 'true')
 """
+
+
+_FOUNDING_SQL = """
+CREATE TABLE {table}
+USING DELTA
+TBLPROPERTIES (
+  'delta.enableDeletionVectors' = 'false',
+  'delta.enableRowTracking' = 'true')
+AS SELECT
+  CAST(kind AS STRING) AS `kind`, CAST(NULL AS STRING) AS `array`,
+  CAST(key AS STRING) AS `key`, CAST(NULL AS STRING) AS `shard_key`,
+  CAST(NULL AS STRING) AS `file`, CAST(NULL AS BIGINT) AS `offset`,
+  CAST(NULL AS BIGINT) AS `length`, CAST(NULL AS STRING) AS `checksum`,
+  CAST(NULL AS STRING) AS `origin`, CAST(NULL AS STRING) AS `identity`,
+  CAST(write_id AS STRING) AS `write_id`, CAST(NULL AS STRING) AS `tag`,
+  CAST(meta AS STRING) AS `meta`
+FROM VALUES ({lock}), ({commit}) AS v(kind, key, write_id, meta)
+"""
+
+
+def _found_ledger(spark, root: str, claim_id: str, body: dict, table: str) -> bool:
+    """Create the ledger of ``root``, which has none, with this claim in it: ``True`` when
+    this call's statement landed. The claim and its commit row (what ``_manifest.commit``
+    writes) are the table's first version, which Delta lets one creator write, so a claim
+    that lands this way is the first and is not read back.
+
+    ``False`` on any failure: the ledger is there already, a concurrent founder won, or the
+    statement failed (and may have landed all the same). The caller then claims through the
+    ledger with the same ``claim_id``, which finds the winner, or this claim if it landed.
+    """
+    if os.path.exists(os.path.join(root, OWNER_LEDGER)):
+        return False
+    commit_meta = json.dumps({"mode": "claim", "table": table}, sort_keys=True)
+    rows = (
+        ("lock", _LEDGER_KEY, claim_id, json.dumps(body, sort_keys=True)),
+        ("commit", claim_id, claim_id, commit_meta),
+    )
+    lock, commit_row = (", ".join(_lit(v) for v in r) for r in rows)
+    try:
+        spark.sql(
+            _FOUNDING_SQL.format(
+                table=_q(_ledger_table(root)), lock=lock, commit=commit_row
+            )
+        )
+        return True
+    except Exception as e:  # noqa: BLE001 - the ledger decides, below
+        _LOG.debug("founding the ledger of %s did not land: %s", root, e)
+        return False
 
 
 def _ledger_table(root: str) -> str:
@@ -582,7 +635,8 @@ def _claim_ledger(spark, root: str, table: str, kind: str) -> bool:
     ``False`` when the ledger already names this table and kind. Raises
     ``ZarrOwnershipError`` when another table owns it.
 
-    One insert wins. A claimer that finds the row (before or after trying) is refused. A
+    A root with no ledger is claimed by founding it (``_found_ledger``). Otherwise one insert
+    wins. A claimer that finds the row (before or after trying) is refused. A
     commit Delta rejects as a conflict is tried again after a jittered wait, at most
     ``_write._ATTEMPTS`` times; the next look finds the winner. Once its own
     commit landed, the claimer reads the ledger back: if another claim sits ahead of its own
@@ -591,9 +645,11 @@ def _claim_ledger(spark, root: str, table: str, kind: str) -> bool:
     from databricks.labs.gbx.zarr import _write
 
     ledger = _ledger_table(root)
-    _create_ledger(spark, ledger, root)
     claim_id = uuid.uuid4().hex
     body = {"table": table, "kind": kind, "format": FORMAT_VERSION}
+    if _found_ledger(spark, root, claim_id, body, table):
+        return True
+    _create_ledger(spark, ledger, root)
     row = {
         "kind": "lock",
         "key": _LEDGER_KEY,
@@ -605,6 +661,10 @@ def _claim_ledger(spark, root: str, table: str, kind: str) -> bool:
     for attempt in range(_write._ATTEMPTS):
         held = _held(spark, ledger)
         if held:
+            if (
+                held[0]["write_id"] == claim_id
+            ):  # the founding statement landed after all
+                return True
             return _owned_by(held[0], root, table, kind)
         try:
             _manifest.commit(

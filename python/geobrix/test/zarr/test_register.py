@@ -345,14 +345,25 @@ def _ledger_owners(spark, root):
     return [c["table"] for c in _register._held(spark, _register._ledger_table(root))]
 
 
+def _empty_ledger(spark, root):
+    """Make the ledger of ``root`` with no claim in it, so a claim goes through the ledger's
+    compare-and-swap rather than founding it (what a root whose claim was given back has).
+    """
+    root = str(root)
+    os.makedirs(root, exist_ok=True)
+    _register._create_ledger(spark, _register._ledger_table(root), root)
+
+
+@pytest.mark.parametrize("founded", [False, True], ids=["new-root", "empty-ledger"])
 def test_concurrent_claims_of_one_root_have_exactly_one_winner(
-    spark_delta, tmp_path, monkeypatch
+    spark_delta, tmp_path, monkeypatch, founded
 ):
     """Eight tables claim one root at the same moment, on a file system whose exclusive
     create is not exclusive: what a Unity Catalog Volume does across nodes (two claimers
     both created the marker, and the recorded owner was often not the winner). The
     ownership ledger, a Delta table in the root, lets exactly one in; the rest are refused
-    with a fix, and the marker names the winner."""
+    with a fix, and the marker names the winner. On a new root they race to found the
+    ledger (one first version), on an empty one through its compare-and-swap."""
     from databricks.labs.gbx.zarr import _write
 
     monkeypatch.setattr(_write, "_pause", lambda seconds: None)
@@ -365,6 +376,8 @@ def test_concurrent_claims_of_one_root_have_exactly_one_winner(
 
     monkeypatch.setattr(os, "open", not_exclusive)
     root = tmp_path / "ov"
+    if founded:  # every claimer goes through the MERGE, none founds the ledger
+        _empty_ledger(spark_delta, root)
     names = [f"c.s.t{i}" for i in range(8)]
     barrier, outcome = threading.Barrier(len(names)), {}
 
@@ -432,6 +445,7 @@ def test_a_claim_whose_commit_landed_but_whose_lookup_failed_still_wins(
         return real(*a, **k)
 
     root = str(tmp_path / "ov")
+    _empty_ledger(spark_delta, root)
     monkeypatch.setattr(_register._manifest, "find_commit_version", flaky)
     assert _register.claim_root(spark_delta, root, "c.s.t", "overlay") is True
     monkeypatch.undo()
@@ -456,6 +470,7 @@ def test_a_failed_commit_is_the_error_raised_when_the_lookup_after_it_fails_too(
         raise RuntimeError("commit failed")
 
     root = str(tmp_path / "ov")
+    _empty_ledger(spark_delta, root)
     monkeypatch.setattr(_register, "_held", held)
     monkeypatch.setattr(_register._manifest, "commit", commit)
     with pytest.raises(RuntimeError, match="commit failed"):
@@ -481,12 +496,72 @@ def test_a_claim_whose_read_back_fails_leaves_no_row_behind(
         return real_held(spark, ledger)
 
     root = str(tmp_path / "ov")
+    _empty_ledger(spark_delta, root)
     monkeypatch.setattr(_register, "_held", held)
     with pytest.raises(RuntimeError, match="read-back failed"):
         _register.claim_root(spark_delta, root, "c.s.t", "overlay")
     monkeypatch.undo()
     assert _ledger_owners(spark_delta, root) == []
     assert _register.claim_root(spark_delta, root, "c.s.other", "overlay") is True
+
+
+def _refused(what):
+    def refused(*a, **k):
+        raise AssertionError(f"{what} ran")
+
+    return refused
+
+
+def test_a_new_root_is_claimed_by_founding_its_ledger_in_one_commit(
+    spark_delta, tmp_path, monkeypatch
+):
+    """A root with no ledger: one statement creates the ledger with the claim in it. No
+    CREATE IF NOT EXISTS, no read, no MERGE, no read back; the ledger has one version.
+    """
+    root = str(tmp_path / "ov")
+    monkeypatch.setattr(_register, "_create_ledger", _refused("create"))
+    monkeypatch.setattr(_register, "_held", _refused("read"))
+    monkeypatch.setattr(_register._manifest, "commit", _refused("merge"))
+    assert _register.claim_root(spark_delta, root, "c.s.t", "overlay") is True
+    monkeypatch.undo()
+    ledger = _register._ledger_table(root)
+    assert spark_delta.sql(f"DESCRIBE HISTORY {ledger}").count() == 1
+    held = _register._held(spark_delta, ledger)
+    assert [c["table"] for c in held] == ["c.s.t"] and held[0]["kind"] == "overlay"
+    kinds = sorted(
+        r["kind"]
+        for r in spark_delta.sql(
+            f"SELECT kind FROM {ledger} WHERE tag IS NULL"
+        ).collect()
+    )
+    assert kinds == ["commit", "lock"]  # the rows a claim through the MERGE leaves
+    assert json.loads((tmp_path / "ov" / OWNER_MARKER).read_text())["table"] == "c.s.t"
+    # the claim is the first: another table is refused, the owner claims again for free
+    with pytest.raises(ZarrOwnershipError, match="c.s.t"):
+        _register.claim_root(spark_delta, root, "c.s.other", "overlay")
+    assert _register.claim_root(spark_delta, root, "c.s.t", "overlay") is False
+    _register.release_root(spark_delta, root, "c.s.t", "overlay")
+    assert _ledger_owners(spark_delta, root) == []
+    assert _register.claim_root(spark_delta, root, "c.s.other", "overlay") is True
+
+
+def test_a_founding_statement_that_landed_but_raised_is_still_this_claim(
+    spark_delta, tmp_path, monkeypatch
+):
+    """The founding statement lands and then reports a failure (a lost reply): the claim
+    goes on through the ledger, finds its own row first, and has won."""
+    real = _register._found_ledger
+
+    def landed_but_raised(*a, **k):
+        assert real(*a, **k)
+        return False
+
+    root = str(tmp_path / "ov")
+    monkeypatch.setattr(_register, "_found_ledger", landed_but_raised)
+    monkeypatch.setattr(_register._manifest, "commit", _refused("merge"))
+    assert _register._claim_ledger(spark_delta, root, "c.s.t", "overlay") is True
+    monkeypatch.undo()
+    assert _ledger_owners(spark_delta, root) == ["c.s.t"]
 
 
 def test_register_never_writes_into_base(spark_delta, era5_v3_sharded, tmp_path):

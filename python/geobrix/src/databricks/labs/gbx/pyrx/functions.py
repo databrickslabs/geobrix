@@ -31,7 +31,7 @@ from pyspark.sql.types import (
 )
 
 from databricks.labs.gbx import _register
-from databricks.labs.gbx._gdal_policy import open_data
+from databricks.labs.gbx._gdal_policy import open_bytes, open_data
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx._udf import ColLike, _col, _crs_col
 from databricks.labs.gbx.pyrx.core import _nodata, accessors
@@ -851,7 +851,7 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
 
                     if _os.path.exists(staged):
                         _os.remove(staged)
-            with MemoryFile(_src_bytes) as _src_mf, _src_mf.open() as src:
+            with MemoryFile(_src_bytes) as _src_mf, open_bytes(_src_mf) as src:
                 data = src.read()
                 # The file's own mask band (not an alpha band) is part of its bytes;
                 # carry it, as a virtual tile of this file reads it.

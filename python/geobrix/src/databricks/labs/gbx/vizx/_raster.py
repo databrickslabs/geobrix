@@ -9,7 +9,7 @@ import os
 
 import numpy as np
 
-from databricks.labs.gbx._gdal_policy import open_data
+from databricks.labs.gbx._gdal_policy import open_bytes, open_data
 
 # ---------------------------------------------------------------------------
 # emphasis styling defaults (raster tier)
@@ -676,7 +676,7 @@ def plot_raster(
         from rasterio.io import MemoryFile
 
         with MemoryFile(bytes(raster_bytes)) as mf:
-            with mf.open() as src:
+            with open_bytes(mf) as src:
                 data, transform, scale = _decimated_read(src, max_pixels)
                 return _render(
                     data,
@@ -762,7 +762,7 @@ def plot_mask_layers(
     handles = []
     for (label, raster_bytes), color in zip(layers, colors):
         with MemoryFile(bytes(raster_bytes)) as mf:
-            with mf.open() as src:
+            with open_bytes(mf) as src:
                 data, transform, _ = _decimated_read(src, max_pixels)
         band = data[0]
         if isinstance(band, np.ma.MaskedArray):

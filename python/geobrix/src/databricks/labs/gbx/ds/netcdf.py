@@ -18,6 +18,7 @@ from typing import Dict, Iterator, List, Tuple
 from pyspark.sql.datasource import DataSource, DataSourceReader
 from pyspark.sql.types import StructType
 
+from databricks.labs.gbx._gdal_policy import open_bytes
 from databricks.labs.gbx.ds import _encode, _listing, _netcdf, _quarantine
 from databricks.labs.gbx.ds.raster import RasterGbxReader, _FilePartition, reader_schema
 
@@ -126,7 +127,7 @@ def _encode_single_band_tile(
     with MemoryFile() as mf:
         with mf.open(**profile) as out:
             out.write(arr.astype(profile["dtype"]), 1)
-        with mf.open() as rds:
+        with open_bytes(mf) as rds:
             cellid, raster_bytes, meta = _encode.encode_tile(
                 rds,
                 window=(0, 0, w, h),
@@ -219,7 +220,7 @@ def _encode_multiband_tile(
                 out.write(arr_k.astype(dtype), k + 1)
                 del arr_k
             out.descriptions = tuple(f"{band_dim}={c}" for c in band_coords)
-        with mf.open() as rds:
+        with open_bytes(mf) as rds:
             cellid, raster_bytes, meta = _encode.encode_tile(
                 rds,
                 window=(0, 0, w, h),

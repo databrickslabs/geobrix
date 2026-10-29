@@ -68,7 +68,7 @@ from typing import Dict, Iterator, Optional, Sequence, Tuple
 from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
 from pyspark.sql.types import StringType, StructField, StructType
 
-from databricks.labs.gbx._gdal_policy import open_data
+from databricks.labs.gbx._gdal_policy import open_bytes, open_data
 from databricks.labs.gbx.ds import _encode, _listing
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import budget
@@ -1279,7 +1279,7 @@ class RasterGbxReader(DataSourceReader):
                             all_parents=partition.all_parents,
                             tile_format="gtiff",
                         )
-            with MemoryFile(win_bytes) as mf, mf.open() as wds:
+            with MemoryFile(win_bytes) as mf, open_bytes(mf) as wds:
                 clipped = _clip.clip_dataset(
                     wds, partition.clip_polygon, partition.clip_crs
                 )

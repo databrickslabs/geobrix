@@ -19,6 +19,7 @@ from pyspark.sql import functions as f
 from pyspark.sql.functions import udtf
 from pyspark.sql.types import ArrayType, BinaryType, IntegerType
 
+from databricks.labs.gbx._gdal_policy import open_bytes
 from databricks.labs.gbx.pygx.functions import _BngTessellateExplode
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import agg as agg_core
@@ -286,7 +287,7 @@ def canvas_max(rasters):
 
     best, seen, profile = None, None, None
     for r in rasters or []:
-        with MemoryFile(bytes(r)) as mf, mf.open() as ds:
+        with MemoryFile(bytes(r)) as mf, open_bytes(mf) as ds:
             a = ds.read(1).astype("float64")
             present = a != ds.nodata  # a NaN is a cell with a null value: present
             if best is None:

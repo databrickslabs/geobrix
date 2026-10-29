@@ -1,12 +1,20 @@
-"""Structural guard: every direct raster open in the Python sources goes through ``open_data``, or is an allowlisted
-site with its reason.
+"""Structural guard: every direct raster open in the Python sources goes through ``open_data`` (a name) or
+``open_bytes`` (bytes), or is an allowlisted site with its reason.
 
-A direct open is a call to ``rasterio.open``, osgeo's ``gdal.Open`` / ``gdal.OpenEx`` (and the ``GDALOpen*`` names of
-the ctypes engine), rio-tiler's ``Reader`` or a rasterio ``shutil.copy``, on a path that is not a string literal, under
-whatever name the file binds the module or the function to (``import rasterio as _rio``, ``from rasterio.shutil import
-copy``, ``rasterio.shutil.copy``). Such a call opens a file the data may name, with GDAL's whole registry and no driver
-list of GeoBrix's, so it is the policy's (``_gdal_policy.open_data``) or it is a site whose file GeoBrix itself wrote,
-with the reason given below.
+A direct open is a call that opens a raster with GDAL's whole driver registry, under whatever name the file binds the
+module or the function to (``import rasterio as _rio``, ``from rasterio.shutil import copy``, ``rasterio.shutil.copy``):
+
+- by name, on a path that is not a string literal: ``rasterio.open``, rasterio's ``DatasetReader``, osgeo's
+  ``gdal.Open`` / ``gdal.OpenEx`` / ``gdal.OpenShared`` (the path given positionally, or as ``utf8_path=``), the
+  ``GDALOpen*`` names of the ctypes engine, rio-tiler's ``Reader`` (``rio_tiler.io`` or ``rio_tiler.io.rasterio``)
+  unless it is handed an open dataset, a rasterio ``shutil.copy``, and the GDAL utilities (``Translate``, ``Warp``,
+  ``Info``, ``BuildVRT``, ``DEMProcessing``, ``VectorTranslate``, ``MultiDimTranslate``) given a non-literal source;
+- of bytes: the read form of a ``MemoryFile``, ``mf.open()`` with no arguments, on a name the file binds to a
+  ``MemoryFile`` (``with MemoryFile(b) as mf`` or ``mf = MemoryFile(b)``).
+
+Such a call is the policy's (``_gdal_policy``, which is not scanned) or a site whose file or bytes GeoBrix itself wrote,
+with the reason given below. Not detected, on purpose: ``getattr(rasterio, "open")``, a ctypes ``GDALOpenShared``, and
+a ``MemoryFile`` reached through a name the file does not bind to one (a parameter); none is used today.
 
 The allowlist is keyed by file, the exact source text of the line, and the number of occurrences of that line in the
 file: a new site, and a verbatim copy of an allowlisted line, both fail until the allowlist names them.
@@ -34,28 +42,44 @@ OPEN_RECEIVERS = {
 # module -> the attributes of it that open a file by name
 OPENERS = {
     "rasterio": {"open"},
+    "rasterio.io": {"DatasetReader"},
     "osgeo.gdal": {"Open", "OpenEx", "OpenShared"},
     "osgeo.ogr": {"Open", "OpenShared"},
     "rasterio.shutil": {"copy"},
     "rio_tiler.io": {"Reader"},
+    "rio_tiler.io.rasterio": {"Reader"},
 }
 FIXED_ATTRS = {"open", "Open", "OpenEx", "OpenShared", "GDALOpen", "GDALOpenEx"}
 COPY_RECEIVERS = ("rio_shutil", "_rio_shutil", "rio_copy")
-PATH_KEYWORDS = ("fp", "input", "src_path", "path", "src")
+PATH_KEYWORDS = ("fp", "input", "src_path", "path", "src", "utf8_path")
+# osgeo.gdal's utilities: the position of the source argument, and its keyword names
+UTILITIES = {
+    "Info": 0,
+    "Translate": 1,
+    "Warp": 1,
+    "BuildVRT": 1,
+    "DEMProcessing": 1,
+    "VectorTranslate": 1,
+    "MultiDimTranslate": 1,
+}
+SOURCE_KEYWORDS = ("ds", "srcDS", "srcDSOrSrcDSTab")
+# a MemoryFile read form has no path: it is a site whatever it holds
+BYTES = object()
 
 
-def _path_arg(call: ast.Call):
-    if call.args:
-        return call.args[0]
+def _arg(call: ast.Call, index: int, keywords):
+    if len(call.args) > index:
+        return call.args[index]
     for kw in call.keywords:
-        if kw.arg in PATH_KEYWORDS:
+        if kw.arg in keywords:
             return kw.value
     return None
 
 
 def _bindings(tree) -> tuple:
-    """(modules, functions): the file's local names for the modules of OPENERS, and for their opening functions."""
-    modules, functions = {}, {}
+    """(modules, functions, memfiles): the file's local names for the modules of OPENERS, for their opening functions,
+    and for MemoryFile instances."""
+    modules, functions, memfiles = {}, {}, set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for a in node.names:
@@ -71,7 +95,21 @@ def _bindings(tree) -> tuple:
                     modules[a.asname or a.name] = qual
                 elif a.name in OPENERS.get(node.module, ()):
                     functions[a.asname or a.name] = (node.module, a.name)
-    return modules, functions
+        elif isinstance(node, ast.withitem) and _is_memoryfile(node.context_expr):
+            if isinstance(node.optional_vars, ast.Name):
+                memfiles.add(node.optional_vars.id)
+        elif isinstance(node, ast.Assign) and _is_memoryfile(node.value):
+            memfiles.update(t.id for t in node.targets if isinstance(t, ast.Name))
+    return modules, functions, memfiles
+
+
+def _is_memoryfile(node) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    f = node.func
+    return (isinstance(f, ast.Name) and f.id == "MemoryFile") or (
+        isinstance(f, ast.Attribute) and f.attr == "MemoryFile"
+    )
 
 
 def _dotted(node):
@@ -94,47 +132,62 @@ def _hands_a_dataset(call: ast.Call) -> bool:
     )
 
 
-def _is_direct_open(call: ast.Call, modules: dict, functions: dict) -> bool:
+def _opened(call: ast.Call, modules: dict, functions: dict, memfiles: set):
+    """What a direct open opens (the path node, or BYTES), or None when the call is not a direct open."""
     func = call.func
     if isinstance(func, ast.Name):
         target = functions.get(func.id)
-        if target is None:
-            return False
-        return not (target[1] == "Reader" and _hands_a_dataset(call))
+        if target is None or (target[1] == "Reader" and _hands_a_dataset(call)):
+            return None
+        return _arg(call, 0, PATH_KEYWORDS)
     if not isinstance(func, ast.Attribute):
-        return False
+        return None
+    if (
+        func.attr == "open"
+        and isinstance(func.value, ast.Name)
+        and func.value.id in memfiles
+        and not call.args
+        and not call.keywords
+    ):
+        return BYTES
     recv = _dotted(func.value)
     if recv is None:
-        return False
+        return None
     head, _, rest = recv.partition(".")
     module = modules.get(head, head if head in ("rasterio", "osgeo") else None)
-    if module is not None:
-        qual = f"{module}.{rest}" if rest else module
-        if func.attr in OPENERS.get(qual, ()):
-            return not (func.attr == "Reader" and _hands_a_dataset(call))
+    qual = (f"{module}.{rest}" if rest else module) if module is not None else None
+    if qual is not None and func.attr in OPENERS.get(qual, ()):
+        if func.attr == "Reader" and _hands_a_dataset(call):
+            return None
+        return _arg(call, 0, PATH_KEYWORDS)
+    gdal_module = qual == "osgeo.gdal" or (
+        "." not in recv and recv in ("gdal", "_gdal")
+    )
+    if gdal_module and func.attr in UTILITIES:
+        return _arg(call, UTILITIES[func.attr], SOURCE_KEYWORDS)
     if "." not in recv and recv in OPEN_RECEIVERS and func.attr in FIXED_ATTRS:
-        return True
-    return func.attr == "copy" and recv in COPY_RECEIVERS
+        return _arg(call, 0, PATH_KEYWORDS)
+    if func.attr == "copy" and recv in COPY_RECEIVERS:
+        return _arg(call, 0, PATH_KEYWORDS)
+    return None
 
 
 def open_sites_in(text: str):
-    """(line number, source line) of every direct open whose path is not a string literal."""
+    """(line number, source line) of every direct open: of bytes, or of a path that is not a string literal."""
     tree = ast.parse(text)
     lines = text.splitlines()
-    modules, functions = _bindings(tree)
+    modules, functions, memfiles = _bindings(tree)
     hits = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not _is_direct_open(
-            node, modules, functions
-        ):
+        if not isinstance(node, ast.Call):
             continue
-        path = _path_arg(node)
-        if path is None or (
-            isinstance(path, ast.Constant) and isinstance(path.value, str)
+        what = _opened(node, modules, functions, memfiles)
+        if what is None or (
+            isinstance(what, ast.Constant) and isinstance(what.value, str)
         ):
             continue
         hits.append((node.lineno, lines[node.lineno - 1].strip()))
-    return hits
+    return sorted(hits)
 
 
 # The choke point itself: the one place GeoBrix calls rasterio.open for a read (open_data).
@@ -190,7 +243,7 @@ OPEN_SITES = {
     ),
     ("pyrx/core/analysis.py", '_rio_shutil.copy(ds, dem_path, driver="GTiff")'): (
         1,
-        "copies the DEM from the dataset the caller opened through open_data; no name is opened here",
+        "copies the DEM from the dataset the caller opened (through open_data or open_bytes); no name is opened here",
     ),
     (
         "pyrx/core/analysis.py",
@@ -223,6 +276,123 @@ OPEN_SITES = {
     ): (
         1,
         "copies an open dataset (the tile GeoBrix rendered into a MemoryFile) to another MemoryFile; no name is opened",
+    ),
+    (
+        "_native/_selfcheck.py",
+        "with MemoryFile(geotiff_bytes()) as mf, mf.open() as ds:",
+    ): (
+        1,
+        "the self-check reads the GeoTIFF bytes it encoded a line above (geotiff_bytes)",
+    ),
+    ("bench/compression_sweep.py", "with mf2.open() as ds2:"): (
+        1,
+        "the compression sweep reads back the bytes it encoded a few lines above",
+    ),
+    ("bench/datagen.py", "with mf.open() as src:"): (
+        1,
+        "the data generator reads the tile bytes it synthesized a few lines above",
+    ),
+    ("bench/oracles.py", "a.open() as got,"): (
+        2,
+        "a bench oracle reads a tile the bench built as its fixture, or the result tile the function under test returned",
+    ),
+    ("bench/oracles.py", "b.open() as base,"): (
+        1,
+        "a bench oracle reads a tile the bench built as its fixture, or the result tile the function under test returned",
+    ),
+    ("bench/oracles.py", "b.open() as want,"): (
+        1,
+        "a bench oracle reads a tile the bench built as its fixture, or the result tile the function under test returned",
+    ),
+    (
+        "bench/oracles.py",
+        "with MemoryFile(_raster_of(arg_rows[0][0])) as mf, mf.open() as src:",
+    ): (
+        1,
+        "a bench oracle reads a tile the bench built as its fixture, or the result tile the function under test returned",
+    ),
+    (
+        "bench/oracles.py",
+        "with MemoryFile(_raster_of(args[0])) as mf, mf.open() as ds:",
+    ): (
+        1,
+        "a bench oracle reads a tile the bench built as its fixture, or the result tile the function under test returned",
+    ),
+    (
+        "bench/oracles.py",
+        "with MemoryFile(_raster_of(args[0])) as mf, mf.open() as src:",
+    ): (
+        1,
+        "a bench oracle reads a tile the bench built as its fixture, or the result tile the function under test returned",
+    ),
+    (
+        "bench/oracles.py",
+        "with MemoryFile(_raster_of(args[0])) as src_mf, src_mf.open() as src:",
+    ): (
+        1,
+        "a bench oracle reads a tile the bench built as its fixture, or the result tile the function under test returned",
+    ),
+    (
+        "bench/oracles.py",
+        "with MemoryFile(_raster_of(tile)) as mf, mf.open() as src:",
+    ): (
+        1,
+        "a bench oracle reads a tile the bench built as its fixture, or the result tile the function under test returned",
+    ),
+    (
+        "bench/oracles.py",
+        'with MemoryFile(_tile_bytes("EPSG:4326", 32, 32)) as mf, mf.open() as ds:',
+    ): (
+        1,
+        "a bench oracle reads a tile it synthesized on the line (_tile_bytes)",
+    ),
+    ("bench/oracles.py", "with MemoryFile(a) as mf, mf.open() as ds:"): (
+        2,
+        "a bench oracle reads a tile the bench built as its fixture, or the result tile the function under test returned",
+    ),
+    ("bench/oracles.py", "with MemoryFile(b) as m, m.open() as ds:"): (
+        1,
+        "a bench oracle reads a tile the bench built as its fixture, or the result tile the function under test returned",
+    ),
+    (
+        "bench/oracles.py",
+        'with MemoryFile(bytes(_field(t, "raster"))) as o, o.open() as got:',
+    ): (
+        1,
+        "a bench oracle reads a tile the bench built as its fixture, or the result tile the function under test returned",
+    ),
+    (
+        "bench/oracles.py",
+        'with MemoryFile(bytes(_field(t, "raster"))) as o, o.open() as piece:',
+    ): (
+        1,
+        "a bench oracle reads a tile the bench built as its fixture, or the result tile the function under test returned",
+    ),
+    (
+        "bench/oracles.py",
+        'with MemoryFile(bytes(_field(tile, "raster"))) as mf, mf.open() as got:',
+    ): (
+        1,
+        "a bench oracle reads a tile the bench built as its fixture, or the result tile the function under test returned",
+    ),
+    ("bench/oracles.py", "with MemoryFile(bytes(raster)) as a, a.open() as got:"): (
+        1,
+        "a bench oracle reads a tile the bench built as its fixture, or the result tile the function under test returned",
+    ),
+    ("bench/oracles.py", "with MemoryFile(bytes(raster)) as mf, mf.open() as ds:"): (
+        1,
+        "a bench oracle reads a tile the bench built as its fixture, or the result tile the function under test returned",
+    ),
+    ("sample/_bundle.py", "gdal.Translate("): (
+        1,
+        "the sample-bundle generator converts a raster it downloaded or wrote (the viewable Byte copy)",
+    ),
+    (
+        "sample/_bundle.py",
+        'gdal.Translate(str(tif_path), str(hgt_path), format="GTiff").Close()',
+    ): (
+        1,
+        "the sample-bundle generator converts the SRTM .hgt it downloaded to GeoTIFF",
     ),
 }
 
@@ -283,6 +453,31 @@ def test_the_guard_follows_the_names_a_file_binds_the_openers_to():
         "    rio_tiler.io.Reader(p, dataset=ds)\n"
     )
     assert [n for n, _ in open_sites_in(text)] == [7, 8, 9, 10, 11]
+
+
+def test_the_guard_flags_bytes_utilities_and_the_reader_forms():
+    text = (
+        "import rasterio.io as rio_io\n"
+        "from rasterio.io import DatasetReader, MemoryFile\n"
+        "from rio_tiler.io.rasterio import Reader\n"
+        "from osgeo import gdal\n"
+        "def f(p, q, raw):\n"
+        "    DatasetReader(p)\n"
+        "    rio_io.DatasetReader(p)\n"
+        "    gdal.OpenEx(utf8_path=p)\n"
+        "    Reader(p)\n"
+        "    gdal.Translate(q, p)\n"
+        "    gdal.Info(p)\n"
+        "    gdal.Warp(q, [p])\n"
+        "    with MemoryFile(raw) as mf, mf.open() as ds:\n"
+        "        pass\n"
+        "    m2 = MemoryFile(raw)\n"
+        "    m2.open()\n"
+        "    gdal.Translate('/out.tif', '/fixed.tif')\n"
+        "    with MemoryFile() as w, w.open(driver='GTiff', width=1, height=1, count=1, dtype='uint8') as d:\n"
+        "        pass\n"
+    )
+    assert [n for n, _ in open_sites_in(text)] == [6, 7, 8, 9, 10, 11, 12, 13, 16]
 
 
 def test_a_verbatim_copy_of_an_allowlisted_line_is_a_new_site():

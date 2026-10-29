@@ -20,6 +20,8 @@ import morecantile
 import numpy as np
 from rasterio.warp import transform_bounds
 
+from databricks.labs.gbx._gdal_policy import open_bytes
+
 # NOTE: rio_tiler is imported LAZILY (inside _transparent_png_riotiler /
 # _render_tile_riotiler), not at module top. rio-tiler 9.x defines
 # TypedDict(extra_items=...) (PEP 728), which needs typing_extensions>=4.13; a
@@ -138,7 +140,7 @@ def _encode(arr_u8, driver):
             dtype="uint8",
         ) as src:
             src.write(arr_u8)
-        with src_m.open() as src_ds, MemoryFile(ext="." + driver.lower()) as dst_m:
+        with open_bytes(src_m) as src_ds, MemoryFile(ext="." + driver.lower()) as dst_m:
             rasterio_shutil.copy(src_ds, dst_m.name, driver=driver)
             return dst_m.read()
 

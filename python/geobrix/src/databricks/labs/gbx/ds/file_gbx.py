@@ -29,7 +29,7 @@ from typing import Any, Callable, Literal, Optional
 from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql import functions as F
 
-from databricks.labs.gbx._gdal_policy import open_data
+from databricks.labs.gbx._gdal_policy import open_bytes, open_data
 from databricks.labs.gbx.ds._listing import (  # re-exported for backward compatibility
     _retry_transient,
     list_files,
@@ -1135,7 +1135,7 @@ def open_windowed_via_fileref(file_ref, window, pending, tile_crs=None):
     # Yield phase: outside the broad handler so that caller-body exceptions
     # propagate unchanged (not converted to FileRefReadError → RuntimeError).
     with MemoryFile(tile_bytes) as mf:
-        with mf.open() as ds:
+        with open_bytes(mf) as ds:
             yield ds
 
 

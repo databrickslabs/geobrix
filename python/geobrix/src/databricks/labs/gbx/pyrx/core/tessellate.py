@@ -25,6 +25,7 @@ from rasterio.windows import Window
 from shapely.geometry import Polygon, mapping, shape
 from shapely.geometry.polygon import orient
 
+from databricks.labs.gbx._gdal_policy import open_bytes
 from databricks.labs.gbx.core.crs import (
     authority_srid_of,
     crs_to_canonical,
@@ -126,7 +127,7 @@ def _as_bng_dataset(ds):
         ds, _BNG_EPSG, resampling="nearest", mark_fill_nodata=True
     )
     with MemoryFile(warped_bytes) as mf:
-        with mf.open() as work_ds:
+        with open_bytes(mf) as work_ds:
             yield work_ds
 
 
@@ -321,7 +322,7 @@ def _chip_is_all_nodata(raster_bytes: bytes) -> bool:
     all-valid masks and is kept.
     """
     with MemoryFile(raster_bytes) as mf:
-        with mf.open() as chip_ds:
+        with open_bytes(mf) as chip_ds:
             return not valid_mask(chip_ds).any()
 
 

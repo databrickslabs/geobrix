@@ -32,7 +32,7 @@ from rasterio.io import MemoryFile
 from rasterio.windows import Window
 from shapely.ops import unary_union
 
-from databricks.labs.gbx._gdal_policy import open_data
+from databricks.labs.gbx._gdal_policy import open_bytes, open_data
 from databricks.labs.gbx.core.crs import area_m2 as _area_m2
 from databricks.labs.gbx.pyrx.core import features, tiling
 from databricks.labs.gbx.pyrx.core.gpu_pool import gpu_pool_map
@@ -75,7 +75,7 @@ def _open_input(tile_or_path):
         yield tile_or_path
         return
     if isinstance(tile_or_path, (bytes, bytearray)):
-        with MemoryFile(bytes(tile_or_path)) as mf, mf.open() as ds:
+        with MemoryFile(bytes(tile_or_path)) as mf, open_bytes(mf) as ds:
             yield ds
         return
     with open_data(tile_or_path) as ds:
@@ -128,7 +128,7 @@ def _polygonize_mask(mask, transform, crs):
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
             dst.write(mask, 1)
-        with mf.open() as src:
+        with open_bytes(mf) as src:
             frags = features.polygonize(src, band=1, connectedness=4)
     return [(wkb, value) for wkb, value in frags if value != 0]
 

@@ -8,6 +8,8 @@ instructions, and v1/v2/bytes shapes all normalize identically — no reimplemen
 import warnings
 from contextlib import contextmanager
 
+from databricks.labs.gbx._gdal_policy import open_bytes
+
 
 def _extract_tile(tile_or_row, tile_col):
     """Pull the tile value out of a Row/dict that has a tile_col, else pass through.
@@ -140,7 +142,7 @@ def _plot_tiles_mosaic(
             profile["nodata"] = nodata
         with mf.open(**profile) as dst:
             dst.write(mosaic)
-        with mf.open() as src:
+        with open_bytes(mf) as src:
             data, tfm, scale = _decimated_read(src, max_pixels)
             _render(
                 data,

@@ -70,7 +70,7 @@ from typing import Any, Dict, Iterator, List, Optional
 from pyspark.sql.datasource import DataSourceWriter, WriterCommitMessage
 from pyspark.sql.types import StructType
 
-from databricks.labs.gbx._gdal_policy import open_data
+from databricks.labs.gbx._gdal_policy import open_bytes, open_data
 from databricks.labs.gbx.ds import _listing
 from databricks.labs.gbx.ds.file_gbx import (
     _COG_DRIVER_MAX_BYTES,
@@ -242,7 +242,7 @@ def _cell_gtiff_bytes(profile, dst_data, colorinterp, mask, tags, prune_empty):
             dst_ds.update_tags(**tags)
         raw = mf.read()
     if prune_empty:
-        with MemoryFile(raw) as mf, mf.open() as ds:
+        with MemoryFile(raw) as mf, open_bytes(mf) as ds:
             if not _nodata.valid_mask(ds).any():
                 return None
     return raw

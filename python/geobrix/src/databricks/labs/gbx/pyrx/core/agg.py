@@ -30,7 +30,7 @@ from rasterio.merge import merge as _rio_merge
 from rasterio.transform import from_bounds
 from rasterio.warp import Resampling, reproject
 
-from databricks.labs.gbx._gdal_policy import open_data
+from databricks.labs.gbx._gdal_policy import open_bytes, open_data
 from databricks.labs.gbx.ds.cog_writer import _build_mosaic_vrt
 from databricks.labs.gbx.pyrx.core import _nodata
 from databricks.labs.gbx.pyrx.core import compression as _comp
@@ -61,7 +61,7 @@ def _open_all(rasters: List[bytes]):
         for b in rasters:
             mf = MemoryFile(bytes(b))
             memfiles.append(mf)
-            datasets.append(mf.open())
+            datasets.append(open_bytes(mf))
     except Exception:
         _close_all(memfiles, datasets)
         raise
@@ -226,7 +226,7 @@ def _union_own_mask(datasets) -> np.ndarray:
                 crs=d.crs,
             ) as dst:
                 dst.write(_valid_u8(d), 1)
-            masks.append(mf.open())
+            masks.append(open_bytes(mf))
         merged, _ = _rio_merge(masks, method="max")
         return np.where(merged[0] != 0, 255, 0).astype("uint8")
     finally:
@@ -357,7 +357,7 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
                 # VRT mosaic has no sub-pixel placement drift.  Nearest resampling
                 # preserves source values; nodata is carried through.
                 with MemoryFile(rb) as src_mf:
-                    with src_mf.open() as src:
+                    with open_bytes(src_mf) as src:
                         rep_mf, rep_ds = _reproject_dataset(
                             src, ref_crs, target_res=ref_pixel_res, anchor=ref_corner
                         )
@@ -375,7 +375,7 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
                             rep_ds.close()
                             rep_mf.close()
             elif (group_masked and not has_mask[i]) or has_alpha[i]:
-                with MemoryFile(rb) as src_mf, src_mf.open() as src:
+                with MemoryFile(rb) as src_mf, open_bytes(src_mf) as src:
                     _write_masked_tile(src, tile_path, _valid_u8(src))
             else:
                 # Same CRS (or no CRS): write raw GTiff bytes straight to disk.
@@ -536,7 +536,7 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
             if _nodata.has_alpha(d):
                 copy_mf = MemoryFile()
                 _write_masked_tile(d, copy_mf, _valid_u8(d))
-                copy = copy_mf.open()
+                copy = open_bytes(copy_mf)
                 extra.append((copy_mf, copy))
                 d = copy
             composite.append(d)
@@ -599,7 +599,7 @@ def combineavg_tiles(rasters: List[bytes]) -> bytes:
     fallback = None
     any_nodata = False
     for b in rasters:
-        with MemoryFile(bytes(b)) as mf, mf.open() as ds:
+        with MemoryFile(bytes(b)) as mf, open_bytes(mf) as ds:
             if sums is None:
                 shape = (ds.count, ds.height, ds.width)
                 sums = np.zeros(shape, dtype="float64")
@@ -839,7 +839,7 @@ def derivedband_tiles(rasters: List[bytes], python_func: str, func_name: str) ->
         _close_all(memfiles, datasets)
 
     with MemoryFile(stacked_bytes) as mf:
-        with mf.open() as ds:
+        with open_bytes(mf) as ds:
             return _derivedband.derivedband(ds, str(python_func), str(func_name))
 
 
@@ -1129,9 +1129,9 @@ def align_to_tiles(tile_bytes: bytes, ref_bytes: bytes, dst_nodata=None) -> byte
         return None
 
     with MemoryFile(bytes(tile_bytes)) as src_mf:
-        with src_mf.open() as src:
+        with open_bytes(src_mf) as src:
             with MemoryFile(bytes(ref_bytes)) as ref_mf:
-                with ref_mf.open() as ref:
+                with open_bytes(ref_mf) as ref:
                     dst_crs = ref.crs
                     dst_transform = ref.transform
                     dst_width = ref.width

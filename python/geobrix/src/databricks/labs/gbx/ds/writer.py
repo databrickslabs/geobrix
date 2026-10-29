@@ -18,6 +18,7 @@ from typing import Iterator, List, Optional
 from pyspark.sql.datasource import DataSourceWriter, WriterCommitMessage
 from pyspark.sql.types import StructType
 
+from databricks.labs.gbx._gdal_policy import open_bytes
 from databricks.labs.gbx.ds import _write
 from databricks.labs.gbx.ds.raster import reader_schema, reader_schema_v2
 from databricks.labs.gbx.pyrx.core import compression as _comp
@@ -98,7 +99,7 @@ def _raster_bytes_compression(raster_bytes: bytes) -> "Optional[str]":
     from rasterio.io import MemoryFile
 
     try:
-        with MemoryFile(raster_bytes) as mf, mf.open() as ds:
+        with MemoryFile(raster_bytes) as mf, open_bytes(mf) as ds:
             comp = ds.compression
             return comp.value.lower() if comp is not None else None
     except Exception:
@@ -134,7 +135,7 @@ def _apply_compression(
 
     from databricks.labs.gbx.pyrx.core._nodata import has_own_mask
 
-    with MemoryFile(raster_bytes) as src_mf, src_mf.open() as src:
+    with MemoryFile(raster_bytes) as src_mf, open_bytes(src_mf) as src:
         data = src.read()
         # The pixels alone do not carry a source's own (non-alpha) mask band.
         mask = src.read_masks(1) if has_own_mask(src) else None
@@ -365,7 +366,7 @@ class RasterGbxWriter(DataSourceWriter):
                 info = _cog.detect_cog(metadata, raster_bytes)
                 if not info.is_cog:
                     with MemoryFile(raster_bytes) as mf:
-                        with mf.open() as ds:
+                        with open_bytes(mf) as ds:
                             raster_bytes = _analysis.cog_convert(
                                 ds,
                                 _cog_compress,

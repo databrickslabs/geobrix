@@ -36,6 +36,7 @@ from pyspark.sql.types import (
 )
 from rasterio.io import DatasetReader, MemoryFile
 
+from databricks.labs.gbx._gdal_policy import open_bytes
 from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA, VirtualTile
 
 # Legacy 3-field tile struct — INPUT-ONLY (reader/writer v1 read/load path).
@@ -54,7 +55,7 @@ TILE_SCHEMA = StructType(
 def open_tile(raster_bytes: bytes) -> Iterator[DatasetReader]:
     """Open raster BINARY content as a rasterio DatasetReader (in-memory)."""
     with MemoryFile(bytes(raster_bytes)) as mf:
-        with mf.open() as ds:
+        with open_bytes(mf) as ds:
             yield ds
 
 

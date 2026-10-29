@@ -501,8 +501,9 @@ def test_each_regression_is_reported(name):
 #
 # The dev image (scripts/docker/Dockerfile) and the Databricks Container Service image
 # (scripts/docker/dcs/Dockerfile) build the same GDAL from source with the Java bindings. Until now only a
-# comment said to keep them in step. The heavyweight JAR loads the JNI library by the absolute path in
-# GDALManager.scala, so the image must provide exactly that path.
+# comment said to keep them in step. With no payload named (no native dir, no GBX_NATIVE_ROOT), the heavyweight
+# JAR loads the system JNI library by the absolute path GDALManager.scala keeps in `LegacyJni`, so the image must
+# provide exactly that path.
 
 DCS_DOCKERFILE = REPO_ROOT / "scripts" / "docker" / "dcs" / "Dockerfile"
 GDAL_MANAGER = (
@@ -566,6 +567,18 @@ def jni_links(instrs, env: dict) -> set:
     return out
 
 
+def legacy_jni_path(scala: str):
+    """The absolute path GDALManager.scala's `LegacyJni` names (its `$JniName` filled in), or None."""
+    name = re.search(r'\bval\s+JniName\s*=\s*"([^"]+)"', scala)
+    legacy = re.search(r'\bval\s+LegacyJni\s*=\s*s?"([^"]+)"', scala)
+    if not legacy:
+        return None
+    path = legacy.group(1)
+    if name:
+        path = re.sub(r"\$\{?JniName\}?", name.group(1), path)
+    return path if path.startswith("/") and path.endswith(f"/{JNI}") else None
+
+
 def lockstep_problems(dev=REAL, dcs=DCS_REAL, scala=SCALA_REAL) -> list:
     out = []
     dev_i, dcs_i = parse(dev), parse(dcs)
@@ -601,12 +614,11 @@ def lockstep_problems(dev=REAL, dcs=DCS_REAL, scala=SCALA_REAL) -> list:
                 f"{sorted((dcs_flags - dev_flags) - DCS_ONLY_FLAGS)}"
             )
 
-    # the path GDALManager.loadSharedObjects loads first
-    m = re.search(r'loadOrNoop\("([^"]*%s)"\)' % re.escape(JNI), scala)
-    if not m:
+    # the system JNI path GDALManager loads when no payload is named
+    path = legacy_jni_path(scala)
+    if path is None:
         out.append(f"GDALManager.scala no longer loads an absolute path to {JNI}")
     else:
-        path = m.group(1)
         for label, instrs, kv in (("dev", dev_i, dev_kv), ("DCS", dcs_i, dcs_kv)):
             links = jni_links(instrs, kv)
             if not any(
@@ -745,8 +757,8 @@ LOCKSTEP_MUTATIONS = {
         dict(
             scala=mutate_in(
                 SCALA_REAL,
-                'loadOrNoop("/usr/lib/libgdalalljni.so")',
-                'loadOrNoop("/opt/gdal/libgdalalljni.so")',
+                'val LegacyJni = s"/usr/lib/$JniName"',
+                'val LegacyJni = s"/opt/gdal/$JniName"',
             )
         ),
         "dev image does not link /opt/gdal/libgdalalljni.so",
@@ -755,8 +767,8 @@ LOCKSTEP_MUTATIONS = {
         dict(
             scala=mutate_in(
                 SCALA_REAL,
-                'loadOrNoop("/usr/lib/libgdalalljni.so")',
-                "loadOrNoop(jniPath)",
+                'val LegacyJni = s"/usr/lib/$JniName"',
+                "val LegacyJni = jniPath",
             )
         ),
         "GDALManager.scala no longer loads an absolute path",

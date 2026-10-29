@@ -160,7 +160,7 @@ case class RST_BNG_RasterizeAgg(
      *  [[BNG.parse]]; the accumulator stays Long-keyed so the serde is unchanged.
      */
     override def update(buffer: BNGRasterizeAcc, input: InternalRow): BNGRasterizeAcc = {
-        // out_crs is refused, not ignored (AP-43): a value the engine never reads would be a silent defect.
+        // out_crs is refused, not ignored: a value the engine never reads would be a silent defect.
         if (outCrsExpr.eval(input) != null) throw new IllegalArgumentException(RST_BNG_RasterizeAgg.OutCrsRefusal)
         val raw = cellidExpr.eval(input)
         if (raw == null) return buffer
@@ -264,12 +264,12 @@ object RST_BNG_RasterizeAgg extends WithExpressionInfo {
     /** NoData fill value, matching the lightweight tier (`cellraster._NODATA`). */
     val NoData: Double = -9999.0
 
-    /** The refusal of a non-NULL `out_crs` on the heavy tier (AP-43). BNG output is always EPSG:27700; the light tier
-      * takes the argument and ignores it (documented), so the two tiers differ only here, and the message says so. */
-    val OutCrsRefusal: String = "gbx_rst_bng_rasterize_agg: out_crs is not supported on the heavy tier, where the " +
-        "output is always EPSG:27700. Fix: pass NULL for out_crs (the light tier also gives EPSG:27700 for it)."
+    /** The refusal of a non-NULL `out_crs`. BNG output is always EPSG:27700; the light tier refuses the argument with
+      * the same text (`pyrx.functions.BNG_OUT_CRS_REFUSAL`), so the two tiers agree. */
+    val OutCrsRefusal: String = "gbx_rst_bng_rasterize_agg: out_crs is not supported; the output is always " +
+        "EPSG:27700. Fix: pass NULL for out_crs, then reproject the tile with gbx_rst_transformcrs."
 
-    /** 12 arguments, or 13 with the trailing `out_crs`, which must be NULL: a non-NULL value is refused (AP-43). */
+    /** 12 arguments, or 13 with the trailing `out_crs`, which must be NULL: a non-NULL value is refused. */
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => c.length match {
         case 12 => RST_BNG_RasterizeAgg(
             c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7), c(8), c(9), c(10), c(11))

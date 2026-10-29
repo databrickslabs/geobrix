@@ -9387,6 +9387,13 @@ def _rst_quadbin_rasterize_agg_udf(
     )
 
 
+# The refusal of a non-NULL out_crs: the same text on both tiers (the heavy tier's RST_BNG_RasterizeAgg.OutCrsRefusal).
+BNG_OUT_CRS_REFUSAL = (
+    "gbx_rst_bng_rasterize_agg: out_crs is not supported; the output is always EPSG:27700. "
+    "Fix: pass NULL for out_crs, then reproject the tile with gbx_rst_transformcrs."
+)
+
+
 @pandas_udf(BinaryType())
 def _rst_bng_rasterize_agg_udf(
     cellid: pd.Series,
@@ -9406,6 +9413,8 @@ def _rst_bng_rasterize_agg_udf(
     from databricks.labs.gbx.pyrx import _env
     from databricks.labs.gbx.pyrx.core import cellraster as cr
 
+    if out_crs is not None and any(pd.notna(v) for v in out_crs):
+        raise ValueError(BNG_OUT_CRS_REFUSAL)
     _env.configure_gdal_env()
     # BNG cell ids are STRING on the public surface (e.g. "TQ3080"); the adapter
     # parses each to the internal Long via pygx._bng.parse (single source of truth).
@@ -10054,9 +10063,9 @@ def rst_bng_rasterize_agg(
 
         df.groupBy(k).agg(prx.rst_bng_rasterize_agg("cellid").alias("tile"))
 
-    BNG is EPSG:27700-native (British National Grid): the ``out_srid`` / ``out_crs``
-    arguments are accepted for API consistency with the H3/quadbin variants but are
-    a **no-op** -- the output raster is always EPSG:27700, with no reprojection.
+    BNG is EPSG:27700-native (British National Grid): the output raster is always
+    EPSG:27700, and ``out_srid`` is not read. A non-NULL ``out_crs`` is refused on
+    both tiers: pass NULL, then reproject with ``rst_transformcrs``.
 
     SQL returns BINARY (the raw grouped-agg UDF); Python returns a tile struct
     (wrapped by ``_as_tile_udf``).

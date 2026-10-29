@@ -5,9 +5,9 @@ import org.apache.spark.sql.catalyst.expressions.{Expression, GenericInternalRow
 import org.apache.spark.sql.types.StringType
 import org.scalatest.funsuite.AnyFunSuite
 
-/** `gbx_rst_bng_rasterize_agg`'s trailing `out_crs` on the heavy tier (AP-43): NULL is accepted, a non-NULL value is
-  * refused with a `Fix:`, at analysis for a literal and at update for a column. The light tier takes it and ignores it;
-  * the two tiers differ here, on purpose, and the message says so. */
+/** `gbx_rst_bng_rasterize_agg`'s trailing `out_crs` on the heavy tier: NULL is accepted, a non-NULL value is refused
+  * with a `Fix:`, at analysis for a literal and at update for a column. The light tier refuses it with the same text
+  * (`test/pyrx/test_bng_agg_arity.py` holds the two texts equal). */
 class RST_BNG_OutCrsTest extends AnyFunSuite {
 
     private val twelve: Seq[Expression] = Seq.fill(12)(Literal.create(null, StringType))
@@ -22,7 +22,7 @@ class RST_BNG_OutCrsTest extends AnyFunSuite {
     test("a literal non-NULL out_crs is refused at analysis, with the reason and a Fix") {
         val e = intercept[IllegalArgumentException](RST_BNG_RasterizeAgg.builder()(twelve :+ Literal("EPSG:4326")))
         assert(e.getMessage == refusal, e.getMessage)
-        assert(e.getMessage.contains("out_crs is not supported on the heavy tier") && e.getMessage.contains("Fix:"))
+        assert(e.getMessage.contains("out_crs is not supported") && e.getMessage.contains("Fix:"))
     }
 
     test("a non-NULL out_crs on a row is refused at update, before any cell is read") {

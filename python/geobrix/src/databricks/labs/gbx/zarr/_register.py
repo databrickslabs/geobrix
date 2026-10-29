@@ -588,12 +588,12 @@ def _error_condition(e: BaseException) -> str | None:
 
 
 def _not_a_delta_table(e: BaseException) -> bool:
-    condition = _error_condition(e)
-    if condition is not None:
-        return condition in _NOT_A_DELTA_TABLE
-    return "is not a Delta table" in _error_text(
-        e
-    )  # no class on the error: its message
+    """Delta's answer that a path is not a Delta table: by its error class, else (a class
+    this code does not know, or none: another runtime may name it otherwise) by its words.
+    """
+    if _error_condition(e) in _NOT_A_DELTA_TABLE:
+        return True
+    return "is not a Delta table" in _error_text(e)
 
 
 def _ledger_state(spark, root: str) -> str:
@@ -640,12 +640,22 @@ def _ledger_state(spark, root: str) -> str:
         ) from e
 
 
-def _stuck(root: str, attempts: int) -> ZarrOwnershipError:
+class _StuckRoot(ZarrOwnershipError):
+    """``_stuck``: ``since`` is when the claimer began waiting (``_clock``)."""
+
+    since: float = 0.0
+
+
+# the clock the founding wait is measured by, against the files' ages (a test may set it)
+_clock = time.time
+
+
+def _stuck(root: str, attempts: int, since: float = 0.0) -> ZarrOwnershipError:
     """The error of a root whose ledger directory Delta still does not take for a table after
     the claim's whole jittered budget (``attempts`` looks: about 3 minutes, at most 4.5).
     """
     ledger = os.path.join(root, OWNER_LEDGER)
-    return ZarrOwnershipError(
+    err = _StuckRoot(
         f"{ledger} holds files that Delta does not take for a table, after waiting about 3 "
         f"minutes (at most 4.5; {attempts} looks): another call's claim is still creating "
         "the ownership ledger of the root, or it stopped before it committed.",
@@ -654,6 +664,54 @@ def _stuck(root: str, attempts: int) -> ZarrOwnershipError:
         "claim and no store owns the root by it; then try again. Otherwise wait for that "
         "call to end",
     )
+    err.since = since
+    return err
+
+
+def _clear_dead_founder(spark, root: str, since: float) -> bool:
+    """After a claim waited out its whole budget on a founding directory: whether the root
+    is no longer stuck. ``True`` when Delta now takes the directory for a table, or it is
+    absent, or every file and folder in it is older than ``since`` (the start of the wait):
+    those are a dead founder's leftovers (a founding statement that wrote its data files and
+    failed or died before it committed, this call's own included), and exactly those are
+    removed, logged at WARNING with their ages. ``False`` (nothing is touched) when anything
+    in it is newer: a founder may still be writing. A table Delta knows is never touched.
+    """
+    if _ledger_state(spark, root) != "founding":
+        return True
+    path = os.path.join(root, OWNER_LEDGER)
+    files, dirs = [], []
+    for here, subdirs, names in os.walk(path):
+        dirs += [os.path.join(here, d) for d in subdirs]
+        files += [os.path.join(here, n) for n in names]
+    ages = {}
+    for f in files + dirs:
+        try:
+            ages[f] = os.stat(f).st_mtime
+        except FileNotFoundError:  # it went while we looked: someone is at work in it
+            return False
+    if not files or any(m >= since for m in ages.values()):
+        return False
+    now = _clock()
+    _LOG.warning(
+        "removing %d file(s) a founder left in %s without a Delta table (they are %s s old; "
+        "the claim waited since %.0f s ago), and founding the ledger again",
+        len(files),
+        path,
+        sorted(round(now - ages[f]) for f in files),
+        now - since,
+    )
+    for f in files:
+        try:
+            os.remove(f)
+        except FileNotFoundError:
+            pass
+    for d in sorted(dirs, key=len, reverse=True) + [path]:
+        try:
+            os.rmdir(d)  # only those it emptied
+        except OSError:
+            pass
+    return True
 
 
 def _ledger_exists(spark, ledger: str) -> bool:
@@ -675,12 +733,13 @@ def _create_ledger(spark, ledger: str, root: str) -> None:
     """
     from databricks.labs.gbx.zarr import _write
 
-    failures = 0
+    failures, since = 0, None
     for attempt in range(_write._ATTEMPTS):
         state = _ledger_state(spark, root)
         if state == "delta":
             return
         if state == "founding":
+            since = _clock() if since is None else since
             _write._pause(_write._wait(attempt))
             continue
         try:
@@ -690,6 +749,7 @@ def _create_ledger(spark, ledger: str, root: str) -> None:
             if _ledger_exists(spark, ledger):
                 return
             if _ledger_state(spark, root) == "founding":
+                since = _clock() if since is None else since
                 _write._pause(_write._wait(attempt))
                 continue
             failures += 1
@@ -700,7 +760,7 @@ def _create_ledger(spark, ledger: str, root: str) -> None:
                     fix="check that the root is on a Volume you can write to, then try again",
                 ) from e
             time.sleep(0.5 * failures)
-    raise _stuck(root, _write._ATTEMPTS)
+    raise _stuck(root, _write._ATTEMPTS, _clock() if since is None else since)
 
 
 def _held(spark, ledger: str) -> list[dict]:
@@ -773,7 +833,17 @@ def _claim_ledger(spark, root: str, table: str, kind: str) -> bool:
     body = {"table": table, "kind": kind, "format": FORMAT_VERSION}
     if _found_ledger(spark, root, claim_id, body, table):
         return True
-    _create_ledger(spark, ledger, root)
+    try:
+        _create_ledger(spark, ledger, root)
+    except _StuckRoot as stuck:
+        # a founding that failed after writing its files (this call's own, say) leaves them
+        # without a table: once they are all older than the wait, they are cleared and the
+        # founding is tried once more (the state is asked again first)
+        if not _clear_dead_founder(spark, root, stuck.since):
+            raise
+        if _found_ledger(spark, root, claim_id, body, table):
+            return True
+        _create_ledger(spark, ledger, root)
     row = {
         "kind": "lock",
         "key": _LEDGER_KEY,

@@ -583,10 +583,15 @@ def test_a_root_whose_founder_never_commits_is_refused_with_a_fix(
     (the founder died), the next claim wins."""
     from databricks.labs.gbx.zarr import _write
 
-    pauses = []
-    monkeypatch.setattr(_write, "_pause", pauses.append)
     root = tmp_path / "ov"
     ledger = _stray_founding(root)
+    pauses = []
+
+    def founder_writing(seconds):  # a live founder: it keeps writing while we wait
+        pauses.append(seconds)
+        (ledger / f"part-{len(pauses):05d}.snappy.parquet").write_bytes(b"PAR1")
+
+    monkeypatch.setattr(_write, "_pause", founder_writing)
     with pytest.raises(ZarrOwnershipError) as ei:
         _register.claim_root(spark_delta, str(root), "c.s.t", "overlay")
     assert len(pauses) == _write._ATTEMPTS
@@ -596,6 +601,110 @@ def test_a_root_whose_founder_never_commits_is_refused_with_a_fix(
     shutil.rmtree(ledger)
     assert _register.claim_root(spark_delta, str(root), "c.s.t", "overlay") is True
     assert _ledger_owners(spark_delta, root) == ["c.s.t"]
+
+
+def _age(path, seconds):
+    """Date every file under ``path`` ``seconds`` back."""
+    when = __import__("time").time() - seconds
+    for f in path.rglob("*"):
+        os.utime(f, (when, when))
+
+
+def test_a_dead_founders_leftovers_are_cleared_after_the_wait_and_the_claim_wins(
+    spark_delta, tmp_path, monkeypatch, caplog
+):
+    """A founding statement that wrote its data files and then failed (its own call, or one
+    that died) leaves _gbx_owner without a table. After the claim's whole wait, files that are
+    all older than the start of that wait are a dead founder's: they alone are removed (logged
+    at WARNING with their ages) and the founding is tried once more, and wins."""
+    from databricks.labs.gbx.zarr import _write
+
+    root = tmp_path / "ov"
+    ledger = _stray_founding(root)
+    (ledger / "sub").mkdir()
+    (ledger / "sub" / "part-1.snappy.parquet").write_bytes(b"PAR1")
+    _age(ledger, 600)
+    pauses = []
+    monkeypatch.setattr(_write, "_pause", pauses.append)
+    with caplog.at_level(logging.WARNING, logger=_register._LOG.name):
+        assert _register.claim_root(spark_delta, str(root), "c.s.t", "overlay") is True
+    assert len(pauses) == _write._ATTEMPTS  # it waited the whole budget first
+    assert _ledger_owners(spark_delta, root) == ["c.s.t"]
+    warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("2 file(s)" in m and "s old" in m for m in warned), warned
+    assert not (ledger / "part-00000-founder.snappy.parquet").exists()
+
+
+def test_a_founding_that_fails_after_writing_its_files_does_not_wedge_its_own_root(
+    spark_delta, tmp_path, monkeypatch
+):
+    """The call's own founding statement writes a data file into _gbx_owner and then fails
+    before its commit: the same call waits its budget, finds only its own (older) file,
+    clears it and founds the ledger on the second try."""
+    from databricks.labs.gbx.zarr import _write
+
+    real, tries = _register._found_ledger, []
+
+    def failing_once(spark, root, claim_id, body, table):
+        tries.append(1)
+        if len(tries) == 1:
+            ledger = os.path.join(root, OWNER_LEDGER)
+            os.makedirs(ledger)
+            with open(
+                os.path.join(ledger, "part-00000-mine.snappy.parquet"), "wb"
+            ) as f:
+                f.write(b"PAR1 written, never committed")
+            return False  # the statement raised after writing it
+        return real(spark, root, claim_id, body, table)
+
+    monkeypatch.setattr(_register, "_found_ledger", failing_once)
+    monkeypatch.setattr(_write, "_pause", lambda seconds: None)
+    root = tmp_path / "ov"
+    assert _register.claim_root(spark_delta, str(root), "c.s.t", "overlay") is True
+    assert len(tries) == 2 and _ledger_owners(spark_delta, root) == ["c.s.t"]
+
+
+def test_leftovers_with_one_fresh_file_are_kept_and_the_root_is_stuck(
+    spark_delta, tmp_path, monkeypatch
+):
+    """One file written after the wait began: a founder may be alive, so nothing is
+    removed and the stuck error is raised as before."""
+    from databricks.labs.gbx.zarr import _write
+
+    root = tmp_path / "ov"
+    ledger = _stray_founding(root)
+    _age(ledger, 600)
+    pauses = []
+
+    def one_fresh(seconds):
+        pauses.append(seconds)
+        if len(pauses) == 3:
+            (ledger / "part-fresh.snappy.parquet").write_bytes(b"PAR1")
+
+    monkeypatch.setattr(_write, "_pause", one_fresh)
+    with pytest.raises(ZarrOwnershipError, match="Delta does not take for a table"):
+        _register.claim_root(spark_delta, str(root), "c.s.t", "overlay")
+    assert sorted(p.name for p in ledger.iterdir()) == [
+        "part-00000-founder.snappy.parquet",
+        "part-fresh.snappy.parquet",
+    ]
+
+
+def test_a_real_ledger_is_never_cleared_however_old(spark_delta, tmp_path, monkeypatch):
+    """A ledger Delta takes for a table is never cleaned, even with every file dated long
+    before the wait: the claimer reads it and is refused by the owner's name."""
+    from databricks.labs.gbx.zarr import _write
+
+    root = tmp_path / "ov"
+    assert _register.claim_root(spark_delta, str(root), "c.s.first", "overlay") is True
+    ledger = root / OWNER_LEDGER
+    _age(ledger, 10 * 86400)
+    before = sorted(str(p.relative_to(ledger)) for p in ledger.rglob("*"))
+    monkeypatch.setattr(_write, "_pause", lambda seconds: None)
+    assert _register._clear_dead_founder(spark_delta, str(root), since=1e18) is True
+    with pytest.raises(ZarrOwnershipError, match="c.s.first"):
+        _register.claim_root(spark_delta, str(root), "c.s.second", "overlay")
+    assert sorted(str(p.relative_to(ledger)) for p in ledger.rglob("*")) == before
 
 
 def test_a_claimer_waits_for_a_founder_in_flight_and_finds_the_winner(
@@ -756,6 +865,23 @@ def test_a_delta_error_that_is_not_a_missing_table_is_a_zarr_error(tmp_path):
     with pytest.raises(ZarrError, match="unreachable") as ei:
         _register._ledger_state(Session(), str(tmp_path))
     assert "Fix:" in str(ei.value)
+
+
+@pytest.mark.parametrize("condition", [None, "DELTA_SOME_OTHER_CLASS"])
+def test_delta_saying_not_a_delta_table_in_words_is_founding(tmp_path, condition):
+    """An error with no class, or one this code does not know, that says the path "is not a
+    Delta table" is that answer: a founder in flight, not a hard error."""
+
+    class NotATable(Exception):
+        def getCondition(self):
+            return condition
+
+    class Session:
+        def sql(self, text):
+            raise NotATable("[X] `/x/_gbx_owner` is not a Delta table.")
+
+    _stray_founding(tmp_path)
+    assert _register._ledger_state(Session(), str(tmp_path)) == "founding"
 
 
 def test_the_zarr_package_reads_no_delta_log_files():

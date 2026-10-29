@@ -749,6 +749,93 @@ def test_worker_peak_is_none_after_spark_stops_a_finished_worker(
     ) in peak.reason
 
 
+def _iso(t):
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + ".%03dGMT" % (
+        t % 1 * 1000
+    )
+
+
+def _fake_rest(
+    ends=None,
+    failed=0,
+    killed_stage=0,
+    attempt=0,
+    jobs=1,
+    no_attempts=False,
+    group=None,
+):
+    """A stand-in for the Spark REST API: `jobs` jobs of one stage each (one attempt), whose
+    tasks ended at `ends` ({executor: [times]}). `failed` is the job's failed-task count.
+    """
+    ends = ends or {"0": [time.time()]}
+
+    def get(url):
+        if url.endswith("/jobs"):
+            return [
+                {"jobId": i, "jobGroup": group, "stageIds": [0], "skippedStages": [],
+                 "numFailedTasks": failed, "numKilledTasks": 0, "numFailedStages": 0,
+                 "submissionTime": _iso(0), "completionTime": _iso(time.time())}
+                for i in range(jobs)
+            ]  # fmt: skip
+        if "taskList" in url:
+            return [
+                {"launchTime": _iso(t - 0.001), "duration": 1, "executorId": ex}
+                for ex, times in ends.items()
+                for t in times
+            ]
+        if "/stages/" in url:
+            if no_attempts:
+                return []
+            return [
+                {
+                    "attemptId": attempt,
+                    "numFailedTasks": 0,
+                    "numKilledTasks": killed_stage,
+                }
+            ]
+        raise AssertionError(url)
+
+    return get
+
+
+@pytest.mark.parametrize(
+    "case, rest, executors, long, want",
+    [
+        ("a quick shape, nothing wrong", {}, 1, False, ""),
+        ("no job at all", {"jobs": 0}, 1, False, attribution._NO_TASKS_REASON),
+        ("a stage the API will not give", {"no_attempts": True}, 1, False, attribution._NO_TASKS_REASON),
+        ("a failed task", {"failed": 1}, 1, False, attribution._RETRIED_REASON),
+        ("a killed task", {"killed_stage": 1}, 1, False, attribution._RETRIED_REASON),
+        ("a second stage attempt", {"attempt": 1}, 1, False, attribution._RETRIED_REASON),
+        ("the sweeps' own job is left out", {"failed": 1, "group": attribution._PEAK_JOB_GROUP + "x"}, 1, False, attribution._NO_TASKS_REASON),
+        ("a long shape, a task end every 10 s", {"ends": {"0": [100 + 10 * i for i in range(30)]}}, 1, True, ""),
+        ("a long shape, a task end every 70 s", {"ends": {"0": [100, 170, 240, 310]}}, 1, True, attribution._MAYBE_LOST_REASON),
+        ("a long shape, no task end at all", {"ends": {"0": []}}, 1, True, attribution._NO_TASKS_REASON),
+        ("a long shape, one executor of two", {"ends": {"0": [100 + 10 * i for i in range(30)]}}, 2, True, attribution._NO_TASKS_REASON),
+    ],
+)  # fmt: skip
+def test_the_rest_api_must_show_no_lost_task_and_answer(
+    monkeypatch, case, rest, executors, long, want
+):
+    """Closed by default: only a clean, complete answer reads."""
+    monkeypatch.setattr(attribution, "_get", _fake_rest(**rest))
+    got = attribution._rest_trouble("http://x/api", 99.0, 400.0, executors, long)
+    assert got == want, case
+
+
+def test_a_rest_api_that_does_not_answer_voids_every_shape(monkeypatch):
+    def down(url):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(attribution, "_get", down)
+    peak = attribution.WorkerPeak.__new__(attribution.WorkerPeak)
+    peak.spark = types.SimpleNamespace(
+        sparkContext=types.SimpleNamespace(uiWebUrl="http://x", applicationId="a")
+    )
+    peak._t0 = time.time() - 5  # a quick shape
+    assert peak._rest_trouble(time.time(), 1) == attribution._NO_REST_REASON
+
+
 @LINUX
 @pytest.mark.parametrize("gap, reads", [(10.0, True), (70.0, False)])
 def test_a_long_shape_reads_only_if_the_pool_never_idled_for_a_minute(
@@ -764,43 +851,188 @@ def test_a_long_shape_reads_only_if_the_pool_never_idled_for_a_minute(
     shape.collect()
     peak._t0 -= 300  # as if the shape had run for five minutes
     now = time.time()
-    ends = [
-        now - 300 + i * gap for i in range(int(300 / gap) + 1)
-    ]  # one every `gap` seconds
-    monkeypatch.setattr(attribution, "_task_ends", lambda base, t0, t1: {"0": ends})
+    # the made-up end times come from the executor the shape really ran on, one every `gap` s
+    ex = [e["id"] for e in attribution._get(
+        f"{spark_session_local.sparkContext.uiWebUrl}/api/v1/applications/"
+        f"{spark_session_local.sparkContext.applicationId}/executors")][0]  # fmt: skip
+    ends = {ex: [now - 300 + i * gap for i in range(int(300 / gap) + 1)]}
+    monkeypatch.setattr(attribution, "_get", _fake_rest(ends))
     got = peak.read()
     assert (got is not None and got >= 400) is reads, (got, peak.reason)
     assert reads or "may have exited" in peak.reason
 
 
+_RETRY = """
+import json, os, sys, tempfile, threading, time, uuid
+from pyspark.sql import SparkSession, functions as F
+spark = (SparkSession.builder.master("local[2, 3]")  # 3 attempts per task
+         .config("spark.sql.execution.arrow.pyspark.enabled", "true").getOrCreate())
+from databricks.labs.gbx.bench import attribution
+where = tempfile.mkdtemp()
+env = spark.sparkContext.environment
+env["GBX_TEST_POOL"] = uuid.uuid4().hex
+
+@F.udf("long")
+def victim(x):
+    import os, time
+    from pyspark import TaskContext
+    if x == 0 and TaskContext.get().attemptNumber() == 0:
+        b = bytearray(400 * 1024 * 1024)
+        for i in range(0, len(b), 4096):
+            b[i] = 1
+        open(where + "/victim", "w").write(str(os.getpid()))
+        time.sleep(60)  # killed from outside long before this
+    elif x == 1:
+        time.sleep(4)
+    return 0
+
+shape = spark.range(2, numPartitions=2).select(victim("id"))
+env.pop("GBX_TEST_POOL")
+peak = attribution.WorkerPeak(spark)
+peak.start()
+
+def killer():
+    end = time.time() + 60
+    while time.time() < end:
+        try:
+            os.kill(int(open(where + "/victim").read()), 9)
+            return
+        except (OSError, ValueError):
+            time.sleep(0.05)
+
+thread = threading.Thread(target=killer)
+thread.start()
+shape.collect()  # the killed task is retried on a new worker that holds nothing
+thread.join()
+print(json.dumps({"peak": peak.read(), "reason": peak.reason}))
+"""
+
+
+@LINUX
+def test_worker_peak_is_none_when_a_task_is_retried_after_its_worker_was_killed():
+    # A worker the shape created holds 400 MB and is killed (a crash, an OOM kill); its task runs
+    # again on a new worker that holds nothing. The killed worker leaves no trace in /proc, and the
+    # reading used to be the new worker's 52 MB. The REST API shows the lost attempt.
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join(p for p in sys.path if p),
+        "PYSPARK_PYTHON": sys.executable,
+    }
+    out = subprocess.run(
+        [sys.executable, "-c", _RETRY],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        env=env,
+    )
+    got = json.loads(out.stdout.strip().splitlines()[-1])
+    assert got["peak"] is None, (got, out.stderr[-500:])
+    assert got["reason"] == attribution._RETRIED_REASON
+
+
+@LINUX
+def test_worker_peak_is_none_when_a_read_that_stops_early_destroys_the_workers(
+    spark_session_local,
+):
+    # `limit` makes the JVM stop reading, and Spark destroys the workers without failing a task.
+    # The pool's new daemon was counted as a worker that ran (51 MB); a daemon is not a worker.
+    spark = spark_session_local
+    from pyspark.sql import functions as F
+
+    @F.udf("long")
+    def first_is_heavy(x):
+        if x == 0:
+            b = bytearray(400 * 1024 * 1024)
+            for i in range(0, len(b), 4096):
+                b[i] = 1
+        return x
+
+    with _own_worker_pool(spark):
+        shape = spark.range(1000, numPartitions=2).select(first_is_heavy("id")).limit(1)
+    peak = attribution.WorkerPeak(spark)
+    peak.start()
+    shape.collect()
+    assert peak.read() is None and peak.reason
+
+
+@LINUX
+def test_worker_peak_stands_when_another_pools_idle_worker_exits(
+    spark_session_local, tmp_path
+):
+    # The pool of an earlier test still holds idle workers, and Spark stops them (killed here).
+    # They are not the shape's pool: they neither void the reading nor count toward it.
+    spark = spark_session_local
+    with _own_worker_pool(spark) as other:
+        warm = _Shapes(spark).two_workers_per_task()
+    with _own_worker_pool(spark):
+        s = _Shapes(spark)
+        held = _Held(spark, tmp_path)
+        shape = held.shape(early=False)
+    warm.collect()
+    strays = [pid for pid, _ in _pool_workers(other)]
+    assert strays, "the earlier pool holds no worker"
+    peak = attribution.WorkerPeak(spark)
+    peak.start()
+    thread, box = _in_background(shape)
+    try:
+        _until(lambda: len(held.pids()) == s.slots, "every task to be running")
+        for pid in strays:
+            os.kill(pid, 9)
+        _until(lambda: all(_gone(pid) for pid in strays), "the daemon to reap them")
+    finally:
+        held.go()
+        thread.join()
+    assert "error" not in box, box
+    assert peak.read() >= 400 and peak.reason is None
+
+
 @pytest.mark.parametrize(
     "case, members, want",
     [
-        ("nothing moved", {"w1": (5, 0), "w2": (7, 0), "d": (100, 0)}, (0, 0, 0)),
-        ("a worker ran and is alive", {"w1": (9, 400), "w2": (7, 0), "d": (100, 0)}, (400, 1, 0)),
-        ("a worker has gone", {"w1": (5, 0), "d": (100, 0)}, (0, 0, 1)),
-        ("a new worker ran", {"w1": (5, 0), "w2": (7, 0), "d": (100, 0), "w3": (2, 80)}, (80, 1, 0)),
-        ("a zombie", {"w1": (5, 0, "z"), "w2": (7, 0), "d": (100, 0)}, (0, 0, 1)),
-        ("every worker and the daemon have gone", {}, (0, 0, 2)),
-        ("only the daemon has gone", {"w1": (5, 0), "w2": (7, 0)}, (0, 0, 0)),
+        ("nothing moved", {"w1": (5, 0), "w2": (7, 0), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (0, 0, 0)),
+        ("a worker ran and is alive", {"w1": (9, 400), "w2": (7, 0), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (400, 1, 0)),
+        ("a worker of the pool that ran has gone", {"w1": (9, 400), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (400, 1, 1)),
+        ("a worker has gone and nothing ran", {"w1": (5, 0), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (0, 0, 0)),
+        ("another pool's straggler has gone", {"w1": (9, 400), "w2": (7, 0), "d": (100, 0), "e": (50, 0)}, (400, 1, 0)),
+        ("another pool's fat idle worker is not counted", {"w1": (9, 90), "w2": (7, 0), "x1": (3, 250), "d": (100, 0), "e": (50, 0)}, (90, 1, 0)),
+        ("a new worker ran", {"w1": (5, 0), "w2": (7, 0), "w3": (2, 80), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (80, 1, 0)),
+        ("a zombie of a pool that ran", {"w1": (9, 0, "z"), "w2": (7, 0), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (0, 0, 1)),
+        ("an idle zombie beside a worker that ran", {"w1": (5, 0, "z"), "w2": (9, 60), "x1": (3, 0), "d": (100, 0), "e": (50, 0)}, (60, 1, 1)),
+        ("a new daemon is not a worker", {"w1": (5, 0), "w2": (7, 0), "x1": (3, 0), "d": (100, 0), "e": (50, 0), "f": (7, 51)}, (0, 0, 0)),
+        ("only the daemons have gone", {"w1": (5, 0), "w2": (7, 0), "x1": (3, 0)}, (0, 0, 0)),
     ],
 )  # fmt: skip
-def test_the_read_counts_the_workers_that_have_gone(case, members, want):
+def test_the_read_counts_the_workers_of_the_pool_that_ran_that_have_gone(
+    case, members, want
+):
     """The judgement on synthetic /proc numbers. The baseline: workers w1 (5 ticks) and w2 (7)
-    and their daemon d (100); a worker that has gone voids the reading, a daemon alone does not.
-    """
+    of daemon d (100), and x1 (3) of daemon e (50). A worker of a pool that ran that has gone voids
+    the reading; a daemon never counts."""
     scope = "h:1"
     key = lambda k: f"{scope}:{k}"  # noqa: E731
+    pool = {"w": key("d"), "x": key("e")}
     baseline = {
-        "cpu": {key("w1"): 5, key("w2"): 7, key("d"): 100},
-        "daemons": {key("d")},
+        "cpu": {key("w1"): 5, key("w2"): 7, key("x1"): 3, key("d"): 100, key("e"): 50},
+        "via": {
+            key("w1"): key("d"),
+            key("w2"): key("d"),
+            key("x1"): key("e"),
+            key("d"): "",
+            key("e"): "",
+        },
+        "daemons": {key("d"), key("e")},
     }
     live = {
-        key(k): {"cpu": v[0], "mb": v[1], "zombie": len(v) > 2, "daemon": k == "d"}
+        key(k): {
+            "cpu": v[0],
+            "mb": v[1],
+            "zombie": len(v) > 2,
+            "daemon": k in "def",
+            "via": pool.get(k[0], "") if k not in "def" else "",
+        }
         for k, v in members.items()
     }
-    got = attribution._read_judge()(scope, live, baseline)
-    assert got == want, case
+    assert attribution._read_judge()(scope, live, baseline) == want, case
 
 
 def test_the_longest_wait_between_task_ends_is_per_executor_and_runs_to_the_read():

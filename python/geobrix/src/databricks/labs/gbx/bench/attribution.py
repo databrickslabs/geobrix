@@ -259,6 +259,18 @@ _MAYBE_LOST_REASON = (
     "a task of the shape ended more than 50 s before the read (Spark stops a worker that "
     "idles for 60 s), so a worker that ran it may have exited and taken its peak"
 )
+_RETRIED_REASON = (
+    "a task of the shape failed, was killed or was retried (the Spark REST API shows it), so a "
+    "worker that ran it may have exited and taken its peak"
+)
+_NO_TASKS_REASON = (
+    "the Spark REST API shows no task of the shape, so the workers that ran it cannot be "
+    "accounted for"
+)
+_NO_REST_REASON = (
+    "the Spark REST API did not answer for the shape's jobs, so whether a worker that ran it "
+    "exited cannot be ruled out"
+)
 
 
 def _worker_finder():
@@ -329,7 +341,8 @@ def _surveyor(find_workers):
 
     ``scope`` names the executor (host and JVM). ``members`` maps ``scope:pid:start`` (the start
     time tells a reused pid) to the process's CPU ticks (``utime + stime``), its high-water mark
-    in MB, whether it is a zombie, and whether it is a daemon (the process that forks workers).
+    in MB, whether it is a zombie, whether it is a daemon (the process that forks workers), and
+    ``via``: the key of the daemon it was forked by, which names its pool ("" when it has none).
     """
 
     def stat(pid):
@@ -357,12 +370,18 @@ def _surveyor(find_workers):
 
         jvm, parents, daemons = find_workers(me)
         scope = f"{socket.gethostname()}:{jvm}"
-        members = {}
+        seen = {}
         for pid in parents:
             info = stat(pid)
             if info is not None:
-                info.update(pid=pid, daemon=pid in daemons)
-                members[f"{scope}:{pid}:{info['start']}"] = info
+                seen[pid] = info
+        members = {}
+        for pid, info in seen.items():
+            owner, via = parents[pid], ""
+            if owner in daemons and owner in seen:
+                via = f"{scope}:{owner}:{seen[owner]['start']}"
+            info.update(pid=pid, daemon=pid in daemons, via=via)
+            members[f"{scope}:{pid}:{info['start']}"] = info
         return scope, members
 
     return survey, alive
@@ -371,29 +390,34 @@ def _surveyor(find_workers):
 def _read_judge():
     """``judge(scope, members, baseline)`` -> ``(hwm, ran, lost)`` for one executor.
 
-    `baseline` is what the reset noted: ``cpu`` (worker -> CPU ticks) and ``daemons``. ``hwm``
-    and ``ran`` are the highest mark, and the count, of the live workers that are new or whose
-    CPU ticks passed their entry: those ran the shape. ``lost`` counts the workers that have
+    `baseline` is what the reset noted: ``cpu`` (worker -> CPU ticks), ``via`` (worker -> its
+    daemon, which names its pool) and ``daemons``. A daemon is not a worker: only the processes
+    it forks are counted. The shape's pools are the daemons that have a worker new since the
+    reset or with CPU ticks past its entry (it ran), and only those are judged. Another pool's
+    idle worker, the warm-up of an earlier test or a straggler of an earlier form, neither
+    counts toward the reading nor voids it. ``hwm`` and ``ran`` are the highest mark, and the
+    count, of the live workers of those pools that ran. ``lost`` counts their workers that have
     exited since the reset (gone, or zombies), and with them their marks. Spark stops a worker
-    that has idled 60 s, and nothing the kernel keeps says whether one that has gone was idle
-    or had run: the daemon ignores SIGCHLD, so its ``cutime + cstime`` never gets a reaped
-    child's CPU time. Any worker that has gone voids the reading.
+    that has idled 60 s, and nothing the kernel keeps says whether one that has gone was idle or
+    had run: the daemon ignores SIGCHLD, so its ``cutime + cstime`` never gets a reaped child's
+    CPU time. Any worker of the shape's pools that has gone voids the reading.
     """
 
     def judge(scope, members, baseline):
-        cpu0, daemons0 = baseline["cpu"], baseline["daemons"]
+        cpu0, via0, daemons0 = baseline["cpu"], baseline["via"], baseline["daemons"]
+        workers = {k: m for k, m in members.items() if not m["daemon"]}
+        pools = {m["via"] for k, m in workers.items() if m["cpu"] > cpu0.get(k, -1)}
         hwm, ran, lost = 0.0, 0, 0
-        for key, m in members.items():
+        for key, m in workers.items():
+            if m["via"] not in pools:
+                continue
             if m["zombie"]:
                 lost += 1
             elif m["cpu"] > cpu0.get(key, -1):  # a new worker has no entry
                 hwm, ran = max(hwm, m["mb"]), ran + 1
         for key in cpu0:
-            if (
-                key.startswith(f"{scope}:")
-                and key not in members
-                and key not in daemons0
-            ):
+            gone = key.startswith(f"{scope}:") and key not in members
+            if gone and key not in daemons0 and via0[key] in pools:
                 lost += 1
         return hwm, ran, lost
 
@@ -404,7 +428,7 @@ def _sweep_task(reset, survey, alive, judge, baseline):
     """The barrier task of one sweep, over the shape's Python workers of its executor.
 
     With `reset` it clears each worker's high-water mark and returns (as ``ticks``) what to
-    compare with later: each worker's CPU ticks (``m,<key>,<ticks>,<1 for a daemon>``); how many
+    compare with later: each process's CPU ticks (``m,<key>,<ticks>,<1 for a daemon>,<daemon>``); how many
     live workers it could not reset is ``missed``. Without, it returns what `_read_judge` makes
     of them against `baseline`: the highest ``VmHWM`` (MB) of the workers that ran since
     (``hwm``, ``ran`` of them), and ``lost`` workers that have exited. An idle worker's RSS,
@@ -416,7 +440,7 @@ def _sweep_task(reset, survey, alive, judge, baseline):
         for key, m in members.items():
             if m["zombie"]:
                 continue  # gone, with nothing to reset
-            ticks.append(f"m,{key},{m['cpu']},{int(m['daemon'])}")
+            ticks.append(f"m,{key},{m['cpu']},{int(m['daemon'])},{m['via']}")
             try:
                 with open(f"/proc/{m['pid']}/clear_refs", "w") as fh:
                     fh.write("5")
@@ -465,28 +489,65 @@ def _longest_release_gap(ends: Dict[str, List[float]], t1: float) -> float:
     return worst
 
 
-def _task_ends(base: str, t0: float, t1: float) -> Dict[str, List[float]]:
-    """Executor -> end times (epoch seconds) of the tasks that ended in [t0, t1], from the Spark
-    REST API at `base`, leaving out the jobs of the worker sweeps themselves."""
-    ends: Dict[str, List[float]] = {}
-    for job in _get(f"{base}/jobs"):
-        done = _epoch(job.get("completionTime"))
-        if (job.get("jobGroup") or "").startswith(_PEAK_JOB_GROUP) or (
-            done and done < t0
+def _rest_trouble(base: str, t0: float, t1: float, executors: int, ends: bool) -> str:
+    """Why the Spark REST API at `base` says that a worker that ran the shape (the jobs that
+    ran in [t0, t1], leaving out the worker sweeps' own) may have exited unseen, or "" when it
+    says nothing of the kind. Closed by default: no job, a stage that the API will not give,
+    or no answer is trouble too.
+
+    A task attempt that failed or was killed, a retried task and a stage attempt after the
+    first all mean a worker may have died with its mark; a worker created by the shape leaves
+    no other trace. With `ends` (a shape that ran longer than Spark's idle stop), the end times
+    of the tasks must also show that no executor waited more than 50 s between two (or for the
+    read after the last): Spark stops a worker only when its pool has seen no worker released
+    for 60 s, and a task ends at or just before its worker is released. That needs the end
+    of a task to be within 10 s of its worker's release (measured at 12 and 17 ms). `executors`
+    is how many executors have a worker that ran: the end times must come from as many.
+    """
+    jobs = [
+        j
+        for j in _get(f"{base}/jobs")
+        if not (j.get("jobGroup") or "").startswith(_PEAK_JOB_GROUP)
+        and not (
+            _epoch(j.get("completionTime")) and _epoch(j.get("completionTime")) < t0
+        )
+    ]
+    if not jobs:
+        return _NO_TASKS_REASON
+    task_ends: Dict[str, List[float]] = {}
+    for job in jobs:
+        if (
+            job.get("numFailedTasks")
+            or job.get("numKilledTasks")
+            or job.get("numFailedStages")
         ):
-            continue
-        for sid in job.get("stageIds", []):
-            for attempt in _get(f"{base}/stages/{sid}"):
-                url = (
-                    f"{base}/stages/{sid}/{attempt['attemptId']}/taskList?length=100000"
-                )
-                for task in _get(url):
-                    if task.get("duration") is None:
-                        continue  # still running
-                    end = _epoch(task["launchTime"]) + task["duration"] / 1000.0
-                    if t0 <= end <= t1 + 1.0:
-                        ends.setdefault(str(task["executorId"]), []).append(end)
-    return ends
+            return _RETRIED_REASON
+        for sid in set(job.get("stageIds", [])) - set(job.get("skippedStages", [])):
+            attempts = _get(f"{base}/stages/{sid}")
+            if not attempts:
+                return _NO_TASKS_REASON
+            for attempt in attempts:
+                if (
+                    attempt.get("attemptId")
+                    or attempt.get("numFailedTasks")
+                    or attempt.get("numKilledTasks")
+                ):
+                    return _RETRIED_REASON
+                if ends:
+                    url = f"{base}/stages/{sid}/{attempt['attemptId']}/taskList?length=100000"
+                    for task in _get(url):
+                        if task.get("duration") is None:
+                            continue
+                        end = _epoch(task["launchTime"]) + task["duration"] / 1000.0
+                        if t0 <= end <= t1 + 1.0:
+                            task_ends.setdefault(str(task["executorId"]), []).append(
+                                end
+                            )
+    if ends and (len(task_ends) < executors or not task_ends):
+        return _NO_TASKS_REASON
+    if ends and _longest_release_gap(task_ends, t1) > _IDLE_STOP_S:
+        return _MAYBE_LOST_REASON
+    return ""
 
 
 class WorkerPeak:
@@ -510,14 +571,25 @@ class WorkerPeak:
     tasks run in Python workers of their own (a worker environment variable keys a separate
     pool), so the sweep's own CPU time never makes a bystander look busy.
 
-    A worker that exits takes its mark with it, and Spark stops an idle worker after 60 s: in a
-    long shape, a worker whose task finished early is gone before the read, and nothing the
-    kernel keeps says whether it had run (the daemon ignores SIGCHLD, so a reaped worker's CPU
-    time is not added to the daemon's). So ``read()`` is NULL when a worker that was there at the
-    reset is gone. A worker created during the shape leaves no trace if it exits; but Spark
-    stops one only after the pool has seen no worker released for 60 s, so when the shape ran
-    longer than that the Spark REST API's task end times must show every executor releasing a
-    worker at least every 50 s, or the reading is NULL too.
+    A worker that exits takes its mark with it, and nothing the kernel keeps says whether it had
+    run (the daemon ignores SIGCHLD, so a reaped worker's CPU time is not added to the daemon's).
+    So the reading is never a bare maximum over the workers that are left:
+
+    - a worker of the shape's pool that was there at the reset and has gone voids it. The shape's
+      pool is the daemon whose workers ran; another pool's idle worker, which Spark also stops
+      after 60 s, neither counts nor voids. A daemon is not a worker.
+    - for every shape, the Spark REST API's jobs and stages of the shape must show no failed or
+      killed task and no retry (a worker that was killed, and its task run again on a new one,
+      leaves nothing else), and must answer: an empty or missing reply voids it.
+    - a worker created by the shape leaves no trace if Spark stops it, after the pool has seen
+      no worker released for 60 s. So when the shape ran longer than 50 s, the REST end times of
+      its tasks must show every executor releasing a worker at least every 50 s (and the first
+      read after the last), or the reading is NULL. That leaves 10 s of margin, for a task that
+      ends that long after its worker is released.
+
+    Not covered: a worker that the JVM destroys without failing a task (a read that stops early,
+    such as ``limit``) while another worker of the pool ran on. If every worker that ran is gone,
+    nothing is left to count and the reading is NULL.
 
     ``read()`` is None, with the reason in ``reason``, wherever the reset cannot be shown to
     reach every worker: off Linux, on a Connect session, when the Spark REST API does not give
@@ -525,10 +597,10 @@ class WorkerPeak:
     ``spark.default.parallelism`` would leave an executor without a task and still read a
     number), when a live worker's counter cannot be reset, when the sweep did not get a pool of
     its own, and when no slot frees up within ``TIMEOUT_S`` (a busy cluster). It is also None,
-    saying so, when a worker exited before the read (above; also a crashed one), when an
-    executor that held workers at the reset is gone, when workers exit with their task
-    (``spark.python.worker.reuse=false``), and when no Python worker ran during the shape (a plan
-    with no Python in it). It is not a number that leaves out a worker that ran.
+    saying so, in each case above, when an executor that held workers at the reset is gone, when
+    workers exit with their task (``spark.python.worker.reuse=false``), and when no Python worker
+    ran during the shape (a plan with no Python in it). It is not a number that leaves out a
+    worker that ran.
 
     Why not sampling: a sampler would have to run inside the workers during the shape and
     compete with it for slots. The reset needs no thread, and it costs two short jobs. It
@@ -544,7 +616,7 @@ class WorkerPeak:
         self.reason: Optional[str] = None
         self._slots = 0
         # what the reset noted: worker -> CPU ticks, and the daemons
-        self._baseline: Dict = {"cpu": {}, "daemons": set()}
+        self._baseline: Dict = {"cpu": {}, "via": {}, "daemons": set()}
         self._scopes: set = set()  # the executors that held workers at the reset
         self._t0: Optional[float] = None  # when the reset ended
         if is_connect(spark):
@@ -667,11 +739,14 @@ class WorkerPeak:
                 missed = sum(r.missed for r in rows)
                 if missed:
                     raise RuntimeError(f"{missed} live Python worker(s) not resettable")
-                self._baseline = {"cpu": {}, "daemons": set()}
+                self._baseline = {"cpu": {}, "via": {}, "daemons": set()}
                 for r in rows:
                     for entry in filter(None, r.ticks.split(";")):
-                        _, key, ticks, daemon = entry.split(",")  # "m,key,cpu,daemon"
+                        _, key, ticks, daemon, via = entry.split(
+                            ","
+                        )  # "m,key,cpu,daemon,via"
                         self._baseline["cpu"][key] = int(ticks)
+                        self._baseline["via"][key] = via
                         if daemon == "1":
                             self._baseline["daemons"].add(key)
                 self._scopes = {r.scope for r in rows}
@@ -679,33 +754,34 @@ class WorkerPeak:
             except Exception as exc:  # noqa: BLE001
                 self._fail("reset", exc)
 
-    def _released_often_enough(self, t1: float) -> bool:
-        """False when a worker may have idled out the pool's 60 s and been stopped since the reset."""
-        if self._t0 is None or t1 - self._t0 <= _IDLE_STOP_S:
-            return True
+    def _rest_trouble(self, t1: float, executors: int) -> str:
+        """`_rest_trouble` for this shape (since the reset), "" if it finds none."""
+        if self._t0 is None:
+            return ""
         sc = self.spark.sparkContext
         try:
             base = f"{sc.uiWebUrl}/api/v1/applications/{sc.applicationId}"
-            ends = _task_ends(base, self._t0, t1)
-        except Exception:  # noqa: BLE001 - no task times: no way to rule it out
-            return False
-        return _longest_release_gap(ends, t1) <= _IDLE_STOP_S
+            return _rest_trouble(
+                base, self._t0, t1, executors, t1 - self._t0 > _IDLE_STOP_S
+            )
+        except Exception:  # noqa: BLE001 - no answer: no way to rule it out
+            return _NO_REST_REASON
 
     def read(self) -> Optional[float]:
         if self.reason is not None:
             return None
-        t1 = time.time()
         try:
             rows = self._sweep(reset=False)
         except Exception as exc:  # noqa: BLE001
             self._fail("read", exc)
             return None
+        # taken after the sweep, so that a sweep that waited for slots counts as shape time
+        t1 = time.time()
         if sum(r.lost for r in rows) or self._scopes - {r.scope for r in rows}:
             self.reason = _LOST_REASON
-        elif not self._released_often_enough(t1):
-            self.reason = _MAYBE_LOST_REASON
         elif not sum(r.ran for r in rows):
             self.reason = "no Python worker ran during the shape"
         else:
-            return max(r.hwm for r in rows)
-        return None
+            ran_on = len({r.scope for r in rows if r.ran})
+            self.reason = self._rest_trouble(t1, ran_on) or None
+        return None if self.reason else max(r.hwm for r in rows)

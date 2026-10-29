@@ -120,9 +120,10 @@ class ResultRow:
     # on every worker just before; an idle pooled worker, whatever RSS it holds, is not counted.
     # NULL, with the reason in the row's note, rather than a number that may leave a worker out:
     # on a Connect session, off Linux, with spark.python.worker.reuse=false, when no Python worker
-    # ran during the shape, and when a worker exited before the read. Spark stops a worker that has
-    # idled 60 s, so a long shape whose early tasks finish long before its last is NULL; so is one
-    # whose task end times do not rule that out.
+    # ran during the shape, when a worker of the shape's pool that was there at the reset has exited
+    # (Spark stops one that has idled 60 s, so a long shape whose early tasks end long before its
+    # last is NULL), when the Spark REST API shows a failed, killed or retried task, gives no answer,
+    # or leaves a 50 s wait between task ends in a shape longer than that.
     py_worker_rss_mb: Optional[float] = None
     # Why an error row failed ("ExceptionType: message"); "" on every other row.
     failure_mode: str = ""

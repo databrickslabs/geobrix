@@ -109,7 +109,33 @@ CRS_VALUES = [
     ("OGC:CRS84", True, None),
     (_WKT_32633, True, None),
     (pyproj.CRS.from_epsg(3857).to_json(), True, None),
+    # m-4: a PROJJSON parameter that names a grid by path (the `"value"` key branch), and a bare registered grid name
+    (
+        '{"type": "ProjectedCRS", "name": "gbx", "base_crs": {"name": "WGS 84"}, "conversion": {"name": "gbx", '
+        '"method": {"name": "Transverse Mercator"}, "parameters": [{"name": "Latitude of natural origin", '
+        '"value": "/etc/hostname", "unit": "degree"}]}}',
+        False,
+        "/etc/hostname",
+    ),
+    (
+        "+proj=longlat +datum=WGS84 +nadgrids=gbx_registered_grid.gsb +type=crs",
+        True,
+        None,
+    ),
+    # m-5: the named datums and an OGC URN are admitted (a ruling, disclosed): both resolve without reading a file
+    ("WGS84", True, None),
+    ("urn:ogc:def:crs:EPSG::4326", True, None),
 ]
+
+
+def test_a_named_datum_is_the_datum_never_a_planted_file_of_that_name(
+    tmp_path, monkeypatch
+):
+    """m-5: `WGS84` names a datum; a file of that name in the working directory is not read (GDAL resolves named
+    datums before its file check, the order this rule relies on)."""
+    (tmp_path / "WGS84").write_text(_WKT_32633)
+    monkeypatch.chdir(tmp_path)
+    assert C.resolve_crs("WGS84").to_epsg() == 4326
 
 
 @pytest.mark.parametrize("value,accepted,named", CRS_VALUES)

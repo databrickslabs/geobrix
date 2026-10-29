@@ -6,14 +6,32 @@
 
 set -e
 
+# The checkout as mounted, and the image Maven's conf dir (overridable for the scripts/ci tests).
+ROOT="${GBX_CONTAINER_ROOT:-/root/geobrix}"
+CONF="${GBX_MAVEN_CONF_DIR:-/usr/local/share/maven/conf}"
+SETTINGS="$ROOT/scripts/docker/m2/settings.xml"
+DEFAULT_SETTINGS="$ROOT/scripts/docker/extras/maven-settings.xml"
+
 echo ""
 echo "::: [Maven setup] .m2 in project + skipScoverage as default :::"
 unset JAVA_TOOL_OPTIONS
 
-if [ -f /usr/local/share/maven/conf/settings.xml ] && [ ! -f /usr/local/share/maven/conf/settings.xml.BAK ]; then
-    mv /usr/local/share/maven/conf/settings.xml /usr/local/share/maven/conf/settings.xml.BAK
+# scripts/docker/m2/ is gitignored, so a new linked worktree has no settings.xml there: give it the
+# tracked default. A settings.xml already there is kept. This comes first: the image's own settings
+# are moved aside below, and without a replacement Maven would go to Maven Central, which is blocked.
+if [ ! -f "$SETTINGS" ]; then
+    if [ ! -f "$DEFAULT_SETTINGS" ]; then
+        echo "    no $SETTINGS and no $DEFAULT_SETTINGS: the container's Maven settings were left unchanged" >&2
+        exit 1
+    fi
+    mkdir -p "$(dirname "$SETTINGS")"
+    cp "$DEFAULT_SETTINGS" "$SETTINGS"
+    echo "    $SETTINGS was missing: wrote the default (db-maven-proxy mirror, skipScoverage)"
 fi
-cp /root/geobrix/scripts/docker/m2/settings.xml /usr/local/share/maven/conf
+if [ -f "$CONF/settings.xml" ] && [ ! -f "$CONF/settings.xml.BAK" ]; then
+    mv "$CONF/settings.xml" "$CONF/settings.xml.BAK"
+fi
+cp "$SETTINGS" "$CONF/settings.xml"
 echo "    Active Maven profile(s):"
 # Fully qualified, version-pinned plugin coordinates: the short `help:` prefix does not resolve
 # in geobrix-dev. Prefix lookup reads each repository's plugin-group maven-metadata.xml, and the
@@ -22,7 +40,7 @@ echo "    Active Maven profile(s):"
 HELP_PLUGIN="3.5.1"
 # No -q: the plugin reports through the INFO log, so -q printed an empty list under the heading above.
 # Show just the profile lines on success; on failure show everything Maven said and stop.
-cd /root/geobrix
+cd "$ROOT"
 if ! profiles_out="$(mvn -B "org.apache.maven.plugins:maven-help-plugin:${HELP_PLUGIN}:active-profiles" 2>&1)"; then
     echo "$profiles_out"
     exit 1

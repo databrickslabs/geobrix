@@ -1,0 +1,19 @@
+<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.2.0 http://maven.apache.org/xsd/settings-1.2.0.xsd">
+    <!-- The geobrix-dev container's Maven settings. docker_maven_setup.sh copies this to
+    | scripts/docker/m2/settings.xml when the checkout has none there (a new linked worktree:
+    | scripts/docker/m2/ is gitignored), then into the container's Maven conf. A settings.xml
+    | already in scripts/docker/m2/ is kept.
+    -->
+    <localRepository>/root/geobrix/scripts/docker/m2</localRepository>
+    <mirrors>
+        <mirror>
+            <id>db-maven-proxy</id>
+            <url>https://maven-proxy.dev.databricks.com</url>
+            <mirrorOf>central</mirrorOf>
+        </mirror>
+    </mirrors>
+    <activeProfiles>
+        <activeProfile>skipScoverage</activeProfile>
+    </activeProfiles>
+</settings>

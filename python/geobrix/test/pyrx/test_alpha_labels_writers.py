@@ -16,6 +16,7 @@ carried.
 import numpy as np
 import pytest
 import rasterio
+import rasterio.shutil  # not loaded by `import rasterio`; _getsubdataset_of calls rasterio.shutil.copy
 from rasterio.enums import ColorInterp as CI
 from rasterio.io import MemoryFile
 from rasterio.windows import Window

@@ -111,7 +111,6 @@ from databricks.labs.gbx.zarr._write_tasks import (
     block_hash,
     block_is_stored,
     chunk_grid,
-    delete_row,
     explode_function,
     extent,
     part_of,
@@ -1962,8 +1961,9 @@ def _untouched_deletes(spark, plan: _Plan, rows: pa.Table, written: set) -> pa.T
     """An overwrite replaces whole variables: every base row of a variable it writes goes,
     unless a chunk replaced it. The tasks delete within the groups the input touched (they
     saw only those); this reads the base rows of the written variables in every other
-    group, on the cluster, and returns them as delete rows (``ROWS_ARROW``). Nothing of a
-    variable the write does not replace is read."""
+    group, on the cluster, and returns them as delete rows (``ROWS_ARROW``), column by
+    column. Nothing of a variable the write does not replace is read, and a variable whose
+    every group the input touched (an overwrite of all of it) is not read at all."""
     if plan.mode != "overwrite" or plan.docs is None:
         return ROWS_ARROW.empty_table()
     names = sorted(
@@ -1983,23 +1983,80 @@ def _untouched_deletes(spark, plan: _Plan, rows: pa.Table, written: set) -> pa.T
     touched = (
         pa.table(
             {
-                "variable": chunks.column("array"),
-                "part": pc.coalesce(chunks.column("shard_key"), chunks.column("key")),
+                "variable": chunks.column("array").cast(pa.string()),
+                "part": pc.coalesce(
+                    chunks.column("shard_key"), chunks.column("key")
+                ).cast(pa.string()),
             }
         )
         .group_by(["variable", "part"])
         .aggregate([])
     )
-    base = _base_frame(spark, plan, names)
-    if touched.num_rows:
-        seen = to_spark_df(spark, touched, "variable STRING, part STRING")
-        base = base.join(seen, ["variable", "part"], "left_anti")
-    gone = [
-        json.loads(r) for r in base.select("row").toArrow().column("row").to_pylist()
-    ]
-    if not gone:
+    per_array = dict(
+        zip(
+            *touched.group_by("variable")
+            .aggregate([("part", "count")])
+            .select(["variable", "part_count"])
+            .to_pydict()
+            .values()
+        )
+    )
+    # the input reaches only groups of the array's grid, so touching as many groups as the
+    # grid has means touching all of them: nothing of that variable is left to delete
+    left = [n for n in names if per_array.get(n, 0) < _groups(plan.docs.arrays[n])]
+    if not left:
         return ROWS_ARROW.empty_table()
-    return pa.Table.from_pylist([delete_row(b) for b in gone], schema=ROWS_ARROW)
+    from pyspark.sql import functions as F
+
+    base = spark.sql(
+        f"SELECT kind, array, key, shard_key, identity, write_id "
+        f"FROM {M._q(plan.table)} VERSION AS OF {int(plan.base.version)} "
+        "WHERE tag IS NULL AND kind IN ('shard', 'chunk')"
+    ).where(F.col("array").isin(left))
+    seen = touched.filter(
+        pc.is_in(touched.column("variable"), value_set=pa.array(left, pa.string()))
+    )
+    if seen.num_rows:
+        part = (
+            F.when(F.col("kind") == "shard", F.col("key"))
+            .when(F.col("shard_key").isNotNull(), F.col("shard_key"))
+            .otherwise(F.col("key"))
+        )
+        keys = to_spark_df(spark, seen, "variable STRING, part STRING")
+        base = (
+            base.withColumn("variable", F.col("array"))
+            .withColumn("part", part)
+            .join(keys, ["variable", "part"], "left_anti")
+            .drop("variable", "part")
+        )
+    gone = base.toArrow()
+    n = gone.num_rows
+    if not n:
+        return ROWS_ARROW.empty_table()
+    columns = {
+        "rtype": pa.repeat(pa.scalar("delete", pa.string()), n),
+        "kind": gone.column("kind"),
+        "array": gone.column("array"),
+        "key": gone.column("key"),
+        "shard_key": gone.column("shard_key"),
+        "identity": gone.column("identity"),
+        "expected_write_id": gone.column("write_id"),
+    }
+    return pa.Table.from_arrays(
+        [
+            (columns[f.name] if f.name in columns else pa.nulls(n, f.type)).cast(f.type)
+            for f in ROWS_ARROW
+        ],
+        schema=ROWS_ARROW,
+    )
+
+
+def _groups(meta: ArrayMeta) -> int:
+    """How many Spark groups (``part_of``) the grid of ``meta`` has: shards, or chunks."""
+    per = meta.chunks
+    if meta.shard is not None:
+        per = tuple(c * k for c, k in zip(meta.chunks, meta.shard.cps))
+    return math.prod(-(-n // p) for n, p in zip(meta.shape, per))
 
 
 # --- after the files: side rows, coordinates ---------------------------------------------

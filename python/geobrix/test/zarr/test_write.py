@@ -383,6 +383,51 @@ def test_a_one_chunk_write_reads_only_its_own_group_of_the_manifest(
     np.testing.assert_array_equal(_read(spark_delta, table, "u10"), ds.u10.values)
 
 
+@pytest.mark.parametrize("whole", [False, True])
+def test_an_overwrite_collects_the_rest_of_its_variable_as_columns(
+    spark_delta, drop, tmp_path, no_hooks, whole
+):
+    """The rows an overwrite deletes outside the groups its input touched (here up to 1,439
+    of one variable) reach the driver as Arrow columns, never as a Python dict per row; an
+    overwrite of the whole variable touches every group, so nothing is read or uploaded.
+    """
+    ds = _dataset(hours=12)
+    one = {"time": 1, "latitude": 1, "longitude": 1}
+    table, _, _ = _create(spark_delta, drop, tmp_path, ds, chunks=one, shards=False)
+    uploads, collected = [], {}
+    real_upload, real_rows = _write.to_spark_df, _write._commit_data_rows
+
+    def per_row_dict(base):
+        raise AssertionError("a delete row was built as a Python dict")
+
+    def recording_rows(plan, rows, written):
+        collected["deletes"] = (
+            rows.filter(pa_compute.equal(rows.column("rtype"), "delete"))
+            .column("array")
+            .to_pylist()
+        )
+        return real_rows(plan, rows, written)
+
+    no_hooks.setattr(_write, "delete_row", per_row_dict, raising=False)
+    no_hooks.setattr(
+        _write, "to_spark_df", lambda *a, **k: uploads.append(1) or real_upload(*a, **k)
+    )
+    no_hooks.setattr(_write, "_commit_data_rows", recording_rows)
+    new = np.full((12, 10, 12) if whole else (1, 1, 1), 5.0, dtype="float32")
+    gbx_zarr_write(
+        _blocks(spark_delta, ("t2m", (0, 0, 0), new)), table, mode="overwrite"
+    )
+
+    got = _read(spark_delta, table, "t2m")
+    if whole:
+        assert (got == 5.0).all()
+        assert collected["deletes"] == [] and uploads == []
+    else:
+        assert got[0, 0, 0] == 5.0 and np.isnan(got.ravel()[1:]).all()
+        assert collected["deletes"] == ["t2m"] * 1439 and len(uploads) == 1
+    np.testing.assert_array_equal(_read(spark_delta, table, "u10"), ds.u10.values)
+
+
 # --- idempotency and read-only stores ------------------------------------------------------
 
 

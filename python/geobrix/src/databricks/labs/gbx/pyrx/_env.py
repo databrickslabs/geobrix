@@ -249,15 +249,33 @@ def _proj_data_dir(base: str, extra_proj_dirs: Sequence[str]) -> Optional[str]:
     return path
 
 
+def _set_osr_search_paths(dirs: Sequence[str]) -> None:
+    """Set GDAL's PROJ search path on the process's default PROJ context (osr.SetPROJSearchPaths), so a grid directory
+    registered after the context was built reaches the raster transforms. Only when osgeo is rasterio's GDAL: another
+    GDAL's context is not this process's."""
+    try:
+        from databricks.labs.gbx import _osgeo
+
+        if not _osgeo._same_libgdal_report().get("shared"):
+            return
+        from osgeo import osr
+    except (
+        Exception
+    ):  # noqa: BLE001 - no payload osgeo: the environment variable is all there is
+        return
+    osr.SetPROJSearchPaths(list(dirs))
+
+
 def _register_pyproj_search_dirs(extra_proj_dirs: Sequence[str]) -> None:
     """Add custom grid dirs to pyproj's PROJ search path (best-effort, idempotent).
 
-    Setting ``PROJ_DATA`` in the environment is enough for the GDAL/rasterio raster
-    path, but NOT for pyproj — the light vector transform engine. pyproj resolves and
-    caches its PROJ data dir at import and installs it on the proj context explicitly,
-    so a ``PROJ_DATA`` env var changed *afterwards* is ignored for grids loaded through
-    a pyproj ``Transformer``. Registering the dirs via ``pyproj.datadir`` is what makes
-    an in-process transform actually find a user grid.
+    pyproj resolves and caches its PROJ data dir at import and installs it on the proj
+    context explicitly, so a ``PROJ_DATA`` env var changed *afterwards* is ignored for
+    grids loaded through a pyproj ``Transformer``. Registering the dirs via
+    ``pyproj.datadir`` is what makes an in-process transform find a user grid. (The
+    GDAL/rasterio side has the same limit: a PROJ context that already exists keeps the
+    search path it was built with, so ``configure_gdal_env`` also sets it with
+    ``osr.SetPROJSearchPaths``.)
 
     Dirs are APPENDED (never prepended): pyproj's own data dir stays first so proj.db
     resolution is untouched, and PROJ searches grid files across all search paths
@@ -310,6 +328,7 @@ def configure_gdal_env(extra_proj_dirs: Optional[Sequence[str]] = None) -> None:
         merged = _proj_data_dir(base, extra_proj_dirs)
         if merged:
             os.environ["PROJ_DATA"] = merged
+            _set_osr_search_paths([merged])
         _register_pyproj_search_dirs(extra_proj_dirs)
     elif base and not os.environ.get("PROJ_DATA") and not os.environ.get("PROJ_LIB"):
         os.environ["PROJ_DATA"] = base

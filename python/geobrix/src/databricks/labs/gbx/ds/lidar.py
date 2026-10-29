@@ -521,6 +521,44 @@ def _most_chunks(points: int, chunk_size: Optional[int]) -> int:
     return -(-points // (1 if chunk_size is None else chunk_size)) + 1
 
 
+def _chunk_count_problem(
+    count: int, at: int, start: int, item: int, points: int, chunk_size: Optional[int]
+) -> Optional[str]:
+    """Why a chunk table of ``count`` chunks cannot be what a decoder is given, or
+    None. ``at`` is where the table is, ``start`` where the compressed points begin,
+    ``item`` the bytes of a point, ``points`` the header's point count and
+    ``chunk_size`` the points per chunk (None: they vary).
+
+    Both decoders size a table from this number before they decode a point (lazrs
+    reserves 16 bytes a chunk, laszip 8) and the process dies on what the machine
+    cannot give: a count of 2**31 - 1 asks lazrs for 32 GiB and laszip for 16 GiB."""
+    # One chunk holds at least its first point, uncompressed; the writer's last
+    # chunk may hold none.
+    if count > min((at - start - 8) // item + 1, _MAX_LAZ_CHUNKS):
+        return f"the chunk table declares {count} chunks, more than the file can hold"
+    # Nor more chunks than the header's points fill: a garbled offset deep in a big
+    # file can read as a count up to _MAX_LAZ_CHUNKS, and lazrs builds a list of
+    # that many entries (about 2.5 GB).
+    if count > _most_chunks(points, chunk_size):
+        return (
+            f"the chunk table declares {count} chunks, more than the {points} "
+            "points of the header need (the header's point count may be wrong)"
+        )
+    return None
+
+
+def _chunk_size_of(h) -> Optional[int]:
+    """Points per chunk of the LASzip record (the u32 at byte 12, which laspy parses
+    without lazrs); None when chunks vary in size (all ones, as COPC files have),
+    when there is no record, or when it holds none (0)."""
+    laszip = h.vlrs.get("LasZipVlr")
+    record = bytes(laszip[0].record_data) if laszip else b""
+    if len(record) < 16:
+        return None
+    chunk_size = struct.unpack_from("<I", record, 12)[0]
+    return None if chunk_size in (0, _VARIABLE_CHUNK_SIZE) else chunk_size
+
+
 def _laszip_record(h) -> Union[str, _LaszipRecord, None]:
     """The LASzip record of a LAZ file, checked; a str saying why it cannot go to
     the decoder; None for a file that is not LAZ, or when lazrs (so no abort to
@@ -648,18 +686,9 @@ def _chunk_table_in(h, record: _LaszipRecord, f, size: int) -> Union[str, _Chunk
         if points:
             return "the chunk table is empty"
         return _ChunkTable([], item, record.chunk_size)
-    # One chunk holds at least its first point, uncompressed; the writer's last
-    # chunk may hold none.
-    if count > min((at - start - 8) // item + 1, _MAX_LAZ_CHUNKS):
-        return f"the chunk table declares {count} chunks, more than the file can hold"
-    # Nor more chunks than the header's points fill: a garbled offset deep in a big
-    # file can read as a count up to _MAX_LAZ_CHUNKS, and lazrs builds a list of
-    # that many entries (about 2.5 GB).
-    if count > _most_chunks(points, record.chunk_size):
-        return (
-            f"the chunk table declares {count} chunks, more than the {points} "
-            "points of the header need (the header's point count may be wrong)"
-        )
+    problem = _chunk_count_problem(count, at, start, item, points, record.chunk_size)
+    if problem is not None:
+        return problem
     handle = _IOWatch(f)
     handle.seek(start)
     try:  # now bounded by the file and the header: lazrs reserves 16 bytes per chunk
@@ -686,14 +715,15 @@ def _chunk_table_in(h, record: _LaszipRecord, f, size: int) -> Union[str, _Chunk
     )
 
 
-def _laszip_scans(h) -> bool:
-    """True for a LAZ file with GPS time that ``laszip``, not lazrs, would decode.
+def _laszip_decodes(h) -> bool:
+    """True for a LAZ file that ``laszip``, not lazrs, would decode.
 
-    laspy picks the first backend it can import (lazrs, then laszip). The laszip
-    decoder overflows its stack on a run of 0xFF as lazrs does, but with no lazrs
-    there is no chunk table to read, so such a file is scanned as a whole.
+    laspy picks the first backend it can import (lazrs, then laszip). laszip dies
+    on a garbled chunk count and (a point format with GPS time) on a run of 0xFF
+    as lazrs does, but with no lazrs there is no decoded chunk table to check, so
+    the file's own bytes are (see :func:`_laszip_only_problem`).
     """
-    if not h.are_points_compressed or "gps_time" not in h.point_format.dimension_names:
+    if not h.are_points_compressed:
         return False
     from laspy.compression import LazBackend
 
@@ -704,17 +734,36 @@ def _laszip_scans(h) -> bool:
 
 
 def _laszip_only_problem(h, f, size: int) -> Optional[str]:
-    """:data:`_DENSE_FF_PROBLEM` when the compressed points of the open file ``f``
-    (``size`` bytes) hold a dense run of 0xFF, else None; for a file that
-    :func:`_laszip_scans`.
+    """Why the open file ``f`` (``size`` bytes) must not be given to laszip, or None;
+    for a file that :func:`_laszip_decodes`.
 
-    Without lazrs the chunk table cannot be read, so every byte from the start of
-    the compressed points to the table is scanned and the uncompressed first record
-    of each chunk is not left out, as :func:`_dense_ff_in` does with the table. A
-    record is far smaller than a 256-byte block, so only one that is mostly 0xFF
-    (extra bytes all 255, say) can be mistaken for damage."""
+    laszip sizes a table from the chunk count it reads out of the file before it
+    decodes a point and the process dies on a count the machine cannot give (a
+    count of 2**31 - 1 asks for 16 GiB), so the count is checked as it is for lazrs
+    (:func:`_chunk_count_problem`); it stands in the first bytes of the table, which
+    are read without lazrs.
+
+    A point format with GPS time also has its compressed points scanned for a
+    dense run of 0xFF: without lazrs the chunk table cannot be read, so every byte
+    from the start of the compressed points to the table is scanned and the
+    uncompressed first record of each chunk is not left out, as :func:`_dense_ff_in`
+    does with the table. A record is far smaller than a 256-byte block, so only one
+    that is mostly 0xFF (extra bytes all 255, say) can be mistaken for damage."""
     start = int(h.offset_to_point_data)
     found = _find_chunk_table(f, start, size)
+    if not isinstance(found, str) and found[1]:
+        problem = _chunk_count_problem(
+            found[1],
+            found[0],
+            start,
+            max(int(h.point_format.size), 1),
+            int(h.point_count),
+            _chunk_size_of(h),
+        )
+        if problem is not None:
+            return problem
+    if "gps_time" not in h.point_format.dimension_names:
+        return None
     end = size if isinstance(found, str) else found[0]
     room = end - (start + 8)
     if room <= 0:
@@ -725,9 +774,9 @@ def _laszip_only_problem(h, f, size: int) -> Optional[str]:
 def _read_chunk_table(h, local: str, size: int) -> Union[str, _ChunkTable, None]:
     """The chunk table of a LAZ file when it can be handed to the decoder; a str
     saying why not when it cannot; None for a file that is not LAZ, or when lazrs
-    is not the decoder (no chunk table to hand over: the points of a file that
-    laszip decodes are scanned for 0xFF runs all the same, see
-    :func:`_laszip_only_problem`).
+    is not the decoder (no chunk table to hand over: a file that laszip decodes
+    has its chunk count checked and its points scanned for 0xFF runs all the
+    same, see :func:`_laszip_only_problem`).
 
     lazrs reserves memory for numbers it reads out of the file (the chunk count,
     each chunk's byte count and point count, the chunk size of the LASzip record)
@@ -746,7 +795,7 @@ def _read_chunk_table(h, local: str, size: int) -> Union[str, _ChunkTable, None]
     chunks), and for a format with GPS time one more sequential read of the
     compressed points."""
     record = _laszip_record(h)
-    if record is None and not _laszip_scans(h):
+    if record is None and not _laszip_decodes(h):
         return None
     if isinstance(record, str):
         return record
@@ -766,8 +815,8 @@ def check_laz(source, name: str) -> None:
     What is checked depends on the decoder laspy will pick. With lazrs: a LASzip
     record that cannot be decoded, a chunk table that is implausible, or (a point
     format with GPS time) compressed points with a dense run of 0xFF bytes (see
-    :func:`_read_chunk_table`). With laszip and no lazrs: only that run of 0xFF
-    bytes, again for a point format with GPS time. Anything else passes: an
+    :func:`_read_chunk_table`). With laszip and no lazrs: the chunk count, and
+    that run of 0xFF bytes for a point format with GPS time. Anything else passes: an
     uncompressed file, a LAZ file under any other decoder, and a LAZ file whose
     table and points are sound as far as these checks go (other damage can still
     reach the decoder)."""
@@ -782,7 +831,7 @@ def check_laz(source, name: str) -> None:
         h = laspy.LasHeader.read_from(f, read_evlrs=False)  # points only
         record = _laszip_record(h)
         if record is None:
-            if not _laszip_scans(h):
+            if not _laszip_decodes(h):
                 return
             found = _laszip_only_problem(h, f, size)
         else:
@@ -858,12 +907,8 @@ def _laz_point_room(h, local: str, size: int) -> Tuple[int, bool]:
     (:data:`_MIN_LAZ_POINT_BYTES`) are the answer then."""
     start = int(h.offset_to_point_data)
     by_size = int((size - start) / _MIN_LAZ_POINT_BYTES)
-    laszip = h.vlrs.get("LasZipVlr")
-    record = bytes(laszip[0].record_data) if laszip else b""
-    if len(record) < 16:
-        return by_size, False
-    chunk_size = struct.unpack_from("<I", record, 12)[0]
-    if chunk_size in (0, _VARIABLE_CHUNK_SIZE):
+    chunk_size = _chunk_size_of(h)
+    if chunk_size is None:
         return by_size, False
     f = _listing._retry_transient(lambda: open(local, "rb"))
     with f:

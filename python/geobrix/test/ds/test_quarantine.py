@@ -654,14 +654,15 @@ def test_lidar_record_length_counting_missing_extra_bytes_reads_nothing(tmp_path
     assert "38 bytes" in rec["error_message"]
 
 
-def _laz(path, n=5000, zero_points=()):
+def _laz(path, n=5000, zero_points=(), point_format=3):
     """A LAZ file (one chunk up to laspy's 50,000 points) with UTM-like offsets:
     a zero-filled point record decodes to the offset corner, which lies inside
     the header bounds. ``zero_points`` are written as records whose bytes are
-    all zero (raw X/Y/Z 0; every other field is 0 in every point)."""
+    all zero (raw X/Y/Z 0; every other field is 0 in every point).
+    ``point_format`` 3 carries GPS time, 2 does not."""
     import laspy
 
-    header = laspy.LasHeader(point_format=3, version="1.2")
+    header = laspy.LasHeader(point_format=point_format, version="1.2")
     header.offsets = np.array([500000.0, 4000000.0, 100.0])
     header.scales = np.array([0.01, 0.01, 0.01])
     las = laspy.LasData(header)
@@ -715,50 +716,96 @@ def test_lidar_laz_declaring_a_huge_point_count_fabricates_none(tmp_path):
     )
 
 
-@pytest.mark.parametrize("damage", ["none", "variable", "zero", "count"])
+def _header_of(path):
+    import laspy
+
+    with open(path, "rb") as fh:
+        return laspy.LasHeader.read_from(fh, read_evlrs=False)
+
+
+def _without_lazrs(monkeypatch):
+    """This process as a worker with no lazrs: ``import lazrs`` fails, laspy's own
+    binding of it is gone and laszip is the one decoder it reports. Nothing here can
+    reach lazrs, so no read can abort the test run on a buffer lazrs reserves; a read
+    that gets as far as a decoder fails with laspy's error (laszip is not a test
+    dependency)."""
+    import laspy._compression.lazrsbackend as lazrsbackend
+    from laspy.compression import LazBackend
+
+    monkeypatch.setitem(sys.modules, "lazrs", None)
+    monkeypatch.setattr(lazrsbackend, "lazrs", None)
+    monkeypatch.setattr(
+        LazBackend, "detect_available", staticmethod(lambda: (LazBackend.Laszip,))
+    )
+
+
+def _set_chunk_count(path, count):
+    """The chunk count at the head of the file's chunk table."""
+    at, _, _ = _chunk_table(path)
+    with open(path, "r+b") as fh:
+        fh.seek(at + 4)
+        fh.write(struct.pack("<I", count))
+
+
+@pytest.mark.parametrize("damage", ["none", "variable", "zero"])
 def test_lidar_laz_without_lazrs_still_caps_a_huge_point_count(
     tmp_path, monkeypatch, damage
 ):
     """With no chunk table to hand to the decoder (lazrs is not the decoder), a header count beyond
     what the table holds is capped by it: its chunk count times the points per chunk, both readable
-    without lazrs. Where that cannot be known (chunks of varying size, zero points per chunk) or
-    cannot be trusted (a garbled count), the bytes of the file bound it, at the fewest a point
-    takes: a guess, but never looser than the file."""
-    import laspy
-
+    without lazrs. Where that cannot be known (chunks of varying size, zero points per chunk), the
+    bytes of the file bound it, at the fewest a point takes: a guess, but never looser than the file.
+    Lazrs is taken away for real (see :func:`_without_lazrs`), so the cap is read off the file
+    and no decoder is called."""
     from databricks.labs.gbx.ds import lidar
 
     path = _laz(tmp_path / "a.laz")
-    with open(path, "rb") as fh:
-        raw = fh.read()
-        fh.seek(0)
-        header = laspy.LasHeader.read_from(fh, read_evlrs=False)
-    by_size = int((len(raw) - header.offset_to_point_data) * 1024)
+    header = _header_of(path)
+    by_size = int((os.path.getsize(path) - header.offset_to_point_data) * 1024)
     if damage in (
         "variable",
         "zero",
     ):  # points per chunk: the u32 at byte 12 of the record
-        at = raw.find(bytes(header.vlrs.get("LasZipVlr")[0].record_data)) + 12
-        patch = struct.pack("<I", 0xFFFFFFFF if damage == "variable" else 0)
         with open(path, "r+b") as fh:
+            raw = fh.read()
+            at = raw.find(bytes(header.vlrs.get("LasZipVlr")[0].record_data)) + 12
             fh.seek(at)
-            fh.write(patch)
-    if damage == "count":  # the chunk count at the head of the chunk table
-        with open(path, "r+b") as fh:
-            fh.seek(header.offset_to_point_data)
-            table = struct.unpack("<q", fh.read(8))[0]
-            fh.seek(table + 4)
-            fh.write(struct.pack("<I", 0x7FFFFFFF))
+            fh.write(struct.pack("<I", 0xFFFFFFFF if damage == "variable" else 0))
     _declare_points(path, 10**9)
-    monkeypatch.setattr(lidar, "_read_chunk_table", lambda *a: None)
+    _without_lazrs(monkeypatch)
 
-    rows, recs = _read(tmp_path, path, "lidar_gbx")
+    header, size = _header_of(path), os.path.getsize(path)
+    table = lidar._read_chunk_table(header, path, size)
+    assert table is None  # a sound file: no table to hand over, nothing to refuse
+    said = []
+    readable = lidar._readable_points(
+        header, path, size, lambda *a: said.append(a), table
+    )
 
-    # a record whose chunk size or count is damaged does not decode: what matters is the cap
-    assert _at_offset_corner(rows) == [] and (damage != "none" or len(rows) == 5000)
-    (capped,) = [r for r in recs if r["error_class"] == Q.RECORDS_NOT_READ]
-    most = int(re.search(r"at most (\d+) were read", capped["error_message"]).group(1))
-    assert most == (50000 if damage == "none" else by_size)
+    ((index, error_class, message),) = said
+    assert (index, error_class) == (None, Q.RECORDS_NOT_READ)
+    most = int(re.search(r"at most (\d+) were read", message).group(1))
+    assert most == readable == (50000 if damage == "none" else by_size)
+
+
+@pytest.mark.parametrize("point_format", [3, 2], ids=["gps_time", "no_gps_time"])
+def test_lidar_laz_without_lazrs_refuses_a_garbled_chunk_count(
+    tmp_path, monkeypatch, point_format
+):
+    """laszip, the decoder that is left without lazrs, reserves memory for the chunk count
+    it reads out of the file (2**31 - 1 is 16 GiB) and the process dies on what the machine
+    cannot give. The count is checked from the file's own bytes, for a point format with
+    GPS time and for one without."""
+    from databricks.labs.gbx.ds import lidar
+
+    path = _laz(tmp_path / "a.laz", point_format=point_format)
+    _set_chunk_count(path, 0x7FFFFFFF)
+    _without_lazrs(monkeypatch)
+
+    verdict = lidar._read_chunk_table(_header_of(path), path, os.path.getsize(path))
+    assert verdict and "2147483647 chunks, more than the file can hold" in verdict
+    rows, recs = _read(tmp_path, path, "lidar_gbx")  # set aside before a decoder
+    assert rows == [] and "chunk table" in _only_record(recs)
 
 
 def test_lidar_valid_laz_reads_every_point_and_no_record(tmp_path):
@@ -1012,6 +1059,21 @@ def test_lidar_laz_garbled_chunk_count_is_one_bad_record_not_a_dead_process(
     for) is an unreadable file; lazrs would abort the process."""
     path = _laz(tmp_path / "c.laz", 120_000)  # three chunks
     _garble_chunk_count(path, xor_high_byte)
+    rows, recs, _ = _read_in_child(tmp_path, path)
+    assert rows == 0
+    assert "chunk table" in _only_record(recs)
+
+
+@_linux_only()
+def test_lidar_laz_chunk_count_of_two_billion_is_one_bad_record_not_a_dead_process(
+    tmp_path,
+):
+    """A one-chunk file whose table declares 2**31 - 1 chunks asks lazrs for 32 GiB: an
+    abort on any machine that cannot give it (a 16 GB CI runner, not a Mac), so the child's
+    address space is capped. With lazrs the decoder, the check that refuses the count is the
+    only thing between it and the file."""
+    path = _laz(tmp_path / "c.laz")
+    _set_chunk_count(path, 0x7FFFFFFF)
     rows, recs, _ = _read_in_child(tmp_path, path)
     assert rows == 0
     assert "chunk table" in _only_record(recs)

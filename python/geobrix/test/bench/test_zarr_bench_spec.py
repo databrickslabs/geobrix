@@ -354,3 +354,76 @@ def test_w1d_alternates_the_traced_create_and_the_plain_puts(monkeypatch):
     assert "warm pack puts median 1.50" in gbx.note and "owner re-claim" in gbx.note
     assert base.measured_iters == 3 and "cold_s=5.0" in base.note
     assert "warm puts median 1.00" in base.note
+
+
+def _w1_stubs(monkeypatch, write):
+    import databricks.labs.gbx.zarr as gz
+    from databricks.labs.gbx.bench import zarr_bench as zb
+
+    current = {}
+
+    class Phases:
+        def __init__(self):
+            self.t, self.traces = {}, []
+            current["ph"] = self
+
+        def restore(self):
+            pass
+
+    monkeypatch.setattr(zb, "_w1_phases", Phases)
+    monkeypatch.setattr(zb, "_cube_blocks", lambda *a, **k: None)
+    monkeypatch.setattr(zb, "_w1_check", lambda *a, **k: "verify OK")
+    monkeypatch.setattr(zb, "_drop", lambda *a, **k: None)
+    monkeypatch.setattr(zb, "_plain_w1", lambda *a, **k: 5.0)
+    monkeypatch.setattr(gz, "gbx_zarr_write", lambda *a, **k: write(current["ph"], **k))
+    return zb
+
+
+def test_a_w1_leg_that_fails_is_an_error_row_and_the_other_leg_runs_on(monkeypatch):
+    seen = []
+
+    def write(ph, *, access, **kw):
+        seen.append(access)
+        if access == "direct" and seen.count("direct") == 2:
+            raise RuntimeError("direct put refused")
+        ph.t.update({"files": 8.0, "commit": 3.0})
+
+    zb = _w1_stubs(monkeypatch, write)
+    cfg = zb.ZarrBenchConfig("/s", "/c", "/tmp", "c.s", "r", reps=4)
+    rows = {r.fn: r for r in zb.run_w1(None, cfg)}
+    assert seen.count("direct") == 2 and seen.count("fuse") == 4
+    assert rows["gbx_zarr_write[W1,direct]"].status == "error"
+    assert "direct put refused" in rows["gbx_zarr_write[W1,direct]"].note
+    assert rows["gbx_zarr_write[W1,fuse]"].status == "ok"
+
+
+def test_a_w1_leg_with_no_run_is_an_error_row(monkeypatch):
+    zb = _w1_stubs(monkeypatch, lambda ph, **kw: None)
+    cfg = zb.ZarrBenchConfig("/s", "/c", "/tmp", "c.s", "r", reps=0)
+    rows = [r for r in zb.run_w1(None, cfg) if r.fn.startswith("gbx_zarr_write")]
+    assert rows and all(r.status == "error" and "no run" in r.note for r in rows)
+
+
+def test_the_update_window_probe_runs_only_with_a_write_case(monkeypatch):
+    from databricks.labs.gbx.bench import zarr_bench as zb
+
+    ran = []
+    monkeypatch.setattr(zb, "shard_index_probe", lambda d: ran.append("shard") or [])
+    monkeypatch.setattr(
+        zb, "sample_density_probe", lambda *a: ran.append("density") or []
+    )
+    monkeypatch.setattr(
+        zb, "update_window_probe", lambda *a: ran.append("window") or []
+    )
+    monkeypatch.setattr(zb, "run_r1", lambda spark, cfg: [])
+    monkeypatch.setattr(zb, "run_w1", lambda spark, cfg: [])
+    monkeypatch.setattr(zb.os, "makedirs", lambda *a, **k: None)
+    zb.run_zarr_cases(
+        None, zb.ZarrBenchConfig("/s", "/c", "/tmp", "c.s", "r", cases=("R1",))
+    )
+    assert ran == ["shard", "density"]
+    ran.clear()
+    zb.run_zarr_cases(
+        None, zb.ZarrBenchConfig("/s", "/c", "/tmp", "c.s", "r", cases=("W1",))
+    )
+    assert ran == ["shard", "density", "window"]

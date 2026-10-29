@@ -743,8 +743,10 @@ def run_w1(spark, cfg: ZarrBenchConfig) -> List[ResultRow]:
     for access in accesses:
         leg = legs[access]
         fn = f"{case.name}[W1,{access}]"
-        if leg["error"] is not None:
-            out.append(_error_row(cfg, fn, leg["error"]))
+        if leg["error"] is not None or not leg["walls"]:
+            out.append(
+                _error_row(cfg, fn, leg["error"] or ValueError("no run (reps=0)"))
+            )
             continue
         gate_key = "serverless" if cfg.serverless else f"dbr19_{access}"
         out.append(_w1_row(cfg, fn, nt, nbytes, gate_key, leg))
@@ -1470,6 +1472,9 @@ def _probe_row(cfg, fn, payload, wall) -> ResultRow:
 # --- all of it ----------------------------------------------------------------------------------
 
 
+_WRITE_CASES = {"W1", "W2", "W1D"}  # the update-window probe runs with these only
+
+
 def run_zarr_cases(spark, cfg: ZarrBenchConfig, sink=None) -> List[ResultRow]:
     """Run the selected cases, then the two probes; ``sink(rows)`` gets each case's rows as
     it finishes (the notebook streams them to the results table)."""
@@ -1496,14 +1501,16 @@ def run_zarr_cases(spark, cfg: ZarrBenchConfig, sink=None) -> List[ResultRow]:
         rows += got
         if sink is not None:
             sink(got)
-    for fn, probe in (
+    probes = [
         (
             "probe_shard_index",
             lambda: shard_index_probe(os.path.join(cfg.scratch, "b")),
         ),
         ("probe_sample_density", lambda: sample_density_probe(cfg.store, cfg.variable)),
-        ("probe_update_window", lambda: update_window_probe(spark, cfg)),
-    ):
+    ]
+    if set(cfg.cases) & _WRITE_CASES:  # a 96-step create and six whole-store updates
+        probes.append(("probe_update_window", lambda: update_window_probe(spark, cfg)))
+    for fn, probe in probes:
         try:
             os.makedirs(os.path.join(cfg.scratch, "b"), exist_ok=True)
             t = time.perf_counter()

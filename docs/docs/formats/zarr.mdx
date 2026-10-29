@@ -492,6 +492,66 @@ optimize after many small appends, especially for reads from a Volume; it change
   testFile="docs/tests/python/formats/test_zarr_examples.py"
   outputConstant="COUNT_MANIFEST_ROWS_after_output" />
 
+## Performance
+
+What a store costs to read and write depends on its layout and on the compute. The figures below were
+measured on Databricks to show the shape of the trade-offs; they are not a guarantee.
+
+- **Data.** The ERA5 reanalysis for January 2023: 2-metre temperature, 744 hourly steps on the
+  0.25-degree global grid (721 x 1440), float32. As Zarr, a v3 store with inner chunks of 24 x 90 x 90
+  cells in shards of 168 x 360 x 360, compressed with zstd. For comparison, the same values as one tiled
+  GeoTIFF per hour (512 x 512 tiles, ZSTD), read with the [Raster Reader](../readers/raster).
+- **Compute.** Databricks Runtime 19 on one 4-core worker (`m5d.xlarge`) with dedicated access, and
+  Serverless environment 6.
+- **Method.** Each figure is the median of three runs; the first of the three ran cold.
+
+### Reads
+
+| Workload | Read with | Runtime 19 | Serverless |
+|---|---|---|---|
+| One hour of the whole globe | `gbx_zarr_read` | 3.2 s | 3.0 s |
+| | GeoTIFF: `raster_gbx` and `rst_avg` | 1.9 s | 3.3 s |
+| 1,000 points, every hour (744,000 values) | `gbx_zarr_sample` | 24 s | 16.5 s |
+| | GeoTIFF: `raster_gbx`, crossed with the points, and `rst_sample` | about 1.0 s of task time per point and hour | about 1.2 s of task time per point and hour |
+| 30 days over Europe (35-72 N, 10 W-40 E) | `gbx_zarr_read` | 4.8 s | 4.4 s |
+| | GeoTIFF: 720 windows, `raster_gbx` and `rst_avg` | 232 s | 83 s |
+
+The GeoTIFF time series was measured on 4 hours and 100 points (30 on Serverless) and is given per
+value: at that rate the whole workload is some 760,000 task-seconds, against 24 s for the store.
+
+- **A single map** is quick either way, but this store keeps 24 hours in each inner chunk, so one hour
+  reads 24 hours of chunks. A store that is read mostly as maps should be written with `chunks="maps"`.
+- **A time series at points** is where the store wins most: it reads each chunk once for all the points
+  in it, while one GeoTIFF per hour means one file and one read per point and hour.
+- **A box over many hours** reads only the chunks the box touches, in a few large reads; the GeoTIFFs
+  need one file per hour.
+
+### Writes
+
+| Write | With | Runtime 19, through the Volume | Runtime 19, direct to storage | Serverless |
+|---|---|---|---|---|
+| Create a 1 GB cube (240 x 721 x 1440, float32, from 10 tasks) | `gbx_zarr_write` | 60 s (16.5 MB/s) | 47 s (21 MB/s) | 31 s (32 MB/s) |
+| | plain `xarray.to_zarr`, no transaction | 9.9 s (101 MB/s) | | 7.4 s (135 MB/s) |
+| Eight appends of one day each (100 MB) | `gbx_zarr_write`, all at once | 216 s | | 132 s |
+| | `gbx_zarr_write`, one after another | 178 s | | 215 s |
+
+Where the time of a create goes, in a warm run on Serverless (26 s): 8.7 s setting the store up (6.6 s
+claiming its root in the ownership ledger, 1.8 s creating the manifest table), 2.7 s for the first pass
+over the block positions, 8.8 s writing the data files, and 6.0 s for the commit. On Runtime 19 with one
+4-core worker, writing the data files took most of it (28-46 s through the Volume, 24-27 s direct to
+storage): the blocks pass through Spark, into a shuffle and out of it, before they are written.
+
+- **A create has a fixed cost** of about 15 s for setting up and committing, whatever its size, and a
+  write that is not a create pays the commit part of it. Write a store in a few large writes rather than
+  many small ones.
+- **A plain `xarray.to_zarr` is faster and gives none of the guarantees**: no versions, no all-or-nothing
+  commit, no safe concurrent writers.
+- **An input that is expensive to compute** is evaluated twice by a create or an append (once for its
+  positions). Write it to a table first; see the [Zarr Writer](../writers/zarr).
+- **Concurrent appenders** land one per round, each rebasing on the others, and the last of eight needed
+  seven attempts. On Serverless eight at once took 132 s against 215 s one after another; on Runtime 19
+  with one 4-core worker they took 216 s against 178 s, the eight sharing four cores.
+
 ## Limits
 
 - **Runtimes.** Databricks Runtime 19 and Serverless environment 6 (Python 3.12), lightweight tier only. The
@@ -502,9 +562,9 @@ optimize after many small appends, especially for reads from a Volume; it change
 - **Tiles.** `output="tiles"` needs the coordinates to form a regular grid.
 - **Inner chunks per shard.** A shard that `gbx_zarr_write` creates holds at most 4,096 inner chunks.
   Every read of a shard fetches or builds its index, 16 bytes per inner chunk, so a shard of many tiny
-  chunks makes every read slow: reading one chunk from a shard of 93,312 chunks took about 0.3 s, against
-  13 ms at 4,096. The computed layout stays within the limit, and a `shards=` that goes beyond it raises
-  `ValueError` with a `Fix:`. A registered store's shards are read as they are.
+  chunks makes every read slow: on a Volume, reading one chunk of a shard of 93,312 chunks took 0.9-1.2 s,
+  against 0.11-0.14 s at 4,096. The computed layout stays within the limit, and a `shards=` that goes
+  beyond it raises `ValueError` with a `Fix:`. A registered store's shards are read as they are.
 - **Codecs.** The codecs that zarr-python, numcodecs and zarrs can decode. Writes use `zstd` and `crc32c`
   unless you pass `codecs`. A Zarr v3 array that has any codec beside `sharding_indexed` in its own codec
   list (a transpose before it, a compressor after it) is not supported: registering the store records it as

@@ -396,7 +396,7 @@ Every CRS-touching function across GeoBrix, with its CRS parameter(s) and role. 
 | RasterX | [`rst_rasterize`](./raster-functions#rst_rasterize) (+`_agg`) | both | `out_srid` / `out_crs` | output | geom reprojected source→output before burn |
 | RasterX | [`rst_gridfrompoints`](./raster-functions#rst_gridfrompoints) (+`_agg`) | both | `out_srid` / `out_crs` | output | output raster CRS (points assumed in it) |
 | RasterX | [`rst_dtmfromgeoms`](./raster-functions#rst_dtmfromgeoms) (+`_agg`) | both | `out_srid` / `out_crs` | output | output raster CRS (points assumed in it) |
-| RasterX | `rst_{h3,quadbin,bng}_rasterize_agg` | both | `out_srid` / `out_crs` | output | output raster CRS (bng always 27700) |
+| RasterX | `rst_{h3,quadbin,bng}_rasterize_agg` | both | `out_srid` / `out_crs` | output | output raster CRS (bng always 27700; heavyweight refuses a non-NULL `out_crs`) |
 | RasterX | `rst_{h3,quadbin}_rastertogrid*` | both | `crs` | source | raster auto-reprojected to grid-native 4326 |
 | RasterX | `rst_bng_rastertogrid*` | both | `crs` | source | raster auto-reprojected to grid-native 27700 |
 | RasterX | `rst_h3_gridspec` | light | `out_srid` / `out_crs` | output | grid-spec output CRS (DataFrame helper) |

@@ -257,32 +257,38 @@ switch to `GDAL_VRT_ENABLE_PYTHON=TRUSTED_MODULES` with a narrow
 [RasterX Function Reference § VRT Python pixel functions](./api/raster-functions#vrt-python-pixel-functions)
 for the full how-to.
 
-### 7. Virtual tiles from data other principals can write
+### 7. Raster data other principals can write
 
-A virtual tile is a path to a raster file and a window, not its bytes. Anyone who can write
-a table or a Volume can name any file in it, so the GDAL spec engine (the functions it
-serves, such as `gbx_rst_slope`) applies a driver policy before it reads one:
+GeoBrix reads rasters that anyone who can write a table or a Volume can name, and a raster
+file can name more: a VRT names its sources, a tile index names its tiles, a pipeline names
+its inputs. GDAL opens all of them. So GeoBrix applies a driver policy at its first use of
+GDAL in each process, on both tiers, before any raster is opened:
 
-- **The tile's own file must be a GeoTIFF or a GDAL VRT.** Any other format is refused, and
-  the reason names the format.
-- **GDAL opens a VRT's sources, a tile index's tiles and a pipeline's inputs itself.** The
-  drivers that run stored pipelines (`GDALG`), index or catalog other rasters (`GTI`,
-  `STACTA`, `STACIT`) or reach a network API (`WMS`, `WMTS`, `WCS`, `WFS`, `HTTP`, `CSW`,
-  `OGCAPI`, `PLMOSAIC`, `PLSCENES`, `EEDAI`, `EEDA`, `DAAS`, `NGW`) are deregistered from the
-  Python process, so GDAL cannot open them at any depth.
-- **A VRT's raw bands and inline Python pixel functions are off while the tile is read**
+- **The refused drivers are removed from GDAL.** The stored-pipeline driver (`GDALG`), the
+  tile indexes and catalogs that open other rasters (`GTI`, `STACTA`, `STACIT`), the service
+  drivers (`WMS`, `WMTS`, `WCS`, `OGCAPI`, `HTTP`) and the network APIs (`PLMOSAIC`,
+  `PLSCENES`, `EEDAI`, `DAAS`, `NGW`, and the OGR network drivers `WFS`, `CSW`, `EEDA`) are
+  not registered, so GDAL cannot open them at any depth.
+- **The VRT settings that read a file's bytes as pixels, or run code, are off**
   (`GDAL_VRT_ENABLE_RAWRASTERBAND=NO`, `GDAL_VRT_ENABLE_PYTHON=NO`).
+- **Every open of a raster GeoBrix makes is identified first, with the allowed drivers, and
+  opened with the one it identified.** Every other raster GDAL reads is allowed.
 
-A refused tile is an error tile whose reason says what was refused; the query continues.
+A refused raster raises an error (a query error on a read, an error tile on a virtual tile)
+whose message names what was refused and says why GeoBrix does not open it.
 
-The deregistration is process-wide: once the engine runs in a Python process (on the driver
-and on each executor), that process no longer finds those drivers, for any code in it. On
-the JVM the same drivers are skipped when GDAL starts, as on the
+The policy is process-wide, as it is on the JVM: once GeoBrix runs in a Python process (on
+the driver and on each executor), that process no longer finds the refused drivers, for any
+code in it. On the JVM the same drivers are skipped when GDAL starts, as on the
 [raster reader](./readers/raster) page.
 
-To keep the drivers for your own code in that process, set `GBX_ENGINE_DRIVER_POLICY=off` in
-its environment before the engine first runs. The allowlist still applies to a virtual tile's
-own file; only the deregistration is off, so a VRT source of one of those drivers can open.
+**To turn the policy off**, set one switch, on either tier. In a Python process, set
+`GBX_GDAL_DRIVER_POLICY=off` in the environment before GeoBrix is imported. On the JVM, set it
+in the environment, or set `spark.databricks.labs.gbx.gdal.driver_policy=off` in the session
+conf (the JVM reads both). Off means GDAL is left as GDAL has it, with no refused driver removed
+and no VRT setting changed.
+Only turn it off for data you trust: a virtual tile or a raster from another principal can then
+run a stored pipeline or read a raw band.
 
 ## Next steps
 

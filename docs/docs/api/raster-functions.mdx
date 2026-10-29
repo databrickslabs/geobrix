@@ -836,13 +836,13 @@ GROUP BY cell_id
 
 Streaming aggregator that burns BNG cell geometry/value pairs (one row per cell) into a single rasterized tile per group. The output tile is always in EPSG:27700 (British National Grid). BNG cell IDs are **STRING**. The inverse of `rst_bng_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, this one synthesizes a raster from per-cell values.
 
-:::note Optional trailing `out_crs` parameter (no-op for BNG, on both tiers)
-Both tiers accept an optional trailing `out_crs` (string CRS) argument. For BNG it is a **no-op**: the output is always EPSG:27700. Both `out_srid` and `out_crs` are ignored here (they exist only for signature parity with the H3/quadbin aggregators).
+:::note Optional trailing `out_crs` parameter (a no-op on the lightweight tier, refused on the heavyweight tier)
+Both tiers accept an optional trailing `out_crs` (string CRS) argument, and the output is always EPSG:27700. The lightweight tier ignores `out_crs`. The heavyweight tier refuses a non-NULL `out_crs` with a parameter error, so pass `NULL` for it there. `out_srid` is not read on either tier (it exists for signature parity with the H3/quadbin aggregators).
 :::
 
 **Signature:** `rst_bng_rasterize_agg(cellid: Column, value: Column, out_srid: Column, pixel_size: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, mode: Column, kring_pad: Column, out_crs: Column): Column`
 
-**Parameters:** `cellid` — BNG cell ID (STRING); `value` — numeric burn value; `out_srid` — EPSG code for the output CRS (typically `27700`); `pixel_size` — output raster cell size in metres (usually `1.0` for 1km BNG cells); `xmin/ymin/xmax/ymax` — output extent in EPSG:27700 metres; `width/height` — output raster dimensions in pixels; `mode` — aggregation mode for overlapping values (typically `"last"`); `kring_pad` — cell neighbourhood expansion (typically `0`); `out_crs` — accepted for parity, a no-op for BNG
+**Parameters:** `cellid` — BNG cell ID (STRING); `value` — numeric burn value; `out_srid` — EPSG code for the output CRS (typically `27700`); `pixel_size` — output raster cell size in metres (usually `1.0` for 1km BNG cells); `xmin/ymin/xmax/ymax` — output extent in EPSG:27700 metres; `width/height` — output raster dimensions in pixels; `mode` — aggregation mode for overlapping values (typically `"last"`); `kring_pad` — cell neighbourhood expansion (typically `0`); `out_crs` — ignored on the lightweight tier; the heavyweight tier refuses a non-NULL value (pass `NULL`)
 
 _Multi-row fixture: 3 BNG 1km STRING cell rows near central London (EPSG:27700) with burn values 1.0/2.0/3.0. All tabs use the same grouped-agg rasterize invocation._
 

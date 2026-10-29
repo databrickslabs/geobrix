@@ -236,6 +236,22 @@ formats.
   longer leaves a staging folder in the driver's temp directory for each read, or keeps the
   inspected dataset open.
 
+### Spatial reference and driver policy (behavior change)
+
+- **A GeoJSON Lines write with a bad CRS column fails.** The `geojsonl_ogr` writer used to write a
+  layer without a CRS when its `proj4` column (or its SRID column, when it is not an integer code)
+  did not parse as one. It now fails the write, and the error names the column and the value, with
+  a `Fix:` that says how to write the layer's CRS. A grid named by a file path in that column is
+  refused the same way.
+- **The raster driver policy is on for the whole process.** From the first GeoBrix GDAL use, the
+  drivers that run stored pipelines, index other rasters or reach a network API are unavailable to
+  the process, and a raster GeoBrix reads is identified before it is opened. Set
+  `GBX_GDAL_DRIVER_POLICY=off` (or `spark.databricks.labs.gbx.gdal.driver_policy=off` on the JVM)
+  to turn it off. See [Security § 7](./security#7-raster-data-other-principals-can-write).
+- **`out_crs` on the heavyweight `gbx_rst_bng_rasterize_agg` is refused when it is not NULL.** The
+  heavyweight aggregate used to ignore the argument. BNG output is always EPSG:27700, and the
+  lightweight tier still accepts the argument and ignores it, so pass NULL on either tier.
+
 ### Heavyweight vector readers — `layerNumber` reads the layer it names (fix)
 
 - **`layerNumber` picks the layer the heavyweight vector readers return.** A read with a

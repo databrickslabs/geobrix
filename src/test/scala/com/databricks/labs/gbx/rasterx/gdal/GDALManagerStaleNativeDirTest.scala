@@ -31,34 +31,33 @@ class GDALManagerStaleNativeDirTest extends AnyFunSuite {
             .map(_.toAbsolutePath).find(p => Files.exists(p.resolve(s"lib/$Jni")))
     }
 
-    /** A wheel's `_native/<arch>` stand-in: `lib/` links to every file of the staged payload's `lib/`, `share/` to its data. */
-    private def linkedPayload(staged: Path): Path = {
-        val d = Files.createTempDirectory("gbx_native_dir")
-        val lib = Files.createDirectories(d.resolve("lib"))
-        val files = new File(staged.resolve("lib").toString).listFiles().filter(_.isFile)
-        files.foreach(f => Files.createSymbolicLink(lib.resolve(f.getName), f.toPath.toRealPath()))
-        Files.createSymbolicLink(d.resolve("share"), staged.resolve("share").toRealPath())
-        d
-    }
-
-    /** The next run's copy of the payload: the same JNI bytes at another path. */
-    private def copiedPayload(staged: Path): Path = {
-        val d = Files.createTempDirectory("gbx_native_dir")
-        Files.createDirectories(d.resolve("lib"))
-        Files.copy(staged.resolve(s"lib/$Jni").toRealPath(), d.resolve(s"lib/$Jni"), StandardCopyOption.REPLACE_EXISTING)
-        d
+    /** A run's env wheel: `<root>/_native/<arch>/lib` (`linked`: links to every file of the staged payload's `lib/`, else
+      * only a copy of its JNI, the same bytes at another path) and `<root>/_native/share`, the staged data. The native
+      * dir is `<root>/_native/<arch>`, as the wheel's `_native.native_dir()`, so its data is `../share/{proj,gdal}`. */
+    private def wheelRoot(staged: Path, linked: Boolean): (Path, Path) = {
+        val root = Files.createTempDirectory("gbx_wheel")
+        val dir = Files.createDirectories(root.resolve("_native/x"))
+        val lib = Files.createDirectories(dir.resolve("lib"))
+        if (linked) {
+            new File(staged.resolve("lib").toString).listFiles().filter(_.isFile)
+                .foreach(f => Files.createSymbolicLink(lib.resolve(f.getName), f.toPath.toRealPath()))
+        } else {
+            Files.copy(staged.resolve(s"lib/$Jni").toRealPath(), lib.resolve(Jni), StandardCopyOption.REPLACE_EXISTING)
+        }
+        Files.createSymbolicLink(root.resolve("_native/share"), staged.resolve("share").toRealPath())
+        (root, dir)
     }
 
     test("a later payload with the loaded JNI's bytes is taken when the loaded payload's directory is gone") {
         val staged = stagedPayload()
         assume(staged.isDefined, "PRECONDITION MISSING: no staged GDAL (build/native/out/<arch>/stage-native); stale-payload row not run")
-        val first = linkedPayload(staged.get)
-        val second = copiedPayload(staged.get)
+        val (firstRoot, first) = wheelRoot(staged.get, linked = true)
+        val (_, second) = wheelRoot(staged.get, linked = false)
         val java = new File(System.getProperty("java.home"), "bin/java").getPath
         // the payload's lib/ is the child's whole library path, as on a cluster with no other GDAL
         val pb = new ProcessBuilder(
           java, s"-Djava.library.path=$first/lib", "-cp", System.getProperty("java.class.path"),
-          "com.databricks.labs.gbx.rasterx.gdal.StaleNativeDirProbe", first.toString, second.toString
+          "com.databricks.labs.gbx.rasterx.gdal.StaleNativeDirProbe", first.toString, second.toString, firstRoot.toString
         ).redirectErrorStream(true)
         val proc = pb.start()
         val lines = mutable.ArrayBuffer.empty[String]
@@ -70,7 +69,12 @@ class GDALManagerStaleNativeDirTest extends AnyFunSuite {
         assert(lines.contains("DONE"), s"the probe did not finish: ${lines.takeRight(4).mkString(" | ")}")
         assert(out("LATER") == "ok", s"the later payload was refused: ${out("LATER")}")
         assert(out("JNI") == s"$second/lib/$Jni")
-        assert(out("PROJ_DATA").startsWith(s"$second/../share/proj"), s"PROJ_DATA did not move to the later payload: ${out("PROJ_DATA")}")
+        assert(out("PRE").startsWith("ok "), s"PROJ did not work before the delete: ${out("PRE")}")
+        assert(out("PROJ_DATA") == s"$second/../share/proj", s"PROJ_DATA did not move to the later payload: ${out("PROJ_DATA")}")
+        // a CRS transform on a new PROJ context needs proj.db from the payload that is still there
+        assert(out("TRANSFORM").startsWith("ok "), s"PROJ cannot transform after the first payload is gone: ${out("TRANSFORM")}")
+        assert(out("FIND_PRE") != "<not found>", s"GDAL found no data file before the delete: ${out("FIND_PRE")}")
+        assert(out("FIND") != "<not found>", s"GDAL's data directory still names the removed payload: GDAL_DATA=${out("GDAL_DATA")}")
     }
 
     // laterNative is pure: these rows need no GDAL (the child-JVM row above is the end-to-end one)

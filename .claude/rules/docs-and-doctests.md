@@ -33,6 +33,47 @@ Anything under `docs/docs/` is read by end users. Never leak internal release-pl
 
 Quick check before merging: `grep -rn -iE "wave [0-9]+|wave-[0-9]+" docs/docs/ 2>/dev/null` should print nothing. The QC judge enforces this via the `internals-leak` check.
 
+## Concise, clear prose (STE-lite)
+
+Docs stay in user narrative voice. Apply these writing rules from ASD-STE100 (Simplified
+Technical English). They are the rules only, not its controlled dictionary.
+
+- **Sentence length.** A procedure step has at most 20 words; a description has at most 25. Split
+  longer sentences. A table cell or a code comment is not a sentence.
+- **One instruction per sentence.** Write procedures in the imperative: "Install the env wheel."
+  Do not write "You will want to install".
+- **Active voice.** Name who or what acts: "The reader skips the file", not "The file is skipped".
+- **One topic per paragraph,** at most 6 sentences. Use a list for 3 or more parallel items.
+- **Say the result first, then the reason.** Cut how it was found, review history and internal
+  mechanics that do not change what the user does.
+- **One term per concept.** Use the term list below; do not alternate synonyms for variety.
+- **Keep every fact a user acts on:** a breaking change, a changed default, a new parameter, a
+  refusal and its fix, a version pin. Concise means fewer words, not fewer facts.
+
+Term list (start; extend it when you settle a term):
+
+| Use | Not |
+|---|---|
+| lightweight / heavyweight (API, function, reader) | light tier, heavy tier, light-tier |
+| env wheel (`+env5`, `+env6`) | runtime wheel, flavor wheel |
+| tile (the GeoBrix struct) | chip, raster struct (except where the API name says "chip") |
+| Volume (UC Volume) | volume, UC volume path |
+| Serverless | serverless compute, SL |
+| dedicated / standard (access mode) | single user, shared, USER_ISOLATION (except in a quoted setting) |
+
+## Release notes layout
+
+- `release-notes.mdx` is the **summary** page: the current-version banner (`gbx:versions:bump`
+  edits its "Current version:" string) and, per release, a few key-feature bullets that link to
+  the detail.
+- The **detail** lives on one subpage per series: `release-notes-0-6.mdx` for 0.6.x, and
+  `release-notes-0-5-and-earlier.mdx` for v0.5.2 and every earlier release.
+- A new change goes on its series subpage. Add a bullet on the summary page only for a key
+  feature or a breaking change.
+- A new series gets a new subpage, wired into `sidebars.js` and listed in
+  `docs/scripts/check-release-notes-functions.py` and the exclusion list in
+  `scripts/commands/gbx-versions-bump.sh`.
+
 ## MDX gotchas
 
 - **Bare angle-bracket types** in MDX PROSE (`STRUCT<…>`, `Array<…>`) are parsed as JSX and CRASH the build — backtick them.

@@ -181,6 +181,11 @@ def run_mvp(
 
 
 _EXC_LINE = re.compile(r"^\s*[A-Za-z_][\w.]*(Error|Exception|Exit|Interrupt)\b")
+# Spark's "Job aborted ... Lost task 3.3 in stage 7.0 (TID 9) (10.0.0.1 executor 4): java.lang.X: reason" is one line
+# far longer than the head the row keeps; the executor's exception class and reason come after its last "): "
+_EXECUTOR_CAUSE = re.compile(
+    r"\)\s*:\s+((?:[\w$]+\.)+[\w$]*(?:Error|Exception)\b[^\n]*)"
+)
 
 
 def failure_text(exc: BaseException) -> str:
@@ -190,6 +195,9 @@ def failure_text(exc: BaseException) -> str:
     lines = [ln.strip() for ln in str(exc).splitlines() if ln.strip()]
     head = lines[0][:200] if lines else ""
     cause = next((ln for ln in reversed(lines) if _EXC_LINE.match(ln)), "")
+    if not cause:
+        on_executor = _EXECUTOR_CAUSE.search(str(exc))
+        cause = on_executor.group(1).strip() if on_executor else ""
     out = f"{type(exc).__name__}: {head}"
     if cause and cause != head:
         return f"{out} ... {cause[:500]}"

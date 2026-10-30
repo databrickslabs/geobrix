@@ -1550,6 +1550,28 @@ def test_a_failed_form_keeps_the_python_workers_cause():
     assert failure_text(ValueError("bad window")) == "ValueError: bad window"
 
 
+def test_a_failed_form_keeps_the_executors_exception_class_and_reason():
+    """Spark folds the executor's exception into one long "Lost task" line; a head cut at 200 characters left
+    "(executor 4): java.l" and nothing of what failed."""
+    from databricks.labs.gbx.bench.levels import failure_text
+
+    text = (
+        "An error occurred while calling o21387.collectToPython.\n"
+        ": org.apache.spark.SparkException: Job aborted due to stage failure: Task 3 in stage 761.0 failed 4 times, "
+        "most recent failure: Lost task 3.3 in stage 761.0 (TID 11675) (10.0.9.167 executor 4): "
+        "java.lang.IllegalStateException: geobrix: this JVM already runs the GDAL loaded from /a/lib/x.so, and a "
+        "later configuration names /b/lib/x.so\n"
+        "\tat com.databricks.labs.gbx.rasterx.gdal.GDALManager$.ensureJniLoaded(GDALManager.scala:437)\n"
+        "Driver stacktrace:\n"
+    )
+    got = failure_text(RuntimeError(text))
+    assert (
+        "java.lang.IllegalStateException: geobrix: this JVM already runs the GDAL"
+        in got
+    )
+    assert "/b/lib/x.so" in got
+
+
 def test_a_multiline_pip_failure_keeps_its_first_lines_not_just_the_first():
     """A UC function environment that cannot install the wheel fails with pip output, no exception-class line:
     the first actionable pip lines are the finding."""

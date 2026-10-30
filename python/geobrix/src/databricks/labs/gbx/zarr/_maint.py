@@ -60,6 +60,7 @@ from databricks.labs.gbx.zarr._register import holds_store, identity_of
 from databricks.labs.gbx.zarr._shard import Region
 from databricks.labs.gbx.zarr._store import ManifestStore
 from databricks.labs.gbx.zarr.errors import (
+    ZarrAccessUnavailable,
     ZarrError,
     ZarrReadOnly,
     ZarrVersionUnavailable,
@@ -1127,19 +1128,35 @@ def _files_root(props) -> str | None:
 
 
 def _require_exist(files, root: str | None, table: str, version, action: str) -> None:
-    """Every pack file in ``files`` (relative to ``root``) must still exist."""
+    """Every pack file in ``files`` (relative to ``root``) must still exist.
+
+    A file that is not there (``ENOENT``, or a parent that is not a directory) is gone. A
+    stat that fails for any other reason, such as ``EBUSY`` while a Volume mount is down,
+    says nothing about the file: that is ``ZarrAccessUnavailable``, never "vacuumed".
+    """
     if root is None:
         return
-    gone = [
-        f
-        for f in sorted(set(files))
-        if not os.path.exists(f if os.path.isabs(f) else os.path.join(root, f))
-    ]
+    gone, unreachable = [], []
+    for f in sorted(set(files)):
+        path = f if os.path.isabs(f) else os.path.join(root, f)
+        try:
+            os.stat(path)
+        except (FileNotFoundError, NotADirectoryError):
+            gone.append(f)
+        except OSError as e:
+            unreachable.append((f, e))
     if gone:
         raise ZarrVersionUnavailable(
             f"version {version} of {table} points at {len(gone)} file(s) that no longer "
             f"exist (e.g. {gone[0]})",
             fix=f"the files were vacuumed; {action}",
+        )
+    if unreachable:
+        f, e = unreachable[0]
+        raise ZarrAccessUnavailable(
+            f"cannot tell whether version {version} of {table} still has its files: "
+            f"{len(unreachable)} of them could not be checked (e.g. {f}: {e.strerror or e})",
+            fix="retry when the Volume is reachable",
         )
 
 

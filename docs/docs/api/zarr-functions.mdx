@@ -484,6 +484,7 @@ at. A tag costs one manifest row per shard and chunk of the version. Returns `No
 | `ValueError` | The tag name exists | `pick another name, or remove it first with gbx_zarr_untag` |
 | `ValueError` | The name is not 1 to 128 characters of letters, digits and `. _ : / @ + = -`, starting with a letter or digit | `pass a name like 'two-days' or 'release/1.0'.` |
 | `ZarrVersionUnavailable` | The version's files are gone | `the files were vacuumed; tag a later version or an existing tag` |
+| `ZarrAccessUnavailable` | The version's files cannot be checked, for example while the Volume is not mounted | `retry when the Volume is reachable` |
 
 ### `gbx_zarr_untag`
 
@@ -566,6 +567,7 @@ one is retried like a write's, up to twenty attempts.
 | `ValueError` | Neither `version_as_of` nor `timestamp_as_of` is given | `give the version, tag or time to restore` |
 | `ZarrReadOnly` | The store is a read-only registration | `register the store with writable=True and an overlay_root` |
 | `ZarrVersionUnavailable` | Vacuum has removed the version's files | `the files were vacuumed; restore a later version or a tag` |
+| `ZarrAccessUnavailable` | The version's files cannot be checked, for example while the Volume is not mounted | `retry when the Volume is reachable` |
 | `ZarrVersionUnavailable` | The version's base objects changed since | `run gbx_zarr_sync('<table>') to record the store as it is now, then restore a later version` |
 | `ZarrWriteConflict` | Other writers kept changing the rows | `retry once the other writers are done` |
 
@@ -634,6 +636,7 @@ Exports a version of the store whose manifest table is `source`. Returns the pat
 | `ZarrWriteConflict` | A publish holds its lock on the table | `wait for the publish to finish. If it was killed and none is running, clear the lock with gbx_zarr_sync('<table>', break_lock=True), then publish again with gbx_zarr_export('<table>', method="publish")` |
 | `ZarrWriteConflict` | A write landed on the table during the publish, or Delta rejected the publish's commit | `the objects this publish already wrote are in the store, so run gbx_zarr_sync('<table>') to record them, then publish again` |
 | `ZarrVersionUnavailable` | The version was vacuumed or its files are gone | `the files were vacuumed; export a later version or a tag` |
+| `ZarrAccessUnavailable` | The version's files cannot be checked, for example while the Volume is not mounted | `retry when the Volume is reachable` |
 
 For a publish, the way back from either `ZarrWriteConflict` (a write landed, or Delta rejected the commit) or
 `ZarrStoreDrift` is `gbx_zarr_sync(spark, table)` and then the publish again; a lock left by a killed publish,

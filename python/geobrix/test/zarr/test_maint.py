@@ -4,6 +4,7 @@ These run on local OSS Delta. Time is injected (``_maint._utcnow``) so a vacuum 
 asked what it would do a week from now; the Delta history keeps its real timestamps.
 """
 
+import errno
 import hashlib
 import json
 import os
@@ -42,6 +43,7 @@ from databricks.labs.gbx.zarr._testing import (  # noqa: E402
 )
 from databricks.labs.gbx.zarr._write import gbx_zarr_write  # noqa: E402
 from databricks.labs.gbx.zarr.errors import (  # noqa: E402
+    ZarrAccessUnavailable,
     ZarrError,
     ZarrOwnershipError,
     ZarrReadOnly,
@@ -945,6 +947,35 @@ def test_restore_refuses_vacuumed_version(
         H.read_variable(spark_delta, table, "t2m"),
         np.full((48, 10, 12), 2.0, "float32"),
     )
+
+
+def test_restore_does_not_call_files_vacuumed_when_it_cannot_reach_them(
+    spark_delta, drop, tmp_path, no_hooks, monkeypatch
+):
+    """With the Volume mount down (EBUSY) a stat says nothing about whether a file exists:
+    the refusal must say the files could not be checked, not that they were vacuumed."""
+    table, root, v1 = _store(spark_delta, drop, tmp_path)
+    gbx_zarr_write(
+        _blocks(spark_delta, ("t2m", (0, 0, 0), np.full((48, 10, 12), 2.0, "float32"))),
+        table,
+        mode="overwrite",
+    )
+    latest = _latest(spark_delta, table)
+    real = os.stat
+
+    def stat(path, *args, **kw):
+        if str(path).startswith(str(root / "data")):
+            raise OSError(errno.EBUSY, os.strerror(errno.EBUSY), str(path))
+        return real(path, *args, **kw)
+
+    monkeypatch.setattr(os, "stat", stat)
+    with pytest.raises(ZarrAccessUnavailable) as e:
+        gbx_zarr_restore(spark_delta, table, version_as_of=v1)
+    monkeypatch.undo()
+    assert "vacuumed" not in str(e.value) and "no longer exist" not in str(e.value)
+    assert os.strerror(errno.EBUSY) in e.value.message  # says why it could not look
+    assert "Fix: retry when the Volume is reachable" in str(e.value)
+    assert _latest(spark_delta, table) == latest  # nothing was committed
 
 
 def test_restore_refuses_a_read_only_registration_and_a_base_that_moved(

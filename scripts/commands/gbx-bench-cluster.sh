@@ -51,8 +51,9 @@ Options:
   --grouped-file-only   Run ONLY the grouped FILE-amortization benchmark (no fn benchmarks)
   --multiwindow-corpus <path>  Multiwindow COG corpus dir (holds cog_multiwindow_manifest.json).
                         Default: <corpus>/bench-corpus-cog-multiwindow.
-  --levels <S|G|A|H|IO> Also run the levels leg for one set of functions (S session functions,
-                        G generators, A aggregates, H DataFrame helpers; IO has no forms yet):
+  --levels <S|G|A|H|SE|IO> Also run the levels leg for one set of functions (S session functions,
+                        G generators, A aggregates, H DataFrame helpers, SE the GDAL spec engine's
+                        rows; IO has no forms yet):
                         every form of that set at each execution level the compute offers
                         (L1 Catalyst, L2 Java UDF, L3 light, L4 Unity Catalog) at 1x/4x/16x, with
                         the attribution split (serialization, Python eval, shuffle, spill, memory,

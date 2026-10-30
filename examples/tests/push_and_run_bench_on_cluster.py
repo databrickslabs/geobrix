@@ -510,15 +510,15 @@ def main() -> int:
     levels_mvp = _arg("--levels", "")
     levels_only = "--levels-only" in sys.argv
     levels_uc = _arg("--levels-uc", "")
-    if levels_mvp not in ("", "S", "G", "A", "H", "IO"):
+    if levels_mvp not in ("", "S", "G", "A", "H", "SE", "IO"):
         print(
-            f"ERROR: --levels must be one of S, G, A, H, IO (got '{levels_mvp}')",
+            f"ERROR: --levels must be one of S, G, A, H, SE, IO (got '{levels_mvp}')",
             file=sys.stderr,
         )
         return 2
     if (levels_only or levels_uc) and not levels_mvp:
         print(
-            "ERROR: --levels-only and --levels-uc need --levels <S|G|A|H|IO>.",
+            "ERROR: --levels-only and --levels-uc need --levels <S|G|A|H|SE|IO>.",
             file=sys.stderr,
         )
         return 2

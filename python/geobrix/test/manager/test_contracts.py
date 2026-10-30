@@ -530,6 +530,10 @@ def test_uc_ddl_contract(fn):
         # A generator is a SQL table function over the array function: no Python, no environment.
         (tvf,) = stmts
         over = fn.levels["L4"]["tvf_over"]
+        if any(
+            p.default for p in MAN.functions[over].params
+        ):  # its public name is a SQL wrapper
+            over = f"gbx__{over[len('gbx_'):]}"
         assert "COMMENT 'geobrix 0.6.0'" in tvf and "LANGUAGE PYTHON" not in tvf
         assert f"RETURNS TABLE ({', '.join(f'{n} {t}' for n, t in fn.columns)})" in tvf
         assert tvf.endswith(

@@ -128,8 +128,14 @@ def function_ddl(
 def _table_function_ddl(fn, q: str, sql_name: str, over: str, version: str) -> str:
     """A generator on UC is a SQL table function over the array function: one row per element.
 
-    It takes the DEFAULTs itself and runs no Python of its own (the function it calls does).
+    It takes the DEFAULTs itself and runs no Python of its own (the function it calls does). It calls the Python
+    function itself: when the array function has a DEFAULT its public name is a SQL wrapper, and UC refuses a SQL
+    function inside a generator ([UNSUPPORTED_SQL_UDF_USAGE], measured on Serverless env 6).
     """
+    from databricks.labs.gbx import manifest
+
+    if any(p.default for p in manifest.load().functions[over].params):
+        over = f"gbx__{over[len('gbx_'):]}"
     cols = ", ".join(f"{n} {sql_type(t)}" for n, t in fn.columns)
     sig = ", ".join(
         f"{p.name} {sql_type(p.uc)}" + (f" DEFAULT {p.default}" if p.default else "")

@@ -1527,6 +1527,8 @@ def test_notebook_runs_the_levels_leg_alone_when_asked():
     assert "# (c) Lightweight spark-path" in both
     assert "# (c) Lightweight spark-path" not in only
     assert "_lv.run_mvp(" not in sources(levels_mvp="")  # off unless asked
+    assert "LEVELS_SCALES = (1, 4, 16)" in both and "scales=LEVELS_SCALES" in both
+    assert "LEVELS_SCALES = (1, 4)" in sources(levels_scales=(1, 4))
 
 
 def test_a_failed_form_keeps_the_python_workers_cause():

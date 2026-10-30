@@ -60,6 +60,7 @@ Options:
                         GC, worker RSS) in the row. Tile inputs come from <corpus>/rows. L1/L2
                         need the geobrix JAR on the cluster.
   --levels-only         Run ONLY the levels leg (no fn benchmarks, no heavy tests JAR)
+  --levels-scales <csv> Multiples of each form's base row count the levels leg times (default 1,4,16)
   --levels-uc <c.s>     catalog.schema holding the L4 (Unity Catalog) functions. Without it the L4
                         forms record a skipped row.
   --file-matrix         Also run the FILE-access matrix: GeoTIFF + GeoPackage reads across

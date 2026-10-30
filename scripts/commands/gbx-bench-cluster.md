@@ -6,7 +6,7 @@ Submit the heavy-vs-light benchmark as a one-off notebook job to a **provisioned
 
 **Usage:** `bash scripts/commands/gbx-bench-cluster.sh [options]`
 
-**Options:** `--cluster-id`, `--existing-cluster-id`, `--run-id`, `--functions`, `--set core|full`, `--grid-bng-only`, `--benchmark-grid-bng`, `--spark-warmup`, `--spark-measured`, `--modes`, `--row-counts`, `--warmup`, `--measured`, `--heavyweight-only`, `--lightweight-only`, `--input-tile materialized|virtual`, `--grouped-file`, `--grouped-file-only`, `--multiwindow-corpus <path>`, `--levels <S|G|A|H|SE|IO>`, `--levels-only`, `--levels-uc <catalog.schema>`, `--file-matrix`, `--file-matrix-only`, `--gpkg-chunksize`, `--gpkg-chunksize-only`, `--layout-sweep`, `--layout-sweep-only`, `--layout-scan`, `--layout-scan-only`, `--file-filespace <id>`, `--gpkg-corpus <path>`, `--max-partition-bytes <v>`, `--no-wait`, `--help`.
+**Options:** `--cluster-id`, `--existing-cluster-id`, `--run-id`, `--functions`, `--set core|full`, `--grid-bng-only`, `--benchmark-grid-bng`, `--spark-warmup`, `--spark-measured`, `--modes`, `--row-counts`, `--warmup`, `--measured`, `--heavyweight-only`, `--lightweight-only`, `--input-tile materialized|virtual`, `--grouped-file`, `--grouped-file-only`, `--multiwindow-corpus <path>`, `--levels <S|G|A|H|SE|IO>`, `--levels-only`, `--levels-scales <csv>`, `--levels-uc <catalog.schema>`, `--file-matrix`, `--file-matrix-only`, `--gpkg-chunksize`, `--gpkg-chunksize-only`, `--layout-sweep`, `--layout-sweep-only`, `--layout-scan`, `--layout-scan-only`, `--file-filespace <id>`, `--gpkg-corpus <path>`, `--max-partition-bytes <v>`, `--no-wait`, `--help`.
 
 `--existing-cluster-id <id>` attaches the run to a warm all-purpose cluster, skipping the 4-8 min job-cluster startup. Passed through to the Python launcher; equivalent to setting `CLUSTER_ID` in the env file. (`--cluster-id` in the shell command sets the same env var for back-compat.)
 
@@ -48,3 +48,4 @@ Every two-tier leg of the grid (BNG, quadbin, custom), TIN, legacy, MVT/PMTiles 
 - `bash scripts/commands/gbx-bench-cluster.sh --existing-cluster-id 0101-x --run-id bngx1 --grid-bng-only --functions bng_kringexplode,bng_kloopexplode --spark-warmup 1 --spark-measured 5`
 - `bash scripts/commands/gbx-bench-cluster.sh --cluster-id 0101-x --run-id gfile1 --grouped-file-only --multiwindow-corpus /Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-cog-multiwindow`
 - `bash scripts/commands/gbx-bench-cluster.sh --existing-cluster-id 0101-x --run-id lv1 --levels S --levels-only --levels-uc main.gbx_uc`
+- `bash scripts/commands/gbx-bench-cluster.sh --existing-cluster-id 0101-x --run-id lvh --levels H --levels-only --levels-scales 1,4` (`--levels-scales`: the multiples of each form's base row count; default `1,4,16`)

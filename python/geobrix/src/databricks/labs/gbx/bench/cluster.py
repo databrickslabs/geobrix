@@ -379,6 +379,8 @@ GROUPED_FILE_ONLY = {grouped_file_only!r}
 LEVELS_MVP = {levels_mvp!r}
 LEVELS_ONLY = {levels_only!r}
 LEVELS_UC = {levels_uc!r}
+# --levels-scales <csv>: the multiples of each form's base row count the leg times (default 1,4,16).
+LEVELS_SCALES = {levels_scales!r}
 MULTIWINDOW_CORPUS = {multiwindow_corpus!r} or (CORPUS + "/bench-corpus-cog-multiwindow")
 # --file-matrix: sweep file_mode in ("fuse","external","managed") for GeoTIFF + GeoPackage reads.
 # --file-matrix-only: ONLY run the FILE matrix, skip all fn benchmarks.
@@ -2935,7 +2937,8 @@ _CELL_LEVELS = """# Levels leg (perf matrix + attribution split): every form of 
 from databricks.labs.gbx.bench import levels as _lv
 print("=== levels leg starting:", LEVELS_MVP, flush=True)
 _lv_rows = _lv.run_mvp(spark, LEVELS_MVP, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, corpus=CORPUS,
-                       schema=".".join(TABLE.split(".")[:2]), uc=(LEVELS_UC or None), where="cluster")
+                       schema=".".join(TABLE.split(".")[:2]), uc=(LEVELS_UC or None), where="cluster",
+                       scales=LEVELS_SCALES)
 _sink(_lv_rows)
 lw.extend(_lv_rows)
 _show_md(f"levels leg {LEVELS_MVP} -- {RUN_ID}", _lv.summarize(_lv_rows))
@@ -3625,6 +3628,7 @@ def build_bench_notebook(cfg: dict) -> dict:
         levels_mvp=str(cfg.get("levels_mvp", "") or ""),
         levels_only=bool(cfg.get("levels_only")),
         levels_uc=str(cfg.get("levels_uc", "") or ""),
+        levels_scales=tuple(cfg.get("levels_scales") or (1, 4, 16)),
         multiwindow_corpus=str(cfg.get("multiwindow_corpus", "") or ""),
         benchmark_file_matrix=bool(cfg.get("file_matrix")),
         file_matrix_only=bool(cfg.get("file_matrix_only")),

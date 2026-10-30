@@ -510,6 +510,14 @@ def main() -> int:
     levels_mvp = _arg("--levels", "")
     levels_only = "--levels-only" in sys.argv
     levels_uc = _arg("--levels-uc", "")
+    # --levels-scales <csv>: the multiples of each form's base row count the leg times (default 1,4,16).
+    try:
+        levels_scales = tuple(int(x) for x in _arg("--levels-scales", "1,4,16").split(",") if x.strip())
+    except ValueError:
+        levels_scales = ()
+    if not levels_scales or min(levels_scales) < 1:
+        print("ERROR: --levels-scales must be positive integers, e.g. 1,4,16", file=sys.stderr)
+        return 2
     if levels_mvp not in ("", "S", "G", "A", "H", "SE", "IO"):
         print(
             f"ERROR: --levels must be one of S, G, A, H, SE, IO (got '{levels_mvp}')",
@@ -724,6 +732,7 @@ def main() -> int:
         levels_mvp=levels_mvp,
         levels_only=levels_only,
         levels_uc=levels_uc,
+        levels_scales=levels_scales,
         #  Phase-2 FILE legs (light-only, serialized):
         #  --file-matrix: file_mode sweep (fuse/external/managed) for GeoTIFF + GeoPackage reads.
         file_matrix=file_matrix,

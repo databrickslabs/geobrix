@@ -2,7 +2,7 @@
 
 A production-ready **Wireless Coverage pipeline**: a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) (SDP) plus a post-pipeline tower-siting task, built as a [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) and running entirely on the GeoBrix **lightweight tier** over **Serverless** compute.
 
-> **Requires GeoBrix 0.6.0 or newer** (the silver step reads the LiDAR with `read_paths`, new in 0.6.0). The pipeline installs `geobrix[light_dbr18,vizx,stac,overture]` and the serverless job tasks install `geobrix[light_env5,vizx,stac,overture]` — the protobuf-5 extras that match the Lakeflow runtime **as of this example (DBR 18.3)**. Lakeflow pins its compute by a runtime channel; **check the [current Lakeflow runtime channel](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions) when you deploy and switch to the matching GeoBrix extra** if it has moved (e.g. a DBR 19 channel → `[light_dbr19]` / `[light_env6]`) — the extra and the compute runtime must agree. The `gbx_wheel` variable must point at `geobrix-0.6.0-py3-none-any.whl` or newer, staged on a Unity Catalog Volume.
+> **Requires GeoBrix 0.6.0 or newer** (the silver step reads the LiDAR with `read_paths`, new in 0.6.0). The pipeline and the serverless job tasks install `geobrix[vizx,stac]` from the env5 wheel, with the Overture CLI as a separate entry — the wheel that matches the Lakeflow runtime **as of this example (DBR 18.3)** and the job tasks' Serverless environment 5. Lakeflow pins its compute by a runtime channel; **check the [current Lakeflow runtime channel](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions) when you deploy and switch to the matching GeoBrix wheel** if it has moved (e.g. a DBR 19 channel → the `+env6` wheel, with environment version 6 for the job tasks) — the wheel and the compute runtime must agree (the other family's wheel refuses to import). The `gbx_wheel` variable must point at `geobrix-0.6.0+env5-py3-none-any.whl` or newer, staged on a Unity Catalog Volume.
 >
 > **Compute:** the bundle **defaults to Serverless** (both the pipeline and the job tasks), which runs the whole medallion. For heavier runs — notably **full San Francisco** (`full_aoi=true`), where the LiDAR binning / TIN / H3 work is large — you can switch to **classic compute** (a sized cluster) for dedicated memory and throughput: set `serverless: false` plus a `clusters:` block on the pipeline, and `job_clusters` / `new_cluster` on the job tasks (match the cluster DBR to the GeoBrix extra). Serverless is the default and is sufficient for the demo window.
 >
@@ -64,7 +64,7 @@ databricks bundle  →  wireless_coverage_lf_job
                               validate/validate_wc_lf.ipynb — confirms all outputs
 ```
 
-**Task 2 — `pipeline`**: the Lakeflow Declarative Pipeline (`wireless_coverage_lf_pipeline`, `serverless: true`), rooted at `./transformations`. Its environment installs `${var.gbx_wheel}[light_dbr18,vizx,stac,overture]` (the extra matching the Lakeflow DBR-18.3 runtime channel — see the note at the top) as a **single pip dependency entry** (keeping pip's resolver in one pass).
+**Task 2 — `pipeline`**: the Lakeflow Declarative Pipeline (`wireless_coverage_lf_pipeline`, `serverless: true`), rooted at `./transformations`. Its environment installs `${var.gbx_wheel}[vizx,stac]` (the env5 wheel, matching the Lakeflow DBR-18.3 runtime channel — see the note at the top) as a **single pip dependency entry** (keeping pip's resolver in one pass), and the Overture CLI (`overturemaps>=1.0.2,<2`, not an env wheel extra) as a second entry.
 
 **Task 3 — `siting`**: reads `wc_surface_dsm` and `wc_surface_dtm` from the pipeline, bins them to H3 at multiple resolutions, builds the naive res-9 candidate lattice, rules out weak sites with a coarse quick-pass, then runs exact res-12 H3 line-of-sight viewsheds on survivors via `h3_viewshed_towers` (distributed — one tower per Spark task). Writes seven regular Delta tables overwritten each run.
 
@@ -132,7 +132,7 @@ targets:
     variables:
       # catalog: my_catalog
       # schema: my_wireless_coverage_lf
-      # gbx_wheel: /Volumes/my_catalog/my_schema/vol/geobrix-0.6.0-py3-none-any.whl
+      # gbx_wheel: /Volumes/my_catalog/my_schema/vol/geobrix-0.6.0+env5-py3-none-any.whl
 
       # Reuse already-staged LiDAR from the notebook series (skip the ~830 MB download):
       # laz_dir: /Volumes/geospatial_docs/wireless_coverage/data/lidar/sf/laz
@@ -143,7 +143,7 @@ The override file is layered in automatically via `include: ["*.override.yml"]`.
 
 - **Schedule**: the job ships with a daily schedule (`0 0 7 * * ?`, America/Chicago) but **paused** (`pause_status: PAUSED`) — unpause it in the workspace (or in `databricks.yml`) once you've confirmed a manual run.
 - **Shared LiDAR**: if you have already run the notebook series and staged the USGS 3DEP data, set `laz_dir` (and optionally `water_mask_dir`) in your override file to reuse those files and skip the ~830 MB download.
-- **GeoBrix wheel**: `gbx_wheel` defaults to a staged `geobrix-0.6.0-py3-none-any.whl`. Stage your own build at that path or override the variable to wherever your wheel lives.
+- **GeoBrix wheel**: `gbx_wheel` defaults to a staged `geobrix-0.6.0+env5-py3-none-any.whl`. Stage your own build at that path or override the variable to wherever your wheel lives.
 
 ### Streaming `wc_lidar_pts`: upgrade and resets
 
@@ -195,7 +195,7 @@ The other settings (`simplify`, `water_mask_dir`, `wireless_coverage.pixel_m`, `
 | `simplify` | `true` | `true` to apply product `st_simplify` to isobands before H3 covering (fast, no coverage loss); `false` for exact isobands (heavy/slow at full scale). |
 | `laz_dir` | _(derived)_ | Path to staged `.laz` EPT files. Leave empty to auto-derive under the Volume. Set to the notebook series' Volume path to reuse already-staged LiDAR. `laz_inventory` and the streaming table `wc_lidar_pts` keep the files and points of an earlier folder, so after changing `laz_dir` on a deployed pipeline reset both once: `databricks bundle run wireless_coverage_lf_pipeline --full-refresh laz_inventory,wc_lidar_pts`. |
 | `water_mask_dir` | _(derived)_ | Path to staged Overture water GeoParquet. Leave empty to auto-derive. |
-| `gbx_wheel` | `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0-py3-none-any.whl` | Path to the staged GeoBrix wheel. |
+| `gbx_wheel` | `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env5-py3-none-any.whl` | Path to the staged GeoBrix wheel. |
 
 ### Algorithm and resolution parameters
 
@@ -230,7 +230,7 @@ resources:
 ## Prerequisites
 
 - **Unity Catalog**: a catalog and schema (defaults `geospatial_docs.wireless_coverage_lf`) and a Volume named `data` under it. The pipeline creates sub-directories inside the Volume but not the Volume itself.
-- **GeoBrix 0.6.0 or newer** — the silver step reads the LiDAR with `read_paths`, new in 0.6.0. Stage the wheel at the `gbx_wheel` path (default: `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0-py3-none-any.whl`). The pipeline installs `${gbx_wheel}[light_dbr18,vizx,stac,overture]` and the job tasks `${gbx_wheel}[light_env5,vizx,stac,overture]` — the DBR-18 / Env-5 (protobuf-5) extras matching the Lakeflow runtime **as of this example**. Re-check the [current Lakeflow runtime channel](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions) at deploy time and switch the extra (and the job `environment_version`) to match the live channel.
+- **GeoBrix 0.6.0 or newer** — the silver step reads the LiDAR with `read_paths`, new in 0.6.0. Stage the wheel at the `gbx_wheel` path (default: `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env5-py3-none-any.whl`). The pipeline and the job tasks install `${gbx_wheel}[vizx,stac]` and the Overture CLI — the env5 wheel, matching the Lakeflow runtime (DBR 18) and environment 5 **as of this example**. Re-check the [current Lakeflow runtime channel](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions) at deploy time and switch the wheel (and the job `environment_version`) to match the live channel.
 - **Network access**: the `land` task fetches from USGS 3DEP and Overture Maps over HTTPS — Serverless has outbound internet by default.
 
 ---

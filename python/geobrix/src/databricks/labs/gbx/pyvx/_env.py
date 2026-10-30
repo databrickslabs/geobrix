@@ -14,9 +14,9 @@ def assert_mvt_available() -> None:
         missing.append("shapely")
     if missing:
         raise ImportError(
-            "pyvx requires a light-tier extra; missing: "
+            "pyvx requires the lightweight tier; missing: "
             + ", ".join(missing)
-            + ". Install with: pip install 'geobrix[light_env6]'"
+            + ". Install the env wheel for the runtime (on Databricks) or pip install geobrix (off Databricks)"
         )
 
 
@@ -34,9 +34,9 @@ def assert_legacy_available() -> None:
         missing.append("shapely")
     if missing:
         raise ImportError(
-            "pyvx legacy requires a light-tier extra; missing: "
+            "pyvx legacy requires the lightweight tier; missing: "
             + ", ".join(missing)
-            + ". Install with: pip install 'geobrix[light_env6]'"
+            + ". Install the env wheel for the runtime (on Databricks) or pip install geobrix (off Databricks)"
         )
 
 
@@ -53,9 +53,9 @@ def assert_tin_available() -> None:
         missing.append("shapely")
     if missing:
         raise ImportError(
-            "pyvx TIN/legacy requires a light-tier extra; missing: "
+            "pyvx TIN/legacy requires the lightweight tier; missing: "
             + ", ".join(missing)
-            + ". Install with: pip install 'geobrix[light_env6]'"
+            + ". Install the env wheel for the runtime (on Databricks) or pip install geobrix (off Databricks)"
         )
 
 
@@ -76,7 +76,7 @@ def assert_crs_available() -> None:
         missing.append("shapely")
     if missing:
         raise ImportError(
-            "pyvx CRS requires a light-tier extra; missing: "
+            "pyvx CRS requires the lightweight tier; missing: "
             + ", ".join(missing)
-            + ". Install with: pip install 'geobrix[light_env6]'"
+            + ". Install the env wheel for the runtime (on Databricks) or pip install geobrix (off Databricks)"
         )

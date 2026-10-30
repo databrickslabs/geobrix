@@ -22,11 +22,11 @@ import pytest
 
 pytest.importorskip(
     "rasterio",
-    reason="rasterio not installed (a light-tier extra (e.g. geobrix[light_env6]) required)",
+    reason="rasterio not installed (the lightweight tier required: the env wheel, or pip install geobrix)",
 )
 pytest.importorskip(
     "shapely",
-    reason="shapely not installed (a light-tier extra (e.g. geobrix[light_env6]) required)",
+    reason="shapely not installed (the lightweight tier required: the env wheel, or pip install geobrix)",
 )
 from test.pyrx import _alpha_layouts as al  # noqa: E402
 from test.pyrx import _tessellate_parity as tp  # noqa: E402

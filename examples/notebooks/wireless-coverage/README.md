@@ -7,8 +7,8 @@ consume for antenna siting and line-of-sight analysis.
 
 > **Requires GeoBrix 0.5.2 or newer (minimum).** The series depends on capabilities introduced in
 > 0.5.2 — the `lidar_gbx` reader, the point-cloud surface functions (`rst_binpoints`, `rst_chm`,
-> `rst_isoband`), and `h3_viewshed_towers`. The notebooks install `geobrix[light_env6,vizx]` on
-> Serverless environment 6 (`light_env5` on environment 5). The [Lakeflow pipeline](lakeflow/README.md)
+> `rst_isoband`), and `h3_viewshed_towers`. The notebooks install `geobrix[vizx]` (the env6 wheel) on
+> Serverless environment 6 (the env5 wheel on environment 5). The [Lakeflow pipeline](lakeflow/README.md)
 > needs 0.6.0 or newer.
 
 ![Wireless Coverage series — config_nb → 01 → 02a/02b → 03a → 03b → 04](https://raw.githubusercontent.com/databrickslabs/geobrix/main/resources/images/diagrams/wireless-coverage/wireless-coverage-overview.png)
@@ -64,7 +64,7 @@ Finally — zooming to the Golden Gate Park demo, where the ranked sites are leg
 
 ## Runtime
 
-All notebooks run on the **lightweight tier** — `geobrix[light_env6,vizx]`, pure
+All notebooks run on the **lightweight tier** — `geobrix[vizx]` (the env6 wheel), pure
 Python/PySpark bindings with no JAR or GDAL init script — targeting **Databricks Serverless
 environment 6** (`laspy`/`lazrs` for the LiDAR reader ship with the light base).
 `DECIMATE=1` keeps **every** return (~830 M over SF) — an honest big-data run; raise

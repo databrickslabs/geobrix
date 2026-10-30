@@ -17,11 +17,10 @@ start for understanding the GeoBrix functions involved in the detection cascade.
 :::note Minimum GeoBrix version
 - **Notebook series: GeoBrix 0.5.0 or newer (minimum)** — it depends on capabilities introduced in
   0.4.1 — the `netcdf_gbx` reader (Sentinel-5P swath → points) and the `TropomiDownloader` /
-  `EmitDownloader` / `WellsDownloader` sample downloaders — and installs the `light_env6` and
-  `earthdata` extras, which arrived in 0.5.0 (`geobrix[light_env6,stac,vizx,earthdata]`; use
-  `light_env5` on Serverless environment 5).
+  `EmitDownloader` / `WellsDownloader` sample downloaders — and installs `geobrix[stac,vizx]` (the env6
+  wheel, with `earthaccess` as a separate step; the env5 wheel on Serverless environment 5).
 - **Lakeflow SDP pipeline: GeoBrix 0.6.0 or newer** — it reads its files with
-  [`read_paths`](../ingestion/read-paths), new in 0.6.0. It installs the extra for its Lakeflow
+  [`read_paths`](../ingestion/read-paths), new in 0.6.0. It installs the env wheel for its Lakeflow
   runtime channel (see the Lakeflow tab).
 :::
 
@@ -39,7 +38,7 @@ This is the production counterpart to the notebook series (see the other tab) �
 :::
 
 :::info Runs on the lightweight tier (Serverless)
-The pipeline installs `geobrix[light_dbr18,stac,vizx]` (the extra for its Lakeflow runtime channel, DBR 18 as of this example) and its `land` downloader task `geobrix[light_env5,stac,vizx]` (Serverless environment version 5), each from a staged wheel as a single pip dependency entry — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`, `pyvx`), no JAR, Serverless throughout. See [Execution Tiers](../api/execution-tiers).
+The pipeline installs `geobrix[stac,vizx]` from the env5 wheel (the wheel for its Lakeflow runtime channel, DBR 18 as of this example), and so does its `land` downloader task (Serverless environment version 5), each from a staged wheel as a single pip dependency entry — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`, `pyvx`), no JAR, Serverless throughout. See [Execution Tiers](../api/execution-tiers).
 :::
 
 ## How it works: from a raw satellite signal to a leaderboard
@@ -138,7 +137,7 @@ A five-notebook series that takes one Permian (Delaware Basin) bounding box and 
 :::
 
 :::info Lightweight tier (Serverless) by default
-Pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`, `pyvx`) plus the `geobrix[light_env6,stac,vizx,earthdata]` wheel — no JAR. It features the net-new **`netcdf_gbx` reader** (`databricks.labs.gbx.ds`), which transcodes the Sentinel-5P netCDF-4 swath directly to points with no regridding. See [Execution Tiers](../api/execution-tiers).
+Pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`, `pyvx`) plus the `geobrix[stac,vizx]` env6 wheel (with `earthaccess` as a separate step) — no JAR. It features the net-new **`netcdf_gbx` reader** (`databricks.labs.gbx.ds`), which transcodes the Sentinel-5P netCDF-4 swath directly to points with no regridding. See [Execution Tiers](../api/execution-tiers).
 :::
 
 ### 01 — Wide-area screening (Sentinel-5P)

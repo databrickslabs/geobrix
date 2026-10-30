@@ -42,18 +42,19 @@ Finally, the capstone classifies the whole scene into contiguous land-cover regi
 Installed by the `config_nb` `%pip` cell:
 
 ```
-geobrix[light_env5,photogrammetry,vizx]
+geobrix[vizx]      (the env5 wheel)
+pycolmap==4.2.1    (a separate step; pycolmap-cuda12 for the GPU pass)
 ```
 
-The `photogrammetry` extra bundles: `pycolmap>=4.0.0`, `rasterio>=1.3`, `pmtiles`.
+The env5 wheel carries `rasterio` and `pmtiles`; `pycolmap` installs after it.
 
 The wheel is fetched from:
 ```
-/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0-py3-none-any.whl
+/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env5-py3-none-any.whl
 ```
 
-`03_segment` is standalone (no `%run ./config_nb`) and installs its own extras —
-`geobrix[light_env5,models_gpu_env5,vizx]` — since it needs the GeoSAM GPU model deps
+`03_segment` is standalone (no `%run ./config_nb`) and installs its own dependencies —
+`geobrix[vizx]` (the env5 wheel, with the GeoSAM GPU packages as a separate step) — since it needs the GeoSAM GPU model deps
 (`torch`, `segment-geospatial`), not `photogrammetry`.
 
 ## Runtime

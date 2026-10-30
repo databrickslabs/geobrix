@@ -39,11 +39,12 @@ Unity Gateway GPU Model Serving endpoint — and a **land-cover** region map wit
 The series runs on **Serverless environment 5** (Python 3.11, CPU only). Install via:
 
 ```
-geobrix[light_env5,photogrammetry,vizx] @ file:///Volumes/.../geobrix-0.6.0-py3-none-any.whl
+geobrix[vizx] @ file:///Volumes/.../geobrix-0.6.0+env5-py3-none-any.whl
+pycolmap==4.2.1
 ```
 
-The `photogrammetry` extra brings `pycolmap >= 4.0.0`, `rasterio`, and the
-PMTiles toolchain. No JAR or GDAL init script is needed.
+The env5 wheel carries `rasterio` and the PMTiles toolchain; `pycolmap` (COLMAP) is a separate
+install after it (`pycolmap-cuda12` for the GPU pass). No JAR or GDAL init script is needed.
 
 **`01a` runs sparse SfM on CPU.** An optional dense pass (`01b`) runs COLMAP
 `patch_match_stereo` on the **Serverless GPU AI Runtime** (`pycolmap-cuda12`, CUDA 12),
@@ -53,7 +54,7 @@ pass adds fidelity for measurement workflows. `02_publish` uses whichever orthom
 present (dense if `01b` ran, else sparse).
 
 **`03_segment` (optional) turns the published COG into objects AND a land-cover map.** It
-installs its own extras — `geobrix[light_env5,models_gpu_env5,vizx]` — rather than
+installs its own dependencies — `geobrix[vizx]` (the env5 wheel, with the GeoSAM GPU packages as a separate step) — rather than
 `photogrammetry`, since its **instance-objects** section needs GeoSAM's
 `torch`/`segment-geospatial`, not `pycolmap`, and runs on the **Serverless GPU AI Runtime**
 (environment 5). Its **land-cover** section is plain RasterX (`rst_land_cover`, CPU-only) and

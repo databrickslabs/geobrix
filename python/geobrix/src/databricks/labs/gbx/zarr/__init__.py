@@ -3,9 +3,9 @@
 Public names are imported lazily (PEP 562): importing ``databricks.labs.gbx.zarr``
 never imports ``zarr``, ``numcodecs``, ``tensorstore``, ``obstore`` or PySpark.
 Importing a name (``from databricks.labs.gbx.zarr import ZarrWriteConflict``) loads
-only the module that defines it. Install the stack with the per-runtime extra:
-``pip install 'geobrix[light_dbr19,zarr_dbr19]'`` on DBR 19, or
-``geobrix[light_env6,zarr_env6]`` on Serverless environment 6.
+only the module that defines it. Install the stack with the env6 wheel's ``[zarr]`` extra on
+DBR 19 and Serverless environment 6 (``"geobrix[zarr] @ <the +env6 wheel>"``), or the plain
+wheel's ``geobrix[zarr_dbr19]`` off Databricks.
 """
 
 import importlib

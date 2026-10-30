@@ -18,8 +18,8 @@ The notebook works over the San Francisco Bay Area: it downloads the **USGS 3DEP
 **[examples/notebooks/h3-rasterize](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/h3-rasterize)** — download `h3_rasterize_isobands.ipynb` and import it into your Databricks workspace to run.
 :::
 
-:::info Runs on the lightweight tier (`geobrix[light_env5,stac,vizx,overture]`)
-The notebook uses the **lightweight tier** — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`) plus the `geobrix[light_env5,stac,vizx,overture]` wheel — so it runs on **Serverless environment 5** with no JAR or GDAL init script. The per-tier rasterize result is materialized into a **session-scoped temporary table** (`CREATE TEMP TABLE`) so that the stacking step reads cached bytes instead of recomputing the burn. Session temp tables require **Serverless or DBR 18.1+**; they are not supported on dedicated / single-user clusters. See [Execution Tiers](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers) for the trade-offs between lightweight and heavyweight.
+:::info Runs on the lightweight tier (`geobrix[stac,vizx]` (the env5 wheel, with the Overture CLI as a separate step))
+The notebook uses the **lightweight tier** — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`) plus the `geobrix[stac,vizx]` env5 wheel (with the Overture CLI as a separate step) — so it runs on **Serverless environment 5** with no JAR or GDAL init script. The per-tier rasterize result is materialized into a **session-scoped temporary table** (`CREATE TEMP TABLE`) so that the stacking step reads cached bytes instead of recomputing the burn. Session temp tables require **Serverless or DBR 18.1+**; they are not supported on dedicated / single-user clusters. See [Execution Tiers](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers) for the trade-offs between lightweight and heavyweight.
 :::
 
 ---
@@ -36,16 +36,16 @@ The notebook uses the **lightweight tier** — pure Python/PySpark bindings (`da
 ## Prerequisites
 
 - **Databricks Runtime 17.3 LTS / 18.1+ or Serverless** (Spark 4 / Python 3.12). Lightweight default runs on Serverless. Session temp tables (Step 4) require Serverless or DBR 18.1+; they are not available on dedicated / single-user clusters.
-- **GeoBrix** (version 0.6.0). The `%pip install` cell installs the `geobrix[light_env5,stac,vizx,overture]` wheel, which pulls in `rasterio`, `matplotlib`, `geopandas`, `mapclassify` (visualization), planetary-computer STAC client (`stac`), and Overture Maps helpers (`overture`). No JAR or GDAL init script is required.
+- **GeoBrix** (version 0.6.0). The `%pip install` cell installs the `geobrix[stac,vizx]` env5 wheel (with the Overture CLI as a separate step), which pulls in `rasterio`, `matplotlib`, `geopandas`, `mapclassify` (visualization), planetary-computer STAC client (`stac`), and Overture Maps helpers (`overture`). No JAR or GDAL init script is required.
 - **Unity Catalog Volumes**: `DemDownloader()` stages the USGS 3DEP seamless (10 m) GeoTIFFs to `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-examples/sf/elevation-3dep/dem_10m`; `OvertureClient` stages the Overture water layer to `.../sf/overture-water-bay`. Update `DEM_DIR` and `LAND_DIR` if your Volume layout differs. The Volume root must already exist; staging creates sub-directories automatically.
-- **Wheel path**: update the `%pip install` cell to point at your staged `geobrix-0.6.0-py3-none-any.whl` if its Volume path differs from the default.
+- **Wheel path**: update the `%pip install` cell to point at your staged `geobrix-0.6.0+env5-py3-none-any.whl` if its Volume path differs from the default.
 - **Databricks product H3**: `h3_try_coverash3` is a built-in Databricks function available on **DBR 16.3+ / Serverless**, accessed via the product Python bindings (`from pyspark.databricks.sql import functions as DBF`) — no extra install is needed.
 
 ---
 
 ## Run order
 
-1. **Install and restart** — the `%pip install` cell installs `geobrix[light_env5,stac,vizx,overture]` and is followed immediately by `%restart_python`; run cells in order without skipping the restart.
+1. **Install and restart** — the `%pip install` cell installs `geobrix[stac,vizx]` (the env5 wheel, with the Overture CLI as a separate step) and is followed immediately by `%restart_python`; run cells in order without skipping the restart.
 2. **Imports and registration** — imports `pyrx`, `pygx`, `gbx.vizx` helpers, and calls `rx.register(spark)` + `gx.register(spark)` + `register(spark)` to install SQL UDFs.
 3. **Download DEM and land mask** — `DemDownloader().download(…)` fetches USGS 3DEP seamless (10 m) tiles via Planetary Computer STAC and stages them (idempotent); `OvertureClient` fetches Overture Maps `base/water` features and builds a land multipolygon by subtracting water from the AOI box.
 4. **Steps 1–3 (Spark)** — the `raster_gbx` reader with `tileSize=512` splits the DEM into virtual tiles (already EPSG:4326 — no reprojection); `rst_clip` masks each tile to the land polygon; `rst_isoband` extracts twelve 60 m elevation bands; `h3_try_coverash3` indexes each band at H3 res 9 (Databricks product function, accepts WKB directly); `rst_h3_gridspec` computes the shared canvas.

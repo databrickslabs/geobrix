@@ -19,10 +19,10 @@ series** that walks through each step and the GeoBrix functions behind it.
 :::note Minimum GeoBrix version
 - **Notebook series: GeoBrix 0.5.2 or newer (minimum)** — it depends on capabilities introduced in
   0.5.2: the `lidar_gbx` reader, the point-cloud surface functions (`rst_binpoints`, `rst_chm`,
-  `rst_isoband`), and `h3_viewshed_towers`. On Serverless it installs `geobrix[light_env6,vizx]`
-  (use `light_env5` on environment 5).
+  `rst_isoband`), and `h3_viewshed_towers`. On Serverless it installs `geobrix[vizx]` (the env6 wheel;
+  the env5 wheel on environment 5).
 - **Lakeflow SDP pipeline: GeoBrix 0.6.0 or newer** — it reads its LiDAR files with
-  [`read_paths`](../ingestion/read-paths), new in 0.6.0. It installs the extra for its Lakeflow
+  [`read_paths`](../ingestion/read-paths), new in 0.6.0. It installs the env wheel for its Lakeflow
   runtime channel (see the Lakeflow tab).
 :::
 
@@ -88,7 +88,7 @@ databricks bundle run wireless_coverage_lf_job
 :::
 
 :::info Runs on the lightweight tier (Serverless)
-The pipeline and its `land` and `siting` tasks install the GeoBrix wheel with the extra that matches the Lakeflow runtime — **as of this example DBR 18.3**, so `geobrix[light_dbr18,vizx,stac,overture]` (pipeline) and `geobrix[light_env5,vizx,stac,overture]` (serverless job tasks), both the protobuf-5 regime — as a single pip dependency entry; pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`, `pygx`), no JAR, Serverless throughout. Lakeflow pins compute by a runtime channel: check the [current Lakeflow runtime channel](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions) when you deploy and switch the extra to match if it has moved (e.g. DBR 19 → `[light_dbr19]`/`[light_env6]`). The bundle **defaults to Serverless**; for heavier runs (notably full San Francisco) you can switch the pipeline and job tasks to **classic compute** (`serverless: false` + a cluster spec) for dedicated memory and throughput. See [Execution Tiers](../api/execution-tiers).
+The pipeline and its `land` and `siting` tasks install the GeoBrix env wheel that matches the Lakeflow runtime — **as of this example DBR 18.3**, so `geobrix[vizx,stac]` from the env5 wheel (pipeline and serverless job tasks alike, with the Overture CLI as a separate entry) — as a single pip dependency entry; pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`, `pygx`), no JAR, Serverless throughout. Lakeflow pins compute by a runtime channel: check the [current Lakeflow runtime channel](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions) when you deploy and switch the wheel to match if it has moved (e.g. DBR 19 → the `+env6` wheel). The bundle **defaults to Serverless**; for heavier runs (notably full San Francisco) you can switch the pipeline and job tasks to **classic compute** (`serverless: false` + a cluster spec) for dedicated memory and throughput. See [Execution Tiers](../api/execution-tiers).
 :::
 
 ## How it works: from staged LiDAR to ranked tower sites
@@ -176,7 +176,7 @@ The bundle validates and deploys with the committed defaults in `databricks.yml`
 
 - **Schedule**: the job ships paused (`pause_status: PAUSED`, daily at `0 0 7 * * ?` America/Chicago) — unpause it in the workspace once you've confirmed a manual run.
 - **Shared LiDAR**: if you have already run the notebook series and staged the USGS 3DEP data, set `laz_dir` (and optionally `water_mask_dir`) in your override file to reuse those files and skip the ~830 MB download. See `databricks.override.yml.example` for the exact paths.
-- **GeoBrix wheel**: `gbx_wheel` points at a staged `geobrix-0.6.0-py3-none-any.whl`. Stage your own build at that path or override the variable to wherever your wheel lives.
+- **GeoBrix wheel**: `gbx_wheel` points at a staged `geobrix-0.6.0+env6-py3-none-any.whl`. Stage your own build at that path or override the variable to wherever your wheel lives.
 
 ## Configuration
 
@@ -195,7 +195,7 @@ Bundle variables (set in `databricks.yml`; override per-workspace in `databricks
 | `simplify` | `true` | Apply product `st_simplify` to isobands before H3 covering (default True = fast, no coverage loss, needed for full-SF performance; False = exact isobands, heavy/slow). |
 | `laz_dir` | _(derived)_ | Path to staged `.laz` EPT files. Leave empty to auto-derive under the Volume. Set to the notebook series' Volume path to reuse already-staged LiDAR. `laz_inventory` and the streaming table `wc_lidar_pts` keep the files and points of an earlier folder, so after changing `laz_dir` on a deployed pipeline reset both once: `databricks bundle run wireless_coverage_lf_pipeline --full-refresh laz_inventory,wc_lidar_pts`. |
 | `water_mask_dir` | _(derived)_ | Path to staged Overture water GeoParquet. Leave empty to auto-derive. |
-| `gbx_wheel` | `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0-py3-none-any.whl` | Path to the staged GeoBrix wheel. |
+| `gbx_wheel` | `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env6-py3-none-any.whl` | Path to the staged GeoBrix wheel. |
 
 Algorithm and resolution parameters are tunable via `wireless_coverage.*` keys in the pipeline `configuration` block. Key defaults:
 
@@ -237,7 +237,7 @@ The LiDAR path (Parts 1 and 2a) works over **all of San Francisco** (`SF_AOI = (
 :::
 
 :::info Runs on the lightweight tier (Serverless) by default
-The series uses the **lightweight tier** — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`) plus the `geobrix[light_env6,vizx]` wheel — so it runs on **Serverless environment 6** with no JAR or GDAL init script. The `laspy` / `lazrs` readers the point cloud needs ship with the light base. Visualization helpers come from `databricks.labs.gbx.vizx`. See [Execution Tiers](../api/execution-tiers).
+The series uses the **lightweight tier** — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`) plus the `geobrix[vizx]` env6 wheel — so it runs on **Serverless environment 6** with no JAR or GDAL init script. The `laspy` / `lazrs` readers the point cloud needs ship with the light base. Visualization helpers come from `databricks.labs.gbx.vizx`. See [Execution Tiers](../api/execution-tiers).
 :::
 
 :::note Big-data by default

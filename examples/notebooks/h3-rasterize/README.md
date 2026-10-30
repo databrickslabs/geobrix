@@ -19,7 +19,7 @@ bringing merged footprints to the driver. Visualized throughout with the
 ![H3 Rasterize — DEM isobands to a multi-band H3 raster stack](../../../resources/images/diagrams/h3-rasterize/h3-rasterize.png)
 
 > **Lightweight tier (Serverless) by default.** The notebook uses the lightweight
-> tier — `geobrix[light_env5,stac,vizx,overture]` — pure Python/PySpark bindings with no
+> tier — `geobrix[stac,vizx]` (the env5 wheel, with the Overture CLI as a separate step) — pure Python/PySpark bindings with no
 > JAR or GDAL init script required. It targets **Serverless environment 5**. See
 > [Execution Tiers](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers).
 
@@ -59,9 +59,9 @@ shared canvas, cumulative tier overlays, and a final coverage-depth composite.
   per-tier tiles to a **permanent table** you own (`CATALOG.SCHEMA.wc_dem_tier_tiles`); set a
   catalog/schema you can write to.
 - **GeoBrix 0.6.0.** Update the `%pip install` cell to point at your staged
-  `geobrix-0.6.0-py3-none-any.whl`. The `[light_env5,stac,vizx,overture]` extras install
-  rasterio, geopandas, matplotlib, mapclassify, the planetary-computer STAC client, and
-  Overture Maps helpers — no other dependencies assumed pre-staged.
+  `geobrix-0.6.0+env5-py3-none-any.whl`. The env5 wheel carries rasterio and geopandas; its
+  `[stac,vizx]` extras install matplotlib, mapclassify and the planetary-computer STAC client, and a
+  separate step installs the Overture CLI — no other dependencies assumed pre-staged.
 - **Unity Catalog Volumes.** `DemDownloader()` stages the 3DEP seamless (10 m) GeoTIFFs to
   `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-examples/sf/elevation-3dep/dem_10m`;
   `OvertureClient` stages Overture water features to `.../sf/overture-water-bay`.
@@ -78,7 +78,7 @@ This is a single notebook; run all cells top to bottom. The `%pip install` + `%r
 pair at the top restarts the Python kernel — subsequent cells import from the freshly installed
 wheel. Cells after the restart are safe to re-run individually once the wheel is installed.
 
-1. **Install and restart** — `%pip install "geobrix[light_env5,stac,vizx,overture] @ file://…"` + `%restart_python`.
+1. **Install and restart** — `%pip install "geobrix[stac,vizx] @ file://…/geobrix-0.6.0+env5-py3-none-any.whl"`, then `%pip install "overturemaps>=1.0.2,<2"` (the Overture CLI), + `%restart_python`.
 2. **Imports and registration** — `rx.register(spark)`, `gx.register(spark)`, and `register(spark)` install the SQL UDFs.
 3. **Download DEM and land mask** — `DemDownloader().download(…)` fetches USGS 3DEP
    seamless (10 m) tiles (idempotent); `OvertureClient` fetches Overture Maps `base/water`

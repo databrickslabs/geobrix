@@ -14,9 +14,9 @@ def assert_quadbin_available() -> None:
         missing.append("shapely")
     if missing:
         raise ImportError(
-            "pygx quadbin requires a light-tier extra; missing: "
+            "pygx quadbin requires the lightweight tier; missing: "
             + ", ".join(missing)
-            + ". Install with: pip install 'geobrix[light_env6]'"
+            + ". Install the env wheel for the runtime (on Databricks) or pip install geobrix (off Databricks)"
         )
 
 
@@ -30,8 +30,8 @@ def assert_bng_available() -> None:
         import shapely  # noqa: F401
     except Exception:  # noqa: BLE001
         raise ImportError(
-            "pygx BNG requires a light-tier extra (shapely). "
-            "Install with: pip install 'geobrix[light_env6]'"
+            "pygx BNG requires the lightweight tier (shapely). "
+            "Install the env wheel for the runtime (on Databricks) or pip install geobrix (off Databricks)"
         )
 
 
@@ -45,8 +45,8 @@ def assert_custom_available() -> None:
         import shapely  # noqa: F401
     except Exception:  # noqa: BLE001
         raise ImportError(
-            "pygx custom gridding requires a light-tier extra (shapely). "
-            "Install with: pip install 'geobrix[light_env6]'"
+            "pygx custom gridding requires the lightweight tier (shapely). "
+            "Install the env wheel for the runtime (on Databricks) or pip install geobrix (off Databricks)"
         )
 
 
@@ -61,5 +61,5 @@ def assert_h3_available() -> None:
     except Exception:  # noqa: BLE001
         raise ImportError(
             "pygx h3 cellfill requires the h3 library. "
-            "Install with: pip install 'geobrix[light_env6]'"
+            "Install the env wheel for the runtime (on Databricks) or pip install geobrix (off Databricks)"
         )

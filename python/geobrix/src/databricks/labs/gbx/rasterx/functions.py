@@ -66,7 +66,7 @@ def register(_spark: SparkSession) -> None:
     # UC Volume (/Volumes/...) FUSE path in the Spark execution context -- the UC credential is held
     # only by Spark's managed Python worker -- so the canonical implementation is the pyrx Python
     # UDF, which DOES read /Volumes (and /Workspace, DBFS, local). Override the Scala registration
-    # with it when pyrx (a light-tier extra) is importable. If it is NOT present, skip gracefully and leave the
+    # with it when pyrx (the lightweight tier) is importable. If it is NOT present, skip gracefully and leave the
     # Scala gbx_rst_fromfile in place (it still reads local / DBFS / Workspace, just not /Volumes).
     try:
         # Register the 2-arg (path, driver) SQL UDF, but the HEAVY variant that
@@ -687,17 +687,17 @@ def rst_fromfile(path: ColLike, driver: ColLike) -> Column:
         (a ``pandas_udf``) and has no JVM/Scala implementation. On Databricks the executor JVM cannot
         read a UC Volume (``/Volumes/...``) FUSE path — the UC credential is held only by Spark's
         managed Python worker — so this delegates to ``pyrx.rst_fromfile`` and **requires
-        a light-tier extra (e.g. ``geobrix[light_env6]``)**. If no light-tier extra is installed,
-        this raises with guidance. The portable alternative (works on every tier) is
+        the lightweight tier (the env wheel for the runtime, or the plain wheel off Databricks)**. Without
+        it, this raises with guidance. The portable alternative (works on every tier) is
         ``spark.read.format("binaryFile").load(path)`` + ``gbx_rst_fromcontent(content, driver)``.
     """
     try:
         from databricks.labs.gbx.pyrx import functions as _pyrx
     except ImportError as e:  # pragma: no cover
         raise ImportError(
-            "gbx_rst_fromfile is lightweight-only and requires a light-tier extra, e.g. geobrix[light_env6] "
+            "gbx_rst_fromfile is lightweight-only and requires the lightweight tier "
             "(implemented by the pyrx Python reader; the JVM cannot read UC Volumes). "
-            "Install a light-tier extra, or use "
+            "Install the env wheel for the runtime (or pip install geobrix off Databricks), or use "
             "spark.read.format('binaryFile').load(path) + gbx_rst_fromcontent(content, driver)."
         ) from e
     # The heavyweight surface always yields a MATERIALIZED tile (raster bytes

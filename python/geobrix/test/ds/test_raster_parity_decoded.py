@@ -17,7 +17,7 @@ import pytest
 
 rasterio = pytest.importorskip(
     "rasterio",
-    reason="rasterio not installed (a light-tier extra (e.g. geobrix[light_env6]) required)",
+    reason="rasterio not installed (the lightweight tier required: the env wheel, or pip install geobrix)",
 )
 import numpy as np  # noqa: E402
 from rasterio.io import MemoryFile  # noqa: E402

@@ -18,7 +18,9 @@ variables:
   # already-staged LiDAR and skip a second ~830 MB download.
   laz_dir: {default: ""}
   water_mask_dir: {default: ""}
-  gbx_wheel: {default: "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0-py3-none-any.whl"}
+  # The env wheel for the pipeline's runtime: CURRENT is DBR 18 as of this example -> +env5 (a DBR 19
+  # channel takes +env6); the land/siting job environments below are Serverless environment 5, the same family.
+  gbx_wheel: {default: "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env5-py3-none-any.whl"}
 
 resources:
   pipelines:
@@ -28,8 +30,8 @@ resources:
       # runs -- notably full-SF (full_aoi=true), where the LiDAR binning/TIN/H3 is
       # large -- you can switch to CLASSIC compute for dedicated, sized memory and
       # throughput: set `serverless: false` and add a `clusters:` block (node_type
-      # + autoscale). Match the cluster DBR to the GeoBrix extra (e.g. DBR 19 ->
-      # [light_dbr19]). See https://docs.databricks.com/aws/en/dlt/configure-compute
+      # + autoscale). Match the cluster DBR to the GeoBrix wheel (e.g. DBR 19 ->
+      # the +env6 wheel). See https://docs.databricks.com/aws/en/dlt/configure-compute
       serverless: true
       catalog: ${var.catalog}
       schema: ${var.schema}
@@ -40,16 +42,17 @@ resources:
       environment:
         dependencies:
           # The Lakeflow SDP pipeline runs on the DLT runtime channel. As of this
-          # example that channel is DBR 18.3.x (protobuf-5), so it uses the DBR-language
-          # [light_dbr18] extra, NOT [light_env6] (the protobuf-6 / DBR-19 regime).
+          # example that channel is DBR 18.3.x, so gbx_wheel is the +env5 wheel.
           # >>> Before you deploy, check the current Lakeflow runtime channel at
           # https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions
-          # and switch to the matching GeoBrix extra (e.g. a DBR 19 channel -> [light_dbr19]).
-          # Installed WITH vizx in ONE pip resolution: Lakeflow runs one `%pip install`
-          # per dependency entry, so splitting the extras defeats pip's resolver
-          # (rio-tiler after a pinned rasterio forces a rebuild / ENVIRONMENT_PIP_INSTALL_ERROR).
+          # and switch to the matching GeoBrix wheel (e.g. a DBR 19 channel -> the +env6 wheel).
+          # Installed WITH its extras in ONE pip resolution: Lakeflow runs one `%pip install`
+          # per dependency entry, so splitting the extras defeats pip's resolver.
           # The `wheel[extras]` path form keeps it a single pass + DAB-path-safe.
-          - ${var.gbx_wheel}[light_dbr18,vizx,stac,overture]
+          - ${var.gbx_wheel}[vizx,stac]
+          # The Overture CLI (the bbox fast path) is not an env wheel extra: a separate entry.
+          # It raises click and tqdm and installs PyPI's shapely, which GeoBrix does not use.
+          - overturemaps>=1.0.2,<2
       configuration:
         wireless_coverage.catalog: ${var.catalog}
         wireless_coverage.schema: ${var.schema}
@@ -132,16 +135,16 @@ resources:
           spec:
             # Serverless job tasks use Environment-language versioning. As of this
             # example the equivalent of the Lakeflow DBR 18.3 runtime is Env 5
-            # (DBR 18 <-> Env 5, protobuf-5), so env version "5" + the [light_env5]
-            # extra (= light_dbr18). Re-check the current channel (see the pipeline
-            # dependencies note above) and keep the env version + extra in lockstep
-            # with it — a mismatched base + extra trips the "core package versions
-            # changed" job failure.
+            # (DBR 18 <-> Env 5), the family of the +env5 wheel. Re-check the current
+            # channel (see the pipeline dependencies note above) and keep the env
+            # version and the wheel in lockstep with it: the other family's wheel
+            # refuses to import.
             environment_version: "5"
             dependencies:
               # Single-pass wheel+extras install, same rationale as the pipeline
               # environment above (avoids per-dep %pip resolver churn).
-              - ${var.gbx_wheel}[light_env5,vizx,stac,overture]
+              - ${var.gbx_wheel}[vizx,stac]
+              - overturemaps>=1.0.2,<2
       schedule:
         quartz_cron_expression: "0 0 7 * * ?"
         timezone_id: "America/Chicago"

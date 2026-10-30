@@ -38,11 +38,11 @@ import pytest
 # Light core (h3-py + rasterio) and heavy (JNI GDAL) deps; skip cleanly if absent.
 rasterio = pytest.importorskip(
     "rasterio",
-    reason="rasterio not installed (a light-tier extra (e.g. geobrix[light_env6]) required)",
+    reason="rasterio not installed (the lightweight tier required: the env wheel, or pip install geobrix)",
 )
 pytest.importorskip(
     "h3",
-    reason="h3-py not installed (a light-tier extra (e.g. geobrix[light_env6]) required)",
+    reason="h3-py not installed (the lightweight tier required: the env wheel, or pip install geobrix)",
 )
 from test.pyrx import _tessellate_parity as tp  # noqa: E402
 

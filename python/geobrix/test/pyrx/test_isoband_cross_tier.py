@@ -45,7 +45,7 @@ import pytest
 
 rasterio = pytest.importorskip(
     "rasterio",
-    reason="rasterio not installed (geobrix[light_env6] required)",
+    reason="rasterio not installed (the lightweight tier required)",
 )
 import numpy as np  # noqa: E402
 import shapely.wkb  # noqa: E402

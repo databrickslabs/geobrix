@@ -324,7 +324,7 @@ def test_dir_load_excludes_vrt(spark, tmp_path):
 def test_parse_vrt_members_uses_defusedxml(tmp_path):
     """External VRT parsing must be entity-hardened (defusedxml), not raw stdlib.
 
-    defusedxml is declared in the [light-base] extra so production installs get
+    defusedxml is declared in the base dependencies (and the env wheels' core.txt) so production installs get
     it; the fallback to stdlib xml.etree exists only for resilience.  A VRT that
     declares an XML entity must be REJECTED (defusedxml raises) rather than
     expanded — proof the hardened parser is active.

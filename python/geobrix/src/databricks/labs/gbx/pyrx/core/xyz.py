@@ -26,11 +26,11 @@ from databricks.labs.gbx._gdal_policy import open_bytes
 # _render_tile_riotiler), not at module top. rio-tiler 9.x defines
 # TypedDict(extra_items=...) (PEP 728), which needs typing_extensions>=4.13; a
 # runtime that keeps an older typing_extensions (Serverless env 5, DBR 17.3 and 18
-# ship 4.12.2 until the light extras raise it) cannot import it.
+# ship 4.12.2 until GeoBrix's typing_extensions floor raises it) cannot import it.
 # Keeping the import lazy means `import pyrx` — and every rst_* function that
 # does NOT use XYZ tiling — still works there; only rst_tilexyz /
 # rst_xyzpyramid fall back to the rasterio backend at call time.  See the
-# pyproject [light_dbr17] typing_extensions floor and rio-tiler pin.
+# typing_extensions floor in pyproject's base dependencies and envs/env<N>/core.txt.
 
 # --- constants (mirror heavyweight) -----------------------------------------
 MAX_ZOOM = 20

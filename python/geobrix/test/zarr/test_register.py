@@ -506,6 +506,36 @@ def test_a_claim_whose_read_back_fails_leaves_no_row_behind(
     assert _register.claim_root(spark_delta, root, "c.s.other", "overlay") is True
 
 
+def test_a_claim_that_cannot_be_taken_back_still_raises_the_read_back_error(
+    spark_delta, tmp_path, monkeypatch, caplog
+):
+    """The read that confirms the claim fails and so does deleting the claim's row: the read-back
+    error is the one raised (the unlock failure is only logged), and the row is left in the ledger.
+    """
+    real_held, looks = _register._held, []
+
+    def held(spark, ledger):
+        looks.append(1)
+        if len(looks) == 2:
+            raise RuntimeError("read-back failed")
+        return real_held(spark, ledger)
+
+    def unlock(*a, **k):
+        raise RuntimeError("unlock failed")
+
+    root = str(tmp_path / "ov")
+    _empty_ledger(spark_delta, root)
+    monkeypatch.setattr(_register, "_held", held)
+    monkeypatch.setattr(_register, "_unlock", unlock)
+    with caplog.at_level(logging.WARNING, logger=_register._LOG.name):
+        with pytest.raises(RuntimeError, match="read-back failed"):
+            _register.claim_root(spark_delta, root, "c.s.t", "overlay")
+    warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("could not take claim" in m and "unlock failed" in m for m in warned)
+    monkeypatch.undo()
+    assert _ledger_owners(spark_delta, root) == ["c.s.t"]
+
+
 def _refused(what):
     def refused(*a, **k):
         raise AssertionError(f"{what} ran")

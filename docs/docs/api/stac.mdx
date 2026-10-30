@@ -10,7 +10,7 @@ title: STAC Client
 Where a single-node STAC script serializes search requests and downloads, `StacClient` fans both operations out across the Spark cluster — one task per AOI row (search) and one task per asset (download). On Serverless, parallelism is controlled via `partitions=` and `DataFrame.repartition()`, with no `spark.conf.set` calls.
 
 :::info Opt-in extra
-`StacClient` requires `geobrix[light_env6,stac]`. The `[stac]` extra pulls in `pystac-client`, `planetary-computer`, `tenacity`, and `requests`. Serverless environment version 6 (Python 3.12) is required.
+`StacClient` requires the `[stac]` extra (on Databricks, the env wheel with `[stac]`; see [Installation](../installation)). The `[stac]` extra pulls in `pystac-client`, `planetary-computer`, `tenacity`, and `requests`. Serverless environment version 6 (Python 3.12) is required.
 :::
 
 ## Ready-made downloaders
@@ -27,14 +27,18 @@ Reach for `StacClient` directly when you need a catalog these don't cover, or fu
 
 ## Installation
 
-```bash
-pip install "geobrix[light_env6,stac]"
-```
-
-From a Databricks notebook (Serverless or classic):
+From a Databricks notebook (Serverless or classic), install the env wheel for the runtime with the
+`[stac]` extra (`+env6` on Serverless environment 6 and DBR 19, `+env5` on environment 5 and DBR 17.3
+/ 18):
 
 ```python
-%pip install --quiet "geobrix[light_env6,stac] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-0.5.0-py3-none-any.whl"
+%pip install --quiet "geobrix[stac] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>+env6-py3-none-any.whl"
+```
+
+Off Databricks (the plain wheel):
+
+```bash
+pip install "geobrix[stac]"
 ```
 
 ## Import

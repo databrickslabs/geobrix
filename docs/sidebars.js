@@ -35,6 +35,7 @@ const sidebars = {
       collapsed: true,
       link: { type: 'doc', id: 'release-notes' },
       items: [
+        'release-notes-0-6',
         'release-notes-0-5-and-earlier',
       ],
     },

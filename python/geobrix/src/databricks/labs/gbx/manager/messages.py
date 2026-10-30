@@ -7,7 +7,7 @@ from typing import Dict, Set
 
 REMINDER = (
     "geobrix 0.6.0: SQL functions register through databricks.labs.gbx.register(spark); "
-    "each runtime has its own wheel. See https://databrickslabs.github.io/geobrix/docs/release-notes"
+    "each runtime has its own wheel. See https://databrickslabs.github.io/geobrix/docs/release-notes-0-6#env-wheels"
 )
 _SEEN: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
 _SEEN_BY_ID: Dict[int, Set[str]] = {}

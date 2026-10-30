@@ -28,6 +28,7 @@ import threading
 import numpy as np
 from rasterio.io import MemoryFile
 
+from databricks.labs.gbx.pyrx._env import capped_block_cache
 from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core.budget import (
     _cgroup_task_limit_bytes,
@@ -219,7 +220,8 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
         # Validate compression against the same set that rio-cogeo accepts, so
         # callers passing profile names (e.g. "deflate", "lzw", "raw") still work.
         # "raw" (and "none", read as "raw" above) means no compression: the authority emits
-        # compress=none below, since the COG driver compresses with LZW when none is named.
+        # compress=none below, since the COG driver compresses with LZW when the profile
+        # has no COMPRESS option at all.
         from rio_cogeo.profiles import cog_profiles
 
         try:
@@ -368,7 +370,10 @@ def cog_convert_file(
     # Merge authority options (codec + level + predictor); RAW is compress=none alone.
     creation.update(_comp_opts)
 
-    with rasterio.Env(GDAL_CACHEMAX=200):
+    # 4 MiB of block cache, a streaming copy's: the RSS of this conversion and of the streamed merge
+    # built on it grows with the cache (an 8192 x 8192 float32 raster: ~36 MiB over the baseline at
+    # 4 MiB, ~310 MiB at 200 MiB; the merge's peak passes its bound at 4 MiB and fails past 8 MiB).
+    with capped_block_cache(4 * 1024 * 1024):
         rio_shutil.copy(src_path, dst_path, driver="COG", **creation)
 
 

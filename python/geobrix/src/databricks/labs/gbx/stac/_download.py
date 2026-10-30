@@ -81,14 +81,15 @@ def windowed_download(
         Memory bound: a 4 km × 4 km NAIP AOI at 0.6 m native is ~44 M pixels per band.
         Setting max_mpp=6.0 reduces that to ~444 K pixels (~100× smaller array).
 
-    GDAL_CACHEMAX is set to 128 (MB) via rasterio.Env to bound /vsicurl block cache
+    The GDAL block cache is capped at 128 MiB (``capped_block_cache``) to bound /vsicurl blocks
     even when decimation is active (defence-in-depth for Serverless 1 GB UDF cap).
     """
     import rasterio
 
     from databricks.labs.gbx.ds._window import window_for_bbox
+    from databricks.labs.gbx.pyrx._env import capped_block_cache
 
-    with rasterio.Env(GDAL_CACHEMAX=128):
+    with capped_block_cache(128 * 1024 * 1024):
         with rasterio.open(href) as src:
             win = window_for_bbox(src, bbox, bbox_crs)
             if win is None:

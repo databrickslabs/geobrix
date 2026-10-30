@@ -1,3 +1,4 @@
+import contextlib
 import os
 import subprocess
 import sys
@@ -104,4 +105,59 @@ def test_a_registered_grid_reaches_rasterio_after_an_unreadable_proj_data(tmp_pa
     assert out.returncode == 0, out.stderr[-2000:]
     assert float(out.stdout.strip().splitlines()[-1]) == pytest.approx(
         51.5 + 30.0 / 3600.0, abs=1e-9
+    )
+
+
+def _cache_max():
+    from rasterio.env import get_gdal_config
+
+    return get_gdal_config("GDAL_CACHEMAX")
+
+
+@pytest.mark.parametrize(
+    "outer_env", [False, True], ids=["no outer Env", "inside an Env"]
+)
+def test_a_block_cache_cap_is_put_back_where_a_rasterio_env_would_leave_it(outer_env):
+    """``rasterio.Env(GDAL_CACHEMAX=n)`` sets the cache to n BYTES and, entered inside another
+    Env, never sets it back: GDAL work after it ran with a cache too small to hold a block, and
+    ``GDALViewshedGenerate`` gave a different answer from call to call. The helper sets the cap
+    in bytes and puts the size it found back, in either case."""
+    import rasterio
+
+    before = _cache_max()
+    cap = 64 * 1024 * 1024
+    assert cap != before
+    with rasterio.Env() if outer_env else contextlib.nullcontext():
+        with _env.capped_block_cache(cap):
+            assert _cache_max() == cap
+        assert _cache_max() == before
+    assert _cache_max() == before
+
+
+def test_overlapping_block_cache_caps_hold_the_largest_and_end_at_the_original():
+    before = _cache_max()
+    small, large = 32 * 1024 * 1024, 96 * 1024 * 1024
+    with _env.capped_block_cache(small):
+        with _env.capped_block_cache(large):
+            assert _cache_max() == large
+        assert _cache_max() == small
+    assert _cache_max() == before
+
+
+def test_no_module_caps_the_block_cache_through_a_rasterio_env():
+    """GDAL_CACHEMAX is named in one module, the helper that restores it. Anywhere else it is
+    ``rasterio.Env(GDAL_CACHEMAX=...)`` again: bytes read as megabytes, and never put back.
+    """
+    import pathlib
+
+    src = pathlib.Path(_env.__file__).parents[1]  # .../databricks/labs/gbx
+    offenders = [
+        path.relative_to(src).as_posix()
+        for path in sorted(src.rglob("*.py"))
+        if path.name != "_env.py"
+        and "GDAL_CACHEMAX" in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == [], (
+        f"{offenders} set GDAL_CACHEMAX directly. Fix: wrap the block in "
+        "databricks.labs.gbx.pyrx._env.capped_block_cache(<bytes>)"
     )

@@ -818,6 +818,47 @@ def readdir_option(mode: Optional[str]):
         setter(key, prev)
 
 
+# GDAL's raster block cache size is one number for the whole process. Callers that cap it for a
+# block of work go through capped_block_cache: the sizes asked for are kept here, the size the
+# process had when the first one began is put back when the last one ends.
+_CACHE_LOCK = threading.Lock()
+_CACHE_CAPS: List[int] = []
+_CACHE_BEFORE: Optional[int] = None
+
+
+@contextmanager
+def capped_block_cache(max_bytes: int):
+    """Run the block with GDAL's raster block cache capped at *max_bytes* BYTES, then put back
+    the size it had.
+
+    Do not cap it with ``rasterio.Env(GDAL_CACHEMAX=...)``: rasterio hands that value to
+    ``GDALSetCacheMax64``, which counts bytes (``GDAL_CACHEMAX=128`` is a 128-byte cache, where
+    GDAL itself reads it as megabytes), and restores the previous size only when that Env is
+    the outermost one. Entered inside another Env (any open of a MemoryFile or a rasterio
+    session), the cap stayed for the rest of the process: GDAL work after it ran with a cache
+    too small to hold one block, and a multi-threaded algorithm (``GDALViewshedGenerate``)
+    gave a different answer from call to call.
+
+    Overlapping blocks (threads of one worker) are held to the largest cap asked for while
+    any of them runs."""
+    from rasterio.env import get_gdal_config, set_gdal_config
+
+    global _CACHE_BEFORE
+    with _CACHE_LOCK:
+        if not _CACHE_CAPS:
+            _CACHE_BEFORE = get_gdal_config("GDAL_CACHEMAX")
+        _CACHE_CAPS.append(int(max_bytes))
+        set_gdal_config("GDAL_CACHEMAX", max(_CACHE_CAPS))
+    try:
+        yield
+    finally:
+        with _CACHE_LOCK:
+            _CACHE_CAPS.remove(int(max_bytes))
+            set_gdal_config(
+                "GDAL_CACHEMAX", max(_CACHE_CAPS) if _CACHE_CAPS else _CACHE_BEFORE
+            )
+
+
 def open_raster(path, *args, **kwargs):
     """``rasterio.open(path, ...)`` with GDAL_DISABLE_READDIR_ON_OPEN chosen for this file
     (readdir_mode), for this open only: GDAL decides which sidecars to look for when it

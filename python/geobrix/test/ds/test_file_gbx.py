@@ -1051,6 +1051,32 @@ def test_open_for_write_auto_fuse_tier_writes_plain_delta():
         assert "try_to_file" not in sql_str
 
 
+@pytest.mark.parametrize("entry", ["open_for_write", "gbx_file_write"])
+def test_the_default_file_mode_is_fuse_even_where_file_is_supported(entry):
+    """No ``file_mode`` is a plain Delta write, as on a runtime without FILE: a table made
+    on FILE compute reads on every compute. ``file_mode="auto"`` (the tests above) is the
+    opt-in to FILE references."""
+    captured = []
+    mock_spark = MagicMock()
+    mock_spark.sql.side_effect = lambda sql: captured.append(sql)
+    mock_df = _make_tile_df()
+
+    with (
+        patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs,
+        patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
+    ):
+        mock_fs.return_value = True
+        if entry == "open_for_write":
+            file_gbx.open_for_write(mock_spark, mock_df, "cat.sch.t")
+        else:
+            file_gbx.gbx_file_write(mock_df, "cat.sch.t", spark=mock_spark)
+
+    mock_wft.assert_not_called()
+    assert [s for s in captured if "CREATE TABLE" in s.upper()]
+    for sql_str in captured:
+        assert "create_file" not in sql_str and "try_to_file" not in sql_str
+
+
 def test_open_for_write_explicit_managed_routes_to_write_file_table():
     """Explicit file_mode='managed' with write-primitive available → write_file_table(managed)."""
     mock_spark = MagicMock()

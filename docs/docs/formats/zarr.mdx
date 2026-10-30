@@ -222,10 +222,13 @@ It matches the `file_mode` of `gbx_file_write`.
 
 | `file_mode` | The manifest's `file` column | Who deletes superseded files | Where it runs |
 |---|---|---|---|
-| `fuse` | Path strings, relative to the store's root | GeoBrix `gbx_zarr_vacuum` | Everywhere, Serverless included |
+| `fuse` (default) | Path strings, relative to the store's root | GeoBrix `gbx_zarr_vacuum` | Everywhere, Serverless included |
 | `external` | `FILE EXTERNAL` references, governed with the table | GeoBrix `gbx_zarr_vacuum` | Compute that supports `FILE` values, in a workspace with the File type preview (**preview**) |
 | `managed` | `FILE MANAGED` values | The table | **Not available in this release** |
-| `auto` (default) | `external` on compute that supports `FILE` values, otherwise `fuse`; it never fails | | |
+| `auto` | `external` on compute that supports `FILE` values (Serverless included, in a workspace with the File type preview), otherwise `fuse`; it never fails | | |
+
+The default is `fuse`, so a store made on `FILE`-capable compute still reads on every compute; pass
+`file_mode="auto"` or `"external"` to keep `FILE` references.
 
 `managed` is not available because Delta's `VACUUM` does not reclaim the bytes of a managed file, so a
 managed store would only grow. A registered store is never `managed`: managed ingest would copy the

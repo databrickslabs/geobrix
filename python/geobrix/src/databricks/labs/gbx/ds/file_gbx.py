@@ -1868,7 +1868,7 @@ def open_for_write(
     df: "DataFrame",
     target: str,
     *,
-    file_mode: str = "auto",
+    file_mode: str = "fuse",
     filespace: Optional[str] = None,
     layout: str = "order",
     overwrite: bool = False,
@@ -1878,7 +1878,9 @@ def open_for_write(
 
     Mode selection (``file_mode`` parameter):
 
-    - **"auto"** (default):
+    - **"fuse"** (default): plain Delta write regardless of FILE capability, so the
+      table reads on every compute.
+    - **"auto"** (opt in to FILE where the runtime has it):
       - FILE-capable runtime + ``filespace`` provided → ``"managed"``
         (FILE MANAGED via ``create_file``).
       - FILE-capable runtime + no ``filespace`` → ``"external"``
@@ -1887,7 +1889,6 @@ def open_for_write(
     - **"managed"** or **"external"**: explicit FILE mode.  Raises ``ValueError`` if
       FILE is not available on this runtime (tier='fuse'), or if ``"managed"`` is
       requested without a ``filespace``.
-    - **"fuse"**: plain Delta write regardless of FILE capability.
 
     Fuse mode writes the DataFrame as a plain Delta table with tile columns as
     ordinary columns (``path`` → STRING, ``raster`` → BINARY).  No FILE column,
@@ -1902,7 +1903,7 @@ def open_for_write(
         spark: SparkSession.
         df: DataFrame to write.  Must have a ``tile`` struct column or be pre-flattened.
         target: Fully-qualified Delta table name (e.g. ``"catalog.schema.table"``).
-        file_mode: ``"auto"`` (default), ``"managed"``, ``"external"``, or ``"fuse"``.
+        file_mode: ``"fuse"`` (default), ``"auto"``, ``"managed"``, or ``"external"``.
         filespace: Required for managed mode — the filespace path (``/Volumes/…``).
         layout: Write strategy: ``"order"`` (ORDER BY path, default), ``"cluster"``
                 (CLUSTER BY path + ORDER BY on FILE tables; ORDER BY + warning on fuse),
@@ -1956,11 +1957,11 @@ def open_for_write(
                 f"\n"
                 f"Option 1: Upgrade your cluster to DBR 19+ with FILE support, then try again. "
                 f"\n"
-                f"Option 2: Set file_mode='auto' (default) to transparently use FUSE "
-                f"(fallback, no FILE column). "
+                f"Option 2: Use file_mode='fuse' (default) for a plain Delta write "
+                f"(FUSE only, no FILE-column registration). "
                 f"\n"
-                f"Option 3: Use file_mode='fuse' explicitly to bypass FILE (FUSE only, "
-                f"no FILE-column registration). "
+                f"Option 3: Set file_mode='auto' to use FILE where the runtime supports "
+                f"it and FUSE where it does not. "
             )
         effective_mode = file_mode
     elif file_mode == "fuse":
@@ -2458,7 +2459,7 @@ def gbx_file_write(
     df: "DataFrame",
     target: str,
     *,
-    file_mode: str = "auto",
+    file_mode: str = "fuse",
     filespace: Optional[str] = None,
     layout: str = "order",
     overwrite: bool = False,
@@ -2470,6 +2471,10 @@ def gbx_file_write(
     Composes :func:`open_for_write` (MANAGED ``create_file`` / EXTERNAL
     ``try_to_file`` / FUSE plain Delta).  Resolves the session from
     ``df.sparkSession`` when *spark* is not given, so callers hold no session.
+
+    ``file_mode`` defaults to ``"fuse"``: a plain Delta table that reads on every compute.
+    Pass ``"auto"`` (FILE where the runtime supports it), ``"external"`` or ``"managed"``
+    for FILE references.
 
     Validates ``layout`` up front (fail before any side effect) and delegates
     everything else — including the ``managed``-without-``filespace`` guard and

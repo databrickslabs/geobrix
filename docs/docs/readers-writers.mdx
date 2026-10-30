@@ -102,11 +102,13 @@ Measured on 1,000 raster tiles or 100k vector features; times are whole-job wall
 
 The `read_files`/`list_files` rows time the **listing** step (per 10k files, comparable, metadata-bound). The Delta-scan and DataSource rows time the actual tile **read/open** (per 1k tiles). The performance gap is the per-tile open/decode cost, not listing — the Delta-scan FILE-column-table path (~2 s) beats the DataSource directory scan by ~10× on classic and **~16–17× on Serverless** (~2 s vs. ~30 s per 1k tiles). **On Serverless, prefer reading from a FILE-column table (Delta scan).** See [Serverless & Memory](./serverless-and-memory) for the connect-aware stream caps (64 MiB on Serverless/Connect, 256 MiB on classic) and a full guide to memory-safe pipelines.
 
-The **no-gating rule**: the auto default (`access="auto"` on readers, `file_mode="auto"` on
-writers) silently downgrades to the best available tier and never errors. Explicitly requesting
+The **no-gating rule**: `access="auto"` on readers and `file_mode="auto"` on writers silently
+downgrade to the best available tier and never error. Explicitly requesting
 `"managed"` or `"external"` on a FUSE-only runtime raises a clear, actionable error
-describing the upgrade path. Your pipelines run on any runtime without code changes; you
-only need to opt in to FILE when you want the governance and lifecycle benefits.
+describing the upgrade path. Readers default to `access="auto"`; writers default to
+`file_mode="fuse"`, a plain Delta table that reads on every compute. Your pipelines run on any
+runtime without code changes; you only need to opt in to FILE (`file_mode="auto"`) when you
+want the governance and lifecycle benefits.
 
 ### Read resolver
 
@@ -128,8 +130,9 @@ The resolver checks the tier and picks a strategy:
 
 ### Write committer
 
-Writers call `open_for_write(spark, df, target, file_mode="auto", filespace=…, layout=…)`.
-`file_mode="auto"` resolves as follows:
+Writers call `open_for_write(spark, df, target, file_mode="fuse", filespace=…, layout=…)`.
+The default, `file_mode="fuse"`, is a plain Delta write. `file_mode="auto"` opts in to FILE and
+resolves as follows:
 
 | Condition | Effective mode | Mechanism |
 |---|---|---|
@@ -137,7 +140,7 @@ Writers call `open_for_write(spark, df, target, file_mode="auto", filespace=…,
 | FILE available, no `filespace` | `"external"` | `try_to_file` — EXTERNAL FILE column |
 | No FILE (fuse tier) | `"fuse"` | Plain Delta write, path STRING / raster BINARY |
 
-Explicit modes (`"managed"`, `"external"`, `"fuse"`) override auto-selection. Requesting
+Explicit modes (`"managed"`, `"external"`) override auto-selection. Requesting
 `"managed"` or `"external"` on a fuse-only runtime raises a clear error.
 
 ### Layout options

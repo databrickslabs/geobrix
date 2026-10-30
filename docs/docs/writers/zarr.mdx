@@ -103,7 +103,7 @@ The layout is in the array's document, which is a row of the manifest table:
 `create` needs `root` not to exist, or to be empty. It gets an ownership ledger (the small Delta table
 `_gbx_owner`, which decides which table owns the root even when several claim it at once) and the
 `_gbx_store.json` marker; see [One owner per root](../formats/zarr#one-owner-per-root). `file_mode`
-(`"auto"`, `"fuse"` or `"external"`; `"managed"` is not available in this release) and `retain` (how
+(`"fuse"` by default; `"auto"` or `"external"` keep `FILE` references; `"managed"` is not available in this release) and `retain` (how
 long superseded versions stay readable, `"7 days"` by default) are the store's from then on; see
 [File modes](../formats/zarr#file-modes). A store in `external` mode keeps `FILE` values in its manifest,
 so it can be written, read and maintained only on compute that supports them; other compute refuses

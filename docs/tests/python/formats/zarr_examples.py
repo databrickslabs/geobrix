@@ -61,7 +61,7 @@ Fix: run gbx_zarr_sync(<table>) on the store's manifest table to record the chan
 +-------+-----+-------+
 """
 MANAGED_IS_NOT_AVAILABLE_output = """
-file_mode="managed" is not available in this release: Delta VACUUM does not reclaim the bytes of a managed file (nor does a deletion-vector delete or REORG PURGE), so a managed store would only grow Fix: use file_mode="auto" (the default), "external" or "fuse"
+file_mode="managed" is not available in this release: Delta VACUUM does not reclaim the bytes of a managed file (nor does a deletion-vector delete or REORG PURGE), so a managed store would only grow Fix: use file_mode="fuse" (the default), "auto" or "external"
 """
 READ_HISTORY_output = """
 +-------+------+-------------------------------------+
@@ -290,7 +290,7 @@ def create_with_a_file_mode(spark, cube, table, root):
         variables=["t2m", "time", "latitude", "longitude"],
         sel={"time": slice("2023-01-01T00:00", "2023-01-01T11:00")},
     )
-    # "fuse": the manifest keeps plain path strings. It works on every compute.
+    # "fuse" (the default): the manifest keeps plain path strings. It works on every compute.
     gbx_zarr_write(first, table, mode="create", root=root, file_mode="fuse")
 
 

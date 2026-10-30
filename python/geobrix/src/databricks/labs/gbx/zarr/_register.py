@@ -1739,7 +1739,7 @@ def gbx_zarr_register(
     *,
     writable: bool = False,
     overlay_root: str | None = None,
-    file_mode: str = "auto",
+    file_mode: str = "fuse",
     retain: str = "7 days",
 ) -> int:
     """Register the Zarr store at ``path`` as the manifest table ``table``, in place.
@@ -1754,10 +1754,11 @@ def gbx_zarr_register(
     to, recorded in an ownership ledger (the Delta table ``_gbx_owner`` in that directory,
     one winner even when several tables claim it at once) and an owner marker, so no other
     table can claim it. ``file_mode`` is
-    ``"auto"`` (the default: ``"external"`` on a runtime with the File type preview,
-    ``"fuse"`` elsewhere, Serverless included), ``"fuse"`` (path strings relative to the
-    store root) or ``"external"`` (FILE EXTERNAL references, governed with the table; needs a
-    workspace with the File type preview, ``ZarrUnsupported`` otherwise). ``"managed"`` is
+    ``"fuse"`` (the default: path strings relative to the store root, so the table reads
+    on every compute), ``"auto"`` (``"external"`` on a runtime with the File type preview,
+    Serverless included, ``"fuse"`` elsewhere) or ``"external"`` (FILE EXTERNAL references,
+    governed with the table; needs a workspace with the File type preview,
+    ``ZarrUnsupported`` otherwise). ``"managed"`` is
     not available in this release, and never for a registered store: it would copy the base. ``retain`` is how long superseded versions stay readable.
 
     An array GeoBrix cannot decode (a string coordinate, say) is registered like any

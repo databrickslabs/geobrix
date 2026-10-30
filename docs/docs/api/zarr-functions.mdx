@@ -205,7 +205,7 @@ coordinates are attached.
 
 ```python
 gbx_zarr_write(data, target, *, mode="create", root=None, variables=None, append_dim=None,
-               dim_cols=None, chunks="balanced", shards=None, codecs=None, file_mode="auto",
+               dim_cols=None, chunks="balanced", shards=None, codecs=None, file_mode="fuse",
                retain="7 days", write_id=None, access="auto", optimize=False, spark=None)
 ```
 
@@ -225,7 +225,7 @@ layouts, tiles and concurrency in detail.
 | `chunks` | `str` or `dict` | `create` only. `"balanced"` (default), `"maps"`, `"series"` or a dict of dimension to size. |
 | `shards` | `None`, `False` or `dict` | `create` only. `None` computes the shards, a dict sets some, `False` means none. |
 | `codecs` | `list` | `create` only. The inner chunk's codec chain as Zarr v3 codec documents or zarr codec objects. Default `bytes`, `zstd` (level 3), `crc32c`. |
-| `file_mode` | `str` | `create` only. `"auto"` (default), `"fuse"` or `"external"`. `"managed"` is not available in this release. |
+| `file_mode` | `str` | `create` only. `"fuse"` (default: path strings, so the store reads on every compute), `"auto"` (FILE references where the compute has them, otherwise `"fuse"`) or `"external"`. `"managed"` is not available in this release. |
 | `retain` | `str` | `create` only. How long superseded versions stay readable, such as `"7 days"` (the default). |
 | `write_id` | `str` | 32 lowercase hex characters. Writing again with one that has committed returns its version and writes nothing. |
 | `access` | `str` | `"auto"` (default), `"fuse"` or `"direct"`; see [Access](../readers/zarr#access). |
@@ -279,7 +279,7 @@ nothing.
 ### `gbx_zarr_register`
 
 ```python
-gbx_zarr_register(spark, path, table, *, writable=False, overlay_root=None, file_mode="auto",
+gbx_zarr_register(spark, path, table, *, writable=False, overlay_root=None, file_mode="fuse",
                   retain="7 days")
 ```
 
@@ -296,7 +296,7 @@ the registered rows. Progress is printed, one line for each step.
 | `table` | `str` | The manifest table to create. It must not exist. |
 | `writable` | `bool` | Default `False`: read-only. `True` needs `overlay_root`. |
 | `overlay_root` | `str` | A directory outside the store, on a Volume, that this table owns and GeoBrix writes to. |
-| `file_mode` | `str` | `"auto"` (default), `"fuse"` (path strings) or `"external"` (FILE EXTERNAL values, governed with the table; needs the File type preview). `"managed"` is not available. |
+| `file_mode` | `str` | `"fuse"` (default: path strings), `"auto"` (FILE references where the compute has them, otherwise `"fuse"`) or `"external"` (FILE EXTERNAL values, governed with the table; needs the File type preview). `"managed"` is not available. |
 | `retain` | `str` | How long superseded versions stay readable. Default `"7 days"`. |
 
 An array GeoBrix cannot decode (a string coordinate, say) is registered like any other and listed under

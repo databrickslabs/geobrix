@@ -122,7 +122,7 @@ def test_external_file_mode_is_open_and_managed_is_refused(monkeypatch):
     with pytest.raises(ZarrUnsupported, match="not available in this release") as e:
         FM.resolve(None, "managed", has_filespace=True)
     assert "reclaim" in str(e.value) and "Fix:" in str(e.value)
-    monkeypatch.setattr(FM, "file_supported", lambda spark: False)  # Serverless, DCS
+    monkeypatch.setattr(FM, "file_supported", lambda spark: False)  # DCS, no preview
     assert FM.resolve(None, "auto", has_filespace=True) == "fuse"
 
 
@@ -176,6 +176,37 @@ def test_registered_base_never_managed(file_support):
     assert FM.resolve(None, "auto", has_filespace=True, registered=True) == "external"
     with pytest.raises(ValueError, match="registered"):
         M.create_manifest(None, "t", _props("managed", kind="registered", root="/base"))
+
+
+@pytest.mark.parametrize("entry", ["write", "register"])
+@pytest.mark.parametrize(
+    "given, want", [({}, "fuse"), ({"file_mode": "auto"}, "external")]
+)
+def test_the_default_file_mode_is_fuse_and_auto_opts_into_file(
+    spark_delta,
+    tmp_path,
+    era5_v3_unsharded,
+    file_support,
+    fake_file_type,
+    entry,
+    given,
+    want,
+):
+    """Where FILE works, a store made with no ``file_mode`` still keeps path strings, so it
+    reads on every compute; ``file_mode="auto"`` is what picks FILE references there."""
+    file_support()
+    table = f"zf_{uuid.uuid4().hex[:8]}"
+    try:
+        if entry == "write":
+            data = era5_like_dataset().isel(time=slice(0, 12), latitude=slice(0, 5))
+            gbx_zarr_write(
+                data, table, root=str(tmp_path / "store"), spark=spark_delta, **given
+            )
+        else:
+            gbx_zarr_register(spark_delta, str(era5_v3_unsharded), table, **given)
+        assert M.read_props(spark_delta, table).file_mode == want
+    finally:
+        spark_delta.sql(f"DROP TABLE IF EXISTS {table}")
 
 
 @pytest.mark.parametrize(

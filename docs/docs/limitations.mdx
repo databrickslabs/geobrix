@@ -121,7 +121,7 @@ GeoBrix reads, registers and writes [Zarr stores](./formats/zarr) within these l
 - **Reading with GDAL.** A GDAL before 3.13 cannot read sharded Zarr v3 stores, or ones that use the `crc32c`
   codec, which `gbx_zarr_write` writes by default. See [Zarr in the Raster Reader](./readers/raster).
 - **File modes.** `file_mode="external"` is a preview that needs a workspace with the File type preview and
-  compute that supports `FILE` values; `"auto"` uses path strings (`"fuse"`) everywhere else.
+  compute that supports `FILE` values; the default, `"fuse"`, keeps path strings and works everywhere.
   `file_mode="managed"` is not available.
 - **Cloud storage.** Direct storage access (`access="direct"`) has been measured on AWS only. Azure and
   Google Cloud storage are not measured yet: pass `access="fuse"` to read and write through the Volume mount,

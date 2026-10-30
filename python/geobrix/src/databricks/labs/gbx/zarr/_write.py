@@ -3046,7 +3046,7 @@ def gbx_zarr_write(
     chunks="balanced",
     shards=None,
     codecs=None,
-    file_mode: str = "auto",
+    file_mode: str = "fuse",
     retain: str = "7 days",
     write_id: str | None = None,
     access: str = "auto",
@@ -3073,10 +3073,11 @@ def gbx_zarr_write(
       (``None`` computes them, a dict sets some, ``False`` means none) and ``codecs`` (the
       inner chunk's codec chain, as Zarr v3 codec documents or zarr codec objects; default
       ``bytes`` + ``zstd`` level 3 + ``crc32c``) lay out each array; coordinates are one
-      unsharded chunk. ``file_mode`` is ``"auto"`` (the default: ``"external"`` on a runtime with
-      the File type preview, ``"fuse"`` elsewhere, Serverless included), ``"fuse"`` (the
-      manifest keeps path strings) or ``"external"`` (FILE EXTERNAL values, governed with
-      the table; needs the preview, ``ZarrUnsupported`` otherwise). ``"managed"`` is not
+      unsharded chunk. ``file_mode`` is ``"fuse"`` (the default: the manifest keeps path strings, so
+      the store reads on every compute), ``"auto"`` (``"external"`` on a runtime with the
+      File type preview, Serverless included, ``"fuse"`` elsewhere) or ``"external"`` (FILE
+      EXTERNAL values, governed with the table; needs the preview, ``ZarrUnsupported``
+      otherwise). ``"managed"`` is not
       available in this release: Delta VACUUM does not reclaim a managed file's bytes. ``retain``
       is the store's.
     - ``"append"``: extend along ``append_dim`` (default: the first dimension labelled by
@@ -3200,7 +3201,7 @@ def gbx_zarr_write(
                 ("chunks", chunks, "balanced"),
                 ("shards", shards, None),
                 ("codecs", codecs, None),
-                ("file_mode", file_mode, "auto"),
+                ("file_mode", file_mode, "fuse"),
                 ("retain", retain, "7 days"),
             )
             if v != default

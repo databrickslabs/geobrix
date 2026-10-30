@@ -926,3 +926,23 @@ def test_standard_offers_l2_only_for_a_row_with_a_java_handler(fn):
         assert why and "Java handler" in why and "standard access mode" in why
     # classic is unaffected: the Scala class is what it registers
     assert "Java handler" not in (levels.available(fn, "L2", _caps(jar=OK_JAR)) or "")
+
+
+@pytest.mark.parametrize(
+    "fn",
+    [f for f in FNS if "L2" in f.levels and "connect_class" not in f.levels["L2"]],
+    ids=lambda f: f.sql_name,
+)
+def test_forced_l2_on_standard_refuses_a_row_without_a_java_handler_cleanly(
+    fn, monkeypatch, tmp_path
+):
+    """The test-only L2 override skips `levels.available`; install must still refuse, not raise a raw KeyError."""
+    from databricks.labs.gbx.manager import jvm
+
+    stub, _ = _standard_stub(monkeypatch, tmp_path)
+    why = jvm.install_l2(stub, fn, _caps(connect=True, jar=OK_JAR))
+    assert why and "has no Java handler for standard access mode" in why
+    assert "KeyError" not in why
+    assert stub.java_registered == []
+    # the same words the default path gives
+    assert levels.available(fn, "L2", _caps(connect=True, jar=OK_JAR)) == why

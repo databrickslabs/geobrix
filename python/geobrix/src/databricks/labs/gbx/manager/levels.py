@@ -119,6 +119,11 @@ def _jvm_unavailable(fn, level: str, spec, caps: Capabilities) -> Optional[str]:
     return None
 
 
+def no_connect_handler(fn) -> str:
+    """The refusal for an L2 row with no Java handler (`connect_class`) on a standard-access-mode session."""
+    return f"{fn.sql_name} has no Java handler for standard access mode"
+
+
 def available(fn, level: str, caps: Capabilities) -> Optional[str]:
     """None when `level` can serve `fn` with its full session signature here; else the reason."""
     spec = fn.levels.get(level)
@@ -136,7 +141,7 @@ def available(fn, level: str, caps: Capabilities) -> Optional[str]:
         if level == "L1" and l1_returns != fn.returns_session:
             return f"{fn.sql_name}: heavy returns {l1_returns}, the session signature returns {fn.returns_session}"
         if level == "L2" and caps.connect and "connect_class" not in spec:
-            return f"{fn.sql_name} has no Java handler for standard access mode"
+            return no_connect_handler(fn)
         if level == "L2" and fn.kind != "scalar":
             return f"standard access mode serves scalars only ({fn.sql_name} is a {fn.kind})"
         if level == "L2" and fn.min_args != fn.max_args and "wrapper" not in spec:

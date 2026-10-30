@@ -9,7 +9,7 @@ from __future__ import annotations
 import importlib
 from typing import Optional
 
-from databricks.labs.gbx.manager import capabilities, l3, sqlwrap
+from databricks.labs.gbx.manager import capabilities, l3, levels, sqlwrap
 
 
 def _priv(fn, level: str) -> str:
@@ -121,6 +121,10 @@ def _register_java(spark, name: str, spec) -> None:
 def install_l2(spark, fn, caps) -> Optional[str]:
     try:
         spec = fn.levels["L2"]
+        if (
+            caps.connect and "connect_class" not in spec
+        ):  # a forced L2 skips `levels.available`
+            return levels.no_connect_handler(fn)
         if "bytes_param" in spec:
             k = _priv(fn, "L2")
             _register_java(spark, k, spec)

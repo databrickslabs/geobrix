@@ -69,6 +69,12 @@ class GdalSpecSmokeTest extends AnyFunSuite {
                 assert(e.getMessage.contains("Fix:"), s"$v: ${e.getMessage}")
             }
             SpatialRefOps.resolveCrs("+proj=longlat +datum=WGS84 +nadgrids=@null +no_defs").delete() // no path: allowed
+            // the spellings the docs use, with file and network access off: an OGC URN, a named CRS, compound codes
+            for (v <- Seq("urn:ogc:def:crs:EPSG::4326", "WGS84", "EPSG:4326+5773", "EPSG:4258+5701")) {
+                SpatialRefOps.resolveCrs(v).delete()
+            }
+            val compound = intercept[IllegalArgumentException](SpatialRefOps.resolveCrs(s"EPSG:4326+$file"))
+            assert(compound.getMessage.contains("Fix:"), compound.getMessage)
         } finally {
             Files.deleteIfExists(file)
             Files.deleteIfExists(dir)

@@ -237,6 +237,70 @@ def test_override_is_honoured(fn):
     assert levels.select(fn, _caps(), override=(forced, "-")).level == forced
 
 
+class _Session:
+    """A session that records what an install registers (``udf.register``) and runs (``sql``)."""
+
+    def __init__(self):
+        self.registered, self.statements, self.udf = [], [], self
+
+    def register(self, name, f, returnType=None):
+        self.registered.append(name)
+
+    def sql(self, text):
+        self.statements.append(text)
+
+
+@pytest.mark.parametrize(
+    "engine,connect,want",
+    [
+        (True, True, "engine-c0"),  # Connect: the row-wise UDF alone
+        (
+            True,
+            False,
+            "engine-c1",
+        ),  # classic with SQL functions: the batch UDF behind the wrapper
+        (False, True, "fallback"),  # no engine here: the light kernel, and why
+    ],
+    ids=["engine-connect", "engine-classic", "no-engine"],
+)
+def test_an_unforced_engine_row_installs_the_engine_or_says_why_not(
+    monkeypatch, capsys, engine, connect, want
+):
+    """The default (not forced) light install of a row with a ``gdal`` block: the engine where it runs, as c0 on
+    Connect and as c1 on a classic session; else the light kernel, with the reason said once.
+    """
+    from databricks.labs.gbx import manager
+    from databricks.labs.gbx.ds import file_gbx
+    from databricks.labs.gbx.manager import jvm
+
+    fn = MAN.functions["gbx_rst_slope"]
+    monkeypatch.setattr(
+        levels, "engine_unavailable", lambda f, lv, c: None if engine else "no payload"
+    )
+    monkeypatch.setattr(caps_mod, "is_connect", lambda s: connect)
+    monkeypatch.setattr(caps_mod, "_sql_functions", lambda s: True)
+    monkeypatch.setattr(file_gbx, "report_detected_cap", lambda s=None: 1 << 26)
+    spark = _Session()
+    choice = manager._install(
+        spark, fn, levels.Choice("L3", "-", ()), _caps(), forced=False
+    )
+    said = capsys.readouterr().out
+    if want == "fallback":
+        assert choice.variant not in levels.ENGINE_L3
+        assert spark.registered == [fn.sql_name]
+        assert (
+            f"{fn.sql_name} runs without the GDAL spec engine at light (no payload)"
+            in said
+        )
+        return
+    assert choice.variant == want and "runs without" not in said
+    if want == "engine-c0":
+        assert spark.registered == [fn.sql_name]
+    else:
+        assert spark.registered == [jvm._priv(fn, "L3"), jvm._priv(fn, "L3c1")]
+        assert any(fn.sql_name in s for s in spark.statements), spark.statements
+
+
 def test_l2_is_refused_while_proj_grids_are_registered(tmp_path):
     """A Java UDF has no channel for PROJ grid directories: a warp through it would ignore them. The JVM engine
     keeps L1: every GDALManager.init adds a configuration's grid directories to PROJ's search path, also after

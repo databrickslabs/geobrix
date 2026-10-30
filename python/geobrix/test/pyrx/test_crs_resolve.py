@@ -125,6 +125,10 @@ CRS_VALUES = [
     # m-5: the named datums and an OGC URN are admitted (a ruling, disclosed): both resolve without reading a file
     ("WGS84", True, None),
     ("urn:ogc:def:crs:EPSG::4326", True, None),
+    # compound codes (a horizontal CRS plus a vertical one), as the docs spell them; a path after the + is refused
+    ("EPSG:4326+5773", True, None),
+    ("EPSG:4258+5701", True, None),
+    ("EPSG:4326+./secret_crs", False, "file"),
 ]
 
 

@@ -88,7 +88,10 @@ def _is_intlike(value) -> bool:
 # The CRS strings resolve_crs parses, besides an int SRID. GDAL's universal parser reads a file when a string
 # names one (a relative name included), and PROJ opens a grid named by path, so anything else is refused: a CRS
 # value never reaches a file or the network. The JVM's SpatialRefOps.resolveCrs applies the same rule.
-_AUTH_CODE = re.compile(r"[A-Za-z][A-Za-z0-9_]*::?[A-Za-z0-9_.\-]+")
+# AUTHORITY:CODE, and a compound one (EPSG:4326+5773, EPSG:4326+EPSG:5773: a horizontal CRS plus a vertical one)
+_AUTH_CODE = re.compile(
+    r"[A-Za-z][A-Za-z0-9_]*::?[A-Za-z0-9_.\-]+(?:\+(?:[A-Za-z][A-Za-z0-9_]*::?)?[A-Za-z0-9_.\-]+)*"
+)
 _URL = re.compile(
     r"[A-Za-z][A-Za-z0-9+.\-]*://"
 )  # a value that IS a URL (PROJJSON's $schema is not one)

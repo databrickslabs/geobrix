@@ -550,7 +550,7 @@ object GDALManager extends Logging {
 
     private def differentGdal(paths: Seq[String], libDir: String): String =
         s"geobrix: a different GDAL is already loaded in this process (${paths.mkString(", ")}); expected one from " +
-            s"$libDir. $OneGdal"
+            s"$libDir. Fix: remove the other GDAL, or the library that brings it, from the cluster. $OneGdal"
 
     private def applyNativeData(c: NativeChoice): Unit = {
         c.projData.foreach { p =>

@@ -66,6 +66,34 @@ def test_spec_se_oracle(request, tmp_path, fn, level, variant):
     assert _run(request, tmp_path, fn, level, variant, _rows(fn)) == {}
 
 
+@pytest.mark.integration
+def test_mapalgebra_on_its_heavy_companion_behind_the_tiles_wrapper(request, tmp_path):
+    """L1 without the engine (as where the JVM runs another GDAL): mapalgebra runs on its RST_MapAlgebra companion
+    behind the tiles dispatch wrapper. An array of materialized tiles goes to the companion, an array of virtual
+    tiles to the light kernel the wrapper names, and each gives the tile."""
+    from rasterio.io import MemoryFile
+
+    spark = _session(request, "L1")
+    fn = MAN.functions["gbx_rst_mapalgebra"]
+    register(spark, only=[fn.sql_name], _levels={fn.sql_name: ("L1", "-")})
+    pair = oracles._se_build("se_pair")
+    virtual = []
+    for i, t in enumerate(pair):
+        f = tmp_path / f"t{i}.tif"
+        f.write_bytes(t["raster"])
+        virtual.append(oracles._tile(path=str(f)))
+    spec = '{"calc": "(A - B) / (A + B)", "A_index": 0, "B_index": 1}'
+    schema = f"tiles {oracles._ddl_type(pair, fn.params[0])}, spec string"
+    df = spark.createDataFrame([(pair, spec), (virtual, spec)], schema)
+    outs = [
+        r["out"] for r in df.selectExpr(f"{fn.sql_name}(tiles, spec) AS out").collect()
+    ]
+    for out in outs:
+        assert out is not None and out["raster"] is not None, out
+        with MemoryFile(bytes(out["raster"])) as mf, mf.open() as ds:
+            assert (ds.width, ds.height) == (64, 48)
+
+
 # One success row per function: the same input through every engine level.
 SAME_PIXELS = [
     "se_slope_deg",

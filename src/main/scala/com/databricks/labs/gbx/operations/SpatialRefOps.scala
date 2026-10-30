@@ -37,7 +37,9 @@ object SpatialRefOps {
     // The CRS strings resolveCrs parses, besides an int SRID (mirrors the light `core.crs.crs_text_kind`). GDAL's
     // universal parser reads a file when a string names one (a relative name included), and PROJ opens a grid named
     // by path, so anything else is refused: a CRS value never reaches a file or the network.
-    private val AuthCode = "[A-Za-z][A-Za-z0-9_]*::?[A-Za-z0-9_.\\-]+".r
+    // AUTHORITY:CODE, and a compound one (EPSG:4326+5773, EPSG:4326+EPSG:5773: a horizontal CRS plus a vertical one)
+    private val AuthCode =
+        "[A-Za-z][A-Za-z0-9_]*::?[A-Za-z0-9_.\\-]+(?:\\+(?:[A-Za-z][A-Za-z0-9_]*::?)?[A-Za-z0-9_.\\-]+)*".r
     private val Url = "[A-Za-z][A-Za-z0-9+.\\-]*://".r // a value that IS a URL (PROJJSON's $schema is not one)
     private val WktStart = "[A-Za-z][A-Za-z0-9_]*\\s*\\[".r
     private val UrnPrefixes = Seq("urn:ogc:def:crs:", "urn:ogc:def:crs,crs:", "urn:x-ogc:def:crs:")

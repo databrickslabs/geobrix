@@ -231,6 +231,36 @@ def test_the_system_gdal_is_named_and_other_gdal_classes_are_refused(
     assert (named, refused) == (True, True), res.stdout + res.stderr[-3000:]
 
 
+def test_a_pre_3_13_jni_as_the_only_gdal_is_refused_before_any_gdal_call(
+    native_dir, conf_only_probe, tmp_path
+):
+    """The JAR's GDAL classes are the pinned build's, so an older JNI (the image's 3.11) is no runtime choice: as the
+    JVM's only GDAL (the conf names a directory whose JNI is it, and nothing else is on the library path), the first
+    GDAL use is refused with a Fix, before any GDAL call (the CRS parser's options overload never meets that JNI).
+    """
+    jni = _system_gdal_or_skip()
+    lib = tmp_path / "_native" / "aarch64" / "lib"
+    lib.mkdir(parents=True)
+    (lib / "libgdalalljni.so").symlink_to(jni)
+    res = _java(
+        native_dir,
+        "ConfOnlyProbe",
+        "kernel",
+        str(lib.parent),
+        classes=conf_only_probe,
+        library_path=str(lib),
+    )
+    refused = (
+        "RESULT error:" in res.stdout
+        and (
+            "GDAL's Java classes cannot use the GDAL loaded from" in res.stdout
+            or "a different GDAL is already loaded" in res.stdout
+        )
+        and "Fix:" in res.stdout
+    )
+    assert refused, res.stdout + res.stderr[-3000:]
+
+
 def test_a_shared_object_that_maps_a_second_gdal_is_refused_on_the_system_gdal(
     native_dir, conf_only_probe
 ):

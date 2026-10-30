@@ -358,7 +358,10 @@ runs.
 | A partial path where rasterio registered GDAL's drivers before GeoBrix was imported | rasterio's own GDAL | partial, with the warning |
 
 The JVM side is the same on every install path: the GeoBrix JAR skips the refused drivers and
-sets the two VRT settings when the JVM's GDAL starts, whichever GDAL it loads.
+sets the two VRT settings when the JVM's GDAL starts, whichever GDAL it loads. A JVM runs one
+GDAL, the build the JAR's GDAL classes come from: an older GDAL JNI (a system GDAL from an
+earlier release), or a second GDAL on the JVM's library path, is refused at the first GDAL use,
+with an error that names it and the fix, before any GDAL call.
 
 A `spark.gdal.GDAL_SKIP` value adds to the refused drivers; it cannot remove one. In a Python
 process a `GDAL_SKIP` environment value adds to them the same way. Neither

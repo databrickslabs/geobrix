@@ -37,7 +37,7 @@ class GDALManagerNativeDirTest extends AnyFunSuite {
         // another GDAL already mapped in this process is refused, naming both
         val two = refusal(resolve(Some(dir), mapped = Seq("/usr/local/lib/libgdal.so.37")))
         two should (include("a different GDAL is already loaded") and include("/usr/local/lib/libgdal.so.37")
-            and include(s"$dir/lib"))
+            and include(s"$dir/lib") and include("Fix:"))
         // the system JNI linked into a payload (DCS, init script) runs on that payload's data
         val p = "/opt/gbx/_native/aarch64"
         resolve(files = Set(legacy), real = Map(legacy -> s"$p/lib/libgdalalljni.so")) shouldBe Right(

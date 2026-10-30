@@ -20,11 +20,13 @@ The sets (only files under git count; --rev reads that commit's tree, without it
          copies or mounts from scripts/native (both architectures' spelling of ${GBX_ARCH}), rust-toolchain.toml.
          The sources, wheels and tools it copies are fixed by the sha256s in pins.conf and the hashed requirement files.
   sources  pins.conf's KEY=VALUE lines only: the key of CI's cache of the pinned source downloads.
-  gate   exactly what gbx:native:verify-arches exercises: build, plus the env wheel's inputs as its builder lists
-         them (GIT_INPUTS of scripts/native/build_env_wheel.py, read from the same tree: python/geobrix/src, the envs
-         files, pyproject.toml, requirements-build.txt and scripts/native, the checks among them; not README.md, which
-         no check reads), plus the checks themselves (verify-native.sh with its JNI row JniSmoke.java,
-         check-env-wheel.sh with base_held.py), less the stamp itself. Not GDALManager.scala: no gate check runs it.
+  gate   the native inputs and the env wheel's assembly inputs, what differs by architecture and is what
+         gbx:native:verify-arches exists for: build, plus the env wheel's inputs as its builder lists them (GIT_INPUTS
+         of scripts/native/build_env_wheel.py, read from the same tree: the envs files with pyproject.env.toml,
+         pyproject.toml, requirements-build.txt and scripts/native, the checks among them), with the package source
+         narrowed to its native part (python/geobrix/src/databricks/labs/gbx/_native/**, _gbx_native_path.py) and
+         without README.md, less the stamp itself. The rest of the package is pure Python, the same on both
+         architectures, and tested by x86_64 CI; GDALManager.scala is not run by any gate check.
 
 Stdlib only: CI runs it with the runner's python3.
 """
@@ -51,10 +53,15 @@ PINS = "scripts/native/pins.conf"
 DOCKERFILE = "scripts/native/build.Dockerfile"
 STAMP = "scripts/native/arch-gate.json"
 GATE_COMMAND = "bash scripts/commands/gbx-native-verify-arches.sh"
-# The env wheel's inputs come from one list, its builder's GIT_INPUTS (what its dirty check refuses), minus the files
-# no gate check reads.
+# The env wheel's inputs come from one list, its builder's GIT_INPUTS (what its dirty check refuses), with two explicit
+# exclusions. README.md: no gate check reads it. The pure-Python package tree (PACKAGE_SOURCE): it is the same on both
+# architectures and x86_64 CI tests it, while the two-architecture gate is for what differs by architecture, so only
+# its native part (NATIVE_PYTHON: the payload's activation) stays in. Cost, accepted: an aarch64-only regression from a
+# pure-Python change is not stamp-gated (the per-release Graviton run covers it).
 WHEEL_BUILDER = "scripts/native/build_env_wheel.py"
 NOT_EXERCISED = ("python/geobrix/README.md",)
+PACKAGE_SOURCE = "python/geobrix/src"
+NATIVE_PYTHON = ("python/geobrix/src/databricks/labs/gbx/_native", "python/geobrix/src/_gbx_native_path.py")
 # Gate inputs the checks read from the checkout when they run, not from the env wheel (verify-native mounts
 # scripts/native with JniSmoke.java; --verify mounts scripts/native for check-env-wheel.sh and its base_held.py): a
 # change to them needs the gate re-run, not a wheel rebuild. Everything else in the set is in the wheel, or built into it.
@@ -172,10 +179,14 @@ def files(tree, which):
 
 
 def wheel_inputs(tree):
-    """GIT_INPUTS of build_env_wheel.py at this tree (the env wheel's inputs), minus what no gate check reads."""
+    """GIT_INPUTS of build_env_wheel.py at this tree (the env wheel's inputs), less README.md, with the package
+    source narrowed to its native part (see PACKAGE_SOURCE)."""
     for node in ast.parse(tree.read(WHEEL_BUILDER).decode()).body:
         if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "GIT_INPUTS" for t in node.targets):
-            return [spec for spec in ast.literal_eval(node.value) if spec not in NOT_EXERCISED]
+            specs = [s for s in ast.literal_eval(node.value) if s not in NOT_EXERCISED]
+            if PACKAGE_SOURCE in specs:
+                specs = [s for s in specs if s != PACKAGE_SOURCE] + list(NATIVE_PYTHON)
+            return specs
     raise Fail(f"{WHEEL_BUILDER} has no GIT_INPUTS")
 
 

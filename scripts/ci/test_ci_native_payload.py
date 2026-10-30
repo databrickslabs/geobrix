@@ -290,7 +290,9 @@ def _edit(root, rel, fn):
 
 
 GDALMANAGER = "src/main/scala/com/databricks/labs/gbx/rasterx/gdal/GDALManager.scala"
-NOT_INPUTS = [GDALMANAGER, "python/geobrix/README.md", "scripts/native/arch-gate.json"]
+PURE_PYTHON = "python/geobrix/src/databricks/labs/gbx/core/crs.py"
+NATIVE_PYTHON = ("python/geobrix/src/databricks/labs/gbx/_native/", "python/geobrix/src/_gbx_native_path.py")
+NOT_INPUTS = [GDALMANAGER, PURE_PYTHON, "python/geobrix/README.md", "scripts/native/arch-gate.json"]
 APPEND = lambda b: b + b"\n# x\n"  # noqa: E731
 EDITS = {  # edit -> (does the build hash move, does the gate hash move)
     "a pin value": ("scripts/native/pins.conf", lambda b: b.replace(b"GDAL_VERSION=3", b"GDAL_VERSION=4", 1), True, True),
@@ -302,7 +304,7 @@ EDITS = {  # edit -> (does the build hash move, does the gate hash move)
     "the activation rules": ("python/geobrix/src/databricks/labs/gbx/_native/_rules.py", APPEND, False, True),
     "a check script": ("scripts/native/check-env-wheel.sh", APPEND, False, True),
     "GDALManager (no gate check runs it)": (GDALMANAGER, lambda b: b + b"\n// x\n", False, False),
-    "a library source (in the wheel)": ("python/geobrix/src/databricks/labs/gbx/core/crs.py", APPEND, False, True),
+    "a pure-Python package source (arch-neutral)": (PURE_PYTHON, APPEND, False, False),
     "pyproject.toml (the wheel's)": ("python/geobrix/pyproject.toml", APPEND, False, True),
     "README.md (no gate check reads it)": ("python/geobrix/README.md", APPEND, False, False),
     "the stamp itself": ("scripts/native/arch-gate.json", lambda b: b + b" ", False, False),
@@ -319,22 +321,32 @@ def test_the_native_input_hash_moves_with_the_inputs_only(tree, edit):
     assert (after["build"] != before["build"], after["gate"] != before["gate"]) == (build_moves, gate_moves)
 
 
-def test_the_gate_holds_every_input_of_the_env_wheel():
-    """One list of the env wheel's inputs: build_env_wheel.py's GIT_INPUTS (minus README.md, which no gate check reads)
-    is inside the gate set, so a wheel input cannot be left out of the stamp by a second list going stale."""
+def test_the_gate_is_the_env_wheels_inputs_less_the_pure_python_package():
+    """One list of the env wheel's inputs, build_env_wheel.py's GIT_INPUTS, with two exclusions: README.md and the
+    pure-Python package tree (everything under python/geobrix/src but the payload's activation, _native/** and
+    _gbx_native_path.py), which is arch-neutral and tested by x86_64 CI. Exactly:
+    GIT_INPUTS - {README.md, pure Python} <= gate <= that + the build set + the check scripts."""
     tree = ast.parse((REPO_ROOT / "scripts/native/build_env_wheel.py").read_text())
     (git_inputs,) = [
         ast.literal_eval(n.value)
         for n in tree.body
         if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "GIT_INPUTS" for t in n.targets)
     ]
-    specs = [s for s in git_inputs if s != "python/geobrix/README.md"]
-    tracked = subprocess.run(["git", "-C", str(REPO_ROOT), "ls-files", "--", *specs], capture_output=True, text=True)
-    want = set(tracked.stdout.split()) - {"scripts/native/arch-gate.json"}
+
+    def tracked(*specs):
+        res = subprocess.run(["git", "-C", str(REPO_ROOT), "ls-files", "--", *specs], capture_output=True, text=True)
+        return set(res.stdout.split())
+
+    pure = {f for f in tracked("python/geobrix/src") if not f.startswith(NATIVE_PYTHON)}
+    low = tracked(*[s for s in git_inputs if s != "python/geobrix/README.md"]) - pure - {"scripts/native/arch-gate.json"}
+    build = set(_inputs("files", "--set", "build").stdout.split())
+    checks = {f"scripts/native/{f}" for f in ("verify-native.sh", "JniSmoke.java", "check-env-wheel.sh", "base_held.py")}
     gate = set(_inputs("files", "--set", "gate").stdout.split())
-    assert want and not want - gate, sorted(want - gate)[:10]
-    assert "python/geobrix/pyproject.toml" in gate and "python/geobrix/requirements-build.txt" in gate
-    assert "python/geobrix/README.md" not in gate and "scripts/native/arch-gate.json" not in gate
+    assert pure and low and not low - gate, sorted(low - gate)[:10]
+    assert not gate - (low | build | checks), sorted(gate - (low | build | checks))[:10]
+    assert {"python/geobrix/pyproject.toml", "python/geobrix/requirements-build.txt", "python/geobrix/envs/pyproject.env.toml",
+            "python/geobrix/src/_gbx_native_path.py", "scripts/native/JniSmoke.java"} <= gate
+    assert not gate & pure and "python/geobrix/README.md" not in gate
 
 
 # --- the binding sdists through the package index (CI) ---------------------------------------------------------------
@@ -438,6 +450,8 @@ def _logs(tmp_path, bad=None):
         ("an env file changed", ("python/geobrix/envs/env5/base.txt", APPEND), 1),
         ("a comment in pins.conf", ("scripts/native/pins.conf", lambda b: b"# a note\n" + b), 0),
         ("only GDALManager changed", (GDALMANAGER, APPEND), 0),
+        ("a pure-Python package source changed", (PURE_PYTHON, APPEND), 0),
+        ("the payload's activation changed", ("python/geobrix/src/databricks/labs/gbx/_native/_rules.py", APPEND), 1),
     ],
 )
 def test_ci_fails_a_stale_arch_gate_stamp(tree, tmp_path, case, edit, code):

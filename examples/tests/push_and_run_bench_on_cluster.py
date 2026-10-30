@@ -32,6 +32,14 @@ Usage:
                 4-8 min job-cluster startup; overrides the CLUSTER_ID env var),
               --truncate-results (clear only this run_id + this invocation's tier(s)),
               --truncate-all (empty the whole table -> only the current run remains)
+
+Hardening (every run): a SMOKE stage runs first (--no-smoke skips it, logged): each form of the chosen --levels
+set once at --smoke-rows rows plus a worker-side import check; only a clean smoke submits the real run. A local
+preflight refuses the launch with no compute (--skip-preflight skips it, logged). A watchdog polls the notebook's
+heartbeat and cancels a run whose heartbeat stopped (--stale-min) or whose form passed --form-cap-min, printing
+`STALLED: <form> after <m> min` and the driver stack, exit 3. --smoke-only stops after a clean smoke. Every run has a time limit (--timeout-min, default 120
+for --levels, else 360; the smoke stage --smoke-timeout-min, default 15). --inject-stall <secs> adds a form that
+sleeps on the driver (test only; proves the watchdog).
 """
 
 from __future__ import annotations
@@ -42,6 +50,9 @@ import sys
 from pathlib import Path
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
+import _preflight  # sibling module (script dir is on sys.path)
+import _run_watchdog  # sibling module (script dir is on sys.path)
+from _preflight import serverless_dependencies
 
 # Load config from .env in same dir
 TESTS_DIR = Path(__file__).resolve().parent
@@ -239,7 +250,7 @@ def _expected_rows(
             return None  # still unknown due to heavyweight fn count
         return None
     try:
-        sys.path.insert(0, "python/geobrix/src")
+        sys.path.insert(0, str(TESTS_DIR.parent.parent / "python" / "geobrix" / "src"))
         from databricks.labs.gbx.bench import spec as _spec
 
         fns = _spec.select(
@@ -265,6 +276,160 @@ def _expected_rows(
     return total or None
 
 
+
+EXIT_STALLED = _run_watchdog.EXIT_STALLED
+EXIT_SMOKE_FAILED = 4
+EXIT_PREFLIGHT = 5
+SMOKE_FORM_CAP_MIN = 5.0  # a form at the smoke's few rows that runs longer than this is stuck, not slow
+HEARTBEAT_READ_SECS = 15.0
+
+
+def launch_problems(w, *, serverless, wheel, env_version, levels_mvp, levels_scales, root) -> list:
+    """What makes this launch fail, found with no compute: the Serverless environment spec, the staged wheel against
+    the local build, and (for a levels run) the probe SQL on a local Spark session and the client-side input sizes."""
+    problems = []
+    if serverless:
+        problems += _preflight.check_env_spec(serverless_dependencies(wheel), wheel, env_version)
+    if wheel.startswith("/Volumes/"):
+        try:
+            problems += _preflight.wheel_problems(w, wheel, root)
+        except Exception as exc:  # noqa: BLE001 - an unreadable staged wheel is a launch problem too
+            problems.append(f"cannot read the staged wheel {wheel}: {type(exc).__name__}: {exc}")
+    if levels_mvp:
+        sys.path.insert(0, str(Path(root) / "python/geobrix/src"))
+        problems += _preflight.probe_problems(levels_mvp, levels_scales, root)
+    return problems
+
+
+class Outcome:
+    """How a watched run ended: its final ``run``, the notebook's exit ``payload``, the ``stall`` (or None)."""
+
+    def __init__(self, run=None, payload=None, stall=None, seconds=0.0):
+        self.run, self.payload, self.stall, self.seconds = run, payload, stall, seconds
+
+
+def _life_and_result(run):
+    st = run.state
+
+    def val(x):
+        return x.value if x is not None and hasattr(x, "value") else (str(x) if x is not None else "")
+
+    return (val(st.life_cycle_state) if st else "?"), (val(st.result_state) if st else "")
+
+
+def watch_to_end(w, run_id, *, hb_path, form_cap_s, stale_s, count=None, poll_secs=5) -> Outcome:
+    """Poll the run to its end with the watchdog; a stalled run is cancelled and reported (exit 3, not retried).
+
+    ``count`` is ``(warehouse_id, table, run_id, apis, expected)`` for the live row count of a real run.
+    """
+    import time
+
+    t0 = time.monotonic()
+    last = {"beat": None, "at": -1e9, "rows": -1, "stale": 0, "run": None}
+
+    def get_state():
+        try:
+            last["run"] = w.jobs.get_run(run_id)
+        except Exception as exc:  # noqa: BLE001 - transient: keep polling
+            print(f"  (poll error: {exc})", file=sys.stderr)
+            return ("RUNNING", "")
+        return _life_and_result(last["run"])
+
+    def beat():
+        if time.monotonic() - last["at"] >= HEARTBEAT_READ_SECS:
+            last["at"] = time.monotonic()
+            got = _run_watchdog.read_beat(w, hb_path)
+            if got is not None:
+                last["beat"] = got
+        return last["beat"]
+
+    def on_poll(lc):
+        if not count or not count[0]:
+            return
+        warehouse_id, table, rid, apis, expected = count
+        of = f" (of {expected})" if expected else ""
+        c = _count_run_rows(w, warehouse_id, table, rid, apis)
+        if c > last["rows"]:
+            print(f"  [{lc}] {c}{of} rows streamed to table so far")
+            last["rows"], last["stale"] = c, 0
+        else:
+            last["stale"] += 1
+            if last["stale"] % 6 == 0:  # ~30s with no new rows -> show we're alive
+                b = last["beat"] or {}
+                where = f"; heartbeat: {b['form']} {b.get('form_elapsed_s', 0):.0f} s" if b.get("form") else ""
+                print(f"  [{lc}] still {max(last['rows'], 0)}{of} rows (current fn taking a while{where})")
+
+    kind, what = _run_watchdog.watch_run(
+        get_state=get_state,
+        read_beat_fn=beat,
+        cancel=lambda: w.jobs.cancel_run(run_id),
+        on_stall_dump=lambda: _run_watchdog.faulthandler_tail(w, run_id),
+        on_poll=on_poll,
+        watchdog=_run_watchdog.Watchdog(form_cap_s=form_cap_s, stale_s=stale_s),
+        poll_secs=poll_secs,
+    )
+    seconds = time.monotonic() - t0
+    if kind == "stalled":
+        return Outcome(stall=what, seconds=seconds)
+    run = w.jobs.get_run(run_id)
+    payload = None
+    try:
+        out = w.jobs.get_run_output(run.tasks[0].run_id) if run.tasks else None
+        if out and getattr(out, "notebook_output", None) and out.notebook_output.result:
+            payload = out.notebook_output.result
+    except Exception:  # noqa: BLE001 - the payload is a convenience
+        pass
+    return Outcome(run=run, payload=payload, seconds=seconds)
+
+
+def _smoke_result(outcome) -> dict:
+    try:
+        return json.loads(outcome.payload) if outcome.payload else {}
+    except ValueError:
+        return {}
+
+
+def smoke_problems(outcome, *, require_forms: bool, allow_errors: bool = False) -> list:
+    """Why a finished smoke run is not clean (empty when it is)."""
+    lc, result = _life_and_result(outcome.run)
+    problems = []
+    if result != "SUCCESS":
+        problems.append(f"the smoke run ended {lc}/{result or '?'}: {outcome.run.state.state_message if outcome.run.state else ''}")
+    res = _smoke_result(outcome)
+    if not res:
+        problems.append("the smoke run returned no result (the notebook did not reach its exit)")
+        return problems
+    chk = res.get("import_check") or {}
+    if not chk.get("ok"):
+        problems.append(f"worker-side import check failed: {chk.get('error', 'no result')}")
+    if require_forms and chk.get("ok") and not res.get("forms"):
+        problems.append("no form ran at the smoke (nothing in the chosen set runs on this compute)")
+    if res.get("errors") and not allow_errors:
+        for e in res["errors"]:
+            problems.append(f"form {e['fn']} {e['level']}/{e['form']} failed: {e['failure']}")
+    return problems
+
+
+def print_smoke(outcome) -> None:
+    res = _smoke_result(outcome)
+    chk = res.get("import_check") or {}
+    if chk.get("ok"):
+        print(f"  worker import check: ok (geobrix {chk.get('version')} on {chk.get('arch')})")
+    forms = res.get("forms") or []
+    if forms:
+        print(f"  {'fn':<34}{'level':<9}{'form':<22}{'status':<14}{'tasks':>6}{'median_s':>10}")
+        for f in forms:
+            print(
+                f"  {f['fn']:<34}{f['level']:<9}{f['form']:<22}{f['status']:<14}{f.get('tasks', 0):>6}{f.get('median_s', 0):>10}"
+            )
+        few = [f for f in forms if f["status"] == "ok" and 0 < f.get("tasks", 0) <= 2]
+        if few:
+            print(
+                f"  NOTE: {len(few)} form(s) run on 1-2 Spark tasks whatever the cluster size "
+                "(their input is one or two files): their times are per task, not cluster throughput."
+            )
+
+
 def main() -> int:
     exit_if_help(__doc__)
     # Force line-buffered stdout so the run URL + interim progress heartbeats appear
@@ -277,6 +442,19 @@ def main() -> int:
         pass
 
     do_wait = "--no-wait" not in sys.argv
+    # Run hardening (see the module docstring): the smoke stage, the preflight, the watchdog and the time limits.
+    no_smoke = "--no-smoke" in sys.argv
+    smoke_only = "--smoke-only" in sys.argv
+    if smoke_only and no_smoke:
+        print("ERROR: --smoke-only and --no-smoke exclude each other.", file=sys.stderr)
+        return 2
+    skip_preflight = "--skip-preflight" in sys.argv
+    smoke_allow_errors = "--smoke-allow-errors" in sys.argv
+    smoke_rows = int(_arg("--smoke-rows", "16"))
+    inject_stall = float(_arg("--inject-stall", "0"))
+    form_cap_min = float(_arg("--form-cap-min", "15"))
+    stale_min = float(_arg("--stale-min", "5"))
+    smoke_timeout_min = int(_arg("--smoke-timeout-min", "15"))
     heavyweight = "--lightweight-only" not in sys.argv
     lightweight = "--heavyweight-only" not in sys.argv
     # --serverless: submit to Serverless compute instead of an existing cluster. Light-only (no JAR).
@@ -510,6 +688,8 @@ def main() -> int:
     levels_mvp = _arg("--levels", "")
     levels_only = "--levels-only" in sys.argv
     levels_uc = _arg("--levels-uc", "")
+    # The real run's time limit: a levels leg is bounded, the full function bench was measured at hours.
+    timeout_min = int(_arg("--timeout-min", "120" if levels_mvp else "360"))
     # --levels-scales <csv>: the multiples of each form's base row count the leg times (default 1,4,16).
     try:
         levels_scales = tuple(int(x) for x in _arg("--levels-scales", "1,4,16").split(",") if x.strip())
@@ -733,6 +913,10 @@ def main() -> int:
         levels_only=levels_only,
         levels_uc=levels_uc,
         levels_scales=levels_scales,
+        #  Liveness: the heartbeat period, the driver stack dump cap, the test-only stall.
+        heartbeat_secs=30,
+        stall_cap_s=int(form_cap_min * 60),
+        inject_stall=inject_stall,
         #  Phase-2 FILE legs (light-only, serialized):
         #  --file-matrix: file_mode sweep (fuse/external/managed) for GeoTIFF + GeoPackage reads.
         file_matrix=file_matrix,
@@ -831,7 +1015,7 @@ def main() -> int:
         cfg["modes"] = "spark-path"
 
     # Import the notebook builder from the repo source (this runs on the HOST, not the cluster).
-    sys.path.insert(0, "python/geobrix/src")
+    sys.path.insert(0, str(TESTS_DIR.parent.parent / "python" / "geobrix" / "src"))
     try:
         from databricks.labs.gbx.bench.cluster import build_bench_notebook
     except ImportError as e:
@@ -891,7 +1075,21 @@ def main() -> int:
     print("=" * 64)
 
     nb = build_bench_notebook(cfg)
-    nb_bytes = json.dumps(nb, indent=1).encode("utf-8")
+
+    # Local preflight: refuse a launch that cannot work, with no compute (the checks of _preflight.py).
+    if skip_preflight:
+        print("PREFLIGHT SKIPPED (--skip-preflight): the launch is not checked locally.")
+    else:
+        problems = launch_problems(
+            w, serverless=serverless, wheel=wheel, env_version=env_version, levels_mvp=levels_mvp,
+            levels_scales=levels_scales, root=Path(os.environ.get("GBX_SOURCE_ROOT") or TESTS_DIR.parent.parent),
+        )  # fmt: skip
+        if problems:
+            print("PREFLIGHT FAILED: nothing is submitted.", file=sys.stderr)
+            for pr in problems:
+                print(f"  - {pr}", file=sys.stderr)
+            return EXIT_PREFLIGHT
+        print("preflight: ok (environment spec, staged wheel, probe SQL, client input sizes)")
 
     # Pre-flight: REFUSE to submit a spark-path run the corpus row pool can't fill. The
     # spark-path draws max(--row-counts) DISTINCT tiles from the pool; a smaller pool would
@@ -974,6 +1172,7 @@ def main() -> int:
         notebook_path = notebook_path.rstrip("/") + ".ipynb"
     # Ensure it doesn't have the /Workspace prefix for the SDK calls.
     notebook_path = "/" + notebook_path.strip().removeprefix("/Workspace").lstrip("/")
+    smoke_path = notebook_path[: -len(".ipynb")] + "_smoke.ipynb"
 
     # Ensure parent directory exists (workspace API).
     notebook_parent = Path(notebook_path).parent
@@ -982,14 +1181,27 @@ def main() -> int:
     except Exception:
         pass
 
-    print(f"Uploading bench notebook to {notebook_path}...")
-    # CRITICAL: ImportFormat.JUPYTER creates a NOTEBOOK, not a FILE.
-    w.workspace.upload(
-        notebook_path,
-        io.BytesIO(nb_bytes),
-        format=ImportFormat.JUPYTER,
-        overwrite=True,
-    )
+    def upload(path, notebook):
+        print(f"Uploading bench notebook to {path}...")
+        # CRITICAL: ImportFormat.JUPYTER creates a NOTEBOOK, not a FILE.
+        w.workspace.upload(
+            path,
+            io.BytesIO(json.dumps(notebook, indent=1).encode("utf-8")),
+            format=ImportFormat.JUPYTER,
+            overwrite=True,
+        )
+
+    # Both notebooks are built and uploaded now, from the code this launch started with (the launcher itself
+    # runs from a snapshot, see gbx-bench-cluster.sh): a later edit cannot change the real run after the smoke.
+    upload(notebook_path, nb)
+    do_smoke = not no_smoke and not explain_only
+    if do_smoke:
+        smoke_cfg = dict(
+            cfg, smoke=True, run_id=f"{run_id}-smoke", out_dir=f"{out_dir}-smoke", smoke_rows=smoke_rows,
+            truncate_results=False, truncate_all=False, resume=False, redo_functions="",
+            stall_cap_s=int(min(form_cap_min, SMOKE_FORM_CAP_MIN) * 60),
+        )  # fmt: skip
+        upload(smoke_path, build_bench_notebook(smoke_cfg))
 
     # Attach the bench tests.jar only for the heavyweight leg (it carries the bench Scala classes).
     # On an all-purpose cluster, job-attached libraries PERSIST as cluster libraries, so a second
@@ -1065,82 +1277,114 @@ def main() -> int:
     else:
         libraries = [compute.Library(jar=tests_jar)] if heavyweight else None
 
-    if serverless:
-        # Serverless submission: environment_version-pinned compute, no cluster_id, no JAR.
-        # max_retries=0: a failed bench task must surface immediately, not auto-retry and mask
-        # the failure (standing bench rule).
-        env_version_str = str(env_version)
-        print(f"Submitting one-off benchmark run on Serverless (env v{env_version_str})...")
-        submit_waiter = submit_once(
-            w,
-            run_name=f"geobrix-bench-{run_id}",
-            # 6h matches the classic timeout; Serverless light spark-path can still be slow
-            # on a large tile set with the virtual-tile reader path.
-            timeout_seconds=21600,
-            environments=[
-                jobs.JobEnvironment(
-                    environment_key="bench_env",
-                    # The wheel goes in the environment spec: that is what reaches the Python UDF workers.
-                    # The notebook's own pip install reaches the driver only (every geobrix UDF then failed
-                    # on the workers with "No module named 'databricks.labs'", measured on env 6).
-                    spec=compute.Environment(
-                        environment_version=env_version_str,
-                        dependencies=[wheel, "markdown"],
-                    ),
-                )
-            ],
-            tasks=[
-                jobs.SubmitTask(
-                    task_key="run_bench",
-                    environment_key="bench_env",
-                    notebook_task=jobs.NotebookTask(
-                        notebook_path=notebook_path,
-                        source=jobs.Source.WORKSPACE,
-                    ),
-                    max_retries=0,
-                )
-            ],
+    def submit(path, name, timeout_s):
+        """Submit one notebook run (Serverless or the cluster) with a time limit; returns the run id."""
+        if serverless:
+            # Serverless submission: environment_version-pinned compute, no cluster_id, no JAR.
+            # max_retries=0: a failed bench task must surface immediately, not auto-retry and mask
+            # the failure (standing bench rule).
+            env_version_str = str(env_version)
+            print(f"Submitting {name} on Serverless (env v{env_version_str}), time limit {timeout_s // 60} min...")
+            waiter = submit_once(
+                w,
+                run_name=name,
+                timeout_seconds=timeout_s,
+                environments=[
+                    jobs.JobEnvironment(
+                        environment_key="bench_env",
+                        # The wheel goes in the environment spec: that is what reaches the Python UDF workers.
+                        # The notebook's own pip install reaches the driver only (every geobrix UDF then failed
+                        # on the workers with "No module named 'databricks.labs'", measured on env 6).
+                        spec=compute.Environment(
+                            environment_version=env_version_str,
+                            dependencies=serverless_dependencies(wheel),
+                        ),
+                    )
+                ],
+                tasks=[
+                    jobs.SubmitTask(
+                        task_key="run_bench",
+                        environment_key="bench_env",
+                        notebook_task=jobs.NotebookTask(notebook_path=path, source=jobs.Source.WORKSPACE),
+                        max_retries=0,
+                    )
+                ],
+            )
+        else:
+            print(f"Submitting {name} on cluster {cluster_id}, time limit {timeout_s // 60} min...")
+            waiter = submit_once(
+                w,
+                run_name=name,
+                timeout_seconds=timeout_s,
+                tasks=[
+                    jobs.SubmitTask(
+                        task_key="run_bench",
+                        existing_cluster_id=cluster_id,
+                        notebook_task=jobs.NotebookTask(notebook_path=path, source=jobs.Source.WORKSPACE),
+                        libraries=libraries,
+                    )
+                ],
+            )
+        run_id_remote = waiter.run_id
+        print("=" * 64)
+        print(f"Run submitted: run_id={run_id_remote}")
+        try:
+            _r0 = w.jobs.get_run(run_id_remote)
+            if getattr(_r0, "run_page_url", None):
+                print(f"  run URL : {_r0.run_page_url}")
+        except Exception:
+            pass
+        return run_id_remote
+
+    form_cap_s = form_cap_min * 60.0
+    stale_s = stale_min * 60.0
+    warehouse_id = _strip_invisible(os.environ.get("GBX_BENCH_SQL_WAREHOUSE_ID") or "") or (
+        _discover_warehouse(w) if do_wait else None
+    )
+
+    if do_smoke:
+        print("=" * 64)
+        print(
+            f"SMOKE STAGE: each form of the chosen set once at {smoke_rows} rows, plus a worker-side import check "
+            f"(time limit {smoke_timeout_min} min, form cap {min(form_cap_min, SMOKE_FORM_CAP_MIN):g} min)"
         )
+        smoke_id = submit(smoke_path, f"geobrix-bench-{run_id}-smoke", smoke_timeout_min * 60)
+        outcome = watch_to_end(
+            w, smoke_id, hb_path=f"{out_dir}-smoke/heartbeat.json",
+            form_cap_s=min(form_cap_s, SMOKE_FORM_CAP_MIN * 60.0), stale_s=stale_s,
+        )  # fmt: skip
+        if outcome.stall:
+            print("SMOKE STAGE STALLED: nothing else is submitted.", file=sys.stderr)
+            return EXIT_STALLED
+        problems = smoke_problems(outcome, require_forms=bool(levels_mvp), allow_errors=smoke_allow_errors)
+        print_smoke(outcome)
+        if problems:
+            print("SMOKE STAGE FAILED: nothing else is submitted.", file=sys.stderr)
+            for pr in problems:
+                print(f"  - {pr}", file=sys.stderr)
+            return EXIT_SMOKE_FAILED
+        if smoke_only:
+            print(f"SMOKE STAGE CLEAN ({outcome.seconds:.0f} s): --smoke-only, the real run is not submitted.")
+            return 0
+        print(f"SMOKE STAGE CLEAN ({outcome.seconds:.0f} s): submitting the real run.")
     else:
-        print("Submitting one-off benchmark run on cluster...")
-        submit_waiter = submit_once(
-            w,
-            run_name=f"geobrix-bench-{run_id}",
-            # 6h: the full 1000-row both-run is dominated by the slow light spark-path fns
-            # (the perf gap being measured). 2h timed out mid light-spark-path; 6h covers
-            # light+heavy spark-path even before cluster upsizing parallelizes it.
-            timeout_seconds=21600,
-            tasks=[
-                jobs.SubmitTask(
-                    task_key="run_bench",
-                    existing_cluster_id=cluster_id,
-                    notebook_task=jobs.NotebookTask(
-                        notebook_path=notebook_path,
-                        source=jobs.Source.WORKSPACE,
-                    ),
-                    libraries=libraries,
-                )
-            ],
+        print(
+            "SMOKE STAGE SKIPPED (--no-smoke): the real run is submitted without proving that each form can run."
+            if no_smoke
+            else "SMOKE STAGE SKIPPED (--explain-only runs no timed form)."
         )
 
-    remote_run_id = submit_waiter.run_id
+    remote_run_id = submit(notebook_path, f"geobrix-bench-{run_id}", timeout_min * 60)
 
     # Results stream into the table as each function finishes -> queryable immediately.
     # Surface the run URL + the exact query right after submit (don't make the operator
     # wait until the end or hunt for it).
-    print("=" * 64)
-    print(f"Run submitted: run_id={remote_run_id}")
-    try:
-        _r0 = w.jobs.get_run(remote_run_id)
-        if getattr(_r0, "run_page_url", None):
-            print(f"  run URL : {_r0.run_page_url}")
-    except Exception:
-        pass
     print(f"  results : {table}  (streaming; filter run_id = '{run_id}')")
     print(
         f"  query   : SELECT fn, mode, rows, iter_median_ms, status "
         f"FROM {table} WHERE run_id = '{run_id}' ORDER BY fn"
     )
+    print(f"  heartbeat: {out_dir}/heartbeat.json  (the watchdog cancels a stalled run)")
     print("=" * 64)
 
     if not do_wait:
@@ -1148,16 +1392,6 @@ def main() -> int:
         print("Run submitted (--no-wait). Poll the table above, or the Databricks UI.")
         return 0
 
-    # Poll the live row count as interim rows land in the table (each function appends
-    # as it finishes). Use a TIGHT interval so the displayed count tracks the table
-    # closely -- a coarse sleep makes the count lag far behind during the fast middle of
-    # a run. Print only when it advances, plus a periodic heartbeat so a slow function
-    # doesn't look like a stall. Live counts need a SQL warehouse (auto-discovered, or
-    # GBX_BENCH_SQL_WAREHOUSE_ID); without one we heartbeat run state -- the table is
-    # queryable regardless.
-    import time
-
-    POLL_SECS = 5
     # The tier(s) this invocation writes -> filter the live count by (run_id, api) so it
     # stays accurate when light and heavy share a run_id in the same table.
     poll_apis = [
@@ -1179,53 +1413,18 @@ def main() -> int:
         benchmark_vector=benchmark_vector,
         vector_only=vector_only,
     )
-    # "27 (of 83)" when we know the total this run will stream, else just "27".
-    of = f" (of {expected})" if expected else ""
-    warehouse_id = _strip_invisible(
-        os.environ.get("GBX_BENCH_SQL_WAREHOUSE_ID") or ""
-    ) or _discover_warehouse(w)
-    if warehouse_id:
-        tot = f" (expecting {expected} rows)" if expected else ""
+    outcome = watch_to_end(
+        w, remote_run_id, hb_path=f"{out_dir}/heartbeat.json", form_cap_s=form_cap_s, stale_s=stale_s,
+        count=(warehouse_id, table, run_id, poll_apis, expected),
+    )  # fmt: skip
+    if outcome.stall:
         print(
-            f"Waiting; polling live row count via SQL warehouse {warehouse_id} every {POLL_SECS}s{tot}..."
+            f"Rows sunk before the stall are in {table} (run_id = '{run_id}'). Not retried.",
+            file=sys.stderr,
         )
-    else:
-        print(
-            "Waiting; no SQL warehouse for live counts (set GBX_BENCH_SQL_WAREHOUSE_ID "
-            "for them) -- heartbeating run state. The table above is queryable now."
-        )
-    run = None
-    last_count = -1
-    stale_polls = 0
-    while True:
-        try:
-            run = w.jobs.get_run(remote_run_id)
-        except Exception as e:  # transient -> keep polling
-            print(f"  (poll error: {e})", file=sys.stderr)
-            time.sleep(POLL_SECS)
-            continue
-        st = run.state
-        lc = (
-            st.life_cycle_state.value
-            if st and st.life_cycle_state and hasattr(st.life_cycle_state, "value")
-            else str(st.life_cycle_state if st else "?")
-        )
-        if lc in ("TERMINATED", "SKIPPED", "INTERNAL_ERROR"):
-            break
-        if warehouse_id:
-            c = _count_run_rows(w, warehouse_id, table, run_id, poll_apis)
-            if c > last_count:
-                print(f"  [{lc}] {c}{of} rows streamed to table so far")
-                last_count = c
-                stale_polls = 0
-            else:
-                stale_polls += 1
-                if stale_polls % 6 == 0:  # ~30s with no new rows -> show we're alive
-                    print(
-                        f"  [{lc}] still {max(last_count, 0)}{of} rows (current fn taking a while)"
-                    )
-        time.sleep(POLL_SECS)
+        return EXIT_STALLED
 
+    run = outcome.run
     run_id_remote = remote_run_id
     state = run.state
     if state and getattr(state, "life_cycle_state", None):
@@ -1244,17 +1443,8 @@ def main() -> int:
                 if state.result_state
                 else "UNKNOWN"
             )
-            # Try to surface the notebook's dbutils.notebook.exit() payload.
-            try:
-                out = w.jobs.get_run_output(run.tasks[0].run_id) if run.tasks else None
-                if (
-                    out
-                    and getattr(out, "notebook_output", None)
-                    and out.notebook_output.result
-                ):
-                    print("Notebook output:", out.notebook_output.result)
-            except Exception:
-                pass
+            if outcome.payload:
+                print("Notebook output:", outcome.payload)
             if result_state == "SUCCESS":
                 # Point at the summary file that actually exists for this scope:
                 # both tiers -> comparison summary.md; lightweight-only ->

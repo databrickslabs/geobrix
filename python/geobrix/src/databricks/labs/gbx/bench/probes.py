@@ -277,13 +277,17 @@ def run_smallagg_input(spark, corpus: str, table: str, n: int = 1000) -> dict:
             paths.append(p)
         if len(paths) >= n:
             break
+    # The rows go through the client: refuse before reading the files if they would be too many bytes.
+    from databricks.labs.gbx.bench.clientcap import check_estimate, client_dataframe
+
+    check_estimate("small-agg input", 1, sum(os.path.getsize(p) for p in paths))
     rows = []
     for i, p in enumerate(paths):
         with open(p, "rb") as fh:
             rows.append((i, os.path.basename(p), bytearray(fh.read())))
-    spark.createDataFrame(rows, "i int, name string, raster binary").write.mode(
-        "overwrite"
-    ).saveAsTable(table)
+    client_dataframe(
+        spark, rows, "i int, name string, raster binary", what="small-agg input"
+    ).write.mode("overwrite").saveAsTable(table)
     return {"table": table, "tiles": len(rows), "epsg": crs0}
 
 

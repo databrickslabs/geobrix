@@ -3,6 +3,10 @@
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/common.sh"
+gbx_snapshot_exec "${BASH_SOURCE[0]}" "$@"   # run from a copy: an edit during the run cannot change it
+# In the snapshot's run the code is the snapshot's, the state (venv, logs, local build) the source tree's.
+SNAP_ROOT="$PROJECT_ROOT"
+PROJECT_ROOT="${GBX_SOURCE_ROOT:-$PROJECT_ROOT}"
 
 PASS_ARGS=()
 show_help() {
@@ -85,6 +89,21 @@ Options:
   --env-version <N>     Serverless environment version to pin (default 6; env v6 = protobuf-6 regime).
                         Only used with --serverless.
   --no-wait             Submit without blocking on completion
+  --no-smoke            Skip the smoke stage (logged). By default a SMOKE run goes first: each form of the
+                        --levels set once at --smoke-rows rows plus a worker-side import check; only a clean
+                        smoke submits the real run (exit 4 otherwise)
+  --smoke-only          Run the smoke stage and stop (exit 0 when clean): proves a compute and a launch cheaply
+  --smoke-rows <n>      Rows per form at the smoke (default 16)
+  --smoke-timeout-min <n>  Time limit of the smoke run (default 15)
+  --smoke-allow-errors  A form's error row at the smoke does not stop the real run
+  --skip-preflight      Skip the local preflight (logged): the environment spec names the wheel, the staged wheel
+                        is the local build, the probe SQL runs on a local Spark, no client input above the cap
+                        (exit 5 when a check fails)
+  --timeout-min <n>     Time limit of the real run (default 120 with --levels, else 360)
+  --form-cap-min <n>    The watchdog cancels the run when one form runs longer (default 15; the smoke 5)
+  --stale-min <n>       ... or when the notebook's heartbeat stops changing for this long (default 5);
+                        either prints `STALLED: <form> after <m> min` and the driver stack, exit 3, no retry
+  --inject-stall <s>    TEST ONLY: add a form that sleeps s seconds on the driver (proves the watchdog)
   --help, -h            Show help
 
 Environment: GBX_PYRX_VENV=<dir> runs the launcher on that venv instead of .venv-pyrx (Python 3.11+;
@@ -115,5 +134,5 @@ echo "Submitting benchmark job (this runs on a real cluster and costs compute)..
 # The launcher imports the bench package (-> pyrx -> rasterio) and the databricks SDK: it runs
 # on the project's .venv-pyrx with the SDK layered over it (see gbx_python_with_sdk in common.sh).
 gbx_python_with_sdk || exit 1
-"${GBX_SDK_PYTHON[@]}" examples/tests/push_and_run_bench_on_cluster.py "${PASS_ARGS[@]}"
+"${GBX_SDK_PYTHON[@]}" "$SNAP_ROOT/examples/tests/push_and_run_bench_on_cluster.py" "${PASS_ARGS[@]}"
 exit $?

@@ -381,6 +381,14 @@ LEVELS_ONLY = {levels_only!r}
 LEVELS_UC = {levels_uc!r}
 # --levels-scales <csv>: the multiples of each form's base row count the leg times (default 1,4,16).
 LEVELS_SCALES = {levels_scales!r}
+# Liveness (see bench/liveness.py): the heartbeat file the launcher's watchdog reads, and the stall cap of the
+# driver stack dump. SMOKE: run only the smoke stage (the worker import check, then every form of the levels
+# set once at SMOKE_ROWS rows) and exit. INJECT_STALL (seconds, test only): a form that sleeps on the driver.
+HEARTBEAT_SECS = {heartbeat_secs}
+STALL_CAP_S = {stall_cap_s}
+SMOKE = {smoke!r}
+SMOKE_ROWS = {smoke_rows}
+INJECT_STALL = {inject_stall}
 MULTIWINDOW_CORPUS = {multiwindow_corpus!r} or (CORPUS + "/bench-corpus-cog-multiwindow")
 # --file-matrix: sweep file_mode in ("fuse","external","managed") for GeoTIFF + GeoPackage reads.
 # --file-matrix-only: ONLY run the FILE matrix, skip all fn benchmarks.
@@ -527,6 +535,19 @@ if _redo_names:
 _PC_EXP = len([f for f in fnspecs if "pure-core" in f.modes])
 _SP_EXP = len([f for f in fnspecs if "spark-path" in f.modes])
 lw, hw, all_rows = [], [], []
+"""
+
+# The driver's liveness, started right after the sink is defined (so a hang in any later cell is seen): a stack
+# dump to stderr at the stall cap (plain Python, not Spark conf), and the heartbeat file the launcher watches.
+_LIVENESS = """
+import faulthandler as _fh, sys as _sys
+try:
+    _fh.dump_traceback_later(STALL_CAP_S, repeat=True, file=_sys.stderr)
+except Exception as _e:  # a stderr with no file descriptor: the heartbeat's own stack still names the stall
+    print("faulthandler stall dump not armed:", _e)
+from databricks.labs.gbx.bench import liveness as _live
+HEARTBEAT = _live.Heartbeat(OUT + "/heartbeat.json", HEARTBEAT_SECS, phase="smoke" if SMOKE else "run").start()
+print("heartbeat:", OUT + "/heartbeat.json", flush=True)
 """
 
 # Truncate up-front + define the incremental Delta sink. Kept OUT of _PREAMBLE (which
@@ -2934,18 +2955,57 @@ else:
 _CELL_LEVELS = """# Levels leg (perf matrix + attribution split): every form of the chosen set at each
 # execution level this compute offers (L1 Catalyst, L2 Java UDF, L3 light, L4 Unity Catalog),
 # timed at 1x/4x/16x. Rows land in the same results table; the split is in the row's own columns.
-import faulthandler as _fh, sys as _sys
 from databricks.labs.gbx.bench import levels as _lv
-# A driver stack dump every 10 minutes while the leg runs: a leg prints nothing until it ends, so a hang shows where.
-_fh.dump_traceback_later(600, repeat=True, file=_sys.stderr)
 print("=== levels leg starting:", LEVELS_MVP, flush=True)
+# Each form's rows are sunk the moment that form has run at every scale, and the heartbeat names the form in progress.
 _lv_rows = _lv.run_mvp(spark, LEVELS_MVP, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, corpus=CORPUS,
                        schema=".".join(TABLE.split(".")[:2]), uc=(LEVELS_UC or None), where="cluster",
-                       scales=LEVELS_SCALES)
-_sink(_lv_rows)
+                       scales=LEVELS_SCALES, on_form=_sink, heartbeat=HEARTBEAT, inject_stall=INJECT_STALL)
 lw.extend(_lv_rows)
-_fh.cancel_dump_traceback_later()
 _show_md(f"levels leg {LEVELS_MVP} -- {RUN_ID}", _lv.summarize(_lv_rows))
+"""
+
+# Smoke stage: before the real scales, prove the run can work. A one-row UDF imports the wheel on a WORKER and reports
+# its version and arch (the Serverless environment-spec mistake showed only there), then every form of the levels set
+# runs once at SMOKE_ROWS rows. Rows sink per form; the exit payload says what ran, what failed and how many Spark tasks
+# each form's input scan ran (a tile form over a one-file table runs on one task whatever the cluster's size).
+_CELL_SMOKE = """# Smoke stage: the worker import check, then each form of the levels set once at the smallest scale.
+import json as _json
+from pyspark.sql import functions as _F
+_smoke = dict(smoke=True, run_id=RUN_ID, import_check=None, forms=[], errors=[])
+
+
+def _worker_probe(_):
+    import json, platform
+    import databricks.labs.gbx as _g
+    return json.dumps(dict(version=getattr(_g, "__version__", "?"), arch=platform.machine()))
+
+
+try:
+    _probe = spark.range(1).select(_F.udf(_worker_probe, "string")("id")).collect()[0][0]
+    _smoke["import_check"] = dict(ok=True, **_json.loads(_probe))
+    print("worker import check:", _probe, flush=True)
+except Exception as _e:
+    _smoke["import_check"] = dict(ok=False, error=(type(_e).__name__ + ": " + str(_e))[-600:])
+    print("worker import check FAILED:", _smoke["import_check"]["error"], flush=True)
+
+if _smoke["import_check"]["ok"] and LEVELS_MVP:
+    from databricks.labs.gbx.bench import levels as _lv
+    _lv_rows = _lv.run_mvp(spark, LEVELS_MVP, RUN_ID, 0, 1, corpus=CORPUS,
+                           schema=".".join(TABLE.split(".")[:2]), uc=(LEVELS_UC or None), where="cluster",
+                           scales=(1,), base_rows=SMOKE_ROWS, on_form=_sink, heartbeat=HEARTBEAT,
+                           report_tasks=True, inject_stall=INJECT_STALL)
+    for _r in _lv_rows:
+        _smoke["forms"].append(dict(fn=_r.fn, level=_r.level, form=_r.form, status=_r.status, rows=_r.rows,
+                                    tasks=_r.input_partitions, median_s=round(_r.iter_median_s, 3)))
+        if _r.status == "error":
+            _smoke["errors"].append(dict(fn=_r.fn, level=_r.level, form=_r.form, failure=_r.failure_mode[-400:]))
+    print(_lv.summarize(_lv_rows), flush=True)
+HEARTBEAT.stop("done" if _smoke["import_check"]["ok"] and not _smoke["errors"] else "failed")
+"""
+
+_EXIT_SMOKE = """# The smoke result is the notebook output the launcher reads (its own cell, like the bench exit).
+dbutils.notebook.exit(_json.dumps(_smoke))
 """
 
 _CELL_FILE_MATRIX = """# FILE-access matrix: GeoTIFF + GeoPackage reads across file_mode in ("fuse","external","managed").
@@ -3503,6 +3563,7 @@ if _vrows:
 """
 
 _EPILOGUE = """# Wrap-up: durable jsonl shards + per-tier summaries + heavy-vs-light comparison.
+HEARTBEAT.stop("done")
 all_rows = lw + hw
 if lw:
     results.write_jsonl(lw, f"{OUT}/lightweight.jsonl")
@@ -3633,6 +3694,11 @@ def build_bench_notebook(cfg: dict) -> dict:
         levels_only=bool(cfg.get("levels_only")),
         levels_uc=str(cfg.get("levels_uc", "") or ""),
         levels_scales=tuple(cfg.get("levels_scales") or (1, 4, 16)),
+        heartbeat_secs=float(cfg.get("heartbeat_secs", 30)),
+        stall_cap_s=int(cfg.get("stall_cap_s", 900)),
+        smoke=bool(cfg.get("smoke")),
+        smoke_rows=int(cfg.get("smoke_rows", 16)),
+        inject_stall=float(cfg.get("inject_stall", 0) or 0),
         multiwindow_corpus=str(cfg.get("multiwindow_corpus", "") or ""),
         benchmark_file_matrix=bool(cfg.get("file_matrix")),
         file_matrix_only=bool(cfg.get("file_matrix_only")),
@@ -3652,6 +3718,7 @@ def build_bench_notebook(cfg: dict) -> dict:
     setup += (
         _SINK  # truncate up-front + define the incremental Delta sink + show_section
     )
+    setup += _LIVENESS  # the stack dump at the stall cap + the heartbeat file
     light = bool(cfg.get("lightweight"))
     heavy = bool(cfg.get("heavyweight"))
     modes = cfg["modes"]
@@ -3787,6 +3854,14 @@ def build_bench_notebook(cfg: dict) -> dict:
         # run view leads with the per-section result cells, not this wall of setup code.
         _cell(setup, collapsed=True),
     ]
+    if cfg.get("smoke"):
+        # The smoke stage runs the import check and the levels forms only, then exits with its own payload.
+        return {
+            "cells": [*cells, _cell(_CELL_SMOKE), _cell(_EXIT_SMOKE)],
+            "metadata": {},
+            "nbformat": 4,
+            "nbformat_minor": 5,
+        }
     # Any "*-only" reader/writer benchmark suppresses the per-function sections (they stage
     # their own corpus and don't touch the function-bench row pool). Collapsed into one
     # membership test so adding a new *-only leg doesn't grow this function's branch count.

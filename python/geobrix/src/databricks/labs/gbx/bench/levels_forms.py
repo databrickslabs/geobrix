@@ -11,6 +11,11 @@ import os
 from typing import Callable, Dict, List, Optional
 
 from databricks.labs.gbx._gdal_policy import open_data
+from databricks.labs.gbx.bench.clientcap import (
+    check_estimate,
+    client_dataframe,
+    size_of,
+)
 from databricks.labs.gbx.bench.levels import Form
 
 # Bump when an input recipe (a seed or a shape) changes: it is part of the cached table's name,
@@ -158,13 +163,15 @@ def _tile_column(spark, pairs, virtual: bool, keyed: bool):
 
     if virtual:
         rows = [(k, VirtualTile(cellid=0, path=p).to_row()) for k, p in pairs]
-        df = spark.createDataFrame(rows, f"key string, tile {TILE_SQL}")
+        df = client_dataframe(
+            spark, rows, f"key string, tile {TILE_SQL}", what="virtual tile rows"
+        )
     else:
         from databricks.labs.gbx.pyrx import functions as prx
 
-        df = spark.createDataFrame(pairs, "key string, path string").select(
-            "key", prx.rst_fromfile(F.col("path"), "GTiff", True).alias("tile")
-        )
+        df = client_dataframe(
+            spark, pairs, "key string, path string", what="tile path rows"
+        ).select("key", prx.rst_fromfile(F.col("path"), "GTiff", True).alias("tile"))
     return df if keyed else df.select("tile")
 
 
@@ -346,7 +353,9 @@ def _dsm_towers(spark, n, corpus, schema):
         spark,
         schema,
         name + "_tiles",
-        lambda: spark.createDataFrame(tiles, "tx int, ty int, path string"),
+        lambda: client_dataframe(
+            spark, tiles, "tx int, ty int, path string", what="tower tile paths"
+        ),
     )
     reach = _DSM_GRID * _DSM_TILE_PX - 2 * _TOWER_RADIUS
     return _table(
@@ -1285,12 +1294,16 @@ def _se_dems(size: int):
         from databricks.labs.gbx.manifest import TILE_SQL
 
         tiles = [_se_dem_tile(size, s) for s in range(4)]  # four distinct tiles, cycled
+        check_estimate(f"se_dem_{size} x {n}", n, size_of(tiles[0]))
         return _table(
             spark,
             schema,
             f"mvp_in_se_dem{size}_v{RECIPE_VERSION}_{n}",
-            lambda: spark.createDataFrame(
-                [(tiles[i % 4],) for i in range(n)], f"tile {TILE_SQL}"
+            lambda: client_dataframe(
+                spark,
+                [(tiles[i % 4],) for i in range(n)],
+                f"tile {TILE_SQL}",
+                what=f"se_dem_{size} tiles",
             ).repartition(max(1, min(n, 8))),
         )
 
@@ -1302,13 +1315,16 @@ def _se_pairs(size: int):
         from databricks.labs.gbx.manifest import TILE_SQL
 
         tiles = [_se_dem_tile(size, s) for s in range(4)]
+        check_estimate(f"se_pair_{size} x {n}", n, 2 * size_of(tiles[0]))
         return _table(
             spark,
             schema,
             f"mvp_in_se_pair{size}_v{RECIPE_VERSION}_{n}",
-            lambda: spark.createDataFrame(
+            lambda: client_dataframe(
+                spark,
                 [([tiles[i % 4], tiles[(i + 1) % 4]],) for i in range(n)],
                 f"tiles array<{TILE_SQL}>",
+                what=f"se_pair_{size} tile pairs",
             ).repartition(max(1, min(n, 8))),
         )
 
@@ -1518,3 +1534,47 @@ FORMS["SE"] = (
         _se(_MALG, "L3", "engine-c1", "se_pair_512", _SE_MA_ENGINE),
     ]
 )
+
+
+# A form that only sleeps, for proving the launcher's watchdog (``--inject-stall`` of the cluster launcher). It
+# is not in any set: ``levels.run_mvp(inject_stall=...)`` adds it after the first form.
+INPUTS["none"] = lambda spark, n, corpus, schema: "none"
+BASE_ROWS["none"] = 1
+STALL_SECONDS = 0.0
+
+
+def stall_form(spark, src):
+    """Sleep on the driver for STALL_SECONDS: a form with no Spark job, so a run that sits in it has no tasks."""
+    import time
+
+    time.sleep(STALL_SECONDS)
+    return 1, 1, 1
+
+
+STALL_FORM = Form(
+    "S",
+    "inject_stall",
+    "L3",
+    "sleep",
+    "none",
+    run="databricks.labs.gbx.bench.levels_forms:stall_form",
+    register=False,
+)
+
+
+# The inputs a builder makes on the CLIENT (the rest are read or generated on the executors), as (tile pixels,
+# tiles per row): the preflight refuses a ladder whose client-built bytes pass the cap before anything is submitted.
+CLIENT_TILES = {
+    "se_dem_256": (256, 1),
+    "se_dem_512": (512, 1),
+    "se_dem_1024": (1024, 1),
+    "se_pair_512": (512, 2),
+}
+
+
+def client_bytes(input_key: str, rows: int) -> int:
+    """The bytes the builder of `input_key` ships from the client for `rows` rows (0 for an executor-side input)."""
+    if input_key not in CLIENT_TILES:
+        return 0
+    size, per_row = CLIENT_TILES[input_key]
+    return rows * per_row * size_of(_se_dem_tile(size, 0))

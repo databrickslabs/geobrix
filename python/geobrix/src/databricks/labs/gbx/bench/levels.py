@@ -11,7 +11,7 @@ import dataclasses
 import re
 import time
 from dataclasses import dataclass, replace
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from databricks.labs.gbx.bench import attribution
 from databricks.labs.gbx.bench.results import ResultRow
@@ -87,6 +87,10 @@ def run_mvp(
     where: str = "cluster",
     only_levels: Optional[Tuple[str, ...]] = None,
     base_rows: Optional[int] = None,
+    on_form: Optional[Callable[[List[ResultRow]], None]] = None,
+    heartbeat=None,
+    report_tasks: bool = False,
+    inject_stall: float = 0.0,
 ) -> List[ResultRow]:
     """Time every form of `mvp` that this compute offers, at each scale; one row per form and scale.
 
@@ -97,6 +101,13 @@ def run_mvp(
     The timing is the median over the measured iterations; the attribution split is the plan of
     the LAST measured iteration (one sample), and the worker memory peak covers warmup and all
     measured iterations. A metric with no value is NULL, with the reason in the row's `note`.
+
+    Liveness: `on_form` is called with each form's rows as soon as that form has run at every scale (the
+    caller sinks them there, so a hung later form loses nothing), and `heartbeat` (``liveness.Heartbeat``)
+    is told which form is in progress. `report_tasks` records, per row, the number of Spark tasks the
+    form's input scan runs (``input_partitions``): a tile form over a one-file table runs on one task.
+    `inject_stall` (seconds, test only) adds a form after the first that sleeps on the driver, to prove the
+    launcher's watchdog.
     """
     from databricks.labs.gbx.bench import levels_forms as lf
 
@@ -104,16 +115,26 @@ def run_mvp(
         raise ValueError(
             f"no forms for MVP {mvp!r} yet (have: {', '.join(sorted(lf.FORMS))})"
         )
-    ctx = _Ctx(spark, warmup, measured, corpus, schema, uc, {})
+    ctx = _Ctx(
+        spark, warmup, measured, corpus, schema, uc, {}, report_tasks=report_tasks
+    )
     compute = detect_compute(spark)
     env = capture_env(where)
     out: List[ResultRow] = []
-    for form in lf.FORMS[mvp]:
-        if compute not in form.computes or (
-            only_levels and form.level not in only_levels
-        ):
-            continue
+    forms = list(lf.FORMS[mvp])
+    if inject_stall:
+        lf.STALL_SECONDS = float(inject_stall)
+        forms.insert(min(1, len(forms)), lf.STALL_FORM)
+    todo = [
+        f
+        for f in forms
+        if compute in f.computes and not (only_levels and f.level not in only_levels)
+    ]
+    for index, form in enumerate(todo, 1):
         rows: List[ResultRow] = []
+        label = f"{form.fn}:{form.level}:{form.variant}"
+        if heartbeat:
+            heartbeat.begin(label, index, len(todo))
         for scale in scales:
             requested = (base_rows or lf.BASE_ROWS[form.input]) * scale
             base = dict(
@@ -138,7 +159,12 @@ def run_mvp(
                         failure=failure_text(exc),
                     )
                 )
-        out += _guard_sent(rows)
+        rows = _guard_sent(rows)
+        if heartbeat:
+            heartbeat.end()
+        if on_form:
+            on_form(rows)
+        out += rows
     return out
 
 
@@ -169,6 +195,7 @@ class _Ctx:
     jvm_why: Optional[str] = (
         None  # why this session has no geobrix JAR ("" = it has one), once probed
     )
+    report_tasks: bool = False
 
 
 _JVM_LEVELS = ("L1", "L2", "L1-steps", "JVM-DF")  # forms whose body is the geobrix JAR
@@ -217,6 +244,7 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
         return _row(
             base, note="input unavailable (no tile corpus)", status="na_by_design"
         )
+    scan_tasks = _scan_tasks(ctx, src)
     if form.register:
         variant = form.variant.split("@")[
             0
@@ -283,6 +311,7 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
     gone = attribution.unavailable(m, skip=na)
     if gone:
         note.append("unavailable: " + ",".join(gone))
+    note += _tasks_note(scan_tasks)
     return _row(
         {**base, "rows": min(int(n), requested)},
         note="; ".join(note),
@@ -290,7 +319,30 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
         timing=timing,
         fp=str(fp),
         m=m,
+        input_partitions=scan_tasks or 0,
     )
+
+
+def _scan_tasks(ctx: "_Ctx", src: str) -> Optional[int]:
+    """The number of Spark tasks that scan `src` (its non-empty input partitions); None when the run does not
+    report it (`report_tasks`) or `src` is not a table.
+
+    A tile input is a few files in one Delta table, so a tile form may run on one or two tasks whatever the
+    cluster's size: the smoke stage reports this so that is seen before the real scales are submitted.
+    """
+    if not ctx.report_tasks:
+        return None
+    try:
+        r = ctx.spark.sql(
+            f"SELECT count(DISTINCT p) FROM (SELECT spark_partition_id() AS p FROM {src})"
+        ).collect()
+        return int(r[0][0])
+    except Exception:  # noqa: BLE001 - a source that is not a table
+        return None
+
+
+def _tasks_note(tasks: Optional[int]) -> List[str]:
+    return [] if tasks is None else [f"tasks={tasks}"]
 
 
 def _guard_sent(rows: List[ResultRow]) -> List[ResultRow]:
@@ -335,6 +387,7 @@ def _row(
     fp: str = "",
     m: Optional[Dict] = None,
     failure: str = "",
+    input_partitions: int = 0,
 ) -> ResultRow:
     t, m = timing or {}, m or {}
     med = t.get("iter_median_ms", 0.0) / 1000.0
@@ -372,6 +425,7 @@ def _row(
         gc_s=_opt(m.get("gc_s"), float),
         py_worker_rss_mb=_opt(m.get("py_worker_rss_mb"), float),
         failure_mode=failure,
+        input_partitions=input_partitions,
     )
 
 

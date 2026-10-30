@@ -80,6 +80,8 @@ def _search_order(base: str, extra: Sequence[str]) -> List[str]:
 # instead of nesting it.
 _PROJ_DATA_DIRS: Dict[Tuple[str, ...], str] = {}
 _PROJ_DATA_BASES: Dict[str, str] = {}
+# The grid dirs _register_pyproj_search_dirs appended to pyproj's data dir (so a later, smaller set takes them out).
+_PYPROJ_ADDED: list = []
 # A directory that could not be listed leaves its files out of the merged directory. That
 # build is reused only until the time here (then rebuilt, which lists again): per-row
 # callers must not repeat the listing retries, and a dir that was unreachable once (FUSE)
@@ -288,7 +290,9 @@ def _register_pyproj_search_dirs(extra_proj_dirs: Sequence[str]) -> None:
     Dirs are APPENDED (never prepended): pyproj's own data dir stays first so proj.db
     resolution is untouched, and PROJ searches grid files across all search paths
     regardless of order (grid filenames are unique, so there is no override contest).
-    Only fires when a dir is genuinely new, so repeated per-row calls are cheap.
+    A dir added here earlier and not in ``extra_proj_dirs`` now (a ``replace=True``
+    registration) is taken out again. Only fires when the set changes, so repeated
+    per-row calls are cheap.
     """
     try:
         from pyproj.datadir import get_data_dir, set_data_dir
@@ -299,9 +303,15 @@ def _register_pyproj_search_dirs(extra_proj_dirs: Sequence[str]) -> None:
     except Exception:
         return
     parts = [p for p in current.split(os.pathsep) if p]
-    added = [d for d in extra_proj_dirs if d and d not in parts]
-    if added:
-        set_data_dir(os.pathsep.join(parts + added))
+    wanted = [d for d in extra_proj_dirs if d]
+    dropped = [d for d in _PYPROJ_ADDED if d not in wanted]
+    kept = [p for p in parts if p not in dropped]
+    added = [d for d in wanted if d not in kept]
+    if added or dropped:
+        set_data_dir(os.pathsep.join(kept + added))
+    _PYPROJ_ADDED[:] = [d for d in _PYPROJ_ADDED if d in wanted] + [
+        d for d in added if d not in _PYPROJ_ADDED
+    ]
 
 
 def configure_gdal_env(extra_proj_dirs: Optional[Sequence[str]] = None) -> None:
@@ -338,6 +348,12 @@ def configure_gdal_env(extra_proj_dirs: Optional[Sequence[str]] = None) -> None:
             os.environ["PROJ_DATA"] = merged
             _set_osr_search_paths([merged])
         _register_pyproj_search_dirs(extra_proj_dirs)
+    elif current in _PROJ_DATA_BASES:
+        # no grid directory now (register_proj_grids(..., replace=True) with none): the merged directory set
+        # earlier goes, so the grids registered before are not found any more
+        os.environ["PROJ_DATA"] = base
+        _set_osr_search_paths([base])
+        _register_pyproj_search_dirs([])
     elif base and not os.environ.get("PROJ_DATA") and not os.environ.get("PROJ_LIB"):
         os.environ["PROJ_DATA"] = base
 

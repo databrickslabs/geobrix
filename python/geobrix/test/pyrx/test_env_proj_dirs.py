@@ -31,6 +31,9 @@ def _resolves_to(proj_data, name, owner_dir):
     return os.path.exists(entry) and os.path.samefile(entry, owner_dir / name)
 
 
+_REAL_PYPROJ_HOOK = _env._register_pyproj_search_dirs
+
+
 @pytest.fixture
 def base(monkeypatch, tmp_path):
     """A stand-in bundled PROJ data dir; overlays are built under tmp_path."""
@@ -95,6 +98,37 @@ def test_newly_registered_dir_is_added_on_a_later_call(base, tmp_path):
 def test_empty_list_is_noop(base):
     _env.configure_gdal_env(extra_proj_dirs=[])
     assert os.environ["PROJ_DATA"] == str(base)
+
+
+def test_a_replace_with_fewer_dirs_drops_the_grids_registered_before(
+    monkeypatch, base, tmp_path
+):
+    """register_proj_grids(..., replace=True) with fewer dirs, then none: PROJ_DATA, GDAL's search path and
+    pyproj's drop the grids registered before (the base is PROJ_DATA again once none is left).
+    """
+    import pyproj.datadir
+
+    osr_paths, pyproj_dir = [], {"dir": str(base)}
+    monkeypatch.setattr(
+        _env, "_set_osr_search_paths", lambda d: osr_paths.append(list(d))
+    )
+    monkeypatch.setattr(
+        _env, "_register_pyproj_search_dirs", _REAL_PYPROJ_HOOK, raising=True
+    )
+    monkeypatch.setattr(_env, "_PYPROJ_ADDED", [], raising=False)
+    monkeypatch.setattr(pyproj.datadir, "get_data_dir", lambda: pyproj_dir["dir"])
+    monkeypatch.setattr(
+        pyproj.datadir, "set_data_dir", lambda d: pyproj_dir.update(dir=d)
+    )
+    a = _mkdir_with(tmp_path / "a", "a.gsb")
+    b = _mkdir_with(tmp_path / "b", "b.gsb")
+    _env.configure_gdal_env(extra_proj_dirs=[str(a), str(b)])
+    _env.configure_gdal_env(extra_proj_dirs=[str(b)])
+    assert not os.path.exists(os.path.join(os.environ["PROJ_DATA"], "a.gsb"))
+    assert pyproj_dir["dir"].split(os.pathsep) == [str(base), str(b)]
+    _env.configure_gdal_env(extra_proj_dirs=[])
+    assert os.environ["PROJ_DATA"] == str(base) and osr_paths[-1] == [str(base)]
+    assert pyproj_dir["dir"] == str(base)
 
 
 def test_none_reads_registry(monkeypatch, base, tmp_path):

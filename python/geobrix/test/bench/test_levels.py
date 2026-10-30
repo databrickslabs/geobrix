@@ -1527,3 +1527,22 @@ def test_notebook_runs_the_levels_leg_alone_when_asked():
     assert "# (c) Lightweight spark-path" in both
     assert "# (c) Lightweight spark-path" not in only
     assert "_lv.run_mvp(" not in sources(levels_mvp="")  # off unless asked
+
+
+def test_a_failed_form_keeps_the_python_workers_cause():
+    """A Python worker's error ends with the cause, after a traceback longer than any prefix the row keeps."""
+    from databricks.labs.gbx.bench.levels import failure_text
+
+    text = (
+        "\n  An exception was thrown from the Python worker. Please see the stack trace below.\n"
+        "[PYTHON_EXCEPTION] An exception was thrown from the Python worker: Traceback (most recent call last):\n"
+        + '  File "/databricks/spark/python/worker.py", line 5393, in invoke_udf\n    fun()\n'
+        * 20
+        + "ImportError: libgdal.so.39: cannot open shared object file\n SQLSTATE: 38000"
+    )
+    got = failure_text(RuntimeError(text))
+    assert got.startswith(
+        "RuntimeError: An exception was thrown from the Python worker"
+    )
+    assert got.endswith("ImportError: libgdal.so.39: cannot open shared object file")
+    assert failure_text(ValueError("bad window")) == "ValueError: bad window"

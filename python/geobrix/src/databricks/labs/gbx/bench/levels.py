@@ -8,6 +8,7 @@ levels the compute offers and records the attribution split (``attribution.py``)
 from __future__ import annotations
 
 import dataclasses
+import re
 import time
 from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Set, Tuple
@@ -134,11 +135,25 @@ def run_mvp(
                     _row(
                         base,
                         status="error",
-                        failure=f"{type(exc).__name__}: {str(exc)[:300]}",
+                        failure=failure_text(exc),
                     )
                 )
         out += _guard_sent(rows)
     return out
+
+
+_EXC_LINE = re.compile(r"^\s*[A-Za-z_][\w.]*(Error|Exception|Exit|Interrupt)\b")
+
+
+def failure_text(exc: BaseException) -> str:
+    """A failed form's `failure_mode`: the exception class, its first line, and the cause. A Python worker's error
+    names the cause in its LAST exception line (after the worker traceback), which a plain prefix cuts off.
+    """
+    lines = [ln.strip() for ln in str(exc).splitlines() if ln.strip()]
+    head = lines[0][:200] if lines else ""
+    cause = next((ln for ln in reversed(lines) if _EXC_LINE.match(ln)), "")
+    out = f"{type(exc).__name__}: {head}"
+    return f"{out} ... {cause[:500]}" if cause and cause != head else out
 
 
 @dataclass

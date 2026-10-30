@@ -106,11 +106,23 @@ jobs:
         if: matrix.shard.scripts_ci
         run: python -m pytest scripts/ci -v
 
+  # The x86_64 native build the heavy build's JVMs load their GDAL from (the JAR's GDAL Java classes refuse any
+  # other JNI). Cached on the native build's inputs: a hit takes seconds, a miss builds (about 20-40 min), in
+  # parallel with the pyrx shards. See .github/workflows/build-gdal-native.yml for the cache rules.
+  native-payload:
+    uses: ./.github/workflows/build-gdal-native.yml
+    with:
+      cache: true
+    permissions:
+      contents: read
+      # Required by .github/actions/jfrog-auth (on a cache miss): GitHub OIDC token exchange for pip and crates via JFrog.
+      id-token: write
+
   build:
     # Heavy: full Scala test + Python test+coverage + GDAL native install (mvn -T 1C, ~10–15 min). Standard runner is too small.
     # Gated on the lightweight pyrx job so a pyrx failure fails the run fast,
     # before spending ~10–15 min on the Scala/native build.
-    needs: pyrx
+    needs: [pyrx, native-payload]
     runs-on:
       group: larger-runners
       labels: larger
@@ -142,12 +154,17 @@ jobs:
         with:
           path: .cache/apt-archives
           key: apt-${{ runner.os }}-${{ hashFiles('.github/actions/scala_build/action.yml', '.github/actions/python_build/action.yml') }}
+      # The native-payload job's build (from the cache, else this run's artifact), laid out for the JVMs.
+      - name: Fetch the x86_64 native payload
+        id: native
+        uses: ./.github/actions/native_payload
       - name: build scala
         uses: ./.github/actions/scala_build
         with:
           # Disable scoverage in main build to keep CI ~10–15 min (full Scala coverage is ~30+ min). Run coverage locally via the gbx:coverage:* commands.
           enable_coverage: "false"
           fail_on_scalastyle: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' }}
+          native_root: ${{ steps.native.outputs.root }}
       - name: build python
         uses: ./.github/actions/python_build
         with:

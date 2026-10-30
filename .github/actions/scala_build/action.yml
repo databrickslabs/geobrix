@@ -14,6 +14,11 @@ inputs:
   suite_pattern:
     description: 'Optional -Dsuites= value (e.g. com.databricks.labs.gbx.rasterx.*). If empty, uses com.databricks.labs.gbx.*'
     default: ''
+  native_root:
+    description: >-
+      The native payload the JVMs load GDAL from: the root output of .github/actions/native_payload (required; the
+      JAR's GDAL Java classes refuse any other JNI)
+    required: true
 runs:
   using: "composite"
   steps:
@@ -123,10 +128,22 @@ runs:
             echo "Matrix GDAL version: ${{ matrix.gdal }}"
             GDAL_VERSION_TO_INSTALL="${INSTALLED_GDAL_VERSION:-${{ matrix.gdal }}}"
             pip install --no-build-isolation --no-binary :all: gdal[numpy]==${GDAL_VERSION_TO_INSTALL}
-            # - add the so files
-            sudo cp scripts/gdal311/libgdalalljni.so /usr/lib/libgdalalljni.so
             # - save apt archives for next run (workflow caches .cache/apt-archives)
             sudo cp -n /var/cache/apt/archives/*.deb .cache/apt-archives/ 2>/dev/null || true
+        # The JVMs (Maven's test JVMs here, python_build's Spark JVMs after it in the same job) load GDAL's JNI from
+        # /usr/lib/libgdalalljni.so: GDAL's Java classes load it by name from the library path, and it is
+        # GDALManager's fallback. The JAR's GDAL classes are the native build's and refuse another GDAL's JNI (the
+        # apt GDAL above stays for the Python bindings only), so the link goes to the native payload's JNI, with the
+        # script the dev container runs on every start; GDALManager then takes the payload's GDAL and PROJ data.
+        - name: Link the JVM's GDAL to the native payload's JNI
+          shell: bash
+          env:
+            GBX_NATIVE_ROOT: ${{ inputs.native_root }}
+          run: |
+            set -euo pipefail
+            [ -n "$GBX_NATIVE_ROOT" ] || { echo "::error::scala_build needs native_root (the root output of .github/actions/native_payload)"; exit 1; }
+            sudo GBX_NATIVE_ROOT="$GBX_NATIVE_ROOT" GBX_JNI_REQUIRE=1 bash scripts/docker/extras/docker_native_jni.sh
+            echo "the JVMs' GDAL JNI: $(readlink -f /usr/lib/libgdalalljni.so)"
         # With coverage: 3-step flow. When suite_pattern is set (e.g. parallel-by-package CI), skip report-only and package (caller will merge and upload).
         - name: Test and build the scala JAR - skip tests is false, coverage enabled
           if: inputs.skip_tests == 'false' && inputs.enable_coverage == 'true'
@@ -171,10 +188,9 @@ runs:
           if: inputs.suite_pattern == ''
           shell: bash
           run: |
-            # add .jar + .so
+            # the JAR (its GDAL JNI is the native payload's, which ships in the env wheels, not here)
             mkdir -p staging/build-artifacts
             cp target/geobrix*.jar staging/build-artifacts
-            cp scripts/gdal311/libgdalalljni.so staging/build-artifacts
         - name: Copy user artifacts local staging
           if: inputs.suite_pattern == ''
           shell: bash

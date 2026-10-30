@@ -6,7 +6,19 @@ on:
 permissions:
   contents: read
 jobs:
+  # The x86_64 native build the JVMs below load their GDAL from (the JAR's GDAL Java classes refuse any other JNI);
+  # cached, see .github/workflows/build-gdal-native.yml.
+  native-payload:
+    uses: ./.github/workflows/build-gdal-native.yml
+    with:
+      cache: true
+    permissions:
+      contents: read
+      # Required by .github/actions/jfrog-auth (on a cache miss): GitHub OIDC token exchange for pip and crates via JFrog.
+      id-token: write
+
   build:
+    needs: native-payload
     # Heavy: full Scala test suite + scoverage report (mvn -T 1C, ~10–15 min). Standard runner is too small.
     runs-on:
       group: larger-runners
@@ -39,9 +51,13 @@ jobs:
         with:
           path: .cache/apt-archives
           key: apt-${{ runner.os }}-${{ hashFiles('.github/actions/scala_build/action.yml', '.github/actions/python_build/action.yml') }}
+      - name: Fetch the x86_64 native payload
+        id: native
+        uses: ./.github/actions/native_payload
       - name: build scala with tests
         uses: ./.github/actions/scala_build
         with:
+          native_root: ${{ steps.native.outputs.root }}
           enable_coverage: "true"
       - name: upload artifacts
         uses: ./.github/actions/upload_artifacts

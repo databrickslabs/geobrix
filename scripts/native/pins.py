@@ -99,7 +99,12 @@ def load_all(root: Path) -> dict:
 def canonical(path: Path) -> str:
     """The KEY=VALUE lines of a pin file, stripped, in file order: what the image build copies and its tag hashes,
     so a comment or blank-line edit changes neither."""
-    lines = [ln.strip() for ln in path.read_text().splitlines()]
+    return canonical_text(path.read_text())
+
+
+def canonical_text(text: str) -> str:
+    """canonical() of a pin file's text (native_inputs.py hashes a commit's pins.conf with it)."""
+    lines = [ln.strip() for ln in text.splitlines()]
     return "".join(f"{ln}\n" for ln in lines if ln and not ln.startswith("#"))
 
 

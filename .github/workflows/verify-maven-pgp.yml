@@ -19,7 +19,9 @@ name: Verify Maven dependency PGP signatures
 
 on:
   push:
-    branches: [main]
+    # The release branch too: the GDAL Java classes' install (java_jar.py) and their noSig keysmap entry changed there
+    # first, and its first push runs this gate on them.
+    branches: [main, streamline/0.6.0]
     paths:
       - 'pom.xml'
       - '.maven-keys.list'

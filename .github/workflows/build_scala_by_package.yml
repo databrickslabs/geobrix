@@ -11,8 +11,20 @@ permissions:
   contents: read
 
 jobs:
+  # The x86_64 native build the JVMs below load their GDAL from (the JAR's GDAL Java classes refuse any other JNI);
+  # cached, see .github/workflows/build-gdal-native.yml.
+  native-payload:
+    uses: ./.github/workflows/build-gdal-native.yml
+    with:
+      cache: true
+    permissions:
+      contents: read
+      # Required by .github/actions/jfrog-auth (on a cache miss): GitHub OIDC token exchange for pip and crates via JFrog.
+      id-token: write
+
   test-package:
     name: Test ${{ matrix.package }}
+    needs: native-payload
     # Heavy per matrix shard: mvn install + Scala tests for one package (rasterx/gridx/vectorx/ds/expressions/util). 6 shards in parallel.
     runs-on:
       group: larger-runners
@@ -50,9 +62,14 @@ jobs:
           path: .cache/apt-archives
           key: apt-${{ runner.os }}-${{ hashFiles('.github/actions/scala_build/action.yml') }}
 
+      - name: Fetch the x86_64 native payload
+        id: native
+        uses: ./.github/actions/native_payload
+
       - name: Run Scala tests (one package)
         uses: ./.github/actions/scala_build
         with:
+          native_root: ${{ steps.native.outputs.root }}
           skip_tests: "false"
           enable_coverage: "false"
           fail_on_scalastyle: "false"

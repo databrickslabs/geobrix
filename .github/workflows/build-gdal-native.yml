@@ -1,15 +1,35 @@
 name: Build GDAL native (x86_64)
 
-# The x86_64 build of the native stack in the pinned manylinux_2_28 container (scripts/native/build.Dockerfile),
-# for when the emulated build on an Apple Silicon machine is too slow or fails. Manual trigger only:
-#   gh workflow run build-gdal-native.yml --ref <branch> -f target=<toolchain|stage-native|bindings>
-#   gh run download <run id> -D build/native/out/x86_64/
-# It uses public package indexes and crate registries (the hashed locks hold against them), no repository secrets,
-# and uploads what the build wrote to build/native/out/x86_64/.
+# The x86_64 build of the native stack in the pinned manylinux_2_28 container (scripts/native/build.Dockerfile), with
+# the command the developers use (gbx:build:native). Two ways in:
+#
+# 1. Called by the CI workflows (workflow_call, `cache: true`): the build CI's JVMs load their GDAL from. The JAR's GDAL
+#    Java classes are the native build's (pom.xml gdal.java.version) and GDALManager refuses any other JNI, so a job
+#    that runs a GeoBrix JVM needs the job that calls this one, then .github/actions/native_payload (which reads the
+#    build) and .github/actions/scala_build (which links the JVM's JNI to it). Cached on the hash of the native
+#    build's inputs (scripts/native/native_inputs.py hash --set build: pins.conf's KEY=VALUE lines, build.Dockerfile,
+#    every recipe it copies, rust-toolchain.toml): a hit builds nothing; a miss builds stage-native then bindings
+#    (verified as gbx:build:native verifies them; about 20-40 min on this runner). Only a push to main or to the
+#    release branch saves the cache: GitHub scopes a cache to its branch (a branch reads its own and the default
+#    branch's, a pull request also its base branch's), the repository's caches share 10 GB, and an entry unused for 7
+#    days is evicted. A run that built uploads the build as this run's artifact native-out-x86_64 (kept 1 day), which
+#    its JVM jobs read when the cache was not saved. The pinned source tarballs are cached too (keyed on pins.conf,
+#    falling back to the latest earlier entry: prefetch.sh keeps every file whose sha256 still matches). Nothing is
+#    published.
+# 2. By hand (workflow_dispatch), one target, for when the emulated build on an Apple Silicon machine is too slow or
+#    fails:
+#      gh workflow run build-gdal-native.yml --ref <branch> -f target=<toolchain|stage-native|bindings>
+#      gh run download <run id> -D build/native/out/x86_64/
+#    It uploads what the build wrote to build/native/out/x86_64/.
+#
+# It uses public package indexes and crate registries (the hashed locks hold against them), no repository secrets.
 # Runs on the Databricks-hardened runner group (Labs lockdown policy), like the other workflows. That group does not
-# reach index.crates.io, and the toolchain and bindings targets vendor their Rust crates on the runner, so the crates
-# come from the JFrog mirror through the OIDC login the other workflows use (jfrog-auth, then jfrog-cargo). The mirror
-# serves a crate version only 7 days after its release.
+# reach pypi.org or index.crates.io, so pip and the crates go through the JFrog mirror with the OIDC login the other
+# workflows use (jfrog-pip-bootstrap and jfrog-auth, then jfrog-cargo: the toolchain and bindings targets vendor their
+# Rust crates on the runner). The mirror serves a crate version only 7 days after its release. The source tarballs
+# come from their upstream hosts (pins.conf's URLs), checksum-checked; the image build pulls the pinned manylinux
+# image and installs the JDK (dnf) and the Rust toolchain (rustup).
+# This workflow does not interpolate any github.event.* values into run: blocks.
 on:
   workflow_dispatch:
     inputs:
@@ -22,13 +42,19 @@ on:
           - toolchain
           - stage-native
           - bindings
+  workflow_call:
+    inputs:
+      cache:
+        description: Build stage-native and bindings, cached (the CI form)
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
 jobs:
   build-x86_64:
-    name: Build ${{ inputs.target }} (x86_64)
+    name: Build ${{ inputs.target || 'stage-native and bindings, cached' }} (x86_64)
     runs-on:
       group: databrickslabs-protected-runner-group
       labels: linux-ubuntu-latest
@@ -37,32 +63,125 @@ jobs:
     environment: runtime
     permissions:
       contents: read
-      # Required by .github/actions/jfrog-auth: GitHub OIDC token exchange for crates via JFrog.
+      # Required by .github/actions/jfrog-auth: GitHub OIDC token exchange for pip and crates via JFrog.
       id-token: write
     env:
-      TARGET: ${{ inputs.target }}
+      TARGETS: ${{ inputs.target || 'stage-native bindings' }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           persist-credentials: false
 
-      - name: Authenticate for JFrog (crates via OIDC)
+      # The cache key, and the key of the pinned sources (pins.conf's KEY=VALUE lines only).
+      - name: Hash the native build's inputs
+        id: key
+        run: |
+          set -euo pipefail
+          echo "hash=$(python3 scripts/native/native_inputs.py hash --set build)" >> "$GITHUB_OUTPUT"
+          echo "pins=$(python3 scripts/native/pins.py canonical | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+      # Whether this build is cached (lookup only: this job needs no copy of it).
+      - name: Look up the cached build
+        id: cache
+        if: inputs.cache
+        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
+        with:
+          path: |
+            build/native/out/x86_64/stage-native
+            build/native/out/x86_64/bindings
+            !build/native/out/x86_64/**/*-debuginfo.tar.xz
+          key: native-out-x86_64-${{ steps.key.outputs.hash }}
+          lookup-only: true
+
+      - name: Restore the pinned sources
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
+        with:
+          path: |
+            build/native/src
+            build/native/sdists
+            build/native/bin
+          key: native-sources-${{ steps.key.outputs.pins }}
+          restore-keys: native-sources-
+
+      # prefetch.sh fetches the hashed wheelhouses with the runner's pip (`python3 -m pip download`): route it through
+      # JFrog first, as the jobs that run setup-python do.
+      - name: Pre-bootstrap pip for JFrog
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/jfrog-pip-bootstrap
+
+      - name: Authenticate for JFrog (pip and crates via OIDC)
         id: jfrog
+        if: steps.cache.outputs.cache-hit != 'true'
         uses: ./.github/actions/jfrog-auth
 
       # Points GBX_HOST_CARGO_HOME (the CARGO_HOME of install-host-rust.sh and cargo-vendor.sh) at a cargo config that
       # replaces crates-io with the JFrog registry.
       - name: Configure Cargo for JFrog
+        if: steps.cache.outputs.cache-hit != 'true'
         uses: ./.github/actions/jfrog-cargo
         with:
           jfrog-access-token: ${{ steps.jfrog.outputs.jfrog-access-token }}
 
+      # Each target as gbx:build:native builds and verifies it (stage-native: verify-native.sh rows 1-18; bindings:
+      # test-bindings.sh, each binding's own suite). The command's last line is NATIVE_VERIFIED, and it exits 1 on a
+      # failed check. The images take about 12 GB of disk (toolchain, stage-native and bindings share layers) beside
+      # the build context: the runner image's unused SDKs are removed first where it has them.
       - name: Build and verify
-        run: bash scripts/commands/gbx-build-native.sh --arch x86_64 --target "$TARGET" --log "native-$TARGET-x86_64.log"
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          df -h / | tail -n 1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost || true
+          df -h / | tail -n 1
+          for t in $TARGETS; do
+            start=$(date +%s)
+            bash scripts/commands/gbx-build-native.sh --arch x86_64 --target "$t" --log "native-$t-x86_64.log"
+            echo "::notice::native $t (x86_64): $(( $(date +%s) - start )) s"
+          done
+          du -sh build/native/out/x86_64/* build/native/src build/native/sdists build/native/bin || true
+
+      - name: Save the pinned sources
+        if: >-
+          inputs.cache && steps.cache.outputs.cache-hit != 'true' && github.event_name == 'push'
+          && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/streamline/0.6.0')
+        uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
+        with:
+          path: |
+            build/native/src
+            build/native/sdists
+            build/native/bin
+          key: native-sources-${{ steps.key.outputs.pins }}
+
+      - name: Save the build
+        if: >-
+          inputs.cache && steps.cache.outputs.cache-hit != 'true' && github.event_name == 'push'
+          && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/streamline/0.6.0')
+        uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
+        with:
+          path: |
+            build/native/out/x86_64/stage-native
+            build/native/out/x86_64/bindings
+            !build/native/out/x86_64/**/*-debuginfo.tar.xz
+          key: native-out-x86_64-${{ steps.key.outputs.hash }}
+
+      # For this run's JVM jobs (.github/actions/native_payload reads it when it finds no cache): on a branch or pull
+      # request that does not save the cache, they would otherwise each build again.
+      - name: Hand the build to this run's JVM jobs
+        if: inputs.cache && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        with:
+          name: native-out-x86_64
+          path: |
+            build/native/out/x86_64/stage-native
+            build/native/out/x86_64/bindings
+            !build/native/out/x86_64/**/*-debuginfo.tar.xz
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Upload the build output
-        if: always()
+        if: always() && !inputs.cache
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: native-${{ inputs.target }}-x86_64

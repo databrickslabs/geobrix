@@ -83,6 +83,35 @@ def test_without_a_payload_the_link_is_left_alone_and_the_fix_printed(tmp_path):
     assert "NOT LINKED" in res.stdout and "gbx-build-wheel.sh --env 6" in res.stdout
 
 
+@pytest.mark.parametrize("built", [True, False])
+def test_ci_links_the_payload_gbx_native_root_names_or_fails(tmp_path, built):
+    """CI's form (scala_build): GBX_NATIVE_ROOT names the payload, and GBX_JNI_REQUIRE=1 makes a missing one an error
+    (a JVM left on GDAL 3.11's JNI would abort every GDAL suite), not the dev container's printed fix."""
+    payload = tmp_path / "jvm-payload"
+    jni = payload / "_native" / "x86_64" / "lib" / "libgdalalljni.so"
+    if built:
+        jni.parent.mkdir(parents=True)
+        jni.write_bytes(b"\x7fELF ci payload jni")
+    link = tmp_path / "libgdalalljni.so"
+    env = dict(
+        os.environ,
+        GBX_CONTAINER_ROOT=str(tmp_path / "no-checkout"),
+        GBX_NATIVE_ROOT=str(payload),
+        GBX_JNI_REQUIRE="1",
+        GBX_JNI_LINK=str(link),
+        GBX_JNI_ARCH="x86_64",
+    )
+
+    res = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
+
+    if built:
+        assert res.returncode == 0, res.stdout + res.stderr
+        assert os.readlink(link) == str(jni)
+    else:
+        assert res.returncode == 1
+        assert not link.is_symlink() and str(jni) in res.stdout
+
+
 def _steps(sb):
     """The container steps the command ran, in order: 'maven' and 'jni'."""
     out = []

@@ -1511,6 +1511,54 @@ def test_the_serverless_runner_installs_an_env_wheel_with_its_own_extras(monkeyp
     assert runner._split_deps("rich, overturemaps>=1.0.2,<2") == ["rich", "overturemaps>=1.0.2,<2"]
 
 
+@pytest.mark.parametrize(
+    "wheel, extra, want",
+    [
+        # the PEP 685 spellings of an extra name (case, '-', '_' and '.' are one separator) reach the same refusal
+        (ENV6, "Light-Env6", "needs no light extra"),
+        (ENV6.replace("env6", "env5"), "models-gpu-env5", "a 0.5.x GPU extra, dropped in 0.6.0"),
+        (ENV6.replace("env6", "env5"), "GPU.ENV5.ALL", "a 0.5.x GPU extra, dropped in 0.6.0"),
+        ("/Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl", "models-gpu-env5", "a 0.5.x GPU extra, dropped in 0.6.0"),
+        ("/Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl", "light-dbr19", "a 0.5.x name; it requires geobrix=="),
+        ("/Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl", "Light.Env6", "it requires geobrix==0.6.0+env6"),
+    ],
+)  # fmt: skip
+def test_the_serverless_runner_normalizes_extra_names_before_it_refuses_one(monkeypatch, wheel, extra, want):
+    runner = _launcher("run_notebooks_serverless", monkeypatch)
+    with pytest.raises(SystemExit, match=re.escape(want)):
+        runner._build_dep_list(wheel, [extra], [], "5" if "env5" in wheel or "gpu" in extra.lower() else "6")
+
+
+def test_the_serverless_runner_finds_an_extra_under_any_spelling(monkeypatch):
+    runner = _launcher("run_notebooks_serverless", monkeypatch)
+    assert runner._build_dep_list(ENV6, ["STAC"], [], "6") == runner._build_dep_list(ENV6, ["stac"], [], "6")
+    plain = "/Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl"
+    assert runner._build_dep_list(plain, ["Zarr-Env6"], [], "6") == runner._build_dep_list(plain, ["zarr_env6"], [], "6")
+    assert runner._build_dep_list(plain, ["zarr-env6"], [], "6")[1:]  # it has packages: not "not found"
+
+
+@pytest.mark.parametrize("wheel", [ENV6, "/Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl"])
+def test_an_empty_extras_option_means_the_wheel_alone(monkeypatch, wheel):
+    """--extras '' (the CSV is empty) must reach the job environment as the wheel and nothing else."""
+    runner = _launcher("run_notebooks_serverless", monkeypatch)
+    reached = {}
+
+    def stop(**kw):
+        raise RuntimeError("workspace client reached")
+
+    sdk = type(sys)("databricks.sdk")
+    sdk.WorkspaceClient = stop
+    monkeypatch.setitem(sys.modules, "databricks.sdk", sdk)
+    real = runner._build_dep_list
+    monkeypatch.setattr(runner, "_build_dep_list", lambda *a: reached.setdefault("deps", real(*a)))
+    nb = REPO_ROOT / "examples" / "tests" / "probe_arrow_empty_chunks.ipynb"
+    monkeypatch.setattr(sys, "argv", ["run_notebooks_serverless.py", "--notebook", str(nb), "--wheel", wheel,
+                                      "--extras", "", "--env-version", "6"])  # fmt: skip
+    with pytest.raises(RuntimeError, match="workspace client reached"):  # no SystemExit from the option parsing
+        runner.main()
+    assert reached["deps"] == [wheel]
+
+
 def test_the_serverless_runner_submits_one_jar_task_with_the_jar_as_a_java_dependency(monkeypatch):
     from types import SimpleNamespace
 

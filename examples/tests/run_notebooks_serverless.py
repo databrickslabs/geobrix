@@ -94,11 +94,18 @@ _GPU_EXTRA_DEPS = {
 _GPU_EXTRA_DEPS["gpu_env5_all"] = ",".join(_GPU_EXTRA_DEPS.values())
 
 
+def _canon_extra(name: str) -> str:
+    """An extra name as a comparison key: PEP 685 treats case and any run of '-', '_' and '.' as one separator, so
+    ``models-gpu-env5`` and ``Models_GPU_Env5`` are the extra ``models_gpu_env5`` (the repo spells its names with '_')."""
+    return re.sub(r"[-_.]+", "_", name).lower()
+
+
 def _refuse_gpu_extra(extra: str) -> None:
-    if extra in _GPU_EXTRA_DEPS:
+    key = _canon_extra(extra)
+    if key in _GPU_EXTRA_DEPS:
         raise SystemExit(
             f"--extras {extra}: a 0.5.x GPU extra, dropped in 0.6.0. Fix: --wheel <the geobrix-<version>+env5 wheel> "
-            f"--env-version 5 --extra-deps '{_GPU_EXTRA_DEPS[extra]}'"
+            f"--env-version 5 --extra-deps '{_GPU_EXTRA_DEPS[key]}'"
         )
 
 
@@ -111,20 +118,21 @@ def _env_extras_deps(env: int, extras: list[str]) -> list[str]:
     """
     envdir = _ENVS_PATH / f"env{env}"
     have = sorted(p.stem.removeprefix("extra-") for p in envdir.glob("extra-*.txt"))
+    by_key = {_canon_extra(h): h for h in have}
     out: list[str] = []
     for extra in extras:
         _refuse_gpu_extra(extra)
-        if extra.startswith("light"):
+        if _canon_extra(extra).startswith("light"):
             raise SystemExit(
                 f"--extras {extra}: the env{env} wheel needs no light extra (it is the light install); "
                 "drop it. Fix: pass only feature extras, e.g. --extras stac,vizx"
             )
-        if extra not in have:
+        if _canon_extra(extra) not in by_key:
             raise SystemExit(
                 f"--extras {extra}: the env{env} wheel has no [{extra}] (its extras: {', '.join(have)}). "
                 "Fix: pass its packages with --extra-deps (e.g. --extra-deps 'overturemaps>=1.0.2,<2')"
             )
-        for line in (envdir / f"extra-{extra}.txt").read_text().splitlines():
+        for line in (envdir / f"extra-{by_key[_canon_extra(extra)]}.txt").read_text().splitlines():
             req = line.split("#", 1)[0].strip()
             if req and req not in out:
                 out.append(req)
@@ -155,20 +163,22 @@ def _load_extras_deps(extras: list[str]) -> list[str]:
     with open(_PYPROJECT_PATH, "rb") as fh:
         data = tomllib.load(fh)
 
-    opt_deps: dict[str, list[str]] = (
-        data.get("project", {}).get("optional-dependencies", {})
-    )
+    opt_deps: dict[str, list[str]] = {
+        _canon_extra(k): v
+        for k, v in data.get("project", {}).get("optional-dependencies", {}).items()
+    }
 
     seen_deps: set[str] = set()
     seen_extras: set[str] = set()
     result: list[str] = []
 
     def _visit(extra: str) -> None:
-        if extra in seen_extras:
+        key = _canon_extra(extra)
+        if key in seen_extras:
             return
-        seen_extras.add(extra)
+        seen_extras.add(key)
         _refuse_gpu_extra(extra)
-        deps = opt_deps.get(extra, [])
+        deps = opt_deps.get(key, [])
         if deps and all(d.strip().startswith("geobrix==") for d in deps):
             raise SystemExit(  # a tripwire: it names the env wheel to install instead
                 f"--extras {extra}: a 0.5.x name; it requires {deps[0]}. Fix: --wheel <that env wheel> with only "

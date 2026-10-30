@@ -845,6 +845,22 @@ def test_a_ledger_whose_first_log_version_was_retired_is_still_a_ledger(
     assert pauses == []
 
 
+def test_a_claim_on_a_root_with_a_ledger_asks_delta_once(spark_delta, tmp_path):
+    """The state of the ledger is asked once, not once to found it and again to create it."""
+    root = tmp_path / "ov"
+    assert _register.claim_root(spark_delta, str(root), "c.s.t", "overlay") is True
+    asked = []
+
+    class Counting:
+        def sql(self, text):
+            if text.startswith("DESCRIBE DETAIL"):
+                asked.append(text)
+            return spark_delta.sql(text)
+
+    assert _register.claim_root(Counting(), str(root), "c.s.t", "overlay") is False
+    assert len(asked) == 1
+
+
 def test_a_founders_directory_with_data_files_and_no_log_is_founding(
     spark_delta, tmp_path
 ):

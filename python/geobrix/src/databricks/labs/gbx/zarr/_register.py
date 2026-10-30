@@ -814,6 +814,30 @@ def _take_back(spark, ledger: str, write_id: str) -> None:
         _LOG.warning("could not take claim %s back out of %s: %s", write_id, ledger, e)
 
 
+def _make_ledger(
+    spark, root: str, ledger: str, claim_id: str, body: dict, table: str
+) -> bool:
+    """Have a ledger at ``root``: ``True`` when founding it landed this call's claim. A root
+    whose ledger Delta already describes needs neither founding nor creating, so it is asked
+    about once."""
+    if _ledger_state(spark, root) == "delta":
+        return False
+    if _found_ledger(spark, root, claim_id, body, table):
+        return True
+    try:
+        _create_ledger(spark, ledger, root)
+    except _StuckRoot as stuck:
+        # a founding that failed after writing its files (this call's own, say) leaves them
+        # without a table: once they are all older than the wait, they are cleared and the
+        # founding is tried once more (the state is asked again first)
+        if not _clear_dead_founder(spark, root, stuck.since):
+            raise
+        if _found_ledger(spark, root, claim_id, body, table):
+            return True
+        _create_ledger(spark, ledger, root)
+    return False
+
+
 def _claim_ledger(spark, root: str, table: str, kind: str) -> bool:
     """Make ``table`` the owner of ``root`` in its ledger; ``True`` when this call did,
     ``False`` when the ledger already names this table and kind. Raises
@@ -831,19 +855,8 @@ def _claim_ledger(spark, root: str, table: str, kind: str) -> bool:
     ledger = _ledger_table(root)
     claim_id = uuid.uuid4().hex
     body = {"table": table, "kind": kind, "format": FORMAT_VERSION}
-    if _found_ledger(spark, root, claim_id, body, table):
+    if _make_ledger(spark, root, ledger, claim_id, body, table):
         return True
-    try:
-        _create_ledger(spark, ledger, root)
-    except _StuckRoot as stuck:
-        # a founding that failed after writing its files (this call's own, say) leaves them
-        # without a table: once they are all older than the wait, they are cleared and the
-        # founding is tried once more (the state is asked again first)
-        if not _clear_dead_founder(spark, root, stuck.since):
-            raise
-        if _found_ledger(spark, root, claim_id, body, table):
-            return True
-        _create_ledger(spark, ledger, root)
     row = {
         "kind": "lock",
         "key": _LEDGER_KEY,

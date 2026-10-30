@@ -11,13 +11,15 @@ FROM ${BASE_IMAGE} AS release
 # x86_64 or aarch64: the payload's architecture directory
 ARG GBX_ARCH
 ARG GEOBRIX_VERSION
-# The wheels are bind-mounted for the install, not copied, so no layer of the image holds them.
-RUN --mount=type=bind,source=geobrix-wheel,target=/tmp/geobrix-wheel \
+# The wheels are bind-mounted for the install, not copied, so no layer of the image holds them. Every RUN step runs
+# with no network, and pip installs binary wheels only (nothing is built here).
+RUN --network=none \
+    --mount=type=bind,source=geobrix-wheel,target=/tmp/geobrix-wheel \
     --mount=type=bind,source=wheelhouse,target=/tmp/wh \
     --mount=type=bind,source=dcs.lock,target=/tmp/dcs.lock \
     py=/databricks/python3/bin/python \
- && $py -m pip install -q --disable-pip-version-check --no-cache-dir --no-index --no-deps /tmp/geobrix-wheel/geobrix-*.whl \
- && $py -m pip install -q --disable-pip-version-check --no-cache-dir --no-index --find-links /tmp/wh --require-hashes -r /tmp/dcs.lock \
+ && $py -m pip install -q --disable-pip-version-check --no-cache-dir --no-index --only-binary :all: --no-deps /tmp/geobrix-wheel/geobrix-*.whl \
+ && $py -m pip install -q --disable-pip-version-check --no-cache-dir --no-index --only-binary :all: --find-links /tmp/wh --require-hashes -r /tmp/dcs.lock \
  && $py -m pip check
 # Point the system at the payload, so the JVM's legacy path, the GDAL tools that load by name and the netCDF-C
 # plugin search all find the one GDAL stack:
@@ -27,7 +29,7 @@ RUN --mount=type=bind,source=geobrix-wheel,target=/tmp/geobrix-wheel \
 # - /usr/local/hdf5/lib/plugin, HDF5's and netCDF-C's default plugin directory, is a LINK to the payload's filter
 #   plugins (a copy would lose their RUNPATH, $ORIGIN/../lib). The JVM cannot register a plugin directory itself,
 #   so this is what lets the heavy tier read zstd, blosc and bzip2 netCDF-4 with no spark_env_vars setting.
-RUN set -e; \
+RUN --network=none set -e; \
     gbx="$(/databricks/python3/bin/python -c 'import os, databricks.labs.gbx._native as n; print(os.path.dirname(os.path.dirname(n.__file__)))')"; \
     native="$gbx/_native/${GBX_ARCH}"; \
     test -f "$native/lib/libgdalalljni.so"; test -d "$native/hdf5-plugins"; \

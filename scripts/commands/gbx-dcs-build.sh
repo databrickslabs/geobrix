@@ -124,6 +124,9 @@ if [ "$RELOCK" -eq 1 ]; then
 fi
 [ -f "$ENV_DIR/dcs-$MARCH.lock" ] && [ -f "$ENV_DIR/dcs-base-$MARCH.txt" ] \
     || die "PRECONDITION MISSING: python/geobrix/envs/env6/dcs-$MARCH.lock or dcs-base-$MARCH.txt (gbx:dcs:build --relock); gbx:dcs:build not run"
+# The base image is the digest the lock was made from (the tag is mutable): the build, the pull and the history
+# check all use it, so a base that moved under its tag cannot get into the image unnoticed.
+BASE_IMAGE=$(python3 "$DCS_DIR/dcs_lock.py" --root "$PROJECT_ROOT" base-image "$MARCH") || die "PRECONDITION MISSING: the base list pins no image digest (gbx:dcs:build --relock); gbx:dcs:build not run"
 cp "$ENV_DIR/dcs-$MARCH.lock" "$CTX/dcs.lock" || die "PRECONDITION MISSING: could not stage the lock; gbx:dcs:build not run"
 python3 "$DCS_DIR/dcs_lock.py" --root "$PROJECT_ROOT" wheelhouse "$MARCH" "$CTX/wheelhouse" || die "WHEELHOUSE FAILED: the locked wheels were not staged for $MARCH; gbx:dcs:build not run"
 RASTERIO=$(python3 "$DCS_DIR/dcs_lock.py" --root "$PROJECT_ROOT" rasterio-pin) \

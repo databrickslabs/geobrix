@@ -22,6 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 TEST_REPO = (
     "gbx-test/none"  # conftest.py runs every command with GBX_DCS_REPO set to this
 )
+PINNED = "sha256:" + "1" * 64  # conftest.DcsCommand.lock writes this digest into the base list
 RC_TAG = f"{TEST_REPO}:0.0.2-env6-arm-rc"
 INDEX = "https://ci-user@idx.internal:8443/simple"
 INDEX_HOST = "idx.internal"
@@ -137,7 +138,7 @@ def test_relock_regenerates_the_lock_before_anything_is_built(dcs_build):
     res = dcs_build.run("--relock")
     assert res.returncode == 1
     assert "RELOCK FAILED" in res.output and "build" not in dcs_build.commands()
-    assert dcs_build.commands()[:2] == ["info", "run"]  # info, then the base image's package list
+    assert dcs_build.commands()[:2] == ["info", "image"]  # info, then the base image digest (not in the fake store)
 
 
 # --- an option without its value is a usage error ------------------------------------
@@ -189,7 +190,7 @@ def test_the_wheelhouse_has_the_needed_wheels_and_our_rasterio(dcs_build, tmp_pa
     assert "linux/arm64" in build
     args = " ".join(build)
     assert "GBX_ARCH=aarch64" in args and "GEOBRIX_VERSION=0.0.2" in args
-    assert "BASE_IMAGE=databricksruntime/environment:v6-standard-arm" in args
+    assert f"BASE_IMAGE=databricksruntime/environment@{PINNED}" in args  # the digest, not the mutable tag
 
 
 def test_the_amd64_build_uses_the_x86_base_and_lock(dcs_build):
@@ -201,7 +202,7 @@ def test_the_amd64_build_uses_the_x86_base_and_lock(dcs_build):
     assert f"IMAGE={TEST_REPO}:0.0.2-env6-x86-rc" in res.output
     build = next(c for c in dcs_build.calls if c[0] == "build")
     assert "GBX_ARCH=x86_64" in " ".join(build)
-    assert "BASE_IMAGE=databricksruntime/environment:v6-standard" in " ".join(build)
+    assert f"BASE_IMAGE=databricksruntime/environment@{PINNED}" in " ".join(build)
 
 
 # --- the -rc tag comes after every verify step -----------------------------------------
@@ -257,6 +258,26 @@ def test_the_oracle_runs_offline_with_the_lock_mounted_read_only(dcs_build):
     # GeoBrix's own rasterio build is what the image must carry (the pin file's version and revision)
     assert oracle[oracle.index("-e") + 1] == "GBX_RASTERIO=1.5.2+gbx1"
     assert oracle[-1] == "/mnt/dcs/verify_image.py"
+
+
+def test_the_base_image_is_used_and_pulled_by_digest(dcs_build):
+    res = _release_build(dcs_build)
+    assert res.returncode == 0, res.output
+    ref = f"databricksruntime/environment@{PINNED}"
+    pull = next(c for c in dcs_build.calls if c[0] == "pull")
+    assert pull[-1] == ref
+    history = [c for c in dcs_build.calls if c[0] == "history"]
+    assert any(c[-1] == ref for c in history)  # the base's history is read from the pinned image too
+
+
+def test_a_base_list_without_a_digest_pin_is_refused_before_a_build(dcs_build):
+    dcs_build.env_wheel("0.0.2")
+    dcs_build.lock()
+    base = dcs_build.root / "python/geobrix/envs/env6/dcs-base-aarch64.txt"
+    base.write_text("".join(ln + "\n" for ln in base.read_text().splitlines()[1:]))
+    res = dcs_build.run()
+    assert res.returncode == 1 and "digest" in res.output and "--relock" in res.output
+    assert "build" not in dcs_build.commands()
 
 
 def test_the_base_image_is_pulled_before_it_is_read(dcs_build):

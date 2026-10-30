@@ -62,6 +62,13 @@ def wheel_tags(dist):
     return [ln.split(":", 1)[1].strip() for ln in (dist.read_text("WHEEL") or "").splitlines() if ln.startswith("Tag:")]
 
 
+def payload_libssl(sonames):
+    """The hashed names of the payload's libssl of OpenSSL 3 or later, from the MANIFEST `sonames` map."""
+    return sorted(
+        h for o, h in sonames.items() if re.fullmatch(r"libssl\.so\.(\d+)", o) and int(o.rsplit(".", 1)[1]) >= 3
+    )
+
+
 def ldd(path):
     res = subprocess.run(["ldd", path], capture_output=True, text=True)
     return res.stdout + res.stderr
@@ -210,9 +217,11 @@ def main():
             fail(f"the installed rasterio resolves libgdal to {m.group(2) if m else None}, not into {lib}")
         else:
             sonames = _native._manifest(native).get("sonames", {})
-            ssl = [h for o, h in sonames.items() if re.fullmatch(r"libssl\.so\.(\d+)", o) and int(o.rsplit(".", 1)[1]) >= 3]
-            if not ssl or ssl[0] not in ldd(m.group(2)):
-                fail(f"the payload's libgdal does not link the payload's libssl ({ssl})")
+            ssl = payload_libssl(sonames)
+            if len(ssl) != 1:
+                fail(f"expected exactly one payload libssl (OpenSSL 3 or later) in the MANIFEST, found {ssl}")
+            elif ssl[0] not in ldd(m.group(2)):
+                fail(f"the payload's libgdal does not link the payload's libssl ({ssl[0]})")
     res = run_python(VIZ_MAPS)
     if res.returncode != 0:
         fail(f"importing geopandas, contextily, rasterio and geobrix: {res.stderr.strip()[-400:]}")

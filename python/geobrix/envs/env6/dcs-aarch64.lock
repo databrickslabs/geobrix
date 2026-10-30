@@ -10,13 +10,13 @@ annotated-types==0.7.0 \
     --hash=sha256:1f02e8b43a8fbbc3f3e0d4f0f4bfc8131bcb4eebe8849b8e5c773f3a1c582a53 \
     --hash=sha256:aff07c09a53a08bc8cfccb9c85b05f1aa9a2a6f23728d790723543408344ce89
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   pydantic
 anyio==4.10.0 \
     --hash=sha256:3f3fae35c96039744587aa5b8371e7e8e603c0702999535961dd336026973ba6 \
     --hash=sha256:60e474ac86736bbfd6f210f7a61218939c318f43f9972497381f1c5e930ed3d1
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   httpx
     #   httpx2
     #   jupyter-server
@@ -28,7 +28,7 @@ argon2-cffi==21.3.0 \
     --hash=sha256:8c976986f2c5c0e5000919e6de187906cfd81fb1c72bf9d88c01177e77da7f80 \
     --hash=sha256:d384164d944190a7dd7ef22c6aa3ff197da12962bd04b17f64d4e93d934dba5b
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyter-server
 argon2-cffi-bindings==25.1.0 \
     --hash=sha256:1db89609c06afa1a214a69a462ea741cf735b29a57530478c06eb81dd403de99 \
@@ -58,31 +58,31 @@ argon2-cffi-bindings==25.1.0 \
     --hash=sha256:da0c79c23a63723aa5d782250fbf51b768abca630285262fb5144ba5ae01e520 \
     --hash=sha256:e2fd3bfbff3c5d74fef31a722f729bf93500910db650c925c2d6ef879a7e51cb
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   argon2-cffi
 arrow==1.4.0 \
     --hash=sha256:749f0769958ebdc79c173ff0b0670d59051a535fa26e8eba02953dc19eb43205 \
     --hash=sha256:ed0cc050e98001b8779e84d461b0098c4ac597e88704a655582b21d116e526d7
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   isoduration
 asttokens==3.0.0 \
     --hash=sha256:0dcd8baa8d62b0c1d118b399b2ddba3c4aff271d0d7a9e0d4c1681c79035bbc7 \
     --hash=sha256:e3078351a059199dd5138cb1c706e6430c05eff2ff136af5eb4790f9d28932e2
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   stack-data
 async-lru==2.0.5 \
     --hash=sha256:481d52ccdd27275f42c43a928b4a50c3bfb2d67af4e78b170e3e0bb39c66e5bb \
     --hash=sha256:ab95404d8d2605310d345932697371a5f40def0487c03d6d0ad9138de52c9943
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyterlab
 attrs==25.4.0 \
     --hash=sha256:16d5969b87f0859ef33a48b35d55ac1be6e42ae49d5e853b597db70c35c57e11 \
     --hash=sha256:adcf7e2a1fb3b36ac48d97835bb6d8ade15b8dcce26aba8bf1d14847b57a3373
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   -r core.txt
     #   affine
     #   jsonschema
@@ -92,31 +92,31 @@ babel==2.16.0 \
     --hash=sha256:368b5b98b37c06b7daf6696391c3240c938b37767d4584413e8438c5c435fa8b \
     --hash=sha256:d1f3554ca26605fe173f3de0c65f750f5a42f924499bf134de6423582298e316
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyterlab-server
 beautifulsoup4==4.13.5 \
     --hash=sha256:5e70131382930e7c3de33450a2f54a63d5e4b19386eab43a5b34d594268f3695 \
     --hash=sha256:642085eaa22233aceadff9c69651bc51e8bf3f874fb6d7104ece2beb24b47c4a
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   nbconvert
 bleach==6.2.0 \
     --hash=sha256:117d9c6097a7c3d22fd578fcd8d35ff1e125df6736f554da4e432fdd63f31e5e \
     --hash=sha256:123e894118b8a599fd80d3ec1a6d4cc7ce4e5882b1317a7e1ba69b56e95f991f
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   nbconvert
 cachetools==5.5.1 \
     --hash=sha256:70f238fbba50383ef62e55c6aff6d9673175fe59f7c6782c7a0b9e38f4a9df95 \
     --hash=sha256:b76651fdc3b24ead3c648bbdeeb940c1b04d365b38b4af66788f9ec4a81d42bb
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   -r core.txt
-certifi==2025.11.12 \
-    --hash=sha256:97de8790030bbd5c2d96b7ec782fc2f7820ef8dba6db909ccf95449f2d062d4b \
-    --hash=sha256:d8ab5478f2ecd78af242878415affce761ca6bc54a22a27e026d7c25357c3316
+certifi==2026.10.19 \
+    --hash=sha256:035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae \
+    --hash=sha256:42d35340cc5b9ba78e818ddbff0c5b1c2b779de448a340fd1b989f5fa8670e1b
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   -r core.txt
     #   httpcore
     #   httpx
@@ -208,7 +208,7 @@ cffi==2.0.0 \
     --hash=sha256:fc7de24befaeae77ba923797c7c87834c73648a05a4bde34b3b7e5588973a453 \
     --hash=sha256:fe562eb1a64e67dd297ccc4f5addea2501664954f2692b69a76449ec7913ecbf
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   argon2-cffi-bindings
 cftime==1.6.6.1 \
     --hash=sha256:03273be53472a16b55bf1e600cb3984ccc607f465afc3d1a9cf02a7300c828be \
@@ -346,13 +346,13 @@ charset-normalizer==3.4.4 \
     --hash=sha256:faa3a41b2b66b6e50f84ae4a68c64fcd0c44355741c6374813a800cd6695db9e \
     --hash=sha256:fd44c878ea55ba351104cb93cc85e74916eb8fa440ca7903e57575e97394f608
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   requests
 click==8.2.1 \
     --hash=sha256:27c491cc05d968d271d5a1db13e3b5a184636d9d930f148c50b038f0d0646202 \
     --hash=sha256:61a3265b914e850b85317d0b3109c7f8cd35a670f963866005d6ef1d5175a12b
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   -r core.txt
     #   mercantile
     #   rasterio
@@ -405,7 +405,7 @@ comm==0.2.3 \
     --hash=sha256:2dc8048c10962d55d7ad693be1e7045d891b7ce8d999c97963a5e3e99c055971 \
     --hash=sha256:c615d91d75f7f04f095b30d1c1711babd43bdc6419c1be9886a85f2f4e489417
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   ipykernel
     #   ipywidgets
 contourpy==1.3.3 \
@@ -482,13 +482,13 @@ contourpy==1.3.3 \
     --hash=sha256:fd914713266421b7536de2bfa8181aa8c699432b6763a0ea64195ebe28bff6a9 \
     --hash=sha256:fde6c716d51c04b1c25d0b90364d0be954624a0ee9d60e23e850e8d48353d07a
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   matplotlib
 cycler==0.11.0 \
     --hash=sha256:3a27e95f763a428a739d2add979fa7494c912a32c17c4c38c4d5f082cad165a3 \
     --hash=sha256:9c87405839a19696e837b3b818fed3f5f69f16f1eec1a1ad77e043dcea9c772f
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   matplotlib
 debugpy==1.8.16 \
     --hash=sha256:135ccd2b1161bade72a7a099c9208811c137a150839e970aeaf121c2467debe8 \
@@ -518,26 +518,26 @@ debugpy==1.8.16 \
     --hash=sha256:f8340a3ac2ed4f5da59e064aa92e39edd52729a88fbde7bbaa54e08249a04493 \
     --hash=sha256:fee6db83ea5c978baf042440cfe29695e1a5d48a30147abf4c3be87513609817
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   ipykernel
 decorator==5.2.1 \
     --hash=sha256:65f266143752f734b0a7cc83c46f4618af75b8c5911b00ccb61d0ac9b6da0360 \
     --hash=sha256:d316bb415a2d9e2d2b3abcc4084c6502fc09240e292cd76a76afc106a1c8e04a
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   ipython
 defusedxml==0.7.1 \
     --hash=sha256:1bb3032db185915b62d7c6209c5a8792be6a32ab2fedacc84e01b52c51aa3e69 \
     --hash=sha256:a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   -r core.txt
     #   nbconvert
 executing==2.2.1 \
     --hash=sha256:3632cc370565f6648cc328b32435bd120a1e4ebb20c77e3fdde9a13cd1e533c4 \
     --hash=sha256:760643d3452b4d777d295bb167ccc74c64a81df23fb5e08eff250c425a4b2017
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   stack-data
 exifread==3.5.1 \
     --hash=sha256:9f998f80d3062741c976dfc4fd033424bc40932937994e4d2181eb70c4b6aedd \
@@ -547,7 +547,7 @@ fastjsonschema==2.21.2 \
     --hash=sha256:1c797122d0a86c5cace2e54bf4e819c36223b552017172f32c5c024a6b77e463 \
     --hash=sha256:b1eb43748041c880796cd077f1a07c3d94e93ae84bba5ed36800a33554ae05de
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   nbformat
 fonttools==4.60.1 \
     --hash=sha256:022beaea4b73a70295b688f817ddc24ed3e3418b5036ffcd5658141184ef0d0c \
@@ -609,13 +609,13 @@ fonttools==4.60.1 \
     --hash=sha256:f3d5be054c461d6a2268831f04091dc82753176f6ea06dc6047a5e168265a987 \
     --hash=sha256:f4b5c37a5f40e4d733d3bbaaef082149bee5a5ea3156a785ff64d949bd1353fa
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   matplotlib
 fqdn==1.5.1 \
     --hash=sha256:105ed3677e767fb5ca086a0c1f4bb66ebc3c100be518f0e0d755d9eae164d89f \
     --hash=sha256:3a179af3761e4df6eb2e026ff9e1a3033d3587bf980a0b1b2e1e5d08d7358014
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jsonschema
 geographiclib==2.1 \
     --hash=sha256:6a6545e6262d0ed3522e13c515713718797e37ed8c672c31ad7b249f372ef108 \
@@ -629,7 +629,7 @@ h11==0.16.0 \
     --hash=sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1 \
     --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   httpcore
     #   httpcore2
 h3==4.5.0 \
@@ -671,7 +671,7 @@ httpcore==1.0.9 \
     --hash=sha256:2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55 \
     --hash=sha256:6e34463af53fd2ab5d807f399a9b45ea31c3dfa2276f15a2c3f00afff6e176e8
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   httpx
 httpcore2==2.16.0 \
     --hash=sha256:5c4358319f2602d984ad93182c9fee5160f22e9da7babdda870a5e7c4e2dc34f \
@@ -681,7 +681,7 @@ httpx==0.28.1 \
     --hash=sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc \
     --hash=sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyterlab
 httpx2==2.16.0 \
     --hash=sha256:0d54c98128e8f2ff7fbbde0fca8c359e5f032edeaaaac443cdb7f31f685bcd7f \
@@ -715,50 +715,50 @@ ipykernel==6.31.0 \
     --hash=sha256:2372ce8bc1ff4f34e58cafed3a0feb2194b91fc7cad0fc72e79e47b45ee9e8f6 \
     --hash=sha256:abe5386f6ced727a70e0eb0cf1da801fa7c5fa6ff82147747d5a0406cd8c94af
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyterlab
 ipython==9.7.0 \
     --hash=sha256:5f6de88c905a566c6a9d6c400a8fed54a638e1f7543d17aae2551133216b1e4e \
     --hash=sha256:bce8ac85eb9521adc94e1845b4c03d88365fd6ac2f4908ec4ed1eb1b0a065f9f
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   ipykernel
     #   ipywidgets
 ipython-genutils==0.2.0 \
     --hash=sha256:72dd37233799e619666c9f639a9da83c34013a73e8bbc79a7a6348d93c61fab8 \
     --hash=sha256:eb2e116e75ecef9d4d228fdc66af54269afa26ab4463042e33785b887c628ba8
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   ipywidgets
 ipython-pygments-lexers==1.1.1 \
     --hash=sha256:09c0138009e56b6854f9535736f4171d855c8c08a563a0dcd8022f78355c7e81 \
     --hash=sha256:a9462224a505ade19a605f71f8fa63c2048833ce50abc86768a0d81d876dc81c
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   ipython
 ipywidgets==7.8.1 \
     --hash=sha256:050b87bb9ac11641859af4c36cdb639ca072fb5e121f0f1a401f8a80f9fa008d \
     --hash=sha256:29f7056d368bf0a7b35d51cf0c56b58582da57c78bb9f765965fef7c332e807c
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   anywidget
 isoduration==20.11.0 \
     --hash=sha256:ac2f9015137935279eac671f94f89eb00584f940f5dc49462a0c4ee692ba1bd9 \
     --hash=sha256:b2904c2a4228c3d44f409c8ae8e2370eb21a26f7ac2ec5446df141dde3452042
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jsonschema
 jedi==0.19.2 \
     --hash=sha256:4770dc3de41bde3966b02eb84fbcf557fb33cce26ad23da12c742fb50ecb11f0 \
     --hash=sha256:a8ef22bde8490f57fe5c7681a3c83cb58874daf72b4784de3cce5b6ef6edb5b9
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   ipython
 jinja2==3.1.6 \
     --hash=sha256:0137fb05990d35f1275a587e9aee6d56da821fc83491a0fb838183be43f66d6d \
     --hash=sha256:85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyter-server
     #   jupyterlab
     #   jupyterlab-server
@@ -767,26 +767,26 @@ joblib==1.5.2 \
     --hash=sha256:3faa5c39054b2f03ca547da9b2f52fde67c06240c31853f306aea97f13647b55 \
     --hash=sha256:4e1f0bdbb987e6d843c70cf43714cb276623def372df3c22fe5266b2670bc241
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   -r extra-vizx.txt
     #   scikit-learn
 json5==0.12.1 \
     --hash=sha256:b2743e77b3242f8d03c143dd975a6ec7c52e2f2afe76ed934e53503dd4ad4990 \
     --hash=sha256:d9c9b3bc34a5f54d43c35e11ef7cb87d8bdd098c6ace87117a7b7e83e705c1d5
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyterlab-server
 jsonpointer==3.1.1 \
     --hash=sha256:0b801c7db33a904024f6004d526dcc53bbb8a4a0f4e32bfd10beadf60adf1900 \
     --hash=sha256:8ff8b95779d071ba472cf5bc913028df06031797532f08a7d5b602d8b2a488ca
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jsonschema
 jsonschema==4.25.0 \
     --hash=sha256:24c2e8da302de79c8b9382fee3e76b355e44d2a4364bb207159ce10b517bd716 \
     --hash=sha256:e63acf5c11762c0e6672ffb61482bdf57f0876684d8d249c0fe2d730d48bc55f
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyter-events
     #   jupyterlab-server
     #   nbformat
@@ -794,13 +794,13 @@ jsonschema-specifications==2025.9.1 \
     --hash=sha256:98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe \
     --hash=sha256:b540987f239e745613c7a9176f3edb72b832a4ac465cf02712288397832b5e8d
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jsonschema
 jupyter-client==8.6.3 \
     --hash=sha256:35b3a0947c4a6e9d589eb97d7d4cd5e90f910ee73101611f01283732bd6d9419 \
     --hash=sha256:e8a19cc986cc45905ac3362915f410f3af85424b4c0905e94fa5f2cb08e8f23f
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   ipykernel
     #   jupyter-server
     #   nbclient
@@ -808,7 +808,7 @@ jupyter-core==5.8.1 \
     --hash=sha256:0a5f9706f70e64786b75acba995988915ebd4601c8a52e534a40b51c95f59941 \
     --hash=sha256:c28d268fc90fb53f1338ded2eb410704c5449a358406e8a948b75706e24863d0
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   ipykernel
     #   jupyter-client
     #   jupyter-server
@@ -820,19 +820,19 @@ jupyter-events==0.12.0 \
     --hash=sha256:6464b2fa5ad10451c3d35fabc75eab39556ae1e2853ad0c0cc31b656731a97fb \
     --hash=sha256:fc3fce98865f6784c9cd0a56a20644fc6098f21c8c33834a8d9fe383c17e554b
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyter-server
 jupyter-lsp==2.2.5 \
     --hash=sha256:45fbddbd505f3fbfb0b6cb2f1bc5e15e83ab7c79cd6e89416b248cb3c00c11da \
     --hash=sha256:793147a05ad446f809fd53ef1cd19a9f5256fd0a2d6b7ce943a982cb4f545001
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyterlab
 jupyter-server==2.16.0 \
     --hash=sha256:3d8db5be3bc64403b1c65b400a1d7f4647a5ce743f3b20dbdefe8ddb7b55af9e \
     --hash=sha256:65d4b44fdf2dcbbdfe0aa1ace4a842d4aaf746a2b7b168134d5aaed35621b7f6
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyter-lsp
     #   jupyterlab
     #   jupyterlab-server
@@ -842,32 +842,32 @@ jupyter-server-terminals==0.5.3 \
     --hash=sha256:41ee0d7dc0ebf2809c668e0fc726dfaf258fcd3e769568996ca731b6194ae9aa \
     --hash=sha256:5ae0295167220e9ace0edcfdb212afd2b01ee8d179fe6f23c899590e9b8a5269
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyter-server
 jupyterlab==4.4.7 \
     --hash=sha256:808bae6136b507a4d18f04254218bfe71ed8ba399a36ef3280d5f259e69abf80 \
     --hash=sha256:8c8e225492f4513ebde9bbbc00a05b651ab9a1f5b0013015d96fabf671c37188
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   notebook
 jupyterlab-pygments==0.3.0 \
     --hash=sha256:721aca4d9029252b11cfa9d185e5b5af4d54772bb8072f9b7036f4170054d35d \
     --hash=sha256:841a89020971da1d8693f1a99997aefc5dc424bb1b251fd6322462a1b8842780
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   nbconvert
 jupyterlab-server==2.28.0 \
     --hash=sha256:35baa81898b15f93573e2deca50d11ac0ae407ebb688299d3a5213265033712c \
     --hash=sha256:e4355b148fdcf34d312bbbc80f22467d6d20460e8b8736bf235577dd18506968
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyterlab
     #   notebook
 jupyterlab-widgets==1.1.11 \
     --hash=sha256:414cdbcd99db6e8f1174c7e4ed49c6ba368779f4659806fb1d824f3c377218e4 \
     --hash=sha256:840e538021d87e020a8e7b786597f088431f4ebd8308655555e126c3950a1b27
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   ipywidgets
 kiwisolver==1.4.8 \
     --hash=sha256:01c3d31902c7db5fb6182832713d3b4122ad9317c2c5877d0539227d96bb2e50 \
@@ -951,13 +951,13 @@ kiwisolver==1.4.8 \
     --hash=sha256:ed33ca2002a779a2e20eeb06aea7721b6e47f2d4b8a8ece979d8ba9e2a167e34 \
     --hash=sha256:fc2ace710ba7c1dfd1a3b42530b62b9ceed115f19a1656adefce7b1782a37794
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   matplotlib
 lark==1.3.1 \
     --hash=sha256:b426a7a6d6d53189d318f2b6236ab5d6429eaf09259f1ca33eb716eed10d2905 \
     --hash=sha256:c629b661023a014c37da873b4ff58a817398d12635d3bbb2c5a03be7fe5d1e12
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   rfc3987-syntax
 laspy==2.7.0 \
     --hash=sha256:15f5344c62a1023461996bdf5d1ba5fdd813e96694a524fee712931134f3792f \
@@ -1071,7 +1071,7 @@ markupsafe==3.0.2 \
     --hash=sha256:f8b3d067f2e40fe93e1ccdd6b2e1d16c43140e76f02fb1319a05cf2b79d99430 \
     --hash=sha256:fcabf5ff6eea076f859677f5f0b6b5c1a51e70a376b0579e0eadef8db48c6b50
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jinja2
     #   nbconvert
 matplotlib==3.10.6 \
@@ -1131,13 +1131,13 @@ matplotlib==3.10.6 \
     --hash=sha256:f7173f8551b88f4ef810a94adae3128c2530e0d07529f7141be7f8d8c365f051 \
     --hash=sha256:f9c862d91ec0b7842920a4cfdaaec29662195301914ea54c33e01f1a28d014b2
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   -r extra-vizx.txt
 matplotlib-inline==0.2.1 \
     --hash=sha256:d56ce5156ba6085e00a9d54fead6ed29a9c47e215cd1bba2e976ef39f5710a76 \
     --hash=sha256:e1ee949c340d771fc39e241ea75683deb94762c8fa5f2927ec57c83c4dffa9fe
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   ipykernel
     #   ipython
 mercantile==1.2.1 \
@@ -1148,25 +1148,25 @@ mistune==3.1.2 \
     --hash=sha256:4b47731332315cdca99e0ded46fc0004001c1299ff773dfb48fbe1fd226de319 \
     --hash=sha256:733bf018ba007e8b5f2d3a9eb624034f6ee26c4ea769a98ec533ee111d504dff
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   nbconvert
 nbclient==0.10.2 \
     --hash=sha256:4ffee11e788b4a27fabeb7955547e4318a5298f34342a4bfd01f2e1faaeadc3d \
     --hash=sha256:90b7fc6b810630db87a6d0c2250b1f0ab4cf4d3c27a299b0cde78a4ed3fd9193
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   nbconvert
 nbconvert==7.16.6 \
     --hash=sha256:1375a7b67e0c2883678c48e506dc320febb57685e5ee67faa51b18a90f3a712b \
     --hash=sha256:576a7e37c6480da7b8465eefa66c17844243816ce1ccc372633c6b71c3c0f582
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyter-server
 nbformat==5.10.4 \
     --hash=sha256:322168b14f937a5d11362988ecac2a4952d3d8e3a2cbeb2319584631226d5b3a \
     --hash=sha256:3b48d6c8fbca4b299bf3982ea7db1af21580e4fec269ad087b9e81588891200b
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyter-server
     #   nbclient
     #   nbconvert
@@ -1174,7 +1174,7 @@ nest-asyncio==1.6.0 \
     --hash=sha256:6f172d5449aca15afd6c646851f4e31e02c598d553a667e38cafa997cfec55fe \
     --hash=sha256:87af6efd6b5e897c81050477ef65c62e2b2f35d51703cae01aff2905b1852e1c
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   ipykernel
 networkx==3.7 \
     --hash=sha256:e3fd2c13a7814cee3746340d8d7f8598a67f16a58bf47fb7f8793fab6efca1b0 \
@@ -1186,13 +1186,13 @@ notebook==7.4.5 \
     --hash=sha256:351635461aca9dad08cf8946a4216f963e2760cc1bf7b1aaaecb23afc33ec046 \
     --hash=sha256:7c2c4ea245913c3ad8ab3e5d36b34a842c06e524556f5c2e1f5d7d08c986615e
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   widgetsnbextension
 notebook-shim==0.2.4 \
     --hash=sha256:411a5be4e9dc882a074ccbcae671eda64cceb068767e9a3419096986560e1cef \
     --hash=sha256:b4b2cfa1b65d98307ca24361f5b30fe785b53c3fd07b7a47e89acb5e6ac638cb
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyterlab
     #   notebook
 numexpr==2.14.2 \
@@ -1319,7 +1319,7 @@ numpy==2.3.4 \
     --hash=sha256:fdebe771ca06bb8d6abce84e51dca9f7921fe6ad34a0c914541b063e9a68928b \
     --hash=sha256:fea80f4f4cf83b54c3a051f2f727870ee51e22f0248d3114b8e755d160b38cfb
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   -r core.txt
     #   cftime
     #   color-operations
@@ -1340,13 +1340,13 @@ overrides==7.7.0 \
     --hash=sha256:55158fa3d93b98cc75299b1e67078ad9003ca27945c76162c1c0766d6f91820a \
     --hash=sha256:c7ed9d062f78b8e4c1a7b70bd8796b35ead4d9f510227ef9c5dc7626c60d7e49
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyter-server
 packaging==25.0 \
     --hash=sha256:29572ef2b1f17581046b3a2227d5c611fb25ec70ca1ba8554b24b0e69331a484 \
     --hash=sha256:d443872c98d677bf60f6a1f2f8c1cb748e8fe762d2bf9d3148b5599295b0fc4f
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   -r core.txt
     #   ipykernel
     #   jupyter-events
@@ -1415,7 +1415,7 @@ pandas==2.3.3 \
     --hash=sha256:f086f6fe114e19d92014a1966f43a3e62285109afe874f067f5abbdcbb10e59c \
     --hash=sha256:f8bfc0e12dc78f777f323f55c58649591b2cd0c43534e8355c51d3fede5f4dee
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   -r core.txt
     #   mapclassify
     #   xarray
@@ -1423,19 +1423,19 @@ pandocfilters==1.5.1 \
     --hash=sha256:002b4a555ee4ebc03f8b66307e287fa492e4a77b4ea14d3f934328297bb4939e \
     --hash=sha256:93be382804a9cdb0a7267585f157e5d1731bbe5545a85b268d6f5fe6232de2bc
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   nbconvert
 parso==0.8.5 \
     --hash=sha256:034d7354a9a018bdce352f48b2a8a450f05e9d6ee85db84764e9b6bd96dafe5a \
     --hash=sha256:646204b5ee239c396d040b90f9e272e9a8017c630092bf59980beb62fd033887
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jedi
 pexpect==4.9.0 \
     --hash=sha256:7236d1e080e4936be2dc3e326cec0af72acf9212a7e1d060210e70a47e253523 \
     --hash=sha256:ee7d41123f3c9911050ea2c2dac107568dc43b2d3b0c7557a33212c398ead30f
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   ipython
 pillow==12.0.0 \
     --hash=sha256:0869154a2d0546545cde61d1789a6524319fc1897d9ee31218eae7a60ccc5643 \
@@ -1530,7 +1530,7 @@ pillow==12.0.0 \
     --hash=sha256:fa3ed2a29a9e9d2d488b4da81dcb54720ac3104a20bf0bd273f1e4648aff5af9 \
     --hash=sha256:fb3096c30df99fd01c7bf8e544f392103d0795b9f98ba71a8054bcbf56b255f1
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   imageio
     #   matplotlib
     #   scikit-image
@@ -1538,7 +1538,7 @@ platformdirs==4.5.0 \
     --hash=sha256:70ddccdd7c99fc5942e9fc25636a8b34d04c24b335100223152c2803e4063312 \
     --hash=sha256:e578a81bb873cbb89a41fcc904c7ef523cc18284b7e3b3ccf06aca1403b7ebd3
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyter-core
 pmtiles==3.8.1 \
     --hash=sha256:0f594a61b37fca039f06162428781f76a4233f5beea94444702f0dc41f20f007 \
@@ -1548,13 +1548,13 @@ prometheus-client==0.21.1 \
     --hash=sha256:252505a722ac04b0456be05c05f75f45d760c2911ffc45f2a06bcaed9f3ae3fb \
     --hash=sha256:594b45c410d6f4f8888940fe80b5cc2521b305a1fafe1c58609ef715a001f301
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyter-server
 prompt-toolkit==3.0.52 \
     --hash=sha256:28cde192929c8e7321de85de1ddbe736f1375148b02f2e17edd840042b1be855 \
     --hash=sha256:9aac639a3bbd33284347de5ad8d68ecc044b91a762dc39b7c21095fcd6a19955
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   ipython
 protobuf==6.33.5 \
     --hash=sha256:3093804752167bcab3998bec9f1048baae6e29505adaf1afd14a37bddede533c \
@@ -1568,7 +1568,7 @@ protobuf==6.33.5 \
     --hash=sha256:cbf16ba3350fb7b889fca858fb215967792dc125b35c7976ca4818bee3521cf0 \
     --hash=sha256:d71b040839446bac0f4d162e758bea99c8251161dae9d0983a3b88dee345153b
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   -r core.txt
 psutil==7.0.0 \
     --hash=sha256:101d71dc322e3cffd7cea0650b09b3d08b8e7c4109dd6809fe452dfd00e58b25 \
@@ -1582,7 +1582,7 @@ psutil==7.0.0 \
     --hash=sha256:a5f098451abc2828f7dc6b58d44b532b22f2088f4999a937557b603ce72b1993 \
     --hash=sha256:ba3fcef7523064a6c9da440fc4d6bd07da93ac726b5733c29027d7dc95b39d99
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   ipykernel
 psygnal==0.16.1 \
     --hash=sha256:035f8f92dd1ba00da86319f2d4397bb385b9e1ceaed152305230163d776dff3e \
@@ -1622,14 +1622,14 @@ ptyprocess==0.7.0 \
     --hash=sha256:4b41f3967fce3af57cc7e94b888626c18bf37a083e3651ca8feeb66d492fef35 \
     --hash=sha256:5c5d0a3b48ceee0b48485e0c26037c0acd7d29765ca3fbb5cb3831d347423220
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   pexpect
     #   terminado
 pure-eval==0.2.3 \
     --hash=sha256:1db8e35b67b3d218d818ae653e27f06c3aa420901fa7b081ca98cbedc874e0d0 \
     --hash=sha256:5f4e983f40564c576c7c8635ae88db5956bb2229d7e9237d03b3c0b0190eaf42
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   stack-data
 pyarrow==21.0.0 \
     --hash=sha256:067c66ca29aaedae08218569a114e413b26e742171f526e828e1064fcdec13f4 \
@@ -1676,7 +1676,7 @@ pyarrow==21.0.0 \
     --hash=sha256:fc0d2f88b81dcf3ccf9a6ae17f89183762c8a94a5bdcfa09e05cfe413acf0503 \
     --hash=sha256:fee33b0ca46f4c85443d6c450357101e47d53e6c3f008d658c27a2d020d44c79
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   -r core.txt
 pyclipper==1.4.0 \
     --hash=sha256:0a4d2736fb3c42e8eb1d38bf27a720d1015526c11e476bded55138a977c17d9d \
@@ -1720,13 +1720,13 @@ pycparser==2.23 \
     --hash=sha256:78816d4f24add8f10a06d6f05b4d424ad9e96cfebf68a4ddc99c65c0720d00c2 \
     --hash=sha256:e5c6e8d3fbad53479cab09ac03729e0a9faf2bee3db8208a550daf5af81a5934
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   cffi
 pydantic==2.13.3 \
     --hash=sha256:6db14ac8dfc9a1e57f87ea2c0de670c251240f43cb0c30a5130e9720dc612927 \
     --hash=sha256:af09e9d1d09f4e7fe37145c1f577e1d61ceb9a41924bf0094a36506285d0a84d
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   -r core.txt
 pydantic-core==2.46.3 \
     --hash=sha256:0087084960f209a9a4af50ecd1fb063d9ad3658c07bb81a7a53f452dacbfb2ba \
@@ -1850,13 +1850,13 @@ pydantic-core==2.46.3 \
     --hash=sha256:ff5e7783bcc5476e1db448bf268f11cb257b1c276d3e89f00b5727be86dd0127 \
     --hash=sha256:ffe0883b56cfc05798bf994164d2b2ff03efe2d22022a2bb080f3b626176dd56
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   pydantic
 pygments==2.19.2 \
     --hash=sha256:636cb2477cec7f8952536970bc533bc43743542f70392ae026374600add5b887 \
     --hash=sha256:86540386c03d588bb81d44bc3928634ff26449851e99741617ecb9037ee5ec0b
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   ipython
     #   ipython-pygments-lexers
     #   nbconvert
@@ -1864,7 +1864,7 @@ pyparsing==3.2.5 \
     --hash=sha256:2df8d5b7b2802ef88e8d016a2eb9c7aeaa923529cd251ed0fe4608275d4105b6 \
     --hash=sha256:e38a4f02064cf41fe6593d328d0512495ad1f3d8a91c4f73fc401b3079a59a5e
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   -r core.txt
     #   matplotlib
     #   rasterio
@@ -2000,7 +2000,7 @@ python-dateutil==2.9.0.post0 \
     --hash=sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3 \
     --hash=sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   arrow
     #   jupyter-client
     #   matplotlib
@@ -2010,13 +2010,13 @@ python-json-logger==3.2.1 \
     --hash=sha256:8eb0554ea17cb75b05d2848bc14fb02fbdbd9d6972120781b974380bfa162008 \
     --hash=sha256:cdc17047eb5374bd311e748b42f99d71223f3b0e186f4206cc5d52aefe85b090
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyter-events
 pytz==2025.2 \
     --hash=sha256:360b9e3dbb49a209c21ad61809c7fb453643e048b38924c765813546746e81c3 \
     --hash=sha256:5ddf76296dd8c44c26eb8f4b6f35488f3ccbf6fbbd7adee0b7262d43f0ec2f00
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   pandas
 pyyaml==6.0.3 \
     --hash=sha256:00c4bdeba853cc34e7dd471f16b4114f4162dc03e6b7afcc2128711f0eca823c \
@@ -2093,7 +2093,7 @@ pyyaml==6.0.3 \
     --hash=sha256:fa160448684b4e94d80416c0fa4aac48967a969efe22931448d853ada8baf926 \
     --hash=sha256:fc09d0aa354569bc501d4e787133afc08552722d3ab34836a80547331bb5d4a0
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyter-events
 pyzmq==27.1.0 \
     --hash=sha256:01c0e07d558b06a60773744ea6251f769cd79a41a97d11b8bf4ab8f034b0424d \
@@ -2189,7 +2189,7 @@ pyzmq==27.1.0 \
     --hash=sha256:fbb4f2400bfda24f12f009cba62ad5734148569ff4949b1b6ec3b519444342e6 \
     --hash=sha256:ff8d114d14ac671d88c89b9224c63d6c4e5a613fe8acd5594ce53d752a3aafe9
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   ipykernel
     #   jupyter-client
     #   jupyter-server
@@ -2204,7 +2204,7 @@ referencing==0.37.0 \
     --hash=sha256:381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231 \
     --hash=sha256:44aefc3142c5b842538163acb373e24cce6632bd54bdb01b21ad5863489f50d8
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jsonschema
     #   jsonschema-specifications
     #   jupyter-events
@@ -2212,28 +2212,28 @@ requests==2.32.5 \
     --hash=sha256:2462f94637a34fd532264295e186976db0f5d453d1cdd31473c85a6a161affb6 \
     --hash=sha256:dbba0bac56e100853db0ea71b82b4dfd5fe2bf6d3754a8893c3af500cec7d7cf
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   -r extra-vizx.txt
     #   jupyterlab-server
 rfc3339-validator==0.1.4 \
     --hash=sha256:138a2abdf93304ad60530167e51d2dfb9549521a836871b88d7f4695d0022f6b \
     --hash=sha256:24f6ec1eda14ef823da9e36ec7113124b39c04d50a4d3d3a3c2859577e7791fa
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jsonschema
     #   jupyter-events
 rfc3986-validator==0.1.1 \
     --hash=sha256:2f235c432ef459970b4306369336b9d5dbdda31b510ca1e327636e01f528bfa9 \
     --hash=sha256:3d44bde7921b3b9ec3ae4e3adca370438eccebc676456449b145d533b240d055
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jsonschema
     #   jupyter-events
 rfc3987-syntax==1.1.0 \
     --hash=sha256:6c3d97604e4c5ce9f714898e05401a0445a641cfa276432b0a648c80856f6a3f \
     --hash=sha256:717a62cbf33cffdd16dfa3a497d81ce48a660ea691b1ddd7be710c22f00b4a0d
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jsonschema
 rpds-py==0.28.0 \
     --hash=sha256:03065002fd2e287725d95fbc69688e0c6daf6c6314ba38bdbaa3895418e09296 \
@@ -2352,7 +2352,7 @@ rpds-py==0.28.0 \
     --hash=sha256:f5e7101145427087e493b9c9b959da68d357c28c562792300dd21a095118ed16 \
     --hash=sha256:f9174471d6920cbc5e82a7822de8dfd4dcea86eb828b04fc8c6519a77b0ee51e
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jsonschema
     #   referencing
 scikit-image==0.26.0 \
@@ -2439,7 +2439,7 @@ scikit-learn==1.7.2 \
     --hash=sha256:f95dc55b7902b91331fa4e5845dd5bde0580c9cd9612b1b2791b7e80c3d32615 \
     --hash=sha256:fa8f63940e29c82d1e67a45d5297bdebbcb585f5a5a50c4914cc2e852ab77f33
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   mapclassify
 scipy==1.16.3 \
     --hash=sha256:0151a0749efeaaab78711c78422d413c583b8cdd2011a3c1d6c794938ee9fdb2 \
@@ -2504,7 +2504,7 @@ scipy==1.16.3 \
     --hash=sha256:fb4b29f4cf8cc5a8d628bc8d8e26d12d7278cd1f219f22698a378c3d67db5e4b \
     --hash=sha256:ffa6eea95283b2b8079b821dc11f50a17d0571c92b43e2b5b12764dc5f9b285d
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   -r core.txt
     #   mapclassify
     #   scikit-image
@@ -2513,51 +2513,51 @@ send2trash==1.8.2 \
     --hash=sha256:a384719d99c07ce1eefd6905d2decb6f8b7ed054025bb0e618919f945de4f679 \
     --hash=sha256:c132d59fa44b9ca2b1699af5c86f57ce9f4c5eb56629d5d55fbb7a35f84e2312
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyter-server
 setuptools==80.9.0 \
     --hash=sha256:062d34222ad13e0cc312a4c02d73f059e86a4acbfbdea8f8f76b28c99f306922 \
     --hash=sha256:f36b47402ecde768dbfafc46e8e4207b4360c654f1f3bb84475f0a28628fb19c
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyterlab
 six==1.17.0 \
     --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274 \
     --hash=sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   python-dateutil
     #   rfc3339-validator
 sniffio==1.3.0 \
     --hash=sha256:e60305c5e5d314f5389259b7f22aaa33d8f7dee49763119234af3755c55b9101 \
     --hash=sha256:eecefdce1e5bbfb7ad2eeaabf7c1eeb404d7757c379bd1f7e5cce9d8bf425384
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   anyio
 soupsieve==2.5 \
     --hash=sha256:5663d5a7b3bfaeee0bc4372e7fc48f9cff4940b3eec54a6451cc5299f1097690 \
     --hash=sha256:eaa337ff55a1579b6549dc679565eac1e3d000563bcb1c8ab0d0fefbc0c2cdc7
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   beautifulsoup4
 stack-data==0.6.3 \
     --hash=sha256:836a778de4fec4dcd1dcd89ed8abff8a221f58308462e1c4aa2a3cf30148f0b9 \
     --hash=sha256:d5558e0c25a4cb0853cddad3d77da9891a08cb85dd9f9f91b9f8cd66e511e695
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   ipython
 terminado==0.18.1 \
     --hash=sha256:a4468e1b37bb318f8a86514f65814e1afc977cf29b3992a4500d9dd305dcceb0 \
     --hash=sha256:de09f2c4b85de4765f7714688fff57d3e75bad1f909b589fde880460c753fd2e
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyter-server
     #   jupyter-server-terminals
 threadpoolctl==3.5.0 \
     --hash=sha256:082433502dd922bf738de0d8bcc4fdcbf0979ff44c42bd40f5af8a282f6fa107 \
     --hash=sha256:56c1e26c150397e58c4926da8eeee87533b1e32bef131bd4bf6a2f45f3185467
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   scikit-learn
 tifffile==2026.10.15 \
     --hash=sha256:3dcf6c56731a45c1f85c81e90dad922b0a380a2d639e77f71207e010f8ef0f7b \
@@ -2567,7 +2567,7 @@ tinycss2==1.4.0 \
     --hash=sha256:10c0972f6fc0fbee87c3edb76549357415e94548c1ae10ebccdea16fb404a9b7 \
     --hash=sha256:3a49cf47b7675da0b15d0c6e1df8df4ebd96e9394bb905a5775adb0d884c5289
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   bleach
 tippecanoe==2.72.0 \
     --hash=sha256:0dcc13af896ea7c369a09627009a7181cc36136aef29d80874469e1aac75cc94 \
@@ -2597,7 +2597,7 @@ tornado==6.5.1 \
     --hash=sha256:d50065ba7fd11d3bd41bcad0825227cc9a95154bad83239357094c36708001f7 \
     --hash=sha256:e0a36e1bc684dca10b1aa75a31df8bdfed656831489bc1e6a6ebed05dc1ec365
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   ipykernel
     #   jupyter-client
     #   jupyter-server
@@ -2608,7 +2608,7 @@ traitlets==5.14.3 \
     --hash=sha256:9ed0579d3502c94b4b3732ac120375cda96f923114522847de4b3bb98b96b6b7 \
     --hash=sha256:b74e89e397b1ed28cc831db7aea759ba6640cb3de13090ca145426688ff1ac4f
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   ipykernel
     #   ipython
     #   ipywidgets
@@ -2631,7 +2631,7 @@ typing-extensions==4.15.0 \
     --hash=sha256:0cea48d173cc12fa28ecabc3b837ea3cf6f38c6d1136f85cbaaf598984861466 \
     --hash=sha256:f0fa19c6845758ab08074a0cfa8b7aecb71c999ca73d62883bc25cc018c4e548
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   -r core.txt
     #   anyio
     #   anywidget
@@ -2645,58 +2645,58 @@ typing-inspection==0.4.2 \
     --hash=sha256:4ed1cacbdc298c220f1bd249ed5287caa16f34d44ef4e9c3d0cbad5b521545e7 \
     --hash=sha256:ba561c48a67c5958007083d386c3295464928b01faa735ab8547c5692e87f464
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   pydantic
 tzdata==2026.2 \
     --hash=sha256:9173fde7d80d9018e02a662e168e5a2d04f87c41ea174b139fbef642eda62d10 \
     --hash=sha256:bbe9af844f658da81a5f95019480da3a89415801f6cc966806612cc7169bffe7
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   arrow
     #   pandas
 uri-template==1.3.0 \
     --hash=sha256:0e00f8eb65e18c7de20d595a14336e9f337ead580c70934141624b6d1ffdacc7 \
     --hash=sha256:a44a133ea12d44a0c0f06d7d42a52d71282e77e2f937d8abd5655b8d56fc1363
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jsonschema
 urllib3==2.5.0 \
     --hash=sha256:3fc47733c7e419d4bc3f6b3dc2b4f890bb743906a30d56ba4a5bfa4bbff92760 \
     --hash=sha256:e6b01673c0fa6a13e374b50871808eb3bf7046c4b125b216f6bf1cc604cff0dc
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   -r core.txt
     #   requests
 wcwidth==0.2.13 \
     --hash=sha256:3da69048e4540d84af32131829ff948f1e022c1c6bdb8d6102117aac784f6859 \
     --hash=sha256:72ea0c06399eb286d978fdedb6923a9eb47e1c486ce63e9b4e64fc18303972b5
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   prompt-toolkit
 webcolors==25.10.0 \
     --hash=sha256:032c727334856fc0b968f63daa252a1ac93d33db2f5267756623c210e57a4f1d \
     --hash=sha256:62abae86504f66d0f6364c2a8520de4a0c47b80c03fc3a5f1815fedbef7c19bf
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jsonschema
 webencodings==0.5.1 \
     --hash=sha256:a0af1213f3c2226497a97e2b3aa01a7e4bee4f403f95be16fc9acd2947514a78 \
     --hash=sha256:b36a1c245f2d304965eb4e0a82848379241dc04b865afcc4aab16748587e1923
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   bleach
     #   tinycss2
 websocket-client==1.8.0 \
     --hash=sha256:17b44cc997f5c498e809b22cdf2d9c7a9e71c02c8cc2b6c56e7c2d1239bfa526 \
     --hash=sha256:3239df9f44da632f96012472805d40a23281a991027ce11d2f45a6f24ac4c3da
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   jupyter-server
 widgetsnbextension==3.6.6 \
     --hash=sha256:46f4e3cb2d451bbd6141a13696d6ba17c9b5f50645dca9cfd26fe9644d5a00e1 \
     --hash=sha256:e7fb9999845affc9024ecfbe0a824dd8e633403d027b28ceadab398b633ad51c
     # via
-    #   -c /var/folders/4f/s1wyjq_n4yl1hv1p8bc_g3v80000gp/T/tmp024mibm1/constraints.txt
+    #   -c .dcs-constraints-aarch64.txt
     #   ipywidgets
 xarray==2026.9.0 \
     --hash=sha256:6abc69694c22fa1f0fb2f357ff4e41d88beb4477ed71091f944b7dbf67ed54fe \

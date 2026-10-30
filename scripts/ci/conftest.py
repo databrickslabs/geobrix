@@ -122,7 +122,9 @@ class DcsCommand:
             f"idna==3.20 \\\n    --hash=sha256:{h}\n"
             f"rasterio==1.5.2+gbx1 \\\n    --hash=sha256:{sha}\n"
         )
-        (env / f"dcs-base-{arch}.txt").write_text("click==8.2.1\nidna==3.11\n")
+        (env / f"dcs-base-{arch}.txt").write_text(
+            "# base-image: databricksruntime/environment@sha256:" + "1" * 64 + "\nclick==8.2.1\nidna==3.11\n"
+        )
         cache = self.root / "build" / "dcs" / "wheelhouse" / arch
         cache.mkdir(parents=True, exist_ok=True)
         (cache / "idna-3.20-py3-none-any.whl").write_bytes(b"idna")

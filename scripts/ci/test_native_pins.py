@@ -344,6 +344,10 @@ def test_the_dcs_image_builds_no_gdal():
     assert len(wheel) == 1 and "geobrix-" in wheel[0] and "--no-index" in wheel[0]
     assert len(locked) == 1 and "-r /tmp/dcs.lock" in locked[0] and "--no-index" in locked[0]
     assert len(pips) == 2  # nothing else is installed, and nothing reaches an index
+    assert all("--only-binary :all:" in part for part in pips)  # and nothing is built from a source distribution
+    # every RUN step runs with no network: the image build needs none, and a step that reached for one would fail
+    runs = [ln for ln in dockerfile_instructions(DCS_DOCKERFILE) if ln.startswith("RUN ")]
+    assert len(runs) == 2 and all("--network=none" in ln for ln in runs)
 
 
 @pytest.mark.parametrize("arch", ARCHES)
@@ -359,8 +363,10 @@ def test_the_dcs_lock_installs_our_rasterio_and_holds_the_base(arch):
     assert len(entries) == len(re.findall(r"^[A-Za-z0-9_.-]+==", lock, re.M))
     # click is held at the image's version
     assert re.search(r"^click==(\S+)", base, re.M).group(1) == pinned["click"]
-    # and it is the plain package list of the image, one `name==version` per line
-    assert all(re.fullmatch(r"[A-Za-z0-9_.-]+==\S+", ln) for ln in base.splitlines())
+    # and it is the package list of the image at ONE image digest, one `name==version` per line after that header
+    header, *packages = base.splitlines()
+    assert re.fullmatch(r"# base-image: databricksruntime/environment@sha256:[0-9a-f]{64}", header)
+    assert all(re.fullmatch(r"[A-Za-z0-9_.-]+==\S+", ln) for ln in packages)
 
 
 def test_the_dcs_inputs_name_the_declared_requirements_and_our_rasterio():

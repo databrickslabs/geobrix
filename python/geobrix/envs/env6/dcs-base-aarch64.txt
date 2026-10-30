@@ -1,3 +1,4 @@
+# base-image: databricksruntime/environment@sha256:beefc87b68f63c4cd2551a4f20af395137628dd17e957a95a60593e1a886466d
 annotated-doc==0.0.4
 annotated-types==0.7.0
 anyio==4.10.0
@@ -23,7 +24,7 @@ blinker==1.7.0
 boto3==1.40.46
 botocore==1.40.46
 cachetools==5.5.1
-certifi==2025.11.12
+certifi==2026.10.19
 cffi==2.0.0
 charset-normalizer==3.4.4
 click==8.2.1

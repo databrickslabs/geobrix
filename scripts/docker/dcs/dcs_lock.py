@@ -2,11 +2,13 @@
 """The DCS image's per-architecture lock and wheelhouse.
 
     dcs_lock.py relock ARCH            rewrite python/geobrix/envs/env6/dcs-base-<arch>.txt (the base image's
-                                       packages) and dcs-<arch>.lock (hashed; the base held, click included)
+                                       packages, headed by its digest) and dcs-<arch>.lock (hashed; the base held,
+                                       click included), both or neither
     dcs_lock.py wheelhouse ARCH DEST   put into DEST the wheels the lock installs beyond the base image, and
                                        GeoBrix's own rasterio wheel (its sha256 must be the lock's)
     dcs_lock.py check ARCH             the lock against the base file and, when built, our rasterio wheel
     dcs_lock.py moves ARCH             what the lock changes against the base image
+    dcs_lock.py base-image ARCH        the pinned base image reference (repo@sha256:...) the base list was made from
     dcs_lock.py rasterio-pin           the rasterio distribution version the lock must carry (from scripts/native/pins.conf)
 
 ARCH is x86_64 or aarch64. The lock is made on the host with uv (`uv pip compile --generate-hashes`), offering
@@ -19,6 +21,8 @@ printed (output goes through scripts/native/redact.py). Standard library only (t
 import argparse
 import hashlib
 import importlib.util
+import json
+import os
 import re
 import shutil
 import subprocess
@@ -205,6 +209,7 @@ def wheelhouse(root, arch, dest, download=download):
     """Fill dest with the wheels the lock installs beyond the base image, and GeoBrix's rasterio wheel."""
     lock_text, base_text = _read(root, arch)
     lock, base = parse_lock(lock_text), parse_base(base_text)
+    base_image(base_text)  # refuses a base list that is not pinned to an image digest
     want = rasterio_pin(root)
     built = rasterio_wheel(root, arch, want)
     problems = check(lock, base, want, sha256(built))
@@ -230,35 +235,75 @@ def wheelhouse(root, arch, dest, download=download):
     return sorted(p.name for p in dest.iterdir())
 
 
+BASE_REPO = "databricksruntime/environment"
+BASE_HEADER = re.compile(r"^# base-image: (" + re.escape(BASE_REPO) + r"@sha256:[0-9a-f]{64})$", re.M)
+
+
+def base_image(base_text):
+    """The base image reference (`repo@sha256:...`) a base list was made from: the build uses exactly it."""
+    m = BASE_HEADER.search(base_text)
+    if not m:
+        raise LockError("the base list names no image digest (`# base-image: <repo>@sha256:...`); run `gbx:dcs:build --relock`")
+    return m.group(1)
+
+
+def local_digest(image):
+    """The digest of a base image tag that is in the local image store, as `repo@sha256:...` (no registry query)."""
+    rc, out = _run_redacted(["docker", "image", "inspect", image, "--format", "{{json .RepoDigests}}"])
+    try:
+        refs = [r for r in json.loads(out.strip() or "[]") if r.startswith(BASE_REPO + "@sha256:")] if rc == 0 else []
+    except ValueError:
+        refs = []
+    if len(refs) != 1:
+        raise LockError(f"{image} is not in the local image store with one digest (docker pull it first)")
+    return refs[0]
+
+
 def relock(root, arch):
-    """Rewrite the base list and the lock for one architecture (needs docker, uv and the built rasterio wheel)."""
+    """Rewrite the base list and the lock for one architecture (needs docker, uv and the built rasterio wheel).
+
+    Both files are written together, and only after the compile and the lock check have passed: a failure
+    leaves the previous pair untouched.
+    """
     platform, image = BASE_IMAGES[arch]
     env = _env_dir(root)
     want = rasterio_pin(root)
     built = rasterio_wheel(root, arch, want)
+    ref = local_digest(image)
     rc, listing = _run_redacted(
-        ["docker", "run", "--rm", "--platform", platform, "--entrypoint", "/databricks/python3/bin/python", image,
+        ["docker", "run", "--rm", "--platform", platform, "--entrypoint", "/databricks/python3/bin/python", ref,
          "-m", "pip", "list", "--disable-pip-version-check", "--format=freeze"]
     )
     if rc != 0:
         raise LockError(f"could not list the packages of {image}:\n{listing[-800:]}")
     lines = sorted((ln.strip() for ln in listing.splitlines() if "==" in ln), key=str.lower)
-    (env / f"dcs-base-{arch}.txt").write_text("\n".join(lines) + "\n")
+    base_text = f"# base-image: {ref}\n" + "\n".join(lines) + "\n"
+    # The constraints file sits beside dcs.in under a fixed name: uv prints the path in the lock's `via` notes, so a
+    # temporary directory's name would end up in a tracked file.
+    cons = env / f".dcs-constraints-{arch}.txt"
     with tempfile.TemporaryDirectory() as tmp:
-        cons = Path(tmp) / "constraints.txt"
-        cons.write_text(constraints("\n".join(lines)))
-        rc, out = _run_redacted(
-            ["uv", "pip", "compile", "--quiet", "--generate-hashes", "--only-binary", ":all:", "--python-version", "3.12",
-             "--python-platform", f"{arch}-manylinux_2_28", "-c", str(cons), "--find-links", str(built.parent),
-             "--custom-compile-command", "gbx:dcs:build --relock", "-o", f"dcs-{arch}.lock", "dcs.in"],
-            cwd=str(env),
-        )
-    if rc != 0:
-        raise LockError(f"uv pip compile exited {rc}:\n{out[-1500:]}")
-    lock_text, base_text = _read(root, arch)
-    problems = check(parse_lock(lock_text), parse_base(base_text), want, sha256(built))
-    if problems:
-        raise LockError("; ".join(problems))
+        new_lock = Path(tmp) / f"dcs-{arch}.lock"
+        cons.write_text(constraints(base_text))
+        try:
+            rc, out = _run_redacted(
+                ["uv", "pip", "compile", "--quiet", "--generate-hashes", "--only-binary", ":all:", "--python-version", "3.12",
+                 "--python-platform", f"{arch}-manylinux_2_28", "-c", cons.name, "--find-links", str(built.parent),
+                 "--custom-compile-command", "gbx:dcs:build --relock", "-o", str(new_lock), "dcs.in"],
+                cwd=str(env),
+            )
+        finally:
+            cons.unlink()
+        if rc != 0:
+            raise LockError(f"uv pip compile exited {rc}:\n{out[-1500:]}")
+        lock_text = new_lock.read_text()
+        problems = check(parse_lock(lock_text), parse_base(base_text), want, sha256(built))
+        if problems:
+            raise LockError("; ".join(problems))
+    staged = {name: env / (name + ".new") for name in (f"dcs-{arch}.lock", f"dcs-base-{arch}.txt")}
+    staged[f"dcs-{arch}.lock"].write_text(lock_text)
+    staged[f"dcs-base-{arch}.txt"].write_text(base_text)
+    for name, path in staged.items():
+        os.replace(path, env / name)
 
 
 def main(argv=None):
@@ -268,11 +313,15 @@ def main(argv=None):
     for name in ("relock", "check", "moves"):
         sub.add_parser(name).add_argument("arch", choices=ARCHES)
     sub.add_parser("rasterio-pin")
+    sub.add_parser("base-image").add_argument("arch", choices=ARCHES)
     w = sub.add_parser("wheelhouse")
     w.add_argument("arch", choices=ARCHES)
     w.add_argument("dest")
     args = ap.parse_args(argv)
     try:
+        if args.cmd == "base-image":
+            print(base_image(_read(args.root, args.arch)[1]))
+            return 0
         if args.cmd == "rasterio-pin":
             print(rasterio_pin(args.root))
             return 0

@@ -34,7 +34,8 @@ rasterio==1.5.2+gbx1 \\
 tippecanoe==2.72.0 \\
     --hash=sha256:{H1}
 """
-BASE = "click==8.2.1\nidna==3.11\nnumpy==2.3.4\nrequests==2.32.5\n"
+DIGEST = "sha256:" + "d" * 64
+BASE = f"# base-image: databricksruntime/environment@{DIGEST}\nclick==8.2.1\nidna==3.11\nnumpy==2.3.4\nrequests==2.32.5\n"
 
 
 def test_a_lock_is_read_as_name_version_and_hashes():
@@ -98,6 +99,7 @@ def tree(tmp_path, wheel_sha=None):
     lock = LOCK.replace(f"rasterio==1.5.2+gbx1 \\\n    --hash=sha256:{H2}", f"rasterio==1.5.2+gbx1 \\\n    --hash=sha256:{wheel_sha or sha}")
     (env / "dcs-aarch64.lock").write_text(lock)
     (env / "dcs-base-aarch64.txt").write_text(BASE)
+    (env / "dcs.in").write_text("-r core.txt\n")
     cache = root / "build/dcs/wheelhouse/aarch64"
     cache.mkdir(parents=True)
     for name in ("idna-3.20-py3-none-any.whl", "tippecanoe-2.72.0-py3-none-manylinux_2_28_aarch64.whl"):
@@ -173,3 +175,96 @@ def test_only_distributions_the_build_installed_are_held_to_the_no_source_build_
     built = ["rasterio", "numexpr", "badpkg"]
     assert verify_image.linux_tagged(tags, built, "aarch64") == ["badpkg"]
     assert verify_image.linux_tagged(tags, built, "x86_64") == []
+
+
+# --- the base image is pinned by digest, and a relock writes both files or neither ---------------
+
+
+def test_the_base_image_is_the_digest_recorded_in_the_base_list():
+    assert dcs_lock.base_image(BASE) == f"databricksruntime/environment@{DIGEST}"
+    assert dcs_lock.parse_base(BASE)["click"] == "8.2.1"  # the header is not a package
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["click==8.2.1\n", "# base-image: databricksruntime/environment:v6-standard\nclick==8.2.1\n"],
+    ids=["no-header", "tag-not-digest"],
+)
+def test_a_base_list_without_a_digest_pin_is_refused(text):
+    with pytest.raises(dcs_lock.LockError, match="digest"):
+        dcs_lock.base_image(text)
+
+
+def scripted(tmp_path, compile_rc):
+    """Stand-in for the tools relock calls: docker inspect (digest), docker run (pip list), uv compile."""
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append(cmd[:3])
+        if cmd[:2] == ["docker", "image"]:
+            return 0, f'["databricksruntime/environment@{DIGEST}"]'
+        if cmd[0] == "docker":
+            assert cmd[cmd.index("--entrypoint") + 2] == f"databricksruntime/environment@{DIGEST}"  # the pinned image
+            return 0, "click==8.2.1\nidna==3.11\nnewpkg==1.0\n"
+        out = Path(cmd[cmd.index("-o") + 1])
+        if compile_rc == 0:
+            out.write_text(NEW_LOCK)
+        return compile_rc, "no solution" if compile_rc else ""
+
+    return run, calls
+
+
+NEW_LOCK = LOCK.replace("numpy==2.3.4", "newpkg==1.0")
+
+
+def test_a_failed_compile_leaves_the_old_base_list_and_lock_alone(tmp_path, monkeypatch):
+    root = tree(tmp_path)
+    env = root / "python/geobrix/envs/env6"
+    before = {n: (env / n).read_text() for n in ("dcs-aarch64.lock", "dcs-base-aarch64.txt")}
+    run, _ = scripted(tmp_path, compile_rc=2)
+    monkeypatch.setattr(dcs_lock, "_run_redacted", run)
+    with pytest.raises(dcs_lock.LockError, match="uv pip compile"):
+        dcs_lock.relock(root, "aarch64")
+    assert {n: (env / n).read_text() for n in before} == before
+
+
+def test_a_lock_that_fails_its_check_leaves_the_old_pair_alone(tmp_path, monkeypatch):
+    root = tree(tmp_path)
+    env = root / "python/geobrix/envs/env6"
+    before = {n: (env / n).read_text() for n in ("dcs-aarch64.lock", "dcs-base-aarch64.txt")}
+    run, _ = scripted(tmp_path, compile_rc=0)  # NEW_LOCK still carries a rasterio hash that is not the built wheel's
+    monkeypatch.setattr(dcs_lock, "_run_redacted", run)
+    with pytest.raises(dcs_lock.LockError, match="sha256"):
+        dcs_lock.relock(root, "aarch64")
+    assert {n: (env / n).read_text() for n in before} == before
+
+
+def test_a_good_relock_writes_both_files_with_the_digest_header(tmp_path, monkeypatch):
+    root = tree(tmp_path)
+    env = root / "python/geobrix/envs/env6"
+    built = next((root / "build/native/out/aarch64/bindings/dist").glob("*.whl"))
+    good = LOCK.replace(f"rasterio==1.5.2+gbx1 \\\n    --hash=sha256:{H2}", f"rasterio==1.5.2+gbx1 \\\n    --hash=sha256:{dcs_lock.sha256(built)}")
+    run, calls = scripted(tmp_path, compile_rc=0)
+
+    def run_good(cmd, **kw):
+        rc, out = run(cmd, **kw)
+        if cmd[0] == "uv":
+            Path(cmd[cmd.index("-o") + 1]).write_text(good)
+        return rc, out
+
+    monkeypatch.setattr(dcs_lock, "_run_redacted", run_good)
+    dcs_lock.relock(root, "aarch64")
+    base = (env / "dcs-base-aarch64.txt").read_text()
+    assert base.splitlines()[0] == f"# base-image: databricksruntime/environment@{DIGEST}"
+    assert "newpkg==1.0" in base and (env / "dcs-aarch64.lock").read_text() == good
+
+
+# --- verify_image.py: exactly one payload libssl ----------------------------------------------
+
+
+def test_the_payload_libssl_must_be_exactly_one_soname_of_version_3_or_later():
+    ok = {"libssl.so.4": "libssl-9d7cc1ed.so.4", "libgdal.so.39": "libgdal-faff949c.so.39"}
+    assert verify_image.payload_libssl(ok) == ["libssl-9d7cc1ed.so.4"]
+    assert verify_image.payload_libssl({"libssl.so.1.1": "libssl-aa.so.1.1"}) == []
+    two = {**ok, "libssl.so.3": "libssl-bb.so.3"}
+    assert verify_image.payload_libssl(two) == ["libssl-9d7cc1ed.so.4", "libssl-bb.so.3"]  # the oracle fails on two

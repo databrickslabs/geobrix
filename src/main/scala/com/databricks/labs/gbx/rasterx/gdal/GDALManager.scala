@@ -57,6 +57,8 @@ object GDALManager extends Logging {
 
     var isEnabled = false
     @volatile private var loaded: Option[NativeChoice] = None
+    // the loaded JNI's sha256, taken when it was loaded: its file may be gone by the time a later configuration names a copy
+    @volatile private var loadedIdentity: Option[String] = None
     // conf dirs already found to name the loaded JNI: a later init with one of them is a lock-free no-op
     @volatile private var sameAsLoaded: Set[String] = Set.empty
     // PROJ grid directories already on the PROJ search path, in the order applied (a union: none is dropped)
@@ -408,6 +410,36 @@ object GDALManager extends Logging {
         }
     }
 
+    /**
+      * What a later [[NativeDirKey]] `dir` means for the GDAL this JVM has loaded (`c`, whose JNI had the sha256
+      * `loadedIdentity` when it was loaded). Pure: the file system comes in as arguments.
+      *
+      * Left: the refusal (no JNI at `dir`, or another GDAL than the loaded one). Right(None): the loaded GDAL; nothing
+      * to do. Right(Some(choice)): the same JNI bytes, while the file the JVM loaded them from is gone. An executor
+      * outlives the notebook run whose Python environment held the payload it loaded, and the next run names its own
+      * copy of that payload. The loaded library stays mapped, so `choice` (the copy's paths) replaces `c`, and its
+      * PROJ and GDAL data directories replace the removed ones.
+      */
+    private[gdal] def laterNative(
+        c: NativeChoice,
+        loadedIdentity: Option[String],
+        dir: String,
+        exists: String => Boolean,
+        realPath: String => String,
+        jniIdentity: String => String
+    ): Either[String, Option[NativeChoice]] = {
+        val d = dir.stripSuffix("/")
+        val j = s"$d/lib/$JniName"
+        if (!exists(j)) Left(s"geobrix: no GDAL JNI at $j (from $NativeDirKey); this JVM runs the GDAL loaded from ${c.jni}. Fix: $FindDir.")
+        else {
+            val loadedPaths = Set(c.jni, realPath(c.jni))
+            val idOf = (p: String) => if (loadedPaths(p)) loadedIdentity.getOrElse(jniIdentity(p)) else jniIdentity(p)
+            if (!sameJni(j, c.jni, realPath, idOf)) Left(laterGdal(c.jni, j))
+            else if (exists(c.jni)) Right(None)
+            else payload(d, NativeDirKey, exists).map(moved => Option(moved))
+        }
+    }
+
     private def sameJni(a: String, b: String, realPath: String => String, jniIdentity: String => String): Boolean = {
         val (ra, rb) = (realPath(a), realPath(b))
         ra == rb || jniIdentity(ra) == jniIdentity(rb)
@@ -427,17 +459,19 @@ object GDALManager extends Logging {
                 loaded match {
                     case Some(c) =>
                         confDir.filter(_.nonEmpty).foreach { d =>
-                            val j = s"${d.stripSuffix("/")}/lib/$JniName"
-                            if (!Files.exists(Paths.get(j))) {
-                                throw new IllegalStateException(
-                                  s"geobrix: no GDAL JNI at $j (from $NativeDirKey); this JVM runs the GDAL loaded from " +
-                                      s"${c.jni}. Fix: $FindDir."
-                                )
+                            laterNative(c, loadedIdentity, d, p => Files.exists(Paths.get(p)), realPathOf, jniIdentityOf) match {
+                                case Left(refusal)      => throw new IllegalStateException(refusal)
+                                case Right(None)        => sameAsLoaded += d
+                                case Right(Some(moved)) =>
+                                    // the JNI stays mapped from the path that is gone; its data directories do not
+                                    logInfo(s"GDAL JNI loaded from ${c.jni}, which is gone; the same JNI is at ${moved.jni}")
+                                    loaded = Some(moved)
+                                    sameAsLoaded = Set(d)
+                                    applyNativeData(moved)
+                                    setProjSearchPath((appliedGridDirs :+ baseProjData).distinct)
                             }
-                            if (!sameJni(j, c.jni, realPathOf, jniIdentityOf)) throw new IllegalStateException(laterGdal(c.jni, j))
-                            sameAsLoaded += d
                         }
-                        c
+                        loaded.getOrElse(c)
                     case None    =>
                         val dir = confDir.filter(_.nonEmpty).orElse(sessionNativeDir())
                         val env = sys.env.get("GBX_NATIVE_ROOT").filter(_.nonEmpty)
@@ -468,6 +502,7 @@ object GDALManager extends Logging {
                         if (foreign.nonEmpty) throw new IllegalStateException(differentGdal(foreign, c.jni.stripSuffix(s"/$JniName")))
                         val version = bindCheck(c)
                         applyNativeData(c) // before any driver registers: GDAL fixes its data path at the first lookup
+                        loadedIdentity = Some(jniIdentityOf(realPathOf(c.jni)))
                         loaded = Some(c)
                         dir.foreach(d => sameAsLoaded += d)
                         logInfo(s"GDAL JNI loaded from ${c.jni} ($version)")

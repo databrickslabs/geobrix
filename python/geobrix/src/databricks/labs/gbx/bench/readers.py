@@ -8832,8 +8832,21 @@ def _write_striped_gtiff(
         # Explicit STRIP layout — no tiling, no blockxsize/blockysize.
         tiled=False,
     )
-    with open_data(path, "w", **profile) as ds:
-        ds.write(data)
+    # GDAL seeks back to write the first IFD offset on close; a Volume (FUSE) leaves it 0 and
+    # tears the file. Write locally, then publish sequentially (write-then-rename).
+    import shutil
+
+    from databricks.labs.gbx.bench.synth import publish_file
+    from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
+
+    scratch = new_local_temp_dir("gbx_striped_")
+    try:
+        local = os.path.join(scratch, os.path.basename(path))
+        with open_data(local, "w", **profile) as ds:
+            ds.write(data)
+        publish_file(local, path)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 def _write_tiled_cog(

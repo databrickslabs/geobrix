@@ -161,3 +161,72 @@ def test_materialize_all_reads_corpus_json_when_corpus_omitted(tmp_path):
     corpus.write(tmp_path / "corpus.json")
     written = synth.materialize_all(str(tmp_path))  # corpus=None -> read json
     assert written, "materialize_all loads corpus.json when corpus is omitted"
+
+
+# ---------------------------------------------------------------------------
+# Volume safety: no GDAL write onto the destination, torn cache files rewritten
+# ---------------------------------------------------------------------------
+
+_TORN = bytes.fromhex("49492a0000000000") + b"\x00" * 64  # first-IFD offset 0
+
+
+def test_synth_never_writes_gdal_onto_the_destination(tmp_path, monkeypatch):
+    """GDAL seeks back on close; on a Volume that tears the file. It must write locally, then copy."""
+    src = _write_src(tmp_path / "src.tif", bands=2)
+    out = tmp_path / "out"
+    written = []
+    real = synth.open_data
+
+    def spy(path, mode="r", **kw):
+        if mode == "w":
+            written.append(Path(str(path)))
+        return real(path, mode, **kw)
+
+    monkeypatch.setattr(synth, "open_data", spy)
+    for recipe in ("frombands", "combineavg", "merge"):
+        synth.synthesize(str(src), recipe, str(out))
+    assert written, "the spy saw no writes"
+    assert all(out not in p.parents for p in written), written
+    # nothing partial left beside the finished files
+    assert sorted(p.suffix for p in out.iterdir()) == [".tif"] * len(
+        list(out.iterdir())
+    )
+
+
+def test_synth_rewrites_a_torn_cached_file(tmp_path):
+    src = _write_src(tmp_path / "src.tif", bands=2)
+    out = tmp_path / "out"
+    paths = synth.synthesize(str(src), "merge", str(out))
+    good = Path(paths[0]).read_bytes()
+    Path(paths[0]).write_bytes(_TORN)
+    again = synth.synthesize(str(src), "merge", str(out))
+    assert again == paths
+    assert Path(paths[0]).read_bytes() == good, "torn file not rewritten"
+    with rasterio.open(paths[0]) as ds:
+        assert ds.read(1).shape == (16, 16)
+
+
+def test_synth_keeps_a_valid_cached_file(tmp_path):
+    src = _write_src(tmp_path / "src.tif", bands=2)
+    out = tmp_path / "out"
+    paths = synth.synthesize(str(src), "combineavg", str(out))
+    before = [Path(p).stat().st_mtime_ns for p in paths]
+    synth.synthesize(str(src), "combineavg", str(out))
+    assert [Path(p).stat().st_mtime_ns for p in paths] == before
+
+
+def test_publish_file_falls_back_when_replace_is_refused(tmp_path, monkeypatch):
+    local = tmp_path / "a.bin"
+    local.write_bytes(b"abc")
+    dest = tmp_path / "d" / "a.bin"
+    dest.parent.mkdir()
+
+    def refuse(*a, **k):
+        raise OSError("no rename here")
+
+    monkeypatch.setattr(synth.os, "replace", refuse)
+    synth.publish_file(local, dest)
+    assert dest.read_bytes() == b"abc"
+    assert [p.name for p in dest.parent.iterdir()] == [
+        "a.bin"
+    ], "temp sibling left behind"

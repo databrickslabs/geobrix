@@ -49,6 +49,28 @@ def test_write_striped_gtiff_creates_valid_file(tmp_path):
         assert not ds.profile.get("tiled", False)
 
 
+def test_write_striped_gtiff_writes_locally_then_copies(tmp_path, monkeypatch):
+    """The fixture can land on a Volume: GDAL must write a local file, never the destination."""
+    from databricks.labs.gbx.bench import readers
+
+    dest = tmp_path / "vol" / "strip.tif"
+    dest.parent.mkdir()
+    written = []
+    real = readers.open_data
+
+    def spy(path, mode="r", **kw):
+        if mode == "w":
+            written.append(os.fspath(path))
+        return real(path, mode, **kw)
+
+    monkeypatch.setattr(readers, "open_data", spy)
+    _write_striped_gtiff(str(dest), _W, _H, _B, _DT)
+    assert written and all(w != str(dest) for w in written), written
+    assert [p.name for p in dest.parent.iterdir()] == ["strip.tif"]
+    with rasterio.open(dest) as ds:
+        assert (ds.width, ds.height) == (_W, _H)
+
+
 def test_write_tiled_cog_creates_valid_file(tmp_path):
     """_write_tiled_cog produces a genuine COG: tiled AND has overview levels."""
     from databricks.labs.gbx.pyrx.core.cog import sniff_header

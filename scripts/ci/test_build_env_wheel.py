@@ -575,35 +575,58 @@ def test_base_txt_is_the_oldest_preinstalled_version_of_every_package_an_extra_n
                 assert dep in base, (f.name, dep)  # so its floor-only / frozen-cap rule applies
 
 
+MASKED = "click: 8.2.1 under the runtime's constraints, 8.5.0 with them as preferences only (a move the constraints mask)"
+
+
 @pytest.mark.parametrize(
-    "env, install, resolved, failure",
+    "env, install, resolved, unconstrained, failure",
     [
-        (6, "core", {"idna": "3.20"}, None),  # a documented move
-        (6, "core", {"click": "8.5.0"}, "click 8.2.1 -> 8.5.0 is not a documented move"),
-        (5, "core", {"requests": "2.32.5"}, "requests 2.32.3 -> 2.32.5 is not a documented move"),  # [stac]'s only
-        (5, "full", {"requests": "2.32.5"}, None),
-        (6, "full", {"rasterio": "1.5.2"}, "pulls PyPI's rasterio 1.5.2, which the wheel vendors"),
-        (6, "full", {"geopandas": "1.2.0"}, "pulls PyPI's geopandas 1.2.0, which the wheel vendors"),
+        (6, "core", {"idna": "3.20"}, None, None),  # a documented move
+        (6, "core", {"click": "8.5.0"}, None, "click 8.2.1 -> 8.5.0 is not a documented move"),
+        (5, "core", {"requests": "2.32.5"}, None, "requests 2.32.3 -> 2.32.5 is not a documented move"),  # [stac]'s only
+        (5, "full", {"requests": "2.32.5"}, None, None),
+        (6, "full", {"rasterio": "1.5.2"}, None, "pulls PyPI's rasterio 1.5.2, which the wheel vendors"),
+        (6, "full", {"geopandas": "1.2.0"}, None, "pulls PyPI's geopandas 1.2.0, which the wheel vendors"),
+        # the constraints held click by backtracking another package; pip on the runtime would move it
+        (6, "full", {"click": "8.2.1", "x": "1.0"}, {"click": "8.5.0", "x": "1.0"}, MASKED),
+        (6, "full", {"click": "8.2.1"}, {"click": "8.2.1"}, None),
     ],
-)
-def test_an_install_may_move_only_a_documented_package_and_pull_nothing_vendored(env, install, resolved, failure):
+)  # fmt: skip
+def test_an_install_may_move_only_a_documented_package_and_pull_nothing_vendored(
+    env, install, resolved, unconstrained, failure
+):
     runtime = install_moves.RUNTIMES[env][0]
-    _moves, failures = install_moves.judge(env, install, runtime, resolved)
+    _moves, failures = install_moves.judge(env, install, runtime, resolved, unconstrained)
     assert failures == ([failure] if failure else [])
 
 
+# What uv prints when it cannot reach the index (not when it cannot solve): anchored phrases, so a resolution error
+# that names databricks-connect is not taken for a network failure.
+INDEX_DOWN = ("failed to fetch", "dns error", "error sending request", "tcp connect error", "connection refused",
+              "failed to connect", "operation timed out", "request failed after")  # fmt: skip
+
+
+def _precondition(why):
+    """In CI (the scripts/ci step installs uv and points it at the job's index) a missing precondition fails the row;
+    on a workstation it skips."""
+    (pytest.fail if os.environ.get("CI") else pytest.skip)(f"PRECONDITION MISSING: {why}; this row not run")
+
+
+@pytest.mark.parametrize("arch", install_moves.ARCHES)
+@pytest.mark.parametrize("install", ["core", "full"])
 @pytest.mark.parametrize("runtime", [r for rs in install_moves.RUNTIMES.values() for r in rs])
-def test_each_runtime_keeps_its_packages_but_the_documented_moves(runtime):
-    # uv resolves core.txt and every extra (x86_64) with the runtime's preinstalled list as constraints; the
-    # gbx:versions:audit --install-moves form covers both architectures and the core install alone.
+def test_each_runtime_keeps_its_packages_but_the_documented_moves(runtime, install, arch):
+    # uv resolves the install with the runtime's preinstalled list as constraints, and again with it as preferences
+    # only (the two must agree: a difference is a move the constraints masked); the same 28 cases as
+    # gbx:versions:audit --install-moves.
     if shutil.which("uv") is None:
-        pytest.skip("PRECONDITION MISSING: uv; this row not run")
+        _precondition("uv")
     env = next(e for e, rs in install_moves.RUNTIMES.items() if runtime in rs)
-    resolved, err = install_moves.resolve(env, "full", runtime, "x86_64")
-    if resolved is None and any(m in err.lower() for m in ("failed to fetch", "dns error", "timed out", "connect")):
-        pytest.skip(f"PRECONDITION MISSING: the package index; this row not run ({err[:80]})")
+    resolved, err, unconstrained = install_moves.resolve(env, install, runtime, arch)
+    if resolved is None and any(m in err.lower() for m in INDEX_DOWN):
+        _precondition(f"the package index ({err[:80]})")
     assert resolved is not None, err
-    _moves, failures = install_moves.judge(env, "full", runtime, resolved)
+    _moves, failures = install_moves.judge(env, install, runtime, resolved, unconstrained)
     assert failures == []
 
 

@@ -7,7 +7,10 @@ A runtime's preinstalled packages are python/geobrix/envs/runtimes/<runtime>.txt
 family and two installs, the core install (envs/env<N>/core.txt) and the full one (core.txt and every
 extra-<name>.txt), uv resolves the requirements for CPython 3.12 manylinux_2_28 <arch>, with
 the runtime's list as CONSTRAINTS, except the packages ALLOWED_MOVES lets move there (their preinstalled version
-stays a preference). So a resolution that fails would have moved another preinstalled package. What the install adds
+stays a preference). So a resolution that fails would have moved another preinstalled package. Constraints can also
+MASK a move: uv backtracks to an older release of whatever would raise a preinstalled package's floor, while pip on
+the runtime takes the newest release and moves the package. So the same requirements are resolved again with the
+runtime's versions as preferences only, and that resolution must equal the constrained one. What the install adds
 must have a binary wheel for the platform (a preinstalled package needs none). Then:
 - every resolved package whose version differs from the runtime's is a move, and must be an ALLOWED_MOVES entry;
 - no resolved package may be one the wheel vendors (pip would install PyPI's copy beside the vendored build: a
@@ -125,7 +128,7 @@ def allowed(env, install, runtime_pins):
 
 
 def resolve(env, install, runtime, arch, uv="uv"):
-    """(resolved pins, None) or (None, the redacted uv error)."""
+    """(constrained pins, None, preference-only pins) or (None, the redacted uv error, None)."""
     base = pins(ENVS / "runtimes" / f"{runtime}.txt")
     free = allowed(env, install, base)
     with tempfile.TemporaryDirectory(prefix="gbx-moves-") as tmp:
@@ -144,8 +147,18 @@ def resolve(env, install, runtime, arch, uv="uv"):
             capture_output=True, text=True,
         )  # fmt: skip
         if res.returncode != 0:
-            return None, redact((res.stderr or res.stdout).strip())[-1500:]
+            return None, redact((res.stderr or res.stdout).strip())[-1500:], None
         resolved = pins(out)
+        # The same requirements with the runtime's versions as preferences only: pip on the runtime holds nothing.
+        free_out = tmp / "preferred.txt"
+        free_out.write_text("".join(f"{n}=={v}\n" for n, v in sorted(base.items())))
+        res = subprocess.run(
+            [uv, "pip", "compile", "-q", "--no-header", "--no-annotate", *target, "-o", str(free_out), str(reqs)],
+            capture_output=True, text=True,
+        )  # fmt: skip
+        if res.returncode != 0:
+            return None, "preferences only: " + redact((res.stderr or res.stdout).strip())[-1200:], None
+        unconstrained = pins(free_out)
         # What the install adds must come as a wheel for the platform (the preinstalled packages are there already,
         # some built by the runtime itself, so they need none).
         new = {n: v for n, v in resolved.items() if base.get(n) != v}
@@ -156,16 +169,25 @@ def resolve(env, install, runtime, arch, uv="uv"):
             capture_output=True, text=True,
         )  # fmt: skip
         if res.returncode != 0:
-            return None, "no wheel for what it adds: " + redact((res.stderr or res.stdout).strip())[-1200:]
-        return resolved, None
+            return None, "no wheel for what it adds: " + redact((res.stderr or res.stdout).strip())[-1200:], None
+        return resolved, None, unconstrained
 
 
-def judge(env, install, runtime, resolved):
-    """(moves, failures): moves = [(name, runtime version, resolved version)], failures = [what is wrong]."""
+def judge(env, install, runtime, resolved, unconstrained=None):
+    """(moves, failures): moves = [(name, runtime version, resolved version)], failures = [what is wrong].
+    ``unconstrained`` is the preference-only resolution: any package it has at another version (or not at all, or
+    only it has) is a move the constraints masked."""
     base = pins(ENVS / "runtimes" / f"{runtime}.txt")
     free = allowed(env, install, base)
     moves = sorted((n, base[n], v) for n, v in resolved.items() if n in base and base[n] != v)
     failures = [f"{n} {b} -> {v} is not a documented move" for n, b, v in moves if n not in free]
+    if unconstrained is not None:
+        for n in sorted(set(resolved) | set(unconstrained)):
+            if resolved.get(n) != unconstrained.get(n):
+                failures.append(
+                    f"{n}: {resolved.get(n, 'absent')} under the runtime's constraints, "
+                    f"{unconstrained.get(n, 'absent')} with them as preferences only (a move the constraints mask)"
+                )
     pulled = sorted(set(resolved) & vendored(env))
     failures += [f"pulls PyPI's {n} {resolved[n]}, which the wheel vendors" for n in pulled]
     return moves, failures
@@ -190,11 +212,11 @@ def main():
                 continue
             for arch in arches:
                 for install in ("core", "full"):
-                    resolved, err = resolve(env, install, runtime, arch, uv)
+                    resolved, err, unconstrained = resolve(env, install, runtime, arch, uv)
                     if resolved is None:
                         moves, bad = [], [f"no resolution holds the runtime's other packages: {err}"]
                     else:
-                        moves, bad = judge(env, install, runtime, resolved)
+                        moves, bad = judge(env, install, runtime, resolved, unconstrained)
                     added = sorted(set(resolved or {}) - set(pins(ENVS / "runtimes" / f"{runtime}.txt")))
                     failures += len(bad)
                     rows.append(

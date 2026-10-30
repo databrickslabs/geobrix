@@ -104,7 +104,12 @@ jobs:
       # registry is involved. Run once, in one shard.
       - name: test scripts/ci (JAR packaging check, DCS build/publish gates, shard guard)
         if: matrix.shard.scripts_ci
-        run: python -m pytest scripts/ci -v
+        # The install-moves rows (test_build_env_wheel.py) resolve with uv. uv comes through the job's pip, which the
+        # JFrog bootstrap routes to the mirror (never a direct download), and uses the same index and netrc; the rows
+        # FAIL in CI (CI=true) when uv or the index is missing, they do not skip.
+        run: |
+          python -m pip install --quiet uv==0.13.5
+          UV_DEFAULT_INDEX="$(python -m pip config get global.index-url)" python -m pytest scripts/ci -v
 
   # The x86_64 native build the heavy build's JVMs load their GDAL from (the JAR's GDAL Java classes refuse any
   # other JNI). Cached on the native build's inputs: a hit takes seconds, a miss builds (about 20-40 min), in

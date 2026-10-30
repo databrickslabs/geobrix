@@ -136,12 +136,27 @@ def _same_proj_db(version, ref):
     )
 
 
+def lazy_proj_ref(db):
+    """A ``ref`` for ``proj_entry`` that reads the payload ``proj.db`` (``proj_db_version``) on first use and then
+    remembers it, so an interpreter whose PROJ variables name no ``proj.db`` never opens (or imports ``sqlite3`` for)
+    the payload's."""
+    memo = []
+
+    def ref():
+        if not memo:
+            memo.append(proj_db_version(db))
+        return memo[0]
+
+    return ref
+
+
 def proj_entry(d, ref=None):
     """What a ``PROJ_DATA``/``PROJ_LIB`` entry is to this process: ``"db"`` (a directory holding a readable
     ``proj.db``), ``"dir"`` (a readable directory without one: a grid directory), ``"missing"`` (nothing there),
     ``"unreadable"`` (there, but this process cannot read it or its ``proj.db``: the entry pyproj's ``Path.exists()``
-    raises on, EACCES), or, given ``ref`` (the payload ``proj.db``'s ``proj_db_version``), ``"foreign"`` (a readable
-    ``proj.db`` that is not the payload's version, which the payload's PROJ cannot use). Never raises.
+    raises on, EACCES), or, given ``ref`` (the payload ``proj.db``'s ``proj_db_version``, or a callable returning it,
+    called only once a ``proj.db`` is found), ``"foreign"`` (a readable ``proj.db`` that is not the payload's
+    version, which the payload's PROJ cannot use). Never raises.
     """
     try:
         os.stat(d)
@@ -159,6 +174,8 @@ def proj_entry(d, ref=None):
             return "dir"
         if not os.access(db, os.R_OK):
             return "unreadable"
+        if callable(ref):
+            ref = ref()
         if ref is not None and not _same_proj_db(proj_db_version(db), ref):
             return "foreign"
         return "db"
@@ -195,9 +212,9 @@ def set_data_dirs(env, share):
     # PROJ_LIB's grid directories followed by the payload's share/proj. A value with a usable proj.db and nothing
     # dropped is kept as it is.
     proj = os.path.join(share, "proj")
-    ref = proj_db_version(
+    ref = lazy_proj_ref(
         os.path.join(proj, "proj.db")
-    )  # None (no payload proj.db): no version check
+    )  # read on first use; None (no payload proj.db): no version check
     lib = []
     if "PROJ_LIB" in env:
         lib = usable_proj_dirs(env["PROJ_LIB"], ref)

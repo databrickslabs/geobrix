@@ -270,6 +270,36 @@ def test_a_proj_db_probe_that_raises_is_unreadable_and_never_raises(
     assert env["PROJ_DATA"] == "<share>/proj"
 
 
+@pytest.mark.parametrize(
+    "environ, opened",
+    [
+        (
+            {},
+            False,
+        ),  # neither variable: every interpreter start, so the payload proj.db stays closed
+        (
+            {"PROJ_DATA": "<grids>"},
+            False,
+        ),  # a grid directory holds no proj.db to compare with
+        ({"PROJ_LIB": "<grids>", "PROJ_DATA": "<missing>"}, False),
+        ({"PROJ_DATA": "<ok>"}, True),  # a proj.db to compare: the payload's is read
+        ({"PROJ_LIB": "<ok>"}, True),
+    ],
+)
+def test_the_payload_proj_db_is_opened_only_when_a_variable_names_a_proj_db(
+    tmp_path, monkeypatch, environ, opened
+):
+    dirs = _proj_dirs(tmp_path)
+    reads = []
+    real = _rules.proj_db_version
+    monkeypatch.setattr(
+        _rules, "proj_db_version", lambda db: reads.append(db) or real(db)
+    )
+    env = {k: _fill(v, dirs) for k, v in environ.items()}
+    _rules.set_data_dirs(env, dirs["<share>"])
+    assert bool([d for d in reads if d.startswith(dirs["<share>"])]) is opened
+
+
 # The DBR 19 standard-access driver, for real: the runtime's PROJ_DATA names a directory this process cannot read
 # (EACCES), and the vendored pyproj, which has no data dir of its own, falls through to PROJ_DATA. A fresh
 # interpreter activates a copy of the payload as the .pth does, then imports pyproj and resolves EPSG:4326. Root

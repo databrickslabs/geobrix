@@ -724,16 +724,13 @@ def _header_of(path):
 
 
 def _without_lazrs(monkeypatch):
-    """This process as a worker with no lazrs: ``import lazrs`` fails, laspy's own
-    binding of it is gone and laszip is the one decoder it reports. Nothing here can
-    reach lazrs, so no read can abort the test run on a buffer lazrs reserves; a read
-    that gets as far as a decoder fails with laspy's error (laszip is not a test
-    dependency)."""
-    import laspy._compression.lazrsbackend as lazrsbackend
+    """This process as a worker with no lazrs: ``import lazrs`` fails and laszip is the
+    one decoder laspy reports. Nothing here can reach lazrs, so no read can abort the
+    test run on a buffer lazrs reserves; a read that gets as far as a decoder fails with
+    laspy's error (laszip is not a test dependency)."""
     from laspy.compression import LazBackend
 
     monkeypatch.setitem(sys.modules, "lazrs", None)
-    monkeypatch.setattr(lazrsbackend, "lazrs", None)
     monkeypatch.setattr(
         LazBackend, "detect_available", staticmethod(lambda: (LazBackend.Laszip,))
     )
@@ -747,7 +744,7 @@ def _set_chunk_count(path, count):
         fh.write(struct.pack("<I", count))
 
 
-@pytest.mark.parametrize("damage", ["none", "variable", "zero"])
+@pytest.mark.parametrize("damage", ["none", "variable", "zero", "clamp"])
 def test_lidar_laz_without_lazrs_still_caps_a_huge_point_count(
     tmp_path, monkeypatch, damage
 ):
@@ -755,6 +752,8 @@ def test_lidar_laz_without_lazrs_still_caps_a_huge_point_count(
     what the table holds is capped by it: its chunk count times the points per chunk, both readable
     without lazrs. Where that cannot be known (chunks of varying size, zero points per chunk), the
     bytes of the file bound it, at the fewest a point takes: a guess, but never looser than the file.
+    So does a chunk count too big for the bytes (``clamp``: 700 chunks of 50,000 points in a file
+    of 5,000, a count the file-size bound on the table still lets through).
     Lazrs is taken away for real (see :func:`_without_lazrs`), so the cap is read off the file
     and no decoder is called."""
     from databricks.labs.gbx.ds import lidar
@@ -771,6 +770,10 @@ def test_lidar_laz_without_lazrs_still_caps_a_huge_point_count(
             at = raw.find(bytes(header.vlrs.get("LasZipVlr")[0].record_data)) + 12
             fh.seek(at)
             fh.write(struct.pack("<I", 0xFFFFFFFF if damage == "variable" else 0))
+    if damage == "clamp":
+        # 700 chunks of 50,000 points: 35M, more than the bytes of the file can hold
+        _set_chunk_count(path, 700)
+        assert 700 * 50000 > by_size
     _declare_points(path, 10**9)
     _without_lazrs(monkeypatch)
 
@@ -1789,7 +1792,7 @@ def test_a_folder_that_cannot_be_written_says_what_to_do(tmp_path):
         bad.close()
 
 
-# --- fix round 2: valid data that must not be set aside ---------------------------
+# --- valid data that must not be set aside ---------------------------
 
 
 def _wkb_points(points):
@@ -2008,7 +2011,7 @@ def test_lidar_waveform_data_after_the_points_is_not_extra_points(tmp_path):
     assert len(rows) == 3 and recs == []
 
 
-# --- fix round 2: environment errors fail the read; they are not bad data --------
+# --- environment errors fail the read; they are not bad data --------
 
 
 def test_memory_and_import_errors_fail_the_read(tmp_path, monkeypatch):
@@ -2122,7 +2125,7 @@ def test_lidar_rereads_of_a_failing_chunk_are_bounded(tmp_path, monkeypatch):
     assert [i for i, _ in _classes(recs)] == ["points=0-999999999"]
 
 
-# --- fix round 2: what a bad record holds -------------------------------------
+# --- what a bad record holds -------------------------------------
 
 
 def test_raw_is_capped_and_binary_values_are_described():
@@ -2168,7 +2171,7 @@ def test_skip_log_lines_name_the_error_class_once(caplog):
     assert line.count("ValueError") == 1
 
 
-# --- fix round 3 -------------------------------------------------------------
+# --- a decoder that fails part-way through a file ----------------------------
 
 
 def _failing_reads(monkeypatch, bad_lo, bad_hi):

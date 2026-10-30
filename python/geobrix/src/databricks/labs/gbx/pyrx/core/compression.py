@@ -6,6 +6,7 @@ materialize story is consistent. Mirrors heavy OperatorOptions.appendOptions.
 
 import os
 import warnings
+from typing import Optional
 
 _FLOAT = {"float32", "float64"}
 _SMALL_INT = {"uint8", "int8"}
@@ -147,6 +148,16 @@ def auto_level(decoded_bytes) -> int:
     return _AUTO_LADDER[-1][1]  # unreachable: last ceiling is inf
 
 
+# Drivers a tile can be forced to (ds/_write.py) that take no codec options: see creation_opts.
+_NO_CODEC_OPTION_DRIVERS = frozenset({"PNG", "JPEG"})
+# The keys of a profile (or of creation_opts) that choose a codec, its predictor and its level.
+_CODEC_KEYS = ("compress", "predictor", "zstd_level", "zlevel", "LEVEL")
+
+
+def _is_png(driver) -> bool:
+    return str(driver).upper() == "PNG"
+
+
 def creation_opts(
     dtype,
     decoded_bytes=None,
@@ -190,6 +201,8 @@ def creation_opts(
         "GTiff" (default) or "COG". Controls compression option names:
         - GTiff ZSTD uses "zstd_level", DEFLATE uses "zlevel"
         - COG ZSTD/DEFLATE both use "LEVEL"
+        - PNG and JPEG take no codec options: the result is empty (PNG keeps "zlevel", its
+          deflate level), so GDAL is not handed an option it logs as not supported.
 
     nbits:
         Optional source sample depth (the band's ``NBITS`` metadata), e.g. 15 for
@@ -203,6 +216,11 @@ def creation_opts(
     dict[str, str] suitable for merging into a rasterio profile.
     """
     opts = _codec_opts(dtype, decoded_bytes, compress, level, predictor, driver)
+    if str(driver).upper() in _NO_CODEC_OPTION_DRIVERS:
+        # PNG always deflates and JPEG always takes JPEG: they take no COMPRESS or PREDICTOR (or
+        # a level named for a codec), and GDAL logs CPLE_NotSupported for each one it is
+        # handed. Only PNG's own deflate level, ZLEVEL, is an option of theirs.
+        return {k: v for k, v in opts.items() if k == "zlevel" and _is_png(driver)}
     if (
         nbits is not None
         and opts.get("predictor") == "2"
@@ -348,14 +366,21 @@ def drop_stripe_blocks(profile: dict) -> dict:
     return prof
 
 
-def source_profile(profile: dict, *, unless_jpeg: bool = False) -> dict:
+def source_profile(
+    profile: dict, *, unless_jpeg: bool = False, driver: Optional[str] = None
+) -> dict:
     """The profile of a source dataset, cleaned to be the base of a new GTiff.
 
     The one place a writer starts from a source's ``profile``: :func:`drop_ycbcr` (a YCbCr
     ``photometric`` is valid only with JPEG; ``unless_jpeg`` as there) and
-    :func:`drop_stripe_blocks` (the strip width of an untiled source). Every other key is kept.
+    :func:`drop_stripe_blocks` (the strip width of an untiled source). Every other key is kept,
+    except that for a ``driver`` that takes no codec options (PNG, JPEG; see
+    :func:`creation_opts`) the source's own codec keys go too.
     """
-    return drop_stripe_blocks(drop_ycbcr(profile, unless_jpeg=unless_jpeg))
+    prof = drop_stripe_blocks(drop_ycbcr(profile, unless_jpeg=unless_jpeg))
+    if str(driver).upper() in _NO_CODEC_OPTION_DRIVERS:
+        prof = {k: v for k, v in prof.items() if k not in _CODEC_KEYS}
+    return prof
 
 
 # Keys of a source profile that a write with the COG driver must not inherit: the driver lays the

@@ -508,6 +508,7 @@ def test_zarr_page_sections_come_in_the_planned_order():
         "Snapshots",
         "Lifecycle",
         "Chunk rows",
+        "Performance",
         "Limits",
     ]
     positions = []

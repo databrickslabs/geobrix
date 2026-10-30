@@ -12,10 +12,11 @@ the other dimensions (time, level), carrying the point's own columns:
 2. **Group.** Points are grouped by the inner chunk of the grid they fall in. One unit of
    work is one spatial chunk with every selected position of the other dimensions, and it
    ships the manifest rows of exactly the objects it reads.
-3. **Read.** A unit reads the cells of its points, not the boxes around them
-   (``_engine.read_points``): a plain store through a vectorized index, a manifest store by
-   decoding only the chunks that hold a cell. Missing data is masked as ``gbx_zarr_read``
-   masks it (``_read._table_values``).
+3. **Read.** A unit reads the cells of its points (``_engine.read_points``): a plain store
+   through a vectorized index, a manifest store by decoding only the chunks that hold a
+   cell. A unit whose points need a tenth or more of the cells of the box around them reads
+   that box once and gathers from it instead (``_unit_boxes``), which measured faster. Missing
+   data is masked as ``gbx_zarr_read`` masks it (``_read._table_values``).
 
 The work runs where it is cheapest:
 
@@ -34,6 +35,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import math
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -87,6 +89,12 @@ _SPREAD = (
     64  # unmapped points are spread over this many pseudo-chunks, so none is skewed
 )
 _CELL_BYTES = 64  # working bytes per sampled cell: indices, values and Arrow columns
+# A unit whose points need at least this share of the cells of the box around them reads the
+# box once and gathers (see _unit_boxes). MEASURED on the ERA5 cube on Serverless (one 90 x 90
+# chunk, 744 steps): the box was faster from 12% of the cells up (2x there, 4x at 25%), the
+# point reads at 1% (by 0.07 s).
+_DENSE = 0.1
+_BOX_SHARE = 2  # a dense unit's boxes hold at most this fraction of the decoded budget
 _UID, _ROW, _COL = "__gbx_uid", "__gbx_r", "__gbx_c"
 _INTERNAL = (_UID, _ROW, _COL)
 _PERIOD = 360.0
@@ -273,6 +281,9 @@ class _SampleConfig:
     var_columns: tuple[tuple[str, str], ...]  # (name, kind) of each variable
     batch_cells: int  # cells a batch holds
     crs: object  # the caller's crs, for points without an SRID
+    box_bytes: int = (
+        0  # decoded bytes a dense unit's boxes may hold (0: never read boxes)
+    )
 
     @property
     def n_steps(self) -> int:
@@ -388,6 +399,7 @@ def _plan_sample(src: _Source, names, sel, crs, flag) -> _SampleConfig:
         var_columns=tuple(columns[ndim:]),
         batch_cells=max(1, read.batch_bytes // _CELL_BYTES),
         crs=crs,
+        box_bytes=max(1, budget // _BOX_SHARE),
     )
 
 
@@ -468,12 +480,51 @@ def _cells(
     return out
 
 
-def _sampled(cfg: _SampleConfig, reader: _UnitReader, pool, row, col) -> pa.RecordBatch:
+def _unit_boxes(cfg: _SampleConfig, reader: _UnitReader, pool, row, col):
+    """``(boxes, lo)`` for a dense unit, else ``None``: decided once for the whole unit (all
+    its points, however many batches they make). A unit is dense when its distinct points,
+    at every selected step, need at least ``_DENSE`` of the cells of the box around them;
+    its boxes (one per variable, read once) must also fit ``cfg.box_bytes``. A batch then
+    gathers its cells from the boxes instead of reading them point by point.
+
+    MEASURED on the ERA5 cube (one 90 x 90 chunk, 744 steps, over a Volume, through
+    ``_sample_points``): see the Zarr Reader's sampling section for the figures.
+    """
+    from databricks.labs.gbx.zarr._engine import read_box
+
+    if not row.size or not cfg.n_steps or not cfg.box_bytes:
+        return None  # nothing to read, or no step selected (an empty box)
+    ndim = len(cfg.read.arrays[cfg.variables[0]].dims)
+    lo, hi = [0] * ndim, [0] * ndim
+    lo[cfg.ypos], hi[cfg.ypos] = int(row.min()), int(row.max()) + 1
+    lo[cfg.xpos], hi[cfg.xpos] = int(col.min()), int(col.max()) + 1
+    for k, p in enumerate(cfg.other):
+        lo[p], hi[p] = int(cfg.steps[k].min()), int(cfg.steps[k].max()) + 1
+    box_cells = math.prod(b - a for a, b in zip(lo, hi))
+    distinct = int(np.unique(row * (hi[cfg.xpos]) + col).size)
+    nbytes = box_cells * sum(
+        np.dtype(cfg.read.arrays[v].dtype).itemsize for v in cfg.variables
+    )
+    if distinct * cfg.n_steps < _DENSE * box_cells or nbytes > cfg.box_bytes:
+        return None
+    box = tuple(slice(a, b) for a, b in zip(lo, hi))
+    read = pool.map(lambda v: read_box(reader.array(v), box), cfg.variables)
+    return dict(zip(cfg.variables, read)), lo
+
+
+def _sampled(
+    cfg: _SampleConfig, reader: _UnitReader, pool, row, col, dense=None
+) -> pa.RecordBatch:
     from databricks.labs.gbx.zarr._engine import read_points
 
     def one(v: str):
         meta = cfg.read.arrays[v]
-        stored = read_points(reader.array(v), _cells(cfg, meta, row, col))
+        cells = _cells(cfg, meta, row, col)
+        if dense is None:
+            stored = read_points(reader.array(v), cells)
+        else:
+            boxes, lo = dense
+            stored = boxes[v][tuple(c - a for c, a in zip(cells, lo))]
         return _table_values(stored, meta, True, cfg.read.flag)
 
     read = list(pool.map(one, cfg.variables))
@@ -534,11 +585,13 @@ def _sample_points(
             try:
                 for name in cfg.variables:
                     reader.array(name)  # open before the threads start
+                dense = _unit_boxes(cfg, reader, pool, row[group], col[group])
                 for lo in range(0, group.size, per_batch):
                     part = group[lo : lo + per_batch]
                     yield np.repeat(part, cfg.n_steps), _sampled(
-                        cfg, reader, pool, row[part], col[part]
+                        cfg, reader, pool, row[part], col[part], dense
                     )
+                del dense
             finally:
                 reader.close()
 

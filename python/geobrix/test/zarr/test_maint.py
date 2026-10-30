@@ -4,6 +4,7 @@ These run on local OSS Delta. Time is injected (``_maint._utcnow``) so a vacuum 
 asked what it would do a week from now; the Delta history keeps its real timestamps.
 """
 
+import errno
 import hashlib
 import json
 import os
@@ -42,6 +43,7 @@ from databricks.labs.gbx.zarr._testing import (  # noqa: E402
 )
 from databricks.labs.gbx.zarr._write import gbx_zarr_write  # noqa: E402
 from databricks.labs.gbx.zarr.errors import (  # noqa: E402
+    ZarrAccessUnavailable,
     ZarrError,
     ZarrOwnershipError,
     ZarrReadOnly,
@@ -947,6 +949,93 @@ def test_restore_refuses_vacuumed_version(
     )
 
 
+@pytest.mark.parametrize(
+    "code, fix",
+    [
+        (errno.EBUSY, "retry when the Volume is reachable"),  # the mount is down
+        (errno.EACCES, "READ VOLUME"),  # no grant: retrying cannot help
+    ],
+)
+def test_restore_does_not_call_files_vacuumed_when_it_cannot_reach_them(
+    spark_delta, drop, tmp_path, no_hooks, monkeypatch, code, fix
+):
+    """With the Volume mount down (EBUSY) a stat says nothing about whether a file exists:
+    the refusal must say the files could not be checked, not that they were vacuumed. A
+    refused read (EACCES) says to check the Volume grants, not to retry."""
+    table, root, v1 = _store(spark_delta, drop, tmp_path)
+    gbx_zarr_write(
+        _blocks(spark_delta, ("t2m", (0, 0, 0), np.full((48, 10, 12), 2.0, "float32"))),
+        table,
+        mode="overwrite",
+    )
+    latest = _latest(spark_delta, table)
+    real = os.stat
+
+    def stat(path, *args, **kw):
+        if str(path).startswith(str(root / "data")):
+            raise OSError(code, os.strerror(code), str(path))
+        return real(path, *args, **kw)
+
+    monkeypatch.setattr(os, "stat", stat)
+    with pytest.raises(ZarrAccessUnavailable) as e:
+        gbx_zarr_restore(spark_delta, table, version_as_of=v1)
+    monkeypatch.undo()
+    assert "vacuumed" not in str(e.value) and "no longer exist" not in str(e.value)
+    assert os.strerror(code) in e.value.message  # says why it could not look
+    assert fix in e.value.fix and (code == errno.EACCES) == ("retry" not in e.value.fix)
+    assert _latest(spark_delta, table) == latest  # nothing was committed
+
+
+@pytest.mark.parametrize(
+    "failure, raises, wording",
+    [
+        (
+            OSError(errno.EBUSY, os.strerror(errno.EBUSY)),
+            ZarrAccessUnavailable,
+            "retry when the Volume is reachable",
+        ),  # the mount is down: not a verdict on the files
+        (
+            NotADirectoryError(errno.ENOTDIR, os.strerror(errno.ENOTDIR)),
+            ZarrVersionUnavailable,
+            "no longer exist",
+        ),  # a removed parent directory: the files are gone
+    ],
+    ids=["unreachable", "not-a-directory"],
+)
+def test_tag_of_a_version_tells_unreachable_files_from_gone_ones(
+    spark_delta, drop, tmp_path, no_hooks, monkeypatch, failure, raises, wording
+):
+    """``gbx_zarr_tag(version_as_of=...)`` checks the version's files through the shared
+    ``_require_exist``: a stat that fails with EBUSY is ``ZarrAccessUnavailable`` (never
+    "vacuumed"), a ``NotADirectoryError`` (a removed parent) is a gone file, and neither
+    writes a tag row."""
+    table, root, v1 = _store(spark_delta, drop, tmp_path)
+    gbx_zarr_write(
+        _blocks(spark_delta, ("t2m", (0, 0, 0), np.full((48, 10, 12), 2.0, "float32"))),
+        table,
+        mode="overwrite",
+    )
+    latest = _latest(spark_delta, table)
+    real = os.stat
+
+    def stat(path, *args, **kw):
+        if str(path).startswith(str(root / "data")):
+            raise type(failure)(*failure.args, str(path))
+        return real(path, *args, **kw)
+
+    monkeypatch.setattr(os, "stat", stat)
+    with pytest.raises(raises) as e:
+        gbx_zarr_tag(spark_delta, table, "pinned", version_as_of=v1)
+    monkeypatch.undo()
+    assert wording in str(e.value)
+    if raises is ZarrAccessUnavailable:
+        assert "vacuumed" not in str(e.value) and "no longer exist" not in str(e.value)
+    assert (
+        spark_delta.sql(f"SELECT 1 FROM {table} WHERE tag = 'pinned'").first() is None
+    )
+    assert _latest(spark_delta, table) == latest  # nothing was committed
+
+
 def test_restore_refuses_a_read_only_registration_and_a_base_that_moved(
     spark_delta, drop, tmp_path, no_hooks
 ):
@@ -972,6 +1061,40 @@ def test_restore_refuses_a_read_only_registration_and_a_base_that_moved(
         gbx_zarr_restore(spark_delta, table, version_as_of=before)
     assert "gbx_zarr_sync" in e.value.fix and _latest(spark_delta, table) == latest
     assert H.read_variable(spark_delta, table, "t2m").shape[0] == 48  # still reads
+
+
+def test_restore_does_not_call_a_base_object_changed_when_it_cannot_reach_it(
+    spark_delta, drop, tmp_path, no_hooks, monkeypatch
+):
+    """The same mount-down case for the base store of a registration: a stat that fails
+    with EBUSY must not read as "changed since" (which sends the caller to a sync)."""
+    store, table = _registered(spark_delta, drop, tmp_path, "mv")
+    before = M.snapshot(spark_delta, table).version
+    shard = store / "t2m" / "c" / "0" / "0" / "0"
+    stat = os.stat(shard)
+    os.utime(shard, ns=(stat.st_atime_ns, stat.st_mtime_ns + 5_000_000_000))
+    gbx_zarr_sync(spark_delta, table)  # records the new identity: `before` is now stale
+    latest = _latest(spark_delta, table)
+    real = os.stat
+
+    def down(path, *args, **kw):
+        if str(path).startswith(str(store)):
+            raise OSError(errno.EBUSY, os.strerror(errno.EBUSY), str(path))
+        return real(path, *args, **kw)
+
+    monkeypatch.setattr(os, "stat", down)
+    with pytest.raises(ZarrAccessUnavailable) as e:
+        gbx_zarr_restore(spark_delta, table, version_as_of=before)
+    monkeypatch.undo()
+    assert "changed since" not in str(e.value) and os.strerror(errno.EBUSY) in str(
+        e.value
+    )
+    assert "Fix: retry when the Volume is reachable" in str(e.value)
+    assert _latest(spark_delta, table) == latest  # nothing was committed
+    with pytest.raises(
+        ZarrVersionUnavailable, match="changed since"
+    ):  # reachable again
+        gbx_zarr_restore(spark_delta, table, version_as_of=before)
 
 
 def _first_write(spark, table, version):

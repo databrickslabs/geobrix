@@ -102,11 +102,13 @@ Measured on 1,000 raster tiles or 100k vector features; times are whole-job wall
 
 The `read_files`/`list_files` rows time the **listing** step (per 10k files, comparable, metadata-bound). The Delta-scan and DataSource rows time the actual tile **read/open** (per 1k tiles). The performance gap is the per-tile open/decode cost, not listing — the Delta-scan FILE-column-table path (~2 s) beats the DataSource directory scan by ~10× on classic and **~16–17× on Serverless** (~2 s vs. ~30 s per 1k tiles). **On Serverless, prefer reading from a FILE-column table (Delta scan).** See [Serverless & Memory](./serverless-and-memory) for the connect-aware stream caps (64 MiB on Serverless/Connect, 256 MiB on classic) and a full guide to memory-safe pipelines.
 
-The **no-gating rule**: the auto default (`access="auto"` on readers, `file_mode="auto"` on
-writers) silently downgrades to the best available tier and never errors. Explicitly requesting
+The **no-gating rule**: `access="auto"` on readers and `file_mode="auto"` on writers silently
+downgrade to the best available tier and never error. Explicitly requesting
 `"managed"` or `"external"` on a FUSE-only runtime raises a clear, actionable error
-describing the upgrade path. Your pipelines run on any runtime without code changes; you
-only need to opt in to FILE when you want the governance and lifecycle benefits.
+describing the upgrade path. Readers default to `access="auto"`; writers default to
+`file_mode="fuse"`, a plain Delta table that reads on every compute. Your pipelines run on any
+runtime without code changes; you only need to opt in to FILE (`file_mode="auto"`) when you
+want the governance and lifecycle benefits.
 
 ### Read resolver
 
@@ -128,8 +130,9 @@ The resolver checks the tier and picks a strategy:
 
 ### Write committer
 
-Writers call `open_for_write(spark, df, target, file_mode="auto", filespace=…, layout=…)`.
-`file_mode="auto"` resolves as follows:
+Writers call `open_for_write(spark, df, target, file_mode="fuse", filespace=…, layout=…)`.
+The default, `file_mode="fuse"`, is a plain Delta write. `file_mode="auto"` opts in to FILE and
+resolves as follows:
 
 | Condition | Effective mode | Mechanism |
 |---|---|---|
@@ -137,7 +140,7 @@ Writers call `open_for_write(spark, df, target, file_mode="auto", filespace=…,
 | FILE available, no `filespace` | `"external"` | `try_to_file` — EXTERNAL FILE column |
 | No FILE (fuse tier) | `"fuse"` | Plain Delta write, path STRING / raster BINARY |
 
-Explicit modes (`"managed"`, `"external"`, `"fuse"`) override auto-selection. Requesting
+Explicit modes (`"managed"`, `"external"`) override auto-selection. Requesting
 `"managed"` or `"external"` on a fuse-only runtime raises a clear error.
 
 ### Layout options
@@ -169,10 +172,42 @@ The two filters are **mutually exclusive** and are ANDed with `include_hidden`: 
 
 ### Light-tier FILE flow
 
-![file_gbx access flow — the READ lane resolves a source (path, directory, or FILE ref) through open_for_read, a once-per-session capability-tier probe (read_files on DBR 13.3+, list_files on DBR 18+, FUSE floor), and size-adaptive routing (FILE byte-range stream, FUSE-of-FILE for large or striped files, or a probe-then-stage copy) into the rasterio / pyogrio reader, where a per-partition open-LRU amortizes the open cost across a source’s windows; the WRITE lane resolves writer output through open_for_write into MANAGED (create_file), EXTERNAL (try_to_file), or FUSE (plain Delta) modes and their targets — a FILE-column Delta table or a Volume path — with ORDER BY path by default and opt-in CLUSTER BY plus OPTIMIZE; access="auto" downgrades to FUSE gracefully while an explicit FILE mode on a FUSE-only runtime raises a clear error](../../resources/images/diagrams/rasterx/file-gbx-flow.png)
+![file_gbx access flow — the READ lane resolves a source (path, directory, or FILE ref) through open_for_read, a once-per-session capability-tier probe (read_files on DBR 13.3+, list_files on DBR 18+, FUSE floor), and size-adaptive routing (FILE byte-range stream, FUSE-of-FILE for large or striped files, or a probe-then-stage copy) into the rasterio / pyogrio reader, where a per-partition open-LRU amortizes the open cost across a source’s windows; the WRITE lane resolves writer output through open_for_write into FUSE (plain Delta, the default) or, with file_mode="auto" or an explicit choice, MANAGED (create_file) or EXTERNAL (try_to_file) modes and their targets — a FILE-column Delta table or a Volume path — with ORDER BY path by default and opt-in CLUSTER BY plus OPTIMIZE; access="auto" downgrades to FUSE gracefully while an explicit FILE mode on a FUSE-only runtime raises a clear error](../../resources/images/diagrams/rasterx/file-gbx-flow.png)
 
 See [`file_gbx` Reader](./readers/file) for enumeration and read-mode details, and
 [`file_gbx` Writer](./writers/file) for write-mode and ingest options.
+
+## Delta-indexed collections
+
+Two parts of GeoBrix keep a Delta table as the **index** of a collection of files and leave the bytes in
+the files:
+
+- a **FILE-column table** has one row per raster or vector file on a Volume, with a `FILE` reference (a path
+  string where FILE is not available). The `*_gbx` writers make one through `file_gbx` and readers scan it
+  (see [Read-options matrix](#read-options-matrix)). A **tile index** (`tilesTable`) is the same idea with an
+  optional pixel window on each row, read with [`read_tiles_table`](./readers/raster#read-tiles-table);
+- the **manifest table of a [Zarr store](./formats/zarr)** has one row per chunk or shard (the file, offset and
+  length that hold it), per array and group document, and one `commit` row for each write.
+
+It is one pattern, and in both the collection is a table. SQL, Unity Catalog grants and Delta's own tools work
+on it. A reader plans from the table rather than from a directory listing, so it never walks the files to find
+them. The table has versions that you can read as they were: `versionAsOf` and `timestampAsOf` on
+`read_tiles_table`, `version_as_of` and `timestamp_as_of` on [`gbx_zarr_read`](./readers/zarr#choosing-the-source).
+
+What differs is who looks after the files, and a Zarr store comes in two kinds: one you create, whose
+files GeoBrix writes, and one you register in place, whose files other tools own.
+
+| | FILE-column table or tile index | Zarr store you create | Zarr store you register |
+|---|---|---|---|
+| Made by | The `*_gbx` writers; you, for a tile index | `gbx_zarr_write` with `mode="create"` | `gbx_zarr_register` |
+| One row is | A file, or a window of one | A chunk or shard at an offset in a pack file that GeoBrix wrote | A chunk or shard at an offset in the store's own objects; for a writable registration, a pack file in its overlay is the same as in the previous column |
+| Files | Referenced. An earlier version of the table lists the files it listed, but a file replaced since is replaced for every version | Written only by GeoBrix, each into a new pack file that is never changed. An earlier version reads the bytes it did, while it is within `retain` or tagged | The store's objects belong to the tools that wrote them. GeoBrix copies nothing and writes nothing in the store (an explicit publish aside), records each object's identity, and a read stops with `ZarrStoreDrift` if another tool changed one |
+| Writes | A Delta transaction on the table | One Delta transaction for each write, with a compare-and-swap on every key it replaces, so concurrent writers either land or get a clear conflict error | None through GeoBrix for a read-only registration. A writable one writes new pack files to its overlay, in the same transactions |
+| Cleaning up | Yours | `gbx_zarr_vacuum` deletes the files that no readable version needs | `gbx_zarr_vacuum` deletes only the packs GeoBrix wrote to the overlay; it never touches the store's own objects |
+
+A FILE-column table suits files that other tools produce and own. A Zarr store suits a cube that jobs also
+write back to, and that needs all-or-nothing writes and versions. [Choosing a Format](./formats/overview) shows where each
+format fits.
 
 ## Next Steps
 

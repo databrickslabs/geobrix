@@ -98,7 +98,7 @@ def test_cog_convert_file_peak_rss_bounded(tmp_path):
 
     A 8192×8192 float32 raster = ~0.25 GiB decoded.  The array-based path
     (cog_convert) would consume ≥256 MiB just for ds.read().  The streaming
-    path (rasterio.shutil.copy + GDAL_CACHEMAX=200) should stay well under
+    path (rasterio.shutil.copy with a 4 MiB block cache) should stay well under
     that ceiling.  Threshold: {rss_limit} MiB RSS delta in a fresh subprocess.
     """.format(rss_limit=_RSS_LIMIT_MIB)
     result = _run_memory_probe(str(tmp_path), side=8192)

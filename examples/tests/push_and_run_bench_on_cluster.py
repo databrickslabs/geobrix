@@ -40,6 +40,11 @@ heartbeat and cancels a run whose heartbeat stopped (--stale-min) or whose form 
 `STALLED: <form> after <m> min` and the driver stack, exit 3. --smoke-only stops after a clean smoke. Every run has a time limit (--timeout-min, default 360;
 the smoke stage --smoke-timeout-min, default 15). --inject-stall <secs> adds a form that
 sleeps on the driver (test only; proves the watchdog).
+
+     Without --run-id a launch gets an id of its own (cluster-<date>-<time>-<4 hex>), so
+     the rows of an earlier run are reached only by naming its id: --resume and
+     --truncate-results need an explicit --run-id (with a fresh id, --truncate-results
+     has nothing to clear).
 """
 
 from __future__ import annotations
@@ -47,6 +52,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -158,6 +164,21 @@ def _minutes_arg(flag: str, default: int) -> int:
     if value < 1:
         raise ValueError(f"ERROR: {flag} must be a whole number of minutes, at least 1 (got {raw!r}).")
     return value
+
+
+def _default_run_id() -> str:
+    """A run id of its own for a launch that names none: its rows, its out_dir and its
+    notebook are then never another launch's."""
+    return f"cluster-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
+
+
+def _remove_notebook(w, path: str) -> None:
+    """Delete the run's notebook once the run has ended (its output stays with the run)."""
+    try:
+        w.workspace.delete(path)
+        print(f"Removed the run's notebook {path}")
+    except Exception as e:  # noqa: BLE001 - best effort; say what is left
+        print(f"WARNING: could not remove {path} ({e}); delete it by hand.", file=sys.stderr)
 
 
 def _discover_warehouse(w):
@@ -608,6 +629,15 @@ def main() -> int:
     # LIGHT-ONLY: there is no heavy EXIF tier.
     benchmark_exif = "--benchmark-exif" in sys.argv
     exif_only = "--exif-only" in sys.argv
+    # --benchmark-zarr: also run the Zarr benchmark (light only: gbx_zarr_read / sample /
+    #   write against one GeoTIFF per hour, plus the shard-index and sample-density probes).
+    # --zarr-only: ONLY run the Zarr benchmark, skip all fn benchmarks. Zarr is light-tier
+    #   only, so either forces --lightweight-only.
+    benchmark_zarr = "--benchmark-zarr" in sys.argv
+    zarr_only = "--zarr-only" in sys.argv
+    if benchmark_zarr or zarr_only:
+        heavyweight = False
+        lightweight = True
     # --fanout-scale F: dial the synthetic fan-out size for each function (default 1.0 ->
     #   meaningful but ~couple minutes on ~20 workers). Larger = more output rows.
     fanout_scale = float(_arg("--fanout-scale", "1.0"))
@@ -644,7 +674,14 @@ def main() -> int:
     # e.g. after a code/JAR fix); --no-fix-errors keeps them as-is and skips them.
     fix_errors = "--no-fix-errors" not in sys.argv
 
-    run_id = _arg("--run-id", "cluster")
+    run_id = _arg("--run-id", "") or _default_run_id()
+    if resume and "--run-id" not in sys.argv:
+        print(
+            "ERROR: --resume needs the --run-id of the run to resume (a launch without "
+            "--run-id gets an id of its own).",
+            file=sys.stderr,
+        )
+        return 2
     # Keep reader/writer benchmarks SEPARABLE from the function benchmarks: an *-only run
     # gets its own run_id suffix (unless --run-id was given explicitly) so its rows land in
     # a distinct partition of the results table instead of commingling with the function
@@ -675,6 +712,8 @@ def main() -> int:
             run_id = f"{run_id}-netcdf"
         elif netcdf_writer_only:
             run_id = f"{run_id}-netcdf-writer"
+        elif zarr_only:
+            run_id = f"{run_id}-zarr"
     functions = ",".join(_function_names(_arg("--functions", "")))
     sel = _arg("--set", "core")
     unknown_bng = _unknown_bng_names(functions)
@@ -809,6 +848,36 @@ def main() -> int:
     # --max-partition-bytes <v>: cap bytes-per-partition (e.g. "32m") to reduce rows/task on
     # file/Delta scans. Settable on Serverless (unlike AQE). Empty = leave the platform default.
     max_partition_bytes = _arg("--max-partition-bytes", "")
+    # --extras <csv>: the geobrix extras the notebook installs after the wheel (default: the
+    # env wheel's zarr extra for a run with the Zarr cell, else none).
+    extras = _arg("--extras", "")
+    # --new-cluster: run on a job cluster made for this run (it ends with the run) instead of
+    # an existing cluster: --spark-version (default 19.x-scala2.13), --node-type (default
+    # m6gd.xlarge), --num-workers (default 1), --access-mode dedicated|standard (default
+    # dedicated), --on-demand (AWS: every node on demand, so no spot node is taken back
+    # during a measurement; default: the workspace's spot/on-demand policy).
+    new_cluster = "--new-cluster" in sys.argv
+    on_demand = "--on-demand" in sys.argv
+    spark_version = _arg("--spark-version", "19.x-scala2.13")
+    node_type = _arg("--node-type", "m6gd.xlarge")
+    num_workers = int(_arg("--num-workers", "1"))
+    access_mode = _arg("--access-mode", "dedicated")
+    if access_mode not in ("dedicated", "standard"):
+        print(
+            f"ERROR: --access-mode must be 'dedicated' or 'standard' (got '{access_mode}')",
+            file=sys.stderr,
+        )
+        return 2
+    if new_cluster and serverless:
+        print("ERROR: --new-cluster and --serverless are exclusive.", file=sys.stderr)
+        return 2
+    if on_demand and not new_cluster:
+        print(
+            "ERROR: --on-demand applies to a job cluster made for the run: pass "
+            "--new-cluster with it.",
+            file=sys.stderr,
+        )
+        return 2
 
     host = os.environ.get("DATABRICKS_HOST")
     token = os.environ.get("DATABRICKS_TOKEN")
@@ -825,7 +894,9 @@ def main() -> int:
     cluster_id = _strip_invisible(
         _arg("--existing-cluster-id", "") or os.environ.get("CLUSTER_ID") or ""
     )
-    if not serverless and not cluster_id:
+    if new_cluster:
+        cluster_id = ""  # a job cluster: CLUSTER_ID from the config file is not used
+    if not serverless and not new_cluster and not cluster_id:
         print(
             "Set CLUSTER_ID env var or pass --existing-cluster-id <id>",
             file=sys.stderr,
@@ -861,6 +932,17 @@ def main() -> int:
         or f"{volroot}/geobrix-{ver}-tests.jar"
     )
     out_dir = f"{volroot}/bench-out/{run_id}"
+    # Zarr bench locations (--zarr-store/--zarr-cog-dir/--zarr-scratch/--zarr-schema): the
+    # ERA5 January 2023 v3 sharded store, its GeoTIFF-per-hour copy, a scratch directory the
+    # write legs fill and empty, and the schema of their (dropped) manifest tables.
+    zarr_store = _arg(
+        "--zarr-store", f"{volroot}/_probe/zarr-spike/read/era5/era5_v3_shard_zstd.zarr"
+    )
+    zarr_cog_dir = _arg("--zarr-cog-dir", f"{volroot}/_probe/zarr/bench/cog_hourly")
+    zarr_scratch = _arg("--zarr-scratch", f"{volroot}/_probe/zarr/bench/scratch/{run_id}")
+    zarr_schema = _arg("--zarr-schema", f"{catalog}.gbx_zarr_scratch")
+    zarr_cases = _arg("--zarr-cases", "R1,R2,R3,W1,W2")
+    zarr_reps = int(_arg("--zarr-reps", "3"))
 
     cfg = dict(
         wheel=wheel,
@@ -1012,6 +1094,17 @@ def main() -> int:
         #  the environment version to pin (default 6, the +env6 wheel's).
         serverless=serverless,
         env_version=env_version,
+        #  --benchmark-zarr / --zarr-only and the Zarr bench locations (see above).
+        benchmark_zarr=benchmark_zarr,
+        zarr_only=zarr_only,
+        zarr_store=zarr_store,
+        zarr_cog_dir=zarr_cog_dir,
+        zarr_scratch=zarr_scratch,
+        zarr_schema=zarr_schema,
+        zarr_cases=zarr_cases,
+        zarr_reps=zarr_reps,
+        #  --extras: what the install cell adds after the wheel.
+        extras=extras,
     )
     if explain_only:
         # Plans are a spark-path concern only; never run the pure-core sections.
@@ -1079,11 +1172,17 @@ def main() -> int:
     if raster_decode_read_only:
         # Raster decode-read benchmark is spark-path only; skip pure-core sections.
         cfg["modes"] = "spark-path"
+    if zarr_only:
+        # Zarr benchmark is spark-path only; skip pure-core sections.
+        cfg["modes"] = "spark-path"
 
     # Import the notebook builder from the repo source (this runs on the HOST, not the cluster).
     sys.path.insert(0, str(TESTS_DIR.parent.parent / "python" / "geobrix" / "src"))
     try:
-        from databricks.labs.gbx.bench.cluster import build_bench_notebook
+        from databricks.labs.gbx.bench.cluster import (
+            build_bench_notebook,
+            install_extras,
+        )
     except ImportError as e:
         print(
             f"Could not import build_bench_notebook from repo source (python/geobrix/src): {e}",
@@ -1112,7 +1211,10 @@ def main() -> int:
     )
     if not explicit_wheel:
         # The env wheel for the compute's runtime: the other family's wheel refuses to import there.
-        env = int(env_version) if serverless else env_of_runtime(w.clusters.get(cluster_id).spark_version)
+        if serverless:
+            env = int(env_version)
+        else:
+            env = env_of_runtime(spark_version if new_cluster else w.clusters.get(cluster_id).spark_version)
         wheel = f"{volroot}/geobrix-{ver}+env{env}-py3-none-any.whl"
         cfg["wheel"] = wheel
 
@@ -1121,6 +1223,12 @@ def main() -> int:
     if serverless:
         print("gbx:bench:cluster pre-flight (SERVERLESS)")
         print(f"  env_version: {env_version}")
+    elif new_cluster:
+        print("gbx:bench:cluster pre-flight (JOB CLUSTER, ends with the run)")
+        print(
+            f"  new cluster: {spark_version} {node_type} x {num_workers} worker(s), "
+            f"{access_mode} access{', on demand' if on_demand else ''}"
+        )
     else:
         print("gbx:bench:cluster pre-flight")
         print(f"  cluster_id : {cluster_id}")
@@ -1133,6 +1241,10 @@ def main() -> int:
     print(f"  table      : {table}")
     print(f"  out_dir    : {out_dir}")
     print(f"  wheel      : {wheel}")
+    if benchmark_zarr or zarr_only:
+        print(f"  zarr       : store={zarr_store}")
+        print(f"               cog_dir={zarr_cog_dir} scratch={zarr_scratch}")
+        print(f"               schema={zarr_schema} cases={zarr_cases} reps={zarr_reps}")
     if heavyweight:
         print(
             f"  tests.jar  : {tests_jar}  (attached as job library; fat JAR via cluster init script)"
@@ -1140,6 +1252,18 @@ def main() -> int:
     print("  NOTE: this submits a job to a real cluster and consumes compute.")
     print("=" * 64)
 
+    # Serverless + the Zarr legs or --extras: the job environment installs the wheel and the
+    # extras' requirements (expanded from pyproject.toml, as gbx:test:notebooks-serverless
+    # does). A pip install from the notebook reaches the Serverless driver only, and the
+    # Zarr legs' tasks import zarr, numcodecs and xarray on the executors.
+    env_deps = None
+    if serverless and (benchmark_zarr or zarr_only or extras):
+        from run_notebooks_serverless import _build_dep_list  # sibling module
+
+        # the env wheel's own extras (envs/env<N>/extra-<name>.txt), as gbx:test:notebooks-serverless does
+        env_deps = _build_dep_list(wheel, install_extras(cfg), [], env_version) + ["markdown"]
+        cfg["env_deps"] = True
+        print(f"  env deps   : {len(env_deps)} (wheel + {', '.join(install_extras(cfg))})")
     nb = build_bench_notebook(cfg)
 
     # Local preflight: refuse a launch that cannot work, with no compute (the checks of _preflight.py).
@@ -1185,6 +1309,7 @@ def main() -> int:
         or cfg.get("layout_scan_only")
         or cfg.get("vector_table_read_only")
         or cfg.get("raster_decode_read_only")
+        or cfg.get("zarr_only")
     )
     if (
         cfg["modes"] in ("spark-path", "both")
@@ -1226,16 +1351,17 @@ def main() -> int:
             )
             return 2
 
-    # Notebook path: env override or per-user default.
+    # Notebook path: one per run id, under the per-user default or the env override (a
+    # prefix). A job reads its notebook when it is submitted, so two launches sharing one
+    # path made the earlier job run the later launch's notebook.
     notebook_path_from_env = (
         _strip_invisible(os.environ.get("GBX_BENCH_RUNNER_NOTEBOOK_PATH") or "").strip()
         or None
     )
     me = w.current_user.me()
-    default_path = f"/Users/{me.user_name}/geobrix_bench_runner.ipynb"
-    notebook_path = notebook_path_from_env or default_path
-    if not notebook_path.endswith(".ipynb"):
-        notebook_path = notebook_path.rstrip("/") + ".ipynb"
+    base = notebook_path_from_env or f"/Users/{me.user_name}/geobrix_bench_runner"
+    base = base.rstrip("/").removesuffix(".ipynb")
+    notebook_path = f"{base}_{run_id}.ipynb"
     # Ensure it doesn't have the /Workspace prefix for the SDK calls.
     notebook_path = "/" + notebook_path.strip().removeprefix("/Workspace").lstrip("/")
     smoke_path = notebook_path[: -len(".ipynb")] + "_smoke.ipynb"
@@ -1359,11 +1485,13 @@ def main() -> int:
                     jobs.JobEnvironment(
                         environment_key="bench_env",
                         # The wheel goes in the environment spec: that is what reaches the Python UDF workers.
+                        # With the Zarr legs or --extras it also names the extras' requirements, so the
+                        # executors have them too.
                         # The notebook's own pip install reaches the driver only (every geobrix UDF then failed
                         # on the workers with "No module named 'databricks.labs'", measured on env 6).
                         spec=compute.Environment(
                             environment_version=env_version_str,
-                            dependencies=serverless_dependencies(wheel),
+                            dependencies=env_deps or serverless_dependencies(wheel),
                         ),
                     )
                 ],
@@ -1372,6 +1500,42 @@ def main() -> int:
                         task_key="run_bench",
                         environment_key="bench_env",
                         notebook_task=jobs.NotebookTask(notebook_path=path, source=jobs.Source.WORKSPACE),
+                        max_retries=0,
+                    )
+                ],
+            )
+        elif new_cluster:
+            print(f"Submitting {name} on a new job cluster, time limit {timeout_s // 60} min...")
+            mode = (
+                compute.DataSecurityMode.SINGLE_USER
+                if access_mode == "dedicated"
+                else compute.DataSecurityMode.USER_ISOLATION
+            )
+            waiter = submit_once(
+                w,
+                run_name=name,
+                timeout_seconds=timeout_s,
+                tasks=[
+                    jobs.SubmitTask(
+                        task_key="run_bench",
+                        new_cluster=compute.ClusterSpec(
+                            spark_version=spark_version,
+                            node_type_id=node_type,
+                            num_workers=num_workers,
+                            data_security_mode=mode,
+                            single_user_name=(me.user_name if access_mode == "dedicated" else None),
+                            custom_tags={"gbx_bench": run_id[:64]},
+                            aws_attributes=(
+                                compute.AwsAttributes(
+                                    availability=compute.AwsAvailability.ON_DEMAND,
+                                    first_on_demand=num_workers + 1,
+                                )
+                                if on_demand
+                                else None
+                            ),
+                        ),
+                        notebook_task=jobs.NotebookTask(notebook_path=path, source=jobs.Source.WORKSPACE),
+                        libraries=libraries,
                         max_retries=0,
                     )
                 ],
@@ -1456,6 +1620,8 @@ def main() -> int:
         benchmark_vector=benchmark_vector,
         vector_only=vector_only,
     )
+    if zarr_only:
+        expected = 0  # the function-row count does not apply to the Zarr legs
     outcome = watch_to_end(
         w, remote_run_id, hb_path=f"{out_dir}/heartbeat.json", form_cap_s=form_cap_s, stale_s=stale_s,
         token=cfg["launch_token"], count=(warehouse_id, table, run_id, poll_apis, expected),
@@ -1469,6 +1635,7 @@ def main() -> int:
 
     run = outcome.run
     run_id_remote = remote_run_id
+    _remove_notebook(w, notebook_path)  # the run has ended; its output stays with it
     state = run.state
     if state and getattr(state, "life_cycle_state", None):
         lc = (

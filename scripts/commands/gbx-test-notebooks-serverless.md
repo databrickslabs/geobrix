@@ -21,8 +21,11 @@ bash scripts/commands/gbx-test-notebooks-serverless.sh [OPTIONS]
 - `--extra-deps CSV` – Additional pip requirements (comma-separated; a specifier keeps its own commas, so `rich,overturemaps>=1.0.2,<2` is two requirements).
 - `--wheel VOLPATH` – Volume path to the geobrix wheel (default: the env6 wheel, `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env6-py3-none-any.whl`; stage it with `gbx:data:stage-wheel --env 6`). An env wheel must match `--env-version` (the env5 wheel with `--env-version 5`): the other environment's wheel refuses to import, so the runner stops before submitting.
 - `--env-version VER` – Serverless environment version (default: `6`).
-- `--new-cluster SPARK_VERSION` – Run each notebook on a classic job cluster of that Databricks Runtime (e.g. `19.x-scala2.13`), created for the run and terminated when it ends, so there is nothing to delete; dedicated (single user) access mode, one worker. The notebook's own `%pip` cells are kept (classic clusters install through them), so `--extras`, `--wheel`, `--env-version` and `--hardware-accelerator` do not apply. Exclusive with `--existing-cluster-id`.
-- `--node-type NODE_TYPE` – The `--new-cluster` job cluster's node type (default: `i3.xlarge`).
+- `--existing-cluster-id ID` – Run on an existing (warm) classic cluster instead of Serverless; the notebook's `%pip` cells are kept and install its deps (`--extras`/`--wheel`/`--env-version` do not apply).
+- `--new-cluster [SPARK_VERSION]` – Run each notebook on a classic job cluster made for its run, which Databricks terminates when the run ends, so there is nothing to delete. An optional Databricks Runtime (e.g. `19.x-scala2.13`) sets the runtime, as `--spark-version` does. The notebook's `%pip` cells are kept and install its deps (`--extras`/`--wheel`/`--env-version`/`--hardware-accelerator` do not apply); the task has `max_retries=0`. Exclusive with `--existing-cluster-id` and `--hardware-accelerator`.
+  - `--access-mode dedicated|standard` – `dedicated` (default) is single-user for the caller; `standard` is `USER_ISOLATION`.
+  - `--spark-version VER` (default `19.x-scala2.13`), `--node-type TYPE` (default `m5d.xlarge`, x86_64), `--num-workers N` (default `1`).
+  - Runs submitted at the same time need their own `--ws-dir`: a job reads its notebook when it starts, so two launches of one notebook into one folder can run each other's copy.
 - `--profile PROFILE` – Databricks config profile (default: `oauth-fe` or `DATABRICKS_CONFIG_PROFILE`).
 - `--poll-secs N` – Polling interval in seconds (default: `20`).
 - `--timeout-min N` – Time limit of each run in minutes (default: `60`); the Jobs service ends a run that outlives it. The command runs from a snapshot of its files and copies each notebook at launch, so an edit during the run changes nothing (`GBX_NO_SNAPSHOT=1` runs in place).
@@ -67,6 +70,12 @@ bash scripts/commands/gbx-test-notebooks-serverless.sh \
 bash scripts/commands/gbx-test-notebooks-serverless.sh \
   --notebook examples/notebooks/h3-rasterize/h3_rasterize_isobands.ipynb \
   --new-cluster 19.x-scala2.13
+
+# Run a probe notebook on a DBR 19 standard-access job cluster (terminated with its run)
+bash scripts/commands/gbx-test-notebooks-serverless.sh \
+  --notebook examples/tests/probe_proj_data_access.ipynb \
+  --new-cluster --access-mode standard \
+  --ws-dir /Users/me@example.com/GeoBrix/probe-standard
 
 # Run nb04 with output harvesting, forcing compute with FORCE_RELOAD=True
 bash scripts/commands/gbx-test-notebooks-serverless.sh \

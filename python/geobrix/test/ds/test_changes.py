@@ -1302,7 +1302,7 @@ def test_ingest_setup_names_the_bad_records_table():
     assert got["bad_records"] == "`a-b`.s.t_bad_records"
 
 
-# --- fix round 2: staging namespace, Volume paths, dedupe, NOT NULL, views ------
+# --- staging namespace, Volume paths, dedupe, NOT NULL, views ------
 
 
 def test_each_target_stages_in_its_own_namespace(tmp_path):

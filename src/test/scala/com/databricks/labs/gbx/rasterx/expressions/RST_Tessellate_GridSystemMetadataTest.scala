@@ -26,7 +26,7 @@ import scala.util.Try
   * "gridSystem" key and the assertion fails. GREEN-after: the augmented resMtd is
   * passed to tileToRow, survives serialization, and is present on collect().
   *
-  * BNG fixture (Ruling I): a small EPSG:27700 GTiff over London (easting 530000,
+  * BNG fixture: a small EPSG:27700 GTiff over London (easting 530000,
   * northing 182000, 8x8 pixels at 250m) is written to a temp directory in beforeAll()
   * so the BNG test yields >=1 tile and the gridSystem assertion is non-vacuous.
   */
@@ -157,7 +157,7 @@ class RST_Tessellate_GridSystemMetadataTest extends PlanTest with SilentSparkSes
     // ---------------------------------------------------------------------------
     // BNG tessellate — covering + centroid both carry gridSystem="bng"
     // Uses a synthesized EPSG:27700 London GTiff (see writeLondon27700Tif) to
-    // guarantee >=1 output tile and a non-vacuous assertion (Ruling I).
+    // guarantee >=1 output tile and a non-vacuous assertion.
     // ---------------------------------------------------------------------------
 
     test("rst_bng_tessellate covering: every output tile has metadata[gridSystem]='bng'") {
@@ -169,7 +169,7 @@ class RST_Tessellate_GridSystemMetadataTest extends PlanTest with SilentSparkSes
             .withColumn("tile", rst_bng_tessellate(col("raster"), lit(3)))
             .select("tile.metadata")
             .collect()
-        // Non-vacuous assertion: the London 27700 fixture MUST yield tiles (Ruling I).
+        // Non-vacuous assertion: the London 27700 fixture MUST yield tiles.
         assert(rows.nonEmpty,
             "rst_bng_tessellate covering with a London EPSG:27700 fixture must yield >=1 tile; got 0 rows")
         rows.foreach { row =>

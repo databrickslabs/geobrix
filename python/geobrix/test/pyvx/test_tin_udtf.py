@@ -28,7 +28,7 @@ def test_st_triangulate_emits_triangles(spark):
 
 
 def test_st_triangulate_multipoint_element(spark):
-    # I3: a single MULTIPOINT WKB as one array element must flatten to its member
+    # A single MULTIPOINT WKB as one array element must flatten to its member
     # points (shapely MultiPoint has .geoms, not .coords) and emit triangles —
     # not crash on a missing .coords attribute.
     from shapely.geometry import MultiPoint

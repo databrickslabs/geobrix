@@ -427,6 +427,43 @@ def test_drop_stripe_blocks_drops_only_the_strip_width_of_an_untiled_profile():
     assert C.drop_stripe_blocks({"width": 4}) == {"width": 4}  # no block keys at all
 
 
+@pytest.mark.parametrize(
+    "driver, compress, want",
+    [
+        ("GTiff", "none", {"compress": "none"}),
+        ("COG", "raw", {"compress": "none"}),
+        ("PNG", "none", {}),
+        ("JPEG", "raw", {}),
+        (
+            "PNG",
+            "deflate",
+            {"zlevel": "6"},
+        ),  # PNG's own level, the one codec option it takes
+        ("JPEG", "deflate", {}),
+        ("PNG", "auto", {}),
+        ("JPEG", "zstd", {}),
+    ],
+)
+def test_png_and_jpeg_are_handed_no_codec_options(driver, compress, want):
+    """PNG always deflates and JPEG always takes JPEG: GDAL logs CPLE_NotSupported for a
+    COMPRESS or PREDICTOR it is handed, and for a codec level on JPEG. GTiff and COG are as before.
+    """
+    assert C.creation_opts("uint8", compress=compress, driver=driver) == want
+
+
+def test_a_source_profile_for_png_or_jpeg_loses_its_codec_keys():
+    prof = {
+        "compress": "deflate",
+        "predictor": 2,
+        "zstd_level": 9,
+        "width": 4,
+        "tiled": False,
+    }
+    for driver in ("PNG", "jpeg"):
+        assert C.source_profile(prof, driver=driver) == {"width": 4, "tiled": False}
+    assert C.source_profile(prof, driver="GTiff") == prof == C.source_profile(prof)
+
+
 def test_source_profile_is_drop_ycbcr_and_drop_stripe_blocks_in_one():
     prof = {
         "photometric": "ycbcr",
@@ -488,36 +525,49 @@ _PROFILE_COPY_EXCEPTIONS = {
 
 
 def _copies_of_a_dataset_profile(tree):
-    """``(line, enclosing function)`` of ``x.profile.copy()``, ``dict(x.profile)`` and ``{**x.profile}``."""
+    """``(line, enclosing function)`` of each place a dataset's profile is taken: ``x.profile.copy()``,
+    ``dict(x.profile)``, ``{**x.profile}``, ``x.profile | {...}`` (or ``{...} | x.profile``),
+    ``profile = x.profile`` (the alias is then changed or written) and ``f(**x.profile)``.
+    """
     import ast
 
     def is_profile(node):
         return isinstance(node, ast.Attribute) and node.attr == "profile"
+
+    def takes_profile(node):
+        if isinstance(node, ast.Call):
+            fn = node.func
+            return (
+                (
+                    isinstance(fn, ast.Attribute)
+                    and fn.attr == "copy"
+                    and is_profile(fn.value)
+                )
+                or (
+                    isinstance(fn, ast.Name)
+                    and fn.id == "dict"
+                    and any(is_profile(a) for a in node.args)
+                )
+                or any(k.arg is None and is_profile(k.value) for k in node.keywords)
+            )
+        if isinstance(node, ast.Dict):
+            return any(
+                k is None and is_profile(v) for k, v in zip(node.keys, node.values)
+            )
+        if isinstance(node, ast.BinOp):
+            return isinstance(node.op, ast.BitOr) and (
+                is_profile(node.left) or is_profile(node.right)
+            )
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+            return is_profile(node.value)
+        return False
 
     found = []
 
     def visit(node, func):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             func = node
-        hit = (
-            isinstance(node, ast.Call)
-            and (
-                (
-                    isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "copy"
-                    and is_profile(node.func.value)
-                )
-                or (
-                    isinstance(node.func, ast.Name)
-                    and node.func.id == "dict"
-                    and any(is_profile(a) for a in node.args)
-                )
-            )
-        ) or (
-            isinstance(node, ast.Dict)
-            and any(k is None and is_profile(v) for k, v in zip(node.keys, node.values))
-        )
-        if hit:
+        if takes_profile(node):
             found.append((node.lineno, func))
         for child in ast.iter_child_nodes(node):
             visit(child, func)
@@ -560,7 +610,37 @@ def test_a_profile_copied_from_a_source_is_cleaned_before_it_is_written():
                 used.add((rel, name))
             elif func is None or not (_called_names(func) & _PROFILE_CLEANERS):
                 offenders.append(f"{rel}:{lineno} in {name}")
-    assert offenders == [], offenders
+    assert offenders == [], (
+        f"{offenders} take a dataset's profile without cleaning it. Fix: start from "
+        "source_profile(ds.profile) (databricks.labs.gbx.pyrx.core.compression; or cog_profile "
+        "for a COG, or write_gtiff), or, for a copy made for another use, list the function in "
+        "_PROFILE_COPY_EXCEPTIONS with the reason"
+    )
     assert used == set(
         _PROFILE_COPY_EXCEPTIONS
     ), "a listed exception no longer copies a profile"
+
+
+@pytest.mark.parametrize(
+    "source, taken",
+    [
+        ("p = ds.profile.copy()", 1),
+        ("p = dict(ds.profile)", 1),
+        ("p = {**ds.profile, 'driver': 'GTiff'}", 1),
+        ("p = ds.profile | {'driver': 'GTiff'}", 1),
+        ("p = {'driver': 'GTiff'} | ds.profile", 1),
+        ("profile = ds.profile", 1),
+        ("mf.open(**ds.profile)", 1),
+        ("w = ds.profile['width']", 0),
+        ("n = ds.profile.get('count')", 0),
+        ("p = ds.meta | {'driver': 'GTiff'}", 0),
+        ("mf.open(**kwargs)", 0),
+    ],
+)
+def test_the_profile_copy_guard_sees_every_way_to_take_a_profile(source, taken):
+    """The guard above finds a profile by its spelling; each spelling a writer can use to start
+    from a source's profile is one row (a read of one key of it is not a copy)."""
+    import ast
+
+    tree = ast.parse(f"def writer(ds, mf, kwargs):\n    {source}\n")
+    assert len(_copies_of_a_dataset_profile(tree)) == taken

@@ -874,7 +874,7 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_color_relief(tile: Column, colorTablePath: String): Column =
         rst_color_relief(tile, lit(colorTablePath))
 
-    // Spectral indices (Wave 8b) - all delegate to RST_MapAlgebra under the hood.
+    // Spectral indices - all delegate to RST_MapAlgebra under the hood.
     def rst_evi(
         tile: Column, redIdx: Column, nirIdx: Column, blueIdx: Column
     ): Column =

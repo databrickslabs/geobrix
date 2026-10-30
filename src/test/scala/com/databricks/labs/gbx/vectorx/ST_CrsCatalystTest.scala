@@ -15,8 +15,8 @@ import org.scalatest.matchers.should.Matchers._
   *
   * These tests run expressions through the full Spark SQL analysis path (parse → analyze
   * → optimize → execute) and catch issues that unit-level eval() tests miss, such as:
-  * - propagateNull short-circuiting in RuntimeReplaceable (C1: 2-arg transformcrs → NULL)
-  * - implicit casts not firing for integer CRS arguments (I2)
+  * - propagateNull short-circuiting in RuntimeReplaceable (2-arg transformcrs → NULL)
+  * - implicit casts not firing for integer CRS arguments
   * - expression registration gaps
   *
   * Requires GDAL native libs; run via gbx:test:scala or inside Docker.

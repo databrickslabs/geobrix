@@ -15,7 +15,7 @@ container build has no access to the workspace's UC Volumes, so geobrix must rid
 along as bundled model code instead. ``create_endpoint``/``query`` are thin wrappers
 over the Databricks Model Serving API (see the ``databricks-model-serving`` skill).
 
-RULING R4 -- mlflow is ABSENT from the light CI env (not in
+mlflow is ABSENT from the light CI env (not in
 ``requirements-light-env6-ci.txt``, confirmed not importable in the geobrix-dev
 container either). This module MUST import cleanly with no mlflow installed, so every
 ``import mlflow*`` is lazy, scoped inside the function that needs it -- including any
@@ -95,7 +95,7 @@ def _in_databricks_runtime() -> bool:
     runtime injects credentials and the ``databricks``/``databricks-uc`` URIs resolve
     without a named profile), so a ``~/.databrickscfg`` profile is neither present nor
     needed. Off-cluster (local dev) this is False and the caller's profile is applied to
-    reach the remote workspace. Env-var based so this module stays mlflow-free (R4) and
+    reach the remote workspace. Env-var based so this module stays mlflow-free and
     unit-testable. ``DATABRICKS_RUNTIME_VERSION`` is set on classic DBR and Serverless
     alike (e.g. ``client.*``); ``DB_IS_DRIVER`` is a secondary signal."""
     import os
@@ -151,7 +151,7 @@ def _rows_to_feature_collection(df) -> dict:
 def _predict_geojson(
     model_input, *, model_type: str = "vit_h", weights=None, gpus=1
 ) -> dict:
-    """The predict LOGIC, mlflow-free (R4): base64-decode the image, call
+    """The predict LOGIC, mlflow-free: base64-decode the image, call
     ``runner.segment_raster`` (via the module reference so
     ``monkeypatch.setattr("databricks.labs.gbx.models.runner.segment_raster", ...)`` is
     honored -- a ``from ... import segment_raster`` binding captured at def time would
@@ -182,7 +182,7 @@ def build_geosam_pyfunc(*, model_type: str = "vit_h", weights=None):
     the served model's env), and returns ``{"geojson": <FeatureCollection str>}``.
 
     mlflow is imported lazily here, and the ``PythonModel`` subclass is defined inside
-    this function rather than at module scope -- R4: this module must import cleanly
+    this function rather than at module scope: this module must import cleanly
     with no mlflow installed.
     """
     import mlflow.pyfunc

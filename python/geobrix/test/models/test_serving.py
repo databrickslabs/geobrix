@@ -1,6 +1,6 @@
 """Tests for gbx.models.serving.
 
-RULING R4: mlflow is ABSENT from the light CI env (not in
+mlflow is ABSENT from the light CI env (not in
 requirements-light-env6-ci.txt; confirmed not importable in the geobrix-dev container
 either). serving.py imports mlflow lazily inside each function that needs it, so the
 module itself always imports cleanly. These tests split the same way:
@@ -59,7 +59,7 @@ def _fake_segment_raster(*_a, **_k):
 
 
 def test_predict_geojson_returns_feature_collection(monkeypatch):
-    """R4: the predict LOGIC lives in _predict_geojson, mlflow-free. Patches the
+    """The predict LOGIC lives in _predict_geojson, mlflow-free. Patches the
     runner module ATTRIBUTE (not a name copied at def time) so the lazy in-function
     `from databricks.labs.gbx.models import runner` call inside _predict_geojson picks
     up the patch."""

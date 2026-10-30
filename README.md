@@ -101,6 +101,7 @@ Lightweight (`*_gbx`) formats are pure-Python (no JAR); each pairs with a heavyw
 | GeoTIFF | `gtiff_gbx` | `gtiff_gdal` |
 | COG | `cog_gbx` | — (light-only) |
 | NetCDF | `netcdf_gbx` | `netcdf_gdal` / `netcdf_ogr` |
+| Zarr | `zarr_gbx` (plain stores; `gbx_zarr_read` adds versions) | — (light-only) |
 | PMTiles | `pmtiles_gbx` | — (light-only) |
 | File lister | `file_gbx` | — (light-only) |
 | LiDAR (LAS/LAZ) | `lidar_gbx` | — (light-only) |
@@ -119,6 +120,7 @@ Lightweight (`*_gbx`) formats are pure-Python (no JAR); each pairs with a heavyw
 | Raster (generic) | `raster_gbx` | `gdal` |
 | GeoTIFF | `gtiff_gbx` | `gtiff_gdal` |
 | COG | `cog_gbx` | — (light-only) |
+| Zarr | `gbx_zarr_write` (a function, not a DataSource) | — (light-only) |
 | PMTiles | `pmtiles_gbx` | `pmtiles` |
 | NetCDF | `netcdf_gbx` | — (light-only) |
 | LiDAR (LAS/LAZ) | `lidar_gbx` | — (light-only) |
@@ -150,6 +152,7 @@ End-to-end worked examples live in [`examples/notebooks/`](./examples/notebooks/
 | [`helios`](https://databrickslabs.github.io/geobrix/docs/notebooks/helios) | Tiling to PMTiles | A four-notebook solar site-selection series that turns one San Francisco bounding box into self-contained [PMTiles](https://protomaps.com/docs/pmtiles) archives — candidate rooftops (vector), aerial basemap (raster), and terrain slope/aspect/hillshade scoring (elevation) — then reshards a layer into a distributed multi-archive PMTiles mosaic + catalog for web-scale delivery, viewable in a single browser tab with no tile server. |
 | [`vapor-eyes`](https://databrickslabs.github.io/geobrix/docs/notebooks/vapor-eyes) | Methane monitoring | Works a satellite methane signal over the Permian Basin — from a wide-area screen down to the operator whose well pad is leaking — reading Sentinel-5P (TROPOMI) swaths as points with the `netcdf_gbx` reader alongside EMIT plume data. Ships in two flavors: a production-ready Lakeflow pipeline and an interactive notebook series. |
 | [`orthomosaic`](https://databrickslabs.github.io/geobrix/docs/notebooks/orthomosaic) | Photogrammetry | Extracts per-image EXIF/GPS telemetry with `exif_gbx`, computes GSD, and runs distributed sparse SfM with `pycolmap` on Serverless env 5 — with an optional GPU dense MVS pass — to produce a georeferenced orthomosaic; publishes it via color-correction → COG → PMTiles, then (optionally) derives GeoSAM instance-object polygons and an `rst_land_cover` region map, serving the object model behind a Unity Gateway GPU Model Serving endpoint. |
+| [`zarr-weather-features`](https://databrickslabs.github.io/geobrix/docs/notebooks/zarr-weather-features) | Zarr weather features | Registers an ERA5-like weather cube in place as a transactional Zarr store (`gbx_zarr_register`), reads a box as blocks and as a table, samples 100 sites into a features table (`gbx_zarr_sample`), writes a derived wind speed back as a new variable in one transaction (`gbx_zarr_write`), reads the version before it, maps it as raster tiles clipped with `rst_clip`, and tags the version for training (`gbx_zarr_tag`), on the lightweight tier (Serverless environment 6 or Databricks Runtime 19). |
 
 ### Apps
 

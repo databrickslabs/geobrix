@@ -108,6 +108,98 @@ def test_sample_matches_numpy_nearest(fixture, route, request, monkeypatch, tmp_
     )
 
 
+@pytest.mark.parametrize(
+    "route, step, dense",
+    [
+        ("tensorstore", 1, True),
+        ("zarr", 1, True),
+        ("zarr", 6, True),  # a sixth of the cells: above the tenth
+        ("zarr", 50, False),  # a fiftieth: below it
+        ("registered", 1, True),
+    ],
+)
+def test_a_dense_sample_reads_its_box_once(
+    era5_v3_sharded, route, step, dense, monkeypatch, tmp_path
+):
+    """Points on a tenth or more of a box's cells read the box and gather from it (MEASURED
+    on the ERA5 cube on Serverless: the box was faster from 12% of the cells up, 2x there and
+    4x at 25%; point reads were faster at 1%); sparser points keep the vectorized point read.
+    Same values either way. ``step``: every step-th cell of chunk (0, 0) gets a point.
+    """
+    from databricks.labs.gbx.zarr import _engine
+
+    store = era5_v3_sharded
+    lat, lon = H.direct(store, "latitude"), H.direct(store, "longitude")
+    rows, cols = np.meshgrid(
+        np.arange(37), np.arange(72), indexing="ij"
+    )  # chunk (0, 0)
+    take = slice(None, None, step)
+    ys, xs = lat[rows.ravel()[take]], lon[cols.ravel()[take]]
+    used = {"box": 0, "points": 0}
+    real_box, real_points = _engine.read_box, _engine.read_points
+
+    def box(arr, *a, **k):
+        used["box"] += len(arr.shape) == 3  # a read of t2m, not of a coordinate
+        return real_box(arr, *a, **k)
+
+    def points(arr, *a, **k):
+        used["points"] += len(arr.shape) == 3
+        return real_points(arr, *a, **k)
+
+    monkeypatch.setattr(_engine, "read_box", box)
+    monkeypatch.setattr(_engine, "read_points", points)
+    if route == "registered":
+        source = H.registered_source(monkeypatch, store, overlay=tmp_path)
+        engine = "auto"
+    else:
+        source, engine = store, {"tensorstore": "auto", "zarr": "zarr"}[route]
+    _, table = H.sample_table(
+        source, [_wkb(x, y) for x, y in zip(xs, ys)], engine=engine, variables=["t2m"]
+    )
+    np.testing.assert_array_equal(
+        _by_point(table, "t2m"), _era5_oracle(store, "t2m", xs, ys)
+    )
+    assert (used["box"] > 0, used["points"] > 0) == (dense, not dense)
+
+
+def test_a_dense_unit_is_read_once_across_its_batches(tmp_path, monkeypatch):
+    """The dense decision is made for the whole unit: with batches of two points, a unit of
+    every cell of a chunk (plus two points given twice, and the fill cell) still reads its
+    box once, and each batch gathers from it; the fill cell is NULL, the repeats repeat.
+    """
+    from databricks.labs.gbx.zarr import _engine
+
+    data = _regional(tmp_path / "r.zarr")
+    cells = [(j, i) for j in range(5) for i in range(5)] + [(0, 0), (4, 4)]
+    points = [
+        _wkb(10.0 + i, 50.0 - j) for j, i in cells
+    ]  # chunk (0, 0), fill at (2, 3)
+    used = {"box": 0, "points": 0}
+    real_box, real_points = _engine.read_box, _engine.read_points
+
+    def box(arr, *a, **k):
+        used["box"] += len(arr.shape) == 3
+        return real_box(arr, *a, **k)
+
+    def point(arr, *a, **k):
+        used["points"] += len(arr.shape) == 3
+        return real_points(arr, *a, **k)
+
+    monkeypatch.setattr(_engine, "read_box", box)
+    monkeypatch.setattr(_engine, "read_points", point)
+    _, table = H.sample_table(tmp_path / "r.zarr", points, batch_cells=6)
+
+    assert used == {"box": 1, "points": 0}  # 14 batches, one read
+    got = _by_point(table, "v", 3)
+    null = table.column("v").is_null().to_numpy(zero_copy_only=False).reshape(-1, 3)
+    for n, (j, i) in enumerate(cells):
+        if (j, i) == (2, 3):
+            assert null[n].all()
+        else:
+            assert not null[n].any()
+            np.testing.assert_array_equal(got[n], data[:, j, i])
+
+
 def _regional(path):
     """A v3 store of 3 steps over latitude 50..41 (descending) and longitude 10..19, whose
     cell ``(j, i)`` at step ``t`` holds ``1000 t + 10 j + i`` except one fill cell."""
@@ -361,3 +453,17 @@ def test_sample_on_a_spark_connect_client(
         str(era5_v3_sharded),
     )
     _check_against_numpy(df, era5_v3_sharded, xs, ys)
+
+
+def test_a_unit_with_no_selected_step_is_not_read_as_a_box():
+    """No step selected: the box would be empty (and its bounds undefined), so the unit is
+    not dense, whatever else it holds."""
+    import types
+
+    import numpy as np
+
+    from databricks.labs.gbx.zarr import _sample
+
+    cfg = types.SimpleNamespace(n_steps=0, box_bytes=1 << 20)
+    rows = np.array([3, 4])
+    assert _sample._unit_boxes(cfg, None, None, rows, rows) is None

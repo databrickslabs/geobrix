@@ -129,7 +129,7 @@ object RST_TileXYZ extends WithExpressionInfo {
 
     // Spark sends Python ints as LongType - we accept both Int and Long overloads. Int
     // overloads are needed for SQL literal default args; Long overloads cover the
-    // PySpark-from-notebook case (Wave 3 found this in Quadbin_PointAsCell).
+    // PySpark-from-notebook case.
     def eval(row: InternalRow, z: Int, x: Int, y: Int, format: UTF8String, size: Int, resampling: UTF8String, rescale: UTF8String, conf: UTF8String): Array[Byte] =
         doInvoke(row, z, x, y, format, size, resampling, rescale, conf, BinaryType)
     def eval(row: InternalRow, z: Long, x: Long, y: Long, format: UTF8String, size: Long, resampling: UTF8String, rescale: UTF8String, conf: UTF8String): Array[Byte] =

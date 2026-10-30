@@ -69,6 +69,7 @@ Source of truth (priority order):
 4. **System apt + ubuntugis PPA** — for GDAL native + Python bindings; auto-detected from `gdal-config --version`.
 5. **Build tool** — `maven`: the Maven version the wrapper pins for CI (`.mvn/wrapper/maven-wrapper.properties`), the dev and local-CI images' `MAVEN_VERSION`, and the pom's enforcer floor. `scripts/ci/test_maven_wrapper.py` fails when they differ.
 6. **Intentional DBR divergence** — `pyzmq 25.1.1` (Dockerfile only). DBR has 26.2.0 but our Jupyter ZMQ workaround requires the older pin. Re-evaluate on next DBR LTS bump.
+7. **Zarr extra** — `zarr` (`--package zarr`): the `[zarr_dbr19]` pins in `python/geobrix/pyproject.toml` (`zarr`, `numcodecs`, `zarrs`, `tensorstore`, `obstore`, `ml_dtypes`, `msgspec`, `donfig`). None is preinstalled on DBR 19, Serverless env 6 or DBR 19 ML, so they follow the Zarr runtime-deps report, not a DBR release-notes table.
 
 ## Files audited
 

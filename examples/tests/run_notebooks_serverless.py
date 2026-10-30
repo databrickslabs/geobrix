@@ -37,6 +37,7 @@ import re
 import sys
 import time
 import tomllib
+from dataclasses import dataclass
 from typing import Optional
 
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
@@ -62,6 +63,11 @@ DEFAULT_ENV_VERSION = "6"
 # Each run's time limit (minutes): a notebook that outlives it is ended by the Jobs service, not left to hang.
 DEFAULT_TIMEOUT_MIN = 60
 DEFAULT_POLL_SECS = 20
+# --new-cluster defaults: a DBR 19 job cluster with one worker. m5d.xlarge (x86_64), not the
+# Graviton m6gd.xlarge, which has sat for 25 min without capacity on the dev workspace.
+DEFAULT_SPARK_VERSION = "19.x-scala2.13"
+DEFAULT_NODE_TYPE = "m5d.xlarge"
+ACCESS_MODES = ("dedicated", "standard")
 
 # Cells whose source contains a line beginning with these magic prefixes are
 # stripped when strip_pip=True.  Serverless JOB kernels cannot %pip install
@@ -269,6 +275,43 @@ def _inject_override_cell(nb_bytes: bytes, assignments: list[str]) -> bytes:
 
 
 # ---------------------------------------------------------------------------
+# Job cluster (--new-cluster)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class JobCluster:
+    """A cluster made for one run: Databricks terminates it when the run ends.
+
+    ``access_mode`` is ``dedicated`` (single user: ``user_name``) or ``standard``
+    (``USER_ISOLATION``, where user code runs isolated from other users).
+    """
+
+    spark_version: str = DEFAULT_SPARK_VERSION
+    node_type: str = DEFAULT_NODE_TYPE
+    num_workers: int = 1
+    access_mode: str = "dedicated"
+    user_name: Optional[str] = None
+
+
+def _cluster_spec(cluster: JobCluster):
+    """The ``new_cluster`` of the run's task."""
+    from databricks.sdk.service import compute
+
+    dedicated = cluster.access_mode == "dedicated"
+    return compute.ClusterSpec(
+        spark_version=cluster.spark_version,
+        node_type_id=cluster.node_type,
+        num_workers=cluster.num_workers,
+        data_security_mode=(
+            compute.DataSecurityMode.SINGLE_USER
+            if dedicated
+            else compute.DataSecurityMode.USER_ISOLATION
+        ),
+        single_user_name=cluster.user_name if dedicated else None,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Polling helpers
 # ---------------------------------------------------------------------------
 
@@ -350,7 +393,7 @@ def run_one(
     existing_cluster_id: str | None = None,
     harvest_outputs: bool = False,
     profile: str | None = None,
-    new_cluster=None,
+    job_cluster: JobCluster | None = None,
     timeout_min: int = DEFAULT_TIMEOUT_MIN,
     harvest_path: pathlib.Path | None = None,
 ) -> bool:
@@ -364,16 +407,21 @@ def run_one(
     environment spec (``%pip`` is stripped for jobs, CPU and GPU alike) — pass the
     env5 wheel and the GPU packages via ``--extra-deps`` (e.g. ``pycolmap-cuda12==4.2.1``).
 
+    With ``existing_cluster_id`` the run attaches to that cluster; with ``job_cluster``
+    it runs on a cluster made for it (terminated when the run ends). Either way the
+    notebook installs its own deps with ``%pip``.
+
     If ``harvest_outputs`` is True and the run succeeds, exports the run and harvests
     cell outputs back into the local .ipynb file.
     """
     from databricks.sdk.service import compute, jobs
 
-    _mode = (
-        f"cluster {existing_cluster_id}"
-        if existing_cluster_id
-        else f"job cluster {new_cluster.spark_version}" if new_cluster else "serverless"
-    )
+    if existing_cluster_id:
+        _mode = f"cluster {existing_cluster_id}"
+    elif job_cluster:
+        _mode = f"new {job_cluster.access_mode} cluster {job_cluster.spark_version}"
+    else:
+        _mode = "serverless"
     tag = f" [{hardware_accelerator}]" if hardware_accelerator else ""
     print(f"\n=== SUBMIT ({_mode}{tag}): {local_path.name} ===", flush=True)
 
@@ -381,11 +429,17 @@ def run_one(
 
     task_key = "".join(c if c.isalnum() else "_" for c in local_path.stem)[:90]
 
-    if existing_cluster_id or new_cluster:
-        # A classic cluster: a warm interactive one (no cold start), or a job cluster created for this run
-        # alone and terminated when it ends (--new-cluster). Deps install via the notebook's own %pip (kept, not
-        # stripped — classic clusters support %pip), so there is no environment spec or GPU compute request
-        # here; --extras/--wheel/--env-version/--hardware-accelerator do not apply in this mode.
+    if existing_cluster_id or job_cluster:
+        # A classic cluster: the warm interactive one (no cold start), or a job cluster
+        # made for this run. Deps install via the notebook's own %pip (kept, not
+        # stripped — classic clusters support %pip), so there is no environment spec or
+        # GPU compute request here; --extras/--wheel/--env-version/--hardware-accelerator
+        # do not apply in this mode.
+        where = (
+            {"existing_cluster_id": existing_cluster_id}
+            if existing_cluster_id
+            else {"new_cluster": _cluster_spec(job_cluster)}
+        )
         waiter = submit_once(
             w,
             run_name=f"gbx-nb:{task_key}",
@@ -393,10 +447,9 @@ def run_one(
             tasks=[
                 jobs.SubmitTask(
                     task_key=task_key,
-                    existing_cluster_id=existing_cluster_id,
-                    new_cluster=new_cluster,
                     notebook_task=jobs.NotebookTask(notebook_path=ws_path),
                     max_retries=0,  # run exactly once — never retry a failed run
+                    **where,
                 )
             ],
         )
@@ -472,6 +525,9 @@ def run_one(
     for t in r.tasks or []:
         ts = t.state.result_state if t.state else None
         print(f"    task {t.task_key}: {ts}  page={t.run_page_url}", flush=True)
+        cluster_id = getattr(getattr(t, "cluster_instance", None), "cluster_id", None)
+        if job_cluster and cluster_id:
+            print(f"    task {t.task_key} job cluster: {cluster_id}", flush=True)
         # The jobs API does NOT expose serverless notebook stdout; a notebook that
         # ends with dbutils.notebook.exit(<json>) surfaces its result here. Print
         # it so experiment summaries are captured client-side (reliable, not stdout).
@@ -697,20 +753,42 @@ def main() -> int:
     )
     parser.add_argument(
         "--new-cluster",
-        metavar="SPARK_VERSION",
+        nargs="?",
+        const=True,
         default=None,
+        metavar="SPARK_VERSION",
         help=(
-            "Run each notebook on a job cluster of this Databricks Runtime (e.g. '19.x-scala2.13'), created for "
-            "the run and terminated when it ends (nothing left to delete). Dedicated (single user) access mode, "
-            "one worker of --node-type. Deps install via the notebook's own %%pip (kept). --extras/--wheel/"
+            "Run on a classic job cluster made for each run, which Databricks terminates "
+            "when the run ends, instead of Serverless. An optional runtime (e.g. "
+            "'19.x-scala2.13') sets the cluster's Databricks Runtime, as --spark-version does. "
+            "Deps install via the notebook's own %%pip (kept, not stripped). --extras/--wheel/"
             "--env-version/--hardware-accelerator are ignored in this mode."
         ),
     )
     parser.add_argument(
+        "--access-mode",
+        choices=ACCESS_MODES,
+        default="dedicated",
+        help=(
+            "--new-cluster access mode: dedicated (single user: you) or standard "
+            "(USER_ISOLATION). Default: dedicated."
+        ),
+    )
+    parser.add_argument(
+        "--spark-version",
+        default=DEFAULT_SPARK_VERSION,
+        help=f"--new-cluster runtime (default: {DEFAULT_SPARK_VERSION!r}).",
+    )
+    parser.add_argument(
         "--node-type",
-        metavar="NODE_TYPE",
-        default="i3.xlarge",
-        help="Node type of the --new-cluster job cluster's driver and worker (default: 'i3.xlarge').",
+        default=DEFAULT_NODE_TYPE,
+        help=f"--new-cluster driver and worker type (default: {DEFAULT_NODE_TYPE!r}).",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=1,
+        help="--new-cluster worker count (default: 1).",
     )
     parser.add_argument(
         "--profile",
@@ -817,6 +895,11 @@ def main() -> int:
         )
         return 0 if ok else 1
 
+    if args.new_cluster and (args.existing_cluster_id or args.hardware_accelerator):
+        parser.error(
+            "--new-cluster is exclusive with --existing-cluster-id and --hardware-accelerator"
+        )
+
     notebooks = _collect_notebooks(args.notebooks, args.dirs)
     if not notebooks:
         parser.error(
@@ -843,23 +926,18 @@ def main() -> int:
 
     w = WorkspaceClient(profile=args.profile)
 
-    if args.existing_cluster_id and args.new_cluster:
-        parser.error("--existing-cluster-id and --new-cluster are exclusive")
     # Classic-cluster modes keep %pip cells (classic clusters install via %pip, unlike
     # Serverless JOB compute where they fail and are stripped).
     if args.existing_cluster_id or args.new_cluster:
         args.strip_pip = False
-    new_cluster = None
+    job_cluster = None
     if args.new_cluster:
-        from databricks.sdk.service import compute
-
-        new_cluster = compute.ClusterSpec(
-            spark_version=args.new_cluster,
-            node_type_id=args.node_type,
-            num_workers=1,
-            data_security_mode=compute.DataSecurityMode.SINGLE_USER,
-            single_user_name=w.current_user.me().user_name,
-            custom_tags={"gbx-run": "notebooks"},
+        job_cluster = JobCluster(
+            spark_version=args.new_cluster if isinstance(args.new_cluster, str) else args.spark_version,
+            node_type=args.node_type,
+            num_workers=args.num_workers,
+            access_mode=args.access_mode,
+            user_name=w.current_user.me().user_name,
         )
 
     # Resolve default ws-dir using the current user
@@ -878,8 +956,13 @@ def main() -> int:
         print(f"Accelerator: {args.hardware_accelerator}", flush=True)
     if args.existing_cluster_id:
         print(f"Cluster  : {args.existing_cluster_id} (warm; %pip kept, env spec skipped)", flush=True)
-    if new_cluster:
-        print(f"Cluster  : a job cluster per run, {args.new_cluster} on {args.node_type} (%pip kept)", flush=True)
+    if job_cluster:
+        print(
+            f"Cluster  : new job cluster per run, {job_cluster.access_mode} access, "
+            f"{job_cluster.spark_version}, {job_cluster.num_workers} x {job_cluster.node_type} "
+            "(%pip kept, env spec skipped; terminated when the run ends)",
+            flush=True,
+        )
     if args.set_vars:
         print(f"Override vars: {', '.join(args.set_vars)}", flush=True)
     print("", flush=True)
@@ -907,7 +990,7 @@ def main() -> int:
             existing_cluster_id=args.existing_cluster_id,
             harvest_outputs=args.harvest_outputs,
             profile=args.profile,
-            new_cluster=new_cluster,
+            job_cluster=job_cluster,
             timeout_min=args.timeout_min,
             harvest_path=originals[nb_path],
         )

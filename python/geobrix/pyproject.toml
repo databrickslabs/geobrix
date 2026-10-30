@@ -138,22 +138,58 @@ light_env6_all = ["geobrix==0.6.0+env6"]
 # Databricks the env6 wheel's [zarr] carries these pins (DBR 19, DBR 19 ML, Serverless env 6):
 #   pip install "geobrix[zarr] @ file:///Volumes/.../geobrix-<version>+env6-py3-none-any.whl"
 # Off Databricks: pip install "geobrix[zarr_dbr19]".
-# Floors are at or below what the DBR 19 / env 6 / DBR 19 ML base ships (numpy>=2,
-# typing_extensions>=4.14, packaging>=22, google-crc32c>=1.5, pyyaml), so nothing
-# preinstalled moves. Do NOT cap those shared packages: a cap under a later base bump
-# becomes a downgrade. Not for DBR 17.3 / 18 / env 5: Zarr support targets DBR 19 and env 6
-# only (zarr 3.4 also needs typing_extensions>=4.14, and their base ships 4.12.2). Each
-# package is minor-capped because zarrs subclasses zarr internals and documents no zarr
-# ceiling: widen a cap only after a re-test.
+#
+# Source of the pins: the per-runtime dependency report (2026-10-21), which reads the package
+# tables of the DBR 19, Serverless env 6 and DBR 19 ML release notes. Its result: the pins
+# "do not move any preinstalled package on DBR 19, Serverless env 6 or DBR 19 ML". So no
+# package moves for a stated reason, and every pin is a floor plus a cap at the next minor
+# (or major) release. Do NOT cap the shared packages below: a cap under a later base bump
+# becomes a downgrade.
+#
+# None of the eight packages is preinstalled on DBR 19, env 6 or DBR 19 ML (CPU or GPU): the
+# report's tables list each as "absent" on all three. What they require of packages the
+# runtimes DO ship is met by the same version on all three runtimes. The report: "Every floor
+# the zarr stack imposes on a shared package (numpy>=2, typing_extensions>=4.14,
+# packaging>=22, google-crc32c>=1.5, pyyaml) is already met by the base of all three
+# runtimes." Preinstalled version -> floor asked (report section 3):
+#   numpy 2.3.4 -> zarr >=2, numcodecs >=2.0, ml_dtypes >=2.0.0, tensorstore >=1.22.0,
+#                  zarrs >=1.24
+#   typing_extensions 4.15.0 -> zarr >=4.14
+#   packaging 25.0 -> zarr >=22.0
+#   google-crc32c 1.8.0 -> zarr >=1.5
+#   pyyaml 6.0.3 -> donfig (no floor)
+# Not for DBR 17.3 / 18 / env 5: Zarr support targets DBR 19 and env 6 only (zarr 3.4 needs
+# typing_extensions>=4.14, and their base ships 4.12.2). The report's open item: zarrs
+# subclasses zarr internals and documents no zarr ceiling, so each package is minor-capped;
+# widen a cap only after a re-test.
 # ---------------------------------------------------------------------------
 zarr_dbr19 = [
-    "zarr>=3.4.1,<3.5",           # sharded v3 stores; pulls msgspec>=0.19 and donfig>=0.8
-    "numcodecs>=0.17,<0.18",      # needs python>=3.12 and numpy>=2
-    "zarrs>=0.2.3,<0.3",          # ZarrsCodecPipeline; declares only zarr>=3.1, hence the zarr cap
-    "tensorstore>=0.1.85,<0.2",   # needs ml_dtypes>=0.5.0
-    "obstore>=0.11,<0.13",        # object-store access; replaces fsspec/s3fs (base fsspec is 2023.5.0)
+    # zarr: not preinstalled on DBR 19, env 6 or DBR 19 ML. Sharded v3 stores. Pulls
+    # msgspec>=0.19 and donfig>=0.8 (below); its other floors are listed above.
+    "zarr>=3.4.1,<3.5",
+    # numcodecs: not preinstalled on DBR 19, env 6 or DBR 19 ML. Needs python>=3.12 and
+    # numpy>=2 (numpy 2.3.4 preinstalled). Report: "nothing from the base requires it" (0.17.x
+    # over 0.16.x); 0.17.1 makes Pickle.decode opt-in, and the range admits it.
+    "numcodecs>=0.17,<0.18",
+    # zarrs: not preinstalled on DBR 19, env 6 or DBR 19 ML. ZarrsCodecPipeline. Declares only
+    # zarr>=3.1, and "documents no zarr upper bound": hence the zarr cap above.
+    "zarrs>=0.2.3,<0.3",
+    # tensorstore: not preinstalled on DBR 19, env 6 or DBR 19 ML. Needs ml_dtypes>=0.5.0 and
+    # numpy>=1.22.0 (numpy 2.3.4 preinstalled). 0.1.85 is the version the spike measured.
+    "tensorstore>=0.1.85,<0.2",
+    # obstore: not preinstalled on DBR 19, env 6 or DBR 19 ML. Object-store access; replaces
+    # fsspec/s3fs (preinstalled fsspec is 2023.5.0, which the zarr path does not import).
+    # Needs typing-extensions (python<3.13) with no floor (4.15.0 preinstalled). Report:
+    # "take 0.12.0 if the cluster index serves it"; 0.11 is the floor.
+    "obstore>=0.11,<0.13",
+    # ml_dtypes: not preinstalled on DBR 19, env 6 or DBR 19 ML. tensorstore's floor; 0.6.0
+    # itself needs numpy>=2.0.0 (2.3.4 preinstalled).
     "ml_dtypes>=0.5,<1",
+    # msgspec: not preinstalled on DBR 19, env 6 or DBR 19 ML. Hard dependency of zarr>=3.4.0
+    # (JSON metadata validation); floor from zarr 3.4.x.
     "msgspec>=0.19,<1",
+    # donfig: not preinstalled on DBR 19, env 6 or DBR 19 ML. zarr's config; floor from zarr.
+    # Its pyyaml has no floor (6.0.3 preinstalled).
     "donfig>=0.8,<1",
 ]
 # Serverless env 6 -- aliases the canonical protobuf-6 Zarr extra [zarr_dbr19].

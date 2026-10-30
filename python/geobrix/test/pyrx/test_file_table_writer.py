@@ -216,7 +216,7 @@ def test_write_file_table_managed_uses_qualified_raster():
 
 
 # ---------------------------------------------------------------------------
-# I1: validate before DROP
+# validate before DROP
 # ---------------------------------------------------------------------------
 
 
@@ -271,7 +271,7 @@ def test_write_file_table_invalid_mode_raises_before_drop():
 
 
 # ---------------------------------------------------------------------------
-# M3: plain layout → honest write_strategy, no ORDER BY
+# plain layout → honest write_strategy, no ORDER BY
 # ---------------------------------------------------------------------------
 
 

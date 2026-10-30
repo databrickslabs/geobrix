@@ -60,7 +60,7 @@ case class RST_Rasterize(
  *
  *  PySpark sends Python ints as `LongType`. We expose Int overloads (for
  *  Scala/SQL literal callers) and Long overloads (for PySpark notebook
- *  callers). Wave 3 (`Quadbin_PointAsCell`) found this gap the hard way.
+ *  callers).
  */
 object RST_Rasterize extends WithExpressionInfo {
 

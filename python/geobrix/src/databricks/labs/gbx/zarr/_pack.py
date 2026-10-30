@@ -22,6 +22,7 @@ import shutil
 import threading
 import uuid
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
@@ -140,6 +141,9 @@ def is_fill(chunk: np.ndarray, fill) -> bool:
     return bool((chunk == fill).all())
 
 
+_STAT_THREADS = 16  # the pack files one commit checks, looked up at a time
+
+
 def require_packs(root: str, files, *, what: str, access=None) -> None:
     """Raise ``ZarrError`` unless every pack file in ``files`` (paths relative to ``root``)
     still exists. With direct ``access`` (an ``AccessConfig``) the objects are looked up in
@@ -150,14 +154,20 @@ def require_packs(root: str, files, *, what: str, access=None) -> None:
     removed them meanwhile, and a row that points at a missing file is a version that
     cannot be read. ``what`` names the operation in the message.
     """
-    gone = []
     stat = stat_for(access)
-    for f in sorted(set(files)):
+
+    def missing(f: str) -> bool:
         path = f if os.path.isabs(f) else os.path.join(root, f)
         try:
-            _retry_transient(lambda p=path: stat(p), attempts=3, backoff=0.2)
+            _retry_transient(lambda: stat(path), attempts=3, backoff=0.2)
         except FileNotFoundError:
-            gone.append(f)
+            return True
+        return False
+
+    names = sorted(set(files))
+    # one look per pack: a mount stat or an object head each, asked side by side
+    with ThreadPoolExecutor(max(1, min(_STAT_THREADS, len(names)))) as pool:
+        gone = [f for f, lost in zip(names, pool.map(missing, names)) if lost]
     if gone:
         raise ZarrError(
             f"{len(gone)} pack file(s) of this {what} are gone before it could commit "

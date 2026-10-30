@@ -363,3 +363,16 @@ This may take 2-3 minutes (~20-30MB)...
 
 USAGE_HRRR_NYC = """sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
 hrrr = spark.read.format("gdal").load(f"{sample_path}/nyc/hrrr-weather/hrrr_*.grib2")"""
+
+
+GENERATE_ERA5_ZARR = """# The Zarr weather cube is generated, not downloaded (it takes seconds)
+from databricks.labs.gbx.sample.zarr_era5 import write_era5_cube
+
+sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
+write_era5_cube(f"{sample_path}/global/era5-weather")"""
+
+USAGE_ERA5_ZARR = """from databricks.labs.gbx.zarr import gbx_zarr_read
+
+sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
+cube = f"{sample_path}/global/era5-weather/era5_like_v3.zarr"
+gbx_zarr_read(spark, cube, variables=["t2m"], isel={"time": 0}, output="table").show(3)"""

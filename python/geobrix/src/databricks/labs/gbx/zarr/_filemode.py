@@ -14,12 +14,16 @@ relative to the root it lies under: the FILE value is only how the column stores
 nothing outside the manifest module has to know the mode. ``path_of`` turns either
 form into the bare ``/Volumes/...`` path that opens through the FUSE mount.
 
+The default is ``fuse``, so a store made on FILE compute reads on every compute; ``auto`` and
+``external`` opt into FILE references.
+
 The FILE modes need a workspace with the File type preview. ``VERIFIED_FILE_MODES`` names the
 modes that have been verified on a cluster: while a mode is not in it, ``auto`` never picks it
 and asking for it raises ``ZarrUnsupported``.
 
-- ``external`` passed: on a runtime with FILE, ``auto`` picks it (Serverless, the Databricks
-  Container Service image and a workspace without the preview stay on ``fuse``).
+- ``external`` passed: on a runtime with FILE, ``auto`` picks it, Serverless included where the
+  workspace has the preview (the Databricks Container Service image and a workspace without the
+  preview stay on ``fuse``). ``auto`` follows FILE availability; the default does not.
 - ``managed`` failed and is **not available in this release**: Delta VACUUM, a deletion-vector delete
   and ``REORG ... PURGE`` never reclaim the bytes of a managed file, and a write that fails
   after its files were made leaves them behind, so a managed store only grows. It needs a
@@ -79,7 +83,7 @@ _REFUSED = {
         'file_mode="managed" is not available in this release: Delta VACUUM does not reclaim the '
         "bytes of a managed file (nor does a deletion-vector delete or REORG PURGE), so a "
         "managed store would only grow",
-        'use file_mode="auto" (the default), "external" or "fuse"',
+        'use file_mode="fuse" (the default), "auto" or "external"',
     )
 }
 _SCHEMES = ("dbfs:/", "file:/")  # the schemes ``to_local_path`` strips
@@ -109,9 +113,10 @@ def resolve(
 ) -> str:
     """The file mode to use, never ``"auto"``: ``"fuse"``, ``"external"`` or ``"managed"``.
 
-    ``auto`` is the best verified mode the runtime supports: ``managed`` when a filespace
-    root is given (``has_filespace``), else ``external``, else ``fuse``; it never raises. As
-    shipped that is ``external`` on a runtime with FILE and ``fuse`` elsewhere.
+    ``auto`` (an opt-in: the callers' default is ``fuse``) is the best verified mode the
+    runtime supports: ``managed`` when a filespace root is given (``has_filespace``), else
+    ``external``, else ``fuse``; it never raises. As shipped that is ``external`` on a
+    runtime with FILE and ``fuse`` elsewhere.
     An explicit ``external`` or ``managed`` that cannot be used raises ``ZarrUnsupported``
     (``managed`` always does in this release, see the module docstring).
     A registered store (``registered=True``) is never ``managed``: managed ingest copies
@@ -193,10 +198,12 @@ def require_file_compute(spark, label: str, mode: str) -> None:
     (``external`` or ``managed``), is used from compute that does not support them.
 
     A FILE store is made on a runtime with the File type preview, and its manifest cannot be
-    committed to there: the commit mints each value with ``try_to_file``, a function Serverless
-    and the Databricks Container Service image lack. What reading such a store does there has not been
-    verified, so it is refused the same way, before anything is written. ``fuse`` stores pass
-    without a probe; for the others ``file_supported`` caches its answer per session."""
+    committed to from compute without it: the commit mints each value with ``try_to_file``, a
+    function the Databricks Container Service image and compute in a workspace without the
+    preview lack (Serverless has it where the preview is on). What reading such a store does
+    on that compute has not been verified, so it is refused the same way, before anything is
+    written. ``fuse`` stores pass without a probe; for the others ``file_supported`` caches
+    its answer per session."""
     if mode == "fuse" or file_supported(spark):
         return
     raise ZarrUnsupported(

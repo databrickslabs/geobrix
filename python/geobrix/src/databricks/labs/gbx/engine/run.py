@@ -45,7 +45,7 @@ _TIFF_MAGIC = (
 # The engine's GDAL settings, set thread-local for each call on both tiers (the JVM's GdalSpecEngine applies the
 # same table), so they never change the user's process: one thread per call (a Spark task is one core), no Python
 # in a VRT pixel function, and no VRT raw band (it reads a file's bytes as pixels without a driver, which a driver
-# policy cannot judge). Process-wide settings stay as the process has them: GDAL_CACHEMAX (GDALManager's 512 MB on the
+# policy cannot judge). Process-wide settings stay as the process has them: the raster block cache size (GDALManager's 512 MB on the
 # JVM, GDAL's default in Python), GDAL_PAM_ENABLED (on: a tile's NoData may live in its .aux.xml; the engine's own
 # sidecars are under the call's prefix and go with it) and GDAL_SKIP, which only acts when drivers register (the
 # policy deregisters the refused drivers instead). Pinned by a golden row, read by both suites.

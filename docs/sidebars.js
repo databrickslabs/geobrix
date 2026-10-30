@@ -56,6 +56,7 @@ const sidebars = {
             'notebooks/helios',
             'notebooks/vapor-eyes',
             'notebooks/orthomosaic',
+            'notebooks/zarr-weather-features',
           ],
         },
         {

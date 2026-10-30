@@ -13,7 +13,7 @@ import org.apache.spark.sql.{Column, SparkSession}
   * registered automatically via `META-INF/services/...DataSourceRegister`.
   *
   * Naming: SQL `gbx_pmtiles_agg` → Scala `pmtiles_agg` → Python `pmtiles_agg`
-  * (single canonical name; Wave 6 is Beta — no aliases).
+  * (single canonical name; no aliases).
   */
 object functions extends Serializable {
 

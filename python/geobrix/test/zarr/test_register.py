@@ -25,6 +25,7 @@ from databricks.labs.gbx.zarr._manifest import (  # noqa: E402
 )
 from databricks.labs.gbx.zarr._meta import parse_v2, parse_v3  # noqa: E402
 from databricks.labs.gbx.zarr._register import (  # noqa: E402
+    OWNER_LEDGER,
     OWNER_MARKER,
     _claim_marker,
     gbx_zarr_register,
@@ -345,14 +346,25 @@ def _ledger_owners(spark, root):
     return [c["table"] for c in _register._held(spark, _register._ledger_table(root))]
 
 
+def _empty_ledger(spark, root):
+    """Make the ledger of ``root`` with no claim in it, so a claim goes through the ledger's
+    compare-and-swap rather than founding it (what a root whose claim was given back has).
+    """
+    root = str(root)
+    os.makedirs(root, exist_ok=True)
+    _register._create_ledger(spark, _register._ledger_table(root), root)
+
+
+@pytest.mark.parametrize("founded", [False, True], ids=["new-root", "empty-ledger"])
 def test_concurrent_claims_of_one_root_have_exactly_one_winner(
-    spark_delta, tmp_path, monkeypatch
+    spark_delta, tmp_path, monkeypatch, founded
 ):
     """Eight tables claim one root at the same moment, on a file system whose exclusive
     create is not exclusive: what a Unity Catalog Volume does across nodes (two claimers
     both created the marker, and the recorded owner was often not the winner). The
     ownership ledger, a Delta table in the root, lets exactly one in; the rest are refused
-    with a fix, and the marker names the winner."""
+    with a fix, and the marker names the winner. On a new root they race to found the
+    ledger (one first version), on an empty one through its compare-and-swap."""
     from databricks.labs.gbx.zarr import _write
 
     monkeypatch.setattr(_write, "_pause", lambda seconds: None)
@@ -365,6 +377,8 @@ def test_concurrent_claims_of_one_root_have_exactly_one_winner(
 
     monkeypatch.setattr(os, "open", not_exclusive)
     root = tmp_path / "ov"
+    if founded:  # every claimer goes through the MERGE, none founds the ledger
+        _empty_ledger(spark_delta, root)
     names = [f"c.s.t{i}" for i in range(8)]
     barrier, outcome = threading.Barrier(len(names)), {}
 
@@ -432,6 +446,7 @@ def test_a_claim_whose_commit_landed_but_whose_lookup_failed_still_wins(
         return real(*a, **k)
 
     root = str(tmp_path / "ov")
+    _empty_ledger(spark_delta, root)
     monkeypatch.setattr(_register._manifest, "find_commit_version", flaky)
     assert _register.claim_root(spark_delta, root, "c.s.t", "overlay") is True
     monkeypatch.undo()
@@ -456,6 +471,7 @@ def test_a_failed_commit_is_the_error_raised_when_the_lookup_after_it_fails_too(
         raise RuntimeError("commit failed")
 
     root = str(tmp_path / "ov")
+    _empty_ledger(spark_delta, root)
     monkeypatch.setattr(_register, "_held", held)
     monkeypatch.setattr(_register._manifest, "commit", commit)
     with pytest.raises(RuntimeError, match="commit failed"):
@@ -481,12 +497,436 @@ def test_a_claim_whose_read_back_fails_leaves_no_row_behind(
         return real_held(spark, ledger)
 
     root = str(tmp_path / "ov")
+    _empty_ledger(spark_delta, root)
     monkeypatch.setattr(_register, "_held", held)
     with pytest.raises(RuntimeError, match="read-back failed"):
         _register.claim_root(spark_delta, root, "c.s.t", "overlay")
     monkeypatch.undo()
     assert _ledger_owners(spark_delta, root) == []
     assert _register.claim_root(spark_delta, root, "c.s.other", "overlay") is True
+
+
+def test_a_claim_that_cannot_be_taken_back_still_raises_the_read_back_error(
+    spark_delta, tmp_path, monkeypatch, caplog
+):
+    """The read that confirms the claim fails and so does deleting the claim's row: the read-back
+    error is the one raised (the unlock failure is only logged), and the row is left in the ledger.
+    """
+    real_held, looks = _register._held, []
+
+    def held(spark, ledger):
+        looks.append(1)
+        if len(looks) == 2:
+            raise RuntimeError("read-back failed")
+        return real_held(spark, ledger)
+
+    def unlock(*a, **k):
+        raise RuntimeError("unlock failed")
+
+    root = str(tmp_path / "ov")
+    _empty_ledger(spark_delta, root)
+    monkeypatch.setattr(_register, "_held", held)
+    monkeypatch.setattr(_register, "_unlock", unlock)
+    with caplog.at_level(logging.WARNING, logger=_register._LOG.name):
+        with pytest.raises(RuntimeError, match="read-back failed"):
+            _register.claim_root(spark_delta, root, "c.s.t", "overlay")
+    warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("could not take claim" in m and "unlock failed" in m for m in warned)
+    monkeypatch.undo()
+    assert _ledger_owners(spark_delta, root) == ["c.s.t"]
+
+
+def _refused(what):
+    def refused(*a, **k):
+        raise AssertionError(f"{what} ran")
+
+    return refused
+
+
+def test_a_new_root_is_claimed_by_founding_its_ledger_in_one_commit(
+    spark_delta, tmp_path, monkeypatch
+):
+    """A root with no ledger: one statement creates the ledger with the claim in it. No
+    CREATE IF NOT EXISTS, no read, no MERGE, no read back; the ledger has one version.
+    """
+    root = str(tmp_path / "ov")
+    monkeypatch.setattr(_register, "_create_ledger", _refused("create"))
+    monkeypatch.setattr(_register, "_held", _refused("read"))
+    monkeypatch.setattr(_register._manifest, "commit", _refused("merge"))
+    assert _register.claim_root(spark_delta, root, "c.s.t", "overlay") is True
+    monkeypatch.undo()
+    ledger = _register._ledger_table(root)
+    assert spark_delta.sql(f"DESCRIBE HISTORY {ledger}").count() == 1
+    held = _register._held(spark_delta, ledger)
+    assert [c["table"] for c in held] == ["c.s.t"] and held[0]["kind"] == "overlay"
+    kinds = sorted(
+        r["kind"]
+        for r in spark_delta.sql(
+            f"SELECT kind FROM {ledger} WHERE tag IS NULL"
+        ).collect()
+    )
+    assert kinds == ["commit", "lock"]  # the rows a claim through the MERGE leaves
+    assert json.loads((tmp_path / "ov" / OWNER_MARKER).read_text())["table"] == "c.s.t"
+    # the claim is the first: another table is refused, the owner claims again for free
+    with pytest.raises(ZarrOwnershipError, match="c.s.t"):
+        _register.claim_root(spark_delta, root, "c.s.other", "overlay")
+    assert _register.claim_root(spark_delta, root, "c.s.t", "overlay") is False
+    _register.release_root(spark_delta, root, "c.s.t", "overlay")
+    assert _ledger_owners(spark_delta, root) == []
+    assert _register.claim_root(spark_delta, root, "c.s.other", "overlay") is True
+
+
+def test_a_founding_statement_that_landed_but_raised_is_still_this_claim(
+    spark_delta, tmp_path, monkeypatch
+):
+    """The founding statement lands and then reports a failure (a lost reply): the claim
+    goes on through the ledger, finds its own row first, and has won."""
+    real = _register._found_ledger
+
+    def landed_but_raised(*a, **k):
+        assert real(*a, **k)
+        return False
+
+    root = str(tmp_path / "ov")
+    monkeypatch.setattr(_register, "_found_ledger", landed_but_raised)
+    monkeypatch.setattr(_register._manifest, "commit", _refused("merge"))
+    assert _register._claim_ledger(spark_delta, root, "c.s.t", "overlay") is True
+    monkeypatch.undo()
+    assert _ledger_owners(spark_delta, root) == ["c.s.t"]
+
+
+def _stray_founding(root):
+    """A ledger directory as a founder's CREATE TABLE AS SELECT leaves it before (or without)
+    its commit: a data file, no Delta log."""
+    ledger = root / OWNER_LEDGER
+    ledger.mkdir(parents=True)
+    (ledger / "part-00000-founder.snappy.parquet").write_bytes(b"PAR1 not committed")
+    return ledger
+
+
+def test_a_root_whose_founder_never_commits_is_refused_with_a_fix(
+    spark_delta, tmp_path, monkeypatch
+):
+    """Files in _gbx_owner and no Delta log: a founder is in flight. The claimer waits on the
+    claim's jittered budget, not three short tries, and a root still stuck raises an ownership
+    error whose Fix names the directory and when deleting it is safe. Once it is deleted
+    (the founder died), the next claim wins."""
+    from databricks.labs.gbx.zarr import _write
+
+    root = tmp_path / "ov"
+    ledger = _stray_founding(root)
+    pauses = []
+
+    def founder_writing(seconds):  # a live founder: it keeps writing while we wait
+        pauses.append(seconds)
+        (ledger / f"part-{len(pauses):05d}.snappy.parquet").write_bytes(b"PAR1")
+
+    monkeypatch.setattr(_write, "_pause", founder_writing)
+    with pytest.raises(ZarrOwnershipError) as ei:
+        _register.claim_root(spark_delta, str(root), "c.s.t", "overlay")
+    assert len(pauses) == _write._ATTEMPTS
+    assert OWNER_LEDGER in str(ei.value) and str(ledger) in ei.value.fix
+    assert "delete" in ei.value.fix and "Delta holds no table" in ei.value.fix
+    assert not (root / OWNER_MARKER).exists()
+    shutil.rmtree(ledger)
+    assert _register.claim_root(spark_delta, str(root), "c.s.t", "overlay") is True
+    assert _ledger_owners(spark_delta, root) == ["c.s.t"]
+
+
+def _age(path, seconds):
+    """Date every file under ``path`` ``seconds`` back."""
+    when = __import__("time").time() - seconds
+    for f in path.rglob("*"):
+        os.utime(f, (when, when))
+
+
+def test_a_dead_founders_leftovers_are_cleared_after_the_wait_and_the_claim_wins(
+    spark_delta, tmp_path, monkeypatch, caplog
+):
+    """A founding statement that wrote its data files and then failed (its own call, or one
+    that died) leaves _gbx_owner without a table. After the claim's whole wait, files that are
+    all older than the start of that wait are a dead founder's: they alone are removed (logged
+    at WARNING with their ages) and the founding is tried once more, and wins."""
+    from databricks.labs.gbx.zarr import _write
+
+    root = tmp_path / "ov"
+    ledger = _stray_founding(root)
+    (ledger / "sub").mkdir()
+    (ledger / "sub" / "part-1.snappy.parquet").write_bytes(b"PAR1")
+    _age(ledger, 600)
+    pauses = []
+    monkeypatch.setattr(_write, "_pause", pauses.append)
+    with caplog.at_level(logging.WARNING, logger=_register._LOG.name):
+        assert _register.claim_root(spark_delta, str(root), "c.s.t", "overlay") is True
+    assert len(pauses) == _write._ATTEMPTS  # it waited the whole budget first
+    assert _ledger_owners(spark_delta, root) == ["c.s.t"]
+    warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("2 file(s)" in m and "s old" in m for m in warned), warned
+    assert not (ledger / "part-00000-founder.snappy.parquet").exists()
+
+
+def test_a_founding_that_fails_after_writing_its_files_does_not_wedge_its_own_root(
+    spark_delta, tmp_path, monkeypatch
+):
+    """The call's own founding statement writes a data file into _gbx_owner and then fails
+    before its commit: the same call waits its budget, finds only its own (older) file,
+    clears it and founds the ledger on the second try."""
+    from databricks.labs.gbx.zarr import _write
+
+    real, tries = _register._found_ledger, []
+
+    def failing_once(spark, root, claim_id, body, table):
+        tries.append(1)
+        if len(tries) == 1:
+            ledger = os.path.join(root, OWNER_LEDGER)
+            os.makedirs(ledger)
+            with open(
+                os.path.join(ledger, "part-00000-mine.snappy.parquet"), "wb"
+            ) as f:
+                f.write(b"PAR1 written, never committed")
+            return False  # the statement raised after writing it
+        return real(spark, root, claim_id, body, table)
+
+    monkeypatch.setattr(_register, "_found_ledger", failing_once)
+    monkeypatch.setattr(_write, "_pause", lambda seconds: None)
+    root = tmp_path / "ov"
+    assert _register.claim_root(spark_delta, str(root), "c.s.t", "overlay") is True
+    assert len(tries) == 2 and _ledger_owners(spark_delta, root) == ["c.s.t"]
+
+
+def test_leftovers_with_one_fresh_file_are_kept_and_the_root_is_stuck(
+    spark_delta, tmp_path, monkeypatch
+):
+    """One file written after the wait began: a founder may be alive, so nothing is
+    removed and the stuck error is raised as before."""
+    from databricks.labs.gbx.zarr import _write
+
+    root = tmp_path / "ov"
+    ledger = _stray_founding(root)
+    _age(ledger, 600)
+    pauses = []
+
+    def one_fresh(seconds):
+        pauses.append(seconds)
+        if len(pauses) == 3:
+            (ledger / "part-fresh.snappy.parquet").write_bytes(b"PAR1")
+
+    monkeypatch.setattr(_write, "_pause", one_fresh)
+    with pytest.raises(ZarrOwnershipError, match="Delta does not take for a table"):
+        _register.claim_root(spark_delta, str(root), "c.s.t", "overlay")
+    assert sorted(p.name for p in ledger.iterdir()) == [
+        "part-00000-founder.snappy.parquet",
+        "part-fresh.snappy.parquet",
+    ]
+
+
+def test_a_real_ledger_is_never_cleared_however_old(spark_delta, tmp_path, monkeypatch):
+    """A ledger Delta takes for a table is never cleaned, even with every file dated long
+    before the wait: the claimer reads it and is refused by the owner's name."""
+    from databricks.labs.gbx.zarr import _write
+
+    root = tmp_path / "ov"
+    assert _register.claim_root(spark_delta, str(root), "c.s.first", "overlay") is True
+    ledger = root / OWNER_LEDGER
+    _age(ledger, 10 * 86400)
+    before = sorted(str(p.relative_to(ledger)) for p in ledger.rglob("*"))
+    monkeypatch.setattr(_write, "_pause", lambda seconds: None)
+    assert _register._clear_dead_founder(spark_delta, str(root), since=1e18) is True
+    with pytest.raises(ZarrOwnershipError, match="c.s.first"):
+        _register.claim_root(spark_delta, str(root), "c.s.second", "overlay")
+    assert sorted(str(p.relative_to(ledger)) for p in ledger.rglob("*")) == before
+
+
+def test_a_claimer_waits_for_a_founder_in_flight_and_finds_the_winner(
+    spark_delta, tmp_path, monkeypatch
+):
+    """A claimer that meets a founder's files waits; when the founder commits, it reads the
+    ledger and is refused with the winner's name, not a write error."""
+    from databricks.labs.gbx.zarr import _write
+
+    root = tmp_path / "ov"
+    ledger = _stray_founding(root)
+    pauses = []
+
+    def founder_lands(seconds):
+        pauses.append(seconds)
+        if len(pauses) == 2:
+            shutil.rmtree(ledger)  # the founder's statement commits its first version
+            body = {"table": "c.s.first", "kind": "overlay", "format": "1"}
+            claim = uuid.uuid4().hex
+            assert _register._found_ledger(
+                spark_delta, str(root), claim, body, "c.s.first"
+            )
+
+    monkeypatch.setattr(_write, "_pause", founder_lands)
+    with pytest.raises(ZarrOwnershipError, match="c.s.first"):
+        _register.claim_root(spark_delta, str(root), "c.s.second", "overlay")
+    assert len(pauses) == 2
+    assert _ledger_owners(spark_delta, root) == ["c.s.first"]
+
+
+def test_a_founding_statement_that_fails_is_logged_as_a_warning(tmp_path, caplog):
+    class Session:
+        def sql(self, text):
+            raise RuntimeError("the founding statement failed")
+
+    body = {"table": "c.s.t", "kind": "overlay", "format": "1"}
+    with caplog.at_level(logging.WARNING, logger=_register._LOG.name):
+        assert not _register._found_ledger(
+            Session(), str(tmp_path / "ov"), "a" * 32, body, "c.s.t"
+        )
+    warned = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warned and "the founding statement failed" in warned[0].getMessage()
+
+
+def test_a_founded_ledger_has_the_schema_of_a_created_one(spark_delta, tmp_path):
+    """The two ways a ledger comes to be (founded with a claim; created empty, then claimed)
+    give one schema, nullability included."""
+    founded, created = tmp_path / "a", tmp_path / "b"
+    assert _register.claim_root(spark_delta, str(founded), "c.s.t", "overlay") is True
+    _empty_ledger(spark_delta, created)
+
+    def schema(root):
+        return [
+            (f.name, f.dataType.simpleString(), f.nullable)
+            for f in spark_delta.read.format("delta")
+            .load(str(root / OWNER_LEDGER))
+            .schema.fields
+        ]
+
+    assert schema(founded) == schema(created)
+
+
+def test_a_ledger_whose_first_log_version_was_retired_is_still_a_ledger(
+    spark_delta, tmp_path, monkeypatch
+):
+    """Delta's log cleanup removes old version files once a checkpoint covers them. A ledger
+    in that state (made here by Delta itself: checkpoints every 2 commits, a one-day log
+    retention, the early versions dated 40 days back) is asked of Delta, not of its files:
+    it is a ledger, its owner claims it again at once and another table is refused by name,
+    with no wait."""
+    from databricks.labs.gbx.zarr import _write
+
+    root = tmp_path / "ov"
+    ledger = _register._ledger_table(str(root))
+    body = json.dumps(
+        {"table": "c.s.t", "kind": "overlay", "format": "1"}, sort_keys=True
+    )
+    spark_delta.sql(  # a ledger with c.s.t's claim, made to checkpoint and clean early
+        f"CREATE TABLE {ledger} USING DELTA TBLPROPERTIES ("
+        "'delta.enableDeletionVectors' = 'false', 'delta.enableRowTracking' = 'true', "
+        "'delta.checkpointInterval' = '2', 'delta.logRetentionDuration' = 'interval 1 days') "
+        "AS SELECT CAST('lock' AS STRING) AS kind, CAST(NULL AS STRING) AS array, "
+        "'owner' AS key, CAST(NULL AS STRING) AS shard_key, CAST(NULL AS STRING) AS file, "
+        "CAST(NULL AS BIGINT) AS offset, CAST(NULL AS BIGINT) AS length, "
+        "CAST(NULL AS STRING) AS checksum, CAST(NULL AS STRING) AS origin, "
+        "CAST(NULL AS STRING) AS identity, 'a' AS write_id, CAST(NULL AS STRING) AS tag, "
+        f"'{body}' AS meta"
+    )
+    _register._claim_marker(str(root), "c.s.t", "overlay")
+    insert = f"INSERT INTO {ledger} (kind, key, write_id) VALUES ('commit', 'k{{}}', 'w{{}}')"
+    for i in range(3):
+        spark_delta.sql(insert.format(i, i))
+    log_dir = root / OWNER_LEDGER / "_delta_log"
+    past = __import__("time").time() - 40 * 86400
+    for f in log_dir.iterdir():
+        os.utime(f, (past, past))
+    for i in range(3, 6):
+        spark_delta.sql(insert.format(i, i))  # the next checkpoint cleans the old log
+    assert not (log_dir / ("0" * 20 + ".json")).exists(), sorted(  # version 0 is gone
+        p.name for p in log_dir.iterdir()
+    )
+    assert _register._ledger_state(spark_delta, str(root)) == "delta"
+    pauses = []
+    monkeypatch.setattr(_write, "_pause", pauses.append)
+    assert _register.claim_root(spark_delta, str(root), "c.s.t", "overlay") is False
+    with pytest.raises(ZarrOwnershipError, match="c.s.t"):
+        _register.claim_root(spark_delta, str(root), "c.s.other", "overlay")
+    assert pauses == []
+
+
+def test_a_founders_directory_with_data_files_and_no_log_is_founding(
+    spark_delta, tmp_path
+):
+    assert _register._ledger_state(spark_delta, str(tmp_path)) == "absent"
+    (tmp_path / OWNER_LEDGER).mkdir()
+    assert _register._ledger_state(spark_delta, str(tmp_path)) == "absent"  # empty
+    _stray_founding(tmp_path / "f")
+    assert _register._ledger_state(spark_delta, str(tmp_path / "f")) == "founding"
+
+
+def test_the_stuck_root_fix_says_when_deleting_is_safe_and_how_long_it_waited(tmp_path):
+    ledger = _stray_founding(tmp_path / "a")
+    err = _register._stuck(str(tmp_path / "a"), 20)
+    assert "safe to delete" in err.fix and str(ledger) in err.fix
+    assert "no create, register, write or maintenance call" in err.fix
+    assert "3 minutes" in str(err) and "4.5" in str(err)
+
+
+def test_an_unreadable_ledger_directory_is_a_zarr_error_with_a_fix(
+    spark_delta, tmp_path, monkeypatch
+):
+    """A refused listing is not retried as a transient miss and does not escape raw."""
+    from databricks.labs.gbx.zarr.errors import ZarrError
+
+    real = os.listdir
+
+    def refused(path):
+        if str(path).endswith(OWNER_LEDGER):
+            raise PermissionError(13, "Permission denied", str(path))
+        return real(path)
+
+    monkeypatch.setattr(os, "listdir", refused)
+    with pytest.raises(ZarrError) as ei:
+        _register._ledger_state(spark_delta, str(tmp_path))
+    assert "Fix:" in str(ei.value) and OWNER_LEDGER in str(ei.value)
+
+
+def test_a_delta_error_that_is_not_a_missing_table_is_a_zarr_error(tmp_path):
+    """Only Delta's "not a Delta table" means a founder is in flight; any other error from
+    the question is raised with a Fix, not guessed at."""
+    from databricks.labs.gbx.zarr.errors import ZarrError
+
+    class Session:
+        def sql(self, text):
+            raise RuntimeError("the warehouse is unreachable")
+
+    _stray_founding(tmp_path)
+    with pytest.raises(ZarrError, match="unreachable") as ei:
+        _register._ledger_state(Session(), str(tmp_path))
+    assert "Fix:" in str(ei.value)
+
+
+@pytest.mark.parametrize("condition", [None, "DELTA_SOME_OTHER_CLASS"])
+def test_delta_saying_not_a_delta_table_in_words_is_founding(tmp_path, condition):
+    """An error with no class, or one this code does not know, that says the path "is not a
+    Delta table" is that answer: a founder in flight, not a hard error."""
+
+    class NotATable(Exception):
+        def getCondition(self):
+            return condition
+
+    class Session:
+        def sql(self, text):
+            raise NotATable("[X] `/x/_gbx_owner` is not a Delta table.")
+
+    _stray_founding(tmp_path)
+    assert _register._ledger_state(Session(), str(tmp_path)) == "founding"
+
+
+def test_the_zarr_package_reads_no_delta_log_files():
+    """Ledgers and manifests are asked of Delta, never read from its log's files: no zarr
+    module names the log directory or a log version file."""
+    import pathlib
+
+    pkg = pathlib.Path(_register.__file__).parent
+    hits = [
+        f"{f.name}: {needle}"
+        for f in sorted(pkg.glob("*.py"))
+        for needle in ("_delta_log", "0" * 20)
+        if needle in f.read_text()
+    ]
+    assert hits == []
 
 
 def test_register_never_writes_into_base(spark_delta, era5_v3_sharded, tmp_path):
@@ -1707,7 +2147,7 @@ def test_a_corrupt_group_registers_as_a_group_and_its_arrays_are_refused(
     spark_delta.sql(f"DROP TABLE IF EXISTS {table}")
 
 
-# --- fix round 1 (I7): a marker stays with a table that may hold a commit ------------------
+# --- a marker stays with a table that may hold a commit ------------------
 
 
 def test_discard_says_whether_it_dropped_the_table(monkeypatch):

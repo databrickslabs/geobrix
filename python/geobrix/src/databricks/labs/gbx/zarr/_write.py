@@ -66,6 +66,8 @@ import os
 import random
 import time
 import uuid
+import weakref
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -78,7 +80,11 @@ from databricks.labs.gbx.zarr import _write_tiles
 from databricks.labs.gbx.zarr._access import bounded_closure, resolve_access
 from databricks.labs.gbx.zarr._filemode import FileLayout, require_geobrix_files
 from databricks.labs.gbx.zarr._filemode import resolve as resolve_file_mode
-from databricks.labs.gbx.zarr._layout import chunk_layout, coordinate_chunks
+from databricks.labs.gbx.zarr._layout import (
+    check_shard,
+    chunk_layout,
+    coordinate_chunks,
+)
 from databricks.labs.gbx.zarr._meta import (
     ArrayMeta,
     cf_encode,
@@ -109,6 +115,7 @@ from databricks.labs.gbx.zarr._write_tasks import (
     chunk_grid,
     explode_function,
     extent,
+    pack_function,
     part_of,
 )
 from databricks.labs.gbx.zarr.errors import (
@@ -148,6 +155,10 @@ _CHANGED_INPUT_FIX = (
 # planned). _BEFORE_COMMIT: called with the write_id on the driver after the files are
 # written and before the commit, to let another write land in between.
 _FAULT = None
+# Measurement hook (the bench sets it, never production): each pack-stage task reports in its
+# digest row where and when it ran and, for each pack, its bytes and the seconds its copy or
+# put took (``_write_tasks._Trace``).
+_TRACE = False
 _BEFORE_COMMIT = None
 
 
@@ -228,11 +239,25 @@ def _shuffle_partitions(spark) -> int | None:
     return n if n > 0 else None
 
 
+_USERS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
 def _current_user(spark):
+    """The session's user, which a commit records: asked once per session (``None`` when
+    the session cannot say, asked again next time)."""
     try:
-        return spark.sql("SELECT current_user()").first()[0]
+        return _USERS[spark]
+    except (KeyError, TypeError):
+        pass
+    try:
+        user = spark.sql("SELECT current_user()").first()[0]
     except Exception:
         return None
+    try:
+        _USERS[spark] = user
+    except TypeError:  # a session that cannot be weakly referenced is asked each time
+        pass
+    return user
 
 
 def _is_xarray(data) -> bool:
@@ -443,6 +468,7 @@ def _explicit_shards(
                     f"chunk size {inner[i]}. Fix: pass a multiple of the chunk size."
                 )
             out[i] = size
+    check_shard(inner, out)
     return tuple(out)
 
 
@@ -484,6 +510,9 @@ class _Input:
     frame: object = None  # blocks: the blocks to write
     digest: tuple | None = None  # blocks: (count, hash) of the planned blocks
     known: dict = field(default_factory=dict)  # coordinates the driver holds already
+    # blocks: {"blocks": data blocks, "partitions": input partitions holding them}, from
+    # the position pass; None when the positions came from elsewhere (tiles)
+    spread: dict | None = None
 
 
 def _wanted(names, variables) -> list[str]:
@@ -618,7 +647,10 @@ def _planned_blocks(data, variables, seen=None, known=None) -> _Input:
     from pyspark.sql import functions as F
 
     frame = _blocks_frame(data, variables)
-    vars_ = _position_pass(frame) if seen is None else _summarize_positions(seen)
+    spread: dict = {}
+    vars_ = (
+        _position_pass(frame, spread) if seen is None else _summarize_positions(seen)
+    )
     names = _names(variables)
     if names is not None:
         missing = [n for n in names if n not in vars_]
@@ -635,14 +667,24 @@ def _planned_blocks(data, variables, seen=None, known=None) -> _Input:
             frame = frame.where(F.col("variable").isin(keep))
             vars_ = {n: vars_[n] for n in keep}
     return _Input(
-        "blocks", vars_, {}, frame=frame, digest=_digest_of(vars_), known=known or {}
+        "blocks",
+        vars_,
+        {},
+        frame=frame,
+        digest=_digest_of(vars_),
+        known=known or {},
+        spread=spread or None,
     )
 
 
-def _position_pass(frame) -> dict[str, _Var]:
+_PID = "__gbx_pid"
+
+
+def _position_pass(frame, spread: dict | None = None) -> dict[str, _Var]:
     """The variables of a blocks frame from one pass over its block positions. Only
     position, type and attribute columns are selected, never ``data``: a staged input is
-    not read for its bytes here."""
+    not read for its bytes here. ``spread``, when given, gets how many data blocks there are
+    and how many input partitions hold them (the same pass: each row's partition id)."""
     from pyspark.sql import functions as F
 
     cols = [F.col(c) for c in ("variable", "dims", "start", "stop", "dtype", "shape")]
@@ -652,7 +694,32 @@ def _position_pass(frame) -> dict[str, _Var]:
             if opt in frame.columns
             else F.lit(None).cast("string").alias(opt)
         )
-    return _summarize_positions(frame.select(*cols).toArrow())
+    seen = frame.select(*cols, F.spark_partition_id().alias(_PID)).toArrow()
+    if spread is not None:
+        spread.update(_spread_of(seen))
+    return _summarize_positions(seen)
+
+
+def _spread_of(seen: pa.Table) -> dict:
+    """``{"blocks", "partitions"}`` of a position pass: its data blocks (not coordinate
+    blocks: one dimension, named like it) and the distinct partitions they came from."""
+    dims = seen.column("dims")
+    one = pc.fill_null(pc.equal(pc.list_value_length(dims), 1), False)
+    # the first dimension is taken only of one-dimension blocks: a scalar (dims=[], a CF
+    # grid mapping) has none, and is data
+    coord = np.zeros(seen.num_rows, dtype=bool)
+    idx = np.flatnonzero(one.to_numpy(zero_copy_only=False))
+    if idx.size:
+        sub = seen.take(pa.array(idx))
+        first = pc.list_element(sub.column("dims"), 0)
+        coord[idx] = pc.fill_null(
+            pc.equal(first, sub.column("variable")), False
+        ).to_numpy(zero_copy_only=False)
+    data = seen.filter(pa.array(~coord))
+    return {
+        "blocks": data.num_rows,
+        "partitions": len(pc.unique(data.column(_PID))) if data.num_rows else 0,
+    }
 
 
 def _summarize_positions(seen: pa.Table) -> dict[str, _Var]:
@@ -883,6 +950,9 @@ class _Plan:
         None  # AccessConfig: how the tasks reach the files (holds credentials)
     )
     files: object = None  # FileLayout: how the manifest keeps its files
+    fresh: bool = False  # create: this call made the table, nothing is committed to it
+    spread: dict | None = None  # create: how the input holds its blocks (_Input.spread)
+    coverage: dict = field(default_factory=dict)  # variable -> _coverage of its boxes
 
 
 def _as_numbers(values):
@@ -1190,6 +1260,7 @@ def _plan_create(table, write_id, root, inp: _Input, chunks, shards, codecs) -> 
         offsets=offsets,
         extents=extents,
         digest=inp.digest,
+        spread=inp.spread,
     )
     chunks_codecs = _codec_chain(codecs)
     for v in inp.vars.values():
@@ -1706,6 +1777,67 @@ def _coverage(meta: ArrayMeta, starts: np.ndarray, stops: np.ndarray):
     return set(covered), partial
 
 
+def _aligned(plan: _Plan) -> bool:
+    """Whether a create's blocks can be packed by the tasks that make them, with no shuffle:
+    a blocks input planned ahead, each block starting on the grid of its array's units
+    (shards of a sharded array, chunks otherwise) and stopping on it or at the array's edge,
+    and no chunk covered by two blocks. Every piece of such a block is a whole chunk, and a
+    shard's chunks come from one block, so they share a pack as they do after the shuffle.
+    Anything else (blocks across units, overlapping blocks, an empty block) is assembled.
+    """
+    if plan.mode != "create" or plan.frame is None or not plan.boxes:
+        return False
+    for name, (starts, stops) in plan.boxes.items():
+        meta = plan.task_arrays.get(name)
+        if meta is None or not len(starts) or not (stops > starts).all():
+            return False
+        chunks = np.array(meta.chunks, dtype=np.int64)
+        unit = chunks
+        if meta.shard is not None:
+            unit = chunks * np.array(meta.shard.cps, dtype=np.int64)
+        shape = np.array(meta.shape, dtype=np.int64)
+        if (starts % unit).any() or ((stops % unit != 0) & (stops != shape)).any():
+            return False
+        # whole chunks only: the blocks are disjoint exactly when their chunk counts add up
+        # to the chunks they touch together
+        counts = np.prod(-(-stops // chunks) - starts // chunks, axis=1)
+        touched, _ = _plan_coverage(plan, name)
+        if int(counts.sum()) != len(touched):
+            return False
+    return True
+
+
+def _spread_out(spark, plan: _Plan, frame):
+    """An aligned create's blocks, repartitioned by block when the input holds them in at
+    most half the partitions the write could use (the blocks, up to the session's
+    parallelism): the pack stage runs where the blocks are, so an input of one partition would
+    encode and pack every block in one task, and on Serverless a repartition by column is
+    how work fans out. Hashing the block keys fills about two thirds of the partitions, so an
+    input spread wider than half is left where it is, with nothing moved."""
+    spread = plan.spread or {}
+    blocks, parts = spread.get("blocks", 0), spread.get("partitions", 0)
+    want = min(blocks, _shuffle_partitions(spark) or _DEFAULT_PARTITIONS)
+    if not parts or parts * 2 > want:
+        return frame
+    _LOG.info(
+        "gbx_zarr_write %s (create): %d blocks in %d input partition(s), packed in %d",
+        plan.table,
+        blocks,
+        parts,
+        want,
+    )
+    return frame.repartition(want, "variable", "start")
+
+
+def _plan_coverage(plan: _Plan, name: str):
+    """``_coverage`` of the planned boxes of ``name``, walked once per write (both the
+    alignment check and the shuffle sizing ask for it)."""
+    if name not in plan.coverage:
+        starts, stops = plan.boxes[name]
+        plan.coverage[name] = _coverage(plan.task_arrays[name], starts, stops)
+    return plan.coverage[name]
+
+
 def _planned(plan: _Plan):
     """``(parts, nbytes)`` of a write whose blocks are known ahead: the ``(variable,
     part)`` groups it touches and their decoded bytes; ``(None, None)`` for one pass."""
@@ -1714,7 +1846,7 @@ def _planned(plan: _Plan):
     parts, nbytes = set(), 0
     for name, (starts, stops) in plan.boxes.items():
         meta = plan.task_arrays[name]
-        touched, _ = _coverage(meta, starts, stops)
+        touched, _ = _plan_coverage(plan, name)
         parts.update((name, part_of(meta, c)[0]) for c in touched)
         nbytes += len(touched) * math.prod(meta.chunks) * meta.itemsize
     return parts, nbytes
@@ -1864,8 +1996,9 @@ def _base_frame(spark, plan: _Plan, names: list[str], parts=None):
 
 
 def _write_files(spark, plan: _Plan) -> pa.Table:
-    """Phase 1: the explode and assemble stages. Returns their rows (``ROWS_ARROW``):
-    chunks, guards, deletes, coordinate blocks and digests."""
+    """Phase 1: the explode and assemble stages, or for an aligned create (``_aligned``)
+    the one pack stage. Returns their rows (``ROWS_ARROW``): chunks, guards, deletes,
+    coordinate blocks and digests."""
     sizes = _sizes()
     frame = plan.frame
     if frame is None and plan.dataset_vars:
@@ -1899,18 +2032,33 @@ def _write_files(spark, plan: _Plan) -> pa.Table:
         batch_bytes=sizes["batch_bytes"],
         roll_bytes=sizes["roll_bytes"],
         fault=_FAULT,
+        trace=_TRACE,
         access=plan.access,
     )
+    if _aligned(plan):
+        _LOG.info(
+            "gbx_zarr_write %s (create): every block is whole units, packed where it is "
+            "made (no shuffle)",
+            plan.table,
+        )
+        packed, plan.access = bounded_closure(
+            spark,
+            plan.access,
+            lambda a: pack_function(dataclasses.replace(cfg, access=a)),
+        )
+        return _spread_out(spark, plan, frame).mapInArrow(packed, ROWS_DDL).toArrow()
     # the explode stage touches no storage: it never carries the credentials
     pieces = frame.mapInArrow(
         explode_function(dataclasses.replace(cfg, access=None)), PIECES_DDL
     )
     parts, nbytes = _planned(plan)
-    if plan.mode != "create" and base_names:
-        # an overwrite deletes every row its input does not replace: it needs them all
-        scope = None if plan.mode == "overwrite" else parts
-        if scope is None or scope:
-            pieces = pieces.unionByName(_base_frame(spark, plan, base_names, scope))
+    # base rows of the groups the input touches: those groups when the blocks were planned
+    # ahead, else (one pass) every candidate group, narrowed after the shuffle. An
+    # overwrite's untouched groups are deleted at commit (_untouched_deletes).
+    unscoped = False
+    if plan.mode != "create" and base_names and (parts is None or parts):
+        pieces = pieces.unionByName(_base_frame(spark, plan, base_names, parts))
+        unscoped = parts is None
     n = _partitions(spark, parts, nbytes, sizes["budget"])
     _LOG.info(
         "gbx_zarr_write %s (%s): %s shuffle partitions",
@@ -1923,12 +2071,133 @@ def _write_files(spark, plan: _Plan) -> pa.Table:
         if n is None
         else pieces.repartition(n, "variable", "part")
     ).sortWithinPartitions("variable", "part", "ord", "key")
+    if unscoped:
+        grouped = _touched_groups(grouped)
     assemble, plan.access = bounded_closure(
         spark,
         plan.access,
         lambda a: assemble_function(dataclasses.replace(cfg, access=a)),
     )
     return grouped.mapInArrow(assemble, ROWS_DDL).toArrow()
+
+
+_HIT = "__gbx_hit"
+
+
+def _touched_groups(grouped):
+    """``grouped`` with only the base rows of the groups that also have a piece or a side
+    row. A one-pass write unions every candidate group's base rows, because which groups
+    its blocks reach is known only once they are cut; this drops the others in Spark,
+    before the assemble stage sees them. The frame is already partitioned and sorted by
+    ``(variable, part)``, so the window adds no shuffle and no sort."""
+    from pyspark.sql import Window
+    from pyspark.sql import functions as F
+
+    piece = (F.col("kind") != F.lit("base")).cast("int")
+    hit = F.max(piece).over(Window.partitionBy("variable", "part"))
+    return grouped.withColumn(_HIT, hit).where(F.col(_HIT) == 1).drop(_HIT)
+
+
+def _untouched_deletes(spark, plan: _Plan, rows: pa.Table, written: set) -> pa.Table:
+    """An overwrite replaces whole variables: every base row of a variable it writes goes,
+    unless a chunk replaced it. The tasks delete within the groups the input touched (they
+    saw only those); this reads the base rows of the written variables in every other
+    group, on the cluster, and returns them as delete rows (``ROWS_ARROW``), column by
+    column. Nothing of a variable the write does not replace is read, and a variable whose
+    every group the input touched (an overwrite of all of it) is not read at all."""
+    if plan.mode != "overwrite" or plan.docs is None:
+        return ROWS_ARROW.empty_table()
+    names = sorted(
+        n for n in written if n in plan.task_arrays and n in plan.docs.arrays
+    )
+    if not names:
+        return ROWS_ARROW.empty_table()
+    chunks = rows.filter(
+        pc.and_(
+            pc.equal(rows.column("rtype"), "chunk"),
+            pc.is_in(
+                rows.column("array"),
+                value_set=pa.array(names, rows.schema.field("array").type),
+            ),
+        )
+    )
+    touched = (
+        pa.table(
+            {
+                "variable": chunks.column("array").cast(pa.string()),
+                "part": pc.coalesce(
+                    chunks.column("shard_key"), chunks.column("key")
+                ).cast(pa.string()),
+            }
+        )
+        .group_by(["variable", "part"])
+        .aggregate([])
+    )
+    per_array = dict(
+        zip(
+            *touched.group_by("variable")
+            .aggregate([("part", "count")])
+            .select(["variable", "part_count"])
+            .to_pydict()
+            .values()
+        )
+    )
+    # the input reaches only groups of the array's grid, so touching as many groups as the
+    # grid has means touching all of them: nothing of that variable is left to delete
+    left = [n for n in names if per_array.get(n, 0) < _groups(plan.docs.arrays[n])]
+    if not left:
+        return ROWS_ARROW.empty_table()
+    from pyspark.sql import functions as F
+
+    base = spark.sql(
+        f"SELECT kind, array, key, shard_key, identity, write_id "
+        f"FROM {M._q(plan.table)} VERSION AS OF {int(plan.base.version)} "
+        "WHERE tag IS NULL AND kind IN ('shard', 'chunk')"
+    ).where(F.col("array").isin(left))
+    seen = touched.filter(
+        pc.is_in(touched.column("variable"), value_set=pa.array(left, pa.string()))
+    )
+    if seen.num_rows:
+        part = (
+            F.when(F.col("kind") == "shard", F.col("key"))
+            .when(F.col("shard_key").isNotNull(), F.col("shard_key"))
+            .otherwise(F.col("key"))
+        )
+        keys = to_spark_df(spark, seen, "variable STRING, part STRING")
+        base = (
+            base.withColumn("variable", F.col("array"))
+            .withColumn("part", part)
+            .join(keys, ["variable", "part"], "left_anti")
+            .drop("variable", "part")
+        )
+    gone = base.toArrow()
+    n = gone.num_rows
+    if not n:
+        return ROWS_ARROW.empty_table()
+    columns = {
+        "rtype": pa.repeat(pa.scalar("delete", pa.string()), n),
+        "kind": gone.column("kind"),
+        "array": gone.column("array"),
+        "key": gone.column("key"),
+        "shard_key": gone.column("shard_key"),
+        "identity": gone.column("identity"),
+        "expected_write_id": gone.column("write_id"),
+    }
+    return pa.Table.from_arrays(
+        [
+            (columns[f.name] if f.name in columns else pa.nulls(n, f.type)).cast(f.type)
+            for f in ROWS_ARROW
+        ],
+        schema=ROWS_ARROW,
+    )
+
+
+def _groups(meta: ArrayMeta) -> int:
+    """How many Spark groups (``part_of``) the grid of ``meta`` has: shards, or chunks."""
+    per = meta.chunks
+    if meta.shard is not None:
+        per = tuple(c * k for c, k in zip(meta.chunks, meta.shard.cps))
+    return math.prod(-(-n // p) for n, p in zip(meta.shape, per))
 
 
 # --- after the files: side rows, coordinates ---------------------------------------------
@@ -2283,8 +2552,9 @@ def _coordinate_rows(spark, plan: _Plan, snap, docs: _Docs | None, *, rebase=Fal
                 rebase,
                 (FuseRangeReader, open_manifest_array, read_box, ManifestStore),
             )
-        for writer in writers.values():
-            writer.close()
+        # one pack per coordinate, each a copy to the store: made side by side
+        with ThreadPoolExecutor(max(1, min(16, len(writers)))) as pool:
+            list(pool.map(PackWriter.close, writers.values()))
     except BaseException:
         for writer in writers.values():
             writer.abort()
@@ -2513,6 +2783,7 @@ def _commit(spark, plan: _Plan, data_rows: pa.Table, stats: dict) -> int:
             meta=meta,
             sharded=sharded,
             files=plan.files,
+            fresh=plan.fresh,
         )
     base = plan.base
     for attempt in range(_ATTEMPTS):
@@ -2588,6 +2859,9 @@ def _write(spark, plan: _Plan, optimize: bool = False) -> int:
         lo_hi[1] = max(lo_hi[1], patch.start + len(patch.values))
     _apply_coordinates(plan, side["coords"])
     written = set(side["variables"]) | set(plan.dataset_vars)
+    gone = _untouched_deletes(spark, plan, rows, written)
+    if gone.num_rows:
+        rows = pa.concat_tables([rows, gone.cast(rows.schema)])
     data_rows = _commit_data_rows(plan, rows, written)
     chunk_rows = rows.filter(pc.equal(rows.column("rtype"), "chunk"))
     stats = {
@@ -2691,6 +2965,50 @@ def _check_new_root(root: str, owner: str) -> None:
         )
 
 
+def _written_arrays(plan: _Plan) -> set:
+    """Every array a write may have put packs of: its arrays (data and coordinates, nested
+    names such as ``grp/sub/x`` included) and the coordinates it patches."""
+    return (
+        set(plan.arrays)
+        | set(plan.task_arrays)
+        | set(plan.coords)
+        | {p.name for p in plan.patches}
+    )
+
+
+def _remove_write_files(root: str, write_id: str, arrays) -> None:
+    """Remove the pack files a failed create wrote, ``<root>/data/<array>/<write_id>`` for
+    each of ``arrays`` (the write's own, nested names included), and the parent directories
+    that leaves empty up to ``data``, so the root is empty again and the same create can run
+    again there. Only this write's directories are touched; nothing references them, since
+    the create committed nothing. Cleanup: a failure is logged."""
+    import shutil
+
+    data = os.path.normpath(os.path.join(root, "data"))
+    for name in sorted(set(arrays)):
+        target = os.path.normpath(os.path.join(data, name, write_id))
+        if not target.startswith(data + os.sep):
+            continue  # a name that does not stay under data/ is not a pack directory
+        try:
+            shutil.rmtree(target)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            _LOG.warning("could not remove %s", target, exc_info=True)
+            continue
+        parent = os.path.dirname(target)
+        while parent != data and parent.startswith(data + os.sep):
+            try:
+                os.rmdir(parent)  # only when now empty
+            except OSError:
+                break
+            parent = os.path.dirname(parent)
+    try:
+        os.rmdir(data)
+    except OSError:
+        pass
+
+
 def _adoptable(spark, table: str, root: str, owner: str) -> bool:
     """Whether an existing ``table`` is this create's own, left empty by a crash: a
     managed manifest of this root, with no commit, whose root marker names it."""
@@ -2728,7 +3046,7 @@ def gbx_zarr_write(
     chunks="balanced",
     shards=None,
     codecs=None,
-    file_mode: str = "auto",
+    file_mode: str | None = None,
     retain: str = "7 days",
     write_id: str | None = None,
     access: str = "auto",
@@ -2755,12 +3073,13 @@ def gbx_zarr_write(
       (``None`` computes them, a dict sets some, ``False`` means none) and ``codecs`` (the
       inner chunk's codec chain, as Zarr v3 codec documents or zarr codec objects; default
       ``bytes`` + ``zstd`` level 3 + ``crc32c``) lay out each array; coordinates are one
-      unsharded chunk. ``file_mode`` is ``"auto"`` (the default: ``"external"`` on a runtime with
-      the File type preview, ``"fuse"`` elsewhere, Serverless included), ``"fuse"`` (the
-      manifest keeps path strings) or ``"external"`` (FILE EXTERNAL values, governed with
-      the table; needs the preview, ``ZarrUnsupported`` otherwise). ``"managed"`` is not
-      available in this release: Delta VACUUM does not reclaim a managed file's bytes. ``retain``
-      is the store's.
+      unsharded chunk. ``file_mode`` is ``None`` or ``"fuse"`` (the default: the manifest keeps
+      path strings, so the store reads on every compute), ``"auto"`` (``"external"`` on a
+      runtime with the File type preview, Serverless included, ``"fuse"`` elsewhere) or
+      ``"external"`` (FILE EXTERNAL values, governed with the table; needs the preview,
+      ``ZarrUnsupported`` otherwise). ``"managed"`` is not available in this release: Delta
+      VACUUM does not reclaim a managed file's bytes. ``retain`` is the store's. Later
+      writes follow the store's recorded ``file_mode``: pass none, or that one.
     - ``"append"``: extend along ``append_dim`` (default: the first dimension labelled by
       CF times). The input must carry that dimension's labels, all after the store's last;
       on a regular axis they land at their step (so appends may arrive out of order), else
@@ -2882,7 +3201,6 @@ def gbx_zarr_write(
                 ("chunks", chunks, "balanced"),
                 ("shards", shards, None),
                 ("codecs", codecs, None),
-                ("file_mode", file_mode, "auto"),
                 ("retain", retain, "7 days"),
             )
             if v != default
@@ -2917,6 +3235,12 @@ def gbx_zarr_write(
                 fix="create the store with mode='create' (or register an existing one)",
             )
         props = M.read_props(spark, target, need_file=True)
+        if file_mode is not None and file_mode != props.file_mode:
+            raise ValueError(
+                f"file_mode applies to mode='create' only: {target} keeps its files in "
+                f"file_mode {props.file_mode!r}, and {file_mode!r} was given. Fix: drop "
+                "file_mode, or pass the store's own."
+            )
         plan = _plan_existing(
             spark,
             target,
@@ -2942,7 +3266,9 @@ def gbx_zarr_write(
         )
     _check_new_root(data_root, owner)
     # the data root is the filespace of a managed store
-    fm = resolve_file_mode(spark, file_mode, has_filespace=True)
+    fm = resolve_file_mode(
+        spark, "fuse" if file_mode is None else file_mode, has_filespace=True
+    )
     require_geobrix_files(target, fm, "write", new=True)  # before a marker is claimed
     inp = _create_input(spark, data, tiles, variables)
     plan = _plan_create(target, write_id, data_root, inp, chunks, shards, codecs)
@@ -2964,7 +3290,7 @@ def gbx_zarr_write(
         claimed = claim_root(spark, data_root, owner, "managed")
         if not adopt:
             M.create_manifest(spark, target, new_props)
-            made = True
+            made = plan.fresh = True
         return _write(spark, plan, optimize)
     except BaseException:
         # Only a table this call made, and then dropped, gives its marker back: a table
@@ -2977,5 +3303,6 @@ def gbx_zarr_write(
             else not adopt and not _table_exists(spark, target)
         )
         if claimed and gone:
+            _remove_write_files(data_root, write_id, _written_arrays(plan))
             release_root(spark, data_root, owner, "managed")
         raise

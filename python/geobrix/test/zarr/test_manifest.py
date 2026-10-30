@@ -275,6 +275,27 @@ def test_idempotent_write_id(spark_delta, table):
     assert M.find_commit_version(spark_delta, table, w1) == v1
 
 
+def test_a_fresh_commit_skips_the_lookup_before_its_merge(
+    spark_delta, table, monkeypatch
+):
+    """A first commit to a table its caller made looks for its write_id once, after the
+    MERGE. A twin of it (the same write_id, landed meanwhile) is still found: its MERGE
+    aborts on the commit row, and the version that landed is returned."""
+    real, looks = M.find_commit_version, []
+
+    def counted(*a, **k):
+        looks.append(1)
+        return real(*a, **k)
+
+    monkeypatch.setattr(M, "find_commit_version", counted)
+    w1 = uuid.uuid4().hex
+    rows = _rows(_chunk("c/0/0/0", w1))
+    v1 = M.commit(spark_delta, table, rows, write_id=w1, meta={}, fresh=True)
+    assert len(looks) == 1  # the lookup after the MERGE only
+    assert M.commit(spark_delta, table, rows, write_id=w1, meta={}, fresh=True) == v1
+    assert M.snapshot(spark_delta, table).version == v1  # the twin committed nothing
+
+
 def test_time_travel_snapshot(spark_delta, table):
     w1, w2 = uuid.uuid4().hex, uuid.uuid4().hex
     v1 = M.commit(
@@ -1469,7 +1490,7 @@ def test_a_v2_document_in_the_commit_says_not_sharded_without_a_lookup():
     M._require_shard_keys(None, "t", M._commit_source(rows, w, {}))  # no session needed
 
 
-# --- read guards: op 'check' (fix round 1, I1) ------------------------------------------
+# --- read guards: op 'check' ------------------------------------------
 
 
 def _check(kind, array, key, wid, expected):

@@ -1308,13 +1308,22 @@ def _probe_direct_open(path: str) -> None:
     consistency misses (``FileNotFoundError`` / ``OSError``) do not
     immediately trigger a full-file copy.
 
+    The open runs with ``GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR`` for this thread
+    (``pyrx._env.readdir_option``): a one-pixel read needs no sidecar file, and GDAL then
+    neither lists the folder (0.3 s to 10 s on a Serverless worker for a folder of 745
+    files) nor checks each sidecar by name. The real open that follows takes its own value
+    (``pyrx._env.open_raster``).
+
     Raises on failure after retries; returns ``None`` on success.
     """
     from rasterio.windows import Window
 
+    from databricks.labs.gbx.pyrx._env import readdir_option
+
     def _do() -> None:
-        with open_data(path) as ds:
-            ds.read(1, window=Window(0, 0, 1, 1))
+        with readdir_option("EMPTY_DIR"):
+            with open_data(path) as ds:
+                ds.read(1, window=Window(0, 0, 1, 1))
 
     _retry_transient(_do)
 
@@ -1495,8 +1504,16 @@ def _open_via_file_ref(fr, rasterio, stream_max_bytes=_GBX_STREAM_MAX_BYTES):
             return ds, stream  # tiled/COG: seekable stream is efficient
         ds.close()
         stream.close()  # striped: release the stream before FUSE fallback
+    from databricks.labs.gbx.pyrx._env import readdir_mode, readdir_option
+
     local_path = fr.as_local_file()
-    return open_data(local_path), None  # FUSE path: no stream
+    with readdir_option(readdir_mode(local_path)):  # as open_raster does
+        return open_data(local_path), None  # FUSE path: no stream
+
+
+# Drivers that read a dataset through the one file handle they opened and never open the
+# path again by name: a staged copy of such a file may be removed from disk once it is open.
+_SINGLE_HANDLE_DRIVERS = frozenset(("GTiff", "COG"))
 
 
 class _OpenerContext:
@@ -1523,17 +1540,34 @@ class _OpenerContext:
       prevent stream leaks alongside the DatasetReader.
     - ``_fuse_sources``: set of id(ds) for FUSE-opened handles — FUSE handles don't
       buffer into executor RAM, so ``weigh`` returns a small nominal for them.
+    - ``_unlinked_sizes``: id(ds) → size of a staged copy removed from disk as soon as it
+      was opened (``unlink_staged``); ``weigh`` uses it.
+
+    ``unlink_staged``: remove a staged copy from disk once it is open, when the dataset's
+    driver reads through the one handle it opened (``_SINGLE_HANDLE_DRIVERS``: GTiff,
+    COG). POSIX: the open handle still reads the file, and its space comes back when the
+    handle closes, however the process ends. For holders that outlive a task: a PySpark
+    worker exits with ``os._exit`` and runs no ``atexit`` handler, so a copy left on disk
+    would stay there. Any other driver may open the file again by name (a netCDF or HDF
+    subdataset, ``NETCDF:"<path>":var``; a fallback that reopens ``ds.name``), so its copy
+    stays on disk and ``close`` removes it (an eviction, the task-attempt boundary, the end
+    of the worker's Python process). Where the remove fails (a platform that cannot remove
+    an open file) the copy is removed by ``close`` as usual.
     """
 
-    def __init__(self, stream_max_bytes: int = _GBX_STREAM_MAX_BYTES):
+    def __init__(
+        self, stream_max_bytes: int = _GBX_STREAM_MAX_BYTES, unlink_staged: bool = False
+    ):
         # Mutable FileRef slot; a list so the partition loop can rebind it.
         self.fr_holder: "list[Any]" = [None]
         # Mutable size slot for metadata-derived tile size; a list to mirror fr_holder.
         self.size_holder: "list[int | None]" = [None]
         self._staged_temps: "dict[int, str]" = {}
+        self._unlinked_sizes: "dict[int, int]" = {}
         self._streams: "dict[int, Any]" = {}
         self._fuse_sources: "set[int]" = set()
         self._stream_max_bytes = stream_max_bytes
+        self._unlink_staged = unlink_staged
 
     def open(self, uri: str):
         import rasterio
@@ -1551,18 +1585,40 @@ class _OpenerContext:
                 pass  # all FILE paths failed → staging fallback
         # Staging fallback: fr unavailable or all FILE paths raised.
         # Import from preparer shim so test monkeypatches still work
+        from databricks.labs.gbx.pyrx._env import open_raster
         from databricks.labs.gbx.pyrx.core.preparer import (
             _stage_local_if_needed as _stage,
         )
 
         local_path, is_temp = _stage(uri)
-        ds = open_data(local_path)
+        opened = False
+        try:
+            ds = open_raster(local_path)
+            opened = True
+        finally:
+            # not opened (a corrupt file the probe could not read either, or an interrupt):
+            # the copy just made would otherwise stay on local disk, once per attempt
+            if is_temp and not opened:
+                try:
+                    os.remove(local_path)
+                except OSError:
+                    pass
         if is_temp:
             self._staged_temps[id(ds)] = local_path
+            if self._unlink_staged and ds.driver in _SINGLE_HANDLE_DRIVERS:
+                try:
+                    size = os.path.getsize(local_path)
+                    os.remove(local_path)
+                except OSError:
+                    pass  # stays in _staged_temps: close removes it
+                else:
+                    del self._staged_temps[id(ds)]
+                    self._unlinked_sizes[id(ds)] = size
         return ds
 
     def close(self, src) -> None:
         tmp = self._staged_temps.pop(id(src), None)
+        self._unlinked_sizes.pop(id(src), None)
         stream = self._streams.pop(id(src), None)
         self._fuse_sources.discard(id(src))
         try:
@@ -1597,7 +1653,9 @@ class _OpenerContext:
                 return int(fr.size)
             except Exception:
                 pass
-        # Staged fallback: use the on-disk size of the temp copy.
+        # Staged fallback: use the size of the temp copy (on disk, or open but unlinked).
+        if id(src) in self._unlinked_sizes:
+            return self._unlinked_sizes[id(src)]
         tmp = self._staged_temps.get(id(src))
         if tmp:
             try:
@@ -1813,7 +1871,7 @@ def open_for_write(
     df: "DataFrame",
     target: str,
     *,
-    file_mode: str = "auto",
+    file_mode: Optional[str] = None,
     filespace: Optional[str] = None,
     layout: str = "order",
     overwrite: bool = False,
@@ -1823,7 +1881,13 @@ def open_for_write(
 
     Mode selection (``file_mode`` parameter):
 
-    - **"auto"** (default):
+    - **None** (default): ``"fuse"`` when no ``filespace`` is given. A ``filespace``
+      asks for FILE MANAGED, so with one and no explicit ``file_mode`` the mode
+      resolves as ``"auto"`` does: managed where the runtime has FILE, and the
+      ``ValueError`` below where it does not.
+    - **"fuse"**: plain Delta write regardless of FILE capability, so the
+      table reads on every compute.
+    - **"auto"** (opt in to FILE where the runtime has it):
       - FILE-capable runtime + ``filespace`` provided → ``"managed"``
         (FILE MANAGED via ``create_file``).
       - FILE-capable runtime + no ``filespace`` → ``"external"``
@@ -1832,7 +1896,6 @@ def open_for_write(
     - **"managed"** or **"external"**: explicit FILE mode.  Raises ``ValueError`` if
       FILE is not available on this runtime (tier='fuse'), or if ``"managed"`` is
       requested without a ``filespace``.
-    - **"fuse"**: plain Delta write regardless of FILE capability.
 
     Fuse mode writes the DataFrame as a plain Delta table with tile columns as
     ordinary columns (``path`` → STRING, ``raster`` → BINARY).  No FILE column,
@@ -1847,8 +1910,11 @@ def open_for_write(
         spark: SparkSession.
         df: DataFrame to write.  Must have a ``tile`` struct column or be pre-flattened.
         target: Fully-qualified Delta table name (e.g. ``"catalog.schema.table"``).
-        file_mode: ``"auto"`` (default), ``"managed"``, ``"external"``, or ``"fuse"``.
+        file_mode: ``None`` (default; ``"fuse"``, or the ``"auto"`` rule when ``filespace``
+                is given), ``"fuse"``, ``"auto"``, ``"managed"``, or ``"external"``.
+                An explicit value always wins.
         filespace: Required for managed mode — the filespace path (``/Volumes/…``).
+                Without an explicit ``file_mode`` it selects FILE MANAGED.
         layout: Write strategy: ``"order"`` (ORDER BY path, default), ``"cluster"``
                 (CLUSTER BY path + ORDER BY on FILE tables; ORDER BY + warning on fuse),
                 or ``"plain"`` (no ordering).  Any other value raises ``ValueError``.
@@ -1857,12 +1923,19 @@ def open_for_write(
 
     Raises:
         ValueError: If ``layout`` is invalid, if explicit ``"managed"`` is requested
-                    without a ``filespace``, or if ``"managed"`` / ``"external"`` is
-                    requested on a fuse-only runtime.
+                    without a ``filespace``, if ``"managed"`` / ``"external"`` is
+                    requested on a fuse-only runtime, or if a ``filespace`` is given
+                    with no ``file_mode`` on a runtime without FILE.
     """
     import warnings
 
     from databricks.labs.gbx.pyrx.file_table import write_file_table
+
+    # 0. A bare ``filespace`` signals FILE MANAGED intent: resolve it as "auto" would,
+    #    but through the explicit-mode branch so a runtime without FILE raises instead of
+    #    silently writing plain Delta.  No filespace -> the fuse default.
+    if file_mode is None:
+        file_mode = "managed" if filespace else "fuse"
 
     # 1. Validate layout before any side effects.
     _validate_layout(layout)
@@ -1901,11 +1974,11 @@ def open_for_write(
                 f"\n"
                 f"Option 1: Upgrade your cluster to DBR 19+ with FILE support, then try again. "
                 f"\n"
-                f"Option 2: Set file_mode='auto' (default) to transparently use FUSE "
-                f"(fallback, no FILE column). "
+                f"Option 2: Use file_mode='fuse' (default) for a plain Delta write "
+                f"(FUSE only, no FILE-column registration). "
                 f"\n"
-                f"Option 3: Use file_mode='fuse' explicitly to bypass FILE (FUSE only, "
-                f"no FILE-column registration). "
+                f"Option 3: Set file_mode='auto' to use FILE where the runtime supports "
+                f"it and FUSE where it does not. "
             )
         effective_mode = file_mode
     elif file_mode == "fuse":
@@ -2403,7 +2476,7 @@ def gbx_file_write(
     df: "DataFrame",
     target: str,
     *,
-    file_mode: str = "auto",
+    file_mode: Optional[str] = None,
     filespace: Optional[str] = None,
     layout: str = "order",
     overwrite: bool = False,
@@ -2415,6 +2488,12 @@ def gbx_file_write(
     Composes :func:`open_for_write` (MANAGED ``create_file`` / EXTERNAL
     ``try_to_file`` / FUSE plain Delta).  Resolves the session from
     ``df.sparkSession`` when *spark* is not given, so callers hold no session.
+
+    ``file_mode`` defaults to ``None``, which is ``"fuse"``: a plain Delta table that reads
+    on every compute. A ``filespace`` with no ``file_mode`` asks for FILE MANAGED (the
+    ``"auto"`` rule: managed where the runtime has FILE, a clear ``ValueError`` where it
+    does not). Pass ``"auto"`` (FILE where the runtime supports it), ``"external"`` or
+    ``"managed"`` for FILE references; an explicit ``file_mode`` always wins.
 
     Validates ``layout`` up front (fail before any side effect) and delegates
     everything else — including the ``managed``-without-``filespace`` guard and

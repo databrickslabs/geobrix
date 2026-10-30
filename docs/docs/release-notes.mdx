@@ -28,7 +28,8 @@ v0.6.0 is under development and not yet released.
 
 Incremental ingestion of new and changed files with Auto Loader that sets unreadable data aside
 instead of failing, a multi-format Lakeflow connector, a Databricks Container Service image that
-runs both tiers on dedicated clusters, fixes for very large and domain-coded vector sources and
+runs both tiers on dedicated clusters, transactional, versioned Zarr stores for large N-dimensional
+cubes, fixes for very large and domain-coded vector sources and
 one field-type mapping shared by both vector reader tiers, and raster tessellation whose
 centroid chips match across tiers and scale to scene-sized tiles, with tiling that keeps every
 window in both tiers.
@@ -435,6 +436,57 @@ formats.
 - **The lightweight `rst_cog_convert` keeps the colour interpretation of RGB tiles.** The red,
   green and blue bands of a COG it wrote were left unlabelled (only an alpha band was kept);
   they now keep their red, green and blue labels, as in the source tile.
+
+### Raster functions — `rst_sample` on virtual tiles (fix)
+
+- **The lightweight `rst_sample` on a virtual tile reads the pixel at its point and opens the file
+  once per task.** Each call used to open the tile's file twice, decode the tile's whole window
+  and encode it again before reading one pixel. An open of a file on a Volume is slow on
+  Databricks, so 100 points on each of four hourly global GeoTIFFs (721 by 1440 pixels) took about
+  a second of task time a point. A call now reads only the block that holds its point, and the
+  points of one file in a task share one open of it: on Databricks Runtime 19 the same 400 samples
+  took 2.5 s of wall time, with the four files sampled side by side: about 25 ms of task time a
+  point, the job's fixed cost included. On Serverless a point after the first in a task took about
+  half a millisecond. The values are unchanged. Clipped or reprojected virtual tiles, Zarr-backed
+  and materialized tiles, and files with their own mask band are read as before. Releases v0.5.0
+  to v0.5.2 are affected.
+
+### Lightweight raster opens — no folder listing (behavior change)
+
+- **The lightweight tier lists each folder once per worker, not at every open.** GDAL lists a
+  raster's folder at every open to look for its sidecar files. On a Volume, a folder of 745 hourly
+  GeoTIFFs took 0.3 s to 10 s per open on a Serverless worker. GeoBrix now lists a folder once per
+  Python worker, when the worker opens a second, different file of it, and then tells GDAL, for
+  each open, where to look. A GeoTIFF, PNG, JPEG, JPEG 2000, netCDF, HDF or GRIB file with no
+  sidecar in the folder is opened without any sidecar look-up: a median of about 165 ms per open
+  of a fresh file on Serverless, against about 415 ms with GDAL checking each sidecar by name. A
+  file with sidecars (external overviews, masks, `.aux.xml`, world files) still finds them, and so
+  do the files a VRT or another multi-file dataset opens. `rst_avg` on a whole hourly file took
+  about 290 ms to 370 ms a call instead of about 630 ms to 670 ms. Before a folder is listed, and
+  in a folder of more than 1,000 files (GDAL's own `GDAL_READDIR_LIMIT_ON_OPEN`), sidecars are
+  checked by name; finding that a folder is that large costs one listing per worker (about 2 s for
+  5,000 files and 14.5 s for 40,000 on Serverless), except for tiles read with `raster_gbx`, which
+  carry the reader's count of such a folder in their metadata (`path_folder_files`) and skip the
+  listing. A sidecar added to a folder after a worker listed it is not seen by that worker until
+  the folder is listed again (a file missing from the listing triggers that, at most every 10
+  seconds) or the worker restarts. See [Sidecar files and folder
+  listings](./api/performance#sidecar-files-and-folder-listings).
+- **Importing the lightweight tier sets `GDAL_DISABLE_READDIR_ON_OPEN=TRUE` for the whole Python
+  process**, unless it is set already (`databricks.labs.gbx.pyrx`, or anything that imports
+  `databricks.labs.gbx.core.crs`). Your own rasterio, GDAL or Fiona code in that process and the
+  programs it starts (`gdalinfo`, `tippecanoe`) then check sidecars by name too, so a sidecar
+  whose name mixes case (`x.Tfw`), or a vendor metadata file whose name differs in case from the
+  one GDAL builds, is found only with `NO`. Set `GDAL_DISABLE_READDIR_ON_OPEN=NO` to keep GDAL's
+  listing, or `YES` for the checks by name without GeoBrix's per-file choice, in the environment
+  of the Python workers (a cluster or job environment variable) before GeoBrix is imported there;
+  a notebook's `os.environ` does not reach the workers. Any value you set before the import, or in
+  a `rasterio.Env` around your reads, is used for every open. When the outermost `rasterio.Env`
+  that names the option exits, rasterio keeps the value it found on entry as a GDAL configuration
+  option for the process, and a later change of the environment variable no longer has an effect.
+- **A local copy of a Volume file is removed from disk as soon as it is opened.** When a Volume
+  file cannot be read directly, the lightweight tier copies it to local disk. The copy that
+  `rst_sample` keeps open for a task now leaves the disk at once: its space comes back when the
+  file is closed, even when the Python worker ends without cleaning up.
 
 ### Raster writers
 
@@ -929,8 +981,15 @@ formats.
   This applies to the `clipPolygons` option of the raster readers and to the bounding-box download
   of STAC assets; a raster whose pixels line up with the area is cut as before.
 
-### Registered PROJ grids and raster CRS transforms
+### PROJ data, registered grids and raster CRS transforms
 
+- **Lightweight CRS lookups work on the driver of a standard-access cluster.** On DBR 19 in
+  standard access, a lightweight function that resolves a CRS on the driver, such as
+  `gbx_zarr_sample`, failed with `CRSError: ... Cannot find proj.db`. The runtime sets
+  `PROJ_DATA=/databricks/native/proj-data`, which the notebook's user cannot read there, and
+  GeoBrix kept any `PROJ_DATA` that was set. GeoBrix now uses its bundled PROJ data whenever the
+  `PROJ_DATA` that is set holds no `proj.db` the process can read. Functions that resolve the CRS
+  in their Spark tasks were not affected.
 - **Lightweight raster CRS transforms work after `register_proj_grids`.** After you called
   `gbx.register_proj_grids`, raster transforms such as `rst_transformcrs` could fail on Spark
   workers with `Cannot find proj.db`, and the registered grids were not applied to them. GeoBrix
@@ -978,6 +1037,59 @@ formats.
   `/Volumes` paths as the lightweight readers. The `gdal` raster reader needed no change, and
   other compute is unchanged.
 
+### Zarr stores — transactional, versioned stores (new)
+
+- **Zarr stores are registered, read and written transactionally in the lightweight tier.**
+  [Zarr](https://zarr.dev) keeps N-dimensional arrays as many small objects in object storage, and
+  plain Zarr has no commit: two jobs that write to one store can lose each other's updates, and a
+  reader can see a half-written store. GeoBrix adds the missing layer. A store's manifest is a
+  Delta table, a version of the store is a version of that table, and one Delta transaction is one
+  store transaction. It runs on Databricks Runtime 19 and Serverless environment 6, with no JAR,
+  and needs the `zarr_dbr19` or `zarr_env6` extra (see [Dependencies](#dependencies)). See
+  [Zarr Stores](./formats/zarr).
+- **`gbx_zarr_register` registers an existing store in place.** It lists a Zarr v2 or v3 store once
+  and records every object in a manifest table, without copying the store or writing to it.
+  `writable=True` with an `overlay_root` sends writes to new files in a directory outside the
+  store, so the store itself is never written. Several tables can register one store; each is an
+  independent branch with its own history, grants and overlay, and branches do not merge.
+- **`gbx_zarr_read`, `gbx_zarr_sample` and the `zarr_gbx` reader read stores.** Select by label
+  (`sel`) or by position (`isel`), and read blocks, a table with a column per dimension and per
+  variable (missing data is `NULL`), or GeoBrix tiles. The tiles are virtual, so every `rst_*`
+  function works on a cube without converting it to GeoTIFF. `gbx_zarr_sample` reads the time
+  series at the points of a DataFrame. A read of a manifest table pins one version; `zarr_gbx`
+  reads plain stores by path. See [Zarr Reader](./readers/zarr).
+- **`gbx_zarr_write` creates, appends to, updates and overwrites a store in one transaction.**
+  Tasks write immutable pack files, then the driver commits one Delta MERGE with a
+  compare-and-swap on every key it replaces, so nothing is visible until the write commits.
+  Writers that touch different chunks both land. Appenders that change the array's shape and a
+  shared coordinate chunk are rebased, up to 20 attempts. Writers that meet on one chunk get a
+  `ZarrWriteConflict` that names the keys and the write that won. A `write_id` makes a retried
+  write apply once. Blocks and tiles that were read can be written back. See
+  [Zarr Writer](./writers/zarr).
+- **`gbx_zarr_sync` brings a registered table up to date with other tools' changes.** GeoBrix cannot
+  make another tool's writes to a registered store transactional, but it detects them: a read
+  stops with `ZarrStoreDrift` when an object changed (its modification time and size on a Volume),
+  and `gbx_zarr_sync` records what changed as one new version. `gbx_zarr_export(method="publish")`
+  writes a writable registration's overlay into the store itself; that is not atomic for plain
+  readers.
+- **Every version stays readable for `retain` (7 days by default), and a tagged version for good.**
+  `gbx_zarr_history` lists the commits. Read an older version with `version_as_of` (a number or
+  `"tag:<name>"`) or `timestamp_as_of`. `gbx_zarr_tag` and `gbx_zarr_untag` name a version so that
+  vacuum keeps its files. `gbx_zarr_restore` makes the store equal an older version again as a new
+  commit. `gbx_zarr_optimize` folds the small chunk rows that appends leave into shards, and
+  `gbx_zarr_vacuum` deletes the files that no readable version needs (`dry_run=True` lists them).
+  Reading a version older than `retain` raises `ZarrVersionUnavailable`.
+- **A store's root belongs to exactly one table, decided by a Delta transaction.** A managed
+  store's data root and a writable registration's overlay root carry an ownership ledger, the
+  small Delta table `_gbx_owner`, next to the `_gbx_store.json` marker. Two tables that claim one
+  root at the same moment cannot both win: an exclusive file create is not exclusive across the
+  nodes of a Volume, so the claim is a compare-and-swap insert into the ledger and the marker is
+  written only after it. The loser gets `ZarrOwnershipError`. Leave `_gbx_owner` where it is;
+  delete it, with the marker, only when no store owns the root.
+- **Zarr support has limits.** It reads numeric types and CF times, needs a regular grid to return
+  tiles, and direct storage access has been measured on AWS only. See
+  [Known Limitations](./limitations#zarr-stores).
+
 ### Zarr stores — direct storage access (new)
 
 - **`access="direct"` reads and writes a Zarr store's files straight from the Volume's cloud
@@ -1004,36 +1116,45 @@ formats.
   not clean them up, so add a lifecycle rule to the bucket that aborts incomplete multipart
   uploads (`AbortIncompleteMultipartUpload`, after a few days).
 
+### File writes — `gbx_file_write` defaults to `fuse` (breaking behavior change)
+
+- **`gbx_file_write` and `open_for_write` now default to `file_mode="fuse"`.** The default was
+  `"auto"`, which wrote a FILE column wherever the runtime had one, so a table written on FILE
+  compute could not be read or appended to from other compute. With no `file_mode` they now write
+  a plain Delta table (a path string and the raster bytes), which reads everywhere. Pass
+  `file_mode="auto"` to use FILE where the runtime supports it, or `"external"` / `"managed"`
+  to ask for FILE references. Passing `filespace=` with no `file_mode` still asks for FILE
+  MANAGED, as before: it writes managed where the runtime has FILE and raises a clear error
+  where it does not.
+
 ### Zarr stores — file modes, copy targets and reference files (new)
 
+- **The default `file_mode` is `"fuse"`, so a Zarr store reads from every compute.**
+  `gbx_zarr_write` and `gbx_zarr_register` keep path strings in the manifest unless you pass
+  `file_mode="auto"` or `"external"`. Only `create` takes a `file_mode`: a later
+  `gbx_zarr_write` follows the store's own, and raises if you pass a different one.
 - **`file_mode="external"` is available where the File type preview is on.** A Zarr store made
   or registered on a Databricks Runtime 19 dedicated cluster (single-user, with
   `fileReferenceCreationMode=MANAGED` in the cluster config) in a workspace with the preview
-  keeps FILE EXTERNAL references in its manifest, governed with the table, and
-  `file_mode="auto"` picks it there.
-  On Serverless, on the Databricks Container Service image and where the preview is off, `auto`
-  keeps path strings (`"fuse"`). Spark cannot hash a FILE value, so leave the manifest's `file`
-  column out of a `hash(*)` or a `GROUP BY`.
+  keeps FILE EXTERNAL references in its manifest, governed with the table, when you ask for
+  `file_mode="external"`. `file_mode="auto"` picks it on any compute that supports FILE
+  values, Serverless included where the workspace has the preview. On the Databricks
+  Container Service image and where the preview is off, `auto` keeps path strings
+  (`"fuse"`). Spark cannot hash a FILE value, so leave the manifest's `file` column out of
+  a `hash(*)` or a `GROUP BY`.
 - **A Zarr store made in FILE mode needs FILE-enabled compute to read, write and maintain it.**
-  Its manifest holds FILE values, which Serverless and the Databricks Container Service image
-  cannot commit, so `gbx_zarr_read`, `gbx_zarr_write`, `gbx_zarr_sync`, `gbx_zarr_export` and
-  the maintenance functions stop there with a `ZarrUnsupported` that says so, before they
-  write anything. A store that other compute also uses is created with `file_mode="fuse"`; to
-  move a FILE store there, copy it with `gbx_zarr_export(method="copy")` on a cluster that has
-  FILE and register the copy with `file_mode="fuse"`. FILE mode
-  also makes registering slower: in a measured run, registering 20,000 objects took 34.5 s with
-  path strings and 106.7 s with FILE references (about 3 times, 3.6 ms more per object).
+  Its manifest holds FILE values, which the Databricks Container Service image and compute in
+  a workspace without the preview cannot commit, so `gbx_zarr_read`, `gbx_zarr_write`,
+  `gbx_zarr_sync`, `gbx_zarr_export` and the maintenance functions stop there with a
+  `ZarrUnsupported` that says so, before they write anything. To move a FILE store there,
+  copy it with `gbx_zarr_export(method="copy")` on a cluster that has FILE and register the
+  copy with `file_mode="fuse"`. FILE mode also makes registering slower: in a measured run,
+  registering 20,000 objects took 34.5 s with path strings and 106.7 s with FILE references
+  (about 3 times, 3.6 ms more per object).
 - **`file_mode="managed"` is not available in 0.6.0.** Delta `VACUUM`, a deletion-vector delete
   and `REORG TABLE ... APPLY (PURGE)` never reclaim the bytes of a managed file, and a write
   that fails after its files were made leaves them behind, so a managed store would only grow.
-  Asking for it raises `ZarrUnsupported`; use `"auto"`, `"external"` or `"fuse"`.
-- **A store's root belongs to exactly one table, decided by a Delta transaction.** A managed
-  store's data root and a writable registration's overlay root now carry an ownership ledger,
-  the small Delta table `_gbx_owner`, next to the `_gbx_store.json` marker. Two tables that
-  claim one root at the same moment can no longer both win: an exclusive file create is not
-  exclusive across the nodes of a Volume, so the claim is a compare-and-swap insert into the
-  ledger and the marker is written only after it. The loser gets `ZarrOwnershipError`. Leave
-  `_gbx_owner` where it is; delete it, with the marker, only when no store owns the root.
+  Asking for it raises `ZarrUnsupported`; use `"fuse"` (the default), `"auto"` or `"external"`.
 - **A copy export needs a path every node sees.** `gbx_zarr_export(method="copy")` is written
   by the cluster's tasks, so a `to` on the driver's local disk is refused before any task runs
   (`ValueError`, "export to a /Volumes path"). It used to fail after the work was done, with the
@@ -1046,6 +1167,21 @@ formats.
 
 ### Dependencies
 
+- **Zarr extras: `zarr_dbr19` and `zarr_env6` (new).** Zarr stores need an extra beside the
+  matching lightweight extra: `pip install "geobrix[light_dbr19,zarr_dbr19]"` on Databricks
+  Runtime 19 (and 19 ML) and `pip install "geobrix[light_env6,zarr_env6]"` on Serverless
+  environment 6, where `zarr_env6` is the same set of packages as `zarr_dbr19`. `light_dbr19_all`
+  and `light_env6_all` include it. There is no bare `zarr` extra, and Databricks Runtime 17.3
+  and 18 and Serverless environment 5 are not supported. The extra pins `zarr>=3.4.1,<3.5`,
+  `numcodecs>=0.17,<0.18`, `zarrs>=0.2.3,<0.3`, `tensorstore>=0.1.85,<0.2`, `obstore>=0.11,<0.13`,
+  `ml_dtypes>=0.5,<1`, `msgspec>=0.19,<1` and `donfig>=0.8,<1`. None of these packages is
+  preinstalled on Databricks Runtime 19, Databricks Runtime 19 ML or Serverless environment 6,
+  and the packages they need that the runtimes do ship (`numpy`, `typing_extensions`,
+  `packaging`, `google-crc32c` and `pyyaml`) are already new enough, so one set of pins serves
+  all three and installing the extra changes no package the runtime provides. Each is capped
+  below its next minor (or major) release because `zarrs` builds on `zarr` internals and states
+  no ceiling for `zarr`. GeoBrix reads cloud storage with `obstore` and adds no `fsspec`,
+  `s3fs` or `gcsfs`. See [Zarr Stores](./formats/zarr#what-you-need).
 - **GeoBrix no longer installs PySpark (breaking for local installs).** On Databricks the
   runtime provides PySpark, so installing GeoBrix no longer downloads a second copy.
   If you run GeoBrix against a local Spark session, install `pyspark>=4.0.0` alongside it. See

@@ -28,7 +28,12 @@ import numpy as np
 from rasterio.io import MemoryFile
 
 from databricks.labs.gbx._gdal_policy import open_data
+from databricks.labs.gbx.pyrx._env import capped_block_cache
 from databricks.labs.gbx.pyrx.core import compression as _comp
+from databricks.labs.gbx.pyrx.core.budget import (
+    STREAMING_BLOCK_CACHE_MAX,
+    block_cache_bytes,
+)
 from databricks.labs.gbx.pyrx.core.local_temp import (
     new_local_temp_dir,
     new_local_temp_file,
@@ -312,7 +317,6 @@ def cog_convert_file(
             f"got {bigtiff!r}"
         )
 
-    import rasterio
     import rasterio.shutil as rio_shutil
 
     # Source dtype (predictor) and sample depth: a band tagged NBITS (e.g. 15-bit
@@ -347,8 +351,14 @@ def cog_convert_file(
     creation.update(_comp_opts)
 
     # The source is copied from an open_data dataset (the driver policy), not by name: GDAL's copy would open the name
-    # with GDAL's whole driver registry.
-    with open_data(src_path) as _src, rasterio.Env(GDAL_CACHEMAX=200):
+    # with GDAL's whole driver registry. A streaming copy's block cache is kept small, because the memory of this
+    # copy (and of the streamed merge built on it) grows with it.
+    with (
+        open_data(src_path) as _src,
+        capped_block_cache(
+            block_cache_bytes("auto", ceiling=STREAMING_BLOCK_CACHE_MAX)
+        ),
+    ):
         rio_shutil.copy(_src, dst_path, driver="COG", **creation)
 
 

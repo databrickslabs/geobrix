@@ -231,7 +231,7 @@ def test_scalar_array_has_one_empty_key_chunk():
     assert chunk_slices([], (), (), ()) == [((), ())]
 
 
-# ---- fix round 1: periodic longitudes, time bounds and date-string periods
+# ---- periodic longitudes, time bounds and date-string periods
 
 LON_PM = np.arange(-180, 180, 2.5)  # -180..177.5
 LON_INC = np.arange(
@@ -495,7 +495,7 @@ def test_isel_on_an_empty_dimension_says_so():
     assert "[-0" not in str(e.value) and "Fix:" in str(e.value)
 
 
-# ---- fix round 2: projected origins, float32 seams, CF unit spellings, non-finite bounds, offsets
+# ---- projected origins, float32 seams, CF unit spellings, non-finite bounds, offsets
 
 
 def test_projected_x_with_a_large_origin_never_wraps():
@@ -607,7 +607,7 @@ def test_utc_offset_just_inside_the_range_still_parses():
     assert time_ranges(slice("2023-01-01T05:00-23:59", None)) == ((29, 48),)
 
 
-# ---- fix round 3: seams on pixel-centred float32 axes, out-of-range bounds, float noise
+# ---- seams on pixel-centred float32 axes, out-of-range bounds, float noise
 
 PIXEL64 = np.arange(-1799.5, 1800, 1.0) / 10  # -179.95 .. 179.95, step 0.1
 PIXEL32 = PIXEL64.astype(np.float32)

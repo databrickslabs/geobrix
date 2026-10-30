@@ -18,6 +18,7 @@ LOG_FILE=""
 SHOW_HELP=0
 STAGE_ARGS=()
 ENV_STAGE=false
+PROFILE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -42,11 +43,25 @@ while [[ $# -gt 0 ]]; do
             STAGE_ARGS+=(--no-prune)
             shift
             ;;
+        --profile)
+            if [[ -z "${2:-}" || "$2" == --* ]]; then
+                echo "--profile needs a profile name" >&2
+                exit 2
+            fi
+            PROFILE="$2"
+            shift 2
+            ;;
         *)
-            shift
+            # An option that is silently dropped looks like one that worked (--profile was a
+            # no-op for a while): refuse what this command does not know.
+            echo "Unknown option: $1 (see --help)" >&2
+            exit 2
             ;;
     esac
 done
+# The launcher fills DATABRICKS_CONFIG_PROFILE from databricks_cluster_config.env only when the
+# environment has none, so --profile wins over the config file.
+[[ -n "$PROFILE" ]] && export DATABRICKS_CONFIG_PROFILE="$PROFILE"
 
 if [[ "$SHOW_HELP" == "1" ]]; then
     echo "Usage: bash scripts/commands/gbx-data-stage-wheel.sh [OPTIONS]"
@@ -63,6 +78,8 @@ if [[ "$SHOW_HELP" == "1" ]]; then
     echo "                 volroot (the %pip path), by the wheel's own +env<N> name. The init-script dir is"
     echo "                 left as it is, so no other wheel there is touched."
     echo "  --no-prune     Keep every other geobrix-*.whl in the init-script dir (skip the single-version cleanup)"
+    echo "  --profile <name>  Databricks config profile for the upload (default: DATABRICKS_CONFIG_PROFILE"
+    echo "                    in the environment or examples/tests/databricks_cluster_config.env)"
     echo "  --log <path>   Write output to this log file (filename → test-logs/<name>)"
     print_lock_help
     echo "  --help, -h     Show this help"

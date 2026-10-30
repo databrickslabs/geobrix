@@ -1,3 +1,5 @@
+import pytest
+
 from databricks.labs.gbx.pyrx.core import budget
 
 _MIB = 1024 * 1024
@@ -105,6 +107,35 @@ def test_decoded_budget_serverless_without_cgroup_limit(monkeypatch):
     """No cgroup limit (None) → 64 MiB empirical fallback."""
     monkeypatch.setattr(budget, "_cgroup_task_limit_bytes", lambda: None)
     assert budget.decoded_budget_bytes("serverless") == 64 * _MIB
+
+
+@pytest.mark.parametrize(
+    "strategy, kind, limit, ceiling, want",
+    [
+        # 1/16 of the tile budget: 64 MiB serverless, 1536 MiB classic (under the 128 MiB ceiling)
+        ("serverless", None, None, None, 4 * _MIB),
+        ("classic", None, None, None, 96 * _MIB),
+        ("serverless", None, 64 * _1_GIB, None, 128 * _MIB),  # a big pod: the ceiling
+        ("serverless", None, _1_GIB, None, int(_1_GIB * 0.15) // 16),  # follows the pod
+        # no tile splitting says nothing about memory: sized for the runtime
+        ("none", "serverless", None, None, 4 * _MIB),
+        ("none", "classic", None, None, 96 * _MIB),
+        # the streaming COG copy's ceiling: the same on both runtimes
+        ("serverless", None, None, budget.STREAMING_BLOCK_CACHE_MAX, 4 * _MIB),
+        ("classic", None, None, budget.STREAMING_BLOCK_CACHE_MAX, 4 * _MIB),
+    ],
+)
+def test_block_cache_is_a_share_of_the_tile_budget_under_a_ceiling(
+    monkeypatch, strategy, kind, limit, ceiling, want
+):
+    """The size every site that caps GDAL's block cache takes: 1/16 of the decoded bytes a tile
+    may take, never above the ceiling (128 MiB; the streaming COG copy passes a lower one).
+    """
+    monkeypatch.setattr(budget, "_cgroup_task_limit_bytes", lambda: limit)
+    if kind:
+        monkeypatch.setattr(budget, "runtime_kind", lambda: kind)
+    kwargs = {} if ceiling is None else {"ceiling": ceiling}
+    assert budget.block_cache_bytes(strategy, **kwargs) == want
 
 
 def test_none_budget_single_tile():

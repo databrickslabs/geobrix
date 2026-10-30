@@ -225,7 +225,7 @@ def render():
                  border=ACCENT_WRITE, mono_font=True, h=21, size=11)
     parts.append(wc)
     parts.append(text(bx2 + 12, wy_box + 48, "df, target, *, file_mode=", size=10, weight=500, fill=C_MUTED))
-    parts.append(mono(bx2 + 12 + 124, wy_box + 48, '"auto"', size=10, weight=700, fill=ACCENT_WRITE))
+    parts.append(mono(bx2 + 12 + 124, wy_box + 48, '"fuse"', size=10, weight=700, fill=ACCENT_WRITE))
     parts.append(text(bx2 + 12, wy_box + 65, "returns None (writes Delta table)", size=10, weight=500, fill=C_MUTED_2))
 
     # --- NO-GATING callout ---

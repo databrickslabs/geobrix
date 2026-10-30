@@ -13,7 +13,7 @@ import org.scalatest.matchers.should.Matchers._
 /**
   * Tests for [[RasterTessellate.tessellateCustomIter]] — the Long-keyed custom-grid tessellate
   * wrapper. Exercises both the centroid and covering paths at a custom SRID (27700), and the
-  * R3 up-front bounds-contain-extent guard.
+  * up-front bounds-contain-extent guard.
   */
 class RasterTessellateCustomTest extends AnyFunSuite with BeforeAndAfterAll {
 

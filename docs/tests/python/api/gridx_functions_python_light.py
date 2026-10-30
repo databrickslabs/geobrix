@@ -679,7 +679,7 @@ bng_tessellate_python_light_example_output = """
 #
 # Aggregators: grouped-agg pandas_udf → BINARY (dissolved chip WKB).
 #   Light tier returns BINARY; heavy tier returns STRUCT<cellid,core,chip>.
-#   This is a GENUINE tier divergence (C4): use the :::warning callout in MDX.
+#   This is a genuine tier divergence: use the :::warning callout in MDX.
 #
 # Explode UDTFs: SQL LATERAL is the ONLY invocation form for the light tier.
 #   Calling these as Column expressions raises NotImplementedError.

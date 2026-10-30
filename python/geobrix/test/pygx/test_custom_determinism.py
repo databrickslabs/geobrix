@@ -1,16 +1,16 @@
-"""Custom-grid raster determinism tests (R1, R2, R3).
+"""Custom-grid raster determinism tests.
 
-R1 — Struct-travels-with-result
+Struct-travels-with-result
     The same custom-grid struct always produces the same cell ids regardless of
     call order or session context.  Two independent SQL LATERAL calls with the
     same gbx_custom_grid(…) struct must yield exactly the same set of Long ids.
 
-R2 — Incomparable structs
+Incomparable structs
     Two grids with different origin or cell size define disjoint cell spaces.  A
     cell id from grid A must NOT appear in the output of grid B (different struct
     → different, incomparable ids).
 
-R3 — Out-of-bounds behaviour (heavy tier, integration)
+Out-of-bounds behaviour (heavy tier, integration)
     Out-of-bounds behaviour is NOT uniform across the custom raster surface, and
     the honest statement of it is:
 
@@ -23,20 +23,21 @@ R3 — Out-of-bounds behaviour (heavy tier, integration)
         wrapper: ``RasterizeBurn.burn`` calls ``CustomGridSystem.pointToCellID``
         per canvas pixel, whose ``require`` guard throws an
         ``IllegalStateException`` naming the offending coordinate/bound when the
-        (kring-expanded) canvas extends past the grid.  R3 asserts on THAT path.
+        (kring-expanded) canvas extends past the grid.  The out-of-bounds test
+        asserts on THAT path.
 
     The light tier deliberately has no equivalent hard guard and is not tested
     here for this property.
 
-R1/R2 use the light tier (pyrx) only — no JAR required.
-R3 is an integration test requiring the geobrix JAR.
+The determinism and incomparability tests use the light tier (pyrx) only — no JAR
+required.  The out-of-bounds test is an integration test requiring the geobrix JAR.
 
-Run R1+R2:
+Run the light-tier tests:
     bash scripts/commands/gbx-test-python.sh \\
         --path python/geobrix/test/pygx/test_custom_determinism.py \\
         --log stage3-t8-det.log
 
-Run R3 additionally (needs JAR):
+Run the integration test additionally (needs JAR):
     bash scripts/commands/gbx-test-python.sh \\
         --path python/geobrix/test/pygx/test_custom_determinism.py \\
         --with-integration --log stage3-t8-det.log
@@ -122,12 +123,12 @@ def _make_raster(epsg, origin, px, shape=(8, 8), nodata=-9999.0):
 
 
 # ---------------------------------------------------------------------------
-# R1: same struct → identical cell ids
+# same struct → identical cell ids
 # ---------------------------------------------------------------------------
 
 
 def test_r1_same_struct_yields_same_cellids(spark):
-    """R1: two LATERAL calls with the SAME grid struct must yield the same Long cell ids.
+    """Two LATERAL calls with the SAME grid struct must yield the same Long cell ids.
 
     Uses the light-tier (pyrx) gbx_rst_custom_rastertogridavg UDTF registered under
     the same SQL name.  Both calls see the same raster bytes and the same grid struct
@@ -171,12 +172,12 @@ def test_r1_same_struct_yields_same_cellids(spark):
 
 
 # ---------------------------------------------------------------------------
-# R2: different struct → incomparable cell ids
+# different struct → incomparable cell ids
 # ---------------------------------------------------------------------------
 
 
 def test_r2_same_cellid_decodes_to_different_world_coords_across_grids(spark):
-    """R2: custom cell IDs are semantically incomparable across different grids.
+    """Custom cell IDs are semantically incomparable across different grids.
 
     Custom grid cell IDs encode position within the grid's own integer lattice.
     The SAME integer id decoded under grid A and under grid B maps to DIFFERENT
@@ -269,13 +270,13 @@ def test_r2_same_cellid_decodes_to_different_world_coords_across_grids(spark):
 
 
 # ---------------------------------------------------------------------------
-# R3: bounds-contain-extent guard (heavy tier — integration)
+# bounds-contain-extent guard (heavy tier — integration)
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="module")
 def spark_with_jar():
-    """Spark session with the geobrix JAR for heavy-tier R3 tests."""
+    """Spark session with the geobrix JAR for the heavy-tier out-of-bounds test."""
     if not _JARS:
         pytest.skip(
             "no geobrix JAR staged under python/geobrix/lib/ — run in geobrix-dev Docker"
@@ -313,13 +314,13 @@ def spark_with_jar():
 
 @pytest.mark.integration
 def test_r3_oob_raster_heavy_raises_clear_error(spark_with_jar):
-    """R3: heavy custom rasterize_agg raises a bounds error for an out-of-bounds canvas.
+    """Heavy custom rasterize_agg raises a bounds error for an out-of-bounds canvas.
 
     Only ``gbx_rst_custom_rasterize_agg`` raises on out-of-bounds.  The
     ``rastertogrid``/``tessellate`` expressions wrap their eval in
     ``RST_ErrorHandler.safeEval`` and DEGRADE an out-of-bounds grid to a null tile
     + WARN (the standard rst_* policy) — they do NOT raise on the LATERAL/SQL path,
-    so R3 cannot be asserted through them.  The UDAF has no safeEval wrapper:
+    so this property cannot be asserted through them.  The UDAF has no safeEval wrapper:
     ``RasterizeBurn.burn`` maps every canvas pixel centroid through
     ``CustomGridSystem.pointToCellID``, whose ``require`` guard throws an
     ``IllegalStateException`` naming the offending coordinate/bound

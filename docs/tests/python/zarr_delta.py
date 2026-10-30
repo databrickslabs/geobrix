@@ -17,8 +17,8 @@ that needs the shared session.
   is already running (the Delta extension is a static setting), which is why the marked tests
   run last: nothing after them needs the shared session.
 - **The cube** is the sample cube from the GeoBrix sample data (``global/era5-weather``). It
-  is generated, not tracked, so a run without it writes it into a temporary directory with
-  ``write_era5_cube``.
+  is generated, not tracked, so a run without it writes it once into a temporary directory with
+  ``write_era5_cube`` (every module that imports the fixture shares that copy).
 """
 
 import os
@@ -105,15 +105,24 @@ def spark(tmp_path_factory):
     session.stop()
 
 
+# pytest registers a fixture once for each test module that imports it, so "session" scope lasts
+# one module here. This dict is the session: it holds the generated cube for every module.
+_GENERATED_CUBE: dict = {}
+
+
 @pytest.fixture(scope="session")
 def cube(tmp_path_factory):
-    """The sample cube as a Zarr v3 store (sharded): the bundle's copy, else a generated one."""
+    """The sample cube as a Zarr v3 store (sharded): the bundle's copy, else one generated for
+    the run (written once, shared by every module)."""
     bundled = Path(SAMPLE_DATA_BASE) / CUBE_SUBDIR / CUBE_V3
     if bundled.is_dir():
         return str(bundled)
-    from databricks.labs.gbx.sample.zarr_era5 import V3_NAME, write_era5_cube
+    if "path" not in _GENERATED_CUBE:
+        from databricks.labs.gbx.sample.zarr_era5 import V3_NAME, write_era5_cube
 
-    return str(write_era5_cube(tmp_path_factory.mktemp("era5_cube"))[V3_NAME])
+        made = write_era5_cube(tmp_path_factory.mktemp("era5_cube"))
+        _GENERATED_CUBE["path"] = str(made[V3_NAME])
+    return _GENERATED_CUBE["path"]
 
 
 @pytest.fixture

@@ -175,3 +175,53 @@ High-resolution weather forecast data in GRIB2 format (read by GDAL as multi-ban
 
 
 ---
+
+### Zarr - ERA5-like weather cube (global)
+
+:::info Generated, not downloaded
+Neither setup script downloads this cube. GeoBrix writes it, in seconds, from a fixed seed.
+:::
+
+A small, made-up hourly weather cube on a one-degree global grid. It is **not** reanalysis data. It
+stands in for ERA5 in the [Zarr](../formats/zarr) examples, the [Zarr Reader](../readers/zarr) and the
+[Zarr Writer](../writers/zarr), and it is small enough to load in seconds.
+
+| | |
+|---|---|
+| **Where** | `global/era5-weather/` under `geobrix-examples` |
+| **Dimensions** | `time` (48 hourly steps from 2023-01-01 00:00) by `latitude` (181, from 90 down to -90) by `longitude` (360, from 0 to 359) |
+| **Variables** | `t2m` (2 m temperature, K), `u10` and `v10` (10 m wind, m/s), `msl` (mean sea level pressure, Pa), all `float32` |
+| **`era5_like_v3.zarr`** | Zarr v3 with sharding: inner chunks of (12, 91, 180), shards of (24, 182, 360), `zstd`. About 3.6 MB |
+| **`era5_like_v2.zarr`** | The same data as Zarr v2: chunks of (12, 91, 180), Blosc with `zstd`. About 3.2 MB |
+
+The values are smooth fields with seeded noise, rounded to 0.25 K, 0.25 m/s and 10 Pa as ERA5's own
+packed files are, so two runs in one environment give identical stores.
+
+**Generate it** in a notebook (it needs the `zarr_env6` or `zarr_dbr19` extra):
+
+<CodeFromTest
+  code={rasterDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/raster_data.py"
+  testFile="docs/tests/python/sample_data/test_raster_data.py"
+  functionName="GENERATE_ERA5_ZARR"
+/>
+
+In a GeoBrix checkout, `gbx:data:generate-minimal-bundle --zarr-only` writes the same two stores into the
+in-repo test bundle (`sample-data/Volumes/main/default/test-data/geobrix-examples/global/era5-weather/`;
+the cube is not tracked in git). Then `gbx:data:stage-sample --profile <name>` uploads them to a Volume,
+checks every file size, and removes only stale files inside the uploaded `.zarr` stores; pass
+`--volume-root` to choose the Volume and `--dry-run` to list what it would upload without contacting a
+workspace.
+
+**Usage in examples:**
+
+<CodeFromTest
+  code={rasterDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/raster_data.py"
+  testFile="docs/tests/python/sample_data/test_raster_data.py"
+  functionName="USAGE_ERA5_ZARR"
+/>
+
+---

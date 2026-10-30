@@ -223,10 +223,13 @@ It matches the `file_mode` of `gbx_file_write`.
 
 | `file_mode` | The manifest's `file` column | Who deletes superseded files | Where it runs |
 |---|---|---|---|
-| `fuse` | Path strings, relative to the store's root | GeoBrix `gbx_zarr_vacuum` | Everywhere, Serverless included |
+| `fuse` (default) | Path strings, relative to the store's root | GeoBrix `gbx_zarr_vacuum` | Everywhere, Serverless included |
 | `external` | `FILE EXTERNAL` references, governed with the table | GeoBrix `gbx_zarr_vacuum` | Compute that supports `FILE` values, in a workspace with the File type preview (**preview**) |
 | `managed` | `FILE MANAGED` values | The table | **Not available in this release** |
-| `auto` (default) | `external` on compute that supports `FILE` values, otherwise `fuse`; it never fails | | |
+| `auto` | `external` on compute that supports `FILE` values (Serverless included, in a workspace with the File type preview), otherwise `fuse`; it never fails | | |
+
+The default is `fuse`, so a store made on `FILE`-capable compute still reads on every compute; pass
+`file_mode="auto"` or `"external"` to keep `FILE` references.
 
 `managed` is not available because Delta's `VACUUM` does not reclaim the bytes of a managed file, so a
 managed store would only grow. A registered store is never `managed`: managed ingest would copy the
@@ -375,8 +378,10 @@ refuses a version that vacuum has already removed.
   testFile="docs/tests/python/formats/test_zarr_examples.py" />
 
 **Export** takes a version out of GeoBrix. `method="copy"` writes a plain Zarr store at canonical keys,
-in the store's own format, with the metadata written last, so any Zarr v3 tool can open it and a reader
-never sees a half-written store. The target must be empty. Shards that are already in standard form are
+in the store's own format (a copy of a Zarr v2 store is Zarr v2, and of a v3 store is v3), with the
+metadata written last, so a reader never sees a half-written store. Any tool that reads that format
+opens the copy. A store that `gbx_zarr_write` made is Zarr v3 with sharding and the `crc32c` codec by
+default, and a GDAL before 3.13 cannot read those. The target must be empty. Shards that are already in standard form are
 copied as bytes, without decoding.
 
 <CodeFromTest code={zarrExamples} language="python" functionName="export_a_version"
@@ -491,16 +496,103 @@ optimize after many small appends, especially for reads from a Volume; it change
   testFile="docs/tests/python/formats/test_zarr_examples.py"
   outputConstant="COUNT_MANIFEST_ROWS_after_output" />
 
+## Performance
+
+What a store costs to read and write depends on its layout and on the compute. The figures below were
+measured on Databricks to show the shape of the trade-offs; they are not a guarantee.
+
+- **Data.** The ERA5 reanalysis for January 2023: 2-metre temperature, 744 hourly steps on the
+  0.25-degree global grid (721 x 1440), float32. As Zarr, a v3 store with inner chunks of 24 x 90 x 90
+  cells in shards of 168 x 360 x 360, compressed with zstd. For comparison, the same values as one tiled
+  GeoTIFF per hour (512 x 512 tiles, ZSTD), read with the [Raster Reader](../readers/raster).
+- **Compute.** The reads ran on Databricks Runtime 19 with one 4-core worker (`m5d.xlarge`), the writes
+  on Databricks Runtime 19 with two 4-core workers (`m6gd.xlarge`, on demand), both with dedicated
+  access; and both on Serverless environment 6.
+- **Method.** Each figure is the median of three runs, the first of the three cold, except the 1 GB
+  create: its figures are the median of five warm runs after a cold one, with the two Runtime 19 legs
+  (through the Volume, direct to storage) taking turns.
+
+### Reads
+
+| Workload | Read with | Runtime 19 | Serverless |
+|---|---|---|---|
+| One hour of the whole globe | `gbx_zarr_read` | 3.2 s | 3.0 s |
+| | GeoTIFF: `raster_gbx` and `rst_avg` | 1.9 s | 3.3 s |
+| 1,000 points, every hour (744,000 values) | `gbx_zarr_sample` | 24 s | 16.5 s |
+| 30 days over Europe (35-72 N, 10 W-40 E) | `gbx_zarr_read` | 4.8 s | 4.4 s |
+| | GeoTIFF: 720 windows, `raster_gbx` and `rst_avg` | 232 s | 83 s |
+
+- **A single map** is quick either way, but this store keeps 24 hours in each inner chunk, so one hour
+  reads 24 hours of chunks. A store that is read mostly as maps should be written with `chunks="maps"`.
+- **A time series at points** reads each chunk once for all the points in it, whatever the number of
+  hours.
+- **A box over many hours** reads only the chunks the box touches, in a few large reads; the GeoTIFFs
+  need one file per hour.
+
+### Writes
+
+| Write | With | Runtime 19, through the Volume | Runtime 19, direct to storage | Serverless |
+|---|---|---|---|---|
+| Create a 1 GB cube (240 x 721 x 1440, float32, from 10 tasks) | `gbx_zarr_write` | 19 s | 22 s | 20 s |
+| | of which writing the data files | 8.4 s (119 MB/s) | 12.4 s (80 MB/s) | 8.1 s (122 MB/s) |
+| | plain `xarray.to_zarr`, no transaction | 5.4 s (184 MB/s) | | 6.1 s (163 MB/s) |
+| Eight appends of one day each (100 MB) | `gbx_zarr_write`, all at once | 166 s | | 132 s |
+| | `gbx_zarr_write`, one after another | 147 s | | 150 s |
+
+Where the time of a create goes, as the median of each step over the warm runs on Serverless (19.5 s a
+create): 2.5 s for the first pass over the block positions, 2.1 s claiming its root in the ownership
+ledger, 1.8 s creating the manifest table, 8.1 s writing the data files, and 4.6 s for the commit (3.0 s
+of it the MERGE into the manifest). On Runtime 19 through the Volume (19.3 s) the same steps took 1.7 s,
+2.3 s, 1.8 s, 8.4 s and 4.9 s. Direct to storage, writing the data files varied most from run to run on
+one cluster, from 7.2 s to 25.5 s; measured again on a second cluster, beside plain object-store puts of
+the same size on the same nodes, it took a median 6.7 s (149 MB/s), from 5.3 s to 29.7 s. Its slow runs
+spent their time in the executors' JVM garbage collection, while Spark handed each 100 MB block from the
+step that computed it to the step that writes it; the writes themselves took 0.6-2.6 s each, and the
+plain puts, which never cross that step, 0.5-4.9 s.
+
+- **Blocks that are whole shards are written where they are made.** Each block of this cube is one
+  shard (24 hours of the whole globe), so the task that makes a block encodes it and writes its data
+  file, and nothing is shuffled. Blocks that cut across chunks or shards are regrouped first, which
+  costs more; see the [Zarr Writer](../writers/zarr#blocks-on-the-stores-grid).
+- **A create has a fixed cost**: claiming its root, creating the manifest table and the commit (the checks
+  before them take another 0.1-0.6 s). In the warm runs its median was 9.0 s through the Volume, 8.0 s
+  direct to storage and 8.4 s on Serverless (7.4-10.5 s in all); the first create on new compute, which
+  ran cold, took 20.8-38.3 s, and the direct leg's first create (the cluster's second) 21.0 s. Through the Volume the commit's coordinate files cost 0.5-0.8 s against
+  0.1-0.2 s direct. A write that is not a create pays the commit part of it, so write a store in a few
+  large writes rather than many small ones.
+- **A plain `xarray.to_zarr` is faster and gives none of the guarantees**: no versions, no all-or-nothing
+  commit, no safe concurrent writers.
+- **An input that is expensive to compute** is evaluated twice by a create or an append (once for its
+  positions). This cube is computed in the tasks, so its first pass took 1.5-8.1 s in the warm runs and
+  14-31 s in the first create on new compute. Write such an input to a table first; see the [Zarr Writer](../writers/zarr).
+- **Concurrent appenders** land one per round, each rebasing on the others after a jittered wait that
+  doubles with every lost round (up to 16 s). The last of eight needed
+  seven or eight attempts. On Serverless eight at once took 132 s against 150 s one after another; on
+  Runtime 19 with two 4-core workers they took 166 s against 147 s, the eight sharing eight cores as well
+  as waiting between attempts.
+
 ## Limits
 
 - **Runtimes.** Databricks Runtime 19 and Serverless environment 6 (Python 3.12), lightweight tier only. The
   heavyweight tier reads Zarr data only as materialized GeoBrix tiles.
 - **Data types.** Numeric types and CF times. Strings and objects are not supported: an array GeoBrix
-  cannot decode is left out of reads and registered without being readable, and complex arrays can be
-  read only as blocks.
+  cannot decode is left out of reads and registered without being readable, and a complex array cannot
+  be read as a table (a table has no column for complex numbers; read it as blocks).
 - **Tiles.** `output="tiles"` needs the coordinates to form a regular grid.
+- **Inner chunks per shard.** A shard that `gbx_zarr_write` creates holds at most 4,096 inner chunks.
+  Every read of a shard fetches or builds its index, 16 bytes per inner chunk, so a shard of many tiny
+  chunks makes every read slow: on a Volume, reading one chunk of a shard of 93,312 chunks took a median
+  of 0.87-1.41 s, against 0.10-0.15 s at 4,096 (ten runs on two runtimes). The computed layout stays
+  within the limit, and a `shards=` that goes beyond it raises `ValueError` with a `Fix:`. A registered
+  store's shards are read as they are.
 - **Codecs.** The codecs that zarr-python, numcodecs and zarrs can decode. Writes use `zstd` and `crc32c`
-  unless you pass `codecs`.
+  unless you pass `codecs`. A Zarr v3 array that has any codec beside `sharding_indexed` in its own codec
+  list (a transpose before it, a compressor after it) is not supported: registering the store records it as
+  an array GeoBrix cannot decode, a default read leaves it out with a warning, and naming it in `variables`
+  raises `ZarrUnsupported`. Rewrite the array so that `sharding_indexed` is its only outer codec, with
+  compression and other codecs inside it. zarr-python does not write that layout.
+- **Reading with GDAL.** A GDAL before 3.13 cannot read sharded Zarr v3 stores, or ones that use the
+  `crc32c` codec, which `gbx_zarr_write` writes by default; see [the Raster Reader](../readers/raster).
 - **File modes.** `external` is a preview that needs a workspace with the File type preview and compute
   that supports `FILE` values; `managed` is not available (see [File modes](#file-modes)).
 - **Outside writers.** GeoBrix detects writes that other tools make to a registered store; it cannot make
@@ -514,7 +606,9 @@ optimize after many small appends, especially for reads from a Volume; it change
   can issue temporary credentials (dedicated compute), and through the Volume mount elsewhere, including
   Serverless. Direct access sends short-lived, Volume-scoped credentials (at most one hour) to the
   executors, and under memory pressure Spark may spill task data, those credentials included, to local disk:
-  turn on local-disk encryption on clusters that use it, or pass `access="fuse"`, which sends none.
+  turn on local-disk encryption on clusters that use it, or pass `access="fuse"`, which sends none. Direct
+  access has been measured on AWS only; Azure and Google Cloud storage are not measured yet, and
+  `access="fuse"` reads and writes through the Volume mount there.
 - **Incomplete uploads.** A pack upload that is refused or fails part way can leave an incomplete multipart
   upload in the bucket. GeoBrix does not clean it up: add a bucket lifecycle rule that aborts incomplete
   multipart uploads (`AbortIncompleteMultipartUpload`) to the bucket of the Volume.

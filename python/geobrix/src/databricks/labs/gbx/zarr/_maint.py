@@ -33,6 +33,7 @@ Everything goes through SQL and DataFrame calls that work under Spark Connect.
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import math
@@ -60,6 +61,7 @@ from databricks.labs.gbx.zarr._register import holds_store, identity_of
 from databricks.labs.gbx.zarr._shard import Region
 from databricks.labs.gbx.zarr._store import ManifestStore
 from databricks.labs.gbx.zarr.errors import (
+    ZarrAccessUnavailable,
     ZarrError,
     ZarrReadOnly,
     ZarrVersionUnavailable,
@@ -1127,20 +1129,51 @@ def _files_root(props) -> str | None:
 
 
 def _require_exist(files, root: str | None, table: str, version, action: str) -> None:
-    """Every pack file in ``files`` (relative to ``root``) must still exist."""
+    """Every pack file in ``files`` (relative to ``root``) must still exist.
+
+    A file that is not there (``ENOENT``, or a parent that is not a directory) is gone. A
+    stat that fails for any other reason, such as ``EBUSY`` while a Volume mount is down,
+    says nothing about the file: that is ``ZarrAccessUnavailable``, never "vacuumed".
+    """
     if root is None:
         return
-    gone = [
-        f
-        for f in sorted(set(files))
-        if not os.path.exists(f if os.path.isabs(f) else os.path.join(root, f))
-    ]
+    gone, unreachable = [], []
+    for f in sorted(set(files)):
+        path = f if os.path.isabs(f) else os.path.join(root, f)
+        try:
+            os.stat(path)
+        except (FileNotFoundError, NotADirectoryError):
+            gone.append(f)
+        except OSError as e:
+            unreachable.append((f, e))
     if gone:
         raise ZarrVersionUnavailable(
             f"version {version} of {table} points at {len(gone)} file(s) that no longer "
             f"exist (e.g. {gone[0]})",
             fix=f"the files were vacuumed; {action}",
         )
+    if unreachable:
+        raise _not_reachable(table, version, unreachable)
+
+
+def _not_reachable(table: str, version, unreachable) -> ZarrAccessUnavailable:
+    """The refusal for files a stat could not check (``(file, OSError)`` pairs): neither
+    gone nor changed is known, so the caller is told what to do about the Volume, not to
+    sync or restore another version. A refused read (``EACCES``, ``EPERM``) is a missing
+    grant, which waiting does not fix; anything else (the mount is down) may pass."""
+    denied = [(f, e) for f, e in unreachable if e.errno in (errno.EACCES, errno.EPERM)]
+    f, e = (denied or unreachable)[0]
+    message = (
+        f"cannot tell whether version {version} of {table} still has its files: "
+        f"{len(unreachable)} of them could not be checked (e.g. {f}: {e.strerror or e})"
+    )
+    if denied:
+        return ZarrAccessUnavailable(
+            message,
+            fix="check that you have READ VOLUME (and WRITE VOLUME to write) on the "
+            "Volume, then try again",
+        )
+    return ZarrAccessUnavailable(message, fix="retry when the Volume is reachable")
 
 
 _GERUND = {"restore": "restoring", "export": "exporting"}
@@ -1167,7 +1200,7 @@ def _require_files(
         f"{verb} a later version or a tag",
     )
     theirs = upserts.filter(pc.and_(named, external))
-    moved = []
+    moved, unreachable = [], []
     for f, recorded in sorted(
         set(
             zip(
@@ -1177,8 +1210,11 @@ def _require_files(
     ):
         try:
             st = os.stat(os.path.join(props.root, f))
-        except OSError:
-            moved.append(f)
+        except (FileNotFoundError, NotADirectoryError):
+            moved.append(f)  # an object that is not there has not stayed what it was
+            continue
+        except OSError as e:  # EBUSY with the mount down: not a verdict on the object
+            unreachable.append((f, e))
             continue
         now = identity_of(st.st_mtime_ns // 1_000_000, st.st_size)
         if recorded is not None and not identities_match(recorded, now):
@@ -1191,6 +1227,8 @@ def _require_files(
             fix=f"run gbx_zarr_sync({table!r}) to record the store as it is now, then "
             f"{verb} a later version",
         )
+    if unreachable:
+        raise _not_reachable(table, version, unreachable)
 
 
 def gbx_zarr_restore(

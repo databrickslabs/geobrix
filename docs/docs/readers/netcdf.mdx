@@ -26,6 +26,10 @@ so the readers split along that grain: gridded variables go through the raster
 path (`netcdf_gbx` raster mode / `netcdf_gdal`), and feature/point data goes
 through the vector path (`netcdf_gbx` vector mode / `netcdf_ogr`).
 
+For a large cube, or one that many jobs read slices of or write results back to, use
+[Zarr](../formats/zarr) instead of NetCDF: it is read a chunk at a time and written transactionally (see the
+[Zarr Reader](./zarr)).
+
 ## Selecting variables — the unified contract
 
 All three readers share one rule: **`variable` / `variables` is an optional

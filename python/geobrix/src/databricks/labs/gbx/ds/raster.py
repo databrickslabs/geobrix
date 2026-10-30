@@ -78,10 +78,10 @@ from databricks.labs.gbx._gdal_policy import (
     data_path,
     driver_switch,
     open_bytes,
-    open_data,
 )
 from databricks.labs.gbx.ds import _encode, _listing
-from databricks.labs.gbx.pyrx import _serde
+from databricks.labs.gbx.pyrx import _env, _serde
+from databricks.labs.gbx.pyrx._env import open_raster
 from databricks.labs.gbx.pyrx.core import budget
 from databricks.labs.gbx.pyrx.core.local_temp import (
     StageCache,
@@ -241,6 +241,9 @@ class _TilePartition(InputPartition):
         # (native tiles).  A non-empty dict is merged into tile.metadata in
         # read() so downstream ops can dispatch by cell without re-opening.
         "vrt_tags",
+        # Files the planner found in this file's folder (None when not planned from a
+        # folder listing); stamped on virtual tiles as metadata["path_folder_files"].
+        "folder_files",
     )
 
     def __init__(
@@ -277,6 +280,7 @@ class _TilePartition(InputPartition):
         self.size_mib = size_mib
         self.tile_format = tile_format
         self.vrt_tags: Optional[dict] = None
+        self.folder_files: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -353,7 +357,7 @@ def _clip_partitions(
     from databricks.labs.gbx.ds._window import window_for_geom
 
     parts: list = []
-    with open_data(file_path) as ds:
+    with open_raster(file_path) as ds:
         for raw in clip_polygons:
             geom = parse_geom(raw)
             if geom is None:
@@ -426,7 +430,7 @@ def _plan_partitions_for_file(
         # file once — but only on this opt-in path; the no-split default below
         # keeps its lazy, header-free fast path.
         if budget_bytes > 0:
-            with open_data(file_path) as ds:
+            with open_raster(file_path) as ds:
                 width, height = ds.width, ds.height
                 bands = ds.count
                 itemsize = _numpy_itemsize(ds.dtypes[0])
@@ -494,7 +498,7 @@ def _plan_partitions_for_file(
         from rasterio.windows import Window as _W
 
         parts = []
-        with open_data(file_path) as ds:
+        with open_raster(file_path) as ds:
             full = _W(0, 0, ds.width, ds.height)
             for c, r, w, h in windows:
                 try:
@@ -529,7 +533,7 @@ def _plan_partitions_for_file(
         from databricks.labs.gbx.pyrx.core.tiling import plan_grid_windows
 
         tw, th = int(tile_size[0]), int(tile_size[1])
-        with open_data(file_path) as ds:
+        with open_raster(file_path) as ds:
             W, H = ds.width, ds.height
             bands = ds.count
             itemsize = _numpy_itemsize(ds.dtypes[0])
@@ -561,7 +565,7 @@ def _plan_partitions_for_file(
     # ------------------------------------------------------------------
     # Normal path: read header metadata, decide whole vs split.
     # ------------------------------------------------------------------
-    with open_data(file_path) as ds:
+    with open_raster(file_path) as ds:
         width, height, driver = ds.width, ds.height, ds.driver
         bands = ds.count
         itemsize = _numpy_itemsize(ds.dtypes[0])
@@ -946,7 +950,7 @@ def _read_gbx_member_tags(member_path: str) -> dict:
 
     tags_out: dict = {}
     try:
-        with open_data(member_path) as ds:
+        with open_raster(member_path) as ds:
             raw = ds.tags()
             if "GBX_CELLID" in raw:
                 tags_out["cellid"] = raw["GBX_CELLID"]
@@ -1105,6 +1109,20 @@ class RasterGbxReader(DataSourceReader):
             extensions=self.extensions,
             path_glob_filter=self.path_glob_filter,
         )
+        # Files per folder, from this listing (only files it accepted, so never more than
+        # the folder holds), kept for the folders past GDAL's listing limit: stamped on their
+        # virtual tiles as a hint that lets a worker skip listing such a folder
+        # (pyrx._env.note_folder_files). A count at or under the limit changes nothing on
+        # a worker, so it is not stamped, and the tile stays the one read_paths plans for
+        # the same file.
+        folder_files: Dict[str, int] = {}
+        for f in files:
+            d = os.path.dirname(f)
+            folder_files[d] = folder_files.get(d, 0) + 1
+        cap = _env.listing_cap()
+        self._folder_files = {
+            d: n for d, n in folder_files.items() if cap is not None and n > cap
+        }
         if self.filter_regex and self.filter_regex != ".*":
             import re as _re
 
@@ -1224,20 +1242,24 @@ class RasterGbxReader(DataSourceReader):
         # on the read result; n is a parallelism signal (classic ≈ 3–5× cores),
         # never n = file_count.
         files = self._list_source_files()
+        folder_files = getattr(self, "_folder_files", {})
         result: list = []
         for f in files:
-            result.extend(
-                _plan_partitions_for_file(
-                    file_path=f,
-                    budget_bytes=resolved_budget,
-                    clip_polygons=self.clip_polygons,
-                    clip_crs=self.clip_crs,
-                    windows=self.windows,
-                    tile_size=self.tile_size,
-                    overlap_percent=self.overlap_percent,
-                    emit_virtual=self.emit_virtual,
-                )
+            n = folder_files.get(os.path.dirname(f))
+            _env.note_folder_files(f, n)  # the planner's own header opens
+            parts = _plan_partitions_for_file(
+                file_path=f,
+                budget_bytes=resolved_budget,
+                clip_polygons=self.clip_polygons,
+                clip_crs=self.clip_crs,
+                windows=self.windows,
+                tile_size=self.tile_size,
+                overlap_percent=self.overlap_percent,
+                emit_virtual=self.emit_virtual,
             )
+            for p in parts:
+                p.folder_files = n
+            result.extend(parts)
         # None-safe: place None values at the end (deterministic ordering).
         # skipOrdering=True bypasses this sort (opt-out for pre-ordered input).
         if self.skip_ordering:
@@ -1245,8 +1267,6 @@ class RasterGbxReader(DataSourceReader):
         return sorted(result, key=lambda p: (p.file_path is None, p.file_path or ""))
 
     def read(self, partition: "_TilePartition") -> Iterator[Tuple]:
-        import rasterio
-
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
@@ -1265,6 +1285,8 @@ class RasterGbxReader(DataSourceReader):
             return
 
         source = _listing.to_spark_uri(partition.file_path)
+        folder_files = getattr(partition, "folder_files", None)
+        _env.note_folder_files(partition.file_path, folder_files)
 
         # ------------------------------------------------------------------
         # Virtual tile: bytes-free emission (path + whole-file window).
@@ -1302,6 +1324,8 @@ class RasterGbxReader(DataSourceReader):
                     "format": "gtiff",
                     "path_file_size": str(file_size),
                 }
+                if folder_files is not None:
+                    meta[_env.FOLDER_FILES_KEY] = str(folder_files)
                 # Propagate VRT member tags (cellid, gridSystem) when present.
                 # Set by partitions() for quadbin mini-COG members; absent for
                 # native tiles and for partitions built outside the VRT branch.
@@ -1326,7 +1350,7 @@ class RasterGbxReader(DataSourceReader):
                 # window is already set by the planner; dims are needed for
                 # metadata and to confirm the window fits the source extent.
                 file_size = os.path.getsize(partition.file_path)
-                with open_data(partition.file_path) as ds:
+                with open_raster(partition.file_path) as ds:
                     meta = {
                         "sourcePath": partition.file_path,
                         "driver": ds.driver,
@@ -1336,6 +1360,8 @@ class RasterGbxReader(DataSourceReader):
                         "count": str(ds.count),
                         "path_file_size": str(file_size),
                     }
+                    if folder_files is not None:
+                        meta[_env.FOLDER_FILES_KEY] = str(folder_files)
                     win = (
                         partition.window
                     )  # always set for non-whole-file virtual tiles
@@ -1371,8 +1397,8 @@ class RasterGbxReader(DataSourceReader):
             from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
 
             with _RASTER_STAGE.use(partition.file_path) as local_path:
-                with rasterio.Env(GDAL_CACHEMAX=128):
-                    with open_data(local_path) as ds:
+                with _env.capped_block_cache(budget.block_cache_bytes(self.strategy)):
+                    with open_raster(local_path) as ds:
                         tile_crs = crs_to_canonical(ds.crs)
                         _cellid, win_bytes, meta = _encode.encode_tile(
                             ds,
@@ -1415,7 +1441,7 @@ class RasterGbxReader(DataSourceReader):
         if partition.is_passthrough:
             from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
 
-            with open_data(partition.file_path) as ds:
+            with open_raster(partition.file_path) as ds:
                 tile_crs = crs_to_canonical(ds.crs)
                 width, height = ds.width, ds.height
                 compression = str(ds.profile.get("compress") or "DEFLATE").upper()
@@ -1453,8 +1479,8 @@ class RasterGbxReader(DataSourceReader):
         from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
 
         with _RASTER_STAGE.use(partition.file_path) as local_path:
-            with rasterio.Env(GDAL_CACHEMAX=128):
-                with open_data(local_path) as ds:
+            with _env.capped_block_cache(budget.block_cache_bytes(self.strategy)):
+                with open_raster(local_path) as ds:
                     tile_crs = crs_to_canonical(ds.crs)
                     cellid, raster_bytes, meta = _encode.encode_tile(
                         ds,
@@ -1493,7 +1519,7 @@ class RasterGbxReader(DataSourceReader):
         source = _listing.to_spark_uri(partition.file_path)
 
         size_bytes = os.path.getsize(partition.file_path)
-        with open_data(partition.file_path) as ds:
+        with open_raster(partition.file_path) as ds:
             width, height, driver = ds.width, ds.height, ds.driver
             bands = ds.count
             itemsize = _numpy_itemsize(ds.dtypes[0])
@@ -1549,7 +1575,7 @@ class RasterGbxReader(DataSourceReader):
                 open(local_path, "wb") as _dst,
             ):
                 shutil.copyfileobj(_src, _dst, length=8 * 1024 * 1024)
-            with open_data(local_path) as ds:
+            with open_raster(local_path) as ds:
                 if whole:
                     plan_tiles = [(0, 0, width, height)]
                 else:

@@ -82,16 +82,17 @@ demand — expressed as a Spark DataFrame.
 
 The diagram above traces the four stages:
 
-1. **Source.** Striped GeoTIFFs, tiled GeoTIFFs, COGs, NetCDFs, and tabular
-   tile-struct columns are all usable **as-is**. File formats can *optionally* be
+1. **Source.** Striped GeoTIFFs, tiled GeoTIFFs, COGs, NetCDFs, [Zarr stores](#zarr-tiles),
+   and tabular tile-struct columns are all usable **as-is**. File formats can *optionally* be
    standardized into COGs first with
    [`prepare_cogs`](./large-rasters#prepare_cogs--driver-orchestrated-preparation),
    which makes windowed reads cheap (a striped source can inflate a single window
    ~570× versus a clean tiled block). Optimization is a choice, not a gate.
-2. **Distributed load.** A reader (`cog_gbx`, `gdal`, `netcdf_gbx`, …) partitions
+2. **Distributed load.** A reader (`cog_gbx`, `gdal`, `netcdf_gbx`, `gbx_zarr_read`, …) partitions
    the source across executors and emits tile rows — the lightweight raster readers
    (`raster_gbx`, `gtiff_gbx`, `cog_gbx`) emit **virtual tiles by default**;
-   pass `.option("virtualTiles", "false")` to get materialized bytes instead. Selection
+   pass `.option("virtualTiles", "false")` to get materialized bytes instead (for
+   `gbx_zarr_read`, `virtual_tiles=False`). Selection
    options (`tileSize`, `overlapPercent`, `clipPolygons`, …) shape the windowing.
 3. **Operate.** Any `rst_*` function accepts either a virtual or a materialized
    tile. The output shape is your choice — see below.
@@ -102,7 +103,7 @@ The diagram above traces the four stages:
 
 FILE is a [Databricks data type](https://docs.databricks.com/aws/en/pyspark/reference/file-type) that provides **governed access to files on compute without a FUSE mount**. GeoBrix detects FILE availability and uses it when present. If FILE is not available, virtual tiles work via the FUSE path unchanged.
 
-When FILE is available (Databricks Runtime 19 dedicated clusters), GeoBrix:
+When FILE is available (Databricks Runtime 19 dedicated clusters and Serverless, in a workspace with the File type preview), GeoBrix:
 
 - Stamps each virtual tile row with a `path_mode` field: `"external"` or `"managed"` (see [Tile Structure](./tile-structure)).
 - Opens the file via `fref.open()` (byte-range stream) rather than through the FUSE mount.
@@ -116,9 +117,8 @@ The decisive factor for virtual-tile read performance is **open amortization** �
 
 ### Supported environments
 
-- **Databricks Runtime 19 dedicated clusters** (single-user, with `fileReferenceCreationMode=MANAGED` in cluster config): FILE engages where the runtime feature-detect succeeds. Where it does not, tiles use FUSE automatically.
-- **Databricks Runtime 19 on Serverless:** coming soon.
-- **Local development, CI, Serverless Compute (today), DBR 17/18:** virtual tiles use the traditional FUSE + rasterio path — correct and unchanged.
+- **Databricks Runtime 19 dedicated clusters** (single-user, with `fileReferenceCreationMode=MANAGED` in cluster config) **and Serverless**, in a workspace with the File type preview: FILE engages where the runtime feature-detect succeeds. Where it does not, tiles use FUSE automatically. The default `file_mode` is `fuse`; `"auto"` and `"external"` opt in to FILE.
+- **Local development, CI, DBR 17/18, and compute in a workspace without the preview:** virtual tiles use the traditional FUSE + rasterio path — correct and unchanged.
 
 ## Reader selection surface
 
@@ -146,6 +146,47 @@ of tile count.
 See [Raster Reader performance](../readers/raster#loading-many-small-files) and
 [Benchmarking → Reader plan-time listing](./benchmarking#reader-plan-time-listing).
 :::
+
+## Zarr tiles
+
+A [Zarr](../formats/zarr) store is the first **N-dimensional** format with virtual tiles. A GeoTIFF is one
+picture; a Zarr variable is a cube (`time` by `latitude` by `longitude`, say), so a tile is a window of one
+2-D plane of it. [`gbx_zarr_read(..., output="tiles")`](../readers/zarr#output-geobrix-tiles) cuts every
+selected latitude-longitude plane of a variable into windows (one inner chunk each by default), and each
+position along the other dimensions makes its own tile, named in the tile's `sliceDims` metadata as the
+NetCDF reader names it. `band_dim` stacks one dimension as the bands of a tile instead. By default the tiles
+are virtual: `raster` is `NULL`, `path` is the store and `window` is the cells of the plane. Every
+lightweight `rst_*` function opens such a tile on demand and reads only the chunks its window touches, and a
+header function such as `rst_crs` or `rst_width` reads no chunk at all.
+
+- **A Zarr tile is self-contained.** What a task needs to read the window travels in the tile's `metadata`:
+  the array's metadata (`zarr_meta`), the storage objects the window touches, each as a file, an offset and a
+  length taken from the manifest at the version the read was pinned to (`zarr_refs`), and the directory they
+  are under (`zarr_root`). A task that opens the tile has no Spark session and no manifest table, so a table
+  of tiles can be saved and read back by other jobs. Its keys are listed in
+  [Zarr tile metadata](./tile-structure#zarr-tile-metadata).
+- **Chunks are read through the Volume mount.** A task resolves the tile's files under `zarr_root` on the
+  file system, so the store has to stay on a Volume, and `path_mode` is `NULL`: FILE references are not
+  used to open a Zarr tile. GeoBrix reads, registers and creates stores only at a Volume path (or another
+  mounted file system), so no tile is made for a store at a cloud URL: `gbx_zarr_read`, `gbx_zarr_register`
+  and `gbx_zarr_write` refuse one such as `s3://bucket/era5.zarr` with a `ZarrUnsupported` whose fix says
+  to pass the store's `/Volumes/<catalog>/<schema>/<volume>/...` path. For a store with a manifest table, a
+  file that the tile names and that has gone missing raises `ZarrStoreDrift`. Vacuum deletes the files of
+  versions older than the store's `retain` period, so
+  [tag](../formats/zarr#snapshots-time-travel-and-tags) the version that a saved table of tiles points at.
+- **`access="direct"` needs `virtual_tiles=False`.** A virtual tile is opened later, in another job and
+  without the credentials of the call that made it, so `gbx_zarr_read` refuses `access="direct"` with
+  virtual tiles and raises `ZarrAccessUnavailable`. Read the tiles now with `virtual_tiles=False` to use
+  direct access, or leave `access` at `"auto"` or `"fuse"`. See [Access](../readers/zarr#access).
+- **The heavyweight tier needs materialized tiles.** A heavyweight function refuses a virtual Zarr tile like any
+  other. `virtual_tiles=False` reads each tile as the read runs and holds its pixels as GeoTIFF bytes (its
+  `driver` and `format` are then `GTiff`) that both tiers accept; keep the windows small, because it costs the
+  read up front and the memory of the pixels. See
+  [Materialize for the heavyweight tier](../readers/zarr#materialize-for-the-heavyweight-tier).
+
+Zarr tiles are a lightweight-tier capability of Databricks Runtime 19 and Serverless environment 6, installed
+with the `zarr_dbr19` or `zarr_env6` extra. The [Zarr Reader](../readers/zarr#virtual-tiles-and-the-rst_-functions)
+shows them in use, and [Zarr Stores](../formats/zarr) explains versions, tags and retention.
 
 ## Operating on tiles: your choice of output
 
@@ -211,4 +252,6 @@ is for heavy (binary) raster tiles.**
   and the light→heavy bridge.
 - [COG reader (`cog_gbx`)](../readers/cog) and [Readers overview](../readers/overview)
   — the windowed-read option reference.
+- [Zarr Reader](../readers/zarr) and [Zarr Stores](../formats/zarr) — tiles cut from N-dimensional
+  Zarr cubes.
 - [Writers overview](../writers/overview) — persisting tiles to files.

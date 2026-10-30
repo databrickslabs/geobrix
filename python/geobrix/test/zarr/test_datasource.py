@@ -130,6 +130,45 @@ def test_tiles_and_table_outputs(spark, era5_v3_sharded, output, options, call):
     assert expected and got == expected
 
 
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"output": "tiles", "variables": "t2m", "isel": {"time": [0, 2]}},
+        {  # materialized: the tile holds its GeoTIFF bytes
+            "output": "tiles",
+            "variables": "t2m",
+            "isel": {"time": [0, 1]},
+            "virtualTiles": "false",
+        },
+        {"output": "blocks", "variables": "t2m", "isel": {"time": [0, 2]}},
+        {"output": "table", "variables": "t2m", "isel": {"time": [0, 1]}},
+    ],
+    ids=["tiles", "tiles-materialized", "blocks", "table"],
+)
+def test_batches_carry_the_declared_schema(spark, era5_v3_sharded, options):
+    """Spark 4.1+ (Databricks 19, Serverless env 6) compares the Arrow schema of every batch
+    a Python source yields with the schema it declared, nullability included, and fails
+    the read with DATA_SOURCE_RETURN_SCHEMA_MISMATCH; Spark 4.0 only compares the names.
+    This is that comparison, run where the batches are made (a session parses the DDL).
+    """
+    from pyspark.sql.pandas.types import to_arrow_schema
+    from pyspark.sql.types import StructType
+
+    options = {
+        "path": str(era5_v3_sharded),
+        **{k: v if isinstance(v, str) else json.dumps(v) for k, v in options.items()},
+    }
+    declared = ZarrGbxDataSource(options).schema()
+    if isinstance(declared, str):
+        declared = StructType.fromDDL(declared)
+    want = to_arrow_schema(declared)
+    reader = ZarrGbxReader(options)
+    batches = [b for p in reader.partitions() for b in reader.read(p)]
+    assert batches
+    for batch in batches:
+        assert batch.schema.equals(want), f"{batch.schema}\n!=\n{want}"
+
+
 # --- options ----------------------------------------------------------------------------
 
 

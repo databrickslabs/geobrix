@@ -7,6 +7,7 @@ vendor wrote consolidated metadata and whose overlay holds a tombstone and an ap
 """
 
 import base64
+import errno
 import json
 import os
 import struct
@@ -186,6 +187,35 @@ def _assert_readers(copy, want, fmt):
         np.testing.assert_array_equal(group[name][...], values)
         np.testing.assert_array_equal(_tensorstore(copy / name, fmt), values)
     return group
+
+
+# --- a base object that cannot be checked -------------------------------------------------
+
+
+@pytest.mark.parametrize("method", ["copy", "reference"])
+def test_export_does_not_call_a_base_object_changed_when_it_cannot_reach_it(
+    spark_delta, drop, tmp_path, monkeypatch, method
+):
+    """The export caller of the shared check: with the base store's Volume mount down (a stat
+    fails with EBUSY) the refusal is ``ZarrAccessUnavailable`` saying to retry, not "changed
+    since" or "vacuumed", and nothing is written under ``to``."""
+    table, _ = _scenario(spark_delta, drop, tmp_path, "registered_v2")
+    to = tmp_path / ("out" if method == "copy" else "out.json")
+    real = os.stat
+
+    def down(path, *args, **kw):
+        if str(path).startswith(str(tmp_path / "vendor.zarr")):
+            raise OSError(errno.EBUSY, os.strerror(errno.EBUSY), str(path))
+        return real(path, *args, **kw)
+
+    monkeypatch.setattr(os, "stat", down)
+    with pytest.raises(ZarrAccessUnavailable) as e:
+        gbx_zarr_export(spark_delta, table, str(to), method=method)
+    monkeypatch.undo()
+    assert "Fix: retry when the Volume is reachable" in str(e.value)
+    assert os.strerror(errno.EBUSY) in str(e.value)
+    assert "changed since" not in str(e.value) and "vacuumed" not in str(e.value)
+    assert not to.exists()  # nothing was written
 
 
 # --- copy -------------------------------------------------------------------------------

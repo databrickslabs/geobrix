@@ -507,6 +507,21 @@ def _build_mosaic_vrt(
     # ── Step 2: compute mosaic envelope ───────────────────────────────────
     # Use the first tile as the reference for CRS / pixel size.
     ref = metas[0]
+    # The mosaic has the first tile's bands and each tile is a source of every one of them, so a
+    # tile with fewer has no band to give: name the counts rather than fail on a band index
+    # below. A tile with more is allowed: its extra bands still feed the mask band of the mosaic
+    # (a tile without a mask band of its own is valid where any of its bands is).
+    short = [m for m in metas if m["count"] < ref["count"]]
+    if short:
+        counts = "; ".join(
+            f"{os.path.basename(m['path'])}: {m['count']}" for m in short
+        )
+        raise ValueError(
+            f"_build_mosaic_vrt: the mosaic has the {ref['count']} bands of "
+            f"{os.path.basename(ref['path'])}, the first tile, and these tiles have fewer: "
+            f"{counts}. Fix: mosaic tiles with the same number of bands (select the same "
+            "bands from each source before mosaicking)"
+        )
     pixel_x = ref["transform"].a  # positive (east)
     pixel_y = ref["transform"].e  # negative (north-up)
     crs = ref["crs"]

@@ -91,8 +91,9 @@ def windowed_download(
         Memory bound: a 4 km × 4 km NAIP AOI at 0.6 m native is ~44 M pixels per band.
         Setting max_mpp=6.0 reduces that to ~444 K pixels (~100× smaller array).
 
-    GDAL_CACHEMAX is set to 128 (MB) via rasterio.Env to bound /vsicurl block cache
-    even when decimation is active (defence-in-depth for Serverless 1 GB UDF cap).
+    The GDAL block cache is capped (``capped_block_cache``, sized by ``budget.block_cache_bytes``)
+    to bound /vsicurl blocks even when decimation is active (defence-in-depth for the Serverless
+    1 GB UDF cap).
 
     An http(s) href comes from data: its redirects are followed here first, each hop
     checked as ``download_href`` checks it, and GDAL opens the URL they end at, with
@@ -102,13 +103,18 @@ def windowed_download(
     import rasterio
 
     from databricks.labs.gbx.ds._window import window_for_bbox
+    from databricks.labs.gbx.pyrx._env import capped_block_cache
+    from databricks.labs.gbx.pyrx.core.budget import block_cache_bytes
 
     # judged by the parse rasterio uses (urlsplit's scheme), so a spelling it reads as a URL is a URL here too
     if urlsplit(href).scheme.lower() in ("http", "https"):
         href = _http.final_url(href, allowed_hosts=allowed_hosts)
     elif remote_location(href) is not None:
         _http.check_href(href, allowed_hosts)  # refuses: not an http(s) URL
-    with rasterio.Env(GDAL_CACHEMAX=128, GDAL_HTTP_NETRC="NO"):
+    with (
+        capped_block_cache(block_cache_bytes("auto")),
+        rasterio.Env(GDAL_HTTP_NETRC="NO"),
+    ):
         # the href is an http(s) URL the checks passed, or a path the remote-path gate allows
         with open_data(href, remote_ok=True) as src:
             win = window_for_bbox(src, bbox, bbox_crs)
@@ -193,11 +199,11 @@ def fetch_validate_publish(
         Still raise_for_status() so HTTP throttle/expiry triggers a retry.
         is_out_file_valid reflects "downloaded + published OK", not decode success.
 
-    Idempotency (I3): if the target Volume path already exists and passes the
+    Idempotency: if the target Volume path already exists and passes the
     validity check (read_validate when validate=True, exists-above-size-floor when
     validate=False), return it immediately WITHOUT re-downloading.
 
-    I5: filename is sanitized via os.path.basename to prevent path-traversal.
+    The filename is sanitized via os.path.basename to prevent path-traversal.
 
     An href the destination checks refuse (``core._http.RefusedHref``: a private
     address, a host off ``allowed_hosts``, a redirect to either) is not retried.
@@ -206,7 +212,7 @@ def fetch_validate_publish(
     outpath = os.path.join(out_dir, safe_filename)
     os.makedirs(out_dir, exist_ok=True)
 
-    # I3 — idempotency short-circuit
+    # a target that is already valid is returned without downloading again
     if os.path.exists(outpath):
         if validate:
             if read_validate(outpath):
@@ -239,7 +245,7 @@ def fetch_validate_publish(
                     shutil.copyfile(local, outpath)  # publish only validated files
                     return outpath
             else:
-                # I1 — no-validate path: publish without rasterio decode
+                # validate=False: publish the bytes without a rasterio decode
                 shutil.copyfile(local, outpath)
                 return outpath
         except _http.RefusedHref as exc:

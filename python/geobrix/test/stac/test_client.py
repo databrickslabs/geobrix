@@ -1,19 +1,19 @@
 """Tests for StacClient covering both driver-shim and UDF fan-out paths.
 
-C1: UDF-path tests exercise the REAL repartition+explode+UDF code path (not the
-    _search_driver shim). The Python UDF workers run in separate subprocesses, so
-    monkeypatching the driver's pystac_client does not propagate. Instead we ship a
-    stub pystac_client.py to the workers via spark.sparkContext.addPyFile(), which
-    places it first on sys.path so the UDF imports it instead of the real package.
-    This exercises _ITEM_SCHEMA, _ASSET_SCHEMA, repartition, explode, and
-    dropDuplicates end-to-end.
+UDF-path tests exercise the REAL repartition+explode+UDF code path (not the
+_search_driver shim). The Python UDF workers run in separate subprocesses, so
+monkeypatching the driver's pystac_client does not propagate. Instead we ship a
+stub pystac_client.py to the workers via spark.sparkContext.addPyFile(), which
+places it first on sys.path so the UDF imports it instead of the real package.
+This exercises _ITEM_SCHEMA, _ASSET_SCHEMA, repartition, explode, and
+dropDuplicates end-to-end.
 
-    NOTE: addPyFile with the same filename can only be called once per SparkContext
-    (subsequent calls with a different file content raise a conflict error). Therefore
-    we use a single stub file (added at module scope via a session-scoped fixture) that
-    always returns 2 items per search, with get_item() support for the download path.
-    Tests that check for "no duplicate (item_id, asset_name)" simply verify that
-    dropDuplicates works across multiple AOIs producing the same item.
+NOTE: addPyFile with the same filename can only be called once per SparkContext
+(subsequent calls with a different file content raise a conflict error). Therefore
+we use a single stub file (added at module scope via a session-scoped fixture) that
+always returns 2 items per search, with get_item() support for the download path.
+Tests that check for "no duplicate (item_id, asset_name)" simply verify that
+dropDuplicates works across multiple AOIs producing the same item.
 """
 
 import os
@@ -45,7 +45,7 @@ _ITEM = {
 # ---------------------------------------------------------------------------
 
 _PYSTAC_CLIENT_STUB = '''\
-"""Fake pystac_client shipped to Spark UDF workers for C1 tests.
+"""Fake pystac_client shipped to Spark UDF workers for the fan-out tests.
 Returns 2 copies of S2_X (with B02+B03) per AOI search.
 get_item() returns an item with B02 for the download UDF.
 """
@@ -157,12 +157,12 @@ def test_search_explodes_items_to_asset_rows(spark):
 
 
 # ---------------------------------------------------------------------------
-# C1 — UDF fan-out path tests (stub pystac_client shipped to workers)
+# UDF fan-out path tests (stub pystac_client shipped to workers)
 # ---------------------------------------------------------------------------
 
 
 def test_search_udf_path_columns_and_types(spark_with_fake_catalog):
-    """C1: real repartition+explode+UDF path produces correct columns/types.
+    """Real repartition+explode+UDF path produces correct columns/types.
 
     The stub returns 2 copies of S2_X; dropDuplicates collapses to {B02, B03}.
     """
@@ -198,7 +198,7 @@ def test_search_udf_path_columns_and_types(spark_with_fake_catalog):
 
 
 def test_search_udf_path_carries_non_geojson_cols(spark_with_fake_catalog):
-    """C1: carried columns (non-geojson) are preserved through UDF path."""
+    """Carried columns (non-geojson) are preserved through UDF path."""
     spark = spark_with_fake_catalog
     client = StacClient(catalog="http://fake-catalog", sign=None)
     df = spark.createDataFrame(
@@ -218,7 +218,7 @@ def test_search_udf_path_carries_non_geojson_cols(spark_with_fake_catalog):
 
 
 def test_search_udf_path_dedup_duplicate_items(spark_with_fake_catalog):
-    """C1: dropDuplicates(["item_id","asset_name"]) collapses duplicate rows.
+    """dropDuplicates(["item_id","asset_name"]) collapses duplicate rows.
 
     Two AOIs each returning 2 copies of S2_X × {B02, B03} via the stub.
     Raw output = up to 8 rows; after dropDuplicates = exactly {B02, B03}.
@@ -248,7 +248,7 @@ def test_search_udf_path_dedup_duplicate_items(spark_with_fake_catalog):
 
 
 def test_download_udf_path_publishes_valid_bytes(spark_with_fake_catalog, tmp_path):
-    """C1: download UDF path writes bytes to Volume path and sets is_out_file_valid=True.
+    """Download UDF path writes bytes to Volume path and sets is_out_file_valid=True.
 
     The pystac_client stub (shipped once at module scope via addPyFile) handles
     get_item() in the _fetch UDF. We inject a fake HTTP fetcher via _get_fn= so
@@ -353,12 +353,12 @@ def test_download_fetches_only_the_hosts_allowed(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# I1 — validate=False publishes without rasterio decode
+# validate=False publishes without rasterio decode
 # ---------------------------------------------------------------------------
 
 
 def test_fetch_validate_false_publishes_non_decodable(tmp_path):
-    """I1: validate=False publishes bytes that are not a valid raster."""
+    """With validate=False, bytes that are not a valid raster are published."""
     from databricks.labs.gbx.stac._download import fetch_validate_publish
 
     garbage = b"not-a-raster-but-non-empty" * 10
@@ -393,7 +393,7 @@ def test_fetch_validate_false_publishes_non_decodable(tmp_path):
 
 
 def test_fetch_validate_true_rejects_garbage(tmp_path):
-    """I1: validate=True rejects truncated/garbage body (original behavior preserved)."""
+    """With validate=True, a truncated/garbage body is rejected (original behavior)."""
     from databricks.labs.gbx.stac._download import fetch_validate_publish
 
     def fake_get(href, timeout=None, stream=None):
@@ -420,12 +420,12 @@ def test_fetch_validate_true_rejects_garbage(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# I2 — repair includes last_update
+# repair includes last_update
 # ---------------------------------------------------------------------------
 
 
 def test_download_emits_last_update_column(spark_with_fake_catalog, tmp_path):
-    """I2: download DataFrame includes a last_update timestamp column."""
+    """Download DataFrame includes a last_update timestamp column."""
     import numpy as np
     import rasterio
     from rasterio.transform import from_origin
@@ -479,12 +479,12 @@ def test_download_emits_last_update_column(spark_with_fake_catalog, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# P1 — range-scan fan-out: N tasks, no Exchange in plan
+# range-scan fan-out: N tasks, no Exchange in plan
 # ---------------------------------------------------------------------------
 
 
 def test_download_range_scan_fanout(spark, tmp_path):
-    """P1: download uses spark.range fan-out so N=4 targets → 4 partitions.
+    """Download uses spark.range fan-out so N=4 targets → 4 partitions.
 
     Asserts:
       (a) result.rdd.getNumPartitions() == 4  (range scan survives AQE)
@@ -563,12 +563,12 @@ def test_download_range_scan_fanout(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# I3 — idempotency: already-valid file is not re-fetched
+# idempotency: already-valid file is not re-fetched
 # ---------------------------------------------------------------------------
 
 
 def test_fetch_skips_existing_valid_file(tmp_path):
-    """I3: if the target file already exists and is valid, no fetch is performed."""
+    """If the target file already exists and is valid, no fetch is performed."""
     import numpy as np
     import rasterio
     from rasterio.transform import from_origin
@@ -618,7 +618,7 @@ def test_fetch_skips_existing_valid_file(tmp_path):
 
 
 def test_fetch_skips_existing_no_validate(tmp_path):
-    """I3: validate=False skips if file exists (above floor size)."""
+    """With validate=False, an existing file above the floor size is skipped."""
     from databricks.labs.gbx.stac._download import fetch_validate_publish
 
     out_dir = tmp_path / "out"
@@ -653,12 +653,12 @@ def test_fetch_skips_existing_no_validate(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# I5 — path traversal sanitization
+# path traversal sanitization
 # ---------------------------------------------------------------------------
 
 
 def test_filename_sanitized_against_path_traversal(tmp_path):
-    """I5: item_id containing ../ does not escape out_dir."""
+    """An item_id containing ../ does not escape out_dir."""
     import numpy as np
     import rasterio
     from rasterio.transform import from_origin
@@ -709,12 +709,12 @@ def test_filename_sanitized_against_path_traversal(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# M4 — warn on swallowed search exceptions
+# warn on swallowed search exceptions
 # ---------------------------------------------------------------------------
 
 
 def test_search_one_warns_on_exception():
-    """M4: search_one emits a warning when the catalog raises."""
+    """search_one emits a warning when the catalog raises."""
     import warnings
 
     from databricks.labs.gbx.stac._search import search_one

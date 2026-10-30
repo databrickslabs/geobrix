@@ -320,11 +320,19 @@ selected position of those dimensions, so one point's time series is its rows.
   testFile="docs/tests/python/readers/test_zarr_read_examples.py"
   outputConstant="SAMPLE_PROJECTED_output" />
 
-Up to 100,000 points are collected to the driver. If they lie in at most four chunks and the answer
-is small, the driver reads them and no Spark job runs; otherwise Spark reads each chunk once for all
-its points. **Above 100,000 points `points_df` is evaluated more than once** (up to about three
-times, because the chunks to read are planned from a first pass over the geometry column), so it must
-be deterministic. Write it to a table first, rather than sampling a random or time-dependent query.
+Up to 100,000 points are collected to the driver. If they lie in at most four chunks and the answer is
+small, the driver reads them and no Spark job runs; otherwise Spark reads each chunk once for all its
+points. Within a chunk, scattered points are read cell by cell. When a chunk's points need a tenth or
+more of the cells of the box around them, and the box fits in half of a task's decoded-data budget
+(32 MiB on Serverless and 768 MiB on Databricks Runtime 19 in these measurements), the box is read once
+and every point takes its cells from it; a chunk whose box is larger is read cell by cell. On the ERA5 store
+of the [Zarr Stores performance figures](../formats/zarr#performance) (one 90 x 90 chunk of 2-metre
+temperature, all 744 hours) on Serverless, points on a quarter of the chunk's cells took 0.44 s this way
+against 1.7 s cell by cell, and points on every cell 0.55 s against 6.7 s; at one point in 81 cells
+(100 points), reading cell by cell was the faster (0.26 s against 0.40 s).
+**Above 100,000 points `points_df` is evaluated more than once** (up to about three times, because
+the chunks to read are planned from a first pass over the geometry column), so it must be
+deterministic. Write it to a table first, rather than sampling a random or time-dependent query.
 
 ## Access
 
@@ -365,6 +373,9 @@ GeoBrix error name and the `Fix:` line:
 
 ## Next Steps
 
+- [Weather Features with Zarr](../notebooks/zarr-weather-features) — an end-to-end example notebook
+  that registers a weather cube in place, samples it into a features table, writes a derived
+  variable back as a new version, maps it as raster tiles, and tags the version for training.
 - [Zarr Writer](../writers/zarr) — create, append, update and overwrite a store transactionally.
 - [Zarr Function Reference](../api/zarr-functions) — every function, parameter and error.
 - [Zarr Stores](../formats/zarr) — the transactional model: versions, tags, retention, file modes.

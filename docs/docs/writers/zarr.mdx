@@ -37,7 +37,7 @@ same sample cube as the other Zarr pages.
 | `"overwrite"` | Replaces the named variables | The variables to replace. Chunks the input does not cover read as the fill value afterwards |
 
 `root`, `chunks`, `shards`, `codecs`, `file_mode` and `retain` belong to `mode="create"`: in the other
-modes they raise `ValueError` with a `Fix:`. A write into a registered store needs it to be registered
+modes they raise `ValueError` with a `Fix:` (a later write may repeat the store's own `file_mode`). A write into a registered store needs it to be registered
 with `writable=True`; it goes to the store's overlay root, in the base arrays' own codecs and key
 encoding, and the store itself is never written (see [Registered stores](#registered-stores-and-publish)).
 
@@ -103,8 +103,9 @@ The layout is in the array's document, which is a row of the manifest table:
 `create` needs `root` not to exist, or to be empty. It gets an ownership ledger (the small Delta table
 `_gbx_owner`, which decides which table owns the root even when several claim it at once) and the
 `_gbx_store.json` marker; see [One owner per root](../formats/zarr#one-owner-per-root). `file_mode`
-(`"auto"`, `"fuse"` or `"external"`; `"managed"` is not available in this release) and `retain` (how
-long superseded versions stay readable, `"7 days"` by default) are the store's from then on; see
+(`"fuse"` by default; `"auto"` or `"external"` keep `FILE` references; `"managed"` is not
+available in this release) and `retain` (how long superseded versions stay readable,
+`"7 days"` by default) are the store's from then on; see
 [File modes](../formats/zarr#file-modes). A store in `external` mode keeps `FILE` values in its manifest,
 so it can be written, read and maintained only on compute that supports them; other compute refuses
 before it writes anything.
@@ -150,9 +151,10 @@ An `overwrite` replaces the variables it names:
 - **It is required to create a variable the store lacks.** A new variable is created on the store's
   dimensions, with the layout and codecs of a new array and the attributes of its first block. Without
   `variables=` the writer only knows the arrays the store already has, and refuses a block of any other.
-- **It narrows the work.** Without it every decodable array of the store is a candidate, and the write
-  shuffles the manifest rows of all of them against the input, even when the input holds one variable.
-  On a large store always name the variables you write.
+- **It narrows the work.** Without it every decodable array of the store is a candidate: the write reads
+  the manifest rows of all of them and moves them through its shuffle, and only then keeps the rows of
+  the chunks its input touches. Naming the variables leaves the other arrays' rows out from the start,
+  so on a large store name the variables you write.
 
 <CodeFromTest code={zarrWrite} language="python" functionName="add_a_variable"
   source="docs/tests/python/writers/zarr_write_examples.py"
@@ -172,6 +174,25 @@ and the table is read once for the data.
 <CodeFromTest code={zarrWrite} language="python" functionName="stage_the_blocks_first"
   source="docs/tests/python/writers/zarr_write_examples.py"
   testFile="docs/tests/python/writers/test_zarr_write_examples.py" />
+
+### Blocks on the store's grid
+
+A `create` writes blocks that each cover whole chunks (whole shards, in a sharded array) where they are
+made: the task that holds a block encodes it and writes it to a data file of its own, and nothing is
+shuffled. This is decided for the whole create, every variable at once: if any block cuts across a chunk
+or a shard, or two blocks overlap, all of them are cut into pieces, regrouped by chunk through a shuffle
+and assembled. The store is the same either way: the same documents, the same chunk rows, the same bytes
+in every chunk; only the data file a chunk sits in differs.
+
+To write the faster way, start every block on a chunk boundary (a shard boundary, for a sharded array)
+and end it on one or at the edge of the array. The blocks are written by the tasks that hold them, so an
+input that keeps its blocks in few partitions (a single one, say) is first spread out by block, and many
+tasks write at once. A block of several shards writes their chunks in its own order, so one shard's
+chunks do not sit side by side in the data file and a read of that shard takes more, smaller reads; a
+block of one shard keeps them together. A 1 GB create of blocks of one shard each wrote its data
+files at a median 119 MB/s through the Volume and 80 MB/s direct to storage on Databricks Runtime 19
+(direct runs from 39 to 139 MB/s), and at 122 MB/s on Serverless; see
+[Zarr Stores](../formats/zarr#performance).
 
 An `xarray.Dataset` and a DataFrame of tiles are planned on the driver from what they hold, so neither
 has a pass of this kind.
@@ -364,6 +385,9 @@ message; a failed write commits nothing. The full list, with the cause of each, 
 
 ## Next Steps
 
+- [Weather Features with Zarr](../notebooks/zarr-weather-features) — an end-to-end example notebook
+  that registers a weather cube in place, samples it into a features table, writes a derived
+  variable back as a new version, maps it as raster tiles, and tags the version for training.
 - [Zarr Reader](../readers/zarr) — read a store as blocks, a table or tiles.
 - [Zarr Function Reference](../api/zarr-functions) — every function, parameter and error.
 - [Zarr Stores](../formats/zarr) — versions, tags, retention and file modes.

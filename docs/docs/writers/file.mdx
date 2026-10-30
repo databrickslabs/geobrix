@@ -29,7 +29,7 @@ open_for_write(
     spark,
     df,                        # DataFrame with a 'tile' struct or pre-flattened columns
     "main.geo.raster_tiles",   # fully-qualified Delta table name
-    file_mode="auto",          # "auto" | "managed" | "external" | "fuse"
+    file_mode="fuse",          # "fuse" (default) | "auto" | "managed" | "external"
     filespace="/Volumes/main/geo/store",  # required for managed mode
     layout="order",            # "order" | "cluster" | "plain"
     overwrite=False,
@@ -41,12 +41,12 @@ open_for_write(
 
 | Value | Condition | What happens |
 |---|---|---|
+| `"fuse"` | default | Plain Delta write regardless of FILE capability; the table reads on every compute |
 | `"auto"` | FILE available + `filespace` given | → `"managed"`: `create_file` writes a MANAGED FILE column |
 | `"auto"` | FILE available, no `filespace` | → `"external"`: `try_to_file` writes an EXTERNAL FILE column |
 | `"auto"` | No FILE (fuse tier, DBR < 13) | → `"fuse"`: plain Delta, path STRING / raster BINARY |
 | `"managed"` | explicit, `filespace` required | `create_file` — FILE lifecycle managed by the table |
 | `"external"` | explicit | `try_to_file` — FILE reference pointing to an existing Volume path |
-| `"fuse"` | explicit | Plain Delta write regardless of FILE capability |
 
 Requesting `"managed"` without a `filespace` raises `ValueError` immediately. Requesting
 `"managed"` or `"external"` on a fuse-only runtime raises a clear error with upgrade steps.

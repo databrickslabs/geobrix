@@ -3565,6 +3565,50 @@ if _vrows:
     _show_md(f"vector reader+writer benchmark -- {RUN_ID}", _md)
 """
 
+# Zarr benchmark (light tier only): the cases of spec.ZARR_CASES (R1-R3 reads against
+# one GeoTIFF per hour, W1-W2 writes) and two probes, through bench.zarr_bench. The first
+# line is filled from the launcher's --zarr-* options; the rest is the cell as it runs.
+_CELL_ZARR_BODY = """
+from databricks.labs.gbx.bench import readers as _rd
+from databricks.labs.gbx.bench import zarr_bench as _zb
+if not LIGHTWEIGHT:
+    print("ZARR BENCH SKIPPED: Zarr is light-tier only.", flush=True)
+else:
+    _zcfg = _zb.ZarrBenchConfig(**_ZARR)
+    os.makedirs(_zcfg.scratch, exist_ok=True)
+    if any(c.startswith("R") for c in _zcfg.cases):
+        # one GeoTIFF per hour of the store's t2m; skipped when its manifest exists
+        _rd.stage_zarr_cog_corpus(spark, _zcfg.store, _zcfg.cog_dir)
+    def _zsink(rows):
+        _sink(rows)
+        lw.extend(rows)
+    try:
+        _zrows = _zb.run_zarr_cases(spark, _zcfg, sink=_zsink)
+    finally:
+        import shutil as _zsh
+        _zsh.rmtree(_zcfg.scratch, ignore_errors=True)  # the legs' own scratch, emptied by them
+    _show_md(f"zarr benchmark -- {RUN_ID}", results.summarize(_zrows))
+"""
+
+
+def _zarr_cell(cfg: dict) -> str:
+    """The Zarr cell, its settings taken from the launcher's ``zarr_*`` options."""
+    settings = dict(
+        store=cfg["zarr_store"],
+        cog_dir=cfg["zarr_cog_dir"],
+        scratch=cfg["zarr_scratch"],
+        schema=cfg["zarr_schema"],
+        run_id=cfg["run_id"],
+        serverless=bool(cfg.get("serverless")),
+        reps=int(cfg.get("zarr_reps", 3)),
+        cases=tuple(c for c in str(cfg.get("zarr_cases", "")).split(",") if c),
+    )
+    return (
+        "# Zarr benchmark (light tier only): R1-R3 reads, W1-W2 writes, two probes\n"
+        f"_ZARR = {settings!r}" + _CELL_ZARR_BODY
+    )
+
+
 _EPILOGUE = """# Wrap-up: durable jsonl shards + per-tier summaries + heavy-vs-light comparison.
 HEARTBEAT.stop("done")
 all_rows = lw + hw
@@ -3620,6 +3664,33 @@ else:
 _EXIT = """# Emit the status-led JSON exit payload (separate cell -- see _EPILOGUE note).
 dbutils.notebook.exit(json.dumps(result))
 """
+
+
+def install_extras(cfg: dict) -> list:
+    """The geobrix extras a run installs after the env wheel.
+
+    ``cfg["extras"]`` (comma-separated) when given; else ``zarr`` (the env6 wheel's Zarr extra)
+    for a run with the Zarr cell; else none. The env wheels have no ``light_*`` extra.
+    """
+    extras = str(cfg.get("extras") or "").strip()
+    if not extras and (cfg.get("benchmark_zarr") or cfg.get("zarr_only")):
+        extras = "zarr"
+    return [e.strip() for e in extras.split(",") if e.strip()]
+
+
+def _install_extras_suffix(cfg: dict) -> str:
+    """``[<extras>]`` to follow ``geobrix`` in the install cell's requirement, or nothing."""
+    extras = install_extras(cfg)
+    return f"[{','.join(extras)}]" if extras else ""
+
+
+# A Serverless job whose environment installs the wheel and its extras (cfg["env_deps"]):
+# a pip install from the notebook would reach the driver only, not the executors.
+_ENV_DEPS_CELL = (
+    "import importlib.metadata as _md\n"
+    "print('geobrix', _md.version('geobrix'), 'and its extras: installed by the job "
+    "environment', flush=True)\n"
+)
 
 
 def build_bench_notebook(cfg: dict) -> dict:
@@ -3777,6 +3848,8 @@ def build_bench_notebook(cfg: dict) -> dict:
     vector_table_read_only = bool(cfg.get("vector_table_read_only"))
     benchmark_raster_decode_read = bool(cfg.get("raster_decode_read"))
     raster_decode_read_only = bool(cfg.get("raster_decode_read_only"))
+    benchmark_zarr = bool(cfg.get("benchmark_zarr"))
+    zarr_only = bool(cfg.get("zarr_only"))
 
     # Setup is one cell; then ONE cell per selected (tier x mode) section so each renders
     # its table + summary the moment it finishes; then the wrap-up cell. Order: pure-core
@@ -3786,7 +3859,9 @@ def build_bench_notebook(cfg: dict) -> dict:
     # subprocess so we control the restart precisely. Classic: the single %pip cell is
     # preferred (ONE kernel restart, no manual dbutils.library.restartPython() needed, and
     # avoids the triple-restart failure on DBR 19.x-snapshot).
-    if cfg.get("serverless"):
+    if cfg.get("serverless") and cfg.get("env_deps"):
+        _install_cell_src = _ENV_DEPS_CELL
+    elif cfg.get("serverless"):
         _install_cell_src = (
             "import subprocess, sys\n"
             "WHL = {wheel!r}\n"
@@ -3801,7 +3876,7 @@ def build_bench_notebook(cfg: dict) -> dict:
             "                       + r.stdout[-1200:] + ' || ' + r.stderr[-1200:])\n"
             "r2 = subprocess.run(\n"
             "    [sys.executable, '-m', 'pip', 'install', '--quiet',\n"
-            "     'geobrix @ file://' + WHL, 'markdown'],\n"
+            "     'geobrix{extras} @ file://' + WHL, 'markdown'],\n"
             "    capture_output=True, text=True,\n"
             ")\n"
             "print('deps install rc:', r2.returncode, flush=True)\n"
@@ -3810,7 +3885,7 @@ def build_bench_notebook(cfg: dict) -> dict:
             "                       + r2.stdout[-1200:] + ' || ' + r2.stderr[-1200:])\n"
             "print('installs done; restarting Python', flush=True)\n"
             "dbutils.library.restartPython()\n"
-        ).format(wheel=cfg["wheel"])
+        ).format(wheel=cfg["wheel"], extras=_install_extras_suffix(cfg))
     else:
         # Classic cluster: two-step subprocess install (same shape as serverless), one restart.
         # WHY NOT a single `%pip install --force-reinstall "geobrix[..] @ file://<whl>"`:
@@ -3839,7 +3914,7 @@ def build_bench_notebook(cfg: dict) -> dict:
             "                       + r.stdout[-1200:] + ' || ' + r.stderr[-1200:])\n"
             "r2 = subprocess.run(\n"
             "    [sys.executable, '-m', 'pip', 'install', '--quiet',\n"
-            "     'geobrix @ file://' + WHL, 'markdown'],\n"
+            "     'geobrix{extras} @ file://' + WHL, 'markdown'],\n"
             "    capture_output=True, text=True,\n"
             ")\n"
             "print('deps install rc:', r2.returncode, flush=True)\n"
@@ -3848,7 +3923,7 @@ def build_bench_notebook(cfg: dict) -> dict:
             "                       + r2.stdout[-1200:] + ' || ' + r2.stderr[-1200:])\n"
             "print('installs done; restarting Python', flush=True)\n"
             "dbutils.library.restartPython()\n"
-        ).format(wheel=cfg["wheel"])
+        ).format(wheel=cfg["wheel"], extras=_install_extras_suffix(cfg))
     cells = [
         # Ensure BOTH fresh geobrix code AND its dependency set every run. The wheel is the env
         # wheel for the compute's runtime (+env5: DBR 17.3 / 18, env 5; +env6: DBR 19, env 6): its
@@ -3893,6 +3968,7 @@ def build_bench_notebook(cfg: dict) -> dict:
             layout_scan_only,
             vector_table_read_only,
             raster_decode_read_only,
+            zarr_only,
         )
     )
     if not _any_only:
@@ -3939,6 +4015,8 @@ def build_bench_notebook(cfg: dict) -> dict:
             [_CELL_RASTER_DECODE_READ],
         ),
     ]
+    if benchmark_zarr or zarr_only:
+        _bench_cells.append((True, [_zarr_cell(cfg)]))
     for _enabled, _cell_srcs in _bench_cells:
         if _enabled:
             for _src in _cell_srcs:

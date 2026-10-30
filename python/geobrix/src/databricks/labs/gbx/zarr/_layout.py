@@ -28,6 +28,7 @@ __all__ = [
     "SHARD_CAP_BYTES",
     "SHARD_MAX_CHUNKS",
     "PRESETS",
+    "check_shard",
     "chunk_layout",
     "coordinate_chunks",
     "shard_layout",
@@ -36,7 +37,9 @@ __all__ = [
 TARGET_CHUNK_BYTES = 4 << 20
 SHARD_CAP_BYTES = 128 << 20
 # A shard holds at most this many inner chunks: its (virtual) index, 16 bytes per chunk,
-# stays near 64 KiB, which every read of the shard fetches or builds.
+# stays near 64 KiB, which every read of the shard fetches or builds. Measured: reading one
+# inner chunk from a shard's chunk rows costs about 3 us per inner chunk of the shard,
+# 13 ms at 4,096 (a third of one Volume object open) and 0.3 s at 93,312.
 SHARD_MAX_CHUNKS = 4096
 PRESETS = ("maps", "series", "balanced")
 _SERIES_TILE = 32
@@ -116,6 +119,18 @@ def shard_layout(
         by_chunks = max(1, SHARD_MAX_CHUNKS // math.prod(count))
         count[lead] = max(1, min(SHARD_CAP_BYTES // max(1, slab), by_chunks))
     return tuple(c * k for c, k in zip(chunks, count))
+
+
+def check_shard(chunks, shards) -> None:
+    """Refuse a shard that holds more than ``SHARD_MAX_CHUNKS`` inner chunks."""
+    n = math.prod(int(s) // int(c) for s, c in zip(shards, chunks))
+    if n > SHARD_MAX_CHUNKS:
+        raise ValueError(
+            f"a shard of {tuple(shards)} holds {n} inner chunks of {tuple(chunks)}, "
+            f"more than the {SHARD_MAX_CHUNKS} a shard may hold (every read of a shard "
+            "fetches or builds an index of 16 bytes per inner chunk). "
+            "Fix: pass smaller shards= sizes, or larger chunks=."
+        )
 
 
 def chunk_layout(

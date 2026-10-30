@@ -4300,6 +4300,116 @@ def select(
     return out
 
 
+# --- Zarr (light tier only) -----------------------------------------------------------
+# The Zarr API is Python only (no gbx_* SQL binding), so its cases live beside REGISTRY and
+# the function-coverage check is unchanged. ``sql_name`` holds the Python name. Each case is
+# timed against a baseline on the same compute; the bench notebook's Zarr cell runs them
+# (gbx:bench:cluster --zarr-only) through ``bench.zarr_bench``. Corpus: the ERA5 January
+# 2023 store (744 h x 721 x 1440, v3 sharded zstd) and its copy as one tiled GeoTIFF per hour.
+_ZARR_SRC = "python/geobrix/src/databricks/labs/gbx/zarr/"
+_ZARR_READ = (_ZARR_SRC + "_read.py", _ZARR_SRC + "_engine.py", _ZARR_SRC + "_plan.py")
+_ZARR_WRITE = (
+    _ZARR_SRC + "_write.py",
+    _ZARR_SRC + "_write_tasks.py",
+    _ZARR_SRC + "_pack.py",
+    _ZARR_SRC + "_manifest.py",
+)
+_ZARR_ONLY = ("spark-path",)
+
+ZARR_CASES = {
+    "gbx_zarr_read": FnSpec(
+        "gbx_zarr_read",
+        "gbx_zarr_read",
+        "zarr",
+        _ZARR_ONLY,
+        {
+            "case": "R1",
+            "workload": "one time step, full globe, t2m",
+            "time_index": 360,
+            "baseline": "raster_gbx reading the one GeoTIFF of that hour",
+        },
+        sources=_ZARR_READ,
+    ),
+    "gbx_zarr_sample": FnSpec(
+        "gbx_zarr_sample",
+        "gbx_zarr_sample",
+        "zarr",
+        _ZARR_ONLY,
+        {
+            "case": "R2",
+            "workload": "1000 points x 744 hours, t2m",
+            "points": 1000,
+            "seed": 22,
+            "baseline": "rst_sample over the hourly GeoTIFFs crossed with the points",
+        },
+        sources=(_ZARR_SRC + "_sample.py",) + _ZARR_READ,
+    ),
+    "gbx_zarr_read_box": FnSpec(
+        "gbx_zarr_read_box",
+        "gbx_zarr_read",
+        "zarr",
+        _ZARR_ONLY,
+        {
+            "case": "R3",
+            "workload": "a 30-day box over Europe, t2m",
+            "hours": 720,
+            "latitude": (72.0, 35.0),
+            "longitude": (350.0, 40.0),  # crosses the store's 0/360 seam
+            "baseline": "raster_gbx window reads of the 720 GeoTIFFs",
+        },
+        sources=_ZARR_READ,
+        variant_of="gbx_zarr_read",
+    ),
+    "gbx_zarr_write": FnSpec(
+        "gbx_zarr_write",
+        "gbx_zarr_write",
+        "zarr",
+        _ZARR_ONLY,
+        {
+            "case": "W1",
+            "workload": "create a 1 GB cube: float32 (240, 721, 1440), 10 tasks",
+            "shape": (240, 721, 1440),
+            "chunks": {"time": 24, "latitude": 181, "longitude": 360},
+            "shards": {"time": 24, "latitude": 724, "longitude": 1440},
+            "baseline": "xarray.to_zarr region writes of the same cube to the same path",
+            # the prototype's throughput on the same compute and data (design 8.5, MEASURED)
+            "gate_mb_s": {
+                "dbr19_fuse": 109.0,
+                "dbr19_direct": 143.0,
+                "serverless": 137.0,
+            },
+            "gate_tolerance": 0.25,
+            # the gate restated: the files phase is held to the floors above;
+            # the fixed cost of a create (ownership claim + CREATE TABLE + commit) to this
+            "fixed_cost_s": 10.0,
+        },
+        sources=_ZARR_WRITE,
+    ),
+    "gbx_zarr_write_append": FnSpec(
+        "gbx_zarr_write_append",
+        "gbx_zarr_write",
+        "zarr",
+        _ZARR_ONLY,
+        {
+            "case": "W2",
+            "workload": "8 appenders of one day each to a one-day store",
+            "writers": 8,
+            "baseline": "the same 8 appends one after another",
+        },
+        sources=_ZARR_WRITE,
+        variant_of="gbx_zarr_write",
+    ),
+}
+
+
+def zarr_case(case: str) -> FnSpec:
+    """The Zarr case with ``args["case"] == case`` (``"R1"`` ... ``"W2"``)."""
+    for c in ZARR_CASES.values():
+        if c.args["case"] == case:
+            return c
+    raise KeyError(f"no Zarr bench case {case!r}; cases: R1, R2, R3, W1, W2")
+
+
 def benched_function(name: str) -> str:
     """The registered function a bench case times: its ``variant_of``, else ``name``."""
     fs = REGISTRY.get(name)

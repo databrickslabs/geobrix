@@ -8,9 +8,11 @@ Real row-level concurrency is exercised on Databricks.
 
 import hashlib
 import json
+import types
 import uuid
 
 import numpy as np
+import pyarrow.compute as pa_compute
 import pytest
 
 zarr = pytest.importorskip("zarr")
@@ -193,6 +195,37 @@ def test_create_refuses_an_existing_table_and_a_missing_root(
         )
 
 
+def test_a_later_write_takes_no_file_mode_but_the_stores_own(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """``file_mode`` belongs to ``create`` (None there means "fuse"). A later write follows
+    the store's recorded mode: given nothing or that mode it is accepted, given any other
+    (``"auto"`` included) it raises with a Fix, and nothing is committed."""
+    table, _, _ = _create(spark_delta, drop, tmp_path)  # file_mode None: fuse
+    patch = np.full((12, 5, 6), 3.0, dtype="float32")
+    before = spark_delta.sql(f"DESCRIBE HISTORY {table} LIMIT 1").first()["version"]
+    for other in ("auto", "external"):
+        with pytest.raises(ValueError, match="file_mode.*'fuse'") as e:
+            gbx_zarr_write(
+                _blocks(spark_delta, ("t2m", (0, 0, 0), patch)),
+                table,
+                mode="update",
+                file_mode=other,
+            )
+        assert "Fix:" in str(e.value)
+    assert (
+        spark_delta.sql(f"DESCRIBE HISTORY {table} LIMIT 1").first()["version"]
+        == before
+    )
+    for given in (None, "fuse"):
+        gbx_zarr_write(
+            _blocks(spark_delta, ("t2m", (0, 0, 0), patch)),
+            table,
+            mode="update",
+            file_mode=given,
+        )
+
+
 def test_create_stores_no_row_for_a_chunk_of_fill(
     spark_delta, drop, tmp_path, no_hooks
 ):
@@ -329,6 +362,102 @@ def test_overwrite_replaces_variable(spark_delta, drop, tmp_path, no_hooks):
         "AND tag IS NULL"
     ).collect()
     assert [r["write_id"] for r in live] == [wid]  # no row of the first write is left
+
+
+@pytest.mark.parametrize("mode", ["update", "overwrite"])
+def test_a_one_chunk_write_reads_only_its_own_group_of_the_manifest(
+    spark_delta, drop, tmp_path, no_hooks, mode
+):
+    """A one-chunk update or overwrite from blocks, with ``variables=None``: the assemble
+    stage gets the base rows of that chunk's group only, not the manifest of every array
+    it might have written, and the driver collects no delete row of an array the write
+    does not replace. The overwrite still replaces the whole of the variable it writes.
+    """
+    ds = _dataset()
+    table, _, _ = _create(spark_delta, drop, tmp_path, ds, shards=False)
+    fed, collected = {}, {}
+    frame_class = type(spark_delta.range(1))  # the session's DataFrame implementation
+    real_map, real_rows = frame_class.mapInArrow, _write._commit_data_rows
+
+    def counting_map(df, func, schema, *a, **k):
+        if schema == _write.ROWS_DDL:  # the assemble stage's input
+            fed.update(
+                {r["kind"]: r["count"] for r in df.groupBy("kind").count().collect()}
+            )
+        return real_map(df, func, schema, *a, **k)
+
+    def recording_rows(plan, rows, written):
+        collected["deletes"] = (
+            rows.filter(pa_compute.equal(rows.column("rtype"), "delete"))
+            .column("array")
+            .to_pylist()
+        )
+        return real_rows(plan, rows, written)
+
+    no_hooks.setattr(frame_class, "mapInArrow", counting_map)
+    no_hooks.setattr(_write, "_commit_data_rows", recording_rows)
+    one = np.full((12, 5, 6), 7.0, dtype="float32")  # chunk c/0/0/0 of t2m, whole
+    gbx_zarr_write(_blocks(spark_delta, ("t2m", (0, 0, 0), one)), table, mode=mode)
+
+    assert fed.get("base") == 1  # the chunk's own row; t2m and u10 have 16 rows each
+    assert "u10" not in collected["deletes"]
+    got = _read(spark_delta, table, "t2m")
+    assert (got[0:12, 0:5, 0:6] == 7.0).all()
+    if mode == "update":
+        want = ds.t2m.values.copy()
+        want[0:12, 0:5, 0:6] = 7.0
+        np.testing.assert_array_equal(got, want)
+    else:  # the other 15 chunks of t2m are gone: the variable was replaced
+        rest = got.copy()
+        rest[0:12, 0:5, 0:6] = np.nan
+        assert np.isnan(rest).all()
+        assert sorted(collected["deletes"]) == ["t2m"] * 15
+    np.testing.assert_array_equal(_read(spark_delta, table, "u10"), ds.u10.values)
+
+
+@pytest.mark.parametrize("whole", [False, True])
+def test_an_overwrite_collects_the_rest_of_its_variable_as_columns(
+    spark_delta, drop, tmp_path, no_hooks, whole
+):
+    """The rows an overwrite deletes outside the groups its input touched (here up to 1,439
+    of one variable) reach the driver as Arrow columns, never as a Python dict per row; an
+    overwrite of the whole variable touches every group, so nothing is read or uploaded.
+    """
+    ds = _dataset(hours=12)
+    one = {"time": 1, "latitude": 1, "longitude": 1}
+    table, _, _ = _create(spark_delta, drop, tmp_path, ds, chunks=one, shards=False)
+    uploads, collected = [], {}
+    real_upload, real_rows = _write.to_spark_df, _write._commit_data_rows
+
+    def per_row_dict(base):
+        raise AssertionError("a delete row was built as a Python dict")
+
+    def recording_rows(plan, rows, written):
+        collected["deletes"] = (
+            rows.filter(pa_compute.equal(rows.column("rtype"), "delete"))
+            .column("array")
+            .to_pylist()
+        )
+        return real_rows(plan, rows, written)
+
+    no_hooks.setattr(_write, "delete_row", per_row_dict, raising=False)
+    no_hooks.setattr(
+        _write, "to_spark_df", lambda *a, **k: uploads.append(1) or real_upload(*a, **k)
+    )
+    no_hooks.setattr(_write, "_commit_data_rows", recording_rows)
+    new = np.full((12, 10, 12) if whole else (1, 1, 1), 5.0, dtype="float32")
+    gbx_zarr_write(
+        _blocks(spark_delta, ("t2m", (0, 0, 0), new)), table, mode="overwrite"
+    )
+
+    got = _read(spark_delta, table, "t2m")
+    if whole:
+        assert (got == 5.0).all()
+        assert collected["deletes"] == [] and uploads == []
+    else:
+        assert got[0, 0, 0] == 5.0 and np.isnan(got.ravel()[1:]).all()
+        assert collected["deletes"] == ["t2m"] * 1439 and len(uploads) == 1
+    np.testing.assert_array_equal(_read(spark_delta, table, "u10"), ds.u10.values)
 
 
 # --- idempotency and read-only stores ------------------------------------------------------
@@ -705,7 +834,7 @@ def test_a_new_variable_is_created_on_the_store_dimensions(
     np.testing.assert_array_equal(_read(spark_delta, table, "t2m"), ds.t2m.values)
 
 
-# --- fix round 1: the reviewer's probes as tests ----------------------------------------------
+# --- cases a review found, kept as tests ----------------------------------------------
 
 from databricks.labs.gbx.zarr import _manifest as M  # noqa: E402
 from databricks.labs.gbx.zarr.errors import (  # noqa: E402
@@ -1065,7 +1194,9 @@ def test_p9_a_create_whose_commit_landed_keeps_its_marker(
     spark_delta, drop, tmp_path, no_hooks, how
 ):
     """I7: the lookup after the MERGE fails (a transient error once, or every time). The
-    commit is in, so the marker must stay and the store stays writable."""
+    commit is in, so the marker must stay and the store stays writable. A new store's
+    commit looks its write_id up only after the MERGE, so every lookup is one of those.
+    """
     root, table = tmp_path / f"r9{how}", _table(f"p9{how}")
     drop(table)
     real, calls = M.find_commit_version, []
@@ -1074,7 +1205,7 @@ def test_p9_a_create_whose_commit_landed_keeps_its_marker(
         if table_.startswith("delta."):  # the root's ownership ledger, not the manifest
             return real(spark_, table_, write_id, since=since)
         calls.append(1)
-        if len(calls) >= 2 and (how == "always" or len(calls) == 2):
+        if how == "always" or len(calls) == 1:
             raise RuntimeError("transient lookup failure")
         return real(spark_, table_, write_id, since=since)
 
@@ -1816,3 +1947,679 @@ def test_m14_a_new_nested_variable_gets_its_parent_group(
     np.testing.assert_array_equal(
         _read(spark_delta, table, "grp/sub/x")[:12, :5, :6], ones
     )
+
+
+# --- an aligned create: packed where its blocks are made ---------------------------------
+
+ALIGN_SHAPE = (24, 10, 12)
+# (chunks, shards, cut): the blocks are cut every ``cut`` cells along each dimension
+ALIGNED = {
+    "one-chunk-blocks": (
+        {"time": 12, "latitude": 5, "longitude": 6},
+        False,
+        (12, 5, 6),
+    ),
+    "four-chunk-blocks": (
+        {"time": 12, "latitude": 5, "longitude": 6},
+        False,
+        (12, 10, 12),
+    ),
+    "edge-chunks": ({"time": 12, "latitude": 4, "longitude": 5}, False, (12, 4, 5)),
+    "one-shard-blocks": (
+        {"time": 12, "latitude": 5, "longitude": 6},
+        {"time": 12, "latitude": 10, "longitude": 12},
+        (12, 10, 12),
+    ),
+    # latitude 10 = a shard of 8 and an edge shard of 2 (one partial chunk of 4)
+    "edge-shards": (
+        {"time": 12, "latitude": 4, "longitude": 6},
+        {"time": 12, "latitude": 8, "longitude": 12},
+        (12, 8, 12),
+    ),
+}
+MISALIGNED = {
+    "half-chunks": ({"time": 12, "latitude": 5, "longitude": 6}, False, (6, 5, 6)),
+    "chunks-of-a-shard": (
+        {"time": 12, "latitude": 5, "longitude": 6},
+        {"time": 12, "latitude": 10, "longitude": 12},
+        (12, 5, 6),
+    ),
+}
+
+
+def _cube_values():
+    values = np.arange(np.prod(ALIGN_SHAPE), dtype="float32").reshape(ALIGN_SHAPE)
+    values[0:12, 0:5, 0:6] = np.nan  # one chunk all fill
+    return values
+
+
+def _cut_blocks(spark, cut, values):
+    """``values`` cut every ``cut`` cells, with latitude and longitude labels."""
+    blocks = [
+        ("t2m", (t, y, x), values[t : t + cut[0], y : y + cut[1], x : x + cut[2]])
+        for t in range(0, ALIGN_SHAPE[0], cut[0])
+        for y in range(0, ALIGN_SHAPE[1], cut[1])
+        for x in range(0, ALIGN_SHAPE[2], cut[2])
+    ]
+    blocks += [
+        ("latitude", (0,), np.linspace(45.0, 36.0, ALIGN_SHAPE[1])),
+        ("longitude", (0,), np.arange(ALIGN_SHAPE[2]) * 1.0),
+    ]
+    return _blocks(spark, *blocks)
+
+
+def _refuse(stage):
+    def refused(*a, **k):
+        raise AssertionError(f"{stage} ran")
+
+    return refused
+
+
+def _create_cut(spark, drop, tmp_path, label, chunks, shards, cut, values=None):
+    table, root = _table(label), tmp_path / f"root_{label}"
+    drop(table)
+    gbx_zarr_write(
+        _cut_blocks(spark, cut, _cube_values() if values is None else values),
+        table,
+        root=str(root),
+        chunks=chunks,
+        shards=shards,
+        spark=spark,
+    )
+    return table, root
+
+
+@pytest.mark.parametrize("case", sorted(ALIGNED))
+def test_an_aligned_create_is_packed_where_its_blocks_are_made(
+    spark_delta, drop, tmp_path, no_hooks, case
+):
+    """Blocks of whole units (chunks, or the shards of a sharded array) are encoded and
+    packed by the tasks that make them: no explode, no shuffle, no assemble."""
+    chunks, shards, cut = ALIGNED[case]
+    no_hooks.setattr(_write, "explode_function", _refuse("explode"))
+    no_hooks.setattr(_write, "assemble_function", _refuse("assemble"))
+    table, _ = _create_cut(spark_delta, drop, tmp_path, "al", chunks, shards, cut)
+    np.testing.assert_array_equal(_read(spark_delta, table, "t2m"), _cube_values())
+    if shards:  # a shard's chunks share one pack, as after the shuffle
+        packs = spark_delta.sql(
+            f"SELECT shard_key, count(DISTINCT file) AS n FROM {table} WHERE kind = "
+            "'chunk' AND array = 't2m' AND file IS NOT NULL GROUP BY shard_key"
+        ).collect()
+        assert packs and all(r["n"] == 1 for r in packs)
+
+
+@pytest.mark.parametrize("case", sorted(MISALIGNED))
+def test_a_misaligned_create_is_assembled(spark_delta, drop, tmp_path, no_hooks, case):
+    chunks, shards, cut = MISALIGNED[case]
+    no_hooks.setattr(_write, "pack_function", _refuse("pack"))
+    table, _ = _create_cut(spark_delta, drop, tmp_path, "mis", chunks, shards, cut)
+    np.testing.assert_array_equal(_read(spark_delta, table, "t2m"), _cube_values())
+
+
+def test_overlapping_whole_chunk_blocks_are_assembled_and_refused(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """Two blocks of one whole chunk are each aligned, but together they are no aligned
+    input: the assembler sees the chunk twice and refuses it (packed where they were
+    made, both would land as rows of one key)."""
+    table = _table("ov")
+    drop(table)
+    one = np.ones((12, 5, 6), "float32")
+    with pytest.raises(Exception, match="more than once"):  # raised in a task
+        gbx_zarr_write(
+            _blocks(spark_delta, ("t2m", (0, 0, 0), one), ("t2m", (0, 0, 0), one)),
+            table,
+            root=str(tmp_path / "root_ov"),
+            chunks=CHUNKS,
+            shards=False,
+            spark=spark_delta,
+        )
+
+
+def _manifest_of(spark, table, root):
+    """What a store holds, wherever its chunks landed: its documents, and per chunk row
+    its key, shard, length, checksum and bytes (``None`` for a row with no file)."""
+    docs = sorted(
+        (r["kind"], r["array"] or "", r["key"] or "", r["meta"])
+        for r in spark.sql(
+            f"SELECT kind, array, key, meta FROM {table} "
+            "WHERE kind IN ('group', 'array') AND tag IS NULL"
+        ).collect()
+    )
+    chunks = []
+    for r in spark.sql(
+        f"SELECT array, key, shard_key, file, offset, length, checksum, origin, "
+        f"identity FROM {table} WHERE kind = 'chunk' AND tag IS NULL"
+    ).collect():
+        data = None
+        if r["file"] is not None:
+            with open(root / r["file"], "rb") as f:
+                f.seek(r["offset"])
+                data = f.read(r["length"])
+        chunks.append(
+            (
+                r["array"],
+                r["key"],
+                r["shard_key"],
+                r["length"],
+                r["checksum"],
+                r["origin"],
+                r["identity"],
+                data,
+            )
+        )
+    return docs, sorted(chunks, key=lambda c: (c[0], c[1]))
+
+
+@pytest.mark.parametrize("case", sorted(ALIGNED))
+def test_an_aligned_create_matches_the_assembled_store_byte_for_byte(
+    spark_delta, drop, tmp_path, no_hooks, case
+):
+    """The packed and the assembled create of the same blocks hold the same documents and
+    the same chunk rows, every chunk the same bytes; only the pack a chunk sits in (and
+    where in it) may differ."""
+    chunks, shards, cut = ALIGNED[case]
+    packed, packed_root = _create_cut(
+        spark_delta, drop, tmp_path, "pk", chunks, shards, cut
+    )
+    no_hooks.setattr(_write, "_aligned", lambda plan: False)
+    no_hooks.setattr(_write, "pack_function", _refuse("pack"))
+    shuffled, shuffled_root = _create_cut(
+        spark_delta, drop, tmp_path, "sh", chunks, shards, cut
+    )
+    got = _manifest_of(spark_delta, packed, packed_root)
+    want = _manifest_of(spark_delta, shuffled, shuffled_root)
+    assert got[0] == want[0]
+    assert len(got[1]) == len(want[1]) and got[1] == want[1]
+    np.testing.assert_array_equal(
+        _read(spark_delta, packed, "t2m"), _read(spark_delta, shuffled, "t2m")
+    )
+    np.testing.assert_array_equal(
+        _read(spark_delta, packed, "latitude"), _read(spark_delta, shuffled, "latitude")
+    )
+
+
+def test_the_user_a_commit_records_is_asked_once_per_session():
+    class Session:
+        def __init__(self, user):
+            self.user, self.asked = user, 0
+
+        def sql(self, text):
+            assert text == "SELECT current_user()"
+            self.asked += 1
+            return types.SimpleNamespace(first=lambda: [self.user])
+
+    one, two = Session("a@example.com"), Session("b@example.com")
+    assert [_write._current_user(one) for _ in range(3)] == ["a@example.com"] * 3
+    assert _write._current_user(two) == "b@example.com"
+    assert (one.asked, two.asked) == (1, 1)
+
+
+def test_a_new_store_looks_for_its_write_id_once(spark_delta, drop, tmp_path, no_hooks):
+    """The create made its table, so its commit skips the lookup before the MERGE: one
+    lookup in all, the one after it."""
+    real, looks = _write.M.find_commit_version, []
+
+    def counted(*a, **k):
+        looks.append(1)
+        return real(*a, **k)
+
+    no_hooks.setattr(_write.M, "find_commit_version", counted)
+    table, _, version = _create(spark_delta, drop, tmp_path, label="once")
+    assert looks == [1] and version == real(
+        spark_delta, table, _write_id_of(spark_delta, table)
+    )
+
+
+def _write_id_of(spark, table):
+    return spark.sql(
+        f"SELECT key FROM {table} WHERE kind = 'commit' AND tag IS NULL"
+    ).first()["key"]
+
+
+def test_a_commit_writes_its_coordinate_packs_side_by_side(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """Each coordinate a write sets gets a pack of its own, a copy to the store each: the
+    copies run side by side (a dataset with three coordinates: three at once)."""
+    import threading
+    import time as _time
+
+    real, threads, lock = _write.PackWriter.close, set(), threading.Lock()
+
+    def close(self):
+        if "/data/t2m/" not in self.dest_dir and "/data/u10/" not in self.dest_dir:
+            with lock:
+                threads.add(threading.get_ident())
+            _time.sleep(0.05)
+        return real(self)
+
+    no_hooks.setattr(_write.PackWriter, "close", close)
+    table, _, _ = _create(spark_delta, drop, tmp_path, label="coords")
+    assert len(threads) > 1
+    np.testing.assert_array_equal(
+        _read(spark_delta, table, "latitude"), _dataset().latitude.values
+    )
+
+
+def _pack_files(spark, table, name="t2m"):
+    return {
+        r["file"]
+        for r in spark.sql(
+            f"SELECT file FROM {table} WHERE kind = 'chunk' AND array = '{name}' "
+            "AND file IS NOT NULL AND tag IS NULL"
+        ).collect()
+    }
+
+
+def test_an_aligned_create_from_one_partition_still_fans_out(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """Eight whole-chunk blocks in one input partition: the pack stage runs where the blocks
+    are, so they are first repartitioned by block, and more than one task packs them."""
+    no_hooks.setattr(_write, "explode_function", _refuse("explode"))
+    table, root = _table("fan"), tmp_path / "root_fan"
+    drop(table)
+    chunks, shards, cut = ALIGNED["one-chunk-blocks"]
+    gbx_zarr_write(
+        _cut_blocks(spark_delta, cut, _cube_values()).coalesce(1),
+        table,
+        root=str(root),
+        chunks=chunks,
+        shards=shards,
+        spark=spark_delta,
+    )
+    assert len(_pack_files(spark_delta, table)) > 1
+    np.testing.assert_array_equal(_read(spark_delta, table, "t2m"), _cube_values())
+
+
+def test_spread_out_moves_only_an_input_too_narrow_for_its_blocks():
+    class Frame:
+        def __init__(self):
+            self.calls = []
+
+        def repartition(self, *args):
+            self.calls.append(args)
+            return self
+
+    class Session:
+        conf = types.SimpleNamespace(get=lambda key, default=None: "8")
+
+    def plan(blocks, partitions):
+        return types.SimpleNamespace(
+            spread={"blocks": blocks, "partitions": partitions}, table="t"
+        )
+
+    for blocks, parts, want in [
+        (40, 1, (8, "variable", "start")),
+        (40, 4, (8, "variable", "start")),
+        (40, 5, None),
+        (2, 1, (2, "variable", "start")),
+        (8, 8, None),
+    ]:
+        frame = Frame()
+        _write._spread_out(Session(), plan(blocks, parts), frame)
+        assert frame.calls == ([want] if want else []), (blocks, parts)
+    frame = Frame()
+    _write._spread_out(Session(), types.SimpleNamespace(spread=None, table="t"), frame)
+    assert frame.calls == []  # positions from elsewhere (tiles): left as they are
+
+
+def test_the_position_pass_counts_the_partitions_holding_data_blocks():
+    import pyarrow as pa
+
+    seen = pa.table(
+        {
+            "variable": ["t2m", "t2m", "t2m", "time", "u10"],
+            "dims": [
+                ["time", "y"],
+                ["time", "y"],
+                ["time", "y"],
+                ["time"],
+                ["time", "y"],
+            ],
+            _write._PID: [0, 0, 3, 5, 3],
+        }
+    )
+    assert _write._spread_of(seen) == {
+        "blocks": 4,
+        "partitions": 2,
+    }  # "time" is a coordinate
+
+
+def test_overlapping_aligned_blocks_walk_their_coverage_once(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    real, calls = _write._coverage, []
+
+    def counted(*a, **k):
+        calls.append(1)
+        return real(*a, **k)
+
+    no_hooks.setattr(_write, "_coverage", counted)
+    one = np.ones((12, 5, 6), "float32")
+    with pytest.raises(Exception, match="more than once"):
+        gbx_zarr_write(
+            _blocks(spark_delta, ("t2m", (0, 0, 0), one), ("t2m", (0, 0, 0), one)),
+            _table("cov"),
+            root=str(tmp_path / "root_cov"),
+            chunks=CHUNKS,
+            shards=False,
+            spark=spark_delta,
+        )
+    assert calls == [1]  # the alignment check and the shuffle sizing share it
+
+
+def test_an_aligned_create_that_fails_in_its_pack_stage_leaves_nothing(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """A pack task fails after it has written packs: the create raises, its packs are
+    removed, the new table is dropped and the root given back, so the same create runs
+    again at the same root. One task (one partition, kept so) packs block 0 into packs
+    that close at once (1-byte roll), then fails on block 1."""
+    from databricks.labs.gbx.zarr import _register
+
+    chunks, shards, cut = ALIGNED["one-shard-blocks"]
+    table, root = _table("pkf"), tmp_path / "root_pkf"
+    drop(table)
+    sizes = _write._sizes
+    no_hooks.setattr(_write, "_sizes", lambda: {**sizes(), "roll_bytes": 1})
+    no_hooks.setattr(_write, "_spread_out", lambda spark, plan, frame: frame)
+    no_hooks.setattr(_write, "explode_function", _refuse("explode"))
+    no_hooks.setattr(_write, "_FAULT", ("t2m", "c/1/0/0"))
+    with pytest.raises(Exception, match="test fault"):
+        gbx_zarr_write(
+            _cut_blocks(spark_delta, cut, _cube_values()).coalesce(1),
+            table,
+            root=str(root),
+            chunks=chunks,
+            shards=shards,
+            spark=spark_delta,
+        )
+    assert not spark_delta.catalog.tableExists(table)
+    assert not (root / OWNER_MARKER).exists()
+    assert not (root / "data").exists()  # block 0's packs were written, then removed
+    ledger = _register._ledger_table(str(root))
+    assert _register._held(spark_delta, ledger) == []
+    no_hooks.setattr(_write, "_FAULT", None)
+    _create_cut(spark_delta, drop, tmp_path, "pkf", chunks, shards, cut)
+
+
+def test_a_coordinate_copy_that_fails_fails_the_commit(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """An error that is not a missing file, raised in one of the side-by-side coordinate
+    copies, fails the commit: nothing is committed and the new table is dropped."""
+    from databricks.labs.gbx.zarr.errors import ZarrError
+
+    real = _write.PackWriter.close
+
+    def close(self):
+        if "/data/latitude/" in self.dest_dir:
+            raise ZarrError("could not write the pack file (test)", fix="none")
+        return real(self)
+
+    no_hooks.setattr(_write.PackWriter, "close", close)
+    table, root = _table("cpf"), tmp_path / "root_cpf"
+    drop(table)
+    with pytest.raises(ZarrError, match="could not write the pack file"):
+        gbx_zarr_write(
+            _dataset(), table, root=str(root), chunks=CHUNKS, spark=spark_delta
+        )
+    assert not spark_delta.catalog.tableExists(table)
+
+
+def test_a_create_from_blocks_with_a_scalar_variable(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """A store read as blocks can hold a scalar (a CF grid mapping, ``dims=[]``): a create
+    from a 2-D ``t2m`` block and a scalar ``crs`` block writes both. The position pass's
+    partition count treats only one-dimension blocks as possible coordinates."""
+    t2m = np.arange(120, dtype="float32").reshape(10, 12)
+    crs = np.array(4326, dtype="int32")
+    rows = [
+        (
+            "t2m",
+            ["latitude", "longitude"],
+            [0, 0],
+            [10, 12],
+            None,
+            None,
+            t2m.dtype.str,
+            [10, 12],
+            t2m.tobytes(),
+            None,
+            None,
+        ),
+        (
+            "crs",
+            [],
+            [],
+            [],
+            None,
+            None,
+            crs.dtype.str,
+            [],
+            crs.tobytes(),
+            None,
+            json.dumps({"grid_mapping_name": "latitude_longitude"}),
+        ),
+    ]
+    table, root = _table("scl"), tmp_path / "root_scl"
+    drop(table)
+    gbx_zarr_write(
+        spark_delta.createDataFrame(rows, BLOCKS_SCHEMA),
+        table,
+        root=str(root),
+        chunks={"latitude": 5, "longitude": 6},
+        shards=False,
+        spark=spark_delta,
+    )
+    np.testing.assert_array_equal(_read(spark_delta, table, "t2m"), t2m)
+    arrays = {
+        r["array"]
+        for r in spark_delta.sql(
+            f"SELECT array FROM {table} WHERE kind = 'array' AND tag IS NULL"
+        ).collect()
+    }
+    assert {"t2m", "crs"} <= arrays
+
+
+def test_the_partition_count_takes_a_scalar_block_as_data():
+    import pyarrow as pa
+
+    seen = pa.table(
+        {
+            "variable": ["t2m", "crs", "time"],
+            "dims": pa.array([["time", "y"], [], ["time"]], pa.list_(pa.string())),
+            _write._PID: [0, 1, 2],
+        }
+    )
+    assert _write._spread_of(seen) == {"blocks": 2, "partitions": 2}
+
+
+def test_a_failed_create_removes_only_its_own_files(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """The cleanup after a failed create removes this write's pack directory and nothing
+    else: another write's pack, a user's file in data/, in an array directory and beside
+    data/ all stay."""
+    chunks, shards, cut = ALIGNED["one-shard-blocks"]
+    table, root = _table("neg"), tmp_path / "root_neg"
+    drop(table)
+    other = root / "data" / "t2m" / ("0" * 32) / "part-other.zpack"
+    keep = [
+        other,
+        root / "data" / "notes.txt",
+        root / "data" / "t2m" / "mine.txt",
+        root / "user" / "f.txt",
+    ]
+    real = _write._write_files
+
+    def seeded(spark, plan):
+        for f in keep:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(b"keep me")
+        return real(spark, plan)
+
+    sizes = _write._sizes
+    no_hooks.setattr(_write, "_sizes", lambda: {**sizes(), "roll_bytes": 1})
+    no_hooks.setattr(_write, "_spread_out", lambda spark, plan, frame: frame)
+    no_hooks.setattr(_write, "_write_files", seeded)
+    no_hooks.setattr(_write, "_FAULT", ("t2m", "c/1/0/0"))
+    wid = uuid.uuid4().hex
+    with pytest.raises(Exception, match="test fault"):
+        gbx_zarr_write(
+            _cut_blocks(spark_delta, cut, _cube_values()).coalesce(1),
+            table,
+            root=str(root),
+            chunks=chunks,
+            shards=shards,
+            write_id=wid,
+            spark=spark_delta,
+        )
+    assert all(f.read_bytes() == b"keep me" for f in keep)
+    assert not (root / "data" / "t2m" / wid).exists()  # this write's packs went
+
+
+def test_a_traced_aligned_create_reports_each_task_and_its_packs(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """With the measurement switch on, each pack-stage task's digest row says where and when
+    it ran and what each pack it wrote cost; with it off (as in production), nothing."""
+    seen = []
+    real = _write._side_info
+
+    def captured(rows):
+        seen.extend(
+            json.loads(t)
+            for t in rows.filter(pa_compute.equal(rows.column("rtype"), "digest"))
+            .column("info")
+            .to_pylist()
+        )
+        return real(rows)
+
+    no_hooks.setattr(_write, "_side_info", captured)
+    chunks, shards, cut = ALIGNED["one-shard-blocks"]
+    _create_cut(spark_delta, drop, tmp_path, "notrace", chunks, shards, cut)
+    assert seen and not any("trace" in i for i in seen)
+    seen.clear()
+    no_hooks.setattr(_write, "_TRACE", True)
+    _create_cut(spark_delta, drop, tmp_path, "trace", chunks, shards, cut)
+    traced = [i["trace"] for i in seen if i.get("variables")]
+    assert len(traced) == 2  # two blocks, one task each here
+    for t in traced:
+        assert t["host"] and t["end"] >= t["start"] and "partition" in t
+        assert t["packs"] and all(
+            p["bytes"] > 0 and p["how"] == "copy" for p in t["packs"]
+        )
+
+
+def _failing_nested_create(
+    spark, drop, tmp_path, no_hooks, label, seeded=None, wid=None
+):
+    """A create of the nested variable grp/sub/x from one block (one task, kept so, packs
+    closing at once) that fails on its fifth chunk, after four packs are written."""
+    table, root = _table(label), tmp_path / f"root_{label}"
+    drop(table)
+    sizes = _write._sizes
+    no_hooks.setattr(_write, "_sizes", lambda: {**sizes(), "roll_bytes": 1})
+    no_hooks.setattr(_write, "_spread_out", lambda spark, plan, frame: frame)
+    no_hooks.setattr(_write, "_FAULT", ("grp/sub/x", "c/1/0/0"))
+    if seeded is not None:
+        real = _write._write_files
+
+        def seeding(spark_, plan):
+            seeded(root)
+            return real(spark_, plan)
+
+        no_hooks.setattr(_write, "_write_files", seeding)
+    blocks = _blocks(spark, ("grp/sub/x", (0, 0, 0), _cube_values())).coalesce(1)
+    with pytest.raises(Exception, match="test fault"):
+        gbx_zarr_write(
+            blocks,
+            table,
+            root=str(root),
+            chunks=CHUNKS,
+            shards=False,
+            write_id=wid,
+            spark=spark,
+        )
+    return table, root
+
+
+def test_a_failed_create_of_a_nested_variable_leaves_nothing_and_runs_again(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    table, root = _failing_nested_create(spark_delta, drop, tmp_path, no_hooks, "nest")
+    assert not (
+        root / "data"
+    ).exists()  # data/grp/sub/x/<write_id> and its parents went
+    no_hooks.setattr(_write, "_FAULT", None)
+    gbx_zarr_write(
+        _blocks(spark_delta, ("grp/sub/x", (0, 0, 0), _cube_values())),
+        table,
+        root=str(root),
+        chunks=CHUNKS,
+        shards=False,
+        spark=spark_delta,
+    )
+    np.testing.assert_array_equal(
+        _read(spark_delta, table, "grp/sub/x"), _cube_values()
+    )
+
+
+def test_a_failed_nested_create_keeps_another_writes_packs_and_user_files(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    keep = []
+
+    def seed(root):
+        keep[:] = [
+            root / "data" / "grp" / "sub" / "x" / ("0" * 32) / "part-other.zpack",
+            root / "data" / "grp" / "notes.txt",
+            root / "data" / "grp" / "sub" / "mine.txt",
+        ]
+        for f in keep:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(b"keep me")
+
+    wid = uuid.uuid4().hex
+    _, root = _failing_nested_create(
+        spark_delta, drop, tmp_path, no_hooks, "nestk", seeded=seed, wid=wid
+    )
+    assert keep and all(f.read_bytes() == b"keep me" for f in keep)
+    assert not (root / "data" / "grp" / "sub" / "x" / wid).exists()
+
+
+def test_an_aligned_create_whose_input_changes_between_passes_is_refused(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """The pack stage trusts the position pass: if the input it then evaluates holds other
+    blocks (a non-deterministic source), a piece that is not a whole chunk must stop the
+    write, never be stored as one. The plan here sees whole-chunk blocks while the frame the
+    pack stage gets holds half-chunk blocks of the same cube."""
+    chunks, shards, cut = ALIGNED["one-chunk-blocks"]
+    half = _cut_blocks(spark_delta, (6, 5, 6), _cube_values())
+    real = _write._planned_blocks
+
+    def changed(data, variables, seen=None, known=None):
+        inp = real(data, variables, seen=seen, known=known)
+        inp.frame = half  # what the second evaluation of the input yields
+        return inp
+
+    no_hooks.setattr(_write, "_planned_blocks", changed)
+    no_hooks.setattr(_write, "explode_function", _refuse("explode"))
+    table, root = _table("chg"), tmp_path / "root_chg"
+    drop(table)
+    with pytest.raises(Exception, match="changed between the two passes"):
+        gbx_zarr_write(
+            _cut_blocks(spark_delta, cut, _cube_values()),
+            table,
+            root=str(root),
+            chunks=chunks,
+            shards=shards,
+            spark=spark_delta,
+        )
+    assert not spark_delta.catalog.tableExists(table)
+    assert not (root / "data").exists()

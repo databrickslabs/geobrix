@@ -44,6 +44,8 @@ def base(monkeypatch, tmp_path):
     monkeypatch.setattr(_env, "_bundled_proj_data", lambda: str(bundled))
     monkeypatch.setattr(_env, "_bundled_gdal_data", lambda: None)
     monkeypatch.setattr(_env, "_register_pyproj_search_dirs", lambda dirs: None)
+    # GDAL's PROJ search path is process-wide: never point it at this stand-in dir.
+    monkeypatch.setattr(_env, "_set_rasterio_proj_search_path", lambda path: None)
     monkeypatch.setattr(_env, "_PROJ_DATA_DIRS", {})
     monkeypatch.setattr(_env, "_PROJ_DATA_BASES", {})
     monkeypatch.setattr(_env, "_PROJ_DATA_RETRY_AT", {})
@@ -129,6 +131,13 @@ def test_a_replace_with_fewer_dirs_drops_the_grids_registered_before(
     _env.configure_gdal_env(extra_proj_dirs=[])
     assert os.environ["PROJ_DATA"] == str(base) and osr_paths[-1] == [str(base)]
     assert pyproj_dir["dir"] == str(base)
+
+
+def test_a_readable_proj_data_of_the_users_is_kept(monkeypatch, base, tmp_path):
+    mine = _mkdir_with(tmp_path / "mine", "proj.db")
+    monkeypatch.setenv("PROJ_DATA", str(mine))
+    _env.configure_gdal_env(extra_proj_dirs=[])
+    assert os.environ["PROJ_DATA"] == str(mine)
 
 
 def test_none_reads_registry(monkeypatch, base, tmp_path):

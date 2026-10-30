@@ -27,6 +27,7 @@ import xml.etree.ElementTree as ET
 from typing import List, Tuple
 
 import numpy as np
+import pytest
 import rasterio
 from pyspark.sql.types import StringType, StructField, StructType
 from rasterio.transform import from_origin
@@ -368,6 +369,26 @@ def test_vrt_multiband_source(tmp_path):
         assert not list(
             band.iter("SimpleSource")
         ), "must be ComplexSource, not SimpleSource"
+
+
+def test_a_tile_with_fewer_bands_than_the_first_is_refused_naming_the_counts(tmp_path):
+    """The mosaic has the first tile's bands and every tile is a source of each, so a tile with
+    fewer bands used to fail on a band index (IndexError) while the VRT was built. (A tile with
+    more is allowed: its extra bands feed the mask band, see the own-mask rows.)"""
+    from databricks.labs.gbx.ds.cog_writer import _build_mosaic_vrt
+
+    out = tmp_path / "out"
+    out.mkdir()
+    first, second = out / "first.tif", out / "second.tif"
+    _write_src(str(first), w=100, h=60, count=3)
+    _write_src(str(second), w=100, h=60, count=1)
+    with rasterio.open(second, "r+") as ds:  # next to the first, not on top of it
+        ds.transform = from_origin(401000.0, 5000000.0, 10.0, 10.0)
+    with pytest.raises(ValueError, match=r"Fix: ") as err:
+        _build_mosaic_vrt([str(first), str(second)], str(out))
+    msg = str(err.value)
+    assert "3 bands of first.tif" in msg and "second.tif: 1" in msg
+    assert not (out / "mosaic.vrt").exists()
 
 
 def test_vrt_multiband_nodata_on_every_band(tmp_path):

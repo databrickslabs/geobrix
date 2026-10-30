@@ -17,6 +17,12 @@ appended to the task's pack file and reported with the base ``write_id`` of its 
 compare-and-swap expectation) and whether a live shard row holds it. In an overwrite the
 group's base rows that no piece rewrote are reported as deletes. Side rows pass through.
 
+**Pack** (``pack_function``) is the one stage of a create whose blocks each cover whole
+units (shards of a sharded array, chunks otherwise) and no cell twice: every piece is a
+whole chunk, so the task that makes a block encodes it and appends it to its own pack file,
+as the assembler would, and nothing is shuffled. Its rows are the assembler's: the same
+chunk rows (only the pack a chunk lands in differs), coordinate side rows and one digest row.
+
 Nothing here needs a session: the tasks see only their rows and the closure.
 """
 
@@ -54,6 +60,7 @@ __all__ = [
     "chunk_grid",
     "explode_function",
     "extent",
+    "pack_function",
     "part_of",
 ]
 
@@ -129,6 +136,7 @@ class TaskConfig:
     batch_bytes: int
     roll_bytes: int
     fault: tuple | None = None
+    trace: bool = False  # report per-task placement and per-pack timings (_Trace)
     unsupported: dict | None = None  # name -> why the store cannot decode that array
     access: object = None  # AccessConfig: how the files are reached (holds credentials)
 
@@ -363,6 +371,126 @@ def _block_pieces(cfg: TaskConfig, row: dict, buf, seen: dict):
         }
 
 
+# --- packs ---------------------------------------------------------------------------------
+
+
+class _Trace:
+    """Where and when one task ran and what its pack writes cost (``TaskConfig.trace``): the
+    host, process, partition and attempt; wall-clock start and end; for each pack its bytes,
+    the seconds its copy (mount) or put (direct) took, and which of the two it was."""
+
+    def __init__(self):
+        import socket
+        import time as _time
+
+        self._time = _time.time
+        self.info = {
+            "host": socket.gethostname(),
+            "pid": os.getpid(),
+            "start": _time.time(),
+        }
+        try:
+            from pyspark import TaskContext
+
+            ctx = TaskContext.get()
+            if ctx is not None:
+                self.info["partition"] = ctx.partitionId()
+                self.info["attempt"] = ctx.attemptNumber()
+                self.info["stage"] = ctx.stageId()
+        except Exception:  # noqa: BLE001 - placement is best effort
+            pass
+        self.packs: list[dict] = []
+
+    def close(self, writer: PackWriter) -> None:
+        start = self._time()
+        writer.close()
+        self.packs.append(
+            {
+                "bytes": writer.size,
+                "s": round(self._time() - start, 4),
+                "how": (
+                    "put"
+                    if (writer._access is not None and writer._access.is_direct)
+                    else "copy"
+                ),
+            }
+        )
+
+    def done(self) -> dict:
+        return {**self.info, "end": self._time(), "packs": self.packs}
+
+
+class _Packs:
+    """The pack files one task writes: one open per variable at a time, each closed (and
+    a new one begun) once it holds ``roll_bytes``."""
+
+    def __init__(self, cfg: TaskConfig, trace: "_Trace | None" = None):
+        self.cfg = cfg
+        self.open: dict[str, PackWriter] = {}
+        self.full: list[PackWriter] = []
+        self.trace = trace
+
+    def _close(self, writer: PackWriter) -> None:
+        if self.trace is None or writer._closed:
+            writer.close()
+        else:
+            self.trace.close(writer)
+
+    def put(self, name: str, data: bytes) -> tuple[str, int, int]:
+        """Append one encoded chunk of ``name``: ``(file, offset, length)`` of its bytes."""
+        cfg = self.cfg
+        writer = self.open.get(name)
+        if writer is None:
+            writer = self.open[name] = PackWriter(
+                os.path.join(cfg.root, "data", name, cfg.write_id),
+                reader_root=cfg.root,
+                access=cfg.access,
+            )
+        offset, length = writer.add(data)
+        file = writer.path
+        if writer.size >= cfg.roll_bytes:
+            self._close(writer)
+            self.full.append(writer)
+            del self.open[name]
+        return file, offset, length
+
+    def finish(self) -> None:
+        for w in list(self.open.values()):
+            self._close(w)
+        for w in self.full:
+            self._close(w)
+
+    def abort(self) -> None:
+        for w in [*self.open.values(), *self.full]:
+            w.abort()
+
+
+def _chunk_row(
+    name, key, shard_key, where, data, *, empty, rmw=False, base=None, shard_live=False
+) -> dict:
+    """The row of a chunk whose encoded ``data`` landed at ``where`` (``_Packs.put``)."""
+    file, offset, length = where
+    return _row(
+        "chunk",
+        kind="chunk",
+        array=name,
+        key=key,
+        shard_key=shard_key,
+        file=file,
+        offset=offset,
+        length=length,
+        checksum=crc32c_hex(data),
+        empty=empty,
+        rmw=rmw,
+        expected_write_id=None if base is None else base["write_id"],
+        # the row replaces one for the same key: the file it recorded for the base object (a
+        # registered store's own) stays the identity this chunk shadows, which is how a sync
+        # tells that the base changed under it
+        identity=None if base is None else base.get("identity"),
+        shard_live=shard_live,
+    )
+
+
 # --- assemble ------------------------------------------------------------------------------
 
 
@@ -381,8 +509,7 @@ class _Group:
 class _Assembler:
     def __init__(self, cfg: TaskConfig):
         self.cfg = cfg
-        self.writers: dict[str, PackWriter] = {}
-        self.done: list[PackWriter] = []
+        self.packs = _Packs(cfg)
         self.out: list[dict] = []
         self.group: _Group | None = None
         self.pending: list[dict] = []
@@ -433,9 +560,9 @@ class _Assembler:
         if self.cfg.mode == "overwrite":
             for key, base in sorted(group.chunks.items()):
                 if key not in group.rewritten:
-                    self.out.append(_delete(base))
+                    self.out.append(delete_row(base))
             if group.shard is not None:
-                self.out.append(_delete(group.shard))
+                self.out.append(delete_row(group.shard))
         if group.store is not None:
             group.store.close()
         self.group = None
@@ -479,40 +606,20 @@ class _Assembler:
             empty = is_fill(values, meta.fill_value)
             data = _encode(cfg, meta, key, values)
         group.rewritten.add(key)
-        writer = self.writers.get(name)
-        if writer is None:
-            writer = self.writers[name] = PackWriter(
-                os.path.join(cfg.root, "data", name, cfg.write_id),
-                reader_root=cfg.root,
-                access=cfg.access,
-            )
-        offset, length = writer.add(data)
-        base = group.chunks.get(key)
+        where = self.packs.put(name, data)
         self.out.append(
-            _row(
-                "chunk",
-                kind="chunk",
-                array=name,
-                key=key,
-                shard_key=first["shard_key"],
-                file=writer.path,
-                offset=offset,
-                length=length,
-                checksum=crc32c_hex(data),
+            _chunk_row(
+                name,
+                key,
+                first["shard_key"],
+                where,
+                data,
                 empty=empty,
                 rmw=rmw,
-                expected_write_id=None if base is None else base["write_id"],
-                # the row replaces one for the same key: the file it recorded for the
-                # base object (a registered store's own) stays the identity this chunk
-                # shadows, which is how a sync tells that the base changed under it
-                identity=None if base is None else base.get("identity"),
+                base=group.chunks.get(key),
                 shard_live=group.shard is not None and cfg.mode != "overwrite",
             )
         )
-        if writer.size >= cfg.roll_bytes:
-            writer.close()
-            self.done.append(writer)
-            del self.writers[name]
 
     def base_chunk(self, meta: ArrayMeta, chunk, key: str) -> np.ndarray:
         """The stored values of ``chunk`` at the base, padded with fill to a whole chunk,
@@ -557,14 +664,10 @@ class _Assembler:
 
     def finish(self) -> None:
         self.close_group()
-        for w in list(self.writers.values()):
-            w.close()
-        for w in self.done:
-            w.close()
+        self.packs.finish()
 
     def abort(self) -> None:
-        for w in [*self.writers.values(), *self.done]:
-            w.abort()
+        self.packs.abort()
         if self.group is not None and self.group.store is not None:
             self.group.store.close()
 
@@ -573,7 +676,8 @@ def _row(rtype: str, **values) -> dict:
     return {name: values.get(name) for name in ROWS_ARROW.names} | {"rtype": rtype}
 
 
-def _delete(base: dict) -> dict:
+def delete_row(base: dict) -> dict:
+    """The delete row (``ROWS_ARROW``) of a base manifest row, expecting its write_id."""
     return _row(
         "delete",
         kind=base.get("kind"),
@@ -618,14 +722,85 @@ def assemble_function(cfg: TaskConfig):
         except BaseException:
             work.abort()
             raise
-        rows, held, out = [], 0, work.out
-        for row in out:
-            rows.append(row)
-            held += len(row.get("data") or b"")
-            if len(rows) >= cfg.batch_rows * 16 or held >= cfg.batch_bytes:
-                yield _batch(rows, ROWS_ARROW)
-                rows, held = [], 0
-        if rows:
-            yield _batch(rows, ROWS_ARROW)
+        yield from _yield_rows(work.out, cfg)
 
     return run
+
+
+# --- pack: an aligned create's one stage ----------------------------------------------------
+
+
+def _yield_rows(rows: list[dict], cfg: TaskConfig):
+    out, held = [], 0
+    for row in rows:
+        out.append(row)
+        held += len(row.get("data") or b"")
+        if len(out) >= cfg.batch_rows * 16 or held >= cfg.batch_bytes:
+            yield _batch(out, ROWS_ARROW)
+            out, held = [], 0
+    if out:
+        yield _batch(out, ROWS_ARROW)
+
+
+def pack_function(cfg: TaskConfig):
+    """Blocks straight to encoded chunks in this task's pack files (``ROWS_ARROW``), for a
+    create the driver found aligned (``_write._aligned``): every piece of every block is a
+    whole chunk. A piece that is not means the input changed since the position pass; the
+    write stops, as its digest check would."""
+
+    def run(batches):
+        trace = _Trace() if cfg.trace else None
+        packs = _Packs(cfg, trace)
+        out: list[dict] = []
+        seen = {"count": 0, "hash": 0, "region": {}, "variables": set()}
+        try:
+            for batch in batches:
+                table = pa.Table.from_batches([batch])
+                cols = ["variable", "dims", "start", "stop", "dtype", "shape"]
+                cols += [c for c in ("attrs",) if c in table.schema.names]
+                rows = table.select(cols).to_pylist()
+                data = batch.column("data")
+                for i, row in enumerate(rows):
+                    seen["count"] += 1
+                    h = block_hash(
+                        row["variable"], row["start"] or (), row["stop"] or ()
+                    )
+                    seen["hash"] = (seen["hash"] + h) & _HASH_MASK
+                    for piece in _block_pieces(cfg, row, data[i].as_buffer(), seen):
+                        out.append(_packed(cfg, packs, piece))
+            packs.finish()
+        except BaseException:
+            packs.abort()
+            raise
+        info = {
+            "count": seen["count"],
+            "hash": str(seen["hash"]),
+            "region": seen["region"],
+            "variables": sorted(seen["variables"]),
+        }
+        if trace is not None:
+            info["trace"] = trace.done()
+        out.append(_row("digest", info=json.dumps(info)))
+        yield from _yield_rows(out, cfg)
+
+    return run
+
+
+def _packed(cfg: TaskConfig, packs: _Packs, piece: dict) -> dict:
+    """The row of one piece of an aligned create: a coordinate block passes through, a whole
+    chunk goes into the task's pack."""
+    if piece["kind"] == "coord":
+        return _row("coord", info=piece["row"]) | {"data": bytes(piece["data"])}
+    name, key = piece["variable"], piece["key"]
+    if piece["kind"] != "enc":
+        raise ZarrError(
+            f"a block of {name!r} covers chunk {key} only in part, though the position "
+            "pass found every block whole: the input changed between the two passes",
+            fix="the input changed between planning and writing; materialize it as a "
+            "table first (write it to Delta, then pass spark.table(...))",
+        )
+    data = bytes(piece["data"])
+    where = packs.put(name, data)
+    return _chunk_row(
+        name, key, piece["shard_key"], where, data, empty=bool(piece["empty"])
+    )

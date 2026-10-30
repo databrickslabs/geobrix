@@ -101,6 +101,7 @@ def _run_file_fast_path(
     fallback path can take over on any open / stream / view-construction failure.
     """
     fr_holder[0] = fr
+    from ._env import FOLDER_FILES_KEY, note_folder_files
     from .core.open_tile import (
         _has_pending,
         _parse_pending,
@@ -111,6 +112,9 @@ def _run_file_fast_path(
     )
 
     vt = _to_virtual_tile(tile)
+    # the reader's count of files in the tile's folder: lets the opener skip listing a
+    # folder past GDAL's listing limit (a hint only; see _env.note_folder_files)
+    note_folder_files(vt.path, (vt.metadata or {}).get(FOLDER_FILES_KEY))
     bands, raw_nodata, srid, crs_str = _parse_pending(vt.metadata)
     # Extract metadata-derived size (path_file_size or tile_size) before lru.get()
     # so the weigher can use it instead of calling fr.size.

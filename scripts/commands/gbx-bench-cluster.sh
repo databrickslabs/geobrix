@@ -21,7 +21,8 @@ the configured Volume. Reads examples/tests/databricks_cluster_config.env.
 Usage: bash scripts/commands/gbx-bench-cluster.sh [options]
 Options:
   --cluster-id <id>     Target cluster (overrides CLUSTER_ID from config)
-  --run-id <id>         Run id (default cluster)
+  --run-id <id>         Run id (default: one of its own per launch, cluster-<date>-<time>-<4 hex>;
+                        --resume needs the run id it resumes)
   --functions <csv>     rst_* names (overrides --set); with --grid-bng-only, bng_* names
                         pick which BNG legs run (no bng_* name = all legs)
   --set <core|full>     Selection tier: core (fast default) or full (default core)
@@ -85,6 +86,27 @@ Options:
                         (managed/external legs yield na_by_design on FUSE-only tiers).
   --gpkg-corpus <path>  GeoPackage bench corpus base dir (staged by stage_gpkg_bench_corpus).
                         Default: <corpus>/bench-corpus-gpkg.
+  --benchmark-zarr      Also run the Zarr benchmark (light only): R1-R3 reads of the ERA5 store
+                        against one GeoTIFF per hour, W1-W2 writes, the shard-index and
+                        sample-density probes (cases in bench/spec.py ZARR_CASES)
+  --zarr-only           Run ONLY the Zarr benchmark (no fn benchmarks)
+  --zarr-store <path>   The plain ERA5 store (default <volume>/_probe/zarr-spike/read/era5/
+                        era5_v3_shard_zstd.zarr)
+  --zarr-cog-dir <path> Its GeoTIFF-per-hour copy, staged on first use (default
+                        <volume>/_probe/zarr/bench/cog_hourly)
+  --zarr-scratch <path> Directory the write legs fill and empty (default
+                        <volume>/_probe/zarr/bench/scratch/<run-id>)
+  --zarr-schema <c.s>   Schema of the write legs' manifest tables, each dropped after its run
+                        (default <catalog>.gbx_zarr_scratch)
+  --zarr-cases <csv>    Cases to run (default R1,R2,R3,W1,W2)
+  --zarr-reps <n>       Runs per leg, the first cold (default 3)
+  --extras <csv>        geobrix extras the notebook installs after the wheel (default: the
+                        runtime's Zarr extras with a Zarr leg, else light-dbr19)
+  --new-cluster         Run on a job cluster made for this run; it ends with the run.
+                        --spark-version (default 19.x-scala2.13), --node-type (default
+                        m6gd.xlarge), --num-workers (default 1), --access-mode
+                        dedicated|standard (default dedicated), --on-demand (AWS: every
+                        node on demand, none of them a spot node taken back mid-run)
   --serverless          Submit to Serverless compute (light-only, no JAR). Skips --cluster-id.
                         Profile must point to a workspace that supports Serverless jobs (e.g. dogfood).
   --env-version <N>     Serverless environment version to pin (default 6; env v6 = protobuf-6 regime).

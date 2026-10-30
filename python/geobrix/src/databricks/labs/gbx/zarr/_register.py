@@ -479,13 +479,21 @@ def _release_marker(root: str, table: str, kind: str) -> None:
 # "must not exist"), so Delta lets exactly one claimer in; a claimer that loses finds the
 # winner's row and is refused. The marker file is written after the win, as the note a person
 # or an older reader finds in the directory.
+#
+# A root with no ledger yet (every new store's) is claimed by founding it: one CREATE TABLE AS
+# SELECT writes the table with the claim in it. Delta writes a table's first version once, so
+# exactly one founder lands, and its row sits ahead of any row added later: no read before,
+# no MERGE, no read back. A founder that does not land claims through the ledger as above.
 
 _LEDGER_KEY = "owner"
+# No NOT NULL: a ledger founded by CREATE TABLE AS SELECT cannot declare one (Spark refuses a
+# column list there, and Delta makes a written DataFrame's columns nullable), so the ledger
+# made here has the same schema. Every writer of a ledger sets kind and write_id.
 _LEDGER_DDL = """
 CREATE TABLE IF NOT EXISTS {table} (
-  kind STRING NOT NULL, array STRING, key STRING, shard_key STRING, file STRING,
+  kind STRING, array STRING, key STRING, shard_key STRING, file STRING,
   offset BIGINT, length BIGINT, checksum STRING, origin STRING, identity STRING,
-  write_id STRING NOT NULL, tag STRING, meta STRING)
+  write_id STRING, tag STRING, meta STRING)
 USING DELTA
 TBLPROPERTIES (
   'delta.enableDeletionVectors' = 'false',
@@ -493,10 +501,217 @@ TBLPROPERTIES (
 """
 
 
+_FOUNDING_SQL = """
+CREATE TABLE {table}
+USING DELTA
+TBLPROPERTIES (
+  'delta.enableDeletionVectors' = 'false',
+  'delta.enableRowTracking' = 'true')
+AS SELECT
+  CAST(kind AS STRING) AS `kind`, CAST(NULL AS STRING) AS `array`,
+  CAST(key AS STRING) AS `key`, CAST(NULL AS STRING) AS `shard_key`,
+  CAST(NULL AS STRING) AS `file`, CAST(NULL AS BIGINT) AS `offset`,
+  CAST(NULL AS BIGINT) AS `length`, CAST(NULL AS STRING) AS `checksum`,
+  CAST(NULL AS STRING) AS `origin`, CAST(NULL AS STRING) AS `identity`,
+  CAST(write_id AS STRING) AS `write_id`, CAST(NULL AS STRING) AS `tag`,
+  CAST(meta AS STRING) AS `meta`
+FROM VALUES ({lock}), ({commit}) AS v(kind, key, write_id, meta)
+"""
+
+
+def _found_ledger(spark, root: str, claim_id: str, body: dict, table: str) -> bool:
+    """Create the ledger of ``root``, which has none, with this claim in it: ``True`` when
+    this call's statement landed. The claim and its commit row (what ``_manifest.commit``
+    writes) are the table's first version, which Delta lets one creator write, so a claim
+    that lands this way is the first and is not read back.
+
+    ``False`` when the ledger directory is not absent (``_ledger_state``), and on any failure
+    of the statement (logged at WARNING): a concurrent founder won, or the statement failed
+    (and may have landed all the same). The caller then claims through the
+    ledger with the same ``claim_id``, which finds the winner, or this claim if it landed.
+    """
+    if _ledger_state(spark, root) != "absent":
+        return False
+    commit_meta = json.dumps({"mode": "claim", "table": table}, sort_keys=True)
+    rows = (
+        ("lock", _LEDGER_KEY, claim_id, json.dumps(body, sort_keys=True)),
+        ("commit", claim_id, claim_id, commit_meta),
+    )
+    lock, commit_row = (", ".join(_lit(v) for v in r) for r in rows)
+    try:
+        spark.sql(
+            _FOUNDING_SQL.format(
+                table=_q(_ledger_table(root)), lock=lock, commit=commit_row
+            )
+        )
+        return True
+    except Exception as e:  # noqa: BLE001 - the ledger decides, below
+        _LOG.warning(
+            "founding the ownership ledger of %s did not land (%s: %s); claiming through "
+            "the ledger instead",
+            root,
+            type(e).__name__,
+            e,
+        )
+        return False
+
+
 def _ledger_table(root: str) -> str:
     """The Spark name of the ledger of ``root``: the Delta table at ``<root>/_gbx_owner``."""
     path = os.path.join(root, OWNER_LEDGER)
     return "delta.`" + path.replace("`", "``") + "`"
+
+
+# A ledger is told from a founder's leftovers by asking Delta, never by reading its log's
+# files: a missing or empty directory is "absent" (a plain directory check, so a new root's
+# claim asks Delta nothing); a directory with content is "delta" when DESCRIBE DETAIL answers,
+# and "founding" when Delta answers that the path is not a Delta table.
+_NOT_A_DELTA_TABLE = ("DELTA_MISSING_DELTA_TABLE",)
+
+
+class _LedgerUnreadable(ZarrError):
+    """The ledger directory cannot be listed for a reason that is not a transient miss."""
+
+
+def _error_condition(e: BaseException) -> str | None:
+    """The error class (condition) Spark gives an exception, classic or Connect."""
+    for name in ("getCondition", "getErrorClass"):
+        get = getattr(e, name, None)
+        if callable(get):
+            try:
+                found = get()
+            except Exception:  # noqa: BLE001 - only the class is wanted
+                found = None
+            if found:
+                return str(found)
+    return None
+
+
+def _not_a_delta_table(e: BaseException) -> bool:
+    """Delta's answer that a path is not a Delta table: by its error class, else (a class
+    this code does not know, or none: another runtime may name it otherwise) by its words.
+    """
+    if _error_condition(e) in _NOT_A_DELTA_TABLE:
+        return True
+    return "is not a Delta table" in _error_text(e)
+
+
+def _ledger_state(spark, root: str) -> str:
+    """What the ledger directory of ``root`` holds: ``"absent"`` (no directory, or an empty
+    one), ``"delta"`` (Delta describes it: a ledger, whatever its log retention has kept) or
+    ``"founding"`` (content, and Delta says it is not a Delta table: a founder's CREATE TABLE
+    AS SELECT has written its data and not yet committed, or died before it did). A listing
+    that fails for a reason other than a missing entry, and any other error from Delta, raise
+    ``ZarrError``."""
+    path = os.path.join(root, OWNER_LEDGER)
+
+    def has_content() -> bool:
+        try:
+            return bool(os.listdir(path))
+        except FileNotFoundError:
+            return False
+        except (PermissionError, NotADirectoryError) as e:
+            raise _LedgerUnreadable(
+                f"cannot list the ownership ledger directory {path} ({e}).",
+                fix="check that the root is on a Volume you can read and write, then try "
+                "again",
+            ) from e
+
+    try:
+        content = _retry_transient(has_content)
+    except OSError as e:
+        raise ZarrError(
+            f"cannot list the ownership ledger directory {path} ({e}).",
+            fix="check that the root is on a Volume you can read and write, then try again",
+        ) from e
+    if not content:
+        return "absent"
+    try:
+        spark.sql(f"DESCRIBE DETAIL {_q(_ledger_table(root))}").collect()
+        return "delta"
+    except Exception as e:  # noqa: BLE001 - classified below
+        if _not_a_delta_table(e):
+            return "founding"
+        raise ZarrError(
+            f"cannot tell whether {path} is an ownership ledger: Delta reported "
+            f"{type(e).__name__}: {_error_text(e)[:300]}",
+            fix="check that the root is on a Volume you can read and write and that the "
+            "session can read Delta tables there, then try again",
+        ) from e
+
+
+class _StuckRoot(ZarrOwnershipError):
+    """``_stuck``: ``since`` is when the claimer began waiting (``_clock``)."""
+
+    since: float = 0.0
+
+
+# the clock the founding wait is measured by, against the files' ages (a test may set it)
+_clock = time.time
+
+
+def _stuck(root: str, attempts: int, since: float = 0.0) -> ZarrOwnershipError:
+    """The error of a root whose ledger directory Delta still does not take for a table after
+    the claim's whole jittered budget (``attempts`` looks: about 3 minutes, at most 4.5).
+    """
+    ledger = os.path.join(root, OWNER_LEDGER)
+    err = _StuckRoot(
+        f"{ledger} holds files that Delta does not take for a table, after waiting about 3 "
+        f"minutes (at most 4.5; {attempts} looks): another call's claim is still creating "
+        "the ownership ledger of the root, or it stopped before it committed.",
+        fix=f"if no create, register, write or maintenance call on {root} is running, it is "
+        f"safe to delete the directory {ledger}: Delta holds no table there, so it holds no "
+        "claim and no store owns the root by it; then try again. Otherwise wait for that "
+        "call to end",
+    )
+    err.since = since
+    return err
+
+
+def _clear_dead_founder(spark, root: str, since: float) -> bool:
+    """After a claim waited out its whole budget on a founding directory: whether the root
+    is no longer stuck. ``True`` when Delta now takes the directory for a table, or it is
+    absent, or every file and folder in it is older than ``since`` (the start of the wait):
+    those are a dead founder's leftovers (a founding statement that wrote its data files and
+    failed or died before it committed, this call's own included), and exactly those are
+    removed, logged at WARNING with their ages. ``False`` (nothing is touched) when anything
+    in it is newer: a founder may still be writing. A table Delta knows is never touched.
+    """
+    if _ledger_state(spark, root) != "founding":
+        return True
+    path = os.path.join(root, OWNER_LEDGER)
+    files, dirs = [], []
+    for here, subdirs, names in os.walk(path):
+        dirs += [os.path.join(here, d) for d in subdirs]
+        files += [os.path.join(here, n) for n in names]
+    ages = {}
+    for f in files + dirs:
+        try:
+            ages[f] = os.stat(f).st_mtime
+        except FileNotFoundError:  # it went while we looked: someone is at work in it
+            return False
+    if not files or any(m >= since for m in ages.values()):
+        return False
+    now = _clock()
+    _LOG.warning(
+        "removing %d file(s) a founder left in %s without a Delta table (they are %s s old; "
+        "the claim waited since %.0f s ago), and founding the ledger again",
+        len(files),
+        path,
+        sorted(round(now - ages[f]) for f in files),
+        now - since,
+    )
+    for f in files:
+        try:
+            os.remove(f)
+        except FileNotFoundError:
+            pass
+    for d in sorted(dirs, key=len, reverse=True) + [path]:
+        try:
+            os.rmdir(d)  # only those it emptied
+        except OSError:
+            pass
+    return True
 
 
 def _ledger_exists(spark, ledger: str) -> bool:
@@ -509,21 +724,43 @@ def _ledger_exists(spark, ledger: str) -> bool:
 
 def _create_ledger(spark, ledger: str, root: str) -> None:
     """Create the ledger table if it is not there. Two claimers can create it at once: the
-    one that loses its first commit finds the table made, which is what it wanted."""
-    for attempt in range(3):
+    one that loses its first commit finds the table made, which is what it wanted.
+
+    A ledger directory with files but no Delta log is a founder's statement in flight
+    (``_ledger_state``): it is waited for, on the claim's jittered budget
+    (``_write._ATTEMPTS``), and not created over. A root still in that state after the
+    budget raises ``ZarrOwnershipError`` naming the directory and when deleting it is safe.
+    """
+    from databricks.labs.gbx.zarr import _write
+
+    failures, since = 0, None
+    for attempt in range(_write._ATTEMPTS):
+        state = _ledger_state(spark, root)
+        if state == "delta":
+            return
+        if state == "founding":
+            since = _clock() if since is None else since
+            _write._pause(_write._wait(attempt))
+            continue
         try:
             spark.sql(_LEDGER_DDL.format(table=_q(ledger)))
             return
         except Exception as e:
             if _ledger_exists(spark, ledger):
                 return
-            if attempt == 2:
+            if _ledger_state(spark, root) == "founding":
+                since = _clock() if since is None else since
+                _write._pause(_write._wait(attempt))
+                continue
+            failures += 1
+            if failures == 3:
                 raise ZarrError(
                     f"GeoBrix cannot create the ownership ledger of {root} "
                     f"({type(e).__name__}).",
                     fix="check that the root is on a Volume you can write to, then try again",
                 ) from e
-            time.sleep(0.5 * (attempt + 1))
+            time.sleep(0.5 * failures)
+    raise _stuck(root, _write._ATTEMPTS, _clock() if since is None else since)
 
 
 def _held(spark, ledger: str) -> list[dict]:
@@ -582,7 +819,8 @@ def _claim_ledger(spark, root: str, table: str, kind: str) -> bool:
     ``False`` when the ledger already names this table and kind. Raises
     ``ZarrOwnershipError`` when another table owns it.
 
-    One insert wins. A claimer that finds the row (before or after trying) is refused. A
+    A root with no ledger is claimed by founding it (``_found_ledger``). Otherwise one insert
+    wins. A claimer that finds the row (before or after trying) is refused. A
     commit Delta rejects as a conflict is tried again after a jittered wait, at most
     ``_write._ATTEMPTS`` times; the next look finds the winner. Once its own
     commit landed, the claimer reads the ledger back: if another claim sits ahead of its own
@@ -591,9 +829,21 @@ def _claim_ledger(spark, root: str, table: str, kind: str) -> bool:
     from databricks.labs.gbx.zarr import _write
 
     ledger = _ledger_table(root)
-    _create_ledger(spark, ledger, root)
     claim_id = uuid.uuid4().hex
     body = {"table": table, "kind": kind, "format": FORMAT_VERSION}
+    if _found_ledger(spark, root, claim_id, body, table):
+        return True
+    try:
+        _create_ledger(spark, ledger, root)
+    except _StuckRoot as stuck:
+        # a founding that failed after writing its files (this call's own, say) leaves them
+        # without a table: once they are all older than the wait, they are cleared and the
+        # founding is tried once more (the state is asked again first)
+        if not _clear_dead_founder(spark, root, stuck.since):
+            raise
+        if _found_ledger(spark, root, claim_id, body, table):
+            return True
+        _create_ledger(spark, ledger, root)
     row = {
         "kind": "lock",
         "key": _LEDGER_KEY,
@@ -605,6 +855,10 @@ def _claim_ledger(spark, root: str, table: str, kind: str) -> bool:
     for attempt in range(_write._ATTEMPTS):
         held = _held(spark, ledger)
         if held:
+            if (
+                held[0]["write_id"] == claim_id
+            ):  # the founding statement landed after all
+                return True
             return _owned_by(held[0], root, table, kind)
         try:
             _manifest.commit(
@@ -1485,7 +1739,7 @@ def gbx_zarr_register(
     *,
     writable: bool = False,
     overlay_root: str | None = None,
-    file_mode: str = "auto",
+    file_mode: str = "fuse",
     retain: str = "7 days",
 ) -> int:
     """Register the Zarr store at ``path`` as the manifest table ``table``, in place.
@@ -1500,10 +1754,11 @@ def gbx_zarr_register(
     to, recorded in an ownership ledger (the Delta table ``_gbx_owner`` in that directory,
     one winner even when several tables claim it at once) and an owner marker, so no other
     table can claim it. ``file_mode`` is
-    ``"auto"`` (the default: ``"external"`` on a runtime with the File type preview,
-    ``"fuse"`` elsewhere, Serverless included), ``"fuse"`` (path strings relative to the
-    store root) or ``"external"`` (FILE EXTERNAL references, governed with the table; needs a
-    workspace with the File type preview, ``ZarrUnsupported`` otherwise). ``"managed"`` is
+    ``"fuse"`` (the default: path strings relative to the store root, so the table reads
+    on every compute), ``"auto"`` (``"external"`` on a runtime with the File type preview,
+    Serverless included, ``"fuse"`` elsewhere) or ``"external"`` (FILE EXTERNAL references,
+    governed with the table; needs a workspace with the File type preview,
+    ``ZarrUnsupported`` otherwise). ``"managed"`` is
     not available in this release, and never for a registered store: it would copy the base. ``retain`` is how long superseded versions stay readable.
 
     An array GeoBrix cannot decode (a string coordinate, say) is registered like any

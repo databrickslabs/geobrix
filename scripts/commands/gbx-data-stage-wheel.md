@@ -7,11 +7,14 @@ Builds the JAR first (via stage-jar: `mvn clean package` + JAR upload) unless **
 ## Usage
 
 ```bash
-bash scripts/commands/gbx-data-stage-wheel.sh [--env 5|6|both] [--no-prune] [--log <path>] [--no-wait]
+bash scripts/commands/gbx-data-stage-wheel.sh [--env 5|6|both] [--profile NAME] [--no-prune] [--log <path>] [--no-wait]
 ```
 
 - `--env 5|6|both` - stage the env wheel(s), the Databricks install, instead of building the plain wheel: `dist/env<N>/geobrix-<version>+env<N>-py3-none-any.whl` as `gbx:build:wheel --env <N>` left it (one wheel there, or `PRECONDITION MISSING`). No JAR step and no Maven (the env wheel carries its JAR), no build, and no container lock. The wheel goes to the bundle volroot only (the `%pip` path notebooks and docs use), under its own `+env<N>` name, size-verified; the init-script dir (`GBX_ARTIFACT_VOLUME`, not required with `--env`) and the plain wheel in it are not touched.
+- `--profile NAME` - the Databricks config profile for the uploads. Without it the profile is `DATABRICKS_CONFIG_PROFILE` from the environment, else from `examples/tests/databricks_cluster_config.env`.
 - `--no-prune` - keep every other `geobrix-*.whl` in the init-script dir: skip the single-version cleanup of the plain-wheel stage.
+
+An option the command does not know is an error (exit 2), never ignored.
 
 ## Config
 

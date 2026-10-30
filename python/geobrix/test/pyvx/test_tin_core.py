@@ -74,7 +74,7 @@ def test_zsnap_sets_vertex_z_along_constraint():
     bl = [np.array([[0.0, 2.0, 10.0], [4.0, 2.0, 10.0]])]
     tris = _tin.triangulate(pts, bl, 0.0, 1e-6)
     assert len(tris) > 0  # must not crash; recovery + snap run
-    # The breakline endpoints (0,2) and (4,2) became vertices (C1); on the
+    # The breakline endpoints (0,2) and (4,2) became vertices; on the
     # constraint line their Z must be snapped to 10.0.
     snapped = []
     for t in tris:
@@ -86,7 +86,7 @@ def test_zsnap_sets_vertex_z_along_constraint():
 
 
 def test_interpolate_z_on_edge_at_utm_magnitude():
-    # I2: barycentric tolerance must be scale-aware. At BNG/UTM magnitudes the
+    # Barycentric tolerance must be scale-aware. At BNG/UTM magnitudes the
     # absolute 1e-12 tol is effectively zero (orient2d is an area ~coord^2), so a
     # cell center dead-on a triangle edge gets spuriously dropped. Must interpolate.
     bx, by = 530000.0, 180000.0
@@ -117,7 +117,7 @@ def test_grid_geom_negative_celly():
 
 
 def test_triangulate_skips_empty_breakline():
-    # F1: an empty LineString -> np.asarray(coords) has shape (0,) with no second
+    # An empty LineString -> np.asarray(coords) has shape (0,) with no second
     # axis; b.shape[1] raised IndexError. Empty breaklines must be skipped, and a
     # normal breakline in the same list still triangulates.
     pts = np.array([[0, 0, 0], [4, 0, 0], [4, 4, 0], [0, 4, 0]], dtype=float)
@@ -130,7 +130,7 @@ def test_triangulate_skips_empty_breakline():
 
 
 def test_triangulate_collinear_points_returns_empty():
-    # F2: scipy Delaunay on collinear points raises QhullError ("Initial simplex
+    # scipy Delaunay on collinear points raises QhullError ("Initial simplex
     # is flat"). Heavy returns gracefully (no triangles); light must return [].
     pts = np.array(
         [[0, 0, 0], [1, 1, 0], [2, 2, 0], [3, 3, 0]], dtype=float
@@ -139,7 +139,7 @@ def test_triangulate_collinear_points_returns_empty():
 
 
 def test_zsnap_snaps_just_beyond_endpoint():
-    # F3: a vertex within tol of a breakline ENDPOINT but just beyond it (s slightly
+    # A vertex within tol of a breakline ENDPOINT but just beyond it (s slightly
     # > 1) must still be snapped to that endpoint's Z (heavy's circular buffer cap),
     # not left at the mass-point Z.
     tol = 0.1

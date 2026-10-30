@@ -17,6 +17,13 @@ from typing import Optional, Tuple, Union
 import numpy as np
 from rasterio.crs import CRS
 
+from databricks.labs.gbx.pyrx._env import configure_gdal_env
+
+# Every light CRS lookup comes through this module, on the driver as in the tasks, so make
+# PROJ's data findable before the first one: a runtime can export a PROJ_DATA this process
+# cannot read (DBR 19 standard access), and rasterio took it as its search path at import.
+configure_gdal_env()
+
 # 120 WGS84 UTM zones (EPSG 326xx N + 327xx S) + 4326/27700/3857 + headroom.
 # A workload touching every UTM zone plus the common CRSes never evicts.
 _TRANSFORMER_CACHE_SIZE = 128

@@ -46,6 +46,10 @@ If the point falls outside the raster's extent, or if the raster's geotransform 
 
 `rst_sample` uses **nearest-pixel** sampling. For bilinear, cubic, or other interpolation methods, see [Interpolation](#interpolation-bilinear-and-cubic) below.
 
+### Many points on a virtual tile
+
+On a [virtual tile](./virtual-tiles), the lightweight `rst_sample` reads only the block of the file that holds the point, and the points of one file in a Spark task share one open of it. Many points per tile are cheap when the rows of a file stay together in a task, as they do when a tile DataFrame is cross-joined with a broadcast point table. After a shuffle that scatters them, group them again with `repartition(n, "tile.path").sortWithinPartitions("tile.path")` (see [Virtual tile read performance](./performance#virtual-tile-read-performance)). A clipped or reprojected virtual tile is read whole, as the other pixel functions read it.
+
 For `rst_sample` examples (doc-tested), see the [`rst_sample` function reference](./raster-functions#rst_sample).
 
 ---

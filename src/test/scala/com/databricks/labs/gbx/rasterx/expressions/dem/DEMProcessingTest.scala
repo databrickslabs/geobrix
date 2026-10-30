@@ -9,7 +9,7 @@ import org.scalatest.matchers.should.Matchers._
 
 import java.nio.file.Files
 
-/** Direct-execute tests for the Wave 8a terrain-analysis expressions.
+/** Direct-execute tests for the terrain-analysis expressions.
  *
  *  We exercise each expression's pure compute path (`execute(...)`) on a small
  *  100x100 synthetic DEM. That avoids a full Spark session bootstrap and keeps

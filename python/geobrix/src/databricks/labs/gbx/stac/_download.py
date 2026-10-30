@@ -172,11 +172,11 @@ def fetch_validate_publish(
         Still raise_for_status() so HTTP throttle/expiry triggers a retry.
         is_out_file_valid reflects "downloaded + published OK", not decode success.
 
-    Idempotency (I3): if the target Volume path already exists and passes the
+    Idempotency: if the target Volume path already exists and passes the
     validity check (read_validate when validate=True, exists-above-size-floor when
     validate=False), return it immediately WITHOUT re-downloading.
 
-    I5: filename is sanitized via os.path.basename to prevent path-traversal.
+    The filename is sanitized via os.path.basename to prevent path-traversal.
     """
     safe_filename = _sanitize_filename(filename)
     outpath = os.path.join(out_dir, safe_filename)

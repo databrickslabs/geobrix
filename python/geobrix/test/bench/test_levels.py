@@ -1570,6 +1570,13 @@ def test_a_failed_form_keeps_the_executors_exception_class_and_reason():
         in got
     )
     assert "/b/lib/x.so" in got
+    wrapped = text.replace(
+        "Driver stacktrace:",
+        "Caused by: java.io.FileNotFoundException: /Volumes/x/y.tif\nDriver stacktrace:",
+    )
+    assert "Caused by: java.io.FileNotFoundException: /Volumes/x/y.tif" in failure_text(
+        RuntimeError(wrapped)
+    )
 
 
 def test_a_multiline_pip_failure_keeps_its_first_lines_not_just_the_first():

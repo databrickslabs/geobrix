@@ -198,6 +198,10 @@ def failure_text(exc: BaseException) -> str:
     if not cause:
         on_executor = _EXECUTOR_CAUSE.search(str(exc))
         cause = on_executor.group(1).strip() if on_executor else ""
+        # a wrapper exception ("Failed to materialize ... after 3 retries") hides the failure under "Caused by:"
+        root = next((ln for ln in reversed(lines) if ln.startswith("Caused by:")), "")
+        if cause and root:
+            cause = f"{cause[:250]} {root[:250]}"
     out = f"{type(exc).__name__}: {head}"
     if cause and cause != head:
         return f"{out} ... {cause[:500]}"

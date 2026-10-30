@@ -112,7 +112,7 @@ the GeoBrix error name and `Fix:` line.
 | `ZarrVersionUnavailable` | The version does not exist, or is older than the store's `retain` horizon | `pick a later version or tag the version you need with gbx_zarr_tag` |
 | `ZarrVersionUnavailable` | The tag does not exist | `pick an existing tag, or create it with gbx_zarr_tag` |
 | `ZarrUnsupported` | A variable you named cannot be decoded (a string array, say) | `read the other variables, or convert this array to a numeric dtype` |
-| `ZarrUnsupported` | A table is asked for an array it has no column for (complex values) | `read it as blocks, or leave it out of variables` |
+| `ZarrUnsupported` | A table or tiles are asked for a complex array | `read it as blocks, or leave it out of variables` |
 | `ZarrUnsupported` | No variable has a regular latitude and longitude grid to tile | `read it with output="blocks" or output="table"` |
 | `ZarrUnsupported` | The store keeps its files as FILE values and the compute does not support them | `use a Databricks Runtime 19 dedicated cluster (single-user, with fileReferenceCreationMode=MANAGED in its cluster config) in a workspace with the File type preview` |
 | `ZarrAccessUnavailable` | `access="direct"` is asked of a plain store | `register the store with gbx_zarr_register to use direct access, or use access="auto" or "fuse"` |

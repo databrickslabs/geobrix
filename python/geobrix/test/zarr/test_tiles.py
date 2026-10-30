@@ -632,6 +632,20 @@ def test_a_variable_with_no_grid_is_left_out_by_default_and_refused_by_name(
         tile_set(store, variables=("series",))
 
 
+def test_a_complex_variable_is_refused_as_tiles_and_left_out_by_default(
+    tmp_path, caplog
+):
+    """A complex array must not become tiles that ``rst_*`` quietly reduce to the real part."""
+    store = cube(tmp_path / "c.zarr", dtype="complex64", nt=2)
+    with pytest.raises(ZarrUnsupported, match="complex") as e:
+        tile_set(store, variables=("v",))
+    assert "'v'" in str(e.value) and "read it as blocks" in str(e.value)
+    with pytest.raises(ZarrUnsupported, match="no variable of the store"):
+        with caplog.at_level("WARNING"):
+            tile_set(store, variables=None)
+    assert "complex" in caplog.text  # left out with the reason, not silently
+
+
 def test_non_volume_root_raises_access_unavailable(era5_v3_sharded):
     plan = one_plan(era5_v3_sharded, isel={"time": 0})
     s3 = dataclasses.replace(plan, root="s3://bucket/era5.zarr", table="db.t")

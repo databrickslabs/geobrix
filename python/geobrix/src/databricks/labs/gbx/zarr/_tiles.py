@@ -306,7 +306,12 @@ def _gtiff_dtype(dtype: np.dtype, name: str) -> str:
         return "uint8"
     if dtype.kind == "f" and dtype.itemsize == 2:
         return "float32"
-    if dtype.kind in "iufc":
+    if dtype.kind == "c":  # rst_* would read only the real part
+        raise ZarrUnsupported(
+            f"array {name!r} holds complex numbers, which tiles cannot hold yet",
+            fix="read it as blocks, or leave it out of variables",
+        )
+    if dtype.kind in "iuf":
         return dtype.newbyteorder("=").name
     raise ZarrUnsupported(
         f"array {name!r} holds {dtype} values, which a GeoTIFF band cannot",

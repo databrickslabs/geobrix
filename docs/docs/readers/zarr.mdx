@@ -145,7 +145,7 @@ double:
 | A packed array (`scale_factor`, `add_offset`) | `FLOAT` or `DOUBLE`, since it decodes to floating point |
 
 A time column is a UTC instant. It does not move with the session time zone, and a time finer than
-a microsecond is truncated. Complex arrays raise `ZarrUnsupported`: read them as blocks.
+a microsecond is truncated. Complex arrays raise `ZarrUnsupported` as a table or as tiles: read them as blocks.
 
 ### Missing data is `NULL`
 

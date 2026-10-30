@@ -1251,7 +1251,7 @@ def gbx_zarr_read(
     read as booleans through a ``dtype`` attribute of ``"bool"`` is masked on its integers,
     so a cell equal to the fill is ``NULL`` here where blocks, following xarray, cast the
     masked cell's NaN to True.) Complex arrays raise
-    ``ZarrUnsupported``: read them as blocks. With ``decode=False`` the table holds the
+    ``ZarrUnsupported`` (as tiles, too): read them as blocks. With ``decode=False`` the table holds the
     stored values and nothing is ``NULL``. The variables must share their dimensions and
     shape. Row order is not defined.
 

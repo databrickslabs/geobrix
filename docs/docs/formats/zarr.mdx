@@ -576,8 +576,8 @@ plain puts, which never cross that step, 0.5-4.9 s.
 - **Runtimes.** Databricks Runtime 19 and Serverless environment 6 (Python 3.12), lightweight tier only. The
   heavyweight tier reads Zarr data only as materialized GeoBrix tiles.
 - **Data types.** Numeric types and CF times. Strings and objects are not supported: an array GeoBrix
-  cannot decode is left out of reads and registered without being readable, and a complex array cannot
-  be read as a table (a table has no column for complex numbers; read it as blocks).
+  cannot decode is left out of reads and registered without being readable, and a complex array can
+  only be read as blocks (a table has no column for complex numbers, and tiles do not hold them yet).
 - **Tiles.** `output="tiles"` needs the coordinates to form a regular grid.
 - **Inner chunks per shard.** A shard that `gbx_zarr_write` creates holds at most 4,096 inner chunks.
   Every read of a shard fetches or builds its index, 16 bytes per inner chunk, so a shard of many tiny

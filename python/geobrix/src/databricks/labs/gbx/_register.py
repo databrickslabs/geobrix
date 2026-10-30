@@ -79,13 +79,13 @@ def run_groups(groups: List[Group], spark: Any, only: Optional[Iterable[str]]) -
     from databricks.labs.gbx import _gdal_policy
 
     # every function registered here carries the driver's remote-path switch to the workers
-    with _gdal_policy.carrying_registrations(spark):
-        for guard, entries in groups:
-            selected = [
-                fn for name, fn in entries.items() if wanted is None or name in wanted
-            ]
-            if not selected:
-                continue
-            guard()
-            for fn in selected:
-                fn(spark)
+    session = _gdal_policy.carrying_session(spark)
+    for guard, entries in groups:
+        selected = [
+            fn for name, fn in entries.items() if wanted is None or name in wanted
+        ]
+        if not selected:
+            continue
+        guard()
+        for fn in selected:
+            fn(session)

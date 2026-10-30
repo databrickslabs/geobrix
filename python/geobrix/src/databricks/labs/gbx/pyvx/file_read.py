@@ -120,8 +120,8 @@ def _make_vector_decode_fn(as_wkb: bool, layer, remote_allowed=None):
     _remote = remote_allowed  # the driver's remote-path switch, carried in the closure
 
     def _map(pdf_iter):
-        with _gdal_policy.carried(_remote):
-            yield from _decode(pdf_iter)
+        # the switch is carried around each step of the decode, never held across a yield
+        return _gdal_policy.carrying_iter(_decode(pdf_iter), _remote)
 
     def _decode(pdf_iter):
         import numpy as np
@@ -152,10 +152,8 @@ def _make_vector_decode_fn(as_wkb: bool, layer, remote_allowed=None):
                         )
                         local = None
                 if local is None:
-                    # a path from the table is data: a remote location is refused (the remote-path gate)
-                    local = to_local_path(
-                        _gdal_policy.data_path(src, "vector_file_read")
-                    )
+                    # a path from the table is data: pyogrio()'s read refuses a remote location (the gate)
+                    local = to_local_path(src)
                 # The geometry column is raw WKB; meta["geometry_name"] names it
                 # (GeoJSON drivers return "" and use "wkb_geometry").
                 with pyogrio.open_arrow(

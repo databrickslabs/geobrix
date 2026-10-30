@@ -14,6 +14,7 @@ import os
 import shutil
 import time
 from typing import Callable, Optional
+from urllib.parse import urlsplit
 
 from databricks.labs.gbx._gdal_policy import open_data, remote_location
 from databricks.labs.gbx.core import _http
@@ -102,12 +103,14 @@ def windowed_download(
 
     from databricks.labs.gbx.ds._window import window_for_bbox
 
-    if href.lower().startswith(("http://", "https://")):
+    # judged by the parse rasterio uses (urlsplit's scheme), so a spelling it reads as a URL is a URL here too
+    if urlsplit(href).scheme.lower() in ("http", "https"):
         href = _http.final_url(href, allowed_hosts=allowed_hosts)
     elif remote_location(href) is not None:
         _http.check_href(href, allowed_hosts)  # refuses: not an http(s) URL
     with rasterio.Env(GDAL_CACHEMAX=128, GDAL_HTTP_NETRC="NO"):
-        with open_data(href) as src:
+        # the href is an http(s) URL the checks passed, or a path the remote-path gate allows
+        with open_data(href, remote_ok=True) as src:
             win = window_for_bbox(src, bbox, bbox_crs)
             if win is None:
                 raise ValueError(f"bbox {bbox} does not overlap the asset {href!r}")

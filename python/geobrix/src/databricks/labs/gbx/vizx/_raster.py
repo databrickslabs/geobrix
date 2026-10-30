@@ -9,7 +9,7 @@ import os
 
 import numpy as np
 
-from databricks.labs.gbx._gdal_policy import data_path, open_bytes, open_data
+from databricks.labs.gbx._gdal_policy import open_bytes, open_data
 
 # ---------------------------------------------------------------------------
 # emphasis styling defaults (raster tier)
@@ -587,8 +587,6 @@ def _resolve_tile_input(raster):
 
     if vt.path is None:
         raise ValueError("tile struct has neither raster bytes nor a path")
-    # the tile's path is data: a remote location is refused before any open (the remote-path gate)
-    data_path(vt.path, f"the tile {vt.path}")
 
     rasterio_window = None
     if vt.window is not None:
@@ -828,7 +826,7 @@ def plot_file(
     if path.startswith("//"):
         path = "/" + path.lstrip("/")
 
-    with open_data(path) as src:
+    with open_data(path, remote_ok=True) as src:  # the caller's own path
         data, transform, scale = _decimated_read(src, max_pixels)
         return _render(
             data,
@@ -965,7 +963,7 @@ def plot_mosaic(
     import rasterio
 
     vrt_path = _resolve_vrt_path(vrt)
-    with open_data(vrt_path) as src:
+    with open_data(vrt_path, remote_ok=True) as src:  # the caller's own VRT
         window = None
         if bbox is not None:
             from rasterio.windows import Window, from_bounds

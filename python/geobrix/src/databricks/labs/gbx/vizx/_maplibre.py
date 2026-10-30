@@ -1553,7 +1553,7 @@ def _raster_to_image(
                 break
         if path.startswith("//"):
             path = "/" + path.lstrip("/")
-        with open_data(path) as src:
+        with open_data(path, remote_ok=True) as src:  # the caller's own layer path
             png_b64, corners = _src_to_png_b64(src, raster_max_px)
         return png_b64, corners
     else:

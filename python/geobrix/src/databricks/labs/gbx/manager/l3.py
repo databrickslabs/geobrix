@@ -61,50 +61,42 @@ def register_l3(spark, fn, variant: str, name: Optional[str] = None) -> None:
     from databricks.labs.gbx import _gdal_policy
 
     spec, name = fn.levels["L3"], name or fn.sql_name
-    with _gdal_policy.carrying_registrations(
+    reg = _gdal_policy.carrying_session(
         spark
-    ):  # the driver's remote-path switch goes to the workers
-        if "variants" in spec:
-            spark.udf.register(name, resolve_ref(spec["variants"][variant]))
-        elif "factory" in spec:
-            spark.udf.register(
-                name,
-                resolve_ref(spec["factory"])(*_factory_args(spec["factory_args"])),
-            )
-        elif "callable" in spec:
-            spark.udf.register(
-                name, resolve_ref(spec["callable"]), _return_type(spec["returns"])
-            )
-        elif "udtf" in spec:
-            spark.udtf.register(name, resolve_ref(spec["udtf"]))
-        else:
-            raise ValueError(f"{fn.sql_name}: unknown L3 registration")
+    )  # the driver's remote-path switch goes to the workers
+    if "variants" in spec:
+        reg.udf.register(name, resolve_ref(spec["variants"][variant]))
+    elif "factory" in spec:
+        reg.udf.register(
+            name,
+            resolve_ref(spec["factory"])(*_factory_args(spec["factory_args"])),
+        )
+    elif "callable" in spec:
+        reg.udf.register(
+            name, resolve_ref(spec["callable"]), _return_type(spec["returns"])
+        )
+    elif "udtf" in spec:
+        reg.udtf.register(name, resolve_ref(spec["udtf"]))
+    else:
+        raise ValueError(f"{fn.sql_name}: unknown L3 registration")
 
 
 def register_l3_engine(
     spark, fn, form: str = "engine", name: Optional[str] = None
 ) -> str:
-    """Register `fn`'s GDAL spec engine UDFs (see ``_register_l3_engine``), carrying the driver's remote-path switch
-    to the workers."""
-    from databricks.labs.gbx import _gdal_policy
-
-    with _gdal_policy.carrying_registrations(spark):
-        return _register_l3_engine(spark, fn, form, name)
-
-
-def _register_l3_engine(
-    spark, fn, form: str = "engine", name: Optional[str] = None
-) -> str:
-    """Register `fn`'s GDAL spec engine UDFs under `name` (default its SQL name); returns the form used.
+    """Register `fn`'s GDAL spec engine UDFs under `name` (default its SQL name), each carrying the driver's
+    remote-path switch to the workers; returns the form used.
 
     ``engine-c1`` (and ``engine``, the default, where SQL functions work on a classic session): the batch UDF
     behind a wrapper that sends virtual, NULL and error tiles to the row-wise UDF. ``engine-c0`` (and the
     default anywhere else, Spark Connect included): the row-wise UDF alone.
     """
+    from databricks.labs.gbx import _gdal_policy
     from databricks.labs.gbx.ds.file_gbx import report_detected_cap
     from databricks.labs.gbx.engine import l3 as engine_l3
     from databricks.labs.gbx.manager import capabilities, jvm, sqlwrap
 
+    reg = _gdal_policy.carrying_session(spark)  # its UDFs carry the driver's switch
     grid = _factory_args("proj_grid_dirs")[0]
     cap = report_detected_cap(
         spark
@@ -116,11 +108,11 @@ def _register_l3_engine(
         and capabilities._sql_functions(spark)
     )
     if not wrapped:
-        spark.udf.register(name, engine_l3.c0(fn.sql_name, grid, read_cap=cap))
+        reg.udf.register(name, engine_l3.c0(fn.sql_name, grid, read_cap=cap))
         return "engine-c0"
     c0_name, c1_name = jvm._priv(fn, "L3"), jvm._priv(fn, "L3c1")
-    spark.udf.register(c0_name, engine_l3.c0(fn.sql_name, grid, read_cap=cap))
-    spark.udf.register(c1_name, engine_l3.c1(fn.sql_name, grid))
+    reg.udf.register(c0_name, engine_l3.c0(fn.sql_name, grid, read_cap=cap))
+    reg.udf.register(c1_name, engine_l3.c1(fn.sql_name, grid))
     first = fn.params[0].name
     if fn.gdal.inputs[0][1] == "rasters":
         ddl = sqlwrap.tiles_dispatch(

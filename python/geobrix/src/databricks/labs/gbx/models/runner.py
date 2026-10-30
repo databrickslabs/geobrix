@@ -78,7 +78,7 @@ def _open_input(tile_or_path):
         with MemoryFile(bytes(tile_or_path)) as mf, open_bytes(mf) as ds:
             yield ds
         return
-    with open_data(tile_or_path) as ds:
+    with open_data(tile_or_path, remote_ok=True) as ds:  # the caller's own path
         yield ds
 
 

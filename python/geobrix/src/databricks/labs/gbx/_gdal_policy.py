@@ -43,6 +43,7 @@ import threading
 import types
 import warnings
 from typing import Dict, Optional
+from urllib.parse import urlsplit
 
 from databricks.labs.gbx import manifest
 
@@ -146,6 +147,28 @@ _DATA_VSI = frozenset(
     }
 )
 _SCHEME = re.compile(r"(?<![a-z0-9+.\-])([a-z][a-z0-9+.\-]*)://", re.IGNORECASE)
+# The URI schemes rasterio and pyogrio turn into a GDAL file system (their ``SCHEMES``), each read with
+# ``urllib.parse``: a scheme needs no ``//`` there (``https:host/a.tif`` opens as ``/vsicurl/https://host/a.tif``), so
+# the gate reads a path's scheme by the same parse. A scheme they do not know reaches GDAL as written.
+_BINDING_SCHEMES = frozenset(
+    {
+        "file",
+        "zip",
+        "tar",
+        "gzip",
+        "http",
+        "https",
+        "ftp",
+        "s3",
+        "gs",
+        "az",
+        "oss",
+        "adls",
+        "adl",
+        "hdfs",
+        "webhdfs",
+    }
+)
 # a GDAL virtual file system prefix where a file name starts: the start, or after a wrapper's / { " ' : , or a space
 _VSI = re.compile(r"(?:^|(?<=[/{\"':,\s]))/vsi([a-z0-9_]+)", re.IGNORECASE)
 
@@ -197,7 +220,8 @@ def carried(allowed: Optional[bool]):
         _CARRIED.reset(token)
 
 
-def _carrying_iter(it, allowed: bool):
+def carrying_iter(it, allowed: Optional[bool]):
+    """``it``'s items, each produced with ``allowed`` carried (None: as it was); nothing is carried across a yield."""
     while True:
         with carried(allowed):
             try:
@@ -216,7 +240,7 @@ def _carrying_function(func, allowed: bool):
         with carried(allowed):
             result = func(*args, **kwargs)
         if isinstance(result, collections.abc.Iterator):
-            return _carrying_iter(result, allowed)
+            return carrying_iter(result, allowed)
         return result
 
     return run
@@ -284,30 +308,45 @@ def carrying_source(cls, allowed: bool):
     )
 
 
-@contextlib.contextmanager
-def carrying_registrations(spark, allowed: Optional[bool] = None):
-    """While the block runs, every ``spark.udf`` / ``spark.udtf`` registration carries the driver's switch (read now,
-    unless ``allowed`` is given): the one point where the registrars hand their functions to Spark.
+class _CarryingRegistration:
+    """A session's ``udf`` / ``udtf`` as a registrar sees it: ``register`` hands Spark the function with the switch
+    carried (``carrying``); everything else is the session's own."""
+
+    def __init__(self, target, allowed: bool):
+        self._target, self._allowed = target, allowed
+
+    def register(self, name, f, *args, **kwargs):
+        return self._target.register(name, carrying(f, self._allowed), *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._target, name)
+
+
+class _CarryingSession:
+    """A session as a registrar sees it: its ``udf`` / ``udtf`` registrations carry the driver's switch to the
+    workers; every other attribute is the session's own. Nothing global changes, so a registration made elsewhere
+    (another thread's ``register()``, the user's own UDF) is untouched."""
+
+    def __init__(self, spark, allowed: bool):
+        self._spark, self._allowed = spark, allowed
+
+    @property
+    def udf(self):
+        return _CarryingRegistration(self._spark.udf, self._allowed)
+
+    @property
+    def udtf(self):
+        return _CarryingRegistration(self._spark.udtf, self._allowed)
+
+    def __getattr__(self, name):
+        return getattr(self._spark, name)
+
+
+def carrying_session(spark, allowed: Optional[bool] = None):
+    """``spark`` for the registrars: each function they register through its ``udf`` / ``udtf`` carries the
+    driver's switch (read now, unless ``allowed`` is given). The one point where they hand their functions to Spark.
     """
-    allowed = driver_switch() if allowed is None else allowed
-    patched = []
-    for name in ("udf", "udtf"):
-        try:
-            cls = type(getattr(spark, name))
-        except Exception:  # noqa: BLE001 - a session without it registers none
-            continue
-        orig = cls.register
-
-        def register(self, name, f, *args, _orig=orig, **kwargs):
-            return _orig(self, name, carrying(f, allowed), *args, **kwargs)
-
-        cls.register = register
-        patched.append((cls, orig))
-    try:
-        yield allowed
-    finally:
-        for cls, orig in reversed(patched):
-            cls.register = orig
+    return _CarryingSession(spark, driver_switch() if allowed is None else allowed)
 
 
 def remote_location(path) -> Optional[str]:
@@ -322,15 +361,22 @@ def remote_location(path) -> Optional[str]:
         scheme = m.group(1).lower()
         if any(part not in _DATA_SCHEMES for part in scheme.split("+")):
             return f"{scheme}://"
+    # the path as the binding opens it: rasterio and pyogrio read the scheme with urllib.parse (no "//" needed)
+    scheme = urlsplit(text).scheme
+    parts = scheme.split("+") if scheme else ()
+    if parts and all(p in _BINDING_SCHEMES for p in parts):
+        if any(p not in _DATA_SCHEMES for p in parts):
+            return f"{scheme}:"
     return None
 
 
 def data_path(path, what: str = "a path from data"):
     """``path``, when it is one GeoBrix opens for a path that comes from data; ``RemotePathError`` when it names a
-    remote location (``remote_location``) and the switch is off. The one gate for those paths: a virtual tile's path
-    (``open_tile``'s resolver, the engine, vizx), a ``manifest`` or tile-index row, a VRT's member, the
-    ``vector_file_read`` table's path. A path the caller passes itself (``.load(path)``, ``rst_fromfile``) is the
-    caller's choice and is not judged here."""
+    remote location (``remote_location``) and the switch is off. The one gate for those paths, run by every opener:
+    ``open_data`` (every raster read), the vector reads of ``pyogrio()``, and the engine's open of a virtual tile's
+    file. ``rst_fromfile`` runs it on its path at once, so a refused URL raises at the first evaluation. An opener is
+    told ``remote_ok=True`` only where the path is not data: a path the caller passed to a driver-side call
+    themselves, or an href ``core._http`` checked."""
     if path is None or remote_paths_allowed():
         return path
     where = remote_location(path)
@@ -461,13 +507,51 @@ def state() -> Dict:
     return activate()
 
 
-def pyogrio():
+# The pyogrio reads that open a path (their first argument): through ``pyogrio()`` each is judged by the remote-path
+# gate first.
+_VECTOR_READS = (
+    "read_arrow",
+    "open_arrow",
+    "read_info",
+    "read_bounds",
+    "read_dataframe",
+    "list_layers",
+    "read",  # pyogrio.raw.read
+)
+
+
+class _GatedPyogrio:
+    """pyogrio as GeoBrix's vector reads see it: each read of a path (``_VECTOR_READS``) is judged by the remote-path
+    gate first; everything else is pyogrio's own."""
+
+    def __init__(self, module):
+        self._module = module
+
+    def __getattr__(self, name):
+        attr = getattr(self._module, name)
+        if name == "raw":  # pyogrio.raw's reads are judged the same way
+            return _GatedPyogrio(attr)
+        if name not in _VECTOR_READS:
+            return attr
+
+        @functools.wraps(attr)
+        def read(path_or_buffer, *args, **kwargs):
+            if isinstance(path_or_buffer, (str, os.PathLike)):
+                data_path(path_or_buffer, "a vector file")
+            return attr(path_or_buffer, *args, **kwargs)
+
+        return read
+
+
+def pyogrio(remote_ok: bool = False):
     """pyogrio, with the policy active first: GeoBrix's vector reads take the module from here, so the refused drivers
-    are gone before their first open."""
+    are gone before their first open. Each read of a path is judged by the remote-path gate (``data_path``) first,
+    unless ``remote_ok``: a path that is not data (no vector read needs it today: the readers list local and Volume
+    files; a site that would is listed in ``test_open_sites.py``)."""
     activate()
     import pyogrio as module
 
-    return module
+    return module if remote_ok else _GatedPyogrio(module)
 
 
 def _skip_at_registration() -> None:
@@ -749,18 +833,23 @@ def _open_restricted(fp, mode: str, drivers: list, kwargs: dict):
     return rasterio.open(fp, mode, driver=name, **kwargs)
 
 
-def open_data(fp, mode: str = "r", **kwargs):
-    """``rasterio.open`` for GeoBrix, under the process's driver policy. Every read (``r``, ``r+``) opens with the
-    allowed drivers as GDAL's driver list: the identified one in full mode, for a named file; the whole allowed list
-    otherwise (a remote or ``/vsi`` name, a ``MemoryFile``, a file-like, a partial process). A ``driver=`` the policy
-    refuses, and a file no allowed driver reads, raise ``DriverPolicyError``. A write (``w``) is ``rasterio.open``
-    after the activation, as is every open with the switch off."""
+def open_data(fp, mode: str = "r", *, remote_ok: bool = False, **kwargs):
+    """``rasterio.open`` for GeoBrix, under the process's driver policy. A read (``r``, ``r+``) of a named path is
+    judged by the remote-path gate first (``data_path``), unless ``remote_ok``: the caller's own path to a
+    driver-side call, or an href ``core._http`` checked (the sites are listed in ``test_open_sites.py``). Every read
+    opens with the allowed drivers as GDAL's driver list: the identified one in full mode, for a named file; the
+    whole allowed list otherwise (a remote or ``/vsi`` name, a ``MemoryFile``, a file-like, a partial process). A
+    ``driver=`` the policy refuses, and a file no allowed driver reads, raise ``DriverPolicyError``. A write (``w``)
+    is ``rasterio.open`` after the activation, as is every open with the policy switched off.
+    """
     import rasterio
 
+    path = os.fspath(fp) if isinstance(fp, (str, os.PathLike)) else None
+    if mode.startswith("r") and path is not None and not remote_ok:
+        data_path(path, "a raster")
     state_now = activate()
     if not mode.startswith("r") or state_now["mode"] == "off":
         return rasterio.open(fp, mode, **kwargs)
-    path = os.fspath(fp) if isinstance(fp, (str, os.PathLike)) else None
     what = path or "the raster bytes"
     explicit = kwargs.pop("driver", None)
     drivers = _requested_drivers(explicit, what)

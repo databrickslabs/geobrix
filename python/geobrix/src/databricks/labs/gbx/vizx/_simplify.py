@@ -454,7 +454,7 @@ def _simplify_raster(source, spec: dict, out_path: str | None) -> Union[bytes, s
             from databricks.labs.gbx.pyrx.core import compression as _comp
 
             src_path = str(source)
-            with open_data(src_path) as src:
+            with open_data(src_path, remote_ok=True) as src:  # the caller's own path
                 scale = max(src.width, src.height) / raster_max_px
                 if scale > 1:
                     new_h = max(1, int(src.height / scale))

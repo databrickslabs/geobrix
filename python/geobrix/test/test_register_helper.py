@@ -1,5 +1,7 @@
 """Unit tests for the shared selective-registration helper."""
 
+import threading
+
 import pytest
 
 from databricks.labs.gbx import _register
@@ -112,3 +114,72 @@ def test_run_groups_empty_only_registers_nothing_and_no_guards():
     _register.run_groups(groups, spark=None, only=[])
     assert registered == []
     assert calls == []  # no function selected => guard not run
+
+
+class _Registry:
+    """A session's ``udf`` / ``udtf``: what each registration was handed."""
+
+    def __init__(self):
+        self.got = {}
+
+    def register(self, name, f, *args, **kwargs):
+        self.got[name] = f
+        return f
+
+
+def test_overlapping_registrations_each_carry_their_own_switch_and_wrap_nothing_else(
+    monkeypatch,
+):
+    """Two register() calls overlapping on threads (the first ends first) keep each one's remote-path switch; a
+    UDF the user registers on the session meanwhile is registered as given; Spark's registration class is left as
+    it was."""
+    from databricks.labs.gbx import _gdal_policy
+
+    class Session:
+        def __init__(self):
+            self.udf, self.udtf = _Registry(), _Registry()
+
+    spark, original = Session(), _Registry.register
+
+    def probe():
+        return _gdal_policy._CARRIED.get()
+
+    def user_fn():
+        return "mine"
+
+    def registrar(tag, entered, release):
+        def reg(s):
+            s.udf.register(f"{tag}1", probe)
+            entered.set()
+            assert release.wait(10)
+            s.udf.register(f"{tag}2", probe)
+
+        return [(lambda: None, {f"gbx_{tag}": reg})]
+
+    events = {t: (threading.Event(), threading.Event()) for t in ("a", "b")}
+    threads = {}
+    for tag, switch in (("a", "true"), ("b", "false")):
+        monkeypatch.setenv(
+            _gdal_policy.REMOTE_ENV, switch
+        )  # read as each register() starts
+        threads[tag] = threading.Thread(
+            target=_register.run_groups,
+            args=(registrar(tag, *events[tag]), spark, None),
+        )
+        threads[tag].start()
+        assert events[tag][0].wait(10)
+    spark.udf.register(
+        "user_fn", user_fn
+    )  # both register() calls are inside their blocks
+    for tag in ("a", "b"):  # the first one ends first
+        events[tag][1].set()
+        threads[tag].join(10)
+    got = spark.udf.got
+    assert {n: got[n]() for n in ("a1", "a2", "b1", "b2")} == {
+        "a1": True,
+        "a2": True,
+        "b1": False,
+        "b2": False,
+    }
+    assert got["user_fn"] is user_fn
+    assert _Registry.register is original and "register" not in vars(spark.udf)

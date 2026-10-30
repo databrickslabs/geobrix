@@ -316,7 +316,11 @@ def test_a_refused_drivers_connection_string_is_the_policy_refusal(tmp_path, nam
     _rasterio_or_skip()
     gpkg = tmp_path / "index.gpkg"
     gpkg.write_bytes(b"SQLite format 3\x00")
-    with pytest.raises(_gdal_policy.DriverPolicyError) as raised:
+    # with remote paths allowed, so the WMS URL reaches the driver policy (the remote-path gate has its own rows)
+    with (
+        _gdal_policy.carried(True),
+        pytest.raises(_gdal_policy.DriverPolicyError) as raised,
+    ):
         _gdal_policy.open_data(name.format(gpkg=gpkg))
     msg = str(raised.value)
     assert (
@@ -705,7 +709,8 @@ def test_every_read_through_open_data_names_the_allowed_drivers(monkeypatch):
         monkeypatch.setattr(_gdal_policy, "activate", lambda m=mode: {"mode": m})
         monkeypatch.setattr(_gdal_policy, "_identify", lambda path, n=identified: n)
         monkeypatch.setattr(_gdal_policy, "_exists", lambda path, e=exists: e)
-        _gdal_policy.open_data(fp, open_mode).close()
+        with _gdal_policy.carried(True):  # the remote-path gate has its own rows
+            _gdal_policy.open_data(fp, open_mode).close()
         assert seen, (mode, fp)
         first = seen[0][2]
         assert first == want, (mode, fp, open_mode, seen)
@@ -802,6 +807,13 @@ DATA_PATHS = [
     ("zip+https://h/a.zip!/a.tif", "zip+https://"),
     ('NETCDF:"/vsicurl/http://h/a.nc":v', "/vsicurl/"),
     ("/vsiwebhdfs/http://h/a.tif", "/vsiwebhdfs/"),
+    # a scheme as rasterio and pyogrio read it (urllib.parse: no "//" needed); a driver prefix is no scheme to them
+    ("https:h/a.tif", "https:"),
+    (" ftp:h/a.tif", "ftp:"),
+    ("zip+https:h/a.zip!a.tif", "zip+https:"),
+    ("hdfs:namenode/a.shp", "hdfs:"),
+    ("s3:b/a.tif", None),
+    ('NETCDF:"/Volumes/c/s/v/a.nc":v', None),
 ]
 
 
@@ -876,7 +888,22 @@ def _through_vizx(tmp_path):
     )
 
 
+def _through_open_data(tmp_path):
+    _gdal_policy.open_data(_URL)
+
+
+def _through_pyogrio(tmp_path):
+    _gdal_policy.pyogrio().read_info("/vsicurl/http://127.0.0.1:9/a.gpkg")
+
+
+def _through_pyogrio_raw(tmp_path):
+    _gdal_policy.pyogrio().raw.read("/vsicurl/http://127.0.0.1:9/a.gpkg")
+
+
 GATED_SITES = {
+    "open-data": _through_open_data,
+    "pyogrio-read": _through_pyogrio,
+    "pyogrio-raw-read": _through_pyogrio_raw,
     "virtual-tile": _through_open_tile,
     "manifest-row": _through_a_manifest_row,
     "vrt-member": _through_a_vrt_member,
@@ -894,6 +921,62 @@ def test_each_path_from_data_goes_through_the_remote_path_gate(
     monkeypatch.delenv(_gdal_policy.REMOTE_ENV, raising=False)
     with pytest.raises(_gdal_policy.RemotePathError, match=r"\(/vsicurl/\)"):
         GATED_SITES[site](tmp_path)
+
+
+def _binding_forms(path: str) -> list:
+    """The names rasterio and pyogrio open for ``path``: each binding's own parse of it."""
+    from rasterio._path import _parse_path, _vsi_path
+
+    forms = []
+    for convert in (lambda p: _vsi_path(_parse_path(p)), _pyogrio_vsi_path()):
+        try:
+            forms.append(convert(path))
+        except (
+            Exception
+        ):  # noqa: BLE001 - a spelling the binding cannot parse opens nothing
+            pass
+    return forms
+
+
+def _pyogrio_vsi_path():
+    try:
+        from pyogrio.util import vsi_path
+    except ImportError:
+        return lambda p: p
+    return vsi_path
+
+
+def test_the_gate_refuses_every_spelling_a_binding_opens_as_a_remote_location():
+    """rasterio and pyogrio read a path's scheme with urllib.parse, so ``https:host/a.tif`` (no ``//``) is a URL to
+    them. Over every scheme they convert, with each separator, in upper case, inside ``zip+`` and after a blank:
+    whenever the name a binding opens is one the gate refuses, the gate refuses the path as written.
+    """
+    _rasterio_or_skip()
+    import rasterio._path as rio_path
+
+    schemes = set(rio_path.SCHEMES)
+    try:
+        import pyogrio.util
+
+        schemes |= set(pyogrio.util.SCHEMES)
+    except ImportError:
+        pass
+    assert schemes <= _gdal_policy._BINDING_SCHEMES, (
+        schemes - _gdal_policy._BINDING_SCHEMES
+    )
+    missed = []
+    for scheme in sorted(schemes):
+        for spelled in (scheme, scheme.upper(), f"zip+{scheme}"):
+            for sep in ("://", ":", ":/", ":///"):
+                for lead in ("", " "):
+                    path = f"{lead}{spelled}{sep}127.0.0.1:9/a.zip!a.tif"
+                    for form in _binding_forms(path):
+                        if (
+                            _gdal_policy.remote_location(form) is not None
+                            and _gdal_policy.remote_location(path) is None
+                        ):
+                            missed.append((path, form))
+    assert missed == []
 
 
 def test_rst_fromfile_refuses_a_remote_url_at_once_unless_the_switch_is_carried(
@@ -934,9 +1017,11 @@ class _RangeHandler:
         import threading
 
         data = body
+        self.hits = hits = []
 
         class H(http.server.BaseHTTPRequestHandler):
             def _send(self, head_only):
+                hits.append(self.command)
                 rng = self.headers.get("Range")
                 part, status = data, 200
                 if rng and rng.startswith("bytes="):
@@ -1013,3 +1098,127 @@ def test_the_switch_is_read_on_the_driver_and_carried_to_the_workers(
             spark.sql(query).collect()
     finally:
         server.close()
+
+
+def _served_tif(tmp_path):
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    tif = tmp_path / "a.tif"
+    with rasterio.open(
+        tif,
+        "w",
+        driver="GTiff",
+        width=8,
+        height=6,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(0, 6, 1, 1),
+    ) as w:
+        w.write(np.ones((1, 6, 8), dtype="uint8"))
+    return _RangeHandler(tif.read_bytes())
+
+
+def test_a_reader_carries_the_switch_from_register_to_its_workers_planning(
+    spark8, monkeypatch, tmp_path
+):
+    """A manifest row's path is data. With the switch on in the driver at register() (and NOT in the workers'
+    environment), the reader's planning on a worker lets a remote row through the gate (the lightweight reader then
+    reads a row's file from a local or Volume path only, so this read ends with the reader's own error); after
+    register() with it off, the row is refused by name."""
+    _rasterio_or_skip()
+    import json
+
+    from databricks.labs.gbx.ds.register import register
+
+    manifest_file = tmp_path / "rows.json"
+    manifest_file.write_text(json.dumps([{"path": "http://127.0.0.1:9/a.tif"}]))
+
+    def read():
+        with pytest.raises(Exception) as raised:
+            spark8.read.format("raster_gbx").option(
+                "manifest", str(manifest_file)
+            ).load(str(tmp_path)).collect()
+        return str(raised.value)
+
+    monkeypatch.setenv(_gdal_policy.REMOTE_ENV, "true")
+    register(spark8, only=["raster_gbx"])
+    on = read()
+    assert "names a remote location" not in on and "No such file" in on, on[-600:]
+    monkeypatch.delenv(_gdal_policy.REMOTE_ENV)
+    register(spark8, only=["raster_gbx"])
+    assert "names a remote location" in read()
+
+
+def test_vector_file_read_carries_the_switch_to_its_workers_reads(
+    spark8, monkeypatch, tmp_path
+):
+    """A vector table's path is data: vector_file_read reads the driver's switch where the read is built, and its
+    workers (whose environment does not have it) read a remote path with it on; with it off, refused.
+    """
+    import json
+
+    pytest.importorskip("pyogrio")
+    from databricks.labs.gbx.pyvx import file_read
+
+    feature = {
+        "type": "Feature",
+        "properties": {},
+        "geometry": {"type": "Point", "coordinates": [1.0, 2.0]},
+    }
+    body = json.dumps({"type": "FeatureCollection", "features": [feature]}).encode()
+    server = _RangeHandler(body)
+    url = server.url.replace("/a.tif", "/a.geojson")
+    monkeypatch.setattr(
+        file_read,
+        "resolve_file_table",
+        lambda spark, table, skip_ordering=False: spark.createDataFrame(
+            [(url,)], "source string"
+        ),
+    )
+    try:
+        monkeypatch.setenv(_gdal_policy.REMOTE_ENV, "true")
+        df = file_read.vector_file_read(spark8, "cat.sch.points", source_type="table")
+        assert [r["source"] for r in df.collect()] == [url]
+        monkeypatch.delenv(_gdal_policy.REMOTE_ENV)
+        df = file_read.vector_file_read(spark8, "cat.sch.points", source_type="table")
+        with pytest.raises(Exception, match="names a remote location"):
+            df.collect()
+    finally:
+        server.close()
+
+
+def test_the_vector_decode_carries_the_switch_per_batch_not_across_its_yields(
+    tmp_path,
+):
+    """vector_file_read's decode carries the driver's switch around each step it takes; between batches the
+    caller's context is as it was (nothing is held across a yield)."""
+    import json
+
+    import pandas as pd
+
+    pytest.importorskip("pyogrio")
+    from databricks.labs.gbx.pyvx import file_read
+
+    gj = tmp_path / "a.geojson"
+    gj.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {},
+                        "geometry": {"type": "Point", "coordinates": [1.0, 2.0]},
+                    }
+                ],
+            }
+        )
+    )
+    decode = file_read._make_vector_decode_fn(True, 0, remote_allowed=True)
+    batches = decode(iter([pd.DataFrame({"source": [str(gj)]})]))
+    assert len(next(batches)) == 1
+    assert _gdal_policy._CARRIED.get() is None
+    batches.close()

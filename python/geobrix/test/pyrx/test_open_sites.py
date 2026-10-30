@@ -544,3 +544,173 @@ def test_a_verbatim_copy_of_an_allowlisted_line_is_a_new_site():
     line = one_site[0][1]
     # the allowlist as it stands names one copy: the second copy makes the count differ
     assert Counter(text for _n, text in two_sites)[line] != 1
+
+
+# ---------------------------------------------------------------------------
+# The remote-path gate runs inside the openers: ``open_data`` judges every read of a named path, and the reads of
+# ``_gdal_policy.pyogrio()`` every vector path, unless told ``remote_ok=True``. Together with the guard above (every
+# raster open is ``open_data`` or ``open_bytes``), a light open of a path from data cannot pass around the gate: the
+# opt-out appears only at the sites below, each a path that is not data; and pyogrio is imported only by the policy
+# module and the listed sites, none of which reads a path from data through it.
+# ---------------------------------------------------------------------------
+
+REMOTE_OK_SITES = {
+    (
+        "stac/_download.py",
+        "windowed_download",
+    ): "an http(s) href core._http checked, or a path the gate allowed",
+    ("vizx/_raster.py", "plot_file"): "the caller's own path, to a driver-side call",
+    ("vizx/_raster.py", "plot_mosaic"): "the caller's own VRT, to a driver-side call",
+    ("vizx/_cog.py", "plot_cog"): "the caller's own path, to a driver-side call",
+    (
+        "vizx/_maplibre.py",
+        "_raster_to_image",
+    ): "the caller's own layer path, to a driver-side call",
+    (
+        "vizx/_simplify.py",
+        "_simplify_raster",
+    ): "the caller's own path, to a driver-side call",
+    ("models/runner.py", "_open_input"): "the caller's own path, to a driver-side call",
+}
+PYOGRIO_IMPORTS = {
+    "_native/_selfcheck.py": "the payload's self-check of its own pyogrio, on files it writes in its scratch directory",
+    "sample/_bundle.py": "the development-only sample-data generator (the security page names it)",
+    "ds/vector.py": "pyogrio.errors (the exception types) and pyogrio.raw.write (a writer)",
+}
+# What a pyogrio import may be used for where it is not the policy module's: no read of a path.
+_PYOGRIO_READS = {
+    "read_arrow",
+    "open_arrow",
+    "read_info",
+    "read_bounds",
+    "read_dataframe",
+    "list_layers",
+    "read",
+}
+
+
+def remote_ok_sites_in(text: str) -> list:
+    """The functions (by name) that call an opener with ``remote_ok`` other than a literal False."""
+    tree = ast.parse(text)
+    found = []
+
+    def visit(node, where):
+        for child in ast.iter_child_nodes(node):
+            name = (
+                child.name
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                else where
+            )
+            if isinstance(child, ast.Call):
+                for kw in child.keywords:
+                    if kw.arg == "remote_ok" and not (
+                        isinstance(kw.value, ast.Constant) and kw.value.value is False
+                    ):
+                        found.append(where)
+            visit(child, name)
+
+    visit(tree, "<module>")
+    return sorted(set(found))
+
+
+_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+
+
+def _own_nodes(scope):
+    """The nodes of ``scope`` outside the functions and classes nested in it."""
+    todo = list(ast.iter_child_nodes(scope))
+    while todo:
+        node = todo.pop()
+        yield node
+        if not isinstance(node, _SCOPES):
+            todo.extend(ast.iter_child_nodes(node))
+
+
+def _pyogrio_names(nodes) -> set:
+    names = set()
+    for node in nodes:
+        if isinstance(node, ast.Import):
+            names.update(
+                a.asname or "pyogrio"
+                for a in node.names
+                if a.name.split(".")[0] == "pyogrio"
+            )
+        elif (
+            isinstance(node, ast.ImportFrom)
+            and (node.module or "").split(".")[0] == "pyogrio"
+        ):
+            names.update(a.asname or a.name for a in node.names)
+    return names
+
+
+def pyogrio_reads_in(text: str) -> tuple:
+    """(whether the file imports pyogrio itself, the lines that read a path through a name such an import binds in
+    that scope: a name assigned there, such as ``pyogrio = _gdal_policy.pyogrio()``, is the gated module instead).
+    """
+    tree = ast.parse(text)
+    reads = []
+
+    def check(scope, inherited):
+        own = list(_own_nodes(scope))
+        assigned = {
+            t.id
+            for n in own
+            if isinstance(n, (ast.Assign, ast.AnnAssign))
+            for t in (n.targets if isinstance(n, ast.Assign) else [n.target])
+            if isinstance(t, ast.Name)
+        }
+        raw = (inherited - assigned) | _pyogrio_names(own)
+        for node in own:
+            if isinstance(node, _SCOPES):
+                check(node, raw)
+            elif isinstance(node, ast.Call):
+                f = node.func
+                if isinstance(f, ast.Name) and f.id in raw and f.id in _PYOGRIO_READS:
+                    reads.append(node.lineno)
+                elif isinstance(f, ast.Attribute) and f.attr in _PYOGRIO_READS:
+                    root = f.value
+                    while isinstance(root, ast.Attribute):
+                        root = root.value
+                    if isinstance(root, ast.Name) and root.id in raw:
+                        reads.append(node.lineno)
+
+    check(tree, set())
+    return bool(_pyogrio_names(ast.walk(tree))), sorted(reads)
+
+
+def test_the_openers_gate_every_path_but_the_listed_ones():
+    remote_ok, imports, reads = {}, {}, {}
+    for py in sorted(PY_ROOT.rglob("*.py")):
+        if "__pycache__" in py.parts:
+            continue
+        rel = py.relative_to(PY_ROOT).as_posix()
+        if rel in EXCLUDED_FILES:
+            continue
+        text = py.read_text()
+        for fn in remote_ok_sites_in(text):
+            remote_ok[(rel, fn)] = True
+        imported, lines = pyogrio_reads_in(text)
+        if imported:
+            imports[rel] = True
+        if lines and rel not in ("_native/_selfcheck.py", "sample/_bundle.py"):
+            reads[rel] = lines
+    assert sorted(remote_ok) == sorted(REMOTE_OK_SITES)
+    assert sorted(imports) == sorted(PYOGRIO_IMPORTS)
+    assert reads == {}, f"a path read through a pyogrio import of its own: {reads}"
+
+
+def test_the_gate_guards_flag_a_planted_opt_out_and_a_raw_vector_read():
+    text = (
+        "import pyogrio.raw\n"
+        "from databricks.labs.gbx import _gdal_policy\n"
+        "from databricks.labs.gbx._gdal_policy import open_data\n"
+        "def f(p):\n"
+        "    with open_data(p, remote_ok=True) as ds:\n"
+        "        return pyogrio.read_info(p)\n"
+        "def g(p):\n"
+        "    pyogrio = _gdal_policy.pyogrio()\n"
+        "    pyogrio.read_info(p)\n"
+        "    return open_data(p, remote_ok=False)\n"
+    )
+    assert remote_ok_sites_in(text) == ["f"]
+    assert pyogrio_reads_in(text) == (True, [6])

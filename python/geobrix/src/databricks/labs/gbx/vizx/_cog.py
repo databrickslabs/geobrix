@@ -316,7 +316,7 @@ def plot_cog(
     from databricks.labs.gbx.vizx._raster import _decimated_read
 
     p = _strip_scheme(str(path))
-    with open_data(p) as src:
+    with open_data(p, remote_ok=True) as src:  # the caller's own path
         warp_crs = None
         if to_crs is not None and src.crs is not None:
             from databricks.labs.gbx.core.crs import crs_equal, resolve_crs

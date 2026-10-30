@@ -82,8 +82,9 @@ def register(_spark: SparkSession) -> None:
         )
 
         # the light implementation it registers carries the driver's remote-path switch to the workers
-        with _gdal_policy.carrying_registrations(_spark):
-            _spark.udf.register("gbx_rst_fromfile", _pyrx_fromfile_materialized_udf)
+        _gdal_policy.carrying_session(_spark).udf.register(
+            "gbx_rst_fromfile", _pyrx_fromfile_materialized_udf
+        )
     except (
         Exception
     ):  # noqa: BLE001 - pyrx/light-tier not installed: keep the Scala fallback

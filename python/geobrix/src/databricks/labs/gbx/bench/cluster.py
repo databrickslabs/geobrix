@@ -385,6 +385,7 @@ LEVELS_SCALES = {levels_scales!r}
 # driver stack dump. SMOKE: run only the smoke stage (the worker import check, then every form of the levels
 # set once at SMOKE_ROWS rows) and exit. INJECT_STALL (seconds, test only): a form that sleeps on the driver.
 HEARTBEAT_SECS = {heartbeat_secs}
+LAUNCH_TOKEN = {launch_token!r}
 STALL_CAP_S = {stall_cap_s}
 SMOKE = {smoke!r}
 SMOKE_ROWS = {smoke_rows}
@@ -546,7 +547,8 @@ try:
 except Exception as _e:  # a stderr with no file descriptor: the heartbeat's own stack still names the stall
     print("faulthandler stall dump not armed:", _e)
 from databricks.labs.gbx.bench import liveness as _live
-HEARTBEAT = _live.Heartbeat(OUT + "/heartbeat.json", HEARTBEAT_SECS, phase="smoke" if SMOKE else "run").start()
+HEARTBEAT = _live.Heartbeat(OUT + "/heartbeat.json", HEARTBEAT_SECS, phase="smoke" if SMOKE else "run",
+                            token=LAUNCH_TOKEN).start()
 print("heartbeat:", OUT + "/heartbeat.json", flush=True)
 """
 
@@ -3695,6 +3697,7 @@ def build_bench_notebook(cfg: dict) -> dict:
         levels_uc=str(cfg.get("levels_uc", "") or ""),
         levels_scales=tuple(cfg.get("levels_scales") or (1, 4, 16)),
         heartbeat_secs=float(cfg.get("heartbeat_secs", 30)),
+        launch_token=str(cfg.get("launch_token", "")),
         stall_cap_s=int(cfg.get("stall_cap_s", 900)),
         smoke=bool(cfg.get("smoke")),
         smoke_rows=int(cfg.get("smoke_rows", 16)),

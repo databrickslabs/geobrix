@@ -66,10 +66,12 @@ class Watchdog:
         form_cap_s: float = DEFAULT_FORM_CAP_S,
         stale_s: float = DEFAULT_STALE_S,
         clock: Callable[[], float] = time.monotonic,
+        token: Optional[str] = None,
     ):
         self.form_cap_s = form_cap_s
         self.stale_s = stale_s
         self._clock = clock
+        self.token = token  # this launch's id: a beat another launch wrote (same path) is not this run's
         self._seq = None
         self._seen_at = 0.0
         self._last: dict = {}
@@ -80,6 +82,8 @@ class Watchdog:
 
     def observe(self, beat: Optional[dict]) -> Optional[Stall]:
         now = self._clock()
+        if beat is not None and self.token is not None and beat.get("token") != self.token:
+            beat = None  # a file an earlier launch left at the same path
         if beat is not None and beat.get("seq") != self._seq:
             self._seq, self._seen_at, self._last = beat.get("seq"), now, beat
         if not self._last or self._last.get("state") in ("done", "failed"):

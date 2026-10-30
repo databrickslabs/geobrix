@@ -58,6 +58,16 @@ def test_nothing_is_judged_before_the_first_beat_or_after_a_finished_run():
     assert w.observe(beat(1, state="done")) is None
 
 
+def test_a_heartbeat_file_another_launch_left_at_the_same_path_is_not_this_runs():
+    """A cancelled run's file (old token, a form already 8 min in) once got the next run cancelled seven seconds in."""
+    c = Clock()
+    w = wd.Watchdog(form_cap_s=300, stale_s=300, clock=c, token="new-launch")
+    left_over = {**beat(32, elapsed=501), "token": "old-launch"}
+    assert w.observe(left_over) is None and w.last_beat == {}  # not seen at all
+    assert w.observe({**beat(1, elapsed=3), "token": "new-launch"}) is None
+    assert w.last_beat["seq"] == 1
+
+
 def run_watch(beats, states, **kw):
     """watch_run over scripted beats and states; returns (outcome, cancels, printed lines)."""
     c = Clock()

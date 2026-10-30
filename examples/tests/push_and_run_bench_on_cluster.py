@@ -47,6 +47,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import uuid
 from pathlib import Path
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
@@ -317,13 +318,17 @@ def _life_and_result(run):
     return (val(st.life_cycle_state) if st else "?"), (val(st.result_state) if st else "")
 
 
-def watch_to_end(w, run_id, *, hb_path, form_cap_s, stale_s, count=None, poll_secs=5) -> Outcome:
+def watch_to_end(w, run_id, *, hb_path, form_cap_s, stale_s, token=None, count=None, poll_secs=5) -> Outcome:
     """Poll the run to its end with the watchdog; a stalled run is cancelled and reported (exit 3, not retried).
 
     ``count`` is ``(warehouse_id, table, run_id, apis, expected)`` for the live row count of a real run.
     """
     import time
 
+    try:
+        w.files.delete(hb_path)  # a file an earlier run left there (the token below is the guard if this fails)
+    except Exception:  # noqa: BLE001 - absent is the usual case
+        pass
     t0 = time.monotonic()
     last = {"beat": None, "at": -1e9, "rows": -1, "stale": 0, "run": None}
 
@@ -365,7 +370,7 @@ def watch_to_end(w, run_id, *, hb_path, form_cap_s, stale_s, count=None, poll_se
         cancel=lambda: w.jobs.cancel_run(run_id),
         on_stall_dump=lambda: _run_watchdog.faulthandler_tail(w, run_id),
         on_poll=on_poll,
-        watchdog=_run_watchdog.Watchdog(form_cap_s=form_cap_s, stale_s=stale_s),
+        watchdog=_run_watchdog.Watchdog(form_cap_s=form_cap_s, stale_s=stale_s, token=token),
         poll_secs=poll_secs,
     )
     seconds = time.monotonic() - t0
@@ -915,6 +920,7 @@ def main() -> int:
         levels_scales=levels_scales,
         #  Liveness: the heartbeat period, the driver stack dump cap, the test-only stall.
         heartbeat_secs=30,
+        launch_token=uuid.uuid4().hex,
         stall_cap_s=int(form_cap_min * 60),
         inject_stall=inject_stall,
         #  Phase-2 FILE legs (light-only, serialized):
@@ -1199,7 +1205,7 @@ def main() -> int:
         smoke_cfg = dict(
             cfg, smoke=True, run_id=f"{run_id}-smoke", out_dir=f"{out_dir}-smoke", smoke_rows=smoke_rows,
             truncate_results=False, truncate_all=False, resume=False, redo_functions="",
-            stall_cap_s=int(min(form_cap_min, SMOKE_FORM_CAP_MIN) * 60),
+            stall_cap_s=int(min(form_cap_min, SMOKE_FORM_CAP_MIN) * 60), launch_token=uuid.uuid4().hex,
         )  # fmt: skip
         upload(smoke_path, build_bench_notebook(smoke_cfg))
 
@@ -1351,7 +1357,7 @@ def main() -> int:
         smoke_id = submit(smoke_path, f"geobrix-bench-{run_id}-smoke", smoke_timeout_min * 60)
         outcome = watch_to_end(
             w, smoke_id, hb_path=f"{out_dir}-smoke/heartbeat.json",
-            form_cap_s=min(form_cap_s, SMOKE_FORM_CAP_MIN * 60.0), stale_s=stale_s,
+            form_cap_s=min(form_cap_s, SMOKE_FORM_CAP_MIN * 60.0), stale_s=stale_s, token=smoke_cfg["launch_token"],
         )  # fmt: skip
         if outcome.stall:
             print("SMOKE STAGE STALLED: nothing else is submitted.", file=sys.stderr)
@@ -1415,7 +1421,7 @@ def main() -> int:
     )
     outcome = watch_to_end(
         w, remote_run_id, hb_path=f"{out_dir}/heartbeat.json", form_cap_s=form_cap_s, stale_s=stale_s,
-        count=(warehouse_id, table, run_id, poll_apis, expected),
+        token=cfg["launch_token"], count=(warehouse_id, table, run_id, poll_apis, expected),
     )  # fmt: skip
     if outcome.stall:
         print(

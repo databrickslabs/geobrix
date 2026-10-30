@@ -33,7 +33,10 @@ def test_the_heartbeat_names_the_form_its_elapsed_time_and_the_stack_of_the_work
     tmp_path,
 ):
     hb = liveness.Heartbeat(
-        str(tmp_path / "out" / "heartbeat.json"), interval=0.05, phase="smoke"
+        str(tmp_path / "out" / "heartbeat.json"),
+        interval=0.05,
+        phase="smoke",
+        token="launch-1",
     ).start()
 
     def working_here():
@@ -47,6 +50,9 @@ def test_the_heartbeat_names_the_form_its_elapsed_time_and_the_stack_of_the_work
     final = json.loads((tmp_path / "out" / "heartbeat.json").read_text())
     assert beat["form"] == "gbx_bng:L4:uc-scalar" and beat["form_elapsed_s"] > 0.1
     assert (beat["form_index"], beat["form_total"], beat["phase"]) == (3, 10, "smoke")
+    assert (
+        beat["token"] == "launch-1"
+    )  # the launcher ignores a file another launch left
     assert any("working_here" in ln for ln in beat["stack"]), beat["stack"]
     assert (
         final["state"] == "done" and final["form"] is None and final["forms_done"] == 1
@@ -118,7 +124,10 @@ def test_the_injected_stall_form_sleeps_on_the_driver_after_the_first_form(
 def test_the_setup_arms_the_stack_dump_and_the_heartbeat_and_the_levels_cell_sinks_per_form():
     src = source(cl.build_bench_notebook(CFG))
     assert "_fh.dump_traceback_later(STALL_CAP_S, repeat=True, file=_sys.stderr)" in src
-    assert 'HEARTBEAT = _live.Heartbeat(OUT + "/heartbeat.json"' in src
+    assert (
+        'HEARTBEAT = _live.Heartbeat(OUT + "/heartbeat.json"' in src
+        and "token=LAUNCH_TOKEN" in src
+    )
     assert "on_form=_sink, heartbeat=HEARTBEAT" in src
     for cell in cl.build_bench_notebook(CFG)["cells"]:
         ast.parse("".join(cell["source"]).replace("%pip", "#"))

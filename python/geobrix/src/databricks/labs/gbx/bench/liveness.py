@@ -34,10 +34,13 @@ class Heartbeat:
     half-written file once in a while and should retry.
     """
 
-    def __init__(self, path: str, interval: float = 30.0, *, phase: str = ""):
+    def __init__(
+        self, path: str, interval: float = 30.0, *, phase: str = "", token: str = ""
+    ):
         self.path = path
         self.interval = float(interval)
         self.phase = phase
+        self.token = token  # the launcher's id of this launch: a reader ignores a file another launch left
         self._seq = 0
         self._form: Optional[str] = None
         self._form_started = 0.0
@@ -99,6 +102,7 @@ class Heartbeat:
             "seq": seq,
             "state": self._state,
             "phase": self.phase,
+            "token": self.token,
             "form": form,
             "form_elapsed_s": round(time.monotonic() - started, 1) if form else 0.0,
             "form_index": index,

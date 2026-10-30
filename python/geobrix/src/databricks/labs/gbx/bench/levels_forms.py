@@ -476,6 +476,8 @@ B, T, M = "gbx_bng_eastnorthasbng", "gbx_rst_transformcrs", "gbx_st_makevalid"
 FORMS: Dict[str, List[Form]] = {
     "S": [
         _f("L1", "-", B, "bng_points", _BNG, computes=("dedicated",)),
+        # Standard access mode runs a Java UDF only from a Java class of a JAR added to the session
+        # (`connect_class` in the manifest): the BNG scalar has one, the forms below do not.
         _f("L2", "-", B, "bng_points", _BNG, computes=("dedicated", "standard")),
         _f("L3", "c0", B, "bng_points", _BNG),
         _f("L3", "c1", B, "bng_points", _BNG),
@@ -501,7 +503,7 @@ FORMS: Dict[str, List[Form]] = {
         ),
         _f("L1", "-", T, "tiles_mat", _TCRS, computes=("dedicated",)),
         _f("L1", "dispatch-virtual", T, "tiles_virt", _TCRS, computes=("dedicated",)),
-        _f("L2", "-", T, "tiles_mat", _TCRS, computes=("dedicated", "standard")),
+        _f("L2", "-", T, "tiles_mat", _TCRS, computes=("dedicated",)),
         _f("L3", "-", T, "tiles_mat", _TCRS),
         _f("L3", "virtual", T, "tiles_virt", _TCRS),
         _f("L3", "-", M, "invalid_polys", _MV),
@@ -978,7 +980,7 @@ FORMS["G"] = [
         "tiles_mat",
         _retile(_RT_ARRAY_L2, _RT_CELL),
         setup="setup_g_l2",
-        computes=("dedicated", "standard"),
+        computes=("dedicated",),
     ),
     _g(
         RT,
@@ -987,7 +989,7 @@ FORMS["G"] = [
         "tiles_mat",
         _retile(_RT_PART_L2, _RT_CELL),
         setup="setup_g_l2",
-        computes=("dedicated", "standard"),
+        computes=("dedicated",),
     ),
     # the same three light shapes on big tiles (512 windows each): what the shapes cost in memory
     _g(
@@ -1050,7 +1052,7 @@ FORMS["G"] = [
         "bng_polys",
         _TE_ARRAY_L2,
         setup="setup_g_l2",
-        computes=("dedicated", "standard"),
+        computes=("dedicated",),
     ),
     _g(TE, "L4", "uc-tvf", "bng_polys", _TE_UC, computes=("serverless", "dedicated")),
     # form (b): the tessellation as one Scala mapPartitions, called over py4j (no SQL function in between)
@@ -1225,7 +1227,7 @@ def _a_light(fn, shapes, inputs):
 
 
 def _a_jvm(fn, shapes, inputs):
-    both = ("dedicated", "standard")
+    both = ("dedicated",)  # no Java handler for the finalize on standard access mode
     out = []
     for inp, sfx in inputs:
         out += [
@@ -1537,7 +1539,7 @@ FORMS["SE"] = (
     ]
     + [
         _se(T, "L1", "-", "tiles_mat", _SE_TCRS, computes=_DED),
-        _se(T, "L2", "-", "tiles_mat", _SE_TCRS, computes=("dedicated", "standard")),
+        _se(T, "L2", "-", "tiles_mat", _SE_TCRS, computes=("dedicated",)),
         _se(T, "L3", "-", "tiles_mat", _SE_TCRS),
         _se(T, "L1", "engine", "tiles_mat", _SE_TCRS, computes=_DED),
         _se(T, "L3", "engine-c0", "tiles_mat", _SE_TCRS),

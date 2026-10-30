@@ -309,18 +309,16 @@ def test_l2_is_refused_while_proj_grids_are_registered(tmp_path):
     from databricks.labs.gbx.core import proj_grids
 
     fn = MAN.functions["gbx_rst_transformcrs"]
-    standard = _caps(
-        connect=True, jar=OK_JAR, jar_reason=""
-    )  # L2 is the heavy option here
-    assert levels.select(fn, standard).level == "L2"
+    # L2 for a raster function exists on classic only (standard has no Java handler for it): judge the rule there
+    classic = _caps(jar=OK_JAR, jar_reason="")
+    assert levels.available(fn, "L2", classic) is None
     saved = proj_grids.get_registered_dirs()
     proj_grids.set_registered_dirs(str(tmp_path), replace=True)
     try:
-        choice = levels.select(fn, standard)
+        why = levels.available(fn, "L2", classic)
     finally:
         proj_grids.set_registered_dirs(saved, replace=True)
-    assert choice.level == "L3"
-    assert any("PROJ grids" in r for r in choice.reasons)
+    assert why and "PROJ grids" in why
     # The JVM engine reads them: with grids registered, L1 still runs the engine.
     dedicated = _caps(jar=OK_JAR, jar_reason="", jvm_gdal=MAN.gdal.pin)
     assert levels.select(fn, dedicated).variant == levels.ENGINE
@@ -851,3 +849,80 @@ def test_register_uc_checks_the_schema_against_this_wheel(
         assert register(spark, target="uc", catalog="cat", schema=schema) == {}
     with pytest.raises(ValueError, match="catalog= and schema="):
         register(_UcSpark(routines), target="uc")
+
+
+# --- Java handlers on standard access mode -----------------------------------------------------------------
+# Measured on a DBR 19 standard cluster: a JAR installed as a cluster library is invisible to the Java UDF
+# sandbox (CLASS_NOT_FOUND, for a Java class too); a JAR added to the SESSION (`spark.addArtifact`) is seen, but
+# only its Java classes are loaded (a Scala `class` still fails) and their parameters must be concrete types
+# (an `Object` parameter fails in the input conversion). So the manifest names a Java `connect_class` per row.
+
+BNG = MAN.functions["gbx_bng_eastnorthasbng"]
+CONNECT_BNG = BNG.levels["L2"]["connect_class"]
+
+
+def _standard_stub(monkeypatch, tmp_path, jar=True):
+    monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+    path = tmp_path / "geobrix-0.6.0-jar-with-dependencies.jar"
+    path.write_bytes(b"PK")
+    if jar:
+        monkeypatch.setenv("GBX_JAR_PATH", str(path))
+    else:
+        monkeypatch.delenv("GBX_JAR_PATH", raising=False)
+        from databricks.labs.gbx import _native
+
+        monkeypatch.setattr(_native, "jar_path", lambda root=None: None)
+    stub = ConnectStub()
+    stub.sandbox_classes = {
+        CONNECT_BNG,
+        caps_mod.BUILDINFO_CONNECT_UDF,
+        caps_mod.GDALPROBE_CONNECT_UDF,
+    }
+    return stub, str(path)
+
+
+def test_standard_l2_registers_the_java_handler_on_a_session_jar(monkeypatch, tmp_path):
+    from databricks.labs.gbx.manager import jvm
+
+    stub, jar = _standard_stub(monkeypatch, tmp_path)
+    assert jvm.install_l2(stub, BNG, _caps(connect=True, jar=OK_JAR)) is None
+    assert stub.artifacts == [jar]  # the JAR goes to the session first
+    assert stub.java_registered == [("gbx_bng_eastnorthasbng", CONNECT_BNG, "string")]
+    # one JAR, one attach per session, however many names register
+    jvm.install_l2(stub, BNG, _caps(connect=True, jar=OK_JAR))
+    assert stub.artifacts == [jar]
+
+
+def test_standard_l2_without_a_jar_says_where_to_get_one(monkeypatch, tmp_path):
+    from databricks.labs.gbx.manager import jvm
+
+    stub, _ = _standard_stub(monkeypatch, tmp_path, jar=False)
+    why = jvm.install_l2(stub, BNG, _caps(connect=True, jar=OK_JAR))
+    assert why and "GBX_JAR_PATH" in why and "standard access mode" in why
+    assert stub.artifacts == [] and stub.java_registered == []
+
+
+def test_detect_on_standard_reads_the_jar_through_the_session_handlers(
+    monkeypatch, tmp_path
+):
+    stub, jar = _standard_stub(monkeypatch, tmp_path)
+    caps = caps_mod.detect(stub, need_jvm=True)
+    assert caps.connect and caps.jar is not None and caps.gdal_reason == ""
+    assert stub.artifacts == [jar]
+    assert {c for _, c, _ in stub.java_registered} == {
+        caps_mod.BUILDINFO_CONNECT_UDF,
+        caps_mod.GDALPROBE_CONNECT_UDF,
+    }
+
+
+@pytest.mark.parametrize(
+    "fn", [f for f in FNS if "L2" in f.levels], ids=lambda f: f.sql_name
+)
+def test_standard_offers_l2_only_for_a_row_with_a_java_handler(fn):
+    why = levels.available(fn, "L2", _caps(connect=True, jar=OK_JAR))
+    if "connect_class" in fn.levels["L2"]:
+        assert why is None
+    else:
+        assert why and "Java handler" in why and "standard access mode" in why
+    # classic is unaffected: the Scala class is what it registers
+    assert "Java handler" not in (levels.available(fn, "L2", _caps(jar=OK_JAR)) or "")

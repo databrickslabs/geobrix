@@ -9,7 +9,7 @@ import java.util.zip.ZipEntry
 import com.databricks.labs.gbx.kernels.{BuildInfo, KernelGdal, L1Installer}
 import com.databricks.labs.gbx.kernels.df.{BngTessellateJob, ViewshedTowersJvm}
 import com.databricks.labs.gbx.kernels.uc.BngUc
-import com.databricks.labs.gbx.kernels.udf.{BngEastNorthAsBngUdf, BngTessellateUdf, RetileKernel, RstMergeArrayBytesUdf, RstRetileArrayBytesUdf, RstRetileCountBytesUdf, RstRetilePartBytesUdf, RstTransformCrsBytesUdf}
+import com.databricks.labs.gbx.kernels.udf.{BngEastNorthAsBngConnectUdf, BngEastNorthAsBngUdf, BngTessellateUdf, BuildInfoConnectUdf, GdalProbeConnectUdf, RetileKernel, RstMergeArrayBytesUdf, RstRetileArrayBytesUdf, RstRetileCountBytesUdf, RstRetilePartBytesUdf, RstTransformCrsBytesUdf}
 import com.databricks.labs.gbx.rasterx.expressions.agg.mvp.BngRasterizeCellsBytesUdf
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import com.databricks.labs.gbx.util.NodeFilePathUtil
@@ -96,6 +96,19 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
             assert(e.getMessage.contains(bad.toString), s"resolution $bad: ${e.getMessage}")
         }
         assert(intercept[Exception](f.call("abc", 180000.0, 3)).getMessage.contains("abc"))
+    }
+
+    test("the Java shells for standard access mode give the Scala answers, with the typed parameters SQL binds") {
+        val shell = new BngEastNorthAsBngConnectUdf() // (double, double, string): an INT resolution arrives as digits
+        val scala = new BngEastNorthAsBngUdf()
+        for (res <- Seq("3", "-3", "1km")) {
+            assert(shell.call(530000.0, 180000.0, res) == scala.call(530000.0, 180000.0, res), res)
+        }
+        assert(shell.call(530000.0, 180000.0, "3") == "TQ3080")
+        assert(shell.call(null, 180000.0, "3") == null && shell.call(Double.NaN, 180000.0, "3") == null)
+        assert(intercept[Exception](shell.call(530000.0, 180000.0, "3km")).getMessage.contains("3km"))
+        assert(new BuildInfoConnectUdf().call() == BuildInfo.identity())
+        assert(new GdalProbeConnectUdf().call() == KernelGdal.probe())
     }
 
     test("RstTransformCrsBytesUdf warps bytes and releases its datasets") {

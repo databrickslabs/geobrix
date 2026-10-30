@@ -47,7 +47,8 @@
      "min_args": 3, "returns": {"session": "STRING", "uc": "STRING"},
      "levels": {
        "L1": {"companion": "com.databricks.labs.gbx.gridx.bng.BNG_EastNorthAsBNG"},
-       "L2": {"class": "com.databricks.labs.gbx.kernels.udf.BngEastNorthAsBngUdf", "returns": "string"},
+       "L2": {"class": "com.databricks.labs.gbx.kernels.udf.BngEastNorthAsBngUdf", "returns": "string",
+              "connect_class": "com.databricks.labs.gbx.kernels.udf.BngEastNorthAsBngConnectUdf"},
        "L3": {"register": "udf", "variants": {
          "c0": "databricks.labs.gbx.pygx.functions:_bng_eastnorthasbng_udf",
          "c1": "databricks.labs.gbx.pygx._accel:bng_eastnorthasbng_c1",

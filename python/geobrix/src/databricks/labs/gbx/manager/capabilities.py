@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import weakref
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
@@ -11,6 +12,11 @@ from databricks.labs.gbx import __version__
 
 BUILDINFO_UDF = "com.databricks.labs.gbx.kernels.udf.BuildInfoUdf"
 GDALPROBE_UDF = "com.databricks.labs.gbx.kernels.udf.GdalProbeUdf"
+# Standard access mode runs a Java UDF in a sandbox that loads only Java classes of a JAR added to the session
+# (see `attach_jar`), so the two probes have Java twins there.
+BUILDINFO_CONNECT_UDF = "com.databricks.labs.gbx.kernels.udf.BuildInfoConnectUdf"
+GDALPROBE_CONNECT_UDF = "com.databricks.labs.gbx.kernels.udf.GdalProbeConnectUdf"
+JAR_PATH_ENV = "GBX_JAR_PATH"
 
 
 @dataclass(frozen=True)
@@ -40,6 +46,56 @@ def is_connect(spark) -> bool:
 
 def is_serverless() -> bool:
     return os.environ.get("DATABRICKS_RUNTIME_VERSION", "").startswith("client.")
+
+
+_JAR_ATTACHED: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+
+
+def attach_jar(spark) -> str:
+    """Add the GeoBrix JAR to a Spark Connect session so its Java UDFs can be registered; "" when it is there,
+    else one line saying why not. Once per session.
+
+    A JAR installed as a cluster library is not seen by the standard-access Java UDF sandbox, whatever the class:
+    only a JAR added to the session is. The path is `GBX_JAR_PATH`, else the JAR the env wheel carries.
+    """
+    done = _JAR_ATTACHED.get(spark)
+    if done is not None:
+        return done
+    path = os.environ.get(JAR_PATH_ENV) or ""
+    if not path:
+        try:
+            path = (
+                importlib.import_module("databricks.labs.gbx._native").jar_path() or ""
+            )
+        except ModuleNotFoundError:
+            path = ""
+    if not path:
+        why = (
+            "on standard access mode the Java UDFs need the GeoBrix JAR added to the session: set "
+            f"{JAR_PATH_ENV} to its path (a Volume path works) or install the env wheel that carries it"
+        )
+    else:
+        try:
+            spark.addArtifact(path)
+            why = ""
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - a refused artifact is a fallback reason
+            why = f"adding the JAR {os.path.basename(path)} to the session failed ({type(exc).__name__}: {str(exc)[:120]})"
+    try:
+        _JAR_ATTACHED[spark] = why
+    except TypeError:  # a session object that cannot be weakly referenced
+        pass
+    return why
+
+
+def register_java(spark, name: str, cls: str, returns: str) -> None:
+    """`spark.udf.registerJavaFunction` on a Connect session, with the JAR added to the session first.
+    Raises when the JAR cannot be added."""
+    why = attach_jar(spark)
+    if why:
+        raise RuntimeError(why)
+    spark.udf.registerJavaFunction(name, cls, returns)
 
 
 def _runtime_guard() -> None:
@@ -77,7 +133,7 @@ def _identity(spark, connect: bool) -> Tuple[Optional[str], str]:
                 str(spark._jvm.com.databricks.labs.gbx.kernels.BuildInfo.identity()),
                 "",
             )
-        spark.udf.registerJavaFunction("gbx__buildinfo", BUILDINFO_UDF, "string")
+        register_java(spark, "gbx__buildinfo", BUILDINFO_CONNECT_UDF, "string")
         return str(spark.sql("SELECT gbx__buildinfo() AS i").first()["i"]), ""
     except (
         Exception
@@ -102,7 +158,7 @@ def _gdal(spark, connect: bool) -> Tuple[str, str]:
         if not connect:
             r = str(spark._jvm.com.databricks.labs.gbx.kernels.KernelGdal.probe())
         else:
-            spark.udf.registerJavaFunction("gbx__gdalprobe", GDALPROBE_UDF, "string")
+            register_java(spark, "gbx__gdalprobe", GDALPROBE_CONNECT_UDF, "string")
             r = str(spark.sql("SELECT gbx__gdalprobe() AS g").first()["g"])
     except Exception:  # noqa: BLE001
         return "GDAL natives not loadable", ""

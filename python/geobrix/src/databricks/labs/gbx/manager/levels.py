@@ -135,6 +135,8 @@ def available(fn, level: str, caps: Capabilities) -> Optional[str]:
         l1_returns = spec.get("session_returns", fn.returns_session)
         if level == "L1" and l1_returns != fn.returns_session:
             return f"{fn.sql_name}: heavy returns {l1_returns}, the session signature returns {fn.returns_session}"
+        if level == "L2" and caps.connect and "connect_class" not in spec:
+            return f"{fn.sql_name} has no Java handler for standard access mode"
         if level == "L2" and fn.kind != "scalar":
             return f"standard access mode serves scalars only ({fn.sql_name} is a {fn.kind})"
         if level == "L2" and fn.min_args != fn.max_args and "wrapper" not in spec:

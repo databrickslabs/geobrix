@@ -26,7 +26,9 @@ SCHEMA_VERSION = 1
 # and its own implementation (the other keys) elsewhere.
 LEVEL_KEYS = {
     "L1": frozenset({"companion", "needs_gdal", "session_returns", "engine"}),
-    "L2": frozenset({"class", "returns", "bytes_param", "needs_gdal", "wrapper"}),
+    "L2": frozenset(
+        {"class", "connect_class", "returns", "bytes_param", "needs_gdal", "wrapper"}
+    ),
     "L3": frozenset(
         {
             "register",
@@ -42,6 +44,9 @@ LEVEL_KEYS = {
     ),
     "L4": frozenset({"handler", "deps", "tvf_over", "engine"}),
 }
+# `connect_class` is the Java handler a standard access mode (Spark Connect) session registers instead of `class`: its
+# sandbox loads only Java classes of a JAR added to the session, with concrete parameter types. A row without one has
+# no L2 there.
 # Keys every spec of that level must carry.
 LEVEL_REQUIRED = {
     "L2": frozenset({"class", "returns"}),

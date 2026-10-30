@@ -9,7 +9,7 @@ from __future__ import annotations
 import importlib
 from typing import Optional
 
-from databricks.labs.gbx.manager import l3, sqlwrap
+from databricks.labs.gbx.manager import capabilities, l3, sqlwrap
 
 
 def _priv(fn, level: str) -> str:
@@ -109,12 +109,21 @@ def install_l1_engine(spark, fn, caps) -> Optional[str]:
         return f"{fn.sql_name}: heavy engine install failed ({type(exc).__name__}: {str(exc)[:160]})"
 
 
+def _register_java(spark, name: str, spec) -> None:
+    """Register `spec`'s Java UDF as `name`: its Scala class on a classic session, its Java `connect_class` (with
+    the JAR added to the session first) on Spark Connect."""
+    if capabilities.is_connect(spark):
+        capabilities.register_java(spark, name, spec["connect_class"], spec["returns"])
+    else:
+        spark.udf.registerJavaFunction(name, spec["class"], spec["returns"])
+
+
 def install_l2(spark, fn, caps) -> Optional[str]:
     try:
         spec = fn.levels["L2"]
         if "bytes_param" in spec:
             k = _priv(fn, "L2")
-            spark.udf.registerJavaFunction(k, spec["class"], spec["returns"])
+            _register_java(spark, k, spec)
             light = _install_light_side(spark, fn)
             tile = fn.params[0].name
             jvm = sqlwrap.tile_from_raster(k + "({tile}.raster, {rest})", tile)
@@ -122,7 +131,7 @@ def install_l2(spark, fn, caps) -> Optional[str]:
             return None
         if fn.min_args != fn.max_args:
             return f"{fn.sql_name}: optional arguments at L2 need a SQL wrapper this row does not declare"
-        spark.udf.registerJavaFunction(fn.sql_name, spec["class"], spec["returns"])
+        _register_java(spark, fn.sql_name, spec)
         return None
     except Exception as exc:  # noqa: BLE001
         return f"{fn.sql_name}: Java UDF registration failed ({type(exc).__name__}: {str(exc)[:160]})"

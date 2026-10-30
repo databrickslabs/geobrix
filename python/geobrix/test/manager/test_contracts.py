@@ -417,8 +417,35 @@ def test_jar_identity_is_judged_against_the_wheel(identity, jar_found):
     kernels = NS(
         BuildInfo=NS(identity=lambda: identity), KernelGdal=NS(probe=lambda: "ok:3")
     )
-    spark = NS(_jvm=NS(com=NS(databricks=NS(labs=NS(gbx=NS(kernels=kernels))))))
+    spark = NS(
+        _jvm=NS(com=NS(databricks=NS(labs=NS(gbx=NS(kernels=kernels))))),
+        conf=NS(get=lambda k, d=None: d, set=lambda k, v: None),
+    )
     assert (caps_mod.detect(spark, True).jar is not None) is jar_found
+
+
+def test_detect_points_the_jvm_at_the_wheel_natives_before_probing_gdal(monkeypatch):
+    """On a stock dedicated runtime the GDAL probe is the JVM's first GDAL load: it must already see the wheel's
+    native directory, or it finds no JNI and every raster name falls back to light (measured on DBR 19).
+    """
+    from types import SimpleNamespace as NS
+
+    from databricks.labs.gbx.manager import jvm
+
+    seen = []
+    monkeypatch.setattr(caps_mod, "_identity", lambda spark, connect: ("0.6.0|abc", ""))
+    monkeypatch.setattr(caps_mod, "_expected_sha", lambda: "abc")
+    monkeypatch.setattr(
+        jvm, "_point_jvm_at_payload", lambda spark: seen.append("point")
+    )
+    monkeypatch.setattr(
+        caps_mod,
+        "_gdal",
+        lambda spark, connect: (seen.append("probe"), ("", "3.13.3"))[1],
+    )
+    monkeypatch.setattr(caps_mod, "_sql_functions", lambda spark: True)
+    assert caps_mod.detect(NS(), True).jvm_gdal == "3.13.3"
+    assert seen == ["point", "probe"]
 
 
 @pytest.mark.parametrize(

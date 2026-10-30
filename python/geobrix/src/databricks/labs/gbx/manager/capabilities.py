@@ -142,6 +142,12 @@ def detect(spark, need_jvm: bool) -> Capabilities:
             reason = f"JAR sha256 {sha[:12]} != bundled {expected[:12]}"
         else:
             jar = JarIdentity(version, sha)
+    if jar is not None and not connect:
+        # Point the JVM at the wheel's natives BEFORE probing them: the probe is GDAL's first load in this JVM, and
+        # without the key it looks only for GBX_NATIVE_ROOT and the system JNI (none on a stock runtime).
+        from databricks.labs.gbx.manager import jvm
+
+        jvm._point_jvm_at_payload(spark)
     gdal_reason, jvm_gdal = _gdal(spark, connect) if jar is not None else (reason, "")
     sqlf = _sql_functions(spark)
     return Capabilities(connect, False, jar, reason, gdal_reason, sqlf, jvm_gdal)

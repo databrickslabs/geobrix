@@ -10,7 +10,7 @@ import org.scalatest.matchers.should.Matchers._
 
 import java.nio.file.Files
 
-/** End-to-end tests for the 3 Wave 5 expressions.
+/** End-to-end tests for the 3 web-tile expressions.
  *
  *  Uses a tiny in-memory 8×8 EPSG:4326 raster covering (-1,-1)..(1,1) to keep wall-clock low.
  *  We exercise the public `execute(...)` methods directly — that's the integration boundary
@@ -31,7 +31,7 @@ class WebMercatorTileTest extends AnyFunSuite with BeforeAndAfterAll {
         Files.createDirectories(NodeFilePathUtil.rootPath)
 
         val drv = gdal.GetDriverByName("MEM")
-        srcDs = drv.Create("/vsimem/wave5_src", 8, 8, 1, gdalconstConstants.GDT_Float64)
+        srcDs = drv.Create("/vsimem/webmercator_src", 8, 8, 1, gdalconstConstants.GDT_Float64)
         srcDs.SetGeoTransform(Array(-1.0, 0.25, 0.0, 1.0, 0.0, -0.25))
         val sr = new org.gdal.osr.SpatialReference()
         sr.ImportFromEPSG(4326)

@@ -10,7 +10,7 @@ import java.util.{Vector => JVector}
   * Shared thin wrapper around `gdal.DEMProcessing` for terrain-analysis
   * expressions (slope, aspect, hillshade, TRI, TPI, roughness, color_relief).
   *
-  * All 7 Wave 8a expressions follow the same pattern: take a single source
+  * All 7 terrain-analysis expressions follow the same pattern: take a single source
   * Dataset, run `gdal.DEMProcessing(processing, opts)` against it to materialize
   * a derived raster at a `/vsimem/` GTiff path, and return that result Dataset
   * together with output metadata. The caller is responsible for releasing the

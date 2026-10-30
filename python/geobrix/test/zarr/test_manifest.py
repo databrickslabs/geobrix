@@ -1490,7 +1490,7 @@ def test_a_v2_document_in_the_commit_says_not_sharded_without_a_lookup():
     M._require_shard_keys(None, "t", M._commit_source(rows, w, {}))  # no session needed
 
 
-# --- read guards: op 'check' (fix round 1, I1) ------------------------------------------
+# --- read guards: op 'check' ------------------------------------------
 
 
 def _check(kind, array, key, wid, expected):

@@ -13,7 +13,7 @@ container build has no access to the workspace's UC Volumes, so geobrix must rid
 along as bundled model code instead. ``create_endpoint``/``query`` are thin wrappers
 over the Databricks Model Serving API (see the ``databricks-model-serving`` skill).
 
-RULING R4 -- mlflow is ABSENT from the light CI env (not in
+mlflow is ABSENT from the light CI env (not in
 ``requirements-light-env6-ci.txt``, confirmed not importable in the geobrix-dev
 container either). This module MUST import cleanly with no mlflow installed, so every
 ``import mlflow*`` is lazy, scoped inside the function that needs it -- including any

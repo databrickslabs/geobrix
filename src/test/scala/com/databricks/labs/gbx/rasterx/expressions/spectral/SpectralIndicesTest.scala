@@ -11,7 +11,7 @@ import org.scalatest.matchers.should.Matchers._
 import java.nio.file.{Files, Paths}
 
 /**
-  * Direct-execute tests for the Wave 8b spectral-index expressions.
+  * Direct-execute tests for the spectral-index expressions.
   *
   * Each test builds a small (4 x 4) synthetic 4-band Float32 raster with hand-picked
   * constant pixel values per band (band1=red, band2=NIR, band3=blue, band4=SWIR),
@@ -26,7 +26,7 @@ import java.nio.file.{Files, Paths}
 class SpectralIndicesTest extends AnyFunSuite with BeforeAndAfterAll {
 
     // Hand-picked band reflectances. Chosen so the expected output values are
-    // exact (or near-exact) decimals: see Wave 8b plan, "Function formulas" table.
+    // exact (or near-exact) decimals.
     //  band 1 = red   = 0.1
     //  band 2 = nir   = 0.4
     //  band 3 = blue  = 0.05

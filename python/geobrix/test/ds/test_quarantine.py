@@ -1789,7 +1789,7 @@ def test_a_folder_that_cannot_be_written_says_what_to_do(tmp_path):
         bad.close()
 
 
-# --- fix round 2: valid data that must not be set aside ---------------------------
+# --- valid data that must not be set aside ---------------------------
 
 
 def _wkb_points(points):
@@ -2008,7 +2008,7 @@ def test_lidar_waveform_data_after_the_points_is_not_extra_points(tmp_path):
     assert len(rows) == 3 and recs == []
 
 
-# --- fix round 2: environment errors fail the read; they are not bad data --------
+# --- environment errors fail the read; they are not bad data --------
 
 
 def test_memory_and_import_errors_fail_the_read(tmp_path, monkeypatch):
@@ -2122,7 +2122,7 @@ def test_lidar_rereads_of_a_failing_chunk_are_bounded(tmp_path, monkeypatch):
     assert [i for i, _ in _classes(recs)] == ["points=0-999999999"]
 
 
-# --- fix round 2: what a bad record holds -------------------------------------
+# --- what a bad record holds -------------------------------------
 
 
 def test_raw_is_capped_and_binary_values_are_described():
@@ -2168,7 +2168,7 @@ def test_skip_log_lines_name_the_error_class_once(caplog):
     assert line.count("ValueError") == 1
 
 
-# --- fix round 3 -------------------------------------------------------------
+# --- a decoder that fails part-way through a file ----------------------------
 
 
 def _failing_reads(monkeypatch, bad_lo, bad_hi):

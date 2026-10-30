@@ -803,7 +803,7 @@ def test_a_new_variable_is_created_on_the_store_dimensions(
     np.testing.assert_array_equal(_read(spark_delta, table, "t2m"), ds.t2m.values)
 
 
-# --- fix round 1: the reviewer's probes as tests ----------------------------------------------
+# --- cases a review found, kept as tests ----------------------------------------------
 
 from databricks.labs.gbx.zarr import _manifest as M  # noqa: E402
 from databricks.labs.gbx.zarr.errors import (  # noqa: E402

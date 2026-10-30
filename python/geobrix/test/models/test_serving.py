@@ -1,6 +1,6 @@
 """Tests for gbx.models.serving.
 
-RULING R4: mlflow is ABSENT from the light CI env (not in
+mlflow is ABSENT from the light CI env (not in
 requirements-light-env6-ci.txt; confirmed not importable in the geobrix-dev container
 either). serving.py imports mlflow lazily inside each function that needs it, so the
 module itself always imports cleanly. These tests split the same way:

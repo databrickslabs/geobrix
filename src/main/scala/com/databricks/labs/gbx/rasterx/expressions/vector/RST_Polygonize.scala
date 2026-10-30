@@ -53,7 +53,7 @@ case class RST_Polygonize(
 /** Companion: SQL name, builder, and dispatch entry points.
  *
  *  PySpark sends Python ints as `LongType` - we expose both Int and Long
- *  overloads for the `band` / `connectedness` args. Per Wave 3 finding.
+ *  overloads for the `band` / `connectedness` args.
  */
 object RST_Polygonize extends WithExpressionInfo {
 

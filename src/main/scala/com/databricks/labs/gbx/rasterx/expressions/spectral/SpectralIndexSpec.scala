@@ -17,7 +17,7 @@ import scala.util.Try
   * Helpers for building ``RST_MapAlgebra`` JSON specs from a calc string + a
   * map of single-letter band aliases to 1-based band indices.
   *
-  * The 5 Wave 8b spectral-index expressions (EVI, SAVI, NDWI, NBR, Index) all
+  * The 5 spectral-index expressions (EVI, SAVI, NDWI, NBR, Index) all
   * use the same single-source pattern: one input raster, multiple per-band
   * reads from that raster, and a per-pixel ``calc`` formula. ``MapAlgebra``'s
   * spec accepts ``A_index``/``A_band``/.../``Z_index``/``Z_band`` keys plus a

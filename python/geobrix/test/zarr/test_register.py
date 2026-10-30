@@ -2117,7 +2117,7 @@ def test_a_corrupt_group_registers_as_a_group_and_its_arrays_are_refused(
     spark_delta.sql(f"DROP TABLE IF EXISTS {table}")
 
 
-# --- fix round 1 (I7): a marker stays with a table that may hold a commit ------------------
+# --- a marker stays with a table that may hold a commit ------------------
 
 
 def test_discard_says_whether_it_dropped_the_table(monkeypatch):

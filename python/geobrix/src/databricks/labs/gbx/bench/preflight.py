@@ -140,7 +140,7 @@ def probe_failures(
         engine_run.unavailable_reason()
     )  # the GDAL bindings of this interpreter (a host venv has none)
     if no_engine:
-        why = "not checkable here (no GDAL bindings for the spec engine in this interpreter)"
+        why = f"not checkable here (the spec engine is unavailable in this interpreter: {no_engine})"
         skipped += [
             f"{f.fn} {f.level}/{f.variant}: {why}" for f in forms if _on_engine(f)
         ]

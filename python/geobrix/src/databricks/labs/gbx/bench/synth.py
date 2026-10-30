@@ -93,10 +93,13 @@ def publish_file(local: Union[str, Path], dest: Union[str, Path]) -> None:
     dest = Path(dest)
     tmp = dest.with_name(f".{dest.name}.{uuid.uuid4().hex[:8]}.part")
     try:
-        shutil.copy(local, tmp)
+        shutil.copyfile(
+            local, tmp
+        )  # copyfile: no chmod, which a Volume's FUSE mount may refuse
         os.replace(tmp, dest)
-    except OSError:
-        shutil.copy(local, dest)
+    except OSError as exc:
+        print(f"publish_file: rename onto {dest} refused ({exc}); copying in place")
+        shutil.copyfile(local, dest)
     finally:
         try:
             os.remove(tmp)

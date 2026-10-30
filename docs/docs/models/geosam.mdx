@@ -25,7 +25,7 @@ imported lazily inside this call, not at module import time — a caller without
 deps installed gets a clear `ModelDepsMissing` error:
 
 ```
-GeoSAM requires the model deps — install geobrix[models_gpu_env5]
+GeoSAM requires the model deps: install them after the env5 wheel on Serverless GPU environment 5 (pip install torch==2.9.0 torchvision==0.24.0 segment-geospatial opencv-python-headless==4.11.0.86)
 ```
 
 - `model_type` — the SAM model variant (default `"vit_h"`).
@@ -138,14 +138,16 @@ capability, not something to invoke today.
 ## Installation
 
 ```
-pip install "geobrix[models_gpu_env5] @ file:///Volumes/.../geobrix-0.6.0-py3-none-any.whl"
+%pip install "geobrix[vizx] @ file:///Volumes/.../geobrix-0.6.0+env5-py3-none-any.whl"
+%pip install "torch==2.9.0" "torchvision==0.24.0" "segment-geospatial" "opencv-python-headless==4.11.0.86"
 ```
 
-`geobrix[models_gpu_env5]` pins `torch==2.10.0` / `torchvision==0.25.0` (CUDA 12) plus
-`segment-geospatial`, matching the Serverless **GPU AI Runtime environment 5**. The
-lighter `geobrix[models]` extra installs `segment-geospatial` with its own default
-torch/torchvision resolution — fine for a quick CPU-importable install, but not
-CUDA-version-pinned to a specific GPU runtime. See [Geospatial Models
+On Databricks the GeoSAM packages are a separate step after the env5 wheel (the env wheels have no
+models extra): `torch==2.9.0` / `torchvision==0.24.0` (CUDA 12, the Serverless **GPU AI Runtime
+environment 5** base's pair), OpenCV 4.x, and `segment-geospatial`, which also installs PyPI's
+`rasterio` and `shapely` beside the wheel's own (a GeoBrix process uses the wheel's). Off
+Databricks, the plain wheel's `geobrix[models]` extra installs `segment-geospatial` with its own
+default torch/torchvision resolution. See [Geospatial Models
 overview](./overview#installation).
 
 ## See also

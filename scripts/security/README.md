@@ -336,7 +336,7 @@ release unless a runtime fixes its version:
   so the floor is CI-only and the runtime's own pillow (11.1.0 or 12.0.0) is untouched.
 - *Still held on purpose.*  `urllib3` and `pyarrow` in the light locks (cases above); `pip` and
   `pyarrow` in the dev container (the DBR 17.3 install toolchain and
-  Arrow baseline the tests run on); `torch` in `models_gpu_env5` (pinned to the Serverless GPU base,
+  Arrow baseline the tests run on); `torch` in the GeoSAM model pins (`serving.MODEL_DEPS`; pinned to the Serverless GPU base,
   CUDA 12).
 - *Docs and the Genie Map app (npm / pnpm).*  Docusaurus moved to 3.10.2, and `overrides` lift
   `serialize-javascript`, `tinypool` and `uuid` (docs) and about twenty transitive packages

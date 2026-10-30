@@ -5,8 +5,10 @@
 returns a GeoJSON ``FeatureCollection`` string. ``register_to_unity_gateway`` logs that
 pyfunc to the Unity Catalog model registry using mlflow's private-wheel pattern: the
 geobrix wheel is bundled INTO the model via ``code_paths`` (mlflow copies it to
-``code/<basename>``) and ``pip_requirements`` installs geobrix from that bundled copy
-(via the ``models_gpu_env5`` extra) + segment-geospatial -- a deliberate
+``code/<basename>``) and ``pip_requirements`` installs geobrix from that bundled copy (the env5
+wheel, whose Python and CUDA-12 torch pairing match the Serverless GPU environment 5 the model
+is logged from; no extra: the env wheels define none for models) + the GeoSAM packages, pinned
+explicitly (MODEL_DEPS) -- a deliberate
 usage-affiliation goal: the served model's environment carries geobrix. A
 ``file:///Volumes/...`` pip requirement does NOT work here: the Model Serving
 container build has no access to the workspace's UC Volumes, so geobrix must ride
@@ -52,7 +54,17 @@ PREDICT_OUTPUT_COLUMNS = [("geojson", "string")]
 # used elsewhere for wheel staging; override wheel_path= with the actual staged
 # wheel's path/version at call time.
 DEFAULT_WHEEL_PATH = (
-    "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0-py3-none-any.whl"
+    "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env5-py3-none-any.whl"
+)
+
+# The GeoSAM packages, as explicit requirement lines: the env wheels have no models extra (the same
+# separate step the notebooks take after the wheel). torch / torchvision pinned to the GPU environment
+# 5 base's CUDA-12 pair; OpenCV 4.x (5.x aborts in its FIPS self-test on the GPU node).
+MODEL_DEPS = (
+    "torch==2.9.0",
+    "torchvision==0.24.0",
+    "segment-geospatial",
+    "opencv-python-headless==4.11.0.86",
 )
 
 
@@ -63,11 +75,12 @@ def _bundled_pip_reqs(wheel_path) -> list:
     preserved), so pip must install from that BUNDLED path, not the original
     local/Volume path -- referencing the original path (or a ``file:///Volumes/...``
     URI) is exactly the bug this fixes, since the Model Serving container build has no
-    access to the workspace's UC Volumes. Pulls in the ``models_gpu_env5`` extra (pins
-    the CUDA-12 torch + opencv 4.x) plus segment-geospatial, the GeoSAM backend.
+    access to the workspace's UC Volumes. The bundled wheel is installed with no extra (an env
+    wheel defines none for models), followed by MODEL_DEPS (the CUDA-12 torch pair, OpenCV 4.x and
+    segment-geospatial, the GeoSAM backend).
     """
     basename = os.path.basename(wheel_path)
-    return [f"code/{basename}[models_gpu_env5]", "segment-geospatial"]
+    return [f"code/{basename}", *MODEL_DEPS]
 
 
 # Default pip_requirements, derived from DEFAULT_WHEEL_PATH -- kept for

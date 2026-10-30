@@ -53,19 +53,24 @@ model_version = serving.register_to_unity_gateway(
 `profile` selects the `DATABRICKS_CONFIG_PROFILE` used for the registry call — this
 function never auto-selects a profile; the caller chooses it explicitly.
 
-`pip_reqs` defaults to `serving.DEFAULT_PIP_REQS`:
+The env5 wheel (`wheel_path=`, default `/Volumes/…/geobrix-0.6.0+env5-py3-none-any.whl`) is bundled
+into the model (`code_paths`), and `pip_reqs` defaults to that bundled copy plus the GeoSAM packages
+(`serving.MODEL_DEPS`), since the Model Serving build cannot reach a Volume and the env wheels have no
+models extra:
 
 ```python
 DEFAULT_PIP_REQS = (
-    "geobrix[models_gpu_env5] @ file:///Volumes/.../geobrix-0.6.0-py3-none-any.whl",
+    "code/geobrix-0.6.0+env5-py3-none-any.whl",
+    "torch==2.9.0",
+    "torchvision==0.24.0",
     "segment-geospatial",
+    "opencv-python-headless==4.11.0.86",
 )
 ```
 
 This is a deliberate **usage-affiliation** choice: the served model's logged environment
-carries the GeoBrix light wheel alongside `segment-geospatial`, not just the raw
-segmentation backend. Override `pip_reqs=` with the actual staged wheel path/version for
-your workspace.
+carries the GeoBrix wheel alongside `segment-geospatial`, not just the raw
+segmentation backend. Pass `wheel_path=` (or `pip_reqs=`) for the wheel your workspace stages.
 
 ## Creating a GPU endpoint
 

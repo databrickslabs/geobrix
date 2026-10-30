@@ -52,5 +52,8 @@ def test_load_without_deps_raises_clear_error(monkeypatch):
         "_import_backend",
         lambda *a, **k: (_ for _ in ()).throw(ImportError("no torch")),
     )
-    with pytest.raises(geosam.ModelDepsMissing, match=r"geobrix\[models_gpu_env5\]"):
+    with pytest.raises(
+        geosam.ModelDepsMissing,
+        match=r"torch==2\.9\.0 torchvision==0\.24\.0 segment-geospatial",
+    ):
         geosam.load_geosam(device="cpu")

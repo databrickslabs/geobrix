@@ -63,16 +63,15 @@ parameter reference.
 
 ## Installation
 
-`gbx.models` ships two extras:
+- **On Databricks (Serverless GPU AI Runtime environment 5)** — the env5 wheel, then the GeoSAM
+  packages as a separate step: `%pip install "torch==2.9.0" "torchvision==0.24.0" "segment-geospatial"
+  "opencv-python-headless==4.11.0.86"` (the CUDA-12 torch pair of that runtime; the env wheels have no
+  models extra).
+- **Off Databricks** — the plain wheel's **`geobrix[models]`** extra adds `segment-geospatial`, which
+  pulls its own default torch/torchvision/segment-anything stack; the resolved torch build may not
+  match a specific GPU's CUDA version.
 
-- **`geobrix[models]`** — adds `segment-geospatial`, which pulls its own default
-  torch/torchvision/segment-anything stack. Good for a quick, CPU-importable install;
-  the resolved torch build may not match a specific GPU runtime's CUDA version.
-- **`geobrix[models_gpu_env5]`** — pins `torch==2.10.0` and `torchvision==0.25.0`
-  (CUDA 12) alongside `segment-geospatial`, matching the Serverless **GPU AI Runtime
-  environment 5**. This is the extra to install for an actual GPU run on Databricks.
-
-Both extras are CPU-importable at the package level — `import databricks.labs.gbx.models`
+Both are CPU-importable at the package level — `import databricks.labs.gbx.models`
 never touches torch. GPU deps load only inside `load_geosam`.
 
 GeoSAM segmentation is the model behind the object-segmentation step in the

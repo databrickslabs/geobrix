@@ -173,7 +173,10 @@ def test_register_bundles_wheel_via_code_paths(monkeypatch):
     serving.register_to_unity_gateway(object(), "cat.sch.geosam", profile="oauth-fe")
     assert calls["code_paths"] == [serving.DEFAULT_WHEEL_PATH]
     pip_reqs_str = " ".join(calls["pip_reqs"])
-    assert "code/geobrix-0.6.0-py3-none-any.whl[models_gpu_env5]" in pip_reqs_str
+    assert calls["pip_reqs"] == [
+        "code/geobrix-0.6.0+env5-py3-none-any.whl",
+        *serving.MODEL_DEPS,
+    ]
     assert "segment-geospatial" in pip_reqs_str
     assert "file:///Volumes" not in pip_reqs_str
 
@@ -189,12 +192,10 @@ def test_register_wheel_path_override_changes_pip_reqs(monkeypatch):
         object(),
         "cat.sch.geosam",
         profile="oauth-fe",
-        wheel_path="/Volumes/x/y/geobrix-9.9.9-py3-none-any.whl",
+        wheel_path="/Volumes/x/y/geobrix-9.9.9+env6-py3-none-any.whl",
     )
-    assert calls["code_paths"] == ["/Volumes/x/y/geobrix-9.9.9-py3-none-any.whl"]
-    assert "code/geobrix-9.9.9-py3-none-any.whl[models_gpu_env5]" in " ".join(
-        calls["pip_reqs"]
-    )
+    assert calls["code_paths"] == ["/Volumes/x/y/geobrix-9.9.9+env6-py3-none-any.whl"]
+    assert calls["pip_reqs"][0] == "code/geobrix-9.9.9+env6-py3-none-any.whl"
 
 
 def test_register_pip_reqs_override_still_passes_code_paths(monkeypatch):
@@ -304,3 +305,26 @@ def test_query_uses_serving_seam(monkeypatch):
     assert calls["endpoint_name"] == "geosam-endpoint"
     assert calls["profile"] == "oauth-fe"
     assert base64.b64decode(calls["image_b64"]) == b"raw-image-bytes"
+
+
+def test_the_served_environment_names_only_extras_its_env_wheel_defines():
+    # 0.6.0 drops the *_gpu_env5 and light_* names: every extra a pip requirement of the served
+    # environment asks for must be one the bundled env wheel declares (envs/env<N>/extra-*.txt).
+    import re
+    from pathlib import Path
+
+    assert re.search(r"\+env5-py3-none-any\.whl$", serving.DEFAULT_WHEEL_PATH), (
+        "the served environment bundles the env5 wheel (the GPU environment 5 family)",
+        serving.DEFAULT_WHEEL_PATH,
+    )
+    envs = Path(__file__).resolve().parents[2] / "envs"
+    for wheel in (serving.DEFAULT_WHEEL_PATH, "/V/geobrix-0.6.0+env6-py3-none-any.whl"):
+        env = re.search(r"\+env([56])-", wheel).group(1)
+        shipped = {
+            f.stem.removeprefix("extra-")
+            for f in (envs / f"env{env}").glob("extra-*.txt")
+        }
+        for req in serving._bundled_pip_reqs(wheel):
+            extras = re.search(r"\[([^\]]*)\]", req)
+            asked = set(extras.group(1).split(",")) if extras else set()
+            assert asked <= shipped, (req, sorted(asked - shipped))

@@ -819,7 +819,7 @@ def readdir_option(mode: Optional[str]):
 
 
 # GDAL's raster block cache size is one number for the whole process. Callers that cap it for a
-# block of work go through capped_block_cache: the sizes asked for are kept here, the size the
+# block of work go through capped_block_cache: the sizes in force are kept here, the size the
 # process had when the first one began is put back when the last one ends.
 _CACHE_LOCK = threading.Lock()
 _CACHE_CAPS: List[int] = []
@@ -829,7 +829,8 @@ _CACHE_BEFORE: Optional[int] = None
 @contextmanager
 def capped_block_cache(max_bytes: int):
     """Run the block with GDAL's raster block cache capped at *max_bytes* BYTES, then put back
-    the size it had.
+    the size it had. A cap never raises a cache that is already smaller (a cluster or a user may
+    have lowered it): the block runs at ``min(size found, max_bytes)``.
 
     Do not cap it with ``rasterio.Env(GDAL_CACHEMAX=...)``: rasterio hands that value to
     ``GDALSetCacheMax64``, which counts bytes (``GDAL_CACHEMAX=128`` is a 128-byte cache, where
@@ -839,21 +840,24 @@ def capped_block_cache(max_bytes: int):
     too small to hold one block, and a multi-threaded algorithm (``GDALViewshedGenerate``)
     gave a different answer from call to call.
 
-    Overlapping blocks (threads of one worker) are held to the largest cap asked for while
-    any of them runs."""
+    Overlapping blocks (threads of one worker) are held to the largest cap in force while any of
+    them runs."""
     from rasterio.env import get_gdal_config, set_gdal_config
 
     global _CACHE_BEFORE
     with _CACHE_LOCK:
-        if not _CACHE_CAPS:
-            _CACHE_BEFORE = get_gdal_config("GDAL_CACHEMAX")
-        _CACHE_CAPS.append(int(max_bytes))
-        set_gdal_config("GDAL_CACHEMAX", max(_CACHE_CAPS))
+        first = not _CACHE_CAPS
+        before = get_gdal_config("GDAL_CACHEMAX") if first else _CACHE_BEFORE
+        cap = min(before, int(max_bytes))
+        set_gdal_config("GDAL_CACHEMAX", max([*_CACHE_CAPS, cap]))
+        # recorded only once the size is set, so a failure leaves nothing to put back
+        _CACHE_BEFORE = before
+        _CACHE_CAPS.append(cap)
     try:
         yield
     finally:
         with _CACHE_LOCK:
-            _CACHE_CAPS.remove(int(max_bytes))
+            _CACHE_CAPS.remove(cap)
             set_gdal_config(
                 "GDAL_CACHEMAX", max(_CACHE_CAPS) if _CACHE_CAPS else _CACHE_BEFORE
             )

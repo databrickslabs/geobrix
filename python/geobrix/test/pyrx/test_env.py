@@ -161,3 +161,65 @@ def test_no_module_caps_the_block_cache_through_a_rasterio_env():
         f"{offenders} set GDAL_CACHEMAX directly. Fix: wrap the block in "
         "databricks.labs.gbx.pyrx._env.capped_block_cache(<bytes>)"
     )
+
+
+@pytest.fixture
+def block_cache():
+    """GDAL's block cache size, put back after the test whatever it did."""
+    from rasterio.env import set_gdal_config
+
+    before = _cache_max()
+    yield before
+    set_gdal_config("GDAL_CACHEMAX", before)
+
+
+def test_a_cap_never_raises_a_cache_that_is_already_smaller(block_cache):
+    """A cluster or a user may have lowered the cache to bound memory: the block runs at the
+    smaller of the two, and a smaller cap inside it does not take it lower than the first.
+    """
+    from rasterio.env import set_gdal_config
+
+    lowered = 16 * 1024 * 1024
+    set_gdal_config("GDAL_CACHEMAX", lowered)
+    with _env.capped_block_cache(128 * 1024 * 1024):
+        assert _cache_max() == lowered
+        with _env.capped_block_cache(4 * 1024 * 1024):
+            assert _cache_max() == lowered
+    assert _cache_max() == lowered
+
+
+def test_the_cache_size_comes_back_when_the_block_raises(block_cache):
+    with pytest.raises(RuntimeError, match="boom"):
+        with _env.capped_block_cache(32 * 1024 * 1024):
+            assert _cache_max() == 32 * 1024 * 1024
+            raise RuntimeError("boom")
+    assert _cache_max() == block_cache
+    assert _env._CACHE_CAPS == []
+
+
+def test_threads_that_overlap_are_held_to_the_largest_cap_until_the_last_ends(
+    block_cache,
+):
+    """A small cap begins on another thread, a large one here, the small one ends first: the
+    large one still holds, and the size found comes back only when both are done."""
+    import threading
+
+    small, large = 32 * 1024 * 1024, 96 * 1024 * 1024
+    inside, release, done = (threading.Event() for _ in range(3))
+
+    def other():
+        with _env.capped_block_cache(small):
+            inside.set()
+            release.wait(10)
+        done.set()
+
+    t = threading.Thread(target=other)
+    t.start()
+    assert inside.wait(10)
+    with _env.capped_block_cache(large):
+        assert _cache_max() == large
+        release.set()
+        assert done.wait(10)
+        assert _cache_max() == large  # the small one has ended; this one still holds
+    t.join(10)
+    assert _cache_max() == block_cache

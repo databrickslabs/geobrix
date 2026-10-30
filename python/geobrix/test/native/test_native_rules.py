@@ -117,18 +117,93 @@ DATA_CASES = [
         "<share>/gdal",
         f"<grids>{os.pathsep}<ok>",
     ),
+    # PROJ_LIB: an all-unreadable one goes; a grid-only one keeps its grids (PROJ reads PROJ_DATA first), both when
+    # PROJ_DATA is completed and when it is set
+    ({"PROJ_LIB": "<unr>"}, "<share>/gdal", "<share>/proj", None),
+    ({"PROJ_LIB": "<grids>"}, "<share>/gdal", f"<grids>{os.pathsep}<share>/proj"),
+    (
+        {"PROJ_DATA": "<grids2>", "PROJ_LIB": "<grids>"},
+        "<share>/gdal",
+        f"<grids2>{os.pathsep}<grids>{os.pathsep}<share>/proj",
+    ),
+    (
+        {"PROJ_DATA": "<grids2>", "PROJ_LIB": f"<grids>{os.pathsep}<ok>"},
+        "<share>/gdal",
+        f"<grids2>{os.pathsep}<grids>{os.pathsep}<ok>",
+    ),
+    # another PROJ's proj.db (DBR 19's /databricks/native/proj-data on a dedicated cluster): it goes like an
+    # unreadable one, so the payload's proj.db wins; a proj.db of the payload's version stays
+    ({"PROJ_DATA": "<foreign>"}, "<share>/gdal", "<share>/proj"),
+    (
+        {"PROJ_DATA": "<foreign9>"},
+        "<share>/gdal",
+        "<share>/proj",
+    ),  # the same layout, another PROJ.VERSION
+    ({"PROJ_DATA": "<nometa>"}, "<share>/gdal", "<share>/proj"),  # not a PROJ database
+    (
+        {"PROJ_DATA": f"<foreign>{os.pathsep}<grids>"},
+        "<share>/gdal",
+        f"<grids>{os.pathsep}<share>/proj",
+    ),
+    ({"PROJ_DATA": f"<foreign>{os.pathsep}<ok>"}, "<share>/gdal", "<ok>"),
+    (
+        {"PROJ_DATA": "<same>"},
+        "<share>/gdal",
+        "<same>",
+    ),  # the payload's own version: kept as it is
+    ({"PROJ_LIB": "<foreign>"}, "<share>/gdal", "<share>/proj", None),
 ]
+KEEP = object()  # PROJ_LIB after the rule: as the user set it
+DATA_CASES = [c if len(c) == 4 else (*c, KEEP) for c in DATA_CASES]
+
+
+def _proj_db(path, layout=("1", "5"), version="9.9.0"):
+    """A proj.db with only the metadata table the version check reads (``layout`` None: no metadata at all)."""
+    import sqlite3
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE metadata (key TEXT, value TEXT)")
+    if layout:
+        rows = [
+            ("DATABASE.LAYOUT.VERSION.MAJOR", layout[0]),
+            ("DATABASE.LAYOUT.VERSION.MINOR", layout[1]),
+        ]
+        con.executemany(
+            "INSERT INTO metadata VALUES (?, ?)",
+            rows + ([("PROJ.VERSION", version)] if version else []),
+        )
+    con.commit()
+    con.close()
 
 
 def _proj_dirs(tmp_path):
-    names = ("ok", "ok2", "grids", "empty", "unr")
+    """The directories DATA_CASES names, and "<share>": a payload share/ whose proj/proj.db is PROJ 9.9.0's."""
+    names = (
+        "ok",
+        "ok2",
+        "grids",
+        "grids2",
+        "empty",
+        "unr",
+        "same",
+        "foreign",
+        "foreign9",
+        "nometa",
+    )
     for n in names:
         (tmp_path / n).mkdir()
-    for n in ("ok", "ok2", "unr"):
-        (tmp_path / n / "proj.db").write_bytes(b"SQLite format 3\x00")
-    (tmp_path / "grids" / "my_grid.gsb").write_bytes(b"NUM_OREC")
+    for n in ("ok", "ok2", "unr", "same"):
+        _proj_db(tmp_path / n / "proj.db")
+    _proj_db(tmp_path / "share" / "proj" / "proj.db")
+    _proj_db(tmp_path / "foreign" / "proj.db", layout=("1", "4"), version="9.4.0")
+    _proj_db(tmp_path / "foreign9" / "proj.db", version="9.6.1")
+    _proj_db(tmp_path / "nometa" / "proj.db", layout=None)
+    for n in ("grids", "grids2"):
+        (tmp_path / n / "my_grid.gsb").write_bytes(b"NUM_OREC")
     dirs = {f"<{n}>": str(tmp_path / n) for n in names}
     dirs["<missing>"] = str(tmp_path / "missing")
+    dirs["<share>"] = str(tmp_path / "share")
     return dirs
 
 
@@ -155,26 +230,27 @@ def _fill(value, dirs):
     return value
 
 
-@pytest.mark.parametrize("environ, gdal_data, proj_data", DATA_CASES)
-def test_the_data_rule(tmp_path, _unreadable, environ, gdal_data, proj_data):
+@pytest.mark.parametrize("environ, gdal_data, proj_data, proj_lib", DATA_CASES)
+def test_the_data_rule(tmp_path, _unreadable, environ, gdal_data, proj_data, proj_lib):
     dirs = _proj_dirs(tmp_path)
     _unreadable["unr"] = dirs["<unr>"]
     env = {k: _fill(v, dirs) for k, v in environ.items()}
-    _rules.set_data_dirs(env, "<share>")
+    _rules.set_data_dirs(env, dirs["<share>"])
     assert (env.get("GDAL_DATA"), env.get("PROJ_DATA")) == (
-        gdal_data,
+        _fill(gdal_data, dirs),
         _fill(proj_data, dirs),
     )
-    assert env.get("PROJ_LIB") == _fill(environ.get("PROJ_LIB"), dirs)
+    want_lib = environ.get("PROJ_LIB") if proj_lib is KEEP else proj_lib
+    assert env.get("PROJ_LIB") == _fill(want_lib, dirs)
 
 
 def test_a_proj_lib_list_drops_only_its_unreadable_entries(tmp_path, _unreadable):
     dirs = _proj_dirs(tmp_path)
     _unreadable["unr"] = dirs["<unr>"]
     env = {"PROJ_LIB": os.pathsep.join([dirs["<unr>"], dirs["<grids>"], dirs["<ok>"]])}
-    _rules.set_data_dirs(env, "<share>")
+    _rules.set_data_dirs(env, dirs["<share>"])
     assert env == {
-        "GDAL_DATA": "<share>/gdal",
+        "GDAL_DATA": dirs["<share>"] + "/gdal",
         "PROJ_LIB": os.pathsep.join([dirs["<grids>"], dirs["<ok>"]]),
     }
 

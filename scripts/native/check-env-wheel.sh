@@ -27,6 +27,8 @@
 #     written and read back as GPKG, contextily's warp, gbx.vizx's plot_file and plot_static) the process maps one
 #     libgdal, one libproj and one GEOS (libgeos_c), all the payload's: with the .pth, and with GBX_NATIVE_PTH=0
 #     (activated at `import databricks.labs.gbx`; before it, geopandas does not import at all)
+#  10 a runtime PROJ_DATA holding another PROJ's proj.db (DBR 19's /databricks/native/proj-data on a dedicated
+#     cluster): pyproj from the payload still creates EPSG:4326, with PROJ_DATA the payload's share/proj
 set -uo pipefail
 ENV="$1"; VERSION="$2"; OTHER=$((11 - ENV)); ARCH="$(uname -m)"
 PY=/opt/python/cp312-cp312/bin/python PY311=/opt/python/cp311-cp311/bin/python
@@ -186,6 +188,28 @@ PY
 else
     bad "9 [vizx] does not install offline from the wheelhouses"
 fi
+
+# 10: a foreign proj.db on PROJ_DATA: a copy of the payload's with another layout minor and PROJ.VERSION, as the
+# runtime's own PROJ data is to the payload's PROJ.
+out="$("$V/bin/python" - 2>&1 <<'PY'
+import glob, os, shutil, sqlite3, subprocess, sys
+src = glob.glob(f"{sys.prefix}/lib/python3.12/site-packages/databricks/labs/gbx/_native/share/proj/proj.db")[0]
+os.makedirs("/tmp/foreign-proj", exist_ok=True)
+db = shutil.copy(src, "/tmp/foreign-proj/proj.db")
+con = sqlite3.connect(db)
+con.execute("UPDATE metadata SET value = '1' WHERE key = 'DATABASE.LAYOUT.VERSION.MINOR'")
+con.execute("UPDATE metadata SET value = '9.0.0' WHERE key = 'PROJ.VERSION'")
+con.commit(); con.close()
+probe = "import os, pyproj; print(pyproj.CRS.from_epsg(4326).to_epsg(), os.environ['PROJ_DATA'], pyproj.__file__)"
+r = subprocess.run([sys.executable, "-c", probe], env={**os.environ, "PROJ_DATA": "/tmp/foreign-proj"},
+                   capture_output=True, text=True)
+print("PROJ10", r.stdout.strip() or r.stderr.strip()[-300:])
+PY
+)"
+case "$out" in
+    *"PROJ10 4326 "*"/_native/share/proj "*"/_vendor/"*) ok "10 PROJ_DATA with another PROJ's proj.db: the payload's share/proj serves, pyproj creates EPSG:4326" ;;
+    *) bad "10 PROJ_DATA with another PROJ's proj.db: $(echo "$out" | tail -2)" ;;
+esac
 
 echo "ENV_WHEEL_VERIFIED env=$ENV arch=$ARCH failures=$FAILS"
 [ "$FAILS" = 0 ]

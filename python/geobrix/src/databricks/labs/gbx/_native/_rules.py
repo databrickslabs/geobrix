@@ -3,8 +3,8 @@
 Used by ``_gbx_native_path`` (interpreter start, through ``geobrix-native.pth``; it loads this file
 by path so that no geobrix package is imported) and by ``databricks.labs.gbx._native.activate``
 (``import databricks.labs.gbx``). Pure standard library (``os``, ``sys``; ``json`` and ``ctypes``
-only when the filter plugins are registered); imports nothing from geobrix; never raises for any
-input it is given.
+only when the filter plugins are registered; ``sqlite3`` only when ``PROJ_DATA``/``PROJ_LIB`` name a
+``proj.db``); imports nothing from geobrix; never raises for any input it is given.
 
 The rules:
 
@@ -16,11 +16,16 @@ The rules:
   installed package, so the payload's bindings (which must match its GDAL) win over a user's own
   copies. ``PYTHONPATH`` entries stay ahead of them. With no such entry they are appended.
 - **Data.** ``GDAL_DATA`` and ``PROJ_DATA`` point at ``_native/share``, each only when unset;
-  ``PROJ_DATA`` is not set when the user set ``PROJ_LIB`` (PROJ's older name, still read). A ``PROJ_DATA`` or
-  ``PROJ_LIB`` drops the entries that exist but this process cannot read (DBR 19's ``/databricks/native/proj-data``
-  on a standard-access driver) and keeps every other one in order, grid directories included; a ``PROJ_DATA`` left
-  with no ``proj.db`` gets the user's readable ``PROJ_LIB`` data directories, else ``_native/share/proj``, appended.
-  A value with a readable ``proj.db`` and nothing unreadable in it is never changed. The probes never raise.
+  ``PROJ_DATA`` is not set when the user's ``PROJ_LIB`` (PROJ's older name, still read) holds a usable
+  ``proj.db``. A ``PROJ_DATA`` or ``PROJ_LIB`` drops the entries that exist but this process cannot read (DBR 19's
+  ``/databricks/native/proj-data`` on a standard-access driver) and the ones whose ``proj.db`` is another PROJ's
+  (its ``metadata`` layout version, or ``PROJ.VERSION``, is not the payload ``proj.db``'s: DBR 19's same directory
+  on a dedicated cluster, where the payload's PROJ finds no usable database in it), and keeps every other one in
+  order, grid directories included; a ``PROJ_LIB`` left with none goes. A ``PROJ_DATA`` left with no ``proj.db``
+  gets the user's ``PROJ_LIB`` grid and data directories appended, then ``_native/share/proj`` unless one of those
+  holds a ``proj.db``; with no ``PROJ_DATA``, ``PROJ_DATA`` is the user's ``PROJ_LIB`` grid directories followed by
+  ``_native/share/proj``. A value with a usable ``proj.db`` and nothing dropped is never changed. The probes never
+  raise.
 - **HDF5 filter plugins.** ``_native/<arch>/hdf5-plugins`` (netCDF-C's zstd, blosc, bzip2, szip,
   ... filters) is registered with the payload's OWN netCDF-C and HDF5, never through the
   environment: ``HDF5_PLUGIN_PATH`` is never set, so it reaches no other HDF5 in the process (a
@@ -89,11 +94,55 @@ def insert_vendor(path, dirs):
     return new
 
 
-def proj_entry(d):
+PROJ_DB_KEYS = (
+    "DATABASE.LAYOUT.VERSION.MAJOR",
+    "DATABASE.LAYOUT.VERSION.MINOR",
+    "PROJ.VERSION",
+)
+
+
+def proj_db_version(db):
+    """``(layout major, layout minor, PROJ.VERSION or None)`` from a ``proj.db``'s ``metadata`` table, or None when
+    it is not a readable PROJ database. Read-only and immutable (no lock, no journal: the file may be on a read-only
+    file system). Never raises."""
+    try:
+        import sqlite3
+        from urllib.parse import quote
+
+        con = sqlite3.connect(f"file:{quote(str(db))}?mode=ro&immutable=1", uri=True)
+        try:
+            rows = dict(
+                con.execute(
+                    "SELECT key, value FROM metadata WHERE key IN (?, ?, ?)",
+                    PROJ_DB_KEYS,
+                ).fetchall()
+            )
+        finally:
+            con.close()
+    except Exception:
+        return None
+    if PROJ_DB_KEYS[0] not in rows or PROJ_DB_KEYS[1] not in rows:
+        return None
+    return tuple(rows.get(k) for k in PROJ_DB_KEYS)
+
+
+def _same_proj_db(version, ref):
+    """``version`` (``proj_db_version``) is the payload's: the same layout, and the same PROJ.VERSION where both
+    carry one."""
+    return (
+        version is not None
+        and version[:2] == ref[:2]
+        and (version[2] is None or ref[2] is None or version[2] == ref[2])
+    )
+
+
+def proj_entry(d, ref=None):
     """What a ``PROJ_DATA``/``PROJ_LIB`` entry is to this process: ``"db"`` (a directory holding a readable
-    ``proj.db``), ``"dir"`` (a readable directory without one: a grid directory), ``"missing"`` (nothing there), or
+    ``proj.db``), ``"dir"`` (a readable directory without one: a grid directory), ``"missing"`` (nothing there),
     ``"unreadable"`` (there, but this process cannot read it or its ``proj.db``: the entry pyproj's ``Path.exists()``
-    raises on, EACCES). Never raises."""
+    raises on, EACCES), or, given ``ref`` (the payload ``proj.db``'s ``proj_db_version``), ``"foreign"`` (a readable
+    ``proj.db`` that is not the payload's version, which the payload's PROJ cannot use). Never raises.
+    """
     try:
         os.stat(d)
     except (FileNotFoundError, NotADirectoryError):
@@ -108,7 +157,11 @@ def proj_entry(d):
             os.stat(db)
         except (FileNotFoundError, NotADirectoryError):
             return "dir"
-        return "db" if os.access(db, os.R_OK) else "unreadable"
+        if not os.access(db, os.R_OK):
+            return "unreadable"
+        if ref is not None and not _same_proj_db(proj_db_version(db), ref):
+            return "foreign"
+        return "db"
     except (OSError, ValueError):
         return "unreadable"
 
@@ -118,42 +171,60 @@ def proj_db_readable(value):
     return any(proj_entry(d) == "db" for d in (value or "").split(os.pathsep) if d)
 
 
-def usable_proj_dirs(value):
-    """The entries of ``value`` (``os.pathsep``-joined), in order, but those that exist and this process cannot read."""
+def usable_proj_dirs(value, ref=None):
+    """The entries of ``value`` (``os.pathsep``-joined), in order, but those that exist and this process cannot read
+    and, given ``ref``, those holding another PROJ's ``proj.db``."""
     return [
         d
         for d in (value or "").split(os.pathsep)
-        if d and proj_entry(d) != "unreadable"
+        if d and proj_entry(d, ref) not in ("unreadable", "foreign")
     ]
 
 
 def set_data_dirs(env, share):
     env.setdefault("GDAL_DATA", os.path.join(share, "gdal"))
-    # PROJ_DATA / PROJ_LIB. DBR 19 exports PROJ_DATA=/databricks/native/proj-data, which the notebook user of a
-    # standard-access cluster cannot read, and the vendored pyproj (no data dir of its own) checks each entry in order
-    # with Path.exists(), which raises on EACCES. So an entry that exists but cannot be read goes; every other entry
-    # stays, in order (a grid directory holds no proj.db, and a missing one costs nothing). Then PROJ must still find
-    # a proj.db: a PROJ_DATA left with none gets the user's readable PROJ_LIB data directories, else the payload's
-    # share/proj, appended; a PROJ_DATA left empty goes; with no PROJ_DATA and no readable PROJ_LIB data directory,
-    # PROJ_DATA is the payload's share/proj. A value with a readable proj.db and nothing unreadable is kept as it is.
+    # PROJ_DATA / PROJ_LIB. DBR 19 exports PROJ_DATA=/databricks/native/proj-data. A standard-access notebook user
+    # cannot read it, and the vendored pyproj (no data dir of its own) checks each entry in order with
+    # Path.exists(), which raises on EACCES; on a dedicated cluster it is readable but its proj.db is the runtime's
+    # PROJ's, and the payload's PROJ then finds no usable database ("no database context specified"). So an entry
+    # that exists but cannot be read goes, and so does one whose proj.db is not the payload's version; every other
+    # entry stays, in order (a grid directory holds no proj.db, and a missing one costs nothing). A PROJ_LIB left
+    # empty goes. Then PROJ must still find a proj.db, and PROJ reads PROJ_DATA before PROJ_LIB: a PROJ_DATA left
+    # with none gets PROJ_LIB's grid and data directories, then the payload's share/proj unless PROJ_LIB has a
+    # proj.db; a PROJ_DATA left empty goes; with no PROJ_DATA and no usable PROJ_LIB proj.db, PROJ_DATA is
+    # PROJ_LIB's grid directories followed by the payload's share/proj. A value with a usable proj.db and nothing
+    # dropped is kept as it is.
     proj = os.path.join(share, "proj")
-    lib = None
+    ref = proj_db_version(
+        os.path.join(proj, "proj.db")
+    )  # None (no payload proj.db): no version check
+    lib = []
     if "PROJ_LIB" in env:
-        lib = usable_proj_dirs(env["PROJ_LIB"])
-        if lib and lib != env["PROJ_LIB"].split(os.pathsep):
+        lib = usable_proj_dirs(env["PROJ_LIB"], ref)
+        if not lib:
+            del env["PROJ_LIB"]
+        elif lib != env["PROJ_LIB"].split(os.pathsep):
             env["PROJ_LIB"] = os.pathsep.join(lib)
-    lib_db = [d for d in (lib or []) if proj_entry(d) == "db"]
+    kinds = {d: proj_entry(d, ref) for d in lib}
+    lib_db = [d for d in lib if kinds[d] == "db"]
+    lib_dirs = [d for d in lib if kinds[d] in ("db", "dir")]
     if "PROJ_DATA" in env:
-        data = usable_proj_dirs(env["PROJ_DATA"])
+        data = usable_proj_dirs(env["PROJ_DATA"], ref)
         if not data:
             del env["PROJ_DATA"]
         else:
-            if not any(proj_entry(d) == "db" for d in data):
-                data = data + (lib_db or [proj])
+            if not any(proj_entry(d, ref) == "db" for d in data):
+                data = (
+                    data
+                    + [d for d in lib_dirs if d not in data]
+                    + ([] if lib_db else [proj])
+                )
             if data != env["PROJ_DATA"].split(os.pathsep):
                 env["PROJ_DATA"] = os.pathsep.join(data)
     if "PROJ_DATA" not in env and not lib_db:
-        env["PROJ_DATA"] = proj
+        env["PROJ_DATA"] = os.pathsep.join(
+            [d for d in lib if kinds[d] == "dir"] + [proj]
+        )
 
 
 def payload_lib(root, arch, soname_prefix):

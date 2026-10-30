@@ -1565,6 +1565,23 @@ def test_stage_sample_dry_run_needs_neither_uv_nor_the_sdk_and_keeps_the_log_out
     assert (sandbox.root / "test-logs" / "l.log").exists()
 
 
+def test_the_serverless_notebook_command_hands_the_runner_its_arguments_whole(sandbox):
+    """The wrapper parses only --help and --log: every other argument, valued or not, reaches the runner as given."""
+    env, _stub_log, uv_log = _stage_sample_sandbox(sandbox)
+    (sandbox.bin / "uv").write_text('#!/bin/sh\nfor a in "$@"; do echo "$a"; done >> "$UV_LOG"\nexit 0\n')
+    runner = sandbox.root / "examples" / "tests" / "run_notebooks_serverless.py"
+    runner.parent.mkdir(parents=True, exist_ok=True)
+    runner.write_text("")
+    args = ["--notebook", "a.ipynb", "--dep-notebook", "cfg.ipynb", "--existing-cluster-id", "0101-x",
+            "--new-cluster", "--jar", "/Volumes/c/s/v/j.jar", "--access-mode", "standard"]  # fmt: skip
+
+    res = sandbox.run("gbx-test-notebooks-serverless.sh", *args, **env)
+
+    assert res.returncode == 0, res.output
+    seen = uv_log.read_text().splitlines()
+    assert seen[seen.index("python") + 2 :] == args  # after the interpreter and the runner script
+
+
 def test_stage_sample_without_dry_run_runs_the_launcher_on_the_sdk_python(sandbox):
     env, stub_log, uv_log = _stage_sample_sandbox(sandbox)
 

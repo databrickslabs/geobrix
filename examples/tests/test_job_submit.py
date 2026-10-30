@@ -348,6 +348,7 @@ def fake_sdk(monkeypatch):
     compute = types.ModuleType("databricks.sdk.service.compute")
     compute.Environment = container("Environment")
     compute.ClusterSpec = container("ClusterSpec")
+    compute.Library = container("Library")
     compute.DataSecurityMode = SimpleNamespace(
         SINGLE_USER="SINGLE_USER", USER_ISOLATION="USER_ISOLATION"
     )
@@ -426,6 +427,109 @@ def test_a_new_cluster_run_gets_a_job_cluster_in_its_access_mode(
     )
     assert task.max_retries == 0
     assert not hasattr(task, "existing_cluster_id") and "environments" not in call
+
+
+def _new_cluster_task(cluster):
+    w = fake_workspace()
+    assert rns.run_one(
+        w,
+        pathlib.Path("my nb.ipynb"),
+        "/ws",
+        deps=[],
+        env_version="6",
+        poll_secs=0,
+        strip_pip=False,
+        job_cluster=cluster,
+    )
+    (call,) = w.jobs.calls
+    (task,) = call["tasks"]
+    return task
+
+
+def test_a_new_cluster_run_carries_the_jar_as_a_library_of_the_task(fake_sdk):
+    jar = "/Volumes/c/s/v/geobrix-0.6.0-jar-with-dependencies.jar"
+
+    task = _new_cluster_task(rns.JobCluster(user_name="me@example.com", jar=jar))
+
+    (lib,) = task.libraries
+    assert lib.jar == jar
+    assert task.new_cluster is not None  # the library rides on the cluster made for the run
+
+
+def test_a_new_cluster_run_without_a_jar_attaches_no_library(fake_sdk):
+    task = _new_cluster_task(rns.JobCluster(user_name="me@example.com"))
+
+    assert not hasattr(task, "libraries")
+
+
+def _run_main(monkeypatch, tmp_path, *flags):
+    """rns.main() on a fake workspace; returns (exit, the JobCluster the run was made for)."""
+    nb = tmp_path / "a.ipynb"
+    nb.write_text("{}")
+    made = []
+    w = fake_workspace()
+    w.current_user = SimpleNamespace(me=lambda: SimpleNamespace(user_name="me@example.com"))
+    sys.modules["databricks.sdk"].WorkspaceClient = lambda **k: w
+    monkeypatch.setattr(rns, "run_one", lambda **kw: made.append(kw["job_cluster"]) or True)
+    monkeypatch.setattr(sys, "argv", ["run_notebooks_serverless.py", "--notebook", str(nb), *flags])
+    return rns.main(), made
+
+
+def test_the_jar_option_reaches_the_cluster_made_for_a_new_cluster_run(fake_sdk, monkeypatch, tmp_path):
+    jar = "/Volumes/c/s/v/j.jar"
+
+    code, made = _run_main(monkeypatch, tmp_path, "--new-cluster", "--jar", jar)
+
+    assert code == 0 and [c.jar for c in made] == [jar]
+    code, made = _run_main(monkeypatch, tmp_path, "--new-cluster")
+    assert code == 0 and [c.jar for c in made] == [None]
+
+
+@pytest.mark.parametrize("other", [[], ["--existing-cluster-id", "0101-x"]])
+def test_the_jar_option_without_a_new_cluster_or_jar_task_is_refused(fake_sdk, monkeypatch, tmp_path, other):
+    """It would be silently ignored on Serverless and on a warm cluster: refuse it before any call."""
+    with pytest.raises(SystemExit) as stop:
+        _run_main(monkeypatch, tmp_path, "--jar", "/Volumes/c/s/v/j.jar", *other)
+
+    assert stop.value.code == 2
+
+
+def test_an_option_missing_its_value_stops_the_runner_before_any_workspace_call(fake_sdk, monkeypatch, tmp_path):
+    """exit 2 (argparse) is a refusal of the command line: it comes before the first import, never after a submit.
+
+    A bare ``--existing-cluster-id`` is what an unset shell variable leaves in
+    ``--existing-cluster-id $CID --dep-notebook cfg.ipynb``; the runs that then finished were another invocation's.
+    """
+    reached = []
+    nb, dep = tmp_path / "a.ipynb", tmp_path / "cfg.ipynb"
+    nb.write_text("{}")
+    dep.write_text("{}")
+    sys.modules["databricks.sdk"].WorkspaceClient = lambda **k: reached.append("client")
+    monkeypatch.setattr(rns, "_import_notebook", lambda *a, **k: reached.append("import"))
+    monkeypatch.setattr(rns, "run_one", lambda **kw: reached.append("run") or True)
+    monkeypatch.setattr(
+        sys, "argv", ["run_notebooks_serverless.py", "--notebook", str(nb), "--dep-notebook", str(dep), "--existing-cluster-id"]
+    )
+
+    with pytest.raises(SystemExit) as stop:
+        rns.main()
+
+    assert stop.value.code == 2 and reached == []
+
+
+def test_a_dep_notebook_run_exits_zero_after_it_submits(fake_sdk, monkeypatch, tmp_path):
+    nb, dep = tmp_path / "a.ipynb", tmp_path / "cfg.ipynb"
+    nb.write_text("{}")
+    dep.write_text("{}")
+    w = fake_workspace()
+    w.current_user = SimpleNamespace(me=lambda: SimpleNamespace(user_name="me@example.com"))
+    sys.modules["databricks.sdk"].WorkspaceClient = lambda **k: w
+    for flags in ([], ["--new-cluster"], ["--existing-cluster-id", "0101-x"]):
+        monkeypatch.setattr(
+            sys, "argv", ["run_notebooks_serverless.py", "--notebook", str(nb), "--dep-notebook", str(dep), "--poll-secs", "0", *flags]
+        )
+        assert rns.main() == 0, flags
+    assert len(w.jobs.runs) == 3
 
 
 # ----------------------------------------------------- every launcher goes through it

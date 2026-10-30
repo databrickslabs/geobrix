@@ -301,6 +301,7 @@ class JobCluster:
     num_workers: int = 1
     access_mode: str = "dedicated"
     user_name: Optional[str] = None
+    jar: Optional[str] = None  # a /Volumes path: installed as a library of the cluster (the heavy tier)
 
 
 def _cluster_spec(cluster: JobCluster):
@@ -319,6 +320,13 @@ def _cluster_spec(cluster: JobCluster):
         ),
         single_user_name=cluster.user_name if dedicated else None,
     )
+
+
+def _cluster_libraries(cluster: JobCluster) -> list:
+    """The libraries of the run's task: the JAR when ``--jar`` was given, else none."""
+    from databricks.sdk.service import compute
+
+    return [compute.Library(jar=cluster.jar)] if cluster.jar else []
 
 
 # ---------------------------------------------------------------------------
@@ -450,6 +458,8 @@ def run_one(
             if existing_cluster_id
             else {"new_cluster": _cluster_spec(job_cluster)}
         )
+        if job_cluster and _cluster_libraries(job_cluster):
+            where["libraries"] = _cluster_libraries(job_cluster)
         waiter = submit_once(
             w,
             run_name=f"gbx-nb:{task_key}",
@@ -867,7 +877,15 @@ def main() -> int:
             "its parameters). The JAR is the environment's java dependency; --env-version must be 4 or later."
         ),
     )
-    parser.add_argument("--jar", metavar="VOLPATH", default=None, help="The JAR (a /Volumes path) for --jar-task.")
+    parser.add_argument(
+        "--jar",
+        metavar="VOLPATH",
+        default=None,
+        help=(
+            "The JAR (a /Volumes path): for --jar-task, the environment's java dependency; with --new-cluster, "
+            "a library of the cluster (the heavy tier)."
+        ),
+    )
     parser.add_argument(
         "--jar-args", metavar="CSV", default="", help="Comma-separated parameters of the --jar-task main class."
     )
@@ -904,6 +922,9 @@ def main() -> int:
             w, args.jar_task, args.jar, params, str(args.env_version), args.poll_secs, args.timeout_min
         )
         return 0 if ok else 1
+
+    if args.jar and not args.new_cluster:
+        parser.error("--jar goes with --jar-task or --new-cluster (it is not used on Serverless or a warm cluster)")
 
     if args.new_cluster and (args.existing_cluster_id or args.hardware_accelerator):
         parser.error(
@@ -948,6 +969,7 @@ def main() -> int:
             num_workers=args.num_workers,
             access_mode=args.access_mode,
             user_name=w.current_user.me().user_name,
+            jar=args.jar,
         )
 
     # Resolve default ws-dir using the current user
@@ -970,7 +992,8 @@ def main() -> int:
         print(
             f"Cluster  : new job cluster per run, {job_cluster.access_mode} access, "
             f"{job_cluster.spark_version}, {job_cluster.num_workers} x {job_cluster.node_type} "
-            "(%pip kept, env spec skipped; terminated when the run ends)",
+            "(%pip kept, env spec skipped; terminated when the run ends)"
+            + (f"; JAR library {job_cluster.jar}" if job_cluster.jar else ""),
             flush=True,
         )
     if args.set_vars:

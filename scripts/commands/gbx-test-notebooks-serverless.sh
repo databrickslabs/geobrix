@@ -50,6 +50,7 @@ show_help() {
     echo -e "  ${GREEN}--existing-cluster-id ID${NC} Run on a warm classic cluster (%%pip cells kept)."
     echo -e "  ${GREEN}--new-cluster [VER]${NC}   Run on a classic job cluster made for each run and"
     echo -e "                        terminated when it ends (%%pip cells kept; prints its id)."
+    echo -e "  ${GREEN}--jar VOLPATH${NC}         --new-cluster library: the JAR, for heavyweight notebooks (also the --jar-task JAR)."
     echo -e "  ${GREEN}--access-mode MODE${NC}    --new-cluster access: dedicated (default) or standard."
     echo -e "  ${GREEN}--spark-version VER${NC}   --new-cluster runtime (default: 19.x-scala2.13)."
     echo -e "  ${GREEN}--node-type TYPE${NC}      --new-cluster node type (default: m5d.xlarge)."

@@ -333,7 +333,9 @@ public addresses: a cloud metadata address (`169.254.169.254`, `fd00:ec2::254`, 
 link-local or unspecified one, and any other address that is not public (the documentation and benchmark ranges,
 multicast, reserved) are refused always, even for a host you list, while a private (RFC 1918, `fc00::/7`) or
 carrier-grade NAT (`100.64.0.0/10`) address is refused unless you name the host in `allowed_hosts=` (an internal
-catalog); an `allowed_hosts=` list, when you pass one, refuses any other host. The host checked is the one the HTTP client
+catalog); an `allowed_hosts=` list, when you pass one, refuses any other host. Azure's WireServer address
+(`168.63.129.16`), a platform endpoint, is refused with the cloud metadata addresses. A 6to4 address (`2002::/16`) is
+refused too, whatever IPv4 address it embeds. The host checked is the one the HTTP client
 connects to: an href whose host the client reads differently from the check (a backslash in it, for example) is
 refused. The fetch connects to an address the check approved, with the host's name in the request and in TLS, so a
 DNS answer that changes after the check is never used. Each redirect hop is checked the same way, and no

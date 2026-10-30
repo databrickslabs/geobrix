@@ -9,7 +9,8 @@ and the fetch runs on an executor, with the node's network. Each fetch here:
   loopback, link-local or unspecified one, and any other address that is not public (``ipaddress``'s ``is_global``
   false, or multicast or reserved: the documentation and benchmark ranges ...) is refused always; a private one
   (RFC 1918, ``fc00::/7``) or a carrier-grade NAT one (``100.64.0.0/10``) is refused unless the caller names the host
-  in ``allowed_hosts``; an IPv4-mapped IPv6 address is judged as the IPv4 address it maps; and when
+  in ``allowed_hosts``; an IPv4-mapped IPv6 address is judged as the IPv4 address it maps, and a 6to4 one
+  (``2002::/16``) is refused whatever it embeds; and when
   ``allowed_hosts`` is set, any host off it is refused (``"example.com"`` is that host; ``".example.com"`` is it and
   every host under it);
 - connects to an address it checked (the name is not resolved again, so it cannot change in between), with the
@@ -37,11 +38,15 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 MAX_REDIRECTS = 5
 _FIX = "Fix: an href must name a public host; check the catalog, or the table, that the href came from"
 _DEFAULT_PORT = {"http": 80, "https": 443}
-# The cloud metadata endpoints (AWS, Azure, GCP; AWS's IPv6 one; Alibaba's): refused always, even when listed.
+# The cloud metadata endpoints (AWS, Azure, GCP; AWS's IPv6 one; Alibaba's) and Azure's WireServer (a platform
+# endpoint): refused always, even when listed.
 _METADATA = frozenset(
     ipaddress.ip_address(a)
-    for a in ("169.254.169.254", "fd00:ec2::254", "100.100.100.200")
+    for a in ("169.254.169.254", "fd00:ec2::254", "100.100.100.200", "168.63.129.16")
 )
+# 6to4 (deprecated, RFC 7526): refused outright, so the verdict does not depend on the Python patch level (whose
+# ``is_global`` for it changed) or on what IPv4 address the prefix embeds.
+_SIX_TO_FOUR = ipaddress.ip_network("2002::/16")
 # The internal ranges a host the caller lists in allowed_hosts may resolve to (an internal catalog), by kind.
 _LISTABLE = {
     "private": tuple(
@@ -75,13 +80,22 @@ class _Target:
             host if self.port == _DEFAULT_PORT[self.scheme] else f"{host}:{self.port}"
         )
 
-    def at(self, netloc: str) -> str:
-        """The prepared URL with ``netloc`` (an address and port, or the checked host) as its host: its user info
-        (already percent-encoded by the client), path and query are kept."""
+    def at(self, netloc: str, userinfo: bool = True) -> str:
+        """The prepared URL with ``netloc`` (an address and port, or the checked host) as its host; its path and
+        query are kept, and its user info (already percent-encoded by the client) unless ``userinfo`` is False.
+        """
         parts = urlsplit(self.url)
-        userinfo = parts.netloc.rpartition("@")[0]
-        authority = f"{userinfo}@{netloc}" if userinfo else netloc
+        info = parts.netloc.rpartition("@")[0] if userinfo else ""
+        authority = f"{info}@{netloc}" if info else netloc
         return urlunsplit((self.scheme, authority, parts.path, parts.query, ""))
+
+    @property
+    def auth(self):
+        """The href's user info as the request's credentials (user, password), or None."""
+        import requests
+
+        user, password = requests.utils.get_auth_from_url(self.url)
+        return (user, password) if user or password else None
 
     @property
     def clean_url(self) -> str:
@@ -107,6 +121,8 @@ def _kind(addr: str) -> Optional[str]:
         ip = mapped
     if ip in _METADATA:
         return "cloud metadata"
+    if ip in _SIX_TO_FOUR:
+        return "6to4"
     if ip.is_unspecified:
         return "unspecified"
     if ip.is_loopback:
@@ -288,11 +304,13 @@ def _get(session, target: _Target, timeout, headers):
             f"{target.scheme}://{netloc}/",
             _pinned_adapter(target.host if target.scheme == "https" else None),
         )
-        url = target.at(netloc)
+        # the user info goes as the credentials, so the URL sent starts with the prefix the adapter is mounted on
+        url = target.at(netloc, userinfo=False)
         try:
             return session.get(
                 url,
                 headers=pinned_headers,
+                auth=target.auth,
                 proxies={},
                 verify=settings["verify"],
                 **kwargs,

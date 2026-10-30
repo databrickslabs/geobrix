@@ -3,6 +3,7 @@ import os
 import socket
 import threading
 import types
+from urllib.parse import urlsplit
 
 import numpy as np
 import pytest
@@ -219,12 +220,21 @@ def test_a_loopback_href_is_refused_before_any_request_and_not_retried(
         ("http://198.18.0.1/x", "non-public"),
         ("http://224.0.0.1/x", "non-public"),
         ("http://240.0.0.1/x", "non-public"),
+        # Azure's WireServer, a platform endpoint; 6to4, whatever IPv4 address it embeds
+        ("http://168.63.129.16/machine?comp=goalstate", "cloud metadata"),
+        ("http://[2002:a9fe:a9fe::1]/x", "6to4"),
+        ("http://[2002:5db8:d822::1]/x", "6to4"),
     ],
 )
-def test_an_href_to_a_private_destination_is_refused(tmp_path, href, kind):
+def test_an_href_to_a_private_destination_is_refused(
+    monkeypatch, server, tmp_path, href, kind
+):
+    # the network routes the literal to the local server, so a check that let it through fetches nothing real
+    literal = urlsplit(href).hostname
+    _network(monkeypatch, {}, {literal: ("127.0.0.1", server.port)})
     with pytest.raises(_http.RefusedHref, match=f"a {kind} address") as raised:
         download_href(href, str(tmp_path / "x"))
-    assert "Fix:" in str(raised.value)
+    assert "Fix:" in str(raised.value) and server.hits == []
 
 
 def test_a_redirect_from_a_public_host_to_a_private_one_is_refused(
@@ -289,6 +299,8 @@ def private_test(monkeypatch, server):
         "ll.corp": "fe80::1",
         "lo.corp": "127.0.0.1",
         "doc.corp": "192.0.2.10",
+        "wire.corp": "168.63.129.16",
+        "six.corp": "2002:a00:5::1",
     }
     local = ("127.0.0.1", server.port)
     _network(
@@ -324,6 +336,8 @@ def test_a_private_host_the_caller_lists_is_fetched_and_an_unlisted_one_refused(
         ("ll.corp", "link-local"),
         ("lo.corp", "loopback"),
         ("doc.corp", "non-public"),
+        ("wire.corp", "cloud metadata"),
+        ("six.corp", "6to4"),
     ],
 )
 def test_a_listed_loopback_or_metadata_host_is_still_refused(
@@ -458,40 +472,105 @@ def _certificates(tmp_path):
     return ca, leaves
 
 
-def test_a_pinned_https_fetch_checks_the_certificate_against_the_host_name(
-    monkeypatch, server, served_tif, tmp_path
-):
-    """The connection goes to the checked address, and TLS still names and verifies the host: the server's
-    certificate for public.test passes, one for another name fails."""
-    import ssl
+def _closed_port() -> int:
+    """A local port nothing listens on (a connect to it is refused at once)."""
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    return port
 
-    import requests
+
+@pytest.fixture
+def https_server(monkeypatch, served_tif, tmp_path):
+    """start(name) -> an HTTPS server whose certificate names ``name``, signed by a test CA the fetch trusts
+    (REQUESTS_CA_BUNDLE). Only the checked address of public.test routes to it; the name itself routes to a closed
+    local port, so a fetch that resolved the name again would reach nothing."""
+    import ssl
 
     ca, leaves = _certificates(tmp_path)
     monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(ca))
-    for name, ok in (("public.test", True), ("other.test", False)):
+    started = []
+
+    def start(name):
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.load_cert_chain(*map(str, leaves[name]))
         srv, ns = _start({"/a.tif": (200, {}, served_tif)}, tls=ctx)
-        try:
-            # only the checked address reaches the server: the name itself resolves nowhere
-            _network(
-                monkeypatch,
-                {"public.test": ["93.184.216.34"]},
-                {"93.184.216.34": ("127.0.0.1", ns.port)},
-            )
-            out = tmp_path / f"{name}.tif"
-            href = f"https://public.test:{ns.port}/a.tif"
-            if ok:
+        started.append(srv)
+        _network(
+            monkeypatch,
+            {"public.test": ["93.184.216.34"]},
+            {
+                "93.184.216.34": ("127.0.0.1", ns.port),
+                "public.test": ("127.0.0.1", _closed_port()),
+            },
+        )
+        return ns
+
+    yield start
+    for srv in started:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_a_pinned_https_fetch_checks_the_certificate_against_the_host_name(
+    https_server, tmp_path
+):
+    """The connection goes to the checked address, and TLS still names and verifies the host: the server's
+    certificate for public.test passes, one for another name fails."""
+    import requests
+
+    for name, ok in (("public.test", True), ("other.test", False)):
+        ns = https_server(name)
+        out = tmp_path / f"{name}.tif"
+        href = f"https://public.test:{ns.port}/a.tif"
+        if ok:
+            download_href(href, str(out))
+            assert read_validate(str(out)) and len(ns.hits) == 1
+        else:
+            with pytest.raises(requests.exceptions.SSLError):
                 download_href(href, str(out))
-                assert read_validate(str(out)) and len(ns.hits) == 1
-            else:
-                with pytest.raises(requests.exceptions.SSLError):
-                    download_href(href, str(out))
-                assert ns.hits == [] and not out.exists()
-        finally:
-            srv.shutdown()
-            srv.server_close()
+            assert ns.hits == [] and not out.exists()
+
+
+def test_an_https_href_with_user_info_is_fetched_pinned_with_its_credentials(
+    https_server, tmp_path
+):
+    """User info in an href goes as the request's credentials; the URL sent is the checked address alone, so the
+    pinned transport (TLS named for the host) carries it."""
+    import base64
+
+    ns = https_server("public.test")
+    out = tmp_path / "u.tif"
+    download_href(f"https://u:p%40ss@public.test:{ns.port}/a.tif", str(out))
+    assert read_validate(str(out)) and len(ns.hits) == 1
+    assert ns.hits[0][1].get("Authorization") == "Basic " + base64.b64encode(
+        b"u:p@ss"
+    ).decode("ascii")
+
+
+def test_the_network_guard_stops_a_connect_off_loopback_before_it_leaves(
+    monkeypatch,
+):
+    """The rows' guard (test/stac/conftest.py) refuses a connect to any address off loopback before the real
+    connect runs. Shown on a stub connect: nothing is dialled whatever the guard does.
+    """
+    from test._net_guard import install_loopback_only
+
+    dialled = []
+
+    def stub(sock, address):
+        dialled.append(address)
+
+    refused = install_loopback_only(monkeypatch, connect=stub)
+    sock = socket.socket()
+    try:
+        with pytest.raises(OSError, match="no connection off loopback"):
+            sock.connect(("192.0.2.1", 9))
+        sock.connect(("127.0.0.1", 9))
+    finally:
+        sock.close()
+    assert dialled == [("127.0.0.1", 9)] and refused == [("192.0.2.1", 9)]
 
 
 def test_a_windowed_read_of_an_href_without_slashes_is_refused_before_gdal_opens_it(

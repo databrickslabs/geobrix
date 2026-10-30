@@ -7,8 +7,19 @@ Runs **mvn clean package -DskipTests** and stages **both** jars it produces (one
 ## Usage
 
 ```bash
-bash scripts/commands/gbx-data-stage-jar.sh
+bash scripts/commands/gbx-data-stage-jar.sh [--from-wheel <whl>] [--profile NAME] [--log <path>] [--no-wait]
 ```
+
+## Options
+
+- `--from-wheel <whl>` - stage the JAR bundled in an env wheel. It runs no Maven, no container and no lock.
+  - It takes the one `_jar/geobrix-<version>-jar-with-dependencies.jar` in the wheel.
+  - It refuses a JAR that is not the wheel's version, or whose sha256 is not the one in the wheel's `RECORD`.
+  - It runs the packaging guard on the JAR.
+  - It uploads the JAR, then `<jar>.sha256` (`sha256sum` format), to `<volroot>/geobrix/<version>/jar/`, checking each size.
+  - `GBX_ARTIFACT_VOLUME` is not used. `GBX_BUNDLE_SKIP_JAR_UPLOAD=1` does the checks and stops before the upload.
+- `--profile NAME` - the Databricks config profile for the upload. Default: `DATABRICKS_CONFIG_PROFILE` from the environment, else from `examples/tests/databricks_cluster_config.env`.
+- `--log <path>`, `--no-wait` - as in the other commands.
 
 ## Config
 

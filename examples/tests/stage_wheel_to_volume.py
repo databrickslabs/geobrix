@@ -17,6 +17,8 @@ uploads. Loads config from databricks_cluster_config.env. Overwrites if file alr
 built by gbx:build:wheel): no JAR step (the env wheel carries its JAR), no build, and only the
 bundle volroot (the %pip path); the init-script dir and its plain wheel are left as they are.
 --no-prune keeps every other geobrix-*.whl in the init-script dir (no single-version cleanup).
+--versioned (with --env) stages each env wheel to <volroot>/geobrix/<version>/env<N>/ instead of the volroot itself,
+removes every other geobrix-*.whl in that folder and verifies the uploaded size; the wheels of the volroot are left alone.
 """
 from __future__ import annotations
 
@@ -26,7 +28,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from _artifact_volume import prune_stale
+from _artifact_volume import bundle_root, prune_stale, upload_verified, versioned_dir, wheel_version
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -80,30 +82,14 @@ def _env_wheels(project_root: Path, envs) -> list:
     return out
 
 
-def _upload_verified(w, whl: Path, remote: str) -> int:
-    """files.upload, then the remote size must equal the local one (the upload can return without the bytes)."""
-    print("Uploading to %s (overwrite if exists)..." % remote)
-    with open(whl.resolve(), "rb") as _fh:
-        w.files.upload(remote, _fh, overwrite=True)
-    try:
-        remote_size = w.files.get_metadata(remote).content_length
-    except Exception as e:
-        print(f"Error: failed to verify upload. Could not read remote metadata for {remote}: {e}", file=sys.stderr)
-        return 1
-    if remote_size != whl.stat().st_size:
-        print(
-            f"Error: upload verification failed. Local size: {whl.stat().st_size}, remote size: {remote_size}.",
-            file=sys.stderr,
-        )
-        return 1
-    print("Done: %s" % remote)
-    return 0
-
-
 def main() -> int:
     exit_if_help(__doc__)
     args = sys.argv[1:]
     no_prune = "--no-prune" in args
+    versioned = "--versioned" in args
+    if versioned and "--env" not in args:
+        print("--versioned stages env wheels: pass --env 5|6|both", file=sys.stderr)
+        return 2
     envs = None
     if "--env" in args:
         i = args.index("--env")
@@ -150,20 +136,24 @@ def main() -> int:
         if skip_wheel_upload:
             print("GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1: %s found; skipping Databricks upload." % [x.name for x in wheels])
             return 0
-        b_root = "/Volumes/%s/%s/%s" % tuple(
-            (os.environ.get(k) or d).strip()
-            for k, d in (
-                ("GBX_BUNDLE_VOLUME_CATALOG", "main"),
-                ("GBX_BUNDLE_VOLUME_SCHEMA", "default"),
-                ("GBX_BUNDLE_VOLUME_NAME", "geobrix_samples"),
-            )
-        )
-        try:
-            w.files.create_directory(b_root)
-        except Exception:
-            pass
-        for whl in wheels:  # by its own +env<N> name: no other wheel is touched
-            rc = _upload_verified(w, whl, f"{b_root}/{whl.name}")
+        b_root = bundle_root()
+        if not versioned:
+            try:
+                w.files.create_directory(b_root)
+            except Exception:
+                pass
+        for env, whl in zip(envs, wheels):
+            folder = b_root
+            if versioned:  # <volroot>/geobrix/<version>/env<N>/: this wheel alone is left in it
+                folder = versioned_dir(b_root, wheel_version(whl.name), f"env{env}")
+                try:
+                    w.files.create_directory(folder)  # also creates its parents
+                    prune_stale(w, folder, "geobrix-", ".whl", whl.name)
+                except Exception as e:
+                    print(f"Error: could not prepare {folder}: {e}", file=sys.stderr)
+                    return 1
+            # by its own +env<N> name; unversioned, no other wheel is touched
+            rc = upload_verified(w, whl, f"{folder}/{whl.name}")
             if rc:
                 return rc
         return 0

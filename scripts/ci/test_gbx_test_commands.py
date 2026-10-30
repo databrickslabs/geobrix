@@ -1113,6 +1113,54 @@ def test_stage_jar_writes_a_log_when_asked(sandbox):
     )
 
 
+def _python3_logging_args(sandbox):
+    """A python3 on PATH that records its arguments and the profile it sees; returns the log path."""
+    log = sandbox.root / "py3-args.log"
+    py3 = sandbox.bin / "python3"
+    py3.write_text('#!/bin/sh\necho "profile=${DATABRICKS_CONFIG_PROFILE:-unset} $*" >> "%s"\nexit 0\n' % log)
+    py3.chmod(0o755)
+    return log
+
+
+def test_stage_jar_from_wheel_takes_no_lock_and_passes_the_wheel_by_absolute_path(sandbox):
+    log = _python3_logging_args(sandbox)
+    wheel = sandbox.root / "dist" / "env6" / "geobrix-0.6.0+env6-py3-none-any.whl"
+    wheel.parent.mkdir(parents=True)
+    wheel.write_bytes(b"w")
+
+    with sandbox.lock_held_by("pid=4242 cmd=gbx-test-scala.sh since=now"):  # a Maven build would wait or exit 75
+        res = sandbox.run(
+            "gbx-data-stage-jar.sh", "--no-wait", "--from-wheel", "dist/env6/../env6/" + wheel.name,
+            "--profile", "oauth-fe", GBX_BUNDLE_SKIP_JAR_UPLOAD="1",
+        )  # fmt: skip
+
+    assert res.returncode == 0, res.output
+    assert "container lock" not in res.output
+    profile, script, flag, path = log.read_text().split()
+    assert (profile, flag) == ("profile=oauth-fe", "--from-wheel")
+    assert script.endswith("examples/tests/stage_jar_to_volume.py")
+    assert Path(path).is_absolute() and Path(path).resolve() == wheel.resolve()  # not relative to the project root
+
+
+@pytest.mark.parametrize("args", [["--from-wheel"], ["--from-wheel", "--no-wait"], ["--profile"], ["--profile", "--no-wait"]])
+def test_stage_jar_options_that_need_a_value_are_refused(sandbox, args):
+    log = _python3_logging_args(sandbox)
+    res = sandbox.run("gbx-data-stage-jar.sh", *args, GBX_BUNDLE_SKIP_JAR_UPLOAD="1")
+    assert res.returncode == 2 and "needs" in res.output and not log.exists()
+
+
+def test_stage_wheel_versioned_reaches_the_launcher_only_with_env(sandbox):
+    log = _python3_logging_args(sandbox)
+    env = dict(GBX_BUNDLE_SKIP_WHEEL_UPLOAD="1")
+
+    res = sandbox.run("gbx-data-stage-wheel.sh", "--versioned", **env)
+    assert res.returncode == 2 and "--versioned stages env wheels" in res.output and not log.exists()
+
+    res = sandbox.run("gbx-data-stage-wheel.sh", "--env", "6", "--versioned", **env)
+    assert res.returncode == 0, res.output
+    assert log.read_text().split()[2:] == ["--env", "6", "--versioned"]
+
+
 def test_ci_status_help_is_help_not_the_run_limit(tmp_path):
     # `--help` was taken as the LIMIT: `gh run list --limit --help` failed. gh must not be called.
     bin_dir = tmp_path / "bin"
@@ -1650,6 +1698,70 @@ def test_stage_wheel_env_puts_each_env_wheel_on_the_bundle_volroot_by_its_own_na
     assert uploads == [f"/Volumes/c/s/v/geobrix-0.6.0+env{e}-py3-none-any.whl" for e in envs]
     assert not [c for c in files.calls if c[0] in ("list", "delete")]
 
+
+
+def _stage_env_wheels(tmp_path, monkeypatch, files, args, short=()):
+    """main() of stage_wheel_to_volume for ``args`` against a scratch project with both env wheels built."""
+    stage = _launcher("stage_wheel_to_volume", monkeypatch)
+    sdk = type(sys)("databricks.sdk")
+    sdk.WorkspaceClient = lambda **kw: type("W", (), {"files": files})()
+    monkeypatch.setitem(sys.modules, "databricks.sdk", sdk)
+    project = tmp_path / "repo"
+    for env in (5, 6):
+        (project / "dist" / f"env{env}").mkdir(parents=True)
+        (project / "dist" / f"env{env}" / f"geobrix-0.6.0+env{env}-py3-none-any.whl").write_bytes(b"w" * env)
+    monkeypatch.setattr(stage, "TESTS_DIR", project / "examples" / "tests")
+    for k, v in {"DATABRICKS_CONFIG_PROFILE": "p", "GBX_BUNDLE_VOLUME_CATALOG": "c", "GBX_BUNDLE_VOLUME_SCHEMA": "s",
+                 "GBX_BUNDLE_VOLUME_NAME": "v"}.items():  # fmt: skip
+        monkeypatch.setenv(k, v)
+    monkeypatch.delenv("GBX_ARTIFACT_VOLUME", raising=False)
+    monkeypatch.delenv("GBX_BUNDLE_SKIP_WHEEL_UPLOAD", raising=False)
+    monkeypatch.setattr(sys, "argv", ["stage_wheel_to_volume.py", *args])
+    return stage
+
+
+def test_stage_wheel_env_versioned_gives_each_env_its_own_folder_and_keeps_only_that_wheel(tmp_path, monkeypatch):
+    root = "/Volumes/c/s/v/geobrix/0.6.0"
+    held = {  # what each folder holds before the stage
+        f"{root}/env5": ["geobrix-0.5.2+env5-py3-none-any.whl", "geobrix-0.6.0+env5-py3-none-any.whl", "notes.txt"],
+        f"{root}/env6": ["geobrix-0.6.0-py3-none-any.whl", "geobrix-0.6.0+env6-py3-none-any.whl"],
+    }
+    files = _FakeFiles([])
+    real = files.list_directory_contents
+    files.list_directory_contents = lambda path: (setattr(files, "listing", held[path]), real(path))[1]
+    stage = _stage_env_wheels(tmp_path, monkeypatch, files, ["--env", "both", "--versioned"])
+
+    assert stage.main() == 0
+    calls = files.calls
+    assert [c for c in calls if c[0] == "upload"] == [
+        ("upload", f"{root}/env5/geobrix-0.6.0+env5-py3-none-any.whl"),
+        ("upload", f"{root}/env6/geobrix-0.6.0+env6-py3-none-any.whl"),
+    ]
+    assert ("mkdir", f"{root}/env5") in calls and ("mkdir", f"{root}/env6") in calls
+    # every other wheel of a folder goes, this env's own is overwritten, notes.txt is no wheel
+    assert [c for c in calls if c[0] == "delete"] == [
+        ("delete", f"{root}/env5/geobrix-0.5.2+env5-py3-none-any.whl"),
+        ("delete", f"{root}/env6/geobrix-0.6.0-py3-none-any.whl"),
+    ]
+    assert not [c for c in calls if c[1].rstrip("/") == "/Volumes/c/s/v"]  # the volroot itself is never touched
+
+
+def test_stage_wheel_env_versioned_stops_on_a_short_upload(tmp_path, monkeypatch, capsys):
+    files = _FakeFiles([])
+    files.get_metadata = lambda path: type("M", (), {"content_length": 0})()
+    stage = _stage_env_wheels(tmp_path, monkeypatch, files, ["--env", "6", "--versioned"])
+
+    assert stage.main() == 1
+    assert "upload verification failed" in capsys.readouterr().err
+    assert ("upload", "/Volumes/c/s/v/geobrix/0.6.0/env6/geobrix-0.6.0+env6-py3-none-any.whl") in files.calls
+
+
+def test_stage_wheel_versioned_without_env_is_refused_before_anything_is_listed(tmp_path, monkeypatch, capsys):
+    files = _FakeFiles([])
+    stage = _stage_env_wheels(tmp_path, monkeypatch, files, ["--versioned"])
+
+    assert stage.main() == 2
+    assert "--versioned stages env wheels" in capsys.readouterr().err and files.calls == []
 
 
 def test_the_plain_wheel_stage_prunes_only_other_plain_wheels(monkeypatch):

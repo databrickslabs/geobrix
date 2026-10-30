@@ -18,6 +18,7 @@ LOG_FILE=""
 SHOW_HELP=0
 STAGE_ARGS=()
 ENV_STAGE=false
+VERSIONED=false
 PROFILE=""
 
 while [[ $# -gt 0 ]]; do
@@ -43,6 +44,10 @@ while [[ $# -gt 0 ]]; do
             STAGE_ARGS+=(--no-prune)
             shift
             ;;
+        --versioned)
+            STAGE_ARGS+=(--versioned); VERSIONED=true
+            shift
+            ;;
         --profile)
             if [[ -z "${2:-}" || "$2" == --* ]]; then
                 echo "--profile needs a profile name" >&2
@@ -62,6 +67,10 @@ done
 # The launcher fills DATABRICKS_CONFIG_PROFILE from databricks_cluster_config.env only when the
 # environment has none, so --profile wins over the config file.
 [[ -n "$PROFILE" ]] && export DATABRICKS_CONFIG_PROFILE="$PROFILE"
+if [[ "$VERSIONED" == true && "$ENV_STAGE" != true ]]; then
+    echo "--versioned stages env wheels: pass --env 5|6|both" >&2
+    exit 2
+fi
 
 if [[ "$SHOW_HELP" == "1" ]]; then
     echo "Usage: bash scripts/commands/gbx-data-stage-wheel.sh [OPTIONS]"
@@ -77,6 +86,8 @@ if [[ "$SHOW_HELP" == "1" ]]; then
     echo "                 (gbx:build:wheel --env <N> builds it). No JAR step and no build; only the bundle"
     echo "                 volroot (the %pip path), by the wheel's own +env<N> name. The init-script dir is"
     echo "                 left as it is, so no other wheel there is touched."
+    echo "  --versioned    With --env: stage each wheel to <bundle volroot>/geobrix/<version>/env<N>/, remove every"
+    echo "                 other geobrix-*.whl there, and verify the uploaded size. The volroot's own wheels stay."
     echo "  --no-prune     Keep every other geobrix-*.whl in the init-script dir (skip the single-version cleanup)"
     echo "  --profile <name>  Databricks config profile for the upload (default: DATABRICKS_CONFIG_PROFILE"
     echo "                    in the environment or examples/tests/databricks_cluster_config.env)"
@@ -98,6 +109,8 @@ if [[ "$SHOW_HELP" == "1" ]]; then
     echo "  GBX_BUNDLE_SKIP_JAR_UPLOAD=1 bash scripts/commands/gbx-data-stage-wheel.sh --log my-build.log"
     echo "  # both env wheels (the Databricks install), built first with gbx:build:wheel:"
     echo "  bash scripts/commands/gbx-data-stage-wheel.sh --env both"
+    echo "  # each into its own folder, <volroot>/geobrix/<version>/env<N>/:"
+    echo "  bash scripts/commands/gbx-data-stage-wheel.sh --env both --versioned"
     exit 0
 fi
 

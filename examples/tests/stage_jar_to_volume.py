@@ -7,15 +7,26 @@ dir is removed before the new one is uploaded (tests.jar and non-geobrix files a
 Set GBX_BUNDLE_SKIP_JAR_UPLOAD=1 to build the JAR locally but skip the Databricks upload;
 set GBX_BUNDLE_SKIP_JAR=1 to skip the JAR step ENTIRELY (no build, no upload). Loads config
 from examples/tests/databricks_cluster_config.env. Overwrites if file already exists.
+
+--from-wheel <env wheel> builds nothing (no Maven, no container, no lock): it takes the JAR bundled in the wheel
+(databricks/labs/gbx/_jar/), checks that its version is the wheel's and that its sha256 is the one in the wheel's
+RECORD, runs the packaging guard on it, and stages it with a <jar>.sha256 sidecar to
+<volroot>/geobrix/<version>/jar/ (the bundle volroot; GBX_ARTIFACT_VOLUME is not used or touched).
+GBX_BUNDLE_SKIP_JAR_UPLOAD=1 does the checks and stops before the upload.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import os
+import re
 import subprocess
 import sys
+import tempfile
+import zipfile
 from pathlib import Path
 
-from _artifact_volume import prune_stale
+from _artifact_volume import bundle_root, prune_stale, upload_verified, versioned_dir, wheel_version
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -42,6 +53,139 @@ if _env_file.exists():
                     os.environ[k] = v
 
 
+def _packaging_ok(project_root: Path, jar_path: Path) -> bool:
+    """Guard BEFORE any upload (and before the local-only early return): the JAR must not bundle classes the
+    runtime provides (Scala, Spark or log4j), which would shadow the runtime's own from /databricks/jars.
+    False after one line on stderr when it does, could not be read, or the guard failed to run."""
+    check = subprocess.run(
+        [sys.executable, str(project_root / "scripts" / "ci" / "check_jar_packaging.py"), str(jar_path)]
+    )
+    if check.returncode == 1:
+        print(
+            "Refusing to stage a JAR that bundles classes the runtime provides (Scala, Spark or log4j).",
+            file=sys.stderr,
+        )
+        return False
+    if check.returncode == 3:
+        # Exit 3 is a JAR the guard could not read (missing, or not a zip file): not a bundling problem.
+        print(
+            f"Refusing to stage {jar_path}: it could not be checked (missing or not a readable "
+            "zip file); rebuild it with mvn clean package.",
+            file=sys.stderr,
+        )
+        return False
+    if check.returncode != 0:
+        # The guard itself failed (a usage error, a crash): say so, and do not blame the JAR.
+        print(
+            f"Refusing to stage {jar_path}: the packaging check failed to run (exit "
+            f"{check.returncode}); its output is above.",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
+class WheelJarError(Exception):
+    """The wheel's bundled JAR is missing, ambiguous, not the wheel's version, or not the bytes the wheel recorded."""
+
+
+_JAR_IN_WHEEL = re.compile(r"databricks/labs/gbx/_jar/(geobrix-[^/]+-jar-with-dependencies\.jar)")
+
+
+def _recorded_sha256(zf: zipfile.ZipFile, member: str) -> str:
+    """The hex sha256 the wheel's RECORD lists for ``member`` (RECORD holds it as ``sha256=<urlsafe base64>``)."""
+    import csv
+    import io
+
+    records = [n for n in zf.namelist() if re.fullmatch(r"[^/]+\.dist-info/RECORD", n)]
+    if len(records) != 1:
+        raise WheelJarError(f"the wheel holds {len(records)} RECORD files, expected 1")
+    for row in csv.reader(io.StringIO(zf.read(records[0]).decode("utf-8"))):
+        if row and row[0] == member:
+            algo, _, digest = (row[1] if len(row) > 1 else "").partition("=")
+            if algo != "sha256" or not digest:
+                raise WheelJarError(f"RECORD lists no sha256 for {member}")
+            return base64.urlsafe_b64decode(digest + "=" * (-len(digest) % 4)).hex()
+    raise WheelJarError(f"RECORD does not list {member}")
+
+
+def bundled_jar(wheel: Path, out_dir: Path):
+    """Extract the JAR an env wheel bundles into ``out_dir``: ``(path, sha256 hex)``. WheelJarError unless the wheel
+    holds exactly one, named for the wheel's own version, whose bytes have the sha256 its RECORD lists."""
+    try:
+        version = wheel_version(wheel.name)
+        zf = zipfile.ZipFile(wheel)
+    except (OSError, ValueError, zipfile.BadZipFile) as e:
+        raise WheelJarError(f"{wheel} is not a readable geobrix wheel ({e})") from None
+    with zf:
+        jars = [n for n in zf.namelist() if _JAR_IN_WHEEL.fullmatch(n)]
+        if len(jars) != 1:
+            raise WheelJarError(f"the wheel bundles {len(jars)} JARs under databricks/labs/gbx/_jar/, expected 1")
+        member, name = jars[0], _JAR_IN_WHEEL.fullmatch(jars[0]).group(1)
+        if name != f"geobrix-{version}-jar-with-dependencies.jar":
+            raise WheelJarError(f"the bundled JAR is {name}, the wheel is version {version}")
+        want = _recorded_sha256(zf, member)
+        out = out_dir / name  # the name matched the pattern above: no path component
+        digest = hashlib.sha256()
+        with zf.open(member) as src, open(out, "wb") as dst:
+            for chunk in iter(lambda: src.read(1 << 20), b""):
+                digest.update(chunk)
+                dst.write(chunk)
+    if digest.hexdigest() != want:
+        out.unlink()
+        raise WheelJarError(f"the bundled JAR has sha256 {digest.hexdigest()[:12]}, RECORD lists {want[:12]}")
+    return out, want
+
+
+def _workspace_client():
+    """``(WorkspaceClient, 0)`` from the profile or host/token in the environment, else ``(None, exit code)``."""
+    host = os.environ.get("DATABRICKS_HOST")
+    token = os.environ.get("DATABRICKS_TOKEN")
+    profile = os.environ.get("DATABRICKS_CONFIG_PROFILE")
+    if not (host and token) and not profile:
+        print("Set DATABRICKS_HOST and DATABRICKS_TOKEN, or DATABRICKS_CONFIG_PROFILE", file=sys.stderr)
+        return None, 2
+    try:
+        from databricks.sdk import WorkspaceClient
+    except ImportError:
+        print("Install databricks-sdk: pip install databricks-sdk", file=sys.stderr)
+        return None, 2
+    return (WorkspaceClient(profile=profile) if profile else WorkspaceClient(host=host, token=token)), 0
+
+
+def _stage_from_wheel(wheel: Path, project_root: Path, skip_upload: bool) -> int:
+    """--from-wheel: check the JAR bundled in an env wheel and stage it, with its sha256 sidecar, to
+    ``<volroot>/geobrix/<version>/jar/``. No build, no container."""
+    if not wheel.is_file():
+        print(f"PRECONDITION MISSING: {wheel} is not a file; gbx:data:stage-jar --from-wheel not run", file=sys.stderr)
+        return 1
+    with tempfile.TemporaryDirectory(prefix="gbx-wheel-jar-") as tmp:
+        try:
+            jar, sha = bundled_jar(wheel, Path(tmp))
+        except WheelJarError as e:
+            print(f"Refusing to stage the JAR of {wheel.name}: {e}.", file=sys.stderr)
+            return 1
+        print(f"{jar.name}: sha256 {sha} (the wheel's RECORD lists the same)")
+        if not _packaging_ok(project_root, jar):
+            return 1
+        if skip_upload:
+            print("GBX_BUNDLE_SKIP_JAR_UPLOAD=1: JAR checked; skipping Databricks upload.")
+            return 0
+        w, rc = _workspace_client()
+        if w is None:
+            return rc
+        folder = versioned_dir(bundle_root(), wheel_version(wheel.name), "jar")
+        try:
+            w.files.create_directory(folder)  # also creates its parents
+        except Exception as e:
+            print(f"Error: could not create {folder}: {e}", file=sys.stderr)
+            return 1
+        sidecar = Path(tmp) / (jar.name + ".sha256")
+        sidecar.write_text(f"{sha}  {jar.name}\n")  # sha256sum's format
+        # the JAR first: a sidecar on the Volume then means the JAR before it landed
+        return upload_verified(w, jar, f"{folder}/{jar.name}") or upload_verified(w, sidecar, f"{folder}/{sidecar.name}")
+
+
 def main() -> int:
     exit_if_help(__doc__)
     # GBX_BUNDLE_SKIP_JAR: skip the JAR step ENTIRELY (no Maven build, no upload) —
@@ -54,6 +198,14 @@ def main() -> int:
     skip_jar_upload = os.environ.get("GBX_BUNDLE_SKIP_JAR_UPLOAD", "").strip().lower() in ("1", "true", "yes")
 
     project_root = TESTS_DIR.parent.parent
+
+    if "--from-wheel" in sys.argv:
+        i = sys.argv.index("--from-wheel")
+        value = sys.argv[i + 1] if i + 1 < len(sys.argv) else ""
+        if not value or value.startswith("--"):
+            print("--from-wheel needs the path of an env wheel", file=sys.stderr)
+            return 2
+        return _stage_from_wheel(Path(value), project_root, skip_jar_upload)
 
     # Auth/volume checks: only required when uploading
     if not skip_jar_upload:
@@ -111,33 +263,7 @@ def main() -> int:
         return 1
     jar_path = jars[0]
 
-    # Guard BEFORE any upload (and before the local-only early return): the JAR must not bundle
-    # classes the runtime provides (Scala, Spark or log4j), which would shadow the runtime's own
-    # from /databricks/jars.
-    check = subprocess.run(
-        [sys.executable, str(project_root / "scripts" / "ci" / "check_jar_packaging.py"), str(jar_path)]
-    )
-    if check.returncode == 1:
-        print(
-            "Refusing to stage a JAR that bundles classes the runtime provides (Scala, Spark or log4j).",
-            file=sys.stderr,
-        )
-        return 1
-    if check.returncode == 3:
-        # Exit 3 is a JAR the guard could not read (missing, or not a zip file): not a bundling problem.
-        print(
-            f"Refusing to stage {jar_path}: it could not be checked (missing or not a readable "
-            "zip file); rebuild it with mvn clean package.",
-            file=sys.stderr,
-        )
-        return 1
-    if check.returncode != 0:
-        # The guard itself failed (a usage error, a crash): say so, and do not blame the JAR.
-        print(
-            f"Refusing to stage {jar_path}: the packaging check failed to run (exit "
-            f"{check.returncode}); its output is above.",
-            file=sys.stderr,
-        )
+    if not _packaging_ok(project_root, jar_path):
         return 1
 
     if skip_jar_upload:

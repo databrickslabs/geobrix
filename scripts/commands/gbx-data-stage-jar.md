@@ -1,5 +1,7 @@
 # Stage JAR to Volume
 
+With `--from-wheel`, stages the JAR bundled in an env wheel instead (no Maven).
+
 Runs **mvn clean package -DskipTests** and stages **both** jars it produces (one build): the product **target/*-jar-with-dependencies.jar** → **GBX_ARTIFACT_VOLUME**/ (the init-script dir; dedupes to exactly one `geobrix-*-jar-with-dependencies.jar` — any stale other-version product JAR in that dir is removed before upload), and the bench **target/*-tests.jar** → the **bundle volroot** (`/Volumes/$GBX_BUNDLE_VOLUME_CATALOG/$GBX_BUNDLE_VOLUME_SCHEMA/$GBX_BUNDLE_VOLUME_NAME/`, where the bench launcher attaches it as a cluster library). Both overwrite if present. Set **GBX_BUNDLE_SKIP_JAR_UPLOAD=1** to build the JAR locally but skip the Databricks upload (no auth needed), **GBX_BUNDLE_SKIP_JAR=1** to skip the JAR step entirely (no build, no upload), or **GBX_BUNDLE_SKIP_TESTS_JAR_UPLOAD=1** to stage only the product jar. Override the tests.jar destination with **GBX_BENCH_TESTS_JAR_VOLUME_PATH**.
 
 ---
@@ -12,7 +14,7 @@ bash scripts/commands/gbx-data-stage-jar.sh [--from-wheel <whl>] [--profile NAME
 
 ## Options
 
-- `--from-wheel <whl>` - stage the JAR bundled in an env wheel. It runs no Maven, no container and no lock.
+- `--from-wheel <whl>` - stage the JAR bundled in an env wheel. It runs no Maven and no container, and takes no container lock (it builds nothing). It runs even when `GBX_BUNDLE_SKIP_JAR=1` is set.
   - It takes the one `_jar/geobrix-<version>-jar-with-dependencies.jar` in the wheel.
   - It refuses a JAR that is not the wheel's version, or whose sha256 is not the one in the wheel's `RECORD`.
   - It runs the packaging guard on the JAR.

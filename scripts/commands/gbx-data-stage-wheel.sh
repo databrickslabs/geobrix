@@ -67,10 +67,6 @@ done
 # The launcher fills DATABRICKS_CONFIG_PROFILE from databricks_cluster_config.env only when the
 # environment has none, so --profile wins over the config file.
 [[ -n "$PROFILE" ]] && export DATABRICKS_CONFIG_PROFILE="$PROFILE"
-if [[ "$VERSIONED" == true && "$ENV_STAGE" != true ]]; then
-    echo "--versioned stages env wheels: pass --env 5|6|both" >&2
-    exit 2
-fi
 
 if [[ "$SHOW_HELP" == "1" ]]; then
     echo "Usage: bash scripts/commands/gbx-data-stage-wheel.sh [OPTIONS]"
@@ -112,6 +108,11 @@ if [[ "$SHOW_HELP" == "1" ]]; then
     echo "  # each into its own folder, <volroot>/geobrix/<version>/env<N>/:"
     echo "  bash scripts/commands/gbx-data-stage-wheel.sh --env both --versioned"
     exit 0
+fi
+
+if [[ "$VERSIONED" == true && "$ENV_STAGE" != true ]]; then
+    echo "--versioned stages env wheels: pass --env 5|6|both" >&2
+    exit 2
 fi
 
 cd "$PROJECT_ROOT" || exit 1

@@ -11,7 +11,7 @@ bash scripts/commands/gbx-data-stage-wheel.sh [--env 5|6|both [--versioned]] [--
 ```
 
 - `--env 5|6|both` - stage the env wheel(s), the Databricks install, instead of building the plain wheel: `dist/env<N>/geobrix-<version>+env<N>-py3-none-any.whl` as `gbx:build:wheel --env <N>` left it (one wheel there, or `PRECONDITION MISSING`). No JAR step and no Maven (the env wheel carries its JAR), no build, and no container lock. The wheel goes to the bundle volroot only (the `%pip` path notebooks and docs use), under its own `+env<N>` name, size-verified; the init-script dir (`GBX_ARTIFACT_VOLUME`, not required with `--env`) and the plain wheel in it are not touched.
-- `--versioned` - with `--env`: put each wheel in `<volroot>/geobrix/<version>/env<N>/`, not in the volroot.
+- `--versioned` - with `--env`: put each wheel in `<volroot>/geobrix/<version>/env<N>/`, not in the volroot. Without it, `--env` stages flat to the volroot: the per-version folder needs `--versioned`.
   - It removes every other `geobrix-*.whl` in that folder and checks the uploaded size.
   - The wheels in the volroot itself are not touched.
   - Without `--env` it exits 2.

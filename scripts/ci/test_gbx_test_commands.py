@@ -1149,6 +1149,24 @@ def test_stage_jar_options_that_need_a_value_are_refused(sandbox, args):
     assert res.returncode == 2 and "needs" in res.output and not log.exists()
 
 
+def test_stage_wheel_help_wins_over_a_versioned_without_env(sandbox):
+    log = _python3_logging_args(sandbox)
+    res = sandbox.run("gbx-data-stage-wheel.sh", "--versioned", "--help")
+    assert res.returncode == 0 and "Usage:" in res.output and "--versioned" in res.output
+    assert "stages env wheels: pass" not in res.output and not log.exists()
+
+
+def test_stage_jar_from_wheel_runs_the_launcher_even_with_skip_jar_set(sandbox):
+    log = _python3_logging_args(sandbox)
+    wheel = sandbox.root / "w" / "geobrix-0.6.0+env6-py3-none-any.whl"
+    wheel.parent.mkdir()
+    wheel.write_bytes(b"w")
+    res = sandbox.run("gbx-data-stage-jar.sh", "--from-wheel", str(wheel),
+                      GBX_BUNDLE_SKIP_JAR="1", GBX_BUNDLE_SKIP_JAR_UPLOAD="1")  # fmt: skip
+    assert res.returncode == 0, res.output
+    assert "--from-wheel" in log.read_text()
+
+
 def test_stage_wheel_versioned_reaches_the_launcher_only_with_env(sandbox):
     log = _python3_logging_args(sandbox)
     env = dict(GBX_BUNDLE_SKIP_WHEEL_UPLOAD="1")

@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+import zlib
 from pathlib import Path
 
 from _artifact_volume import bundle_root, prune_stale, upload_verified, versioned_dir, wheel_version
@@ -127,10 +128,14 @@ def bundled_jar(wheel: Path, out_dir: Path):
         want = _recorded_sha256(zf, member)
         out = out_dir / name  # the name matched the pattern above: no path component
         digest = hashlib.sha256()
-        with zf.open(member) as src, open(out, "wb") as dst:
-            for chunk in iter(lambda: src.read(1 << 20), b""):
-                digest.update(chunk)
-                dst.write(chunk)
+        try:
+            with zf.open(member) as src, open(out, "wb") as dst:
+                for chunk in iter(lambda: src.read(1 << 20), b""):
+                    digest.update(chunk)
+                    dst.write(chunk)
+        except (OSError, zipfile.BadZipFile, EOFError, zlib.error) as e:  # a bad CRC, a truncated member
+            out.unlink(missing_ok=True)
+            raise WheelJarError(f"the bundled JAR cannot be read from the wheel ({type(e).__name__}: {e})") from None
     if digest.hexdigest() != want:
         out.unlink()
         raise WheelJarError(f"the bundled JAR has sha256 {digest.hexdigest()[:12]}, RECORD lists {want[:12]}")
@@ -188,17 +193,12 @@ def _stage_from_wheel(wheel: Path, project_root: Path, skip_upload: bool) -> int
 
 def main() -> int:
     exit_if_help(__doc__)
-    # GBX_BUNDLE_SKIP_JAR: skip the JAR step ENTIRELY (no Maven build, no upload) —
-    # for light-tier-only changes (pyrx/pyvx/pygx wheel) where the staged JAR is
-    # unchanged. Distinct from GBX_BUNDLE_SKIP_JAR_UPLOAD, which still builds the JAR.
-    if os.environ.get("GBX_BUNDLE_SKIP_JAR", "").strip().lower() in ("1", "true", "yes"):
-        print("GBX_BUNDLE_SKIP_JAR=1: skipping JAR build + upload (wheel-only stage).")
-        return 0
-
     skip_jar_upload = os.environ.get("GBX_BUNDLE_SKIP_JAR_UPLOAD", "").strip().lower() in ("1", "true", "yes")
 
     project_root = TESTS_DIR.parent.parent
 
+    # --from-wheel is asked for by name, so it runs even when GBX_BUNDLE_SKIP_JAR=1 is in the environment
+    # (that flag skips the JAR *build*, which this mode does not have).
     if "--from-wheel" in sys.argv:
         i = sys.argv.index("--from-wheel")
         value = sys.argv[i + 1] if i + 1 < len(sys.argv) else ""
@@ -206,6 +206,13 @@ def main() -> int:
             print("--from-wheel needs the path of an env wheel", file=sys.stderr)
             return 2
         return _stage_from_wheel(Path(value), project_root, skip_jar_upload)
+
+    # GBX_BUNDLE_SKIP_JAR: skip the JAR step ENTIRELY (no Maven build, no upload) —
+    # for light-tier-only changes (pyrx/pyvx/pygx wheel) where the staged JAR is
+    # unchanged. Distinct from GBX_BUNDLE_SKIP_JAR_UPLOAD, which still builds the JAR.
+    if os.environ.get("GBX_BUNDLE_SKIP_JAR", "").strip().lower() in ("1", "true", "yes"):
+        print("GBX_BUNDLE_SKIP_JAR=1: skipping JAR build + upload (wheel-only stage).")
+        return 0
 
     # Auth/volume checks: only required when uploading
     if not skip_jar_upload:

@@ -273,3 +273,25 @@ def test_from_wheel_needs_a_path(stage, monkeypatch, capsys):
     module, _ = stage
     monkeypatch.setattr(sys, "argv", ["stage_jar_to_volume.py", "--from-wheel"])
     assert module.main() == 2 and "--from-wheel needs the path" in capsys.readouterr().err
+
+
+def test_from_wheel_refuses_a_jar_member_with_a_bad_crc_as_one_clear_line(from_wheel, tmp_path, capsys):
+    whl, _, _ = _wheel(tmp_path)
+    data = bytearray(whl.read_bytes())
+    jar_name = b"databricks/labs/gbx/_jar/geobrix-0.6.0-jar-with-dependencies.jar"
+    start = data.index(jar_name) + len(jar_name) + 4  # a few bytes into the stored member, past its name
+    data[start] ^= 0xFF  # the member is stored (not deflated): its CRC no longer matches
+    whl.write_bytes(bytes(data))
+    files = _Files()
+    assert from_wheel(whl, files) == 1
+    err = capsys.readouterr().err
+    assert "cannot be read from the wheel" in err and "Traceback" not in err and files.calls == []
+
+
+def test_from_wheel_runs_even_when_skip_jar_is_set(from_wheel, tmp_path, monkeypatch, capsys):
+    """GBX_BUNDLE_SKIP_JAR=1 skips the JAR *build*; a stage asked for by --from-wheel has none."""
+    monkeypatch.setenv("GBX_BUNDLE_SKIP_JAR", "1")
+    whl, sha, _ = _wheel(tmp_path)
+    assert from_wheel(whl) == 0
+    out = capsys.readouterr().out
+    assert sha in out and "skipping JAR build" not in out

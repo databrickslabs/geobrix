@@ -5,7 +5,7 @@
 # and GDAL's own osgeo and osgeo_utils from that GDAL. rio-cogeo and xarray-spatial are dropped:
 # GDAL's COG driver and GDALViewshedGenerate do their work.
 
-# The runtime's preinstalled versions as the floor, the next minor as the cap: nothing moves.
+# The runtime's preinstalled versions as the floor, the next minor as the cap: these move nothing.
 # These are FROZEN-BASE caps, deliberate: this wheel targets frozen runtime bases (DBR 17.3, DBR 18, Serverless
 # environment 5), so a cap cannot downgrade the runtime's numpy, pandas, pyarrow, scipy, protobuf or urllib3, and
 # it stops a transitive requirement from upgrading one. (The extras follow another rule: a package the runtimes
@@ -17,8 +17,17 @@ pyarrow>=19.0.1,<22
 scipy>=1.15.1,<1.16
 protobuf>=5.26.1,<6
 urllib3<2.4
-# PEP 728 TypedDict(extra_items=...), which rio-tiler 9 uses, works from 4.13.0 (the bases ship 4.12.2).
+# What the core install does move (gbx:versions:audit --install-moves lists these and fails on any other move), each
+# to the newest release that meets the floor, as pip upgrades an installed package that does not:
+# - typing_extensions 4.12.2 -> 4.13 or later: PEP 728 TypedDict(extra_items=...), which rio-tiler 9 uses, works
+#   from 4.13.0;
+# - idna 3.7 -> 3.18 or later, anyio 4.6.2 / 4.7.0 -> 4.10 or later, h11 0.14.0 -> 0.16 or later (DBR 17.3): httpx2
+#   2.12 and later (below) need them; earlier httpx2 releases have two HIGH advisories, and h11 0.16 is itself the
+#   fix for CVE-2025-43859;
+# - httpcore 1.0.2 -> 1.0.9 or later (DBR 17.3 only): its httpcore 1.0.2 requires h11<0.15, so the h11 move would
+#   leave it broken; 1.0.9 is the release that accepts the fixed h11. DBR 18 and environment 5 already have 1.0.9.
 typing_extensions>=4.13
+httpcore>=1.0.9
 
 # The light tier.
 numexpr>=2.14.1
@@ -26,6 +35,10 @@ h3>=4.1,<5
 quadbin>=0.2,<0.3
 pmtiles>=3.4,<4
 scikit-image>=0.22,<1
+# scikit-image imports lazy_loader. On Serverless, %pip installs into the notebook-scoped environment only what
+# the runtime's own packages do not already satisfy, and the rst_land_cover worker runs from that environment: a
+# floor above the ML runtimes' 0.4 makes pip install it there (without it, `from skimage.morphology import disk`
+# fails with ModuleNotFoundError: lazy_loader). It moves the ML runtimes' 0.4.
 lazy_loader>=0.5
 defusedxml>=0.7,<1
 laspy>=2.7,<2.8
@@ -47,6 +60,7 @@ cachetools
 pydantic>=2,<3
 color-operations
 pystac>=1.9,<2
-# rio-tiler's HTTP client; 2.12 and later are the releases without the two HIGH advisories.
+# rio-tiler's HTTP client; 2.12 and later are the releases without the two HIGH advisories (it moves idna, anyio and
+# h11: see the top).
 httpx2>=2.12
 xarray>=2025.1

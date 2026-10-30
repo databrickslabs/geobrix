@@ -3,6 +3,7 @@
 # architecture's toolchain image (AlmaLinux 8, the manylinux_2_28 floor) with --network none. Mounted:
 #   /dist/geobrix-<VERSION>+env<ENV>-py3-none-any.whl  the wheel
 #   /wheelhouse                                         its core.txt wheels, fetched on the host
+#   /wheelhouse-vizx                                    core.txt and extra-vizx.txt's wheels (check 9)
 #   /env                                                python/geobrix/envs/env<ENV> (base.txt: the runtime's base)
 # Each check prints `ok: <check>` or `CHECK FAILED: <what>`; the last line is
 # `ENV_WHEEL_VERIFIED env=<ENV> arch=<arch> failures=<n>` and the exit status is 1 when any check failed.
@@ -21,6 +22,11 @@
 #     registered with the payload's own netCDF-C, HDF5_PLUGIN_PATH unset here and in a child), OSTN15 against Ordnance
 #     Survey's test points, OSGM15 and EGM96 heights, PROJ network off, GTiff JXL, REGEXP and muparser, libjpeg-turbo's
 #     SIMD dispatcher, curl HTTP/2 with GDAL_HTTP_VERSION unset, projsync (its CDN listing is skipped here: --network none)
+#   9 [vizx]: the extra installs offline (/wheelhouse-vizx) and brings no PyPI rasterio, pyogrio, pyproj, shapely,
+#     geopandas or contextily (geopandas and contextily are vendored); after a vizx plot (a GeoDataFrame reprojected,
+#     written and read back as GPKG, contextily's warp, gbx.vizx's plot_file and plot_static) the process maps one
+#     libgdal, one libproj and one GEOS (libgeos_c), all the payload's: with the .pth, and with GBX_NATIVE_PTH=0
+#     (activated at `import databricks.labs.gbx`; before it, geopandas does not import at all)
 set -uo pipefail
 ENV="$1"; VERSION="$2"; OTHER=$((11 - ENV)); ARCH="$(uname -m)"
 PY=/opt/python/cp312-cp312/bin/python PY311=/opt/python/cp311-cp311/bin/python
@@ -123,6 +129,63 @@ PY
 echo "$out" | grep -q '^N5_RESULT {"ok": true' && ok "8 natives: netCDF zstd/blosc/bzip2 via netCDF4 and GDAL, OSTN15/OSGM15/EGM96, JXL, REGEXP, muparser, JPEG SIMD, curl HTTP/2, projsync" \
     || bad "8 natives"
 echo "$out" | grep '^N5_RESULT' || echo "$out" | tail -5
+
+# 9: [vizx] in its own venv (the extra's packages from /wheelhouse-vizx, the base held but for VERIFY_UNHELD's
+# packages, whose base version has no wheel for this Python: the runtimes built their own).
+grep -v -E "^($(echo "${VERIFY_UNHELD:-psutil}" | tr ' ' '|'))==" /env/base.txt > /tmp/base-vizx.txt
+V4=/tmp/vizx
+if $PY -m venv "$V4" && pipq "$V4/bin/python" install -q --no-index --find-links /wheelhouse --find-links /wheelhouse-vizx \
+        -c /tmp/base-vizx.txt "geobrix[vizx] @ file://$WHL"; then
+    pulled="$(pipq "$V4/bin/python" list --format=freeze 2>/dev/null | grep -i -E '^(rasterio|pyogrio|pyproj|shapely|geopandas|contextily|gdal)==' | tr '\n' ' ')"
+    [ -z "$pulled" ] && ok "9a [vizx] installs offline and brings no PyPI GDAL-stack package ($(pipq "$V4/bin/python" list 2>/dev/null | tail -n +3 | wc -l | tr -d ' ') distributions)" \
+        || bad "9a [vizx] installs PyPI's $pulled"
+    cat > /tmp/vizx_probe.py <<'PY'
+import json, os, re, sys, tempfile
+import _gbx_native_path as p
+before = None
+if not p.ACTIVE:  # GBX_NATIVE_PTH=0: nothing GDAL-stack imports until geobrix activates the payload
+    try:
+        import geopandas  # noqa: F401
+        before = "imported"
+    except ModuleNotFoundError:
+        before = "absent"
+    import databricks.labs.gbx  # noqa: F401
+import matplotlib
+matplotlib.use("Agg")
+import numpy as np, rasterio, geopandas as gpd, contextily as cx
+from shapely.geometry import Point
+from rasterio.transform import from_origin
+from databricks.labs.gbx import vizx
+d = tempfile.mkdtemp()
+gdf = gpd.GeoDataFrame({"v": [1, 2, 3]}, geometry=[Point(-0.1, 51.5), Point(0.0, 51.4), Point(0.1, 51.6)], crs=4326)
+gdf.to_crs(3857).to_file(f"{d}/p.gpkg")
+back = gpd.read_file(f"{d}/p.gpkg")
+img, ext = cx.warp_tiles(np.zeros((16, 16, 3), "uint8"), (0, 1600, 0, 1600), "EPSG:4326")
+with rasterio.open(f"{d}/r.tif", "w", driver="GTiff", width=8, height=8, count=1, dtype="uint8", crs="EPSG:4326",
+                   transform=from_origin(0, 8, 1, 1)) as ds:
+    ds.write(np.arange(64, dtype="uint8").reshape(1, 8, 8))
+vizx.plot_file(f"{d}/r.tif")
+vizx.plot_static(back, basemap=False)
+files = {l.split()[-1] for l in open("/proc/self/maps") if len(l.split()) > 5 and l.split()[-1].startswith("/")}
+fam = {k: sorted(f for f in files if re.search(rf"/lib{k}(-[0-9a-f]{{8}})?\.so[.\d]*$", f)) for k in ("gdal", "proj", "geos_c")}
+vendor = "/databricks/labs/gbx/_native/"
+r = {"pth": p.ACTIVE, "geopandas_before_geobrix": before, "rows": len(back), "libs": fam,
+     "from": {m: sys.modules[m].__file__ for m in ("geopandas", "contextily", "rasterio", "pyogrio", "pyproj", "shapely")}}
+r["ok"] = (all(len(v) == 1 and vendor in v[0] for v in fam.values()) and len(back) == 3 and before in (None, "absent")
+           and all("/databricks/labs/gbx/_vendor/" in f for f in r["from"].values()))
+print("VIZX_RESULT " + json.dumps(r))
+PY
+    for mode in pth import; do
+        out="$( (if [ $mode = import ]; then export GBX_NATIVE_PTH=0; fi; "$V4/bin/python" /tmp/vizx_probe.py) 2>&1)"
+        if echo "$out" | grep -q '^VIZX_RESULT .*"ok": true}$'; then
+            ok "9 [vizx] plot, activated by the $mode: one libgdal, one libproj, one GEOS, all the payload's ($(echo "$out" | grep -o '"libs": {[^}]*}' | sed 's#[^"]*/_native/##g'))"
+        else
+            bad "9 [vizx] plot, activated by the $mode: $(echo "$out" | grep '^VIZX_RESULT' || echo "$out" | tail -4)"
+        fi
+    done
+else
+    bad "9 [vizx] does not install offline from the wheelhouses"
+fi
 
 echo "ENV_WHEEL_VERIFIED env=$ENV arch=$ARCH failures=$FAILS"
 [ "$FAILS" = 0 ]

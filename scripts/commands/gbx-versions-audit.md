@@ -14,6 +14,8 @@ bash scripts/commands/gbx-versions-audit.sh [OPTIONS]
 - `--native` — Audit every consumer of the native pins instead of printing the package inventory (see "Native pins" below).
 - `--host` — Check the host venv AND this checkout's dev container against the native pins.
 - `--check` — With `--native` or `--host`: exit 1 on drift. Without it the report is printed and the exit is 0.
+- `--install-moves` — What installing each env wheel moves on each runtime it targets (see "Install moves" below).
+- `--env 5|6` — With `--install-moves`: only that env wheel's runtimes (repeatable; default both).
 - `--log <path>` — Write output to log file.
 - `--help` — Display help.
 
@@ -44,6 +46,16 @@ bash scripts/commands/gbx-versions-audit.sh --host --check
 ```
 
 `--native` runs `python3 scripts/native/pins.py audit`: the pin files themselves (`pins.conf` and `rust-pins.conf`: no placeholder, every `X_VERSION` has its checksum, and no Rust pin in `pins.conf`, where every value is the GDAL build's cache key), the `rust-toolchain.toml` channel, every `Cargo.toml` that depends on `pyo3` (`=PYO3_VERSION`), every `Cargo.lock` against the `CRATE_<name>_VERSION` pins (a locked crate at another version, and a pin no lock uses), every maturin `pyproject.toml` (`maturin==MATURIN_VERSION`), `scripts/native/build-requirements.in`, the `gdal.java.version` property in `pom.xml` when present, and the legacy consumers still on an older GDAL (`scripts/native/legacy-consumers.txt`: a changed value is drift; a regex that no longer matches means the consumer was retired, so delete its line). `--host` reuses the collector and comparison of `gbx:venv:check`; it is red while the environments still carry the previous GDAL stack. `pins.py get KEY` and `pins.py build-args` read the pins for scripts and Docker builds.
+
+## Install moves
+
+```bash
+# env5 (DBR 17.3, 18, Serverless env 5) and env6 (DBR 19, 19 ML, Serverless env 6, 6 ML), both architectures
+bash scripts/commands/gbx-versions-audit.sh --install-moves
+bash scripts/commands/gbx-versions-audit.sh --install-moves --env 6
+```
+
+`scripts/native/install_moves.py` resolves, with uv (the configured index; its output redacted), each env wheel's requirements for CPython 3.12 `manylinux_2_28` on x86_64 and aarch64: the core install (`envs/env<N>/core.txt`) and the full one (with every `extra-<name>.txt`), against each target runtime's preinstalled packages (`python/geobrix/envs/runtimes/<runtime>.txt`) as constraints. Only the documented moves (`ALLOWED_MOVES`, each the pin comment of the requirement that causes it: idna everywhere, anyio, h11, httpcore and typing-extensions on the env5 runtimes, lazy-loader on the ML runtimes, requests with env5's `[stac]`) may leave the runtime's version; a resolution that would move any other preinstalled package fails. What the install adds must have a binary wheel for the platform, and no resolved package may be one the wheel vendors (rasterio, pyogrio, pyproj, shapely, netCDF4, GDAL, and the `vendor-pure.txt` packages). One line per runtime, architecture and install (`ok:` or `FAILED:`, the moves, how many packages it adds), then `INSTALL_MOVES envs=... rows=<n> failures=<n>`; exit 1 on a failure. `scripts/ci/test_build_env_wheel.py` runs the full install per runtime on x86_64 (skipped without uv or the index). Refresh a runtime's list from a fresh session's `pip freeze` when its runtime changes.
 
 ## What's tracked
 

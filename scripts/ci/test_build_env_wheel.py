@@ -8,9 +8,11 @@
 
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 import zipfile
+from email.parser import Parser
 from pathlib import Path
 
 import pytest
@@ -323,7 +325,7 @@ def test_the_rust_std_notice_is_the_pinned_toolchains():
     assert (bew.RUST_STD_NOTICE / "COPYRIGHT-library.html").read_bytes() == docs[0].read_bytes()
 
 
-# --- the feature extras (NP-30): each env's set, and their rules -------------------------------------------------
+# --- the feature extras: each env's set, and their rules ----------------------------------------------------------
 
 # What the env wheel vendors, by distribution name: the five bindings, the vendor-pure packages, osgeo's GDAL.
 VENDORED = {
@@ -335,6 +337,8 @@ VENDORED = {
     "rio-tiler",
     "morecantile",
     "mapbox-vector-tile",
+    "geopandas",
+    "contextily",
     "gdal",
 }
 
@@ -385,7 +389,7 @@ def test_stac_pins_the_requests_security_floor(env, cap):
     assert not r.specifier.contains("2.32.3") and r.specifier.contains("2.32.5"), str(r)
     assert sorted(str(s) for s in r.specifier if s.operator.startswith("<")) == ([cap] if cap else [])
     assert bew.SECURITY_FLOORS["requests"][0] == "2.32.4"
-    assert bew.FROZEN_BASE_CAPS == {5: {"requests": "<2.33"}}
+    assert bew.FROZEN_BASE_CAPS[5]["requests"] == "<2.33" and "requests" not in bew.FROZEN_BASE_CAPS[6]
 
 
 @pytest.mark.parametrize("env", [5, 6])
@@ -547,3 +551,182 @@ def test_the_plain_wheels_base_is_the_light_tier_with_floors_only():
         assert r.marker is None and all(s.operator == ">=" for s in r.specifier), str(r)
     te = next(r for r in deps if bew.canonicalize_name(r.name) == "typing-extensions")
     assert str(te.specifier) == ">=4.13"  # rio-tiler 9's PEP 728 TypedDict(extra_items=...)
+
+
+# --- the env wheels' requirements against the runtimes' preinstalled lists (envs/runtimes/) ------------------------
+
+_im_spec = importlib.util.spec_from_file_location("install_moves", NATIVE / "install_moves.py")
+install_moves = importlib.util.module_from_spec(_im_spec)
+_im_spec.loader.exec_module(install_moves)
+
+
+@pytest.mark.parametrize("env", [5, 6])
+def test_base_txt_is_the_oldest_preinstalled_version_of_every_package_an_extra_names(env):
+    envdir = bew.PYDIR / "envs" / f"env{env}"
+    lists = [install_moves.pins(bew.PYDIR / "envs" / "runtimes" / f"{r}.txt") for r in install_moves.RUNTIMES[env]]
+    base = bew.pins_of(envdir / "base.txt")
+    for dep, v in base.items():
+        shipped = [Version(rt[dep]) for rt in lists if dep in rt]
+        assert shipped and v == min(shipped), (dep, str(v), sorted(map(str, shipped)))
+    for f in sorted(envdir.glob("extra-*.txt")):
+        for r in bew.reqs_of(f):
+            dep = bew.canonicalize_name(r.name)
+            if any(dep in rt for rt in lists):
+                assert dep in base, (f.name, dep)  # so its floor-only / frozen-cap rule applies
+
+
+@pytest.mark.parametrize(
+    "env, install, resolved, failure",
+    [
+        (6, "core", {"idna": "3.20"}, None),  # a documented move
+        (6, "core", {"click": "8.5.0"}, "click 8.2.1 -> 8.5.0 is not a documented move"),
+        (5, "core", {"requests": "2.32.5"}, "requests 2.32.3 -> 2.32.5 is not a documented move"),  # [stac]'s only
+        (5, "full", {"requests": "2.32.5"}, None),
+        (6, "full", {"rasterio": "1.5.2"}, "pulls PyPI's rasterio 1.5.2, which the wheel vendors"),
+        (6, "full", {"geopandas": "1.2.0"}, "pulls PyPI's geopandas 1.2.0, which the wheel vendors"),
+    ],
+)
+def test_an_install_may_move_only_a_documented_package_and_pull_nothing_vendored(env, install, resolved, failure):
+    runtime = install_moves.RUNTIMES[env][0]
+    _moves, failures = install_moves.judge(env, install, runtime, resolved)
+    assert failures == ([failure] if failure else [])
+
+
+@pytest.mark.parametrize("runtime", [r for rs in install_moves.RUNTIMES.values() for r in rs])
+def test_each_runtime_keeps_its_packages_but_the_documented_moves(runtime):
+    # uv resolves core.txt and every extra (x86_64) with the runtime's preinstalled list as constraints; the
+    # gbx:versions:audit --install-moves form covers both architectures and the core install alone.
+    if shutil.which("uv") is None:
+        pytest.skip("PRECONDITION MISSING: uv; this row not run")
+    env = next(e for e, rs in install_moves.RUNTIMES.items() if runtime in rs)
+    resolved, err = install_moves.resolve(env, "full", runtime, "x86_64")
+    if resolved is None and any(m in err.lower() for m in ("failed to fetch", "dns error", "timed out", "connect")):
+        pytest.skip(f"PRECONDITION MISSING: the package index; this row not run ({err[:80]})")
+    assert resolved is not None, err
+    _moves, failures = install_moves.judge(env, "full", runtime, resolved)
+    assert failures == []
+
+
+# --- the soft size budget (envs/size-budget.json) ---------------------------------------------------------------
+
+BUDGET = {"budget_mb": 100, "justified": [{"env": 6, "ceiling_mb": 110, "reason": "a reason", "date": "2026-10-29"}]}
+
+
+@pytest.mark.parametrize(
+    "size, env, refused",
+    [
+        (90.1, 6, None),
+        (104.0, 5, "with no recorded justification"),  # over budget, nothing recorded for env5
+        (104.0, 6, None),  # recorded: passes and says why
+        (111.0, 6, "past its justified ceiling of 110 MB"),  # grew past the recorded ceiling
+    ],
+)
+def test_the_size_budget_is_soft_under_a_recorded_ceiling(capsys, size, env, refused):
+    run = lambda: bew.size_gate(size, env, BUDGET, last=90.0)  # noqa: E731
+    if refused:
+        with pytest.raises(SystemExit):
+            run()
+        assert refused in capsys.readouterr().out
+        return
+    run()
+    out = capsys.readouterr().out
+    assert f"size {size:.1f} MB ({size - 90.0:+.1f} MB against the last build)" in out
+    assert ("a reason" in out) == (size > 100)
+
+
+def test_the_committed_size_budget_records_justifications():
+    budget = bew.json.loads(bew.SIZE_BUDGET.read_text())
+    assert budget["budget_mb"] == 100
+    for j in budget["justified"]:
+        assert {"env", "ceiling_mb", "reason", "date"} <= set(j) and j["ceiling_mb"] > budget["budget_mb"]
+
+
+# --- small rules of the build: the security floor, the architectures' gdal_internal, the licence note -------------
+
+@pytest.mark.parametrize(
+    "line, refused",
+    [
+        ("requests>=2.32.4", False),
+        ("requests==2.32.5", False),  # a pin above the fix is a floor too
+        ("requests~=2.32.5", False),
+        ("requests>=2.32.4,<2.33", False),
+        ("requests>=2.32.3", True),
+        ("requests<3", True),  # no lower bound at all
+        ("requests>2.32.3", True),  # admits 2.32.3.1
+    ],
+)
+def test_the_security_floor_refuses_a_specifier_that_admits_an_older_release(line, refused):
+    assert bew.admits_below(Requirement(line).specifier, "2.32.4") is refused
+
+
+def test_the_architectures_must_agree_on_gdals_internal_copies(tmp_path, capsys):
+    natives = {}
+    for a, tiff in zip(bew.ARCHES, ("4.7.2", "4.7.1")):
+        natives[a] = tmp_path / a
+        natives[a].mkdir()
+        manifest = {"versions": {"gdal": "3.13.3", "proj": "9.9.0", "geos": "3.14.1"}, "native_revision": 1,
+                    "gdal_internal": {"libtiff": tiff, "libgeotiff": "1.7.4"}}  # fmt: skip
+        (natives[a] / "MANIFEST.json").write_text(bew.json.dumps(manifest))
+    (tmp_path / "tree" / "src" / bew.PKG).mkdir(parents=True)
+    with pytest.raises(SystemExit):
+        bew.write_build_info(tmp_path / "tree", 6, "0.6.0+env6", natives, False, 0)
+    assert "disagree on gdal_internal" in capsys.readouterr().out
+
+
+def _payload_zip(path, note, licences):
+    """A wheel holding one architecture's minimal payload up to the gdal_internal licence check (the other
+    architecture's MANIFEST.json too); `note` is INTERNAL-COPIES.txt's text, `licences` the licence dirs present."""
+    pkg = bew.PKG
+    with zipfile.ZipFile(path, "w") as zf:
+        for a in bew.ARCHES:
+            manifest = {"sonames": {}, "jni": "libgdalalljni.so", "versions": {},
+                        "gdal_internal": {"libtiff": "4.7.2", "libgeotiff": "1.7.4"}}  # fmt: skip
+            zf.writestr(f"{pkg}/_native/{a}/MANIFEST.json", bew.json.dumps(manifest))
+            zf.writestr(f"{pkg}/_native/{a}/lib/libgdalalljni.so", b"")
+            for binding in ("rasterio", "osgeo"):
+                zf.writestr(f"{pkg}/_vendor/{a}/{binding}/__init__.py", b"")
+            for plugin in bew.FILTER_PLUGINS:
+                zf.writestr(f"{pkg}/_native/{a}/hdf5-plugins/{plugin}", b"")
+            info = zipfile.ZipInfo(f"{pkg}/_native/{a}/bin/projsync")
+            info.external_attr = 0o100755 << 16
+            zf.writestr(info, b"")
+        for d in licences:
+            zf.writestr(f"{pkg}/_native/licenses/{d}/LICENSE", b"licence")
+        zf.writestr(f"{pkg}/_native/licenses/gdal/INTERNAL-COPIES.txt", note)
+
+
+@pytest.mark.parametrize(
+    "note, licences, refused",
+    [
+        ("  libtiff 4.7.2: ../libtiff/\n  libgeotiff 1.7.4: ../libgeotiff/\n", ("libtiff", "libgeotiff"), None),
+        ("  libtiff 4.7.2: ../libtiff/\n", ("libtiff", "libgeotiff"), "libgeotiff 1.7.4 is not in licenses/gdal"),
+        ("  libtiff 4.7.2: ../libtiff/\n  libgeotiff 1.7.4: ../libgeotiff/\n", ("libtiff",), "libgeotiff (1.7.4) has no licence"),
+    ],
+)  # fmt: skip
+def test_the_wheel_names_and_licenses_gdals_internal_copies(tmp_path, capsys, note, licences, refused):
+    whl = tmp_path / "w.whl"
+    _payload_zip(whl, note, licences)
+    with zipfile.ZipFile(whl) as zf, pytest.raises(SystemExit):
+        bew.verify_payload(zf, "0.6.0+env6", 0)  # the minimal wheel stops at a later check when this one passes
+    out = capsys.readouterr().out
+    if refused:
+        assert refused in out
+    else:
+        assert "GDAL's internal" not in out and "BUILD FAILED" in out
+
+
+def test_contextilys_requirements_come_from_vizx(tmp_path, capsys):
+    # contextily is vendored and usable with [vizx] only: geopy, mercantile and xyzservices are extra-vizx.txt's
+    envdir = _env_copy(tmp_path, 6)
+    meta = Parser().parsestr(
+        "Name: contextily\nVersion: 1.6.2\n"
+        + "".join(f"Requires-Dist: {d}\n" for d in ("geopy", "matplotlib", "mercantile", "pillow", "rasterio",
+                                                      "requests", "joblib", "xyzservices"))
+    )  # fmt: skip
+    vendored = {"contextily": (Version("1.6.2"), meta), "rasterio": (Version("1.5.2"), Parser().parsestr("Name: r\n"))}
+    bew.check_requirements(6, vendored, envdir)
+    vizx = envdir / "extra-vizx.txt"
+    vizx.write_text("".join(ln + "\n" for ln in vizx.read_text().splitlines() if not ln.startswith("geopy")))
+    with pytest.raises(SystemExit):
+        bew.check_requirements(6, vendored, envdir)
+    assert "vendored contextily requires geopy" in capsys.readouterr().out

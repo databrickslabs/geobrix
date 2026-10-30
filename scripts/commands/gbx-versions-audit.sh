@@ -4,6 +4,9 @@
 # Use case 2: when bumping to a new DBR LTS, run this first to see every place that needs an update.
 # Use case 3 (--native, --host): check the native stack (GDAL, PROJ, GEOS, Rust, the bindings) against
 # scripts/native/pins.conf: the repository's consumers (--native) and the host venv and the dev container (--host).
+# Use case 4 (--install-moves): what installing each env wheel (its core install, and with every extra) moves on each
+# runtime it targets (python/geobrix/envs/runtimes/), resolved with uv; fails on an undocumented move or a pulled
+# vendored package (scripts/native/install_moves.py).
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -22,6 +25,10 @@ show_help() {
     echo -e "  ${GREEN}--host${NC}           Check the host venv AND this checkout's dev container against the pins: Python patch"
     echo -e "                      version, the bound Python packages, and GDAL/PROJ/GEOS as rasterio/pyproj/shapely report them."
     echo -e "  ${GREEN}--check${NC}          With --native or --host: exit 1 on drift (without it the report is printed and the exit is 0)."
+    echo -e "  ${GREEN}--install-moves${NC}  Resolve each env wheel's requirements (core, and core + every extra) against each target"
+    echo -e "                      runtime's preinstalled list (python/geobrix/envs/runtimes/) with uv, both architectures:"
+    echo -e "                      prints what moves, exits 1 on an undocumented move or a PyPI copy of a vendored package."
+    echo -e "  ${GREEN}--env 5|6${NC}        With --install-moves: only that env wheel's runtimes (repeatable; default both)."
     echo -e "  ${GREEN}--log <path>${NC}     Write output to log file."
     echo -e "  ${GREEN}--help${NC}           Show this help."
     echo ""
@@ -37,6 +44,8 @@ LOG_PATH=""
 NATIVE=false
 HOST=false
 CHECK=false
+MOVES=false
+MOVES_ARGS=()
 while [[ $# -gt 0 ]]; do
     case $1 in
         --package)
@@ -47,6 +56,11 @@ while [[ $# -gt 0 ]]; do
             HOST=true; shift;;
         --check)
             CHECK=true; shift;;
+        --install-moves)
+            MOVES=true; shift;;
+        --env)
+            [[ $# -ge 2 ]] || { echo -e "${RED}--env needs a value${NC}"; exit 2; }
+            MOVES_ARGS+=(--env "$2"); shift 2;;
         --log)
             LOG_PATH=$(resolve_log_path "$2"); shift 2;;
         --help|-h)
@@ -59,6 +73,17 @@ done
 cd "$PROJECT_ROOT"
 show_banner "Versions audit"
 setup_log_file "$LOG_PATH"
+
+# --install-moves: no inventory; scripts/native/install_moves.py resolves (uv, the configured index, output redacted).
+if [ "$MOVES" = true ]; then
+    command -v uv > /dev/null 2>&1 || { echo "PRECONDITION MISSING: uv is not installed; gbx:versions:audit --install-moves not run"; exit 1; }
+    RC=0
+    python3 scripts/native/install_moves.py ${MOVES_ARGS[@]+"${MOVES_ARGS[@]}"} || RC=1
+    if [ -n "$LOG_PATH" ]; then
+        echo -e "${CYAN}Log saved to: ${YELLOW}$LOG_PATH${NC}"
+    fi
+    exit $RC
+fi
 
 # --native / --host: the native pins are checked, not inventoried (scripts/native/pins.py does the work).
 if [ "$NATIVE" = true ] || [ "$HOST" = true ]; then

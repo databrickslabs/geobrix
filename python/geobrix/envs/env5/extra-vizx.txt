@@ -1,13 +1,20 @@
-# [vizx]: visualization helpers (gbx.vizx), the committed pyproject's [vizx].
-# geopandas and contextily require rasterio, pyogrio, pyproj and shapely by distribution name, so
-# this extra installs their PyPI wheels too; the vendored builds stay first on sys.path.
-# Except: the runtimes preinstall matplotlib: a floor only, the oldest
-# preinstalled version, and no cap (a cap under a later runtime's version would be a downgrade).
+# [vizx]: visualization helpers (gbx.vizx). geopandas and contextily are vendored (vendor-pure.txt): installed
+# from PyPI they would pull PyPI's rasterio, pyogrio, pyproj and shapely (a second GDAL, PROJ and GEOS) beside the
+# vendored builds. This extra is the rest of the plain wheel's [vizx], and contextily's other requirements.
+# The runtimes preinstall matplotlib and joblib: a floor only, the oldest preinstalled version, no cap (a cap under a
+# later runtime's version would be a downgrade). click and psutil are held at the runtimes' versions
+# (gbx:build:wheel FROZEN_BASE_CAPS: these are frozen LTS bases): mercantile's CLI needs click, and nothing [vizx]
+# installs may move either (DBR 17.3 / 18 and Serverless environment 5 ship click 8.1.7-8.1.8 and psutil 5.9.0).
+# GeoBrix brings the rest in, capped at the next major.
 matplotlib>=3.10.0
-geopandas>=1.1.4,<2
 mapclassify>=2.6,<3
-contextily>=1.5,<2
 anywidget>=0.9,<1
 tippecanoe>=2.72.0,<3
 imageio>=2.28,<3
 imageio-ffmpeg>=0.4,<2
+mercantile>=1.2,<2
+geopy>=2.0,<3
+xyzservices>=2023.10
+joblib>=1.4.2
+click>=8.1.7,<8.2
+psutil>=5.9.0,<5.10

@@ -28,7 +28,8 @@ Steps (each prints `== <n> ...`; a failure prints `BUILD FAILED: <what>`, a miss
   1 a scratch tree: the package source, the template pyproject plus the extras and tripwires,
     env/ (the env files), and __version__ stamped `<version>+env<N>` (exactly one replacement);
   2 _build_info.py: ENV, VERSION, the GDAL/PROJ/GEOS versions from MANIFEST.json, the native
-    revision, the git sha, whether the tree was dirty, SOURCE_DATE_EPOCH;
+    revision, the git sha, whether the tree was dirty, SOURCE_DATE_EPOCH (the two MANIFEST.json files must
+    agree on those and on gdal_internal);
   3 the payload per architecture: _native/<arch>/lib (no pkgconfig/cmake, no symlinks) and
     MANIFEST.json, _native/share and _native/licenses (identical for both architectures, or fail),
     _vendor/<arch> (the five bindings, and gdal-native's osgeo with its RUNPATH set for that place
@@ -37,14 +38,15 @@ Steps (each prints `== <n> ...`; a failure prints `BUILD FAILED: <what>`, a miss
   4 the vendored pure-Python wheels into _vendor/common without their dist-info (licences to
     _vendor/licenses); every Requires-Dist of a vendored package must be another vendored package
     at a version it accepts, or a core.txt name whose base version (base.txt) or floor it accepts
-    and whose cap is no higher than its own, or click at the base version; the extra-<name>.txt files
-    must be EXTRAS[env], and no extra may name a vendored distribution or exclude a base.txt version;
+    and whose cap is no higher than its own, or click or another base.txt package at the base version, or,
+    for a VENDORED_FOR_EXTRA package, one that extra names; the extra-<name>.txt files must be EXTRAS[env],
+    and no extra may name a vendored distribution or exclude a base.txt version;
   5 python -m build --wheel --no-isolation, with SOURCE_DATE_EPOCH = HEAD's commit time;
   6 wheel unpack, add geobrix-native.pth (`import _gbx_native_path`), wheel pack (same epoch, so the
     same tree gives the same bytes);
   7 verify the wheel (metadata against the env files and EXTRAS, the payload, the JAR, the licence guard, the
-    URLs in the metadata, the size) and extract its payload to build/env-wheel/env<N>/payload/,
-    the GBX_NATIVE_ROOT layout;
+    URLs in the metadata, the size against envs/size-budget.json, with its delta against the last build) and
+    extract its payload to build/env-wheel/env<N>/payload/, the GBX_NATIVE_ROOT layout;
   8 per architecture, in that architecture's toolchain image (--network none): auditwheel show on a
     throwaway wheel of _native/<arch> + _vendor/<arch> is consistent with manylinux_2_28_<arch> and
     names no external library (the closure check of the payload as packed).
@@ -52,9 +54,9 @@ Only then the wheel goes to dist/env<N>/, which keeps no other wheel.
 
 `--verify <arch>` builds nothing: it installs dist/env<N>'s wheel in a fresh offline venv in that
 architecture's toolchain image and runs scripts/native/check-env-wheel.sh (the install, the .pth and
-import-time activation, the CA rule, the tripwire, Python 3.11, and the payload's `_selfcheck`). The
-venv's wheelhouse (core.txt with base.txt as constraints) is fetched on the host first, through
-`--host-python`'s pip, its output redacted.
+import-time activation, the CA rule, the tripwire, Python 3.11, the payload's `_selfcheck`, and [vizx]'s one
+GDAL). The venvs' wheelhouses (core.txt with base.txt as constraints; core.txt and extra-vizx.txt) are fetched on the
+host first, through `--host-python`'s pip, its output redacted.
 """
 
 import argparse
@@ -101,12 +103,16 @@ TRIPWIRES = {6: OLD_EXTRAS[5], 5: OLD_EXTRAS[6]}  # the other environment's old 
 RELY_ON_BASE = {
     "click"
 }  # preinstalled on every runtime; core.txt may still declare it
-# The feature extras each env wheel declares, one envs/env<N>/extra-<name>.txt each (Ruling NP-30). [zarr] is env6's
+# The feature extras each env wheel declares, one envs/env<N>/extra-<name>.txt each. [zarr] is env6's
 # only: Zarr targets DBR 19 and env 6. The plain wheel's [overture] and [earthdata] are not here: each moves a package
 # the runtimes preinstall (overturemaps needs click>=8.3 and tqdm>=4.67.3; earthaccess's s3fs pins fsspec to its own
 # release, and holding fsspec moves botocore instead), and overturemaps needs shapely by name, which would install
 # PyPI's beside the vendored build.
 EXTRAS = {5: ("databricks", "stac", "vizx"), 6: ("databricks", "stac", "vizx", "zarr")}
+# A vendored pure-Python package usable only with an extra: its requirements may be met by that extra's file too.
+# contextily (vendored, because it requires rasterio by name) needs geopy, mercantile and xyzservices, which [vizx]
+# brings.
+VENDORED_FOR_EXTRA = {"contextily": "vizx"}
 # The distribution name of the vendored osgeo (GDAL's own bindings): not a wheel in the vendored set, so named here.
 VENDORED_DISTS = {"gdal"}
 # Security floors: the only packages an extra may move off a runtime's preinstalled version, and only up to the fix.
@@ -121,8 +127,12 @@ SECURITY_FLOORS = {"requests": ("2.32.4", "CVE-2024-47081")}
 # an extra names) gets a floor only there, never an upper bound, since an extra is an opt-in a user may install over a
 # base they have since upgraded themselves; caps in extras stay on what GeoBrix brings in, where they guard our own
 # compatibility. FROZEN_BASE_CAPS lists the extras' exceptions: env5's requests is held under 2.33, so its
-# CVE-2024-47081 move is a patch move (2.32.3 -> 2.32.5), not a jump to the newest requests.
-FROZEN_BASE_CAPS = {5: {"requests": "<2.33"}}
+# CVE-2024-47081 move is a patch move (2.32.3 -> 2.32.5), not a jump to the newest requests; [vizx] holds click and
+# psutil at the runtimes' versions, so nothing it installs can move them (each runtime family's own next minor).
+FROZEN_BASE_CAPS = {
+    5: {"requests": "<2.33", "click": "<8.2", "psutil": "<5.10"},
+    6: {"click": "<8.3", "psutil": "<7.1"},
+}
 GIT_INPUTS = (  # what the wheel is built from, under git
     "python/geobrix/src",
     "python/geobrix/envs",
@@ -131,7 +141,9 @@ GIT_INPUTS = (  # what the wheel is built from, under git
     "python/geobrix/requirements-build.txt",
     "scripts/native",
 )
-SIZE_BUDGET_MB = 100  # the env wheels measured 97.0 MB (2026-10-28: JPEG XL, the PROJ grids, the HDF5 plugins)
+# The size budget is soft: python/geobrix/envs/size-budget.json holds it and the recorded justifications (env, ceiling,
+# reason, date) under which a wheel may be bigger; step 7 fails a wheel over the budget with none, or over its ceiling.
+SIZE_BUDGET = PYDIR / "envs" / "size-budget.json"
 METADATA_URL_HOSTS = {"databricks.com", "github.com", "databrickslabs.github.io"}
 URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://([^/\s\"'<>]+)")
 BANNED = re.compile(
@@ -319,6 +331,20 @@ def _bounds(spec):
     return floor, cap
 
 
+def admits_below(spec, floor):
+    """True when `spec` admits a version below `floor`: the highest release under it, a pre-release of the floor, or
+    (no lower bound at all) a version zero. So ==2.32.5, ~=2.32.5 and >=2.32.4 meet a 2.32.4 floor; >=2.32.3 does not."""
+    f = Version(floor)
+    rel = list(f.release) + [0] * (3 - len(f.release))
+    probes = [Version("0"), Version(f"{floor}rc0"), Version(f"{floor}.dev0")]
+    for i in range(len(rel) - 1, -1, -1):  # 2.32.4 -> 2.32.3.9999, 2.31.9999..., 1.9999...
+        if rel[i] > 0:
+            below = rel[:i] + [rel[i] - 1] + [9999] * (len(rel) - i - 1)
+            probes.append(Version(".".join(map(str, below))))
+            break
+    return any(spec.contains(v, prereleases=True) for v in probes)
+
+
 def check_against_core(name, req, core_req, base):
     """A vendored package's requirement on a core.txt (or rely-on-base) package, by version."""
     want = req.specifier
@@ -474,6 +500,8 @@ def write_build_info(tree, env, version, natives, dirty, epoch):
         for k in ("gdal", "proj", "geos")
     }
     pick["revision"] = {a: manifests[a]["native_revision"] for a in ARCHES}
+    # the licence note (step 3) is written from the first architecture's gdal_internal: both must have the same
+    pick["gdal_internal"] = {a: json.dumps(manifests[a].get("gdal_internal"), sort_keys=True) for a in ARCHES}
     for k, per_arch in pick.items():
         if len(set(per_arch.values())) != 1:
             fail(f"the two architectures' MANIFEST.json disagree on {k}: {per_arch}")
@@ -800,9 +828,10 @@ def pins_of(path):
     }
 
 
-def check_requirements(env, vendored):
-    """Every vendored package's Requires-Dist, against the vendored set, core.txt and base.txt."""
-    envdir = PYDIR / "envs" / f"env{env}"
+def check_requirements(env, vendored, envdir=None):
+    """Every vendored package's Requires-Dist, against the vendored set, core.txt and base.txt (and, for a
+    VENDORED_FOR_EXTRA package, its extra's file)."""
+    envdir = envdir or PYDIR / "envs" / f"env{env}"
     core = {canonicalize_name(r.name): r for r in reqs_of(envdir / "core.txt")}
     base = pins_of(envdir / "base.txt")
     # The base pins are what the runtime has: core.txt must admit them.
@@ -812,6 +841,12 @@ def check_requirements(env, vendored):
                 f"env{env}/core.txt {core[dep]} does not admit the runtime's {dep} {v} (base.txt)"
             )
     for name, (_v, meta) in sorted(vendored.items()):
+        extra = VENDORED_FOR_EXTRA.get(name)
+        with_extra = (
+            {canonicalize_name(r.name): r for r in reqs_of(envdir / f"extra-{extra}.txt")}
+            if extra
+            else {}
+        )
         for line in meta.get_all("Requires-Dist") or []:
             r = Requirement(line)
             if r.marker is not None and not r.marker.evaluate(PY312_LINUX):
@@ -824,11 +859,16 @@ def check_requirements(env, vendored):
                     )
             elif dep in core or dep in RELY_ON_BASE:
                 check_against_core(name, r, core.get(dep), base.get(dep))
+            elif dep in with_extra or dep in base:
+                # preinstalled (base.txt), or brought by the extra the package is usable with
+                check_against_core(name, r, with_extra.get(dep), base.get(dep))
             else:
                 fail(
-                    f"vendored {name} requires {r}: neither vendored, in env{env}/core.txt, nor preinstalled (click)"
+                    f"vendored {name} requires {r}: neither vendored, in env{env}/core.txt"
+                    + (f" or extra-{extra}.txt" if extra else "")
+                    + ", nor preinstalled (base.txt)"
                 )
-    check_extras(env, set(vendored) | VENDORED_DISTS)
+    check_extras(env, set(vendored) | VENDORED_DISTS, envdir)
 
 
 def check_extras(env, vendored, envdir=None):
@@ -837,9 +877,9 @@ def check_extras(env, vendored, envdir=None):
     says the runtime preinstalls (installing the extra would move it) except up to a SECURITY_FLOORS fix, which an
     extra naming that package must have, or caps a preinstalled package (floors only, but FROZEN_BASE_CAPS).
 
-    These are rules on the names an extra lists, not on what they pull in: [vizx] passes while geopandas and
-    contextily install PyPI's rasterio, pyogrio, pyproj and shapely. The transitive no-pull / no-move rule gets its
-    committed test in task PK-1 (R3/R4), resolving each extra against the runtimes' preinstalled sets."""
+    These are rules on the names an extra lists, not on what they pull in. What an install pulls in and moves, each
+    extra's closure resolved against every target runtime's preinstalled packages, is scripts/native/install_moves.py
+    (gbx:versions:audit --install-moves)."""
     envdir = envdir or PYDIR / "envs" / f"env{env}"
     base = pins_of(envdir / "base.txt")
     names = tuple(sorted(p.stem.removeprefix("extra-") for p in envdir.glob("extra-*.txt")))
@@ -853,10 +893,8 @@ def check_extras(env, vendored, envdir=None):
                     f"env{env}/extra-{name}.txt names {dep}, which the wheel vendors: pip would install PyPI's {dep} beside it"
                 )
             floor = SECURITY_FLOORS.get(dep)
-            if floor:
-                lows = [Version(s.version) for s in r.specifier if s.operator in (">=", ">")]
-                if not lows or max(lows) < Version(floor[0]):
-                    fail(f"env{env}/extra-{name}.txt {r}: {dep} needs a floor of at least {floor[0]} ({floor[1]})")
+            if floor and admits_below(r.specifier, floor[0]):
+                fail(f"env{env}/extra-{name}.txt {r}: {dep} needs a floor of at least {floor[0]} ({floor[1]})")
             caps = sorted(str(s) for s in r.specifier if s.operator in ("<", "<=", "==", "~=", "==="))
             allowed = FROZEN_BASE_CAPS.get(env, {}).get(dep)
             if dep in base and caps and caps != [allowed]:
@@ -1154,6 +1192,39 @@ def extract_payload(zf, payload):
             out.chmod(0o755)
 
 
+def last_size(args, env):
+    """The size in MB of the wheel the last build left in dist/env<N>/, or None."""
+    wheels = sorted(args.out.glob(f"geobrix-*+env{env}-py3-none-any.whl")) if args.out.is_dir() else []
+    return wheels[-1].stat().st_size / 1e6 if wheels else None
+
+
+def size_gate(size, env, budget, last=None):
+    """The soft size budget (envs/size-budget.json): print the size and its delta against the last build; a wheel over
+    `budget_mb` builds only under a recorded justification for its env (`justified`: env, ceiling_mb, reason, date),
+    and never over that ceiling."""
+    delta = f"{size - last:+.1f} MB against the last build" if last is not None else "no earlier build"
+    print(f"    size {size:.1f} MB ({delta}); budget {budget['budget_mb']} MB", flush=True)
+    if size <= budget["budget_mb"]:
+        return
+    entries = [j for j in budget.get("justified", []) if j.get("env") == env]
+    if not entries:
+        fail(
+            f"the wheel is {size:.1f} MB, over the {budget['budget_mb']} MB budget, with no recorded justification: "
+            f"add one (env, ceiling_mb, reason, date) to python/geobrix/envs/size-budget.json"
+        )
+    top = max(entries, key=lambda j: j["ceiling_mb"])
+    if size > top["ceiling_mb"]:
+        fail(
+            f"the wheel is {size:.1f} MB, past its justified ceiling of {top['ceiling_mb']} MB "
+            f"({top['date']}: {top['reason']}): justify the growth with a new entry"
+        )
+    print(
+        f"    over the {budget['budget_mb']} MB budget, under the justified ceiling of {top['ceiling_mb']} MB "
+        f"({top['date']}: {top['reason']})",
+        flush=True,
+    )
+
+
 def verify(args, whl, env, version, extras, epoch):
     """Step 7: returns the wheel's size in MB."""
     if whl.name != f"geobrix-{version}-py3-none-any.whl":
@@ -1163,8 +1234,7 @@ def verify(args, whl, env, version, extras, epoch):
         verify_payload(zf, version, epoch)
         extract_payload(zf, args.work / "payload")
     size = whl.stat().st_size / 1e6
-    if size > SIZE_BUDGET_MB:
-        fail(f"the wheel is {size:.1f} MB, over the {SIZE_BUDGET_MB} MB budget")
+    size_gate(size, env, json.loads(SIZE_BUDGET.read_text()), last_size(args, env))
     return size
 
 
@@ -1205,6 +1275,46 @@ def auditwheel(args, bindings):
             fail(f"auditwheel {a} (in {image})")
 
 
+# Base packages whose runtime version has no wheel for the toolchain image's CPython 3.12 (the runtimes built their
+# own): check 9's [vizx] venv installs the extra's range for them instead of the base version.
+VERIFY_UNHELD = {"psutil"}
+
+
+def fetch_vizx_wheelhouse(args, envdir, env, arch):
+    """The wheels check 9 installs [vizx] from: core.txt and extra-vizx.txt, base.txt (but VERIFY_UNHELD) as
+    constraints, fetched on the host through --host-python's pip; kept while those files are unchanged."""
+    house = REPO / "build" / "env-wheel" / "wheelhouse" / f"env{env}-vizx" / arch
+    files = [envdir / "core.txt", envdir / "extra-vizx.txt", envdir / "base.txt"]
+    key = hashlib.sha256(b"".join(f.read_bytes() for f in files) + repr(sorted(VERIFY_UNHELD)).encode()).hexdigest()
+    stamp = house / ".inputs-sha256"
+    if stamp.is_file() and stamp.read_text().strip() == key:
+        print(f"    wheelhouse {house}: current", flush=True)
+        return house
+    print(f"    wheelhouse {house}: fetching core.txt + extra-vizx.txt (host pip)", flush=True)
+    shutil.rmtree(house, ignore_errors=True)
+    house.mkdir(parents=True)
+    held = house / "constraints.txt"
+    held.write_text(
+        "".join(
+            ln + "\n"
+            for ln in (envdir / "base.txt").read_text().splitlines()
+            if canonicalize_name(ln.split("==")[0].strip()) not in VERIFY_UNHELD
+        )
+    )
+    res = subprocess.run(
+        [args.host_python, "-m", "pip", "download", "-q", "--disable-pip-version-check",
+         "-r", str(envdir / "core.txt"), "-r", str(envdir / "extra-vizx.txt"), "-c", str(held),
+         "--only-binary", ":all:", "--platform", f"manylinux_2_28_{arch}", "--platform", f"manylinux2014_{arch}",
+         "--platform", f"manylinux_2_17_{arch}", "--python-version", "3.12", "-d", str(house)],
+        capture_output=True, text=True,
+    )  # fmt: skip
+    if res.returncode != 0:
+        print(redact((res.stdout + res.stderr)[-3000:]))
+        fail(f"pip download of the env{env} [vizx] wheelhouse for {arch} exited {res.returncode}")
+    stamp.write_text(key + "\n")
+    return house
+
+
 def verify_install(args, env, version, arch):
     """`--verify <arch>`: the install check of the built wheel in that architecture's toolchain image."""
     whl = args.out / f"geobrix-{version}-py3-none-any.whl"
@@ -1242,9 +1352,11 @@ def verify_install(args, env, version, arch):
                 f"pip download of the env{env} wheelhouse for {arch} exited {res.returncode}"
             )
         (house / ".inputs-sha256").write_text(key + "\n")
+    vizx = fetch_vizx_wheelhouse(args, envdir, env, arch)
     res = subprocess.run(
         ["docker", "run", "--rm", "--network", "none", "--platform", PLATFORMS[arch],
-         "-v", f"{args.out}:/dist:ro", "-v", f"{house}:/wheelhouse:ro", "-v", f"{envdir}:/env:ro",
+         "-v", f"{args.out}:/dist:ro", "-v", f"{house}:/wheelhouse:ro", "-v", f"{vizx}:/wheelhouse-vizx:ro",
+         "-v", f"{envdir}:/env:ro", "-e", f"VERIFY_UNHELD={' '.join(sorted(VERIFY_UNHELD))}",
          "-v", f"{REPO / 'scripts' / 'native'}:/check:ro", image,
          "bash", "/check/check-env-wheel.sh", str(env), version.split("+")[0]],
         capture_output=True, text=True,

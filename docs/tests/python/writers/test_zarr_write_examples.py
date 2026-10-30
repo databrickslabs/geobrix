@@ -290,7 +290,9 @@ def test_a_new_variable_is_named_in_variables(
         gbx_zarr_write(
             spark.createDataFrame(moved, BLOCKS_SCHEMA), table, mode="update"
         )
-    assert "Fix:" in str(err.value) or "t2m_k2" in str(err.value)
+    refused = str(err.value)  # the executor's error keeps the message, Fix line included
+    assert "the variable 't2m_k2', which this write did not plan" in refused
+    assert "Fix: name it in variables=[...] so the write creates it" in refused
 
 
 # --- tiles ------------------------------------------------------------------------------

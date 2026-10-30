@@ -1446,6 +1446,9 @@ def _extra(env, name):
         (ENV6, ["stac", "vizx"], "6", [ENV6, *_extra(6, "stac"), *[r for r in _extra(6, "vizx") if r not in _extra(6, "stac")]]),
         (ENV6, [], "6", [ENV6]),  # the bare env wheel: its core is the wheel's own Requires-Dist
         (ENV6, ["light_env6"], "6", "needs no light extra"),
+        (ENV6.replace("env6", "env5"), ["models_gpu_env5"], "5", "--extra-deps 'torch==2.9.0,torchvision==0.24.0,segment-geospatial,opencv-python-headless==4.11.0.86'"),
+        ("/Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl", ["photogrammetry_gpu_env5"], "5", "--extra-deps 'pycolmap-cuda12==4.2.1'"),
+        ("/Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl", ["light_env6"], "6", "it requires geobrix==0.6.0+env6"),
         (ENV6, ["overture"], "6", "has no [overture]"),
         (ENV6, ["vizx"], "5", "Fix: pass --env-version 6"),
         ("/Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl", ["vizx"], "6", None),  # the plain wheel: pyproject's [vizx]

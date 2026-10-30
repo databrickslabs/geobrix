@@ -33,6 +33,9 @@ TRIPWIRES = {  # the other environment's old extra names, per wheel
         "light_dbr17_all",
         "light_dbr18_all",
         "light_env5_all",
+        "photogrammetry_gpu_env5",
+        "models_gpu_env5",
+        "gpu_env5_all",
     ),
     5: ("light_dbr19", "light_env6", "light_dbr19_all", "light_env6_all"),
 }

@@ -76,6 +76,23 @@ def wheel_env(wheel: str) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
+# The 0.5.x GPU extras are tripwires in 0.6.0 (GPU = Serverless GPU environment 5, CUDA 12): their packages
+# install as a separate step after the env5 wheel, here with --extra-deps.
+_GPU_EXTRA_DEPS = {
+    "photogrammetry_gpu_env5": "pycolmap-cuda12==4.2.1",
+    "models_gpu_env5": "torch==2.9.0,torchvision==0.24.0,segment-geospatial,opencv-python-headless==4.11.0.86",
+}
+_GPU_EXTRA_DEPS["gpu_env5_all"] = ",".join(_GPU_EXTRA_DEPS.values())
+
+
+def _refuse_gpu_extra(extra: str) -> None:
+    if extra in _GPU_EXTRA_DEPS:
+        raise SystemExit(
+            f"--extras {extra}: a 0.5.x GPU extra, dropped in 0.6.0. Fix: --wheel <the geobrix-<version>+env5 wheel> "
+            f"--env-version 5 --extra-deps '{_GPU_EXTRA_DEPS[extra]}'"
+        )
+
+
 def _env_extras_deps(env: int, extras: list[str]) -> list[str]:
     """The pip deps of an env wheel's extras: envs/env<N>/extra-<name>.txt, one requirement per line.
 
@@ -87,6 +104,7 @@ def _env_extras_deps(env: int, extras: list[str]) -> list[str]:
     have = sorted(p.stem.removeprefix("extra-") for p in envdir.glob("extra-*.txt"))
     out: list[str] = []
     for extra in extras:
+        _refuse_gpu_extra(extra)
         if extra.startswith("light"):
             raise SystemExit(
                 f"--extras {extra}: the env{env} wheel needs no light extra (it is the light install); "
@@ -112,8 +130,7 @@ def _split_deps(csv: str) -> list[str]:
 def _load_extras_deps(extras: list[str]) -> list[str]:
     """Return the union of pip deps for the requested extras from pyproject.toml (the plain wheel).
 
-    Recursively expands nested ``geobrix[<extra>]`` references (``zarr_env6`` aliases
-    ``zarr_dbr19``, ``gpu_env5_all`` composes two GPU extras) into their real package
+    Recursively expands nested ``geobrix[<extra>]`` references into their real package
     requirements. Without this, a nested string like ``geobrix[zarr_dbr19]`` would be
     injected verbatim into the Serverless environment spec, which does NOT honor
     extras: it would resolve from PyPI, and the extra's deps would never install.
@@ -141,7 +158,13 @@ def _load_extras_deps(extras: list[str]) -> list[str]:
         if extra in seen_extras:
             return
         seen_extras.add(extra)
+        _refuse_gpu_extra(extra)
         deps = opt_deps.get(extra, [])
+        if deps and all(d.strip().startswith("geobrix==") for d in deps):
+            raise SystemExit(  # a tripwire: it names the env wheel to install instead
+                f"--extras {extra}: a 0.5.x name; it requires {deps[0]}. Fix: --wheel <that env wheel> with only "
+                "its feature extras (e.g. --extras stac,vizx)"
+            )
         if not deps:
             print(f"WARNING: extra '{extra}' not found in pyproject.toml", flush=True)
         for dep in deps:
@@ -331,7 +354,7 @@ def run_one(
     When ``hardware_accelerator`` is set (e.g. ``GPU_1xH100`` / ``GPU_8xH100``), the
     task requests Serverless GPU AI Runtime compute. Deps still come from the
     environment spec (``%pip`` is stripped for jobs, CPU and GPU alike) — pass the
-    GPU wheel extra via ``--extras`` (e.g. ``photogrammetry_gpu_env5``).
+    env5 wheel and the GPU packages via ``--extra-deps`` (e.g. ``pycolmap-cuda12==4.2.1``).
 
     If ``harvest_outputs`` is True and the run succeeds, exports the run and harvests
     cell outputs back into the local .ipynb file.
@@ -384,8 +407,8 @@ def run_one(
                     spec=compute.Environment(
                         environment_version=env_version,
                         # Both CPU and GPU serverless jobs install deps from the environment
-                        # spec (%pip is stripped for jobs). For GPU, pass the GPU wheel extra
-                        # (e.g. photogrammetry_gpu_env5) via --extras.
+                        # spec (%pip is stripped for jobs). For GPU, pass the env5 wheel and the
+                        # GPU packages (e.g. pycolmap-cuda12==4.2.1) via --extra-deps.
                         dependencies=deps,
                     ),
                 )
@@ -584,7 +607,7 @@ def main() -> int:
             "Request Serverless GPU AI Runtime compute for the task, e.g. "
             "'GPU_1xH100', 'GPU_8xH100', or 'GPU_1xA10'. Omit for CPU serverless. "
             "Deps come from the environment spec as usual (%%pip stripped) — pass the "
-            "GPU wheel extra via --extras (e.g. photogrammetry_gpu_env5)."
+            "env5 wheel and the GPU packages via --extra-deps (e.g. pycolmap-cuda12==4.2.1)."
         ),
     )
     parser.add_argument(

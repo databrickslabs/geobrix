@@ -219,56 +219,29 @@ photogrammetry = [
     "rasterio>=1.3",
     "pmtiles",
 ]
-# GPU is env5-only on purpose: Serverless GPU AI Runtime env5 = CUDA 12 (matches pycolmap-cuda12).
-# env6 = CUDA 13 and no pycolmap-cuda13 wheel exists on the proxy -> no photogrammetry_gpu_env6 until it does.
-photogrammetry_gpu_env5 = [
-    "pycolmap-cuda12==4.2.1",
-    "rasterio>=1.3",
-    "pmtiles",
-]
 # Model-backed raster inference (gbx.models): GeoSAM (segment-geospatial / SamGeo)
 # segmentation + Unity Catalog model serving. CPU-importable surface only -- torch and
 # segment-geospatial are imported lazily inside gbx.models (see geosam.py/__init__.py),
 # so importing the package never requires a GPU-capable torch build. The plain
 # `segment-geospatial` PyPI wheel already pulls its own default
-# torch/torchvision/segment-anything/rasterio/shapely closure; use
-# [models_gpu_env5] for a CUDA-12-pinned runtime install instead.
+# torch/torchvision/segment-anything/rasterio/shapely closure. On Serverless GPU environment 5,
+# install the env5 wheel and the CUDA-12-pinned GeoSAM packages instead (see the GPU tripwires).
 models = [
     "segment-geospatial",
 ]
-# GPU is env5-only on purpose, mirroring [photogrammetry_gpu_env5]: Serverless GPU AI
-# Runtime env5 = CUDA 12, env6 = CUDA 13, and GeoBrix standardizes its whole GPU stack on
-# CUDA 12 (pycolmap-cuda12 has no CUDA-13 build -- see nb1b / Part 1b). torch's default PyPI
-# Linux wheel bundles CUDA 12 through torch 2.10.x; torch==2.11.0 flips the default wheel to
-# CUDA 13 (nvidia-*-cu13 / cuda-toolkit==13.0.2 -- confirmed via each release's wheel METADATA
-# on the PyPI mirror, 2026-09-28). So torch MUST stay pinned below 2.11 to remain CUDA-12,
-# else segment-geospatial floats it to a CUDA-13 build. Pin to the env5 BASE's torch
-# (2.9.0 / torchvision 0.24.0 -- itself CUDA-12, cu129) rather than the newest CUDA-12 release
-# (2.10.0): both honor the CUDA-12 requirement, but matching the base means pip does NOT
-# upgrade the base torch -- a 2.10.0 upgrade otherwise collides with the base's
-# torch==2.9.0-pinned torchaudio / vllm / xformers and prints noisy pip "ERROR" conflict lines
-# (ugly in a public example). torchvision pins its torch exactly per release (0.24.0 -> 2.9.0),
-# so both are pinned. No models_gpu_env6 until a CUDA-13 torch pairing is verified, same as
-# photogrammetry_gpu_env5/env6.
-models_gpu_env5 = [
-    "torch==2.9.0",
-    "torchvision==0.24.0",
-    "segment-geospatial",
-    # segment-geospatial pulls opencv-python-headless UNPINNED, so it inherits the GPU
-    # AI Runtime base env's opencv-python-headless 5.0.0.93. OpenCV *5.x*'s bundled libs
-    # trip an OpenSSL FIPS self-test abort (crypto/fips/fips.c:154 -> SIGABRT) the moment
-    # `import cv2` runs on the GPU node -- killing `segment_raster` before it starts
-    # (verified env5+A10 and env5+H100, 2026-09-29). Pinning back to the latest OpenCV
-    # 4.x avoids the defect (verified: env5+H100 with this pin runs GeoSAM end to end).
-    # See memory: check-actual-gpu-env-packages.
-    "opencv-python-headless==4.11.0.86",
-]
-# Generic GPU umbrella (env5-only): composes the GPU-requiring extras. On Databricks (Serverless
-# GPU environment 5) they install as a separate step after the env5 wheel.
-gpu_env5_all = [
-    "geobrix[photogrammetry_gpu_env5]",
-    "geobrix[models_gpu_env5]",
-]
+# ---------------------------------------------------------------------------
+# The 0.5.x GPU extras are TRIPWIRES too, like the light_* names above: each requires the env5
+# wheel, so an install that still asks for one fails at resolution (pip: ResolutionImpossible)
+# naming geobrix==<version>+env5. GPU stays Serverless GPU environment 5 (CUDA 12; pycolmap-cuda12
+# has no CUDA-13 build). There, install the env5 wheel, then the GPU packages as a separate step:
+#   photogrammetry: pycolmap-cuda12==4.2.1
+#   models (GeoSAM): torch==2.9.0 torchvision==0.24.0 segment-geospatial opencv-python-headless==4.11.0.86
+#     (the env5 base's CUDA-12 torch pair; OpenCV 4.x, as 5.x aborts in its FIPS self-test on the
+#     GPU node: gbx.models.serving.MODEL_DEPS)
+# ---------------------------------------------------------------------------
+photogrammetry_gpu_env5 = ["geobrix==0.6.0+env5"]
+models_gpu_env5 = ["geobrix==0.6.0+env5"]
+gpu_env5_all = ["geobrix==0.6.0+env5"]
 
 [tool.coverage.run]
 # Exclude sample-data bundle from coverage total so reported % reflects main library (gridx, rasterx, vectorx)

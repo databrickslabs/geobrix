@@ -390,7 +390,7 @@ runs.
 | The env wheel for the runtime, installed by file: `geobrix-<version>+env6-py3-none-any.whl` (Serverless environment 6, DBR 19) or `geobrix-<version>+env5-py3-none-any.whl` (Serverless environment 5, DBR 17.3 and 18) | the wheel's vendored rasterio and osgeo | full |
 | The plain wheel, for use off Databricks: `pip install geobrix` (its base dependencies are the lightweight tier, with PyPI rasterio, pyogrio, pyproj and shapely) | PyPI rasterio | partial |
 | The [DCS image](./installation/dcs.mdx): the plain wheel with `[vizx]` | PyPI rasterio | partial |
-| The plain wheel with an example extra: `geobrix[photogrammetry]` or `[photogrammetry_gpu_env5]` | PyPI rasterio | partial |
+| The plain wheel with the example extra `geobrix[photogrammetry]` | PyPI rasterio | partial |
 | The plain wheel with `[vizx]` or `[models]` (they pull PyPI rasterio and pyogrio) | PyPI rasterio | partial |
 | The env wheel with `[vizx]`: the wheel vendors geopandas and contextily, so no PyPI rasterio, pyogrio, pyproj or shapely is installed | the wheel's vendored rasterio and osgeo | full |
 | A partial path where rasterio or pyogrio registered GDAL's drivers before GeoBrix was imported | the binding's own GDAL | partial: on Linux the refused drivers are removed at the import, elsewhere with the warning |

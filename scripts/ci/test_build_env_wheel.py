@@ -532,12 +532,18 @@ def _plain():
 def test_the_plain_wheels_old_runtime_extras_are_tripwires():
     # Each old name requires the env wheel that replaces it, so `geobrix[light_env6] @ <plain wheel>` fails at
     # resolution naming geobrix==<version>+env6 instead of installing PyPI's GDAL stack on a Databricks runtime.
+    # The 0.5.x GPU names (photogrammetry_gpu_env5, models_gpu_env5, gpu_env5_all) require the env5 wheel the same
+    # way: on Serverless GPU environment 5 the GPU packages are a separate step after it.
     extras, version = _plain()["optional-dependencies"], bew.source_version()
     for env, names in bew.OLD_EXTRAS.items():
         for name in names:
             assert extras.get(name) == [f"geobrix=={version}+env{env}"], (name, extras.get(name))
-    light = {n for n in extras if n.startswith("light")}
-    assert light == {n for names in bew.OLD_EXTRAS.values() for n in names}  # no light-base, no other light name
+    old = {n for names in bew.OLD_EXTRAS.values() for n in names}
+    assert {"photogrammetry_gpu_env5", "models_gpu_env5", "gpu_env5_all"} <= set(bew.OLD_EXTRAS[5])
+    light_or_gpu = {n for n in extras if n.startswith("light") or "_gpu_" in n or n.startswith("gpu_")}
+    assert light_or_gpu == old  # no light-base, no other light or GPU name
+    for name, reqs in extras.items():  # no live extra composes an old one back in
+        assert not any(r.startswith("geobrix[") and set(r[8:-1].split(",")) & old for r in reqs), (name, reqs)
     assert bew.TRIPWIRES == {6: bew.OLD_EXTRAS[5], 5: bew.OLD_EXTRAS[6]}
 
 

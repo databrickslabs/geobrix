@@ -87,7 +87,8 @@ PKG = Path("databricks/labs/gbx")
 ARCHES = ("x86_64", "aarch64")
 PLATFORMS = {"x86_64": "linux/amd64", "aarch64": "linux/arm64"}
 # The 0.5.x runtime extras, by the env wheel that replaces them. The plain wheel (the committed pyproject) declares
-# every one as a tripwire, `geobrix==<version>+env<N>`; each env wheel declares the other family's the same way.
+# every one as a tripwire, `geobrix==<version>+env<N>`; each env wheel declares the other family's the same way. The
+# GPU names are env5's: GPU is Serverless GPU environment 5 only (CUDA 12), its packages a separate step after the wheel.
 OLD_EXTRAS = {
     5: (
         "light_dbr17",
@@ -96,6 +97,9 @@ OLD_EXTRAS = {
         "light_dbr17_all",
         "light_dbr18_all",
         "light_env5_all",
+        "photogrammetry_gpu_env5",
+        "models_gpu_env5",
+        "gpu_env5_all",
     ),
     6: ("light_dbr19", "light_env6", "light_dbr19_all", "light_env6_all"),
 }
@@ -449,7 +453,7 @@ def build_tree(args, env, version):
     other = 11 - env
     trip = tree / "env" / f"tripwire-env{other}.txt"
     trip.write_text(
-        "# A light_* name of the other environment's family: this wheel is not the one to install.\n"
+        "# A 0.5.x name of the other environment's family: this wheel is not the one to install.\n"
         f"geobrix=={version.split('+')[0]}+env{other}\n"
     )
 

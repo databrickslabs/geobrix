@@ -230,7 +230,8 @@ def _gb_tiles(virtual: bool):
             return None
 
         gb = []
-        for p in sources:
+        # a probe: a corpus with no EPSG:27700 tiles must not open every file
+        for p in sources[:64]:
             with open_data(p) as ds:
                 if ds.crs is not None and ds.crs.to_epsg() == 27700:
                     gb.append(p)

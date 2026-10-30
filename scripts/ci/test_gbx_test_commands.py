@@ -1472,6 +1472,32 @@ def test_the_serverless_runner_installs_an_env_wheel_with_its_own_extras(monkeyp
     assert runner._split_deps("rich, overturemaps>=1.0.2,<2") == ["rich", "overturemaps>=1.0.2,<2"]
 
 
+def test_the_serverless_runner_submits_one_jar_task_with_the_jar_as_a_java_dependency(monkeypatch):
+    from types import SimpleNamespace
+
+    jobs = pytest.importorskip("databricks.sdk.service.jobs")  # the launcher's own interpreter has it
+    RunLifeCycleState, RunResultState = jobs.RunLifeCycleState, jobs.RunResultState
+    runner = _launcher("run_notebooks_serverless", monkeypatch)
+    sent = {}
+
+    def fake_submit(w, **kw):
+        sent.update(kw)
+        return SimpleNamespace(run_id=7)
+
+    state = SimpleNamespace(life_cycle_state=RunLifeCycleState.TERMINATED, result_state=RunResultState.SUCCESS,
+                            state_message="")  # fmt: skip
+    w = SimpleNamespace(jobs=SimpleNamespace(
+        get_run=lambda run_id: SimpleNamespace(run_page_url="u", state=state, tasks=[]),
+        get_run_output=lambda run_id: SimpleNamespace(logs="E-JARtask wall_s=1.0"),
+    ))  # fmt: skip
+    monkeypatch.setattr(runner, "submit_once", fake_submit)
+    assert runner.run_jar_task(w, "a.b.Job", "/Volumes/c/s/v/j.jar", ["t1", "t2", "3"], "6", 0)
+    (env,), (task,) = sent["environments"], sent["tasks"]
+    assert env.spec.java_dependencies == ["/Volumes/c/s/v/j.jar"] and env.spec.environment_version == "6"
+    assert task.environment_key == env.environment_key and task.max_retries == 0 and task.disable_auto_optimization
+    assert (task.spark_jar_task.main_class_name, task.spark_jar_task.parameters) == ("a.b.Job", ["t1", "t2", "3"])
+
+
 class _FakeFiles:
     def __init__(self, listing):
         self.calls, self.listing, self.sizes = [], listing, {}

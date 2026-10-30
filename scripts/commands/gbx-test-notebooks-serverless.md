@@ -26,6 +26,7 @@ bash scripts/commands/gbx-test-notebooks-serverless.sh [OPTIONS]
 - `--profile PROFILE` – Databricks config profile (default: `oauth-fe` or `DATABRICKS_CONFIG_PROFILE`).
 - `--poll-secs N` – Polling interval in seconds (default: `20`).
 - `--no-strip-pip` – Do NOT strip `%pip`/`%restart_python` cells from uploaded notebooks.
+- `--jar-task MAIN`, `--jar VOLPATH`, `--jar-args CSV` – Run ONE Serverless JAR task instead of notebooks: `spark_jar_task(main_class_name=MAIN, parameters=<the CSV>)` with the JAR (a `/Volumes` path) as the environment's `java_dependencies`, which is the Serverless JAR task form (environment version 4 or later; `--env-version`, default `6`). It is submitted once (`max_retries=0`, auto-optimization retries off), and the run's state message and the end of its output are printed. It runs alone: no `--notebook`, `--dir`, `--existing-cluster-id` or `--new-cluster`.
 - `--harvest-outputs` – After each successful run, export it (`databricks jobs export-run`) and write its cell outputs back into the local `.ipynb`: cells are matched by source (stripped `%pip` cells and injected `--set-var` cells are skipped), only outputs/`execution_count` change, and the file's JSON serialization is preserved. A requested harvest that fails fails the run.
 - `--log <path>` – Write output to log file (filename → `test-logs/<name>`).
 - `--help` – Help and examples.

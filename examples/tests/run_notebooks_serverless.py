@@ -492,6 +492,68 @@ def run_one(
     return ok
 
 
+def run_jar_task(
+    w,
+    main_class: str,
+    jar: str,
+    params: list[str],
+    env_version: str,
+    poll_secs: int,
+) -> bool:
+    """Run ONE Serverless JAR task: ``spark_jar_task(main_class, params)`` with the JAR as the environment's
+    java dependency (the Serverless JAR task form: environment version 4 or later). Returns True on SUCCESS and
+    prints the run's state message and the end of its output."""
+    from databricks.sdk.service import compute, jobs
+
+    task_key = "".join(c if c.isalnum() else "_" for c in main_class.rsplit(".", 1)[-1])[:90]
+    print(f"\n=== SUBMIT (serverless JAR task): {main_class} {params} ===", flush=True)
+    waiter = submit_once(
+        w,
+        run_name=f"gbx-jar:{task_key}",
+        environments=[
+            jobs.JobEnvironment(
+                environment_key=ENV_KEY,
+                spec=compute.Environment(environment_version=env_version, java_dependencies=[jar]),
+            )
+        ],
+        tasks=[
+            jobs.SubmitTask(
+                task_key=task_key,
+                environment_key=ENV_KEY,
+                spark_jar_task=jobs.SparkJarTask(main_class_name=main_class, parameters=params),
+                max_retries=0,
+                disable_auto_optimization=True,  # at most once (see run_one)
+            )
+        ],
+    )
+    run_id = waiter.run_id
+    print(f"    run_id={run_id}  run_page_url={w.jobs.get_run(run_id=run_id).run_page_url}", flush=True)
+    terminal, last, started = _terminal_states(), None, time.time()
+    while True:
+        r = w.jobs.get_run(run_id=run_id)
+        life = r.state.life_cycle_state if r.state else None
+        if life != last:
+            print(f"    [{int(time.time() - started)}s] life_cycle_state={life}", flush=True)
+            last = life
+        if life in terminal:
+            break
+        time.sleep(poll_secs)
+    result = r.state.result_state if r.state else None
+    print(f"=== RESULT: {main_class}  result_state={result}  ({(r.state.state_message or '')[:500]})", flush=True)
+    for t in r.tasks or []:
+        try:
+            out = w.jobs.get_run_output(run_id=t.run_id)
+            for k in ("logs", "error", "error_trace"):
+                v = getattr(out, k, None)
+                if v:
+                    print(f"    task {t.task_key} {k}: {str(v)[-2000:]}", flush=True)
+        except Exception as exc:  # noqa: BLE001 - output fetch is best-effort
+            print(f"    (no output for {t.task_key}: {exc})", flush=True)
+    from databricks.sdk.service.jobs import RunResultState
+
+    return result == RunResultState.SUCCESS
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -688,6 +750,19 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--jar-task",
+        metavar="MAIN",
+        default=None,
+        help=(
+            "Run ONE Serverless JAR task with this main class instead of notebooks (needs --jar; --jar-args are "
+            "its parameters). The JAR is the environment's java dependency; --env-version must be 4 or later."
+        ),
+    )
+    parser.add_argument("--jar", metavar="VOLPATH", default=None, help="The JAR (a /Volumes path) for --jar-task.")
+    parser.add_argument(
+        "--jar-args", metavar="CSV", default="", help="Comma-separated parameters of the --jar-task main class."
+    )
+    parser.add_argument(
         "--harvest-outputs",
         dest="harvest_outputs",
         action="store_true",
@@ -706,6 +781,18 @@ def main() -> int:
         name, sep, _ = sv.partition("=")
         if not sep or not name.strip().isidentifier():
             parser.error(f"--set-var must be NAME=VALUE with NAME a valid identifier; got {sv!r}")
+
+    if args.jar_task:
+        if not args.jar or args.notebooks or args.dirs or args.existing_cluster_id or args.new_cluster:
+            parser.error("--jar-task needs --jar and runs alone (no --notebook/--dir/--existing-cluster-id/--new-cluster)")
+        if not str(args.env_version).isdigit() or int(args.env_version) < 4:
+            parser.error("--jar-task needs --env-version 4 or later (the Serverless JAR task environments)")
+        from databricks.sdk import WorkspaceClient
+
+        params = [a.strip() for a in args.jar_args.split(",") if a.strip()]
+        w = WorkspaceClient(profile=args.profile)
+        ok = run_jar_task(w, args.jar_task, args.jar, params, str(args.env_version), args.poll_secs)
+        return 0 if ok else 1
 
     notebooks = _collect_notebooks(args.notebooks, args.dirs)
     if not notebooks:

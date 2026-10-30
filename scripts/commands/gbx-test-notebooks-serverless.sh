@@ -50,6 +50,9 @@ show_help() {
     echo -e "                        DATABRICKS_CONFIG_PROFILE env var)."
     echo -e "  ${GREEN}--poll-secs N${NC}         Polling interval in seconds (default: 20)."
     echo -e "  ${GREEN}--no-strip-pip${NC}        Do NOT strip %%pip/%%restart_python cells."
+    echo -e "  ${GREEN}--jar-task MAIN${NC}       Run ONE Serverless JAR task with this main class instead of notebooks"
+    echo -e "                        (with --jar VOLPATH, the JAR, and --jar-args CSV, its parameters;"
+    echo -e "                        --env-version 4 or later)."
     echo -e "  ${GREEN}--harvest-outputs${NC}     After each SUCCESS, export and harvest cell outputs"
     echo -e "                        back into the local .ipynb (aligns by source, preserves"
     echo -e "                        serialization, strips injected cells)."
@@ -95,7 +98,7 @@ while [[ $# -gt 0 ]]; do
             LOG_PATH=$(resolve_log_path "$2")
             shift 2
             ;;
-        --notebook|--dir)
+        --notebook|--dir|--jar-task)
             HAS_NOTEBOOK_OR_DIR=true
             RUNNER_ARGS+=("$1" "$2")
             shift 2

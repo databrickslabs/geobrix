@@ -7,6 +7,7 @@ Unity Catalog passes all read these rows, so a level is "correct" exactly when i
 from __future__ import annotations
 
 import base64
+import contextlib
 import functools
 import json
 import math
@@ -16,6 +17,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from databricks.labs.gbx._gdal_policy import open_data
+from databricks.labs.gbx.uc.ddl import UC_GEOMETRY
 
 MERC_PROJ = (
     "+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 "
@@ -2136,7 +2138,7 @@ def run_session(
         # On the UC surface GEOMETRY params get an integer-SRID constructor, never a CRS string.
         cols = ", ".join(
             (
-                f"st_geomfromwkt(c{i}, {case.geom_srid})"
+                f"CAST(st_geomfromwkt(c{i}, {case.geom_srid}) AS {UC_GEOMETRY})"
                 if surface == "uc" and params[i].uc == "GEOMETRY"
                 else f"c{i}"
             )
@@ -2334,7 +2336,7 @@ def run_rows(
         )
         cols = ", ".join(
             (
-                f"st_geomfromwkt(c{i}, {case.geom_srid})"
+                f"CAST(st_geomfromwkt(c{i}, {case.geom_srid}) AS {UC_GEOMETRY})"
                 if surface == "uc" and params[i].uc == "GEOMETRY"
                 else f"c{i}"
             )
@@ -2452,23 +2454,63 @@ def run_groups(
 # --- Unity Catalog surface -----------------------------------------------------------------------
 
 
+class UcGeometry:
+    """Stand-in for ``pyspark.sql.types.Geometry``: what a UC Python function receives for a GEOMETRY(ANY) argument
+    and returns for a GEOMETRY(ANY) result (measured on Serverless env 6): plain WKB plus the SRID.
+    """
+
+    def __init__(self, wkb: bytes, srid: int):
+        self.wkb, self.srid = bytes(wkb), int(srid)
+
+    @classmethod
+    def fromWKB(cls, wkb, srid):  # noqa: N802 - the pyspark name
+        return cls(wkb, srid)
+
+    def getBytes(self):  # noqa: N802
+        return self.wkb
+
+    def getSrid(self):  # noqa: N802
+        return self.srid
+
+
+def _from_uc_geometry(out):
+    """A handler's GEOMETRY result as the EWKB the product's st_asewkb gives for it."""
+    if not isinstance(out, UcGeometry):
+        return out
+    from shapely import from_wkb, set_srid, to_wkb
+
+    return to_wkb(set_srid(from_wkb(out.wkb), out.srid), include_srid=True)
+
+
 def _uc_value(arg, param, case: Case):
     """A session-shaped oracle argument as the UC function receives it."""
     if arg is None or isinstance(arg, dict):
         return arg
     if param.uc == "GEOMETRY" and isinstance(arg, str):
-        from shapely import set_srid, to_wkb
+        from shapely import to_wkb
 
         from databricks.labs.gbx._geom import parse_geom
 
-        return to_wkb(set_srid(parse_geom(arg), case.geom_srid), include_srid=True)
+        return UcGeometry(to_wkb(parse_geom(arg)), case.geom_srid)
     if param.uc == "STRING" and not isinstance(arg, str):
         return str(arg)  # UC has one STRING type: an INT literal arrives as its digits
     return arg
 
 
+@contextlib.contextmanager
+def _uc_geometry_type():
+    """The handlers build their GEOMETRY results with :class:`UcGeometry` while the oracle calls them (no pyspark)."""
+    from databricks.labs.gbx.uc import handlers
+
+    saved, handlers._geometry_type = handlers._geometry_type, lambda: UcGeometry
+    try:
+        yield
+    finally:
+        handlers._geometry_type = saved
+
+
 def run_handlers(cases, tmpdir: Optional[str] = None):
-    """L4 without Spark: call the UC handlers with Python values. GEOMETRY params get EWKB bytes."""
+    """L4 without Spark: call the UC handlers with Python values. GEOMETRY params get :class:`UcGeometry` values."""
     from databricks.labs.gbx import manifest
 
     tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")
@@ -2488,7 +2530,9 @@ def run_handlers(cases, tmpdir: Optional[str] = None):
                     for p in fn.params[len(args) :]
                 ]
                 args = [_uc_value(a, p, case) for a, p in zip(args, fn.params)]
-                msgs.append(check(case, handler(*args), args))
+                with _uc_geometry_type():
+                    got = _from_uc_geometry(handler(*args))
+                msgs.append(check(case, got, args))
             out.append((case, next(filter(None, msgs), None)))
         except (
             Exception
@@ -2545,7 +2589,8 @@ def _sql_literal(value, param, case: Case) -> str:
             "'crs', CAST(NULL AS STRING), 'metadata', CAST(map() AS map<string,string>))"
         )
     if param.uc == "GEOMETRY":
-        return f"st_geomfromwkt('{value}', {case.geom_srid})"  # integer SRID only (product CRS facts)
+        # integer SRID only (product CRS facts); a UC GEOMETRY(ANY) parameter takes it through a CAST
+        return f"CAST(st_geomfromwkt('{value}', {case.geom_srid}) AS {UC_GEOMETRY})"
     if isinstance(value, str):
         return "'" + value.replace("'", "''") + "'"
     if isinstance(value, float) and math.isnan(value):

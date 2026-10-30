@@ -131,21 +131,39 @@ def rst_transformcrs(tile, target_crs):
 
 
 def _geom_bytes(geom):
-    """GEOMETRY as the UC Python side receives it -> WKB/EWKB bytes (or WKT text).
+    """GEOMETRY as a UC Python function receives it -> EWKB bytes, the SRID kept.
 
-    The branches are a stand-in until a run on a UC runtime shows what a handler receives.
+    Measured on Serverless env 6: a GEOMETRY(ANY) argument arrives as ``pyspark.sql.types.Geometry``, whose WKB
+    (``getBytes()``) carries no SRID and whose ``getSrid()`` is the SRID.
     """
-    if isinstance(geom, (bytes, bytearray, memoryview)):
-        return bytes(geom)
-    for attr in ("ewkb", "wkb"):
-        v = getattr(geom, attr, None)
-        if isinstance(v, (bytes, bytearray)):
-            return bytes(v)
-    if isinstance(geom, str):
-        return geom
+    get_wkb, get_srid = getattr(geom, "getBytes", None), getattr(geom, "getSrid", None)
+    if callable(get_wkb) and callable(get_srid):
+        import shapely
+
+        g = shapely.from_wkb(bytes(get_wkb()))
+        return shapely.to_wkb(shapely.set_srid(g, int(get_srid())), include_srid=True)
     raise TypeError(
         f"gbx: unsupported GEOMETRY value {type(geom).__module__}.{type(geom).__name__}"
     )
+
+
+def _geometry_type():
+    """The GEOMETRY value class of a UC Python function (the oracle swaps in a stand-in where there is no pyspark)."""
+    from pyspark.sql.types import Geometry
+
+    return Geometry
+
+
+def _geom_out(ewkb):
+    """EWKB -> the GEOMETRY value a UC Python function returns: a ``Geometry`` of the WKB and its SRID (measured:
+    returning bytes for a GEOMETRY(ANY) result fails in the worker)."""
+    if ewkb is None:
+        return None
+    import shapely
+
+    g = shapely.from_wkb(ewkb)
+    srid = shapely.get_srid(g)
+    return _geometry_type().fromWKB(shapely.to_wkb(shapely.set_srid(g, 0)), srid)
 
 
 def bng_tessellate(geom, resolution, keep_core_geom):
@@ -205,6 +223,6 @@ def st_makevalid(geom, level):
 
     if geom is None:
         return None
-    return _makevalid(
-        _geom_bytes(geom), level or "linework"
-    )  # EWKB in, EWKB out: the SRID is kept
+    return _geom_out(
+        _makevalid(_geom_bytes(geom), level or "linework")
+    )  # the SRID is kept

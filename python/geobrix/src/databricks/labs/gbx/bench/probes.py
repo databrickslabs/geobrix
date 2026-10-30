@@ -94,7 +94,11 @@ def run_ek1(spark, n: int = 1_000_000) -> dict:
         try:
             register(spark, only=[name], _levels={name: lv})
             t = time.time()
-            spark.sql(f"SELECT sum(xxhash64({name}(e, n, 3))) FROM ek1_pts").collect()
+            # the call in a subquery (a Java UDF is not deterministic, so it cannot sit inside an aggregate) and
+            # the hash reduced before the sum (a sum of raw 64-bit hashes overflows under ANSI): the leg's own shape
+            spark.sql(
+                f"SELECT sum(pmod(xxhash64(c), 2147483647)) FROM (SELECT {name}(e, n, 3) AS c FROM ek1_pts)"
+            ).collect()
             out[f"{lv[0]}_sql_s"] = time.time() - t
             out[f"{lv[0]}_call_function"] = (
                 pts.limit(1)

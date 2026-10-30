@@ -6,7 +6,18 @@ import json
 import re
 from typing import Dict, List, Optional
 
-from databricks.labs.gbx.manifest import sql_type
+from databricks.labs.gbx.manifest import sql_type as _manifest_sql_type
+
+# How a UC function declares the manifest's GEOMETRY (measured on Serverless env 6): bare GEOMETRY is not a type
+# there (UNSUPPORTED_DATATYPE), GEOMETRY(<srid>) takes that one SRID, and GEOMETRY(ANY) takes every SRID; a
+# caller's GEOMETRY(<srid>) value reaches a GEOMETRY(ANY) parameter only through CAST(... AS GEOMETRY(ANY)).
+UC_GEOMETRY = "GEOMETRY(ANY)"
+
+
+def sql_type(t: str) -> str:
+    """The SQL type of a manifest UC type: the manifest's text, with GEOMETRY declared as GEOMETRY(ANY)."""
+    return UC_GEOMETRY if t.upper() == "GEOMETRY" else _manifest_sql_type(t)
+
 
 # One rule for every name that reaches a statement: a catalog or schema is checked against Unity
 # Catalog's own character rules (so a hyphen is fine) and is ALWAYS emitted backtick-quoted; a string

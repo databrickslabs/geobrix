@@ -399,7 +399,7 @@ _MV = (
 )
 _MV_UC = (
     "SELECT count(*) AS n, sum(length(st_asewkb(g))) AS fp, count(g) AS n_out FROM "
-    "(SELECT {fn}(st_geomfromwkt(wkt, 4326)) AS g FROM {src})"
+    "(SELECT {fn}(CAST(st_geomfromwkt(wkt, 4326) AS GEOMETRY(ANY))) AS g FROM {src})"
 )
 
 
@@ -836,7 +836,7 @@ _TE_ARRAY_L2 = (
 ).format()
 _TE_UC = (
     _TE_FP.format(x="t.cellid")
-    + "{{src}} s, LATERAL {{uc}}.gbx_bng_tessellateexplode(st_geomfromwkt(s.wkt, 27700), '3') t"
+    + "{{src}} s, LATERAL {{uc}}.gbx_bng_tessellateexplode(CAST(st_geomfromwkt(s.wkt, 27700) AS GEOMETRY(ANY)), '3') t"
 ).format()
 
 

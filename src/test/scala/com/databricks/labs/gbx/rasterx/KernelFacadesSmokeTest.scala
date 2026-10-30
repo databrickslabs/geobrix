@@ -7,7 +7,7 @@ import java.util.jar.JarOutputStream
 import java.util.zip.ZipEntry
 
 import com.databricks.labs.gbx.kernels.{BuildInfo, KernelGdal, L1Installer}
-import com.databricks.labs.gbx.kernels.df.ViewshedTowersJvm
+import com.databricks.labs.gbx.kernels.df.{BngTessellateJob, ViewshedTowersJvm}
 import com.databricks.labs.gbx.kernels.uc.BngUc
 import com.databricks.labs.gbx.kernels.udf.{BngEastNorthAsBngUdf, BngTessellateUdf, RetileKernel, RstMergeArrayBytesUdf, RstRetileArrayBytesUdf, RstRetileCountBytesUdf, RstRetilePartBytesUdf, RstTransformCrsBytesUdf}
 import com.databricks.labs.gbx.rasterx.expressions.agg.mvp.BngRasterizeCellsBytesUdf
@@ -256,6 +256,15 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         assert(f.call(null, 3, false) == null && f.call(offset, null, false) == null)
         assert(f.call(offset.getBytes("UTF-8"), 3, false) == null) // bytes that are not a geometry: DATA, NULL
         assert(intercept[Exception](f.call(offset, "3km", false)).getMessage.contains("3km"))
+    }
+
+    test("BngTessellateJob tessellates a polygon column in one mapPartitions") {
+        // 2800 x 800 m, offset 100 m into the cells it covers: three 1 km border cells
+        val poly = "POLYGON((530100 180100, 532900 180100, 532900 180900, 530100 180900, 530100 180100))"
+        val polys = spark.createDataFrame(Seq(Tuple1(poly))).toDF("wkt")
+        val rows = BngTessellateJob.transform(spark, polys, 3).collect()
+        assert(rows.map(_.getString(0)).toSet == Set("TQ3080", "TQ3180", "TQ3280"))
+        assert(rows.forall(r => !r.getBoolean(1)) && math.abs(rows.map(_.getDouble(2)).sum - 2800.0 * 800.0) < 1e-6)
     }
 
     test("the retile facades cut windows from bytes") {

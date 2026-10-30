@@ -153,6 +153,52 @@ def test_mvp_g_uc_handlers(tmp_path):
     assert [m for _, m in ran if m] == []
 
 
+def test_mvp_g_uc_table_function_on_the_warehouse(tmp_path):
+    """The warehouse form of the UC table function: one statement per case answers its rows as one JSON cell, and
+    the oracle judges the rows read back from it (a missing row fails)."""
+    import base64
+    import json
+
+    from shapely import box, to_wkb
+
+    pairs = dict(oracles.uc_sql(oracles.MVP_G, "cat", "sch", str(tmp_path)))
+    assert " FROM `cat`.`sch`.gbx_bng_tessellateexplode(" in pairs["te_offset"]
+    poly = box(530100, 180100, 532900, 181900)
+    rows = [
+        {
+            "cellid": f"TQ{x}{y}",
+            "core": False,
+            "chip": base64.b64encode(to_wkb(poly & box(*c))).decode(),
+        }
+        for x, y, c in [
+            (
+                30 + i,
+                80 + j,
+                (
+                    530000 + 1000 * i,
+                    180000 + 1000 * j,
+                    531000 + 1000 * i,
+                    181000 + 1000 * j,
+                ),
+            )
+            for j in (0, 1)
+            for i in (0, 1, 2)
+        ]
+    ]
+    results = {
+        "te_offset": {"value": json.dumps(rows)},
+        "te_null": {"value": "[]"},
+        "te_wrong_srid_uc": {
+            "error": "gbx_bng_tessellate: SRID 4326. Fix: use the session function"
+        },
+    }
+    ran = [c for c in oracles.MVP_G if c.cid in results]
+    assert oracles.check_uc_results(ran, results, str(tmp_path)) == []
+    results["te_offset"]["value"] = json.dumps(rows[1:])
+    (failure,) = oracles.check_uc_results(ran, results, str(tmp_path))
+    assert failure.startswith("te_offset")
+
+
 def test_the_probe_cache_holds_one_raster_and_confirms_a_hit_against_its_bytes(
     monkeypatch,
 ):

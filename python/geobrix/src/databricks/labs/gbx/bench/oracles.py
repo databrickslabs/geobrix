@@ -2572,10 +2572,35 @@ def uc_sql(cases, catalog: str, schema: str, tmpdir: str) -> List[Tuple[str, str
             for a, p in zip(case.args, fn.params)
         ]
         call = f"`{catalog}`.`{schema}`.{case.fn}({', '.join(lits)})"
+        if fn.kind == "generator":
+            # A UC table function: its rows as ONE JSON array cell (BINARY columns base64), so the statement
+            # still answers one value; check_uc_results reads the rows back.
+            fields = ", ".join(
+                f"'{n}', " + (f"base64(t.{n})" if t.upper() == "BINARY" else f"t.{n}")
+                for n, t in fn.columns
+            )
+            stmts.append(
+                (
+                    case.cid,
+                    f"SELECT to_json(collect_list(named_struct({fields}))) AS out FROM {call} AS t",
+                )
+            )
+            continue
         if fn.returns_uc == "GEOMETRY":
             call = f"st_asewkb({call})"
         stmts.append((case.cid, f"SELECT {call} AS out"))
     return stmts
+
+
+def _uc_rows(fn, value) -> list:
+    """The rows of a UC table function from the JSON array `uc_sql` made of them (BINARY columns decoded)."""
+    binary = [n for n, t in fn.columns if t.upper() == "BINARY"]
+    rows = json.loads(value) if isinstance(value, str) else (value or [])
+    for r in rows:
+        for n in binary:
+            if r.get(n) is not None:
+                r[n] = base64.b64decode(r[n])
+    return rows
 
 
 _CID_MARK = "-- cid: "
@@ -2668,16 +2693,21 @@ def check_uc_results(cases, results: dict, tmpdir: str) -> List[str]:
 
     A UC case with no result is a failure too: a statement that never ran must not pass.
     """
+    from databricks.labs.gbx import manifest
+
+    man = manifest.load()
     failures = []
     by_id = {c.cid: c for c in cases}
     for cid, r in results.items():
         case = by_id[cid]
         args = [resolve_arg(a, tmpdir) for a in case.args]
-        msg = (
-            check_error(case, RuntimeError(r["error"]))
-            if "error" in r
-            else check(case, r["value"], args)
-        )
+        fn = man.functions[case.fn]
+        if "error" in r:
+            msg = check_error(case, RuntimeError(r["error"]))
+        elif fn.kind == "generator":
+            msg = _check_rows(case, _uc_rows(fn, r["value"]), args)
+        else:
+            msg = check(case, r["value"], args)
         if msg:
             failures.append(msg)
     failures += [

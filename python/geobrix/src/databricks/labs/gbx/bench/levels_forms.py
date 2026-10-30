@@ -1023,7 +1023,37 @@ FORMS["G"] = [
         computes=("dedicated", "standard"),
     ),
     _g(TE, "L4", "uc-tvf", "bng_polys", _TE_UC, computes=("serverless", "dedicated")),
+    # form (b): the tessellation as one Scala mapPartitions, called over py4j (no SQL function in between)
+    Form(
+        "G",
+        TE,
+        "JVM-DF",
+        "scala-mapPartitions",
+        "bng_polys",
+        run=_G + "g_tessellate_jvm",
+        computes=("dedicated",),
+        register=False,
+    ),
 ]
+
+
+def g_tessellate_jvm(spark, src):
+    """(n, fp, n_out, df) of `BngTessellateJob.transform` over `src` at resolution 3: the cell count, the same
+    cellid fingerprint as the SQL forms, and the non-NULL cellid count."""
+    from pyspark.sql import DataFrame
+    from pyspark.sql import functions as F
+
+    job = spark._jvm.com.databricks.labs.gbx.kernels.df.BngTessellateJob
+    cells = DataFrame(
+        job.transform(spark._jsparkSession, spark.table(src)._jdf, 3), spark
+    )
+    out = cells.agg(
+        F.count(F.lit(1)),
+        F.sum(F.pmod(F.xxhash64("cellid"), F.lit(2147483647))),
+        F.count("cellid"),
+    )
+    r = out.collect()[0]
+    return r[0], r[1], r[2], out
 
 
 # --- A, aggregates: one form per shape and input ----------------------------------------------------------

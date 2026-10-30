@@ -1010,6 +1010,59 @@ def test_a_local_only_wheel_build_needs_no_sdk_so_it_stays_on_python3(sandbox):
     assert not uv_log.exists() and not venv_calls.exists()
 
 
+_FAILING_SDK = """
+import os
+class NotFound(Exception):
+    pass
+class _Files:
+    def create_directory(self, path):
+        pass
+    def upload(self, path, fh, overwrite):
+        if os.environ.get("FAKE_UPLOAD_FAILS"):
+            raise NotFound("Volume %s does not exist" % path)
+        self.size = len(fh.read())
+    def get_metadata(self, path):
+        return type("M", (), {"content_length": self.size})()
+class WorkspaceClient:
+    def __init__(self, **kw):
+        self.files = _Files()
+"""
+
+
+@pytest.mark.parametrize("log_args", [[], ["--log", "stage.log"]], ids=["no-log", "tee-log"])
+def test_stage_wheel_exits_nonzero_when_the_upload_raises(sandbox, tmp_path, log_args):
+    # A chain that kept going after "NotFound: Volume ... does not exist" asked whether the command
+    # swallows it. The real script runs on a stub SDK whose upload raises; with and without the
+    # `| tee` of --log the command's own status is the script's, never tee's.
+    stub = tmp_path / "stub"
+    (stub / "databricks" / "sdk").mkdir(parents=True)
+    (stub / "databricks" / "__init__.py").write_text("")
+    (stub / "databricks" / "sdk" / "__init__.py").write_text(_FAILING_SDK)
+    python, _ = _venv_python(sandbox, sdk=True)
+    python.write_text(
+        f'#!/bin/sh\nPYTHONPATH="{stub}" exec "{sys.executable}" "$@"\n'
+    )  # a venv python that has the stub SDK
+    tests = sandbox.root / "examples" / "tests"
+    tests.mkdir(parents=True)
+    for name in ("stage_wheel_to_volume.py", "_artifact_volume.py", "_cli.py"):
+        shutil.copy(REPO_ROOT / "examples" / "tests" / name, tests / name)
+    dist = sandbox.root / "dist" / "env6"
+    dist.mkdir(parents=True)
+    (dist / "geobrix-0.6.0+env6-py3-none-any.whl").write_bytes(b"wheel")
+    args = ["--env", "6", "--profile", "p", *log_args]
+
+    res = sandbox.run("gbx-data-stage-wheel.sh", *args, FAKE_UPLOAD_FAILS="1")
+
+    assert res.returncode != 0, res.output
+    assert "NotFound: Volume" in res.output and "does not exist" in res.output, res.output
+    assert "Done:" not in res.output
+
+    res = sandbox.run("gbx-data-stage-wheel.sh", *args)  # the same run with a working upload
+
+    assert res.returncode == 0, res.output
+    assert "Done: /Volumes/main/default/geobrix_samples/geobrix-0.6.0+env6-py3-none-any.whl" in res.output
+
+
 def test_stage_wheel_profile_reaches_the_launcher_and_an_unknown_option_is_refused(sandbox):
     # --profile was dropped by a catch-all `*) shift`, so staging used the config file's profile
     # while the caller believed it chose one. It must set the launcher's profile, and anything the

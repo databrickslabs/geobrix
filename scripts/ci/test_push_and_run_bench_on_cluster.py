@@ -205,6 +205,28 @@ def test_on_demand_without_a_job_cluster_is_refused(launch, sdk, other):
     assert sdk.submits == []
 
 
+@pytest.mark.parametrize(
+    "extra, env",
+    [(["--env-version", "5"], 5), (["--env-version", "6"], 6)],
+)
+def test_a_custom_runtime_takes_the_env_family_from_env_version(launch, sdk, extra, env):
+    """A DCS image's spark_version (custom:...) has no leading runtime number: --env-version decides."""
+    args = ("--new-cluster", "--spark-version", "custom:dcs-image", "--zarr-only", "--no-wait", *extra)
+    assert launch(*args, "--run-id", "t6") == 0
+    (task,) = sdk.submits[0]["tasks"]
+    assert task.new_cluster.spark_version == "custom:dcs-image"
+    (_, notebook), = sdk.uploads
+    assert f"+env{env}-py3-none-any.whl" in json.dumps(notebook)
+
+
+def test_a_custom_runtime_without_env_version_is_one_clear_line_not_a_traceback(launch, sdk, capsys):
+    args = ("--new-cluster", "--spark-version", "custom:dcs-image", "--zarr-only", "--no-wait", "--run-id", "t7")
+    assert launch(*args) == 2
+    err = capsys.readouterr().err
+    assert "custom:dcs-image" in err and "--env-version" in err and "Traceback" not in err
+    assert sdk.submits == [] and sdk.uploads == []
+
+
 def test_a_finished_run_removes_its_notebook(launch, sdk):
     assert launch("--serverless", "--zarr-only", "--run-id", "t4") == 0
 

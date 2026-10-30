@@ -138,10 +138,19 @@ def _unknown_bng_names(functions: str) -> list:
     return [x for x in _function_names(functions) if x.startswith("bng_") and x not in known]
 
 
-def env_of_runtime(spark_version: str) -> int:
+def env_of_runtime(spark_version: str, fallback=None) -> int:
     """The env wheel family of a Databricks Runtime ``spark_version`` key: 6 for DBR 19 and later, else 5
-    (DBR 17.3 and 18)."""
-    return 6 if int(spark_version.split(".", 1)[0]) >= 19 else 5
+    (DBR 17.3 and 18). A key with no leading runtime number (a ``custom:`` DCS image) takes ``fallback``
+    (``--env-version``); with none given, ValueError names the key and the flag."""
+    try:
+        return 6 if int(spark_version.split(".", 1)[0]) >= 19 else 5
+    except ValueError:
+        if fallback is not None:
+            return int(fallback)
+        raise ValueError(
+            f"ERROR: cannot tell the env wheel from spark_version {spark_version!r}: "
+            "pass --env-version 5|6 (or a wheel with GBX_BUNDLE_WHEEL_VOLUME_PATH)."
+        ) from None
 
 
 def _arg(flag: str, default: str) -> str:
@@ -1214,7 +1223,14 @@ def main() -> int:
         if serverless:
             env = int(env_version)
         else:
-            env = env_of_runtime(spark_version if new_cluster else w.clusters.get(cluster_id).spark_version)
+            try:
+                env = env_of_runtime(
+                    spark_version if new_cluster else w.clusters.get(cluster_id).spark_version,
+                    env_version if "--env-version" in sys.argv else None,
+                )
+            except ValueError as exc:
+                print(exc, file=sys.stderr)
+                return 2
         wheel = f"{volroot}/geobrix-{ver}+env{env}-py3-none-any.whl"
         cfg["wheel"] = wheel
 

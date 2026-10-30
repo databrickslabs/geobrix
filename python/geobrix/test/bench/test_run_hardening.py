@@ -197,3 +197,23 @@ def test_no_levels_input_is_built_with_a_raw_create_dataframe():
             and getattr(n.func, "attr", "") == "createDataFrame"
         ]
         assert raw == [], (name, raw)
+
+
+def test_a_few_rows_of_tiles_come_from_the_first_files_not_a_limit_over_the_whole_directory(
+    spark_session_local, tmp_path, monkeypatch
+):
+    """`limit(16)` over the corpus reads every file before it keeps 16: minutes for the smoke's input on Serverless."""
+    (tmp_path / "rows").mkdir()
+    files = [str(tmp_path / "rows" / f"t{i}.tif") for i in range(5)]
+    monkeypatch.setattr(lf, "_corpus_rows", lambda corpus: files)
+    seen = []
+
+    def column(spark, pairs, virtual, keyed):
+        seen.append((pairs, virtual, keyed))
+        return spark.createDataFrame([(1,)], "tile int")
+
+    monkeypatch.setattr(lf, "_tile_column", column)
+    src = lf.INPUTS["tiles_virt"](spark_session_local, 3, str(tmp_path), None)
+    assert src and seen == [
+        ([("0", files[0]), ("1", files[1]), ("2", files[2])], True, False)
+    ]

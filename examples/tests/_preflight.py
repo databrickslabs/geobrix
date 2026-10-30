@@ -15,6 +15,7 @@ import hashlib
 import os
 import pathlib
 import re
+import subprocess
 import sys
 from typing import List, Optional, Sequence
 
@@ -107,6 +108,16 @@ def local_corpus(root) -> Optional[str]:
     src_root = os.environ.get("GBX_SOURCE_ROOT")
     if src_root:
         candidates.append(str(pathlib.Path(src_root) / "sample-data/Volumes/main/default/bench-corpus"))
+    # a linked worktree has an empty mount point: the main checkout's corpus is the one on disk
+    try:
+        common = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            capture_output=True, text=True, timeout=20,
+        ).stdout.strip()  # fmt: skip
+        if common:
+            candidates.append(str(pathlib.Path(common).parent / "sample-data/Volumes/main/default/bench-corpus"))
+    except (OSError, subprocess.SubprocessError):
+        pass
     return next((c for c in candidates if c and (pathlib.Path(c) / "rows").is_dir()), None)
 
 

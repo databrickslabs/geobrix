@@ -118,6 +118,9 @@ def _bng_polys(spark, n, corpus, schema):
     )
 
 
+SMALL_INPUT_ROWS = 64  # a tile input of at most this many rows is built from the first files, not by a limit
+
+
 def _tiles(virtual: bool, subdir: str = "rows", name: Optional[str] = None):
     """The corpus tiles under `subdir` as a one-column `tile` table (`name` labels the cached table)."""
 
@@ -128,10 +131,24 @@ def _tiles(virtual: bool, subdir: str = "rows", name: Optional[str] = None):
         from databricks.labs.gbx.ds.register import register
 
         register(spark)  # the light raster reader
+        label = f"mvp_in_tiles_{name or ('virt' if virtual else 'mat')}_v{RECIPE_VERSION}_{n}"
+        first = (
+            _corpus_rows(corpus) if subdir == "rows" and n <= SMALL_INPUT_ROWS else None
+        )
+        if first:
+            # A few rows (the smoke): the first n files, not `limit(n)` over the whole directory, which reads every
+            # file (one row each) before it keeps n of them: minutes for a table of 16 tiles.
+            pairs = [(str(i), p) for i, p in enumerate(first[:n])]
+            return _table(
+                spark,
+                schema,
+                label,
+                lambda: _tile_column(spark, pairs, virtual, keyed=False),
+            )
         return _table(
             spark,
             schema,
-            f"mvp_in_tiles_{name or ('virt' if virtual else 'mat')}_v{RECIPE_VERSION}_{n}",
+            label,
             lambda: spark.read.format("raster_gbx")
             .option("virtualTiles", str(virtual).lower())
             .load(rows)

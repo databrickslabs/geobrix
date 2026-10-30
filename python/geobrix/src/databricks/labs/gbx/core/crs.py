@@ -58,6 +58,36 @@ def _epsg_codes() -> frozenset:
     return _authority_codes("EPSG")
 
 
+@lru_cache(maxsize=None)
+def _crs_codes(authority: str) -> frozenset:
+    """Every CRS code (any kind, vertical included) ``authority`` has in PROJ's database, upper-cased."""
+    from pyproj.database import get_codes
+    from pyproj.enums import PJType
+
+    try:
+        return frozenset(
+            c.upper() for c in get_codes(authority, PJType.CRS, allow_deprecated=True)
+        )
+    except Exception:  # an authority PROJ does not have
+        return frozenset()
+
+
+def _authority_known(value: str) -> None:
+    """Raise unless each AUTHORITY:CODE ``value`` names (each part of a compound one) is a CRS in PROJ's database.
+    GDAL's parse, which rasterio's ``from_authority`` uses, reads a code it cannot resolve as a file name; the JVM
+    parses with file and network access off, so both tiers refuse it."""
+    auth, _, rest = value.partition(":")
+    for part in rest.lstrip(":").split("+"):
+        a, sep, code = part.partition(":")
+        a, code = (a, code.lstrip(":")) if sep else (auth, part)
+        if code.upper() not in _crs_codes(a.upper()):
+            raise ValueError(
+                f"resolve_crs: '{value}' names {a}:{code}, which is no CRS in PROJ's database; GDAL would read it "
+                "as a file name, and a CRS value is never read from a file. Fix: pass EPSG:<code> (or another "
+                "AUTHORITY:CODE PROJ knows), an integer SRID, WKT, PROJJSON or a +proj string"
+            )
+
+
 def _esri_codes() -> frozenset:
     return _authority_codes("ESRI")
 
@@ -185,6 +215,7 @@ def resolve_crs(value: Union[int, str]) -> CRS:
     kind = crs_text_kind(value)
     v = value.strip()
     if kind == "auth":
+        _authority_known(v)
         auth, _, code = v.partition(":")
         return CRS.from_authority(auth.upper(), code.lstrip(":"))
     if kind == "wkt":

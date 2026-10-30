@@ -129,6 +129,9 @@ CRS_VALUES = [
     ("EPSG:4326+5773", True, None),
     ("EPSG:4258+5701", True, None),
     ("EPSG:4326+./secret_crs", False, "file"),
+    # an AUTHORITY:CODE PROJ does not know is a file name to GDAL (a planted "GBX:secret_crs" below): refused
+    ("GBX:secret_crs", False, "file"),
+    ("EPSG:4326+GBX:secret_crs", False, "file"),
 ]
 
 
@@ -168,6 +171,7 @@ def test_a_crs_value_never_reaches_a_file_or_the_network(
     """
     secret = tmp_path / "secret_crs"
     secret.write_text(_WKT_32633)  # a planted file the parser must never read
+    (tmp_path / "GBX:secret_crs").write_text(_WKT_32633)  # the same, named as a code
     monkeypatch.chdir(tmp_path)
     value = value.replace("{abs}", str(secret))
     if accepted:

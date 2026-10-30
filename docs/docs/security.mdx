@@ -264,10 +264,11 @@ If your own code consumes Python-pixel VRTs from less-trusted sources
 (e.g. you pull VRT XML from object storage that other principals can
 write to), keep the option `NO` and pre-translate to GTiff. With the
 driver policy on (§ 7), GeoBrix sets `GDAL_VRT_ENABLE_PYTHON=NO` for the
-whole process on both tiers, and a value you set does not apply, so
-`GDAL_VRT_ENABLE_PYTHON=TRUSTED_MODULES` with a narrow
+whole process on both tiers, and a value you set does not apply. On the
+lightweight tier, `GDAL_VRT_ENABLE_PYTHON=TRUSTED_MODULES` with a narrow
 `GDAL_VRT_PYTHON_TRUSTED_MODULES` allowlist works only with the policy
-switched off. See
+switched off; the heavyweight tier keeps the setting `NO` whatever the
+switch, outside its own `combineavg` / `derivedband` calls. See
 [RasterX Function Reference § VRT Python pixel functions](./api/raster-functions#vrt-python-pixel-functions)
 for the full how-to.
 
@@ -327,10 +328,12 @@ whole executor JVM: on dedicated compute, the first GDAL use in each JVM applies
 The heavyweight tier runs on dedicated compute only, and is refused on standard access mode.
 
 GeoBrix sets the policy when it is imported, in the environment GDAL reads when it registers
-its drivers, and completes it at its first GDAL use. Importing GeoBrix changes the process
-environment: it adds the refused drivers to `GDAL_SKIP` (a value you set stays, with the
-refused names added), and sets `GDAL_VRT_ENABLE_PYTHON` and `GDAL_VRT_ENABLE_RAWRASTERBAND` to
-`NO`, replacing a value you set. Subprocesses the process starts inherit these values.
+its drivers, and completes it at its first GDAL use. With the policy on, importing GeoBrix
+changes the process environment: it adds the refused drivers to `GDAL_SKIP` (a value you set
+stays, with the refused names added), and sets `GDAL_VRT_ENABLE_PYTHON` and
+`GDAL_VRT_ENABLE_RAWRASTERBAND` to `NO`, replacing a value you set. Subprocesses the process
+starts inherit these values. With `GBX_GDAL_DRIVER_POLICY=off` set before the import, the
+environment is left as it is.
 
 **Known limitation: a netCDF CRS given as a URL.** A netCDF variable whose `crs` attribute is
 an http(s) URL makes GDAL fetch that URL when the file is opened, and no GDAL setting turns that

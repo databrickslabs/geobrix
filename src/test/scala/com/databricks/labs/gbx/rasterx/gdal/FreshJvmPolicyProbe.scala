@@ -39,6 +39,7 @@ object FreshJvmPolicyProbe {
         }
         println(s"GDAL_SKIP=${show("GDAL_SKIP")}")
         println(s"GDAL_VRT_ENABLE_RAWRASTERBAND=${show("GDAL_VRT_ENABLE_RAWRASTERBAND")}")
+        println(s"GDAL_VRT_ENABLE_PYTHON=${show("GDAL_VRT_ENABLE_PYTHON")}")
         val present = GDALManager.DefaultSkippedDrivers.split(" ").filter(n => gdal.GetDriverByName(n) != null)
         println(s"PRESENT=${present.mkString(",")}")
         println("DONE")

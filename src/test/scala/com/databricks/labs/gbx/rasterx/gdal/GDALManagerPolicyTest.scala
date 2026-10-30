@@ -32,6 +32,9 @@ class GDALManagerPolicyTest extends AnyFunSuite {
             val i = l.indexOf('=')
             l.take(i) -> l.drop(i + 1)
         }.toMap
+        // a GDAL init that failed is a failure of the case; only a JVM that could not load GDAL at all is a precondition
+        val failed = lines.find(_.startsWith("ERROR "))
+        assert(failed.forall(_.contains("UnsatisfiedLinkError")), s"the probe's GDAL init failed: ${failed.getOrElse("")}")
         val done = lines.exists(_ == "DONE")
         assume(done, s"PRECONDITION MISSING: the probe JVM did not finish (is the GDAL JNI on this host?): ${lines.takeRight(3).mkString(" | ")}")
         out
@@ -59,9 +62,11 @@ class GDALManagerPolicyTest extends AnyFunSuite {
     }
 
     test("spark.gdal.GDAL_SKIP cannot un-skip the refused drivers") {
-        val out = probe("raster", Seq("spark.gdal.GDAL_SKIP=", "spark.gdal.GDAL_VRT_ENABLE_RAWRASTERBAND=YES"))
+        val out = probe("raster", Seq("spark.gdal.GDAL_SKIP=", "spark.gdal.GDAL_VRT_ENABLE_RAWRASTERBAND=YES",
+            "spark.gdal.GDAL_VRT_ENABLE_PYTHON=YES"))
         assert(out("GDAL_SKIP") == GDALManager.DefaultSkippedDrivers, s"the conf overrode the policy: ${out("GDAL_SKIP")}")
         assert(out("GDAL_VRT_ENABLE_RAWRASTERBAND") == "NO", "the conf overrode the raw-band setting")
+        assert(out("GDAL_VRT_ENABLE_PYTHON") == "NO", "the conf turned VRT Python pixel functions on")
         assert(out("PRESENT").split(",").filter(_.nonEmpty).toSet.intersect(Refused).isEmpty)
     }
 

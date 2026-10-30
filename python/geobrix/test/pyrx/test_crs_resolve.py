@@ -132,6 +132,23 @@ CRS_VALUES = [
 ]
 
 
+def test_a_crs_object_passes_and_a_parameter_mapping_naming_a_grid_path_is_refused():
+    """resolve_crs takes a CRS as it is, and a mapping of PROJ parameters under the string rule (a grid by path is
+    refused, naming it)."""
+    from rasterio.crs import CRS as RioCRS
+
+    crs = RioCRS.from_epsg(4326)
+    assert C.resolve_crs(crs) is crs
+    with pytest.raises(ValueError, match="/etc/hostname"):
+        C.resolve_crs(
+            {"proj": "longlat", "datum": "WGS84", "nadgrids": "/etc/hostname"}
+        )
+    assert (
+        C.resolve_crs({"proj": "longlat", "datum": "WGS84", "no_defs": True})
+        is not None
+    )
+
+
 def test_a_named_datum_is_the_datum_never_a_planted_file_of_that_name(
     tmp_path, monkeypatch
 ):

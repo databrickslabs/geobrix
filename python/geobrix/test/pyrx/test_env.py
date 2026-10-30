@@ -223,3 +223,86 @@ def test_threads_that_overlap_are_held_to_the_largest_cap_until_the_last_ends(
         assert _cache_max() == large  # the small one has ended; this one still holds
     t.join(10)
     assert _cache_max() == block_cache
+
+
+@pytest.fixture
+def cap_seen(monkeypatch):
+    """``(bytes asked for, cache size inside the block)`` for each ``capped_block_cache`` the
+    sites enter, with the real helper doing the work."""
+    from contextlib import contextmanager
+
+    from databricks.labs.gbx.pyrx.core import analysis
+
+    seen, real = [], _env.capped_block_cache
+
+    @contextmanager
+    def spy(max_bytes):
+        with real(max_bytes):
+            seen.append((max_bytes, _cache_max()))
+            yield
+
+    monkeypatch.setattr(_env, "capped_block_cache", spy)
+    monkeypatch.setattr(analysis, "capped_block_cache", spy)
+    return seen
+
+
+def _small_tif(path, size=64):
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        width=size,
+        height=size,
+        count=1,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=from_origin(0.0, float(size), 1.0, 1.0),
+    ) as dst:
+        dst.write(np.arange(size * size, dtype="float32").reshape(1, size, size))
+    return str(path)
+
+
+@pytest.mark.parametrize(
+    "site", ["reader window", "reader clip", "stac download", "cog file"]
+)
+def test_every_site_that_caps_the_block_cache_applies_the_cap(
+    tmp_path, cap_seen, block_cache, site
+):
+    """Each of the four places that bound GDAL's block cache asks for the size the budget names
+    and has it in force while it works; deleting the wrapper from one fails its row."""
+    from databricks.labs.gbx.pyrx.core import analysis, budget
+
+    src = _small_tif(tmp_path / "src.tif")
+    streaming = budget.block_cache_bytes(
+        "auto", ceiling=budget.STREAMING_BLOCK_CACHE_MAX
+    )
+    if site == "cog file":
+        analysis.cog_convert_file(src, str(tmp_path / "out.tif"), blocksize=256)
+        want = streaming
+    elif site == "stac download":
+        from databricks.labs.gbx.stac._download import windowed_download
+
+        windowed_download(src, str(tmp_path / "win.tif"), (2, 2, 5, 6))
+        want = budget.block_cache_bytes("auto")
+    else:
+        from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+        # tiles with bytes; a whole file would pass through without a decode, so cut windows
+        options = {"path": src, "virtualTiles": "false", "tileSize": "32"}
+        if site == "reader clip":
+            options = {
+                "path": src,
+                "virtualTiles": "false",
+                "clipPolygons": "POLYGON((10 10, 40 10, 40 40, 10 40, 10 10))",
+            }
+        reader = RasterGbxReader(options)
+        assert [row for p in reader.partitions() for row in reader.read(p)]
+        want = budget.block_cache_bytes(reader.strategy)
+    assert cap_seen and set(cap_seen) == {
+        (want, want)
+    }  # once per window for the reader
+    assert _cache_max() == block_cache

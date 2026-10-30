@@ -31,7 +31,9 @@ from rasterio.io import MemoryFile
 from databricks.labs.gbx.pyrx._env import capped_block_cache
 from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core.budget import (
+    STREAMING_BLOCK_CACHE_MAX,
     _cgroup_task_limit_bytes,
+    block_cache_bytes,
     decoded_budget_bytes,
 )
 from databricks.labs.gbx.pyrx.core.local_temp import (
@@ -370,10 +372,11 @@ def cog_convert_file(
     # Merge authority options (codec + level + predictor); RAW is compress=none alone.
     creation.update(_comp_opts)
 
-    # 4 MiB of block cache, a streaming copy's: the RSS of this conversion and of the streamed merge
-    # built on it grows with the cache (an 8192 x 8192 float32 raster: ~36 MiB over the baseline at
-    # 4 MiB, ~310 MiB at 200 MiB; the merge's peak passes its bound at 4 MiB and fails past 8 MiB).
-    with capped_block_cache(4 * 1024 * 1024):
+    # A streaming copy's block cache: kept small, because the memory of this copy (and of the
+    # streamed merge built on it) grows with it.
+    with capped_block_cache(
+        block_cache_bytes("auto", ceiling=STREAMING_BLOCK_CACHE_MAX)
+    ):
         rio_shutil.copy(src_path, dst_path, driver="COG", **creation)
 
 

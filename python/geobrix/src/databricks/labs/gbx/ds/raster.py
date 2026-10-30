@@ -1385,7 +1385,7 @@ class RasterGbxReader(DataSourceReader):
             from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
 
             with _RASTER_STAGE.use(partition.file_path) as local_path:
-                with _env.capped_block_cache(128 * 1024 * 1024):
+                with _env.capped_block_cache(budget.block_cache_bytes(self.strategy)):
                     with open_raster(local_path) as ds:
                         tile_crs = crs_to_canonical(ds.crs)
                         _cellid, win_bytes, meta = _encode.encode_tile(
@@ -1467,7 +1467,7 @@ class RasterGbxReader(DataSourceReader):
         from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
 
         with _RASTER_STAGE.use(partition.file_path) as local_path:
-            with _env.capped_block_cache(128 * 1024 * 1024):
+            with _env.capped_block_cache(budget.block_cache_bytes(self.strategy)):
                 with open_raster(local_path) as ds:
                     tile_crs = crs_to_canonical(ds.crs)
                     cellid, raster_bytes, meta = _encode.encode_tile(

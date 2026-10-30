@@ -101,6 +101,32 @@ def decoded_budget_bytes(strategy: str) -> int:
     return _BUDGETS[s]
 
 
+# GDAL's raster block cache, for the sites that cap it (the raster reader's opens, the STAC window
+# download, the COG file conversion; all through ``_env.capped_block_cache``). Left alone it is a
+# share of the machine's RAM, which on a Serverless task is far more than the task may hold.
+# Those sites take a share of the tile budget instead: sequential reads of one window need to keep a
+# few blocks, not the window, so 1/16 of the decoded bytes a tile may take, and never more than
+# _BLOCK_CACHE_MAX. The streaming COG copy passes a lower ceiling (STREAMING_BLOCK_CACHE_MAX):
+# the memory of that copy, and of the streamed merge built on it, grows with its cache.
+_BLOCK_CACHE_SHARE = 16
+_BLOCK_CACHE_MAX = 128 * _MIB
+STREAMING_BLOCK_CACHE_MAX = 4 * _MIB
+
+
+def block_cache_bytes(
+    strategy: str = "auto", *, ceiling: int = _BLOCK_CACHE_MAX
+) -> int:
+    """Size in bytes for GDAL's block cache in a block of work that reads one tile.
+
+    ``strategy`` is the one :func:`decoded_budget_bytes` takes. ``none`` (no tile splitting)
+    says nothing about memory, so it is sized for the runtime it runs on (``auto``).
+    """
+    s = resolve_strategy(strategy)
+    if s == "none":
+        s = runtime_kind()
+    return min(int(ceiling), decoded_budget_bytes(s) // _BLOCK_CACHE_SHARE)
+
+
 @dataclass(frozen=True)
 class LayoutPlan:
     tiles: List[Tuple[int, int, int, int]]  # (col_off, row_off, w, h)

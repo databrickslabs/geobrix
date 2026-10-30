@@ -830,7 +830,8 @@ _CACHE_BEFORE: Optional[int] = None
 def capped_block_cache(max_bytes: int):
     """Run the block with GDAL's raster block cache capped at *max_bytes* BYTES, then put back
     the size it had. A cap never raises a cache that is already smaller (a cluster or a user may
-    have lowered it): the block runs at ``min(size found, max_bytes)``.
+    have lowered it): the block runs at ``min(size found, max_bytes)``. Sizes: see
+    ``budget.block_cache_bytes``.
 
     Do not cap it with ``rasterio.Env(GDAL_CACHEMAX=...)``: rasterio hands that value to
     ``GDALSetCacheMax64``, which counts bytes (``GDAL_CACHEMAX=128`` is a 128-byte cache, where

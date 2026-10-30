@@ -1005,6 +1005,40 @@ def test_restore_refuses_a_read_only_registration_and_a_base_that_moved(
     assert H.read_variable(spark_delta, table, "t2m").shape[0] == 48  # still reads
 
 
+def test_restore_does_not_call_a_base_object_changed_when_it_cannot_reach_it(
+    spark_delta, drop, tmp_path, no_hooks, monkeypatch
+):
+    """The same mount-down case for the base store of a registration: a stat that fails
+    with EBUSY must not read as "changed since" (which sends the caller to a sync)."""
+    store, table = _registered(spark_delta, drop, tmp_path, "mv")
+    before = M.snapshot(spark_delta, table).version
+    shard = store / "t2m" / "c" / "0" / "0" / "0"
+    stat = os.stat(shard)
+    os.utime(shard, ns=(stat.st_atime_ns, stat.st_mtime_ns + 5_000_000_000))
+    gbx_zarr_sync(spark_delta, table)  # records the new identity: `before` is now stale
+    latest = _latest(spark_delta, table)
+    real = os.stat
+
+    def down(path, *args, **kw):
+        if str(path).startswith(str(store)):
+            raise OSError(errno.EBUSY, os.strerror(errno.EBUSY), str(path))
+        return real(path, *args, **kw)
+
+    monkeypatch.setattr(os, "stat", down)
+    with pytest.raises(ZarrAccessUnavailable) as e:
+        gbx_zarr_restore(spark_delta, table, version_as_of=before)
+    monkeypatch.undo()
+    assert "changed since" not in str(e.value) and os.strerror(errno.EBUSY) in str(
+        e.value
+    )
+    assert "Fix: retry when the Volume is reachable" in str(e.value)
+    assert _latest(spark_delta, table) == latest  # nothing was committed
+    with pytest.raises(
+        ZarrVersionUnavailable, match="changed since"
+    ):  # reachable again
+        gbx_zarr_restore(spark_delta, table, version_as_of=before)
+
+
 def _first_write(spark, table, version):
     return spark.sql(
         f"SELECT key FROM {table} WHERE kind = 'commit' AND "

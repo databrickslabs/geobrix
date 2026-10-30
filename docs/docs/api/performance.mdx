@@ -24,7 +24,7 @@ _Last reviewed for GeoBrix **v0.5.2**, which adds lightweight LiDAR (`lidar_gbx`
 :::note Key takeaways
 - **Deferred edits run 1.5–12× faster on virtual tiles** — metadata operations (set-CRS/SRID/nodata/band-select) complete without pixel I/O. Chain several deferred edits before a terminal step to materialize once and pay pixel cost only at the end.
 - **Open amortization is the lever** — grouping same-source windows (via `ORDER BY path` or repartitioning) cuts per-tile open cost from ~multiple-seconds to ~2 ms per window. Without amortization (per-tile-open), stream reads grow expensive with file size; FUSE becomes viable.
-- **FILE-on ≈ FILE-off for reads on dedicated clusters** — FILE is a governance/access mechanism, not a per-tile read optimization. Amortization (grouped executor) is the performance lever. Serverless FILE support is coming soon.
+- **FILE-on ≈ FILE-off for reads on dedicated clusters** — FILE is a governance/access mechanism, not a per-tile read optimization. Amortization (grouped executor) is the performance lever. FILE is available on Serverless too, in a workspace with the File type preview.
 - **COG + amortization beats FUSE** — byte-range stream reads are 10–290× faster than FUSE for windowed COGs when opens are amortized. Choose COG format and group by source path for best throughput.
 :::
 
@@ -121,7 +121,7 @@ The GeoBrix writer optionally lays tiles out source-aligned at write time, so th
 
 ### FILE type and `path_mode`
 
-When FILE is available (Databricks Runtime 19 dedicated clusters; coming soon to Serverless), the tile struct's [`path_mode` field](./tile-structure) records how the virtual tile was stored:
+When FILE is available (Databricks Runtime 19 dedicated clusters and Serverless, in a workspace with the File type preview), the tile struct's [`path_mode` field](./tile-structure) records how the virtual tile was stored:
 
 | `path_mode` | Meaning |
 |---|---|
@@ -129,7 +129,7 @@ When FILE is available (Databricks Runtime 19 dedicated clusters; coming soon to
 | `"external"` | FILE EXTERNAL virtual tile — opened via byte-range stream |
 | `"managed"` | FILE MANAGED virtual tile — opened via byte-range stream; lifecycle governed by the table |
 
-On runtimes without FILE support (Serverless today, DBR 17/18), `path_mode` is always `null` and virtual tiles use the FUSE path — correct and unchanged.
+On runtimes without FILE support (DBR 17/18, the Databricks Container Service image, and any compute in a workspace without the File type preview), `path_mode` is always `null` and virtual tiles use the FUSE path — correct and unchanged. Writers default to `file_mode="fuse"`; pass `"auto"` or `"external"` to opt in to FILE.
 
 ---
 

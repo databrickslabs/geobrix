@@ -117,9 +117,8 @@ The decisive factor for virtual-tile read performance is **open amortization** �
 
 ### Supported environments
 
-- **Databricks Runtime 19 dedicated clusters** (single-user, with `fileReferenceCreationMode=MANAGED` in cluster config): FILE engages where the runtime feature-detect succeeds. Where it does not, tiles use FUSE automatically.
-- **Databricks Runtime 19 on Serverless:** coming soon.
-- **Local development, CI, Serverless Compute (today), DBR 17/18:** virtual tiles use the traditional FUSE + rasterio path — correct and unchanged.
+- **Databricks Runtime 19 dedicated clusters** (single-user, with `fileReferenceCreationMode=MANAGED` in cluster config) **and Serverless**, in a workspace with the File type preview: FILE engages where the runtime feature-detect succeeds. Where it does not, tiles use FUSE automatically. The default `file_mode` is `fuse`; `"auto"` and `"external"` opt in to FILE.
+- **Local development, CI, DBR 17/18, and compute in a workspace without the preview:** virtual tiles use the traditional FUSE + rasterio path — correct and unchanged.
 
 ## Reader selection surface
 

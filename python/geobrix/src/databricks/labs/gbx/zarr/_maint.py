@@ -1152,12 +1152,19 @@ def _require_exist(files, root: str | None, table: str, version, action: str) ->
             fix=f"the files were vacuumed; {action}",
         )
     if unreachable:
-        f, e = unreachable[0]
-        raise ZarrAccessUnavailable(
-            f"cannot tell whether version {version} of {table} still has its files: "
-            f"{len(unreachable)} of them could not be checked (e.g. {f}: {e.strerror or e})",
-            fix="retry when the Volume is reachable",
-        )
+        raise _not_reachable(table, version, unreachable)
+
+
+def _not_reachable(table: str, version, unreachable) -> ZarrAccessUnavailable:
+    """The refusal for files a stat could not check (``(file, OSError)`` pairs): neither
+    gone nor changed is known, so the caller is told to try again, not to sync or restore
+    another version."""
+    f, e = unreachable[0]
+    return ZarrAccessUnavailable(
+        f"cannot tell whether version {version} of {table} still has its files: "
+        f"{len(unreachable)} of them could not be checked (e.g. {f}: {e.strerror or e})",
+        fix="retry when the Volume is reachable",
+    )
 
 
 _GERUND = {"restore": "restoring", "export": "exporting"}
@@ -1184,7 +1191,7 @@ def _require_files(
         f"{verb} a later version or a tag",
     )
     theirs = upserts.filter(pc.and_(named, external))
-    moved = []
+    moved, unreachable = [], []
     for f, recorded in sorted(
         set(
             zip(
@@ -1194,8 +1201,11 @@ def _require_files(
     ):
         try:
             st = os.stat(os.path.join(props.root, f))
-        except OSError:
-            moved.append(f)
+        except (FileNotFoundError, NotADirectoryError):
+            moved.append(f)  # an object that is not there has not stayed what it was
+            continue
+        except OSError as e:  # EBUSY with the mount down: not a verdict on the object
+            unreachable.append((f, e))
             continue
         now = identity_of(st.st_mtime_ns // 1_000_000, st.st_size)
         if recorded is not None and not identities_match(recorded, now):
@@ -1208,6 +1218,8 @@ def _require_files(
             fix=f"run gbx_zarr_sync({table!r}) to record the store as it is now, then "
             f"{verb} a later version",
         )
+    if unreachable:
+        raise _not_reachable(table, version, unreachable)
 
 
 def gbx_zarr_restore(

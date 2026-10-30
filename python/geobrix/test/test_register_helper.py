@@ -183,3 +183,26 @@ def test_overlapping_registrations_each_carry_their_own_switch_and_wrap_nothing_
     }
     assert got["user_fn"] is user_fn
     assert _Registry.register is original and "register" not in vars(spark.udf)
+
+
+def test_connect_detection_sees_the_session_behind_the_registrars_proxy(monkeypatch):
+    """A registrar gets the carrying session proxy; telling Spark Connect from a classic session (by the session's
+    type) still judges the session behind it."""
+    from databricks.labs.gbx import _gdal_policy
+    from databricks.labs.gbx.ds import file_gbx
+    from databricks.labs.gbx.manager import capabilities
+
+    monkeypatch.delenv("GBX_STREAM_MAX_BYTES", raising=False)
+    monkeypatch.delenv("GBX_LRU_MAX_BYTES", raising=False)
+
+    class ConnectSession:
+        pass
+
+    ConnectSession.__module__ = "pyspark.sql.connect.session"
+    real = ConnectSession()
+    proxy = _gdal_policy.carrying_session(real, allowed=False)
+    assert capabilities.is_connect(real) and capabilities.is_connect(proxy)
+    assert file_gbx._connect_aware_lru_sizing(
+        proxy
+    ) == file_gbx._connect_aware_lru_sizing(real)
+    assert file_gbx._connect_aware_lru_sizing(real) != file_gbx._lru_sizing(False)

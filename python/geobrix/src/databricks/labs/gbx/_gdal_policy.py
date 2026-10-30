@@ -342,6 +342,12 @@ class _CarryingSession:
         return getattr(self._spark, name)
 
 
+def real_session(spark):
+    """The session behind a registrar's ``carrying_session`` proxy (any other value as it is): what a check of the
+    session's type (Spark Connect or classic) must judge."""
+    return spark._spark if isinstance(spark, _CarryingSession) else spark
+
+
 def carrying_session(spark, allowed: Optional[bool] = None):
     """``spark`` for the registrars: each function they register through its ``udf`` / ``udtf`` carries the
     driver's switch (read now, unless ``allowed`` is given). The one point where they hand their functions to Spark.
@@ -507,40 +513,48 @@ def state() -> Dict:
     return activate()
 
 
-# The pyogrio reads that open a path (their first argument): through ``pyogrio()`` each is judged by the remote-path
-# gate first.
-_VECTOR_READS = (
-    "read_arrow",
-    "open_arrow",
-    "read_info",
-    "read_bounds",
-    "read_dataframe",
-    "list_layers",
-    "read",  # pyogrio.raw.read
-)
+# A pyogrio entry point whose first parameter is one of these takes a path: through ``pyogrio()`` each is judged by
+# the remote-path gate first, in every submodule (``core``, ``raw``, ``geopandas`` ...).
+_PATH_PARAMS = frozenset({"path_or_buffer", "path", "path_or_fp"})
+
+
+def _takes_a_path(func) -> bool:
+    import inspect
+
+    try:
+        params = list(inspect.signature(func).parameters)
+    except (
+        TypeError,
+        ValueError,
+    ):  # no signature to read: judged as one that may take a path
+        return True
+    return bool(params) and params[0] in _PATH_PARAMS
 
 
 class _GatedPyogrio:
-    """pyogrio as GeoBrix's vector reads see it: each read of a path (``_VECTOR_READS``) is judged by the remote-path
-    gate first; everything else is pyogrio's own."""
+    """pyogrio as GeoBrix's vector reads see it: every entry point that takes a path (``_takes_a_path``), in the
+    module and in each of its submodules, judges the path with the remote-path gate first; everything else is
+    pyogrio's own."""
 
     def __init__(self, module):
         self._module = module
 
     def __getattr__(self, name):
         attr = getattr(self._module, name)
-        if name == "raw":  # pyogrio.raw's reads are judged the same way
+        if isinstance(
+            attr, types.ModuleType
+        ):  # pyogrio.core, .raw, .geopandas ...: judged the same way
             return _GatedPyogrio(attr)
-        if name not in _VECTOR_READS:
+        if not callable(attr) or isinstance(attr, type) or not _takes_a_path(attr):
             return attr
 
         @functools.wraps(attr)
-        def read(path_or_buffer, *args, **kwargs):
+        def gated(path_or_buffer, *args, **kwargs):
             if isinstance(path_or_buffer, (str, os.PathLike)):
                 data_path(path_or_buffer, "a vector file")
             return attr(path_or_buffer, *args, **kwargs)
 
-        return read
+        return gated
 
 
 def pyogrio(remote_ok: bool = False):

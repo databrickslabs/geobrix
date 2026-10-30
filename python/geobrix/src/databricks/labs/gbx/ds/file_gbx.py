@@ -1422,6 +1422,11 @@ def _connect_aware_lru_sizing(spark) -> tuple[int, int, int]:
         - Env overrides win in both: GBX_STREAM_MAX_BYTES, GBX_LRU_MAX_BYTES.
         - Serverless worst case: 4 × 64 MiB = 256 MiB, well under ~1 GB task.
     """
+    from databricks.labs.gbx import _gdal_policy
+
+    spark = _gdal_policy.real_session(
+        spark
+    )  # a registrar's proxy: the session behind it
     is_connect = spark is not None and "connect" in type(spark).__module__
     return _lru_sizing(is_connect)
 

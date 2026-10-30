@@ -33,7 +33,9 @@ class Capabilities:
 
 
 def is_connect(spark) -> bool:
-    return "connect" in type(spark).__module__
+    from databricks.labs.gbx import _gdal_policy
+
+    return "connect" in type(_gdal_policy.real_session(spark)).__module__
 
 
 def is_serverless() -> bool:

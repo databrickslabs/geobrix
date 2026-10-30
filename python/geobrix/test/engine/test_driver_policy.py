@@ -900,10 +900,15 @@ def _through_pyogrio_raw(tmp_path):
     _gdal_policy.pyogrio().raw.read("/vsicurl/http://127.0.0.1:9/a.gpkg")
 
 
+def _through_pyogrio_core(tmp_path):
+    _gdal_policy.pyogrio().core.list_layers("/vsicurl/http://127.0.0.1:9/a.gpkg")
+
+
 GATED_SITES = {
     "open-data": _through_open_data,
     "pyogrio-read": _through_pyogrio,
     "pyogrio-raw-read": _through_pyogrio_raw,
+    "pyogrio-core-read": _through_pyogrio_core,
     "virtual-tile": _through_open_tile,
     "manifest-row": _through_a_manifest_row,
     "vrt-member": _through_a_vrt_member,
@@ -1222,3 +1227,108 @@ def test_the_vector_decode_carries_the_switch_per_batch_not_across_its_yields(
     assert len(next(batches)) == 1
     assert _gdal_policy._CARRIED.get() is None
     batches.close()
+
+
+# pyogrio's entry points whose first argument is not a path (reviewed): everything else in pyogrio and its submodules
+# takes a path first, and pyogrio() gates it. A new entry point that takes a path under another name fails the row
+# below until it is reviewed here.
+PYOGRIO_NOT_A_PATH = {
+    # GDAL, PROJ and driver setup or introspection
+    *(
+        "GDALEnv",
+        "capture_errors",
+        "contextmanager",
+        "uuid4",
+        "urlparse",
+        "get_versions",
+    ),
+    *(
+        "get_gdal_config_option",
+        "set_gdal_config_options",
+        "get_gdal_data_path",
+        "get_gdal_version",
+    ),
+    *(
+        "get_gdal_version_string",
+        "get_gdal_geos_version",
+        "has_gdal_data",
+        "has_proj_data",
+    ),
+    *("init_gdal_data", "init_proj_data", "list_drivers", "list_drivers_details"),
+    *(
+        "ogr_list_drivers",
+        "ogr_list_drivers_details",
+        "ogr_driver_supports_append",
+        "ogr_driver_supports_open",
+    ),
+    *(
+        "ogr_driver_supports_update",
+        "ogr_driver_supports_vsi",
+        "ogr_driver_supports_write",
+    ),
+    *(
+        "vsi_curl_clear_cache",
+        "ogr_vsi_curl_clear_cache",
+        "ogr_vsi_curl_clear_all_cache",
+    ),
+    *(
+        "_get_driver_metadata_item",
+        "_get_gdal_config_option",
+        "_get_gdal_data_path",
+        "_init_gdal_data",
+    ),
+    *(
+        "_init_proj_data",
+        "_register_drivers",
+        "_register_error_handler",
+        "_set_gdal_config_options",
+    ),
+    # option, metadata and geometry helpers
+    *(
+        "_add_column_metadata",
+        "_mask_to_wkb",
+        "_parse_options_names",
+        "_preprocess_options_key_value",
+    ),
+    *("_preprocess_options_kwargs", "_try_parse_datetime", "_validate_metadata"),
+    # writes: the path, the caller's output, is the second argument
+    *("write_arrow", "write_dataframe"),
+}
+
+
+def _pyogrio_modules():
+    import types
+
+    import pyogrio
+
+    mods = {"pyogrio": pyogrio}
+    for name in dir(pyogrio):
+        sub = getattr(pyogrio, name)
+        if isinstance(sub, types.ModuleType) and sub.__name__.startswith("pyogrio."):
+            mods[name] = sub
+    return mods
+
+
+def test_every_pyogrio_entry_point_that_takes_a_path_is_gated():
+    """Through pyogrio(), every entry point of pyogrio and of each submodule (core, raw, geopandas, the extension
+    modules) that takes a path is the gated one; the rest are the reviewed list above.
+    """
+    import types
+
+    pytest.importorskip("pyogrio")
+    gated_root = _gdal_policy.pyogrio()
+    unreviewed, ungated = [], []
+    for attr, mod in _pyogrio_modules().items():
+        view = gated_root if attr == "pyogrio" else getattr(gated_root, attr)
+        for name in dir(mod):
+            func = getattr(mod, name)
+            if name.startswith("__") or not callable(func):
+                continue
+            if isinstance(func, (type, types.ModuleType)):
+                continue
+            if _gdal_policy._takes_a_path(func):
+                if getattr(view, name) is func:
+                    ungated.append(f"{mod.__name__}.{name}")
+            elif name not in PYOGRIO_NOT_A_PATH:
+                unreviewed.append(f"{mod.__name__}.{name}")
+    assert ungated == [] and unreviewed == [], (ungated, unreviewed)

@@ -416,14 +416,18 @@ def register_floor(spark):
 
     const = _FLOOR
 
-    def floor(
-        e, n, res
-    ):  # no annotations: this module's are strings the UDF cannot resolve
+    def floor(e, n, res):
         return pd.Series(const, index=e.index)
 
-    spark.udf.register(
-        "gbx_bng_floor", F.pandas_udf(floor, StringType(), F.PandasUDFType.SCALAR)
-    )
+    # Type hints as objects, not the strings this module's `from __future__ import annotations` would make: the
+    # pandas UDF reads them to pick the Series -> Series form (no deprecated PandasUDFType argument).
+    floor.__annotations__ = {
+        "e": pd.Series,
+        "n": pd.Series,
+        "res": pd.Series,
+        "return": pd.Series,
+    }
+    spark.udf.register("gbx_bng_floor", F.pandas_udf(floor, StringType()))
 
 
 def floor_bng(spark, src):

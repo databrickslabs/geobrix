@@ -195,6 +195,37 @@ def test_create_refuses_an_existing_table_and_a_missing_root(
         )
 
 
+def test_a_later_write_takes_no_file_mode_but_the_stores_own(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """``file_mode`` belongs to ``create`` (None there means "fuse"). A later write follows
+    the store's recorded mode: given nothing or that mode it is accepted, given any other
+    (``"auto"`` included) it raises with a Fix, and nothing is committed."""
+    table, _, _ = _create(spark_delta, drop, tmp_path)  # file_mode None: fuse
+    patch = np.full((12, 5, 6), 3.0, dtype="float32")
+    before = spark_delta.sql(f"DESCRIBE HISTORY {table} LIMIT 1").first()["version"]
+    for other in ("auto", "external"):
+        with pytest.raises(ValueError, match="file_mode.*'fuse'") as e:
+            gbx_zarr_write(
+                _blocks(spark_delta, ("t2m", (0, 0, 0), patch)),
+                table,
+                mode="update",
+                file_mode=other,
+            )
+        assert "Fix:" in str(e.value)
+    assert (
+        spark_delta.sql(f"DESCRIBE HISTORY {table} LIMIT 1").first()["version"]
+        == before
+    )
+    for given in (None, "fuse"):
+        gbx_zarr_write(
+            _blocks(spark_delta, ("t2m", (0, 0, 0), patch)),
+            table,
+            mode="update",
+            file_mode=given,
+        )
+
+
 def test_create_stores_no_row_for_a_chunk_of_fill(
     spark_delta, drop, tmp_path, no_hooks
 ):

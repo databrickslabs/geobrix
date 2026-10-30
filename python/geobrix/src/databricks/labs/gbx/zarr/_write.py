@@ -3046,7 +3046,7 @@ def gbx_zarr_write(
     chunks="balanced",
     shards=None,
     codecs=None,
-    file_mode: str = "fuse",
+    file_mode: str | None = None,
     retain: str = "7 days",
     write_id: str | None = None,
     access: str = "auto",
@@ -3073,13 +3073,13 @@ def gbx_zarr_write(
       (``None`` computes them, a dict sets some, ``False`` means none) and ``codecs`` (the
       inner chunk's codec chain, as Zarr v3 codec documents or zarr codec objects; default
       ``bytes`` + ``zstd`` level 3 + ``crc32c``) lay out each array; coordinates are one
-      unsharded chunk. ``file_mode`` is ``"fuse"`` (the default: the manifest keeps path strings, so
-      the store reads on every compute), ``"auto"`` (``"external"`` on a runtime with the
-      File type preview, Serverless included, ``"fuse"`` elsewhere) or ``"external"`` (FILE
-      EXTERNAL values, governed with the table; needs the preview, ``ZarrUnsupported``
-      otherwise). ``"managed"`` is not
-      available in this release: Delta VACUUM does not reclaim a managed file's bytes. ``retain``
-      is the store's.
+      unsharded chunk. ``file_mode`` is ``None`` or ``"fuse"`` (the default: the manifest keeps
+      path strings, so the store reads on every compute), ``"auto"`` (``"external"`` on a
+      runtime with the File type preview, Serverless included, ``"fuse"`` elsewhere) or
+      ``"external"`` (FILE EXTERNAL values, governed with the table; needs the preview,
+      ``ZarrUnsupported`` otherwise). ``"managed"`` is not available in this release: Delta
+      VACUUM does not reclaim a managed file's bytes. ``retain`` is the store's. Later
+      writes follow the store's recorded ``file_mode``: pass none, or that one.
     - ``"append"``: extend along ``append_dim`` (default: the first dimension labelled by
       CF times). The input must carry that dimension's labels, all after the store's last;
       on a regular axis they land at their step (so appends may arrive out of order), else
@@ -3201,7 +3201,6 @@ def gbx_zarr_write(
                 ("chunks", chunks, "balanced"),
                 ("shards", shards, None),
                 ("codecs", codecs, None),
-                ("file_mode", file_mode, "fuse"),
                 ("retain", retain, "7 days"),
             )
             if v != default
@@ -3236,6 +3235,12 @@ def gbx_zarr_write(
                 fix="create the store with mode='create' (or register an existing one)",
             )
         props = M.read_props(spark, target, need_file=True)
+        if file_mode is not None and file_mode != props.file_mode:
+            raise ValueError(
+                f"file_mode applies to mode='create' only: {target} keeps its files in "
+                f"file_mode {props.file_mode!r}, and {file_mode!r} was given. Fix: drop "
+                "file_mode, or pass the store's own."
+            )
         plan = _plan_existing(
             spark,
             target,
@@ -3261,7 +3266,9 @@ def gbx_zarr_write(
         )
     _check_new_root(data_root, owner)
     # the data root is the filespace of a managed store
-    fm = resolve_file_mode(spark, file_mode, has_filespace=True)
+    fm = resolve_file_mode(
+        spark, "fuse" if file_mode is None else file_mode, has_filespace=True
+    )
     require_geobrix_files(target, fm, "write", new=True)  # before a marker is claimed
     inp = _create_input(spark, data, tiles, variables)
     plan = _plan_create(target, write_id, data_root, inp, chunks, shards, codecs)

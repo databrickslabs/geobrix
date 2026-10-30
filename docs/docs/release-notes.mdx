@@ -1041,24 +1041,26 @@ formats.
 
 - **The default `file_mode` is `"fuse"`, so a Zarr store reads from every compute.**
   `gbx_zarr_write` and `gbx_zarr_register` keep path strings in the manifest unless you pass
-  `file_mode="auto"` or `"external"`.
+  `file_mode="auto"` or `"external"`. Only `create` takes a `file_mode`: a later
+  `gbx_zarr_write` follows the store's own, and raises if you pass a different one.
 - **`file_mode="external"` is available where the File type preview is on.** A Zarr store made
   or registered on a Databricks Runtime 19 dedicated cluster (single-user, with
   `fileReferenceCreationMode=MANAGED` in the cluster config) in a workspace with the preview
   keeps FILE EXTERNAL references in its manifest, governed with the table, when you ask for
   `file_mode="external"`. `file_mode="auto"` picks it on any compute that supports FILE
-  values, Serverless included where the workspace has the preview.
-  On the Databricks Container Service image and where the preview is off, `auto`
-  keeps path strings (`"fuse"`). Spark cannot hash a FILE value, so leave the manifest's `file`
-  column out of a `hash(*)` or a `GROUP BY`.
+  values, Serverless included where the workspace has the preview. On the Databricks
+  Container Service image and where the preview is off, `auto` keeps path strings
+  (`"fuse"`). Spark cannot hash a FILE value, so leave the manifest's `file` column out of
+  a `hash(*)` or a `GROUP BY`.
 - **A Zarr store made in FILE mode needs FILE-enabled compute to read, write and maintain it.**
-  Its manifest holds FILE values, which the Databricks Container Service image and compute in a
-  workspace without the preview cannot commit, so `gbx_zarr_read`, `gbx_zarr_write`, `gbx_zarr_sync`, `gbx_zarr_export` and
-  the maintenance functions stop there with a `ZarrUnsupported` that says so, before they
-  write anything. To move a FILE store there, copy it with `gbx_zarr_export(method="copy")` on a
-  cluster that has FILE and register the copy with `file_mode="fuse"`. FILE mode
-  also makes registering slower: in a measured run, registering 20,000 objects took 34.5 s with
-  path strings and 106.7 s with FILE references (about 3 times, 3.6 ms more per object).
+  Its manifest holds FILE values, which the Databricks Container Service image and compute in
+  a workspace without the preview cannot commit, so `gbx_zarr_read`, `gbx_zarr_write`,
+  `gbx_zarr_sync`, `gbx_zarr_export` and the maintenance functions stop there with a
+  `ZarrUnsupported` that says so, before they write anything. To move a FILE store there,
+  copy it with `gbx_zarr_export(method="copy")` on a cluster that has FILE and register the
+  copy with `file_mode="fuse"`. FILE mode also makes registering slower: in a measured run,
+  registering 20,000 objects took 34.5 s with path strings and 106.7 s with FILE references
+  (about 3 times, 3.6 ms more per object).
 - **`file_mode="managed"` is not available in 0.6.0.** Delta `VACUUM`, a deletion-vector delete
   and `REORG TABLE ... APPLY (PURGE)` never reclaim the bytes of a managed file, and a write
   that fails after its files were made leaves them behind, so a managed store would only grow.

@@ -228,7 +228,7 @@ def test_the_default_file_mode_is_fuse_and_auto_opts_into_file(
 def test_a_file_store_is_refused_on_compute_without_file(
     spark_delta, tmp_path, fake_file_type, monkeypatch, entry
 ):
-    """A store `auto` made in FILE mode on a runtime with the File type preview is used only
+    """A store made in FILE mode on a runtime with the File type preview is used only
     where FILE values work: every entry point refuses with a Fix, before it writes a file.
     """
     from databricks.labs.gbx.zarr import _sync as SY

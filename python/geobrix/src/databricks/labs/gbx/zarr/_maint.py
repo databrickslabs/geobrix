@@ -33,6 +33,7 @@ Everything goes through SQL and DataFrame calls that work under Spark Connect.
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import math
@@ -1157,14 +1158,22 @@ def _require_exist(files, root: str | None, table: str, version, action: str) ->
 
 def _not_reachable(table: str, version, unreachable) -> ZarrAccessUnavailable:
     """The refusal for files a stat could not check (``(file, OSError)`` pairs): neither
-    gone nor changed is known, so the caller is told to try again, not to sync or restore
-    another version."""
-    f, e = unreachable[0]
-    return ZarrAccessUnavailable(
+    gone nor changed is known, so the caller is told what to do about the Volume, not to
+    sync or restore another version. A refused read (``EACCES``, ``EPERM``) is a missing
+    grant, which waiting does not fix; anything else (the mount is down) may pass."""
+    denied = [(f, e) for f, e in unreachable if e.errno in (errno.EACCES, errno.EPERM)]
+    f, e = (denied or unreachable)[0]
+    message = (
         f"cannot tell whether version {version} of {table} still has its files: "
-        f"{len(unreachable)} of them could not be checked (e.g. {f}: {e.strerror or e})",
-        fix="retry when the Volume is reachable",
+        f"{len(unreachable)} of them could not be checked (e.g. {f}: {e.strerror or e})"
     )
+    if denied:
+        return ZarrAccessUnavailable(
+            message,
+            fix="check that you have READ VOLUME (and WRITE VOLUME to write) on the "
+            "Volume, then try again",
+        )
+    return ZarrAccessUnavailable(message, fix="retry when the Volume is reachable")
 
 
 _GERUND = {"restore": "restoring", "export": "exporting"}

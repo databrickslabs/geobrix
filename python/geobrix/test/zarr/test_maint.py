@@ -949,11 +949,19 @@ def test_restore_refuses_vacuumed_version(
     )
 
 
+@pytest.mark.parametrize(
+    "code, fix",
+    [
+        (errno.EBUSY, "retry when the Volume is reachable"),  # the mount is down
+        (errno.EACCES, "READ VOLUME"),  # no grant: retrying cannot help
+    ],
+)
 def test_restore_does_not_call_files_vacuumed_when_it_cannot_reach_them(
-    spark_delta, drop, tmp_path, no_hooks, monkeypatch
+    spark_delta, drop, tmp_path, no_hooks, monkeypatch, code, fix
 ):
     """With the Volume mount down (EBUSY) a stat says nothing about whether a file exists:
-    the refusal must say the files could not be checked, not that they were vacuumed."""
+    the refusal must say the files could not be checked, not that they were vacuumed. A
+    refused read (EACCES) says to check the Volume grants, not to retry."""
     table, root, v1 = _store(spark_delta, drop, tmp_path)
     gbx_zarr_write(
         _blocks(spark_delta, ("t2m", (0, 0, 0), np.full((48, 10, 12), 2.0, "float32"))),
@@ -965,7 +973,7 @@ def test_restore_does_not_call_files_vacuumed_when_it_cannot_reach_them(
 
     def stat(path, *args, **kw):
         if str(path).startswith(str(root / "data")):
-            raise OSError(errno.EBUSY, os.strerror(errno.EBUSY), str(path))
+            raise OSError(code, os.strerror(code), str(path))
         return real(path, *args, **kw)
 
     monkeypatch.setattr(os, "stat", stat)
@@ -973,8 +981,8 @@ def test_restore_does_not_call_files_vacuumed_when_it_cannot_reach_them(
         gbx_zarr_restore(spark_delta, table, version_as_of=v1)
     monkeypatch.undo()
     assert "vacuumed" not in str(e.value) and "no longer exist" not in str(e.value)
-    assert os.strerror(errno.EBUSY) in e.value.message  # says why it could not look
-    assert "Fix: retry when the Volume is reachable" in str(e.value)
+    assert os.strerror(code) in e.value.message  # says why it could not look
+    assert fix in e.value.fix and (code == errno.EACCES) == ("retry" not in e.value.fix)
     assert _latest(spark_delta, table) == latest  # nothing was committed
 
 

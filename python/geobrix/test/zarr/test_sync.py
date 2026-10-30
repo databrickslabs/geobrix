@@ -604,6 +604,30 @@ def test_a_volume_object_is_looked_at_until_its_time_has_settled(
     )  # objects that had settled are not looked at again
 
 
+def test_the_settle_bounds_cover_the_slowest_measured_volume(monkeypatch, caplog):
+    """A Volume's writer stat settled up to 1.93 s after the rename (p90 about 1.3 s). A whole
+    second seen inside that window is not trusted, and the bound outlasts it."""
+    assert (_sync._QUIET, _sync._SETTLE_SECONDS) == (2.0, 3.0)
+    now, base_s = [0.0], 1_792_741_018
+    path = "/Volumes/c/s/v/store/t2m/c/0/0/0"
+
+    class Stat:
+        def __init__(self, ns):
+            self.st_mtime_ns, self.st_size = ns, 21
+
+    def stat(p):  # a whole second throughout, moved on 1.93 s after the write
+        return Stat((base_s + (1 if now[0] >= 1.93 else 0)) * 10**9)
+
+    monkeypatch.setattr(_sync, "_stat", stat)
+    monkeypatch.setattr(_sync, "_sleep", lambda s: now.__setitem__(0, now[0] + s))
+    monkeypatch.setattr(_sync, "_clock", lambda: now[0])
+    monkeypatch.setattr(_sync, "_WRITTEN", {path: 0.0}, raising=False)
+    with caplog.at_level("WARNING", logger=_sync.__name__):
+        got = _sync._settle([path])
+    assert got == {path: f"{(base_s + 1) * 1000}:21"}
+    assert not [r for r in caplog.records if "settled" in r.getMessage()]
+
+
 def test_only_the_objects_a_publish_settles_are_remembered(tmp_path, monkeypatch):
     """The write times kept for the settle are for the objects a publish records an identity
     for: a document (or a reference file) is never kept, an object is forgotten once settled,

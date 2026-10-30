@@ -93,11 +93,13 @@ _AFTER_LOCK = None
 _stat = os.stat
 _sleep = time.sleep
 _clock = time.monotonic
+# A Volume's writer stat settled up to 1.93 s after the rename (p90 about 1.3 s), so a whole
+# second is trusted only after ``_QUIET`` and the wait outlasts it.
 _SETTLE_SECONDS = (
-    2.0  # the longest a publish waits, after its first look, for the times
+    3.0  # the longest a publish waits, after its first look, for the times
 )
 _SETTLE_STEP = 0.1  # between two looks at the objects still moving
-_QUIET = 1.0  # a whole second is trusted this long after the object's write
+_QUIET = 2.0  # a whole second is trusted this long after the object's write
 _VOLUMES = "/Volumes/"
 _WRITTEN: dict[str, float] = {}  # a Volume path -> clock() when its rename returned
 _WRITTEN_MAX = 100_000

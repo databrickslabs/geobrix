@@ -1548,3 +1548,35 @@ def test_a_failed_form_keeps_the_python_workers_cause():
     )
     assert got.endswith("ImportError: libgdal.so.39: cannot open shared object file")
     assert failure_text(ValueError("bad window")) == "ValueError: bad window"
+
+
+def test_a_multiline_pip_failure_keeps_its_first_lines_not_just_the_first():
+    """A UC function environment that cannot install the wheel fails with pip output, no exception-class line:
+    the first actionable pip lines are the finding."""
+    from databricks.labs.gbx.bench.levels import failure_text
+
+    pip = [
+        "[ISOLATED_COMMAND_EXEC_ERROR] Failed to create the environment for the function; pip install returned 1.",
+        "Looking in links: /Volumes/x/y",
+        "ERROR: Could not find a version that satisfies the requirement geobrix==0.6.0+env6",
+        "ERROR: No matching distribution found for geobrix==0.6.0+env6",
+    ] + [f"extra pip line {i}" for i in range(30)]
+    got = failure_text(RuntimeError("\n".join(pip)))
+    assert "Could not find a version that satisfies" in got
+    assert "No matching distribution" in got
+    assert "extra pip line 20" not in got  # bounded: about the first ten lines
+    assert len(got) < 1000
+
+
+def test_the_smoke_keeps_the_head_of_a_failure_not_its_tail():
+    from databricks.labs.gbx.bench import cluster as cl
+
+    src = "\n".join(
+        "".join(c["source"])
+        for c in cl.build_bench_notebook(
+            dict(corpus="/c", out_dir="/o", table="a.b.c", run_id="r", functions="", set="core",
+                 modes="spark-path", row_counts="1", warmup=0, measured=1, lightweight=True,
+                 heavyweight=False, levels_mvp="S", levels_only=True, wheel="/w.whl", smoke=True)
+        )["cells"]
+    )  # fmt: skip
+    assert "failure=_r.failure_mode[:700]" in src and "failure_mode[-400:]" not in src

@@ -37,6 +37,37 @@ def test_a_form_past_its_cap_is_a_stall_even_while_the_heartbeat_keeps_beating()
     assert stall.line == f"STALLED: bng:L3:c0 after {stall.minutes:.1f} min"
 
 
+def test_a_form_at_a_larger_scale_is_judged_by_its_own_scaled_cap_and_named_with_its_scale():
+    """The ladder 1x/4x/16x: a 16x form that runs past the 1x cap is healthy; one past its scaled cap is stalled."""
+
+    def run(elapsed_end):
+        c = Clock()
+        w = wd.Watchdog(form_cap_s=600, stale_s=300, clock=c)  # the 1x cap: 10 min
+        stall = None
+        for i, el in enumerate(range(0, int(elapsed_end) + 1, 30), 1):
+            c.t += 30
+            b = {**beat(i, "bng:L3:c0 @16x", el), "scale": 16, "cap_s": 9600}  # 160 min at 16x
+            stall = w.observe(b) or stall
+            if stall:
+                break
+        return stall
+
+    assert run(3600) is None  # 60 min at 16x: past the 1x cap six times over, inside the 16x cap
+    stall = run(9600 + 120)  # past 160 min
+    assert stall is not None and stall.form == "bng:L3:c0 @16x" and "160 min cap" in stall.reason
+    assert stall.line.startswith("STALLED: bng:L3:c0 @16x after 160.")
+
+
+def test_a_beat_with_no_cap_falls_back_to_the_watchdogs_own_cap():
+    c = Clock()
+    w = wd.Watchdog(form_cap_s=60, stale_s=300, clock=c)
+    assert w.observe(beat(1, elapsed=0)) is None
+    c.t += 30
+    assert w.observe(beat(2, elapsed=30)) is None
+    c.t += 61
+    assert w.observe(beat(3, elapsed=91)) is not None
+
+
 def test_a_heartbeat_that_stops_changing_is_a_stall_and_the_clock_of_the_notebook_does_not_matter():
     c = Clock()
     w = wd.Watchdog(form_cap_s=3600, stale_s=300, clock=c)
@@ -121,3 +152,30 @@ def test_the_heartbeat_reader_returns_none_for_a_missing_or_half_written_file():
                 raise FileNotFoundError(path)
 
     assert wd.read_beat(W, "/Volumes/x/heartbeat.json") is None
+
+
+def test_a_cancel_that_fails_still_reports_the_stall_and_says_to_cancel_by_hand():
+    c = Clock()
+    out = []
+    stuck = [beat(1, "f", 0)] + [beat(2, "f", 500)] * 40
+
+    def cancel():
+        raise RuntimeError("PermissionDenied: cannot cancel")
+
+    beats = iter(stuck)
+    kind, stall = wd.watch_run(
+        get_state=lambda: ("RUNNING", ""),
+        read_beat_fn=lambda: next(beats, None),
+        cancel=cancel,
+        watchdog=wd.Watchdog(form_cap_s=120, stale_s=300, clock=c),
+        poll_secs=30,
+        sleep=c.sleep,
+        clock=c,
+        cancel_wait_s=60,
+        print_fn=out.append,
+        run_id=4242,
+    )
+    text = "\n".join(out)
+    assert kind == "stalled" and stall.cancel_error and "cannot cancel" in stall.cancel_error
+    assert "STALLED: f after" in text
+    assert "cancel FAILED: " in text and "cancel run 4242 by hand" in text

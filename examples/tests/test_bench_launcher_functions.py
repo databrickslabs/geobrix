@@ -7,6 +7,7 @@ launcher reads the leg table and the registry as text. Run:
 
 import re
 
+import pytest
 import push_and_run_bench_on_cluster as launcher
 
 
@@ -116,3 +117,85 @@ def test_a_run_whose_heartbeat_names_a_stuck_form_is_cancelled_by_the_launcher_a
     assert cancelled == [77] and out.stall is not None and out.run is None
     assert "STALLED: gbx_bng:L4:uc-scalar after" in text and "uc_scalar" in text
     assert _run_watchdog.EXIT_STALLED == 3
+
+
+# ---- the smoke stage as the launcher runs it: a bad smoke blocks the real run
+
+
+class SmokeWorkspace:
+    """A workspace whose smoke run ends with ``payload`` as the notebook's exit value."""
+
+    def __init__(self, payload):
+        life = types.SimpleNamespace(value="TERMINATED")
+        state = types.SimpleNamespace(life_cycle_state=life, result_state=types.SimpleNamespace(value="SUCCESS"), state_message="")
+        run = types.SimpleNamespace(state=state, tasks=[types.SimpleNamespace(run_id=5)])
+        out = types.SimpleNamespace(notebook_output=types.SimpleNamespace(result=json.dumps(payload)))
+        self.jobs = types.SimpleNamespace(get_run=lambda rid: run, get_run_output=lambda rid: out)
+        self.files = types.SimpleNamespace(delete=lambda p: None, download=lambda p: (_ for _ in ()).throw(FileNotFoundError(p)))
+
+
+CLEAN = {"import_check": {"ok": True, "version": "0.6.0", "arch": "x86_64"}, "forms": [{"fn": "f", "level": "L3", "form": "c0", "status": "ok", "tasks": 8, "median_s": 1.0}], "errors": []}  # fmt: skip
+BAD = {**CLEAN, "errors": [{"fn": "gbx_st_makevalid", "level": "L4", "form": "uc-scalar", "failure": "ISOLATED_COMMAND_EXEC_ERROR: pip install returned 1"}]}  # fmt: skip
+
+
+def smoke_stage(payload, capsys, **over):
+    submitted = []
+
+    def submit(path, name, timeout_s):
+        submitted.append((path, name, timeout_s))
+        return 11
+
+    kw = dict(
+        do_smoke=True, no_smoke=False, smoke_only=False, smoke_path="/nb/smoke", run_id="r1", out_dir="/Volumes/x/r1",
+        smoke_rows=16, smoke_timeout_min=15, form_cap_s=900.0, stale_s=300.0, token="tok", levels_mvp="S", allow_errors=False,
+    )  # fmt: skip
+    kw.update(over)
+    rc = launcher.run_smoke_stage(SmokeWorkspace(payload), submit, **kw)
+    cap = capsys.readouterr()
+    return rc, submitted, cap.out, cap.err
+
+
+def test_a_smoke_with_a_failed_form_blocks_the_real_run_with_exit_4_and_names_the_failure(capsys):
+    rc, submitted, out, err = smoke_stage(BAD, capsys)
+    assert rc == launcher.EXIT_SMOKE_FAILED == 4
+    assert [s[1] for s in submitted] == ["geobrix-bench-r1-smoke"]  # only the smoke was submitted
+    assert submitted[0][2] == 15 * 60  # with its own time limit
+    assert "SMOKE STAGE FAILED: nothing else is submitted" in err
+    assert "gbx_st_makevalid L4/uc-scalar failed" in err and "pip install returned 1" in err
+
+
+def test_a_clean_smoke_lets_the_real_run_go_on_and_smoke_only_stops_there(capsys):
+    rc, submitted, out, _ = smoke_stage(CLEAN, capsys)
+    assert rc is None and len(submitted) == 1 and "SMOKE STAGE CLEAN" in out
+    rc, submitted, out, _ = smoke_stage(CLEAN, capsys, smoke_only=True)
+    assert rc == 0 and "the real run is not submitted" in out
+    rc, submitted, out, _ = smoke_stage(BAD, capsys, allow_errors=True)  # --smoke-allow-errors
+    assert rc is None
+
+
+def test_no_smoke_submits_no_smoke_run_and_logs_that_it_was_skipped(capsys):
+    rc, submitted, out, _ = smoke_stage(BAD, capsys, do_smoke=False, no_smoke=True)
+    assert rc is None and submitted == []
+    assert "SMOKE STAGE SKIPPED (--no-smoke)" in out
+
+
+# ---- the time limits are refused at argument-parse time
+
+
+@pytest.mark.parametrize(
+    "flag,value",
+    [("--timeout-min", "0"), ("--timeout-min", "-5"), ("--timeout-min", "abc"), ("--timeout-min", "1.5"),
+     ("--smoke-timeout-min", "0"), ("--smoke-timeout-min", "-1"), ("--smoke-timeout-min", "x")],
+)  # fmt: skip
+def test_a_time_limit_that_is_not_a_positive_whole_number_of_minutes_is_refused_before_any_work(
+    flag, value, monkeypatch, capsys
+):
+    monkeypatch.setattr(launcher.sys, "argv", ["push_and_run_bench_on_cluster.py", flag, value])
+    monkeypatch.setattr(launcher, "WorkspaceClient", lambda *a, **k: pytest.fail("work started before the check"), raising=False)
+    assert launcher.main() == 2
+    err = capsys.readouterr().err
+    assert flag in err and "whole number of minutes" in err and err.count("\n") == 1
+
+
+def test_the_levels_run_gets_the_same_default_time_limit_as_any_other(monkeypatch):
+    assert launcher.DEFAULT_RUN_TIMEOUT_MIN == 360

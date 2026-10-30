@@ -80,10 +80,10 @@ def test_a_form_sinks_its_rows_before_the_next_form_starts_and_reports_its_tasks
     log = []
 
     class HB:
-        def begin(self, label, index, total):
+        def begin(self, label, index, total, **kw):
             log.append(("begin", label, index, total))
 
-        def end(self):
+        def end(self, **kw):
             log.append(("end",))
 
     rows = levels.run_mvp(
@@ -99,7 +99,7 @@ def test_a_form_sinks_its_rows_before_the_next_form_starts_and_reports_its_tasks
         "end",
         "sink",
     ]  # sunk before the next begins
-    assert log[0][1:] == (f"{B}:L3:c0", 1, 2)
+    assert log[0][1:] == (f"{B}:L3:c0 @1x", 1, 2)
     assert [r.status for r in rows] == ["ok", "ok"]
     assert all(r.input_partitions >= 1 and "tasks=" in r.note for r in rows)
 
@@ -116,6 +116,88 @@ def test_the_injected_stall_form_sleeps_on_the_driver_after_the_first_form(
     assert seen == [B, "inject_stall", B]
     stall = rows[1]
     assert stall.status == "ok" and stall.iter_median_s >= 0.4
+
+
+def test_a_form_is_timed_and_capped_per_scale_not_once_for_the_whole_ladder(
+    spark_session_local, tmp_path, monkeypatch
+):
+    """A healthy form whose 1x/4x/16x ladder totals more than the 1x cap was cancelled as stalled: the beat now
+    names the scale and carries that scale's cap (the 1x cap times the scale)."""
+    tiny_forms(monkeypatch, 1)
+    log = []
+
+    class HB:
+        def begin(self, label, index, total, *, scale=1, cap_s=None):
+            log.append(("begin", label, scale, cap_s))
+
+        def end(self, *, form_done=True):
+            log.append(("end", form_done))
+
+    levels.run_mvp(
+        spark_session_local, "S", "t", 0, 1, corpus=str(tmp_path), schema=None, scales=(1, 4), where="venv",
+        base_rows=50, only_levels=("L3",), heartbeat=HB(), form_cap_s=60,
+        on_form=lambda rs: log.append(("sink", len(rs))),
+    )  # fmt: skip
+    assert log == [
+        ("begin", f"{B}:L3:c0 @1x", 1, 60),
+        ("end", False),
+        ("begin", f"{B}:L3:c0 @4x", 4, 240),
+        ("end", True),
+        ("sink", 2),  # rows still sink per form, after its last scale
+    ]
+
+
+def test_a_beat_carries_its_scale_and_cap_and_forms_done_counts_forms_not_scales(
+    tmp_path,
+):
+    path = tmp_path / "hb.json"
+    hb = liveness.Heartbeat(str(path), interval=60, token="t").start()
+    hb.begin("f @4x", 1, 2, scale=4, cap_s=3600)
+    beat = json.loads(path.read_text())
+    assert (beat["form"], beat["scale"], beat["cap_s"]) == ("f @4x", 4, 3600)
+    hb.end(form_done=False)
+    assert json.loads(path.read_text())["forms_done"] == 0
+    hb.end()
+    hb.stop()
+    assert json.loads(path.read_text())["forms_done"] == 1
+
+
+def test_beats_from_two_threads_always_leave_a_parseable_file(tmp_path):
+    """The work thread and the daemon thread both write the file; a reader must never see a half-written one."""
+    import threading
+
+    path = tmp_path / "hb.json"
+    hb = liveness.Heartbeat(str(path), interval=3600).start()
+    stop, bad = threading.Event(), []
+
+    def writer():
+        while not stop.is_set():
+            hb.beat()
+
+    def reader():
+        while not stop.is_set():
+            try:
+                json.loads(path.read_text())
+            except FileNotFoundError:
+                pass
+            except ValueError as exc:
+                bad.append(str(exc))
+
+    threads = [threading.Thread(target=f) for f in (writer, writer, reader)]
+    [t.start() for t in threads]
+    time.sleep(1.0)
+    stop.set()
+    [t.join() for t in threads]
+    hb.stop()
+    assert bad == [] and json.loads(path.read_text())["state"] == "done"
+    assert [p.name for p in tmp_path.iterdir()] == [
+        "hb.json"
+    ]  # no temp file left behind
+
+
+def test_the_levels_cell_passes_the_form_cap_so_each_scale_carries_its_own():
+    src = source(cl.build_bench_notebook(CFG))
+    assert "heartbeat=HEARTBEAT, form_cap_s=STALL_CAP_S" in src
 
 
 # ---- the notebook: faulthandler + heartbeat in the setup, the smoke cells

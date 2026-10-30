@@ -37,8 +37,8 @@ Hardening (every run): a SMOKE stage runs first (--no-smoke skips it, logged): e
 set once at --smoke-rows rows plus a worker-side import check; only a clean smoke submits the real run. A local
 preflight refuses the launch with no compute (--skip-preflight skips it, logged). A watchdog polls the notebook's
 heartbeat and cancels a run whose heartbeat stopped (--stale-min) or whose form passed --form-cap-min, printing
-`STALLED: <form> after <m> min` and the driver stack, exit 3. --smoke-only stops after a clean smoke. Every run has a time limit (--timeout-min, default 120
-for --levels, else 360; the smoke stage --smoke-timeout-min, default 15). --inject-stall <secs> adds a form that
+`STALLED: <form> after <m> min` and the driver stack, exit 3. --smoke-only stops after a clean smoke. Every run has a time limit (--timeout-min, default 360;
+the smoke stage --smoke-timeout-min, default 15). --inject-stall <secs> adds a form that
 sleeps on the driver (test only; proves the watchdog).
 """
 
@@ -49,6 +49,7 @@ import os
 import sys
 import uuid
 from pathlib import Path
+from typing import Optional
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 import _preflight  # sibling module (script dir is on sys.path)
@@ -144,6 +145,19 @@ def _arg(flag: str, default: str) -> str:
         if i + 1 < len(sys.argv):
             return sys.argv[i + 1]
     return default
+
+
+def _minutes_arg(flag: str, default: int) -> int:
+    """A time limit in whole minutes (at least 1) from argv. ValueError, one line, when it is anything else:
+    0 would reach the Jobs API as "no limit" and a bad value must stop before any work."""
+    raw = _arg(flag, str(default))
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value < 1:
+        raise ValueError(f"ERROR: {flag} must be a whole number of minutes, at least 1 (got {raw!r}).")
+    return value
 
 
 def _discover_warehouse(w):
@@ -283,6 +297,8 @@ EXIT_SMOKE_FAILED = 4
 EXIT_PREFLIGHT = 5
 SMOKE_FORM_CAP_MIN = 5.0  # a form at the smoke's few rows that runs longer than this is stuck, not slow
 HEARTBEAT_READ_SECS = 15.0
+DEFAULT_RUN_TIMEOUT_MIN = 360  # the real run's time limit, a levels leg included (its 1x/4x/16x ladder runs long)
+DEFAULT_SMOKE_TIMEOUT_MIN = 15
 
 
 def launch_problems(w, *, serverless, wheel, env_version, levels_mvp, levels_scales, root) -> list:
@@ -372,6 +388,7 @@ def watch_to_end(w, run_id, *, hb_path, form_cap_s, stale_s, token=None, count=N
         on_poll=on_poll,
         watchdog=_run_watchdog.Watchdog(form_cap_s=form_cap_s, stale_s=stale_s, token=token),
         poll_secs=poll_secs,
+        run_id=run_id,
     )
     seconds = time.monotonic() - t0
     if kind == "stalled":
@@ -435,6 +452,46 @@ def print_smoke(outcome) -> None:
             )
 
 
+def run_smoke_stage(
+    w, submit, *, do_smoke, no_smoke, smoke_only, smoke_path, run_id, out_dir, smoke_rows, smoke_timeout_min,
+    form_cap_s, stale_s, token, levels_mvp, allow_errors,
+) -> Optional[int]:  # fmt: skip
+    """Run (or skip) the smoke stage before the real run. Returns an exit code when the launch must end here (a
+    stalled or failed smoke, or ``--smoke-only``), None when the real run goes on. A bad smoke submits nothing else."""
+    if not do_smoke:
+        print(
+            "SMOKE STAGE SKIPPED (--no-smoke): the real run is submitted without proving that each form can run."
+            if no_smoke
+            else "SMOKE STAGE SKIPPED (--explain-only runs no timed form)."
+        )
+        return None
+    print("=" * 64)
+    print(
+        f"SMOKE STAGE: each form of the chosen set once at {smoke_rows} rows, plus a worker-side import check "
+        f"(time limit {smoke_timeout_min} min, form cap {min(form_cap_s / 60.0, SMOKE_FORM_CAP_MIN):g} min)"
+    )
+    smoke_id = submit(smoke_path, f"geobrix-bench-{run_id}-smoke", smoke_timeout_min * 60)
+    outcome = watch_to_end(
+        w, smoke_id, hb_path=f"{out_dir}-smoke/heartbeat.json",
+        form_cap_s=min(form_cap_s, SMOKE_FORM_CAP_MIN * 60.0), stale_s=stale_s, token=token,
+    )  # fmt: skip
+    if outcome.stall:
+        print("SMOKE STAGE STALLED: nothing else is submitted.", file=sys.stderr)
+        return EXIT_STALLED
+    problems = smoke_problems(outcome, require_forms=bool(levels_mvp), allow_errors=allow_errors)
+    print_smoke(outcome)
+    if problems:
+        print("SMOKE STAGE FAILED: nothing else is submitted.", file=sys.stderr)
+        for pr in problems:
+            print(f"  - {pr}", file=sys.stderr)
+        return EXIT_SMOKE_FAILED
+    if smoke_only:
+        print(f"SMOKE STAGE CLEAN ({outcome.seconds:.0f} s): --smoke-only, the real run is not submitted.")
+        return 0
+    print(f"SMOKE STAGE CLEAN ({outcome.seconds:.0f} s): submitting the real run.")
+    return None
+
+
 def main() -> int:
     exit_if_help(__doc__)
     # Force line-buffered stdout so the run URL + interim progress heartbeats appear
@@ -459,7 +516,12 @@ def main() -> int:
     inject_stall = float(_arg("--inject-stall", "0"))
     form_cap_min = float(_arg("--form-cap-min", "15"))
     stale_min = float(_arg("--stale-min", "5"))
-    smoke_timeout_min = int(_arg("--smoke-timeout-min", "15"))
+    try:  # the run time limits are checked here, before the preflight, the uploads or the smoke
+        smoke_timeout_min = _minutes_arg("--smoke-timeout-min", DEFAULT_SMOKE_TIMEOUT_MIN)
+        timeout_min = _minutes_arg("--timeout-min", DEFAULT_RUN_TIMEOUT_MIN)
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 2
     heavyweight = "--lightweight-only" not in sys.argv
     lightweight = "--heavyweight-only" not in sys.argv
     # --serverless: submit to Serverless compute instead of an existing cluster. Light-only (no JAR).
@@ -693,8 +755,6 @@ def main() -> int:
     levels_mvp = _arg("--levels", "")
     levels_only = "--levels-only" in sys.argv
     levels_uc = _arg("--levels-uc", "")
-    # The real run's time limit: a levels leg is bounded, the full function bench was measured at hours.
-    timeout_min = int(_arg("--timeout-min", "120" if levels_mvp else "360"))
     # --levels-scales <csv>: the multiples of each form's base row count the leg times (default 1,4,16).
     try:
         levels_scales = tuple(int(x) for x in _arg("--levels-scales", "1,4,16").split(",") if x.strip())
@@ -1348,37 +1408,14 @@ def main() -> int:
         _discover_warehouse(w) if do_wait else None
     )
 
-    if do_smoke:
-        print("=" * 64)
-        print(
-            f"SMOKE STAGE: each form of the chosen set once at {smoke_rows} rows, plus a worker-side import check "
-            f"(time limit {smoke_timeout_min} min, form cap {min(form_cap_min, SMOKE_FORM_CAP_MIN):g} min)"
-        )
-        smoke_id = submit(smoke_path, f"geobrix-bench-{run_id}-smoke", smoke_timeout_min * 60)
-        outcome = watch_to_end(
-            w, smoke_id, hb_path=f"{out_dir}-smoke/heartbeat.json",
-            form_cap_s=min(form_cap_s, SMOKE_FORM_CAP_MIN * 60.0), stale_s=stale_s, token=smoke_cfg["launch_token"],
-        )  # fmt: skip
-        if outcome.stall:
-            print("SMOKE STAGE STALLED: nothing else is submitted.", file=sys.stderr)
-            return EXIT_STALLED
-        problems = smoke_problems(outcome, require_forms=bool(levels_mvp), allow_errors=smoke_allow_errors)
-        print_smoke(outcome)
-        if problems:
-            print("SMOKE STAGE FAILED: nothing else is submitted.", file=sys.stderr)
-            for pr in problems:
-                print(f"  - {pr}", file=sys.stderr)
-            return EXIT_SMOKE_FAILED
-        if smoke_only:
-            print(f"SMOKE STAGE CLEAN ({outcome.seconds:.0f} s): --smoke-only, the real run is not submitted.")
-            return 0
-        print(f"SMOKE STAGE CLEAN ({outcome.seconds:.0f} s): submitting the real run.")
-    else:
-        print(
-            "SMOKE STAGE SKIPPED (--no-smoke): the real run is submitted without proving that each form can run."
-            if no_smoke
-            else "SMOKE STAGE SKIPPED (--explain-only runs no timed form)."
-        )
+    rc = run_smoke_stage(
+        w, submit, do_smoke=do_smoke, no_smoke=no_smoke, smoke_only=smoke_only, smoke_path=smoke_path,
+        run_id=run_id, out_dir=out_dir, smoke_rows=smoke_rows, smoke_timeout_min=smoke_timeout_min,
+        form_cap_s=form_cap_s, stale_s=stale_s, token=smoke_cfg["launch_token"] if do_smoke else "",
+        levels_mvp=levels_mvp, allow_errors=smoke_allow_errors,
+    )  # fmt: skip
+    if rc is not None:
+        return rc
 
     remote_run_id = submit(notebook_path, f"geobrix-bench-{run_id}", timeout_min * 60)
 

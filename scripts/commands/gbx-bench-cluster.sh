@@ -101,7 +101,7 @@ Options:
   --skip-preflight      Skip the local preflight (logged): the environment spec names the wheel, the staged wheel
                         is the local build, the probe SQL runs on a local Spark, no client input above the cap
                         (exit 5 when a check fails)
-  --timeout-min <n>     Time limit of the real run (default 120 with --levels, else 360)
+  --timeout-min <n>     Time limit of the real run (default 360)
   --form-cap-min <n>    The watchdog cancels the run when one form runs longer (default 15; the smoke 5)
   --stale-min <n>       ... or when the notebook's heartbeat stops changing for this long (default 5);
                         either prints `STALLED: <form> after <m> min` and the driver stack, exit 3, no retry

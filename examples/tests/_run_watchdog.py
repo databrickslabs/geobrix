@@ -6,7 +6,8 @@ and the stack of the thread running it. ``Watchdog`` judges the beats; ``watch_r
 state and the heartbeat, and cancels the run itself when either:
 
 * the heartbeat stopped changing for ``stale_s`` (the driver cannot even write a file), or
-* one form has run past ``form_cap_s``.
+* one form has run past its cap: the cap in the beat when it has one (a form at 16x carries sixteen times the
+  1x cap, so a long ladder is not judged by the 1x cap), else ``form_cap_s``.
 
 It then says which form, prints the tail of the stack the last beat held, and returns ``EXIT_STALLED``.
 It never retries: the caller decides what to do about a stalled run.
@@ -36,6 +37,7 @@ class Stall:
     minutes: float
     reason: str
     stack: list
+    cancel_error: Optional[str] = None  # set when the cancel call itself failed: the run is still live
 
     @property
     def line(self) -> str:
@@ -93,10 +95,10 @@ class Watchdog:
         if form:
             # elapsed at the last beat, plus the time since it (the form kept running while no beat came)
             ran = float(self._last.get("form_elapsed_s") or 0.0) + quiet
-            if ran > self.form_cap_s:
-                return Stall(
-                    form, ran / 60, f"form past its {self.form_cap_s / 60:.0f} min cap", self._last.get("stack", [])
-                )
+            # the beat carries the cap of the scale it is at (the 1x cap times the scale); else the watchdog's own
+            cap = float(self._last.get("cap_s") or self.form_cap_s)
+            if ran > cap:
+                return Stall(form, ran / 60, f"form past its {cap / 60:.0f} min cap", self._last.get("stack", []))
         if quiet > self.stale_s:
             what = form or f"after {self._last.get('forms_done', 0)} forms (between forms)"
             return Stall(
@@ -129,6 +131,8 @@ def faulthandler_tail(w, run_id: int, lines: int = STACK_TAIL_LINES) -> str:
 def report_stall(stall: Stall, *, extra_dump: str = "", print_fn=print) -> None:
     print_fn(stall.line)
     print_fn(f"  reason : {stall.reason}")
+    if stall.cancel_error:
+        print_fn(f"  {stall.cancel_error}")
     if stall.stack:
         print_fn(f"  driver stack at the last heartbeat (innermost {min(len(stall.stack), STACK_TAIL_LINES)} lines):")
         for ln in stall.stack[-STACK_TAIL_LINES:]:
@@ -150,6 +154,7 @@ def watch_run(
     on_poll: Callable[[str], None] = lambda lc: None,
     watchdog: Optional[Watchdog] = None,
     poll_secs: float = 5.0,
+    run_id: Optional[int] = None,
     cancel_wait_s: float = 180.0,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
@@ -158,7 +163,8 @@ def watch_run(
     """Poll until the run ends. Returns ``("finished", life_cycle_state)`` or ``("stalled", Stall)``.
 
     ``get_state()`` returns ``(life_cycle_state, result_state)`` as strings. On a stall the run is cancelled
-    (and waited for, up to ``cancel_wait_s``), the stall is reported, and no retry follows.
+    (and waited for, up to ``cancel_wait_s``), the stall is reported, and no retry follows. A cancel that raises
+    is reported too (``cancel FAILED: ...; cancel run <run_id> by hand``): the run is still live then.
     """
     wd = watchdog or Watchdog()
     while True:
@@ -169,10 +175,14 @@ def watch_run(
         stall = wd.observe(read_beat_fn())
         if stall:
             print_fn(f"{stall.reason}: cancelling the run")
-            cancel()
-            deadline = clock() + cancel_wait_s
-            while clock() < deadline and get_state()[0] not in TERMINAL_STATES:
-                sleep(poll_secs)
+            try:
+                cancel()
+            except Exception as exc:  # noqa: BLE001 - the stall must still be reported, and said to be live
+                stall.cancel_error = f"cancel FAILED: {type(exc).__name__}: {exc}; cancel run {run_id} by hand"
+            else:
+                deadline = clock() + cancel_wait_s
+                while clock() < deadline and get_state()[0] not in TERMINAL_STATES:
+                    sleep(poll_secs)
             report_stall(stall, extra_dump=on_stall_dump(), print_fn=print_fn)
             return "stalled", stall
         sleep(poll_secs)

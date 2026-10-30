@@ -2962,7 +2962,8 @@ print("=== levels leg starting:", LEVELS_MVP, flush=True)
 # Each form's rows are sunk the moment that form has run at every scale, and the heartbeat names the form in progress.
 _lv_rows = _lv.run_mvp(spark, LEVELS_MVP, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, corpus=CORPUS,
                        schema=".".join(TABLE.split(".")[:2]), uc=(LEVELS_UC or None), where="cluster",
-                       scales=LEVELS_SCALES, on_form=_sink, heartbeat=HEARTBEAT, inject_stall=INJECT_STALL)
+                       scales=LEVELS_SCALES, on_form=_sink, heartbeat=HEARTBEAT, form_cap_s=STALL_CAP_S,
+                       inject_stall=INJECT_STALL)
 lw.extend(_lv_rows)
 _show_md(f"levels leg {LEVELS_MVP} -- {RUN_ID}", _lv.summarize(_lv_rows))
 """
@@ -2996,12 +2997,12 @@ if _smoke["import_check"]["ok"] and LEVELS_MVP:
     _lv_rows = _lv.run_mvp(spark, LEVELS_MVP, RUN_ID, 0, 1, corpus=CORPUS,
                            schema=".".join(TABLE.split(".")[:2]), uc=(LEVELS_UC or None), where="cluster",
                            scales=(1,), base_rows=SMOKE_ROWS, on_form=_sink, heartbeat=HEARTBEAT,
-                           report_tasks=True, inject_stall=INJECT_STALL)
+                           form_cap_s=STALL_CAP_S, report_tasks=True, inject_stall=INJECT_STALL)
     for _r in _lv_rows:
         _smoke["forms"].append(dict(fn=_r.fn, level=_r.level, form=_r.form, status=_r.status, rows=_r.rows,
                                     tasks=_r.input_partitions, median_s=round(_r.iter_median_s, 3)))
         if _r.status == "error":
-            _smoke["errors"].append(dict(fn=_r.fn, level=_r.level, form=_r.form, failure=_r.failure_mode[-400:]))
+            _smoke["errors"].append(dict(fn=_r.fn, level=_r.level, form=_r.form, failure=_r.failure_mode[:700]))
     print(_lv.summarize(_lv_rows), flush=True)
 HEARTBEAT.stop("done" if _smoke["import_check"]["ok"] and not _smoke["errors"] else "failed")
 """

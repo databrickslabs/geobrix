@@ -30,8 +30,12 @@ class Heartbeat:
     ``start()`` must be called from the thread that runs the work: that thread's stack is the one
     recorded. ``begin(label, ...)`` / ``end()`` mark the form in progress.
 
-    The file is overwritten in place (a UC Volume does not reliably rename), so a reader can see a
-    half-written file once in a while and should retry.
+    ``begin`` names the form and, for a ladder, the scale it is at, and may carry the cap that applies to
+    that scale (``cap_s``): the watchdog judges a form against the cap in its own beat.
+
+    Beats are serialised by a lock (the work thread and the daemon thread both write) and land through a
+    temp file in the same directory and ``os.replace``, so a reader sees the previous beat or the new one,
+    never half of one. Where the replace is refused the beat is written in place and a reader retries.
     """
 
     def __init__(
@@ -47,10 +51,13 @@ class Heartbeat:
         self._index = 0
         self._total = 0
         self._done = 0
+        self._scale = 1
+        self._cap_s: Optional[float] = None
         self._work_thread: Optional[int] = None
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+        self._write_lock = threading.Lock()  # one beat file write at a time
         self._state = "idle"
 
     # -- the work thread's side -------------------------------------------------------------
@@ -68,16 +75,28 @@ class Heartbeat:
         self._thread.start()
         return self
 
-    def begin(self, label: str, index: int = 0, total: int = 0) -> None:
+    def begin(
+        self,
+        label: str,
+        index: int = 0,
+        total: int = 0,
+        *,
+        scale: int = 1,
+        cap_s: Optional[float] = None,
+    ) -> None:
         with self._lock:
             self._form, self._form_started = label, time.monotonic()
             self._index, self._total = index, total
+            self._scale, self._cap_s = scale, cap_s
         self.beat()
 
-    def end(self) -> None:
+    def end(self, *, form_done: bool = True) -> None:
+        """Mark the form (or one scale of it) finished; ``form_done=False`` for a scale that is not the form's last."""
         with self._lock:
             self._form = None
-            self._done += 1
+            self._cap_s = None
+            if form_done:
+                self._done += 1
         self.beat()
 
     def stop(self, state: str = "done") -> None:
@@ -96,6 +115,7 @@ class Heartbeat:
         with self._lock:
             form, started = self._form, self._form_started
             index, total, done = self._index, self._total, self._done
+            scale, cap_s = self._scale, self._cap_s
             self._seq += 1
             seq = self._seq
         return {
@@ -105,6 +125,8 @@ class Heartbeat:
             "token": self.token,
             "form": form,
             "form_elapsed_s": round(time.monotonic() - started, 1) if form else 0.0,
+            "scale": scale,
+            "cap_s": cap_s,
             "form_index": index,
             "form_total": total,
             "forms_done": done,
@@ -129,8 +151,8 @@ class Heartbeat:
     def beat(self) -> None:
         """Write one beat. A failed write is printed and never raised: the heartbeat must not kill the run."""
         try:
-            with open(self.path, "w") as fh:
-                json.dump(self.snapshot(), fh)
+            with self._write_lock:
+                self._write(json.dumps(self.snapshot()))
         except (
             Exception
         ) as exc:  # noqa: BLE001 - the work matters more than its heartbeat
@@ -139,3 +161,18 @@ class Heartbeat:
                 file=sys.stderr,
                 flush=True,
             )
+
+    def _write(self, text: str) -> None:
+        tmp = f"{self.path}.{os.getpid()}.tmp"
+        try:
+            with open(tmp, "w") as fh:
+                fh.write(text)
+            os.replace(tmp, self.path)
+        except OSError:
+            # a filesystem that refuses the replace: write in place (a reader retries on a half-written file)
+            with open(self.path, "w") as fh:
+                fh.write(text)
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass

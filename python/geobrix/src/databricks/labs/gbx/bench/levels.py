@@ -91,6 +91,7 @@ def run_mvp(
     heartbeat=None,
     report_tasks: bool = False,
     inject_stall: float = 0.0,
+    form_cap_s: Optional[float] = None,
 ) -> List[ResultRow]:
     """Time every form of `mvp` that this compute offers, at each scale; one row per form and scale.
 
@@ -104,7 +105,9 @@ def run_mvp(
 
     Liveness: `on_form` is called with each form's rows as soon as that form has run at every scale (the
     caller sinks them there, so a hung later form loses nothing), and `heartbeat` (``liveness.Heartbeat``)
-    is told which form is in progress. `report_tasks` records, per row, the number of Spark tasks the
+    is told which form, at which scale, is in progress (one begin/end per scale) together with the cap that
+    applies to it: `form_cap_s` (the cap of a 1x form) times the scale, so a long ladder is not judged by
+    the 1x cap. `report_tasks` records, per row, the number of Spark tasks the
     form's input scan runs (``input_partitions``): a tile form over a one-file table runs on one task.
     `inject_stall` (seconds, test only) adds a form after the first that sleeps on the driver, to prove the
     launcher's watchdog.
@@ -133,9 +136,15 @@ def run_mvp(
     for index, form in enumerate(todo, 1):
         rows: List[ResultRow] = []
         label = f"{form.fn}:{form.level}:{form.variant}"
-        if heartbeat:
-            heartbeat.begin(label, index, len(todo))
         for scale in scales:
+            if heartbeat:
+                heartbeat.begin(
+                    f"{label} @{scale}x",
+                    index,
+                    len(todo),
+                    scale=scale,
+                    cap_s=form_cap_s * scale if form_cap_s else None,
+                )
             requested = (base_rows or lf.BASE_ROWS[form.input]) * scale
             base = dict(
                 run_id=run_id,
@@ -159,9 +168,9 @@ def run_mvp(
                         failure=failure_text(exc),
                     )
                 )
+            if heartbeat:
+                heartbeat.end(form_done=scale == scales[-1])
         rows = _guard_sent(rows)
-        if heartbeat:
-            heartbeat.end()
         if on_form:
             on_form(rows)
         out += rows
@@ -179,7 +188,13 @@ def failure_text(exc: BaseException) -> str:
     head = lines[0][:200] if lines else ""
     cause = next((ln for ln in reversed(lines) if _EXC_LINE.match(ln)), "")
     out = f"{type(exc).__name__}: {head}"
-    return f"{out} ... {cause[:500]}" if cause and cause != head else out
+    if cause and cause != head:
+        return f"{out} ... {cause[:500]}"
+    if len(lines) > 1:
+        # no exception-class line to point at (a pip failure in a UC function environment is plain output): keep
+        # the first lines, where the actionable one is, within the same budget
+        return f"{out} | {' | '.join(ln[:200] for ln in lines[1:10])[:500]}"
+    return out
 
 
 @dataclass

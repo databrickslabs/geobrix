@@ -9,6 +9,7 @@ SNAP_ROOT="$PROJECT_ROOT"
 PROJECT_ROOT="${GBX_SOURCE_ROOT:-$PROJECT_ROOT}"
 
 PASS_ARGS=()
+LOG_PATH=""
 show_help() {
     show_banner "gbx:bench:cluster"
     cat <<'EOF'
@@ -89,6 +90,7 @@ Options:
   --env-version <N>     Serverless environment version to pin (default 6; env v6 = protobuf-6 regime).
                         Only used with --serverless.
   --no-wait             Submit without blocking on completion
+  --log <path>          Write the output to a log (filename -> test-logs/<name>)
   --no-smoke            Skip the smoke stage (logged). By default a SMOKE run goes first: each form of the
                         --levels set once at --smoke-rows rows plus a worker-side import check; only a clean
                         smoke submits the real run (exit 4 otherwise)
@@ -118,11 +120,13 @@ EOF
 while [[ $# -gt 0 ]]; do case $1 in
     --help|-h) show_help; exit 0 ;;
     --cluster-id) export CLUSTER_ID="$2"; shift 2 ;;
+    --log) LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
     *) PASS_ARGS+=("$1"); shift ;;
 esac; done
 
 cd "$PROJECT_ROOT"
 show_banner "gbx:bench:cluster"
+setup_log_file "$LOG_PATH"
 
 CONFIG="examples/tests/databricks_cluster_config.env"
 if [[ ! -f "$CONFIG" ]]; then

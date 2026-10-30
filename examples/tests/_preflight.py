@@ -121,7 +121,7 @@ def local_corpus(root) -> Optional[str]:
     return next((c for c in candidates if c and (pathlib.Path(c) / "rows").is_dir()), None)
 
 
-def probe_problems(mvp: str, scales: Sequence[int], root, *, rows: int = 16) -> List[str]:
+def probe_problems(mvp: str, scales: Sequence[int], root, *, rows: int = 8) -> List[str]:
     """The levels set's SQL on a local Spark session with a handful of rows, and its client-side input sizes."""
     from databricks.labs.gbx.bench import preflight
 
@@ -133,13 +133,19 @@ def probe_problems(mvp: str, scales: Sequence[int], root, *, rows: int = 16) -> 
         SparkSession.builder.master("local[2]")
         .appName("gbx-bench-preflight")
         .config("spark.ui.enabled", "false")
+        .config("spark.driver.memory", "4g")  # the tile forms hold a few 4 MiB tiles per task; 1g ran out
         .config("spark.sql.shuffle.partitions", "2")
         .getOrCreate()
     )
     try:
         failures, skipped = preflight.probe_failures(spark, mvp, local_corpus(root) or "/nonexistent", rows=rows)
+    except Exception as exc:  # noqa: BLE001 - a probe that cannot run is a launch problem, not a crash
+        failures, skipped = [f"the local probe run itself failed: {type(exc).__name__}: {str(exc)[:300]}"], []
     finally:
-        spark.stop()
+        try:
+            spark.stop()
+        except Exception:  # noqa: BLE001 - a JVM that died has nothing to stop
+            pass
     problems += [f"probe SQL cannot run: {f}" for f in failures]
     if skipped:
         print(f"  preflight: {len(skipped)} form(s) not runnable locally (JAR, Unity Catalog or no local corpus)")

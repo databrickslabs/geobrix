@@ -73,7 +73,7 @@ def test_every_name_the_probe_calls_in_the_package_is_there():
                 if node.value.id == "_native":
                     assert f"def {node.attr}(" in native_init, node.attr
     assert called == {"stack", "light", "light_sql", "payload_size_mb", "installed_closure_mb", "heavy_sql",
-                      "install_paths", "_write_points"}  # fmt: skip
+                      "install_paths"}  # fmt: skip
     assert called <= defined, called - defined
     assert "NATIVE_DIR_KEY = (" in jvm  # the Python name of the Scala GDALManager.NativeDirKey
 

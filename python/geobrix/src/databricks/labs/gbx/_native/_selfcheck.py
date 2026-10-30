@@ -9,7 +9,8 @@
   and EGM96 heights, no network), GTiff JXL, REGEXP (PCRE2) and muparser, libjpeg-turbo SIMD and curl
   HTTP/2 (with ``GDAL_HTTP_VERSION`` left unset), and projsync.
 - ``light_sql(spark)`` / ``heavy_sql(spark, scratch_dir)``: the same GeoTIFF through the light and
-  the heavy SQL functions; heavy also reads a Shapefile and checks the driver JVM's GDAL.
+  the heavy SQL functions; heavy also reads a Shapefile (written locally, then copied to the scratch
+  dir, which may be a Volume) and checks the driver JVM's GDAL.
 - ``install_paths(spark)``: where the driver and each executor import geobrix from.
 - ``payload_size_mb()``, ``installed_closure_mb()``: sizes on disk, in MB (10^6 bytes).
 
@@ -157,6 +158,24 @@ def _write_points(path, driver):
     pyogrio.raw.write(
         path, wkb, [ids], ["id"], driver=driver, geometry_type="Point", crs="EPSG:27700"
     )
+
+
+def _publish_points(shp_dir):
+    """The oracle Shapefile in ``shp_dir``, whole. A Shapefile closes by rewriting its ``.shx`` and ``.dbf``
+    headers, which a ``/Volumes`` FUSE write cannot do (the files would hold no rows): write it on local
+    disk, then copy the files over one after another."""
+    import shutil
+
+    from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
+
+    os.makedirs(shp_dir, exist_ok=True)
+    local = new_local_temp_dir("gbx-selfcheck-shp-")
+    try:
+        _write_points(os.path.join(local, "points.shp"), "ESRI Shapefile")
+        for name in sorted(os.listdir(local)):
+            shutil.copyfile(os.path.join(local, name), os.path.join(shp_dir, name))
+    finally:
+        shutil.rmtree(local, ignore_errors=True)
 
 
 def _raster():
@@ -575,10 +594,8 @@ def heavy_sql(spark, scratch_dir):
     with open(tif, "wb") as fh:
         fh.write(geotiff_bytes())
     shp_dir = os.path.join(scratch_dir, "gbx-selfcheck-points")
-    os.makedirs(shp_dir, exist_ok=True)
-    shp = os.path.join(shp_dir, "points.shp")
-    if not os.path.exists(shp):
-        _write_points(shp, "ESRI Shapefile")
+    # always: an earlier run on a Volume may have left a header-only Shapefile
+    _publish_points(shp_dir)
     _heavy_register(spark)
     size = _size_sql(
         spark, spark.read.format("binaryFile").load(tif), "gbx_selfcheck_heavy"

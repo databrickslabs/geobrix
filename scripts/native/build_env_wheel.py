@@ -127,12 +127,8 @@ SECURITY_FLOORS = {"requests": ("2.32.4", "CVE-2024-47081")}
 # an extra names) gets a floor only there, never an upper bound, since an extra is an opt-in a user may install over a
 # base they have since upgraded themselves; caps in extras stay on what GeoBrix brings in, where they guard our own
 # compatibility. FROZEN_BASE_CAPS lists the extras' exceptions: env5's requests is held under 2.33, so its
-# CVE-2024-47081 move is a patch move (2.32.3 -> 2.32.5), not a jump to the newest requests; [vizx] holds click and
-# psutil at the runtimes' versions, so nothing it installs can move them (each runtime family's own next minor).
-FROZEN_BASE_CAPS = {
-    5: {"requests": "<2.33", "click": "<8.2", "psutil": "<5.10"},
-    6: {"click": "<8.3", "psutil": "<7.1"},
-}
+# CVE-2024-47081 move is a patch move (2.32.3 -> 2.32.5), not a jump to the newest requests.
+FROZEN_BASE_CAPS = {5: {"requests": "<2.33"}}
 GIT_INPUTS = (  # what the wheel is built from, under git
     "python/geobrix/src",
     "python/geobrix/envs",
@@ -1275,16 +1271,11 @@ def auditwheel(args, bindings):
             fail(f"auditwheel {a} (in {image})")
 
 
-# Base packages whose runtime version has no wheel for the toolchain image's CPython 3.12 (the runtimes built their
-# own): check 9's [vizx] venv installs the extra's range for them instead of the base version. So does a package the
-# extra moves to a SECURITY_FLOORS fix (env5's requests).
-VERIFY_UNHELD = {"psutil"}
-
-
 def verify_unheld(envdir):
+    """The base packages check 9's [vizx] venv does not hold at base: those the extra moves to a SECURITY_FLOORS fix
+    (env5's requests); it installs the extra's range for them."""
     base = pins_of(envdir / "base.txt")
-    moved = {d for d, (floor, _cve) in SECURITY_FLOORS.items() if d in base and base[d] < Version(floor)}
-    return VERIFY_UNHELD | moved
+    return {d for d, (floor, _cve) in SECURITY_FLOORS.items() if d in base and base[d] < Version(floor)}
 
 
 def fetch_vizx_wheelhouse(args, envdir, env, arch):

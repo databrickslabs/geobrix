@@ -131,8 +131,8 @@ echo "$out" | grep -q '^N5_RESULT {"ok": true' && ok "8 natives: netCDF zstd/blo
 echo "$out" | grep '^N5_RESULT' || echo "$out" | tail -5
 
 # 9: [vizx] in its own venv (the extra's packages from /wheelhouse-vizx, the base held but for VERIFY_UNHELD's
-# packages, whose base version has no wheel for this Python: the runtimes built their own).
-grep -v -E "^($(echo "${VERIFY_UNHELD:-psutil}" | tr ' ' '|'))==" /env/base.txt > /tmp/base-vizx.txt
+# packages: those the extra moves to a security fix, env5's requests).
+if [ -n "${VERIFY_UNHELD:-}" ]; then grep -v -E "^($(echo "$VERIFY_UNHELD" | tr ' ' '|'))==" /env/base.txt; else cat /env/base.txt; fi > /tmp/base-vizx.txt
 V4=/tmp/vizx
 if $PY -m venv "$V4" && pipq "$V4/bin/python" install -q --no-index --find-links /wheelhouse --find-links /wheelhouse-vizx \
         -c /tmp/base-vizx.txt "geobrix[vizx] @ file://$WHL"; then

@@ -389,7 +389,7 @@ def test_stac_pins_the_requests_security_floor(env, cap):
     assert not r.specifier.contains("2.32.3") and r.specifier.contains("2.32.5"), str(r)
     assert sorted(str(s) for s in r.specifier if s.operator.startswith("<")) == ([cap] if cap else [])
     assert bew.SECURITY_FLOORS["requests"][0] == "2.32.4"
-    assert bew.FROZEN_BASE_CAPS[5]["requests"] == "<2.33" and "requests" not in bew.FROZEN_BASE_CAPS[6]
+    assert bew.FROZEN_BASE_CAPS == {5: {"requests": "<2.33"}}
 
 
 @pytest.mark.parametrize("env", [5, 6])
@@ -732,8 +732,8 @@ def test_contextilys_requirements_come_from_vizx(tmp_path, capsys):
     assert "vendored contextily requires geopy" in capsys.readouterr().out
 
 
-def test_the_vizx_check_unholds_only_a_wheel_less_base_or_a_security_move():
-    # check 9 installs [vizx] in a fresh venv: psutil's base version has no cp312 wheel, and env5's [vizx] moves
-    # requests to its CVE-2024-47081 floor, so neither can be held at base there; everything else is
-    assert bew.verify_unheld(bew.PYDIR / "envs" / "env5") == {"psutil", "requests"}
-    assert bew.verify_unheld(bew.PYDIR / "envs" / "env6") == {"psutil"}
+def test_the_vizx_check_unholds_only_a_security_move():
+    # check 9 installs [vizx] in a fresh venv: env5's [vizx] moves requests to its CVE-2024-47081 floor, so it cannot
+    # be held at base there; everything else is
+    assert bew.verify_unheld(bew.PYDIR / "envs" / "env5") == {"requests"}
+    assert bew.verify_unheld(bew.PYDIR / "envs" / "env6") == set()

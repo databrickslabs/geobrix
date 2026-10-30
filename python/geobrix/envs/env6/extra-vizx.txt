@@ -3,9 +3,9 @@
 # vendored builds. This extra is the rest of the plain wheel's [vizx], and contextily's other requirements.
 # The runtimes preinstall matplotlib and joblib (and DBR 19 ML / env 6 ML imageio, 2.37.2: a floor below that keeps
 # the runtimes without it free): a floor only, the oldest preinstalled version, no cap (a cap under a later
-# runtime's version would be a downgrade). click and psutil are held at the runtimes' versions
-# (gbx:build:wheel FROZEN_BASE_CAPS): mercantile's CLI needs click, and nothing [vizx] installs may move either
-# (DBR 19 and Serverless environment 6 ship click 8.2.1 and psutil 7.0.0).
+# runtime's version would be a downgrade). Nothing here moves click or psutil (that came with PyPI rasterio, which
+# [vizx] no longer pulls; gbx:versions:audit --install-moves checks every runtime), and they get no hold: a click
+# cap would make the separate overturemaps step (click>=8.3) unsatisfiable beside [vizx].
 # GeoBrix brings the rest in, capped at the next major.
 matplotlib>=3.10.6
 mapclassify>=2.6,<3
@@ -19,5 +19,3 @@ xyzservices>=2023.10
 # contextily fetches its tiles through requests: the runtimes' 2.32.5, past the CVE-2024-47081 fix.
 requests>=2.32.5
 joblib>=1.5.2
-click>=8.2.1,<8.3
-psutil>=7.0.0,<7.1

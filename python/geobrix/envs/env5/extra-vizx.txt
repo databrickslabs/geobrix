@@ -2,10 +2,10 @@
 # from PyPI they would pull PyPI's rasterio, pyogrio, pyproj and shapely (a second GDAL, PROJ and GEOS) beside the
 # vendored builds. This extra is the rest of the plain wheel's [vizx], and contextily's other requirements.
 # The runtimes preinstall matplotlib and joblib: a floor only, the oldest preinstalled version, no cap (a cap under a
-# later runtime's version would be a downgrade). click and psutil are held at the runtimes' versions
-# (gbx:build:wheel FROZEN_BASE_CAPS: these are frozen LTS bases): mercantile's CLI needs click, and nothing [vizx]
-# installs may move either (DBR 17.3 / 18 and Serverless environment 5 ship click 8.1.7-8.1.8 and psutil 5.9.0).
-# GeoBrix brings the rest in, capped at the next major.
+# later runtime's version would be a downgrade). Nothing here moves click or psutil (that came with PyPI rasterio,
+# which [vizx] no longer pulls; gbx:versions:audit --install-moves checks every runtime), and they get no hold: a
+# click cap would make the separate overturemaps step (click>=8.3) unsatisfiable beside [vizx], and psutil 5.9 has
+# no cp312 aarch64 wheel. GeoBrix brings the rest in, capped at the next major.
 matplotlib>=3.10.0
 mapclassify>=2.6,<3
 anywidget>=0.9,<1
@@ -19,5 +19,3 @@ xyzservices>=2023.10
 # 2.32.3) under the frozen-base cap.
 requests>=2.32.4,<2.33
 joblib>=1.4.2
-click>=8.1.7,<8.2
-psutil>=5.9.0,<5.10

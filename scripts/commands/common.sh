@@ -649,7 +649,7 @@ zarr_doc_tests_selected() {
 # a script, the launcher or the bench package while the run is live cannot change it (bash reads a script as it
 # runs it: an edit under a live runner once made it execute half of a changed line, "dk: command not found").
 # Called right after `source common.sh`, before the argument loop. In the first run it copies scripts/commands,
-# scripts/docker, the examples/tests launchers (with the untracked config env) and python/geobrix/{src,envs,pyproject}
+# the top-level scripts of scripts/docker (never its m2/ Maven repo), the examples/tests launchers (with the untracked config env) and python/geobrix/{src,envs,pyproject}
 # into a temp dir and execs the snapshot's copy of the command with GBX_SNAPSHOT_DIR and GBX_SOURCE_ROOT set; in the
 # snapshot's run it sets the exit trap that removes the dir and returns 0, and the command then points PROJECT_ROOT
 # back at GBX_SOURCE_ROOT (the venv, the logs and the local build are the source tree's) and runs the launcher from
@@ -667,7 +667,11 @@ gbx_snapshot_exec() {
     local root snap rel
     root="$(cd "$(dirname "$script")/../.." && pwd)"
     snap="$(mktemp -d "${TMPDIR:-/tmp}/gbx-snapshot.XXXXXX")" || return 1
-    for rel in scripts/commands scripts/docker python/geobrix/src python/geobrix/envs python/geobrix/pyproject.toml; do
+    # scripts/docker holds the 1+ GB persistent Maven repo (m2/) and other state: only the top-level scripts and
+    # templates the commands source or exec (gbx-container.sh, gbx-lock.sh, ...) are copied, by an include rule.
+    mkdir -p "$snap/scripts/docker"
+    cp "$root"/scripts/docker/*.sh "$root"/scripts/docker/*.example "$snap/scripts/docker/" 2>/dev/null || true
+    for rel in scripts/commands python/geobrix/src python/geobrix/envs python/geobrix/pyproject.toml; do
         [[ -e "$root/$rel" ]] || continue
         mkdir -p "$snap/$(dirname "$rel")"
         cp -R "$root/$rel" "$snap/$rel" 2>/dev/null || { rm -rf "$snap"; echo "ERROR: could not snapshot $rel; set GBX_NO_SNAPSHOT=1 to run in place." >&2; exit 1; }
@@ -675,7 +679,7 @@ gbx_snapshot_exec() {
     mkdir -p "$snap/examples/tests"
     cp "$root"/examples/tests/*.py "$root"/examples/tests/*.env "$snap/examples/tests/" 2>/dev/null || true
     export GBX_SNAPSHOT_DIR="$snap" GBX_SOURCE_ROOT="$root"
-    exec bash "$snap/scripts/commands/$(basename "$script")" "$@"
+    exec "$BASH" "$snap/scripts/commands/$(basename "$script")" "$@"
 }
 
 # Export helpers + color vars so they survive any subshell that doesn't re-source this file

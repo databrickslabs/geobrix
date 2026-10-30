@@ -1604,6 +1604,34 @@ def test_a_launcher_command_runs_from_a_snapshot_so_an_edit_during_the_run_canno
     assert not Path(m.group(1)).exists()  # the snapshot is removed when the run ends
 
 
+_SNAPSHOT_SIZE_PROBE = """#!/bin/bash
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+source "$SCRIPT_DIR/common.sh"
+gbx_snapshot_exec "${BASH_SOURCE[0]}" "$@"
+echo "docker files: $(cd "$PROJECT_ROOT/scripts/docker" && find . -type f | sort | tr '\\n' ' ')"
+echo "big files: $(find "$PROJECT_ROOT" -type f -size +1024k | wc -l | tr -d ' ')"
+echo "m2 dirs: $(find "$PROJECT_ROOT" -name m2 | wc -l | tr -d ' ')"
+"""
+
+
+def test_the_snapshot_never_copies_the_maven_repo_or_any_large_data_dir(sandbox):
+    """scripts/docker/m2 is a 1.1 GB persistent Maven repo: copying it cost 13 s per launch and filled /tmp."""
+    docker = sandbox.root / "scripts" / "docker"
+    (docker / "m2" / "repository").mkdir(parents=True)
+    (docker / "m2" / "repository" / "big.jar").write_bytes(b"\0" * (3 * 1024 * 1024))
+    (docker / "data").mkdir()
+    (docker / "data" / "huge.bin").write_bytes(b"\0" * (3 * 1024 * 1024))
+    sandbox.write_command("gbx-snapshot-size-probe.sh", _SNAPSHOT_SIZE_PROBE)
+
+    res = sandbox.run("gbx-snapshot-size-probe.sh")
+
+    assert res.returncode == 0, res.output
+    assert "m2 dirs: 0" in res.output and "big files: 0" in res.output, res.output
+    # what the snapshotted commands source or exec from scripts/docker is there
+    assert "./gbx-container.sh" in res.output and "./gbx-lock.sh" in res.output, res.output
+
+
 def test_help_runs_in_place_without_a_snapshot(sandbox):
     sandbox.write_command("gbx-snapshot-probe.sh", _SNAPSHOT_PROBE)
 

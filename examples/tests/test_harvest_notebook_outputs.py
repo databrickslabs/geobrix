@@ -166,3 +166,38 @@ def test_set_var_override_falls_back_to_after_run_cell():
     cells = [_code("a = 1"), _code("%run ./config_nb"), _code("b = FORCE_RELOAD == 1")]
     out = json.loads(_inject_override_cell(json.dumps({"cells": cells}).encode(), ["FORCE_RELOAD=True"]))
     assert "FORCE_RELOAD=True" in "".join(out["cells"][2]["source"])
+
+
+def test_the_runner_submits_the_notebooks_as_they_were_at_launch_and_harvests_into_the_original(tmp_path, monkeypatch):
+    """A notebook edited while the launch is live must not change what is submitted; outputs go back to the original."""
+    import sys
+    import types
+
+    import run_notebooks_serverless as rns
+
+    nb = tmp_path / "main.ipynb"
+    dep = tmp_path / "dep.ipynb"
+    nb.write_text("main v1")
+    dep.write_text("dep v1")
+    seen = {"runs": [], "deps": []}
+
+    def client(*a, **k):  # built after the launch-time snapshot: the edit lands between snapshot and submit
+        nb.write_text("main v2 (edited during the launch)")
+        dep.write_text("dep v2 (edited during the launch)")
+        return types.SimpleNamespace()
+
+    monkeypatch.setitem(sys.modules, "databricks.sdk", types.SimpleNamespace(WorkspaceClient=client))
+    monkeypatch.setattr(rns, "_import_notebook", lambda w, path, ws_dir, strip_pip, **kw: seen["deps"].append(path.read_text()))
+    monkeypatch.setattr(
+        rns, "run_one",
+        lambda **kw: seen["runs"].append((kw["local_path"].read_text(), kw["harvest_path"])) or True,
+    )  # fmt: skip
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_notebooks_serverless.py", "--notebook", str(nb), "--dep-notebook", str(dep), "--ws-dir", "/Users/x/y",
+         "--harvest-outputs"],
+    )  # fmt: skip
+
+    assert rns.main() == 0
+    assert seen["runs"][0][0] == "main v1" and seen["deps"] == ["dep v1"]  # what was there at launch
+    assert seen["runs"][0][1] == nb.resolve()  # the harvest targets the original, not the snapshot copy

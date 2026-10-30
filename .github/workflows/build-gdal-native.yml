@@ -12,7 +12,8 @@ name: Build GDAL native (x86_64)
 #      deliberately not in that key, as it is not in the native image tag (pins.py tag-hash): gbx-build-native.sh's
 #      arguments and context assembly, pins.py build-args, and the checks verify-native.sh and test-bindings.sh. A change
 #      to them does not rebuild or re-verify a cached build. (The two-architecture gate, gbx:native:verify-arches,
-#      hashes verify-native.sh and check-env-wheel.sh, the checks it runs; it does not run test-bindings.sh.)
+#      hashes all of scripts/native but its stamp, test-bindings.sh included, although the checks it runs are
+#      verify-native.sh and check-env-wheel.sh: a change to any file there stales its stamp.)
 #    - A hit builds nothing; a miss builds stage-native then bindings, each verified as gbx:build:native verifies it
 #      (about 20-40 min). The build is saved on a push to main or to the release branch, and on a pull request from this
 #      repository (in the pull request's own scope, about 62 MB, so its next pushes restore it). GitHub scopes a cache
@@ -48,8 +49,11 @@ name: Build GDAL native (x86_64)
 #   - the manylinux image from quay.io, pinned by digest;
 #   - the JDK from the image's AlmaLinux dnf repositories (rpm signatures);
 #   - the Rust toolchain from static.rust-lang.org, rustup-init's host (rustup checks it against its manifest).
+# Nothing comes from Docker Hub: build.Dockerfile has no syntax directive, so the runner's Docker Engine (23 or later)
+# parses it with its bundled Dockerfile frontend instead of pulling docker/dockerfile.
 # "Check the direct downloads are reachable" probes all four before the build (a ranged GET of every pinned file; an
-# HTTP 403, 407 or 451 counts as blocked) and fails in seconds with one ::error:: per download with no working origin.
+# HTTP 403, 407 or 451 counts as blocked; a 429, a 5xx or a timeout is retried once) and fails in seconds with one
+# ::error:: per download with no working origin.
 # Only a cold build (a cache miss) fetches anything.
 # This workflow does not interpolate any github.event.* values into run: blocks.
 on:

@@ -277,10 +277,12 @@ def check_stamp(root):
 
 
 def uncommitted(root):
-    """The native inputs (gate set) with uncommitted changes in the checkout, untracked files included."""
+    """The native inputs (gate set) with uncommitted changes in the checkout: a file under git changed, staged or
+    deleted. Not the stamp (a gate run writes it, and no set hashes it), and not an untracked file (the sets are
+    git's files: none hashes one)."""
     head = Tree(root, "HEAD")
-    specs = files(head, "build") + gate_specs(head)
-    out = Tree(root)._git("status", "--porcelain", "--untracked-files=all", "--", *specs).decode()
+    specs = files(head, "build") + gate_specs(head) + [f":(exclude){STAMP}"]
+    out = Tree(root)._git("status", "--porcelain", "--untracked-files=no", "--", *specs).decode()
     return sorted(ln[3:] for ln in out.splitlines() if ln.strip())
 
 

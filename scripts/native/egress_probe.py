@@ -9,14 +9,17 @@ goes to its upstream hosts: every *_URL / *_URL2 of pins.conf (the source tarbal
 grids) and rasterio's test data (test-data.conf). Each download needs one working origin, its URL or its URL2 mirror:
 a ranged GET of the file itself (redirects followed, so a release asset's storage host is checked too) that answers
 2xx. HTTP 403, 407 and 451 are a policy proxy's refusal (blocked); another status means the pinned URL itself fails; a
-refused, reset or timed-out connection, or a failed TLS handshake, is blocked. One `::error::` line per download with
-no working origin, naming the host and the kind of download, then exit 1: seconds, not 20 minutes into the build. The
-quay.io image pull and the image build's dnf are probed by the workflow step that runs this; the image build's
-`rustup toolchain install` uses static.rust-lang.org, rustup-init's host, probed here. Stdlib only.
+refused, reset or timed-out connection, or a failed TLS handshake, is blocked. An HTTP 429, a 5xx or a timeout is
+retried once first, as prefetch.sh's `curl --retry` retries it, so a transient answer does not fail the job. One
+`::error::` line per download with no working origin, naming the host and the kind of download, then exit 1: seconds,
+not 20 minutes into the build. The quay.io image pull and the image build's dnf are probed by the workflow step that
+runs this; the image build's `rustup toolchain install` uses static.rust-lang.org, rustup-init's host, probed here.
+Stdlib only.
 """
 
 import argparse
 import sys
+import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -29,6 +32,7 @@ from pins import load_pins  # noqa: E402
 
 WHERE = 'the "Direct fetches" list in .github/workflows/build-gdal-native.yml'
 POLICY = (403, 407, 451)  # what a policy proxy answers for a host or path it refuses
+RETRY_DELAY = 1  # seconds before the one retry of a 429, a 5xx or a timeout (curl --retry's first wait)
 TRIPLES = {"RUSTUP": "{arch}-unknown-linux-gnu", "CARGO_DENY": "{arch}-unknown-linux-musl"}  # as prefetch.sh
 
 
@@ -58,18 +62,23 @@ def downloads(pins, testdata, arch):
 
 
 def check_url(url, timeout):
-    """(ok, why): a ranged GET of the pinned file."""
-    req = urllib.request.Request(url, headers={"Range": "bytes=0-0", "User-Agent": "geobrix-egress-probe"})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            resp.read(1)
-        return True, "ok"
-    except urllib.error.HTTPError as e:
-        if e.code in POLICY:
-            return False, f"refused (HTTP {e.code}: a policy proxy)"
-        return False, f"the pinned URL answered HTTP {e.code}"
-    except (urllib.error.URLError, OSError):
-        return False, "no connection (refused, reset, timed out or TLS failed)"
+    """(ok, why): a ranged GET of the pinned file; a 429, a 5xx or a timeout is retried once."""
+    for attempt in (1, 2):
+        req = urllib.request.Request(url, headers={"Range": "bytes=0-0", "User-Agent": "geobrix-egress-probe"})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                resp.read(1)
+            return True, "ok"
+        except urllib.error.HTTPError as e:
+            if e.code in POLICY:
+                return False, f"refused (HTTP {e.code}: a policy proxy)"
+            why, transient = f"the pinned URL answered HTTP {e.code}", e.code == 429 or e.code >= 500
+        except (urllib.error.URLError, OSError) as e:
+            why = "no connection (refused, reset, timed out or TLS failed)"
+            transient = isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError)
+        if not transient or attempt == 2:
+            return False, why
+        time.sleep(RETRY_DELAY)
 
 
 def probe(dl, check):

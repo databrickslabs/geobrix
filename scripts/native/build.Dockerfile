@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # Build container for GeoBrix natives on manylinux_2_28. Every version arrives as a --build-arg from
 # scripts/native/pins.conf; every source tarball, wheel and tool binary is pre-fetched on the host into the
 # context (scripts/native/prefetch.sh), so the image build needs no package index and no source mirror.
@@ -7,6 +6,9 @@
 #   - the Rust toolchain (rustc, cargo, std, clippy, rustfmt), by `rustup toolchain install` from
 #     static.rust-lang.org; rustup checks the components against a manifest it fetches itself.
 # Nothing is downloaded when the image runs: Rust crates build with --network none from vendored sources.
+# No `syntax` directive on purpose: one would pull the Dockerfile frontend image from Docker Hub, which CI does not
+# probe. The Docker Engine's bundled frontend parses this file; it needs Dockerfile 1.4 (tmpfs `size`, and the named
+# build contexts of gbx-build-native.sh), bundled since Docker Engine 23 (BuildKit 0.10).
 ARG MANYLINUX_IMAGE
 FROM ${MANYLINUX_IMAGE} AS toolchain
 ARG GBX_ARCH

@@ -14,6 +14,7 @@ holds copies of the real input files, jvm_payload.py on a fake native tree.
 import ast
 import base64
 import hashlib
+import importlib
 import json
 import os
 import re
@@ -33,6 +34,7 @@ FETCH = GITHUB / "actions" / "native_payload" / "action.yml"
 SCALA_BUILD = GITHUB / "actions" / "scala_build" / "action.yml"
 INPUTS = REPO_ROOT / "scripts" / "native" / "native_inputs.py"
 JVM_PAYLOAD = REPO_ROOT / "scripts" / "native" / "jvm_payload.py"
+INDEX_FETCH = REPO_ROOT / "scripts" / "native" / "index_fetch.py"
 GATE = REPO_ROOT / "scripts" / "commands" / "gbx-native-verify-arches.sh"
 HASH_RUN = "scripts/native/native_inputs.py hash --set build"
 PAYLOAD_KEY = "native-out-x86_64-${{ steps.%s.outputs.hash }}"
@@ -127,17 +129,32 @@ def test_a_failed_input_hash_fails_the_key_step(tmp_path, where):
     assert "hash=" not in out
 
 
-def _probe_module():
-    sys.path.insert(0, str(REPO_ROOT / "scripts" / "native"))
-    import egress_probe
+def _native(module):
+    """A stdlib script of scripts/native, imported."""
+    here = str(REPO_ROOT / "scripts" / "native")
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    return importlib.import_module(module)
 
-    return egress_probe
+
+def _parser_directives(dockerfile):
+    """The `# key=value` parser directives at the top of a Dockerfile (BuildKit reads no others)."""
+    out = {}
+    for line in dockerfile.read_text().splitlines():
+        m = re.fullmatch(r"#\s*([a-zA-Z]+)\s*=\s*(\S+)\s*", line)
+        if not m:
+            break
+        out[m.group(1).lower()] = m.group(2)
+    return out
 
 
 def test_the_direct_download_probe_names_a_download_with_no_working_origin():
     """Each direct download needs one origin that serves the file; a policy proxy's 403/407/451 is blocked, not
-    reachable. The sdists are not direct (they come through the package index in CI); rasterio's test data is."""
-    probe = _probe_module()
+    reachable. The sdists are not direct (they come through the package index in CI); rasterio's test data is. The
+    image build pulls no Dockerfile frontend from Docker Hub, which no step probes: build.Dockerfile has no `syntax`
+    directive, so the Docker Engine's bundled frontend parses it."""
+    assert "syntax" not in _parser_directives(REPO_ROOT / "scripts/native/build.Dockerfile")
+    probe = _native("egress_probe")
     pins = {
         "ZLIB_URL": "https://blocked-a.example/zlib.tar.gz",
         "ZLIB_URL2": "https://mirror.example/zlib.tar.gz",  # the mirror serves it: zlib has an origin
@@ -164,13 +181,30 @@ def test_the_direct_download_probe_names_a_download_with_no_working_origin():
     assert probe.probe(dl, lambda url: (True, "ok")) == []
 
 
-@pytest.mark.parametrize("code, ok", [(206, True), (200, True), (403, False), (407, False), (451, False), (404, False)])
-def test_a_policy_proxys_refusal_is_blocked(monkeypatch, code, ok):
-    probe = _probe_module()
+TIMEOUT = "timed out"
+
+
+@pytest.mark.parametrize(
+    "answers, ok",
+    [
+        ((206,), True), ((200,), True),
+        # one GET: a policy proxy's refusal is blocked, another 4xx is no working origin
+        ((403,), False), ((407,), False), ((451,), False), ((404,), False),
+        # a 429, a 5xx or a timeout is retried once (curl --retry's intent), then counts as no working origin
+        ((429, 206), True), ((503, 206), True), ((TIMEOUT, 206), True), ((503, 503), False),
+    ],
+)
+def test_a_refusal_is_blocked_and_a_transient_failure_retried_once(monkeypatch, answers, ok):
+    probe = _native("egress_probe")
+    calls = []
 
     def urlopen(req, timeout):
-        if code >= 400:
-            raise probe.urllib.error.HTTPError(req.full_url, code, "x", {}, None)
+        answer = answers[len(calls)]  # an IndexError: called more often than the row allows
+        calls.append(answer)
+        if answer == TIMEOUT:
+            raise probe.urllib.error.URLError(TimeoutError(TIMEOUT))
+        if answer >= 400:
+            raise probe.urllib.error.HTTPError(req.full_url, answer, "x", {}, None)
 
         class R:
             def read(self, n):
@@ -185,7 +219,9 @@ def test_a_policy_proxys_refusal_is_blocked(monkeypatch, code, ok):
         return R()
 
     monkeypatch.setattr(probe.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(probe, "RETRY_DELAY", 0, raising=False)
     assert probe.check_url("https://h.example/f.tar.gz", 5)[0] is ok
+    assert len(calls) == len(answers)
 
 
 def _jvm_jobs():
@@ -425,6 +461,51 @@ def test_ci_fetches_the_binding_sdists_through_the_package_index(tmp_path, pinne
     assert job["env"]["GBX_SDISTS_FROM"] == "index"
 
 
+INDEX_CASES = {  # case -> (what `pip config list` prints, the netrc has the index's login, the outcome)
+    # CI's branch: jfrog-pip-bootstrap sets PIP_CONFIG_FILE, not PIP_INDEX_URL; pip download's own index-url wins
+    "pip config's index (CI)": ("download.index-url='{index}'\nglobal.index-url='http://127.0.0.1:1/simple'\n", True,
+                                "fetched"),
+    "no index configured": ("global.timeout='60'\n", True, "no package index is configured"),
+    "a 401: no credentials for the index": ("global.index-url='{index}'\n", False, "HTTPError 401"),
+}
+
+
+@pytest.mark.parametrize("case", INDEX_CASES)
+def test_the_sdist_index_is_pips_and_fails_closed(tmp_path, case):
+    config, login, outcome = INDEX_CASES[case]
+    fetcher = _native("index_fetch")
+    data = b"an sdist"
+    index = _Index(tmp_path, data)
+    env = {"NETRC": index.env["NETRC"] if login else str(tmp_path / "no-netrc")}
+    dest = tmp_path / "sdists" / "rasterio-1.5.2.tar.gz"
+    args = ("rasterio", dest.name, hashlib.sha256(data).hexdigest(), dest)
+    try:
+        if outcome == "fetched":
+            assert fetcher.fetch(*args, env=env, pip_config=config.format(index=index.env["PIP_INDEX_URL"])) == outcome
+            assert dest.read_bytes() == data
+        else:
+            with pytest.raises(fetcher.Fail, match=outcome):
+                fetcher.fetch(*args, env=env, pip_config=config.format(index=index.env["PIP_INDEX_URL"]))
+            assert not dest.exists() and not dest.with_name(dest.name + ".part").exists()
+    finally:
+        index.server.shutdown()
+    assert bool(index.hits) is (case != "no index configured")
+
+
+@pytest.mark.parametrize("index", ["//ci:tok3n@secret-host.example/simple", "http://ci:tok3n@secret-host.example/simple"])
+def test_no_index_url_or_credential_reaches_the_log(tmp_path, index):
+    """An index URL urllib cannot open (scheme-less: ValueError; a login in it: InvalidURL) fails closed with the
+    exception's class only: the text of either names the URL, and a public repository's CI log is public."""
+    env = dict(os.environ, PIP_INDEX_URL=index, NETRC=str(tmp_path / "no-netrc"))
+    res = subprocess.run(
+        [sys.executable, str(INDEX_FETCH), "rasterio", "rasterio-1.5.2.tar.gz", "0" * 64, str(tmp_path / "f")],
+        env=env, capture_output=True, text=True,
+    )
+    out = res.stdout + res.stderr
+    assert res.returncode == 1 and "PREFETCH FAILED" in res.stderr
+    assert not re.search(r"secret-host|tok3n|Traceback", out), out
+
+
 def _logs(tmp_path, bad=None):
     """Synthetic logs of the four checks per architecture; `bad` = (arch, check) whose log has a failure."""
     args = []
@@ -509,6 +590,9 @@ PROVENANCE = {  # case -> (what happens after the wheels' commit, exit code, a w
     "an env file committed after the wheels": ("commit-env", 1, ENV_FILE),
     "only a check script committed after (no rebuild)": ("commit-check", 0, "BUILT_FROM="),
     "an uncommitted native input": ("uncommitted", 1, "PRECONDITION MISSING"),
+    # neither is hashed: a gate run's own stamp, not yet committed, and an untracked file beside the inputs
+    "only the stamp changed (uncommitted)": ("stamp", 0, "BUILT_FROM="),
+    "an untracked scratch file in scripts/native": ("scratch", 0, "BUILT_FROM="),
     "the tree is not the wheels' build": ("manifest", 1, "is not the"),
 }
 
@@ -528,6 +612,10 @@ def test_the_gate_verifies_only_trees_and_wheels_built_from_heads_inputs(tree, c
         _commit(tree, "check")
     elif after == "uncommitted":
         _edit(tree, ENV_FILE, APPEND)
+    elif after == "stamp":
+        _edit(tree, "scripts/native/arch-gate.json", lambda b: b + b" ")
+    elif after == "scratch":
+        (tree / "scripts/native/scratch.log").write_text("a local note\n")
 
     res = _inputs("provenance", root=tree)
 

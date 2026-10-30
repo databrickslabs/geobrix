@@ -10,7 +10,8 @@ from source. So this reads the index as pip does: the index URL from PIP_INDEX_U
 (`pip config list`: download., then global. index-url), the PEP 503 page of NAME there, the link named FILE (its
 #sha256= fragment, when present, must be the pin), with the netrc credentials of each host it calls (never sent to
 another host after a redirect). The file is kept only when its sha256 is the pin; a mismatch is a hard stop, as in
-fetch-lib.sh's fetch_verified. An existing DEST with the pinned sum is kept. No URL, host or credential is printed.
+fetch-lib.sh's fetch_verified. An existing DEST with the pinned sum is kept. No URL, host or credential is printed,
+also when it fails: any other exception prints its class only (no message, no traceback), exit 1.
 Used by fetch-lib.sh's fetch_sdist when GBX_SDISTS_FROM=index (the CI builder sets it). Stdlib only.
 """
 
@@ -132,6 +133,9 @@ def main(argv):
         how = fetch(name, file, want, dest)
     except Fail as e:
         print(f"PREFETCH FAILED: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:  # the text of urllib's ValueError or http.client's InvalidURL names the URL: the class only
+        print(f"PREFETCH FAILED: unexpected {type(e).__name__}", file=sys.stderr)
         return 1
     print(f"sdist {file}: {how} (package index, sha256 ok)")
     return 0

@@ -311,8 +311,12 @@ column's value is data), the rows of a `manifest` or a tile index, the sources o
 tile that a vizx plot opens. A path that names `/vsicurl/`, `/vsicurl_streaming/`, `http://`,
 `https://`, `ftp://` or another GDAL virtual file system, directly or inside a wrapper such as
 `/vsizip//vsicurl/…`, raises an error that names it, before anything is opened: for
-`rst_fromfile`, at its first evaluation. A path you pass to a reader yourself is your own choice
-and is not checked: `.load(url)`, `StacClient(catalog=url)`.
+`rst_fromfile`, at its first evaluation. A scheme counts as rasterio and pyogrio read it, so
+`https:host/a.tif`, written without `//`, is the URL they would open. The check runs in every
+open GeoBrix makes of a raster or a vector file, so a path from data is never opened without it.
+A path you pass yourself to a call that runs on the driver is your own choice and is not checked:
+`StacClient(catalog=url)`, and the path you give `plot_file`, `plot_cog`, `plot_mosaic`, a map
+layer or `segment_raster`.
 
 To open remote paths from data you trust, set `GBX_ALLOW_REMOTE_PATHS=true` in the driver's
 environment (in the notebook, `os.environ["GBX_ALLOW_REMOTE_PATHS"] = "true"`) before
@@ -325,10 +329,13 @@ sources of a VRT that GDAL reads as a raster, and the netCDF CRS URL below.
 
 **Hrefs that come from data.** `StacClient.download` and `repair`, and the Overture downloader's HTTP
 fallback, fetch hrefs that a catalog or a table names. Each href must be an `http(s)` URL whose host does not resolve
-to a loopback, link-local (such as the cloud metadata address `169.254.169.254`) or unspecified address, nor to a
-private address unless you name the host in `allowed_hosts=` (an internal catalog); each redirect hop is checked the
-same way; no `~/.netrc` is read; and an `allowed_hosts=` list, when you pass one, refuses any other host. See
-[STAC § Constructor](./api/stac#constructor).
+to a loopback, link-local (such as the cloud metadata address `169.254.169.254`), cloud metadata (`fd00:ec2::254`) or
+unspecified address, nor to a private address unless you name the host in `allowed_hosts=` (an internal catalog); an
+`allowed_hosts=` list, when you pass one, refuses any other host. The host checked is the one the HTTP client
+connects to: an href whose host the client reads differently from the check (a backslash in it, for example) is
+refused. The fetch connects to an address the check approved, with the host's name in the request and in TLS, so a
+DNS answer that changes after the check is never used. Each redirect hop is checked the same way, and no
+`~/.netrc` is read. See [STAC § Constructor](./api/stac#constructor).
 
 **Spark's GDAL settings on the JVM.** A `spark.gdal.*` or `spark.databricks.labs.gbx.gdal.*` setting applies to the
 whole executor JVM: on dedicated compute, the first GDAL use in each JVM applies it for every job that JVM then runs.
@@ -342,16 +349,18 @@ stays, with the refused names added), and sets `GDAL_VRT_ENABLE_PYTHON` and
 starts inherit these values. With `GBX_GDAL_DRIVER_POLICY=off` set before the import, the
 environment is left as it is.
 
-**Known limitation: a host's address can change after the check.** The check resolves an href's
-host before the request, and the connection resolves it again, so a name whose DNS answer changes
-between the two (DNS rebinding) can reach an address the check refused. Name the hosts you trust
-in `allowed_hosts=`.
+**Known limitation: behind a proxy, the proxy picks the address.** With `HTTP_PROXY` or
+`HTTPS_PROXY` set (and the host not in `NO_PROXY`), the proxy resolves the href's host and
+connects to it, so the address checks above do not bound where it goes, and a host that does not
+resolve on the node is left to it. The proxy is your egress control there: name the hosts you
+trust in `allowed_hosts=`, which still applies.
 
-**Known limitation: GDAL follows redirects on a windowed read.** With `bbox`, GeoBrix follows the
-href's redirects itself, each hop checked, and GDAL opens the URL they end at; a redirect the
-server returns to one of GDAL's later range reads is followed by GDAL without the checks. Download
-without `bbox` (each hop is checked) and window the file afterwards, or name the hosts in
-`allowed_hosts=`.
+**Known limitation: GDAL connects on its own on a windowed read.** With `bbox`, GeoBrix follows the
+href's redirects itself, each hop checked, and GDAL opens the URL they end at. GDAL then resolves
+the host again for its range reads (a DNS answer that changes after the check is used there), and
+a redirect the server returns to one of those reads is followed by GDAL without the checks.
+Download without `bbox` (the fetch connects to the checked address, and each hop is checked) and
+window the file afterwards, or name the hosts in `allowed_hosts=`.
 
 **Known limitation: a netCDF CRS given as a URL.** A netCDF variable whose `crs` attribute is
 an http(s) URL makes GDAL fetch that URL when the file is opened, and no GDAL setting turns that

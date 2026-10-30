@@ -65,13 +65,15 @@ StacClient(
 
 **Asset hrefs are data.** The catalog, or the table you pass to `download` or `repair`, names each href, so
 `download` checks where it goes. An href must be an `http(s)` URL whose host does not resolve to a loopback,
-link-local (such as the cloud metadata address `169.254.169.254`) or unspecified address, even when you list it,
-nor to a private address unless you list the host in `allowed_hosts`; and it must be in `allowed_hosts` when you set
-it. Redirects are followed one at a time, and each hop is checked the same way. A
+link-local (such as the cloud metadata address `169.254.169.254`), cloud metadata (`fd00:ec2::254`) or unspecified
+address, even when you list it, nor to a private address unless you list the host in `allowed_hosts`; and it must be
+in `allowed_hosts` when you set it. The host checked is the one the download connects to, at an address the check
+approved. Redirects are followed one at a time, and each hop is checked the same way. A
 refused asset is not retried: its row has a NULL `out_file_path` and `is_out_file_valid = false`. The download
 reads no `~/.netrc`; the `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` settings and the `REQUESTS_CA_BUNDLE` bundle of
-the environment still apply. With `bbox`, the redirects are followed before GDAL opens the asset, and GDAL opens the
-URL they end at; a redirect the server returns later, to one of GDAL's range reads, is followed by GDAL itself.
+the environment still apply (behind a proxy, the proxy picks the address, so `allowed_hosts` is what bounds it). With
+`bbox`, the redirects are followed before GDAL opens the asset, and GDAL opens the URL they end at, resolving its host
+again; a redirect the server returns later, to one of GDAL's range reads, is followed by GDAL itself.
 
 ---
 

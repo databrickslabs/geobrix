@@ -46,7 +46,7 @@ client = OvertureClient(
 ```
 
 The HTTP download fallback fetches each asset href as `StacClient.download` does: the host must not resolve to a
-loopback, link-local or unspecified address, nor to a private one unless you list it in `allowed_hosts`; every
+loopback, link-local, cloud metadata or unspecified address, nor to a private one unless you list it in `allowed_hosts`; every
 redirect hop is checked, no `~/.netrc` is read, and when `allowed_hosts` is set (`"example.com"` is that host,
 `".example.com"` it and every host under it) an href off it is refused. A refused asset is not retried; its row has `is_out_file_valid = false`.
 

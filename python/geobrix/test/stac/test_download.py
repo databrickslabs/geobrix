@@ -103,15 +103,10 @@ def test_fetch_retries_then_gives_up_on_bad(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def server(monkeypatch, tmp_path):
-    """A local HTTP server: `routes` maps a path to (status, headers, body); `hits` records (path, headers)."""
-    for var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
-        monkeypatch.delenv(var, raising=False)
-        monkeypatch.delenv(var.lower(), raising=False)
-    tif = tmp_path / "served.tif"
-    _write_gtiff(str(tif))
-    hits, routes = [], {"/a.tif": (200, {}, tif.read_bytes())}
+def _start(routes, tls=None):
+    """A local HTTP(S) server on 127.0.0.1: `routes` maps a path to (status, headers, body); `hits` records
+    (path, headers). `tls` is a server ssl context, for HTTPS."""
+    hits = []
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -128,28 +123,67 @@ def server(monkeypatch, tmp_path):
             pass
 
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    if tls is not None:
+        srv.socket = tls.wrap_socket(srv.socket, server_side=True)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    yield types.SimpleNamespace(port=srv.server_address[1], hits=hits, routes=routes)
+    return srv, types.SimpleNamespace(
+        port=srv.server_address[1], hits=hits, routes=routes
+    )
+
+
+@pytest.fixture
+def served_tif(tmp_path):
+    tif = tmp_path / "served.tif"
+    _write_gtiff(str(tif))
+    return tif.read_bytes()
+
+
+@pytest.fixture
+def server(monkeypatch, served_tif):
+    """A local HTTP server: `routes` maps a path to (status, headers, body); `hits` records (path, headers)."""
+    for var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"):
+        monkeypatch.delenv(var, raising=False)
+        monkeypatch.delenv(var.lower(), raising=False)
+    srv, ns = _start({"/a.tif": (200, {}, served_tif)})
+    yield ns
     srv.shutdown()
     srv.server_close()
 
 
-@pytest.fixture
-def public_test(monkeypatch, server):
-    """`public.test` is a public (documentation) address to the checks, and the local server to the socket."""
-    real_getaddrinfo, real_addresses = socket.getaddrinfo, _http._addresses
+def _network(monkeypatch, names, routes):
+    """The rows' resolver and network: ``names`` maps a host name to the addresses the checks see (the
+    ``_addresses`` seam); ``routes`` maps a name or an address to the local (host, port) a socket reaches for it
+    (a route ignores the port the URL names)."""
+    real_getaddrinfo = socket.getaddrinfo
 
-    def getaddrinfo(host, *args, **kwargs):
-        host = "127.0.0.1" if host == "public.test" else host
-        return real_getaddrinfo(host, *args, **kwargs)
+    def getaddrinfo(host, port, *args, **kwargs):
+        if host in routes:
+            host, port = routes[host]
+        return real_getaddrinfo(host, port, *args, **kwargs)
 
     def addresses(host, port):
-        if host == "public.test":
-            return ["93.184.216.34"]
-        return real_addresses(host, port)
+        if host in names:
+            return list(names[host])
+        try:  # any other host resolves as it really does (a literal address to itself)
+            infos = real_getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except OSError:
+            return []
+        return list(dict.fromkeys(info[4][0] for info in infos))
 
     monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
     monkeypatch.setattr(_http, "_addresses", addresses)
+
+
+@pytest.fixture
+def public_test(monkeypatch, server):
+    """`public.test` is a public (documentation) address to the checks; the network routes that address, and the
+    name itself, to the local server."""
+    local = ("127.0.0.1", server.port)
+    _network(
+        monkeypatch,
+        {"public.test": ["93.184.216.34"]},
+        {"public.test": local, "93.184.216.34": local},
+    )
     return f"http://public.test:{server.port}"
 
 
@@ -173,7 +207,7 @@ def test_a_loopback_href_is_refused_before_any_request_and_not_retried(
         ("http://169.254.169.254/latest/meta-data/", "link-local"),
         ("http://[fe80::1]/x", "link-local"),
         ("http://10.0.0.5/x", "private"),
-        ("http://[fd00:ec2::254]/x", "private"),
+        ("http://[fd00:ec2::254]/x", "cloud metadata"),
         ("http://0.0.0.0/x", "unspecified"),
         ("http://[::ffff:127.0.0.1]/x", "loopback"),
     ],
@@ -232,23 +266,21 @@ def test_a_windowed_read_of_a_loopback_href_is_refused_before_gdal_opens_it(
 
 @pytest.fixture
 def private_test(monkeypatch, server):
-    """`stac.corp` is a private (RFC 1918) address, `meta.corp` the metadata address and `lo.corp` loopback, to the
-    checks; each is the local server to the socket."""
+    """`stac.corp` is a private (RFC 1918) address, `meta.corp` and `meta6.corp` the cloud metadata addresses and
+    `lo.corp` loopback, to the checks; the network routes each name and address to the local server.
+    """
     names = {
         "stac.corp": "10.0.0.5",
         "meta.corp": "169.254.169.254",
+        "meta6.corp": "fd00:ec2::254",
         "lo.corp": "127.0.0.1",
     }
-    real_getaddrinfo, real_addresses = socket.getaddrinfo, _http._addresses
-
-    def getaddrinfo(host, *args, **kwargs):
-        return real_getaddrinfo("127.0.0.1" if host in names else host, *args, **kwargs)
-
-    def addresses(host, port):
-        return [names[host]] if host in names else real_addresses(host, port)
-
-    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
-    monkeypatch.setattr(_http, "_addresses", addresses)
+    local = ("127.0.0.1", server.port)
+    _network(
+        monkeypatch,
+        {n: [a] for n, a in names.items()},
+        {k: local for k in [*names, *names.values()]},
+    )
     return server.port
 
 
@@ -266,7 +298,12 @@ def test_a_private_host_the_caller_lists_is_fetched_and_an_unlisted_one_refused(
 
 
 @pytest.mark.parametrize(
-    "host,kind", [("meta.corp", "link-local"), ("lo.corp", "loopback")]
+    "host,kind",
+    [
+        ("meta.corp", "link-local"),
+        ("meta6.corp", "cloud metadata"),
+        ("lo.corp", "loopback"),
+    ],
 )
 def test_a_listed_loopback_or_metadata_host_is_still_refused(
     server, private_test, tmp_path, host, kind
@@ -280,4 +317,168 @@ def test_a_listed_loopback_or_metadata_host_is_still_refused(
             str(tmp_path / "y"),
             allowed_hosts=["169.254.169.254"],
         )
+    assert server.hits == []
+
+
+# The host the check judges is the host the HTTP client connects to: a URL whose authority the two parsers split
+# differently (urllib3 ends the authority at a backslash, urlsplit at the next "/") is refused, at the first hop
+# and at a redirect hop.
+@pytest.mark.parametrize("hop", ["first", "redirect"])
+def test_an_href_the_http_client_reads_as_another_host_is_refused(
+    server, public_test, tmp_path, hop
+):
+    split = f"http://127.0.0.1:{server.port}\\@public.test/secret"
+    server.routes["/%5C@public.test/secret"] = (200, {}, b"SECRET")
+    href = split
+    if hop == "redirect":
+        server.routes["/a.tif"] = (302, {"Location": split}, b"")
+        href = f"{public_test}/a.tif"
+    out = tmp_path / "x"
+    with pytest.raises(_http.RefusedHref, match="reads this URL's host as 127.0.0.1"):
+        download_href(href, str(out))
+    first = ["/a.tif"] if hop == "redirect" else []
+    assert [p for p, _h in server.hits] == first and not out.exists()
+
+
+def test_a_name_with_a_private_address_among_public_ones_is_refused(
+    monkeypatch, server, tmp_path
+):
+    local = ("127.0.0.1", server.port)
+    _network(
+        monkeypatch,
+        {"multi.test": ["93.184.216.34", "10.0.0.5"]},
+        {"multi.test": local, "93.184.216.34": local, "10.0.0.5": local},
+    )
+    with pytest.raises(_http.RefusedHref, match="10.0.0.5, a private address"):
+        download_href(f"http://multi.test:{server.port}/a.tif", str(tmp_path / "x"))
+    assert server.hits == []
+
+
+@pytest.mark.parametrize("location", ["file:///etc/passwd", "ftp://127.0.0.1/x"])
+def test_a_redirect_to_another_scheme_is_refused(
+    server, public_test, tmp_path, location
+):
+    server.routes["/a.tif"] = (302, {"Location": location}, b"")
+    with pytest.raises(_http.RefusedHref, match="only as an http"):
+        download_href(f"{public_test}/a.tif", str(tmp_path / "x"))
+    assert [p for p, _h in server.hits] == ["/a.tif"]
+
+
+def test_a_redirect_chain_stops_at_the_hop_limit(server, public_test, tmp_path):
+    server.routes["/a.tif"] = (302, {"Location": "/a.tif"}, b"")
+    with pytest.raises(_http.RefusedHref, match=f"more than {_http.MAX_REDIRECTS}"):
+        download_href(f"{public_test}/a.tif", str(tmp_path / "x"))
+    assert len(server.hits) == _http.MAX_REDIRECTS + 1
+
+
+def test_the_request_goes_to_the_address_the_check_approved(
+    monkeypatch, server, tmp_path
+):
+    """A name that resolves again at connect time (DNS rebinding) to another host: the request goes to the
+    checked address, with the name in its Host header, and never to the rebound one."""
+    rebound_srv, rebound = _start({"/a.tif": (200, {}, b"SECRET")})
+    try:
+        _network(
+            monkeypatch,
+            {"public.test": ["93.184.216.34"]},
+            {
+                "public.test": ("127.0.0.1", rebound.port),
+                "93.184.216.34": ("127.0.0.1", server.port),
+            },
+        )
+        out = tmp_path / "x.tif"
+        download_href(f"http://public.test:{server.port}/a.tif", str(out))
+    finally:
+        rebound_srv.shutdown()
+        rebound_srv.server_close()
+    assert rebound.hits == [] and read_validate(str(out))
+    assert [h.get("Host") for _p, h in server.hits] == [f"public.test:{server.port}"]
+
+
+def _certificates(tmp_path):
+    """A test CA, and a server certificate and key it signed for each of public.test and other.test."""
+    import shutil
+    import subprocess
+
+    openssl = shutil.which("openssl")
+    if openssl is None:
+        pytest.skip("PRECONDITION MISSING: no openssl to make the test certificates")
+
+    def run(*args):
+        subprocess.run([openssl, *map(str, args)], check=True, capture_output=True)
+
+    ca_key, ca = tmp_path / "ca.key", tmp_path / "ca.pem"
+    run("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", ca_key, "-out", ca, "-days", "1",
+        "-subj", "/CN=GeoBrix test CA", "-addext", "basicConstraints=critical,CA:TRUE",
+        "-addext", "keyUsage=critical,keyCertSign,cRLSign")  # fmt: skip
+    leaves = {}
+    for name in ("public.test", "other.test"):
+        key, csr, crt = (tmp_path / f"{name}.{e}" for e in ("key", "csr", "pem"))
+        ext = tmp_path / f"{name}.ext"
+        ext.write_text(
+            f"subjectAltName=DNS:{name}\nbasicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\n"
+            "extendedKeyUsage=serverAuth\nauthorityKeyIdentifier=keyid,issuer\n"
+        )
+        run(
+            "req",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            key,
+            "-out",
+            csr,
+            "-subj",
+            f"/CN={name}",
+        )
+        run("x509", "-req", "-in", csr, "-CA", ca, "-CAkey", ca_key, "-CAcreateserial", "-out", crt,
+            "-days", "1", "-extfile", ext)  # fmt: skip
+        leaves[name] = (crt, key)
+    return ca, leaves
+
+
+def test_a_pinned_https_fetch_checks_the_certificate_against_the_host_name(
+    monkeypatch, server, served_tif, tmp_path
+):
+    """The connection goes to the checked address, and TLS still names and verifies the host: the server's
+    certificate for public.test passes, one for another name fails."""
+    import ssl
+
+    import requests
+
+    ca, leaves = _certificates(tmp_path)
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(ca))
+    for name, ok in (("public.test", True), ("other.test", False)):
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(*map(str, leaves[name]))
+        srv, ns = _start({"/a.tif": (200, {}, served_tif)}, tls=ctx)
+        try:
+            # only the checked address reaches the server: the name itself resolves nowhere
+            _network(
+                monkeypatch,
+                {"public.test": ["93.184.216.34"]},
+                {"93.184.216.34": ("127.0.0.1", ns.port)},
+            )
+            out = tmp_path / f"{name}.tif"
+            href = f"https://public.test:{ns.port}/a.tif"
+            if ok:
+                download_href(href, str(out))
+                assert read_validate(str(out)) and len(ns.hits) == 1
+            else:
+                with pytest.raises(requests.exceptions.SSLError):
+                    download_href(href, str(out))
+                assert ns.hits == [] and not out.exists()
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+
+def test_a_windowed_read_of_an_href_without_slashes_is_refused_before_gdal_opens_it(
+    server, tmp_path
+):
+    """rasterio reads ``https:host/path`` (no ``//``) as an https URL; the windowed read judges the href by the
+    same parse, so it is refused, not handed to GDAL."""
+    href = f"http:127.0.0.1:{server.port}/a.tif"
+    with pytest.raises(_http.RefusedHref, match="only as an http"):
+        windowed_download(href, str(tmp_path / "w.tif"), (2, 2, 5, 6))
     assert server.hits == []

@@ -38,8 +38,9 @@ done
 check_docker
 gbx_acquire_test_lock
 echo "start $$" >> "$GBX_DEMO_EVENTS"
-i=0
-while [ "$i" -lt $((HOLD * 10)) ]; do sleep 0.1; i=$((i + 1)); done
+# Hold by the clock: counting `sleep 0.1` iterations drifts (a loaded host made a 4 s hold take 6 s).
+t0=$(date +%s)
+while [ $(( $(date +%s) - t0 )) -le "$HOLD" ] && [ "$HOLD" -gt 0 ]; do sleep 0.1; done
 echo "end $$" >> "$GBX_DEMO_EVENTS"
 """
 
@@ -576,20 +577,28 @@ def test_the_callers_own_signal_trap_is_back_once_the_lock_is_held(demo):
 def test_the_run_and_work_lock_waits_share_one_deadline(demo):
     # The run-lock wait used the whole timeout and the work-lock wait started a fresh one:
     # a run could wait twice as long as GBX_TEST_LOCK_TIMEOUT says.
-    first = demo.popen("lockdemo.sh", "--hold", "4")
-    _wait_for(lambda: "start" in _events(demo))
+    # Margins of about 3 s each way, because a loaded host adds seconds of process start-up:
+    # the first run must end well inside the timeout (or the RUN lock times out instead), and
+    # a fresh work-lock deadline must land well past the bound.
+    started = time.monotonic()
+    demo.run("lockdemo.sh")
+    overhead = time.monotonic() - started  # what one uncontended run costs on this host, now
+
+    first = demo.popen("lockdemo.sh", "--hold", "6")
+    _wait_for(lambda: _events(demo).count("start") == 2)  # the baseline run was the first
 
     with demo.lock_held_by("pid=9 cmd=orphan since=then", lock=demo.work_lock_file):
         started = time.monotonic()
         res = demo.run(
-            "lockdemo.sh", GBX_TEST_LOCK_TIMEOUT="5"
-        )  # ~4 s run wait, then work
+            "lockdemo.sh", GBX_TEST_LOCK_TIMEOUT="10"
+        )  # 6-7 s run wait, then work
         elapsed = time.monotonic() - started
     first.communicate(timeout=30)
 
     assert res.returncode == 75, res.output
-    assert "Timed out after 5s waiting for earlier work" in res.output  # WORK_TIMEOUT
-    assert elapsed < 8, elapsed  # about 5 s in all, not 4 + 5
+    assert "Timed out after 10s waiting for earlier work" in res.output  # WORK_TIMEOUT
+    # about 10 s in all, not 6-7 + 10
+    assert elapsed < 10 + overhead + 2.5, (elapsed, overhead)
 
 
 def test_the_work_locks_holder_stays_named_while_a_child_of_the_work_outlives_it(demo):

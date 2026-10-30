@@ -118,6 +118,24 @@ jobs:
       # Required by .github/actions/jfrog-auth (on a cache miss): GitHub OIDC token exchange for pip and crates via JFrog.
       id-token: write
 
+  # CI is x86_64 only; the aarch64 native build is checked by the local two-architecture gate
+  # (bash scripts/commands/gbx-native-verify-arches.sh), whose stamp scripts/native/arch-gate.json names the native
+  # inputs it checked. This fails when they changed since: run the gate and commit the stamp. Builds nothing.
+  arch-gate:
+    name: Two-architecture native gate is current
+    runs-on:
+      group: databrickslabs-protected-runner-group
+      labels: linux-ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Check scripts/native/arch-gate.json against the native inputs
+        run: python3 scripts/native/native_inputs.py check-stamp
+
   build:
     # Heavy: full Scala test + Python test+coverage + GDAL native install (mvn -T 1C, ~10–15 min). Standard runner is too small.
     # Gated on the lightweight pyrx job so a pyrx failure fails the run fast,

@@ -29,6 +29,7 @@ FETCH = GITHUB / "actions" / "native_payload" / "action.yml"
 SCALA_BUILD = GITHUB / "actions" / "scala_build" / "action.yml"
 INPUTS = REPO_ROOT / "scripts" / "native" / "native_inputs.py"
 JVM_PAYLOAD = REPO_ROOT / "scripts" / "native" / "jvm_payload.py"
+GATE = REPO_ROOT / "scripts" / "commands" / "gbx-native-verify-arches.sh"
 HASH_RUN = "scripts/native/native_inputs.py hash --set build"
 PAYLOAD_KEY = "native-out-x86_64-${{ steps.%s.outputs.hash }}"
 ARCHES = ("aarch64", "x86_64")
@@ -128,6 +129,15 @@ def test_every_jvm_job_links_the_payload_jni_before_its_tests():
         if re.search(r"gdal311/libgdalalljni\.so\s+/usr/lib", p.read_text())
     ]
     assert not copies, f"GDAL 3.11's JNI still goes to /usr/lib in {copies}"
+
+
+def test_ci_checks_the_arch_gate_stamp_and_builds_nothing():
+    jobs = _load(WORKFLOWS / "build_main.yml")["jobs"]
+    gate = [j for j in jobs.values() if "native_inputs.py check-stamp" in str(j.get("steps"))]
+    assert len(gate) == 1
+    steps = gate[0]["steps"]
+    assert [s["uses"].split("@")[0] for s in steps if "uses" in s] == ["actions/checkout"]
+    assert not re.search(r"gbx-build|docker|mvnw|pip install", str(steps))
 
 
 # --- the native-input hash ------------------------------------------------------------------------------------------
@@ -290,3 +300,36 @@ def test_the_jvm_payload_is_the_layout_gdalmanager_reads(tmp_path, stray):
     assert (d / "hdf5-plugins" / "lib__nch5zstd.so").is_file() and (d / "MANIFEST.json").is_file()
     assert (out / "_native/share/proj/proj.db").is_file() and (out / "_native/share/gdal/osmconf.ini").is_file()
     assert f"root={out}" in res.stdout
+
+
+# --- the gate command -----------------------------------------------------------------------------------------------
+
+
+def _gate(tmp_path, *args, docker_ok=True):
+    fake = tmp_path / "bin"
+    fake.mkdir(exist_ok=True)
+    (fake / "docker").write_text("#!/bin/sh\nexit %d\n" % (0 if docker_ok else 1))
+    (fake / "docker").chmod(0o755)
+    env = dict(os.environ, PATH=f"{fake}{os.pathsep}{os.environ['PATH']}")
+    return subprocess.run(["bash", str(GATE), *args], capture_output=True, text=True, env=env)
+
+
+def _stamp_bytes():
+    p = REPO_ROOT / "scripts/native/arch-gate.json"
+    return p.read_bytes() if p.exists() else None
+
+
+def test_the_gate_help_runs_nothing(tmp_path):
+    before = _stamp_bytes()
+    res = _gate(tmp_path, "--help")
+    assert res.returncode == 0
+    assert "arch-gate.json" in res.stdout and "--verify" in res.stdout
+    assert _stamp_bytes() == before
+
+
+def test_the_gate_without_docker_stops_before_any_check(tmp_path):
+    before = _stamp_bytes()
+    res = _gate(tmp_path, docker_ok=False)
+    assert res.returncode == 1
+    assert "PRECONDITION MISSING" in res.stdout
+    assert _stamp_bytes() == before

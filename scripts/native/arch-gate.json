@@ -1,0 +1,64 @@
+{
+  "written_by": "bash scripts/commands/gbx-native-verify-arches.sh",
+  "checked_by": "python3 scripts/native/native_inputs.py check-stamp (CI: build_main.yml, job arch-gate)",
+  "native_inputs_sha256": "aa4d3b53ae2321a98fc62e05ed5c6b8abedf99a442bcca78dcd7df47405fbcd3",
+  "date": "2026-10-30",
+  "gdal_version": "3.13.3",
+  "native_revision": "1",
+  "built_from": "f4542264373dba1c0fa9736abf40cbb8e827191f",
+  "results": {
+    "aarch64": {
+      "verify_native": {
+        "passed": 22,
+        "failed": 0
+      },
+      "env5": {
+        "passed": 10,
+        "failed": 0
+      },
+      "env6": {
+        "passed": 10,
+        "failed": 0
+      }
+    },
+    "x86_64": {
+      "verify_native": {
+        "passed": 22,
+        "failed": 0
+      },
+      "env5": {
+        "passed": 10,
+        "failed": 0
+      },
+      "env6": {
+        "passed": 10,
+        "failed": 0
+      }
+    }
+  },
+  "files": {
+    "python/geobrix/src/_gbx_native_path.py": "91439a475d1c3910874667efef67770407ddd5ff03854c40bfa85d0bb2ce0361",
+    "python/geobrix/src/databricks/labs/gbx/_native/__init__.py": "5f5372383f99daf248cd9decc8c10b4eb643aab9cf64662b305c7d6f7964fad2",
+    "python/geobrix/src/databricks/labs/gbx/_native/_rules.py": "49859a6b802b52a291fc5a76f76edaba9815910edd3c293236bd0107b81824cd",
+    "python/geobrix/src/databricks/labs/gbx/_native/_selfcheck.py": "1a5afcbf5ee08e1530d15b6cb68884308163c019ef9c13baa573929718ea011d",
+    "rust-toolchain.toml": "862adc14eccb8038bf8cead88a04def82032db0e59673d7cf228131e5e25d3b1",
+    "scripts/native/JniSmoke.java": "d119583c5188d53f3c45ee7e0cf335a05fd2b2d347ead61d8310d2bfeb5b510b",
+    "scripts/native/bindings-requirements-aarch64.txt": "b9f3121fab509094149551e3f0e68eb69e6cf8800558ca80af6dbecfa1597dc8",
+    "scripts/native/bindings-requirements-x86_64.txt": "726bde8d4036bc5e19c0d8327c7f05ee079e71eb50d04db345e513bbce1fa3ca",
+    "scripts/native/build-bindings.sh": "297af4fdaf9dd250058b61f273773d9bcb1593ba84afd4f9fb3e693a51899e0e",
+    "scripts/native/build-deps.sh": "5805da06acc681a78285478fdde5037810f086f59cf12556174018a5cd8b9448",
+    "scripts/native/build-gdal.sh": "32defc5a7fb2d3d0e634931ea3be0ab02c9b7a353108ebc242fbbc762d397495",
+    "scripts/native/build-lib.sh": "e87f9da94a7ebd624c49418d78a5d257ea7846702c6157d8eb13f6859429dfd9",
+    "scripts/native/build-requirements-aarch64.txt": "96f5a2ed85332b958a434d6399a93621fc2fb280337ae5b414b970a09bc058fc",
+    "scripts/native/build-requirements-x86_64.txt": "837e514662848d4176fd642bafcac1fc9825dbc84919e8eb560756aa2e65ffb1",
+    "scripts/native/build.Dockerfile": "aa6d3805279feb2d098c852b28c48da81434961755ac4d57d73e8acadd9331e5",
+    "scripts/native/cargo-offline.toml": "a8326789ecde9b687444088317921b38f25c1cdedcb0117b9a17f945216de55e",
+    "scripts/native/maven/gdal-3.13.3-gbx1.jar": "17416efc7f12c47febaa21c50b22ee62d116f1f6102b046fc59607238093dc08",
+    "scripts/native/pins.conf": "1851ae79c6d216bc6e18ab87a60e7e75501497286e992beeb33f104ba91fb53c",
+    "scripts/native/relax-click.py": "eec3148c4394b430bff193ceafe6a895c2eb1f01c260866d5deec7dfabd84560",
+    "scripts/native/rename-sonames.py": "460bd8b888f03a02042ca1df1d2c1166e9fb6258a7c706ac7cecebd532acbb78",
+    "scripts/native/set-rpath.py": "7a45a8596d3144ad38c32b91e19c4b9888bc6b2bfe00abb09f269592b2c52521",
+    "scripts/native/stage-payload.sh": "e393fd9af05cf8d26bb6cfb5bc7f2c2f6400b9684eb7acd30ccab7d6d51f5260",
+    "src/main/scala/com/databricks/labs/gbx/rasterx/gdal/GDALManager.scala": "210035f38a1f801d9f8e59e52b839984fbb11e5cc6122f28bd63f7195d99c55c"
+  }
+}

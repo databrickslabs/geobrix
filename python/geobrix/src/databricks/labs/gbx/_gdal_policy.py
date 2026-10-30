@@ -24,8 +24,9 @@ where GeoBrix first touches GDAL, not per call:
   reason; a missing file stays the binding's own I/O error.
 - ``pyogrio()`` returns pyogrio after ``activate()``: GeoBrix's vector reads take it from there.
 
-One switch turns the whole defence off, on both tiers: ``GBX_GDAL_DRIVER_POLICY=off`` in the environment, or
-``spark.databricks.labs.gbx.gdal.driver_policy=off`` in the session conf (the JVM's ``GDALManager`` reads it).
+One switch turns the whole defence off: ``GBX_GDAL_DRIVER_POLICY=off`` in the environment, which this module reads
+(a Python process reads no Spark conf); the JVM's ``GDALManager`` reads the same variable, or
+``spark.databricks.labs.gbx.gdal.driver_policy=off`` in the cluster's Spark config.
 """
 
 from __future__ import annotations
@@ -42,7 +43,6 @@ from typing import Dict, Optional
 from databricks.labs.gbx import manifest
 
 ENV = "GBX_GDAL_DRIVER_POLICY"
-CONF = "spark.databricks.labs.gbx.gdal.driver_policy"
 SETTINGS = {"GDAL_VRT_ENABLE_RAWRASTERBAND": "NO", "GDAL_VRT_ENABLE_PYTHON": "NO"}
 # The phrase every refusal of this policy ends with (the rows read it).
 REFUSED_PHRASE = "which GeoBrix does not open"

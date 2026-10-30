@@ -276,6 +276,11 @@ _NO_REST_REASON = (
 _EARLY_STOP = re.compile(
     r"\b(CollectLimit|GlobalLimit|LocalLimit|TakeOrderedAndProject)\b"
 )
+# The nodes that run Python workers. A plan prints a node before its children, so a limit printed after the first of
+# them is below it: the workers consume all of their (limited) input, and nothing ends them early.
+_PYTHON_EVAL = re.compile(
+    r"\b(?:\w*EvalPython\w*|\w*InPandas|\w*MapInArrow|ArrowAggregatePython)\b"
+)
 _EARLY_STOP_REASON = (
     "an early-stop plan can end a worker before the read ({node} in the physical plan), so "
     "its peak may be lost"
@@ -313,8 +318,11 @@ def _early_stop_node(df) -> Optional[str]:
         return None
     if not text.strip():
         return None
-    m = _EARLY_STOP.search(text)
-    return m.group(1) if m else ""
+    ev = _PYTHON_EVAL.search(text)
+    for m in _EARLY_STOP.finditer(text):
+        if ev is None or m.start() < ev.start():
+            return m.group(1)
+    return ""
 
 
 def _worker_finder():

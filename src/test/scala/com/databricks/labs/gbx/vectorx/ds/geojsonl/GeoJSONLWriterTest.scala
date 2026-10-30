@@ -156,6 +156,34 @@ class GeoJSONLWriterTest extends PlanTest with SilentSparkSession {
         assert(!out.exists() || shards(out).isEmpty, "a refused CRS wrote a shard")
     }
 
+    test("the layer CRS is the srid's, else the PROJ4 column's; a non-integer srid that is no CRS is loud") {
+        spark.sparkContext.setLogLevel("ERROR")
+        // the writer reprojects to WGS84 (GeoJSONSeq is RFC 7946): a point 10 degrees east in EPSG:3857 comes back at
+        // lon 10 only when the layer carried the CRS
+        val merc = "+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 +units=m +no_defs"
+        val x = 1113194.9079327357
+        for ((srid, proj) <- Seq(("3857", ""), ("0", merc), ("999999", merc))) {
+            val out = Files.createTempDirectory("gbx_geojsonl_crs_").toFile
+            out.delete()
+            spark.createDataFrame(Seq(("a", 1, JTS.toWKB(gf.createPoint(new Coordinate(x, 0.0))), srid, proj)))
+                .toDF("name", "pop", "geom_0", "geom_0_srid", "geom_0_srid_proj")
+                .write.format("geojsonl_ogr").mode("overwrite").save(out.getAbsolutePath)
+            val back = spark.read.format("geojson_ogr").option("multi", "true").load(out.getAbsolutePath)
+            val gcol = back.schema.fields.map(_.name).find(_.endsWith("_srid")).get.dropRight("_srid".length)
+            val lon = JTS.fromWKB(back.select(gcol).first().getAs[Array[Byte]](0)).getCoordinate.x
+            assert(math.abs(lon - 10.0) < 1e-6, s"srid=$srid proj=$proj: lon $lon (the layer lost its CRS)")
+        }
+        val out = Files.createTempDirectory("gbx_geojsonl_badsrid_").toFile
+        out.delete()
+        val e = intercept[Exception] {
+            spark.createDataFrame(Seq(("a", 1, JTS.toWKB(gf.createPoint(new Coordinate(0.1, 40.0))), "NOT:ACRS", "")))
+                .toDF("name", "pop", "geom_0", "geom_0_srid", "geom_0_srid_proj")
+                .write.format("geojsonl_ogr").mode("overwrite").save(out.getAbsolutePath)
+        }
+        val messages = Iterator.iterate[Throwable](e)(_.getCause).takeWhile(_ != null).map(_.getMessage).toSeq
+        assert(messages.exists(m => m != null && m.contains("srid column") && m.contains("Fix:")), messages.mkString(" | "))
+    }
+
     test("an unparseable PROJ4 column is loud: the write fails with the column and a Fix") {
         spark.sparkContext.setLogLevel("ERROR")
         val out = Files.createTempDirectory("gbx_geojsonl_bad_").toFile

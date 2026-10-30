@@ -7,7 +7,8 @@ import org.gdal.gdal.gdal
 
 /** The child JVM of [[GDALManagerPolicyTest]]: one fresh process whose first GDAL use is the one named, then what the
   * process's GDAL reports. Arguments: `ogr` (the first use is `initOgr`), `ogr-force` (a forced OGR registration) or
-  * `raster` (`init`), then `key=value` pairs for the config of an `init`. Prints `GDAL_SKIP=`,
+  * `raster` (`init`), or `ogr-cluster` (`initOgr` in a JVM whose SparkConf holds the `key=value` pairs, as a cluster's
+  * Spark config does), then `key=value` pairs for the config of an `init`. Prints `GDAL_SKIP=`,
   * `GDAL_VRT_ENABLE_RAWRASTERBAND=`, `PRESENT=` (the refused drivers GDAL has registered) and `DONE`.
   */
 object FreshJvmPolicyProbe {
@@ -22,6 +23,12 @@ object FreshJvmPolicyProbe {
         }.toMap
         try {
             if (mode == "ogr") GDALManager.initOgr()
+            else if (mode == "ogr-cluster") {
+                val conf = new org.apache.spark.SparkConf().setMaster("local[1]").setAppName("gbx-policy-probe")
+                configs.foreach { case (k, v) => conf.set(k, v) }
+                new org.apache.spark.SparkContext(conf) // SparkEnv.get is this JVM's cluster conf
+                GDALManager.initOgr()
+            }
             else if (mode == "ogr-force")
                 com.databricks.labs.gbx.vectorx.ds.ogr.OGR_SchemaInference.enableOGRDrivers(force = true)
             else GDALManager.init(ExpressionConfig(configs, new SerializableConfiguration(new Configuration(false))))

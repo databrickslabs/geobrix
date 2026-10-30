@@ -198,7 +198,7 @@ primitives. The table below shows which are active in this writer and which are 
 | `gbx_file_read` (FILE-tier read) | Not in the DataSource | FILE-tier reads for vector data go through `vector_file_read` at the function layer. |
 
 :::note Coordinate reference systems
-The writer reads the CRS from the `geom_0_srid` column (or `sridCol`) and passes it to the OGR GeoJSONSeq driver. Per RFC 7946, each Feature is formally WGS84; for other CRS the driver may write a non-standard `crs` member. If `srid` is `"0"`, the `geom_0_srid_proj` PROJ4 fallback is used. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
+The writer reads the CRS from the `geom_0_srid` column (or `sridCol`) and passes it to the OGR GeoJSONSeq driver. Per RFC 7946, each Feature is WGS84: the heavyweight writer's driver reprojects features in another CRS to WGS84. If `srid` is `"0"`, or an integer code that is neither an EPSG nor an ESRI code, the `geom_0_srid_proj` PROJ4 fallback is used. On the heavyweight tier (`geojsonl_ogr`), a `srid` or PROJ4 value that is not a CRS GeoBrix reads fails the write with an error that names the column, rather than writing the layer without a CRS. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
 :::
 
 :::note Shared file-access layer

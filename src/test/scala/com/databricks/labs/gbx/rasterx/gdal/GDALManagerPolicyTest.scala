@@ -71,6 +71,16 @@ class GDALManagerPolicyTest extends AnyFunSuite {
         assert(out("PRESENT").split(",").filter(_.nonEmpty).toSet.intersect(Refused).isEmpty)
     }
 
+    test("the session's conf switch turns the policy off at an init, and the cluster's at an OGR-first use") {
+        for (out <- Seq(
+              probe("raster", Seq(s"${GDALManager.PolicyConf}=off")),
+              probe("ogr-cluster", Seq(s"${GDALManager.PolicyConf}=off"))
+            )) {
+            assert(out("GDAL_SKIP") == "<unset>", s"the conf switch left a skip list: ${out("GDAL_SKIP")}")
+            assert(out("PRESENT").split(",").exists(_.nonEmpty), "with the switch off, the refused drivers register")
+        }
+    }
+
     test("the documented switch turns the skip off, on the OGR path too") {
         val out = probe("ogr", env = Map("GBX_GDAL_DRIVER_POLICY" -> "off"))
         assert(out("GDAL_SKIP") == "<unset>", s"the switch left a skip list: ${out("GDAL_SKIP")}")

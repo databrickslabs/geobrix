@@ -1202,6 +1202,13 @@ def test_the_reading_is_none_when_the_plan_is_not_given_or_stops_early(
     assert peak.reason == attribution._EARLY_STOP_REASON.format(node="CollectLimit")
 
 
+def _udf_over_a_limit(spark):
+    from pyspark.sql import functions as F
+
+    ident = F.udf(lambda x: x, "long")
+    return spark.range(100, numPartitions=2).limit(5).agg(F.sum(ident("id")))
+
+
 @pytest.mark.parametrize(
     "build, names",
     [
@@ -1216,6 +1223,8 @@ def test_the_reading_is_none_when_the_plan_is_not_given_or_stops_early(
             ("GlobalLimit", "LocalLimit"),
         ),
         (lambda s: s.sql("SELECT id FROM range(100) LIMIT 2"), ("CollectLimit",)),
+        # a limit that builds the input, below the Python evaluation, ends no worker early
+        (lambda s: _udf_over_a_limit(s), ("",)),
     ],
 )
 def test_an_early_stop_is_found_in_the_physical_plan(spark_session_local, build, names):

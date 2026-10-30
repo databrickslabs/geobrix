@@ -763,6 +763,15 @@ SPEC_SE: Tuple[Case, ...] = (
         None,
         ("session",),
     ),
+    # An integer SRID that is an ESRI code, not an EPSG one: the engine reads it as ESRI:<n>, as resolve_crs does.
+    Case(
+        "se_tcrs_int_esri",
+        T,
+        (Build("tile_4326"), "102003"),
+        "tile_props",
+        ("ESRI:102003", 102003),
+        ("session",),
+    ),
     # A target CRS that names a grid by path is refused before GDAL or PROJ sees it: an error tile (the value is
     # data) with a Fix, the same on every level.
     Case(
@@ -950,6 +959,24 @@ SPEC_SE: Tuple[Case, ...] = (
         (Build("se_error_pair"), NORM_DIFF),
         "error_tile",
         UPSTREAM_ERROR,
+        ("session",),
+    ),
+    # Two tiles whose CRS differ: a fault of the data, so that row's error tile (not a parameter error that fails the
+    # query); the same expression over a matching pair afterwards still runs (the check caches no data fault).
+    Case(
+        "se_ma_crs_mismatch",
+        MALG,
+        (Build("se_mismatch_pair"), "(A - B) / (A + B) + 0"),
+        "error_tile_has",
+        "Input spatial reference systems are inconsistent",
+        ("session",),
+    ),
+    Case(
+        "se_ma_after_mismatch",
+        MALG,
+        (Build("se_pair"), "(A - B) / (A + B) + 0"),
+        "ref",
+        "norm_diff",
         ("session",),
     ),
     Case("se_ma_null", MALG, (None, NORM_DIFF), "null", None, ("session",)),
@@ -1294,6 +1321,11 @@ def _se_build(name: str, tmpdir: Optional[str] = None):
         return [
             _tile(_gtiff(a[np.newaxis], "EPSG:3857")),
             _tile(_gtiff(b[np.newaxis], "EPSG:3857")),
+        ]
+    if name == "se_mismatch_pair":  # the se_pair rasters, the second one in another CRS
+        return [
+            _tile(_gtiff(a[np.newaxis], "EPSG:3857")),
+            _tile(_gtiff(b[np.newaxis], "EPSG:4326")),
         ]
     if name == "se_one":
         return [_tile(_gtiff(a[np.newaxis], "EPSG:3857"))]

@@ -72,3 +72,33 @@ def test_every_spec_argument_is_canonical_and_its_choices_exist(usage, fn):
         )
         if choices:
             assert set(words) <= set(choices), (a.arg, words, choices)
+
+
+def test_the_engines_exception_mode_is_its_own_threads(usage):
+    """The engine turns osgeo's exceptions off for its own calls (``run._gdal_status``); in the pinned GDAL that mode
+    is the calling thread's alone, so another thread using osgeo meanwhile keeps the process's mode.
+    """
+    import threading
+
+    gdal = run._gdal()
+    before = gdal.GetUseExceptions()
+    gdal.UseExceptions()
+    seen, inside, read = {}, threading.Event(), threading.Event()
+
+    def other():
+        assert inside.wait(10)
+        seen["other"] = gdal.GetUseExceptions()
+        read.set()
+
+    t = threading.Thread(target=other)
+    t.start()
+    try:
+        with run._gdal_status():
+            seen["engine"] = gdal.GetUseExceptions()
+            inside.set()
+            assert read.wait(10)
+    finally:
+        t.join(10)
+        if not before:
+            gdal.DontUseExceptions()  # the process's mode as it was
+    assert seen == {"engine": 0, "other": 1}

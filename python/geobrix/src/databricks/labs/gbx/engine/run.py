@@ -162,7 +162,9 @@ def virtual_source(sql_name: str, path: str) -> None:
     allowlist, and, for a VRT, opens as a VRT. Only the header is read: a driver off the allowlist is identified,
     never opened. Its sources are not walked here: GDAL opens them when the tile is read, and the refused drivers are
     not registered then (``apply_driver_policy``); a source with a driver off the allowlist is read as GDAL allows.
+    The path is data: a remote location is refused first (``_gdal_policy.data_path``), before GDAL reads anything.
     """
+    _gdal_policy.data_path(path, f"{sql_name}: the virtual tile's file")
     apply_driver_policy()
     with engine_settings(), _gdal_status() as gdal:
         drv = gdal.IdentifyDriverEx(
@@ -255,16 +257,48 @@ def _execute(gdal, alg_path: str, tokens, shown, refused):
         del alg, group  # release both handles, the step before its group
 
 
-def _check_expression(gdal, fn, tokens, props, prefix, shown) -> None:
-    """A map-algebra expression GDAL cannot evaluate is a parameter error: GDAL's own check (one pixel, through a
-    VRT output) runs once per expression and input props, before the first real run."""
+def _blank_inputs(gdal, names, props, prefix, shown) -> dict:
+    """For each input name, a blank GeoTIFF with only its props (size, bands, type; no pixels written, no
+    georeferencing): what the expression check runs on. Returns real name -> blank name; ``shown`` names each
+    blank as its input."""
+    blanks = {}
+    drv = gdal.GetDriverByName("GTiff")
+    for i, (name, p) in enumerate(zip(names, props)):
+        blank = f"{prefix}/check{i}.tif"
+        ds = drv.Create(
+            blank,
+            p.width,
+            p.height,
+            p.bands,
+            gdal.GetDataTypeByName(p.dtype),
+            options=["SPARSE_OK=TRUE"],
+        )
+        if ds is None:
+            raise DataError(
+                gdal.GetLastErrorMsg() or f"cannot make the check input for {name}"
+            )
+        ds = None
+        blanks[name] = blank
+        shown[blank] = shown.get(name, name)
+    return blanks
+
+
+def _check_expression(gdal, fn, tokens, props, names, prefix, shown) -> None:
+    """A map-algebra expression GDAL cannot evaluate is a parameter error: GDAL's own check (through a VRT output,
+    so no pixel is computed) runs once per expression and input props, before the first real run. It runs on blank
+    inputs made from the props alone (``_blank_inputs``), so its outcome is a function of its cache key: a fault of
+    the data itself (inputs whose CRS differ) is left to the real run, where it is that row's error tile and is not
+    cached."""
     key = tuple(t for t in tokens if t.startswith(("--calc=", "--dialect="))) + tuple(
         props
     )
     with _validated_lock:
         known = _validated.get(key)
     if known is None:
+        blanks = _blank_inputs(gdal, names, props, prefix, shown)
         dry = [t for t in tokens if not t.startswith(("--output", "--creation-option"))]
+        for real, blank in blanks.items():
+            dry = [t.replace(real, blank) for t in dry]
         dry += [f"--output={prefix}/check.vrt", "--output-format=VRT"]
         try:
             _execute(gdal, fn.gdal.alg, dry, shown, ParamError)
@@ -332,7 +366,7 @@ def run(
                 return (DataError if data else ParamError)(f"{fn.sql_name}: {msg}")
 
             if block.alg == "raster calc":
-                _check_expression(gdal, fn, tokens, props, prefix, shown)
+                _check_expression(gdal, fn, tokens, props, names, prefix, shown)
             _execute(gdal, block.alg, tokens, shown, refused)
             return Result(_read(gdal, out), None, command)
         except DataError as exc:

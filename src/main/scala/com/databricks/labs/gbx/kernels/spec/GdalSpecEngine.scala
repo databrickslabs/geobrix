@@ -129,17 +129,39 @@ object GdalSpecEngine {
         }
     }
 
+    /** For each input, a blank GeoTIFF with only its props (size, bands, type; no pixel written, no georeferencing):
+      * what the expression check runs on (the light tier's `_blank_inputs`). Returns (real name, blank name). */
+    private def blankInputs(inNames: Seq[String], inputs: Seq[RasterProps], prefix: String): Seq[(String, String)] = {
+        val driver = gdal.GetDriverByName("GTiff")
+        inNames.zip(inputs).zipWithIndex.map { case ((name, p), i) =>
+            val blank = s"$prefix/check$i.tif"
+            gdal.ErrorReset()
+            val ds =
+                try driver.Create(blank, p.width, p.height, p.bands, gdal.GetDataTypeByName(p.dtype), Array("SPARSE_OK=TRUE"))
+                catch { case e: RuntimeException => throw new SpecDataException(e.getMessage) }
+            if (ds == null) throw new SpecDataException(lastError(s"cannot make the check input for $name"))
+            ds.delete()
+            name -> blank
+        }
+    }
+
     /** A map-algebra expression GDAL cannot evaluate is a parameter error: GDAL's own check (a VRT output, so no
-      * pixel is computed) runs once per expression and input props, before the first real run. */
-    private def checkExpression(fn: SpecFunction, tokens: Seq[String], inputs: Seq[RasterProps], prefix: String,
-                                names: Seq[(String, String)]): Unit = {
+      * pixel is computed) runs once per expression and input props, before the first real run. It runs on blank
+      * inputs made from the props alone ([[blankInputs]]), so its outcome is a function of its cache key: a fault of
+      * the data itself (inputs whose CRS differ) is left to the real run, where it is that row's error tile and is
+      * not cached. */
+    private def checkExpression(fn: SpecFunction, tokens: Seq[String], inputs: Seq[RasterProps], inNames: Seq[String],
+                                prefix: String, names: Seq[(String, String)]): Unit = {
         val key = (tokens.filter(t => t.startsWith("--calc=") || t.startsWith("--dialect=")) ++ inputs.map(_.toString))
             .mkString("\u0000")
         val known = Option(validated.get(key)).getOrElse {
-            val dry = tokens.filterNot(t => t.startsWith("--output") || t.startsWith("--creation-option")) ++
+            val blanks = blankInputs(inNames, inputs, prefix)
+            val shownBlanks = names ++ blanks.flatMap { case (real, blank) => names.find(_._1 == real).map(blank -> _._2) }
+            val dry = tokens.filterNot(t => t.startsWith("--output") || t.startsWith("--creation-option"))
+                .map(t => blanks.foldLeft(t) { case (acc, (real, blank)) => acc.replace(real, blank) }) ++
                 Seq(s"--output=$prefix/check.vrt", "--output-format=VRT")
             val outcome =
-                try { execute(fn.gdal.alg, dry, names, m => new SpecParamException(m)); "" }
+                try { execute(fn.gdal.alg, dry, shownBlanks, m => new SpecParamException(m)); "" }
                 catch {
                     case e: SpecDataException  => e.getMessage
                     case e: SpecParamException => e.getMessage
@@ -203,7 +225,7 @@ object GdalSpecEngine {
                         val refused: String => RuntimeException = m =>
                             if (data) new SpecDataException(s"${fn.sqlName}: $m")
                             else new SpecParamException(s"${fn.sqlName}: $m")
-                        if (block.alg == "raster calc") checkExpression(fn, tokens, inputs, prefix, names)
+                        if (block.alg == "raster calc") checkExpression(fn, tokens, inputs, inNames, prefix, names)
                         execute(block.alg, tokens, names, refused)
                         Some(SpecResult(gdal.GetMemFileBuffer(out), null, command))
                 }

@@ -131,7 +131,9 @@ def test_build_bench_notebook_cells():
     # See fix(bench): classic install force-reinstalls geobrix CODE only, not the closure.
     assert "/Volumes/c/s/v/geobrix-0.4.3-py3-none-any.whl" in src
     assert "--force-reinstall" in src and "--no-deps" in src
-    assert "geobrix[light-dbr19]" in src
+    # the env wheel's own deps, no light extra
+    assert "'geobrix @ file://' + WHL" in src
+    assert "light-dbr19" not in src and "light_dbr19" not in src
     assert "HeavyBenchMain" in src and "_jvm" in src
     assert "run_spark_path" in src or "run_pure_core" in src
     assert "bench_results" in src
@@ -225,7 +227,7 @@ def test_build_bench_notebook_one_cell_per_section_in_order():
     assert (
         'show_section("heavyweight", "spark-path", run_heavy("spark-path"))' in secs[3]
     )
-    # 1 install cell ([light-dbr19] @ file:// -- no uninstall/restartPython dance) +
+    # 1 install cell (the env wheel @ file:// -- no uninstall/restartPython dance) +
     # setup + 4 sections + epilogue + exit (exit is its own cell so the compare
     # summary render isn't truncated -- see build_bench_notebook)
     assert len(nb["cells"]) == 8
@@ -301,7 +303,7 @@ def test_build_bench_notebook_fix_errors_default_and_override():
 
 def test_build_bench_notebook_setup_cell_collapsed():
     # cells[1] (the big setup cell) is collapsed by default; the single install cell
-    # ([light-dbr19] @ file://) and the section cells are not.
+    # (the env wheel @ file://) and the section cells are not.
     nb = cl.build_bench_notebook(_cfg())
     setup = nb["cells"][1]
     assert "import json" in "".join(setup["source"])  # it's the assembled setup, sanity

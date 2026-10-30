@@ -239,9 +239,9 @@ Intentionally NOT hash-pinned (per maintainer policy):
 ### Policy
 
 geobrix pins runtime-sensitive core packages (`urllib3`, `pandas`, `numpy`) to
-the preinstalled version of each DBR/Serverless base so a cluster `%pip install
-geobrix[light_dbrNN]` stays silent (no "a core Python package changed" notice) and the
-installed versions remain base-compatible.  geobrix does not ship a newer version of these
+the preinstalled version of each DBR/Serverless base (the env wheels' `core.txt`) so a cluster
+`%pip install` of the env wheel for the runtime stays silent (no "a core Python package changed"
+notice) and the installed versions remain base-compatible.  geobrix does not ship a newer version of these
 than the base.  `idna` is the exception, and is **not** capped: see the httpx2 / httpcore2
 case below.
 
@@ -283,14 +283,14 @@ base-version fidelity).  These CVEs are resolved when Databricks ships a patched
   later (9.4.12 is the newest admitted by the `rio-tiler>=9.0,<10` cap) fetch remote rasters
   through `httpx2`.  The patched `httpx2` (`>=2.11` for the MED multipart/header CVEs, `>=2.12`
   for HIGH CVE-2026-84382 decompression-amplification, plus the paired `httpcore2>=2.10`
-  for HIGH CVE-2026-84381) **requires `idna>=3.18`**.  The extras used to cap idna at the
+  for HIGH CVE-2026-84381) **requires `idna>=3.18`**.  The 0.5.x light extras used to cap idna at the
   runtime's version (`<3.8` env5 / `<3.12` env6), so pip backtracked to `httpx2` 2.3.0 for every
   user of a light extra, not only in the CI locks, and the cap held no one at a safe base either
   (the base idna 3.7 / 3.11 is itself below the 3.15 fix).  The cap was cosmetic (it only
   silenced Databricks' "a core package changed: idna" notice), so it is gone from
-  `pyproject.toml` and the two light CI `.in` files: the four light locks now carry `httpx2` /
-  `httpcore2` 2.16.0 and idna 3.20, and a light-extra install upgrades the runtime's idna and may
-  show that one-time notice.  idna 3.x keeps the API `requests` (2.32.x) and `urllib3` use:
+  `pyproject.toml`, the env wheels' `core.txt` and the two light CI `.in` files: the four light locks
+  now carry `httpx2` / `httpcore2` 2.16.0 and idna 3.20, and installing GeoBrix upgrades the
+  runtime's idna and may show that one-time notice.  idna 3.x keeps the API `requests` (2.32.x) and `urllib3` use:
   their IDN host encoding gives the same result on 3.7, 3.11 and 3.20, and every runtime's
   preinstalled package set resolves with idna 3.20.  The patched `httpx2` also needs `anyio>=4.10`
   and `httpcore2` needs `h11>=0.16`, so the install upgrades `anyio` on env5 / DBR 17.3 / DBR 18
@@ -344,6 +344,6 @@ release unless a runtime fixes its version:
   has no patched release, is not yet on the package mirror, or needs a major bump of a pinned
   consumer (kepler.gl, the AI tool stack, `@loaders.gl`).
 
-**2026-10-28 idna cap lifted.**  `idna` is no longer capped in any light extra, so the four light
+**2026-10-28 idna cap lifted.**  `idna` is no longer capped in any install, so the four light
 locks carry `httpx2` / `httpcore2` 2.16.0 and idna 3.20, and the httpx2 / httpcore2 / idna alerts
 on the light locks are cleared (see the httpx2 / httpcore2 case above).

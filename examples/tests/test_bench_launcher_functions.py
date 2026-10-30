@@ -30,3 +30,10 @@ def test_a_mistyped_bng_name_is_refused_and_every_real_one_is_not():
     readers = (launcher._BENCH_SRC / "readers.py").read_text()
     legs = [n[len("run_") :] for n in re.findall(r"^def (run_bng_\w+)\(", readers, re.M)]
     assert len(legs) >= 20 and launcher._unknown_bng_names(",".join(legs)) == []
+
+
+def test_the_bench_installs_the_env_wheel_of_the_clusters_runtime():
+    # DBR 17.3 / 18 run the env5 wheel, DBR 19 the env6 wheel (the other family's refuses to import)
+    for key, env in (("17.3.x-scala2.13", 5), ("18.x-aarch64-scala2.13", 5), ("19.x-scala2.13", 6),
+                     ("19.x-cpu-ml-scala2.13", 6)):  # fmt: skip
+        assert launcher.env_of_runtime(key) == env, key

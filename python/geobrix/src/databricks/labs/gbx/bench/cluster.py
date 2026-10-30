@@ -3722,7 +3722,7 @@ def build_bench_notebook(cfg: dict) -> dict:
             "                       + r.stdout[-1200:] + ' || ' + r.stderr[-1200:])\n"
             "r2 = subprocess.run(\n"
             "    [sys.executable, '-m', 'pip', 'install', '--quiet',\n"
-            "     'geobrix[light-dbr19]', 'markdown'],\n"
+            "     'geobrix @ file://' + WHL, 'markdown'],\n"
             "    capture_output=True, text=True,\n"
             ")\n"
             "print('deps install rc:', r2.returncode, flush=True)\n"
@@ -3760,7 +3760,7 @@ def build_bench_notebook(cfg: dict) -> dict:
             "                       + r.stdout[-1200:] + ' || ' + r.stderr[-1200:])\n"
             "r2 = subprocess.run(\n"
             "    [sys.executable, '-m', 'pip', 'install', '--quiet',\n"
-            "     'geobrix[light-dbr19]', 'markdown'],\n"
+            "     'geobrix @ file://' + WHL, 'markdown'],\n"
             "    capture_output=True, text=True,\n"
             ")\n"
             "print('deps install rc:', r2.returncode, flush=True)\n"
@@ -3771,9 +3771,9 @@ def build_bench_notebook(cfg: dict) -> dict:
             "dbutils.library.restartPython()\n"
         ).format(wheel=cfg["wheel"])
     cells = [
-        # Ensure BOTH fresh geobrix code AND the full [light-dbr19] dep set every run.
-        # [light-dbr19] is the canonical protobuf-6 classic DBR 19 extra: it drops the
-        # mapbox-vector-tile<2.2 cap that conflicts with DBR 19's protobuf>=6.31.1.
+        # Ensure BOTH fresh geobrix code AND its dependency set every run. The wheel is the env
+        # wheel for the compute's runtime (+env5: DBR 17.3 / 18, env 5; +env6: DBR 19, env 6): its
+        # own Requires-Dist holds the runtime's packages, so step 2 is a plain install of it.
         _cell(_install_cell_src),
         # Cmd 3 -- the big setup cell (preamble + sink + helpers). Collapsed by default so the
         # run view leads with the per-section result cells, not this wall of setup code.

@@ -12,9 +12,10 @@ The cluster + artifacts must be provisioned by the operator (see the installatio
 - heavyweight: x86 DBR 17.3 or 18 LTS with the init script + bundle + geobrix wheel + the bench
   geobrix-*-tests.jar staged on a Volume (the tests.jar is attached here as a job library;
   the production fat JAR is installed by the heavyweight init script, NOT attached here).
-- lightweight (incl. ARM): the [light-dbr19] wheel (installed by the notebook's %pip cell).
-  [light-dbr19] is the classic DBR 19 variant; it drops the mapbox-vector-tile<2.2 cap
-  that conflicts with DBR 19's protobuf>=6.31.1. On ARM clusters use --lightweight-only
+- lightweight (incl. ARM): the env wheel for the compute's runtime, geobrix-<version>+env5 (DBR 17.3 /
+  18, Serverless env 5) or +env6 (DBR 19, Serverless env 6), installed by the notebook's install cell
+  (no light extra). Without GBX_BUNDLE_WHEEL_VOLUME_PATH the launcher picks it from the cluster's
+  Databricks Runtime (or --env-version on Serverless). On ARM clusters use --lightweight-only
   (heavyweight is x86-only by design).
 
 Requires: databricks-sdk, and env config (see databricks_cluster_config.example.env).
@@ -116,6 +117,12 @@ def _unknown_bng_names(functions: str) -> list:
     registered = re.findall(r'^    "(bng_\w+)": FnSpec\(', spec, re.M)
     known = set(legs) | set(registered)
     return [x for x in _function_names(functions) if x.startswith("bng_") and x not in known]
+
+
+def env_of_runtime(spark_version: str) -> int:
+    """The env wheel family of a Databricks Runtime ``spark_version`` key: 6 for DBR 19 and later, else 5
+    (DBR 17.3 and 18)."""
+    return 6 if int(spark_version.split(".", 1)[0]) >= 19 else 5
 
 
 def _arg(flag: str, default: str) -> str:
@@ -273,8 +280,8 @@ def main() -> int:
     heavyweight = "--lightweight-only" not in sys.argv
     lightweight = "--heavyweight-only" not in sys.argv
     # --serverless: submit to Serverless compute instead of an existing cluster. Light-only (no JAR).
-    # --env-version N: Serverless environment version to request (default 6; env v6 is the
-    # protobuf-6 regime, uses [light-dbr19] extras). Skips the cluster_id requirement.
+    # --env-version N: Serverless environment version to request (default 6, the +env6 wheel's).
+    # Skips the cluster_id requirement.
     serverless = "--serverless" in sys.argv
     env_version = _arg("--env-version", "6")
     if serverless:
@@ -584,8 +591,7 @@ def main() -> int:
     wheel = _strip_invisible(
         os.environ.get("GBX_BUNDLE_WHEEL_VOLUME_PATH") or ""
     ).strip()
-    if not wheel:
-        wheel = f"{volroot}/geobrix-{ver}-py3-none-any.whl"
+    explicit_wheel = bool(wheel)  # else: the env wheel for the compute's runtime, chosen below
 
     corpus = (
         _strip_invisible(os.environ.get("GBX_BENCH_CORPUS") or "").strip()
@@ -744,7 +750,7 @@ def main() -> int:
         #  --max-partition-bytes: cap bytes-per-partition (Serverless-settable) to tune rows/task.
         max_partition_bytes=max_partition_bytes,
         #  --serverless: use Serverless compute (light-only, no JAR). --env-version N selects
-        #  the environment version to pin (default 6 = protobuf-6 / [light-dbr19] regime).
+        #  the environment version to pin (default 6, the +env6 wheel's).
         serverless=serverless,
         env_version=env_version,
     )
@@ -840,6 +846,17 @@ def main() -> int:
         print("Install databricks-sdk: pip install databricks-sdk", file=sys.stderr)
         return 2
 
+    w = (
+        WorkspaceClient(profile=profile)
+        if profile
+        else WorkspaceClient(host=host, token=token)
+    )
+    if not explicit_wheel:
+        # The env wheel for the compute's runtime: the other family's wheel refuses to import there.
+        env = int(env_version) if serverless else env_of_runtime(w.clusters.get(cluster_id).spark_version)
+        wheel = f"{volroot}/geobrix-{ver}+env{env}-py3-none-any.whl"
+        cfg["wheel"] = wheel
+
     # Pre-flight: show the operator exactly what will run before submitting.
     print("=" * 64)
     if serverless:
@@ -866,12 +883,6 @@ def main() -> int:
 
     nb = build_bench_notebook(cfg)
     nb_bytes = json.dumps(nb, indent=1).encode("utf-8")
-
-    w = (
-        WorkspaceClient(profile=profile)
-        if profile
-        else WorkspaceClient(host=host, token=token)
-    )
 
     # Pre-flight: REFUSE to submit a spark-path run the corpus row pool can't fill. The
     # spark-path draws max(--row-counts) DISTINCT tiles from the pool; a smaller pool would

@@ -69,13 +69,15 @@ def _create_venv_and_run(venv_root: Path, path_arg: str | None) -> int:
             timeout=120,
             stdin=subprocess.DEVNULL,
         )
-    print("Installing geobrix (editable)...", flush=True)
+    # The plain wheel's base dependencies are the lightweight tier (rasterio, pyogrio, pyproj, shapely,
+    # netCDF4, scikit-image, ...: about 120 MB of wheels), so this step takes minutes on a cold cache.
+    print("Installing geobrix (editable, with the lightweight tier)...", flush=True)
     subprocess.run(
         [str(venv_python), "-m", "pip", "install", "-q", "-e", str(PROJECT_ROOT / "python" / "geobrix")],
         check=True,
         capture_output=True,
         cwd=str(PROJECT_ROOT),
-        timeout=120,
+        timeout=900,
         stdin=subprocess.DEVNULL,
     )
     # Install deps used by sample-data notebooks (Sentinel-2, London boroughs, etc.) so %pip cells

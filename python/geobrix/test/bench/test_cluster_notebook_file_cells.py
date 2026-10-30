@@ -309,7 +309,8 @@ def test_existing_build_unaffected_by_new_flags():
     # cachetools past pyiceberg's <7 cap). Deps are then a separate NON-forced step.
     assert "--force-reinstall" in src
     assert "--no-deps" in src
-    assert "geobrix[light-dbr19]" in src  # the non-forced deps step
+    # the non-forced deps step: the wheel's own deps
+    assert "'geobrix @ file://' + WHL" in src
     assert "dbutils.notebook.exit" in src
     assert nb["nbformat"] == 4
     # None of the four new cell types should appear

@@ -1558,7 +1558,7 @@ def test_a_failed_form_keeps_the_executors_exception_class_and_reason():
     text = (
         "An error occurred while calling o21387.collectToPython.\n"
         ": org.apache.spark.SparkException: Job aborted due to stage failure: Task 3 in stage 761.0 failed 4 times, "
-        "most recent failure: Lost task 3.3 in stage 761.0 (TID 11675) (10.0.9.167 executor 4): "
+        "most recent failure: Lost task 3.3 in stage 761.0 (TID 11675) (10.0.0.1 executor 4): "
         "java.lang.IllegalStateException: geobrix: this JVM already runs the GDAL loaded from /a/lib/x.so, and a "
         "later configuration names /b/lib/x.so\n"
         "\tat com.databricks.labs.gbx.rasterx.gdal.GDALManager$.ensureJniLoaded(GDALManager.scala:437)\n"

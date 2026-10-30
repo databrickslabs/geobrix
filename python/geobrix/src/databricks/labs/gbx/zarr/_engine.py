@@ -53,8 +53,8 @@ _PLAIN_PIPELINES = ("auto", "zarrs", "default")
 # in flight pay off (the spike's setting).
 _TENSORSTORE_FILE_IO = 64
 _INSTALL_FIX = (
-    "install the Zarr extra (geobrix[zarr_dbr19] on DBR 19, geobrix[zarr_env6] on "
-    "Serverless environment 6)"
+    "install the Zarr extra: [zarr] of the env6 wheel on DBR 19 and Serverless environment 6 "
+    '("geobrix[zarr] @ <the +env6 wheel>"), or geobrix[zarr_dbr19] off Databricks'
 )
 
 

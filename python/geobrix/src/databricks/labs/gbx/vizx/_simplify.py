@@ -208,8 +208,8 @@ def _ensure_tippecanoe() -> str:
     if bin_path is None:
         raise ImportError(
             "tippecanoe binary not found or not executable. "
-            "Install it via: pip install geobrix[vizx]  "
-            "(which pulls in the tippecanoe manylinux wheel), or "
+            'Install it via the [vizx] extra ("geobrix[vizx] @ <the env wheel>" on '
+            "Databricks, pip install 'geobrix[vizx]' off it: the tippecanoe manylinux wheel), or "
             "brew install tippecanoe (macOS), or build from source."
         )
     return bin_path
@@ -387,8 +387,8 @@ def _simplify_raster(source, spec: dict, out_path: str | None) -> Union[bytes, s
         from rasterio.transform import from_bounds
     except ImportError as exc:
         raise ImportError(
-            "rasterio is required for the raster path. "
-            "Install it via: pip install geobrix[vizx]"
+            "rasterio is required for the raster path: install the env wheel for the runtime "
+            "on Databricks, or pip install geobrix off Databricks"
         ) from exc
 
     raster_max_px = spec["raster_max_px"]

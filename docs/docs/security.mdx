@@ -293,7 +293,8 @@ applies a driver policy to each process, on both tiers, before any raster is ope
   are the ones GeoBrix has classified as allowed; drivers GeoBrix has not classified for the GDAL
   in use are refused. GDAL is given that list on every read of a raster file and of a tile's
   bytes, including the rasters GeoBrix hands to rio-tiler or copies to a COG; the only other
-  reads are of scratch files GeoBrix writes and reads back itself. A source that a
+  reads are of scratch files GeoBrix writes and reads back itself, and of the files the
+  development-only sample-data generator downloads and converts. A source that a
   VRT or an index names is opened through GDAL's own registry, from which the refused drivers
   are removed. Where the full defence applies (below), a named file is also identified first,
   with the allowed drivers, and opened with the driver identified.
@@ -344,9 +345,11 @@ runs.
   a file before it opens it.
 - The **partial** defence is a process whose rasterio brings its own GDAL (the PyPI wheel). The
   refused drivers are kept out of GDAL's registration and every open uses the allowed drivers
-  only, but a driver that rasterio registered before GeoBrix was imported cannot be removed.
-  GeoBrix then warns once and names those drivers. To avoid it, import `databricks.labs.gbx`
-  before rasterio opens anything, or install the env wheel.
+  only. A binding can register them before GeoBrix is imported: rasterio at its first open, a
+  PyPI pyogrio (which bundles a GDAL of its own) at its import. On Linux GeoBrix removes them
+  then from each GDAL the process has loaded; elsewhere it cannot, and warns once, naming each
+  binding and the drivers it keeps. To avoid it, import `databricks.labs.gbx` before rasterio
+  opens anything and before pyogrio is imported, or install the env wheel.
 
 | Install path | Python GDAL | Defence |
 |---|---|---|
@@ -354,8 +357,10 @@ runs.
 | The plain wheel with a light extra: `geobrix[light_env6]`, `[light_env5]`, `[light_dbr17]`, `[light_dbr18]` or `[light_dbr19]` (the commands on the [installation](./installation) page) | PyPI rasterio | partial |
 | The [DCS image](./installation/dcs.mdx): the plain wheel with `[light_env6,vizx]` | PyPI rasterio | partial |
 | The plain wheel with an example extra: `geobrix[photogrammetry]` or `[photogrammetry_gpu_env5]` | PyPI rasterio | partial |
+| The plain wheel with `[vizx]` or `[models]` (they pull PyPI rasterio and pyogrio) | PyPI rasterio | partial |
+| The env wheel with `[vizx]`: it installs PyPI rasterio and pyogrio, which the wheel's vendored bindings shadow | the wheel's vendored rasterio and osgeo | full (a process that skips the env wheel's start-up, such as one with `GBX_NATIVE_DISABLE=1`, runs the PyPI copies: partial) |
 | `pip install geobrix`, with no extra | no rasterio: the lightweight tier opens no raster | none |
-| A partial path where rasterio registered GDAL's drivers before GeoBrix was imported | rasterio's own GDAL | partial, with the warning |
+| A partial path where rasterio or pyogrio registered GDAL's drivers before GeoBrix was imported | the binding's own GDAL | partial: on Linux the refused drivers are removed at the import, elsewhere with the warning |
 
 The JVM side is the same on every install path: the GeoBrix JAR skips the refused drivers and
 sets the two VRT settings when the JVM's GDAL starts, whichever GDAL it loads. A JVM runs one

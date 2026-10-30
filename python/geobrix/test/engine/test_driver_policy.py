@@ -180,12 +180,14 @@ def test_open_data_refuses_a_driver_GeoBrix_does_not_open_by_name():
 
 
 @pytest.mark.integration
-def test_open_data_refuses_a_file_no_allowed_driver_reads():
-    """Identify-then-open: a file that exists and no allowed driver identifies is refused with the policy's reason
-    (rasterio would otherwise report a generic read error for it)."""
+def test_a_file_no_driver_reads_keeps_the_bindings_io_error():
+    """Identify-then-open: a file that exists, that no allowed driver identifies and that is no refused driver's (a
+    corrupt raster, a format GDAL does not read) keeps rasterio's own I/O error, an OSError the read retries and the
+    readers' quarantine catch; the policy's refusal is for a refused driver's file (the GDALG and KML rows).
+    """
     _payload_or_skip()
     line = _refused(_run(FRESH_NOT_A_RASTER))
-    assert "is not a raster any driver GeoBrix opens reads" in line, line
+    assert "RasterioIOError" in line and "which GeoBrix does not open" not in line, line
 
 
 @pytest.mark.integration
@@ -303,6 +305,55 @@ def test_geobrix_vector_reads_activate_the_policy_before_their_first_pyogrio_ope
     out = _run(code)
     assert "BEFORE True" in out, out[-800:]
     assert "AFTER full" in out, out[-800:]
+
+
+@pytest.mark.parametrize(
+    "name", ["GTI:{gpkg}", "WMS:http://127.0.0.1:9/wms?", "EEDAI:projects/x/assets/y"]
+)
+def test_a_refused_drivers_connection_string_is_the_policy_refusal(tmp_path, name):
+    """A refused driver's connection string is no file to GDAL (it reports it missing): it is named as the policy's
+    refusal, not as a missing file."""
+    _rasterio_or_skip()
+    gpkg = tmp_path / "index.gpkg"
+    gpkg.write_bytes(b"SQLite format 3\x00")
+    with pytest.raises(_gdal_policy.DriverPolicyError) as raised:
+        _gdal_policy.open_data(name.format(gpkg=gpkg))
+    msg = str(raised.value)
+    assert (
+        "a refused driver's connection" in msg and _gdal_policy.REFUSED_PHRASE in msg
+    ), msg
+
+
+def test_corrupt_tile_bytes_keep_the_bindings_io_error():
+    """Tile bytes no driver reads (corrupt, truncated, not a raster) keep rasterio's own I/O error, an OSError; only
+    a refused driver's bytes are the policy's refusal (the pipeline rows)."""
+    _rasterio_or_skip()
+    with pytest.raises(OSError) as raised:
+        _gdal_policy.open_bytes(b"\x00\x01 not a raster any driver reads " * 8)
+    assert not isinstance(raised.value, _gdal_policy.DriverPolicyError), raised.value
+
+
+def test_with_the_switch_off_tile_bytes_open_through_their_memoryfile(monkeypatch):
+    """Off: GDAL as GDAL has it, through MemoryFile.open (rasterio 1.3's rasterio.open would take a MemoryFile down
+    its file-like path); no driver list is passed."""
+    _rasterio_or_skip()
+    import rasterio
+    import rasterio.io as rio_io
+
+    seen = []
+
+    class FakeMemoryFile:
+        def open(self, **kw):
+            seen.append(("MemoryFile.open", kw.get("driver")))
+            return _Opened()
+
+    monkeypatch.setattr(rio_io, "MemoryFile", FakeMemoryFile)
+    monkeypatch.setattr(
+        rasterio, "open", lambda *a, **k: seen.append(("rasterio.open",))
+    )
+    monkeypatch.setattr(_gdal_policy, "activate", lambda: {"mode": "off"})
+    _gdal_policy.open_bytes(FakeMemoryFile()).close()
+    assert seen == [("MemoryFile.open", None)]
 
 
 @pytest.mark.parametrize("name", ["missing.mrf", "tiles_wms", "a.gti"])
@@ -477,9 +528,16 @@ def test_partial_mode_skips_the_refused_drivers_at_registration(before):
 _REGISTERED_FIRST = "import rasterio\nwith rasterio.Env():\n    pass\n"
 
 
-def test_partial_mode_warns_once_when_rasterio_registered_first():
-    """rasterio registered GDAL's drivers before GeoBrix was imported, so the skip cannot apply: at the import, one
-    loud warning names the drivers left and the fix, and the state lists them."""
+# Where the process maps can be read (Linux), the policy removes the refused drivers from every libgdal the process
+# maps; elsewhere it cannot, and warns.
+_MAPS = os.path.exists("/proc/self/maps")
+
+
+def test_partial_mode_removes_or_warns_once_when_rasterio_registered_first():
+    """rasterio registered GDAL's drivers before GeoBrix was imported, so the skip cannot apply: on Linux the policy
+    removes the refused ones from rasterio's libgdal (ctypes, the libgdal the process maps) and nothing is left to warn
+    of; elsewhere one loud warning names the drivers left and the fix, points at the caller's line, and the state
+    lists them."""
     _rasterio_or_skip()
     code = (
         _REGISTERED_FIRST + "import warnings\n"
@@ -490,12 +548,48 @@ def test_partial_mode_warns_once_when_rasterio_registered_first():
         "    state = p.state()\n"
         "    p.state()\n"
         "gap = [w for w in caught if 'Fix: import databricks.labs.gbx before rasterio' in str(w.message)]\n"
-        "print('MODE', state['mode'], 'GDALG' in state['registered_refused'])\n"
-        "print('WARNINGS', len(gap))\n"
+        "with rasterio.Env() as env:\n"
+        "    left = 'GDALG' in env.drivers()\n"
+        "print('MODE', state['mode'], 'GDALG' in state['registered_refused'], 'GDALG' in state['deregistered'])\n"
+        "print('WARNINGS', len(gap), gap and gap[0].filename, 'LEFT', left)\n"
     )
     out = _partial_run(code)
-    assert "MODE partial True" in out, out[-800:]
-    assert "WARNINGS 1" in out, out[-800:]
+    if _MAPS:
+        assert "MODE partial False True" in out, out[-800:]
+        assert "WARNINGS 0 [] LEFT False" in out, out[-800:]
+    else:
+        assert "MODE partial True False" in out, out[-800:]
+        assert "WARNINGS 1 <string> LEFT True" in out, out[-800:]
+
+
+def test_partial_mode_removes_or_names_the_drivers_a_pyogrio_imported_first_registered():
+    """A PyPI pyogrio imported before GeoBrix registered every driver of its own GDAL at its import: on Linux the
+    policy removes the refused ones from pyogrio's libgdal too (no WFS for its vector reads); elsewhere the warning
+    names pyogrio and its refused drivers, and points at the caller's line (the `import`).
+    """
+    _rasterio_or_skip()
+    pytest.importorskip("pyogrio")
+    code = (
+        "import warnings\n"
+        "import pyogrio\n"
+        "with warnings.catch_warnings(record=True) as caught:\n"
+        "    warnings.simplefilter('always')\n"
+        "    import databricks.labs.gbx\n"
+        "    from databricks.labs.gbx import _gdal_policy as p\n"
+        "    state = p.state()\n"
+        "gap = [w for w in caught if 'cannot remove these drivers' in str(w.message)]\n"
+        "ogr = [k for k, v in state['deregistered_by'].items() if 'pyogrio' in k and 'WFS' in v]\n"
+        "print('BY', sorted(state['registered_refused_by']), 'WFS' in state['registered_refused_by'].get('pyogrio', []))\n"
+        "print('REMOVED', len(ogr), 'WFS' in pyogrio.list_drivers())\n"
+        "print('WARN', len(gap), bool(gap) and 'pyogrio: ' in str(gap[0].message), gap and gap[0].filename)\n"
+    )
+    out = _partial_run(code)
+    if _MAPS:
+        assert "BY [] False" in out and "REMOVED 1 False" in out, out[-800:]
+        assert "WARN 0 False []" in out, out[-800:]
+    else:
+        assert "BY ['pyogrio'] True" in out and "REMOVED 0 True" in out, out[-800:]
+        assert "WARN 1 True <string>" in out, out[-800:]
 
 
 def test_a_partial_process_where_gdalg_registered_still_refuses_a_stored_pipeline(

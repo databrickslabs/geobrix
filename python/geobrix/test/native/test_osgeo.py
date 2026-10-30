@@ -43,6 +43,31 @@ SAME_LIBGDAL_EXEMPT = {
 }
 
 
+def test_the_maps_parse_finds_each_libgdal_whatever_the_line(monkeypatch, tmp_path):
+    """``/proc/self/maps`` lines: an auditwheel or payload libgdal, the system one, one replaced on disk since it was
+    mapped (" (deleted)"), and a path that is not UTF-8, which must not fail the package's import.
+    """
+    maps = tmp_path / "maps"
+    maps.write_bytes(
+        b"7f00-7f01 r-xp 00000000 00:00 1 /opt/x/rasterio.libs/libgdal-c14cf0f0.so.38.3.12.2\n"
+        b"7f01-7f02 r-xp 00000000 00:00 2 /usr/lib/libgdal.so.34.3.8.4 (deleted)\n"
+        b"7f02-7f03 r-xp 00000000 00:00 3 /usr/lib/libgdalalljni.so\n"
+        b"7f03-7f04 r-xp 00000000 00:00 4 /tmp/caf\xe9/libfoo.so\n"
+        b"7f04-7f05 rw-p 00000000 00:00 0 [heap]\n"
+    )
+    real_open = open
+    monkeypatch.setattr(
+        _osgeo,
+        "open",
+        lambda f, *a, **k: real_open(maps if f == "/proc/self/maps" else f, *a, **k),
+        raising=False,
+    )
+    assert _osgeo.mapped_libgdal() == [
+        "/opt/x/rasterio.libs/libgdal-c14cf0f0.so.38.3.12.2",
+        "/usr/lib/libgdal.so.34.3.8.4",
+    ]
+
+
 def test_without_osgeo_the_error_names_the_env_wheel(monkeypatch):
     for name in [n for n in sys.modules if n.split(".")[0] in OSGEO]:
         monkeypatch.delitem(sys.modules, name)
@@ -241,11 +266,24 @@ def _osgeo_imports(path):
         yield from ((node.lineno, n) for n in names if n.split(".")[0] in OSGEO)
 
 
+# The modules that import osgeo themselves, and why each is safe: each does so only once the helper's verdict says
+# osgeo is rasterio's GDAL, or builds a test fixture.
+OSGEO_IMPORT_EXEMPT = {
+    # the driver policy's full mode: gdal is imported only after _same_libgdal_report()["shared"]; the helper's
+    # bindings() would turn GDAL exceptions on for the whole process, which the policy's identify must not
+    SRC / "databricks" / "labs" / "gbx" / "_gdal_policy.py",
+    # osr.SetPROJSearchPaths, only after _same_libgdal_report()["shared"]
+    SRC / "databricks" / "labs" / "gbx" / "pyrx" / "_env.py",
+    # the bench oracle's GTI fixture builder (a GeoPackage tile index it writes for the policy rows)
+    SRC / "databricks" / "labs" / "gbx" / "bench" / "oracles.py",
+}
+
+
 def test_only_the_helper_imports_osgeo():
     found = [
         f"{p.relative_to(SRC)}:{line} {name}"
         for p in sorted(SRC.rglob("*.py"))
-        if p != HELPER
+        if p != HELPER and p not in OSGEO_IMPORT_EXEMPT
         for line, name in _osgeo_imports(p)
     ]
     assert (

@@ -58,14 +58,37 @@ def test_a_deregistered_prefix_reported_as_missing_is_the_policy_reason(monkeypa
     """GDAL reports a deregistered driver's name (GTI:/path) as a missing file: that one is the policy's, a missing
     file under an allowed name is not."""
     monkeypatch.setattr(_gdal_policy, "_DEREGISTERED_PREFIXES", {"GTI:"})
-    message = "CPLE_OpenFailedError: GTI:/tmp/se_index.gpkg: No such file or directory"
-    assert run.policy_reason(message) == "a source GDAL has no driver for here"
+    for message in (
+        "CPLE_OpenFailedError: GTI:/tmp/se_index.gpkg: No such file or directory",
+        "ERROR 4: `gti:/tmp/se_index.gpkg': No such file or directory",
+    ):
+        assert run.policy_reason(message) == "a source GDAL has no driver for here"
     assert (
         run.policy_reason(
             "CPLE_OpenFailedError: /tmp/se_index.gpkg: No such file or directory"
         )
         is None
     )
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "/x/missing.mrf: No such file or directory",
+        "ERROR 4: /x/tiles_wms: No such file or directory",
+        "CPLE_OpenFailedError: /x/a.gti: No such file or directory",
+        "/vsicurl/http://h/a.tif: No such file or directory",
+    ],
+)
+def test_a_missing_source_named_like_a_refused_prefix_is_no_policy_refusal(
+    monkeypatch, message
+):
+    """A nested source that is missing, whose name only ends like a refused driver's prefix, is a missing source: the
+    prefix counts where a name starts."""
+    monkeypatch.setattr(
+        _gdal_policy, "_DEREGISTERED_PREFIXES", {"MRF:", "WMS:", "GTI:", "HTTP:"}
+    )
+    assert run.policy_reason(message) is None
 
 
 def test_the_engine_settings_are_thread_local_and_restored():

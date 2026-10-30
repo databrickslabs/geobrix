@@ -86,14 +86,26 @@ def _not_shared(fn: str, r: dict) -> OsgeoUnavailable:
     )
 
 
+def libgdal_in_maps(lines) -> List[str]:
+    """The libgdal files named by ``/proc/<pid>/maps`` lines: a file replaced on disk since it was mapped (" (deleted)")
+    is still mapped, under its old name."""
+    paths = set()
+    for ln in lines:
+        if "/" not in ln:
+            continue
+        p = ln.split(None, 5)[-1].strip()
+        paths.add(p[: -len(" (deleted)")] if p.endswith(" (deleted)") else p)
+    return sorted(p for p in paths if LIBGDAL.search(p))
+
+
 def mapped_libgdal() -> Optional[List[str]]:
-    """The libgdal files this process maps (Linux ``/proc/self/maps``), else None."""
+    """The libgdal files this process maps (Linux ``/proc/self/maps``), else None. A path that is not UTF-8 is read
+    with replacement characters (it is never a libgdal this check looks for)."""
     try:
-        with open("/proc/self/maps") as fh:
-            paths = {ln.split(None, 5)[-1].strip() for ln in fh if "/" in ln}
+        with open("/proc/self/maps", encoding="utf-8", errors="replace") as fh:
+            return libgdal_in_maps(fh)
     except OSError:
         return None
-    return sorted(p for p in paths if LIBGDAL.search(p))
 
 
 def vsimem_check(gdal) -> Optional[str]:

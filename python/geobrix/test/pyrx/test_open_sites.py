@@ -9,12 +9,15 @@ module or the function to (``import rasterio as _rio``, ``from rasterio.shutil i
   ``GDALOpen*`` names of the ctypes engine, rio-tiler's ``Reader`` (``rio_tiler.io`` or ``rio_tiler.io.rasterio``)
   unless it is handed an open dataset, a rasterio ``shutil.copy``, and the GDAL utilities (``Translate``, ``Warp``,
   ``Info``, ``BuildVRT``, ``DEMProcessing``, ``VectorTranslate``, ``MultiDimTranslate``) given a non-literal source;
-- of bytes: the read form of a ``MemoryFile``, ``mf.open()`` with no arguments, on a name the file binds to a
-  ``MemoryFile`` (``with MemoryFile(b) as mf`` or ``mf = MemoryFile(b)``).
+- of bytes: the read form of a ``MemoryFile`` or a ``FilePath`` (``.open()`` with no positional argument and only
+  the read keywords ``driver``, ``sharing``, ``thread_safe``, ``opener``), chained (``MemoryFile(b).open()``) or on a
+  name or attribute the file binds to one (``with MemoryFile(b) as mf``, ``mf = MemoryFile(b)``, an annotated
+  assignment, ``mf = stack.enter_context(MemoryFile(b))``, ``self._mf = MemoryFile(b)``).
 
-Such a call is the policy's (``_gdal_policy``, which is not scanned) or a site whose file or bytes GeoBrix itself wrote,
-with the reason given below. Not detected, on purpose: ``getattr(rasterio, "open")``, a ctypes ``GDALOpenShared``, and
-a ``MemoryFile`` reached through a name the file does not bind to one (a parameter); none is used today.
+A source given as a literal (a string, or a list of strings) is no site. Such a call is the policy's (``_gdal_policy``,
+which is not scanned) or a site whose file or bytes GeoBrix itself wrote, with the reason given below. Not detected,
+on purpose: ``getattr(rasterio, "open")``, a ctypes ``GDALOpenShared``, and a ``MemoryFile`` reached through a name
+the file does not bind to one (a parameter); none is used today.
 
 The allowlist is keyed by file, the exact source text of the line, and the number of occurrences of that line in the
 file: a new site, and a verbatim copy of an allowlisted line, both fail until the allowlist names them.
@@ -63,6 +66,8 @@ UTILITIES = {
     "MultiDimTranslate": 1,
 }
 SOURCE_KEYWORDS = ("ds", "srcDS", "srcDSOrSrcDSTab")
+# the keywords of a MemoryFile's or FilePath's read form (a write form passes the profile: width, count, dtype ...)
+READ_KEYWORDS = {"driver", "sharing", "thread_safe", "opener"}
 # a MemoryFile read form has no path: it is a site whatever it holds
 BYTES = object()
 
@@ -95,21 +100,34 @@ def _bindings(tree) -> tuple:
                     modules[a.asname or a.name] = qual
                 elif a.name in OPENERS.get(node.module, ()):
                     functions[a.asname or a.name] = (node.module, a.name)
+                elif node.module == "osgeo.gdal" and a.name in UTILITIES:
+                    functions[a.asname or a.name] = (node.module, a.name)
         elif isinstance(node, ast.withitem) and _is_memoryfile(node.context_expr):
-            if isinstance(node.optional_vars, ast.Name):
-                memfiles.add(node.optional_vars.id)
+            if node.optional_vars is not None and _dotted(node.optional_vars):
+                memfiles.add(_dotted(node.optional_vars))
         elif isinstance(node, ast.Assign) and _is_memoryfile(node.value):
-            memfiles.update(t.id for t in node.targets if isinstance(t, ast.Name))
+            memfiles.update(_dotted(t) for t in node.targets if _dotted(t))
+        elif isinstance(node, ast.AnnAssign) and _is_memoryfile(node.value):
+            if _dotted(node.target):
+                memfiles.add(_dotted(node.target))
     return modules, functions, memfiles
 
 
 def _is_memoryfile(node) -> bool:
+    """A MemoryFile (or FilePath) made here, directly or through ``stack.enter_context(...)``."""
     if not isinstance(node, ast.Call):
         return False
     f = node.func
-    return (isinstance(f, ast.Name) and f.id == "MemoryFile") or (
-        isinstance(f, ast.Attribute) and f.attr == "MemoryFile"
+    if isinstance(f, ast.Attribute) and f.attr == "enter_context" and node.args:
+        return _is_memoryfile(node.args[0])
+    names = ("MemoryFile", "FilePath")
+    return (isinstance(f, ast.Name) and f.id in names) or (
+        isinstance(f, ast.Attribute) and f.attr in names
     )
+
+
+def _is_read_form(call: ast.Call) -> bool:
+    return not call.args and all(kw.arg in READ_KEYWORDS for kw in call.keywords)
 
 
 def _dotted(node):
@@ -139,15 +157,15 @@ def _opened(call: ast.Call, modules: dict, functions: dict, memfiles: set):
         target = functions.get(func.id)
         if target is None or (target[1] == "Reader" and _hands_a_dataset(call)):
             return None
+        if target[0] == "osgeo.gdal" and target[1] in UTILITIES:
+            return _arg(call, UTILITIES[target[1]], SOURCE_KEYWORDS)
         return _arg(call, 0, PATH_KEYWORDS)
     if not isinstance(func, ast.Attribute):
         return None
     if (
         func.attr == "open"
-        and isinstance(func.value, ast.Name)
-        and func.value.id in memfiles
-        and not call.args
-        and not call.keywords
+        and (_is_memoryfile(func.value) or _dotted(func.value) in memfiles)
+        and _is_read_form(call)
     ):
         return BYTES
     recv = _dotted(func.value)
@@ -172,6 +190,15 @@ def _opened(call: ast.Call, modules: dict, functions: dict, memfiles: set):
     return None
 
 
+def _literal(node) -> bool:
+    """A source given as a literal: a string, or a list or tuple of strings."""
+    if isinstance(node, ast.Constant):
+        return isinstance(node.value, str)
+    if isinstance(node, (ast.List, ast.Tuple)):
+        return bool(node.elts) and all(_literal(e) for e in node.elts)
+    return False
+
+
 def open_sites_in(text: str):
     """(line number, source line) of every direct open: of bytes, or of a path that is not a string literal."""
     tree = ast.parse(text)
@@ -182,9 +209,7 @@ def open_sites_in(text: str):
         if not isinstance(node, ast.Call):
             continue
         what = _opened(node, modules, functions, memfiles)
-        if what is None or (
-            isinstance(what, ast.Constant) and isinstance(what.value, str)
-        ):
+        if what is None or _literal(what):
             continue
         hits.append((node.lineno, lines[node.lineno - 1].strip()))
     return sorted(hits)
@@ -478,6 +503,32 @@ def test_the_guard_flags_bytes_utilities_and_the_reader_forms():
         "        pass\n"
     )
     assert [n for n, _ in open_sites_in(text)] == [6, 7, 8, 9, 10, 11, 12, 13, 16]
+
+
+def test_the_guard_flags_the_other_bytes_forms_and_a_utility_imported_by_name():
+    text = (
+        "import contextlib\n"
+        "from rasterio.io import FilePath, MemoryFile\n"
+        "from osgeo import gdal\n"
+        "from osgeo.gdal import Translate\n"
+        "def f(p, q, raw, fh, drv):\n"
+        "    MemoryFile(raw).open()\n"
+        "    with contextlib.ExitStack() as stack:\n"
+        "        fresh = stack.enter_context(MemoryFile(raw))\n"
+        "        fresh.open()\n"
+        "    m: MemoryFile = MemoryFile(raw)\n"
+        "    m.open(sharing=True)\n"
+        "    m.open(driver=drv)\n"
+        "    FilePath(fh).open()\n"
+        "    Translate(q, p)\n"
+        "    gdal.Warp('/o.tif', ['/i.tif'])\n"
+        "    m.open(driver='GTiff', width=1, height=1, count=1, dtype='uint8')\n"
+        "class C:\n"
+        "    def g(self, raw):\n"
+        "        self._mf = MemoryFile(raw)\n"
+        "        return self._mf.open()\n"
+    )
+    assert [n for n, _ in open_sites_in(text)] == [6, 9, 11, 12, 13, 14, 20]
 
 
 def test_a_verbatim_copy_of_an_allowlisted_line_is_a_new_site():

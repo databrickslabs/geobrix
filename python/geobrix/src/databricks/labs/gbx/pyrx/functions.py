@@ -3565,8 +3565,10 @@ def rst_cog_convert(
     Args:
         tile:                Tile struct column.
         compression:         COG compression (default "AUTO" = size-adaptive
-                             ZSTD + dtype predictor; or a codec name: ZSTD,
-                             DEFLATE, LZW, WEBP, JPEG, LERC, RAW).
+                             ZSTD + dtype predictor; or a codec name, any case:
+                             ZSTD, DEFLATE, LZW, WEBP, JPEG, PACKBITS, LZMA,
+                             LERC, LERC_DEFLATE, LERC_ZSTD; NONE or RAW writes no
+                             compression).
         blocksize:           Internal tile size in pixels, square (default 512).
         overview_resampling: Overview-pyramid resampling (default "AVERAGE").
         virtualize_dir:    Force-output (light-tier, Python API only): write the

@@ -38,7 +38,7 @@ def test_parse_geom_none():
 
 
 def test_parse_geom_empty_string():
-    # I4: empty / whitespace-only string must be None, not a from_wkt parse error.
+    # An empty / whitespace-only string must be None, not a from_wkt parse error.
     assert parse_geom("") is None
     assert parse_geom("   ") is None
 

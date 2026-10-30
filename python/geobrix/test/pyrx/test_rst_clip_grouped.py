@@ -89,7 +89,7 @@ def test_rst_clip_grouped_produces_clipped_tile(materialized_tile_df, clip_geom_
 
 
 def test_rst_clip_grouped_cellids_preserved(materialized_tile_df, clip_geom_wkb):
-    """Output tiles carry the same cellid as the corresponding input tiles (R1)."""
+    """Output tiles carry the same cellid as the corresponding input tiles."""
     from databricks.labs.gbx.pyrx.functions import rst_clip_grouped
 
     out = rst_clip_grouped(

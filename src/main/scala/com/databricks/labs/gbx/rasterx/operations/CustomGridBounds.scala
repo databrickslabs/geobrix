@@ -4,7 +4,7 @@ import com.databricks.labs.gbx.gridx.grid.CustomGridSystem
 import org.gdal.gdal.Dataset
 import org.gdal.osr.{SpatialReference, osrConstants}
 
-/** R3 determinism guard for custom-grid raster ops.
+/** Determinism guard for custom-grid raster ops.
   *
   * Validates UP FRONT that a [[CustomGridSystem]]'s bounds contain the raster extent, throwing a
   * clear [[IllegalArgumentException]] that names the offending bound — instead of letting an

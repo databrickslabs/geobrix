@@ -6,9 +6,9 @@ Covers:
   - Any exception during roundtrip → False (exception swallowed, result cached)
   - open_windowed_via_fileref reads correct windowed pixels from a stub FileRef
   - open_windowed_via_fileref raises FileRefReadError on a non-seekable stream
-  - C1: clip_polygon set → FILE fast-path skipped; result matches fallback (clipped)
-  - C1: warp required → FileRefReadError raised; result matches fallback (warped)
-  - I1: caller-body exception propagates unchanged (not wrapped in FileRefReadError)
+  - clip_polygon set → FILE fast-path skipped; result matches fallback (clipped)
+  - warp required → FileRefReadError raised; result matches fallback (warped)
+  - caller-body exception propagates unchanged (not wrapped in FileRefReadError)
 """
 
 import io
@@ -390,7 +390,7 @@ def test_binding_rewired_rst_height_returns_correct_value(spark, gtiff_bytes):
 
 
 # ---------------------------------------------------------------------------
-# C1: clip_polygon must not be bypassed by FILE fast-path
+# clip_polygon must not be bypassed by FILE fast-path
 # ---------------------------------------------------------------------------
 
 
@@ -404,7 +404,7 @@ def _wkb_box(x0, y0, x1, y1):
 
 
 def test_open_tile_file_ref_clip_falls_through_to_clipped_result(gtiff_bytes):
-    """C1 clip guard: a tile with clip_polygon must not bypass clipping via FILE path.
+    """Clip guard: a tile with clip_polygon must not bypass clipping via FILE path.
 
     Verifies that open_tile(tile, file_ref=stub) with clip_polygon set gives pixels
     IDENTICAL to open_tile(tile, file_ref=None) (the clipped result), not the full
@@ -461,7 +461,7 @@ def test_open_tile_file_ref_clip_falls_through_to_clipped_result(gtiff_bytes):
 
 
 def test_open_tile_file_ref_warp_falls_through_to_warped_result(gtiff_bytes):
-    """C1 warp guard: a tile requesting a different CRS must not bypass reprojection.
+    """Warp guard: a tile requesting a different CRS must not bypass reprojection.
 
     Verifies that open_tile(tile, file_ref=stub) with tile.crs set to EPSG:3857
     gives a result IDENTICAL to open_tile(tile, file_ref=None) (the warped result).
@@ -514,14 +514,14 @@ def test_open_tile_file_ref_warp_falls_through_to_warped_result(gtiff_bytes):
 
 
 # ---------------------------------------------------------------------------
-# I1: caller-body exception must propagate unchanged
+# caller-body exception must propagate unchanged
 # ---------------------------------------------------------------------------
 
 
 def test_open_windowed_via_fileref_caller_exception_propagates(gtiff_bytes):
-    """I1: exception raised in the caller's with-body must propagate unchanged.
+    """Exception raised in the caller's with-body must propagate unchanged.
 
-    Before the I1 fix, the yield was inside the broad try/except, so a caller-body
+    Before the fix, the yield was inside the broad try/except, so a caller-body
     exception would be caught and re-raised as FileRefReadError, which then caused
     a RuntimeError('generator didn't stop after throw()') at the contextmanager
     level.  After the fix the yield is outside the broad handler, so the ValueError

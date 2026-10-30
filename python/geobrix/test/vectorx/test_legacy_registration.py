@@ -36,7 +36,7 @@ def test_legacy_functions_registration(spark):
 
 
 def test_register_honors_explicit_session():
-    # F4: register() must use the session it is handed, not discard it for
+    # register() must use the session it is handed, not discard it for
     # SparkSession.builder.getOrCreate(). Mock the passed session and assert the
     # register_ds read fires on IT (and getOrCreate is never consulted).
     from unittest.mock import MagicMock, patch

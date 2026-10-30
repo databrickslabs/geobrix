@@ -576,11 +576,11 @@ def test_results_main_writes_summary(tmp_path):
     assert "GeoBrix benchmark summary" in out.read_text()
 
 
-# --- bucket C, group C4: raster_collection fingerprint (tiling fns) ----------
-# C4 outputs a LIST of tiles. The fingerprint records the tile COUNT plus the
-# pooled (order-independent) agg stats over every output tile's pixels. The
-# comparator requires the count to match EXACTLY, then compares the pooled agg
-# with the same float tolerance as the raster kind.
+# --- raster_collection fingerprint (tiling fns) ------------------------------
+# The tiling fns output a LIST of tiles. The fingerprint records the tile COUNT
+# plus the pooled (order-independent) agg stats over every output tile's pixels.
+# The comparator requires the count to match EXACTLY, then compares the pooled
+# agg with the same float tolerance as the raster kind.
 def _coll(count, mn, mx, mean, std):
     import json
 

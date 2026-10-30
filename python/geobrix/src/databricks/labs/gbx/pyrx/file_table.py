@@ -274,7 +274,7 @@ def write_file_table(
     clustering, no ORDER BY.  The value is stamped verbatim in ``write_strategy``
     so the reader knows exactly how the table was written.
     """
-    # I1: validate before any side effect (DROP, view creation).
+    # Validate before any side effect (DROP, view creation).
     # build_create_sql validates too, but that runs AFTER the DROP — validating
     # here prevents data loss when overwrite=True and the arguments are invalid.
     if file_mode not in ("external", "managed"):
@@ -286,7 +286,7 @@ def write_file_table(
 
     _validate_layout(layout)
 
-    # M4: unique view name to avoid cross-request clobber.
+    # Unique view name to avoid cross-request clobber.
     view = f"_gbx_file_src_{uuid.uuid4().hex}"
     df.createOrReplaceTempView(view)
     try:

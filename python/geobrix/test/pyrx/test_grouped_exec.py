@@ -112,7 +112,7 @@ def test_make_opener_returns_four_items_not_five():
 
 
 # ---------------------------------------------------------------------------
-# I2: grouped executor robustness
+# grouped executor robustness
 # ---------------------------------------------------------------------------
 
 
@@ -220,7 +220,7 @@ def test_grouped_map_unreadable_tile_degrades_gracefully(spark, gtiff_bytes, tmp
 
 
 # ---------------------------------------------------------------------------
-# Header-vs-pixel view contract (M2)
+# Header-vs-pixel view contract
 # ---------------------------------------------------------------------------
 
 

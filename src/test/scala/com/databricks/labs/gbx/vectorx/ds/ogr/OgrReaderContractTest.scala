@@ -11,10 +11,10 @@ import java.nio.file.Files
 
 /** Contract tests for the OGR reader:
   *   - bare .shp file path reads correctly (sidecar-bundle staging fix)
-  *   - multi-stem divergent-schema directory raises IllegalArgumentException (B4)
-  *   - multi-stem same-schema directory reads without error (B4)
-  *   - directory of unzipped shapefiles counts exactly (C73 sidecar over-count fix)
-  *   - mixed unzipped + zipped directory counts exactly (C73)
+  *   - multi-stem divergent-schema directory raises IllegalArgumentException
+  *   - multi-stem same-schema directory reads without error
+  *   - directory of unzipped shapefiles counts exactly (no sidecar over-count)
+  *   - mixed unzipped + zipped directory counts exactly
   */
 class OgrReaderContractTest extends PlanTest with SilentSparkSession {
 
@@ -50,7 +50,7 @@ class OgrReaderContractTest extends PlanTest with SilentSparkSession {
     }
 
     // ---------------------------------------------------------------------------
-    // Pre-existing contract tests (B3)
+    // Pre-existing contract tests
     // ---------------------------------------------------------------------------
 
     test("shapefile_ogr must read a bare .shp path (sidecar bundle staging)") {
@@ -80,7 +80,7 @@ class OgrReaderContractTest extends PlanTest with SilentSparkSession {
     }
 
     // ---------------------------------------------------------------------------
-    // B4: schema-divergence guard
+    // schema-divergence guard
     // ---------------------------------------------------------------------------
 
     test("shapefile_ogr must raise on a directory with differing-schema shapefiles") {
@@ -113,7 +113,7 @@ class OgrReaderContractTest extends PlanTest with SilentSparkSession {
     }
 
     // ---------------------------------------------------------------------------
-    // C73: unzipped shapefile directory exact-count (regression guard for .dbf over-count)
+    // unzipped shapefile directory exact-count (regression guard for .dbf over-count)
     // ---------------------------------------------------------------------------
 
     test("shapefile_ogr must read a directory of two unzipped shapefiles with exact count") {
@@ -129,7 +129,7 @@ class OgrReaderContractTest extends PlanTest with SilentSparkSession {
     }
 
     // ---------------------------------------------------------------------------
-    // US1: underscore-prefixed shapefile names — Spark's hidden-file filter skips
+    // underscore-prefixed shapefile names — Spark's hidden-file filter skips
     // all files whose names start with '_', so a dir of _foo.shp/_foo.dbf/_foo.shx
     // returned empty from binaryFile.inputFiles() and caused "Is a directory".
     // ---------------------------------------------------------------------------
@@ -157,7 +157,7 @@ class OgrReaderContractTest extends PlanTest with SilentSparkSession {
     }
 
     // ---------------------------------------------------------------------------
-    // D1: dir of .shp.zip — both tiers handle directory of zipped shapefiles
+    // dir of .shp.zip — both tiers handle directory of zipped shapefiles
     // ---------------------------------------------------------------------------
 
     private def zipShapefile(shpFile: java.io.File): java.io.File = {
@@ -251,7 +251,7 @@ class OgrReaderContractTest extends PlanTest with SilentSparkSession {
     }
 
     // ---------------------------------------------------------------------------
-    // C1 (revised): write-guard — read-only OGR formats must fail writes with a clear message.
+    // write-guard — read-only OGR formats must fail writes with a clear message.
     // Mechanism: OGR_DataSource.supportsExternalMetadata=true routes writes through
     // OGR_Table.newWriteBuilder, which throws immediately. inferSchema is NOT called on writes,
     // so reads are completely unaffected.

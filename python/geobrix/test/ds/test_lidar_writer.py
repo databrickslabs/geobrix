@@ -2,7 +2,7 @@
 
 TDD: new tests written BEFORE implementation (RED -> GREEN).
 The write_xyz_laz test, the DataSource writer tests and the singleFile + merge
-mode tests (M1/M2/M3) live here.
+mode tests live here.
 """
 
 import numpy as np
@@ -44,7 +44,7 @@ def _points_df(spark, n=30, with_rgb=True, groups=("A", "B")):
     Uses clu = (i // 2) % 2 so that both cluster values (0 and 1) appear with
     each group, producing all 4 (group, cluster) combinations when len(groups)==2.
     This ensures repartitionByRange(4, 'group', 'cluster') places each combination
-    in its own partition (M3 guard: catches stem-collision naming bugs).
+    in its own partition (guards against stem-collision naming bugs).
     """
     from pyspark.sql import Row
 
@@ -80,7 +80,7 @@ def test_writer_sharded_roundtrips_via_reader(spark, tmp_path):
     out = str(tmp_path / "cloud")
     df = _points_df(spark, n=40, with_rgb=True)
     # repartitionByRange ensures each (group, cluster) lands in its own partition,
-    # giving exactly 4 output files — required for the M3 naming-collision guard.
+    # giving exactly 4 output files — required for the naming-collision guard.
     (
         df.repartitionByRange(4, "group", "cluster")
         .write.format("lidar_gbx")
@@ -96,7 +96,7 @@ def test_writer_sharded_roundtrips_via_reader(spark, tmp_path):
     parts = sorted(os.path.basename(p) for p in glob.glob(os.path.join(out, "*.la*")))
     assert parts, "no part files written"
     assert all("_" in p and "part-" not in p for p in parts)
-    # M3: assert all 4 (group × cluster) combinations produce a distinct file.
+    # Assert all 4 (group × cluster) combinations produce a distinct file.
     assert (
         len(parts) == 4
     ), f"expected 4 part files (A_0, A_1, B_0, B_1) but got {len(parts)}: {parts}"
@@ -151,7 +151,7 @@ def test_writer_rejects_v1_unsupported_columns(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# M2: partial-RGB rejection
+# partial-RGB rejection
 # ---------------------------------------------------------------------------
 
 

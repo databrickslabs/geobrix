@@ -464,10 +464,10 @@ def test_full_set_covers_every_registered_function():
     assert s.benched_functions(s.select(set="full")) == s.registered_rst()
 
 
-# --- bucket C, group C1/C2: readers + buildoverviews + subdataset fns (6) ----
-# C1 (compared): rst_tryopen (bytes->scalar), rst_fromcontent (bytes->raster),
-# rst_fromfile (path->raster), rst_buildoverviews (tile->raster). C2 (timing-
-# only): rst_subdatasets, rst_getsubdataset — a plain GTiff corpus tile has no
+# --- readers + buildoverviews + subdataset fns (6) ---------------------------
+# Compared: rst_tryopen (bytes->scalar), rst_fromcontent (bytes->raster),
+# rst_fromfile (path->raster), rst_buildoverviews (tile->raster). Timing-
+# only: rst_subdatasets, rst_getsubdataset — a plain GTiff corpus tile has no
 # subdatasets (empty map / no match), so they are timed but never compared.
 #
 # These introduce the `input_kind` adapter on FnSpec: the bytes/path readers do
@@ -531,7 +531,7 @@ def test_bucket_c_not_in_core_set():
     assert not ((_C1 | _C2) & core)
 
 
-# --- bucket C, group C3: multi-tile-input functions (3) ----------------------
+# --- multi-tile-input functions (3) ------------------------------------------
 # rst_frombands / rst_combineavg / rst_merge each consume an ARRAY of tiles. The
 # corpus row gives ONE tile, so the runner SYNTHESIZES the multi-tile input from
 # it (bench.synth) and writes it to disk ONCE, so both engines read byte-identical
@@ -585,7 +585,7 @@ def test_c3_not_in_core_set():
     assert not (_C3 & core)
 
 
-# --- bucket C, group C4: tiling functions (5) --------------------------------
+# --- tiling functions (5) ----------------------------------------------------
 # rst_maketiles / rst_retile / rst_tooverlappingtiles / rst_separatebands /
 # rst_xyzpyramid each take ONE tile and emit a COLLECTION of tiles. They run on
 # the default input_kind == "tile" (a single open dataset), but their core_fn
@@ -600,7 +600,7 @@ _C4 = {
     "rst_xyzpyramid",
 }
 
-# rst_xyzpyramid is a tile-in / collection-out function like the rest of C4, but
+# rst_xyzpyramid is a tile-in / collection-out function like the other tiling fns, but
 # its emitted tiles are slippy-map XYZ renders: each is one rst_tilexyz render
 # (the pyramid just loops RST_TileXYZ.execute over the intersecting (z,x,y) set).
 # Like rst_tilexyz, the rendered bytes are render-engine-specific (heavy GDAL
@@ -639,7 +639,7 @@ def test_c4_wellformed_tile_in_collection_out():
         assert fs.sql_name == f"gbx_{name}"
         assert fs.core is False
         assert callable(fs.core_fn) and callable(fs.col_fn)
-        # C4 takes a single open dataset (default input_kind), not a tile_array.
+        # Tiling fns take a single open dataset (default input_kind), not a tile_array.
         assert fs.input_kind == "tile", name
         assert fs.sources, name
 

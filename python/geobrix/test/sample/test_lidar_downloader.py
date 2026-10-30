@@ -1,14 +1,14 @@
 """Tests for LidarDownloader — no live network; _get is fully mocked.
 
 Coverage:
-  N1  — nodes_in_aoi returns intersecting node from a flat (non-paged) EPT store
-  N2  — nodes_in_aoi loads a -1 sub-page, re-examines the node, and selects it
-  DL1 — download (driver path) writes <out_dir>/<project>/<key>.laz (idempotent)
-  W1  — fetch_nodes worker generator yields clipped point rows with correct schema
+  - nodes_in_aoi returns intersecting node from a flat (non-paged) EPT store
+  - nodes_in_aoi loads a -1 sub-page, re-examines the node, and selects it
+  - download (driver path) writes <out_dir>/<project>/<key>.laz (idempotent)
+  - fetch_nodes worker generator yields clipped point rows with correct schema
         (exercises the mapInPandas body without a live Spark cluster)
-  B1  — a LAZ node whose chunk table cannot go to the decoder raises a ValueError
+  - a LAZ node whose chunk table cannot go to the decoder raises a ValueError
         naming the node (driver loop and worker generator), before laspy decodes it
-  B2  — the same for a node whose compressed points hold a run of 0xFF bytes (the
+  - the same for a node whose compressed points hold a run of 0xFF bytes (the
         decoder's stack overflows on it and the process dies)
 """
 
@@ -95,7 +95,7 @@ def _fake_ept_store_paged():
 # ---------------------------------------------------------------------------
 
 
-# N1 — flat (non-paged) hierarchy
+# flat (non-paged) hierarchy
 def test_nodes_in_aoi_selects_intersecting_node():
     from databricks.labs.gbx.sample.lidar import Ept
 
@@ -104,7 +104,7 @@ def test_nodes_in_aoi_selects_intersecting_node():
     assert ("0-0-0-0", 3) in nodes
 
 
-# N2 — -1 sub-page dereference
+# -1 sub-page dereference
 def test_nodes_in_aoi_sub_page_deref():
     """nodes_in_aoi fetches a sub-page when it sees -1 and re-selects the node."""
     from databricks.labs.gbx.sample.lidar import Ept
@@ -115,7 +115,7 @@ def test_nodes_in_aoi_sub_page_deref():
     assert ("1-0-0-0", 7) in nodes
 
 
-# DL1 — driver path writes the .laz file
+# driver path writes the .laz file
 def test_download_writes_laz(tmp_path):
     from databricks.labs.gbx.sample.lidar import LidarDownloader
 
@@ -132,7 +132,7 @@ def test_download_writes_laz(tmp_path):
     assert out.exists() and out.stat().st_size > 0
 
 
-# W1 — worker generator body + schema, no Spark cluster needed
+# worker generator body + schema, no Spark cluster needed
 def test_fetch_nodes_generator_yields_clipped_rows():
     """Call fetch_nodes as a plain Python generator over a pandas iterator.
 
@@ -180,7 +180,7 @@ def test_fetch_nodes_generator_yields_clipped_rows():
     assert df["z_m"].tolist() == pytest.approx([5.0, 10.0, 15.0], abs=0.01)
 
 
-# B1 — a node with an implausible LAZ chunk table is refused before the decoder
+# a node with an implausible LAZ chunk table is refused before the decoder
 def _laz_node_with_a_bad_chunk_table():
     """A compressed node whose chunk table offset points far outside the file
     (a corrupt download); the decoder sizes its buffers from the table."""

@@ -40,6 +40,7 @@ Technical English). They are the rules only, not its controlled dictionary.
 
 - **Sentence length.** A procedure step has at most 20 words; a description has at most 25. Split
   longer sentences. A table cell or a code comment is not a sentence.
+  The QC check `prose-sentence-length` warns on added sentences over 25 words.
 - **One instruction per sentence.** Write procedures in the imperative: "Install the env wheel."
   Do not write "You will want to install".
 - **Active voice.** Name who or what acts: "The reader skips the file", not "The file is skipped".

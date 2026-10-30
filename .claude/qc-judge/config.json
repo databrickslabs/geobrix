@@ -18,6 +18,15 @@
       "expect_exit": 0,
       "timeout_seconds": 30
     },
+    "prose-sentence-length": {
+      "name": "New prose sentences in user-facing docs stay at or under 25 words",
+      "type": "command",
+      "severity": "warn",
+      "enabled": true,
+      "cmd": "[ -f docs/scripts/check-sentence-length.py ] || { echo 'absent; skip'; exit 0; }; python3 docs/scripts/check-sentence-length.py",
+      "expect_exit": 0,
+      "timeout_seconds": 30
+    },
     "docs-match-code": {
       "prompt": "You are checking whether new public symbols in the GeoBrix codebase have documentation.\n\n# Full diff\n{input_0}\n\n# All current docs files\n{input_1}\n\n# Task\n1. From the diff, identify new public symbols. Project conventions:\n   - Scala: `def`/`object`/`class` in `src/main/scala/.../{rasterx,gridx,vectorx}/`\n   - Python: top-level `def`/`class` in `python/geobrix/src/databricks/labs/gbx/` — but EXCLUDE the `bench/` subpackage (`python/geobrix/src/databricks/labs/gbx/bench/`): the benchmark harness is INTERNAL tooling (a dev/CI test instrument), NOT user-facing API, so its functions, dataclass fields (e.g. ResultRow columns), and helpers never appear in user `docs/` and must NOT be flagged as undocumented.\n   - SQL: new `gbx_rst_*`, `gbx_bng_*`, `gbx_st_*` UDFs visible in registration files\n2. For each new symbol, check whether `docs/` references it (case-sensitive substring or close match).\n3. Flag symbols with no apparent doc entry.\n\nReply with exactly one line (tab-separated):\nPASS|FAIL|REVIEW\thigh|low\tone-line reason — if FAIL, list up to 3 undocumented symbols"
     },

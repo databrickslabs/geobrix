@@ -1575,3 +1575,38 @@ def test_the_plain_wheel_stage_prunes_only_other_plain_wheels(monkeypatch):
     assert removed == ["/Volumes/c/s/v/geobrix-0.5.2-py3-none-any.whl"]
     text = (REPO_ROOT / "examples/tests/stage_wheel_to_volume.py").read_text()
     assert 'whl.name, exclude="+env")' in text  # the stage passes it
+
+
+_SNAPSHOT_PROBE = """#!/bin/bash
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+source "$SCRIPT_DIR/common.sh"
+gbx_snapshot_exec "${BASH_SOURCE[0]}" "$@"
+echo "running from $PROJECT_ROOT, source tree ${GBX_SOURCE_ROOT:-none}"
+sleep 2
+echo "version ONE"
+"""
+
+
+def test_a_launcher_command_runs_from_a_snapshot_so_an_edit_during_the_run_cannot_change_it(sandbox):
+    """Editing a gbx script under a live runner once ran half a changed line (`dk: command not found`)."""
+    sandbox.write_command("gbx-snapshot-probe.sh", _SNAPSHOT_PROBE)
+    proc = sandbox.popen("gbx-snapshot-probe.sh")
+    first = proc.stdout.readline()  # the command is now past the snapshot and sleeping
+    script = sandbox.commands / "gbx-snapshot-probe.sh"
+    script.write_text(script.read_text().replace("version ONE", "version TWO") + "\nrm -rf /nonexistent-dk\n")
+    out, _ = proc.communicate(timeout=30)
+
+    assert proc.returncode == 0, first + out
+    assert "version ONE" in out and "version TWO" not in out, out
+    m = re.search(r"running from (\S+), source tree (\S+)", first)
+    assert m and Path(m.group(2)) == sandbox.root and Path(m.group(1)) != sandbox.root, first
+    assert not Path(m.group(1)).exists()  # the snapshot is removed when the run ends
+
+
+def test_help_runs_in_place_without_a_snapshot(sandbox):
+    sandbox.write_command("gbx-snapshot-probe.sh", _SNAPSHOT_PROBE)
+
+    res = sandbox.run("gbx-snapshot-probe.sh", "--help")
+
+    assert "source tree none" in res.output and str(sandbox.root) in res.output

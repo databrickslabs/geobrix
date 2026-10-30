@@ -13,8 +13,12 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 source "$SCRIPT_DIR/common.sh"
+gbx_snapshot_exec "${BASH_SOURCE[0]}" "$@"   # run from a copy: an edit during the run cannot change it
+# In the snapshot's run the code is the snapshot's, the state (venv, logs, notebooks) the source tree's.
+SNAP_ROOT="$PROJECT_ROOT"
+PROJECT_ROOT="${GBX_SOURCE_ROOT:-$PROJECT_ROOT}"
 
-RUNNER_SCRIPT="$PROJECT_ROOT/examples/tests/run_notebooks_serverless.py"
+RUNNER_SCRIPT="$SNAP_ROOT/examples/tests/run_notebooks_serverless.py"
 
 show_help() {
     show_banner "GeoBrix: Serverless Notebook Tests"
@@ -49,6 +53,8 @@ show_help() {
     echo -e "  ${GREEN}--profile PROFILE${NC}     Databricks config profile (default: oauth-fe or"
     echo -e "                        DATABRICKS_CONFIG_PROFILE env var)."
     echo -e "  ${GREEN}--poll-secs N${NC}         Polling interval in seconds (default: 20)."
+    echo -e "  ${GREEN}--timeout-min N${NC}       Time limit of each run in minutes (default: 60); the Jobs service ends a run that"
+    echo -e "                        outlives it. The launcher runs from a snapshot of its files and notebooks."
     echo -e "  ${GREEN}--no-strip-pip${NC}        Do NOT strip %%pip/%%restart_python cells."
     echo -e "  ${GREEN}--jar-task MAIN${NC}       Run ONE Serverless JAR task with this main class instead of notebooks"
     echo -e "                        (with --jar VOLPATH, the JAR, and --jar-args CSV, its parameters;"

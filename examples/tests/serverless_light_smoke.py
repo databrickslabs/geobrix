@@ -28,6 +28,9 @@ from pathlib import Path
 
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
 
+# The smoke notebook imports the wheel and runs a few checks: 20 minutes covers a cold Serverless start.
+SMOKE_TIMEOUT_SECS = 20 * 60
+
 # All workspace-specific values (profile, Volume coordinates) come from the
 # gitignored examples/tests/databricks_cluster_config.env so nothing internal is
 # baked into this committed file. Same env file the bench launcher uses.
@@ -438,6 +441,7 @@ def main():
     run = submit_once(
         w,
         run_name=args.run_name,
+        timeout_seconds=SMOKE_TIMEOUT_SECS,
         tasks=[jobs.SubmitTask(
             task_key="smoke",
             notebook_task=jobs.NotebookTask(notebook_path=nb_path),

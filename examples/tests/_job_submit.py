@@ -12,7 +12,11 @@ request made instead of creating another.
   sends it on every attempt, so the SDK's own retries and the retries here are all
   idempotent;
 * it retries only transient failures (network errors, 429/5xx), with the same token;
-* anything else raises at once.
+* anything else raises at once;
+* it REFUSES a submit that names no ``timeout_seconds``: a run with no time limit can sit for
+  hours on a hung driver. The limit goes on the run and on every task that sets none, and each
+  caller passes a value sized to its work (``DEFAULT_TIMEOUT_SECS`` is the fallback for a caller
+  with nothing better).
 
 ``runner_dir`` is the other thing the launchers share: the workspace folder they upload
 their runner notebook into. It is ``GBX_RUNNER_DIR`` when the caller set it, and the
@@ -29,6 +33,8 @@ import uuid
 
 DEFAULT_ATTEMPTS = 4
 DEFAULT_BACKOFF_SECS = 2.0
+# The limit a caller uses when it cannot size one to its work: 45 minutes.
+DEFAULT_TIMEOUT_SECS = 45 * 60
 
 # Databricks SDK errors (databricks.sdk.errors) that mean "try again": throttling,
 # unavailability, timeouts and server faults. Matched by class name so this module needs no
@@ -101,9 +107,21 @@ def is_transient(exc: BaseException) -> bool:
     return isinstance(exc, OSError) and not isinstance(exc, _LOCAL_FILE_ERRORS)
 
 
+def _require_timeout(timeout_seconds) -> int:
+    """The run's time limit in seconds, or ValueError. The Jobs API reads 0 as "no limit", so 0 is refused too."""
+    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int) or timeout_seconds <= 0:
+        raise ValueError(
+            f"submit_once needs a positive integer timeout_seconds (got {timeout_seconds!r}): a run with no "
+            f"time limit can hang for hours. Size one to the work, or pass DEFAULT_TIMEOUT_SECS "
+            f"({DEFAULT_TIMEOUT_SECS})."
+        )
+    return timeout_seconds
+
+
 def submit_once(
     w,
     *,
+    timeout_seconds=None,
     attempts: int = DEFAULT_ATTEMPTS,
     backoff_secs: float = DEFAULT_BACKOFF_SECS,
     idempotency_token: str | None = None,
@@ -114,9 +132,17 @@ def submit_once(
     Returns what ``jobs.submit`` returns (the ``Wait[Run]`` waiter). ``idempotency_token``
     is generated unless given; a caller that retries the whole launch itself can pass its own
     to keep one token across those retries.
+
+    ``timeout_seconds`` is required (see ``_require_timeout``): it is the run's limit, and the
+    limit of every task that sets none.
     """
+    timeout_seconds = _require_timeout(timeout_seconds)
     if attempts < 1:
         raise ValueError(f"attempts must be >= 1 (got {attempts})")
+    for task in submit_kwargs.get("tasks") or ():
+        if getattr(task, "timeout_seconds", 0) is None:  # a SubmitTask with no limit of its own
+            task.timeout_seconds = timeout_seconds
+    submit_kwargs["timeout_seconds"] = timeout_seconds
     token = idempotency_token or new_idempotency_token()
     print(f"    jobs.submit idempotency_token={token}", flush=True)
     for attempt in range(1, attempts + 1):

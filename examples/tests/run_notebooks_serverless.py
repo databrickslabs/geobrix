@@ -40,6 +40,7 @@ import tomllib
 from typing import Optional
 
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
+from _snapshot import snapshot_files  # sibling module (script dir is on sys.path)
 
 # ---------------------------------------------------------------------------
 # Resolve PROJECT_ROOT (examples/tests/ -> examples/ -> project root)
@@ -58,6 +59,8 @@ DEFAULT_WHEEL = (
 )
 DEFAULT_EXTRAS = "stac,vizx"
 DEFAULT_ENV_VERSION = "6"
+# Each run's time limit (minutes): a notebook that outlives it is ended by the Jobs service, not left to hang.
+DEFAULT_TIMEOUT_MIN = 60
 DEFAULT_POLL_SECS = 20
 
 # Cells whose source contains a line beginning with these magic prefixes are
@@ -348,8 +351,13 @@ def run_one(
     harvest_outputs: bool = False,
     profile: str | None = None,
     new_cluster=None,
+    timeout_min: int = DEFAULT_TIMEOUT_MIN,
+    harvest_path: pathlib.Path | None = None,
 ) -> bool:
     """Import and run one notebook on Serverless. Returns True on SUCCESS.
+
+    ``timeout_min`` is the run's time limit. ``harvest_path`` is where harvested outputs go when it is not
+    ``local_path`` (the launcher runs a snapshot copy of each notebook, so a later edit cannot change a live run).
 
     When ``hardware_accelerator`` is set (e.g. ``GPU_1xH100`` / ``GPU_8xH100``), the
     task requests Serverless GPU AI Runtime compute. Deps still come from the
@@ -381,6 +389,7 @@ def run_one(
         waiter = submit_once(
             w,
             run_name=f"gbx-nb:{task_key}",
+            timeout_seconds=timeout_min * 60,
             tasks=[
                 jobs.SubmitTask(
                     task_key=task_key,
@@ -401,6 +410,7 @@ def run_one(
         waiter = submit_once(
             w,
             run_name=f"gbx-nb:{task_key}",
+            timeout_seconds=timeout_min * 60,
             environments=[
                 jobs.JobEnvironment(
                     environment_key=ENV_KEY,
@@ -482,11 +492,11 @@ def run_one(
         from harvest_notebook_outputs import harvest_run_outputs  # same dir as this script
 
         try:
-            n, unmatched = harvest_run_outputs(run_id, profile or "oauth-fe", local_path)
+            n, unmatched = harvest_run_outputs(run_id, profile or "oauth-fe", harvest_path or local_path)
         except Exception as e:  # a requested harvest that fails must fail the run
             print(f"!!! STOP — output harvest failed ({e.__class__.__name__}: {e})", flush=True)
             return False
-        print(f"    harvested outputs into {n} cell(s) of {local_path}"
+        print(f"    harvested outputs into {n} cell(s) of {harvest_path or local_path}"
               + (f"; NOT updated (no match or unsupported result type): code cells {unmatched}"
                  if unmatched else ""), flush=True)
     return ok
@@ -499,6 +509,7 @@ def run_jar_task(
     params: list[str],
     env_version: str,
     poll_secs: int,
+    timeout_min: int = DEFAULT_TIMEOUT_MIN,
 ) -> bool:
     """Run ONE Serverless JAR task: ``spark_jar_task(main_class, params)`` with the JAR as the environment's
     java dependency (the Serverless JAR task form: environment version 4 or later). Returns True on SUCCESS and
@@ -510,6 +521,7 @@ def run_jar_task(
     waiter = submit_once(
         w,
         run_name=f"gbx-jar:{task_key}",
+        timeout_seconds=timeout_min * 60,
         environments=[
             jobs.JobEnvironment(
                 environment_key=ENV_KEY,
@@ -716,6 +728,15 @@ def main() -> int:
         help=f"Polling interval in seconds (default: {DEFAULT_POLL_SECS}).",
     )
     parser.add_argument(
+        "--timeout-min",
+        type=int,
+        default=DEFAULT_TIMEOUT_MIN,
+        help=(
+            f"Time limit of each run in minutes (default: {DEFAULT_TIMEOUT_MIN}). The Jobs service ends a run "
+            "that outlives it; size it to the notebook."
+        ),
+    )
+    parser.add_argument(
         "--no-strip-pip",
         dest="strip_pip",
         action="store_false",
@@ -791,7 +812,9 @@ def main() -> int:
 
         params = [a.strip() for a in args.jar_args.split(",") if a.strip()]
         w = WorkspaceClient(profile=args.profile)
-        ok = run_jar_task(w, args.jar_task, args.jar, params, str(args.env_version), args.poll_secs)
+        ok = run_jar_task(
+            w, args.jar_task, args.jar, params, str(args.env_version), args.poll_secs, args.timeout_min
+        )
         return 0 if ok else 1
 
     notebooks = _collect_notebooks(args.notebooks, args.dirs)
@@ -799,6 +822,18 @@ def main() -> int:
         parser.error(
             "Provide at least one notebook via --notebook or --dir."
         )
+
+    if args.timeout_min < 1:
+        parser.error("--timeout-min must be at least 1")
+
+    # Run from a snapshot: copy every notebook this launch touches into a temp dir now, so an edit while the
+    # run is live cannot change what a later notebook of the same launch uploads. Harvested outputs still go
+    # back to the original notebook.
+    dep_nbs = [pathlib.Path(d).resolve() for d in args.dep_notebooks or []]
+    snap = snapshot_files([*notebooks, *dep_nbs], prefix="gbx-nb-")
+    originals = {snap.get(nb, nb): nb for nb in notebooks}
+    notebooks = [snap.get(nb, nb) for nb in notebooks]
+    args.dep_notebooks = [str(snap.get(d, d)) for d in dep_nbs]
 
     extras = [e.strip() for e in args.extras.split(",") if e.strip()]
     extra_deps = _split_deps(args.extra_deps)
@@ -873,6 +908,8 @@ def main() -> int:
             harvest_outputs=args.harvest_outputs,
             profile=args.profile,
             new_cluster=new_cluster,
+            timeout_min=args.timeout_min,
+            harvest_path=originals[nb_path],
         )
         if not ok:
             return 1

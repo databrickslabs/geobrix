@@ -87,7 +87,7 @@ def no_backoff(monkeypatch):
 def test_lost_response_is_retried_with_the_same_token_and_makes_one_run():
     w = fake_workspace(fail_after_accept=1)
 
-    waiter = _job_submit.submit_once(w, run_name="nb", tasks=[])
+    waiter = _job_submit.submit_once(w, timeout_seconds=60, run_name="nb", tasks=[])
 
     assert len(w.jobs.runs) == 1
     assert waiter.run_id in w.jobs.runs
@@ -110,8 +110,8 @@ def test_without_a_token_a_lost_response_makes_two_runs():
 def test_each_logical_run_gets_its_own_token():
     w = fake_workspace()
 
-    a = _job_submit.submit_once(w, run_name="nb", tasks=[])
-    b = _job_submit.submit_once(w, run_name="nb", tasks=[])
+    a = _job_submit.submit_once(w, timeout_seconds=60, run_name="nb", tasks=[])
+    b = _job_submit.submit_once(w, timeout_seconds=60, run_name="nb", tasks=[])
 
     assert a.run_id != b.run_id and len(w.jobs.runs) == 2
     t1, t2 = (c["idempotency_token"] for c in w.jobs.calls)
@@ -122,7 +122,7 @@ def test_each_logical_run_gets_its_own_token():
 def test_a_supplied_token_is_used_as_given():
     w = fake_workspace()
 
-    _job_submit.submit_once(w, idempotency_token="my-run-1", run_name="nb")
+    _job_submit.submit_once(w, timeout_seconds=60, idempotency_token="my-run-1", run_name="nb")
 
     assert w.jobs.calls[0]["idempotency_token"] == "my-run-1"
 
@@ -137,6 +137,33 @@ def test_submit_arguments_pass_through_unchanged():
     assert call == {"run_name": "nb", "timeout_seconds": 60, "tasks": ["t"]}
 
 
+# --------------------------------------------------------------------------- the time limit
+
+
+@pytest.mark.parametrize("bad", [None, 0, -5, 1.5, "60", True])
+def test_a_submit_with_no_usable_time_limit_is_refused_before_any_call(bad):
+    """A run with no limit can hang for hours; the Jobs API reads 0 as "no limit" too."""
+    w = fake_workspace()
+    kw = {} if bad is None else {"timeout_seconds": bad}
+
+    with pytest.raises(ValueError, match="timeout_seconds"):
+        _job_submit.submit_once(w, run_name="nb", **kw)
+
+    assert w.jobs.calls == []
+
+
+def test_the_limit_goes_on_every_task_that_sets_none_and_not_on_one_that_does():
+    w = fake_workspace()
+    plain = SimpleNamespace(task_key="a", timeout_seconds=None)  # a jobs.SubmitTask's shape
+    own = SimpleNamespace(task_key="b", timeout_seconds=30)
+
+    _job_submit.submit_once(w, timeout_seconds=600, run_name="nb", tasks=[plain, own])
+
+    sent = w.jobs.calls[0]
+    assert sent["timeout_seconds"] == 600
+    assert (plain.timeout_seconds, own.timeout_seconds) == (600, 30)
+
+
 def test_a_permanent_error_is_not_retried():
     attempts = []
 
@@ -147,7 +174,7 @@ def test_a_permanent_error_is_not_retried():
     w = SimpleNamespace(jobs=SimpleNamespace(submit=rejected))
 
     with pytest.raises(InvalidParameterValue):
-        _job_submit.submit_once(w, run_name="nb")
+        _job_submit.submit_once(w, timeout_seconds=60, run_name="nb")
 
     assert len(attempts) == 1
 
@@ -171,7 +198,7 @@ def test_transient_errors_retry_with_one_token_until_attempts_run_out(exc):
     w = SimpleNamespace(jobs=SimpleNamespace(submit=always_fails))
 
     with pytest.raises(type(exc)):
-        _job_submit.submit_once(w, attempts=3, run_name="nb")
+        _job_submit.submit_once(w, timeout_seconds=60, attempts=3, run_name="nb")
 
     assert len(seen) == 3 and len(set(seen)) == 1
 
@@ -205,7 +232,7 @@ def test_a_urllib_http_error_is_judged_by_its_code(status, retried):
 
 def test_attempts_must_be_positive():
     with pytest.raises(ValueError):
-        _job_submit.submit_once(fake_workspace(), attempts=0, run_name="nb")
+        _job_submit.submit_once(fake_workspace(), timeout_seconds=60, attempts=0, run_name="nb")
 
 
 @pytest.mark.parametrize(
@@ -230,7 +257,7 @@ def test_local_file_errors_are_not_retried(exc):
     w = SimpleNamespace(jobs=SimpleNamespace(submit=fails))
 
     with pytest.raises(type(exc)):
-        _job_submit.submit_once(w, run_name="nb")
+        _job_submit.submit_once(w, timeout_seconds=60, run_name="nb")
 
     assert len(attempts) == 1
 
@@ -514,3 +541,29 @@ def test_the_known_launchers_use_submit_once():
         "run_notebooks_serverless.py",
         "serverless_light_smoke.py",
     }
+
+
+def _submit_once_calls_without_a_limit(source):
+    """Lines of ``submit_once(...)`` calls that pass no ``timeout_seconds=`` keyword."""
+    return [
+        n.lineno
+        for n in ast.walk(ast.parse(source))
+        if isinstance(n, ast.Call)
+        and getattr(n.func, "id", getattr(n.func, "attr", None)) == "submit_once"
+        and not any(k.arg == "timeout_seconds" or k.arg is None for k in n.keywords)
+    ]
+
+
+def test_the_guard_flags_a_submit_once_with_no_limit():
+    assert _submit_once_calls_without_a_limit("submit_once(w, run_name='x')") == [1]
+    assert _submit_once_calls_without_a_limit("submit_once(w, timeout_seconds=9)") == []
+
+
+def test_every_launcher_passes_a_time_limit_to_submit_once():
+    """No ``jobs.submit`` path may omit the limit: a hung run must end on its own."""
+    missing = {
+        str(p.relative_to(TESTS_DIR.parents[1])): lines
+        for p in _launcher_files()
+        if (lines := _submit_once_calls_without_a_limit(p.read_text()))
+    }
+    assert missing == {}

@@ -111,7 +111,7 @@ setup_log_file() {
     # Flush-safe teardown: capture the real exit code, restore stdout/stderr (closing the
     # FIFO write end so tee reaches EOF), wait for tee to finish, then exit with that code.
     # `exit` inside an EXIT trap does not re-run the trap, so this is not recursive.
-    trap 'rc=$?; exec 1>&3 2>&3 3>&-; [ -n "${GBX_TEE_PID:-}" ] && wait "${GBX_TEE_PID}" 2>/dev/null; exit $rc' EXIT
+    trap 'rc=$?; exec 1>&3 2>&3 3>&-; [ -n "${GBX_TEE_PID:-}" ] && wait "${GBX_TEE_PID}" 2>/dev/null; [ -n "${GBX_SNAP_RM:-}" ] && rm -rf "$GBX_SNAP_RM"; exit $rc' EXIT
 }
 
 show_banner() {
@@ -645,10 +645,43 @@ zarr_doc_tests_selected() {
         || "$path" =~ ^${base}/(readers|writers|api)/?$ ]]
 }
 
+# gbx_snapshot_exec "$0" "$@": run the calling command from a snapshot of the files it executes, so that editing
+# a script, the launcher or the bench package while the run is live cannot change it (bash reads a script as it
+# runs it: an edit under a live runner once made it execute half of a changed line, "dk: command not found").
+# Called right after `source common.sh`, before the argument loop. In the first run it copies scripts/commands,
+# scripts/docker, the examples/tests launchers (with the untracked config env) and python/geobrix/{src,envs,pyproject}
+# into a temp dir and execs the snapshot's copy of the command with GBX_SNAPSHOT_DIR and GBX_SOURCE_ROOT set; in the
+# snapshot's run it sets the exit trap that removes the dir and returns 0, and the command then points PROJECT_ROOT
+# back at GBX_SOURCE_ROOT (the venv, the logs and the local build are the source tree's) and runs the launcher from
+# the snapshot. --help/-h run in place (no work to protect). GBX_NO_SNAPSHOT=1 turns it off.
+gbx_snapshot_exec() {
+    local script="$1" arg; shift
+    if [[ -n "${GBX_SNAPSHOT_DIR:-}" ]]; then
+        GBX_SNAP_RM="$GBX_SNAPSHOT_DIR"  # setup_log_file's own EXIT trap removes it too
+        trap "rm -rf '$GBX_SNAP_RM'" EXIT
+        unset GBX_SNAPSHOT_DIR  # a command this one starts takes a snapshot of its own, and never removes this one
+        return 0
+    fi
+    [[ "${GBX_NO_SNAPSHOT:-}" == "1" ]] && return 0
+    for arg in "$@"; do [[ "$arg" == "--help" || "$arg" == "-h" ]] && return 0; done
+    local root snap rel
+    root="$(cd "$(dirname "$script")/../.." && pwd)"
+    snap="$(mktemp -d "${TMPDIR:-/tmp}/gbx-snapshot.XXXXXX")" || return 1
+    for rel in scripts/commands scripts/docker python/geobrix/src python/geobrix/envs python/geobrix/pyproject.toml; do
+        [[ -e "$root/$rel" ]] || continue
+        mkdir -p "$snap/$(dirname "$rel")"
+        cp -R "$root/$rel" "$snap/$rel" 2>/dev/null || { rm -rf "$snap"; echo "ERROR: could not snapshot $rel; set GBX_NO_SNAPSHOT=1 to run in place." >&2; exit 1; }
+    done
+    mkdir -p "$snap/examples/tests"
+    cp "$root"/examples/tests/*.py "$root"/examples/tests/*.env "$snap/examples/tests/" 2>/dev/null || true
+    export GBX_SNAPSHOT_DIR="$snap" GBX_SOURCE_ROOT="$root"
+    exec bash "$snap/scripts/commands/$(basename "$script")" "$@"
+}
+
 # Export helpers + color vars so they survive any subshell that doesn't re-source this file
 # (observed on macOS bash 3.2: "show_separator: command not found" mid-script).
 export RED GREEN YELLOW BLUE CYAN NC GBX_DATABRICKS_SDK_SPEC DOCKER_MAVEN_ENV GBX_TEST_LOCK_FILE GBX_WORK_LOCK_FILE GBX_TEST_LOCK_TIMEOUT GBX_LOCK_NO_WAIT GBX_LOCK_CMD GBX_CONTAINER_ROOT GBX_CONTAINER_LOCK GBX_LOCK_RUN
 export -f check_docker resolve_log_path setup_log_file show_banner show_separator \
           print_report_link open_report generate_timestamp warn_if_jar_stale \
           print_banner print_separator setup_log run_in_pyrx_venv _gbx_py_ok gbx_python_with_sdk validate_set \
-          print_lock_help _gbx_lock_abort gbx_acquire_test_lock gbx_ensure_container_python_deps zarr_extra_installed ensure_zarr_extra ensure_zarr_test_env zarr_doc_tests_selected 2>/dev/null || true
+          print_lock_help _gbx_lock_abort gbx_acquire_test_lock gbx_ensure_container_python_deps zarr_extra_installed ensure_zarr_extra ensure_zarr_test_env zarr_doc_tests_selected gbx_snapshot_exec 2>/dev/null || true

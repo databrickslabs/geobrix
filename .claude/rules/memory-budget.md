@@ -40,6 +40,12 @@ from databricks.labs.gbx.ds.file_gbx import materialize_decision
   classic 1536 MiB / none 0). Handles `tile_split` — intentionally NOT a `budget_for`
   intent (no RAM probe; pure strategy-to-bytes table lookup). Used by `ds/raster.py` to
   size tiles before decode.
+- `block_cache_bytes(strategy="auto", *, ceiling=128 MiB)` — **size of GDAL's raster block
+  cache** for a block of work that reads one tile: 1/16 of `decoded_budget_bytes(strategy)`
+  (`none` is sized for the runtime), under the ceiling. The sites that bound the cache (raster
+  reader opens, STAC window download, COG file conversion) pass it to
+  `pyrx._env.capped_block_cache`, never to `rasterio.Env(GDAL_CACHEMAX=...)`: rasterio counts
+  that value in BYTES and puts the old size back only for an outermost Env.
 
 ## Patterns the QC check flags (level: FAIL) outside `budget.py` / `file_gbx.py` / `mvs.py`
 

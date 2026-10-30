@@ -265,9 +265,9 @@ click==8.2.1 \
     --hash=sha256:27c491cc05d968d271d5a1db13e3b5a184636d9d930f148c50b038f0d0646202 \
     --hash=sha256:61a3265b914e850b85317d0b3109c7f8cd35a670f963866005d6ef1d5175a12b
     # via
+    #   -r requirements-light-env6-all-ci.in
     #   click-plugins
     #   cligj
-    #   geobrix
     #   mercantile
     #   morecantile
     #   planetary-computer
@@ -786,7 +786,9 @@ lazy-loader==0.5 \
 mapbox-vector-tile==2.2.0 \
     --hash=sha256:9fbf2e94890429ccdaf8e047019dccadd9deb03f5b2ae9b5c5561d27a20a0eb3 \
     --hash=sha256:d26ad320ade60cc6c0b66edc6ee4b6f53663aedf0b444b115c6ba68e9ba1e6d1
-    # via geobrix
+    # via
+    #   -r requirements-light-env6-all-ci.in
+    #   geobrix
 mapclassify==2.11.0 \
     --hash=sha256:85dbfe747e5b5aed1f1fd41ef5de0c0ab8322227ee308191a44fff12c59c197d \
     --hash=sha256:a510178db75c9b12db3207d748993e0cc5be4132171a4adc42d0b723515352b1
@@ -1168,6 +1170,7 @@ numpy==2.3.5 \
     --hash=sha256:ffe22d2b05504f786c867c8395de703937f934272eb67586817b46188b4ded6d \
     --hash=sha256:fffe29a1ef00883599d1dc2c51aa2e5d80afe49523c261a74933df395c15c520
     # via
+    #   -r requirements-light-env6-all-ci.in
     #   cftime
     #   color-operations
     #   contourpy
@@ -1317,6 +1320,7 @@ pandas==2.3.3 \
     --hash=sha256:f086f6fe114e19d92014a1966f43a3e62285109afe874f067f5abbdcbb10e59c \
     --hash=sha256:f8bfc0e12dc78f777f323f55c58649591b2cd0c43534e8355c51d3fede5f4dee
     # via
+    #   -r requirements-light-env6-all-ci.in
     #   geobrix
     #   geopandas
     #   mapclassify
@@ -2094,7 +2098,9 @@ requests==2.34.2 \
 rio-tiler==9.4.12 \
     --hash=sha256:103a3df350ea1c756c78570f4a4bacbe0d769808d879766bcbf880f3daa73372 \
     --hash=sha256:e0076a986e901f1782fe41f4582a01b5592dfaa702b743fc7c0624a063f0a093
-    # via geobrix
+    # via
+    #   -r requirements-light-env6-all-ci.in
+    #   geobrix
 rpds-py==2026.6.3 \
     --hash=sha256:0be972be84cfcaf46c8c6edf690ca0f154ac17babf1f6a955a51579b34ad2dc5 \
     --hash=sha256:127565fead0a10943b282957bd5447804ff3160ad79f2ad2635e6d249e380680 \
@@ -2510,7 +2516,7 @@ urllib3==2.5.0 \
     --hash=sha256:3fc47733c7e419d4bc3f6b3dc2b4f890bb743906a30d56ba4a5bfa4bbff92760 \
     --hash=sha256:e6b01673c0fa6a13e374b50871808eb3bf7046c4b125b216f6bf1cc604cff0dc
     # via
-    #   geobrix
+    #   -r requirements-light-env6-all-ci.in
     #   requests
 wcwidth==0.8.2 \
     --hash=sha256:91fbef97204b96a3d4d421609b80340b760cf33e26da123ff243d76b1fda8dda \

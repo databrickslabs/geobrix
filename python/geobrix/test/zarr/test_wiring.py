@@ -30,8 +30,17 @@ def test_extras_are_per_runtime_with_an_alias_and_no_bare_zarr():
     assert all("<" in r for r in EXTRAS["zarr_dbr19"]), "every pin carries a cap"
     assert EXTRAS["zarr_env6"] == ["geobrix[zarr_dbr19]"]
     assert "zarr" not in EXTRAS
-    assert "geobrix[zarr_dbr19]" in EXTRAS["light_dbr19_all"]
-    assert EXTRAS["light_env6_all"] == ["geobrix[light_dbr19_all]"]
+    # the env6 wheel's [zarr] is the same pins (gbx:build:wheel ships envs/env6/extra-zarr.txt as it)
+    env6 = (PKG / "envs" / "env6" / "extra-zarr.txt").read_text().splitlines()
+    pins = [ln.split("#", 1)[0].strip() for ln in env6]
+    assert sorted(p for p in pins if p) == sorted(
+        r.split("#", 1)[0].strip() for r in EXTRAS["zarr_dbr19"]
+    )
+    assert not (PKG / "envs" / "env5" / "extra-zarr.txt").exists()
+    assert (
+        ".[stac,vizx,zarr_dbr19]"
+        in (PKG / "requirements-light-env6-all-ci.in").read_text().splitlines()
+    )
 
 
 def test_zarr_is_registered_in_all_three_light_test_dir_lists():

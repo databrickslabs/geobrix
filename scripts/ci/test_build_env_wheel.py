@@ -517,3 +517,33 @@ def test_verify_check_1_lists_only_what_just_an_extra_holds(env, changes, verdic
 def test_verify_check_1_runs_base_held():
     text = (NATIVE / "check-env-wheel.sh").read_text()
     assert '"$V/bin/python" /check/base_held.py /env' in text
+
+
+# --- the plain wheel (the committed pyproject): off Databricks; the 0.5.x runtime extras are tripwires ----------
+
+def _plain():
+    return bew.tomllib.loads((bew.PYDIR / "pyproject.toml").read_text())["project"]
+
+
+def test_the_plain_wheels_old_runtime_extras_are_tripwires():
+    # Each old name requires the env wheel that replaces it, so `geobrix[light_env6] @ <plain wheel>` fails at
+    # resolution naming geobrix==<version>+env6 instead of installing PyPI's GDAL stack on a Databricks runtime.
+    extras, version = _plain()["optional-dependencies"], bew.source_version()
+    for env, names in bew.OLD_EXTRAS.items():
+        for name in names:
+            assert extras.get(name) == [f"geobrix=={version}+env{env}"], (name, extras.get(name))
+    light = {n for n in extras if n.startswith("light")}
+    assert light == {n for names in bew.OLD_EXTRAS.values() for n in names}  # no light-base, no other light name
+    assert bew.TRIPWIRES == {6: bew.OLD_EXTRAS[5], 5: bew.OLD_EXTRAS[6]}
+
+
+def test_the_plain_wheels_base_is_the_light_tier_with_floors_only():
+    # `pip install geobrix` gives a working light tier off Databricks: floors only, no runtime hold or cap.
+    deps = [Requirement(d) for d in _plain()["dependencies"]]
+    names = {bew.canonicalize_name(r.name) for r in deps}
+    assert {"rasterio", "pyogrio", "pyproj", "shapely", "netcdf4", "rio-tiler", "typing-extensions"} <= names
+    assert "pyspark" not in names  # every runtime brings its own
+    for r in deps:
+        assert r.marker is None and all(s.operator == ">=" for s in r.specifier), str(r)
+    te = next(r for r in deps if bew.canonicalize_name(r.name) == "typing-extensions")
+    assert str(te.specifier) == ">=4.13"  # rio-tiler 9's PEP 728 TypedDict(extra_items=...)

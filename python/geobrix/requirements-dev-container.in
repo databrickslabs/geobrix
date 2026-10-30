@@ -60,7 +60,7 @@ pystac>=1.9,<2
 rasterio==1.5.0
 rioxarray==0.22.0
 # NetCDF decode for the netcdf_gbx reader (NetCDF-3 + NetCDF-4/HDF5: S5P, ERA5).
-# Keep in lockstep with requirements-light-env6-ci.in and the pyproject [light-base] floor.
+# Keep in lockstep with requirements-light-env6-ci.in and the pyproject base-dependency floor.
 netcdf4==1.7.4
 # Zarr transactional stores (test/zarr): the [zarr_dbr19] extra. Ranges MUST match pyproject
 # [zarr_dbr19] and requirements-light-env6-ci.in. gbx:test:python also installs the extra into a
@@ -103,7 +103,7 @@ nest-asyncio==1.6.0
 testbook==0.4.2
 
 # --- EXIF metadata reading (exif_gbx DataSource; camera/GPS EXIF from drone imagery) ---
-# Matches the [light-base] pyproject.toml pin so the dev container exercises the same
+# Matches the pyproject.toml base-dependency floor so the dev container exercises the same
 # version as the light CI environments (requirements-light-env{5,6}-ci.in).
 exifread>=3.0,<4
 

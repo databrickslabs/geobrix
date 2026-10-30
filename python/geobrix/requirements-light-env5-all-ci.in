@@ -1,24 +1,32 @@
-# Source of truth for the protobuf-5 all-features umbrella CI lock
-# (Serverless env 5 / classic DBR 17.3–18, full feature set).
-# Covers: light_env5_all, light_dbr17_all, light_dbr18_all — all alias
-# geobrix[light_dbr17_all], the canonical pb5 all-features extra.
+# Source of truth for the protobuf-5 all-features CI lock: the light tier with [stac] and [vizx],
+# at the versions the env5 runtime family (Serverless env 5 / classic DBR 17.3–18) preinstalls.
+# (On Databricks those runtimes install the env5 wheel; this lock tests the plain wheel's light
+# tier off Databricks with the same versions.)
 #
 # Regenerate (from python/geobrix/):
 #   uv pip compile --generate-hashes --python-version 3.12 \
 #       --output-file requirements-light-env5-all-ci.txt requirements-light-env5-all-ci.in
 #
-# This .in uses a local-package-with-extra reference so uv expands [light_env5_all]
-# directly from pyproject.toml. The [light_env5_all] extra pulls
-# [light_dbr17]+[stac]+[vizx] (protobuf-5 / mapbox-vector-tile<2.2).
-# ([overture] is an opt-in extra outside the _all umbrellas.)
-# Protobuf-6 all-features twin: see requirements-light-env6-all-ci.in.
+# This .in uses a local-package-with-extras reference so uv expands the base dependencies and
+# [stac] + [vizx] directly from pyproject.toml; the holds below are the env5 runtimes' versions.
+# ([overture] is opt-in and left out.) Protobuf-6 all-features twin: requirements-light-env6-all-ci.in.
 #
 # Note: CI resolves without Serverless grpcio-status constraints; the protobuf version
-# in this lock (5.x) reflects the [light_dbr17] cap on mapbox-vector-tile, NOT a CI
+# in this lock (5.x) reflects the mapbox-vector-tile<2.2 hold below, NOT a CI
 # grpcio constraint. The real runtime protobuf is set at cluster install time.
 
-# Local package — expands geobrix[light_env5_all] from pyproject.toml
-.[light_env5_all]
+# Local package — the base dependencies plus [stac] and [vizx] from pyproject.toml
+.[stac,vizx]
+
+# The env5 runtimes' preinstalled versions (DBR 17.3 / 18, Serverless env 5): pandas 2.2.3,
+# numpy 2.1.3, urllib3 2.3.0, click 8.1.7-8.1.8, protobuf 5 (mapbox-vector-tile 2.2 needs 6).
+# The plain wheel has floors only; these holds keep the lock at the runtime family's versions.
+pandas<2.3
+numpy<2.2
+urllib3<2.4
+click<8.2
+mapbox-vector-tile>=2.1,<2.2
+rio-tiler>=9.0,<10
 
 # pyspark is NOT a geobrix base dependency (Databricks provides it on every supported
 # runtime; see pyproject.toml). This lock is for local/manual verification off-cluster,

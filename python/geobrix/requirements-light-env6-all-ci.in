@@ -1,29 +1,38 @@
-# Source of truth for the protobuf-6 all-features umbrella CI lock
-# (Serverless env 6 / classic DBR 19, full feature set).
-# Covers: light_env6_all, light_dbr19_all — all alias geobrix[light_dbr19_all],
-# the canonical pb6 all-features extra.
+# Source of truth for the protobuf-6 all-features CI lock: the light tier with [stac], [vizx]
+# and [zarr_dbr19], at the versions the env6 runtime family (Serverless env 6 / classic DBR 19)
+# preinstalls. (On Databricks those runtimes install the env6 wheel; this lock tests the plain
+# wheel's light tier off Databricks with the same versions.)
 #
 # Regenerate (from python/geobrix/), on any host: the platform is explicit so the result does not
 # depend on where it runs (a Linux aarch64 host would otherwise drop the click hold below):
 #   uv pip compile --generate-hashes --python-version 3.12 --python-platform x86_64-manylinux_2_28 \
 #       --output-file requirements-light-env6-all-ci.txt requirements-light-env6-all-ci.in
 #
-# This .in uses a local-package-with-extra reference so uv expands [light_env6_all]
-# directly from pyproject.toml. The [light_env6_all] extra pulls
-# [light_dbr19]+[stac]+[vizx]+[zarr_dbr19] (protobuf-6 / mapbox-vector-tile>=2.2).
-# ([overture] is an opt-in extra outside the _all umbrellas.)
-# Protobuf-5 all-features twin: see requirements-light-env5-all-ci.in.
+# This .in uses a local-package-with-extras reference so uv expands the base dependencies and
+# [stac] + [vizx] + [zarr_dbr19] directly from pyproject.toml; the holds below are the env6
+# runtimes' versions. ([overture] is opt-in and left out.) Protobuf-5 twin:
+# requirements-light-env5-all-ci.in.
 #
-# Resolved for x86_64 Linux: the umbrella's `click>=8.2,<8.3` hold applies (it is skipped on
-# Linux aarch64), so this lock carries click 8.2.1 and rasterio 1.4.3 -- the x86_64 resolution.
-# On aarch64 the same extra resolves click 8.5.0 / rasterio 1.5.x (see pyproject [light_dbr19_all]).
+# Resolved for x86_64 Linux: the `click>=8.2,<8.3` hold applies (it is skipped on Linux aarch64:
+# PyPI rasterio >=1.4.4 declares `click!=8.2.*` and has no cp312 aarch64 wheel before 1.4.4), so
+# this lock carries click 8.2.1 and rasterio 1.4.3 -- the x86_64 resolution.
 #
 # Note: CI resolves without Serverless grpcio-status constraints; the protobuf version
-# in this lock (6.x) reflects the [light_dbr19] floor on mapbox-vector-tile>=2.2, NOT
-# a CI grpcio constraint. The real runtime protobuf is set by the Serverless base image.
+# in this lock (6.x) reflects the mapbox-vector-tile>=2.2 floor, NOT a CI grpcio constraint.
+# The real runtime protobuf is set by the Serverless base image.
 
-# Local package — expands geobrix[light_env6_all] from pyproject.toml
-.[light_env6_all]
+# Local package — the base dependencies plus [stac], [vizx] and [zarr_dbr19] from pyproject.toml
+.[stac,vizx,zarr_dbr19]
+
+# The env6 runtimes' preinstalled versions (DBR 19, Serverless env 6): pandas 2.3.3, numpy 2.3.4,
+# urllib3 2.5.0, click 8.2.1 (the floor stops a downgrade to 8.1.8). The plain wheel has floors
+# only; these holds keep the lock at the runtime family's versions.
+pandas<2.4
+numpy<2.4
+urllib3<2.6
+click>=8.2,<8.3; platform_machine != "aarch64"
+mapbox-vector-tile>=2.2
+rio-tiler>=9.0,<10
 
 # pyspark is NOT a geobrix base dependency (Databricks provides it on every supported
 # runtime; see pyproject.toml). This lock is for local/manual verification off-cluster,

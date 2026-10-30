@@ -1,10 +1,12 @@
-# Source of truth for the protobuf-5 CI lock (Serverless env 5 / classic DBR 17.3–18).
-# Covers: light_env5, light_dbr17, light_dbr18 — all alias geobrix[light_dbr17], the
-# canonical pb5 extra.  The protobuf-6 lock (env 6 / DBR 19) is requirements-light-env6-ci.in.
+# Source of truth for the protobuf-5 CI lock: the light tier at the versions the env5 runtime
+# family (Serverless env 5 / classic DBR 17.3–18) preinstalls. On Databricks those runtimes
+# install the env5 wheel; this lock tests the plain wheel's light tier (its base dependencies,
+# pyproject.toml) off Databricks with the same versions. The protobuf-6 lock (env 6 / DBR 19) is
+# requirements-light-env6-ci.in.
 #
 # NOT currently CI-consumed. CI's pyrx_build action installs only the protobuf-6
 # lock (requirements-light-env6-ci.txt); there is no env5 CI job today, so the
-# protobuf-5 regime (light_env5 / light_dbr17 / light_dbr18) is not CI-gated. This
+# protobuf-5 runtime family (DBR 17.3 / 18, Serverless env 5) is not CI-gated. This
 # lock is generated for regime parity and local/manual verification:
 #   pip install --require-hashes -r python/geobrix/requirements-light-env5-ci.txt
 # Gating pb5 in CI would need a second pyrx_build step against this lock (backlog).
@@ -33,7 +35,7 @@ pyspark==4.0.0
 numpy==2.1.3
 pandas==2.2.3
 pyarrow==19.0.1
-# urllib3 pinned to the DBR 17.3 / Serverless env 5 base version; cap <2.4 (pyproject [light_dbr17]).
+# urllib3 pinned to the DBR 17.3 / Serverless env 5 base version (the env5 wheel's cap is <2.4).
 urllib3==2.3.0
 
 # --- lightweight raster stack (rasterio ships bundled GDAL — no native install) ---
@@ -42,7 +44,7 @@ shapely==2.1.2
 
 # --- entity-hardened XML parsing for external GDAL .vrt mosaic indexes ---
 # (raster_gbx VRT expansion; guards untrusted .vrt against XXE / billion-laughs).
-# Dep-free, pure Python. Matches the [light-base] pyproject floor + dev container.
+# Dep-free, pure Python. Matches the pyproject base-dependency floor + dev container.
 defusedxml==0.7.1
 
 # --- band math: focal filters / convolution (scipy.ndimage) + map-algebra (numexpr) ---
@@ -64,7 +66,7 @@ pyogrio==0.13.0
 pyproj==3.7.2
 
 # --- MVT (light pyvx) decode oracle used in test/pyvx/ ---
-# MUST match pyproject [light_env5] (alias of [light_dbr17]): mapbox-vector-tile>=2.1,<2.2
+# MUST match the env5 wheel's vendored mapbox-vector-tile (envs/env5/vendor-pure.txt): 2.1.x
 # (protobuf-5 cap; 2.2 pulls protobuf>=6.31.1 which conflicts with classic DBR 17.3/18/env5).
 mapbox-vector-tile==2.1.0
 
@@ -77,7 +79,7 @@ scikit-image==0.26.0
 
 # --- NetCDF decode for the netcdf_gbx reader (NetCDF-3 + NetCDF-4/HDF5: S5P,
 # ERA5): xarray with the netcdf4 engine (single wheel bundling netcdf-c + HDF5;
-# pulls cftime). Keep in lockstep with the pyproject [light-base] floors, and netcdf4 with
+# pulls cftime). Keep in lockstep with the pyproject base-dependency floors, and netcdf4 with
 # requirements-dev-container.in (where xarray comes through rioxarray). ---
 xarray==2026.7.0
 netcdf4==1.7.4
@@ -92,7 +94,7 @@ netcdf4==1.7.4
 # stay within the env5 urllib3 cap, so this does not disturb the pinned urllib3. ---
 requests==2.34.2
 tenacity==9.1.4
-# idna is NOT capped, matching pyproject [light_env5]: the patched httpx2 (rio-tiler's HTTP
+# idna is NOT capped: the patched httpx2 (rio-tiler's HTTP
 # client, 2.12+) requires idna>=3.18, and the runtime base is idna 3.7. The lock resolves it;
 # an install upgrades the runtime's idna (a one-time "core package changed" notice on Databricks).
 # earthaccess is kept here for test/earthdata + test/stac CI coverage; it is now the
@@ -136,7 +138,7 @@ laspy==2.7.0
 lazrs==0.8.2
 
 # --- EXIF metadata reading (exif_gbx DataSource; camera/GPS EXIF from drone imagery) ---
-# Pure-Python; no native dep. Part of [light-base]; available without [photogrammetry].
+# Pure-Python; no native dep. A base dependency; available without [photogrammetry].
 exifread>=3.0,<4
 
 # --- test runner (light-CI only; dev-container / notebooks harness stay on 8.4.2

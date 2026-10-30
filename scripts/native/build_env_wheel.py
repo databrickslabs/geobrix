@@ -84,8 +84,10 @@ PYDIR = REPO / "python" / "geobrix"
 PKG = Path("databricks/labs/gbx")
 ARCHES = ("x86_64", "aarch64")
 PLATFORMS = {"x86_64": "linux/amd64", "aarch64": "linux/arm64"}
-TRIPWIRES = {  # the other environment's old extra names -> geobrix==<version>+env<other>
-    6: (
+# The 0.5.x runtime extras, by the env wheel that replaces them. The plain wheel (the committed pyproject) declares
+# every one as a tripwire, `geobrix==<version>+env<N>`; each env wheel declares the other family's the same way.
+OLD_EXTRAS = {
+    5: (
         "light_dbr17",
         "light_dbr18",
         "light_env5",
@@ -93,8 +95,9 @@ TRIPWIRES = {  # the other environment's old extra names -> geobrix==<version>+e
         "light_dbr18_all",
         "light_env5_all",
     ),
-    5: ("light_dbr19", "light_env6", "light_dbr19_all", "light_env6_all"),
+    6: ("light_dbr19", "light_env6", "light_dbr19_all", "light_env6_all"),
 }
+TRIPWIRES = {6: OLD_EXTRAS[5], 5: OLD_EXTRAS[6]}  # the other environment's old names -> geobrix==<version>+env<other>
 RELY_ON_BASE = {
     "click"
 }  # preinstalled on every runtime; core.txt may still declare it

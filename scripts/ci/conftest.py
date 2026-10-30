@@ -7,6 +7,8 @@ the real repository.
 """
 
 import fcntl
+import hashlib
+import io
 import json
 import os
 import shutil
@@ -44,9 +46,18 @@ class DcsCommand:
         (self.root / "scripts" / "docker" / "dcs" / "Dockerfile").write_text(
             "FROM scratch\n"
         )
-        shutil.copy(
-            REPO_ROOT / "scripts" / "docker" / "dcs" / "redact_pip_log.py",
-            self.root / "scripts" / "docker" / "dcs" / "redact_pip_log.py",
+        for name in ("dcs_lock.py", "verify_image.py"):
+            shutil.copy(
+                REPO_ROOT / "scripts" / "docker" / "dcs" / name,
+                self.root / "scripts" / "docker" / "dcs" / name,
+            )
+        (self.root / "scripts" / "native").mkdir(parents=True)
+        shutil.copy(  # dcs_lock.py prints no index host: its tool output goes through this
+            REPO_ROOT / "scripts" / "native" / "redact.py",
+            self.root / "scripts" / "native" / "redact.py",
+        )
+        (self.root / "scripts" / "native" / "pins.conf").write_text(
+            "GBX_NATIVE_REVISION=1\nRASTERIO_VERSION=1.5.2\n"
         )
         self.script = commands / command
         self.bin = tmp_path / "bin"
@@ -74,6 +85,51 @@ class DcsCommand:
         whl = dist / f"geobrix-{version}-py3-none-any.whl"
         whl.write_bytes(b"not a real wheel")
         return whl
+
+    def env_wheel(self, version: str, jar_classes=("com/databricks/labs/gbx/A.class",)):
+        """dist/env6/geobrix-<version>+env6-py3-none-any.whl holding its JAR under _jar/ (the image's JAR)."""
+        dist = self.root / "dist" / "env6"
+        dist.mkdir(parents=True, exist_ok=True)
+        jar = io.BytesIO()
+        with zipfile.ZipFile(jar, "w") as zf:
+            for name in jar_classes:
+                zf.writestr(name, b"x")
+        whl = dist / f"geobrix-{version}+env6-py3-none-any.whl"
+        with zipfile.ZipFile(whl, "w") as zf:
+            zf.writestr("databricks/labs/gbx/__init__.py", "")
+            zf.writestr(
+                f"databricks/labs/gbx/_jar/geobrix-{version}-jar-with-dependencies.jar",
+                jar.getvalue(),
+            )
+        return whl
+
+    def lock(self, arch: str = "aarch64") -> dict:
+        """The lock, the base list, the built rasterio wheel and a wheelhouse cache for one architecture.
+
+        The cache holds every wheel the lock needs, so dcs_lock.py fetches nothing. Returns the wheel
+        names the context's wheelhouse/ must end up with.
+        """
+        env = self.root / "python" / "geobrix" / "envs" / "env6"
+        env.mkdir(parents=True, exist_ok=True)
+        dist = self.root / "build" / "native" / "out" / arch / "bindings" / "dist"
+        dist.mkdir(parents=True, exist_ok=True)
+        rio = dist / f"rasterio-1.5.2+gbx1-cp312-cp312-linux_{arch}.whl"
+        rio.write_bytes(b"our rasterio")
+        sha = hashlib.sha256(rio.read_bytes()).hexdigest()
+        h = "a" * 64
+        (env / f"dcs-{arch}.lock").write_text(
+            f"click==8.2.1 \\\n    --hash=sha256:{h}\n"
+            f"idna==3.20 \\\n    --hash=sha256:{h}\n"
+            f"rasterio==1.5.2+gbx1 \\\n    --hash=sha256:{sha}\n"
+        )
+        (env / f"dcs-base-{arch}.txt").write_text("click==8.2.1\nidna==3.11\n")
+        cache = self.root / "build" / "dcs" / "wheelhouse" / arch
+        cache.mkdir(parents=True, exist_ok=True)
+        (cache / "idna-3.20-py3-none-any.whl").write_bytes(b"idna")
+        return {
+            "idna-3.20-py3-none-any.whl",
+            rio.name,
+        }
 
     def _env(self, env=None) -> dict:
         self.state_file.write_text(json.dumps(self.state))

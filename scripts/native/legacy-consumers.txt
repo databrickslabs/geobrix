@@ -3,7 +3,6 @@
 # `pins.py audit` fails when the regex matches its file other than once, or captures another value
 # (the consumer drifted), and also when the regex no longer matches (the consumer was retired: delete
 # its line). A consumer that moves to the new stack is retired by pointing it at pins.conf instead.
-scripts/docker/dcs/Dockerfile|(?m)^ARG GDAL_VERSION=(\S+)|3.11.4|DCS image built from the native payload
 scripts/docker/Dockerfile|(?m)^ARG GDAL_VERSION=(\S+)|3.11.4|kept as the fallback dev image
 scripts/build-gdal-artifacts.sh|(?m)^GDAL_PPA_VERSION="([^"]+)"|3.11.4+dfsg-1~noble0|init-script bundle from the native payload
 .github/actions/scala_build/action.yml|(?m)^\s*GDAL_PPA_VERSION="([^"]+)"|3.11.4+dfsg-1~noble0|CI scale-out

@@ -1,71 +1,39 @@
-# syntax=docker/dockerfile:1
-# GeoBrix image for Databricks Container Services (DCS vNext) on DEDICATED clusters.
-# Bakes in native GDAL with its Java (JNI) bindings, the GeoBrix wheel and exactly one GeoBrix JAR,
-# so both tiers run with no init script and no cluster library. Build with `gbx:dcs:build`
-# (scripts/commands/gbx-dcs-build.sh); user docs: docs/docs/installation/dcs.mdx.
+# GeoBrix image for Databricks Container Services (DCS vNext) on DEDICATED clusters: the env6 wheel (its payload
+# carries the one GDAL/PROJ/GEOS stack, its bindings and the JNI); its declared and [vizx] dependencies from a
+# hashed per-arch lock with the base image's packages (click included) held, whose rasterio is our build against
+# the same GDAL (no PyPI rasterio, no OpenSSL 1.1); exactly one JAR. No GDAL is compiled and no package index is
+# needed: the wheels arrive in the build context (gbx:dcs:build stages them).
+# Build with `gbx:dcs:build` (scripts/commands/gbx-dcs-build.sh); user docs: docs/docs/installation/dcs.mdx.
 # DCS honors only FROM/ARG/RUN/ENV/WORKDIR/COPY.
 ARG BASE_IMAGE=databricksruntime/environment:v6-standard-arm
 
-# ---------- base: DCS env 6 + GDAL 3.11.4 (JNI) ----------
-FROM ${BASE_IMAGE} AS base
-ARG GDAL_VERSION=3.11.4
-# Pinned SHA-256 of the GDAL source tarball; keep in lockstep with scripts/docker/Dockerfile.
-ARG GDAL_SHA256=0fa36ee34d4451db586d2bf78ea0dbfa3b0dfae0516587f8130d21add0ac9dad
-
-RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ant autoconf automake build-essential cmake g++ git \
-      libcurl4-gnutls-dev libgeos-dev libgeotiff-dev libhdf4-alt-dev libhdf5-dev \
-      libjsoncpp-dev libnetcdf-dev libopenjp2-7-dev libpoppler-dev libpoppler-private-dev \
-      libpq-dev libproj-dev libsnappy-dev libspatialite-dev libsqlite3-dev \
-      libtiff-dev libtool libwebp-dev libxml2-dev ninja-build pkg-config \
-      proj-bin proj-data sqlite3 swig unixodbc wget && \
-    rm -rf /var/lib/apt/lists/*
-
-RUN mkdir -p /usr/local/src && \
-    wget -q -O /tmp/gdal.tar.gz https://download.osgeo.org/gdal/${GDAL_VERSION}/gdal-${GDAL_VERSION}.tar.gz && \
-    echo "${GDAL_SHA256}  /tmp/gdal.tar.gz" | sha256sum -c - && \
-    tar -xzf /tmp/gdal.tar.gz -C /usr/local/src/ && rm /tmp/gdal.tar.gz && \
-    mkdir -p /usr/local/src/gdal-${GDAL_VERSION}/build && cd /usr/local/src/gdal-${GDAL_VERSION}/build && \
-    cmake -G Ninja .. \
-        -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
-        -DGDAL_USE_JAVA=ON -DJAVA_HOME="${JAVA_HOME}" \
-        -DJNI_INCLUDE_DIRS="${JAVA_HOME}/include;${JAVA_HOME}/include/linux" \
-        -DBUILD_JAVA_BINDINGS=ON -DBUILD_PYTHON_BINDINGS=OFF \
-        -DBUILD_TESTING=OFF && \
-    cmake --build . --parallel 8 && cmake --install . && \
-    echo /usr/local/lib > /etc/ld.so.conf.d/usr-local-gdal.conf && ldconfig && \
-    cd / && rm -rf /usr/local/src/gdal-${GDAL_VERSION}
-
-# The heavyweight JAR loads /usr/lib/libgdalalljni.so.
-RUN ln -sf /usr/local/lib/libgdal.so /usr/lib/libgdal.so && \
-    ln -sf /usr/local/lib/libgdal.so /usr/lib/libgdal.so.30 && \
-    ln -sf /usr/local/lib/jni/libgdalalljni.so /usr/lib/libgdalalljni.so && \
-    mkdir -p /usr/lib/jni && ln -sf /usr/local/lib/jni/libgdalalljni.so /usr/lib/jni/libgdalalljni.so.30
-
-# ---------- release: + GeoBrix wheel (lightweight deps + visualization extra) + exactly one GeoBrix JAR ----------
-FROM base AS release
+FROM ${BASE_IMAGE} AS release
+# x86_64 or aarch64: the payload's architecture directory
+ARG GBX_ARCH
 ARG GEOBRIX_VERSION
-COPY geobrix-${GEOBRIX_VERSION}-py3-none-any.whl /tmp/geobrix-wheel/
-# Hold every package the base image ships at its version; fail the build rather than drift.
-# A package index, if one is needed, arrives as the BuildKit secret pip_index_url (never an ARG or ENV),
-# so it is not recorded in the image history. The install is quiet (-q): at its default verbosity pip prints
-# "Looking in indexes: <url>" into the build log. Its output goes to a file that is printed through
-# redact_pip_log.py (bind-mounted from the build context, so it is not in the image), so a warning or an
-# error from a failing install ("Could not fetch URL <index>/...") does not name the index either; the
-# install's exit status is checked after the print and becomes the step's own.
-RUN --mount=type=secret,id=pip_index_url \
-    --mount=type=bind,source=redact_pip_log.py,target=/mnt/redact_pip_log.py \
-    if [ -s /run/secrets/pip_index_url ]; then export PIP_INDEX_URL="$(cat /run/secrets/pip_index_url)"; fi && \
-    /databricks/python3/bin/python -m pip list --disable-pip-version-check --format=freeze | sort > /tmp/base-constraints.txt && \
-    pip_rc=0 && \
-    { /databricks/python3/bin/python -m pip install -q --disable-pip-version-check --no-cache-dir -c /tmp/base-constraints.txt \
-        "geobrix[vizx] @ file:///tmp/geobrix-wheel/geobrix-${GEOBRIX_VERSION}-py3-none-any.whl" \
-        > /tmp/pip-install.log 2>&1 || pip_rc=$?; } && \
-    /databricks/python3/bin/python /mnt/redact_pip_log.py /tmp/pip-install.log && \
-    { [ "$pip_rc" -eq 0 ] || exit "$pip_rc"; } && \
-    /databricks/python3/bin/python -m pip check && \
-    rm -rf /tmp/geobrix-wheel /tmp/base-constraints.txt /tmp/pip-install.log
+# The wheels are bind-mounted for the install, not copied, so no layer of the image holds them.
+RUN --mount=type=bind,source=geobrix-wheel,target=/tmp/geobrix-wheel \
+    --mount=type=bind,source=wheelhouse,target=/tmp/wh \
+    --mount=type=bind,source=dcs.lock,target=/tmp/dcs.lock \
+    py=/databricks/python3/bin/python \
+ && $py -m pip install -q --disable-pip-version-check --no-cache-dir --no-index --no-deps /tmp/geobrix-wheel/geobrix-*.whl \
+ && $py -m pip install -q --disable-pip-version-check --no-cache-dir --no-index --find-links /tmp/wh --require-hashes -r /tmp/dcs.lock \
+ && $py -m pip check
+# Point the system at the payload, so the JVM's legacy path, the GDAL tools that load by name and the netCDF-C
+# plugin search all find the one GDAL stack:
+# - the payload's libraries are registered system-wide (the JNI library is loaded through /usr/lib, and a link's
+#   $ORIGIN is the link's directory, not the payload's);
+# - /usr/lib/libgdalalljni.so is a link to the payload's JNI, which GDALManager follows into the payload for its data;
+# - /usr/local/hdf5/lib/plugin, HDF5's and netCDF-C's default plugin directory, is a LINK to the payload's filter
+#   plugins (a copy would lose their RUNPATH, $ORIGIN/../lib). The JVM cannot register a plugin directory itself,
+#   so this is what lets the heavy tier read zstd, blosc and bzip2 netCDF-4 with no spark_env_vars setting.
+RUN set -e; \
+    gbx="$(/databricks/python3/bin/python -c 'import os, databricks.labs.gbx._native as n; print(os.path.dirname(os.path.dirname(n.__file__)))')"; \
+    native="$gbx/_native/${GBX_ARCH}"; \
+    test -f "$native/lib/libgdalalljni.so"; test -d "$native/hdf5-plugins"; \
+    echo "$native/lib" > /etc/ld.so.conf.d/zz-gbx-native.conf && ldconfig; \
+    ln -sf "$native/lib/libgdalalljni.so" /usr/lib/libgdalalljni.so; \
+    mkdir -p /usr/local/hdf5/lib && ln -sfn "$native/hdf5-plugins" /usr/local/hdf5/lib/plugin
 # Dedicated clusters load /databricks/jars; one GeoBrix JAR per cluster, so never also attach it as a library.
+# The JAR is the wheel's own copy, staged mode 0644 in the build context.
 COPY geobrix-${GEOBRIX_VERSION}-jar-with-dependencies.jar /databricks/jars/
-RUN chmod 0644 /databricks/jars/geobrix-${GEOBRIX_VERSION}-jar-with-dependencies.jar

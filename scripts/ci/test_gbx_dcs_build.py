@@ -1,20 +1,19 @@
-"""Tests for scripts/commands/gbx-dcs-build.sh: the refusals before a build, and (with
---target base) the image-history check for a package index and tag-after-verify.
+"""Tests for scripts/commands/gbx-dcs-build.sh: the refusals before a build, what the build context
+holds, the verify steps, the image-history check for a package index and tag-after-verify.
 
 The command runs with a fake `docker` (see conftest.py): nothing reaches a daemon or a
 registry, and the repository is always gbx-test/none. The package index used here is a
-made-up value; the tests assert the command never prints it.
+made-up value; the tests assert the command never prints it. The wheels the image installs
+come from a cache the test fills (conftest.DcsCommand.lock), so nothing is downloaded.
 """
 
 import hashlib
-import importlib.util
 import json
 import os
-import re
 import signal
-import subprocess
 import sys
 import time
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -23,14 +22,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 TEST_REPO = (
     "gbx-test/none"  # conftest.py runs every command with GBX_DCS_REPO set to this
 )
-BASE_TAG = f"{TEST_REPO}:base-env6-arm"
 RC_TAG = f"{TEST_REPO}:0.0.2-env6-arm-rc"
 INDEX = "https://ci-user@idx.internal:8443/simple"
 INDEX_HOST = "idx.internal"
-SECRET_READ = (
-    'RUN /bin/sh -c export PIP_INDEX_URL="$(cat /run/secrets/pip_index_url)" '
-    "&& pip install /tmp/geobrix.whl"
-)
 # The public base image's own history names its build-time index host.
 BASE_HISTORY = [
     f"ENV UV_DEFAULT_INDEX=https://{INDEX_HOST}/base",
@@ -39,117 +33,117 @@ BASE_HISTORY = [
 ]
 
 
-def _base_build(cmd, own, env=None):
-    cmd.state.update(history_own=own, history_base=BASE_HISTORY)
-    return cmd.run("--target", "base", env=env)
-
-
 def _tagged(cmd):
     return [c for c in cmd.calls if c[0] == "tag"]
 
 
-# --- refusals before any build (default --target release) ---------------------------
+# --- a release build needs one env6 wheel, a clean JAR in it and the lock --------------------
 
 
-def test_two_jars_are_refused(dcs_build):
-    dcs_build.jar("0.0.2")
-    dcs_build.jar("0.0.3")
-    dcs_build.wheel("0.0.2")
+def _release_build(cmd, *args, env=None, version="0.0.2"):
+    cmd.env_wheel(version)
+    cmd.lock()
+    cmd.state.update(
+        history_own=["COPY geobrix /databricks"], history_base=BASE_HISTORY
+    )
+    return cmd.run(*args, env=env)
+
+
+def test_two_wheels_are_refused(dcs_build):
+    dcs_build.env_wheel("0.0.2")
+    dcs_build.env_wheel("0.0.3")
     res = dcs_build.run()
     assert res.returncode == 1
-    assert (
-        "exactly one target/geobrix-*-jar-with-dependencies.jar, found 2" in res.output
-    )
+    assert "exactly one dist/env6/geobrix-*+env6-py3-none-any.whl" in res.output
+    assert "found 2" in res.output and dcs_build.commands() == ["info"]
+
+
+def test_a_missing_wheel_is_refused(dcs_build):
+    res = dcs_build.run()
+    assert res.returncode == 1 and "found 0" in res.output
     assert dcs_build.commands() == ["info"]
 
 
-def test_jar_and_wheel_versions_must_match(dcs_build):
-    dcs_build.jar("0.0.2")
-    dcs_build.wheel("0.0.3")
+def test_a_jar_bundling_the_scala_library_is_refused(dcs_build):
+    dcs_build.env_wheel("0.0.2", ["com/databricks/labs/gbx/A.class", "scala/Predef.class"])
+    dcs_build.lock()
+    res = dcs_build.run()
+    assert res.returncode == 1
+    assert "scala/Predef.class" in res.output and "rebuild the wheel" in res.output
+    assert dcs_build.commands() == ["info"]
+
+
+def test_a_wheel_whose_jar_has_another_version_is_refused(dcs_build):
+    whl = dcs_build.env_wheel("0.0.2")
+    renamed = whl.with_name("geobrix-0.0.3+env6-py3-none-any.whl")
+    whl.rename(renamed)
+    dcs_build.lock()
     res = dcs_build.run()
     assert res.returncode == 1
     assert "JAR version 0.0.2 != wheel version 0.0.3" in res.output
     assert dcs_build.commands() == ["info"]
 
 
-def test_a_jar_bundling_the_scala_library_is_refused(dcs_build):
-    dcs_build.jar("0.0.2", ["com/databricks/labs/gbx/A.class", "scala/Predef.class"])
-    dcs_build.wheel("0.0.2")
+def test_a_wheel_without_a_jar_is_refused(dcs_build):
+    whl = dcs_build.env_wheel("0.0.2")
+    with zipfile.ZipFile(whl, "w") as zf:
+        zf.writestr("databricks/labs/gbx/__init__.py", "")
+    dcs_build.lock()
     res = dcs_build.run()
-    assert res.returncode == 1
-    assert "scala/Predef.class" in res.output and "rebuild the JAR" in res.output
+    assert res.returncode == 1 and "could not take the JAR out of" in res.output
     assert dcs_build.commands() == ["info"]
 
 
-# --- --target base: history check, then the tag ---------------------------------------
-
-
-def test_clean_history_is_tagged_after_every_check(dcs_build):
-    """The base image's own index host is not this build's; the Dockerfile's literal
-    secret read holds no value. The final tag comes after both history reads."""
-    res = _base_build(
-        dcs_build, [SECRET_READ, "COPY gdal /usr"], env={"PIP_INDEX_URL": INDEX}
-    )
-    assert res.returncode == 0, res.output
-    assert f"IMAGE={BASE_TAG}" in res.output
-    cmds = dcs_build.commands()
-    assert cmds.index("tag") > max(i for i, c in enumerate(cmds) if c == "history")
-    ((_, tmp, final),) = _tagged(dcs_build)
-    assert tmp.startswith("gbx-dcs-build-tmp:") and final == BASE_TAG
-    build = next(c for c in dcs_build.calls if c[0] == "build")
-    assert any(a.startswith("id=pip_index_url,src=") for a in build)
-    assert INDEX not in res.output and INDEX_HOST not in res.output
-    assert not any(INDEX in a for c in dcs_build.calls for a in c)
-
-
-@pytest.mark.parametrize(
-    "leak, counts",
-    [
-        (f"ENV PIP_INDEX_URL={INDEX}", "PIP_INDEX_URL values: 1"),
-        (f"RUN /bin/sh -c pip install -i https://{INDEX_HOST}/x pkg", "index host: 1"),
-    ],
-    ids=["index-value", "index-host"],
-)
-def test_a_package_index_in_this_builds_layers_is_not_tagged(dcs_build, leak, counts):
-    res = _base_build(dcs_build, [leak, "COPY gdal /usr"], env={"PIP_INDEX_URL": INDEX})
+def test_a_missing_lock_is_named_with_the_way_to_make_it(dcs_build):
+    dcs_build.env_wheel("0.0.2")
+    res = dcs_build.run()
     assert res.returncode == 1
-    assert "VERIFY FAILED: package index found in the history" in res.output
-    assert counts in res.output and f"not tagged as {BASE_TAG}" in res.output
-    assert _tagged(dcs_build) == []
-    assert INDEX not in res.output and INDEX_HOST not in res.output
+    assert "PRECONDITION MISSING" in res.output and "dcs-aarch64.lock" in res.output
+    assert "--relock" in res.output and dcs_build.commands() == ["info"]
 
 
-def test_layers_that_cannot_be_told_from_the_base_are_not_tagged(dcs_build):
-    """No history line of its own: the check would inspect nothing, so it fails."""
-    res = _base_build(dcs_build, [])
+def test_a_lock_that_does_not_carry_the_built_rasterio_is_refused(dcs_build):
+    dcs_build.env_wheel("0.0.2")
+    dcs_build.lock()
+    built = next((dcs_build.root / "build/native/out/aarch64/bindings/dist").glob("rasterio-*.whl"))
+    built.write_bytes(b"a rasterio built after the lock")
+    res = dcs_build.run()
     assert res.returncode == 1
-    assert "could not isolate this build's layers" in res.output
-    assert _tagged(dcs_build) == []
+    assert "WHEELHOUSE FAILED" in res.output and "relock" in res.output
+    assert dcs_build.commands() == ["info"]
 
 
-def test_a_failed_image_check_is_not_tagged(dcs_build):
-    dcs_build.state["run_rc"] = 1
-    res = _base_build(dcs_build, ["COPY gdal /usr"])
+def test_a_missing_python3_is_named_not_blamed_on_the_jar(dcs_build):
+    dcs_build.env_wheel("0.0.2")
+    dcs_build.lock()
+    res = dcs_build.run(env={"PATH": dcs_build.path_without("python3")})
+    assert res.returncode == 1, res.output
+    assert "PRECONDITION MISSING: python3" in res.output
+    assert "rebuild the wheel" not in res.output
+    assert dcs_build.commands() == ["info"]
+
+
+def test_the_base_target_is_retired(dcs_build):
+    """The image compiles no GDAL any more, so there is no base stage to stop at."""
+    res = dcs_build.run("--target", "base")
+    assert res.returncode == 1 and "Unknown option: --target" in res.output
+    assert dcs_build.calls == []
+
+
+def test_relock_regenerates_the_lock_before_anything_is_built(dcs_build):
+    """--relock runs dcs_lock.py relock; the fake docker lists no packages, so it stops there."""
+    dcs_build.env_wheel("0.0.2")
+    dcs_build.lock()
+    res = dcs_build.run("--relock")
     assert res.returncode == 1
-    assert "VERIFY FAILED: GDAL 3.11.4" in res.output
-    assert _tagged(dcs_build) == [] and "history" not in dcs_build.commands()
-    assert any(
-        c[0] == "rmi" and c[1].startswith("gbx-dcs-build-tmp:") for c in dcs_build.calls
-    )
-
-
-def test_a_failed_build_is_not_tagged(dcs_build):
-    dcs_build.state["build_rc"] = 3
-    res = _base_build(dcs_build, ["COPY gdal /usr"])
-    assert res.returncode == 3
-    assert "BUILD FAILED: docker build exited 3" in res.output
-    assert _tagged(dcs_build) == []
+    assert "RELOCK FAILED" in res.output and "build" not in dcs_build.commands()
+    assert dcs_build.commands()[:2] == ["info", "run"]  # info, then the base image's package list
 
 
 # --- an option without its value is a usage error ------------------------------------
 
 
-@pytest.mark.parametrize("option", ["--arch", "--target", "--log"])
+@pytest.mark.parametrize("option", ["--arch", "--log"])
 def test_an_option_without_its_value_is_a_usage_error(dcs_build, option):
     """`--arch` at the end used to die on an unbound `$2` (exit 1, no message)."""
     res = dcs_build.run(option)
@@ -159,16 +153,58 @@ def test_an_option_without_its_value_is_a_usage_error(dcs_build, option):
     assert dcs_build.calls == []
 
 
-# --- --target release: the -rc tag comes after every verify step -----------------------
+# --- the build: what the context holds and what the image is told ----------------------------
 
 
-def _release_build(cmd, env=None):
-    cmd.jar("0.0.2")
-    cmd.wheel("0.0.2")
-    cmd.state.update(
-        history_own=["COPY geobrix /databricks"], history_base=BASE_HISTORY
-    )
-    return cmd.run(env=env)
+def test_the_build_context_holds_the_wheels_the_lock_and_the_jar(dcs_build, tmp_path):
+    listing, modes = tmp_path / "context.json", tmp_path / "modes.json"
+    dcs_build.state.update(build_context_log=str(listing), build_context_modes=str(modes))
+    res = _release_build(dcs_build)
+    assert res.returncode == 0, res.output
+    held = set(json.loads(listing.read_text()))
+    assert held == {
+        "Dockerfile",
+        "dcs.lock",
+        "geobrix-wheel",
+        "wheelhouse",
+        "geobrix-0.0.2-jar-with-dependencies.jar",
+    }
+    # the JAR is group- and world-readable in the context, so the image stores it once, readable by the JVM
+    assert json.loads(modes.read_text())["geobrix-0.0.2-jar-with-dependencies.jar"] == "0o644"
+
+
+def test_the_wheelhouse_has_the_needed_wheels_and_our_rasterio(dcs_build, tmp_path):
+    tree = tmp_path / "tree.json"
+    dcs_build.state["build_context_tree"] = str(tree)
+    res = _release_build(dcs_build)
+    assert res.returncode == 0, res.output
+    files = json.loads(tree.read_text())
+    # the base image has click and idna 3.11: only idna (the lock moves it) and our rasterio are staged
+    assert [f for f in files if f.startswith("wheelhouse/")] == [
+        "wheelhouse/idna-3.20-py3-none-any.whl",
+        "wheelhouse/rasterio-1.5.2+gbx1-cp312-cp312-linux_aarch64.whl",
+    ]
+    assert "geobrix-wheel/geobrix-0.0.2+env6-py3-none-any.whl" in files
+    build = next(c for c in dcs_build.calls if c[0] == "build")
+    assert "linux/arm64" in build
+    args = " ".join(build)
+    assert "GBX_ARCH=aarch64" in args and "GEOBRIX_VERSION=0.0.2" in args
+    assert "BASE_IMAGE=databricksruntime/environment:v6-standard-arm" in args
+
+
+def test_the_amd64_build_uses_the_x86_base_and_lock(dcs_build):
+    dcs_build.env_wheel("0.0.2")
+    dcs_build.lock("x86_64")
+    dcs_build.state.update(history_own=["COPY geobrix /databricks"], history_base=BASE_HISTORY)
+    res = dcs_build.run("--arch", "amd64")
+    assert res.returncode == 0, res.output
+    assert f"IMAGE={TEST_REPO}:0.0.2-env6-x86-rc" in res.output
+    build = next(c for c in dcs_build.calls if c[0] == "build")
+    assert "GBX_ARCH=x86_64" in " ".join(build)
+    assert "BASE_IMAGE=databricksruntime/environment:v6-standard" in " ".join(build)
+
+
+# --- the -rc tag comes after every verify step -----------------------------------------
 
 
 def test_the_rc_tag_comes_after_every_release_verify_step(dcs_build):
@@ -177,7 +213,7 @@ def test_the_rc_tag_comes_after_every_release_verify_step(dcs_build):
     assert f"IMAGE={RC_TAG}" in res.output
     cmds = dcs_build.commands()
     checks = [i for i, c in enumerate(cmds) if c in ("pull", "run", "history")]
-    assert cmds.count("run") == 4 and cmds.count("history") == 2
+    assert cmds.count("run") == 2 and cmds.count("history") == 2
     ((_, tmp, final),) = _tagged(dcs_build)
     assert tmp.startswith("gbx-dcs-build-tmp:") and final == RC_TAG
     assert cmds.index("tag") > max(checks)
@@ -186,14 +222,12 @@ def test_the_rc_tag_comes_after_every_release_verify_step(dcs_build):
 @pytest.mark.parametrize(
     "failing_run, message",
     [
-        (0, "VERIFY FAILED: GDAL 3.11.4"),
+        (0, "VERIFY FAILED: the image does not carry the payload's stack"),
         (1, "VERIFY FAILED: image contents"),
-        (2, "VERIFY FAILED: could not read requests"),
-        (3, "VERIFY FAILED: Python environment"),
     ],
 )
 def test_a_failed_release_verify_step_leaves_no_rc_tag(dcs_build, failing_run, message):
-    dcs_build.state["run_rcs"] = [1 if i == failing_run else 0 for i in range(4)]
+    dcs_build.state["run_rcs"] = [1 if i == failing_run else 0 for i in range(2)]
     res = _release_build(dcs_build)
     assert res.returncode == 1
     assert message in res.output and f"not tagged as {RC_TAG}" in res.output
@@ -201,6 +235,28 @@ def test_a_failed_release_verify_step_leaves_no_rc_tag(dcs_build, failing_run, m
     assert any(
         c[0] == "rmi" and c[1].startswith("gbx-dcs-build-tmp:") for c in dcs_build.calls
     )
+
+
+def test_a_failed_build_is_not_tagged(dcs_build):
+    dcs_build.state["build_rc"] = 3
+    res = _release_build(dcs_build)
+    assert res.returncode == 3
+    assert "BUILD FAILED: docker build exited 3" in res.output
+    assert _tagged(dcs_build) == []
+
+
+def test_the_oracle_runs_offline_with_the_lock_mounted_read_only(dcs_build):
+    res = _release_build(dcs_build)
+    assert res.returncode == 0, res.output
+    oracle = next(c for c in dcs_build.calls if c[0] == "run" and "/mnt/dcs/verify_image.py" in c)
+    assert oracle[oracle.index("--network") + 1] == "none"
+    mounts = [oracle[i + 1] for i, a in enumerate(oracle) if a == "-v"]
+    assert len(mounts) == 3 and all(m.endswith(":ro") for m in mounts)
+    assert any(m.endswith("dcs-aarch64.lock:/mnt/dcs.lock:ro") for m in mounts)
+    assert any(m.endswith("dcs-base-aarch64.txt:/mnt/dcs-base.txt:ro") for m in mounts)
+    # GeoBrix's own rasterio build is what the image must carry (the pin file's version and revision)
+    assert oracle[oracle.index("-e") + 1] == "GBX_RASTERIO=1.5.2+gbx1"
+    assert oracle[-1] == "/mnt/dcs/verify_image.py"
 
 
 def test_the_base_image_is_pulled_before_it_is_read(dcs_build):
@@ -217,255 +273,94 @@ def test_the_base_image_is_pulled_before_it_is_read(dcs_build):
     assert "run" not in dcs_build.commands() and _tagged(dcs_build) == []
 
 
-# --- the JAR that is checked, hashed and built is the copy in the build context -----------
+# --- the JAR the image gets is the wheel's own, checked and hashed as the copy in the context ---
 
 
-def _python3_shim(cmd):
-    """A python3 that records the JAR check's arguments, then runs the real interpreter."""
-    seen = cmd.bin.parent / "python3.args"
-    shim = cmd.bin / "python3"
-    shim.write_text(
-        "#!/bin/sh\n"
-        f'case "$1" in *check_jar_packaging.py) echo "$1 $2" >> "{seen}" ;; esac\n'
-        f'exec "{sys.executable}" "$@"\n'
-    )
-    shim.chmod(0o755)
-    return seen
-
-
-def test_the_checked_and_hashed_jar_is_the_copy_in_the_build_context(dcs_build):
-    seen = _python3_shim(dcs_build)
+def test_the_hash_the_image_must_match_is_the_wheels_jar(dcs_build):
     res = _release_build(dcs_build)
     assert res.returncode == 0, res.output
-    checker, jar = seen.read_text().split()
-    assert Path(checker).name == "check_jar_packaging.py"
     name = "geobrix-0.0.2-jar-with-dependencies.jar"
-    assert Path(jar).name == name
-    assert Path(jar).parent != dcs_build.root / "target"  # the copy, not target/
-    sha = hashlib.sha256((dcs_build.root / "target" / name).read_bytes()).hexdigest()
-    contents = next(c for c in dcs_build.calls if c[0] == "run" and sha in c[-1])
+    with zipfile.ZipFile(next((dcs_build.root / "dist/env6").glob("*.whl"))) as z:
+        sha = hashlib.sha256(z.read(f"databricks/labs/gbx/_jar/{name}")).hexdigest()
+    contents = next(c for c in dcs_build.calls if c[0] == "run" and "sha256sum -c" in c[-1])
+    # the classpath copy and the wheel's copy beside it are the same file; one JAR outside the wheel
     assert f"{sha}  /databricks/jars/{name}" in contents[-1]
+    assert f"{sha}  $site/databricks/labs/gbx/_jar/{name}" in contents[-1]
+    assert "-not -path '*/databricks/labs/gbx/_jar/*'" in contents[-1]
+    assert 'v == \"0.0.2+env6\"' in contents[-1]
 
 
-def test_the_hash_is_of_the_copy_not_of_target(dcs_build):
-    """Rebuild target/ after the copy (during the JAR check): the image gets the copy, so the
-    digest the verify step expects must be the copy's, not the new file's."""
-    target_jar = dcs_build.jar("0.0.2")
-    name = target_jar.name
-    dcs_build.wheel("0.0.2")
-    dcs_build.state.update(history_own=["COPY geobrix /x"], history_base=BASE_HISTORY)
-    copied_sha = hashlib.sha256(target_jar.read_bytes()).hexdigest()
-    shim = dcs_build.bin / "python3"
-    shim.write_text(
-        "#!/bin/sh\n"
-        f'case "$1" in *check_jar_packaging.py) printf rebuilt >> "{target_jar}" ;; esac\n'
-        f'exec "{sys.executable}" "$@"\n'
-    )
-    shim.chmod(0o755)
-    res = dcs_build.run()
+# --- the image history carries no package index ---------------------------------------------
+
+INDEX = "https://ci-user@idx.internal:8443/simple"
+INDEX_HOST = "idx.internal"
+
+
+def test_a_clean_history_is_tagged_and_the_index_stays_out_of_the_output(dcs_build):
+    """The base image's own index host is not this build's."""
+    res = _release_build(dcs_build, env={"PIP_INDEX_URL": INDEX})
     assert res.returncode == 0, res.output
-    assert hashlib.sha256(target_jar.read_bytes()).hexdigest() != copied_sha
-    contents = next(
-        c for c in dcs_build.calls if c[0] == "run" and "sha256sum -c" in c[-1]
-    )
-    assert f"{copied_sha}  /databricks/jars/{name}" in contents[-1]
+    assert INDEX not in res.output and INDEX_HOST not in res.output
+    assert not any(INDEX in a for c in dcs_build.calls for a in c)
+    build = next(c for c in dcs_build.calls if c[0] == "build")
+    assert "--secret" not in build  # the image build takes no index at all
 
 
-def test_a_missing_python3_is_named_not_blamed_on_the_jar(dcs_build):
-    dcs_build.jar("0.0.2")
-    dcs_build.wheel("0.0.2")
-    res = dcs_build.run(env={"PATH": dcs_build.path_without("python3")})
-    assert res.returncode == 1, res.output
-    assert "PRECONDITION MISSING: python3" in res.output
-    assert "rebuild the JAR" not in res.output
-    assert dcs_build.commands() == ["info"]
-
-
-# --- libgdalalljni.so must load, not only exist -----------------------------------------
-
-
-def _run_verify_script(cmd, tmp_path, ldd_output):
-    """Run the image-verify script the build sent to `docker run` on this machine, with the
-    library path, gdalinfo and ldd stood in for."""
-    script = next(
-        c[-1] for c in cmd.calls if c[0] == "run" and "libgdalalljni" in c[-1]
-    )
-    lib = tmp_path / "libgdalalljni.so"
-    lib.write_text("")
-    tools = tmp_path / "verify-bin"
-    tools.mkdir(exist_ok=True)
-    (tools / "gdalinfo").write_text(
-        "#!/bin/sh\necho 'GDAL 3.11.4, released 2025/01/01'\n"
-    )
-    (tools / "ldd").write_text(
-        f"#!/bin/sh\necho \"$@\" > {tmp_path}/ldd.args\ncat <<'EOF'\n{ldd_output}\nEOF\n"
-    )
-    for tool in tools.iterdir():
-        tool.chmod(0o755)
-    res = subprocess.run(
-        ["sh", "-c", script.replace("/usr/lib/libgdalalljni.so", str(lib))],
-        env={"PATH": f"{tools}{os.pathsep}/usr/bin{os.pathsep}/bin"},
-        capture_output=True,
-        text=True,
-    )
-    return res, (tmp_path / "ldd.args").read_text().strip(), str(lib)
-
-
-def test_the_image_check_fails_on_a_jni_library_that_cannot_load(dcs_build, tmp_path):
-    res = _base_build(dcs_build, ["COPY gdal /usr"])
-    assert res.returncode == 0, res.output
-    ok = "\tlibgdal.so.37 => /usr/local/lib/libgdal.so.37 (0x00007f)"
-    run, args, lib = _run_verify_script(dcs_build, tmp_path, ok)
-    assert run.returncode == 0, run.stdout + run.stderr
-    assert args == lib  # ldd was asked about the library itself
-    broken = "\tlibgdal.so.37 => not found"
-    run, _, _ = _run_verify_script(dcs_build, tmp_path, broken)
-    assert run.returncode != 0
-    assert "libgdal.so.37" in run.stdout + run.stderr  # names what is unresolved
-
-
-def test_a_jni_library_that_cannot_load_is_reported_as_a_verify_failure(dcs_build):
-    dcs_build.state["run_rc"] = 1
-    res = _base_build(dcs_build, ["COPY gdal /usr"])
+@pytest.mark.parametrize(
+    "leak, counts",
+    [
+        (f"ENV PIP_INDEX_URL={INDEX}", "PIP_INDEX_URL values: 1"),
+        (f"RUN /bin/sh -c pip install -i https://{INDEX_HOST}/x pkg", "index host: 1"),
+    ],
+    ids=["index-value", "index-host"],
+)
+def test_a_package_index_in_this_builds_layers_is_not_tagged(dcs_build, leak, counts):
+    dcs_build.env_wheel("0.0.2")
+    dcs_build.lock()
+    dcs_build.state.update(history_own=[leak, "COPY gdal /usr"], history_base=BASE_HISTORY)
+    res = dcs_build.run(env={"PIP_INDEX_URL": INDEX})
     assert res.returncode == 1
-    assert "unable to load its libraries" in res.output
-    assert f"not tagged as {BASE_TAG}" in res.output and _tagged(dcs_build) == []
+    assert "VERIFY FAILED: package index found in the history" in res.output
+    assert counts in res.output and f"not tagged as {RC_TAG}" in res.output
+    assert _tagged(dcs_build) == []
+    assert INDEX not in res.output and INDEX_HOST not in res.output
 
 
-# --- pip does not echo the package index into the build log ---------------------------------
+def test_layers_that_cannot_be_told_from_the_base_are_not_tagged(dcs_build):
+    """No history line of its own: the check would inspect nothing, so it fails."""
+    dcs_build.env_wheel("0.0.2")
+    dcs_build.lock()
+    dcs_build.state.update(history_own=[], history_base=BASE_HISTORY)
+    res = dcs_build.run()
+    assert res.returncode == 1
+    assert "could not isolate this build's layers" in res.output
+    assert _tagged(dcs_build) == []
 
 
-def test_the_wheel_install_is_quiet_so_the_index_stays_out_of_the_build_log():
-    """`pip install` prints "Looking in indexes: <url>" at its default verbosity."""
-    dockerfile = (REPO_ROOT / "scripts" / "docker" / "dcs" / "Dockerfile").read_text()
-    installs = [
-        line
-        for line in dockerfile.replace("\\\n", " ").splitlines()
-        if "pip install" in line
-    ]
-    assert installs, "expected a pip install in the DCS Dockerfile"
-    for line in installs:
-        flags = line.split("pip install", 1)[1].split("&&")[0].split()
-        assert "-q" in flags or "--quiet" in flags, line
+# --- the Dockerfile ---------------------------------------------------------------------------
+
+DOCKERFILE = REPO_ROOT / "scripts" / "docker" / "dcs" / "Dockerfile"
 
 
-def _wheel_install_script():
-    """The Dockerfile's RUN statement that installs the wheel, without its --mount flags."""
-    text = (REPO_ROOT / "scripts" / "docker" / "dcs" / "Dockerfile").read_text()
-    run = next(
-        line
-        for line in text.replace("\\\n", " ").splitlines()
-        if line.startswith("RUN") and "pip install" in line
-    )
-    return re.sub(r"^RUN\s+(--\S+\s+)*", "", run)
+def test_the_wheels_are_mounted_for_the_install_not_copied_into_a_layer():
+    text = DOCKERFILE.read_text()
+    code = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+    for source in ("geobrix-wheel", "wheelhouse", "dcs.lock"):
+        assert f"--mount=type=bind,source={source}," in code, source
+    assert "COPY wheelhouse" not in code and "COPY dcs.lock" not in code and "COPY geobrix-wheel" not in code
+    assert code.count("COPY ") == 1 and "/databricks/jars/" in code  # the JAR is the one COPY
 
 
-FAKE_PIP = """#!/bin/sh
-# Stands in for /databricks/python3/bin/python: `-m pip ...` is faked, anything else runs
-# the real interpreter (the redactor is a Python script).
-if [ "$1" = "-m" ] && [ "$2" = "pip" ]; then
-    case "$3" in
-        list) echo "numpy==2.0.0" ;;
-        check) echo "No broken requirements found." ;;
-        install)
-            if [ "${FAKE_PIP_INSTALL_RC:-0}" -ne 0 ]; then
-                echo "WARNING: Retrying after connection broken: ${FAKE_INDEX}/geobrix/" >&2
-                echo "ERROR: Could not fetch URL ${FAKE_INDEX}/geobrix/: no route to host"
-                echo "ERROR: user ${FAKE_USER} refused by ${FAKE_HOST}" >&2
-            fi
-            exit "${FAKE_PIP_INSTALL_RC:-0}" ;;
-    esac
-    exit 0
-fi
-exec "%s" "$@"
-"""
+def test_the_hdf5_plugin_directory_is_a_link_to_the_payload_not_a_copy():
+    """A copy would lose the plugins' RUNPATH ($ORIGIN/../lib), so they could not find the payload's libraries."""
+    code = DOCKERFILE.read_text()
+    assert "ln -sfn" in code and "/usr/local/hdf5/lib/plugin" in code
+    assert "cp " not in "\n".join(ln for ln in code.splitlines() if not ln.lstrip().startswith("#"))
 
 
-def _run_wheel_install(tmp_path, install_rc, script=None):
-    """Run the Dockerfile's wheel-install RUN script on this machine, with the secret, the
-    interpreter and /tmp stood in for and a fake pip that fails the way an unreachable index does.
-    """
-    work = tmp_path / "image-tmp"
-    work.mkdir()
-    secret = tmp_path / "pip_index_url"
-    secret.write_text(INDEX)
-    python = tmp_path / "python"
-    python.write_text(FAKE_PIP % sys.executable)
-    python.chmod(0o755)
-    redactor = REPO_ROOT / "scripts" / "docker" / "dcs" / "redact_pip_log.py"
-    script = script or _wheel_install_script()
-    # /tmp/ first: the other replacements are paths under the pytest temp dir, which may be in /tmp.
-    for image_path, local in (
-        ("/tmp/", f"{work}/"),
-        ("/run/secrets/pip_index_url", secret),
-        ("/databricks/python3/bin/python", python),
-        ("/mnt/redact_pip_log.py", redactor),
-    ):
-        script = script.replace(image_path, str(local))
-    return subprocess.run(
-        ["sh", "-c", script],
-        env={
-            "PATH": f"/usr/bin{os.pathsep}/bin",
-            "GEOBRIX_VERSION": "0.0.2",
-            "FAKE_PIP_INSTALL_RC": str(install_rc),
-            "FAKE_INDEX": INDEX,
-            "FAKE_HOST": INDEX_HOST,
-            "FAKE_USER": "ci-user",
-        },
-        capture_output=True,
-        text=True,
-    )
-
-
-def test_a_failing_wheel_install_prints_its_errors_without_the_package_index(tmp_path):
-    """pip's warnings and errors on an unreachable index name the index; the build log must not."""
-    res = _run_wheel_install(tmp_path, install_rc=2)
-    out = res.stdout + res.stderr
-    assert res.returncode == 2  # the failure still fails the build, with pip's own status
-    assert (
-        "Could not fetch URL" in out and "<package-index>" in out
-    )  # and says what failed
-    for leaked in (INDEX, INDEX_HOST, "ci-user"):
-        assert leaked not in out
-
-
-def test_the_log_redactor_removes_every_part_of_the_index():
-    spec = importlib.util.spec_from_file_location(
-        "redact_pip_log",
-        REPO_ROOT / "scripts" / "docker" / "dcs" / "redact_pip_log.py",
-    )
-    redactor = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(redactor)
-    url = "https://ci-user:s3cret@idx.internal:8443/simple/"
-    text = (
-        f"Looking in indexes: {url}\nfetch https://idx.internal:8443/simple/x\n"
-        "user ci-user password s3cret host idx.internal\n"
-    )
-    out = redactor.redact(text, url)
-    for leaked in ("ci-user", "s3cret", "idx.internal", "8443"):
-        assert leaked not in out
-    assert out.count("<package-index>") >= 4
-    assert redactor.redact(text, "") == text  # no index configured: nothing to remove
-    # a tool may print the host in another case, or the user with its escapes decoded
-    spelled = "https://ci%40corp:p%2Fw@IDX.Internal:8443/simple/"
-    out = redactor.redact("host idx.internal user ci@corp password p/w", spelled)
-    for leaked in ("idx.internal", "ci@corp", "p/w"):
-        assert leaked not in out
-    # a port out of range makes urlsplit(...).port raise: the URL, netloc and host are still removed
-    out = redactor.redact("fetch bad.example", "https://u:pw@bad.example:99999999/simple/")
-    assert "bad.example" not in out
-
-
-def test_the_build_context_holds_the_dockerfile_and_the_log_redactor(
-    dcs_build, tmp_path
-):
-    listing = tmp_path / "context.json"
-    dcs_build.state["build_context_log"] = str(listing)
-    res = _release_build(dcs_build)
-    assert res.returncode == 0, res.output
-    held = json.loads(listing.read_text())
-    assert {"Dockerfile", "redact_pip_log.py"} <= set(held)
-    assert any(n.endswith("-jar-with-dependencies.jar") for n in held)
+def test_the_dockerfile_has_no_syntax_directive():
+    """The bundled Dockerfile frontend covers the features used; the directive pulled an image from Docker Hub."""
+    assert not DOCKERFILE.read_text().startswith("# syntax=")
 
 
 # --- Ctrl-C and SIGTERM clean up what the build created ------------------------------------
@@ -478,8 +373,8 @@ def _interrupt_a_build(cmd, tmp_path, sig, extra_args=()):
     tmp.mkdir()
     marker = tmp_path / "building"
     cmd.state["build_hang"] = str(marker)
-    cmd.jar("0.0.2")
-    cmd.wheel("0.0.2")
+    cmd.env_wheel("0.0.2")
+    cmd.lock()
     proc = cmd.start(*extra_args, env={"TMPDIR": str(tmp), "PIP_INDEX_URL": INDEX})
     try:
         deadline = time.time() + 30
@@ -487,7 +382,7 @@ def _interrupt_a_build(cmd, tmp_path, sig, extra_args=()):
             time.sleep(0.1)
         assert marker.exists(), "the build never started"
         held = sorted(p.name for p in tmp.iterdir())
-        assert len(held) == 2 and any(n.startswith("gbx-dcs-pip-index.") for n in held)
+        assert len(held) == 1 and held[0].startswith("gbx-dcs-build.")
         os.killpg(proc.pid, sig)  # the whole group, as Ctrl-C does
         out, _ = proc.communicate(timeout=30)
     finally:
@@ -514,8 +409,7 @@ def _assert_cleaned_up(cmd, proc, out, tmp, code):
     "sig, code", [(signal.SIGINT, 130), (signal.SIGTERM, 143)], ids=["int", "term"]
 )
 def test_an_interrupted_build_removes_its_temp_files(dcs_build, tmp_path, sig, code):
-    """The build context and the 0600 file holding the package index live in $TMPDIR until the
-    build ends; an interrupt must not leave them (the second one holds the index)."""
+    """The build context lives in $TMPDIR until the build ends; an interrupt must not leave it."""
     proc, out, tmp = _interrupt_a_build(dcs_build, tmp_path, sig)
     _assert_cleaned_up(dcs_build, proc, out, tmp, code)
 

@@ -12,6 +12,8 @@ $FAKE_DOCKER_LOG and answers from the JSON state in $FAKE_DOCKER_STATE:
 - build_hang: a file path. `build` creates it, then blocks until it is killed (a build in progress).
 - build_context_log: a file path. `build` writes the sorted names in its context directory
   (its last argument) there as JSON.
+- build_context_tree: a file path. `build` writes the sorted relative paths of every file in the context there.
+- build_context_modes: a file path. `build` writes {name: octal mode} of the context's top-level files there.
 - push_no_digest: `push` succeeds but records no digest on the ref.
 - push_fail_refs: refs whose `push` fails (exit 1) without recording a digest.
 
@@ -48,6 +50,28 @@ def main(args):
     if cmd == "build" and state.get("build_context_log"):
         with open(state["build_context_log"], "w") as fh:
             json.dump(sorted(os.listdir(args[-1])), fh)
+    if cmd == "build" and state.get("build_context_tree"):
+        ctx = args[-1]
+        with open(state["build_context_tree"], "w") as fh:
+            json.dump(
+                sorted(
+                    os.path.relpath(os.path.join(r, f), ctx)
+                    for r, _, files in os.walk(ctx)
+                    for f in files
+                ),
+                fh,
+            )
+    if cmd == "build" and state.get("build_context_modes"):
+        ctx = args[-1]
+        with open(state["build_context_modes"], "w") as fh:
+            json.dump(
+                {
+                    n: oct(os.stat(os.path.join(ctx, n)).st_mode & 0o777)
+                    for n in os.listdir(ctx)
+                    if os.path.isfile(os.path.join(ctx, n))
+                },
+                fh,
+            )
     if cmd == "run" and state.get("run_rcs"):
         rc = state["run_rcs"].pop(0)
         save()

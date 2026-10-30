@@ -314,3 +314,57 @@ def test_the_container_build_stays_offline_on_vendored_crates():
     assert "[source.crates-io]" in lines
     assert 'replace-with = "vendored-sources"' in lines
     assert 'directory = "/vendor"' in lines
+
+
+DCS_DOCKERFILE = REPO_ROOT / "scripts/docker/dcs/Dockerfile"
+ENV6 = REPO_ROOT / "python/geobrix/envs/env6"
+ARCHES = ("aarch64", "x86_64")
+
+
+def dockerfile_instructions(path: Path) -> list:
+    """The Dockerfile's instructions, comments dropped and continuation lines joined."""
+    text = path.read_text().replace("\\\n", " ")
+    return [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.strip().startswith("#")]
+
+
+def test_the_dcs_image_builds_no_gdal():
+    # The DCS image carries the env wheel's payload: one GDAL, from the one build. It compiles none and installs none.
+    code = "\n".join(dockerfile_instructions(DCS_DOCKERFILE))
+
+    assert "download.osgeo.org" not in code
+    assert not re.search(r"\bcmake\b", code)
+    assert not re.search(r"\blib(gdal|proj|geos|poppler)[\w.+-]*", code.replace("libgdalalljni", ""))
+    assert not re.search(r"apt(-get)?\s+install", code)
+    assert "GDAL_VERSION" not in code  # the version in the image is the payload's, read from _build_info
+
+    steps = [part.strip() for ln in dockerfile_instructions(DCS_DOCKERFILE) for part in ln.split("&&")]
+    pips = [part for part in steps if "pip install" in part]
+    wheel = [ln for ln in pips if "--no-deps" in ln]
+    locked = [ln for ln in pips if "--require-hashes" in ln]
+    assert len(wheel) == 1 and "geobrix-" in wheel[0] and "--no-index" in wheel[0]
+    assert len(locked) == 1 and "-r /tmp/dcs.lock" in locked[0] and "--no-index" in locked[0]
+    assert len(pips) == 2  # nothing else is installed, and nothing reaches an index
+
+
+@pytest.mark.parametrize("arch", ARCHES)
+def test_the_dcs_lock_installs_our_rasterio_and_holds_the_base(arch):
+    rasterio = f"{pin('RASTERIO_VERSION')}+gbx{pin('GBX_NATIVE_REVISION')}"
+    lock = (ENV6 / f"dcs-{arch}.lock").read_text()
+    base = (ENV6 / f"dcs-base-{arch}.txt").read_text()
+
+    entries = re.findall(r"^([A-Za-z0-9_.-]+)==(\S+) \\\n((?:\s+--hash=sha256:[0-9a-f]{64}(?: \\)?\n?)+)", lock, re.M)
+    pinned = {n.lower(): v for n, v, _ in entries}
+    assert pinned["rasterio"] == rasterio  # our build, not PyPI's
+    # every requirement line carries a hash (`--require-hashes` refuses the file otherwise)
+    assert len(entries) == len(re.findall(r"^[A-Za-z0-9_.-]+==", lock, re.M))
+    # click is held at the image's version
+    assert re.search(r"^click==(\S+)", base, re.M).group(1) == pinned["click"]
+    # and it is the plain package list of the image, one `name==version` per line
+    assert all(re.fullmatch(r"[A-Za-z0-9_.-]+==\S+", ln) for ln in base.splitlines())
+
+
+def test_the_dcs_inputs_name_the_declared_requirements_and_our_rasterio():
+    lines = [ln.split("#")[0].strip() for ln in (ENV6 / "dcs.in").read_text().splitlines()]
+    lines = [ln for ln in lines if ln]
+    rasterio = f"rasterio=={pin('RASTERIO_VERSION')}+gbx{pin('GBX_NATIVE_REVISION')}"
+    assert lines == ["-r core.txt", "-r extra-vizx.txt", rasterio]

@@ -93,7 +93,7 @@ def tile_to_bytes(
         profile = (
             cog_profile(src.profile)
             if str(driver).upper() == "COG"
-            else source_profile(src.profile, unless_jpeg=True)
+            else source_profile(src.profile, unless_jpeg=True, driver=driver)
         )
         profile["driver"] = driver
         profile.update(

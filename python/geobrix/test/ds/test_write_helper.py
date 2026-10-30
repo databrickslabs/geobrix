@@ -1,6 +1,9 @@
 """Unit tests for the writer's per-tile byte production (no Spark)."""
 
+import logging
+
 import numpy as np
+import pytest
 from rasterio.io import MemoryFile
 
 from databricks.labs.gbx.ds import _write
@@ -74,6 +77,53 @@ def test_non_gtiff_target_reencodes_same_pixels_with_tags():
     )
     assert tags.get("RASTERX_CELL") == "7"
     assert tags.get("RASTERX_driver") == "COG"
+
+
+@pytest.mark.parametrize("driver", ["PNG", "JPEG"])
+@pytest.mark.parametrize("compression", ["none", "DEFLATE"])
+@pytest.mark.parametrize("source_codec", [None, "deflate"])
+def test_a_png_or_jpeg_tile_is_not_handed_a_codec_option(
+    caplog, driver, compression, source_codec
+):
+    """The writer's profile starts from a GTiff source (whose own codec it keeps) and adds the
+    codec asked for: PNG and JPEG take neither, and GDAL logs each one it is handed."""
+    from rasterio.transform import from_origin
+
+    profile = dict(
+        driver="GTiff",
+        width=8,
+        height=8,
+        count=3,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(0.0, 8.0, 1.0, 1.0),
+    )
+    if source_codec:
+        profile["compress"] = source_codec
+    with MemoryFile() as mf:
+        with mf.open(**profile) as ds:
+            ds.write(np.arange(192, dtype="uint8").reshape(3, 8, 8))
+        raw = mf.read()
+    with caplog.at_level(logging.WARNING, logger="rasterio._env"):
+        out = _write.tile_to_bytes(
+            cellid=1,
+            raster_bytes=raw,
+            metadata={"compression": compression},
+            force_driver=driver,
+        )
+    assert out[:4] in (
+        b"\x89PNG",
+        b"\xff\xd8\xff\xe0",
+        b"\xff\xd8\xff\xdb",
+        b"\xff\xd8\xff\xee",
+    )
+    codec = [
+        r.getMessage()
+        for r in caplog.records
+        if "CPLE_NotSupported" in r.getMessage()
+        and any(k in r.getMessage() for k in ("COMPRESS", "PREDICTOR", "ZLEVEL"))
+    ]
+    assert codec == []
 
 
 # --- alpha labels and the own mask of the re-encoded tile ----------------------------------

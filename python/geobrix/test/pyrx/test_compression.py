@@ -427,6 +427,43 @@ def test_drop_stripe_blocks_drops_only_the_strip_width_of_an_untiled_profile():
     assert C.drop_stripe_blocks({"width": 4}) == {"width": 4}  # no block keys at all
 
 
+@pytest.mark.parametrize(
+    "driver, compress, want",
+    [
+        ("GTiff", "none", {"compress": "none"}),
+        ("COG", "raw", {"compress": "none"}),
+        ("PNG", "none", {}),
+        ("JPEG", "raw", {}),
+        (
+            "PNG",
+            "deflate",
+            {"zlevel": "6"},
+        ),  # PNG's own level, the one codec option it takes
+        ("JPEG", "deflate", {}),
+        ("PNG", "auto", {}),
+        ("JPEG", "zstd", {}),
+    ],
+)
+def test_png_and_jpeg_are_handed_no_codec_options(driver, compress, want):
+    """PNG always deflates and JPEG always takes JPEG: GDAL logs CPLE_NotSupported for a
+    COMPRESS or PREDICTOR it is handed, and for a codec level on JPEG. GTiff and COG are as before.
+    """
+    assert C.creation_opts("uint8", compress=compress, driver=driver) == want
+
+
+def test_a_source_profile_for_png_or_jpeg_loses_its_codec_keys():
+    prof = {
+        "compress": "deflate",
+        "predictor": 2,
+        "zstd_level": 9,
+        "width": 4,
+        "tiled": False,
+    }
+    for driver in ("PNG", "jpeg"):
+        assert C.source_profile(prof, driver=driver) == {"width": 4, "tiled": False}
+    assert C.source_profile(prof, driver="GTiff") == prof == C.source_profile(prof)
+
+
 def test_source_profile_is_drop_ycbcr_and_drop_stripe_blocks_in_one():
     prof = {
         "photometric": "ycbcr",

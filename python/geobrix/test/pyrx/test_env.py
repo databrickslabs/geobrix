@@ -188,6 +188,25 @@ def test_a_cap_never_raises_a_cache_that_is_already_smaller(block_cache):
     assert _cache_max() == lowered
 
 
+def test_a_cache_change_made_while_a_cap_is_active_survives_the_last_exit(block_cache):
+    """Something else (user code, another library) resizes the cache inside the block: the last
+    cap's exit leaves that value, instead of writing back the size found at the start.
+    """
+    from rasterio.env import set_gdal_config
+
+    set_gdal_config("GDAL_CACHEMAX", 512 * 1024 * 1024)
+    changed = 200 * 1024 * 1024
+    with _env.capped_block_cache(32 * 1024 * 1024):
+        assert _cache_max() == 32 * 1024 * 1024
+        set_gdal_config("GDAL_CACHEMAX", changed)
+    assert _cache_max() == changed
+    assert _env._CACHE_CAPS == []
+    # and the next block starts clean: it records the size found then, and puts it back
+    with _env.capped_block_cache(32 * 1024 * 1024):
+        assert _cache_max() == 32 * 1024 * 1024
+    assert _cache_max() == changed
+
+
 def test_the_cache_size_comes_back_when_the_block_raises(block_cache):
     with pytest.raises(RuntimeError, match="boom"):
         with _env.capped_block_cache(32 * 1024 * 1024):
@@ -276,8 +295,12 @@ def test_every_site_that_caps_the_block_cache_applies_the_cap(
     and has it in force while it works; deleting the wrapper from one fails its row. On a classic
     runtime the streaming COG copy's size (its ceiling) differs from the others', so a site that
     drops its ceiling fails too."""
+    from rasterio.env import set_gdal_config
+
     from databricks.labs.gbx.pyrx.core import analysis, budget
 
+    # a cache above every cap, so the cap (not the host's default size) is what is in force
+    set_gdal_config("GDAL_CACHEMAX", 1 << 30)
     monkeypatch.setattr(budget, "runtime_kind", lambda: "classic")
     src = _small_tif(tmp_path / "src.tif")
     streaming = budget.block_cache_bytes(
@@ -309,4 +332,4 @@ def test_every_site_that_caps_the_block_cache_applies_the_cap(
     assert cap_seen and set(cap_seen) == {
         (want, want)
     }  # once per window for the reader
-    assert _cache_max() == block_cache
+    assert _cache_max() == 1 << 30

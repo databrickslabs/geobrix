@@ -455,6 +455,38 @@ def test_writer_stem_bucketing_multi_key_partition(spark, tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_writer_merge_names_a_part_that_fails_to_parse(tmp_path):
+    """A stray or truncated .laz in the merge directory fails the merge with an error that
+    names the file and says how to fix it, not a bare laspy error. Driven through the writer's
+    commit, in process."""
+    from pyspark.sql.types import DoubleType, StructField, StructType
+
+    from databricks.labs.gbx.ds._write_lidar import LidarGbxWriter
+    from databricks.labs.gbx.pyrx.imagery import write_xyz_laz
+
+    rng = np.random.default_rng(5)
+    write_xyz_laz(
+        str(tmp_path / "good.laz"),
+        rng.uniform(0, 100, 10),
+        rng.uniform(0, 100, 10),
+        rng.uniform(0, 50, 10),
+    )
+    (tmp_path / "stray_truncated.laz").write_bytes(
+        b"LASF" + b"\x00" * 20
+    )  # a signature, then a header cut short
+    w = LidarGbxWriter(
+        {"path": str(tmp_path), "merge": "true", "fileName": "bad_merged"},
+        StructType([StructField(c, DoubleType()) for c in ("x", "y", "z")]),
+        overwrite=False,
+    )
+    with pytest.raises(ValueError) as ei:
+        w.commit([])
+    msg = str(ei.value)
+    assert "stray_truncated.laz" in msg and "Fix:" in msg, msg
+    assert "good.laz" not in msg
+    assert ei.value.__cause__ is not None  # the laspy error stays chained
+
+
 def test_writer_merge_rejects_heterogeneous_formats(spark, tmp_path):
     """A directory mixing RGB (fmt 2) and XYZ-only (fmt 0) parts must raise a
     clear ValueError naming the conflicting formats.

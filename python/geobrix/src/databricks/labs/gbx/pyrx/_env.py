@@ -820,10 +820,12 @@ def readdir_option(mode: Optional[str]):
 
 # GDAL's raster block cache size is one number for the whole process. Callers that cap it for a
 # block of work go through capped_block_cache: the sizes in force are kept here, the size the
-# process had when the first one began is put back when the last one ends.
+# process had when the first one began is put back when the last one ends, unless something else
+# changed the size meanwhile (_CACHE_SET is the size the caps last set).
 _CACHE_LOCK = threading.Lock()
 _CACHE_CAPS: List[int] = []
 _CACHE_BEFORE: Optional[int] = None
+_CACHE_SET: Optional[int] = None
 
 
 @contextmanager
@@ -842,26 +844,33 @@ def capped_block_cache(max_bytes: int):
     gave a different answer from call to call.
 
     Overlapping blocks (threads of one worker) are held to the largest cap in force while any of
-    them runs."""
+    them runs. If something else changes ``GDAL_CACHEMAX`` while a cap is in force (user code,
+    another library), the size is no longer the one the caps set: when the last cap ends, that
+    newer value is left alone rather than overwritten with the size found at the start.
+    """
     from rasterio.env import get_gdal_config, set_gdal_config
 
-    global _CACHE_BEFORE
+    global _CACHE_BEFORE, _CACHE_SET
     with _CACHE_LOCK:
         first = not _CACHE_CAPS
         before = get_gdal_config("GDAL_CACHEMAX") if first else _CACHE_BEFORE
         cap = min(before, int(max_bytes))
-        set_gdal_config("GDAL_CACHEMAX", max([*_CACHE_CAPS, cap]))
+        size = max([*_CACHE_CAPS, cap])
+        set_gdal_config("GDAL_CACHEMAX", size)
         # recorded only once the size is set, so a failure leaves nothing to put back
         _CACHE_BEFORE = before
+        _CACHE_SET = size
         _CACHE_CAPS.append(cap)
     try:
         yield
     finally:
         with _CACHE_LOCK:
             _CACHE_CAPS.remove(cap)
-            set_gdal_config(
-                "GDAL_CACHEMAX", max(_CACHE_CAPS) if _CACHE_CAPS else _CACHE_BEFORE
-            )
+            if get_gdal_config("GDAL_CACHEMAX") == _CACHE_SET:
+                size = max(_CACHE_CAPS) if _CACHE_CAPS else _CACHE_BEFORE
+                set_gdal_config("GDAL_CACHEMAX", size)
+                _CACHE_SET = size
+            # else: changed while a cap was in force; leave the newer value
 
 
 def open_raster(path, *args, **kwargs):

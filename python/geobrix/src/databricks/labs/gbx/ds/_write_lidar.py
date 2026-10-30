@@ -106,6 +106,15 @@ def _resolve_write_cols(schema: StructType, options: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _unparsable_part(path: str, exc: BaseException) -> ValueError:
+    """The error for a merge part laspy cannot parse: names the file, says how to proceed."""
+    return ValueError(
+        f"lidar_gbx merge: {os.path.basename(path)} could not be read as a LAS/LAZ file "
+        f"({type(exc).__name__}: {exc}). Fix: remove or repair that file (a stray or "
+        "truncated part in the merge directory), then run the merge again."
+    )
+
+
 def _laz_point_count(path: str) -> int:
     """Open a LAS/LAZ file and return its header point count."""
     import laspy
@@ -861,7 +870,15 @@ class LidarGbxWriter(DataSourceWriter):
         from databricks.labs.gbx.ds.lidar import check_laz
 
         for p in parts:
-            check_laz(p, f"lidar_gbx merge: {os.path.basename(p)}")
+            label = f"lidar_gbx merge: {os.path.basename(p)}"
+            try:
+                check_laz(p, label)
+            except ValueError as exc:
+                if label in str(exc):  # check_laz already named the part
+                    raise
+                raise _unparsable_part(p, exc) from exc
+            except Exception as exc:  # laspy could not read the header at all
+                raise _unparsable_part(p, exc) from exc
 
         # Scan every part's point format to detect heterogeneous RGB/XYZ mixes.
         # A merged LAS has a single point format; mixing RGB and XYZ-only parts

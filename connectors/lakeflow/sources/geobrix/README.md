@@ -62,15 +62,15 @@ The pipeline's environment installs three wheels (no GeoBrix install is needed o
 compute that queries the resulting tables):
 
 ```text
-geobrix[light_dbr18]@file:///Volumes/<catalog>/<schema>/<volume>/<dir>/geobrix-<version>-py3-none-any.whl
+geobrix@file:///Volumes/<catalog>/<schema>/<volume>/<dir>/geobrix-<version>+env5-py3-none-any.whl
 /Volumes/<catalog>/<schema>/<volume>/<dir>/lakeflow_community_connectors-<version>-py3-none-any.whl
 /Volumes/<catalog>/<schema>/<volume>/<dir>/geobrix_lakeflow_connectors-<version>-py3-none-any.whl
 ```
 
 - Write the GeoBrix line **without spaces around `@`** — pipelines install each line with an
   unquoted `%pip install`, so spaces split the requirement.
-- Match the extra to the pipeline's channel runtime (`light_dbr18` for a DBR 18 channel,
-  `light_dbr19` for DBR 19).
+- Match the GeoBrix wheel to the pipeline's channel runtime (the `+env5` wheel for a DBR 18
+  channel, `+env6` for DBR 19).
 - Keep the wheels in a folder of their own.
 
 ## Configure

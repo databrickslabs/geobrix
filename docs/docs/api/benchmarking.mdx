@@ -60,7 +60,7 @@ Provision a cluster and stage the artifacts per the [installation guide](../inst
 | Tier | Cluster | Artifacts |
 |---|---|---|
 | Heavyweight (rasterx) | x86 · DBR 17.3 LTS | Legacy init script + bundle + GeoBrix wheel + the bench tests JAR (`geobrix-*-tests.jar`) |
-| Lightweight (pyrx) | x86 **or ARM** | The `[light_env6]` wheel (Serverless) or `[light_dbrN]` (classic) |
+| Lightweight (pyrx) | x86 **or ARM** | The env wheel for the runtime (`+env6` on Serverless environment 6 and DBR 19, `+env5` on environment 5 and DBR 17.3 / 18) |
 
 Then fill in the cluster configuration file (`examples/tests/databricks_cluster_config.env`) with your cluster ID and Volume paths.
 
@@ -1237,7 +1237,7 @@ The quadbin and BNG functions run at or faster than parity: cell-space geometry 
 
 The geometry-aware expansion functions grow grid rings outward from a *geometry's* covering set (not a single cell). This is a **throughput/scaling** benchmark — how expansion cost grows with the number of input geometries `N` and the ring distance `k` — rather than a light-vs-heavy parity table. Inputs are synthetic **notional building footprints** across five shapes (rectangle, L, U, courtyard-with-hole, irregular) and three sizes (~15 / 50 / 200 m), scattered over a city-scale extent so each building lands on a distinct cell set.
 
-> **Environment:** Databricks **Serverless** (environment 6) · `light_env6` wheel · `geomkring`/`geomkloop`, `boundary-out` · best-of-3 warm timing of a full distributed aggregate (`sum(size(cells))` over all rows). Target cell size ≈ 65 m: **h3** res 10, **quadbin** res 19, **custom** 65 m root cell, **BNG** res 4 (100 m — the nearest discrete BNG step). h3 and quadbin run on WGS84; custom and BNG on EPSG:27700. Footprints come from the `bench/buildings.py` generator. Cell counts are the total emitted across all input geometries. (Serverless wall-clock carries run-to-run variance from autoscaling — read the ordering and magnitudes, not the last digit.)
+> **Environment:** Databricks **Serverless** (environment 6) · the 0.5.x `light_env6` wheel · `geomkring`/`geomkloop`, `boundary-out` · best-of-3 warm timing of a full distributed aggregate (`sum(size(cells))` over all rows). Target cell size ≈ 65 m: **h3** res 10, **quadbin** res 19, **custom** 65 m root cell, **BNG** res 4 (100 m — the nearest discrete BNG step). h3 and quadbin run on WGS84; custom and BNG on EPSG:27700. Footprints come from the `bench/buildings.py` generator. Cell counts are the total emitted across all input geometries. (Serverless wall-clock carries run-to-run variance from autoscaling — read the ordering and magnitudes, not the last digit.)
 
 **Headline** — 10,000 building footprints, h3 res 10, `geomkring` `boundary-out`, `k=10`: **≈ 7.9 s** producing **3,573,051 cells** — about **1,260 buildings/s** and **450k cells/s** on Serverless.
 
@@ -1398,7 +1398,7 @@ Provision a cluster and stage the artifacts per the [installation guide](../inst
 | Tier | Cluster | Artifacts |
 |---|---|---|
 | Heavyweight (rasterx) | x86 · DBR 17.3 LTS | Legacy init script + bundle + GeoBrix wheel + the bench tests JAR (`geobrix-*-tests.jar`) |
-| Lightweight (pyrx) | x86 **or ARM** | The `[light_env6]` wheel (Serverless) or `[light_dbrN]` (classic) |
+| Lightweight (pyrx) | x86 **or ARM** | The env wheel for the runtime (`+env6` on Serverless environment 6 and DBR 19, `+env5` on environment 5 and DBR 17.3 / 18) |
 
 Then fill in the cluster configuration file (`examples/tests/databricks_cluster_config.env`) with your cluster ID and Volume paths.
 

@@ -131,9 +131,9 @@ export default function Home() {
                 <p>Get up and running with GeoBrix in minutes:</p>
                 <pre>
                   <code>
-{`# Install the lightweight wheel (single library, no JAR, no GDAL)
-# Stage the wheel on a Unity Catalog Volume, then install the quoted PEP 508 named form:
-%pip install --quiet "geobrix[light_env6] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>-py3-none-any.whl"
+{`# Install the env wheel for your runtime (one library, its own GDAL, no init script)
+# Stage it on a Unity Catalog Volume, then install the quoted PEP 508 named form:
+%pip install --quiet "geobrix @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>+env6-py3-none-any.whl"
 
 # Import and register functions
 from databricks.labs.gbx.pyrx import functions as rx

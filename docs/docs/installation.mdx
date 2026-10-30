@@ -1,6 +1,6 @@
 ---
 sidebar_position: 2
-description: Install GeoBrix three ways — the WHL-only lightweight wheel, a Databricks Container Service image, or the legacy GDAL init script.
+description: Install GeoBrix three ways — the WHL-only env wheel for the runtime, a Databricks Container Service image, or the legacy GDAL init script.
 ---
 
 # Installation
@@ -11,11 +11,11 @@ matches the tier you need and the compute you run on.
 
 ## Choose an install path {#choose-an-install-path}
 
-![Three ways to install GeoBrix — the question of which tier you need, and on which compute, branches three ways: lightweight tier only leads to path a, WHL-only (Lightweight), recommended, installed with the light_env6 extra or another runtime-pinned extra, running on Serverless, standard access mode, Lakeflow pipelines, classic clusters and ARM, with one wheel from a Volume or the GitHub release and no JAR, init script or native GDAL bundle, giving the lightweight tier; heavyweight on arm64 or x86 leads to path b, Databricks Container Service, preferred for the heavyweight tier, a GeoBrix container image on DCS vNext, run on a dedicated Graviton (arm64) or x86 (amd64) DBR 19 cluster, that carries native GDAL, the wheel and the JAR, with no init script and no cluster library, giving both the lightweight and heavyweight tiers, with DBR 17.3 / 18 images not yet available; heavyweight on classic x86 leads to path c, Init Script (Legacy), geobrix-gdal-init.sh on a classic x86 cluster running DBR 17.3, 18 or 19, with the init script, GDAL tarball and .sha256 sidecar on a Volume and the wheel as a cluster library, still supported where the DCS image does not reach yet, giving both the lightweight and heavyweight tiers](../../resources/images/diagrams/installation/installation-paths.png)
+![Three ways to install GeoBrix — the question of which tier you need, and on which compute, branches three ways: lightweight tier only leads to path a, WHL-only (Lightweight), recommended, installed as the env wheel for the runtime (env5 or env6), running on Serverless, standard access mode, Lakeflow pipelines, classic clusters and ARM, with one wheel from a Volume or the GitHub release that carries its own GDAL, PROJ and GEOS and no init script, giving the lightweight tier; heavyweight on arm64 or x86 leads to path b, Databricks Container Service, preferred for the heavyweight tier, a GeoBrix container image on DCS vNext, run on a dedicated Graviton (arm64) or x86 (amd64) DBR 19 cluster, that carries native GDAL, the wheel and the JAR, with no init script and no cluster library, giving both the lightweight and heavyweight tiers, with DBR 17.3 / 18 images not yet available; heavyweight on classic x86 leads to path c, Init Script (Legacy), geobrix-gdal-init.sh on a classic x86 cluster running DBR 17.3, 18 or 19, with the init script, GDAL tarball and .sha256 sidecar on a Volume and the wheel as a cluster library, still supported where the DCS image does not reach yet, giving both the lightweight and heavyweight tiers](../../resources/images/diagrams/installation/installation-paths.png)
 
 | Path | Tiers | Compute | What you install |
 |---|---|---|---|
-| **(a) [WHL-only (Lightweight)](#whl-only)** — recommended | Lightweight | Serverless, standard access mode, Lakeflow declarative pipelines, classic clusters, ARM | One wheel with a runtime-pinned extra — no JAR, no init script |
+| **(a) [WHL-only (Lightweight)](#whl-only)** — recommended | Lightweight | Serverless, standard access mode, Lakeflow declarative pipelines, classic clusters, ARM | The env wheel for the runtime (`+env5` or `+env6`) — no init script |
 | **(b) [Databricks Container Service](./installation/dcs.mdx)** — preferred heavyweight packaging | Lightweight + Heavyweight | Dedicated cluster, Graviton (arm64) or x86 (amd64), DBR 19 | A GeoBrix container image on DCS vNext (native GDAL, the wheel and the JAR) — no init script, no cluster library |
 | **(c) [Init Script (Legacy)](./installation/init-script.mdx)** | Lightweight + Heavyweight | Classic x86 cluster, DBR 17.3 / 18 / 19 | The GDAL init script, its tarball + `.sha256` sidecar on a Volume, and the wheel as a cluster library |
 
@@ -49,9 +49,17 @@ GeoBrix supports the following Databricks Runtime releases:
 | **18** | 24.04 | 4.1.0 | 3.12.3 | 2.13.16 | 21 | ✅ Supported |
 | **19** | 24.04 | 4.2.0 | 3.12.3 | 2.13.18 | 21 | ✅ Supported |
 
-A **single wheel + single JAR** runs on 17.3, 18, and 19: Scala 2.13 minor versions are binary-compatible, the JAR is compiled to Java-17 bytecode so it loads on all three JVMs, and Spark is a `provided` dependency.
+A **single JAR** runs on 17.3, 18, and 19: Scala 2.13 minor versions are binary-compatible, the JAR is compiled to Java-17 bytecode so it loads on all three JVMs, and Spark is a `provided` dependency.
 
-GeoBrix Light uses **explicit, runtime-pinned extras** — there is no bare `[light]`. On Serverless, use `geobrix[light_env6]` (environment v6, recommended) or `geobrix[light_env5]` (environment v5). On classic clusters, use `geobrix[light_dbr17]`, `geobrix[light_dbr18]`, or `geobrix[light_dbr19]` to match your runtime. See the extras table under [WHL-only (Lightweight)](#whl-only) below.
+On Databricks, GeoBrix installs as the **env wheel** for the runtime's family. There is one wheel per
+family, and no light extra to pick:
+
+| Runtime | Wheel |
+|---|---|
+| Serverless environment 6 (recommended), DBR 19, DBR 19 ML, SQL warehouses and UC functions | `geobrix-<version>+env6-py3-none-any.whl` |
+| Serverless environment 5, DBR 17.3, DBR 18, Lakeflow declarative pipelines | `geobrix-<version>+env5-py3-none-any.whl` |
+
+See [WHL-only (Lightweight)](#whl-only) below for the install steps.
 
 :::note PySpark comes from the runtime
 On Databricks, GeoBrix uses the PySpark that the runtime provides — installing GeoBrix never downloads PySpark. Outside Databricks (for example a local Spark session), install `pyspark>=4.0.0` alongside GeoBrix.
@@ -59,92 +67,100 @@ On Databricks, GeoBrix uses the PySpark that the runtime provides — installing
 
 ## WHL-only (Lightweight) {#whl-only}
 
-The lightweight tier is a single Python wheel installed with a runtime-pinned light extra (`light_env6` on Serverless, `light_dbrN` on classic) — **no init script, no JAR, no native GDAL bundle** (rasterio's bundled GDAL does the work). It runs on serverless compute, standard (shared) clusters, Lakeflow declarative pipelines, and ARM. One wheel covers the whole lightweight tier: RasterX (the full `rst_*` set, via `databricks.labs.gbx.pyrx`), VectorX (via `databricks.labs.gbx.pyvx`), and GridX quadbin (via `databricks.labs.gbx.pygx`).
+The lightweight tier is a single Python wheel, the **env wheel** for your runtime — **no init script, no separate JAR, no native GDAL bundle**. The env wheel carries its own GDAL, PROJ and GEOS, built for it, with `rasterio`, `pyogrio`, `pyproj`, `shapely`, `netCDF4` and GDAL's own `osgeo` built against them, so a process runs one GDAL. It holds the runtime's preinstalled packages instead of replacing them. It runs on serverless compute, standard (shared) clusters, Lakeflow declarative pipelines, and ARM. One wheel covers the whole lightweight tier: RasterX (the full `rst_*` set, via `databricks.labs.gbx.pyrx`), VectorX (via `databricks.labs.gbx.pyvx`), and GridX quadbin (via `databricks.labs.gbx.pygx`).
 
-:::note Choose an extra for your runtime
-GeoBrix Light uses **explicit, runtime-pinned extras** — every install picks a named, runtime-pinned extra. Pick the one that matches your compute:
+:::note Choose the wheel for your runtime
+| Runtime | Install command |
+|---|---|
+| Serverless environment 6 (recommended), DBR 19, DBR 19 ML | `%pip install "geobrix @ file:///Volumes/…/geobrix-<version>+env6-py3-none-any.whl"` |
+| Serverless environment 5, DBR 17.3, DBR 18 | `%pip install "geobrix @ file:///Volumes/…/geobrix-<version>+env5-py3-none-any.whl"` |
 
-| Runtime | Install command | Full feature set |
+**Feature extras.** Add them in brackets, on the same line: `"geobrix[stac,vizx] @ file:///Volumes/…/geobrix-<version>+env6-py3-none-any.whl"`.
+
+| Extra | What it adds | Wheels |
 |---|---|---|
-| Serverless env 6 (recommended) | `%pip install "geobrix[light_env6] @ file:///Volumes/…"` | `geobrix[light_env6_all]` |
-| Serverless env 5 | `%pip install "geobrix[light_env5] @ file:///Volumes/…"` | `geobrix[light_env5_all]` |
-| Classic DBR 17.3 | `%pip install "geobrix[light_dbr17] @ file:///Volumes/…"` | `geobrix[light_dbr17_all]` |
-| Classic DBR 18 | `%pip install "geobrix[light_dbr18] @ file:///Volumes/…"` | `geobrix[light_dbr18_all]` |
-| Classic DBR 19 | `%pip install "geobrix[light_dbr19] @ file:///Volumes/…"` | `geobrix[light_dbr19_all]` |
+| `[stac]` | The STAC client (`pystac-client`, `planetary-computer`) | env5, env6 |
+| `[vizx]` | Visualization (`matplotlib`, `mapclassify`, `anywidget`, `tippecanoe`, `imageio`; the wheel carries `geopandas` and `contextily`) | env5, env6 |
+| `[zarr]` | Zarr transactional stores (`zarr`, `numcodecs`, `zarrs`, `tensorstore`, `obstore`) | env6 |
+| `[databricks]` | The Databricks SDK, for the sample-data uploads | env5, env6 |
 
-*(Full feature set (`_all`) = `[light_envN/_dbrN]` + `[stac]` + `[vizx]` in one install; on env 6 and DBR 19 it also includes the Zarr stack (`[zarr_env6]` / `[zarr_dbr19]`). `[databricks]` is added separately if needed.)*
+*What an install changes on the runtime. The env wheel and its extras keep the runtime's preinstalled packages, with these exceptions. Every install upgrades `idna` (the runtime ships 3.7 or 3.11) and installs `httpx2` and `httpcore2`, which `rio-tiler` uses to read remote rasters and which need `idna` 3.18 or later. On Serverless environment 5 and DBR 17.3 / 18 it also upgrades `anyio` and `typing_extensions` (`rio-tiler` 9 needs 4.13 or later), on DBR 17.3 `h11` (to 0.16, the fix for CVE-2025-43859) and `httpcore` (from 1.0.2, which does not accept that `h11`, to 1.0.9), and on DBR 19 ML and Serverless environment 6 ML `lazy_loader`. On those env5 runtimes `[stac]` and `[vizx]` also raise `requests` from 2.32.3 to the latest 2.32 release, which fixes CVE-2024-47081. Databricks may show a one-time "a core package changed" notice; it is harmless, and the restart that follows the install picks up the new versions.*
 
-*Installing any light extra upgrades `idna` (the runtime ships 3.7 or 3.11) and installs `httpx2` and `httpcore2`, which `rio-tiler` uses to read remote rasters and which need `idna` 3.18 or later. On Serverless env 5 and DBR 17.3/18 it also upgrades `anyio`, and on DBR 17.3 `h11`. Databricks may show a one-time "a core package changed" notice; it is harmless, and the restart that follows the install picks up the new versions.*
-
-*The `[stac]` part of `_all` requires `requests` 2.34.2 or later, so an `_all` install raises `requests` wherever the runtime ships an older version (env 6 and DBR 19 ship 2.32.5).*
-
-*`[earthdata]` and `[overture]` are source-specific downloaders kept **outside `_all`** (they change further preinstalled base packages on install). Add either alongside your runtime extra — e.g. `geobrix[light_env6,overture]` — or, to use one with the full feature set, install it as a **separate step after** `_all` (not combined in one command). See **[NASA Earthdata / EMIT](./sample-data/emit-downloader)** and **[Overture Maps](./sample-data/overture-downloader)** for details.*
+*`[overture]` and `[earthdata]` are not extras of the env wheels: each changes further preinstalled packages. Install their packages as a **separate step** after the wheel, if you need them, and accept the changes: `%pip install "overturemaps>=1.0.2,<2"` (the Overture CLI, the fast path of [Overture Maps](./sample-data/overture-downloader); it raises `click` to 8.5 and `tqdm` to 4.70 or later, and installs PyPI's `shapely`, which a GeoBrix process does not use) and `%pip install "earthaccess>=0.11,<1" "botocore<1.44.0"` ([NASA Earthdata / EMIT](./sample-data/emit-downloader); it raises `fsspec` from 2023.5.0 to a current release). The Overture downloader works without the CLI, through the STAC catalog.*
 
 The `file:///Volumes/…` path is a placeholder for the wheel on your Unity Catalog Volume — see
 the install steps below for the exact pattern including the PEP 508 `package @ file://` quoting
 required on Serverless.
 :::
 
-:::note Upgrading from GeoBrix 0.4.x?
-**GeoBrix 0.4.x** used a single unversioned extra: `geobrix[light]` (basic) or `geobrix[light,stac,vizx]` (with feature extras). In **0.5.0+** those bare extras are removed — every install names the target runtime explicitly. Replace `[light]` with the matching runtime extra from the table above (e.g. `[light_env6]` on Serverless, `[light_dbr19]` on classic DBR 19). Feature extras (`stac`, `vizx`, `overture`, `earthdata`) are still available and combine with the runtime extra; `[overture]` and `[earthdata]` are opt-in downloaders not included in `_all` — see the note above.
+:::warning Install the env wheel for the runtime's family
+The env wheel of the other family refuses to import, naming the file to install. The **plain wheel**,
+`geobrix-<version>-py3-none-any.whl`, is for use **off Databricks** (a laptop, a non-Linux machine,
+another Python, a GDAL you bring yourself): `pip install geobrix` gives a working lightweight tier
+with PyPI's `rasterio`, `pyogrio`, `pyproj` and `shapely`, and the plain wheel keeps the feature
+extras (`stac`, `vizx`, `zarr_dbr19`, `overture`, `earthdata`, …). On Databricks it would put a
+second GDAL stack beside the runtime's packages.
 :::
 
-:::tip On Serverless, use `geobrix[light_env6]`
-**Environment v6 is recommended for Serverless.** Install `geobrix[light_env6]` and set the environment version to **6** — in the Environment side panel, or `environment_version: "6"` on a job. For an env 5 Serverless cluster, use `geobrix[light_env5]` instead.
+:::note Upgrading from GeoBrix 0.5.x?
+**GeoBrix 0.5.x** installed the plain wheel with a runtime extra: `geobrix[light_env6]`, `[light_env5]`, `[light_dbr17]`, `[light_dbr18]` or `[light_dbr19]`, or their `_all` forms. In **0.6.0** those extras are gone: install the env wheel for the runtime instead, with no light extra. Replace `"geobrix[light_env6,vizx] @ file:///Volumes/…/geobrix-<version>-py3-none-any.whl"` with `"geobrix[vizx] @ file:///Volumes/…/geobrix-<version>+env6-py3-none-any.whl"` (`+env5` for `light_env5` and `light_dbr17` / `light_dbr18`). An `_all` form becomes `[stac,vizx]`, and `[stac,vizx,zarr]` on the env6 wheel. An old install line fails at resolution (pip: `ResolutionImpossible`), naming the env wheel to install, rather than installing something else.
+:::
+
+:::tip On Serverless, use environment 6
+**Environment v6 is recommended for Serverless.** Install the `+env6` wheel and set the environment version to **6** — in the Environment side panel, or `environment_version: "6"` on a job. For an env 5 Serverless cluster, use the `+env5` wheel instead.
 
 **Force-reload on Serverless without touching dependencies.** To swap in fresh wheel bytes during an interactive session, run this in a cell towards the top of your notebook:
 
 ```python
-%pip install --force-reinstall --no-deps "geobrix @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>-py3-none-any.whl"
-%pip install "geobrix[light_env6] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>-py3-none-any.whl"
+%pip install --force-reinstall --no-deps "geobrix @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>+env6-py3-none-any.whl"
+%pip install "geobrix @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>+env6-py3-none-any.whl"
 dbutils.library.restartPython()
 ```
 
-Keep `--no-deps` alongside `--force-reinstall` — without it, pip force-reinstalls dependencies that are already preinstalled and Serverless fails the cell. The second, plain install then restores any dependencies the first (deps-skipped) step left out.
+Keep `--no-deps` alongside `--force-reinstall` — without it, pip force-reinstalls dependencies that are already preinstalled and Serverless fails the cell. The second, plain install then restores any dependencies the first (deps-skipped) step left out; add your feature extras on that line.
 :::
 
-The wheel ships as a **GitHub release artifact** for GeoBrix 0.4.0+ — it is **not** published to PyPI. Install it from a Unity Catalog Volume so the same path works on both Serverless and Classic compute:
+The wheels ship as **GitHub release artifacts** — they are **not** published to PyPI. Install from a Unity Catalog Volume so the same path works on both Serverless and Classic compute:
 
-1. **Download** `geobrix-<version>-py3-none-any.whl` from the [GeoBrix releases](https://github.com/databrickslabs/geobrix/releases) (0.4.0 or later).
+1. **Download** the env wheel for your runtime, `geobrix-<version>+env6-py3-none-any.whl` or `geobrix-<version>+env5-py3-none-any.whl`, from the [GeoBrix releases](https://github.com/databrickslabs/geobrix/releases).
 2. **Stage** it in a Unity Catalog Volume your compute can read, e.g. `/Volumes/<catalog>/<schema>/<volume>/geobrix/`.
 3. **Install** it — either notebook-scoped with the `%pip` magic (installs across the whole cluster for the notebook session; plain `pip` installs only on the driver), or as a [cluster-scoped library](https://docs.databricks.com/aws/en/libraries/notebooks-python-libraries#manage-libraries-with-pip-commands) pointing at the same Volume path (works on Serverless and Classic):
 
 ```python
-%pip install "geobrix[light_env6] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>-py3-none-any.whl"
+%pip install "geobrix @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>+env6-py3-none-any.whl"
 ```
 
 :::warning Serverless install form
-**Use the quoted `geobrix[light_env6] @ file://…` form.** Install with the **PEP 508
-named form above**, wrapped in quotes as a single argument. Do **not** put the
-extra on the path (`'/Volumes/…/geobrix-<version>-py3-none-any.whl[light_env6]'`): on
+**Use the quoted `geobrix[<extras>] @ file://…` form.** Install with the **PEP 508
+named form above**, wrapped in quotes as a single argument. Do **not** put an
+extra on the path (`'/Volumes/…/geobrix-<version>+env6-py3-none-any.whl[vizx]'`): on
 **Serverless**, `%pip` writes the requirement to a file *including the
-surrounding quotes*, so pip reads `[light_env6]` as part of the filename and fails
+surrounding quotes*, so pip reads `[vizx]` as part of the filename and fails
 with *"Expected package name at the start of dependency specifier."* The named
 form installs cleanly on **Serverless**, standard/shared, and ARM.
 :::
 
 **Or install straight from the GitHub release.** When your compute can reach github.com, skip the
 download-and-stage steps and point pip at the release asset. Keep the same quoted PEP 508 named
-form, with the extra for your runtime:
+form, with the wheel for your runtime:
 
 ```python
-%pip install "geobrix[light_env6] @ https://github.com/databrickslabs/geobrix/releases/download/v<version>/geobrix-<version>-py3-none-any.whl"
+%pip install "geobrix @ https://github.com/databrickslabs/geobrix/releases/download/v<version>/geobrix-<version>+env6-py3-none-any.whl"
 dbutils.library.restartPython()
 ```
 
-On a classic cluster, use your runtime's extra instead (for example `geobrix[light_dbr19]`). For a
-Serverless job, add the requirement as a dependency line of the job's environment, written
-**without spaces around `@`**, with the extra for its environment version (`light_env5` for
-version 5, `light_env6` for version 6):
+On DBR 17.3 or 18, use the `+env5` wheel instead. For a Serverless job, add the requirement as a
+dependency line of the job's environment, written **without spaces around `@`**, with the wheel for
+its environment version (`+env5` for version 5, `+env6` for version 6):
 
 ```text
-geobrix[light_env6]@https://github.com/databrickslabs/geobrix/releases/download/v<version>/geobrix-<version>-py3-none-any.whl
+geobrix@https://github.com/databrickslabs/geobrix/releases/download/v<version>/geobrix-<version>+env6-py3-none-any.whl
 ```
 
 Environment dependencies are installed with an unquoted `%pip install`, so spaces around `@` split
 the requirement and the install fails. A Lakeflow pipeline's dependency lines follow the same rule,
 but the pipeline runs on the Databricks Runtime of its channel, not on a Serverless environment
-version, so it takes the extra for that runtime, not a `light_env` one. See
+version, so it takes the wheel for that runtime (`+env5` for DBR 18, `+env6` for DBR 19). See
 [Lakeflow SDP](./ingestion/lakeflow-sdp#environment).
 
 Workspaces that restrict outbound network access (for example, Serverless egress controls) can
@@ -168,13 +184,13 @@ rx.register(spark)
 
 ### Verify the lightweight tier
 
-Confirm the wheel imports, rasterio's bundled GDAL is present, and a function runs end to end (no JAR, no init script). The check below exercises RasterX (`rst_*`); VectorX (`pyvx`, `st_*`) and GridX quadbin (`pygx`, `quadbin_*`) ship in the same wheel and register and run the same way:
+Confirm the wheel imports, the env wheel's GDAL is the one rasterio runs, and a function runs end to end (no init script). The check below exercises RasterX (`rst_*`); VectorX (`pyvx`, `st_*`) and GridX quadbin (`pygx`, `quadbin_*`) ship in the same wheel and register and run the same way:
 
 ```python
 import rasterio
 from databricks.labs.gbx.pyrx import functions as rx
 
-print("rasterio", rasterio.__version__, "| bundled GDAL", rasterio.__gdal_version__)
+print("rasterio", rasterio.__version__, "| GDAL", rasterio.__gdal_version__)
 
 # Functional check: load a GeoTIFF and read its properties through pyrx.
 tiles = (

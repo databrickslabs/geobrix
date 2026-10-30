@@ -222,11 +222,11 @@ def canvas(badge, title, subtitle, pill, theme, body, chips, label="ARTIFACTS"):
 
 PATHS = [
     dict(theme=BLUE, glyph=g_wheel, letter="a",
-         title="WHL-only (Lightweight)", chip="geobrix[light_env6]",
+         title="WHL-only (Lightweight)", chip="geobrix-<version>+env6 / +env5",
          branch="Lightweight tier only", badge="RECOMMENDED",
          runs="Serverless · standard access mode · Lakeflow pipelines · classic clusters · ARM",
-         install="One wheel with a runtime-pinned extra, from a Volume or the GitHub release",
-         extra="No JAR, no init script, no native GDAL bundle",
+         install="The env wheel for the runtime (env5 or env6), from a Volume or the GitHub release",
+         extra="Its own GDAL, PROJ and GEOS; no init script",
          tiers=["Lightweight"]),
     dict(theme=TEAL, glyph=g_container, letter="b",
          title="Databricks Container Service", chip="GeoBrix container image",
@@ -309,7 +309,7 @@ def body_dcs():
     out.append(panel(x1, top, w1, h, accent=TEAL["accent"], title="GeoBrix image"))
     out.append(centered_chip(x1 + w1 / 2, top + 44, "tag  <version>-env6-<arm|x86>", TEAL))
     layers = [
-        ("GeoBrix wheel  ·  [light_env6,vizx]", "Core + visualization, in the image's Python", BLUE),
+        ("GeoBrix wheel  ·  [vizx]", "Core + visualization, in the image's Python", BLUE),
         ("GeoBrix JAR  ·  /databricks/jars", "The one GeoBrix JAR; dedicated clusters load this directory", ORANGE),
         ("GDAL 3.11.4 + Java (JNI) bindings", "Native GDAL the heavyweight JAR loads", ORANGE),
         ("databricksruntime/environment:v6-standard", "DCS vNext base; Graviton uses the -arm variant", TEAL),
@@ -487,7 +487,7 @@ DIAGRAMS = {
         subtitle="Pick the path that matches the tier you need and the compute you run on",
         pill="Installation  ·  Paths",
         body=body_paths,
-        chips=["geobrix-<version>-py3-none-any.whl",
+        chips=["geobrix-<version>+env<N>-py3-none-any.whl",
                "geobrix-<version>-jar-with-dependencies.jar", "geobrix-gdal-init.sh"],
     ),
     "dcs": dict(
@@ -496,7 +496,7 @@ DIAGRAMS = {
         subtitle="The preferred heavyweight packaging, on DCS vNext: one image carries native GDAL, the wheel and the JAR",
         pill="Installation  ·  Container Service",
         body=body_dcs,
-        chips=["environment:v6-standard[-arm]", "GDAL 3.11.4", "geobrix[light_env6,vizx]",
+        chips=["environment:v6-standard[-arm]", "GDAL 3.11.4", "geobrix[vizx]",
                "jar-with-dependencies.jar"],
     ),
     "init-script": dict(

@@ -23,7 +23,7 @@ Create an [Earthdata Login](https://urs.earthdata.nasa.gov/) account and token f
 :::
 
 :::note Prerequisites
-- GeoBrix installed with the `[earthdata]` extra (e.g. `%pip install "geobrix[light_env6,earthdata] @ file:///Volumes/…"`), which bundles `earthaccess` — wheel includes `databricks.labs.gbx.sample`. See [Installation](../installation#whl-only).
+- GeoBrix installed (the env wheel for the runtime), and `earthaccess` as a separate step after it: `%pip install "earthaccess>=0.11,<1" "botocore<1.44.0"` (the env wheels have no `[earthdata]` extra; installing `earthaccess` raises the runtime's `fsspec`). Off Databricks, the plain wheel's `pip install "geobrix[earthdata]"` installs it. See [Installation](../installation#whl-only).
 - Unity Catalog Volume already exists at `/Volumes/{catalog}/{schema}/{volume}/...`
 - `EARTHDATA_TOKEN` set in the environment (see above) before calling `download()`
 :::
@@ -160,8 +160,9 @@ download_emit_aoi(
 The example below fetches EMIT CH4 enhancement scenes and plume-complex metadata for a Delaware Basin (Permian, TX) AOI, then quantifies each plume against the enhancement raster.
 
 ```python
-# earthaccess is bundled in the [earthdata] extra:
-# %pip install "geobrix[light_env6,earthdata] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>-py3-none-any.whl"
+# The env wheel, then earthaccess as a separate step (the env wheels have no [earthdata] extra):
+# %pip install "geobrix @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>+env6-py3-none-any.whl"
+# %pip install "earthaccess>=0.11,<1" "botocore<1.44.0"
 
 import os
 

@@ -29,8 +29,8 @@ Pipeline setup that every route shares (the channel, the GeoBrix extra, Serverle
 - **Three wheels.** The pipeline installs GeoBrix, the connector and the Lakeflow
   community-connectors framework. The framework and the connector are not on PyPI: build them once
   ([step 1](#1-install-three-wheels)).
-- **No spaces around `@`** in the dependency lines, and **match the GeoBrix extra to the pipeline
-  channel's runtime** (`light_dbr18` or `light_dbr19`). See
+- **No spaces around `@`** in the dependency lines, and **match the GeoBrix wheel to the pipeline
+  channel's runtime** (the `+env5` wheel for DBR 18, `+env6` for DBR 19). See
   [Environment](./lakeflow-sdp#environment).
 - **The connection governs access.** Its `root_path` confines every table to that Volume prefix,
   and `USE CONNECTION` controls who can build pipelines on it. Volume grants still apply.

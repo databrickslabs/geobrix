@@ -25,13 +25,14 @@ sample cube, and every block of code on this page is run by the documentation te
 
 ## What you need
 
-Install the extra that matches your runtime. Zarr runs on Databricks Runtime 19 and Serverless
+Install the env6 wheel with its `[zarr]` extra. Zarr runs on Databricks Runtime 19 and Serverless
 environment 6, in the lightweight tier, so there is no JAR to install.
 
-```bash
-pip install "geobrix[light_env6,zarr_env6]"     # Serverless environment 6
-pip install "geobrix[light_dbr19,zarr_dbr19]"   # Databricks Runtime 19
+```python
+%pip install "geobrix[zarr] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>+env6-py3-none-any.whl"
 ```
+
+Off Databricks, the plain wheel's extra is `pip install "geobrix[zarr_dbr19]"`.
 
 The examples use `cube`, `table` and `root`: the path of a Zarr store, the Unity Catalog name of a
 store's manifest table, and a directory on a Volume that GeoBrix writes a store's files to. The `cube`

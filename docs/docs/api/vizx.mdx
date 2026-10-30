@@ -30,13 +30,13 @@ These are driver-side, single-node helpers for inspecting results in a notebook 
 ## Installation
 
 ```bash
-pip install "geobrix[vizx]"
+pip install "geobrix[vizx]"   # the plain wheel, off Databricks
 ```
 
 From a Databricks notebook (commonly alongside the lightweight tier):
 
 ```python
-%pip install --quiet "geobrix[light_env6,vizx] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-0.6.0-py3-none-any.whl"
+%pip install --quiet "geobrix[vizx] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>+env6-py3-none-any.whl"
 ```
 
 ## Import

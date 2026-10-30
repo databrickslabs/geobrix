@@ -57,19 +57,19 @@ GeoBrix supports the following Databricks Runtime releases:
 | **18** | 24.04 | 4.1.0 | 3.12.3 | 2.13.16 | 21 | ✅ Supported |
 | **19** | 24.04 | 4.2.0 | 3.12.3 | 2.13.18 | 21 | ✅ Supported |
 
-A **single wheel + single JAR** runs on 17.3, 18, and 19: Scala 2.13 minor versions are binary-compatible, the JAR is compiled to Java-17 bytecode so it loads on all three JVMs, and Spark is a `provided` dependency.
+A **single JAR** runs on 17.3, 18, and 19: Scala 2.13 minor versions are binary-compatible, the JAR is compiled to Java-17 bytecode so it loads on all three JVMs, and Spark is a `provided` dependency.
 
-GeoBrix Light uses **explicit, runtime-pinned extras** — each install names the target runtime. On Serverless use `[light_env6]` (environment v6, recommended) or `[light_env5]` (env 5); on classic clusters use `[light_dbr17]`, `[light_dbr18]`, or `[light_dbr19]`. See [Installation](https://databrickslabs.github.io/geobrix/docs/installation#whl-only) for the full extras table.
+On Databricks, GeoBrix installs as the **env wheel** for the runtime, with no light extra to pick: `geobrix-<version>+env6-py3-none-any.whl` for Serverless environment 6 (recommended), DBR 19, SQL warehouses and UC functions; `geobrix-<version>+env5-py3-none-any.whl` for Serverless environment 5, DBR 17.3 / 18 and Lakeflow pipelines. Each carries its own GDAL, PROJ and GEOS. The plain wheel, `geobrix-<version>-py3-none-any.whl`, is for use off Databricks. See [Installation](https://databrickslabs.github.io/geobrix/docs/installation#whl-only) for the wheels and their extras.
 
 ## Quick start (lightweight)
 
-Stage the wheel (a [Releases](https://github.com/databrickslabs/geobrix/releases) artifact, not on PyPI) in a Unity Catalog Volume, then install the `[light_env6]` extra (Serverless env 6, recommended):
+Stage the env wheel for your runtime (a [Releases](https://github.com/databrickslabs/geobrix/releases) artifact, not on PyPI) in a Unity Catalog Volume, then install it (Serverless env 6, recommended; add feature extras such as `[vizx]` on the same line):
 
 ```python
-%pip install "geobrix[light_env6] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>-py3-none-any.whl"
+%pip install "geobrix @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>+env6-py3-none-any.whl"
 ```
 
-> **Use the quoted `geobrix[light_env6] @ file://…` form** (PEP 508, one argument). Don't put the extra on the path (`'/Volumes/…/…whl[light_env6]'`) — on Serverless, `%pip` keeps the surrounding quotes and pip reads `[light_env6]` as part of the filename, failing with *"Expected package name at the start of dependency specifier."* The named form installs cleanly on Serverless, standard/shared, and ARM.
+> **Use the quoted `geobrix[<extras>] @ file://…` form** (PEP 508, one argument). Don't put an extra on the path (`'/Volumes/…/…whl[vizx]'`) — on Serverless, `%pip` keeps the surrounding quotes and pip reads `[vizx]` as part of the filename, failing with *"Expected package name at the start of dependency specifier."* The named form installs cleanly on Serverless, standard/shared, and ARM.
 
 ```python
 from databricks.labs.gbx.ds.register import register   # *_gbx readers/writers

@@ -33,6 +33,40 @@ one field-type mapping shared by both vector reader tiers, and raster tessellati
 centroid chips match across tiers and scale to scene-sized tiles, with tiling that keeps every
 window in both tiers.
 
+### Installation — one env wheel per runtime family, no light extra (breaking)
+
+- **On Databricks, install the env wheel for the runtime, with no light extra.**
+  `geobrix-<version>+env6-py3-none-any.whl` is for Serverless environment 6, DBR 19, DBR 19 ML,
+  SQL warehouses and UC functions; `geobrix-<version>+env5-py3-none-any.whl` is for Serverless
+  environment 5, DBR 17.3, DBR 18 and Lakeflow pipelines. Each carries its own GDAL, PROJ and
+  GEOS with `rasterio`, `pyogrio`, `pyproj`, `shapely`, `netCDF4` and GDAL's `osgeo` built
+  against them, so a process runs one GDAL, and it holds the runtime's preinstalled packages. The
+  env wheel of the other family refuses to import, naming the file to install.
+- **Migration:** replace `"geobrix[light_env6,<extras>] @ file:///Volumes/…/geobrix-<version>-py3-none-any.whl"`
+  with `"geobrix[<extras>] @ file:///Volumes/…/geobrix-<version>+env6-py3-none-any.whl"`
+  (`+env5` where you used `light_env5`, `light_dbr17` or `light_dbr18`). The `_all` forms become
+  `[stac,vizx]`, plus `[zarr]` on the env6 wheel (the env wheels' extras are `stac`, `vizx`,
+  `databricks`, and `zarr` on env6). The 0.5.x light extras (`light_env5`, `light_env6`,
+  `light_dbr17`, `light_dbr18`, `light_dbr19` and their `_all` forms) fail at resolution (pip:
+  `ResolutionImpossible`), naming the env wheel to install, so an old install line stops rather
+  than installs something else. See [Installation](./installation#whl-only).
+- **`[overture]` and `[earthdata]` are not on the env wheels.** Each changes further preinstalled
+  packages; install their packages as a separate step after the wheel if you need them:
+  `overturemaps` (it raises `click` and `tqdm`) and `earthaccess` (it raises `fsspec`).
+- **`[vizx]` no longer installs a second GDAL.** The env wheels carry `geopandas` and
+  `contextily`, so `[vizx]` no longer installs PyPI's `rasterio`, `pyogrio`, `pyproj` and
+  `shapely` beside them (about 265 MB, and their own GDAL, PROJ and GEOS), and no longer moves
+  `click` (Graviton, DBR 19) or `psutil` (DBR 17.3 / 18, environment 5).
+- **`requests` on Serverless environment 5 and DBR 17.3 / 18.** Those runtimes ship
+  `requests` 2.32.3, which can send `~/.netrc` credentials for one host to another
+  (CVE-2024-47081). The env5 wheel's `[stac]` and `[vizx]` require 2.32.4 or later, below 2.33,
+  so installing either raises `requests` to the latest 2.32 release. Environment 6 and DBR 19
+  ship 2.32.5, and nothing moves there.
+- **The plain wheel is for use off Databricks.** `geobrix-<version>-py3-none-any.whl` now
+  declares the lightweight tier as its base dependencies (floors only), so `pip install geobrix`
+  gives a working lightweight tier on a laptop or another Python, with PyPI's GDAL stack. Its
+  feature extras are unchanged.
+
 ### Incremental ingestion — `read_paths` and `declare_ingest` (new)
 
 - **`read_paths` reads a DataFrame of file paths with any lightweight reader.** Give it a batch
@@ -92,7 +126,7 @@ window in both tiers.
   `skip` or `quarantine`, a header that declares more points than the chunk table holds is read up
   to the points the table holds, so a highly compressible file (50,000 identical points) is read
   in full rather than cut short by a guess at the size of a point. The LAZ decoder `lazrs` must be
-  0.8.2 or later: the lightweight extras require it, because earlier versions print a Rust panic
+  0.8.2 or later: GeoBrix requires it, because earlier versions print a Rust panic
   in the executor logs when a file declares more points than its chunks hold.
 - **LAZ point data with a run of `0xFF` bytes is set aside before decoding.** The GPS-time decoder
   of `lazrs` (point formats 1 and 3 to 10; formats 0 and 2 are not affected) calls itself without a
@@ -926,7 +960,7 @@ formats.
   `mjohns797/geobrix:env6-arm` (the newest release), and for x86 (amd64) as
   `mjohns797/geobrix:<version>-env6-x86` and `mjohns797/geobrix:env6-x86`. Both are built on the
   DCS vNext environment 6 images and carry native GDAL 3.11.4 with its Java (JNI) bindings, the
-  GeoBrix wheel (installed with `[light_env6,vizx]`: the core lightweight tier plus visualization)
+  GeoBrix wheel (installed with `[vizx]`: the core lightweight tier plus visualization)
   and the GeoBrix JAR in `/databricks/jars`. Start a dedicated cluster on DBR 19 from the tag that
   matches its instance architecture and set
   `spark.databricks.unityCatalog.volumes.enabled true`: there is no init script and no cluster
@@ -1013,48 +1047,41 @@ formats.
 ### Dependencies
 
 - **GeoBrix no longer installs PySpark (breaking for local installs).** On Databricks the
-  runtime provides PySpark, so `%pip install geobrix[...]` no longer downloads a second copy.
+  runtime provides PySpark, so installing GeoBrix no longer downloads a second copy.
   If you run GeoBrix against a local Spark session, install `pyspark>=4.0.0` alongside it. See
   [Installation](./installation).
-- **LiDAR stack:** the lightweight extras now take `laspy` 2.7 with `lazrs` 0.8 (bumped
+- **LiDAR stack:** the lightweight tier now takes `laspy` 2.7 with `lazrs` 0.8 (bumped
   together; `laspy` 2.7 requires `lazrs` 0.8).
 - **Newer minimums for `numexpr`, `tippecanoe` and `overturemaps`.** The lightweight install
   now requires `numexpr` 2.14.1 or later, the `vizx` extra `tippecanoe` 2.72.0 or later, and the
   `overture` extra `overturemaps` 1.0.2 or later. None of the three is preinstalled on a
   supported runtime. The `overture` extra still raises `click` and `tqdm` on install, because
   `overturemaps` 1.x requires `click` 8.3 or later and `tqdm` 4.67.3 or later.
-- **The `_all` extras install on aarch64 (Graviton) compute.** `light_dbr19_all` and
-  `light_env6_all` hold `click` at the runtime's 8.2.x. Because `rasterio` 1.4.4 and later
-  exclude `click` 8.2.x, that hold pins `rasterio` to 1.4.3, which has no Python 3.12 aarch64
-  wheel on PyPI, so on aarch64 the install failed to resolve (or compiled `rasterio` from source
-  and needed GDAL headers). On aarch64 the hold is now skipped: `click` moves from 8.2.1 to
-  8.5.0 and `rasterio` takes 1.5.x, which is what `light_dbr19` and `light_env6` already do.
-  x86_64 is unchanged: `click` stays at 8.2.1 and `rasterio` stays at 1.4.3.
 - **`rio-tiler` now imports on Serverless environment 5 and Databricks Runtime 17.3 and 18.**
   `rio-tiler` 9.x needs `typing_extensions` 4.13 or later. Those runtimes ship 4.12.2 and the
-  lightweight extras only asked for 4.12, so `import rio_tiler` failed with a `TypeError`: the
-  lightweight `rst_tilexyz` and `rst_xyzpyramid` functions fell back to the rasterio renderer, and
-  `pmtiles_gbx` with `source="raster"` could not render tiles. The extras now require
-  `typing_extensions` 4.13 or later, so installing them on those three runtimes upgrades
+  0.5.x lightweight extras only asked for 4.12, so `import rio_tiler` failed with a `TypeError`:
+  the lightweight `rst_tilexyz` and `rst_xyzpyramid` functions fell back to the rasterio renderer,
+  and `pmtiles_gbx` with `source="raster"` could not render tiles. GeoBrix now requires
+  `typing_extensions` 4.13 or later, so installing it on those three runtimes upgrades
   `typing_extensions` (a pure-Python package with no dependencies) to the latest release.
   Serverless environment 6, Databricks Runtime 19 and Databricks Runtime 19 ML already ship 4.15
   and install exactly as before.
-- **`rio-tiler` is no longer held below 9.3.** The lightweight extras allowed `rio-tiler` 9.0 up
-  to, but not including, 9.3, because 9.3.0 failed to import on Python 3.12: the same
+- **`rio-tiler` is no longer held below 9.3.** The 0.5.x lightweight extras allowed `rio-tiler`
+  9.0 up to, but not including, 9.3, because 9.3.0 failed to import on Python 3.12: the same
   `typing_extensions` problem as above, not a fault in `rio-tiler`. With the `typing_extensions`
   4.13 floor, `rio-tiler` 9.3 and later import on Serverless environments 5 and 6 and Databricks
-  Runtime 17.3, 18 and 19. The extras now allow any `rio-tiler` 9 release, so a new install takes
-  9.4 instead of 9.2; no other package in the extras changes.
-- **The lightweight extras no longer hold `idna` at the runtime's version.** `rio-tiler` 9.2 and
+  Runtime 17.3, 18 and 19; the env wheels carry 9.4.
+- **GeoBrix no longer holds `idna` at the runtime's version.** `rio-tiler` 9.2 and
   later fetch remote rasters through `httpx2`, and the fixed releases of `httpx2` (2.12 or later)
   and `httpcore2` (2.10 or later) need `idna` 3.18 or later. With `idna` held at the runtime's
   copy (3.7 on Serverless environment 5 and Databricks Runtime 17.3 and 18, 3.11 on environment 6
   and Databricks Runtime 19), pip fell back to `httpx2` 2.3.0 and `httpcore2` 2.3.0, which have
-  high-severity advisories. Installing a light extra now installs `httpx2` and `httpcore2` 2.16
+  high-severity advisories. Installing GeoBrix now installs `httpx2` and `httpcore2` 2.16
   and upgrades `idna` (to 3.20) on every runtime. Because the fixed `httpx2` also needs `anyio`
   4.10 or later and `httpcore2` needs `h11` 0.16 or later, the install upgrades `anyio` on
   Serverless environment 5 and Databricks Runtime 17.3 and 18 (they ship 4.6 or 4.7), and `h11`
-  on Databricks Runtime 17.3 (it ships 0.14). Databricks may show its one-time "a core package
+  on Databricks Runtime 17.3 (it ships 0.14), with that runtime's `httpcore` from 1.0.2 to 1.0.9,
+  the release that accepts the new `h11`. Databricks may show its one-time "a core package
   changed" notice. A `%pip` install restarts Python on Databricks (the steps in
   [Installation](./installation) end with an explicit restart where they force-reload), so the
   new versions are in effect afterwards; `requests` and `urllib3` work with the new `idna`
@@ -1066,9 +1093,8 @@ formats.
   `rasterio` share one GDAL in a process (`osgeo_utils` comes without `gdal_merge` and
   `gdal2tiles`, which are not under GDAL's MIT licence). GDAL's viewshed and COG driver do the work
   `xarray-spatial` and `rio-cogeo` did (`numba` came with `xarray-spatial`), and
-  `rst_cog_convert` takes the same profile names. The lightweight extras now install `xarray`
-  themselves (it came with `xarray-spatial`) and no longer list `httpcore`, which nothing they
-  install needs; the `photogrammetry` extras no longer list
+  `rst_cog_convert` takes the same profile names. GeoBrix now installs `xarray` itself (it came
+  with `xarray-spatial`); the `photogrammetry` extras no longer list
   `rio-cogeo`, `folium`, `pymbtiles` or `mercantile`, which nothing in them used.
 - **The GeoBrix JAR no longer bundles the Scala standard library;** Databricks Runtime provides
   it. Nothing changes for users.

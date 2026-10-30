@@ -49,19 +49,22 @@ def test_framework_commit_is_the_one_the_connector_is_tested_against():
 
 def test_build_commands_build_the_wheels_the_pipeline_installs():
     """The two `pip wheel` targets are the packages whose wheels the dependency
-    lines name; the GeoBrix line names a shipped extra."""
+    lines name; the GeoBrix line names an env wheel (and only extras it ships)."""
     pyproject = tomllib.loads((REPO / "connectors/lakeflow/pyproject.toml").read_text())
     connector = pyproject["project"]["name"].replace("-", "_")
     assert "./geobrix/connectors/lakeflow" in ex.BUILD_WHEELS
     assert "lakeflow-community-connectors @ git+" in ex.BUILD_WHEELS
     lines = ex.PIPELINE_DEPENDENCIES.splitlines()
     assert len(lines) == 3 and not any(re.search(r"\s", line) for line in lines)
-    assert re.fullmatch(r"geobrix\[light_dbr\d+\]@file:///Volumes/\S+\.whl", lines[0])
+    # the env wheel for the pipeline's runtime (no light extra); any extra is one that wheel ships
+    m = re.fullmatch(
+        r"geobrix(?:\[([\w,]+)\])?@file:///Volumes/\S+/geobrix-<version>\+env([56])-py3-none-any\.whl", lines[0]
+    )
+    assert m, lines[0]
     assert lines[1].endswith("/lakeflow_community_connectors-<version>-py3-none-any.whl")
     assert lines[2].endswith(f"/{connector}-<version>-py3-none-any.whl")
-    geobrix = tomllib.loads((REPO / "python/geobrix/pyproject.toml").read_text())
-    extra = re.search(r"\[(\w+)\]", lines[0]).group(1)
-    assert extra in geobrix["project"]["optional-dependencies"]
+    shipped = {f.stem.removeprefix("extra-") for f in (REPO / f"python/geobrix/envs/env{m.group(2)}").glob("extra-*.txt")}
+    assert set((m.group(1) or "").split(",")) - {""} <= shipped
     assert "geobrix>=0.6.0" in pyproject["project"]["dependencies"]  # "0.6.0 or later"
 
 

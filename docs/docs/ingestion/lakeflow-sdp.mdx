@@ -38,21 +38,21 @@ Two GeoBrix examples ship as complete Lakeflow SDP bundles. Each opens on its La
 
 ## Environment
 
-### Match the GeoBrix extra to the channel
+### Match the GeoBrix wheel to the channel
 
 A pipeline runs on the Databricks Runtime of its **channel**, not on a Serverless environment
-version. Install GeoBrix with the extra for that runtime:
+version. Install the GeoBrix env wheel for that runtime:
 
-| Channel | Runtime as of v0.6.0 (October 2026) | GeoBrix extra |
+| Channel | Runtime as of v0.6.0 (October 2026) | GeoBrix wheel |
 |---------|-------------------------------------|---------------|
-| `CURRENT` (default) | DBR 18 | `light_dbr18` |
-| `PREVIEW` | DBR 19 | `light_dbr19` |
+| `CURRENT` (default) | DBR 18 | `geobrix-<version>+env5-py3-none-any.whl` |
+| `PREVIEW` | DBR 19 | `geobrix-<version>+env6-py3-none-any.whl` |
 
 Channels move to newer runtimes over time. Check the
 [current channel versions](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions)
-when you create or update a pipeline, and change the extra when the runtime changes: a DBR 19
-runtime takes `light_dbr19`, whichever channel it is on. See [Installation](../installation) for
-every extra.
+when you create or update a pipeline, and change the wheel when the runtime changes: a DBR 19
+runtime takes the `+env6` wheel, whichever channel it is on (the other family's wheel refuses to
+import). See [Installation](../installation) for the wheels and their extras.
 
 ### Dependency lines
 
@@ -79,7 +79,7 @@ Or straight from the GitHub release, when the pipeline's compute can reach githu
 
 - **No spaces around `@`.** A pipeline installs each dependency line with an unquoted
   `%pip install`, so spaces split the requirement and the install fails.
-- **All extras on one line**, for example `geobrix[light_dbr18,vizx]@...`. Each line is a separate
+- **All extras on one line**, for example `geobrix[stac,vizx]@...`. Each line is a separate
   `%pip install`, and extras split across lines can force pip to rebuild packages it already
   installed and fail the install.
 - **Volume or GitHub.** A Volume wheel works in every workspace; workspaces that restrict outbound

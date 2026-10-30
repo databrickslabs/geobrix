@@ -11,8 +11,9 @@ import org.gdal.gdal.gdal
   */
 object StaleNativeDirProbe {
 
+    /** Removes the tree, links as links: a link to a directory is not entered (its target is the staged payload's). */
     private def delete(f: File): Unit = {
-        Option(f.listFiles()).foreach(_.foreach(delete))
+        if (!Files.isSymbolicLink(f.toPath)) Option(f.listFiles()).foreach(_.foreach(delete))
         f.delete()
         ()
     }

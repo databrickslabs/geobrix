@@ -855,6 +855,14 @@ class LidarGbxWriter(DataSourceWriter):
                 f"lidar_gbx merge: no .laz/.las files under {self.path} to merge."
             )
 
+        # The parts of a post-hoc merge are files this job did not write. Refuse, by name, any LAZ
+        # part the decoder must not be given (the reader's own guard) before laspy opens one: a
+        # garbled chunk table or a dense run of 0xFF bytes can end the process, not raise.
+        from databricks.labs.gbx.ds.lidar import check_laz
+
+        for p in parts:
+            check_laz(p, f"lidar_gbx merge: {os.path.basename(p)}")
+
         # Scan every part's point format to detect heterogeneous RGB/XYZ mixes.
         # A merged LAS has a single point format; mixing RGB and XYZ-only parts
         # either raises AttributeError (las.red on XYZ-only) or silently drops

@@ -11,12 +11,14 @@ No Docker and no network: the workflows are read as YAML, native_inputs.py runs 
 holds copies of the real input files, jvm_payload.py on a fake native tree.
 """
 
+import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import zipfile
 
 import pytest
 import yaml
@@ -60,8 +62,8 @@ def _paths(step):
 
 def test_the_payload_cache_is_keyed_on_the_native_build_inputs():
     """One key, the hash of the native build's inputs, wherever the payload cache is read or written; no fallback to
-    another key (a payload built from other inputs is not this one); saved only on pushes to main and the release
-    branch."""
+    another key (a payload built from other inputs is not this one); saved on pushes to main and the release branch
+    and on pull requests from this repository (not forks); the pinned sources are saved also after a failed build."""
     (builder,) = _load(BUILDER)["jobs"].values()
     fetch = _load(FETCH)["runs"]["steps"]
     paths = None
@@ -78,9 +80,66 @@ def test_the_payload_cache_is_keyed_on_the_native_build_inputs():
     cond = re.sub(r"\s+", " ", save["if"])
     assert "github.event_name == 'push'" in cond
     assert "refs/heads/main" in cond and "refs/heads/streamline/0.6.0" in cond
+    assert "github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository" in cond
+    (sources,) = [
+        s
+        for s in builder["steps"]
+        if s.get("uses", "").startswith("actions/cache/save@") and "build/native/src" in s["with"]["path"]
+    ]
+    cond = re.sub(r"\s+", " ", sources["if"])
+    assert cond.startswith("always() ") and "hashFiles('build/native/src/**') != ''" in cond
     # the builder builds what the cache holds: both targets, with the command the developers use
     run = " ".join(s.get("run", "") for s in builder["steps"])
     assert "gbx-build-native.sh --arch x86_64" in run
+
+
+def _run_key_step(tmp_path, step, python3):
+    """A key step's `run:` as Actions runs it, with `python3` (and `uname -m`: x86_64) shims first on PATH."""
+    shims = tmp_path / "shims"
+    shims.mkdir(exist_ok=True)
+    (shims / "python3").write_text("#!/bin/sh\n" + python3)
+    (shims / "uname").write_text("#!/bin/sh\necho x86_64\n")
+    for f in shims.iterdir():
+        f.chmod(0o755)
+    out = tmp_path / "github_output"
+    out.write_text("")
+    env = dict(os.environ, PATH=f"{shims}{os.pathsep}{os.environ['PATH']}", GITHUB_OUTPUT=str(out))
+    res = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", step["run"]], env=env, cwd=tmp_path,
+                         capture_output=True, text=True)
+    return res, out.read_text()
+
+
+@pytest.mark.parametrize("where", ["builder", "consumer"])
+def test_a_failed_input_hash_fails_the_key_step(tmp_path, where):
+    """A failed hash stops the step; it never writes an empty `hash=`, which would make every failing run share the
+    constant key native-out-x86_64- (and restore a stale build)."""
+    steps = _load(BUILDER)["jobs"]["build-x86_64"]["steps"] if where == "builder" else _load(FETCH)["runs"]["steps"]
+    (step,) = [s for s in steps if HASH_RUN in s.get("run", "")]
+
+    good, out = _run_key_step(tmp_path, step, "echo " + "ab" * 32 + "\n")
+    assert good.returncode == 0, good.stdout + good.stderr
+    assert f"hash={'ab' * 32}" in out
+
+    bad, out = _run_key_step(tmp_path, step, "exit 2\n")
+    assert bad.returncode != 0
+    assert "hash=" not in out
+
+
+def test_the_direct_download_probe_names_a_download_with_no_reachable_origin():
+    sys.path.insert(0, str(REPO_ROOT / "scripts" / "native"))
+    import egress_probe
+
+    pins = {
+        "ZLIB_URL": "https://blocked-a.example/zlib.tar.gz",
+        "ZLIB_URL2": "https://mirror.example/zlib.tar.gz",  # the mirror answers: zlib has an origin
+        "PROJ_URL": "https://blocked-b.example/proj.tar.gz",
+        "PROJ_URL2": "single-source",
+        "RUSTUP_URL": "https://mirror.example/rustup/{triple}/rustup-init",
+    }
+    errors = egress_probe.probe(pins, lambda host: not host.startswith("blocked"))
+    assert len(errors) == 1 and errors[0].startswith("::error::direct egress blocked: blocked-b.example")
+    assert "pins.conf PROJ_URL" in errors[0] and "Direct fetches" in errors[0]
+    assert egress_probe.probe(pins, lambda host: True) == []
 
 
 def _jvm_jobs():
@@ -98,8 +157,11 @@ def test_every_jvm_job_links_the_payload_jni_before_its_tests():
     put on a JVM's library path anywhere in CI."""
     found = list(_jvm_jobs())
     assert {w for w, *_ in found} >= {"build_main.yml", "build_python.yml", "build_scala.yml"}
+    builder_group = _load(BUILDER)["jobs"]["build-x86_64"]["runs-on"]
     for wf, name, job, jobs in found:
         where = f"{wf}:{name}"
+        # one runner group for the saving and the restoring side: a cache entry's version includes its compression
+        assert job["runs-on"] == builder_group, where
         needs = job.get("needs", [])
         needs = [needs] if isinstance(needs, str) else needs
         assert any(
@@ -154,14 +216,14 @@ def _git(root, *args):
 
 @pytest.fixture
 def tree(tmp_path):
-    """A scratch git repository holding copies of the real gate inputs, plus one file that is no input."""
+    """A scratch git repository holding copies of the real gate inputs, plus files that are no input: the JVM side no
+    gate check runs (GDALManager.scala, the committed GDAL Java classes) and a script beside the inputs."""
     res = _inputs("files", "--set", "gate")
     assert res.returncode == 0, res.stderr
     root = tmp_path / "repo"
-    for rel in res.stdout.split():
+    for rel in res.stdout.split() + NOT_INPUTS:
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(REPO_ROOT / rel, root / rel)
-    (root / "scripts/native/build_env_wheel.py").write_text("# not a native input\n")
     _git(root, "init", "-q")
     _git(root, "add", "-A")
     return root
@@ -182,14 +244,19 @@ def _edit(root, rel, fn):
 
 
 GDALMANAGER = "src/main/scala/com/databricks/labs/gbx/rasterx/gdal/GDALManager.scala"
+NOT_INPUTS = [GDALMANAGER, "scripts/native/redact.py"]
+APPEND = lambda b: b + b"\n# x\n"  # noqa: E731
 EDITS = {  # edit -> (does the build hash move, does the gate hash move)
     "a pin value": ("scripts/native/pins.conf", lambda b: b.replace(b"GDAL_VERSION=3", b"GDAL_VERSION=4", 1), True, True),
     "a pins.conf comment": ("scripts/native/pins.conf", lambda b: b"# a note\n" + b, False, False),
-    "a recipe the Dockerfile copies": ("scripts/native/build-gdal.sh", lambda b: b + b"\n# x\n", True, True),
-    "the Dockerfile": ("scripts/native/build.Dockerfile", lambda b: b + b"\n# x\n", True, True),
-    "GDALManager": (GDALMANAGER, lambda b: b + b"\n// x\n", False, True),
-    "the activation rules": ("python/geobrix/src/databricks/labs/gbx/_native/_rules.py", lambda b: b + b"\n# x\n", False, True),
-    "a file that is no input": ("scripts/native/build_env_wheel.py", lambda b: b + b"# x\n", False, False),
+    "a recipe the Dockerfile copies": ("scripts/native/build-gdal.sh", APPEND, True, True),
+    "the Dockerfile": ("scripts/native/build.Dockerfile", APPEND, True, True),
+    "the env wheel's builder": ("scripts/native/build_env_wheel.py", APPEND, False, True),
+    "an env file": ("python/geobrix/envs/env6/core.txt", APPEND, False, True),
+    "the activation rules": ("python/geobrix/src/databricks/labs/gbx/_native/_rules.py", APPEND, False, True),
+    "a check script": ("scripts/native/check-env-wheel.sh", APPEND, False, True),
+    "GDALManager (no gate check runs it)": (GDALMANAGER, lambda b: b + b"\n// x\n", False, False),
+    "a file that is no input": ("scripts/native/redact.py", APPEND, False, False),
 }
 
 
@@ -224,8 +291,10 @@ def _logs(tmp_path, bad=None):
     "case, edit, code",
     [
         ("unchanged inputs", None, 0),
-        ("a native input changed", ("scripts/native/build-deps.sh", lambda b: b + b"\n# x\n"), 1),
+        ("a native input changed", ("scripts/native/build-deps.sh", APPEND), 1),
+        ("an env file changed", ("python/geobrix/envs/env5/base.txt", APPEND), 1),
         ("a comment in pins.conf", ("scripts/native/pins.conf", lambda b: b"# a note\n" + b), 0),
+        ("only GDALManager changed", (GDALMANAGER, APPEND), 0),
     ],
 )
 def test_ci_fails_a_stale_arch_gate_stamp(tree, tmp_path, case, edit, code):
@@ -242,7 +311,7 @@ def test_ci_fails_a_stale_arch_gate_stamp(tree, tmp_path, case, edit, code):
 
     assert res.returncode == code, res.stdout + res.stderr
     if code:
-        assert "build-deps.sh" in res.stdout and "gbx-native-verify-arches.sh" in res.stdout
+        assert edit[0] in res.stdout and "gbx-native-verify-arches.sh" in res.stdout
 
 
 @pytest.mark.parametrize("bad", [("aarch64", "verify_native"), ("x86_64", "env5")])
@@ -253,10 +322,64 @@ def test_a_failed_check_writes_no_stamp(tree, tmp_path, bad):
     assert bad[0] in res.stdout
 
 
+def _commit(root, msg):
+    _git(root, "add", "-A")
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", msg)
+    return subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+
+
+def _wheels(root, sha, dirty=False, manifest=b'{"arch": "a"}'):
+    """dist/env5 and dist/env6 wheels built at `sha`, and the stage-native trees they were built from."""
+    for env in (5, 6):
+        d = root / "dist" / f"env{env}"
+        d.mkdir(parents=True)
+        with zipfile.ZipFile(d / f"geobrix-0.6.0+env{env}-py3-none-any.whl", "w") as zf:
+            zf.writestr("databricks/labs/gbx/_build_info.py", f'GIT_SHA = "{sha}"\nGIT_DIRTY = {dirty}\n')
+            for a in ARCHES:
+                zf.writestr(f"databricks/labs/gbx/_native/{a}/MANIFEST.json", manifest)
+    for a in ARCHES:
+        m = root / "build/native/out" / a / "stage-native/gdal-native/MANIFEST.json"
+        m.parent.mkdir(parents=True)
+        m.write_bytes(b'{"arch": "a"}')
+
+
+ENV_FILE = "python/geobrix/envs/env6/core.txt"
+PROVENANCE = {  # case -> (what happens after the wheels' commit, exit code, a word of the message)
+    "one build from HEAD's inputs": (None, 0, "BUILT_FROM="),
+    "a dirty wheel": ("dirty", 1, "dirty"),
+    "an env file committed after the wheels": ("commit-env", 1, ENV_FILE),
+    "only a check script committed after (no rebuild)": ("commit-check", 0, "BUILT_FROM="),
+    "an uncommitted native input": ("uncommitted", 1, "PRECONDITION MISSING"),
+    "the tree is not the wheels' build": ("manifest", 1, "is not the"),
+}
+
+
+@pytest.mark.parametrize("case", PROVENANCE)
+def test_the_gate_verifies_only_trees_and_wheels_built_from_heads_inputs(tree, case):
+    after, code, word = PROVENANCE[case]
+    sha = _commit(tree, "inputs")
+    _wheels(tree, sha, dirty=after == "dirty", manifest=b"{}" if after == "manifest" else b'{"arch": "a"}')
+    (tree / ".gitignore").write_text("/dist/\n/build/\n")
+    _commit(tree, "ignore")
+    if after == "commit-env":
+        _edit(tree, ENV_FILE, APPEND)
+        _commit(tree, "env")
+    elif after == "commit-check":
+        _edit(tree, "scripts/native/verify-native.sh", APPEND)
+        _commit(tree, "check")
+    elif after == "uncommitted":
+        _edit(tree, ENV_FILE, APPEND)
+
+    res = _inputs("provenance", root=tree)
+
+    assert res.returncode == code, res.stdout + res.stderr
+    assert word in res.stdout
+
+
 # --- the JVM payload ------------------------------------------------------------------------------------------------
 
 
-def _native_tree(root, extra_lib=None):
+def _native_tree(root, extra_lib=None, tampered=None):
     lib = root / "lib"
     for d in ("pkgconfig", "cmake"):
         (lib / d).mkdir(parents=True)
@@ -273,25 +396,34 @@ def _native_tree(root, extra_lib=None):
     for rel in ("share/proj/proj.db", "share/gdal/osmconf.ini", "include/gdal.h"):
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         (root / rel).write_text(rel)
+    files = {
+        str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob("*") if p.is_file()
+    }
+    if tampered:  # the bytes on disk are no longer the build's (a partly restored cache entry)
+        (root / tampered).write_bytes(b"truncated")
     manifest = {"arch": "x86_64", "jni": "libgdalalljni.so", "sonames": {"libgdal.so.39": "libgdal-0123abcd.so.39"},
-                "versions": {"gdal": "3.13.3"}}
+                "versions": {"gdal": "3.13.3"}, "files": files}
     (root / "MANIFEST.json").write_text(json.dumps(manifest))
 
 
-@pytest.mark.parametrize("stray", [None, "libsqlite3.so.0"])
-def test_the_jvm_payload_is_the_layout_gdalmanager_reads(tmp_path, stray):
+@pytest.mark.parametrize(
+    "stray, tampered",
+    [(None, None), ("libsqlite3.so.0", None), (None, "lib/libgdal-0123abcd.so.39"), (None, "share/proj/proj.db")],
+)
+def test_the_jvm_payload_is_the_layout_gdalmanager_reads(tmp_path, stray, tampered):
     """<root>/_native/<arch>/lib/libgdalalljni.so with <root>/_native/share beside it: GDALManager's payload layout (its
-    data is <dir>/../share/{proj,gdal}), as the env wheel lays it out; a lib/ that is not MANIFEST.json's is refused."""
+    data is <dir>/../share/{proj,gdal}), as the env wheel lays it out; a lib/ that is not MANIFEST.json's, or a file
+    whose bytes are not the ones MANIFEST.json records, is refused."""
     native, out = tmp_path / "gdal-native", tmp_path / "payload"
-    _native_tree(native, stray)
+    _native_tree(native, stray, tampered)
 
     res = subprocess.run(
         [sys.executable, str(JVM_PAYLOAD), "--native", str(native), "--arch", "x86_64", "--out", str(out)],
         capture_output=True, text=True,
     )
 
-    if stray:
-        assert res.returncode == 1 and stray in res.stdout + res.stderr
+    if stray or tampered:
+        assert res.returncode == 1 and (stray or tampered) in res.stdout + res.stderr
         return
     assert res.returncode == 0, res.stdout + res.stderr
     d = out / "_native" / "x86_64"

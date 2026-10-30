@@ -7,9 +7,9 @@ description: 'The x86_64 native build this run found or made, laid out as the pa
 # or makes it. This action reads it: from the cache (the same key and paths as the builder's), else from this run's
 # native-out-x86_64 artifact (the builder uploads it when it built, for a run that does not save the cache). Then
 # scripts/native/jvm_payload.py lays out build/native/jvm-payload (_native/x86_64/lib with the JNI, _native/share),
-# the env wheel's native layout. Pass the `root` output to .github/actions/scala_build (native_root), which links
-# /usr/lib/libgdalalljni.so to that payload's JNI before the first test JVM. No Python bindings are laid out: the
-# jobs' Python processes keep the GDAL they install.
+# the env wheel's native layout, every file checked against MANIFEST.json's sha256. Pass the `root` output to
+# .github/actions/scala_build (native_root), which links /usr/lib/libgdalalljni.so to that payload's JNI before the
+# first test JVM. No Python bindings are laid out: the jobs' Python processes keep the GDAL they install.
 outputs:
   root:
     description: 'The payload root (the GBX_NATIVE_ROOT layout): <root>/_native/x86_64/lib/libgdalalljni.so'
@@ -17,13 +17,17 @@ outputs:
 runs:
   using: "composite"
   steps:
+    # A failed hash must not become a constant key (native-out-x86_64-), which could restore a stale build: the value
+    # is checked before it is written.
     - name: Hash the native build's inputs
       id: key
       shell: bash
       run: |
         set -euo pipefail
         [ "$(uname -m)" = x86_64 ] || { echo "::error::CI's native build is x86_64; this runner is $(uname -m)"; exit 1; }
-        echo "hash=$(python3 scripts/native/native_inputs.py hash --set build)" >> "$GITHUB_OUTPUT"
+        h=$(python3 scripts/native/native_inputs.py hash --set build)
+        [[ $h =~ ^[0-9a-f]{64}$ ]] || { echo "::error::native_inputs.py hash --set build printed '$h', not a sha256"; exit 1; }
+        echo "hash=$h" >> "$GITHUB_OUTPUT"
 
     - name: Restore the cached native build
       id: cache
@@ -48,11 +52,12 @@ runs:
       shell: bash
       env:
         HIT: ${{ steps.cache.outputs.cache-hit }}
+        HASH: ${{ steps.key.outputs.hash }}
       run: |
         set -euo pipefail
         native=build/native/out/x86_64/stage-native/gdal-native
         if [ ! -f "$native/MANIFEST.json" ]; then
-          echo "::error::no x86_64 native build: neither the cache entry native-out-x86_64-<native input hash> nor this run's native-out-x86_64 artifact. The job needs a job that calls .github/workflows/build-gdal-native.yml (cache: true)."
+          echo "::error::no x86_64 native build: neither the cache entry native-out-x86_64-$HASH nor this run's native-out-x86_64 artifact. The job needs a job that calls .github/workflows/build-gdal-native.yml (cache: true), on the same runner group (a cache entry's version includes its compression)."
           exit 1
         fi
         echo "native build from: $([ "$HIT" = true ] && echo the cache || echo this run's artifact)"

@@ -6,29 +6,48 @@ name: Build GDAL native (x86_64)
 # 1. Called by the CI workflows (workflow_call, `cache: true`): the build CI's JVMs load their GDAL from. The JAR's GDAL
 #    Java classes are the native build's (pom.xml gdal.java.version) and GDALManager refuses any other JNI, so a job
 #    that runs a GeoBrix JVM needs the job that calls this one, then .github/actions/native_payload (which reads the
-#    build) and .github/actions/scala_build (which links the JVM's JNI to it). Cached on the hash of the native
-#    build's inputs (scripts/native/native_inputs.py hash --set build: pins.conf's KEY=VALUE lines, build.Dockerfile,
-#    every recipe it copies, rust-toolchain.toml): a hit builds nothing; a miss builds stage-native then bindings
-#    (verified as gbx:build:native verifies them; about 20-40 min on this runner). Only a push to main or to the
-#    release branch saves the cache: GitHub scopes a cache to its branch (a branch reads its own and the default
-#    branch's, a pull request also its base branch's), the repository's caches share 10 GB, and an entry unused for 7
-#    days is evicted. A run that built uploads the build as this run's artifact native-out-x86_64 (kept 1 day), which
-#    its JVM jobs read when the cache was not saved. The pinned source tarballs are cached too (keyed on pins.conf,
-#    falling back to the latest earlier entry: prefetch.sh keeps every file whose sha256 still matches). Nothing is
-#    published.
+#    build) and .github/actions/scala_build (which links the JVM's JNI to it).
+#    - Cached on the hash of the native build's inputs (scripts/native/native_inputs.py hash --set build: pins.conf's
+#      KEY=VALUE lines, build.Dockerfile, every recipe it copies or mounts, rust-toolchain.toml). The orchestration is
+#      deliberately not in that key, as it is not in the native image tag (pins.py tag-hash): gbx-build-native.sh's
+#      arguments and context assembly, pins.py build-args, and the checks verify-native.sh and test-bindings.sh. A change
+#      to them does not rebuild or re-verify a cached build (the two-architecture gate, gbx:native:verify-arches, hashes
+#      the checks).
+#    - A hit builds nothing; a miss builds stage-native then bindings, each verified as gbx:build:native verifies it
+#      (about 20-40 min). The build is saved on a push to main or to the release branch, and on a pull request from this
+#      repository (in the pull request's own scope, about 62 MB, so its next pushes restore it). GitHub scopes a cache
+#      to its branch: a branch reads its own and the default branch's, a pull request also its base branch's. The
+#      repository's caches share 10 GB, and an entry unused for 7 days is evicted.
+#    - A run that built uploads the build as this run's artifact native-out-x86_64 (kept 1 day), which its JVM jobs read
+#      when the cache was not saved.
+#    - The pinned source downloads are cached too (keyed on pins.conf, falling back to the latest earlier entry:
+#      prefetch.sh keeps every file whose sha256 still matches), saved on the same pushes, also when the build failed.
+#    - A bad entry (a build that verified but is wrong) stays until the inputs change; delete it with
+#      `gh cache delete native-out-x86_64-<hash>` (the hash is in the "Hash the native build's inputs" step), and the
+#      next run rebuilds.
+#    - Runs on larger-runners, as every job that reads the build: a cache entry's version includes its compression, so
+#      saving and restoring on one runner image keeps them equal; the cold build also wants the disk (about 12 GB of
+#      images) and the RAM (6 GB tmpfs build directories).
 # 2. By hand (workflow_dispatch), one target, for when the emulated build on an Apple Silicon machine is too slow or
 #    fails:
 #      gh workflow run build-gdal-native.yml --ref <branch> -f target=<toolchain|stage-native|bindings>
 #      gh run download <run id> -D build/native/out/x86_64/
 #    It uploads what the build wrote to build/native/out/x86_64/.
 #
-# It uses public package indexes and crate registries (the hashed locks hold against them), no repository secrets.
-# Runs on the Databricks-hardened runner group (Labs lockdown policy), like the other workflows. That group does not
-# reach pypi.org or index.crates.io, so pip and the crates go through the JFrog mirror with the OIDC login the other
-# workflows use (jfrog-pip-bootstrap and jfrog-auth, then jfrog-cargo: the toolchain and bindings targets vendor their
-# Rust crates on the runner). The mirror serves a crate version only 7 days after its release. The source tarballs
-# come from their upstream hosts (pins.conf's URLs), checksum-checked; the image build pulls the pinned manylinux
-# image and installs the JDK (dnf) and the Rust toolchain (rustup).
+# Network. Runs on the Databricks-hardened runner groups (Labs lockdown policy), which route package fetches through
+# JFrog: pip and the Rust crates go through the JFrog mirror with the OIDC login the other workflows use
+# (jfrog-pip-bootstrap and jfrog-auth, then jfrog-cargo: the toolchain target vendors Rust crates on the runner). The
+# login is made again before the bindings target, whose prefetch can start after the first token expired. The mirror
+# serves a crate version only 7 days after its release. No repository secrets.
+# Direct fetches: the repository wires JFrog remotes for PyPI, Maven, npm and cargo only (no Docker or generic remote),
+# so a cold build fetches four kinds of thing from their own hosts, each checked by its pin or its signature:
+#   - the pinned downloads of scripts/native/prefetch.sh (pins.conf's *_URL / *_URL2: source tarballs, the bindings'
+#     sdists, rustup-init, cargo-deny, the PROJ grids, rasterio's test data), sha256-checked;
+#   - the manylinux image from quay.io, pinned by digest;
+#   - the JDK from the image's AlmaLinux dnf repositories (rpm signatures);
+#   - the Rust toolchain from static.rust-lang.org (rustup checks it against its manifest).
+# "Check the direct downloads are reachable" probes all four before the build and fails in seconds with one ::error::
+# per blocked host. Only a cold build (a cache miss) fetches anything.
 # This workflow does not interpolate any github.event.* values into run: blocks.
 on:
   workflow_dispatch:
@@ -56,8 +75,8 @@ jobs:
   build-x86_64:
     name: Build ${{ inputs.target || 'stage-native and bindings, cached' }} (x86_64)
     runs-on:
-      group: databrickslabs-protected-runner-group
-      labels: linux-ubuntu-latest
+      group: larger-runners
+      labels: larger
     timeout-minutes: 240
     # The JFrog OIDC exchange runs in the protected environment, as in every other workflow that uses jfrog-auth.
     environment: runtime
@@ -66,20 +85,25 @@ jobs:
       # Required by .github/actions/jfrog-auth: GitHub OIDC token exchange for pip and crates via JFrog.
       id-token: write
     env:
-      TARGETS: ${{ inputs.target || 'stage-native bindings' }}
+      TARGET: ${{ inputs.target }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           persist-credentials: false
 
-      # The cache key, and the key of the pinned sources (pins.conf's KEY=VALUE lines only).
+      # The cache key and the pinned sources' key. A failed hash must not become a constant key (native-out-x86_64-),
+      # under which a stale build would be saved and restored: each value is checked before it is written.
       - name: Hash the native build's inputs
         id: key
         run: |
           set -euo pipefail
-          echo "hash=$(python3 scripts/native/native_inputs.py hash --set build)" >> "$GITHUB_OUTPUT"
-          echo "pins=$(python3 scripts/native/pins.py canonical | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+          h=$(python3 scripts/native/native_inputs.py hash --set build)
+          [[ $h =~ ^[0-9a-f]{64}$ ]] || { echo "::error::native_inputs.py hash --set build printed '$h', not a sha256"; exit 1; }
+          s=$(python3 scripts/native/native_inputs.py hash --set sources)
+          [[ $s =~ ^[0-9a-f]{64}$ ]] || { echo "::error::native_inputs.py hash --set sources printed '$s', not a sha256"; exit 1; }
+          echo "hash=$h" >> "$GITHUB_OUTPUT"
+          echo "sources=$s" >> "$GITHUB_OUTPUT"
 
       # Whether this build is cached (lookup only: this job needs no copy of it).
       - name: Look up the cached build
@@ -102,8 +126,23 @@ jobs:
             build/native/src
             build/native/sdists
             build/native/bin
-          key: native-sources-${{ steps.key.outputs.pins }}
+          key: native-sources-${{ steps.key.outputs.sources }}
           restore-keys: native-sources-
+
+      # The four direct fetches (see "Direct fetches" above), before anything is built.
+      - name: Check the direct downloads are reachable
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          python3 scripts/native/egress_probe.py
+          img=$(python3 scripts/native/pins.py get MANYLINUX_IMAGE_X86_64)
+          docker pull -q "$img" > /dev/null || {
+            echo "::error::direct egress blocked: quay.io (the pinned manylinux image, pins.conf MANYLINUX_IMAGE_X86_64): the cold native build pulls it outside JFrog. See the \"Direct fetches\" list in .github/workflows/build-gdal-native.yml."
+            exit 1; }
+          docker run --rm "$img" bash -c 'dnf -q -y makecache > /dev/null' || {
+            echo "::error::direct egress blocked: the AlmaLinux dnf repositories of the manylinux image (the image build installs the JDK from them): outside JFrog. See the \"Direct fetches\" list in .github/workflows/build-gdal-native.yml."
+            exit 1; }
+          echo "direct egress ok: the pinned downloads, quay.io, dnf (rustup's static.rust-lang.org is a pinned download's host)"
 
       # prefetch.sh fetches the hashed wheelhouses with the runner's pip (`python3 -m pip download`): route it through
       # JFrog first, as the jobs that run setup-python do.
@@ -124,27 +163,35 @@ jobs:
         with:
           jfrog-access-token: ${{ steps.jfrog.outputs.jfrog-access-token }}
 
-      # Each target as gbx:build:native builds and verifies it (stage-native: verify-native.sh rows 1-18; bindings:
-      # test-bindings.sh, each binding's own suite). The command's last line is NATIVE_VERIFIED, and it exits 1 on a
-      # failed check. The images take about 12 GB of disk (toolchain, stage-native and bindings share layers) beside
-      # the build context: the runner image's unused SDKs are removed first where it has them.
-      - name: Build and verify
+      # The images take about 12 GB of disk (toolchain, stage-native and bindings share layers) beside the build
+      # context: the runner image's unused SDKs are removed first where it has them.
+      - name: Free disk for the image build
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          set -euo pipefail
           df -h / | tail -n 1
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost || true
           df -h / | tail -n 1
-          for t in $TARGETS; do
-            start=$(date +%s)
-            bash scripts/commands/gbx-build-native.sh --arch x86_64 --target "$t" --log "native-$t-x86_64.log"
-            echo "::notice::native $t (x86_64): $(( $(date +%s) - start )) s"
-          done
-          du -sh build/native/out/x86_64/* build/native/src build/native/sdists build/native/bin || true
 
+      # Each target as gbx:build:native builds and verifies it (stage-native: verify-native.sh rows 1-18; bindings:
+      # test-bindings.sh, each binding's own suite). The command's last line is NATIVE_VERIFIED, and it exits 1 on a
+      # failed check.
+      - name: Build and verify ${{ inputs.target }} (by hand)
+        if: ${{ !inputs.cache }}
+        run: bash scripts/commands/gbx-build-native.sh --arch x86_64 --target "$TARGET" --log "native-$TARGET-x86_64.log"
+
+      - name: Build and verify stage-native
+        if: inputs.cache && steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          bash scripts/commands/gbx-build-native.sh --arch x86_64 --target stage-native --log native-stage-native-x86_64.log
+          echo "::notice::native stage-native (x86_64): $(( $(date +%s) - start )) s"
+
+      # Also when the build failed: the downloads are kept for the next run (prefetch.sh re-checks every sha256).
       - name: Save the pinned sources
         if: >-
-          inputs.cache && steps.cache.outputs.cache-hit != 'true' && github.event_name == 'push'
+          always() && inputs.cache && steps.cache.outputs.cache-hit != 'true' && hashFiles('build/native/src/**') != ''
+          && github.event_name == 'push'
           && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/streamline/0.6.0')
         uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
         with:
@@ -152,12 +199,33 @@ jobs:
             build/native/src
             build/native/sdists
             build/native/bin
-          key: native-sources-${{ steps.key.outputs.pins }}
+          key: native-sources-${{ steps.key.outputs.sources }}
+
+      # The bindings target's prefetch (pip download through JFrog) starts after the stage-native build: log in again.
+      - name: Pre-bootstrap pip for JFrog again (bindings)
+        if: inputs.cache && steps.cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/jfrog-pip-bootstrap
+
+      - name: Authenticate for JFrog again (bindings)
+        if: inputs.cache && steps.cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/jfrog-auth
+
+      - name: Build and verify bindings
+        if: inputs.cache && steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          bash scripts/commands/gbx-build-native.sh --arch x86_64 --target bindings --log native-bindings-x86_64.log
+          echo "::notice::native bindings (x86_64): $(( $(date +%s) - start )) s"
+          du -sh build/native/out/x86_64/* build/native/src build/native/sdists build/native/bin || true
 
       - name: Save the build
         if: >-
-          inputs.cache && steps.cache.outputs.cache-hit != 'true' && github.event_name == 'push'
-          && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/streamline/0.6.0')
+          inputs.cache && steps.cache.outputs.cache-hit != 'true'
+          && ((github.event_name == 'push'
+               && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/streamline/0.6.0'))
+              || (github.event_name == 'pull_request'
+                  && github.event.pull_request.head.repo.full_name == github.repository))
         uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
         with:
           path: |

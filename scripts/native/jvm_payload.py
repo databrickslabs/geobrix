@@ -7,7 +7,8 @@
 out (build_env_wheel.py add_payload, for one architecture):
 
     _native/<arch>/lib/           gdal-native/lib/ without pkgconfig/ and cmake/: the JNI (libgdalalljni.so) and the
-                                  libraries it needs, RUNPATH $ORIGIN; exactly the libraries MANIFEST.json names
+                                  libraries it needs, RUNPATH $ORIGIN; exactly the libraries MANIFEST.json names,
+                                  and every file laid out has the sha256 MANIFEST.json records
     _native/<arch>/MANIFEST.json  the native build record
     _native/<arch>/hdf5-plugins/, _native/<arch>/bin/projsync
     _native/share/{gdal,proj}     GDAL's and PROJ's data: a JNI under <dir>/lib takes <dir>/../share (GDALManager)
@@ -18,6 +19,7 @@ into the env6 payload. The last line is `JVM_PAYLOAD root=<out> arch=<arch> gdal
 """
 
 import argparse
+import hashlib
 import json
 import shutil
 import sys
@@ -70,6 +72,22 @@ def assemble(native, arch, out):
     for rel in ("share/proj/proj.db", "share/gdal"):
         if not (out / "_native" / rel).exists():
             fail(f"gdal-native has no {rel}")
+    # content, not just names: every file laid out has the sha256 MANIFEST.json records (a partly restored cache
+    # entry fails here, not when a JVM loads it)
+    laid = {}
+    for p in sorted((d / "lib").iterdir()):
+        laid[f"lib/{p.name}"] = p
+    for extra in EXTRAS:
+        for p in sorted((d / extra).rglob("*")) if (d / extra).is_dir() else [d / extra]:
+            if p.is_file():
+                laid[f"{extra}/{p.relative_to(d / extra)}" if (d / extra).is_dir() else extra] = p
+    for p in sorted((out / "_native" / "share").rglob("*")):
+        if p.is_file():
+            laid[f"share/{p.relative_to(out / '_native' / 'share')}"] = p
+    files = manifest.get("files") or {}
+    bad = sorted(r for r, p in laid.items() if files.get(r) != hashlib.sha256(p.read_bytes()).hexdigest())
+    if bad:
+        fail(f"{len(bad)} of {len(laid)} files are not what MANIFEST.json records (sha256), e.g. {bad[:3]}")
     jni = d / "lib" / manifest["jni"]
     print(f"JVM_PAYLOAD root={out} arch={arch} gdal={manifest['versions']['gdal']} jni={jni}")
 

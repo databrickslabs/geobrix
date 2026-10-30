@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """The native inputs: what CI's cached x86_64 native build and the two-architecture gate stamp are keyed on.
 
-    native_inputs.py files --set build|gate [--rev REV] [--root DIR]   the files of a set, one per line
-    native_inputs.py hash --set build|gate [--rev REV] [--root DIR]    the set's sha256
+    native_inputs.py files --set build|gate|sources [--rev REV] [--root DIR]   the files of a set, one per line
+    native_inputs.py hash --set build|gate|sources [--rev REV] [--root DIR]    the set's sha256
     native_inputs.py check-stamp [--root DIR]
         CI (build_main.yml, job arch-gate): exit 1 when the gate set's hash is not scripts/native/arch-gate.json's,
         or the stamp records a failed check; the message names the changed files and the command to run
@@ -19,9 +19,14 @@ The sets (only files under git count; --rev reads that commit's tree, without it
          it (its KEY=VALUE lines: a comment edit moves nothing), scripts/native/build.Dockerfile, every recipe it
          copies or mounts from scripts/native (both architectures' spelling of ${GBX_ARCH}), rust-toolchain.toml.
          The sources, wheels and tools it copies are fixed by the sha256s in pins.conf and the hashed requirement files.
-  gate   build, plus the activation the env wheel runs (python/geobrix/src/databricks/labs/gbx/_native/**,
-         python/geobrix/src/_gbx_native_path.py), how a JVM picks and loads the JNI (GDALManager.scala), the GDAL Java
-         classes the JAR binds to the JNI (scripts/native/maven/**) and the JNI row of verify-native (JniSmoke.java).
+  sources  pins.conf's KEY=VALUE lines only: the key of CI's cache of the pinned source downloads.
+  gate   exactly what gbx:native:verify-arches exercises: build, plus the env wheel's assembly and its inputs
+         (scripts/native/build_env_wheel.py, python/geobrix/envs/** with envs/pyproject.env.toml), the activation the
+         wheel runs (python/geobrix/src/databricks/labs/gbx/_native/**, python/geobrix/src/_gbx_native_path.py), and
+         the checks themselves (scripts/native/verify-native.sh with its JNI row JniSmoke.java, check-env-wheel.sh
+         with base_held.py).
+         Not GDALManager.scala nor the committed GDAL Java classes (scripts/native/maven/**): no gate check runs them
+         (verify-native compiles JniSmoke against the tree's own java/gdal-<version>.jar; a new jar comes with a pin).
 
 Stdlib only: CI runs it with the runner's python3.
 """
@@ -48,18 +53,23 @@ DOCKERFILE = "scripts/native/build.Dockerfile"
 STAMP = "scripts/native/arch-gate.json"
 GATE_COMMAND = "bash scripts/commands/gbx-native-verify-arches.sh"
 GATE_EXTRA = (
+    "scripts/native/build_env_wheel.py",
+    "python/geobrix/envs",
     "python/geobrix/src/databricks/labs/gbx/_native",
     "python/geobrix/src/_gbx_native_path.py",
-    "src/main/scala/com/databricks/labs/gbx/rasterx/gdal/GDALManager.scala",
-    "scripts/native/maven",
+    "scripts/native/verify-native.sh",
     "scripts/native/JniSmoke.java",
+    "scripts/native/check-env-wheel.sh",
+    "scripts/native/base_held.py",
 )
-# Gate inputs no gate check reads from the env wheel (the JVM side: the wheel's JAR is not exercised by --verify, and
-# verify-native mounts the checkout's JniSmoke.java): a change to them needs the gate re-run, not a wheel rebuild.
-NOT_IN_THE_WHEEL_CHECKS = (
-    "src/main/scala/com/databricks/labs/gbx/rasterx/gdal/GDALManager.scala",
-    "scripts/native/maven/",
+# Gate inputs the checks read from the checkout when they run, not from the env wheel (verify-native mounts
+# scripts/native with JniSmoke.java; --verify mounts scripts/native for check-env-wheel.sh and its base_held.py): a
+# change to them needs the gate re-run, not a wheel rebuild. Everything else in the set is in the wheel, or built into it.
+READ_FROM_THE_CHECKOUT = (
+    "scripts/native/verify-native.sh",
     "scripts/native/JniSmoke.java",
+    "scripts/native/check-env-wheel.sh",
+    "scripts/native/base_held.py",
 )
 # Build-context directories the Dockerfile copies or mounts whose content pins.conf (sha256) or the hashed requirement
 # files fix (prefetch.sh checks every sum): not hashed again here.
@@ -136,6 +146,8 @@ def files(tree, which):
     missing = sorted(build - have)
     if missing:
         raise Fail(f"{', '.join(missing)} (from {DOCKERFILE}) not under git")
+    if which == "sources":
+        return [PINS]
     if which == "build":
         return sorted(build)
     extra = set()
@@ -228,8 +240,22 @@ def check_stamp(root):
     return 0
 
 
+def uncommitted(root):
+    """The native inputs (gate set) with uncommitted changes in the checkout, untracked files included."""
+    specs = files(Tree(root, "HEAD"), "build") + list(GATE_EXTRA)
+    out = Tree(root)._git("status", "--porcelain", "--untracked-files=all", "--", *specs).decode()
+    return sorted(ln[3:] for ln in out.splitlines() if ln.strip())
+
+
 def provenance(root, native_out, dist):
     """The trees and wheels the gate is about to verify are one build, made from HEAD's native inputs."""
+    dirty = uncommitted(root)
+    if dirty:
+        print(
+            f"PRECONDITION MISSING: committed native inputs ({', '.join(dirty)} changed, uncommitted): the checks read"
+            f" the checkout and the stamp names HEAD; commit or stash them first"
+        )
+        return 1
     head = Tree(root, "HEAD")
     now = file_hashes(head, "gate")
     problems, shas = [], {}
@@ -258,7 +284,7 @@ def provenance(root, native_out, dist):
                 problems.append(f"{wheels[0].name} was built at {sha[:12]}, which this repository cannot read ({e})")
                 then = None
             if then is not None:
-                diff = [f for f in changed(then, now) if not f.startswith(NOT_IN_THE_WHEEL_CHECKS)]
+                diff = [f for f in changed(then, now) if f not in READ_FROM_THE_CHECKOUT]
                 if diff:
                     problems.append(
                         f"{wheels[0].name} was built at {sha[:12]}, whose native inputs differ from HEAD's ({', '.join(diff)}):"
@@ -303,6 +329,11 @@ def write_stamp(root, rev, verify_native, env_wheel, built_from):
             print(f"ARCH GATE FAILED: {pr}")
         print(f"{STAMP} not written.")
         return 1
+    if rev == "HEAD":
+        dirty = uncommitted(root)
+        if dirty:
+            print(f"ARCH GATE FAILED: {', '.join(dirty)} changed during the run (uncommitted); {STAMP} not written.")
+            return 1
     tree = Tree(root, rev)
     hashes = file_hashes(tree, "gate")
     pins = dict(
@@ -329,7 +360,7 @@ def main(argv):
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("files", "hash"):
         s = sub.add_parser(name)
-        s.add_argument("--set", dest="which", choices=("build", "gate"), required=True)
+        s.add_argument("--set", dest="which", choices=("build", "gate", "sources"), required=True)
         s.add_argument("--rev")
     sub.add_parser("check-stamp")
     pv = sub.add_parser("provenance")

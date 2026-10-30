@@ -12,6 +12,7 @@ bash scripts/commands/gbx-docs-restart.sh [OPTIONS]
 
 - `--skip-build` - Skip npm build, serve existing build
 - `--port <number>` - Custom port (default: 3000)
+- `--force` - Replace the server even if another checkout started it. Default: refuse.
 - `--log <path>` - Write output to log file (supports filename, relative, or absolute path)
 - `--help` - Display help message
 
@@ -30,6 +31,7 @@ bash scripts/commands/gbx-docs-restart.sh --port 3001
 
 ## Notes
 
-- Stops existing server (all ports)
+- Stops only the server on `--port`, never other ports
+- Refuses a server started from another checkout unless `--force`
 - Starts new server with specified options
-- Combines `gbx:docs:stop` + `gbx:docs:start`
+- Combines `gbx:docs:stop --port` + `gbx:docs:start`

@@ -18,7 +18,7 @@ bash scripts/commands/gbx-docs-build.sh [OPTIONS]
 ## When to use
 
 - Use this to check that docs changes compile — especially in an agent/automation session — instead of a bare `npm run build`.
-- `docusaurus build` and `docusaurus start` share the same `docs/.docusaurus/` cache (`registry.js`, `client-manifest.json`, ...). Running a build while a `gbx:docs:dev` server is up rewrites that cache out from under it, so its routes render stale or blank until restarted. This command detects a running dev server (via `/tmp/docusaurus-<port>.pid`), stops it for the build, then restarts it on the same port — so you end on a healthy, freshly-cached server.
+- `docusaurus build` and `docusaurus start` share the same `docs/.docusaurus/` cache (`registry.js`, `client-manifest.json`, ...). Running a build while a `gbx:docs:dev` server is up rewrites that cache out from under it, so its routes render stale or blank until restarted. This command detects a running dev server (via `/tmp/docusaurus-<port>.pid`), stops it for the build, then restarts it on the same port — so you end on a healthy, freshly-cached server. It stops only servers started from this checkout; another checkout has its own cache, so its servers keep running.
 - The same hazard applies to `gbx:docs:static-build`, `gbx:docs:serve-local`, and `gbx:docs:restart` (all run a host-side build): stop your dev server before running those, or use this command for a plain compile check.
 
 ## Examples

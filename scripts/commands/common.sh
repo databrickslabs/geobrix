@@ -241,6 +241,43 @@ detect_docs_dev_servers() {
     done
 }
 
+# Docs servers are told apart by listening port and by the checkout they run from, so a command
+# only touches its own checkout's server unless told otherwise (gbx-docs-stop.sh --force).
+# PIDs listening on a TCP port (empty when none).
+gbx_docs_port_pids() {
+    lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | sort -u
+}
+
+# The checkout (git top level, else the working directory) a docs server PID runs from; empty when
+# its working directory cannot be read.
+gbx_docs_pid_checkout() {
+    local cwd top
+    cwd=$(lsof -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)
+    [ -n "$cwd" ] || return 0
+    top=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)
+    if [ -n "$top" ]; then
+        (cd "$top" 2>/dev/null && pwd -P) || echo "$top"
+    else
+        echo "$cwd"
+    fi
+}
+
+# True when every server listening on PORT runs from checkout ROOT (a physical path). A directory
+# under ROOT counts only when it is not a git checkout of its own (a nested worktree is foreign).
+# A server whose checkout cannot be read counts as foreign.
+# Usage: gbx_docs_port_is_mine PORT ROOT
+gbx_docs_port_is_mine() {
+    local pid owner found=false
+    for pid in $(gbx_docs_port_pids "$1"); do
+        found=true
+        owner=$(gbx_docs_pid_checkout "$pid")
+        [ -n "$owner" ] || return 1
+        [ "$owner" = "$2" ] && continue
+        [[ "$owner" == "$2"/* && ! -e "$owner/.git" ]] || return 1
+    done
+    [ "$found" = true ]
+}
+
 # Warn (non-fatal) before a host-side `npm run build` when a docs server is
 # running. A build rewrites the shared <siteDir>/.docusaurus cache the server
 # relies on, so its rendered routes go stale/blank until it is restarted. Prefer

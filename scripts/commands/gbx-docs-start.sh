@@ -90,7 +90,7 @@ print_banner "📚 GeoBrix: Start Documentation Server"
 # Check if server already running
 if lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
     echo -e "${RED}❌ Port $PORT is already in use!${NC}"
-    echo -e "${YELLOW}   Stop the existing server with: gbx:docs:stop${NC}"
+    echo -e "${YELLOW}   Stop the existing server with: gbx:docs:stop --port $PORT${NC}"
     exit 1
 fi
 

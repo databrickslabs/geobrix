@@ -10,7 +10,7 @@
 # healthy, freshly-cached server instead of a broken one.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd -P)"
 
 source "$SCRIPT_DIR/common.sh"
 
@@ -98,15 +98,23 @@ setup_log_file "$LOG_PATH"
 
 # Detect a running dev server (shared helper reads /tmp/docusaurus-<port>.pid).
 # Capture the port(s) so we can bring the server back up on the same one.
+# Only this checkout's servers share its docs/.docusaurus cache; another checkout's is left running.
 RUNNING_PORTS=()
 while IFS= read -r port; do
-    [ -n "$port" ] && RUNNING_PORTS+=("$port")
+    [ -n "$port" ] || continue
+    if gbx_docs_port_is_mine "$port" "$PROJECT_ROOT"; then
+        RUNNING_PORTS+=("$port")
+    else
+        echo -e "${YELLOW}Leaving the server on port $port alone (not started from this checkout).${NC}"
+    fi
 done < <(detect_docs_dev_servers)
 
 if [ ${#RUNNING_PORTS[@]} -gt 0 ]; then
     echo -e "${CYAN}Dev server running on port(s): ${YELLOW}${RUNNING_PORTS[*]}${NC}"
     echo -e "${CYAN}Stopping it so the build doesn't corrupt its .docusaurus cache...${NC}"
-    bash "$SCRIPT_DIR/gbx-docs-stop.sh"
+    for port in "${RUNNING_PORTS[@]}"; do
+        bash "$SCRIPT_DIR/gbx-docs-stop.sh" --port "$port"
+    done
     sleep 2
 fi
 

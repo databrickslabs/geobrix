@@ -42,7 +42,7 @@
 <path d="M 74 294 A 10 10 0 0 1 84 284 H 356 A 10 10 0 0 1 366 294 V 289 H 74 Z" fill="#7A5AA6"/>
 <rect x="86" y="296" rx="10" ry="10" width="116" height="21" fill="#ECE5F5" stroke="#7A5AA6" stroke-width="1"/><text x="144.0" y="310.5" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="700" fill="#7A5AA6">gbx_file_write</text>
 <text x="86" y="332" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="500" fill="#3F4D5E" text-anchor="start">df, target, *, file_mode=</text>
-<text x="210" y="332" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="700" fill="#7A5AA6" text-anchor="start">"auto"</text>
+<text x="210" y="332" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="700" fill="#7A5AA6" text-anchor="start">"fuse"</text>
 <text x="86" y="349" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="500" fill="#5A6878" text-anchor="start">returns None (writes Delta table)</text>
 <rect x="448" y="182" rx="12" ry="12" width="892" height="180" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#card-shadow)"/>
 <path d="M 448 194 A 12 12 0 0 1 460 182 H 1328 A 12 12 0 0 1 1340 194 V 187 H 448 Z" fill="#1B3139"/>

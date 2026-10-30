@@ -100,7 +100,7 @@
 <path d="M 1146.0 293.0 C 1176.0 293.0 1176.0 288.0 1206.0 288.0" fill="none" stroke="#1F6FB5" stroke-width="2.2" marker-end="url(#arrow-read)"/>
 <path d="M 1146.0 381.0 C 1176.0 381.0 1176.0 288.0 1206.0 288.0" fill="none" stroke="#1F6FB5" stroke-width="2.2" marker-end="url(#arrow-read)"/>
 <path d="M 1146.0 469.0 C 1176.0 469.0 1176.0 288.0 1206.0 288.0" fill="none" stroke="#1F6FB5" stroke-width="2.2" marker-end="url(#arrow-read)"/>
-<rect x="40" y="600" rx="18" ry="18" width="1640" height="372" fill="#ECE5F5" fill-opacity="0.35" stroke="#7A5AA6" stroke-width="1.5"/><rect x="40" y="600" rx="18" ry="18" width="10" height="372" fill="#7A5AA6"/><rect x="45" y="600" width="5" height="372" fill="#7A5AA6"/><rect x="62" y="576" rx="15" ry="15" width="74" height="30" fill="#7A5AA6"/><text x="99.0" y="595.0" text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="700" fill="#FFFFFF">WRITE</text><text x="148" y="596" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="600" fill="#5A6878" text-anchor="start">open_for_write(spark, df, target, file_mode="auto", layout=…)</text>
+<rect x="40" y="600" rx="18" ry="18" width="1640" height="372" fill="#ECE5F5" fill-opacity="0.35" stroke="#7A5AA6" stroke-width="1.5"/><rect x="40" y="600" rx="18" ry="18" width="10" height="372" fill="#7A5AA6"/><rect x="45" y="600" width="5" height="372" fill="#7A5AA6"/><rect x="62" y="576" rx="15" ry="15" width="74" height="30" fill="#7A5AA6"/><text x="99.0" y="595.0" text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="700" fill="#FFFFFF">WRITE</text><text x="148" y="596" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="600" fill="#5A6878" text-anchor="start">open_for_write(spark, df, target, file_mode="fuse", layout=…)</text>
 <rect x="68" y="622" rx="14" ry="14" width="270" height="328" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#card-shadow)"/>
 <path d="M 68 636 A 14 14 0 0 1 82 622 H 324 A 14 14 0 0 1 338 636 V 627 H 68 Z" fill="#7A5AA6"/>
 <circle cx="94" cy="656" r="13" fill="#7A5AA6"/>
@@ -119,9 +119,9 @@
 <circle cx="424" cy="656" r="13" fill="#7A5AA6"/>
 <text x="424" y="661" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="800" fill="#FFFFFF" text-anchor="middle">2</text>
 <text x="446" y="653" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="16" font-weight="800" fill="#0F1B2A" text-anchor="start">Resolve mode</text>
-<text x="446" y="671" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="500" fill="#5A6878" text-anchor="start">file_mode="auto" · no gating</text>
+<text x="446" y="671" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="500" fill="#5A6878" text-anchor="start">default "fuse" · "auto" opts in</text>
 <rect x="416" y="688" rx="11" ry="11" width="120" height="22" fill="#ECE5F5" stroke="#7A5AA6" stroke-width="1"/><text x="476.0" y="703.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" font-weight="700" fill="#7A5AA6">open_for_write</text>
-<text x="416" y="730" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="9" font-weight="700" fill="#7A8794" text-anchor="start" letter-spacing="1.2">AUTO-SELECT</text>
+<text x="416" y="730" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="9" font-weight="700" fill="#7A8794" text-anchor="start" letter-spacing="1.2">"AUTO" (OPT-IN) PICKS</text>
 <rect x="414" y="744" rx="8" ry="8" width="236" height="32" fill="#FFFFFF" stroke="#5060A8" stroke-width="1"/>
 <text x="426" y="764" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10.5" font-weight="600" fill="#3F4D5E" text-anchor="start">filespace given</text>
 <text x="638" y="764" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" font-weight="700" fill="#5060A8" text-anchor="end">→ MANAGED</text>
@@ -178,12 +178,12 @@
 <text x="393" y="1049" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="800" fill="#1E7D4B" text-anchor="middle">✓</text>
 <text x="420" y="1042" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#1E7D4B" text-anchor="start">access="auto"</text>
 <text x="420" y="1060" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="500" fill="#3F4D5E" text-anchor="start">graceful FUSE fallback — never errors</text>
-<text x="420" y="1076" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="500" fill="#5A6878" text-anchor="start">the default on every lightweight reader &amp; writer</text>
+<text x="420" y="1076" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="500" fill="#5A6878" text-anchor="start">the reader default; writers default to file_mode="fuse"</text>
 <rect x="840" y="1030" width="26" height="26" rx="13" fill="#FBE7E4" stroke="#C0392B" stroke-width="2"/>
 <text x="853" y="1049" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="800" fill="#C0392B" text-anchor="middle">!</text>
 <text x="880" y="1042" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#C0392B" text-anchor="start">access="managed" / "external"</text>
 <text x="880" y="1060" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="500" fill="#3F4D5E" text-anchor="start">explicit FILE on a FUSE-only runtime → clear ValueError</text>
-<text x="880" y="1076" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="500" fill="#5A6878" text-anchor="start">the message names the DBR upgrade path &amp; the auto fallback</text>
+<text x="880" y="1076" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="500" fill="#5A6878" text-anchor="start">the message names the DBR upgrade path, fuse &amp; auto</text>
 <text x="40" y="1174" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#7A8794" text-anchor="start">databrickslabs/geobrix  ·  lightweight tier (pyrx)</text>
 <text x="1680" y="1174" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#7A8794" text-anchor="end">docs/readers-writers</text>
 </svg>

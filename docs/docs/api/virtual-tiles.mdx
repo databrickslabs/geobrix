@@ -103,7 +103,7 @@ The diagram above traces the four stages:
 
 FILE is a [Databricks data type](https://docs.databricks.com/aws/en/pyspark/reference/file-type) that provides **governed access to files on compute without a FUSE mount**. GeoBrix detects FILE availability and uses it when present. If FILE is not available, virtual tiles work via the FUSE path unchanged.
 
-When FILE is available (Databricks Runtime 19 dedicated clusters), GeoBrix:
+When FILE is available (Databricks Runtime 19 dedicated clusters and Serverless, in a workspace with the File type preview), GeoBrix:
 
 - Stamps each virtual tile row with a `path_mode` field: `"external"` or `"managed"` (see [Tile Structure](./tile-structure)).
 - Opens the file via `fref.open()` (byte-range stream) rather than through the FUSE mount.

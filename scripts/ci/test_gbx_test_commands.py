@@ -1498,6 +1498,19 @@ def test_the_serverless_runner_submits_one_jar_task_with_the_jar_as_a_java_depen
     assert (task.spark_jar_task.main_class_name, task.spark_jar_task.parameters) == ("a.b.Job", ["t1", "t2", "3"])
 
 
+def test_the_warehouse_runner_records_a_statement_with_no_result_set(monkeypatch):
+    """A CREATE FUNCTION answers SUCCEEDED with no columns: a result with no value, not a stopped run."""
+    from types import SimpleNamespace as NS
+
+    sql = pytest.importorskip("databricks.sdk.service.sql")
+    runner = _launcher("uc_sql", monkeypatch)
+    done = NS(status=NS(state=sql.StatementState.SUCCEEDED), result=None, manifest=NS(schema=NS(columns=None)))
+    w = NS(statement_execution=NS(execute_statement=lambda **kw: done))
+    assert runner.run_once(w, "CREATE FUNCTION f() RETURNS INT RETURN 1", "wh", None, None, 5) == (
+        sql.StatementState.SUCCEEDED, None, None, None,
+    )  # fmt: skip
+
+
 class _FakeFiles:
     def __init__(self, listing):
         self.calls, self.listing, self.sizes = [], listing, {}

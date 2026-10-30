@@ -83,7 +83,10 @@ def run_once(
         return state, (err.message if err and err.message else f"statement {state.value}"), None, None
     rows = (resp.result.data_array if resp.result else None) or []
     cell = rows[0][0] if rows and rows[0] else None
-    type_name = resp.manifest.schema.columns[0].type_name
+    cols = (resp.manifest.schema.columns if resp.manifest and resp.manifest.schema else None) or []
+    if not cols:  # a statement with no result set (CREATE FUNCTION, DROP ...): no value
+        return state, None, None, None
+    type_name = cols[0].type_name
     return state, None, cell, getattr(type_name, "value", str(type_name))
 
 

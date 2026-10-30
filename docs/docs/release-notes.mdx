@@ -1035,7 +1035,9 @@ formats.
   compute could not be read or appended to from other compute. With no `file_mode` they now write
   a plain Delta table (a path string and the raster bytes), which reads everywhere. Pass
   `file_mode="auto"` to use FILE where the runtime supports it, or `"external"` / `"managed"`
-  to ask for FILE references.
+  to ask for FILE references. Passing `filespace=` with no `file_mode` still asks for FILE
+  MANAGED, as before: it writes managed where the runtime has FILE and raises a clear error
+  where it does not.
 
 ### Zarr stores — file modes, copy targets and reference files (new)
 

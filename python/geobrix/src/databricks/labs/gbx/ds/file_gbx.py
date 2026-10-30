@@ -1868,7 +1868,7 @@ def open_for_write(
     df: "DataFrame",
     target: str,
     *,
-    file_mode: str = "fuse",
+    file_mode: Optional[str] = None,
     filespace: Optional[str] = None,
     layout: str = "order",
     overwrite: bool = False,
@@ -1878,7 +1878,11 @@ def open_for_write(
 
     Mode selection (``file_mode`` parameter):
 
-    - **"fuse"** (default): plain Delta write regardless of FILE capability, so the
+    - **None** (default): ``"fuse"`` when no ``filespace`` is given. A ``filespace``
+      asks for FILE MANAGED, so with one and no explicit ``file_mode`` the mode
+      resolves as ``"auto"`` does: managed where the runtime has FILE, and the
+      ``ValueError`` below where it does not.
+    - **"fuse"**: plain Delta write regardless of FILE capability, so the
       table reads on every compute.
     - **"auto"** (opt in to FILE where the runtime has it):
       - FILE-capable runtime + ``filespace`` provided → ``"managed"``
@@ -1903,8 +1907,11 @@ def open_for_write(
         spark: SparkSession.
         df: DataFrame to write.  Must have a ``tile`` struct column or be pre-flattened.
         target: Fully-qualified Delta table name (e.g. ``"catalog.schema.table"``).
-        file_mode: ``"fuse"`` (default), ``"auto"``, ``"managed"``, or ``"external"``.
+        file_mode: ``None`` (default; ``"fuse"``, or the ``"auto"`` rule when ``filespace``
+                is given), ``"fuse"``, ``"auto"``, ``"managed"``, or ``"external"``.
+                An explicit value always wins.
         filespace: Required for managed mode — the filespace path (``/Volumes/…``).
+                Without an explicit ``file_mode`` it selects FILE MANAGED.
         layout: Write strategy: ``"order"`` (ORDER BY path, default), ``"cluster"``
                 (CLUSTER BY path + ORDER BY on FILE tables; ORDER BY + warning on fuse),
                 or ``"plain"`` (no ordering).  Any other value raises ``ValueError``.
@@ -1913,12 +1920,19 @@ def open_for_write(
 
     Raises:
         ValueError: If ``layout`` is invalid, if explicit ``"managed"`` is requested
-                    without a ``filespace``, or if ``"managed"`` / ``"external"`` is
-                    requested on a fuse-only runtime.
+                    without a ``filespace``, if ``"managed"`` / ``"external"`` is
+                    requested on a fuse-only runtime, or if a ``filespace`` is given
+                    with no ``file_mode`` on a runtime without FILE.
     """
     import warnings
 
     from databricks.labs.gbx.pyrx.file_table import write_file_table
+
+    # 0. A bare ``filespace`` signals FILE MANAGED intent: resolve it as "auto" would,
+    #    but through the explicit-mode branch so a runtime without FILE raises instead of
+    #    silently writing plain Delta.  No filespace -> the fuse default.
+    if file_mode is None:
+        file_mode = "managed" if filespace else "fuse"
 
     # 1. Validate layout before any side effects.
     _validate_layout(layout)
@@ -2459,7 +2473,7 @@ def gbx_file_write(
     df: "DataFrame",
     target: str,
     *,
-    file_mode: str = "fuse",
+    file_mode: Optional[str] = None,
     filespace: Optional[str] = None,
     layout: str = "order",
     overwrite: bool = False,
@@ -2472,9 +2486,11 @@ def gbx_file_write(
     ``try_to_file`` / FUSE plain Delta).  Resolves the session from
     ``df.sparkSession`` when *spark* is not given, so callers hold no session.
 
-    ``file_mode`` defaults to ``"fuse"``: a plain Delta table that reads on every compute.
-    Pass ``"auto"`` (FILE where the runtime supports it), ``"external"`` or ``"managed"``
-    for FILE references.
+    ``file_mode`` defaults to ``None``, which is ``"fuse"``: a plain Delta table that reads
+    on every compute. A ``filespace`` with no ``file_mode`` asks for FILE MANAGED (the
+    ``"auto"`` rule: managed where the runtime has FILE, a clear ``ValueError`` where it
+    does not). Pass ``"auto"`` (FILE where the runtime supports it), ``"external"`` or
+    ``"managed"`` for FILE references; an explicit ``file_mode`` always wins.
 
     Validates ``layout`` up front (fail before any side effect) and delegates
     everything else — including the ``managed``-without-``filespace`` guard and

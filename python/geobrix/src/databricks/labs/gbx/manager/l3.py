@@ -58,24 +58,41 @@ def _factory_args(kind: str):
 
 
 def register_l3(spark, fn, variant: str, name: Optional[str] = None) -> None:
+    from databricks.labs.gbx import _gdal_policy
+
     spec, name = fn.levels["L3"], name or fn.sql_name
-    if "variants" in spec:
-        spark.udf.register(name, resolve_ref(spec["variants"][variant]))
-    elif "factory" in spec:
-        spark.udf.register(
-            name, resolve_ref(spec["factory"])(*_factory_args(spec["factory_args"]))
-        )
-    elif "callable" in spec:
-        spark.udf.register(
-            name, resolve_ref(spec["callable"]), _return_type(spec["returns"])
-        )
-    elif "udtf" in spec:
-        spark.udtf.register(name, resolve_ref(spec["udtf"]))
-    else:
-        raise ValueError(f"{fn.sql_name}: unknown L3 registration")
+    with _gdal_policy.carrying_registrations(
+        spark
+    ):  # the driver's remote-path switch goes to the workers
+        if "variants" in spec:
+            spark.udf.register(name, resolve_ref(spec["variants"][variant]))
+        elif "factory" in spec:
+            spark.udf.register(
+                name,
+                resolve_ref(spec["factory"])(*_factory_args(spec["factory_args"])),
+            )
+        elif "callable" in spec:
+            spark.udf.register(
+                name, resolve_ref(spec["callable"]), _return_type(spec["returns"])
+            )
+        elif "udtf" in spec:
+            spark.udtf.register(name, resolve_ref(spec["udtf"]))
+        else:
+            raise ValueError(f"{fn.sql_name}: unknown L3 registration")
 
 
 def register_l3_engine(
+    spark, fn, form: str = "engine", name: Optional[str] = None
+) -> str:
+    """Register `fn`'s GDAL spec engine UDFs (see ``_register_l3_engine``), carrying the driver's remote-path switch
+    to the workers."""
+    from databricks.labs.gbx import _gdal_policy
+
+    with _gdal_policy.carrying_registrations(spark):
+        return _register_l3_engine(spark, fn, form, name)
+
+
+def _register_l3_engine(
     spark, fn, form: str = "engine", name: Optional[str] = None
 ) -> str:
     """Register `fn`'s GDAL spec engine UDFs under `name` (default its SQL name); returns the form used.

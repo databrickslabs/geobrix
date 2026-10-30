@@ -302,26 +302,33 @@ applies a driver policy to each process, on both tiers, before any raster is ope
 
 **Remote paths that come from data.** On the lightweight tier, a path that comes from data is
 opened only when it names a local or Volume path (`/Volumes/…`, `/Workspace/…`), a cloud object
-store (`s3://`, `s3a://`, `abfss://`, `gs://`, `wasbs://`, or `/vsis3/`, `/vsiaz/`, `/vsiadls/`,
-`/vsigs/`; `/vsizip/` and `/vsitar/` around one of these), or `/vsimem/`. The paths it checks
-are a virtual tile's `path`, the rows of a `manifest` or a tile index, the sources of a `.vrt`
-that `raster_gbx` reads, the `path` column that `vector_file_read` reads from a table, and a
-virtual tile that a vizx plot opens. A path that names `/vsicurl/`, `/vsicurl_streaming/`,
-`http://`, `https://`, `ftp://` or another GDAL virtual file system, directly or inside a wrapper
-such as `/vsizip//vsicurl/…`, raises an error that names it, before anything is opened. A path
-you pass yourself is your own choice and is not checked: `.load(url)`, `rst_fromfile(url)`,
-`StacClient(catalog=url)`. A virtual tile that `rst_fromfile` makes from a URL names that URL,
-so a function that opens the tile later refuses it; pass `materialize=True` to read the pixels
-when the tile is made. To open remote paths from data you trust, set
-`GBX_ALLOW_REMOTE_PATHS=true` in the environment of the processes that read it (on a cluster,
-in its environment variables). The sources GDAL opens by itself are outside this check: the
+store (`s3://`, `s3a://`, `abfss://`, `abfs://`, `az://`, `gs://`, `wasbs://`, or `/vsis3/`,
+`/vsiaz/`, `/vsiadls/`, `/vsigs/` and their `/vsis3_streaming/`, `/vsiaz_streaming/`,
+`/vsigs_streaming/` forms; `/vsizip/`, `/vsitar/` and `/vsigzip/` around one of these), or
+`/vsimem/`. The paths it checks are a virtual tile's `path`, the path `rst_fromfile` is given (a
+column's value is data), the rows of a `manifest` or a tile index, the sources of a `.vrt` that
+`raster_gbx` reads, the `path` column that `vector_file_read` reads from a table, and a virtual
+tile that a vizx plot opens. A path that names `/vsicurl/`, `/vsicurl_streaming/`, `http://`,
+`https://`, `ftp://` or another GDAL virtual file system, directly or inside a wrapper such as
+`/vsizip//vsicurl/…`, raises an error that names it, before anything is opened: for
+`rst_fromfile`, at its first evaluation. A path you pass to a reader yourself is your own choice
+and is not checked: `.load(url)`, `StacClient(catalog=url)`.
+
+To open remote paths from data you trust, set `GBX_ALLOW_REMOTE_PATHS=true` in the driver's
+environment (in the notebook, `os.environ["GBX_ALLOW_REMOTE_PATHS"] = "true"`) before
+`register()` and before the column or the read is built. The workers never read it: the SQL
+functions and readers that `register()` installs, `rst_fromfile` and `vector_file_read` take the
+driver's value to them, so it works on Serverless too. After you change it, call `register()`
+again. The other Python column functions, called without the SQL functions, do not carry it: on a
+worker they refuse a remote path. The sources GDAL opens by itself are outside this check: the
 sources of a VRT that GDAL reads as a raster, and the netCDF CRS URL below.
 
 **Hrefs that come from data.** `StacClient.download` and `repair`, and the Overture downloader's HTTP
 fallback, fetch hrefs that a catalog or a table names. Each href must be an `http(s)` URL whose host does not resolve
-to a loopback, private, link-local (such as the cloud metadata address `169.254.169.254`) or unspecified address;
-each redirect hop is checked the same way; no `~/.netrc` is read; and an `allowed_hosts=` list, when you pass one,
-refuses any other host. See [STAC § Constructor](./api/stac#constructor).
+to a loopback, link-local (such as the cloud metadata address `169.254.169.254`) or unspecified address, nor to a
+private address unless you name the host in `allowed_hosts=` (an internal catalog); each redirect hop is checked the
+same way; no `~/.netrc` is read; and an `allowed_hosts=` list, when you pass one, refuses any other host. See
+[STAC § Constructor](./api/stac#constructor).
 
 **Spark's GDAL settings on the JVM.** A `spark.gdal.*` or `spark.databricks.labs.gbx.gdal.*` setting applies to the
 whole executor JVM: on dedicated compute, the first GDAL use in each JVM applies it for every job that JVM then runs.
@@ -334,6 +341,17 @@ stays, with the refused names added), and sets `GDAL_VRT_ENABLE_PYTHON` and
 `GDAL_VRT_ENABLE_RAWRASTERBAND` to `NO`, replacing a value you set. Subprocesses the process
 starts inherit these values. With `GBX_GDAL_DRIVER_POLICY=off` set before the import, the
 environment is left as it is.
+
+**Known limitation: a host's address can change after the check.** The check resolves an href's
+host before the request, and the connection resolves it again, so a name whose DNS answer changes
+between the two (DNS rebinding) can reach an address the check refused. Name the hosts you trust
+in `allowed_hosts=`.
+
+**Known limitation: GDAL follows redirects on a windowed read.** With `bbox`, GeoBrix follows the
+href's redirects itself, each hop checked, and GDAL opens the URL they end at; a redirect the
+server returns to one of GDAL's later range reads is followed by GDAL without the checks. Download
+without `bbox` (each hop is checked) and window the file afterwards, or name the hosts in
+`allowed_hosts=`.
 
 **Known limitation: a netCDF CRS given as a URL.** A netCDF variable whose `crs` attribute is
 an http(s) URL makes GDAL fetch that URL when the file is opened, and no GDAL setting turns that

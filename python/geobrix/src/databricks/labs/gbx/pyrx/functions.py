@@ -31,7 +31,13 @@ from pyspark.sql.types import (
 )
 
 from databricks.labs.gbx import _register
-from databricks.labs.gbx._gdal_policy import open_bytes, open_data
+from databricks.labs.gbx._gdal_policy import (
+    carrying_udf,
+    data_path,
+    driver_switch,
+    open_bytes,
+    open_data,
+)
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx._udf import ColLike, _col, _crs_col
 from databricks.labs.gbx.pyrx.core import _nodata, accessors
@@ -791,6 +797,8 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
     from databricks.labs.gbx.ds.file_gbx import _stage_local_if_needed, to_local_path
     from databricks.labs.gbx.pyrx import _env
 
+    # a column's path is data: a remote URL is refused here, at once, unless the driver's switch was carried in
+    data_path(str(path), "rst_fromfile")
     _env.configure_gdal_env()
     drv = "GTiff" if driver is None else str(driver)
     local = to_local_path(str(path))
@@ -973,7 +981,9 @@ def rst_fromfile(
     )
 
     _cap = _connect_aware_lru_sizing(_resolve_session_for_cap())[0]
-    return _fromfile_udf(_col(path), drv, f.lit(bool(materialize)), f.lit(_cap))
+    # the driver's remote-path switch goes to the workers with the UDF (they never read it themselves)
+    udf = carrying_udf(_fromfile_udf, driver_switch())
+    return udf(_col(path), drv, f.lit(bool(materialize)), f.lit(_cap))
 
 
 # rst_merge: single ARRAY<tile struct> arg in one row -> mosaic tile.

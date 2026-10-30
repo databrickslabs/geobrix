@@ -73,7 +73,13 @@ from pyspark.sql.datasource import (
 )
 from pyspark.sql.types import BinaryType, StringType, StructField, StructType
 
-from databricks.labs.gbx._gdal_policy import data_path, open_bytes, open_data
+from databricks.labs.gbx._gdal_policy import (
+    carried,
+    data_path,
+    driver_switch,
+    open_bytes,
+    open_data,
+)
 from databricks.labs.gbx.ds import _encode, _listing
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import budget
@@ -1115,18 +1121,19 @@ class RasterGbxReader(DataSourceReader):
         """Partitions for pre-computed tile rows (a manifest or a tile index).
 
         The one place those rows are decoded, for ``partitions()`` and for
-        :func:`read_tiles_table`.
+        :func:`read_tiles_table`; with the remote-path switch the driver carried in.
         """
-        parts = _partitions_from_tile_rows(
-            rows,
-            emit_virtual=self.emit_virtual,
-            budget_bytes=budget_bytes,
-            clip_polygons=self.clip_polygons,
-            clip_crs=self.clip_crs,
-            windows=self.windows,
-            tile_size=self.tile_size,
-            overlap_percent=self.overlap_percent,
-        )
+        with carried(getattr(self, "_gbx_remote_allowed", None)):
+            parts = _partitions_from_tile_rows(
+                rows,
+                emit_virtual=self.emit_virtual,
+                budget_bytes=budget_bytes,
+                clip_polygons=self.clip_polygons,
+                clip_crs=self.clip_crs,
+                windows=self.windows,
+                tile_size=self.tile_size,
+                overlap_percent=self.overlap_percent,
+            )
         # Layout convention: sort by source file path so tiles from the
         # same file are adjacent. Maximises per-worker open/stage cache reuse
         # when a worker processes consecutive partitions from the same source.
@@ -1180,7 +1187,8 @@ class RasterGbxReader(DataSourceReader):
         # Connect-safe: _parse_vrt_members() does pure Python / stdlib I/O with
         # no Spark session, no _jvm, no .rdd access.
         if self.path.lower().endswith(".vrt"):
-            member_paths = _parse_vrt_members(self.path)
+            with carried(getattr(self, "_gbx_remote_allowed", None)):
+                member_paths = _parse_vrt_members(self.path)
             result: list = []
             for member_path in member_paths:
                 # Read GBX_CELLID / GBX_GRIDSYSTEM from the member header.
@@ -1769,6 +1777,8 @@ def read_tiles_table(
     )
     schema = source.schema()
     reader = source.reader(schema)
+    # the tile rows are planned on the workers: the driver's remote-path switch goes with the reader
+    reader._gbx_remote_allowed = driver_switch()
     budget_bytes = _resolved_budget(reader.size_mib, reader.strategy)
 
     index = _read_tile_index(spark, table, reader.version_as_of, reader.timestamp_as_of)

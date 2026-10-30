@@ -3,9 +3,10 @@
 A catalog, or a table passed to ``StacClient.download`` / ``repair``, names the hrefs, so an href can name any host,
 and the fetch runs on an executor, with the node's network. Each fetch here:
 
-- takes an ``http(s)`` URL only, and resolves its host: a loopback, private (RFC 1918 and ``fc00::/7``), link-local
-  (``169.254.0.0/16``, ``fe80::/10``) or unspecified address is refused, as is any host off ``allowed_hosts`` when
-  the caller sets it (``"example.com"`` is that host; ``".example.com"`` is it and every host under it);
+- takes an ``http(s)`` URL only, and resolves its host: a loopback, link-local (``169.254.0.0/16``, so the cloud
+  metadata address, and ``fe80::/10``) or unspecified address is refused always; a private one (RFC 1918 and
+  ``fc00::/7``) is refused unless the caller names the host in ``allowed_hosts``; and when ``allowed_hosts`` is set,
+  any host off it is refused (``"example.com"`` is that host; ``".example.com"`` is it and every host under it);
 - follows redirects itself, at most ``MAX_REDIRECTS`` hops, and checks each hop as it checks the first;
 - reads no ``~/.netrc``: the session does not trust the environment, and the proxies (``HTTP_PROXY``,
   ``HTTPS_PROXY``, ``NO_PROXY``) and the CA bundle (``REQUESTS_CA_BUNDLE``, ``CURL_CA_BUNDLE``) are passed from the
@@ -83,7 +84,8 @@ def check_href(url: str, allowed_hosts: Union[None, str, Iterable[str]] = None) 
         )
     host = parts.hostname.lower()
     hosts = _hosts(allowed_hosts)
-    if hosts is not None and not _allowed(host, hosts):
+    listed = hosts is not None and _allowed(host, hosts)
+    if hosts is not None and not listed:
         raise RefusedHref(
             f"{url!r}: the host {host} is not in allowed_hosts ({', '.join(hosts)}). Fix: add the host to "
             "allowed_hosts if you trust it, or check where the href came from"
@@ -94,10 +96,18 @@ def check_href(url: str, allowed_hosts: Union[None, str, Iterable[str]] = None) 
         raise RefusedHref(f"{url!r}: {exc}. {_FIX}") from None
     for addr in _addresses(host, port):
         kind = _kind(addr)
+        if kind == "private" and listed:
+            continue  # a private host the caller named (an internal catalog); loopback, link-local never
         if kind is not None:
+            fix = (
+                f"Fix: if {host} is your own catalog's host, name it in allowed_hosts; else check the catalog, or "
+                "the table, that the href came from"
+                if kind == "private"
+                else _FIX
+            )
             raise RefusedHref(
                 f"{url!r}: the host {host} resolves to {addr}, a {kind} address, which GeoBrix does not fetch for "
-                f"an href that comes from data. {_FIX}"
+                f"an href that comes from data. {fix}"
             )
 
 

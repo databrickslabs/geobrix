@@ -780,6 +780,16 @@ DATA_PATHS = [
     ("/vsitar//vsis3/b/a.tar/a.tif", None),
     ("zip+s3://b/a.zip!/a.tif", None),
     ("/vsimem/gbx/a.tif", None),
+    # the cloud stores' streaming forms, the Azure URI forms, and gzip around an allowed path
+    ("/vsis3_streaming/b/a.tif", None),
+    ("/vsiaz_streaming/c/a.tif", None),
+    ("/vsigs_streaming/b/a.tif", None),
+    ("az://c/a.tif", None),
+    ("abfs://c@acct.dfs.core.windows.net/a.tif", None),
+    ("/vsigzip//Volumes/c/s/v/a.tif.gz", None),
+    ("/vsigzip//vsis3/b/a.tif.gz", None),
+    ("/vsigzip//vsicurl/http://h/a.tif.gz", "/vsicurl/"),
+    ("/vsiadls_streaming/c/a.tif", "/vsiadls_streaming/"),
     (_URL, "/vsicurl/"),
     ("/vsicurl_streaming/https://h/a.tif", "/vsicurl_streaming/"),
     ("/vsicurl?url=http://h/a.tif", "/vsicurl/"),
@@ -886,6 +896,23 @@ def test_each_path_from_data_goes_through_the_remote_path_gate(
         GATED_SITES[site](tmp_path)
 
 
+def test_rst_fromfile_refuses_a_remote_url_at_once_unless_the_switch_is_carried(
+    monkeypatch,
+):
+    """A column function's path is data: rst_fromfile over a URL raises the policy's refusal at its first evaluation,
+    not a NULL tile or a later op's error; with the switch carried it keeps its behaviour (here: an unreachable URL
+    gives NULL)."""
+    _rasterio_or_skip()
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    monkeypatch.delenv(_gdal_policy.REMOTE_ENV, raising=False)
+    url = "http://127.0.0.1:9/a.tif"
+    with pytest.raises(_gdal_policy.RemotePathError, match=r"\(http://\).*Fix:"):
+        prx._fromfile_impl(url, "GTiff", False)
+    with _gdal_policy.carried(True):
+        assert prx._fromfile_impl(url, "GTiff", False) is None
+
+
 def test_the_engine_gives_an_error_tile_for_a_remote_virtual_tile(monkeypatch):
     """The L3 engine's read of a virtual tile goes through the same gate: the error tile names the location."""
     from databricks.labs.gbx.engine import l3, run
@@ -897,3 +924,92 @@ def test_the_engine_gives_an_error_tile_for_a_remote_virtual_tile(monkeypatch):
     fn = manifest.load().functions["gbx_rst_slope"]
     with pytest.raises(run.DataError, match=r"\(/vsicurl/\)"):
         l3._inputs(fn, {"cellid": 0, "raster": None, "path": _URL, "window": None})
+
+
+class _RangeHandler:
+    """A local HTTP server for GDAL's /vsicurl/: HEAD, GET and byte ranges of one GeoTIFF."""
+
+    def __init__(self, body: bytes):
+        import http.server
+        import threading
+
+        data = body
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def _send(self, head_only):
+                rng = self.headers.get("Range")
+                part, status = data, 200
+                if rng and rng.startswith("bytes="):
+                    a, _, b = rng[6:].partition("-")
+                    a = int(a)
+                    b = min(int(b) if b else len(data) - 1, len(data) - 1)
+                    part, status = data[a : b + 1], 206
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(part)))
+                self.send_header("Accept-Ranges", "bytes")
+                if status == 206:
+                    self.send_header("Content-Range", f"bytes {a}-{b}/{len(data)}")
+                self.end_headers()
+                if not head_only:
+                    self.wfile.write(part)
+
+            def do_GET(self):
+                self._send(False)
+
+            def do_HEAD(self):
+                self._send(True)
+
+            def log_message(self, *a):
+                pass
+
+        self.srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.srv.server_address[1]}/a.tif"
+
+    def close(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+
+def test_the_switch_is_read_on_the_driver_and_carried_to_the_workers(
+    spark8, monkeypatch, tmp_path
+):
+    """The workers never read the switch: the SQL functions register() installs carry the driver's value. With the
+    switch on in the driver at register() and NOT in the workers' environment, a worker opens a remote path; after
+    register() with it off, the same query is refused."""
+    _rasterio_or_skip()
+    import numpy as np
+    import rasterio
+    from pyspark.sql import functions as F
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    spark = spark8
+    tif = tmp_path / "a.tif"
+    with rasterio.open(
+        tif,
+        "w",
+        driver="GTiff",
+        width=8,
+        height=6,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(0, 6, 1, 1),
+    ) as w:
+        w.write(np.ones((1, 6, 8), dtype="uint8"))
+    server = _RangeHandler(tif.read_bytes())
+    worker_env = F.udf(lambda _: os.environ.get(_gdal_policy.REMOTE_ENV), "string")
+    query = f"SELECT gbx_rst_width(gbx_rst_fromfile('{server.url}', 'GTiff')) AS w"
+    try:
+        monkeypatch.setenv(_gdal_policy.REMOTE_ENV, "true")
+        prx.register(spark, only=["gbx_rst_fromfile", "gbx_rst_width"])
+        assert spark.range(1).select(worker_env("id")).first()[0] is None
+        assert spark.sql(query).first()["w"] == 8
+        monkeypatch.delenv(_gdal_policy.REMOTE_ENV)
+        prx.register(spark, only=["gbx_rst_fromfile", "gbx_rst_width"])
+        with pytest.raises(Exception, match="names a remote location"):
+            spark.sql(query).collect()
+    finally:
+        server.close()

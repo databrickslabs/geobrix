@@ -101,7 +101,7 @@ def _classify_vector_source(source: str, source_type: str) -> str:
 _STREAM_BATCH = 10000
 
 
-def _make_vector_decode_fn(as_wkb: bool, layer):
+def _make_vector_decode_fn(as_wkb: bool, layer, remote_allowed=None):
     """Return a ``mapInPandas`` decode function for pyogrio vector files.
 
     The returned generator streams each source path with ``pyogrio.open_arrow``
@@ -117,8 +117,13 @@ def _make_vector_decode_fn(as_wkb: bool, layer):
     """
     _layer = layer
     _as_wkb = as_wkb
+    _remote = remote_allowed  # the driver's remote-path switch, carried in the closure
 
     def _map(pdf_iter):
+        with _gdal_policy.carried(_remote):
+            yield from _decode(pdf_iter)
+
+    def _decode(pdf_iter):
         import numpy as np
         import pandas as pd
 
@@ -239,7 +244,9 @@ def vector_file_read(
     out_schema = StructType(
         [StructField("source", StringType()), StructField("geometry", geom_type)]
     )
-    decode_fn = _make_vector_decode_fn(as_wkb, layer)
+    decode_fn = _make_vector_decode_fn(
+        as_wkb, layer, remote_allowed=_gdal_policy.driver_switch()
+    )
 
     if effective_st == "table":
         # Table mode: resolve FILE-column table → plain source paths → decode.

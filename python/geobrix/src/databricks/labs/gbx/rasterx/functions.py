@@ -69,10 +69,6 @@ def register(_spark: SparkSession) -> None:
     # with it when pyrx (a light-tier extra) is importable. If it is NOT present, skip gracefully and leave the
     # Scala gbx_rst_fromfile in place (it still reads local / DBFS / Workspace, just not /Volumes).
     try:
-        from databricks.labs.gbx.pyrx.functions import (
-            _fromfile_sql_materialized_udf as _pyrx_fromfile_materialized_udf,
-        )
-
         # Register the 2-arg (path, driver) SQL UDF, but the HEAVY variant that
         # MATERIALIZES: heavy/JVM callers need bytes (a virtual path-only tile is
         # useless to them). Same call text as the light registration
@@ -80,7 +76,14 @@ def register(_spark: SparkSession) -> None:
         # materialized, last register() wins. (_fromfile_udf is the 3-arg
         # Python-binding variant and must NOT be registered here, or 2-arg SQL
         # calls break on arity.)
-        _spark.udf.register("gbx_rst_fromfile", _pyrx_fromfile_materialized_udf)
+        from databricks.labs.gbx import _gdal_policy
+        from databricks.labs.gbx.pyrx.functions import (
+            _fromfile_sql_materialized_udf as _pyrx_fromfile_materialized_udf,
+        )
+
+        # the light implementation it registers carries the driver's remote-path switch to the workers
+        with _gdal_policy.carrying_registrations(_spark):
+            _spark.udf.register("gbx_rst_fromfile", _pyrx_fromfile_materialized_udf)
     except (
         Exception
     ):  # noqa: BLE001 - pyrx/light-tier not installed: keep the Scala fallback

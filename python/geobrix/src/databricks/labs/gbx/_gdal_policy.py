@@ -31,12 +31,16 @@ One switch turns the whole defence off: ``GBX_GDAL_DRIVER_POLICY=off`` in the en
 
 from __future__ import annotations
 
+import collections.abc
 import contextlib
+import contextvars
+import copy
 import functools
 import os
 import re
 import sys
 import threading
+import types
 import warnings
 from typing import Dict, Optional
 
@@ -105,22 +109,205 @@ class RemotePathError(DriverPolicyError):
 
 
 # The remote-path gate: what a path that comes from data may name. Local and FUSE paths (no scheme: /Volumes,
-# /Workspace, /dbfs, a relative path; the dbfs: and file: spellings), the cloud object stores, the archive wrappers
-# around an allowed path, and GeoBrix's own /vsimem/. Anything else that names a location (/vsicurl/, http(s)://,
-# ftp://, another GDAL virtual file system), at any depth of a wrapper, is refused unless REMOTE_ENV allows it.
+# /Workspace, /dbfs, a relative path; the dbfs: and file: spellings), the cloud object stores (and their streaming
+# and Azure URI forms), the archive and gzip wrappers around an allowed path, and GeoBrix's own /vsimem/. Anything
+# else that names a location (/vsicurl/, http(s)://, ftp://, another GDAL virtual file system), at any depth of a
+# wrapper, is refused unless the switch (REMOTE_ENV) allows it.
 REMOTE_ENV = "GBX_ALLOW_REMOTE_PATHS"
 _DATA_SCHEMES = frozenset(
-    {"s3", "s3a", "abfss", "gs", "wasbs", "zip", "tar", "file", "dbfs"}
+    {
+        "s3",
+        "s3a",
+        "abfss",
+        "abfs",
+        "az",
+        "gs",
+        "wasbs",
+        "zip",
+        "tar",
+        "gzip",
+        "file",
+        "dbfs",
+    }
 )
-_DATA_VSI = frozenset({"s3", "az", "adls", "gs", "mem", "zip", "tar"})
+_DATA_VSI = frozenset(
+    {
+        "s3",
+        "s3_streaming",
+        "az",
+        "az_streaming",
+        "adls",
+        "gs",
+        "gs_streaming",
+        "mem",
+        "zip",
+        "tar",
+        "gzip",
+    }
+)
 _SCHEME = re.compile(r"(?<![a-z0-9+.\-])([a-z][a-z0-9+.\-]*)://", re.IGNORECASE)
 # a GDAL virtual file system prefix where a file name starts: the start, or after a wrapper's / { " ' : , or a space
 _VSI = re.compile(r"(?:^|(?<=[/{\"':,\s]))/vsi([a-z0-9_]+)", re.IGNORECASE)
 
 
-def remote_paths_allowed() -> bool:
-    """True when the remote-path switch (``GBX_ALLOW_REMOTE_PATHS``) is on in this process's environment."""
+# The switch as the driver read it, carried into a worker by the UDF, the reader or the closure that runs there (see
+# ``carrying``): a worker never reads the switch itself.
+_CARRIED: contextvars.ContextVar = contextvars.ContextVar(
+    "gbx_remote_paths", default=None
+)
+
+
+def driver_switch() -> bool:
+    """The remote-path switch as this process's environment sets it (``GBX_ALLOW_REMOTE_PATHS``): read on the driver,
+    where a call is built (``register()``, a reader's planning, ``rst_fromfile``, ``vector_file_read``), and carried to
+    the workers from there."""
     return os.environ.get(REMOTE_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _in_spark_task() -> bool:
+    try:
+        from pyspark import TaskContext
+    except ImportError:  # no pyspark: no Spark task either
+        return False
+    return TaskContext.get() is not None
+
+
+def remote_paths_allowed() -> bool:
+    """Whether a remote path from data may be opened here: the value the driver carried in, else off in a Spark task
+    (a worker never reads the switch itself), else the driver's own switch (``driver_switch``).
+    """
+    value = _CARRIED.get()
+    if value is not None:
+        return value
+    if _in_spark_task():
+        return False
+    return driver_switch()
+
+
+@contextlib.contextmanager
+def carried(allowed: Optional[bool]):
+    """The block runs with ``allowed`` as the carried switch (None: as it was)."""
+    if allowed is None:
+        yield
+        return
+    token = _CARRIED.set(bool(allowed))
+    try:
+        yield
+    finally:
+        _CARRIED.reset(token)
+
+
+def _carrying_iter(it, allowed: bool):
+    while True:
+        with carried(allowed):
+            try:
+                item = next(it)
+            except StopIteration:
+                return
+        yield item
+
+
+def _carrying_function(func, allowed: bool):
+    """``func`` run with ``allowed`` carried; an iterator it returns (an iterator UDF, a UDTF's rows) produces each
+    item with it carried too."""
+
+    @functools.wraps(func)
+    def run(*args, **kwargs):
+        with carried(allowed):
+            result = func(*args, **kwargs)
+        if isinstance(result, collections.abc.Iterator):
+            return _carrying_iter(result, allowed)
+        return result
+
+    return run
+
+
+_HANDLER_METHODS = ("__init__", "eval", "terminate", "cleanup")
+
+
+def _carrying_class(cls, allowed: bool):
+    """A UDTF handler class whose methods run with ``allowed`` carried (a class made here is pickled by value)."""
+    own = {
+        name: _carrying_function(getattr(cls, name), allowed)
+        for name in _HANDLER_METHODS
+        if any(name in c.__dict__ for c in cls.__mro__[:-1])
+    }
+    return type(
+        f"{cls.__name__}Carrying", (cls,), {"__module__": cls.__module__, **own}
+    )
+
+
+def carrying(f, allowed: bool):
+    """What a registration takes, for ``f`` with the driver's switch carried into every worker call: a UDF object
+    (``spark.udf.register``), a UDTF (``spark.udtf.register``) or a plain function."""
+    func = getattr(f, "func", None)
+    if isinstance(
+        func, type
+    ):  # a UDTF: the same registration over a carrying handler class
+        out = copy.copy(f)
+        out.func = _carrying_class(func, allowed)
+        return out
+    if func is not None and hasattr(
+        f, "evalType"
+    ):  # a UDF: the attributes the registration reads
+        return types.SimpleNamespace(
+            func=_carrying_function(func, allowed),
+            returnType=f.returnType,
+            evalType=f.evalType,
+            deterministic=getattr(f, "deterministic", True),
+            asNondeterministic=getattr(f, "asNondeterministic", None),
+        )
+    if callable(f):
+        return _carrying_function(f, allowed)
+    return f
+
+
+def carrying_udf(f, allowed: bool):
+    """A scalar Python UDF ``f`` (``F.udf``) remade with the switch carried, for a column a binding builds."""
+    from pyspark.sql import functions as F
+
+    return F.udf(_carrying_function(f.func, allowed), f.returnType)
+
+
+def carrying_source(cls, allowed: bool):
+    """A DataSource class whose readers carry ``allowed`` (``reader._gbx_remote_allowed``) into their planning."""
+
+    def reader(self, schema):
+        r = cls.reader(self, schema)
+        r._gbx_remote_allowed = allowed
+        return r
+
+    return type(
+        f"{cls.__name__}Carrying",
+        (cls,),
+        {"__module__": cls.__module__, "reader": reader},
+    )
+
+
+@contextlib.contextmanager
+def carrying_registrations(spark, allowed: Optional[bool] = None):
+    """While the block runs, every ``spark.udf`` / ``spark.udtf`` registration carries the driver's switch (read now,
+    unless ``allowed`` is given): the one point where the registrars hand their functions to Spark.
+    """
+    allowed = driver_switch() if allowed is None else allowed
+    patched = []
+    for name in ("udf", "udtf"):
+        try:
+            cls = type(getattr(spark, name))
+        except Exception:  # noqa: BLE001 - a session without it registers none
+            continue
+        orig = cls.register
+
+        def register(self, name, f, *args, _orig=orig, **kwargs):
+            return _orig(self, name, carrying(f, allowed), *args, **kwargs)
+
+        cls.register = register
+        patched.append((cls, orig))
+    try:
+        yield allowed
+    finally:
+        for cls, orig in reversed(patched):
+            cls.register = orig
 
 
 def remote_location(path) -> Optional[str]:
@@ -153,7 +340,8 @@ def data_path(path, what: str = "a path from data"):
         f"{what}: {os.fspath(path)!r} names a remote location ({where}), which GeoBrix does not open for a path that "
         "comes from data (a tile's path, a tile index's row, a VRT's source, a vector table's path). Fix: copy the "
         "data to a Volume or a cloud object store (s3://, abfss://, gs://), or, for data you trust, set "
-        f"{REMOTE_ENV}=true in the environment of the processes that read it"
+        f"{REMOTE_ENV}=true in the driver's environment before register() (and before the column or the read is "
+        "built): the workers get it from there"
     )
 
 

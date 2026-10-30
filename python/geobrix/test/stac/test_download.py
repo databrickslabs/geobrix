@@ -228,3 +228,56 @@ def test_a_windowed_read_of_a_loopback_href_is_refused_before_gdal_opens_it(
     with pytest.raises(_http.RefusedHref, match="a loopback address"):
         windowed_download(href, str(tmp_path / "w.tif"), (2, 2, 5, 6))
     assert server.hits == []
+
+
+@pytest.fixture
+def private_test(monkeypatch, server):
+    """`stac.corp` is a private (RFC 1918) address, `meta.corp` the metadata address and `lo.corp` loopback, to the
+    checks; each is the local server to the socket."""
+    names = {
+        "stac.corp": "10.0.0.5",
+        "meta.corp": "169.254.169.254",
+        "lo.corp": "127.0.0.1",
+    }
+    real_getaddrinfo, real_addresses = socket.getaddrinfo, _http._addresses
+
+    def getaddrinfo(host, *args, **kwargs):
+        return real_getaddrinfo("127.0.0.1" if host in names else host, *args, **kwargs)
+
+    def addresses(host, port):
+        return [names[host]] if host in names else real_addresses(host, port)
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(_http, "_addresses", addresses)
+    return server.port
+
+
+def test_a_private_host_the_caller_lists_is_fetched_and_an_unlisted_one_refused(
+    server, private_test, tmp_path
+):
+    href = f"http://stac.corp:{private_test}/a.tif"
+    with pytest.raises(_http.RefusedHref, match="a private address"):
+        download_href(href, str(tmp_path / "x.tif"))
+    with pytest.raises(_http.RefusedHref, match="not in allowed_hosts"):
+        download_href(href, str(tmp_path / "x.tif"), allowed_hosts=["other.corp"])
+    assert server.hits == []
+    download_href(href, str(tmp_path / "x.tif"), allowed_hosts=["stac.corp"])
+    assert read_validate(str(tmp_path / "x.tif")) and len(server.hits) == 1
+
+
+@pytest.mark.parametrize(
+    "host,kind", [("meta.corp", "link-local"), ("lo.corp", "loopback")]
+)
+def test_a_listed_loopback_or_metadata_host_is_still_refused(
+    server, private_test, tmp_path, host, kind
+):
+    href = f"http://{host}:{private_test}/a.tif"
+    with pytest.raises(_http.RefusedHref, match=f"a {kind} address"):
+        download_href(href, str(tmp_path / "x.tif"), allowed_hosts=[host])
+    with pytest.raises(_http.RefusedHref, match="a link-local address"):
+        download_href(
+            "http://169.254.169.254/latest/meta-data/",
+            str(tmp_path / "y"),
+            allowed_hosts=["169.254.169.254"],
+        )
+    assert server.hits == []

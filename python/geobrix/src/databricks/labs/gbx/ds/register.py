@@ -74,8 +74,12 @@ def register(
             only, by_name.keys(), normalizer=_register.normalize_datasource_name
         )
         selected = [by_name[n] for n in wanted]
+    from databricks.labs.gbx import _gdal_policy
+
+    # each reader carries the driver's remote-path switch into its planning (the workers never read it)
+    allowed = _gdal_policy.driver_switch()
     for source in selected:
-        spark.dataSource.register(source)
+        spark.dataSource.register(_gdal_policy.carrying_source(source, allowed))
 
 
 def _try_register_on_import() -> None:

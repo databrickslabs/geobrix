@@ -270,16 +270,20 @@ def _small_tif(path, size=64):
     "site", ["reader window", "reader clip", "stac download", "cog file"]
 )
 def test_every_site_that_caps_the_block_cache_applies_the_cap(
-    tmp_path, cap_seen, block_cache, site
+    tmp_path, cap_seen, block_cache, monkeypatch, site
 ):
     """Each of the four places that bound GDAL's block cache asks for the size the budget names
-    and has it in force while it works; deleting the wrapper from one fails its row."""
+    and has it in force while it works; deleting the wrapper from one fails its row. On a classic
+    runtime the streaming COG copy's size (its ceiling) differs from the others', so a site that
+    drops its ceiling fails too."""
     from databricks.labs.gbx.pyrx.core import analysis, budget
 
+    monkeypatch.setattr(budget, "runtime_kind", lambda: "classic")
     src = _small_tif(tmp_path / "src.tif")
     streaming = budget.block_cache_bytes(
         "auto", ceiling=budget.STREAMING_BLOCK_CACHE_MAX
     )
+    assert streaming == 4 * 1024 * 1024 != budget.block_cache_bytes("auto")
     if site == "cog file":
         analysis.cog_convert_file(src, str(tmp_path / "out.tif"), blocksize=256)
         want = streaming

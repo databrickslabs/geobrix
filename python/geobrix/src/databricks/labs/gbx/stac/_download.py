@@ -184,7 +184,7 @@ def fetch_validate_publish(
     outpath = os.path.join(out_dir, safe_filename)
     os.makedirs(out_dir, exist_ok=True)
 
-    # I3 — idempotency short-circuit
+    # a target that is already valid is returned without downloading again
     if os.path.exists(outpath):
         if validate:
             if read_validate(outpath):
@@ -210,7 +210,7 @@ def fetch_validate_publish(
                     shutil.copyfile(local, outpath)  # publish only validated files
                     return outpath
             else:
-                # I1 — no-validate path: publish without rasterio decode
+                # validate=False: publish the bytes without a rasterio decode
                 shutil.copyfile(local, outpath)
                 return outpath
         except Exception as exc:

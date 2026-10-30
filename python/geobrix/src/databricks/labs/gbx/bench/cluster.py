@@ -2934,13 +2934,17 @@ else:
 _CELL_LEVELS = """# Levels leg (perf matrix + attribution split): every form of the chosen set at each
 # execution level this compute offers (L1 Catalyst, L2 Java UDF, L3 light, L4 Unity Catalog),
 # timed at 1x/4x/16x. Rows land in the same results table; the split is in the row's own columns.
+import faulthandler as _fh, sys as _sys
 from databricks.labs.gbx.bench import levels as _lv
+# A driver stack dump every 10 minutes while the leg runs: a leg prints nothing until it ends, so a hang shows where.
+_fh.dump_traceback_later(600, repeat=True, file=_sys.stderr)
 print("=== levels leg starting:", LEVELS_MVP, flush=True)
 _lv_rows = _lv.run_mvp(spark, LEVELS_MVP, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, corpus=CORPUS,
                        schema=".".join(TABLE.split(".")[:2]), uc=(LEVELS_UC or None), where="cluster",
                        scales=LEVELS_SCALES)
 _sink(_lv_rows)
 lw.extend(_lv_rows)
+_fh.cancel_dump_traceback_later()
 _show_md(f"levels leg {LEVELS_MVP} -- {RUN_ID}", _lv.summarize(_lv_rows))
 """
 

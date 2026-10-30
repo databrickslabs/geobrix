@@ -243,7 +243,8 @@ def main() -> int:
         if no_prune:
             print("--no-prune: other geobrix-*.whl files in %s are kept." % artifact_volume)
         else:
-            prune_stale(w, artifact_volume, "geobrix-", ".whl", whl.name)
+            # the plain wheel's other versions only: an env wheel (+env5 / +env6) is never this stage's to delete
+            prune_stale(w, artifact_volume, "geobrix-", ".whl", whl.name, exclude="+env")
     except Exception as e:
         print(f"Error: could not list/clean artifact volume {artifact_volume}: {e}", file=sys.stderr)
         return 1

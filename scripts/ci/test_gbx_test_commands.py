@@ -1521,3 +1521,15 @@ def test_stage_wheel_env_puts_each_env_wheel_on_the_bundle_volroot_by_its_own_na
     assert uploads == [f"/Volumes/c/s/v/geobrix-0.6.0+env{e}-py3-none-any.whl" for e in envs]
     assert not [c for c in files.calls if c[0] in ("list", "delete")]
 
+
+
+def test_the_plain_wheel_stage_prunes_only_other_plain_wheels(monkeypatch):
+    # if GBX_ARTIFACT_VOLUME is the bundle volroot, a plain stage must not delete the env wheels staged there
+    av = _launcher("_artifact_volume", monkeypatch)
+    files = _FakeFiles(["geobrix-0.5.2-py3-none-any.whl", "geobrix-0.6.0+env5-py3-none-any.whl",
+                        "geobrix-0.6.0+env6-py3-none-any.whl", "geobrix-0.6.0-py3-none-any.whl", "other.txt"])  # fmt: skip
+    w = type("W", (), {"files": files})()
+    removed = av.prune_stale(w, "/Volumes/c/s/v", "geobrix-", ".whl", "geobrix-0.6.0-py3-none-any.whl", exclude="+env")
+    assert removed == ["/Volumes/c/s/v/geobrix-0.5.2-py3-none-any.whl"]
+    text = (REPO_ROOT / "examples/tests/stage_wheel_to_volume.py").read_text()
+    assert 'whl.name, exclude="+env")' in text  # the stage passes it

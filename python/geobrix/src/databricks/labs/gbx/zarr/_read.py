@@ -29,6 +29,7 @@ of tile numbers into ``mapInArrow``), so no tile passes through the driver.
 from __future__ import annotations
 
 import dataclasses
+import functools
 import itertools
 import json
 import logging
@@ -1381,28 +1382,19 @@ _TILES_PER_TASK = 2048  # virtual tiles one task makes
 _MATERIALIZED_PER_TASK = 64  # tiles a task reads and encodes when virtual_tiles=False
 _TILE_BATCH = 512  # virtual tiles per Arrow batch
 _MATERIALIZED_BATCH = 8  # materialized tiles per Arrow batch (each holds its bytes)
-_WINDOW_ARROW = pa.struct(
-    [
-        ("col_off", pa.int32()),
-        ("row_off", pa.int32()),
-        ("width", pa.int32()),
-        ("height", pa.int32()),
-    ]
-)
-_TILE_ARROW = pa.struct(
-    [
-        ("cellid", pa.int64()),
-        ("raster", pa.binary()),
-        ("path", pa.string()),
-        ("path_mode", pa.string()),
-        ("window", _WINDOW_ARROW),
-        ("clip_polygon", pa.binary()),
-        ("clip_crs", pa.string()),
-        ("crs", pa.string()),
-        ("metadata", pa.map_(pa.string(), pa.string())),
-    ]
-)
-_TILES_ARROW = pa.schema([("source", pa.string()), ("tile", _TILE_ARROW)])
+
+
+@functools.lru_cache(maxsize=1)
+def _tiles_arrow() -> pa.Schema:
+    """The Arrow schema of a tiles batch: the declared ``(source, tile)`` schema itself
+    (``reader_schema_v2``), nullability included. A tile row is never NULL here (an
+    unreadable tile raises), so its fields are the declared NOT NULL ones, as every raster
+    reader declares them; Spark 4.1+ fails a ``zarr_gbx`` read whose batches differ from the
+    declared schema in nullability (``DATA_SOURCE_RETURN_SCHEMA_MISMATCH``)."""
+    from databricks.labs.gbx.ds._arrow_utc import arrow_schema_utc
+    from databricks.labs.gbx.ds.raster import reader_schema_v2
+
+    return arrow_schema_utc(reader_schema_v2())
 
 
 def _raw_attrs(metas: dict[str, bytes], path: str) -> dict | None:
@@ -1529,7 +1521,7 @@ def _tile_batches(
                     materialize_to_bytes(VirtualTile.from_row(r)).to_row() for r in rows
                 ]
         yield pa.RecordBatch.from_pylist(
-            [{"source": source_of(r), "tile": r} for r in rows], schema=_TILES_ARROW
+            [{"source": source_of(r), "tile": r} for r in rows], schema=_tiles_arrow()
         )
 
 

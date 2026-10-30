@@ -11,8 +11,8 @@ name: Build GDAL native (x86_64)
 #      KEY=VALUE lines, build.Dockerfile, every recipe it copies or mounts, rust-toolchain.toml). The orchestration is
 #      deliberately not in that key, as it is not in the native image tag (pins.py tag-hash): gbx-build-native.sh's
 #      arguments and context assembly, pins.py build-args, and the checks verify-native.sh and test-bindings.sh. A change
-#      to them does not rebuild or re-verify a cached build (the two-architecture gate, gbx:native:verify-arches, hashes
-#      the checks).
+#      to them does not rebuild or re-verify a cached build. (The two-architecture gate, gbx:native:verify-arches,
+#      hashes verify-native.sh and check-env-wheel.sh, the checks it runs; it does not run test-bindings.sh.)
 #    - A hit builds nothing; a miss builds stage-native then bindings, each verified as gbx:build:native verifies it
 #      (about 20-40 min). The build is saved on a push to main or to the release branch, and on a pull request from this
 #      repository (in the pull request's own scope, about 62 MB, so its next pushes restore it). GitHub scopes a cache
@@ -35,19 +35,22 @@ name: Build GDAL native (x86_64)
 #    It uploads what the build wrote to build/native/out/x86_64/.
 #
 # Network. Runs on the Databricks-hardened runner groups (Labs lockdown policy), which route package fetches through
-# JFrog: pip and the Rust crates go through the JFrog mirror with the OIDC login the other workflows use
-# (jfrog-pip-bootstrap and jfrog-auth, then jfrog-cargo: the toolchain target vendors Rust crates on the runner). The
-# login is made again before the bindings target, whose prefetch can start after the first token expired. The mirror
-# serves a crate version only 7 days after its release. No repository secrets.
+# JFrog: pip, the Rust crates and the five binding sdists go through the JFrog mirror with the OIDC login the other
+# workflows use (jfrog-pip-bootstrap and jfrog-auth, then jfrog-cargo: the toolchain target vendors Rust crates on the
+# runner). The sdists come from the package index pip is configured with (GBX_SDISTS_FROM=index: fetch-lib.sh
+# fetch_sdist, scripts/native/index_fetch.py, sha256-checked against pins.conf), because those groups block pypi.org's
+# file host. The login is made again before the bindings target, whose prefetch can start after the first token
+# expired. The mirror serves a crate version only 7 days after its release. No repository secrets.
 # Direct fetches: the repository wires JFrog remotes for PyPI, Maven, npm and cargo only (no Docker or generic remote),
 # so a cold build fetches four kinds of thing from their own hosts, each checked by its pin or its signature:
-#   - the pinned downloads of scripts/native/prefetch.sh (pins.conf's *_URL / *_URL2: source tarballs, the bindings'
-#     sdists, rustup-init, cargo-deny, the PROJ grids, rasterio's test data), sha256-checked;
+#   - the pinned downloads of scripts/native/prefetch.sh: pins.conf's *_URL / *_URL2 (the source tarballs, rustup-init,
+#     cargo-deny, the PROJ grids) and rasterio's test data (test-data.conf), sha256-checked;
 #   - the manylinux image from quay.io, pinned by digest;
 #   - the JDK from the image's AlmaLinux dnf repositories (rpm signatures);
-#   - the Rust toolchain from static.rust-lang.org (rustup checks it against its manifest).
-# "Check the direct downloads are reachable" probes all four before the build and fails in seconds with one ::error::
-# per blocked host. Only a cold build (a cache miss) fetches anything.
+#   - the Rust toolchain from static.rust-lang.org, rustup-init's host (rustup checks it against its manifest).
+# "Check the direct downloads are reachable" probes all four before the build (a ranged GET of every pinned file; an
+# HTTP 403, 407 or 451 counts as blocked) and fails in seconds with one ::error:: per download with no working origin.
+# Only a cold build (a cache miss) fetches anything.
 # This workflow does not interpolate any github.event.* values into run: blocks.
 on:
   workflow_dispatch:
@@ -86,6 +89,8 @@ jobs:
       id-token: write
     env:
       TARGET: ${{ inputs.target }}
+      # the binding sdists through the package index pip is configured with (the JFrog PyPI remote), not pypi.org's file host
+      GBX_SDISTS_FROM: index
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2

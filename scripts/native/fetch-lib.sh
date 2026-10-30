@@ -39,3 +39,17 @@ fetch_verified() {
     echo "PREFETCH FAILED: $(basename "$dest") could not be downloaded from any of its sources" >&2
     return 1
 }
+
+# fetch_sdist DEST SHA256 FILE: a Python binding's sdist (pins.conf <X>_SDIST_FILE / _SDIST_SHA256). With
+# GBX_SDISTS_FROM=index (CI's builder sets it: the hardened runners reach PyPI only through the JFrog remote pip is
+# configured for), index_fetch.py reads it from the package index pip is configured with and checks the sum; it never
+# prints the index. Otherwise it comes from the project's own path on the public file host, through fetch_verified.
+fetch_sdist() {
+    local dest="$1" want="$2" file="$3" name
+    name="${file%%-[0-9]*}"
+    if [ "${GBX_SDISTS_FROM:-host}" = index ]; then
+        python3 "$GBX_NATIVE_DIR/index_fetch.py" "$name" "$file" "$want" "$dest"
+    else
+        fetch_verified "$dest" "$want" "https://files.pythonhosted.org/packages/source/${name:0:1}/$name/$file"
+    fi
+}

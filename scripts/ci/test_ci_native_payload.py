@@ -11,6 +11,8 @@ No Docker and no network: the workflows are read as YAML, native_inputs.py runs 
 holds copies of the real input files, jvm_payload.py on a fake native tree.
 """
 
+import ast
+import base64
 import hashlib
 import json
 import os
@@ -125,21 +127,65 @@ def test_a_failed_input_hash_fails_the_key_step(tmp_path, where):
     assert "hash=" not in out
 
 
-def test_the_direct_download_probe_names_a_download_with_no_reachable_origin():
+def _probe_module():
     sys.path.insert(0, str(REPO_ROOT / "scripts" / "native"))
     import egress_probe
 
+    return egress_probe
+
+
+def test_the_direct_download_probe_names_a_download_with_no_working_origin():
+    """Each direct download needs one origin that serves the file; a policy proxy's 403/407/451 is blocked, not
+    reachable. The sdists are not direct (they come through the package index in CI); rasterio's test data is."""
+    probe = _probe_module()
     pins = {
         "ZLIB_URL": "https://blocked-a.example/zlib.tar.gz",
-        "ZLIB_URL2": "https://mirror.example/zlib.tar.gz",  # the mirror answers: zlib has an origin
-        "PROJ_URL": "https://blocked-b.example/proj.tar.gz",
+        "ZLIB_URL2": "https://mirror.example/zlib.tar.gz",  # the mirror serves it: zlib has an origin
+        "PROJ_URL": "https://policy.example/proj.tar.gz",  # answers 403 (a proxy's refusal)
         "PROJ_URL2": "single-source",
         "RUSTUP_URL": "https://mirror.example/rustup/{triple}/rustup-init",
+        "RASTERIO_SDIST_FILE": "rasterio-1.5.2.tar.gz",
     }
-    errors = egress_probe.probe(pins, lambda host: not host.startswith("blocked"))
-    assert len(errors) == 1 and errors[0].startswith("::error::direct egress blocked: blocked-b.example")
+    testdata = {"RASTERIO_TESTDATA_URL": "https://mirror.example/rasterio/1.5.2.tar.gz"}
+    dl = probe.downloads(pins, testdata, "x86_64")
+    assert sorted(dl) == ["PROJ", "RASTERIO_TESTDATA", "RUSTUP", "ZLIB"]
+    assert dl["RUSTUP"] == ["https://mirror.example/rustup/x86_64-unknown-linux-gnu/rustup-init"]
+    assert all(probe.kind(d) != "a pinned source tarball" for d in ("RUSTUP", "RASTERIO_TESTDATA"))
+
+    def check(url):
+        host = url.split("/")[2]
+        if host.startswith("blocked"):
+            return False, "no connection"
+        return (False, "refused (HTTP 403: a policy proxy)") if host.startswith("policy") else (True, "ok")
+
+    errors = probe.probe(dl, check)
+    assert len(errors) == 1 and errors[0].startswith("::error::direct egress blocked: policy.example (refused (HTTP 403")
     assert "pins.conf PROJ_URL" in errors[0] and "Direct fetches" in errors[0]
-    assert egress_probe.probe(pins, lambda host: True) == []
+    assert probe.probe(dl, lambda url: (True, "ok")) == []
+
+
+@pytest.mark.parametrize("code, ok", [(206, True), (200, True), (403, False), (407, False), (451, False), (404, False)])
+def test_a_policy_proxys_refusal_is_blocked(monkeypatch, code, ok):
+    probe = _probe_module()
+
+    def urlopen(req, timeout):
+        if code >= 400:
+            raise probe.urllib.error.HTTPError(req.full_url, code, "x", {}, None)
+
+        class R:
+            def read(self, n):
+                return b"x"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        return R()
+
+    monkeypatch.setattr(probe.urllib.request, "urlopen", urlopen)
+    assert probe.check_url("https://h.example/f.tar.gz", 5)[0] is ok
 
 
 def _jvm_jobs():
@@ -244,7 +290,7 @@ def _edit(root, rel, fn):
 
 
 GDALMANAGER = "src/main/scala/com/databricks/labs/gbx/rasterx/gdal/GDALManager.scala"
-NOT_INPUTS = [GDALMANAGER, "scripts/native/redact.py"]
+NOT_INPUTS = [GDALMANAGER, "python/geobrix/README.md", "scripts/native/arch-gate.json"]
 APPEND = lambda b: b + b"\n# x\n"  # noqa: E731
 EDITS = {  # edit -> (does the build hash move, does the gate hash move)
     "a pin value": ("scripts/native/pins.conf", lambda b: b.replace(b"GDAL_VERSION=3", b"GDAL_VERSION=4", 1), True, True),
@@ -256,7 +302,10 @@ EDITS = {  # edit -> (does the build hash move, does the gate hash move)
     "the activation rules": ("python/geobrix/src/databricks/labs/gbx/_native/_rules.py", APPEND, False, True),
     "a check script": ("scripts/native/check-env-wheel.sh", APPEND, False, True),
     "GDALManager (no gate check runs it)": (GDALMANAGER, lambda b: b + b"\n// x\n", False, False),
-    "a file that is no input": ("scripts/native/redact.py", APPEND, False, False),
+    "a library source (in the wheel)": ("python/geobrix/src/databricks/labs/gbx/core/crs.py", APPEND, False, True),
+    "pyproject.toml (the wheel's)": ("python/geobrix/pyproject.toml", APPEND, False, True),
+    "README.md (no gate check reads it)": ("python/geobrix/README.md", APPEND, False, False),
+    "the stamp itself": ("scripts/native/arch-gate.json", lambda b: b + b" ", False, False),
 }
 
 
@@ -268,6 +317,100 @@ def test_the_native_input_hash_moves_with_the_inputs_only(tree, edit):
     _edit(tree, rel, fn)
     after = _hashes(tree)
     assert (after["build"] != before["build"], after["gate"] != before["gate"]) == (build_moves, gate_moves)
+
+
+def test_the_gate_holds_every_input_of_the_env_wheel():
+    """One list of the env wheel's inputs: build_env_wheel.py's GIT_INPUTS (minus README.md, which no gate check reads)
+    is inside the gate set, so a wheel input cannot be left out of the stamp by a second list going stale."""
+    tree = ast.parse((REPO_ROOT / "scripts/native/build_env_wheel.py").read_text())
+    (git_inputs,) = [
+        ast.literal_eval(n.value)
+        for n in tree.body
+        if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "GIT_INPUTS" for t in n.targets)
+    ]
+    specs = [s for s in git_inputs if s != "python/geobrix/README.md"]
+    tracked = subprocess.run(["git", "-C", str(REPO_ROOT), "ls-files", "--", *specs], capture_output=True, text=True)
+    want = set(tracked.stdout.split()) - {"scripts/native/arch-gate.json"}
+    gate = set(_inputs("files", "--set", "gate").stdout.split())
+    assert want and not want - gate, sorted(want - gate)[:10]
+    assert "python/geobrix/pyproject.toml" in gate and "python/geobrix/requirements-build.txt" in gate
+    assert "python/geobrix/README.md" not in gate and "scripts/native/arch-gate.json" not in gate
+
+
+# --- the binding sdists through the package index (CI) ---------------------------------------------------------------
+
+
+class _Index:
+    """A PEP 503 index on 127.0.0.1 that wants the netrc credentials: /simple/rasterio/ links the file."""
+
+    def __init__(self, tmp_path, data):
+        import http.server
+        import threading
+
+        index = self
+        self.data, self.hits = data, []
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                index.hits.append(self.path)
+                if self.headers.get("Authorization") != "Basic " + base64.b64encode(b"ci:tok").decode():
+                    self.send_response(401)
+                    self.end_headers()
+                    return
+                if self.path == "/simple/rasterio/":
+                    body = b'<html><a href="../../files/rasterio-1.5.2.tar.gz">rasterio-1.5.2.tar.gz</a></html>'
+                elif self.path == "/files/rasterio-1.5.2.tar.gz":
+                    body = index.data
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        self.server = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        netrc = tmp_path / "netrc"
+        netrc.write_text("machine 127.0.0.1\nlogin ci\npassword tok\n")
+        netrc.chmod(0o600)
+        self.env = {"PIP_INDEX_URL": f"http://127.0.0.1:{self.server.server_port}/simple", "NETRC": str(netrc)}
+
+
+@pytest.mark.parametrize("pinned", ["right", "wrong"])
+def test_ci_fetches_the_binding_sdists_through_the_package_index(tmp_path, pinned):
+    """With GBX_SDISTS_FROM=index (the builder's env), fetch-lib.sh's fetch_sdist reads the sdist from the index pip is
+    configured with (its netrc credentials), never from the hard-coded file host (no curl), and keeps it only when its
+    sha256 is the pin; a mismatch fails and writes nothing."""
+    data = b"an sdist"
+    want = hashlib.sha256(data).hexdigest() if pinned == "right" else "0" * 64
+    index = _Index(tmp_path, data)
+    shims = tmp_path / "shims"
+    shims.mkdir()
+    (shims / "curl").write_text(f"#!/bin/sh\necho curl >> {tmp_path / 'curl.log'}\nexit 7\n")
+    (shims / "curl").chmod(0o755)
+    dest = tmp_path / "sdists" / "rasterio-1.5.2.tar.gz"
+    env = dict(os.environ, **index.env, GBX_SDISTS_FROM="index", PATH=f"{shims}{os.pathsep}{os.environ['PATH']}")
+    script = f'source "{REPO_ROOT}/scripts/native/fetch-lib.sh"; fetch_sdist "{dest}" "{want}" rasterio-1.5.2.tar.gz'
+    try:
+        res = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+    finally:
+        index.server.shutdown()
+
+    assert not (tmp_path / "curl.log").exists(), "the sdist went to the hard-coded host"
+    assert "/simple/rasterio/" in index.hits and "127.0.0.1" not in res.stdout + res.stderr
+    if pinned == "right":
+        assert res.returncode == 0, res.stdout + res.stderr
+        assert dest.read_bytes() == data
+    else:
+        assert res.returncode == 1 and "PREFETCH FAILED" in res.stderr and "pins.conf says" in res.stderr
+        assert not dest.exists()
+
+    (job,) = _load(BUILDER)["jobs"].values()
+    assert job["env"]["GBX_SDISTS_FROM"] == "index"
 
 
 def _logs(tmp_path, bad=None):
@@ -316,9 +459,11 @@ def test_ci_fails_a_stale_arch_gate_stamp(tree, tmp_path, case, edit, code):
 
 @pytest.mark.parametrize("bad", [("aarch64", "verify_native"), ("x86_64", "env5")])
 def test_a_failed_check_writes_no_stamp(tree, tmp_path, bad):
+    stamp = tree / "scripts/native/arch-gate.json"
+    before = stamp.read_bytes()
     res = _inputs("write-stamp", "--built-from", "0" * 40, *_logs(tmp_path, bad=bad), root=tree)
     assert res.returncode == 1
-    assert not (tree / "scripts/native/arch-gate.json").exists()
+    assert stamp.read_bytes() == before
     assert bad[0] in res.stdout
 
 

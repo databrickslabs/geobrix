@@ -11,7 +11,8 @@
 #   wheelhouse-pypi/<arch>/      the same five versions as PyPI binary wheels, pinned by sha256 (baseline-requirements-<arch>.txt):
 #                                the baseline the probe compares with
 # Stops with `PREFETCH FAILED: <file> sha256 ...` on a checksum mismatch. The package index is whatever the
-# host's pip is configured for; this script never reads, passes or prints it.
+# host's pip is configured for; this script never passes or prints it (with GBX_SDISTS_FROM=index, index_fetch.py
+# reads pip's configuration, as pip does, to fetch the sdists from it, and prints no URL or host either).
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/fetch-lib.sh"
 
@@ -72,14 +73,12 @@ pip_download "wheelhouse-bindings/$ARCH" "$OUT/wheelhouse-bindings/$ARCH" --requ
 pip_download "wheelhouse-test/$ARCH" "$OUT/wheelhouse-test/$ARCH" --require-hashes -r "$GBX_NATIVE_DIR/test-requirements-$ARCH.txt"
 pip_download "wheelhouse-test/$ARCH (newclick)" "$OUT/wheelhouse-test/$ARCH" --require-hashes -r "$GBX_NATIVE_DIR/test-requirements-newclick-$ARCH.txt"
 
-# The five binding sdists: the sdist is the file pinned, from the project's own path on the public file host
-# (the one a package index redirects to). A changed sum stops the build, as for the C sources.
+# The five binding sdists: the sdist is the file pinned, from the project's own path on the public file host (the one a
+# package index redirects to), or with GBX_SDISTS_FROM=index (CI) from the package index pip is configured with
+# (fetch_sdist). A changed sum stops the build, as for the C sources.
 BINDINGS=(RASTERIO PYOGRIO PYPROJ SHAPELY NETCDF4)
 for dep in "${BINDINGS[@]}"; do
-    file="$(pin "${dep}_SDIST_FILE")"
-    name="${file%%-[0-9]*}"
-    fetch_verified "$OUT/sdists/$file" "$(pin "${dep}_SDIST_SHA256")" \
-        "https://files.pythonhosted.org/packages/source/${name:0:1}/$name/$file" || exit 1
+    fetch_sdist "$OUT/sdists/$(pin "${dep}_SDIST_FILE")" "$(pin "${dep}_SDIST_SHA256")" "$(pin "${dep}_SDIST_FILE")" || exit 1
 done
 
 # rasterio's tests/data (its sdist ships none): the project's tag archive, sha256-checked against test-data.conf

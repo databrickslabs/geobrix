@@ -20,18 +20,17 @@ The sets (only files under git count; --rev reads that commit's tree, without it
          copies or mounts from scripts/native (both architectures' spelling of ${GBX_ARCH}), rust-toolchain.toml.
          The sources, wheels and tools it copies are fixed by the sha256s in pins.conf and the hashed requirement files.
   sources  pins.conf's KEY=VALUE lines only: the key of CI's cache of the pinned source downloads.
-  gate   exactly what gbx:native:verify-arches exercises: build, plus the env wheel's assembly and its inputs
-         (scripts/native/build_env_wheel.py, python/geobrix/envs/** with envs/pyproject.env.toml), the activation the
-         wheel runs (python/geobrix/src/databricks/labs/gbx/_native/**, python/geobrix/src/_gbx_native_path.py), and
-         the checks themselves (scripts/native/verify-native.sh with its JNI row JniSmoke.java, check-env-wheel.sh
-         with base_held.py).
-         Not GDALManager.scala nor the committed GDAL Java classes (scripts/native/maven/**): no gate check runs them
-         (verify-native compiles JniSmoke against the tree's own java/gdal-<version>.jar; a new jar comes with a pin).
+  gate   exactly what gbx:native:verify-arches exercises: build, plus the env wheel's inputs as its builder lists
+         them (GIT_INPUTS of scripts/native/build_env_wheel.py, read from the same tree: python/geobrix/src, the envs
+         files, pyproject.toml, requirements-build.txt and scripts/native, the checks among them; not README.md, which
+         no check reads), plus the checks themselves (verify-native.sh with its JNI row JniSmoke.java,
+         check-env-wheel.sh with base_held.py), less the stamp itself. Not GDALManager.scala: no gate check runs it.
 
 Stdlib only: CI runs it with the runner's python3.
 """
 
 import argparse
+import ast
 import datetime
 import hashlib
 import json
@@ -52,16 +51,10 @@ PINS = "scripts/native/pins.conf"
 DOCKERFILE = "scripts/native/build.Dockerfile"
 STAMP = "scripts/native/arch-gate.json"
 GATE_COMMAND = "bash scripts/commands/gbx-native-verify-arches.sh"
-GATE_EXTRA = (
-    "scripts/native/build_env_wheel.py",
-    "python/geobrix/envs",
-    "python/geobrix/src/databricks/labs/gbx/_native",
-    "python/geobrix/src/_gbx_native_path.py",
-    "scripts/native/verify-native.sh",
-    "scripts/native/JniSmoke.java",
-    "scripts/native/check-env-wheel.sh",
-    "scripts/native/base_held.py",
-)
+# The env wheel's inputs come from one list, its builder's GIT_INPUTS (what its dirty check refuses), minus the files
+# no gate check reads.
+WHEEL_BUILDER = "scripts/native/build_env_wheel.py"
+NOT_EXERCISED = ("python/geobrix/README.md",)
 # Gate inputs the checks read from the checkout when they run, not from the env wheel (verify-native mounts
 # scripts/native with JniSmoke.java; --verify mounts scripts/native for check-env-wheel.sh and its base_held.py): a
 # change to them needs the gate re-run, not a wheel rebuild. Everything else in the set is in the wheel, or built into it.
@@ -104,6 +97,25 @@ class Tree:
         if self.rev:
             return self._git("cat-file", "blob", f"{self.rev}:{rel}")
         return (self.root / rel).read_bytes()
+
+    def read_all(self, rels):
+        """Every file's bytes; a commit's in one `git cat-file --batch`."""
+        if not self.rev:
+            return [(self.root / rel).read_bytes() for rel in rels]
+        res = subprocess.run(
+            ["git", "-C", str(self.root), "cat-file", "--batch"],
+            input="".join(f"{self.rev}:{rel}\n" for rel in rels).encode(), capture_output=True,
+        )
+        out, pos, data = res.stdout, 0, []
+        for rel in rels:
+            end = out.index(b"\n", pos)
+            head = out[pos:end].split()
+            if res.returncode != 0 or len(head) != 3 or head[1] != b"blob":
+                raise Fail(f"git cat-file {self.rev}:{rel}: {out[pos:end].decode()}")
+            start, size = end + 1, int(head[2])
+            data.append(out[start:start + size])
+            pos = start + size + 1
+        return data
 
 
 def dockerfile_inputs(text):
@@ -151,18 +163,31 @@ def files(tree, which):
     if which == "build":
         return sorted(build)
     extra = set()
-    for spec in GATE_EXTRA:
+    for spec in gate_specs(tree):
         found = tree.ls([spec])
         if not found:
-            raise Fail(f"no file under git matches {spec} (a gate input): update GATE_EXTRA")
+            raise Fail(f"no file under git matches {spec} (a gate input)")
         extra.update(found)
-    return sorted(build | extra)
+    return sorted((build | extra) - set(NOT_EXERCISED) - {STAMP})
+
+
+def wheel_inputs(tree):
+    """GIT_INPUTS of build_env_wheel.py at this tree (the env wheel's inputs), minus what no gate check reads."""
+    for node in ast.parse(tree.read(WHEEL_BUILDER).decode()).body:
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "GIT_INPUTS" for t in node.targets):
+            return [spec for spec in ast.literal_eval(node.value) if spec not in NOT_EXERCISED]
+    raise Fail(f"{WHEEL_BUILDER} has no GIT_INPUTS")
+
+
+def gate_specs(tree):
+    """The pathspecs the gate set adds to the build set."""
+    return sorted(set(wheel_inputs(tree)) | {WHEEL_BUILDER} | set(READ_FROM_THE_CHECKOUT))
 
 
 def file_hashes(tree, which):
     out = {}
-    for rel in files(tree, which):
-        data = tree.read(rel)
+    paths = files(tree, which)
+    for rel, data in zip(paths, tree.read_all(paths)):
         if rel == PINS:
             data = canonical_text(data.decode()).encode()
         out[rel] = hashlib.sha256(data).hexdigest()
@@ -242,7 +267,8 @@ def check_stamp(root):
 
 def uncommitted(root):
     """The native inputs (gate set) with uncommitted changes in the checkout, untracked files included."""
-    specs = files(Tree(root, "HEAD"), "build") + list(GATE_EXTRA)
+    head = Tree(root, "HEAD")
+    specs = files(head, "build") + gate_specs(head)
     out = Tree(root)._git("status", "--porcelain", "--untracked-files=all", "--", *specs).decode()
     return sorted(ln[3:] for ln in out.splitlines() if ln.strip())
 

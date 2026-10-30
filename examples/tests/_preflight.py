@@ -6,7 +6,8 @@ cannot run) shows only then. Each check returns the problems it found as a list 
 refuses to submit when any list is not empty.
 
 Pure Python except ``staged_wheel_sha`` (one Files API download through the client it is given) and
-``probe_problems`` (a local Spark session, built lazily).
+``probe_problems`` (a local Spark session, built lazily). A form that is a memory probe by design is logged as skipped, and a JVM form
+that needs the JAR is logged as not checkable here: neither fails the launch.
 """
 
 from __future__ import annotations
@@ -147,6 +148,12 @@ def probe_problems(mvp: str, scales: Sequence[int], root, *, rows: int = 8) -> L
         except Exception:  # noqa: BLE001 - a JVM that died has nothing to stop
             pass
     problems += [f"probe SQL cannot run: {f}" for f in failures]
-    if skipped:
-        print(f"  preflight: {len(skipped)} form(s) not runnable locally (JAR, Unity Catalog or no local corpus)")
+    by_design = [x for x in skipped if "skipped by design" in x]
+    for line in by_design:
+        print(f"  preflight: {line}")
+    rest = [x for x in skipped if x not in by_design]
+    if rest:
+        print(f"  preflight: {len(rest)} form(s) not checkable here (JAR, Unity Catalog or no local corpus)")
+        for line in rest:
+            print(f"    - {line}")
     return problems

@@ -956,6 +956,7 @@ FORMS["G"] = [
         "tiles_mat",
         _retile(_RT_PART, _RT_CELL),
         setup="setup_g_probes",
+        memory_probe=True,
     ),
     _g(
         RT,
@@ -991,6 +992,7 @@ FORMS["G"] = [
         _retile(_RT_PART_L2, _RT_CELL),
         setup="setup_g_l2",
         computes=("dedicated",),
+        memory_probe=True,
     ),
     # the same three light shapes on big tiles (512 windows each): what the shapes cost in memory
     _g(
@@ -1000,6 +1002,7 @@ FORMS["G"] = [
         "tiles_big",
         _retile(_RT_LATERAL, _RT_BIG, fn=RT),
         register=True,
+        memory_probe=True,
     ),
     _g(
         RT,
@@ -1008,6 +1011,7 @@ FORMS["G"] = [
         "tiles_big",
         _retile(_RT_ARRAY, _RT_BIG),
         setup="setup_g_probes",
+        memory_probe=True,
     ),
     _g(
         RT,
@@ -1016,6 +1020,7 @@ FORMS["G"] = [
         "tiles_big",
         _retile(_RT_PART, _RT_BIG),
         setup="setup_g_probes",
+        memory_probe=True,
     ),
     # BNG tessellate on polygons
     _g(TE, "L3", "udtf", "bng_polys", _TE_LATERAL.format(fn=TE), register=True),

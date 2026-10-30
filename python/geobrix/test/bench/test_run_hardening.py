@@ -268,6 +268,80 @@ def test_the_preflight_finds_a_hash_sum_that_overflows_and_a_java_udf_inside_an_
     assert len(failures) == 2, failures  # the good L3 form and the good L2 form pass
 
 
+BROKEN = "SELECT count(*) AS n, sum(nope) AS fp, count(*) AS n_out FROM {src}"
+
+
+def test_the_preflight_skips_a_memory_probe_and_says_so(
+    spark_session_local, tmp_path, monkeypatch
+):
+    """A memory or scale probe is not a statement check: it is not run (its broken SQL proves it), and it is listed."""
+    probe = lf.Form(
+        "S", B, "L3", "count_part", "bng_points", sql=BROKEN, memory_probe=True
+    )
+    monkeypatch.setitem(lf.FORMS, "S", [form("L3", lf._BNG.replace("{fn}", B)), probe])
+    failures, skipped = preflight.probe_failures(
+        spark_session_local, "S", str(tmp_path), rows=8
+    )
+    assert failures == []
+    assert any(
+        "L3/count_part" in x and "skipped by design" in x for x in skipped
+    ), skipped
+
+
+def test_the_preflight_still_fails_a_form_that_is_not_a_memory_probe(
+    spark_session_local, tmp_path, monkeypatch
+):
+    monkeypatch.setitem(lf.FORMS, "S", [form("L3", BROKEN, "c0")])
+    failures, _ = preflight.probe_failures(
+        spark_session_local, "S", str(tmp_path), rows=8
+    )
+    assert len(failures) == 1 and "L3/c0" in failures[0]
+
+
+def test_the_preflight_does_not_run_the_gdal_engine_forms_when_this_interpreter_has_no_gdal(
+    spark_session_local, tmp_path, monkeypatch
+):
+    from databricks.labs.gbx.engine import run as engine_run
+
+    monkeypatch.setattr(engine_run, "unavailable_reason", lambda: "no osgeo")
+    monkeypatch.setitem(
+        lf.FORMS,
+        "S",
+        [form("L3", BROKEN, "engine-c0"), form("L3", BROKEN, "floor-c1@256")],
+    )
+    failures, skipped = preflight.probe_failures(
+        spark_session_local, "S", str(tmp_path), rows=8
+    )
+    assert failures == []
+    assert len([x for x in skipped if "not checkable here" in x]) == 2, skipped
+
+
+def test_a_jvm_form_gets_a_light_stand_in_only_when_the_stand_in_can_run_here():
+    """No stand-in for a form whose own setup registers JVM names, nor for one whose JVM level returns another shape."""
+    ok = form("L2", lf._BNG.replace("{fn}", B), "-")
+    with_setup = lf.Form(
+        "S", B, "L2", "-", "bng_points", sql=ok.sql + " ", setup="m:register_jvm"
+    )
+    other_shape = lf.Form(
+        "G", "gbx_rst_retile", "L1", "tvf", "tiles_mat", sql="SELECT 1, 2, 3 FROM {src}"
+    )
+    got = preflight._jvm_sql_standins([ok, with_setup, other_shape])
+    assert [(f.fn, f.sql) for f in got] == [(B, ok.sql)]
+    assert got[0].level == "L3" and got[0].variant == "c0"
+
+
+def test_the_memory_probes_of_the_g_set_are_marked():
+    """The collect-a-partition shape and the big-tile forms are memory probes by design; nothing else in G is."""
+    marked = {(f.fn, f.level, f.variant) for f in lf.FORMS["G"] if f.memory_probe}
+    for f in lf.FORMS["G"]:
+        by_shape = f.variant.startswith("count_part") or f.input == "tiles_big"
+        assert f.memory_probe == by_shape, (f.fn, f.level, f.variant)
+    assert ("gbx_rst_retile", "L3", "count_part-big") in marked
+    assert not any(
+        f.memory_probe for mvp in ("S", "A", "H", "SE") for f in lf.FORMS[mvp]
+    )
+
+
 def test_the_preflight_refuses_a_ladder_that_builds_gigabytes_on_the_client():
     assert preflight.client_cap_problems(
         "SE", (1, 4, 16)

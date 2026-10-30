@@ -63,6 +63,9 @@ class Form:
     # an error tile has a NULL raster and costs less than real work, so a form that fails on a
     # subset would come out faster and still read ok.
     allows_null: bool = False
+    # A form that is a memory or scale probe BY DESIGN (it collects a whole partition, or runs on the big tiles):
+    # the local preflight checks statements, it does not run these.
+    memory_probe: bool = False
 
 
 def detect_compute(spark) -> str:

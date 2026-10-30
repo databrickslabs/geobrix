@@ -9,6 +9,14 @@ import verifyInstallation from '!!raw-loader!../../tests/python/installation/ver
 
 # Init Script (Legacy)
 
+:::danger Legacy: GeoBrix 0.5.x only
+This page describes the **0.5.x** init-script install. The GeoBrix **0.6.0** wheels are **not supported**
+on this path: the init script's system GDAL and a 0.6.0 wheel put two GDAL stacks in one cluster. For
+0.6.0, install the env wheel for your runtime instead, as on [WHL-only (Lightweight)](../installation.mdx#whl-only):
+`geobrix-<version>+env5-py3-none-any.whl` on DBR 17.3 and DBR 18, `geobrix-<version>+env6-py3-none-any.whl`
+on DBR 19. The rest of this page is kept for 0.5.x clusters.
+:::
+
 The init-script path installs the **heavyweight tier** on a classic x86 cluster: a cluster init
 script installs native GDAL from a pre-built, hash-verified bundle staged in a Unity Catalog Volume,
 and puts the Scala JAR in place. A single JAR plus the init script provide all three heavyweight

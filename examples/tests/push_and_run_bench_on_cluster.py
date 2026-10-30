@@ -1071,7 +1071,13 @@ def main() -> int:
             environments=[
                 jobs.JobEnvironment(
                     environment_key="bench_env",
-                    spec=compute.Environment(environment_version=env_version_str),
+                    # The wheel goes in the environment spec: that is what reaches the Python UDF workers.
+                    # The notebook's own pip install reaches the driver only (every geobrix UDF then failed
+                    # on the workers with "No module named 'databricks.labs'", measured on env 6).
+                    spec=compute.Environment(
+                        environment_version=env_version_str,
+                        dependencies=[wheel, "markdown"],
+                    ),
                 )
             ],
             tasks=[

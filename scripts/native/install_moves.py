@@ -77,8 +77,8 @@ ALLOWED_MOVES = {
     "requests": (
         (5,),
         ("full",),
-        "extra-stac.txt requests>=2.32.4,<2.33: CVE-2024-47081 (a URL can make requests send ~/.netrc credentials "
-        "for one host to another); the env5 runtimes ship 2.32.3",
+        "extra-stac.txt and extra-vizx.txt requests>=2.32.4,<2.33: CVE-2024-47081 (a URL can make requests send "
+        "~/.netrc credentials for one host to another); the env5 runtimes ship 2.32.3",
     ),
 }
 PIN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==(\S+)")

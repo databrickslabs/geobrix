@@ -15,6 +15,9 @@ imageio-ffmpeg>=0.4,<2
 mercantile>=1.2,<2
 geopy>=2.0,<3
 xyzservices>=2023.10
+# contextily fetches its tiles through requests: as in [stac], the CVE-2024-47081 floor (a patch move of the runtimes'
+# 2.32.3) under the frozen-base cap.
+requests>=2.32.4,<2.33
 joblib>=1.4.2
 click>=8.1.7,<8.2
 psutil>=5.9.0,<5.10

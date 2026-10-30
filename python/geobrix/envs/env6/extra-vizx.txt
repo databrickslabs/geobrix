@@ -16,6 +16,8 @@ imageio-ffmpeg>=0.4,<2
 mercantile>=1.2,<2
 geopy>=2.0,<3
 xyzservices>=2023.10
+# contextily fetches its tiles through requests: the runtimes' 2.32.5, past the CVE-2024-47081 fix.
+requests>=2.32.5
 joblib>=1.5.2
 click>=8.2.1,<8.3
 psutil>=7.0.0,<7.1

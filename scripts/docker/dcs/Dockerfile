@@ -60,7 +60,7 @@ RUN --mount=type=secret,id=pip_index_url \
     /databricks/python3/bin/python -m pip list --disable-pip-version-check --format=freeze | sort > /tmp/base-constraints.txt && \
     pip_rc=0 && \
     { /databricks/python3/bin/python -m pip install -q --disable-pip-version-check --no-cache-dir -c /tmp/base-constraints.txt \
-        "geobrix[light_env6,vizx] @ file:///tmp/geobrix-wheel/geobrix-${GEOBRIX_VERSION}-py3-none-any.whl" \
+        "geobrix[vizx] @ file:///tmp/geobrix-wheel/geobrix-${GEOBRIX_VERSION}-py3-none-any.whl" \
         > /tmp/pip-install.log 2>&1 || pip_rc=$?; } && \
     /databricks/python3/bin/python /mnt/redact_pip_log.py /tmp/pip-install.log && \
     { [ "$pip_rc" -eq 0 ] || exit "$pip_rc"; } && \

@@ -12,7 +12,7 @@ LOG_PATH=""
 # test dependency at CI's exact version, incl. the Zarr set, pyspark 4.0.x for the Delta test
 # jars, tenacity/anywidget for test/stac and test/vizx), then the package itself with --no-deps.
 # An extras install floats: an older venv keeps stale versions (h3, pyogrio, numpy) that change
-# test results, and the `test` extra pins mapbox-vector-tile<2.2, which light_env6 (>=2.2) rejects.
+# test results, and the `test` extra pins mapbox-vector-tile<2.2, which the env6 lock's 2.2 rejects.
 LIGHT_LOCK="${PROJECT_ROOT}/python/geobrix/requirements-light-env6-ci.txt"
 
 show_help() {

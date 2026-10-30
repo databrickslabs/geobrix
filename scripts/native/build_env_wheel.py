@@ -1276,16 +1276,24 @@ def auditwheel(args, bindings):
 
 
 # Base packages whose runtime version has no wheel for the toolchain image's CPython 3.12 (the runtimes built their
-# own): check 9's [vizx] venv installs the extra's range for them instead of the base version.
+# own): check 9's [vizx] venv installs the extra's range for them instead of the base version. So does a package the
+# extra moves to a SECURITY_FLOORS fix (env5's requests).
 VERIFY_UNHELD = {"psutil"}
 
 
+def verify_unheld(envdir):
+    base = pins_of(envdir / "base.txt")
+    moved = {d for d, (floor, _cve) in SECURITY_FLOORS.items() if d in base and base[d] < Version(floor)}
+    return VERIFY_UNHELD | moved
+
+
 def fetch_vizx_wheelhouse(args, envdir, env, arch):
-    """The wheels check 9 installs [vizx] from: core.txt and extra-vizx.txt, base.txt (but VERIFY_UNHELD) as
+    """The wheels check 9 installs [vizx] from: core.txt and extra-vizx.txt, base.txt (but verify_unheld) as
     constraints, fetched on the host through --host-python's pip; kept while those files are unchanged."""
     house = REPO / "build" / "env-wheel" / "wheelhouse" / f"env{env}-vizx" / arch
     files = [envdir / "core.txt", envdir / "extra-vizx.txt", envdir / "base.txt"]
-    key = hashlib.sha256(b"".join(f.read_bytes() for f in files) + repr(sorted(VERIFY_UNHELD)).encode()).hexdigest()
+    unheld = verify_unheld(envdir)
+    key = hashlib.sha256(b"".join(f.read_bytes() for f in files) + repr(sorted(unheld)).encode()).hexdigest()
     stamp = house / ".inputs-sha256"
     if stamp.is_file() and stamp.read_text().strip() == key:
         print(f"    wheelhouse {house}: current", flush=True)
@@ -1298,7 +1306,7 @@ def fetch_vizx_wheelhouse(args, envdir, env, arch):
         "".join(
             ln + "\n"
             for ln in (envdir / "base.txt").read_text().splitlines()
-            if canonicalize_name(ln.split("==")[0].strip()) not in VERIFY_UNHELD
+            if canonicalize_name(ln.split("==")[0].strip()) not in unheld
         )
     )
     res = subprocess.run(
@@ -1356,7 +1364,7 @@ def verify_install(args, env, version, arch):
     res = subprocess.run(
         ["docker", "run", "--rm", "--network", "none", "--platform", PLATFORMS[arch],
          "-v", f"{args.out}:/dist:ro", "-v", f"{house}:/wheelhouse:ro", "-v", f"{vizx}:/wheelhouse-vizx:ro",
-         "-v", f"{envdir}:/env:ro", "-e", f"VERIFY_UNHELD={' '.join(sorted(VERIFY_UNHELD))}",
+         "-v", f"{envdir}:/env:ro", "-e", f"VERIFY_UNHELD={' '.join(sorted(verify_unheld(envdir)))}",
          "-v", f"{REPO / 'scripts' / 'native'}:/check:ro", image,
          "bash", "/check/check-env-wheel.sh", str(env), version.split("+")[0]],
         capture_output=True, text=True,

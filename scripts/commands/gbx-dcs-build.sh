@@ -156,7 +156,7 @@ if [ "$TARGET" = "release" ]; then
         /databricks/python3/bin/python -c 'import importlib.metadata as m; v=m.version(\"geobrix\"); assert v == \"$VER\", v'
     " || verify_fail "VERIFY FAILED: image contents (not tagged as $FINAL_TAG)"
 
-    # The image carries geobrix[light_env6,vizx]: the visualization stack is importable, [vizx]'s tippecanoe
+    # The image carries geobrix[vizx]: the visualization stack is importable, [vizx]'s tippecanoe
     # package provides its executables (a bundled binary plus a console script), and the STAC extra and
     # anything that moves a base package are absent (so `requests` stays at the base image's version).
     BASE_REQUESTS=$(docker run --rm --platform "linux/$ARCH" --entrypoint /databricks/python3/bin/python "$BASE_IMAGE" \
@@ -191,7 +191,7 @@ try:
 except ImportError:
     pass
 else:
-    fail("pystac_client is installed; the image carries [light_env6,vizx], not [stac]")
+    fail("pystac_client is installed; the image carries [vizx], not [stac]")
 print("OK")
 ' "$BASE_REQUESTS" || verify_fail "VERIFY FAILED: Python environment of the image, see the line above (not tagged as $FINAL_TAG)"
 fi

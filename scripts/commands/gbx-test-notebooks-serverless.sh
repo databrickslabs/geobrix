@@ -6,7 +6,8 @@
 # and stops on the first failure.
 #
 # Default run (no --notebook or --dir): runs all four Helios notebooks
-# (examples/notebooks/helios/0*.ipynb) with --extra-deps rich.
+# (examples/notebooks/helios/0*.ipynb) on the env6 wheel with --extras stac,vizx and
+# --extra-deps rich and the overturemaps CLI.
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -31,14 +32,20 @@ show_help() {
     echo -e "                        the committed notebook keeps its defaults. Repeatable."
     echo -e "  ${GREEN}--ws-dir WSPATH${NC}       Workspace folder to import notebooks into."
     echo -e "                        (default: /Users/<current-user>/GeoBrix/serverless-run)"
-    echo -e "  ${GREEN}--extras CSV${NC}          Geobrix extras whose deps to install"
-    echo -e "                        (default: light_env6,stac,vizx,overture)."
-    echo -e "  ${GREEN}--extra-deps CSV${NC}      Additional pip requirements (comma-separated)."
-    echo -e "  ${GREEN}--wheel VOLPATH${NC}       Volume path to the geobrix wheel."
+    echo -e "  ${GREEN}--extras CSV${NC}          Geobrix extras whose deps to install (default: stac,vizx). With an"
+    echo -e "                        env wheel, that wheel's extras (envs/env<N>/extra-*.txt); no light_*."
+    echo -e "  ${GREEN}--extra-deps CSV${NC}      Additional pip requirements (comma-separated; a specifier keeps"
+    echo -e "                        its own commas, e.g. 'rich,overturemaps>=1.0.2,<2')."
+    echo -e "  ${GREEN}--wheel VOLPATH${NC}       Volume path to the geobrix wheel (default: the env6 wheel,"
+    echo -e "                        /Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env6-py3-none-any.whl)."
+    echo -e "                        An env wheel (+env5 / +env6) must match --env-version."
     echo -e "  ${GREEN}--env-version VER${NC}     Serverless environment version (default: 6)."
     echo -e "  ${GREEN}--hardware-accelerator VALUE${NC} Serverless GPU AI Runtime accelerator"
     echo -e "                        (e.g. GPU_1xA10, GPU_1xH100). Omit for CPU Serverless"
     echo -e "                        (default). Pair with a GPU wheel extra via --extras."
+    echo -e "  ${GREEN}--new-cluster VER${NC}     Run on a classic job cluster of that runtime (e.g. 19.x-scala2.13),"
+    echo -e "                        created for the run and terminated with it; the notebook's %%pip is kept."
+    echo -e "  ${GREEN}--node-type TYPE${NC}      The --new-cluster node type (default: i3.xlarge)."
     echo -e "  ${GREEN}--profile PROFILE${NC}     Databricks config profile (default: oauth-fe or"
     echo -e "                        DATABRICKS_CONFIG_PROFILE env var)."
     echo -e "  ${GREEN}--poll-secs N${NC}         Polling interval in seconds (default: 20)."
@@ -54,18 +61,20 @@ show_help() {
     echo -e "                      databricks-sdk is added on top when the venv lacks it)"
     echo ""
     echo -e "${CYAN}Default behavior (no --notebook or --dir):${NC}"
-    echo -e "  Runs all four Helios notebooks (examples/notebooks/helios/0*.ipynb)"
-    echo -e "  with extras=light_env6,stac,vizx,overture and --extra-deps rich."
+    echo -e "  Runs all four Helios notebooks (examples/notebooks/helios/0*.ipynb) on the env6 wheel"
+    echo -e "  with extras=stac,vizx and --extra-deps rich,overturemaps (the Overture CLI fast path)."
     echo ""
     echo -e "${CYAN}Examples:${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-test-notebooks-serverless.sh${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-test-notebooks-serverless.sh --log helios.log${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-test-notebooks-serverless.sh \\${NC}"
     echo -e "    ${YELLOW}--notebook 'examples/notebooks/helios/01. Vector Engine (MVT).ipynb' \\${NC}"
-    echo -e "    ${YELLOW}--extras light_env6${NC}"
+    echo -e "    ${YELLOW}--extras vizx${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-test-notebooks-serverless.sh \\${NC}"
     echo -e "    ${YELLOW}--notebook examples/notebooks/orthomosaic/03_segment.ipynb \\${NC}"
-    echo -e "    ${YELLOW}--env-version 5 --extras models_gpu_env5 --hardware-accelerator GPU_1xA10${NC}"
+    echo -e "    ${YELLOW}--wheel /Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env5-py3-none-any.whl \\${NC}"
+    echo -e "    ${YELLOW}--env-version 5 --extras vizx --hardware-accelerator GPU_1xA10 \\${NC}"
+    echo -e "    ${YELLOW}--extra-deps 'torch==2.9.0,torchvision==0.24.0,segment-geospatial,opencv-python-headless==4.11.0.86'${NC}"
     echo ""
 }
 
@@ -114,7 +123,7 @@ if [[ "$HAS_NOTEBOOK_OR_DIR" == false ]]; then
     for nb in "$HELIOS_DIR"/0*.ipynb; do
         RUNNER_ARGS+=("--notebook" "$nb")
     done
-    RUNNER_ARGS+=("--extra-deps" "rich")
+    RUNNER_ARGS+=("--extra-deps" "rich,overturemaps>=1.0.2,<2")
 fi
 
 # ---------------------------------------------------------------------------

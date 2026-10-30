@@ -16,6 +16,8 @@ source "$SCRIPT_DIR/common.sh"
 
 LOG_FILE=""
 SHOW_HELP=0
+STAGE_ARGS=()
+ENV_STAGE=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -29,6 +31,15 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-wait)
             GBX_LOCK_NO_WAIT=true
+            shift
+            ;;
+        --env)
+            case "${2:-}" in 5|6|both) ;; *) echo "--env must be 5, 6 or both" >&2; exit 2 ;; esac
+            STAGE_ARGS+=(--env "$2"); ENV_STAGE=true
+            shift 2
+            ;;
+        --no-prune)
+            STAGE_ARGS+=(--no-prune)
             shift
             ;;
         *)
@@ -47,6 +58,11 @@ if [[ "$SHOW_HELP" == "1" ]]; then
     echo "  bundle volroot/        (bundle/%pip path; overwrite in place)"
     echo ""
     echo "Options:"
+    echo "  --env 5|6|both Stage the env wheel(s) instead: dist/env<N>/geobrix-<version>+env<N>-py3-none-any.whl"
+    echo "                 (gbx:build:wheel --env <N> builds it). No JAR step and no build; only the bundle"
+    echo "                 volroot (the %pip path), by the wheel's own +env<N> name. The init-script dir is"
+    echo "                 left as it is, so no other wheel there is touched."
+    echo "  --no-prune     Keep every other geobrix-*.whl in the init-script dir (skip the single-version cleanup)"
     echo "  --log <path>   Write output to this log file (filename → test-logs/<name>)"
     print_lock_help
     echo "  --help, -h     Show this help"
@@ -63,6 +79,8 @@ if [[ "$SHOW_HELP" == "1" ]]; then
     echo "  bash scripts/commands/gbx-data-stage-wheel.sh"
     echo "  # light-tier-only wheel (no Maven):"
     echo "  GBX_BUNDLE_SKIP_JAR_UPLOAD=1 bash scripts/commands/gbx-data-stage-wheel.sh --log my-build.log"
+    echo "  # both env wheels (the Databricks install), built first with gbx:build:wheel:"
+    echo "  bash scripts/commands/gbx-data-stage-wheel.sh --env both"
     exit 0
 fi
 
@@ -71,6 +89,7 @@ cd "$PROJECT_ROOT" || exit 1
 # The JAR step runs `mvn clean package`, which wipes target/: never under a running test, so it
 # takes the container lock. With a skip-JAR flag no Maven runs and no lock is needed.
 JAR_STEP=true
+[ "$ENV_STAGE" = true ] && JAR_STEP=false  # the env wheel carries its own JAR (_jar/)
 for flag in GBX_BUNDLE_SKIP_JAR GBX_BUNDLE_SKIP_JAR_UPLOAD; do
     case "$(printf '%s' "${!flag:-}" | tr '[:upper:]' '[:lower:]')" in
         1|true|yes) JAR_STEP=false ;;
@@ -92,9 +111,9 @@ esac
 
 if [[ -n "$LOG_FILE" ]]; then
     mkdir -p "$(dirname "$LOG_FILE")"
-    "${GBX_SDK_PYTHON[@]}" examples/tests/stage_wheel_to_volume.py 2>&1 | tee "$LOG_FILE"
+    "${GBX_SDK_PYTHON[@]}" examples/tests/stage_wheel_to_volume.py ${STAGE_ARGS[@]+"${STAGE_ARGS[@]}"} 2>&1 | tee "$LOG_FILE"
     exit "${PIPESTATUS[0]}"
 else
-    "${GBX_SDK_PYTHON[@]}" examples/tests/stage_wheel_to_volume.py
+    "${GBX_SDK_PYTHON[@]}" examples/tests/stage_wheel_to_volume.py ${STAGE_ARGS[@]+"${STAGE_ARGS[@]}"}
     exit $?
 fi

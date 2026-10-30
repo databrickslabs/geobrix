@@ -4,19 +4,21 @@
 Each notebook is imported into the workspace (optionally with %pip/%restart_python
 cells stripped — Serverless JOB %pip fails with WSFS), then submitted as a one-time
 serverless notebook task.  Dependencies go in the environment spec (environment_version
-"6"), not %pip.  Dep list = wheel + union of requested extras' deps (read from
-pyproject.toml via tomllib) + any --extra-deps.
+"6"), not %pip.  Dep list = the wheel + the requested extras' deps + any --extra-deps. For
+an env wheel (geobrix-<version>+env5 / +env6, the Databricks install) the extras are that
+wheel's (python/geobrix/envs/env<N>/extra-<name>.txt) and its environment version must be
+the wheel's; for the plain wheel they are read from pyproject.toml.
 
 Usage examples:
-  # Run the four Helios notebooks with defaults (extras=light_env6,stac,vizx,overture, rich):
+  # Run the four Helios notebooks with defaults (the env6 wheel, extras=stac,vizx):
   python run_notebooks_serverless.py \\
     --dir examples/notebooks/helios \\
     --extra-deps rich
 
-  # Run a single notebook with only the light_env6 extra:
+  # Run a single notebook with no extra:
   python run_notebooks_serverless.py \\
     --notebook examples/notebooks/helios/01\\ Vector\\ Engine\\(MVT\\).ipynb \\
-    --extras light_env6
+    --extras ""
 
   # Explicit workspace folder:
   python run_notebooks_serverless.py \\
@@ -45,15 +47,16 @@ from _job_submit import submit_once  # sibling module (script dir is on sys.path
 _SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
 PROJECT_ROOT = (_SCRIPT_DIR / ".." / "..").resolve()
 _PYPROJECT_PATH = PROJECT_ROOT / "python" / "geobrix" / "pyproject.toml"
+_ENVS_PATH = PROJECT_ROOT / "python" / "geobrix" / "envs"
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 ENV_KEY = "ser6"
 DEFAULT_WHEEL = (
-    "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0-py3-none-any.whl"
+    "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env6-py3-none-any.whl"
 )
-DEFAULT_EXTRAS = "light_env6,stac,vizx,overture"
+DEFAULT_EXTRAS = "stac,vizx"
 DEFAULT_ENV_VERSION = "6"
 DEFAULT_POLL_SECS = 20
 
@@ -67,15 +70,53 @@ _STRIP_PREFIXES = ("%pip", "%restart_python")
 # pyproject.toml helpers
 # ---------------------------------------------------------------------------
 
-def _load_extras_deps(extras: list[str]) -> list[str]:
-    """Return the union of pip deps for the requested extras from pyproject.toml.
+def wheel_env(wheel: str) -> Optional[int]:
+    """5 or 6 for an env wheel (``geobrix-<version>+env<N>-py3-none-any.whl``), None for the plain wheel."""
+    m = re.search(r"geobrix-[^/]*\+env([56])-py3-none-any\.whl$", wheel)
+    return int(m.group(1)) if m else None
 
-    Recursively expands nested ``geobrix[<extra>]`` references (the light_* extras
-    alias one another, and the ``*_all`` umbrellas pull light-base/stac/vizx/overture)
-    into their real package requirements. Without this, a nested string like
-    ``geobrix[light_dbr19]`` would be injected verbatim into the Serverless
-    environment spec, which does NOT honor extras — so the extra's transitive deps
-    silently never install (the whole light raster/vector core would be missing).
+
+def _env_extras_deps(env: int, extras: list[str]) -> list[str]:
+    """The pip deps of an env wheel's extras: envs/env<N>/extra-<name>.txt, one requirement per line.
+
+    The old ``light_*`` names are not extras of an env wheel (the env wheel IS the light install; the
+    other family's names are tripwires), and the plain wheel's ``[overture]`` / ``[earthdata]`` are not
+    on the env wheels: both are refused with what to pass instead.
+    """
+    envdir = _ENVS_PATH / f"env{env}"
+    have = sorted(p.stem.removeprefix("extra-") for p in envdir.glob("extra-*.txt"))
+    out: list[str] = []
+    for extra in extras:
+        if extra.startswith("light"):
+            raise SystemExit(
+                f"--extras {extra}: the env{env} wheel needs no light extra (it is the light install); "
+                "drop it. Fix: pass only feature extras, e.g. --extras stac,vizx"
+            )
+        if extra not in have:
+            raise SystemExit(
+                f"--extras {extra}: the env{env} wheel has no [{extra}] (its extras: {', '.join(have)}). "
+                "Fix: pass its packages with --extra-deps (e.g. --extra-deps 'overturemaps>=1.0.2,<2')"
+            )
+        for line in (envdir / f"extra-{extra}.txt").read_text().splitlines():
+            req = line.split("#", 1)[0].strip()
+            if req and req not in out:
+                out.append(req)
+    return out
+
+
+def _split_deps(csv: str) -> list[str]:
+    """Split a comma-separated requirement list, keeping a specifier's own commas (``a>=1,<2,b`` -> 2)."""
+    return [d.strip() for d in re.split(r",(?=\s*[A-Za-z])", csv) if d.strip()]
+
+
+def _load_extras_deps(extras: list[str]) -> list[str]:
+    """Return the union of pip deps for the requested extras from pyproject.toml (the plain wheel).
+
+    Recursively expands nested ``geobrix[<extra>]`` references (``zarr_env6`` aliases
+    ``zarr_dbr19``, ``gpu_env5_all`` composes two GPU extras) into their real package
+    requirements. Without this, a nested string like ``geobrix[zarr_dbr19]`` would be
+    injected verbatim into the Serverless environment spec, which does NOT honor
+    extras: it would resolve from PyPI, and the extra's deps would never install.
     """
     if not _PYPROJECT_PATH.exists():
         print(
@@ -283,6 +324,7 @@ def run_one(
     existing_cluster_id: str | None = None,
     harvest_outputs: bool = False,
     profile: str | None = None,
+    new_cluster=None,
 ) -> bool:
     """Import and run one notebook on Serverless. Returns True on SUCCESS.
 
@@ -296,7 +338,11 @@ def run_one(
     """
     from databricks.sdk.service import compute, jobs
 
-    _mode = f"cluster {existing_cluster_id}" if existing_cluster_id else "serverless"
+    _mode = (
+        f"cluster {existing_cluster_id}"
+        if existing_cluster_id
+        else f"job cluster {new_cluster.spark_version}" if new_cluster else "serverless"
+    )
     tag = f" [{hardware_accelerator}]" if hardware_accelerator else ""
     print(f"\n=== SUBMIT ({_mode}{tag}): {local_path.name} ===", flush=True)
 
@@ -304,12 +350,11 @@ def run_one(
 
     task_key = "".join(c if c.isalnum() else "_" for c in local_path.stem)[:90]
 
-    if existing_cluster_id:
-        # Warm interactive cluster: reuse the running cluster (no serverless cold
-        # start). Deps install via the notebook's own %pip (kept, not stripped —
-        # classic clusters support %pip), so there is no environment spec or GPU
-        # compute request here; --extras/--wheel/--env-version/--hardware-accelerator
-        # do not apply in this mode.
+    if existing_cluster_id or new_cluster:
+        # A classic cluster: a warm interactive one (no cold start), or a job cluster created for this run
+        # alone and terminated when it ends (--new-cluster). Deps install via the notebook's own %pip (kept, not
+        # stripped — classic clusters support %pip), so there is no environment spec or GPU compute request
+        # here; --extras/--wheel/--env-version/--hardware-accelerator do not apply in this mode.
         waiter = submit_once(
             w,
             run_name=f"gbx-nb:{task_key}",
@@ -317,6 +362,7 @@ def run_one(
                 jobs.SubmitTask(
                     task_key=task_key,
                     existing_cluster_id=existing_cluster_id,
+                    new_cluster=new_cluster,
                     notebook_task=jobs.NotebookTask(notebook_path=ws_path),
                     max_retries=0,  # run exactly once — never retry a failed run
                 )
@@ -431,9 +477,16 @@ def _build_dep_list(
     wheel: str,
     extras: list[str],
     extra_deps: list[str],
+    env_version: Optional[str] = None,
 ) -> list[str]:
+    env = wheel_env(wheel)
+    if env is not None and env_version is not None and str(env_version) != str(env):
+        raise SystemExit(
+            f"--wheel {wheel} is the env{env} wheel, --env-version is {env_version}: the wheel refuses to import "
+            f"on another environment. Fix: pass --env-version {env}, or the +env{env_version} wheel"
+        )
     deps: list[str] = [wheel]
-    deps.extend(_load_extras_deps(extras))
+    deps.extend(_env_extras_deps(env, extras) if env else _load_extras_deps(extras))
     deps.extend(extra_deps)
     return deps
 
@@ -498,8 +551,8 @@ def main() -> int:
         metavar="CSV",
         default=DEFAULT_EXTRAS,
         help=(
-            f"Comma-separated geobrix extras whose deps to include "
-            f"(default: {DEFAULT_EXTRAS!r})."
+            f"Comma-separated geobrix extras whose deps to include (default: {DEFAULT_EXTRAS!r}). "
+            "With an env wheel: that wheel's extras (no light_* name)."
         ),
     )
     parser.add_argument(
@@ -512,7 +565,10 @@ def main() -> int:
         "--wheel",
         metavar="VOLPATH",
         default=DEFAULT_WHEEL,
-        help=f"Volume path to the geobrix wheel (default: {DEFAULT_WHEEL!r}).",
+        help=(
+            f"Volume path to the geobrix wheel (default: {DEFAULT_WHEEL!r}). An env wheel "
+            "(+env5 / +env6) must match --env-version."
+        ),
     )
     parser.add_argument(
         "--env-version",
@@ -541,6 +597,23 @@ def main() -> int:
             "own %%pip (kept, not stripped). --extras/--wheel/--env-version/"
             "--hardware-accelerator are ignored in this mode."
         ),
+    )
+    parser.add_argument(
+        "--new-cluster",
+        metavar="SPARK_VERSION",
+        default=None,
+        help=(
+            "Run each notebook on a job cluster of this Databricks Runtime (e.g. '19.x-scala2.13'), created for "
+            "the run and terminated when it ends (nothing left to delete). Dedicated (single user) access mode, "
+            "one worker of --node-type. Deps install via the notebook's own %%pip (kept). --extras/--wheel/"
+            "--env-version/--hardware-accelerator are ignored in this mode."
+        ),
+    )
+    parser.add_argument(
+        "--node-type",
+        metavar="NODE_TYPE",
+        default="i3.xlarge",
+        help="Node type of the --new-cluster job cluster's driver and worker (default: 'i3.xlarge').",
     )
     parser.add_argument(
         "--profile",
@@ -618,17 +691,31 @@ def main() -> int:
         )
 
     extras = [e.strip() for e in args.extras.split(",") if e.strip()]
-    extra_deps = [e.strip() for e in args.extra_deps.split(",") if e.strip()]
-    deps = _build_dep_list(args.wheel, extras, extra_deps)
+    extra_deps = _split_deps(args.extra_deps)
+    deps = _build_dep_list(args.wheel, extras, extra_deps, args.env_version)
 
     from databricks.sdk import WorkspaceClient
 
     w = WorkspaceClient(profile=args.profile)
 
-    # Warm-cluster mode keeps %pip cells (classic clusters install via %pip, unlike
+    if args.existing_cluster_id and args.new_cluster:
+        parser.error("--existing-cluster-id and --new-cluster are exclusive")
+    # Classic-cluster modes keep %pip cells (classic clusters install via %pip, unlike
     # Serverless JOB compute where they fail and are stripped).
-    if args.existing_cluster_id:
+    if args.existing_cluster_id or args.new_cluster:
         args.strip_pip = False
+    new_cluster = None
+    if args.new_cluster:
+        from databricks.sdk.service import compute
+
+        new_cluster = compute.ClusterSpec(
+            spark_version=args.new_cluster,
+            node_type_id=args.node_type,
+            num_workers=1,
+            data_security_mode=compute.DataSecurityMode.SINGLE_USER,
+            single_user_name=w.current_user.me().user_name,
+            custom_tags={"gbx-run": "notebooks"},
+        )
 
     # Resolve default ws-dir using the current user
     ws_dir = args.ws_dir
@@ -646,6 +733,8 @@ def main() -> int:
         print(f"Accelerator: {args.hardware_accelerator}", flush=True)
     if args.existing_cluster_id:
         print(f"Cluster  : {args.existing_cluster_id} (warm; %pip kept, env spec skipped)", flush=True)
+    if new_cluster:
+        print(f"Cluster  : a job cluster per run, {args.new_cluster} on {args.node_type} (%pip kept)", flush=True)
     if args.set_vars:
         print(f"Override vars: {', '.join(args.set_vars)}", flush=True)
     print("", flush=True)
@@ -673,6 +762,7 @@ def main() -> int:
             existing_cluster_id=args.existing_cluster_id,
             harvest_outputs=args.harvest_outputs,
             profile=args.profile,
+            new_cluster=new_cluster,
         )
         if not ok:
             return 1

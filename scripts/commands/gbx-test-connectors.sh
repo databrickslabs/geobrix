@@ -5,7 +5,7 @@
 # The Lakeflow community-connector framework needs PySpark >= 4.1
 # (pyspark.sql.streaming.datasource), newer than the 4.0 used by the other
 # venvs and the dev container, so connectors get their own venv. Dependencies
-# (pyspark, geobrix[light_env6] editable, the pinned framework wheel, pytest)
+# (pyspark, geobrix editable with its base dependencies (the light tier), the pinned framework wheel, pytest)
 # are re-synced only when their inputs change; the connector itself is
 # reinstalled as a regular wheel on every run (see below).
 
@@ -80,9 +80,9 @@ fi
 STAMP_FILE="${VENV_PATH}/.gbx-deps-stamp"
 STAMP="$(cat "${PROJECT_ROOT}/python/geobrix/pyproject.toml" "${LFCC_WHEEL}" | shasum | cut -d' ' -f1)"
 if [ "${RESYNC}" = true ] || [ "$(cat "${STAMP_FILE}" 2>/dev/null)" != "${STAMP}" ]; then
-    echo "Syncing venv dependencies (pyspark>=4.1, geobrix[light_env6], framework, pytest)..."
+    echo "Syncing venv dependencies (pyspark>=4.1, geobrix, framework, pytest)..."
     "${PIP[@]}" install ${INDEX_ARGS[@]+"${INDEX_ARGS[@]}"} "pyspark>=4.1" pytest
-    "${PIP[@]}" install ${INDEX_ARGS[@]+"${INDEX_ARGS[@]}"} -e "${PROJECT_ROOT}/python/geobrix[light_env6]"
+    "${PIP[@]}" install ${INDEX_ARGS[@]+"${INDEX_ARGS[@]}"} -e "${PROJECT_ROOT}/python/geobrix"
     "${PIP[@]}" install ${INDEX_ARGS[@]+"${INDEX_ARGS[@]}"} --force-reinstall --no-deps "${LFCC_WHEEL}"
     echo "${STAMP}" > "${STAMP_FILE}"
 fi

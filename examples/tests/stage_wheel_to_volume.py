@@ -12,6 +12,11 @@ is left untouched -- for light-tier-only wheel changes), then build the GeoBrix 
      notebooks and the bench launcher; overwrite in place.
 Set GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1 to build the wheel locally but skip both Databricks
 uploads. Loads config from databricks_cluster_config.env. Overwrites if file already exists.
+
+--env 5|6|both stages the env wheel(s) instead (dist/env<N>/geobrix-<version>+env<N>-py3-none-any.whl,
+built by gbx:build:wheel): no JAR step (the env wheel carries its JAR), no build, and only the
+bundle volroot (the %pip path); the init-script dir and its plain wheel are left as they are.
+--no-prune keeps every other geobrix-*.whl in the init-script dir (no single-version cleanup).
 """
 from __future__ import annotations
 
@@ -64,8 +69,49 @@ def _venv_meets_build_requires(venv_py: Path, pkg_dir: Path) -> bool:
     return probe.returncode == 0
 
 
+def _env_wheels(project_root: Path, envs) -> list:
+    """dist/env<N>/'s wheel for each requested env, or an error string."""
+    out = []
+    for env in envs:
+        found = sorted((project_root / "dist" / f"env{env}").glob(f"geobrix-*+env{env}-py3-none-any.whl"))
+        if len(found) != 1:
+            return f"dist/env{env}/ holds {[f.name for f in found]}: build it with gbx:build:wheel --env {env}"
+        out.append(found[0])
+    return out
+
+
+def _upload_verified(w, whl: Path, remote: str) -> int:
+    """files.upload, then the remote size must equal the local one (the upload can return without the bytes)."""
+    print("Uploading to %s (overwrite if exists)..." % remote)
+    with open(whl.resolve(), "rb") as _fh:
+        w.files.upload(remote, _fh, overwrite=True)
+    try:
+        remote_size = w.files.get_metadata(remote).content_length
+    except Exception as e:
+        print(f"Error: failed to verify upload. Could not read remote metadata for {remote}: {e}", file=sys.stderr)
+        return 1
+    if remote_size != whl.stat().st_size:
+        print(
+            f"Error: upload verification failed. Local size: {whl.stat().st_size}, remote size: {remote_size}.",
+            file=sys.stderr,
+        )
+        return 1
+    print("Done: %s" % remote)
+    return 0
+
+
 def main() -> int:
     exit_if_help(__doc__)
+    args = sys.argv[1:]
+    no_prune = "--no-prune" in args
+    envs = None
+    if "--env" in args:
+        i = args.index("--env")
+        value = args[i + 1] if i + 1 < len(args) else ""
+        if value not in ("5", "6", "both"):
+            print("--env must be 5, 6 or both", file=sys.stderr)
+            return 2
+        envs = (5, 6) if value == "both" else (int(value),)
     skip_wheel_upload = os.environ.get("GBX_BUNDLE_SKIP_WHEEL_UPLOAD", "").strip().lower() in ("1", "true", "yes")
 
     project_root = TESTS_DIR.parent.parent
@@ -77,7 +123,7 @@ def main() -> int:
     w = None
     if not skip_wheel_upload:
         artifact_volume = (os.environ.get("GBX_ARTIFACT_VOLUME") or "").strip().rstrip("/")
-        if not artifact_volume:
+        if not artifact_volume and envs is None:  # an env wheel goes to the bundle volroot only
             print("Set GBX_ARTIFACT_VOLUME (e.g. /Volumes/catalog/schema/volume/artifacts)", file=sys.stderr)
             return 2
 
@@ -95,6 +141,32 @@ def main() -> int:
             return 2
 
         w = WorkspaceClient(profile=profile) if profile else WorkspaceClient(host=host, token=token)
+
+    if envs is not None:
+        wheels = _env_wheels(project_root, envs)
+        if isinstance(wheels, str):
+            print(f"PRECONDITION MISSING: {wheels}; gbx:data:stage-wheel --env not run", file=sys.stderr)
+            return 1
+        if skip_wheel_upload:
+            print("GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1: %s found; skipping Databricks upload." % [x.name for x in wheels])
+            return 0
+        b_root = "/Volumes/%s/%s/%s" % tuple(
+            (os.environ.get(k) or d).strip()
+            for k, d in (
+                ("GBX_BUNDLE_VOLUME_CATALOG", "main"),
+                ("GBX_BUNDLE_VOLUME_SCHEMA", "default"),
+                ("GBX_BUNDLE_VOLUME_NAME", "geobrix_samples"),
+            )
+        )
+        try:
+            w.files.create_directory(b_root)
+        except Exception:
+            pass
+        for whl in wheels:  # by its own +env<N> name: no other wheel is touched
+            rc = _upload_verified(w, whl, f"{b_root}/{whl.name}")
+            if rc:
+                return rc
+        return 0
 
     # JAR first so the wheel build can include it if needed. GBX_BUNDLE_SKIP_JAR and
     # GBX_BUNDLE_SKIP_JAR_UPLOAD both skip the JAR step ENTIRELY here (no Maven build, no
@@ -168,7 +240,10 @@ def main() -> int:
     except Exception:
         pass
     try:
-        prune_stale(w, artifact_volume, "geobrix-", ".whl", whl.name)
+        if no_prune:
+            print("--no-prune: other geobrix-*.whl files in %s are kept." % artifact_volume)
+        else:
+            prune_stale(w, artifact_volume, "geobrix-", ".whl", whl.name)
     except Exception as e:
         print(f"Error: could not list/clean artifact volume {artifact_volume}: {e}", file=sys.stderr)
         return 1

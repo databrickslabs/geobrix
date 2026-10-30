@@ -270,7 +270,7 @@ base-version fidelity).  These CVEs are resolved when Databricks ships a patched
   affected code path is the `[stac]` / `[earthdata]` HTTP optional extras (requests →
   urllib3) against attacker-controlled HTTP responses; the base wheel with no extras
   makes no outbound HTTP calls.  A user who must patch can override the cap at their own
-  risk (`pip install geobrix[light_env6] "urllib3>=2.6"`) accepting the changed-package
+  risk (`pip install "geobrix @ <the env wheel>" "urllib3>=2.6"`) accepting the changed-package
   cluster notice.
 
 - **pyarrow — 2 HIGH alerts** in the CI lockfiles (env5: 19.0.1, env6: 21.0.0 — both

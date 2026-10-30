@@ -730,3 +730,10 @@ def test_contextilys_requirements_come_from_vizx(tmp_path, capsys):
     with pytest.raises(SystemExit):
         bew.check_requirements(6, vendored, envdir)
     assert "vendored contextily requires geopy" in capsys.readouterr().out
+
+
+def test_the_vizx_check_unholds_only_a_wheel_less_base_or_a_security_move():
+    # check 9 installs [vizx] in a fresh venv: psutil's base version has no cp312 wheel, and env5's [vizx] moves
+    # requests to its CVE-2024-47081 floor, so neither can be held at base there; everything else is
+    assert bew.verify_unheld(bew.PYDIR / "envs" / "env5") == {"psutil", "requests"}
+    assert bew.verify_unheld(bew.PYDIR / "envs" / "env6") == {"psutil"}

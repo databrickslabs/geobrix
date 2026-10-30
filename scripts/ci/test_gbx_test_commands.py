@@ -632,7 +632,7 @@ def test_venv_sync_installs_the_ci_lock_into_an_existing_venv(sandbox):
     # What the light CI phase installs: the hash-pinned lock (CI's exact versions, so the
     # results match CI; an extras install floats and keeps a stale venv's versions), then the
     # package alone. The `test` extra is never used: it pins mapbox-vector-tile<2.2, which
-    # light_env6 (>=2.2) cannot satisfy.
+    # the env6 lock's 2.2 cannot satisfy.
     installs = [c for c in calls if c.startswith("pip install")]
     assert len(installs) == 2, calls
     assert "--require-hashes" in installs[0] and f"-r {lock}" in installs[0]
@@ -1419,3 +1419,105 @@ def test_stage_sample_without_dry_run_runs_the_launcher_on_the_sdk_python(sandbo
     assert call[:2] == ["run", "--no-project"]
     assert call[-4] == "python" and call[-3].endswith("examples/tests/stage_sample_to_volume.py")
     assert call[-2:] == ["--profile", "p"]
+
+
+# --- the env wheels in the workspace launchers: the Serverless runner's dependency list, stage-wheel --env ------
+
+def _launcher(name, monkeypatch):
+    import importlib
+    from unittest import mock
+
+    monkeypatch.syspath_prepend(str(REPO_ROOT / "examples" / "tests"))
+    with mock.patch.dict(os.environ):  # stage_wheel_to_volume copies databricks_cluster_config.env in at import
+        return importlib.import_module(name)
+
+
+ENV6 = "/Volumes/c/s/v/geobrix-0.6.0+env6-py3-none-any.whl"
+
+
+def _extra(env, name):
+    lines = (REPO_ROOT / f"python/geobrix/envs/env{env}/extra-{name}.txt").read_text().splitlines()
+    return [ln.split("#", 1)[0].strip() for ln in lines if ln.split("#", 1)[0].strip()]
+
+
+@pytest.mark.parametrize(
+    "wheel, extras, env_version, want",
+    [
+        (ENV6, ["stac", "vizx"], "6", [ENV6, *_extra(6, "stac"), *[r for r in _extra(6, "vizx") if r not in _extra(6, "stac")]]),
+        (ENV6, [], "6", [ENV6]),  # the bare env wheel: its core is the wheel's own Requires-Dist
+        (ENV6, ["light_env6"], "6", "needs no light extra"),
+        (ENV6, ["overture"], "6", "has no [overture]"),
+        (ENV6, ["vizx"], "5", "Fix: pass --env-version 6"),
+        ("/Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl", ["vizx"], "6", None),  # the plain wheel: pyproject's [vizx]
+    ],
+)  # fmt: skip
+def test_the_serverless_runner_installs_an_env_wheel_with_its_own_extras(monkeypatch, wheel, extras, env_version, want):
+    runner = _launcher("run_notebooks_serverless", monkeypatch)
+    if isinstance(want, str):
+        with pytest.raises(SystemExit, match=re.escape(want)):
+            runner._build_dep_list(wheel, extras, [], env_version)
+        return
+    deps = runner._build_dep_list(wheel, extras, [], env_version)
+    if want is None:
+        import tomllib
+
+        vizx = tomllib.loads((REPO_ROOT / "python/geobrix/pyproject.toml").read_text())["project"]
+        assert deps == [wheel, *vizx["optional-dependencies"]["vizx"]]
+    else:
+        assert deps == want
+    assert runner.wheel_env(runner.DEFAULT_WHEEL) == int(runner.DEFAULT_ENV_VERSION) == 6
+    assert runner._split_deps("rich, overturemaps>=1.0.2,<2") == ["rich", "overturemaps>=1.0.2,<2"]
+
+
+class _FakeFiles:
+    def __init__(self, listing):
+        self.calls, self.listing, self.sizes = [], listing, {}
+
+    def create_directory(self, path):
+        self.calls.append(("mkdir", path))
+
+    def list_directory_contents(self, path):
+        from types import SimpleNamespace
+
+        self.calls.append(("list", path))
+        return [SimpleNamespace(is_directory=False, name=n, path=f"{path}/{n}") for n in self.listing]
+
+    def delete(self, path):
+        self.calls.append(("delete", path))
+
+    def upload(self, path, fh, overwrite):
+        self.sizes[path] = len(fh.read())
+        self.calls.append(("upload", path))
+
+    def get_metadata(self, path):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(content_length=self.sizes[path])
+
+
+@pytest.mark.parametrize("args", [["--env", "both"], ["--env", "6", "--no-prune"]])
+def test_stage_wheel_env_puts_each_env_wheel_on_the_bundle_volroot_by_its_own_name(tmp_path, monkeypatch, args):
+    # The init-script dir's plain wheel (another lane's) is never listed, pruned or overwritten.
+    stage = _launcher("stage_wheel_to_volume", monkeypatch)
+    files = _FakeFiles(["geobrix-0.6.0-py3-none-any.whl"])
+    sdk = type(sys)("databricks.sdk")
+    sdk.WorkspaceClient = lambda **kw: type("W", (), {"files": files})()
+    monkeypatch.setitem(sys.modules, "databricks.sdk", sdk)
+    project = tmp_path / "repo"
+    for env in (5, 6):
+        (project / "dist" / f"env{env}").mkdir(parents=True)
+        (project / "dist" / f"env{env}" / f"geobrix-0.6.0+env{env}-py3-none-any.whl").write_bytes(b"w" * env)
+    monkeypatch.setattr(stage, "TESTS_DIR", project / "examples" / "tests")
+    for k, v in {"DATABRICKS_CONFIG_PROFILE": "p", "GBX_BUNDLE_VOLUME_CATALOG": "c", "GBX_BUNDLE_VOLUME_SCHEMA": "s",
+                 "GBX_BUNDLE_VOLUME_NAME": "v"}.items():  # fmt: skip
+        monkeypatch.setenv(k, v)
+    monkeypatch.delenv("GBX_ARTIFACT_VOLUME", raising=False)  # not needed for an env wheel
+    monkeypatch.delenv("GBX_BUNDLE_SKIP_WHEEL_UPLOAD", raising=False)
+    monkeypatch.setattr(sys, "argv", ["stage_wheel_to_volume.py", *args])
+
+    assert stage.main() == 0
+    envs = (5, 6) if "both" in args else (6,)
+    uploads = [c[1] for c in files.calls if c[0] == "upload"]
+    assert uploads == [f"/Volumes/c/s/v/geobrix-0.6.0+env{e}-py3-none-any.whl" for e in envs]
+    assert not [c for c in files.calls if c[0] in ("list", "delete")]
+

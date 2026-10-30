@@ -112,15 +112,25 @@ def _search_driver(
 
 
 class StacClient:
+    # The hosts an asset href may name (None: any public host). See ``__init__``.
+    allowed_hosts = None
+
     def __init__(
         self,
         catalog=PLANETARY_COMPUTER,
         sign="planetary_computer",
         _catalog_opener=None,
+        allowed_hosts=None,
     ):
+        """``allowed_hosts``: when set, ``download`` and ``repair`` fetch an asset href only from these hosts
+        (``"example.com"`` is that host, ``".example.com"`` it and every host under it). Whatever it is, an href
+        whose host resolves to a loopback, private, link-local or unspecified address is refused, at every redirect
+        hop, and no ``~/.netrc`` is read: the hrefs come from the catalog or from the table you pass.
+        """
         self.catalog = catalog
         self.sign = sign
         self._catalog_opener = _catalog_opener
+        self.allowed_hosts = allowed_hosts
 
     def _open_catalog(self):
         if self._catalog_opener is not None:
@@ -301,6 +311,9 @@ class StacClient:
         _bbox = tuple(bbox) if bbox is not None else None
         _bbox_crs = bbox_crs
         _max_mpp = max_mpp  # picklable scalar; captured per closure for the UDF
+        _allowed_hosts = (
+            None if self.allowed_hosts is None else list(self.allowed_hosts)
+        )
 
         from pyspark.sql.types import StringType, StructField, StructType
 
@@ -340,6 +353,7 @@ class StacClient:
                 bbox=_bbox,
                 bbox_crs=_bbox_crs,
                 max_mpp=_max_mpp,
+                allowed_hosts=_allowed_hosts,
                 **kwargs,
             )
             return (item_id, asset_name, out_path)

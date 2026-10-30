@@ -315,6 +315,16 @@ when the tile is made. To open remote paths from data you trust, set
 in its environment variables). The sources GDAL opens by itself are outside this check: the
 sources of a VRT that GDAL reads as a raster, and the netCDF CRS URL below.
 
+**Hrefs that come from data.** `StacClient.download` and `repair`, and the Overture downloader's HTTP
+fallback, fetch hrefs that a catalog or a table names. Each href must be an `http(s)` URL whose host does not resolve
+to a loopback, private, link-local (such as the cloud metadata address `169.254.169.254`) or unspecified address;
+each redirect hop is checked the same way; no `~/.netrc` is read; and an `allowed_hosts=` list, when you pass one,
+refuses any other host. See [STAC § Constructor](./api/stac#constructor).
+
+**Spark's GDAL settings on the JVM.** A `spark.gdal.*` or `spark.databricks.labs.gbx.gdal.*` setting applies to the
+whole executor JVM: on dedicated compute, the first GDAL use in each JVM applies it for every job that JVM then runs.
+The heavyweight tier runs on dedicated compute only, and is refused on standard access mode.
+
 GeoBrix sets the policy when it is imported, in the environment GDAL reads when it registers
 its drivers, and completes it at its first GDAL use. Importing GeoBrix changes the process
 environment: it adds the refused drivers to `GDAL_SKIP` (a value you set stays, with the

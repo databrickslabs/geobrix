@@ -311,6 +311,47 @@ def test_download_udf_path_publishes_valid_bytes(spark_with_fake_catalog, tmp_pa
     assert "last_update" in {f.name for f in result.schema}
 
 
+def test_download_fetches_only_the_hosts_allowed(spark, tmp_path):
+    """StacClient(allowed_hosts=...) reaches the download UDF's fetch: an href off the list is refused before any
+    request (the fetcher leaves a marker when it is called, in the UDF's process), one on it is fetched.
+    """
+    marker = tmp_path / "fetched"
+
+    def fake_get(href, timeout=None, stream=None):
+        marker.write_text(href)
+
+        class _Resp:
+            def raise_for_status(self):
+                pass
+
+            def iter_content(self, n):
+                yield b"x" * 2048
+
+        return _Resp()
+
+    df = spark.createDataFrame(
+        [("S2_X", "B02", "http://fake/B02.tif")], ["item_id", "asset_name", "href"]
+    )
+
+    def download(allowed):
+        client = StacClient(
+            catalog="http://fake-catalog", sign=None, allowed_hosts=allowed
+        )
+        return client.download(
+            df,
+            str(tmp_path / "out"),
+            validate=False,
+            max_tries=1,
+            partitions=1,
+            _get_fn=fake_get,
+        ).first()
+
+    assert download(["only.example"])["out_file_path"] is None
+    assert not marker.exists()
+    assert download(["fake"])["out_file_path"] is not None
+    assert marker.exists()
+
+
 # ---------------------------------------------------------------------------
 # I1 — validate=False publishes without rasterio decode
 # ---------------------------------------------------------------------------

@@ -40,9 +40,15 @@ The client follows a **discover → download → read** pattern that separates m
 from databricks.labs.gbx.sample.overture import OvertureClient
 
 client = OvertureClient(
-    release=None,   # str or None — e.g. "2024-07-22". None → latest available.
+    release=None,         # str or None — e.g. "2024-07-22". None → latest available.
+    allowed_hosts=None,   # None | ["host", ".domain", ...] for the HTTP download fallback
 )
 ```
+
+The HTTP download fallback fetches each asset href as `StacClient.download` does: the host must not resolve to a
+loopback, private, link-local or unspecified address, every redirect hop is checked, no `~/.netrc` is read, and when
+`allowed_hosts` is set (`"example.com"` is that host, `".example.com"` it and every host under it) an href off it is
+refused. A refused asset is not retried; its row has `is_out_file_valid = false`.
 
 #### `discover(bbox, themes=None, release=None) → DataFrame`
 

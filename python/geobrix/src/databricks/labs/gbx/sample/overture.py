@@ -217,12 +217,18 @@ class OvertureClient:
         _catalog_opener=None,
         _get_fn=None,
         _item_loader=None,
+        allowed_hosts=None,
     ):
+        """``allowed_hosts``: when set, the HTTP download fallback fetches an asset href only from these hosts
+        (``"example.com"`` is that host, ``".example.com"`` it and every host under it). Whatever it is, an href
+        whose host resolves to a loopback, private, link-local or unspecified address is refused, at every redirect
+        hop, and no ``~/.netrc`` is read: the hrefs come from the catalog."""
         self.catalog = catalog
         self.release = release
         self._catalog_opener = _catalog_opener
         self._get_fn = _get_fn
         self._item_loader = _item_loader
+        self.allowed_hosts = allowed_hosts
 
     def _open_catalog(self):
         import pystac
@@ -439,6 +445,7 @@ class OvertureClient:
         from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
 
         get_fn = self._get_fn  # None in production; injectable for tests
+        allowed_hosts = None if self.allowed_hosts is None else list(self.allowed_hosts)
 
         row_schema = StructType(
             [
@@ -455,11 +462,10 @@ class OvertureClient:
 
         @F.udf(row_schema)
         def _fetch(theme, type_, href, asset_bbox, release):
-            getter = get_fn
-            if getter is None:
-                import requests
+            # the href is fetched under the destination checks (core._http, through download_href)
+            from databricks.labs.gbx.core._http import RefusedHref
+            from databricks.labs.gbx.stac._download import download_href
 
-                getter = requests.get
             target_dir = os.path.join(out_dir, theme, type_)
             os.makedirs(target_dir, exist_ok=True)
             basename = os.path.basename(href.split("?")[0]) or "asset.parquet"
@@ -472,12 +478,7 @@ class OvertureClient:
                 tmpd = new_local_temp_dir("gbx_overture_")
                 try:
                     local = os.path.join(tmpd, basename)
-                    resp = getter(href, timeout=100, stream=True)
-                    resp.raise_for_status()
-                    with open(local, "wb") as fh:
-                        for chunk in resp.iter_content(1024 * 1024):
-                            if chunk:
-                                fh.write(chunk)
+                    download_href(href, local, get=get_fn, allowed_hosts=allowed_hosts)
                     ok = (not validate) or _is_valid_parquet(local)
                     if ok:
                         shutil.copyfile(local, outpath)
@@ -492,6 +493,8 @@ class OvertureClient:
                             release,
                             href,
                         )
+                except RefusedHref:
+                    break  # the same href is refused again: no retry
                 except Exception:  # noqa: BLE001
                     pass
                 finally:

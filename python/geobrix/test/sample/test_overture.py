@@ -342,6 +342,32 @@ def test_download_fallback_injected_fetcher(spark, tmp_path):
     assert spark.read.parquet(row["source"]).count() == 2
 
 
+def test_the_download_fallback_fetches_only_the_hosts_allowed(spark, tmp_path):
+    """The fallback's fetch is the guarded one: an href off allowed_hosts is refused before any request (the fetcher
+    leaves a marker when it is called, in the UDF's process)."""
+    marker = tmp_path / "fetched"
+
+    def fake_get(href, timeout=None, stream=False):
+        marker.write_text(href)
+        raise RuntimeError("must not be called")
+
+    client = OvertureClient(
+        release="2024-07-01",
+        _catalog_opener=open_fake_overture,
+        _get_fn=fake_get,
+        allowed_hosts=["only.example"],
+    )
+    assets = spark.createDataFrame(
+        [("places", "place", "http://fake/place.parquet", [0.0, 0.0, 1.0, 1.0], "r")],
+        "theme string, type string, href string, asset_bbox array<double>, release string",
+    )
+    meta = client._download_fallback(
+        assets, str(tmp_path / "out"), validate=True, max_tries=2, partitions=1
+    )
+    assert meta.collect()[0]["is_out_file_valid"] is False
+    assert not marker.exists()
+
+
 def test_download_routes_cloud_to_distributed(spark, tmp_path):
     src = str(tmp_path / "cloudish.parquet")
 

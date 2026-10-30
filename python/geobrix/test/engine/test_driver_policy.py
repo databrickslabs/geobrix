@@ -658,3 +658,148 @@ def test_the_one_switch_off_leaves_gdal_as_gdal_has_it():
     _payload_or_skip()
     out = _run(FRESH_GDALG_HEADER, {"GBX_GDAL_DRIVER_POLICY": "off"})
     assert "OPENED" in out and "REFUSED" not in out, out[-600:]
+
+
+# The remote-path gate for paths that come from data: each path, and the location the gate names for it (None: the
+# path is one GeoBrix opens). The switch (GBX_ALLOW_REMOTE_PATHS) lets every refused row through.
+_URL = "/vsicurl/http://127.0.0.1:9/a.tif"
+DATA_PATHS = [
+    ("/Volumes/c/s/v/a.tif", None),
+    ("/Workspace/Users/u/a.tif", None),
+    ("/dbfs/tmp/a.tif", None),
+    ("dbfs:/Volumes/c/s/v/a.tif", None),
+    ("file:/tmp/a.tif", None),
+    ("file:///tmp/a.tif", None),
+    ("relative/a.tif", None),
+    ("/data/vsi_cache/a.tif", None),
+    ("s3://b/a.tif", None),
+    ("s3a://b/a.tif", None),
+    ("abfss://c@acct.dfs.core.windows.net/a.tif", None),
+    ("gs://b/a.tif", None),
+    ("wasbs://c@acct.blob.core.windows.net/a.tif", None),
+    ("/vsis3/b/a.tif", None),
+    ("/vsiaz/c/a.tif", None),
+    ("/vsiadls/c/a.tif", None),
+    ("/vsigs/b/a.tif", None),
+    ("/vsizip//Volumes/c/s/v/a.zip/a.tif", None),
+    ("/vsizip/{/tmp/a.zip}/a.tif", None),
+    ("/vsitar//vsis3/b/a.tar/a.tif", None),
+    ("zip+s3://b/a.zip!/a.tif", None),
+    ("/vsimem/gbx/a.tif", None),
+    (_URL, "/vsicurl/"),
+    ("/vsicurl_streaming/https://h/a.tif", "/vsicurl_streaming/"),
+    ("/vsicurl?url=http://h/a.tif", "/vsicurl/"),
+    ("http://h/a.tif", "http://"),
+    ("https://h/a.tif", "https://"),
+    ("HTTPS://h/a.tif", "https://"),
+    ("ftp://h/a.tif", "ftp://"),
+    ("/vsizip//vsicurl/http://h/a.zip/a.tif", "/vsicurl/"),
+    ("/vsitar/{/vsicurl_streaming/http://h/a.tar}/a.tif", "/vsicurl_streaming/"),
+    ("zip+https://h/a.zip!/a.tif", "zip+https://"),
+    ('NETCDF:"/vsicurl/http://h/a.nc":v', "/vsicurl/"),
+    ("/vsiwebhdfs/http://h/a.tif", "/vsiwebhdfs/"),
+]
+
+
+@pytest.mark.parametrize("path,location", DATA_PATHS, ids=[p for p, _ in DATA_PATHS])
+def test_the_remote_path_gate_refuses_a_remote_location_unless_the_switch_allows_it(
+    monkeypatch, path, location
+):
+    monkeypatch.delenv(_gdal_policy.REMOTE_ENV, raising=False)
+    if location is None:
+        assert _gdal_policy.data_path(path, "the tile") == path
+    else:
+        with pytest.raises(_gdal_policy.RemotePathError) as raised:
+            _gdal_policy.data_path(path, "the tile")
+        msg = str(raised.value)
+        assert (
+            f"({location})" in msg and _gdal_policy.REMOTE_ENV in msg and "Fix:" in msg
+        ), msg
+    monkeypatch.setenv(_gdal_policy.REMOTE_ENV, "true")
+    assert _gdal_policy.data_path(path, "the tile") == path
+
+
+def _vrt_naming(tmp_path, source: str) -> str:
+    vrt = tmp_path / "remote.vrt"
+    vrt.write_text(
+        '<VRTDataset rasterXSize="1" rasterYSize="1"><VRTRasterBand dataType="Byte" band="1"><SimpleSource>'
+        f'<SourceFilename relativeToVRT="0">{source}</SourceFilename><SourceBand>1</SourceBand>'
+        "</SimpleSource></VRTRasterBand></VRTDataset>"
+    )
+    return str(vrt)
+
+
+def _through_open_tile(tmp_path):
+    from databricks.labs.gbx.pyrx.core import open_tile as ot
+
+    with ot._open({"cellid": 0, "raster": None, "path": _URL, "window": None}):
+        pass
+
+
+def _through_a_manifest_row(tmp_path):
+    from databricks.labs.gbx.ds import raster as r
+
+    r._partitions_from_tile_rows(
+        [{"path": _URL, "window": [0, 0, 1, 1]}],
+        emit_virtual=True,
+        budget_bytes=1 << 20,
+    )
+
+
+def _through_a_vrt_member(tmp_path):
+    from databricks.labs.gbx.ds import raster as r
+
+    r._parse_vrt_members(_vrt_naming(tmp_path, _URL))
+
+
+def _through_a_vector_table_path(tmp_path):
+    import pandas as pd
+
+    from databricks.labs.gbx.pyvx import file_read
+
+    decode = file_read._make_vector_decode_fn(True, 0)
+    next(
+        decode(iter([pd.DataFrame({"source": ["/vsicurl/http://127.0.0.1:9/a.gpkg"]})]))
+    )
+
+
+def _through_vizx(tmp_path):
+    pytest.importorskip("matplotlib")
+    from databricks.labs.gbx.vizx import _raster
+
+    _raster.plot_raster(
+        {"cellid": 0, "raster": None, "path": _URL, "window": None}, debug_mode=0
+    )
+
+
+GATED_SITES = {
+    "virtual-tile": _through_open_tile,
+    "manifest-row": _through_a_manifest_row,
+    "vrt-member": _through_a_vrt_member,
+    "vector-table-path": _through_a_vector_table_path,
+    "vizx-virtual-tile": _through_vizx,
+}
+
+
+@pytest.mark.parametrize("site", list(GATED_SITES))
+def test_each_path_from_data_goes_through_the_remote_path_gate(
+    monkeypatch, tmp_path, site
+):
+    """Each place a path from data is opened refuses a remote one before any open (no connection is made)."""
+    _rasterio_or_skip()
+    monkeypatch.delenv(_gdal_policy.REMOTE_ENV, raising=False)
+    with pytest.raises(_gdal_policy.RemotePathError, match=r"\(/vsicurl/\)"):
+        GATED_SITES[site](tmp_path)
+
+
+def test_the_engine_gives_an_error_tile_for_a_remote_virtual_tile(monkeypatch):
+    """The L3 engine's read of a virtual tile goes through the same gate: the error tile names the location."""
+    from databricks.labs.gbx.engine import l3, run
+
+    why = run.unavailable_reason()
+    if why:
+        pytest.skip(why)
+    monkeypatch.delenv(_gdal_policy.REMOTE_ENV, raising=False)
+    fn = manifest.load().functions["gbx_rst_slope"]
+    with pytest.raises(run.DataError, match=r"\(/vsicurl/\)"):
+        l3._inputs(fn, {"cellid": 0, "raster": None, "path": _URL, "window": None})

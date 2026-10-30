@@ -124,9 +124,13 @@ def test_a_refused_virtual_tile_gives_the_policy_reason(tmp_path, fixture, reaso
         l3._inputs(FN, tile)
 
 
-def test_a_valid_virtual_tile_is_still_read(tmp_path):
+@pytest.mark.parametrize("spelling", ["", "file:"], ids=["bare", "file-scheme"])
+def test_a_valid_virtual_tile_is_still_read(tmp_path, spelling):
+    """The engine opens the path every light read opens: a file:/ spelling of the tile's path is the same file."""
     _skip_without_gdal()
-    rasters, _p, _c = l3._inputs(FN, oracles._build("dem_vrt", str(tmp_path)))
+    tile = dict(oracles._build("dem_vrt", str(tmp_path)))
+    tile["path"] = spelling + tile["path"]
+    rasters, _p, _c = l3._inputs(FN, tile)
     assert rasters and bytes(rasters[0][:4]) in run._TIFF_MAGIC
 
 

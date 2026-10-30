@@ -73,7 +73,7 @@ from pyspark.sql.datasource import (
 )
 from pyspark.sql.types import BinaryType, StringType, StructField, StructType
 
-from databricks.labs.gbx._gdal_policy import open_bytes, open_data
+from databricks.labs.gbx._gdal_policy import data_path, open_bytes, open_data
 from databricks.labs.gbx.ds import _encode, _listing
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import budget
@@ -804,6 +804,8 @@ def _partitions_from_tile_rows(
             raise ValueError(
                 f"raster_gbx manifest/table: row missing 'path' field: {r!r}"
             )
+        # a row's path is data: a remote location is refused here, before any open (the remote-path gate)
+        data_path(path, "raster_gbx manifest/table row")
 
         win = _row_to_window(r.get("window"))
 
@@ -907,6 +909,8 @@ def _parse_vrt_members(vrt_path: str) -> list:
         else:
             abs_path = os.path.abspath(text)
         if abs_path not in seen:
+            # a member's name is data: a remote location is refused before any open (the remote-path gate)
+            data_path(abs_path, f"raster_gbx: a source of the VRT {vrt_path}")
             seen.add(abs_path)
             paths.append(abs_path)
 

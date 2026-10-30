@@ -147,7 +147,10 @@ def _make_vector_decode_fn(as_wkb: bool, layer):
                         )
                         local = None
                 if local is None:
-                    local = to_local_path(src)
+                    # a path from the table is data: a remote location is refused (the remote-path gate)
+                    local = to_local_path(
+                        _gdal_policy.data_path(src, "vector_file_read")
+                    )
                 # The geometry column is raw WKB; meta["geometry_name"] names it
                 # (GeoJSON drivers return "" and use "wkb_geometry").
                 with pyogrio.open_arrow(

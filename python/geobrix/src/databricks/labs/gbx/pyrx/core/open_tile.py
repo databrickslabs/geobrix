@@ -29,7 +29,13 @@ from rasterio.io import DatasetReader, MemoryFile
 from rasterio.vrt import WarpedVRT
 from rasterio.windows import Window
 
-from databricks.labs.gbx._gdal_policy import open_bytes, open_data, refusals_named
+from databricks.labs.gbx._gdal_policy import (
+    data_path,
+    open_bytes,
+    open_data,
+    refusals_named,
+)
+from databricks.labs.gbx.ds._listing import to_local_path
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import _clip
 from databricks.labs.gbx.pyrx.core import _nodata as _nd
@@ -522,13 +528,16 @@ def _resolve_local_or_windowed(tile: VirtualTile, file_ref, stack: ExitStack) ->
     this helper is called; if the FILE attempt succeeds, this helper is never
     reached.
     """
+    raw = None
     if file_ref is not None:
         try:
             raw = file_ref.as_local_file()
         except Exception:
-            raw = tile.path
-    else:
-        raw = tile.path
+            raw = None
+    if raw is None:
+        # the tile's path is data: a remote location is refused before any open (the remote-path gate), and the
+        # dbfs:/ and file:/ spellings name the local (FUSE) path GDAL opens
+        raw = to_local_path(data_path(tile.path, f"the tile {tile.path}"))
     local_path, is_temp = _stage_local_if_needed(raw)
     if is_temp:
         stack.callback(_safe_remove, local_path)

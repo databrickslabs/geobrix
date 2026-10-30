@@ -298,6 +298,23 @@ applies a driver policy to each process, on both tiers, before any raster is ope
   are removed. Where the full defence applies (below), a named file is also identified first,
   with the allowed drivers, and opened with the driver identified.
 
+**Remote paths that come from data.** On the lightweight tier, a path that comes from data is
+opened only when it names a local or Volume path (`/Volumes/…`, `/Workspace/…`), a cloud object
+store (`s3://`, `s3a://`, `abfss://`, `gs://`, `wasbs://`, or `/vsis3/`, `/vsiaz/`, `/vsiadls/`,
+`/vsigs/`; `/vsizip/` and `/vsitar/` around one of these), or `/vsimem/`. The paths it checks
+are a virtual tile's `path`, the rows of a `manifest` or a tile index, the sources of a `.vrt`
+that `raster_gbx` reads, the `path` column that `vector_file_read` reads from a table, and a
+virtual tile that a vizx plot opens. A path that names `/vsicurl/`, `/vsicurl_streaming/`,
+`http://`, `https://`, `ftp://` or another GDAL virtual file system, directly or inside a wrapper
+such as `/vsizip//vsicurl/…`, raises an error that names it, before anything is opened. A path
+you pass yourself is your own choice and is not checked: `.load(url)`, `rst_fromfile(url)`,
+`StacClient(catalog=url)`. A virtual tile that `rst_fromfile` makes from a URL names that URL,
+so a function that opens the tile later refuses it; pass `materialize=True` to read the pixels
+when the tile is made. To open remote paths from data you trust, set
+`GBX_ALLOW_REMOTE_PATHS=true` in the environment of the processes that read it (on a cluster,
+in its environment variables). The sources GDAL opens by itself are outside this check: the
+sources of a VRT that GDAL reads as a raster, and the netCDF CRS URL below.
+
 GeoBrix sets the policy when it is imported, in the environment GDAL reads when it registers
 its drivers, and completes it at its first GDAL use. Importing GeoBrix changes the process
 environment: it adds the refused drivers to `GDAL_SKIP` (a value you set stays, with the

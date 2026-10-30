@@ -9,7 +9,7 @@ import os
 
 import numpy as np
 
-from databricks.labs.gbx._gdal_policy import open_bytes, open_data
+from databricks.labs.gbx._gdal_policy import data_path, open_bytes, open_data
 
 # ---------------------------------------------------------------------------
 # emphasis styling defaults (raster tier)
@@ -587,6 +587,8 @@ def _resolve_tile_input(raster):
 
     if vt.path is None:
         raise ValueError("tile struct has neither raster bytes nor a path")
+    # the tile's path is data: a remote location is refused before any open (the remote-path gate)
+    data_path(vt.path, f"the tile {vt.path}")
 
     rasterio_window = None
     if vt.window is not None:

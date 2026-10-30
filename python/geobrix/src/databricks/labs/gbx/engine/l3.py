@@ -12,6 +12,8 @@ Both run ``engine.run`` on each row: the same argv, the same GDAL, the same erro
 
 from __future__ import annotations
 
+import contextlib
+import dataclasses
 from typing import Optional, Tuple
 
 import pandas as pd
@@ -64,36 +66,26 @@ def _virtual_raster(fn, tile, read_cap: Optional[int]) -> bytes:
     sources) must open with a driver the virtual-tile policy allows, and its decoded window must fit this compute's
     read cap, judged from the header before any pixel is read. Any failure is a DataError (an error tile).
     """
-    from databricks.labs.gbx.ds.file_gbx import materialize_decision
-    from databricks.labs.gbx.engine.argv import _ITEMSIZE
-    from databricks.labs.gbx.pyrx import functions as prx
     from databricks.labs.gbx.pyrx.core import open_tile as ot
     from databricks.labs.gbx.zarr import _tiles as zarr_tiles
 
     vt = ot._to_virtual_tile(tile)
     try:
-        if not zarr_tiles.is_zarr_tile(
-            vt
-        ):  # a Zarr tile is decoded by GeoBrix, not opened by a GDAL driver
-            run.virtual_source(fn.sql_name, vt.path)
-        with run.engine_settings():
-            with ot.open_header(vt) as h:
-                dtype = str(h.dtypes[0])
-                size = (
-                    h.width
-                    * h.height
-                    * h.count
-                    * _ITEMSIZE.get(_GDAL_TYPE.get(dtype, dtype), 8)
+        with contextlib.ExitStack() as stack:
+            if not zarr_tiles.is_zarr_tile(
+                vt
+            ):  # a Zarr tile is decoded by GeoBrix, not opened by a GDAL driver
+                # the path GDAL opens, resolved once as every light read resolves it (the remote-path gate, the
+                # dbfs:/ and file:/ spellings, /Volumes staging); the policy and the reads below judge that path
+                vt = dataclasses.replace(
+                    vt, path=ot._resolve_local_or_windowed(vt, None, stack)
                 )
-            if materialize_decision(size, "ingest", cap_bytes=read_cap) == "error":
-                raise run.DataError(
-                    f"{fn.sql_name}: the virtual tile is {size // 2**20} MiB decoded, over this compute's read "
-                    "cap. Fix: retile it first (gbx_rst_retile) so each tile is smaller"
-                )
-            with ot._open(vt) as ds:
-                return prx._dataset_to_gtiff_bytes(ds)
+                run.virtual_source(fn.sql_name, vt.path)
+            return _read_virtual(fn, vt, read_cap)
     except (MemoryError, RecursionError):
         raise
+    except _gdal_policy.RemotePathError as exc:
+        raise run.DataError(f"{fn.sql_name}: {exc}") from None
     except (
         Exception
     ) as exc:  # noqa: BLE001 - an unreadable virtual tile is data, as on every light function
@@ -113,6 +105,31 @@ def _virtual_raster(fn, tile, read_cap: Optional[int]) -> bytes:
         raise run.DataError(
             f"{fn.sql_name}: the virtual tile could not be read ({exc})"
         ) from None
+
+
+def _read_virtual(fn, vt, read_cap: Optional[int]) -> bytes:
+    """The window of a virtual tile whose path is resolved, as GeoTIFF bytes, under this compute's read cap."""
+    from databricks.labs.gbx.ds.file_gbx import materialize_decision
+    from databricks.labs.gbx.engine.argv import _ITEMSIZE
+    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx.pyrx.core import open_tile as ot
+
+    with run.engine_settings():
+        with ot.open_header(vt) as h:
+            dtype = str(h.dtypes[0])
+            size = (
+                h.width
+                * h.height
+                * h.count
+                * _ITEMSIZE.get(_GDAL_TYPE.get(dtype, dtype), 8)
+            )
+        if materialize_decision(size, "ingest", cap_bytes=read_cap) == "error":
+            raise run.DataError(
+                f"{fn.sql_name}: the virtual tile is {size // 2**20} MiB decoded, over this compute's read "
+                "cap. Fix: retile it first (gbx_rst_retile) so each tile is smaller"
+            )
+        with ot._open(vt) as ds:
+            return prx._dataset_to_gtiff_bytes(ds)
 
 
 # numpy dtype names -> GDAL type names, for the item size of a header's band type

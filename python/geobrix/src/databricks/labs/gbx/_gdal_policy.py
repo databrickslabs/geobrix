@@ -93,6 +93,65 @@ class DriverPolicyError(ValueError):
     policy's reason (``REFUSED_PHRASE``)."""
 
 
+class RemotePathError(DriverPolicyError):
+    """A path that comes from data (a tile's path, a tile index's row, a VRT's source, a vector table's path) and
+    names a remote location the remote-path gate refuses. The message names the location, the switch and the fix.
+    """
+
+
+# The remote-path gate: what a path that comes from data may name. Local and FUSE paths (no scheme: /Volumes,
+# /Workspace, /dbfs, a relative path; the dbfs: and file: spellings), the cloud object stores, the archive wrappers
+# around an allowed path, and GeoBrix's own /vsimem/. Anything else that names a location (/vsicurl/, http(s)://,
+# ftp://, another GDAL virtual file system), at any depth of a wrapper, is refused unless REMOTE_ENV allows it.
+REMOTE_ENV = "GBX_ALLOW_REMOTE_PATHS"
+_DATA_SCHEMES = frozenset(
+    {"s3", "s3a", "abfss", "gs", "wasbs", "zip", "tar", "file", "dbfs"}
+)
+_DATA_VSI = frozenset({"s3", "az", "adls", "gs", "mem", "zip", "tar"})
+_SCHEME = re.compile(r"(?<![a-z0-9+.\-])([a-z][a-z0-9+.\-]*)://", re.IGNORECASE)
+# a GDAL virtual file system prefix where a file name starts: the start, or after a wrapper's / { " ' : , or a space
+_VSI = re.compile(r"(?:^|(?<=[/{\"':,\s]))/vsi([a-z0-9_]+)", re.IGNORECASE)
+
+
+def remote_paths_allowed() -> bool:
+    """True when the remote-path switch (``GBX_ALLOW_REMOTE_PATHS``) is on in this process's environment."""
+    return os.environ.get(REMOTE_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def remote_location(path) -> Optional[str]:
+    """The location a path names that the remote-path gate refuses (``/vsicurl/``, ``https://`` ...), else None.
+    A wrapper is judged by every path it wraps (``/vsizip//vsicurl/...`` names ``/vsicurl/``).
+    """
+    text = path if isinstance(path, str) else os.fspath(path)
+    for m in _VSI.finditer(text):
+        if m.group(1).lower() not in _DATA_VSI:
+            return f"/vsi{m.group(1).lower()}/"
+    for m in _SCHEME.finditer(text):
+        scheme = m.group(1).lower()
+        if any(part not in _DATA_SCHEMES for part in scheme.split("+")):
+            return f"{scheme}://"
+    return None
+
+
+def data_path(path, what: str = "a path from data"):
+    """``path``, when it is one GeoBrix opens for a path that comes from data; ``RemotePathError`` when it names a
+    remote location (``remote_location``) and the switch is off. The one gate for those paths: a virtual tile's path
+    (``open_tile``'s resolver, the engine, vizx), a ``manifest`` or tile-index row, a VRT's member, the
+    ``vector_file_read`` table's path. A path the caller passes itself (``.load(path)``, ``rst_fromfile``) is the
+    caller's choice and is not judged here."""
+    if path is None or remote_paths_allowed():
+        return path
+    where = remote_location(path)
+    if where is None:
+        return path
+    raise RemotePathError(
+        f"{what}: {os.fspath(path)!r} names a remote location ({where}), which GeoBrix does not open for a path that "
+        "comes from data (a tile's path, a tile index's row, a VRT's source, a vector table's path). Fix: copy the "
+        "data to a Volume or a cloud object store (s3://, abfss://, gs://), or, for data you trust, set "
+        f"{REMOTE_ENV}=true in the environment of the processes that read it"
+    )
+
+
 def enabled() -> bool:
     """False when the one switch is set to off in the environment."""
     return os.environ.get(ENV, "").strip().lower() != "off"

@@ -5,10 +5,13 @@ and the fetch runs on an executor, with the node's network. Each fetch here:
 
 - takes an ``http(s)`` URL only, and judges the host and port the HTTP client (requests, through urllib3) will
   connect to: a URL whose host or port the client reads differently from Python's ``urlsplit`` is refused;
-- resolves that host once: a loopback, link-local (``169.254.0.0/16``, so the cloud metadata address, and
-  ``fe80::/10``), cloud metadata (``fd00:ec2::254``) or unspecified address is refused always; a private one (RFC 1918
-  and ``fc00::/7``) is refused unless the caller names the host in ``allowed_hosts``; and when ``allowed_hosts`` is
-  set, any host off it is refused (``"example.com"`` is that host; ``".example.com"`` is it and every host under it);
+- resolves that host once, and fetches only from public addresses: a cloud metadata address (``_METADATA``), a
+  loopback, link-local or unspecified one, and any other address that is not public (``ipaddress``'s ``is_global``
+  false, or multicast or reserved: the documentation and benchmark ranges ...) is refused always; a private one
+  (RFC 1918, ``fc00::/7``) or a carrier-grade NAT one (``100.64.0.0/10``) is refused unless the caller names the host
+  in ``allowed_hosts``; an IPv4-mapped IPv6 address is judged as the IPv4 address it maps; and when
+  ``allowed_hosts`` is set, any host off it is refused (``"example.com"`` is that host; ``".example.com"`` is it and
+  every host under it);
 - connects to an address it checked (the name is not resolved again, so it cannot change in between), with the
   host's name in the ``Host`` header and, for https, in TLS (SNI and the certificate check);
 - follows redirects itself, at most ``MAX_REDIRECTS`` hops, and checks each hop as it checks the first;
@@ -34,8 +37,19 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 MAX_REDIRECTS = 5
 _FIX = "Fix: an href must name a public host; check the catalog, or the table, that the href came from"
 _DEFAULT_PORT = {"http": 80, "https": 443}
-# Cloud metadata addresses outside link-local (AWS's IPv6 one is a ULA): refused like link-local, even when listed.
-_METADATA = frozenset({ipaddress.ip_address("fd00:ec2::254")})
+# The cloud metadata endpoints (AWS, Azure, GCP; AWS's IPv6 one; Alibaba's): refused always, even when listed.
+_METADATA = frozenset(
+    ipaddress.ip_address(a)
+    for a in ("169.254.169.254", "fd00:ec2::254", "100.100.100.200")
+)
+# The internal ranges a host the caller lists in allowed_hosts may resolve to (an internal catalog), by kind.
+_LISTABLE = {
+    "private": tuple(
+        ipaddress.ip_network(n)
+        for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7")
+    ),
+    "carrier-grade NAT": (ipaddress.ip_network("100.64.0.0/10"),),
+}
 
 
 class RefusedHref(ValueError):
@@ -91,16 +105,19 @@ def _kind(addr: str) -> Optional[str]:
     mapped = getattr(ip, "ipv4_mapped", None)
     if mapped is not None:
         ip = mapped
+    if ip in _METADATA:
+        return "cloud metadata"
     if ip.is_unspecified:
         return "unspecified"
     if ip.is_loopback:
         return "loopback"
     if ip.is_link_local:
         return "link-local"
-    if ip in _METADATA:
-        return "cloud metadata"
-    if ip.is_private:
-        return "private"
+    for kind, networks in _LISTABLE.items():
+        if any(ip in n for n in networks):
+            return kind
+    if not ip.is_global or ip.is_multicast or ip.is_reserved:
+        return "non-public"
     return None
 
 
@@ -178,13 +195,13 @@ def _target(url: str, allowed_hosts) -> _Target:
     addrs = _addresses(host, port)
     for addr in addrs:
         kind = _kind(addr)
-        if kind == "private" and listed:
-            continue  # a private host the caller named (an internal catalog); loopback, link-local never
+        if kind in _LISTABLE and listed:
+            continue  # an internal host the caller named (an internal catalog); every other kind never
         if kind is not None:
             fix = (
                 f"Fix: if {host} is your own catalog's host, name it in allowed_hosts; else check the catalog, or "
                 "the table, that the href came from"
-                if kind == "private"
+                if kind in _LISTABLE
                 else _FIX
             )
             raise RefusedHref(

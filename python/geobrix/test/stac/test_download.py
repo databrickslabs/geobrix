@@ -204,12 +204,21 @@ def test_a_loopback_href_is_refused_before_any_request_and_not_retried(
 @pytest.mark.parametrize(
     "href,kind",
     [
-        ("http://169.254.169.254/latest/meta-data/", "link-local"),
+        ("http://169.254.169.254/latest/meta-data/", "cloud metadata"),
+        ("http://[fd00:ec2::254]/x", "cloud metadata"),
+        ("http://100.100.100.200/latest/meta-data/", "cloud metadata"),
+        ("http://[::ffff:100.100.100.200]/x", "cloud metadata"),
         ("http://[fe80::1]/x", "link-local"),
         ("http://10.0.0.5/x", "private"),
-        ("http://[fd00:ec2::254]/x", "cloud metadata"),
+        ("http://100.64.0.7/x", "carrier-grade NAT"),
         ("http://0.0.0.0/x", "unspecified"),
         ("http://[::ffff:127.0.0.1]/x", "loopback"),
+        # any other address that is not public: documentation, benchmark, multicast, reserved
+        ("http://192.0.2.10/x", "non-public"),
+        ("http://[2001:db8::1]/x", "non-public"),
+        ("http://198.18.0.1/x", "non-public"),
+        ("http://224.0.0.1/x", "non-public"),
+        ("http://240.0.0.1/x", "non-public"),
     ],
 )
 def test_an_href_to_a_private_destination_is_refused(tmp_path, href, kind):
@@ -266,14 +275,20 @@ def test_a_windowed_read_of_a_loopback_href_is_refused_before_gdal_opens_it(
 
 @pytest.fixture
 def private_test(monkeypatch, server):
-    """`stac.corp` is a private (RFC 1918) address, `meta.corp` and `meta6.corp` the cloud metadata addresses and
-    `lo.corp` loopback, to the checks; the network routes each name and address to the local server.
+    """To the checks: `stac.corp` is a private (RFC 1918) address and `cgnat.corp` a carrier-grade NAT one (both
+    hosts a caller may list), `meta.corp`, `meta6.corp` and `ali.corp` cloud metadata addresses, `ll.corp`
+    link-local, `lo.corp` loopback and `doc.corp` a documentation address; the network routes each name and address
+    to the local server.
     """
     names = {
         "stac.corp": "10.0.0.5",
+        "cgnat.corp": "100.64.0.7",
         "meta.corp": "169.254.169.254",
         "meta6.corp": "fd00:ec2::254",
+        "ali.corp": "100.100.100.200",
+        "ll.corp": "fe80::1",
         "lo.corp": "127.0.0.1",
+        "doc.corp": "192.0.2.10",
     }
     local = ("127.0.0.1", server.port)
     _network(
@@ -284,25 +299,31 @@ def private_test(monkeypatch, server):
     return server.port
 
 
+@pytest.mark.parametrize(
+    "host,kind", [("stac.corp", "private"), ("cgnat.corp", "carrier-grade NAT")]
+)
 def test_a_private_host_the_caller_lists_is_fetched_and_an_unlisted_one_refused(
-    server, private_test, tmp_path
+    server, private_test, tmp_path, host, kind
 ):
-    href = f"http://stac.corp:{private_test}/a.tif"
-    with pytest.raises(_http.RefusedHref, match="a private address"):
+    href = f"http://{host}:{private_test}/a.tif"
+    with pytest.raises(_http.RefusedHref, match=f"a {kind} address"):
         download_href(href, str(tmp_path / "x.tif"))
     with pytest.raises(_http.RefusedHref, match="not in allowed_hosts"):
         download_href(href, str(tmp_path / "x.tif"), allowed_hosts=["other.corp"])
     assert server.hits == []
-    download_href(href, str(tmp_path / "x.tif"), allowed_hosts=["stac.corp"])
+    download_href(href, str(tmp_path / "x.tif"), allowed_hosts=[host])
     assert read_validate(str(tmp_path / "x.tif")) and len(server.hits) == 1
 
 
 @pytest.mark.parametrize(
     "host,kind",
     [
-        ("meta.corp", "link-local"),
+        ("meta.corp", "cloud metadata"),
         ("meta6.corp", "cloud metadata"),
+        ("ali.corp", "cloud metadata"),
+        ("ll.corp", "link-local"),
         ("lo.corp", "loopback"),
+        ("doc.corp", "non-public"),
     ],
 )
 def test_a_listed_loopback_or_metadata_host_is_still_refused(
@@ -311,7 +332,7 @@ def test_a_listed_loopback_or_metadata_host_is_still_refused(
     href = f"http://{host}:{private_test}/a.tif"
     with pytest.raises(_http.RefusedHref, match=f"a {kind} address"):
         download_href(href, str(tmp_path / "x.tif"), allowed_hosts=[host])
-    with pytest.raises(_http.RefusedHref, match="a link-local address"):
+    with pytest.raises(_http.RefusedHref, match="a cloud metadata address"):
         download_href(
             "http://169.254.169.254/latest/meta-data/",
             str(tmp_path / "y"),

@@ -328,10 +328,12 @@ worker they refuse a remote path. The sources GDAL opens by itself are outside t
 sources of a VRT that GDAL reads as a raster, and the netCDF CRS URL below.
 
 **Hrefs that come from data.** `StacClient.download` and `repair`, and the Overture downloader's HTTP
-fallback, fetch hrefs that a catalog or a table names. Each href must be an `http(s)` URL whose host does not resolve
-to a loopback, link-local (such as the cloud metadata address `169.254.169.254`), cloud metadata (`fd00:ec2::254`) or
-unspecified address, nor to a private address unless you name the host in `allowed_hosts=` (an internal catalog); an
-`allowed_hosts=` list, when you pass one, refuses any other host. The host checked is the one the HTTP client
+fallback, fetch hrefs that a catalog or a table names. Each href must be an `http(s)` URL whose host resolves only to
+public addresses: a cloud metadata address (`169.254.169.254`, `fd00:ec2::254`, `100.100.100.200`), a loopback,
+link-local or unspecified one, and any other address that is not public (the documentation and benchmark ranges,
+multicast, reserved) are refused always, even for a host you list, while a private (RFC 1918, `fc00::/7`) or
+carrier-grade NAT (`100.64.0.0/10`) address is refused unless you name the host in `allowed_hosts=` (an internal
+catalog); an `allowed_hosts=` list, when you pass one, refuses any other host. The host checked is the one the HTTP client
 connects to: an href whose host the client reads differently from the check (a backslash in it, for example) is
 refused. The fetch connects to an address the check approved, with the host's name in the request and in TLS, so a
 DNS answer that changes after the check is never used. Each redirect hop is checked the same way, and no

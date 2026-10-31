@@ -182,6 +182,8 @@ def test_the_direct_download_probe_names_a_download_with_no_working_origin():
 
 
 TIMEOUT = "timed out"
+BARE_TIMEOUT = "bare timeout"  # socket.timeout out of resp.read(), not wrapped in a URLError
+CUT_SHORT = "cut short"  # http.client.IncompleteRead: an HTTPException, not an OSError
 
 
 @pytest.mark.parametrize(
@@ -192,6 +194,9 @@ TIMEOUT = "timed out"
         ((403,), False), ((407,), False), ((451,), False), ((404,), False),
         # a 429, a 5xx or a timeout is retried once (curl --retry's intent), then counts as no working origin
         ((429, 206), True), ((503, 206), True), ((TIMEOUT, 206), True), ((503, 503), False),
+        ((BARE_TIMEOUT, 206), True), ((BARE_TIMEOUT, BARE_TIMEOUT), False),
+        # a body cut short is no working origin (not a traceback out of the pool), and is not retried
+        ((CUT_SHORT,), False),
     ],
 )
 def test_a_refusal_is_blocked_and_a_transient_failure_retried_once(monkeypatch, answers, ok):
@@ -203,6 +208,10 @@ def test_a_refusal_is_blocked_and_a_transient_failure_retried_once(monkeypatch, 
         calls.append(answer)
         if answer == TIMEOUT:
             raise probe.urllib.error.URLError(TimeoutError(TIMEOUT))
+        if answer == BARE_TIMEOUT:
+            raise TimeoutError(BARE_TIMEOUT)
+        if answer == CUT_SHORT:
+            raise probe.http.client.IncompleteRead(b"x", 10)
         if answer >= 400:
             raise probe.urllib.error.HTTPError(req.full_url, answer, "x", {}, None)
 
@@ -219,7 +228,7 @@ def test_a_refusal_is_blocked_and_a_transient_failure_retried_once(monkeypatch, 
         return R()
 
     monkeypatch.setattr(probe.urllib.request, "urlopen", urlopen)
-    monkeypatch.setattr(probe, "RETRY_DELAY", 0, raising=False)
+    monkeypatch.setattr(probe, "RETRY_DELAY", 0)
     assert probe.check_url("https://h.example/f.tar.gz", 5)[0] is ok
     assert len(calls) == len(answers)
 

@@ -143,6 +143,7 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
+          docker version --format 'runner Docker engine {{.Server.Version}}, client {{.Client.Version}}'
           python3 scripts/native/egress_probe.py
           img=$(python3 scripts/native/pins.py get MANYLINUX_IMAGE_X86_64)
           docker pull -q "$img" > /dev/null || {

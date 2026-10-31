@@ -11,13 +11,15 @@ a ranged GET of the file itself (redirects followed, so a release asset's storag
 2xx. HTTP 403, 407 and 451 are a policy proxy's refusal (blocked); another status means the pinned URL itself fails; a
 refused, reset or timed-out connection, or a failed TLS handshake, is blocked. An HTTP 429, a 5xx or a timeout is
 retried once first, as prefetch.sh's `curl --retry` retries it, so a transient answer does not fail the job. One
-`::error::` line per download with no working origin, naming the host and the kind of download, then exit 1: seconds,
+`::error::` line per download with no working origin, naming the host and the kind of download, then exit 1: in
+seconds for a refusal, and within about twice --timeout for a host that swallows the connection (it is tried twice),
 not 20 minutes into the build. The quay.io image pull and the image build's dnf are probed by the workflow step that
 runs this; the image build's `rustup toolchain install` uses static.rust-lang.org, rustup-init's host, probed here.
 Stdlib only.
 """
 
 import argparse
+import http.client
 import sys
 import time
 import urllib.error
@@ -73,7 +75,8 @@ def check_url(url, timeout):
             if e.code in POLICY:
                 return False, f"refused (HTTP {e.code}: a policy proxy)"
             why, transient = f"the pinned URL answered HTTP {e.code}", e.code == 429 or e.code >= 500
-        except (urllib.error.URLError, OSError) as e:
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
+            # HTTPException: a body cut short (IncompleteRead) or a garbled status line is not an OSError
             why = "no connection (refused, reset, timed out or TLS failed)"
             transient = isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError)
         if not transient or attempt == 2:

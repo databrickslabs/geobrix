@@ -77,6 +77,7 @@ Behavior changes that alter results or signatures:
   - See [Cluster libraries](./installation#heavyweight).
 - **Migration.** Remove the init script and the GDAL bundle from the cluster, then install the wheel and the JAR as libraries.
   - A 0.6.0 wheel beside the init script's system GDAL puts two GDAL stacks in one cluster.
+- **GeoBrix no longer publishes the init script or the GDAL bundle tarball.** The 0.6.0 release attaches neither.
 - **Heavyweight netCDF-4 with zstd, blosc or bzip2 filters returns NULL, with no error, unless `HDF5_PLUGIN_PATH` is set.** The lightweight tier reads these files without it.
   - Setting `HDF5_PLUGIN_PATH` cluster-wide breaks an h5py write with `hdf5plugin` blosc on a Databricks ML runtime.
   - See [Compressed netCDF-4 variables](./readers/netcdf#compressed-netcdf-4-variables-zstd-blosc-bzip2).

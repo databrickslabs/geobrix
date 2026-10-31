@@ -40,41 +40,6 @@ GeoBrix is a multi-artifact repo: Scala/JVM core, Python bindings, docs, and too
 
 Development and CI use a **Docker** image (`geobrix-dev`) for a consistent environment; most `gbx:*` commands run inside that container.
 
-### Git LFS — required to clone the GDAL platform tarball
-
-The GDAL platform tarball at `resources/static/geobrix-gdal-platform-noble.tar.gz` (~90 MB, ships in every GeoBrix release as the runtime GDAL bundle) is stored via **Git LFS** so the binary lives in LFS storage instead of the git pack. The matching `.sha256` sidecar is small enough to live in git directly and is NOT LFS-tracked. The tracking rule is in [`.gitattributes`](https://github.com/databrickslabs/geobrix/blob/main/.gitattributes) at the repo root.
-
-#### One-time install per machine
-
-```bash
-brew install git-lfs           # macOS; or apt-get install git-lfs on Debian/Ubuntu
-git lfs install                # writes LFS filters into ~/.gitconfig
-```
-
-#### Cloning the repo
-
-After `git lfs install`, a normal `git clone` of geobrix automatically fetches LFS objects:
-
-```bash
-git clone git@github.com:databrickslabs/geobrix.git
-```
-
-If you cloned **before** installing git-lfs, run `git lfs pull` from inside the working tree to fetch the binary. Without that step, `resources/static/geobrix-gdal-platform-noble.tar.gz` will be a ~130-byte LFS pointer file rather than the real 90 MB tarball, and the [`package-geobrix-artifacts.yml`](https://github.com/databrickslabs/geobrix/blob/main/.github/workflows/package-geobrix-artifacts.yml) workflow's `lfs: true` checkout will fail an integrity check.
-
-#### Updating the platform tarball
-
-Rebuild only when `GDAL_PPA_VERSION` changes, when DBR moves to a new Ubuntu LTS, or for a security advisory against one of the bundled libs. See [`resources/static/README.md`](https://github.com/databrickslabs/geobrix/blob/main/resources/static/README.md) for the full Docker-based recipe. The short version:
-
-1. Run [`scripts/build-gdal-artifacts.sh --platform-only`](https://github.com/databrickslabs/geobrix/blob/main/scripts/build-gdal-artifacts.sh) inside a fresh `ubuntu:24.04` container (Docker recipe in the README).
-2. Move the resulting `geobrix-gdal-platform-noble.tar.gz` + `.sha256` from `dist/` into `resources/static/`.
-3. `git add resources/static/geobrix-gdal-platform-noble.tar.gz` — the LFS filter intercepts via `.gitattributes`. Verify with `git lfs ls-files` (should list the tarball) and `git diff --cached --stat resources/static/geobrix-gdal-platform-noble.tar.gz` (should show ~3 lines added — the pointer — not 90 MB).
-4. `git add resources/static/geobrix-gdal-platform-noble.tar.gz.sha256` — committed normally, not LFS.
-5. Open a PR. The reviewer **re-runs the build script locally in their own `ubuntu:24.04` container** and confirms the resulting sha256 matches the committed sidecar before approving — that PR review is the trust anchor for every cluster that subsequently installs from this bundle. See [Security](./security#pinned-gdal-native--multi-layer-trust-chain) for the full chain.
-
-#### Storage considerations
-
-LFS bandwidth and storage come from the `databrickslabs` GitHub org quota. Each tarball bump consumes both. Don't rebuild the tarball just to bump GeoBrix versions — the release workflow grafts the per-release JAR onto the committed platform tarball without changing it.
-
 ### Testing on a Databricks cluster
 
 You can run the **Essential bundle** and **primitive Volume tests** on a live Databricks cluster so that Volume paths are FUSE-mounted and the bundle uses pathlib/shutil only (no Databricks Files API).

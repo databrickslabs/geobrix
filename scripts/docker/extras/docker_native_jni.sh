@@ -20,11 +20,20 @@ LINK="${GBX_JNI_LINK:-/usr/lib/libgdalalljni.so}"
 ARCH="${GBX_JNI_ARCH:-$(uname -m)}"
 PAYLOAD="${GBX_NATIVE_ROOT:-$ROOT/build/env-wheel/env6/payload}"
 JNI="${PAYLOAD%/}/_native/$ARCH/lib/libgdalalljni.so"
+IMAGE_JNI="${GBX_JNI_IMAGE:-/usr/local/lib/jni/libgdalalljni.so}"   # the JNI the image was built with
 
 echo ""
 echo "::: [JVM GDAL] $LINK -> the payload's JNI ($PAYLOAD) :::"
 if [ ! -f "$JNI" ]; then
     echo "    NOT LINKED: no $JNI (the payload is not built)."
+    if [ -L "$LINK" ] && [ ! -e "$LINK" ]; then
+        # an earlier start linked into a payload that has since been removed: back to the image's own JNI
+        if [ -f "$IMAGE_JNI" ] && ln -sfn "$IMAGE_JNI" "$LINK"; then
+            echo "    $LINK dangled (its payload is gone); restored to the image's $IMAGE_JNI"
+        else
+            echo "    $LINK dangles (its payload is gone) and $IMAGE_JNI is not there to restore it to"
+        fi
+    fi
     echo "    The JVM keeps the image's JNI ($(readlink -f "$LINK" 2>/dev/null || echo none)), which the JAR's GDAL classes refuse."
     if [ "${GBX_JNI_REQUIRE:-0}" = 1 ]; then
         echo "    GBX_JNI_REQUIRE=1: failing (CI's native payload step lays the payload out before this one)."

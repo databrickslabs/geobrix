@@ -21,13 +21,15 @@ JNI_STEP = ["/bin/bash", "/root/geobrix/scripts/docker/extras/docker_native_jni.
 MAVEN_STEP = "docker_maven_setup.sh"
 
 
-def run(root, link, arch="aarch64"):
+def run(root, link, arch="aarch64", image_jni=None):
     env = dict(
         os.environ,
         GBX_CONTAINER_ROOT=str(root),
         GBX_JNI_LINK=str(link),
         GBX_JNI_ARCH=arch,
     )
+    if image_jni is not None:
+        env["GBX_JNI_IMAGE"] = str(image_jni)
     return subprocess.run(
         ["bash", str(SCRIPT)], env=env, capture_output=True, text=True
     )
@@ -81,6 +83,36 @@ def test_without_a_payload_the_link_is_left_alone_and_the_fix_printed(tmp_path):
     assert res.returncode == 0
     assert os.readlink(link) == str(system)
     assert "NOT LINKED" in res.stdout and "gbx-build-wheel.sh --env 6" in res.stdout
+
+
+def test_a_link_into_a_payload_that_is_gone_goes_back_to_the_images_jni(tmp_path):
+    # An earlier start linked into the payload, then the payload was removed (a rebuild): the link
+    # dangles and the JVM has no JNI at all. It is restored to the image's own, and the fix printed.
+    root = tmp_path / "root"
+    root.mkdir()
+    image = tmp_path / "image-jni.so"
+    image.write_bytes(b"image")
+    link = tmp_path / "libgdalalljni.so"
+    link.symlink_to(root / "build/env-wheel/env6/payload/_native/aarch64/lib/libgdalalljni.so")
+
+    res = run(root, link, image_jni=image)
+
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert os.readlink(link) == str(image)
+    assert "NOT LINKED" in res.stdout and "gbx-build-wheel.sh --env 6" in res.stdout
+
+
+def test_a_dangling_link_with_no_image_jni_to_go_back_to_is_left_and_reported(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    gone = root / "payload-jni.so"
+    link = tmp_path / "libgdalalljni.so"
+    link.symlink_to(gone)
+
+    res = run(root, link, image_jni=tmp_path / "no-such.so")
+
+    assert res.returncode == 0 and os.readlink(link) == str(gone)
+    assert "dangles" in res.stdout
 
 
 @pytest.mark.parametrize("built", [True, False])

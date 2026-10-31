@@ -529,9 +529,7 @@ def test_core_crs_imports_in_a_fresh_interpreter_when_proj_data_is_unlistable(tm
         "time.sleep = lambda _s: None\n"  # no transient-retry backoff
         "import databricks.labs.gbx.core.crs\n"
     )
-    env = {
-        k: v for k, v in os.environ.items() if k not in ("PROJ_LIB", "PYTHONPATH")
-    }
+    env = {k: v for k, v in os.environ.items() if k not in ("PROJ_LIB", "PYTHONPATH")}
     env["PROJ_DATA"] = str(tmp_path / "does-not-exist")
     env["GBX_LOCAL_TEMP_DIR"] = str(tmp_path / "local_tmp")
     run = subprocess.run(

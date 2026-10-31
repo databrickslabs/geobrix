@@ -192,6 +192,7 @@ LOCKED = {
     "gbx-coverage-python.sh": [],
     "gbx-coverage-python-docs.sh": [],
     "gbx-bench-heavyweight.sh": [],
+    "gbx-bench-local-timing.sh": [],
     "gbx-lint-scalastyle.sh": [],
     "gbx-docker-exec.sh": ["mvn -version"],
     "gbx-data-stage-jar.sh": [],

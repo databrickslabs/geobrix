@@ -1941,3 +1941,47 @@ def test_help_runs_in_place_without_a_snapshot(sandbox):
     res = sandbox.run("gbx-snapshot-probe.sh", "--help")
 
     assert "source tree none" in res.output and str(sandbox.root) in res.output
+
+
+# ------------------------------------------------------------------- gbx:bench:local-timing
+
+
+def _timing_sandbox(sandbox, jar=True, payload=True):
+    if jar:
+        (sandbox.root / "python" / "geobrix" / "lib").mkdir(parents=True)
+        (sandbox.root / "python" / "geobrix" / "lib" / "geobrix-0.0.0-jar-with-dependencies.jar").write_text("jar")
+    if payload:
+        rs = sandbox.root / "build" / "env-wheel" / "env6" / "payload" / "_native" / "aarch64" / "rs"
+        rs.mkdir(parents=True)
+        (rs / "_gbxrs.abi3.so").write_text("so")
+    return sandbox
+
+
+def _timing_exec(sandbox):
+    return [c[-1] for c in sandbox.execs() if "local_timing" in c[-1]]
+
+
+def test_local_timing_runs_the_module_in_the_container_with_the_payload_and_its_options(sandbox):
+    _timing_sandbox(sandbox)
+    res = sandbox.run("gbx-bench-local-timing.sh", "--set", "IO", "--k", "4")
+    assert res.returncode == 0, res.output
+    (cmd,) = _timing_exec(sandbox)
+    assert "python3 -m databricks.labs.gbx.bench.local_timing --set IO --k 4" in cmd
+    env = next(e for c, e in zip(sandbox.execs(), sandbox.exec_envs()) if "local_timing" in c[-1])
+    assert env["GBX_NATIVE_ROOT"] == "/root/geobrix/build/env-wheel/env6/payload"
+    assert "/root/geobrix/python/geobrix/src" in env["PYTHONPATH"]
+
+
+@pytest.mark.parametrize("missing", ["jar", "payload"])
+def test_local_timing_without_the_jar_or_the_payload_says_so_and_exits_2(sandbox, missing):
+    _timing_sandbox(sandbox, jar=missing != "jar", payload=missing != "payload")
+    res = sandbox.run("gbx-bench-local-timing.sh")
+    assert res.returncode == 2 and "PRECONDITION MISSING" in res.output, res.output
+    assert _timing_exec(sandbox) == []
+
+
+def test_local_timing_exits_non_zero_when_the_pass_flags_a_form(sandbox):
+    _timing_sandbox(sandbox)
+    res = sandbox.run("gbx-bench-local-timing.sh", FAKE_DOCKER_EXEC_RC="1")
+    assert res.returncode == 1 and "flagged a form" in res.output, res.output
+

@@ -237,7 +237,7 @@ def test_the_limit_sits_below_the_exchange_that_feeds_the_decode(
     }[kind]  # fmt: skip
     top, exch, limit = (
         _at(plan, *decode),
-        _at(plan, "Exchange hashpartitioning"),
+        _at(plan, "Exchange rangepartitioning"),
         _at(plan, "GlobalLimit", "CollectLimit"),
     )
     assert min(top, exch, limit) >= 0, "\n".join(plan)
@@ -280,16 +280,28 @@ def test_the_only_files_regex_keeps_exactly_the_named_files_for_python_and_java(
     import re
 
     names = ["r0.tif", "r1.tif", "r10.tif", "r100.tif", "r2.tif", "a.b.tif"]
-    rx = re.compile(lf._only_files_regex(["/d/" + k for k in names]))
+    rx = re.compile(lf._only_files_regex(["/v/rows/" + k for k in names]))
     every = names + ["r11.tif", "r1.tiff", "xr1.tif", "r1xtif", "r.tif", "ra.b.tif"]
     assert [k for k in every if rx.match("/v/rows/" + k)] == names
+
+
+def test_the_only_files_regex_is_anchored_to_the_rows_folder_not_just_the_file_name():
+    """The heavy reader is recursive: a same-named file in a subfolder or another folder must not match."""
+    import re
+
+    rx = re.compile(lf._only_files_regex(["/v/rows/r1.tif", "/v/rows/r2.tif"]))
+    assert rx.match("/v/rows/r1.tif") and rx.match("/v/rows/r2.tif")
+    assert not rx.match("/v/rows/sub/r1.tif")
+    assert not rx.match("/v/other/r1.tif")
+    assert not rx.match("/v/rows2/r1.tif")
+    assert re.compile(lf._only_files_regex([])).match("/v/rows/r1.tif") is None
 
 
 def test_the_light_writers_take_the_same_limited_input(spark_session_local, tmp_path):
     """W1 writes the virtual tiles: its input has the limit under the exchange, as the read forms do."""
     corpus = _corpus(tmp_path, 8)
     plan = _plan(lf._io_named(spark_session_local, corpus + "/rows", 3, "virtual"))
-    exch, limit = _at(plan, "Exchange hashpartitioning"), _at(
+    exch, limit = _at(plan, "Exchange rangepartitioning"), _at(
         plan, "GlobalLimit", "CollectLimit"
     )
     assert 0 <= exch < limit, "\n".join(plan)
@@ -321,3 +333,87 @@ def test_a_scale_asking_for_more_tiles_than_the_corpus_holds_is_an_error_not_a_c
         where="test",
     )  # fmt: skip
     assert [(r.status, r.rows) for r in exact] == [("ok", 4), ("ok", 4)]
+
+
+# ---- the timed form reads, decodes and writes: the listing and the file filter are built with the input
+
+
+def _count_listings(monkeypatch):
+    from databricks.labs.gbx.ds import _listing
+
+    calls = []
+    real = _listing.list_files
+
+    def counting(*a, **kw):
+        calls.append(a[0])
+        return real(*a, **kw)
+
+    monkeypatch.setattr(_listing, "list_files", counting)
+    return calls
+
+
+@pytest.mark.parametrize("form", ["io_a", "io_b"])
+def test_a_and_b_do_not_list_the_corpus_or_build_the_file_filter_inside_the_timed_form(
+    spark_session_local, tmp_path, monkeypatch, form
+):
+    """The input builder lists the corpus once and carries the filter; the form only reads."""
+    corpus = _corpus(tmp_path, 4)
+    src = lf._io_spec(spark_session_local, 3, corpus, None)
+    calls = _count_listings(monkeypatch)
+    monkeypatch.setattr(
+        lf, "_only_files_regex", lambda *a: pytest.fail("the filter was built in the form")
+    )
+    if form == "io_b":  # a needs the JAR; b is the same path with the light reader
+        n, fp, n_out, *_ = lf.io_b(spark_session_local, src)
+        assert n == 3
+    else:
+        with pytest.raises(Exception) as err:  # no JAR here: it must fail in the read, not in the listing
+            lf.io_a(spark_session_local, src)
+        assert "the filter was built" not in str(err.value)
+    assert calls == []
+
+
+def test_the_input_builder_lists_the_corpus_once_per_scale_not_once_per_form(
+    spark_session_local, tmp_path, monkeypatch
+):
+    corpus = _corpus(tmp_path, 4)
+    calls = _count_listings(monkeypatch)
+    for _ in range(6):  # one build per form of the set
+        lf._io_spec(spark_session_local, 3, corpus, None)
+    assert len(calls) == 1, calls
+    lf._io_spec(spark_session_local, 4, corpus, None)  # the next scale
+    assert len(calls) == 2, calls
+
+
+def test_the_first_files_skip_hidden_files_as_the_reader_does(
+    spark_session_local, tmp_path
+):
+    """A `._x.tif` / `_x.tif` sorts first and is skipped by the reader: b would get fewer than n rows."""
+    corpus = _corpus(tmp_path, 4)
+    rows = os.path.join(corpus, "rows")
+    for hidden in ("._t0.tif", "_t0.tif"):
+        open(os.path.join(rows, hidden), "wb").write(b"junk")
+    got = lf._first_files(rows, 3)
+    assert [os.path.basename(f) for f in got] == ["t0.tif", "t1.tif", "t2.tif"]
+    df = lf._io_read(spark_session_local, rows, 3, "b")
+    assert df.count() == 3
+
+
+@pytest.mark.parametrize("n", [40, 49, 96])
+def test_no_partition_holds_more_than_the_cap_of_tiles(
+    spark_session_local, tmp_path, monkeypatch, n
+):
+    """`IO_ROWS_PER_PARTITION` is a guarantee, not a hash's average (a skewed partition OOM-killed a local JVM)."""
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.bench import runner
+
+    monkeypatch.setattr(runner, "_bench_parallelism", lambda spark, default=8: 1)
+    corpus = _corpus(tmp_path, n)
+    df = lf._io_read(spark_session_local, corpus + "/rows", n, "virtual")
+    sizes = [
+        r[0]
+        for r in df.groupBy(F.spark_partition_id()).count().select("count").collect()
+    ]
+    assert sum(sizes) == n and max(sizes) <= lf.IO_ROWS_PER_PARTITION, sizes
+    assert df.columns == ["tile"]

@@ -1599,10 +1599,27 @@ def _io_scratch(corpus: str) -> str:
     return tempfile.gettempdir() + SCRATCH_PREFIX.rstrip("/")
 
 
+_IO_SPEC_CACHE: Dict[tuple, tuple] = {}  # (rows dir, n, dir mtime) -> (tiles held, a/b file filter)
+
+
+def _io_listing(rows: str, n: int):
+    """`(tiles held, the filterRegex that keeps the first n)` of the corpus' rows folder. The folder is listed once per
+    scale (the six read forms and the three writers all build the same input), and again only when the folder changed.
+    """
+    key = (rows, int(n), os.stat(rows).st_mtime_ns)
+    if key not in _IO_SPEC_CACHE:
+        files = _first_files(rows, None)
+        if len(_IO_SPEC_CACHE) > 32:
+            _IO_SPEC_CACHE.clear()
+        _IO_SPEC_CACHE[key] = (len(files), _only_files_regex(files[: int(n)]))
+    return _IO_SPEC_CACHE[key]
+
+
 def _io_spec(spark, n, corpus, schema):
-    """One row `(rows_dir, n, scratch)`: the forms read the corpus themselves (a table of tiles would leave the read out).
-    The light raster reader and writer are registered here with the input, outside the timed region. A scale that asks
-    for more tiles than `rows` holds is an error (the corpus size found is printed).
+    """One row `(rows_dir, n, scratch, only)`: the forms read the corpus themselves (a table of tiles would leave the read
+    out). `only` is the file filter of the `a` / `b` reads. The corpus is listed and the filter built here, with the
+    light raster reader and writer registered, outside the timed region. A scale that asks for more tiles than `rows`
+    holds is an error (the corpus size found is printed).
     """
     from databricks.labs.gbx.ds.register import register as register_readers
 
@@ -1610,7 +1627,7 @@ def _io_spec(spark, n, corpus, schema):
     rows = corpus.rstrip("/") + "/rows"
     if not os.path.isdir(rows):
         return None
-    held = len(_corpus_rows(corpus) or [])
+    held, only = _io_listing(rows, n)
     print(f"[LEVELS IO] corpus {rows} holds {held} tiles", flush=True)
     if int(n) > held:
         # A short corpus must not cap silently: every scale of the ladder would read the same tiles under its own label.
@@ -1624,8 +1641,8 @@ def _io_spec(spark, n, corpus, schema):
         f"mvp_io_spec_v{RECIPE_VERSION}_{n}",
         lambda: client_dataframe(
             spark,
-            [(rows, int(n), _io_scratch(corpus))],
-            "rows_dir string, n int, scratch string",
+            [(rows, int(n), _io_scratch(corpus), only)],
+            "rows_dir string, n int, scratch string, only string",
             what="the read-path spec row",
         ),
     )
@@ -1634,8 +1651,12 @@ def _io_spec(spark, n, corpus, schema):
 INPUTS["io_rows"] = _io_spec
 
 
+def _io_row(spark, src):
+    return spark.table(src).first()
+
+
 def _io_args(spark, src):
-    r = spark.table(src).first()
+    r = _io_row(spark, src)
     return r["rows_dir"], int(r["n"]), r["scratch"]
 
 
@@ -1651,7 +1672,7 @@ def remove_scratch(path: str, scratch: str) -> None:
     remove_scratch_dir(target)
 
 
-IO_ROWS_PER_PARTITION = 8  # at most this many tiles in a partition: a Python batch of ~13 MB tiles must fit a worker
+IO_ROWS_PER_PARTITION = 8  # at most this many tiles in a partition (`_virtual_tiles` guarantees it): a Python batch of ~13 MB tiles must fit a worker
 
 
 def io_partitions(spark, n) -> int:
@@ -1669,12 +1690,18 @@ def io_partitions(spark, n) -> int:
 
 
 def _first_files(rows_dir, n) -> List[str]:
-    """The corpus' first `n` row files, sorted (the order the light reader lists them in)."""
+    """The corpus' first `n` row files (all of them for `n` None), sorted (the order the light reader lists them in), and
+    without the hidden ones (`.x` / `_x`) the reader skips: a hidden file among the first `n` would leave `b` short."""
     from databricks.labs.gbx.ds._listing import list_files
 
-    return list_files(
-        rows_dir, filter_regex=r".*\.tif$", recursive=False, raise_on_empty=False
-    )[: int(n)]
+    files = list_files(
+        rows_dir,
+        filter_regex=r".*\.tif$",
+        recursive=False,
+        raise_on_empty=False,
+        skip_hidden=True,
+    )
+    return files if n is None else files[: int(n)]
 
 
 def _trie_regex(words) -> str:
@@ -1693,19 +1720,31 @@ def _trie_regex(words) -> str:
 
 
 def _only_files_regex(files) -> str:
-    """The `filterRegex` that keeps exactly `files` (a flat folder: matched by file name), for the light and the heavy
-    reader alike (the light one anchors at the start of the path, the heavy one wraps the regex in `.*`).
+    """The `filterRegex` that keeps exactly `files` (all in one folder: that folder, then the file name), for the light
+    and the heavy reader alike (the light one anchors at the start of the path, the heavy one wraps the regex in `.*`).
+    The folder is part of it: the heavy reader is recursive, so a bare name would also match a same-named file below.
     """
-    return ".*/" + _trie_regex(os.path.basename(f) for f in files) + "$"
+    files = list(files)
+    if not files:
+        return "(?!)"  # no file: nothing matches
+    folder = os.path.dirname(files[0]).rstrip("/") + "/"
+    return (
+        ".*"
+        + re.escape(folder)
+        + _trie_regex(os.path.basename(f) for f in files)
+        + "$"
+    )
 
 
 def _virtual_tiles(spark, rows_dir, n):
     """The virtual tiles of the corpus' first `n` files, as `n` rows spread over `io_partitions` partitions.
 
-    `limit(n)` first, then `repartition(P, tile.path)`: whatever reads or writes the tiles runs ABOVE the exchange, on
-    exactly `n` tiles and `P` tasks. Without the exchange Spark pushes a row UDF (and a JVM decode) below the limit, onto
-    every file of the corpus, while a `mapInArrow` stays above it in one task. Hash by column, not number-only, so
-    Serverless' AQE does not coalesce it back to one partition.
+    `limit(n)` first, then a range exchange of P partitions on a row index: whatever reads or writes the tiles runs ABOVE
+    the exchange, on exactly `n` tiles and `P` tasks. Without the exchange Spark pushes a row UDF (and a JVM decode) below
+    the limit, onto every file of the corpus, while a `mapInArrow` stays above it in one task. The index is `0..n-1` (the
+    limit is one partition) and the range exchange samples every row (it keeps up to 60 per partition, P >= n / 8), so
+    the partitions hold `ceil(n / P)` tiles each, never more than `IO_ROWS_PER_PARTITION`: a hash of the paths would
+    only average to it. By column and with an explicit count, so Serverless' AQE does not coalesce it back to one.
     """
     from pyspark.sql import functions as F
 
@@ -1715,15 +1754,18 @@ def _virtual_tiles(spark, rows_dir, n):
         .load(rows_dir)
         .select("tile")
         .limit(n)
-        .repartition(io_partitions(spark, n), F.col("tile.path"))
+        .withColumn("_row", F.monotonically_increasing_id())
+        .repartitionByRange(io_partitions(spark, n), "_row")
+        .select("tile")
     )
 
 
-def _io_read(spark, rows_dir, n, kind):
+def _io_read(spark, rows_dir, n, kind, only=None):
     """The read of `kind` over the corpus' first `n` tiles, one `tile` column, every kind on exactly `n` tiles.
 
     `a` and `b` decode inside the scan, where a limit cannot reach: they are given the first `n` files themselves
-    (the readers' `filterRegex`), so the scan has `n` tasks. The others decode above `_virtual_tiles`' exchange.
+    (the readers' `filterRegex`, `only`: the input builder's, so a timed form lists nothing; built here when not given),
+    so the scan has `n` tasks. The others decode above `_virtual_tiles`' exchange.
     """
     import functools
 
@@ -1731,7 +1773,7 @@ def _io_read(spark, rows_dir, n, kind):
     from databricks.labs.gbx.pyrx import _mvp_forms
 
     if kind in ("a", "b"):
-        only = _only_files_regex(_first_files(rows_dir, n))
+        only = only or _only_files_regex(_first_files(rows_dir, n))
         if kind == "a":
             return spark.read.format("gdal").option("filterRegex", only).load(rows_dir)
         return (
@@ -1759,8 +1801,8 @@ def _io_read(spark, rows_dir, n, kind):
 
 def _io_form(kind):
     def run(spark, src):
-        rows_dir, n, _ = _io_args(spark, src)
-        tiles = _io_read(spark, rows_dir, n, kind)
+        r = _io_row(spark, src)
+        tiles = _io_read(spark, r["rows_dir"], int(r["n"]), kind, only=r["only"])
         return _stats(tiles.select(tiles["tile"]["raster"].alias("raster")), None)
 
     run.__name__ = f"io_{kind.replace('-', '_')}"
@@ -1790,12 +1832,12 @@ def io_floor(spark, src):
     return r[0], r[1], r[2], out
 
 
-def _io_named(spark, rows_dir, n, kind):
+def _io_named(spark, rows_dir, n, kind, only=None):
     """What a writer form writes: the `kind` read as `(source, tile)`, the file name and the tile the raster writers take."""
     from pyspark.sql import functions as F
 
     return (
-        _io_read(spark, rows_dir, n, kind)
+        _io_read(spark, rows_dir, n, kind, only=only)
         .select("tile")
         .withColumn(
             "source",
@@ -1815,13 +1857,14 @@ def _io_write(fmt, kind):
     def run(spark, src):
         from databricks.labs.gbx.ds._scratch import new_scratch_dir
 
-        rows_dir, n, scratch = _io_args(spark, src)
+        r = _io_row(spark, src)
+        rows_dir, n, scratch = r["rows_dir"], int(r["n"]), r["scratch"]
         out = new_scratch_dir(scratch, "io")
         os.makedirs(scratch, exist_ok=True)
         try:
             # the light writer takes overwrite; the heavy one is append-only (it raises on overwrite)
             mode = "append" if fmt == "gtiff_gdal" else "overwrite"
-            named = _io_named(spark, rows_dir, n, kind)
+            named = _io_named(spark, rows_dir, n, kind, only=r["only"])
             named.write.format(fmt).mode(mode).save(out)
             files = [
                 os.path.join(d, f)

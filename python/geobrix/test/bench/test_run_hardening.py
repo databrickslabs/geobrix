@@ -330,6 +330,40 @@ def test_a_jvm_form_gets_a_light_stand_in_only_when_the_stand_in_can_run_here():
     assert got[0].level == "L3" and got[0].variant == "c0"
 
 
+def test_a_set_with_no_form_table_has_nothing_to_probe():
+    """IO has no forms yet: the probe is skipped (it raised a KeyError that refused every --levels IO launch)."""
+    assert "IO" not in lf.FORMS
+    assert preflight.probe_failures(None, "IO", "/nonexistent") == ([], [])
+
+
+def test_an_unknown_set_is_an_error_not_an_empty_pass():
+    """Only a set KNOWN to have no form table is empty; a misspelled one must not pass the preflight silently."""
+    with pytest.raises(ValueError, match="XYZ"):
+        preflight.probe_failures(None, "XYZ", "/nonexistent")
+    with pytest.raises(ValueError, match="XYZ"):
+        preflight.client_cap_problems("XYZ", (1,))
+
+
+def test_the_probe_runs_only_the_forms_levels_forms_selects(
+    spark_session_local, tmp_path, monkeypatch
+):
+    good = form("L3", lf._BNG.replace("{fn}", B), "c0")
+    monkeypatch.setitem(lf.FORMS, "S", [good, form("L3", BROKEN, "c1")])
+    every, _ = preflight.probe_failures(spark_session_local, "S", str(tmp_path), rows=8)
+    assert len(every) == 1 and "L3/c1" in every[0]
+    kept, _ = preflight.probe_failures(
+        spark_session_local, "S", str(tmp_path), rows=8, forms=("c0",)
+    )
+    assert kept == []  # the broken form was excluded by the user
+
+
+def test_a_levels_forms_name_that_matches_no_variant_is_reported():
+    assert preflight.unknown_form_names("SE", ("today@256", "today@1024")) == []
+    assert preflight.unknown_form_names("SE", ("today@256", "tday@256")) == ["tday@256"]
+    assert preflight.unknown_form_names("SE", ()) == []
+    assert preflight.unknown_form_names("IO", ("anything",)) == ["anything"]  # IO has no forms
+
+
 def test_the_memory_probes_of_the_g_set_are_marked():
     """The collect-a-partition shape and the big-tile forms are memory probes by design; nothing else in G is."""
     marked = {(f.fn, f.level, f.variant) for f in lf.FORMS["G"] if f.memory_probe}

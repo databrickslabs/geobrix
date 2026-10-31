@@ -146,7 +146,16 @@ def probe_problems(mvp: str, scales: Sequence[int], root, *, rows: int = 8, form
     """The levels set's SQL on a local Spark session with a handful of rows, and its client-side input sizes."""
     from databricks.labs.gbx.bench import preflight
 
-    problems = list(preflight.client_cap_problems(mvp, scales, forms=forms))
+    try:
+        problems = list(preflight.client_cap_problems(mvp, scales, forms=forms))
+    except ValueError as exc:  # an unknown set: nothing to probe, and the launch is refused
+        return [str(exc)]
+    problems += [
+        f"--levels-forms name '{n}' matches no form of the set {mvp}"
+        for n in preflight.unknown_form_names(mvp, forms)
+    ]
+    if not preflight.forms_of(mvp, forms):  # a set with no form table (IO): no local Spark session to build either
+        return problems
     from pyspark.sql import SparkSession
 
     os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
@@ -159,7 +168,9 @@ def probe_problems(mvp: str, scales: Sequence[int], root, *, rows: int = 8, form
         .getOrCreate()
     )
     try:
-        failures, skipped = preflight.probe_failures(spark, mvp, local_corpus(root) or "/nonexistent", rows=rows)
+        failures, skipped = preflight.probe_failures(
+            spark, mvp, local_corpus(root) or "/nonexistent", rows=rows, forms=forms
+        )
     except Exception as exc:  # noqa: BLE001 - a probe that cannot run is a launch problem, not a crash
         failures, skipped = [f"the local probe run itself failed: {type(exc).__name__}: {str(exc)[:300]}"], []
     finally:

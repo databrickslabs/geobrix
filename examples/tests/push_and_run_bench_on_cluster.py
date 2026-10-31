@@ -352,8 +352,11 @@ def levels_scales_problem(levels_mvp, levels_scales, root, levels_forms=()) -> O
     except ImportError:  # no pyspark here: the form table cannot be read, and the preflight says so
         return None
 
-    if not preflight.client_cap_problems(levels_mvp, levels_scales, forms=levels_forms):
-        return None
+    try:
+        if not preflight.client_cap_problems(levels_mvp, levels_scales, forms=levels_forms):
+            return None
+    except ValueError as exc:  # an unknown set: not a scales problem, and the launch is refused by name
+        return str(exc)
     fitting = [s for s in levels_scales if not preflight.client_cap_problems(levels_mvp, (s,), forms=levels_forms)]
     wanted = ",".join(str(s) for s in levels_scales)
     if fitting:
@@ -364,6 +367,23 @@ def levels_scales_problem(levels_mvp, levels_scales, root, levels_forms=()) -> O
         f"--levels {levels_mvp} with --levels-scales {wanted} builds inputs on the client above the "
         f"{clientcap.MAX_CLIENT_BYTES // 2**20} MiB cap and would fail on the cluster: {fix}"
     )
+
+
+def levels_forms_problem(levels_mvp, levels_forms, root) -> Optional[str]:
+    """The ``--levels-forms`` names that match no form of the set, as one message, or None when each matches one."""
+    if not levels_mvp or not levels_forms:
+        return None
+    sys.path.insert(0, str(Path(root) / "python/geobrix/src"))
+    try:
+        from databricks.labs.gbx.bench import preflight
+    except ImportError:  # no pyspark here: the form table cannot be read, and the preflight says so
+        return None
+    bad = preflight.unknown_form_names(levels_mvp, levels_forms)
+    if not bad:
+        return None
+    known = sorted({f.variant for f in preflight.lf.FORMS.get(levels_mvp, ())})
+    have = ", ".join(known) if known else f"the set {levels_mvp} has no forms"
+    return f"--levels-forms names no form of --levels {levels_mvp}: {', '.join(bad)} (the forms: {have})"
 
 
 def launch_problems(w, *, serverless, wheel, env_version, levels_mvp, levels_scales, root, levels_forms=()) -> list:
@@ -891,6 +911,12 @@ def main() -> int:
     )
     if scales_problem:
         print(f"ERROR: {scales_problem}", file=sys.stderr)
+        return 2
+    forms_problem = levels_forms_problem(
+        levels_mvp, levels_forms, Path(os.environ.get("GBX_SOURCE_ROOT") or TESTS_DIR.parent.parent)
+    )
+    if forms_problem:
+        print(f"ERROR: {forms_problem}", file=sys.stderr)
         return 2
     if levels_only:
         # The leg installs its own levels through register(); it never uses the tests JAR.

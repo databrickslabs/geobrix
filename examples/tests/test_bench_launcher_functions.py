@@ -255,6 +255,41 @@ def test_the_scales_check_judges_only_the_forms_levels_forms_selects(monkeypatch
     assert launcher.levels_scales_problem("SE", (1, 4), root, ("today@1024",)) is not None
 
 
+def test_a_levels_io_launch_passes_the_preflight_without_starting_spark(monkeypatch):
+    """IO has no form table: the probe has nothing to run (it raised a KeyError that refused every --levels IO launch)."""
+    pytest.importorskip("pyspark")
+    sys_path_root = launcher.TESTS_DIR.parent.parent
+    import _preflight
+
+    monkeypatch.syspath_prepend(str(sys_path_root / "python/geobrix/src"))
+    assert _preflight.probe_problems("IO", (1, 4, 16), sys_path_root) == []
+
+
+def test_an_unknown_levels_set_is_a_launch_problem_not_a_pass(monkeypatch):
+    pytest.importorskip("pyspark")
+    root = launcher.TESTS_DIR.parent.parent
+    import _preflight
+
+    monkeypatch.syspath_prepend(str(root / "python/geobrix/src"))
+    got = _preflight.probe_problems("XYZ", (1,), root)
+    assert len(got) == 1 and "XYZ" in got[0]
+    assert "XYZ" in launcher.levels_scales_problem("XYZ", (1,), root)
+
+
+def test_a_levels_forms_typo_is_refused_at_argument_time_with_exit_2(monkeypatch, capsys):
+    pytest.importorskip("pyspark")
+    root = launcher.TESTS_DIR.parent.parent
+    assert launcher.levels_forms_problem("SE", ("today@256",), root) is None
+    assert launcher.levels_forms_problem("SE", (), root) is None
+    msg = launcher.levels_forms_problem("SE", ("today@256", "tday@256"), root)
+    assert "tday@256" in msg and "today@256," not in msg.split("(the forms")[0]
+    assert "no forms" in launcher.levels_forms_problem("IO", ("x",), root)
+    _no_work(monkeypatch, "--levels", "SE", "--levels-scales", "1", "--levels-forms", "tday@256")
+    assert launcher.main() == 2
+    err = capsys.readouterr().err
+    assert "--levels-forms" in err and "tday@256" in err
+
+
 def test_a_form_cap_ceiling_below_the_1x_cap_is_refused_with_exit_2(monkeypatch, capsys):
     _no_work(monkeypatch, "--form-cap-min", "15", "--form-cap-max-min", "10")
     assert launcher.main() == 2

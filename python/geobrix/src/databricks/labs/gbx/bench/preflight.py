@@ -25,6 +25,27 @@ from databricks.labs.gbx.bench import levels_forms as lf
 
 _JVM_SQL_LEVELS = ("L1", "L2")
 ENGINE_L3 = ("engine", "engine-c0", "engine-c1")
+# the sets that exist but have no form table yet: nothing to probe, nothing built on the client
+NO_FORM_TABLE = frozenset({"IO"})
+
+
+def forms_of(mvp: str, selected=()) -> list:
+    """The forms of `mvp` to judge: those whose variant is in `selected` (the ``--levels-forms`` names), or all of
+    them when `selected` is empty. A set known to have no form table (IO) has none; any other set missing from the
+    table is a misspelling and raises ``ValueError`` rather than passing as empty.
+    """
+    if mvp in NO_FORM_TABLE:
+        return []
+    if mvp not in lf.FORMS:
+        known = ", ".join(sorted([*lf.FORMS, *NO_FORM_TABLE]))
+        raise ValueError(f"unknown levels set {mvp!r} (the sets are: {known})")
+    return [f for f in lf.FORMS[mvp] if not selected or f.variant in selected]
+
+
+def unknown_form_names(mvp: str, selected) -> List[str]:
+    """The ``--levels-forms`` names that match no variant of `mvp` (all of them for a set with no forms)."""
+    known = {f.variant for f in lf.FORMS.get(mvp, ())}
+    return [n for n in selected if n not in known]
 
 
 @contextlib.contextmanager
@@ -103,12 +124,17 @@ def _has_standin(form, standins) -> bool:
 
 
 def probe_failures(
-    spark, mvp: str, corpus: str, *, rows: int = 16
+    spark, mvp: str, corpus: str, *, rows: int = 16, forms=()
 ) -> Tuple[List[str], List[str]]:
     """Run the forms of `mvp` on `rows` rows locally. Returns ``(failures, skipped)``: one line per form that
     failed, and one per form that was not run here: ``skipped by design`` (a memory or scale probe), or not
     checkable here (L4, a JVM form that needs the JAR, no local corpus). Every form runs on the `rows` it is given.
+    `forms` (the ``--levels-forms`` names, matched on the variant) limits the probe to those forms; empty probes all.
+    A set with no form table (IO) has nothing to probe: ``([], [])``; an unknown set raises ``ValueError``.
     """
+    every = forms_of(mvp, forms)
+    if not every:
+        return [], []
     from databricks.labs.gbx.bench import levels
 
     failures: List[str] = []
@@ -127,7 +153,6 @@ def probe_failures(
             elif r.status == "na_by_design":
                 skipped.append(f"{tag}: {r.note}")
 
-    every = list(lf.FORMS[mvp])
     skipped += [
         f"{f.fn} {f.level}/{f.variant}: skipped by design (a memory or scale probe, not a statement check)"
         for f in every
@@ -175,13 +200,12 @@ def client_cap_problems(
     """The inputs of `mvp` whose client-built bytes at the largest scale pass the cap, one line each.
 
     `forms` (the `--levels-forms` names, matched on the form's variant) limits the judgement to those forms; empty
-    judges them all. A set with no forms table (IO) has no client-built inputs: no problem.
+    judges them all. A set with no forms table (IO) has no client-built inputs: no problem; an unknown set raises
+    ``ValueError``.
     """
     cap = clientcap.MAX_CLIENT_BYTES if cap is None else cap
     out: Dict[str, str] = {}
-    for f in lf.FORMS.get(mvp, ()):
-        if forms and f.variant not in forms:
-            continue
+    for f in forms_of(mvp, forms):
         rows = (base_rows or lf.BASE_ROWS[f.input]) * max(scales)
         try:
             clientcap.check_estimate(

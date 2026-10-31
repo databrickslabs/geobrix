@@ -2102,9 +2102,10 @@ def _untouched_deletes(spark, plan: _Plan, rows: pa.Table, written: set) -> pa.T
     """An overwrite replaces whole variables: every base row of a variable it writes goes,
     unless a chunk replaced it. The tasks delete within the groups the input touched (they
     saw only those); this reads the base rows of the written variables in every other
-    group, on the cluster, and returns them as delete rows (``ROWS_ARROW``), column by
-    column. Nothing of a variable the write does not replace is read, and a variable whose
-    every group the input touched (an overwrite of all of it) is not read at all."""
+    group (one a task deleted from counts as touched), on the cluster, and returns them as
+    delete rows (``ROWS_ARROW``), column by column. Nothing of a variable the write does
+    not replace is read, and a variable whose every group the input touched (an overwrite
+    of all of it) is not read at all."""
     if plan.mode != "overwrite" or plan.docs is None:
         return ROWS_ARROW.empty_table()
     names = sorted(
@@ -2112,9 +2113,14 @@ def _untouched_deletes(spark, plan: _Plan, rows: pa.Table, written: set) -> pa.T
     )
     if not names:
         return ROWS_ARROW.empty_table()
+    # a group is handled when the input wrote a chunk to it or a task deleted from it (a
+    # task deletes within every group it opened, whether or not a chunk came out)
     chunks = rows.filter(
         pc.and_(
-            pc.equal(rows.column("rtype"), "chunk"),
+            pc.is_in(
+                rows.column("rtype"),
+                value_set=pa.array(["chunk", "delete"], pa.string()),
+            ),
             pc.is_in(
                 rows.column("array"),
                 value_set=pa.array(names, rows.schema.field("array").type),

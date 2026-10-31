@@ -12,6 +12,7 @@ import types
 import uuid
 
 import numpy as np
+import pyarrow as pa
 import pyarrow.compute as pa_compute
 import pytest
 
@@ -458,6 +459,78 @@ def test_an_overwrite_collects_the_rest_of_its_variable_as_columns(
         assert got[0, 0, 0] == 5.0 and np.isnan(got.ravel()[1:]).all()
         assert collected["deletes"] == ["t2m"] * 1439 and len(uploads) == 1
     np.testing.assert_array_equal(_read(spark_delta, table, "u10"), ds.u10.values)
+
+
+def test_a_whole_variable_overwrite_of_a_sharded_store_reads_no_base_rows(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """The count of groups an overwrite must touch to skip the cluster read is the count of
+    shards when the array is sharded: touching all of them replaces the variable with no
+    stale row left behind."""
+    ds = _dataset(hours=24)
+    shard = {"time": 12, "latitude": 10, "longitude": 12}  # 2 shards of 4 chunks
+    table, _, _ = _create(spark_delta, drop, tmp_path, ds, shards=shard)
+    shards = spark_delta.sql(
+        f"SELECT count(DISTINCT shard_key) AS n FROM {table} WHERE array = 't2m' "
+        "AND tag IS NULL"
+    ).first()["n"]
+    assert shards == 2
+    uploads = []
+    real_upload = _write.to_spark_df
+    no_hooks.setattr(
+        _write, "to_spark_df", lambda *a, **k: uploads.append(1) or real_upload(*a, **k)
+    )
+    new = np.full(ds.t2m.shape, 5.0, dtype="float32")
+    gbx_zarr_write(
+        _blocks(spark_delta, ("t2m", (0, 0, 0), new)), table, mode="overwrite"
+    )
+    assert uploads == []  # every shard was touched: no base row was read to be deleted
+    assert (_read(spark_delta, table, "t2m") == 5.0).all()
+    live = spark_delta.sql(
+        f"SELECT DISTINCT write_id FROM {table} WHERE array = 't2m' "
+        "AND kind IN ('shard', 'chunk') AND tag IS NULL"
+    ).count()
+    assert live == 1  # no row of the first write is left
+    np.testing.assert_array_equal(_read(spark_delta, table, "u10"), ds.u10.values)
+
+
+def test_an_overwrite_deletes_a_base_row_once_even_if_a_task_already_did(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """A group a task deleted from but wrote no chunk to is handled: the driver's collection
+    of the untouched groups does not delete its rows a second time (the commit MERGE would
+    see two sources for one row)."""
+    from databricks.labs.gbx.zarr._write_tasks import delete_row
+
+    ds = _dataset()
+    table, _, _ = _create(spark_delta, drop, tmp_path, ds, shards=False)
+    base = spark_delta.sql(
+        f"SELECT kind, array, key, shard_key, identity, write_id FROM {table} "
+        "WHERE array = 't2m' AND kind = 'chunk' AND tag IS NULL AND key != 'c/0/0/0' "
+        "ORDER BY key LIMIT 1"
+    ).first()
+    real_files, real_rows, seen = _write._write_files, _write._commit_data_rows, {}
+
+    def with_a_task_delete(spark, plan):
+        rows = real_files(spark, plan)
+        extra = pa.Table.from_pylist([delete_row(base.asDict())], schema=rows.schema)
+        return pa.concat_tables([rows, extra])
+
+    def recording_rows(plan, rows, written):
+        deletes = rows.filter(pa_compute.equal(rows.column("rtype"), "delete"))
+        seen["keys"] = list(
+            zip(deletes.column("array").to_pylist(), deletes.column("key").to_pylist())
+        )
+        return real_rows(plan, rows, written)
+
+    no_hooks.setattr(_write, "_write_files", with_a_task_delete)
+    no_hooks.setattr(_write, "_commit_data_rows", recording_rows)
+    one = np.full((12, 5, 6), 7.0, dtype="float32")  # chunk c/0/0/0 of t2m, whole
+    gbx_zarr_write(
+        _blocks(spark_delta, ("t2m", (0, 0, 0), one)), table, mode="overwrite"
+    )
+    assert ("t2m", base["key"]) in seen["keys"]
+    assert len(seen["keys"]) == len(set(seen["keys"]))  # none twice
 
 
 # --- idempotency and read-only stores ------------------------------------------------------

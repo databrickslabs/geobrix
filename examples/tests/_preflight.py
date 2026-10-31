@@ -92,11 +92,31 @@ def check_wheel(local_path, staged_sha: str, volume_path: str) -> List[str]:
     return []
 
 
-def wheel_problems(w, wheel: str, root) -> List[str]:
-    """Compare the wheel staged at `wheel` (a Volume path) with the local build."""
-    local = local_wheel(root, os.path.basename(wheel))
+def _plain_local_wheel(root, wheel_name: str) -> Optional[pathlib.Path]:
+    """A wheel without ``+env<N>`` has no family directory: look in ``dist/`` and in each ``dist/env<N>/``."""
+    dist = pathlib.Path(root) / "dist"
+    for d in [dist, *sorted(dist.glob("env*"))]:
+        if (d / wheel_name).is_file():
+            return d / wheel_name
+    return None
+
+
+def wheel_problems(w, wheel: str, root, print_fn=print) -> List[str]:
+    """Compare the wheel staged at `wheel` (a Volume path) with the local build.
+
+    A plain wheel (no ``+env<N>`` in the name) is compared with ``dist/`` when it is there; when it is not,
+    the comparison is skipped with a printed reason, since only a wheel of the env family can be derived and built.
+    """
+    name = os.path.basename(wheel)
+    if _ENV_WHEEL.search(name):
+        local = local_wheel(root, name)
+        if local is None:
+            return check_wheel(None, "", wheel)
+        return check_wheel(local, staged_wheel_sha(w, wheel), wheel)
+    local = _plain_local_wheel(root, name)
     if local is None:
-        return check_wheel(None, "", wheel)
+        print_fn(f"  preflight: {name} has no +env<N> in the name and is not in dist/; the staged wheel is not compared with a build")
+        return []
     return check_wheel(local, staged_wheel_sha(w, wheel), wheel)
 
 

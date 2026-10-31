@@ -42,6 +42,7 @@ def test_the_bench_installs_the_env_wheel_of_the_clusters_runtime():
 
 # ---- run hardening: the preflight, the smoke verdict and the watchdog wiring (no workspace)
 
+import io
 import json
 import types
 
@@ -64,6 +65,26 @@ def test_the_preflight_refuses_a_spec_without_the_wheel_a_wrong_family_and_a_sta
     assert _preflight.check_wheel(local, sha, WHEEL) == []
     assert "not the local build" in _preflight.check_wheel(local, "0" * 64, WHEEL)[0]
     assert "no local build" in _preflight.check_wheel(None, sha, WHEEL)[0]
+
+
+def test_a_plain_staged_wheel_is_checked_when_dist_has_it_and_skipped_with_a_reason_when_not(tmp_path, capsys):
+    """A wheel without +env<N> has no env family to look up: it is not a launch failure by itself."""
+    plain = "/Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl"
+
+    class Files:
+        @staticmethod
+        def download(path):
+            return types.SimpleNamespace(contents=io.BytesIO(b"the build"))
+
+    w = types.SimpleNamespace(files=Files)
+    assert _preflight.wheel_problems(w, plain, tmp_path) == []  # nothing in dist/: skipped, and says why
+    assert "no +env<N> in the name" in capsys.readouterr().out
+    (tmp_path / "dist").mkdir()
+    built = tmp_path / "dist" / "geobrix-0.6.0-py3-none-any.whl"
+    built.write_bytes(b"the build")
+    assert _preflight.wheel_problems(w, plain, tmp_path) == []  # in dist/: the bytes are compared
+    built.write_bytes(b"another build")
+    assert "not the local build" in _preflight.wheel_problems(w, plain, tmp_path)[0]
 
 
 def run_outcome(payload, result="SUCCESS"):

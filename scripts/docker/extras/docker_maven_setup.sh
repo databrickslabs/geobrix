@@ -43,7 +43,14 @@ cd "$ROOT"
 # GDAL's Java classes come from the native build (scripts/native/maven), in no repository: put them into the
 # project-local repository, sha256-checked against their pin, with no Maven plugin, before Maven resolves anything.
 echo "    GDAL Java classes:"
-python3 "$ROOT/scripts/native/java_jar.py" install --repo "$ROOT/scripts/docker/m2" || exit 1
+# The repository is the one the settings name (a settings.xml of the checkout's own may move it); the tracked
+# default's /root/geobrix prefix is this checkout's $ROOT.
+REPO="$(grep -v '<!--' "$SETTINGS" | sed -n 's:.*<localRepository>\(.*\)</localRepository>.*:\1:p' | head -1)"
+case "$REPO" in
+    /root/geobrix|/root/geobrix/*) REPO="$ROOT${REPO#/root/geobrix}" ;;
+    "") REPO="$ROOT/scripts/docker/m2" ;;
+esac
+python3 "$ROOT/scripts/native/java_jar.py" install --repo "$REPO" || exit 1
 echo "    Active Maven profile(s):"
 if ! profiles_out="$(mvn -B "org.apache.maven.plugins:maven-help-plugin:${HELP_PLUGIN}:active-profiles" 2>&1)"; then
     echo "$profiles_out"

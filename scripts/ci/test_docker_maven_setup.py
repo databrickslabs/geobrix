@@ -111,3 +111,16 @@ def test_a_refused_install_stops_the_setup_before_maven(tmp_path):
     assert [
         c.split()[0] for c in (tmp_path / "calls.log").read_text().splitlines()
     ] == ["python3"]
+
+
+def test_the_gdal_java_classes_go_to_the_repository_the_settings_name(tmp_path):
+    # a settings.xml of the checkout's own may move localRepository; Maven must find the jar there
+    own = (
+        "<settings>\n  <!-- <localRepository>/not/this</localRepository> -->\n"
+        "  <localRepository>/data/other-m2</localRepository>\n</settings>\n"
+    )
+    root, conf, bin_dir = checkout(tmp_path, m2_settings=own)
+    res = run(root, conf, bin_dir)
+    assert res.returncode == 0, res.stdout + res.stderr
+    first = (tmp_path / "calls.log").read_text().splitlines()[0]
+    assert first.endswith("java_jar.py install --repo /data/other-m2"), first

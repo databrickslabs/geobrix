@@ -441,8 +441,9 @@ def _prefix_pattern(prefixes) -> Optional["re.Pattern"]:
     if not prefixes:
         return None
     alts = "|".join(re.escape(p) for p in sorted(prefixes, key=len, reverse=True))
-    # a name starts at the start of the text, or after a space, a quote, a backtick, a bracket or the chain's |
-    return re.compile(rf"(?:^|(?<=[\s'\"`(|]))(?:{alts})", re.IGNORECASE)
+    # a name starts at the start of the text, or after a space, a quote, a backtick, a bracket or the chain's |;
+    # a URL (http://...) is no connection string, whatever its scheme spells (as in the at_start branch)
+    return re.compile(rf"(?:^|(?<=[\s'\"`(|]))(?:{alts})(?!//)", re.IGNORECASE)
 
 
 def _names_a_refused_connection(text: str, at_start: bool = False) -> bool:

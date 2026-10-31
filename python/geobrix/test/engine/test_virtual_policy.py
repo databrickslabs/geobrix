@@ -78,13 +78,16 @@ def test_a_deregistered_prefix_reported_as_missing_is_the_policy_reason(monkeypa
         "ERROR 4: /x/tiles_wms: No such file or directory",
         "CPLE_OpenFailedError: /x/a.gti: No such file or directory",
         "/vsicurl/http://h/a.tif: No such file or directory",
+        "CPLE_OpenFailedError: http://h/a.tif: No such file or directory",
+        "ERROR 4: `HTTP://h/a.tif': No such file or directory",
     ],
 )
 def test_a_missing_source_named_like_a_refused_prefix_is_no_policy_refusal(
     monkeypatch, message
 ):
     """A nested source that is missing, whose name only ends like a refused driver's prefix, is a missing source: the
-    prefix counts where a name starts."""
+    prefix counts where a name starts, and a URL (``http://``) is no connection string wherever it starts.
+    """
     monkeypatch.setattr(
         _gdal_policy, "_DEREGISTERED_PREFIXES", {"MRF:", "WMS:", "GTI:", "HTTP:"}
     )

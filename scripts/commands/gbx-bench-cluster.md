@@ -103,7 +103,7 @@ See [`--levels` details](#levels-details) for the metrics.
   - `S`: session functions. `G`: generators. `A`: aggregates. `H`: DataFrame helpers.
   - `SE`: the GDAL spec engine's rows (slope, transformcrs, mapalgebra against today's implementations).
   - `IO`: the raster read and decode forms (its own ladder: 1x, 4x and 10x).
-  - Every form of the set is timed at each execution level the compute offers, at each scale (1x, 4x and 16x its base row count unless the set has its own ladder). It writes one row per form and scale in the same results table.
+  - The leg times every form of the set at each execution level the compute offers, and at each scale. The default scales are 1x, 4x and 16x the base row count; a set with its own ladder uses that. It writes one row per form and scale in the same results table.
   - The levels are L1 (Catalyst expression), L2 (Java UDF), L3 (light) and L4 (Unity Catalog function).
 - `--levels-only`: run just this leg, without the heavy tests JAR.
 - `--levels-scales <csv>`: the multiples of each form's base row count. Default: the set's own ladder: `1,4,10` for `IO`, `1,4,16` for the rest. An explicit value is used exactly.

@@ -898,10 +898,37 @@ def open_data(fp, mode: str = "r", *, remote_ok: bool = False, **kwargs):
 
 # The bytes of a TIFF start with one of these: the common tile, never a driver of the refused class.
 _TIFF_MAGICS = (b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+")
+# Other binary formats a tile can be (PNG, JPEG, GIF, netCDF classic and 64-bit, HDF5): none is a driver of the refused
+# class, and each can hold XML text (an XMP packet, an attribute), so their bytes are not scanned for a marker.
+_BINARY_MAGICS = _TIFF_MAGICS + (
+    b"\x89PNG\r\n\x1a\n",
+    b"\xff\xd8\xff",
+    b"GIF8",
+    b"CDF\x01",
+    b"CDF\x02",
+    b"CDF\x05",
+    b"\x89HDF\r\n\x1a\n",
+)
+_XML_SKIP = re.compile(rb"\s+|<\?.*?\?>|<!--.*?-->", re.S)
+
+
+def _xml_root_at_start(head: bytes) -> bytes:
+    """``head`` from its first XML element: after a BOM, white space, processing instructions (the <?xml ?> prolog,
+    PDS4's <?xml-model ?>) and comments; the rest when there is no element."""
+    pos = 3 if head.startswith(b"\xef\xbb\xbf") else 0
+    while True:
+        m = _XML_SKIP.match(head, pos)
+        if m is None or m.end() == pos:
+            return head[pos:]
+        pos = m.end()
+
+
 # How the bytes of a driver in the refused class start, for a process whose osgeo is not the rasterio's GDAL (the
-# identify below needs it). A marker GDAL looks for anywhere in the first 1024 bytes is searched there; a label's
-# first words are read from the start. Anything here that is not in the manifest's class is ignored.
-_BYTES_ANYWHERE = (
+# identify below needs it). An XML format's root element is read from the start of the document (after a BOM, white
+# space, the <?xml ?> prolog and any comments), not searched for: a PNG or a netCDF can carry the string in a text
+# chunk or an attribute. A label's first words are read from the start too. The bytes of a known binary format are
+# never scanned. Anything here that is not in the manifest's class is ignored.
+_BYTES_XML = (
     (b"<VRTDataset", "VRT"),
     (b"<Dimap_Document", "DIMAP"),
     (b"<Product_Observational", "PDS4"),
@@ -960,21 +987,39 @@ def _class_of_bytes(head: bytes, mode: str) -> Optional[str]:
     """The refused-class driver the bytes ``head`` are, else None: GDAL's identify where the process has the
     matching osgeo, then how each driver's bytes start."""
     names = bytes_refused_light_names()
-    if not names or head.startswith(_TIFF_MAGICS):
+    if not names or head.startswith(_BINARY_MAGICS):
         return None
     if mode == "full":
         found = _identify_in_class(head[:4096], names)
         if found is not None:
             return found
-    window = head[:1024]
-    for marker, driver in _BYTES_ANYWHERE:
-        if marker in window and driver in names:
+    root = _xml_root_at_start(head)
+    for marker, driver in _BYTES_XML:
+        if root.startswith(marker) and driver in names:
             return driver
     start = head.lstrip()
     for marker, driver in _BYTES_AT_START:
         if start.startswith(marker) and driver in names:
             return driver
     return None
+
+
+def _unrecognized_bytes_refusal(memfile, mode: str) -> Optional[DriverPolicyError]:
+    """The refusal for tile bytes the open (restricted to the drivers outside the refused class) did not recognize,
+    when they are a refused driver's: the head-only checks cannot see one that identifies by extension or a sibling
+    header (ENVI, EHdr, SAGA ...), so the whole bytes go to GDAL's identify once more with the class drivers, and a
+    match names the format. Bytes nothing identifies (corrupt, truncated, not a raster) are None: they keep the
+    binding's own I/O error."""
+    if mode != "full":
+        return None
+    try:
+        data = bytes(memfile.getbuffer())
+    except (
+        Exception
+    ):  # noqa: BLE001 - no buffer to hand over: the binding's error stands
+        return None
+    found = _identify_in_class(data, bytes_refused_light_names()) if data else None
+    return None if found is None else _bytes_refusal("the raster bytes", found)
 
 
 def _bytes_drivers(memfile, explicit, mode: str):
@@ -1017,7 +1062,17 @@ def open_bytes(data, **kwargs):
             ds = memfile.open(**kwargs)
         else:
             driver = _bytes_drivers(memfile, kwargs.pop("driver", None), mode)
-            ds = open_data(memfile, "r", driver=driver, **kwargs)
+            try:
+                ds = open_data(memfile, "r", driver=driver, **kwargs)
+            except DriverPolicyError:
+                raise
+            except Exception as exc:
+                if _NOT_RECOGNIZED not in chain_text(exc):
+                    raise
+                refusal = _unrecognized_bytes_refusal(memfile, mode)
+                if refusal is None:
+                    raise
+                raise refusal from None
             if ds.driver in bytes_refused_light_names():
                 # defence in depth: an open restricted to the drivers outside the class reports one of them
                 name = ds.driver

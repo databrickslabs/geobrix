@@ -12,7 +12,11 @@ import shapely.wkb
 from rasterio.enums import Resampling
 from rasterio.io import MemoryFile
 
-from databricks.labs.gbx._gdal_policy import bytes_refused_light_names, open_data
+from databricks.labs.gbx._gdal_policy import (
+    activate,
+    bytes_refused_light_names,
+    open_data,
+)
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core.analysis import cog_convert
@@ -67,12 +71,15 @@ def _writable_drivers() -> set:
     ``raster_driver_extensions`` maps each file extension to ONE driver, so a driver that
     shares its extension with another, or has none, is hidden from it:
     :data:`_EXTENSIONLESS_WRITERS` are added back from the registered-driver list. The drivers GeoBrix
-    refuses to open from tile bytes are left out: the tile would not open again.
+    refuses to open from tile bytes are left out: the tile would not open again (with the driver policy off
+    nothing is refused, and nothing is left out).
     """
     drivers = set(rasterio.drivers.raster_driver_extensions().values())
     with rasterio.Env() as env:
         registered = env.drivers()
         drivers.update(d for d in _EXTENSIONLESS_WRITERS if d in registered)
+    if activate()["mode"] == "off":
+        return drivers
     return drivers - set(bytes_refused_light_names())
 
 

@@ -290,3 +290,123 @@ def test_a_virtual_tile_path_to_a_vrt_is_not_bytes_and_still_opens(
 def test_the_refusal_names_no_planning_code():
     msg = _refused(_vrt("/vsicurl/http://example.invalid/x.tif"))
     assert not re.search(r"\b(FX|AP|OD|NP|PK)-\d+", msg), msg
+
+
+# ---- XML markers belong to the start of the document; known binary formats are never scanned
+
+_XMP = b"<VRTDataset rasterXSize='4' rasterYSize='4'>"
+
+
+def _png_with_text_chunk(text: bytes) -> bytes:
+    """A real PNG whose tEXt chunk (right after IHDR, so inside the first 1024 bytes) holds ``text``."""
+    import struct
+    import zlib
+
+    raw = _memfile_bytes("PNG")
+    ihdr_end = 8 + 8 + 13 + 4  # signature, chunk header, IHDR data, its CRC
+    body = b"Comment\x00" + text
+    chunk = (
+        struct.pack(">I", len(body))
+        + b"tEXt"
+        + body
+        + struct.pack(">I", zlib.crc32(b"tEXt" + body))
+    )
+    return raw[:ihdr_end] + chunk + raw[ihdr_end:]
+
+
+def test_a_png_that_carries_vrt_xml_in_a_text_chunk_opens_as_a_png():
+    raw = _png_with_text_chunk(_XMP)
+    assert _XMP in raw[:1024]
+    with _gdal_policy.open_bytes(raw) as ds:
+        assert ds.driver == "PNG"
+        assert ds.read().shape[-2:] == (4, 4)
+
+
+@pytest.fixture
+def signatures_only(monkeypatch):
+    """The path a process without the matching osgeo takes: no GDAL identify, only how the bytes start."""
+    monkeypatch.setattr(_gdal_policy, "_identify_in_class", lambda head, names: None)
+
+
+@pytest.mark.parametrize(
+    "magic",
+    [
+        b"\x89PNG\r\n\x1a\n",
+        b"\xff\xd8\xff\xe1",
+        b"GIF89a",
+        b"CDF\x01",
+        b"CDF\x02",
+        b"\x89HDF\r\n\x1a\n",
+        b"II*\x00",
+    ],
+)
+def test_binary_bytes_are_never_scanned_for_an_xml_marker(signatures_only, magic):
+    head = magic + b"\x00" * 8 + _XMP + b"<Dimap_Document><Product_Observational"
+    assert _gdal_policy._class_of_bytes(head, "partial") is None
+
+
+@pytest.mark.parametrize(
+    "head,driver",
+    [
+        (_XMP, "VRT"),
+        (b"\xef\xbb\xbf  \n" + _XMP, "VRT"),
+        (b'<?xml version="1.0" encoding="UTF-8"?>\n' + _XMP, "VRT"),
+        (b"<!-- made by x -->\n<Dimap_Document>", "DIMAP"),
+        (
+            b'<?xml version="1.0"?>\n<?xml-model href="x.sch"?>\n<Product_Observational xmlns="u">',
+            "PDS4",
+        ),
+    ],
+)
+def test_xml_formats_are_recognized_from_the_start_of_the_document(
+    signatures_only, head, driver
+):
+    assert _gdal_policy._class_of_bytes(head, "partial") == driver
+
+
+def test_a_marker_inside_text_that_is_not_xml_is_not_a_refusal(signatures_only):
+    assert (
+        _gdal_policy._class_of_bytes(b"notes: see " + _XMP + b" for details", "partial")
+        is None
+    )
+
+
+def test_real_vrt_xml_with_a_prolog_is_still_refused(sentinel_tif):
+    msg = _refused(b'\xef\xbb\xbf<?xml version="1.0"?>\n' + _vrt(str(sentinel_tif)))
+    _assert_refusal(msg, "VRT")
+
+
+# ---- bytes no allowed driver recognizes: a refused driver's own get the refusal with its Fix
+
+
+def test_unrecognized_bytes_the_full_bytes_identify_as_a_class_driver_name_it(
+    monkeypatch,
+):
+    """ENVI-like: the first 4096 bytes say nothing (identify wants a sibling header), the whole bytes do."""
+    monkeypatch.setattr(_gdal_policy, "activate", lambda: {"mode": "full"})
+    monkeypatch.setattr(
+        _gdal_policy,
+        "_identify_in_class",
+        lambda head, names: "ENVI" if len(head) > 4096 else None,
+    )
+    msg = _refused(b"\x01\x02\x03 raw pixels " * 600)
+    _assert_refusal(msg, "ENVI")
+
+
+# ---- rst_asformat leaves the class out only where the policy refuses it
+
+
+def test_asformat_leaves_the_refused_class_out_with_the_policy_on_and_in_with_it_off(
+    monkeypatch,
+):
+    ops = pytest.importorskip("databricks.labs.gbx.pyrx.core.ops")
+    writable_class = sorted(
+        set(ops.rasterio.drivers.raster_driver_extensions().values())
+        & set(_gdal_policy.bytes_refused_light_names())
+    )
+    if not writable_class:
+        pytest.skip("this GDAL build has no writable driver of the refused class")
+    monkeypatch.setattr(ops, "activate", lambda: {"mode": "full"})
+    assert not set(writable_class) & ops._writable_drivers()
+    monkeypatch.setattr(ops, "activate", lambda: {"mode": "off"})
+    assert set(writable_class) <= ops._writable_drivers()

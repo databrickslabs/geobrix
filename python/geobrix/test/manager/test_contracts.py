@@ -198,9 +198,15 @@ def _l1_shape_ok(fn):
     ],
     ids=lambda c: c[0],
 )
-def test_level_selection_contract(fn, case):
+def test_level_selection_contract(fn, case, monkeypatch):
     """Invariants of the level table, generated per manifest row (not a hand-written expectation list)."""
     name, kw = case
+    if (
+        name == "dedicated"
+    ):  # an env wheel: this process runs the light engine the L1 engine sends virtual tiles to
+        from databricks.labs.gbx.engine import run
+
+        monkeypatch.setattr(run, "unavailable_reason", lambda: None)
     choice = levels.select(fn, _caps(**kw))
     pref = [lv for lv in levels.PREFERENCE[fn.sql_name] if lv in fn.levels]
     assert choice.level in pref
@@ -301,13 +307,34 @@ def test_an_unforced_engine_row_installs_the_engine_or_says_why_not(
         assert any(fn.sql_name in s for s in spark.statements), spark.statements
 
 
-def test_l2_is_refused_while_proj_grids_are_registered(tmp_path):
+def test_l1_engine_needs_the_light_engine_for_its_virtual_tiles(monkeypatch):
+    """L1's engine sends virtual tiles to the light engine (the c0 UDF beside it): where this process cannot run
+    that (no payload osgeo), the L1 engine is unavailable, with the light engine's reason, not a runtime failure.
+    """
+    from databricks.labs.gbx.engine import run
+
+    fn = MAN.functions["gbx_rst_transformcrs"]
+    assert fn.accepts_virtual_tile
+    dedicated = _caps(jar=OK_JAR, jar_reason="", jvm_gdal=MAN.gdal.pin)
+    monkeypatch.setattr(run, "unavailable_reason", lambda: None)
+    assert levels.engine_unavailable(fn, "L1", dedicated) is None
+    monkeypatch.setattr(run, "unavailable_reason", lambda: "no osgeo here")
+    why = levels.engine_unavailable(fn, "L1", dedicated)
+    assert why and "no osgeo here" in why and "virtual" in why
+    assert levels.select(fn, dedicated).variant != levels.ENGINE
+
+
+def test_l2_is_refused_while_proj_grids_are_registered(tmp_path, monkeypatch):
     """A Java UDF has no channel for PROJ grid directories: a warp through it would ignore them. The JVM engine
     keeps L1: every GDALManager.init adds a configuration's grid directories to PROJ's search path, also after
     an earlier init without them (GDALManagerProjGridsSpec holds that).
     """
     from databricks.labs.gbx.core import proj_grids
+    from databricks.labs.gbx.engine import run
 
+    monkeypatch.setattr(
+        run, "unavailable_reason", lambda: None
+    )  # the L1 engine's virtual-tile side runs here
     fn = MAN.functions["gbx_rst_transformcrs"]
     # L2 for a raster function exists on classic only (standard has no Java handler for it): judge the rule there
     classic = _caps(jar=OK_JAR, jar_reason="")

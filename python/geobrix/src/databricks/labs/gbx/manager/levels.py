@@ -91,6 +91,13 @@ def engine_unavailable(fn, level: str, caps: Capabilities) -> Optional[str]:
             return why
         if fn.accepts_virtual_tile and not caps.sql_functions:
             return f"{fn.sql_name} needs a SQL function wrapper, and SQL functions are unavailable here"
+        if fn.accepts_virtual_tile:
+            # the wrapper sends virtual tiles to the light engine (its c0 UDF), which must run in this process
+            from databricks.labs.gbx.engine import run
+
+            why = run.unavailable_reason()
+            if why:
+                return f"{fn.sql_name} sends virtual tiles to the light GDAL spec engine, which cannot run here ({why})"
         pin = manifest.load().gdal.pin
         if caps.jvm_gdal != pin:
             return f"the JVM's GDAL is {caps.jvm_gdal or 'unknown'}; the GDAL spec engine needs {pin}"

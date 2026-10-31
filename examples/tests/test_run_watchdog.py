@@ -154,6 +154,31 @@ def test_the_heartbeat_reader_returns_none_for_a_missing_or_half_written_file():
     assert wd.read_beat(W, "/Volumes/x/heartbeat.json") is None
 
 
+def test_a_missing_heartbeat_reported_as_a_404_or_not_found_code_is_absent_not_a_read_failure():
+    """The SDK can raise a plain DatabricksError for a missing file: its status or error_code says 404 / NOT_FOUND."""
+
+    class SdkError(Exception):  # not named NotFound
+        def __init__(self, msg, error_code=None, status_code=None):
+            super().__init__(msg)
+            self.error_code = error_code
+            self.status_code = status_code
+
+    def reader(exc):
+        class W:
+            class files:
+                @staticmethod
+                def download(path):
+                    raise exc
+
+        return wd.read_beat(W, "/Volumes/x/heartbeat.json")
+
+    assert reader(SdkError("no such file", error_code="NOT_FOUND")) is None
+    assert reader(SdkError("no such file", error_code="RESOURCE_DOES_NOT_EXIST", status_code=404)) is None
+    assert reader(SdkError("gone", status_code=404)) is None
+    with pytest.raises(wd.BeatReadError):
+        reader(SdkError("denied", error_code="PERMISSION_DENIED", status_code=403))
+
+
 def test_a_cancel_that_fails_still_reports_the_stall_and_says_to_cancel_by_hand():
     c = Clock()
     out = []

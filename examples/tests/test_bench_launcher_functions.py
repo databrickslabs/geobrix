@@ -231,6 +231,37 @@ def test_the_default_se_ladder_is_refused_up_front_with_the_scales_that_fit(monk
     assert launcher.levels_scales_problem("S", (1, 4, 16), launcher.TESTS_DIR.parent.parent) is None  # other sets are fine
 
 
+def _no_work(monkeypatch, *argv):
+    monkeypatch.setattr(launcher, "WorkspaceClient", lambda *a, **k: pytest.fail("work started before the check"), raising=False)
+    monkeypatch.setattr(launcher.sys, "argv", ["push_and_run_bench_on_cluster.py", *argv])
+
+
+def test_a_set_without_a_form_table_is_not_a_scales_problem():
+    """--levels IO has no entry in the form table: the scales check has nothing to judge (it crashed with a KeyError)."""
+    pytest.importorskip("pyspark")
+    root = launcher.TESTS_DIR.parent.parent
+    assert launcher.levels_scales_problem("IO", (1, 4, 16), root) is None
+    from databricks.labs.gbx.bench import preflight
+
+    assert preflight.client_cap_problems("IO", (1, 4, 16)) == []
+
+
+def test_the_scales_check_judges_only_the_forms_levels_forms_selects(monkeypatch, capsys):
+    """SE's 512 and 1024 inputs pass the cap at 4x; the 256 form alone fits, so a launch that keeps only it goes on."""
+    pytest.importorskip("pyspark")
+    root = launcher.TESTS_DIR.parent.parent
+    assert launcher.levels_scales_problem("SE", (1, 4), root) is not None  # every form: refused
+    assert launcher.levels_scales_problem("SE", (1, 4), root, ("today@256",)) is None
+    assert launcher.levels_scales_problem("SE", (1, 4), root, ("today@1024",)) is not None
+
+
+def test_a_form_cap_ceiling_below_the_1x_cap_is_refused_with_exit_2(monkeypatch, capsys):
+    _no_work(monkeypatch, "--form-cap-min", "15", "--form-cap-max-min", "10")
+    assert launcher.main() == 2
+    err = capsys.readouterr().err
+    assert "--form-cap-max-min" in err and "--form-cap-min" in err and "below" in err
+
+
 def test_the_levels_run_gets_the_same_default_time_limit_as_any_other(monkeypatch):
     assert launcher.DEFAULT_RUN_TIMEOUT_MIN == 360
 

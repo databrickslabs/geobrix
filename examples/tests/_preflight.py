@@ -142,11 +142,11 @@ def local_corpus(root) -> Optional[str]:
     return next((c for c in candidates if c and (pathlib.Path(c) / "rows").is_dir()), None)
 
 
-def probe_problems(mvp: str, scales: Sequence[int], root, *, rows: int = 8) -> List[str]:
+def probe_problems(mvp: str, scales: Sequence[int], root, *, rows: int = 8, forms=()) -> List[str]:
     """The levels set's SQL on a local Spark session with a handful of rows, and its client-side input sizes."""
     from databricks.labs.gbx.bench import preflight
 
-    problems = list(preflight.client_cap_problems(mvp, scales))
+    problems = list(preflight.client_cap_problems(mvp, scales, forms=forms))
     from pyspark.sql import SparkSession
 
     os.environ.setdefault("PYSPARK_PYTHON", sys.executable)

@@ -57,8 +57,12 @@ class BeatReadError(Exception):
 
 
 def _is_absent(exc: Exception) -> bool:
-    """Not there yet: the notebook has not beaten (the SDK's NotFound is matched by name, this module has no SDK import)."""
-    return isinstance(exc, FileNotFoundError) or type(exc).__name__ in ("NotFound", "ResourceDoesNotExist")
+    """Not there yet: the notebook has not beaten (the SDK's NotFound is matched by name, this module has no SDK import;
+    any error carrying HTTP 404 or the NOT_FOUND error code counts too)."""
+    if isinstance(exc, FileNotFoundError) or type(exc).__name__ in ("NotFound", "ResourceDoesNotExist"):
+        return True
+    # a plain SDK error for a missing file carries the status or the error code, whatever its class is called
+    return getattr(exc, "status_code", None) == 404 or getattr(exc, "error_code", None) == "NOT_FOUND"
 
 
 def read_beat(w, path: str) -> Optional[dict]:

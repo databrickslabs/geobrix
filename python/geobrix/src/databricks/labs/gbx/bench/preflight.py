@@ -165,12 +165,23 @@ def probe_failures(
 
 
 def client_cap_problems(
-    mvp: str, scales, *, base_rows: Optional[int] = None, cap: Optional[int] = None
+    mvp: str,
+    scales,
+    *,
+    base_rows: Optional[int] = None,
+    cap: Optional[int] = None,
+    forms=(),
 ) -> List[str]:
-    """The inputs of `mvp` whose client-built bytes at the largest scale pass the cap, one line each."""
+    """The inputs of `mvp` whose client-built bytes at the largest scale pass the cap, one line each.
+
+    `forms` (the `--levels-forms` names, matched on the form's variant) limits the judgement to those forms; empty
+    judges them all. A set with no forms table (IO) has no client-built inputs: no problem.
+    """
     cap = clientcap.MAX_CLIENT_BYTES if cap is None else cap
     out: Dict[str, str] = {}
-    for f in lf.FORMS[mvp]:
+    for f in lf.FORMS.get(mvp, ()):
+        if forms and f.variant not in forms:
+            continue
         rows = (base_rows or lf.BASE_ROWS[f.input]) * max(scales)
         try:
             clientcap.check_estimate(

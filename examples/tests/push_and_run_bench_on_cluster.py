@@ -337,11 +337,12 @@ DEFAULT_RUN_TIMEOUT_MIN = 360  # the real run's time limit, a levels leg include
 DEFAULT_SMOKE_TIMEOUT_MIN = 15
 
 
-def levels_scales_problem(levels_mvp, levels_scales, root) -> Optional[str]:
+def levels_scales_problem(levels_mvp, levels_scales, root, levels_forms=()) -> Optional[str]:
     """Why the levels ladder can never pass the client-input cap, or None when every scale fits.
 
     The SE inputs are 4 MiB DEM tiles built on the client (cap: 64 MiB), so only 1x fits; the default ladder 1,4,16
     would fail on the cluster, after the cold start. The message names ``--levels-scales`` and the scales that fit.
+    Only the forms ``--levels-forms`` selects are judged (all of them when it is empty).
     """
     if not levels_mvp:
         return None
@@ -351,9 +352,9 @@ def levels_scales_problem(levels_mvp, levels_scales, root) -> Optional[str]:
     except ImportError:  # no pyspark here: the form table cannot be read, and the preflight says so
         return None
 
-    if not preflight.client_cap_problems(levels_mvp, levels_scales):
+    if not preflight.client_cap_problems(levels_mvp, levels_scales, forms=levels_forms):
         return None
-    fitting = [s for s in levels_scales if not preflight.client_cap_problems(levels_mvp, (s,))]
+    fitting = [s for s in levels_scales if not preflight.client_cap_problems(levels_mvp, (s,), forms=levels_forms)]
     wanted = ",".join(str(s) for s in levels_scales)
     if fitting:
         fix = f"use --levels-scales {','.join(str(s) for s in fitting)} (the requested scales that fit)"
@@ -365,7 +366,7 @@ def levels_scales_problem(levels_mvp, levels_scales, root) -> Optional[str]:
     )
 
 
-def launch_problems(w, *, serverless, wheel, env_version, levels_mvp, levels_scales, root) -> list:
+def launch_problems(w, *, serverless, wheel, env_version, levels_mvp, levels_scales, root, levels_forms=()) -> list:
     """What makes this launch fail, found with no compute: the Serverless environment spec, the staged wheel against
     the local build, and (for a levels run) the probe SQL on a local Spark session and the client-side input sizes."""
     problems = []
@@ -378,7 +379,7 @@ def launch_problems(w, *, serverless, wheel, env_version, levels_mvp, levels_sca
             problems.append(f"cannot read the staged wheel {wheel}: {type(exc).__name__}: {exc}")
     if levels_mvp:
         sys.path.insert(0, str(Path(root) / "python/geobrix/src"))
-        problems += _preflight.probe_problems(levels_mvp, levels_scales, root)
+        problems += _preflight.probe_problems(levels_mvp, levels_scales, root, forms=levels_forms)
     return problems
 
 
@@ -594,6 +595,13 @@ def main() -> int:
     form_cap_max_min = float(_arg("--form-cap-max-min", "60"))
     if form_cap_max_min <= 0:
         print("ERROR: --form-cap-max-min must be a positive number of minutes.", file=sys.stderr)
+        return 2
+    if form_cap_max_min < form_cap_min:
+        print(
+            f"ERROR: --form-cap-max-min ({form_cap_max_min:g}) is below --form-cap-min ({form_cap_min:g}): "
+            "the ceiling would cut every form's cap, 1x included. Raise it to at least --form-cap-min.",
+            file=sys.stderr,
+        )
         return 2
     stale_min = float(_arg("--stale-min", "5"))
     try:  # the run time limits are checked here, before the preflight, the uploads or the smoke
@@ -876,7 +884,10 @@ def main() -> int:
         )
         return 2
     scales_problem = levels_scales_problem(
-        levels_mvp, levels_scales, Path(os.environ.get("GBX_SOURCE_ROOT") or TESTS_DIR.parent.parent)
+        levels_mvp,
+        levels_scales,
+        Path(os.environ.get("GBX_SOURCE_ROOT") or TESTS_DIR.parent.parent),
+        levels_forms,
     )
     if scales_problem:
         print(f"ERROR: {scales_problem}", file=sys.stderr)
@@ -1355,6 +1366,7 @@ def main() -> int:
         problems = launch_problems(
             w, serverless=serverless, wheel=wheel, env_version=env_version, levels_mvp=levels_mvp,
             levels_scales=levels_scales, root=Path(os.environ.get("GBX_SOURCE_ROOT") or TESTS_DIR.parent.parent),
+            levels_forms=levels_forms,
         )  # fmt: skip
         if problems:
             print("PREFLIGHT FAILED: nothing is submitted.", file=sys.stderr)

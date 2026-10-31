@@ -12,7 +12,7 @@ core. The index of those rules is at the bottom.
 
 Heavy code is Scala/Spark (JAR); lightweight bindings are Python (wheel) and SQL, both wrapping the Scala columnar expressions via Spark Connect.
 
-Current branch: `beta/0.6.0` (cut 2026-10-22 from the old `beta/0.5.0`, which was deleted; `beta/0.5.2` = the v0.5.2 release line, kept for hotfixes only — 0.5.2 is the last 0.5.x). Repo: `databrickslabs/geobrix`. Release fixes land on `beta/*` first; the user merges to `main` (docs deploy is main-only). A `branch/*` name is a red flag — confirm `beta/*`.
+Current branch: `streamline/0.6.0`, the 0.6.0 release branch, checked out in the main checkout (container `geobrix-dev`). `beta/0.6.0` is fully merged into it and takes no new work; `beta/0.5.2` = the v0.5.2 release line, kept for hotfixes only — 0.5.2 is the last 0.5.x. Repo: `databrickslabs/geobrix`. The user merges to `main` (docs deploy is main-only). A `branch/*` name is a red flag — confirm `streamline/*` or `beta/*`.
 
 ## Working patterns in this repo
 

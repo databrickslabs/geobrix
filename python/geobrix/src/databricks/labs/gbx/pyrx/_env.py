@@ -969,7 +969,9 @@ def configure_gdal_env(extra_proj_dirs: Optional[Sequence[str]] = None) -> None:
         if p:
             base = p
 
-    if extra_proj_dirs:
+    # A joined base (the activation keeps a user's grid directory ahead of the PROJ data as an os.pathsep list, which
+    # PROJ reads) goes through the same merge even with no grid registered: rasterio reads PROJ_DATA as ONE path.
+    if extra_proj_dirs or (base and os.pathsep in base):
         merged = _proj_data_dir(base, extra_proj_dirs)
         if merged:
             os.environ["PROJ_DATA"] = merged

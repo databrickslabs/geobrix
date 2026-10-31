@@ -181,6 +181,27 @@ def test_a_users_grid_directory_survives_activation_and_the_registered_union(
     assert _resolves_to(proj_data, "proj.db", base)
 
 
+def test_a_joined_proj_data_becomes_one_directory_with_no_registered_grids(
+    monkeypatch, base, tmp_path
+):
+    # The activation leaves a grid directory ahead of the PROJ data as an os.pathsep list (PROJ reads that), but
+    # rasterio takes PROJ_DATA as ONE path ("Cannot find proj.db"): with no grid registered, configure_gdal_env
+    # still exports one directory.
+    user_grids = _mkdir_with(tmp_path / "my_grids", "user.gsb")
+    monkeypatch.setenv("PROJ_DATA", os.pathsep.join([str(user_grids), str(base)]))
+    rasterio_paths = []
+    monkeypatch.setattr(_env, "_set_rasterio_proj_search_path", rasterio_paths.append)
+    monkeypatch.setattr(_env, "_RASTERIO_PROJ_PATH", None)
+    _env.configure_gdal_env(extra_proj_dirs=[])
+    proj_data = os.environ["PROJ_DATA"]
+    assert os.pathsep not in proj_data
+    assert _resolves_to(proj_data, "user.gsb", user_grids)
+    assert _resolves_to(proj_data, "proj.db", base)
+    assert rasterio_paths == [proj_data]
+    _env.configure_gdal_env(extra_proj_dirs=[])  # per-row callers: same directory
+    assert os.environ["PROJ_DATA"] == proj_data
+
+
 def test_missing_registered_dir_is_skipped(base, tmp_path):
     missing = tmp_path / "does_not_exist"
     with pytest.warns(RuntimeWarning, match="does_not_exist"):

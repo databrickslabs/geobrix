@@ -300,3 +300,33 @@ def test_stage_zarr_cog_corpus_copies_each_step_once(spark, tmp_path):
     stamp = {f: (out / f).stat().st_mtime_ns for f in os.listdir(out)}
     assert readers.stage_zarr_cog_corpus(spark, str(store), str(out)) == man
     assert {f: (out / f).stat().st_mtime_ns for f in os.listdir(out)} == stamp
+
+
+def test_stage_zarr_cog_corpus_refuses_what_would_not_match_the_store(spark, tmp_path):
+    """A corpus staged from another store or variable is not reused, and a south-first grid
+    is refused: either way the GeoTIFF baselines would time unequal work."""
+    import pytest
+
+    pytest.importorskip("zarr")
+    from databricks.labs.gbx.zarr._testing import era5_like_dataset, make_era5_like
+
+    ds = era5_like_dataset(hours=2, step=10.0, variables=("t2m",))
+    store = make_era5_like(
+        tmp_path / "s.zarr", dataset=ds, sharded=False, chunks=(2, 19, 36)
+    )
+    other = make_era5_like(
+        tmp_path / "o.zarr", dataset=ds, sharded=False, chunks=(2, 19, 36)
+    )
+    out = tmp_path / "cog"
+    readers.stage_zarr_cog_corpus(spark, str(store), str(out), block=2)
+    with pytest.raises(ValueError, match="staged from") as e:
+        readers.stage_zarr_cog_corpus(spark, str(other), str(out))
+    assert "Fix:" in str(e.value)
+    south = make_era5_like(
+        tmp_path / "n.zarr",
+        dataset=ds.isel(latitude=slice(None, None, -1)),
+        sharded=False,
+        chunks=(2, 19, 36),
+    )
+    with pytest.raises(ValueError, match="south-first"):
+        readers.stage_zarr_cog_corpus(spark, str(south), str(tmp_path / "cog2"))

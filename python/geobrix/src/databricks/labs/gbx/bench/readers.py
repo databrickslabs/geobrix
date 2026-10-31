@@ -8723,6 +8723,13 @@ def stage_zarr_cog_corpus(
     if os.path.exists(manifest):
         with open(manifest) as fh:
             man = json.load(fh)
+        if man.get("store") != store or man.get("variable") != variable:
+            raise ValueError(
+                f"{corpus_dir} was staged from {man.get('variable')!r} of "
+                f"{man.get('store')!r}, not {variable!r} of {store!r}, so the GeoTIFF "
+                "baselines would compare unequal data. Fix: use another corpus_dir, or "
+                "delete this one to stage again"
+            )
         print(
             f"stage_zarr_cog_corpus: {len(man['files'])} file(s) already staged under "
             f"{corpus_dir}; nothing written",
@@ -8737,6 +8744,15 @@ def stage_zarr_cog_corpus(
     times = [str(t) for t in ds["time"].values.astype("datetime64[s]")]
     lat = ds["latitude"].values.astype("float64")
     lon = ds["longitude"].values.astype("float64")
+    packing = {"scale_factor", "add_offset"} & set(ds[variable].encoding)
+    if packing or lat[0] < lat[1]:
+        raise ValueError(
+            f"{variable!r} of {store} is "
+            + ("packed (scale_factor/add_offset)" if packing else "south-first")
+            + ": the copy writes the stored values with a north-first grid, so the "
+            "GeoTIFFs would not match what gbx_zarr_read returns. Fix: stage a store "
+            "with unpacked values and descending latitude"
+        )
     roll = -int(np.argmax(lon >= 180.0)) if (lon >= 180.0).any() else 0
     dx, dy = float(lon[1] - lon[0]), float(lat[0] - lat[1])
     west = float(np.roll(np.where(lon >= 180.0, lon - 360.0, lon), roll)[0]) - dx / 2

@@ -38,7 +38,8 @@ show_help() {
 
 # The container has no LANG/LC_ALL, so the JVM's sun.jnu.encoding is ASCII and tests that create
 # non-ASCII file names (NodeFilePathUtilTest) cancel on `assume`. Both runs below pass
-# LC_ALL=C.UTF-8 to the container instead of weakening the test.
+# LC_ALL=C.UTF-8 to the container instead of weakening the test. The caller's GBX_NATIVE_ROOT (a native payload)
+# reaches the container too, so the test JVM loads that payload's GDAL (GDALManager reads it), as the pytest runs do.
 
 # Parse arguments
 SUITE_PATTERN=""
@@ -96,6 +97,8 @@ show_banner "🧪 GeoBrix: Scala Tests (Non-Docs)"
 check_docker
 setup_log_file "$LOG_PATH"
 gbx_acquire_test_lock
+gbx_native_env_args
+SCALA_ENV_ARGS=(-e LC_ALL=C.UTF-8 ${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"})
 
 # Package list for --by-package (same as CI matrix)
 GBX_PACKAGES="rasterx gridx vectorx ds expressions util"
@@ -110,7 +113,7 @@ if [ "$BY_PACKAGE" = true ]; then
         show_separator
         SUITES="com.databricks.labs.gbx.${pkg}.*"
         MVN_CMD="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn test -PskipScoverage -DskipTests=false -Dsuites='$SUITES' $VERBOSE"
-        if docker exec -e LC_ALL=C.UTF-8 "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$MVN_CMD"; then
+        if docker exec "${SCALA_ENV_ARGS[@]}" "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$MVN_CMD"; then
             echo -e "${GREEN}✅ $pkg passed${NC}"
         else
             echo -e "${RED}❌ $pkg failed${NC}"
@@ -151,7 +154,7 @@ else
     show_separator
     echo ""
 
-    docker exec -e LC_ALL=C.UTF-8 "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$MVN_CMD"
+    docker exec "${SCALA_ENV_ARGS[@]}" "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$MVN_CMD"
     EXIT_CODE=$?
 
     echo ""

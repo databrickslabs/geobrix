@@ -22,6 +22,10 @@ bash scripts/commands/gbx-test-scala.sh [OPTIONS]
 
 The container has no `LANG`/`LC_ALL`, which would leave the JVM's file-name encoding at ASCII and cancel the tests that create non-ASCII file names (for example the non-ASCII case in `NodeFilePathUtilTest`). The command passes `-e LC_ALL=C.UTF-8` to the container, so those tests run.
 
+## The native payload
+
+Set `GBX_NATIVE_ROOT` in the calling shell to run the test JVM on a native payload, for example `GBX_NATIVE_ROOT=build/env-wheel/env6/payload` (from `gbx:build:wheel --env 6`). The command passes it into the container as its `/root/geobrix` path (a path under this checkout, relative or absolute; any other absolute path is taken as a container path), and `GDALManager` loads that payload's GDAL JNI instead of the system one. Suites that need the manifest's pinned GDAL (the spec engine runs in `GdalSpecSmokeTest`) cancel with a `PRECONDITION MISSING` line without it. Unset, nothing is passed.
+
 ## One test run at a time
 
 This command runs Maven or a Spark test JVM in `geobrix-dev`, so it takes the container test lock first. It is shared by every command that runs Maven or a test JVM there (`gbx:test:*`, `gbx:coverage:*`, `gbx:lint:scalastyle`, `gbx:bench:heavyweight`, `gbx:data:stage-jar`/`stage-wheel`, and `gbx:docker:exec` with an `mvn` or `pytest` command).

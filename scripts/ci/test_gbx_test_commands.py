@@ -420,6 +420,18 @@ def test_a_native_payload_reaches_the_container_pytest_runs(sandbox):
     assert pytest_env()["GBX_NATIVE_ROOT"] == "/root/geobrix/build/env-wheel/env6/payload"
 
 
+def test_a_native_payload_reaches_the_scala_test_jvm(sandbox):
+    # The Scala run passes GBX_NATIVE_ROOT (as its /root/geobrix path) beside the locale; unset, nothing is passed.
+    def maven_env():
+        return [e for c, e in zip(sandbox.execs(), sandbox.exec_envs()) if "mvn test" in c[-1]][-1]
+
+    sandbox.run("gbx-test-scala.sh", "--suite", "x.Y", GBX_NATIVE_ROOT="build/env-wheel/env6/payload")
+    env = maven_env()
+    assert env["GBX_NATIVE_ROOT"] == "/root/geobrix/build/env-wheel/env6/payload" and env["LC_ALL"] == "C.UTF-8"
+    sandbox.run("gbx-test-scala.sh", "--suite", "x.Y")
+    assert "GBX_NATIVE_ROOT" not in maven_env()
+
+
 def _markers_of_calls(log):
     """The `-m` expression of every pytest process the fake venv python was started for, in order."""
     calls = [line.split("|", 2)[2] for line in log.read_text().splitlines()]

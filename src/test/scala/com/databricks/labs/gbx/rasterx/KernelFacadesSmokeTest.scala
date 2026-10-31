@@ -99,7 +99,7 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
     }
 
     test("the Java shells for standard access mode give the Scala answers, with the typed parameters SQL binds") {
-        val shell = new BngEastNorthAsBngConnectUdf() // (double, double, string): an INT resolution arrives as digits
+        val shell = new BngEastNorthAsBngConnectUdf() // declared (double, double, string); the Scala class coerces
         val scala = new BngEastNorthAsBngUdf()
         for (res <- Seq("3", "-3", "1km")) {
             assert(shell.call(530000.0, 180000.0, res) == scala.call(530000.0, 180000.0, res), res)
@@ -109,6 +109,24 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         assert(intercept[Exception](shell.call(530000.0, 180000.0, "3km")).getMessage.contains("3km"))
         assert(new BuildInfoConnectUdf().call() == BuildInfo.identity())
         assert(new GdalProbeConnectUdf().call() == KernelGdal.probe())
+    }
+
+    test("the BNG Java shell registered as a Java UDF takes an INT resolution and INT coordinates") {
+        // Standard access mode converts the inputs to the types the class itself declares: they stay concrete.
+        val declared = classOf[BngEastNorthAsBngConnectUdf].getGenericInterfaces.collect {
+            case p: java.lang.reflect.ParameterizedType if p.getRawType == classOf[org.apache.spark.sql.api.java.UDF3[_, _, _, _]] =>
+                p.getActualTypeArguments.toSeq
+        }.toSeq
+        assert(declared == Seq(Seq(classOf[java.lang.Double], classOf[java.lang.Double], classOf[String], classOf[String])))
+        // registerJava is what PySpark's registerJavaFunction calls (the manager's L2 on a Connect session); this
+        // session passes each value as SQL bound it
+        spark.udf.registerJava("gbx_probe_bng_shell", classOf[BngEastNorthAsBngConnectUdf].getName,
+          org.apache.spark.sql.types.StringType)
+        def cell(args: String): String = spark.sql(s"SELECT gbx_probe_bng_shell($args)").head().getString(0)
+        assert(cell("530000d, 180000d, '1km'") == "TQ3080") // DOUBLE coordinates, a STRING resolution
+        assert(cell("530000d, 180000d, 3") == "TQ3080") // an INT resolution
+        assert(cell("530000, 180000, 3") == "TQ3080") // INT coordinates too
+        assert(cell("CAST(530000 AS BIGINT), 180000, -3") == "TQ38SW")
     }
 
     test("RstTransformCrsBytesUdf warps bytes and releases its datasets") {

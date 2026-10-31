@@ -356,6 +356,12 @@ def carrying_session(spark, allowed: Optional[bool] = None):
     return _CarryingSession(spark, driver_switch() if allowed is None else allowed)
 
 
+def url_scheme(path) -> str:
+    """The scheme rasterio and pyogrio read from a path with `urllib.parse` (no "//" needed): ``zip`` for
+    ``zip:/x.zip``, ``gs`` for ``gs:bucket/x``; empty for a plain path."""
+    return urlsplit(path if isinstance(path, str) else os.fspath(path)).scheme
+
+
 def remote_location(path) -> Optional[str]:
     """The location a path names that the remote-path gate refuses (``/vsicurl/``, ``https://`` ...), else None.
     A wrapper is judged by every path it wraps (``/vsizip//vsicurl/...`` names ``/vsicurl/``).
@@ -369,7 +375,7 @@ def remote_location(path) -> Optional[str]:
         if any(part not in _DATA_SCHEMES for part in scheme.split("+")):
             return f"{scheme}://"
     # the path as the binding opens it: rasterio and pyogrio read the scheme with urllib.parse (no "//" needed)
-    scheme = urlsplit(text).scheme
+    scheme = url_scheme(text)
     parts = scheme.split("+") if scheme else ()
     if parts and all(p in _BINDING_SCHEMES for p in parts):
         if any(p not in _DATA_SCHEMES for p in parts):

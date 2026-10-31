@@ -307,12 +307,18 @@ def _decode_py(tile, cap_bytes) -> dict:
     return row
 
 
+class RustDecodeUnavailable(RuntimeError):
+    """The Rust build is missing or has no `decode_window`: a configuration error, never a per-tile error tile."""
+
+
 def _rust_can_decode(tile) -> bool:
     """The Rust decode cuts a window of a file and nothing else: a clip, a pending instruction, a Zarr-backed tile, or a
-    path that is not a plain file (`s3://`, `abfss://`, `gs://` URIs and `/vsi...` names, which rasterio opens through
-    GDAL's virtual file systems and a bare `GDALOpenEx` does not) go the pyrx way. `tile["metadata"]` is a dict here
+    path that is not a plain file (any path with a URI scheme, `s3://x`, `gs:bucket/x` or `zip:/x.zip`, and `/vsi...`
+    names, which rasterio opens through GDAL's virtual file systems and a bare `GDALOpenEx` does not) go the pyrx
+    way. `tile["metadata"]` is a dict here
     (`materialize_batches` makes it one: an Arrow map column is a list of (key, value) pairs in `to_pylist()`).
     """
+    from databricks.labs.gbx import _gdal_policy
     from databricks.labs.gbx.ds._listing import to_local_path
 
     md = tile["metadata"] or {}
@@ -321,7 +327,7 @@ def _rust_can_decode(tile) -> bool:
         tile["clip_polygon"] is None
         and not any(k in md for k in ot._PENDING_KEYS)
         and "zarr_array" not in md
-        and "://" not in local
+        and not _gdal_policy.url_scheme(local)
         and not local.startswith("/vsi")
     )
 
@@ -338,7 +344,7 @@ def _decode_rust(tile, cap_bytes) -> dict:
 
     mod = _rs.load()
     if mod is None or not hasattr(mod, "decode_window"):
-        raise RuntimeError(
+        raise RustDecodeUnavailable(
             f"the Rust decode is unavailable: {_rs.unavailable_reason() or 'this _gbxrs build has no decode_window'}"
         )
     _gate(tile, cap_bytes)
@@ -383,13 +389,13 @@ def _decode_rust(tile, cap_bytes) -> dict:
 def _materialized(tile, rust: bool, cap_bytes) -> dict:
     """The row for a virtual tile: decoded, or an error tile when it cannot be (a bad file, a refused location, a tile over
     the cap). That is the convention of the light `rst_*` functions (`RST_TransformCrs` and the rest): a bad input is a
-    row of data, the reason under `metadata["last_error"]`, as the JVM's `safeEval` gives; resource exhaustion still fails
-    the task.
+    row of data, the reason under `metadata["last_error"]`, as the JVM's `safeEval` gives; resource exhaustion and a
+    missing Rust build (a configuration error, not a bad input) still fail the task.
     """
     try:
         decode = _decode_rust if rust and _rust_can_decode(tile) else _decode_py
         return decode(tile, cap_bytes)
-    except (MemoryError, RecursionError):
+    except (MemoryError, RecursionError, RustDecodeUnavailable):
         raise
     except Exception as e:  # noqa: BLE001
         return _serde.build_error_tile(

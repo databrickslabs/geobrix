@@ -103,6 +103,46 @@ def test_the_batch_decode_returns_an_error_tile_for_a_refused_location(rust):
     assert "/vsicurl/" in dict(tile["metadata"])["last_error"]
 
 
+@pytest.mark.parametrize("build", ["none", "no-decode-window"])
+def test_a_missing_rust_build_fails_the_batch_and_is_not_an_error_tile(
+    tmp_path, monkeypatch, build
+):
+    """A build without `decode_window` is a configuration error: a d-rs run on it must raise, not return a column of
+    error tiles that reads as a (cheap) result. A per-tile data error still becomes an error tile (the test above).
+    """
+    monkeypatch.setattr(_rs, "load", lambda: None if build == "none" else object())
+    with pytest.raises(RuntimeError, match="Rust decode is unavailable"):
+        _decoded_rows(_batch_of(_tif(tmp_path / "f.tif")), rust=True)
+
+
+@pytest.mark.parametrize("exc", [MemoryError, RecursionError])
+@pytest.mark.parametrize("rust", [False, True], ids=["d-py", "d-rs"])
+def test_resource_exhaustion_fails_the_task_it_is_not_an_error_tile(
+    tmp_path, monkeypatch, exc, rust
+):
+    from databricks.labs.gbx.pyrx import _mvp_forms
+
+    def boom(*a, **k):
+        raise exc("while decoding")
+
+    monkeypatch.setattr(_mvp_forms, "_decode_rust", boom)
+    monkeypatch.setattr(_mvp_forms, "_decode_py", boom)
+    with pytest.raises(exc):
+        _decoded_rows(_batch_of(_tif(tmp_path / "f.tif")), rust=rust)
+
+
+def test_the_row_udf_returns_an_error_tile_for_a_refused_location():
+    """L3 `gbx_mvp_rst_materialize`: the row UDF gives the same error tile as the batch form (the reason under
+    `last_error`), keeping the tile's cell id."""
+    from databricks.labs.gbx.pyrx import _mvp_forms
+    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+    tile = VirtualTile(cellid=7, path="/vsicurl/https://example.invalid/x.tif").to_row()
+    got = _mvp_forms.materialize_udf.func(tile)
+    assert got["raster"] is None and got["cellid"] == 7
+    assert "/vsicurl/" in dict(got["metadata"])["last_error"]
+
+
 def test_a_tile_with_pending_instructions_decodes_as_the_row_udf_decodes_it(tmp_path):
     """A real Arrow batch (map metadata as pairs): the pending key is applied and gone, and the row is the L3 UDF's."""
     from databricks.labs.gbx.pyrx import _mvp_forms
@@ -147,6 +187,10 @@ def test_the_rust_decode_is_offered_a_plain_file_only():
                 "abfss://c@a.dfs.core.windows.net/k.tif",
                 "gs://b/k.tif",
                 "/vsis3/b/k.tif",
+                # a scheme with no "//" is a scheme to rasterio too (urllib.parse reads it)
+                "zip:/x.zip",
+                "gs:bucket/x.tif",
+                "hdfs:/x.tif",
             )
         ),
     ):
@@ -289,6 +333,58 @@ def _rewritten(raster, dtype=None, crs=None):
         with out.open(**prof) as dst:
             dst.write(data.astype(prof["dtype"]))
         return out.read()
+
+
+def _reader_failures_of(path, tile_raster):
+    from databricks.labs.gbx._gdal_policy import open_data
+
+    with open_data(path) as src:
+        return oracles.reader_failures(
+            "io", "x", src, [{"raster": tile_raster, "metadata": {}}]
+        )
+
+
+def _whole_tile(path):
+    return _window_tile(path, 0, 0, 64)["raster"]
+
+
+@pytest.mark.parametrize("case", ["exact", "band_2_differs", "band_dropped"])
+def test_the_reader_oracle_compares_every_band(tmp_path, case):
+    """Band 1 alone passed a tile whose other bands were wrong or missing."""
+    path = _tif(tmp_path / "f.tif", bands=3)
+    raster = _whole_tile(path)
+    if case != "exact":
+        from rasterio.io import MemoryFile
+
+        with MemoryFile(bytes(raster)) as mf, mf.open() as t:
+            prof, data = t.profile, t.read()
+        if case == "band_2_differs":
+            data[1] = data[1] + 1
+        else:
+            data, prof["count"] = data[:1], 1
+        with MemoryFile() as out:
+            with out.open(**prof) as dst:
+                dst.write(data)
+            raster = out.read()
+    got = _reader_failures_of(path, raster)
+    assert (got == []) == (case == "exact"), got
+
+
+def test_the_reader_oracle_treats_nan_as_equal_to_nan_in_pixels_and_nodata(tmp_path):
+    """A float raster with NaN NoData (and NaN pixels) read back exactly is not a mismatch (nan != nan was one)."""
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    path = str(tmp_path / "nan.tif")
+    data = (np.arange(64 * 64, dtype="float32") % 97).reshape(1, 64, 64)
+    data[0, ::7, ::5] = np.nan
+    with rasterio.open(
+        path, "w", driver="GTiff", width=64, height=64, count=1, dtype="float32",
+        crs="EPSG:4326", transform=from_origin(0, 64, 1, 1), nodata=float("nan"),
+    ) as dst:  # fmt: skip
+        dst.write(data)
+    assert _reader_failures_of(path, _whole_tile(path)) == []
 
 
 def test_a_rewritten_file_is_not_served_the_header_of_the_old_one(tmp_path):

@@ -8,6 +8,7 @@ and a scratch Maven conf dir, with a fake `mvn` first on PATH.
 import os
 import shutil
 import subprocess
+import sys
 
 from conftest import REPO_ROOT
 
@@ -38,7 +39,9 @@ def checkout(tmp_path, with_default=True, m2_settings=None):
     # the GDAL Java classes installer (scripts/native/java_jar.py): logged, exit code from FAKE_INSTALL_RC
     py = bin_dir / "python3"
     py.write_text(
-        f'#!/bin/sh\necho "python3 $*" >> "{calls}"\nexit "${{FAKE_INSTALL_RC:-0}}"\n'
+        # `-c` is the setup's own XML read: run it for real; everything else is the logged installer
+        f'#!/bin/sh\n[ "$1" = "-c" ] && exec "{sys.executable}" "$@"\n'
+        f'echo "python3 $*" >> "{calls}"\nexit "${{FAKE_INSTALL_RC:-0}}"\n'
     )
     py.chmod(0o755)
     return root, conf, bin_dir
@@ -124,3 +127,37 @@ def test_the_gdal_java_classes_go_to_the_repository_the_settings_name(tmp_path):
     assert res.returncode == 0, res.stdout + res.stderr
     first = (tmp_path / "calls.log").read_text().splitlines()[0]
     assert first.endswith("java_jar.py install --repo /data/other-m2"), first
+
+
+def _repo_used(tmp_path, settings, **extra):
+    root, conf, bin_dir = checkout(tmp_path, m2_settings=settings)
+    res = run(root, conf, bin_dir, **extra)
+    assert res.returncode == 0, res.stdout + res.stderr
+    first = (tmp_path / "calls.log").read_text().splitlines()[0]
+    return root, first.split("--repo ", 1)[1]
+
+
+def test_a_multi_line_comment_with_a_decoy_localrepository_is_ignored(tmp_path):
+    own = (
+        "<settings>\n<!--\n  <localRepository>/decoy</localRepository>\n"
+        "  more text\n-->\n<localRepository>/data/real</localRepository>\n</settings>\n"
+    )
+    assert _repo_used(tmp_path, own)[1] == "/data/real"
+
+
+def test_a_padded_localrepository_value_is_trimmed(tmp_path):
+    own = "<settings><localRepository>\n   /data/padded  \n</localRepository></settings>\n"
+    assert _repo_used(tmp_path, own)[1] == "/data/padded"
+
+
+def test_no_localrepository_means_mavens_default(tmp_path):
+    home = tmp_path / "home"
+    _, repo = _repo_used(tmp_path, "<settings></settings>\n", HOME=str(home))
+    assert repo == f"{home}/.m2/repository"
+
+
+def test_an_empty_localrepository_means_the_checkouts_own_m2(tmp_path):
+    root, repo = _repo_used(
+        tmp_path, "<settings><localRepository> </localRepository></settings>\n"
+    )
+    assert repo == f"{root}/scripts/docker/m2"

@@ -43,12 +43,25 @@ cd "$ROOT"
 # GDAL's Java classes come from the native build (scripts/native/maven), in no repository: put them into the
 # project-local repository, sha256-checked against their pin, with no Maven plugin, before Maven resolves anything.
 echo "    GDAL Java classes:"
-# The repository is the one the settings name (a settings.xml of the checkout's own may move it); the tracked
-# default's /root/geobrix prefix is this checkout's $ROOT.
-REPO="$(grep -v '<!--' "$SETTINGS" | sed -n 's:.*<localRepository>\(.*\)</localRepository>.*:\1:p' | head -1)"
+# The repository is the one the settings name (a settings.xml of the checkout's own may move it), read as XML so
+# comments (also multi-line ones holding a decoy element) are dropped and the value is trimmed:
+#   element absent  -> Maven's own default, ~/.m2/repository;
+#   element empty   -> this checkout's $ROOT/scripts/docker/m2 (the tracked default's repository);
+#   a /root/geobrix/... value -> the same path under $ROOT (the tracked default names the container's checkout).
+REPO="$(python3 -c '
+import sys, xml.etree.ElementTree as ET
+for e in ET.parse(sys.argv[1]).iter():
+    if e.tag.rpartition("}")[2] == "localRepository":
+        print("P:" + (e.text or "").strip())
+        break
+else:
+    print("A")
+' "$SETTINGS")" || { echo "    cannot read $SETTINGS as XML" >&2; exit 1; }
 case "$REPO" in
-    /root/geobrix|/root/geobrix/*) REPO="$ROOT${REPO#/root/geobrix}" ;;
-    "") REPO="$ROOT/scripts/docker/m2" ;;
+    A) REPO="${HOME:-/root}/.m2/repository" ;;
+    P:) REPO="$ROOT/scripts/docker/m2" ;;
+    P:/root/geobrix|P:/root/geobrix/*) REPO="$ROOT${REPO#P:/root/geobrix}" ;;
+    P:*) REPO="${REPO#P:}" ;;
 esac
 python3 "$ROOT/scripts/native/java_jar.py" install --repo "$REPO" || exit 1
 echo "    Active Maven profile(s):"

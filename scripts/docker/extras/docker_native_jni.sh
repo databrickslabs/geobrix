@@ -34,7 +34,7 @@ if [ ! -f "$JNI" ]; then
             echo "    $LINK dangles (its payload is gone) and $IMAGE_JNI is not there to restore it to"
         fi
     fi
-    echo "    The JVM keeps the image's JNI ($(readlink -f "$LINK" 2>/dev/null || echo none)), which the JAR's GDAL classes refuse."
+    echo "    The JVM keeps the image's JNI ($([ -e "$LINK" ] && readlink -f "$LINK" || echo none)), which the JAR's GDAL classes refuse."
     if [ "${GBX_JNI_REQUIRE:-0}" = 1 ]; then
         echo "    GBX_JNI_REQUIRE=1: failing (CI's native payload step lays the payload out before this one)."
         echo "::: done :::"

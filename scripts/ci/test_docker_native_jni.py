@@ -113,6 +113,7 @@ def test_a_dangling_link_with_no_image_jni_to_go_back_to_is_left_and_reported(tm
 
     assert res.returncode == 0 and os.readlink(link) == str(gone)
     assert "dangles" in res.stdout
+    assert "keeps the image's JNI (none)" in res.stdout  # not the dangling target
 
 
 @pytest.mark.parametrize("built", [True, False])

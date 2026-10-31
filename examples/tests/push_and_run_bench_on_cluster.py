@@ -382,7 +382,7 @@ def watch_to_end(w, run_id, *, hb_path, form_cap_s, stale_s, token=None, count=N
     except Exception:  # noqa: BLE001 - absent is the usual case
         pass
     t0 = time.monotonic()
-    last = {"beat": None, "at": -1e9, "rows": -1, "stale": 0, "run": None}
+    last = {"beat": None, "at": -1e9, "rows": -1, "stale": 0, "run": None, "read_error": None}
 
     def get_state():
         try:
@@ -395,9 +395,16 @@ def watch_to_end(w, run_id, *, hb_path, form_cap_s, stale_s, token=None, count=N
     def beat():
         if time.monotonic() - last["at"] >= HEARTBEAT_READ_SECS:
             last["at"] = time.monotonic()
-            got = _run_watchdog.read_beat(w, hb_path)
-            if got is not None:
-                last["beat"] = got
+            try:
+                got = _run_watchdog.read_beat(w, hb_path)
+            except _run_watchdog.BeatReadError as exc:
+                last["read_error"] = exc  # stays until a read works: the polls between reads are failures too
+            else:
+                last["read_error"] = None
+                if got is not None:
+                    last["beat"] = got
+        if last["read_error"] is not None:
+            raise last["read_error"]
         return last["beat"]
 
     def on_poll(lc):

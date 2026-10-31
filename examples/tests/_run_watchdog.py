@@ -12,6 +12,10 @@ state and the heartbeat, and cancels the run itself when either:
 It then says which form, prints the tail of the stack the last beat held, and returns ``EXIT_STALLED``.
 It never retries: the caller decides what to do about a stalled run.
 
+A heartbeat that cannot be *read* (a 403, a dropped connection) is not a stalled driver: the watchdog cannot tell
+either way, so the quiet clock stands still while reads fail, and after ``READ_FAIL_WARN_AFTER`` consecutive failed polls
+one warning line says so. The run's own time limit is then the only backstop.
+
 The judging is pure (injectable clock and readers), so it is tested without a workspace; the
 ``read_beat`` / ``cancel`` / ``get_state`` callables are the only parts that touch the SDK.
 """
@@ -29,6 +33,7 @@ DEFAULT_STALE_S = 300.0  # ten missed beats
 DEFAULT_FORM_CAP_S = 15 * 60.0
 TERMINAL_STATES = ("TERMINATED", "SKIPPED", "INTERNAL_ERROR")
 STACK_TAIL_LINES = 25
+READ_FAIL_WARN_AFTER = 12  # consecutive polls with an unreadable heartbeat before the warning (a minute at the 5 s poll)
 
 
 @dataclass
@@ -45,12 +50,29 @@ class Stall:
         return f"STALLED: {self.form} after {self.minutes:.1f} min"
 
 
+class BeatReadError(Exception):
+    """The heartbeat file could not be read for a reason other than being absent or half-written."""
+
+
+def _is_absent(exc: Exception) -> bool:
+    """Not there yet: the notebook has not beaten (the SDK's NotFound is matched by name, this module has no SDK import)."""
+    return isinstance(exc, FileNotFoundError) or type(exc).__name__ in ("NotFound", "ResourceDoesNotExist")
+
+
 def read_beat(w, path: str) -> Optional[dict]:
-    """The heartbeat file as a dict, or None when it is absent, half-written or unreadable (the caller retries)."""
+    """The heartbeat file as a dict, or None when it is absent or half-written (the caller retries).
+
+    Raises ``BeatReadError`` for any other failure (permission, connection, server error): that is neither a beat
+    nor proof that the driver is quiet, and the caller must not count it as a stall.
+    """
     try:
         return json.loads(w.files.download(path).contents.read().decode("utf-8"))
-    except Exception:  # noqa: BLE001 - absent before the notebook starts; half-written now and then
+    except ValueError:  # half-written now and then (JSONDecodeError and UnicodeDecodeError are ValueErrors)
         return None
+    except Exception as exc:  # noqa: BLE001
+        if _is_absent(exc):  # absent before the notebook starts
+            return None
+        raise BeatReadError(f"{type(exc).__name__}: {str(exc)[:200]}") from exc
 
 
 class Watchdog:
@@ -76,14 +98,22 @@ class Watchdog:
         self.token = token  # this launch's id: a beat another launch wrote (same path) is not this run's
         self._seq = None
         self._seen_at = 0.0
+        self._obs_at: Optional[float] = None
         self._last: dict = {}
 
     @property
     def last_beat(self) -> dict:
         return self._last
 
-    def observe(self, beat: Optional[dict]) -> Optional[Stall]:
+    def observe(self, beat: Optional[dict], read_failed: bool = False) -> Optional[Stall]:
+        """Judge one poll. ``read_failed`` says the heartbeat could not be read: nothing is judged and the time
+        since the previous poll does not count as quiet (a missing read is not a missing beat)."""
         now = self._clock()
+        gap = 0.0 if self._obs_at is None else now - self._obs_at
+        self._obs_at = now
+        if read_failed:
+            self._seen_at += gap
+            return None
         if beat is not None and self.token is not None and beat.get("token") != self.token:
             beat = None  # a file an earlier launch left at the same path
         if beat is not None and beat.get("seq") != self._seq:
@@ -162,17 +192,31 @@ def watch_run(
 ) -> tuple:
     """Poll until the run ends. Returns ``("finished", life_cycle_state)`` or ``("stalled", Stall)``.
 
+    ``read_beat_fn`` may raise ``BeatReadError``: the poll then counts as a read failure, not as a stall.
     ``get_state()`` returns ``(life_cycle_state, result_state)`` as strings. On a stall the run is cancelled
     (and waited for, up to ``cancel_wait_s``), the stall is reported, and no retry follows. A cancel that raises
     is reported too (``cancel FAILED: ...; cancel run <run_id> by hand``): the run is still live then.
     """
     wd = watchdog or Watchdog()
+    failed_polls = 0
     while True:
         lc, _ = get_state()
         if lc in TERMINAL_STATES:
             return "finished", lc
         on_poll(lc)
-        stall = wd.observe(read_beat_fn())
+        try:
+            beat, failed = read_beat_fn(), False
+        except BeatReadError as exc:
+            beat, failed = None, True
+            failed_polls += 1
+            if failed_polls == READ_FAIL_WARN_AFTER:
+                print_fn(
+                    f"WARNING: heartbeat unreadable for {READ_FAIL_WARN_AFTER} polls in a row ({exc}); "
+                    "not treated as a stall, so only the run's time limit now ends a stalled run"
+                )
+        else:
+            failed_polls = 0
+        stall = wd.observe(beat, read_failed=failed)
         if stall:
             print_fn(f"{stall.reason}: cancelling the run")
             try:

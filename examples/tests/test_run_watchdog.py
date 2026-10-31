@@ -179,3 +179,64 @@ def test_a_cancel_that_fails_still_reports_the_stall_and_says_to_cancel_by_hand(
     assert kind == "stalled" and stall.cancel_error and "cannot cancel" in stall.cancel_error
     assert "STALLED: f after" in text
     assert "cancel FAILED: " in text and "cancel run 4242 by hand" in text
+
+
+# ---- a heartbeat that cannot be read is not a stalled driver
+
+
+def test_the_heartbeat_reader_raises_for_a_failure_that_is_not_absence_or_a_half_written_file():
+    """Absent and half-written are the reader's None (the notebook has not beaten yet); anything else is a read failure."""
+
+    def reader(exc):
+        class W:
+            class files:
+                @staticmethod
+                def download(path):
+                    raise exc
+
+        return lambda: wd.read_beat(W, "/Volumes/x/heartbeat.json")
+
+    assert reader(ValueError("Expecting value"))() is None  # json.JSONDecodeError is a ValueError: half-written
+    for exc in (PermissionError("403 forbidden"), ConnectionError("reset"), RuntimeError("503")):
+        with pytest.raises(wd.BeatReadError, match=type(exc).__name__):
+            reader(exc)()
+
+
+def test_a_heartbeat_that_cannot_be_read_does_not_stall_a_healthy_run_however_long_it_lasts():
+    c = Clock()
+    w = wd.Watchdog(form_cap_s=3600, stale_s=300, clock=c)
+    assert w.observe(beat(1, elapsed=0)) is None
+    for _ in range(100):  # 50 min of failed reads: ten times stale_s
+        c.t += 30
+        assert w.observe(None, read_failed=True) is None
+    # the reads recover with a beat that moved on: still healthy; the same beat again then ages from the last good read
+    c.t += 30
+    assert w.observe(beat(2, elapsed=3000)) is None
+    c.t += 200
+    assert w.observe(beat(2, elapsed=3000)) is None
+    c.t += 150
+    assert w.observe(beat(2, elapsed=3000)) is not None  # an unchanged beat for stale_s is still a stall
+
+
+def test_persistent_read_failures_print_one_warning_after_the_limit_and_the_run_ends_on_its_own(capsys):
+    c = Clock()
+    out = []
+
+    def read():
+        raise wd.BeatReadError("PermissionError: 403 forbidden")
+
+    states = iter([("RUNNING", "")] * 60 + [("TERMINATED", "SUCCESS")])
+    outcome = wd.watch_run(
+        get_state=lambda: next(states),
+        read_beat_fn=read,
+        cancel=lambda: pytest.fail("a read failure must not cancel the run"),
+        watchdog=wd.Watchdog(form_cap_s=120, stale_s=300, clock=c),
+        poll_secs=30,
+        sleep=c.sleep,
+        clock=c,
+        print_fn=out.append,
+    )
+    assert outcome == ("finished", "TERMINATED")
+    warnings = [ln for ln in out if "heartbeat" in ln and "WARNING" in ln]
+    assert len(warnings) == 1 and "PermissionError: 403 forbidden" in warnings[0]
+    assert f"{wd.READ_FAIL_WARN_AFTER} " in warnings[0] and "time limit" in warnings[0]

@@ -4,6 +4,7 @@ use pyo3::types::PyBytes;
 
 #[cfg(feature = "gdal")]
 mod gdal_decode;
+mod window;
 
 const QUADRANTS: [&str; 5] = ["", "SW", "NW", "NE", "SE"];
 const LETTER_MAP: [[&str; 8]; 14] = [

@@ -161,7 +161,7 @@ fn decode(
     let src = open(path, drivers, &quiet)?;
     let [col, row, w, h] = window;
     let (width, height) = src.size();
-    if col < 0 || row < 0 || w <= 0 || h <= 0 || col + w > width || row + h > height {
+    if !crate::window::inside(window, width, height) {
         return Err(PyValueError::new_err(format!(
             "the window ({col}, {row}, {w}, {h}) is not inside the {width} x {height} raster {path}"
         )));

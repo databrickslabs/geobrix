@@ -11,12 +11,17 @@ import com.databricks.labs.gbx.kernels.df.{BngTessellateJob, ViewshedTowersJvm}
 import com.databricks.labs.gbx.kernels.uc.BngUc
 import com.databricks.labs.gbx.kernels.udf.{BngEastNorthAsBngConnectUdf, BngEastNorthAsBngUdf, BngTessellateUdf, BuildInfoConnectUdf, GdalProbeConnectUdf, RetileKernel, RstMergeArrayBytesUdf, RstRetileArrayBytesUdf, RstRetileCountBytesUdf, RstRetilePartBytesUdf, RstTransformCrsBytesUdf}
 import com.databricks.labs.gbx.rasterx.expressions.agg.mvp.BngRasterizeCellsBytesUdf
+import com.databricks.labs.gbx.expressions.ExpressionConfig
+import com.databricks.labs.gbx.rasterx.expressions.mvp.RST_MvpMaterialize
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
+import com.databricks.labs.gbx.rasterx.util.V2Tile
 import com.databricks.labs.gbx.util.NodeFilePathUtil
 import org.apache.spark.sql.Row
+import org.apache.spark.sql.catalyst.expressions.GenericInternalRow
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.test.SilentSparkSession
 import org.gdal.gdalconst.gdalconstConstants
+import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.osr.SpatialReference
 
 import scala.jdk.CollectionConverters._
@@ -438,6 +443,45 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
             }
         } finally {
             tiles.values.foreach(p => Files.deleteIfExists(Paths.get(p)))
+            Files.deleteIfExists(dir)
+        }
+    }
+
+    test("gbx_mvp_rst_materialize decodes a virtual tile's window as ZSTD, refuses a remote path, and holds nothing") {
+        val dir = Files.createTempDirectory("gbx-materialize")
+        val file = dir.resolve("src.tif")
+        Files.write(file, tinyGTiff())
+        val conf = UTF8String.fromString(ExpressionConfig(spark).toB64)
+        def virtual(path: String, window: Option[(Int, Int, Int, Int)]) = V2Tile.row(
+          cellid = 7L, path = UTF8String.fromString(path),
+          window = window.map { case (c, r, w, h) => new GenericInternalRow(Array[Any](c, r, w, h)) }.orNull)
+        val before = vsimemEntries()
+        // "file:" is not a local path, so the open goes through a node-file copy: the one hold that must come back
+        val remote = s"file:${file.toString}"
+        try {
+            val out = RST_MvpMaterialize.eval(virtual(remote, Some((0, 0, 8, 8))), conf)
+            assert(out.getLong(V2Tile.idx("cellid")) == 7L && V2Tile.getPath(out) == null, "cellid kept, path cleared")
+            val win = V2Tile.getWindow(out)
+            assert((win.getInt(0), win.getInt(1), win.getInt(2), win.getInt(3)) == (0, 0, 8, 8), "window kept")
+            val ds = RasterDriver.readFromBytes(V2Tile.getRaster(out), Map("driver" -> "GTiff"))
+            try {
+                assert(ds.GetRasterXSize == 8 && ds.GetRasterYSize == 8, "an 8 x 8 tile")
+                assert(ds.GetMetadata_Dict("IMAGE_STRUCTURE").get("COMPRESSION") == "ZSTD")
+            } finally RasterDriver.releaseDataset(ds)
+            assert(NodeFilePathUtil.readersOf(remote) == 0, "the node-file lease came back")
+            // a tile with bytes already, and one that is not a raster
+            assert(RST_MvpMaterialize.eval(out, conf) eq out, "a materialized tile is returned as it is")
+            Files.write(dir.resolve("bad.tif"), "not a raster".getBytes("UTF-8"))
+            val bad = RST_MvpMaterialize.eval(virtual(s"file:${dir.resolve("bad.tif")}", None), conf)
+            assert(V2Tile.getRaster(bad) == null && V2Tile.getMetadata(bad) != null, "an error tile")
+            assert(NodeFilePathUtil.readersOf(s"file:${dir.resolve("bad.tif")}") == 0, "the lease came back on a failed open")
+            // a path from data may not name a remote location
+            val refused = RST_MvpMaterialize.eval(virtual("/vsicurl/https://example.com/x.tif", None), conf)
+            assert(V2Tile.getRaster(refused) == null, "a remote location is refused")
+            assert(vsimemEntries() == before, "in-memory GDAL files left behind")
+        } finally {
+            Files.deleteIfExists(file)
+            Files.deleteIfExists(dir.resolve("bad.tif"))
             Files.deleteIfExists(dir)
         }
     }

@@ -1986,6 +1986,46 @@ def test_local_timing_exits_non_zero_when_the_pass_flags_a_form(sandbox):
     assert res.returncode == 1 and "flagged a form" in res.output, res.output
 
 
+def test_local_timing_reports_a_precondition_and_a_failed_pass_apart_from_a_flag(sandbox):
+    # Exit 2 (a short corpus, no baseline) used to read as "flagged a form"; exit 3 is the pass failing.
+    _timing_sandbox(sandbox)
+    res = sandbox.run("gbx-bench-local-timing.sh", FAKE_DOCKER_EXEC_RC="2")
+    assert res.returncode == 2 and "precondition is missing" in res.output and "flagged a form" not in res.output, res.output
+    res = sandbox.run("gbx-bench-local-timing.sh", FAKE_DOCKER_EXEC_RC="3")
+    assert res.returncode == 3 and "not a flag" in res.output and "flagged a form" not in res.output, res.output
+
+
+@pytest.mark.parametrize("option", ["--set", "--k", "--log", "--baseline-k"])
+def test_local_timing_option_without_a_value_exits_2_before_any_work(sandbox, option):
+    _timing_sandbox(sandbox)
+    res = sandbox.run("gbx-bench-local-timing.sh", option)
+    assert res.returncode == 2 and f"Option {option} needs a value" in res.output, res.output
+    assert _timing_exec(sandbox) == []
+
+
+def test_local_timing_unknown_option_exits_1_with_the_usage(sandbox):
+    _timing_sandbox(sandbox)
+    res = sandbox.run("gbx-bench-local-timing.sh", "--nope")
+    assert res.returncode == 1 and "Unknown option: --nope" in res.output and "Usage:" in res.output, res.output
+    assert _timing_exec(sandbox) == []
+
+
+def test_local_timing_hands_the_baseline_options_to_the_module(sandbox):
+    _timing_sandbox(sandbox)
+    res = sandbox.run("gbx-bench-local-timing.sh", "--baseline", "--baseline-write", "--baseline-k", "2")
+    assert res.returncode == 0, res.output
+    (cmd,) = _timing_exec(sandbox)
+    assert cmd.endswith("--baseline --baseline-write --baseline-k 2"), cmd
+    res = sandbox.run("gbx-bench-local-timing.sh", "--baseline", "my base.json")
+    (_, cmd) = _timing_exec(sandbox)
+    assert cmd.endswith("--baseline my\\ base.json"), cmd
+
+
+def test_bench_cluster_profile_without_a_value_exits_2(sandbox):
+    res = sandbox.run("gbx-bench-cluster.sh", "--profile")
+    assert res.returncode == 2 and "--profile needs a value" in res.output, res.output
+
+
 def test_bench_cluster_takes_a_profile_and_hands_it_to_the_launcher(sandbox):
     # The profile used to come only from DATABRICKS_CONFIG_PROFILE / the config file; --profile wins over both.
     _venv_python(sandbox, sdk=False)

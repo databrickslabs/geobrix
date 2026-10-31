@@ -10,7 +10,14 @@ healthy form does:
   the two ns (worse than linear). Growth below that ratio is normal: a fixed cost (the scan, the worker start-up) and 8
   cores keep the ratio of an 8-core pass between 1.3 and 3 for a decode that is linear in n;
 * a cost per tile above K times the median of its peers;
-* a form that has no time (it failed or was skipped).
+* a form that has no time (it failed, was skipped or timed 0 s).
+
+Those rules compare a form with the reference and its peers, so they miss a form whose own cost per tile doubled
+(they need 3x). ``--baseline-write`` stores each form's cost per tile (the slope between the two larger ns, minus the
+floor's) with the machine it was taken on; ``--baseline`` flags a form above ``--baseline-k`` (1.5) times its stored cost.
+
+Exit codes: 0 no flags, 1 the pass flagged a form, 2 a precondition is missing (``PRECONDITION MISSING``, or a usage
+error), 3 the pass itself failed.
 
 Only the IO set is implemented; ``SETS`` is where another set's forms and sizes go. The flagging is plain Python over a
 ``{(form, n): seconds}`` dict, so it is unit-tested without Spark (``test/bench/test_local_timing.py``). The runner
@@ -21,16 +28,31 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import json
 import math
 import os
+import platform
 import shutil
 import statistics
+import subprocess
 import sys
-from typing import Dict, List, Sequence, Tuple
+import time
+import traceback
+from typing import Dict, List, Optional, Sequence, Tuple
 
 K_DEFAULT = 3.0  # the recipe's multiple (Task 17): a form above K x the reference or its peers is flagged
 MIN_GROWTH = 1.1  # t(largest n) / t(middle n) under this: the time is flat across the two larger sizes
 N_INDEPENDENT = 0.6  # t(smallest n) above this share of t(largest n): the form does the same work whatever n is
+BASELINE_K_DEFAULT = (
+    1.5  # a form above this multiple of its stored cost per tile is flagged
+)
+MIN_BASELINE_MS = (
+    1.0  # a stored cost under this (noise around zero) is compared as this much
+)
+
+
+class PreconditionMissing(Exception):
+    """An artifact the pass needs is absent (no JAR, a short corpus, no baseline): not a defect, exit 2."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -60,7 +82,12 @@ SETS: Dict[str, SetSpec] = {
 
 
 def _ok(t) -> bool:
-    return t is not None and not math.isnan(t)
+    """A usable time: present, not NaN (failed or skipped) and above zero (a ratio of it would divide by zero)."""
+    return t is not None and not math.isnan(t) and t > 0
+
+
+def _ratio(a, b) -> float:
+    return a / b if _ok(a) and _ok(b) else float("nan")
 
 
 def flags(
@@ -80,7 +107,7 @@ def flags(
         missing = [n for n in ns if not _ok(res.get((f, n)))]
         if missing:
             out.append(
-                f"{f}: no time at n={missing[0]} (the form failed or was skipped)"
+                f"{f}: no time at n={missing[0]} (the form failed, was skipped or timed 0 s)"
             )
         elif f != floor:
             timed.append(f)
@@ -131,17 +158,143 @@ def table(
         t = [res.get((f, n), float("nan")) for n in ns]
         cells = "".join(f"{x:8.1f}" for x in t)
         lines.append(
-            f"{f:7s} {cells}  {t[-1] / res[(floor, hi)]:7.1f}  {t[-1] / res[(reference, hi)]:5.1f}  {t[-1] / t[ns.index(mid)]:7.2f}"
+            f"{f:7s} {cells}  {_ratio(t[-1], res.get((floor, hi))):7.1f}  {_ratio(t[-1], res.get((reference, hi))):5.1f}"
+            f"  {_ratio(t[-1], t[ns.index(mid)]):7.2f}"
         )
     return "\n".join(lines)
+
+
+def per_tile_ms(
+    res: Dict[Tuple[str, int], float], *, forms: Sequence[str], ns: Sequence[int]
+) -> Dict[str, float]:
+    """Each timed form's cost per tile in ms: the slope between the middle and the largest n, less the floor's slope.
+
+    The slope leaves a fixed cost (the scan, the worker start-up) out, which is what a regression in the decode alone
+    moves. A form without both times, or a pass without the floor's, is left out.
+    """
+    mid, hi = ns[len(ns) // 2], ns[-1]
+
+    def slope(f):
+        a, b = res.get((f, mid)), res.get((f, hi))
+        return (b - a) / (hi - mid) * 1000 if _ok(a) and _ok(b) else None
+
+    base = slope(forms[-1])
+    if base is None:
+        return {}
+    return {f: s - base for f in forms[:-1] if (s := slope(f)) is not None}
+
+
+def baseline_flags(
+    per_tile: Dict[str, float],
+    baseline: Dict[str, float],
+    k: float = BASELINE_K_DEFAULT,
+) -> List[str]:
+    """What is above `k` times its stored cost per tile (and the forms the two do not share)."""
+    out: List[str] = []
+    for f in sorted(per_tile):
+        if f not in baseline:
+            out.append(f"{f}: not in the baseline (write it again)")
+            continue
+        was = max(baseline[f], MIN_BASELINE_MS)
+        if per_tile[f] > k * was:
+            out.append(
+                f"{f}: per-tile {per_tile[f]:.0f} ms is {per_tile[f] / was:.1f}x its baseline {baseline[f]:.0f} ms"
+                f" (flags above {k:g}x)"
+            )
+    out += [
+        f"{f}: in the baseline but not timed in this pass"
+        for f in sorted(baseline)
+        if f not in per_tile
+    ]
+    return out
+
+
+def baseline_table(per_tile: Dict[str, float], baseline: Dict[str, float]) -> str:
+    lines = [
+        "per-tile ms (slope of the two larger ns, less the floor's)     now  baseline       x"
+    ]
+    for f in sorted(set(per_tile) | set(baseline)):
+        now, was = per_tile.get(f), baseline.get(f)
+        x = (
+            now / max(was, MIN_BASELINE_MS)
+            if now is not None and was is not None
+            else float("nan")
+        )
+        cell = lambda v: "       -" if v is None else f"{v:8.1f}"  # noqa: E731
+        lines.append(f"  {f:7s}{' ' * 49}{cell(now)}{cell(was)}{x:8.2f}")
+    return "\n".join(lines)
+
+
+def default_baseline_path(set_name: str) -> str:
+    """Per machine and untracked (`test-logs/` is gitignored); outside `test-logs/bench/`, which `gbx:bench:clean` prunes."""
+    return os.path.join(_root(), "test-logs", f"local-timing-baseline-{set_name}.json")
+
+
+def _environment() -> Dict[str, object]:
+    try:
+        sha = subprocess.run(
+            ["git", "-C", _root(), "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        sha = ""
+    return {
+        "cores": os.cpu_count(),
+        "arch": platform.machine(),
+        "git_sha": sha or "unknown",
+    }
+
+
+def write_baseline(
+    path: str,
+    set_name: str,
+    ns: Sequence[int],
+    per_tile: Dict[str, float],
+    env: Dict[str, object],
+) -> None:
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w") as fh:
+        json.dump(
+            {
+                "set": set_name,
+                "ns": list(ns),
+                "per_tile_ms": {f: round(v, 3) for f, v in sorted(per_tile.items())},
+                "env": env,
+                "written": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            },
+            fh,
+            indent=2,
+        )
+        fh.write("\n")
+
+
+def read_baseline(path: str, set_name: str, ns: Optional[Sequence[int]] = None) -> dict:
+    if not os.path.isfile(path):
+        raise PreconditionMissing(
+            f"no baseline at {path}; write one first with --baseline-write"
+        )
+    with open(path) as fh:
+        got = json.load(fh)
+    if got.get("set") != set_name or (ns is not None and got.get("ns") != list(ns)):
+        raise PreconditionMissing(
+            f"the baseline {path} is for set {got.get('set')!r} at n {got.get('ns')}, not set {set_name!r} at n {list(ns or [])};"
+            " write it again with --baseline-write"
+        )
+    return got
 
 
 def ensure_corpus(src: str, dst: str, n: int) -> int:
     """Make `dst` hold `n` real copies (not links: the reader skips symlinks) of the first files of `src`; once.
 
-    A `dst` that already holds `n` files is left alone. Returns the file count of `dst`.
+    A `dst` that already holds `n` tiles (`.tif`; a sidecar does not count) is left alone. Returns the tile count of `dst`.
     """
-    have = sorted(os.listdir(dst)) if os.path.isdir(dst) else []
+    have = (
+        sorted(f for f in os.listdir(dst) if f.endswith(".tif"))
+        if os.path.isdir(dst)
+        else []
+    )
     if len(have) >= n:
         return len(have)
     files = (
@@ -150,8 +303,8 @@ def ensure_corpus(src: str, dst: str, n: int) -> int:
         else []
     )
     if len(files) < n:
-        raise SystemExit(
-            f"PRECONDITION MISSING: {src} holds only {len(files)} tiles, the pass needs {n}; corpus not made"
+        raise PreconditionMissing(
+            f"{src} holds only {len(files)} tiles, the pass needs {n}; corpus not made"
         )
     os.makedirs(dst, exist_ok=True)
     for f in files[:n]:
@@ -159,15 +312,20 @@ def ensure_corpus(src: str, dst: str, n: int) -> int:
     return n
 
 
-def _jar() -> str:
-    import glob
-
+def _root() -> str:
     here = os.path.abspath(__file__)
-    root = (
+    return (
         here[: here.index("/python/geobrix/")]
         if "/python/geobrix/" in here
         else "/root/geobrix"
     )
+
+
+def _jar(root: Optional[str] = None) -> str:
+    """The JAR: `GBX_JAR` first, then `python/geobrix/lib`, then `target/` (the last of a sorted glob in each)."""
+    import glob
+
+    root = root or _root()
     for pattern in (
         os.environ.get("GBX_JAR", ""),
         f"{root}/python/geobrix/lib/geobrix-*-jar-with-dependencies.jar",
@@ -176,19 +334,13 @@ def _jar() -> str:
         found = sorted(glob.glob(pattern)) if pattern else []
         if found:
             return found[-1]
-    raise SystemExit(
-        "PRECONDITION MISSING: no geobrix JAR (python/geobrix/lib or target/); c needs it"
+    raise PreconditionMissing(
+        "no geobrix JAR (python/geobrix/lib or target/); c needs it"
     )
 
 
-def measure(spec: SetSpec, corpus: str) -> Dict[Tuple[str, int], float]:
-    """Run the set's forms at each n on local[8]: a first pass at the smallest n only warms the JVM and the workers."""
-    from unittest import mock
-
+def _spark():
     from pyspark.sql import SparkSession
-
-    from databricks.labs.gbx.bench import levels
-    from databricks.labs.gbx.bench import levels_forms as lf
 
     os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
     spark = (
@@ -196,6 +348,17 @@ def measure(spec: SetSpec, corpus: str) -> Dict[Tuple[str, int], float]:
         .config("spark.driver.memory", "6g").config("spark.ui.enabled", "false").getOrCreate()
     )  # fmt: skip
     spark.sparkContext.setLogLevel("ERROR")
+    return spark
+
+
+def measure(spec: SetSpec, corpus: str, spark=None) -> Dict[Tuple[str, int], float]:
+    """Run the set's forms at each n on local[8]: a first pass at the smallest n only warms the JVM and the workers."""
+    from unittest import mock
+
+    from databricks.labs.gbx.bench import levels
+    from databricks.labs.gbx.bench import levels_forms as lf
+
+    spark = spark or _spark()
     chosen = sorted(
         (f for f in lf.FORMS[spec.mvp] if f.variant in spec.forms),
         key=lambda f: spec.forms.index(f.variant),
@@ -227,7 +390,8 @@ def measure(spec: SetSpec, corpus: str) -> Dict[Tuple[str, int], float]:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
-        description="Local timing pass of a levels set; exits 1 when it flags anything."
+        description="Local timing pass of a levels set. Exit 0: no flags; 1: a form was flagged; 2: a precondition is "
+        "missing or the usage is wrong; 3: the pass failed."
     )
     ap.add_argument("--set", default="IO", help="levels set (only IO is implemented)")
     ap.add_argument(
@@ -242,12 +406,49 @@ def main(argv=None) -> int:
     ap.add_argument(
         "--corpus-dir", help="the copy to time (default: the set's, under /tmp)"
     )
+    ap.add_argument(
+        "--baseline",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="PATH",
+        help="flag a form whose cost per tile is above --baseline-k times the stored one "
+        "(PATH default: test-logs/local-timing-baseline-<set>.json)",
+    )
+    ap.add_argument(
+        "--baseline-write",
+        action="store_true",
+        help="store this pass' cost per tile as the baseline (at --baseline PATH or the default) instead of comparing; "
+        "a pass that flags a form is not stored",
+    )
+    ap.add_argument(
+        "--baseline-k",
+        type=float,
+        default=BASELINE_K_DEFAULT,
+        help=f"the multiple of the baseline that flags a form (default {BASELINE_K_DEFAULT:g})",
+    )
     a = ap.parse_args(argv)
     if a.set not in SETS:
-        raise SystemExit(
-            f"set {a.set!r} is not implemented (have: {', '.join(sorted(SETS))})"
-        )
+        ap.error(f"set {a.set!r} is not implemented (have: {', '.join(sorted(SETS))})")
     spec = SETS[a.set]
+    try:
+        return _run(a, spec)
+    except PreconditionMissing as e:
+        print(f"PRECONDITION MISSING: {e}; local timing not run", file=sys.stderr)
+        return 2
+    except Exception:  # noqa: BLE001 - the pass itself failed: not a flag, so not 1
+        traceback.print_exc()
+        print("local timing failed (see the traceback above)", file=sys.stderr)
+        return 3
+
+
+def _run(a, spec: SetSpec) -> int:
+    path = a.baseline or default_baseline_path(spec.mvp)
+    stored = None
+    if a.baseline is not None and not a.baseline_write:
+        stored = read_baseline(
+            path, spec.mvp, spec.ns
+        )  # before the minutes of the pass
     corpus = a.corpus_dir or spec.corpus_dir
     held = ensure_corpus(
         a.corpus_src or spec.corpus_src, os.path.join(corpus, "rows"), spec.ns[-1]
@@ -262,7 +463,26 @@ def main(argv=None) -> int:
         + table(res, forms=spec.forms, ns=spec.ns, reference=spec.reference)
     )
     found = flags(res, forms=spec.forms, ns=spec.ns, k=a.k, reference=spec.reference)
+    per_tile = per_tile_ms(res, forms=spec.forms, ns=spec.ns)
+    env = _environment()
+    if stored is not None:
+        print(
+            f"\nbaseline {path} (K={a.baseline_k:g}), taken at {stored['env']}; now {env}\n"
+            + baseline_table(per_tile, stored["per_tile_ms"])
+        )
+        if {stored["env"].get("cores"), stored["env"].get("arch")} != {
+            env["cores"],
+            env["arch"],
+        }:
+            print("NOTE: the baseline was taken on another machine; compare with care")
+        found += baseline_flags(per_tile, stored["per_tile_ms"], a.baseline_k)
     print("FLAGS:\n  " + ("\n  ".join(found) if found else "none"))
+    if a.baseline_write:
+        if found:
+            print(f"baseline not written: the pass flagged a form ({path} unchanged)")
+        else:
+            write_baseline(path, spec.mvp, spec.ns, per_tile, env)
+            print(f"baseline written: {path} ({len(per_tile)} forms, {env})")
     return 1 if found else 0
 
 

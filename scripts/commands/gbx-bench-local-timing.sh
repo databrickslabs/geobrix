@@ -15,27 +15,45 @@ show_help() {
     echo -e "${CYAN}Options:${NC}"
     echo -e "  ${GREEN}--set <name>${NC}     Levels set to time (default IO; only IO is implemented)"
     echo -e "  ${GREEN}--k <number>${NC}     Multiple that flags a form: vs the row UDF and vs its peers per tile (default 3)"
+    echo -e "  ${GREEN}--baseline [path]${NC}  Also flag a form whose cost per tile is over --baseline-k times the stored one"
+    echo -e "                      (default path: test-logs/local-timing-baseline-<set>.json; untracked)"
+    echo -e "  ${GREEN}--baseline-write${NC} Store this pass' cost per tile as the baseline (at --baseline path, or the default)."
+    echo -e "                      A pass that flags a form is not stored"
+    echo -e "  ${GREEN}--baseline-k <number>${NC}  Multiple of the baseline that flags a form (default 1.5)"
     echo -e "  ${GREEN}--log <path>${NC}     Write output to log file (filename -> test-logs/<name>)"
     print_lock_help
     echo -e "  ${GREEN}--help${NC}           Show this help"
     echo ""
     echo -e "${CYAN}Needs:${NC} a built JAR (python/geobrix/lib or target/) and the Rust payload"
     echo -e "  (GBX_NATIVE_ROOT, default build/env-wheel/env6/payload, from gbx:build:wheel --env 6)."
-    echo -e "  Exit 2 with a PRECONDITION MISSING line when either is absent; exit 1 when the pass flags a form."
+    echo -e "  Exit 2 with a PRECONDITION MISSING line when either is absent, or the corpus is short, or the baseline"
+    echo -e "  is missing; exit 1 when the pass flags a form; exit 3 when the pass itself fails."
     echo ""
     echo -e "${CYAN}Examples:${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-bench-local-timing.sh${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-bench-local-timing.sh --k 4 --log local-timing.log${NC}"
+    echo -e "  ${YELLOW}bash scripts/commands/gbx-bench-local-timing.sh --baseline-write${NC}   (after a change you trust)"
+    echo -e "  ${YELLOW}bash scripts/commands/gbx-bench-local-timing.sh --baseline${NC}         (before a cluster round)"
     echo ""
 }
 
 SET="IO"
 K=""
 LOG_PATH=""
+BASELINE_ARGS=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --set|--k|--log)
+        --baseline)
+            # the path is optional: take the next word unless it is another option
+            if [[ $# -ge 2 && "$2" != --* ]]; then
+                BASELINE_ARGS="$BASELINE_ARGS --baseline $(printf '%q' "$2")"; shift 2
+            else
+                BASELINE_ARGS="$BASELINE_ARGS --baseline"; shift
+            fi
+            ;;
+        --baseline-write) BASELINE_ARGS="$BASELINE_ARGS --baseline-write"; shift ;;
+        --set|--k|--log|--baseline-k)
             if [[ $# -lt 2 ]]; then
                 echo -e "${RED}Option $1 needs a value${NC}" >&2
                 exit 2
@@ -43,6 +61,7 @@ while [[ $# -gt 0 ]]; do
             case $1 in
                 --set) SET="$2" ;;
                 --k)   K="$2" ;;
+                --baseline-k) BASELINE_ARGS="$BASELINE_ARGS --baseline-k $(printf '%q' "$2")" ;;
                 --log) LOG_PATH=$(resolve_log_path "$2") ;;
             esac
             shift 2
@@ -81,6 +100,7 @@ gbx_native_env_args
 
 CMD="cd /root/geobrix && python3 -m databricks.labs.gbx.bench.local_timing --set $(printf '%q' "$SET")"
 [ -n "$K" ] && CMD="$CMD --k $(printf '%q' "$K")"
+CMD="$CMD$BASELINE_ARGS"
 
 echo -e "${CYAN}Timing the $SET forms on local[8] in $GBX_DEV_CONTAINER (a few minutes)...${NC}"
 docker exec -e PYTHONPATH=/root/geobrix/python/geobrix/src ${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"} \
@@ -91,5 +111,9 @@ if [ $EXIT -eq 0 ]; then
     echo -e "${GREEN}Local timing: no flags.${NC}"
 elif [ $EXIT -eq 1 ]; then
     echo -e "${RED}Local timing flagged a form (see FLAGS above).${NC}"
+elif [ $EXIT -eq 2 ]; then
+    echo -e "${RED}Local timing not run: a precondition is missing (see PRECONDITION MISSING above).${NC}"
+else
+    echo -e "${RED}Local timing failed (exit $EXIT; see above): this is not a flag.${NC}"
 fi
 exit $EXIT

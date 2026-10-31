@@ -1529,6 +1529,12 @@ def test_notebook_runs_the_levels_leg_alone_when_asked():
     assert "_lv.run_mvp(" not in sources(levels_mvp="")  # off unless asked
     assert "LEVELS_SCALES = (1, 4, 16)" in both and "scales=LEVELS_SCALES" in both
     assert "LEVELS_SCALES = (1, 4)" in sources(levels_scales=(1, 4))
+    # --levels-forms limits the forms the notebook times, in the run and in the smoke
+    assert "LEVELS_FORMS = ()" in both
+    assert "LEVELS_FORMS = ('h_combine_avg',)" in sources(
+        levels_forms=("h_combine_avg",)
+    )
+    assert "_f.variant in LEVELS_FORMS" in both
 
 
 def test_a_failed_form_keeps_the_python_workers_cause():

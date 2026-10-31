@@ -814,6 +814,8 @@ def main() -> int:
         levels_scales = tuple(int(x) for x in _arg("--levels-scales", "1,4,16").split(",") if x.strip())
     except ValueError:
         levels_scales = ()
+    # --levels-forms <csv>: time only the forms with these names (the `form` column of the results).
+    levels_forms = tuple(x.strip() for x in _arg("--levels-forms", "").split(",") if x.strip())
     if not levels_scales or min(levels_scales) < 1:
         print("ERROR: --levels-scales must be positive integers, e.g. 1,4,16", file=sys.stderr)
         return 2
@@ -1082,6 +1084,7 @@ def main() -> int:
         levels_only=levels_only,
         levels_uc=levels_uc,
         levels_scales=levels_scales,
+        levels_forms=levels_forms,
         #  Liveness: the heartbeat period, the driver stack dump cap, the test-only stall.
         heartbeat_secs=30,
         launch_token=uuid.uuid4().hex,

@@ -107,6 +107,7 @@ See [`--levels` details](#levels-details) for the metrics.
   - The levels are L1 (Catalyst expression), L2 (Java UDF), L3 (light) and L4 (Unity Catalog function).
 - `--levels-only`: run just this leg, without the heavy tests JAR.
 - `--levels-scales <csv>`: the multiples of each form's base row count. Default: `1,4,16`.
+- `--levels-forms <csv>`: time only the forms with these names (the `form` column of the results). Default: every form of the set. Use it to rerun the rest of a leg after one slow form.
 - `--levels-uc <catalog.schema>`: where the L4 functions were created (`gbx:uc:sql` / `databricks.labs.gbx.uc`). Without it, the L4 forms record a skipped row.
 
 ### FILE legs (lightweight only, serialized)

@@ -381,6 +381,8 @@ LEVELS_ONLY = {levels_only!r}
 LEVELS_UC = {levels_uc!r}
 # --levels-scales <csv>: the multiples of each form's base row count the leg times (default 1,4,16).
 LEVELS_SCALES = {levels_scales!r}
+# --levels-forms <csv>: time only the forms with these names (the `form` column); empty runs them all.
+LEVELS_FORMS = {levels_forms!r}
 # Liveness (see bench/liveness.py): the heartbeat file the launcher's watchdog reads, and the stall cap of the
 # driver stack dump. SMOKE: run only the smoke stage (the worker import check, then every form of the levels
 # set once at SMOKE_ROWS rows) and exit. INJECT_STALL (seconds, test only): a form that sleeps on the driver.
@@ -2959,6 +2961,10 @@ _CELL_LEVELS = """# Levels leg (perf matrix + attribution split): every form of 
 # timed at 1x/4x/16x. Rows land in the same results table; the split is in the row's own columns.
 from databricks.labs.gbx.bench import levels as _lv
 print("=== levels leg starting:", LEVELS_MVP, flush=True)
+if LEVELS_FORMS:
+    from databricks.labs.gbx.bench import levels_forms as _lf
+    _lf.FORMS[LEVELS_MVP] = [_f for _f in _lf.FORMS[LEVELS_MVP] if _f.variant in LEVELS_FORMS]
+    print("=== levels forms limited to:", sorted(_f.variant for _f in _lf.FORMS[LEVELS_MVP]), flush=True)
 # Each form's rows are sunk the moment that form has run at every scale, and the heartbeat names the form in progress.
 _lv_rows = _lv.run_mvp(spark, LEVELS_MVP, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, corpus=CORPUS,
                        schema=".".join(TABLE.split(".")[:2]), uc=(LEVELS_UC or None), where="cluster",
@@ -2994,6 +3000,10 @@ except Exception as _e:
 
 if _smoke["import_check"]["ok"] and LEVELS_MVP:
     from databricks.labs.gbx.bench import levels as _lv
+    if LEVELS_FORMS:
+        from databricks.labs.gbx.bench import levels_forms as _lf
+        _lf.FORMS[LEVELS_MVP] = [_f for _f in _lf.FORMS[LEVELS_MVP] if _f.variant in LEVELS_FORMS]
+        print("=== levels forms limited to:", sorted(_f.variant for _f in _lf.FORMS[LEVELS_MVP]), flush=True)
     _lv_rows = _lv.run_mvp(spark, LEVELS_MVP, RUN_ID, 0, 1, corpus=CORPUS,
                            schema=".".join(TABLE.split(".")[:2]), uc=(LEVELS_UC or None), where="cluster",
                            scales=(1,), base_rows=SMOKE_ROWS, on_form=_sink, heartbeat=HEARTBEAT,
@@ -3771,6 +3781,7 @@ def build_bench_notebook(cfg: dict) -> dict:
         levels_only=bool(cfg.get("levels_only")),
         levels_uc=str(cfg.get("levels_uc", "") or ""),
         levels_scales=tuple(cfg.get("levels_scales") or (1, 4, 16)),
+        levels_forms=tuple(cfg.get("levels_forms") or ()),
         heartbeat_secs=float(cfg.get("heartbeat_secs", 30)),
         launch_token=str(cfg.get("launch_token", "")),
         stall_cap_s=int(cfg.get("stall_cap_s", 900)),

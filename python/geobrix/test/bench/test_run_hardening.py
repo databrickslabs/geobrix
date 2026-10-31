@@ -234,6 +234,52 @@ def test_a_form_sinks_its_rows_before_the_next_form_starts_and_reports_its_tasks
     assert all(r.input_partitions >= 1 and "tasks=" in r.note for r in rows)
 
 
+def test_a_scale_that_never_finishes_loses_no_row_of_the_scales_before_it(
+    spark_session_local, tmp_path, monkeypatch
+):
+    """d-rs got no row after hours because the rows of a form sank only once all its scales had run."""
+    tiny_forms(monkeypatch, 1)
+    real, calls, sunk = levels._run_one, [], []
+
+    def hangs_at_4x(ctx, form, base, requested):
+        calls.append(requested)
+        if len(calls) == 2:
+            raise KeyboardInterrupt("the 4x scale was cancelled")
+        return real(ctx, form, base, requested)
+
+    monkeypatch.setattr(levels, "_run_one", hangs_at_4x)
+    with pytest.raises(KeyboardInterrupt):
+        levels.run_mvp(
+            spark_session_local, "S", "t", 0, 1, corpus=str(tmp_path), schema=None, scales=(1, 4), where="venv",
+            base_rows=50, only_levels=("L3",), on_form=lambda rs: sunk.append([(r.rows, r.status) for r in rs]),
+        )  # fmt: skip
+    assert sunk == [[(50, "ok")]]
+
+
+def test_a_sunk_row_keeps_serialized_bytes_only_where_the_scales_so_far_show_them_linear(
+    spark_session_local, tmp_path, monkeypatch
+):
+    """The linearity guard needs two scales: the first row sinks without the figure, the second keeps it, and the rows the
+    run returns are guarded as a whole (both keep it), as before."""
+    import dataclasses
+
+    tiny_forms(monkeypatch, 1)
+    real, sunk = levels._run_one, []
+
+    def with_bytes(ctx, form, base, requested):
+        return dataclasses.replace(
+            real(ctx, form, base, requested), ser_sent_bytes=1000 * requested
+        )
+
+    monkeypatch.setattr(levels, "_run_one", with_bytes)
+    out = levels.run_mvp(
+        spark_session_local, "S", "t", 0, 1, corpus=str(tmp_path), schema=None, scales=(1, 4), where="venv",
+        base_rows=50, only_levels=("L3",), on_form=lambda rs: sunk.extend(rs),
+    )  # fmt: skip
+    assert [r.ser_sent_bytes for r in sunk] == [None, 200000]
+    assert [r.ser_sent_bytes for r in out] == [50000, 200000]
+
+
 def test_the_injected_stall_form_sleeps_on_the_driver_after_the_first_form(
     spark_session_local, tmp_path, monkeypatch
 ):
@@ -271,9 +317,10 @@ def test_a_form_is_timed_and_capped_per_scale_not_once_for_the_whole_ladder(
     assert log == [
         ("begin", f"{B}:L3:c0 @1x", 1, 60),
         ("end", False),
+        ("sink", 1),  # a scale's row sinks the moment that scale is done
         ("begin", f"{B}:L3:c0 @4x", 4, 240),
         ("end", True),
-        ("sink", 2),  # rows still sink per form, after its last scale
+        ("sink", 1),
     ]
 
 

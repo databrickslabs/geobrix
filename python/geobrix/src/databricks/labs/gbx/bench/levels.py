@@ -114,8 +114,9 @@ def run_mvp(
     the LAST measured iteration (one sample), and the worker memory peak covers warmup and all
     measured iterations. A metric with no value is NULL, with the reason in the row's `note`.
 
-    Liveness: `on_form` is called with each form's rows as soon as that form has run at every scale (the
-    caller sinks them there, so a hung later form loses nothing), and `heartbeat` (``liveness.Heartbeat``)
+    Liveness: `on_form` is called with one row as soon as that form's scale has run (the caller sinks it there, so a
+    hung later scale or form loses nothing; a row's `ser_sent_bytes` is guarded by the scales run so far, the returned
+    rows by all of them), and `heartbeat` (``liveness.Heartbeat``)
     is told which form, at which scale, is in progress (one begin/end per scale) together with the cap that
     applies to it: `form_cap_s` (the cap of a 1x form) times the scale, so a long ladder is not judged by
     the 1x cap. `report_tasks` records, per row, the number of Spark tasks the
@@ -190,10 +191,11 @@ def run_mvp(
                     median_s=done.iter_median_s if done.status == "ok" else None,
                     status=done.status,
                 )
-        rows = _guard_sent(rows)
-        if on_form:
-            on_form(rows)
-        out += rows
+            if on_form:
+                # sunk now, not after the last scale: a later scale that hangs or is cancelled loses nothing. The
+                # linearity guard needs two scales, so this row is guarded by the scales run so far.
+                on_form([_guard_sent(rows)[-1]])
+        out += _guard_sent(rows)
     return out
 
 

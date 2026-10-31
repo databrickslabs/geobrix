@@ -2965,7 +2965,7 @@ if LEVELS_FORMS:
     from databricks.labs.gbx.bench import levels_forms as _lf
     _lf.FORMS[LEVELS_MVP] = [_f for _f in _lf.FORMS[LEVELS_MVP] if _f.variant in LEVELS_FORMS]
     print("=== levels forms limited to:", sorted(_f.variant for _f in _lf.FORMS[LEVELS_MVP]), flush=True)
-# Each form's rows are sunk the moment that form has run at every scale, and the heartbeat names the form in progress.
+# Each (form, scale) row is sunk the moment that scale has run, and the heartbeat names the form in progress.
 _lv_rows = _lv.run_mvp(spark, LEVELS_MVP, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, corpus=CORPUS,
                        schema=".".join(TABLE.split(".")[:2]), uc=(LEVELS_UC or None), where="cluster",
                        scales=LEVELS_SCALES, on_form=_sink, heartbeat=HEARTBEAT, form_cap_s=STALL_CAP_S,

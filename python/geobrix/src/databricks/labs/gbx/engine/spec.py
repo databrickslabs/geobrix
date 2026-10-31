@@ -43,7 +43,9 @@ class DataError(Exception):
 
 def check_value(sql_name: str, param: str, value) -> None:
     """Refuse a string value that could name a file or a URL (GDAL reads files and URLs through some
-    arguments: a CRS, a dataset, an @file). Binder output is not checked: the engine writes it.
+    arguments: a dataset, an @file). Binder output is not checked: the engine writes it. A `crs` value is judged by
+    the canonical CRS resolver's kinds instead (``core.crs.crs_text_kind``), which also refuses a URL, a file name
+    and a grid named by path, but not the ``$schema`` URL of a PROJJSON.
     """
     if not isinstance(value, str):
         return

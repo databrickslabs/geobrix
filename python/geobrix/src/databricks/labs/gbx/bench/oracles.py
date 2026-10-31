@@ -799,6 +799,24 @@ SPEC_SE: Tuple[Case, ...] = (
         None,
         ("session",),
     ),
+    # A PROJJSON target CRS (its "$schema" is a URL, which is never fetched) reprojects like its EPSG code.
+    Case(
+        "se_tcrs_projjson",
+        T,
+        (Build("tile_3857"), Build("projjson_4326")),
+        "tile_props",
+        ("EPSG:4326", 4326),
+        ("session",),
+    ),
+    # A target CRS that IS a URL is refused before GDAL sees it: an error tile with a Fix, the same on every level.
+    Case(
+        "se_tcrs_url",
+        T,
+        (Build("tile_4326"), "https://example.com/crs.wkt"),
+        "error_fix",
+        None,
+        ("session",),
+    ),
     # Virtual tiles: a VRT is read (the policy allows it); a stored GDAL pipeline, a VRT over one, a VRT with a
     # Python pixel function, a VRT raw band (a file's bytes read with no driver) and a missing file are error
     # tiles, never run and never a failed query.
@@ -1355,6 +1373,13 @@ def _build(name: str, tmpdir: str):
         return _tile(_tile_bytes("EPSG:4326"))
     if name == "tile_3857":
         return _tile(_tile_bytes("EPSG:3857"))
+    if (
+        name == "projjson_4326"
+    ):  # a CRS-as-PROJJSON INPUT value (it carries a "$schema" URL)
+        from databricks.labs.gbx.core.crs import resolve_crs as core_resolve
+        from databricks.labs.gbx.core.crs import to_pyproj_crs
+
+        return to_pyproj_crs(core_resolve("EPSG:4326")).to_json()
     if name == "wkt_3857":
         from databricks.labs.gbx.pyrx.core.crs import resolve_crs
 

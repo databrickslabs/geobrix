@@ -65,7 +65,9 @@ object GdalSpecArgv {
     def fmtDouble(x: Double): String =
         if (x == 0.0) "0" else new java.math.BigDecimal(java.lang.Double.toString(x)).stripTrailingZeros.toPlainString
 
-    /** Refuse a string value that could name a file or a URL. Binder output is not checked: the engine writes it. */
+    /** Refuse a string value that could name a file or a URL. Binder output is not checked: the engine writes it. A
+      * `crs` value is judged by the canonical resolver's kinds instead (`SpatialRefOps.crsTextKind`), which also
+      * refuses a URL, a file name and a grid named by path, but not the schema URL a PROJJSON carries. */
     def checkValue(sqlName: String, param: String, value: Any): Unit = value match {
         case s: String =>
             val v = s.trim
@@ -123,10 +125,11 @@ object GdalSpecArgv {
             // The canonical resolver refuses a file name, a URL or a grid named by path, and parses with file and
             // network access off; the light binder (`engine/argv.canonical_crs`) makes the same OSR calls and judges
             // them the same way: a failing return, or a failure GDAL reports during the parse (PROJ cannot build the
-            // CRS, e.g. a required grid it cannot find), refuses the value.
+            // CRS, e.g. a required grid it cannot find), refuses the value. The gate is the resolver's kinds
+            // (`SpatialRefOps.crsTextKind`), not `checkValue`: a value that IS a URL, a file name or a grid named by
+            // path is refused there, while a PROJJSON's `$schema` URL or a WKT2 `URI[...]` (never fetched) is not.
             val sr =
                 try {
-                    checkValue(fn.sqlName, a.source.get, value)
                     gdal.ErrorReset()
                     SpatialRefOps.resolveCrs(value.toString)
                 } catch {

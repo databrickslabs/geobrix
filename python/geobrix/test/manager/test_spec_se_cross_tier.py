@@ -103,6 +103,7 @@ SAME_PIXELS = [
     "tcrs_proj4",
     "tcrs_wkt",
     "se_ma_norm_diff",
+    "se_tcrs_projjson",
 ]
 
 

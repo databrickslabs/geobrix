@@ -123,8 +123,10 @@ def _bind_value(fn, arg, value) -> Optional[str]:
             )
         return choices[word]
     if t == "crs":
+        # Gated by the canonical CRS resolver's kinds (``core.crs.crs_text_kind``, run by ``canonical_crs``), not by
+        # ``check_value``: a value that IS a URL, a file name or a grid named by path is refused there, while a
+        # PROJJSON's ``$schema`` URL or a WKT2 ``URI[...]`` (never fetched) does not refuse the CRS.
         try:
-            check_value(fn.sql_name, arg.source, value)
             return canonical_crs(str(value))
         except (
             Exception

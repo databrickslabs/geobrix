@@ -430,6 +430,10 @@ def test_a_native_payload_reaches_the_scala_test_jvm(sandbox):
     assert env["GBX_NATIVE_ROOT"] == "/root/geobrix/build/env-wheel/env6/payload" and env["LC_ALL"] == "C.UTF-8"
     sandbox.run("gbx-test-scala.sh", "--suite", "x.Y")
     assert "GBX_NATIVE_ROOT" not in maven_env()
+    # the per-package loop passes it to every Maven run
+    sandbox.run("gbx-test-scala.sh", "--by-package", GBX_NATIVE_ROOT="build/env-wheel/env6/payload")
+    by_package = [e for c, e in zip(sandbox.execs(), sandbox.exec_envs()) if "mvn test" in c[-1]][-6:]
+    assert [e.get("GBX_NATIVE_ROOT") for e in by_package] == ["/root/geobrix/build/env-wheel/env6/payload"] * 6
 
 
 def _markers_of_calls(log):

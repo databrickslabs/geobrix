@@ -337,6 +337,34 @@ DEFAULT_RUN_TIMEOUT_MIN = 360  # the real run's time limit, a levels leg include
 DEFAULT_SMOKE_TIMEOUT_MIN = 15
 
 
+def levels_scales_problem(levels_mvp, levels_scales, root) -> Optional[str]:
+    """Why the levels ladder can never pass the client-input cap, or None when every scale fits.
+
+    The SE inputs are 4 MiB DEM tiles built on the client (cap: 64 MiB), so only 1x fits; the default ladder 1,4,16
+    would fail on the cluster, after the cold start. The message names ``--levels-scales`` and the scales that fit.
+    """
+    if not levels_mvp:
+        return None
+    sys.path.insert(0, str(Path(root) / "python/geobrix/src"))
+    try:
+        from databricks.labs.gbx.bench import clientcap, preflight
+    except ImportError:  # no pyspark here: the form table cannot be read, and the preflight says so
+        return None
+
+    if not preflight.client_cap_problems(levels_mvp, levels_scales):
+        return None
+    fitting = [s for s in levels_scales if not preflight.client_cap_problems(levels_mvp, (s,))]
+    wanted = ",".join(str(s) for s in levels_scales)
+    if fitting:
+        fix = f"use --levels-scales {','.join(str(s) for s in fitting)} (the requested scales that fit)"
+    else:
+        fix = "use --levels-scales 1 (no requested scale fits; 1x is the base row count)"
+    return (
+        f"--levels {levels_mvp} with --levels-scales {wanted} builds inputs on the client above the "
+        f"{clientcap.MAX_CLIENT_BYTES // 2**20} MiB cap and would fail on the cluster: {fix}"
+    )
+
+
 def launch_problems(w, *, serverless, wheel, env_version, levels_mvp, levels_scales, root) -> list:
     """What makes this launch fail, found with no compute: the Serverless environment spec, the staged wheel against
     the local build, and (for a levels run) the probe SQL on a local Spark session and the client-side input sizes."""
@@ -837,6 +865,12 @@ def main() -> int:
             "ERROR: --levels-only and --levels-uc need --levels <S|G|A|H|SE|IO>.",
             file=sys.stderr,
         )
+        return 2
+    scales_problem = levels_scales_problem(
+        levels_mvp, levels_scales, Path(os.environ.get("GBX_SOURCE_ROOT") or TESTS_DIR.parent.parent)
+    )
+    if scales_problem:
+        print(f"ERROR: {scales_problem}", file=sys.stderr)
         return 2
     if levels_only:
         # The leg installs its own levels through register(); it never uses the tests JAR.

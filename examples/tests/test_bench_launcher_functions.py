@@ -218,6 +218,19 @@ def test_a_time_limit_that_is_not_a_positive_whole_number_of_minutes_is_refused_
     assert flag in err and "whole number of minutes" in err and err.count("\n") == 1
 
 
+def test_the_default_se_ladder_is_refused_up_front_with_the_scales_that_fit(monkeypatch, capsys):
+    """SE builds 4 MiB DEM tiles on the client: only 1x fits under the 64 MiB cap, so 1,4,16 can never pass."""
+    pytest.importorskip("pyspark")  # the check reads the form table (levels_forms), which imports pyspark
+    base = ["push_and_run_bench_on_cluster.py", "--levels", "SE"]
+    monkeypatch.setattr(launcher, "WorkspaceClient", lambda *a, **k: pytest.fail("work started before the check"), raising=False)
+    monkeypatch.setattr(launcher.sys, "argv", base)
+    assert launcher.main() == 2
+    err = capsys.readouterr().err
+    assert "--levels-scales" in err and "SE" in err and "1,4,16" in err and "--levels-scales 1" in err
+    assert launcher.levels_scales_problem("SE", (1,), launcher.TESTS_DIR.parent.parent) is None  # 1x fits
+    assert launcher.levels_scales_problem("S", (1, 4, 16), launcher.TESTS_DIR.parent.parent) is None  # other sets are fine
+
+
 def test_the_levels_run_gets_the_same_default_time_limit_as_any_other(monkeypatch):
     assert launcher.DEFAULT_RUN_TIMEOUT_MIN == 360
 

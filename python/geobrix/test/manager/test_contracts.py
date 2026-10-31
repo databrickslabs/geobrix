@@ -234,6 +234,28 @@ def test_level_selection_contract(fn, case, monkeypatch):
         assert choice.variant != levels.ENGINE or choice.level != "L1"
 
 
+# Functions whose preferred levels may return different types (none today).
+RETURN_TYPE_ALLOWLIST: dict = {}
+
+
+def test_preferred_levels_share_one_return_type():
+    """A SQL name returns one type on every compute: each preferred level's session return type
+    (its `session_returns`, else the row's `returns.session`) is the same."""
+    mixed = {}
+    for name, pref in levels.PREFERENCE.items():
+        fn = MAN.functions.get(name)
+        if fn is None or name in RETURN_TYPE_ALLOWLIST:
+            continue
+        types = {
+            lv: fn.levels[lv].get("session_returns", fn.returns_session)
+            for lv in pref
+            if lv in fn.levels
+        }
+        if len(set(types.values())) > 1:
+            mixed[name] = types
+    assert not mixed, f"preferred levels return different types: {mixed}"
+
+
 @pytest.mark.parametrize(
     "fn", [f for f in FNS if {"L1", "L2"} & set(f.levels)], ids=lambda f: f.sql_name
 )

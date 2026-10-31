@@ -262,7 +262,7 @@ For **coverage/assignment cell-set semantics and computed values**, behavior is 
 - Covered-but-missing cells are emitted with `NULL` measures under `coverage='complete'` on both tiers.
 - For `rastertogrid*`, area-weighted `covering` produces mass-conserving weights on both tiers. For `tessellate`, `covering` is a covering-set clip — cells are emitted iff they have positive-area overlap with the raster. Both behaviors are verified by cross-tier parity tests.
 
-**Grouped-aggregator return-type difference:** the grouped aggregators (`<grid>_cellfill` and `rst_<grid>_rasterize_agg`) return the full struct or tile on the heavyweight tier, but return `BINARY` on the lightweight **SQL** tier — a grouped-aggregate `pandas_udf` cannot return a `StructType`. The lightweight **Python** wrappers (not SQL) return the full struct.
+**Grouped-aggregator return-type difference:** the grouped aggregators (`<grid>_cellfill` and `rst_<grid>_rasterize_agg`) return the full struct or tile on the heavyweight tier, but return `BINARY` on the lightweight **SQL** tier — a grouped-aggregate `pandas_udf` cannot return a `StructType`. The lightweight **Python** wrappers (not SQL) return the full struct. `gbx_rst_bng_rasterize_agg` is the exception: its SQL function returns `BINARY` on every compute, whichever tier serves it.
 
 Switch tiers with a one-line import change; the function calls are identical:
 

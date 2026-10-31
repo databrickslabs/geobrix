@@ -379,7 +379,7 @@ GROUPED_FILE_ONLY = {grouped_file_only!r}
 LEVELS_MVP = {levels_mvp!r}
 LEVELS_ONLY = {levels_only!r}
 LEVELS_UC = {levels_uc!r}
-# --levels-scales <csv>: the multiples of each form's base row count the leg times (default 1,4,16).
+# --levels-scales <csv>: the multiples of each form's base row count the leg times (None: the set's own ladder, 1,4,16 unless it has one).
 LEVELS_SCALES = {levels_scales!r}
 # --levels-forms <csv>: time only the forms with these names (the `form` column); empty runs them all.
 LEVELS_FORMS = {levels_forms!r}
@@ -3780,7 +3780,7 @@ def build_bench_notebook(cfg: dict) -> dict:
         levels_mvp=str(cfg.get("levels_mvp", "") or ""),
         levels_only=bool(cfg.get("levels_only")),
         levels_uc=str(cfg.get("levels_uc", "") or ""),
-        levels_scales=tuple(cfg.get("levels_scales") or (1, 4, 16)),
+        levels_scales=tuple(cfg["levels_scales"]) if cfg.get("levels_scales") else None,
         levels_forms=tuple(cfg.get("levels_forms") or ()),
         heartbeat_secs=float(cfg.get("heartbeat_secs", 30)),
         launch_token=str(cfg.get("launch_token", "")),

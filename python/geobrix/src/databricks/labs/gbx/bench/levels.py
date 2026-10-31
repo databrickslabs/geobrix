@@ -76,6 +76,14 @@ def detect_compute(spark) -> str:
     return "standard" if is_connect(spark) else "dedicated"
 
 
+def ladder(mvp: str, scales=None) -> tuple:
+    """The multiples to time: the ones given, else the set's own ladder (IO has one), else 1 / 4 / 16. "Not given" is
+    None, so an explicit 1 / 4 / 16 is kept."""
+    from databricks.labs.gbx.bench import levels_forms as lf
+
+    return lf.SCALES.get(mvp, (1, 4, 16)) if scales is None else tuple(scales)
+
+
 def run_mvp(
     spark,
     mvp: str,
@@ -86,7 +94,7 @@ def run_mvp(
     corpus: str,
     schema: Optional[str],
     uc: Optional[str] = None,
-    scales=(1, 4, 16),
+    scales=None,
     where: str = "cluster",
     only_levels: Optional[Tuple[str, ...]] = None,
     base_rows: Optional[int] = None,
@@ -121,12 +129,7 @@ def run_mvp(
         raise ValueError(
             f"no forms for MVP {mvp!r} yet (have: {', '.join(sorted(lf.FORMS))})"
         )
-    if tuple(scales) == (
-        1,
-        4,
-        16,
-    ):  # the default ladder: a set with a ladder of its own (IO) takes that
-        scales = lf.SCALES.get(mvp, scales)
+    scales = ladder(mvp, scales)
     ctx = _Ctx(
         spark, warmup, measured, corpus, schema, uc, {}, report_tasks=report_tasks
     )
@@ -274,6 +277,26 @@ def _cannot_run_here(
     return None
 
 
+def _ensure_setup(ctx: _Ctx, form: Form) -> None:
+    """Run the form's `setup` unless what it installs is already installed. A setup that installs a function says so
+    (`setup.installs = {fn: (level, variant)}`) and is judged by what is installed now, so a later form that put another
+    level there makes the next one install its own again; any other setup runs once per name.
+    """
+    if not form.setup:
+        return
+    from databricks.labs.gbx.manifest import resolve_ref
+
+    setup = resolve_ref(form.setup)
+    installs = getattr(setup, "installs", None)
+    if installs is None:
+        if form.setup not in ctx.setups:
+            setup(ctx.spark)
+            ctx.setups.add(form.setup)
+    elif any(ctx.registered.get(fn) != want for fn, want in installs.items()):
+        setup(ctx.spark)
+        ctx.registered.update(installs)
+
+
 def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
     from databricks.labs.gbx import register
     from databricks.labs.gbx.bench import levels_forms as lf
@@ -298,9 +321,7 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
             forced = {form.fn: want} if form.level in ("L1", "L2", "L3") else None
             register(spark, only=[form.fn], _levels=forced)
             ctx.registered[form.fn] = want
-    if form.setup and form.setup not in ctx.setups:
-        resolve_ref(form.setup)(spark)
-        ctx.setups.add(form.setup)
+    _ensure_setup(ctx, form)
     holder: Dict = {}
 
     def _go():

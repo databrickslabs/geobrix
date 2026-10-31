@@ -1581,13 +1581,14 @@ BASE_ROWS["io_rows"] = 1000
 SCALES: Dict[str, tuple] = {
     "IO": IO_SCALES
 }  # a set whose ladder is not 1 / 4 / 16 (run_mvp takes it for the default)
-# The only place a writer form deletes anything: under a scratch directory of this exact shape.
+# The scratch directory of a run that is not on a Volume (a local probe): under the temp directory.
 SCRATCH_PREFIX = "/geobrix/0.6.0/scratch/"
 
 
 def _io_scratch(corpus: str) -> str:
-    """The scratch directory of a run: `.../geobrix/0.6.0/scratch` beside the corpus, or the temp directory's when the
-    corpus is not on a Volume (a local probe)."""
+    """The scratch directory of a run: `scratch` beside the corpus on a Volume, or `geobrix/0.6.0/scratch` under the temp
+    directory when the corpus is not (a local probe). A writer form deletes only a strict child of it.
+    """
     if corpus.startswith("/Volumes/"):
         return os.path.dirname(corpus.rstrip("/")) + "/scratch"
     import tempfile
@@ -1596,7 +1597,12 @@ def _io_scratch(corpus: str) -> str:
 
 
 def _io_spec(spark, n, corpus, schema):
-    """One row `(rows_dir, n, scratch)`: the forms read the corpus themselves (a table of tiles would leave the read out)."""
+    """One row `(rows_dir, n, scratch)`: the forms read the corpus themselves (a table of tiles would leave the read out).
+    The light raster reader and writer are registered here with the input, outside the timed region.
+    """
+    from databricks.labs.gbx.ds.register import register as register_readers
+
+    register_readers(spark)
     rows = corpus.rstrip("/") + "/rows"
     if not os.path.isdir(rows):
         return None
@@ -1621,16 +1627,16 @@ def _io_args(spark, src):
     return r["rows_dir"], int(r["n"]), r["scratch"]
 
 
-def remove_scratch(path: str) -> None:
-    """Delete a writer form's output, and only under the scratch prefix: anything else is refused."""
-    import shutil
+def remove_scratch(path: str, scratch: str) -> None:
+    """Delete a writer form's output: only a STRICT CHILD of the run's scratch directory (`_io_scratch`), compared as
+    resolved paths. The scratch directory itself, a sibling and a path that climbs out of it are refused.
+    """
+    root, target = os.path.realpath(scratch), os.path.realpath(path)
+    if target == root or os.path.commonpath([root, target]) != root:
+        raise ValueError(f"refusing to delete {path!r}: not inside {scratch!r}")
+    from databricks.labs.gbx.ds._scratch import remove_scratch_dir
 
-    norm = os.path.normpath(path)
-    if SCRATCH_PREFIX not in norm + "/" or ".." in path.split("/"):
-        raise ValueError(
-            f"refusing to delete {path!r}: not under a '...{SCRATCH_PREFIX}' directory"
-        )
-    shutil.rmtree(norm, ignore_errors=True)
+    remove_scratch_dir(target)
 
 
 def _io_read(spark, rows_dir, n, kind):
@@ -1638,10 +1644,8 @@ def _io_read(spark, rows_dir, n, kind):
     import functools
 
     from databricks.labs.gbx.ds.file_gbx import report_detected_cap
-    from databricks.labs.gbx.ds.register import register
     from databricks.labs.gbx.pyrx import _mvp_forms
 
-    register(spark)  # the light raster reader and writer
     if kind == "a":
         return spark.read.format("gdal").load(rows_dir).limit(n)
     if kind == "b":
@@ -1691,10 +1695,10 @@ def _io_write(fmt, kind):
     """A writer form: write the `kind` read as `fmt` into a fresh scratch directory, count what landed, delete it."""
 
     def run(spark, src):
-        import uuid
+        from databricks.labs.gbx.ds._scratch import new_scratch_dir
 
         rows_dir, n, scratch = _io_args(spark, src)
-        out = f"{scratch}/io_{uuid.uuid4().hex[:12]}"
+        out = new_scratch_dir(scratch, "io")
         os.makedirs(scratch, exist_ok=True)
         try:
             # the light writer takes overwrite; the heavy one is append-only (it raises on overwrite)
@@ -1724,7 +1728,7 @@ def _io_write(fmt, kind):
             size = sum(os.path.getsize(f) for f in files)
             return len(files), size, len(files)
         finally:
-            remove_scratch(out)
+            remove_scratch(out, scratch)
 
     run.__name__ = f"io_write_{fmt}_{kind}"
     return run
@@ -1743,6 +1747,10 @@ def register_io_materialize(spark):
 
     register(spark, only=[IO_FN], _levels={IO_FN: ("L1", "-")})
 
+
+register_io_materialize.installs = {
+    IO_FN: ("L1", "-")
+}  # judged by what is installed (levels._ensure_setup)
 
 _IO = "databricks.labs.gbx.bench.levels_forms:"
 
@@ -1780,6 +1788,9 @@ def register_io_udf(spark):
     from databricks.labs.gbx import register
 
     register(spark, only=[IO_FN], _levels={IO_FN: ("L3", "-")})
+
+
+register_io_udf.installs = {IO_FN: ("L3", "-")}
 
 
 # Module-level names the forms resolve by ``module:function``.

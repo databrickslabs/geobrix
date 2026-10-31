@@ -111,6 +111,54 @@ def test_a_form_prints_its_start_and_its_end_with_the_elapsed_and_the_median(
     ), done2  # no median known: none printed
 
 
+def test_the_done_line_names_a_status_that_is_not_ok_after_the_median(tmp_path, capsys):
+    hb = liveness.Heartbeat(str(tmp_path / "hb.json"), interval=3600).start()
+    for status, median in (("error", None), ("timeout", 2.5), ("ok", 1.0)):
+        hb.begin("f", 1, 1, rows=10, name="f", set_name="S")
+        hb.end(median_s=median, status=status)
+    hb.stop()
+    done = [ln for ln in _printed(capsys) if " DONE " in ln]
+    assert [ln.split(" DONE ")[1].split(" ", 2)[2:] for ln in done] == [
+        ["status error"],
+        ["median 2.50s status timeout"],
+        ["median 1.00s"],  # ok is the default: not printed
+    ], done
+
+
+def test_a_print_that_raises_does_not_kill_the_heartbeat_thread_or_its_json_beat(
+    tmp_path, monkeypatch, capsys
+):
+    """A closed stdout made `_say_running` raise in the daemon thread, which ended it, and the JSON beat with it."""
+    import builtins
+
+    real = builtins.print
+
+    def printing(*a, **k):
+        if k.get("file") is None:  # the tagged lines go to stdout: it is "closed"
+            raise ValueError("I/O operation on closed file")
+        return real(*a, **k)
+
+    path = tmp_path / "hb.json"
+    hb = liveness.Heartbeat(str(path), interval=0.05, print_every=0.05).start()
+    monkeypatch.setattr(builtins, "print", printing)
+    try:
+        hb.begin(
+            "f", 1, 1, rows=10, name="f", set_name="S"
+        )  # START raises into the caller too
+        seq = json.loads(path.read_text())["seq"]
+        time.sleep(0.4)
+        assert hb._thread.is_alive()
+        assert json.loads(path.read_text())["seq"] > seq  # the beat kept going
+        hb.end()
+    finally:
+        hb.stop()
+        monkeypatch.setattr(builtins, "print", real)
+    assert (
+        "heartbeat print failed (ValueError: I/O operation on closed file)"
+        in capsys.readouterr().err
+    )
+
+
 def test_a_running_form_prints_a_line_each_print_interval_apart_from_the_json_beat(
     tmp_path, capsys
 ):

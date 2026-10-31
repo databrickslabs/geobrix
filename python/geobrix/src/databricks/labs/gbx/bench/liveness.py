@@ -162,7 +162,10 @@ class Heartbeat:
         return "none" if cap_s is None else f"{cap_s:g}s"
 
     def _say(self, what: str, tail: str) -> None:
-        """Print one tagged line for the form in progress (nothing when it was begun without a ``set_name``)."""
+        """Print one tagged line for the form in progress (nothing when it was begun without a ``set_name``).
+
+        A print that fails is reported on stderr and never raised, as ``beat`` does for its write.
+        """
         with self._lock:
             if not self._set_name or not self._form:
                 return
@@ -171,7 +174,19 @@ class Heartbeat:
                 f"[LEVELS {self._set_name}] form {self._index}/{self._total} {self._name} "
                 f"scale {self._scale}x rows {rows} {what} {tail}"
             )
-        print(line, flush=True)
+        try:
+            print(line, flush=True)
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - a closed stdout must not end the heartbeat thread (and its JSON beat)
+            try:
+                print(
+                    f"heartbeat print failed ({type(exc).__name__}: {exc})",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            except Exception:  # noqa: BLE001 - nowhere left to say it
+                pass
 
     def _say_running(self) -> None:
         with self._lock:

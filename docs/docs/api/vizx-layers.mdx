@@ -13,7 +13,7 @@ A single GeoBrix analysis often produces several result layers at once — vecto
 When the total GeoJSON + PNG payload fits within the embed budget (small by default in a notebook — see the ladder below), `plot_interactive` embeds everything inline in the HTML string — no tile server, no separate request. When it doesn't fit, the embed-size ladder picks the right path automatically. The runnable example below composites two vector layers; raster- and grid-layer usage is shown in the [Vector](./vizx-vector) and [Raster](./vizx-raster) references.
 
 :::note Opt-in extra
-The compositor requires `geobrix[vizx]`. Install with:
+The compositor requires the `[vizx]` extra. On Databricks, install it with the env wheel for your runtime, as [Installation](../installation#whl-only) describes. Off Databricks, use the plain wheel:
 ```bash
 pip install "geobrix[vizx]"
 ```
@@ -256,7 +256,7 @@ If you already have a PMTiles archive and only need an overview embed (for examp
 :::note Requires tippecanoe
 `simplify_tiles_from_source` requires the `tippecanoe` binary (the `interactive_fit="downzoom"` archive reduction above does not).
 
-`pip install "geobrix[vizx]"` installs the `tippecanoe` Python wheel (manylinux), so **Databricks clusters and Serverless are covered automatically** — no extra step needed.
+The `[vizx]` extra installs the `tippecanoe` Python wheel (manylinux), so the env wheel with `[vizx]` brings it to Databricks clusters and Serverless. No extra step is needed.
 
 On **macOS** (especially Apple Silicon) the manylinux wheel may be unavailable or unreliable; use `brew install tippecanoe` as a fallback. The rest of VizX (plotting, compositing, audit) works without tippecanoe.
 :::

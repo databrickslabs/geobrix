@@ -81,7 +81,7 @@ The heavyweight tier runs on **dedicated clusters**. Install the env wheel and t
 - Not available on standard (shared) access mode, with or without a DCS image (use the lightweight tier there)
 - Requires native GDAL libraries, which the env wheel carries (and the DCS image, from the same wheel)
 - Runs on x86 for DBR 17.3 / 18 / 19, and on Graviton (arm64) for DBR 19
-- **Band math with `gdal_calc`.** Heavyweight `rst_mapalgebra` and `rst_ndvi` run `gdal_calc.py`, which is not on the JVM's `PATH` on a cluster that has only the env wheel. They fail there. Use the lightweight functions.
+- **Band math with `gdal_calc`.** Heavyweight `rst_mapalgebra` failed on every cluster GeoBrix tested that has only the env wheel. The JVM cannot find `gdal_calc.py` on its `PATH`. `rst_ndvi` and `rst_chm` run the same code path, so expect the same failure. The DCS image is untested for it. Use the lightweight functions.
 
 Databricks Runtime:
 - **Minimum**: DBR 17.1 (recommended/tested: DBR 17.3 LTS or 18 LTS)

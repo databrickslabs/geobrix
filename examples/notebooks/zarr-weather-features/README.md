@@ -10,10 +10,9 @@ features need, so that it stays readable for training.
 
 ![Zarr weather features: register a cube in place, read and sample it, write a derived variable back, map it as tiles, tag the version](../../../resources/images/diagrams/zarr-weather-features/zarr-weather-features.png)
 
-> **Lightweight tier only.** Zarr runs in the lightweight tier, so there is no JAR or init
-> script: `geobrix[light_env6,zarr_env6,vizx]` on **Serverless environment 6** (the notebook's
-> target), or `geobrix[light_dbr19,zarr_dbr19,vizx]` on a classic **Databricks Runtime 19**
-> cluster. See [Zarr Stores](https://databrickslabs.github.io/geobrix/docs/formats/zarr#what-you-need).
+> **Lightweight tier only.** Zarr runs in the lightweight tier, so there is no JAR:
+> `geobrix[zarr,vizx]` from the env6 wheel on **Serverless environment 6** (the notebook's
+> target), or on a classic **Databricks Runtime 19** cluster. See [Zarr Stores](https://databrickslabs.github.io/geobrix/docs/formats/zarr#what-you-need).
 
 > **Data: the GeoBrix sample cube.** Two days of made-up hourly weather on a one-degree global
 > grid, `time` (48) by `latitude` (181) by `longitude` (360), with `t2m`, `u10`, `v10` and `msl`,
@@ -50,7 +49,7 @@ unchanged. The committed outputs are from a run on Serverless environment 6.
 - **Serverless environment 6, or Databricks Runtime 19** (Python 3.12). Zarr stores need one of
   the two.
 - **GeoBrix 0.6.0.** Point the `%pip install` cell at your staged
-  `geobrix-0.6.0-py3-none-any.whl`, with the extras for your compute (above).
+  `geobrix-0.6.0+env6-py3-none-any.whl`, with the extras `zarr` and `vizx`.
 - **A schema and a Volume you can write to.** The notebook creates two Unity Catalog tables in
   `CATALOG.SCHEMA` (the store's manifest table and the features table) and writes the files of
   its writes to a folder under `WORK_DIR`. Each run gets its own `RUN_ID`, so runs never collide.

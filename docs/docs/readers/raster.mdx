@@ -288,7 +288,7 @@ Two GDAL drivers are not what their names suggest:
 
 GDAL reads `/vsicurl/` sources over HTTP/2 when the server offers it. Leave `GDAL_HTTP_VERSION` unset.
 On Google Cloud Storage, GeoBrix tests found unset, `1.1` and `2TLS` within the run-to-run noise of one another.
-Amazon S3 speaks only HTTP/1.1, so the setting changes nothing there.
+In the same tests, Amazon S3 negotiated only HTTP/1.1, so the setting changed nothing there.
 
 ## Basic Usage
 

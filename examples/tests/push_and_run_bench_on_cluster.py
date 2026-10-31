@@ -9,14 +9,15 @@ bench_results Delta table and land comparison.csv / summary.md under the out_dir
 configured Volume.
 
 The cluster + artifacts must be provisioned by the operator (see the installation docs):
-- heavyweight: x86 DBR 17.3 or 18 LTS with the init script + bundle + geobrix wheel + the bench
-  geobrix-*-tests.jar staged on a Volume (the tests.jar is attached here as a job library;
-  the production fat JAR is installed by the heavyweight init script, NOT attached here).
+- heavyweight: a dedicated cluster on DBR 17.3, 18 or 19 (x86; Graviton on DBR 19) with the env wheel
+  and the production geobrix fat JAR installed as cluster libraries, and the bench geobrix-*-tests.jar
+  staged on a Volume (the tests.jar is attached here as a job library; the production fat JAR is
+  NOT attached here).
 - lightweight (incl. ARM): the env wheel for the compute's runtime, geobrix-<version>+env5 (DBR 17.3 /
   18, Serverless env 5) or +env6 (DBR 19, Serverless env 6), installed by the notebook's install cell
   (no light extra). Without GBX_BUNDLE_WHEEL_VOLUME_PATH the launcher picks it from the cluster's
-  Databricks Runtime (or --env-version on Serverless). On ARM clusters use --lightweight-only
-  (heavyweight is x86-only by design).
+  Databricks Runtime (or --env-version on Serverless). Use --lightweight-only on a cluster
+  that has no GeoBrix JAR.
 
 Requires: databricks-sdk, and env config (see databricks_cluster_config.example.env).
 

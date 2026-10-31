@@ -326,7 +326,7 @@ set for the cluster's processes:
   in a notebook on that cluster. Add the printed directory to the cluster's environment variables
   (`spark_env_vars`) as `HDF5_PLUGIN_PATH=<that directory>`, then restart the cluster. The path depends on where the
   wheel is installed and on the architecture (`x86_64` or `aarch64`), so read it on the cluster itself.
-- The GeoBrix DCS image needs no setting. It links `/usr/local/hdf5/lib/plugin`, the directory HDF5 searches by default, to the plugins.
+- The GeoBrix DCS image is designed to need no setting. It links `/usr/local/hdf5/lib/plugin`, the directory HDF5 searches by default, to the plugins. GeoBrix has checked the link in the image, but not a read on a cluster.
 
 Without the variable, a heavyweight read of such a variable returns **NULL**, with no error. The same file
 reads on the lightweight tier. In GeoBrix tests, `netcdf_gdal` with `gbx_rst_avg` returned NULL for zstd, blosc and
@@ -334,7 +334,7 @@ bzip2 files. It returned the right value for a zlib file, and for all four once 
 
 :::warning The variable applies to the whole cluster
 Set in `spark_env_vars`, `HDF5_PLUGIN_PATH` reaches every process on the cluster, including other HDF5 libraries.
-On a Databricks ML runtime, an h5py write that uses `hdf5plugin` blosc then fails with `Unable to synchronously create dataset`.
+On a Databricks ML runtime, an h5py write that uses `hdf5plugin` blosc failed with `Unable to synchronously create dataset` in GeoBrix's test.
 Without the variable, that write works. Set it only on a cluster that reads zstd, blosc or bzip2 netCDF-4 with the
 heavyweight tier. Do not set it on a cluster that writes blosc with h5py. The lightweight tier does not set the variable.
 :::

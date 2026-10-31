@@ -80,7 +80,7 @@ Behavior changes that alter results or signatures:
 - **Heavyweight netCDF-4 with zstd, blosc or bzip2 filters returns NULL, with no error, unless `HDF5_PLUGIN_PATH` is set.** The lightweight tier reads these files without it.
   - Setting `HDF5_PLUGIN_PATH` cluster-wide breaks an h5py write with `hdf5plugin` blosc on a Databricks ML runtime.
   - See [Compressed netCDF-4 variables](./readers/netcdf#compressed-netcdf-4-variables-zstd-blosc-bzip2).
-- **Heavyweight `rst_mapalgebra` and `rst_ndvi` fail on a cluster that has only the env wheel.** They run `gdal_calc.py`, which the JVM does not find on its `PATH`. Use the lightweight functions.
+- **Heavyweight `rst_mapalgebra` fails on a cluster that has only the env wheel.** The JVM does not find `gdal_calc.py` on its `PATH`. `rst_ndvi` and `rst_chm` share the code path, so expect the same failure. The DCS image is untested for it. Use the lightweight functions.
 - **Leave `GDAL_HTTP_VERSION` unset.** See [Remote reads over HTTPS](./readers/raster#remote-reads-over-https).
 
 ### The native stack is GDAL 3.13.3, PROJ 9.9.0 and GEOS 3.15.0 (behavior change) {#native-stack}
@@ -697,7 +697,7 @@ Both tiers apply one rule for which pixels are valid.
 - **Contents.** The images are built on the DCS vNext environment 6 images. They carry:
   - The env6 wheel, installed with `[vizx]`. Its GDAL 3.13.3, PROJ 9.9.0 and GEOS 3.15.0 serve both tiers, with GDAL's Java (JNI) bindings.
   - The GeoBrix JAR in `/databricks/jars`.
-  - A link from `/usr/local/hdf5/lib/plugin` to the wheel's HDF5 filter plugins, so the heavyweight tier reads zstd, blosc and bzip2 netCDF-4 with no setting.
+  - A link from `/usr/local/hdf5/lib/plugin` to the wheel's HDF5 filter plugins. By design, the heavyweight tier then reads zstd, blosc and bzip2 netCDF-4 with no setting. This is untested on a cluster.
 
   Each release attaches `geobrix-<version>-dcs.Dockerfile` to the GitHub release. The build installs wheels from a hashed lock and compiles no GDAL. See [Build your own image](./installation/dcs#build-your-own-image).
 - **Use.**
@@ -706,6 +706,7 @@ Both tiers apply one rule for which pixels are valid.
   - There is no cluster library to attach.
   - A cluster should have only one GeoBrix JAR, so do not attach it again.
 - **Limits.**
+  - GeoBrix built the images and ran their in-image checks. It has not yet run them on a cluster.
   - DBR 17.3 / 18 images are not available. Install the env5 wheel and the JAR as cluster libraries.
   - On a DCS cluster, h5py with `hdf5plugin` can see the plugin directory the image links, so a blosc write with h5py may fail. See [netCDF-4 filters and h5py](./installation/dcs#netcdf-filters).
   - The heavyweight tier needs dedicated compute. On standard access mode and Serverless, use the lightweight tier.

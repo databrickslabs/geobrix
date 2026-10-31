@@ -29,8 +29,8 @@ It takes the cube through seven steps:
 **[examples/notebooks/zarr-weather-features](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/zarr-weather-features)** — download `01_zarr_weather_features.ipynb` and import it into your Databricks workspace to run.
 :::
 
-:::info Runs on the lightweight tier (`geobrix[light_env6,zarr_env6,vizx]`)
-Zarr stores run only in the **lightweight tier**, so there is no JAR. The notebook targets **Serverless environment 6** with the `geobrix[light_env6,zarr_env6,vizx]` wheel; on a classic **Databricks Runtime 19** cluster, install `geobrix[light_dbr19,zarr_dbr19,vizx]` instead (the same packages). The committed outputs are from a run on Serverless environment 6, and the notebook gives the same results on a Databricks Runtime 19 dedicated cluster. See [Zarr Stores](../formats/zarr#what-you-need) and [Execution Tiers](../api/execution-tiers).
+:::info Runs on the lightweight tier (`geobrix[zarr,vizx]`, env6 wheel)
+Zarr stores run only in the **lightweight tier**, so there is no JAR. The notebook targets **Serverless environment 6** with the env6 wheel and `geobrix[zarr,vizx]`. On a classic **Databricks Runtime 19** cluster, install the same env6 wheel and extras. The committed outputs are from a run on Serverless environment 6, and the notebook gives the same results on a Databricks Runtime 19 dedicated cluster. See [Zarr Stores](../formats/zarr#what-you-need) and [Execution Tiers](../api/execution-tiers).
 :::
 
 ---
@@ -47,7 +47,7 @@ Zarr stores run only in the **lightweight tier**, so there is no JAR. The notebo
 ## Prerequisites
 
 - **Serverless environment 6, or Databricks Runtime 19** (Python 3.12). Zarr stores need one of the two.
-- **GeoBrix** (version 0.6.0). The `%pip install` cell installs the wheel with the extras for your compute (above): the lightweight raster core, the Zarr libraries (`zarr`, `numcodecs`, `zarrs`, `tensorstore`, `obstore`) and the `vizx` plotting helpers. Point it at your staged `geobrix-0.6.0-py3-none-any.whl` if its Volume path differs from the default.
+- **GeoBrix** (version 0.6.0). The `%pip install` cell installs the env6 wheel with the `zarr` and `vizx` extras: the lightweight raster core, the Zarr libraries (`zarr`, `numcodecs`, `zarrs`, `tensorstore`, `obstore`) and the `vizx` plotting helpers. Point it at your staged `geobrix-0.6.0+env6-py3-none-any.whl` if its Volume path differs from the default.
 - **The sample cube.** The notebook reads `era5_like_v3.zarr`, a sharded Zarr v3 store of 19 files (about 3.6 MB). It is generated, not downloaded: run `write_era5_cube` from `databricks.labs.gbx.sample.zarr_era5` into a Volume of yours and point `CUBE` at it (see [the sample cube](../sample-data/raster-data#zarr---era5-like-weather-cube-global)).
 - **A schema and a Volume you can write to.** The notebook creates two tables in `CATALOG.SCHEMA` (the store's manifest table and the features table) and writes the files of its writes to a folder under `WORK_DIR`. Each run gets its own `RUN_ID`, so its tables and folder never collide with another run's. The registered cube is only read.
 

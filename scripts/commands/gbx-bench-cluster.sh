@@ -33,7 +33,7 @@ Options:
   --spark-warmup <n>    Spark-path warmup iters (default 1)
   --spark-measured <n>  Spark-path measured iters (default 1)
   --heavyweight-only    Skip the lightweight leg
-  --lightweight-only    Skip the heavyweight leg (use on ARM clusters)
+  --lightweight-only    Skip the heavyweight leg (use on a cluster with no GeoBrix JAR)
   --benchmark-readers   Also run reader benchmarks (raster_gbx vs gdal)
   --readers-only        Run ONLY the reader benchmark (no fn benchmarks)
   --benchmark-pmtiles   Also run PMTiles writer benchmark (pmtiles_gbx vs pmtiles)

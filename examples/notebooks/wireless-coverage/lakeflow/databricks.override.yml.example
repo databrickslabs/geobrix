@@ -18,7 +18,7 @@ targets:
       # Override any other databricks.yml variable here, e.g.:
       # catalog: my_catalog
       # schema: my_wireless_coverage_lf
-      # gbx_wheel: /Volumes/my_catalog/my_schema/vol/geobrix-0.6.0-py3-none-any.whl
+      # gbx_wheel: /Volumes/my_catalog/my_schema/vol/geobrix-0.6.0+env5-py3-none-any.whl
 
       # Simplify isoband geometry before H3 covering (default: true). True = apply product st_simplify
       # (fast, no coverage loss, needed for full SF performance); False = exact isobands (heavy/slow).

@@ -20,7 +20,7 @@ reader:
 | [`gbx_zarr_sample`](../api/zarr-functions#gbx_zarr_sample) | A plain store or a table, at the points of a DataFrame | The time series at a set of points |
 
 All three run in the lightweight tier, so there is no JAR to install: install the
-`zarr_env6` (Serverless environment 6) or `zarr_dbr19` (Databricks Runtime 19) extra, as
+env6 wheel with its `[zarr]` extra (Serverless environment 6 or Databricks Runtime 19), as
 [Zarr Stores](../formats/zarr#what-you-need) describes. To write a store back see the
 [Zarr Writer](../writers/zarr); for every parameter, return value and error see the
 [Zarr Function Reference](../api/zarr-functions). The examples use two names that stand for

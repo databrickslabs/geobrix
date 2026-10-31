@@ -25,11 +25,15 @@ targets a dedicated cluster on DBR 19, on a Graviton (arm64) or an x86 (amd64) i
 
 ## Status
 
-| Compute | Lightweight tier | Heavyweight tier |
-|---|---|---|
-| **Dedicated** access mode, Graviton (arm64), DBR 19 | Verified | Verified |
-| **Dedicated** access mode, x86 (amd64), DBR 19 | Verified | Verified |
-| DBR 17.3 / 18 | No image | Use [cluster libraries](../installation.mdx#heavyweight) |
+| Compute | Image |
+|---|---|
+| **Dedicated** access mode, Graviton (arm64), DBR 19 | Built, and its in-image checks pass |
+| **Dedicated** access mode, x86 (amd64), DBR 19 | Built, and its in-image checks pass |
+| DBR 17.3 / 18 | No image; use [cluster libraries](../installation.mdx#heavyweight) |
+
+The in-image checks cover the GDAL stack, the JNI link, the plugin link and the locked packages.
+GeoBrix has not yet run the current image on a cluster. The env wheel and JAR route is the one
+verified on clusters, on DBR 17.3, 18 and 19.
 
 There is no DBR 17.3 / 18 image. On that compute, install the env5 wheel and the GeoBrix JAR as
 [cluster libraries](../installation.mdx#heavyweight).
@@ -58,7 +62,7 @@ on the version you tested. The two architectures carry the same contents:
   The image links the JNI library into `/usr/lib`, where the heavyweight JAR loads it.
 - **The GeoBrix env6 wheel**, installed with the `[vizx]` extra (the core lightweight tier plus
   visualization) into the image's Python, so the lightweight tier needs no `%pip` step. The image
-  holds the wheel's dependencies from a hashed lock, with the base image's packages unchanged.
+  holds the wheel's dependencies from a hashed lock. The lock changes one base package, `idna`, which moves to 3.20.
 - **The GeoBrix JAR**, the only GeoBrix JAR on the image, in `/databricks/jars` — the directory a
   dedicated cluster loads JARs from.
 
@@ -114,9 +118,18 @@ step runs with no network, and no package index is needed.
 3. Push the image to a registry your workspace can pull from, and enter it as the cluster's
    **Docker Image URL** in the steps below.
 
-From a checkout of the release tag, `gbx:dcs:build` stages these inputs, builds the image and checks
-it. The build takes about a minute natively and a few minutes under emulation. The wheel install
-leaves the base image's package versions unchanged, and the build fails rather than change them.
+The release does not attach the lock or the wheelhouse. Build the image from a source checkout of the
+release tag, where `gbx:dcs:build` stages these inputs, builds the image and checks it:
+
+1. Build the env6 wheel with `gbx:build:wheel --env 6`.
+2. Build GeoBrix's `rasterio` for the architecture with `gbx:build:native`. The lock pins its hash.
+3. Run `gbx:dcs:build --arch arm64` or `--arch amd64`.
+
+To make a new lock, for example after a base image update, add `--relock`. It needs `uv` and Docker,
+and it runs `scripts/docker/dcs/dcs_lock.py relock`. The command fetches the wheelhouse from the lock.
+
+The build takes about a minute natively and a few minutes under emulation. The wheel install leaves the
+base image's package versions as they are, except `idna`. The build fails rather than change any other.
 
 ## Set up a dedicated cluster
 
@@ -135,8 +148,8 @@ leaves the base image's package versions unchanged, and the build fails rather t
    spark.databricks.unityCatalog.volumes.enabled true
    ```
 
-5. **Start the cluster.** The first start pulls the image (about 7 GB), which takes several
-   minutes — about 9 minutes in testing.
+5. **Start the cluster.** The first start pulls the image, about 7 GB, which takes several
+   minutes. An earlier image took about 9 minutes in testing.
 
 There is **no library to attach**. Do **not** attach the GeoBrix JAR as a cluster library.
 The image already carries it, and a cluster should have only one GeoBrix JAR.
@@ -172,8 +185,9 @@ a `*_gbx` reader first and hand the result to heavyweight functions. See the
 
 ## netCDF-4 filters and h5py {#netcdf-filters}
 
-The image links `/usr/local/hdf5/lib/plugin` to the wheel's HDF5 filter plugins. The heavyweight tier
-then reads zstd, blosc and bzip2 netCDF-4 with no `HDF5_PLUGIN_PATH` setting.
+The image links `/usr/local/hdf5/lib/plugin` to the wheel's HDF5 filter plugins. By design, the
+heavyweight tier then reads zstd, blosc and bzip2 netCDF-4 with no `HDF5_PLUGIN_PATH` setting.
+GeoBrix has checked the link in the image, but has not run such a read on a cluster.
 
 h5py's own `libhdf5` searches that directory too. An h5py write that uses `hdf5plugin`, blosc
 especially, can fail on a DCS cluster, because the wheel's plugin loads into a different `libhdf5`.

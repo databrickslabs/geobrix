@@ -149,6 +149,7 @@ def run_mvp(
         rows: List[ResultRow] = []
         label = f"{form.fn}:{form.level}:{form.variant}"
         for scale in scales:
+            requested = (base_rows or lf.BASE_ROWS[form.input]) * scale
             if heartbeat:
                 heartbeat.begin(
                     f"{label} @{scale}x",
@@ -156,8 +157,10 @@ def run_mvp(
                     len(todo),
                     scale=scale,
                     cap_s=form_cap_s * scale if form_cap_s else None,
+                    rows=requested,
+                    name=label,
+                    set_name=mvp,
                 )
-            requested = (base_rows or lf.BASE_ROWS[form.input]) * scale
             base = dict(
                 run_id=run_id,
                 api=form.level,
@@ -181,7 +184,12 @@ def run_mvp(
                     )
                 )
             if heartbeat:
-                heartbeat.end(form_done=scale == scales[-1])
+                done = rows[-1]
+                heartbeat.end(
+                    form_done=scale == scales[-1],
+                    median_s=done.iter_median_s if done.status == "ok" else None,
+                    status=done.status,
+                )
         rows = _guard_sent(rows)
         if on_form:
             on_form(rows)

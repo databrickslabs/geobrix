@@ -3,6 +3,7 @@
 import ast
 import json
 import pathlib
+import re
 import time
 
 import pytest
@@ -58,6 +59,135 @@ def test_the_heartbeat_names_the_form_its_elapsed_time_and_the_stack_of_the_work
         final["state"] == "done" and final["form"] is None and final["forms_done"] == 1
     )
     assert final["seq"] > beat["seq"]
+
+
+# ---- liveness: the same beats, printed in the notebook
+
+
+def _printed(capsys):
+    return [
+        ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("[LEVELS")
+    ]
+
+
+def test_a_form_prints_its_start_and_its_end_with_the_elapsed_and_the_median(
+    tmp_path, capsys
+):
+    hb = liveness.Heartbeat(str(tmp_path / "hb.json"), interval=3600).start()
+    hb.begin(
+        "read:DF:b @4x",
+        3,
+        10,
+        scale=4,
+        cap_s=900,
+        rows=4000,
+        name="read:DF:b",
+        set_name="IO",
+    )
+    hb.end(form_done=False, median_s=11.84)
+    hb.begin(
+        "read:DF:b @10x",
+        3,
+        10,
+        scale=10,
+        cap_s=None,
+        rows=10000,
+        name="read:DF:b",
+        set_name="IO",
+    )
+    hb.end(form_done=True)
+    hb.stop()
+    start, done, start2, done2 = _printed(capsys)
+    assert (
+        start == "[LEVELS IO] form 3/10 read:DF:b scale 4x rows 4000 START (cap 900s)"
+    )
+    assert re.fullmatch(
+        r"\[LEVELS IO\] form 3/10 read:DF:b scale 4x rows 4000 DONE elapsed \d+\.\ds median 11\.84s",
+        done,
+    ), done
+    assert start2.endswith("scale 10x rows 10000 START (cap none)")
+    assert re.fullmatch(
+        r".* rows 10000 DONE elapsed \d+\.\ds", done2
+    ), done2  # no median known: none printed
+
+
+def test_a_running_form_prints_a_line_each_print_interval_apart_from_the_json_beat(
+    tmp_path, capsys
+):
+    """The print cadence is its own: a JSON interval of an hour still prints, and prints write no beat."""
+    path = tmp_path / "hb.json"
+    hb = liveness.Heartbeat(str(path), interval=3600, print_every=0.1).start()
+    hb.begin(
+        "read:DF:b @1x",
+        1,
+        2,
+        scale=1,
+        cap_s=900,
+        rows=1000,
+        name="read:DF:b",
+        set_name="IO",
+    )
+    seq = json.loads(path.read_text())["seq"]
+    time.sleep(0.45)
+    lines = [ln for ln in _printed(capsys) if "RUNNING" in ln]
+    assert (
+        json.loads(path.read_text())["seq"] == seq
+    )  # only begin/end/the JSON interval write the file
+    hb.end()
+    hb.stop()
+    assert len(lines) >= 2, lines
+    assert re.fullmatch(
+        r"\[LEVELS IO\] form 1/2 read:DF:b scale 1x rows 1000 RUNNING elapsed \d+s of cap 900s",
+        lines[0],
+    ), lines[0]
+    time.sleep(0.25)
+    assert (
+        "RUNNING" not in capsys.readouterr().out
+    )  # nothing runs between forms: no line
+
+
+def test_a_heartbeat_without_a_set_name_prints_nothing_and_its_json_beat_is_as_before(
+    tmp_path, capsys
+):
+    path = tmp_path / "hb.json"
+    hb = liveness.Heartbeat(
+        str(path), interval=3600, print_every=0.05, phase="p", token="t"
+    ).start()
+    hb.begin("f @2x", 1, 2, scale=2, cap_s=60)
+    time.sleep(0.2)
+    beat = json.loads(path.read_text())
+    hb.end()
+    hb.stop()
+    assert _printed(capsys) == []
+    assert sorted(beat) == sorted(
+        ["seq", "state", "phase", "token", "form", "form_elapsed_s", "scale", "cap_s", "form_index", "form_total",
+         "forms_done", "beat_at", "interval_s", "stack"]
+    )  # fmt: skip
+    assert (beat["form"], beat["scale"], beat["cap_s"], beat["interval_s"]) == (
+        "f @2x",
+        2,
+        60,
+        3600.0,
+    )
+
+
+def test_run_mvp_tells_the_heartbeat_the_set_the_rows_and_the_median(
+    spark_session_local, tmp_path, monkeypatch, capsys
+):
+    tiny_forms(monkeypatch, 1)
+    hb = liveness.Heartbeat(str(tmp_path / "hb.json"), interval=3600).start()
+    rows = levels.run_mvp(
+        spark_session_local, "S", "t", 0, 1, corpus=str(tmp_path), schema=None, scales=(1, 4), where="venv",
+        base_rows=50, only_levels=("L3",), heartbeat=hb, form_cap_s=60,
+    )  # fmt: skip
+    hb.stop()
+    out = _printed(capsys)
+    assert out[0] == f"[LEVELS S] form 1/1 {B}:L3:c0 scale 1x rows 50 START (cap 60s)"
+    assert out[2] == f"[LEVELS S] form 1/1 {B}:L3:c0 scale 4x rows 200 START (cap 240s)"
+    assert (
+        f"{rows[0].iter_median_s:.2f}s" in out[1]
+        and out[1].split("median ")[1] == f"{rows[0].iter_median_s:.2f}s"
+    )
 
 
 # ---- liveness: each form's rows sink when that form finishes
@@ -127,10 +257,10 @@ def test_a_form_is_timed_and_capped_per_scale_not_once_for_the_whole_ladder(
     log = []
 
     class HB:
-        def begin(self, label, index, total, *, scale=1, cap_s=None):
+        def begin(self, label, index, total, *, scale=1, cap_s=None, **kw):
             log.append(("begin", label, scale, cap_s))
 
-        def end(self, *, form_done=True):
+        def end(self, *, form_done=True, **kw):
             log.append(("end", form_done))
 
     levels.run_mvp(

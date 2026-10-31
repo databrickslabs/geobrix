@@ -36,13 +36,24 @@ class Heartbeat:
     Beats are serialised by a lock (the work thread and the daemon thread both write) and land through a
     temp file in the same directory and ``os.replace``, so a reader sees the previous beat or the new one,
     never half of one. Where the replace is refused the beat is written in place and a reader retries.
+
+    The notebook sees the same progress: a form begun with a ``set_name`` prints a tagged line (``[LEVELS <set>] ...``)
+    at its start, its end, and every ``print_every`` seconds while it runs (its own cadence, apart from the JSON
+    ``interval``; a print writes no beat). A form begun without a ``set_name`` prints nothing.
     """
 
     def __init__(
-        self, path: str, interval: float = 30.0, *, phase: str = "", token: str = ""
+        self,
+        path: str,
+        interval: float = 30.0,
+        *,
+        phase: str = "",
+        token: str = "",
+        print_every: float = 60.0,
     ):
         self.path = path
         self.interval = float(interval)
+        self.print_every = float(print_every)
         self.phase = phase
         self.token = token  # the launcher's id of this launch: a reader ignores a file another launch left
         self._seq = 0
@@ -53,6 +64,9 @@ class Heartbeat:
         self._done = 0
         self._scale = 1
         self._cap_s: Optional[float] = None
+        self._set_name: Optional[str] = None
+        self._rows: Optional[int] = None
+        self._name = ""
         self._work_thread: Optional[int] = None
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -83,18 +97,41 @@ class Heartbeat:
         *,
         scale: int = 1,
         cap_s: Optional[float] = None,
+        rows: Optional[int] = None,
+        name: Optional[str] = None,
+        set_name: Optional[str] = None,
     ) -> None:
+        """``rows`` and ``name`` (the form without its scale) are for the printed lines; ``set_name`` turns them on."""
         with self._lock:
             self._form, self._form_started = label, time.monotonic()
             self._index, self._total = index, total
             self._scale, self._cap_s = scale, cap_s
+            self._set_name, self._rows, self._name = set_name, rows, name or label
         self.beat()
+        self._say("START", f"(cap {self._cap_text(cap_s)})")
 
-    def end(self, *, form_done: bool = True) -> None:
-        """Mark the form (or one scale of it) finished; ``form_done=False`` for a scale that is not the form's last."""
+    def end(
+        self,
+        *,
+        form_done: bool = True,
+        median_s: Optional[float] = None,
+        status: Optional[str] = None,
+    ) -> None:
+        """Mark the form (or one scale of it) finished; ``form_done=False`` for a scale that is not the form's last.
+
+        ``median_s`` (the form's median, when it has one) and ``status`` (when it did not end ``ok``) are printed.
+        """
+        elapsed = time.monotonic() - self._form_started if self._form else 0.0
+        tail = f"elapsed {elapsed:.1f}s"
+        if median_s is not None:
+            tail += f" median {median_s:.2f}s"
+        if status and status != "ok":
+            tail += f" status {status}"
+        self._say("DONE", tail)
         with self._lock:
             self._form = None
             self._cap_s = None
+            self._set_name = None
             if form_done:
                 self._done += 1
         self.beat()
@@ -108,8 +145,39 @@ class Heartbeat:
 
     # -- the beat ---------------------------------------------------------------------------
     def _loop(self) -> None:
-        while not self._stop.wait(self.interval):
-            self.beat()
+        """One wake-up per ``min(interval, print_every)``: the JSON beat and the printed line each keep their own cadence."""
+        tick = max(min(self.interval, self.print_every), 0.01)
+        last_beat = last_print = time.monotonic()
+        while not self._stop.wait(tick):
+            now = time.monotonic()
+            if now - last_beat >= self.interval - 1e-3:
+                last_beat = now
+                self.beat()
+            if now - last_print >= self.print_every - 1e-3:
+                last_print = now
+                self._say_running()
+
+    @staticmethod
+    def _cap_text(cap_s: Optional[float]) -> str:
+        return "none" if cap_s is None else f"{cap_s:g}s"
+
+    def _say(self, what: str, tail: str) -> None:
+        """Print one tagged line for the form in progress (nothing when it was begun without a ``set_name``)."""
+        with self._lock:
+            if not self._set_name or not self._form:
+                return
+            rows = "?" if self._rows is None else self._rows
+            line = (
+                f"[LEVELS {self._set_name}] form {self._index}/{self._total} {self._name} "
+                f"scale {self._scale}x rows {rows} {what} {tail}"
+            )
+        print(line, flush=True)
+
+    def _say_running(self) -> None:
+        with self._lock:
+            elapsed = time.monotonic() - self._form_started
+            cap = self._cap_s
+        self._say("RUNNING", f"elapsed {elapsed:.0f}s of cap {self._cap_text(cap)}")
 
     def snapshot(self) -> dict:
         with self._lock:

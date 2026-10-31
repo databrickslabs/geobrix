@@ -508,3 +508,38 @@ def test_raster_tier_keeps_proj_db_and_finds_registered_grid(
     epsg, lat = _in_new_thread(_lookup_and_transform)
     assert epsg == 32618
     assert lat == pytest.approx(EXPECT_LAT, abs=1e-6)
+
+
+def test_core_crs_imports_in_a_fresh_interpreter_when_proj_data_is_unlistable(tmp_path):
+    """core.crs configures GDAL at import; with a PROJ_DATA this process cannot list, that builds the merged
+    dir through ``_list_dir``. If ``_list_dir`` imported ``ds._listing``, the ds package would register every data
+    source, one needs the half-imported core.crs, and the import fails with an ImportError (only a fresh
+    interpreter shows it: in-process, ``ds`` is already loaded)."""
+    import subprocess
+    import sys
+
+    import databricks.labs.gbx as gbx
+
+    src = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.dirname(gbx.__file__)))
+    )
+    child = (
+        "import sys, time\n"
+        f"sys.path.insert(0, {src!r})\n"
+        "time.sleep = lambda _s: None\n"  # no transient-retry backoff
+        "import databricks.labs.gbx.core.crs\n"
+    )
+    env = {
+        k: v for k, v in os.environ.items() if k not in ("PROJ_LIB", "PYTHONPATH")
+    }
+    env["PROJ_DATA"] = str(tmp_path / "does-not-exist")
+    env["GBX_LOCAL_TEMP_DIR"] = str(tmp_path / "local_tmp")
+    run = subprocess.run(
+        [sys.executable, "-I", "-c", child],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=300,
+    )
+    assert run.returncode == 0, run.stderr[-2000:]
+    assert "ImportError" not in run.stderr, run.stderr[-2000:]

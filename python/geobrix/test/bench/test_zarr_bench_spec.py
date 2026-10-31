@@ -427,3 +427,49 @@ def test_the_update_window_probe_runs_only_with_a_write_case(monkeypatch):
         None, zb.ZarrBenchConfig("/s", "/c", "/tmp", "c.s", "r", cases=("W1",))
     )
     assert ran == ["shard", "density", "window"]
+
+
+def test_an_unknown_zarr_case_is_refused_before_any_leg_runs(monkeypatch):
+    """A mistyped case (``r1``) stops the cell at once and names the valid ones, instead of
+    running the earlier legs and then raising a ``KeyError``."""
+    from databricks.labs.gbx.bench import zarr_bench as zb
+
+    ran = []
+    monkeypatch.setattr(zb, "run_r1", lambda spark, cfg: ran.append("R1") or [])
+    cfg = zb.ZarrBenchConfig("/s", "/c", "/tmp", "c.s", "r", cases=("R1", "r2"))
+    with pytest.raises(ValueError, match=r"r2.*R1, R2, R3, W1, W2"):
+        zb.run_zarr_cases(None, cfg)
+    assert ran == []
+
+
+def test_the_r3_geotiff_window_covers_a_box_across_the_seam():
+    """The box 350..40 E crosses the 0/360 seam; the GeoTIFF copy has its columns rolled to
+    -180..180, so the window is the columns for -10..40, north 72 to south 35."""
+    import numpy as np
+
+    from databricks.labs.gbx.bench import zarr_bench as zb
+
+    lat = np.arange(90.0, -91.0, -10.0)  # 90 .. -90
+    lon = np.arange(0.0, 360.0, 10.0)  # 0 .. 350
+    roll = int((lon >= 180.0).sum())  # the columns that move to the front
+    col, row, width, height = zb._box_window(lat, lon, 72, 35, 350, 40, roll)
+    lon180 = np.roll(np.where(lon >= 180.0, lon - 360.0, lon), roll)
+    assert list(lon180[col : col + width]) == [-10.0, 0.0, 10.0, 20.0, 30.0, 40.0]
+    assert list(lat[row : row + height]) == [70.0, 60.0, 50.0, 40.0]
+
+
+def test_the_phase_timers_wrap_real_functions_and_put_them_back():
+    """Every name the W1 timers wrap exists (a rename would fail a paid run), they time the
+    steps, and ``restore`` leaves each module as it was."""
+    from databricks.labs.gbx.bench import zarr_bench as zb
+    from databricks.labs.gbx.zarr import _manifest, _register, _write
+
+    modules = (_manifest, _register, _write)
+    before = {
+        (m, n): getattr(m, n) for m in modules for n in dir(m) if not n.startswith("__")
+    }
+    ph = zb._w1_phases()
+    wrapped = [k for k, v in before.items() if getattr(k[0], k[1]) is not v]
+    assert wrapped  # the timers are on
+    ph.restore()
+    assert all(getattr(m, n) is v for (m, n), v in before.items())

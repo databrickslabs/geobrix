@@ -1486,6 +1486,12 @@ def run_zarr_cases(spark, cfg: ZarrBenchConfig, sink=None) -> List[ResultRow]:
         "W2": run_w2,
         "W1D": run_w1d,  # the direct leg beside plain object-store puts (investigation)
     }
+    unknown = [c for c in cfg.cases if c not in legs]
+    if unknown:  # before any leg runs: a typo must not cost the earlier legs' time
+        raise ValueError(
+            f"unknown Zarr case(s) {', '.join(unknown)}; the cases are "
+            f"{', '.join(legs)}"
+        )
     rows: List[ResultRow] = []
     for case in cfg.cases:
         print(f"ZARR {case}: starting", flush=True)

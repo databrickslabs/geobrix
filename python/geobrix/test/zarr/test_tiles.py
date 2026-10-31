@@ -640,10 +640,12 @@ def test_a_complex_variable_is_refused_as_tiles_and_left_out_by_default(
     with pytest.raises(ZarrUnsupported, match="complex") as e:
         tile_set(store, variables=("v",))
     assert "'v'" in str(e.value) and "read it as blocks" in str(e.value)
-    with pytest.raises(ZarrUnsupported, match="no variable of the store"):
+    with pytest.raises(
+        ZarrUnsupported, match="no variable of the store can be tiled.*complex"
+    ):
         with caplog.at_level("WARNING"):
             tile_set(store, variables=None)
-    assert "complex" in caplog.text  # left out with the reason, not silently
+    assert "cannot be tiled" in caplog.text and "complex" in caplog.text
 
 
 def test_non_volume_root_raises_access_unavailable(era5_v3_sharded):

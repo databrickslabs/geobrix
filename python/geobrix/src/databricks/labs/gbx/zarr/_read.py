@@ -1438,7 +1438,7 @@ def _plan_tile_set(
     tile_size,
     cap_bytes=None,
 ):
-    """The ``TilePlan`` of each of ``names`` that has a regular 2-D grid.
+    """The ``TilePlan`` of each of ``names`` that can be tiled (a regular 2-D grid, real values).
 
     A variable named in ``variables`` (``explicit``) that cannot be tiled raises; one picked
     by default is left out with a warning, as a variable GeoBrix cannot decode is.
@@ -1491,14 +1491,19 @@ def _plan_tile_set(
         plans.append(plan_tiles(meta, by_dim, axes[v], rows, **kwargs))
     if left_out:
         _LOG.warning(
-            "%s: %d variable(s) have no regular 2-D grid and are left out of the tiles: %s",
+            "%s: %d variable(s) cannot be tiled and are left out of the tiles: %s",
             src.table or src.root,
             len(left_out),
             "; ".join(f"{a} ({why})" for a, why in left_out.items()),
         )
     if not plans:
         raise ZarrUnsupported(
-            "no variable of the store has a regular latitude/longitude grid to tile",
+            "no variable of the store can be tiled"
+            + (
+                ": " + "; ".join(f"{a} ({why})" for a, why in left_out.items())
+                if left_out
+                else ""
+            ),
             fix='read it with output="blocks" or output="table"',
         )
     return plans

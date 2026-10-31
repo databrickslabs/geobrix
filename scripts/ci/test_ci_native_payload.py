@@ -724,3 +724,11 @@ def test_the_gate_without_docker_stops_before_any_check(tmp_path):
     assert res.returncode == 1
     assert "PRECONDITION MISSING" in res.stdout
     assert _stamp_bytes() == before
+
+
+def test_a_batch_read_that_git_fails_raises_fail_not_a_value_error(tmp_path):
+    # git prints nothing on stdout when it cannot read the repository at all, so the reader named the failure
+    # instead of dying in a raw ValueError looking for the header line.
+    inputs = _native("native_inputs")
+    with pytest.raises(inputs.Fail, match="cat-file"):
+        inputs.Tree(tmp_path / "not-a-repo", "HEAD").read_all(["a.txt"])

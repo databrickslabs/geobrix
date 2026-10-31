@@ -114,10 +114,14 @@ class Tree:
             input="".join(f"{self.rev}:{rel}\n" for rel in rels).encode(), capture_output=True,
         )
         out, pos, data = res.stdout, 0, []
+        if res.returncode != 0:
+            raise Fail(f"git cat-file --batch {self.rev}: {res.stderr.decode().strip()}")
         for rel in rels:
-            end = out.index(b"\n", pos)
+            end = out.find(b"\n", pos)
+            if end < 0:
+                raise Fail(f"git cat-file --batch {self.rev}: no header for {rel} (output ended early)")
             head = out[pos:end].split()
-            if res.returncode != 0 or len(head) != 3 or head[1] != b"blob":
+            if len(head) != 3 or head[1] != b"blob":
                 raise Fail(f"git cat-file {self.rev}:{rel}: {out[pos:end].decode()}")
             start, size = end + 1, int(head[2])
             data.append(out[start:start + size])

@@ -382,7 +382,9 @@ def test_real_vrt_xml_with_a_prolog_is_still_refused(sentinel_tif):
 def test_unrecognized_bytes_the_full_bytes_identify_as_a_class_driver_name_it(
     monkeypatch,
 ):
-    """ENVI-like: the first 4096 bytes say nothing (identify wants a sibling header), the whole bytes do."""
+    """A stubbed identify that needs more than the first 4096 bytes: the second pass hands it the whole tile (up to
+    the cap), so the format is named. (A real driver whose signature lies that far in is not known: stubbed.)
+    """
     monkeypatch.setattr(_gdal_policy, "activate", lambda: {"mode": "full"})
     monkeypatch.setattr(
         _gdal_policy,
@@ -391,6 +393,77 @@ def test_unrecognized_bytes_the_full_bytes_identify_as_a_class_driver_name_it(
     )
     msg = _refused(b"\x01\x02\x03 raw pixels " * 600)
     _assert_refusal(msg, "ENVI")
+
+
+def _driver_bytes(driver: str, ext: str):
+    """The bytes of the DATA file a real GDAL writes for `driver` (a header file sits beside it)."""
+    gdal = pytest.importorskip("osgeo.gdal")
+    import os
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        src = gdal.GetDriverByName("MEM").Create("", 64, 64, 1, gdal.GDT_Float32)
+        src.GetRasterBand(1).WriteArray(
+            np.arange(4096, dtype="float32").reshape(64, 64)
+        )
+        out = os.path.join(td, "a" + ext)
+        gdal.GetDriverByName(driver).CreateCopy(out, src)
+        siblings = sorted(os.listdir(td))
+        with open(out, "rb") as fh:
+            return fh.read(), siblings
+
+
+@pytest.mark.parametrize("driver,ext", [("ENVI", ""), ("EHdr", ".bil")])
+def test_real_sibling_header_driver_bytes_do_not_identify_standalone(
+    monkeypatch, driver, ext
+):
+    """What the second identify can and cannot name, on real GDAL: ENVI and EHdr identify through a sibling `.hdr`,
+    which a lone tile's bytes do not have, so they are NOT named. The bytes still do not open (the class is out of the
+    open's driver list): the binding's own not-recognized error stands, not a refusal naming the format.
+    """
+    monkeypatch.setattr(_gdal_policy, "activate", lambda: {"mode": "full"})
+    raw, siblings = _driver_bytes(driver, ext)
+    assert any(
+        x.endswith(".hdr") for x in siblings
+    ), siblings  # the format does keep a header beside the data
+    assert _gdal_policy._identify_in_class(raw, (driver,)) is None
+    with MemoryFile(raw) as mf:
+        assert _gdal_policy._unrecognized_bytes_refusal(mf, "full") is None
+    with pytest.raises(rasterio.errors.RasterioIOError):
+        _gdal_policy.open_bytes(raw).close()
+
+
+def test_real_single_file_class_driver_bytes_are_named_by_the_second_identify(
+    monkeypatch,
+):
+    """The other side, on real GDAL: ISIS3 bytes (a label and the pixels in one file) identify standalone."""
+    monkeypatch.setattr(_gdal_policy, "activate", lambda: {"mode": "full"})
+    raw, _ = _driver_bytes("ISIS3", "")
+    assert _gdal_policy._identify_in_class(raw, ("ISIS3",)) == "ISIS3"
+    with MemoryFile(raw) as mf:
+        refusal = _gdal_policy._unrecognized_bytes_refusal(mf, "full")
+    assert refusal is not None
+    _assert_refusal(str(refusal), "ISIS3")
+
+
+def test_the_second_identify_is_given_a_capped_view_not_the_whole_tile(monkeypatch):
+    """A large tile no allowed driver recognizes: GDAL's identify is handed at most the cap, so building the error
+    does not copy the whole tile again."""
+    gdal = pytest.importorskip("osgeo.gdal")
+    monkeypatch.setattr(_gdal_policy, "activate", lambda: {"mode": "full"})
+    sizes = []
+    real = gdal.FileFromMemBuffer
+
+    def spy(path, buf):
+        sizes.append(len(buf))
+        return real(path, buf)
+
+    monkeypatch.setattr(gdal, "FileFromMemBuffer", spy)
+    big = b"\x01\x02\x03 raw pixels " * (3 * 2**20 // 16)
+    assert len(big) > 2 * _gdal_policy._IDENTIFY_MAX_BYTES
+    with MemoryFile(big) as mf:
+        assert _gdal_policy._unrecognized_bytes_refusal(mf, "full") is None
+    assert sizes and max(sizes) <= _gdal_policy._IDENTIFY_MAX_BYTES, sizes
 
 
 # ---- rst_asformat leaves the class out only where the policy refuses it

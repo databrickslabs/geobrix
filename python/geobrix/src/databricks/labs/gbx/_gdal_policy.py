@@ -960,9 +960,14 @@ def _bytes_refusal(what: str, driver: str) -> DriverPolicyError:
     )
 
 
-def _identify_in_class(head: bytes, names: tuple) -> Optional[str]:
-    """The driver of ``names`` that identifies ``head`` (a tile's first bytes) through GDAL, or None. Header only:
-    nothing is opened. Needs the osgeo on rasterio's libgdal (the full mode); any failure is None.
+# The most bytes the second identify (`_unrecognized_bytes_refusal`) is given. Identify reads a driver's signature, not
+# its pixels, so a tile of any size costs one copy of at most this many bytes when the error is built.
+_IDENTIFY_MAX_BYTES = 1 << 20
+
+
+def _identify_in_class(head, names: tuple) -> Optional[str]:
+    """The driver of ``names`` that identifies ``head`` (a tile's first bytes: bytes or a memoryview) through GDAL, or
+    None. Header only: nothing is opened. Needs the osgeo on rasterio's libgdal (the full mode); any failure is None.
     """
     try:
         from osgeo import gdal
@@ -1006,19 +1011,21 @@ def _class_of_bytes(head: bytes, mode: str) -> Optional[str]:
 
 def _unrecognized_bytes_refusal(memfile, mode: str) -> Optional[DriverPolicyError]:
     """The refusal for tile bytes the open (restricted to the drivers outside the refused class) did not recognize,
-    when they are a refused driver's: the head-only checks cannot see one that identifies by extension or a sibling
-    header (ENVI, EHdr, SAGA ...), so the whole bytes go to GDAL's identify once more with the class drivers, and a
-    match names the format. Bytes nothing identifies (corrupt, truncated, not a raster) are None: they keep the
-    binding's own I/O error."""
+    when they are a refused driver's: the head-only checks look at the first 4096 bytes, so the bytes (a view of the
+    first ``_IDENTIFY_MAX_BYTES``, not a copy of the tile) go to GDAL's identify once more with the class drivers, and a
+    match names the format. A driver that identifies through a sibling header (ENVI, EHdr: tested on real GDAL) cannot
+    be named from one file's bytes; those and bytes nothing identifies (corrupt, truncated, not a raster) are None and
+    keep the binding's own I/O error. The open already excludes the class, so none of them is read either way.
+    """
     if mode != "full":
         return None
     try:
-        data = bytes(memfile.getbuffer())
+        data = memfile.getbuffer()[:_IDENTIFY_MAX_BYTES]
     except (
         Exception
     ):  # noqa: BLE001 - no buffer to hand over: the binding's error stands
         return None
-    found = _identify_in_class(data, bytes_refused_light_names()) if data else None
+    found = _identify_in_class(data, bytes_refused_light_names()) if len(data) else None
     return None if found is None else _bytes_refusal("the raster bytes", found)
 
 

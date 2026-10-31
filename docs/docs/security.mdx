@@ -265,7 +265,10 @@ applies a driver policy to each process, on both tiers, before any raster is ope
     `AIG`, `DOQ1`, `DOQ2`, `FAST` and `ESAT`.
 
   The error names the format and gives a fix: store the tile as a GeoTIFF, or pass the VRT as a
-  virtual tile (a path). netCDF, HDF5, HFA, JP2 and GPKG bytes still open. On the heavyweight tier,
+  virtual tile (a path). A format that finds its header in a separate file is named only if the
+  tile's own bytes identify it: the data file of an `ENVI` or `EHdr` raster has no signature
+  without its `.hdr`, so it is not named. It is not opened either, and fails with the reader's
+  own "not recognized" error. netCDF, HDF5, HFA, JP2 and GPKG bytes still open. On the heavyweight tier,
   `gbx_rst_transformcrs`, `gbx_rst_slope` and `gbx_rst_mapalgebra` open a tile's non-TIFF bytes only
   with a short list of single-file drivers, so they refuse the same formats and more.
 

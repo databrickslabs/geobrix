@@ -21,10 +21,10 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_bng_eastnorthasbng": ("L1", "L2", "L3"),
     "gbx_rst_transformcrs": ("L1", "L2", "L3"),
     "gbx_st_makevalid": ("L3",),
-    "gbx_rst_retile": ("L1", "L3"),
+    "gbx_rst_retile": ("L3",),
     "gbx_bng_tessellate": ("L1", "L2", "L3"),
     "gbx_bng_tessellateexplode": ("L1", "L3"),
-    "gbx_rst_merge_agg": ("L1", "L3"),
+    "gbx_rst_merge_agg": ("L3",),
     "gbx_rst_bng_rasterize_agg": ("L1", "L3"),
     # The GDAL spec engine's rows: each level runs the engine where it can, its own implementation elsewhere.
     "gbx_rst_slope": ("L1", "L3"),

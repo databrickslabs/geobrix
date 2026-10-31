@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import re
 import sys
 import tarfile
 import time
@@ -57,3 +58,28 @@ def test_gbx_build_native_packs_debuginfo_with_it():
         'scripts/native/repro_tar.py" "$out/debuginfo" .build-id "$tarball" "$epoch"'
         in text
     )
+
+
+def test_the_epoch_gbx_build_native_extracts_is_one_exported_number():
+    # pack_debuginfo reads it with `sed -n 's/^export SOURCE_DATE_EPOCH=//p'` and fails the build otherwise;
+    # a renamed or doubled export would show up only at build time.
+    lines = [
+        ln
+        for ln in (NATIVE / "build-lib.sh").read_text().splitlines()
+        if ln.startswith("export SOURCE_DATE_EPOCH=")
+    ]
+    assert len(lines) == 1 and re.fullmatch(
+        r"export SOURCE_DATE_EPOCH=\d+", lines[0]
+    ), lines
+
+
+def test_gbx_build_native_exports_the_image_it_just_built_not_the_cache():
+    # after --no-cache the build cache also holds the previous build's layers, and an export that read them
+    # wrote out a stale tree: the export stage must read the tagged image through a named build context
+    text = (NATIVE.parent / "commands" / "gbx-build-native.sh").read_text()
+    lines = text.splitlines()
+    at = [i for i, ln in enumerate(lines) if "docker buildx build" in ln and "--build-context" in ln and "$TARGET=" in ln]
+    assert len(at) == 1, at
+    command = lines[at[0]] + lines[at[0] + 1]  # the command and its continuation line
+    assert '--build-context "$TARGET=docker-image://$tag"' in command
+    assert '--target "export-$TARGET"' in command

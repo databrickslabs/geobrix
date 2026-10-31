@@ -361,13 +361,17 @@ def test_a_and_b_do_not_list_the_corpus_or_build_the_file_filter_inside_the_time
     src = lf._io_spec(spark_session_local, 3, corpus, None)
     calls = _count_listings(monkeypatch)
     monkeypatch.setattr(
-        lf, "_only_files_regex", lambda *a: pytest.fail("the filter was built in the form")
+        lf,
+        "_only_files_regex",
+        lambda *a: pytest.fail("the filter was built in the form"),
     )
     if form == "io_b":  # a needs the JAR; b is the same path with the light reader
         n, fp, n_out, *_ = lf.io_b(spark_session_local, src)
         assert n == 3
     else:
-        with pytest.raises(Exception) as err:  # no JAR here: it must fail in the read, not in the listing
+        with pytest.raises(
+            Exception
+        ) as err:  # no JAR here: it must fail in the read, not in the listing
             lf.io_a(spark_session_local, src)
         assert "the filter was built" not in str(err.value)
     assert calls == []

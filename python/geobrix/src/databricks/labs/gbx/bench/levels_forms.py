@@ -1599,7 +1599,9 @@ def _io_scratch(corpus: str) -> str:
     return tempfile.gettempdir() + SCRATCH_PREFIX.rstrip("/")
 
 
-_IO_SPEC_CACHE: Dict[tuple, tuple] = {}  # (rows dir, n, dir mtime) -> (tiles held, a/b file filter)
+_IO_SPEC_CACHE: Dict[tuple, tuple] = (
+    {}
+)  # (rows dir, n, dir mtime) -> (tiles held, a/b file filter)
 
 
 def _io_listing(rows: str, n: int):
@@ -1691,7 +1693,8 @@ def io_partitions(spark, n) -> int:
 
 def _first_files(rows_dir, n) -> List[str]:
     """The corpus' first `n` row files (all of them for `n` None), sorted (the order the light reader lists them in), and
-    without the hidden ones (`.x` / `_x`) the reader skips: a hidden file among the first `n` would leave `b` short."""
+    without the hidden ones (`.x` / `_x`) the reader skips: a hidden file among the first `n` would leave `b` short.
+    """
     from databricks.labs.gbx.ds._listing import list_files
 
     files = list_files(
@@ -1729,10 +1732,7 @@ def _only_files_regex(files) -> str:
         return "(?!)"  # no file: nothing matches
     folder = os.path.dirname(files[0]).rstrip("/") + "/"
     return (
-        ".*"
-        + re.escape(folder)
-        + _trie_regex(os.path.basename(f) for f in files)
-        + "$"
+        ".*" + re.escape(folder) + _trie_regex(os.path.basename(f) for f in files) + "$"
     )
 
 

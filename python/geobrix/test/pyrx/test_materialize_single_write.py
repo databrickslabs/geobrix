@@ -147,7 +147,8 @@ def test_a_tile_that_needs_a_warp_opens_its_source_once_and_gives_the_same_bytes
     tmp_path, monkeypatch
 ):
     """`_whole_file_bytes` used to open the source to see that a warp was pending, return None, and let `open_tile`
-    open it again. The dataset it holds goes on to the warp; the output is what `open_tile` + one write gave."""
+    open it again. The dataset it holds goes on to the warp; the output is what `open_tile` + one write gave.
+    """
     path = _source(tmp_path, "plain")
     tile = VirtualTile(cellid=1, path=path, crs="EPSG:4326")
     with ot.open_tile(tile) as ds:

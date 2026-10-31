@@ -224,6 +224,10 @@ Standard access mode refuses the heavyweight functions. Use the lightweight tier
 GeoBrix 0.5.x installed native GDAL with a cluster init script. **Remove that init script from the cluster** and do not install the GDAL bundle. A system GDAL beside a 0.6.0 wheel puts two GDAL stacks in one cluster. See [Release Notes: 0.6.x](./release-notes-0-6#init-script).
 :::
 
+:::note Staying on GeoBrix 0.5.x
+These pages describe 0.6.x. To install 0.5.x with its init script, use the assets of the [v0.5.2 release](https://github.com/databrickslabs/geobrix/releases/tag/v0.5.2). They include the init script, the GDAL bundle and `geobrix-docs-0.5.2.zip`, the docs for that release.
+:::
+
 Two optional settings apply to the heavyweight tier:
 
 - **netCDF-4 filters.** Reading zstd, blosc or bzip2 netCDF-4 needs `HDF5_PLUGIN_PATH` in the cluster's environment variables. Without it the result is a silent NULL. The variable also reaches other HDF5 libraries on the cluster. See [Compressed netCDF-4 variables](./readers/netcdf#compressed-netcdf-4-variables-zstd-blosc-bzip2).

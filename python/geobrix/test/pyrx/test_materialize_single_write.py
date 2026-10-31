@@ -141,3 +141,25 @@ def test_a_tile_with_something_to_apply_still_takes_the_window_write(
     with MemoryFile(out.raster) as mf, mf.open() as ds:
         if "window" in tile:
             assert (ds.width, ds.height) == (40, 32)
+
+
+def test_a_tile_that_needs_a_warp_opens_its_source_once_and_gives_the_same_bytes(
+    tmp_path, monkeypatch
+):
+    """`_whole_file_bytes` used to open the source to see that a warp was pending, return None, and let `open_tile`
+    open it again. The dataset it holds goes on to the warp; the output is what `open_tile` + one write gave."""
+    path = _source(tmp_path, "plain")
+    tile = VirtualTile(cellid=1, path=path, crs="EPSG:4326")
+    with ot.open_tile(tile) as ds:
+        reference = ot._dataset_gtiff_bytes(ds)
+    opens = []
+    real = ot.open_raster
+
+    def counting(p, *a, **k):
+        opens.append(p)
+        return real(p, *a, **k)
+
+    monkeypatch.setattr(ot, "open_raster", counting)
+    out = ot.materialize_to_bytes(tile)
+    assert opens == [path], "the source is opened once"
+    assert out.raster == reference

@@ -1009,13 +1009,17 @@ def _dataset_gtiff_bytes(ds) -> bytes:
 
 
 def _whole_file_bytes(tile: VirtualTile) -> Optional[bytes]:
-    """GTiff bytes of a virtual tile that is its whole file with nothing to apply, written once; None otherwise.
+    """GTiff bytes of a virtual tile that is its whole file with nothing to apply but, maybe, a warp; None otherwise.
 
     ``open_tile`` writes the window it cuts to GeoTIFF bytes and reopens them, so that its caller holds a standalone
-    dataset. For a tile with no window, clip, pending instruction or warp that window is the whole source and the
+    dataset. For a tile with no window, clip or pending instruction that window is the whole source and the
     intermediate write is redundant: the source itself holds everything the output is made from (pixels, the own mask
     band, the profile, the alpha label), so it goes to the one write directly. Anything else is None (the caller takes
     the ``open_tile`` path, unchanged).
+
+    Whether the target ``crs`` asks for a warp is known only from the source's CRS, so the source is opened first. A tile
+    that needs one is warped from that same open dataset (``open_tile``'s steps, in the same order, on the one open)
+    rather than returned as None to be opened a second time.
     """
     if (
         tile.raster is not None
@@ -1027,11 +1031,18 @@ def _whole_file_bytes(tile: VirtualTile) -> Optional[bytes]:
     with ExitStack() as stack:
         local_path = _resolve_local_or_windowed(tile, None, stack)
         with open_raster(local_path) as src:
-            if _warp_pending(tile, src):
-                return None
             # a pixel read is where GDAL stops a raw band or a pipeline nested in the VRT: its refusal names the reason
+            if not _warp_pending(tile, src):
+                with refusals_named(f"the tile {tile.path}"):
+                    return _dataset_gtiff_bytes(src)
             with refusals_named(f"the tile {tile.path}"):
-                return _dataset_gtiff_bytes(src)
+                tile_bytes = _tile_window_bytes(
+                    tile,
+                    src,
+                    Window(0, 0, src.width, src.height),
+                    _parse_pending(tile.metadata),
+                )
+        return _dataset_gtiff_bytes(_open_bytes(stack, tile_bytes))
 
 
 def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:

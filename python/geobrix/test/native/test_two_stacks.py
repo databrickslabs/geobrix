@@ -19,7 +19,9 @@ What holds:
 - with the startup activation (the first two legs) no PyPI wheel's ``*.libs`` library is mapped and every binding is
   the payload's.
 
-The third leg's libraries are recorded (``record_property`` and the test output), not asserted.
+The third leg's libraries are recorded (``record_property`` and the test output), not asserted; the one thing asserted
+of it is that ``GBX_NATIVE_PTH=0`` really turned the activation off (no payload directory on ``sys.path`` at interpreter start), so the leg
+is the two-stack case it claims to be.
 
 Needs Linux, a payload (``GBX_NATIVE_ROOT``: ``/opt/gbx-native`` in the native dev image, or
 ``build/env-wheel/env6/payload``), geopandas and pyogrio, and the oracle data under ``/Volumes`` (the dev container
@@ -47,6 +49,9 @@ FOREIGN = ("rasterio.libs", "pyogrio.libs", "pyproj.libs", "shapely.libs")
 LEG = r"""
 import json, os, sys
 
+# the payload's directories on sys.path before anything is imported: the startup activation ran (empty when
+# GBX_NATIVE_PTH=0 turned it off; importing geobrix later activates it in-process, so it is read first)
+payload_at_start = [p for p in sys.path if "/_vendor/" in p]
 order = os.environ["TWO_STACKS_ORDER"]
 if order == "gbx-first":
     import databricks.labs.gbx  # the package, so its startup rules have run
@@ -57,7 +62,7 @@ else:
     import rasterio
     import databricks.labs.gbx
 
-out = {"order": order}
+out = {"order": order, "payload_at_start": payload_at_start}
 with rasterio.open(os.environ["TWO_STACKS_TIF"]) as ds:
     out["size"] = [ds.width, ds.height]
     out["pixel_sum"] = int(ds.read(1).astype("int64").sum())
@@ -146,6 +151,9 @@ def test_each_leg_reads_the_same_values(legs, record_property):
     assert len({r["geopandas_features"] for r in results.values()}) == 1
     # the two-stack leg's libraries and stack, for the decision record
     third = results["pypi-first-no-pth"]
+    assert third["payload_at_start"] == [], third["payload_at_start"]
+    for name in ("gbx-first", "pypi-first"):  # and the other legs did activate
+        assert results[name]["payload_at_start"], name
     stack = json.dumps(third.get("stack", third.get("stack_error")), default=str)
     record_property("two_stack_pypi_libs", ",".join(third["pypi_libs"]))
     record_property("two_stack_stack", stack)

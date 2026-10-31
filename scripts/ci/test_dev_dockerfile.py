@@ -586,6 +586,8 @@ def test_the_native_probe_reports_the_stack_it_finds(tmp_path):
     assert payload["jni_soname"] == "libgdal-abc12345.so.39"
     assert payload["jni_libgdal"] == str(native / "lib/libgdal-abc12345.so.39")
     assert payload["jni_unresolved"] == "0"
+    # the HDF5/netCDF-C default plugin directory is reported in payload mode only
+    assert "hdf5_plugin_dir" in payload and "hdf5_plugin_dir" not in legacy
     # nothing of the payload is importable here: the bindings are reported missing, not guessed
     assert payload.get("rasterio_error") or payload.get("rasterio_from_payload") == "false"
 
@@ -643,6 +645,13 @@ def overlay_problems(text: str) -> list:
         or "ldconfig" not in link[0].rest
     ):
         out.append("the JNI link or ldconfig registration is missing")
+    if (
+        not link
+        or not re.search(
+            r'ln -sfn "\$native/hdf5-plugins" /usr/local/hdf5/lib/plugin', link[0].rest
+        )
+    ):
+        out.append("HDF5's default plugin directory is not linked to the payload's plugins")
     envs = " ".join(i.rest for i in instrs if i.keyword == "ENV")
     if "GBX_NATIVE_ROOT=/opt/gbx-native" not in envs:
         out.append("GBX_NATIVE_ROOT is not the payload's root")
@@ -697,6 +706,22 @@ OVERLAY_MUTATIONS = {
     "no JNI link": (
         OVERLAY_REAL.replace("ln -sfn \"$native/lib/libgdalalljni.so\" /usr/lib/libgdalalljni.so;", "", 1),
         "the JNI link or ldconfig registration is missing",
+    ),
+    "no HDF5 plugin link": (
+        OVERLAY_REAL.replace(
+            'ln -sfn "$native/hdf5-plugins" /usr/local/hdf5/lib/plugin;',
+            "true;",
+            1,
+        ),
+        "HDF5's default plugin directory is not linked",
+    ),
+    "HDF5 plugin link to the wrong place": (
+        OVERLAY_REAL.replace(
+            'ln -sfn "$native/hdf5-plugins" /usr/local/hdf5/lib/plugin',
+            'ln -sfn "$native/lib" /usr/local/hdf5/lib/plugin',
+            1,
+        ),
+        "HDF5's default plugin directory is not linked",
     ),
     "an index as an ENV": (
         OVERLAY_REAL.replace("ENV RUSTUP_HOME", "ENV PIP_INDEX_URL=x RUSTUP_HOME", 1),

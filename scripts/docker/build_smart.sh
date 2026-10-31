@@ -194,7 +194,7 @@ index_fingerprint() {
         if [ ! -d "$(dirname "$salt_file")" ]; then
             mkdir -p "$(dirname "$salt_file")" && chmod 700 "$(dirname "$salt_file")" || return 1
         fi
-        if [ -s "$salt_file" ] && ! salt_is_valid "$salt_file"; then
+        if [ -e "$salt_file" ]; then   # present but invalid (also a zero-byte file): ln would fail on it forever
             log_warn "The salt file $salt_file is not 64 hex characters; making a new one (the package index fingerprint changes once)." >&2
             rm -f "$salt_file" || return 1
         fi
@@ -295,15 +295,17 @@ assemble_overlay_context() {
     req="$(maturin_requirement "$PROJECT_ROOT/scripts/native/build-requirements-$na.txt" "$(native_pin MATURIN_VERSION)")" \
         || overlay_fail "scripts/native/build-requirements-$na.txt has no hashed maturin==$(native_pin MATURIN_VERSION)"
 
-    rm -rf "$ctx"
-    mkdir -p "$ctx/payload/_native" "$ctx/payload/_vendor" "$ctx/rust/wheels" "$ctx/dist"
-    cp -R "$src/_native/$na" "$src/_native/share" "$ctx/payload/_native/"
-    cp -R "$src/_vendor/$na" "$src/_vendor/common" "$ctx/payload/_vendor/"
-    cp "$init" "$ctx/rust/rustup-init"
-    cp "$PROJECT_ROOT/rust-toolchain.toml" "$ctx/rust/rust-toolchain.toml"
-    cp "$wheel" "$ctx/rust/wheels/"
-    printf '%s\n' "$req" > "$ctx/rust/maturin.req"
-    cp "$dist" "$ctx/dist/"
+    rm -rf "$ctx" || overlay_fail "could not remove the old build context $ctx"
+    mkdir -p "$ctx/payload/_native" "$ctx/payload/_vendor" "$ctx/rust/wheels" "$ctx/dist" \
+        || overlay_fail "could not make the build context $ctx"
+    # This runs in a command substitution, where `set -e` does not reach: every step checks itself.
+    cp -R "$src/_native/$na" "$src/_native/share" "$ctx/payload/_native/" || overlay_fail "could not copy the payload's _native into the context"
+    cp -R "$src/_vendor/$na" "$src/_vendor/common" "$ctx/payload/_vendor/" || overlay_fail "could not copy the payload's _vendor into the context"
+    cp "$init" "$ctx/rust/rustup-init" || overlay_fail "could not copy rustup-init into the context"
+    cp "$PROJECT_ROOT/rust-toolchain.toml" "$ctx/rust/rust-toolchain.toml" || overlay_fail "could not copy rust-toolchain.toml into the context"
+    cp "$wheel" "$ctx/rust/wheels/" || overlay_fail "could not copy the maturin wheel into the context"
+    printf '%s\n' "$req" > "$ctx/rust/maturin.req" || overlay_fail "could not write maturin.req"
+    cp "$dist" "$ctx/dist/" || overlay_fail "could not copy the rasterio distribution into the context"
     echo "$ctx"
 }
 
@@ -506,6 +508,7 @@ sys.exit(0 if sys.argv[2] in json.load(open(sys.argv[1]))["sonames"].values() el
 ' "$manifest" "$soname" 2>/dev/null; then
         echo "the JNI needs $soname, which the payload's MANIFEST does not list among its sonames"
     fi
+    expect "HDF5 plugin directory is a link to the payload's filter plugins" "${OVERLAY_PAYLOAD_ROOT}/_native/${na}/hdf5-plugins" "$(value hdf5_plugin_dir)"
     expect "libgdalalljni.so resolves libgdal in the payload" "${OVERLAY_PAYLOAD_ROOT}/_native/${na}/lib/${soname}" "$(value jni_libgdal)"
     expect "/usr/lib/libgdalalljni.so is a link to the payload's JNI" "${OVERLAY_PAYLOAD_ROOT}/_native/${na}/lib/libgdalalljni.so" "$(value jni_link)"
     if [ "$(value jni_unresolved)" != "0" ]; then

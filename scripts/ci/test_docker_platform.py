@@ -1273,6 +1273,7 @@ def test_a_new_rasterio_pin_in_the_lock_stops_the_build_before_it_starts(tmp_pat
     "bad",
     [
         "not hex at all",
+        "",  # a zero-byte file (an interrupted write) must not block the build
         "ab" * 31,  # 62 hex characters: truncated
         "ab" * 33,  # 66
         "AB" * 32,  # upper case
@@ -1287,7 +1288,7 @@ def test_a_salt_that_is_not_64_hex_characters_is_replaced_with_a_warning_naming_
     res = build(arm, env={"PIP_INDEX_URL": INDEX})
     assert res.returncode == 0, res.output
     assert str(arm.salt_file) in res.output and "not 64 hex characters" in res.output
-    assert bad.strip() not in res.output  # the content is never shown
+    assert not bad.strip() or bad.strip() not in res.output  # the content is never shown
     salt = arm.salt_file.read_text()
     assert re.fullmatch(r"[0-9a-f]{64}", salt) and salt != bad
     assert stat.S_IMODE(arm.salt_file.stat().st_mode) == 0o600
@@ -1391,6 +1392,7 @@ def good_overlay_probe(na="aarch64") -> list:
         "jni_soname=libgdal-abc12345.so.39",
         f"jni_libgdal={root}/libgdal-abc12345.so.39",
         "jni_unresolved=0",
+        f"hdf5_plugin_dir={PAYLOAD_ROOT}/_native/{na}/hdf5-plugins",
         f"osgeo_gdal={pins['GDAL_VERSION']}",
         "osgeo_from_payload=true",
         f"rasterio_gdal={pins['GDAL_VERSION']}",
@@ -1563,6 +1565,8 @@ OVERLAY_FAILURES = {
     "the JNI resolves another libgdal": (dict(jni_libgdal="/usr/local/lib/libgdal-abc12345.so.39"), "resolves libgdal in the payload"),
     "the JNI link is the system's": (dict(jni_link="/usr/local/lib/jni/libgdalalljni.so"), "is a link to the payload's JNI"),
     "the JNI has unresolved libraries": (dict(jni_unresolved="2"), "has unresolved libraries"),
+    "the HDF5 plugin directory is not linked": (dict(hdf5_plugin_dir=""), "HDF5 plugin directory is a link to the payload's filter plugins"),
+    "the HDF5 plugin directory is another one": (dict(hdf5_plugin_dir="/usr/local/hdf5/lib/plugin"), "HDF5 plugin directory is a link to the payload's filter plugins"),
 }  # fmt: skip
 
 
@@ -1593,3 +1597,43 @@ def test_the_native_tags_follow_the_architecture(arm):
     # a worktree's .gbx-local.env may name the native tag for the container; the base image does not move
     res = arm.sh("GBX_DEV_IMAGE_TAG=ubuntu24-gbxnative-spark; gbx_dev_base_image arm64; gbx_dev_image_tag arm64")
     assert res.stdout.split() == [f"{BASE_TAG}-arm64", f"{NATIVE_TAG}-arm64"]
+
+
+def fake_tool(sb, name, fail_when):
+    """A stand-in for a coreutil that fails when an argument contains `fail_when`, else runs the real one."""
+    real = shutil.which(name)
+    tool = sb.bin / name
+    tool.write_text(
+        f'#!/bin/sh\nfor a in "$@"; do case "$a" in *{fail_when}*) echo "{name}: simulated failure" >&2; exit 1;; esac; done\n'
+        f'exec {real} "$@"\n'
+    )
+    tool.chmod(0o755)
+
+
+@pytest.mark.parametrize(
+    "tool,marker",
+    [
+        ("mkdir", "payload/_native"),
+        ("cp", "rust-toolchain.toml"),
+        ("cp", "/payload/_vendor/"),
+        ("cp", "rust/wheels"),
+    ],
+)
+def test_a_failed_copy_into_the_overlay_context_stops_the_build(overlay, tool, marker):
+    """The context is assembled inside a command substitution, where `set -e` does not reach."""
+    fake_tool(overlay, tool, marker)
+    res = build_overlay(overlay)
+    assert res.returncode == 1, res.output
+    assert "simulated failure" in res.output
+    assert overlay.of("build") == [] and overlay.of("tag") == []
+
+
+def test_an_index_in_the_base_image_history_fails_the_overlay_untagged(overlay):
+    """The overlay inherits its base's history; an index recorded there is refused like in the base build."""
+    overlay.state["history"] = [f"ENV PIP_INDEX_URL={INDEX}", "RUN apt-get update"]
+    res = build_overlay(overlay)
+    assert res.returncode == 1, res.output
+    assert "recorded in the image history" in res.output
+    assert INDEX not in res.output and "idx.internal" not in res.output
+    assert overlay.of("tag") == [] and probe_calls(overlay) == []
+    assert "geobrix-checkpoint:gbxnative-arm64" not in overlay.final_state()["images"]

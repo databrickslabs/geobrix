@@ -20,6 +20,7 @@
 # (installed versions).
 # Payload also prints (each measured by a fresh interpreter, so the startup activation is what is tested)
 #   jni_link            where the JNI link points
+#   hdf5_plugin_dir     where HDF5's and netCDF-C's default plugin directory (/usr/local/hdf5/lib/plugin) points
 #   <module>_gdal / _proj / _geos   the library version each binding reports (osgeo, rasterio, pyogrio, pyproj, shapely)
 #   <module>_from_payload           true when the module was imported from the payload
 #   rasterio_dist       the installed rasterio distribution's version
@@ -58,6 +59,7 @@ for key in ("gdal", "proj", "geos"):
 print("native_revision=" + str(manifest.get("native_revision", "")))
 PY
     echo "jni_link=$(readlink -f "$jni_link" 2>/dev/null)"
+    echo "hdf5_plugin_dir=$(readlink -f /usr/local/hdf5/lib/plugin 2>/dev/null)"
 else
     jni_file="$jni_link"
     echo "gdal=$(gdalinfo --version 2>/dev/null | sed -n 's/^GDAL \([0-9][0-9.]*\).*/\1/p')"

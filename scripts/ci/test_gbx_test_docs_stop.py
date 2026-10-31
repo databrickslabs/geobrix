@@ -220,3 +220,19 @@ def test_build_stops_its_own_servers_only(docs):
     )
     assert res.returncode != 0  # no docs/ build tree in the sandbox
     assert _wait(lambda: not _listening(own)), "build left its own checkout's server up"
+
+
+@pytest.mark.parametrize("script", ["gbx-docs-stop.sh", "gbx-docs-restart.sh"])
+@pytest.mark.parametrize("args", [["--port"], ["--port", "abc"], ["--port", "--force"]])
+def test_port_without_a_number_exits_2_with_usage(docs, script, args):
+    # `--port` as the last argument used to loop forever (`shift 2` fails with one argument left and shifts nothing).
+    res = subprocess.run(
+        ["bash", str(docs.root / "scripts" / "commands" / script), *args],
+        cwd=docs.root,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    out = res.stdout + res.stderr
+    assert res.returncode == 2, out
+    assert "--port" in out and "USAGE" in out

@@ -48,6 +48,11 @@ EOF
 while [[ $# -gt 0 ]]; do
     case $1 in
         --port)
+            if [[ $# -lt 2 || ! "$2" =~ ^[0-9]+$ ]]; then
+                echo "--port needs a port number (got: ${2:-nothing})" >&2
+                (show_help) >&2
+                exit 2
+            fi
             PORT="$2"
             shift 2
             ;;

@@ -11,7 +11,7 @@ bash scripts/commands/gbx-docs-restart.sh [OPTIONS]
 ## Options
 
 - `--skip-build` - Skip npm build, serve existing build
-- `--port <number>` - Custom port (default: 3000)
+- `--port <number>` - Custom port (default: 3000). A missing or non-numeric value exits 2 with the usage text.
 - `--force` - Replace the server even if another checkout started it. Default: refuse.
 - `--log <path>` - Write output to log file (supports filename, relative, or absolute path)
 - `--help` - Display help message

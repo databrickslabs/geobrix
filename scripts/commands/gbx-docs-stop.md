@@ -10,7 +10,7 @@ bash scripts/commands/gbx-docs-stop.sh [OPTIONS]
 
 ## Options
 
-- `--port <number>` - Stop only the server listening on this port. Default: stop every docs server.
+- `--port <number>` - Stop only the server listening on this port. Default: stop every docs server. A missing or non-numeric value exits 2 with the usage text.
 - `--force` - With `--port`, also stop a server started from another checkout. Default: refuse.
 - `--help` - Display help message.
 

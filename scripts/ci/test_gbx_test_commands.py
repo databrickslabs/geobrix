@@ -1762,7 +1762,7 @@ class _FakeFiles:
 
 @pytest.mark.parametrize("args", [["--env", "both"], ["--env", "6", "--no-prune"]])
 def test_stage_wheel_env_puts_each_env_wheel_on_the_bundle_volroot_by_its_own_name(tmp_path, monkeypatch, args):
-    # The init-script dir's plain wheel (another lane's) is never listed, pruned or overwritten.
+    # The artifact Volume dir's plain wheel (another lane's) is never listed, pruned or overwritten.
     stage = _launcher("stage_wheel_to_volume", monkeypatch)
     files = _FakeFiles(["geobrix-0.6.0-py3-none-any.whl"])
     sdk = type(sys)("databricks.sdk")

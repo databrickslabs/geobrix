@@ -9,9 +9,7 @@
 /target/
 /spark-warehouse/
 /artifacts/
-# Local output of scripts/build-gdal-artifacts.sh — the platform tarball
-# + sidecar are moved into resources/static/ (committed via Git LFS);
-# everything else in dist/ is intermediate (extracted bundle, etc.).
+# Local build output (release packaging, wheel/JAR staging).
 /dist/
 /python/geobrix/artifacts/
 /python/geobrix/test/vectorx/spark-warehouse/
@@ -71,7 +69,7 @@ test-logs/bench/
 /scratchpad/
 # pytest cache (appears in repo root and under docs/, python/, examples/, etc.)
 .pytest_cache/
-# Locally-built docs bundle (only the LFS platform tarball in resources/static/ is committed)
+# Locally-built docs bundle (gbx:docs:static-build writes it to resources/static/)
 /resources/static/geobrix-docs-*.zip
 
 # Per-machine salt for the dev image's package-index fingerprint (normally kept under ~/.cache/geobrix/;

@@ -1279,7 +1279,7 @@ def main() -> int:
         print(f"               schema={zarr_schema} cases={zarr_cases} reps={zarr_reps}")
     if heavyweight:
         print(
-            f"  tests.jar  : {tests_jar}  (attached as job library; fat JAR via cluster init script)"
+            f"  tests.jar  : {tests_jar}  (attached as job library)"
         )
     print("  NOTE: this submits a job to a real cluster and consumes compute.")
     print("=" * 64)

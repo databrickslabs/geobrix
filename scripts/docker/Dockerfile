@@ -166,7 +166,7 @@ RUN mkdir -p $ROOTDIR/share/maven \
 
 ENV MAVEN_HOME="$ROOTDIR/share/maven"
 # Version pins — keep in sync with .github/actions/{scala,python}_build/action.yml,
-# scripts/geobrix-gdal-init.sh, and examples/tests/requirements.txt.
+# and examples/tests/requirements.txt.
 # Run `gbx:versions:audit` after edits to confirm coverage.
 # DBR-aligned values: https://docs.databricks.com/aws/en/release-notes/runtime/17.3lts
 # Exceptions, held at security-patched releases above the DBR 17.3 value: setuptools, wheel and the

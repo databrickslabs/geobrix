@@ -65,7 +65,7 @@ gh release create v<NEW> --latest --title "GeoBrix v<NEW> (Beta)" --notes "..."
 gh workflow run "package geobrix artifacts" -f ref=v<NEW> -f attach_to_tag=v<NEW>
 ```
 
-Builds and attaches seven assets: the JAR, wheel, docs zip, the GDAL artifacts tarball `geobrix-gdal-artifacts-v<NEW>-noble.tar.gz` and its `.sha256`, the GDAL init script, and the DCS Dockerfile. Docs deploy auto-triggers on the docs-touching merge to `main`. Run as `mjohns-databricks` (`gh auth switch --user mjohns-databricks`).
+Builds and attaches four assets: the JAR, the wheel, the docs zip, and the DCS Dockerfile. Docs deploy auto-triggers on the docs-touching merge to `main`. Run as `mjohns-databricks` (`gh auth switch --user mjohns-databricks`).
 
 ## Notes
 

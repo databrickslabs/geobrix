@@ -4,7 +4,7 @@ Build JAR first (always, unless GBX_BUNDLE_SKIP_JAR_UPLOAD=1 or GBX_BUNDLE_SKIP_
 either of which skips the JAR build AND upload ENTIRELY -- no Maven, and python/geobrix/lib/
 is left untouched -- for light-tier-only wheel changes), then build the GeoBrix Python wheel
 (python3 -m build) and stage it to TWO locations:
-  1. GBX_ARTIFACT_VOLUME/<whl_filename>  — init-script dir; dedupes to exactly one
+  1. GBX_ARTIFACT_VOLUME/<whl_filename>  — artifact Volume dir; dedupes to exactly one
      geobrix-*.whl (any other-version geobrix-*.whl in that dir is removed before upload;
      a listing/delete failure aborts the run with a non-zero exit).
   2. bundle volroot/<whl_filename>       — /Volumes/<GBX_BUNDLE_VOLUME_CATALOG>/
@@ -15,8 +15,8 @@ uploads. Loads config from databricks_cluster_config.env. Overwrites if file alr
 
 --env 5|6|both stages the env wheel(s) instead (dist/env<N>/geobrix-<version>+env<N>-py3-none-any.whl,
 built by gbx:build:wheel): no JAR step (the env wheel carries its JAR), no build, and only the
-bundle volroot (the %pip path); the init-script dir and its plain wheel are left as they are.
---no-prune keeps every other geobrix-*.whl in the init-script dir (no single-version cleanup).
+bundle volroot (the %pip path); the artifact Volume dir and its plain wheel are left as they are.
+--no-prune keeps every other geobrix-*.whl in the artifact Volume dir (no single-version cleanup).
 --versioned (with --env) stages each env wheel to <volroot>/geobrix/<version>/env<N>/ instead of the volroot itself,
 removes every other geobrix-*.whl in that folder and verifies the uploaded size; the wheels of the volroot are left alone.
 """
@@ -221,10 +221,10 @@ def main() -> int:
         print("GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1: wheel built locally (%s); skipping Databricks upload." % whl.name)
         return 0
 
-    # ── Destination 1: init-script dir (GBX_ARTIFACT_VOLUME) ──────────────────────────
+    # ── Destination 1: artifact Volume dir (GBX_ARTIFACT_VOLUME) ──────────────────────────
     # Keep exactly one geobrix-*.whl in this dir; remove any other-version wheel before
-    # uploading. Never touch geobrix-gdal-init.sh, platform tarballs, JARs, or subdirs.
-    # A failure here is fatal: swallowing it would leave two wheel versions in the init dir.
+    # uploading. Never touch JARs or subdirs.
+    # A failure here is fatal: swallowing it would leave two wheel versions in the artifact dir.
     try:
         w.files.create_directory(artifact_volume)
     except Exception:

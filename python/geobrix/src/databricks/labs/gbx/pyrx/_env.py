@@ -2,7 +2,7 @@
 
 rasterio's manylinux/macOS wheels ship their own GDAL + PROJ data. We point
 GDAL_DATA / PROJ_DATA at those bundled paths *only if unset*, so pyrx does not
-collide with any cluster-level GDAL installed by the heavyweight init script, and
+collide with a cluster-level GDAL (the heavyweight tier's, or the DCS image's), and
 PROJ_DATA also when it names no proj.db this process can read (see configure_gdal_env).
 Registered PROJ grid dirs are merged with the PROJ data into one directory, which
 becomes PROJ_DATA (rasterio reads PROJ_DATA as a single path; see _proj_data_dir).

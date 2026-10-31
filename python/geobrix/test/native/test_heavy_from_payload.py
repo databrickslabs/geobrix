@@ -16,7 +16,7 @@ dev container::
 
 GDAL's Java classes also load the first ``libgdalalljni.so`` on the JVM's library path, by name. The dev image's
 system JNI (GDAL 3.11.4) is on that path, so these JVMs put the payload's ``lib/`` first (GDALManager refuses a
-second GDAL otherwise). An image whose ``/usr/lib/libgdalalljni.so`` is a link to the payload's (DCS, init script),
+second GDAL otherwise). An image whose ``/usr/lib/libgdalalljni.so`` is a link to the payload's (DCS),
 or one with no system GDAL (Databricks runtimes), needs no such setting.
 """
 

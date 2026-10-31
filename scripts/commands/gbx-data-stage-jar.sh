@@ -1,5 +1,5 @@
 #!/bin/bash
-# gbx:data:stage-jar - with --from-wheel <env wheel>: stage the JAR bundled in that wheel (sha256 checked against the wheel's RECORD, with a .sha256 sidecar) to <bundle volroot>/geobrix/<version>/jar/, no build and no container. Otherwise: mvn clean package -DskipTests then upload BOTH jars: product *-jar-with-dependencies.jar -> GBX_ARTIFACT_VOLUME/ (init-script dir; dedupes to one geobrix-*-jar-with-dependencies.jar), and bench *-tests.jar -> bundle volroot (overwrite if exists); GBX_BUNDLE_SKIP_JAR_UPLOAD=1 still builds the JAR locally but skips all uploads, GBX_BUNDLE_SKIP_JAR=1 skips build and upload, GBX_BUNDLE_SKIP_TESTS_JAR_UPLOAD=1 skips just the tests.jar
+# gbx:data:stage-jar - with --from-wheel <env wheel>: stage the JAR bundled in that wheel (sha256 checked against the wheel's RECORD, with a .sha256 sidecar) to <bundle volroot>/geobrix/<version>/jar/, no build and no container. Otherwise: mvn clean package -DskipTests then upload BOTH jars: product *-jar-with-dependencies.jar -> GBX_ARTIFACT_VOLUME/ (artifact Volume dir; dedupes to one geobrix-*-jar-with-dependencies.jar), and bench *-tests.jar -> bundle volroot (overwrite if exists); GBX_BUNDLE_SKIP_JAR_UPLOAD=1 still builds the JAR locally but skips all uploads, GBX_BUNDLE_SKIP_JAR=1 skips build and upload, GBX_BUNDLE_SKIP_TESTS_JAR_UPLOAD=1 skips just the tests.jar
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -13,7 +13,7 @@ show_help() {
     echo "With --from-wheel, stage the JAR bundled in an env wheel instead (no build, no Docker, no lock)."
     echo ""
     echo "  product *-jar-with-dependencies.jar → GBX_ARTIFACT_VOLUME/"
-    echo "    (init-script dir; dedupes to a single geobrix-*-jar-with-dependencies.jar)"
+    echo "    (artifact Volume dir; dedupes to a single geobrix-*-jar-with-dependencies.jar)"
     echo "  bench *-tests.jar                   → bundle volroot"
     echo ""
     echo "Options:"

@@ -4,7 +4,6 @@
 # (the consumer drifted), and also when the regex no longer matches (the consumer was retired: delete
 # its line). A consumer that moves to the new stack is retired by pointing it at pins.conf instead.
 scripts/docker/Dockerfile|(?m)^ARG GDAL_VERSION=(\S+)|3.11.4|kept as the fallback dev image
-scripts/build-gdal-artifacts.sh|(?m)^GDAL_PPA_VERSION="([^"]+)"|3.11.4+dfsg-1~noble0|init-script bundle from the native payload
 .github/actions/scala_build/action.yml|(?m)^\s*GDAL_PPA_VERSION="([^"]+)"|3.11.4+dfsg-1~noble0|CI scale-out
 .github/actions/python_build/action.yml|(?m)^\s*GDAL_PPA_VERSION="([^"]+)"|3.11.4+dfsg-1~noble0|CI scale-out
 .github/workflows/build_main.yml|(?m)^\s*gdal:\s*\[\s*([0-9.]+)\s*\]|3.11.4|CI scale-out
@@ -12,4 +11,3 @@ scripts/build-gdal-artifacts.sh|(?m)^GDAL_PPA_VERSION="([^"]+)"|3.11.4+dfsg-1~no
 .github/workflows/build_scala.yml|(?m)^\s*gdal:\s*\[\s*([0-9.]+)\s*\]|3.11.4|CI scale-out
 .github/workflows/build_scala_by_package.yml|(?m)^\s*gdal:\s*\[\s*([0-9.]+)\s*\]|3.11.4|CI scale-out
 .github/workflows/codecov-scala-parallel.yml|(?m)^\s*gdal:\s*\[\s*([0-9.]+)\s*\]|3.11.4|CI scale-out
-.github/workflows/package-geobrix-artifacts.yml|(?m)^\s*gdal:\s*\[\s*([0-9.]+)\s*\]|3.11.4|CI scale-out

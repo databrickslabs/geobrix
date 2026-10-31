@@ -1,5 +1,5 @@
 #!/bin/bash
-# gbx:versions:audit - Inventory pinned Python tooling versions across CI, Docker, init scripts, and venv setup.
+# gbx:versions:audit - Inventory pinned Python tooling versions across CI, Docker, the DCS image, and venv setup.
 # Use case 1: audit drift between locations.
 # Use case 2: when bumping to a new DBR LTS, run this first to see every place that needs an update.
 # Use case 3 (--native, --host): check the native stack (GDAL, PROJ, GEOS, Rust, the bindings) against
@@ -14,7 +14,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
 show_help() {
-    show_banner "Versions audit (CI / Docker / init / venv)"
+    show_banner "Versions audit (CI / Docker / DCS / venv)"
     echo -e "${CYAN}Usage:${NC}"
     echo -e "  ${GREEN}gbx:versions:audit${NC} ${YELLOW}[options]${NC}"
     echo ""
@@ -35,7 +35,7 @@ show_help() {
     echo -e "${CYAN}When to use:${NC}"
     echo -e "  - Bumping to a new DBR LTS: run this, then ask Claude to apply the new pins"
     echo -e "    given the release-notes URL (e.g. docs.databricks.com/.../runtime/18.3lts)."
-    echo -e "  - Suspect drift between Dockerfile / CI / init scripts: run to spot it."
+    echo -e "  - Suspect drift between Dockerfile / CI / images: run to spot it."
     echo ""
 }
 
@@ -131,8 +131,6 @@ FILES=(
     "scripts/docker/dcs/Dockerfile"
     "scripts/ci-local/Dockerfile.gha-runner"
     ".mvn/wrapper/maven-wrapper.properties"
-    "scripts/geobrix-gdal-init.sh"
-    "scripts/build-gdal-artifacts.sh"
     "pom.xml"
     "scripts/native/pins.conf"
     "rust-toolchain.toml"

@@ -5,7 +5,7 @@ Push the Essential bundle runner to the workspace and run it on a configured clu
 Use this to test the bundle (or an updated _bundle.py) on a live Databricks cluster:
 the script uploads a small notebook that runs run_essential_bundle() on the cluster,
 then runs that notebook as a one-off job. The cluster must have GeoBrix installed
-(e.g. as a cluster library or via init script), or you can build a wheel and upload
+(e.g. the env wheel and the JAR as cluster libraries), or you can build a wheel and upload
 it to a Volume; set GBX_ARTIFACT_VOLUME (or GBX_BUNDLE_WHEEL_VOLUME_PATH) so the notebook installs it first.
 
 Requires: databricks-sdk, and env config (see databricks_cluster_config.example.env).

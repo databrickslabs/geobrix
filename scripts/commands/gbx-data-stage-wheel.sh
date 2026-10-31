@@ -1,7 +1,7 @@
 #!/bin/bash
 # gbx:data:stage-wheel - build JAR first (mvn clean package -DskipTests in Docker), then
-# python3 -m build, and stage wheel to BOTH locations: GBX_ARTIFACT_VOLUME/ (init-script
-# dir; dedupes to one geobrix-*.whl) and the bundle volroot (bundle/%pip path). Set
+# python3 -m build, and stage wheel to BOTH locations: GBX_ARTIFACT_VOLUME/ (artifact
+# Volume dir; dedupes to one geobrix-*.whl) and the bundle volroot (bundle/%pip path). Set
 # GBX_BUNDLE_SKIP_JAR=1 or GBX_BUNDLE_SKIP_JAR_UPLOAD=1 to skip the JAR step entirely
 # (no Maven build, no JAR upload) — for light-tier-only wheel changes (pyrx/pyvx/pygx);
 # the staged JAR and python/geobrix/lib/ are left untouched.
@@ -74,17 +74,17 @@ if [[ "$SHOW_HELP" == "1" ]]; then
     echo "Build the GeoBrix JAR (in Docker, unless skipped) and Python wheel, then stage to Databricks."
     echo ""
     echo "Destinations:"
-    echo "  GBX_ARTIFACT_VOLUME/   (init-script dir; dedupes to a single geobrix-*.whl)"
+    echo "  GBX_ARTIFACT_VOLUME/   (artifact Volume dir; dedupes to a single geobrix-*.whl)"
     echo "  bundle volroot/        (bundle/%pip path; overwrite in place)"
     echo ""
     echo "Options:"
     echo "  --env 5|6|both Stage the env wheel(s) instead: dist/env<N>/geobrix-<version>+env<N>-py3-none-any.whl"
     echo "                 (gbx:build:wheel --env <N> builds it). No JAR step and no build; only the bundle"
-    echo "                 volroot (the %pip path), by the wheel's own +env<N> name. The init-script dir is"
+    echo "                 volroot (the %pip path), by the wheel's own +env<N> name. The artifact Volume dir is"
     echo "                 left as it is, so no other wheel there is touched."
     echo "  --versioned    With --env: stage each wheel to <bundle volroot>/geobrix/<version>/env<N>/, remove every"
     echo "                 other geobrix-*.whl there, and verify the uploaded size. The volroot's own wheels stay."
-    echo "  --no-prune     Keep every other geobrix-*.whl in the init-script dir (skip the single-version cleanup)"
+    echo "  --no-prune     Keep every other geobrix-*.whl in the artifact Volume dir (skip the single-version cleanup)"
     echo "  --profile <name>  Databricks config profile for the upload (default: DATABRICKS_CONFIG_PROFILE"
     echo "                    in the environment or examples/tests/databricks_cluster_config.env)"
     echo "  --log <path>   Write output to this log file (filename → test-logs/<name>)"

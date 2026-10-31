@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Build the GeoBrix JAR (mvn clean package -DskipTests) and upload *-jar-with-dependencies.jar
-to GBX_ARTIFACT_VOLUME/<jar_filename>. The init-script dir (GBX_ARTIFACT_VOLUME) must hold
+to GBX_ARTIFACT_VOLUME/<jar_filename>. The artifact Volume dir (GBX_ARTIFACT_VOLUME) must hold
 exactly one geobrix-*-jar-with-dependencies.jar: any stale other-version product JAR in that
 dir is removed before the new one is uploaded (tests.jar and non-geobrix files are untouched).
 Set GBX_BUNDLE_SKIP_JAR_UPLOAD=1 to build the JAR locally but skip the Databricks upload;
@@ -283,10 +283,10 @@ def main() -> int:
     except Exception:
         pass
 
-    # Init-script dir: keep exactly one geobrix-*-jar-with-dependencies.jar.
+    # Artifact Volume dir: keep exactly one geobrix-*-jar-with-dependencies.jar.
     # Delete any other-version product JAR before uploading the new one.
-    # Never touch geobrix-*-tests.jar, geobrix-gdal-init.sh, or platform tarballs.
-    # A failure here is fatal: swallowing it would leave two JAR versions in the init dir.
+    # Never touch geobrix-*-tests.jar or any file that is not a geobrix product JAR.
+    # A failure here is fatal: swallowing it would leave two JAR versions in the artifact dir.
     try:
         prune_stale(w, artifact_volume, "geobrix-", "-jar-with-dependencies.jar", jar_path.name)
     except Exception as e:
@@ -305,7 +305,7 @@ def main() -> int:
 
     # Also stage the bench tests.jar (carries HeavyRunner / the bench Scala harness). The
     # bench launcher attaches it as a cluster library from the BUNDLE volroot -- a DIFFERENT
-    # Volume than the artifact volume the init script reads the product jar from. The same
+    # Volume than the artifact volume that holds the product jar. The same
     # `mvn package` already built it (maven-jar-plugin bench-test-jar goal), so stage it here
     # too: one command keeps both jars current (no manual fs cp). Skippable for product-only.
     if os.environ.get("GBX_BUNDLE_SKIP_TESTS_JAR_UPLOAD", "").strip().lower() in ("1", "true", "yes"):

@@ -1,6 +1,6 @@
 # Audit pinned Python tooling versions
 
-Inventories every place a pinned package version lives across CI, the dev container Dockerfile, the Databricks cluster init script, and the lint venv setup. Use it to **detect drift** between locations, and as the entry point for **bumping pins to a new DBR LTS**.
+Inventories every place a pinned package version lives across CI, the dev container Dockerfile, the DCS image, and the lint venv setup. Use it to **detect drift** between locations, and as the entry point for **bumping pins to a new DBR LTS**.
 
 ## Usage
 
@@ -78,7 +78,7 @@ Source of truth (priority order):
 - `.github/workflows/build_*.yml` and `codecov-*.yml` (matrix values)
 - `scripts/docker/Dockerfile`
 - `scripts/ci-local/Dockerfile.gha-runner`, `.mvn/wrapper/maven-wrapper.properties`, `pom.xml` (the Maven pin)
-- `scripts/geobrix-gdal-init.sh`, `scripts/build-gdal-artifacts.sh`, `scripts/docker/dcs/Dockerfile`
+- `scripts/docker/dcs/Dockerfile`
 - `scripts/native/pins.conf`, `scripts/native/rust-pins.conf`, `rust-toolchain.toml`
 - `scripts/commands/gbx-lint-python.sh`
 - `python/geobrix/pyproject.toml` (dev/test extras — currently unpinned)
@@ -98,5 +98,5 @@ If a new file pins versions, add it to the `FILES` array in `gbx-versions-audit.
 ## Notes
 
 - The audit is **read-only** — never modifies files. All edits happen via Claude after you review the audit.
-- Pyproject.toml dev/test extras (`isort`, `black`, `flake8`, `build`, `pytest`, etc.) are intentionally unpinned to allow `pip install -e .[dev]` to resolve cleanly. The hard pins live in CI/Docker/init script — those are the trust boundaries.
+- Pyproject.toml dev/test extras (`isort`, `black`, `flake8`, `build`, `pytest`, etc.) are intentionally unpinned to allow `pip install -e .[dev]` to resolve cleanly. The hard pins live in CI/Docker/DCS image — those are the trust boundaries.
 - The audit prints a "Files audited" section at the end with `✓`/`✗` markers — a `✗` means a tracked file is missing (e.g. renamed/deleted). Update `FILES` in the script to fix.

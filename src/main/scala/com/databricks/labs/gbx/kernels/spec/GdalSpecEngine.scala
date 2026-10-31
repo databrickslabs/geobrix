@@ -3,7 +3,7 @@ package com.databricks.labs.gbx.kernels.spec
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.kernels.KernelGdal
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
-import org.gdal.gdal.{Algorithm, AlgorithmRegistry, gdal}
+import org.gdal.gdal.{Algorithm, AlgorithmRegistry, TranslateOptions, gdal}
 import org.gdal.gdalconst.gdalconstConstants
 
 import java.util.UUID
@@ -15,8 +15,11 @@ final case class SpecResult(raster: Array[Byte], error: String, command: String)
 
 /** One engine call on the JVM's GDAL: the mirror of `engine/run.py`.
   *
-  *   1. The input bytes are sniffed (GeoTIFF magic only), written to `/vsimem/gbx-spec/<uuid>/in<i>.tif` and their
-  *      headers read (size, bands, type, CRS); the call must fit the decoded budget.
+  *   1. The input bytes are written to `/vsimem/gbx-spec/<uuid>/in<i>.tif` and their headers read (size, bands, type,
+  *      CRS); the call must fit the decoded budget. Bytes without the GeoTIFF magic (a PNG, a netCDF or a JPEG 2000
+  *      tile kept in its own driver) are written as `src<i>`, opened with the drivers GeoBrix reads (the manifest's
+  *      allowed class), judged by the budget from their header, and only then translated to `in<i>.tif` (GTiff, no
+  *      other option); the source goes before the run.
   *   1. The argv is bound ([[GdalSpecArgv.build]]) and checked; the algorithm is instantiated (single use), parsed,
   *      run and finalized; the output is read from `/vsimem`.
   *   1. Every file under the call's prefix is removed, and every handle deleted, whatever happened.
@@ -73,13 +76,19 @@ object GdalSpecEngine {
         finally saved.foreach { case (k, v) => gdal.SetThreadLocalConfigOption(k, v) }
     }
 
-    private def props(sqlName: String, name: String, needsCrs: Boolean): RasterProps = {
-        val drivers = new java.util.Vector[String](Seq("GTiff").asJava)
+    private def open(sqlName: String, name: String, drivers: Seq[String]): org.gdal.gdal.Dataset = {
         gdal.ErrorReset()
         val ds =
-            try gdal.OpenEx(name, gdalconstConstants.OF_RASTER | gdalconstConstants.OF_READONLY, drivers)
+            try gdal.OpenEx(name, gdalconstConstants.OF_RASTER | gdalconstConstants.OF_READONLY,
+              new java.util.Vector[String](drivers.asJava))
             catch { case e: RuntimeException => throw new SpecDataException(e.getMessage) }
-        if (ds == null) throw new SpecDataException(lastError(s"$sqlName: the input is not a readable GeoTIFF"))
+        if (ds == null) throw new SpecDataException(lastError(s"$sqlName: the input is not a raster GeoBrix reads"))
+        ds
+    }
+
+    private def props(sqlName: String, name: String, needsCrs: Boolean,
+                      drivers: Seq[String] = Seq("GTiff")): RasterProps = {
+        val ds = open(sqlName, name, drivers)
         try {
             val sr = ds.GetSpatialRef() // a clone the caller owns: released here, not left to the finalizer
             try {
@@ -92,6 +101,25 @@ object GdalSpecEngine {
             RasterProps(ds.GetRasterXSize, ds.GetRasterYSize, ds.GetRasterCount,
               gdal.GetDataTypeName(ds.GetRasterBand(1).getDataType))
         } finally ds.delete()
+    }
+
+    /** Translate `src` (raster bytes in another driver) to the GeoTIFF `dst`, then remove `src`: the engine's
+      * algorithms read GeoTIFF inputs (the light tier's `_to_gtiff` makes the same calls). */
+    private def toGTiff(sqlName: String, src: String, dst: String, drivers: Seq[String]): Unit = {
+        val ds = open(sqlName, src, drivers)
+        val options = new TranslateOptions(new java.util.Vector[String](Seq("-of", "GTiff").asJava))
+        try {
+            gdal.ErrorReset()
+            val out =
+                try gdal.Translate(dst, ds, options)
+                catch { case e: RuntimeException => throw new SpecDataException(e.getMessage) }
+            if (out == null) throw new SpecDataException(lastError(s"$sqlName: the input could not be converted to GeoTIFF"))
+            out.delete()
+        } finally {
+            options.delete()
+            ds.delete()
+        }
+        gdal.Unlink(src)
     }
 
     private def remove(prefix: String): Unit = {
@@ -176,8 +204,8 @@ object GdalSpecEngine {
         }
     }
 
-    /** One call of `fn`'s spec over `rasters` (GeoTIFF bytes) with `values` (param -> String, Double, Boolean or
-      * null): its result, or None for a NULL result. Throws [[SpecParamException]] for a value the function refuses.
+    /** One call of `fn`'s spec over `rasters` (raster bytes: GeoTIFF, or another driver GeoBrix reads, translated
+      * first) with `values` (param -> String, Double, Boolean or null): its result, or None for a NULL result. Throws [[SpecParamException]] for a value the function refuses.
       * `conf` is the session's configuration (it initializes GDAL when the engine is the JVM's first user of it);
       * `section` is the allowlist. */
     def run(
@@ -194,17 +222,27 @@ object GdalSpecEngine {
         val out = s"$prefix/out.tif"
         val placeholders =
             if (block.inputs.head._2 == "raster") Seq("<input>") else rasters.indices.map(i => s"<input$i>")
-        val names = inNames.zip(placeholders) :+ (out -> "<output>")
+        // a raster without the GeoTIFF magic is written here first, read by the drivers GeoBrix reads, and translated
+        // to GeoTIFF once the budget holds (its props are its header's)
+        val srcNames = rasters.indices.map(i => s"$prefix/src$i")
+        val names = inNames.zip(placeholders) ++ srcNames.zip(placeholders) :+ (out -> "<output>")
         var command: String = null
         withEngineSettings {
             try {
-                rasters.zipWithIndex.foreach { case (r, i) =>
-                    if (r == null || r.length < 4 || !TiffMagic.contains(r.take(4).toSeq)) {
-                        throw new SpecDataException(s"${fn.sqlName}: input $i is not a GeoTIFF")
-                    }
-                    gdal.FileFromMemBuffer(inNames(i), r)
+                rasters.indexWhere(_ == null) match {
+                    case -1 => ()
+                    case i  => throw new SpecDataException(s"${fn.sqlName}: input $i has no raster")
                 }
-                val inputs = inNames.map(n => props(fn.sqlName, n, block.needsCrs))
+                val translated =
+                    rasters.indices.filterNot(i => rasters(i).length >= 4 && TiffMagic.contains(rasters(i).take(4).toSeq))
+                rasters.zipWithIndex.foreach { case (r, i) =>
+                    gdal.FileFromMemBuffer(if (translated.contains(i)) srcNames(i) else inNames(i), r)
+                }
+                val drivers = GdalSpecs.section.allowedDrivers // the manifest's allowed class, as for a virtual tile
+                val inputs = inNames.indices.map { i =>
+                    if (translated.contains(i)) props(fn.sqlName, srcNames(i), block.needsCrs, drivers)
+                    else props(fn.sqlName, inNames(i), block.needsCrs)
+                }
                 val decoded =
                     inputs.map(p => p.width.toLong * p.height * p.bands * GdalSpecArgv.ItemSize.getOrElse(p.dtype, 8)).sum
                 if (2 * decoded > DecodedBudget) {
@@ -213,6 +251,7 @@ object GdalSpecEngine {
                           s"compute's ${DecodedBudget >> 20} MiB. Fix: retile the tile first (gbx_rst_retile)"
                     )
                 }
+                translated.foreach(i => toGTiff(fn.sqlName, srcNames(i), inNames(i), drivers))
                 GdalSpecArgv.build(fn, values, inputs, inNames, out, section) match {
                     case None => None
                     case Some(tokens) =>

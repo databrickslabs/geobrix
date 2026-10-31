@@ -1,7 +1,10 @@
 """One engine call on ``osgeo`` (the light tier); the JVM's ``GdalSpecEngine`` makes the same call.
 
-1. The input bytes are sniffed (GeoTIFF magic only), written to ``/vsimem/gbx-spec/<uuid>/in<i>.tif`` and their
-   headers read (size, bands, type, CRS); the call must fit the decoded budget.
+1. The input bytes are written to ``/vsimem/gbx-spec/<uuid>/in<i>.tif`` and their headers read (size, bands, type,
+   CRS); the call must fit the decoded budget. Bytes without the GeoTIFF magic (a PNG, a netCDF or a JPEG 2000 tile
+   kept in its own driver) are written as ``src<i>``, opened with the drivers GeoBrix reads (the manifest's allowed
+   class, as every light read of raster bytes), judged by the budget from their header, and only then translated to
+   ``in<i>.tif`` (GTiff, no other option); the source goes before the run.
 2. The argv is bound (``argv.build``) and checked; the algorithm is instantiated (single use), parsed, run and
    finalized; the output is read from ``/vsimem``.
 3. Every file under the call's prefix is removed, whatever happened.
@@ -193,12 +196,17 @@ def virtual_source(sql_name: str, path: str) -> None:
         ds = None
 
 
-def _props(gdal, sql_name: str, name: str, needs_crs: bool) -> argv_mod.RasterProps:
+def _props(
+    gdal, sql_name: str, name: str, needs_crs: bool, drivers: Sequence[str] = ("GTiff",)
+) -> argv_mod.RasterProps:
     gdal.ErrorReset()
-    ds = gdal.OpenEx(name, gdal.OF_RASTER | gdal.OF_READONLY, allowed_drivers=["GTiff"])
+    ds = gdal.OpenEx(
+        name, gdal.OF_RASTER | gdal.OF_READONLY, allowed_drivers=list(drivers)
+    )
     if ds is None:
         raise DataError(
-            gdal.GetLastErrorMsg() or f"{sql_name}: the input is not a readable GeoTIFF"
+            gdal.GetLastErrorMsg()
+            or f"{sql_name}: the input is not a raster GeoBrix reads"
         )
     try:
         if needs_crs and ds.GetSpatialRef() is None:
@@ -215,6 +223,32 @@ def _props(gdal, sql_name: str, name: str, needs_crs: bool) -> argv_mod.RasterPr
         )
     finally:
         ds = None
+
+
+def _to_gtiff(gdal, sql_name: str, src: str, dst: str, drivers: Sequence[str]) -> None:
+    """Translate `src` (raster bytes in another driver) to the GeoTIFF `dst`, then remove `src`: the engine's
+    algorithms read GeoTIFF inputs. The JVM's GdalSpecEngine makes the same calls."""
+    gdal.ErrorReset()
+    ds = gdal.OpenEx(
+        src, gdal.OF_RASTER | gdal.OF_READONLY, allowed_drivers=list(drivers)
+    )
+    if ds is None:
+        raise DataError(
+            gdal.GetLastErrorMsg()
+            or f"{sql_name}: the input is not a raster GeoBrix reads"
+        )
+    try:
+        gdal.ErrorReset()
+        out = gdal.Translate(dst, ds, options=["-of", "GTiff"])
+        if out is None:
+            raise DataError(
+                gdal.GetLastErrorMsg()
+                or f"{sql_name}: the input could not be converted to GeoTIFF"
+            )
+        out = None
+    finally:
+        ds = None
+    gdal.Unlink(src)
 
 
 def _read(gdal, name: str) -> bytes:
@@ -319,7 +353,8 @@ def _check_expression(gdal, fn, tokens, props, names, prefix, shown) -> None:
 def run(
     fn, rasters: Sequence[bytes], values: Mapping, section=None
 ) -> Optional[Result]:
-    """One call of `fn`'s spec over `rasters` (GeoTIFF bytes) with `values` (param -> value): its Result, or
+    """One call of `fn`'s spec over `rasters` (raster bytes: GeoTIFF, or another driver GeoBrix reads, translated
+    first) with `values` (param -> value): its Result, or
     None for a NULL result. Raises ParamError for a value the function refuses. `section` is the allowlist
     (default the manifest's `gdal` section)."""
     apply_driver_policy()
@@ -336,11 +371,28 @@ def run(
     command = None
     with engine_settings(), _gdal_status() as gdal:
         try:
+            # A raster without the GeoTIFF magic is read by the drivers GeoBrix reads, and translated to GeoTIFF
+            # once the budget below holds (its props are its header's).
+            sources = {}
             for i, raster in enumerate(rasters):
-                if bytes(raster[:4]) not in _TIFF_MAGIC:
-                    raise DataError(f"{fn.sql_name}: input {i} is not a GeoTIFF")
-                gdal.FileFromMemBuffer(names[i], bytes(raster))
-            props = [_props(gdal, fn.sql_name, n, block.needs_crs) for n in names]
+                data = bytes(raster)
+                if data[:4] in _TIFF_MAGIC:
+                    gdal.FileFromMemBuffer(names[i], data)
+                else:
+                    sources[i] = f"{prefix}/src{i}"
+                    shown[sources[i]] = shown.get(names[i], f"<input{i}>")
+                    gdal.FileFromMemBuffer(sources[i], data)
+            drivers = (
+                virtual_drivers()
+            )  # the manifest's allowed class, as for a virtual tile's own file
+            props = [
+                (
+                    _props(gdal, fn.sql_name, sources[i], block.needs_crs, drivers)
+                    if i in sources
+                    else _props(gdal, fn.sql_name, n, block.needs_crs)
+                )
+                for i, n in enumerate(names)
+            ]
             decoded = sum(
                 p.width * p.height * p.bands * argv_mod._ITEMSIZE.get(p.dtype, 8)
                 for p in props
@@ -351,6 +403,8 @@ def run(
                     f"{fn.sql_name}: the call needs {2 * decoded // 2**20} MiB decoded (input and output), over "
                     f"this compute's {budget // 2**20} MiB. Fix: retile the tile first (gbx_rst_retile)"
                 )
+            for i, src in sources.items():
+                _to_gtiff(gdal, fn.sql_name, src, names[i], drivers)
             tokens = argv_mod.build(fn, values, props, names, out, section)
             if tokens is None:
                 return None

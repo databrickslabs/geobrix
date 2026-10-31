@@ -177,6 +177,71 @@ class GdalSpecSmokeTest extends AnyFunSuite {
 
     private def left(): Int = Option(gdal.ReadDirRecursive(GdalSpecEngine.Prefix)).map(_.size).getOrElse(0)
 
+    private def vsimem(): String = s"/vsimem/gbx-smoke-${java.util.UUID.randomUUID()}"
+
+    /** `tif` (GeoTIFF bytes) as `driver`'s bytes, through CreateCopy on /vsimem (every file it wrote removed). */
+    private def asDriver(tif: Array[Byte], driver: String): Array[Byte] = {
+        val (in, out) = (vsimem() + ".tif", vsimem())
+        gdal.FileFromMemBuffer(in, tif)
+        val src = gdal.Open(in)
+        try gdal.GetDriverByName(driver).CreateCopy(out, src).delete()
+        finally src.delete()
+        try gdal.GetMemFileBuffer(out)
+        finally Seq(in, out, out + ".aux.xml").foreach(gdal.Unlink)
+    }
+
+    /** The first band of GeoTIFF bytes, as Float32 pixels. */
+    private def band1(tif: Array[Byte], w: Int, h: Int): Array[Float] = {
+        val name = vsimem() + ".tif"
+        gdal.FileFromMemBuffer(name, tif)
+        val ds = gdal.Open(name)
+        try {
+            val px = new Array[Float](w * h)
+            ds.GetRasterBand(1).ReadRaster(0, 0, w, h, px)
+            px
+        } finally {
+            ds.delete()
+            gdal.Unlink(name)
+        }
+    }
+
+    test("a materialized tile in another driver runs on its GeoTIFF translation") {
+        val probe = KernelGdal.probe()
+        assume(
+          probe == s"ok:${GdalSpecs.section.pin}",
+          s"PRECONDITION MISSING: the JVM runs $probe, not GDAL ${GdalSpecs.section.pin} (the payload's); runs not checked"
+        )
+        val tif = dem(0.5f)
+        val slope = GdalSpecs.function("gbx_rst_slope")
+        val tcrs = GdalSpecs.function("gbx_rst_transformcrs")
+        val vals = Map[String, Any]("unit" -> "degrees", "xscale" -> null, "yscale" -> null)
+        val want = GdalSpecEngine.run(slope, Seq(tif), vals).get
+        // ERDAS Imagine keeps the Float32 pixels, the CRS and the geotransform in-band: the same slope, and a reprojection
+        val hfa = asDriver(tif, "HFA")
+        val got = GdalSpecEngine.run(slope, Seq(hfa), vals).get
+        assert(got.error == null && got.raster != null, String.valueOf(got.error))
+        assert(band1(got.raster, 64, 64).sameElements(band1(want.raster, 64, 64)), "the HFA tile's slope is not its GeoTIFF's")
+        val warped = GdalSpecEngine.run(tcrs, Seq(hfa), Map[String, Any]("target_crs" -> "EPSG:4326")).get
+        assert(warped.error == null && warped.raster != null, String.valueOf(warped.error))
+        // a PNG (Byte) holds no CRS: its slope runs, and reprojecting it is the no-CRS error tile with a Fix
+        val byteTif = {
+            val name = vsimem() + ".tif"
+            val ds = gdal.GetDriverByName("GTiff").Create(name, 64, 64, 1, gdalconstConstants.GDT_Byte)
+            ds.GetRasterBand(1).WriteRaster(0, 0, 64, 64, Array.tabulate(64 * 64)(i => ((i % 64) + (i / 64)).toByte))
+            ds.delete()
+            try gdal.GetMemFileBuffer(name) finally gdal.Unlink(name)
+        }
+        val png = asDriver(byteTif, "PNG")
+        val pngSlope = GdalSpecEngine.run(slope, Seq(png), vals).get
+        assert(pngSlope.error == null && pngSlope.raster != null, String.valueOf(pngSlope.error))
+        val pngWarp = GdalSpecEngine.run(tcrs, Seq(png), Map[String, Any]("target_crs" -> "EPSG:4326")).get
+        assert(pngWarp.raster == null && String.valueOf(pngWarp.error).contains("Fix: set its CRS"), String.valueOf(pngWarp.error))
+        // bytes no allowed driver reads are an error tile
+        val junk = GdalSpecEngine.run(slope, Seq(Array[Byte](1, 2, 3, 4, 5)), vals).get
+        assert(junk.raster == null && junk.error != null, String.valueOf(junk.error))
+        assert(left() == 0)
+    }
+
     test("each spec runs, leaves /vsimem/gbx-spec empty, and holds on eight threads") {
         val probe = KernelGdal.probe()
         assume(

@@ -103,6 +103,8 @@ SAME_PIXELS = [
     "tcrs_proj4",
     "tcrs_wkt",
     "se_ma_norm_diff",
+    "se_slope_png",
+    "se_tcrs_hfa",
     "se_tcrs_projjson",
 ]
 
@@ -271,3 +273,25 @@ def test_a_virtual_tile_over_the_read_cap_is_refused_from_its_header(
     (r,) = df.selectExpr("gbx_rst_slope(tile) AS s").collect()
     reason = r["s"]["metadata"]["last_error"]
     assert r["s"]["raster"] is None and "read cap" in reason and "Fix:" in reason
+
+
+def test_a_tile_in_another_driver_is_translated_under_the_decoded_budget(monkeypatch):
+    """A materialized PNG runs on its GeoTIFF translation and leaves /vsimem/gbx-spec empty; over the decoded
+    budget (judged from its header) it is refused before any translation, with a Fix."""
+    why = run.unavailable_reason()
+    if why:
+        pytest.skip(why)
+    fn = MAN.functions["gbx_rst_slope"]
+    png = oracles._build("dem_png_bytes", "")["raster"]
+    vals = {"unit": "degrees", "xscale": None, "yscale": None}
+    res = run.run(fn, [png], vals)
+    assert res.error is None and res.raster[:4] in run._TIFF_MAGIC
+    translations = []
+    real = run._to_gtiff
+    monkeypatch.setattr(run, "_to_gtiff", lambda *a: translations.append(a) or real(*a))
+    monkeypatch.setattr(
+        run, "decoded_budget", lambda: 1024
+    )  # the 64 x 64 Byte PNG is 4 KiB decoded
+    over = run.run(fn, [png], vals)
+    assert over.raster is None and "Fix: retile" in over.error and translations == []
+    assert not run._gdal().ReadDirRecursive(run.PREFIX)

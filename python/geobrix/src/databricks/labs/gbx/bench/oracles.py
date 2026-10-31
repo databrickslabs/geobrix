@@ -16,7 +16,7 @@ import tempfile
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from databricks.labs.gbx._gdal_policy import open_data
+from databricks.labs.gbx._gdal_policy import open_bytes, open_data
 from databricks.labs.gbx.uc.ddl import UC_GEOMETRY
 
 MERC_PROJ = (
@@ -756,6 +756,15 @@ SPEC_SE: Tuple[Case, ...] = (
         None,
         ("session",),
     ),
+    # A materialized PNG tile (no GeoTIFF magic) runs on its GeoTIFF translation: the reference slope of the PNG.
+    Case(
+        "se_slope_png",
+        SL,
+        (Build("dem_png_bytes"), "degrees"),
+        "ref",
+        "slope",
+        ("session",),
+    ),
     # Reprojecting a tile with no CRS is an error tile that says how to set one (heavy assumed EPSG:4326).
     Case(
         "se_tcrs_no_crs",
@@ -813,6 +822,24 @@ SPEC_SE: Tuple[Case, ...] = (
         "se_tcrs_url",
         T,
         (Build("tile_4326"), "https://example.com/crs.wkt"),
+        "error_fix",
+        None,
+        ("session",),
+    ),
+    # A materialized tile kept in another driver is translated to GeoTIFF first: a georeferenced ERDAS Imagine tile
+    # reprojects as its GeoTIFF does; a PNG carries no CRS, so reprojecting it is the no-CRS error tile with a Fix.
+    Case(
+        "se_tcrs_hfa",
+        T,
+        (Build("tile_4326_hfa"), "EPSG:3857"),
+        "tile_props",
+        "EPSG:3857",
+        ("session",),
+    ),
+    Case(
+        "se_tcrs_png",
+        T,
+        (Build("dem_png_bytes"), "EPSG:4326"),
         "error_fix",
         None,
         ("session",),
@@ -1114,6 +1141,19 @@ def _edit_pair() -> Tuple[bytes, bytes]:
     return a, b
 
 
+def _encode(bands, driver: str, **profile) -> bytes:
+    """`bands` (a (count, h, w) array) as raster bytes in `driver`, with the profile's georeferencing if any."""
+    from rasterio.io import MemoryFile
+
+    count, h, w = bands.shape
+    with MemoryFile() as mf:
+        with mf.open(
+            driver=driver, width=w, height=h, count=count, dtype=bands.dtype, **profile
+        ) as ds:
+            ds.write(bands)
+        return mf.read()
+
+
 def _gtiff(bands, crs_value: Optional[str], nodata=-9999.0) -> bytes:
     """A float32 GeoTIFF of `bands` (a (count, h, w) array) on a 10 m grid, in `crs_value` (None: no CRS)."""
     from rasterio.io import MemoryFile
@@ -1349,6 +1389,12 @@ def _se_build(name: str, tmpdir: Optional[str] = None):
         ]
     if name == "se_one":
         return [_tile(_gtiff(a[np.newaxis], "EPSG:3857"))]
+    if (
+        name == "dem_png_bytes"
+    ):  # a materialized PNG of a smooth Byte surface (a PNG holds no georeferencing)
+        yy, xx = np.mgrid[0:64, 0:64].astype("float64")
+        z = 0.5 * xx + 0.3 * yy + 10.0 * np.sin(xx / 7.0) * np.cos(yy / 5.0) + 100.0
+        return _tile(_encode(z[np.newaxis].round().astype("uint8"), "PNG"))
     if name == "se_four_band":
         return [_tile(_gtiff(np.stack([a, b, a + 1.0, b + 20.0]), "EPSG:3857"))]
     if name == "se_error_pair":
@@ -1373,6 +1419,21 @@ def _build(name: str, tmpdir: str):
         return _tile(_tile_bytes("EPSG:4326"))
     if name == "tile_3857":
         return _tile(_tile_bytes("EPSG:3857"))
+    if (
+        name == "tile_4326_hfa"
+    ):  # the tile_4326 raster, materialized as ERDAS Imagine (CRS and geotransform in-band)
+        from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+        with open_bytes(_tile_bytes("EPSG:4326")) as src:
+            return _tile(
+                _encode(
+                    src.read(),
+                    "HFA",
+                    crs=resolve_crs("EPSG:4326"),
+                    transform=src.transform,
+                    nodata=src.nodata,
+                )
+            )
     if (
         name == "projjson_4326"
     ):  # a CRS-as-PROJJSON INPUT value (it carries a "$schema" URL)

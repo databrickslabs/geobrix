@@ -231,6 +231,15 @@ def test_the_default_se_ladder_is_refused_up_front_with_the_scales_that_fit(monk
     assert launcher.levels_scales_problem("S", (1, 4, 16), launcher.TESTS_DIR.parent.parent) is None  # other sets are fine
 
 
+def test_a_set_with_its_own_ladder_gets_it_when_levels_scales_is_not_given():
+    """IO times 1,4,10; "not given" (None) must not become 1,4,16 on the way to the preflight."""
+    pytest.importorskip("pyspark")
+    root = launcher.TESTS_DIR.parent.parent
+    assert launcher.effective_levels_scales("IO", None, root) == (1, 4, 10)
+    assert launcher.effective_levels_scales("H", None, root) == (1, 4, 16)
+    assert launcher.effective_levels_scales("IO", (1, 4, 16), root) == (1, 4, 16)  # asked for: kept exactly
+
+
 def _no_work(monkeypatch, *argv):
     monkeypatch.setattr(launcher, "WorkspaceClient", lambda *a, **k: pytest.fail("work started before the check"), raising=False)
     monkeypatch.setattr(launcher.sys, "argv", ["push_and_run_bench_on_cluster.py", *argv])

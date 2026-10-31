@@ -102,11 +102,11 @@ See [`--levels` details](#levels-details) for the metrics.
 - `--levels <S|G|A|H|SE|IO>`: add the levels leg for one set of functions.
   - `S`: session functions. `G`: generators. `A`: aggregates. `H`: DataFrame helpers.
   - `SE`: the GDAL spec engine's rows (slope, transformcrs, mapalgebra against today's implementations).
-  - `IO`: no forms yet.
-  - Every form of the set is timed at each execution level the compute offers, at 1x, 4x and 16x its base row count. It writes one row per form and scale in the same results table.
+  - `IO`: the raster read and decode forms (its own ladder: 1x, 4x and 10x).
+  - Every form of the set is timed at each execution level the compute offers, at each scale (1x, 4x and 16x its base row count unless the set has its own ladder). It writes one row per form and scale in the same results table.
   - The levels are L1 (Catalyst expression), L2 (Java UDF), L3 (light) and L4 (Unity Catalog function).
 - `--levels-only`: run just this leg, without the heavy tests JAR.
-- `--levels-scales <csv>`: the multiples of each form's base row count. Default: `1,4,16`.
+- `--levels-scales <csv>`: the multiples of each form's base row count. Default: the set's own ladder: `1,4,10` for `IO`, `1,4,16` for the rest. An explicit value is used exactly.
   - A scale whose client-built inputs pass 64 MiB is refused at once (exit 2). The message names the scales that fit.
   - `--levels SE` fits only 1x, so give it `--levels-scales 1`.
 - `--levels-forms <csv>`: time only the forms with these names (the `form` column of the results). Default: every form of the set. Use it to rerun the rest of a leg after one slow form.
@@ -176,7 +176,7 @@ See [Hardening](#hardening) for what each stage does.
 - `bash scripts/commands/gbx-bench-cluster.sh --serverless --env-version 6 --zarr-only --run-id zarr1-sl`
 - `bash scripts/commands/gbx-bench-cluster.sh --cluster-id 0101-x --run-id gfile1 --grouped-file-only --multiwindow-corpus /Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-cog-multiwindow`
 - `bash scripts/commands/gbx-bench-cluster.sh --existing-cluster-id 0101-x --run-id lv1 --levels S --levels-only --levels-uc main.gbx_uc`
-- `bash scripts/commands/gbx-bench-cluster.sh --existing-cluster-id 0101-x --run-id lvh --levels H --levels-only --levels-scales 1,4` (`--levels-scales`: the multiples of each form's base row count; default `1,4,16`)
+- `bash scripts/commands/gbx-bench-cluster.sh --existing-cluster-id 0101-x --run-id lvh --levels H --levels-only --levels-scales 1,4` (`--levels-scales`: the multiples of each form's base row count; default: the set's own ladder, `1,4,10` for `IO` and `1,4,16` for the rest)
 - `bash scripts/commands/gbx-bench-cluster.sh --serverless --run-id lvs --levels S --levels-only --levels-uc main.gbx_uc` (smoke, then the real run)
 
 ## Run id and notebook path

@@ -145,6 +145,24 @@ def test_serverless_zarr_installs_the_wheel_and_extras_through_the_job_environme
     assert "installed by the job environment" in install and "pip" not in install
 
 
+def _levels_scales_cell(sdk):
+    """The ``LEVELS_SCALES = ...`` line of the one notebook the launch uploaded."""
+    (_, notebook), = sdk.uploads
+    lines = [l for c in notebook["cells"] for l in "".join(c["source"]).splitlines() if l.startswith("LEVELS_SCALES =")]
+    assert len(lines) == 1
+    return lines[0]
+
+
+def test_a_levels_run_without_levels_scales_leaves_the_ladder_to_its_set(launch, sdk):
+    """The launcher once defaulted --levels-scales to 1,4,16, so an IO run timed 1,4,16 and not IO's own 1,4,10.
+    "Not given" must reach the leg as None; an explicit value (even 1,4,16) stays exact."""
+    assert launch("--serverless", "--levels", "IO", "--levels-only", "--no-wait") == 0
+    assert _levels_scales_cell(sdk) == "LEVELS_SCALES = None"
+    sdk.uploads.clear()
+    assert launch("--serverless", "--levels", "IO", "--levels-only", "--levels-scales", "1,4,16", "--no-wait") == 0
+    assert _levels_scales_cell(sdk) == "LEVELS_SCALES = (1, 4, 16)"
+
+
 def test_every_launch_gets_its_own_notebook(launch, sdk):
     """A job reads its notebook when it is submitted: two launches on one path ran the later
     launch's notebook. Without --run-id each launch has its own id, and the env override is

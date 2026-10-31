@@ -337,6 +337,18 @@ DEFAULT_RUN_TIMEOUT_MIN = 360  # the real run's time limit, a levels leg include
 DEFAULT_SMOKE_TIMEOUT_MIN = 15
 
 
+def effective_levels_scales(levels_mvp, levels_scales, root) -> tuple:
+    """The multiples the leg will time: the ones given, else the set's own ladder (``levels.ladder``). Not given is None."""
+    if levels_scales is not None:
+        return tuple(levels_scales)
+    sys.path.insert(0, str(Path(root) / "python/geobrix/src"))
+    try:
+        from databricks.labs.gbx.bench import levels
+    except ImportError:  # no pyspark here: the form table cannot be read, and the preflight says so
+        return (1, 4, 16)
+    return levels.ladder(levels_mvp)
+
+
 def levels_scales_problem(levels_mvp, levels_scales, root, levels_forms=()) -> Optional[str]:
     """Why the levels ladder can never pass the client-input cap, or None when every scale fits.
 
@@ -346,6 +358,7 @@ def levels_scales_problem(levels_mvp, levels_scales, root, levels_forms=()) -> O
     """
     if not levels_mvp:
         return None
+    levels_scales = effective_levels_scales(levels_mvp, levels_scales, root)
     sys.path.insert(0, str(Path(root) / "python/geobrix/src"))
     try:
         from databricks.labs.gbx.bench import clientcap, preflight
@@ -399,6 +412,7 @@ def launch_problems(w, *, serverless, wheel, env_version, levels_mvp, levels_sca
             problems.append(f"cannot read the staged wheel {wheel}: {type(exc).__name__}: {exc}")
     if levels_mvp:
         sys.path.insert(0, str(Path(root) / "python/geobrix/src"))
+        levels_scales = effective_levels_scales(levels_mvp, levels_scales, root)
         problems += _preflight.probe_problems(levels_mvp, levels_scales, root, forms=levels_forms)
     return problems
 
@@ -874,21 +888,25 @@ def main() -> int:
     benchmark_grouped_file = "--grouped-file" in sys.argv
     grouped_file_only = "--grouped-file-only" in sys.argv
     # --levels <S|G|A|H|IO>: also run the levels leg for one set of functions (S session functions,
-    #   G generators, A aggregates, H DataFrame helpers; IO has no forms yet): every form of the set
+    #   G generators, A aggregates, H DataFrame helpers, SE spec engine, IO read paths and writers): every form of the set
     #   at each execution level the compute offers, with the attribution split. --levels-only: ONLY
     #   that leg (no fn benchmarks, no heavy tests JAR). --levels-uc <catalog.schema>: where the
     #   L4 (Unity Catalog) functions live; without it the L4 forms record a skipped row.
     levels_mvp = _arg("--levels", "")
     levels_only = "--levels-only" in sys.argv
     levels_uc = _arg("--levels-uc", "")
-    # --levels-scales <csv>: the multiples of each form's base row count the leg times (default 1,4,16).
+    # --levels-scales <csv>: the multiples of each form's base row count the leg times. Not given: None, which the
+    # leg resolves per set (IO has its own ladder; the rest 1,4,16). An explicit value is kept exactly.
+    levels_scales_text = _arg("--levels-scales", "").strip()
     try:
-        levels_scales = tuple(int(x) for x in _arg("--levels-scales", "1,4,16").split(",") if x.strip())
+        levels_scales = (
+            tuple(int(x) for x in levels_scales_text.split(",") if x.strip()) if levels_scales_text else None
+        )
     except ValueError:
         levels_scales = ()
     # --levels-forms <csv>: time only the forms with these names (the `form` column of the results).
     levels_forms = tuple(x.strip() for x in _arg("--levels-forms", "").split(",") if x.strip())
-    if not levels_scales or min(levels_scales) < 1:
+    if levels_scales is not None and (not levels_scales or min(levels_scales) < 1):
         print("ERROR: --levels-scales must be positive integers, e.g. 1,4,16", file=sys.stderr)
         return 2
     if levels_mvp not in ("", "S", "G", "A", "H", "SE", "IO"):

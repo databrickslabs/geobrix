@@ -7,7 +7,8 @@ state and the heartbeat, and cancels the run itself when either:
 
 * the heartbeat stopped changing for ``stale_s`` (the driver cannot even write a file), or
 * one form has run past its cap: the cap in the beat when it has one (a form at 16x carries sixteen times the
-  1x cap, so a long ladder is not judged by the 1x cap), else ``form_cap_s``.
+  1x cap, so a long ladder is not judged by the 1x cap), else ``form_cap_s``; held to ``form_cap_max_s`` when
+  that is set (the ceiling applies after the scale multiply, so one form cannot hold a run for hours).
 
 It then says which form, prints the tail of the stack the last beat held, and returns ``EXIT_STALLED``.
 It never retries: the caller decides what to do about a stalled run.
@@ -31,6 +32,7 @@ from typing import Callable, Optional
 EXIT_STALLED = 3
 DEFAULT_STALE_S = 300.0  # ten missed beats
 DEFAULT_FORM_CAP_S = 15 * 60.0
+DEFAULT_FORM_CAP_MAX_S = 60 * 60.0  # the launcher's ceiling on a scaled cap (--form-cap-max-min)
 TERMINAL_STATES = ("TERMINATED", "SKIPPED", "INTERNAL_ERROR")
 STACK_TAIL_LINES = 25
 READ_FAIL_WARN_AFTER = 12  # consecutive polls with an unreadable heartbeat before the warning (a minute at the 5 s poll)
@@ -91,8 +93,10 @@ class Watchdog:
         stale_s: float = DEFAULT_STALE_S,
         clock: Callable[[], float] = time.monotonic,
         token: Optional[str] = None,
+        form_cap_max_s: Optional[float] = None,
     ):
         self.form_cap_s = form_cap_s
+        self.form_cap_max_s = form_cap_max_s  # None: no ceiling on the scaled cap
         self.stale_s = stale_s
         self._clock = clock
         self.token = token  # this launch's id: a beat another launch wrote (same path) is not this run's
@@ -127,6 +131,8 @@ class Watchdog:
             ran = float(self._last.get("form_elapsed_s") or 0.0) + quiet
             # the beat carries the cap of the scale it is at (the 1x cap times the scale); else the watchdog's own
             cap = float(self._last.get("cap_s") or self.form_cap_s)
+            if self.form_cap_max_s:
+                cap = min(cap, self.form_cap_max_s)  # after the scale multiply
             if ran > cap:
                 return Stall(form, ran / 60, f"form past its {cap / 60:.0f} min cap", self._last.get("stack", []))
         if quiet > self.stale_s:

@@ -37,7 +37,7 @@ Usage:
 Hardening (every run): a SMOKE stage runs first (--no-smoke skips it, logged): each form of the chosen --levels
 set once at --smoke-rows rows plus a worker-side import check; only a clean smoke submits the real run. A local
 preflight refuses the launch with no compute (--skip-preflight skips it, logged). A watchdog polls the notebook's
-heartbeat and cancels a run whose heartbeat stopped (--stale-min) or whose form passed --form-cap-min, printing
+heartbeat and cancels a run whose heartbeat stopped (--stale-min) or whose form passed --form-cap-min (times the scale, held to --form-cap-max-min), printing
 `STALLED: <form> after <m> min` and the driver stack, exit 3. --smoke-only stops after a clean smoke. Every run has a time limit (--timeout-min, default 360;
 the smoke stage --smoke-timeout-min, default 15). --inject-stall <secs> adds a form that
 sleeps on the driver (test only; proves the watchdog).
@@ -398,7 +398,9 @@ def _life_and_result(run):
     return (val(st.life_cycle_state) if st else "?"), (val(st.result_state) if st else "")
 
 
-def watch_to_end(w, run_id, *, hb_path, form_cap_s, stale_s, token=None, count=None, poll_secs=5) -> Outcome:
+def watch_to_end(
+    w, run_id, *, hb_path, form_cap_s, stale_s, token=None, count=None, poll_secs=5, form_cap_max_s=None
+) -> Outcome:
     """Poll the run to its end with the watchdog; a stalled run is cancelled and reported (exit 3, not retried).
 
     ``count`` is ``(warehouse_id, table, run_id, apis, expected)`` for the live row count of a real run.
@@ -457,7 +459,9 @@ def watch_to_end(w, run_id, *, hb_path, form_cap_s, stale_s, token=None, count=N
         cancel=lambda: w.jobs.cancel_run(run_id),
         on_stall_dump=lambda: _run_watchdog.faulthandler_tail(w, run_id),
         on_poll=on_poll,
-        watchdog=_run_watchdog.Watchdog(form_cap_s=form_cap_s, stale_s=stale_s, token=token),
+        watchdog=_run_watchdog.Watchdog(
+            form_cap_s=form_cap_s, stale_s=stale_s, token=token, form_cap_max_s=form_cap_max_s
+        ),
         poll_secs=poll_secs,
         run_id=run_id,
     )
@@ -586,6 +590,11 @@ def main() -> int:
     smoke_rows = int(_arg("--smoke-rows", "16"))
     inject_stall = float(_arg("--inject-stall", "0"))
     form_cap_min = float(_arg("--form-cap-min", "15"))
+    # --form-cap-max-min: the ceiling on a form's cap after the scale multiply (15 min x 16 would be 4 h).
+    form_cap_max_min = float(_arg("--form-cap-max-min", "60"))
+    if form_cap_max_min <= 0:
+        print("ERROR: --form-cap-max-min must be a positive number of minutes.", file=sys.stderr)
+        return 2
     stale_min = float(_arg("--stale-min", "5"))
     try:  # the run time limits are checked here, before the preflight, the uploads or the smoke
         smoke_timeout_min = _minutes_arg("--smoke-timeout-min", DEFAULT_SMOKE_TIMEOUT_MIN)
@@ -1698,6 +1707,7 @@ def main() -> int:
     outcome = watch_to_end(
         w, remote_run_id, hb_path=f"{out_dir}/heartbeat.json", form_cap_s=form_cap_s, stale_s=stale_s,
         token=cfg["launch_token"], count=(warehouse_id, table, run_id, poll_apis, expected),
+        form_cap_max_s=form_cap_max_min * 60.0,
     )  # fmt: skip
     if outcome.stall:
         print(

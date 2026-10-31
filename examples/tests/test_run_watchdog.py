@@ -240,3 +240,28 @@ def test_persistent_read_failures_print_one_warning_after_the_limit_and_the_run_
     warnings = [ln for ln in out if "heartbeat" in ln and "WARNING" in ln]
     assert len(warnings) == 1 and "PermissionError: 403 forbidden" in warnings[0]
     assert f"{wd.READ_FAIL_WARN_AFTER} " in warnings[0] and "time limit" in warnings[0]
+
+
+# ---- a ceiling on the scaled per-form cap
+
+
+def test_the_scaled_form_cap_is_held_to_the_ceiling_after_the_multiply():
+    """15 min x 16 = 240 min would let one form hold a run for four hours: the ceiling applies after the multiply."""
+
+    def stall_after(scale, cap_max_s, elapsed_end):
+        c = Clock()
+        w = wd.Watchdog(form_cap_s=900, stale_s=300, clock=c, form_cap_max_s=cap_max_s)
+        stall = None
+        for i, el in enumerate(range(0, int(elapsed_end) + 1, 30), 1):
+            c.t += 30
+            stall = w.observe({**beat(i, f"f @{scale}x", el), "scale": scale, "cap_s": 900 * scale}) or stall
+            if stall:
+                break
+        return stall
+
+    ceiling = 3600
+    stall = stall_after(16, ceiling, 4 * 3600)  # the scaled cap is 240 min
+    assert stall is not None and "60 min cap" in stall.reason and 60 <= stall.minutes < 61
+    assert stall_after(4, ceiling, 3600 - 60) is None  # 4x is 60 min: at the ceiling, not over it
+    assert stall_after(1, ceiling, 900 + 60).reason.endswith("15 min cap")  # 1x is below the ceiling: its own cap
+    assert stall_after(16, None, 4 * 3600 - 120) is None  # no ceiling: the scaled cap, as before

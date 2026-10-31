@@ -161,6 +161,7 @@ See [Hardening](#hardening) for what each stage does.
 - `--skip-preflight`: skip the local preflight (logged).
 - `--timeout-min <n>`: the time limit of the real run. Default: 360.
 - `--form-cap-min <n>`: the watchdog cancels the run when one form runs longer. Default: 15 (smoke: 5).
+- `--form-cap-max-min <n>`: the ceiling on a form's cap after the scale multiply. Default: 60.
 - `--stale-min <n>`: the watchdog cancels the run when the heartbeat stops changing for this long. Default: 5.
 - `--inject-stall <seconds>`: test only. Adds a form that sleeps on the driver, to prove the watchdog.
 
@@ -286,6 +287,7 @@ These limits are documented and not coded. None is NULL, and none is checked.
   - The launcher cancels the run when the heartbeat stops changing for `--stale-min` (default 5), or when one form passes its cap.
   - It then prints `STALLED: <form> @<scale>x after <m> min` with the driver stack, and exits 3.
   - The cap is `--form-cap-min` (default 15, smoke 5) for a 1x form. It is multiplied by the scale for the larger ones: a 16x form gets 16 times the cap. A long 1x/4x/16x ladder is judged one scale at a time, not as a whole.
+  - The multiplied cap is held to `--form-cap-max-min` (default 60). At the defaults 4x gets 60 min and 16x gets 60 min, not 240. Raise the ceiling for a ladder whose large scales really need longer.
   - The watchdog never retries. If the cancel call itself fails, it says so and names the run to cancel by hand (still exit 3).
   - The per-form cap applies only to the `--levels` leg, which reports its progress form by form. The other bench legs get the worker import check, the stale-heartbeat check and the run time limit, but no per-form cap.
   - The notebook also arms `faulthandler.dump_traceback_later` at the cap (stderr of the driver).

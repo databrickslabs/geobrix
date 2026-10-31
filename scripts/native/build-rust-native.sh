@@ -43,7 +43,9 @@ echo "dev kit: gdal $(pkg-config --modversion gdal), proj $(pkg-config --modvers
 rm -rf "$OUT/wheel" "$OUT/payload"
 mkdir -p "$OUT/wheel" "$OUT/payload/_native/$ARCH/rs"
 t0=$(date +%s)
-(cd "$CRATE" && maturin build --release --offline --locked --compatibility linux --auditwheel skip -i "$PY" --out "$OUT/wheel") \
+# GBX_CARGO_FEATURES: the crate's cargo features (e.g. gdal for rust/gbxrs), or none
+(cd "$CRATE" && maturin build --release --offline --locked --compatibility linux --auditwheel skip -i "$PY" \
+    ${GBX_CARGO_FEATURES:+--features "$GBX_CARGO_FEATURES"} --out "$OUT/wheel") \
     || fail "maturin build"
 seconds=$(($(date +%s) - t0))
 whl="$(ls "$OUT"/wheel/*-cp312-abi3-linux_"$ARCH".whl 2> /dev/null | head -n 1 || true)"

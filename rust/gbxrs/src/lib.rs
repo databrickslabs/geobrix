@@ -2,6 +2,9 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
+#[cfg(feature = "gdal")]
+mod gdal_decode;
+
 const QUADRANTS: [&str; 5] = ["", "SW", "NW", "NE", "SE"];
 const LETTER_MAP: [[&str; 8]; 14] = [
     ["SV", "SW", "SX", "SY", "SZ", "TV", "TW", "TX"],
@@ -171,6 +174,8 @@ fn bng_eastnorth_cells<'py>(
 #[pymodule]
 fn _gbxrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(bng_eastnorth_cells, m)?)?;
+    #[cfg(feature = "gdal")]
+    m.add_function(wrap_pyfunction!(gdal_decode::decode_window, m)?)?;
     Ok(())
 }
 

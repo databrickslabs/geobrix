@@ -228,6 +228,30 @@ def test_a_complex_variable_is_refused_with_a_fix(tmp_path):
     _plan(tmp_path / "c.zarr")  # blocks are untouched
 
 
+def test_a_named_array_with_codecs_around_its_shards_is_not_told_to_change_dtype(
+    tmp_path,
+):
+    """The Fix for an array GeoBrix cannot decode fits the reason: codecs around a shard are
+    a layout problem, and its dtype is fine."""
+    path = tmp_path / "o.zarr"
+    g = zarr.open_group(str(path), mode="w", zarr_format=3)
+    arr = g.create_array(
+        "a",
+        shape=(4, 4),
+        chunks=(2, 2),
+        shards=(4, 4),
+        dtype="f4",
+        dimension_names=("y", "x"),
+    )
+    arr[:] = 1
+    doc = json.loads((path / "a" / "zarr.json").read_text())
+    doc["codecs"].append({"name": "gzip", "configuration": {"level": 1}})
+    (path / "a" / "zarr.json").write_text(json.dumps(doc))
+    with pytest.raises(ZarrUnsupported, match="sharding_indexed") as e:
+        _plan(path, variables=["a"])
+    assert "numeric dtype" not in str(e.value) and "Fix:" in str(e.value)
+
+
 def test_integer_zeros_survive_when_the_zarr_fill_value_is_not_a_mask(tmp_path):
     g = zarr.open_group(str(tmp_path / "z.zarr"), mode="w", zarr_format=2)
     a = g.create_array(

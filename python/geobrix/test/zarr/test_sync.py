@@ -430,7 +430,9 @@ def test_a_dead_publish_lock_is_cleared_only_on_request(spark_delta, registered)
             call(spark_delta, table)
         assert "break_lock=True" in e.value.fix and "hour" in e.value.fix
         # the public calls, not the private publish() of the module
-        assert "gbx_zarr_export(" in e.value.fix and 'method="publish"' in e.value.fix
+        assert "gbx_zarr_export(spark, " in e.value.fix
+        assert 'method="publish"' in e.value.fix
+        assert "gbx_zarr_sync(spark, " in e.value.fix  # the calls as a user types them
         assert " publish(" not in e.value.fix
     assert len(_live(spark_delta, table, kind="lock")) == 1  # refusing left it alone
 

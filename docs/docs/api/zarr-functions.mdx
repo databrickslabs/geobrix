@@ -111,7 +111,7 @@ the GeoBrix error name and `Fix:` line.
 | `ZarrVersionUnavailable` | A plain store is read with `version_as_of` or `timestamp_as_of` | `register the store with gbx_zarr_register to read it as of a version, or drop version_as_of and timestamp_as_of` |
 | `ZarrVersionUnavailable` | The version does not exist, or is older than the store's `retain` horizon | `pick a later version or tag the version you need with gbx_zarr_tag` |
 | `ZarrVersionUnavailable` | The tag does not exist | `pick an existing tag, or create it with gbx_zarr_tag` |
-| `ZarrUnsupported` | A variable you named cannot be decoded (a string array, say) | `read the other variables, or convert this array to a numeric dtype` |
+| `ZarrUnsupported` | A variable you named cannot be decoded (strings, or codecs around a shard, say) | `read the other variables, or rewrite this array in a form GeoBrix reads` |
 | `ZarrUnsupported` | A table or tiles are asked for a complex array | `read it as blocks, or leave it out of variables` |
 | `ZarrUnsupported` | No variable has a regular latitude and longitude grid to tile | `read it with output="blocks" or output="table"` |
 | `ZarrUnsupported` | The store keeps its files as FILE values and the compute does not support them | `use a Databricks Runtime 19 dedicated cluster (single-user, with fileReferenceCreationMode=MANAGED in its cluster config) in a workspace with the File type preview` |
@@ -365,7 +365,7 @@ its lock on the table. A publish that was killed leaves the lock behind; once it
 |---|---|---|
 | `ZarrUnsupported` | The table is not a registered store | `pass the table of a store made by gbx_zarr_register` |
 | `ZarrUnsupported` | An array changed its data type, chunk grid or codecs outside GeoBrix | `re-register the store` |
-| `ZarrWriteConflict` | A publish holds its lock on the table | `wait for the publish to finish. If it was killed and none is running, clear the lock with gbx_zarr_sync('<table>', break_lock=True), then publish again with gbx_zarr_export('<table>', method="publish")` |
+| `ZarrWriteConflict` | A publish holds its lock on the table | `wait for the publish to finish. If it was killed and none is running, clear the lock with gbx_zarr_sync(spark, '<table>', break_lock=True), then publish again with gbx_zarr_export(spark, '<table>', method="publish")` |
 | `ZarrWriteConflict` | The table changed while it was being synced | `run gbx_zarr_sync again` |
 
 ## Maintain
@@ -635,7 +635,7 @@ Exports a version of the store whose manifest table is `source`. Returns the pat
 | `ZarrUnsupported` | A reference meets a shard made of chunk rows | `run gbx_zarr_optimize first, or use method="copy"` |
 | `ZarrReadOnly` | `publish` on a store with no overlay | `register the store with writable=True and an overlay_root` |
 | `ZarrStoreDrift` | `publish` finds the store changed since the last sync | `run gbx_zarr_sync('<table>'), then publish again` |
-| `ZarrWriteConflict` | A publish holds its lock on the table | `wait for the publish to finish. If it was killed and none is running, clear the lock with gbx_zarr_sync('<table>', break_lock=True), then publish again with gbx_zarr_export('<table>', method="publish")` |
+| `ZarrWriteConflict` | A publish holds its lock on the table | `wait for the publish to finish. If it was killed and none is running, clear the lock with gbx_zarr_sync(spark, '<table>', break_lock=True), then publish again with gbx_zarr_export(spark, '<table>', method="publish")` |
 | `ZarrWriteConflict` | A write landed on the table during the publish, or Delta rejected the publish's commit | `the objects this publish already wrote are in the store, so run gbx_zarr_sync('<table>') to record them, then publish again` |
 | `ZarrVersionUnavailable` | The version was vacuumed or its files are gone | `the files were vacuumed; export a later version or a tag` |
 | `ZarrAccessUnavailable` | The version's files cannot be checked, for example while the Volume is not mounted | `retry when the Volume is reachable` |

@@ -464,7 +464,7 @@ def _choose_variables(variables, src: _Source) -> list[str]:
         if n in unsupported:
             raise ZarrUnsupported(
                 f"array {n!r} cannot be decoded: {unsupported[n]}",
-                fix="read the other variables, or convert this array to a numeric dtype",
+                fix="read the other variables, or rewrite this array in a form GeoBrix reads",
             )
     unknown = [n for n in names if n not in arrays]
     if unknown:

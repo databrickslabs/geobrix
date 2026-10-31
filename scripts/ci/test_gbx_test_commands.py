@@ -1985,3 +1985,20 @@ def test_local_timing_exits_non_zero_when_the_pass_flags_a_form(sandbox):
     res = sandbox.run("gbx-bench-local-timing.sh", FAKE_DOCKER_EXEC_RC="1")
     assert res.returncode == 1 and "flagged a form" in res.output, res.output
 
+
+def test_bench_cluster_takes_a_profile_and_hands_it_to_the_launcher(sandbox):
+    # The profile used to come only from DATABRICKS_CONFIG_PROFILE / the config file; --profile wins over both.
+    _venv_python(sandbox, sdk=False)
+    uv_log = sandbox.root / "uv.log"
+    uv = sandbox.bin / "uv"
+    uv.write_text(f'#!/bin/sh\necho "$* PROFILE=$DATABRICKS_CONFIG_PROFILE" >> "{uv_log}"\n')
+    uv.chmod(0o755)
+    config = sandbox.root / "examples" / "tests" / "databricks_cluster_config.env"
+    config.parent.mkdir(parents=True)
+    config.write_text("")
+
+    res = sandbox.run("gbx-bench-cluster.sh", "--profile", "oauth-fe", "--serverless", DATABRICKS_CONFIG_PROFILE="other")
+
+    assert res.returncode == 0, res.output
+    last = uv_log.read_text().splitlines()[-1]
+    assert "--profile oauth-fe" in last and last.endswith("PROFILE=oauth-fe"), last

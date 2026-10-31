@@ -87,6 +87,21 @@ if _env_file.exists():
                     os.environ[k] = _strip_invisible(v)
 
 
+def _staged_env_wheel(w, volroot: str, ver: str, env: int) -> str:
+    """The env wheel to install: the one `gbx:data:stage-wheel --env <N> --versioned` staged under
+    ``<volroot>/geobrix/<version>/env<N>/`` when it is there, else the flat ``<volroot>/`` path."""
+    name = f"geobrix-{ver}+env{env}-py3-none-any.whl"
+    versioned = f"{volroot}/geobrix/{ver}/env{env}/{name}"
+    try:
+        w.files.get_metadata(versioned)
+        print(f"  staged wheel: {versioned}")
+        return versioned
+    except Exception:  # noqa: BLE001 - absent (or unreadable): the flat path is the fallback
+        flat = f"{volroot}/{name}"
+        print(f"  staged wheel: {flat} (no versioned wheel at {versioned})")
+        return flat
+
+
 def _geobrix_version() -> str:
     """Read version from python package __init__.py (avoid heavy imports)."""
     init_py = (
@@ -1010,7 +1025,8 @@ def main() -> int:
 
     host = os.environ.get("DATABRICKS_HOST")
     token = os.environ.get("DATABRICKS_TOKEN")
-    profile = os.environ.get("DATABRICKS_CONFIG_PROFILE")
+    # --profile beats DATABRICKS_CONFIG_PROFILE (which the config file fills in when the environment has none)
+    profile = _arg("--profile", "") or os.environ.get("DATABRICKS_CONFIG_PROFILE")
     if not (host and token) and not profile:
         print(
             "Set DATABRICKS_HOST and DATABRICKS_TOKEN, or DATABRICKS_CONFIG_PROFILE",
@@ -1352,7 +1368,7 @@ def main() -> int:
             except ValueError as exc:
                 print(exc, file=sys.stderr)
                 return 2
-        wheel = f"{volroot}/geobrix-{ver}+env{env}-py3-none-any.whl"
+        wheel = _staged_env_wheel(w, volroot, ver, env)
         cfg["wheel"] = wheel
 
     # Pre-flight: show the operator exactly what will run before submitting.

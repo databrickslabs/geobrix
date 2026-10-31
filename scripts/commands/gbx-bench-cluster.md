@@ -18,7 +18,9 @@ Prerequisites (operator):
 
 - `--cluster-id <id>`: the target cluster. Sets the same env var as `CLUSTER_ID` in the env file, and overrides it.
 - `--existing-cluster-id <id>`: attach the run to a warm all-purpose cluster. This skips the 4-8 min job-cluster startup. The Python launcher receives it. It is the same as `CLUSTER_ID` in the env file.
+- `--profile <name>`: the Databricks config profile. It overrides `DATABRICKS_CONFIG_PROFILE` and the env file.
 - `--serverless`: submit to Serverless (lightweight only, no JAR). It skips `--cluster-id`. The profile must point to a workspace that supports Serverless jobs.
+- The wheel is found for you. The launcher uses `<volume>/geobrix/<version>/env<N>/` (from `gbx:data:stage-wheel --env <N> --versioned`) when the wheel is there, else `<volume>/geobrix-<version>+env<N>-py3-none-any.whl`. It prints the one it chose. `GBX_BUNDLE_WHEEL_VOLUME_PATH` overrides both.
 - `--env-version <N>`: the Serverless environment version to pin. Used only with `--serverless`. Default: 6.
 - `--run-id <id>`: the run id. Default: `cluster-<date>-<time>-<4 hex>`, new for every launch. See [Run id and notebook path](#run-id-and-notebook-path).
 - `--no-wait`: submit without waiting for the run to end.

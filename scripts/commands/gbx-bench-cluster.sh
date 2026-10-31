@@ -21,6 +21,7 @@ the configured Volume. Reads examples/tests/databricks_cluster_config.env.
 Usage: bash scripts/commands/gbx-bench-cluster.sh [options]
 Options:
   --cluster-id <id>     Target cluster (overrides CLUSTER_ID from config)
+  --profile <name>      Databricks config profile (overrides DATABRICKS_CONFIG_PROFILE and the config file)
   --run-id <id>         Run id (default: one of its own per launch, cluster-<date>-<time>-<4 hex>;
                         --resume needs the run id it resumes)
   --functions <csv>     rst_* names (overrides --set); with --grid-bng-only, bng_* names
@@ -136,13 +137,21 @@ databricks-sdk is added on top when the venv lacks it).
 
 NOTE: this submits a job to a real cluster (or Serverless) and consumes compute. For classic
 cluster runs the operator must have provisioned the cluster and filled databricks_cluster_config.env.
-For --serverless, set DATABRICKS_CONFIG_PROFILE to a workspace with Serverless enabled (e.g. dogfood).
+For --serverless, pass --profile (or set DATABRICKS_CONFIG_PROFILE) for a workspace with Serverless enabled (e.g. dogfood).
+The wheel is the env wheel staged by `gbx:data:stage-wheel --env <N> --versioned`
+(<volume>/geobrix/<version>/env<N>/) when it is there, else <volume>/geobrix-<version>+env<N>-py3-none-any.whl;
+GBX_BUNDLE_WHEEL_VOLUME_PATH overrides both.
 EOF
 }
 
 while [[ $# -gt 0 ]]; do case $1 in
     --help|-h) show_help; exit 0 ;;
     --cluster-id) export CLUSTER_ID="$2"; shift 2 ;;
+    --profile)
+        if [[ $# -lt 2 ]]; then echo "ERROR: --profile needs a value" >&2; exit 2; fi
+        # wins over the config file (the launcher fills DATABRICKS_CONFIG_PROFILE from it only when the environment
+        # has none) and goes to the launcher too
+        export DATABRICKS_CONFIG_PROFILE="$2"; PASS_ARGS+=(--profile "$2"); shift 2 ;;
     --log) LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
     *) PASS_ARGS+=("$1"); shift ;;
 esac; done

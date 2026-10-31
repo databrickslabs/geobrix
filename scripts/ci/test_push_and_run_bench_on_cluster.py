@@ -29,7 +29,13 @@ class _Rec:
 @pytest.fixture
 def sdk(monkeypatch):
     """Stub databricks.sdk: `state.uploads`, `state.submits` and `state.deleted` record calls."""
-    state = SimpleNamespace(uploads=[], submits=[], deleted=[], result="SUCCESS")
+    state = SimpleNamespace(uploads=[], submits=[], deleted=[], result="SUCCESS", staged=set(), profiles=[])
+
+    class Files:
+        def get_metadata(self, path):
+            if path not in state.staged:
+                raise FileNotFoundError(path)
+            return SimpleNamespace(content_length=1)
 
     class Workspace:
         def mkdirs(self, path):
@@ -61,6 +67,8 @@ def sdk(monkeypatch):
 
     class WorkspaceClient:
         def __init__(self, profile=None, **kwargs):
+            state.profiles.append(profile)
+            self.files = Files()
             self.workspace = Workspace()
             self.jobs = Jobs()
             self.current_user = SimpleNamespace(
@@ -270,3 +278,33 @@ def test_a_job_cluster_without_the_jar_refuses_the_heavyweight_tier(launch, sdk,
 def test_resume_needs_the_run_id_it_resumes(launch, sdk):
     assert launch("--serverless", "--zarr-only", "--resume", "--no-wait") == 2
     assert not sdk.submits
+
+
+# ---- the staged wheel and the profile
+
+
+VERSIONED = "/Volumes/c/s/v/geobrix/0.6.0/env6/geobrix-0.6.0+env6-py3-none-any.whl"
+FLAT = "/Volumes/c/s/v/geobrix-0.6.0+env6-py3-none-any.whl"
+
+
+def test_the_launcher_finds_the_versioned_staged_wheel_without_a_path_by_hand(launch, sdk):
+    """`gbx:data:stage-wheel --env 6 --versioned` puts the wheel under <volume>/geobrix/<version>/env6/; the launcher
+    used to look only at the flat <volume>/ path, so a run needed GBX_BUNDLE_WHEEL_VOLUME_PATH set to the real one."""
+    sdk.staged.add(VERSIONED)
+    assert launch("--serverless", "--zarr-only", "--no-wait", "--run-id", "t1") == 0
+    assert sdk.submits[0]["environments"][0].spec.dependencies[0] == VERSIONED
+
+
+def test_without_a_versioned_wheel_the_launcher_keeps_the_flat_path_and_an_explicit_path_wins(launch, sdk):
+    assert launch("--serverless", "--zarr-only", "--no-wait", "--run-id", "t1") == 0
+    assert sdk.submits[0]["environments"][0].spec.dependencies[0] == FLAT
+    sdk.staged.add(VERSIONED)
+    mine = "/Volumes/c/s/v/mine/geobrix-0.6.0+env6-py3-none-any.whl"
+    assert launch("--serverless", "--zarr-only", "--no-wait", "--run-id", "t2", GBX_BUNDLE_WHEEL_VOLUME_PATH=mine) == 0
+    assert sdk.submits[1]["environments"][0].spec.dependencies[0] == mine
+
+
+def test_profile_option_beats_the_environment_variable(launch, sdk):
+    assert launch("--serverless", "--zarr-only", "--no-wait", "--run-id", "t1") == 0
+    assert launch("--serverless", "--zarr-only", "--no-wait", "--run-id", "t2", "--profile", "oauth-fe") == 0
+    assert sdk.profiles == ["test", "oauth-fe"]  # the env var (test) is only the default

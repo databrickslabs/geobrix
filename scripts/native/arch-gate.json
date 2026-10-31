@@ -1,11 +1,11 @@
 {
   "written_by": "bash scripts/commands/gbx-native-verify-arches.sh",
   "checked_by": "python3 scripts/native/native_inputs.py check-stamp (CI: build_main.yml, job arch-gate)",
-  "native_inputs_sha256": "2ac75e5e6cc54d99d73906ebef1e72069de19ffa85437e0b596b55a1814b4c04",
+  "native_inputs_sha256": "19a597ac60a04dacddf41914d9289a185354fdb5b9d5431047a344ab6e85eaa4",
   "date": "2026-10-31",
   "gdal_version": "3.13.3",
   "native_revision": "1",
-  "built_from": "0c3fee8573a44790dacc04e386e96d80e1e9b6a3",
+  "built_from": "a7b814f7f8667987fa289b4cb2cdbbc05ec1e3ca",
   "results": {
     "aarch64": {
       "verify_native": {
@@ -86,10 +86,10 @@
     "scripts/native/build-requirements-aarch64.txt": "96f5a2ed85332b958a434d6399a93621fc2fb280337ae5b414b970a09bc058fc",
     "scripts/native/build-requirements-x86_64.txt": "837e514662848d4176fd642bafcac1fc9825dbc84919e8eb560756aa2e65ffb1",
     "scripts/native/build-requirements.in": "9a4df67eb8215282db860e4bc181c387205b2b72f14db042aaf2359db0b4be34",
-    "scripts/native/build-rust-native.sh": "0d7b445ba6adb04a08ca21295b775d7634f12393b65ff1e19cbec0597a85236e",
+    "scripts/native/build-rust-native.sh": "8f77856738e178be7a6a90a0a4709984c1b6ae35ff30cbf6dd774fdff7bced68",
     "scripts/native/build.Dockerfile": "e6dc9c46f06c8374b0955c8dfb841718dabc828d06e66d5440a9307b9ecb69c3",
     "scripts/native/build_env_wheel.py": "533e332a9b1d09cf0b4633343de1be81eafe27548459ab98793ef94ad9adacf1",
-    "scripts/native/cargo-deny-ci.sh": "6035f4b42b159b31757f9886dc2388a3eb28541bd597edd4142af363987139b2",
+    "scripts/native/cargo-deny-ci.sh": "7343af663e7b1bf5693169bc91fc974fa8aa8aafd6b2e8071bcb96d35dfdb5b3",
     "scripts/native/cargo-offline.toml": "a8326789ecde9b687444088317921b38f25c1cdedcb0117b9a17f945216de55e",
     "scripts/native/cargo-vendor.sh": "535e5b173666967828b06a6f6d7f39bed70af5fd0d4a3df819cba41f62db990c",
     "scripts/native/check-env-wheel.sh": "24df5996b8b45c9c087179d5ccbc7ecd54ce89584c29b7127752ef797ad08d45",

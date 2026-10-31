@@ -361,7 +361,9 @@ def test_a_levels_forms_name_that_matches_no_variant_is_reported():
     assert preflight.unknown_form_names("SE", ("today@256", "today@1024")) == []
     assert preflight.unknown_form_names("SE", ("today@256", "tday@256")) == ["tday@256"]
     assert preflight.unknown_form_names("SE", ()) == []
-    assert preflight.unknown_form_names("IO", ("anything",)) == ["anything"]  # IO has no forms
+    assert preflight.unknown_form_names("IO", ("anything",)) == [
+        "anything"
+    ]  # IO has no forms
 
 
 def test_the_memory_probes_of_the_g_set_are_marked():

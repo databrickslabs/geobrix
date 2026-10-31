@@ -2159,9 +2159,6 @@ def run_reader(spark, case: Case, form: str, tmpdir: Optional[str] = None) -> Li
     """
     import functools
 
-    import numpy as np
-    from rasterio.windows import from_bounds
-
     from databricks.labs.gbx.ds.file_gbx import report_detected_cap
     from databricks.labs.gbx.ds.register import register as register_readers
     from databricks.labs.gbx.pyrx import _mvp_forms
@@ -2200,22 +2197,62 @@ def run_reader(spark, case: Case, form: str, tmpdir: Optional[str] = None) -> Li
         )
     else:
         raise ValueError(form)
-    failures, covered = [], 0
     with open_data(path) as src:
-        for r in df.select("tile").collect():
-            with open_bytes(bytes(r["tile"]["raster"])) as got:
-                win = (
-                    from_bounds(*got.bounds, transform=src.transform)
-                    .round_offsets()
-                    .round_lengths()
-                )
-                if not np.array_equal(got.read(1), src.read(1, window=win)):
-                    failures.append(f"{case.cid}/{form}: pixels differ at {win}")
-                covered += int(win.width * win.height)
-        if covered != src.width * src.height:
-            failures.append(
-                f"{case.cid}/{form}: covered {covered} of {src.width * src.height} px"
+        return reader_failures(
+            case.cid, form, src, [r["tile"] for r in df.select("tile").collect()]
+        )
+
+
+def reader_failures(cid: str, form: str, src, tiles) -> List[str]:
+    """What is wrong with `tiles` (rows of a read of the open raster `src`): each must be a decoded tile with the CRS,
+    data type and NoData of the file and exactly its pixels where its geotransform puts it, and together they must
+    cover every pixel once (a boolean mask: an overlap and a gap are both failures, whatever their areas).
+    """
+    import numpy as np
+    from rasterio.windows import from_bounds
+
+    from databricks.labs.gbx.core.crs import crs_equal
+
+    failures, seen = [], np.zeros((src.height, src.width), dtype=bool)
+    for tile in tiles:
+        if tile["raster"] is None:
+            err = (tile["metadata"] or {}).get("last_error")
+            failures.append(f"{cid}/{form}: an error tile ({err})")
+            continue
+        with open_bytes(bytes(tile["raster"])) as got:
+            win = (
+                from_bounds(*got.bounds, transform=src.transform)
+                .round_offsets()
+                .round_lengths()
             )
+            r0, c0, h, w = (
+                int(win.row_off),
+                int(win.col_off),
+                int(win.height),
+                int(win.width),
+            )
+            if r0 < 0 or c0 < 0 or r0 + h > src.height or c0 + w > src.width:
+                failures.append(f"{cid}/{form}: a tile outside the raster at {win}")
+                continue
+            if not np.array_equal(got.read(1), src.read(1, window=win)):
+                failures.append(f"{cid}/{form}: pixels differ at {win}")
+            if not crs_equal(got.crs, src.crs):
+                failures.append(f"{cid}/{form}: crs {got.crs} is not {src.crs}")
+            if got.dtypes[0] != src.dtypes[0]:
+                failures.append(
+                    f"{cid}/{form}: dtype {got.dtypes[0]} is not {src.dtypes[0]}"
+                )
+            if got.nodata != src.nodata:
+                failures.append(
+                    f"{cid}/{form}: nodata {got.nodata} is not {src.nodata}"
+                )
+            if seen[r0 : r0 + h, c0 : c0 + w].any():
+                failures.append(f"{cid}/{form}: a tile overlaps another at {win}")
+            seen[r0 : r0 + h, c0 : c0 + w] = True
+    if not seen.all():
+        failures.append(
+            f"{cid}/{form}: {int((~seen).sum())} of {seen.size} px are in no tile"
+        )
     return failures
 
 

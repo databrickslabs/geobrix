@@ -510,6 +510,63 @@ def test_the_batch_decode_yields_bounded_slices_in_order(tmp_path, monkeypatch):
     assert [b.to_pylist()[0] for b in out] == whole.to_pylist()
 
 
+def test_the_batch_decode_of_an_empty_batch_is_one_empty_batch_with_the_same_schema():
+    import pyarrow as pa
+
+    from databricks.labs.gbx.pyrx import _mvp_forms
+
+    one = _batch_of("/nowhere.tif")
+    empty = pa.RecordBatch.from_pylist([], schema=one.schema)
+    (out,) = _mvp_forms.materialize_batches([empty])
+    assert out.num_rows == 0 and out.schema == one.schema
+
+
+def test_the_batch_decode_passes_skipped_rows_through_and_keeps_every_row_in_order(
+    tmp_path, monkeypatch
+):
+    """A null tile, an already-materialized tile and a tile without a path are not decoded; the virtual ones between
+    them are, and slicing at the byte bound loses and reorders nothing."""
+    import pyarrow as pa
+
+    from databricks.labs.gbx.pyrx import _mvp_forms
+    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+    a, b = _tif(tmp_path / "a.tif"), _tif(tmp_path / "b.tif")
+    base = _batch_of(a)
+
+    def row(cellid, **kw):
+        return {"tile": VirtualTile(cellid=cellid, **kw).to_row()}
+
+    rows = [
+        {"tile": None},
+        row(cellid=1, path=a),  # decoded
+        row(cellid=2, path=b, raster=b"already"),  # materialized: kept as it is
+        {"tile": {**row(cellid=3, path=a)["tile"], "path": None}},  # no path: kept
+        row(cellid=4, path=b),  # decoded
+        {"tile": None},
+    ]
+    batch = pa.RecordBatch.from_pylist(rows, schema=base.schema)
+    for chunk in (1 << 30, 1):  # one output batch, then a slice per decoded tile
+        monkeypatch.setattr(_mvp_forms, "_OUT_CHUNK_BYTES", chunk)
+        out = [
+            r for ob in _mvp_forms.materialize_batches([batch]) for r in ob.to_pylist()
+        ]
+        assert len(out) == 6
+        assert [None if r["tile"] is None else r["tile"]["cellid"] for r in out] == [
+            None,
+            1,
+            2,
+            3,
+            4,
+            None,
+        ]
+        assert out[1]["tile"]["raster"] and out[4]["tile"]["raster"]  # decoded
+        assert (
+            out[2]["tile"]["raster"] == b"already" and out[3]["tile"]["raster"] is None
+        )  # untouched
+        assert out[0]["tile"] is None and out[5]["tile"] is None
+
+
 @pytest.mark.integration
 @pytest.mark.parametrize("form", ["a", "c"])
 def test_the_jvm_io_reads_take_exactly_n_files(jvm_spark, tmp_path, form):
@@ -533,7 +590,9 @@ def test_the_jvm_io_reads_take_exactly_n_files(jvm_spark, tmp_path, form):
             return next(i for i, ln in enumerate(plan) if any(x in ln for x in k))
 
         assert (
-            at(FN) < at("Exchange hashpartitioning") < at("GlobalLimit", "CollectLimit")
+            at(FN)
+            < at("Exchange rangepartitioning")
+            < at("GlobalLimit", "CollectLimit")
         )
     else:
         assert df.rdd.getNumPartitions() == 3

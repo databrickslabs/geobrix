@@ -148,12 +148,15 @@ def _parser_directives(dockerfile):
     return out
 
 
+def test_the_image_build_pulls_no_dockerfile_frontend_from_docker_hub():
+    """No step probes Docker Hub: build.Dockerfile has no `syntax` directive, so the Docker Engine's bundled
+    frontend parses it."""
+    assert "syntax" not in _parser_directives(REPO_ROOT / "scripts/native/build.Dockerfile")
+
+
 def test_the_direct_download_probe_names_a_download_with_no_working_origin():
     """Each direct download needs one origin that serves the file; a policy proxy's 403/407/451 is blocked, not
-    reachable. The sdists are not direct (they come through the package index in CI); rasterio's test data is. The
-    image build pulls no Dockerfile frontend from Docker Hub, which no step probes: build.Dockerfile has no `syntax`
-    directive, so the Docker Engine's bundled frontend parses it."""
-    assert "syntax" not in _parser_directives(REPO_ROOT / "scripts/native/build.Dockerfile")
+    reachable. The sdists are not direct (they come through the package index in CI); rasterio's test data is."""
     probe = _native("egress_probe")
     pins = {
         "ZLIB_URL": "https://blocked-a.example/zlib.tar.gz",

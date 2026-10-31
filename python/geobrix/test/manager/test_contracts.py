@@ -870,7 +870,9 @@ CONNECT_BNG = BNG.levels["L2"]["connect_class"]
 
 def _standard_stub(monkeypatch, tmp_path, jar=True):
     monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
-    monkeypatch.setattr(caps_mod, "_expected_sha", lambda: None)  # not the payload's bundled JAR
+    monkeypatch.setattr(
+        caps_mod, "_expected_sha", lambda: None
+    )  # not the payload's bundled JAR
     path = tmp_path / "geobrix-0.6.0-jar-with-dependencies.jar"
     path.write_bytes(b"PK")
     if jar:

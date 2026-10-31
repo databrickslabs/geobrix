@@ -145,7 +145,7 @@ ValueError: unknown variable(s) ['temperature']; the store has ['latitude', 'lon
 """
 EXECUTOR_ERROR_output = """
 PythonException
-run gbx_zarr_sync(<table>) on the store's manifest table to record the change, then read again
+run gbx_zarr_sync(spark, <table>) on the store's manifest table to record the change, then read again
 """
 
 

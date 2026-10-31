@@ -1224,7 +1224,7 @@ def _require_files(
             f"version {version} of {table} points at {len(moved)} object(s) of the base "
             f"store that changed since (e.g. {moved[0]}), so {_GERUND[verb]} it would make "
             "the store read as drift",
-            fix=f"run gbx_zarr_sync({table!r}) to record the store as it is now, then "
+            fix=f"run gbx_zarr_sync(spark, {table!r}) to record the store as it is now, then "
             f"{verb} a later version",
         )
     if unreachable:

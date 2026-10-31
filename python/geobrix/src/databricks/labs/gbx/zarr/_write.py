@@ -2901,7 +2901,7 @@ def _fold_touched(spark, table: str, version: int, shards: set, access=None) -> 
         raise ZarrError(
             f"the write committed (version {version}) but folding its shards failed: "
             f"{e.message}",
-            fix=f"run gbx_zarr_optimize({table!r}); the write itself is done. {e.fix}",
+            fix=f"run gbx_zarr_optimize(spark, {table!r}); the write itself is done. {e.fix}",
         ) from e
 
 

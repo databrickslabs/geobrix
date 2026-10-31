@@ -113,11 +113,11 @@ the GeoBrix error name and `Fix:` line.
 | `ZarrVersionUnavailable` | The tag does not exist | `pick an existing tag, or create it with gbx_zarr_tag` |
 | `ZarrUnsupported` | A variable you named cannot be decoded (strings, or codecs around a shard, say) | `read the other variables, or rewrite this array in a form GeoBrix reads` |
 | `ZarrUnsupported` | A table or tiles are asked for a complex array | `read it as blocks, or leave it out of variables` |
-| `ZarrUnsupported` | No variable has a regular latitude and longitude grid to tile | `read it with output="blocks" or output="table"` |
+| `ZarrUnsupported` | No variable can be tiled (no regular latitude and longitude grid, or complex values) | `read it with output="blocks" or output="table"` |
 | `ZarrUnsupported` | The store keeps its files as FILE values and the compute does not support them | `use a Databricks Runtime 19 dedicated cluster (single-user, with fileReferenceCreationMode=MANAGED in its cluster config) in a workspace with the File type preview` |
 | `ZarrAccessUnavailable` | `access="direct"` is asked of a plain store | `register the store with gbx_zarr_register to use direct access, or use access="auto" or "fuse"` |
 | `ZarrAccessUnavailable` | `access="direct"` with virtual tiles | `use virtual_tiles=False to read the tiles now with direct access, or access="auto" or "fuse"` |
-| `ZarrStoreDrift` | A registered store's files were changed by another tool (raised in a task) | `run gbx_zarr_sync(<table>) on the store's manifest table to record the change, then read again` |
+| `ZarrStoreDrift` | A registered store's files were changed by another tool (raised in a task) | `run gbx_zarr_sync(spark, <table>) on the store's manifest table to record the change, then read again` |
 
 ### `gbx_zarr_sample`
 
@@ -272,7 +272,7 @@ nothing.
 | `ZarrWriteConflict` | Another writer changed a chunk this write also touches (`keys`, `winner`) | `re-read the store at its latest version and write again` |
 | `ZarrWriteConflict` | The commit lost 20 attempts to other writers | `retry later or reduce concurrent writers to this array` |
 | `ZarrError` | The input of a `create` or `append` changed between the plan and the write | `the input changed between planning and writing; materialize it as a table first (write it to Delta, then pass spark.table(...))` |
-| `ZarrError` | `optimize=True` committed the write, but the fold failed | `run gbx_zarr_optimize('<table>'); the write itself is done.` |
+| `ZarrError` | `optimize=True` committed the write, but the fold failed | `run gbx_zarr_optimize(spark, '<table>'); the write itself is done.` |
 
 ## Register and sync
 
@@ -570,7 +570,7 @@ one is retried like a write's, up to twenty attempts.
 | `ZarrVersionUnavailable` | Vacuum has removed the version's files | `the files were vacuumed; restore a later version or a tag` |
 | `ZarrAccessUnavailable` | The version's files cannot be checked, for example while the Volume is not mounted | `retry when the Volume is reachable` |
 | `ZarrAccessUnavailable` | The version's files cannot be read for lack of permission on the Volume | `check that you have READ VOLUME (and WRITE VOLUME to write) on the Volume, then try again` |
-| `ZarrVersionUnavailable` | The version's base objects changed since | `run gbx_zarr_sync('<table>') to record the store as it is now, then restore a later version` |
+| `ZarrVersionUnavailable` | The version's base objects changed since | `run gbx_zarr_sync(spark, '<table>') to record the store as it is now, then restore a later version` |
 | `ZarrWriteConflict` | Other writers kept changing the rows | `retry once the other writers are done` |
 
 ## Export and publish
@@ -634,9 +634,9 @@ Exports a version of the store whose manifest table is `source`. Returns the pat
 | `ValueError` | A reference target exists | `pass a path that does not exist, or remove it` |
 | `ZarrUnsupported` | A reference meets a shard made of chunk rows | `run gbx_zarr_optimize first, or use method="copy"` |
 | `ZarrReadOnly` | `publish` on a store with no overlay | `register the store with writable=True and an overlay_root` |
-| `ZarrStoreDrift` | `publish` finds the store changed since the last sync | `run gbx_zarr_sync('<table>'), then publish again` |
+| `ZarrStoreDrift` | `publish` finds the store changed since the last sync | `run gbx_zarr_sync(spark, '<table>'), then publish again` |
 | `ZarrWriteConflict` | A publish holds its lock on the table | `wait for the publish to finish. If it was killed and none is running, clear the lock with gbx_zarr_sync(spark, '<table>', break_lock=True), then publish again with gbx_zarr_export(spark, '<table>', method="publish")` |
-| `ZarrWriteConflict` | A write landed on the table during the publish, or Delta rejected the publish's commit | `the objects this publish already wrote are in the store, so run gbx_zarr_sync('<table>') to record them, then publish again` |
+| `ZarrWriteConflict` | A write landed on the table during the publish, or Delta rejected the publish's commit | `the objects this publish already wrote are in the store, so run gbx_zarr_sync(spark, '<table>') to record them, then publish again` |
 | `ZarrVersionUnavailable` | The version was vacuumed or its files are gone | `the files were vacuumed; export a later version or a tag` |
 | `ZarrAccessUnavailable` | The version's files cannot be checked, for example while the Volume is not mounted | `retry when the Volume is reachable` |
 | `ZarrAccessUnavailable` | The version's files cannot be read for lack of permission on the Volume | `check that you have READ VOLUME (and WRITE VOLUME to write) on the Volume, then try again` |

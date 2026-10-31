@@ -659,7 +659,7 @@ def test_publish_refuses_after_drift(spark_delta, registered):
     zarr.open_array(str(store / "u10"), mode="r+")[0:12, 0:37, 0:72] = 2.5
     with pytest.raises(ZarrStoreDrift, match="changed since the last sync") as e:
         publish(spark_delta, table)
-    assert "gbx_zarr_sync" in e.value.fix
+    assert f"gbx_zarr_sync(spark, {table!r})" in e.value.fix
     np.testing.assert_array_equal(zarr.open_array(str(store / "t2m"))[...], before)
     assert _live(spark_delta, table, kind="lock") == []  # the lock is not left behind
     gbx_zarr_sync(spark_delta, table)  # what the Fix says, then it goes through
@@ -731,7 +731,7 @@ def test_a_write_that_lands_during_a_publish_fails_it_with_a_publish_fix(
         )
     err = e.value
     assert "already wrote" in err.fix and "in the store" in err.fix
-    assert f"gbx_zarr_sync({table!r})" in err.fix and "publish again" in err.fix
+    assert f"gbx_zarr_sync(spark, {table!r})" in err.fix and "publish again" in err.fix
     assert "write again" not in err.fix
     assert err.keys and err.winner  # what the conflicting commit told, kept
     assert _live(spark_delta, table, kind="lock") == []  # the lock is released

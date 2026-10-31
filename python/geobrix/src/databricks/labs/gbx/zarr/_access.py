@@ -61,7 +61,7 @@ _LOG = logging.getLogger(__name__)
 _PERMANENT = (PermissionError, IsADirectoryError, NotADirectoryError)
 _SYNC_FIX = "run gbx_zarr_sync if the store changed outside GeoBrix; otherwise "
 _DRIFT_FIX = (
-    "run gbx_zarr_sync(<table>) on the store's manifest table to record the change, "
+    "run gbx_zarr_sync(spark, <table>) on the store's manifest table to record the change, "
     "then read again"
 )
 # How finely a file's modification time is compared with the one recorded when it was

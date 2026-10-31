@@ -842,7 +842,7 @@ def _publish_conflict(table: str, err: Exception) -> ZarrWriteConflict:
     return ZarrWriteConflict(
         f"the publish of {table} did not commit: {why}",
         fix="the objects this publish already wrote are in the store, so run "
-        f"gbx_zarr_sync({table!r}) to record them, then publish again",
+        f"gbx_zarr_sync(spark, {table!r}) to record them, then publish again",
         **extra,
     )
 
@@ -916,7 +916,7 @@ def _publish(spark, table: str, props, lock: str) -> int:
             f"{len(diff.report)} object(s) of {base} changed since the last sync "
             f"({shown}{' ...' if len(diff.report) > 3 else ''}), so publishing could "
             "overwrite them.",
-            fix=f"run gbx_zarr_sync({table!r}), then publish again",
+            fix=f"run gbx_zarr_sync(spark, {table!r}), then publish again",
         )
     kind = live.column("kind")
     overlay = live.filter(pc.fill_null(pc.equal(live.column("origin"), "gbx"), False))

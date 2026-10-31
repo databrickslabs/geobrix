@@ -53,7 +53,7 @@ read-only 303.0
 writable 302.0
 """
 DETECT_OUTSIDE_CHANGES_output = """
-Fix: run gbx_zarr_sync(<table>) on the store's manifest table to record the change, then read again
+Fix: run gbx_zarr_sync(spark, <table>) on the store's manifest table to record the change, then read again
 +-------+-----+-------+
 | change|array|    key|
 +-------+-----+-------+

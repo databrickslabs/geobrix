@@ -2234,18 +2234,26 @@ def reader_failures(cid: str, form: str, src, tiles) -> List[str]:
             if r0 < 0 or c0 < 0 or r0 + h > src.height or c0 + w > src.width:
                 failures.append(f"{cid}/{form}: a tile outside the raster at {win}")
                 continue
-            if not np.array_equal(got.read(1), src.read(1, window=win)):
-                failures.append(f"{cid}/{form}: pixels differ at {win}")
+            if got.count != src.count:
+                failures.append(f"{cid}/{form}: {got.count} bands, not {src.count}")
+            else:
+                want = src.read(window=win)
+                have = got.read()
+                nan_ok = want.dtype.kind in "fc"  # a NaN pixel is the same pixel
+                if have.shape != want.shape or not np.array_equal(
+                    have, want, equal_nan=nan_ok
+                ):
+                    failures.append(f"{cid}/{form}: pixels differ at {win}")
             if not crs_equal(got.crs, src.crs):
                 failures.append(f"{cid}/{form}: crs {got.crs} is not {src.crs}")
-            if got.dtypes[0] != src.dtypes[0]:
-                failures.append(
-                    f"{cid}/{form}: dtype {got.dtypes[0]} is not {src.dtypes[0]}"
-                )
-            if got.nodata != src.nodata:
-                failures.append(
-                    f"{cid}/{form}: nodata {got.nodata} is not {src.nodata}"
-                )
+            if got.dtypes != src.dtypes:
+                failures.append(f"{cid}/{form}: dtype {got.dtypes} is not {src.dtypes}")
+            gn, sn = got.nodata, src.nodata
+            both_nan = (
+                gn is not None and sn is not None and gn != gn and sn != sn
+            )  # NaN NoData: nan != nan
+            if gn != sn and not both_nan:
+                failures.append(f"{cid}/{form}: nodata {gn} is not {sn}")
             if seen[r0 : r0 + h, c0 : c0 + w].any():
                 failures.append(f"{cid}/{form}: a tile overlaps another at {win}")
             seen[r0 : r0 + h, c0 : c0 + w] = True

@@ -231,6 +231,8 @@ def test_the_gate_keeps_every_check_and_reads_the_crates_through_the_mirror(tmp_
     args = [line for line in deny.splitlines() if line.startswith("args=")]
     assert len(args) == 1
     assert "--locked" in args[0]
+    # optional dependencies (gbxrs: gdal-sys and bindgen behind the `gdal` feature) are in the checked graph
+    assert "--all-features" in args[0]
     # index-failure stays denied: no silent yank skip
     assert args[0].endswith("check " + " ".join(CHECKS))
 

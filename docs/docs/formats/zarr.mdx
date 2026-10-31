@@ -579,6 +579,10 @@ plain puts, which never cross that step, 0.5-4.9 s.
   cannot decode is left out of reads and registered without being readable, and a complex array can
   only be read as blocks (a table has no column for complex numbers, and tiles do not hold them yet).
 - **Tiles.** `output="tiles"` needs the coordinates to form a regular grid.
+  A tile of a registered store does not check its files for changes. A file changed in place reads as its new bytes, or fails.
+  Materialize the tiles you keep.
+- **Chunk grid.** Only a regular chunk grid is supported. An array with a rectilinear grid is left out of reads
+  and registered without being readable.
 - **Inner chunks per shard.** A shard that `gbx_zarr_write` creates holds at most 4,096 inner chunks.
   Every read of a shard fetches or builds its index, 16 bytes per inner chunk, so a shard of many tiny
   chunks makes every read slow: on a Volume, reading one chunk of a shard of 93,312 chunks took a median

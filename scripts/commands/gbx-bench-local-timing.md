@@ -32,7 +32,14 @@ The pass takes about 3 minutes. Run it before a cluster IO round and after a cha
 - A form has no time at some n because it failed, was skipped or timed 0 s.
 - With `--baseline`: a form costs more than `--baseline-k` times its stored cost per tile, is missing from the baseline, or is in it but not timed now.
 
-**The baseline.** The ratio rules compare a form with the row UDF and its peers, so they need a 3x change; a form whose own cost per tile doubled (same fixed cost) passes them. The baseline is each form's cost per tile: the slope of its time between n=24 and n=96, less the floor's slope, in ms, stored with the machine (cores, arch) and git SHA. Write it after a change you trust, compare before a cluster round. A baseline from another machine prints a note. One measured run per n is noisy: in two runs on the same machine `d-py`'s cost per tile differed by 1.6x (36 vs 22 ms), the other forms by 1.1x to 1.2x. A baseline taken on an unlucky run makes the next run look fast, and one taken on a lucky run flags a healthy form; re-run before trusting a baseline flag, and write the baseline again if it was the odd run.
+**The baseline.**
+- The ratio rules compare a form with the row UDF and its peers. They need a 3x change, so a form whose own cost per tile doubled passes them.
+- The baseline stores each form's cost per tile in ms. It is the slope between n=24 and n=96, less the floor's slope.
+- It is stored with the machine (cores, arch) and the git SHA. A baseline from another machine prints a note.
+- Write it after a change you trust. Compare against it before a cluster round.
+- One measured run per n is noisy. In two runs on one machine, `d-py`'s cost per tile differed by 1.6x (36 vs 22 ms).
+- A baseline from a slow run hides a regression. A baseline from a fast run flags a healthy form.
+- Re-run before you trust a baseline flag. Write the baseline again if it came from the odd run.
 
 **Examples:**
 - `bash scripts/commands/gbx-bench-local-timing.sh`

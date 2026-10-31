@@ -307,6 +307,9 @@ def test_the_payload_proj_db_is_opened_only_when_a_variable_names_a_proj_db(
 PYPROJ_PROBE = r"""
 import os, sys
 sys.path.insert(0, sys.argv[1])
+# GBX_NATIVE_PTH=0 kept the image's own startup .pth off this interpreter (it would put
+# /opt/gbx-native first); lift it so the payload copy under test activates
+os.environ.pop("GBX_NATIVE_PTH", None)
 import _gbx_native_path  # what geobrix-native.pth runs at interpreter start
 assert _gbx_native_path.ACTIVE, "the payload copy did not activate"
 import pyproj
@@ -384,7 +387,12 @@ def test_import_pyproj_beside_the_runtimes_proj_data(runtime_proj_data):
             str(runtime[k]) for k in runtime_proj_data.split(os.pathsep)
         )
         env = {k: v for k, v in os.environ.items() if k not in _ENV}
-        env.update(GBX_NATIVE_ROOT=str(payload), PROJ_DATA=proj_data, HOME=str(base))
+        env.update(
+            GBX_NATIVE_ROOT=str(payload),
+            GBX_NATIVE_PTH="0",  # the image's startup .pth stays off; the probe activates the copy
+            PROJ_DATA=proj_data,
+            HOME=str(base),
+        )
         res = subprocess.run(
             [sys.executable, "-I", "-c", PYPROJ_PROBE, str(src)],
             env=env,

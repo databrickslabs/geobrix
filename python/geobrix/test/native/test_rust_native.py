@@ -70,6 +70,12 @@ def _payload_with_probe(tmp_path, a):
     return root
 
 
+_LAUNCH = (
+    "import os, runpy, sys; os.environ.pop('GBX_NATIVE_PTH', None); "
+    "sys.argv = sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')"
+)
+
+
 @pytest.mark.parametrize("order", ["bindings-first", "probe-first"])
 def test_a_rust_kernel_runs_on_the_payload_gdal_beside_rasterio_and_osgeo(
     tmp_path, order
@@ -85,9 +91,12 @@ def test_a_rust_kernel_runs_on_the_payload_gdal_beside_rasterio_and_osgeo(
         if k not in ("GDAL_DATA", "PROJ_DATA", "PROJ_LIB")
     }
     env.pop("GBX_NATIVE_DISABLE", None)
-    env.update(GBX_NATIVE_ROOT=str(root), PYTHONPATH=str(SRC))
+    # GBX_NATIVE_PTH=0 keeps the image's startup .pth (its own /opt/gbx-native first) off
+    # this interpreter; the launcher lifts it again so the smoke's own activation, of the
+    # payload named by GBX_NATIVE_ROOT, is not skipped too
+    env.update(GBX_NATIVE_ROOT=str(root), GBX_NATIVE_PTH="0", PYTHONPATH=str(SRC))
     res = subprocess.run(
-        [sys.executable, str(SMOKE), "--order", order],
+        [sys.executable, "-c", _LAUNCH, str(SMOKE), "--order", order],
         env=env,
         capture_output=True,
         text=True,

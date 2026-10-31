@@ -219,7 +219,9 @@ def test_the_payload_osgeo_is_the_pinned_gdal_and_rasterio_libgdal(
     pin = re.search(
         r"^GDAL_VERSION=(\S+)$", (REPO / "scripts/native/pins.conf").read_text(), re.M
     ).group(1)
-    env = {**os.environ, "GBX_NATIVE_ROOT": str(PAYLOAD)}
+    # GBX_NATIVE_PTH=0: the image's startup .pth would put its own /opt/gbx-native first;
+    # the probe's `import databricks.labs.gbx` still activates the payload named here
+    env = {**os.environ, "GBX_NATIVE_ROOT": str(PAYLOAD), "GBX_NATIVE_PTH": "0"}
     env.pop("GBX_NATIVE_DISABLE", None)
     if foreign_first:  # the dev image's system GDAL stands in for a fiona-like wheel
         foreign = ctypes.util.find_library("gdal")

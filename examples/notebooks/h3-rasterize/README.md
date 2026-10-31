@@ -20,7 +20,7 @@ bringing merged footprints to the driver. Visualized throughout with the
 
 > **Lightweight tier (Serverless) by default.** The notebook uses the lightweight
 > tier — `geobrix[stac,vizx]` (the env5 wheel, with the Overture CLI as a separate step) — pure Python/PySpark bindings with no
-> JAR or GDAL init script required. It targets **Serverless environment 5**. See
+> JAR required. It targets **Serverless environment 5**. See
 > [Execution Tiers](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers).
 
 > **Data source: USGS 3DEP seamless (10 m), San Francisco Bay Area.** `DemDownloader()`

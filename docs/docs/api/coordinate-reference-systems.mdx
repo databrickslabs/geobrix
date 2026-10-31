@@ -217,7 +217,15 @@ GeoBrix recognizes files ending in `.gsb` (NTv2), `.tif` (PROJ geoid/deformation
 
 ### Fetch grids from the PROJ CDN with projsync
 
-The GeoBrix env wheels also install PROJ's grid downloader, `projsync`. `databricks.labs.gbx.crs_grids.projsync_path()` returns its path (or `None` without an env wheel). From a notebook or job with access to `cdn.proj.org`, run it with Python's `subprocess`: `--list-files --source-id uk_os` lists what the CDN has for one agency, and `--source-id uk_os --target-dir /Volumes/<catalog>/<schema>/proj-grids` downloads those grids into a Volume (`--bbox west,south,east,north` limits the download to grids that cover an area). Then register the directory with `register_proj_grids`, below. Download once and keep the Volume: the workers need no network access afterwards.
+The GeoBrix env wheels also install PROJ's grid downloader, `projsync`. `databricks.labs.gbx.crs_grids.projsync_path()` returns its path (or `None` without an env wheel). Run it from a notebook or job with access to `cdn.proj.org`, with Python's `subprocess`.
+
+- `--list-files --source-id uk_os` lists what the CDN has for one agency.
+- `--source-id uk_os --target-dir <local directory>` downloads those grids.
+- `--bbox west,south,east,north` limits the download to grids that cover an area.
+
+**Sync to local disk, then copy to the Volume.** `projsync` keeps a SQLite file, `cache.db`, in the target directory. A Volume cannot hold it. With `--target-dir /Volumes/…` the command exits 0 and prints `disk I/O error`, and `cache.db` stays at 0 bytes. The grids themselves arrive. Sync to a local path such as `/local_disk0/tmp/proj-grids`, then copy the directory to `/Volumes/<catalog>/<schema>/proj-grids`.
+
+Then register the directory with `register_proj_grids`, below. Download once and keep the Volume: the workers need no network access afterwards.
 
 ### Call register_proj_grids once at session start
 
@@ -259,7 +267,9 @@ If a grid file is not found, PROJ falls back to a lower-accuracy transform and c
 
 Volume-hosted grid files are a **lightweight-tier** capability. Every lightweight-tier worker reads a Unity Catalog Volume through Databricks' credentialed connector, so a grid staged to a Volume is available everywhere the analysis runs — including Serverless.
 
-The **heavyweight tier reads grid files directly from each worker's local filesystem and cannot read them from a Unity Catalog Volume.** To use custom grids on the heavyweight tier, stage the files to a cluster-local path — for example, add them with a cluster init script (the same mechanism the legacy [init-script install](../installation/init-script.mdx) uses for the GeoBrix GDAL libraries) so they land in the PROJ data directory on every node — and register that local path rather than a Volume path. `register_proj_grids` emits a warning if you register a Volume path while the heavyweight tier is active, so the mismatch surfaces at registration time rather than as `NULL` results at transform time. This is the same limitation that makes `rst_fromfile` lightweight-only.
+The **heavyweight tier reads grid files directly from each worker's local filesystem and cannot read them from a Unity Catalog Volume.** To use custom grids on the heavyweight tier, copy the files to a cluster-local path on every node. Register that local path, not a Volume path. `register_proj_grids` warns if you register a Volume path while the heavyweight tier is active. The mismatch then surfaces at registration, not as `NULL` results at transform time. This is the same limitation that makes `rst_fromfile` lightweight-only.
+
+`register_proj_grids` is quiet on a cluster that has no JVM access, such as DBR 19 in standard access mode and Serverless. It prints no message there, and the lightweight tier uses your grids. On a cluster whose access mode refuses calls to GeoBrix's JVM classes, it logs one INFO line.
 
 ### Example
 

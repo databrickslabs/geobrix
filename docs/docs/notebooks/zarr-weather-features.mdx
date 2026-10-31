@@ -30,7 +30,7 @@ It takes the cube through seven steps:
 :::
 
 :::info Runs on the lightweight tier (`geobrix[light_env6,zarr_env6,vizx]`)
-Zarr stores run only in the **lightweight tier**, so there is no JAR or GDAL init script. The notebook targets **Serverless environment 6** with the `geobrix[light_env6,zarr_env6,vizx]` wheel; on a classic **Databricks Runtime 19** cluster, install `geobrix[light_dbr19,zarr_dbr19,vizx]` instead (the same packages). The committed outputs are from a run on Serverless environment 6, and the notebook gives the same results on a Databricks Runtime 19 dedicated cluster. See [Zarr Stores](../formats/zarr#what-you-need) and [Execution Tiers](../api/execution-tiers).
+Zarr stores run only in the **lightweight tier**, so there is no JAR. The notebook targets **Serverless environment 6** with the `geobrix[light_env6,zarr_env6,vizx]` wheel; on a classic **Databricks Runtime 19** cluster, install `geobrix[light_dbr19,zarr_dbr19,vizx]` instead (the same packages). The committed outputs are from a run on Serverless environment 6, and the notebook gives the same results on a Databricks Runtime 19 dedicated cluster. See [Zarr Stores](../formats/zarr#what-you-need) and [Execution Tiers](../api/execution-tiers).
 :::
 
 ---

@@ -88,7 +88,7 @@ Or straight from the GitHub release, when the pipeline's compute can reach githu
 
 ## Serverless pipelines
 
-- **Lightweight tier only.** A Serverless pipeline can't load a JAR or run an init script, so it
+- **Lightweight tier only.** A Serverless pipeline can't load a JAR, so it
   installs the GeoBrix wheel and nothing else. `read_paths`, `declare_ingest` and the connector
   are lightweight-tier, so they run on Serverless and classic pipelines alike.
 - **Fan out by repartitioning on a column.** On Serverless, work spreads across tasks through

@@ -23,7 +23,6 @@ const sidebars = {
       link: { type: 'doc', id: 'installation' },
       items: [
         'installation/dcs',
-        'installation/init-script',
       ],
     },
     'quick-start',

@@ -19,9 +19,9 @@ writer with the GeoTIFF driver forced) and the **heavyweight** `gtiff_gdal` writ
 [Choosing an Execution Tier](../api/execution-tiers#the-one-line-swap).
 
 :::tip Benchmark & tradeoff
-The lightweight (`*_gbx`) writers need **no JAR or init script** and are the **only** option
+The lightweight (`*_gbx`) writers need **no JAR** and are the **only** option
 on Serverless and standard (shared) clusters. The heavyweight raster/PMTiles writers run on
-**dedicated clusters** — with the GeoBrix [DCS image](../installation/dcs.mdx) (preferred; Graviton arm64 or x86, DBR 19) or the legacy [init script](../installation/init-script.mdx) (classic x86, DBR 17.3 / 18 / 19); see [Choose an install path](../installation.mdx#choose-an-install-path);
+**dedicated clusters**. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix [DCS image](../installation/dcs.mdx). See [Choose an install path](../installation.mdx#choose-an-install-path).
 where available they use native GDAL on the JVM. So your compute usually decides the tier — then data scale. See the
 [Benchmarking](../api/benchmarking) page for timings and methodology.
 :::

@@ -16,7 +16,7 @@ bash scripts/commands/gbx-data-stage-wheel.sh [--env 5|6|both [--versioned]] [--
   - The wheels in the volroot itself are not touched.
   - Without `--env` it exits 2.
 - `--profile NAME` - the Databricks config profile for the uploads. Without it the profile is `DATABRICKS_CONFIG_PROFILE` from the environment, else from `examples/tests/databricks_cluster_config.env`.
-- `--no-prune` - keep every other `geobrix-*.whl` in the init-script dir: skip the single-version cleanup of the plain-wheel stage.
+- `--no-prune` - keep every other `geobrix-*.whl` in the artifact directory: skip the single-version cleanup of the plain-wheel stage.
 
 An option the command does not know is an error (exit 2), never ignored.
 

@@ -9,9 +9,8 @@ Submit the heavy-vs-light benchmark as a one-off notebook job to a **provisioned
 Prerequisites (operator):
 
 - A provisioned cluster and a filled `examples/tests/databricks_cluster_config.env`.
-- Heavyweight needs an x86 DBR 17.3 or 18 LTS cluster. Stage the init script, the bundle, the geobrix wheel and the bench `geobrix-*-tests.jar`.
+- Heavyweight needs a dedicated cluster on DBR 17.3, 18 or 19. Install the env wheel for the runtime, the GeoBrix JAR and the bench `geobrix-*-tests.jar` as cluster libraries.
 - Lightweight (including ARM) needs the env wheel for the runtime: `geobrix-<version>+env5` on DBR 17.3 / 18, `+env6` on DBR 19 and Serverless environment 6. Use no light extra.
-- On ARM clusters, use `--lightweight-only`. Heavyweight is x86-only by design.
 
 ## Options
 

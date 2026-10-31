@@ -229,7 +229,7 @@ gives a `TIMESTAMP`, `DATE` or `BOOLEAN` column. Any other variable keeps its nu
 `netcdf_gdal` is the heavyweight (Scala/JVM, native GDAL) raster reader. It reads
 the CF grid variables of a `.nc` file into the shared `(source, tile)` schema —
 **one row per grid variable** — so tessellation, band math, and tiling work
-unchanged. It is read-only. Requires a dedicated cluster with the heavyweight tier installed (the GeoBrix [DCS image](../installation/dcs.mdx) or the legacy [init script](../installation/init-script.mdx); see [Choose an install path](../installation.mdx#choose-an-install-path)); on Serverless / standard compute use lightweight `netcdf_gbx`
+unchanged. It is read-only. Requires a dedicated cluster with the heavyweight tier installed (see [Choose an install path](../installation.mdx#choose-an-install-path)). On Serverless / standard compute use lightweight `netcdf_gbx`
 raster mode instead — the two emit the same schema.
 
 ```python
@@ -322,15 +322,22 @@ filters yours lack. `GBX_NATIVE_DISABLE=1` turns the env wheel's native payload,
 inside it afterwards. So reading zstd, blosc or bzip2 netCDF-4 with `netcdf_gdal` / `netcdf_ogr` needs the variable
 set for the cluster's processes:
 
-- On a classic cluster with the env wheel installed, run `from databricks.labs.gbx import _native; print(_native.hdf5_plugin_dir())`
+- On a cluster with the env wheel installed, run `from databricks.labs.gbx import _native; print(_native.hdf5_plugin_dir())`
   in a notebook on that cluster. Add the printed directory to the cluster's environment variables
   (`spark_env_vars`) as `HDF5_PLUGIN_PATH=<that directory>`, then restart the cluster. The path depends on where the
-  wheel is installed and on the architecture (`x86_64` or `aarch64`), so read it on the cluster itself. Set this way,
-  the variable applies to every process on the cluster, including any other HDF5 such as h5py's.
-- The GeoBrix DCS images set it for you.
+  wheel is installed and on the architecture (`x86_64` or `aarch64`), so read it on the cluster itself.
+- The GeoBrix DCS image needs no setting. It links `/usr/local/hdf5/lib/plugin`, the directory HDF5 searches by default, to the plugins.
 
-Without it, a heavyweight read of such a variable fails with an HDF5 "filter" error, while the lightweight tier reads
-it.
+Without the variable, a heavyweight read of such a variable returns **NULL**, with no error. The same file
+reads on the lightweight tier. In GeoBrix tests, `netcdf_gdal` with `gbx_rst_avg` returned NULL for zstd, blosc and
+bzip2 files. It returned the right value for a zlib file, and for all four once the variable was set.
+
+:::warning The variable applies to the whole cluster
+Set in `spark_env_vars`, `HDF5_PLUGIN_PATH` reaches every process on the cluster, including other HDF5 libraries.
+On a Databricks ML runtime, an h5py write that uses `hdf5plugin` blosc then fails with `Unable to synchronously create dataset`.
+Without the variable, that write works. Set it only on a cluster that reads zstd, blosc or bzip2 netCDF-4 with the
+heavyweight tier. Do not set it on a cluster that writes blosc with h5py. The lightweight tier does not set the variable.
+:::
 
 :::note Coordinate reference systems
 The lightweight `netcdf_gbx` reader reads the CRS from CF `crs_wkt` (or `crs_canonical`) grid-mapping attributes and stores it as a canonical string in `tile.metadata` and `tile.crs`. The `spatial_epsg` attribute is also read, but for non-EPSG CRS the authoritative form is `crs_canonical` — `spatial_epsg` may carry an ESRI code in its value (since its name implies EPSG) so always prefer `crs_canonical` for non-EPSG CRSes. ESRI and OGC authorities are preserved. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.

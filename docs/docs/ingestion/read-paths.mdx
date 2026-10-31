@@ -16,7 +16,7 @@ reader you name. Use it directly in notebooks and jobs. [`declare_ingest`](./aut
 [Lakeflow connector](./lakeflow-connector) read files with the same code, so the
 [Reference](#reference) at the end of this page applies to all three.
 
-`read_paths` is pure Python: no JAR, no init script, and no `register(spark)` (it calls the
+`read_paths` is pure Python: no JAR and no `register(spark)` (it calls the
 reader classes directly). It runs on Serverless, standard (shared) and classic compute.
 
 ![read_paths flow — a paths DataFrame with one row per file (a batch binaryFile or file listing, or an Auto Loader stream with schema_path), projected to path and modificationTime, is read with one light reader per file. Vector, LiDAR, EXIF and NetCDF files are each read whole by one task, and num_partitions spreads the files across tasks; raster and PMTiles inputs take two stages, first planning each raster file into its tile windows (tileSize) and each PMTiles input into groups of tiles, then reading each window on its own, spread across tasks with num_partitions. The output rows have the reader’s columns, one row per feature, point, image or tile, plus the \_source_path (STRING, the bare /Volumes path of the file) and \_source_mtime (TIMESTAMP, its modification time) lineage columns, which lineage=False leaves out. What cannot be read fails the read with on_error fail, the default, naming the file, or is skipped with a warning with on_error skip. Where the rows go is yours; declare_ingest and the connector read files with the same code](../../../resources/images/diagrams/ingestion/ingestion-read-paths.png)

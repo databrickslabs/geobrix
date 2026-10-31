@@ -237,7 +237,7 @@ The LiDAR path (Parts 1 and 2a) works over **all of San Francisco** (`SF_AOI = (
 :::
 
 :::info Runs on the lightweight tier (Serverless) by default
-The series uses the **lightweight tier** — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`) plus the `geobrix[vizx]` env6 wheel — so it runs on **Serverless environment 6** with no JAR or GDAL init script. The `laspy` / `lazrs` readers the point cloud needs ship with the light base. Visualization helpers come from `databricks.labs.gbx.vizx`. See [Execution Tiers](../api/execution-tiers).
+The series uses the **lightweight tier** — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`) plus the `geobrix[vizx]` env6 wheel — so it runs on **Serverless environment 6** with no JAR. The `laspy` / `lazrs` readers the point cloud needs ship with the light base. Visualization helpers come from `databricks.labs.gbx.vizx`. See [Execution Tiers](../api/execution-tiers).
 :::
 
 :::note Big-data by default

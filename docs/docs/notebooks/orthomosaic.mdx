@@ -44,7 +44,7 @@ pycolmap==4.2.1
 ```
 
 The env5 wheel carries `rasterio` and the PMTiles toolchain; `pycolmap` (COLMAP) is a separate
-install after it (`pycolmap-cuda12` for the GPU pass). No JAR or GDAL init script is needed.
+install after it (`pycolmap-cuda12` for the GPU pass). No JAR is needed.
 
 **`01a` runs sparse SfM on CPU.** An optional dense pass (`01b`) runs COLMAP
 `patch_match_stereo` on the **Serverless GPU AI Runtime** (`pycolmap-cuda12`, CUDA 12),

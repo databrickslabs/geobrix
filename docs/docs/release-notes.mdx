@@ -21,10 +21,11 @@ v0.6.0 is under development and not yet released.
 :::
 
 - **Breaking:** install one [env wheel per runtime family](./release-notes-0-6#env-wheels) (`+env5` or `+env6`). The 0.5.x light extras are gone, and [GeoBrix no longer installs PySpark](./release-notes-0-6#pyspark).
+- **Breaking:** the [init-script install is removed](./release-notes-0-6#init-script). Install the env wheel and the JAR as cluster libraries, or use the DCS image.
 - **Breaking:** the heavyweight `*_ogr` readers [return declared field types and NULLs](./release-notes-0-6#ogr-field-types), and [`gbx_file_write` defaults to `file_mode="fuse"`](./release-notes-0-6#file-write).
 - **New:** incremental ingestion with [`read_paths` and `declare_ingest`](./release-notes-0-6#read-paths), [bad records set aside with `on_error`](./release-notes-0-6#on-error), and a [multi-format Lakeflow connector](./release-notes-0-6#lakeflow-connector).
 - **New:** [transactional, versioned Zarr stores](./release-notes-0-6#zarr-stores) with [direct storage access](./release-notes-0-6#zarr-direct).
-- **New:** a [Databricks Container Service image](./release-notes-0-6#dcs-image) that runs both tiers on dedicated clusters.
+- **New:** a [Databricks Container Service image](./release-notes-0-6#dcs-image) that runs both tiers on dedicated clusters, and [GDAL 3.13.3, PROJ 9.9.0 and GEOS 3.15.0](./release-notes-0-6#native-stack) in the env wheel.
 - **Changed:** [raster tessellation](./release-notes-0-6#tessellation-parity) matches across tiers and scales to scene-sized tiles, with one rule for [NoData, alpha and mask bands](./release-notes-0-6#nodata-alpha-mask).
 - **Changed:** [large vector layers stream](./release-notes-0-6#vector-large-layers), [`file_gdb_gbx` writes on any compute](./release-notes-0-6#vector-writers), and [British National Grid transforms use OSTN15](./release-notes-0-6#proj-data).
 
@@ -54,7 +55,7 @@ v0.6.0 is under development and not yet released.
 
 ## v0.4.x
 
-- **New in 0.4.0:** the [lightweight tier](./release-notes-0-5-and-earlier#whats-new-in-v040) (`pyrx`, `pygx`, `pyvx`) that needs no JAR or init script and runs on Serverless.
+- **New in 0.4.0:** the [lightweight tier](./release-notes-0-5-and-earlier#whats-new-in-v040) (`pyrx`, `pygx`, `pyvx`) that needs no JAR and runs on Serverless.
 - **New in 0.4.0:** vector tiles (`gbx_st_asmvt`), PMTiles output, quadbin and custom grids, terrain and spectral-index functions, TIN surface modelling, and STAC and visualization helpers.
 - **Breaking in 0.4.0:** the grid explode functions return a lowercase `cellid` field, and slope and hillshade scale from the raster CRS by default.
 - **New in 0.4.1:** the [`netcdf_gbx` reader](./release-notes-0-5-and-earlier#whats-new-in-v041) and methane-source downloaders for the Vapor-Eyes example.
@@ -65,4 +66,4 @@ v0.6.0 is under development and not yet released.
 
 - **Fixed:** [`rst_clip` axis order](./release-notes-0-5-and-earlier#whats-new-in-v030) and `combineavg` / `derivedband` pixel functions.
 - **Changed:** `tile.raster` bytes are always self-contained, and scalar arguments need no `f.lit(...)`.
-- **New:** pre-built, hash-verified GDAL bundle for the Init Script install.
+- **New:** pre-built, hash-verified GDAL bundle.

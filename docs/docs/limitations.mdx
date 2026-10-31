@@ -45,9 +45,8 @@ GeoBrix's GDAL stack and DBR's built-in spatial functions each carry
 their own PROJ runtime — they coexist on the cluster but are not the
 same library, and the two PROJ versions can diverge slightly:
 
-- **GeoBrix's GDAL** (init-script install) links to the PROJ shipped in the cluster init
-  bundle (currently PROJ 9.4.1, from the UbuntuGIS PPA build of
-  `libgdal37`). Installed at `/usr/lib/x86_64-linux-gnu/libproj.so.25`.
+- **GeoBrix's GDAL** comes from the env wheel: GDAL 3.13.3, PROJ 9.9.0 and GEOS 3.15.0, in the
+  wheel's own directory. The lightweight and the heavyweight tier both use that PROJ and its data.
 - **DBR 17.3 LTS's built-in `ST_*` functions** link to PROJ 9.7.1,
   bundled with the runtime under `/databricks/native/` (with
   `PROJ_DATA=/databricks/native/proj-data`). Not registered with
@@ -57,7 +56,7 @@ same library, and the two PROJ versions can diverge slightly:
 The two run side-by-side in the same JVM/Python process without
 conflict, because they're loaded from distinct paths. The cost is
 **CRS-catalog skew at the edges**: any EPSG code added or refined
-between PROJ 9.4.1 and 9.7.1 (newly-added projections, updated
+between PROJ 9.7.1 and 9.9.0 (newly-added projections, updated
 grid-shift definitions, transformation pipeline changes) may be
 interpreted slightly differently by a GeoBrix function vs. a DBR
 built-in operating on the same geometry.
@@ -71,18 +70,18 @@ If you run into a CRS-related discrepancy between a GeoBrix function
 and a DBR `ST_*` built-in on the same input, please
 [file an issue](https://github.com/databrickslabs/geobrix/issues) with
 the EPSG code and a minimal repro — that's the signal we'd use to
-prioritize rebuilding the GeoBrix GDAL stack from source against DBR's
-PROJ in a future release.
+decide whether GeoBrix should follow DBR's PROJ version.
 
 ## Compute Requirements
 
 The compute requirements below apply to the **heavyweight** tier (Scala JAR + native GDAL). The **lightweight** tier (the env wheel for the runtime, e.g. `geobrix-<version>+env6`, with its own GDAL) has none of them — it runs on Serverless compute (environment v6), standard (shared) clusters, Lakeflow declarative pipelines, and ARM. See [Choosing an Execution Tier](./api/execution-tiers).
 
-The heavyweight tier runs on **dedicated clusters** — with the GeoBrix [DCS image](./installation/dcs.mdx) (preferred; Graviton arm64 or x86, DBR 19) or the legacy [init script](./installation/init-script.mdx) (classic x86, DBR 17.3 / 18 / 19); see [Choose an install path](./installation.mdx#choose-an-install-path):
+The heavyweight tier runs on **dedicated clusters**. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix [DCS image](./installation/dcs.mdx). See [Choose an install path](./installation.mdx#choose-an-install-path).
 - **Not** compatible with Serverless compute (use the lightweight tier there)
 - Not available on standard (shared) access mode, with or without a DCS image (use the lightweight tier there)
-- Requires native GDAL libraries, which the DCS image carries and the legacy init script installs
-- **Init-script route: non-ARM instance types only (Intel or AMD x86_64).** The GDAL bundle ships `amd64` `.deb`s from the UbuntuGIS PPA — `amd64` and `x86_64` are the same architecture, and Intel and AMD CPUs are interchangeable. The init script fails fast on `aarch64`; ARM (Graviton) is supported through the DCS image.
+- Requires native GDAL libraries, which the env wheel carries (and the DCS image, from the same wheel)
+- Runs on x86 for DBR 17.3 / 18 / 19, and on Graviton (arm64) for DBR 19
+- **Band math with `gdal_calc`.** Heavyweight `rst_mapalgebra` and `rst_ndvi` run `gdal_calc.py`, which is not on the JVM's `PATH` on a cluster that has only the env wheel. They fail there. Use the lightweight functions.
 
 Databricks Runtime:
 - **Minimum**: DBR 17.1 (recommended/tested: DBR 17.3 LTS or 18 LTS)

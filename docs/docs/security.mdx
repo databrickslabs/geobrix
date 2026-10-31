@@ -84,13 +84,10 @@ serving a same-version-but-different-bytes wheel fails closed.
 | Dev container (x86_64 and arm64) | [`python/geobrix/requirements-dev-container.txt`](https://github.com/databrickslabs/geobrix/blob/main/python/geobrix/requirements-dev-container.txt), [`python/geobrix/requirements-dev-container-aarch64.txt`](https://github.com/databrickslabs/geobrix/blob/main/python/geobrix/requirements-dev-container-aarch64.txt) |
 | Notebook test harness | [`examples/tests/requirements.txt`](https://github.com/databrickslabs/geobrix/blob/main/examples/tests/requirements.txt) |
 
-GDAL is the documented exception **for the heavyweight build**: its Python
-wheel must match the GDAL native version installed on the host, so it is
-installed separately against the detected version. The native side is pinned
-via the init script (see below) or, in the DCS image, built into the image. The lightweight `pyrx` build path has no such
-exception — it uses rasterio's bundled-GDAL binary wheel, which is hash-pinned
-in `requirements-light-env6-ci.txt` like every other dependency (no native GDAL, no
-JAR).
+The native GDAL stack is the documented exception: it is not a Python package. It is built
+from pinned sources and shipped inside the env wheel, as the next section describes. The
+lightweight `pyrx` build path in CI uses the env wheel's rasterio, which is hash-pinned in
+`requirements-light-env6-ci.txt` like every other dependency.
 
 ### Controlled dependency updates
 
@@ -107,59 +104,31 @@ dependency update ever fetches from a public registry directly, so the mirror is
 place trust is anchored — and the `--generate-hashes` / `--require-hashes` chain above means
 even the mirror cannot serve same-version-but-different-bytes without failing closed.
 
-### Pinned GDAL native + multi-layer trust chain
+### Pinned native GDAL stack and its trust chain {#pinned-gdal-native--multi-layer-trust-chain}
 
-As of v0.3.0, the GDAL native install path is **pre-built in CI and
-distributed as a single signed tarball** rather than fetched and compiled
-on every cluster start. This both strengthens the supply-chain story (the
-PPA round-trip happens once, in a controlled environment) and cuts cluster
-start time from ~15 minutes to ~30–90 seconds.
+The env wheels carry GDAL, PROJ, GEOS and the libraries they need, built in CI from pinned
+sources. Nothing is fetched or compiled on a cluster at start. The trust chain has four layers:
 
-The trust chain has four layers, each gating the next:
+1. **Pinned, hashed sources.** One file,
+   [`scripts/native/pins.conf`](https://github.com/databrickslabs/geobrix/blob/main/scripts/native/pins.conf),
+   pins every library by version and by the sha256 of its source archive. Where a library has a
+   second origin, both downloads must give that same sha256. The build fails on a mismatch. A
+   licence check also fails the build if a library is GPL-family or a driver with a closed licence
+   is present.
 
-1. **GPG fingerprint check + reviewed Git-LFS commit (upstream of CI).**
-   The build script
-   [`scripts/build-gdal-artifacts.sh`](https://github.com/databrickslabs/geobrix/blob/main/scripts/build-gdal-artifacts.sh)
-   embeds the UbuntuGIS signing key inline and refuses to proceed unless
-   its fingerprint matches `UBUNTUGIS_FPR` — the same check the legacy
-   on-cluster script ran, moved upstream. The resolved runtime `.deb`
-   set (PPA versions of `libgdal`, `libproj`, `libgeos`, `proj-data`,
-   and other transitive runtime deps) plus the source-compiled GDAL
-   Python wheel (`--no-binary :all:` against the PPA headers) and the
-   `libgdalalljni.so` JNI are packaged into a single platform tarball.
+2. **A verified build.** The build ends with checks of the GDAL driver set, the library closure
+   and the licence files. Every shared library is in the payload or in the manylinux set. Each
+   library carries a hashed name (`libgdal-<sha256[:8]>.so`), so it shares no name with a system library.
 
-   That platform tarball is **committed to the repository under
-   `resources/static/geobrix-gdal-platform-noble.tar.gz` via Git LFS**.
-   The PR that adds or updates it is the single human-review checkpoint
-   for the bytes that will ship to every cluster — reviewers re-run the
-   build script locally in `ubuntu:24.04` and compare the resulting
-   sha256 to the committed sidecar before approving. Subsequent
-   GeoBrix releases reuse that committed platform tarball (the release
-   workflow grafts the per-release JAR onto a copy of it); no new PPA
-   round-trip happens unless the platform tarball itself is bumped.
+3. **A per-file manifest.** The payload's `MANIFEST.json` records the version of each library
+   and the sha256 of every file. Each GeoBrix release attaches the wheels and the JAR, and GitHub
+   records a digest for each release asset. Compare it with the file you stage.
 
-2. **Per-file `SHA256SUMS` manifest (inside the tarball).** Every `.deb`,
-   `.whl`, `.so`, and `.jar` in the bundle is hashed at build time. The
-   cluster verifies the manifest after extraction; any per-file
-   tampering or transport corruption fails closed before install.
-
-3. **Outer tarball sha256 sidecar (staged in your UC Volume).** A
-   `<tarball>.sha256` sidecar file is published alongside the tarball in
-   each GeoBrix release. The operator uploads both files to the Volume;
-   the cluster init script reads the sidecar at runtime and verifies the
-   tarball against it. A tampered tarball fails closed before extraction.
-
-4. **Unity Catalog Volume ACL (your environment).** The Volume's write
-   permission is the boundary that lets the cluster trust the sidecar.
-   Only the release/operator process should be able to write to the
-   staging Volume; read access is broader (clusters need it). This is
-   the only layer of the chain that lives in your workspace — keep
-   write access tightly scoped.
-
-The legacy on-cluster install path is still available as
-[`scripts/geobrix-gdal-init-ppa.sh`](https://github.com/databrickslabs/geobrix/blob/main/scripts/geobrix-gdal-init-ppa.sh)
-(slower, runs the PPA dance every boot) for bootstrapping new bundles or
-debugging.
+4. **Unity Catalog Volume ACL (your environment).** The Volume's write permission is the
+   boundary that lets a cluster trust the staged wheel and JAR. Only the release or operator
+   process should be able to write to the staging Volume; read access is broader (clusters need
+   it). This is the only layer of the chain that lives in your workspace — keep write access
+   tightly scoped.
 
 ### Hardened, ephemeral CI runners
 
@@ -191,39 +160,23 @@ The upstream controls above protect the artifacts we ship. The controls below
 are what you can do at install time and at runtime to keep the same
 guarantees in your environment.
 
-### 1. Use the init script from the matching release verbatim
+### 1. Take the wheel and the JAR from the same release
 
-Each GeoBrix release attaches its own `geobrix-gdal-init.sh` to the
-[release page](https://github.com/databrickslabs/geobrix/releases) so the
-script and tarball that ship together are unambiguously paired. The docs
-import the **latest** script from `main` for reference; for a specific
-GeoBrix version, use the script attached to that release.
+Each GeoBrix release attaches the env wheels and the JAR. Take both from one release, so the
+native stack, the Python code and the JVM code are paired. The wheel carries the GDAL stack. Do
+not add a second GDAL to the cluster, such as a system package.
 
-The architecture check, the sidecar verification, the per-file
-`SHA256SUMS` verification, and the offline `pip install` are load-bearing
-for the trust chain. The only line you should change in the script is
-`VOL_DIR`. Replacing it with a homegrown GDAL installer drops those
-guarantees on your cluster.
+### 2. Stage the wheel and the JAR in a Volume you control
 
-### 2. Stage the tarball + sidecar in a Volume you control
+Both files belong in a Unity Catalog Volume whose **write ACL you've restricted** to the
+release/operator process. The cluster only needs read access. The recommended flow is:
 
-Both files belong in a Unity Catalog Volume whose **write ACL you've
-restricted** to the release/operator process. The cluster only needs read
-access. The recommended flow is:
-
-  - Download `geobrix-gdal-artifacts-v<version>-noble.tar.gz` and its
-    matching `.sha256` sidecar from the
-    [GitHub release page](https://github.com/databrickslabs/geobrix/releases).
-  - Verify the tarball locally: `sha256sum -c <tarball>.sha256`.
-  - Upload **both files** to the Volume — the cluster init script reads
-    the sidecar at runtime to know which tarball to expect and what hash
-    to verify against.
+  - Download the env wheel for your runtime and `geobrix-<version>-jar-with-dependencies.jar`
+    from the [GitHub release page](https://github.com/databrickslabs/geobrix/releases).
+  - Compare each file's sha256 with the digest GitHub shows for the release asset.
+  - Upload both files to the Volume.
   - Refresh on a controlled cadence (when bumping GeoBrix versions or
     applying a security patch), not automatically.
-
-The init script lives separately — typically as a workspace file or in a
-separate Volume the cluster reads as its init-script attachment. Pair it
-with the bundle by GeoBrix version.
 
 ### 3. Pin the GeoBrix version in your cluster libraries
 
@@ -390,7 +343,7 @@ runs.
 |---|---|---|
 | The env wheel for the runtime, installed by file: `geobrix-<version>+env6-py3-none-any.whl` (Serverless environment 6, DBR 19) or `geobrix-<version>+env5-py3-none-any.whl` (Serverless environment 5, DBR 17.3 and 18) | the wheel's vendored rasterio and osgeo | full |
 | The plain wheel, for use off Databricks: `pip install geobrix` (its base dependencies are the lightweight tier, with PyPI rasterio, pyogrio, pyproj and shapely) | PyPI rasterio | partial |
-| The [DCS image](./installation/dcs.mdx): the plain wheel with `[vizx]` | PyPI rasterio | partial |
+| The [DCS image](./installation/dcs.mdx): the env6 wheel with `[vizx]` | the wheel's GDAL, through GeoBrix's rasterio build | full |
 | The plain wheel with the example extra `geobrix[photogrammetry]` | PyPI rasterio | partial |
 | The plain wheel with `[vizx]` or `[models]` (they pull PyPI rasterio and pyogrio) | PyPI rasterio | partial |
 | The env wheel with `[vizx]`: the wheel vendors geopandas and contextily, so no PyPI rasterio, pyogrio, pyproj or shapely is installed | the wheel's vendored rasterio and osgeo | full |
@@ -426,10 +379,9 @@ run a stored pipeline or read a raw band.
 
 ## Next steps
 
-- [Databricks Container Service](./installation/dcs.mdx) — the preferred heavyweight packaging,
-  with native GDAL built into the image.
-- [Init Script (Legacy)](./installation/init-script.mdx) — apply the init script as part of
-  cluster setup.
+- [Installation](./installation.mdx) — the env wheel and the JAR as cluster libraries.
+- [Databricks Container Service](./installation/dcs.mdx) — the same native GDAL stack, built
+  into a cluster image.
 - [Readers overview](./readers/overview) — configuration knobs for narrowing
   the GDAL driver surface.
 - [SECURITY.md](https://github.com/databrickslabs/geobrix/blob/main/SECURITY.md) —

@@ -29,9 +29,9 @@ that round-trips with the GeoJSON reader's directory mode:
   partition, no driver assembly, write throughput scales with partitions. See
   [**Choosing a writer for large datasets**](./overview#choosing-a-writer-for-large-datasets)
   for a comparison with the single-file writers.
-- **Tier & compute:** the lightweight `geojsonl_gbx` writer needs **no JAR or init script** and
+- **Tier & compute:** the lightweight `geojsonl_gbx` writer needs **no JAR** and
   is the **only** option on Serverless and standard (shared) clusters. The heavyweight
-  `geojsonl_ogr` writer runs on **dedicated clusters** — with the GeoBrix [DCS image](../installation/dcs.mdx) (preferred; Graviton arm64 or x86, DBR 19) or the legacy [init script](../installation/init-script.mdx) (classic x86, DBR 17.3 / 18 / 19); see [Choose an install path](../installation.mdx#choose-an-install-path);
+  `geojsonl_ogr` writer runs on **dedicated clusters**. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix [DCS image](../installation/dcs.mdx). See [Choose an install path](../installation.mdx#choose-an-install-path).
   it encodes each shard with native GDAL/OGR on the JVM. Your compute usually decides the tier.
   See [Benchmarking](../api/benchmarking) for timings and methodology.
 :::
@@ -99,7 +99,7 @@ back = spark.read.format("geojson_gbx").option("multi", "true").load("/Volumes/c
 <TabItem value="heavyweight" label="Heavyweight · geojsonl_ogr">
 
 Same input shape and output layout; the format name is `geojsonl_ogr` and reads back through the
-heavyweight GeoJSON reader (`geojson_ogr`). Requires a dedicated cluster with the heavyweight tier installed (the GeoBrix [DCS image](../installation/dcs.mdx) or the legacy [init script](../installation/init-script.mdx); see [Choose an install path](../installation.mdx#choose-an-install-path)). The same column options apply (see the [Vector Writer schema](./vector#schema)):
+heavyweight GeoJSON reader (`geojson_ogr`). Requires a dedicated cluster with the heavyweight tier installed. See [Choose an install path](../installation.mdx#choose-an-install-path). The same column options apply (see the [Vector Writer schema](./vector#schema)):
 
 ```python
 (df  # geometry + CRS under your own column names

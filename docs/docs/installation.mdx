@@ -1,7 +1,10 @@
 ---
 sidebar_position: 2
-description: Install GeoBrix three ways — the WHL-only env wheel for the runtime, a Databricks Container Service image, or the legacy GDAL init script.
+description: Install GeoBrix three ways — the WHL-only env wheel for the runtime, the env wheel plus the GeoBrix JAR as cluster libraries, or a Databricks Container Service image.
 ---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import verifyInstallation from '!!raw-loader!../tests/python/installation/verify_installation.py';
 
 # Installation
 
@@ -11,30 +14,26 @@ matches the tier you need and the compute you run on.
 
 ## Choose an install path {#choose-an-install-path}
 
-![Three ways to install GeoBrix — the question of which tier you need, and on which compute, branches three ways: lightweight tier only leads to path a, WHL-only (Lightweight), recommended, installed as the env wheel for the runtime (env5 or env6), running on Serverless, standard access mode, Lakeflow pipelines, classic clusters and ARM, with one wheel from a Volume or the GitHub release that carries its own GDAL, PROJ and GEOS and no init script, giving the lightweight tier; heavyweight on arm64 or x86 leads to path b, Databricks Container Service, preferred for the heavyweight tier, a GeoBrix container image on DCS vNext, run on a dedicated Graviton (arm64) or x86 (amd64) DBR 19 cluster, that carries native GDAL, the wheel and the JAR, with no init script and no cluster library, giving both the lightweight and heavyweight tiers, with DBR 17.3 / 18 images not yet available; heavyweight on classic x86 leads to path c, Init Script (Legacy), geobrix-gdal-init.sh on a classic x86 cluster running DBR 17.3, 18 or 19, with the init script, GDAL tarball and .sha256 sidecar on a Volume and the wheel as a cluster library, still supported where the DCS image does not reach yet, giving both the lightweight and heavyweight tiers](../../resources/images/diagrams/installation/installation-paths.png)
+![Three ways to install GeoBrix — the question of which tier you need, and on which compute, branches three ways: lightweight tier only leads to path a, WHL-only (Lightweight), recommended, installed as the env wheel for the runtime (env5 or env6), running on Serverless, standard access mode, Lakeflow pipelines, classic clusters and ARM, with one wheel from a Volume or the GitHub release that carries its own GDAL, PROJ and GEOS, giving the lightweight tier; heavyweight on a dedicated cluster leads to path b, Cluster libraries, the env wheel and the GeoBrix JAR both installed as cluster libraries from a Volume, running on a dedicated cluster with x86 on DBR 17.3, 18 or 19 or Graviton on DBR 19, where the wheel's own GDAL serves the JVM, giving both the lightweight and heavyweight tiers; heavyweight on arm64 or x86 with DBR 19 leads to path c, Databricks Container Service, a GeoBrix container image with the env6 wheel, its native GDAL and the JAR, run on a dedicated Graviton (arm64) or x86 (amd64) DBR 19 cluster with no library to attach, giving both the lightweight and heavyweight tiers](../../resources/images/diagrams/installation/installation-paths.png)
 
 | Path | Tiers | Compute | What you install |
 |---|---|---|---|
-| **(a) [WHL-only (Lightweight)](#whl-only)** — recommended | Lightweight | Serverless, standard access mode, Lakeflow declarative pipelines, classic clusters, ARM | The env wheel for the runtime (`+env5` or `+env6`) — no init script |
-| **(b) [Databricks Container Service](./installation/dcs.mdx)** — preferred heavyweight packaging | Lightweight + Heavyweight | Dedicated cluster, Graviton (arm64) or x86 (amd64), DBR 19 | A GeoBrix container image on DCS vNext (native GDAL, the wheel and the JAR) — no init script, no cluster library |
-| **(c) [Init Script (Legacy)](./installation/init-script.mdx)** | Lightweight + Heavyweight | Classic x86 cluster, DBR 17.3 / 18 / 19 | The GDAL init script, its tarball + `.sha256` sidecar on a Volume, and the wheel as a cluster library |
+| **(a) [WHL-only (Lightweight)](#whl-only)** — recommended | Lightweight | Serverless, standard access mode, Lakeflow declarative pipelines, classic clusters, ARM | The env wheel for the runtime (`+env5` or `+env6`) |
+| **(b) [Cluster libraries (Heavyweight)](#heavyweight)** | Lightweight + Heavyweight | Dedicated cluster, x86 on DBR 17.3 / 18 / 19, Graviton (arm64) on DBR 19 | The env wheel and the GeoBrix JAR, both as cluster libraries |
+| **(c) [Databricks Container Service](./installation/dcs.mdx)** | Lightweight + Heavyweight | Dedicated cluster, Graviton (arm64) or x86 (amd64), DBR 19 | A GeoBrix container image (the env6 wheel, its native GDAL and the JAR) — no library to attach |
 
 **(a) WHL-only (Lightweight)** is the default: if you don't specifically need the JVM tier, install
 the wheel and stop there. The full install steps are [below](#whl-only).
 
-**(b) Databricks Container Service** is the **preferred packaging for the heavyweight tier**. A
-dedicated cluster starts from a GeoBrix container image, built on the DCS vNext environment images,
-that already carries native GDAL with its Java bindings, the GeoBrix wheel and the GeoBrix JAR, so
-there is no init script, no cluster library and nothing to install at cluster start — both tiers run,
-heavyweight readers included. Verified today on dedicated clusters with DBR 19, on both Graviton
-(arm64) and x86 (amd64) instance types, each with its own image tag; DBR 17.3 / 18 images are not
-yet available. See [Databricks Container Service](./installation/dcs.mdx).
+**(b) Cluster libraries (Heavyweight)** adds the JVM tier. A dedicated cluster installs the env wheel
+and the GeoBrix JAR as cluster libraries. The wheel carries the native GDAL, PROJ and GEOS, and the JVM
+loads them from the wheel, so nothing else is installed. Verified on dedicated
+clusters with x86 on DBR 17.3, 18 and 19, and Graviton (arm64) on DBR 19. See [below](#heavyweight).
 
-**(c) Init Script (Legacy)** is the older heavyweight route, still supported for compute the DCS
-image doesn't cover yet — today, classic x86 clusters on DBR 17.3 or 18 (it also still runs on
-DBR 19). A versioned init script installs native GDAL at cluster start from a hash-verified tarball
-staged in an isolated Unity Catalog Volume folder, and puts the JAR in place; with the GeoBrix wheel
-attached as a cluster library, the cluster runs both tiers. See [Init Script (Legacy)](./installation/init-script.mdx).
+**(c) Databricks Container Service** starts a dedicated DBR 19 cluster from a GeoBrix container image.
+The image already holds the env6 wheel with its native GDAL, and the GeoBrix JAR, so there is no library
+to attach. It runs on both Graviton (arm64) and x86 (amd64) instance types, each with its own image tag.
+See [Databricks Container Service](./installation/dcs.mdx).
 
 The **heavyweight tier needs dedicated compute** (a dedicated access mode cluster), through (b) or
 (c). On standard access mode and Serverless, use **(a)**: the lightweight tier runs there in full.
@@ -67,7 +66,7 @@ On Databricks, GeoBrix uses the PySpark that the runtime provides — installing
 
 ## WHL-only (Lightweight) {#whl-only}
 
-The lightweight tier is a single Python wheel, the **env wheel** for your runtime — **no init script, no separate JAR, no native GDAL bundle**. The env wheel carries its own GDAL, PROJ and GEOS, built for it, with `rasterio`, `pyogrio`, `pyproj`, `shapely`, `netCDF4` and GDAL's own `osgeo` built against them, so a process runs one GDAL. It holds the runtime's preinstalled packages instead of replacing them. It runs on serverless compute, standard (shared) clusters, Lakeflow declarative pipelines, and ARM. One wheel covers the whole lightweight tier: RasterX (the full `rst_*` set, via `databricks.labs.gbx.pyrx`), VectorX (via `databricks.labs.gbx.pyvx`), and GridX quadbin (via `databricks.labs.gbx.pygx`).
+The lightweight tier is a single Python wheel, the **env wheel** for your runtime — **no separate JAR and no native GDAL bundle**. The env wheel carries its own GDAL, PROJ and GEOS. It also carries `rasterio`, `pyogrio`, `pyproj`, `shapely`, `netCDF4` and GDAL's own `osgeo`, built against them. A process runs one GDAL. It holds the runtime's preinstalled packages instead of replacing them. It runs on serverless compute, standard (shared) clusters, Lakeflow declarative pipelines, and ARM. One wheel covers the whole lightweight tier: RasterX (the full `rst_*` set, via `databricks.labs.gbx.pyrx`), VectorX (via `databricks.labs.gbx.pyvx`), and GridX quadbin (via `databricks.labs.gbx.pygx`).
 
 :::note Choose the wheel for your runtime
 | Runtime | Install command |
@@ -184,7 +183,7 @@ rx.register(spark)
 
 ### Verify the lightweight tier
 
-Confirm the wheel imports, the env wheel's GDAL is the one rasterio runs, and a function runs end to end (no init script). The check below exercises RasterX (`rst_*`); VectorX (`pyvx`, `st_*`) and GridX quadbin (`pygx`, `quadbin_*`) ship in the same wheel and register and run the same way:
+Confirm the wheel imports, the env wheel's GDAL is the one rasterio runs, and a function runs end to end. The check below exercises RasterX (`rst_*`); VectorX (`pyvx`, `st_*`) and GridX quadbin (`pygx`, `quadbin_*`) ship in the same wheel and register and run the same way:
 
 ```python
 import rasterio
@@ -205,10 +204,49 @@ tiles.select(
 ).show()
 ```
 
-If the import succeeds and the query returns raster dimensions, the lightweight tier is ready. For the heavyweight tier, continue with [Databricks Container Service](./installation/dcs.mdx) or [Init Script (Legacy)](./installation/init-script.mdx).
+If the import succeeds and the query returns raster dimensions, the lightweight tier is ready. For the heavyweight tier, continue with [Cluster libraries](#heavyweight) or [Databricks Container Service](./installation/dcs.mdx).
+
+## Cluster libraries (Heavyweight) {#heavyweight}
+
+The heavyweight tier runs on a dedicated cluster with two cluster libraries: the env wheel and the GeoBrix JAR. The wheel carries the native GDAL, PROJ and GEOS. The JVM loads them from the wheel.
+
+1. Stage the env wheel for the runtime in a Unity Catalog Volume: `+env5` on DBR 17.3 and 18, `+env6` on DBR 19.
+2. Download `geobrix-<version>-jar-with-dependencies.jar` from the [GeoBrix releases](https://github.com/databrickslabs/geobrix/releases). Stage it in a Volume.
+3. Create a cluster with **Dedicated** access mode on DBR 17.3, 18 or 19. Use an x86 instance type on any of them, or Graviton (arm64) on DBR 19.
+4. Under **Libraries**, install the wheel (Python whl) and the JAR (JAR) from their Volume paths.
+5. Start the cluster, and attach a notebook.
+
+A cluster loads one GeoBrix JAR, so install only one. On DBR 19 you can also install the wheel from a notebook with `%pip` and keep the JAR as a cluster library.
+
+Standard access mode refuses the heavyweight functions. Use the lightweight tier there.
+
+:::warning Upgrading from GeoBrix 0.5.x
+GeoBrix 0.5.x installed native GDAL with a cluster init script. **Remove that init script from the cluster** and do not install the GDAL bundle. A system GDAL beside a 0.6.0 wheel puts two GDAL stacks in one cluster. See [Release Notes: 0.6.x](./release-notes-0-6#init-script).
+:::
+
+Two optional settings apply to the heavyweight tier:
+
+- **netCDF-4 filters.** Reading zstd, blosc or bzip2 netCDF-4 needs `HDF5_PLUGIN_PATH` in the cluster's environment variables. Without it the result is a silent NULL. The variable also reaches other HDF5 libraries on the cluster. See [Compressed netCDF-4 variables](./readers/netcdf#compressed-netcdf-4-variables-zstd-blosc-bzip2).
+- **HTTP.** Leave `GDAL_HTTP_VERSION` unset. See [Remote reads](./readers/raster#remote-reads-over-https).
+
+### Verify the heavyweight tier
+
+Register the heavyweight RasterX functions and list them:
+
+<CodeFromTest
+  code={verifyInstallation}
+  language="python"
+  functionName="VERIFY_PYTHON_INSTALLATION"
+  title="Verify the heavyweight tier"
+  source="docs/tests/python/installation/verify_installation.py"
+  testFile="docs/tests/python/installation/test_verify_installation.py"
+  outputConstant="VERIFY_PYTHON_INSTALLATION_output"
+/>
+
+If the list shows `gbx_rst_*` functions, the heavyweight tier is ready.
 
 ## Next Steps
 
 - Follow the [Quick Start Guide](./quick-start.mdx) to begin using GeoBrix
 - Explore the [Functions](./api/overview.mdx) documentation
-- Need the heavyweight tier? See [Databricks Container Service](./installation/dcs.mdx) or [Init Script (Legacy)](./installation/init-script.mdx)
+- Compare the tiers in [Choosing an Execution Tier](./api/execution-tiers.mdx)

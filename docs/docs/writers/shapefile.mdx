@@ -21,9 +21,8 @@ across all lightweight vector readers and writers.
   writer for large datasets**](./overview#choosing-a-writer-for-large-datasets) —
   use a **classic cluster** (high-memory Serverless does *not* help here) or the
   scalable `geojsonl_gbx` / `gpkg_gbx` writers.
-- **Tier & compute:** the lightweight (`*_gbx`) writers need **no JAR or init
-  script** and are the **only** option on Serverless and standard (shared)
-  clusters. The heavyweight raster/PMTiles writers run on **dedicated clusters** — with the GeoBrix [DCS image](../installation/dcs.mdx) (preferred; Graviton arm64 or x86, DBR 19) or the legacy [init script](../installation/init-script.mdx) (classic x86, DBR 17.3 / 18 / 19); see [Choose an install path](../installation.mdx#choose-an-install-path). Your compute usually decides the tier — then
+- **Tier & compute:** the lightweight (`*_gbx`) writers need **no JAR** and are the **only** option on Serverless and standard (shared)
+  clusters. The heavyweight raster/PMTiles writers run on **dedicated clusters**. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix [DCS image](../installation/dcs.mdx). See [Choose an install path](../installation.mdx#choose-an-install-path). Your compute usually decides the tier — then
   data scale. See [Benchmarking](../api/benchmarking) for timings and methodology.
 :::
 

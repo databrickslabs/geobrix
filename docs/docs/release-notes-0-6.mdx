@@ -21,6 +21,7 @@ Each heading ends with the change type: breaking, behavior change, new or fix.
 Breaking:
 
 - [Install the env wheel, not a light extra](#env-wheels)
+- [The init-script install is removed](#init-script)
 - [GeoBrix no longer installs PySpark](#pyspark)
 - [Heavyweight `*_ogr` readers return declared field types and NULLs](#ogr-field-types)
 - [`gbx_file_write` defaults to `file_mode="fuse"`](#file-write)
@@ -29,6 +30,7 @@ Behavior changes that alter results or signatures:
 
 - [Raster driver policy is on for the process](#driver-policy)
 - [British National Grid transforms use OSTN15](#proj-data)
+- [The native stack is GDAL 3.13.3, PROJ 9.9.0 and GEOS 3.15.0](#native-stack)
 - [Heavyweight vector readers fail on unreadable files](#ogr-unreadable)
 - [`bng_tessellateexplode` returns `core` and `chip`](#bng-explode)
 - [`bng_tessellate` defaults `keep_core_geom` to false](#bng-tessellate-default)
@@ -67,6 +69,32 @@ Behavior changes that alter results or signatures:
   - Environment 6 and DBR 19 ship 2.32.5.
 - **The plain wheel is for use off Databricks.** `geobrix-<version>-py3-none-any.whl` declares the lightweight tier as its base dependencies (floors only). `pip install geobrix` then works on a laptop or another Python, with PyPI's GDAL stack.
 
+### The init-script install is removed (breaking) {#init-script}
+
+- **GeoBrix 0.6.0 has no GDAL init script.** The heavyweight tier takes its GDAL, PROJ and GEOS from the env wheel.
+  - Install the env wheel for the runtime and the GeoBrix JAR as cluster libraries on a dedicated cluster. The wheel is `+env5` on DBR 17.3 and 18, and `+env6` on DBR 19.
+  - GeoBrix verified this on x86 for DBR 17.3, 18 and 19, and on Graviton (arm64) for DBR 19.
+  - See [Cluster libraries](./installation#heavyweight).
+- **Migration.** Remove the init script and the GDAL bundle from the cluster, then install the wheel and the JAR as libraries.
+  - A 0.6.0 wheel beside the init script's system GDAL puts two GDAL stacks in one cluster.
+- **Heavyweight netCDF-4 with zstd, blosc or bzip2 filters returns NULL, with no error, unless `HDF5_PLUGIN_PATH` is set.** The lightweight tier reads these files without it.
+  - Setting `HDF5_PLUGIN_PATH` cluster-wide breaks an h5py write with `hdf5plugin` blosc on a Databricks ML runtime.
+  - See [Compressed netCDF-4 variables](./readers/netcdf#compressed-netcdf-4-variables-zstd-blosc-bzip2).
+- **Heavyweight `rst_mapalgebra` and `rst_ndvi` fail on a cluster that has only the env wheel.** They run `gdal_calc.py`, which the JVM does not find on its `PATH`. Use the lightweight functions.
+- **Leave `GDAL_HTTP_VERSION` unset.** See [Remote reads over HTTPS](./readers/raster#remote-reads-over-https).
+
+### The native stack is GDAL 3.13.3, PROJ 9.9.0 and GEOS 3.15.0 (behavior change) {#native-stack}
+
+- **One stack serves both tiers.** The env wheel carries it. The DCS image used GDAL 3.11.4 before. The images now take the wheel's stack.
+- **What the build adds.**
+  - JPEG XL: the `JPEGXL` driver and the GeoTIFF `JXL` codec read JPEG XL data. GeoBrix's writers do not offer `JXL`.
+  - `raster calc` accepts the `muparser` dialect.
+  - `REGEXP` works in GDAL's SQLite dialect (PCRE2).
+  - libcurl 8.23 with HTTP/2, and JPEG decoding with SIMD.
+  - Three PROJ grids (OSTN15, OSGM15 and EGM96) and the `projsync` grid downloader.
+- **Drivers to know.** GDAL's PMTiles driver is vector only, and LIBERTIFF is an opt-in, read-only GeoTIFF reader. GeoBrix uses its own PMTiles code and does not enable LIBERTIFF.
+- See [GeoBrix's GDAL build](./readers/raster#gdal-build) and [PROJ version skew](./limitations#coordinate-reference-systems-proj-version-skew).
+
 ### GeoBrix no longer installs PySpark (breaking for local installs) {#pyspark}
 
 - Databricks provides PySpark. For a local Spark session, install `pyspark>=4.0.0` alongside GeoBrix. See [Installation](./installation).
@@ -91,6 +119,7 @@ Behavior changes that alter results or signatures:
   - Results are within millimetres of Ordnance Survey's test points.
   - Results differ from earlier values by about 1.7 m in central London and up to about 5 m elsewhere in Great Britain.
   - See [Grids that ship with GeoBrix](./api/coordinate-reference-systems#grids-that-ship-with-geobrix).
+- **`projsync` needs a local target directory.** Syncing straight into a Volume leaves `cache.db` at 0 bytes with a `disk I/O error`. Sync to local disk, then copy to the Volume. See [Fetch grids with projsync](./api/coordinate-reference-systems#fetch-grids-from-the-proj-cdn-with-projsync).
 
 ## Ingestion {#ingestion}
 
@@ -294,7 +323,7 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
 
 ### Vector writers (new, behavior change, fix) {#vector-writers}
 
-- **`file_gdb_gbx` writes File Geodatabases with the lightweight tier alone (behavior change).** It no longer needs native GDAL (`osgeo`), classic x86 clusters or the init script. It encodes the `.gdb` through pyogrio's bundled OpenFileGDB driver. It runs on Serverless, standard and dedicated clusters, on x86 and ARM. The output layout, `zip=true`, the shared schema and the other options are unchanged.
+- **`file_gdb_gbx` writes File Geodatabases with the lightweight tier alone (behavior change).** It no longer needs native GDAL (`osgeo`), or classic x86 clusters. It encodes the `.gdb` through pyogrio's bundled OpenFileGDB driver. It runs on Serverless, standard and dedicated clusters, on x86 and ARM. The output layout, `zip=true`, the shared schema and the other options are unchanged.
 - **Column types follow the DataFrame types.**
   - An `int` column stays a 32-bit integer, and a `smallint` a 16-bit integer. Both were doubles.
   - A column named `shape` (any case) is refused with an error, because the layer's geometry field is `SHAPE`.
@@ -666,18 +695,19 @@ Both tiers apply one rule for which pixels are valid.
   - Graviton (arm64): `mjohns797/geobrix:<version>-env6-arm` (pinned to a release) and `mjohns797/geobrix:env6-arm` (newest release).
   - x86 (amd64): `mjohns797/geobrix:<version>-env6-x86` and `mjohns797/geobrix:env6-x86`.
 - **Contents.** The images are built on the DCS vNext environment 6 images. They carry:
-  - Native GDAL 3.11.4 with its Java (JNI) bindings.
-  - The GeoBrix wheel, installed with `[vizx]`.
+  - The env6 wheel, installed with `[vizx]`. Its GDAL 3.13.3, PROJ 9.9.0 and GEOS 3.15.0 serve both tiers, with GDAL's Java (JNI) bindings.
   - The GeoBrix JAR in `/databricks/jars`.
+  - A link from `/usr/local/hdf5/lib/plugin` to the wheel's HDF5 filter plugins, so the heavyweight tier reads zstd, blosc and bzip2 netCDF-4 with no setting.
 
-  Each release attaches `geobrix-<version>-dcs.Dockerfile` to the GitHub release.
+  Each release attaches `geobrix-<version>-dcs.Dockerfile` to the GitHub release. The build installs wheels from a hashed lock and compiles no GDAL. See [Build your own image](./installation/dcs#build-your-own-image).
 - **Use.**
   - Start a dedicated cluster on DBR 19 from the tag that matches its instance architecture.
   - Set `spark.databricks.unityCatalog.volumes.enabled true`.
-  - There is no init script and no cluster library to attach.
+  - There is no cluster library to attach.
   - A cluster should have only one GeoBrix JAR, so do not attach it again.
 - **Limits.**
-  - DBR 17.3 / 18 images are not available yet. Use the Init Script (Legacy) on classic x86 clusters.
+  - DBR 17.3 / 18 images are not available. Install the env5 wheel and the JAR as cluster libraries.
+  - On a DCS cluster, h5py with `hdf5plugin` can see the plugin directory the image links, so a blosc write with h5py may fail. See [netCDF-4 filters and h5py](./installation/dcs#netcdf-filters).
   - The heavyweight tier needs dedicated compute. On standard access mode and Serverless, use the lightweight tier.
 
 See [Databricks Container Service](./installation/dcs.mdx) and [Choose an install path](./installation.mdx#choose-an-install-path).

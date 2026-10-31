@@ -9,7 +9,7 @@ import rioDist from '!!raw-loader!../../tests/python/api/rasterio_distributed_ex
 
 # Rasterio Distributed
 
-[RasterX](./raster-functions)'s lightweight (`pyrx`) tier is, in large part, `rasterio` plus a best-of-breed Python raster stack — rio-tiler, scipy, scikit-image, shapely, pyproj, h3, quadbin — run as Arrow-vectorized Spark UDFs and UDTFs across the cluster. It is not a single-node `rasterio.open` loop, and it is not a reimplementation. The same `rasterio` functions you would call locally run inside a vectorized Spark UDF, once per tile, on every executor in parallel. No JAR, no init script, no native GDAL install separate from rasterio's bundled GDAL.
+[RasterX](./raster-functions)'s lightweight (`pyrx`) tier is, in large part, `rasterio` plus a best-of-breed Python raster stack — rio-tiler, scipy, scikit-image, shapely, pyproj, h3, quadbin — run as Arrow-vectorized Spark UDFs and UDTFs across the cluster. It is not a single-node `rasterio.open` loop, and it is not a reimplementation. The same `rasterio` functions you would call locally run inside a vectorized Spark UDF, once per tile, on every executor in parallel. No JAR and no native GDAL install separate from rasterio's bundled GDAL.
 
 If you already know `rasterio`, you already understand what `pyrx` does. The coverage matrix below maps the surface, and the side-by-sides show each operation in rasterio next to its distributed `pyrx` form.
 

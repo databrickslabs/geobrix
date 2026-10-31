@@ -165,7 +165,7 @@ Note: **[high-memory Serverless](https://docs.databricks.com/aws/en/compute/serv
 <Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
 <TabItem value="lightweight" label="Lightweight (pyrx)">
 
-The lightweight tier ships native Python DataSource V2 writers — no JAR, no init script.
+The lightweight tier ships native Python DataSource V2 writers — no JAR.
 
 :::tip Why this scales beyond a single node
 These are Spark DataSource V2 writers, not single-node `pyogrio`/`rasterio` wrappers. **Each

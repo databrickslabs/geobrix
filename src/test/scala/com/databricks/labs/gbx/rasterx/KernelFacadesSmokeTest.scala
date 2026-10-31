@@ -478,6 +478,30 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
             // a path from data may not name a remote location
             val refused = RST_MvpMaterialize.eval(virtual("/vsicurl/https://example.com/x.tif", None), conf)
             assert(V2Tile.getRaster(refused) == null, "a remote location is refused")
+            // a plain local path decodes the whole file (no window): the tile keeps its cellid and gets bytes
+            val whole = RST_MvpMaterialize.eval(virtual(file.toString, None), conf)
+            assert(V2Tile.getRaster(whole) != null && V2Tile.getWindow(whole) == null && V2Tile.getPath(whole) == null, "a whole-file decode")
+            assert(whole.getLong(V2Tile.idx("cellid")) == 7L)
+            // the error tile says why: a scheme without "//" is a remote location too (the light gate reads it by urlsplit), a
+            // clip or a pending instruction is not applied, a window must lie inside the raster (also when its sum overflows Int)
+            def whyNot(out: org.apache.spark.sql.catalyst.InternalRow): String = {
+                assert(V2Tile.getRaster(out) == null, "an error tile")
+                val md = com.databricks.labs.gbx.util.SerializationUtil.createMap[String, String](V2Tile.getMetadata(out))
+                md("last_error")
+            }
+            for (p <- Seq("hdfs:/n/x.tif", "https:example.com/x.tif", "HTTP:x/y.tif", "ftp://h/x.tif", "/vsizip//vsicurl/https://h/x.zip"))
+                assert(RST_MvpMaterialize.remoteLocation(p).isDefined && whyNot(RST_MvpMaterialize.eval(virtual(p, None), conf)).contains("remote location"), p)
+            for (p <- Seq("s3://b/k.tif", "abfss://c@a.dfs.core.windows.net/k.tif", "dbfs:/Volumes/c/s/v/a.tif", "file:/tmp/a.tif",
+                          "/Volumes/c/s/v/a.tif", "rel/a.tif", "C:\\x\\a.tif", "/vsizip//Volumes/c/s/v/a.zip"))
+                assert(RST_MvpMaterialize.remoteLocation(p).isEmpty, p)
+            val pending = V2Tile.row(cellid = 7L, path = UTF8String.fromString(file.toString),
+              metadata = com.databricks.labs.gbx.util.SerializationUtil.toMapData[String, String](Map("pending_nodata" -> "0")))
+            assert(whyNot(RST_MvpMaterialize.eval(pending, conf)).contains("pending instruction"))
+            val clipped = V2Tile.row(cellid = 7L, path = UTF8String.fromString(file.toString), clipPolygon = Array[Byte](1, 2))
+            assert(whyNot(RST_MvpMaterialize.eval(clipped, conf)).contains("clip"))
+            for (w <- Seq((8, 8, 16, 16), (-1, 0, 4, 4), (0, 0, 0, 4), (2000000000, 0, 2000000000, 1), (0, 2000000000, 1, 2000000000)))
+                assert(whyNot(RST_MvpMaterialize.eval(virtual(file.toString, Some(w)), conf)).contains("is not inside"), w.toString)
+            assert(NodeFilePathUtil.readersOf(file.toString) == 0, "no hold left by the refusals")
             assert(vsimemEntries() == before, "in-memory GDAL files left behind")
         } finally {
             Files.deleteIfExists(file)

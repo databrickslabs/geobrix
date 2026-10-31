@@ -49,6 +49,19 @@ object RST_MvpMaterialize extends WithExpressionInfo {
     private val Vsi = java.util.regex.Pattern.compile("""(?:^|(?<=[/{"':,\s]))/vsi([a-z0-9_]+)""", java.util.regex.Pattern.CASE_INSENSITIVE)
     private val Scheme = java.util.regex.Pattern.compile("""(?<![a-z0-9+.\-])([a-z][a-z0-9+.\-]*)://""", java.util.regex.Pattern.CASE_INSENSITIVE)
 
+    // The URI schemes rasterio and pyogrio turn into a GDAL file system (`_gdal_policy._BINDING_SCHEMES`): a scheme needs no
+    // "//" there (`https:host/a.tif` opens as `/vsicurl/https://host/a.tif`, `hdfs:/x` is Hadoop's), so the gate reads a path's
+    // scheme as `urllib.parse.urlsplit` does.
+    private val BindingSchemes = Set("file", "zip", "tar", "gzip", "http", "https", "ftp", "s3", "gs", "az", "oss", "adls", "adl", "hdfs", "webhdfs")
+    private val SchemeChars = (('a' to 'z') ++ ('A' to 'Z') ++ ('0' to '9') ++ Seq('+', '-', '.')).toSet
+
+    /** `urlsplit(text).scheme` (lower case; "" when none): leading control characters and spaces, tabs and line breaks dropped. */
+    private def urlScheme(text: String): String = {
+        val t = text.dropWhile(_ <= ' ').filterNot(c => c == '\t' || c == '\r' || c == '\n')
+        val i = t.indexOf(':')
+        if (i > 0 && t.head < '\u0080' && t.head.isLetter && t.take(i).forall(SchemeChars)) t.take(i).toLowerCase else ""
+    }
+
     /** The location `path` names that a path from data may not (`/vsicurl/`, `https://` ...), else None. */
     def remoteLocation(path: String): Option[String] = {
         val vsi = Vsi.matcher(path)
@@ -60,6 +73,9 @@ object RST_MvpMaterialize extends WithExpressionInfo {
             val s = scheme.group(1).toLowerCase
             if (s.split("\\+").exists(p => !DataSchemes(p))) return Some(s"$s://")
         }
+        val bound = urlScheme(path)
+        val parts = if (bound.isEmpty) Array.empty[String] else bound.split("\\+", -1)
+        if (parts.nonEmpty && parts.forall(BindingSchemes) && parts.exists(p => !DataSchemes(p))) return Some(s"$bound:")
         None
     }
 
@@ -101,8 +117,10 @@ object RST_MvpMaterialize extends WithExpressionInfo {
             var md = Map("driver" -> "GTiff")
             sub = if (row.isNullAt(wId)) ds else {
                 val w = row.getStruct(wId, 4)
+                // Long arithmetic: the window is data, and an Int sum of two large offsets wraps negative
                 val (c, r, wd, h) = (w.getInt(0), w.getInt(1), w.getInt(2), w.getInt(3))
-                require(c >= 0 && r >= 0 && wd > 0 && h > 0 && c + wd <= ds.getRasterXSize && r + h <= ds.getRasterYSize,
+                require(c >= 0 && r >= 0 && wd > 0 && h > 0 &&
+                          c.toLong + wd.toLong <= ds.getRasterXSize.toLong && r.toLong + h.toLong <= ds.getRasterYSize.toLong,
                   s"the window ($c, $r, $wd, $h) is not inside the ${ds.getRasterXSize} x ${ds.getRasterYSize} raster")
                 val (s, m) = ReTile.getTile(ds, md, c, r, wd, h)
                 md = m

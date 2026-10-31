@@ -454,7 +454,9 @@ def materialize_batches(batches, rust: bool = False, cap_bytes=None, decode=None
             out["metadata"] = list((out["metadata"] or {}).items())
             r["tile"] = out
             held += len(out["raster"] or b"")
-            if held >= _OUT_CHUNK_BYTES:  # a bounded slice out, not one batch of every decoded tile
+            if (
+                held >= _OUT_CHUNK_BYTES
+            ):  # a bounded slice out, not one batch of every decoded tile
                 yield pa.RecordBatch.from_pylist(rows[start : i + 1], schema=b.schema)
                 for done in rows[start : i + 1]:
                     done["tile"] = None  # let the decoded bytes go

@@ -3576,6 +3576,9 @@ if not LIGHTWEIGHT:
 else:
     _zcfg = _zb.ZarrBenchConfig(**_ZARR)
     os.makedirs(_zcfg.scratch, exist_ok=True)
+    if any(c.startswith("W") for c in _zcfg.cases):
+        # the write legs' manifest tables live here: a catalog without it errors every rep
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {_zcfg.schema}")
     if any(c.startswith("R") for c in _zcfg.cases):
         # one GeoTIFF per hour of the store's t2m; skipped when its manifest exists
         _rd.stage_zarr_cog_corpus(spark, _zcfg.store, _zcfg.cog_dir)

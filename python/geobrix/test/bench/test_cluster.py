@@ -487,6 +487,8 @@ def test_the_zarr_cell_runs_alone_with_the_env_wheel_zarr_extra(
     (cell,) = [s for s in srcs if "_zb.run_zarr_cases" in s]
     assert "'cases': ('R1', 'W1')" in cell and f"'serverless': {serverless}" in cell
     assert "'store': '/Volumes/c/s/v/era5.zarr'" in cell
+    # W1 is selected: the schema of its manifest tables is made if the catalog lacks it
+    assert "CREATE SCHEMA IF NOT EXISTS {_zcfg.schema}" in cell
     compile(cell, "zarr_cell", "exec")
     # on Serverless the job environment can install everything: the cell only reports it
     if serverless:

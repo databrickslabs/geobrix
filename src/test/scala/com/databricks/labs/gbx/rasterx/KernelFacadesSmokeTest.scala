@@ -491,6 +491,13 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
             }
             for (p <- Seq("hdfs:/n/x.tif", "https:example.com/x.tif", "HTTP:x/y.tif", "ftp://h/x.tif", "/vsizip//vsicurl/https://h/x.zip"))
                 assert(RST_MvpMaterialize.remoteLocation(p).isDefined && whyNot(RST_MvpMaterialize.eval(virtual(p, None), conf)).contains("remote location"), p)
+            // the same verdicts as `_gdal_policy.remote_location` where Java and Python differ in character handling: a
+            // trailing "+" is an empty scheme part (refused), Python's IGNORECASE folds U+017F and the Kelvin sign into [a-z],
+            // and its \s (the "/vsi" lookbehind) matches NBSP and U+001C
+            for (p <- Seq("s3+://x", "\u017f3://x", "\u212aa://x", "\u00a0/vsicurl/https://h/x", "\u001c/vsicurl/https://h/x",
+                          "X\u00a0/vsicurl/x"))
+                assert(RST_MvpMaterialize.remoteLocation(p).isDefined, s"refused as the light gate refuses it: ${p.map(_.toInt.toHexString).mkString(" ")}")
+            assert(RST_MvpMaterialize.remoteLocation("\u00a0/vsis3/b/k").isEmpty, "an allowed /vsi name after a NBSP")
             for (p <- Seq("s3://b/k.tif", "abfss://c@a.dfs.core.windows.net/k.tif", "dbfs:/Volumes/c/s/v/a.tif", "file:/tmp/a.tif",
                           "/Volumes/c/s/v/a.tif", "rel/a.tif", "C:\\x\\a.tif", "/vsizip//Volumes/c/s/v/a.zip"))
                 assert(RST_MvpMaterialize.remoteLocation(p).isEmpty, p)

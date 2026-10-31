@@ -46,8 +46,11 @@ object RST_MvpMaterialize extends WithExpressionInfo {
     // data set, or a URL scheme outside it, names a remote location. No switch here: the JVM is strict.
     private val DataVsi = Set("s3", "s3_streaming", "az", "az_streaming", "adls", "gs", "gs_streaming", "mem", "zip", "tar", "gzip")
     private val DataSchemes = Set("s3", "s3a", "abfss", "abfs", "az", "gs", "wasbs", "zip", "tar", "gzip", "file", "dbfs")
-    private val Vsi = java.util.regex.Pattern.compile("""(?:^|(?<=[/{"':,\s]))/vsi([a-z0-9_]+)""", java.util.regex.Pattern.CASE_INSENSITIVE)
-    private val Scheme = java.util.regex.Pattern.compile("""(?<![a-z0-9+.\-])([a-z][a-z0-9+.\-]*)://""", java.util.regex.Pattern.CASE_INSENSITIVE)
+    // Python's `re.IGNORECASE` on a str is Unicode case folding (U+017F and the Kelvin sign are in [a-z]) and its `\s` is
+    // Unicode whitespace plus U+001C-1F; the flags and the explicit range give the JVM the same sets (compared over every code point).
+    private val Flags = java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE | java.util.regex.Pattern.UNICODE_CHARACTER_CLASS
+    private val Vsi = java.util.regex.Pattern.compile("""(?:^|(?<=[/{"':,\s\u001c-\u001f]))/vsi([a-z0-9_]+)""", Flags)
+    private val Scheme = java.util.regex.Pattern.compile("""(?<![a-z0-9+.\-])([a-z][a-z0-9+.\-]*)://""", Flags)
 
     // The URI schemes rasterio and pyogrio turn into a GDAL file system (`_gdal_policy._BINDING_SCHEMES`): a scheme needs no
     // "//" there (`https:host/a.tif` opens as `/vsicurl/https://host/a.tif`, `hdfs:/x` is Hadoop's), so the gate reads a path's
@@ -71,7 +74,7 @@ object RST_MvpMaterialize extends WithExpressionInfo {
         val scheme = Scheme.matcher(path)
         while (scheme.find()) {
             val s = scheme.group(1).toLowerCase
-            if (s.split("\\+").exists(p => !DataSchemes(p))) return Some(s"$s://")
+            if (s.split("\\+", -1).exists(p => !DataSchemes(p))) return Some(s"$s://")
         }
         val bound = urlScheme(path)
         val parts = if (bound.isEmpty) Array.empty[String] else bound.split("\\+", -1)

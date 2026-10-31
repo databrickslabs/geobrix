@@ -10,8 +10,8 @@ cluster.
 Workspace config (host, profile, Volume coordinates) is read from the gitignored
 examples/tests/databricks_cluster_config.env. Auth mints a bearer token from the
 configured CLI profile (the SDK's profile refresh is flaky on some networks) and
-uses WorkspaceClient(host, token). With no --spec, the Volume-staged env wheel (+env6, or
-+env5 with --env-version 5) path is derived from GBX_BUNDLE_VOLUME_*.
+uses WorkspaceClient(host, token). With no --spec, the Volume-staged env wheel of --env-version
+(+env5 by default) is derived from GBX_BUNDLE_VOLUME_*.
 
 Usage (run under .venv-pyrx which has databricks-sdk):
     .venv-pyrx/bin/python examples/tests/serverless_light_smoke.py \
@@ -68,7 +68,9 @@ def _default_spec(env: str = "6") -> str:
     )
 
 
-DEFAULT_SPEC = _default_spec()
+def _resolve_spec(spec, env_version):
+    """The install spec: the caller's, else the staged wheel of the environment version the run uses."""
+    return spec or _default_spec(env_version)
 
 
 def _host_from_cfg() -> str:
@@ -394,7 +396,9 @@ dbutils.notebook.exit(json.dumps(out))
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--spec", default=DEFAULT_SPEC, help="pip install target")
+    ap.add_argument(
+        "--spec", default=None, help="pip install target (default: the staged wheel for --env-version)"
+    )
     ap.add_argument("--env-version", default="5")
     ap.add_argument("--run-name", default="geobrix-serverless-light-smoke")
     ap.add_argument("--diagnose", action="store_true",
@@ -410,6 +414,7 @@ def main():
     ap.add_argument("--isolate-register", action="store_true",
                     help="env-deps + wrap register to pinpoint the failing UDF registration")
     args = ap.parse_args()
+    args.spec = _resolve_spec(args.spec, args.env_version)
 
     from databricks.sdk.service import compute, jobs, workspace
 

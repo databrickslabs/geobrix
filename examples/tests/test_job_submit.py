@@ -685,6 +685,15 @@ def test_the_known_launchers_use_submit_once():
     }
 
 
+def test_the_smoke_installs_the_wheel_of_the_environment_it_runs_on(monkeypatch):
+    import serverless_light_smoke as smoke
+
+    monkeypatch.delenv("GBX_VERSION", raising=False)
+    assert smoke._resolve_spec(None, "5").endswith("+env5-py3-none-any.whl")
+    assert smoke._resolve_spec(None, "6").endswith("+env6-py3-none-any.whl")
+    assert smoke._resolve_spec("geobrix @ file:///x.whl", "5") == "geobrix @ file:///x.whl"
+
+
 def _submit_once_calls_without_a_limit(source):
     """Lines of ``submit_once(...)`` calls that pass no ``timeout_seconds=`` keyword."""
     return [

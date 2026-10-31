@@ -285,6 +285,9 @@ class ContainerSandbox:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            # A runner started with SIGINT ignored (`cmd &` in a non-interactive shell) would hand
+            # that to bash, which cannot trap a signal ignored at entry (see `start` above).
+            preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
         )
 
     def run(self, command: str, *args: str, timeout: int = 60, **env):

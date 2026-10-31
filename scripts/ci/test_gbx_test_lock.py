@@ -1281,3 +1281,19 @@ def test_the_exempt_notebook_runner_installs_geobrix_only_when_it_is_missing(san
     assert re.search(r"pip show geobrix [^\n]*\|\| pip install --no-deps -e", run)
     # and only an editable install of THIS checkout counts: a stale copy would run the notebooks
     assert "Editable project location: /root/geobrix/python/geobrix" in run
+
+
+def test_a_command_can_trap_sigint_even_when_the_runner_ignores_it(demo):
+    # A runner launched in the background (`cmd &`, non-interactive) has SIGINT ignored, and
+    # bash cannot trap a signal ignored at entry: the signalled-waiter rows then saw exit 0
+    # instead of 130 (they passed from a terminal and failed from a background run).
+    demo.write_command(
+        "trapint.sh", "trap 'exit 130' INT\nkill -INT $$\nsleep 1\nexit 0\n"
+    )
+    previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        res = demo.run("trapint.sh")
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+    assert res.returncode == 130, res.output

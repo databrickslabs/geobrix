@@ -1601,7 +1601,8 @@ def _io_scratch(corpus: str) -> str:
 
 def _io_spec(spark, n, corpus, schema):
     """One row `(rows_dir, n, scratch)`: the forms read the corpus themselves (a table of tiles would leave the read out).
-    The light raster reader and writer are registered here with the input, outside the timed region.
+    The light raster reader and writer are registered here with the input, outside the timed region. A scale that asks
+    for more tiles than `rows` holds is an error (the corpus size found is printed).
     """
     from databricks.labs.gbx.ds.register import register as register_readers
 
@@ -1609,6 +1610,14 @@ def _io_spec(spark, n, corpus, schema):
     rows = corpus.rstrip("/") + "/rows"
     if not os.path.isdir(rows):
         return None
+    held = len(_corpus_rows(corpus) or [])
+    print(f"[LEVELS IO] corpus {rows} holds {held} tiles", flush=True)
+    if int(n) > held:
+        # A short corpus must not cap silently: every scale of the ladder would read the same tiles under its own label.
+        raise ValueError(
+            f"the IO ladder asks for {int(n)} tiles but {rows} holds only {held}: stage a corpus of at least {int(n)} "
+            f"tiles (gbx:bench:gen-data --row-rows {int(n)}, then put it on the Volume) or lower the scales"
+        )
     return _table(
         spark,
         None,  # a view: one row naming the corpus of this run, never worth a cached table

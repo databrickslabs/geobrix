@@ -293,3 +293,31 @@ def test_the_light_writers_take_the_same_limited_input(spark_session_local, tmp_
         plan, "GlobalLimit", "CollectLimit"
     )
     assert 0 <= exch < limit, "\n".join(plan)
+
+
+# ---- a scale asks for no more tiles than the corpus holds
+
+
+def test_a_scale_asking_for_more_tiles_than_the_corpus_holds_is_an_error_not_a_cap(
+    spark_session_local, tmp_path, monkeypatch, capsys
+):
+    """On the cluster the staged rows dir held 1000 tiles, so the 1x / 4x / 10x labels all read the same 1000."""
+    from databricks.labs.gbx.bench import levels
+
+    corpus = _corpus(tmp_path, 4)
+    monkeypatch.setitem(
+        lf.FORMS, "IO", [f for f in lf.FORMS["IO"] if f.variant in ("b", "floor")]
+    )
+    short = levels.run_mvp(
+        spark_session_local, "IO", "io-short", 0, 1, corpus=corpus, schema=None, scales=(1,), base_rows=10,
+        where="test",
+    )  # fmt: skip
+    assert [r.status for r in short] == ["error", "error"]
+    why = short[0].failure_mode
+    assert "asks for 10 tiles" in why and "holds only 4" in why and corpus in why, why
+    assert f"[LEVELS IO] corpus {corpus}/rows holds 4 tiles" in capsys.readouterr().out
+    exact = levels.run_mvp(
+        spark_session_local, "IO", "io-exact", 0, 1, corpus=corpus, schema=None, scales=(1,), base_rows=4,
+        where="test",
+    )  # fmt: skip
+    assert [(r.status, r.rows) for r in exact] == [("ok", 4), ("ok", 4)]

@@ -426,6 +426,12 @@ def keep_virtual(tile, rust: bool, cap_bytes) -> dict:
     return tile
 
 
+# The decoded bytes one output batch may hold. A batch of every tile of an Arrow batch (1000 tiles of 4 MiB) is a
+# 4 GiB column: Arrow cannot build a binary column past 2 GiB ("Cannot convert ChunkedArray to Array"), and a
+# Serverless UDF is limited to 1 GiB.
+_OUT_CHUNK_BYTES = 64 << 20
+
+
 def materialize_batches(batches, rust: bool = False, cap_bytes=None, decode=None):
     """d-py / d-rs: decode every virtual tile of an Arrow batch in one Python call (no per-row UDF hop): the `mapInArrow`
     body over a one-column `tile` DataFrame. `cap_bytes` is the driver's read cap (`report_detected_cap(spark)`).
@@ -438,7 +444,8 @@ def materialize_batches(batches, rust: bool = False, cap_bytes=None, decode=None
 
     for b in batches:
         rows = b.to_pylist()
-        for r in rows:
+        start, held = 0, 0
+        for i, r in enumerate(rows):
             t = r["tile"]
             if t is None or t["raster"] is not None or t["path"] is None:
                 continue
@@ -446,7 +453,14 @@ def materialize_batches(batches, rust: bool = False, cap_bytes=None, decode=None
             out = (decode or _materialized)(t, rust, cap_bytes)
             out["metadata"] = list((out["metadata"] or {}).items())
             r["tile"] = out
-        yield pa.RecordBatch.from_pylist(rows, schema=b.schema)
+            held += len(out["raster"] or b"")
+            if held >= _OUT_CHUNK_BYTES:  # a bounded slice out, not one batch of every decoded tile
+                yield pa.RecordBatch.from_pylist(rows[start : i + 1], schema=b.schema)
+                for done in rows[start : i + 1]:
+                    done["tile"] = None  # let the decoded bytes go
+                start, held = i + 1, 0
+        if start < len(rows) or not rows:
+            yield pa.RecordBatch.from_pylist(rows[start:], schema=b.schema)
 
 
 # --- Aggregates as a finalize over collect_list, a tree of finalizes, and a table function --------------

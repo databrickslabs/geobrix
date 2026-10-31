@@ -486,3 +486,25 @@ def test_every_io_bench_form_runs_with_the_jar(jvm_spark, tmp_path):
     ), bad
     scratch = levels_forms._io_scratch(str(tmp_path / "corpus"))
     assert not os.path.isdir(scratch) or not os.listdir(scratch)
+
+
+def test_the_batch_decode_yields_bounded_slices_in_order(tmp_path, monkeypatch):
+    """A batch of many tiles leaves as several output batches (a decoded column past 2 GiB cannot be built, and a
+    Serverless UDF holds 1 GiB), with every row kept, in order."""
+    import pyarrow as pa
+
+    from databricks.labs.gbx.pyrx import _mvp_forms
+
+    paths = [_tif(tmp_path / f"f{i}.tif") for i in range(5)]
+    batches = [_batch_of(p) for p in paths]
+    one = pa.RecordBatch.from_pylist(
+        [r for b in batches for r in b.to_pylist()], schema=batches[0].schema
+    )
+    monkeypatch.setattr(_mvp_forms, "_OUT_CHUNK_BYTES", 1)  # a slice per decoded tile
+    out = list(_mvp_forms.materialize_batches([one]))
+    assert [b.num_rows for b in out] == [1] * 5
+    assert all(b.to_pylist()[0]["tile"]["raster"] for b in out)
+    monkeypatch.setattr(_mvp_forms, "_OUT_CHUNK_BYTES", 1 << 30)
+    (whole,) = _mvp_forms.materialize_batches([one])
+    assert whole.num_rows == 5
+    assert [b.to_pylist()[0] for b in out] == whole.to_pylist()

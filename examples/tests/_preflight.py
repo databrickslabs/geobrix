@@ -154,7 +154,10 @@ def probe_problems(mvp: str, scales: Sequence[int], root, *, rows: int = 8, form
         f"--levels-forms name '{n}' matches no form of the set {mvp}"
         for n in preflight.unknown_form_names(mvp, forms)
     ]
-    if not preflight.forms_of(mvp, forms):  # a set with no form table (IO): no local Spark session to build either
+    # IO reads a tile corpus and writes GeoTIFFs: its forms are checked on a small local corpus by the bench tests, and a
+    # local Spark session here would time them against whatever corpus the checkout holds. A set with no forms has
+    # nothing to run either.
+    if mvp == "IO" or not preflight.forms_of(mvp, forms):
         return problems
     from pyspark.sql import SparkSession
 

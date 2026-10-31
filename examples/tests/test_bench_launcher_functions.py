@@ -292,7 +292,8 @@ def test_a_levels_forms_typo_is_refused_at_argument_time_with_exit_2(monkeypatch
     assert launcher.levels_forms_problem("SE", (), root) is None
     msg = launcher.levels_forms_problem("SE", ("today@256", "tday@256"), root)
     assert "tday@256" in msg and "today@256," not in msg.split("(the forms")[0]
-    assert "no forms" in launcher.levels_forms_problem("IO", ("x",), root)
+    io = launcher.levels_forms_problem("IO", ("x",), root)  # IO has forms now: the message lists them, floor included
+    assert "x" in io and "d-py" in io and "floor" in io
     _no_work(monkeypatch, "--levels", "SE", "--levels-scales", "1", "--levels-forms", "tday@256")
     assert launcher.main() == 2
     err = capsys.readouterr().err

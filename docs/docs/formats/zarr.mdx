@@ -575,9 +575,9 @@ plain puts, which never cross that step, 0.5-4.9 s.
 
 - **Runtimes.** Databricks Runtime 19 and Serverless environment 6 (Python 3.12), lightweight tier only. The
   heavyweight tier reads Zarr data only as materialized GeoBrix tiles.
-- **Data types.** Numeric types and CF times. Strings and objects are not supported: an array GeoBrix
-  cannot decode is left out of reads and registered without being readable, and a complex array can
-  only be read as blocks (a table has no column for complex numbers, and tiles do not hold them yet).
+- **Data types.** Numeric types and CF times. Strings and objects are not supported. An array GeoBrix
+  cannot decode is left out of reads and registered without being readable. A complex array can only be
+  read as blocks: tables have no complex column, and tiles do not hold complex numbers yet.
 - **Tiles.** `output="tiles"` needs the coordinates to form a regular grid.
   A tile of a registered store does not check its files for changes. A file changed in place reads as its new bytes, or fails.
   Materialize the tiles you keep.

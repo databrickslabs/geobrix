@@ -484,8 +484,10 @@ def _unit_boxes(cfg: _SampleConfig, reader: _UnitReader, pool, row, col):
     """``(boxes, lo)`` for a dense unit, else ``None``: decided once for the whole unit (all
     its points, however many batches they make). A unit is dense when its distinct points,
     at every selected step, need at least ``_DENSE`` of the cells of the box around them;
-    its boxes (one per variable, read once) must also fit ``cfg.box_bytes``. A batch then
-    gathers its cells from the boxes instead of reading them point by point.
+    its boxes (one per variable, read once) must also fit ``cfg.box_bytes``, and the selected
+    steps of every other dimension must be contiguous (a box over a gap reads chunks the
+    selection skips). A batch then gathers its cells from the boxes instead of reading them
+    point by point.
 
     MEASURED on the ERA5 cube (one 90 x 90 chunk, 744 steps, over a Volume, through
     ``_sample_points``): see the Zarr Reader's sampling section for the figures.
@@ -500,6 +502,8 @@ def _unit_boxes(cfg: _SampleConfig, reader: _UnitReader, pool, row, col):
     lo[cfg.xpos], hi[cfg.xpos] = int(col.min()), int(col.max()) + 1
     for k, p in enumerate(cfg.other):
         lo[p], hi[p] = int(cfg.steps[k].min()), int(cfg.steps[k].max()) + 1
+        if np.unique(cfg.steps[k]).size != hi[p] - lo[p]:
+            return None  # a gap: the box would read chunks the selection skips
     box_cells = math.prod(b - a for a, b in zip(lo, hi))
     distinct = int(np.unique(row * (hi[cfg.xpos]) + col).size)
     nbytes = box_cells * sum(

@@ -312,6 +312,7 @@ def sample_table(
     flag=None,
     access=None,
     batch_cells=None,
+    box_bytes=None,
 ):
     """``(cfg, pa.Table)`` of ``gbx_zarr_sample`` at the geometries ``points``, without Spark.
 
@@ -331,6 +332,8 @@ def sample_table(
     cfg.read = dataclasses.replace(cfg.read, access=access)
     if batch_cells is not None:  # small batches: one unit read over many of them
         cfg = dataclasses.replace(cfg, batch_cells=batch_cells)
+    if box_bytes is not None:  # a cap the dense box cannot fit
+        cfg = dataclasses.replace(cfg, box_bytes=box_bytes)
     uid, row, col = cfg.grid.map(points, crs)
     units = _sample._units(src, cfg, np.unique(uid[uid >= 0]))
     parts = []

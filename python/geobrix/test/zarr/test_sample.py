@@ -162,6 +162,46 @@ def test_a_dense_sample_reads_its_box_once(
     assert (used["box"] > 0, used["points"] > 0) == (dense, not dense)
 
 
+@pytest.mark.parametrize("case", ["over the box cap", "a gap in the selected steps"])
+def test_a_box_that_cannot_be_trusted_is_not_read(era5_v3_sharded, monkeypatch, case):
+    """Dense points still read point by point when their box would not fit ``box_bytes``, or
+    when it would span steps the selection skips (chunks the unit never shipped)."""
+    from databricks.labs.gbx.zarr import _engine
+
+    store = era5_v3_sharded
+    lat, lon = H.direct(store, "latitude"), H.direct(store, "longitude")
+    rows, cols = np.meshgrid(np.arange(37), np.arange(72), indexing="ij")
+    ys, xs = lat[rows.ravel()], lon[cols.ravel()]  # every cell of chunk (0, 0)
+    used = {"box": 0, "points": 0}
+    real_box, real_points = _engine.read_box, _engine.read_points
+
+    def box(arr, *a, **k):
+        used["box"] += len(arr.shape) == 3
+        return real_box(arr, *a, **k)
+
+    def points(arr, *a, **k):
+        used["points"] += len(arr.shape) == 3
+        return real_points(arr, *a, **k)
+
+    monkeypatch.setattr(_engine, "read_box", box)
+    monkeypatch.setattr(_engine, "read_points", points)
+    steps = list(range(48))
+    kw = {}
+    if case == "over the box cap":
+        kw["box_bytes"] = 1
+    else:
+        steps = [*range(0, 10), *range(40, 48)]
+        kw["sel"] = {"time": [HOURS[i] for i in steps]}
+    _, table = H.sample_table(
+        store, [_wkb(x, y) for x, y in zip(xs, ys)], variables=["t2m"], **kw
+    )
+    np.testing.assert_array_equal(
+        _by_point(table, "t2m", len(steps)),
+        _era5_oracle(store, "t2m", xs, ys)[:, steps],
+    )
+    assert used["box"] == 0 and used["points"] > 0
+
+
 def test_a_dense_unit_is_read_once_across_its_batches(tmp_path, monkeypatch):
     """The dense decision is made for the whole unit: with batches of two points, a unit of
     every cell of a chunk (plus two points given twice, and the fill cell) still reads its

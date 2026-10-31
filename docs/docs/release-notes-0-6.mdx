@@ -743,7 +743,7 @@ See [Databricks Container Service](./installation/dcs.mdx) and [Choose an instal
 - **Photogrammetry extras.** `pycolmap` and `pycolmap-cuda12` move to 4.2.1.
 - **The env 5 and 6 wheels ship GDAL's own Python bindings.** `xarray-spatial`, `numba` and `rio-cogeo` are no longer installed.
   - `osgeo` and `osgeo_utils` are built from the same GDAL as the wheel's `rasterio`. `from osgeo import gdal` and `rasterio` share one GDAL in a process.
-  - `osgeo_utils` comes without `gdal_merge` and `gdal2tiles`, which are not under GDAL's MIT licence.
+  - `osgeo_utils` comes without `gdal_merge` and `gdal2tiles`, which carry code under other licences.
   - GDAL's viewshed and COG driver replace `xarray-spatial` and `rio-cogeo`. `rst_cog_convert` takes the same profile names.
   - GeoBrix now installs `xarray` itself.
   - The `photogrammetry` extras no longer list `rio-cogeo`, `folium`, `pymbtiles` or `mercantile`. Nothing in them used these.

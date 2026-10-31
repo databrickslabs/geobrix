@@ -291,15 +291,38 @@ def test_only_the_helper_imports_osgeo():
     ), f"import osgeo through databricks.labs.gbx._osgeo, not directly: {found}"
 
 
-def _exemptions(path):
-    """Lines of every call in a file that passes ``same_libgdal`` other than a literal True."""
-    for node in ast.walk(ast.parse(path.read_text(), str(path))):
+def _exemptions_in(source, name="<source>"):
+    """Lines of every call in ``source`` that passes ``same_libgdal`` other than a literal True, or that hides
+    keywords in a ``**`` argument to ``bindings`` / ``utils`` (which could carry it)."""
+    for node in ast.walk(ast.parse(source, name)):
         if isinstance(node, ast.Call):
+            callee = getattr(node.func, "attr", getattr(node.func, "id", None))
             for kw in node.keywords:
                 if kw.arg == "same_libgdal" and not (
                     isinstance(kw.value, ast.Constant) and kw.value.value is True
                 ):
                     yield node.lineno
+                elif kw.arg is None and callee in ("bindings", "utils"):
+                    yield node.lineno
+
+
+def _exemptions(path):
+    yield from _exemptions_in(path.read_text(), str(path))
+
+
+@pytest.mark.parametrize(
+    "source, flagged",
+    [
+        ('bindings("x", same_libgdal=True)', False),
+        ('bindings("x", same_libgdal=False)', True),
+        ('bindings("x", same_libgdal=flag)', True),
+        ('bindings("x", **{"same_libgdal": False})', True),  # a keyword hidden in **
+        ('_osgeo.utils("x", **kw)', True),
+        ("dict(**kw)", False),  # ** elsewhere is not this check's business
+    ],
+)
+def test_the_exemption_scan_sees_a_flag_passed_in_a_double_star(source, flagged):
+    assert bool(list(_exemptions_in(source))) is flagged
 
 
 def test_only_the_by_path_callers_skip_the_same_libgdal_check():

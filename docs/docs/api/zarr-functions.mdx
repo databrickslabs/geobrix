@@ -10,8 +10,8 @@ import zarrFunctions from '!!raw-loader!../../tests/python/api/zarr_functions_ex
 _Since:_ **v0.6.0** · _(lightweight tier only; no JAR)_
 
 The Zarr functions read, write, version and maintain [Zarr](https://zarr.dev) stores. They are Python
-functions in `databricks.labs.gbx.zarr` and have no SQL binding; a store's manifest is a Delta table, so
-SQL can query it, and the GeoBrix tiles a read returns work with every lightweight
+functions in `databricks.labs.gbx.zarr` and have no SQL binding. A store's manifest is a Delta table, so
+SQL can query it. The GeoBrix tiles a read returns work with every lightweight
 [`rst_*` function](./raster-functions). Install the env6 wheel with its `[zarr]` extra, on Serverless environment 6 or Databricks Runtime 19. See [Zarr Stores](../formats/zarr#what-you-need). Importing the package
 imports no heavy library; importing a name loads only the module that defines it.
 

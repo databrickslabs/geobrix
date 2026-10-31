@@ -91,6 +91,9 @@ def test_the_repository_passes_the_audit():
             "scripts/native/rust-pins.conf",
             (r"(?m)^(GDAL_JAVA_JAR_SHA256=).*", r"\g<1>" + "0" * 64),
         ),
+        # pom.xml's gdal.java.version moved without the pin, or lost its property
+        ("pom.xml", (r"(<gdal\.java\.version>)[^<]*", r"\g<1>0.0.1-gbx0")),
+        ("pom.xml", (r"gdal\.java\.version", "gdal.jni.version")),
     ],
     ids=[
         "rust-channel",
@@ -100,6 +103,8 @@ def test_the_repository_passes_the_audit():
         "crate-pin-in-pins-conf",
         "stale-crate-pin",
         "java-classes-sha",
+        "pom-property-moved",
+        "pom-property-missing",
     ],
 )
 def test_drift_is_reported(tmp_path, rel, change):
@@ -374,3 +379,21 @@ def test_the_dcs_inputs_name_the_declared_requirements_and_our_rasterio():
     lines = [ln for ln in lines if ln]
     rasterio = f"rasterio=={pin('RASTERIO_VERSION')}+gbx{pin('GBX_NATIVE_REVISION')}"
     assert lines == ["-r core.txt", "-r extra-vizx.txt", rasterio]
+
+
+def test_a_version_that_is_only_a_prefix_of_the_pinned_url_is_reported():
+    # 1.7.5 is not in ...-1.7.5.1.tar.gz: the version must end at a dot-digit boundary too.
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("gbx_pins", PINS)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["gbx_pins"] = mod
+    spec.loader.exec_module(mod)
+    good = {
+        "ZED_VERSION": "1.7.5",
+        "ZED_SHA256": "0" * 64,
+        "ZED_URL": "https://example.invalid/zed-1.7.5.tar.gz",
+    }
+    assert mod.validate(good) == []
+    prefix = dict(good, ZED_URL="https://example.invalid/zed-1.7.5.1.tar.gz")
+    assert any("ZED_VERSION=1.7.5" in f for f in mod.validate(prefix))

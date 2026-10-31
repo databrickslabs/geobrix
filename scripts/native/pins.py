@@ -161,7 +161,7 @@ def validate(pins: dict, name: str = "scripts/native/pins.conf") -> list:
                 out.append(f"{name}: {key} has no {dep}_SHA256")
             # a bump moves the version, the URLs, the file name and the checksum together
             spelled = re.compile(
-                r"(?<![\d.])(?:%s)(?![\d])" % "|".join(version_forms(value))
+                r"(?<![\d.])(?:%s)(?!\.?\d)" % "|".join(version_forms(value))
             )
             for suffix in ("URL", "URL2", "FILE", "SDIST_FILE"):
                 other = pins.get(f"{dep}_{suffix}")

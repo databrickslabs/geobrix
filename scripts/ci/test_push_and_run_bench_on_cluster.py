@@ -29,7 +29,7 @@ class _Rec:
 @pytest.fixture
 def sdk(monkeypatch):
     """Stub databricks.sdk: `state.uploads`, `state.submits` and `state.deleted` record calls."""
-    state = SimpleNamespace(uploads=[], submits=[], deleted=[])
+    state = SimpleNamespace(uploads=[], submits=[], deleted=[], result="SUCCESS")
 
     class Workspace:
         def mkdirs(self, path):
@@ -50,7 +50,7 @@ def sdk(monkeypatch):
             return SimpleNamespace(
                 state=SimpleNamespace(
                     life_cycle_state=SimpleNamespace(value="TERMINATED"),
-                    result_state=SimpleNamespace(value="SUCCESS"),
+                    result_state=SimpleNamespace(value=state.result),
                 ),
                 tasks=[SimpleNamespace(run_id=12)],
                 run_page_url="https://example/run/11",
@@ -232,6 +232,21 @@ def test_a_finished_run_removes_its_notebook(launch, sdk):
 
     (path, _), = sdk.uploads
     assert path.endswith("_t4.ipynb") and sdk.deleted == [path]
+
+
+def test_a_failed_run_keeps_its_notebook_for_a_repair_run(launch, sdk):
+    sdk.result = "FAILED"
+    assert launch("--serverless", "--zarr-only", "--run-id", "t5") == 1
+
+    (path, _), = sdk.uploads
+    assert path.endswith("_t5.ipynb") and sdk.deleted == []
+
+
+def test_a_job_cluster_without_the_jar_refuses_the_heavyweight_tier(launch, sdk, capsys):
+    assert launch("--new-cluster", "--no-wait", "--run-id", "t6") == 2
+    err = capsys.readouterr().err
+    assert "without the GeoBrix JAR" in err and "--lightweight-only" in err
+    assert sdk.submits == [] and sdk.uploads == []
 
 
 def test_resume_needs_the_run_id_it_resumes(launch, sdk):

@@ -885,6 +885,13 @@ def main() -> int:
     if new_cluster and serverless:
         print("ERROR: --new-cluster and --serverless are exclusive.", file=sys.stderr)
         return 2
+    if new_cluster and heavyweight:
+        print(
+            "ERROR: a --new-cluster job cluster is made without the GeoBrix JAR, so the "
+            "heavyweight tier cannot run on it. Fix: add --lightweight-only (or --zarr-only).",
+            file=sys.stderr,
+        )
+        return 2
     if on_demand and not new_cluster:
         print(
             "ERROR: --on-demand applies to a job cluster made for the run: pass "

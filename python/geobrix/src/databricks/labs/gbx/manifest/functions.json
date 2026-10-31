@@ -47,6 +47,14 @@
     }
   },
   "functions": [
+    {"sql_name": "gbx_mvp_rst_materialize", "family": "raster-tile-scalar", "kind": "scalar", "status": "mvp",
+     "params": [{"name": "tile", "session": ["TILE"], "uc": "TILE"}],
+     "min_args": 1, "returns": {"session": "TILE"},
+     "levels": {
+       "L1": {"companion": "com.databricks.labs.gbx.rasterx.expressions.mvp.RST_MvpMaterialize", "needs_gdal": true},
+       "L3": {"register": "udf", "factory": "databricks.labs.gbx.pyrx._mvp_forms:_build_materialize_udf",
+              "factory_args": "read_cap", "needs": ["rasterio"]}},
+     "oracle": "MVP_IO"},
     {"sql_name": "gbx_bng_eastnorthasbng", "family": "bng-scalar", "kind": "scalar",
      "params": [{"name": "easting", "session": ["DOUBLE"], "uc": "DOUBLE"},
                 {"name": "northing", "session": ["DOUBLE"], "uc": "DOUBLE"},

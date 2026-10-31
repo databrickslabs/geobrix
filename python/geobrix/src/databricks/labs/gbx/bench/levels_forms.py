@@ -1561,6 +1561,232 @@ FORMS["SE"] = (
 )
 
 
+# --- IO, the read paths: bytes-free reads with a JVM, Arrow-batch or Rust decode against the readers with bytes ---------
+#
+# The measured heavy read lead is the cost of moving decoded bytes into Python rows. Every read form reads the corpus
+# tiles under `{CORPUS}/rows` end to end (read, decode, `sum(length(tile.raster))`) at 1000 / 4000 / 10000 tiles:
+#   a      the heavy `gdal` reader (the JVM reads and encodes)
+#   b      the light `raster_gbx` reader with bytes (the reader decodes in Python, the rows carry the bytes)
+#   c      virtual tiles, decoded by the JVM (`gbx_mvp_rst_materialize`, L1)
+#   udf    virtual tiles, decoded row by row by the light UDF (the same function at L3)
+#   d-py   virtual tiles, decoded in one Python call per Arrow batch (`mapInArrow`)
+#   d-rs   the same with the Rust build's `decode_window` (skipped where the module has none)
+# The writer forms start from the same reads and write GeoTIFFs to a scratch directory they delete after timing:
+#   W0 `gtiff_gdal` over the heavy read (the retiring baseline), W1 `gtiff_gbx` over virtual tiles,
+#   W2 `gtiff_gbx` over virtual tiles the JVM decoded first (`gbx_mvp_rst_materialize`).
+
+IO_FN = "gbx_mvp_rst_materialize"
+IO_SCALES = (1, 4, 10)  # times BASE_ROWS["io_rows"]: 1000 / 4000 / 10000 tiles
+BASE_ROWS["io_rows"] = 1000
+SCALES: Dict[str, tuple] = {
+    "IO": IO_SCALES
+}  # a set whose ladder is not 1 / 4 / 16 (run_mvp takes it for the default)
+# The only place a writer form deletes anything: under a scratch directory of this exact shape.
+SCRATCH_PREFIX = "/geobrix/0.6.0/scratch/"
+
+
+def _io_scratch(corpus: str) -> str:
+    """The scratch directory of a run: `.../geobrix/0.6.0/scratch` beside the corpus, or the temp directory's when the
+    corpus is not on a Volume (a local probe)."""
+    if corpus.startswith("/Volumes/"):
+        return os.path.dirname(corpus.rstrip("/")) + "/scratch"
+    import tempfile
+
+    return tempfile.gettempdir() + SCRATCH_PREFIX.rstrip("/")
+
+
+def _io_spec(spark, n, corpus, schema):
+    """One row `(rows_dir, n, scratch)`: the forms read the corpus themselves (a table of tiles would leave the read out)."""
+    rows = corpus.rstrip("/") + "/rows"
+    if not os.path.isdir(rows):
+        return None
+    return _table(
+        spark,
+        None,  # a view: one row naming the corpus of this run, never worth a cached table
+        f"mvp_io_spec_v{RECIPE_VERSION}_{n}",
+        lambda: client_dataframe(
+            spark,
+            [(rows, int(n), _io_scratch(corpus))],
+            "rows_dir string, n int, scratch string",
+            what="the read-path spec row",
+        ),
+    )
+
+
+INPUTS["io_rows"] = _io_spec
+
+
+def _io_args(spark, src):
+    r = spark.table(src).first()
+    return r["rows_dir"], int(r["n"]), r["scratch"]
+
+
+def remove_scratch(path: str) -> None:
+    """Delete a writer form's output, and only under the scratch prefix: anything else is refused."""
+    import shutil
+
+    norm = os.path.normpath(path)
+    if SCRATCH_PREFIX not in norm + "/" or ".." in path.split("/"):
+        raise ValueError(
+            f"refusing to delete {path!r}: not under a '...{SCRATCH_PREFIX}' directory"
+        )
+    shutil.rmtree(norm, ignore_errors=True)
+
+
+def _io_read(spark, rows_dir, n, kind):
+    """The read of `kind` over the corpus' first `n` tiles, one `tile` column."""
+    import functools
+
+    from databricks.labs.gbx.ds.file_gbx import report_detected_cap
+    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx.pyrx import _mvp_forms
+
+    register(spark)  # the light raster reader and writer
+    if kind == "a":
+        return spark.read.format("gdal").load(rows_dir).limit(n)
+    if kind == "b":
+        return (
+            spark.read.format("raster_gbx")
+            .option("virtualTiles", "false")
+            .load(rows_dir)
+            .limit(n)
+        )
+    virt = (
+        spark.read.format("raster_gbx")
+        .option("virtualTiles", "true")
+        .load(rows_dir)
+        .select("tile")
+        .limit(n)
+    )
+    if kind in ("c", "udf"):
+        return virt.selectExpr(f"{IO_FN}(tile) AS tile")
+    if kind in ("d-py", "d-rs"):
+        decode = functools.partial(
+            _mvp_forms.materialize_batches,
+            rust=kind == "d-rs",
+            cap_bytes=report_detected_cap(spark),
+        )
+        return virt.mapInArrow(decode, virt.schema)
+    if kind == "virtual":
+        return virt
+    raise ValueError(kind)
+
+
+def _io_form(kind):
+    def run(spark, src):
+        rows_dir, n, _ = _io_args(spark, src)
+        tiles = _io_read(spark, rows_dir, n, kind)
+        return _stats(tiles.select(tiles["tile"]["raster"].alias("raster")), None)
+
+    run.__name__ = f"io_{kind.replace('-', '_')}"
+    return run
+
+
+io_a, io_b, io_c, io_udf, io_d_py, io_d_rs = (
+    _io_form(k) for k in ("a", "b", "c", "udf", "d-py", "d-rs")
+)
+
+
+def _io_write(fmt, kind):
+    """A writer form: write the `kind` read as `fmt` into a fresh scratch directory, count what landed, delete it."""
+
+    def run(spark, src):
+        import uuid
+
+        rows_dir, n, scratch = _io_args(spark, src)
+        out = f"{scratch}/io_{uuid.uuid4().hex[:12]}"
+        os.makedirs(scratch, exist_ok=True)
+        try:
+            # the light writer takes overwrite; the heavy one is append-only (it raises on overwrite)
+            mode = "append" if fmt == "gtiff_gdal" else "overwrite"
+            from pyspark.sql import functions as F
+
+            named = (  # the raster writers take exactly (source, tile): the file name and the tile
+                _io_read(spark, rows_dir, n, kind)
+                .select("tile")
+                .withColumn(
+                    "source",
+                    F.concat(
+                        F.lit("t"),
+                        F.monotonically_increasing_id().cast("string"),
+                        F.lit(".tif"),
+                    ),
+                )
+                .select("source", "tile")
+            )
+            named.write.format(fmt).mode(mode).save(out)
+            files = [
+                os.path.join(d, f)
+                for d, _, fs in os.walk(out)
+                for f in fs
+                if f.endswith(".tif")
+            ]
+            size = sum(os.path.getsize(f) for f in files)
+            return len(files), size, len(files)
+        finally:
+            remove_scratch(out)
+
+    run.__name__ = f"io_write_{fmt}_{kind}"
+    return run
+
+
+io_w0, io_w1, io_w2 = (
+    _io_write("gtiff_gdal", "a"),
+    _io_write("gtiff_gbx", "virtual"),
+    _io_write("gtiff_gbx", "c"),
+)
+
+
+def register_io_materialize(spark):
+    """Install `gbx_mvp_rst_materialize` where the form needs it: the JVM's (L1) for c / W2."""
+    from databricks.labs.gbx import register
+
+    register(spark, only=[IO_FN], _levels={IO_FN: ("L1", "-")})
+
+
+_IO = "databricks.labs.gbx.bench.levels_forms:"
+
+
+def _io(fn, level, variant, run, *, setup="", **kw):
+    return Form(
+        "IO",
+        fn,
+        level,
+        variant,
+        "io_rows",
+        run=_IO + run.__name__,
+        setup=_IO + setup if setup else "",
+        register=False,
+        **kw,
+    )
+
+
+_IO_DED = ("dedicated",)
+FORMS["IO"] = [
+    _io("read", "JVM-DF", "a", io_a, computes=_IO_DED),
+    _io("read", "DF", "b", io_b),
+    _io(IO_FN, "L1", "c", io_c, setup="register_io_materialize", computes=_IO_DED),
+    _io(IO_FN, "L3", "udf", io_udf, setup="register_io_udf"),
+    _io("read", "DF", "d-py", io_d_py),
+    _io("read", "DF", "d-rs", io_d_rs),
+    _io("write", "JVM-DF", "W0", io_w0, computes=_IO_DED),
+    _io("write", "DF", "W1", io_w1),
+    _io("write", "L1", "W2", io_w2, setup="register_io_materialize", computes=_IO_DED),
+]
+
+
+def register_io_udf(spark):
+    """Install `gbx_mvp_rst_materialize` at L3 (the row-wise light UDF) for the `udf` form."""
+    from databricks.labs.gbx import register
+
+    register(spark, only=[IO_FN], _levels={IO_FN: ("L3", "-")})
+
+
+# Module-level names the forms resolve by ``module:function``.
+for _fn in (io_a, io_b, io_c, io_udf, io_d_py, io_d_rs, io_w0, io_w1, io_w2):
+    globals()[_fn.__name__] = _fn
+
+
 # A form that only sleeps, for proving the launcher's watchdog (``--inject-stall`` of the cluster launcher). It
 # is not in any set: ``levels.run_mvp(inject_stall=...)`` adds it after the first form.
 INPUTS["none"] = lambda spark, n, corpus, schema: "none"

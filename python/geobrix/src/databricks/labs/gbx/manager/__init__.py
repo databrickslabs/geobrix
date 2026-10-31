@@ -43,7 +43,7 @@ def register(
     messages.reminder(spark)
     man = manifest.load()
     names = (
-        list(man.functions)
+        [n for n, f in man.functions.items() if f.status != "mvp"]
         if only is None
         else [
             n.lower() if n.lower().startswith("gbx_") else f"gbx_{n.lower()}"

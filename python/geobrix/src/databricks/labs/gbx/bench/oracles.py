@@ -1050,6 +1050,31 @@ SPEC_SE: Tuple[Case, ...] = (
 )
 
 
+# MVP-IO: four ways to read a file into tiles (and the decode that follows a bytes-free read), held to one answer.
+# `io_cover` runs per read path (`run_reader`): the tiles must reproduce the file exactly, each pixel once.
+# `io_materialize` is the manifest row of `gbx_mvp_rst_materialize`: the virtual tile of the oracle file comes back
+# materialized, its pixels the file's, with no path left.
+IO = "gbx_mvp_rst_materialize"
+MVP_IO: Tuple[Case, ...] = (
+    Case(
+        "io_cover",
+        "read",
+        (Build("tile_virtual"),),
+        "covers_file",
+        None,
+        ("session",),
+    ),
+    Case(
+        "io_materialize",
+        IO,
+        (Build("tile_virtual"),),
+        "materialized_equals_file",
+        None,
+        ("session",),
+    ),
+)
+
+
 def _tile_bytes(
     crs_value: str, w: int = 64, h: int = 48, origin=None, px=None
 ) -> bytes:
@@ -1763,6 +1788,36 @@ def _check_tile(case: Case, out, args) -> Optional[str]:
     return None
 
 
+def _check_materialized(case: Case, out, args) -> Optional[str]:
+    """A virtual tile of a file, decoded: it holds the pixels of its window of the file and no path."""
+    import numpy as np
+    from rasterio.windows import Window
+
+    raster = _field(out, "raster")
+    if raster is None:
+        return f"{case.cid}: no raster in the result (metadata={_field(out, 'metadata')!r})"
+    if _field(out, "path") is not None:
+        return f"{case.cid}: the path is still set ({_field(out, 'path')!r})"
+    src_tile = args[0]
+    win = _field(src_tile, "window")
+    with open_bytes(_raster_of(src_tile)) as src:
+        w = (
+            Window(
+                _field(win, "col_off"),
+                _field(win, "row_off"),
+                _field(win, "width"),
+                _field(win, "height"),
+            )
+            if win is not None
+            else Window(0, 0, src.width, src.height)
+        )
+        want = src.read(1, window=w)
+    with open_bytes(bytes(raster)) as got:
+        if not np.array_equal(got.read(1), want):
+            return f"{case.cid}: pixels differ from the file at {w}"
+    return None
+
+
 def _masked_band(raster: bytes, band: int = 1):
     from rasterio.io import MemoryFile
 
@@ -1902,6 +1957,8 @@ def check(case: Case, out, args) -> Optional[str]:
         )
     if case.kind == "tile_props":
         return _check_tile(case, out, args)
+    if case.kind == "materialized_equals_file":
+        return _check_materialized(case, out, args)
     if case.kind == "ref":
         return _check_ref(case, out, args)
     if case.kind == "error_fix":
@@ -2090,6 +2147,76 @@ def _check_helper(case: Case, rows, tiles) -> Optional[str]:
             else f"{case.cid}: ratio {np.unique(ratio)[:5]}"
         )
     raise ValueError(case.kind)
+
+
+def run_reader(spark, case: Case, form: str, tmpdir: Optional[str] = None) -> List[str]:
+    """MVP-IO: read the oracle file through one path; the tiles must reproduce it exactly, once.
+
+    The forms: ``a`` the heavy ``gdal`` reader; ``b`` the light reader, materialized; ``c`` the light reader's virtual
+    tiles decoded by the JVM (``gbx_mvp_rst_materialize``); ``d-py`` / ``d-rs`` the same decoded in one Python call per
+    Arrow batch (pyrx / the Rust build). Each output tile is located by its own geotransform, so this holds
+    whatever window fields a path keeps.
+    """
+    import functools
+
+    import numpy as np
+    from rasterio.windows import from_bounds
+
+    from databricks.labs.gbx.ds.file_gbx import report_detected_cap
+    from databricks.labs.gbx.ds.register import register as register_readers
+    from databricks.labs.gbx.pyrx import _mvp_forms
+
+    tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")
+    path = resolve_arg(case.args[0], tmpdir)["path"]
+    register_readers(spark)  # the light raster reader
+    virt = (
+        spark.read.format("raster_gbx")
+        .option("virtualTiles", "true")
+        .option("tileSize", "32")
+        .load(path)
+        .select("tile")
+    )
+    if form == "a":
+        df = spark.read.format("gdal").load(path)
+    elif form == "b":
+        df = (
+            spark.read.format("raster_gbx")
+            .option("virtualTiles", "false")
+            .option("tileSize", "32")
+            .load(path)
+        )
+    elif form == "c":
+        df = virt.selectExpr(f"{IO}(tile) AS tile")
+    elif form in ("d-py", "d-rs"):
+        df = virt.mapInArrow(
+            functools.partial(
+                _mvp_forms.materialize_batches,
+                rust=form == "d-rs",
+                cap_bytes=report_detected_cap(
+                    spark
+                ),  # the driver's cap: a worker cannot measure it
+            ),
+            virt.schema,
+        )
+    else:
+        raise ValueError(form)
+    failures, covered = [], 0
+    with open_data(path) as src:
+        for r in df.select("tile").collect():
+            with open_bytes(bytes(r["tile"]["raster"])) as got:
+                win = (
+                    from_bounds(*got.bounds, transform=src.transform)
+                    .round_offsets()
+                    .round_lengths()
+                )
+                if not np.array_equal(got.read(1), src.read(1, window=win)):
+                    failures.append(f"{case.cid}/{form}: pixels differ at {win}")
+                covered += int(win.width * win.height)
+        if covered != src.width * src.height:
+            failures.append(
+                f"{case.cid}/{form}: covered {covered} of {src.width * src.height} px"
+            )
+    return failures
 
 
 def run_towers(spark, case: Case, tmpdir: str, level: Optional[str] = None):

@@ -121,6 +121,12 @@ def run_mvp(
         raise ValueError(
             f"no forms for MVP {mvp!r} yet (have: {', '.join(sorted(lf.FORMS))})"
         )
+    if tuple(scales) == (
+        1,
+        4,
+        16,
+    ):  # the default ladder: a set with a ladder of its own (IO) takes that
+        scales = lf.SCALES.get(mvp, scales)
     ctx = _Ctx(
         spark, warmup, measured, corpus, schema, uc, {}, report_tasks=report_tasks
     )
@@ -257,6 +263,14 @@ def _cannot_run_here(
 
         why = _rs.unavailable_reason()
         return f"Rust kernels unavailable: {why}" if why else None
+    if form.mvp == "IO" and form.variant == "d-rs":
+        from databricks.labs.gbx import _rs
+
+        mod = _rs.load()
+        if mod is None:
+            return f"Rust kernels unavailable: {_rs.unavailable_reason()}"
+        if not hasattr(mod, "decode_window"):
+            return "this _gbxrs build has no decode_window (build rust/gbxrs with --features gdal)"
     return None
 
 

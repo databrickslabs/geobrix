@@ -29,6 +29,8 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     # The GDAL spec engine's rows: each level runs the engine where it can, its own implementation elsewhere.
     "gbx_rst_slope": ("L1", "L3"),
     "gbx_rst_mapalgebra": ("L1", "L3"),
+    # MVP-IO's decode of a virtual tile: the JVM's (Catalyst) where there is a JAR, else the light UDF.
+    "gbx_mvp_rst_materialize": ("L1", "L3"),
     # A DataFrame helper, not a SQL name: its levels are L3 (all light), L1-steps (the viewshed and the
     # histogram are Catalyst steps) and JVM-DF (one Scala DataFrame step). The levels leg measures them.
     "rst_viewshed_towers": ("L3",),

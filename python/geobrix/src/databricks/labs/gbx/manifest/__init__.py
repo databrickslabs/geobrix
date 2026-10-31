@@ -475,6 +475,8 @@ class Function:
     columns: Tuple[Tuple[str, str], ...] = ()
     # The GDAL spec engine's spec for this row (its `gdal` block), when the row has one.
     gdal: Optional[GdalSpec] = None
+    # "mvp" marks a probe: installed when named (`register(only=[...])`), never by a plain `register()`.
+    status: str = ""
 
     @property
     def max_args(self) -> int:
@@ -538,6 +540,7 @@ def load() -> Manifest:
             r["oracle"],
             tuple((c[0], c[1]) for c in r.get("columns", [])),
             parse_gdal_spec(r["gdal"]) if "gdal" in r else None,
+            r.get("status", ""),
         )
     return Manifest(
         MappingProxyType(fns),

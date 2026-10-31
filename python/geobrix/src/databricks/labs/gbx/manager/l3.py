@@ -49,11 +49,17 @@ def l3_variant(fn) -> Tuple[str, Optional[str]]:
     raise RuntimeError(f"{fn.sql_name}: no L3 variant")
 
 
-def _factory_args(kind: str):
+def _factory_args(kind: str, spark=None):
     if kind == "proj_grid_dirs":
         from databricks.labs.gbx.core import proj_grids
 
         return (tuple(proj_grids.get_registered_dirs()),)
+    if (
+        kind == "read_cap"
+    ):  # the driver's connect-aware read cap, which a worker cannot measure itself
+        from databricks.labs.gbx.ds.file_gbx import report_detected_cap
+
+        return (report_detected_cap(spark),)
     raise ValueError(kind)
 
 
@@ -69,7 +75,7 @@ def register_l3(spark, fn, variant: str, name: Optional[str] = None) -> None:
     elif "factory" in spec:
         reg.udf.register(
             name,
-            resolve_ref(spec["factory"])(*_factory_args(spec["factory_args"])),
+            resolve_ref(spec["factory"])(*_factory_args(spec["factory_args"], spark)),
         )
     elif "callable" in spec:
         reg.udf.register(

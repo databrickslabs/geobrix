@@ -330,10 +330,12 @@ def test_a_jvm_form_gets_a_light_stand_in_only_when_the_stand_in_can_run_here():
     assert got[0].level == "L3" and got[0].variant == "c0"
 
 
-def test_a_set_with_no_form_table_has_nothing_to_probe():
-    """IO has no forms yet: the probe is skipped (it raised a KeyError that refused every --levels IO launch)."""
-    assert "IO" not in lf.FORMS
-    assert preflight.probe_failures(None, "IO", "/nonexistent") == ([], [])
+def test_a_set_with_no_form_table_has_nothing_to_probe(monkeypatch):
+    """A set known to have no forms yet is skipped (it raised a KeyError that refused every launch of it)."""
+    monkeypatch.setattr(preflight, "NO_FORM_TABLE", frozenset({"NEXT"}))
+    assert "NEXT" not in lf.FORMS
+    assert preflight.probe_failures(None, "NEXT", "/nonexistent") == ([], [])
+    assert preflight.unknown_form_names("NEXT", ("anything",)) == ["anything"]
 
 
 def test_an_unknown_set_is_an_error_not_an_empty_pass():
@@ -361,9 +363,7 @@ def test_a_levels_forms_name_that_matches_no_variant_is_reported():
     assert preflight.unknown_form_names("SE", ("today@256", "today@1024")) == []
     assert preflight.unknown_form_names("SE", ("today@256", "tday@256")) == ["tday@256"]
     assert preflight.unknown_form_names("SE", ()) == []
-    assert preflight.unknown_form_names("IO", ("anything",)) == [
-        "anything"
-    ]  # IO has no forms
+    assert preflight.unknown_form_names("IO", ("a", "d-rs", "nope")) == ["nope"]
 
 
 def test_the_memory_probes_of_the_g_set_are_marked():

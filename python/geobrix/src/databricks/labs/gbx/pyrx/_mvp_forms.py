@@ -220,6 +220,161 @@ bng_tessellateexplode_udtf_arrow = udtf(
     useArrow=True,
 )
 
+# --- MVP-IO: decoding the virtual tiles of a bytes-free read ---------------------------------------------------------
+#
+# The light reader's virtual tiles carry a path and a window, not bytes. Four ways to turn them into tiles with bytes
+# are held to one answer (`oracles.MVP_IO`): the JVM's `gbx_mvp_rst_materialize` (L1), this row-wise UDF (L3), and the
+# same decode in one Python call per Arrow batch, through pyrx (`d-py`) or the Rust build (`d-rs`).
+
+_HEADERS: dict = (
+    {}
+)  # source path -> (width, height, count, dtype): one header read per file per Python worker
+_HEADERS_MAX = 4096
+# the tile's metadata keys that mean "apply this on materialize": the Rust decode applies none of them (the pyrx one does)
+_PENDING = ("pending_nodata", "pending_srid", "pending_bands", "pending_crs")
+
+
+def _source_header(path: str):
+    """(width, height, count, dtype) of the file at `path`, opened as every light read is (the driver policy and the
+    remote-path gate). Cached per worker: the many windows of one file read its header once.
+    """
+    hit = _HEADERS.get(path)
+    if hit is None:
+        from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+        with ot.open_header(VirtualTile(cellid=0, path=path)) as h:
+            hit = (h.width, h.height, h.count, str(h.dtypes[0]))
+        if len(_HEADERS) >= _HEADERS_MAX:
+            _HEADERS.clear()
+        _HEADERS[path] = hit
+    return hit
+
+
+def _decoded_bytes(tile, header) -> int:
+    from databricks.labs.gbx.engine.argv import _ITEMSIZE
+    from databricks.labs.gbx.engine.l3 import _GDAL_TYPE
+
+    width, height, count, dtype = header
+    win = tile["window"]
+    w, h = (width, height) if win is None else (win["width"], win["height"])
+    return w * h * count * _ITEMSIZE.get(_GDAL_TYPE.get(dtype, dtype), 8)
+
+
+def _gate(tile, header, cap_bytes) -> None:
+    """The materialize gate of a worker (`materialize_decision`, kind `ingest`): a tile decoded over this compute's cap
+    fails fast with its fix, never an OOM. `cap_bytes` is the driver's connect-aware cap (a worker cannot measure it).
+    """
+    from databricks.labs.gbx.ds.file_gbx import materialize_decision
+
+    size = _decoded_bytes(tile, header)
+    if materialize_decision(size, "ingest", cap_bytes=cap_bytes) == "error":
+        raise ValueError(
+            f"gbx_mvp_rst_materialize: the virtual tile is {size // 2**20} MiB decoded, over this compute's read cap. "
+            "Fix: retile it first (gbx_rst_retile) so each tile is smaller"
+        )
+
+
+def _decode_py(tile, cap_bytes) -> bytes:
+    """The bytes of a virtual tile through pyrx (`open_tile`: the driver policy, the remote-path gate, FUSE staging)."""
+    _gate(tile, _source_header(tile["path"]), cap_bytes)
+    return ot.materialize_to_bytes(ot._to_virtual_tile(tile)).raster
+
+
+def _rust_can_decode(tile) -> bool:
+    """The Rust decode cuts a window of a file and nothing else: a clip, a pending instruction or a Zarr-backed tile
+    (and a window it cannot take) go the pyrx way."""
+    md = tile["metadata"] or {}
+    return (
+        tile["clip_polygon"] is None
+        and not any(k in md for k in _PENDING)
+        and "zarr_array" not in md
+    )
+
+
+def _decode_rust(tile, cap_bytes) -> bytes:
+    """The bytes of a virtual tile through the Rust build's `decode_window`, under the same policy as pyrx: the path is
+    judged by the remote-path gate and staged as `open_tile` stages it, and Rust opens it with the allowed drivers only
+    (the manifest's list, as `open_data` does); the predictor is the file's dtype's, read from its header once.
+    """
+    from databricks.labs.gbx import _gdal_policy, _rs
+    from databricks.labs.gbx.ds._listing import to_local_path
+    from databricks.labs.gbx.pyrx.core.compression import predictor_for
+
+    mod = _rs.load()
+    if mod is None or not hasattr(mod, "decode_window"):
+        raise RuntimeError(
+            f"the Rust decode is unavailable: {_rs.unavailable_reason() or 'this _gbxrs build has no decode_window'}"
+        )
+    header = _source_header(tile["path"])
+    _gate(tile, header, cap_bytes)
+    local = to_local_path(tile["path"])
+    _gdal_policy.data_path(
+        local, "a raster"
+    )  # the remote-path gate, as open_data runs it
+    drivers = (
+        list(_gdal_policy.allowed_names())
+        if _gdal_policy.activate()["mode"] != "off"
+        else None
+    )
+    win = tile["window"] or {
+        "col_off": 0,
+        "row_off": 0,
+        "width": header[0],
+        "height": header[1],
+    }
+    staged, is_temp = ot._stage_local_if_needed(local)
+    try:
+        return mod.decode_window(
+            staged,
+            win["col_off"],
+            win["row_off"],
+            win["width"],
+            win["height"],
+            predictor_for(header[3]),
+            drivers,
+        )
+    finally:
+        if is_temp:
+            ot._safe_remove(staged)
+
+
+def _build_materialize_udf(read_cap=None):
+    """L3 gbx_mvp_rst_materialize: one row at a time (the baseline for the batch form). `read_cap` is the driver's
+    connect-aware read cap, which the registrar captures (`factory_args: read_cap`)."""
+
+    @f.udf(V2_TILE_SCHEMA)
+    def materialize_udf(tile):
+        if tile is None or tile["raster"] is not None or tile["path"] is None:
+            return tile
+        _gate(tile, _source_header(tile["path"]), read_cap)
+        row = ot.materialize_to_bytes(ot._to_virtual_tile(tile)).to_row()
+        row["path"] = None  # the bytes are the tile now, as the JVM's decode leaves it
+        return row
+
+    return materialize_udf
+
+
+materialize_udf = _build_materialize_udf()
+
+
+def materialize_batches(batches, rust: bool = False, cap_bytes=None):
+    """d-py / d-rs: decode every virtual tile of an Arrow batch in one Python call (no per-row UDF hop): the `mapInArrow`
+    body over a one-column `tile` DataFrame. `cap_bytes` is the driver's read cap (`report_detected_cap(spark)`).
+    """
+    import pyarrow as pa
+
+    for b in batches:
+        rows = b.to_pylist()
+        for r in rows:
+            t = r["tile"]
+            if t is None or t["raster"] is not None or t["path"] is None:
+                continue
+            decode = _decode_rust if rust and _rust_can_decode(t) else _decode_py
+            t["raster"] = decode(t, cap_bytes)
+            t["path"] = None
+        yield pa.RecordBatch.from_pylist(rows, schema=b.schema)
+
+
 # --- Aggregates as a finalize over collect_list, a tree of finalizes, and a table function --------------
 #
 # Every form here keeps the contract of `gbx_rst_merge_agg` / `gbx_rst_bng_rasterize_agg` on the light tier, so

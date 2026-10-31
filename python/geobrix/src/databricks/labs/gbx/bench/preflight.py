@@ -26,7 +26,7 @@ from databricks.labs.gbx.bench import levels_forms as lf
 _JVM_SQL_LEVELS = ("L1", "L2")
 ENGINE_L3 = ("engine", "engine-c0", "engine-c1")
 # the sets that exist but have no form table yet: nothing to probe, nothing built on the client
-NO_FORM_TABLE = frozenset({"IO"})
+NO_FORM_TABLE: frozenset = frozenset()
 
 
 def forms_of(mvp: str, selected=()) -> list:

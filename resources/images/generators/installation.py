@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
-"""Generate the Installation page diagrams (landing page, DCS, init script).
+"""Generate the Installation page diagrams (landing page and DCS).
 
-Three free-form diagrams for docs/docs/installation.mdx and its two sub-pages:
+Two free-form diagrams for docs/docs/installation.mdx and its sub-page:
 
-    installation-paths        the three install paths, picked by compute + tier
-    installation-dcs          GeoBrix container image -> dedicated cluster -> tiers
-    installation-init-script  isolated VOL_DIR -> geobrix-gdal-init.sh -> x86 cluster
+    installation-paths  the three install paths, picked by compute + tier
+    installation-dcs    GeoBrix container image -> dedicated cluster -> tiers
 
 Reuses the eo-series / vapor-eyes / genie-map primitive library (card, stripe,
-chip, node, arrow, header/footer helpers) and the file-gbx-flow Volume glyph,
-so these sit visually alongside the other GeoBrix diagrams — same palette,
-same fonts, same background.
+chip, node, arrow, header/footer helpers), so these sit visually alongside the
+other GeoBrix diagrams — same palette, same fonts, same background.
 
 Re-render after editing this script (writes SVG, then PNG via headless Chrome
 when it is installed; pass --svg-only to skip the PNG step):
@@ -46,7 +44,6 @@ def _load(name, filename):
 eo = _load("eo_series", "eo-series.py")
 ve = _load("vapor_eyes_gen", "vapor-eyes.py")
 gm = _load("genie_map_gen", "genie-map.py")
-fgf = _load("file_gbx_flow_gen", "file-gbx-flow.py")
 
 # Shared primitives / constants
 text, chip, esc, mono = eo.text, eo.chip, eo.esc, eo.mono
@@ -166,23 +163,6 @@ def g_container(cx, cy, color, tint):
     return "".join(out)
 
 
-def g_script(cx, cy, color, tint):
-    """A shell script: a terminal window with a prompt."""
-    w, h = 92, 64
-    x, y = cx - w / 2, cy - h / 2
-    return (
-        f'<rect x="{x}" y="{y}" rx="7" ry="7" width="{w}" height="{h}" fill="{tint}" '
-        f'stroke="{color}" stroke-width="2"/>'
-        f'<rect x="{x}" y="{y}" rx="7" ry="7" width="{w}" height="14" fill="{color}"/>'
-        f'<rect x="{x}" y="{y + 8}" width="{w}" height="6" fill="{color}"/>'
-        f'<path d="M {x + 14} {y + 28} L {x + 26} {y + 37} L {x + 14} {y + 46}" '
-        f'fill="none" stroke="{color}" stroke-width="2.6" stroke-linecap="round" '
-        f'stroke-linejoin="round"/>'
-        f'<line x1="{x + 32}" y1="{y + 47}" x2="{x + 52}" y2="{y + 47}" stroke="{color}" '
-        f'stroke-width="2.6" stroke-linecap="round"/>'
-    )
-
-
 def g_cluster(cx, cy, color, tint):
     """A cluster: one driver box over three worker boxes."""
     out = [f'<rect x="{cx - 22}" y="{cy - 34}" rx="4" ry="4" width="44" height="22" '
@@ -226,21 +206,21 @@ PATHS = [
          branch="Lightweight tier only", badge="RECOMMENDED",
          runs="Serverless · standard access mode · Lakeflow pipelines · classic clusters · ARM",
          install="The env wheel for the runtime (env5 or env6), from a Volume or the GitHub release",
-         extra="Its own GDAL, PROJ and GEOS; no init script",
+         extra="Its own GDAL, PROJ and GEOS; no JAR",
          tiers=["Lightweight"]),
-    dict(theme=TEAL, glyph=g_container, letter="b",
-         title="Databricks Container Service", chip="GeoBrix container image",
-         branch="Heavyweight · arm64 or x86 · DBR 19", badge="PREFERRED",
-         runs="Dedicated cluster · Graviton (arm64) or x86 · DBR 19",
-         install="A GeoBrix image with native GDAL, the wheel and the JAR: no init script, no cluster library",
-         extra="Not yet available: DBR 17.3 / 18 images",
+    dict(theme=VIOLET, glyph=g_cluster, letter="b",
+         title="Cluster libraries", chip="env wheel + GeoBrix JAR",
+         branch="Heavyweight · dedicated cluster", badge=None,
+         runs="Dedicated cluster · x86 on DBR 17.3 / 18 / 19 · Graviton on DBR 19",
+         install="The env wheel and the GeoBrix JAR, both as cluster libraries from a Volume",
+         extra="The wheel's own GDAL serves the JVM too",
          tiers=["Lightweight", "Heavyweight"]),
-    dict(theme=VIOLET, glyph=g_script, letter="c",
-         title="Init Script (Legacy)", chip="geobrix-gdal-init.sh",
-         branch="Heavyweight · classic x86", badge=None,
-         runs="Classic x86 cluster · DBR 17.3 / 18 / 19",
-         install="Init script, GDAL tarball + .sha256 sidecar on a Volume; wheel as a cluster library",
-         extra="Still supported where the DCS image doesn't reach yet",
+    dict(theme=TEAL, glyph=g_container, letter="c",
+         title="Databricks Container Service", chip="GeoBrix container image",
+         branch="Heavyweight · arm64 or x86 · DBR 19", badge=None,
+         runs="Dedicated cluster · Graviton (arm64) or x86 · DBR 19",
+         install="A GeoBrix image with the env6 wheel, its native GDAL and the JAR",
+         extra="No library to attach: one GeoBrix JAR per cluster",
          tiers=["Lightweight", "Heavyweight"]),
 ]
 
@@ -309,9 +289,9 @@ def body_dcs():
     out.append(panel(x1, top, w1, h, accent=TEAL["accent"], title="GeoBrix image"))
     out.append(centered_chip(x1 + w1 / 2, top + 44, "tag  <version>-env6-<arm|x86>", TEAL))
     layers = [
-        ("GeoBrix wheel  ·  [vizx]", "Core + visualization, in the image's Python", BLUE),
+        ("GeoBrix env6 wheel  ·  [vizx]", "Core + visualization; carries its own GDAL, PROJ, GEOS", BLUE),
         ("GeoBrix JAR  ·  /databricks/jars", "The one GeoBrix JAR; dedicated clusters load this directory", ORANGE),
-        ("GDAL 3.11.4 + Java (JNI) bindings", "Native GDAL the heavyweight JAR loads", ORANGE),
+        ("GDAL 3.13.3 + Java (JNI) bindings", "The wheel's natives; the JAR loads them from /usr/lib", ORANGE),
         ("databricksruntime/environment:v6-standard", "DCS vNext base; Graviton uses the -arm variant", TEAL),
     ]
     lh, lgap = 62, 9
@@ -334,7 +314,7 @@ def body_dcs():
         ("ACCESS MODE", "Dedicated  ·  DBR 19  ·  Graviton (arm64) or x86"),
         ("DOCKER IMAGE URL", "The GeoBrix image tag for the instance architecture"),
         ("SPARK CONFIG", "spark.databricks.unityCatalog.volumes.enabled true"),
-        ("INIT SCRIPT AND LIBRARIES", "None: the image carries everything"),
+        ("LIBRARIES", "None: the image carries everything"),
     ]
     ry = top + 150
     for lbl, val in rows:
@@ -386,97 +366,10 @@ def body_dcs():
                f'fill="#F7F9FB" stroke="{C_MUTED_3}" stroke-width="1.2" stroke-dasharray="6 5"/>')
     out.append(text(sx + 18, sy + 24, "OTHER COMPUTE", size=10.5, weight=700,
                     fill=C_MUTED_2, letter_spacing="1.2"))
-    for yy, msg in ((44, "DBR 17.3 / 18: no image yet; on x86 use the Init Script (Legacy)."),
+    for yy, msg in ((44, "DBR 17.3 / 18: install the env5 wheel and the JAR as cluster libraries."),
                     (83, "Standard access mode and Serverless: use WHL-only (Lightweight).")):
         out.extend(wrap_left(sx + 18, sy + yy, sw - 36, msg, size=11.5, fill=C_MUTED,
                              line_h=15))
-    return "".join(out)
-
-
-def body_init_script():
-    out = []
-    top, h = 150, 386
-    # --- column 1: isolated VOL_DIR --------------------------------------------
-    x1, w1 = PAD, 470
-    out.append(col_label(x1 + 4, top - 8, "1 · STAGE ON A VOLUME", C_MUTED_3))
-    out.append(panel(x1, top, w1, h, accent=VIOLET["accent"]))
-    out.append(fgf.glyph_volume(x1 + 44, top + 42, VIOLET["accent"], VIOLET["tint"], s=40))
-    out.append(text(x1 + 76, top + 38, "VOL_DIR", size=18, weight=800, fill=C_INK))
-    out.append(text(x1 + 76, top + 58, "An isolated Unity Catalog Volume folder", size=12.5,
-                    fill=C_MUTED))
-    files = [
-        ("geobrix-gdal-artifacts-v<version>-noble.tar.gz",
-         "The GDAL tarball (artifacts or platform: one, not both)"),
-        ("geobrix-gdal-artifacts-v<version>-noble.tar.gz.sha256",
-         "Its sidecar: the hash the script verifies at start"),
-        ("geobrix-<version>-jar-with-dependencies.jar",
-         "At most ONE JAR (used with the platform tarball)"),
-    ]
-    fy = top + 88
-    for name, sub in files:
-        out.append(f'<rect x="{x1 + 20}" y="{fy}" rx="9" ry="9" width="{w1 - 40}" height="70" '
-                   f'fill="{VIOLET["tint"]}" stroke="{VIOLET["accent"]}" stroke-width="1.2"/>')
-        out.append(fgf.glyph_file(x1 + 44, fy + 35, VIOLET["accent"], "#FFFFFF", s=34))
-        out.append(mono(x1 + 70, fy + 29, name, size=11.5, weight=700, fill=C_INK))
-        out.append(text(x1 + 70, fy + 51, sub, size=12, fill=C_MUTED))
-        fy += 82
-    out.append(text(x1 + w1 / 2, top + h - 20, "Nothing else: never a shared folder of artifacts",
-                    size=12.5, weight=700, fill=ROSE["accent"], anchor="middle"))
-
-    # --- column 2: init script ---------------------------------------------------
-    x2, w2 = 556, 420
-    out.append(col_label(x2 + 4, top - 8, "2 · INIT SCRIPT AT CLUSTER START", C_MUTED_3))
-    out.append(panel(x2, top, w2, h, accent=VIOLET["accent"]))
-    out.append(g_script(x2 + 66, top + 54, VIOLET["accent"], VIOLET["tint"]))
-    out.append(mono(x2 + 126, top + 50, "geobrix-gdal-init.sh", size=15, weight=800, fill=C_INK))
-    out.append(text(x2 + 126, top + 70, "Versioned per release; edit VOL_DIR only",
-                    size=12, fill=C_MUTED))
-    steps = [
-        "Check the architecture is amd64 (fails fast on ARM)",
-        "Verify the tarball against the .sha256 sidecar",
-        "Extract and verify the SHA256SUMS manifest",
-        "dpkg -i the bundled GDAL / PROJ / GEOS .debs",
-        "pip install the bundled GDAL wheels (no PyPI)",
-        "Copy libgdalalljni.so and the JAR into place",
-    ]
-    sy = top + 116
-    for i, s in enumerate(steps, 1):
-        out.append(f'<circle cx="{x2 + 36}" cy="{sy - 5}" r="11" fill="{VIOLET["accent"]}"/>')
-        out.append(text(x2 + 36, sy - 1, str(i), size=11.5, weight=800, fill="#FFFFFF",
-                        anchor="middle"))
-        out.append(text(x2 + 58, sy, s, size=12.5, fill=C_INK))
-        sy += 42
-
-    # --- column 3: classic x86 cluster -----------------------------------------
-    x3, w3 = 1056, CANVAS_W - PAD - 1056
-    out.append(col_label(x3 + 4, top - 8, "3 · CLASSIC X86 CLUSTER", C_MUTED_3))
-    out.append(panel(x3, top, w3, h, accent=VIOLET["accent"], title="Classic cluster"))
-    out.append(g_cluster(x3 + w3 / 2, top + 86, VIOLET["accent"], VIOLET["tint"]))
-    rows = [
-        ("RUNTIME", "DBR 17.3 / 18 / 19 (Ubuntu 24.04)"),
-        ("INSTANCE TYPE", "Intel or AMD x86_64, not ARM"),
-        ("LIBRARY", "GeoBrix wheel as a cluster library"),
-    ]
-    ry = top + 152
-    for lbl, val in rows:
-        out.append(text(x3 + 24, ry, lbl, size=10.5, weight=700, fill=C_MUTED_3,
-                        letter_spacing="1.2"))
-        out.append(text(x3 + 24, ry + 19, val, size=13, weight=600, fill=C_INK))
-        ry += 52
-    tsvg, _ = tier_chips(x3 + 24, top + h - 48, ["Lightweight", "Heavyweight"])
-    out.append(tsvg)
-    out.append(text(x3 + w3 - 24, top + h - 30, "TIERS", size=10.5, weight=700,
-                    fill=C_MUTED_3, anchor="end", letter_spacing="1.2"))
-
-    # arrows
-    out.append(parrow(x1 + w1 + 6, top + h / 2, x2 - 6, top + h / 2, VIOLET["accent"]))
-    out.append(parrow(x2 + w2 + 6, top + h / 2, x3 - 6, top + h / 2, VIOLET["accent"]))
-
-    # isolation strip
-    out.append(strip(PAD, top + h + 18, CANVAS_W - 2 * PAD, 52, ROSE,
-                     "WHY VOL_DIR STAYS ISOLATED",
-                     "The script glob-copies every geobrix-*-jar-with-dependencies.jar it finds "
-                     "there: a mixed folder gives a nondeterministic classpath."))
     return "".join(out)
 
 
@@ -488,25 +381,16 @@ DIAGRAMS = {
         pill="Installation  ·  Paths",
         body=body_paths,
         chips=["geobrix-<version>+env<N>-py3-none-any.whl",
-               "geobrix-<version>-jar-with-dependencies.jar", "geobrix-gdal-init.sh"],
+               "geobrix-<version>-jar-with-dependencies.jar"],
     ),
     "dcs": dict(
         badge="GB", theme=TEAL,
         title="GeoBrix on Databricks Container Service",
-        subtitle="The preferred heavyweight packaging, on DCS vNext: one image carries native GDAL, the wheel and the JAR",
+        subtitle="On DCS vNext, one image carries the env6 wheel, its native GDAL and the JAR",
         pill="Installation  ·  Container Service",
         body=body_dcs,
-        chips=["environment:v6-standard[-arm]", "GDAL 3.11.4", "geobrix[vizx]",
+        chips=["environment:v6-standard[-arm]", "GDAL 3.13.3", "geobrix[vizx]",
                "jar-with-dependencies.jar"],
-    ),
-    "init-script": dict(
-        badge="GB", theme=VIOLET,
-        title="Init Script (Legacy)",
-        subtitle="The older heavyweight route, still supported where the DCS image doesn't reach yet",
-        pill="Installation  ·  Init Script",
-        body=body_init_script,
-        chips=["geobrix-gdal-init.sh", "*-noble.tar.gz", "*.tar.gz.sha256",
-               "geobrix-*-jar-with-dependencies.jar"],
     ),
 }
 

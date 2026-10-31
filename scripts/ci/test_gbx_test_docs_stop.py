@@ -46,6 +46,8 @@ class DocsSandbox:
         for name in (
             "gbx-docs-stop.sh",
             "gbx-docs-dev.sh",
+            "gbx-docs-start.sh",
+            "gbx-docs-serve-local.sh",
             "gbx-docs-restart.sh",
             "gbx-docs-build.sh",
             "common.sh",
@@ -222,7 +224,16 @@ def test_build_stops_its_own_servers_only(docs):
     assert _wait(lambda: not _listening(own)), "build left its own checkout's server up"
 
 
-@pytest.mark.parametrize("script", ["gbx-docs-stop.sh", "gbx-docs-restart.sh"])
+@pytest.mark.parametrize(
+    "script",
+    [
+        "gbx-docs-stop.sh",
+        "gbx-docs-restart.sh",
+        "gbx-docs-dev.sh",
+        "gbx-docs-start.sh",
+        "gbx-docs-serve-local.sh",
+    ],
+)
 @pytest.mark.parametrize("args", [["--port"], ["--port", "abc"], ["--port", "--force"]])
 def test_port_without_a_number_exits_2_with_usage(docs, script, args):
     # `--port` as the last argument used to loop forever (`shift 2` fails with one argument left and shifts nothing).

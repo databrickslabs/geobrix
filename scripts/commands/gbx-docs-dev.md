@@ -10,7 +10,7 @@ bash scripts/commands/gbx-docs-dev.sh [OPTIONS]
 
 ## Options
 
-- `--port <number>` - Custom port (default: 3000)
+- `--port <number>` - Custom port (default: 3000). A missing or non-numeric value exits 2 with the usage text.
 - `--no-stop-first` - If the port is in use, fail instead of replacing the server. Default: replace it.
 - `--force` - Replace the server even if another checkout started it. Default: refuse.
 - `--log <path>` - Write output to log file

@@ -484,9 +484,9 @@ def _unit_boxes(cfg: _SampleConfig, reader: _UnitReader, pool, row, col):
     """``(boxes, lo)`` for a dense unit, else ``None``: decided once for the whole unit (all
     its points, however many batches they make). A unit is dense when its distinct points,
     at every selected step, need at least ``_DENSE`` of the cells of the box around them;
-    its boxes (one per variable, read once) must also fit ``cfg.box_bytes``, and the selected
-    steps of every other dimension must be contiguous (a box over a gap reads chunks the
-    selection skips). A batch then gathers its cells from the boxes instead of reading them
+    its boxes (one per variable, read once) must also fit ``cfg.box_bytes``, and every chunk
+    of the box along another dimension must hold a selected step (a box over a gap reads
+    chunks the selection skips; a strided selection within chunks keeps the box). A batch then gathers its cells from the boxes instead of reading them
     point by point.
 
     MEASURED on the ERA5 cube (one 90 x 90 chunk, 744 steps, over a Volume, through
@@ -502,8 +502,11 @@ def _unit_boxes(cfg: _SampleConfig, reader: _UnitReader, pool, row, col):
     lo[cfg.xpos], hi[cfg.xpos] = int(col.min()), int(col.max()) + 1
     for k, p in enumerate(cfg.other):
         lo[p], hi[p] = int(cfg.steps[k].min()), int(cfg.steps[k].max()) + 1
-        if np.unique(cfg.steps[k]).size != hi[p] - lo[p]:
-            return None  # a gap: the box would read chunks the selection skips
+        for v in cfg.variables:  # a chunk of the box with no selected step is a gap
+            size = cfg.read.arrays[v].chunks[p]
+            inside = np.unique(cfg.steps[k] // size).size
+            if inside != (hi[p] - 1) // size - lo[p] // size + 1:
+                return None  # the box would read chunks the selection skips
     box_cells = math.prod(b - a for a, b in zip(lo, hi))
     distinct = int(np.unique(row * (hi[cfg.xpos]) + col).size)
     nbytes = box_cells * sum(

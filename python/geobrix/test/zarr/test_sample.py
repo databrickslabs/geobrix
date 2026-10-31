@@ -162,10 +162,14 @@ def test_a_dense_sample_reads_its_box_once(
     assert (used["box"] > 0, used["points"] > 0) == (dense, not dense)
 
 
-@pytest.mark.parametrize("case", ["over the box cap", "a gap in the selected steps"])
-def test_a_box_that_cannot_be_trusted_is_not_read(era5_v3_sharded, monkeypatch, case):
-    """Dense points still read point by point when their box would not fit ``box_bytes``, or
-    when it would span steps the selection skips (chunks the unit never shipped)."""
+@pytest.mark.parametrize(
+    "case",
+    ["over the box cap", "a gap in the selected steps", "every 6th step"],
+)
+def test_a_box_is_read_unless_it_cannot_be_trusted(era5_v3_sharded, monkeypatch, case):
+    """Dense points read point by point when their box would not fit ``box_bytes``, or would
+    span chunks the selection skips (never shipped); a strided selection within chunks keeps
+    the box."""
     from databricks.labs.gbx.zarr import _engine
 
     store = era5_v3_sharded
@@ -190,7 +194,16 @@ def test_a_box_that_cannot_be_trusted_is_not_read(era5_v3_sharded, monkeypatch, 
     if case == "over the box cap":
         kw["box_bytes"] = 1
     else:
-        steps = [*range(0, 10), *range(40, 48)]
+        # chunks hold 12 steps: a strided selection touches every chunk of its box, a hole
+        # of whole chunks does not
+        steps = (
+            list(range(0, 48, 6))
+            if case == "every 6th step"
+            else [
+                *range(0, 10),
+                *range(40, 48),
+            ]
+        )
         kw["sel"] = {"time": [HOURS[i] for i in steps]}
     _, table = H.sample_table(
         store, [_wkb(x, y) for x, y in zip(xs, ys)], variables=["t2m"], **kw
@@ -199,7 +212,10 @@ def test_a_box_that_cannot_be_trusted_is_not_read(era5_v3_sharded, monkeypatch, 
         _by_point(table, "t2m", len(steps)),
         _era5_oracle(store, "t2m", xs, ys)[:, steps],
     )
-    assert used["box"] == 0 and used["points"] > 0
+    if case == "every 6th step":
+        assert used["box"] > 0 and used["points"] == 0
+    else:
+        assert used["box"] == 0 and used["points"] > 0
 
 
 def test_a_dense_unit_is_read_once_across_its_batches(tmp_path, monkeypatch):

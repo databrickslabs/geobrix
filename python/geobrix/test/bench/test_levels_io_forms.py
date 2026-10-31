@@ -31,9 +31,25 @@ def _corpus(tmp_path, n=4):
     return str(tmp_path / "corpus")
 
 
-def test_the_io_set_holds_the_five_reads_the_udf_and_the_three_writers():
+def test_the_io_set_holds_the_reads_the_udf_the_floor_and_the_three_writers():
     forms = {f.variant: f for f in lf.FORMS["IO"]}
-    assert set(forms) == {"a", "b", "c", "udf", "d-py", "d-rs", "W0", "W1", "W2"}
+    assert set(forms) == {
+        "a",
+        "b",
+        "c",
+        "udf",
+        "d-py",
+        "d-rs",
+        "floor",
+        "W0",
+        "W1",
+        "W2",
+    }
+    # the floor sits beside the d forms: `summarize` keys floor_median_s on (fn, level, rows)
+    assert (forms["floor"].fn, forms["floor"].level) == (
+        forms["d-py"].fn,
+        forms["d-py"].level,
+    )
     assert {f.input for f in lf.FORMS["IO"]} == {"io_rows"}
     assert [lf.BASE_ROWS["io_rows"] * k for k in lf.SCALES["IO"]] == [1000, 4000, 10000]
     for f in lf.FORMS["IO"]:  # every form resolves to a function of this module
@@ -113,3 +129,54 @@ def test_the_light_io_forms_run_on_a_local_corpus(spark_session_local, tmp_path)
     assert not os.path.exists(lf._io_scratch(corpus)) or not os.listdir(
         lf._io_scratch(corpus)
     )
+
+
+def test_the_io_floor_is_the_d_py_shell_with_the_decode_skipped(
+    spark_session_local, tmp_path
+):
+    """The floor reads the same bytes-free virtual tiles through the same `mapInArrow` shell as d-py, and keeps them
+    virtual: no raster is decoded, so its median is the cost of the shell alone."""
+    corpus = _corpus(tmp_path)
+    rows = (
+        lf._io_read(spark_session_local, corpus + "/rows", 4, "floor")
+        .select("tile")
+        .collect()
+    )
+    assert len(rows) == 4
+    assert all(r["tile"]["raster"] is None and r["tile"]["path"] for r in rows)
+    decoded = (
+        lf._io_read(spark_session_local, corpus + "/rows", 4, "d-py")
+        .select("tile")
+        .collect()
+    )
+    assert all(
+        r["tile"]["raster"] is not None for r in decoded
+    )  # d-py does decode the same tiles
+
+
+def test_the_io_floor_is_recorded_as_the_floor_and_reported_beside_d_py(
+    spark_session_local, tmp_path
+):
+    """The floor row is `ok` (its rasters are NULL by design, not an error) and d-py's line carries its median."""
+    from databricks.labs.gbx.bench import levels
+
+    corpus = _corpus(tmp_path)
+    got = levels.run_mvp(
+        spark_session_local, "IO", "io-floor", 0, 1, corpus=corpus, schema=None, scales=(1,), base_rows=4,
+        where="test", only_levels=("DF",),
+    )  # fmt: skip
+    by_form = {r.form: r for r in got}
+    assert by_form["floor"].status == "ok", (
+        by_form["floor"].failure_mode,
+        by_form["floor"].note,
+    )
+    assert "NULL" not in (by_form["floor"].note or "")
+    assert by_form["d-py"].status == "ok"
+    lines = levels.summarize(got).splitlines()
+    cells = {
+        ln.split("|")[3].strip(): [c.strip() for c in ln.split("|")]
+        for ln in lines
+        if "| read | DF |" in ln
+    }
+    assert cells["d-py"][7] != "-"  # floor_median_s
+    assert cells["floor"][7] == "-"

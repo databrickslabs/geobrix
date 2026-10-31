@@ -419,9 +419,17 @@ def _build_materialize_udf(read_cap=None):
 materialize_udf = _build_materialize_udf()
 
 
-def materialize_batches(batches, rust: bool = False, cap_bytes=None):
+def keep_virtual(tile, rust: bool, cap_bytes) -> dict:
+    """The decode of the IO floor form: the tile as it came, still virtual. `materialize_batches(decode=keep_virtual)`
+    is the d-py / d-rs shell (Arrow rows to Python and back, the metadata made a dict) with the decode skipped.
+    """
+    return tile
+
+
+def materialize_batches(batches, rust: bool = False, cap_bytes=None, decode=None):
     """d-py / d-rs: decode every virtual tile of an Arrow batch in one Python call (no per-row UDF hop): the `mapInArrow`
     body over a one-column `tile` DataFrame. `cap_bytes` is the driver's read cap (`report_detected_cap(spark)`).
+    `decode` (default `_materialized`) is the per-tile step; the bench's floor form passes `keep_virtual` to time the shell.
 
     A map column is a list of (key, value) pairs in `to_pylist()`: each tile's metadata is made a dict once for the
     decode, and written back in the schema's form.
@@ -435,7 +443,7 @@ def materialize_batches(batches, rust: bool = False, cap_bytes=None):
             if t is None or t["raster"] is not None or t["path"] is None:
                 continue
             t["metadata"] = dict(t["metadata"] or ())
-            out = _materialized(t, rust, cap_bytes)
+            out = (decode or _materialized)(t, rust, cap_bytes)
             out["metadata"] = list((out["metadata"] or {}).items())
             r["tile"] = out
         yield pa.RecordBatch.from_pylist(rows, schema=b.schema)

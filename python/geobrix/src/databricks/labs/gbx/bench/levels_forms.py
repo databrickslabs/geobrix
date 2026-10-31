@@ -1571,6 +1571,8 @@ FORMS["SE"] = (
 #   udf    virtual tiles, decoded row by row by the light UDF (the same function at L3)
 #   d-py   virtual tiles, decoded in one Python call per Arrow batch (`mapInArrow`)
 #   d-rs   the same with the Rust build's `decode_window` (skipped where the module has none)
+#   floor  d-py's read and `mapInArrow` shell with the decode skipped (the tiles stay virtual): its median is the shell
+#          cost, shown as `floor_median_s` beside d-py and d-rs
 # The writer forms start from the same reads and write GeoTIFFs to a scratch directory they delete after timing:
 #   W0 `gtiff_gdal` over the heavy read (the retiring baseline), W1 `gtiff_gbx` over virtual tiles,
 #   W2 `gtiff_gbx` over virtual tiles the JVM decoded first (`gbx_mvp_rst_materialize`).
@@ -1664,11 +1666,13 @@ def _io_read(spark, rows_dir, n, kind):
     )
     if kind in ("c", "udf"):
         return virt.selectExpr(f"{IO_FN}(tile) AS tile")
-    if kind in ("d-py", "d-rs"):
+    if kind in ("d-py", "d-rs", "floor"):
+        # the floor is d-py's shell with the decode skipped (`keep_virtual`): same read, same Arrow round trip
         decode = functools.partial(
             _mvp_forms.materialize_batches,
             rust=kind == "d-rs",
             cap_bytes=report_detected_cap(spark),
+            **({"decode": _mvp_forms.keep_virtual} if kind == "floor" else {}),
         )
         return virt.mapInArrow(decode, virt.schema)
     if kind == "virtual":
@@ -1689,6 +1693,24 @@ def _io_form(kind):
 io_a, io_b, io_c, io_udf, io_d_py, io_d_rs = (
     _io_form(k) for k in ("a", "b", "c", "udf", "d-py", "d-rs")
 )
+
+
+def io_floor(spark, src):
+    """The IO floor: the `d-py` read with the decode skipped, so its median is what the read and the `mapInArrow` shell
+    cost without a decode (`floor_median_s` beside `d-py`, as the BNG floor sits beside its variants). The tiles stay
+    virtual, so there are no raster bytes: it counts the tiles that came through (`path`), not decoded rasters.
+    """
+    from pyspark.sql import functions as F
+
+    rows_dir, n, _ = _io_args(spark, src)
+    tiles = _io_read(spark, rows_dir, n, "floor")
+    out = tiles.agg(
+        F.count(F.lit(1)),
+        F.coalesce(F.sum(F.length(tiles["tile"]["raster"])), F.lit(0)),
+        F.count(tiles["tile"]["path"]),
+    )
+    r = out.collect()[0]
+    return r[0], r[1], r[2], out
 
 
 def _io_write(fmt, kind):
@@ -1777,6 +1799,8 @@ FORMS["IO"] = [
     _io(IO_FN, "L3", "udf", io_udf, setup="register_io_udf"),
     _io("read", "DF", "d-py", io_d_py),
     _io("read", "DF", "d-rs", io_d_rs),
+    # the shell cost of d-py / d-rs (Task 17's "decode share" floor): `summarize` puts its median beside theirs
+    _io("read", "DF", "floor", io_floor),
     _io("write", "JVM-DF", "W0", io_w0, computes=_IO_DED),
     _io("write", "DF", "W1", io_w1),
     _io("write", "L1", "W2", io_w2, setup="register_io_materialize", computes=_IO_DED),
@@ -1794,7 +1818,7 @@ register_io_udf.installs = {IO_FN: ("L3", "-")}
 
 
 # Module-level names the forms resolve by ``module:function``.
-for _fn in (io_a, io_b, io_c, io_udf, io_d_py, io_d_rs, io_w0, io_w1, io_w2):
+for _fn in (io_a, io_b, io_c, io_udf, io_d_py, io_d_rs, io_floor, io_w0, io_w1, io_w2):
     globals()[_fn.__name__] = _fn
 
 

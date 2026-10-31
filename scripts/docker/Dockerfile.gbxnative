@@ -1,0 +1,60 @@
+# check=skip=InvalidDefaultArgInFrom
+# geobrix-dev on the env wheel's natives: the base dev image plus the env6 wheel's payload (the same bytes the wheel
+# ships), the rasterio distribution built against that GDAL, and the pinned Rust toolchain. The base image stays
+# the fallback. Build with `bash scripts/commands/gbx-docker-rebuild.sh --overlay gbxnative`, which assembles the
+# build context (build/devimage/<arch>/: payload/, rust/, dist/) from the native build and checks every file
+# against its pin. No package index is needed: every pip step is --no-index, and every RUN but the toolchain
+# download has no network.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+# x86_64 or aarch64: the payload's architecture directory
+ARG GBX_ARCH
+ARG RUST_TOOLCHAIN
+ARG RUSTUP_INIT_SHA256
+ARG MATURIN_VERSION
+
+# The payload, laid out as in the wheel (_native/<arch>, _native/share, _vendor/<arch>, _vendor/common), so every
+# binding's relative RUNPATH finds the payload's libraries. GBX_NATIVE_ROOT names it for the JVM (GDALManager) and
+# the Python loader; GDAL_DATA and PROJ_DATA are the payload's own data.
+COPY payload/ /opt/gbx-native/
+ENV GBX_NATIVE_ROOT=/opt/gbx-native \
+    GDAL_DATA=/opt/gbx-native/_native/share/gdal \
+    PROJ_DATA=/opt/gbx-native/_native/share/proj
+
+# Every interpreter starts on the payload's bindings: its _vendor/<arch> and _vendor/common go ahead of
+# site-packages (as the env wheel's own .pth does), so `import rasterio` is the payload's build before anything
+# else imports a PyPI copy. GBX_NATIVE_PTH=0 or GBX_NATIVE_DISABLE=1 turns it off for one process (python/geobrix/test/native/test_two_stacks.py).
+# The system libraries are registered with ldconfig (an installed binding's RUNPATH is relative to site-packages,
+# which holds no payload here, and a link's $ORIGIN is the link's directory), and the JVM's legacy path
+# /usr/lib/libgdalalljni.so is a link to the payload's JNI, which GDALManager follows into the payload for its
+# data. HDF5's and netCDF-C's default plugin directory links to the payload's filter plugins (the JVM cannot
+# register a plugin directory itself).
+RUN --network=none set -e; \
+    purelib="$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"; \
+    native="/opt/gbx-native/_native/${GBX_ARCH}"; \
+    test -f "$native/lib/libgdalalljni.so"; test -d "$native/hdf5-plugins"; \
+    printf 'import os, sys; sys.path[0:0] = ["/opt/gbx-native/_vendor/%s", "/opt/gbx-native/_vendor/common"] if os.environ.get("GBX_NATIVE_PTH") != "0" and os.environ.get("GBX_NATIVE_DISABLE") != "1" else []\n' "${GBX_ARCH}" > "$purelib/00-gbx-native.pth"; \
+    echo "$native/lib" > /etc/ld.so.conf.d/zz-gbx-native.conf && ldconfig; \
+    ln -sfn "$native/lib/libgdalalljni.so" /usr/lib/libgdalalljni.so; \
+    mkdir -p /usr/local/hdf5/lib && ln -sfn "$native/hdf5-plugins" /usr/local/hdf5/lib/plugin; \
+    python3 -c "import rasterio, osgeo.gdal as g; assert '/opt/gbx-native/' in rasterio.__file__ and '/opt/gbx-native/' in g.__file__"
+
+# Our rasterio as the installed distribution (it replaces the dev lock's PyPI copy), so [vizx]'s contextily is
+# satisfied by name and pip has no reason to fetch PyPI's rasterio and its click pin. The bind mount leaves no layer.
+RUN --network=none --mount=type=bind,source=dist,target=/tmp/dist \
+    pip3 install --no-index --no-deps --only-binary :all: --force-reinstall --break-system-packages /tmp/dist/rasterio-*.whl
+
+# The Rust toolchain from rust-toolchain.toml (an exact release), with maturin from its hashed wheel. rustup-init is
+# checked against its pinned sha256; the toolchain itself is the one download, and rustup verifies it against the
+# release manifest.
+ENV RUSTUP_HOME=/opt/rust/rustup CARGO_HOME=/opt/rust/cargo PATH=/opt/rust/cargo/bin:${PATH}
+RUN --network=none --mount=type=bind,source=rust,target=/tmp/rust \
+    pip3 install --no-index --no-deps --only-binary :all: --require-hashes --find-links /tmp/rust/wheels --break-system-packages -r /tmp/rust/maturin.req \
+ && maturin --version | grep -q " ${MATURIN_VERSION}"
+RUN --mount=type=bind,source=rust,target=/tmp/rust \
+    echo "${RUSTUP_INIT_SHA256}  /tmp/rust/rustup-init" | sha256sum -c - \
+ && mkdir -p /opt/rust && cp /tmp/rust/rustup-init /tmp/rustup-init && chmod +x /tmp/rustup-init \
+ && /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain none \
+ && rm -f /tmp/rustup-init && cp /tmp/rust/rust-toolchain.toml /opt/rust/ \
+ && cd /opt/rust && rustup toolchain install && rustup default "${RUST_TOOLCHAIN}" \
+ && rustc --version | grep -q " ${RUST_TOOLCHAIN} "

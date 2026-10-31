@@ -13,7 +13,9 @@ PULL=true
 START=false
 ATTACH=false
 KEEP_CONTAINER=false
+KEEP_REASON="--keep-container"
 PLATFORM_ARG=""
+OVERLAY=""
 LOG_FILE=""
 
 show_help() {
@@ -29,6 +31,13 @@ USAGE:
 OPTIONS:
     --platform <p>       linux/arm64 or linux/amd64 (default: \$GBX_DOCKER_PLATFORM, else this host's
                          architecture). Each platform builds its own image tag, so both coexist.
+    --overlay gbxnative  Build the native overlay instead of the base image: the env6 wheel's natives (GDAL, PROJ,
+                         GEOS and the bindings built against them), the rasterio distribution and the pinned Rust
+                         toolchain over the EXISTING base image, tagged geobrix-dev:ubuntu24-gbxnative-spark-<arch>.
+                         The base image and the running container are left alone: switch with
+                         GBX_DEV_IMAGE_TAG=ubuntu24-gbxnative-spark in .gbx-local.env, then
+                         gbx:docker:start --recreate, at a quiet point. Needs the env6 wheel built
+                         (gbx:build:wheel --env 6) and scripts/native/prefetch.sh --arch <arch> run.
     --no-cache           Build without Docker cache (passed to build_smart.sh)
     --no-pull            Do not force-pull latest ubuntu:24.04 (faster, may miss base updates)
     --keep-container     Do not stop or remove this checkout's running dev container
@@ -52,6 +61,9 @@ EXAMPLES:
 
     # Rebuild without cache
     bash scripts/commands/gbx-docker-rebuild.sh --no-cache
+
+    # Layer the env wheel's natives and Rust over the existing base image (the container is not touched)
+    bash scripts/commands/gbx-docker-rebuild.sh --overlay gbxnative
 
     # Rebuild without pulling base image (faster)
     bash scripts/commands/gbx-docker-rebuild.sh --no-pull
@@ -79,6 +91,9 @@ NOTES:
       the JNI library's libgdal.so.37, rasterio as a manylinux wheel, pyogrio/pyproj/shapely at the locked
       versions); any difference leaves the image untagged.
     - Start script uses the same per-architecture tag (start_docker_with_volumes.sh)
+    - --overlay gbxnative probes the new image in a throwaway container with no network (GDAL/PROJ/GEOS from the
+      payload against the pins, every binding imported from the payload, the JNI link, no PyPI library mapped) and
+      uses no package index; the only network use is rustup's verified toolchain download.
 
 EOF
     exit 0
@@ -94,6 +109,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-pull)
             PULL=false
+            shift
+            ;;
+        --overlay)
+            if [ $# -lt 2 ]; then
+                echo -e "${RED}❌ --overlay needs a value (gbxnative)${NC}"
+                exit 2
+            fi
+            OVERLAY="$2"
+            shift 2
+            ;;
+        --overlay=*)
+            OVERLAY="${1#--overlay=}"
             shift
             ;;
         --keep-container)
@@ -152,6 +179,24 @@ PLATFORM="$(gbx_docker_platform "$PLATFORM_ARG")" || exit 2
 gbx_require_local_env   # a linked worktree with no .gbx-local.env has no container of its own to replace
 gbx_check_docker_flags "${BUILD_EXTRA[@]}" || exit 2
 IMAGE_TAG="$(gbx_dev_image_tag "$PLATFORM")"
+case "$OVERLAY" in
+    "") ;;
+    gbxnative)
+        IMAGE_TAG="$(gbx_dev_native_image "$PLATFORM")"
+        # The overlay is a different tag from the one the running container uses: nothing is replaced, so nothing is
+        # stopped or removed, and it is not started here either (that swap is a deliberate step, below).
+        KEEP_CONTAINER=true
+        KEEP_REASON="--overlay"
+        if [ "$START" = true ]; then
+            echo -e "${RED}❌ --overlay builds the image only. To run it: set GBX_DEV_IMAGE_TAG=ubuntu24-gbxnative-spark in .gbx-local.env, then gbx:docker:start --recreate (a quiet point).${NC}"
+            exit 2
+        fi
+        ;;
+    *)
+        echo -e "${RED}❌ Unknown overlay '$OVERLAY' (the only one is gbxnative)${NC}"
+        exit 2
+        ;;
+esac
 
 print_banner "🐳 GeoBrix: Rebuild Docker Image"
 
@@ -175,7 +220,7 @@ if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -Fxq -- "$GBX_DEV_CONTA
     CONTAINER_ARCH="$(gbx_container_arch "$GBX_DEV_CONTAINER")"
     if [ "$KEEP_CONTAINER" = true ]; then
         CONTAINER_KEPT=true
-        echo -e "${YELLOW}   Keeping the existing $GBX_DEV_CONTAINER container (--keep-container).${NC}"
+        echo -e "${YELLOW}   Keeping the existing $GBX_DEV_CONTAINER container ($KEEP_REASON).${NC}"
     elif [ "$CONTAINER_ARCH" != "$(gbx_platform_arch "$PLATFORM")" ]; then
         CONTAINER_KEPT=true
         echo -e "${YELLOW}   Keeping the existing $GBX_DEV_CONTAINER container (it runs ${CONTAINER_ARCH:-an unknown architecture}; this build is $(gbx_platform_arch "$PLATFORM")).${NC}"
@@ -205,6 +250,7 @@ BUILD_ARGS=("--platform" "$PLATFORM")
 [ "$PULL" = true ] && BUILD_ARGS+=("--pull")
 [ "$PULL" = false ] && BUILD_ARGS+=("--no-pull")
 [ "$NO_CACHE" = true ] && BUILD_ARGS+=("--no-cache")
+[ -n "$OVERLAY" ] && BUILD_ARGS+=("--overlay" "$OVERLAY")
 # After `--`, so build_smart.sh passes them to docker and never parses one as its own option (a --platform
 # there would otherwise override the platform decided above).
 if [ ${#BUILD_EXTRA[@]} -gt 0 ]; then
@@ -226,6 +272,12 @@ if [ $EXIT_CODE -eq 0 ]; then
         echo ""
         echo -e "${CYAN}🚀 Starting new container...${NC}"
         bash "$SCRIPT_DIR/gbx-docker-start.sh" --platform "$PLATFORM" $([ "$ATTACH" = true ] && echo "--attach")
+    elif [ -n "$OVERLAY" ]; then
+        echo ""
+        echo -e "${CYAN}💡 The base image and the container were left alone. To run the native image, at a quiet point:${NC}"
+        echo -e "   add ${YELLOW}GBX_DEV_IMAGE_TAG=ubuntu24-gbxnative-spark${NC} to .gbx-local.env, then"
+        echo -e "   ${YELLOW}bash scripts/commands/gbx-docker-start.sh --recreate --platform ${PLATFORM}${NC}"
+        print_separator
     elif [ "$CONTAINER_KEPT" = true ]; then
         echo ""
         echo -e "${CYAN}💡 The existing container was left running. To switch it to the new image at a quiet point:${NC}"

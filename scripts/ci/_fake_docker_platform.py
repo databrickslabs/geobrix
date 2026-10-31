@@ -13,7 +13,8 @@ and answers from the JSON state in $FAKE_DOCKER_STATE:
   `image inspect` on a checkpoint image (the build could not be read back).
 - container_image_gone: `image inspect` of the container's image fails (its architecture is unknown).
 - probe / probe_rc: the lines a `run --rm` (the native-stack probe, no container is created) prints for
-  the platform's architecture, and its exit code.
+  the platform's architecture, and its exit code. probe_payload: the same for a probe run with `--payload`
+  (the native overlay). probe_stderr: lines the probe writes to stderr.
 - A `build` with `--secret id=...,src=FILE` reads FILE (content and mode) and appends them to
   $FAKE_DOCKER_LOG.secrets before answering, so a test can see what the build was given.
 """
@@ -127,9 +128,12 @@ def main(args):
     if cmd == "run" and "--rm" in args:
         # the native-stack probe: a throwaway container that prints state["probe"][arch] lines
         arch = (flag("--platform") or "").rsplit("/", 1)[-1]
+        for line in state.get("probe_stderr", []):
+            print(line, file=sys.stderr)
         if state.get("probe_rc"):
             return state["probe_rc"]
-        for line in state.get("probe", {}).get(arch, []):
+        key = "probe_payload" if "--payload" in args else "probe"
+        for line in state.get(key, {}).get(arch, []):
             print(line)
         return 0
     if cmd == "run":

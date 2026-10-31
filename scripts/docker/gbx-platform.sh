@@ -76,6 +76,26 @@ gbx_dev_image_tag() {
     echo "${GBX_DEV_IMAGE_REPO}:${GBX_DEV_IMAGE_TAG}-${a}"
 }
 
+# The native overlay (build_smart.sh --overlay gbxnative): the base image plus the env wheel's natives and Rust.
+# It has its own tag, so the base image stays as the fallback; start scripts run it when GBX_DEV_IMAGE_TAG
+# (.gbx-local.env) names it. gbx_dev_base_image is the image the overlay is built on, whatever GBX_DEV_IMAGE_TAG says.
+GBX_DEV_BASE_IMAGE_TAG="ubuntu24-gdal311-spark"
+GBX_DEV_NATIVE_IMAGE_TAG="ubuntu24-gbxnative-spark"
+
+# gbx_dev_base_image <platform>  ->  geobrix-dev:ubuntu24-gdal311-spark-<arch>
+gbx_dev_base_image() {
+    local a
+    a="$(gbx_platform_arch "$1")" || return 2
+    echo "${GBX_DEV_IMAGE_REPO}:${GBX_DEV_BASE_IMAGE_TAG}-${a}"
+}
+
+# gbx_dev_native_image <platform>  ->  geobrix-dev:ubuntu24-gbxnative-spark-<arch>
+gbx_dev_native_image() {
+    local a
+    a="$(gbx_platform_arch "$1")" || return 2
+    echo "${GBX_DEV_IMAGE_REPO}:${GBX_DEV_NATIVE_IMAGE_TAG}-${a}"
+}
+
 # gbx_dev_run_image <platform>  ->  the image to run for that platform: the per-arch tag when it
 # exists locally; for amd64 only, the pre-arm64 un-suffixed tag when that image really is amd64;
 # otherwise the per-arch tag (so `docker run` reports the missing image by its real name).

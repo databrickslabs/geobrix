@@ -59,6 +59,7 @@ def good_probe(arch: str) -> list:
         "gdal=3.11.4",
         "proj=9.4.0",
         "geos=3.12.1",
+        "jni_soname=libgdal.so.37",
         "jni_libgdal=/usr/local/lib/libgdal.so.37",
         "jni_unresolved=0",
         "rasterio_gdal=3.12.1",
@@ -1053,6 +1054,8 @@ def test_the_probe_runs_in_a_throwaway_container_of_the_finished_image(arm):
         "run",
         "--rm",
         "-i",
+        "--network",
+        "none",
         "--platform",
         "linux/arm64",
         "--entrypoint",
@@ -1090,11 +1093,19 @@ PROBE_FAILURES = {
     "GEOS differs": (dict(geos="3.12.2"), "GEOS: want '3.12.1', got '3.12.2'"),
     "JNI resolves no libgdal": (
         dict(jni_libgdal=""),
-        "libgdalalljni.so does not resolve libgdal.so.37",
+        "libgdalalljni.so does not resolve libgdal.so.37 in /usr/local/lib",
     ),
     "JNI resolves another libgdal": (
-        dict(jni_libgdal="/usr/lib/libgdal.so.34"),
-        "libgdalalljni.so does not resolve libgdal.so.37",
+        dict(jni_libgdal="/usr/local/lib/libgdal.so.34"),
+        "libgdalalljni.so does not resolve libgdal.so.37 in /usr/local/lib",
+    ),
+    "JNI resolves its libgdal outside /usr/local/lib": (
+        dict(jni_libgdal="/usr/lib/aarch64-linux-gnu/libgdal.so.37"),
+        "does not resolve libgdal.so.37 in /usr/local/lib",
+    ),
+    "JNI needs no libgdal": (
+        dict(jni_soname="", jni_libgdal=""),
+        "needs no libgdal",
     ),
     "JNI has unresolved libraries": (
         dict(jni_unresolved="2"),
@@ -1216,3 +1227,369 @@ def test_a_native_stack_failure_does_not_mask_an_index_leak_and_the_reverse(arm)
     assert res.returncode == 1 and "recorded in the image history" in res.output
     assert probe_calls(arm) == []
     assert INDEX not in res.output and "idx.internal" not in res.output
+
+
+def test_the_jni_soname_is_read_from_the_probe_not_hard_coded(arm):
+    """A GDAL bump changes the soname; the check follows what the JNI file asks for (resolved in /usr/local/lib)."""
+    arm.state["probe"]["arm64"] = probe_with(
+        "arm64",
+        jni_soname="libgdal.so.38",
+        jni_libgdal="/usr/local/lib/libgdal.so.38",
+    )
+    res = build(arm)
+    assert res.returncode == 0, res.output
+    assert ["tag", "geobrix-checkpoint:final-arm64", f"{TAG}-arm64"] in arm.calls
+
+
+def test_a_probe_that_fails_prints_the_tail_of_its_stderr(arm):
+    arm.state["probe_rc"] = 125
+    arm.state["probe_stderr"] = [f"line {i}" for i in range(30)] + [
+        f"pull from {INDEX} failed"
+    ]
+    res = build(arm)
+    assert res.returncode == 1 and "Could not run the native-stack probe" in res.output
+    assert "line 29" in res.output and "line 5" not in res.output  # the last 20 lines
+    assert INDEX not in res.output and "idx.internal" not in res.output  # URLs removed
+    assert "<url>" in res.output
+    assert arm.of("tag") == []
+
+
+def test_a_new_rasterio_pin_in_the_lock_stops_the_build_before_it_starts(tmp_path):
+    """The expected rasterio GDAL (3.12.1) was measured for rasterio 1.5.0's wheel; a new pin must be re-verified."""
+    sb = Sandbox(tmp_path, "arm64")
+    script = scratch_tree(tmp_path, "")
+    lock = script.parents[2] / "python" / "geobrix" / "requirements-dev-container-aarch64.txt"
+    lock.write_text(re.sub(r"(?m)^rasterio==\S+", "rasterio==1.5.9", lock.read_text()))
+    res = sb.run(script, "--no-pull")
+    assert res.returncode == 1, res.output
+    assert "re-verify the probe constants" in res.output and "rasterio==1.5.9" in res.output
+    assert sb.of("build") == [] and sb.of("tag") == []
+
+
+# --- the salt of the index fingerprint ----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "not hex at all",
+        "ab" * 31,  # 62 hex characters: truncated
+        "ab" * 33,  # 66
+        "AB" * 32,  # upper case
+        "ab" * 32 + "\nab" * 32,  # two lines
+    ],
+)
+def test_a_salt_that_is_not_64_hex_characters_is_replaced_with_a_warning_naming_the_file(
+    arm, bad
+):
+    arm.salt_file.parent.mkdir(mode=0o700)
+    arm.salt_file.write_text(bad)
+    res = build(arm, env={"PIP_INDEX_URL": INDEX})
+    assert res.returncode == 0, res.output
+    assert str(arm.salt_file) in res.output and "not 64 hex characters" in res.output
+    assert bad.strip() not in res.output  # the content is never shown
+    salt = arm.salt_file.read_text()
+    assert re.fullmatch(r"[0-9a-f]{64}", salt) and salt != bad
+    assert stat.S_IMODE(arm.salt_file.stat().st_mode) == 0o600
+    assert final_build_arg(arm) == f"GBX_PIP_INDEX_FPR={fingerprint(arm, INDEX)}"
+    assert not list(arm.salt_file.parent.glob("pip-index-fpr-salt.*"))  # no temp file left
+
+
+def test_a_valid_salt_is_kept_without_a_warning(arm):
+    arm.salt_file.parent.mkdir(mode=0o700)
+    arm.salt_file.write_text("ab" * 32 + "\n")  # a trailing newline is still a valid salt
+    res = build(arm, env={"PIP_INDEX_URL": INDEX})
+    assert res.returncode == 0, res.output
+    assert "not 64 hex characters" not in res.output
+    assert arm.salt_file.read_text() == "ab" * 32 + "\n"
+
+
+def test_two_builds_starting_together_use_the_salt_that_won(arm):
+    """The salt is linked into place, never overwritten: when another build got there first, this one reads
+    that salt back and fingerprints with it. A stand-in `ln` plays the other build."""
+    winner = "cd" * 32
+    ln = arm.bin / "ln"
+    ln.write_text(
+        '#!/bin/sh\n# the other build links its salt first\n'
+        'for last; do :; done\n'
+        f'printf %s {winner} > "$last"\n'
+        'exec /bin/ln "$@"\n'
+    )
+    ln.chmod(0o755)
+    res = build(arm, env={"PIP_INDEX_URL": INDEX})
+    assert res.returncode == 0, res.output
+    assert arm.salt_file.read_text() == winner
+    assert final_build_arg(arm) == f"GBX_PIP_INDEX_FPR={fingerprint(arm, INDEX)}"
+    assert not list(arm.salt_file.parent.glob("pip-index-fpr-salt.*"))
+
+
+# --- the native overlay (--overlay gbxnative) -------------------------------------------------------
+
+NATIVE_TAG = "geobrix-dev:ubuntu24-gbxnative-spark"
+BASE_TAG = "geobrix-dev:ubuntu24-gdal311-spark"
+PAYLOAD_ROOT = "/opt/gbx-native"
+
+
+def native_pins() -> dict:
+    out = {}
+    for name in ("pins.conf", "rust-pins.conf"):
+        for line in (REPO_ROOT / "scripts" / "native" / name).read_text().splitlines():
+            if "=" in line and not line.startswith("#"):
+                k, v = line.split("=", 1)
+                out[k] = v.strip().strip('"')
+    return out
+
+
+def overlay_inputs(sb, na="aarch64"):
+    """What the native build leaves for the overlay, under the scratch repo: a payload (both architectures, as the
+    env6 wheel extracts it), the rasterio distribution, rustup-init and the maturin wheel; and the pin files the
+    script reads, with the fake rustup-init's checksum in place of the real one."""
+    import hashlib
+
+    repo, pins = sb.repo, native_pins()
+    native = repo / "scripts" / "native"
+    native.mkdir(parents=True)
+    for name in ("pins.py", "pins.conf", "rust-pins.conf", "build-requirements-aarch64.txt", "build-requirements-x86_64.txt"):
+        shutil.copy(REPO_ROOT / "scripts" / "native" / name, native / name)
+    shutil.copy(REPO_ROOT / "rust-toolchain.toml", repo / "rust-toolchain.toml")
+    payload = repo / "build" / "env-wheel" / "env6" / "payload"
+    for arch in ("aarch64", "x86_64"):
+        (payload / "_native" / arch / "lib").mkdir(parents=True)
+        (payload / "_native" / arch / "lib" / "libgdalalljni.so").write_bytes(b"jni " + arch.encode())
+        (payload / "_native" / arch / "MANIFEST.json").write_text(
+            json.dumps({"versions": {"gdal": pins["GDAL_VERSION"]}, "sonames": {"libgdal.so.39": "libgdal-abc12345.so.39"}})
+        )
+        (payload / "_vendor" / arch / "rasterio").mkdir(parents=True)
+        (payload / "_vendor" / arch / "rasterio" / "__init__.py").write_text(arch)
+    (payload / "_native" / "share" / "proj").mkdir(parents=True)
+    (payload / "_vendor" / "common" / "geopandas").mkdir(parents=True)
+    dist = repo / "build" / "native" / "out" / na / "bindings" / "dist"
+    dist.mkdir(parents=True)
+    (dist / f"rasterio-{pins['RASTERIO_VERSION']}+gbx{pins['GBX_NATIVE_REVISION']}-cp312-cp312-linux_{na}.whl").write_bytes(b"whl")
+    (repo / "build" / "native" / "bin" / na).mkdir(parents=True)
+    init = repo / "build" / "native" / "bin" / na / "rustup-init"
+    init.write_bytes(b"fake rustup-init")
+    (repo / "build" / "native" / "wheelhouse" / na).mkdir(parents=True)
+    (repo / "build" / "native" / "wheelhouse" / na / f"maturin-{pins['MATURIN_VERSION']}-py3-none-manylinux_2_17_{na}.whl").write_bytes(b"whl")
+    conf = native / "pins.conf"
+    key = f"RUSTUP_INIT_SHA256_{na.upper()}"
+    conf.write_text(
+        re.sub(rf"(?m)^{key}=.*$", f"{key}={hashlib.sha256(init.read_bytes()).hexdigest()}", conf.read_text())
+    )
+    return repo / "build" / "devimage" / na
+
+
+def good_overlay_probe(na="aarch64") -> list:
+    pins = native_pins()
+    root = f"{PAYLOAD_ROOT}/_native/{na}/lib"
+    return [
+        f"gdal={pins['GDAL_VERSION']}",
+        f"proj={pins['PROJ_VERSION']}",
+        f"geos={pins['GEOS_VERSION']}",
+        f"native_revision={pins['GBX_NATIVE_REVISION']}",
+        f"jni_link={root}/libgdalalljni.so",
+        "jni_soname=libgdal-abc12345.so.39",
+        f"jni_libgdal={root}/libgdal-abc12345.so.39",
+        "jni_unresolved=0",
+        f"osgeo_gdal={pins['GDAL_VERSION']}",
+        "osgeo_from_payload=true",
+        f"rasterio_gdal={pins['GDAL_VERSION']}",
+        "rasterio_from_payload=true",
+        f"pyogrio_gdal={pins['GDAL_VERSION']}",
+        "pyogrio_from_payload=true",
+        f"pyproj_proj={pins['PROJ_VERSION']}",
+        "pyproj_from_payload=true",
+        f"shapely_geos={pins['GEOS_VERSION']}",
+        "shapely_from_payload=true",
+        f"rasterio_dist={pins['RASTERIO_VERSION']}+gbx{pins['GBX_NATIVE_REVISION']}",
+        "pypi_libs=",
+    ]
+
+
+@pytest.fixture
+def overlay(arm):
+    """An arm64 sandbox with the base image present, the native build's outputs in place and a probe that passes."""
+    arm.image(f"{BASE_TAG}-arm64", "arm64")
+    arm.ctx = overlay_inputs(arm)
+    arm.state["probe_payload"] = {"arm64": good_overlay_probe()}
+    return arm
+
+
+def build_overlay(sb, *args, env=None):
+    return build(sb, "--overlay", "gbxnative", *args, env=env)
+
+
+def test_the_overlay_builds_on_the_base_image_and_tags_the_native_one(overlay):
+    res = build_overlay(overlay, env={"PIP_INDEX_URL": INDEX})
+    assert res.returncode == 0, res.output
+    builds = overlay.of("build")
+    assert len(builds) == 1
+    b, pins = builds[0], native_pins()
+    assert flag_value(b, "-f").endswith("scripts/docker/Dockerfile.gbxnative")
+    assert b[-1].endswith("build/devimage/aarch64")  # the context
+    assert flag_value(b, "-t") == "geobrix-checkpoint:gbxnative-arm64"
+    assert flag_value(b, "--platform") == "linux/arm64"
+    args = [b[i + 1] for i, a in enumerate(b) if a == "--build-arg"]
+    assert f"BASE_IMAGE={BASE_TAG}-arm64" in args  # the base image, whatever the run tag is
+    assert "GBX_ARCH=aarch64" in args
+    assert f"RUST_TOOLCHAIN={pins['RUST_TOOLCHAIN']}" in args
+    assert f"MATURIN_VERSION={pins['MATURIN_VERSION']}" in args
+    assert any(a.startswith("RUSTUP_INIT_SHA256=") and len(a) > 40 for a in args)
+    # no package index: no secret, no fingerprint, no salt file, nowhere in the output
+    assert "--secret" not in b and overlay.secrets == []
+    assert not any("GBX_PIP_INDEX_FPR" in a for a in args)
+    assert not overlay.salt_file.exists()
+    assert INDEX not in res.output and "idx.internal" not in res.output
+    # the probe: a throwaway container, no network, in payload mode
+    probes = probe_calls(overlay)
+    assert probes == [
+        [
+            "run", "--rm", "-i", "--network", "none", "--platform", "linux/arm64",
+            "--entrypoint", "bash", "geobrix-checkpoint:gbxnative-arm64", "-s",
+            "--", "--payload", PAYLOAD_ROOT,
+        ]
+    ]  # fmt: skip
+    assert ["tag", "geobrix-checkpoint:gbxnative-arm64", f"{NATIVE_TAG}-arm64"] in overlay.calls
+    assert not [c for c in overlay.of("tag") if c[-1].startswith(BASE_TAG)]  # the base is never retagged
+    assert "Native stack as expected" in res.output
+
+
+def test_the_overlay_context_holds_this_architectures_payload_and_the_pinned_tools(overlay):
+    assert build_overlay(overlay).returncode == 0
+    ctx = overlay.ctx
+    assert (ctx / "payload/_native/aarch64/MANIFEST.json").is_file()
+    assert (ctx / "payload/_native/share/proj").is_dir()
+    assert (ctx / "payload/_vendor/aarch64/rasterio/__init__.py").is_file()
+    assert (ctx / "payload/_vendor/common/geopandas").is_dir()
+    assert not (ctx / "payload/_native/x86_64").exists()  # the other architecture is not in this image
+    assert not (ctx / "payload/_vendor/x86_64").exists()
+    assert (ctx / "rust/rustup-init").is_file() and (ctx / "rust/rust-toolchain.toml").is_file()
+    assert [p.name.split("-")[0] for p in (ctx / "rust/wheels").iterdir()] == ["maturin"]
+    assert [p.name.startswith("rasterio-") for p in (ctx / "dist").iterdir()] == [True]
+    req = (ctx / "rust/maturin.req").read_text()
+    assert req.startswith(f"maturin=={native_pins()['MATURIN_VERSION']} --hash=sha256:")
+    assert req.count("--hash=") >= 2
+
+
+def test_the_overlay_leaves_the_running_container_and_the_base_image_alone(overlay):
+    overlay.container("arm64")
+    res = overlay.run(
+        overlay.commands / "gbx-docker-rebuild.sh", "--overlay", "gbxnative", "--no-pull"
+    )
+    assert res.returncode == 0, res.output
+    assert overlay.of("stop") == [] and overlay.of("rm") == []
+    assert overlay.final_state()["container"]["running"] is True
+    assert f"{NATIVE_TAG}-arm64" in res.output
+    assert "GBX_DEV_IMAGE_TAG=ubuntu24-gbxnative-spark" in res.output  # how to switch, at a quiet point
+
+
+def test_the_overlay_is_not_started_by_the_rebuild_command(overlay):
+    res = overlay.run(
+        overlay.commands / "gbx-docker-rebuild.sh", "--overlay", "gbxnative", "--start"
+    )
+    assert res.returncode == 2 and "builds the image only" in res.output
+    assert overlay.of("build") == []
+
+
+def test_an_unknown_overlay_is_refused(overlay):
+    res = build(overlay, "--overlay", "nope")
+    assert res.returncode == 2 and "nope" in res.output and overlay.of("build") == []
+    res = overlay.run(overlay.commands / "gbx-docker-rebuild.sh", "--overlay", "nope")
+    assert res.returncode == 2 and overlay.of("build") == []
+
+
+def test_the_overlay_needs_the_base_image(overlay):
+    del overlay.state["images"][f"{BASE_TAG}-arm64"]
+    res = build_overlay(overlay)
+    assert res.returncode == 1
+    assert "PRECONDITION MISSING" in res.output and f"{BASE_TAG}-arm64" in res.output
+    assert overlay.of("build") == []
+
+
+def test_the_overlay_builds_on_the_base_even_when_the_run_tag_is_the_native_one(overlay):
+    """.gbx-local.env may already name the native tag for the container; the overlay still layers over the base."""
+    (overlay.repo / ".gbx-local.env").write_text("GBX_DEV_IMAGE_TAG=ubuntu24-gbxnative-spark\n")
+    res = build_overlay(overlay)
+    assert res.returncode == 0, res.output
+    args = [overlay.of("build")[0][i + 1] for i, a in enumerate(overlay.of("build")[0]) if a == "--build-arg"]
+    assert f"BASE_IMAGE={BASE_TAG}-arm64" in args
+
+
+MISSING_INPUTS = {
+    "no payload": ("build/env-wheel/env6/payload/_native/aarch64/MANIFEST.json", "no env6 payload for aarch64"),
+    "no rasterio distribution": ("build/native/out/aarch64/bindings/dist", "rasterio distribution wheel"),
+    "no rustup-init": ("build/native/bin/aarch64/rustup-init", "rustup-init is absent"),
+    "no maturin wheel": ("build/native/wheelhouse/aarch64", "no maturin wheel"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(MISSING_INPUTS))
+def test_a_missing_native_input_stops_the_overlay_before_docker_builds(overlay, name):
+    path, expected = MISSING_INPUTS[name]
+    target = overlay.repo / path
+    shutil.rmtree(target) if target.is_dir() else target.unlink()
+    res = build_overlay(overlay)
+    assert res.returncode == 1 and "PRECONDITION MISSING" in res.output, res.output
+    assert expected in res.output
+    assert overlay.of("build") == [] and overlay.of("tag") == []
+
+
+def test_a_rustup_init_that_is_not_the_pinned_one_stops_the_overlay(overlay):
+    (overlay.repo / "build/native/bin/aarch64/rustup-init").write_bytes(b"something else")
+    res = build_overlay(overlay)
+    assert res.returncode == 1 and "is not the pinned build" in res.output
+    assert overlay.of("build") == []
+
+
+def overlay_probe_with(**changes):
+    lines = dict(line.split("=", 1) for line in good_overlay_probe())
+    lines.update(changes)
+    return [f"{k}={v}" for k, v in lines.items()]
+
+
+OVERLAY_FAILURES = {
+    "GDAL in the manifest differs from the pin": (dict(gdal="3.11.4"), "GDAL (payload manifest): want"),
+    "stale payload revision": (dict(native_revision="0"), "payload native revision: want"),
+    "osgeo loads another GDAL": (dict(osgeo_gdal="3.11.4"), "osgeo's GDAL: want"),
+    "rasterio loads another GDAL": (dict(rasterio_gdal="3.12.1"), "rasterio's GDAL: want"),
+    "pyogrio loads another GDAL": (dict(pyogrio_gdal="3.12.1"), "pyogrio's GDAL: want"),
+    "pyproj loads another PROJ": (dict(pyproj_proj="9.7.0"), "pyproj's PROJ: want"),
+    "shapely loads another GEOS": (dict(shapely_geos="3.13.1"), "shapely's GEOS: want"),
+    "rasterio comes from site-packages": (dict(rasterio_from_payload="false"), "rasterio is not imported from the payload"),
+    "pyogrio fails to import": (dict(pyogrio_from_payload="", pyogrio_error="ImportError"), "pyogrio is not imported from the payload"),
+    "the rasterio distribution is PyPI's": (dict(rasterio_dist="1.5.0"), "rasterio distribution: want"),
+    "a PyPI wheel's libraries are mapped": (dict(pypi_libs="pyproj.libs,shapely.libs"), "maps a PyPI wheel's libraries: pyproj.libs,shapely.libs"),
+    "the JNI needs a soname the manifest lacks": (dict(jni_soname="libgdal-ffffffff.so.39", jni_libgdal=f"{PAYLOAD_ROOT}/_native/aarch64/lib/libgdal-ffffffff.so.39"), "which the payload's MANIFEST does not list"),
+    "the JNI resolves another libgdal": (dict(jni_libgdal="/usr/local/lib/libgdal-abc12345.so.39"), "resolves libgdal in the payload"),
+    "the JNI link is the system's": (dict(jni_link="/usr/local/lib/jni/libgdalalljni.so"), "is a link to the payload's JNI"),
+    "the JNI has unresolved libraries": (dict(jni_unresolved="2"), "has unresolved libraries"),
+}  # fmt: skip
+
+
+@pytest.mark.parametrize("name", sorted(OVERLAY_FAILURES))
+def test_an_overlay_that_is_not_the_payloads_stack_is_not_tagged(overlay, name):
+    changes, expected = OVERLAY_FAILURES[name]
+    overlay.state["probe_payload"]["arm64"] = overlay_probe_with(**changes)
+    res = build_overlay(overlay)
+    assert res.returncode == 1, res.output
+    assert expected in res.output, res.output
+    assert "not tagged" in res.output and f"{NATIVE_TAG}-arm64" in res.output
+    assert overlay.of("tag") == []
+    assert "geobrix-checkpoint:gbxnative-arm64" in overlay.final_state()["images"]
+
+
+def test_an_overlay_probe_that_cannot_run_prints_its_stderr_and_fails_closed(overlay):
+    overlay.state["probe_rc"] = 1
+    overlay.state["probe_stderr"] = ["ModuleNotFoundError: no module named osgeo"]
+    res = build_overlay(overlay)
+    assert res.returncode == 1 and "Could not run the native-stack probe" in res.output
+    assert "no module named osgeo" in res.output
+    assert overlay.of("tag") == []
+
+
+def test_the_native_tags_follow_the_architecture(arm):
+    res = arm.sh("gbx_dev_native_image linux/arm64; gbx_dev_native_image amd64; gbx_dev_base_image arm64")
+    assert res.stdout.split() == [f"{NATIVE_TAG}-arm64", f"{NATIVE_TAG}-amd64", f"{BASE_TAG}-arm64"]
+    # a worktree's .gbx-local.env may name the native tag for the container; the base image does not move
+    res = arm.sh("GBX_DEV_IMAGE_TAG=ubuntu24-gbxnative-spark; gbx_dev_base_image arm64; gbx_dev_image_tag arm64")
+    assert res.stdout.split() == [f"{BASE_TAG}-arm64", f"{NATIVE_TAG}-arm64"]

@@ -998,6 +998,42 @@ def open_tile_points(tile) -> Iterator:
         yield ds
 
 
+def _dataset_gtiff_bytes(ds) -> bytes:
+    """GTiff bytes of the whole of *ds*, through the compression authority (ZSTD + dtype predictor)."""
+    data = ds.read()
+    profile = _comp.source_profile(ds.profile)
+    profile.update(driver="GTiff")
+    # A source's own mask band travels with the bytes (the heavy tier reads them).
+    mask = ds.read_masks(1) if _nd.has_own_mask(ds) else None
+    return _comp.write_gtiff(profile, data, alpha_like=ds.colorinterp, mask=mask)
+
+
+def _whole_file_bytes(tile: VirtualTile) -> Optional[bytes]:
+    """GTiff bytes of a virtual tile that is its whole file with nothing to apply, written once; None otherwise.
+
+    ``open_tile`` writes the window it cuts to GeoTIFF bytes and reopens them, so that its caller holds a standalone
+    dataset. For a tile with no window, clip, pending instruction or warp that window is the whole source and the
+    intermediate write is redundant: the source itself holds everything the output is made from (pixels, the own mask
+    band, the profile, the alpha label), so it goes to the one write directly. Anything else is None (the caller takes
+    the ``open_tile`` path, unchanged).
+    """
+    if (
+        tile.raster is not None
+        or tile.window is not None
+        or tile.clip_polygon is not None
+        or _has_pending(tile.metadata)
+    ):
+        return None
+    with ExitStack() as stack:
+        local_path = _resolve_local_or_windowed(tile, None, stack)
+        with open_raster(local_path) as src:
+            if _warp_pending(tile, src):
+                return None
+            # a pixel read is where GDAL stops a raw band or a pipeline nested in the VRT: its refusal names the reason
+            with refusals_named(f"the tile {tile.path}"):
+                return _dataset_gtiff_bytes(src)
+
+
 def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:
     """Convert a (possibly virtual) tile to a v2-materialized tile: run open_tile
     on the light side (which CAN read /Volumes), capture the window+warp+clip
@@ -1006,14 +1042,10 @@ def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:
     """
     if _zarr_tiles.is_zarr_tile(tile):
         return _materialize_zarr(tile)
-    with open_tile(tile) as ds:
-        data = ds.read()
-        profile = _comp.source_profile(ds.profile)
-        profile.update(driver="GTiff")
-        # A source's own mask band travels with the bytes (the heavy tier reads them).
-        mask = ds.read_masks(1) if _nd.has_own_mask(ds) else None
-        # Route through the compression authority: ZSTD + dtype-predictor baseline.
-        raster = _comp.write_gtiff(profile, data, alpha_like=ds.colorinterp, mask=mask)
+    raster = _whole_file_bytes(tile)
+    if raster is None:
+        with open_tile(tile) as ds:
+            raster = _dataset_gtiff_bytes(ds)
     # Pending keys are baked into the produced bytes; strip them so the
     # materialized tile's metadata stays honest (no double-application).
     meta = _without_pending(tile.metadata)

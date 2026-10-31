@@ -288,6 +288,7 @@ These limits are documented and not coded. None is NULL, and none is checked.
   - It then prints `STALLED: <form> @<scale>x after <m> min` with the driver stack, and exits 3.
   - The cap is `--form-cap-min` (default 15, smoke 5) for a 1x form. It is multiplied by the scale for the larger ones: a 16x form gets 16 times the cap. A long 1x/4x/16x ladder is judged one scale at a time, not as a whole.
   - The multiplied cap is held to `--form-cap-max-min` (default 60). At the defaults 4x gets 60 min and 16x gets 60 min, not 240. Raise the ceiling for a ladder whose large scales really need longer.
+  - A heartbeat that cannot be read (a 403, a dropped connection) is not a stall. The quiet clock stands still while reads fail. After 12 failed polls in a row (about a minute) the launcher prints one `WARNING: heartbeat unreadable` line, and only the run's time limit then ends a stalled run.
   - The watchdog never retries. If the cancel call itself fails, it says so and names the run to cancel by hand (still exit 3).
   - The per-form cap applies only to the `--levels` leg, which reports its progress form by form. The other bench legs get the worker import check, the stale-heartbeat check and the run time limit, but no per-form cap.
   - The notebook also arms `faulthandler.dump_traceback_later` at the cap (stderr of the driver).

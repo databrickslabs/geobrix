@@ -310,6 +310,15 @@ def _opened(gdal, call):
     ], res
 
 
+# what the refusal says per source: the header check names the VRT driver; the tile index driver is deregistered,
+# so no driver identifies its bytes
+REFUSAL = {
+    "local": "is a VRT raster",
+    "vsicurl": "is a VRT raster",
+    "gti": "is not a raster GeoBrix reads from tile bytes",
+}
+
+
 @pytest.mark.parametrize("source", ["local", "vsicurl", "gti"])
 def test_tile_bytes_that_name_other_files_are_refused_before_any_open(tmp_path, source):
     """The bytes of a VRT (its source a local file, or a URL) and of a tile index are an error tile with a Fix: a
@@ -352,6 +361,10 @@ def test_tile_bytes_that_name_other_files_are_refused_before_any_open(tmp_path, 
     assert (
         res.raster is None and "Fix:" in res.error and "tile bytes" in res.error
     ), res.error
+    # A failed open logs no GDALOpen line, so for vsicurl (the host never resolves) and gti (the driver is
+    # deregistered) `opened` proves nothing: the refusal message is the proof that the header check, not an
+    # open attempt, ended the call.
+    assert REFUSAL[source] in res.error, res.error
     assert not [o for o in opened if not o.startswith(run.PREFIX)], opened
     assert not gdal.ReadDirRecursive(run.PREFIX)
 

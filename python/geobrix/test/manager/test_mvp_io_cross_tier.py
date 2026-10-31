@@ -508,3 +508,32 @@ def test_the_batch_decode_yields_bounded_slices_in_order(tmp_path, monkeypatch):
     (whole,) = _mvp_forms.materialize_batches([one])
     assert whole.num_rows == 5
     assert [b.to_pylist()[0] for b in out] == whole.to_pylist()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("form", ["a", "c"])
+def test_the_jvm_io_reads_take_exactly_n_files(jvm_spark, tmp_path, form):
+    """`a` decodes in the scan (the heavy reader is given the first n files); `c` decodes above the exchange that
+    follows `limit(n)` (the JVM expression is no longer pushed below the limit onto every file).
+    """
+    from databricks.labs.gbx.bench import levels_forms as lf
+
+    rows = tmp_path / "corpus" / "rows"
+    rows.mkdir(parents=True)
+    for i in range(8):
+        _tif(rows / f"t{i}.tif")
+    if form == "c":
+        register(jvm_spark, only=[FN], _levels={FN: ("L1", "-")})
+    df = lf._io_read(jvm_spark, str(rows), 3, form)
+    assert df.count() == 3
+    if form == "c":
+        plan = df._jdf.queryExecution().executedPlan().treeString().splitlines()
+
+        def at(*k):
+            return next(i for i, ln in enumerate(plan) if any(x in ln for x in k))
+
+        assert (
+            at(FN) < at("Exchange hashpartitioning") < at("GlobalLimit", "CollectLimit")
+        )
+    else:
+        assert df.rdd.getNumPartitions() == 3

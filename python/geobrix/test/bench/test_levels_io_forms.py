@@ -180,3 +180,116 @@ def test_the_io_floor_is_recorded_as_the_floor_and_reported_beside_d_py(
     }
     assert cells["d-py"][7] != "-"  # floor_median_s
     assert cells["floor"][7] == "-"
+
+
+# ---- every form takes exactly n tiles and decodes / writes them with the same parallelism
+
+
+def _plan(df) -> list:
+    """The physical plan of `df` as its node lines, root first (so a node's ancestors come before it)."""
+    return df._jdf.queryExecution().executedPlan().treeString().splitlines()
+
+
+def _at(plan, *needles):
+    """The index of the first plan line holding any of `needles` (-1 when none does)."""
+    return next((i for i, ln in enumerate(plan) if any(k in ln for k in needles)), -1)
+
+
+def test_the_io_partition_count_follows_the_compute_and_keeps_a_few_rows_per_partition(
+    monkeypatch,
+):
+    """P is a function of n and the slots only (every form gets the same one), never over n, and never so few that
+    a partition holds a long run of ~13 MB tiles (a Python batch of those OOM-killed a local JVM at 8 partitions).
+    """
+    from databricks.labs.gbx.bench import runner
+
+    for slots, n, want in [
+        (8, 6, 6),
+        (8, 96, 12),
+        (8, 400, 50),
+        (200, 1000, 200),
+        (8, 1000, 125),
+    ]:
+        monkeypatch.setattr(
+            runner, "_bench_parallelism", lambda spark, default=8, s=slots: s
+        )
+        got = lf.io_partitions(None, n)
+        assert got == want, (slots, n, got)
+        assert (
+            1 <= got <= n and -(-n // got) <= lf.IO_ROWS_PER_PARTITION
+        )  # a few rows per partition
+
+
+@pytest.mark.parametrize("kind", ["udf", "d-py", "d-rs", "floor", "virtual"])
+def test_the_limit_sits_below_the_exchange_that_feeds_the_decode(
+    spark_session_local, tmp_path, kind
+):
+    """`limit(n)` then `repartition(P, ...)` then the decode: the decode node is above the exchange, the exchange above
+    the global limit. (Before, Spark ran a row UDF BELOW the limit, on every file of the corpus.)
+    """
+    lf.register_io_udf(spark_session_local)
+    corpus = _corpus(tmp_path, 8)
+    plan = _plan(lf._io_read(spark_session_local, corpus + "/rows", 3, kind))
+    decode = {
+        "udf": ("BatchEvalPython", "ArrowEvalPython"),
+        "d-py": ("MapInArrow",), "d-rs": ("MapInArrow",), "floor": ("MapInArrow",),
+        "virtual": ("Exchange",),
+    }[kind]  # fmt: skip
+    top, exch, limit = (
+        _at(plan, *decode),
+        _at(plan, "Exchange hashpartitioning"),
+        _at(plan, "GlobalLimit", "CollectLimit"),
+    )
+    assert min(top, exch, limit) >= 0, "\n".join(plan)
+    assert top <= exch < limit, "\n".join(plan)
+
+
+def test_the_row_udf_decodes_exactly_n_tiles_not_the_corpus(
+    spark_session_local, tmp_path
+):
+    """A counting stand-in for the row UDF, installed under its name: it is called once per tile it is given."""
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+    count_file = tmp_path / "calls.txt"
+
+    def spy(tile):
+        with open(str(count_file), "a") as fh:
+            fh.write("x\n")
+        return tile
+
+    spark_session_local.udf.register(lf.IO_FN, spy, V2_TILE_SCHEMA)
+    corpus = _corpus(tmp_path, 8)
+    got = lf._io_read(spark_session_local, corpus + "/rows", 3, "udf").collect()
+    assert len(got) == 3
+    assert count_file.read_text().count("x") == 3  # was 8: the decode ran on every file
+
+
+def test_the_scan_decoding_light_reader_reads_exactly_n_files(
+    spark_session_local, tmp_path
+):
+    """`b` decodes in the scan, so n is the file list it is given: n scan tasks, n tiles."""
+    corpus = _corpus(tmp_path, 8)
+    df = lf._io_read(spark_session_local, corpus + "/rows", 3, "b")
+    assert (
+        df.rdd.getNumPartitions() == 3 and df.count() == 3
+    )  # was 8 tasks (one per corpus file)
+
+
+def test_the_only_files_regex_keeps_exactly_the_named_files_for_python_and_java():
+    """One filter for both readers: python `re.match` (light) and java `matches` of `.*<regex>.*` (heavy)."""
+    import re
+
+    names = ["r0.tif", "r1.tif", "r10.tif", "r100.tif", "r2.tif", "a.b.tif"]
+    rx = re.compile(lf._only_files_regex(["/d/" + k for k in names]))
+    every = names + ["r11.tif", "r1.tiff", "xr1.tif", "r1xtif", "r.tif", "ra.b.tif"]
+    assert [k for k in every if rx.match("/v/rows/" + k)] == names
+
+
+def test_the_light_writers_take_the_same_limited_input(spark_session_local, tmp_path):
+    """W1 writes the virtual tiles: its input has the limit under the exchange, as the read forms do."""
+    corpus = _corpus(tmp_path, 8)
+    plan = _plan(lf._io_named(spark_session_local, corpus + "/rows", 3, "virtual"))
+    exch, limit = _at(plan, "Exchange hashpartitioning"), _at(
+        plan, "GlobalLimit", "CollectLimit"
+    )
+    assert 0 <= exch < limit, "\n".join(plan)

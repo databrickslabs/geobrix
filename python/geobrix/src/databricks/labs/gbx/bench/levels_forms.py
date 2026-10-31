@@ -8,6 +8,7 @@ run; without one, a temp view. The seeds are fixed, so a form sees the same rows
 from __future__ import annotations
 
 import os
+import re
 from typing import Callable, Dict, List, Optional
 
 from databricks.labs.gbx._gdal_policy import open_data
@@ -1641,29 +1642,96 @@ def remove_scratch(path: str, scratch: str) -> None:
     remove_scratch_dir(target)
 
 
-def _io_read(spark, rows_dir, n, kind):
-    """The read of `kind` over the corpus' first `n` tiles, one `tile` column."""
-    import functools
+IO_ROWS_PER_PARTITION = 8  # at most this many tiles in a partition: a Python batch of ~13 MB tiles must fit a worker
 
-    from databricks.labs.gbx.ds.file_gbx import report_detected_cap
-    from databricks.labs.gbx.pyrx import _mvp_forms
 
-    if kind == "a":
-        return spark.read.format("gdal").load(rows_dir).limit(n)
-    if kind == "b":
-        return (
-            spark.read.format("raster_gbx")
-            .option("virtualTiles", "false")
-            .load(rows_dir)
-            .limit(n)
-        )
-    virt = (
+def io_partitions(spark, n) -> int:
+    """The partition count every IO form decodes or writes its `n` tiles with: the compute's slots, but never fewer
+    than `ceil(n / IO_ROWS_PER_PARTITION)` (a handful of tiles each: 8 partitions for 400 tiles OOM-killed a local
+    JVM) and never more than `n`. A function of `n` and the compute alone, so every form gets the same one.
+    `bench.runner._bench_parallelism` is the Connect-safe slot count (no `sparkContext` on Serverless).
+    """
+    from databricks.labs.gbx.bench.runner import _bench_parallelism
+
+    n = int(n)
+    return max(
+        1, min(n, max(_bench_parallelism(spark), -(-n // IO_ROWS_PER_PARTITION)))
+    )
+
+
+def _first_files(rows_dir, n) -> List[str]:
+    """The corpus' first `n` row files, sorted (the order the light reader lists them in)."""
+    from databricks.labs.gbx.ds._listing import list_files
+
+    return list_files(
+        rows_dir, filter_regex=r".*\.tif$", recursive=False, raise_on_empty=False
+    )[: int(n)]
+
+
+def _trie_regex(words) -> str:
+    """A regex for exactly `words`, factored by shared prefix (a flat alternation of 10000 names is tried name by name
+    on every file; this one reads each file's name once)."""
+    words = sorted(set(words))
+    if words == [""]:
+        return ""
+    groups: Dict[str, List[str]] = {}
+    for w in words:
+        if w:
+            groups.setdefault(w[0], []).append(w[1:])
+    parts = [re.escape(c) + _trie_regex(rest) for c, rest in groups.items()]
+    body = parts[0] if len(parts) == 1 else "(?:" + "|".join(parts) + ")"
+    return f"(?:{body})?" if "" in words else body
+
+
+def _only_files_regex(files) -> str:
+    """The `filterRegex` that keeps exactly `files` (a flat folder: matched by file name), for the light and the heavy
+    reader alike (the light one anchors at the start of the path, the heavy one wraps the regex in `.*`).
+    """
+    return ".*/" + _trie_regex(os.path.basename(f) for f in files) + "$"
+
+
+def _virtual_tiles(spark, rows_dir, n):
+    """The virtual tiles of the corpus' first `n` files, as `n` rows spread over `io_partitions` partitions.
+
+    `limit(n)` first, then `repartition(P, tile.path)`: whatever reads or writes the tiles runs ABOVE the exchange, on
+    exactly `n` tiles and `P` tasks. Without the exchange Spark pushes a row UDF (and a JVM decode) below the limit, onto
+    every file of the corpus, while a `mapInArrow` stays above it in one task. Hash by column, not number-only, so
+    Serverless' AQE does not coalesce it back to one partition.
+    """
+    from pyspark.sql import functions as F
+
+    return (
         spark.read.format("raster_gbx")
         .option("virtualTiles", "true")
         .load(rows_dir)
         .select("tile")
         .limit(n)
+        .repartition(io_partitions(spark, n), F.col("tile.path"))
     )
+
+
+def _io_read(spark, rows_dir, n, kind):
+    """The read of `kind` over the corpus' first `n` tiles, one `tile` column, every kind on exactly `n` tiles.
+
+    `a` and `b` decode inside the scan, where a limit cannot reach: they are given the first `n` files themselves
+    (the readers' `filterRegex`), so the scan has `n` tasks. The others decode above `_virtual_tiles`' exchange.
+    """
+    import functools
+
+    from databricks.labs.gbx.ds.file_gbx import report_detected_cap
+    from databricks.labs.gbx.pyrx import _mvp_forms
+
+    if kind in ("a", "b"):
+        only = _only_files_regex(_first_files(rows_dir, n))
+        if kind == "a":
+            return spark.read.format("gdal").option("filterRegex", only).load(rows_dir)
+        return (
+            spark.read.format("raster_gbx")
+            .option("virtualTiles", "false")
+            .option("filterRegex", only)
+            .load(rows_dir)
+        )
+    virt = _virtual_tiles(spark, rows_dir, n)
     if kind in ("c", "udf"):
         return virt.selectExpr(f"{IO_FN}(tile) AS tile")
     if kind in ("d-py", "d-rs", "floor"):
@@ -1713,6 +1781,25 @@ def io_floor(spark, src):
     return r[0], r[1], r[2], out
 
 
+def _io_named(spark, rows_dir, n, kind):
+    """What a writer form writes: the `kind` read as `(source, tile)`, the file name and the tile the raster writers take."""
+    from pyspark.sql import functions as F
+
+    return (
+        _io_read(spark, rows_dir, n, kind)
+        .select("tile")
+        .withColumn(
+            "source",
+            F.concat(
+                F.lit("t"),
+                F.monotonically_increasing_id().cast("string"),
+                F.lit(".tif"),
+            ),
+        )
+        .select("source", "tile")
+    )
+
+
 def _io_write(fmt, kind):
     """A writer form: write the `kind` read as `fmt` into a fresh scratch directory, count what landed, delete it."""
 
@@ -1725,21 +1812,7 @@ def _io_write(fmt, kind):
         try:
             # the light writer takes overwrite; the heavy one is append-only (it raises on overwrite)
             mode = "append" if fmt == "gtiff_gdal" else "overwrite"
-            from pyspark.sql import functions as F
-
-            named = (  # the raster writers take exactly (source, tile): the file name and the tile
-                _io_read(spark, rows_dir, n, kind)
-                .select("tile")
-                .withColumn(
-                    "source",
-                    F.concat(
-                        F.lit("t"),
-                        F.monotonically_increasing_id().cast("string"),
-                        F.lit(".tif"),
-                    ),
-                )
-                .select("source", "tile")
-            )
+            named = _io_named(spark, rows_dir, n, kind)
             named.write.format(fmt).mode(mode).save(out)
             files = [
                 os.path.join(d, f)

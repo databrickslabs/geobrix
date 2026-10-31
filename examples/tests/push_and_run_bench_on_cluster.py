@@ -181,8 +181,13 @@ def _default_run_id() -> str:
     return f"cluster-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
 
 
-def _remove_notebook(w, path: str) -> None:
-    """Delete the run's notebook once the run has ended (its output stays with the run)."""
+def _remove_notebook(w, path: str, succeeded: bool = True) -> None:
+    """Delete the run's notebook once the run has succeeded (its output stays with the run).
+
+    A run that did not succeed keeps its notebook: a Jobs repair run re-runs it."""
+    if not succeeded:
+        print(f"Kept the run's notebook {path} (the run did not succeed; delete it when done).")
+        return
     try:
         w.workspace.delete(path)
         print(f"Removed the run's notebook {path}")
@@ -1651,8 +1656,10 @@ def main() -> int:
 
     run = outcome.run
     run_id_remote = remote_run_id
-    _remove_notebook(w, notebook_path)  # the run has ended; its output stays with it
     state = run.state
+    _result = getattr(state, "result_state", None)
+    # the run has ended; its output stays with it, and a failed run keeps its notebook
+    _remove_notebook(w, notebook_path, getattr(_result, "value", str(_result)) == "SUCCESS")
     if state and getattr(state, "life_cycle_state", None):
         lc = (
             state.life_cycle_state.value

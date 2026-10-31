@@ -199,3 +199,19 @@ def test_a_time_limit_that_is_not_a_positive_whole_number_of_minutes_is_refused_
 
 def test_the_levels_run_gets_the_same_default_time_limit_as_any_other(monkeypatch):
     assert launcher.DEFAULT_RUN_TIMEOUT_MIN == 360
+
+
+def test_a_failed_run_keeps_its_notebook_for_a_repair_run(capsys):
+    deleted = []
+
+    class Workspace:
+        def delete(self, path):
+            deleted.append(path)
+
+    class W:
+        workspace = Workspace()
+
+    launcher._remove_notebook(W(), "/nb/failed", succeeded=False)
+    assert deleted == [] and "/nb/failed" in capsys.readouterr().out
+    launcher._remove_notebook(W(), "/nb/ok")
+    assert deleted == ["/nb/ok"]

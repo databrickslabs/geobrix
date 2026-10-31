@@ -29,12 +29,19 @@ class _Rec:
 @pytest.fixture
 def sdk(monkeypatch):
     """Stub databricks.sdk: `state.uploads`, `state.submits` and `state.deleted` record calls."""
-    state = SimpleNamespace(uploads=[], submits=[], deleted=[], result="SUCCESS", staged=set(), profiles=[])
+    state = SimpleNamespace(uploads=[], submits=[], deleted=[], result="SUCCESS", staged=set(), profiles=[], files_error=None)
+
+    class NotFound(OSError):  # databricks.sdk.errors.NotFound: a 404
+        pass
+
+    state.NotFound = NotFound
 
     class Files:
         def get_metadata(self, path):
+            if state.files_error is not None:
+                raise state.files_error
             if path not in state.staged:
-                raise FileNotFoundError(path)
+                raise NotFound(f"{path} does not exist")
             return SimpleNamespace(content_length=1)
 
     class Workspace:
@@ -79,6 +86,8 @@ def sdk(monkeypatch):
 
     sdk_mod = types.ModuleType("databricks.sdk")
     sdk_mod.WorkspaceClient = WorkspaceClient
+    errors_mod = types.ModuleType("databricks.sdk.errors")
+    errors_mod.NotFound = NotFound
     service = types.ModuleType("databricks.sdk.service")
     compute = types.ModuleType("databricks.sdk.service.compute")
     compute.Environment = compute.Library = compute.ClusterSpec = _Rec
@@ -95,6 +104,7 @@ def sdk(monkeypatch):
     service.compute, service.jobs, service.workspace = compute, jobs, workspace
     for name, mod in (
         ("databricks.sdk", sdk_mod),
+        ("databricks.sdk.errors", errors_mod),
         ("databricks.sdk.service", service),
         ("databricks.sdk.service.compute", compute),
         ("databricks.sdk.service.jobs", jobs),
@@ -302,6 +312,21 @@ def test_without_a_versioned_wheel_the_launcher_keeps_the_flat_path_and_an_expli
     mine = "/Volumes/c/s/v/mine/geobrix-0.6.0+env6-py3-none-any.whl"
     assert launch("--serverless", "--zarr-only", "--no-wait", "--run-id", "t2", GBX_BUNDLE_WHEEL_VOLUME_PATH=mine) == 0
     assert sdk.submits[1]["environments"][0].spec.dependencies[0] == mine
+
+
+def test_a_failed_wheel_lookup_that_is_not_a_not_found_surfaces_instead_of_reading_as_absent(launch, sdk, capsys):
+    """A 401/403 or a network error used to print "no versioned wheel" and take the flat path."""
+
+    class PermissionDenied(Exception):
+        pass
+
+    sdk.files_error = PermissionDenied("403: cannot read the volume")
+    with pytest.raises(PermissionDenied):
+        launch("--serverless", "--zarr-only", "--no-wait", "--run-id", "t1")
+    out = capsys.readouterr()
+    assert "wheel lookup failed (PermissionDenied: 403: cannot read the volume)" in out.err + out.out
+    assert "no versioned wheel" not in out.err + out.out
+    assert sdk.submits == []
 
 
 def test_profile_option_beats_the_environment_variable(launch, sdk):

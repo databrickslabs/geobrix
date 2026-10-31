@@ -90,16 +90,25 @@ if _env_file.exists():
 def _staged_env_wheel(w, volroot: str, ver: str, env: int) -> str:
     """The env wheel to install: the one `gbx:data:stage-wheel --env <N> --versioned` staged under
     ``<volroot>/geobrix/<version>/env<N>/`` when it is there, else the flat ``<volroot>/`` path."""
+    from databricks.sdk.errors import NotFound
+
     name = f"geobrix-{ver}+env{env}-py3-none-any.whl"
     versioned = f"{volroot}/geobrix/{ver}/env{env}/{name}"
     try:
         w.files.get_metadata(versioned)
         print(f"  staged wheel: {versioned}")
         return versioned
-    except Exception:  # noqa: BLE001 - absent (or unreadable): the flat path is the fallback
+    except (NotFound, FileNotFoundError):  # not staged there: the flat path is the fallback
         flat = f"{volroot}/{name}"
         print(f"  staged wheel: {flat} (no versioned wheel at {versioned})")
         return flat
+    except Exception as exc:
+        # An auth or network error says nothing about the wheel: do not read it as "absent" and run on the flat path.
+        print(
+            f"  staged wheel lookup failed ({type(exc).__name__}: {exc}) at {versioned}",
+            file=sys.stderr,
+        )
+        raise
 
 
 def _geobrix_version() -> str:

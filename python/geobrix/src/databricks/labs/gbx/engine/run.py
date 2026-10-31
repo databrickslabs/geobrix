@@ -1,10 +1,12 @@
 """One engine call on ``osgeo`` (the light tier); the JVM's ``GdalSpecEngine`` makes the same call.
 
 1. The input bytes are written to ``/vsimem/gbx-spec/<uuid>/in<i>.tif`` and their headers read (size, bands, type,
-   CRS); the call must fit the decoded budget. Bytes without the GeoTIFF magic (a PNG, a netCDF or a JPEG 2000 tile
-   kept in its own driver) are written as ``src<i>``, opened with the drivers GeoBrix reads (the manifest's allowed
-   class, as every light read of raster bytes), judged by the budget from their header, and only then translated to
-   ``in<i>.tif`` (GTiff, no other option); the source goes before the run.
+   CRS); the call must fit the decoded budget. Bytes without the GeoTIFF magic (a PNG or JPEG tile kept in its own
+   driver) are written as ``src<i>.bin`` and opened only if a driver of the manifest's ``bytes`` class identifies
+   them: drivers whose dataset is the bytes alone, never a name, href or URL read from the data (a VRT, a label
+   format, netCDF or HDF5 bytes are refused with a Fix, before anything is opened). They are judged by the budget
+   from their header, and only then translated to ``in<i>.tif`` (GTiff, no other option); the source goes before
+   the run.
 2. The argv is bound (``argv.build``) and checked; the algorithm is instantiated (single use), parsed, run and
    finalized; the output is read from ``/vsimem``.
 3. Every file under the call's prefix is removed, whatever happened.
@@ -225,6 +227,28 @@ def _props(
         ds = None
 
 
+BYTES_FIX = "Fix: store the tile as a GeoTIFF, or pass it as a virtual tile (a path), which the virtual-tile policy judges"
+
+
+def _bytes_source(
+    gdal, sql_name: str, i: int, src: str, drivers: Sequence[str]
+) -> None:
+    """Raise DataError (with a Fix) unless a driver of the ``bytes`` class (`drivers`) identifies `src`, a tile's
+    bytes without the TIFF magic. Only the header is read: a driver outside the class (a VRT, whose sources GDAL would
+    open) is named, never opened. The JVM's GdalSpecEngine applies the same rule."""
+    gdal.ErrorReset()
+    drv = gdal.IdentifyDriverEx(src, gdal.OF_RASTER)
+    if drv is None:
+        raise DataError(
+            f"{sql_name}: input {i} is not a raster GeoBrix reads from tile bytes. {BYTES_FIX}"
+        )
+    if not drivers or drv.ShortName not in drivers:
+        raise DataError(
+            f"{sql_name}: input {i} is a {drv.ShortName} raster, which may name other files, so GeoBrix does not "
+            f"open it from tile bytes. {BYTES_FIX}"
+        )
+
+
 def _to_gtiff(gdal, sql_name: str, src: str, dst: str, drivers: Sequence[str]) -> None:
     """Translate `src` (raster bytes in another driver) to the GeoTIFF `dst`, then remove `src`: the engine's
     algorithms read GeoTIFF inputs. The JVM's GdalSpecEngine makes the same calls."""
@@ -371,20 +395,21 @@ def run(
     command = None
     with engine_settings(), _gdal_status() as gdal:
         try:
-            # A raster without the GeoTIFF magic is read by the drivers GeoBrix reads, and translated to GeoTIFF
-            # once the budget below holds (its props are its header's).
+            # A raster without the GeoTIFF magic is read only by a self-contained driver (the manifest's bytes
+            # class), and translated to GeoTIFF once the budget below holds (its props are its header's).
             sources = {}
             for i, raster in enumerate(rasters):
                 data = bytes(raster)
                 if data[:4] in _TIFF_MAGIC:
                     gdal.FileFromMemBuffer(names[i], data)
                 else:
-                    sources[i] = f"{prefix}/src{i}"
+                    sources[i] = f"{prefix}/src{i}.bin"
                     shown[sources[i]] = shown.get(names[i], f"<input{i}>")
                     gdal.FileFromMemBuffer(sources[i], data)
-            drivers = (
-                virtual_drivers()
-            )  # the manifest's allowed class, as for a virtual tile's own file
+            # the manifest's bytes class (self-contained drivers only), from the allowlist this call runs under
+            drivers = tuple((section or manifest.load().gdal).bytes_drivers)
+            for i, src in sources.items():
+                _bytes_source(gdal, fn.sql_name, i, src, drivers)
             props = [
                 (
                     _props(gdal, fn.sql_name, sources[i], block.needs_crs, drivers)

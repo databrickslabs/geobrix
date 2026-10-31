@@ -190,22 +190,7 @@ class GdalSpecSmokeTest extends AnyFunSuite {
         finally Seq(in, out, out + ".aux.xml").foreach(gdal.Unlink)
     }
 
-    /** The first band of GeoTIFF bytes, as Float32 pixels. */
-    private def band1(tif: Array[Byte], w: Int, h: Int): Array[Float] = {
-        val name = vsimem() + ".tif"
-        gdal.FileFromMemBuffer(name, tif)
-        val ds = gdal.Open(name)
-        try {
-            val px = new Array[Float](w * h)
-            ds.GetRasterBand(1).ReadRaster(0, 0, w, h, px)
-            px
-        } finally {
-            ds.delete()
-            gdal.Unlink(name)
-        }
-    }
-
-    test("a materialized tile in another driver runs on its GeoTIFF translation") {
+    test("a materialized tile in a self-contained driver runs on its GeoTIFF translation; any other is refused") {
         val probe = KernelGdal.probe()
         assume(
           probe == s"ok:${GdalSpecs.section.pin}",
@@ -215,14 +200,33 @@ class GdalSpecSmokeTest extends AnyFunSuite {
         val slope = GdalSpecs.function("gbx_rst_slope")
         val tcrs = GdalSpecs.function("gbx_rst_transformcrs")
         val vals = Map[String, Any]("unit" -> "degrees", "xscale" -> null, "yscale" -> null)
-        val want = GdalSpecEngine.run(slope, Seq(tif), vals).get
-        // ERDAS Imagine keeps the Float32 pixels, the CRS and the geotransform in-band: the same slope, and a reprojection
-        val hfa = asDriver(tif, "HFA")
-        val got = GdalSpecEngine.run(slope, Seq(hfa), vals).get
-        assert(got.error == null && got.raster != null, String.valueOf(got.error))
-        assert(band1(got.raster, 64, 64).sameElements(band1(want.raster, 64, 64)), "the HFA tile's slope is not its GeoTIFF's")
-        val warped = GdalSpecEngine.run(tcrs, Seq(hfa), Map[String, Any]("target_crs" -> "EPSG:4326")).get
-        assert(warped.error == null && warped.raster != null, String.valueOf(warped.error))
+        def refusedAs(driver: String, r: SpecResult): Unit = assert(
+          r.raster == null && String.valueOf(r.error).contains(s"is a $driver raster, which may name other files") &&
+              String.valueOf(r.error).contains("Fix:"),
+          String.valueOf(r.error)
+        )
+        // ERDAS Imagine names spill and dependent files: outside the manifest's bytes class, refused from its header
+        refusedAs("HFA", GdalSpecEngine.run(slope, Seq(asDriver(tif, "HFA")), vals).get)
+        // a VRT's XML as tile bytes, its source a local GeoTIFF or a URL: refused from its header, so the source is never
+        // opened (the same VRT, written as a file, reads the sentinel: the control)
+        val sentinel = Files.createTempFile("gbx_sentinel", ".tif")
+        Files.write(sentinel, tif)
+        def vrt(src: String): Array[Byte] = (
+          """<VRTDataset rasterXSize="64" rasterYSize="64"><VRTRasterBand dataType="Float32" band="1"><SimpleSource>""" +
+              s"""<SourceFilename relativeToVRT="0">$src</SourceFilename><SourceBand>1</SourceBand></SimpleSource>""" +
+              "</VRTRasterBand></VRTDataset>"
+        ).getBytes("UTF-8")
+        try {
+            val control = vsimem() + ".vrt"
+            gdal.FileFromMemBuffer(control, vrt(sentinel.toString))
+            val cds = gdal.Open(control)
+            try assert(cds.GetRasterBand(1).Checksum() != 0) finally { cds.delete(); gdal.Unlink(control) }
+            refusedAs("VRT", GdalSpecEngine.run(slope, Seq(vrt(sentinel.toString)), vals).get)
+            refusedAs("VRT", GdalSpecEngine.run(slope, Seq(vrt("/vsicurl/https://example.invalid/gbx_sentinel.tif")), vals).get)
+        } finally Files.deleteIfExists(sentinel)
+        // a NULL input raster is an error tile, never a NullPointerException
+        val noRaster = GdalSpecEngine.run(slope, Seq(null), vals).get
+        assert(noRaster.raster == null && String.valueOf(noRaster.error).contains("has no raster"), String.valueOf(noRaster.error))
         // a PNG (Byte) holds no CRS: its slope runs, and reprojecting it is the no-CRS error tile with a Fix
         val byteTif = {
             val name = vsimem() + ".tif"
@@ -234,6 +238,9 @@ class GdalSpecSmokeTest extends AnyFunSuite {
         val png = asDriver(byteTif, "PNG")
         val pngSlope = GdalSpecEngine.run(slope, Seq(png), vals).get
         assert(pngSlope.error == null && pngSlope.raster != null, String.valueOf(pngSlope.error))
+        // a PNG whose pixels are cut short opens from its header, and its translation fails: an error tile
+        val cut = GdalSpecEngine.run(slope, Seq(png.take(png.length / 2)), vals).get
+        assert(cut.raster == null && cut.error != null, String.valueOf(cut.error))
         val pngWarp = GdalSpecEngine.run(tcrs, Seq(png), Map[String, Any]("target_crs" -> "EPSG:4326")).get
         assert(pngWarp.raster == null && String.valueOf(pngWarp.error).contains("Fix: set its CRS"), String.valueOf(pngWarp.error))
         // bytes no allowed driver reads are an error tile

@@ -34,6 +34,7 @@
         "SNAP_TIFF", "SNODAS", "SRP", "SRTMHGT", "TGA", "TIL", "TSX", "Terragen", "USGSDEM", "VICAR", "VRT",
         "WEBP", "XYZ", "ZMap", "Zarr", "netCDF"
       ],
+      "bytes": ["BMP", "COG", "GIF", "GTiff", "JPEG", "JPEGXL", "LIBERTIFF", "PNG", "PNM", "WEBP"],
       "refused": [
         "CSW", "DAAS", "EEDA", "EEDAI", "ESRIC", "GDALG", "GTI", "HTTP", "KMLSUPEROVERLAY", "MRF", "NGW", "OGCAPI", "PLMOSAIC", "PLSCENES", "STACIT", "STACTA", "WCS", "WFS", "WMS", "WMTS"
       ]

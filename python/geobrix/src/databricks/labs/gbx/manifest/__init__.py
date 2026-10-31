@@ -302,6 +302,30 @@ class GdalSection:
     #     allowed: GeoBrix's netCDF readers need it.
     allowed_drivers: Tuple[str, ...] = ()
     refused_drivers: Tuple[str, ...] = ()
+    # `bytes`: the allowed drivers the spec engine opens a materialized tile's bytes with (bytes without the TIFF
+    # magic, translated to GeoTIFF before the run; engine/run.py and the JVM's GdalSpecEngine read this one list). A
+    # tile's bytes have no directory of their own, so the class is the drivers whose dataset is the bytes alone: no
+    # name, href or URL read from the data is opened or fetched, and no header or data file beside it is needed
+    # (the sidecars GDAL may look for, .aux.xml, .msk, .ovr or a world file, would sit in the call's /vsimem prefix,
+    # which holds none). It is an allowlist: every other driver is refused for bytes, with a Fix (store the tile as a
+    # GeoTIFF, or pass it as a virtual tile, a path, which the virtual-tile policy judges). In the class:
+    #   GTiff, COG, LIBERTIFF: one TIFF file (the engine sends TIFF bytes straight to GTiff).
+    #   PNG, JPEG, GIF, BMP, WEBP, JPEGXL, PNM: one image file; no tag or box of theirs names another file.
+    # Refused for bytes, by why (the drivers named are the allowed ones that look most like tile formats):
+    #   names a file or dataset GDAL opens: VRT (SourceFilename), DERIVED (a DERIVED_SUBDATASET: name), DIMAP and
+    #     SAFE (hrefs), GPKG, HDF5 and PDS4 (a subdataset name, /vsicurl/ included), ECRGTOC, RPFTOC and TIL (the
+    #     frames or tiles a table of contents lists), MEM and NUMPY (a pointer to memory, not bytes);
+    #   a label or header that names its data file, or a data file beside the header: PDS, ISIS2, ISIS3 and VICAR
+    #     (detached labels), ENVI, EHdr, GenBin, ERS, PAux, MFF, MFF2, RST, ILWIS, SAGA, ISCE, ROI_PAC, and the
+    #     product directories (CEOS, SAR_CEOS, AirSAR, RS2, RCM, TSX, COSAR, SENTINEL2, AIG, DOQ1/DOQ2, FAST, ESAT);
+    #   a library with its own reads or a fetch: netCDF (a DAP URL, and an http(s) crs attribute it fetches, above),
+    #     HDF5Image, BAG and S102/S104/S111 (HDF5, whose external links the HDF5 library follows), Zarr (a store of
+    #     many files), MBTiles;
+    #   names files inside the file, not judged here: HFA (its spill .ige and dependent .rrd files), PCIDSK (external
+    #     channels), JP2OpenJPEG (GMLJP2 boxes may hold xlink references), NITF, PDF;
+    #   the rest: not audited for bytes; refused until one is added here with its reason.
+    # The refused class (GTI, STACIT, STACTA, WMS, WMTS ...) is never registered where the engine runs.
+    bytes_drivers: Tuple[str, ...] = ()
 
 
 def _closed(raw: Mapping, keys: frozenset, what: str) -> None:
@@ -368,9 +392,15 @@ def _parse_gdal_section(raw: Optional[Mapping]) -> Optional[GdalSection]:
         return None
     _closed(raw, frozenset({"pin", "deny", "allow", "raster_drivers"}), "section")
     drivers = raw.get("raster_drivers", {})
-    _closed(drivers, frozenset({"allowed", "refused"}), "raster_drivers")
+    _closed(drivers, frozenset({"allowed", "refused", "bytes"}), "raster_drivers")
     allowed = tuple(drivers.get("allowed", ()))
     refused = tuple(drivers.get("refused", ()))
+    in_bytes = tuple(drivers.get("bytes", ()))
+    if not set(in_bytes) <= set(allowed) or len(set(in_bytes)) != len(in_bytes):
+        raise ValueError(
+            "gdal spec: the bytes drivers must be allowed drivers, free of repeats "
+            f"(not allowed: {sorted(set(in_bytes) - set(allowed))})"
+        )
     both = sorted(set(allowed) & set(refused))
     if both or len(set(allowed)) != len(allowed) or len(set(refused)) != len(refused):
         raise ValueError(
@@ -384,6 +414,7 @@ def _parse_gdal_section(raw: Optional[Mapping]) -> Optional[GdalSection]:
         ),
         allowed_drivers=allowed,
         refused_drivers=refused,
+        bytes_drivers=in_bytes,
     )
 
 

@@ -104,7 +104,6 @@ SAME_PIXELS = [
     "tcrs_wkt",
     "se_ma_norm_diff",
     "se_slope_png",
-    "se_tcrs_hfa",
     "se_tcrs_projjson",
 ]
 
@@ -294,4 +293,78 @@ def test_a_tile_in_another_driver_is_translated_under_the_decoded_budget(monkeyp
     )  # the 64 x 64 Byte PNG is 4 KiB decoded
     over = run.run(fn, [png], vals)
     assert over.raster is None and "Fix: retile" in over.error and translations == []
+    assert not run._gdal().ReadDirRecursive(run.PREFIX)
+
+
+def _opened(gdal, call):
+    """The files GDAL opened (its CPL_DEBUG "GDALOpen(<name>" lines) while `call()` ran, and its result."""
+    lines = []
+    gdal.PushErrorHandler(lambda _cls, _no, msg: lines.append(msg))
+    try:
+        with gdal.config_options({"CPL_DEBUG": "ON"}, thread_local=True):
+            res = call()
+    finally:
+        gdal.PopErrorHandler()
+    return [
+        m.split("GDALOpen(", 1)[1].split(",", 1)[0] for m in lines if "GDALOpen(" in m
+    ], res
+
+
+@pytest.mark.parametrize("source", ["local", "vsicurl", "gti"])
+def test_tile_bytes_that_name_other_files_are_refused_before_any_open(tmp_path, source):
+    """The bytes of a VRT (its source a local file, or a URL) and of a tile index are an error tile with a Fix: a
+    driver outside the manifest's self-contained bytes class is named from the header, never opened, so nothing they
+    name is read, and the call's /vsimem prefix is left empty."""
+    from databricks.labs.gbx.bench.oracles import _vrt
+
+    why = run.unavailable_reason()
+    if why:
+        pytest.skip(why)
+    gdal = run._gdal()
+    sentinel = tmp_path / "gbx_sentinel.tif"
+    sentinel.write_bytes(oracles._se_build("dem_3857")["raster"])
+    if source == "gti":
+        data = f"<GDALTileIndexDataset><IndexDataset>{sentinel}</IndexDataset></GDALTileIndexDataset>"
+    else:
+        src = (
+            str(sentinel)
+            if source == "local"
+            else "/vsicurl/https://example.invalid/gbx_sentinel.tif"
+        )
+        data = _vrt(src)
+    if (
+        source == "local"
+    ):  # the detector sees the sentinel when GDAL opens the VRT itself
+        name = f"/vsimem/gbx-probe-{tmp_path.name}.vrt"
+        gdal.FileFromMemBuffer(name, data.encode())
+
+        def read_it():
+            ds = gdal.Open(name)
+            ds.GetRasterBand(1).Checksum()
+
+        try:
+            assert str(sentinel) in _opened(gdal, read_it)[0]
+        finally:
+            gdal.Unlink(name)
+    fn = MAN.functions["gbx_rst_slope"]
+    vals = {"unit": "degrees", "xscale": None, "yscale": None}
+    opened, res = _opened(gdal, lambda: run.run(fn, [data.encode()], vals))
+    assert (
+        res.raster is None and "Fix:" in res.error and "tile bytes" in res.error
+    ), res.error
+    assert not [o for o in opened if not o.startswith(run.PREFIX)], opened
+    assert not gdal.ReadDirRecursive(run.PREFIX)
+
+
+def test_unreadable_tile_bytes_are_an_error_tile_and_leave_nothing():
+    """Bytes no driver reads, and a PNG whose pixels are cut short (the translation fails), are error tiles."""
+    why = run.unavailable_reason()
+    if why:
+        pytest.skip(why)
+    fn = MAN.functions["gbx_rst_slope"]
+    vals = {"unit": "degrees", "xscale": None, "yscale": None}
+    png = oracles._build("dem_png_bytes", "")["raster"]
+    for data in (b"\x01\x02\x03\x04\x05", png[: len(png) // 2]):
+        res = run.run(fn, [data], vals)
+        assert res.raster is None and res.error, res
     assert not run._gdal().ReadDirRecursive(run.PREFIX)

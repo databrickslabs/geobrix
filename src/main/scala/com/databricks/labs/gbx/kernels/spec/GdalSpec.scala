@@ -37,13 +37,17 @@ final case class SpecFunction(sqlName: String, params: Seq[SpecParam], minArgs: 
 /** The manifest's top-level `gdal` section (mirrors `manifest.GdalSection`). The driver classification: every
   * raster driver the payload's GDAL registers is in `allowedDrivers` (a reader can read it) or `refusedDrivers` (a
   * pipeline, an index, a service or a network API; never registered where the engine runs, see
-  * [[com.databricks.labs.gbx.rasterx.gdal.GDALManager.DefaultSkippedDrivers]]). */
+  * [[com.databricks.labs.gbx.rasterx.gdal.GDALManager.DefaultSkippedDrivers]]). `bytesDrivers` are the allowed
+  * drivers whose dataset is the bytes alone (no name, href or URL read from the data is opened): the only drivers the
+  * engine opens a materialized tile's non-TIFF bytes with (the manifest's comment, `manifest.GdalSection`, gives
+  * the class and why each other driver is out). */
 final case class GdalSection(
     pin: String,
     deny: Set[String],
     allow: Map[String, Seq[String]],
     allowedDrivers: Seq[String],
-    refusedDrivers: Seq[String]
+    refusedDrivers: Seq[String],
+    bytesDrivers: Seq[String] = Nil
 )
 
 /** The GDAL spec engine's specs, read from the copy of `functions.json` the build packs into the JAR, never from
@@ -54,7 +58,7 @@ object GdalSpecs {
     val Resource = "/com/databricks/labs/gbx/manifest/functions.json"
 
     private val SectionKeys = Set("pin", "deny", "allow", "raster_drivers")
-    private val RasterDriverKeys = Set("allowed", "refused")
+    private val RasterDriverKeys = Set("allowed", "refused", "bytes")
     private val OutKeys = Set("kind", "dtype")
     private val BlockKeys = Set("alg", "in", "out", "write", "args", "needs_crs", "gdal_min")
     private val ArgKeys = Set("arg", "const", "from", "type", "map", "null", "with", "bad")
@@ -152,6 +156,11 @@ object GdalSpecs {
         closed(drivers, RasterDriverKeys, "raster_drivers")
         val allowedDrivers = names(drivers, "allowed")
         val refusedDrivers = names(drivers, "refused")
+        val bytesDrivers = names(drivers, "bytes")
+        require(
+          bytesDrivers.toSet.subsetOf(allowedDrivers.toSet) && bytesDrivers.distinct.size == bytesDrivers.size,
+          s"gdal spec: the bytes drivers must be allowed drivers, free of repeats: $bytesDrivers"
+        )
         // the two classes are disjoint and free of repeats, as the Python parser holds them
         require(
           allowedDrivers.toSet.intersect(refusedDrivers.toSet).isEmpty &&
@@ -163,7 +172,8 @@ object GdalSpecs {
           deny = s.get("deny").elements.asScala.map(_.asText).toSet,
           allow = s.get("allow").fields.asScala.map(e => e.getKey -> e.getValue.elements.asScala.map(_.asText).toSeq).toMap,
           allowedDrivers = allowedDrivers,
-          refusedDrivers = refusedDrivers
+          refusedDrivers = refusedDrivers,
+          bytesDrivers = bytesDrivers
         )
         val fns = root.get("functions").elements.asScala.filter(_.has("gdal")).map { r =>
             val params = r.get("params").elements.asScala.map { p =>

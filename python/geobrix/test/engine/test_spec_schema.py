@@ -158,12 +158,76 @@ def test_the_jvm_skips_exactly_the_refused_drivers():
             },
             "GTiff",
         ),
+        (
+            {
+                "pin": "3.13.3",
+                "raster_drivers": {
+                    "allowed": ["GTiff"],
+                    "refused": [],
+                    "bytes": ["VRT"],
+                },
+            },
+            "VRT",
+        ),
     ],
-    ids=["a section key outside the vocabulary", "a driver on both lists"],
+    ids=[
+        "a section key outside the vocabulary",
+        "a driver on both lists",
+        "a bytes driver that is not allowed",
+    ],
 )
 def test_a_section_outside_the_vocabulary_is_refused_at_load(raw, named):
     with pytest.raises(ValueError, match=re.escape(named)):
         manifest._parse_gdal_section(raw)
+
+
+def test_the_bytes_class_holds_no_driver_that_names_other_files():
+    """The drivers the engine opens a tile's bytes with are self-contained: none whose dataset names another file, a
+    dataset or a URL (a VRT's sources, a label's data file, a subdataset, a library's own reads).
+    """
+    named = {
+        "VRT",
+        "DERIVED",
+        "GTI",
+        "STACIT",
+        "STACTA",
+        "WMS",
+        "WMTS",
+        "DIMAP",
+        "SAFE",
+        "GPKG",
+        "HDF5",
+    }
+    named |= {
+        "HDF5Image",
+        "BAG",
+        "netCDF",
+        "Zarr",
+        "PDS",
+        "PDS4",
+        "ISIS2",
+        "ISIS3",
+        "VICAR",
+        "ENVI",
+        "EHdr",
+    }
+    named |= {
+        "GenBin",
+        "ERS",
+        "PAux",
+        "MFF",
+        "MFF2",
+        "HFA",
+        "PCIDSK",
+        "MEM",
+        "NUMPY",
+        "ECRGTOC",
+        "RPFTOC",
+        "TIL",
+    }
+    bytes_class = set(MAN.gdal.bytes_drivers)
+    assert bytes_class and bytes_class <= set(MAN.gdal.allowed_drivers)
+    assert not bytes_class & named, bytes_class & named
 
 
 @pytest.mark.parametrize("fn", ENGINE_FNS, ids=lambda f: f.sql_name)

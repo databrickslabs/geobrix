@@ -703,6 +703,8 @@ _VT_POLICY = "which GeoBrix does not open for a virtual tile"
 _VT_TOP = f"a file no driver on the virtual-tile allowlist reads, {_VT_POLICY}"
 _VT_NESTED = f"a source GDAL has no driver for here, {_VT_POLICY}"
 NORM_DIFF = '{"calc": "norm_diff", "dialect": "builtin"}'
+# A tile's bytes in a driver outside the manifest's self-contained `bytes` class (engine/run.py), as the rows read it.
+_BYTES_REFUSED = "is a {} raster, which may name other files, so GeoBrix does not open it from tile bytes. Fix:"
 SPEC_SE: Tuple[Case, ...] = (
     # Horn's slope with no edges: the 1-pixel border and the neighbours of the NoData hole are NoData.
     Case(
@@ -826,22 +828,40 @@ SPEC_SE: Tuple[Case, ...] = (
         None,
         ("session",),
     ),
-    # A materialized tile kept in another driver is translated to GeoTIFF first: a georeferenced ERDAS Imagine tile
-    # reprojects as its GeoTIFF does; a PNG carries no CRS, so reprojecting it is the no-CRS error tile with a Fix.
-    Case(
-        "se_tcrs_hfa",
-        T,
-        (Build("tile_4326_hfa"), "EPSG:3857"),
-        "tile_props",
-        "EPSG:3857",
-        ("session",),
-    ),
+    # A materialized tile kept in another driver is translated to GeoTIFF first, only when its driver is one of the
+    # manifest's self-contained `bytes` class: a PNG carries no CRS, so reprojecting it is the no-CRS error tile. A
+    # driver outside the class (ERDAS Imagine names spill files; a VRT names its sources, a local file or a URL) is
+    # an error tile with a Fix, and nothing it names is opened.
     Case(
         "se_tcrs_png",
         T,
         (Build("dem_png_bytes"), "EPSG:4326"),
-        "error_fix",
-        None,
+        "error_tile_has",
+        "Fix: set its CRS",
+        ("session",),
+    ),
+    Case(
+        "se_tcrs_hfa",
+        T,
+        (Build("tile_4326_hfa"), "EPSG:3857"),
+        "error_tile_has",
+        _BYTES_REFUSED.format("HFA"),
+        ("session",),
+    ),
+    Case(
+        "se_tcrs_vrt_bytes",
+        T,
+        (Build("tile_vrt_bytes"), "EPSG:4326"),
+        "error_tile_has",
+        _BYTES_REFUSED.format("VRT"),
+        ("session",),
+    ),
+    Case(
+        "se_tcrs_vrt_bytes_vsicurl",
+        T,
+        (Build("tile_vrt_bytes_vsicurl"), "EPSG:4326"),
+        "error_tile_has",
+        _BYTES_REFUSED.format("VRT"),
         ("session",),
     ),
     # Virtual tiles: a VRT is read (the policy allows it); a stored GDAL pipeline, a VRT over one, a VRT with a
@@ -1434,6 +1454,14 @@ def _build(name: str, tmpdir: str):
                     nodata=src.nodata,
                 )
             )
+    if name in ("tile_vrt_bytes", "tile_vrt_bytes_vsicurl"):
+        # a VRT's XML as a materialized tile's bytes: its source is the DEM on local disk, or a URL
+        if name == "tile_vrt_bytes":
+            _se_virtual("dem_vrt", tmpdir)  # writes se_dem.tif
+            src = os.path.join(tmpdir, "se_dem.tif")
+        else:
+            src = "/vsicurl/https://example.invalid/se_dem.tif"
+        return _tile(_vrt(src).encode())
     if (
         name == "projjson_4326"
     ):  # a CRS-as-PROJJSON INPUT value (it carries a "$schema" URL)

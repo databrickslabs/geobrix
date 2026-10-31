@@ -256,15 +256,13 @@ OPEN_SITES = {
         "the bench harness reads the rasters its own _synth step wrote (GeoBrix's outputs, never user data)",
     ),
     ("engine/run.py", "ds = gdal.OpenEx("): (
-        1,
-        "identify with the allowed drivers (IdentifyDriverEx), then open with the one identified: the engine's identify-then-open",
+        3,
+        "each open names allowed_drivers: the virtual tile's VRT header (VRT only, after the remote-path refusal), "
+        "the tile properties read, and the non-GeoTIFF-to-GeoTIFF conversion (the drivers that read from tile bytes)",
     ),
-    (
-        "engine/run.py",
-        'ds = gdal.OpenEx(name, gdal.OF_RASTER | gdal.OF_READONLY, allowed_drivers=["GTiff"])',
-    ): (
+    ("engine/run.py", 'out = gdal.Translate(dst, ds, options=["-of", "GTiff"])'): (
         1,
-        "a /vsimem name the engine wrote from bytes that passed the TIFF magic check; GTiff only",
+        "converts the dataset object the OpenEx just above opened (allowed drivers only); no name is opened here",
     ),
     ("pyrx/core/analysis.py", '_rio_shutil.copy(ds, dem_path, driver="GTiff")'): (
         1,

@@ -57,7 +57,7 @@ All Maven/test/doc/coverage work runs inside the **`geobrix-dev` Docker containe
 
 ## Commands (the `gbx:*` palette)
 
-**85 `gbx:*` commands** in `scripts/commands/` (each a `.md` registration + a `.sh` implementation). They handle Docker setup, env vars, log paths (`--log filename` → `test-logs/filename`; relative → under `test-logs/`; absolute → as-is), and profile selection. **If a command fails, fix the command** — don't work around it (procedure in `.claude/rules/gbx-commands.md`).
+**90 `gbx:*` commands** in `scripts/commands/` (each a `.md` registration + a `.sh` implementation). They handle Docker setup, env vars, log paths (`--log filename` → `test-logs/filename`; relative → under `test-logs/`; absolute → as-is), and profile selection. **If a command fails, fix the command** — don't work around it (procedure in `.claude/rules/gbx-commands.md`).
 
 - **Tests**: `gbx:test:scala`, `gbx:test:python`, `gbx:test:scala-docs`, `gbx:test:python-docs`, `gbx:test:sql-docs`, `gbx:test:docs`, `gbx:test:function-info`, `gbx:test:notebooks`, `gbx:test:bindings`
   - Single Scala suite: `gbx:test:scala --suite 'com.databricks.labs.gbx.gridx.*'` or `--suites 'A,B'`

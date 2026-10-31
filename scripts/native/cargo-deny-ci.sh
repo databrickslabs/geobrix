@@ -125,9 +125,10 @@ cargo deny --version | grep -q "$(pin CARGO_DENY_VERSION)"
 probe_hosts || exit 1
 
 failed=""
+# --all-features: a crate's optional dependencies (gbxrs: gdal-sys and bindgen behind `gdal`) are in the checked graph
 while IFS= read -r root; do
     echo "== cargo deny: $root"
-    cargo deny --manifest-path "$root/Cargo.toml" --workspace --locked --config "$GBX_NATIVE_ROOT/deny.toml" \
+    cargo deny --manifest-path "$root/Cargo.toml" --workspace --all-features --locked --config "$GBX_NATIVE_ROOT/deny.toml" \
         check -D index-failure advisories bans licenses sources || failed="$failed $root"
 done <<< "$roots"
 if [ -n "$failed" ]; then echo "cargo-deny-ci: FAILED for:$failed" >&2; exit 1; fi

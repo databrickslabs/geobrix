@@ -231,11 +231,9 @@ def set_data_dirs(env, share):
             del env["PROJ_DATA"]
         else:
             if not any(proj_entry(d, ref) == "db" for d in data):
-                data = (
-                    data
-                    + [d for d in lib_dirs if d not in data]
-                    + ([] if lib_db else [proj])
-                )
+                data = data + [d for d in lib_dirs if d not in data]
+                if not lib_db and proj not in data:  # a repeat activation adds nothing
+                    data.append(proj)
             if data != env["PROJ_DATA"].split(os.pathsep):
                 env["PROJ_DATA"] = os.pathsep.join(data)
     if "PROJ_DATA" not in env and not lib_db:

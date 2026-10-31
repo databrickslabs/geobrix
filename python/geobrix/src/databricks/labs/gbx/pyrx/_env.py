@@ -163,11 +163,13 @@ def _list_dir(d: str) -> Optional[List[str]]:
     missing from PROJ_DATA, which silently costs accuracy (a grid is not applied). Such a
     dir is tried once on later rebuilds (a quick miss), not retried for ~20 s again.
     """
-    from databricks.labs.gbx.ds import _listing
+    # core._retry, not ds._listing: importing the ds package registers every data source,
+    # which needs core.crs, and core.crs is what is importing this module right now.
+    from databricks.labs.gbx.core._retry import _retry_transient
 
     once = {"attempts": 1} if d in _WARNED_UNLISTABLE else {}
     try:
-        return sorted(_listing._retry_transient(lambda: os.listdir(d), **once))
+        return sorted(_retry_transient(lambda: os.listdir(d), **once))
     except OSError as e:
         if d not in _WARNED_UNLISTABLE:
             _WARNED_UNLISTABLE.add(d)

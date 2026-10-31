@@ -41,6 +41,7 @@ import re
 import sys
 import threading
 import types
+import uuid
 import warnings
 from typing import Dict, Optional
 from urllib.parse import urlsplit
@@ -895,22 +896,133 @@ def open_data(fp, mode: str = "r", *, remote_ok: bool = False, **kwargs):
     return ds
 
 
+# The bytes of a TIFF start with one of these: the common tile, never a driver of the refused class.
+_TIFF_MAGICS = (b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+")
+# How the bytes of a driver in the refused class start, for a process whose osgeo is not the rasterio's GDAL (the
+# identify below needs it). A marker GDAL looks for anywhere in the first 1024 bytes is searched there; a label's
+# first words are read from the start. Anything here that is not in the manifest's class is ignored.
+_BYTES_ANYWHERE = (
+    (b"<VRTDataset", "VRT"),
+    (b"<Dimap_Document", "DIMAP"),
+    (b"<Product_Observational", "PDS4"),
+    (b"<Product_Ancillary", "PDS4"),
+)
+_BYTES_AT_START = (
+    (b"PDS_VERSION_ID", "PDS"),
+    (b"CCSD3ZF", "ISIS2"),
+    (b"LBLSIZE=", "VICAR"),
+    (b"Object = IsisCube", "ISIS3"),
+    (b"DatasetHeader Begin", "ERS"),
+)
+BYTES_FIX = (
+    "Fix: store the tile as a GeoTIFF, or pass a VRT as a virtual tile (a path), which the virtual-tile policy "
+    "judges"
+)
+
+
+@functools.lru_cache(maxsize=1)
+def bytes_refused_light_names() -> tuple:
+    """The drivers the lightweight tier refuses for a tile's bytes: the manifest's ``bytes_refused_light`` class."""
+    return tuple(manifest.load().gdal.bytes_refused_light_drivers)
+
+
+def _bytes_refusal(what: str, driver: str) -> DriverPolicyError:
+    return DriverPolicyError(
+        f"{what}: is a {driver} raster, a format that can name other files, {REFUSED_PHRASE} from tile bytes. "
+        f"{BYTES_FIX}"
+    )
+
+
+def _identify_in_class(head: bytes, names: tuple) -> Optional[str]:
+    """The driver of ``names`` that identifies ``head`` (a tile's first bytes) through GDAL, or None. Header only:
+    nothing is opened. Needs the osgeo on rasterio's libgdal (the full mode); any failure is None.
+    """
+    try:
+        from osgeo import gdal
+
+        path = f"/vsimem/gbx_bytes_{uuid.uuid4().hex}"
+        gdal.FileFromMemBuffer(path, head)
+        try:
+            with gdal.ExceptionMgr(useExceptions=False):
+                drv = gdal.IdentifyDriverEx(
+                    path, gdal.OF_RASTER, allowed_drivers=list(names)
+                )
+        finally:
+            gdal.Unlink(path)
+        return None if drv is None else drv.ShortName
+    except (
+        Exception
+    ):  # noqa: BLE001 - no usable osgeo here: the signatures and the driver list decide
+        return None
+
+
+def _class_of_bytes(head: bytes, mode: str) -> Optional[str]:
+    """The refused-class driver the bytes ``head`` are, else None: GDAL's identify where the process has the
+    matching osgeo, then how each driver's bytes start."""
+    names = bytes_refused_light_names()
+    if not names or head.startswith(_TIFF_MAGICS):
+        return None
+    if mode == "full":
+        found = _identify_in_class(head[:4096], names)
+        if found is not None:
+            return found
+    window = head[:1024]
+    for marker, driver in _BYTES_ANYWHERE:
+        if marker in window and driver in names:
+            return driver
+    start = head.lstrip()
+    for marker, driver in _BYTES_AT_START:
+        if start.startswith(marker) and driver in names:
+            return driver
+    return None
+
+
+def _bytes_drivers(memfile, explicit, mode: str):
+    """The drivers an open of tile bytes may use: the allowed ones less the refused class. A driver the caller named
+    that is in the class, and bytes that are a driver of the class, raise the policy's refusal first.
+    """
+    refused = set(bytes_refused_light_names())
+    what = "the raster bytes"
+    if explicit is not None:
+        named = [explicit] if isinstance(explicit, str) else list(explicit)
+        for name in named:
+            if name in refused:
+                raise _bytes_refusal(what, name)
+        return named
+    driver = _class_of_bytes(_head(memfile, None), mode)
+    if driver is not None:
+        raise _bytes_refusal(what, driver)
+    return [name for name in allowed_names() if name not in refused]
+
+
 def open_bytes(data, **kwargs):
     """A read of raster bytes under the driver policy: ``data`` is bytes (a tile's raster, an intermediate GeoBrix
     wrote) or a ``MemoryFile``. The open uses the allowed drivers as GDAL's driver list and checks the driver it
     reports, as ``open_data`` does. Bytes are held in a ``MemoryFile`` that the returned dataset owns (closed with
     it); a ``MemoryFile`` passed in stays the caller's. Use it as ``with open_bytes(raw) as ds:``.
+
+    A tile's bytes are data, and the remote-path gate never sees what a VRT or another indirection format names, so
+    the manifest's ``bytes_refused_light`` class is refused: the driver is identified from the bytes first and a
+    driver of the class raises ``DriverPolicyError`` (with a Fix) before anything is opened; the open itself lists
+    the allowed drivers less that class. netCDF, HDF5, HFA, JP2OpenJPEG and GPKG bytes open as before.
     """
     import rasterio.io as rio_io
 
     owned = not isinstance(data, rio_io.MemoryFile)
     memfile = rio_io.MemoryFile(data) if owned else data
     try:
-        if activate()["mode"] == "off":
+        mode = activate()["mode"]
+        if mode == "off":
             # GDAL as GDAL has it, through the MemoryFile's own open (rasterio 1.3's open would take the file-like path)
             ds = memfile.open(**kwargs)
         else:
-            ds = open_data(memfile, "r", **kwargs)
+            driver = _bytes_drivers(memfile, kwargs.pop("driver", None), mode)
+            ds = open_data(memfile, "r", driver=driver, **kwargs)
+            if ds.driver in bytes_refused_light_names():
+                # defence in depth: an open restricted to the drivers outside the class reports one of them
+                name = ds.driver
+                ds.close()
+                raise _bytes_refusal("the raster bytes", name)
     except BaseException:
         if owned:
             memfile.close()

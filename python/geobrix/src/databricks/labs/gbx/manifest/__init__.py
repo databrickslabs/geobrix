@@ -326,6 +326,22 @@ class GdalSection:
     #   the rest: not audited for bytes; refused until one is added here with its reason.
     # The refused class (GTI, STACIT, STACTA, WMS, WMTS ...) is never registered where the engine runs.
     bytes_drivers: Tuple[str, ...] = ()
+    # `bytes_refused_light`: the allowed drivers the lightweight tier refuses for a tile's bytes (`open_bytes` in
+    # `_gdal_policy`, so every caller that opens tile bytes). It is a refusal list, narrower than the `bytes`
+    # allowlist above: the common single-file formats a light function can hold as bytes (netCDF, HDF5, HFA,
+    # JP2OpenJPEG, GPKG, and the other drivers not named here) stay readable, and only a driver that can name or need
+    # another file is refused. The driver is identified from the bytes first and refused before it is opened, with a
+    # Fix (store the tile as a GeoTIFF, or pass it as a virtual tile, a path, which the virtual-tile policy judges).
+    # Why each is in the class:
+    #   names a file or dataset GDAL opens: VRT (SourceFilename, /vsicurl/ included), DERIVED (a DERIVED_SUBDATASET:
+    #     name), DIMAP and SAFE (hrefs), PDS4 (a subdataset name), ECRGTOC, RPFTOC and TIL (the frames or tiles a
+    #     table of contents lists), MEM and NUMPY (a pointer to memory, not bytes);
+    #   a label or header that names its data file, or a data file beside the header: PDS, ISIS2, ISIS3 and VICAR
+    #     (detached labels), ENVI, EHdr, GenBin, ERS, PAux, MFF, MFF2, RST, ILWIS, SAGA, ISCE, ROI_PAC;
+    #   a product directory (its files are the dataset): CEOS, SAR_CEOS, AirSAR, RS2, RCM, TSX, COSAR, SENTINEL2,
+    #     AIG, DOQ1, DOQ2, FAST, ESAT.
+    # Not in the class, by the same ruling: netCDF, HDF5, HFA, JP2OpenJPEG and GPKG.
+    bytes_refused_light_drivers: Tuple[str, ...] = ()
 
 
 def _closed(raw: Mapping, keys: frozenset, what: str) -> None:
@@ -392,14 +408,28 @@ def _parse_gdal_section(raw: Optional[Mapping]) -> Optional[GdalSection]:
         return None
     _closed(raw, frozenset({"pin", "deny", "allow", "raster_drivers"}), "section")
     drivers = raw.get("raster_drivers", {})
-    _closed(drivers, frozenset({"allowed", "refused", "bytes"}), "raster_drivers")
+    _closed(
+        drivers,
+        frozenset({"allowed", "refused", "bytes", "bytes_refused_light"}),
+        "raster_drivers",
+    )
     allowed = tuple(drivers.get("allowed", ()))
     refused = tuple(drivers.get("refused", ()))
     in_bytes = tuple(drivers.get("bytes", ()))
+    light_refused = tuple(drivers.get("bytes_refused_light", ()))
     if not set(in_bytes) <= set(allowed) or len(set(in_bytes)) != len(in_bytes):
         raise ValueError(
             "gdal spec: the bytes drivers must be allowed drivers, free of repeats "
             f"(not allowed: {sorted(set(in_bytes) - set(allowed))})"
+        )
+    if (
+        not set(light_refused) <= set(allowed)
+        or len(set(light_refused)) != len(light_refused)
+        or set(light_refused) & set(in_bytes)
+    ):
+        raise ValueError(
+            "gdal spec: the bytes_refused_light drivers must be allowed drivers, free of repeats, and none of "
+            f"the bytes drivers (not allowed: {sorted(set(light_refused) - set(allowed))})"
         )
     both = sorted(set(allowed) & set(refused))
     if both or len(set(allowed)) != len(allowed) or len(set(refused)) != len(refused):
@@ -415,6 +445,7 @@ def _parse_gdal_section(raw: Optional[Mapping]) -> Optional[GdalSection]:
         allowed_drivers=allowed,
         refused_drivers=refused,
         bytes_drivers=in_bytes,
+        bytes_refused_light_drivers=light_refused,
     )
 
 

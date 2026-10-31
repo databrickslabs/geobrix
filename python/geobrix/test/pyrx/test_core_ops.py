@@ -168,14 +168,14 @@ def test_as_format_to_cog_is_a_real_cog(caplog):
         ("png", "PNG", "uint8"),
         ("cog", "GTiff", "float32"),
         ("GSBG", "GSBG", "float32"),
-        ("VICAR", "VICAR", "float32"),
+        ("GSAG", "GSAG", "float32"),
     ],
 )
 def test_as_format_takes_any_case_and_a_driver_with_no_file_extension(
     name, driver, dtype
 ):
     # GDAL looks a driver up in any case; a driver with no extension of its own (Surfer
-    # grids, VICAR) is no less a raster driver, and COG opens as GTiff.
+    # grids) is no less a raster driver, and COG opens as GTiff.
     profile = dict(
         driver="GTiff",
         width=16,
@@ -193,6 +193,15 @@ def test_as_format_takes_any_case_and_a_driver_with_no_file_extension(
         out = ops_core.as_format(ds, name)
     with _serde.open_tile(out) as o:
         assert (o.driver, o.shape) == (driver, (16, 16))
+
+
+@pytest.mark.parametrize("name", ["VICAR", "ISIS3", "vrt"])
+def test_as_format_does_not_offer_a_driver_whose_bytes_a_tile_cannot_hold(name):
+    # A VRT or a label format names other files, so GeoBrix does not open it from tile bytes: the tile
+    # rst_asformat wrote would not open again. It is refused up front, not written.
+    with _serde.open_tile(make_geotiff_bytes()) as ds:
+        with pytest.raises(ValueError, match="does not open as a tile"):
+            ops_core.as_format(ds, name)
 
 
 def test_as_format_bad_driver_raises():

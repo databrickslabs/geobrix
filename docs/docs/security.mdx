@@ -253,6 +253,21 @@ applies a driver policy to each process, on both tiers, before any raster is ope
   VRT or an index names is opened through GDAL's own registry, from which the refused drivers
   are removed. Where the full defence applies (below), a named file is also identified first,
   with the allowed drivers, and opened with the driver identified.
+- **Tile bytes that hold a VRT, or another format that names other files, are refused.** A tile's
+  bytes are data, and the remote-path check below never sees what a VRT's sources name. The
+  lightweight tier names the driver from a tile's bytes first and refuses these before it opens
+  them:
+  - `VRT` and `DERIVED`, and the formats that name other datasets: `DIMAP`, `SAFE`, `PDS4`, `ECRGTOC`,
+    `RPFTOC`, `TIL`, `MEM` and `NUMPY`.
+  - Label and header formats that name their data file: `PDS`, `ISIS2`, `ISIS3`, `VICAR`, `ENVI`,
+    `EHdr`, `GenBin`, `ERS`, `PAux`, `MFF`, `MFF2`, `RST`, `ILWIS`, `SAGA`, `ISCE` and `ROI_PAC`.
+  - Product directories: `CEOS`, `SAR_CEOS`, `AirSAR`, `RS2`, `RCM`, `TSX`, `COSAR`, `SENTINEL2`,
+    `AIG`, `DOQ1`, `DOQ2`, `FAST` and `ESAT`.
+
+  The error names the format and gives a fix: store the tile as a GeoTIFF, or pass the VRT as a
+  virtual tile (a path). netCDF, HDF5, HFA, JP2 and GPKG bytes still open. On the heavyweight tier,
+  `gbx_rst_transformcrs`, `gbx_rst_slope` and `gbx_rst_mapalgebra` open a tile's non-TIFF bytes only
+  with a short list of single-file drivers, so they refuse the same formats and more.
 
 **Remote paths that come from data.** On the lightweight tier, a path that comes from data is
 opened only when it names a local or Volume path (`/Volumes/…`, `/Workspace/…`), a cloud object
@@ -279,7 +294,8 @@ functions and readers that `register()` installs, `rst_fromfile` and `vector_fil
 driver's value to them, so it works on Serverless too. After you change it, call `register()`
 again. The other Python column functions, called without the SQL functions, do not carry it: on a
 worker they refuse a remote path. The sources GDAL opens by itself are outside this check: the
-sources of a VRT that GDAL reads as a raster, and the netCDF CRS URL below.
+sources of a VRT that a virtual tile's path names, and the netCDF CRS URL below. A VRT held as tile
+bytes is refused, as listed above.
 
 **Hrefs that come from data.** `StacClient.download` and `repair`, and the Overture downloader's HTTP
 fallback, fetch hrefs that a catalog or a table names. Each href must be an `http(s)` URL whose host resolves only to

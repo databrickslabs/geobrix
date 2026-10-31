@@ -110,6 +110,7 @@ Behavior changes that alter results or signatures:
 
   GeoBrix opens every raster with the allowed drivers only. With the env wheel, it also identifies a raster before opening it.
 - **Turn it off** with `GBX_GDAL_DRIVER_POLICY=off`, or `spark.databricks.labs.gbx.gdal.driver_policy=off` in the cluster's Spark config. Set it before the first GDAL use. See [Security § 7](./security#7-raster-data-other-principals-can-write) for the install paths that get the full defence.
+- **The lightweight tier refuses tile bytes that hold a VRT or another format that names other files.** Examples are `VRT`, `DERIVED`, the label formats (`PDS`, `ISIS3`, `VICAR`, `ENVI`) and the product directories. The error gives a fix: store the tile as a GeoTIFF, or pass the VRT as a virtual tile (a path). netCDF, HDF5, HFA, JP2 and GPKG bytes still open. `rst_asformat` no longer offers these formats. See [Security § 7](./security#7-raster-data-other-principals-can-write).
 - **`spark.gdal.GDAL_SKIP` adds to the refused drivers** and can no longer re-enable one. `spark.gdal.*` cannot turn the VRT raw-band or Python settings back on.
 
 ### PROJ data, registered grids and OSTN15 (behavior change, fix) {#proj-data}
@@ -379,7 +380,7 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
   - Overviews when the tile is larger than 512 pixels.
 
   The heavyweight `rst_asformat` still writes a plain GeoTIFF for `'COG'`. A later release fixes that.
-- **The lightweight `rst_asformat` takes a driver name in any case,** and the Surfer grid formats (`GS7BG`, `GSAG`, `GSBG`) and `VICAR` are available.
+- **The lightweight `rst_asformat` takes a driver name in any case,** and the Surfer grid formats (`GS7BG`, `GSAG`, `GSBG`) are available.
 - **The tile of `rst_asformat(tile, 'COG')` records `metadata['driver'] = 'GTiff'`** (it was `'COG'`). That is the driver its bytes open as, and the one `rst_cog_convert` records. A writer passes those bytes through and keeps the layout and codec you asked for.
 - **Other fixes.**
   - `rst_cog_convert`, `rst_asformat(..., 'COG')` and the lightweight functions that rewrite a striped GeoTIFF no longer log a GDAL warning per tile. Those functions are `rst_asformat`, `rst_merge` and the STAC windowed download.

@@ -35,6 +35,12 @@
         "WEBP", "XYZ", "ZMap", "Zarr", "netCDF"
       ],
       "bytes": ["BMP", "COG", "GIF", "GTiff", "JPEG", "JPEGXL", "LIBERTIFF", "PNG", "PNM", "WEBP"],
+      "bytes_refused_light": [
+        "AIG", "AirSAR", "CEOS", "COSAR", "DERIVED", "DIMAP", "DOQ1", "DOQ2", "ECRGTOC", "EHdr", "ENVI", "ERS",
+        "ESAT", "FAST", "GenBin", "ILWIS", "ISCE", "ISIS2", "ISIS3", "MEM", "MFF", "MFF2", "NUMPY", "PAux", "PDS",
+        "PDS4", "RCM", "ROI_PAC", "RPFTOC", "RS2", "RST", "SAFE", "SAGA", "SAR_CEOS", "SENTINEL2", "TIL", "TSX",
+        "VICAR", "VRT"
+      ],
       "refused": [
         "CSW", "DAAS", "EEDA", "EEDAI", "ESRIC", "GDALG", "GTI", "HTTP", "KMLSUPEROVERLAY", "MRF", "NGW", "OGCAPI", "PLMOSAIC", "PLSCENES", "STACIT", "STACTA", "WCS", "WFS", "WMS", "WMTS"
       ]

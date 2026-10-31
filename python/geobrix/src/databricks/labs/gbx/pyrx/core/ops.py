@@ -12,7 +12,7 @@ import shapely.wkb
 from rasterio.enums import Resampling
 from rasterio.io import MemoryFile
 
-from databricks.labs.gbx._gdal_policy import open_data
+from databricks.labs.gbx._gdal_policy import bytes_refused_light_names, open_data
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core.analysis import cog_convert
@@ -53,11 +53,12 @@ def try_open(raster_bytes: bytes) -> bool:
 
 
 # Raster drivers that write a file but that rasterio's extension map does not list: COG shares
-# ``tif`` with GTiff (only GTiff survives), and the Surfer grids and VICAR have no extension of
+# ``tif`` with GTiff (only GTiff survives), and the Surfer grids have no extension of
 # their own. (The other drivers the map hides cannot be encoded to one buffer: ENVI and ISCE
 # write a header file beside the data, ROI_PAC and Leveller need a file type or a creation option
-# of their own.)
-_EXTENSIONLESS_WRITERS = ("COG", "GS7BG", "GSAG", "GSBG", "VICAR")
+# of their own.) A driver of the refused tile-bytes class (VRT, VICAR, ISIS3 ...) is no writer here: a tile's
+# bytes in that format would not open again (``_gdal_policy.open_bytes``).
+_EXTENSIONLESS_WRITERS = ("COG", "GS7BG", "GSAG", "GSBG")
 
 
 def _writable_drivers() -> set:
@@ -65,13 +66,14 @@ def _writable_drivers() -> set:
 
     ``raster_driver_extensions`` maps each file extension to ONE driver, so a driver that
     shares its extension with another, or has none, is hidden from it:
-    :data:`_EXTENSIONLESS_WRITERS` are added back from the registered-driver list.
+    :data:`_EXTENSIONLESS_WRITERS` are added back from the registered-driver list. The drivers GeoBrix
+    refuses to open from tile bytes are left out: the tile would not open again.
     """
     drivers = set(rasterio.drivers.raster_driver_extensions().values())
     with rasterio.Env() as env:
         registered = env.drivers()
         drivers.update(d for d in _EXTENSIONLESS_WRITERS if d in registered)
-    return drivers
+    return drivers - set(bytes_refused_light_names())
 
 
 def driver_name(new_format: str) -> str:
@@ -83,7 +85,8 @@ def driver_name(new_format: str) -> str:
     if name is None:
         raise ValueError(
             f"rst_asformat: driver '{new_format}' is not available in this "
-            f"GDAL build; available: {', '.join(sorted(available))}"
+            "GDAL build, or is a format whose bytes GeoBrix does not open as a tile "
+            f"(it can name other files); available: {', '.join(sorted(available))}"
         )
     return name
 

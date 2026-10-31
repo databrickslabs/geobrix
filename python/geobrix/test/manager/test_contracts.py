@@ -408,9 +408,12 @@ def test_java_udf_classes_exist_in_source(fqn):
         ("0.6.0|abc", True),
     ],
 )
-def test_jar_identity_is_judged_against_the_wheel(identity, jar_found):
+def test_jar_identity_is_judged_against_the_wheel(monkeypatch, identity, jar_found):
     """The JVM reports `<version>|<sha256>`; an unknown or development JAR is never used."""
     from types import SimpleNamespace as NS
+
+    # an env wheel's own bundled JAR would judge the sha as well; this row is about the version
+    monkeypatch.setattr(caps_mod, "_expected_sha", lambda: None)
 
     kernels = NS(
         BuildInfo=NS(identity=lambda: identity), KernelGdal=NS(probe=lambda: "ok:3")
@@ -491,6 +494,10 @@ def test_one_unavailable_function_does_not_stop_the_rest(monkeypatch, capsys):
         "find_spec",
         lambda n, *a, **k: None if n == "rasterio" else real(n, *a, **k),
     )
+    from databricks.labs.gbx.engine import run
+
+    # an activated payload's osgeo would serve transformcrs through the spec engine without rasterio
+    monkeypatch.setattr(run, "unavailable_reason", lambda: "no osgeo in this test")
     monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "client.6.0")
     stub = ConnectStub()
     out = manager.register(stub)
@@ -863,6 +870,7 @@ CONNECT_BNG = BNG.levels["L2"]["connect_class"]
 
 def _standard_stub(monkeypatch, tmp_path, jar=True):
     monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+    monkeypatch.setattr(caps_mod, "_expected_sha", lambda: None)  # not the payload's bundled JAR
     path = tmp_path / "geobrix-0.6.0-jar-with-dependencies.jar"
     path.write_bytes(b"PK")
     if jar:

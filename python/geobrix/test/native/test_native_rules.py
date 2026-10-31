@@ -490,7 +490,12 @@ def test_both_activators_apply_the_rules_only_on_cpython_312(
         (root / d).mkdir(parents=True)
     stdlib, site = "/py/lib/python3.12", "/venv/lib/python3.12/site-packages"
     monkeypatch.setattr(sys, "path", [stdlib, site])
-    monkeypatch.setattr(sys, "meta_path", list(sys.meta_path))
+    # drop the hook an already activated payload (GBX_NATIVE_ROOT in this process) installed
+    monkeypatch.setattr(
+        sys,
+        "meta_path",
+        [f for f in sys.meta_path if not getattr(f, "gbx_hdf5_hook", False)],
+    )
     for k in _ENV:
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("SSL_CERT_FILE", "/u/ssl.pem")

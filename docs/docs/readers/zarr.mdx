@@ -19,9 +19,9 @@ reader:
 | `spark.read.format("zarr_gbx")` | A plain store (a path) | A read that is a Spark source, with no call to a function. A DataSource has no session to read a manifest with, so it reads plain stores only |
 | [`gbx_zarr_sample`](../api/zarr-functions#gbx_zarr_sample) | A plain store or a table, at the points of a DataFrame | The time series at a set of points |
 
-All three run in the lightweight tier, so there is no JAR to install: install the
-env6 wheel with its `[zarr]` extra (Serverless environment 6 or Databricks Runtime 19), as
-[Zarr Stores](../formats/zarr#what-you-need) describes. To write a store back see the
+All three run in the lightweight tier, so there is no JAR to install. Install the
+env6 wheel with its `[zarr]` extra, on Serverless environment 6 or Databricks Runtime 19.
+[Zarr Stores](../formats/zarr#what-you-need) describes this. To write a store back see the
 [Zarr Writer](../writers/zarr); for every parameter, return value and error see the
 [Zarr Function Reference](../api/zarr-functions). The examples use two names that stand for
 what is yours:

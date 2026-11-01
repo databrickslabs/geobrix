@@ -118,7 +118,10 @@ def test_l2_java_shell_takes_int_arguments(jvm_spark, monkeypatch):
     fn = manifest.load().functions["gbx_bng_eastnorthasbng"]
     monkeypatch.setattr(capabilities, "is_connect", lambda spark: True)
     monkeypatch.setattr(capabilities, "attach_jar", lambda spark: "")  # in spark.jars
-    assert jvm.install_l2(jvm_spark, fn, SimpleNamespace(connect=True)) is None
+    assert (
+        jvm.install_l2(jvm_spark, fn, SimpleNamespace(connect=True, sql_functions=True))
+        is None
+    )
     try:
         for args, want in (
             ("530000, 180000, 3", "TQ3080"),
@@ -130,6 +133,7 @@ def test_l2_java_shell_takes_int_arguments(jvm_spark, monkeypatch):
             assert got == want, args
     finally:
         jvm_spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {fn.sql_name}")
+        jvm_spark.sql("DROP TEMPORARY FUNCTION IF EXISTS gbx__l2_bng_eastnorthasbng")
 
 
 def test_mvp_s_oracle_uc_handlers(tmp_path):

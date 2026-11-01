@@ -51,8 +51,13 @@ def cast_call(fn, java_name: str, types) -> str:
     A Java UDF class names concrete parameter types, and the JVM casts each value to them before ``call``
     runs. Only a session that converts the inputs first (standard access mode) hands it those types; one that
     passes each value as SQL bound it fails on an INT where the class declares STRING. The casts make every
-    session hand over the declared types.
+    session hand over the declared types. ``types`` must name every parameter: a short or long list would
+    build a wrapper that drops (or invents) an argument, so it is an error.
     """
+    if len(types) != len(fn.params):
+        raise ValueError(
+            f"{fn.sql_name}: {len(types)} arg_types for {len(fn.params)} parameters"
+        )
     params = ", ".join(f"{p.name} {t}" for p, t in zip(fn.params, types))
     args = ", ".join(f"CAST({p.name} AS {t})" for p, t in zip(fn.params, types))
     return (

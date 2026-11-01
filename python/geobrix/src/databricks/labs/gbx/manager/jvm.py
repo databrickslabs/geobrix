@@ -125,6 +125,10 @@ def install_l2(spark, fn, caps) -> Optional[str]:
             caps.connect and "connect_class" not in spec
         ):  # a forced L2 skips `levels.available`
             return levels.no_connect_handler(fn)
+        if ("bytes_param" in spec or "arg_types" in spec) and not caps.sql_functions:
+            # A forced L2 skips `levels.available`. Refuse before anything is registered: the wrapper step
+            # drops whatever holds the SQL name (an L3 registration) and would then fail its CREATE.
+            return levels.no_sql_functions(fn)
         if "bytes_param" in spec:
             k = _priv(fn, "L2")
             _register_java(spark, k, spec)

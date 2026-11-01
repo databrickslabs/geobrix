@@ -29,12 +29,13 @@ class _Udtf:
 
 class ConnectStub:
     def __init__(self):
-        self.touched, self.registered = [], []
+        self.touched, self.registered, self.sql_text = [], [], []
         self.artifacts, self.java_registered, self.sandbox_classes = [], [], set()
         self.udf = _Udf(self)
         self.udtf = _Udtf(self)
 
     def sql(self, text):
+        self.sql_text.append(text)
         # the probes the manager runs once its Java handlers are registered
         from databricks.labs.gbx import __version__
 

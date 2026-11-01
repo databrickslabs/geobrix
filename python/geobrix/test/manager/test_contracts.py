@@ -955,6 +955,86 @@ def test_standard_l2_registers_the_java_handler_on_a_session_jar(monkeypatch, tm
     assert stub.artifacts == [jar]
 
 
+def test_cast_call_wraps_the_private_java_udf_with_declared_types():
+    """The L2 SQL wrapper, as text (the JAR-gated test only sees it run): each parameter typed in order, each
+    argument cast to the same type, the session return type, and a call to the private name.
+    """
+    from databricks.labs.gbx.manager import sqlwrap
+
+    assert sqlwrap.cast_call(
+        BNG, "gbx__l2_bng_eastnorthasbng", ["DOUBLE", "DOUBLE", "STRING"]
+    ) == (
+        "CREATE OR REPLACE TEMPORARY FUNCTION gbx_bng_eastnorthasbng("
+        "easting DOUBLE, northing DOUBLE, resolution STRING) RETURNS STRING "
+        "RETURN gbx__l2_bng_eastnorthasbng(CAST(easting AS DOUBLE), "
+        "CAST(northing AS DOUBLE), CAST(resolution AS STRING))"
+    )
+
+
+@pytest.mark.parametrize("types", [["DOUBLE", "DOUBLE"], ["DOUBLE"] * 4, []])
+def test_cast_call_refuses_a_type_list_that_does_not_match_the_parameters(types):
+    from databricks.labs.gbx.manager import sqlwrap
+
+    with pytest.raises(ValueError, match="arg_types"):
+        sqlwrap.cast_call(BNG, "gbx__l2_bng_eastnorthasbng", types)
+
+
+_ARG_TYPE_NAMES = {"DOUBLE", "STRING", "INT", "BIGINT", "BOOLEAN", "BINARY", "FLOAT"}
+
+
+@pytest.mark.parametrize(
+    "fn",
+    [f for f in FNS if "arg_types" in f.levels.get("L2", {})],
+    ids=lambda f: f.sql_name,
+)
+def test_l2_arg_types_name_every_parameter_with_a_sql_type(fn):
+    types = fn.levels["L2"]["arg_types"]
+    assert len(types) == len(fn.params), (fn.sql_name, types)
+    assert set(types) <= _ARG_TYPE_NAMES, types
+    assert fn.min_args == fn.max_args, "a cast wrapper takes every parameter"
+
+
+def test_l2_with_arg_types_needs_sql_functions_and_falls_back_without_them():
+    """Both polarities of the gate: with SQL functions L2 is offered; without, it is refused with a reason
+    (the manager then falls back to the next level and says why)."""
+    on = _caps(connect=True, jar=OK_JAR, sql_functions=True)
+    off = _caps(connect=True, jar=OK_JAR, sql_functions=False)
+    assert levels.available(BNG, "L2", on) is None
+    why = levels.available(BNG, "L2", off)
+    assert why and "needs a SQL function wrapper" in why
+    assert why == levels.no_sql_functions(BNG)
+
+
+def test_forced_l2_without_sql_functions_refuses_before_touching_the_session(
+    monkeypatch, tmp_path
+):
+    """A forced L2 skips `levels.available`. It must refuse before it registers the Java UDF or runs the
+    wrapper's DROP, so the registration already under the SQL name (L3, say) stays."""
+    from databricks.labs.gbx.manager import jvm
+
+    stub, _ = _standard_stub(monkeypatch, tmp_path)
+    caps = _caps(connect=True, jar=OK_JAR, sql_functions=False)
+    why = jvm.install_l2(stub, BNG, caps)
+    assert why == levels.no_sql_functions(BNG)
+    assert stub.artifacts == [] and stub.java_registered == []
+    assert stub.sql_text == []  # no DROP, no CREATE
+
+
+def test_l2_wrapper_replaces_the_sql_name_after_the_private_udf_is_registered(
+    monkeypatch, tmp_path
+):
+    from databricks.labs.gbx.manager import jvm, sqlwrap
+
+    stub, _ = _standard_stub(monkeypatch, tmp_path)
+    assert jvm.install_l2(stub, BNG, _caps(connect=True, jar=OK_JAR)) is None
+    assert stub.sql_text == [
+        "DROP TEMPORARY FUNCTION IF EXISTS gbx_bng_eastnorthasbng",
+        sqlwrap.cast_call(
+            BNG, "gbx__l2_bng_eastnorthasbng", ["DOUBLE", "DOUBLE", "STRING"]
+        ),
+    ]
+
+
 def test_standard_l2_without_a_jar_says_where_to_get_one(monkeypatch, tmp_path):
     from databricks.labs.gbx.manager import jvm
 

@@ -133,6 +133,11 @@ def no_connect_handler(fn) -> str:
     return f"{fn.sql_name} has no Java handler for standard access mode"
 
 
+def no_sql_functions(fn) -> str:
+    """The refusal for a row whose level is a SQL wrapper on a session that cannot create SQL functions."""
+    return f"{fn.sql_name} needs a SQL function wrapper, and SQL functions are unavailable here"
+
+
 def available(fn, level: str, caps: Capabilities) -> Optional[str]:
     """None when `level` can serve `fn` with its full session signature here; else the reason."""
     spec = fn.levels.get(level)
@@ -166,8 +171,12 @@ def available(fn, level: str, caps: Capabilities) -> Optional[str]:
         wrapper = fn.accepts_virtual_tile or (
             level == "L2" and ("bytes_param" in spec or "arg_types" in spec)
         )
+        # A row with `arg_types` (or `bytes_param`) reaches its Java UDF only through a SQL wrapper that casts (or
+        # unwraps) the arguments. Where SQL functions cannot be created there is no wrapper, and the bare Java UDF
+        # fails its argument casts on some sessions: L2 is unavailable and `select` falls back to the next level,
+        # naming this reason in the manager's one-line message. `jvm.install_l2` refuses the same way for a forced L2.
         if wrapper and not caps.sql_functions:
-            return f"{fn.sql_name} needs a SQL function wrapper, and SQL functions are unavailable here"
+            return no_sql_functions(fn)
         return None
     if level == "L3":
         missing = [

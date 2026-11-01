@@ -502,3 +502,93 @@ def test_one_odd_run_in_three_neither_flags_nor_moves_the_stored_baseline(
     assert lt.main(argv + ["--baseline", base]) == 0
     out = capsys.readouterr().out
     assert "per run" in out  # the spread is shown, so a noisy machine is visible
+
+
+# --- a corpus folder read in place (the big-folder shape) ----------------------------------------
+
+
+def _tiles_folder(path, n):
+    path.mkdir(parents=True)
+    for i in range(n):
+        (path / f"r{i}.tif").write_bytes(b"x")
+    (path / "notes.json").write_text("{}")  # not a tile
+    return path
+
+
+def test_a_folder_named_rows_is_read_in_place_and_nothing_is_copied(
+    tmp_path, capsys, monkeypatch
+):
+    rows = _tiles_folder(tmp_path / "bench" / "rows", 120)
+    seen = {}
+
+    def no_copy(*a):
+        raise AssertionError("a corpus read in place is never copied")
+
+    monkeypatch.setattr(lt, "ensure_corpus", no_copy)
+    monkeypatch.setattr(
+        lt,
+        "measure_runs",
+        lambda spec, corpus, repeats: seen.update(corpus=corpus) or [_res()],
+    )
+    monkeypatch.setattr(lt, "probe_readdir", lambda r: "readdir_mode probe line")
+    assert lt.main(["--corpus-dir", str(rows)]) == 0
+    assert seen["corpus"] == str(
+        tmp_path / "bench"
+    )  # the parent: `<corpus>/rows` is the folder
+    out = capsys.readouterr().out
+    assert f"corpus {rows}: 120 tiles" in out and "in place" in out
+    assert "readdir_mode probe line" in out
+    assert sorted(os.listdir(tmp_path / "bench")) == ["rows"]
+
+
+def test_a_folder_read_in_place_with_too_few_tiles_is_a_precondition_not_a_copy(
+    tmp_path, capsys, monkeypatch
+):
+    rows = _tiles_folder(tmp_path / "rows", 10)
+    monkeypatch.setattr(
+        lt, "measure_runs", lambda *a: pytest.fail("the pass must not run")
+    )
+    assert lt.main(["--corpus-dir", str(rows)]) == 2
+    err = capsys.readouterr().err
+    assert "PRECONDITION MISSING" in err and "holds only 10 tiles" in err
+    assert len(os.listdir(rows)) == 11  # nothing written
+
+
+def test_count_tiles_counts_tifs_only(tmp_path):
+    rows = _tiles_folder(tmp_path / "rows", 5)
+    assert lt.count_tiles(str(rows)) == 5
+    assert lt.count_tiles(str(tmp_path / "absent")) == 0
+
+
+def test_the_probe_reports_the_mode_a_file_of_a_big_folder_takes(tmp_path):
+    rows = _tiles_folder(tmp_path / "rows", 1200)  # past GDAL's listing limit of 1000
+    line = lt.probe_readdir(str(rows))
+    assert "1201 files" in line or "1200 tiles" in line
+    assert "readdir_mode = EMPTY_DIR" in line, line
+
+
+def test_the_probe_reports_by_name_checks_for_a_file_with_a_sidecar(tmp_path):
+    rows = _tiles_folder(tmp_path / "rows", 3)
+    (rows / "r1.tif.ovr").write_bytes(
+        b"x"
+    )  # a sidecar: r1 (the file the probe judges) takes TRUE
+    line = lt.probe_readdir(str(rows))
+    assert "readdir_mode = TRUE" in line, line
+
+
+def test_the_spark_workers_do_not_inherit_the_value_pyrx_set_in_the_driver(monkeypatch):
+    """Importing pyrx sets GDAL_DISABLE_READDIR_ON_OPEN=TRUE in the driver; a JVM started after that hands it to the
+    Python workers, where it reads as the user's own value and turns the per-file sidecar mode off. The session is
+    launched without it (a value the user exported is kept), and the driver gets it back.
+    """
+    from databricks.labs.gbx.pyrx import _env
+
+    key = "GDAL_DISABLE_READDIR_ON_OPEN"
+    monkeypatch.setenv(key, "TRUE")
+    monkeypatch.setattr(_env, "_READDIR_SET_HERE", True)  # pyrx set it
+    with lt._launch_env_without_pyrx_readdir():
+        assert key not in os.environ
+    assert os.environ[key] == "TRUE"
+    monkeypatch.setattr(_env, "_READDIR_SET_HERE", False)  # the user's
+    with lt._launch_env_without_pyrx_readdir():
+        assert os.environ[key] == "TRUE"

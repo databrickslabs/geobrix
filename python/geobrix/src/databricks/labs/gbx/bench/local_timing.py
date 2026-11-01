@@ -23,11 +23,17 @@ error), 3 the pass itself failed.
 Only the IO set is implemented; ``SETS`` is where another set's forms and sizes go. The flagging is plain Python over a
 ``{(form, n): seconds}`` dict, so it is unit-tested without Spark (``test/bench/test_local_timing.py``). The runner
 (``main``) is what ``scripts/commands/gbx-bench-local-timing.sh`` runs in the dev container.
+
+The default pass times a 96-tile copy in `/tmp`: a folder of 96 files. The cluster reads a folder of thousands, where
+the listing a worker makes of the folder (and the sidecar look-up it chooses) decides the cost of every open. Run it
+once with ``--corpus-dir <big folder>/rows`` (the container's ``/Volumes/main/default/bench-corpus/rows``) before a
+cluster round: it reads that folder in place and prints the ``readdir_mode`` its tiles get.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import json
 import math
@@ -370,6 +376,66 @@ def ensure_corpus(src: str, dst: str, n: int) -> int:
     return n
 
 
+def count_tiles(rows: str) -> int:
+    """The `.tif` tiles `rows` holds (0 for a folder that is absent)."""
+    return (
+        sum(1 for f in os.listdir(rows) if f.endswith(".tif"))
+        if os.path.isdir(rows)
+        else 0
+    )
+
+
+_PROBE = """
+import json, os, sys, time
+from databricks.labs.gbx.pyrx import _env
+_env.configure_gdal_env()
+rows = sys.argv[1]
+tiles = sorted(f for f in os.listdir(rows) if f.endswith(".tif"))[:2]
+t0 = time.monotonic()
+modes = [_env.readdir_mode(os.path.join(rows, t)) for t in tiles]
+print(json.dumps({"files": len(os.listdir(rows)), "cap": _env.listing_cap(),
+    "bound": _env.listing_ceiling(), "tiles": tiles, "modes": modes,
+    "listings": _env._LISTINGS.listings, "seconds": time.monotonic() - t0}))
+"""
+
+
+def probe_readdir(rows: str) -> str:
+    """One line: the GDAL_DISABLE_READDIR_ON_OPEN mode the lightweight tier gives the first tiles of `rows`.
+
+    It runs in a fresh process (`GDAL_DISABLE_READDIR_ON_OPEN` unset, as on a worker), where the second distinct
+    file opened lists the folder, so the second tile's mode is the one the listing decides and the elapsed time is that
+    listing. A folder past GDAL's listing limit that still gives None is the shape the gate exists to catch.
+    """
+    env = {k: v for k, v in os.environ.items() if k != "GDAL_DISABLE_READDIR_ON_OPEN"}
+    env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
+    try:
+        out = subprocess.run(
+            [sys.executable, "-c", _PROBE, rows],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            env=env,
+        )
+        got = json.loads(out.stdout.strip().splitlines()[-1])
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError) as e:
+        return f"readdir_mode probe of {rows} failed: {type(e).__name__}: {e}"
+    mode = got["modes"][-1] if got["modes"] else None
+    past = (
+        " (past GDAL's listing limit of %s)" % got["cap"]
+        if got["cap"] and got["files"] > got["cap"]
+        else ""
+    )
+    verdict = (
+        f"readdir_mode = {mode}"
+        if mode is not None
+        else "readdir_mode = None (the open keeps the process value TRUE: every sidecar name is stat'ed)"
+    )
+    return (
+        f"folder shape: {rows} holds {got['files']} files{past}; {verdict} for {got['tiles'][-1] if got['tiles'] else '-'}"
+        f" (modes of the first two tiles {got['modes']}, {got['listings']} listing, {got['seconds']:.2f} s)"
+    )
+
+
 def _root() -> str:
     here = os.path.abspath(__file__)
     return (
@@ -397,14 +463,37 @@ def _jar(root: Optional[str] = None) -> str:
     )
 
 
+@contextlib.contextmanager
+def _launch_env_without_pyrx_readdir():
+    """Run the block without the GDAL_DISABLE_READDIR_ON_OPEN value pyrx put in this process's environment.
+
+    Importing pyrx sets it to TRUE (a worker's default). A JVM started after that hands it to the Python workers,
+    where a value present at start reads as the user's own and turns the per-file choice of sidecar mode off: the timed
+    forms would then never get what a cluster gives them. A value the user exported is kept.
+    """
+    from databricks.labs.gbx.pyrx import _env
+
+    key = "GDAL_DISABLE_READDIR_ON_OPEN"
+    held = os.environ.get(key)
+    drop = _env._READDIR_SET_HERE and held is not None
+    if drop:
+        del os.environ[key]
+    try:
+        yield
+    finally:
+        if drop:
+            os.environ[key] = held
+
+
 def _spark():
     from pyspark.sql import SparkSession
 
     os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
-    spark = (
-        SparkSession.builder.master("local[8]").appName("gbx-local-timing").config("spark.jars", _jar())
-        .config("spark.driver.memory", "6g").config("spark.ui.enabled", "false").getOrCreate()
-    )  # fmt: skip
+    with _launch_env_without_pyrx_readdir():
+        spark = (
+            SparkSession.builder.master("local[8]").appName("gbx-local-timing").config("spark.jars", _jar())
+            .config("spark.driver.memory", "6g").config("spark.ui.enabled", "false").getOrCreate()
+        )  # fmt: skip
     spark.sparkContext.setLogLevel("ERROR")
     return spark
 
@@ -479,7 +568,10 @@ def main(argv=None) -> int:
         "--corpus-src", help="where the tiles are copied from (default: the set's)"
     )
     ap.add_argument(
-        "--corpus-dir", help="the copy to time (default: the set's, under /tmp)"
+        "--corpus-dir",
+        help="the corpus to time. A folder named `rows` is read in place (nothing is copied; it must hold the "
+        "tiles): use the big corpus folder to time the shape of a cluster run. Any other path is the parent of the "
+        "96-tile copy (default: the set's, under /tmp)",
     )
     ap.add_argument(
         "--baseline",
@@ -541,14 +633,30 @@ def _run(a, spec: SetSpec) -> int:
         stored = read_baseline(
             path, spec.mvp, spec.ns
         )  # before the minutes of the pass
-    corpus = a.corpus_dir or spec.corpus_dir
-    held = ensure_corpus(
-        a.corpus_src or spec.corpus_src, os.path.join(corpus, "rows"), spec.ns[-1]
+    in_place = (
+        bool(a.corpus_dir) and os.path.basename(a.corpus_dir.rstrip("/")) == "rows"
     )
+    if in_place:
+        # a folder of tiles named `rows`: read where it is (a big folder, the shape that shows a listing cost a
+        # 96-tile copy hides); never copy into it
+        rows = a.corpus_dir.rstrip("/")
+        corpus = os.path.dirname(rows)
+        held = count_tiles(rows)
+        if held < spec.ns[-1]:
+            raise PreconditionMissing(
+                f"{rows} holds only {held} tiles, the pass needs {spec.ns[-1]}; nothing was copied into it"
+            )
+    else:
+        corpus = a.corpus_dir or spec.corpus_dir
+        rows = os.path.join(corpus, "rows")
+        held = ensure_corpus(a.corpus_src or spec.corpus_src, rows, spec.ns[-1])
     print(
-        f"[local-timing {spec.mvp}] corpus {corpus}/rows: {held} tiles; forms {', '.join(spec.forms)}; n {spec.ns}; K={a.k:g}",
+        f"[local-timing {spec.mvp}] corpus {rows}: {held} tiles{' (read in place)' if in_place else ''}; "
+        f"forms {', '.join(spec.forms)}; n {spec.ns}; K={a.k:g}",
         flush=True,
     )
+    if in_place:
+        print(f"[local-timing {spec.mvp}] {probe_readdir(rows)}", flush=True)
     runs = measure_runs(spec, corpus, a.repeats)
     res = median_res(runs)
     print(

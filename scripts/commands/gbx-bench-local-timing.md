@@ -13,11 +13,16 @@ The plain pass takes about 70 seconds on a 12-core arm64 laptop. `--baseline` an
 - `--baseline-write`: store this pass's cost per tile as the baseline (at the `--baseline` path, or the default) instead of comparing. A pass that flags a form is not stored.
 - `--baseline-k <number>`: the multiple of the baseline that flags a form. Default `1.5`.
 - `--repeats <n>`: measured runs per n. The table, the flags and the baseline use their median. Default `1` for the plain pass and `3` with `--baseline` or `--baseline-write`. `--baseline-write` refuses fewer than 3 (exit 2).
+- `--corpus-dir <path>`: the corpus to time. A folder named `rows` is read in place: nothing is copied, and the pass exits 2 if it holds fewer than 96 tiles. Any other path is the parent of the 96-tile copy. Pass `/Volumes/main/default/bench-corpus/rows` (10,000 tiles) to time the folder shape of a cluster run; the pass then also prints the `readdir_mode` the first tiles get and how long the one listing took.
 - `--log <path>`: write the output to a log file (a filename goes to `test-logs/<name>`).
 - `--no-wait`: exit 75 at once if another test run holds the container lock.
 - `--help`: print the help.
 
+**Run it once with the big folder before a cluster round.** The default pass copies 96 tiles to `/tmp`, a folder of 96 files. A worker's folder listing and the sidecar look-up it chooses cost nothing there, so a cost that only shows in a folder of thousands of files (the one the cluster reads) never appears. `--corpus-dir /Volumes/main/default/bench-corpus/rows` reads the 10,000-file folder in place, with the same forms and n. With a folder this size every form carries one fixed cost (about two minutes locally: `limit(n)` over the reader's 10,000 partitions runs a task per file), so a big-folder pass can flag forms as n-independent. Judge `readdir_mode` and the forms' ratios to each other, not those flags. A line `readdir_mode = None` in its output means the open keeps the process value `TRUE` and stats every sidecar name: a regression.
+
 **What it does:**
+- Runs with `GBX_NATIVE_PTH=0`. The image's startup `.pth` otherwise puts its own rasterio ahead of the payload's, while pyrx's per-open sidecar mode reaches the payload's libgdal. The two differ, and the mode is silently off: the timed forms never get the `EMPTY_DIR` or `TRUE` a cluster gives them.
+- Starts Spark without the `GDAL_DISABLE_READDIR_ON_OPEN=TRUE` that importing pyrx sets in the driver. A JVM started with it hands it to the Python workers, where it reads as a value you set and turns the per-file sidecar mode off. A value you export yourself is kept.
 - Checks for a built JAR and the Rust payload (`GBX_NATIVE_ROOT`, default `build/env-wheel/env6/payload`). A missing one prints `PRECONDITION MISSING` and exits 2; so does a corpus with fewer than 96 tiles, a missing baseline, or a baseline of another set.
 - Copies 96 tiles from `/Volumes/main/default/bench-corpus/rows` to `/tmp/gbx-local-timing/IO/rows` in the container, once.
 - Runs forms `b`, `c`, `udf`, `d-py`, `d-rs` and `floor` at n = 6, 24 and 96. A dropped warmup pass comes first, then `--repeats` measured runs of each n.
@@ -47,6 +52,7 @@ The plain pass takes about 70 seconds on a 12-core arm64 laptop. `--baseline` an
 - `bash scripts/commands/gbx-bench-local-timing.sh --k 4 --log local-timing.log`
 - `bash scripts/commands/gbx-bench-local-timing.sh --baseline-write`
 - `bash scripts/commands/gbx-bench-local-timing.sh --baseline`
+- `bash scripts/commands/gbx-bench-local-timing.sh --corpus-dir /Volumes/main/default/bench-corpus/rows` (the big-folder shape; once before a cluster round)
 
 **Limits:**
 - Only the `IO` set exists. Add another set to `SETS` in `python/geobrix/src/databricks/labs/gbx/bench/local_timing.py`.

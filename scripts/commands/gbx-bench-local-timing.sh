@@ -22,6 +22,9 @@ show_help() {
     echo -e "  ${GREEN}--baseline-k <number>${NC}  Multiple of the baseline that flags a form (default 1.5)"
     echo -e "  ${GREEN}--repeats <n>${NC}    Measured runs per n; the table and the baseline use their median. Default 1 for the plain"
     echo -e "                      pass, 3 with --baseline or --baseline-write (--baseline-write needs at least 3)"
+    echo -e "  ${GREEN}--corpus-dir <path>${NC}  A folder named rows is read in place (no copy; it must hold the tiles). Use the big folder"
+    echo -e "                      /Volumes/main/default/bench-corpus/rows once before a cluster round: the default pass times a"
+    echo -e "                      96-file copy in /tmp, where a worker's folder listing never shows. Prints the readdir_mode its tiles get"
     echo -e "  ${GREEN}--log <path>${NC}     Write output to log file (filename -> test-logs/<name>)"
     print_lock_help
     echo -e "  ${GREEN}--help${NC}           Show this help"
@@ -36,6 +39,7 @@ show_help() {
     echo -e "  ${YELLOW}bash scripts/commands/gbx-bench-local-timing.sh --k 4 --log local-timing.log${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-bench-local-timing.sh --baseline-write${NC}   (after a change you trust)"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-bench-local-timing.sh --baseline${NC}         (before a cluster round)"
+    echo -e "  ${YELLOW}bash scripts/commands/gbx-bench-local-timing.sh --corpus-dir /Volumes/main/default/bench-corpus/rows${NC}   (the big-folder shape, once before a cluster round)"
     echo ""
 }
 
@@ -43,6 +47,7 @@ SET="IO"
 K=""
 LOG_PATH=""
 BASELINE_ARGS=""
+CORPUS_ARGS=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -55,7 +60,7 @@ while [[ $# -gt 0 ]]; do
             fi
             ;;
         --baseline-write) BASELINE_ARGS="$BASELINE_ARGS --baseline-write"; shift ;;
-        --set|--k|--log|--baseline-k|--repeats)
+        --set|--k|--log|--baseline-k|--repeats|--corpus-dir)
             if [[ $# -lt 2 ]]; then
                 echo -e "${RED}Option $1 needs a value${NC}" >&2
                 exit 2
@@ -65,6 +70,7 @@ while [[ $# -gt 0 ]]; do
                 --k)   K="$2" ;;
                 --repeats) BASELINE_ARGS="$BASELINE_ARGS --repeats $(printf '%q' "$2")" ;;
                 --baseline-k) BASELINE_ARGS="$BASELINE_ARGS --baseline-k $(printf '%q' "$2")" ;;
+                --corpus-dir) CORPUS_ARGS=" --corpus-dir $(printf '%q' "$2")" ;;
                 --log) LOG_PATH=$(resolve_log_path "$2") ;;
             esac
             shift 2
@@ -103,10 +109,12 @@ gbx_native_env_args
 
 CMD="cd /root/geobrix && python3 -m databricks.labs.gbx.bench.local_timing --set $(printf '%q' "$SET")"
 [ -n "$K" ] && CMD="$CMD --k $(printf '%q' "$K")"
-CMD="$CMD$BASELINE_ARGS"
+CMD="$CMD$BASELINE_ARGS$CORPUS_ARGS"
 
 echo -e "${CYAN}Timing the $SET forms on local[8] in $GBX_DEV_CONTAINER (a few minutes)...${NC}"
-docker exec -e PYTHONPATH=/root/geobrix/python/geobrix/src ${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"} \
+# GBX_NATIVE_PTH=0: the image's startup .pth puts /opt/gbx-native's rasterio ahead of the payload's, while the per-open
+# sidecar mode (pyrx readdir_option) reaches the payload's libgdal: the two differ and the mode is silently off.
+docker exec -e PYTHONPATH=/root/geobrix/python/geobrix/src -e GBX_NATIVE_PTH=0 ${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"} \
     "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$CMD"
 EXIT=$?
 

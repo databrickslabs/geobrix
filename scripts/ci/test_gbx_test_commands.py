@@ -1983,6 +1983,17 @@ def test_local_timing_runs_the_module_in_the_container_with_the_payload_and_its_
     env = next(e for c, e in zip(sandbox.execs(), sandbox.exec_envs()) if "local_timing" in c[-1])
     assert env["GBX_NATIVE_ROOT"] == "/root/geobrix/build/env-wheel/env6/payload"
     assert "/root/geobrix/python/geobrix/src" in env["PYTHONPATH"]
+    # the image's startup .pth would put its own rasterio ahead of the payload's, whose libgdal the per-open sidecar
+    # mode (readdir_option) then does not reach: the timed forms would never take the modes a cluster gives them
+    assert env["GBX_NATIVE_PTH"] == "0"
+
+
+def test_local_timing_passes_the_corpus_dir_through_to_the_module(sandbox):
+    _timing_sandbox(sandbox)
+    res = sandbox.run("gbx-bench-local-timing.sh", "--corpus-dir", "/Volumes/main/default/bench-corpus/rows")
+    assert res.returncode == 0, res.output
+    (cmd,) = _timing_exec(sandbox)
+    assert cmd.endswith("--corpus-dir /Volumes/main/default/bench-corpus/rows"), cmd
 
 
 @pytest.mark.parametrize("missing", ["jar", "payload"])

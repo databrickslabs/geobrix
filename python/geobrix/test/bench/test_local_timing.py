@@ -1,7 +1,11 @@
 """``bench.local_timing``: the flags of the local timing pass (gbx:bench:local-timing) and its corpus copy."""
 
+import dataclasses
+import json
 import math
 import os
+import time
+import types
 
 import pytest
 
@@ -592,3 +596,189 @@ def test_the_spark_workers_do_not_inherit_the_value_pyrx_set_in_the_driver(monke
     monkeypatch.setattr(_env, "_READDIR_SET_HERE", False)  # the user's
     with lt._launch_env_without_pyrx_readdir():
         assert os.environ[key] == "TRUE"
+
+
+# ---- the readdir probe
+
+
+class _Done:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+def _probe_json(**changes):
+    got = {
+        "files": 1200,
+        "cap": 1000,
+        "bound": 100000,
+        "tiles": ["r0.tif", "r1.tif"],
+        "modes": [None, "EMPTY_DIR"],
+        "listings": 1,
+        "listing_seconds": 0.25,
+        "per_open": True,
+    }
+    return json.dumps({**got, **changes})
+
+
+def _fake_child(monkeypatch, **kw):
+    monkeypatch.setattr(lt.subprocess, "run", lambda *a, **k: _Done(**kw))
+
+
+def test_the_probe_times_the_one_cold_listing_and_nothing_else(tmp_path, monkeypatch):
+    """The listing cache is cleared before the timed opens, and the time reported is the scan of the listing itself:
+    no second `os.listdir` of the folder inside it (that made the figure a warm listing plus another).
+    """
+    from databricks.labs.gbx.pyrx import _env
+
+    rows = _tiles_folder(tmp_path / "rows", 5)
+    inside = {"on": False, "listdirs": 0, "cleared_before": None}
+    real_listdir, real_clear = os.listdir, _env._LISTINGS.clear
+
+    def listdir(p="."):
+        inside["listdirs"] += inside["on"]
+        return real_listdir(p)
+
+    def clear():
+        inside["cleared_before"] = not inside["on"]
+        return real_clear()
+
+    def scan(folder):
+        time.sleep(0.05)
+        return _env._IndexedNames(real_listdir(folder))
+
+    def fake_mode(path):
+        inside["on"] = True
+        _env._LISTINGS._list(os.path.dirname(path))
+        inside["on"] = False
+        return "EMPTY_DIR"
+
+    monkeypatch.setattr(os, "listdir", listdir)
+    monkeypatch.setattr(_env, "configure_gdal_env", lambda: None)
+    monkeypatch.setattr(_env._LISTINGS, "clear", clear)
+    monkeypatch.setattr(_env._LISTINGS, "_list", scan)
+    monkeypatch.setattr(_env, "readdir_mode", fake_mode)
+    got = lt.probe_folder(str(rows))
+    assert inside["cleared_before"] and inside["listdirs"] == 0
+    assert 0.05 <= got["listing_seconds"] < 0.5
+    assert got["files"] == 6 and got["tiles"] == ["r0.tif", "r1.tif"]
+
+
+def test_the_probe_says_which_of_two_reasons_left_the_mode_none(monkeypatch):
+    _fake_child(monkeypatch, stdout=_probe_json(modes=[None, None], per_open=True))
+    kept = lt.probe_readdir("/x/rows")
+    assert "readdir_mode = None" in kept and "keeps the process value TRUE" in kept
+    assert "cannot be set" not in kept
+    _fake_child(monkeypatch, stdout=_probe_json(modes=[None, None], per_open=False))
+    unreachable = lt.probe_readdir("/x/rows")
+    assert "readdir_mode = None" in unreachable
+    assert (
+        "per-open value cannot be set" in unreachable
+        and "GBX_NATIVE_PTH" in unreachable
+    )
+
+
+def test_the_probe_names_the_listing_limit_it_is_past_and_its_cold_listing(monkeypatch):
+    _fake_child(monkeypatch, stdout=_probe_json(files=999, cap=1000))
+    line = lt.probe_readdir("/x/rows")
+    assert (
+        "past GDAL's listing limit of 1000" in line
+    )  # "." and ".." count: 999 names are past it
+    assert "cold listing 0.25 s" in line
+    _fake_child(monkeypatch, stdout=_probe_json(files=998, cap=1000))
+    assert "past GDAL's" not in lt.probe_readdir("/x/rows")
+    _fake_child(
+        monkeypatch, stdout=_probe_json(files=50000, cap=None)
+    )  # GDAL_READDIR_LIMIT_ON_OPEN=0
+    assert "past GDAL's" not in lt.probe_readdir("/x/rows")
+
+
+def test_a_probe_child_that_crashes_is_a_failure_with_its_stderr(monkeypatch):
+    _fake_child(monkeypatch, returncode=-11, stdout="", stderr="Segmentation fault\n")
+    with pytest.raises(RuntimeError) as e:
+        lt.probe_readdir("/x/rows")
+    assert "-11" in str(e.value) and "Segmentation fault" in str(e.value)
+    _fake_child(monkeypatch, returncode=1, stdout="not json", stderr="ImportError: x")
+    with pytest.raises(RuntimeError, match="ImportError: x"):
+        lt.probe_readdir("/x/rows")
+    _fake_child(
+        monkeypatch, returncode=0, stdout="not json"
+    )  # exits 0 but prints no result
+    with pytest.raises(RuntimeError, match="no result"):
+        lt.probe_readdir("/x/rows")
+
+
+def test_a_probe_that_crashes_ends_the_pass_with_exit_3(tmp_path, capsys, monkeypatch):
+    rows = _tiles_folder(tmp_path / "rows", 120)
+    _fake_child(monkeypatch, returncode=1, stderr="boom in the child")
+    monkeypatch.setattr(
+        lt, "measure_runs", lambda *a: pytest.fail("the pass must not run")
+    )
+    assert lt.main(["--corpus-dir", str(rows)]) == 3
+    assert "boom in the child" in capsys.readouterr().err
+
+
+def test_the_spark_session_is_started_through_the_env_wrapper(monkeypatch):
+    """`getOrCreate` is the call that launches the JVM: it runs inside `_launch_env_without_pyrx_readdir`."""
+    import contextlib
+
+    import pyspark.sql
+
+    state = {"in": False, "created_in": None, "entered": 0}
+
+    @contextlib.contextmanager
+    def wrapper():
+        state["in"] = True
+        state["entered"] += 1
+        try:
+            yield
+        finally:
+            state["in"] = False
+
+    class _Builder:
+        def __getattr__(self, name):
+            return lambda *a, **k: self
+
+        def getOrCreate(self):
+            state["created_in"] = state["in"]
+            return types.SimpleNamespace(
+                sparkContext=types.SimpleNamespace(setLogLevel=lambda lvl: None)
+            )
+
+    monkeypatch.setattr(lt, "_launch_env_without_pyrx_readdir", wrapper)
+    monkeypatch.setattr(lt, "_jar", lambda: "x.jar")
+    monkeypatch.setattr(
+        pyspark.sql, "SparkSession", types.SimpleNamespace(builder=_Builder())
+    )
+    lt._spark()
+    assert state["entered"] == 1 and state["created_in"] is True
+
+
+# ---- an in-place corpus is never written to
+
+
+def test_the_io_set_writes_nothing_under_the_corpus_it_reads_in_place():
+    from databricks.labs.gbx.bench import levels_forms as lf
+
+    forms = [f for f in lf.FORMS["IO"] if f.variant in lt.SETS["IO"].forms]
+    assert forms and lf.forms_writing_under_corpus(forms) == []
+
+
+def test_a_set_whose_forms_write_under_the_corpus_is_refused_for_an_in_place_one(
+    tmp_path, capsys, monkeypatch
+):
+    rows = _tiles_folder(tmp_path / "bench" / "rows", 120)
+    writing = dataclasses.replace(
+        lt.SETS["IO"],
+        mvp="H",
+        forms=("h_merge_fold", "h_merge_vrt"),
+        reference="h_merge_fold",
+    )
+    monkeypatch.setitem(lt.SETS, "H", writing)
+    monkeypatch.setattr(
+        lt, "measure_runs", lambda *a: pytest.fail("the pass must not run")
+    )
+    monkeypatch.setattr(lt, "probe_readdir", lambda r: "probe")
+    assert lt.main(["--set", "H", "--corpus-dir", str(rows)]) == 2
+    err = capsys.readouterr().err
+    assert "PRECONDITION MISSING" in err and "_synth" in err and "in place" in err
+    assert sorted(os.listdir(tmp_path / "bench")) == ["rows"]  # nothing written

@@ -386,25 +386,63 @@ def count_tiles(rows: str) -> int:
 
 
 _PROBE = """
-import json, os, sys, time
-from databricks.labs.gbx.pyrx import _env
-_env.configure_gdal_env()
-rows = sys.argv[1]
-tiles = sorted(f for f in os.listdir(rows) if f.endswith(".tif"))[:2]
-t0 = time.monotonic()
-modes = [_env.readdir_mode(os.path.join(rows, t)) for t in tiles]
-print(json.dumps({"files": len(os.listdir(rows)), "cap": _env.listing_cap(),
-    "bound": _env.listing_ceiling(), "tiles": tiles, "modes": modes,
-    "listings": _env._LISTINGS.listings, "seconds": time.monotonic() - t0}))
+import json, sys
+from databricks.labs.gbx.bench import local_timing
+print(json.dumps(local_timing.probe_folder(sys.argv[1])))
 """
+
+
+def probe_folder(rows: str) -> dict:
+    """What a worker's first opens in `rows` do: run in the fresh process of `probe_readdir`.
+
+    The first two tiles are picked, then the listing cache is cleared and the two opens are made, with the listing
+    itself timed (the scan, nothing else: no further read of the folder is inside the timed region). The second
+    distinct file opened lists the folder, so the second tile's mode is the one the listing decides. The operating
+    system's own cache of the folder is not dropped (the pass cannot do that).
+    """
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    tiles = sorted(f for f in os.listdir(rows) if f.endswith(".tif"))[:2]
+    _env._LISTINGS.clear()  # a cold listing: nothing held from the pick above
+    took: List[float] = []
+    scan = _env._LISTINGS._list
+
+    def timed(folder):
+        t0 = time.monotonic()
+        try:
+            return scan(folder)
+        finally:
+            took.append(time.monotonic() - t0)
+
+    held = vars(_env._LISTINGS).get("_list")
+    _env._LISTINGS._list = timed
+    try:
+        modes = [_env.readdir_mode(os.path.join(rows, t)) for t in tiles]
+    finally:
+        if held is None:
+            del _env._LISTINGS._list  # back to the class' method
+        else:
+            _env._LISTINGS._list = held
+    return {
+        "files": len(os.listdir(rows)),
+        "cap": _env.listing_cap(),
+        "bound": _env.listing_ceiling(),
+        "tiles": tiles,
+        "modes": modes,
+        "listings": _env._LISTINGS.listings,
+        "listing_seconds": took[0] if took else None,
+        "per_open": _env._thread_config() is not None,
+    }
 
 
 def probe_readdir(rows: str) -> str:
     """One line: the GDAL_DISABLE_READDIR_ON_OPEN mode the lightweight tier gives the first tiles of `rows`.
 
-    It runs in a fresh process (`GDAL_DISABLE_READDIR_ON_OPEN` unset, as on a worker), where the second distinct
-    file opened lists the folder, so the second tile's mode is the one the listing decides and the elapsed time is that
-    listing. A folder past GDAL's listing limit that still gives None is the shape the gate exists to catch.
+    It runs `probe_folder` in a fresh process (`GDAL_DISABLE_READDIR_ON_OPEN` unset, as on a worker). A folder past
+    GDAL's listing limit that still gives None is the shape the gate exists to catch; the line says whether that None
+    is the kept process value or a per-open setter that cannot be reached here. A child that fails raises
+    `RuntimeError` with its exit code and stderr (the pass then ends with exit 3).
     """
     env = {k: v for k, v in os.environ.items() if k != "GDAL_DISABLE_READDIR_ON_OPEN"}
     env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
@@ -416,23 +454,39 @@ def probe_readdir(rows: str) -> str:
             timeout=300,
             env=env,
         )
-        got = json.loads(out.stdout.strip().splitlines()[-1])
-    except (OSError, subprocess.SubprocessError, ValueError, IndexError) as e:
-        return f"readdir_mode probe of {rows} failed: {type(e).__name__}: {e}"
+    except (OSError, subprocess.SubprocessError) as e:
+        raise RuntimeError(
+            f"readdir_mode probe of {rows} did not run: {type(e).__name__}: {e}"
+        ) from e
+    lines = (out.stdout or "").strip().splitlines()
+    try:
+        if out.returncode != 0:
+            raise ValueError(f"exit code {out.returncode}")
+        got = json.loads(lines[-1])
+    except (ValueError, IndexError) as e:
+        err = (out.stderr or "").strip()[-2000:]
+        why = f"exit code {out.returncode}" if out.returncode != 0 else "no result line"
+        raise RuntimeError(
+            f"readdir_mode probe of {rows} failed ({why}; {type(e).__name__}); stderr:\n{err or '(empty)'}"
+        ) from e
     mode = got["modes"][-1] if got["modes"] else None
-    past = (
-        " (past GDAL's listing limit of %s)" % got["cap"]
-        if got["cap"] and got["files"] > got["cap"]
-        else ""
-    )
-    verdict = (
-        f"readdir_mode = {mode}"
-        if mode is not None
-        else "readdir_mode = None (the open keeps the process value TRUE: every sidecar name is stat'ed)"
-    )
+    cap, files = got["cap"], got["files"]
+    # GDAL's listing holds "." and ".." too: it is past its limit two names early
+    past = " (past GDAL's listing limit of %s)" % cap if cap and files + 2 > cap else ""
+    if mode is not None:
+        verdict = f"readdir_mode = {mode}"
+    elif not got.get("per_open", True):
+        verdict = (
+            "readdir_mode = None (the per-open value cannot be set here: the libgdal reached through ctypes is not "
+            "rasterio's, so the open keeps the process value TRUE; start the process with GBX_NATIVE_PTH=0)"
+        )
+    else:
+        verdict = "readdir_mode = None (the open keeps the process value TRUE: every sidecar name is stat'ed)"
+    secs = got.get("listing_seconds")
+    cold = f"cold listing {secs:.2f} s" if secs is not None else "no listing"
     return (
-        f"folder shape: {rows} holds {got['files']} files{past}; {verdict} for {got['tiles'][-1] if got['tiles'] else '-'}"
-        f" (modes of the first two tiles {got['modes']}, {got['listings']} listing, {got['seconds']:.2f} s)"
+        f"folder shape: {rows} holds {files} files{past}; {verdict} for {got['tiles'][-1] if got['tiles'] else '-'}"
+        f" (modes of the first two tiles {got['modes']}, {got['listings']} listing, {cold})"
     )
 
 
@@ -645,6 +699,17 @@ def _run(a, spec: SetSpec) -> int:
         if held < spec.ns[-1]:
             raise PreconditionMissing(
                 f"{rows} holds only {held} tiles, the pass needs {spec.ns[-1]}; nothing was copied into it"
+            )
+        from databricks.labs.gbx.bench import levels_forms as lf
+
+        writing = lf.forms_writing_under_corpus(
+            [f for f in lf.FORMS[spec.mvp] if f.variant in spec.forms]
+        )
+        if writing:
+            raise PreconditionMissing(
+                f"forms {', '.join(f.variant for f in writing)} of set {spec.mvp} write files under the corpus "
+                f"({corpus}/_synth); {rows} is read in place and shared, so nothing may be written beside it. "
+                "Run this set without --corpus-dir rows (the 96-tile copy)"
             )
     else:
         corpus = a.corpus_dir or spec.corpus_dir

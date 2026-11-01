@@ -106,6 +106,32 @@ def test_detect_sees_the_jar_and_gdal(jvm_spark):
     assert caps.jar_reason == "" and caps.gdal_reason == "", caps
 
 
+@pytest.mark.integration
+def test_l2_java_shell_takes_int_arguments(jvm_spark, monkeypatch):
+    """`gbx_bng_eastnorthasbng`'s L2 on a Connect session registers the Java shell (`connect_class`). A session
+    that hands it each value as SQL bound it (here a classic one, through the same registerJavaFunction) must
+    still give the L3 answers for an INT resolution and INT or BIGINT coordinates."""
+    from types import SimpleNamespace
+
+    from databricks.labs.gbx.manager import jvm
+
+    fn = manifest.load().functions["gbx_bng_eastnorthasbng"]
+    monkeypatch.setattr(capabilities, "is_connect", lambda spark: True)
+    monkeypatch.setattr(capabilities, "attach_jar", lambda spark: "")  # in spark.jars
+    assert jvm.install_l2(jvm_spark, fn, SimpleNamespace(connect=True)) is None
+    try:
+        for args, want in (
+            ("530000, 180000, 3", "TQ3080"),
+            ("CAST(530000 AS BIGINT), 180000, -3", "TQ38SW"),
+            ("530000.7d, 180000.2d, '1km'", "TQ3080"),
+            ("530000d, 180000d, CAST(NULL AS INT)", None),
+        ):
+            got = jvm_spark.sql(f"SELECT {fn.sql_name}({args})").first()[0]
+            assert got == want, args
+    finally:
+        jvm_spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {fn.sql_name}")
+
+
 def test_mvp_s_oracle_uc_handlers(tmp_path):
     """Without Spark: the UC handlers on Python values (GEOMETRY stand-in = EWKB bytes until a UC runtime shows what a handler receives)."""
     ran = oracles.run_handlers(oracles.MVP_S, tmpdir=str(tmp_path))

@@ -44,6 +44,23 @@ def tile_dispatch(fn, jvm_call: str, l3_name: str) -> str:
     )
 
 
+def cast_call(fn, java_name: str, types) -> str:
+    """CREATE FUNCTION text that calls the Java UDF ``java_name`` with each argument cast to the type its class
+    declares (``types``, one SQL type per parameter, in order).
+
+    A Java UDF class names concrete parameter types, and the JVM casts each value to them before ``call``
+    runs. Only a session that converts the inputs first (standard access mode) hands it those types; one that
+    passes each value as SQL bound it fails on an INT where the class declares STRING. The casts make every
+    session hand over the declared types.
+    """
+    params = ", ".join(f"{p.name} {t}" for p, t in zip(fn.params, types))
+    args = ", ".join(f"CAST({p.name} AS {t})" for p, t in zip(fn.params, types))
+    return (
+        f"CREATE OR REPLACE TEMPORARY FUNCTION {fn.sql_name}({params}) "
+        f"RETURNS {sql_type(fn.returns_session)} RETURN {java_name}({args})"
+    )
+
+
 def tile_from_raster(raster_expr: str, tile: str) -> str:
     """A v2 tile around the bytes a Java UDF returned.
 

@@ -163,7 +163,9 @@ def available(fn, level: str, caps: Capabilities) -> Optional[str]:
 
             if proj_grids.get_registered_dirs():  # a Java UDF has no channel for them
                 return f"{fn.sql_name}: PROJ grids are registered and a Java UDF cannot read them"
-        wrapper = fn.accepts_virtual_tile or (level == "L2" and "bytes_param" in spec)
+        wrapper = fn.accepts_virtual_tile or (
+            level == "L2" and ("bytes_param" in spec or "arg_types" in spec)
+        )
         if wrapper and not caps.sql_functions:
             return f"{fn.sql_name} needs a SQL function wrapper, and SQL functions are unavailable here"
         return None

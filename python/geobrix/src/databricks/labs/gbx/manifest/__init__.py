@@ -27,7 +27,15 @@ SCHEMA_VERSION = 1
 LEVEL_KEYS = {
     "L1": frozenset({"companion", "needs_gdal", "session_returns", "engine"}),
     "L2": frozenset(
-        {"class", "connect_class", "returns", "bytes_param", "needs_gdal", "wrapper"}
+        {
+            "class",
+            "connect_class",
+            "returns",
+            "bytes_param",
+            "needs_gdal",
+            "wrapper",
+            "arg_types",
+        }
     ),
     "L3": frozenset(
         {
@@ -46,7 +54,9 @@ LEVEL_KEYS = {
 }
 # `connect_class` is the Java handler a standard access mode (Spark Connect) session registers instead of `class`: its
 # sandbox loads only Java classes of a JAR added to the session, with concrete parameter types. A row without one has
-# no L2 there.
+# no L2 there. `arg_types` (one SQL type per parameter) are the types the Java classes declare: the manager puts the
+# Java UDF under a private name and a SQL wrapper that casts each argument to them under the SQL name, so a session
+# that hands a Java UDF the values as SQL bound them (an INT where the class declares STRING) cannot fail its cast.
 # Keys every spec of that level must carry.
 LEVEL_REQUIRED = {
     "L2": frozenset({"class", "returns"}),

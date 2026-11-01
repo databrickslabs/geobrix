@@ -946,7 +946,10 @@ def test_standard_l2_registers_the_java_handler_on_a_session_jar(monkeypatch, tm
     stub, jar = _standard_stub(monkeypatch, tmp_path)
     assert jvm.install_l2(stub, BNG, _caps(connect=True, jar=OK_JAR)) is None
     assert stub.artifacts == [jar]  # the JAR goes to the session first
-    assert stub.java_registered == [("gbx_bng_eastnorthasbng", CONNECT_BNG, "string")]
+    # the Java UDF under its private name; the SQL name is the wrapper that casts to its declared types
+    assert stub.java_registered == [
+        ("gbx__l2_bng_eastnorthasbng", CONNECT_BNG, "string")
+    ]
     # one JAR, one attach per session, however many names register
     jvm.install_l2(stub, BNG, _caps(connect=True, jar=OK_JAR))
     assert stub.artifacts == [jar]

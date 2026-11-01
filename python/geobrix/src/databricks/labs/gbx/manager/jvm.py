@@ -135,6 +135,13 @@ def install_l2(spark, fn, caps) -> Optional[str]:
             return None
         if fn.min_args != fn.max_args:
             return f"{fn.sql_name}: optional arguments at L2 need a SQL wrapper this row does not declare"
+        if "arg_types" in spec:
+            # The Java UDF under its private name, and a SQL wrapper under the SQL name that casts each
+            # argument to the type the Java class declares (an INT resolution to STRING).
+            k = _priv(fn, "L2")
+            _register_java(spark, k, spec)
+            _create_wrapper(spark, fn, sqlwrap.cast_call(fn, k, spec["arg_types"]))
+            return None
         _register_java(spark, fn.sql_name, spec)
         return None
     except Exception as exc:  # noqa: BLE001

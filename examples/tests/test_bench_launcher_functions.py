@@ -325,3 +325,51 @@ def test_a_failed_run_keeps_its_notebook_for_a_repair_run(capsys):
     assert deleted == [] and "/nb/failed" in capsys.readouterr().out
     launcher._remove_notebook(W(), "/nb/ok")
     assert deleted == ["/nb/ok"]
+
+
+class _ExportWorkspace:
+    """A Jobs API whose export_run answers (or fails) as told, and records what it was asked."""
+
+    def __init__(self, views=None, error=None):
+        self.asked = []
+        self._views, self._error = views, error
+        self.jobs = self
+
+    def export_run(self, run_id, views_to_export=None):
+        self.asked.append((run_id, getattr(views_to_export, "value", views_to_export)))
+        if self._error:
+            raise self._error
+        return types.SimpleNamespace(views=self._views)
+
+
+def _run_with_task(task_run_id=77):
+    return types.SimpleNamespace(run_id=11, tasks=[types.SimpleNamespace(run_id=task_run_id)])
+
+
+def test_the_executed_notebook_is_saved_under_the_run_id_before_it_is_deleted(tmp_path, capsys):
+    w = _ExportWorkspace(views=[types.SimpleNamespace(content="<html>[LEVELS IO] form 1/1 DONE</html>")])
+    path = launcher._save_run_output(w, _run_with_task(77), "r-abc", tmp_path)
+    assert path == tmp_path / "test-logs" / "bench" / "r-abc" / "notebook-output.html"
+    assert "form 1/1 DONE" in path.read_text()
+    assert w.asked == [(77, "CODE")]  # the TASK run id: a job run's own id cannot be exported
+    assert str(path) in capsys.readouterr().out
+
+
+def test_a_failed_export_says_why_and_never_fails_the_run(tmp_path, capsys):
+    w = _ExportWorkspace(error=RuntimeError("Notebook has been removed"))
+    assert launcher._save_run_output(w, _run_with_task(), "r-abc", tmp_path) is None
+    assert "Notebook has been removed" in capsys.readouterr().err
+    assert not (tmp_path / "test-logs" / "bench" / "r-abc" / "notebook-output.html").exists()
+
+
+def test_a_run_with_no_exported_view_saves_nothing_and_says_so(tmp_path, capsys):
+    w = _ExportWorkspace(views=[])
+    assert launcher._save_run_output(w, _run_with_task(), "r-abc", tmp_path) is None
+    assert "no view" in capsys.readouterr().err
+
+
+def test_the_launch_exports_the_notebook_before_it_removes_it():
+    import inspect
+
+    src = inspect.getsource(launcher.main)
+    assert src.index("_save_run_output(") < src.index("_remove_notebook(")

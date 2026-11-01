@@ -206,8 +206,38 @@ def _default_run_id() -> str:
     return f"cluster-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
 
 
+def _save_run_output(w, run, bench_run_id: str, root: Path) -> Optional[Path]:
+    """Save the executed notebook (its cell output, with the progress lines) before the notebook is deleted.
+
+    ``jobs export-run`` answers only while the notebook exists, so once ``_remove_notebook`` has run the
+    progress lines are gone from the run. Written to ``test-logs/bench/<run-id>/notebook-output.html``;
+    returns the path, or None. Best effort: a failure says why on stderr and never fails the run."""
+    try:
+        try:
+            from databricks.sdk.service.jobs import ViewsToExport
+
+            code_view = ViewsToExport.CODE
+        except ImportError:  # no SDK here (a unit test with a fake Jobs API)
+            code_view = "CODE"
+        tasks = getattr(run, "tasks", None) or []
+        task_run_id = tasks[0].run_id if tasks else run.run_id  # a job run's own id cannot be exported
+        views = w.jobs.export_run(run_id=task_run_id, views_to_export=code_view).views or []
+        html = "\n".join(v.content or "" for v in views)
+        if not html.strip():
+            print(f"WARNING: no view to export for run {task_run_id}; no notebook output saved.", file=sys.stderr)
+            return None
+        out = Path(root) / "test-logs" / "bench" / bench_run_id / "notebook-output.html"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(html, encoding="utf-8")
+        print(f"Saved the run's notebook output (progress lines) to {out}")
+        return out
+    except Exception as e:  # noqa: BLE001 - best effort; the run's result stands
+        print(f"WARNING: could not export the run's notebook output ({type(e).__name__}: {e}).", file=sys.stderr)
+        return None
+
+
 def _remove_notebook(w, path: str, succeeded: bool = True) -> None:
-    """Delete the run's notebook once the run has succeeded (its output stays with the run).
+    """Delete the run's notebook once the run has succeeded (``_save_run_output`` has exported its output).
 
     A run that did not succeed keeps its notebook: a Jobs repair run re-runs it."""
     if not succeeded:
@@ -1801,7 +1831,9 @@ def main() -> int:
     run_id_remote = remote_run_id
     state = run.state
     _result = getattr(state, "result_state", None)
-    # the run has ended; its output stays with it, and a failed run keeps its notebook
+    # the run has ended; export its executed notebook first (export-run needs the notebook), then delete it;
+    # a failed run keeps its notebook
+    _save_run_output(w, run, run_id, Path(os.environ.get("GBX_SOURCE_ROOT") or TESTS_DIR.parent.parent))
     _remove_notebook(w, notebook_path, getattr(_result, "value", str(_result)) == "SUCCESS")
     if state and getattr(state, "life_cycle_state", None):
         lc = (

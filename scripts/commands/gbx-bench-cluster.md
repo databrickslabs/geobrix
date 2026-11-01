@@ -187,7 +187,8 @@ See [Hardening](#hardening) for what each stage does.
 - `--resume` needs the `--run-id` of the run it resumes.
 - `--truncate-results` needs the `--run-id` whose rows it clears. With a fresh id it has nothing to clear.
 - Each run uploads its notebook to `/Users/<you>/geobrix_bench_runner_<run-id>.ipynb`. `GBX_BENCH_RUNNER_NOTEBOOK_PATH` replaces the `/Users/<you>/geobrix_bench_runner` prefix.
-- After the run ends, a launch that waited for it deletes the notebook. The run keeps its output.
+- After the run ends, a launch that waited for it saves the executed notebook's output, then deletes the notebook (a run that did not succeed keeps its notebook). `jobs export-run` answers only while the notebook exists, so the saved copy is the way to read the run's progress lines (`[LEVELS IO] form ... RUNNING elapsed ...`) afterwards.
+- The saved output is `test-logs/bench/<run-id>/notebook-output.html` (the launch prints the path). If the export fails, the launch prints why and carries on: the run's result and exit code do not change. A `--no-wait` launch does not delete the notebook, so `jobs export-run <task run id> --views-to-export CODE` still works for it.
 - A job reads its notebook when it is submitted. Launches at the same time need their own paths. With one shared path, an earlier job ran a later launch's notebook.
 
 ## `--levels` details {#levels-details}

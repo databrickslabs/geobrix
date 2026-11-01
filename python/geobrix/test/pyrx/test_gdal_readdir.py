@@ -1068,7 +1068,30 @@ def test_a_folder_past_the_bound_is_held_as_too_large_and_keeps_the_process_valu
 
 
 def test_the_default_bound_is_far_above_gdals_limit():
-    assert _env.listing_ceiling() >= 100 * _env.listing_cap()
+    """Against GDAL's own default limit (1,000), whatever this process has set for it."""
+    assert _env._MAX_LISTED_NAMES >= 100 * 1000
+    assert _env.listing_ceiling() == _env._MAX_LISTED_NAMES
+
+
+@pytest.mark.parametrize("raw", ["0", "-1", "abc"], ids=["0", "-1", "abc"])
+def test_with_no_gdal_limit_a_big_folder_keeps_no_for_a_candidate_gdal_misses(
+    tmp_path, readdir, raw
+):
+    """GDAL_READDIR_LIMIT_ON_OPEN of 0 or less is no limit (``listing_cap`` is None): GDAL
+    never drops its listing, so the ``NO`` choice stays however many names the folder holds
+    (it is TRUE only past a limit)."""
+    from rasterio._env import del_gdal_config, set_gdal_config
+
+    a = _big_folder(tmp_path)
+    (tmp_path / "a.Tfw").write_text("x")
+    readdir(None)
+    set_gdal_config("GDAL_READDIR_LIMIT_ON_OPEN", raw)
+    try:
+        assert _env.listing_cap() is None
+        assert len(os.listdir(tmp_path)) > 1000
+        assert _env.readdir_mode(a) == "NO"
+    finally:
+        del_gdal_config("GDAL_READDIR_LIMIT_ON_OPEN")
 
 
 def test_a_reader_count_below_the_bound_does_not_stop_the_listing(
@@ -1158,3 +1181,211 @@ def test_the_indexed_listing_gives_the_mode_of_the_plain_rule(name, folder):
     """The index a listing carries answers the same candidate query as a scan of the names."""
     indexed = _env._IndexedNames(folder)
     assert _env.readdir_mode_for(name, indexed) == _env.readdir_mode_for(name, folder)
+
+
+@pytest.fixture
+def fixed_clock(monkeypatch):
+    """The listing cache's clock, held until the test moves it."""
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(_env, "_now", lambda: clock["t"])
+    return clock
+
+
+def test_an_evicted_listing_waits_out_the_relist_interval_before_it_is_listed_again(
+    tmp_path, readdir, scans, fixed_clock, monkeypatch
+):
+    """Three folders of 10 names under a budget of 25 names, opened round-robin: the budget
+    holds two listings, so each open of the evicted one used to list its folder again (15
+    listings in 5 rounds, 3 expected). The wait for a relisting outlives the names."""
+    readdir(None)
+    monkeypatch.setattr(_env._LISTINGS, "max_total_names", 25)
+    files = []
+    for i in range(3):
+        d = tmp_path / f"d{i}"
+        d.mkdir()
+        for j in range(9):
+            (d / f"f{j}.json").write_text("{}")
+        files.append(_plain_tiff(d / "a.tif"))
+    modes = []
+    for _round in range(5):
+        for p in files:
+            modes.append(_env.readdir_mode(p))
+    assert len(scans) == 3
+    # inside the window the evicted folder's open keeps the process value, as before listing
+    assert modes[3] is None and modes[-3] is None
+    fixed_clock["t"] += _env._RELIST_INTERVAL_S
+    assert _env.readdir_mode(files[0]) == "EMPTY_DIR"
+    assert len(scans) == 4
+
+
+def test_an_evicted_listing_also_waits_ten_times_what_it_took(
+    tmp_path, readdir, fixed_clock, monkeypatch
+):
+    readdir(None)
+    monkeypatch.setattr(_env._LISTINGS, "max_total_names", 25)
+    real = _env._LISTINGS._list
+    n = []
+
+    def slow(folder):
+        n.append(folder)
+        fixed_clock["t"] += 5.0  # each listing took 5 s
+        return real(folder)
+
+    monkeypatch.setattr(_env._LISTINGS, "_list", slow)
+    files = []
+    for i in range(3):
+        d = tmp_path / f"d{i}"
+        d.mkdir()
+        for j in range(9):
+            (d / f"f{j}.json").write_text("{}")
+        files.append(_plain_tiff(d / "a.tif"))
+    for p in files:
+        _env.readdir_mode(p)
+    assert len(n) == 3  # d0 is evicted now, listed 10 s ago (15 s on the clock)
+    fixed_clock[
+        "t"
+    ] += _env._RELIST_INTERVAL_S  # past the plain interval, short of 10 x 5 s
+    assert _env.readdir_mode(files[0]) is None
+    assert len(n) == 3
+    fixed_clock["t"] += 50.0
+    assert _env.readdir_mode(files[0]) == "EMPTY_DIR"
+    assert len(n) == 4
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "notes.txt",
+        "scene.hdr",
+        "scene.dim",
+        "scene.rpc",
+        "scene.pass",
+        "DIM_scene.xml",
+        "RPC_scene.xml",
+    ],
+)
+def test_a_vendor_named_file_is_not_its_own_vendor_metadata(name):
+    """The file opened is not a metadata file of the folder: a lone ``notes.txt`` is TRUE
+    (nothing to look up), as the plain scan says, and a second vendor file makes it NO.
+    """
+    alone = [name, "z.tif"]
+    assert _env.readdir_mode_for(name, _env._IndexedNames(alone)) == "TRUE"
+    assert _env.readdir_mode_for(name, alone) == "TRUE"
+    two = [name, "other.txt"]
+    assert _env.readdir_mode_for(name, _env._IndexedNames(two)) == "NO"
+    assert _env.readdir_mode_for(name, two) == "NO"
+
+
+def test_the_indexed_listing_gives_the_mode_of_the_plain_rule_on_random_folders():
+    import random
+
+    rng = random.Random(20261101)
+    stems = ["x", "X", "y", "scene", "a_b", "a", "Y2"]
+    exts = [
+        ".tif", ".TIF", ".tfw", ".Tfw", ".TFW", ".ovr", ".msk", ".aux.xml", ".xml",
+        ".txt", ".hdr", ".dim", ".rpc", ".pass", ".png", ".pgw", ".json", "", ".vrt",
+    ]  # fmt: skip
+    pre = ["", "", "", "DIM_", "RPC_", "dim_"]
+    seen_vendor_self = 0
+    for _ in range(400):
+        folder = {
+            rng.choice(pre) + rng.choice(stems) + rng.choice(["", "_c", "2", "."]) + rng.choice(exts)
+            for _ in range(rng.randint(1, 12))
+        }  # fmt: skip
+        listing = sorted(folder)
+        indexed = _env._IndexedNames(folder)
+        for name in listing:
+            seen_vendor_self += _env._vendor_metadata(name.lower())
+            assert _env.readdir_mode_for(name, indexed) == _env.readdir_mode_for(
+                name, listing
+            ), (name, listing)
+    assert seen_vendor_self > 50  # the vendor-named opened file is in the sample
+
+
+def test_concurrent_misses_on_a_folder_list_it_once(tmp_path, readdir, monkeypatch):
+    import threading
+    import time
+
+    readdir(None)
+    a = _plain_tiff(tmp_path / "a.tif")
+    calls = []
+    real = _env._LISTINGS._list
+
+    def slow(folder):
+        calls.append(folder)
+        time.sleep(0.2)
+        return real(folder)
+
+    monkeypatch.setattr(_env._LISTINGS, "_list", slow)
+    barrier = threading.Barrier(8)
+    out = []
+
+    def go():
+        barrier.wait()
+        out.append(_env._LISTINGS.names(str(tmp_path), "a.tif"))
+
+    threads = [threading.Thread(target=go) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(calls) == 1
+    assert len(out) == 8 and all("a.tif" in names for names in out)
+    assert a.exists()
+
+
+def test_concurrent_misses_on_a_file_written_later_relist_the_folder_once(
+    tmp_path, readdir, fixed_clock, monkeypatch
+):
+    import threading
+    import time
+
+    readdir(None)
+    _plain_tiff(tmp_path / "a.tif")
+    assert "a.tif" in _env._LISTINGS.names(str(tmp_path), "a.tif")
+    _plain_tiff(tmp_path / "new.tif")
+    fixed_clock["t"] += 2 * _env._RELIST_INTERVAL_S
+    calls = []
+    real = _env._LISTINGS._list
+
+    def slow(folder):
+        calls.append(folder)
+        time.sleep(0.2)
+        return real(folder)
+
+    monkeypatch.setattr(_env._LISTINGS, "_list", slow)
+    barrier = threading.Barrier(8)
+    out = []
+
+    def go():
+        barrier.wait()
+        out.append(_env._LISTINGS.names(str(tmp_path), "new.tif"))
+
+    threads = [threading.Thread(target=go) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(calls) == 1
+    assert all("new.tif" in names for names in out)
+
+
+@pytest.mark.parametrize(
+    "names, want",
+    [(998, "NO"), (999, "TRUE"), (1000, "TRUE"), (1001, "TRUE")],
+    ids=["998 names", "999", "1000", "1001"],
+)
+def test_gdal_counts_dot_and_dotdot_against_its_listing_limit(
+    tmp_path, readdir, names, want
+):
+    """GDAL's listing holds "." and ".." too and drops itself past the limit (1000): a folder
+    of 999 names is already past it (measured: a mixed-case world file is found beside 998
+    names, not beside 999), so the ``NO`` choice, GDAL's own listing, is the by-name check.
+    """
+    a = _plain_tiff(tmp_path / "a.tif")
+    (tmp_path / "a.Tfw").write_text("x")  # a sidecar GDAL finds only by its listing
+    for i in range(names - 2):
+        (tmp_path / f"f{i}.json").write_text("{}")
+    assert len(os.listdir(tmp_path)) == names
+    readdir(None)
+    assert _env.readdir_mode(a) == want

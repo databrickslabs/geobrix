@@ -450,8 +450,8 @@ def _stat_sidecars(name: str) -> frozenset:
 
 
 class _IndexedNames(frozenset):
-    """The names of one folder, indexed for ``readdir_mode_for``: whether any is a vendor
-    metadata file, and the names sorted by lower case, so the candidates of a file (the
+    """The names of one folder, indexed for ``readdir_mode_for``: how many are vendor
+    metadata files, and the names sorted by lower case, so the candidates of a file (the
     entries that start, in any case, with its stem and then ``.`` or ``_``) are two slices
     of a sorted list found by bisection, where a pass over the names costs a few
     milliseconds an open in a folder of 10,000. Built once per listing."""
@@ -459,17 +459,22 @@ class _IndexedNames(frozenset):
     def __init__(self, names=()):
         super().__init__()
         pairs = []
-        vendor = False
+        vendor = 0
         for n in self:
             low = n.lower()
             pairs.append(
                 (n if low == n else low, n)
             )  # the same string when it is lower case
-            if not vendor and _vendor_metadata(low):
-                vendor = True
+            if _vendor_metadata(low):
+                vendor += 1
         pairs.sort()
-        self.vendor = vendor
+        self._vendor = vendor
         self._pairs = pairs
+
+    def vendor_besides(self, name: str) -> bool:
+        """Whether a vendor metadata file other than *name* itself is in the folder."""
+        own = 1 if name in self and _vendor_metadata(name.lower()) else 0
+        return self._vendor > own
 
     def candidates(self, prefix: str, name: str) -> list:
         """The names other than *name* whose lower case starts with ``prefix.`` or ``prefix_``."""
@@ -500,7 +505,7 @@ def readdir_mode_for(name: str, folder_names) -> str:
     prefix = stem.lower()
     if isinstance(folder_names, _IndexedNames):
         # a listing's own index: the same rule, answered without a pass over every name
-        vendor = folder_names.vendor
+        vendor = folder_names.vendor_besides(name)
         candidates = folder_names.candidates(prefix, name)
     else:
         candidates = []
@@ -544,7 +549,12 @@ _UNLISTABLE = object()
 _UNLISTABLE_LISTING_RETRY_S = 60.0
 # The most names a folder may hold to be listed (a larger one is held as _TOO_LARGE and its
 # files keep TRUE), and the most names held across all listings (the least recently used go
-# first). About 200 bytes a name: 20 MB for a folder at the bound, 60 MB at the budget.
+# first). Measured with tracemalloc on 100,000 names held (set, sorted index and names):
+# about 110 bytes a name for the set and the index, plus the name itself (41 bytes and one
+# per character), and a mixed-case name is held a second time lower-cased. For 21-character
+# names that is 168 bytes lower-case and 230 mixed-case; for 49-character names 196 and 286.
+# So a folder at the bound holds up to 29 MB and the budget up to 86 MB, with a listing in
+# progress adding its transient list of names.
 _MAX_LISTED_NAMES = 100_000
 _MAX_TOTAL_NAMES = 300_000
 # A relisting takes at least this many times what the last listing of the folder took.
@@ -596,9 +606,20 @@ def listing_cap() -> Optional[int]:
     return cap if cap > 0 else None
 
 
+# The entries GDAL's own folder listing holds that a scandir does not: "." and "..".
+_GDAL_LISTING_DOT_ENTRIES = 2
+
 # A folder is listed once this worker has opened this many of its files: a folder it opens
 # one file of (one scene a folder) is never listed.
 _LIST_AFTER_OPENS = 2
+
+
+class _Flight:
+    """A folder listing in progress: ``done`` is set when ``result`` is there."""
+
+    def __init__(self):
+        self.done = threading.Event()
+        self.result = None
 
 
 class _FolderListings:
@@ -622,8 +643,11 @@ class _FolderListings:
     again. A folder that cannot be listed is not tried again for
     ``_UNLISTABLE_LISTING_RETRY_S``. A file missing from a held listing lists the folder
     again, at most once per ``relist_interval_s`` and no sooner than ``_RELIST_COST_FACTOR``
-    times what the last listing took; a sidecar written after the folder was listed is not
-    seen until the folder is listed again (a file missing from it, or a new worker).
+    times what the last listing took, a wait kept when a listing is dropped to stay in budget
+    (its open meanwhile keeps the process value, as before the listing existed). A folder is
+    listed by one thread at a time: the others that miss it meanwhile wait for that listing.
+    A sidecar written after the folder was listed is not seen until the folder is listed
+    again (a file missing from it, or a new worker).
     """
 
     def __init__(
@@ -648,12 +672,18 @@ class _FolderListings:
         self._too_large: "OrderedDict[str, None]" = OrderedDict()
         self._resolved: "OrderedDict[str, str]" = OrderedDict()
         self._opened: "OrderedDict[str, set]" = OrderedDict()
+        # key -> (time listed, seconds the listing took, could not be listed) of a listing
+        # dropped to stay in budget: its names go, the wait before a relisting stays
+        self._dropped: "OrderedDict[str, tuple]" = OrderedDict()
+        # key -> the listing in progress, so that a folder is listed by one thread at a time
+        self._inflight: "dict[str, _Flight]" = {}
         self._lock = threading.Lock()
         self.listings = 0
 
     def clear(self) -> None:
         with self._lock:
             self._names.clear()
+            self._dropped.clear()
             self._too_large.clear()
             self._resolved.clear()
             self._opened.clear()
@@ -693,8 +723,38 @@ class _FolderListings:
         while len(self._too_large) > self.max_too_large:
             self._too_large.popitem(last=False)
         self._names.pop(key, None)
+        self._dropped.pop(key, None)
 
-    def _store(self, key: str, folder: str):
+    def _store(self, key: str, folder: str, seen=None):
+        """List *folder* and hold the listing, once at a time per folder: a thread that finds
+        the folder being listed waits for that listing and takes its result. *seen* is the
+        entry the caller found held (None: none), so that a thread which read the entry just
+        before another stored a newer one takes the newer one rather than listing again.
+        """
+        with self._lock:
+            flight = self._inflight.get(key)
+            if flight is None:
+                held = self._names.get(key)
+                if held is not None and held is not seen:
+                    return None if held[0] is _UNLISTABLE else held[0]
+                if key in self._too_large:
+                    return _TOO_LARGE
+                flight = self._inflight[key] = _Flight()
+                leader = True
+            else:
+                leader = False
+        if not leader:
+            flight.done.wait()
+            return flight.result
+        try:
+            flight.result = self._list_and_hold(key, folder)
+            return flight.result
+        finally:
+            with self._lock:
+                self._inflight.pop(key, None)
+            flight.done.set()
+
+    def _list_and_hold(self, key: str, folder: str):
         started = _now()
         names = self._list(folder)
         listed_at = _now()
@@ -708,15 +768,19 @@ class _FolderListings:
                 listed_at - started,
             )
             self._names.move_to_end(key)
+            self._dropped.pop(key, None)
             total = sum(
                 len(v[0]) for v in self._names.values() if v[0] is not _UNLISTABLE
             )
             while len(self._names) > self.max_folders or (
                 total > self.max_total_names and len(self._names) > 1
             ):
-                _k, (dropped, _t, _d) = self._names.popitem(last=False)
+                k, (dropped, at, took) = self._names.popitem(last=False)
+                self._dropped[k] = (at, took, dropped is _UNLISTABLE)
                 if dropped is not _UNLISTABLE:
                     total -= len(dropped)
+            while len(self._dropped) > 4 * self.max_folders:
+                self._dropped.popitem(last=False)
         return names
 
     def mark_too_large(self, folder: str) -> None:
@@ -730,6 +794,12 @@ class _FolderListings:
                 return
             self._hold_too_large(key)
 
+    def _wait(self, took: float, unlistable: bool) -> float:
+        """The least time before a folder is listed again after a listing that took *took*."""
+        if unlistable:
+            return _UNLISTABLE_LISTING_RETRY_S
+        return max(self.relist_interval_s, _RELIST_COST_FACTOR * took)
+
     def names(self, folder: str, must_hold: str):
         """The names held for *folder* (a frozenset), ``_TOO_LARGE``, or None (not listed
         yet, or cannot be listed). Lists the folder at the ``list_after_opens``-th distinct
@@ -741,9 +811,11 @@ class _FolderListings:
                 self._too_large.move_to_end(key)
                 return _TOO_LARGE
             held = self._names.get(key)
+            dropped = None
             if held is not None:
                 self._names.move_to_end(key)
             else:
+                dropped = self._dropped.get(key)
                 opened = self._opened.get(key)
                 if opened is None:
                     opened = self._opened[key] = set()
@@ -756,20 +828,24 @@ class _FolderListings:
         if held is None:
             if distinct < self.list_after_opens:
                 return None
-            names = self._store(key, folder)
+            if dropped is not None:
+                # listed before and dropped to stay in budget: the wait for a relisting
+                # holds as if the names were still held, or each open would list again
+                at, took, unlistable = dropped
+                if _now() - at < self._wait(took, unlistable):
+                    return None
+            names = self._store(key, folder, seen=None)
             return names if names is _TOO_LARGE or names else None
         names, listed_at, took = held
         if names is _UNLISTABLE:
-            if _now() - listed_at < _UNLISTABLE_LISTING_RETRY_S:
+            if _now() - listed_at < self._wait(took, True):
                 return None
-            names = self._store(key, folder)
+            names = self._store(key, folder, seen=held)
             return names if names is _TOO_LARGE or names else None
         if must_hold in names:
             return names
-        if _now() - listed_at >= max(
-            self.relist_interval_s, _RELIST_COST_FACTOR * took
-        ):
-            relisted = self._store(key, folder)
+        if _now() - listed_at >= self._wait(took, False):
+            relisted = self._store(key, folder, seen=held)
             if relisted is _TOO_LARGE or relisted:
                 return relisted
         return names  # without must_hold the caller keeps TRUE for this open
@@ -840,9 +916,10 @@ def readdir_mode(path) -> Optional[str]:
     *path* (TRUE, no listing), when the thread-local setter cannot be reached, for a folder
     that cannot be listed or holds more names than the listing bound (listing_ceiling), and
     for a file missing from its folder's listing. A folder past GDAL's own listing limit
-    (listing_cap) is listed like any other, but never gives ``NO``: GDAL would list it at
-    every open and drop the listing, which is the by-name check (``TRUE``) at the cost of
-    the listing. See _READDIR_ON_OPEN and readdir_mode_for."""
+    (listing_cap; GDAL's listing counts "." and ".." too) is listed like any other, but
+    never gives ``NO``: GDAL would list it at every open and drop the listing, which is the
+    by-name check (``TRUE``) at the cost of the listing. See _READDIR_ON_OPEN and
+    readdir_mode_for."""
     if not _READDIR_SET_HERE or _user_env_sets_readdir():
         return None
     try:
@@ -867,7 +944,9 @@ def readdir_mode(path) -> Optional[str]:
     mode = readdir_mode_for(name, names)
     if mode == "NO":
         cap = listing_cap()
-        if cap is not None and len(names) > cap:
+        # GDAL's own listing holds "." and ".." too (measured: it finds a mixed-case world
+        # file beside 998 other names, not beside 999), so it drops itself two names early
+        if cap is not None and len(names) + _GDAL_LISTING_DOT_ENTRIES > cap:
             return "TRUE"
     return mode
 

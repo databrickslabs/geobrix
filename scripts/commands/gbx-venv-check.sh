@@ -44,6 +44,7 @@ while [[ $# -gt 0 ]]; do case $1 in
     --help|-h) show_help; exit 0 ;;
     *) echo "Unknown option: $1" >&2; show_help; exit 1 ;;
 esac; done
+VENV_DIR="$(abs_path "$VENV_DIR")"
 
 cd "$PROJECT_ROOT"
 show_banner "gbx:venv:check — host venv vs container"

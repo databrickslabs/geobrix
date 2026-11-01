@@ -23,7 +23,8 @@ tests (gbx:test:light / gbx:test:pyrx, zarr included). It installs what the ligh
 installs: the hash-pinned lock python/geobrix/requirements-light-env6-ci.txt, then
 python/geobrix itself (editable, --no-deps). Re-running refreshes an existing venv in place;
 --recreate builds a new venv beside the old one and swaps it in only once everything installed
-(the old venv is untouched on a failure). GBX_PYRX_VENV=<dir> or --venv <dir> moves the venv
+(and, with --match-container, only once the new venv matches the container); the old venv is
+untouched on a failure, and restored if the swap itself is interrupted. GBX_PYRX_VENV=<dir> or --venv <dir> moves the venv
 from .venv-pyrx.
 
 Usage: bash scripts/commands/gbx-venv-sync.sh [--python 3.12] [--recreate] [--connect] [--match-container] [--venv <dir>] [--log <path>]
@@ -70,6 +71,7 @@ while [[ $# -gt 0 ]]; do case $1 in
     --help|-h) show_help; exit 0 ;;
     *) echo "Unknown option: $1" >&2; show_help; exit 1 ;;
 esac; done
+VENV_DIR="$(abs_path "$VENV_DIR")"
 
 cd "$PROJECT_ROOT"
 show_banner "gbx:venv:sync — isolated pyrx venv"
@@ -79,10 +81,23 @@ setup_log_file "$LOG_PATH"
 # old venv is never deleted before its replacement is known to resolve and install.
 FINAL_VENV="$VENV_DIR"
 STAGING=""
+OLD=""        # the old venv, moved aside during the swap
+SWAPPED=0     # 1 once the staging venv is at FINAL_VENV
 WORK=""   # scratch dir of --match-container; removed explicitly (an EXIT trap would replace the log's)
 cleanup() {
     [[ -n "$STAGING" ]] && rm -rf "$STAGING"
     [[ -n "$WORK" ]] && rm -rf "$WORK"
+    return 0
+}
+# restore_old: an interrupted or failed swap puts the old venv back where it was (only when nothing is there now);
+# a swap that already moved the new venv in only has the old one left to remove.
+restore_old() {
+    [[ -n "$OLD" ]] || return 0
+    if [[ $SWAPPED -eq 1 || ( -n "$STAGING" && ! -e "$STAGING" ) ]]; then  # the new venv is at FINAL_VENV
+        rm -rf "$OLD"
+    elif [[ -d "$OLD" && ! -e "$FINAL_VENV" ]]; then
+        mv "$OLD" "$FINAL_VENV"
+    fi
     return 0
 }
 # fail <what failed> <how to fix it>: clean up, say the old venv is untouched, exit non-zero.
@@ -93,7 +108,7 @@ fail() {
     echo "Fix: $2" >&2
     exit 1
 }
-trap 'cleanup; exit 130' INT TERM
+trap 'restore_old; cleanup; exit 130' INT TERM
 INDEX_FIX="make sure the index (PIP_INDEX_URL or uv's configuration) serves every pinned version, then re-run"
 
 if [[ ! -f "$LIGHT_LOCK" ]]; then
@@ -139,8 +154,10 @@ fi
 # uv venvs are no-system-site-packages by default.
 # `uv venv` refuses an existing venv, so only create a missing one; a re-run refreshes in place.
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
-    # --relocatable: a staging venv is moved to its final path, so its scripts must not hold the old one.
-    uv venv "$VENV_DIR" --python "$PYTHON_VERSION" --relocatable \
+    # --relocatable only for a staging venv: it is moved to its final path, so its scripts must not hold the old one.
+    RELOCATABLE=()
+    [[ -n "$STAGING" ]] && RELOCATABLE=(--relocatable)
+    uv venv "$VENV_DIR" --python "$PYTHON_VERSION" ${RELOCATABLE[@]+"${RELOCATABLE[@]}"} \
         || fail "uv venv failed" "check that uv can fetch Python $PYTHON_VERSION, then re-run"
 fi
 if [[ $MATCH -eq 1 ]]; then
@@ -215,21 +232,30 @@ fi
 if [[ $EXIT_CODE -ne 0 ]]; then
     fail "venv sync failed" "read the error above; re-run once it is resolved"
 fi
+CHECKED=0
 if [[ -n "$STAGING" ]]; then
+    if [[ $MATCH -eq 1 ]]; then
+        # The drift check judges the replacement BEFORE it replaces anything: a drifting venv never displaces a good one.
+        echo ""
+        GBX_PYRX_VENV="$STAGING" bash "$SCRIPT_DIR/gbx-venv-check.sh" \
+            || fail "the new venv drifts from the container" "see the DRIFT rows above (a package the index cannot serve at the container's version, say), then re-run"
+        CHECKED=1
+    fi
     # Everything installed in the staging venv: only now does it replace the old one.
     OLD="${FINAL_VENV}.old.$$"
     mv "$FINAL_VENV" "$OLD" || fail "could not move the old venv aside" "check permissions on $(dirname "$FINAL_VENV"), then re-run"
     if ! mv "$STAGING" "$FINAL_VENV"; then
-        mv "$OLD" "$FINAL_VENV"
+        restore_old
         fail "could not move the new venv into place" "check permissions on $(dirname "$FINAL_VENV"), then re-run"
     fi
+    SWAPPED=1
     rm -rf "$OLD"
     STAGING=""
     VENV_DIR="$FINAL_VENV"
 fi
 echo "✅ venv ready at $VENV_DIR"
 cleanup
-if [[ $MATCH -eq 1 ]]; then
+if [[ $MATCH -eq 1 && $CHECKED -eq 0 ]]; then
     echo ""
     GBX_PYRX_VENV="$VENV_DIR" bash "$SCRIPT_DIR/gbx-venv-check.sh"
     EXIT_CODE=$?

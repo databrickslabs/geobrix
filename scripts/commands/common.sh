@@ -48,6 +48,15 @@ check_docker() {
     fi
 }
 
+# abs_path <path>: absolute (against the caller's cwd, before a command cd's to the repo root) and without
+# trailing slashes, so a staging or old-venv name derived from it lands beside the venv, never inside it.
+abs_path() {
+    local p="$1"
+    case "$p" in /*) ;; *) p="$PWD/$p" ;; esac
+    while [[ "$p" != "/" && "$p" == */ ]]; do p="${p%/}"; done
+    printf '%s' "$p"
+}
+
 resolve_log_path() {
     local log_arg="$1"
     

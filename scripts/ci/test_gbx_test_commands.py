@@ -1571,6 +1571,174 @@ def test_recreate_swaps_the_new_venv_in_once_the_install_succeeded(sandbox):
     assert ".venv-pyrx/bin/python" not in first_install  # built in the staging venv, not in place
 
 
+def _fake_mv(sandbox, on_staging):
+    """A `mv` that fails (`exit 1`) or interrupts the script (TERM to its parent, then a no-op move) when it is
+    asked to move a staging venv; every other move is the real one."""
+    mv = sandbox.bin / "mv"
+    mv.write_text(
+        f'#!/bin/sh\ncase "$1" in *.staging.*) {on_staging};; esac\nexec /bin/mv "$@"\n'
+    )
+    mv.chmod(0o755)
+
+
+def _no_leftovers(sandbox):
+    return [p.name for p in sandbox.root.glob(".venv-pyrx*")] == [".venv-pyrx"]
+
+
+def test_recreate_restores_the_old_venv_when_the_new_one_cannot_be_moved_in(sandbox):
+    old = _old_venv(sandbox)
+    _swap_uv(sandbox)
+    _fake_lock(sandbox)
+    _fake_mv(sandbox, "exit 1")  # the staging -> final move fails, after the old venv was moved aside
+
+    res = sandbox.run("gbx-venv-sync.sh", "--recreate")
+
+    assert res.returncode != 0, res.output
+    assert "could not move the new venv into place" in res.output and "Fix:" in res.output
+    assert (old / "old-venv").read_text() == "keep me"
+    assert not (old / "new-venv").exists()
+    assert _no_leftovers(sandbox)  # neither .old.* nor .staging.* remains
+
+
+def test_an_interrupt_during_the_swap_puts_the_old_venv_back(sandbox):
+    old = _old_venv(sandbox)
+    _swap_uv(sandbox)
+    _fake_lock(sandbox)
+    _fake_mv(sandbox, 'kill -TERM "$PPID"; exit 0')  # TERM lands between the two moves
+
+    res = sandbox.run("gbx-venv-sync.sh", "--recreate")
+
+    assert res.returncode == 130, res.output
+    assert (old / "old-venv").read_text() == "keep me" and (old / "bin" / "python").exists()
+    assert _no_leftovers(sandbox)
+
+
+def test_a_trailing_slash_on_the_venv_does_not_break_recreate(sandbox):
+    old = _old_venv(sandbox)
+    _swap_uv(sandbox)
+    _fake_lock(sandbox)
+
+    res = sandbox.run("gbx-venv-sync.sh", "--recreate", "--venv", f"{old}//")
+
+    assert res.returncode == 0, res.output
+    assert (old / "new-venv").exists() and not (old / "old-venv").exists()
+    assert _no_leftovers(sandbox)
+
+
+@pytest.mark.parametrize("command", ["gbx-venv-sync.sh", "gbx-venv-check.sh"])
+def test_a_relative_venv_resolves_against_the_callers_directory_not_the_repo(
+    sandbox, tmp_path, command
+):
+    here = tmp_path / "elsewhere"
+    here.mkdir()
+    _swap_uv(sandbox)
+    _fake_lock(sandbox)
+    if command == "gbx-venv-check.sh":
+        _curated_sandbox(sandbox, _env_json())
+        shutil.move(str(sandbox.root / ".venv-pyrx"), str(here / "rel-venv"))
+    proc = subprocess.run(
+        ["bash", str(sandbox.commands / command), "--venv", "rel-venv"],
+        cwd=here,
+        env=sandbox.env(FAKE_DOCKER_EXEC_STDOUT=_env_json()),
+        capture_output=True,
+        text=True,
+    )
+    out = proc.stdout + proc.stderr
+    if command == "gbx-venv-sync.sh":
+        assert (here / "rel-venv" / "new-venv").exists(), out
+        assert not (sandbox.root / "rel-venv").exists()
+    else:
+        assert f"host venv : {here}/rel-venv" in out, out
+
+
+def test_relocatable_is_asked_of_the_staging_venv_only(sandbox):
+    log = _swap_uv(sandbox)
+    _fake_lock(sandbox)
+    sandbox.run("gbx-venv-sync.sh")  # a first sync: the venv stays where it is built
+    fresh = [c for c in log.read_text().splitlines() if c.startswith("venv ")]
+    assert len(fresh) == 1 and "--relocatable" not in fresh[0], fresh
+
+    log.unlink()
+    sandbox.run("gbx-venv-sync.sh", "--recreate")  # staging: moved afterwards
+    staged = [c for c in log.read_text().splitlines() if c.startswith("venv ")]
+    assert len(staged) == 1 and "--relocatable" in staged[0], staged
+
+
+def _match_recreate(sandbox, *, host_numpy, container_numpy):
+    """`--match-container --recreate` over an old venv: the staging venv reports `host_numpy`, the container
+    `container_numpy`."""
+    _curated_sandbox(sandbox, _env_json(numpy="0.0.1"))  # the old venv's own report: never consulted
+    old = sandbox.root / ".venv-pyrx"
+    (old / "old-venv").write_text("keep me")
+    fake = sandbox.root / ".venv-fake-python"
+    fake.write_text(
+        '#!/bin/sh\nif [ "$1" = "-" ]; then cat > /dev/null; '
+        f"echo '{_env_json(numpy=host_numpy)}'; exit 0; fi\n"
+        f'exec "{sys.executable}" "$@"\n'
+    )
+    fake.chmod(0o755)
+    uv = sandbox.bin / "uv"
+    uv.write_text(
+        "#!/bin/sh\n"
+        f'case "$1" in venv) mkdir -p "$2/bin"; cp "{fake}" "$2/bin/python"; touch "$2/new-venv";; esac\n'
+    )
+    uv.chmod(0o755)
+    _fake_lock(sandbox)
+    res = sandbox.run(
+        "gbx-venv-sync.sh",
+        "--match-container",
+        "--recreate",
+        FAKE_DOCKER_EXEC_STDOUT=_env_json(numpy=container_numpy),
+    )
+    return res, old
+
+
+def test_recreate_match_container_keeps_the_old_venv_when_the_new_one_drifts(sandbox):
+    res, old = _match_recreate(sandbox, host_numpy="2.3.4", container_numpy="2.1.3")
+
+    assert res.returncode == 1, res.output
+    assert "the new venv drifts from the container" in res.output and "Fix:" in res.output
+    assert re.search(r"numpy\s+2\.3\.4\s+2\.1\.3\s+DRIFT", res.output)
+    assert (old / "old-venv").read_text() == "keep me" and not (old / "new-venv").exists()
+    assert _no_leftovers(sandbox)
+
+
+def test_recreate_match_container_swaps_in_a_venv_that_matches(sandbox):
+    res, old = _match_recreate(sandbox, host_numpy="2.1.3", container_numpy="2.1.3")
+
+    assert res.returncode == 0, res.output
+    assert (old / "new-venv").exists() and not (old / "old-venv").exists()
+    assert res.output.count("host venv matches the container") == 1  # checked once, before the swap
+    assert _no_leftovers(sandbox)
+
+
+def test_venv_check_names_the_venv_it_was_given_and_documents_the_option(sandbox, tmp_path):
+    venv = _curated_sandbox(sandbox, _env_json(numpy="2.1.3"))
+    other = tmp_path / "other-venv"
+    shutil.move(str(venv), str(other))
+
+    res = sandbox.run(
+        "gbx-venv-check.sh", "--venv", str(other), FAKE_DOCKER_EXEC_STDOUT=_env_json(numpy="2.1.3")
+    )
+
+    assert res.returncode == 0, res.output
+    assert f"host venv : {other}" in res.output
+    assert "--venv <dir>" in sandbox.run("gbx-venv-check.sh", "--help").output
+
+
+def test_venv_check_prints_the_fix_on_drift_and_a_plain_tick_on_a_clean_match(sandbox):
+    _curated_sandbox(sandbox, _env_json(numpy="2.3.4"))
+
+    drift = sandbox.run("gbx-venv-check.sh", FAKE_DOCKER_EXEC_STDOUT=_env_json(numpy="2.1.3"))
+    assert drift.returncode == 1, drift.output
+    assert "Fix: bash scripts/commands/gbx-venv-sync.sh --match-container --recreate" in drift.output
+
+    clean = sandbox.run("gbx-venv-check.sh", FAKE_DOCKER_EXEC_STDOUT=_env_json(numpy="2.3.4"))
+    assert clean.returncode == 0, clean.output
+    assert "✅ host venv matches the container" in clean.output
+    assert "WARN" not in clean.output and "Fix:" not in clean.output
+
+
 def test_the_venv_option_moves_the_venv_and_is_documented(sandbox, tmp_path):
     other = tmp_path / "throwaway"
     _swap_uv(sandbox)

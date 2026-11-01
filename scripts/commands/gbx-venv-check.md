@@ -16,7 +16,7 @@ A package only one side has is not drift, because it cannot be compared; the cou
 
 - The container carries the env wheel's payload stack: gdal 3.13.3, geos 3.15.0, proj 9.9.0 and rasterio `1.5.2+gbx1` (a local build).
 - The host uses PyPI wheels, and a local version is on no index, so the host cannot match it.
-- When the container's rasterio has a local version, a difference in gdal, geos, proj or rasterio is shown as `EXPECTED`, not `DRIFT`. The check passes and prints a WARN naming them.
+- When the container's rasterio has a local version, a difference in gdal, geos, proj or rasterio is shown as `EXPECTED`, not `DRIFT`, when the host has exactly the container's public version (rasterio 1.5.2 against 1.5.2+gbx1). A host at any other version (rasterio 1.5.0) is `DRIFT`. The check passes and prints a WARN naming the expected rows.
 - Any other difference is still `DRIFT` and fails the check. So is a native the host cannot reach, and a local version on any other package.
 - With no local-version rasterio in the container, a GDAL, PROJ or GEOS difference is `DRIFT`.
 - The WARN carries the rule: a host (T0) run is valid only for a test that does not depend on the stack's GDAL 3.13 or PROJ 9.9 behaviour. Run such a test in the container.

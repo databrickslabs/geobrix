@@ -75,6 +75,17 @@ def test_payload_stack_divergence_is_expected_not_drift():
         assert word in warn[0]
 
 
+def test_a_payload_package_at_another_public_version_is_drift():
+    container = _env(rasterio="1.5.2+gbx1", numpy="2.1.3", natives=PAYLOAD_NATIVES)
+    stale = _env(rasterio="1.5.0", numpy="2.1.3")  # not the container's public base: a real drift
+
+    rows, notes = report.compare(stale, container)
+
+    assert _statuses(rows)["rasterio"] == "DRIFT"
+    assert not any(n.startswith("WARN") and "rasterio" in n for n in notes)
+    assert any(r[3] == "DRIFT" for r in rows)  # the gate (exit 1) sees it
+
+
 def test_other_drift_still_fails_beside_the_expected_divergence():
     container = _env(rasterio="1.5.2+gbx1", numpy="2.1.3", natives=PAYLOAD_NATIVES)
     host = _env(rasterio="1.5.2", numpy="2.3.4")

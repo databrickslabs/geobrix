@@ -24,9 +24,27 @@ bash scripts/commands/gbx-data-stage-sample.sh --profile oauth-fe [OPTIONS]
 - `--path <rel>` — dataset directory under `geobrix-examples`, relative, no `..` (default: `global/era5-weather`)
 - `--src-root <dir>` — local `geobrix-examples` root (default: `sample-data/Volumes/main/default/test-data/geobrix-examples`)
 - `--volume-root <dir>` — Volume to stage into (default: `/Volumes/geospatial_docs/geobrix/sample-data`)
+- `--skip-existing` — upload only the files that are not on the Volume yet or have another size there, so a rerun after an interrupted upload sends only the rest
+- `--bench-corpus` — stage the benchmark IO corpus; see [The benchmark IO corpus](#the-benchmark-io-corpus)
 - `--dry-run` — list the files that would be uploaded and the stores that would be pruned; no workspace call, no auth, and it needs neither `uv` nor the SDK (it runs on plain `python3`)
 - `--log <path>` — write output to a log file
 - `--help` — show help (side-effect free)
+
+## The benchmark IO corpus
+
+`gbx:bench:gen-data` writes the corpus to `sample-data/Volumes/main/default/bench-corpus/` (`rows/` holds 10000 tiles by default, about 156 GB). `gbx:bench:cluster` reads `<corpus>/rows`, and the corpus is `/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus` unless `GBX_BENCH_CORPUS` says otherwise. `--bench-corpus` copies the one to the other:
+
+```bash
+bash scripts/commands/gbx-data-stage-sample.sh --bench-corpus --profile oauth-fe --log stage-corpus.log
+```
+
+- Source `sample-data/Volumes/main/default/bench-corpus/rows`, target `<volume-root>/bench-corpus/rows`. `--path` may name another directory, but it must be `bench-corpus` or below it. `--src-root` and `--volume-root` work as above.
+- Only the files that are missing on the Volume, or have another size there, are uploaded, so it is safe to rerun after an interruption. Each upload is checked against its local size.
+- It prints `uploaded N of M` every 250 files.
+- At the end it lists the target directory and checks that every local file is there at its size. It prints `Volume holds N files in <dir> (expected M from the local copy)` and exits 1 if any is missing.
+- It deletes nothing, not even a file in `rows/` that the local corpus lacks (it reports how many). Nothing outside the target directory is touched, including `corpus.json` and the other corpora beside `rows/`.
+- `--dry-run` prints the count and the first five names; it makes no workspace call.
+- `--profile` is required. To stage fewer tiles, generate fewer: `gbx:bench:gen-data --row-rows 1000`.
 
 ## Examples
 

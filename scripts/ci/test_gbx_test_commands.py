@@ -1581,6 +1581,19 @@ def test_stage_sample_dry_run_needs_neither_uv_nor_the_sdk_and_keeps_the_log_out
     assert (sandbox.root / "test-logs" / "l.log").exists()
 
 
+def test_stage_sample_hands_the_corpus_options_to_the_launcher_and_documents_them(sandbox):
+    env, stub_log, _uv_log = _stage_sample_sandbox(sandbox)
+
+    helped = sandbox.run("gbx-data-stage-sample.sh", "--help", **env)
+    res = sandbox.run(
+        "gbx-data-stage-sample.sh", "--bench-corpus", "--dry-run", "--skip-existing", **env
+    )
+
+    assert "--bench-corpus" in helped.output and "--skip-existing" in helped.output
+    assert res.returncode == 0, res.output
+    assert json.loads(stub_log.read_text()) == ["--bench-corpus", "--dry-run", "--skip-existing"]
+
+
 def test_the_serverless_notebook_command_hands_the_runner_its_arguments_whole(sandbox):
     """The wrapper parses only --help and --log: every other argument, valued or not, reaches the runner as given."""
     env, _stub_log, uv_log = _stage_sample_sandbox(sandbox)

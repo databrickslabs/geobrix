@@ -87,6 +87,7 @@ class FakeFiles:
                 name=name,
                 path=self.list_prefix + prefix + name,
                 is_directory=is_dir,
+                file_size=None if is_dir else len(self.files[prefix + name]),
             )
 
     def delete(self, path):
@@ -381,3 +382,140 @@ def test_a_client_error_stops_with_its_own_exit_code(
     assert run(launcher, src_root, "--profile", "p") == code
     assert sdk.files.uploaded == [] and sdk.files.deleted == []
     assert type(error).__name__ in capsys.readouterr().err
+
+
+# ------------------------------------------------ --bench-corpus: the IO corpus's own layout, only what is missing
+
+CORPUS_REL = "bench-corpus/rows"
+CORPUS = f"{VOL}/{CORPUS_REL}"
+TILES = {f"{CORPUS_REL}/r{i}.tif": f"tile-{i}".encode() * 3 for i in range(4)}
+BESIDE = {  # on the Volume next to the corpus rows: none of it is the command's to touch
+    f"{VOL}/bench-corpus/corpus.json": b"manifest",
+    f"{VOL}/bench-corpus/netcdf/a.nc": b"netcdf",
+    f"{VOL}/bench-corpus-cog-multiwindow/m.tif": b"cog",
+    f"{EXAMPLES}/nyc/x.geojson": b"x",
+    f"{VOL}/geobrix-0.6.0-py3-none-any.whl": b"wheel",
+}
+
+
+@pytest.fixture
+def corpus_root(tmp_path):
+    root = tmp_path / "main" / "default"  # the local Volumes/main/default that holds bench-corpus/
+    _write(root, TILES)
+    return root
+
+
+def stage_corpus(launcher, corpus_root, *args):
+    return launcher.main(
+        ["--bench-corpus", "--src-root", str(corpus_root), "--volume-root", VOL, *args]
+    )
+
+
+def test_the_bench_corpus_goes_to_the_corpus_dir_of_the_volume_not_under_geobrix_examples(
+    launcher, sdk, corpus_root, capsys
+):
+    sdk.files = FakeFiles(BESIDE)
+
+    assert stage_corpus(launcher, corpus_root, "--profile", "p") == 0
+
+    assert sdk.clients == ["p"]
+    assert {p for p in sdk.files.files if p.startswith(CORPUS)} == {
+        f"{VOL}/{rel}" for rel in TILES
+    }
+    assert all(sdk.files.files[path] == data for path, data in BESIDE.items())
+    assert sdk.files.deleted == []
+    assert f"Volume holds 4 files in {CORPUS} (expected 4" in capsys.readouterr().out
+
+
+def test_only_the_missing_or_wrong_size_files_are_uploaded_and_a_rerun_uploads_nothing(
+    launcher, sdk, corpus_root, capsys
+):
+    sdk.files = FakeFiles(
+        {
+            **BESIDE,
+            f"{CORPUS}/r0.tif": TILES[f"{CORPUS_REL}/r0.tif"],  # already there
+            f"{CORPUS}/r1.tif": b"cut short",  # there, but not the same file
+        }
+    )
+
+    assert stage_corpus(launcher, corpus_root, "--profile", "p") == 0
+
+    assert sorted(sdk.files.uploaded) == [
+        f"{CORPUS}/r1.tif",
+        f"{CORPUS}/r2.tif",
+        f"{CORPUS}/r3.tif",
+    ]
+    assert "2 missing, 1 of another size" in capsys.readouterr().out
+    sdk.files.uploaded.clear()
+
+    assert stage_corpus(launcher, corpus_root, "--profile", "p") == 0
+
+    assert sdk.files.uploaded == []
+    assert "already on the Volume" in capsys.readouterr().out
+
+
+def test_nothing_is_deleted_not_even_a_file_in_the_corpus_dir_the_local_copy_lacks(
+    launcher, sdk, corpus_root, capsys
+):
+    extra = {f"{CORPUS}/r99.tif": b"from an earlier, longer corpus"}
+    sdk.files = FakeFiles({**BESIDE, **extra})
+
+    assert stage_corpus(launcher, corpus_root, "--profile", "p") == 0
+
+    assert sdk.files.deleted == [] and f"{CORPUS}/r99.tif" in sdk.files.files
+    assert "1 more file(s) there that are not in the local corpus" in capsys.readouterr().out
+
+
+def test_a_file_that_does_not_land_in_full_fails_the_run_and_says_which(
+    launcher, sdk, corpus_root, capsys
+):
+    sdk.files = FakeFiles(BESIDE, truncate=True)
+
+    assert stage_corpus(launcher, corpus_root, "--profile", "p") == 1
+
+    assert sdk.files.deleted == []
+    assert "did not land" in capsys.readouterr().err
+
+
+def test_progress_is_printed_as_the_files_go_up(launcher, sdk, corpus_root, capsys, monkeypatch):
+    monkeypatch.setattr(launcher, "PROGRESS_EVERY", 2)
+    sdk.files = FakeFiles(BESIDE)
+
+    stage_corpus(launcher, corpus_root, "--profile", "p")
+
+    out = capsys.readouterr().out
+    assert "uploaded 2 of 4" in out and "uploaded 4 of 4" in out
+
+
+def test_a_dry_run_lists_a_summary_and_touches_no_workspace(launcher, sdk, corpus_root, capsys):
+    assert stage_corpus(launcher, corpus_root, "--dry-run") == 0
+
+    out = capsys.readouterr().out
+    assert sdk.clients == [] and "4 files" in out and f"to {CORPUS}" in out
+    assert "only those not already on the Volume" in out
+
+
+def test_the_bench_corpus_needs_a_profile(launcher, sdk, corpus_root, capsys):
+    assert stage_corpus(launcher, corpus_root) == 2
+    assert sdk.clients == [] and "--profile" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("path", ["geobrix-examples", "bench-corpus/../x", "nyc", "bench-corpus-cog-multiwindow"])
+def test_the_bench_corpus_path_must_stay_under_bench_corpus(launcher, sdk, corpus_root, path):
+    sdk.files = FakeFiles(BESIDE)
+
+    assert stage_corpus(launcher, corpus_root, "--profile", "p", "--path", path) == 2
+
+    assert sdk.clients == [] and sdk.files.uploaded == [] and sdk.files.deleted == []
+
+
+def test_skip_existing_alone_skips_in_the_examples_layout_and_still_prunes_only_its_stores(
+    launcher, sdk, src_root
+):
+    keep = f"{EXAMPLES}/{DATASET}/era5_like_v3.zarr/zarr.json"
+    sdk.files = FakeFiles({keep: b"{v3}"})
+
+    assert run(launcher, src_root, "--profile", "p", "--skip-existing") == 0
+
+    assert keep not in sdk.files.uploaded  # same size: not sent again
+    assert f"{EXAMPLES}/{DATASET}/era5_like_v3.zarr/t2m/c/0/0/0" in sdk.files.uploaded

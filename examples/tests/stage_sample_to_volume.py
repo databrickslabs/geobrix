@@ -23,6 +23,13 @@ Options:
                       (default: sample-data/Volumes/main/default/test-data/geobrix-examples)
   --volume-root DIR   Volume to stage into, /Volumes/<catalog>/<schema>/<volume>
                       (default: /Volumes/geospatial_docs/geobrix/sample-data)
+  --skip-existing     upload only the files that are not on the Volume yet or have another size there
+                      (a rerun after an interrupted upload sends only the rest)
+  --bench-corpus      stage the benchmark IO corpus instead: --path defaults to bench-corpus/rows (and must
+                      stay under bench-corpus), --src-root to sample-data/Volumes/main/default, and the files
+                      go to <volume-root>/bench-corpus/rows -- where gbx:bench:cluster reads {corpus}/rows.
+                      Implies --skip-existing, deletes nothing at all, prints progress and checks the Volume
+                      holds every local file at the end. Generate it with gbx:bench:gen-data.
   --dry-run           list what would be uploaded and pruned; no workspace call, no SDK needed
   --help, -h          this text
 
@@ -36,6 +43,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -47,6 +55,11 @@ DEFAULT_SRC_ROOT = (
 )
 DEFAULT_VOLUME_ROOT = "/Volumes/geospatial_docs/geobrix/sample-data"
 DEFAULT_PATH = "global/era5-weather"
+# gbx:bench:gen-data writes <this>/bench-corpus/rows; the cluster runner reads <volume-root>/bench-corpus/rows.
+DEFAULT_CORPUS_SRC_ROOT = PROJECT_ROOT / "sample-data/Volumes/main/default"
+CORPUS_DIR = "bench-corpus"
+DEFAULT_CORPUS_PATH = f"{CORPUS_DIR}/rows"
+PROGRESS_EVERY = 250  # a line per this many files uploaded
 WORKERS = 8
 AUTH_ERRORS = (
     "Unauthenticated",
@@ -157,6 +170,29 @@ def remote_files(w, root: str) -> list[str]:
     return sorted(out)
 
 
+def remote_sizes(w, root: str) -> dict[str, int]:
+    """Size in bytes of every file under the Volume directory ``root`` ({} when it does not exist yet)."""
+    from databricks.sdk.errors import NotFound
+
+    out: dict[str, int] = {}
+    todo = [root]
+    while todo:
+        directory = todo.pop()
+        try:
+            entries = list(w.files.list_directory_contents(directory))
+        except NotFound:
+            continue
+        for entry in entries:
+            if entry.is_directory:
+                todo.append(entry.path)
+            else:
+                size = getattr(entry, "file_size", None)
+                if size is None:
+                    size = w.files.get_metadata(entry.path).content_length
+                out[entry.path] = size
+    return out
+
+
 def _upload(w, local: Path, remote: str) -> str | None:
     """Upload one file and check its size; returns an error text, or None."""
     try:
@@ -183,11 +219,19 @@ def main(argv=None) -> int:
     exit_if_help(__doc__, argv)
     ap = argparse.ArgumentParser(description="Stage a sample-data dataset to a Volume")
     ap.add_argument("--profile")
-    ap.add_argument("--path", default=DEFAULT_PATH)
-    ap.add_argument("--src-root", type=Path, default=DEFAULT_SRC_ROOT)
+    ap.add_argument("--path", default=None)
+    ap.add_argument("--src-root", type=Path, default=None)
     ap.add_argument("--volume-root", default=DEFAULT_VOLUME_ROOT)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--skip-existing", action="store_true")
+    ap.add_argument("--bench-corpus", action="store_true")
     args = ap.parse_args(argv)
+    corpus = args.bench_corpus
+    skip_existing = args.skip_existing or corpus
+    if args.path is None:
+        args.path = DEFAULT_CORPUS_PATH if corpus else DEFAULT_PATH
+    if args.src_root is None:
+        args.src_root = DEFAULT_CORPUS_SRC_ROOT if corpus else DEFAULT_SRC_ROOT
 
     # Everything that decides where files go is checked before any file or workspace is touched.
     try:
@@ -196,6 +240,9 @@ def main(argv=None) -> int:
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 2
+    if corpus and rel != CORPUS_DIR and not rel.startswith(f"{CORPUS_DIR}/"):
+        print(f"Error: --bench-corpus stages under {CORPUS_DIR}/, not --path {rel!r}.", file=sys.stderr)
+        return 2
     src_root = args.src_root.resolve()
     src = (src_root / rel).resolve()
     try:
@@ -203,7 +250,7 @@ def main(argv=None) -> int:
     except ValueError:
         print(f"Error: --path {rel!r} leaves --src-root {src_root}.", file=sys.stderr)
         return 2
-    base = f"{volume_root}/geobrix-examples"
+    base = volume_root if corpus else f"{volume_root}/geobrix-examples"
     dest = f"{base}/{rel}"
     try:
         files = local_files(src, src_root) if src.is_dir() else []
@@ -213,7 +260,7 @@ def main(argv=None) -> int:
     if not files:
         print(
             f"Nothing to stage: no files under {src}. Generate it first "
-            "(gbx:data:generate-minimal-bundle --zarr-only).",
+            f"({'gbx:bench:gen-data' if corpus else 'gbx:data:generate-minimal-bundle --zarr-only'}).",
             file=sys.stderr,
         )
         return 2
@@ -221,15 +268,21 @@ def main(argv=None) -> int:
     total = sum(f.stat().st_size for f in files)
     print(f"Staging {len(files)} files ({total / 1e6:.2f} MB) from {src}")
     print(f"  to {dest}")
-    if scopes:
+    if corpus:
+        print("  nothing is deleted on the Volume")
+    elif scopes:
         print("  stale files are removed only inside: " + ", ".join(scopes))
     else:
         print(
             "  no *.zarr store here: files are uploaded over what is there, nothing is deleted"
         )
+    if skip_existing:
+        print("  only those not already on the Volume (or of another size there) are uploaded")
     if args.dry_run:
-        for f in files:
+        for f in files[:5] if corpus else files:
             print(f"  would upload {f.relative_to(src).as_posix()}")
+        if corpus and len(files) > 5:
+            print(f"  ... and {len(files) - 5} more")
         return 0
     if not args.profile:
         print(
@@ -275,18 +328,51 @@ def main(argv=None) -> int:
         return 4
 
     remote = {f: f"{dest}/{f.relative_to(src).as_posix()}" for f in files}
-    for directory in sorted({str(Path(p).parent) for p in remote.values()}):
+    todo = files
+    if skip_existing:
+        have = remote_sizes(w, dest)
+        todo = [f for f in files if have.get(remote[f]) != f.stat().st_size]
+        wrong = sum(1 for f in todo if remote[f] in have)
+        print(
+            f"{len(files) - len(todo)} of {len(files)} files already on the Volume; "
+            f"{len(todo)} to upload ({len(todo) - wrong} missing, {wrong} of another size)"
+        )
+    for directory in sorted({str(Path(remote[f]).parent) for f in todo}):
         try:
             w.files.create_directory(directory)
         except Exception:  # noqa: BLE001 - already there, or the upload creates it
             pass
+    done = [0]
+    lock = threading.Lock()
+
+    def send(f: Path):
+        error = _upload(w, f, remote[f])
+        with lock:
+            done[0] += 1
+            if done[0] % PROGRESS_EVERY == 0 or done[0] == len(todo):
+                print(f"  uploaded {done[0]} of {len(todo)}", flush=True)
+        return error
+
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        errors = [e for e in pool.map(lambda f: _upload(w, f, remote[f]), files) if e]
+        errors = [e for e in pool.map(send, todo) if e]
     if errors:
         print("Upload failed or did not land (nothing was deleted):", file=sys.stderr)
         for e in errors:
             print(f"  {e}", file=sys.stderr)
         return 1
+    if corpus:
+        # The Volume must now hold every local file at its size; anything else there is left alone.
+        after = remote_sizes(w, dest)
+        bad = [remote[f] for f in files if after.get(remote[f]) != f.stat().st_size]
+        extra = len(set(after) - set(remote.values()))
+        print(f"Volume holds {len(after)} files in {dest} (expected {len(files)} from the local copy)")
+        if extra:
+            print(f"  {extra} more file(s) there that are not in the local corpus (left in place)")
+        if bad:
+            print(f"Verification failed: {len(bad)} file(s) missing or of another size, first {bad[0]}", file=sys.stderr)
+            return 1
+        print(f"Done: {len(files)} files in {dest}")
+        return 0
 
     # Plan every prune first: a scope whose listing does not contain what was just uploaded is
     # listed in a form we did not build, and then nothing may be deleted anywhere.

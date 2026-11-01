@@ -26,6 +26,10 @@ show_help() {
     echo -e "  ${GREEN}--src-root DIR${NC}      Local geobrix-examples root"
     echo -e "                        (default: sample-data/Volumes/main/default/test-data/geobrix-examples)"
     echo -e "  ${GREEN}--volume-root DIR${NC}   Volume to stage into (default: /Volumes/geospatial_docs/geobrix/sample-data)"
+    echo -e "  ${GREEN}--skip-existing${NC}     Upload only the files not on the Volume yet or of another size there"
+    echo -e "  ${GREEN}--bench-corpus${NC}      Stage the benchmark IO corpus (from gbx:bench:gen-data) to <volume-root>/bench-corpus/rows,"
+    echo -e "                        where gbx:bench:cluster reads it: only the missing files, no deletes, progress,"
+    echo -e "                        and a check that the Volume holds every local file (--path/--src-root default to it)"
     echo -e "  ${GREEN}--dry-run${NC}           List what would be uploaded and pruned; no workspace call, no auth,"
     echo -e "                        no uv or SDK needed"
     echo -e "  ${GREEN}--log <path>${NC}        Write output to log (filename -> test-logs/<name>)"
@@ -42,6 +46,7 @@ show_help() {
     echo -e "${CYAN}Examples:${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-data-stage-sample.sh --profile oauth-fe${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-data-stage-sample.sh --dry-run${NC}"
+    echo -e "  ${YELLOW}bash scripts/commands/gbx-data-stage-sample.sh --bench-corpus --profile oauth-fe${NC}"
     echo ""
 }
 

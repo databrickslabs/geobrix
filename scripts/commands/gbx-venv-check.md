@@ -1,6 +1,6 @@
 # gbx:venv:check
 
-Compare the host venv (`.venv-pyrx`, or `GBX_PYRX_VENV`) with the running `geobrix-dev` container and print what differs. Exits 1 on any drift, and 0 with a WARN when only the expected payload-stack divergence remains.
+Compare the host venv (`.venv-pyrx`, or `GBX_PYRX_VENV`) with the running `geobrix-dev` container and print what differs. Exits 3 on any drift (1 when the venv or the container cannot be read), and 0 with a WARN when only the expected payload-stack divergence remains.
 
 A host that drifts from the container proves nothing about it: a test that passes on the host may fail there. Run this at the start of a host (no-Docker) task. On a drift, fix the venv (`gbx:venv:sync --match-container --recreate`), not the test. The failure prints that command on a `Fix:` line.
 
@@ -22,6 +22,8 @@ A package only one side has is not drift, because it cannot be compared; the cou
 - The WARN carries the rule: a host (T0) run is valid only for a test that does not depend on the stack's GDAL 3.13 or PROJ 9.9 behaviour. Run such a test in the container.
 
 The container side is read with `docker exec` running a stdlib-only script (`scripts/ci/venv_env_report.py`) that the host interpreter also runs, so both sides report the same way. Nothing here runs Maven or a test JVM, so it takes no container lock.
+
+**Exit codes:** `0` match (with a WARN when only the expected payload-stack divergence remains), `1` the venv or the container could not be read, `3` drift.
 
 **Usage:** `bash scripts/commands/gbx-venv-check.sh [--venv <dir>] [--log <path>]`
 

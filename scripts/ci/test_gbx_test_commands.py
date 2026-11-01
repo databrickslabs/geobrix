@@ -1421,7 +1421,7 @@ def test_venv_check_fails_on_drift_and_passes_on_a_match(sandbox):
         natives={"gdal": "3.11.0", "proj": "9.5.1", "geos": "3.13.1"},
     )
     res = sandbox.run("gbx-venv-check.sh", FAKE_DOCKER_EXEC_STDOUT=drifted)
-    assert res.returncode == 1, res.output
+    assert res.returncode == 3, res.output  # drift has its own exit code
     assert re.search(r"python\s+3\.12\.11\s+3\.12\.3\s+DRIFT", res.output)
     assert re.search(r"numpy\s+2\.3\.4\s+2\.1\.3\s+DRIFT", res.output)
     assert re.search(r"gdal\s+3\.12\.1\s+3\.11\.0\s+DRIFT", res.output)
@@ -1613,6 +1613,113 @@ def test_an_interrupt_during_the_swap_puts_the_old_venv_back(sandbox):
     assert _no_leftovers(sandbox)
 
 
+def test_an_interrupt_after_the_new_venv_is_in_place_keeps_it_and_drops_the_old(sandbox):
+    old = _old_venv(sandbox)
+    _swap_uv(sandbox)
+    _fake_lock(sandbox)
+    _fake_mv(sandbox, '/bin/mv "$@"; kill -TERM "$PPID"; exit 0')  # the move lands, then TERM
+
+    res = sandbox.run("gbx-venv-sync.sh", "--recreate")
+
+    assert res.returncode == 130, res.output
+    assert (old / "new-venv").exists() and not (old / "old-venv").exists()
+    assert _no_leftovers(sandbox)
+
+
+@pytest.mark.parametrize("suffix", ["/.", "/./", "/"])
+def test_a_dot_segment_on_the_venv_does_not_put_the_staging_dir_inside_it(sandbox, suffix):
+    old = _old_venv(sandbox)
+    _swap_uv(sandbox)
+    _fake_lock(sandbox)
+
+    res = sandbox.run("gbx-venv-sync.sh", "--recreate", "--venv", f"{old}{suffix}")
+
+    assert res.returncode == 0, res.output
+    assert (old / "new-venv").exists() and not (old / "old-venv").exists()
+    assert _no_leftovers(sandbox)
+
+
+def test_venv_dot_means_the_callers_directory(sandbox):
+    old = _old_venv(sandbox)
+    _swap_uv(sandbox)
+    _fake_lock(sandbox)
+    proc = subprocess.run(
+        ["bash", str(sandbox.commands / "gbx-venv-sync.sh"), "--recreate", "--venv", "."],
+        cwd=old,
+        env=sandbox.env(),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (old / "new-venv").exists() and not (old / "old-venv").exists()
+    assert _no_leftovers(sandbox)
+
+
+def test_a_relative_gbx_pyrx_venv_means_the_same_to_every_command(sandbox, tmp_path):
+    """From a subdirectory, GBX_PYRX_VENV=rel-venv names <subdir>/rel-venv for the test commands too, not
+    <repo>/rel-venv (they cd to the repo root before they read it)."""
+    here = tmp_path / "elsewhere"
+    here.mkdir()
+    python, log = _fake_venv(sandbox, here / "rel-venv")
+    proc = subprocess.run(
+        ["bash", str(sandbox.commands / "gbx-test-pyrx.sh"), "--path", "python/geobrix/test/zarr/test_keys.py"],
+        cwd=here,
+        env=sandbox.env(GBX_PYRX_VENV="rel-venv"),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    workers, _, _ = _last_python_call(log)
+    assert Path(workers).resolve() == python.resolve()
+
+
+def test_an_unreadable_container_is_not_reported_as_drift(sandbox):
+    _curated_sandbox(sandbox, _env_json(numpy="2.1.3"))
+
+    res = sandbox.run("gbx-venv-check.sh", FAKE_DOCKER_EXEC_RC="1")
+
+    assert res.returncode == 1, res.output  # drift is 3
+    assert "could not read the container" in res.output and "drifts" not in res.output
+
+
+def test_recreate_match_container_says_when_it_could_not_check(sandbox):
+    old = _old_venv(sandbox)
+    _curated_sandbox_files = sandbox.root / "scripts" / "ci"
+    _curated_sandbox_files.mkdir(parents=True)
+    shutil.copy(REPO_ROOT / "scripts" / "ci" / "venv_env_report.py", _curated_sandbox_files)
+    fake = sandbox.root / ".venv-fake-python"
+    fake.write_text(
+        '#!/bin/sh\nif [ "$1" = "-" ]; then cat > /dev/null; '
+        f"echo '{_env_json()}'; exit 0; fi\n"
+        f'exec "{sys.executable}" "$@"\n'
+    )
+    fake.chmod(0o755)
+    uv = sandbox.bin / "uv"
+    uv.write_text(
+        "#!/bin/sh\n"
+        f'case "$1" in venv) mkdir -p "$2/bin"; cp "{fake}" "$2/bin/python"; touch "$2/new-venv";; esac\n'
+    )
+    uv.chmod(0o755)
+    _fake_lock(sandbox)
+    # the container is read once for the Python version (ok), then not at all for the check
+    flaky = sandbox.bin / "docker"
+    real = flaky.read_text()
+    counter = sandbox.root / "docker.calls"
+    flaky.write_text(
+        f'#!/bin/sh\nif [ "$1" = "exec" ]; then n=$(cat "{counter}" 2>/dev/null || echo 0); n=$((n+1)); '
+        f'echo $n > "{counter}"; [ $n -ge 2 ] && exit 1; fi\n' + real.split("\n", 1)[1]
+    )
+
+    res = sandbox.run(
+        "gbx-venv-sync.sh", "--match-container", "--recreate", FAKE_DOCKER_EXEC_STDOUT=_env_json()
+    )
+
+    assert res.returncode == 1, res.output
+    assert "could not be checked against the container" in res.output
+    assert "drifts from the container" not in res.output
+    assert (old / "old-venv").read_text() == "keep me" and _no_leftovers(sandbox)
+
+
 def test_a_trailing_slash_on_the_venv_does_not_break_recreate(sandbox):
     old = _old_venv(sandbox)
     _swap_uv(sandbox)
@@ -1730,7 +1837,7 @@ def test_venv_check_prints_the_fix_on_drift_and_a_plain_tick_on_a_clean_match(sa
     _curated_sandbox(sandbox, _env_json(numpy="2.3.4"))
 
     drift = sandbox.run("gbx-venv-check.sh", FAKE_DOCKER_EXEC_STDOUT=_env_json(numpy="2.1.3"))
-    assert drift.returncode == 1, drift.output
+    assert drift.returncode == 3, drift.output
     assert "Fix: bash scripts/commands/gbx-venv-sync.sh --match-container --recreate" in drift.output
 
     clean = sandbox.run("gbx-venv-check.sh", FAKE_DOCKER_EXEC_STDOUT=_env_json(numpy="2.3.4"))
@@ -1769,7 +1876,7 @@ def test_venv_check_passes_with_a_warn_on_the_expected_payload_divergence(sandbo
     # Any other drift still fails, beside the expected divergence.
     drifted = _env_json(numpy="2.0.0", rasterio="1.5.2+gbx1", natives=payload)
     res = sandbox.run("gbx-venv-check.sh", FAKE_DOCKER_EXEC_STDOUT=drifted)
-    assert res.returncode == 1, res.output
+    assert res.returncode == 3, res.output
     assert re.search(r"numpy\s+2\.1\.3\s+2\.0\.0\s+DRIFT", res.output)
 
 

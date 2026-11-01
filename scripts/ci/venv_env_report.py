@@ -21,8 +21,9 @@ The container carries the env wheel's payload GDAL stack (gdal, geos, proj, and 
 local version such as ``1.5.2+gbx1``); the host uses PyPI wheels, and a local version is on no index.
 When the container's rasterio has a local version, the stack's items that differ are EXPECTED, not
 DRIFT: they pass with a WARN, and the requirements built for the host pin the public base version.
-A payload package is EXPECTED only at that public version (host 1.5.2, container 1.5.2+gbx1); a host at another
-version (1.5.0) is DRIFT. Any other difference is still DRIFT. Packages named in the ``--extras`` file (the Spark Connect client packages that
+rasterio (the one with a local version) is EXPECTED only at that public version (host 1.5.2, container 1.5.2+gbx1);
+a host at another version (1.5.0) is DRIFT. The payload's gdal, geos and proj differ from PyPI's by nature and stay
+EXPECTED. Any other difference is still DRIFT. Packages named in the ``--extras`` file (the Spark Connect client packages that
 ``gbx:venv:sync --connect`` installs and the container does not carry yet) are listed as declared
 extras when they are host-only.
 """
@@ -112,21 +113,17 @@ def compare(host: dict, container: dict, extras=()) -> tuple[list, list]:
     hp, cp = host["packages"], container["packages"]
     shared = sorted((set(hp) & set(cp)) - IGNORED)
     drift = [n for n in shared if hp[n] != cp[n]]
-    # A payload package is EXPECTED only when the host has exactly the container's public version (rasterio
-    # 1.5.2 against 1.5.2+gbx1): the local segment is what the host cannot install. Another version is drift.
-    rows += [
-        (
-            n,
-            hp[n],
-            cp[n],
-            (
-                "EXPECTED"
-                if payload and n in PAYLOAD_PACKAGES and hp[n] == public_version(cp[n])
-                else "DRIFT"
-            ),
-        )
-        for n in drift
-    ]
+    # rasterio is built with a local version (1.5.2+gbx1): EXPECTED only when the host has exactly its public
+    # version, another version (1.5.0) is drift. The payload's own libraries (gdal, geos, proj) have no local
+    # version and always differ from PyPI's: any difference is EXPECTED while the payload is active.
+    def package_status(n):
+        if not payload or n not in PAYLOAD_PACKAGES:
+            return "DRIFT"
+        if "+" in cp[n] and hp[n] != public_version(cp[n]):
+            return "DRIFT"
+        return "EXPECTED"
+
+    rows += [(n, hp[n], cp[n], package_status(n)) for n in drift]
     real = sum(1 for r in rows[-len(drift) :] if r[3] == "DRIFT") if drift else 0
     declared = {canonical(e) for e in extras}
     host_only = sorted((set(hp) - set(cp)) - IGNORED)

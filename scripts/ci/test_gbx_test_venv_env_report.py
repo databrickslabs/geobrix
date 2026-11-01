@@ -86,6 +86,31 @@ def test_a_payload_package_at_another_public_version_is_drift():
     assert any(r[3] == "DRIFT" for r in rows)  # the gate (exit 1) sees it
 
 
+def test_a_payload_native_library_that_differs_is_expected_not_drift():
+    # gdal/geos/proj are the payload's own libraries and always differ from PyPI's: no local version to compare.
+    container = _env(rasterio="1.5.2+gbx1", gdal="3.13.3", natives=PAYLOAD_NATIVES)
+    host = _env(rasterio="1.5.2", gdal="3.12.2")
+
+    rows, _ = report.compare(host, container)
+
+    assert _statuses(rows)["gdal"] == "EXPECTED"
+    assert _statuses(rows)["rasterio"] == "EXPECTED"
+    assert not any(r[3] == "DRIFT" for r in rows)
+
+
+def test_rasterio_is_expected_only_at_the_containers_public_version():
+    container = _env(rasterio="1.5.2+gbx1", natives=PAYLOAD_NATIVES)
+    for host_version, want in (("1.5.2", "EXPECTED"), ("1.5.0", "DRIFT")):
+        rows, _ = report.compare(_env(rasterio=host_version), container)
+        assert _statuses(rows)["rasterio"] == want, host_version
+
+
+def test_a_payload_package_differing_without_the_payload_is_drift():
+    container = _env(gdal="3.13.3", natives=HOST_NATIVES)  # no local version anywhere: the payload is not active
+    rows, _ = report.compare(_env(gdal="3.12.2"), container)
+    assert _statuses(rows)["gdal"] == "DRIFT"
+
+
 def test_other_drift_still_fails_beside_the_expected_divergence():
     container = _env(rasterio="1.5.2+gbx1", numpy="2.1.3", natives=PAYLOAD_NATIVES)
     host = _env(rasterio="1.5.2", numpy="2.3.4")

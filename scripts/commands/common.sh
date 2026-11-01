@@ -49,13 +49,28 @@ check_docker() {
 }
 
 # abs_path <path>: absolute (against the caller's cwd, before a command cd's to the repo root) and without
-# trailing slashes, so a staging or old-venv name derived from it lands beside the venv, never inside it.
+# trailing slashes or "." segments, so a staging or old-venv name derived from it lands beside the venv, never
+# inside it (`.`, `foo/.` and `foo/./` are `foo`'s directory, not a name ending in a dot).
 abs_path() {
     local p="$1"
     case "$p" in /*) ;; *) p="$PWD/$p" ;; esac
-    while [[ "$p" != "/" && "$p" == */ ]]; do p="${p%/}"; done
+    local prev="" slash="/"
+    while [[ "$p" != "$prev" ]]; do
+        prev="$p"
+        p="${p//\/\//$slash}"
+        [[ "$p" != "/" && "$p" == */ ]] && p="${p%/}"
+        [[ "$p" == */. ]] && p="${p%/.}"
+        [[ -z "$p" ]] && p="/"
+    done
     printf '%s' "$p"
 }
+
+# One meaning for a relative GBX_PYRX_VENV in every command that sources this file: the caller's directory,
+# resolved now, before the command cd's to the repo root.
+if [[ -n "${GBX_PYRX_VENV:-}" ]]; then
+    GBX_PYRX_VENV="$(abs_path "$GBX_PYRX_VENV")"
+    export GBX_PYRX_VENV
+fi
 
 resolve_log_path() {
     local log_arg="$1"

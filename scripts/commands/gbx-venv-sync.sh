@@ -237,8 +237,13 @@ if [[ -n "$STAGING" ]]; then
     if [[ $MATCH -eq 1 ]]; then
         # The drift check judges the replacement BEFORE it replaces anything: a drifting venv never displaces a good one.
         echo ""
-        GBX_PYRX_VENV="$STAGING" bash "$SCRIPT_DIR/gbx-venv-check.sh" \
-            || fail "the new venv drifts from the container" "see the DRIFT rows above (a package the index cannot serve at the container's version, say), then re-run"
+        GBX_PYRX_VENV="$STAGING" bash "$SCRIPT_DIR/gbx-venv-check.sh"
+        CHECK_RC=$?
+        case $CHECK_RC in
+            0) ;;
+            3) fail "the new venv drifts from the container" "see the DRIFT rows above (a package the index cannot serve at the container's version, say), then re-run" ;;
+            *) fail "the new venv could not be checked against the container (check exit $CHECK_RC)" "see the error above (is the container up? gbx:docker:start), then re-run" ;;
+        esac
         CHECKED=1
     fi
     # Everything installed in the staging venv: only now does it replace the old one.
@@ -259,5 +264,6 @@ if [[ $MATCH -eq 1 && $CHECKED -eq 0 ]]; then
     echo ""
     GBX_PYRX_VENV="$VENV_DIR" bash "$SCRIPT_DIR/gbx-venv-check.sh"
     EXIT_CODE=$?
+    [[ $EXIT_CODE -eq 3 ]] && EXIT_CODE=1   # venv-check's drift code; this command's failure is 1
 fi
 exit $EXIT_CODE

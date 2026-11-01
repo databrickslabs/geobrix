@@ -7,13 +7,15 @@ source "$SCRIPT_DIR/common.sh"
 VENV_DIR="${GBX_PYRX_VENV:-${PROJECT_ROOT}/.venv-pyrx}"
 REPORT="$PROJECT_ROOT/scripts/ci/venv_env_report.py"
 LOG_PATH=""
+DRIFT_EXIT=3   # drift has a code of its own: 1 is "could not read the venv or the container"
 
 show_help() {
     show_banner "gbx:venv:check — host venv vs container"
     cat <<'HELP'
 Compare the host venv with the running dev container and print what differs:
 the Python patch version, the version of every package both have, and the natives
-(GDAL, PROJ and GEOS as rasterio, pyproj and shapely report them). Exits 1 on any drift.
+(GDAL, PROJ and GEOS as rasterio, pyproj and shapely report them). Exits 3 on any drift
+(1 when the venv or the container cannot be read).
 
 The container carries the env wheel's payload GDAL stack (gdal, geos, proj, rasterio with a
 local version such as 1.5.2+gbx1); the host uses PyPI wheels. That divergence is EXPECTED: when
@@ -82,5 +84,6 @@ if [[ $RC -eq 0 ]]; then
 else
     echo "❌ host venv drifts from the container (DRIFT rows above)"
     echo "Fix: bash scripts/commands/gbx-venv-sync.sh --match-container --recreate (fix the venv, not the test)"
+    RC=$DRIFT_EXIT
 fi
 exit $RC

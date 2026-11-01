@@ -263,6 +263,81 @@ def _cfg(**kw):
     return base
 
 
+def test_notebook_main_writes_the_local_generators_bytes_and_prints_the_tagged_progress(
+    spark, tmp_path, local_corpus
+):
+    lines = []
+    out = tmp_path / "vol"
+    cfg = _cfg(
+        out_dir=str(out), rows_to=3, partitions=2, chunk=2, verify_indices=[0, 3]
+    )
+
+    payload = dr.notebook_main(spark, cfg, say=lines.append)
+
+    for j in range(4):
+        assert _sha(out / "rows" / f"r{j}.tif") == _sha(
+            local_corpus / "rows" / f"r{j}.tif"
+        )
+    assert payload["ok"] and payload["summary"]["written"] == 4
+    assert (
+        payload["inventory"]["complete"] == 4 and payload["inventory"]["missing"] == []
+    )
+    assert {j: v["sha256"] for j, v in payload["sha"].items()} == {
+        str(j): _sha(local_corpus / "rows" / f"r{j}.tif") for j in (0, 3)
+    }
+    assert (
+        dr.compare_payload(
+            payload, {k: v["sha256"] for k, v in payload["sha"].items()}, 4
+        )
+        == []
+    )
+    json.dumps(payload)  # it is the notebook's exit value
+    assert lines[0].startswith("[GENCORPUS] run gen-test mode run")
+    assert sum(x.startswith("[GENCORPUS] progress") for x in lines) == 2  # chunks of 2
+    assert any(x.startswith("[GENCORPUS] inventory: 4/4 complete") for x in lines)
+    assert sum(x.startswith("[GENCORPUS] sha r") for x in lines) == 2
+    progress = [x for x in lines if x.startswith("[GENCORPUS] progress")]
+    assert [dr.progress_done(x) for x in progress] == [(2, 4), (4, 4)]
+
+
+def test_notebook_main_skips_tiles_already_complete_unless_told_not_to(spark, tmp_path):
+    spec = _spec()
+    out = tmp_path / "vol"
+    dr.write_row_tile(1, out, spec, dr.expected_sizes(spec))
+    kept = (out / "rows" / "r1.tif").stat().st_mtime_ns
+
+    first = dr.notebook_main(
+        spark, _cfg(out_dir=str(out), rows_to=3), say=lambda _x: None
+    )
+    assert (first["summary"]["written"], first["summary"]["skipped"]) == (3, 1)
+    assert (out / "rows" / "r1.tif").stat().st_mtime_ns == kept
+
+    again = dr.notebook_main(
+        spark, _cfg(out_dir=str(out), rows_to=3), say=lambda _x: None
+    )
+    assert (again["summary"]["written"], again["summary"]["skipped"]) == (0, 4)
+
+    rewrite = dr.notebook_main(
+        spark,
+        _cfg(out_dir=str(out), rows_to=3, skip_existing=False),
+        say=lambda _x: None,
+    )
+    assert (rewrite["summary"]["written"], rewrite["summary"]["skipped"]) == (4, 0)
+
+
+def test_notebook_main_in_smoke_mode_compares_worker_bytes_and_writes_no_tile(
+    spark, tmp_path, local_corpus
+):
+    want = {str(j): _sha(local_corpus / "rows" / f"r{j}.tif") for j in (0, 1)}
+    out = tmp_path / "vol"
+    res = dr.notebook_main(
+        spark,
+        _cfg(mode="smoke", out_dir=str(out), smoke_indices=[0, 1], smoke_sha=want),
+        say=lambda _x: None,
+    )
+    assert res["smoke"] and res["ok"] and not out.exists()
+
+
 @pytest.mark.parametrize("mode", ["run", "smoke"])
 def test_notebook_cells_compile_and_exit_in_their_own_last_cell(mode):
     nb = dr.build_gen_notebook(

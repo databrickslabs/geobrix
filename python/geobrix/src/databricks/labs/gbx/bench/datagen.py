@@ -224,6 +224,13 @@ def _default_jobs() -> int:
     return min(32, (os.cpu_count() or 4) * 4)
 
 
+def row_tile_srid_seed(j: int, seed: int, srids) -> tuple:
+    """The ``(srid, tile_seed)`` of row-pool tile *j*: the one rule that makes ``rows/r<j>.tif``
+    the same bytes wherever it is generated (the local corpus and the Databricks generation).
+    """
+    return srids[j % len(srids)], seed + 100000 + j
+
+
 def _write_row_tile(args: tuple) -> "m.TileEntry":
     """Generate and write a single row-pool tile; returns its TileEntry.
 
@@ -311,8 +318,7 @@ def generate_corpus(
             row_tile_px,
             row_bands,
             row_dtype,
-            srids[j % len(srids)],
-            seed + 100000 + j,
+            *row_tile_srid_seed(j, seed, srids),
             len(size_sweep),
         )
         for j in range(row_rows)

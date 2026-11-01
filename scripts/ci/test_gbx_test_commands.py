@@ -1512,6 +1512,99 @@ def test_venv_sync_match_container_builds_on_the_containers_python_and_versions(
     assert res.returncode == 1 and "drifts from the container" in res.output, res.output
 
 
+def _swap_uv(sandbox, fail_install=False):
+    """A `uv` whose `venv` makes a working fake venv and whose `pip install` may fail."""
+    log = sandbox.root / "uv.calls"
+    fake = sandbox.root / ".venv-fake-python"
+    fake.write_text(
+        '#!/bin/sh\n[ "$1" = "-c" ] && case "$2" in "import platform"*) echo 3.12.3;; esac\n'
+        '[ "$1" = "-" ] && cat > /dev/null\nexit 0\n'
+    )
+    fake.chmod(0o755)
+    uv = sandbox.bin / "uv"
+    uv.write_text(
+        "#!/bin/sh\n"
+        f'echo "$*" >> "{log}"\n'
+        'case "$1" in\n'
+        f'  venv) mkdir -p "$2/bin"; cp "{fake}" "$2/bin/python"; touch "$2/new-venv";;\n'
+        + ('  pip) echo "there is no version of rasterio==1.5.2+gbx1" >&2; exit 1;;\n' if fail_install else "")
+        + "esac\n"
+    )
+    uv.chmod(0o755)
+    return log
+
+
+def _old_venv(sandbox, venv=None):
+    python, _ = _fake_venv(sandbox, venv)
+    old = python.parent.parent
+    (old / "old-venv").write_text("keep me")
+    return old
+
+
+def test_recreate_leaves_the_old_venv_alone_when_the_install_fails(sandbox):
+    # The destructive step used to run first: a failed install left the venv empty.
+    old = _old_venv(sandbox)
+    _swap_uv(sandbox, fail_install=True)
+    _fake_lock(sandbox)
+
+    res = sandbox.run("gbx-venv-sync.sh", "--recreate")
+
+    assert res.returncode != 0, res.output
+    assert "Fix:" in res.output, res.output
+    assert (old / "old-venv").read_text() == "keep me"
+    assert (old / "bin" / "python").exists()
+    assert not (old / "new-venv").exists()
+    assert [p.name for p in sandbox.root.glob(".venv-pyrx*")] == [".venv-pyrx"]  # no staging left
+
+
+def test_recreate_swaps_the_new_venv_in_once_the_install_succeeded(sandbox):
+    old = _old_venv(sandbox)
+    log = _swap_uv(sandbox)
+    _fake_lock(sandbox)
+
+    res = sandbox.run("gbx-venv-sync.sh", "--recreate")
+
+    assert "Fix:" not in res.output
+    assert (old / "new-venv").exists() and not (old / "old-venv").exists(), res.output
+    assert [p.name for p in sandbox.root.glob(".venv-pyrx*")] == [".venv-pyrx"]
+    first_install = next(c for c in log.read_text().splitlines() if c.startswith("pip install"))
+    assert ".venv-pyrx/bin/python" not in first_install  # built in the staging venv, not in place
+
+
+def test_the_venv_option_moves_the_venv_and_is_documented(sandbox, tmp_path):
+    other = tmp_path / "throwaway"
+    _swap_uv(sandbox)
+    _fake_lock(sandbox)
+
+    sandbox.run("gbx-venv-sync.sh", "--venv", str(other))
+
+    assert (other / "new-venv").exists()
+    assert not (sandbox.root / ".venv-pyrx").exists()
+    help_ = sandbox.run("gbx-venv-sync.sh", "--help")
+    assert "--venv <dir>" in help_.output
+
+
+def test_venv_check_passes_with_a_warn_on_the_expected_payload_divergence(sandbox):
+    payload = {"gdal": "3.13.3", "proj": "9.9.0", "geos": "3.15.0"}
+    host = _env_json(numpy="2.1.3", rasterio="1.5.2")
+    _curated_sandbox(sandbox, host)
+    container = _env_json(numpy="2.1.3", rasterio="1.5.2+gbx1", natives=payload)
+
+    res = sandbox.run("gbx-venv-check.sh", FAKE_DOCKER_EXEC_STDOUT=container)
+
+    assert res.returncode == 0, res.output
+    assert re.search(r"rasterio\s+1\.5\.2\s+1\.5\.2\+gbx1\s+EXPECTED", res.output)
+    assert re.search(r"gdal\s+3\.12\.1\s+3\.13\.3\s+EXPECTED", res.output)
+    assert "WARN" in res.output and "container" in res.output
+    assert "DRIFT" not in res.output.replace("drifts from", "")
+
+    # Any other drift still fails, beside the expected divergence.
+    drifted = _env_json(numpy="2.0.0", rasterio="1.5.2+gbx1", natives=payload)
+    res = sandbox.run("gbx-venv-check.sh", FAKE_DOCKER_EXEC_STDOUT=drifted)
+    assert res.returncode == 1, res.output
+    assert re.search(r"numpy\s+2\.1\.3\s+2\.0\.0\s+DRIFT", res.output)
+
+
 def test_no_command_hard_codes_a_package_index():
     # This is a public repository: a package index comes from PIP_INDEX_URL or pip's own
     # configuration, never from a literal URL in a command.

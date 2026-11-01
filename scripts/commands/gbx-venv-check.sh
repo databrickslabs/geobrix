@@ -15,6 +15,11 @@ Compare the host venv with the running dev container and print what differs:
 the Python patch version, the version of every package both have, and the natives
 (GDAL, PROJ and GEOS as rasterio, pyproj and shapely report them). Exits 1 on any drift.
 
+The container carries the env wheel's payload GDAL stack (gdal, geos, proj, rasterio with a
+local version such as 1.5.2+gbx1); the host uses PyPI wheels. That divergence is EXPECTED: when
+only it differs the check passes with a WARN. A host run proves only tests that do not depend on
+that stack's GDAL, PROJ or GEOS version; run those in the container. Any other drift fails.
+
 A host that drifts from the container proves nothing about it: a test that passes here may
 fail there. Run this at the start of a host (no-Docker) task; on a drift fix the venv, not the
 test: gbx:venv:sync --match-container --recreate.
@@ -23,8 +28,9 @@ A package only one side has is not drift (it cannot be compared); the count is p
 Spark Connect client packages that gbx:venv:sync --connect installs are listed as declared
 connect-tier extras. GBX_PYRX_VENV=<dir> checks another venv than .venv-pyrx.
 
-Usage: bash scripts/commands/gbx-venv-check.sh [--log <path>]
+Usage: bash scripts/commands/gbx-venv-check.sh [--venv <dir>] [--log <path>]
 Options:
+  --venv <dir>   Check <dir> instead of .venv-pyrx (same as GBX_PYRX_VENV)
   --log <path>   Tee output to a log file (resolved under test-logs/)
   --help, -h     Show this help
 HELP
@@ -33,6 +39,8 @@ HELP
 while [[ $# -gt 0 ]]; do case $1 in
     --log) [[ $# -ge 2 ]] || { echo "Option --log needs a value" >&2; exit 2; }
         LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
+    --venv) [[ $# -ge 2 ]] || { echo "Option --venv needs a value" >&2; exit 2; }
+        VENV_DIR="$2"; shift 2 ;;
     --help|-h) show_help; exit 0 ;;
     *) echo "Unknown option: $1" >&2; show_help; exit 1 ;;
 esac; done
@@ -59,13 +67,19 @@ EXTRAS=()
 echo "host venv : $VENV_DIR"
 echo "container : $GBX_DEV_CONTAINER"
 echo ""
-"$VENV_DIR/bin/python" "$REPORT" compare "$WORK/host.json" "$WORK/container.json" ${EXTRAS[@]+"${EXTRAS[@]}"}
+OUT="$("$VENV_DIR/bin/python" "$REPORT" compare "$WORK/host.json" "$WORK/container.json" ${EXTRAS[@]+"${EXTRAS[@]}"})"
 RC=$?
 rm -rf "$WORK"
+echo "$OUT"
 echo ""
 if [[ $RC -eq 0 ]]; then
-    echo "✅ host venv matches the container"
+    if grep -q '^WARN' <<<"$OUT"; then
+        echo "⚠️  host venv matches the container except the expected payload-stack divergence (WARN above)"
+    else
+        echo "✅ host venv matches the container"
+    fi
 else
-    echo "❌ host venv drifts from the container: fix the venv (gbx:venv:sync --match-container --recreate), not the test"
+    echo "❌ host venv drifts from the container (DRIFT rows above)"
+    echo "Fix: bash scripts/commands/gbx-venv-sync.sh --match-container --recreate (fix the venv, not the test)"
 fi
 exit $RC

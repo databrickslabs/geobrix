@@ -630,7 +630,9 @@ def test_each_runtime_keeps_its_packages_but_the_documented_moves(runtime, insta
     env = next(e for e, rs in install_moves.RUNTIMES.items() if runtime in rs)
     resolved, err, unconstrained = install_moves.resolve(env, install, runtime, arch)
     if resolved is None and any(m in err.lower() for m in INDEX_DOWN):
-        _precondition(f"the package index ({err[:80]})")
+        # The whole cause chain, not its first line: "Request failed after 3 retries" alone cannot tell a TLS, an auth,
+        # a rate-limit or a 5xx failure apart. install_moves.resolve has already redacted every URL and host from err.
+        _precondition("the package index (" + " | ".join(ln.strip() for ln in err.splitlines() if ln.strip())[-600:] + ")")
     assert resolved is not None, err
     _moves, failures = install_moves.judge(env, install, runtime, resolved, unconstrained)
     assert failures == []

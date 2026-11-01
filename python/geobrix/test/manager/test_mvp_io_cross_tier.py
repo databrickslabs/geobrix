@@ -115,6 +115,38 @@ def test_a_missing_rust_build_fails_the_batch_and_is_not_an_error_tile(
         _decoded_rows(_batch_of(_tif(tmp_path / "f.tif")), rust=True)
 
 
+def test_the_rust_decode_runs_under_the_per_file_sidecar_option(tmp_path, monkeypatch):
+    """`decode_window` is called inside `readdir_option(readdir_mode(file))`, as pyrx's own opens are: under the process
+    value GDAL stats a dozen sidecar names per open, which cost ~1.7 s a tile on a Volume (EMPTY_DIR: ~0.08 s).
+    """
+    from contextlib import contextmanager
+
+    from databricks.labs.gbx.pyrx import _env
+
+    active, seen = [], []
+    path = _tif(tmp_path / "f.tif")
+
+    @contextmanager
+    def option(mode):
+        active.append(mode)
+        try:
+            yield
+        finally:
+            active.pop()
+
+    class FakeRs:
+        def decode_window(self, *a):
+            seen.append(list(active))  # the options in force at the call
+            return b"II*\x00"
+
+    monkeypatch.setattr(_rs, "load", lambda: FakeRs())
+    monkeypatch.setattr(_env, "readdir_mode", lambda p: "EMPTY_DIR")
+    monkeypatch.setattr(_env, "readdir_option", option)
+    (tile,) = _decoded_rows(_batch_of(path), rust=True)
+    assert tile["raster"] == b"II*\x00"
+    assert seen == [["EMPTY_DIR"]] and active == []
+
+
 @pytest.mark.parametrize("exc", [MemoryError, RecursionError])
 @pytest.mark.parametrize("rust", [False, True], ids=["d-py", "d-rs"])
 def test_resource_exhaustion_fails_the_task_it_is_not_an_error_tile(

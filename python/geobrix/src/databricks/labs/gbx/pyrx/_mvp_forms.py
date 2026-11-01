@@ -340,6 +340,7 @@ def _decode_rust(tile, cap_bytes) -> dict:
     """
     from databricks.labs.gbx import _gdal_policy, _rs
     from databricks.labs.gbx.ds._listing import to_local_path
+    from databricks.labs.gbx.pyrx._env import readdir_mode, readdir_option
     from databricks.labs.gbx.pyrx.core.compression import predictor_for
 
     mod = _rs.load()
@@ -366,15 +367,18 @@ def _decode_rust(tile, cap_bytes) -> dict:
     }
     staged, is_temp = ot._stage_local_if_needed(local)
     try:
-        raster = mod.decode_window(
-            staged,
-            win["col_off"],
-            win["row_off"],
-            win["width"],
-            win["height"],
-            predictor_for(header[3]),
-            drivers,
-        )
+        # the sidecar probing pyrx's own opens choose per file (`open_raster`): under the process value (TRUE) GDAL
+        # stats a dozen sidecar names per open, ~1.7 s a tile on a Volume's FUSE where EMPTY_DIR takes ~0.08 s
+        with readdir_option(readdir_mode(staged)):
+            raster = mod.decode_window(
+                staged,
+                win["col_off"],
+                win["row_off"],
+                win["width"],
+                win["height"],
+                predictor_for(header[3]),
+                drivers,
+            )
     finally:
         if is_temp:
             ot._safe_remove(staged)

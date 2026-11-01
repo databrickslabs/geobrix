@@ -706,6 +706,11 @@ def main(argv=None) -> int:
     if a.set not in SETS:
         ap.error(f"set {a.set!r} is not implemented (have: {', '.join(sorted(SETS))})")
     spec = SETS[a.set]
+    if spec.corpus_src is None and (a.corpus_src or a.corpus_dir):
+        ap.error(
+            f"set {spec.mvp} times generated input and reads no corpus, so --corpus-src and --corpus-dir have no "
+            f"effect. Fix: drop them, or pick a set with a corpus (--set IO)"
+        )
     try:
         return _run(a, spec)
     except PreconditionMissing as e:
@@ -731,7 +736,7 @@ def _run(a, spec: SetSpec) -> int:
     )
     if spec.corpus_src is None:
         # forms over generated inputs: no tiles to copy or read in place
-        corpus, rows, held = a.corpus_dir or spec.corpus_dir, "", 0
+        corpus, rows, held = spec.corpus_dir, "", 0
     elif in_place:
         # a folder of tiles named `rows`: read where it is (a big folder, the shape that shows a listing cost a
         # 96-tile copy hides); never copy into it

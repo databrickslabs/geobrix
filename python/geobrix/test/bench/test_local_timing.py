@@ -816,7 +816,7 @@ def test_a_set_without_a_corpus_runs_without_a_copy(tmp_path, capsys, monkeypatc
     assert lt.main(["--set", "S"]) == 0
     out = capsys.readouterr().out
     assert "no corpus" in out and "FLAGS:\n  none" in out
-    assert seen["corpus"] is not None
+    assert seen["corpus"] == lt.SETS["S"].corpus_dir
 
 
 def _s_res():
@@ -914,3 +914,57 @@ def test_a_generated_input_form_that_processed_fewer_rows_than_n_is_a_failure(
     assert all(math.isnan(run[("d", n)]) for n in spec.ns)  # a flag, never a time
     assert all(run[("c1", n)] == 1.0 for n in spec.ns)
     assert "d n=1000000: processed 500000 of 1000000 rows" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "flag", [["--corpus-dir", "/x/rows"], ["--corpus-src", "/x/src"]]
+)
+def test_a_set_without_a_corpus_refuses_the_corpus_flags(flag, capsys, monkeypatch):
+    monkeypatch.setattr(
+        lt, "measure_runs", lambda *a: pytest.fail("the pass must not start")
+    )
+    with pytest.raises(SystemExit) as e:
+        lt.main(["--set", "S", *flag])
+    assert e.value.code == 2
+    err = capsys.readouterr().err
+    assert "Fix: drop them" in err and "--set IO" in err
+
+
+def test_the_s_set_passes_its_peer_exemption_to_the_flags(capsys, monkeypatch):
+    """The plain-Python rung is 12x c1 per row and scales linearly: with `peer_exempt` wired from the spec the
+    pass is clean, without it c0 is flagged on every run."""
+    ns = lt.SETS["S"].ns
+    per_row = {"c0": 12e-6, "c1": 1e-6, "d": 1e-6, "floor": 0.1e-6}
+    res = {(f, n): c * n for f, c in per_row.items() for n in ns}
+    assert any(
+        "c0" in x
+        for x in lt.flags(res, forms=lt.SETS["S"].forms, ns=ns, reference="c1")
+    )  # the input is one the exemption is needed for
+    monkeypatch.setattr(lt, "measure_runs", lambda spec, corpus, repeats: [res])
+    assert lt.main(["--set", "S"]) == 0
+    assert "FLAGS:\n  none" in capsys.readouterr().out
+
+
+def test_a_short_generated_input_reaches_the_guard_as_the_processed_row_count():
+    """`measure_runs` compares `r.rows` with n; `levels._run_one` must report the count the form processed (not the
+    requested one), or the guard could never fire in a real run."""
+    from databricks.labs.gbx import manifest
+    from databricks.labs.gbx.bench import levels
+    from databricks.labs.gbx.bench import levels_forms as lf
+
+    form = levels.Form(
+        mvp="X", fn="f", level="L4", variant="v", input="short", run="m:short", register=False
+    )  # fmt: skip
+    ctx = levels._Ctx(None, 0, 1, "", None, "cat.sch", {})
+    base = dict(
+        run_id="r", api="L4", fn="f", category="mvp-X", mode="spark-path", rows=1000,
+        level="L4", form="v", compute="dedicated", **levels.capture_env("docker"),
+    )  # fmt: skip
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setitem(lf.INPUTS, "short", lambda spark, n, corpus, schema: "src")
+        mp.setattr(
+            manifest, "resolve_ref", lambda ref: lambda spark, src: (600, "fp", 600)
+        )
+        row = levels._run_one(ctx, form, base, 1000)
+    assert row.status == "ok" and row.rows == 600
+    assert "short input: 600 of 1000 rows" in row.note

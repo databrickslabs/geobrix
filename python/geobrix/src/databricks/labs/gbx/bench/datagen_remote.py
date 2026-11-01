@@ -453,6 +453,32 @@ def default_verify_indices(rows_from: int, rows_to: int) -> List[int]:
     return sorted(pick)
 
 
+def exported_text(html: str) -> str:
+    """The cell output text inside a ``jobs export-run`` HTML view.
+
+    The view holds the notebook as a URL-quoted base64 JSON model, so the printed lines are not
+    plain text in the page. Returns those outputs joined, or *html* itself when it holds no model.
+    """
+    import base64
+    import re
+    import urllib.parse
+
+    m = re.search(r"__DATABRICKS_NOTEBOOK_MODEL = '([^']+)'", html or "")
+    if not m:
+        return html or ""
+    try:
+        model = json.loads(urllib.parse.unquote(base64.b64decode(m.group(1)).decode()))
+    except ValueError:
+        return html or ""
+    out = []
+    for cmd in model.get("commands", []):
+        res = cmd.get("results") or {}
+        for item in res.get("data", []) if isinstance(res.get("data"), list) else []:
+            if isinstance(item, dict) and isinstance(item.get("data"), str):
+                out.append(item["data"])
+    return "\n".join(out)
+
+
 _PROGRESS_RE = None
 
 

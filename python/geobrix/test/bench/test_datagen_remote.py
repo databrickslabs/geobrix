@@ -318,3 +318,28 @@ def test_compare_payload_flags_a_short_count_and_every_sha_difference():
     problems = dr.compare_payload(bad, {"0": "a", "2": "b"}, 3)
     assert len(problems) == 2
     assert "2 of 3" in problems[0] and "r2.tif" in problems[1]
+
+
+def test_exported_text_decodes_the_notebook_model_in_the_export_html():
+    import base64
+    import urllib.parse
+
+    model = {
+        "commands": [
+            {
+                "results": {
+                    "data": [
+                        {"data": "[GENCORPUS] progress: done 3/8 (written 3)\n"},
+                        {"data": "[GENCORPUS] running: done 5/8 (chunk 2/3)\n"},
+                    ]
+                }
+            },
+            {"results": {"data": "raw string result"}},
+        ]
+    }
+    blob = base64.b64encode(urllib.parse.quote(json.dumps(model)).encode()).decode()
+    html = f"<script>window.x = 1; __DATABRICKS_NOTEBOOK_MODEL = '{blob}';</script>"
+    text = dr.exported_text(html)
+    assert dr.progress_done(dr.last_progress(text)) == (5, 8)
+    # a page with no model is searched as it is
+    assert dr.exported_text("plain [GENCORPUS] start 1") == "plain [GENCORPUS] start 1"

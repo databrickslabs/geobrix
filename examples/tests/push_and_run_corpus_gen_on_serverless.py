@@ -109,7 +109,7 @@ def _export_text(w, run) -> str:
     from databricks.sdk.service.jobs import ViewsToExport
 
     views = w.jobs.export_run(run_id=_task_run_id(run), views_to_export=ViewsToExport.CODE).views or []
-    return "\n".join(v.content or "" for v in views)
+    return "\n".join(v.content or "" for v in views)  # HTML; dr.exported_text decodes its notebook model
 
 
 def _write_status(path, run_id, state, elapsed_s, line, extra=""):
@@ -143,7 +143,7 @@ def watch(w, run_id, *, label, poll_s, progress_s, stale_s, status_file, dr, ben
             last_print = el
             line = None
             try:
-                line = dr.last_progress(_export_text(w, run))
+                line = dr.last_progress(dr.exported_text(_export_text(w, run)))
             except Exception as exc:  # noqa: BLE001 - export is a convenience
                 line = f"(export-run: {type(exc).__name__})"
             if line != last_line:

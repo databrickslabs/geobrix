@@ -493,6 +493,49 @@ def test_the_virtual_input_scan_has_n_partitions_not_one_per_file(
     )
 
 
+def test_every_input_that_writes_under_the_corpus_is_marked_so():
+    """`forms_writing_under_corpus` is what keeps a shared corpus read in place from being written to: an input builder
+    that calls the synthesiser (its files land in `<corpus>/_synth`) must carry the mark.
+    """
+    import inspect
+
+    for key, build in lf.INPUTS.items():
+        writes = "synth" in inspect.getsource(build)
+        assert bool(getattr(build, "writes_under_corpus", False)) == writes, key
+    marked = {
+        k for k, b in lf.INPUTS.items() if getattr(b, "writes_under_corpus", False)
+    }
+    assert {"tiles_grouped_mat", "tiles_aligned_mat", "dsm_towers"} <= marked
+    assert "io_rows" not in marked and "tiles_mat" not in marked
+
+
+@pytest.mark.parametrize("name", ["tiles_mat", "tiles_virt", "tiles_big"])
+def test_a_tile_table_over_a_bigger_folder_reads_only_its_first_n_files(
+    spark_session_local, tmp_path, monkeypatch, name
+):
+    """`tiles_mat` / `tiles_virt` past SMALL_INPUT_ROWS rows, and `tiles_big` (another folder), scanned the whole folder
+    with a task per file to keep n rows: 40 files, n = 3, no stage with more than 3 tasks, and the first 3 files.
+    """
+    import shutil
+
+    _light_readers(spark_session_local)
+    monkeypatch.setattr(
+        lf, "SMALL_INPUT_ROWS", 2
+    )  # n = 3 takes the scan, as n > 64 does
+    corpus = _corpus(tmp_path, 40)
+    shutil.copytree(corpus + "/rows", corpus + "/big")
+    src = lf.INPUTS[name](spark_session_local, 3, corpus, None)
+    folder = corpus + ("/big" if name == "tiles_big" else "/rows")
+    table = spark_session_local.table(src)
+    # a count runs the limit as a global limit over the whole scan (a collect stops early), as a form's work above it does
+    widest = _max_tasks_in_job(spark_session_local, f"tiles-{name}", table.count)
+    assert widest <= 3, widest
+    got = sorted(
+        os.path.basename(r["path"]) for r in table.select("tile.path").collect()
+    )
+    assert got == sorted(os.path.basename(f) for f in lf._first_files(folder, 3))
+
+
 def _read_names(df):
     return sorted(os.path.basename(r["path"]) for r in df.select("tile.path").collect())
 

@@ -146,12 +146,16 @@ def _tiles(virtual: bool, subdir: str = "rows", name: Optional[str] = None):
                 label,
                 lambda: _tile_column(spark, pairs, virtual, keyed=False),
             )
+        # The scan is given the first n files themselves (the `filterRegex` IO's reads use), so it plans n files: a bare
+        # `limit(n)` leaves a task per file of the folder (10,000 for the big corpus) when the table is built or read.
+        only = _only_files_regex(_first_files(rows, n))
         return _table(
             spark,
             schema,
             label,
             lambda: spark.read.format("raster_gbx")
             .option("virtualTiles", str(virtual).lower())
+            .option("filterRegex", only)
             .load(rows)
             .select("tile")
             .limit(n),
@@ -219,6 +223,7 @@ def _grouped(recipe: str, virtual: bool):
             lambda: _tile_column(spark, pairs, virtual, keyed=True),
         )
 
+    build.writes_under_corpus = True  # the group members land in `<corpus>/_synth`
     return build
 
 
@@ -389,6 +394,8 @@ def _dsm_towers(spark, n, corpus, schema):
     )
 
 
+_dsm_towers.writes_under_corpus = True  # the DSM tiles land in `<corpus>/_synth`
+
 INPUTS: Dict[str, Callable] = {
     "bng_points": _bng_points,
     "invalid_polys": _invalid_polys,
@@ -409,6 +416,15 @@ INPUTS: Dict[str, Callable] = {
         False, "big", "big"
     ),  # absent until the 4096 x 4096 tiles are copied to {corpus}/big
 }
+
+
+def forms_writing_under_corpus(forms) -> List[Form]:
+    """The forms whose input builder writes files under the corpus root (the multi-tile and DSM inputs write `_synth/`
+    there): a corpus read in place, a shared folder, must not be given to them. The builders carry the mark
+    (`writes_under_corpus`); a test keeps it in step with the builders that call the synthesiser.
+    """
+    return [f for f in forms if getattr(INPUTS[f.input], "writes_under_corpus", False)]
+
 
 # Each query answers one row (n, fp, n_out): the output count, an order-independent fingerprint,
 # and count(<the output>), which skips NULLs: n_out != n means some rows came out NULL. The hash

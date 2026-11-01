@@ -7,7 +7,7 @@ The plain pass takes about 70 seconds on a 12-core arm64 laptop. `--baseline` an
 **Usage:** `bash scripts/commands/gbx-bench-local-timing.sh [OPTIONS]`
 
 **Options:**
-- `--set <name>`: the levels set to time. Default `IO`. Only `IO` is implemented.
+- `--set <name>`: the levels set to time. Default `IO`. Sets: `IO` (the tile read forms) and `S` (the BNG scalar `gbx_bng_eastnorthasbng` forms `c0`, `c1`, `d`, `floor` over generated points; no corpus copy, n is rows: 250,000, 1,000,000, 4,000,000).
 - `--k <number>`: the multiple that flags a form. Default `3`.
 - `--baseline [path]`: also flag a form whose cost per tile is over `--baseline-k` times the stored one. The default path is `test-logs/local-timing-baseline-<set>.json` (gitignored, per machine; `gbx:bench:clean` does not touch it).
 - `--baseline-write`: store this pass's cost per tile as the baseline (at the `--baseline` path, or the default) instead of comparing. A pass that flags a form is not stored.
@@ -55,6 +55,6 @@ The plain pass takes about 70 seconds on a 12-core arm64 laptop. `--baseline` an
 - `bash scripts/commands/gbx-bench-local-timing.sh --corpus-dir /Volumes/main/default/bench-corpus/rows` (the big-folder shape; once before a cluster round)
 
 **Limits:**
-- Only the `IO` set exists. Add another set to `SETS` in `python/geobrix/src/databricks/labs/gbx/bench/local_timing.py`.
+- Only `IO` and `S` exist. Add another set to `SETS` in `python/geobrix/src/databricks/labs/gbx/bench/local_timing.py`.
 - Growth below linear is normal: a fixed scan and worker cost plus 8 cores keep t96/t24 near 1.4 to 3.
 - Local ratios understate a cluster's: 8 local cores run the parallel forms about 4 times less parallel.

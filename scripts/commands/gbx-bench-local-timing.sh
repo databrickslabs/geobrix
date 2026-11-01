@@ -13,7 +13,7 @@ show_help() {
     echo -e "  ${GREEN}bash scripts/commands/gbx-bench-local-timing.sh${NC} ${YELLOW}[OPTIONS]${NC}"
     echo ""
     echo -e "${CYAN}Options:${NC}"
-    echo -e "  ${GREEN}--set <name>${NC}     Levels set to time (default IO; only IO is implemented)"
+    echo -e "  ${GREEN}--set <name>${NC}     Levels set to time (default IO; have IO, S)"
     echo -e "  ${GREEN}--k <number>${NC}     Multiple that flags a form: vs the row UDF and vs its peers per tile (default 3)"
     echo -e "  ${GREEN}--baseline [path]${NC}  Also flag a form whose cost per tile is over --baseline-k times the stored one"
     echo -e "                      (default path: test-logs/local-timing-baseline-<set>.json; untracked)"

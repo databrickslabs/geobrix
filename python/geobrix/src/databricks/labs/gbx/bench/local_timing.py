@@ -20,7 +20,7 @@ floor's, the median over the runs; one run of a form differed by 1.6x from the n
 Exit codes: 0 no flags, 1 the pass flagged a form, 2 a precondition is missing (``PRECONDITION MISSING``, or a usage
 error), 3 the pass itself failed.
 
-Only the IO set is implemented; ``SETS`` is where another set's forms and sizes go. The flagging is plain Python over a
+The IO and S sets are implemented; ``SETS`` is where another set's forms and sizes go. The flagging is plain Python over a
 ``{(form, n): seconds}`` dict, so it is unit-tested without Spark (``test/bench/test_local_timing.py``). The runner
 (``main``) is what ``scripts/commands/gbx-bench-local-timing.sh`` runs in the dev container.
 
@@ -71,9 +71,17 @@ class SetSpec:
     ]  # variants timed; the last is the floor (its shell cost, no decode)
     reference: str  # the form the others are compared with
     ns: Tuple[int, ...]  # sizes, smallest first; the corpus holds the largest
-    corpus_src: str  # where the real files are copied from (once)
-    corpus_dir: (
-        str  # the copy (a container /tmp path); `<corpus_dir>/rows` holds the files
+    corpus_src: Optional[str] = (
+        None  # where the real files are copied from (once); None: no corpus copy
+    )
+    corpus_dir: str = (
+        ""  # the copy (a container /tmp path); `<corpus_dir>/rows` holds the files
+    )
+    fn: Optional[str] = (
+        None  # time only this function's forms (a set whose forms hold more than one function)
+    )
+    peer_exempt: Tuple[str, ...] = (
+        ()  # forms printed with their ratios but kept out of the peer-outlier flags and the peers' median
     )
 
 
@@ -85,7 +93,18 @@ SETS: Dict[str, SetSpec] = {
         ns=(6, 24, 96),
         corpus_src="/Volumes/main/default/bench-corpus/rows",
         corpus_dir="/tmp/gbx-local-timing/IO",
-    )
+    ),
+    # the BNG scalar's forms over generated points (`bng_points`: no corpus); n is rows, not tiles
+    "S": SetSpec(
+        mvp="S",
+        forms=("c0", "c1", "d", "floor"),
+        reference="c1",
+        ns=(1_000_000, 4_000_000, 16_000_000),
+        fn="gbx_bng_eastnorthasbng",
+        peer_exempt=(
+            "c0",
+        ),  # the plain-Python reference rung: slow by design, not a peer of c1 and d
+    ),
 }
 
 
@@ -105,8 +124,13 @@ def flags(
     ns: Sequence[int],
     k: float = K_DEFAULT,
     reference: str = "udf",
+    peer_exempt: Sequence[str] = (),
 ) -> List[str]:
-    """What is wrong with the timings `res` (seconds by `(form, n)`); an empty list is a healthy pass."""
+    """What is wrong with the timings `res` (seconds by `(form, n)`); an empty list is a healthy pass.
+
+    A form in `peer_exempt` (slow by design) skips the two peer-outlier rules (K x the reference, K x its peers'
+    median per tile) and is left out of the peers' median; every other rule still applies to it.
+    """
     lo, mid, hi = ns[0], ns[len(ns) // 2], ns[-1]
     floor = forms[-1]
     out: List[str] = []
@@ -125,10 +149,11 @@ def flags(
         for f in timed
         if _ok(res.get((floor, hi)))
     }
-    peers = statistics.median(per_tile.values()) if per_tile else None
+    peer_set = [v for f, v in per_tile.items() if f not in peer_exempt]
+    peers = statistics.median(peer_set) if peer_set else None
     for f in timed:
         t_lo, t_mid, t_hi = res[(f, lo)], res[(f, mid)], res[(f, hi)]
-        if f != reference and _ok(ref) and t_hi / ref > k:
+        if f != reference and f not in peer_exempt and _ok(ref) and t_hi / ref > k:
             out.append(f"{f}: {t_hi / ref:.1f}x the row UDF at n={hi}")
         if t_lo > N_INDEPENDENT * t_hi:
             out.append(
@@ -140,7 +165,7 @@ def flags(
                 out.append(
                     f"{f}: non-linear t{hi}/t{mid}={t_hi / t_mid:.2f} (expect {MIN_GROWTH:g} to {want * 1.5:g})"
                 )
-        if peers is not None and per_tile[f] > k * peers:
+        if peers is not None and f not in peer_exempt and per_tile[f] > k * peers:
             out.append(
                 f"{f}: per-tile {per_tile[f]:.0f} ms > {k:g}x its peers' median {peers:.0f} ms"
             )
@@ -565,7 +590,11 @@ def measure_runs(
 
     spark = spark or _spark()
     chosen = sorted(
-        (f for f in lf.FORMS[spec.mvp] if f.variant in spec.forms),
+        (
+            f
+            for f in lf.FORMS[spec.mvp]
+            if f.variant in spec.forms and (spec.fn is None or f.fn == spec.fn)
+        ),
         key=lambda f: spec.forms.index(f.variant),
     )
     runs: List[Dict[Tuple[str, int], float]] = []
@@ -589,9 +618,17 @@ def measure_runs(
         if i is not None and i == len(runs):
             runs.append({})
         for r in rows:
+            short = (
+                spec.corpus_src is None and r.status == "ok" and r.rows != n
+            )  # generated input: every form must have processed all n rows
+            if short:
+                print(
+                    f"  {r.form} n={n}: processed {r.rows} of {n} rows",
+                    flush=True,
+                )
             if i is not None:
                 runs[i][(r.form, n)] = (
-                    r.iter_median_s if r.status == "ok" else float("nan")
+                    r.iter_median_s if r.status == "ok" and not short else float("nan")
                 )
             if r.status != "ok":
                 print(
@@ -611,7 +648,7 @@ def main(argv=None) -> int:
         description="Local timing pass of a levels set. Exit 0: no flags; 1: a form was flagged; 2: a precondition is "
         "missing or the usage is wrong; 3: the pass failed."
     )
-    ap.add_argument("--set", default="IO", help="levels set (only IO is implemented)")
+    ap.add_argument("--set", default="IO", help="levels set (have: IO, S)")
     ap.add_argument(
         "--k",
         type=float,
@@ -688,9 +725,14 @@ def _run(a, spec: SetSpec) -> int:
             path, spec.mvp, spec.ns
         )  # before the minutes of the pass
     in_place = (
-        bool(a.corpus_dir) and os.path.basename(a.corpus_dir.rstrip("/")) == "rows"
+        spec.corpus_src is not None
+        and bool(a.corpus_dir)
+        and os.path.basename(a.corpus_dir.rstrip("/")) == "rows"
     )
-    if in_place:
+    if spec.corpus_src is None:
+        # forms over generated inputs: no tiles to copy or read in place
+        corpus, rows, held = a.corpus_dir or spec.corpus_dir, "", 0
+    elif in_place:
         # a folder of tiles named `rows`: read where it is (a big folder, the shape that shows a listing cost a
         # 96-tile copy hides); never copy into it
         rows = a.corpus_dir.rstrip("/")
@@ -715,8 +757,13 @@ def _run(a, spec: SetSpec) -> int:
         corpus = a.corpus_dir or spec.corpus_dir
         rows = os.path.join(corpus, "rows")
         held = ensure_corpus(a.corpus_src or spec.corpus_src, rows, spec.ns[-1])
+    where = (
+        "no corpus (generated input)"
+        if spec.corpus_src is None
+        else f"corpus {rows}: {held} tiles{' (read in place)' if in_place else ''}"
+    )
     print(
-        f"[local-timing {spec.mvp}] corpus {rows}: {held} tiles{' (read in place)' if in_place else ''}; "
+        f"[local-timing {spec.mvp}] {where}; "
         f"forms {', '.join(spec.forms)}; n {spec.ns}; K={a.k:g}",
         flush=True,
     )
@@ -728,7 +775,14 @@ def _run(a, spec: SetSpec) -> int:
         f"\nseconds per form at n tiles (median of {len(runs)} measured run{'s' if len(runs) != 1 else ''})\n"
         + table(res, forms=spec.forms, ns=spec.ns, reference=spec.reference)
     )
-    found = flags(res, forms=spec.forms, ns=spec.ns, k=a.k, reference=spec.reference)
+    found = flags(
+        res,
+        forms=spec.forms,
+        ns=spec.ns,
+        k=a.k,
+        reference=spec.reference,
+        peer_exempt=spec.peer_exempt,
+    )
     per_tile = median_per_tile(runs, forms=spec.forms, ns=spec.ns)
     if len(runs) > 1:
         print("\n" + per_run_table(runs, forms=spec.forms, ns=spec.ns))

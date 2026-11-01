@@ -86,8 +86,8 @@ def test_the_table_has_seconds_per_n_the_ratios_to_floor_and_udf_and_t96_over_t2
     assert udf == ["udf", "1.5", "2.5", "7.0", "4.4", "1.0", "2.80"]
 
 
-def test_only_the_io_set_is_implemented(capsys):
-    assert set(lt.SETS) == {"IO"}
+def test_only_the_io_and_s_sets_are_implemented(capsys):
+    assert set(lt.SETS) == {"IO", "S"}
     with pytest.raises(
         SystemExit
     ) as e:  # a usage error: 2, so 1 stays "the pass flagged a form"
@@ -782,3 +782,135 @@ def test_a_set_whose_forms_write_under_the_corpus_is_refused_for_an_in_place_one
     err = capsys.readouterr().err
     assert "PRECONDITION MISSING" in err and "_synth" in err and "in place" in err
     assert sorted(os.listdir(tmp_path / "bench")) == ["rows"]  # nothing written
+
+
+# ---- a set without a corpus (corpus_src None) and a set that filters by function (fn)
+
+
+def test_the_s_set_times_the_bng_scalar_forms_with_the_floor_last_and_no_corpus():
+    from databricks.labs.gbx.bench import levels_forms as lf
+
+    s = lt.SETS["S"]
+    assert s.mvp == "S" and s.forms == ("c0", "c1", "d", "floor")
+    assert s.reference == "c1" and s.fn == "gbx_bng_eastnorthasbng"
+    assert s.corpus_src is None and list(s.ns) == sorted(s.ns) and len(s.ns) == 3
+    assert s.ns == (1_000_000, 4_000_000, 16_000_000) and s.peer_exempt == ("c0",)
+    assert lt.SETS["IO"].peer_exempt == ()
+    assert lt.SETS["IO"].corpus_src and lt.SETS["IO"].fn is None  # IO is unchanged
+    picked = [f for f in lf.FORMS["S"] if f.variant in s.forms and f.fn == s.fn]
+    assert sorted(f.variant for f in picked) == sorted(s.forms)  # one form per name
+    assert lf.forms_writing_under_corpus(picked) == []
+
+
+def test_a_set_without_a_corpus_runs_without_a_copy(tmp_path, capsys, monkeypatch):
+    def no_copy(*a):
+        raise AssertionError("a set with corpus_src None copies nothing")
+
+    seen = {}
+    monkeypatch.setattr(lt, "ensure_corpus", no_copy)
+    monkeypatch.setattr(
+        lt,
+        "measure_runs",
+        lambda spec, corpus, repeats: seen.update(corpus=corpus) or [_s_res()],
+    )
+    assert lt.main(["--set", "S"]) == 0
+    out = capsys.readouterr().out
+    assert "no corpus" in out and "FLAGS:\n  none" in out
+    assert seen["corpus"] is not None
+
+
+def _s_res():
+    t = {
+        "c0": (0.9, 1.5, 3.5),
+        "c1": (0.8, 1.2, 2.4),
+        "d": (0.7, 0.9, 1.4),
+        "floor": (0.6, 0.7, 0.9),
+    }
+    return {(f, n): v for f, ts in t.items() for n, v in zip(lt.SETS["S"].ns, ts)}
+
+
+def test_a_function_filter_times_only_that_function(monkeypatch):
+    from types import SimpleNamespace as R
+
+    from databricks.labs.gbx.bench import levels
+    from databricks.labs.gbx.bench import levels_forms as lf
+
+    seen = []
+
+    def fake_run_mvp(spark, mvp, *a, base_rows, **kw):
+        seen.append([(f.fn, f.variant) for f in lf.FORMS[mvp]])
+        return [
+            R(
+                form=f.variant,
+                rows=base_rows,
+                iter_median_s=1.0,
+                status="ok",
+                failure_mode="",
+                note="",
+            )
+            for f in lf.FORMS[mvp]
+        ]
+
+    monkeypatch.setattr(levels, "run_mvp", fake_run_mvp)
+    # S holds three functions; two of them also have a variant named "-", "virtual" or "c0" style names
+    spec = dataclasses.replace(lt.SETS["S"], forms=("-", "floor"), fn=None)
+    lt.measure_runs(spec, "", 1, spark=object())
+    assert len({fn for fn, _ in seen[0]}) > 1  # without fn, every function's "-" form
+    seen.clear()
+    spec = dataclasses.replace(spec, fn="gbx_st_makevalid")
+    lt.measure_runs(spec, "", 1, spark=object())
+    assert {fn for fn, _ in seen[0]} == {"gbx_st_makevalid"}
+
+
+def test_a_peer_exempt_form_far_slower_than_its_peers_raises_no_peer_flag():
+    forms, ns = ("slow", "c1", "d", "floor"), (10, 40, 160)
+    t = {
+        "slow": (3.0, 12.0, 48.0),  # 12x c1's per-row cost, scaling linearly
+        "c1": (0.5, 1.5, 5.0),
+        "d": (0.5, 1.4, 4.6),
+        "floor": (0.1, 0.1, 0.1),
+    }
+    res = {(f, n): v for f, ts in t.items() for n, v in zip(ns, ts)}
+    plain = lt.flags(res, forms=forms, ns=ns, reference="c1")
+    assert any("slow: per-tile" in x for x in plain) and any(
+        "slow: " in x and "the row UDF" in x for x in plain
+    )
+    exempt = lt.flags(res, forms=forms, ns=ns, reference="c1", peer_exempt=("slow",))
+    assert exempt == []  # no peer flag for it, and it left the peers' median alone
+    # every other rule still applies to an exempt form: n-independence
+    res[("slow", 10)] = 40.0
+    assert any(
+        "slow: n-independent" in x
+        for x in lt.flags(
+            res, forms=forms, ns=ns, reference="c1", peer_exempt=("slow",)
+        )
+    )
+
+
+def test_a_generated_input_form_that_processed_fewer_rows_than_n_is_a_failure(
+    monkeypatch, capsys
+):
+    from types import SimpleNamespace as R
+
+    from databricks.labs.gbx.bench import levels
+    from databricks.labs.gbx.bench import levels_forms as lf
+
+    def fake_run_mvp(spark, mvp, *a, base_rows, **kw):
+        return [
+            R(
+                form=f.variant,
+                rows=base_rows // 2 if f.variant == "d" else base_rows,
+                iter_median_s=1.0,
+                status="ok",
+                failure_mode="",
+                note="",
+            )
+            for f in lf.FORMS[mvp]
+        ]
+
+    monkeypatch.setattr(levels, "run_mvp", fake_run_mvp)
+    spec = lt.SETS["S"]
+    run = lt.measure_runs(spec, "", 1, spark=object())[0]
+    assert all(math.isnan(run[("d", n)]) for n in spec.ns)  # a flag, never a time
+    assert all(run[("c1", n)] == 1.0 for n in spec.ns)
+    assert "d n=1000000: processed 500000 of 1000000 rows" in capsys.readouterr().out

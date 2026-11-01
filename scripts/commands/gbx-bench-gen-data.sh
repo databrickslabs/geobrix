@@ -66,6 +66,8 @@ On Databricks (row pool only): generate rows/r<N>.tif on Serverless, byte-identi
   --no-smoke           Skip the smoke stage; --smoke-only stops after it
   --timeout-min <n>    Time limit of the real run (default 240)
   --status-file <path> Write the run's state and latest progress there on every poll
+  --progress-secs <n>  Seconds between the launcher's progress lines (default 60); also --poll-secs, --stale-min (cancel when no new
+                       progress line for that long, default 20), --smoke-timeout-min
   --no-wait            Submit and return
 Nothing on the Volume is deleted. Exit: 0 verified, 1 verification failed, 2 usage, 3 stalled, 4 smoke failed.
 EOF
@@ -91,7 +93,7 @@ while [[ $# -gt 0 ]]; do case $1 in
     --rows-from) ROWS_FROM="$2"; shift 2 ;;
     --rows-to) ROWS_TO="$2"; shift 2 ;;
     --skip-existing|--no-skip-existing|--no-smoke|--smoke-only|--no-wait) DBX_ARGS+=("$1"); shift ;;
-    --partitions|--chunk|--verify-indices|--env-version|--run-id|--timeout-min|--status-file) DBX_ARGS+=("$1" "$2"); shift 2 ;;
+    --partitions|--chunk|--verify-indices|--env-version|--run-id|--timeout-min|--status-file|--progress-secs|--poll-secs|--stale-min|--smoke-timeout-min) DBX_ARGS+=("$1" "$2"); shift 2 ;;
     --corpus-out) DBX_ARGS+=(--out "$2"); shift 2 ;;
     --help|-h) show_help; exit 0 ;;
     *) echo "Unknown option: $1" >&2; show_help; exit 1 ;;

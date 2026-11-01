@@ -1005,17 +1005,25 @@ def test_l2_with_arg_types_needs_sql_functions_and_falls_back_without_them():
     assert why == levels.no_sql_functions(BNG)
 
 
+@pytest.mark.parametrize(
+    "fn, connect",
+    [
+        (BNG, True),  # an `arg_types` row (standard access mode)
+        (next(f for f in FNS if "bytes_param" in f.levels.get("L2", {})), False),
+    ],  # a `bytes_param` row has no Java handler for standard access mode: classic
+    ids=lambda p: p.sql_name if hasattr(p, "sql_name") else str(p),
+)
 def test_forced_l2_without_sql_functions_refuses_before_touching_the_session(
-    monkeypatch, tmp_path
+    fn, connect, monkeypatch, tmp_path
 ):
     """A forced L2 skips `levels.available`. It must refuse before it registers the Java UDF or runs the
     wrapper's DROP, so the registration already under the SQL name (L3, say) stays."""
     from databricks.labs.gbx.manager import jvm
 
     stub, _ = _standard_stub(monkeypatch, tmp_path)
-    caps = _caps(connect=True, jar=OK_JAR, sql_functions=False)
-    why = jvm.install_l2(stub, BNG, caps)
-    assert why == levels.no_sql_functions(BNG)
+    caps = _caps(connect=connect, jar=OK_JAR, sql_functions=False)
+    why = jvm.install_l2(stub, fn, caps)
+    assert why == levels.no_sql_functions(fn)
     assert stub.artifacts == [] and stub.java_registered == []
     assert stub.sql_text == []  # no DROP, no CREATE
 

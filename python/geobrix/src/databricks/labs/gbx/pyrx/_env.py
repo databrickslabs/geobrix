@@ -8,6 +8,7 @@ Registered PROJ grid dirs are merged with the PROJ data into one directory, whic
 becomes PROJ_DATA (rasterio reads PROJ_DATA as a single path; see _proj_data_dir).
 """
 
+import bisect
 import hashlib
 import logging
 import os
@@ -448,6 +449,41 @@ def _stat_sidecars(name: str) -> frozenset:
     return frozenset(names)
 
 
+class _IndexedNames(frozenset):
+    """The names of one folder, indexed for ``readdir_mode_for``: whether any is a vendor
+    metadata file, and the names sorted by lower case, so the candidates of a file (the
+    entries that start, in any case, with its stem and then ``.`` or ``_``) are two slices
+    of a sorted list found by bisection, where a pass over the names costs a few
+    milliseconds an open in a folder of 10,000. Built once per listing."""
+
+    def __init__(self, names=()):
+        super().__init__()
+        pairs = []
+        vendor = False
+        for n in self:
+            low = n.lower()
+            pairs.append(
+                (n if low == n else low, n)
+            )  # the same string when it is lower case
+            if not vendor and _vendor_metadata(low):
+                vendor = True
+        pairs.sort()
+        self.vendor = vendor
+        self._pairs = pairs
+
+    def candidates(self, prefix: str, name: str) -> list:
+        """The names other than *name* whose lower case starts with ``prefix.`` or ``prefix_``."""
+        out = []
+        for sep, end in (
+            (".", "/"),
+            ("_", "`"),
+        ):  # "/" and "`" are the characters after "." and "_"
+            lo = bisect.bisect_left(self._pairs, (prefix + sep,))
+            hi = bisect.bisect_left(self._pairs, (prefix + end,), lo)
+            out.extend(n for _low, n in self._pairs[lo:hi] if n != name)
+        return out
+
+
 def readdir_mode_for(name: str, folder_names) -> str:
     """The GDAL_DISABLE_READDIR_ON_OPEN value an open of the file *name* takes, given the
     names in its folder: ``EMPTY_DIR`` when nothing in the folder can be a sidecar of it,
@@ -462,16 +498,24 @@ def readdir_mode_for(name: str, folder_names) -> str:
     """
     stem = name.rpartition(".")[0] or name
     prefix = stem.lower()
-    candidates = []
-    vendor = False
-    for other in folder_names:
-        if other == name:
-            continue
-        low = other.lower()
-        if low.startswith(prefix) and low[len(prefix) : len(prefix) + 1] in (".", "_"):
-            candidates.append(other)
-        if _vendor_metadata(low):
-            vendor = True
+    if isinstance(folder_names, _IndexedNames):
+        # a listing's own index: the same rule, answered without a pass over every name
+        vendor = folder_names.vendor
+        candidates = folder_names.candidates(prefix, name)
+    else:
+        candidates = []
+        vendor = False
+        for other in folder_names:
+            if other == name:
+                continue
+            low = other.lower()
+            if low.startswith(prefix) and low[len(prefix) : len(prefix) + 1] in (
+                ".",
+                "_",
+            ):
+                candidates.append(other)
+            if _vendor_metadata(low):
+                vendor = True
     if vendor:
         return "NO"
     if not candidates:
@@ -484,11 +528,27 @@ def readdir_mode_for(name: str, folder_names) -> str:
     return "TRUE" if all(c in exact for c in candidates) else "NO"
 
 
-# A folder held as larger than GDAL's own listing limit (see listing_cap), and a folder that
-# could not be listed (retried after _UNLISTABLE_LISTING_RETRY_S).
+# A folder held as larger than the listing bound (_MAX_LISTED_NAMES, far above GDAL's own
+# listing limit, see listing_cap), and a folder that could not be listed (retried after
+# _UNLISTABLE_LISTING_RETRY_S).
+#
+# The bound is what _TOO_LARGE guards: a listing is held in memory and costs the time of the
+# whole folder (a Volume returns a folder's names only once it has fetched them all: 0.5 s
+# for 1,000 names, 14.5 s for 40,000 on a Serverless worker). GDAL's own limit (1,000) used
+# to be the bound, which left every file of a bigger folder under the process value TRUE,
+# where GDAL stats each sidecar name of each open: on a Volume's FUSE under concurrent load
+# a 10,000-tile read took 1.7 to 3.1 times as long as with no look-up. A folder up to the
+# bound is now listed once per process, and each file takes the mode its sidecars call for.
 _TOO_LARGE = object()
 _UNLISTABLE = object()
 _UNLISTABLE_LISTING_RETRY_S = 60.0
+# The most names a folder may hold to be listed (a larger one is held as _TOO_LARGE and its
+# files keep TRUE), and the most names held across all listings (the least recently used go
+# first). About 200 bytes a name: 20 MB for a folder at the bound, 60 MB at the budget.
+_MAX_LISTED_NAMES = 100_000
+_MAX_TOTAL_NAMES = 300_000
+# A relisting takes at least this many times what the last listing of the folder took.
+_RELIST_COST_FACTOR = 10.0
 # A file missing from a held listing lists its folder again at most this often. A listing
 # of a folder at the cap (1,000 names) cost 0.25-0.9 s on a Serverless worker; once per
 # 10 s keeps that under a tenth of the time of a worker that opens new files of a growing
@@ -511,6 +571,13 @@ def _gdal_atoi(raw) -> int:
             break
         digits += ch
     return sign * int(digits) if digits else 0
+
+
+def listing_ceiling() -> int:
+    """The most names a folder may hold for the light tier to list it (``_MAX_LISTED_NAMES``
+    unless changed on ``_LISTINGS``): past it the folder is held as too large and its files
+    keep the process value. Not GDAL's own limit (listing_cap), which is far lower."""
+    return _LISTINGS.max_listed_names
 
 
 def listing_cap() -> Optional[int]:
@@ -538,7 +605,7 @@ class _FolderListings:
     """The names in each folder, listed once per process (os.scandir), most recent last.
 
     A folder is listed once this worker has opened ``list_after_opens`` distinct files of
-    it; before that its files are opened with the process TRUE (by-name checks), and a
+    it (however many names it holds, up to ``max_listed_names``); before that its files are opened with the process TRUE (by-name checks), and a
     folder the worker opens one file of (however often) is never listed. The listing is
     not moved to a background thread: on a Volume an open in the folder waits for a listing
     in progress there anyway (a fresh-file open took the 14.4-15.4 s of a 40,000-file
@@ -547,15 +614,16 @@ class _FolderListings:
 
     Keyed by the folder's resolved path (resolved once per folder string: a FUSE stat costs
     milliseconds; at most ``4 * max_folders`` folder strings and open records are kept). At
-    most ``max_folders`` listings are held, the least recently used dropped first. A folder
-    with more names than GDAL's own listing limit (listing_cap), found by a listing or told
-    by the reader (mark_too_large), goes into its own set of at most ``max_too_large``
-    folders: its files keep TRUE, as GDAL itself checks by name past that limit, and it is
-    not listed again. A folder that cannot be listed is not tried again for
+    most ``max_folders`` listings are held, and at most ``max_total_names`` names across
+    them, the least recently used dropped first. A folder with more than
+    ``max_listed_names`` names (far above GDAL's own listing limit, listing_cap), found by a
+    listing or told by the reader (mark_too_large), goes into its own set of at most
+    ``max_too_large`` folders: its files keep TRUE, the by-name checks, and it is not listed
+    again. A folder that cannot be listed is not tried again for
     ``_UNLISTABLE_LISTING_RETRY_S``. A file missing from a held listing lists the folder
-    again, at most once per ``relist_interval_s``; a sidecar written after the folder was
-    listed is not seen until the folder is listed again (a file missing from it, or a new
-    worker).
+    again, at most once per ``relist_interval_s`` and no sooner than ``_RELIST_COST_FACTOR``
+    times what the last listing took; a sidecar written after the folder was listed is not
+    seen until the folder is listed again (a file missing from it, or a new worker).
     """
 
     def __init__(
@@ -564,6 +632,8 @@ class _FolderListings:
         relist_interval_s: float = _RELIST_INTERVAL_S,
         list_after_opens: int = _LIST_AFTER_OPENS,
         max_too_large: int = 1024,
+        max_listed_names: int = _MAX_LISTED_NAMES,
+        max_total_names: int = _MAX_TOTAL_NAMES,
     ):
         from collections import OrderedDict
 
@@ -571,7 +641,9 @@ class _FolderListings:
         self.relist_interval_s = relist_interval_s
         self.list_after_opens = list_after_opens
         self.max_too_large = max_too_large
-        # key -> (frozenset of names | _UNLISTABLE, time listed)
+        self.max_listed_names = max_listed_names
+        self.max_total_names = max_total_names
+        # key -> (_IndexedNames | _UNLISTABLE, time listed, seconds the listing took)
         self._names: "OrderedDict[str, tuple]" = OrderedDict()
         self._too_large: "OrderedDict[str, None]" = OrderedDict()
         self._resolved: "OrderedDict[str, str]" = OrderedDict()
@@ -587,19 +659,19 @@ class _FolderListings:
             self._opened.clear()
 
     def _list(self, folder: str):
-        cap = listing_cap()
+        bound = self.max_listed_names
         names = []
         try:
             with os.scandir(folder) as it:
                 for entry in it:
                     names.append(entry.name)
-                    if cap is not None and len(names) > cap:
+                    if len(names) > bound:
                         self.listings += 1
                         return _TOO_LARGE
         except OSError:
             return None
         self.listings += 1
-        return frozenset(names)
+        return _IndexedNames(names)
 
     def _key(self, folder: str) -> str:
         with self._lock:
@@ -623,15 +695,28 @@ class _FolderListings:
         self._names.pop(key, None)
 
     def _store(self, key: str, folder: str):
+        started = _now()
         names = self._list(folder)
+        listed_at = _now()
         with self._lock:
             if names is _TOO_LARGE:
                 self._hold_too_large(key)
                 return _TOO_LARGE
-            self._names[key] = (_UNLISTABLE if names is None else names, _now())
+            self._names[key] = (
+                _UNLISTABLE if names is None else names,
+                listed_at,
+                listed_at - started,
+            )
             self._names.move_to_end(key)
-            while len(self._names) > self.max_folders:
-                self._names.popitem(last=False)
+            total = sum(
+                len(v[0]) for v in self._names.values() if v[0] is not _UNLISTABLE
+            )
+            while len(self._names) > self.max_folders or (
+                total > self.max_total_names and len(self._names) > 1
+            ):
+                _k, (dropped, _t, _d) = self._names.popitem(last=False)
+                if dropped is not _UNLISTABLE:
+                    total -= len(dropped)
         return names
 
     def mark_too_large(self, folder: str) -> None:
@@ -673,7 +758,7 @@ class _FolderListings:
                 return None
             names = self._store(key, folder)
             return names if names is _TOO_LARGE or names else None
-        names, listed_at = held
+        names, listed_at, took = held
         if names is _UNLISTABLE:
             if _now() - listed_at < _UNLISTABLE_LISTING_RETRY_S:
                 return None
@@ -681,7 +766,9 @@ class _FolderListings:
             return names if names is _TOO_LARGE or names else None
         if must_hold in names:
             return names
-        if _now() - listed_at >= self.relist_interval_s:
+        if _now() - listed_at >= max(
+            self.relist_interval_s, _RELIST_COST_FACTOR * took
+        ):
             relisted = self._store(key, folder)
             if relisted is _TOO_LARGE or relisted:
                 return relisted
@@ -700,10 +787,9 @@ def note_folder_files(path, count) -> None:
     """Take *count*, a tile's ``path_folder_files``, as a hint about the folder of *path*.
 
     The value is data (a tile row can carry anything), so it is only ever allowed to choose
-    between two correct modes: a count over the listing cap (listing_cap, the same
-    GDAL_READDIR_LIMIT_ON_OPEN) holds the folder as too large without listing it, and its
-    files keep TRUE (by-name checks), as GDAL itself does past that limit; anything else
-    (a count at or under the cap, none, or one that is neither a non-negative int nor a
+    between two correct modes: a count over the listing bound (listing_ceiling) holds the
+    folder as too large without listing it, and its files keep TRUE (by-name checks);
+    anything else (a count at or under the bound, none, or one that is neither a non-negative int nor a
     plain ASCII decimal string) does nothing, so
     the folder is listed as without a hint and its listing decides per file. A hint never
     yields EMPTY_DIR: only a real listing of the folder can (readdir_mode_for).
@@ -717,8 +803,7 @@ def note_folder_files(path, count) -> None:
         n = int(text)
     if n < 0:
         return
-    cap = listing_cap()
-    if cap is None or n <= cap:
+    if n <= listing_ceiling():
         return
     try:
         p = os.fspath(path)
@@ -753,8 +838,11 @@ def readdir_mode(path) -> Optional[str]:
     environment before configure_gdal_env ran, any value; in a rasterio.Env around the
     call; or as a GDAL config option since), for a cloud, /vsi, DRIVER: or non-path
     *path* (TRUE, no listing), when the thread-local setter cannot be reached, for a folder
-    that cannot be listed or is larger than GDAL's listing limit, and for a file missing
-    from its folder's listing. See _READDIR_ON_OPEN and readdir_mode_for."""
+    that cannot be listed or holds more names than the listing bound (listing_ceiling), and
+    for a file missing from its folder's listing. A folder past GDAL's own listing limit
+    (listing_cap) is listed like any other, but never gives ``NO``: GDAL would list it at
+    every open and drop the listing, which is the by-name check (``TRUE``) at the cost of
+    the listing. See _READDIR_ON_OPEN and readdir_mode_for."""
     if not _READDIR_SET_HERE or _user_env_sets_readdir():
         return None
     try:
@@ -776,7 +864,12 @@ def readdir_mode(path) -> Optional[str]:
     names = _LISTINGS.names(folder, name)
     if names is None or names is _TOO_LARGE or name not in names:
         return None
-    return readdir_mode_for(name, names)
+    mode = readdir_mode_for(name, names)
+    if mode == "NO":
+        cap = listing_cap()
+        if cap is not None and len(names) > cap:
+            return "TRUE"
+    return mode
 
 
 # CPLSetThreadLocalConfigOption / CPLGetThreadLocalConfigOption of the libgdal rasterio

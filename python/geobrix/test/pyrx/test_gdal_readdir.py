@@ -373,18 +373,20 @@ def test_the_listings_held_are_capped(tmp_path, readdir, monkeypatch):
     assert len(_env._LISTINGS._resolved) == 8
 
 
-def test_a_folder_past_gdals_listing_limit_opens_with_by_name_checks(
+def test_a_folder_past_the_listing_bound_opens_with_by_name_checks(
     tmp_path, readdir, monkeypatch
 ):
-    """GDAL drops a listing longer than GDAL_READDIR_LIMIT_ON_OPEN (1000 unless set) and
-    checks sidecars by name. A folder past that limit is held as too large, after a scan
-    that stops past the limit, and its files keep the process value (TRUE); a later open
-    does not list it again."""
+    """A folder with more names than the listing bound (``max_listed_names``, far above GDAL's
+    1000) is held as too large, after a scan that stops past the bound, and its files keep the
+    process value (TRUE); a later open does not list it again. GDAL's own limit
+    (GDAL_READDIR_LIMIT_ON_OPEN) is read as GDAL reads it but no longer bounds the listing.
+    """
     readdir(None)
     assert _env.listing_cap() == 1000
     monkeypatch.setenv("GDAL_READDIR_LIMIT_ON_OPEN", "0")
     assert _env.listing_cap() is None  # 0: no limit, as in GDAL
     monkeypatch.setenv("GDAL_READDIR_LIMIT_ON_OPEN", "5")
+    monkeypatch.setattr(_env._LISTINGS, "max_listed_names", 5)
     a = _plain_tiff(tmp_path / "a.tif")
     for i in range(6):
         (tmp_path / f"f{i}.json").write_text("{}")
@@ -393,7 +395,7 @@ def test_a_folder_past_gdals_listing_limit_opens_with_by_name_checks(
     assert _env.readdir_mode(a) is None
     assert _env._LISTINGS.listings - before == 1
     assert os.path.realpath(tmp_path) in _env._LISTINGS._too_large
-    monkeypatch.setenv("GDAL_READDIR_LIMIT_ON_OPEN", "10")
+    monkeypatch.setattr(_env._LISTINGS, "max_listed_names", 10)
     _env._LISTINGS.clear()
     assert _env.readdir_mode(a) == "EMPTY_DIR"
 
@@ -557,7 +559,7 @@ def test_a_tile_whose_folder_is_past_the_cap_opens_without_a_listing(
     (open_tile, open_header, rst_sample) keep TRUE."""
     readdir(None)
     a = _plain_tiff(tmp_path / "a.tif")
-    tile = _hinted_tile(a, "40000")
+    tile = _hinted_tile(a, "400000")
     with ot._open(tile) as ds:
         assert ds.read(1).sum() == 64
     with ot.open_header(tile) as ds:
@@ -603,7 +605,7 @@ def test_a_listing_held_outranks_a_count(tmp_path, readdir):
     readdir(None)
     a = _plain_tiff(tmp_path / "a.tif")
     assert _env.readdir_mode(a) == "EMPTY_DIR"
-    _env.note_folder_files(a, "40000")
+    _env.note_folder_files(a, "400000")
     assert _env.readdir_mode(a) == "EMPTY_DIR"
 
 
@@ -615,7 +617,7 @@ def test_the_reader_stamps_its_folder_count_on_virtual_tiles(tmp_path, monkeypat
     from databricks.labs.gbx.ds.raster import RasterGbxReader
     from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
 
-    monkeypatch.setenv("GDAL_READDIR_LIMIT_ON_OPEN", "2")
+    monkeypatch.setattr(_env._LISTINGS, "max_listed_names", 2)
     (tmp_path / "sub").mkdir()
     for i in range(3):
         _plain_tiff(tmp_path / f"t{i}.tif")
@@ -647,7 +649,7 @@ def test_a_reader_tile_past_the_cap_reaches_the_open_as_a_hint(
     from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
 
     readdir(None)
-    monkeypatch.setenv("GDAL_READDIR_LIMIT_ON_OPEN", "2")
+    monkeypatch.setattr(_env._LISTINGS, "max_listed_names", 2)
     for i in range(3):
         _plain_tiff(tmp_path / f"t{i}.tif")
     reader = RasterGbxReader({"path": str(tmp_path), "virtualTiles": "true"})
@@ -741,7 +743,7 @@ def test_a_hinted_tile_on_the_grouped_file_path_does_no_scan(
             lru,
             str(a),
             None,
-            _hinted_tile(a, "40000"),
+            _hinted_tile(a, "400000"),
             0,
             "header",
             lambda ds, cellid: ds.width,
@@ -783,17 +785,17 @@ def test_a_folder_that_cannot_be_listed_is_not_tried_on_every_open(
 @pytest.mark.parametrize(
     "count, too_large",
     [
-        ("40000", True),
-        (" 40000 ", True),
+        ("400000", True),
+        (" 400000 ", True),
         ("9" * 40, True),
-        ("４００００", False),  # unicode digits: not a plain ASCII count
+        ("４０００００", False),  # unicode digits: not a plain ASCII count
         ("inf", False),
         (float("inf"), False),
-        (40000.0, False),
-        (40000, True),  # the reader's own int count (partition.folder_files)
+        (400000.0, False),
+        (400000, True),  # the reader's own int count (partition.folder_files)
         (True, False),  # a bool is not a count
-        (-40000, False),
-        ("-40000", False),
+        (-400000, False),
+        ("-400000", False),
         ("4e4", False),
     ],
 )
@@ -844,7 +846,7 @@ def test_too_large_marks_are_kept_apart_from_the_listings(
         assert _env.readdir_mode(listed[-1]) == "EMPTY_DIR"
     for i in range(5):
         (tmp_path / f"big{i}").mkdir()
-        _env.note_folder_files(_plain_tiff(tmp_path / f"big{i}" / "a.tif"), "40000")
+        _env.note_folder_files(_plain_tiff(tmp_path / f"big{i}" / "a.tif"), "400000")
     assert list(_env._LISTINGS._names) == [os.path.realpath(p.parent) for p in listed]
     assert list(_env._LISTINGS._too_large) == [
         os.path.realpath(tmp_path / f"big{i}") for i in (2, 3, 4)
@@ -859,7 +861,7 @@ def test_a_single_file_read_carries_no_folder_count(tmp_path, monkeypatch):
     from databricks.labs.gbx.ds.raster import RasterGbxReader
     from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
 
-    monkeypatch.setenv("GDAL_READDIR_LIMIT_ON_OPEN", "2")
+    monkeypatch.setattr(_env._LISTINGS, "max_listed_names", 2)
     for i in range(3):
         _plain_tiff(tmp_path / f"t{i}.tif")
     names = V2_TILE_SCHEMA.fieldNames()
@@ -884,7 +886,7 @@ def test_the_readers_own_opens_take_its_int_count(
     from databricks.labs.gbx.ds.raster import RasterGbxReader
 
     readdir(None)
-    monkeypatch.setenv("GDAL_READDIR_LIMIT_ON_OPEN", "2")
+    monkeypatch.setattr(_env._LISTINGS, "max_listed_names", 2)
     for i in range(3):
         _plain_tiff(tmp_path / f"t{i}.tif")
     reader = RasterGbxReader(
@@ -963,3 +965,196 @@ def test_a_libgdal_that_is_not_rasterios_turns_the_per_open_value_off(
     with caplog.at_level(logging.DEBUG, logger=_env.__name__):
         assert _env._thread_config() is None
     assert "is not rasterio's" in caplog.text
+
+
+# --- a folder past GDAL's listing limit: the per-file mode still comes from a listing ---------------
+#
+# Past GDAL_READDIR_LIMIT_ON_OPEN (1000) the process value TRUE makes GDAL stat each sidecar name
+# of every open, which on a Volume's FUSE under concurrent load cost a 10,000-tile read 1.7 to 3.1x
+# the same read with no sidecar look-up. The folder is listed once per process (up to a much higher
+# bound), and each file takes the mode its own sidecars call for.
+
+
+def _big_folder(folder, extra=1200):
+    """``a.tif`` (a real GeoTIFF) among ``extra`` other tiles, past the 1000-name limit."""
+    a = _plain_tiff(folder / "a.tif")
+    for i in range(extra):
+        (folder / f"f{i}.tif").write_bytes(b"")
+    return a
+
+
+def test_a_file_with_no_sidecar_in_a_folder_past_the_limit_takes_the_fast_mode(
+    tmp_path, readdir, opens_seen
+):
+    a = _big_folder(tmp_path)
+    readdir(None)
+    assert len(os.listdir(tmp_path)) > _env.listing_cap()
+    assert _env.readdir_mode(a) == "EMPTY_DIR"
+    with ot._open(_tile(a)) as ds:
+        assert ds.read(1).sum() == 64
+    assert {m for n, m in opens_seen if n == "a.tif"} == {"EMPTY_DIR"}
+
+
+def test_a_file_with_sidecars_in_a_folder_past_the_limit_keeps_the_by_name_check(
+    tmp_path, readdir, opens_seen
+):
+    """An external overview and a .aux.xml beside the file: TRUE, and the overviews are found.
+    A vendor metadata file in the folder, or a sidecar GDAL would not find by name, would be
+    ``NO`` in a small folder; past the limit GDAL drops its own listing and checks by name, so
+    it is TRUE here (``NO`` would have GDAL list the whole folder at every open)."""
+    a = _big_folder(tmp_path, extra=0)
+    with rasterio.Env(TIFF_USE_OVR=True):
+        with rasterio.open(a, "r+") as ds:
+            ds.build_overviews([2])
+    (tmp_path / "a.tif.aux.xml").write_text("<PAMDataset/>")
+    assert (tmp_path / "a.tif.ovr").exists()
+    for i in range(1200):
+        (tmp_path / f"f{i}.tif").write_bytes(b"")
+    b = _plain_tiff(tmp_path / "b.tif")
+    readdir(None)
+    assert _env.readdir_mode(a) == "TRUE"
+    with ot.open_header(_tile(a)) as ds:
+        assert ds.overviews(1) == [2]
+    assert {m for n, m in opens_seen if n == "a.tif"} == {"TRUE"}
+    # the sibling without sidecars still takes the fast mode
+    assert _env.readdir_mode(b) == "EMPTY_DIR"
+    # a sidecar GDAL does not find by name, and a vendor file: TRUE, never NO, past the limit
+    (tmp_path / "b.Tfw").write_text("x")
+    _env._LISTINGS.clear()
+    assert _env.readdir_mode(b) == "TRUE"
+    (tmp_path / "summary.txt").write_text("x")
+    _env._LISTINGS.clear()
+    assert _env.readdir_mode(a) == "TRUE"
+
+
+def test_a_folder_at_or_under_the_limit_keeps_no_for_a_candidate_gdal_misses(
+    tmp_path, readdir
+):
+    """Under the limit GDAL's own listing is cheap and the ``NO`` value stays."""
+    a = _plain_tiff(tmp_path / "a.tif")
+    (tmp_path / "a.Tfw").write_text("x")
+    readdir(None)
+    assert _env.readdir_mode(a) == "NO"
+
+
+def test_a_folder_past_the_limit_is_listed_once_for_all_its_files(
+    tmp_path, readdir, scans
+):
+    a = _big_folder(tmp_path)
+    others = [_plain_tiff(tmp_path / f"p{i}.tif") for i in range(4)]
+    readdir(None)
+    for p in [a, *others, a, *others]:
+        assert _env.readdir_mode(p) == "EMPTY_DIR"
+    assert scans == [str(tmp_path)]
+    assert os.path.realpath(tmp_path) not in _env._LISTINGS._too_large
+
+
+def test_a_folder_past_the_bound_is_held_as_too_large_and_keeps_the_process_value(
+    tmp_path, readdir, scans, monkeypatch
+):
+    """The much higher bound (``max_listed_names``): past it the scan stops and the folder is
+    held as too large, as before; it is not listed again."""
+    readdir(None)
+    monkeypatch.setattr(_env._LISTINGS, "max_listed_names", 50)
+    a = _plain_tiff(tmp_path / "a.tif")
+    for i in range(60):
+        (tmp_path / f"f{i}.json").write_text("{}")
+    for _ in range(3):
+        assert _env.readdir_mode(a) is None
+    assert scans == [str(tmp_path)]
+    assert os.path.realpath(tmp_path) in _env._LISTINGS._too_large
+    assert _env._LISTINGS.max_listed_names == 50
+    assert _env.listing_ceiling() == 50
+
+
+def test_the_default_bound_is_far_above_gdals_limit():
+    assert _env.listing_ceiling() >= 100 * _env.listing_cap()
+
+
+def test_a_reader_count_below_the_bound_does_not_stop_the_listing(
+    tmp_path, readdir, scans
+):
+    """The reader's count (path_folder_files) holds a folder as too large only past the bound."""
+    readdir(None)
+    a = _big_folder(tmp_path)
+    _env.note_folder_files(a, "40000")  # past GDAL's limit, under the bound
+    assert _env.readdir_mode(a) == "EMPTY_DIR"
+    assert len(scans) == 1
+    b = tmp_path / "x"
+    b.mkdir()
+    c = _plain_tiff(b / "c.tif")
+    _env.note_folder_files(c, str(10 * _env.listing_ceiling()))
+    assert _env.readdir_mode(c) is None
+    assert len(scans) == 1  # held as too large without a scan
+
+
+def test_a_large_listing_is_refreshed_no_sooner_than_ten_times_what_it_took(
+    tmp_path, readdir, monkeypatch
+):
+    """A file missing from a held listing lists the folder again at most once per
+    ``relist_interval_s``, and no sooner than 10x the time the last listing took: a slow
+    listing of a big folder is a tenth of the time of a worker that opens new files at once.
+    """
+    readdir(None)
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(_env, "_now", lambda: clock["t"])
+    real = _env._LISTINGS._list
+    n_scans = []
+
+    def slow(folder):
+        n_scans.append(folder)
+        clock["t"] += 5.0  # this listing took 5 s
+        return real(folder)
+
+    monkeypatch.setattr(_env._LISTINGS, "_list", slow)
+    _big_folder(tmp_path, extra=10)
+    assert _env.readdir_mode(tmp_path / "a.tif") == "EMPTY_DIR"
+    assert len(n_scans) == 1
+    new = _plain_tiff(tmp_path / "new.tif")
+    clock["t"] += _env._RELIST_INTERVAL_S  # past the plain interval, short of 10 x 5 s
+    assert _env.readdir_mode(new) is None
+    assert len(n_scans) == 1
+    clock["t"] += 50.0
+    assert _env.readdir_mode(new) == "EMPTY_DIR"
+    assert len(n_scans) == 2
+
+
+def test_listings_held_are_bounded_by_the_names_they_hold(
+    tmp_path, readdir, monkeypatch
+):
+    """A budget on the names held across all listings (``max_total_names``): the least recently
+    used listings go first, the newest stays."""
+    readdir(None)
+    monkeypatch.setattr(_env._LISTINGS, "max_total_names", 100)
+    folders = []
+    for i in range(3):
+        d = tmp_path / f"d{i}"
+        d.mkdir()
+        for j in range(60):
+            (d / f"f{j}.json").write_text("{}")
+        folders.append(_plain_tiff(d / "a.tif"))
+    for p in folders:
+        assert _env.readdir_mode(p) == "EMPTY_DIR"
+    held = list(_env._LISTINGS._names)
+    assert held == [os.path.realpath(folders[-1].parent)]
+
+
+@pytest.mark.parametrize(
+    "name, folder",
+    [
+        ("x.tif", ["x.tif", "y.tif", "xy.tif", "manifest.json", "x"]),
+        ("x.tif", ["x.tif", "x.tfw", "X.TFW", "x.tif.ovr", "x_rpc.txt", "x2.tif"]),
+        ("x.tif", ["x.tif", "x.Tfw", "X.tif.aux.xml", "xx.tif.aux.xml"]),
+        ("a_b.tif", ["a_b.tif", "a_b_c.tif", "a_b.msk", "a.tif", "a_.tif", "a-b.tif"]),
+        ("x.png", ["x.png", "x.pgw", "x.png.AUX", "x.png.ovr"]),
+        ("x.tif", ["x.tif", "readme.txt"]),
+        ("x.tif", ["x.tif", "DIM_x.XML", "x.xml"]),
+        ("Y.TIF", ["Y.TIF", "y.tfw", "y.TIF.msk", "Y2.TIF"]),
+        ("x.vrt", ["x.vrt", "x.tif"]),
+        ("noext", ["noext", "noext.aux", "noext2"]),
+    ],
+)
+def test_the_indexed_listing_gives_the_mode_of_the_plain_rule(name, folder):
+    """The index a listing carries answers the same candidate query as a scan of the names."""
+    indexed = _env._IndexedNames(folder)
+    assert _env.readdir_mode_for(name, indexed) == _env.readdir_mode_for(name, folder)

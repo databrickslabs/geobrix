@@ -1110,19 +1110,17 @@ class RasterGbxReader(DataSourceReader):
             path_glob_filter=self.path_glob_filter,
         )
         # Files per folder, from this listing (only files it accepted, so never more than
-        # the folder holds), kept for the folders past GDAL's listing limit: stamped on their
-        # virtual tiles as a hint that lets a worker skip listing such a folder
-        # (pyrx._env.note_folder_files). A count at or under the limit changes nothing on
-        # a worker, so it is not stamped, and the tile stays the one read_paths plans for
-        # the same file.
+        # the folder holds), kept for the folders past the bound a worker lists up to
+        # (pyrx._env.listing_ceiling): stamped on their virtual tiles as a hint that lets a
+        # worker skip listing such a folder (pyrx._env.note_folder_files). A count at or
+        # under the bound changes nothing on a worker, so it is not stamped, and the tile
+        # stays the one read_paths plans for the same file.
         folder_files: Dict[str, int] = {}
         for f in files:
             d = os.path.dirname(f)
             folder_files[d] = folder_files.get(d, 0) + 1
-        cap = _env.listing_cap()
-        self._folder_files = {
-            d: n for d, n in folder_files.items() if cap is not None and n > cap
-        }
+        bound = _env.listing_ceiling()
+        self._folder_files = {d: n for d, n in folder_files.items() if n > bound}
         if self.filter_regex and self.filter_regex != ".*":
             import re as _re
 

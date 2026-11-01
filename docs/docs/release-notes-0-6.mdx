@@ -399,8 +399,9 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
 - **The lightweight tier lists each folder once per worker, not at every open.** GDAL lists a raster's folder at every open to look for sidecar files. That took 0.3 s to 10 s per open on a Volume on Serverless. GeoBrix now lists a folder once per Python worker, when the worker opens a second, different file of it. It tells GDAL where to look.
   - A GeoTIFF, PNG, JPEG, JPEG 2000, netCDF, HDF or GRIB file with no sidecar opens with no sidecar look-up. This is about 2.5 times faster on Serverless.
   - A file with sidecars (external overviews, masks, `.aux.xml`, world files) still finds them. So do the files a VRT or another multi-file dataset opens.
-  - Sidecars are checked by name before a folder is listed, and in a folder of more than 1,000 files (GDAL's `GDAL_READDIR_LIMIT_ON_OPEN`).
-  - Tiles read with `raster_gbx` carry the reader's file count in `path_folder_files` and skip the listing.
+  - Sidecars are checked by name before a folder is listed, and in a folder of more than 100,000 files.
+  - A folder of up to 100,000 files is listed once per worker, so a file with no sidecar in a folder of 10,000 files opens with no sidecar look-up.
+  - Tiles read from a folder of more than 100,000 files with `raster_gbx` carry the reader's file count in `path_folder_files` and skip the listing.
   - A sidecar added after a worker listed the folder is not seen until the worker lists it again or restarts. A missing file triggers a new listing, at most every 10 seconds.
 
   See [Sidecar files and folder listings](./api/performance#sidecar-files-and-folder-listings).

@@ -400,7 +400,7 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
   - A GeoTIFF, PNG, JPEG, JPEG 2000, netCDF, HDF or GRIB file with no sidecar opens with no sidecar look-up. This is about 2.5 times faster on Serverless.
   - A file with sidecars (external overviews, masks, `.aux.xml`, world files) still finds them. So do the files a VRT or another multi-file dataset opens.
   - Sidecars are checked by name before a folder is listed, and in a folder of more than 100,000 files.
-  - A folder of up to 100,000 files is listed once per worker, so a file with no sidecar in a folder of 10,000 files opens with no sidecar look-up.
+  - A folder of up to 100,000 files is listed once per worker. A file with no sidecar in a folder of 10,000 files then opens with no sidecar look-up.
   - Tiles read from a folder of more than 100,000 files with `raster_gbx` carry the reader's file count in `path_folder_files` and skip the listing.
   - A sidecar added after a worker listed the folder is not seen until the worker lists it again or restarts. A missing file triggers a new listing, at most every 10 seconds.
 

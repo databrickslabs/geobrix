@@ -131,19 +131,21 @@ def test_a_missing_precondition_exits_2_and_a_flag_exits_1(
     assert lt.main(argv) == 2
     assert "PRECONDITION MISSING" in capsys.readouterr().err
     monkeypatch.setattr(lt, "ensure_corpus", lambda *a: 96)
-    monkeypatch.setattr(lt, "measure", lambda spec, corpus: _res(udf=(7.1, 7.1, 7.4)))
+    monkeypatch.setattr(
+        lt, "measure_runs", lambda spec, corpus, repeats: [_res(udf=(7.1, 7.1, 7.4))]
+    )
     assert lt.main(argv) == 1  # flagged
-    monkeypatch.setattr(lt, "measure", lambda spec, corpus: _res())
+    monkeypatch.setattr(lt, "measure_runs", lambda spec, corpus, repeats: [_res()])
     assert lt.main(argv) == 0
 
 
 def test_a_pass_that_crashes_is_not_a_flag(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(lt, "ensure_corpus", lambda *a: 96)
 
-    def boom(spec, corpus):
+    def boom(spec, corpus, repeats):
         raise RuntimeError("spark died")
 
-    monkeypatch.setattr(lt, "measure", boom)
+    monkeypatch.setattr(lt, "measure_runs", boom)
     assert lt.main(["--corpus-dir", str(tmp_path)]) == 3
     assert "spark died" in capsys.readouterr().err
 
@@ -333,12 +335,14 @@ def test_main_writes_a_baseline_then_compares_against_it(tmp_path, capsys, monke
     monkeypatch.setattr(lt, "ensure_corpus", lambda *a: 96)
     base = str(tmp_path / "base.json")
     argv = ["--corpus-dir", str(tmp_path)]
-    monkeypatch.setattr(lt, "measure", lambda spec, corpus: _res())
+    monkeypatch.setattr(lt, "measure_runs", lambda spec, corpus, repeats: [_res()])
     assert lt.main(argv + ["--baseline-write", "--baseline", base]) == 0
     assert "baseline written" in capsys.readouterr().out and os.path.exists(base)
     assert lt.main(argv + ["--baseline", base]) == 0  # the same timings
     monkeypatch.setattr(
-        lt, "measure", lambda spec, corpus: _res(udf=_doubled_per_tile("udf"))
+        lt,
+        "measure_runs",
+        lambda spec, corpus, repeats: [_res(udf=_doubled_per_tile("udf"))],
     )
     assert lt.main(argv + ["--baseline", base]) == 1
     assert "udf: per-tile" in capsys.readouterr().out
@@ -348,7 +352,9 @@ def test_main_writes_a_baseline_then_compares_against_it(tmp_path, capsys, monke
 
 def test_a_flagged_pass_does_not_write_a_baseline(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(lt, "ensure_corpus", lambda *a: 96)
-    monkeypatch.setattr(lt, "measure", lambda spec, corpus: _res(udf=(7.1, 7.1, 7.4)))
+    monkeypatch.setattr(
+        lt, "measure_runs", lambda spec, corpus, repeats: [_res(udf=(7.1, 7.1, 7.4))]
+    )
     base = tmp_path / "base.json"
     assert (
         lt.main(
@@ -357,3 +363,142 @@ def test_a_flagged_pass_does_not_write_a_baseline(tmp_path, capsys, monkeypatch)
         == 1
     )
     assert not base.exists() and "baseline not written" in capsys.readouterr().out
+
+
+# ---- repeated measured runs: the median, not one noisy run
+
+
+def _scaled(f):
+    """GOOD with every form's time above the floor scaled by f: a slower (f > 1) or faster run of the same machine."""
+    floor = GOOD["floor"]
+    return _res(
+        **{
+            form: tuple(fl + (t - fl) * f for t, fl in zip(ts, floor))
+            for form, ts in GOOD.items()
+            if form != "floor"
+        }
+    )
+
+
+def test_the_median_time_of_three_runs_ignores_the_one_odd_run():
+    runs = [_scaled(1.0), _scaled(1.6), _scaled(1.0)]
+    med = lt.median_res(runs)
+    assert med == _scaled(1.0)  # the 1.6x run does not move the median
+    assert lt.median_res([_scaled(1.0)]) == _scaled(1.0)
+
+
+def test_a_cell_that_failed_in_any_run_stays_a_failure_in_the_median():
+    bad = {**_scaled(1.0), ("d-rs", 24): float("nan")}
+    med = lt.median_res([_scaled(1.0), bad, _scaled(1.0)])
+    assert (
+        math.isnan(med[("d-rs", 24)]) and med[("udf", 24)] == _scaled(1.0)[("udf", 24)]
+    )
+
+
+def test_the_median_slope_of_three_runs_is_the_middle_cost_per_tile_not_the_mean():
+    kw = dict(forms=tuple(GOOD), ns=NS)
+    one = lt.per_tile_ms(_scaled(1.0), **kw)
+    odd = lt.per_tile_ms(_scaled(1.6), **kw)  # the 1.6x spread seen on d-py
+    med = lt.median_per_tile([_scaled(1.0), _scaled(1.6), _scaled(1.0)], **kw)
+    assert med == pytest.approx(one) and odd["d-py"] > 1.5 * one["d-py"]
+    mid = lt.median_per_tile([_scaled(1.0), _scaled(1.3), _scaled(1.6)], **kw)
+    assert mid["d-py"] == pytest.approx(lt.per_tile_ms(_scaled(1.3), **kw)["d-py"])
+
+
+def test_a_form_missing_a_slope_in_one_run_takes_the_median_of_the_others():
+    kw = dict(forms=tuple(GOOD), ns=NS)
+    gone = {k: v for k, v in _scaled(1.0).items() if k != ("b", 96)}
+    med = lt.median_per_tile([_scaled(1.0), gone, _scaled(1.6)], **kw)
+    assert med["b"] == pytest.approx(
+        (
+            lt.per_tile_ms(_scaled(1.0), **kw)["b"]
+            + lt.per_tile_ms(_scaled(1.6), **kw)["b"]
+        )
+        / 2
+    )
+
+
+def test_measure_runs_warms_up_once_and_times_every_n_per_repeat(monkeypatch):
+    from types import SimpleNamespace as R
+
+    from databricks.labs.gbx.bench import levels
+    from databricks.labs.gbx.bench import levels_forms as lf
+
+    spec = lt.SETS["IO"]
+    calls = []
+
+    def fake_run_mvp(spark, mvp, *a, base_rows, **kw):
+        calls.append(base_rows)
+        return [
+            R(
+                form=f.variant,
+                iter_median_s=base_rows / 10,
+                status="ok",
+                failure_mode="",
+                note="",
+            )
+            for f in lf.FORMS[mvp]
+        ]
+
+    monkeypatch.setattr(levels, "run_mvp", fake_run_mvp)
+    runs = lt.measure_runs(spec, "/corpus", 3, spark=object())
+    assert calls == [6] + [6, 24, 96] * 3  # one warmup, then a full ladder per repeat
+    assert len(runs) == 3 and all(r[("udf", 96)] == 9.6 for r in runs)
+
+
+def test_the_repeats_default_is_one_for_the_plain_pass_and_three_for_the_baseline_modes(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(lt, "ensure_corpus", lambda *a: 96)
+    seen = []
+
+    def fake(spec, corpus, repeats):
+        seen.append(repeats)
+        return [_res()] * repeats
+
+    monkeypatch.setattr(lt, "measure_runs", fake)
+    base = str(tmp_path / "b.json")
+    argv = ["--corpus-dir", str(tmp_path)]
+    assert lt.main(argv) == 0
+    assert lt.main(argv + ["--baseline-write", "--baseline", base]) == 0
+    assert lt.main(argv + ["--baseline", base]) == 0
+    assert lt.main(argv + ["--baseline", base, "--repeats", "5"]) == 0
+    assert lt.main(argv + ["--repeats", "2"]) == 0
+    assert seen == [1, 3, 3, 5, 2]
+
+
+def test_a_baseline_write_of_fewer_than_three_runs_is_a_usage_error(
+    tmp_path, capsys, monkeypatch
+):
+    monkeypatch.setattr(lt, "ensure_corpus", lambda *a: 96)
+    monkeypatch.setattr(
+        lt, "measure_runs", lambda spec, corpus, repeats: pytest.fail("must not time")
+    )
+    with pytest.raises(SystemExit) as e:
+        lt.main(["--corpus-dir", str(tmp_path), "--baseline-write", "--repeats", "2"])
+    assert e.value.code == 2 and "at least 3" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        lt.main(["--corpus-dir", str(tmp_path), "--repeats", "0"])
+
+
+def test_one_odd_run_in_three_neither_flags_nor_moves_the_stored_baseline(
+    tmp_path, capsys, monkeypatch
+):
+    monkeypatch.setattr(lt, "ensure_corpus", lambda *a: 96)
+    base = str(tmp_path / "b.json")
+    argv = ["--corpus-dir", str(tmp_path)]
+    # d-py came out 1.6x slower in one run of three (the spread seen in a single-run pass): the median holds
+    monkeypatch.setattr(
+        lt,
+        "measure_runs",
+        lambda spec, corpus, repeats: [_scaled(1.0), _scaled(1.0), _scaled(1.0)],
+    )
+    assert lt.main(argv + ["--baseline-write", "--baseline", base]) == 0
+    monkeypatch.setattr(
+        lt,
+        "measure_runs",
+        lambda spec, corpus, repeats: [_scaled(1.6), _scaled(1.0), _scaled(1.0)],
+    )
+    assert lt.main(argv + ["--baseline", base]) == 0
+    out = capsys.readouterr().out
+    assert "per run" in out  # the spread is shown, so a noisy machine is visible

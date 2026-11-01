@@ -1,7 +1,8 @@
 """Local timing pass: does each form of a levels set scale with n on one machine (`gbx:bench:local-timing`)?
 
 The cluster ladder takes hours; most of what is wrong with a set of forms shows locally in minutes. The pass times the
-forms of a set at three sizes on ``local[8]`` (a dropped warmup pass, then one measured run each) and flags what no
+forms of a set at three sizes on ``local[8]`` (a dropped warmup pass, then ``--repeats`` measured runs each; their median
+is what is judged) and flags what no
 healthy form does:
 
 * more than K times the row UDF (the reference decode) at the largest n;
@@ -14,7 +15,7 @@ healthy form does:
 
 Those rules compare a form with the reference and its peers, so they miss a form whose own cost per tile doubled
 (they need 3x). ``--baseline-write`` stores each form's cost per tile (the slope between the two larger ns, minus the
-floor's) with the machine it was taken on; ``--baseline`` flags a form above ``--baseline-k`` (1.5) times its stored cost.
+floor's, the median over the runs; one run of a form differed by 1.6x from the next) with the machine it was taken on; ``--baseline`` flags a form above ``--baseline-k`` (1.5) times its stored cost.
 
 Exit codes: 0 no flags, 1 the pass flagged a form, 2 a precondition is missing (``PRECONDITION MISSING``, or a usage
 error), 3 the pass itself failed.
@@ -46,6 +47,7 @@ N_INDEPENDENT = 0.6  # t(smallest n) above this share of t(largest n): the form 
 BASELINE_K_DEFAULT = (
     1.5  # a form above this multiple of its stored cost per tile is flagged
 )
+BASELINE_REPEATS = 3  # measured runs per n for a baseline write or comparison: one run of three is not the cost
 MIN_BASELINE_MS = (
     1.0  # a stored cost under this (noise around zero) is compared as this much
 )
@@ -184,6 +186,60 @@ def per_tile_ms(
     return {f: s - base for f in forms[:-1] if (s := slope(f)) is not None}
 
 
+def median_res(
+    runs: Sequence[Dict[Tuple[str, int], float]],
+) -> Dict[Tuple[str, int], float]:
+    """The median seconds of each `(form, n)` over the measured runs.
+
+    A cell with no usable time in any run (failed, skipped, 0 s) stays NaN: a failure is a flag, not noise to out-vote.
+    """
+    out: Dict[Tuple[str, int], float] = {}
+    for key in {k for r in runs for k in r}:
+        ts = [r.get(key) for r in runs]
+        out[key] = statistics.median(ts) if all(_ok(t) for t in ts) else float("nan")
+    return out
+
+
+def median_per_tile(
+    runs: Sequence[Dict[Tuple[str, int], float]],
+    *,
+    forms: Sequence[str],
+    ns: Sequence[int],
+) -> Dict[str, float]:
+    """Each form's median cost per tile (ms) over the runs: the median of the runs' slopes (`per_tile_ms`).
+
+    A form without a slope in some run takes the median of the runs that have one."""
+    each = [per_tile_ms(r, forms=forms, ns=ns) for r in runs]
+    return {
+        f: statistics.median(v) for f in forms if (v := [p[f] for p in each if f in p])
+    }
+
+
+def per_run_table(
+    runs: Sequence[Dict[Tuple[str, int], float]],
+    *,
+    forms: Sequence[str],
+    ns: Sequence[int],
+) -> str:
+    """Cost per tile (ms) of each form in each run and the spread (max/min): how noisy this machine was."""
+    each = [per_tile_ms(r, forms=forms, ns=ns) for r in runs]
+    lines = [
+        "per-tile ms per run"
+        + "".join(f"{'run ' + str(i + 1):>9}" for i in range(len(runs)))
+        + "   max/min"
+    ]
+    for f in forms[:-1]:
+        v = [p.get(f) for p in each]
+        ok = [x for x in v if x is not None and x > 0]
+        spread = max(ok) / min(ok) if len(ok) > 1 else float("nan")
+        lines.append(
+            f"  {f:17s}"
+            + "".join(f"{'-' if x is None else format(x, '.1f'):>9}" for x in v)
+            + f"{spread:10.2f}"
+        )
+    return "\n".join(lines)
+
+
 def baseline_flags(
     per_tile: Dict[str, float],
     baseline: Dict[str, float],
@@ -253,6 +309,7 @@ def write_baseline(
     ns: Sequence[int],
     per_tile: Dict[str, float],
     env: Dict[str, object],
+    repeats: int = 1,
 ) -> None:
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w") as fh:
@@ -261,6 +318,7 @@ def write_baseline(
                 "set": set_name,
                 "ns": list(ns),
                 "per_tile_ms": {f: round(v, 3) for f, v in sorted(per_tile.items())},
+                "repeats": repeats,
                 "env": env,
                 "written": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             },
@@ -351,8 +409,12 @@ def _spark():
     return spark
 
 
-def measure(spec: SetSpec, corpus: str, spark=None) -> Dict[Tuple[str, int], float]:
-    """Run the set's forms at each n on local[8]: a first pass at the smallest n only warms the JVM and the workers."""
+def measure_runs(
+    spec: SetSpec, corpus: str, repeats: int = 1, spark=None
+) -> List[Dict[Tuple[str, int], float]]:
+    """Run the set's forms at each n on local[8]: one dropped warmup pass at the smallest n (it only warms the JVM and
+    the workers), then `repeats` measured passes over every n. One `{(form, n): seconds}` dict per measured pass.
+    """
     from unittest import mock
 
     from databricks.labs.gbx.bench import levels
@@ -363,8 +425,11 @@ def measure(spec: SetSpec, corpus: str, spark=None) -> Dict[Tuple[str, int], flo
         (f for f in lf.FORMS[spec.mvp] if f.variant in spec.forms),
         key=lambda f: spec.forms.index(f.variant),
     )
-    res: Dict[Tuple[str, int], float] = {}
-    for n in (spec.ns[0],) + tuple(spec.ns):
+    runs: List[Dict[Tuple[str, int], float]] = []
+    passes = [(None, spec.ns[0])] + [
+        (i, n) for i in range(repeats) for n in spec.ns
+    ]  # (run index | warmup, n)
+    for i, n in passes:
         with mock.patch.dict(lf.FORMS, {spec.mvp: chosen}):
             rows = levels.run_mvp(
                 spark,
@@ -378,14 +443,24 @@ def measure(spec: SetSpec, corpus: str, spark=None) -> Dict[Tuple[str, int], flo
                 where="docker",
                 base_rows=n,
             )
+        if i is not None and i == len(runs):
+            runs.append({})
         for r in rows:
-            res[(r.form, n)] = r.iter_median_s if r.status == "ok" else float("nan")
+            if i is not None:
+                runs[i][(r.form, n)] = (
+                    r.iter_median_s if r.status == "ok" else float("nan")
+                )
             if r.status != "ok":
                 print(
-                    f"  {r.form} n={n}: {r.status} {r.failure_mode or r.note}",
+                    f"  {r.form} n={n}{'' if i is None else f' run {i + 1}'}: {r.status} {r.failure_mode or r.note}",
                     flush=True,
                 )
-    return res
+    return runs
+
+
+def measure(spec: SetSpec, corpus: str, spark=None) -> Dict[Tuple[str, int], float]:
+    """One measured pass (see `measure_runs`)."""
+    return measure_runs(spec, corpus, 1, spark)[0]
 
 
 def main(argv=None) -> int:
@@ -427,7 +502,24 @@ def main(argv=None) -> int:
         default=BASELINE_K_DEFAULT,
         help=f"the multiple of the baseline that flags a form (default {BASELINE_K_DEFAULT:g})",
     )
+    ap.add_argument(
+        "--repeats",
+        type=int,
+        default=None,
+        help="measured runs per n; the table and the baseline use their median (default 1 for the plain pass, "
+        f"{BASELINE_REPEATS} with --baseline or --baseline-write; --baseline-write needs at least {BASELINE_REPEATS})",
+    )
     a = ap.parse_args(argv)
+    if a.repeats is None:
+        a.repeats = (
+            BASELINE_REPEATS if (a.baseline is not None or a.baseline_write) else 1
+        )
+    if a.repeats < 1:
+        ap.error("--repeats must be at least 1")
+    if a.baseline_write and a.repeats < BASELINE_REPEATS:
+        ap.error(
+            f"--baseline-write needs at least {BASELINE_REPEATS} runs per n (one run is too noisy to store); got --repeats {a.repeats}"
+        )
     if a.set not in SETS:
         ap.error(f"set {a.set!r} is not implemented (have: {', '.join(sorted(SETS))})")
     spec = SETS[a.set]
@@ -457,13 +549,16 @@ def _run(a, spec: SetSpec) -> int:
         f"[local-timing {spec.mvp}] corpus {corpus}/rows: {held} tiles; forms {', '.join(spec.forms)}; n {spec.ns}; K={a.k:g}",
         flush=True,
     )
-    res = measure(spec, corpus)
+    runs = measure_runs(spec, corpus, a.repeats)
+    res = median_res(runs)
     print(
-        "\nseconds per form at n tiles\n"
+        f"\nseconds per form at n tiles (median of {len(runs)} measured run{'s' if len(runs) != 1 else ''})\n"
         + table(res, forms=spec.forms, ns=spec.ns, reference=spec.reference)
     )
     found = flags(res, forms=spec.forms, ns=spec.ns, k=a.k, reference=spec.reference)
-    per_tile = per_tile_ms(res, forms=spec.forms, ns=spec.ns)
+    per_tile = median_per_tile(runs, forms=spec.forms, ns=spec.ns)
+    if len(runs) > 1:
+        print("\n" + per_run_table(runs, forms=spec.forms, ns=spec.ns))
     env = _environment()
     if stored is not None:
         print(
@@ -481,8 +576,10 @@ def _run(a, spec: SetSpec) -> int:
         if found:
             print(f"baseline not written: the pass flagged a form ({path} unchanged)")
         else:
-            write_baseline(path, spec.mvp, spec.ns, per_tile, env)
-            print(f"baseline written: {path} ({len(per_tile)} forms, {env})")
+            write_baseline(path, spec.mvp, spec.ns, per_tile, env, a.repeats)
+            print(
+                f"baseline written: {path} ({len(per_tile)} forms, median of {a.repeats} runs per n, {env})"
+            )
     return 1 if found else 0
 
 

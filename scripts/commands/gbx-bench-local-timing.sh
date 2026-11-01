@@ -20,6 +20,8 @@ show_help() {
     echo -e "  ${GREEN}--baseline-write${NC} Store this pass' cost per tile as the baseline (at --baseline path, or the default)."
     echo -e "                      A pass that flags a form is not stored"
     echo -e "  ${GREEN}--baseline-k <number>${NC}  Multiple of the baseline that flags a form (default 1.5)"
+    echo -e "  ${GREEN}--repeats <n>${NC}    Measured runs per n; the table and the baseline use their median. Default 1 for the plain"
+    echo -e "                      pass, 3 with --baseline or --baseline-write (--baseline-write needs at least 3)"
     echo -e "  ${GREEN}--log <path>${NC}     Write output to log file (filename -> test-logs/<name>)"
     print_lock_help
     echo -e "  ${GREEN}--help${NC}           Show this help"
@@ -53,7 +55,7 @@ while [[ $# -gt 0 ]]; do
             fi
             ;;
         --baseline-write) BASELINE_ARGS="$BASELINE_ARGS --baseline-write"; shift ;;
-        --set|--k|--log|--baseline-k)
+        --set|--k|--log|--baseline-k|--repeats)
             if [[ $# -lt 2 ]]; then
                 echo -e "${RED}Option $1 needs a value${NC}" >&2
                 exit 2
@@ -61,6 +63,7 @@ while [[ $# -gt 0 ]]; do
             case $1 in
                 --set) SET="$2" ;;
                 --k)   K="$2" ;;
+                --repeats) BASELINE_ARGS="$BASELINE_ARGS --repeats $(printf '%q' "$2")" ;;
                 --baseline-k) BASELINE_ARGS="$BASELINE_ARGS --baseline-k $(printf '%q' "$2")" ;;
                 --log) LOG_PATH=$(resolve_log_path "$2") ;;
             esac

@@ -2,7 +2,7 @@
 
 Time the forms of a levels set at three sizes on `local[8]` in the dev container. Exit 1 when a form does not scale with n, or (with `--baseline`) costs more per tile than it did.
 
-The pass takes about 3 minutes. Run it before a cluster IO round and after a change to `levels_forms._io_read`, `pyrx/_mvp_forms.py` or `open_tile.py`.
+The plain pass takes about 70 seconds on a 12-core arm64 laptop. `--baseline` and `--baseline-write` take about 2.5 minutes (2:24 and 2:38 measured): they time every n three times. Run it before a cluster IO round and after a change to `levels_forms._io_read`, `pyrx/_mvp_forms.py` or `open_tile.py`.
 
 **Usage:** `bash scripts/commands/gbx-bench-local-timing.sh [OPTIONS]`
 
@@ -12,6 +12,7 @@ The pass takes about 3 minutes. Run it before a cluster IO round and after a cha
 - `--baseline [path]`: also flag a form whose cost per tile is over `--baseline-k` times the stored one. The default path is `test-logs/local-timing-baseline-<set>.json` (gitignored, per machine; `gbx:bench:clean` does not touch it).
 - `--baseline-write`: store this pass's cost per tile as the baseline (at the `--baseline` path, or the default) instead of comparing. A pass that flags a form is not stored.
 - `--baseline-k <number>`: the multiple of the baseline that flags a form. Default `1.5`.
+- `--repeats <n>`: measured runs per n. The table, the flags and the baseline use their median. Default `1` for the plain pass and `3` with `--baseline` or `--baseline-write`. `--baseline-write` refuses fewer than 3 (exit 2).
 - `--log <path>`: write the output to a log file (a filename goes to `test-logs/<name>`).
 - `--no-wait`: exit 75 at once if another test run holds the container lock.
 - `--help`: print the help.
@@ -19,8 +20,8 @@ The pass takes about 3 minutes. Run it before a cluster IO round and after a cha
 **What it does:**
 - Checks for a built JAR and the Rust payload (`GBX_NATIVE_ROOT`, default `build/env-wheel/env6/payload`). A missing one prints `PRECONDITION MISSING` and exits 2; so does a corpus with fewer than 96 tiles, a missing baseline, or a baseline of another set.
 - Copies 96 tiles from `/Volumes/main/default/bench-corpus/rows` to `/tmp/gbx-local-timing/IO/rows` in the container, once.
-- Runs forms `b`, `c`, `udf`, `d-py`, `d-rs` and `floor` at n = 6, 24 and 96. A dropped warmup pass comes first, then one measured run each.
-- Prints seconds per n, the ratio to `floor`, the ratio to `udf` and t96/t24.
+- Runs forms `b`, `c`, `udf`, `d-py`, `d-rs` and `floor` at n = 6, 24 and 96. A dropped warmup pass comes first, then `--repeats` measured runs of each n.
+- Prints the median seconds per n, the ratio to `floor`, the ratio to `udf` and t96/t24. With more than one run it also prints each form's cost per tile in every run and the max/min spread.
 
 **Exit codes:** `0` no flags, `1` the pass flagged a form, `2` a precondition is missing (or a usage error), `3` the pass itself failed.
 
@@ -34,10 +35,10 @@ The pass takes about 3 minutes. Run it before a cluster IO round and after a cha
 
 **The baseline.**
 - The ratio rules compare a form with the row UDF and its peers. They need a 3x change, so a form whose own cost per tile doubled passes them.
-- The baseline stores each form's cost per tile in ms. It is the slope between n=24 and n=96, less the floor's slope.
+- The baseline stores each form's cost per tile in ms. Each run gives the slope between n=24 and n=96, less the floor's slope. The baseline is the median of those slopes over the runs, and a comparison uses the median of its own runs.
 - It is stored with the machine (cores, arch) and the git SHA. A baseline from another machine prints a note.
 - Write it after a change you trust. Compare against it before a cluster round.
-- One measured run per n is noisy. In two runs on one machine, `d-py`'s cost per tile differed by 1.6x (36 vs 22 ms).
+- One measured run per n is noisy. In two single runs on one machine, `d-py`'s cost per tile differed by 1.6x (36 vs 22 ms). Inside one 3-run pass the spread of a form was 1.2x to 1.9x, so the median of 3 is what is stored and compared.
 - A baseline from a slow run hides a regression. A baseline from a fast run flags a healthy form.
 - Re-run before you trust a baseline flag. Write the baseline again if it came from the odd run.
 

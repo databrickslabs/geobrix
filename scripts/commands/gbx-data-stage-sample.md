@@ -24,7 +24,7 @@ bash scripts/commands/gbx-data-stage-sample.sh --profile oauth-fe [OPTIONS]
 - `--path <rel>` — dataset directory under `geobrix-examples`, relative, no `..` (default: `global/era5-weather`)
 - `--src-root <dir>` — local `geobrix-examples` root (default: `sample-data/Volumes/main/default/test-data/geobrix-examples`)
 - `--volume-root <dir>` — Volume to stage into (default: `/Volumes/geospatial_docs/geobrix/sample-data`)
-- `--skip-existing` — upload only the files that are not on the Volume yet or have another size there, so a rerun after an interrupted upload sends only the rest
+- `--skip-existing` — upload only the files that are missing on the Volume or have another size there. A rerun after an interrupted upload sends only the rest.
 - `--bench-corpus` — stage the benchmark IO corpus; see [The benchmark IO corpus](#the-benchmark-io-corpus)
 - `--dry-run` — list the files that would be uploaded and the stores that would be pruned; no workspace call, no auth, and it needs neither `uv` nor the SDK (it runs on plain `python3`)
 - `--log <path>` — write output to a log file

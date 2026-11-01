@@ -421,3 +421,130 @@ def test_no_partition_holds_more_than_the_cap_of_tiles(
     ]
     assert sum(sizes) == n and max(sizes) <= lf.IO_ROWS_PER_PARTITION, sizes
     assert df.columns == ["tile"]
+
+
+# ---- the virtual input plans and reads the first n files, not the folder
+
+
+def _light_readers(spark):
+    from databricks.labs.gbx.ds.register import register
+
+    register(spark)
+
+
+def _max_tasks_in_job(spark, group, action):
+    """The task count of the widest stage `action()` ran (a job group of its own): counts tasks, never time."""
+    sc = spark.sparkContext
+    sc.setJobGroup(group, group)
+    action()
+    tracker = sc.statusTracker()
+    stages = [
+        tracker.getStageInfo(sid)
+        for jid in tracker.getJobIdsForGroup(group)
+        for sid in tracker.getJobInfo(jid).stageIds
+    ]
+    return max(s.numTasks for s in stages if s is not None)
+
+
+@pytest.mark.parametrize("kind", ["virtual", "udf", "d-py", "floor"])
+def test_the_virtual_input_plans_and_reads_only_n_files_of_a_bigger_folder(
+    spark_session_local, tmp_path, kind
+):
+    """40 files, n = 3: no stage has more than 3 tasks. (Before, the scan planned one task per file of the folder, so a
+    10,000-file corpus paid 10,000 tasks for the first n tiles whatever n was.)
+    """
+    _light_readers(spark_session_local)
+    lf.register_io_udf(spark_session_local)
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+    if kind == "udf":
+        spark_session_local.udf.register(lf.IO_FN, lambda t: t, V2_TILE_SCHEMA)
+    corpus = _corpus(tmp_path, 40)
+    n = 3
+    df = lf._io_read(spark_session_local, corpus + "/rows", n, kind)
+    widest = _max_tasks_in_job(
+        spark_session_local, f"virt-{kind}", lambda: df.collect()
+    )
+    assert widest <= n, widest
+
+
+def test_the_virtual_input_scan_has_n_partitions_not_one_per_file(
+    spark_session_local, tmp_path
+):
+    """The same through the reader's own partition count: the scan under `_virtual_tiles` holds the n files."""
+    _light_readers(spark_session_local)
+    corpus = _corpus(tmp_path, 40)
+    rows = corpus + "/rows"
+    only = lf._only_files_regex(lf._first_files(rows, 3))
+    scan = (
+        spark_session_local.read.format("raster_gbx")
+        .option("virtualTiles", "true")
+        .option("filterRegex", only)
+        .load(rows)
+    )
+    assert scan.rdd.getNumPartitions() == 3
+    assert (
+        _max_tasks_in_job(
+            spark_session_local,
+            "virt-scan",
+            lambda: lf._virtual_tiles(spark_session_local, rows, 3).collect(),
+        )
+        <= 3
+    )
+
+
+def _read_names(df):
+    return sorted(os.path.basename(r["path"]) for r in df.select("tile.path").collect())
+
+
+def test_every_io_form_reads_the_same_n_file_names(spark_session_local, tmp_path):
+    """b (decodes in the scan, given `only`) and the virtual-input forms (given the same `only`) take the same first n
+    sorted files; the writers' input is the virtual one.
+    """
+    _light_readers(spark_session_local)
+    lf.register_io_udf(spark_session_local)
+    corpus = _corpus(tmp_path, 12)
+    rows = corpus + "/rows"
+    n = 3
+    only = lf._only_files_regex(lf._first_files(rows, n))
+    want = sorted(os.path.basename(f) for f in lf._first_files(rows, n))
+    assert len(want) == n
+    got = {
+        kind: _read_names(lf._io_read(spark_session_local, rows, n, kind, only=only))
+        for kind in ("b", "virtual", "floor")
+    }
+    # built without the builder's filter: the same first n files
+    got["virtual-no-only"] = _read_names(
+        lf._io_read(spark_session_local, rows, n, "virtual")
+    )
+    got["writer-input"] = sorted(
+        os.path.basename(r["tile"]["path"])
+        for r in lf._io_named(
+            spark_session_local, rows, n, "virtual", only=only
+        ).collect()
+    )
+    assert all(v == want for v in got.values()), (want, got)
+
+
+def test_every_io_form_takes_its_files_from_the_one_filter_it_is_given(
+    spark_session_local, tmp_path
+):
+    """One way to pick files: the `filterRegex` of the input builder. Given a filter for t5..t7, b, the virtual input and
+    the writers' input all read t5..t7 (so the builder's filter, not a second listing, decides what every form reads).
+    """
+    _light_readers(spark_session_local)
+    corpus = _corpus(tmp_path, 12)
+    rows = corpus + "/rows"
+    files = lf._first_files(rows, None)
+    picked = files[5:8]
+    only = lf._only_files_regex(picked)
+    want = sorted(os.path.basename(f) for f in picked)
+    for kind in (
+        "b",
+        "virtual",
+        "floor",
+    ):  # the d / c / udf forms decode above the same virtual input
+        df = lf._io_read(spark_session_local, rows, 3, kind, only=only)
+        assert _read_names(df) == want, kind
+    named = lf._io_named(spark_session_local, rows, 3, "virtual", only=only)
+    assert sorted(os.path.basename(r["tile"]["path"]) for r in named.collect()) == want

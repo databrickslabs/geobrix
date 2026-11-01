@@ -1657,11 +1657,6 @@ def _io_row(spark, src):
     return spark.table(src).first()
 
 
-def _io_args(spark, src):
-    r = _io_row(spark, src)
-    return r["rows_dir"], int(r["n"]), r["scratch"]
-
-
 def remove_scratch(path: str, scratch: str) -> None:
     """Delete a writer form's output: only a STRICT CHILD of the run's scratch directory (`_io_scratch`), compared as
     resolved paths. The scratch directory itself, a sibling and a path that climbs out of it are refused.
@@ -1736,10 +1731,14 @@ def _only_files_regex(files) -> str:
     )
 
 
-def _virtual_tiles(spark, rows_dir, n):
+def _virtual_tiles(spark, rows_dir, n, only=None):
     """The virtual tiles of the corpus' first `n` files, as `n` rows spread over `io_partitions` partitions.
 
-    `limit(n)` first, then a range exchange of P partitions on a row index: whatever reads or writes the tiles runs ABOVE
+    The scan is given the first `n` files themselves (`only`: the `filterRegex` the input builder made for `a` and `b`;
+    built here when not given), so it plans and reads `n` files, never the folder: a `limit` alone leaves a task per file
+    of a 10,000-file corpus, whatever `n` is.
+
+    `limit(n)` then a range exchange of P partitions on a row index: whatever reads or writes the tiles runs ABOVE
     the exchange, on exactly `n` tiles and `P` tasks. Without the exchange Spark pushes a row UDF (and a JVM decode) below
     the limit, onto every file of the corpus, while a `mapInArrow` stays above it in one task. The index is `0..n-1` (the
     limit is one partition) and the range exchange samples every row (it keeps up to 60 per partition, P >= n / 8), so
@@ -1748,9 +1747,11 @@ def _virtual_tiles(spark, rows_dir, n):
     """
     from pyspark.sql import functions as F
 
+    only = only or _only_files_regex(_first_files(rows_dir, n))
     return (
         spark.read.format("raster_gbx")
         .option("virtualTiles", "true")
+        .option("filterRegex", only)
         .load(rows_dir)
         .select("tile")
         .limit(n)
@@ -1763,17 +1764,17 @@ def _virtual_tiles(spark, rows_dir, n):
 def _io_read(spark, rows_dir, n, kind, only=None):
     """The read of `kind` over the corpus' first `n` tiles, one `tile` column, every kind on exactly `n` tiles.
 
-    `a` and `b` decode inside the scan, where a limit cannot reach: they are given the first `n` files themselves
-    (the readers' `filterRegex`, `only`: the input builder's, so a timed form lists nothing; built here when not given),
-    so the scan has `n` tasks. The others decode above `_virtual_tiles`' exchange.
+    Every kind is given the first `n` files themselves (the readers' `filterRegex`, `only`: the input builder's, so a
+    timed form lists nothing; built here when not given), so every scan has `n` tasks. `a` and `b` decode inside the
+    scan, where a limit cannot reach; the others decode above `_virtual_tiles`' exchange.
     """
     import functools
 
     from databricks.labs.gbx.ds.file_gbx import report_detected_cap
     from databricks.labs.gbx.pyrx import _mvp_forms
 
+    only = only or _only_files_regex(_first_files(rows_dir, n))
     if kind in ("a", "b"):
-        only = only or _only_files_regex(_first_files(rows_dir, n))
         if kind == "a":
             return spark.read.format("gdal").option("filterRegex", only).load(rows_dir)
         return (
@@ -1782,7 +1783,7 @@ def _io_read(spark, rows_dir, n, kind, only=None):
             .option("filterRegex", only)
             .load(rows_dir)
         )
-    virt = _virtual_tiles(spark, rows_dir, n)
+    virt = _virtual_tiles(spark, rows_dir, n, only=only)
     if kind in ("c", "udf"):
         return virt.selectExpr(f"{IO_FN}(tile) AS tile")
     if kind in ("d-py", "d-rs", "floor"):
@@ -1821,8 +1822,8 @@ def io_floor(spark, src):
     """
     from pyspark.sql import functions as F
 
-    rows_dir, n, _ = _io_args(spark, src)
-    tiles = _io_read(spark, rows_dir, n, "floor")
+    r = _io_row(spark, src)
+    tiles = _io_read(spark, r["rows_dir"], int(r["n"]), "floor", only=r["only"])
     out = tiles.agg(
         F.count(F.lit(1)),
         F.coalesce(F.sum(F.length(tiles["tile"]["raster"])), F.lit(0)),

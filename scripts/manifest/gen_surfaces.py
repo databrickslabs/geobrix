@@ -184,16 +184,6 @@ def _duplicate_defs(path: Path, text: str) -> List[str]:
     return findings
 
 
-def _generated_part(path: Path, text: str) -> str:
-    """The text the generator wrote: for function-info.json, the manifest rows only (the legacy generator
-    writes the other entries)."""
-    if path != FUNCTION_INFO:
-        return text
-    from databricks.labs.gbx import manifest
-
-    return json.dumps(S.function_info_entries(manifest.load()), ensure_ascii=False)
-
-
 def check(only: Optional[str] = None) -> List[str]:
     try:
         planned = plan(only)
@@ -213,7 +203,7 @@ def check(only: Optional[str] = None) -> List[str]:
             findings.append(
                 f"{rel}: differs from the manifest ({first[:120]}); run gbx:manifest:gen --write"
             )
-        if _MACHINE_PATH.search(_generated_part(path, new)):
+        if _MACHINE_PATH.search(new):
             findings.append(f"{rel}: a machine path in generated output")
         if path in S.MODULE_FILES.values():
             findings += _duplicate_defs(path, new)

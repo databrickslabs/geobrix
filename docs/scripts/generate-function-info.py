@@ -191,6 +191,16 @@ def first_statement_containing(sql: str, func_name: str) -> str:
     return ""
 
 
+_NEUTRAL_DIR = "/Volumes/<catalog>/<schema>/<volume>"
+
+
+def neutral_paths(text: str) -> str:
+    """The example with each path under this checkout shown as a Volume path (keeping the file name), so the
+    shipped metadata names no machine. The doc test still runs the real path; only the rendered text changes."""
+    root = re.escape(REPO_ROOT.rstrip("/"))
+    return re.sub(rf"{root}/(?:[^'\" )/]+/)*([^'\" )/]+)", rf"{_NEUTRAL_DIR}/\1", text)
+
+
 def format_examples_block(sql_line: str) -> str:
     """Format one SQL line for Spark ExpressionInfo examples (DESCRIBE FUNCTION EXTENDED)."""
     if not sql_line:
@@ -247,6 +257,7 @@ def _collect_from_module(
             continue
         if not sql or not isinstance(sql, str):
             continue
+        sql = neutral_paths(sql)
 
         if registered_for_package:
             # First SELECT that contains the package prefix (e.g. gbx_rst_)

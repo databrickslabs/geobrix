@@ -255,7 +255,7 @@
       "since": "0.4.0"
     },
     "gbx_rst_color_relief": {
-      "examples": "Examples:\n      > SELECT gbx_rst_color_relief(tile, '/root/geobrix/src/test/resources/binary/elevation/elevation.clr') AS rgba FROM dem_rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_color_relief(tile, '/Volumes/<catalog>/<schema>/<volume>/elevation.clr') AS rgba FROM dem_rasters;",
       "usage_args": "tile, color_table_path",
       "bindings": [
         "sql",

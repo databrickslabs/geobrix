@@ -103,6 +103,14 @@ class GdalSpecSmokeTest extends AnyFunSuite {
         // An installed engine row's DESCRIBE usage is the manifest's (function-info.json), optionals in brackets.
         val usage = L1Installer.specInfo("gbx_rst_slope", GdalSpecs.function("gbx_rst_slope")).getUsage
         assert(usage.contains("gbx_rst_slope(tile, [unit], [xscale], [yscale])"), usage)
+        // The manifest's description and examples are carried into the ExpressionInfo.
+        val slope = L1Installer.specInfo("gbx_rst_slope", GdalSpecs.function("gbx_rst_slope"))
+        assert(slope.getUsage.contains(" - Compute terrain slope"), slope.getUsage)
+        assert(slope.getExamples.contains("gbx_rst_slope("), slope.getExamples)
+        // A row with no function-info entry falls back to the engine's own text, with no examples.
+        val bare = L1Installer.specInfo("gbx_rst_notinfunctioninfo", GdalSpecs.function("gbx_rst_slope").copy(sqlName = "gbx_rst_notinfunctioninfo"))
+        assert(bare.getUsage == "gbx_rst_notinfunctioninfo(tile, unit, xscale, yscale) - GDAL 'raster slope' on the GDAL spec engine.", bare.getUsage)
+        assert(bare.getExamples.isEmpty, bare.getExamples)
     }
 
     test("the level knob, the virtual-tile policy and the engine's settings are the light tier's") {

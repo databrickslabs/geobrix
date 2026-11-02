@@ -32,11 +32,14 @@ def _write_header(tmp_path, width, height, name="h.tif"):
     """Create a GTiff with given dimensions but minimal data (no large pixel array).
 
     The guard reads only ds.width/height/count/dtypes so we write a tiled GTiff
-    with 1x1 block to avoid allocating a width*height pixel array at test time.
+    and only its first block, so no width*height pixel array is allocated at test time.
+    ``sparse_ok`` makes the file sparse (the unwritten blocks take no space) and spares
+    GDAL's check that the disk could hold the full uncompressed raster: a 50000 x 50000
+    float32 raster is 10 GB, which a CI runner with less free disk would refuse.
     """
     p = str(tmp_path / name)
-    # blocksize must be a multiple of 16 per TIFF spec; 16 is the minimum.
-    blocksize = 16
+    # blocksize must be a multiple of 16 per TIFF spec; 512 keeps the tile index small.
+    blocksize = 512
     prof = dict(
         driver="GTiff",
         width=width,
@@ -48,6 +51,7 @@ def _write_header(tmp_path, width, height, name="h.tif"):
         tiled=True,
         blockxsize=blocksize,
         blockysize=blocksize,
+        sparse_ok=True,
     )
     with rasterio.open(p, "w", **prof) as ds:
         # Write only the first block (16x16) — guard reads only metadata.

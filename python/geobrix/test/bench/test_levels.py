@@ -586,6 +586,13 @@ class _Shapes:
         return peak.read(df)
 
 
+# A trivial shape on a lean worker reads about 125 MB locally (JAR-less venv from the CI lock: 124.9 MB) and 158.5 MB on
+# the CI runner image 1.22.0 (CPython and kernel differ; the packages are the same). The readings that mean a shape
+# inherited an earlier one's memory are 245 MB or more (245 in the full file, 250 an idle fat worker, 298 on CI, 400 a
+# heavy shape). The bound sits between: above the runner's baseline, and below the smallest bug reading.
+_LEAN_WORKER_MB = 200
+
+
 @LINUX
 def test_worker_peak_is_the_shapes_not_the_workers_lifetime(spark_session_local):
     _settle()
@@ -595,7 +602,7 @@ def test_worker_peak_is_the_shapes_not_the_workers_lifetime(spark_session_local)
 
     assert s.peak_of(heavy) >= 400
     # a trivial shape after it does not inherit the 400 MB
-    assert s.peak_of(trivial) < 150
+    assert s.peak_of(trivial) < _LEAN_WORKER_MB
 
 
 @LINUX
@@ -619,7 +626,7 @@ def test_worker_peak_reaches_every_python_worker_not_one_per_slot(spark_session_
     ), "the warm-up left no more workers than slots"
 
     assert s.peak_of(heavy) >= 400
-    assert s.peak_of(trivial) < 150
+    assert s.peak_of(trivial) < _LEAN_WORKER_MB
 
 
 @LINUX
@@ -640,7 +647,7 @@ def test_worker_peak_leaves_out_idle_workers_that_hold_memory(spark_session_loca
     held = [mb for _, mb in _pool_workers(pool) if mb >= 200]
     assert len(held) >= s.slots, "the pool holds no idle workers of 250 MB"
 
-    assert s.peak_of(trivial) < 150
+    assert s.peak_of(trivial) < _LEAN_WORKER_MB
 
 
 @LINUX

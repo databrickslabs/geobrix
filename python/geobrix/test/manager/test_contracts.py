@@ -1599,9 +1599,13 @@ def _heavy(spark, names):
         inst = spark._jvm.com.databricks.labs.gbx.kernels.L1Installer
         base = "com.databricks.labs.gbx.rasterx.expressions.accessors.RST_"
         for n in names:
-            cls = {"rst_numbands": "NumBands", "rst_srid": "SRID"}.get(
-                n, n[len("rst_") :].capitalize()
-            )
+            cls = {
+                "rst_numbands": "NumBands",
+                "rst_srid": "SRID",
+                "rst_getnodata": "GetNoData",
+                "rst_boundingbox": "BoundingBox",
+                "rst_georeference": "GeoReference",
+            }.get(n, n[len("rst_") :].capitalize())
             r = inst.install(spark._jsparkSession, f"gbx_{n}", base + cls)
             assert str(r) == "ok", r
 
@@ -1642,6 +1646,43 @@ def test_heavy_format_of_a_netcdf_tile_is_its_own_not_the_geotiff_it_is_read_as(
         jvm_spark, tmp_path, names, _heavy(jvm_spark, names), "tile_4326_netcdf"
     )
     assert got["rst_format"] == "netCDF"
+
+
+@pytest.mark.integration
+def test_heavy_and_light_accessors_agree_on_a_single_variable_netcdf_tile(
+    jvm_spark, tmp_path
+):
+    """A non-container netCDF tile (one variable, a band): heavy reads its source dataset for the header and
+    ungated accessors, and every one of these answers as light's, which never translates.
+    """
+    names = [
+        "rst_format",
+        "rst_type",
+        "rst_getnodata",
+        "rst_boundingbox",
+        "rst_georeference",
+        "rst_srid",
+    ]
+    light = _answers(
+        jvm_spark, tmp_path, names, _light(jvm_spark, names), "tile_4326_netcdf"
+    )
+    heavy = _answers(
+        jvm_spark, tmp_path, names, _heavy(jvm_spark, names), "tile_4326_netcdf"
+    )
+    from shapely import from_wkb
+
+    # the box is one polygon; heavy writes it big-endian from another corner, so judge the geometry
+    box = {
+        k: from_wkb(bytes(v["rst_boundingbox"]))
+        for k, v in (("h", heavy), ("l", light))
+    }
+    assert box["h"].equals(box["l"]), (box["h"].wkt, box["l"].wkt)
+    differ = {
+        k: (heavy[k], light[k])
+        for k in names
+        if k != "rst_boundingbox" and heavy[k] != light[k]
+    }
+    assert not differ, differ
 
 
 def test_a_failing_data_source_registration_is_a_reported_line_not_a_failure(

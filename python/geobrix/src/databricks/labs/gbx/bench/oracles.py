@@ -1108,11 +1108,48 @@ def _tables() -> Dict[str, Tuple[Case, ...]]:
 
 
 class _Tables(dict):
-    """Every oracle table by name, discovered on first lookup (so family modules need no registry edit)."""
+    """Every oracle table by name, discovered on first use (so family modules need no registry edit): any read
+    (lookup, ``in``, iteration, ``len``, ``keys``, ``items``, ``values``, ``get``) finds them first.
+    """
 
-    def __missing__(self, key):
-        self.update(_tables())
+    _found = False
+
+    def _find(self) -> None:
+        if not self._found:
+            dict.update(self, _tables())
+            self._found = True
+
+    def __getitem__(self, key):
+        self._find()
         return dict.__getitem__(self, key)
+
+    def __contains__(self, key):
+        self._find()
+        return dict.__contains__(self, key)
+
+    def __iter__(self):
+        self._find()
+        return dict.__iter__(self)
+
+    def __len__(self):
+        self._find()
+        return dict.__len__(self)
+
+    def get(self, key, default=None):
+        self._find()
+        return dict.get(self, key, default)
+
+    def keys(self):
+        self._find()
+        return dict.keys(self)
+
+    def items(self):
+        self._find()
+        return dict.items(self)
+
+    def values(self):
+        self._find()
+        return dict.values(self)
 
 
 TABLES = _Tables()

@@ -1740,3 +1740,24 @@ def test_a_failing_registrar_group_skips_only_its_own_names(monkeypatch):
     ]
 
 
+def test_a_failing_data_source_registration_is_a_reported_line_not_a_failure(
+    monkeypatch, capsys
+):
+    """The light data sources register last; if that fails the functions are registered all the same, the failure is
+    one of the grouped lines, and the session still counts the names as done."""
+    from databricks.labs.gbx import _api, manager
+    from databricks.labs.gbx.ds import register as sources
+
+    def boom(spark):
+        raise RuntimeError("no data source support here")
+
+    monkeypatch.setattr(sources, "register", boom)
+    stub = ConnectStub()
+    out = manager.register(stub)
+    printed = capsys.readouterr().out.splitlines()
+    assert any(
+        "light data sources not registered (RuntimeError: no data source support here)"
+        in p
+        for p in printed
+    ), printed
+    assert out and set(out) <= _api._done(stub), "the names are still marked registered"

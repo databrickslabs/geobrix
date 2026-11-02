@@ -96,9 +96,24 @@ def register(
         lines += skipped
         out.update({n: Choice("L3", "legacy", ()) for n in bridge if n in done})
     if only is None:
-        from databricks.labs.gbx.ds import register as _sources
+        try:
+            from databricks.labs.gbx.ds import register as _sources
 
-        _sources.register(spark)
+            _sources.register(spark)
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - the functions are registered; this failure is a line like any other
+            why = (
+                f"{type(exc).__name__}: {str(exc).splitlines()[0][:160]}"
+                if str(exc)
+                else type(exc).__name__
+            )
+            lines.append(
+                (
+                    "light data sources",
+                    f"geobrix: light data sources not registered ({why})",
+                )
+            )
     messages.say_grouped(spark, lines)
     from databricks.labs.gbx import _api
 

@@ -25,8 +25,8 @@ with rasterio.open("in.tif") as src:
         src.crs, "EPSG:3857", src.width, src.height, *src.bounds)
     # ...write a reprojected file, one machine, one file at a time"""
 
-WARP_PYRX = """# GeoBrix pyrx: reproject a whole DataFrame of tiles, distributed
-import databricks.labs.gbx.pyrx.functions as rx
+WARP_PYRX = """# GeoBrix: reproject a whole DataFrame of tiles, distributed
+from databricks.labs.gbx.rasterx import functions as rx
 df2 = df.withColumn("tile", rx.rst_transform("tile", 3857))
 # rst_transform runs rasterio.warp on each tile in an Arrow UDF across the cluster"""
 
@@ -36,8 +36,8 @@ from rasterio.mask import mask as rio_mask
 with rasterio.open("in.tif") as src:
     out, out_transform = rio_mask(src, [geom], crop=True)"""
 
-CLIP_PYRX = """# GeoBrix pyrx: clip every tile to a geometry, distributed
-import databricks.labs.gbx.pyrx.functions as rx
+CLIP_PYRX = """# GeoBrix: clip every tile to a geometry, distributed
+from databricks.labs.gbx.rasterx import functions as rx
 from pyspark.sql import functions as f
 # clip_geom column holds WKB/WKT geometry; third arg controls border pixel inclusion
 df2 = df.withColumn("tile", rx.rst_clip("tile", "clip_geom", f.lit(False)))"""
@@ -100,7 +100,7 @@ def warp_both(spark, src_path):
     from rasterio.transform import array_bounds
     from rasterio.io import MemoryFile
     from pyspark.sql import functions as F
-    import databricks.labs.gbx.pyrx.functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api
 
     _register(spark)
 
@@ -118,7 +118,7 @@ def warp_both(spark, src_path):
     # pyrx side: distributed Arrow UDF; collect the result tile in one Spark action
     df = (
         _one_tile_df(spark, src_path)
-        .withColumn("tile", rx.rst_transform("tile", 3857))
+        .withColumn("tile", rx_api.rst_transform("tile", 3857))
     )
     tile_bytes = bytes(
         df.select(F.col("tile.raster").alias("r")).first()["r"]

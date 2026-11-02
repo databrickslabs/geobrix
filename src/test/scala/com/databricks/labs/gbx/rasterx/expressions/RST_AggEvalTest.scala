@@ -49,7 +49,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
             df
                 .withColumn("bbox", rst_boundingbox(col("raster")))
                 .withColumn("clipper", st_buffer(col("bbox"), lit(-500000.0))) // projection in meters 1 px is ~470m
-                .withColumn("raster", rst_clip(col("raster"), col("clipper"), lit(true)))
+                .withColumn("raster", call_function("gbx_rst_clip", col("raster"), col("clipper"), lit(true)))
                 .groupBy(lit(1))
                 .agg(
                   rst_combineavg_agg(col("raster")),
@@ -450,7 +450,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
             .withColumn("raster", udfs.rasterFromPath(col("path")))
             .withColumn("bbox", rst_boundingbox(col("raster")))
             .withColumn("clipper", st_buffer(col("bbox"), lit(-500000.0)))
-            .withColumn("raster", rst_clip(col("raster"), col("clipper"), lit(true)))
+            .withColumn("raster", call_function("gbx_rst_clip", col("raster"), col("clipper"), lit(true)))
 
         noException should be thrownBy {
             df.groupBy(lit(1))

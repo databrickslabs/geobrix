@@ -26,91 +26,12 @@ def test_register_is_noop(spark):
 
 def test_rst_transform_to_3857(spark):
     df = _tile_df(spark, epsg=4326, count=2)
-    out = df.select(prx.rst_transform("tile", 3857).alias("t"))
+    out = df.select(rx.rst_transform("tile", 3857).alias("t"))
     row = out.select(
         rx.rst_srid("t").alias("s"), rx.rst_numbands("t").alias("n")
     ).first()
     assert row["s"] == 3857
     assert row["n"] == 2
-
-
-def test_rst_to_webmercator(spark):
-    df = _tile_df(spark, epsg=4326)
-    out = df.select(prx.rst_to_webmercator("tile").alias("t"))
-    assert out.select(rx.rst_srid("t").alias("s")).first()["s"] == 3857
-
-
-def test_rst_resample_factor(spark):
-    df = _tile_df(spark, width=4, height=3)
-    out = df.select(prx.rst_resample("tile", 2.0).alias("t"))
-    row = out.select(
-        rx.rst_width("t").alias("w"), rx.rst_height("t").alias("h")
-    ).first()
-    assert (row["w"], row["h"]) == (8, 6)
-
-
-def test_rst_resample_to_size(spark):
-    df = _tile_df(spark, width=4, height=3)
-    out = df.select(prx.rst_resample_to_size("tile", 10, 7).alias("t"))
-    row = out.select(
-        rx.rst_width("t").alias("w"), rx.rst_height("t").alias("h")
-    ).first()
-    assert (row["w"], row["h"]) == (10, 7)
-
-
-def test_rst_resample_to_res(spark):
-    df = _tile_df(spark, width=4, height=3, epsg=4326)
-    out = df.select(prx.rst_resample_to_res("tile", 0.25, 0.25).alias("t"))
-    row = out.select(
-        rx.rst_width("t").alias("w"), rx.rst_height("t").alias("h")
-    ).first()
-    assert (row["w"], row["h"]) == (8, 6)
-
-
-def test_rst_clip(spark):
-    import shapely.wkb
-    from shapely.geometry import box
-
-    geom = shapely.wkb.dumps(box(10.5, 49.0, 11.5, 49.5))
-    df = _tile_df(spark, width=4, height=3, epsg=4326)
-    df = df.withColumn("g", f.lit(geom))
-    out = df.select(prx.rst_clip("tile", "g", False).alias("t"))
-    row = out.select(
-        rx.rst_width("t").alias("w"), rx.rst_height("t").alias("h")
-    ).first()
-    assert 0 < row["w"] < 4 and 0 < row["h"] < 3
-
-
-def test_rst_clip_geom_encodings(spark):
-    # Parity bug fix: rst_clip must accept the SAME geometry as WKB / EWKB /
-    # WKT / EWKT (heavyweight accepts all four; the xView example passes EWKT).
-    from shapely import set_srid, to_wkb
-    from shapely.geometry import box
-
-    poly = box(10.5, 49.0, 11.5, 49.5)
-    encodings = {
-        "wkb": to_wkb(poly),
-        "ewkb": to_wkb(set_srid(poly, 4326), include_srid=True),
-        "wkt": poly.wkt,
-        "ewkt": f"SRID=4326;{poly.wkt}",
-    }
-
-    results = {}
-    for name, geom in encodings.items():
-        df = _tile_df(spark, width=4, height=3, epsg=4326)
-        df = df.withColumn("g", f.lit(geom))
-        row = (
-            df.select(prx.rst_clip("tile", "g", False).alias("t"))
-            .select(f.col("t.raster").alias("b"))
-            .first()
-        )
-        assert row is not None and row["b"] is not None, f"{name} produced a null tile"
-        results[name] = bytes(row["b"])
-
-    # All four encodings of the same geometry must produce identical raster bytes.
-    distinct = set(results.values())
-    sizes = {k: len(v) for k, v in results.items()}
-    assert len(distinct) == 1, f"encodings diverged: {sizes}"
 
 
 def test_rst_updatetype(spark):
@@ -144,42 +65,6 @@ def test_rst_rasterize(spark):
         rx.rst_srid("t").alias("s"),
     ).first()
     assert (row["w"], row["h"], row["s"]) == (4, 4, 4326)
-
-
-def test_rst_fillnodata(spark):
-    import numpy as np
-    from rasterio.io import MemoryFile
-    from rasterio.transform import from_origin
-
-    data = np.ones((5, 5), dtype="float32")
-    data[2, 2] = -9999.0
-    profile = dict(
-        driver="GTiff",
-        width=5,
-        height=5,
-        count=1,
-        dtype="float32",
-        crs="EPSG:4326",
-        transform=from_origin(0, 5, 1, 1),
-        nodata=-9999.0,
-    )
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(data, 1)
-        src = mf.read()
-    df = spark.createDataFrame([(src,)], ["raster"])
-    df = df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
-    out = df.select(prx.rst_fillnodata("tile").alias("t"))
-    # rst_pixelcount absent in pyrx; verify via dims and nodata list (all filled = empty nodata)
-    row = out.select(
-        rx.rst_width("t").alias("w"),
-        rx.rst_height("t").alias("h"),
-        rx.rst_getnodata("t").alias("nd"),
-    ).first()
-    assert (row["w"], row["h"]) == (5, 5)
-    # nodata is set but all pixels should now be valid — getnodata returns the
-    # configured nodata value (not per-pixel mask), so just verify tile is non-null.
-    assert row["nd"] is not None
 
 
 def test_rst_slope_aspect_hillshade(spark):
@@ -1729,7 +1614,7 @@ def test_rst_proximity_column_api(spark):
     df = spark.createDataFrame([(src,)], ["raster"]).select(
         prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
-    out = df.select(prx.rst_proximity("tile", None, "PIXEL", None).alias("t"))
+    out = df.select(rx.rst_proximity("tile", None, "PIXEL", None).alias("t"))
     # Float32 output, nodata -1.
     assert out.select(rx.rst_type("t").alias("ty")).first()["ty"][0] == "Float32"
     assert out.select(rx.rst_getnodata("t").alias("nd")).first()["nd"][0] == -1.0

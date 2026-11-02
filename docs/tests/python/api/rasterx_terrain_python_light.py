@@ -167,9 +167,9 @@ rst_color_relief_python_light_example_output = """
 """
 
 
-def rst_proximity_python_light_example(spark):
+def rst_proximity_python_example(spark):
     """Compute per-pixel distance to the nearest non-NoData pixel."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
     rx.register(spark)
@@ -180,7 +180,7 @@ def rst_proximity_python_light_example(spark):
     return result["tile"]
 
 
-rst_proximity_python_light_example_output = """
+rst_proximity_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+

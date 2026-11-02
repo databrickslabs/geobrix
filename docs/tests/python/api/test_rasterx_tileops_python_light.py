@@ -77,10 +77,10 @@ def test_rst_buildoverviews_python_light_example(spark):
     _assert_materialized_tile(result, "rst_buildoverviews")
 
 
-def test_rst_clip_python_light_example(spark):
+def test_rst_clip_python_example(spark):
     """rst_clip returns a materialized tile with populated raster bytes."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_clip_python_light_example(spark)
+    result = tileops_examples.rst_clip_python_example(spark)
     _assert_materialized_tile(result, "rst_clip")
 
 
@@ -98,10 +98,10 @@ def test_rst_convolve_python_light_example(spark):
     _assert_materialized_tile(result, "rst_convolve")
 
 
-def test_rst_fillnodata_python_light_example(spark):
+def test_rst_fillnodata_python_example(spark):
     """rst_fillnodata returns a materialized tile with populated raster bytes."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_fillnodata_python_light_example(spark)
+    result = tileops_examples.rst_fillnodata_python_example(spark)
     _assert_materialized_tile(result, "rst_fillnodata")
 
 
@@ -119,24 +119,24 @@ def test_rst_initnodata_python_light_example(spark):
     _assert_materialized_tile(result, "rst_initnodata")
 
 
-def test_rst_resample_python_light_example(spark):
+def test_rst_resample_python_example(spark):
     """rst_resample returns a materialized tile (2x upsampled)."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_resample_python_light_example(spark)
+    result = tileops_examples.rst_resample_python_example(spark)
     _assert_materialized_tile(result, "rst_resample")
 
 
-def test_rst_resample_to_res_python_light_example(spark):
+def test_rst_resample_to_res_python_example(spark):
     """rst_resample_to_res returns a materialized tile (downsampled to 20m)."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_resample_to_res_python_light_example(spark)
+    result = tileops_examples.rst_resample_to_res_python_example(spark)
     _assert_materialized_tile(result, "rst_resample_to_res")
 
 
-def test_rst_resample_to_size_python_light_example(spark):
+def test_rst_resample_to_size_python_example(spark):
     """rst_resample_to_size returns a materialized tile (forced to 100x100)."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_resample_to_size_python_light_example(spark)
+    result = tileops_examples.rst_resample_to_size_python_example(spark)
     _assert_materialized_tile(result, "rst_resample_to_size")
 
 
@@ -163,10 +163,10 @@ def test_rst_threshold_python_example(spark):
     _assert_materialized_tile(result, "rst_threshold")
 
 
-def test_rst_transform_python_light_example(spark):
+def test_rst_transform_python_example(spark):
     """rst_transform returns a materialized tile (reprojected to EPSG:4326)."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_transform_python_light_example(spark)
+    result = tileops_examples.rst_transform_python_example(spark)
     _assert_materialized_tile(result, "rst_transform")
 
 

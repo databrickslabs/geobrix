@@ -26,7 +26,7 @@ class RST_ExpressionEvalTest extends PlanTest with SilentSparkSession {
                 .withColumn("bbox", rst_boundingbox(col("raster")))
                 // Clip to reduce data size for faster, more stable testing (1 px ~470m, so -520000 = ~1100px clip)
                 .withColumn("clipper", st_buffer(col("bbox"), lit(-520000.0))) // projection in meters 1 px is ~470m
-                .withColumn("clipped", rst_clip(col("raster"), col("clipper"), lit(true)))
+                .withColumn("clipped", call_function("gbx_rst_clip", col("raster"), col("clipper"), lit(true)))
                 .cache()
             base.collect()
             Seq(
@@ -76,7 +76,7 @@ class RST_ExpressionEvalTest extends PlanTest with SilentSparkSession {
                 .withColumn("bbox", rst_boundingbox(col("raster")))
                 // Clip more for convolve operations (which are compute-intensive)
                 .withColumn("clipper", st_buffer(col("bbox"), lit(-540000.0))) // projection in meters 1 px is ~470m
-                .withColumn("raster", rst_clip(col("raster"), col("clipper"), lit(true)))
+                .withColumn("raster", call_function("gbx_rst_clip", col("raster"), col("clipper"), lit(true)))
                 .cache()
             base.collect()
             // Test filter and one representative convolve operation for stability

@@ -44,36 +44,6 @@ def spark():
     return spark
 
 
-def test_rst_clip(spark):
-    """Test clipping a raster by a geometry."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    # Create a simple polygon geometry in WKT format
-    # This polygon should intersect with the MODIS tile
-    wkt_geom = "POLYGON((-8900000 2220000, -8900000 2200000, -8880000 2200000, -8880000 2220000, -8900000 2220000))"
-
-    df = spark.range(1).select(
-        rx.rst_clip(
-            tile_from_path(rx, f, str(MODIS_B01), "GTiff"),
-            f.lit(wkt_geom),
-            f.lit(True),  # cutline_all_touched
-        ).alias("clipped_tile")
-    )
-
-    result = df.collect()
-    assert result is not None
-    assert len(result) == 1
-    tile = result[0]["clipped_tile"]
-    assert tile is not None
-    # Guard against empty-TIFF-stub regression: writeToBytes returning a ~422-byte
-    # unfinalized GTiff header if the output Dataset isn't closed before reading
-    # /vsimem. Real clipped raster bytes are much larger than the header alone.
-    assert len(tile["raster"]) > 2000, (
-        f"clipped tile raster unexpectedly small ({len(tile['raster'])}B) "
-        "— likely unfinalized GTiff output"
-    )
-
-
 def test_rst_filter(spark):
     """Test filtering a raster with kernel operations."""
     from databricks.labs.gbx.rasterx import functions as rx
@@ -110,24 +80,6 @@ def test_rst_filter_operations(spark):
         result = df.collect()
         assert result is not None, f"Filter operation '{op}' failed"
         assert result[0]["result"] is not None
-
-
-def test_rst_transform(spark):
-    """Test transforming raster to different SRID."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    # Transform to EPSG:4326 (WGS84)
-    df = spark.range(1).select(
-        rx.rst_transform(
-            tile_from_path(rx, f, str(MODIS_B01), "GTiff"),
-            f.lit(4326),  # target SRID
-        ).alias("transformed_tile")
-    )
-
-    result = df.collect()
-    assert result is not None
-    assert len(result) == 1
-    assert result[0]["transformed_tile"] is not None
 
 
 def test_rst_convolve(spark):
@@ -285,25 +237,3 @@ def test_rst_mapalgebra(spark):
     assert len(result) == 1
     assert result[0]["algebra_result"] is not None
     assert result[0]["algebra_result"] is not None
-
-
-def test_rst_scalar_literal_args(spark):
-    """Plain Python non-string scalars (bool/int/float) are accepted in place of f.lit(...).
-
-    Verifies the ColLike/_col() widening: booleans, ints, and floats now
-    auto-wrap via f.lit so ``rst_clip(tile, geom, True)`` works without
-    ``f.lit(True)``. Strings stay as-is (pyspark column-ref convention).
-    """
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    wkt = "POLYGON((-8900000 2220000, -8900000 2200000, -8880000 2200000, -8880000 2220000, -8900000 2220000))"
-    tile = tile_from_path(rx, f, str(MODIS_B01), "GTiff")
-
-    df = spark.range(1).select(
-        rx.rst_clip(tile, f.lit(wkt), True).alias("clipped"),  # bool scalar
-        rx.rst_transform(tile, 4326).alias("transformed"),  # int scalar
-    )
-
-    row = df.collect()[0]
-    assert row["clipped"] is not None
-    assert row["transformed"] is not None

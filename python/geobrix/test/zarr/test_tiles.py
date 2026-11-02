@@ -823,9 +823,9 @@ def test_rst_clip_and_transform_on_zarr_tiles(spark_delta, era5_v3_sharded):
         rx.rst_height(tile).alias("h"),
         rx.rst_srid(tile).alias("srid"),
         rx.rst_numbands(tile).alias("bands"),
-        rx.rst_srid(prx.rst_transform(tile, F.lit(3857))).alias("srid_t"),
+        rx.rst_srid(rx.rst_transform(tile, F.lit(3857))).alias("srid_t"),
         rx.rst_width(
-            prx.rst_clip(tile, F.lit(bytes(box(10, 60, 40, 80).wkb)), F.lit(False))
+            rx.rst_clip(tile, F.lit(bytes(box(10, 60, 40, 80).wkb)), F.lit(False))
         ).alias("w_clip"),
         rx.rst_isempty(tile).alias("empty"),
     ).first()

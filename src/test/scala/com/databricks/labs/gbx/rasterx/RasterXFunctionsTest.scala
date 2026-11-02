@@ -265,11 +265,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
         result should not be null
     }
 
-    test("rst_clip should accept tile, clip geometry, and cutline flag") {
-        val result = functions.rst_clip(col("tile"), col("geom"), col("flag"))
-        result should not be null
-    }
-
     test("rst_combineavg should accept tiles") {
         val result = functions.rst_combineavg(col("tiles"))
         result should not be null
@@ -358,8 +353,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
     // ====== Scalar Literal Overloads ======
 
     test("scalar-literal overloads should accept plain values for non-Column args") {
-        // rst_clip with Boolean scalar (primary parity with Mosaic/DBR built-ins)
-        functions.rst_clip(col("tile"), col("geom"), cutlineAllTouched = true) should not be null
         // int scalars
         functions.rst_bandmetadata(col("tile"), 1) should not be null
         functions.rst_transform(col("tile"), 4326) should not be null

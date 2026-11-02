@@ -121,13 +121,6 @@ def test_rst_buildoverviews_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_buildoverviews")
 
 
-def test_rst_clip_python_heavy_example(spark):
-    """rst_clip returns a non-null tile struct."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_clip_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_clip")
-
-
 def test_rst_cog_convert_python_heavy_example(spark):
     """rst_cog_convert returns a non-null tile struct."""
     assert rasterx_functions is not None
@@ -140,13 +133,6 @@ def test_rst_convolve_python_heavy_example(spark):
     assert rasterx_functions is not None
     result = rasterx_functions.rst_convolve_python_heavy_example(spark)
     _assert_heavy_tile(result, "rst_convolve")
-
-
-def test_rst_fillnodata_python_heavy_example(spark):
-    """rst_fillnodata returns a non-null tile struct."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_fillnodata_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_fillnodata")
 
 
 def test_rst_filter_python_heavy_example(spark):
@@ -170,39 +156,11 @@ def test_rst_initnodata_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_initnodata")
 
 
-def test_rst_resample_python_heavy_example(spark):
-    """rst_resample returns a non-null tile struct (2x upsampled)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_resample_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_resample")
-
-
-def test_rst_resample_to_res_python_heavy_example(spark):
-    """rst_resample_to_res returns a non-null tile struct (downsampled to 20m)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_resample_to_res_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_resample_to_res")
-
-
-def test_rst_resample_to_size_python_heavy_example(spark):
-    """rst_resample_to_size returns a non-null tile struct (forced to 100x100)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_resample_to_size_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_resample_to_size")
-
-
 def test_rst_setsrid_python_heavy_example(spark):
     """rst_setsrid returns a non-null tile struct."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_setsrid_python_heavy_example(spark)
     _assert_heavy_tile(result, "rst_setsrid")
-
-
-def test_rst_transform_python_heavy_example(spark):
-    """rst_transform returns a non-null tile struct (reprojected to EPSG:4326)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_transform_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_transform")
 
 
 def test_rst_updatetype_python_heavy_example(spark):
@@ -396,13 +354,6 @@ def test_rst_color_relief_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_color_relief")
 
 
-def test_rst_proximity_python_heavy_example(spark):
-    """rst_proximity returns a non-null tile struct (distance to non-NoData)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_proximity_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_proximity")
-
-
 def test_rst_contour_python_heavy_example(spark):
     """rst_contour returns an array of contour line feature structs."""
     assert rasterx_functions is not None
@@ -436,13 +387,6 @@ def test_rst_dtmfromgeoms_python_heavy_example(spark):
 # ============================================================================
 # Coordinate Transforms & Tiling (Heavy)
 # ============================================================================
-
-
-def test_rst_to_webmercator_python_heavy_example(spark):
-    """rst_to_webmercator returns a tile struct."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_to_webmercator_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_to_webmercator")
 
 
 def test_rst_tilexyz_python_heavy_example(spark):

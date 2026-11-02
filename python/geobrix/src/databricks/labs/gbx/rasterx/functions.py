@@ -1647,35 +1647,6 @@ def rst_asformat(tile: ColLike, new_format: ColLike) -> Column:
     return f.call_function("gbx_rst_asformat", _col(tile), _col(new_format))
 
 
-def rst_clip(
-    tile: ColLike, geom: ColLike, cutline_all_touched: ColLike, clip_crs: ColLike = None
-) -> Column:
-    """Clip the raster to a geometry (or mask).
-
-    Args:
-        tile: Raster tile column.
-        geom: Clipping geometry column (WKT/WKB/EWKT/EWKB).
-        cutline_all_touched: If True, include pixels touched by the boundary.
-        clip_crs: Optional source CRS of a plain WKB/WKT cutline (int SRID or
-            CRS string). An EWKB/EWKT embedded SRID wins; absent + no SRID ->
-            assumed already in the raster CRS.
-
-    Returns:
-        Column of clipped raster tile.
-    """
-    if clip_crs is None:
-        return f.call_function(
-            "gbx_rst_clip", _col(tile), _col(geom), _col(cutline_all_touched)
-        )
-    return f.call_function(
-        "gbx_rst_clip",
-        _col(tile),
-        _col(geom),
-        _col(cutline_all_touched),
-        _crs_col(clip_crs),
-    )
-
-
 def rst_combineavg(tiles: ColLike) -> Column:
     """Combine multiple raster tiles by averaging (same extent/cellsize).
 
@@ -1863,19 +1834,6 @@ def rst_merge(tiles: ColLike) -> Column:
     return f.call_function("gbx_rst_merge", _col(tiles))
 
 
-def rst_transform(tile: ColLike, srid: ColLike) -> Column:
-    """Reproject the raster to the target SRID (EPSG code).
-
-    Args:
-        tile: Raster tile column.
-        srid: Target spatial reference ID (e.g. 4326 for WGS84).
-
-    Returns:
-        Column of reprojected raster tile.
-    """
-    return f.call_function("gbx_rst_transform", _col(tile), _col(srid))
-
-
 def rst_updatetype(tile: ColLike, new_type: ColLike) -> Column:
     """Update the declared data type of the raster (e.g. after conversion).
 
@@ -1887,31 +1845,6 @@ def rst_updatetype(tile: ColLike, new_type: ColLike) -> Column:
         Column of raster tile with updated type metadata.
     """
     return f.call_function("gbx_rst_updatetype", _col(tile), _col(new_type))
-
-
-def rst_to_webmercator(
-    tile: ColLike, resampling: Union[ColLike, None] = None
-) -> Column:
-    """Reproject the tile to EPSG:3857 (web mercator).
-
-    Most slippy-map workflows start here because rasters typically arrive
-    in EPSG:4326 or a UTM zone — neither renders directly in tile servers.
-
-    Args:
-        tile: Raster tile column.
-        resampling: gdalwarp -r algorithm (default ``"bilinear"``). Use
-            ``"near"`` for categorical rasters. String literals are auto
-            wrapped in ``f.lit``; pass a ``Column`` to defer.
-
-    Returns:
-        Tile column reprojected to EPSG:3857.
-    """
-    resampling_col = (
-        f.lit("bilinear")
-        if resampling is None
-        else (f.lit(resampling) if isinstance(resampling, str) else _col(resampling))
-    )
-    return f.call_function("gbx_rst_to_webmercator", _col(tile), resampling_col)
 
 
 def rst_tilexyz(
@@ -2161,101 +2094,6 @@ def rst_color_relief(
 # (`rst_gridfrompoints` non-aggregator + `rst_gridfrompoints_agg` aggregator)
 # delegates to gdal.Grid with the invdist algorithm.
 # ---------------------------------------------------------------------------
-
-
-def rst_resample(
-    tile: ColLike,
-    factor: ColLike,
-    algorithm: Union[ColLike, None] = None,
-) -> Column:
-    """Resample a raster tile by a multiplicative ``factor``.
-
-    ``factor > 1`` upsamples, ``0 < factor < 1`` downsamples. CRS and extent
-    are preserved; output dimensions are ``round(srcW * factor) x round(srcH * factor)``.
-
-    Args:
-        tile: Raster tile column.
-        factor: Multiplicative scale factor (``float``).
-        algorithm: gdalwarp ``-r`` algorithm (default ``"bilinear"``). One of
-            ``near``, ``bilinear``, ``cubic``, ``cubicspline``, ``lanczos``,
-            ``average``, ``mode``, ``max``, ``min``, ``med``, ``q1``, ``q3``.
-            String literals are auto-wrapped via ``f.lit``.
-
-    Returns:
-        Resampled raster tile column.
-    """
-    alg_col = (
-        f.lit("bilinear")
-        if algorithm is None
-        else (f.lit(algorithm) if isinstance(algorithm, str) else _col(algorithm))
-    )
-    return f.call_function("gbx_rst_resample", _col(tile), _col(factor), alg_col)
-
-
-def rst_resample_to_size(
-    tile: ColLike,
-    width_px: ColLike,
-    height_px: ColLike,
-    algorithm: Union[ColLike, None] = None,
-) -> Column:
-    """Resample a raster tile to an explicit output size ``width_px x height_px``.
-
-    Args:
-        tile: Raster tile column.
-        width_px: Output raster width in pixels.
-        height_px: Output raster height in pixels.
-        algorithm: gdalwarp ``-r`` algorithm (default ``"bilinear"``).
-
-    Returns:
-        Resampled raster tile column.
-    """
-    alg_col = (
-        f.lit("bilinear")
-        if algorithm is None
-        else (f.lit(algorithm) if isinstance(algorithm, str) else _col(algorithm))
-    )
-    return f.call_function(
-        "gbx_rst_resample_to_size",
-        _col(tile),
-        _col(width_px),
-        _col(height_px),
-        alg_col,
-    )
-
-
-def rst_resample_to_res(
-    tile: ColLike,
-    x_res: ColLike,
-    y_res: ColLike,
-    algorithm: Union[ColLike, None] = None,
-) -> Column:
-    """Resample a raster tile to an explicit ground resolution.
-
-    ``x_res`` / ``y_res`` are in source CRS units (metres for UTM, degrees for
-    EPSG:4326). Output extent matches the source bounding box adjusted to the
-    new pixel size.
-
-    Args:
-        tile: Raster tile column.
-        x_res: Target X resolution (``float``, CRS units / pixel).
-        y_res: Target Y resolution (``float``).
-        algorithm: gdalwarp ``-r`` algorithm (default ``"bilinear"``).
-
-    Returns:
-        Resampled raster tile column.
-    """
-    alg_col = (
-        f.lit("bilinear")
-        if algorithm is None
-        else (f.lit(algorithm) if isinstance(algorithm, str) else _col(algorithm))
-    )
-    return f.call_function(
-        "gbx_rst_resample_to_res",
-        _col(tile),
-        _col(x_res),
-        _col(y_res),
-        alg_col,
-    )
 
 
 def rst_gridfrompoints(
@@ -2652,28 +2490,6 @@ def rst_dtmfromgeoms_agg(
 # ---------------------------------------------------------------------------
 
 
-def rst_fillnodata(
-    tile: ColLike,
-    max_search_dist: ColLike = None,
-    smoothing_iter: ColLike = None,
-) -> Column:
-    """Interpolate NoData pixels from valid neighbours via ``gdal.FillNodata``.
-
-    Args:
-        tile: Raster tile column.
-        max_search_dist: Maximum pixel distance to search for a valid value
-            to fill from (default 100.0).
-        smoothing_iter: Number of 3x3 smoothing iterations after fill
-            (default 0).
-
-    Returns:
-        Raster tile column with NoData holes filled.
-    """
-    msd_col = f.lit(100.0) if max_search_dist is None else _col(max_search_dist)
-    si_col = f.lit(0) if smoothing_iter is None else _col(smoothing_iter)
-    return f.call_function("gbx_rst_fillnodata", _col(tile), msd_col, si_col)
-
-
 def rst_setcrs(tile: ColLike, crs: ColLike) -> Column:
     """Stamp the CRS WITHOUT reprojecting, accepting any CRS string.
 
@@ -2812,48 +2628,6 @@ def rst_cog_convert(
         )
     )
     return f.call_function("gbx_rst_cog_convert", _col(tile), comp_col, bs_col, or_col)
-
-
-def rst_proximity(
-    tile: ColLike,
-    target_values: Union[ColLike, None] = None,
-    dist_units: Union[ColLike, None] = None,
-    max_distance: ColLike = None,
-) -> Column:
-    """Compute a proximity raster: each pixel = distance to nearest source pixel.
-
-    Wraps ``gdal.ComputeProximity``. The output preserves the source extent /
-    CRS / GeoTransform; pixel dtype is Float32. Pixels beyond ``max_distance``
-    or with no source in range get the output's NoData value (``-1.0``).
-
-    Args:
-        tile: Raster tile column.
-        target_values: Optional comma-separated list of source-pixel values to
-            measure distance to (e.g. ``"1,2,3"``). ``None`` = any non-NoData
-            pixel is a target.
-        dist_units: ``"GEO"`` (CRS ground units, default) or ``"PIXEL"``.
-        max_distance: Optional cap on output distance (in the same units as
-            ``dist_units``). ``None`` = unlimited.
-
-    Returns:
-        Float32 proximity raster tile column.
-    """
-    tv_col = (
-        f.lit(None).cast("string")
-        if target_values is None
-        else (
-            f.lit(target_values)
-            if isinstance(target_values, str)
-            else _col(target_values)
-        )
-    )
-    du_col = (
-        f.lit("GEO")
-        if dist_units is None
-        else (f.lit(dist_units) if isinstance(dist_units, str) else _col(dist_units))
-    )
-    md_col = f.lit(None).cast("double") if max_distance is None else _col(max_distance)
-    return f.call_function("gbx_rst_proximity", _col(tile), tv_col, du_col, md_col)
 
 
 def rst_contour(
@@ -3135,6 +2909,55 @@ def rst_chm(
     )
 
 
+def rst_clip(
+    tile: ColLike,
+    geom: ColLike,
+    cutline_all_touched: ColLike,
+    clip_crs: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Clip the raster to a polygon.
+
+    Args:
+        tile: The tile to clip.
+        geom: The cutline: a polygon as WKB, EWKB, WKT or EWKT.
+        cutline_all_touched: `true` keeps every pixel the cutline touches; `false` keeps
+            the pixels whose centre it holds.
+        clip_crs: The CRS of a cutline that carries no SRID: `EPSG:<code>`,
+            `ESRI:<code>`, WKT or an integer code. The CRS of the tile when NULL. An EWKB or
+            EWKT SRID wins. SQL default: ``NULL``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        The tile cropped to the polygon's envelope on the tile's grid, NoData outside
+        the polygon; NULL when the polygon misses the tile.
+
+    SQL: ``gbx_rst_clip(tile, geom, cutline_all_touched, [clip_crs])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_clip",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            geom,
+            cutline_all_touched,
+            clip_crs,
+        )
+    return _api.call(
+        "gbx_rst_clip",
+        tile,
+        geom,
+        cutline_all_touched,
+        clip_crs,
+    )
+
+
 def rst_crs(
     tile: ColLike,
 ) -> Column:
@@ -3213,6 +3036,50 @@ def rst_evi(
         c1,
         c2,
         g,
+    )
+
+
+def rst_fillnodata(
+    tile: ColLike,
+    max_search_dist: ColLike = None,
+    smoothing_iter: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Interpolate across NoData gaps in the raster.
+
+    Args:
+        tile: The tile to fill.
+        max_search_dist: How far, in pixels, to search for valid pixels to interpolate
+            from. SQL default: ``100.0``.
+        smoothing_iter: The number of 3x3 smoothing passes over the filled pixels. SQL
+            default: ``0``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        The tile with the NoData pixels that have a valid pixel within `max_search_dist`
+        filled; the rest stay NoData.
+
+    SQL: ``gbx_rst_fillnodata(tile, [max_search_dist], [smoothing_iter])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_fillnodata",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            max_search_dist,
+            smoothing_iter,
+        )
+    return _api.call(
+        "gbx_rst_fillnodata",
+        tile,
+        max_search_dist,
+        smoothing_iter,
     )
 
 
@@ -3818,6 +3685,55 @@ def rst_pixelwidth(
     )
 
 
+def rst_proximity(
+    tile: ColLike,
+    target_values: ColLike = None,
+    dist_units: ColLike = None,
+    max_distance: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute a proximity raster: each pixel's distance to the nearest source pixel.
+
+    Args:
+        tile: The tile to measure: its first band.
+        target_values: The source pixel values as a comma-separated list, such as
+            `'1,2'`. NULL makes every pixel that is not 0 a source. SQL default: ``NULL``.
+        dist_units: `'GEO'` measures in the units of the tile's CRS; `'PIXEL'` counts
+            pixels. NULL is `'GEO'`. SQL default: ``'GEO'``.
+        max_distance: The largest distance to compute, above 0: farther pixels are
+            NoData. NULL for no limit. SQL default: ``NULL``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile on the grid of the input: 0 on a source pixel, NoData
+        (-1) beyond `max_distance`.
+
+    SQL: ``gbx_rst_proximity(tile, [target_values], [dist_units], [max_distance])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_proximity",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            target_values,
+            dist_units,
+            max_distance,
+        )
+    return _api.call(
+        "gbx_rst_proximity",
+        tile,
+        target_values,
+        dist_units,
+        max_distance,
+    )
+
+
 def rst_rastertoworldcoord(
     tile: ColLike,
     x: ColLike,
@@ -3890,6 +3806,148 @@ def rst_rastertoworldcoordy(
         tile,
         x,
         y,
+    )
+
+
+def rst_resample(
+    tile: ColLike,
+    factor: ColLike,
+    algorithm: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Resample a raster tile by a multiplicative factor.
+
+    Args:
+        tile: The tile to resample.
+        factor: The multiplicative factor, above 0: above 1 upsamples, below 1
+            downsamples.
+        algorithm: The resampling algorithm: `near`, `bilinear`, `cubic`, `cubicspline`,
+            `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3` (any case;
+            `nearest` is accepted as `near`). A word that names none raises. SQL default:
+            ``'bilinear'``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        The tile on a grid `factor` times as large in each direction; the CRS and the
+        extent stay.
+
+    SQL: ``gbx_rst_resample(tile, factor, [algorithm])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_resample",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            factor,
+            algorithm,
+        )
+    return _api.call(
+        "gbx_rst_resample",
+        tile,
+        factor,
+        algorithm,
+    )
+
+
+def rst_resample_to_res(
+    tile: ColLike,
+    x_res: ColLike,
+    y_res: ColLike,
+    algorithm: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Resample a raster tile to a target ground resolution.
+
+    Args:
+        tile: The tile to resample.
+        x_res: The size of a pixel along x in the units of the tile's CRS, above 0.
+        y_res: The size of a pixel along y in the units of the tile's CRS, above 0.
+        algorithm: The resampling algorithm: `near`, `bilinear`, `cubic`, `cubicspline`,
+            `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3` (any case;
+            `nearest` is accepted as `near`). A word that names none raises. SQL default:
+            ``'bilinear'``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        The tile on a grid of `x_res` by `y_res` pixels; the CRS and the extent stay.
+
+    SQL: ``gbx_rst_resample_to_res(tile, x_res, y_res, [algorithm])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_resample_to_res",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            x_res,
+            y_res,
+            algorithm,
+        )
+    return _api.call(
+        "gbx_rst_resample_to_res",
+        tile,
+        x_res,
+        y_res,
+        algorithm,
+    )
+
+
+def rst_resample_to_size(
+    tile: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    algorithm: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Resample a raster tile to exact pixel dimensions.
+
+    Args:
+        tile: The tile to resample.
+        width_px: The width of the result in pixels, above 0.
+        height_px: The height of the result in pixels, above 0.
+        algorithm: The resampling algorithm: `near`, `bilinear`, `cubic`, `cubicspline`,
+            `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3` (any case;
+            `nearest` is accepted as `near`). A word that names none raises. SQL default:
+            ``'bilinear'``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        The tile on a `width_px` by `height_px` grid; the CRS and the extent stay.
+
+    SQL: ``gbx_rst_resample_to_size(tile, width_px, height_px, [algorithm])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_resample_to_size",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            width_px,
+            height_px,
+            algorithm,
+        )
+    return _api.call(
+        "gbx_rst_resample_to_size",
+        tile,
+        width_px,
+        height_px,
+        algorithm,
     )
 
 
@@ -4270,6 +4328,46 @@ def rst_threshold(
     )
 
 
+def rst_to_webmercator(
+    tile: ColLike,
+    resampling: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Reproject the tile to EPSG:3857 (web mercator).
+
+    Args:
+        tile: The tile to reproject.
+        resampling: The resampling algorithm: `near`, `bilinear`, `cubic`,
+            `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3`
+            (any case; `nearest` is accepted as `near`). A word that names none raises. SQL
+            default: ``'bilinear'``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        The tile in EPSG:3857; an error tile with the reason when the tile has no CRS.
+
+    SQL: ``gbx_rst_to_webmercator(tile, [resampling])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_to_webmercator",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            resampling,
+        )
+    return _api.call(
+        "gbx_rst_to_webmercator",
+        tile,
+        resampling,
+    )
+
+
 def rst_tpi(
     tile: ColLike,
     virtualize_dir: Optional[str] = None,
@@ -4301,6 +4399,44 @@ def rst_tpi(
     return _api.call(
         "gbx_rst_tpi",
         tile,
+    )
+
+
+def rst_transform(
+    tile: ColLike,
+    srid: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Reproject the raster to the target SRID (an EPSG code).
+
+    Args:
+        tile: The tile to reproject.
+        srid: The EPSG (or ESRI) code of the target CRS, a positive integer.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        The tile in the target CRS; the tile as it is when it already has that CRS. An
+        error tile with the reason when the tile has no CRS or the SRID names none.
+
+    SQL: ``gbx_rst_transform(tile, srid)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_transform",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            srid,
+        )
+    return _api.call(
+        "gbx_rst_transform",
+        tile,
+        srid,
     )
 
 

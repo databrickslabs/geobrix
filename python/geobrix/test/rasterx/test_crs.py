@@ -87,34 +87,6 @@ def test_rst_transformcrs_reprojects(spark):
     ), f"Expected 3857 in transformed CRS, got {crs_value}"
 
 
-def test_rst_clip_bare_string_crs(spark):
-    """rst_clip with bare string CRS arg should not resolve as UNRESOLVED_COLUMN."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    if not Path(SRTM_PATH).exists():
-        pytest.skip(f"Sample data not found: {SRTM_PATH}")
-
-    df = spark.read.format("binaryFile").load(SRTM_PATH).limit(1)
-    tile_df = df.select(rx.rst_fromcontent(col("content"), lit("GTiff")).alias("tile"))
-
-    # Create a clipping polygon inside the SRTM extent
-    # SRTM n51w001 covers lon ~ [-1, 0], lat ~ [51, 52]
-    cutline_wkt = "POLYGON((-0.8 51.2, -0.2 51.2, -0.2 51.8, -0.8 51.8, -0.8 51.2))"
-
-    # Test with bare string "EPSG:4326" as clip_crs arg — must not resolve as column
-    result = tile_df.select(
-        rx.rst_clip(
-            col("tile"), lit(cutline_wkt), lit(False), clip_crs="EPSG:4326"
-        ).alias("clipped_tile")
-    ).collect()
-
-    assert len(result) == 1
-    clipped = result[0]["clipped_tile"]
-    assert (
-        clipped is not None
-    ), "rst_clip with bare string CRS should return a non-null tile"
-
-
 def test_rst_sample_bare_string_crs(spark):
     """rst_sample with bare string CRS arg should not resolve as UNRESOLVED_COLUMN."""
     from databricks.labs.gbx.rasterx import functions as rx

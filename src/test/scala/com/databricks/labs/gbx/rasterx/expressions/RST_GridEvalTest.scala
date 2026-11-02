@@ -24,7 +24,7 @@ class RST_GridEvalTest extends PlanTest with SilentSparkSession {
             val base = df
                 .withColumn("bbox", rst_boundingbox(col("raster")))
                 .withColumn("clipper", st_buffer(col("bbox"), lit(-500000.0))) // projection in meters 1 px is ~470m
-                .withColumn("raster", rst_clip(col("raster"), col("clipper"), lit(true)))
+                .withColumn("raster", call_function("gbx_rst_clip", col("raster"), col("clipper"), lit(true)))
                 .cache()
             base.collect()
             Seq(

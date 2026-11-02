@@ -234,11 +234,10 @@
     "gbx_rst_clip": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_clip( tile, 'POLYGON((-122 37, -122 38, -121 38, -121 37, -122 37))', true ) as clipped FROM rasters;",
       "usage_args": "tile, geom, cutline_all_touched, [clip_crs]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
-        "scala"
+      "description": "Clip the raster to a polygon.",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.2.0"
     },
@@ -552,10 +551,10 @@
     "gbx_rst_fillnodata": {
       "examples": "Examples:\n      > SELECT gbx_rst_fillnodata(tile, 100.0, 0) AS filled FROM rasters;",
       "usage_args": "tile, [max_search_dist], [smoothing_iter]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Interpolate across NoData gaps in the raster.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -1064,10 +1063,10 @@
     "gbx_rst_proximity": {
       "examples": "Examples:\n      > SELECT gbx_rst_proximity(tile, '', 'PIXEL', cast(100.0 as double)) AS dist FROM rasters;",
       "usage_args": "tile, [target_values], [dist_units], [max_distance]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Compute a proximity raster: each pixel's distance to the nearest source pixel.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -1240,10 +1239,10 @@
     "gbx_rst_resample": {
       "examples": "Examples:\n      > SELECT gbx_rst_resample(tile, 2.0, 'bilinear') AS upsampled FROM rasters;",
       "usage_args": "tile, factor, [algorithm]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Resample a raster tile by a multiplicative factor.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -1251,10 +1250,10 @@
     "gbx_rst_resample_to_res": {
       "examples": "Examples:\n      > SELECT gbx_rst_resample_to_res(tile, 100.0, 100.0, 'average') AS coarse FROM rasters;",
       "usage_args": "tile, x_res, y_res, [algorithm]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Resample a raster tile to a target ground resolution.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -1262,10 +1261,10 @@
     "gbx_rst_resample_to_size": {
       "examples": "Examples:\n      > SELECT gbx_rst_resample_to_size(tile, 512, 512, 'near') AS sized FROM rasters;",
       "usage_args": "tile, width_px, height_px, [algorithm]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Resample a raster tile to exact pixel dimensions.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -1468,10 +1467,10 @@
     "gbx_rst_to_webmercator": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_to_webmercator(tile) as web_tile, gbx_rst_srid(gbx_rst_to_webmercator(tile)) as new_srid FROM rasters;",
       "usage_args": "tile, [resampling]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Reproject the tile to EPSG:3857 (web mercator).",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -1501,10 +1500,10 @@
     "gbx_rst_transform": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_transform(tile, 4326) as wgs84_tile, gbx_rst_srid(gbx_rst_transform(tile, 4326)) as new_srid FROM rasters;",
       "usage_args": "tile, srid",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Reproject the raster to the target SRID (an EPSG code).",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"

@@ -44,6 +44,7 @@ import math
 import sys
 
 import h3
+from databricks.labs.gbx.rasterx import functions as rx_api
 
 # Constants mirror transformations/_config._FULL_SF / _DEMO_GGP exactly. The CLI
 # --full-aoi flag selects the AOI; _config.cfg's spark.conf-driven bbox is not
@@ -186,7 +187,7 @@ def _bin_h3(spark, surface_df, col, res, agg):
     view = f"_wc_siting_bin_{agg}_{res}"
     (
         surface_df.repartition(64, "tx", "ty")
-        .select(rx.rst_transform(col, F.lit(4326)).alias("t4326"))
+        .select(rx_api.rst_transform(col, F.lit(4326)).alias("t4326"))
         .createOrReplaceTempView(view)
     )
     return spark.sql(

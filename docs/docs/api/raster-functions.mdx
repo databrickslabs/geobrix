@@ -3130,17 +3130,31 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 
 ### rst_clip
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_clip: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** (`rasterio.mask`). The clip geometry is assumed to be in the raster's CRS; the heavyweight tier has additional SRID-inheritance fallbacks.
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_clip(tile, geom, cutline_all_touched, [clip_crs])` | `TILE` |
+| Python | `rasterx.functions.rst_clip(tile, geom, cutline_all_touched, clip_crs=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to clip. |
+| `geom` | `BINARY` or `STRING` |  | The cutline: a polygon as WKB, EWKB, WKT or EWKT. |
+| `cutline_all_touched` | `BOOLEAN` |  | `true` keeps every pixel the cutline touches; `false` keeps the pixels whose centre it holds. |
+| `clip_crs` | `STRING` | `NULL` | The CRS of a cutline that carries no SRID: `EPSG:<code>`, `ESRI:<code>`, WKT or an integer code. The CRS of the tile when NULL. An EWKB or EWKT SRID wins. |
+{/* END GENERATED gbx_rst_clip */}
+
+:::note Cutline CRS
+A cutline with an EWKB or EWKT SRID is reprojected to the tile's CRS. A plain WKB or WKT cutline takes `clip_crs`, else the tile's CRS. The result is NULL when the cutline misses the tile.
 :::
 
 :::note Lightweight Python — virtual-tile force-output
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_clip(tile: Column, clip: Column, cutlineAllTouched: Column, [clip_crs: Column = null]): Column` — Clip by geometry. The `clip` argument must be **WKT** (string), **EWKT** (SRID-prefixed string), **WKB** (binary), or **EWKB** (SRID-embedded binary); do not use `st_geomfromtext()` or other DBR native geometry. Optional `clip_crs` (string, source role) declares the CRS of a plain WKB/WKT cutline — an EWKB/EWKT embedded SRID wins, absent → assumed already in the raster CRS. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
+Clip by geometry. The `clip` argument must be **WKT** (string), **EWKT** (SRID-prefixed string), **WKB** (binary), or **EWKB** (SRID-embedded binary); do not use `st_geomfromtext()` or other DBR native geometry. Optional `clip_crs` (string, source role) declares the CRS of a plain WKB/WKT cutline — an EWKB/EWKT embedded SRID wins, absent → assumed already in the raster CRS. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
 
 **CRS handling:**
 - **EWKT** (`SRID=4326;POLYGON(...)`) or **EWKB** (SRID encoded in the byte header) — the SRID is read, and if it differs from the raster's CRS the cutline is reprojected before clipping. Use this form whenever the geometry and raster may be in different CRSs.
@@ -3151,9 +3165,7 @@ _Example clip geometry: a WKT polygon in the raster's native CRS (EPSG:32618, no
 <FunctionExamples
   name="rst_clip"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
@@ -3671,7 +3683,20 @@ World X / Y coordinate of a pixel.
 
 ### rst_resample
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_resample: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_resample(tile, factor, [algorithm])` | `TILE` |
+| Python | `rasterx.functions.rst_resample(tile, factor, algorithm=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to resample. |
+| `factor` | `DOUBLE` |  | The multiplicative factor, above 0: above 1 upsamples, below 1 downsamples. |
+| `algorithm` | `STRING` | `'bilinear'` | The resampling algorithm: `near`, `bilinear`, `cubic`, `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3` (any case; `nearest` is accepted as `near`). A word that names none raises. |
+{/* END GENERATED gbx_rst_resample */}
 
 See [interpolation & fill](./grid-raster-tessellation#interpolation-and-fill) to choose among sampling, resampling, and gap-filling.
 
@@ -3679,18 +3704,14 @@ See [interpolation & fill](./grid-raster-tessellation#interpolation-and-fill) to
 Powered by **rasterio** (`rasterio.warp`).
 :::
 
-Resample a raster tile by a multiplicative factor via `gdal.Warp -r`, scaling pixel dimensions up or down relative to the source.
+Resample a raster tile by a multiplicative factor via `gdal.Warp -r`, scaling pixel dimensions up or down relative to the source. A factor of 0 or less, or an unknown algorithm, raises an error that names the value.
 
 :::note Lightweight Python — virtual-tile force-output
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_resample(tile: Column, factor: Column, algorithm: Column): Column`
-
-**Parameters:** `factor` — multiplicative scale factor applied to both width and height (e.g. `2.0` doubles the pixel grid); `algorithm` — gdalwarp resampling method name (e.g. `bilinear`, `near`, `cubic`, `cubicspline`, `lanczos`, `average`)
-
 :::tip Esri Resample / changing cell size
-The `rst_resample*` family is GeoBrix's equivalent of the ArcGIS **Resample** tool — producing a *new* raster at a different cell size with a chosen resampling method (`algorithm`: `near`, `bilinear`, `cubic`, `cubicspline`, `lanczos`, `average`). Pick the variant by how you specify the target:
+The `rst_resample*` family is GeoBrix's equivalent of the ArcGIS **Resample** tool — producing a *new* raster at a different cell size with a chosen resampling method. The `algorithm` is one of `near`, `bilinear`, `cubic`, `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3`, in any case. Pick the variant by how you specify the target:
 
 - **`rst_resample`** — by a multiplicative **factor** (e.g. `2.0` doubles the grid).
 - **[`rst_resample_to_res`](#rst_resample_to_res)** — by target **ground resolution** in CRS units (e.g. metres per pixel).
@@ -3706,29 +3727,38 @@ See [Raster Sampling](./raster-sampling) for the full workflow guide.
 <FunctionExamples
   name="rst_resample"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
 ### rst_resample_to_res
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_resample_to_res: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_resample_to_res(tile, x_res, y_res, [algorithm])` | `TILE` |
+| Python | `rasterx.functions.rst_resample_to_res(tile, x_res, y_res, algorithm=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to resample. |
+| `x_res` | `DOUBLE` |  | The size of a pixel along x in the units of the tile's CRS, above 0. |
+| `y_res` | `DOUBLE` |  | The size of a pixel along y in the units of the tile's CRS, above 0. |
+| `algorithm` | `STRING` | `'bilinear'` | The resampling algorithm: `near`, `bilinear`, `cubic`, `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3` (any case; `nearest` is accepted as `near`). A word that names none raises. |
+{/* END GENERATED gbx_rst_resample_to_res */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** (`rasterio.warp`).
 :::
 
-Resample a raster tile to an explicit ground resolution in CRS units via `gdal.Warp -tr`.
+Resample a raster tile to an explicit ground resolution in CRS units via `gdal.Warp -tr`. A resolution of 0 or less raises an error that names it.
 
 :::note Lightweight Python — virtual-tile force-output
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
-
-**Signature:** `rst_resample_to_res(tile: Column, xRes: Column, yRes: Column, algorithm: Column): Column`
-
-**Parameters:** `xRes` — target pixel width in CRS units (e.g. metres for a metric projection); `yRes` — target pixel height in CRS units; `algorithm` — gdalwarp resampling method name (e.g. `average`, `bilinear`, `near`)
 
 Part of the `rst_resample*` family — see the [Esri Resample note](#rst_resample) for how it relates to the ArcGIS Resample tool and `rst_sample`.
 
@@ -3737,29 +3767,38 @@ Part of the `rst_resample*` family — see the [Esri Resample note](#rst_resampl
 <FunctionExamples
   name="rst_resample_to_res"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
 ### rst_resample_to_size
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_resample_to_size: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_resample_to_size(tile, width_px, height_px, [algorithm])` | `TILE` |
+| Python | `rasterx.functions.rst_resample_to_size(tile, width_px, height_px, algorithm=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to resample. |
+| `width_px` | `INT` |  | The width of the result in pixels, above 0. |
+| `height_px` | `INT` |  | The height of the result in pixels, above 0. |
+| `algorithm` | `STRING` | `'bilinear'` | The resampling algorithm: `near`, `bilinear`, `cubic`, `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3` (any case; `nearest` is accepted as `near`). A word that names none raises. |
+{/* END GENERATED gbx_rst_resample_to_size */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** (`rasterio.warp`).
 :::
 
-Resample a raster tile to an explicit pixel grid size via `gdal.Warp -ts`.
+Resample a raster tile to an explicit pixel grid size via `gdal.Warp -ts`. A size of 0 or less raises an error that names it.
 
 :::note Lightweight Python — virtual-tile force-output
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
-
-**Signature:** `rst_resample_to_size(tile: Column, widthPx: Column, heightPx: Column, algorithm: Column): Column`
-
-**Parameters:** `widthPx` — target output width in pixels; `heightPx` — target output height in pixels; `algorithm` — gdalwarp resampling method name (e.g. `near` for categorical rasters, `bilinear` for continuous)
 
 Part of the `rst_resample*` family — see the [Esri Resample note](#rst_resample) for how it relates to the ArcGIS Resample tool and `rst_sample`.
 
@@ -3768,15 +3807,26 @@ Part of the `rst_resample*` family — see the [Esri Resample note](#rst_resampl
 <FunctionExamples
   name="rst_resample_to_size"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
 ### rst_transform
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_transform: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_transform(tile, srid)` | `TILE` |
+| Python | `rasterx.functions.rst_transform(tile, srid, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to reproject. |
+| `srid` | `INT` |  | The EPSG (or ESRI) code of the target CRS, a positive integer. |
+{/* END GENERATED gbx_rst_transform */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** (`rasterio.warp`). Reprojection uses the GDAL build bundled with rasterio, whose projection database and driver set may be narrower than the heavyweight tier.
@@ -3786,13 +3836,12 @@ Powered by **rasterio** (`rasterio.warp`). Reprojection uses the GDAL build bund
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_transform(tile: Column, targetSrid: Column): Column` — Reproject to a target SRID (a positive EPSG or ESRI code, classified at apply time); `0` or a code in neither registry is rejected with a clear error. Use `rst_transformcrs` to reproject to a target given as a CRS string. See [Coordinate Reference Systems](./coordinate-reference-systems).
+Reproject to a target SRID: a positive EPSG or ESRI code. A code that names no CRS gives an error tile with the reason. A tile with no CRS also gives an error tile; set its CRS first with `rst_setcrs`. Use `rst_transformcrs` for a target given as a CRS string. See [Coordinate Reference Systems](./coordinate-reference-systems).
 
 <FunctionExamples
   name="rst_transform"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
@@ -4003,7 +4052,19 @@ The output is a display web-map tile, not the source's raw bands. **PNG and WebP
 
 ### rst_to_webmercator
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_to_webmercator: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_to_webmercator(tile, [resampling])` | `TILE` |
+| Python | `rasterx.functions.rst_to_webmercator(tile, resampling=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to reproject. |
+| `resampling` | `STRING` | `'bilinear'` | The resampling algorithm: `near`, `bilinear`, `cubic`, `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3` (any case; `nearest` is accepted as `near`). A word that names none raises. |
+{/* END GENERATED gbx_rst_to_webmercator */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** (`rasterio.warp`). Uses rasterio's bundled GDAL build, whose projection and driver coverage may be narrower than the heavyweight tier.
@@ -4013,13 +4074,12 @@ Powered by **rasterio** (`rasterio.warp`). Uses rasterio's bundled GDAL build, w
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_to_webmercator(tile: Column): Column` — Reproject a raster to EPSG:3857 (Web Mercator) using bilinear resampling by default. The returned tile carries `srid = 3857`.
+Reproject a raster to EPSG:3857 (Web Mercator) using bilinear resampling by default. The returned tile carries `srid = 3857`. A resampling word that names none raises an error that names it. A tile with no CRS gives an error tile.
 
 <FunctionExamples
   name="rst_to_webmercator"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTransformsLightCode} pythonSource="docs/tests/python/api/rasterx_transforms_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
 />
@@ -4628,7 +4688,20 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 
 ### rst_fillnodata
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_fillnodata: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_fillnodata(tile, [max_search_dist], [smoothing_iter])` | `TILE` |
+| Python | `rasterx.functions.rst_fillnodata(tile, max_search_dist=None, smoothing_iter=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to fill. |
+| `max_search_dist` | `DOUBLE` | `100.0` | How far, in pixels, to search for valid pixels to interpolate from. |
+| `smoothing_iter` | `INT` | `0` | The number of 3x3 smoothing passes over the filled pixels. |
+{/* END GENERATED gbx_rst_fillnodata */}
 
 See [interpolation & fill](./grid-raster-tessellation#interpolation-and-fill) to choose among sampling, resampling, and gap-filling.
 
@@ -4640,13 +4713,12 @@ Powered by **rasterio** (`rasterio.fill`).
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_fillnodata(tile: Column, [maxSearchDist: Column = lit(100), smoothingIter: Column = lit(0)]): Column` — Fill NoData pixels via `gdal.FillNodata` using inverse-distance interpolation from neighbors within `maxSearchDist` pixels. `smoothingIter` applies an optional post-fill 3×3 smoothing pass.
+Fill NoData pixels via `gdal.FillNodata` using inverse-distance interpolation from neighbors within `maxSearchDist` pixels. `smoothingIter` applies an optional post-fill 3×3 smoothing pass.
 
 <FunctionExamples
   name="rst_fillnodata"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
@@ -4850,7 +4922,21 @@ Powered by **scikit-image** (`measure.find_contours`). Returns `ARRAY<struct(geo
 
 ### rst_proximity
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_proximity: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_proximity(tile, [target_values], [dist_units], [max_distance])` | `TILE` |
+| Python | `rasterx.functions.rst_proximity(tile, target_values=None, dist_units=None, max_distance=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to measure: its first band. |
+| `target_values` | `STRING` | `NULL` | The source pixel values as a comma-separated list, such as `'1,2'`. NULL makes every pixel that is not 0 a source. |
+| `dist_units` | `STRING` | `'GEO'` | `'GEO'` measures in the units of the tile's CRS; `'PIXEL'` counts pixels. NULL is `'GEO'`. |
+| `max_distance` | `DOUBLE` | `NULL` | The largest distance to compute, above 0: farther pixels are NoData. NULL for no limit. |
+{/* END GENERATED gbx_rst_proximity */}
 
 :::note Lightweight tier (pyrx)
 Powered by **SciPy** (`scipy.ndimage.distance_transform_edt`). Distance to the nearest source pixel (`target_values`, or any non-zero pixel by default), in `GEO` (CRS units) or `PIXEL` units; pixels beyond `max_distance` → NoData −1.0. Single-band Float32.
@@ -4860,13 +4946,12 @@ Powered by **SciPy** (`scipy.ndimage.distance_transform_edt`). Distance to the n
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_proximity(tile: Column, [targetValues: Column = null, distUnits: Column = lit("GEO"), maxDistance: Column = null]): Column` — Compute a Float32 raster where each pixel holds the distance to the nearest source pixel via `gdal.ComputeProximity`. `targetValues` is a comma-separated list of source-pixel values (e.g. `"1,2,3"`); `null` means any non-NoData pixel is a target. `distUnits` is `"GEO"` (CRS ground units, default) or `"PIXEL"`. `maxDistance` caps the output; pixels beyond it get the NoData sentinel `-1.0`.
+Compute a Float32 raster where each pixel holds the distance to the nearest source pixel via `gdal.ComputeProximity`. `targetValues` is a comma-separated list of source-pixel values (e.g. `"1,2,3"`); `null` means every pixel that is not 0 is a source. `distUnits` is `"GEO"` (CRS ground units, default; NULL is `"GEO"`) or `"PIXEL"`; any other word raises an error. `maxDistance` caps the output; pixels beyond it get the NoData sentinel `-1.0`.
 
 <FunctionExamples
   name="rst_proximity"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTerrainLightCode} pythonSource="docs/tests/python/api/rasterx_terrain_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
 />

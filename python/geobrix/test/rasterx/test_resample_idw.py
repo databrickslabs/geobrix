@@ -43,45 +43,6 @@ def spark():
     return spark
 
 
-@pytest.mark.parametrize(
-    "expression",
-    [
-        # Multiplicative factor; bilinear.
-        "gbx_rst_resample(t, 0.5, 'bilinear')",
-        # Explicit pixel dims.
-        "gbx_rst_resample_to_size(t, 32, 32, 'near')",
-        # Explicit ground resolution (degrees, since SRTM is in EPSG:4326).
-        "gbx_rst_resample_to_res(t, 0.01, 0.01, 'average')",
-    ],
-)
-def test_resample_family_roundtrip(spark, expression):
-    """Each resample wrapper: SQL invocation returns a non-empty tile."""
-    if not Path(SAMPLE_TILE_PATH).exists():
-        pytest.skip(f"sample raster not present: {SAMPLE_TILE_PATH}")
-    # gbx_rst_fromfile is lightweight-only (issue #34, pyrx UDF). The heavy tier
-    # loads the local raster by reading its bytes via the binaryFile reader and
-    # decoding with the Scala/GDAL gbx_rst_fromcontent -- no pandas/rasterio.
-    spark.read.format("binaryFile").load(str(SAMPLE_TILE_PATH)).createOrReplaceTempView(
-        "_rasterx_src"
-    )
-    df = spark.sql(
-        f"SELECT {expression} AS out "
-        f"FROM (SELECT gbx_rst_fromcontent(content, 'GTiff') AS t FROM _rasterx_src)"
-    )
-    rows = df.collect()
-    assert len(rows) == 1
-    out = rows[0]["out"]
-    assert out is not None, f"{expression} returned null tile"
-    md = out["metadata"]
-    assert md is not None, f"{expression} returned tile with null metadata"
-    raster = out["raster"]
-    assert raster is not None, f"{expression} returned None raster; metadata={dict(md)}"
-    if isinstance(raster, (bytes, bytearray)):
-        assert len(raster) > 0, f"{expression} returned empty raster bytes"
-    else:
-        assert len(str(raster)) > 0
-
-
 def test_idw_roundtrip_non_agg_and_agg_match(spark):
     """IDW non-aggregator and aggregator return non-empty tiles on the same data.
 

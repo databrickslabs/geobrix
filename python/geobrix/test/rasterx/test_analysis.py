@@ -49,15 +49,6 @@ def spark():
             "gbx_rst_cog_convert(t, 'DEFLATE', 256, 'AVERAGE')",
             lambda v: v is not None and v["raster"] is not None,
         ),
-        # 2) proximity — returns a Float32 tile of distance-to-source-pixel.
-        # Avoid passing NULL literals: Catalyst's Invoke `propagateNull` would
-        # short-circuit the whole call to null. Pass an empty `target_values`
-        # string (= any non-NoData pixel is a target) and an explicit cap.
-        (
-            "proximity",
-            "gbx_rst_proximity(t, '', 'PIXEL', cast(100.0 as double))",
-            lambda v: v is not None and v["raster"] is not None,
-        ),
         # 3) contour — returns ARRAY<struct(geom_wkb, value)>. London SRTM
         # n51w001 spans only ~91-95 m elevation so a 1 m interval is required
         # to pick up at least one contour line within that narrow range.

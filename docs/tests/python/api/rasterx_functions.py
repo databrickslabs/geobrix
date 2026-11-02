@@ -562,34 +562,6 @@ rst_buildoverviews_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_clip_python_heavy_example(spark):
-    """Clip a raster tile to a geometry cutline via the heavy rasterx tier.
-
-    Uses a plain WKT polygon in the raster's native CRS (EPSG:32618), covering
-    the upper-left half of the raster extent (upperleftx=2121950, width=236px at 10m).
-    Omitting an SRID means the geometry is assumed to be in the raster's CRS.
-    """
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    tile_df = spark.table("rasters")
-    clip_geom = "POLYGON((2121950 -10791280, 2123140 -10791280, 2123140 -10790470, 2121950 -10790470, 2121950 -10791280))"
-    result = tile_df.select(
-        rx.rst_clip("tile", f.lit(clip_geom), f.lit(True)).alias("tile")
-    ).first()
-    return result["tile"]
-
-
-rst_clip_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(clipped tile; polygon is in the raster's native CRS (no SRID = no reprojection))
-"""
-
-
 # ---------------------------------------------------------------------------
 # rst_cog_convert — re-layout tile as Cloud Optimized GeoTIFF (heavy tier)
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
@@ -651,28 +623,6 @@ rst_convolve_python_heavy_example_output = """
 # rst_fillnodata — fill NoData pixels via inverse-distance interpolation (heavy tier)
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — nodata=0.0)
 # ---------------------------------------------------------------------------
-
-
-def rst_fillnodata_python_heavy_example(spark):
-    """Fill NoData pixels in a raster tile via the heavy rasterx tier."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    tile_df = spark.table("rasters")
-    result = tile_df.select(
-        rx.rst_fillnodata("tile", f.lit(100.0), f.lit(0)).alias("tile")
-    ).first()
-    return result["tile"]
-
-
-rst_fillnodata_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(filled tile; NoData holes searched within 100 pixels)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -810,28 +760,6 @@ rst_initnodata_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_resample_python_heavy_example(spark):
-    """Resample a raster tile by a 2x factor via the heavy rasterx tier."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    tile_df = spark.table("rasters")
-    result = tile_df.select(
-        rx.rst_resample("tile", f.lit(2.0), f.lit("bilinear")).alias("tile")
-    ).first()
-    return result["tile"]
-
-
-rst_resample_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(2x bilinear upsampled tile; source is 236x161 px)
-"""
-
-
 # ---------------------------------------------------------------------------
 # rst_resample_to_res — resample to an explicit ground resolution (heavy tier)
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — 10 m pixels)
@@ -839,59 +767,11 @@ rst_resample_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_resample_to_res_python_heavy_example(spark):
-    """Resample a raster tile to an explicit ground resolution via the heavy rasterx tier."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    tile_df = spark.table("rasters")
-    result = tile_df.select(
-        rx.rst_resample_to_res(
-            "tile", f.lit(20.0), f.lit(20.0), f.lit("average")
-        ).alias("tile")
-    ).first()
-    return result["tile"]
-
-
-rst_resample_to_res_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(downsampled tile; 10 m to 20 m resolution)
-"""
-
-
 # ---------------------------------------------------------------------------
 # rst_resample_to_size — resample to an explicit pixel grid size (heavy tier)
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # target 100x100 px
 # ---------------------------------------------------------------------------
-
-
-def rst_resample_to_size_python_heavy_example(spark):
-    """Resample a raster tile to an explicit pixel grid size via the heavy rasterx tier."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    tile_df = spark.table("rasters")
-    result = tile_df.select(
-        rx.rst_resample_to_size("tile", f.lit(100), f.lit(100), f.lit("near")).alias(
-            "tile"
-        )
-    ).first()
-    return result["tile"]
-
-
-rst_resample_to_size_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(resampled tile forced to 100x100 pixels)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -959,26 +839,6 @@ rst_setsrid_python_heavy_example_output = """
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — EPSG:32618)
 # Reproject to EPSG:4326
 # ---------------------------------------------------------------------------
-
-
-def rst_transform_python_heavy_example(spark):
-    """Reproject a raster tile to a target EPSG SRID via the heavy rasterx tier."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    tile_df = spark.table("rasters")
-    result = tile_df.select(rx.rst_transform("tile", f.lit(4326)).alias("tile")).first()
-    return result["tile"]
-
-
-rst_transform_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(reprojected tile; source EPSG:32618 (UTM Zone 18N) to EPSG:4326)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -1846,28 +1706,6 @@ rst_color_relief_python_heavy_example_output = """
 """
 
 
-def rst_proximity_python_heavy_example(spark):
-    """Compute per-pixel distance to the nearest non-NoData pixel."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    df = spark.table("dem_rasters")
-    result = df.select(
-        rx.rst_proximity("tile", f.lit(""), f.lit("PIXEL"), f.lit(100.0)).alias("tile")
-    ).first()
-    return result["tile"]
-
-
-rst_proximity_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(distance in pixels to nearest non-NoData pixel, capped at 100)
-"""
-
-
 def rst_contour_python_heavy_example(spark):
     """Generate contour LineStrings at equal intervals from a DEM tile."""
     from databricks.labs.gbx.rasterx import functions as rx
@@ -2039,27 +1877,6 @@ rst_dtmfromgeoms_python_heavy_example_output = """
 # ============================================================================
 # Coordinate Transforms & Tiling (Heavy Tier)
 # ============================================================================
-
-
-def rst_to_webmercator_python_heavy_example(spark):
-    """Transform raster from its native CRS to Web Mercator (EPSG:3857)."""
-    if rx is None:
-        raise ImportError("rasterx not installed")
-
-    df = spark.table("rasters")
-    # Reproject to Web Mercator (default bilinear resampling)
-    result = df.select(rx.rst_to_webmercator("tile").alias("tile")).first()
-    return result["tile"]
-
-
-rst_to_webmercator_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(reprojected to Web Mercator, EPSG:3857)
-"""
 
 
 def rst_tilexyz_python_heavy_example(spark):

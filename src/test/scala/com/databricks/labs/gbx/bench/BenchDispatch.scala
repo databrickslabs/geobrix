@@ -1240,7 +1240,7 @@ object BenchDispatch {
         rst_proximity(tile, lit(argS(a, "target_values", "1")), lit(argS(a, "distunits", "GEO")))
       case "rst_clip" =>
         import org.apache.spark.sql.functions.lit
-        rst_clip(tile, lit(clipGeomWkt), argB(a, "cutline_all_touched", false))
+        org.apache.spark.sql.functions.call_function("gbx_rst_clip", tile, lit(clipGeomWkt), lit(argB(a, "cutline_all_touched", false)))
       case "rst_color_relief" =>
         rst_color_relief(tile, colorTablePath)
       case "rst_viewshed" =>

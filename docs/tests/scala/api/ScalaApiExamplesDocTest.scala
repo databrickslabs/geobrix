@@ -32,11 +32,6 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     succeed
   }
 
-  test("RasterX rst_clip three-arg signature compiles") {
-    val _: Column = rx.rst_clip(col("tile"), col("clip"), lit(true))
-    succeed
-  }
-
   test("GridX register and cellarea compile") {
     val _: SparkSession => Unit = bx.register _
     succeed

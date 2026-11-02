@@ -45,13 +45,6 @@ def spark():
 @pytest.mark.parametrize(
     "label, sql_expr, expected_col, validator",
     [
-        # 1) fillnodata - returns a tile struct.
-        (
-            "fillnodata",
-            "gbx_rst_fillnodata(t, 100.0, 0)",
-            "out",
-            lambda v: v is not None and v["raster"] is not None,
-        ),
         # 2) sample - returns ARRAY<DOUBLE>. Pick a lon/lat inside the SRTM
         # tile (SRTM n51w001 covers W001..E000, N51..N52). London = ~-0.13, 51.5.
         # Construct a WKT POINT inline.

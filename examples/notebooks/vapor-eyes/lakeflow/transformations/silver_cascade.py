@@ -318,7 +318,6 @@ def plume_quant():
     c = cfg(spark)
     p = paths(spark)
 
-    from databricks.labs.gbx.pyrx import functions as rx
     from databricks.labs.gbx.rasterx import functions as rx_api
     from databricks.labs.gbx.sample import EmitDownloader
 
@@ -384,7 +383,7 @@ def plume_quant():
     clipped = (
         paired
         .withColumn("scene_qc", rx_api.rst_threshold("scene", F.lit(">"), F.lit(floor)))
-        .withColumn("clip", rx.rst_clip("scene_qc", "plume_geom", F.lit(True)))
+        .withColumn("clip", rx_api.rst_clip("scene_qc", "plume_geom", F.lit(True)))
         .withColumn("summary", rx_api.rst_summary("clip"))
         .withColumn("gbx_mean_ppmm",
                     F.get_json_object("summary", "$.bands[0].mean").cast("double"))

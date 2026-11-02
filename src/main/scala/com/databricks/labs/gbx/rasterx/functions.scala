@@ -632,8 +632,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
 
     // Operations
     def rst_asformat(tile: Column, newFormat: Column): Column = ColumnAdapter(RST_AsFormat.name, Seq(tile, newFormat))
-    def rst_clip(tile: Column, clip: Column, cutlineAllTouched: Column): Column =
-        ColumnAdapter(RST_Clip.name, Seq(tile, clip, cutlineAllTouched))
     def rst_combineavg(tiles: Column): Column = ColumnAdapter(RST_CombineAvg.name, Seq(tiles))
     def rst_combinemin(tiles: Column): Column = ColumnAdapter(RST_CombineMin.name, Seq(tiles))
     def rst_combinemax(tiles: Column): Column = ColumnAdapter(RST_CombineMax.name, Seq(tiles))
@@ -660,7 +658,7 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         ColumnAdapter(RST_RasterToWorldCoordX.name, Seq(tile, x, y))
     def rst_rastertoworldcoordy(tile: Column, x: Column, y: Column): Column =
         ColumnAdapter(RST_RasterToWorldCoordY.name, Seq(tile, x, y))
-    def rst_transform(tile: Column, targetSrid: Column): Column = ColumnAdapter(RST_Transform.name, Seq(tile, targetSrid))
+    def rst_transform(tile: Column, srid: Column): Column = ColumnAdapter(RST_Transform.name, Seq(tile, srid))
     def rst_transformcrs(tile: Column, targetCrs: Column): Column = ColumnAdapter(RST_TransformCrs.name, Seq(tile, targetCrs))
     def rst_transformcrs(tile: Column, targetCrs: String): Column = rst_transformcrs(tile, lit(targetCrs))
     def rst_tryopen(tile: Column): Column = ColumnAdapter(RST_TryOpen.name, Seq(tile))
@@ -755,8 +753,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_custom_tessellate(tile: Column, grid: Column, resolution: Int, assignment: String, coverage: String): Column =
         rst_custom_tessellate(tile, grid, lit(resolution), assignment, coverage)
     def rst_asformat(tile: Column, newFormat: String): Column = rst_asformat(tile, lit(newFormat))
-    def rst_clip(tile: Column, clip: Column, cutlineAllTouched: Boolean): Column =
-        rst_clip(tile, clip, lit(cutlineAllTouched))
     def rst_filter(tile: Column, kernelSize: Int, operation: String): Column =
         rst_filter(tile, lit(kernelSize), lit(operation))
     def rst_mapalgebra(tiles: Column, expression: String): Column = rst_mapalgebra(tiles, lit(expression))
@@ -766,7 +762,7 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         rst_rastertoworldcoordx(tile, lit(x), lit(y))
     def rst_rastertoworldcoordy(tile: Column, x: Int, y: Int): Column =
         rst_rastertoworldcoordy(tile, lit(x), lit(y))
-    def rst_transform(tile: Column, targetSrid: Int): Column = rst_transform(tile, lit(targetSrid))
+    def rst_transform(tile: Column, srid: Int): Column = rst_transform(tile, lit(srid))
     def rst_updatetype(tile: Column, newType: String): Column = rst_updatetype(tile, lit(newType))
     def rst_worldtorastercoord(tile: Column, x: Double, y: Double): Column =
         rst_worldtorastercoord(tile, lit(x), lit(y))

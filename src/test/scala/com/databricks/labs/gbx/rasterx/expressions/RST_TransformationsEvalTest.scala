@@ -30,7 +30,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
             .withColumn("raster", udfs.rasterFromPath(col("path")))
             .withColumn(
               "clipped",
-              rst_clip(
+              call_function("gbx_rst_clip", 
                 col("raster"),
                 lit("POLYGON((-8900000 2220000, -8900000 2200000, -8880000 2200000, -8880000 2220000, -8900000 2220000))"),
                 lit(true)
@@ -64,7 +64,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         // Convert to WKB using JTS (assuming st_aswkb exists)
         import com.databricks.labs.gbx.udfs._
         val dfWithWkb = df.withColumn("wkb", st_aswkb(col("wkt")))
-            .withColumn("clipped", rst_clip(col("raster"), col("wkb"), lit(true)))
+            .withColumn("clipped", call_function("gbx_rst_clip", col("raster"), col("wkb"), lit(true)))
 
         noException should be thrownBy dfWithWkb.collect()
     }
@@ -82,8 +82,8 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
           (1, s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF")
         ).toDF("id", "path")
             .withColumn("raster", udfs.rasterFromPath(col("path")))
-            .withColumn("clip_true", rst_clip(col("raster"), lit(geom), lit(true)))
-            .withColumn("clip_false", rst_clip(col("raster"), lit(geom), lit(false)))
+            .withColumn("clip_true", call_function("gbx_rst_clip", col("raster"), lit(geom), lit(true)))
+            .withColumn("clip_false", call_function("gbx_rst_clip", col("raster"), lit(geom), lit(false)))
 
         noException should be thrownBy df.collect()
         val result = df.select("clip_true", "clip_false").collect()
@@ -104,7 +104,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
             .withColumn("raster", udfs.rasterFromPath(col("path")))
             .withColumn(
               "clipped",
-              rst_clip(
+              call_function("gbx_rst_clip", 
                 col("raster"),
                 lit("POLYGON((-8900000 2220000, -8900000 2200000, -8880000 2200000, -8880000 2220000, -8900000 2220000))"),
                 lit(true)
@@ -305,7 +305,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
             .withColumn("raster", udfs.rasterFromPath(col("path")))
             .withColumn(
               "clipped",
-              rst_clip(
+              call_function("gbx_rst_clip", 
                 col("raster"),
                 lit("POLYGON((-8900000 2220000, -8900000 2200000, -8880000 2200000, -8880000 2220000, -8900000 2220000))"),
                 lit(true)
@@ -353,7 +353,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
           (1, s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF")
         ).toDF("id", "path")
             .withColumn("raster", udfs.rasterFromPath(col("path")))
-            .withColumn("clipped", rst_clip(col("raster"), lit(ewkt), lit(true)))
+            .withColumn("clipped", call_function("gbx_rst_clip", col("raster"), lit(ewkt), lit(true)))
             .withColumn("clipped_size", rst_memsize(col("clipped")))
 
         val result = df.select("clipped_size").collect()
@@ -380,7 +380,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
           (1, s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF", ewkb)
         ).toDF("id", "path", "clip_wkb")
             .withColumn("raster", udfs.rasterFromPath(col("path")))
-            .withColumn("clipped", rst_clip(col("raster"), col("clip_wkb"), lit(true)))
+            .withColumn("clipped", call_function("gbx_rst_clip", col("raster"), col("clip_wkb"), lit(true)))
             .withColumn("clipped_size", rst_memsize(col("clipped")))
 
         val result = df.select("clipped_size").collect()
@@ -406,7 +406,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
             schema)
             .withColumn(
               "clipped",
-              rst_clip(col("tile"), lit("POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))"), lit(true)))
+              call_function("gbx_rst_clip", col("tile"), lit("POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))"), lit(true)))
 
         noException should be thrownBy df.collect()
         val result = df.select("clipped").collect()
@@ -429,7 +429,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
           (1, s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF")
         ).toDF("id", "path")
             .withColumn("raster", udfs.rasterFromPath(col("path")))
-            .withColumn("clipped", rst_clip(col("raster"), lit(null).cast("string"), lit(true)))
+            .withColumn("clipped", call_function("gbx_rst_clip", col("raster"), lit(null).cast("string"), lit(true)))
 
         noException should be thrownBy df.collect()
         val result = df.select("clipped").collect()

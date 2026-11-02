@@ -97,7 +97,7 @@ val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samp
 val clipWkt = "POLYGON((-122 37, -122 38, -121 38, -121 37, -122 37))"
 val clipped = rasters.select(
   col("path"),
-  rx.rst_clip(col("tile"), lit(clipWkt), lit(true)).alias("clipped_tile")
+  call_function("gbx_rst_clip", col("tile"), lit(clipWkt), lit(true)).alias("clipped_tile")
 )
 """.trim
 
@@ -992,29 +992,6 @@ result.show()
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
 (Float32 10×10 BNG tile; three points binned by max z-value, empty cells = NoData -9999.0)
-""".trim
-
-  val rst_clip_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// WKT polygon in raster's native CRS (EPSG:32618); no SRID prefix = no reprojection.
-// To clip with a WGS84 geometry use EWKT: "SRID=4326;POLYGON(...)".
-val rasters = spark.table("rasters")
-val clipGeom = "POLYGON((2121950 -10791280, 2123140 -10791280, 2123140 -10790470, 2121950 -10790470, 2121950 -10791280))"
-val result = rasters.select(rx.rst_clip(col("tile"), lit(clipGeom), lit(true)).alias("tile"))
-result.show()
-""".trim
-
-  val rst_clip_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(clipped tile; polygon is in the raster's native CRS (no SRID = no reprojection))
 """.trim
 
   val rst_cog_convert_scala_example: String =

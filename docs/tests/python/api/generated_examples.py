@@ -249,6 +249,11 @@ EXAMPLES = {
         "chm",
         "SELECT gbx_rst_chm(c0, c1) AS out FROM gbx_example",
     ),
+    "gbx_rst_clip": (
+        "SPEC_WARP",
+        "clip_half",
+        "SELECT gbx_rst_clip(c0, 'POLYGON((-1.05 51.4, -0.68 51.4, -0.68 52.1, -1.05 52.1, -1.05 51.4))', FALSE) AS out FROM gbx_example",
+    ),
     "gbx_rst_crs": (
         "RASTER_ACCESSOR",
         "crs",
@@ -258,6 +263,11 @@ EXAMPLES = {
         "SPEC_CALC",
         "evi",
         "SELECT gbx_rst_evi(c0, 1, 2, 3, 2.0D, 6.0D, 7.5D, 2.5D) AS out FROM gbx_example",
+    ),
+    "gbx_rst_fillnodata": (
+        "SPEC_ANALYSIS",
+        "fillnodata_default",
+        "SELECT gbx_rst_fillnodata(c0) AS out FROM gbx_example",
     ),
     "gbx_rst_format": (
         "RASTER_ACCESSOR",
@@ -369,6 +379,11 @@ EXAMPLES = {
         "pixelwidth",
         "SELECT gbx_rst_pixelwidth(c0) AS out FROM gbx_example",
     ),
+    "gbx_rst_proximity": (
+        "SPEC_ANALYSIS",
+        "proximity_targets",
+        "SELECT gbx_rst_proximity(c0, '1,2') AS out FROM gbx_example",
+    ),
     "gbx_rst_rastertoworldcoord": (
         "RASTER_ACCESSOR",
         "rastertoworldcoord",
@@ -383,6 +398,21 @@ EXAMPLES = {
         "RASTER_ACCESSOR",
         "rastertoworldcoordy",
         "SELECT gbx_rst_rastertoworldcoordy(c0, 1, 2) AS out FROM gbx_example",
+    ),
+    "gbx_rst_resample": (
+        "SPEC_WARP",
+        "resample_half",
+        "SELECT gbx_rst_resample(c0, 0.5D) AS out FROM gbx_example",
+    ),
+    "gbx_rst_resample_to_res": (
+        "SPEC_WARP",
+        "resample_to_res",
+        "SELECT gbx_rst_resample_to_res(c0, 0.02D, 0.02D) AS out FROM gbx_example",
+    ),
+    "gbx_rst_resample_to_size": (
+        "SPEC_WARP",
+        "resample_to_size",
+        "SELECT gbx_rst_resample_to_size(c0, 10, 20) AS out FROM gbx_example",
     ),
     "gbx_rst_retile": (
         "MVP_G",
@@ -454,10 +484,20 @@ EXAMPLES = {
         "threshold",
         "SELECT gbx_rst_threshold(c0, '>', 12.0D) AS out FROM gbx_example",
     ),
+    "gbx_rst_to_webmercator": (
+        "SPEC_WARP",
+        "webmercator_default",
+        "SELECT gbx_rst_to_webmercator(c0) AS out FROM gbx_example",
+    ),
     "gbx_rst_tpi": (
         "SPEC_DEM",
         "tpi",
         "SELECT gbx_rst_tpi(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_transform": (
+        "SPEC_WARP",
+        "transform_3857",
+        "SELECT gbx_rst_transform(c0, 3857) AS out FROM gbx_example",
     ),
     "gbx_rst_transformcrs": (
         "MVP_S",

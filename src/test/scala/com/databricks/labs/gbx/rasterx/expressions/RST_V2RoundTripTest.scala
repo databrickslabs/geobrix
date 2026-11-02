@@ -8,7 +8,7 @@ import org.apache.spark.sql.Row
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow
 import org.apache.spark.sql.catalyst.plans.PlanTest
-import org.apache.spark.sql.functions.{col, lit}
+import org.apache.spark.sql.functions.{call_function, col, lit}
 import org.apache.spark.sql.test.SilentSparkSession
 import org.apache.spark.sql.types._
 import org.scalatest.matchers.should.Matchers._
@@ -57,7 +57,7 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
         val out = df
             .withColumn("bbox", rst_boundingbox(col("tile")))
             .withColumn("clipper", st_buffer(col("bbox"), lit(-520000.0)))
-            .select(rst_clip(col("tile"), col("clipper"), lit(true)).as("t"))
+            .select(call_function("gbx_rst_clip", col("tile"), col("clipper"), lit(true)).as("t"))
 
         // Output schema must be the v2 9-field struct.
         val tileType = out.schema("t").dataType.asInstanceOf[StructType]
@@ -87,7 +87,7 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
             .withColumn("tile", rst_fromcontent(col("content"), lit("GTiff")))
             .withColumn("bbox", rst_boundingbox(col("tile")))
             .withColumn("clipper", st_buffer(col("bbox"), lit(-520000.0)))
-            .select(rst_clip(col("tile"), col("clipper"), lit(true)).as("t"))
+            .select(call_function("gbx_rst_clip", col("tile"), col("clipper"), lit(true)).as("t"))
             .cache()
 
         stage1.count() // materialise
@@ -179,7 +179,7 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
             tileSchema)
 
         val ex = intercept[Exception] {
-            dfVirtual.select(rst_clip(col("tile"), lit("POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))"), lit(true))).collect()
+            dfVirtual.select(call_function("gbx_rst_clip", col("tile"), lit("POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))"), lit(true))).collect()
         }
 
         assert(
@@ -245,7 +245,7 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
             .withColumn("tile", rst_fromcontent(col("content"), lit("GTiff")))
             .withColumn("bbox", rst_boundingbox(col("tile")))
             .withColumn("clipper", st_buffer(col("bbox"), lit(-520000.0)))
-            .select(rst_clip(col("tile"), col("clipper"), lit(true)).as("t"))
+            .select(call_function("gbx_rst_clip", col("tile"), col("clipper"), lit(true)).as("t"))
 
         val heavyType = heavyOutDF.schema("t").dataType.asInstanceOf[StructType]
         val canonical = RST_ExpressionUtil.v2TileType

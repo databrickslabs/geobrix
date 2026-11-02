@@ -5,6 +5,7 @@ Each function is called on the single-band fixture and assertions verify the ret
 
 from pyspark.sql import functions as f
 from _fixtures import single_band_tile_df
+from databricks.labs.gbx.rasterx import functions as rx_api
 
 try:
     from . import rasterx_transforms_python_light as transforms_examples
@@ -50,13 +51,13 @@ def test_rst_worldtorastercoordy_python_example(spark):
     assert row == 80
 
 
-def test_rst_to_webmercator_python_light_example(spark):
+def test_rst_to_webmercator_python_example(spark):
     """Test reprojection to Web Mercator."""
     from databricks.labs.gbx.pyrx import functions as rx
 
     rx.register(spark)
     df = single_band_tile_df(spark)
-    result = df.select(rx.rst_to_webmercator("tile").alias("tile")).first()
+    result = df.select(rx_api.rst_to_webmercator("tile").alias("tile")).first()
     tile = result["tile"]
     assert tile is not None
     # Light tiles have raster bytes populated

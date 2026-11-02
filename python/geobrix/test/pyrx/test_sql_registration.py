@@ -20,16 +20,6 @@ def _tile_view(spark, name="t", **kw):
     df.createOrReplaceTempView(name)
 
 
-def test_register_enables_tile_returning_sql_composition(spark):
-    prx.register(spark)
-    _tile_view(spark, epsg=4326)
-    # reproject in SQL, then read its SRID in SQL — composes like heavyweight.
-    row = spark.sql(
-        "SELECT gbx_rst_srid(gbx_rst_transform(tile, 3857)) AS s FROM t"
-    ).first()
-    assert row["s"] == 3857
-
-
 def test_register_enables_polygonize_sql(spark):
     prx.register(spark)
     _tile_view(spark, epsg=4326)

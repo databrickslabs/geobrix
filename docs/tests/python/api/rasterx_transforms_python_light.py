@@ -170,9 +170,9 @@ rst_worldtorastercoordy_python_example_output = """
 # ============================================================================
 
 
-def rst_to_webmercator_python_light_example(spark):
+def rst_to_webmercator_python_example(spark):
     """Transform raster from its native CRS to Web Mercator (EPSG:3857)."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
     df = single_band_tile_df(spark)
@@ -181,7 +181,7 @@ def rst_to_webmercator_python_light_example(spark):
     return result["tile"]
 
 
-rst_to_webmercator_python_light_example_output = """
+rst_to_webmercator_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+

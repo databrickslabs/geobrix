@@ -50,6 +50,7 @@ from databricks.labs.gbx.pyrx.core import (
 from databricks.labs.gbx.pyrx.core.compression import source_profile
 from databricks.labs.gbx.pyvx import functions as pyvx
 from databricks.labs.gbx.rasterx import functions as rx
+from databricks.labs.gbx.vectorx import functions as vx
 
 # Fixed 3x3 normalised mean kernel for rst_convolve. Hardcoded identically here
 # (Python core_fn + col_fn) and in the Scala BenchDispatch case so the two engines
@@ -784,7 +785,7 @@ REGISTRY: Dict[str, FnSpec] = {
         sources=_WARP_LIGHT + (_HEAVY + "RST_Transform.scala",),
         core=True,
         core_fn=lambda ds, a: warp.reproject_to_srid(ds, a["target_srid"]),
-        col_fn=lambda t, a: prx.rst_transform(t, a["target_srid"]),
+        col_fn=lambda t, a: rx.rst_transform(t, a["target_srid"]),
     ),
     # --- accessors (scalar; accessors.py; empty args) ---
     "rst_height": FnSpec(
@@ -952,7 +953,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: warp.reproject_to_srid(
             ds, 3857, resampling=a["resampling"]
         ),
-        col_fn=lambda t, a: prx.rst_to_webmercator(t, a["resampling"]),
+        col_fn=lambda t, a: rx.rst_to_webmercator(t, a["resampling"]),
     ),
     # --- scalar accessors (no args; accessors.py) -------------------------------
     # All core=False. Most produce a cross-engine-identical scalar/array
@@ -1469,7 +1470,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: features.fill_nodata(
             ds, a["max_search_dist"], a["smoothing_iter"]
         ),
-        col_fn=lambda t, a: prx.rst_fillnodata(
+        col_fn=lambda t, a: rx.rst_fillnodata(
             t, a["max_search_dist"], a["smoothing_iter"]
         ),
         sources=_FEATURES_LIGHT + (_HEAVY + "pixel/RST_FillNodata.scala",),
@@ -1550,7 +1551,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: resample.resample_by_factor(
             ds, a["factor"], a["algorithm"]
         ),
-        col_fn=lambda t, a: prx.rst_resample(t, a["factor"], a["algorithm"]),
+        col_fn=lambda t, a: rx.rst_resample(t, a["factor"], a["algorithm"]),
         sources=_RESAMPLE_LIGHT + (_HEAVY + "resample/RST_Resample.scala",),
         core=False,
     ),
@@ -1563,7 +1564,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: resample.resample_to_size(
             ds, a["width_px"], a["height_px"], a["algorithm"]
         ),
-        col_fn=lambda t, a: prx.rst_resample_to_size(
+        col_fn=lambda t, a: rx.rst_resample_to_size(
             t, a["width_px"], a["height_px"], a["algorithm"]
         ),
         sources=_RESAMPLE_LIGHT + (_HEAVY + "resample/RST_ResampleToSize.scala",),
@@ -1584,7 +1585,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: resample.resample_to_res(
             ds, a["x_res"], a["y_res"], a["algorithm"]
         ),
-        col_fn=lambda t, a: prx.rst_resample_to_res(
+        col_fn=lambda t, a: rx.rst_resample_to_res(
             t, a["x_res"], a["y_res"], a["algorithm"]
         ),
         sources=_RESAMPLE_LIGHT + (_HEAVY + "resample/RST_ResampleToRes.scala",),
@@ -1729,7 +1730,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: analysis_core.proximity(
             ds, a["target_values"], a["distunits"], None
         ),
-        col_fn=lambda t, a: prx.rst_proximity(t, a["target_values"], a["distunits"]),
+        col_fn=lambda t, a: rx.rst_proximity(t, a["target_values"], a["distunits"]),
         sources=_ANALYSIS_LIGHT + (_HEAVY + "analysis/RST_Proximity.scala",),
         core=False,
     ),
@@ -1748,7 +1749,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: edit.clip_to_geom(
             ds, _shrunk_bounds_box_wkb(ds), a["cutline_all_touched"]
         ),
-        col_fn=lambda t, a: prx.rst_clip(
+        col_fn=lambda t, a: rx.rst_clip(
             t, F.lit(_CLIP_GEOM_WKB), F.lit(a["cutline_all_touched"])
         ),
         sources=_EDIT_LIGHT + (_HEAVY + "RST_Clip.scala",),
@@ -3793,7 +3794,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: pyvx.st_legacyaswkb(col),
+        col_fn=lambda col, a: vx.st_legacyaswkb(col),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
@@ -3878,7 +3879,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),  # Spark-path only; lightweight accessor
         {},
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
-        col_fn=lambda col, a: pyvx.st_crs(col),
+        col_fn=lambda col, a: vx.st_crs(col),
         core=False,
         fingerprint=False,  # Timing-only
         input_kind="geometry_scalar",
@@ -3893,7 +3894,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {"srid": 4326},  # Default WGS84
         core_fn=lambda col, a: None,  # Placeholder for spark-path only
-        col_fn=lambda col, a: pyvx.st_setcrs(col, F.lit(a["srid"])),
+        col_fn=lambda col, a: vx.st_setcrs(col, F.lit(a["srid"])),
         core=False,
         fingerprint=True,
         input_kind="geometry_scalar",
@@ -3908,7 +3909,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {"source_crs": "EPSG:4326", "target_crs": "EPSG:3857"},
         core_fn=lambda col, a: None,  # Placeholder for spark-path only
-        col_fn=lambda col, a: pyvx.st_transformcrs(
+        col_fn=lambda col, a: vx.st_transformcrs(
             col, F.lit(a["target_crs"]), F.lit(a["source_crs"])
         ),
         core=False,
@@ -3925,7 +3926,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: pyvx.st_shiftlongitude(col),
+        col_fn=lambda col, a: vx.st_shiftlongitude(col),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
@@ -3942,7 +3943,7 @@ REGISTRY: Dict[str, FnSpec] = {
         # Blade must be a LINE to split a polygon (shapely.ops.split rejects a
         # polygon blade). Use the antimeridian meridian at x=180; the corpus
         # crossers are represented in 0..360 lon, so this line bisects them.
-        col_fn=lambda col, a: pyvx.st_split(
+        col_fn=lambda col, a: vx.st_split(
             col, F.lit(shapely.geometry.LineString([(180, -95), (180, 95)]).wkb)
         ),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
@@ -3958,7 +3959,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {"wrap_x_origin": 180, "wrap_direction": -180},
-        col_fn=lambda col, a: pyvx.st_wrapx(
+        col_fn=lambda col, a: vx.st_wrapx(
             col, F.lit(a["wrap_x_origin"]), F.lit(a["wrap_direction"])
         ),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
@@ -3975,7 +3976,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: pyvx.st_explainvalidity(col),
+        col_fn=lambda col, a: vx.st_explainvalidity(col),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=False,  # Timing-only; text output
@@ -4004,7 +4005,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: pyvx.st_node(col),
+        col_fn=lambda col, a: vx.st_node(col),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
@@ -4018,7 +4019,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {"grid_size": 0.0001},
-        col_fn=lambda col, a: pyvx.st_reduceprecision(col, F.lit(a["grid_size"])),
+        col_fn=lambda col, a: vx.st_reduceprecision(col, F.lit(a["grid_size"])),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
@@ -4032,7 +4033,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: pyvx.st_removerepeatedpoints(col),
+        col_fn=lambda col, a: vx.st_removerepeatedpoints(col),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
@@ -4046,7 +4047,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {"tolerance": 0.001},
-        col_fn=lambda col, a: pyvx.st_simplifypreservetopology(
+        col_fn=lambda col, a: vx.st_simplifypreservetopology(
             col, F.lit(a["tolerance"])
         ),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
@@ -4062,7 +4063,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {"tolerance": 0.0001},  # Reference WKB generated per-call
-        col_fn=lambda col, a: pyvx.st_snap(
+        col_fn=lambda col, a: vx.st_snap(
             col, F.lit(shapely.geometry.box(-1, -1, 1, 1).wkb), F.lit(a["tolerance"])
         ),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only

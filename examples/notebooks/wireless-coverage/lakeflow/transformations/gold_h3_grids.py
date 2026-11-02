@@ -42,6 +42,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
 from _config import cfg, paths, register_gbx  # correct under the pipeline root_path
+from databricks.labs.gbx.rasterx import functions as rx_api
 
 # Artifact ceiling for CHM max-canopy before gap-fill. CHM = DSM - DTM bins all
 # returns at max z, so towers read as canopy; SF's tallest structure (Salesforce
@@ -117,7 +118,7 @@ def _surface_to_h3_cells(
     t4326 = surface_df.select(
         "tx",
         "ty",
-        rx.rst_transform(tile_col, F.lit(4326)).alias("tile_4326"),
+        rx_api.rst_transform(tile_col, F.lit(4326)).alias("tile_4326"),
     )
     # clip=False skips the raster land-clip (rst_clip SIGABRTs natively on the TIN
     # DTM grid at full-SF scale); callers that skip it mask land in H3 space after
@@ -126,7 +127,7 @@ def _surface_to_h3_cells(
         clipped = t4326.select(
             "tx",
             "ty",
-            rx.rst_clip("tile_4326", F.lit(land_wkb), F.lit(True)).alias("tile"),
+            rx_api.rst_clip("tile_4326", F.lit(land_wkb), F.lit(True)).alias("tile"),
         )
     else:
         clipped = t4326.withColumnRenamed("tile_4326", "tile")
@@ -202,17 +203,16 @@ def _with_join_parent(df, join_res, cell_col="cellid"):
 def wc_dem_clipped():
     spark = SparkSession.getActiveSession()
     register_gbx(spark)
-    from databricks.labs.gbx.pyrx import functions as rx
 
     c = cfg(spark)
     p = paths(spark)
     dtm = spark.read.table("wc_surface_dtm").repartition(512, "tx", "ty")
     land_wkb = _land_wkb(c["bbox"], p["water"])
     t4326 = dtm.select(
-        "tx", "ty", rx.rst_transform("dtm", F.lit(4326)).alias("tile_4326")
+        "tx", "ty", rx_api.rst_transform("dtm", F.lit(4326)).alias("tile_4326")
     )
     return t4326.select(
-        "tx", "ty", rx.rst_clip("tile_4326", F.lit(land_wkb), F.lit(True)).alias("tile")
+        "tx", "ty", rx_api.rst_clip("tile_4326", F.lit(land_wkb), F.lit(True)).alias("tile")
     )
 
 
@@ -314,7 +314,6 @@ def wc_h3_chm_res10():
     register_gbx(spark)
     c = cfg(spark)
     p = paths(spark)
-    from databricks.labs.gbx.pyrx import functions as rx
 
     chm = spark.read.table("wc_surface_chm")
     h3_res = c["h3_res"]
@@ -332,7 +331,7 @@ def wc_h3_chm_res10():
     # fanned-out shuffle is merged back by the small inlined-raster row count). See
     # databricks.yml.
     chm_4326 = chm.repartition(512, "tx", "ty").select(
-        "tx", "ty", rx.rst_transform("chm", F.lit(4326)).alias("chm_4326")
+        "tx", "ty", rx_api.rst_transform("chm", F.lit(4326)).alias("chm_4326")
     )
     chm_4326.createOrReplaceTempView("_wc_chm_4326_tiles")
 

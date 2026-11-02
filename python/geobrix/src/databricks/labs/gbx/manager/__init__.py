@@ -75,7 +75,9 @@ def register(
         )
         return {}
     overrides = _levels or {}
-    if overrides:  # a forced level may follow a JAR staged since the last call
+    if overrides or only is None:
+        # a forced level, or a full registration, may follow a JAR staged since the last call; the per-name first-use
+        # registrations of the Python API (`only=[name]`) keep the session's probes
         capabilities.forget(spark)
     need_jvm = any(lv in man.functions[n].levels for n in names for lv in ("L1", "L2"))
     caps = capabilities.detect(spark, need_jvm)
@@ -95,6 +97,13 @@ def register(
         done, skipped = _legacy.register_unmigrated(spark, bridge)
         lines += skipped
         out.update({n: Choice("L3", "legacy", ()) for n in bridge if n in done})
+    if (
+        only is None
+    ):  # a light module that could not be imported: its names are not registered, the rest are
+        lines += [
+            (m, f"geobrix: {m} not loaded ({why})")
+            for m, why in _legacy.import_failures().items()
+        ]
     if only is None:
         try:
             from databricks.labs.gbx.ds import register as _sources

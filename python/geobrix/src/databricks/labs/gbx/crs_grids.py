@@ -58,8 +58,13 @@ def _reregister_active_light_tiers(spark) -> None:
             mod = importlib.import_module(modname)
         except Exception:
             continue
-        if getattr(mod, "_gbx_registered", False):  # set by register()
+        if getattr(mod, "_gbx_registered", False):  # set by the module's own register()
             mod.register(spark)
+    # the names the manager registered through the light registrars (not the whole modules: that would overwrite the
+    # manager's wrappers under the same SQL names)
+    from databricks.labs.gbx.manager import _legacy
+
+    _legacy.reregister_bridged(spark)
 
 
 def _warn_heavy_volume_grids(result) -> None:

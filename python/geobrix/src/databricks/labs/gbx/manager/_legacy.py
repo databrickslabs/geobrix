@@ -15,10 +15,37 @@ _MODULES = (
 )
 
 
+# the light modules that could not be imported, with the reason (a missing dependency of one module must not stop the
+# manifest's names or the other modules' names from registering)
+_FAILED: Dict[str, str] = {}
+# the names the bridge registered, by module: a CRS-grid registration re-registers these (and only these) with fresh
+# closures, where a module's own register() would also overwrite the manager's wrappers under the same SQL names
+_BRIDGED: Dict[str, Set[str]] = {}
+
+
 @functools.lru_cache(maxsize=1)
 def _by_module() -> Dict[str, list]:
-    """Each light module's registrar groups, (guard, {name: register}) pairs, as the module defines them."""
-    return {m: list(importlib.import_module(m)._registrar_groups()) for m in _MODULES}
+    """Each light module's registrar groups, (guard, {name: register}) pairs, as the module defines them. A module
+    that fails to import is left out and named in :func:`import_failures`."""
+    out: Dict[str, list] = {}
+    _FAILED.clear()
+    for m in _MODULES:
+        try:
+            out[m] = list(importlib.import_module(m)._registrar_groups())
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - one module's failure is its own names' loss only
+            first = str(exc).splitlines()[0][:160] if str(exc) else ""
+            _FAILED[m] = (
+                f"{type(exc).__name__}: {first}" if first else type(exc).__name__
+            )
+    return out
+
+
+def import_failures() -> Dict[str, str]:
+    """The light modules that could not be imported (module -> reason); their names are not in :func:`names`."""
+    _by_module()
+    return dict(_FAILED)
 
 
 def names() -> Set[str]:
@@ -57,7 +84,13 @@ def register_unmigrated(
                 lines += [(n, f"geobrix: {n} not registered ({why})") for n in todo]
                 continue
             done.update(todo)
-            importlib.import_module(m)._gbx_registered = (
-                True  # as the module's register() marks it
-            )
+            _BRIDGED.setdefault(m, set()).update(todo)
     return done, lines
+
+
+def reregister_bridged(spark) -> None:
+    """Register the bridged names again (fresh closures, such as after the CRS grid directories change), with the
+    light registrars as before, and only those names: not the whole module, and not the names the manager serves.
+    """
+    for names_ in list(_BRIDGED.values()):
+        register_unmigrated(spark, sorted(names_))

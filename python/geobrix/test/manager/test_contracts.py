@@ -2282,6 +2282,58 @@ def test_session_read_cap_falls_back_to_the_classic_budget_for_a_bad_value():
     assert session_read_cap(named) == 4096
 
 
+def test_every_level_a_row_declares_is_in_its_order():
+    """`select` only tries the levels in `order(fn)`: a row that declares L2 and whose family order omits it would
+    never reach its Java UDF. A row with a deliberate omission names it in PREFERENCE, so this lists none.
+    """
+    omitted = {
+        f.sql_name: sorted(set(f.levels) & {"L1", "L2", "L3"} - set(levels.order(f)))
+        for f in FNS
+        if "L2" in f.levels and "L2" not in levels.order(f)
+    }
+    assert omitted == {}
+
+
+def test_select_falls_back_to_light_when_the_order_names_no_level_of_the_row(
+    monkeypatch,
+):
+    fn = next(f for f in FNS if "L2" not in f.levels)
+    monkeypatch.delitem(levels.PREFERENCE, fn.sql_name, raising=False)
+    monkeypatch.setitem(levels.FAMILY_PREFERENCE, fn.family, ("L2",))
+    assert levels.select(fn, _caps()).level == "L3"
+
+
+def test_a_full_registration_probes_the_session_again(monkeypatch, spark):
+    from databricks.labs.gbx import register
+    from databricks.labs.gbx.manager import capabilities
+
+    calls = []
+    real = capabilities._detect_uncached
+    monkeypatch.setattr(
+        capabilities,
+        "_detect_uncached",
+        lambda s, need_jvm: calls.append(need_jvm) or real(s, need_jvm),
+    )
+    capabilities._CACHE.clear()
+    register(spark, only=["gbx_bng_eastnorthasbng"])
+    register(spark, only=["gbx_st_makevalid"])
+    assert len(calls) == 1  # the per-name first-use registrations share the probes
+    register(spark)  # a JAR may have been staged since: probe again
+    assert len(calls) == 2
+    capabilities.forget(spark)
+    register(spark, only=["gbx_st_makevalid"])
+    assert len(calls) == 3
+
+
+def test_a_return_type_outside_the_words_passes_through_as_ddl():
+    from pyspark.sql import types as T
+
+    from databricks.labs.gbx.manager import l3
+
+    assert l3._return_type("array<bigint>") == "array<bigint>"
+    assert isinstance(l3._return_type("bng_chips"), T.ArrayType)
+
+
 def test_the_keyed_helpers_carry_the_sessions_read_cap(spark, tmp_path):
     """`merge_by_key` / `combine_by_key` fold each member through the same read gate as the aggregates, so their
     closures carry the driver's cap, as `grouped_tile_map`'s does."""
@@ -2307,3 +2359,54 @@ def test_the_keyed_helpers_carry_the_sessions_read_cap(spark, tmp_path):
                 fold(df, ["k"]).collect()
         finally:
             spark.conf.unset(READ_CAP_KEY)
+
+
+def test_a_bridge_registers_its_names_and_a_grid_registration_re_registers_only_those(
+    monkeypatch,
+):
+    """The bridge does not mark its light module as registered (that would have a CRS-grid registration re-register the
+    module's every name over the manager's wrappers): it records the names it registered, and those are the ones
+    registered again."""
+    import sys
+    import types
+
+    from databricks.labs.gbx.manager import _legacy
+
+    seen = []
+    mod = types.ModuleType("fake_gbx_light_bridge")
+    mod._registrar_groups = lambda: [
+        (lambda: None, {f"gbx_{n}": (lambda s, n=n: seen.append(n)) for n in "abc"})
+    ]
+    monkeypatch.setitem(sys.modules, mod.__name__, mod)
+    monkeypatch.setattr(_legacy, "_MODULES", (mod.__name__,))
+    monkeypatch.setattr(_legacy, "_BRIDGED", {})
+    _legacy._by_module.cache_clear()
+    spark = types.SimpleNamespace(conf={})
+    try:
+        _legacy.register_unmigrated(spark, ["gbx_a", "gbx_b"])
+        assert not getattr(mod, "_gbx_registered", False)
+        seen.clear()
+        _legacy.reregister_bridged(spark)
+        assert sorted(seen) == ["a", "b"]  # never "c"
+    finally:
+        _legacy._by_module.cache_clear()
+
+
+def test_a_light_module_that_fails_to_import_loses_only_its_own_names(monkeypatch):
+    import sys
+    import types
+
+    from databricks.labs.gbx.manager import _legacy
+
+    good = types.ModuleType("fake_gbx_light_good")
+    good._registrar_groups = lambda: [(lambda: None, {"gbx_a": lambda s: None})]
+    monkeypatch.setitem(sys.modules, good.__name__, good)
+    monkeypatch.setattr(
+        _legacy, "_MODULES", ("fake_gbx_light_missing_dependency", good.__name__)
+    )
+    _legacy._by_module.cache_clear()
+    try:
+        assert _legacy.names() == {"gbx_a"}
+        assert list(_legacy.import_failures()) == ["fake_gbx_light_missing_dependency"]
+    finally:
+        _legacy._by_module.cache_clear()

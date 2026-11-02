@@ -106,6 +106,10 @@ def test_a_vrt_naming_a_remote_source_is_an_error_tile_with_the_policy_reason(tm
     )
     msg = _error_of(prx._fromfile_impl(str(vrt), "GTiff", True))
     assert "r.vrt" in msg and "Fix:" in msg, msg
+    # a VRT that is itself on a URL cannot be rendered: its reason, not a silent NULL
+    url = "s3://bucket/r.vrt"
+    msg = _error_of(prx._fromfile_render_vrt(url, url, "GTiff", None))
+    assert "local or FUSE-mounted" in msg and "virtual tile" in msg and "Fix:" in msg, msg
 
 
 def test_a_virtual_vrt_is_unchanged(tmp_path):
@@ -133,6 +137,20 @@ def test_a_policy_refusal_of_a_non_vrt_file_is_an_error_tile_not_null(tmp_path):
 
     with patch.object(prx, "open_bytes", side_effect=refusal):
         msg = _error_of(prx._fromfile_impl(str(p), "GTiff", True))
+    assert "TEST raster" in msg and "Fix:" in msg
+
+
+def test_a_policy_refusal_when_opening_the_header_is_an_error_tile_not_null(tmp_path):
+    """The virtual default answers a driver-policy refusal with its reason and Fix, as the materialized path does."""
+    from unittest.mock import patch
+
+    from databricks.labs.gbx import _gdal_policy
+
+    p = tmp_path / "x.tif"
+    _source_tif(str(p))
+    refusal = _gdal_policy.DriverPolicyError("x is a TEST raster. Fix: do not")
+    with patch.object(prx, "open_data", side_effect=refusal):
+        msg = _error_of(prx._fromfile_impl(str(p), "GTiff", False))
     assert "TEST raster" in msg and "Fix:" in msg
 
 

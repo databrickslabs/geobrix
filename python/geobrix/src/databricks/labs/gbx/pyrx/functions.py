@@ -782,15 +782,42 @@ def rst_fromcontent(content: ColLike, driver: ColLike) -> Column:
 # ``virtualize_dir``/``virtualize_prefix`` (those exist only for functions that
 # COMPUTE new pixels and need somewhere to write them).
 # A bad/missing path yields NULL (matching the heavyweight's Option(...).orNull).
+_RASTER_SUFFIXES = (
+    ".tif",
+    ".tiff",
+    ".nc",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".jp2",
+    ".img",
+    ".hdf",
+    ".h5",
+    ".grib",
+    ".grb",
+    ".grb2",
+    ".asc",
+    ".bil",
+    ".dem",
+)
+
+
 def _names_a_vrt(local) -> bool:
-    """Whether the file at ``local`` is a VRT: by its name, or by the root element in its first bytes."""
-    if str(local).lower().endswith(".vrt"):
+    """Whether the file at ``local`` is a VRT: by its name, or because it starts with the VRT root element (after
+    optional whitespace and an XML declaration). A file named for a known raster format is not opened to look."""
+    name = str(local).lower()
+    if name.endswith(".vrt"):
         return True
+    if name.endswith(_RASTER_SUFFIXES):
+        return False
     try:
         with open(local, "rb") as fh:
-            return b"<VRTDataset" in fh.read(4096)
+            head = fh.read(4096).lstrip()
     except OSError:
         return False
+    if head.startswith(b"<?xml"):
+        head = head[head.find(b"?>") + 2 :].lstrip() if b"?>" in head else b""
+    return head.startswith(b"<VRTDataset")
 
 
 def _fromfile_render_vrt(path, local, drv, cap_bytes):
@@ -808,6 +835,13 @@ def _fromfile_render_vrt(path, local, drv, cap_bytes):
 
     from databricks.labs.gbx.ds.file_gbx import materialize_decision
 
+    if "://" in str(local):  # an object-store or http URL: GDAL cannot resolve a VRT's relative sources there
+        return _serde.build_error_tile(
+            f"rst_fromfile materialize=True unsuccessful: the VRT {path} is not on local or FUSE-mounted "
+            "storage, and a VRT must be on local or FUSE-mounted storage to render. Fix: use a virtual tile "
+            "(omit materialize=True), or copy the VRT and its sources to a Volume.",
+            0,
+        )
     if not os.path.exists(local):
         return None
     try:

@@ -145,6 +145,12 @@ def _sized(width, height):
         ("approx", (1.0, 2.0), (1.0 + 1e-12, 2.0), (1.0, 2.1)),
         ("tile_size", (32, 24), _sized(32, 24), _sized(31, 24)),
         (
+            "tile_meta",
+            {"width": 32, "height": 24, "dtype": "float32", "no_crs": False},
+            _sized(32, 24),
+            _sized(31, 24),
+        ),
+        (
             "json_subset",
             {"size": [4, 3], "bands": [{"min": 2.0}]},
             '{"size": [4, 3], "extra": 1, "bands": [{"min": 2.0, "max": 12.0}]}',

@@ -8,6 +8,17 @@ import org.gdal.gdalconst.gdalconstConstants.GF_Write
 /** Applies a 2D convolution kernel to each band of a raster; kernel must have odd dimensions. */
 object Convolve {
 
+    /** The kernel must be a rectangular array with an odd number of rows and columns (it needs a centre); the
+      * failure names its shape. */
+    def requireKernel(kernel: Array[Array[Double]]): Unit = {
+        val cols = if (kernel.isEmpty) 0 else kernel.head.length
+        val shape = s"${kernel.length}x$cols"
+        require(
+          kernel.nonEmpty && cols > 0 && kernel.forall(_.length == cols) && kernel.length % 2 == 1 && cols % 2 == 1,
+          s"gbx_rst_convolve: kernel must be a rectangular array with an odd number of rows and columns; got $shape"
+        )
+    }
+
     /** Convolves the dataset with the given kernel; returns (new Dataset, metadata). Caller must release. */
     def convolve(ds: Dataset, options: Map[String, String], kernel: Array[Array[Double]]): (Dataset, Map[String, String]) = {
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "_")
@@ -16,15 +27,16 @@ object Convolve {
         val extension = GDAL.getExtension(outShortName)
         val tmpPath = s"/vsimem/convolve_$uuid.$extension"
 
-        // Create a copy via gdal_translate to ensure proper format, compression, etc.
-        val (cpy, _) = GDALTranslate.executeTranslate(tmpPath, ds, "gdal_translate", options)
+        // Create a copy via gdal_translate to ensure proper format, compression, etc. The result is Float64 whatever
+        // the type of the input: a weighted sum does not fit it (a UInt8 raster would clamp at 255).
+        val (cpy, _) = GDALTranslate.executeTranslate(tmpPath, ds, "gdal_translate -ot Float64", options)
         cpy.FlushCache()
         cpy.delete()
 
         val outputRaster = gdal.Open(tmpPath, GF_Write)
 
+        requireKernel(kernel)
         val kernelH = kernel.length
-        require(kernelH % 2 == 1, "Kernel size must be odd")
         val stride = kernelH / 2
         val resultBuf: Array[Double] = Array.emptyDoubleArray
         val trimBuf: Array[Double] = Array.emptyDoubleArray

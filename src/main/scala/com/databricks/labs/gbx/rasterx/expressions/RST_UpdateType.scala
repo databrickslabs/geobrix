@@ -31,13 +31,26 @@ object RST_UpdateType extends WithExpressionInfo {
 
     def eval(row: InternalRow, newType: UTF8String, conf: UTF8String): InternalRow = eval(row, newType, conf, BinaryType)
 
-    def eval(row: InternalRow, newType: UTF8String, conf: UTF8String, rdt: DataType): InternalRow =
+    /** The data types, as GDAL names them; the SQL function takes them in any case. */
+    val dataTypes: Seq[String] = Seq("Byte", "Int8", "UInt16", "Int16", "UInt32", "Int32", "Float32", "Float64")
+
+    /** The name in `dataTypes` that `newType` names, in any case; the failure names the value. */
+    def requireDataType(newType: String): String =
+        dataTypes.find(_.equalsIgnoreCase(newType)).getOrElse(
+          throw new IllegalArgumentException(
+            s"gbx_rst_updatetype: unknown data type '$newType'; known: ${dataTypes.mkString(", ")}"
+          )
+        )
+
+    def eval(row: InternalRow, newType: UTF8String, conf: UTF8String, rdt: DataType): InternalRow = {
+        // A wrong type fails the call (naming it); only the tile's own failures become its error tile.
+        val gdalType = if (row != null && newType != null) requireDataType(newType.toString) else newType.toString
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
               val (cell, ds, mtd) = RasterSerializationUtil.rowToTile(row, rdt)
-              val result = execute(ds, mtd, newType.toString)
+              val result = execute(ds, mtd, gdalType)
               RasterDriver.releaseDataset(ds)
               val res = RasterSerializationUtil.tileToRow((cell, result._1, result._2), rdt, exprConf.hConf)
               RasterDriver.releaseDataset(result._1)
@@ -46,6 +59,7 @@ object RST_UpdateType extends WithExpressionInfo {
           row,
           rdt
         )
+    }
 
     def execute(ds: Dataset, options: Map[String, String], newType: String): (Dataset, Map[String, String]) = {
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "_")

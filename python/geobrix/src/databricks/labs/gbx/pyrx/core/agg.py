@@ -1172,7 +1172,19 @@ def combine_stddev_tiles(rasters: List[bytes]) -> bytes:
 
 
 def align_to_tiles(tile_bytes: bytes, ref_bytes: bytes, dst_nodata=None) -> bytes:
-    """Warp ``tile_bytes`` onto ``ref_bytes``'s grid (GTiff bytes).
+    """Warp ``tile_bytes`` onto ``ref_bytes``'s grid (GTiff bytes); see :func:`align_datasets`.
+
+    Returns ``None`` when either input is missing/empty.
+    """
+    if not tile_bytes or not ref_bytes:
+        return None
+    with MemoryFile(bytes(tile_bytes)) as src_mf, open_bytes(src_mf) as src:
+        with MemoryFile(bytes(ref_bytes)) as ref_mf, open_bytes(ref_mf) as ref:
+            return align_datasets(src, ref, dst_nodata)
+
+
+def align_datasets(src, ref, dst_nodata=None) -> bytes:
+    """Warp the open dataset ``src`` onto the grid of the open dataset ``ref`` (GTiff bytes).
 
     Mirrors ``gbx_rst_align_to``: the output has exactly the same CRS, width,
     height, and geotransform as the reference. Nearest-neighbour resampling is
@@ -1187,57 +1199,41 @@ def align_to_tiles(tile_bytes: bytes, ref_bytes: bytes, dst_nodata=None) -> byte
     fill of 0). Pass ``dst_nodata`` to force a sentinel for those uncovered
     pixels — this is what a NoData-less tile needs so padding is distinguishable
     from real values; the sentinel is also written as the output's NoData tag.
-
-    Returns ``None`` when either input is missing/empty.
     """
-    if not tile_bytes or not ref_bytes:
-        return None
+    dst_crs, dst_transform = ref.crs, ref.transform
+    dst_width, dst_height = ref.width, ref.height
+    src_nodata = src.nodata
+    effective_dst_nodata = src_nodata if dst_nodata is None else dst_nodata
+    out_dtype = src.dtypes[0]
+    decoded_bytes = src.count * dst_width * dst_height * np.dtype(out_dtype).itemsize
 
-    with MemoryFile(bytes(tile_bytes)) as src_mf:
-        with open_bytes(src_mf) as src:
-            with MemoryFile(bytes(ref_bytes)) as ref_mf:
-                with open_bytes(ref_mf) as ref:
-                    dst_crs = ref.crs
-                    dst_transform = ref.transform
-                    dst_width = ref.width
-                    dst_height = ref.height
+    profile = _comp.source_profile(src.profile)
+    profile.update(
+        driver="GTiff",
+        crs=dst_crs,
+        transform=dst_transform,
+        width=dst_width,
+        height=dst_height,
+    )
+    profile.update(
+        _comp.creation_opts(out_dtype, decoded_bytes=decoded_bytes, compress="auto")
+    )
+    if dst_nodata is not None:
+        profile.update(nodata=dst_nodata)
 
-            src_nodata = src.nodata
-            effective_dst_nodata = src_nodata if dst_nodata is None else dst_nodata
-            out_dtype = src.dtypes[0]
-            decoded_bytes = (
-                src.count * dst_width * dst_height * np.dtype(out_dtype).itemsize
-            )
-
-            profile = _comp.source_profile(src.profile)
-            profile.update(
-                driver="GTiff",
-                crs=dst_crs,
-                transform=dst_transform,
-                width=dst_width,
-                height=dst_height,
-            )
-            profile.update(
-                _comp.creation_opts(
-                    out_dtype, decoded_bytes=decoded_bytes, compress="auto"
+    with MemoryFile() as out_mf:
+        with out_mf.open(**profile) as dst:
+            _comp.match_alpha(dst, src.colorinterp)
+            for b in range(1, src.count + 1):
+                reproject(
+                    source=rasterio.band(src, b),
+                    destination=rasterio.band(dst, b),
+                    src_transform=src.transform,
+                    src_crs=src.crs,
+                    dst_transform=dst_transform,
+                    dst_crs=dst_crs,
+                    src_nodata=src_nodata,
+                    dst_nodata=effective_dst_nodata,
+                    resampling=Resampling.nearest,
                 )
-            )
-            if dst_nodata is not None:
-                profile.update(nodata=dst_nodata)
-
-            with MemoryFile() as out_mf:
-                with out_mf.open(**profile) as dst:
-                    _comp.match_alpha(dst, src.colorinterp)
-                    for b in range(1, src.count + 1):
-                        reproject(
-                            source=rasterio.band(src, b),
-                            destination=rasterio.band(dst, b),
-                            src_transform=src.transform,
-                            src_crs=src.crs,
-                            dst_transform=dst_transform,
-                            dst_crs=dst_crs,
-                            src_nodata=src_nodata,
-                            dst_nodata=effective_dst_nodata,
-                            resampling=Resampling.nearest,
-                        )
-                return out_mf.read()
+        return out_mf.read()

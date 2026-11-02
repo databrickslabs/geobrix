@@ -12,6 +12,23 @@ from skimage.morphology import disk
 DEFAULT_CLASSES = ["vegetation", "bare", "impervious", "dark"]
 
 
+METHODS = ("spectral", "kmeans", "hybrid")
+
+
+def check_args(method, n_clusters, smooth) -> None:
+    """The arguments of ``rst_land_cover``: a wrong one raises a ``ValueError`` that names it."""
+    if str(method).lower() not in METHODS:
+        raise ValueError(
+            f"rst_land_cover: unknown method {method!r}; known: {', '.join(METHODS)}"
+        )
+    if int(n_clusters) < 1:
+        raise ValueError(
+            f"rst_land_cover: n_clusters must be 1 or more; got {n_clusters}"
+        )
+    if int(smooth) < 0:
+        raise ValueError(f"rst_land_cover: smooth must be 0 or more; got {smooth}")
+
+
 def features(arr) -> dict:
     """Derive per-pixel spectral features from an HxWxbands uint8/float array.
 

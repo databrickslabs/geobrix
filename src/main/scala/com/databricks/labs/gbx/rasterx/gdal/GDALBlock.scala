@@ -109,7 +109,8 @@ case class GDALBlock[T: ClassTag](
         val values = valuesAt(x, y, kernelSize, kernelSize)
         val n = values.length
         scala.util.Sorting.quickSort(values)
-        values(n / 2)
+        // an even count: the mean of the two middle values
+        if (n % 2 == 1) values(n / 2) else (values(n / 2 - 1) + values(n / 2)) / 2.0
     }
 
     def modeFilterAt(x: Int, y: Int, kernelSize: Int): Double = {

@@ -338,7 +338,7 @@ def examples_by_name(man) -> Dict[str, Tuple[str, str, str]]:
 
 def _py_str(text: str) -> str:
     """A Python string literal as black writes it: double quotes, unless that needs more escapes."""
-    if '"' not in text and "\\" not in text:
+    if '"' not in text and "\\" not in text and "\n" not in text:
         return '"' + text + '"'
     return repr(text)
 

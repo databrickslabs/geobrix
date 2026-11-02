@@ -33,13 +33,27 @@ object RST_Filter extends WithExpressionInfo {
     def eval(row: InternalRow, n: Int, operation: UTF8String, conf: UTF8String): InternalRow =
         eval(row, n, operation, conf, BinaryType)
 
-    def eval(row: InternalRow, n: Int, operation: UTF8String, conf: UTF8String, rdt: DataType): InternalRow =
+    /** The operations, as the SQL function names them (any case). */
+    val operations: Seq[String] = Seq("min", "max", "mean", "median")
+
+    /** The window must be a positive odd integer and the operation one of [[operations]]; the failure names the
+      * value. Returns the operation as KernelFilter spells it. */
+    def requireArguments(n: Int, operation: String): String = {
+        require(n >= 1 && n % 2 == 1, s"gbx_rst_filter: kernel_size must be a positive odd integer; got $n")
+        val op = operation.toLowerCase
+        require(operations.contains(op), s"gbx_rst_filter: unknown operation '$operation'; known: ${operations.mkString(", ")}")
+        op
+    }
+
+    def eval(row: InternalRow, n: Int, operation: UTF8String, conf: UTF8String, rdt: DataType): InternalRow = {
+        // A wrong argument fails the call (naming the value); only the tile's own failures become its error tile.
+        val op = if (row != null && operation != null) requireArguments(n, operation.toString) else operation.toString
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
               val (cell, ds, _) = RasterSerializationUtil.rowToTile(row, rdt)
-              val result = execute(ds, n, operation.toString)
+              val result = execute(ds, n, op)
               RasterDriver.releaseDataset(ds)
               val res = RasterSerializationUtil.tileToRow((cell, result._1, result._2), rdt, exprConf.hConf)
               RasterDriver.releaseDataset(result._1)
@@ -48,6 +62,7 @@ object RST_Filter extends WithExpressionInfo {
           row,
           rdt
         )
+    }
 
     def execute(ds: Dataset, n: Int, operation: String): (Dataset, Map[String, String]) = {
         val res = KernelFilter.filter(ds, n, operation)

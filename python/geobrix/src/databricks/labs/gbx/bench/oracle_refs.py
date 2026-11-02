@@ -117,3 +117,54 @@ def proximity(source, px, py, max_distance=None, pixel_units=False):
     if max_distance is not None:
         mask = dist > float(max_distance)
     return dist, mask
+
+
+def focal(z, valid, size, op):
+    """A focal filter written out pixel by pixel: ``op`` (``min``, ``max``, ``mean`` or ``median``) over the valid
+    pixels of the ``size`` x ``size`` window around each pixel, the window cut at the edges. ``(values, mask)``,
+    the mask True where the window holds no valid pixel."""
+    h, w = z.shape
+    r = size // 2
+    out = np.zeros((h, w), "float64")
+    mask = np.zeros((h, w), bool)
+    pick = {"min": np.min, "max": np.max, "mean": np.mean, "median": np.median}[op]
+    for y in range(h):
+        for x in range(w):
+            ys, xs = slice(max(0, y - r), y + r + 1), slice(max(0, x - r), x + r + 1)
+            win = z[ys, xs][valid[ys, xs]]
+            if win.size == 0:
+                mask[y, x] = True
+            else:
+                out[y, x] = pick(win)
+    return out, mask
+
+
+def correlate(z, valid, kernel):
+    """The kernel laid over each pixel, not flipped: the sum of ``kernel[i][j]`` times the pixel ``i - kh // 2``
+    rows and ``j - kw // 2`` columns away, a pixel off the raster or not valid adding 0.
+    """
+    k = np.asarray(kernel, dtype="float64")
+    zz = np.where(valid, z, 0.0).astype("float64")
+    h, w = zz.shape
+    ry, rx = k.shape[0] // 2, k.shape[1] // 2
+    out = np.zeros((h, w), "float64")
+    for y in range(h):
+        for x in range(w):
+            acc = 0.0
+            for i in range(k.shape[0]):
+                for j in range(k.shape[1]):
+                    yy, xx = y + i - ry, x + j - rx
+                    if 0 <= yy < h and 0 <= xx < w:
+                        acc += zz[yy, xx] * k[i, j]
+            out[y, x] = acc
+    return out
+
+
+def percentile_scale(z, valid, lo_pct, hi_pct):
+    """A band stretched to 0..255 between two percentiles of its valid pixels (before the cast to 8 bits): the value
+    at the low percentile is 0, at the high one 255, the rest linear and clipped; an invalid pixel is 0.
+    """
+    lo, hi = np.percentile(z[valid], (lo_pct, hi_pct))
+    out = np.clip((z.astype("float64") - lo) / (hi - lo) * 255.0, 0.0, 255.0)
+    out[~valid] = 0.0
+    return out

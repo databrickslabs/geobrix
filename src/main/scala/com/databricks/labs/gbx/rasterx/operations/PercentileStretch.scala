@@ -53,6 +53,7 @@ object PercentileStretch {
             while (b <= nBands) {
                 val inBand = ds.GetRasterBand(b)
                 val outBand = outDs.GetRasterBand(b)
+                outBand.SetNoDataValue(0.0) // an invalid pixel is written 0, which is the output's NoData
 
                 // The pixels valid for this band: by its mask (NoData, own mask band) and its alpha band
                 validity.readBand(b, 0, 0, width, height, valid)

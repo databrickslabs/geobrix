@@ -57,7 +57,9 @@ object RST_PercentileStretch extends WithExpressionInfo {
 
     private def runDispatch(
         row: InternalRow, loPct: Double, hiPct: Double, conf: UTF8String, dt: DataType
-    ): InternalRow =
+    ): InternalRow = {
+        // Wrong percentiles fail the call (naming the value); only the tile's own failures become its error tile.
+        if (row != null) requirePercentiles(loPct, hiPct)
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
@@ -72,16 +74,9 @@ object RST_PercentileStretch extends WithExpressionInfo {
           row,
           dt
         )
+    }
 
-    /** Pure compute path — extracted for direct unit-testing without Spark.
-      *
-      * Computes percentiles from the input dataset, creates a new uint8 GTiff,
-      * and writes rescaled pixel values to each band.
-      */
-    def execute(
-        ds: Dataset, options: Map[String, String], loPct: Double, hiPct: Double
-    ): (Dataset, Map[String, String]) = {
-        require(ds != null, "RST_PercentileStretch.execute: source Dataset is null")
+    private def requirePercentiles(loPct: Double, hiPct: Double): Unit = {
         require(
             loPct >= 0.0 && loPct <= 100.0,
             s"gbx_rst_percentile_stretch: lo_pct must be in [0, 100]; got $loPct"
@@ -94,6 +89,18 @@ object RST_PercentileStretch extends WithExpressionInfo {
             loPct < hiPct,
             s"gbx_rst_percentile_stretch: lo_pct ($loPct) must be < hi_pct ($hiPct)"
         )
+    }
+
+    /** Pure compute path — extracted for direct unit-testing without Spark.
+      *
+      * Computes percentiles from the input dataset, creates a new uint8 GTiff,
+      * and writes rescaled pixel values to each band.
+      */
+    def execute(
+        ds: Dataset, options: Map[String, String], loPct: Double, hiPct: Double
+    ): (Dataset, Map[String, String]) = {
+        require(ds != null, "RST_PercentileStretch.execute: source Dataset is null")
+        requirePercentiles(loPct, hiPct)
 
         PercentileStretch.execute(ds, options, loPct, hiPct)
     }

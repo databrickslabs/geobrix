@@ -74,7 +74,7 @@ object KernelFilter {
                 for (y <- 0 until currentBlock.height) {
                     for (x <- 0 until currentBlock.width) {
                         result(y * currentBlock.width + x) = operation match {
-                            case "avg"    => currentBlock.avgFilterAt(x, y, kernelSize)
+                            case "avg" | "mean" => currentBlock.avgFilterAt(x, y, kernelSize)
                             case "min"    => currentBlock.minFilterAt(x, y, kernelSize)
                             case "max"    => currentBlock.maxFilterAt(x, y, kernelSize)
                             case "median" => currentBlock.medianFilterAt(x, y, kernelSize)

@@ -147,7 +147,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
-        val operations = Seq("avg", "median", "mode", "max", "min")
+        val operations = Seq("mean", "median", "max", "min")
         
         operations.foreach { op =>
             val df: DataFrame = Seq(
@@ -175,7 +175,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
               (1, s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF")
             ).toDF("id", "path")
                 .withColumn("raster", udfs.rasterFromPath(col("path")))
-                .withColumn("filtered", rst_filter(col("raster"), lit(size), lit("avg")))
+                .withColumn("filtered", rst_filter(col("raster"), lit(size), lit("mean")))
 
             noException should be thrownBy df.collect()
         }
@@ -193,7 +193,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
           (1, s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF")
         ).toDF("id", "path")
             .withColumn("raster", udfs.rasterFromPath(col("path")))
-            .withColumn("filtered", rst_filter(col("raster"), lit(3), lit("avg")))
+            .withColumn("filtered", rst_filter(col("raster"), lit(3), lit("mean")))
             .withColumn("original_width", rst_width(col("raster")))
             .withColumn("filtered_width", rst_width(col("filtered")))
             .withColumn("original_height", rst_height(col("raster")))
@@ -331,7 +331,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
             .format("binaryFile")
             .load(tifPath)
             .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
-            .withColumn("filtered", rst_filter(col("raster"), lit(3), lit("avg")))
+            .withColumn("filtered", rst_filter(col("raster"), lit(3), lit("mean")))
             .withColumn("transformed", rst_transform(col("filtered"), lit(4326)))
 
         noException should be thrownBy df.collect()

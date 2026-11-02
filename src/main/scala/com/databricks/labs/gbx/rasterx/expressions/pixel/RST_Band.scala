@@ -3,7 +3,7 @@ package com.databricks.labs.gbx.rasterx.expressions.pixel
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, RasterDriver}
 import com.databricks.labs.gbx.rasterx.operator.OperatorOptions
-import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
+import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterArgumentException, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.Expression
@@ -67,10 +67,8 @@ object RST_Band extends WithExpressionInfo {
     def execute(ds: Dataset, options: Map[String, String], bandIndex: Int): (Dataset, Map[String, String]) = {
         require(ds != null, "RST_Band.execute: source Dataset is null")
         val nBands = ds.GetRasterCount
-        require(
-            bandIndex >= 1 && bandIndex <= nBands,
-            s"gbx_rst_band: band_index $bandIndex out of range [1..$nBands]"
-        )
+        if (bandIndex < 1 || bandIndex > nBands)
+            throw new RasterArgumentException(s"gbx_rst_band: band_index $bandIndex out of range [1..$nBands]")
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "")
         val outPath = s"/vsimem/band_$uuid.tif"
         val opts = new JVector[String]()

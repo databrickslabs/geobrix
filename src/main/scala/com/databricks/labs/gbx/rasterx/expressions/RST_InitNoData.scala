@@ -47,11 +47,20 @@ object RST_InitNoData extends WithExpressionInfo {
         )
 
     def execute(ds: Dataset, options: Map[String, String]): (Dataset, Map[String, String]) = {
-        val perBand = (1 to ds.GetRasterCount())
+        val constants = (1 to ds.GetRasterCount())
             .map { bandIndex =>
                 val band = ds.GetRasterBand(bandIndex)
                 GDAL.getNoDataConstant(band.getDataType)
             }
+        // A raster whose bands all declare one NoData value keeps it (an existing value is kept); otherwise each band
+        // gets its type's constant.
+        val declared = (1 to ds.GetRasterCount()).map { bandIndex =>
+            val value = new Array[java.lang.Double](1)
+            ds.GetRasterBand(bandIndex).GetNoDataValue(value)
+            Option(value(0)).map(_.doubleValue())
+        }
+        val perBand =
+            if (declared.forall(_.isDefined) && declared.flatten.distinct.size == 1) declared.flatten else constants
         // gdalwarp -dstnodata takes ONE argv (a single value applied to all bands,
         // or a space-separated per-band list). The command string is later split on
         // spaces by OperatorOptions.parseOptions, so a multi-value string must NOT

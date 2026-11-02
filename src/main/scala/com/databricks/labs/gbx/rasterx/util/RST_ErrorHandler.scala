@@ -10,6 +10,13 @@ import org.apache.spark.unsafe.types.UTF8String
 
 import scala.util.control.NonFatal
 
+/** Raised by a tile function when an argument is wrong for the tile it is given (a band index past the tile's last
+  * band, a subdataset name the tile does not hold): the tile is only known once it is open, inside
+  * [[RST_ErrorHandler.safeEval]], which re-throws this one so that it names the value, as every other wrong argument
+  * does. (A wrong argument that needs no tile is checked before `safeEval`.)
+  */
+final class RasterArgumentException(msg: String) extends IllegalArgumentException(msg)
+
 /** Raised by a generator's own argument guard (for example the `gbx_rst_xyzpyramid` tile-count cap) so the
   * message reaches the caller. Extends IllegalArgumentException, but unlike an ordinary per-row IAE it is
   * re-thrown by [[RST_ErrorHandler.safeEvalNullElement]] rather than degraded to a NULL row.
@@ -55,6 +62,7 @@ object RST_ErrorHandler extends Logging {
             underHdfLock(RasterSerializationUtil.isHdfTile(row))(eval)
         } catch {
             case e: VirtualTileException => throw e
+            case e: RasterArgumentException => throw e
             case NonFatal(e) =>
                 // Fatal errors (out of memory, stack overflow) fail the task so it can be retried; they are not data.
                 if (RasterSerializationUtil.isErrorTile(row)) {

@@ -592,6 +592,29 @@ def _open(tile, file_ref=None, gate=True):
 
 
 @contextmanager
+def open_source(tile):
+    """Yield the dataset a tile *is*, as GDAL opens it: a virtual tile's file whole, a materialized tile's bytes as
+    their own driver. No window, clip or pending instruction is applied, and nothing is copied to GeoTIFF, so a
+    container (a NetCDF or HDF file) keeps its subdatasets. For the one op that reads them (``rst_getsubdataset``).
+    """
+    import warnings
+
+    from rasterio.errors import NotGeoreferencedWarning
+
+    vt = _to_virtual_tile(tile)
+    with warnings.catch_warnings():
+        # a container has no georeferencing of its own (its subdatasets have): the warning on opening it is noise
+        warnings.simplefilter("ignore", NotGeoreferencedWarning)
+        if vt.raster is not None:
+            with _serde.open_tile(vt.raster) as ds:
+                yield ds
+            return
+        with ExitStack() as stack:
+            with open_raster(_resolve_local_or_windowed(vt, None, stack)) as src:
+                yield src
+
+
+@contextmanager
 def _open_all(tiles):
     """Context manager that yields a list of open ``DatasetReader`` objects.
 

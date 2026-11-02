@@ -23,6 +23,47 @@ from databricks.labs.gbx.pyrx.core._nodata import (
 )
 from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 
+FILTER_OPERATIONS = ("min", "max", "mean", "median")
+
+
+def check_filter(kernel_size, operation):
+    """``(size, operation)`` of ``rst_filter`` as the filter reads them: the size a positive odd integer and
+    the operation one of :data:`FILTER_OPERATIONS` in any case; a ``ValueError`` that names a wrong one.
+    """
+    try:
+        size = int(kernel_size)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"rst_filter: kernel_size must be a positive odd integer; got {kernel_size!r}"
+        ) from exc
+    if size < 1 or size % 2 == 0:
+        raise ValueError(
+            f"rst_filter: kernel_size must be a positive odd integer; got {size}"
+        )
+    op = str(operation).lower()
+    if op not in FILTER_OPERATIONS:
+        raise ValueError(
+            f"rst_filter: unknown operation {operation!r}; known: {', '.join(FILTER_OPERATIONS)}"
+        )
+    return size, op
+
+
+def check_kernel(kernel) -> np.ndarray:
+    """The kernel of ``rst_convolve`` as a 2-D float array; a ``ValueError`` that names a wrong one (ragged,
+    empty, or an even side: a kernel needs a centre)."""
+    try:
+        k = np.asarray(kernel, dtype="float64")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"rst_convolve: kernel must be a rectangular array of numbers; got {kernel!r}"
+        ) from exc
+    if k.ndim != 2 or k.size == 0 or k.shape[0] % 2 == 0 or k.shape[1] % 2 == 0:
+        shape = "x".join(str(n) for n in k.shape)
+        raise ValueError(
+            f"rst_convolve: kernel must be a 2-D array with an odd number of rows and columns; got {shape}"
+        )
+    return k
+
 
 def _nodata_value(ds, default: float = -9999.0, dtype: str = None) -> float:
     """The source's NoData, else *default* when the band type can hold it, else the type's fallback
@@ -53,8 +94,7 @@ def filt(ds, kernel_size, operation: str) -> bytes:
     band's own mask and, for a raster with an alpha band, opaque, so transparent pixels are skipped
     like NoData at any band count.
     """
-    size = int(kernel_size)
-    op = str(operation)
+    size, op = check_filter(kernel_size, operation)
     box = np.ones((size, size), dtype="float64")
     out_dtype = "float32" if op == "mean" else ds.dtypes[0]
     nd = _nodata_value(ds, default=-9999.0, dtype=out_dtype)
@@ -122,7 +162,7 @@ def convolve(ds, kernel) -> bytes:
     sum is emitted verbatim (convolveAt never yields NoData). Output dtype is Float64.
     The result equals the heavyweight's over the whole raster, edges included.
     """
-    k = np.asarray(kernel, dtype="float64")
+    k = check_kernel(kernel)
     nd = _nodata_value(ds, default=-9999.0)
     out_bands = []
     for i in range(1, ds.count + 1):

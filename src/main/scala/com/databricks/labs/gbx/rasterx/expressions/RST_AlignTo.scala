@@ -42,7 +42,10 @@ case class RST_AlignTo(
 object RST_AlignTo extends WithExpressionInfo {
 
     def eval(tileRow: InternalRow, refRow: InternalRow, conf: UTF8String): InternalRow =
-        RST_ErrorHandler.safeEval(
+        // An error tile as the reference comes out as itself, so its reason survives (the tile's own is passed on by the
+        // dispatch wrapper and by safeEval).
+        if (refRow != null && RasterSerializationUtil.isErrorTile(refRow) && !RasterSerializationUtil.isErrorTile(tileRow)) refRow
+        else RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)

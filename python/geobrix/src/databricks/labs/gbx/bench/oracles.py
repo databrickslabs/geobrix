@@ -57,6 +57,11 @@ class Case:
     # exact: the value. raises: a substring the error message must contain (the offending
     # value), so a missing function cannot pass. tile_props: the target CRS, or (CRS, SRID).
     # error_tile: when set, the reason that must come out unchanged. error_tile_has: a substring the reason must hold.
+    # tile_meta: `expect` is a dict of what the result tile's raster must be, each key optional: crs, no_crs, srid, width,
+    # height, count, dtype, nodata (a value, or None for none declared), driver (the raster's format), meta_driver (the
+    # tile metadata's driver), layout (the GeoTIFF IMAGE_STRUCTURE layout), pixels_of_arg0 (the pixels of the first
+    # argument unchanged), transform_of_arg0 (its geotransform) and grid_of_arg1 (the width, height, CRS and geotransform
+    # of the second argument). A result that is still a virtual tile is read as its next reader reads it.
     expect: Any = None
     surfaces: Tuple[str, ...] = ("session", "uc")
     geom_srid: int = (
@@ -89,7 +94,19 @@ _METADATA_L1 = "the JVM metadata is GDAL's metadata domains merged, not the cont
 # With zero_for_flat GDAL drops the NoData value, so its border pixels are 0; light keeps them NoData (a documented
 # divergence, which the GDAL spec engine keeps).
 _ASPECT_ZERO_L1 = "GDAL drops the NoData value when zero_for_flat is set, so its border pixels are 0, not NoData"
+# H20: the JVM derived band is GDAL's VRT pixel function, read lazily: its raster is a Float32 VRT whose function runs when it
+# is read, so the data type is the source's and a function that does not parse or does not exist surfaces as a failed
+# read, not at the call. The companion is deleted in the Task 21 sweep (L1 is not the default for this function).
+_DERIVEDBAND_L1 = "the JVM derived band is a VRT pixel function run on read: the source's data type, and a wrong function is not an error at the call (H20; companion deleted in the decision sweep)"
 HEAVY_PENDING: Dict[str, Dict[str, str]] = {
+    **{
+        cid: {"L1": _DERIVEDBAND_L1}
+        for cid in (
+            "derivedband_float64",
+            "derivedband_unknown_function",
+            "derivedband_syntax_error",
+        )
+    },
     "aspect_flat_zero": {"L1": _ASPECT_ZERO_L1},
     **{
         cid: {"L1": _QUADBIN_L1}
@@ -146,6 +163,7 @@ READ_CAP_ROWS: Dict[str, int] = {
     "decoded_over_cap_error_tile": 4096,
     "dem_decoded_over_cap": 4096,
     "resample_decoded_over_cap": 4096,
+    "tile_op_decoded_over_cap": 4096,
     "rt_over_cap_windows": 4096,
 }
 # The refusal of a tile's bytes in a driver that can name other files, on every level (the light tier's text).
@@ -1698,18 +1716,24 @@ def _se_build(name: str, tmpdir: Optional[str] = None):
     return None
 
 
+def to_netcdf(tif: str, nc: str) -> None:
+    """Write the raster file `tif` as the NetCDF file `nc` (GDAL writes NetCDF by copy, to a file only; each band
+    becomes a variable)."""
+    import rasterio.shutil
+
+    with open_data(tif) as src:  # the copy reads this dataset, not the name
+        rasterio.shutil.copy(src, nc, driver="netCDF")
+
+
 def _bytes_class_build(name: str, tmpdir: str):
     """The bytes-class rows' fixtures: a materialized tile in a driver outside the self-contained class."""
     if (
         name == "tile_4326_netcdf"
     ):  # the tile_4326 raster, materialized as netCDF (GDAL writes netCDF by copy, to a file only)
-        import rasterio.shutil
-
         tif, nc = (os.path.join(tmpdir, f"oracle_4326.{e}") for e in ("tif", "nc"))
         with open(tif, "wb") as fh:
             fh.write(_tile_bytes("EPSG:4326"))
-        with open_data(tif) as src:  # the copy reads this dataset, not the name
-            rasterio.shutil.copy(src, nc, driver="netCDF")
+        to_netcdf(tif, nc)
         with open(nc, "rb") as fh:
             return _tile(fh.read())
     if (
@@ -2094,6 +2118,94 @@ def _check_materialized(case: Case, out, args) -> Optional[str]:
     return None
 
 
+@contextlib.contextmanager
+def _open_out(out):
+    """The raster of a result tile, open for reading: its bytes, or, for a virtual result (which records
+    instructions for its next reader), the file as that reader opens it."""
+    raster = _field(out, "raster")
+    if raster is not None:
+        with open_bytes(bytes(raster)) as ds:
+            yield ds
+        return
+    from databricks.labs.gbx.pyrx.core import open_tile
+
+    with open_tile._open(out) as ds:
+        yield ds
+
+
+def _tile_meta_flaws(case: Case, out, got, want) -> Optional[str]:
+    """What is wrong with the open raster `got` of a result tile `out` against the dict `want` (see `Case`), else None."""
+    from databricks.labs.gbx.core.crs import authority_srid_of, crs_equal
+
+    if "crs" in want and (got.crs is None or not crs_equal(got.crs, want["crs"])):
+        return f"CRS {got.crs} is not {want['crs']}"
+    if want.get("no_crs") and got.crs is not None:
+        return f"CRS {got.crs}, want none"
+    if "srid" in want and authority_srid_of(got.crs) != want["srid"]:
+        return f"SRID {authority_srid_of(got.crs)} is not {want['srid']}"
+    for key in ("width", "height", "count"):
+        if key in want and getattr(got, key) != want[key]:
+            return f"{key} {getattr(got, key)} is not {want[key]}"
+    if "dtype" in want and got.dtypes[0] != want["dtype"]:
+        return f"data type {got.dtypes[0]} is not {want['dtype']}"
+    if "nodata" in want:
+        n, w = got.nodata, want["nodata"]
+        if (n is None) != (w is None) or (w is not None and abs(n - w) > 1e-6):
+            return f"NoData {n} is not {w}"
+    if "driver" in want and got.driver != want["driver"]:
+        return f"format {got.driver} is not {want['driver']}"
+    if "meta_driver" in want:
+        md = (_field(out, "metadata") or {}).get("driver")
+        if md != want["meta_driver"]:
+            return f"metadata driver {md!r} is not {want['meta_driver']!r}"
+    if "layout" in want:
+        layout = got.tags(ns="IMAGE_STRUCTURE").get("LAYOUT")
+        if layout != want["layout"]:
+            return f"layout {layout!r} is not {want['layout']!r}"
+    return None
+
+
+def _tile_meta_against_args(got, want, args) -> Optional[str]:
+    """The keys of a `tile_meta` expectation that compare the result `got` with the case's arguments, else None."""
+    import numpy as np
+
+    from databricks.labs.gbx.core.crs import crs_equal
+
+    if want.get("pixels_of_arg0") or want.get("transform_of_arg0"):
+        with _ref_dataset(args) as src:
+            if want.get("pixels_of_arg0") and not np.array_equal(
+                got.read(), src.read()
+            ):
+                return "the pixels differ from the input's"
+            if want.get("transform_of_arg0") and got.transform != src.transform:
+                return f"geotransform {got.transform} is not the input's"
+    if "grid_of_arg1" in want:
+        with open_bytes(_raster_of(args[1])) as ref:
+            if (got.width, got.height, got.transform) != (
+                ref.width,
+                ref.height,
+                ref.transform,
+            ) or not crs_equal(got.crs, ref.crs):
+                return (
+                    f"grid {got.width}x{got.height} {got.transform} {got.crs} is not the reference's "
+                    f"{ref.width}x{ref.height} {ref.transform} {ref.crs}"
+                )
+    return None
+
+
+def _check_tile_meta(case: Case, out, args) -> Optional[str]:
+    """`out` is a tile whose raster meets each key of `case.expect` (see `Case`)."""
+    if out is None or (_field(out, "raster") is None and _field(out, "path") is None):
+        meta = _field(out, "metadata") if out is not None else None
+        return f"{case.cid}: no raster in the result (got {out!r}, metadata={meta!r})"
+    want = dict(case.expect)
+    with _open_out(out) as got:
+        why = _tile_meta_flaws(case, out, got, want) or _tile_meta_against_args(
+            got, want, args
+        )
+    return None if why is None else f"{case.cid}: {why}"
+
+
 def _masked_band(raster: bytes, band: int = 1):
     from rasterio.io import MemoryFile
 
@@ -2362,7 +2474,156 @@ def _ref_transform_gcp(args):
     return out.astype("float64"), out == nodata
 
 
+def _ref_band_arg(args):
+    """rst_band: the band the second argument names (1-based) of the first, as it is."""
+    import numpy as np
+
+    with _ref_dataset(args) as ds:
+        band = ds.read(int(args[1]), masked=True)
+    return band.data.astype("float64"), np.ma.getmaskarray(band)
+
+
+def _ref_filter(args):
+    """rst_filter: the focal minimum, maximum, mean or median written out pixel by pixel (oracle_refs.focal)."""
+    from databricks.labs.gbx.bench import oracle_refs
+
+    with _ref_dataset(args) as ds:
+        band = ds.read(1, masked=True)
+    import numpy as np
+
+    return oracle_refs.focal(
+        band.data.astype("float64"),
+        ~np.ma.getmaskarray(band),
+        int(args[1]),
+        str(args[2]).lower(),
+    )
+
+
+def _ref_convolve(args):
+    """rst_convolve: the unflipped kernel laid over each pixel, zero-padded, a NoData neighbour adding 0
+    (oracle_refs.correlate); the result is never NoData."""
+    import numpy as np
+
+    from databricks.labs.gbx.bench import oracle_refs
+
+    with _ref_dataset(args) as ds:
+        band = ds.read(1, masked=True)
+    out = oracle_refs.correlate(
+        band.data.astype("float64"), ~np.ma.getmaskarray(band), args[1]
+    )
+    return out, np.zeros(out.shape, dtype=bool)
+
+
+def _ref_percentile_stretch(args):
+    """rst_percentile_stretch: the band scaled between two percentiles of its valid pixels (oracle_refs). The
+    output's NoData is 0, so a pixel that scales to below 1 is NoData too."""
+    import numpy as np
+
+    from databricks.labs.gbx.bench import oracle_refs
+
+    with _ref_dataset(args) as ds:
+        band = ds.read(1, masked=True)
+    valid = ~np.ma.getmaskarray(band)
+    out = oracle_refs.percentile_scale(
+        band.data.astype("float64"), valid, float(args[1]), float(args[2])
+    )
+    return out, ~valid | (np.floor(out) == 0)
+
+
+def _ref_derived_plus_one(args):
+    """rst_derivedband with `out_ar[:] = in_ar[0] * 2 + 1`: band 1 doubled and one added, as 64-bit floats."""
+    import numpy as np
+
+    with _ref_dataset(args) as ds:
+        z = ds.read(1).astype("float64")
+    return z * 2.0 + 1.0, np.zeros(z.shape, dtype=bool)
+
+
+def _ref_cast(args):
+    """rst_updatetype to an integer type: each value rounded to the nearest integer and clamped to the type's range,
+    as `gdal_translate -ot` does; the NoData mask is the input's."""
+    import numpy as np
+
+    info = np.iinfo(
+        {"byte": "uint8", "int32": "int32", "int16": "int16"}[str(args[1]).lower()]
+    )
+    with _ref_dataset(args) as ds:
+        band = ds.read(1, masked=True)
+    out = np.clip(np.floor(band.data.astype("float64") + 0.5), info.min, info.max)
+    return out, np.ma.getmaskarray(band)
+
+
+def _ref_align_to(args):
+    """rst_align_to: rasterio.warp's nearest-neighbour reprojection of the first tile onto the grid of the second,
+    the tile's NoData where it does not cover the grid."""
+    import numpy as np
+    from rasterio.warp import Resampling, reproject
+
+    with _ref_dataset(args) as src, open_bytes(_raster_of(args[1])) as ref:
+        out = np.full((ref.height, ref.width), src.nodata, dtype=src.dtypes[0])
+        reproject(
+            source=src.read(1),
+            destination=out,
+            src_transform=src.transform,
+            src_crs=src.crs,
+            src_nodata=src.nodata,
+            dst_transform=ref.transform,
+            dst_crs=ref.crs,
+            dst_nodata=src.nodata,
+            resampling=Resampling.nearest,
+        )
+        nodata = src.nodata
+    return out.astype("float64"), out == nodata
+
+
+def _ref_land_cover_spectral(args):
+    """rst_land_cover with `spectral`: the documented thresholds on the red, green and blue bands. Excess green
+    (2G - R - B) above 6 is vegetation (0); of the rest, a brightness (R + G + B) / 3 of 150 or more is bare (1),
+    below 55 is dark (3), and between is impervious (2); a pixel whose three bands sum below 12 is NoData (-1).
+    """
+    import numpy as np
+
+    with _ref_dataset(args) as ds:
+        r, g, b = (ds.read(i).astype("float64") for i in (1, 2, 3))
+    bright = (r + g + b) / 3.0
+    out = np.full(r.shape, 2.0)
+    out[bright >= 150] = 1.0
+    out[bright < 55] = 3.0
+    out[2 * g - r - b > 6] = 0.0
+    nodata = (r + g + b) < 12
+    out[nodata] = -1.0
+    return out, nodata
+
+
+def _ref_subdataset(args):
+    """rst_getsubdataset: the subdataset the second argument names of the NetCDF file the first tile points to,
+    opened straight through rasterio's NetCDF driver."""
+    import os
+    import tempfile
+
+    import numpy as np
+
+    path, raster = _field(args[0], "path"), _field(args[0], "raster")
+    with tempfile.TemporaryDirectory(prefix="gbx-oracle-nc-") as d:
+        if path is None:  # a materialized tile: its bytes are the file
+            path = os.path.join(d, "tile.nc")
+            with open(path, "wb") as fh:
+                fh.write(bytes(raster))
+        with open_data(f'NETCDF:"{path}":{args[1]}') as sub:
+            band = sub.read(1, masked=True)
+    return band.data.astype("float64"), np.ma.getmaskarray(band)
+
+
 _REFS = {
+    "band": _ref_band_arg,
+    "filter": _ref_filter,
+    "convolve": _ref_convolve,
+    "percentile_stretch": _ref_percentile_stretch,
+    "derived_plus_one": _ref_derived_plus_one,
+    "cast": _ref_cast,
+    "align_to": _ref_align_to,
+    "land_cover_spectral": _ref_land_cover_spectral,
+    "subdataset": _ref_subdataset,
     "transform_gcp": _ref_transform_gcp,
     "resample_average_half": _ref_resample_average,
     "proximity_geo": _ref_proximity("GEO"),
@@ -2398,6 +2659,7 @@ _REFS = {
 # Byte output (hillshade) is rounded by GDAL, not by the reference: one grey level either way.
 # GDAL's proximity is a fast two-pass distance, not the exact Euclidean one: it agrees to within a pixel's diagonal.
 _REF_ATOL = {
+    "percentile_stretch": 1.0,  # the cast to 8 bits truncates; a reference that rounded would differ by one level
     "hillshade": 1.0,
     "aspect": 0.01,
     "proximity_geo": 15.0,
@@ -2606,6 +2868,16 @@ _VALUE_CHECKS = {
 }
 
 
+# the kinds whose check reads the case's arguments too
+_ARG_CHECKS = {
+    "tile_props": _check_tile,
+    "tile_meta": _check_tile_meta,
+    "materialized_equals_file": _check_materialized,
+    "ref": _check_ref,
+    "geom_srid": _check_geom_srid,
+}
+
+
 def check(case: Case, out, args) -> Optional[str]:
     """None when `out` meets the case; else a one-line reason.
 
@@ -2661,12 +2933,8 @@ def check(case: Case, out, args) -> Optional[str]:
             if str(case.expect) in reason
             else f"{case.cid}: the reason is {reason!r}, want it to say {str(case.expect)!r}"
         )
-    if case.kind == "tile_props":
-        return _check_tile(case, out, args)
-    if case.kind == "materialized_equals_file":
-        return _check_materialized(case, out, args)
-    if case.kind == "ref":
-        return _check_ref(case, out, args)
+    if case.kind in _ARG_CHECKS:
+        return _ARG_CHECKS[case.kind](case, out, args)
     if case.kind == "error_fix":
         reason = (_field(out, "metadata") or {}).get(ERROR_TILE_KEY) or ""
         if out is None or _field(out, "raster") is not None or "Fix:" not in reason:
@@ -2676,8 +2944,6 @@ def check(case: Case, out, args) -> Optional[str]:
         return None
     if case.kind == "geom_props":
         return _check_geom(case, out)
-    if case.kind == "geom_srid":
-        return _check_geom_srid(case, out, args)
     if case.kind in _VALUE_CHECKS:
         return _VALUE_CHECKS[case.kind](case, out)
     if case.kind == "merged_equals":
@@ -3065,6 +3331,7 @@ _SQL = {
     "BINARY": "binary",
     "BOOLEAN": "boolean",
     "ARRAY<BIGINT>": "array<bigint>",
+    "ARRAY<ARRAY<DOUBLE>>": "array<array<double>>",
 }
 
 

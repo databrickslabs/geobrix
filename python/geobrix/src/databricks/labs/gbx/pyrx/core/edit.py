@@ -98,17 +98,39 @@ def clip_to_geom(ds, geom, all_touched: bool = False, geom_crs=None, nodata=None
     )
 
 
+def gdal_type(new_type) -> str:
+    """The key of ``_GDAL_TO_NP`` that ``new_type`` names, in any case (GDAL reads a data-type name case-
+    insensitively); a ``ValueError`` that names it and lists the known ones when it names none.
+    """
+    by_lower = {k.lower(): k for k in _GDAL_TO_NP}
+    key = by_lower.get(str(new_type).lower())
+    if key is None:
+        raise ValueError(
+            f"rst_updatetype: unknown data type {new_type!r}; known: {', '.join(_GDAL_TO_NP)}"
+        )
+    return key
+
+
 def update_type(ds, new_type: str) -> bytes:
-    """Cast all bands to a new GDAL data type name (e.g. 'Int32'); return GTiff bytes."""
-    np_dtype = _GDAL_TO_NP[new_type]
-    data = ds.read().astype(np_dtype)
+    """Cast all bands to a new GDAL data type name (e.g. 'Int32', any case); return GTiff bytes.
+
+    As ``gdal_translate -ot``: a floating-point value cast to an integer type is rounded to the nearest integer
+    and a value outside the type's range is clamped to its end, never wrapped.
+    """
+    np_dtype = _GDAL_TO_NP[gdal_type(new_type)]
+    data = ds.read()
+    if np.issubdtype(np.dtype(np_dtype), np.integer):
+        info = np.iinfo(np_dtype)
+        if np.issubdtype(data.dtype, np.floating):
+            # NaN has no integer: it becomes 0, as GDAL's
+            data = np.floor(np.nan_to_num(data.astype("float64"), nan=0.0) + 0.5)
+        data = np.clip(data, info.min, info.max)
+    data = data.astype(np_dtype)
     profile = ds.profile.copy()
     profile.update(driver="GTiff", dtype=np_dtype)
     # Drop a nodata value that can't be represented in the new dtype.
     nd = profile.get("nodata")
     if nd is not None:
-        import numpy as np
-
         if np.issubdtype(np.dtype(np_dtype), np.integer):
             info = np.iinfo(np_dtype)
             if not (info.min <= nd <= info.max):

@@ -44,18 +44,20 @@ object RST_Convolve extends WithExpressionInfo {
     def evalFloat(row: InternalRow, kernelAD: ArrayData, conf: UTF8String): InternalRow = eval(row, kernelAD, conf, BinaryType, FloatType)
     def evalLong(row: InternalRow, kernelAD: ArrayData, conf: UTF8String): InternalRow = eval(row, kernelAD, conf, BinaryType, LongType)
 
-    def eval(row: InternalRow, kernelAD: ArrayData, conf: UTF8String, rdt: DataType, kdt: DataType): InternalRow =
+    def eval(row: InternalRow, kernelAD: ArrayData, conf: UTF8String, rdt: DataType, kdt: DataType): InternalRow = {
+        val kernel = kdt match {
+            case DoubleType  => SerializationUtil.create2DArray[Double](kernelAD, kdt)
+            case IntegerType => SerializationUtil.create2DArray[Int](kernelAD, kdt).map(_.map(_.toDouble))
+            case FloatType   => SerializationUtil.create2DArray[Float](kernelAD, kdt).map(_.map(_.toDouble))
+            case LongType    => SerializationUtil.create2DArray[Long](kernelAD, kdt).map(_.map(_.toDouble))
+        }
+        // A wrong kernel fails the call (naming its shape); only the tile's own failures become its error tile.
+        if (row != null) Convolve.requireKernel(kernel)
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
               val tile = RasterSerializationUtil.rowToTile(row, rdt)
-              val kernel = kdt match {
-                  case DoubleType  => SerializationUtil.create2DArray[Double](kernelAD, kdt)
-                  case IntegerType => SerializationUtil.create2DArray[Int](kernelAD, kdt).map(_.map(_.toDouble))
-                  case FloatType   => SerializationUtil.create2DArray[Float](kernelAD, kdt).map(_.map(_.toDouble))
-                  case LongType    => SerializationUtil.create2DArray[Long](kernelAD, kdt).map(_.map(_.toDouble))
-              }
               val (raster, metadata) = Convolve.convolve(tile._2, tile._3, kernel)
               RasterDriver.releaseDataset(tile._2)
               val res = RasterSerializationUtil.tileToRow((tile._1, raster, metadata), rdt, exprConf.hConf)
@@ -65,6 +67,7 @@ object RST_Convolve extends WithExpressionInfo {
           row,
           rdt
         )
+    }
 
     def execute(tile: (Long, Dataset, Map[String, String]), kernel: Array[Array[Double]]): (Dataset, Map[String, String]) = {
         Convolve.convolve(tile._2, tile._3, kernel)

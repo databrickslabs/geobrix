@@ -2,7 +2,7 @@ package com.databricks.labs.gbx.rasterx.expressions.accessors
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
-import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
+import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterArgumentException, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.Expression
@@ -68,11 +68,23 @@ object RST_GetSubdataset extends WithExpressionInfo {
           rdt
         )
 
+    /** The names of the subdatasets of `ds` (the part of each GDAL name after the container's). */
+    private def subdatasetNames(ds: Dataset): Seq[String] =
+        Option(ds.GetMetadata_List("SUBDATASETS")).map(_.asScala.map(_.toString).toSeq).getOrElse(Seq.empty)
+            .filter(_.contains("_NAME="))
+            .map(_.split("_NAME=", 2)(1))
+
     def execute(ds: Dataset, name: String): Dataset = {
         val path = ds.GetDescription
         val driver = ds.GetDriver.getShortName
         val subdatasetPath = s"$driver:$path:$name"
-        GDALManager.withHdfLockIf(GDALManager.isHdfFamily(ds))(gdal.Open(subdatasetPath, GA_ReadOnly))
+        val sub = GDALManager.withHdfLockIf(GDALManager.isHdfFamily(ds))(scala.util.Try(gdal.Open(subdatasetPath, GA_ReadOnly)).getOrElse(null))
+        // A tile that holds no subdataset of that name: the argument names none, which fails the call naming it
+        if (sub == null)
+            throw new RasterArgumentException(
+              s"gbx_rst_getsubdataset: no subdataset named '$name' (available: ${subdatasetNames(ds).mkString(", ")})"
+            )
+        sub
     }
 
     override def name: String = "gbx_rst_getsubdataset"

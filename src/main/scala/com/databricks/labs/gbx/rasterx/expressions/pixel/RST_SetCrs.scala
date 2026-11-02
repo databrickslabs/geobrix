@@ -52,7 +52,12 @@ object RST_SetCrs extends WithExpressionInfo {
 
     private def runDispatch(
         row: InternalRow, crs: UTF8String, conf: UTF8String, dt: DataType
-    ): InternalRow =
+    ): InternalRow = {
+        // A value that is no CRS fails the call (naming it); only the tile's own failures become its error tile.
+        if (row != null && crs != null) {
+            RST_ExpressionUtil.init(ExpressionConfig.fromB64(conf.toString))
+            SpatialRefOps.resolveCrs(crs.toString).delete()
+        }
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
@@ -67,6 +72,7 @@ object RST_SetCrs extends WithExpressionInfo {
           row,
           dt
         )
+    }
 
     /** Pure compute path — extracted for direct unit-testing without Spark.
       *

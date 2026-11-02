@@ -21,6 +21,20 @@ from databricks.labs.gbx.pyrx.core.compression import (
 _PERCENTILE_SAMPLE_CAP = 500_000
 
 
+def check_percentiles(lo_pct, hi_pct) -> None:
+    """The percentiles of ``rst_percentile_stretch``: each in [0, 100] and the low one below the high one;
+    a ``ValueError`` that names the wrong value."""
+    lo_pct, hi_pct = float(lo_pct), float(hi_pct)
+    if not (0 <= lo_pct <= 100) or not (0 <= hi_pct <= 100):
+        raise ValueError(
+            f"percentiles must be in [0, 100], got lo_pct={lo_pct}, hi_pct={hi_pct}"
+        )
+    if lo_pct >= hi_pct:
+        raise ValueError(
+            f"lo_pct must be < hi_pct, got lo_pct={lo_pct}, hi_pct={hi_pct}"
+        )
+
+
 def percentile_stretch(ds, lo_pct: float, hi_pct: float) -> bytes:
     """Per-band percentile contrast stretch to uint8 [0,255].
 
@@ -40,16 +54,8 @@ def percentile_stretch(ds, lo_pct: float, hi_pct: float) -> bytes:
     """
     from rasterio.io import MemoryFile
 
-    lo_pct = float(lo_pct)
-    hi_pct = float(hi_pct)
-    if not (0 <= lo_pct <= 100) or not (0 <= hi_pct <= 100):
-        raise ValueError(
-            f"percentiles must be in [0, 100], got lo={lo_pct}, hi={hi_pct}"
-        )
-    if lo_pct >= hi_pct:
-        raise ValueError(
-            f"lo_pct must be < hi_pct, got lo_pct={lo_pct}, hi_pct={hi_pct}"
-        )
+    check_percentiles(lo_pct, hi_pct)
+    lo_pct, hi_pct = float(lo_pct), float(hi_pct)
 
     count = ds.count
 

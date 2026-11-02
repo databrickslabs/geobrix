@@ -12,6 +12,33 @@ from databricks.labs.gbx.pyrx.core import _nodata
 from databricks.labs.gbx.pyrx.core import compression as _comp
 
 
+def check_function(pyfunc: str, func_name: str) -> None:
+    """The arguments of ``rst_derivedband`` without running the code: the source must parse, and define
+    ``func_name`` at its top level (a ``def``, a ``class``, an assignment or an import). A ``ValueError``
+    names the offender."""
+    import ast
+
+    try:
+        tree = ast.parse(str(pyfunc))
+    except SyntaxError as exc:
+        raise ValueError(f"rst_derivedband: python_func does not parse: {exc}") from exc
+    defined = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            defined.add(node.name)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            defined.update(
+                n.id for t in targets for n in ast.walk(t) if isinstance(n, ast.Name)
+            )
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            defined.update((a.asname or a.name).split(".")[0] for a in node.names)
+    if str(func_name) not in defined:
+        raise ValueError(
+            f"rst_derivedband: python_func defines no function named {func_name!r}"
+        )
+
+
 def derivedband(ds, pyfunc: str, func_name: str) -> bytes:
     """Apply a user-provided Python function to the raster's bands.
 

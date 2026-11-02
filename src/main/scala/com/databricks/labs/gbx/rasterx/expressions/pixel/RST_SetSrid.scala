@@ -55,7 +55,12 @@ object RST_SetSrid extends WithExpressionInfo {
 
     private def runDispatch(
         row: InternalRow, srid: Int, conf: UTF8String, dt: DataType
-    ): InternalRow =
+    ): InternalRow = {
+        // A wrong SRID fails the call (naming it); only the tile's own failures become its error tile.
+        if (row != null) {
+            RST_ExpressionUtil.init(ExpressionConfig.fromB64(conf.toString))
+            requireSrid(srid)
+        }
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
@@ -70,6 +75,13 @@ object RST_SetSrid extends WithExpressionInfo {
           row,
           dt
         )
+    }
+
+    /** Not negative, and a positive code an EPSG or ESRI code ([[SpatialRefOps.resolveCrs]] raises naming it). */
+    private def requireSrid(srid: Int): Unit = {
+        require(srid >= 0, s"gbx_rst_setsrid: SRID must be >= 0; got $srid")
+        if (srid > 0) SpatialRefOps.resolveCrs(srid.toString).delete()
+    }
 
     /** Pure compute path — extracted for direct unit-testing without Spark.
       *

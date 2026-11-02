@@ -211,7 +211,10 @@ def _run_code(text: str, base: Path, issues: List[str], seen=()) -> str:
         ref = ref.strip("'\"")
         ref_path = Path(ref)
         found = None
-        for cand in (ref_path, ref_path.with_name(ref_path.name + ".py"), ref_path.with_name(ref_path.name + ".ipynb")):
+        cands = [ref_path]
+        if ref_path.name:  # `%run .` or `%run ./dir/` names no file: there is no name to suffix
+            cands += [ref_path.with_name(ref_path.name + ".py"), ref_path.with_name(ref_path.name + ".ipynb")]
+        for cand in cands:
             full = cand if cand.is_absolute() else base.parent / cand
             if full.is_file():
                 found = full

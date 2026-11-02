@@ -39,7 +39,9 @@ case class Custom_KLoop(
         if (gridVal == null) return null
 
         val sys = Custom_GridSpec.systemFromRow(gridVal.asInstanceOf[InternalRow])  // PARAMETER
-        val k   = Custom_GridSpec.asInt(kExpr.eval(input), "k")                    // PARAMETER
+        val kVal = kExpr.eval(input)
+        if (kVal == null) return null
+        val k   = Custom_GridSpec.asInt(kVal, "k")                                  // PARAMETER
         GridErrorHandler.safeEval[ArrayData](null) {
             val cell = cellVal.asInstanceOf[Long]
             val cells: Seq[Long] = sys.kLoop(cell, k)

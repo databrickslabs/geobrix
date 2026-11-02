@@ -116,7 +116,10 @@ def test_family_oracle(request, tmp_path, sql_name, level, variant, api):
         for cid, lv in oracles.HEAVY_PENDING.items()
         if level in lv and cid in {c.cid for c in cases}
     }
-    assert [m for cid, m in red.items() if cid not in pending] == []
+    bad = [m for cid, m in red.items() if cid not in pending]
+    assert not bad, "\n".join(
+        m[-500:] for m in bad
+    )  # every red row, not pytest's cut-down list
     assert pending <= set(red), f"{level} now passes {sorted(pending - set(red))}"
 
 

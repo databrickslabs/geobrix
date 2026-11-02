@@ -456,7 +456,8 @@ def test_tile_reference_compares_a_grid_one_pixel_off_by_pixels():
 def test_pending_heavy_rows_name_real_oracle_rows():
     from databricks.labs.gbx.bench import oracles
 
-    assert set(oracles.HEAVY_PENDING) <= {c.cid for c in oracles.MVP_S}
+    rows = {c.cid for table in oracles.TABLES.values() for c in table}
+    assert set(oracles.HEAVY_PENDING) <= rows
     assert all(
         set(levels_) <= {"L1", "L2"} for levels_ in oracles.HEAVY_PENDING.values()
     )

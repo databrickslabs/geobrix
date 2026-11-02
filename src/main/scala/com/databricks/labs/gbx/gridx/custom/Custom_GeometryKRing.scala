@@ -42,16 +42,23 @@ case class Custom_GeometryKRing(
         if (gridVal == null) return null
 
         val sys  = Custom_GridSpec.systemFromRow(gridVal.asInstanceOf[InternalRow])
-        val res  = Custom_GridSpec.asInt(resolutionExpr.eval(input), "resolution")
-        val k    = Custom_GridSpec.asInt(kExpr.eval(input), "k")
+        val resVal = resolutionExpr.eval(input)
+        if (resVal == null) return null
+        val res  = Custom_GridSpec.asResolution(resVal, "resolution")
+        val kVal = kExpr.eval(input)
+        if (kVal == null) return null
+        val k    = Custom_GridSpec.asInt(kVal, "k")
         val mRaw = modeExpr.eval(input)
         val mode = if (mRaw == null) GeomDilation.DEFAULT_MODE else mRaw.asInstanceOf[UTF8String].toString
         val cvRaw = coverageExpr.eval(input)
         val coverage = if (cvRaw == null) GeomDilation.DEFAULT_COVERAGE else cvRaw.asInstanceOf[UTF8String].toString
 
+        GeomDilation.requireMode(mode) // PARAMETER: an unknown mode raises, never a NULL
         GridErrorHandler.safeEval[ArrayData](null) {
             val geom = Custom_PointAsCell.decodeGeom(geomVal)
-            ArrayData.toArrayData(sys.geometryKRing(geom, res, k, mode, coverage).toArray)
+            // a geometry that is not finite has no cells
+            if (!GridErrorHandler.isFinite(geom)) null
+            else ArrayData.toArrayData(sys.geometryKRing(geom, res, k, mode, coverage).toArray)
         }
     }
 

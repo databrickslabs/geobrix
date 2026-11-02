@@ -38,7 +38,9 @@ case class Custom_Polyfill(
         if (gridVal == null) return null
 
         val sys = Custom_GridSpec.systemFromRow(gridVal.asInstanceOf[InternalRow])  // PARAMETER
-        val res = Custom_GridSpec.asInt(resolutionExpr.eval(input), "resolution")  // PARAMETER (type check)
+        val resVal = resolutionExpr.eval(input)
+        if (resVal == null) return null
+        val res = Custom_GridSpec.asResolution(resVal, "resolution")  // PARAMETER (type check)
         if (res > sys.conf.maxResolution)                                          // PARAMETER range: must raise, not null
             throw new IllegalStateException(s"Resolution exceeds maximum resolution of ${sys.conf.maxResolution}.")
         GridErrorHandler.safeEval[ArrayData](null) {

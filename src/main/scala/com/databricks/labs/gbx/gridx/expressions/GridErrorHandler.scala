@@ -18,4 +18,8 @@ object GridErrorHandler {
     def safeEval[T](nullValue: T)(body: => T): T =
         try body
         catch { case NonFatal(_) => nullValue }
+
+    /** True when every coordinate of `geom` is finite (a point at infinity has no grid cell). */
+    def isFinite(geom: org.locationtech.jts.geom.Geometry): Boolean =
+        geom.getCoordinates.forall(c => java.lang.Double.isFinite(c.x) && java.lang.Double.isFinite(c.y))
 }

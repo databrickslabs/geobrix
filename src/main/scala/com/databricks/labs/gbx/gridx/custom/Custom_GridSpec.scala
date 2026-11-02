@@ -46,6 +46,29 @@ object Custom_GridSpec {
             s"gbx_custom: $label must be INT or LONG; got ${o.getClass.getName}")
     }
 
+    /** A resolution argument: any whole number, as a number or as its text (`3`, `3.0`, `' 3 '`). A fractional
+      * value or text that is not a number raises naming it, so it is never cut to a whole number. */
+    def asResolution(v: Any, label: String): Int = {
+        def whole(d: Double): Int =
+            if (d.isNaN || d.isInfinite || d != Math.rint(d) || d > Int.MaxValue || d < Int.MinValue)
+                throw new IllegalArgumentException(s"gbx_custom: $label must be a whole number; got $v")
+            else d.toInt
+        v match {
+            case i: Int                      => i
+            case l: Long                     => Math.toIntExact(l)
+            case s: Short                    => s.toInt
+            case b: Byte                     => b.toInt
+            case d: Double                   => whole(d)
+            case f: Float                    => whole(f.toDouble)
+            case d: org.apache.spark.sql.types.Decimal => whole(d.toDouble)
+            case u: org.apache.spark.unsafe.types.UTF8String =>
+                whole(scala.util.Try(u.toString.trim.toDouble).getOrElse(Double.NaN))
+            case null => throw new IllegalArgumentException(s"gbx_custom: $label must not be null")
+            case o    => throw new IllegalArgumentException(
+                s"gbx_custom: $label must be a whole number; got ${o.getClass.getName}")
+        }
+    }
+
     /** Long-or-Int tolerant (bounds). */
     def asLong(v: Any, label: String): Long = v match {
         case l: Long => l

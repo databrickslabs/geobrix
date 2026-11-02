@@ -43,7 +43,8 @@ class Case:
     args: Tuple[Any, ...]
     # exact | exact_rows | null | raises | uc_refused | error_tile | tile_props | geom_props | geom_equals | cell_set
     # geom_equals: `expect` is the WKT of the geometry the output (WKB or WKT) must equal, vertex order aside.
-    # cell_set: `expect` is the cell ids an array output must hold, each once, in any order.
+    # cell_set: `expect` is the cell ids an array output must hold, each once, in any order (an array of chip
+    # structs is judged by the first field of each). approx: a number, or a struct or list of numbers, to 1e-9.
     # exact_rows is one batch: `args` is a tuple of argument rows, `expect` one value per row.
     # Generators also use no_rows | windows | cells, and error_tile means exactly one row.
     # The DataFrame helpers' rst_viewshed_towers uses towers (see MVP_H).
@@ -70,7 +71,24 @@ _L2_NO_REASON = (
     "the raster Java UDF returns NULL bytes for a refused tile, so its error tile carries no reason; "
     "raster functions lose this level"
 )
+# The quadbin Catalyst companions are not a default level (their cluster timings are at parity with light) and
+# are deleted in the decision sweep, so they keep the contract gaps below instead of being fixed.
+_QUADBIN_L1 = "the quadbin Catalyst companion is not conformed to the light contract; it is deleted in the decision sweep"
 HEAVY_PENDING: Dict[str, Dict[str, str]] = {
+    **{
+        cid: {"L1": _QUADBIN_L1}
+        for cid in (
+            "quadbin_res_3_5_raises",
+            "quadbin_inf_point",
+            "qb_polyfill_bad_geom",
+            "quadbin_res_3_5_raises_array",
+            "quadbin_res_digit_string_array",
+            "qb_geomkring_bad_mode",
+            "quadbin_res_3_5_raises_geomk",
+            "quadbin_res_digit_string_geomk",
+            "quadbin_inf_point_geomk",
+        )
+    },
     "bytes_class_refused_driver": {"L2": _L2_NO_REASON},
     "bytes_class_vrt_refused": {"L2": _L2_NO_REASON},
     "decoded_over_cap_error_tile": {
@@ -2101,11 +2119,49 @@ def _check_geom_equals(case: Case, out) -> Optional[str]:
         return f"{case.cid}: got NULL, want {case.expect}"
     got = parse_geom(bytes(out) if isinstance(out, (bytearray, memoryview)) else out)
     want = shapely.from_wkt(case.expect)
-    if got is None or not shapely.normalize(got).equals_exact(
-        shapely.normalize(want), 1e-6
-    ):
+    # the same vertices, or (areas) the same region: a union keeps a vertex a hand-written ring does not
+    same = got is not None and got.geom_type == want.geom_type
+    if same and not shapely.normalize(got).equals_exact(shapely.normalize(want), 1e-6):
+        same = want.area > 0 and got.symmetric_difference(want).area <= 1e-9 * want.area
+    if not same:
         return f"{case.cid}: got {got.wkt if got is not None else out!r}, want {case.expect}"
     return None
+
+
+def _check_approx(case: Case, out) -> Optional[str]:
+    """`out` (a number, or a struct or list of numbers) equals `case.expect` to a relative 1e-9."""
+    import math
+
+    def flat(v):
+        return [v] if isinstance(v, (int, float)) else list(v)
+
+    if out is None:
+        return f"{case.cid}: got NULL, want {case.expect}"
+    got, want = flat(out), flat(case.expect)
+    if len(got) != len(want) or not all(
+        math.isclose(g, w, rel_tol=1e-9, abs_tol=1e-12) for g, w in zip(got, want)
+    ):
+        return f"{case.cid}: got {got}, want {want}"
+    return None
+
+
+def _check_cell_set(case: Case, out) -> Optional[str]:
+    if out is None:
+        return f"{case.cid}: got NULL, want the cells {sorted(case.expect)}"
+    # a chip array (struct elements) is judged by its cells: the struct's first field
+    cells = sorted(e[0] if isinstance(e, tuple) else e for e in out)
+    return (
+        None
+        if cells == sorted(case.expect)
+        else f"{case.cid}: cells {cells}, want {sorted(case.expect)}"
+    )
+
+
+_VALUE_CHECKS = {
+    "geom_equals": _check_geom_equals,
+    "approx": _check_approx,
+    "cell_set": _check_cell_set,
+}
 
 
 def check(case: Case, out, args) -> Optional[str]:
@@ -2172,16 +2228,8 @@ def check(case: Case, out, args) -> Optional[str]:
         return None
     if case.kind == "geom_props":
         return _check_geom(case, out)
-    if case.kind == "geom_equals":
-        return _check_geom_equals(case, out)
-    if case.kind == "cell_set":
-        if out is None:
-            return f"{case.cid}: got NULL, want the cells {sorted(case.expect)}"
-        return (
-            None
-            if sorted(out) == sorted(case.expect)
-            else f"{case.cid}: cells {sorted(out)}, want {sorted(case.expect)}"
-        )
+    if case.kind in _VALUE_CHECKS:
+        return _VALUE_CHECKS[case.kind](case, out)
     if case.kind == "merged_equals":
         return _check_merged(case, out)
     if case.kind == "pixels":
@@ -2562,9 +2610,11 @@ def run_helpers(
 _SQL = {
     "DOUBLE": "double",
     "INT": "int",
+    "BIGINT": "bigint",
     "STRING": "string",
     "BINARY": "binary",
     "BOOLEAN": "boolean",
+    "ARRAY<BIGINT>": "array<bigint>",
 }
 
 
@@ -2581,8 +2631,10 @@ def _ddl_type(value, param) -> str:
         return TILE_SQL
     if isinstance(value, bool):
         return "boolean"
+    if isinstance(value, list):  # an array parameter (quadbin cells)
+        return _SQL[param.session[0]]
     if isinstance(value, int):
-        return "int"
+        return "bigint" if param.session[0] == "BIGINT" else "int"
     if isinstance(value, float):
         return "double"
     if isinstance(value, (bytes, bytearray)):

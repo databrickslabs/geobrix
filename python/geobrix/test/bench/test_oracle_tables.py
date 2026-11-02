@@ -123,6 +123,7 @@ def test_an_aggregate_verdict_checks_the_resolved_arguments(monkeypatch):
             "POLYGON((0 0, 2 0, 2 2, 0 2, 0 0))",
         ),
         ("cell_set", ["TQ3080", "TQ3180"], ["TQ3180", "TQ3080"], ["TQ3080", "TQ3080"]),
+        ("approx", (1.0, 2.0), (1.0 + 1e-12, 2.0), (1.0, 2.1)),
     ],
 )
 def test_a_new_check_kind_passes_its_value_and_fails_another(kind, expect, good, bad):

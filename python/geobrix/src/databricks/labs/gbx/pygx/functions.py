@@ -69,7 +69,7 @@ def _pointascell_udf(lon: pd.Series, lat: pd.Series, res: pd.Series) -> pd.Serie
     ress = res.to_numpy()
     # a NULL arrives as NaN (or None) in a batch: a NULL resolution, longitude or latitude
     # gives a NULL cell (a NaN coordinate used to come out as a made-up cell)
-    null = pd.isna(ress) | np.isnan(lons) | np.isnan(lats)
+    null = pd.isna(ress) | ~np.isfinite(lons) | ~np.isfinite(lats)
     out = np.zeros(len(lons), dtype=np.int64)
     # point_as_cell_vec needs a fixed z per call; group rows by their resolution
     # (typically a single literal => one pass). Bit-identical to the scalar path.
@@ -84,8 +84,12 @@ def _pointascell_udf(lon: pd.Series, lat: pd.Series, res: pd.Series) -> pd.Serie
 
 @pandas_udf(IntegerType())
 def _resolution_udf(cell: pd.Series) -> pd.Series:
-    cells = cell.to_numpy(dtype=np.int64)
-    return pd.Series(_quadbin.resolution_vec(cells).astype(np.int32))
+    # a NULL cell arrives as NaN in a batch (an all-NULL column is a float one): it has no resolution
+    null = cell.isna().to_numpy()
+    cells = cell.fillna(0).to_numpy(dtype=np.int64)
+    out = pd.Series(_quadbin.resolution_vec(cells).astype(np.int32), dtype="Int32")
+    out[null] = pd.NA
+    return out
 
 
 @pandas_udf(IntegerType())
@@ -98,7 +102,7 @@ def _distance_udf(a: pd.Series, b: pd.Series) -> pd.Series:
         [
             (
                 int(_quadbin.distance(int(x), int(y)))
-                if (x is not None and y is not None)
+                if not (pd.isna(x) or pd.isna(y))
                 else None
             )
             for x, y in zip(a, b)
@@ -115,14 +119,12 @@ def _distance_udf(a: pd.Series, b: pd.Series) -> pd.Series:
 
 @pandas_udf(BinaryType())
 def _aswkb_udf(cell: pd.Series) -> pd.Series:
-    return pd.Series([_quadbin.as_wkb(int(c)) if c is not None else None for c in cell])
+    return pd.Series([None if pd.isna(c) else _quadbin.as_wkb(int(c)) for c in cell])
 
 
 @pandas_udf(BinaryType())
 def _centroid_udf(cell: pd.Series) -> pd.Series:
-    return pd.Series(
-        [_quadbin.centroid(int(c)) if c is not None else None for c in cell]
-    )
+    return pd.Series([None if pd.isna(c) else _quadbin.centroid(int(c)) for c in cell])
 
 
 @pandas_udf(BinaryType())
@@ -149,9 +151,12 @@ def _quadbin_geomkring(geom, res, k, mode="boundary-out", coverage="coveras"):
     if geom is None or res is None or k is None:
         return None
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
+    res = _whole_res("gbx_quadbin_geomkring", res)
+    if _not_finite(geom):
+        return None  # a geometry that is not finite has no cells
     try:
         return _quadbin.geometry_k_ring(
-            geom, int(res), int(k), mode or "boundary-out", coverage or "coveras"
+            geom, res, int(k), mode or "boundary-out", coverage or "coveras"
         )
     except ValueError:
         raise  # re-raise param errors (bad mode propagated from engine)
@@ -163,9 +168,12 @@ def _quadbin_geomkloop(geom, res, k, mode="boundary-out", coverage="coveras"):
     if geom is None or res is None or k is None:
         return None
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
+    res = _whole_res("gbx_quadbin_geomkloop", res)
+    if _not_finite(geom):
+        return None  # a geometry that is not finite has no cells
     try:
         return _quadbin.geometry_k_loop(
-            geom, int(res), int(k), mode or "boundary-out", coverage or "coveras"
+            geom, res, int(k), mode or "boundary-out", coverage or "coveras"
         )
     except ValueError:
         raise  # re-raise param errors
@@ -217,17 +225,29 @@ def _kring(cell, k):
 
 
 def _polyfill(geom, res):
-    if geom is None:
+    if geom is None or res is None:
         return None
-    return _quadbin.polyfill(geom, int(res))
+    z = _whole_res("gbx_quadbin_polyfill", res)
+    try:
+        return _quadbin.polyfill(geom, z)
+    except ValueError:
+        raise  # a resolution or cell-count PARAMETER error
+    except Exception:
+        return None  # unreadable geometry DATA -> NULL (matches BNG)
 
 
 def _tessellate(geom, res):
-    if geom is None:
+    if geom is None or res is None:
         return None
-    return [
-        {"cell": int(c), "geom": gm} for (c, gm) in _quadbin.tessellate(geom, int(res))
-    ]
+    z = _whole_res("gbx_quadbin_tessellate", res)
+    try:
+        return [
+            {"cell": int(c), "geom": gm} for (c, gm) in _quadbin.tessellate(geom, z)
+        ]
+    except ValueError:
+        raise
+    except Exception:
+        return None
 
 
 # --- grouped-aggregate pandas UDF -----------------------------------------------------------
@@ -834,7 +854,7 @@ def _custom_cellaswkb_udf(cell: pd.Series, grid: pd.Series) -> pd.Series:
         [
             (
                 _custom.cell_aswkb(_custom.conf_from_row(s), int(c))
-                if c is not None and s is not None
+                if not pd.isna(c) and s is not None
                 else None
             )
             for c, s in zip(cell, _custom_grid_records(grid))
@@ -848,7 +868,7 @@ def _custom_cellaswkt_udf(cell: pd.Series, grid: pd.Series) -> pd.Series:
         [
             (
                 _custom.cell_aswkt(_custom.conf_from_row(s), int(c))
-                if c is not None and s is not None
+                if not pd.isna(c) and s is not None
                 else None
             )
             for c, s in zip(cell, _custom_grid_records(grid))
@@ -862,7 +882,7 @@ def _custom_centroid_udf(cell: pd.Series, grid: pd.Series) -> pd.Series:
         [
             (
                 _custom.cell_centroid(_custom.conf_from_row(s), int(c))
-                if c is not None and s is not None
+                if not pd.isna(c) and s is not None
                 else None
             )
             for c, s in zip(cell, _custom_grid_records(grid))
@@ -881,7 +901,7 @@ def _custom_grid_records(grid):
     if isinstance(grid, pd.DataFrame):
         recs = []
         for rec in grid.to_dict(orient="records"):
-            recs.append(None if all(v is None for v in rec.values()) else rec)
+            recs.append(None if all(pd.isna(v) for v in rec.values()) else rec)
         return recs
     return list(grid)
 
@@ -892,18 +912,27 @@ def _custom_grid_records(grid):
 def _custom_polyfill(geom, grid, res):
     if geom is None or grid is None or res is None:
         return None
-    return _custom.polyfill(_custom.conf_from_row(grid), parse_geom(geom), int(res))
+    r = _whole_res("gbx_custom_polyfill", res)
+    conf = _custom.conf_from_row(grid)
+    try:
+        parsed = parse_geom(geom)
+    except Exception:
+        return None  # unreadable geometry DATA -> NULL (matches BNG)
+    return _custom.polyfill(conf, parsed, r)
 
 
 def _custom_geomkring(geom, grid, res, k, mode="boundary-out", coverage="coveras"):
     if geom is None or grid is None or res is None or k is None:
         return None
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
+    res = _whole_res("gbx_custom_geomkring", res)
+    if _not_finite(geom):
+        return None  # a geometry that is not finite has no cells
     try:
         return _custom.geometry_k_ring(
             _custom.conf_from_row(grid),
             geom,
-            int(res),
+            res,
             int(k),
             mode or "boundary-out",
             coverage or "coveras",
@@ -918,11 +947,14 @@ def _custom_geomkloop(geom, grid, res, k, mode="boundary-out", coverage="coveras
     if geom is None or grid is None or res is None or k is None:
         return None
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
+    res = _whole_res("gbx_custom_geomkloop", res)
+    if _not_finite(geom):
+        return None  # a geometry that is not finite has no cells
     try:
         return _custom.geometry_k_loop(
             _custom.conf_from_row(grid),
             geom,
-            int(res),
+            res,
             int(k),
             mode or "boundary-out",
             coverage or "coveras",
@@ -1003,7 +1035,7 @@ def _custom_distance_udf(
         [
             (
                 int(_custom.distance(_custom.conf_from_row(s), int(a), int(b)))
-                if (a is not None and s is not None and b is not None)
+                if not (pd.isna(a) or s is None or pd.isna(b))
                 else None
             )
             for a, s, b in zip(cell1, _custom_grid_records(grid), cell2)
@@ -1204,12 +1236,15 @@ def _h3_geomkring(geom, resolution, k, mode="boundary-out", coverage="coveras"):
     if geom is None or resolution is None or k is None:
         return None
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
+    resolution = _whole_res("gbx_h3_geomkring", resolution)
+    if _not_finite(geom):
+        return None  # a geometry that is not finite has no cells
     try:
         return sorted(
             _h3mod.geom_expand(
                 "ring",
                 geom,
-                int(resolution),
+                resolution,
                 int(k),
                 mode or "boundary-out",
                 coverage or "coveras",
@@ -1226,12 +1261,15 @@ def _h3_geomkloop(geom, resolution, k, mode="boundary-out", coverage="coveras"):
     if geom is None or resolution is None or k is None:
         return None
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
+    resolution = _whole_res("gbx_h3_geomkloop", resolution)
+    if _not_finite(geom):
+        return None  # a geometry that is not finite has no cells
     try:
         return sorted(
             _h3mod.geom_expand(
                 "loop",
                 geom,
-                int(resolution),
+                resolution,
                 int(k),
                 mode or "boundary-out",
                 coverage or "coveras",

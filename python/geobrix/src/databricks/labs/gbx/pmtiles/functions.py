@@ -7,11 +7,11 @@ Thin wrapper around GeoBrix's PMTiles v3 encoder. Two paths:
      Use when the full pyramid fits in a Spark cell (rough ceiling: ~100 MiB
      of tile payload / 2 GiB Spark cell limit).
 
-  2. ``df.write.format("pmtiles").mode("overwrite").save(path)`` — Spark V2
+  2. ``df.write.format("pmtiles_gbx").mode("overwrite").save(path)`` — the Python
      DataSource that streams arbitrarily large pyramids to a single
      ``.pmtiles`` file via a partitioned commit protocol. No Python wrapper
-     is needed for the DataSource path — it is registered automatically when
-     the GeoBrix JAR is on the Spark classpath.
+     is needed for the DataSource path; register it once per session with
+     ``gbx.register(spark)``.
 
 Register the UDAF once per session before use::
 
@@ -51,9 +51,8 @@ def register(_spark: SparkSession) -> None:
     """Register PMTiles functions with the Spark session.
 
     Call once (e.g. after creating the session) so that ``gbx_pmtiles_agg``
-    is available as a SQL function. The DataSource format string ``pmtiles``
-    is wired via ``META-INF/services`` and does not need an explicit register
-    call.
+    is available as a SQL function. The ``pmtiles_gbx`` writer is a Python
+    data source that ``gbx.register(spark)`` registers.
 
     Args:
         _spark: Spark session (optional; uses active session if not provided).

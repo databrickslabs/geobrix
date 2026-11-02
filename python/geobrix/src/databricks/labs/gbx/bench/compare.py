@@ -377,8 +377,8 @@ def pyrx_implemented() -> "frozenset[str]":
 
     Derived by parsing `def rst_<name>` definitions and module-level
     `rst_<name> = ...` bindings out of the pyrx
-    `functions.py` so the coverage scorecard guards against a regression (a
-    registered function losing its pyrx binding). Path resolved relative to the
+    `functions.py`, plus every manifest row's light (L3) kernel, so the coverage scorecard
+    guards against a regression (a registered function losing its pyrx binding). Path resolved relative to the
     repo root, mirroring `spec.registered_rst()`.
     """
     root = Path(__file__).resolve()
@@ -401,6 +401,14 @@ def pyrx_implemented() -> "frozenset[str]":
     # rst_combine* stats are built by a factory, not written out with `def`).
     names = set(re.findall(r"def (rst_[a-z0-9_]+)", src))
     names |= set(re.findall(r"^(rst_[a-z0-9_]+)\s*=", src, flags=re.M))
+    # A manifest row has no light `def` in pyrx: its light kernel is its L3 entry.
+    from databricks.labs.gbx import manifest
+
+    names |= {
+        f.sql_name[len("gbx_") :]
+        for f in manifest.load().functions.values()
+        if f.sql_name.startswith("gbx_rst_") and "L3" in f.levels
+    }
     return frozenset(names)
 
 

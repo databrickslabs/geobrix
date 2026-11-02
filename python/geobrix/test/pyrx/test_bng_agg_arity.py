@@ -1,17 +1,15 @@
 """X1 (review m-7): gbx_rst_bng_rasterize_agg takes a trailing out_crs on both tiers, and the docs say so.
 
-The seven-surface rule (.claude/rules/functions-authoring.md): the builder (Scala, 12 or 13 arguments), the wrapper,
-the heavy shim, the light binding, the docs Signature line, and the usage metadata must agree on the parameter list.
-This row pins the Python surfaces and the docs line; the Scala builder's arity is pinned by the JVM row
+The Python entry is generated from the manifest row (gen --check holds it to the row), so the old light-vs-heavy
+signature comparison is gone with the light def it compared. This file pins the docs line (against the 13
+parameters) and the light tier's refusal text; the Scala builder's arity is pinned by the JVM row
 test_l1_arity_contract.
 """
 
-import inspect
 import re
 from pathlib import Path
 
 from databricks.labs.gbx.pyrx import functions as light
-from databricks.labs.gbx.rasterx import functions as heavy
 
 REPO = Path(__file__).resolve().parents[4]
 EXPECTED = [
@@ -29,13 +27,6 @@ EXPECTED = [
     "kring_pad",
     "out_crs",
 ]
-
-
-def test_the_light_and_heavy_shims_take_the_same_thirteen_parameters():
-    light_names = list(inspect.signature(light.rst_bng_rasterize_agg).parameters)
-    heavy_names = list(inspect.signature(heavy.rst_bng_rasterize_agg).parameters)
-    assert light_names == EXPECTED
-    assert heavy_names == EXPECTED
 
 
 def test_the_docs_signature_line_lists_the_same_parameters():

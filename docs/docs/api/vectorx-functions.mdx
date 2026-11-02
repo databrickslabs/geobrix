@@ -600,7 +600,7 @@ Stamps a CRS on a geometry **without reprojecting** — it relabels, it does not
 | `source_crs` | `STRING` or `INT` | `NULL` | The CRS of a geometry that carries no SRID; ignored when it does. |
 {/* END GENERATED gbx_st_transformcrs */}
 
-Reprojects a geometry's coordinates into `target_crs`. The counterpart to the built-in `ST_Transform`, taking a CRS string instead of an integer — so an ESRI code, a WKT definition, or a PROJ4 string can be a target.
+Reprojects a geometry's coordinates into `target_crs`. The counterpart to the built-in `ST_Transform`, taking a CRS string instead of an integer. An ESRI code, a WKT definition or a PROJ4 string can be the target.
 
 **Returns:** `BINARY` — the reprojected geometry.
 
@@ -678,7 +678,7 @@ See [Geometry Validity](./geometry-validity).
 | `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT. |
 {/* END GENERATED gbx_st_explainvalidity */}
 
-Diagnoses geometry validity and returns a JSON string with four fields: `valid` (boolean), `reason` (GEOS reason string), `code` (stable integer violation class), and `location` (`POINT(x y)` WKT string of the violation site). `code` and `location` are `null` when GEOS does not provide them. Use `ST_IsValid` as a cheap boolean gate and call `gbx_st_explainvalidity` only on flagged rows.
+Diagnoses geometry validity and returns a JSON string with four fields. `valid` is a boolean, `reason` the GEOS reason, `code` a stable integer for the violation class, and `location` the violation site as a `POINT(x y)` WKT string. `code` and `location` are `null` when GEOS does not provide them. Use `ST_IsValid` as a cheap boolean gate and call `gbx_st_explainvalidity` only on flagged rows.
 
 **Returns:** `STRING` — JSON `{"valid": ..., "reason": ..., "code": ..., "location": ...}`. Returns `NULL` for null or unparseable input.
 
@@ -798,7 +798,7 @@ Distributed shapely helpers — shapely/GEOS operations running as Python UDFs �
 | `tolerance` | `DOUBLE` |  | The distance below which a vertex is dropped. |
 {/* END GENERATED gbx_st_simplifypreservetopology */}
 
-Simplifies a geometry using the Douglas-Peucker algorithm with topology preservation (`preserve_topology=True`). Vertices that deviate less than `tolerance` from the simplified line are dropped, but the output geometry is guaranteed to be of the same topological class as the input and to remain valid. Use this instead of the product's `st_simplify` when ring connectivity must be maintained.
+Simplifies a geometry using the Douglas-Peucker algorithm with topology preservation (`preserve_topology=True`). Vertices that deviate less than `tolerance` from the simplified line are dropped. The output keeps the topological class of the input and stays valid. Use this instead of the product's `st_simplify` when ring connectivity must be maintained.
 
 **Returns:** `BINARY` — WKB (or EWKB if input carried a SRID). The original CRS is preserved. Returns `NULL` for null or unparseable input.
 
@@ -958,7 +958,7 @@ These three functions are distributed shapely helpers — shapely/GEOS geometry 
 | `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT. |
 {/* END GENERATED gbx_st_shiftlongitude */}
 
-Shifts all longitude (x) coordinates of a geometry from `[-180, 180]` space into `[0, 360]` space by adding 360 to any negative x value. Use this as the first step when normalizing a geometry that crosses the 180° antimeridian: after shifting, the crossing polygon becomes contiguous around x=180 and can be cleanly split there.
+Shifts all longitude (x) coordinates of a geometry from `[-180, 180]` space into `[0, 360]` space by adding 360 to any negative x value. Use this as the first step when normalizing a geometry that crosses the 180° antimeridian. After the shift, the crossing polygon is contiguous around x=180 and splits cleanly there.
 
 **Returns:** `BINARY` — WKB with all negative x coordinates shifted by +360.
 
@@ -1053,7 +1053,7 @@ See [Antimeridian](./antimeridian).
 | `geom` | `struct<typeId:int,srid:int,boundaries:array<array<array<double>>>,holes:array<array<array<array<double>>>>>` |  | The legacy Mosaic geometry struct: `typeId`, `srid`, `boundaries` and `holes`. |
 {/* END GENERATED gbx_st_legacyaswkb */}
 
-Migrates a legacy DBLabs Mosaic geometry value to standard Well-Known Binary (WKB). Pass the raw legacy geometry column through `st_legacyaswkb` to obtain a WKB binary that all downstream `ST_*` functions accept — the practical first step when moving a Mosaic-era table onto the product's native `GEOMETRY`/`GEOGRAPHY` types.
+Migrates a legacy DBLabs Mosaic geometry value to standard Well-Known Binary (WKB). Pass the raw legacy geometry column through `st_legacyaswkb` to get a WKB binary that every downstream `ST_*` function accepts. This is the first step when moving a Mosaic-era table onto the product's native `GEOMETRY` and `GEOGRAPHY` types.
 
 
 **Migration notes:**

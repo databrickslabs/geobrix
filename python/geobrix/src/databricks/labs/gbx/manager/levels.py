@@ -24,6 +24,14 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_rst_retile": ("L3",),
     "gbx_bng_tessellate": ("L1", "L3"),
     "gbx_bng_tessellateexplode": ("L1", "L3"),
+    # Quadbin cell math is at parity with light on a cluster (0.89x to 1.33x), so it stays on light; the other
+    # grid scalars (custom grid, H3) are L1 first through their family. The quadbin arrays are light by family.
+    "gbx_quadbin_pointascell": ("L3",),
+    "gbx_quadbin_aswkb": ("L3",),
+    "gbx_quadbin_centroid": ("L3",),
+    "gbx_quadbin_resolution": ("L3",),
+    "gbx_quadbin_distance": ("L3",),
+    "gbx_quadbin_cellunion": ("L3",),
     "gbx_rst_merge_agg": ("L3",),
     "gbx_rst_bng_rasterize_agg": ("L3",),
     # The GDAL spec engine's rows: each level runs the engine where it can, its own implementation elsewhere.

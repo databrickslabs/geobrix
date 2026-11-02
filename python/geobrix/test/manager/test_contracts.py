@@ -1786,26 +1786,29 @@ def test_a_failing_data_source_registration_is_a_reported_line_not_a_failure(
     assert out and set(out) <= _api._done(stub), "the names are still marked registered"
 
 
+from databricks.labs.gbx.pyrx.core import budget as _budget  # noqa: E402
+
 # --- the read cap is decided on the driver and carried to the workers -----------------------------------------
-# A Spark Connect session is Serverless OR standard access mode. A standard worker can read neither SPARK_WORKER_MEMORY
-# nor a cgroup limit, so its own budget is Serverless's 64 MiB: the driver decides, whenever the compute is not Serverless.
+# A Spark Connect session is Serverless OR standard access mode. A standard worker can read neither the classic
+# memory env (budget.CLASSIC_MEMORY_ENV) nor a cgroup limit, so its own budget is Serverless's 64 MiB: the driver decides, whenever the compute is not Serverless.
 _MIB = 1024 * 1024
+_WORKER_MEM = _budget.CLASSIC_MEMORY_ENV[0]
 
 
 @pytest.mark.parametrize(
     "env,want",
     [
-        ({"SPARK_WORKER_MEMORY": "4g"}, 1536 * _MIB),
+        ({_WORKER_MEM: "4g"}, 1536 * _MIB),
         (
-            {"SPARK_WORKER_MEMORY": "4g", "DATABRICKS_RUNTIME_VERSION": "17.3"},
+            {_WORKER_MEM: "4g", "DATABRICKS_RUNTIME_VERSION": "17.3"},
             1536 * _MIB,
         ),
         ({"DATABRICKS_RUNTIME_VERSION": "client.4.1"}, None),
         (
-            {"SPARK_WORKER_MEMORY": "4g", "DATABRICKS_RUNTIME_VERSION": "client.4.1"},
+            {_WORKER_MEM: "4g", "DATABRICKS_RUNTIME_VERSION": "client.4.1"},
             None,
         ),
-        ({"SPARK_WORKER_MEMORY": "4g", "IS_SERVERLESS": "true"}, None),
+        ({_WORKER_MEM: "4g", "IS_SERVERLESS": "true"}, None),
         ({}, None),
     ],
     ids=[
@@ -1823,8 +1826,7 @@ def test_a_connect_session_carries_the_classic_cap_unless_the_compute_is_serverl
     from databricks.labs.gbx.ds.file_gbx import session_read_cap
 
     for k in (
-        "SPARK_WORKER_MEMORY",
-        "SPARK_EXECUTOR_MEMORY",
+        *_budget.CLASSIC_MEMORY_ENV,
         "IS_SERVERLESS",
         "DATABRICKS_RUNTIME_VERSION",
     ):

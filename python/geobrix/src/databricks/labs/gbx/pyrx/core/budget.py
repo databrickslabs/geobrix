@@ -70,12 +70,17 @@ def _cgroup_task_limit_bytes() -> Optional[int]:
     return None
 
 
+# The environment keys a classic cluster sets and Serverless does not. Tests that fake a compute kind read
+# these names from here, so the names stay in this one file.
+CLASSIC_MEMORY_ENV = ("SPARK_WORKER_MEMORY", "SPARK_EXECUTOR_MEMORY")
+
+
 def runtime_kind() -> str:
     """Driver-side runtime probe (NO Spark API). Defaults to 'serverless' (safe)."""
     if os.environ.get("IS_SERVERLESS", "").lower() in ("true", "1"):
         return "serverless"
     # Classic clusters expose an executor/worker memory env; Serverless does not.
-    if os.environ.get("SPARK_WORKER_MEMORY") or os.environ.get("SPARK_EXECUTOR_MEMORY"):
+    if any(os.environ.get(k) for k in CLASSIC_MEMORY_ENV):
         return "classic"
     return "serverless"
 

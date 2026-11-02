@@ -42,6 +42,10 @@ def spark():
 
 def test_rst_subdatasets(spark):
     """Test getting subdatasets from NetCDF."""
+    # Served by the light level (or a heavy level that dispatches to it): needs the light deps, which the
+    # heavyweight CI env does not have (test/conftest.py).
+    pytest.importorskip("rasterio")
+    pytest.importorskip("pandas")
     from databricks.labs.gbx.rasterx import functions as rx
 
     tile_col = tile_from_path(rx, f, str(NETCDF), "NetCDF")

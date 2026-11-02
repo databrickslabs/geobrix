@@ -12,6 +12,10 @@ import pytest
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as f
 
+# Quadbin cell math is served by the light level only: the heavyweight CI env (no light deps) skips this file.
+pytest.importorskip("quadbin")
+pytest.importorskip("pandas")
+
 HERE = Path(__file__).resolve()
 LIBDIR = (HERE.parents[3] / "lib").resolve()
 candidates = sorted(LIBDIR.glob("geobrix-*-jar-with-dependencies.jar"))

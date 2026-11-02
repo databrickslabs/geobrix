@@ -46,6 +46,10 @@ def spark():
 
 def test_rst_retile(spark):
     """Test retiling a raster."""
+    # Served by the light level (or a heavy level that dispatches to it): needs the light deps, which the
+    # heavyweight CI env does not have (test/conftest.py).
+    pytest.importorskip("rasterio")
+    pytest.importorskip("pandas")
     from databricks.labs.gbx.rasterx import functions as rx
 
     src = spark.range(1).select(
@@ -212,6 +216,10 @@ def test_rst_from_local_path(spark):
 
 def test_generators_workflow(spark):
     """Test a complete workflow using multiple generators."""
+    # Served by the light level (or a heavy level that dispatches to it): needs the light deps, which the
+    # heavyweight CI env does not have (test/conftest.py).
+    pytest.importorskip("rasterio")
+    pytest.importorskip("pandas")
     from databricks.labs.gbx.rasterx import functions as rx
 
     # Load raster

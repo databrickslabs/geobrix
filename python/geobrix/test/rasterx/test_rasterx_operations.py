@@ -259,6 +259,10 @@ def test_rst_mapalgebra(spark):
     Note: Uses rst_fromcontent with binaryFile format to keep raster in memory
     and avoid GDAL temp file lifecycle issues.
     """
+    # Served by the light level (or a heavy level that dispatches to it): needs the light deps, which the
+    # heavyweight CI env does not have (test/conftest.py).
+    pytest.importorskip("rasterio")
+    pytest.importorskip("pandas")
     from databricks.labs.gbx.rasterx import functions as rx
 
     # Load raster from binary content (avoids temp file issues)

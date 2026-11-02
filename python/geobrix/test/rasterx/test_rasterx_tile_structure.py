@@ -184,6 +184,10 @@ def test_tessellated_tiles_have_cellid(spark):
 
 def test_tile_compatible_with_accessor_functions(spark):
     """Test that tile structure is compatible with accessor functions"""
+    # Served by the light level (or a heavy level that dispatches to it): needs the light deps, which the
+    # heavyweight CI env does not have (test/conftest.py).
+    pytest.importorskip("rasterio")
+    pytest.importorskip("pandas")
     from databricks.labs.gbx.rasterx import functions as rx
 
     df = (

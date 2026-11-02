@@ -31,6 +31,10 @@ def spark():
 
 
 def test_rasterx_functions_registration(spark):
+    # Served by the light level (or a heavy level that dispatches to it): needs the light deps, which the
+    # heavyweight CI env does not have (test/conftest.py).
+    pytest.importorskip("rasterio")
+    pytest.importorskip("pandas")
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)

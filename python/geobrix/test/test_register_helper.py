@@ -188,6 +188,7 @@ def test_overlapping_registrations_each_carry_their_own_switch_and_wrap_nothing_
 def test_connect_detection_sees_the_session_behind_the_registrars_proxy(monkeypatch):
     """A registrar gets the carrying session proxy; telling Spark Connect from a classic session (by the session's
     type) still judges the session behind it."""
+    pytest.importorskip("rasterio")  # ds (file_gbx) is the light readers' package
     from databricks.labs.gbx import _gdal_policy
     from databricks.labs.gbx.ds import file_gbx
     from databricks.labs.gbx.manager import capabilities

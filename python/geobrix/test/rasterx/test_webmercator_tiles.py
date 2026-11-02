@@ -43,6 +43,10 @@ def spark():
 
 def test_rst_to_webmercator_roundtrip(spark):
     """Tile is reprojected to EPSG:3857 — round-trip through rst_srid."""
+    # Served by the light level (or a heavy level that dispatches to it): needs the light deps, which the
+    # heavyweight CI env does not have (test/conftest.py).
+    pytest.importorskip("rasterio")
+    pytest.importorskip("pandas")
     from databricks.labs.gbx.rasterx import functions as rx
 
     df = spark.range(1).select(

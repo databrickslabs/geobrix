@@ -805,6 +805,9 @@ def _whole_res(fn, res) -> int:
 # always supplies all 8.
 @udf(returnType=CUSTOM_GRID_SCHEMA)
 def _custom_grid_udf(x_min, x_max, y_min, y_max, splits, root_x, root_y, srid=-1):
+    # A NULL required argument gives a NULL grid (the SQL convention, and heavy's), not a TypeError.
+    if any(v is None for v in (x_min, x_max, y_min, y_max, splits, root_x, root_y)):
+        return None
     x_min, x_max = int(x_min), int(x_max)
     y_min, y_max = int(y_min), int(y_max)
     splits, root_x, root_y = int(splits), int(root_x), int(root_y)

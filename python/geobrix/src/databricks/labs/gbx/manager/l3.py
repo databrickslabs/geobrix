@@ -131,7 +131,47 @@ def _needs_default_wrapper(spark, fn, spec, name: str) -> bool:
         return False
     from databricks.labs.gbx.manager import capabilities
 
-    return bool(capabilities._sql_functions(spark))
+    if not capabilities._sql_functions(spark):
+        return False
+    # A kernel that already defaults its own optional arguments needs no wrapper, and must not sit behind one:
+    # Spark rejects a SQL function inside a generator, and `explode(gbx_bng_tessellate(g, 3))` is the way
+    # to read the chips of an array-returning scalar.
+    return not _takes_its_defaults(fn, spec)
+
+
+def _takes_its_defaults(fn, spec) -> bool:
+    """True when every registered form of the row gives each optional parameter a default in its own signature
+    (a UDF object is read through the function it wraps). A form that cannot be read counts as one that does not.
+    """
+    import inspect
+
+    from databricks.labs.gbx.manifest import resolve_ref
+
+    refs = (
+        list(spec["variants"].values())
+        if "variants" in spec
+        else [spec["callable"]] if "callable" in spec else []
+    )
+    if not refs:
+        return (
+            False  # a factory builds its function from the session; it is not read here
+        )
+    for ref in refs:
+        obj = resolve_ref(ref)
+        try:
+            params = list(
+                inspect.signature(getattr(obj, "func", obj)).parameters.values()
+            )
+        except (TypeError, ValueError):
+            return False
+        if any(p.kind is p.VAR_POSITIONAL for p in params):
+            continue
+        optional = params[fn.min_args : fn.max_args]
+        if len(optional) < fn.max_args - fn.min_args or any(
+            p.default is p.empty for p in optional
+        ):
+            return False
+    return True
 
 
 def register_l3_engine(

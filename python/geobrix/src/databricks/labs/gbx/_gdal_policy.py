@@ -456,7 +456,7 @@ def carrying_session(spark, allowed: Optional[bool] = None):
     later change of the session's read-cap key reaches the JVM at its next query but not these functions, which
     need a fresh ``register()``.
     """
-    from databricks.labs.gbx.ds.file_gbx import session_read_cap
+    from databricks.labs.gbx.pyrx.core.budget import session_read_cap
 
     return _CarryingSession(
         spark,

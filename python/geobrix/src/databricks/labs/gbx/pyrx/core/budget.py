@@ -96,6 +96,12 @@ def resolve_strategy(strategy: str) -> str:
     return s
 
 
+# The session key of the read cap: the decoded size, in bytes, a materialized tile may have where a function reads its
+# bytes (the JVM's RasterDriver.readFromBytes and the light _serde.open_tile). It lives here, not in ds, so the heavy
+# tier's registrar can name it without importing the light readers (rasterio).
+READ_CAP_KEY = "spark.databricks.labs.gbx.read_cap"
+
+
 def decoded_budget_bytes(strategy: str) -> int:
     s = resolve_strategy(strategy)
     if s == "serverless":
@@ -362,3 +368,43 @@ def budget_for(intent, est_bytes=None, *, override_mb=None, infra=None):
         f"Worker-side binary caps: use materialize_decision (file_gbx.py) for "
         f"a read, write, ingest or cog_write. Tile splitting: use decoded_budget_bytes(strategy)."
     )
+
+
+def session_read_cap(spark) -> Optional[int]:
+    """Driver side: the read cap a registration, or a Column-API call, carries to its workers.
+
+    On a classic session it is the session's :data:`READ_CAP_KEY` when set, else the classic decoded budget (the cap the
+    JVM reads there). On a Spark Connect session, whose configuration is not read here, it is the classic budget when the
+    DRIVER's compute is not Serverless (standard access mode is Connect too, and its workers can read neither
+    ``SPARK_WORKER_MEMORY`` nor a cgroup limit, so their own budget would be Serverless's 64 MiB), else None: a
+    Serverless worker then uses its own budget (``ds.file_gbx.tile_read_cap``), which is the right one there.
+
+    The light tier keeps the cap it was registered with: it is read here, once per registration, and travels with the
+    function. Changing :data:`READ_CAP_KEY` afterwards does not reach a function already registered (the JVM reads
+    the key per query): call ``register()`` again after changing it.
+    """
+    if spark is None:
+        return None
+    if "connect" in type(spark).__module__:
+        return decoded_budget_bytes("classic") if _driver_compute_is_classic() else None
+    try:
+        value = spark.conf.get(READ_CAP_KEY, None)
+    except (
+        Exception
+    ):  # noqa: BLE001 - a session without a readable configuration carries the default
+        value = None
+    try:
+        cap = int(str(value).strip()) if value is not None else 0
+    except ValueError:
+        cap = 0
+    return cap if cap > 0 else decoded_budget_bytes("classic")
+
+
+def _driver_compute_is_classic() -> bool:
+    """True when the driver's compute is not Serverless, by the two probes the rest of the package uses (the runtime
+    version the manager keys on, and the budget's own ``runtime_kind``, which defaults to Serverless when it sees
+    nothing). Reads the environment only: no Spark call, so it is safe on a Connect session.
+    """
+    from databricks.labs.gbx.manager import capabilities
+
+    return not capabilities.is_serverless() and runtime_kind() == "classic"

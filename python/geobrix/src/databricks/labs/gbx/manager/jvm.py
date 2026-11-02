@@ -20,8 +20,9 @@ NATIVE_DIR_KEY = (
     "spark.databricks.labs.gbx.native.dir"  # the JVM's GDALManager reads it
 )
 # The decoded size, in bytes, a materialized tile may have where the JVM reads its bytes (RasterDriver's one
-# tile-from-bytes point, through ExpressionConfig): over it the tile is an error tile with a Fix.
-from databricks.labs.gbx.ds.file_gbx import READ_CAP_KEY  # noqa: E402
+# tile-from-bytes point, through ExpressionConfig): over it the tile is an error tile with a Fix. Imported from the
+# rasterio-free budget module: the heavy tier registers through here and must not load the light readers (ds).
+from databricks.labs.gbx.pyrx.core.budget import READ_CAP_KEY  # noqa: E402
 
 
 def _point_jvm_at_payload(spark) -> None:

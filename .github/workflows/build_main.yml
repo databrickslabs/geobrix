@@ -107,9 +107,11 @@ jobs:
         # The install-moves rows (test_build_env_wheel.py) resolve with uv. uv comes through the job's pip, which the
         # JFrog bootstrap routes to the mirror (never a direct download), and uses the same index and netrc; the rows
         # FAIL in CI (CI=true) when uv or the index is missing, they do not skip.
+        # UV_NATIVE_TLS: uv's bundled TLS (rustls) got "tls handshake eof" from the mirror on every run, while pip
+        # (platform TLS) reached it from the same runner. With native TLS, uv uses the platform stack as pip does.
         run: |
           python -m pip install --quiet uv==0.13.5
-          UV_DEFAULT_INDEX="$(python -m pip config get global.index-url)" python -m pytest scripts/ci -v
+          UV_NATIVE_TLS=1 UV_DEFAULT_INDEX="$(python -m pip config get global.index-url)" python -m pytest scripts/ci -v
 
   # The x86_64 native build the heavy build's JVMs load their GDAL from (the JAR's GDAL Java classes refuse any
   # other JNI). Cached on the native build's inputs: a hit takes seconds, a miss builds (about 20-40 min), in

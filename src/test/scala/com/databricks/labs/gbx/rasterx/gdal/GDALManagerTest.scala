@@ -115,4 +115,17 @@ class GDALManagerTest extends AnyFunSuite with BeforeAndAfterAll {
         } finally ds.delete()
     }
 
+    test("isHdfFamilyPath: a driver prefix, an extension or the signature of a file without one; not a GeoTIFF") {
+        GDALManager.isHdfFamilyPath("NETCDF:\"/x.nc\":var") shouldBe true
+        GDALManager.isHdfFamilyPath("HDF5:/x.h5://a") shouldBe true
+        // the signature of a netCDF-4 file whose name says nothing, and a GeoTIFF-named copy of it (never sniffed)
+        val src = Paths.get(getClass.getResource("/binary/netcdf-coral/").toURI)
+        val nc = Files.list(src).iterator().next()
+        val dir = Files.createTempDirectory("gbx_hdf_path")
+        val bare = Files.copy(nc, dir.resolve("coral_no_extension"))
+        val tif = Files.copy(nc, dir.resolve("coral.tif"))
+        GDALManager.isHdfFamilyPath(bare.toString) shouldBe true
+        GDALManager.isHdfFamilyPath(tif.toString) shouldBe false
+    }
+
 }

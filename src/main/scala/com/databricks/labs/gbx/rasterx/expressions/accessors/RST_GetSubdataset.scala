@@ -11,6 +11,8 @@ import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants.GA_ReadOnly
 
+import scala.jdk.CollectionConverters._
+
 /** Returns the subdatasets of the raster. */
 case class RST_GetSubdataset(
     tile: Expression,
@@ -38,17 +40,26 @@ object RST_GetSubdataset extends WithExpressionInfo {
               RST_ExpressionUtil.init(exprConf)
               val (cell, ds, mtd) = RasterSerializationUtil.rowToSourceTile(row, rdt)
               var subdataset: Dataset = null
+              var containerFiles = Set.empty[String]
               try {
                   // A netCDF / HDF container and its subdataset are opened, cut to GeoTIFF bytes and closed one thread at
                   // a time (GDALManager.withHdfLock); nothing in this block waits on a Spark task.
                   GDALManager.withHdfLockIf(GDALManager.isHdfFamily(ds)) {
+                      containerFiles = ds.GetFileList().asScala.map(_.toString).toSet
                       subdataset = execute(ds, subsetName.toString)
                       // the subdataset is stored as the GeoTIFF the bytes rule reads, not as its container's driver
-                      RasterSerializationUtil.tileToRow((cell, subdataset, mtd + ("driver" -> "GTiff")), rdt, exprConf.hConf)
+                      // and extension
+                      RasterSerializationUtil.tileToRow(
+                        (cell, subdataset, mtd + ("driver" -> "GTiff") + ("extension" -> "tif")),
+                        rdt,
+                        exprConf.hConf
+                      )
                   }
               } finally {
                   GDALManager.withHdfLockIf(GDALManager.isHdfFamily(ds)) {
-                      RasterDriver.releaseDataset(subdataset) // before ds: it is open on ds's in-memory file
+                      // before ds: it is open on ds's in-memory file, which it lists but does not own: only ds
+                      // unlinks the container's files
+                      RasterDriver.releaseDataset(subdataset, keep = containerFiles)
                       RasterDriver.releaseDataset(ds)
                   }
               }

@@ -1,9 +1,12 @@
 package com.databricks.labs.gbx.rasterx.ds
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
+import com.databricks.labs.gbx.kernels.spec.{GdalSpecEngine, GdalSpecs}
 import com.databricks.labs.gbx.rasterx
+import com.databricks.labs.gbx.rasterx.ds.gdal.{GDAL_Partition, GDAL_Reader}
 import com.databricks.labs.gbx.rasterx.ds.netcdf.{NetCDF_DataSource, NetCDF_Partition, NetCDF_Reader}
 import com.databricks.labs.gbx.rasterx.expressions.accessors.{RST_GetSubdataset, RST_MetaData, RST_Summary}
+import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
 import com.databricks.labs.gbx.rasterx.util.V2Tile
 import com.databricks.labs.gbx.util.NodeFileCacheProbe.{entries, garbage, withNetCDFCopy}
 import com.databricks.labs.gbx.util.{HadoopUtils, NodeCacheRetentionOff, NodeFileManager, NodeFilePathUtil, SerializationUtil}
@@ -207,8 +210,9 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession with NodeCa
     // The same crash through the rst_* functions: a tile whose bytes are a netCDF-4 file is opened, read and cut by every
     // function that takes a tile, on the several tasks of one executor. Each open goes through RasterDriver.readBytes,
     // which reads such bytes (and translates them to a GeoTIFF) one thread at a time; gbx_rst_getsubdataset also opens
-    // the container's subdataset and cuts it to bytes under the same lock.
-    test("rst_* functions over netCDF-4 tiles on many threads at once all finish") {
+    // the container's subdataset and cuts it to bytes under the same lock. The generic gdal reader over the same files
+    // and a spec-engine function (gbx_rst_transformcrs) on the single-variable tiles share the pool.
+    test("rst_* functions, the gdal reader and a spec-engine function over netCDF-4 on many threads at once all finish") {
         rasterx.functions.register(spark)
         val dir = Paths.get(this.getClass.getResource("/binary/netcdf-coral/").toURI)
         val files = Files.list(dir).iterator().asScala.map(_.toString).filter(_.endsWith(".nc")).toSeq.sorted
@@ -217,7 +221,7 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession with NodeCa
         // the file itself (a container of several variables: subdatasets, no band), and a netCDF-4 file of one grid
         // variable (a tile read as its GeoTIFF translation), as the bytes of a tile
         val containers = files.map(f => V2Tile.row(raster = Files.readAllBytes(Paths.get(f)), metadata = meta))
-        val tiles = containers ++ files.map { f =>
+        val singles = files.map { f =>
             val src = gdal.Open(s"""NETCDF:"$f":bleaching_alert_area""")
             withClue(s"open of $f: ${gdal.GetLastErrorMsg}: ") { src should not be null }
             val dst = Files.createTempFile("gbx-nc4-tile", ".nc").toString // netCDF cannot write to /vsimem
@@ -226,23 +230,43 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession with NodeCa
             withClue(s"translate of $f to netCDF-4: ${gdal.GetLastErrorMsg}: ") { out should not be null }
             out.delete()
             src.delete()
-            try V2Tile.row(raster = Files.readAllBytes(Paths.get(dst)), metadata = meta) finally Files.delete(Paths.get(dst))
+            try Files.readAllBytes(Paths.get(dst)) finally Files.delete(Paths.get(dst))
         }
+        val tiles = containers ++ singles.map(b => V2Tile.row(raster = b, metadata = meta))
+        // the subdataset of a container is a GeoTIFF tile (driver and extension say so) that reopens from its bytes
+        val sub = RST_GetSubdataset.eval(containers.head, UTF8String.fromString("bleaching_alert_area"), conf)
+        val subMeta = SerializationUtil.createMap[String, String](V2Tile.getMetadata(sub))
+        subMeta.get("driver") shouldBe Some("GTiff")
+        subMeta.get("extension") shouldBe Some("tif")
+        val expected = gdal.Open(s"""NETCDF:"${files.head}":bleaching_alert_area""")
+        val reopened = RasterDriver.readBytes(V2Tile.getRaster(sub), Map.empty, gated = false)
+        try {
+            reopened should not be null
+            reopened.getRasterCount should be >= 1
+            (reopened.getRasterXSize, reopened.getRasterYSize) shouldBe (expected.getRasterXSize, expected.getRasterYSize)
+        } finally { RasterDriver.releaseDataset(reopened); expected.delete() }
+        val partitions = files.map(f => GDAL_Partition(f, 8, ExpressionConfig(spark)))
+        val transformCrs = GdalSpecs.function("gbx_rst_transformcrs")
         val pool = java.util.concurrent.Executors.newFixedThreadPool(8)
         val done =
             try {
-                val jobs = (0 until 4).flatMap(_ => tiles).flatMap { t =>
-                    Seq(
+                val perTile = tiles.flatMap { t =>
+                    Seq[() => Any](
                       () => RST_MetaData.eval(t, conf),
                       () => RST_Summary.eval(t, conf),
                       () => RST_GetSubdataset.eval(t, UTF8String.fromString("bleaching_alert_area"), conf)
                     )
-                }.map { fn =>
+                }
+                val specs = singles.map { b =>
+                    () => GdalSpecEngine.run(transformCrs, Seq(b), Map[String, Any]("target_crs" -> "EPSG:3857"), Some(ExpressionConfig(spark)))
+                }
+                val readers = partitions.map { p => () => { val r = new GDAL_Reader(p); while (r.next()) r.get(); r.close() } }
+                val jobs = (0 until 4).flatMap(_ => perTile ++ specs ++ readers).map { fn =>
                     pool.submit(new java.util.concurrent.Callable[Int] { def call(): Int = { fn(); 1 } })
                 }
                 jobs.map(_.get(5, java.util.concurrent.TimeUnit.MINUTES)).sum
             } finally pool.shutdownNow()
-        done shouldBe 4 * tiles.size * 3
+        done shouldBe 4 * (tiles.size * 3 + singles.size + partitions.size)
     }
 
     // NetCDF_Reader stages its .nc before opening the subdataset; Spark never closes a reader whose constructor

@@ -105,8 +105,12 @@ object RasterDriver {
     /** Release a Dataset and any associated vsimem or copied files; must be called once when done with a Dataset.
       * Each distinct listed file is handled once: a /vsimem/ file is unlinked, a node-file copy's path gives
       * back the one hold the Dataset owns on it (see [[read]]), and any other path (a sidecar, a user's local
-      * file) is left alone. */
-    def releaseDataset(ds: Dataset): Unit = {
+      * file) is left alone. A path in `keep` is left alone too: a dataset opened on another dataset's in-memory
+      * file (a subdataset) lists that file but does not own it. */
+    def releaseDataset(ds: Dataset): Unit = releaseDataset(ds, Set.empty[String])
+
+    /** [[releaseDataset]] that leaves the files in `keep` alone. */
+    def releaseDataset(ds: Dataset, keep: Set[String]): Unit = {
         if (ds != null) {
             val files = GDALManager.withHdfLockIf(GDALManager.isHdfFamily(ds)) {
                 ds.FlushCache()
@@ -114,7 +118,7 @@ object RasterDriver {
                 ds.delete()
                 listed
             }
-            files.foreach(f => {
+            files.filterNot(keep.contains).foreach(f => {
                 if (f.contains("/vsimem/")) gdal.Unlink(f)
                 else NodeFileManager.releaseLocal(f)
             })

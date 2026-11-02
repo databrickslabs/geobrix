@@ -192,11 +192,19 @@ object GDALManager extends Logging {
     def isHdfFamilyBytes(bytes: Array[Byte]): Boolean =
         bytes != null && HdfMagics.exists(m => bytes.length >= m.length && m.indices.forall(i => bytes(i) == m(i)))
 
-    /** True when `path` names a netCDF / HDF source: a driver prefix, an extension, or (a local file) its signature. */
+    /** Extensions of raster formats that are not netCDF / HDF: a path with one is never opened to read its signature
+      * (this check runs before every path open, and most opens are GeoTIFFs). */
+    private val NonHdfExtensions = Set(
+      "tif", "tiff", "gtiff", "vrt", "jp2", "j2k", "png", "jpg", "jpeg", "gif", "bmp", "img", "asc", "dem", "ecw",
+      "sid", "grb", "grb2", "grib", "gpkg", "xyz"
+    )
+
+    /** True when `path` names a netCDF / HDF source: a driver prefix, an extension, or (a local file whose extension
+      * is not a known other raster format) its signature. */
     def isHdfFamilyPath(path: String): Boolean = {
         val name = path.substring(path.lastIndexOf('/') + 1)
         val ext = if (name.contains('.')) name.substring(name.lastIndexOf('.') + 1).toLowerCase else ""
-        HdfPrefixes.exists(path.toUpperCase.startsWith) || HdfExtensions.contains(ext) || {
+        HdfPrefixes.exists(path.toUpperCase.startsWith) || HdfExtensions.contains(ext) || !NonHdfExtensions.contains(ext) && {
             val f = new File(path)
             f.isFile && Try {
                 val in = new java.io.FileInputStream(f)

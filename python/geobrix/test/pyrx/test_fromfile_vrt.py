@@ -27,12 +27,25 @@ def _source_tif(path, w=16, h=12):
 
 
 def _vrt_over(tif, vrt):
-    from databricks.labs.gbx._osgeo import bindings
-
-    gdal = bindings().gdal
-    ds = gdal.BuildVRT(str(vrt), [str(tif)])
-    assert ds is not None
-    ds = None  # flush
+    # A one-source VRT written as XML from the source's own metadata: no osgeo needed, so the
+    # light CI shards (rasterio only) run this file too.
+    with rasterio.open(tif) as src:
+        w, h, gt = src.width, src.height, src.transform.to_gdal()
+        dtype = {"float32": "Float32", "float64": "Float64", "uint8": "Byte", "int16": "Int16",
+                 "uint16": "UInt16", "int32": "Int32"}[src.dtypes[0]]  # fmt: skip
+        bands = "".join(
+            f'<VRTRasterBand dataType="{dtype}" band="{b}"><SimpleSource>'
+            f'<SourceFilename relativeToVRT="0">{tif}</SourceFilename><SourceBand>{b}</SourceBand>'
+            f'<SrcRect xOff="0" yOff="0" xSize="{w}" ySize="{h}"/>'
+            f'<DstRect xOff="0" yOff="0" xSize="{w}" ySize="{h}"/></SimpleSource></VRTRasterBand>'
+            for b in range(1, src.count + 1)
+        )
+        srs = f"<SRS>{src.crs.to_wkt()}</SRS>" if src.crs else ""
+    gt_txt = ", ".join(repr(v) for v in gt)
+    with open(vrt, "w") as fh:
+        fh.write(
+            f'<VRTDataset rasterXSize="{w}" rasterYSize="{h}">{srs}<GeoTransform>{gt_txt}</GeoTransform>{bands}</VRTDataset>'
+        )
     return vrt
 
 

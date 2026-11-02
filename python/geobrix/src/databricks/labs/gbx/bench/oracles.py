@@ -117,6 +117,7 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
         )
     },
     "summary": {"L1": _SUMMARY_L1},
+    "summary_float32_precision": {"L1": _SUMMARY_L1},
     "median_two_band": {"L1": _MEDIAN_L1},
     "metadata": {"L1": _METADATA_L1},
     **{
@@ -2158,11 +2159,29 @@ def _ref_terrain(name):
     def ref(args):
         from databricks.labs.gbx.bench import oracle_refs
 
+        if name == "hillshade":
+            _require_projected_for_default_scale(args)
         z, nodata, xres, yres = _dem_band(args)
         rest = [1.0 if a is None else a for a in args[1:]]
         return getattr(oracle_refs, name)(z, nodata, xres, yres, *rest)
 
     return ref
+
+
+def _require_projected_for_default_scale(args):
+    """The hillshade reference takes a NULL xscale / yscale as 1.0 (pixel size in the unit of the heights), which
+    is what the function derives only for a projected CRS; for a geographic one it derives about 111 km per degree.
+    A row on a geographic DEM must give the scales, or the reference would judge against the wrong surface.
+    """
+    scales = args[4:6]
+    if len(scales) == 2 and all(v is not None for v in scales):
+        return
+    with _ref_dataset(args) as ds:
+        if ds.crs is not None and ds.crs.is_geographic:
+            raise ValueError(
+                "the hillshade reference assumes a scale of 1.0 when xscale and yscale are NULL, which holds only "
+                "for a projected DEM; this DEM is geographic: give xscale and yscale"
+            )
 
 
 def _ref_window(name):
@@ -2291,14 +2310,19 @@ def _check_ref(case: Case, out, args) -> Optional[str]:
             f"{case.cid}: the NoData mask differs from the reference at {off} pixel(s)"
         )
     ok = ~want_mask
-    close = np.isclose(
-        got.data[ok].astype("float64"),
-        want[ok],
-        rtol=1e-4,
-        atol=_REF_ATOL.get(case.expect, 1e-3),
-    )
+    gotv = got.data[ok].astype("float64")
+    atol = _REF_ATOL.get(case.expect, 1e-3)
+    if case.expect == "aspect":
+        # a direction in degrees wraps at 360: a cell facing almost due north is 0.001 on one side and 359.999 on the
+        # other, and the two agree
+        diff = (gotv - want[ok] + 180.0) % 360.0 - 180.0
+        close = np.abs(diff) <= atol + 1e-4 * np.abs(want[ok])
+        worst_d = np.abs(diff)
+    else:
+        close = np.isclose(gotv, want[ok], rtol=1e-4, atol=atol)
+        worst_d = np.abs(gotv - want[ok])
     if not close.all():
-        worst = float(np.max(np.abs(got.data[ok] - want[ok])))
+        worst = float(np.max(worst_d))
         return f"{case.cid}: {int((~close).sum())} pixel(s) differ from the reference (max |d| {worst:.3g})"
     return None
 
@@ -2456,7 +2480,13 @@ _VALUE_CHECKS = {
 
 
 def check(case: Case, out, args) -> Optional[str]:
-    """None when `out` meets the case; else a one-line reason."""
+    """None when `out` meets the case; else a one-line reason.
+
+    An `expect` that is a function is called here, when the row runs, so a table can state a value that needs rasterio
+    (a fixture's byte length) without importing it when the table is imported.
+    """
+    if callable(case.expect):
+        case = replace(case, expect=case.expect())
     if case.kind == "exact":
         return (
             None

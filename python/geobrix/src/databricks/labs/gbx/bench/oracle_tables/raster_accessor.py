@@ -236,7 +236,7 @@ RASTER_ACCESSOR = (
     _c("getnodata", "getnodata", (T4326,), "exact", [NODATA]),
     _c("getnodata_none", "getnodata", (TWO,), "null"),
     # sizes: the raster buffer of a materialized tile; the decoded window (1 band x 64 x 48 x 4 bytes) of a virtual one
-    _c("memsize", "memsize", (T4326,), "exact", _oracle_tile_len()),
+    _c("memsize", "memsize", (T4326,), "exact", _oracle_tile_len),
     _c("memsize_virtual", "memsize", (VIRT,), "exact", 64 * 48 * 4),
     # metadata maps
     _c(

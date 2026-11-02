@@ -36,6 +36,15 @@ SPEC_ANALYSIS = (
     Case(
         "summary_virtual", S, (VIRT,), "json_subset", {"size": [64, 48]}, ("session",)
     ),
+    # the mean of single-precision pixels is accumulated in double (see avg_float32_precision in raster_accessor.py)
+    Case(
+        "summary_float32_precision",
+        S,
+        (Build("tile_4326"),),
+        "json_subset",
+        {"bands": [{"mean": 47.71793193717277}]},
+        ("session",),
+    ),
     Case("summary_null_tile", S, (None,), "null", None, ("session",)),
     Case("summary_error_tile", S, (ERR,), "null", None, ("session",)),
 )

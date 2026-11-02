@@ -107,6 +107,8 @@ SPEC_CALC = (
     Case("threshold_bad_operator", THR, (BANDS, "~", 1.0), "raises", "~", ONLY),
     Case("chm", CHM, (Build("calc_dsm"), Build("calc_dem")), "ref", "chm", ONLY),
     Case("chm_null_dsm", CHM, (None, Build("calc_dem")), "null", None, ONLY),
+    # a DSM that opens but cannot be read or aligned is an error tile, not a failed task
+    Case("chm_corrupt", CHM, (CORRUPT, Build("calc_dem")), "error_tile", None, ONLY),
     Case(
         "chm_error_tile",
         CHM,

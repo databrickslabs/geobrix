@@ -192,6 +192,9 @@ object JTS {
         reader.read(bytes)
     }
 
+    /** [[fromWKB]], with NULL bytes read as an empty polygon (a chip that an empty intersection left without a geometry). */
+    def fromWKBOrEmpty(bytes: Array[Byte]): Geometry = if (bytes eq null) emptyPolygon else fromWKB(bytes)
+
     /** Builds a MultiLineString from a sequence of LineString geometries; uses per-thread factory. */
     def multiLineString(breaklines: Seq[Geometry]): MultiLineString = {
         val tid = Thread.currentThread().getId

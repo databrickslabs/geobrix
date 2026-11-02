@@ -33,10 +33,11 @@ object BNG extends GridSystem {
 
     /** The type a BNG resolution argument reaches `eval` as: a STRING stays a STRING (a size name or the digits
       * of an index), a fractional number becomes its text (so `3.5` is refused naming the value, never truncated
-      * to 3), and any other type is an INT index. */
+      * to 3), a BIGINT becomes its digits too (a cast to INT would wrap a huge value into a valid index; as
+      * digits it is range-checked and refused naming the value), and any other type is an INT index. */
     def resolutionInputType(t: DataType): DataType = t match {
-        case StringType | DoubleType | FloatType | _: DecimalType => StringType
-        case _                                                => IntegerType
+        case StringType | DoubleType | FloatType | LongType | _: DecimalType => StringType
+        case _                                                               => IntegerType
     }
 
     /** StructType for a BNG cell: cellid (idType), core (Boolean), chip (Binary). */

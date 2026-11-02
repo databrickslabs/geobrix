@@ -45,8 +45,8 @@ object BNG_CellIntersection extends WithExpressionInfo {
         else GridErrorHandler.safeEval[InternalRow](null) {
             val cell1 = chip1.getLong(0)
             val cell2 = chip2.getLong(0)
-            val geom1 = JTS.fromWKB(chip1.getBinary(2))
-            val geom2 = JTS.fromWKB(chip2.getBinary(2))
+            val geom1 = JTS.fromWKBOrEmpty(chip1.getBinary(2))
+            val geom2 = JTS.fromWKBOrEmpty(chip2.getBinary(2))
             val res = executeLong((cell1, chip1.getBoolean(1), geom1), (cell2, chip2.getBoolean(1), geom2))
             InternalRow.fromSeq(Seq(res._1, res._2, chipBytes(res._3)))
         }
@@ -58,8 +58,8 @@ object BNG_CellIntersection extends WithExpressionInfo {
         else GridErrorHandler.safeEval[InternalRow](null) {
             val cell1 = chip1.getString(0)
             val cell2 = chip2.getString(0)
-            val geom1 = JTS.fromWKB(chip1.getBinary(2))
-            val geom2 = JTS.fromWKB(chip2.getBinary(2))
+            val geom1 = JTS.fromWKBOrEmpty(chip1.getBinary(2))
+            val geom2 = JTS.fromWKBOrEmpty(chip2.getBinary(2))
             val res = executeString((cell1, chip1.getBoolean(1), geom1), (cell2, chip2.getBoolean(1), geom2))
             InternalRow(UTF8String.fromString(res._1), res._2, chipBytes(res._3))
         }

@@ -55,7 +55,10 @@ object Custom_GridSpec {
             else d.toInt
         v match {
             case i: Int                      => i
-            case l: Long                     => Math.toIntExact(l)
+            case l: Long                     =>
+                if (l > Int.MaxValue || l < Int.MinValue)
+                    throw new IllegalArgumentException(s"gbx_custom: $label must be a whole number; got $v")
+                else l.toInt
             case s: Short                    => s.toInt
             case b: Byte                     => b.toInt
             case d: Double                   => whole(d)

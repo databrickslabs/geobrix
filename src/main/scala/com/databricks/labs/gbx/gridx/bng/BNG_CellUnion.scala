@@ -47,8 +47,8 @@ object BNG_CellUnion extends WithExpressionInfo {
             // Mismatched cell ids are treated as bad DATA (likely a bad join key) and degrade to NULL
             // rather than raising. Revisit when the strict-mode workstream lands (strict=raise, default=degrade).
             require(chip2.getLong(0) == cellId, "Can only union chips with the same grid cell id")
-            val geom1 = JTS.fromWKB(chip1.getBinary(2))
-            val geom2 = JTS.fromWKB(chip2.getBinary(2))
+            val geom1 = JTS.fromWKBOrEmpty(chip1.getBinary(2))
+            val geom2 = JTS.fromWKBOrEmpty(chip2.getBinary(2))
             val union = executeLong((cellId, chip1.getBoolean(1), geom1), (cellId, chip2.getBoolean(1), geom2))
             InternalRow.fromSeq(Seq(union._1, union._2, chipBytes(union._3)))
         }
@@ -62,8 +62,8 @@ object BNG_CellUnion extends WithExpressionInfo {
             // Mismatched cell ids are treated as bad DATA (likely a bad join key) and degrade to NULL
             // rather than raising. Revisit when the strict-mode workstream lands (strict=raise, default=degrade).
             require(chip2.getString(0) == cellId, "Can only union chips with the same grid cell id")
-            val geom1 = JTS.fromWKB(chip1.getBinary(2))
-            val geom2 = JTS.fromWKB(chip2.getBinary(2))
+            val geom1 = JTS.fromWKBOrEmpty(chip1.getBinary(2))
+            val geom2 = JTS.fromWKBOrEmpty(chip2.getBinary(2))
             val union = executeString((cellId, chip1.getBoolean(1), geom1), (cellId, chip2.getBoolean(1), geom2))
             InternalRow.fromSeq(Seq(UTF8String.fromString(union._1), union._2, chipBytes(union._3)))
         }

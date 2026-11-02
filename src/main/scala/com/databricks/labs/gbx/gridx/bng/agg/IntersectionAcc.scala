@@ -24,10 +24,12 @@ final case class IntersectionAcc(
         else require(cellID == id, "can only intersect chips based on the same grid cell")
 
         if (!isCore) {
+            // a chip with NULL bytes is an empty geometry: the intersection with it is empty
+            val bytes = if (wkb eq null) JTS.toWKB(JTS.emptyPolygon) else wkb
             boundaryWkb =
-                if (boundaryWkb eq null) java.util.Arrays.copyOf(wkb, wkb.length)
+                if (boundaryWkb eq null) java.util.Arrays.copyOf(bytes, bytes.length)
                 else {
-                    val out = intersectBytes(boundaryWkb, wkb)
+                    val out = intersectBytes(boundaryWkb, bytes)
                     boundaryWkb = out
                     out
                 }

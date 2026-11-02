@@ -12,7 +12,7 @@ final case class UnionAcc(
     var mixed: Boolean = false // a chip with a different cellID was seen -> union is empty (scalar parity)
 ) {
 
-    @inline private def copyBytes(a: Array[Byte]) = java.util.Arrays.copyOf(a, a.length)
+    @inline private def copyBytes(a: Array[Byte]) = if (a eq null) null else java.util.Arrays.copyOf(a, a.length)
     @inline private def unionBytes(a: Array[Byte], b: Array[Byte]): Array[Byte] = {
         if (a eq null) return copyBytes(b)
         if (b eq null) return copyBytes(a)
@@ -29,7 +29,8 @@ final case class UnionAcc(
         if (mixed) return this
         if (hasCore) return this
         if (isCore) { hasCore = true; unionWkb = null; return this }
-        unionWkb = if (unionWkb eq null) copyBytes(wkb) else unionBytes(unionWkb, wkb)
+        // a chip with NULL bytes is an empty geometry: it adds nothing to the union
+        if (wkb ne null) unionWkb = if (unionWkb eq null) copyBytes(wkb) else unionBytes(unionWkb, wkb)
         this
     }
 

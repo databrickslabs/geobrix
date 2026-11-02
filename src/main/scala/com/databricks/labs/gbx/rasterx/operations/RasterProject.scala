@@ -10,10 +10,17 @@ import java.nio.file.Files
 /** Projects a raster to a new CRS via GDAL Warp (-t_srs); returns (Dataset, metadata). Caller must release. */
 object RasterProject {
 
+    /** A tile has a CRS when it declares a projection, or ground control points with a projection of their own. */
+    def hasCrs(ds: Dataset): Boolean = {
+        val projection = ds.GetProjection
+        val gcpProjection = ds.GetGCPProjection
+        (projection != null && projection.nonEmpty) ||
+        (ds.GetGCPCount > 0 && gcpProjection != null && gcpProjection.nonEmpty)
+    }
+
     /** A tile with no CRS has nothing to reproject from: say how to set one, not GDAL's "points failed to transform". */
     def requireCrs(ds: Dataset): Unit = {
-        val projection = ds.GetProjection
-        if (projection == null || projection.isEmpty) {
+        if (!hasCrs(ds)) {
             throw new IllegalArgumentException(
               "the tile has no CRS, so it cannot be reprojected. Fix: set its CRS first with gbx_rst_setcrs"
             )

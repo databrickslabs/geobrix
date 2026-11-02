@@ -278,10 +278,12 @@ def _open_op(tile, file_ref=None):
         yield ds
 
 
-def _tile_op(*required):
+def _tile_op(*required, check=None):
     """Decorator for a tile-returning UDF body ``(tile, ..., <named parameters>)``.
 
-    NULL in is NULL out: a NULL ``tile`` or a NULL argument named in ``required`` gives NULL. A tile with neither
+    The checks run in this order. NULL in is NULL out: a NULL ``tile`` or a NULL argument named in ``required``
+    gives NULL. ``check``, when given, is called with every argument by name and raises a ``ValueError`` that names
+    a wrong one: that fails the call, also for an error tile or a tile that cannot be opened. A tile with neither
     bytes nor a path goes out as itself when it is an error tile (so the upstream reason survives) and is NULL
     otherwise. A tile the body cannot open is its error tile, with the reason (:class:`_UnreadableTile`).
     """
@@ -297,6 +299,8 @@ def _tile_op(*required):
             tile = args[0]
             if tile is None or any(args[i] is None for i in at):
                 return None
+            if check is not None:
+                check(**dict(zip(names, args)))
             if _tile_is_empty(tile):
                 return _empty_tile_out(tile)
             try:
@@ -2100,11 +2104,12 @@ def _reproject(who, ds, project):
     """``project(ds)``, the reprojection of an open tile, with the tile's own failures as its error tile.
 
     A tile with no CRS cannot be reprojected, and a target the CRS library does not know (an SRID that names
-    nothing) is data too: both are the tile's error tile with the reason, not a failed task.
+    nothing) is data too: both are the tile's error tile with the reason, not a failed task. A tile georeferenced
+    by ground control points has a CRS: its GCP projection.
     """
     from rasterio.errors import CRSError
 
-    if ds.crs is None:
+    if warp.source_crs(ds) is None:
         raise _UnreadableTile(
             f"{who}: the tile has no CRS, so it cannot be reprojected. "
             "Fix: set its CRS first with gbx_rst_setcrs"
@@ -2217,14 +2222,17 @@ def _build_transform_sql_udf(grid_dirs):
     return _udf
 
 
-def _to_webmercator_bytes(tile, resampling, file_ref=None):
-    from databricks.labs.gbx.pyrx import _env
+def _check_resampling(*, resampling, **_):
+    """A word that names no resampling raises, also for a tile already in 3857 (checked by ``_tile_op``)."""
     from databricks.labs.gbx.pyrx.core._util import resampling_enum
 
+    resampling_enum(str(resampling))
+
+
+def _to_webmercator_bytes(tile, resampling, file_ref=None):
+    from databricks.labs.gbx.pyrx import _env
+
     _env.configure_gdal_env()
-    resampling_enum(
-        str(resampling)
-    )  # a word that names no resampling raises, also for a tile already in 3857
     with _open_op(tile, file_ref=file_ref) as ds:
         return _reproject(
             "RST_ToWebMercator",
@@ -2234,14 +2242,14 @@ def _to_webmercator_bytes(tile, resampling, file_ref=None):
 
 
 @f.udf(V2_TILE_SCHEMA)
-@_tile_op("resampling")
+@_tile_op("resampling", check=_check_resampling)
 def _to_webmercator_udf(tile, resampling):
     new_bytes = _to_webmercator_bytes(tile, resampling)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 @f.udf(V2_TILE_SCHEMA)
-@_tile_op("resampling")
+@_tile_op("resampling", check=_check_resampling)
 def _to_webmercator_v2_udf(
     tile, resampling, virtualize_dir, virtualize_prefix, materialize
 ):
@@ -2252,7 +2260,7 @@ def _to_webmercator_v2_udf(
 
 
 @f.udf(V2_TILE_SCHEMA)
-@_tile_op("resampling")
+@_tile_op("resampling", check=_check_resampling)
 def _uf_to_webmercator(tile, file_ref, resampling):
     new_bytes = _to_webmercator_bytes(tile, resampling, file_ref=file_ref)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
@@ -2263,7 +2271,7 @@ def _build_uf_to_webmercator(grid_dirs):
     from databricks.labs.gbx.pyrx import _env
 
     @f.udf(V2_TILE_SCHEMA)
-    @_tile_op("resampling")
+    @_tile_op("resampling", check=_check_resampling)
     def _udf(tile, file_ref, resampling):
         _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
         new_bytes = _to_webmercator_bytes(tile, resampling, file_ref=file_ref)
@@ -2277,7 +2285,7 @@ def _build_to_webmercator_v2_udf(grid_dirs):
     from databricks.labs.gbx.pyrx import _env
 
     @f.udf(V2_TILE_SCHEMA)
-    @_tile_op("resampling")
+    @_tile_op("resampling", check=_check_resampling)
     def _udf(tile, resampling, virtualize_dir, virtualize_prefix, materialize):
         _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
         new_bytes = _to_webmercator_bytes(tile, resampling)
@@ -2297,7 +2305,7 @@ def _build_to_webmercator_sql_udf(grid_dirs):
     from databricks.labs.gbx.pyrx import _env
 
     @f.udf(V2_TILE_SCHEMA)
-    @_tile_op("resampling")
+    @_tile_op("resampling", check=_check_resampling)
     def _udf(tile, resampling):
         _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
         new_bytes = _to_webmercator_bytes(tile, resampling)
@@ -2316,14 +2324,14 @@ def _resample_bytes(tile, factor, algorithm, file_ref=None):
 
 
 @f.udf(V2_TILE_SCHEMA)
-@_tile_op("factor", "algorithm")
+@_tile_op("factor", "algorithm", check=resample.check_by_factor)
 def _resample_udf(tile, factor, algorithm):
     new_bytes = _resample_bytes(tile, factor, algorithm)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 @f.udf(V2_TILE_SCHEMA)
-@_tile_op("factor", "algorithm")
+@_tile_op("factor", "algorithm", check=resample.check_by_factor)
 def _resample_v2_udf(
     tile, factor, algorithm, virtualize_dir, virtualize_prefix, materialize
 ):
@@ -2334,7 +2342,7 @@ def _resample_v2_udf(
 
 
 @f.udf(V2_TILE_SCHEMA)
-@_tile_op("factor", "algorithm")
+@_tile_op("factor", "algorithm", check=resample.check_by_factor)
 def _uf_resample(tile, file_ref, factor, algorithm):
     new_bytes = _resample_bytes(tile, factor, algorithm, file_ref=file_ref)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
@@ -2351,14 +2359,14 @@ def _resample_to_size_bytes(tile, width_px, height_px, algorithm, file_ref=None)
 
 
 @f.udf(V2_TILE_SCHEMA)
-@_tile_op("width_px", "height_px", "algorithm")
+@_tile_op("width_px", "height_px", "algorithm", check=resample.check_to_size)
 def _resample_to_size_udf(tile, width_px, height_px, algorithm):
     new_bytes = _resample_to_size_bytes(tile, width_px, height_px, algorithm)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 @f.udf(V2_TILE_SCHEMA)
-@_tile_op("width_px", "height_px", "algorithm")
+@_tile_op("width_px", "height_px", "algorithm", check=resample.check_to_size)
 def _resample_to_size_v2_udf(
     tile, width_px, height_px, algorithm, virtualize_dir, virtualize_prefix, materialize
 ):
@@ -2369,7 +2377,7 @@ def _resample_to_size_v2_udf(
 
 
 @f.udf(V2_TILE_SCHEMA)
-@_tile_op("width_px", "height_px", "algorithm")
+@_tile_op("width_px", "height_px", "algorithm", check=resample.check_to_size)
 def _uf_resample_to_size(tile, file_ref, width_px, height_px, algorithm):
     new_bytes = _resample_to_size_bytes(
         tile, width_px, height_px, algorithm, file_ref=file_ref
@@ -2386,14 +2394,14 @@ def _resample_to_res_bytes(tile, x_res, y_res, algorithm, file_ref=None):
 
 
 @f.udf(V2_TILE_SCHEMA)
-@_tile_op("x_res", "y_res", "algorithm")
+@_tile_op("x_res", "y_res", "algorithm", check=resample.check_to_res)
 def _resample_to_res_udf(tile, x_res, y_res, algorithm):
     new_bytes = _resample_to_res_bytes(tile, x_res, y_res, algorithm)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 @f.udf(V2_TILE_SCHEMA)
-@_tile_op("x_res", "y_res", "algorithm")
+@_tile_op("x_res", "y_res", "algorithm", check=resample.check_to_res)
 def _resample_to_res_v2_udf(
     tile, x_res, y_res, algorithm, virtualize_dir, virtualize_prefix, materialize
 ):
@@ -2404,26 +2412,45 @@ def _resample_to_res_v2_udf(
 
 
 @f.udf(V2_TILE_SCHEMA)
-@_tile_op("x_res", "y_res", "algorithm")
+@_tile_op("x_res", "y_res", "algorithm", check=resample.check_to_res)
 def _uf_resample_to_res(tile, file_ref, x_res, y_res, algorithm):
     new_bytes = _resample_to_res_bytes(tile, x_res, y_res, algorithm, file_ref=file_ref)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 # --- Tier 1d: tile-returning edit UDFs -------------------------------------
+def _read_cutline(geom_wkb, clip_crs):
+    """The cutline geometry of a clip (``None`` for an empty one), with its CRS checked.
+
+    A cutline that cannot be read, or a ``clip_crs`` that names no CRS, is data the tile cannot be clipped by:
+    the tile's error tile with the reason, as heavy ``RST_Clip`` gives it, not a failed task.
+    """
+    import shapely
+
+    from databricks.labs.gbx._geom import parse_geom
+    from databricks.labs.gbx.pyrx.core.crs import resolve_source_crs
+
+    try:
+        geom = parse_geom(geom_wkb)
+        if geom is not None:
+            resolve_source_crs(shapely.get_srid(geom), crs=clip_crs)
+    except Exception as exc:
+        raise _UnreadableTile(f"RST_Clip: the cutline cannot be used: {exc}") from exc
+    return geom
+
+
 def _clip_bytes(tile, geom_wkb, all_touched, clip_crs=None):
     """Shared clip body: open the (virtual or materialized) tile, clip to the
     parsed cutline, return the clipped GTiff bytes (or None on no-overlap).
 
     ``clip_crs`` is a source-CRS override for a plain WKB/WKT cutline (int SRID or
     CRS string incl. ESRI/WKT); an EWKB/EWKT embedded SRID wins per-geom."""
-    from databricks.labs.gbx._geom import parse_geom
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    # parse_geom keeps the SRID (EWKT/EWKB carry it) so clip_to_geom can
-    # reproject the cutline to the raster CRS, mirroring heavy RST_Clip.
-    geom = parse_geom(geom_wkb)
+    # The parsed cutline keeps the SRID (EWKT/EWKB carry it) so clip_to_geom can
+    # reproject it to the raster CRS, mirroring heavy RST_Clip.
+    geom = _read_cutline(geom_wkb, clip_crs)
     if geom is None:
         return None
     with _open_op(tile) as ds:
@@ -2468,11 +2495,10 @@ def _uf_clip(tile, file_ref, geom_wkb, all_touched, clip_crs):
     The explicit cutline is applied AFTER the tile bytes are read (it is not a tile-level
     ``clip_polygon``).
     """
-    from databricks.labs.gbx._geom import parse_geom
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    geom = parse_geom(geom_wkb)
+    geom = _read_cutline(geom_wkb, clip_crs)
     if geom is None:
         return None
     with _open_op(tile, file_ref=file_ref) as ds:
@@ -3093,14 +3119,14 @@ def _proximity_bytes(tile, target_values, distunits, max_distance):
 
 
 @f.udf(V2_TILE_SCHEMA)
-@_tile_op()
+@_tile_op(check=analysis_core.check_proximity)
 def _proximity_udf(tile, target_values, distunits, max_distance):
     new_bytes = _proximity_bytes(tile, target_values, distunits, max_distance)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 @f.udf(V2_TILE_SCHEMA)
-@_tile_op()
+@_tile_op(check=analysis_core.check_proximity)
 def _proximity_v2_udf(
     tile,
     target_values,

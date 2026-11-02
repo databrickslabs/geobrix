@@ -16,6 +16,24 @@ def _positive(who: str, **values) -> None:
             raise ValueError(f"{who}: {name} must be positive and finite; got {v}")
 
 
+def check_by_factor(*, factor, algorithm="bilinear", **_) -> None:
+    """The arguments of ``rst_resample``: a wrong one raises a ``ValueError`` that names it."""
+    _positive("rst_resample", factor=factor)
+    resampling_enum(algorithm)
+
+
+def check_to_size(*, width_px, height_px, algorithm="bilinear", **_) -> None:
+    """The arguments of ``rst_resample_to_size``: a wrong one raises a ``ValueError`` that names it."""
+    _positive("rst_resample_to_size", width_px=width_px, height_px=height_px)
+    resampling_enum(algorithm)
+
+
+def check_to_res(*, x_res, y_res, algorithm="bilinear", **_) -> None:
+    """The arguments of ``rst_resample_to_res``: a wrong one raises a ``ValueError`` that names it."""
+    _positive("rst_resample_to_res", x_res=x_res, y_res=y_res)
+    resampling_enum(algorithm)
+
+
 def _write_resampled(ds, dst_width: int, dst_height: int, algorithm: str) -> bytes:
     resampling_enum(algorithm)  # a word that names no resampling raises before any work
     dst_width = max(1, int(dst_width))
@@ -52,20 +70,20 @@ def _write_resampled(ds, dst_width: int, dst_height: int, algorithm: str) -> byt
 
 def resample_by_factor(ds, factor: float, algorithm: str = "bilinear") -> bytes:
     """Resample by a multiplicative factor (>1 upsamples, 0<factor<1 downsamples)."""
-    _positive("rst_resample", factor=factor)
+    check_by_factor(factor=factor, algorithm=algorithm)
     f = float(factor)
     return _write_resampled(ds, round(ds.width * f), round(ds.height * f), algorithm)
 
 
 def resample_to_size(ds, width_px, height_px, algorithm: str = "bilinear") -> bytes:
     """Resample to exact pixel dimensions."""
-    _positive("rst_resample_to_size", width_px=width_px, height_px=height_px)
+    check_to_size(width_px=width_px, height_px=height_px, algorithm=algorithm)
     return _write_resampled(ds, width_px, height_px, algorithm)
 
 
 def resample_to_res(ds, x_res, y_res, algorithm: str = "bilinear") -> bytes:
     """Resample to a target ground resolution in CRS units."""
-    _positive("rst_resample_to_res", x_res=x_res, y_res=y_res)
+    check_to_res(x_res=x_res, y_res=y_res, algorithm=algorithm)
     left, bottom, right, top = ds.bounds
     return _write_resampled(
         ds,

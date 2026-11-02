@@ -49,6 +49,43 @@ def _fill_plan(ds):
     return nodata, own_mask
 
 
+def gcp_georef(ds):
+    """``(crs, gcps)`` of a tile georeferenced by ground control points, else ``None``.
+
+    Such a tile has no ``ds.crs`` and an identity transform; its CRS is the GCP projection, and a warp
+    takes the points in place of a transform.
+    """
+    if ds.crs is not None:
+        return None
+    gcps, crs = ds.gcps
+    return (crs, gcps) if gcps and crs else None
+
+
+def source_crs(ds):
+    """The CRS a tile is georeferenced in: its own, else its GCP projection; ``None`` for a tile with neither."""
+    georef = gcp_georef(ds)
+    return ds.crs if georef is None else georef[0]
+
+
+def _source_georef(ds, window=None) -> dict:
+    """The ``reproject`` arguments that place ``ds`` (or a window of it) on the ground."""
+    georef = gcp_georef(ds)
+    if georef is not None:
+        return {"gcps": georef[1], "src_crs": georef[0]}
+    transform = ds.window_transform(window) if window is not None else ds.transform
+    return {"src_transform": transform, "src_crs": ds.crs}
+
+
+def _default_transform(ds, dst_crs):
+    """``calculate_default_transform`` of ``ds`` to ``dst_crs``, from its GCPs when it has them in place of a transform."""
+    georef = gcp_georef(ds)
+    if georef is not None:
+        return calculate_default_transform(
+            georef[0], dst_crs, ds.width, ds.height, gcps=georef[1]
+        )
+    return calculate_default_transform(ds.crs, dst_crs, ds.width, ds.height, *ds.bounds)
+
+
 def warped_own_mask(
     ds, *, dst_crs, transform, width: int, height: int, window=None
 ) -> np.ndarray:
@@ -66,10 +103,7 @@ def warped_own_mask(
     reproject(
         source=ds.read_masks(1, window=window),
         destination=warped,
-        src_transform=(
-            ds.window_transform(window) if window is not None else ds.transform
-        ),
-        src_crs=ds.crs,
+        **_source_georef(ds, window),
         dst_transform=transform,
         dst_crs=dst_crs,
         resampling=resampling_enum("nearest"),
@@ -92,8 +126,7 @@ def warped_footprint(ds, *, dst_crs, transform, width: int, height: int) -> np.n
     reproject(
         source=np.ones((ds.height, ds.width), dtype="uint8"),
         destination=covered,
-        src_transform=ds.transform,
-        src_crs=ds.crs,
+        **_source_georef(ds),
         dst_transform=transform,
         dst_crs=dst_crs,
         resampling=resampling_enum("nearest"),
@@ -155,8 +188,7 @@ def _warp_bands(ds, profile, *, dst_crs, transform, resampling: str, mark_fill_n
                 reproject(
                     source=source,
                     destination=rasterio.band(dst, i),
-                    src_transform=ds.transform,
-                    src_crs=ds.crs,
+                    **_source_georef(ds),
                     dst_transform=transform,
                     dst_crs=dst_crs,
                     resampling=resamp,
@@ -198,9 +230,7 @@ def reproject_to_crs(
         # Identity: re-encode with ZSTD baseline (same as reproject_to_srid).
         return _identity(ds)
 
-    transform, width, height = calculate_default_transform(
-        ds.crs, dst_crs, ds.width, ds.height, *ds.bounds
-    )
+    transform, width, height = _default_transform(ds, dst_crs)
     out_dtype = ds.dtypes[0]
     decoded_bytes = ds.count * width * height * np.dtype(out_dtype).itemsize
     profile = _comp.source_profile(ds.profile)
@@ -250,9 +280,7 @@ def reproject_to_srid(
         return _identity(ds)
 
     dst_crs = f"EPSG:{target_srid}"
-    transform, width, height = calculate_default_transform(
-        ds.crs, dst_crs, ds.width, ds.height, *ds.bounds
-    )
+    transform, width, height = _default_transform(ds, dst_crs)
     out_dtype = ds.dtypes[0]
     decoded_bytes = ds.count * width * height * np.dtype(out_dtype).itemsize
     profile = _comp.source_profile(ds.profile)

@@ -89,8 +89,15 @@ _METADATA_L1 = "the JVM metadata is GDAL's metadata domains merged, not the cont
 # With zero_for_flat GDAL drops the NoData value, so its border pixels are 0; light keeps them NoData (a documented
 # divergence, which the GDAL spec engine keeps).
 _ASPECT_ZERO_L1 = "GDAL drops the NoData value when zero_for_flat is set, so its border pixels are 0, not NoData"
+# The manager's SQL dispatch sends an error tile out before the JVM expression runs, so a wrong argument that the
+# expression itself rejects (it checks arguments before it passes an error tile through) is not seen on that path.
+_L1_ERROR_TILE_FIRST = (
+    "the manager's SQL dispatch returns an error tile before the JVM expression checks its arguments; "
+    "the expression itself raises"
+)
 HEAVY_PENDING: Dict[str, Dict[str, str]] = {
     "aspect_flat_zero": {"L1": _ASPECT_ZERO_L1},
+    "resample_error_in_bad_word": {"L1": _L1_ERROR_TILE_FIRST},
     **{
         cid: {"L1": _QUADBIN_L1}
         for cid in (
@@ -2333,7 +2340,35 @@ def _ref_clip_columns(first: int, count: int):
     return ref
 
 
+def _ref_transform_gcp(args):
+    """rst_transform to EPSG:3857 of a tile georeferenced by ground control points: rasterio.warp's own nearest-neighbour
+    warp from the points and their projection, on the default output grid."""
+    import numpy as np
+    from rasterio.warp import Resampling, calculate_default_transform, reproject
+
+    with _ref_dataset(args) as ds:
+        points, gcp_crs = ds.gcps
+        transform, width, height = calculate_default_transform(
+            gcp_crs, "EPSG:3857", ds.width, ds.height, gcps=points
+        )
+        nodata = ds.nodata
+        out = np.full((height, width), nodata, dtype=ds.dtypes[0])
+        reproject(
+            source=ds.read(1),
+            destination=out,
+            gcps=points,
+            src_crs=gcp_crs,
+            src_nodata=nodata,
+            dst_transform=transform,
+            dst_crs="EPSG:3857",
+            dst_nodata=nodata,
+            resampling=Resampling.nearest,
+        )
+    return out.astype("float64"), out == nodata
+
+
 _REFS = {
+    "transform_gcp": _ref_transform_gcp,
     "resample_average_half": _ref_resample_average,
     "proximity_geo": _ref_proximity("GEO"),
     "proximity_pixel": _ref_proximity("PIXEL"),

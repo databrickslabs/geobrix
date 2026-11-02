@@ -74,6 +74,39 @@ def _ramp(tmpdir):
     return _tile(_gtiff(z, "EPSG:3857", nodata=None))
 
 
+@builder("tile_gcp")
+def _gcp_tile(tmpdir):
+    """A 16 x 12 float32 ramp georeferenced by four ground control points in EPSG:4326 (0.01 degrees a pixel from
+    (-1, 52)), so its projection is the GCP projection: it has a CRS but no geotransform.
+    """
+    import numpy as np
+    from rasterio.control import GroundControlPoint as Gcp
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.pyrx.core.compression import creation_opts
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    z = np.arange(192, dtype="float32").reshape(1, 12, 16)
+    z[0, 4:6, 4:6] = -9999.0
+    corners = [(0, 0), (0, 16), (12, 0), (12, 16)]  # (row, column)
+    points = [
+        Gcp(row, col, -1.0 + 0.01 * col, 52.0 - 0.01 * row) for row, col in corners
+    ]
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff",
+            width=16,
+            height=12,
+            count=1,
+            dtype="float32",
+            nodata=-9999.0,
+            **creation_opts("float32", compress="zstd"),
+        ) as ds:
+            ds.write(z)
+            ds.gcps = (points, resolve_crs("EPSG:4326"))
+        return _tile(mf.read())
+
+
 SPEC_WARP = (
     # transform: a reprojection judged against rasterio.warp on the same grid (nearest neighbour)
     Case("transform_3857", TR, (T4326, 3857), "tile_props", "EPSG:3857", ONLY),
@@ -85,6 +118,15 @@ SPEC_WARP = (
     Case("transform_no_crs", TR, (Build("tile_nocrs"), 3857), "error_fix", None, ONLY),
     # an SRID that names no CRS is data: an error tile
     Case("transform_bad_srid", TR, (T4326, 999999), "error_tile", None, ONLY),
+    # a tile georeferenced by ground control points has a CRS, its GCP projection: it is warped, not refused
+    Case(
+        "transform_gcp",
+        TR,
+        (Build("tile_gcp"), 3857),
+        "ref",
+        "transform_gcp",
+        ONLY,
+    ),
     Case("transform_null_tile", TR, (None, 3857), "null", None, ONLY),
     Case("transform_null_srid", TR, (T4326, None), "null", None, ONLY),
     Case("transform_error_in", TR, (ERR, 3857), "error_tile", UPSTREAM_ERROR, ONLY),
@@ -101,6 +143,8 @@ SPEC_WARP = (
     Case("webmercator_bad_word_identity", WM, (T3857, "sinc"), "raises", "sinc", ONLY),
     Case("webmercator_no_crs", WM, (Build("tile_nocrs"),), "error_fix", None, ONLY),
     Case("webmercator_null_tile", WM, (None,), "null", None, ONLY),
+    # a NULL tile is NULL before the word is checked
+    Case("webmercator_null_tile_bad_word", WM, (None, "sinc"), "null", None, ONLY),
     Case("webmercator_error_in", WM, (ERR,), "error_tile", UPSTREAM_ERROR, ONLY),
     # resample by a factor: the output size is the factor times the source size
     Case("resample_half", RS, (T4326, 0.5), "tile_size", (32, 24), ONLY),
@@ -129,9 +173,21 @@ SPEC_WARP = (
     Case("resample_zero", RS, (T4326, 0.0), "raises", "factor", ONLY),
     Case("resample_negative", RS, (T4326, -2.0), "raises", "-2.0", ONLY),
     Case("resample_bad_algorithm", RS, (T4326, 0.5, "sinc"), "raises", "sinc", ONLY),
+    # the words are the ones gdalwarp takes, at every level: GDAL's cubicspline is accepted, rasterio's gauss is not
+    Case(
+        "resample_cubicspline",
+        RS,
+        (T4326, 0.5, "cubicspline"),
+        "tile_size",
+        (32, 24),
+        ONLY,
+    ),
+    Case("resample_gauss", RS, (T4326, 0.5, "gauss"), "raises", "gauss", ONLY),
     Case("resample_null_tile", RS, (None, 0.5), "null", None, ONLY),
     Case("resample_null_factor", RS, (T4326, None), "null", None, ONLY),
     Case("resample_error_in", RS, (ERR, 0.5), "error_tile", UPSTREAM_ERROR, ONLY),
+    # a wrong argument fails the call before an error tile passes through
+    Case("resample_error_in_bad_word", RS, (ERR, 0.5, "sinc"), "raises", "sinc", ONLY),
     Case("resample_corrupt", RS, (CORRUPT, 0.5), "error_tile", None, ONLY),
     # a tile decoded over the read cap is an error tile with a Fix, never a failed task (READ_CAP_ROWS lowers the cap)
     Case(
@@ -202,4 +258,13 @@ SPEC_WARP = (
         "clip_error_in", CL, (ERR, LEFT_HALF, False), "error_tile", UPSTREAM_ERROR, ONLY
     ),
     Case("clip_corrupt", CL, (CORRUPT, LEFT_HALF, False), "error_tile", None, ONLY),
+    # a cutline that cannot be read is the tile's error tile, not a failed task
+    Case(
+        "clip_bad_cutline",
+        CL,
+        (T4326, "POLYGON((0 0, 1", False),
+        "error_tile",
+        None,
+        ONLY,
+    ),
 )

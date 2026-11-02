@@ -66,3 +66,23 @@ def test_dem_and_calc_force_output_keywords(spark, tmp_path):
     assert row["a"]["raster"] is None and row["a"]["path"].startswith(str(out_dir))
     assert list(out_dir.glob("*.tif"))
     assert row["n"]["raster"] is not None and row["n"]["path"] is None
+
+
+def test_clip_virtualize_dir_with_optional_crs_before_the_literals(spark, tmp_path):
+    """`rst_clip` has an optional `clip_crs` before the force-output literals: left out, the SQL default fills it,
+    and the clip lands under the directory with the pixels of the unforced call."""
+    from databricks.labs.gbx.rasterx import functions as rx
+
+    df = _v2_df(spark, tmp_path)
+    # the left half of the 8 x 8 tile (columns 0 to 3), in the tile's own CRS
+    cutline = f.lit("POLYGON((-1 -1, 4 -1, 4 9, -1 9, -1 -1))")
+    out_dir = tmp_path / "clip_vout"
+    forced = df.select(
+        rx.rst_clip("tile", cutline, False, virtualize_dir=str(out_dir)).alias("t")
+    ).first()["t"]
+    assert forced["raster"] is None and forced["path"].startswith(str(out_dir))
+    assert list(out_dir.glob("*.tif"))
+    plain = df.select(rx.rst_clip("tile", cutline, False).alias("t")).first()["t"]
+    got = _slope_array_from_row(forced.asDict())
+    assert got.shape == (8, 4)
+    assert np.array_equal(got, _slope_array_from_row(plain.asDict()))

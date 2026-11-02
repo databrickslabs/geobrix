@@ -44,27 +44,30 @@ object RST_ToWebMercator extends WithExpressionInfo {
     def eval(row: InternalRow, resampling: UTF8String, conf: UTF8String): InternalRow =
         doInvoke(row, resampling, conf, BinaryType)
 
-    private def doInvoke(row: InternalRow, resampling: UTF8String, conf: UTF8String, dt: DataType): InternalRow = {
-        // A word that names no resampling fails the call (naming it); only the tile's own failures become its error tile.
-        val resampleLower = RST_ResampleHelper.validateAlgorithm(
-          if (resampling == null) "bilinear" else resampling.toString,
-          "rst_to_webmercator"
-        )
-        RST_ErrorHandler.safeEval(
-          () => {
-              val exprConf = ExpressionConfig.fromB64(conf.toString)
-              RST_ExpressionUtil.init(exprConf)
-              val (cell, ds, options) = RasterSerializationUtil.rowToTile(row, dt)
-              val (resultDs, metadata) = execute(ds, options, resampleLower)
-              RasterDriver.releaseDataset(ds)
-              val res = RasterSerializationUtil.tileToRow((cell, resultDs, metadata), dt, exprConf.hConf)
-              RasterDriver.releaseDataset(resultDs)
-              res
-          },
-          row,
-          dt
-        )
-    }
+    private def doInvoke(row: InternalRow, resampling: UTF8String, conf: UTF8String, dt: DataType): InternalRow =
+        // A NULL tile is NULL. A word that names no resampling fails the call (naming it), also for an error tile;
+        // only the tile's own failures become its error tile.
+        if (row == null) null
+        else {
+            val resampleLower = RST_ResampleHelper.validateAlgorithm(
+              if (resampling == null) "bilinear" else resampling.toString,
+              "rst_to_webmercator"
+            )
+            RST_ErrorHandler.safeEval(
+              () => {
+                  val exprConf = ExpressionConfig.fromB64(conf.toString)
+                  RST_ExpressionUtil.init(exprConf)
+                  val (cell, ds, options) = RasterSerializationUtil.rowToTile(row, dt)
+                  val (resultDs, metadata) = execute(ds, options, resampleLower)
+                  RasterDriver.releaseDataset(ds)
+                  val res = RasterSerializationUtil.tileToRow((cell, resultDs, metadata), dt, exprConf.hConf)
+                  RasterDriver.releaseDataset(resultDs)
+                  res
+              },
+              row,
+              dt
+            )
+        }
 
     /** Warp `ds` to EPSG:3857 using `resampling` (lowercased gdalwarp -r value). Caller releases the returned Dataset. */
     def execute(ds: Dataset, options: Map[String, String], resampling: String): (Dataset, Map[String, String]) = {

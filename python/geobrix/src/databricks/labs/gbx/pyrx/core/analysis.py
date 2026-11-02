@@ -45,6 +45,25 @@ from databricks.labs.gbx.pyrx.core.local_temp import (
 _PROXIMITY_NODATA = -1.0
 
 
+def check_proximity(*, distunits=None, max_distance=None, **_) -> None:
+    """The arguments of ``rst_proximity``: a wrong one raises a ``ValueError`` that names it."""
+    distunits = "GEO" if distunits is None else str(distunits)
+    if distunits not in ("GEO", "PIXEL"):
+        raise ValueError(
+            f"rst_proximity: distunits must be 'GEO' or 'PIXEL'; got '{distunits}'"
+        )
+    if max_distance is not None:
+        max_distance = float(max_distance)
+        if (
+            not (max_distance > 0.0)
+            or math.isinf(max_distance)
+            or math.isnan(max_distance)
+        ):
+            raise ValueError(
+                f"rst_proximity: max_distance must be > 0 and finite; got {max_distance}"
+            )
+
+
 def proximity(ds, target_values, distunits, max_distance):
     """Compute a Float32 proximity raster: each pixel holds the distance to the
     nearest source pixel.
@@ -75,21 +94,9 @@ def proximity(ds, target_values, distunits, max_distance):
     Returns:
         Single-band Float32 GTiff bytes (nodata = -1.0).
     """
-    distunits = "GEO" if distunits is None else str(distunits)
-    if distunits not in ("GEO", "PIXEL"):
-        raise ValueError(
-            f"rst_proximity: distunits must be 'GEO' or 'PIXEL'; got '{distunits}'"
-        )
+    check_proximity(distunits=distunits, max_distance=max_distance)
     if max_distance is not None:
         max_distance = float(max_distance)
-        if (
-            not (max_distance > 0.0)
-            or math.isinf(max_distance)
-            or math.isnan(max_distance)
-        ):
-            raise ValueError(
-                f"rst_proximity: max_distance must be > 0 and finite; got {max_distance}"
-            )
 
     # scipy is a pyrx dependency; import lazily so module import stays cheap.
     from scipy import ndimage

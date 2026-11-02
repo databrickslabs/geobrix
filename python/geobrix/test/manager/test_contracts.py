@@ -80,7 +80,7 @@ def test_oracle_rows_fit_signature(fn):
         ), c.cid
         assert c.kind != "exact_rows" or len(c.expect) == len(c.args), c.cid
         assert c.surfaces and set(c.surfaces) <= {"session", "uc"}, c.cid
-        assert not c.variants or c.kind in ("exact", "null"), c.cid
+        assert not c.variants or c.kind in ("exact", "null", "geom_srid"), c.cid
         if (
             c.kind == "raises"
         ):  # an error row names the offending value, so a missing function cannot pass
@@ -2386,3 +2386,62 @@ def test_stage_jar_is_a_lazy_package_export():
     from databricks.labs.gbx import stage
 
     assert gbx.stage_jar is stage.stage_jar and "stage_jar" in gbx.__all__
+
+
+# A netCDF / HDF file of several variables is a container: it has subdatasets and no band. Both tiers answer its header
+# from the file itself, and a pixel function has no pixel to read: an empty answer (no band), not an error.
+_CONTAINER_ANSWERS = ["rst_width", "rst_height", "rst_numbands", "rst_subdatasets"]
+_CONTAINER_PIXEL = ["rst_avg", "rst_summary"]
+
+
+def _container_answers(spark, names, register_it):
+    import json
+
+    from pyspark.sql.types import StructField, StructType
+
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+    nc = sorted((REPO / "src/test/resources/binary/netcdf-coral").glob("*.nc"))[0]
+    tile = {
+        "cellid": 0,
+        "raster": nc.read_bytes(),
+        "path": None,
+        "path_mode": None,
+        "window": None,
+        "clip_polygon": None,
+        "clip_crs": None,
+        "crs": None,
+        "metadata": {"driver": "netCDF", "extension": "nc"},
+    }
+    schema = StructType([StructField("tile", V2_TILE_SCHEMA)])
+    spark.createDataFrame([(tile,)], schema).createOrReplaceTempView("_gbx_container")
+    register_it()
+    calls = ", ".join(f"gbx_{n}(tile) AS {n}" for n in names)
+    got = spark.sql(f"SELECT {calls} FROM _gbx_container").collect()[0].asDict()
+    return {
+        "size": (got["rst_width"], got["rst_height"], got["rst_numbands"]),
+        "subdatasets": len(got["rst_subdatasets"] or {}) > 0,
+        "avg": list(got["rst_avg"]) if got["rst_avg"] is not None else None,
+        "summary_bands": json.loads(got["rst_summary"])["bands"],
+    }
+
+
+_CONTAINER_WANT = {
+    "size": (512, 512, 0),
+    "subdatasets": True,
+    "avg": [],
+    "summary_bands": [],
+}
+
+
+def test_light_container_tile_answers_its_header_and_has_no_pixel(spark):
+    names = _CONTAINER_ANSWERS + _CONTAINER_PIXEL
+    got = _container_answers(spark, names, _light(spark, names))
+    assert got == _CONTAINER_WANT
+
+
+@pytest.mark.integration
+def test_heavy_container_tile_answers_its_header_and_has_no_pixel(jvm_spark):
+    names = _CONTAINER_ANSWERS + _CONTAINER_PIXEL
+    got = _container_answers(jvm_spark, names, _heavy(jvm_spark, names))
+    assert got == _CONTAINER_WANT

@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.rasterx.util
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
+import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.util.ArrayData
@@ -20,6 +21,12 @@ final class GeneratorGuardException(msg: String) extends IllegalArgumentExceptio
   * instead of failing the task, unless ExpressionConfig.crashExpressions is true.
   */
 object RST_ErrorHandler extends Logging {
+
+    /** `eval` with no other thread of this JVM in GeoBrix's netCDF / HDF GDAL work when `hdf` (a tile of such a file): the
+      * whole expression, from the open to the release, because GDAL's netCDF driver reads a band's metadata outside its
+      * own mutex and the payload's HDF5 is not thread-safe ([[GDALManager.withHdfLock]]; reentrant, and no Spark task is
+      * waited on inside an expression). */
+    private def underHdfLock[T](hdf: Boolean)(eval: () => T): T = GDALManager.withHdfLockIf(hdf)(eval())
 
     /** The error tile of a group one of whose members was refused (decoded over the read cap, or a driver that can name
       * other files): the reason and its `Fix:` as every error tile carries them, never a result built from the other
@@ -45,7 +52,7 @@ object RST_ErrorHandler extends Logging {
       */
     def safeEval(eval: () => InternalRow, row: InternalRow, rasterType: DataType): InternalRow = {
         try {
-            eval()
+            underHdfLock(RasterSerializationUtil.isHdfTile(row))(eval)
         } catch {
             case e: VirtualTileException => throw e
             case NonFatal(e) =>
@@ -70,7 +77,7 @@ object RST_ErrorHandler extends Logging {
       */
     def safeEval(eval: () => InternalRow, rows: ArrayData, rasterType: DataType, elementFieldCount: Int = 3): InternalRow = {
         try {
-            eval()
+            underHdfLock((0 until rows.numElements()).exists(i => RasterSerializationUtil.isHdfTile(rows.getStruct(i, elementFieldCount))))(eval)
         } catch {
             case e: VirtualTileException => throw e
             case NonFatal(e) =>
@@ -98,7 +105,7 @@ object RST_ErrorHandler extends Logging {
       */
     def safeEval(eval: () => Any, row: InternalRow, rasterType: DataType, conf: UTF8String): Any = {
         try {
-            eval()
+            underHdfLock(RasterSerializationUtil.isHdfTile(row))(eval)
         } catch {
             case e: VirtualTileException =>
                 // Virtual-tile guard must propagate — wrong API usage, not a per-row data error.

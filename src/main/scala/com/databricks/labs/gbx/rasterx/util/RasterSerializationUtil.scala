@@ -115,9 +115,19 @@ object RasterSerializationUtil {
             val metadataRow = row.getMap(lyt.metadata)
             val metadata = SerializationUtil.createMap[String, String](metadataRow)
             val buffer = row.getBinary(lyt.raster)
-            RasterDriver.readBytes(buffer, metadata, gated)
+            // an ungated read is a header answer: the file itself, not its GeoTIFF translation (a netCDF / HDF file's
+            // metadata domains and subdatasets, a container's size), as the light tier answers it
+            if (gated) RasterDriver.readBytes(buffer, metadata, gated) else RasterDriver.readSourceFromBytes(buffer, metadata)
         }
     }
+
+    /** True for a tile whose raster bytes are a netCDF / HDF file: its expression runs under
+      * [[GDALManager.withHdfLock]] from the open to the release ([[RST_ErrorHandler.safeEval]]). */
+    def isHdfTile(row: InternalRow): Boolean =
+        Try {
+            val lyt = tileLayout(row)
+            !row.isNullAt(lyt.raster) && GDALManager.isHdfFamilyBytes(row.getBinary(lyt.raster))
+        }.getOrElse(false)
 
     /** [[rowToTile]] with the tile's bytes read as their own driver's dataset, not their GeoTIFF translation
       * ([[RasterDriver.readSourceFromBytes]]): for the functions that answer from a netCDF / HDF file's subdatasets.

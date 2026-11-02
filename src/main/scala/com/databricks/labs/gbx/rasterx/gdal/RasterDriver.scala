@@ -195,7 +195,9 @@ object RasterDriver {
                 return null
             }
             if (gated) TileBytes.checkSize(ds)
-            if (!translate || TileBytes.selfContained(ds)) ds
+            // a file with no band (a netCDF / HDF container of several variables) has no pixel to translate: it is read
+            // as its own dataset, which answers its header and subdatasets, as the light tier reads it
+            if (!translate || TileBytes.selfContained(ds) || ds.getRasterCount == 0) ds
             else {
                 val gtiff = TileBytes.toGTiff(ds, s"/vsimem/temp_raster_${uuid}_gtiff.tif")
                 ds.delete()

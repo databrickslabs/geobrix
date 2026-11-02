@@ -355,16 +355,14 @@ def _with_cap(f, cap: int):
         f.func, type
     ):  # a UDTF: the same function over a carrying handler class
         return carrying(f, None, cap)
-    from pyspark.sql import functions as F
+    from pyspark.sql.udf import UserDefinedFunction
 
-    func = _carrying_function(f.func, None, cap)
-    if f.evalType in (
-        100,
-        101,
-    ):  # PythonEvalType.SQL_BATCHED_UDF / SQL_ARROW_BATCHED_UDF
-        out = F.udf(func, f.returnType, useArrow=f.evalType == 101)
-    else:  # a pandas UDF of the same kind (scalar, grouped aggregate, ...)
-        out = F.pandas_udf(func, f.returnType, f.evalType)
+    # The class `F.udf` / `F.pandas_udf` build through, with the eval type the original resolved (from its type hints, or
+    # a UDF's own): `F.pandas_udf(func, type, evalType)` would raise PySpark's SPARK-28264 deprecation warning, and the
+    # carrying wrapper has no hints for it to infer from.
+    out = UserDefinedFunction(
+        _carrying_function(f.func, None, cap), f.returnType, evalType=f.evalType
+    )._wrapped()
     return out if getattr(f, "deterministic", True) else out.asNondeterministic()
 
 

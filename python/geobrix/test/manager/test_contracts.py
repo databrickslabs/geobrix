@@ -2204,8 +2204,13 @@ def test_with_cap_rebuilds_a_udtf_and_both_kinds_of_pandas_udf(spark):
             yield (gp.carried_read_cap(),)
 
     nondeterministic = scalar.asNondeterministic()
+    import warnings
+
     for original in (scalar, grouped, nondeterministic):
-        rebuilt = _gdal_policy._with_cap(original, 777)
+        with warnings.catch_warnings():
+            # the rebuild must not take PySpark's explicit-eval-type path (SPARK-28264): the docs tests make it an error
+            warnings.simplefilter("error")
+            rebuilt = _gdal_policy._with_cap(original, 777)
         assert rebuilt.evalType == original.evalType
         assert rebuilt.deterministic == original.deterministic
     spark.conf.set(READ_CAP_KEY, "777")

@@ -14,7 +14,7 @@ import pytest
 # there and runs in the dev container (gbx:test:python).
 pyogrio = pytest.importorskip("pyogrio")
 
-from databricks.labs.gbx._native import _selfcheck
+from databricks.labs.gbx._native import _selfcheck  # noqa: E402
 
 
 class _Frame:

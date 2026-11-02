@@ -1,6 +1,6 @@
 # gbx:venv:check
 
-Compare the host venv (`.venv-pyrx`, or `GBX_PYRX_VENV`) with the running `geobrix-dev` container and print what differs. Exits 3 on any drift (1 when the venv or the container cannot be read), and 0 with a WARN when only the expected payload-stack divergence remains.
+Compare the host venv (`.venv-pyrx`, or `GBX_PYRX_VENV`) with the running `geobrix-dev` container and print what differs. It exits 3 on any drift, and 1 when the venv or the container cannot be read. It exits 0 with a WARN when only the expected payload-stack divergence remains.
 
 A host that drifts from the container proves nothing about it: a test that passes on the host may fail there. Run this at the start of a host (no-Docker) task. On a drift, fix the venv (`gbx:venv:sync --match-container --recreate`), not the test. The failure prints that command on a `Fix:` line.
 
@@ -16,10 +16,12 @@ A package only one side has is not drift, because it cannot be compared; the cou
 
 - The container carries the env wheel's payload stack: gdal 3.13.3, geos 3.15.0, proj 9.9.0 and rasterio `1.5.2+gbx1` (a local build).
 - The host uses PyPI wheels, and a local version is on no index, so the host cannot match it.
-- When the container's rasterio has a local version, a difference in gdal, geos, proj or rasterio is shown as `EXPECTED`, not `DRIFT`, when the host has exactly the container's public version (rasterio 1.5.2 against 1.5.2+gbx1). A host at any other version (rasterio 1.5.0) is `DRIFT`. The check passes and prints a WARN naming the expected rows.
+- The rows apply when the container's rasterio has a local version (for example 1.5.2+gbx1).
+  - A gdal, geos or proj difference is `EXPECTED`, not `DRIFT`.
+  - rasterio is `EXPECTED` only when the host has exactly the public version (1.5.2). Any other host version (1.5.0) is `DRIFT`. The check passes and prints a WARN naming the expected rows.
 - Any other difference is still `DRIFT` and fails the check. So is a native the host cannot reach, and a local version on any other package.
 - With no local-version rasterio in the container, a GDAL, PROJ or GEOS difference is `DRIFT`.
-- The WARN carries the rule: a host (T0) run is valid only for a test that does not depend on the stack's GDAL 3.13 or PROJ 9.9 behaviour. Run such a test in the container.
+- The WARN states the rule. A host (T0) run is valid only for a test that does not depend on GDAL 3.13 or PROJ 9.9 behaviour. Run such a test in the container.
 
 The container side is read with `docker exec` running a stdlib-only script (`scripts/ci/venv_env_report.py`) that the host interpreter also runs, so both sides report the same way. Nothing here runs Maven or a test JVM, so it takes no container lock.
 

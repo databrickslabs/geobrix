@@ -7,7 +7,9 @@ The plain pass takes about 70 seconds on a 12-core arm64 laptop. `--baseline` an
 **Usage:** `bash scripts/commands/gbx-bench-local-timing.sh [OPTIONS]`
 
 **Options:**
-- `--set <name>`: the levels set to time. Default `IO`. Sets: `IO` (the tile read forms) and `S` (the BNG scalar `gbx_bng_eastnorthasbng` forms `c0`, `c1`, `d`, `floor` over generated points; no corpus copy, n is rows: 1,000,000, 4,000,000, 16,000,000; `--corpus-dir` and `--corpus-src` are refused for it with exit 2).
+- `--set <name>`: the levels set to time. Default `IO`.
+  - `IO`: the tile read forms.
+  - `S`: the BNG scalar `gbx_bng_eastnorthasbng` forms `c0`, `c1`, `d` and `floor`, over generated points. There is no corpus copy. n is rows: 1,000,000, 4,000,000 and 16,000,000. `--corpus-dir` and `--corpus-src` are refused for it (exit 2).
 - `--k <number>`: the multiple that flags a form. Default `3`.
 - `--baseline [path]`: also flag a form whose cost per tile is over `--baseline-k` times the stored one. The default path is `test-logs/local-timing-baseline-<set>.json` (gitignored, per machine; `gbx:bench:clean` does not touch it).
 - `--baseline-write`: store this pass's cost per tile as the baseline (at the `--baseline` path, or the default) instead of comparing. A pass that flags a form is not stored.

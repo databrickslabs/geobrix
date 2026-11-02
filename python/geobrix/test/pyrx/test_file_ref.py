@@ -364,31 +364,6 @@ def test_binding_injection_uses_call_function_when_supported(spark):
         assert "try_to_file" in expr_str, f"Expected try_to_file in {expr_str!r}"
 
 
-def test_binding_rewired_rst_height_returns_correct_value(spark, gtiff_bytes):
-    """End-to-end: rewired rst_height returns correct pixel height via fallback.
-
-    file_ref_arg → F.lit(None) → the 2-arg UDF falls back to the plain-path
-    open_header path.  Builds a materialized tile via rst_fromcontent (no JAR
-    needed).  file_supported() is mocked to False so the test exercises the
-    fallback path regardless of whether the local Spark session supports FILE.
-    """
-    from unittest import mock
-
-    from pyspark.sql import functions as F
-
-    from databricks.labs.gbx.pyrx import functions as prx
-
-    with mock.patch(
-        "databricks.labs.gbx.ds.file_gbx.file_supported", return_value=False
-    ):
-        # Build a materialized tile from the gtiff_bytes fixture (4×3).
-        df = spark.createDataFrame([(gtiff_bytes,)], ["raster"]).select(
-            prx.rst_fromcontent("raster", F.lit("GTiff")).alias("tile")
-        )
-        result = df.select(prx.rst_height("tile")).collect()[0][0]
-    assert result == 3, f"Expected height=3, got {result}"
-
-
 # ---------------------------------------------------------------------------
 # clip_polygon must not be bypassed by FILE fast-path
 # ---------------------------------------------------------------------------
@@ -581,52 +556,6 @@ def test_file_ref_arg_str_column_name_does_not_raise(spark):
         assert isinstance(result_false_str, Column)
         result_false_col = file_ref_arg(F.col("tile"))
         assert isinstance(result_false_col, Column)
-
-
-def test_sql_registry_still_maps_to_single_arg_udfs():
-    """SQL_REGISTRY entries for all rewired accessors point at single-arg ``_u_*`` UDFs.
-
-    This confirms that the FILE-aware rewiring of the public Python bindings
-    did NOT inadvertently redirect the SQL registry entries to the 2-arg ``_uf_*``
-    UDFs.  SQL binds positionally, so a 2-arg UDF in the registry would cause
-    incorrect or errored SQL calls.
-    """
-    from databricks.labs.gbx.pyrx.functions import (
-        SQL_REGISTRY,
-        _metadata_udf,
-        _summary_udf,
-        _u_boundingbox,
-        _u_crs,
-        _u_height,
-        _u_isempty,
-        _u_numbands,
-        _u_srid,
-        _u_width,
-    )
-
-    assert (
-        SQL_REGISTRY["gbx_rst_height"] is _u_height
-    ), "gbx_rst_height must map to _u_height"
-    assert (
-        SQL_REGISTRY["gbx_rst_numbands"] is _u_numbands
-    ), "gbx_rst_numbands must map to _u_numbands"
-    assert SQL_REGISTRY["gbx_rst_srid"] is _u_srid, "gbx_rst_srid must map to _u_srid"
-    assert (
-        SQL_REGISTRY["gbx_rst_width"] is _u_width
-    ), "gbx_rst_width must map to _u_width"
-    assert (
-        SQL_REGISTRY["gbx_rst_metadata"] is _metadata_udf
-    ), "gbx_rst_metadata must map to _metadata_udf (single-arg)"
-    assert (
-        SQL_REGISTRY["gbx_rst_boundingbox"] is _u_boundingbox
-    ), "gbx_rst_boundingbox must map to _u_boundingbox"
-    assert (
-        SQL_REGISTRY["gbx_rst_summary"] is _summary_udf
-    ), "gbx_rst_summary must map to _summary_udf (single-arg)"
-    assert SQL_REGISTRY["gbx_rst_crs"] is _u_crs, "gbx_rst_crs must map to _u_crs"
-    assert (
-        SQL_REGISTRY["gbx_rst_isempty"] is _u_isempty
-    ), "gbx_rst_isempty must map to _u_isempty"
 
 
 def test_file_ref_sql_follows_the_rule_of_file_ref_arg(monkeypatch):

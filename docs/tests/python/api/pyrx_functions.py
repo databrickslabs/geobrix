@@ -126,7 +126,7 @@ Every example on this page reads from one of these views.
 
 def pyrx_accessors_example(spark):
     """Read basic raster properties from the tile struct."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
 
     tile_df = _tile_df(spark, width=4, height=3, count=2, epsg=4326)
     row = tile_df.select(
@@ -150,7 +150,7 @@ Row(width=4, height=3, srid=4326, bands=2)
 
 def pyrx_transform_example(spark):
     """Reproject the raster tile to a target CRS (EPSG:3857)."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
 
     tile_df = _tile_df(spark, epsg=4326)
     out = tile_df.select(rx.rst_transform("tile", 3857).alias("t"))
@@ -173,7 +173,7 @@ def pyrx_clip_example(spark):
     import shapely.wkb
     from pyspark.sql import functions as f
     from shapely.geometry import box
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
 
     tile_df = _tile_df(spark, width=4, height=3, epsg=4326)
     # Clip to a 1 x 0.5 degree box — smaller than the full 2 x 1.5 degree extent.

@@ -219,35 +219,230 @@ EXAMPLES = {
         "qb_tessellate_triangle",
         "SELECT gbx_quadbin_tessellate('POLYGON((-122.5 37.9, -122.2 37.9, -122.5 37.6, -122.5 37.9))', 10) AS out",
     ),
+    "gbx_rst_avg": (
+        "RASTER_STAT",
+        "avg",
+        "SELECT gbx_rst_avg(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_bandmetadata": (
+        "RASTER_ACCESSOR",
+        "bandmetadata",
+        "SELECT gbx_rst_bandmetadata(c0, 1) AS out FROM gbx_example",
+    ),
     "gbx_rst_bng_rasterize_agg": (
         "MVP_A",
         "br_nan_beside_numbers",
         "SELECT gbx_rst_bng_rasterize_agg(c0, c1, 27700, CAST(NULL AS DOUBLE), 530000.0D, 180000.0D, 533000.0D, 182000.0D, 3, 2, 'centroids', 0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_boundingbox": (
+        "RASTER_ACCESSOR",
+        "boundingbox",
+        "SELECT gbx_rst_boundingbox(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_crs": (
+        "RASTER_ACCESSOR",
+        "crs",
+        "SELECT gbx_rst_crs(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_format": (
+        "RASTER_ACCESSOR",
+        "format",
+        "SELECT gbx_rst_format(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_georeference": (
+        "RASTER_ACCESSOR",
+        "georeference",
+        "SELECT gbx_rst_georeference(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_getnodata": (
+        "RASTER_ACCESSOR",
+        "getnodata",
+        "SELECT gbx_rst_getnodata(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_height": (
+        "RASTER_ACCESSOR",
+        "height",
+        "SELECT gbx_rst_height(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_histogram": (
+        "RASTER_STAT",
+        "histogram",
+        "SELECT gbx_rst_histogram(c0, 2) AS out FROM gbx_example",
+    ),
+    "gbx_rst_isempty": (
+        "RASTER_STAT",
+        "isempty",
+        "SELECT gbx_rst_isempty(c0) AS out FROM gbx_example",
     ),
     "gbx_rst_mapalgebra": (
         "SPEC_SE",
         "se_ma_norm_diff",
         'SELECT gbx_rst_mapalgebra(c0, \'{"calc": "norm_diff", "dialect": "builtin"}\') AS out FROM gbx_example',
     ),
+    "gbx_rst_max": (
+        "RASTER_STAT",
+        "max",
+        "SELECT gbx_rst_max(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_median": (
+        "RASTER_STAT",
+        "median",
+        "SELECT gbx_rst_median(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_memsize": (
+        "RASTER_ACCESSOR",
+        "memsize",
+        "SELECT gbx_rst_memsize(c0) AS out FROM gbx_example",
+    ),
     "gbx_rst_merge_agg": (
         "MVP_A",
         "ma_quad",
         "SELECT gbx_rst_merge_agg(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_metadata": (
+        "RASTER_ACCESSOR",
+        "metadata",
+        "SELECT gbx_rst_metadata(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_min": (
+        "RASTER_STAT",
+        "min",
+        "SELECT gbx_rst_min(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_numbands": (
+        "RASTER_ACCESSOR",
+        "numbands",
+        "SELECT gbx_rst_numbands(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_pixelcount": (
+        "RASTER_STAT",
+        "pixelcount",
+        "SELECT gbx_rst_pixelcount(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_pixelheight": (
+        "RASTER_ACCESSOR",
+        "pixelheight",
+        "SELECT gbx_rst_pixelheight(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_pixelwidth": (
+        "RASTER_ACCESSOR",
+        "pixelwidth",
+        "SELECT gbx_rst_pixelwidth(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_rastertoworldcoord": (
+        "RASTER_ACCESSOR",
+        "rastertoworldcoord",
+        "SELECT gbx_rst_rastertoworldcoord(c0, 1, 2) AS out FROM gbx_example",
+    ),
+    "gbx_rst_rastertoworldcoordx": (
+        "RASTER_ACCESSOR",
+        "rastertoworldcoordx",
+        "SELECT gbx_rst_rastertoworldcoordx(c0, 1, 2) AS out FROM gbx_example",
+    ),
+    "gbx_rst_rastertoworldcoordy": (
+        "RASTER_ACCESSOR",
+        "rastertoworldcoordy",
+        "SELECT gbx_rst_rastertoworldcoordy(c0, 1, 2) AS out FROM gbx_example",
     ),
     "gbx_rst_retile": (
         "MVP_G",
         "rt_32",
         "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_retile(c0, 32, 32) AS gbx_out",
     ),
+    "gbx_rst_rotation": (
+        "RASTER_ACCESSOR",
+        "rotation",
+        "SELECT gbx_rst_rotation(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_sample": (
+        "RASTER_STAT",
+        "sample",
+        "SELECT gbx_rst_sample(c0, 'POINT(400015 5759995)') AS out FROM gbx_example",
+    ),
+    "gbx_rst_scalex": (
+        "RASTER_ACCESSOR",
+        "scalex",
+        "SELECT gbx_rst_scalex(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_scaley": (
+        "RASTER_ACCESSOR",
+        "scaley",
+        "SELECT gbx_rst_scaley(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_skewx": (
+        "RASTER_ACCESSOR",
+        "skewx",
+        "SELECT gbx_rst_skewx(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_skewy": (
+        "RASTER_ACCESSOR",
+        "skewy",
+        "SELECT gbx_rst_skewy(c0) AS out FROM gbx_example",
+    ),
     "gbx_rst_slope": (
         "SPEC_SE",
         "se_slope_deg",
         "SELECT gbx_rst_slope(c0, 'degrees') AS out FROM gbx_example",
     ),
+    "gbx_rst_srid": (
+        "RASTER_ACCESSOR",
+        "srid",
+        "SELECT gbx_rst_srid(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_subdatasets": (
+        "RASTER_ACCESSOR",
+        "subdatasets",
+        "SELECT gbx_rst_subdatasets(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_summary": (
+        "SPEC_ANALYSIS",
+        "summary",
+        "SELECT gbx_rst_summary(c0) AS out FROM gbx_example",
+    ),
     "gbx_rst_transformcrs": (
         "MVP_S",
         "tcrs_epsg",
         "SELECT gbx_rst_transformcrs(c0, 'EPSG:3857') AS out FROM gbx_example",
+    ),
+    "gbx_rst_tryopen": (
+        "RASTER_STAT",
+        "tryopen",
+        "SELECT gbx_rst_tryopen(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_type": (
+        "RASTER_ACCESSOR",
+        "type",
+        "SELECT gbx_rst_type(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_upperleftx": (
+        "RASTER_ACCESSOR",
+        "upperleftx",
+        "SELECT gbx_rst_upperleftx(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_upperlefty": (
+        "RASTER_ACCESSOR",
+        "upperlefty",
+        "SELECT gbx_rst_upperlefty(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_width": (
+        "RASTER_ACCESSOR",
+        "width",
+        "SELECT gbx_rst_width(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_worldtorastercoord": (
+        "RASTER_ACCESSOR",
+        "worldtorastercoord",
+        "SELECT gbx_rst_worldtorastercoord(c0, 400015.0D, 5759975.0D) AS out FROM gbx_example",
+    ),
+    "gbx_rst_worldtorastercoordx": (
+        "RASTER_ACCESSOR",
+        "worldtorastercoordx",
+        "SELECT gbx_rst_worldtorastercoordx(c0, 400015.0D, 5759975.0D) AS out FROM gbx_example",
+    ),
+    "gbx_rst_worldtorastercoordy": (
+        "RASTER_ACCESSOR",
+        "worldtorastercoordy",
+        "SELECT gbx_rst_worldtorastercoordy(c0, 400015.0D, 5759975.0D) AS out FROM gbx_example",
     ),
     "gbx_st_crs": (
         "VECTOR_SCALAR",

@@ -93,79 +93,6 @@ def register(_spark: SparkSession) -> None:
         pass
 
 
-def rst_avg(tile: ColLike) -> Column:
-    """Return the average pixel value per band for the tile.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of array of double (one per band).
-    """
-    return f.call_function("gbx_rst_avg", _col(tile))
-
-
-def rst_bandmetadata(tile: ColLike, band: ColLike) -> Column:
-    """Return metadata for the given band index (e.g. nodata, data type).
-
-    Args:
-        tile: Raster tile column.
-        band: 1-based band index column.
-
-    Returns:
-        Column of map (string -> string).
-    """
-    return f.call_function("gbx_rst_bandmetadata", _col(tile), _col(band))
-
-
-def rst_boundingbox(tile: ColLike) -> Column:
-    """Return the bounding box of the raster in world coordinates.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of WKB (binary).
-    """
-    return f.call_function("gbx_rst_boundingbox", _col(tile))
-
-
-def rst_format(tile: ColLike) -> Column:
-    """Return the GDAL format/driver name of the raster (e.g. GTiff).
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of format string.
-    """
-    return f.call_function("gbx_rst_format", _col(tile))
-
-
-def rst_georeference(tile: ColLike) -> Column:
-    """Return the georeference (affine transform) of the raster.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of map (string -> double).
-    """
-    return f.call_function("gbx_rst_georeference", _col(tile))
-
-
-def rst_getnodata(tile: ColLike) -> Column:
-    """Return the NoData value for the raster (or null if not set).
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of array of double (one per band), or null.
-    """
-    return f.call_function("gbx_rst_getnodata", _col(tile))
-
-
 def rst_getsubdataset(tile: ColLike, subset_name: ColLike) -> Column:
     """Return a sub-dataset (e.g. HDF sublayer) by name.
 
@@ -177,270 +104,6 @@ def rst_getsubdataset(tile: ColLike, subset_name: ColLike) -> Column:
         Column of raster tile (sub-dataset).
     """
     return f.call_function("gbx_rst_getsubdataset", _col(tile), _col(subset_name))
-
-
-def rst_height(tile: ColLike) -> Column:
-    """Return the pixel height (number of rows) of the raster.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of integer height.
-    """
-    return f.call_function("gbx_rst_height", _col(tile))
-
-
-def rst_max(tile: ColLike) -> Column:
-    """Return the maximum pixel value per band for the tile.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of array of double (one per band).
-    """
-    return f.call_function("gbx_rst_max", _col(tile))
-
-
-def rst_median(tile: ColLike) -> Column:
-    """Return the median pixel value per band for the tile.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of array of double (one per band).
-    """
-    return f.call_function("gbx_rst_median", _col(tile))
-
-
-def rst_memsize(tile: ColLike) -> Column:
-    """Return the approximate memory size of the tile in bytes.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of long (bytes).
-    """
-    return f.call_function("gbx_rst_memsize", _col(tile))
-
-
-def rst_metadata(tile: ColLike) -> Column:
-    """Return full metadata of the raster (driver, dimensions, CRS, etc.).
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of map (string -> string).
-    """
-    return f.call_function("gbx_rst_metadata", _col(tile))
-
-
-def rst_min(tile: ColLike) -> Column:
-    """Return the minimum pixel value per band for the tile.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of array of double (one per band).
-    """
-    return f.call_function("gbx_rst_min", _col(tile))
-
-
-def rst_numbands(tile: ColLike) -> Column:
-    """Return the number of bands in the raster.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of integer band count.
-    """
-    return f.call_function("gbx_rst_numbands", _col(tile))
-
-
-def rst_pixelcount(tile: ColLike) -> Column:
-    """Return the valid pixel count per band.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of array of long (one per band).
-    """
-    return f.call_function("gbx_rst_pixelcount", _col(tile))
-
-
-def rst_pixelheight(tile: ColLike) -> Column:
-    """Return the pixel height (ground size in Y) in CRS units.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of double (may be negative).
-    """
-    return f.call_function("gbx_rst_pixelheight", _col(tile))
-
-
-def rst_pixelwidth(tile: ColLike) -> Column:
-    """Return the pixel width (ground size in X) in CRS units.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of double.
-    """
-    return f.call_function("gbx_rst_pixelwidth", _col(tile))
-
-
-def rst_rotation(tile: ColLike) -> Column:
-    """Return the rotation component of the georeference (if any).
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of rotation (double).
-    """
-    return f.call_function("gbx_rst_rotation", _col(tile))
-
-
-def rst_scalex(tile: ColLike) -> Column:
-    """Return the X scale (pixel size in X) of the raster.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of double.
-    """
-    return f.call_function("gbx_rst_scalex", _col(tile))
-
-
-def rst_scaley(tile: ColLike) -> Column:
-    """Return the Y scale (pixel size in Y) of the raster.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of double (often negative).
-    """
-    return f.call_function("gbx_rst_scaley", _col(tile))
-
-
-def rst_skewx(tile: ColLike) -> Column:
-    """Return the X skew component of the georeference.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of double.
-    """
-    return f.call_function("gbx_rst_skewx", _col(tile))
-
-
-def rst_skewy(tile: ColLike) -> Column:
-    """Return the Y skew component of the georeference.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of double.
-    """
-    return f.call_function("gbx_rst_skewy", _col(tile))
-
-
-def rst_srid(tile: ColLike) -> Column:
-    """Return the spatial reference ID (EPSG code) of the raster.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of integer SRID.
-    """
-    return f.call_function("gbx_rst_srid", _col(tile))
-
-
-def rst_subdatasets(tile: ColLike) -> Column:
-    """Return the sub-dataset names and descriptions (e.g. for HDF/NetCDF).
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of map (string -> string, name to description).
-    """
-    return f.call_function("gbx_rst_subdatasets", _col(tile))
-
-
-def rst_summary(tile: ColLike) -> Column:
-    """Return a short text summary of the raster (dimensions, CRS, bands).
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of string summary.
-    """
-    return f.call_function("gbx_rst_summary", _col(tile))
-
-
-def rst_type(tile: ColLike) -> Column:
-    """Return the raster data type (e.g. Byte, Int16, Float32) per band.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of array of strings (one per band).
-    """
-    return f.call_function("gbx_rst_type", _col(tile))
-
-
-def rst_upperleftx(tile: ColLike) -> Column:
-    """Return the X coordinate of the upper-left corner in world coordinates.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of double.
-    """
-    return f.call_function("gbx_rst_upperleftx", _col(tile))
-
-
-def rst_upperlefty(tile: ColLike) -> Column:
-    """Return the Y coordinate of the upper-left corner in world coordinates.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of double.
-    """
-    return f.call_function("gbx_rst_upperlefty", _col(tile))
-
-
-def rst_width(tile: ColLike) -> Column:
-    """Return the pixel width (number of columns) of the raster.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of integer width.
-    """
-    return f.call_function("gbx_rst_width", _col(tile))
 
 
 # Aggregators
@@ -2163,25 +1826,6 @@ def rst_convolve(tile: ColLike, kernel: ColLike) -> Column:
     return f.call_function("gbx_rst_convolve", _col(tile), _col(kernel))
 
 
-def rst_crs(tile: ColLike) -> Column:
-    """Return the canonical CRS string for the raster tile.
-
-    Returns an authority string (``'EPSG:4326'``, ``'ESRI:54008'``) when the
-    CRS has a recognised authority code, or a WKT string for authority-less
-    projections. Returns NULL for a tile with no CRS.
-
-    Distinct from ``rst_srid`` (int / NULL): ``rst_crs`` preserves non-EPSG
-    authority codes (ESRI, IAU, etc.) and falls back to WKT rather than NULL.
-
-    Args:
-        tile: Tile struct column.
-
-    Returns:
-        STRING column — canonical CRS string, or NULL if CRS is absent.
-    """
-    return f.call_function("gbx_rst_crs", _col(tile))
-
-
 def rst_derivedband(tile: ColLike, python_func: ColLike, func_name: ColLike) -> Column:
     """Apply a Python UDF to each pixel (or band) to produce a derived band.
 
@@ -2226,18 +1870,6 @@ def rst_initnodata(tile: ColLike) -> Column:
     return f.call_function("gbx_rst_initnodata", _col(tile))
 
 
-def rst_isempty(tile: ColLike) -> Column:
-    """Return true if the raster tile is empty or invalid.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of boolean.
-    """
-    return f.call_function("gbx_rst_isempty", _col(tile))
-
-
 def rst_merge(tiles: ColLike) -> Column:
     """Merge multiple raster tiles into one (e.g. mosaic).
 
@@ -2264,48 +1896,6 @@ def rst_ndvi(tile: ColLike, red_idx: ColLike, nir_idx: ColLike) -> Column:
     return f.call_function("gbx_rst_ndvi", _col(tile), _col(red_idx), _col(nir_idx))
 
 
-def rst_rastertoworldcoord(tile: ColLike, x: ColLike, y: ColLike) -> Column:
-    """Convert pixel (x, y) to world (x, y) in the CRS of the raster.
-
-    Args:
-        tile: Raster tile column.
-        x: Pixel column index.
-        y: Pixel row index.
-
-    Returns:
-        Column of struct (x, y as double) in world coordinates.
-    """
-    return f.call_function("gbx_rst_rastertoworldcoord", _col(tile), _col(x), _col(y))
-
-
-def rst_rastertoworldcoordx(tile: ColLike, x: ColLike, y: ColLike) -> Column:
-    """Convert pixel (x, y) to world X coordinate.
-
-    Args:
-        tile: Raster tile column.
-        x: Pixel column index.
-        y: Pixel row index.
-
-    Returns:
-        Column of double.
-    """
-    return f.call_function("gbx_rst_rastertoworldcoordx", _col(tile), _col(x), _col(y))
-
-
-def rst_rastertoworldcoordy(tile: ColLike, x: ColLike, y: ColLike) -> Column:
-    """Convert pixel (x, y) to world Y coordinate.
-
-    Args:
-        tile: Raster tile column.
-        x: Pixel column index.
-        y: Pixel row index.
-
-    Returns:
-        Column of double.
-    """
-    return f.call_function("gbx_rst_rastertoworldcoordy", _col(tile), _col(x), _col(y))
-
-
 def rst_transform(tile: ColLike, srid: ColLike) -> Column:
     """Reproject the raster to the target SRID (EPSG code).
 
@@ -2319,18 +1909,6 @@ def rst_transform(tile: ColLike, srid: ColLike) -> Column:
     return f.call_function("gbx_rst_transform", _col(tile), _col(srid))
 
 
-def rst_tryopen(tile: ColLike) -> Column:
-    """Attempt to open/validate the raster; return true if successful.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of boolean.
-    """
-    return f.call_function("gbx_rst_tryopen", _col(tile))
-
-
 def rst_updatetype(tile: ColLike, new_type: ColLike) -> Column:
     """Update the declared data type of the raster (e.g. after conversion).
 
@@ -2342,48 +1920,6 @@ def rst_updatetype(tile: ColLike, new_type: ColLike) -> Column:
         Column of raster tile with updated type metadata.
     """
     return f.call_function("gbx_rst_updatetype", _col(tile), _col(new_type))
-
-
-def rst_worldtorastercoord(tile: ColLike, x: ColLike, y: ColLike) -> Column:
-    """Convert world (x, y) to pixel (x, y) in the raster.
-
-    Args:
-        tile: Raster tile column.
-        x: World X coordinate.
-        y: World Y coordinate.
-
-    Returns:
-        Column of struct (x, y as integer) in pixel coordinates.
-    """
-    return f.call_function("gbx_rst_worldtorastercoord", _col(tile), _col(x), _col(y))
-
-
-def rst_worldtorastercoordx(tile: ColLike, x: ColLike, y: ColLike) -> Column:
-    """Convert world (x, y) to pixel column index.
-
-    Args:
-        tile: Raster tile column.
-        x: World X coordinate.
-        y: World Y coordinate.
-
-    Returns:
-        Column of integer (pixel column index).
-    """
-    return f.call_function("gbx_rst_worldtorastercoordx", _col(tile), _col(x), _col(y))
-
-
-def rst_worldtorastercoordy(tile: ColLike, x: ColLike, y: ColLike) -> Column:
-    """Convert world (x, y) to pixel row index.
-
-    Args:
-        tile: Raster tile column.
-        x: World X coordinate.
-        y: World Y coordinate.
-
-    Returns:
-        Column of integer (pixel row index).
-    """
-    return f.call_function("gbx_rst_worldtorastercoordy", _col(tile), _col(x), _col(y))
 
 
 def rst_to_webmercator(
@@ -3432,27 +2968,6 @@ def rst_fillnodata(
     return f.call_function("gbx_rst_fillnodata", _col(tile), msd_col, si_col)
 
 
-def rst_sample(tile: ColLike, geom: ColLike, crs: ColLike = None) -> Column:
-    """Sample raster pixel values at a POINT geometry — returns one Double per band.
-
-    The point coordinates must be in the raster's CRS. Out-of-extent points
-    return ``null`` (not a partial array).
-
-    Args:
-        tile: Raster tile column.
-        geom: POINT geometry — WKB ``bytes`` or WKT ``string`` column.
-        crs: Optional source CRS of a plain WKB/WKT point (int SRID or CRS
-            string). An EWKB/EWKT embedded SRID wins; absent + no SRID ->
-            assumed already in the raster CRS.
-
-    Returns:
-        Column of ``ARRAY<DOUBLE>`` (one value per band) or ``null`` outside extent.
-    """
-    if crs is None:
-        return f.call_function("gbx_rst_sample", _col(tile), _col(geom))
-    return f.call_function("gbx_rst_sample", _col(tile), _col(geom), _crs_col(crs))
-
-
 def rst_setcrs(tile: ColLike, crs: ColLike) -> Column:
     """Stamp the CRS WITHOUT reprojecting, accepting any CRS string.
 
@@ -3487,39 +3002,6 @@ def rst_setsrid(tile: ColLike, srid: ColLike) -> Column:
         Raster tile column with rewritten SR header.
     """
     return f.call_function("gbx_rst_setsrid", _col(tile), _col(srid))
-
-
-def rst_histogram(
-    tile: ColLike,
-    n_buckets: ColLike = None,
-    min_val: ColLike = None,
-    max_val: ColLike = None,
-    include_nodata: ColLike = None,
-) -> Column:
-    """Per-band pixel histogram via ``band.GetHistogram``.
-
-    Returns ``MAP<STRING, ARRAY<LONG>>`` keyed by ``"band_<i>"`` (1-based) with
-    a length-``n_buckets`` array of bucket counts per band. Pixels outside
-    ``[min_val, max_val]`` are excluded.
-
-    Args:
-        tile: Raster tile column.
-        n_buckets: Number of equal-width buckets across ``[min_val, max_val]``
-            (default 256).
-        min_val: Histogram lower bound (default: derived from band statistics).
-        max_val: Histogram upper bound (default: derived from band statistics).
-        include_nodata: Reserved — GDAL excludes NoData regardless. Default False.
-
-    Returns:
-        Column of ``MAP<STRING, ARRAY<LONG>>``.
-    """
-    nb_col = f.lit(256) if n_buckets is None else _col(n_buckets)
-    min_col = f.lit(None).cast("double") if min_val is None else _col(min_val)
-    max_col = f.lit(None).cast("double") if max_val is None else _col(max_val)
-    inc_col = f.lit(False) if include_nodata is None else _col(include_nodata)
-    return f.call_function(
-        "gbx_rst_histogram", _col(tile), nb_col, min_col, max_col, inc_col
-    )
 
 
 def rst_threshold(
@@ -3789,6 +3271,47 @@ def rst_viewshed(
 # BEGIN GENERATED by gbx:manifest:gen: edit manifest/functions.json, then run the generator
 
 
+def rst_avg(
+    tile: ColLike,
+) -> Column:
+    """Return the mean of the valid pixels of each band.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        One value per band; a band with no valid pixel gives NULL.
+
+    SQL: ``gbx_rst_avg(tile)``
+    """
+    return _api.call(
+        "gbx_rst_avg",
+        tile,
+    )
+
+
+def rst_bandmetadata(
+    tile: ColLike,
+    band: ColLike,
+) -> Column:
+    """Return the metadata of one band as a map.
+
+    Args:
+        tile: The raster tile.
+        band: The 1-based band number.
+
+    Returns:
+        The band's tags (empty when it has none), or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_bandmetadata(tile, band)``
+    """
+    return _api.call(
+        "gbx_rst_bandmetadata",
+        tile,
+        band,
+    )
+
+
 def rst_bng_rasterize_agg(
     cellid: ColLike,
     value: ColLike,
@@ -3846,6 +3369,179 @@ def rst_bng_rasterize_agg(
     )
 
 
+def rst_boundingbox(
+    tile: ColLike,
+) -> Column:
+    """Return the raster's bounding box as a polygon.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        A WKB polygon in the raster CRS, or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_boundingbox(tile)``
+    """
+    return _api.call(
+        "gbx_rst_boundingbox",
+        tile,
+    )
+
+
+def rst_crs(
+    tile: ColLike,
+) -> Column:
+    """Return the canonical CRS of the raster.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        `EPSG:<code>` or `ESRI:<code>` when the CRS has an authority code, its WKT when
+        it has none, or NULL when the raster has no CRS.
+
+    SQL: ``gbx_rst_crs(tile)``
+    """
+    return _api.call(
+        "gbx_rst_crs",
+        tile,
+    )
+
+
+def rst_format(
+    tile: ColLike,
+) -> Column:
+    """Return the GDAL driver short name of the raster.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The driver the raster was read with, for example `GTiff` or `HFA`, or NULL for a
+        NULL or error tile.
+
+    SQL: ``gbx_rst_format(tile)``
+    """
+    return _api.call(
+        "gbx_rst_format",
+        tile,
+    )
+
+
+def rst_georeference(
+    tile: ColLike,
+) -> Column:
+    """Return the geotransform as a map.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The keys `upperLeftX`, `upperLeftY`, `scaleX`, `scaleY`, `skewX` and `skewY`, or
+        NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_georeference(tile)``
+    """
+    return _api.call(
+        "gbx_rst_georeference",
+        tile,
+    )
+
+
+def rst_getnodata(
+    tile: ColLike,
+) -> Column:
+    """Return the NoData value of each band.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        One value per band, or NULL when the raster declares no NoData.
+
+    SQL: ``gbx_rst_getnodata(tile)``
+    """
+    return _api.call(
+        "gbx_rst_getnodata",
+        tile,
+    )
+
+
+def rst_height(
+    tile: ColLike,
+) -> Column:
+    """Return the height of the raster in pixels.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The pixel count along y, or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_height(tile)``
+    """
+    return _api.call(
+        "gbx_rst_height",
+        tile,
+    )
+
+
+def rst_histogram(
+    tile: ColLike,
+    n_buckets: ColLike = None,
+    min_val: ColLike = None,
+    max_val: ColLike = None,
+    include_nodata: ColLike = None,
+) -> Column:
+    """Return the histogram of each band.
+
+    Args:
+        tile: The raster tile.
+        n_buckets: The number of equal-width buckets across the range. SQL default:
+            ``256``.
+        min_val: The lower bound of the range; the band's smallest valid value when
+            NULL. SQL default: ``NULL``.
+        max_val: The upper bound of the range; the band's largest valid value when NULL.
+            SQL default: ``NULL``.
+        include_nodata: Whether NoData pixels are binned too; the default leaves them
+            out. SQL default: ``false``.
+
+    Returns:
+        A map from `band_<i>` to the bucket counts; values outside the range are
+        dropped.
+
+    SQL: ``gbx_rst_histogram(tile, [n_buckets], [min_val], [max_val], [include_nodata])``
+    """
+    return _api.call(
+        "gbx_rst_histogram",
+        tile,
+        n_buckets,
+        min_val,
+        max_val,
+        include_nodata,
+    )
+
+
+def rst_isempty(
+    tile: ColLike,
+) -> Column:
+    """Test whether a raster holds no valid pixel.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        True when the raster has no size, no band or only NoData; an error tile is
+        empty.
+
+    SQL: ``gbx_rst_isempty(tile)``
+    """
+    return _api.call(
+        "gbx_rst_isempty",
+        tile,
+    )
+
+
 def rst_mapalgebra(
     tiles: ColLike,
     expression: ColLike,
@@ -3885,6 +3581,64 @@ def rst_mapalgebra(
     )
 
 
+def rst_max(
+    tile: ColLike,
+) -> Column:
+    """Return the maximum of the valid pixels of each band.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        One value per band; a band with no valid pixel gives NULL.
+
+    SQL: ``gbx_rst_max(tile)``
+    """
+    return _api.call(
+        "gbx_rst_max",
+        tile,
+    )
+
+
+def rst_median(
+    tile: ColLike,
+) -> Column:
+    """Return the median of the valid pixels of each band.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        One value per band; a band with no valid pixel gives NULL.
+
+    SQL: ``gbx_rst_median(tile)``
+    """
+    return _api.call(
+        "gbx_rst_median",
+        tile,
+    )
+
+
+def rst_memsize(
+    tile: ColLike,
+) -> Column:
+    """Return the in-memory size of a tile in bytes.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The raster buffer length for a materialized tile, or the decoded footprint of
+        the window for a virtual one.
+
+    SQL: ``gbx_rst_memsize(tile)``
+    """
+    return _api.call(
+        "gbx_rst_memsize",
+        tile,
+    )
+
+
 def rst_merge_agg(
     tile: ColLike,
     virtualize_dir: Optional[str] = None,
@@ -3918,6 +3672,198 @@ def rst_merge_agg(
     )
 
 
+def rst_metadata(
+    tile: ColLike,
+) -> Column:
+    """Return the raster's metadata as a map.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The metadata entries, or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_metadata(tile)``
+    """
+    return _api.call(
+        "gbx_rst_metadata",
+        tile,
+    )
+
+
+def rst_min(
+    tile: ColLike,
+) -> Column:
+    """Return the minimum of the valid pixels of each band.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        One value per band; a band with no valid pixel gives NULL.
+
+    SQL: ``gbx_rst_min(tile)``
+    """
+    return _api.call(
+        "gbx_rst_min",
+        tile,
+    )
+
+
+def rst_numbands(
+    tile: ColLike,
+) -> Column:
+    """Return the number of bands of the raster.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The band count (0 for a container with only subdatasets), or NULL for a NULL or
+        error tile.
+
+    SQL: ``gbx_rst_numbands(tile)``
+    """
+    return _api.call(
+        "gbx_rst_numbands",
+        tile,
+    )
+
+
+def rst_pixelcount(
+    tile: ColLike,
+) -> Column:
+    """Return the number of valid pixels of each band.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        One count per band; a band with no valid pixel gives 0.
+
+    SQL: ``gbx_rst_pixelcount(tile)``
+    """
+    return _api.call(
+        "gbx_rst_pixelcount",
+        tile,
+    )
+
+
+def rst_pixelheight(
+    tile: ColLike,
+) -> Column:
+    """Return the ground size of a pixel along y.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The non-negative pixel height, including any skew, or NULL for a NULL or error
+        tile.
+
+    SQL: ``gbx_rst_pixelheight(tile)``
+    """
+    return _api.call(
+        "gbx_rst_pixelheight",
+        tile,
+    )
+
+
+def rst_pixelwidth(
+    tile: ColLike,
+) -> Column:
+    """Return the ground size of a pixel along x.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The non-negative pixel width, including any skew, or NULL for a NULL or error
+        tile.
+
+    SQL: ``gbx_rst_pixelwidth(tile)``
+    """
+    return _api.call(
+        "gbx_rst_pixelwidth",
+        tile,
+    )
+
+
+def rst_rastertoworldcoord(
+    tile: ColLike,
+    x: ColLike,
+    y: ColLike,
+) -> Column:
+    """Convert a pixel to the world coordinate of its centre.
+
+    Args:
+        tile: The raster tile.
+        x: The pixel column, counted from 0.
+        y: The pixel row, counted from 0.
+
+    Returns:
+        A struct with the x and y of the pixel centre in the raster CRS.
+
+    SQL: ``gbx_rst_rastertoworldcoord(tile, x, y)``
+    """
+    return _api.call(
+        "gbx_rst_rastertoworldcoord",
+        tile,
+        x,
+        y,
+    )
+
+
+def rst_rastertoworldcoordx(
+    tile: ColLike,
+    x: ColLike,
+    y: ColLike,
+) -> Column:
+    """Convert a pixel to the x of its centre.
+
+    Args:
+        tile: The raster tile.
+        x: The pixel column, counted from 0.
+        y: The pixel row, counted from 0.
+
+    Returns:
+        The x of the pixel centre in the raster CRS.
+
+    SQL: ``gbx_rst_rastertoworldcoordx(tile, x, y)``
+    """
+    return _api.call(
+        "gbx_rst_rastertoworldcoordx",
+        tile,
+        x,
+        y,
+    )
+
+
+def rst_rastertoworldcoordy(
+    tile: ColLike,
+    x: ColLike,
+    y: ColLike,
+) -> Column:
+    """Convert a pixel to the y of its centre.
+
+    Args:
+        tile: The raster tile.
+        x: The pixel column, counted from 0.
+        y: The pixel row, counted from 0.
+
+    Returns:
+        The y of the pixel centre in the raster CRS.
+
+    SQL: ``gbx_rst_rastertoworldcoordy(tile, x, y)``
+    """
+    return _api.call(
+        "gbx_rst_rastertoworldcoordy",
+        tile,
+        x,
+        y,
+    )
+
+
 def rst_retile(
     df: DataFrame,
     tile: ColLike,
@@ -3944,6 +3890,128 @@ def rst_retile(
         tile,
         tile_width,
         tile_height,
+    )
+
+
+def rst_rotation(
+    tile: ColLike,
+) -> Column:
+    """Return the rotation of the raster grid in radians.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The angle atan(skew y / scale x), or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_rotation(tile)``
+    """
+    return _api.call(
+        "gbx_rst_rotation",
+        tile,
+    )
+
+
+def rst_sample(
+    tile: ColLike,
+    geom: ColLike,
+    crs: ColLike = None,
+) -> Column:
+    """Return the pixel value of each band at a point.
+
+    Args:
+        tile: The raster tile.
+        geom: A POINT as WKB, EWKB, WKT or EWKT.
+        crs: The CRS of a point with no SRID: `EPSG:<code>`, `ESRI:<code>`, WKT or an
+            integer code. The raster CRS when NULL. SQL default: ``NULL``.
+
+    Returns:
+        One value per band, or NULL when the point lies outside the raster.
+
+    SQL: ``gbx_rst_sample(tile, geom, [crs])``
+    """
+    return _api.call(
+        "gbx_rst_sample",
+        tile,
+        geom,
+        crs,
+    )
+
+
+def rst_scalex(
+    tile: ColLike,
+) -> Column:
+    """Return the signed x scale of the geotransform.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The geotransform's pixel width, or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_scalex(tile)``
+    """
+    return _api.call(
+        "gbx_rst_scalex",
+        tile,
+    )
+
+
+def rst_scaley(
+    tile: ColLike,
+) -> Column:
+    """Return the signed y scale of the geotransform.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The geotransform's pixel height, negative for a north-up raster, or NULL for a
+        NULL or error tile.
+
+    SQL: ``gbx_rst_scaley(tile)``
+    """
+    return _api.call(
+        "gbx_rst_scaley",
+        tile,
+    )
+
+
+def rst_skewx(
+    tile: ColLike,
+) -> Column:
+    """Return the x skew of the geotransform.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The geotransform's third term, or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_skewx(tile)``
+    """
+    return _api.call(
+        "gbx_rst_skewx",
+        tile,
+    )
+
+
+def rst_skewy(
+    tile: ColLike,
+) -> Column:
+    """Return the y skew of the geotransform.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The geotransform's fifth term, or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_skewy(tile)``
+    """
+    return _api.call(
+        "gbx_rst_skewy",
+        tile,
     )
 
 
@@ -3994,6 +4062,65 @@ def rst_slope(
     )
 
 
+def rst_srid(
+    tile: ColLike,
+) -> Column:
+    """Return the integer SRID of the raster CRS.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The authority code, or NULL when the raster has no CRS or its CRS has no code.
+
+    SQL: ``gbx_rst_srid(tile)``
+    """
+    return _api.call(
+        "gbx_rst_srid",
+        tile,
+    )
+
+
+def rst_subdatasets(
+    tile: ColLike,
+) -> Column:
+    """Return the subdatasets of a container raster.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The `SUBDATASET_<n>_NAME` and `SUBDATASET_<n>_DESC` entries, empty for a raster
+        with no subdatasets, or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_subdatasets(tile)``
+    """
+    return _api.call(
+        "gbx_rst_subdatasets",
+        tile,
+    )
+
+
+def rst_summary(
+    tile: ColLike,
+) -> Column:
+    """Return a JSON summary of the raster with per-band statistics.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        A JSON string with the driver, size, CRS, geotransform and the statistics of
+        each band.
+
+    SQL: ``gbx_rst_summary(tile)``
+    """
+    return _api.call(
+        "gbx_rst_summary",
+        tile,
+    )
+
+
 def rst_transformcrs(
     tile: ColLike,
     target_crs: ColLike,
@@ -4014,6 +4141,177 @@ def rst_transformcrs(
         "gbx_rst_transformcrs",
         tile,
         target_crs,
+    )
+
+
+def rst_tryopen(
+    tile: ColLike,
+) -> Column:
+    """Test whether tile bytes open as a raster.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        True when the tile opens; false for corrupt, empty or error tiles.
+
+    SQL: ``gbx_rst_tryopen(tile)``
+    """
+    return _api.call(
+        "gbx_rst_tryopen",
+        tile,
+    )
+
+
+def rst_type(
+    tile: ColLike,
+) -> Column:
+    """Return the GDAL data type of each band.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        One type name per band, for example `Float32`, or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_type(tile)``
+    """
+    return _api.call(
+        "gbx_rst_type",
+        tile,
+    )
+
+
+def rst_upperleftx(
+    tile: ColLike,
+) -> Column:
+    """Return the x coordinate of the raster's upper-left corner.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The corner's x in the raster CRS, or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_upperleftx(tile)``
+    """
+    return _api.call(
+        "gbx_rst_upperleftx",
+        tile,
+    )
+
+
+def rst_upperlefty(
+    tile: ColLike,
+) -> Column:
+    """Return the y coordinate of the raster's upper-left corner.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The corner's y in the raster CRS, or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_upperlefty(tile)``
+    """
+    return _api.call(
+        "gbx_rst_upperlefty",
+        tile,
+    )
+
+
+def rst_width(
+    tile: ColLike,
+) -> Column:
+    """Return the width of the raster in pixels.
+
+    Args:
+        tile: The raster tile.
+
+    Returns:
+        The pixel count along x, or NULL for a NULL or error tile.
+
+    SQL: ``gbx_rst_width(tile)``
+    """
+    return _api.call(
+        "gbx_rst_width",
+        tile,
+    )
+
+
+def rst_worldtorastercoord(
+    tile: ColLike,
+    x: ColLike,
+    y: ColLike,
+) -> Column:
+    """Convert a world coordinate to the pixel that contains it.
+
+    Args:
+        tile: The raster tile.
+        x: The x coordinate in the raster CRS.
+        y: The y coordinate in the raster CRS.
+
+    Returns:
+        A struct with the pixel column x and row y; a point outside the raster gives a
+        pixel outside its size.
+
+    SQL: ``gbx_rst_worldtorastercoord(tile, x, y)``
+    """
+    return _api.call(
+        "gbx_rst_worldtorastercoord",
+        tile,
+        x,
+        y,
+    )
+
+
+def rst_worldtorastercoordx(
+    tile: ColLike,
+    x: ColLike,
+    y: ColLike,
+) -> Column:
+    """Convert a world coordinate to a pixel column.
+
+    Args:
+        tile: The raster tile.
+        x: The x coordinate in the raster CRS.
+        y: The y coordinate in the raster CRS.
+
+    Returns:
+        The column of the pixel that contains the point.
+
+    SQL: ``gbx_rst_worldtorastercoordx(tile, x, y)``
+    """
+    return _api.call(
+        "gbx_rst_worldtorastercoordx",
+        tile,
+        x,
+        y,
+    )
+
+
+def rst_worldtorastercoordy(
+    tile: ColLike,
+    x: ColLike,
+    y: ColLike,
+) -> Column:
+    """Convert a world coordinate to a pixel row.
+
+    Args:
+        tile: The raster tile.
+        x: The x coordinate in the raster CRS.
+        y: The y coordinate in the raster CRS.
+
+    Returns:
+        The row of the pixel that contains the point.
+
+    SQL: ``gbx_rst_worldtorastercoordy(tile, x, y)``
+    """
+    return _api.call(
+        "gbx_rst_worldtorastercoordy",
+        tile,
+        x,
+        y,
     )
 
 

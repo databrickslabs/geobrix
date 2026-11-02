@@ -149,8 +149,6 @@ def test_virtual_tile_pixel_read_file_ref_on_path(tmp_path, spark, monkeypatch):
     import rasterio
     from rasterio.transform import from_origin
 
-    from databricks.labs.gbx.pyrx import _file_ref
-
     # Create a minimal 8x8 float32 GeoTIFF with no-data set.
     tif = tmp_path / "tile.tif"
     data = (np.arange(64, dtype="float32") / 64.0).reshape(8, 8)
@@ -172,15 +170,22 @@ def test_virtual_tile_pixel_read_file_ref_on_path(tmp_path, spark, monkeypatch):
     manifest_file = tmp_path / "m.json"
     manifest_file.write_text(json.dumps([{"path": str(tif), "window": [0, 0, 8, 8]}]))
 
-    # Spy on file_ref_arg: if called, the geobrix FILE path is wired.
+    # Spy on file_ref_sql, the FILE mint of the registered rst_avg: if called, the geobrix FILE path is wired.
+    from databricks.labs.gbx.ds import file_gbx
+
     file_ref_calls = []
-    _orig = _file_ref.file_ref_arg
+    _orig = file_gbx.file_ref_sql
 
-    def _spy(tile_col):
-        file_ref_calls.append(tile_col)
-        return _orig(tile_col)
+    def _spy(tile_sql, spark=None):
+        file_ref_calls.append(tile_sql)
+        return _orig(tile_sql, spark)
 
-    monkeypatch.setattr(_file_ref, "file_ref_arg", _spy)
+    monkeypatch.setattr(file_gbx, "file_ref_sql", _spy)
+    from databricks.labs.gbx import _api
+
+    _api._done(spark).discard(
+        "gbx_rst_avg"
+    )  # so the call registers it again, through the spy
 
     rows = readers.run_virtual_tile_pixel_read(
         spark=spark,
@@ -197,10 +202,10 @@ def test_virtual_tile_pixel_read_file_ref_on_path(tmp_path, spark, monkeypatch):
     r = rows[0]
     assert r.status == "ok", f"expected ok, got {r.note!r}"
     assert r.rows >= 1
-    # The critical assertion: file_ref_arg must have been called, proving that
+    # The critical assertion: file_ref_sql must have been called when rst_avg registered, proving that
     # the geobrix FILE path (not a hand-rolled rasterio.open bypass) is invoked.
     assert file_ref_calls, (
-        "file_ref_arg was never called — run_virtual_tile_pixel_read is still "
+        "file_ref_sql was never called — run_virtual_tile_pixel_read is still "
         "bypassing the geobrix FILE path (hand-rolled rasterio.open UDF). "
         "Fix: use rst_avg(col('tile')) instead of a bare rasterio.open UDF."
     )

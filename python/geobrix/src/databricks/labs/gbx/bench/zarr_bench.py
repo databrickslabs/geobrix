@@ -224,7 +224,7 @@ def _register_light(spark) -> None:
 def run_r1(spark, cfg: ZarrBenchConfig) -> List[ResultRow]:
     from pyspark.sql import functions as F
 
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx.rasterx import functions as rx
     from databricks.labs.gbx.zarr import gbx_zarr_read
 
     case = zarr_case("R1")
@@ -258,7 +258,7 @@ def run_r1(spark, cfg: ZarrBenchConfig) -> List[ResultRow]:
         df = lambda: (  # noqa: E731
             spark.read.format("raster_gbx")
             .load(path)
-            .select(prx.rst_avg(F.col("tile")).alias("avg"))
+            .select(rx.rst_avg(F.col("tile")).alias("avg"))
         )
         walls = _walls(lambda: _noop(df()), cfg.reps)
         out.append(
@@ -290,7 +290,7 @@ def _points(spark, n: int, seed: int):
 def run_r2(spark, cfg: ZarrBenchConfig) -> List[ResultRow]:
     from pyspark.sql import functions as F
 
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx.rasterx import functions as rx
     from databricks.labs.gbx.zarr import gbx_zarr_sample
 
     case = zarr_case("R2")
@@ -331,7 +331,7 @@ def run_r2(spark, cfg: ZarrBenchConfig) -> List[ResultRow]:
             tiles = _cog_frame(spark, files[:hours])
             _noop(
                 tiles.crossJoin(F.broadcast(points.limit(n))).select(
-                    prx.rst_sample(F.col("tile"), F.col("geom")).alias("v")
+                    rx.rst_sample(F.col("tile"), F.col("geom")).alias("v")
                 )
             )
 
@@ -391,7 +391,7 @@ def _box_window(lat, lon, lat_hi, lat_lo, lon_west, lon_east, roll: int):
 def run_r3(spark, cfg: ZarrBenchConfig) -> List[ResultRow]:
     from pyspark.sql import functions as F
 
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx.rasterx import functions as rx
     from databricks.labs.gbx.zarr import gbx_zarr_read
 
     case = zarr_case("R3")
@@ -425,7 +425,7 @@ def run_r3(spark, cfg: ZarrBenchConfig) -> List[ResultRow]:
         files = man["files"][:hours]
         df = lambda: _cog_frame(  # noqa: E731
             spark, files, windows=json.dumps(list(win))
-        ).select(prx.rst_avg(F.col("tile")).alias("avg"))
+        ).select(rx.rst_avg(F.col("tile")).alias("avg"))
         walls = _walls(lambda: _noop(df()), cfg.reps)
         out.append(
             _row(

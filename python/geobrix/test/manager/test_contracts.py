@@ -10,6 +10,7 @@ from databricks.labs.gbx import manifest
 from databricks.labs.gbx.core import crs as gcrs
 from databricks.labs.gbx.manager import capabilities as caps_mod
 from databricks.labs.gbx.manager import levels
+from databricks.labs.gbx.rasterx import functions as rx
 from databricks.labs.gbx.uc import ddl
 
 from .connect_stub import ConnectStub
@@ -1786,8 +1787,9 @@ def test_every_pyrx_column_api_udf_carries_the_cap_at_the_call():
 
 
 def test_the_column_api_reads_at_the_sessions_read_cap(spark, tmp_path):
-    """A Column-API call carries the session's cap from the driver, as a registered function does: the same tile is
-    refused under a lowered cap and read without it."""
+    """A light Column-API call carries the session's cap from the driver, as a registered function does: the same tile
+    is refused (with a Fix) under a lowered cap and read without it."""
+    from pyspark.sql import functions as f
     from pyspark.sql.types import StructField, StructType
 
     from databricks.labs.gbx.bench import oracles
@@ -1799,10 +1801,15 @@ def test_the_column_api_reads_at_the_sessions_read_cap(spark, tmp_path):
     df = spark.createDataFrame(
         [(tile,)], StructType([StructField("tile", V2_TILE_SCHEMA)])
     )
-    assert df.select(prx.rst_avg("tile")).first()[0] is not None
+
+    def retyped():
+        return prx.rst_updatetype("tile", f.lit("Float64")).alias("t")
+
+    assert df.select(retyped()).first()["t"]["raster"] is not None
     spark.conf.set(READ_CAP_KEY, "4096")
     try:
-        assert df.select(prx.rst_avg("tile")).first()[0] is None
+        with pytest.raises(Exception, match="Fix:"):
+            df.select(retyped()).first()
     finally:
         spark.conf.unset(READ_CAP_KEY)
 
@@ -1817,7 +1824,6 @@ def test_a_worker_with_no_memory_signal_reads_a_tile_at_the_classic_cap(spark):
     from rasterio.transform import from_origin
 
     from databricks.labs.gbx import register
-    from databricks.labs.gbx.pyrx import functions as prx
     from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
 
     side = 4200  # float32: 70.56 MB decoded, over Serverless's 64 MiB, a few KB encoded
@@ -1852,8 +1858,10 @@ def test_a_worker_with_no_memory_signal_reads_a_tile_at_the_classic_cap(spark):
     df = spark.createDataFrame(
         [(tile,)], StructType([StructField("tile", V2_TILE_SCHEMA)])
     )
-    assert df.select(prx.rst_avg("tile")).first()[0] == [2.0]
-    register(spark, only=["gbx_rst_avg"])
+    register(
+        spark, only=["gbx_rst_avg"]
+    )  # with the cap this session carries now, whatever an earlier test set
+    assert df.select(rx.rst_avg("tile")).first()[0] == [2.0]
     df.createOrReplaceTempView("_gbx_big")
     assert spark.sql("SELECT gbx_rst_avg(tile) FROM _gbx_big").first()[0] == [2.0]
 

@@ -657,23 +657,23 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_mapalgebra(tiles: Column, expression: Column): Column = ColumnAdapter(RST_MapAlgebra.name, Seq(tiles, expression))
     def rst_merge(tiles: Column): Column = ColumnAdapter(RST_Merge.name, Seq(tiles))
     def rst_ndvi(tile: Column, redBand: Column, nirBand: Column): Column = ColumnAdapter(RST_NDVI.name, Seq(tile, redBand, nirBand))
-    def rst_rastertoworldcoord(tile: Column, pixelX: Column, pixelY: Column): Column =
-        ColumnAdapter(RST_RasterToWorldCoord.name, Seq(tile, pixelX, pixelY))
-    def rst_rastertoworldcoordx(tile: Column, pixelX: Column, pixelY: Column): Column =
-        ColumnAdapter(RST_RasterToWorldCoordX.name, Seq(tile, pixelX, pixelY))
-    def rst_rastertoworldcoordy(tile: Column, pixelX: Column, pixelY: Column): Column =
-        ColumnAdapter(RST_RasterToWorldCoordY.name, Seq(tile, pixelX, pixelY))
+    def rst_rastertoworldcoord(tile: Column, x: Column, y: Column): Column =
+        ColumnAdapter(RST_RasterToWorldCoord.name, Seq(tile, x, y))
+    def rst_rastertoworldcoordx(tile: Column, x: Column, y: Column): Column =
+        ColumnAdapter(RST_RasterToWorldCoordX.name, Seq(tile, x, y))
+    def rst_rastertoworldcoordy(tile: Column, x: Column, y: Column): Column =
+        ColumnAdapter(RST_RasterToWorldCoordY.name, Seq(tile, x, y))
     def rst_transform(tile: Column, targetSrid: Column): Column = ColumnAdapter(RST_Transform.name, Seq(tile, targetSrid))
     def rst_transformcrs(tile: Column, targetCrs: Column): Column = ColumnAdapter(RST_TransformCrs.name, Seq(tile, targetCrs))
     def rst_transformcrs(tile: Column, targetCrs: String): Column = rst_transformcrs(tile, lit(targetCrs))
     def rst_tryopen(tile: Column): Column = ColumnAdapter(RST_TryOpen.name, Seq(tile))
     def rst_updatetype(tile: Column, newType: Column): Column = ColumnAdapter(RST_UpdateType.name, Seq(tile, newType))
-    def rst_worldtorastercoord(tile: Column, worldX: Column, worldY: Column): Column =
-        ColumnAdapter(RST_WorldToRasterCoord.name, Seq(tile, worldX, worldY))
-    def rst_worldtorastercoordx(tile: Column, worldX: Column, worldY: Column): Column =
-        ColumnAdapter(RST_WorldToRasterCoordX.name, Seq(tile, worldX, worldY))
-    def rst_worldtorastercoordy(tile: Column, worldX: Column, worldY: Column): Column =
-        ColumnAdapter(RST_WorldToRasterCoordY.name, Seq(tile, worldX, worldY))
+    def rst_worldtorastercoord(tile: Column, x: Column, y: Column): Column =
+        ColumnAdapter(RST_WorldToRasterCoord.name, Seq(tile, x, y))
+    def rst_worldtorastercoordx(tile: Column, x: Column, y: Column): Column =
+        ColumnAdapter(RST_WorldToRasterCoordX.name, Seq(tile, x, y))
+    def rst_worldtorastercoordy(tile: Column, x: Column, y: Column): Column =
+        ColumnAdapter(RST_WorldToRasterCoordY.name, Seq(tile, x, y))
 
     // Scalar-literal overloads — so users can pass plain values for non-Column params
     // (e.g. rst_clip(tile, clip, true) instead of rst_clip(tile, clip, lit(true))).
@@ -764,20 +764,20 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         rst_filter(tile, lit(kernelSize), lit(operation))
     def rst_mapalgebra(tiles: Column, expression: String): Column = rst_mapalgebra(tiles, lit(expression))
     def rst_ndvi(tile: Column, redBand: Int, nirBand: Int): Column = rst_ndvi(tile, lit(redBand), lit(nirBand))
-    def rst_rastertoworldcoord(tile: Column, pixelX: Int, pixelY: Int): Column =
-        rst_rastertoworldcoord(tile, lit(pixelX), lit(pixelY))
-    def rst_rastertoworldcoordx(tile: Column, pixelX: Int, pixelY: Int): Column =
-        rst_rastertoworldcoordx(tile, lit(pixelX), lit(pixelY))
-    def rst_rastertoworldcoordy(tile: Column, pixelX: Int, pixelY: Int): Column =
-        rst_rastertoworldcoordy(tile, lit(pixelX), lit(pixelY))
+    def rst_rastertoworldcoord(tile: Column, x: Int, y: Int): Column =
+        rst_rastertoworldcoord(tile, lit(x), lit(y))
+    def rst_rastertoworldcoordx(tile: Column, x: Int, y: Int): Column =
+        rst_rastertoworldcoordx(tile, lit(x), lit(y))
+    def rst_rastertoworldcoordy(tile: Column, x: Int, y: Int): Column =
+        rst_rastertoworldcoordy(tile, lit(x), lit(y))
     def rst_transform(tile: Column, targetSrid: Int): Column = rst_transform(tile, lit(targetSrid))
     def rst_updatetype(tile: Column, newType: String): Column = rst_updatetype(tile, lit(newType))
-    def rst_worldtorastercoord(tile: Column, worldX: Double, worldY: Double): Column =
-        rst_worldtorastercoord(tile, lit(worldX), lit(worldY))
-    def rst_worldtorastercoordx(tile: Column, worldX: Double, worldY: Double): Column =
-        rst_worldtorastercoordx(tile, lit(worldX), lit(worldY))
-    def rst_worldtorastercoordy(tile: Column, worldX: Double, worldY: Double): Column =
-        rst_worldtorastercoordy(tile, lit(worldX), lit(worldY))
+    def rst_worldtorastercoord(tile: Column, x: Double, y: Double): Column =
+        rst_worldtorastercoord(tile, lit(x), lit(y))
+    def rst_worldtorastercoordx(tile: Column, x: Double, y: Double): Column =
+        rst_worldtorastercoordx(tile, lit(x), lit(y))
+    def rst_worldtorastercoordy(tile: Column, x: Double, y: Double): Column =
+        rst_worldtorastercoordy(tile, lit(x), lit(y))
 
     // Web-mercator tile output (Column form)
     def rst_to_webmercator(tile: Column): Column =

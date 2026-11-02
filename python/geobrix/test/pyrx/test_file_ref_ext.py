@@ -17,6 +17,7 @@ import tempfile
 from databricks.labs.gbx.pyrx.core import accessors as _acc
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+from databricks.labs.gbx.rasterx import functions as rx
 
 
 class _StubFileRef:
@@ -76,7 +77,7 @@ def test_rst_avg_public_binding_uses_file_ref_arg(spark):
     with mock.patch(
         "databricks.labs.gbx.pyrx._file_ref.file_supported", return_value=False
     ):
-        col = prx.rst_avg(tc)
+        col = rx.rst_avg(tc)
 
     # The column wraps a UDF call. The UDF must accept 2 args (tile, file_ref).
     # _uf_avg is a 2-arg UDF; _u_avg is a 1-arg UDF.

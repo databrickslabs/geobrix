@@ -2,7 +2,7 @@
 
 Swap-compatible with ``databricks.labs.gbx.rasterx.functions``:
     from databricks.labs.gbx.pyrx import functions as prx
-    df.select(prx.rst_width("tile"))
+    df.select(prx.rst_to_webmercator("tile"))
 """
 
 # Before the pyspark imports: one clear error when PySpark is missing.
@@ -184,7 +184,7 @@ def register(spark: SparkSession = None, only: Optional[List[str]] = None) -> No
     Installs the same ``gbx_rst_*`` SQL names the heavyweight rasterx package
     uses, but powered by the pyspark/rasterio implementation (no JAR). Call this
     once when you want the functions from SQL. The Python Column API
-    (``prx.rst_width(col)``) works WITHOUT this call.
+    (``prx.rst_to_webmercator(col)``) works WITHOUT this call.
 
     You register the lightweight OR the heavyweight package in a given session;
     they share the ``gbx_rst_*`` names, so the last registration wins.
@@ -459,9 +459,7 @@ _uf_crs = _header_accessor_udf_file(accessors.crs, StringType())
 _uf_width = _header_accessor_udf_file(accessors.width, IntegerType())
 _uf_boundingbox = _header_accessor_udf_file(accessors.boundingbox, BinaryType())
 # Pixel-reading (_open — materialises the window):
-_uf_isempty = _pixel_accessor_udf_file(
-    accessors.isempty, BooleanType(), on_empty=True
-)
+_uf_isempty = _pixel_accessor_udf_file(accessors.isempty, BooleanType(), on_empty=True)
 
 # Group 1 pixel accessors — FILE-aware 2-arg singletons.
 _uf_avg = _pixel_accessor_udf_file(accessors.avg, ArrayType(DoubleType()))
@@ -3502,15 +3500,6 @@ def _cog_convert_v2_udf(
     )
 
 
-def rst_tryopen(tile: ColLike) -> Column:
-    """Return BOOLEAN: True if the raster bytes open as a valid dataset.
-
-    Mirrors the heavyweight ``gbx_rst_tryopen`` — any failure to open (corrupt
-    bytes, unknown format) yields False rather than raising.
-    """
-    return _tryopen_udf(_col(tile))
-
-
 def rst_setsrid(
     tile: ColLike,
     srid: ColLike,
@@ -4239,7 +4228,7 @@ def rst_viewshed_towers(
         args = (f.lit(2), f.lit(0.0), f.lit(256.0), f.lit(False))
         if heavy:
             return f.call_function("gbx__l1_rst_histogram", f.col(tile_col), *args)
-        return rst_histogram(tile_col, *args)
+        return _light_rst_histogram(tile_col, *args)
 
     def cells(tile_col: str, vis, invis):
         """The cells of the viewshed: the two histogram classes, or at L1-steps the size of the raster. The
@@ -4320,29 +4309,6 @@ def rst_viewshed_towers(
         ]
 
     return with_frac(piped.select(*out_cols))
-
-
-def rst_sample(tile: ColLike, geom: ColLike, crs: ColLike = None) -> Column:
-    """Sample per-band raster values at a POINT geometry (WKB, EWKB, WKT, or EWKT).
-
-    Mirrors the heavyweight ``gbx_rst_sample``: requires a POINT geometry
-    (raises otherwise), reprojects the point to the raster CRS, and returns
-    ARRAY<DOUBLE> with one value per band in band order. Points outside the
-    raster extent return null.
-
-    Args:
-        tile: Tile struct column.
-        geom: POINT geometry as WKB, EWKB, WKT, or EWKT.
-        crs:  Optional source-CRS for a plain WKB/WKT point (int SRID or CRS
-              string — ``EPSG:x`` / ``ESRI:x`` / WKT). An EWKB/EWKT embedded
-              SRID wins; absent + no SRID -> assumed already in the raster CRS.
-
-    Returns:
-        ARRAY<DOUBLE>: one value per band, or null if the point is out of extent.
-    """
-    if crs is None:
-        return _sample_udf(_col(tile), _col(geom))
-    return _sample_udf(_col(tile), _col(geom), f.lit(crs))
 
 
 # --- Tier 1d3: band-math / focal UDFs --------------------------------------
@@ -6814,232 +6780,18 @@ def rst_color_relief(
     return _color_relief_udf(_col(tile), ctp)
 
 
-# --- Accessors ------------------------------------------------------
-# Accessor wrappers pass the FULL tile struct (not the raster subfield) so a
-# virtual tile's ``path`` is reachable; the header/pixel split is decided by the
-# factory that built each ``_u_*`` UDF (open_header vs _open).
-#
-# FILE-aware wiring: the public Python bindings now call the 2-arg
-# ``_uf_*`` UDFs (Struct + FileRef), injecting a plan-level file_ref via
-# ``file_ref_arg()``.  When FILE is unsupported (local / non-DBR / env-disabled)
-# ``file_ref_arg`` returns ``F.lit(None)`` and the UDF falls back to the
-# plain-path read — identical to the previous single-arg path.
-# The SQL registry keeps pointing at the single-arg ``_u_*`` UDFs (fallback,
-# no FILE acceleration for SQL).
-def rst_width(tile: ColLike) -> Column:
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_width(tc, file_ref_arg(tc))
-
-
-def rst_height(tile: ColLike) -> Column:
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_height(tc, file_ref_arg(tc))
-
-
-def rst_numbands(tile: ColLike) -> Column:
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_numbands(tc, file_ref_arg(tc))
-
-
-def rst_srid(tile: ColLike) -> Column:
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_srid(tc, file_ref_arg(tc))
-
-
-def rst_crs(tile: ColLike) -> Column:
-    """Return the canonical CRS string for the raster tile.
-
-    Returns an authority string (``'EPSG:4326'``, ``'ESRI:54008'``) when the
-    CRS has a recognised authority code, or a WKT string for authority-less
-    projections.  Returns NULL for a tile with no CRS.
-
-    Distinct from ``rst_srid`` (int / NULL): ``rst_crs`` preserves non-EPSG
-    authority codes (ESRI, IAU, etc.) and falls back to WKT rather than NULL.
-
-    Args:
-        tile: Tile struct column.
-
-    Returns:
-        STRING column — canonical CRS string, or NULL if CRS is absent.
-    """
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_crs(tc, file_ref_arg(tc))
-
-
-def rst_pixelwidth(tile: ColLike) -> Column:
-    return _u_pixelwidth(_col(tile))
-
-
-def rst_pixelheight(tile: ColLike) -> Column:
-    return _u_pixelheight(_col(tile))
-
-
-def rst_upperleftx(tile: ColLike) -> Column:
-    return _u_upperleftx(_col(tile))
-
-
-def rst_upperlefty(tile: ColLike) -> Column:
-    return _u_upperlefty(_col(tile))
-
-
-def rst_boundingbox(tile: ColLike) -> Column:
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_boundingbox(tc, file_ref_arg(tc))
-
-
-def rst_metadata(tile: ColLike) -> Column:
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_metadata_udf(tc, file_ref_arg(tc))
-
-
-def rst_scalex(tile: ColLike) -> Column:
-    return _u_scalex(_col(tile))
-
-
-def rst_scaley(tile: ColLike) -> Column:
-    return _u_scaley(_col(tile))
-
-
-def rst_isempty(tile: ColLike) -> Column:
-    """True if the raster has no size or every band is entirely NoData; BOOLEAN."""
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_isempty(tc, file_ref_arg(tc))
-
-
-def rst_type(tile: ColLike) -> Column:
-    """Return the GDAL data-type name per band (e.g. ['Float32', 'Float32'])."""
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_type(tc, file_ref_arg(tc))
-
-
-def rst_getnodata(tile: ColLike) -> Column:
-    """Return the NoData value per band as an array of doubles, or null if not set."""
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_getnodata(tc, file_ref_arg(tc))
+# --- Accessors and statistics ----------------------------------------
+# Their public Python API is the generated one (``databricks.labs.gbx.rasterx.functions``). The ``_u_*``
+# and ``_uf_*`` UDFs above are the manifest's light kernels: a header accessor answers from the file header
+# (``open_header``), a pixel accessor reads the window, and the ``_uf_*`` forms also take a FILE reference.
 
 
 # --- Coordinate transforms -----------------------------------------
 # HEADER-ONLY accessors: pass the FULL tile struct (not the raster subfield) so
 # a virtual tile's ``path`` is reachable; the UDF resolves via open_header.
-def rst_rastertoworldcoordx(tile: ColLike, x: ColLike, y: ColLike) -> Column:
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_r2w_x(tc, file_ref_arg(tc), _col(x), _col(y))
-
-
-def rst_rastertoworldcoordy(tile: ColLike, x: ColLike, y: ColLike) -> Column:
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_r2w_y(tc, file_ref_arg(tc), _col(x), _col(y))
-
-
-def rst_worldtorastercoordx(tile: ColLike, x: ColLike, y: ColLike) -> Column:
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_w2r_x(tc, file_ref_arg(tc), _col(x), _col(y))
-
-
-def rst_worldtorastercoordy(tile: ColLike, x: ColLike, y: ColLike) -> Column:
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_w2r_y(tc, file_ref_arg(tc), _col(x), _col(y))
-
-
-def rst_rastertoworldcoord(tile: ColLike, x: ColLike, y: ColLike) -> Column:
-    """World coordinate of pixel (x=col, y=row) as STRUCT<x: DOUBLE, y: DOUBLE>."""
-    return _rastertoworldcoord_udf(_col(tile), _col(x), _col(y))
-
-
-def rst_worldtorastercoord(tile: ColLike, x: ColLike, y: ColLike) -> Column:
-    """Pixel (col, row) containing world (x, y) as STRUCT<x: INT, y: INT>."""
-    return _worldtorastercoord_udf(_col(tile), _col(x), _col(y))
 
 
 # --- Group 1: per-band statistics & accessors -------------------------------
-def rst_avg(tile: ColLike) -> Column:
-    """Per-band mean of valid (non-NoData) pixels; ARRAY<DOUBLE>.
-
-    Empty / all-invalid bands return NULL.
-    """
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_avg(tc, file_ref_arg(tc))
-
-
-def rst_min(tile: ColLike) -> Column:
-    """Per-band minimum of valid (non-NoData) pixels; ARRAY<DOUBLE>.
-
-    Empty / all-invalid bands return NULL.
-    """
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_min(tc, file_ref_arg(tc))
-
-
-def rst_max(tile: ColLike) -> Column:
-    """Per-band maximum of valid (non-NoData) pixels; ARRAY<DOUBLE>.
-
-    Empty / all-invalid bands return NULL.
-    """
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_max(tc, file_ref_arg(tc))
-
-
-def rst_median(tile: ColLike) -> Column:
-    """Per-band median of valid (non-NoData) pixels; ARRAY<DOUBLE>.
-
-    Empty / all-invalid bands return NULL.
-    """
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_median(tc, file_ref_arg(tc))
-
-
-def rst_pixelcount(tile: ColLike) -> Column:
-    """Per-band count of valid (non-NoData) pixels; ARRAY<LONG>.
-
-    Empty / all-invalid bands return 0.
-    """
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_pixelcount(tc, file_ref_arg(tc))
-
-
-def rst_memsize(tile: ColLike) -> Column:
-    """Serialized size in bytes for a materialized tile (raster buffer length);
-    for a virtual tile, the estimated decoded window footprint
-    (count * width * height * itemsize). LONG."""
-    return _memsize_struct_udf(_col(tile))
 
 
 def rst_memsize_grouped(df, *, tile_col: str = "tile", out_col: str = "memsize"):
@@ -7557,44 +7309,6 @@ def rst_hillshade_grouped(
     )
 
 
-def rst_rotation(tile: ColLike) -> Column:
-    """Rotation angle = atan(skewY / scaleX) in radians; DOUBLE."""
-    return _u_rotation(_col(tile))
-
-
-def rst_skewx(tile: ColLike) -> Column:
-    """X skew of the geotransform (gt2); DOUBLE."""
-    return _u_skewx(_col(tile))
-
-
-def rst_skewy(tile: ColLike) -> Column:
-    """Y skew of the geotransform (gt4); DOUBLE."""
-    return _u_skewy(_col(tile))
-
-
-def rst_format(tile: ColLike) -> Column:
-    """GDAL driver short name of the raster (e.g. 'GTiff'); STRING."""
-    return _u_format(_col(tile))
-
-
-def rst_georeference(tile: ColLike) -> Column:
-    """Geotransform as MAP<STRING,DOUBLE>.
-
-    Keys: upperLeftX, upperLeftY, scaleX, scaleY, skewX, skewY.
-    """
-    return _georeference_udf(_col(tile))
-
-
-def rst_bandmetadata(tile: ColLike, band: ColLike) -> Column:
-    """Metadata tags of the given 1-based band as MAP<STRING,STRING>."""
-    return _bandmetadata_udf(_col(tile), _col(band))
-
-
-def rst_subdatasets(tile: ColLike) -> Column:
-    """Subdataset map as MAP<STRING,STRING>; empty for plain single-dataset rasters."""
-    return _subdatasets_udf(_col(tile))
-
-
 def rst_getsubdataset(tile: ColLike, subset_name: ColLike) -> Column:
     """Extract the named subdataset as a new raster tile struct.
 
@@ -7604,19 +7318,7 @@ def rst_getsubdataset(tile: ColLike, subset_name: ColLike) -> Column:
     return _getsubdataset_udf(_col(tile), nm)
 
 
-def rst_summary(tile: ColLike) -> Column:
-    """gdalinfo-style JSON summary string with per-band statistics; STRING.
-
-    The JSON shape is GeoBrix-specific (driver, size, crs, geoTransform, bands
-    with min/max/mean/stdDev), not a byte-for-byte ``gdalinfo -json`` match.
-    """
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_summary_udf(tc, file_ref_arg(tc))
-
-
-def rst_histogram(
+def _light_rst_histogram(
     tile: ColLike,
     n_buckets: ColLike = 256,
     min_val: ColLike = None,

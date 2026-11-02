@@ -38,7 +38,7 @@ sources = spark.read.format("file_gbx").load("/Volumes/catalog/schema/volume/raw
 )"""
 
 VRT_READ_EXPAND = r"""from databricks.labs.gbx.ds.register import register
-from databricks.labs.gbx.pyrx.functions import rst_avg
+from databricks.labs.gbx.rasterx.functions import rst_avg
 from pyspark.sql.functions import col
 
 register(spark)
@@ -239,7 +239,7 @@ def vrt_read_expand(spark, src_path=None):
     """raster_gbx expands mosaic.vrt into one virtual tile row per member mini-COG."""
     from pyspark.sql.functions import col
 
-    from databricks.labs.gbx.pyrx.functions import rst_avg
+    from databricks.labs.gbx.rasterx.functions import rst_avg
 
     _register(spark)
     src = src_path or SAMPLE_RASTER_SINGLE

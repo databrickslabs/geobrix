@@ -112,10 +112,10 @@ def test_rst_viewshed_python_light_example(spark):
     _assert_materialized_tile(result, "rst_viewshed")
 
 
-def test_rst_sample_python_light_example(spark):
+def test_rst_sample_python_example(spark):
     """rst_sample returns an array of sampled pixel values."""
     assert terrain_examples is not None
-    result = terrain_examples.rst_sample_python_light_example(spark)
+    result = terrain_examples.rst_sample_python_example(spark)
     assert result is not None, "rst_sample: result should not be None"
     assert isinstance(result, list), "rst_sample: result should be an array of values"
 

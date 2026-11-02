@@ -213,13 +213,24 @@ Functions to read raster properties and metadata (29 total).
 
 ### rst_avg
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_avg: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_avg(tile)` | `array<double>` |
+| Python | `rasterx.functions.rst_avg(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_avg */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **NumPy**. Per-band mean over valid (non-NoData) pixels.
 :::
 
-**Signature:** `rst_avg(tile: Column): Column` — Per-band average pixel values.
+Per-band average pixel values.
 
 Returns `NULL` for a band with zero valid pixels (all NoData) on both tiers.
 
@@ -228,66 +239,97 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands: red, NIR, gre
 <FunctionExamples
   name="rst_avg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_bandmetadata
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_bandmetadata: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_bandmetadata(tile, band)` | `map<string,string>` |
+| Python | `rasterx.functions.rst_bandmetadata(tile, band)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+| `band` | `INT` |  | The 1-based band number. |
+{/* END GENERATED gbx_rst_bandmetadata */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**.
 :::
 
-**Signature:** `rst_bandmetadata(tile: Column, band: Column): Column` — Band metadata map.
+Band metadata map.
 
 _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands with per-band GDAL metadata tags); plain single-band GeoTIFFs without tags return an empty map `{}`._
 
 <FunctionExamples
   name="rst_bandmetadata"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_boundingbox
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_boundingbox: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_boundingbox(tile)` | `BINARY` |
+| Python | `rasterx.functions.rst_boundingbox(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_boundingbox */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**.
 :::
 
-**Signature:** `rst_boundingbox(tile: Column): Column` — Bounding box geometry.
+Bounding box geometry.
 
 <FunctionExamples
   name="rst_boundingbox"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_crs
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_crs: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_crs(tile)` | `STRING` |
+| Python | `rasterx.functions.rst_crs(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_crs */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **pyproj**.
 :::
 
-**Signature:** `rst_crs(tile: Column): Column` — the tile's CRS as a string (authority string like `EPSG:4326` / `ESRI:54008`, else WKT); returns a value for every raster that has a CRS, including an authority-less one that `rst_srid` cannot name, and `NULL` for a raster with no CRS. See [Coordinate Reference Systems](./coordinate-reference-systems).
+The CRS of the tile as a string: `EPSG:4326`, `ESRI:54008` or, with no authority code, its WKT. Every raster with a CRS gets a value, including an authority-less one that `rst_srid` cannot name. A raster with no CRS gives `NULL`. See [Coordinate Reference Systems](./coordinate-reference-systems).
 
-Returns the authority string (`AUTHORITY:CODE`, e.g. `EPSG:4326` or `ESRI:54008`) when the CRS has one, otherwise its WKT. Unlike `rst_srid` (the integer authority code, EPSG or ESRI: `54008` for an `ESRI:54008` raster on both tiers; `NULL` lightweight / `0` heavyweight when the CRS has no numeric authority code), `rst_crs` names every CRS a raster has — including an authority-less one defined by WKT or PROJ4.
+Returns the authority string (`AUTHORITY:CODE`, e.g. `EPSG:4326` or `ESRI:54008`) when the CRS has one, otherwise its WKT. `rst_srid` gives the integer authority code, and `NULL` when the CRS has none. `rst_crs` names every CRS a raster has, including an authority-less one defined by WKT or PROJ4.
 
 :::tip CRS: SRID int vs CRS string
-- **`rst_srid`** returns the integer authority code, EPSG or ESRI (e.g. `4326`, or `54008` for `ESRI:54008`, the same on both tiers); `NULL` (lightweight) or `0` (heavyweight) when there is none to give: no CRS, an authority-less WKT/PROJ4 CRS, or a code that is not a number (such as `OGC:CRS84` when a format keeps it). Use it when you need the numeric SRID for the native ST bridge.
+- **`rst_srid`** returns the integer authority code, EPSG or ESRI (for example `4326`, or `54008` for `ESRI:54008`). It returns `NULL` for a raster with no CRS, an authority-less WKT or PROJ4 CRS, or a code that is not a number (such as `OGC:CRS84`). Use it when you need the numeric SRID for the native ST bridge.
 - **`rst_crs`** returns the CRS string and never loses a non-EPSG CRS.
 - **`rst_setcrs`** / **`rst_transformcrs`** take a CRS *string*. An int-castable string is treated as an EPSG SRID (`'4326'` behaves like SRID `4326`); otherwise the string is parsed as an authority code (`EPSG:`/`ESRI:`), WKT, or PROJ4. This is how ESRI codes, WKT, and PROJ4 definitions survive a round trip.
 :::
@@ -295,40 +337,60 @@ Returns the authority string (`AUTHORITY:CODE`, e.g. `EPSG:4326` or `ESRI:54008`
 <FunctionExamples
   name="rst_crs"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_format
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_format: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_format(tile)` | `STRING` |
+| Python | `rasterx.functions.rst_format(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_format */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**.
 :::
 
-**Signature:** `rst_format(tile: Column): Column` — GDAL format name.
+GDAL format name.
 
 <FunctionExamples
   name="rst_format"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_georeference
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_georeference: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_georeference(tile)` | `map<string,double>` |
+| Python | `rasterx.functions.rst_georeference(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_georeference */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**.
 :::
 
-**Signature:** `rst_georeference(tile: Column): Column` — Georeference parameters as a map.
+Georeference parameters as a map.
 
 The result is a **MapType** with the following keys, corresponding to [GDAL's 6-element geotransform](https://gdal.org/en/stable/tutorials/geotransforms_tut.html):
 
@@ -346,27 +408,36 @@ See the [GDAL geotransform tutorial](https://gdal.org/en/stable/tutorials/geotra
 <FunctionExamples
   name="rst_georeference"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_getnodata
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_getnodata: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_getnodata(tile)` | `array<double>` |
+| Python | `rasterx.functions.rst_getnodata(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_getnodata */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**. Returns the dataset NoData value repeated once per band.
 :::
 
-**Signature:** `rst_getnodata(tile: Column): Column` — NoData values per band.
+NoData values per band.
 
 <FunctionExamples
   name="rst_getnodata"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
@@ -394,32 +465,53 @@ _Examples use the CMIP5 NetCDF fixture (`prAdjust_day_HadGEM2-CC_*.nc`) which ha
 
 ### rst_height
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_height: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_height(tile)` | `INT` |
+| Python | `rasterx.functions.rst_height(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_height */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**.
 :::
 
-**Signature:** `rst_height(tile: Column): Column` — Height in pixels.
+Height in pixels.
 
 <FunctionExamples
   name="rst_height"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_max
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_max: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_max(tile)` | `array<double>` |
+| Python | `rasterx.functions.rst_max(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_max */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **NumPy**. Per-band maximum over valid (non-NoData) pixels.
 :::
 
-**Signature:** `rst_max(tile: Column): Column` — Maximum pixel values per band.
+Maximum pixel values per band.
 
 Returns `NULL` for a band with zero valid pixels (all NoData) on both tiers.
 
@@ -428,21 +520,31 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands); the canonica
 <FunctionExamples
   name="rst_max"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_median
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_median: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_median(tile)` | `array<double>` |
+| Python | `rasterx.functions.rst_median(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_median */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **NumPy**. Per-band median over valid (non-NoData) pixels.
 :::
 
-**Signature:** `rst_median(tile: Column): Column` — Median pixel values per band.
+Median pixel values per band.
 
 Returns `NULL` for a band with zero valid pixels (all NoData) on both tiers.
 
@@ -451,59 +553,89 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands); the canonica
 <FunctionExamples
   name="rst_median"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_memsize
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_memsize: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_memsize(tile)` | `BIGINT` |
+| Python | `rasterx.functions.rst_memsize(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_memsize */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**. Returns the serialized raster size in bytes.
 :::
 
-**Signature:** `rst_memsize(tile: Column): Column` — In-memory size in bytes.
+In-memory size in bytes.
 
 <FunctionExamples
   name="rst_memsize"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_metadata
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_metadata: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_metadata(tile)` | `map<string,string>` |
+| Python | `rasterx.functions.rst_metadata(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_metadata */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**.
 :::
 
-**Signature:** `rst_metadata(tile: Column): Column` — Metadata map.
+Metadata map.
 
 <FunctionExamples
   name="rst_metadata"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_min
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_min: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_min(tile)` | `array<double>` |
+| Python | `rasterx.functions.rst_min(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_min */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **NumPy**. Per-band minimum over valid (non-NoData) pixels.
 :::
 
-**Signature:** `rst_min(tile: Column): Column` — Minimum pixel values per band.
+Minimum pixel values per band.
 
 Returns `NULL` for a band with zero valid pixels (all NoData) on both tiers.
 
@@ -512,292 +644,481 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands); the canonica
 <FunctionExamples
   name="rst_min"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_numbands
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_numbands: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_numbands(tile)` | `INT` |
+| Python | `rasterx.functions.rst_numbands(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_numbands */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**.
 :::
 
-**Signature:** `rst_numbands(tile: Column): Column` — Number of bands.
+Number of bands.
 
 _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands: red, NIR, green)._
 
 <FunctionExamples
   name="rst_numbands"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_pixelcount
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_pixelcount: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_pixelcount(tile)` | `array<bigint>` |
+| Python | `rasterx.functions.rst_pixelcount(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_pixelcount */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **NumPy**. Per-band count of valid (non-NoData) pixels.
 :::
 
-**Signature:** `rst_pixelcount(tile: Column): Column` — Total pixel count.
+Total pixel count.
 
 _Examples use the multiband fixture (`rgb_nir_small.tif`, 8×8, 3 bands, no NoData set), yielding 64 valid pixels per band; the canonical single-band sentinel2 tile has NoData=0 with all pixels equal zero, returning `[0]`._
 
 <FunctionExamples
   name="rst_pixelcount"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_pixelheight
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_pixelheight: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_pixelheight(tile)` | `DOUBLE` |
+| Python | `rasterx.functions.rst_pixelheight(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_pixelheight */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**.
 :::
 
-**Signature:** `rst_pixelheight(tile: Column): Column` — Pixel height in ground units.
+Pixel height in ground units.
 
 <FunctionExamples
   name="rst_pixelheight"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_pixelwidth
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_pixelwidth: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_pixelwidth(tile)` | `DOUBLE` |
+| Python | `rasterx.functions.rst_pixelwidth(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_pixelwidth */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**.
 :::
 
-**Signature:** `rst_pixelwidth(tile: Column): Column` — Pixel width in ground units.
+Pixel width in ground units.
 
 <FunctionExamples
   name="rst_pixelwidth"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_rotation
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_rotation: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_rotation(tile)` | `DOUBLE` |
+| Python | `rasterx.functions.rst_rotation(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_rotation */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**.
 :::
 
-**Signature:** `rst_rotation(tile: Column): Column` — Rotation in radians.
+Rotation in radians.
 
 <FunctionExamples
   name="rst_rotation"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
-### rst_scalex / rst_scaley
+### rst_scalex
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_scalex: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_scalex(tile)` | `DOUBLE` |
+| Python | `rasterx.functions.rst_scalex(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_scalex */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**.
 :::
 
-**Signature:** `rst_scalex(tile: Column): Column`, `rst_scaley(tile: Column): Column` — Scale (pixel size) in X/Y.
+Scale (pixel size) in X/Y.
 
 <FunctionExamples
   name="rst_scalex"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
-<FunctionExamples
-  name="rst_scaley"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
-/>
+### rst_scaley
 
-### rst_skewx / rst_skewy
+{/* BEGIN GENERATED gbx_rst_scaley: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
 
-<Tier both/>
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_scaley(tile)` | `DOUBLE` |
+| Python | `rasterx.functions.rst_scaley(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_scaley */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**.
 :::
 
-**Signature:** `rst_skewx(tile: Column): Column`, `rst_skewy(tile: Column): Column` — Skew in X/Y.
+Scale (pixel size) in X/Y.
 
 <FunctionExamples
-  name="rst_skewx"
+  name="rst_scaley"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
+### rst_skewx
+
+{/* BEGIN GENERATED gbx_rst_skewx: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_skewx(tile)` | `DOUBLE` |
+| Python | `rasterx.functions.rst_skewx(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_skewx */}
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio**.
+:::
+
+Skew in X/Y.
+
+<FunctionExamples
+  name="rst_skewx"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
+
+### rst_skewy
+
+{/* BEGIN GENERATED gbx_rst_skewy: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_skewy(tile)` | `DOUBLE` |
+| Python | `rasterx.functions.rst_skewy(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_skewy */}
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio**.
+:::
+
+Skew in X/Y.
+
 <FunctionExamples
   name="rst_skewy"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_srid
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_srid: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_srid(tile)` | `INT` |
+| Python | `rasterx.functions.rst_srid(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_srid */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**.
 :::
 
-**Signature:** `rst_srid(tile: Column): Column` — the stored spatial reference ID integer (an EPSG or ESRI code), or NULL when the tile has none. Returns the code as stored; it is classified only when applied. See [Coordinate Reference Systems](./coordinate-reference-systems) for the SRID-vs-CRS-string model and the epsg→esri resolution rule.
+The stored spatial reference ID integer (an EPSG or ESRI code), or NULL when the tile has none. Returns the code as stored; it is classified only when applied. See [Coordinate Reference Systems](./coordinate-reference-systems) for the SRID-vs-CRS-string model and the epsg→esri resolution rule.
 
 <FunctionExamples
   name="rst_srid"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_subdatasets
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_subdatasets: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_subdatasets(tile)` | `map<string,string>` |
+| Python | `rasterx.functions.rst_subdatasets(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_subdatasets */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**. Empty for single-dataset rasters (e.g. a plain GeoTIFF).
 :::
 
-**Signature:** `rst_subdatasets(tile: Column): Column` — List of subdataset names.
+List of subdataset names.
 
 _Examples use the CMIP5 NetCDF fixture (`prAdjust_day_HadGEM2-CC_*.nc`) which has two subdatasets: `time_bnds` and `prAdjust`. Subdatasets require a multi-layer format; plain GeoTIFFs return an empty map._
 
 <FunctionExamples
   name="rst_subdatasets"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_summary
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_summary: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_summary(tile)` | `STRING` |
+| Python | `rasterx.functions.rst_summary(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_summary */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **NumPy**. Returns a JSON summary (driver, size, CRS, geotransform, per-band statistics); the lightweight JSON shape differs from the heavyweight `gdalinfo -json` output.
 :::
 
-**Signature:** `rst_summary(tile: Column): Column` — Statistical summary of values.
+Statistical summary of values.
 
 _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands) which has real pixel data._
 
 <FunctionExamples
   name="rst_summary"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_type
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_type: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_type(tile)` | `array<string>` |
+| Python | `rasterx.functions.rst_type(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_type */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**.
 :::
 
-**Signature:** `rst_type(tile: Column): Column` — Data type per band.
+Data type per band.
 
 _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands, `UInt16`)._
 
 <FunctionExamples
   name="rst_type"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
-### rst_upperleftx / rst_upperlefty
+### rst_upperleftx
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_upperleftx: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_upperleftx(tile)` | `DOUBLE` |
+| Python | `rasterx.functions.rst_upperleftx(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_upperleftx */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**.
 :::
 
-**Signature:** `rst_upperleftx(tile: Column): Column`, `rst_upperlefty(tile: Column): Column` — Upper-left corner coordinates.
+Upper-left corner coordinates.
 
 <FunctionExamples
   name="rst_upperleftx"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
+### rst_upperlefty
+
+{/* BEGIN GENERATED gbx_rst_upperlefty: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_upperlefty(tile)` | `DOUBLE` |
+| Python | `rasterx.functions.rst_upperlefty(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_upperlefty */}
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio**.
+:::
+
+Upper-left corner coordinates.
+
 <FunctionExamples
   name="rst_upperlefty"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_width
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_width: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_width(tile)` | `INT` |
+| Python | `rasterx.functions.rst_width(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_width */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**.
 :::
 
-**Signature:** `rst_width(tile: Column): Column` — Width in pixels.
+Width in pixels.
 
 <FunctionExamples
   name="rst_width"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
@@ -3104,13 +3425,24 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 
 ### rst_isempty
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_isempty: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_isempty(tile)` | `BOOLEAN` |
+| Python | `rasterx.functions.rst_isempty(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_isempty */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**.
 :::
 
-**Signature:** `rst_isempty(tile: Column): Column` — Check if raster is empty.
+Check if raster is empty.
 
 Returns `true` when the raster has no size **or** every band is entirely NoData.
 
@@ -3119,8 +3451,7 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands with real pixe
 <FunctionExamples
   name="rst_isempty"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
@@ -3229,41 +3560,97 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 
 ### rst_rastertoworldcoord
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_rastertoworldcoord: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_rastertoworldcoord(tile, x, y)` | `struct<x:double,y:double>` |
+| Python | `rasterx.functions.rst_rastertoworldcoord(tile, x, y)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+| `x` | `INT` |  | The pixel column, counted from 0. |
+| `y` | `INT` |  | The pixel row, counted from 0. |
+{/* END GENERATED gbx_rst_rastertoworldcoord */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**.
 :::
 
-**Signature:** `rst_rastertoworldcoord(tile: Column, pixelX: Column, pixelY: Column): Column` — Pixel to world coordinates as a struct with `.x` and `.y` fields.
+Pixel to world coordinates as a struct with `.x` and `.y` fields.
 
 <FunctionExamples
   name="rst_rastertoworldcoord"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTransformsLightCode} pythonSource="docs/tests/python/api/rasterx_transforms_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
 />
 
-### rst_rastertoworldcoordx / rst_rastertoworldcoordy
+### rst_rastertoworldcoordx
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_rastertoworldcoordx: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_rastertoworldcoordx(tile, x, y)` | `DOUBLE` |
+| Python | `rasterx.functions.rst_rastertoworldcoordx(tile, x, y)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+| `x` | `INT` |  | The pixel column, counted from 0. |
+| `y` | `INT` |  | The pixel row, counted from 0. |
+{/* END GENERATED gbx_rst_rastertoworldcoordx */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**.
 :::
 
-**Signature:** `rst_rastertoworldcoordx(tile: Column, pixelX: Column, pixelY: Column): Column`, `rst_rastertoworldcoordy(tile: Column, pixelX: Column, pixelY: Column): Column` — World X / Y coordinate of a pixel.
+World X / Y coordinate of a pixel.
 
 <FunctionExamples
   name="rst_rastertoworldcoordx"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTransformsLightCode} pythonSource="docs/tests/python/api/rasterx_transforms_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
 />
+
+### rst_rastertoworldcoordy
+
+{/* BEGIN GENERATED gbx_rst_rastertoworldcoordy: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_rastertoworldcoordy(tile, x, y)` | `DOUBLE` |
+| Python | `rasterx.functions.rst_rastertoworldcoordy(tile, x, y)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+| `x` | `INT` |  | The pixel column, counted from 0. |
+| `y` | `INT` |  | The pixel row, counted from 0. |
+{/* END GENERATED gbx_rst_rastertoworldcoordy */}
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio**.
+:::
+
+World X / Y coordinate of a pixel.
+
+<FunctionExamples
+  name="rst_rastertoworldcoordy"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  python={rasterxTransformsLightCode} pythonSource="docs/tests/python/api/rasterx_transforms_python_light.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
+/>
+
 
 ### rst_resample
 
@@ -3428,21 +3815,31 @@ Distinct from `rst_transform` (integer EPSG only): `rst_transformcrs` accepts an
 
 ### rst_tryopen
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_tryopen: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_tryopen(tile)` | `BOOLEAN` |
+| Python | `rasterx.functions.rst_tryopen(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+{/* END GENERATED gbx_rst_tryopen */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**.
 :::
 
-**Signature:** `rst_tryopen(tile: Column): Column` — Validate raster can be opened.
+Validate raster can be opened.
 
 _Examples use the multiband fixture (`rgb_nir_small.tif`, committed to the repo, always openable)._
 
 <FunctionExamples
   name="rst_tryopen"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
@@ -3472,47 +3869,97 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 
 ### rst_worldtorastercoord
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_worldtorastercoord: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_worldtorastercoord(tile, x, y)` | `struct<x:int,y:int>` |
+| Python | `rasterx.functions.rst_worldtorastercoord(tile, x, y)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+| `x` | `DOUBLE` |  | The x coordinate in the raster CRS. |
+| `y` | `DOUBLE` |  | The y coordinate in the raster CRS. |
+{/* END GENERATED gbx_rst_worldtorastercoord */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**.
 :::
 
-**Signature:** `rst_worldtorastercoord(tile: Column, worldX: Column, worldY: Column): Column` — World to pixel coordinates as a struct with `.x` and `.y` fields.
+World to pixel coordinates as a struct with `.x` and `.y` fields.
 
 <FunctionExamples
   name="rst_worldtorastercoord"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTransformsLightCode} pythonSource="docs/tests/python/api/rasterx_transforms_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
 />
 
-### rst_worldtorastercoordx / rst_worldtorastercoordy
+### rst_worldtorastercoordx
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_worldtorastercoordx: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_worldtorastercoordx(tile, x, y)` | `INT` |
+| Python | `rasterx.functions.rst_worldtorastercoordx(tile, x, y)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+| `x` | `DOUBLE` |  | The x coordinate in the raster CRS. |
+| `y` | `DOUBLE` |  | The y coordinate in the raster CRS. |
+{/* END GENERATED gbx_rst_worldtorastercoordx */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**.
 :::
 
-**Signature:** `rst_worldtorastercoordx(tile: Column, worldX: Column, worldY: Column): Column`, `rst_worldtorastercoordy(tile: Column, worldX: Column, worldY: Column): Column` — Pixel column / row for a world coordinate.
+Pixel column / row for a world coordinate.
 
 <FunctionExamples
   name="rst_worldtorastercoordx"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTransformsLightCode} pythonSource="docs/tests/python/api/rasterx_transforms_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
 />
 
----
+### rst_worldtorastercoordy
 
-## Web-Mercator Tile Output
+{/* BEGIN GENERATED gbx_rst_worldtorastercoordy: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
 
-Reproject rasters to EPSG:3857 (Web Mercator) and emit slippy-map XYZ tiles. Pair with [`gbx_pmtiles_agg`](./pmtiles-functions#pmtiles_agg) or the [PMTiles writer](../writers/pmtiles) to publish a raster pyramid as a single `.pmtiles` archive. See the [Helios notebooks](../notebooks/helios) for a worked example: NAIP aerial scenes are reprojected and pyramided into a PMTiles archive in NB02.
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_worldtorastercoordy(tile, x, y)` | `INT` |
+| Python | `rasterx.functions.rst_worldtorastercoordy(tile, x, y)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+| `x` | `DOUBLE` |  | The x coordinate in the raster CRS. |
+| `y` | `DOUBLE` |  | The y coordinate in the raster CRS. |
+{/* END GENERATED gbx_rst_worldtorastercoordy */}
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio**.
+:::
+
+Pixel column / row for a world coordinate.
+
+<FunctionExamples
+  name="rst_worldtorastercoordy"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  python={rasterxTransformsLightCode} pythonSource="docs/tests/python/api/rasterx_transforms_python_light.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
+/>
+
 
 ### rst_tilexyz
 
@@ -4078,28 +4525,55 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 
 ### rst_histogram
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_histogram: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_histogram(tile, [n_buckets], [min_val], [max_val], [include_nodata])` | `map<string,array<bigint>>` |
+| Python | `rasterx.functions.rst_histogram(tile, n_buckets=None, min_val=None, max_val=None, include_nodata=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+| `n_buckets` | `INT` | `256` | The number of equal-width buckets across the range. |
+| `min_val` | `DOUBLE` | `NULL` | The lower bound of the range; the band's smallest valid value when NULL. |
+| `max_val` | `DOUBLE` | `NULL` | The upper bound of the range; the band's largest valid value when NULL. |
+| `include_nodata` | `BOOLEAN` | `false` | Whether NoData pixels are binned too; the default leaves them out. |
+{/* END GENERATED gbx_rst_histogram */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **NumPy**. Per-band bucket counts via `numpy.histogram`; map keys are `band_<i>` (1-based).
 :::
 
-**Signature:** `rst_histogram(tile: Column, [bands: Column = null, nBuckets: Column = lit(256), min: Column = null, max: Column = null, includeNodata: Column = lit(false)]): Column` — Compute per-band histograms via `band.GetHistogram`. Returns `MAP<STRING, ARRAY<LONG>>` keyed by `"band_<n>"` with bucket counts. If `bands` is null, all bands are processed; if `min` / `max` are null, GDAL auto-detects the range.
+Compute per-band histograms via `band.GetHistogram`. Returns `MAP<STRING, ARRAY<LONG>>` keyed by `"band_<n>"` with bucket counts. If `bands` is null, all bands are processed; if `min` / `max` are null, GDAL auto-detects the range.
 
 _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands) so the histogram has entries for each band._
 
 <FunctionExamples
   name="rst_histogram"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_sample
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_sample: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_sample(tile, geom, [crs])` | `array<double>` |
+| Python | `rasterx.functions.rst_sample(tile, geom, crs=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The raster tile. |
+| `geom` | `BINARY` or `STRING` |  | A POINT as WKB, EWKB, WKT or EWKT. |
+| `crs` | `STRING` | `NULL` | The CRS of a point with no SRID: `EPSG:<code>`, `ESRI:<code>`, WKT or an integer code. The raster CRS when NULL. |
+{/* END GENERATED gbx_rst_sample */}
 
 See [interpolation & fill](./grid-raster-tessellation#interpolation-and-fill) to choose among sampling, resampling, and gap-filling.
 
@@ -4107,7 +4581,7 @@ See [interpolation & fill](./grid-raster-tessellation#interpolation-and-fill) to
 Powered by **rasterio**. Point geometries only; the point is assumed to be in the raster's CRS.
 :::
 
-**Signature:** `rst_sample(tile: Column, geom: Column, [crs: Column = null]): Column` — Sample the raster at the geometry's location(s). For a `POINT`, returns `ARRAY<DOUBLE>` of one value per band at the nearest pixel. The point is reprojected from its source CRS to the raster CRS: an EWKB/EWKT embedded SRID wins, else the optional `crs` (string, source role), else assumed already aligned. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
+Sample the raster at the geometry's location(s). For a `POINT`, returns `ARRAY<DOUBLE>` of one value per band at the nearest pixel. The point moves from its source CRS to the raster CRS. An EWKB or EWKT SRID wins, then the optional `crs` argument. With neither, the point is taken to be in the raster CRS. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
 
 :::tip Esri RS_VALUE / raster sampling
 `rst_sample` is GeoBrix's equivalent of the ArcGIS **Sample** tool's `RS_VALUE` — reading a raster's cell value at a point. It returns `ARRAY<DOUBLE>` (one value per band, in band order), or `null` where the point falls outside the raster (the NoData/out-of-extent case). Sampling is nearest-pixel; for bilinear or cubic, run [`rst_resample`](#rst_resample) first, then sample.
@@ -4121,8 +4595,7 @@ See [Raster Sampling](./raster-sampling) for the full workflow guide.
 <FunctionExamples
   name="rst_sample"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTerrainLightCode} pythonSource="docs/tests/python/api/rasterx_terrain_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
 />

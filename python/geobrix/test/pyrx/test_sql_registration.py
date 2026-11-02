@@ -20,24 +20,6 @@ def _tile_view(spark, name="t", **kw):
     df.createOrReplaceTempView(name)
 
 
-def test_register_enables_scalar_sql(spark):
-    prx.register(spark)
-    _tile_view(spark, width=4, height=3, epsg=4326)
-    row = spark.sql(
-        "SELECT gbx_rst_width(tile) AS w, gbx_rst_height(tile) AS h, gbx_rst_srid(tile) AS s FROM t"
-    ).first()
-    assert (row["w"], row["h"], row["s"]) == (4, 3, 4326)
-
-
-def test_register_enables_coord_sql(spark):
-    prx.register(spark)
-    _tile_view(spark, epsg=4326)
-    row = spark.sql(
-        "SELECT gbx_rst_worldtorastercoordx(tile, 10.6, 49.9) AS c FROM t"
-    ).first()
-    assert row["c"] == 1
-
-
 def test_register_enables_tile_returning_sql_composition(spark):
     prx.register(spark)
     _tile_view(spark, epsg=4326)
@@ -148,11 +130,6 @@ def test_register_enables_quadbin_rastertogrid_sql(spark):
 
 
 # --- Operations via SQL -----------------------------------------------------
-def test_register_enables_tryopen_sql(spark):
-    prx.register(spark)
-    _tile_view(spark, width=4, height=3)
-    ok = spark.sql("SELECT gbx_rst_tryopen(tile) AS ok FROM t").first()["ok"]
-    assert ok is True
 
 
 def test_register_enables_setsrid_sql(spark):
@@ -193,74 +170,7 @@ def test_register_enables_buildoverviews_sql(spark):
     assert n == 1
 
 
-def test_register_enables_sample_sql(spark):
-    import shapely.wkb
-    from shapely.geometry import Point
-
-    prx.register(spark)
-    raster = make_geotiff_bytes(width=4, height=3, count=2)
-    pt = shapely.wkb.dumps(Point(10.75, 49.75))
-    df = spark.createDataFrame([(raster, pt)], ["raster", "g"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"), f.col("g")
-    )
-    df.createOrReplaceTempView("t")
-    vals = spark.sql("SELECT gbx_rst_sample(tile, g) AS v FROM t").first()["v"]
-    assert vals == [1.0, 101.0]
-
-
 # --- Group 1: statistics & accessors via SQL --------------------------------
-def test_register_enables_stats_sql(spark):
-    prx.register(spark)
-    _tile_view(spark, width=4, height=3, count=1)
-    row = spark.sql(
-        "SELECT gbx_rst_avg(tile) AS avg, gbx_rst_min(tile) AS mn, "
-        "gbx_rst_max(tile) AS mx, gbx_rst_pixelcount(tile) AS pc FROM t"
-    ).first()
-    assert row["mn"] == [0.0]
-    assert row["mx"] == [11.0]
-    assert row["pc"] == [12]
-
-
-def test_register_enables_memsize_format_sql(spark):
-    prx.register(spark)
-    _tile_view(spark, width=4, height=3)
-    row = spark.sql(
-        "SELECT gbx_rst_memsize(tile) AS sz, gbx_rst_format(tile) AS fmt FROM t"
-    ).first()
-    assert row["sz"] > 0
-    assert row["fmt"] == "GTiff"
-
-
-def test_register_enables_georeference_sql(spark):
-    prx.register(spark)
-    _tile_view(spark, width=4, height=3)
-    gr = spark.sql("SELECT gbx_rst_georeference(tile) AS g FROM t").first()["g"]
-    assert gr["scaleX"] == 0.5
-    assert gr["scaleY"] == -0.5
-
-
-def test_register_enables_histogram_sql(spark):
-    prx.register(spark)
-    _tile_view(spark, width=4, height=3, count=1)
-    # SQL callers pass all args (no Python defaults in SQL UDFs).
-    hist = spark.sql(
-        "SELECT gbx_rst_histogram(tile, 4, 0.0, 11.0, false) AS h FROM t"
-    ).first()["h"]
-    assert sum(hist["band_1"]) == 12
-
-
-def test_register_enables_coord_structs_sql(spark):
-    prx.register(spark)
-    _tile_view(spark, epsg=4326)
-    # round-trip pixel (2,1) through both struct coord UDFs.
-    out = spark.sql(
-        "SELECT gbx_rst_rastertoworldcoord(tile, 2, 1) AS wc FROM t"
-    ).first()["wc"]
-    assert out["x"] is not None and out["y"] is not None
-    rc = spark.sql(
-        f"SELECT gbx_rst_worldtorastercoord(tile, {out['x']}, {out['y']}) AS rc FROM t"
-    ).first()["rc"]
-    assert (rc["x"], rc["y"]) == (2, 1)
 
 
 # --- Grouped aggregators via SQL GROUP BY ---------------------------

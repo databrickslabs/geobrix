@@ -57,52 +57,9 @@ def _tile_df(spark, **kw):
 # ---------------------------------------------------------------------------
 
 
-def rst_avg_python_light_example(spark):
-    """Get per-band average pixel values from a raster tile using the light pyrx tier."""
-    from databricks.labs.gbx.pyrx import functions as rx
-
-    rx.register(spark)
-    tile_df = _tile_df(spark, width=4, height=3, count=1)
-    result = tile_df.select(rx.rst_avg("tile").alias("band_averages")).first()
-    return result["band_averages"]
-
-
-rst_avg_python_light_example_output = """
-+-------------+
-|band_averages|
-+-------------+
-|        [5.5]|
-+-------------+
-"""
-
-
 # ---------------------------------------------------------------------------
 # rst_boundingbox — bounding polygon (returns WKB binary)
 # ---------------------------------------------------------------------------
-
-
-def rst_boundingbox_python_light_example(spark):
-    """Get the bounding box of a raster tile as WKB binary using the light pyrx tier.
-
-    The light tier returns the bounding polygon as WKB binary. Use
-    st_geomfromwkb / shapely.wkb.loads to decode to a geometry object.
-    """
-    from databricks.labs.gbx.pyrx import functions as rx
-
-    rx.register(spark)
-    tile_df = _tile_df(spark, width=4, height=3)
-    result = tile_df.select(rx.rst_boundingbox("tile").alias("bbox")).first()
-    return result["bbox"]
-
-
-rst_boundingbox_python_light_example_output = """
-+----+
-|bbox|
-+----+
-|[...|
-+----+
-(WKB binary — bounding POLYGON of the raster extent in EPSG:32618)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -110,47 +67,9 @@ rst_boundingbox_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_numbands_python_light_example(spark):
-    """Get the number of bands in a raster tile using the light pyrx tier."""
-    from databricks.labs.gbx.pyrx import functions as rx
-
-    rx.register(spark)
-    tile_df = _tile_df(spark, count=1)
-    result = tile_df.select(rx.rst_numbands("tile").alias("num_bands")).first()
-    return result["num_bands"]
-
-
-rst_numbands_python_light_example_output = """
-+---------+
-|num_bands|
-+---------+
-|        1|
-+---------+
-"""
-
-
 # ---------------------------------------------------------------------------
 # rst_width — pixel width
 # ---------------------------------------------------------------------------
-
-
-def rst_width_python_light_example(spark):
-    """Get the pixel width of a raster tile using the light pyrx tier."""
-    from databricks.labs.gbx.pyrx import functions as rx
-
-    rx.register(spark)
-    tile_df = _tile_df(spark, width=4)
-    result = tile_df.select(rx.rst_width("tile").alias("width")).first()
-    return result["width"]
-
-
-rst_width_python_light_example_output = """
-+-----+
-|width|
-+-----+
-|    4|
-+-----+
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +87,7 @@ def rst_fromfile_python_light_example(spark):
     import tempfile
     import os
     from pyspark.sql import functions as f
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
 

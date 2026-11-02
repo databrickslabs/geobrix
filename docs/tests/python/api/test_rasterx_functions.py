@@ -39,39 +39,6 @@ def test_rasterx_setup_example():
 # ---------------------------------------------------------------------------
 
 
-def test_rst_avg_python_heavy_example(spark):
-    """rst_avg returns a list of per-band float averages."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_avg_python_heavy_example(spark)
-    assert isinstance(result, list), f"Expected list, got {type(result)}"
-    assert len(result) >= 1
-    assert isinstance(
-        result[0], float
-    ), f"Expected float in list, got {type(result[0])}"
-
-
-def test_rst_boundingbox_python_heavy_example(spark):
-    """rst_boundingbox returns non-null WKB binary bytes."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_boundingbox_python_heavy_example(spark)
-    assert result is not None, "Expected non-null bbox"
-    assert len(result) > 0, "Expected non-empty bbox bytes"
-
-
-def test_rst_numbands_python_heavy_example(spark):
-    """rst_numbands returns a positive integer."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_numbands_python_heavy_example(spark)
-    assert isinstance(result, int) and result >= 1
-
-
-def test_rst_width_python_heavy_example(spark):
-    """rst_width returns 236 for the single-band sentinel2 fixture."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_width_python_heavy_example(spark)
-    assert result == 236, f"Expected width 236, got {result}"
-
-
 def test_rst_fromfile_python_heavy_example(spark):
     """rst_fromfile (heavy) returns a MATERIALIZED tile (raster bytes present)."""
     assert rasterx_functions is not None
@@ -84,10 +51,6 @@ def test_heavy_output_constants_exist():
     """All heavy-tier *_output constants are present and non-empty strings."""
     assert rasterx_functions is not None
     output_names = [
-        "rst_avg_python_heavy_example_output",
-        "rst_boundingbox_python_heavy_example_output",
-        "rst_numbands_python_heavy_example_output",
-        "rst_width_python_heavy_example_output",
         "rst_fromfile_python_heavy_example_output",
     ]
     for name in output_names:
@@ -101,41 +64,6 @@ def test_heavy_output_constants_exist():
 # ---------------------------------------------------------------------------
 
 
-def test_rst_bandmetadata_python_heavy_example(spark):
-    """rst_bandmetadata returns a non-empty dict with real tags for the multiband fixture."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_bandmetadata_python_heavy_example(spark)
-    assert isinstance(result, dict), f"Expected dict, got {type(result)}"
-    assert len(result) > 0, f"Expected non-empty metadata dict, got {result!r}"
-    # multiband fixture has name, wavelength_nm, band_index per band
-    assert "name" in result, f"Expected 'name' key in band metadata, got {result!r}"
-
-
-def test_rst_format_python_heavy_example(spark):
-    """rst_format returns a non-empty format string."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_format_python_heavy_example(spark)
-    assert (
-        isinstance(result, str) and len(result) > 0
-    ), f"Expected non-empty string, got {result!r}"
-
-
-def test_rst_georeference_python_heavy_example(spark):
-    """rst_georeference returns a dict with georeference parameters."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_georeference_python_heavy_example(spark)
-    assert isinstance(result, dict), f"Expected dict, got {type(result)}"
-
-
-def test_rst_getnodata_python_heavy_example(spark):
-    """rst_getnodata returns a list of NoData values."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_getnodata_python_heavy_example(spark)
-    assert (
-        isinstance(result, list) and len(result) >= 1
-    ), f"Expected non-empty list, got {result!r}"
-
-
 def test_rst_getsubdataset_python_heavy_example(spark):
     """rst_getsubdataset extracts the prAdjust subdataset and returns a tile struct."""
     assert rasterx_functions is not None
@@ -143,237 +71,11 @@ def test_rst_getsubdataset_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_getsubdataset")
 
 
-def test_rst_height_python_heavy_example(spark):
-    """rst_height returns 161 for the single-band sentinel2 fixture."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_height_python_heavy_example(spark)
-    assert result == 161, f"Expected height 161, got {result}"
-
-
-def test_rst_max_python_heavy_example(spark):
-    """rst_max returns [119.0, 197.0, 148.0] for the 3-band multiband fixture."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_max_python_heavy_example(spark)
-    assert (
-        isinstance(result, list) and len(result) == 3
-    ), f"Expected 3-band list, got {result!r}"
-    assert result[0] is not None, "band_max[0] should not be None"
-
-
-def test_rst_median_python_heavy_example(spark):
-    """rst_median returns [85.0, 157.5, 111.5] for the 3-band multiband fixture."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_median_python_heavy_example(spark)
-    assert (
-        isinstance(result, list) and len(result) == 3
-    ), f"Expected 3-band list, got {result!r}"
-    assert result[0] is not None, "band_median[0] should not be None"
-
-
-def test_rst_memsize_python_heavy_example(spark):
-    """rst_memsize returns a positive integer."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_memsize_python_heavy_example(spark)
-    assert (
-        isinstance(result, int) and result > 0
-    ), f"Expected positive int, got {result!r}"
-
-
-def test_rst_metadata_python_heavy_example(spark):
-    """rst_metadata returns a dict."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_metadata_python_heavy_example(spark)
-    assert isinstance(result, dict), f"Expected dict, got {type(result)}"
-
-
-def test_rst_min_python_heavy_example(spark):
-    """rst_min returns [50.0, 102.0, 82.0] for the 3-band multiband fixture."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_min_python_heavy_example(spark)
-    assert (
-        isinstance(result, list) and len(result) == 3
-    ), f"Expected 3-band list, got {result!r}"
-    assert result[0] is not None, "band_min[0] should not be None"
-
-
-def test_rst_pixelcount_python_heavy_example(spark):
-    """rst_pixelcount returns [64, 64, 64] for the multiband fixture (8x8, no NoData)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_pixelcount_python_heavy_example(spark)
-    assert (
-        isinstance(result, list) and len(result) == 3
-    ), f"Expected 3-band list, got {result!r}"
-    assert all(v == 64 for v in result), f"Expected [64, 64, 64], got {result!r}"
-
-
-def test_rst_pixelheight_python_heavy_example(spark):
-    """rst_pixelheight returns a positive float."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_pixelheight_python_heavy_example(spark)
-    assert isinstance(result, float), f"Expected float, got {type(result)}"
-
-
-def test_rst_pixelwidth_python_heavy_example(spark):
-    """rst_pixelwidth returns a positive float."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_pixelwidth_python_heavy_example(spark)
-    assert isinstance(result, float), f"Expected float, got {type(result)}"
-
-
-def test_rst_rotation_python_heavy_example(spark):
-    """rst_rotation returns a float."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_rotation_python_heavy_example(spark)
-    assert isinstance(result, float), f"Expected float, got {type(result)}"
-
-
-def test_rst_scalex_python_heavy_example(spark):
-    """rst_scalex returns a non-zero float."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_scalex_python_heavy_example(spark)
-    assert isinstance(result, float), f"Expected float, got {type(result)}"
-
-
-def test_rst_scaley_python_heavy_example(spark):
-    """rst_scaley returns a float (negative for north-up rasters)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_scaley_python_heavy_example(spark)
-    assert isinstance(result, float), f"Expected float, got {type(result)}"
-
-
-def test_rst_skewx_python_heavy_example(spark):
-    """rst_skewx returns a float."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_skewx_python_heavy_example(spark)
-    assert isinstance(result, float), f"Expected float, got {type(result)}"
-
-
-def test_rst_skewy_python_heavy_example(spark):
-    """rst_skewy returns a float."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_skewy_python_heavy_example(spark)
-    assert isinstance(result, float), f"Expected float, got {type(result)}"
-
-
-def test_rst_srid_python_heavy_example(spark):
-    """rst_srid returns 32618 for the single-band EPSG:32618 fixture."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_srid_python_heavy_example(spark)
-    assert result == 32618, f"Expected 32618, got {result}"
-
-
-def test_rst_crs_python_heavy_example(spark):
-    """rst_crs returns 'EPSG:32618' for the single-band fixture."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_crs_python_heavy_example(spark)
-    assert (
-        isinstance(result, str) and len(result) > 0
-    ), f"Expected non-empty string, got {result!r}"
-    assert "32618" in result, f"Expected EPSG:32618, got {result!r}"
-
-
-def test_rst_subdatasets_python_heavy_example(spark):
-    """rst_subdatasets returns a non-empty dict for a NetCDF raster."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_subdatasets_python_heavy_example(spark)
-    assert isinstance(result, dict), f"Expected dict, got {type(result)}"
-    assert (
-        len(result) > 0
-    ), f"Expected non-empty subdatasets dict (NetCDF fixture), got {result!r}"
-
-
-def test_rst_summary_python_heavy_example(spark):
-    """rst_summary returns a non-empty JSON string."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_summary_python_heavy_example(spark)
-    assert (
-        isinstance(result, str) and len(result) > 0
-    ), f"Expected non-empty string, got {result!r}"
-
-
-def test_rst_type_python_heavy_example(spark):
-    """rst_type returns ['UInt16', 'UInt16', 'UInt16'] for the 3-band multiband fixture."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_type_python_heavy_example(spark)
-    assert (
-        isinstance(result, list) and len(result) == 3
-    ), f"Expected 3-band list, got {result!r}"
-    assert all(t == "UInt16" for t in result), f"Expected all UInt16, got {result!r}"
-
-
-def test_rst_upperleftx_python_heavy_example(spark):
-    """rst_upperleftx returns a float."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_upperleftx_python_heavy_example(spark)
-    assert isinstance(result, float), f"Expected float, got {type(result)}"
-
-
-def test_rst_upperlefty_python_heavy_example(spark):
-    """rst_upperlefty returns a float."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_upperlefty_python_heavy_example(spark)
-    assert isinstance(result, float), f"Expected float, got {type(result)}"
-
-
-def test_rst_isempty_python_heavy_example(spark):
-    """rst_isempty returns False for the multiband fixture (has real pixel data)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_isempty_python_heavy_example(spark)
-    assert result is False, f"Expected False (multiband has real data), got {result!r}"
-
-
-def test_rst_tryopen_python_heavy_example(spark):
-    """rst_tryopen returns True for a valid tile."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_tryopen_python_heavy_example(spark)
-    assert result is True, f"Expected True, got {result!r}"
-
-
-def test_rst_histogram_python_heavy_example(spark):
-    """rst_histogram returns a dict with 3 band keys for the multiband fixture."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_histogram_python_heavy_example(spark)
-    assert isinstance(result, dict), f"Expected dict, got {type(result)}"
-    assert len(result) == 3, f"Expected 3 bands in histogram, got {len(result)}"
-    for v in result.values():
-        assert isinstance(
-            v, list
-        ), f"Expected list values in histogram dict, got {type(v)}"
-
-
 def test_accessor_heavy_output_constants_exist():
     """All accessor heavy-tier *_output constants are present and non-empty strings."""
     assert rasterx_functions is not None
     output_names = [
-        "rst_bandmetadata_python_heavy_example_output",
-        "rst_format_python_heavy_example_output",
-        "rst_georeference_python_heavy_example_output",
-        "rst_getnodata_python_heavy_example_output",
         "rst_getsubdataset_python_heavy_example_output",
-        "rst_height_python_heavy_example_output",
-        "rst_max_python_heavy_example_output",
-        "rst_median_python_heavy_example_output",
-        "rst_memsize_python_heavy_example_output",
-        "rst_metadata_python_heavy_example_output",
-        "rst_min_python_heavy_example_output",
-        "rst_pixelcount_python_heavy_example_output",
-        "rst_pixelheight_python_heavy_example_output",
-        "rst_pixelwidth_python_heavy_example_output",
-        "rst_rotation_python_heavy_example_output",
-        "rst_scalex_python_heavy_example_output",
-        "rst_scaley_python_heavy_example_output",
-        "rst_skewx_python_heavy_example_output",
-        "rst_skewy_python_heavy_example_output",
-        "rst_srid_python_heavy_example_output",
-        "rst_crs_python_heavy_example_output",
-        "rst_subdatasets_python_heavy_example_output",
-        "rst_summary_python_heavy_example_output",
-        "rst_type_python_heavy_example_output",
-        "rst_upperleftx_python_heavy_example_output",
-        "rst_upperlefty_python_heavy_example_output",
-        "rst_isempty_python_heavy_example_output",
-        "rst_tryopen_python_heavy_example_output",
-        "rst_histogram_python_heavy_example_output",
     ]
     for name in output_names:
         assert hasattr(rasterx_functions, name), f"Missing output constant: {name}"
@@ -808,14 +510,6 @@ def test_rst_viewshed_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_viewshed")
 
 
-def test_rst_sample_python_heavy_example(spark):
-    """rst_sample returns an array of sampled pixel values."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_sample_python_heavy_example(spark)
-    assert result is not None, "rst_sample: result should not be None"
-    assert isinstance(result, list), "rst_sample: result should be an array"
-
-
 def test_rst_gridfrompoints_python_heavy_example(spark):
     """rst_gridfrompoints returns a non-null tile struct (IDW interpolated)."""
     assert rasterx_functions is not None
@@ -833,52 +527,6 @@ def test_rst_dtmfromgeoms_python_heavy_example(spark):
 # ============================================================================
 # Coordinate Transforms & Tiling (Heavy)
 # ============================================================================
-
-
-def test_rst_rastertoworldcoord_python_heavy_example(spark):
-    """rst_rastertoworldcoord returns struct with x, y DOUBLE."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_rastertoworldcoord_python_heavy_example(spark)
-    assert result is not None
-    assert hasattr(result, "x") and hasattr(result, "y")
-    assert isinstance(result.x, float) and isinstance(result.y, float)
-
-
-def test_rst_rastertoworldcoordx_python_heavy_example(spark):
-    """rst_rastertoworldcoordx returns DOUBLE (easting)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_rastertoworldcoordx_python_heavy_example(spark)
-    assert isinstance(result, (int, float))
-
-
-def test_rst_rastertoworldcoordy_python_heavy_example(spark):
-    """rst_rastertoworldcoordy returns DOUBLE (northing)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_rastertoworldcoordy_python_heavy_example(spark)
-    assert isinstance(result, (int, float))
-
-
-def test_rst_worldtorastercoord_python_heavy_example(spark):
-    """rst_worldtorastercoord returns struct with x, y INT."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_worldtorastercoord_python_heavy_example(spark)
-    assert result is not None
-    assert hasattr(result, "x") and hasattr(result, "y")
-    assert isinstance(result.x, int) and isinstance(result.y, int)
-
-
-def test_rst_worldtorastercoordx_python_heavy_example(spark):
-    """rst_worldtorastercoordx returns INT (pixel col)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_worldtorastercoordx_python_heavy_example(spark)
-    assert isinstance(result, int)
-
-
-def test_rst_worldtorastercoordy_python_heavy_example(spark):
-    """rst_worldtorastercoordy returns INT (pixel row)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_worldtorastercoordy_python_heavy_example(spark)
-    assert isinstance(result, int)
 
 
 def test_rst_to_webmercator_python_heavy_example(spark):

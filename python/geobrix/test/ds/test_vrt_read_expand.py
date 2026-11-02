@@ -37,7 +37,7 @@ from rasterio.transform import from_origin
 from databricks.labs.gbx.ds.cog import CogGbxDataSource
 from databricks.labs.gbx.ds.cog_writer import CogGbxWriter, parse_mosaic_options
 from databricks.labs.gbx.ds.raster import RasterGbxDataSource
-from databricks.labs.gbx.pyrx.functions import rst_avg
+from databricks.labs.gbx.rasterx.functions import rst_avg
 
 # ---------------------------------------------------------------------------
 # Helpers

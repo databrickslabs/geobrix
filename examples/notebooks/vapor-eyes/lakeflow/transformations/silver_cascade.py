@@ -319,6 +319,7 @@ def plume_quant():
     p = paths(spark)
 
     from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api
     from databricks.labs.gbx.sample import EmitDownloader
 
     # emit_scenes ENH inventory: carries observation_date per staged ENH COG AND the
@@ -384,7 +385,7 @@ def plume_quant():
         paired
         .withColumn("scene_qc", rx.rst_threshold("scene", F.lit(">"), F.lit(floor)))
         .withColumn("clip", rx.rst_clip("scene_qc", "plume_geom", F.lit(True)))
-        .withColumn("summary", rx.rst_summary("clip"))
+        .withColumn("summary", rx_api.rst_summary("clip"))
         .withColumn("gbx_mean_ppmm",
                     F.get_json_object("summary", "$.bands[0].mean").cast("double"))
         .withColumn("gbx_max_ppmm",

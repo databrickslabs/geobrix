@@ -422,7 +422,7 @@ def run_virtual_tile_pixel_read(
 
     import pyspark.sql.functions as _F
 
-    from databricks.labs.gbx.pyrx import functions as _pyrx
+    from databricks.labs.gbx.rasterx import functions as rx
 
     def _job():
         reader = spark.read.format("raster_gbx").option("virtualTiles", "true")
@@ -433,7 +433,7 @@ def run_virtual_tile_pixel_read(
             load_path = path
         return (
             reader.load(load_path)
-            .select(_pyrx.rst_avg(_F.col("tile")).alias("avg"))
+            .select(rx.rst_avg(_F.col("tile")).alias("avg"))
             .count()
         )
 
@@ -3069,7 +3069,7 @@ def run_raster_decode_read_sweep(
 
     import pyspark.sql.functions as _F
 
-    from databricks.labs.gbx.pyrx import functions as _pyrx
+    from databricks.labs.gbx.rasterx import functions as rx
 
     def _na_row(mode_label: str, note: str) -> "ResultRow":
         return ResultRow(
@@ -3108,7 +3108,7 @@ def run_raster_decode_read_sweep(
                 spark.read.format("raster_gbx")
                 .option("virtualTiles", "true")
                 .load(source)
-                .select(_pyrx.rst_avg(_F.col("tile")).alias("avg"))
+                .select(rx.rst_avg(_F.col("tile")).alias("avg"))
                 .count()
             )
 
@@ -3202,7 +3202,7 @@ def run_raster_decode_read_sweep(
     try:
         _probe_df = read_file_table(spark, source, skip_ordering=False)
         _n_probe = int(
-            _probe_df.select(_pyrx.rst_avg(_F.col("tile")).alias("avg")).count()
+            _probe_df.select(rx.rst_avg(_F.col("tile")).alias("avg")).count()
         )
     except ValueError as ve:
         note = f"FILE {file_mode} unavailable on this tier: {str(ve)[:160]}"
@@ -3236,7 +3236,7 @@ def run_raster_decode_read_sweep(
         def _table_job(skip_ord=_skip_ord):
             return int(
                 read_file_table(spark, source, skip_ordering=skip_ord)
-                .select(_pyrx.rst_avg(_F.col("tile")).alias("avg"))
+                .select(rx.rst_avg(_F.col("tile")).alias("avg"))
                 .count()
             )
 

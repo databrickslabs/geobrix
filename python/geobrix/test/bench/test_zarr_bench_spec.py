@@ -56,7 +56,7 @@ def test_r2_measures_the_baseline_it_reports(monkeypatch):
     points for three runs in 600 s."""
     import pyspark.sql.functions as F
 
-    import databricks.labs.gbx.pyrx.functions as prx
+    import databricks.labs.gbx.rasterx.functions as prx
     import databricks.labs.gbx.zarr as gz
     from databricks.labs.gbx.bench import zarr_bench as zb
 

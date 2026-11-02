@@ -278,7 +278,7 @@ def read_tiles(spark, cube):
     """Tiles of one hour of 2 m temperature: a table of GeoBrix tiles, with no pixels yet."""
     from pyspark.sql import functions as F
 
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from databricks.labs.gbx.zarr import gbx_zarr_read
 
     tiles = gbx_zarr_read(
@@ -303,7 +303,7 @@ def measure_tiles(spark, cube):
     """Every rst_* function opens a tile on demand: here the size and mean of the windows."""
     from pyspark.sql import functions as F
 
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from databricks.labs.gbx.zarr import gbx_zarr_read
 
     tiles = gbx_zarr_read(
@@ -342,7 +342,7 @@ def materialize_tiles(spark, cube):
 
 def stack_time_as_bands(spark, cube):
     """band_dim stacks one dimension as the bands of each tile: six hours, six bands."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from databricks.labs.gbx.zarr import gbx_zarr_read
 
     tiles = gbx_zarr_read(

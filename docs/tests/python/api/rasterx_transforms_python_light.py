@@ -18,9 +18,9 @@ from _fixtures import single_band_tile_df
 # ============================================================================
 
 
-def rst_rastertoworldcoord_python_light_example(spark):
+def rst_rastertoworldcoord_python_example(spark):
     """Convert pixel coordinates (col, row) to world coordinates (x, y)."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
     rx.register(spark)
@@ -32,7 +32,7 @@ def rst_rastertoworldcoord_python_light_example(spark):
     return result["world_coord"]
 
 
-rst_rastertoworldcoord_python_light_example_output = """
+rst_rastertoworldcoord_python_example_output = """
 +-----------------------------+
 |world_coord                  |
 +-----------------------------+
@@ -42,9 +42,9 @@ rst_rastertoworldcoord_python_light_example_output = """
 """
 
 
-def rst_rastertoworldcoordx_python_light_example(spark):
+def rst_rastertoworldcoordx_python_example(spark):
     """Convert pixel column to world X coordinate (easting)."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
     rx.register(spark)
@@ -56,7 +56,7 @@ def rst_rastertoworldcoordx_python_light_example(spark):
     return result["easting"]
 
 
-rst_rastertoworldcoordx_python_light_example_output = """
+rst_rastertoworldcoordx_python_example_output = """
 +---------+
 |easting  |
 +---------+
@@ -65,9 +65,9 @@ rst_rastertoworldcoordx_python_light_example_output = """
 """
 
 
-def rst_rastertoworldcoordy_python_light_example(spark):
+def rst_rastertoworldcoordy_python_example(spark):
     """Convert pixel row to world Y coordinate (northing)."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
     rx.register(spark)
@@ -79,7 +79,7 @@ def rst_rastertoworldcoordy_python_light_example(spark):
     return result["northing"]
 
 
-rst_rastertoworldcoordy_python_light_example_output = """
+rst_rastertoworldcoordy_python_example_output = """
 +------------+
 |northing    |
 +------------+
@@ -88,9 +88,9 @@ rst_rastertoworldcoordy_python_light_example_output = """
 """
 
 
-def rst_worldtorastercoord_python_light_example(spark):
+def rst_worldtorastercoord_python_example(spark):
     """Convert world coordinates (x, y) to pixel coordinates (col, row)."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
     rx.register(spark)
@@ -105,7 +105,7 @@ def rst_worldtorastercoord_python_light_example(spark):
     return result["pixel_coord"]
 
 
-rst_worldtorastercoord_python_light_example_output = """
+rst_worldtorastercoord_python_example_output = """
 +-----------+
 |pixel_coord|
 +-----------+
@@ -115,9 +115,9 @@ rst_worldtorastercoord_python_light_example_output = """
 """
 
 
-def rst_worldtorastercoordx_python_light_example(spark):
+def rst_worldtorastercoordx_python_example(spark):
     """Convert world X coordinate to pixel column."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
     rx.register(spark)
@@ -131,7 +131,7 @@ def rst_worldtorastercoordx_python_light_example(spark):
     return result["pixel_col"]
 
 
-rst_worldtorastercoordx_python_light_example_output = """
+rst_worldtorastercoordx_python_example_output = """
 +---------+
 |pixel_col|
 +---------+
@@ -140,9 +140,9 @@ rst_worldtorastercoordx_python_light_example_output = """
 """
 
 
-def rst_worldtorastercoordy_python_light_example(spark):
+def rst_worldtorastercoordy_python_example(spark):
     """Convert world Y coordinate to pixel row."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
     rx.register(spark)
@@ -156,7 +156,7 @@ def rst_worldtorastercoordy_python_light_example(spark):
     return result["pixel_row"]
 
 
-rst_worldtorastercoordy_python_light_example_output = """
+rst_worldtorastercoordy_python_example_output = """
 +---------+
 |pixel_row|
 +---------+

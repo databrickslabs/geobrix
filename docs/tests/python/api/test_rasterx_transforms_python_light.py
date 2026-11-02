@@ -12,41 +12,41 @@ except (ModuleNotFoundError, ImportError):
     import rasterx_transforms_python_light as transforms_examples
 
 
-def test_rst_rastertoworldcoord_python_light_example(spark):
+def test_rst_rastertoworldcoord_python_example(spark):
     """Pixel (100, 80) → world (2122955.0, -10791275.0)."""
-    coord = transforms_examples.rst_rastertoworldcoord_python_light_example(spark)
+    coord = transforms_examples.rst_rastertoworldcoord_python_example(spark)
     assert coord is not None
     assert coord.x == 2122955.0 and coord.y == -10791275.0
 
 
-def test_rst_rastertoworldcoordx_python_light_example(spark):
+def test_rst_rastertoworldcoordx_python_example(spark):
     """Pixel (100, 80) → world easting 2122955.0."""
-    x = transforms_examples.rst_rastertoworldcoordx_python_light_example(spark)
+    x = transforms_examples.rst_rastertoworldcoordx_python_example(spark)
     assert x == 2122955.0
 
 
-def test_rst_rastertoworldcoordy_python_light_example(spark):
+def test_rst_rastertoworldcoordy_python_example(spark):
     """Pixel (100, 80) → world northing -10791275.0."""
-    y = transforms_examples.rst_rastertoworldcoordy_python_light_example(spark)
+    y = transforms_examples.rst_rastertoworldcoordy_python_example(spark)
     assert y == -10791275.0
 
 
-def test_rst_worldtorastercoord_python_light_example(spark):
+def test_rst_worldtorastercoord_python_example(spark):
     """World (2122955, -10791275) → pixel (100, 80) — inverse round-trip."""
-    coord = transforms_examples.rst_worldtorastercoord_python_light_example(spark)
+    coord = transforms_examples.rst_worldtorastercoord_python_example(spark)
     assert coord is not None
     assert coord.x == 100 and coord.y == 80
 
 
-def test_rst_worldtorastercoordx_python_light_example(spark):
+def test_rst_worldtorastercoordx_python_example(spark):
     """World (2122955, -10791275) → pixel column 100."""
-    col = transforms_examples.rst_worldtorastercoordx_python_light_example(spark)
+    col = transforms_examples.rst_worldtorastercoordx_python_example(spark)
     assert col == 100
 
 
-def test_rst_worldtorastercoordy_python_light_example(spark):
+def test_rst_worldtorastercoordy_python_example(spark):
     """World (2122955, -10791275) → pixel row 80."""
-    row = transforms_examples.rst_worldtorastercoordy_python_light_example(spark)
+    row = transforms_examples.rst_worldtorastercoordy_python_example(spark)
     assert row == 80
 
 

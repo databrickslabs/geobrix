@@ -340,7 +340,7 @@ def _v2_df(spark, tmp_path):
 
 def test_rst_width_column_api_on_virtual_df(spark, tmp_path):
     df = _v2_df(spark, tmp_path)
-    assert df.select(prx.rst_width("tile").alias("w")).first()["w"] == 8
+    assert df.select(rx.rst_width("tile").alias("w")).first()["w"] == 8
 
 
 def test_rst_slope_column_api_virtualize_dir_on_virtual_df(spark, tmp_path):

@@ -12,6 +12,7 @@ from databricks.labs.gbx.ds.register import register
 from databricks.labs.gbx.pyrx import functions as rx
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+from databricks.labs.gbx.rasterx import functions as rx_api
 
 
 def _a_tif():
@@ -165,7 +166,7 @@ def test_setsrid_virtual_records_key_stays_virtual():
     assert row["raster"] is None and row["path"] is not None
     assert row["metadata"]["pending_srid"] == "3857"
     # reading it applies the relabel
-    row2 = out.select(rx.rst_srid("tile").alias("s")).first()
+    row2 = out.select(rx_api.rst_srid("tile").alias("s")).first()
     assert row2["s"] == 3857
 
 
@@ -176,7 +177,7 @@ def test_band_virtual_records_key_stays_virtual():
     row = out.select("tile.raster", "tile.path", "tile.metadata").first()
     assert row["raster"] is None and row["path"] is not None
     assert row["metadata"]["pending_bands"] == "1"
-    row2 = out.select(rx.rst_numbands("tile").alias("n")).first()
+    row2 = out.select(rx_api.rst_numbands("tile").alias("n")).first()
     assert row2["n"] == 1
 
 
@@ -193,23 +194,6 @@ def test_setsrid_band_v2_struct():
 # ---------------------------------------------------------------------------
 # rst_memsize virtual-aware
 # ---------------------------------------------------------------------------
-
-
-def test_memsize_virtual_not_null():
-    spark = _spark()
-    df = _read_virtual_df(spark, _a_tif())
-    v = df.select(rx.rst_memsize("tile").alias("m")).first()["m"]
-    assert v is not None and v > 0
-
-
-def test_memsize_materialized_is_byte_length():
-    spark = _spark()
-    df = _read_virtual_df(spark, _a_tif())
-    # materialize first, then check memsize equals raster byte length
-    mat = df.withColumn("tile", rx.rst_initnodata("tile", materialize=True))
-    row = mat.select(rx.rst_memsize("tile").alias("m"), "tile.raster").first()
-    assert row["m"] is not None and row["m"] > 0
-    assert row["m"] == len(bytes(row["raster"]))
 
 
 # ---------------------------------------------------------------------------
@@ -238,8 +222,8 @@ def test_accumulated_instructions_apply_in_order():
         .withColumn("tile", rx.rst_initnodata("tile", materialize=True))
     )
     r = m.select(
-        rx.rst_numbands("tile").alias("n"),
-        rx.rst_srid("tile").alias("s"),
+        rx_api.rst_numbands("tile").alias("n"),
+        rx_api.rst_srid("tile").alias("s"),
         "tile.raster",
         "tile.metadata",
     ).first()

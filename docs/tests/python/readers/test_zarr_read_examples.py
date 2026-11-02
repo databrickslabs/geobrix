@@ -41,9 +41,10 @@ PAGE = DOCS / "readers" / "zarr.mdx"
 
 
 def shown(capsys):
-    """What an example printed, without the progress lines register prints."""
+    """What an example printed, without the progress lines register prints and the one-time 0.6.0 reminder."""
     lines = capsys.readouterr().out.splitlines()
-    return "\n".join(ln for ln in lines if not ln.startswith("[register] ")).strip()
+    skip = ("[register] ", "geobrix 0.6.0: ")
+    return "\n".join(ln for ln in lines if not ln.startswith(skip)).strip()
 
 
 @pytest.fixture(scope="module")
@@ -305,7 +306,7 @@ def test_a_dimension_stacks_as_the_bands_of_a_tile(spark, cube, capsys):
 def test_a_0_to_360_longitude_axis_gives_tiles_east_of_180(spark, tmp_path):
     from pyspark.sql import functions as F
 
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
 
     ds = xr.Dataset(
         {"t": (("latitude", "longitude"), np.zeros((4, 360), "float32"))},

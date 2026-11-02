@@ -15,37 +15,6 @@ except (ModuleNotFoundError, ImportError):
         light_examples = None
 
 
-def test_rst_avg_python_light_example(spark):
-    """rst_avg returns a list of per-band float averages."""
-    assert light_examples is not None
-    result = light_examples.rst_avg_python_light_example(spark)
-    assert isinstance(result, list), f"Expected list, got {type(result)}"
-    assert len(result) >= 1
-    assert isinstance(result[0], float), f"Expected float in list, got {type(result[0])}"
-
-
-def test_rst_boundingbox_python_light_example(spark):
-    """rst_boundingbox returns non-null WKB binary bytes for the bounding polygon."""
-    assert light_examples is not None
-    result = light_examples.rst_boundingbox_python_light_example(spark)
-    assert result is not None, "Expected non-null bbox"
-    assert len(result) > 0, "Expected non-empty bbox bytes"
-
-
-def test_rst_numbands_python_light_example(spark):
-    """rst_numbands returns 1 for a single-band synthetic raster."""
-    assert light_examples is not None
-    result = light_examples.rst_numbands_python_light_example(spark)
-    assert result == 1, f"Expected 1 band, got {result}"
-
-
-def test_rst_width_python_light_example(spark):
-    """rst_width returns 4 for the 4-pixel-wide synthetic raster."""
-    assert light_examples is not None
-    result = light_examples.rst_width_python_light_example(spark)
-    assert result == 4, f"Expected width 4, got {result}"
-
-
 def test_rst_fromfile_python_light_example(spark):
     """rst_fromfile returns a valid tile; width is 4 for the synthetic raster."""
     assert light_examples is not None
@@ -57,10 +26,6 @@ def test_output_constants_exist():
     """All *_output constants are present and non-empty strings."""
     assert light_examples is not None
     output_names = [
-        "rst_avg_python_light_example_output",
-        "rst_boundingbox_python_light_example_output",
-        "rst_numbands_python_light_example_output",
-        "rst_width_python_light_example_output",
         "rst_fromfile_python_light_example_output",
     ]
     for name in output_names:

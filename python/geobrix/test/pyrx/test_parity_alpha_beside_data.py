@@ -32,6 +32,7 @@ from test.pyrx import _alpha_layouts as al  # noqa: E402
 from test.pyrx import _tessellate_parity as tp  # noqa: E402
 
 import numpy as np  # noqa: E402
+from pyspark.sql import functions as f  # noqa: E402
 
 from .test_parity_bng_quadbin_raster_grid import (  # noqa: E402
     _TESS_CONFIG,
@@ -168,8 +169,12 @@ def _scalar(spark, raster, tier, fn):
 def _assert_scalar_parity(spark, raster, fn_names, label=""):
     """Each of ``fn_names`` (an accessor of the tile) gives the same per-band values in both tiers."""
     for fn_name in fn_names:
-        light = _scalar(spark, raster, "light", lambda m, t: getattr(m, fn_name)(t))
-        heavy = _scalar(spark, raster, "heavy", lambda m, t: getattr(m, fn_name)(t))
+        light = _scalar(
+            spark, raster, "light", lambda m, t: f.call_function(f"gbx_{fn_name}", t)
+        )
+        heavy = _scalar(
+            spark, raster, "heavy", lambda m, t: f.call_function(f"gbx_{fn_name}", t)
+        )
         assert list(light) == pytest.approx(list(heavy)), f"{label} {fn_name}"
 
 
@@ -191,10 +196,22 @@ def test_alpha_statistics_parity(spark_with_jar, name):
     _assert_scalar_parity(
         spark, raster, ("rst_pixelcount", "rst_min", "rst_max", "rst_avg"), name
     )
-    counts = _scalar(spark, raster, "light", lambda m, t: m.rst_pixelcount(t))
+    counts = _scalar(
+        spark, raster, "light", lambda m, t: f.call_function("gbx_rst_pixelcount", t)
+    )
     assert list(counts) == _valid_counts(name)
-    assert _scalar(spark, raster, "light", lambda m, t: m.rst_isempty(t)) is False
-    assert _scalar(spark, raster, "heavy", lambda m, t: m.rst_isempty(t)) is False
+    assert (
+        _scalar(
+            spark, raster, "light", lambda m, t: f.call_function("gbx_rst_isempty", t)
+        )
+        is False
+    )
+    assert (
+        _scalar(
+            spark, raster, "heavy", lambda m, t: f.call_function("gbx_rst_isempty", t)
+        )
+        is False
+    )
 
 
 @pytest.mark.parametrize("name", ["gray_x_alpha", "rgb_x_alpha", "rgba"])
@@ -204,7 +221,12 @@ def test_an_entirely_transparent_raster_is_empty_in_both_tiers(spark_with_jar, n
     data[-1] = 0
     raster = al.layout_bytes(name, data=data)
     for tier in ("light", "heavy"):
-        got = _scalar(spark_with_jar, raster, tier, lambda m, t: m.rst_isempty(t))
+        got = _scalar(
+            spark_with_jar,
+            raster,
+            tier,
+            lambda m, t: f.call_function("gbx_rst_isempty", t),
+        )
         assert got is True, f"{name}: {tier} reads a fully transparent raster as data"
 
 
@@ -378,7 +400,12 @@ def test_statistics_of_a_raster_with_its_own_mask_parity(spark_with_jar):
     _assert_scalar_parity(
         spark_with_jar, raster, ("rst_pixelcount", "rst_min", "rst_max", "rst_avg")
     )
-    counts = _scalar(spark_with_jar, raster, "light", lambda m, t: m.rst_pixelcount(t))
+    counts = _scalar(
+        spark_with_jar,
+        raster,
+        "light",
+        lambda m, t: f.call_function("gbx_rst_pixelcount", t),
+    )
     assert list(counts) == [12, 12, 12, 12]
 
 

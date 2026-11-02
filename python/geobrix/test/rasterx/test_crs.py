@@ -38,27 +38,6 @@ def spark():
     return spark
 
 
-def test_rst_crs_returns_string(spark):
-    """rst_crs(tile) returns a non-null CRS string."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    # Load the SRTM tile (which has a known CRS).
-    if not Path(SRTM_PATH).exists():
-        pytest.skip(f"Sample data not found: {SRTM_PATH}")
-
-    df = spark.read.format("binaryFile").load(SRTM_PATH).limit(1)
-    tile_df = df.select(rx.rst_fromcontent(col("content"), lit("GTiff")).alias("tile"))
-
-    # Apply rst_crs.
-    result = tile_df.select(rx.rst_crs(col("tile")).alias("crs")).collect()
-    assert len(result) == 1
-    crs_value = result[0]["crs"]
-    assert crs_value is not None, "rst_crs should return a non-null CRS string"
-    assert isinstance(crs_value, str), f"Expected string, got {type(crs_value)}"
-    # SRTM tiles typically have WGS84 (EPSG:4326).
-    assert "4326" in crs_value or "4326" in str(crs_value).upper()
-
-
 def test_rst_setcrs_bare_string_literal(spark):
     """rst_setcrs(tile, 'EPSG:4326') with a bare string literal should not resolve as a column name."""
     from databricks.labs.gbx.rasterx import functions as rx

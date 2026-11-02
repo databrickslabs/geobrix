@@ -109,8 +109,7 @@ FROM dem_rasters;
 
 ```python
 import pyspark.sql.functions as F
-from databricks.labs.gbx.pyrx import functions as rx      # lightweight
-# from databricks.labs.gbx.rasterx import functions as rx  # heavyweight — same call
+from databricks.labs.gbx.rasterx import functions as rx
 
 point = F.lit("SRID=32618;POINT(500320 4500320)")
 
@@ -194,7 +193,7 @@ FROM
 <TabItem value="python" label="Python">
 
 ```python
-from databricks.labs.gbx.pyrx import functions as rx   # or ...rasterx
+from databricks.labs.gbx.rasterx import functions as rx
 
 point = F.lit("SRID=32618;POINT(500320 4500320)")
 
@@ -249,7 +248,7 @@ WHERE d.tile_bounds IS NOT NULL;
 <TabItem value="python" label="Python">
 
 ```python
-from databricks.labs.gbx.pyrx import functions as rx
+from databricks.labs.gbx.rasterx import functions as rx
 from pyspark.sql import functions as F
 
 points = spark.table("points_table")
@@ -296,7 +295,7 @@ FROM
 <TabItem value="python" label="Python">
 
 ```python
-from databricks.labs.gbx.pyrx import functions as rx
+from databricks.labs.gbx.rasterx import functions as rx
 # h3_pointash3 is a Databricks built-in H3 function
 from pyspark.sql.functions import expr
 

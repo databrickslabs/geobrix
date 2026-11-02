@@ -37,10 +37,10 @@
     "gbx_rst_avg": {
       "examples": "Examples:\n      > SELECT gbx_rst_avg(tile) AS band_averages FROM multiband_rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the mean of the valid pixels of each band.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -59,10 +59,10 @@
     "gbx_rst_bandmetadata": {
       "examples": "Examples:\n      > SELECT gbx_rst_bandmetadata(tile, 1) AS band_meta FROM multiband_rasters;",
       "usage_args": "tile, band",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the metadata of one band as a map.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -202,10 +202,10 @@
     "gbx_rst_boundingbox": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_boundingbox(tile) as bbox FROM rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the raster's bounding box as a polygon.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -378,10 +378,10 @@
     "gbx_rst_crs": {
       "examples": "Examples:\n      > SELECT gbx_rst_crs(tile) AS crs FROM rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the canonical CRS of the raster.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.0"
@@ -576,10 +576,10 @@
     "gbx_rst_format": {
       "examples": "Examples:\n      > SELECT gbx_rst_format(tile) AS format FROM rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the GDAL driver short name of the raster.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -629,10 +629,10 @@
     "gbx_rst_georeference": {
       "examples": "Examples:\n      > SELECT gbx_rst_georeference(tile) AS georeference FROM rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the geotransform as a map.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -640,10 +640,10 @@
     "gbx_rst_getnodata": {
       "examples": "Examples:\n      > SELECT gbx_rst_getnodata(tile) AS nodata FROM rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the NoData value of each band.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -794,10 +794,10 @@
     "gbx_rst_height": {
       "examples": "Examples:\n      > SELECT gbx_rst_height(tile) AS height FROM rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the height of the raster in pixels.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -816,10 +816,10 @@
     "gbx_rst_histogram": {
       "examples": "Examples:\n      > SELECT gbx_rst_histogram(tile) AS histogram FROM multiband_rasters;",
       "usage_args": "tile, [n_buckets], [min_val], [max_val], [include_nodata]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the histogram of each band.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -849,10 +849,10 @@
     "gbx_rst_isempty": {
       "examples": "Examples:\n      > SELECT gbx_rst_isempty(tile) AS is_empty FROM multiband_rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Test whether a raster holds no valid pixel.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -899,10 +899,10 @@
     "gbx_rst_max": {
       "examples": "Examples:\n      > SELECT gbx_rst_max(tile) AS band_max FROM multiband_rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the maximum of the valid pixels of each band.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -910,10 +910,10 @@
     "gbx_rst_median": {
       "examples": "Examples:\n      > SELECT gbx_rst_median(tile) AS band_median FROM multiband_rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the median of the valid pixels of each band.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -921,10 +921,10 @@
     "gbx_rst_memsize": {
       "examples": "Examples:\n      > SELECT gbx_rst_memsize(tile) AS memsize FROM rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the in-memory size of a tile in bytes.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -954,10 +954,10 @@
     "gbx_rst_metadata": {
       "examples": "Examples:\n      > SELECT gbx_rst_metadata(tile) as metadata FROM rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the raster's metadata as a map.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -965,10 +965,10 @@
     "gbx_rst_min": {
       "examples": "Examples:\n      > SELECT gbx_rst_min(tile) AS band_min FROM multiband_rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the minimum of the valid pixels of each band.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1009,10 +1009,10 @@
     "gbx_rst_numbands": {
       "examples": "Examples:\n      > SELECT gbx_rst_numbands(tile) AS num_bands FROM multiband_rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the number of bands of the raster.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1027,10 +1027,10 @@
     "gbx_rst_pixelcount": {
       "examples": "Examples:\n      > SELECT gbx_rst_pixelcount(tile) AS pixel_count FROM multiband_rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the number of valid pixels of each band.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1038,10 +1038,10 @@
     "gbx_rst_pixelheight": {
       "examples": "Examples:\n      > SELECT gbx_rst_pixelheight(tile) AS pixel_height FROM rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the ground size of a pixel along y.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1049,10 +1049,10 @@
     "gbx_rst_pixelwidth": {
       "examples": "Examples:\n      > SELECT gbx_rst_pixelwidth(tile) AS pixel_width FROM rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the ground size of a pixel along x.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1214,10 +1214,10 @@
     "gbx_rst_rastertoworldcoord": {
       "examples": "Examples:\n      > SELECT gbx_rst_rastertoworldcoord(tile, 100, 80) as world_coord, gbx_rst_rastertoworldcoord(tile, 100, 80).x as easting, gbx_rst_rastertoworldcoord(tile, 100, 80).y as northing FROM rasters;",
       "usage_args": "tile, x, y",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Convert a pixel to the world coordinate of its centre.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1225,10 +1225,10 @@
     "gbx_rst_rastertoworldcoordx": {
       "examples": "Examples:\n      > SELECT gbx_rst_rastertoworldcoordx(tile, 100, 80) as easting FROM rasters;",
       "usage_args": "tile, x, y",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Convert a pixel to the x of its centre.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1236,10 +1236,10 @@
     "gbx_rst_rastertoworldcoordy": {
       "examples": "Examples:\n      > SELECT gbx_rst_rastertoworldcoordy(tile, 100, 80) as northing FROM rasters;",
       "usage_args": "tile, x, y",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Convert a pixel to the y of its centre.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1291,10 +1291,10 @@
     "gbx_rst_rotation": {
       "examples": "Examples:\n      > SELECT gbx_rst_rotation(tile) AS rotation FROM rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the rotation of the raster grid in radians.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1313,10 +1313,10 @@
     "gbx_rst_sample": {
       "examples": "Examples:\n      > SELECT gbx_rst_sample(tile, 'SRID=32618;POINT(500320 4500320)') AS values FROM dem_rasters;",
       "usage_args": "tile, geom, [crs]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the pixel value of each band at a point.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -1335,10 +1335,10 @@
     "gbx_rst_scalex": {
       "examples": "Examples:\n      > SELECT gbx_rst_scalex(tile) AS scale_x FROM rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the signed x scale of the geotransform.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1346,10 +1346,10 @@
     "gbx_rst_scaley": {
       "examples": "Examples:\n      > SELECT gbx_rst_scaley(tile) AS scale_y FROM rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the signed y scale of the geotransform.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1390,10 +1390,10 @@
     "gbx_rst_skewx": {
       "examples": "Examples:\n      > SELECT gbx_rst_skewx(tile) AS skew_x FROM rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the x skew of the geotransform.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1401,10 +1401,10 @@
     "gbx_rst_skewy": {
       "examples": "Examples:\n      > SELECT gbx_rst_skewy(tile) AS skew_y FROM rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the y skew of the geotransform.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1422,10 +1422,10 @@
     "gbx_rst_srid": {
       "examples": "Examples:\n      > SELECT gbx_rst_srid(tile) AS srid FROM rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the integer SRID of the raster CRS.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1433,10 +1433,10 @@
     "gbx_rst_subdatasets": {
       "examples": "Examples:\n      > SELECT gbx_rst_subdatasets(tile) AS subdatasets FROM netcdf_rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the subdatasets of a container raster.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1444,10 +1444,10 @@
     "gbx_rst_summary": {
       "examples": "Examples:\n      > SELECT gbx_rst_summary(tile) AS summary FROM multiband_rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return a JSON summary of the raster with per-band statistics.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1544,10 +1544,10 @@
     "gbx_rst_tryopen": {
       "examples": "Examples:\n      > SELECT gbx_rst_tryopen(tile) AS try_open FROM multiband_rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Test whether tile bytes open as a raster.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1555,10 +1555,10 @@
     "gbx_rst_type": {
       "examples": "Examples:\n      > SELECT gbx_rst_type(tile) AS band_types FROM multiband_rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the GDAL data type of each band.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1577,10 +1577,10 @@
     "gbx_rst_upperleftx": {
       "examples": "Examples:\n      > SELECT gbx_rst_upperleftx(tile) AS upper_left_x FROM rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the x coordinate of the raster's upper-left corner.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1588,10 +1588,10 @@
     "gbx_rst_upperlefty": {
       "examples": "Examples:\n      > SELECT gbx_rst_upperlefty(tile) AS upper_left_y FROM rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the y coordinate of the raster's upper-left corner.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1610,10 +1610,10 @@
     "gbx_rst_width": {
       "examples": "Examples:\n      > SELECT gbx_rst_width(tile) AS width FROM rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the width of the raster in pixels.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1621,10 +1621,10 @@
     "gbx_rst_worldtorastercoord": {
       "examples": "Examples:\n      > SELECT gbx_rst_worldtorastercoord(tile, 2122955.0, -10791275.0) as pixel_coord, gbx_rst_worldtorastercoord(tile, 2122955.0, -10791275.0).x as pixel_col, gbx_rst_worldtorastercoord(tile, 2122955.0, -10791275.0).y as pixel_row FROM rasters;",
       "usage_args": "tile, x, y",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Convert a world coordinate to the pixel that contains it.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1632,10 +1632,10 @@
     "gbx_rst_worldtorastercoordx": {
       "examples": "Examples:\n      > SELECT gbx_rst_worldtorastercoordx(tile, 2122955.0, -10791275.0) as pixel_col FROM rasters;",
       "usage_args": "tile, x, y",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Convert a world coordinate to a pixel column.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1643,10 +1643,10 @@
     "gbx_rst_worldtorastercoordy": {
       "examples": "Examples:\n      > SELECT gbx_rst_worldtorastercoordy(tile, 2122955.0, -10791275.0) as pixel_row FROM rasters;",
       "usage_args": "tile, x, y",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Convert a world coordinate to a pixel row.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"

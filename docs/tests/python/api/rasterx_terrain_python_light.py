@@ -244,9 +244,9 @@ rst_viewshed_python_light_example_output = """
 """
 
 
-def rst_sample_python_light_example(spark):
+def rst_sample_python_example(spark):
     """Sample raster pixel values at a POINT geometry."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
     rx.register(spark)
@@ -257,7 +257,7 @@ def rst_sample_python_light_example(spark):
     return result["values"]
 
 
-rst_sample_python_light_example_output = """
+rst_sample_python_example_output = """
 +-------+
 |values |
 +-------+

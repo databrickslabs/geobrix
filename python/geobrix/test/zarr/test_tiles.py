@@ -22,6 +22,7 @@ from databricks.labs.gbx.pyrx.core.virtual_tile import (  # noqa: E402
     V2_TILE_SCHEMA,
     VirtualTile,
 )
+from databricks.labs.gbx.rasterx import functions as rx  # noqa: E402
 from databricks.labs.gbx.zarr import _read, _tiles  # noqa: E402
 from databricks.labs.gbx.zarr._testing import (  # noqa: E402
     make_era5_like,
@@ -818,20 +819,20 @@ def test_rst_clip_and_transform_on_zarr_tiles(spark_delta, era5_v3_sharded):
     tile = F.col("tile")
     one = df.where("tile.window.col_off = 0 AND tile.window.row_off = 0")
     row = one.select(
-        prx.rst_width(tile).alias("w"),
-        prx.rst_height(tile).alias("h"),
-        prx.rst_srid(tile).alias("srid"),
-        prx.rst_numbands(tile).alias("bands"),
-        prx.rst_srid(prx.rst_transform(tile, F.lit(3857))).alias("srid_t"),
-        prx.rst_width(
+        rx.rst_width(tile).alias("w"),
+        rx.rst_height(tile).alias("h"),
+        rx.rst_srid(tile).alias("srid"),
+        rx.rst_numbands(tile).alias("bands"),
+        rx.rst_srid(prx.rst_transform(tile, F.lit(3857))).alias("srid_t"),
+        rx.rst_width(
             prx.rst_clip(tile, F.lit(bytes(box(10, 60, 40, 80).wkb)), F.lit(False))
         ).alias("w_clip"),
-        prx.rst_isempty(tile).alias("empty"),
+        rx.rst_isempty(tile).alias("empty"),
     ).first()
     assert (row.w, row.h, row.srid, row.bands) == (72, 37, 4326, 1)
     assert row.srid_t == 3857 and 0 < row.w_clip < 72 and row.empty is False
     grouped = prx.rst_clip_grouped(
         one, bytes(box(10, 60, 40, 80).wkb), out_col="clipped"
     )
-    assert grouped.select(prx.rst_width("clipped")).first()[0] == row.w_clip
-    assert df.select(prx.rst_width(tile)).count() == 4
+    assert grouped.select(rx.rst_width("clipped")).first()[0] == row.w_clip
+    assert df.select(rx.rst_width(tile)).count() == 4

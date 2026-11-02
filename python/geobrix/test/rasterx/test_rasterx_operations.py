@@ -257,37 +257,6 @@ def test_rst_initnodata(spark):
     assert result[0]["nodata_tile"] is not None
 
 
-def test_rst_isempty(spark):
-    """Test checking if raster is empty."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    df = spark.range(1).select(
-        rx.rst_isempty(tile_from_path(rx, f, str(MODIS_B01), "GTiff")).alias("is_empty")
-    )
-
-    result = df.collect()
-    assert result is not None
-    assert len(result) == 1
-    # MODIS tile should not be empty
-    assert result[0]["is_empty"] is False
-
-
-def test_rst_tryopen(spark):
-    """Test safely opening a raster."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    df = spark.range(1).select(
-        rx.rst_tryopen(tile_from_path(rx, f, str(MODIS_B01), "GTiff")).alias(
-            "opened_tile"
-        )
-    )
-
-    result = df.collect()
-    assert result is not None
-    assert len(result) == 1
-    assert result[0]["opened_tile"] is not None
-
-
 def test_rst_updatetype(spark):
     """Test updating raster data type."""
     from databricks.labs.gbx.rasterx import functions as rx
@@ -302,54 +271,6 @@ def test_rst_updatetype(spark):
     assert result is not None
     assert len(result) == 1
     assert result[0]["updated_tile"] is not None
-
-
-def test_rst_coordinate_conversions(spark):
-    """Test raster/world coordinate conversions."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    tile_col = tile_from_path(rx, f, str(MODIS_B01), "GTiff")
-
-    # Test world to raster coordinate conversion
-    df = spark.range(1).select(
-        rx.rst_worldtorastercoord(
-            tile_col, f.lit(-8895604.157333), f.lit(2223901.039333)
-        ).alias("raster_coord"),
-        rx.rst_worldtorastercoordx(
-            tile_col, f.lit(-8895604.157333), f.lit(2223901.039333)
-        ).alias("raster_x"),
-        rx.rst_worldtorastercoordy(
-            tile_col, f.lit(-8895604.157333), f.lit(2223901.039333)
-        ).alias("raster_y"),
-    )
-
-    result = df.collect()
-    assert result is not None
-    assert len(result) == 1
-    assert result[0]["raster_coord"] is not None
-    assert result[0]["raster_x"] is not None
-    assert result[0]["raster_y"] is not None
-
-
-def test_rst_raster_to_world_conversions(spark):
-    """Test raster to world coordinate conversions."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    tile_col = tile_from_path(rx, f, str(MODIS_B01), "GTiff")
-
-    # Test raster to world coordinate conversion
-    df = spark.range(1).select(
-        rx.rst_rastertoworldcoord(tile_col, f.lit(0), f.lit(0)).alias("world_coord"),
-        rx.rst_rastertoworldcoordx(tile_col, f.lit(0), f.lit(0)).alias("world_x"),
-        rx.rst_rastertoworldcoordy(tile_col, f.lit(0), f.lit(0)).alias("world_y"),
-    )
-
-    result = df.collect()
-    assert result is not None
-    assert len(result) == 1
-    assert result[0]["world_coord"] is not None
-    assert result[0]["world_x"] is not None
-    assert result[0]["world_y"] is not None
 
 
 def test_rst_mapalgebra(spark):

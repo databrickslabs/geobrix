@@ -42,7 +42,7 @@ from rasterio.windows import Window
 from databricks.labs.gbx.ds._mosaic import mint_vrt
 from databricks.labs.gbx.ds.cog import CogGbxDataSource
 from databricks.labs.gbx.ds.raster import RasterGbxDataSource
-from databricks.labs.gbx.pyrx.functions import rst_avg
+from databricks.labs.gbx.rasterx.functions import rst_avg
 
 # ---------------------------------------------------------------------------
 # Shared raster geometry

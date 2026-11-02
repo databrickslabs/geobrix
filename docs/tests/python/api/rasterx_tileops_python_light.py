@@ -302,7 +302,7 @@ def rst_fromcontent_python_light_example(spark):
     compute — both lightweight and heavyweight tiers.
     """
     from ._fixtures import single_band_path  # noqa: PLC0415
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     rx.register(spark)
@@ -541,7 +541,7 @@ rst_resample_to_size_python_light_example_output = """
 
 def rst_setcrs_python_light_example(spark):
     """Stamp a CRS string onto a raster tile using the light pyrx tier."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.table("rasters")

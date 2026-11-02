@@ -30,6 +30,7 @@ from shapely.geometry import box
 from databricks.labs.gbx.pyrx.core import edit
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+from databricks.labs.gbx.rasterx import functions as rx
 
 from . import _tessellate_parity as tp
 
@@ -414,8 +415,8 @@ def test_rst_initnodata_from_a_virtual_tile(spark, tmp_path):
     for start in (True, False):
         df = _tile_df(spark, p, virtual_start=start)
         row = df.select(
-            prx.rst_pixelcount(prx.rst_initnodata("tile")).alias("n"),
-            prx.rst_max(prx.rst_initnodata("tile")).alias("mx"),
+            rx.rst_pixelcount(prx.rst_initnodata("tile")).alias("n"),
+            rx.rst_max(prx.rst_initnodata("tile")).alias("mx"),
         ).collect()[0]
         got[start] = (list(row["n"]), list(row["mx"]))
     # 1600 pixels - 80 masked - 40 real 65535s (the NoData it stamps)

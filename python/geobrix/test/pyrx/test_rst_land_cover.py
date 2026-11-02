@@ -7,6 +7,7 @@ from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.pyrx import functions as prx
+from databricks.labs.gbx.rasterx import functions as rx
 
 
 def _two_region_rgb_bytes(h=32, w=32):
@@ -46,7 +47,7 @@ def test_rst_land_cover_emits_classmask_tile(spark, two_region_rgb_tile_df):
         prx.rst_land_cover(F.col("tile"), method="spectral", smooth=0).alias("lc")
     )
     row = out.select(
-        prx.rst_numbands("lc").alias("n"), prx.rst_type("lc").alias("ty")
+        rx.rst_numbands("lc").alias("n"), rx.rst_type("lc").alias("ty")
     ).first()
     assert row["n"] == 1
     assert row["ty"][0] == "Int32"
@@ -83,8 +84,8 @@ def test_gbx_rst_land_cover_sql_registration(spark, two_region_rgb_tile_df):
             "SELECT gbx_rst_land_cover(tile, 'spectral', 6, 0) AS lc FROM _lc_sql_test"
         )
         .select(
-            prx.rst_numbands("lc").alias("n"),
-            prx.rst_type("lc").alias("ty"),
+            rx.rst_numbands("lc").alias("n"),
+            rx.rst_type("lc").alias("ty"),
         )
         .first()
     )

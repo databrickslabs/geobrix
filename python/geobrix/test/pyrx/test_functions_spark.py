@@ -19,55 +19,6 @@ def test_no_jar_in_session(spark):
     assert not spark.conf.get("spark.jars", "")
 
 
-def test_rst_width_height(spark):
-    df = _tile_df(spark, width=4, height=3)
-    row = df.select(
-        prx.rst_width("tile").alias("w"),
-        prx.rst_height("tile").alias("h"),
-    ).first()
-    assert row["w"] == 4
-    assert row["h"] == 3
-
-
-def test_rst_srid(spark):
-    df = _tile_df(spark, epsg=4326)
-    assert df.select(prx.rst_srid("tile").alias("s")).first()["s"] == 4326
-
-
-def test_rst_rastertoworldcoordx(spark):
-    df = _tile_df(spark)
-    row = df.select(
-        prx.rst_rastertoworldcoordx("tile", f.lit(0), f.lit(0)).alias("x")
-    ).first()
-    assert row["x"] == 10.25
-
-
-def test_rst_worldtorastercoordx(spark):
-    df = _tile_df(spark)
-    row = df.select(
-        prx.rst_worldtorastercoordx("tile", f.lit(10.6), f.lit(49.9)).alias("c")
-    ).first()
-    assert row["c"] == 1
-
-
-def test_rst_metadata_maptype_roundtrip(spark):
-    # Exercises the MapType return path (non-pandas @f.udf fallback).
-    df = _tile_df(spark, width=4, height=3)
-    meta = df.select(prx.rst_metadata("tile").alias("m")).first()["m"]
-    assert meta["width"] == "4"
-    assert meta["height"] == "3"
-    assert meta["driver"] == "GTiff"
-
-
-def test_rst_boundingbox_binarytype_roundtrip(spark):
-    # Exercises the BinaryType (WKB) return path end-to-end through Spark.
-    import shapely.wkb
-
-    df = _tile_df(spark, width=4, height=3)
-    wkb = df.select(prx.rst_boundingbox("tile").alias("b")).first()["b"]
-    assert shapely.wkb.loads(bytes(wkb)).bounds == (10.0, 48.5, 12.0, 50.0)
-
-
 def test_register_is_noop(spark):
     # swap-compat: rx.register(spark) -> prx.register(spark) must not error.
     prx.register(spark)
@@ -77,7 +28,7 @@ def test_rst_transform_to_3857(spark):
     df = _tile_df(spark, epsg=4326, count=2)
     out = df.select(prx.rst_transform("tile", 3857).alias("t"))
     row = out.select(
-        prx.rst_srid("t").alias("s"), prx.rst_numbands("t").alias("n")
+        rx.rst_srid("t").alias("s"), rx.rst_numbands("t").alias("n")
     ).first()
     assert row["s"] == 3857
     assert row["n"] == 2
@@ -86,14 +37,14 @@ def test_rst_transform_to_3857(spark):
 def test_rst_to_webmercator(spark):
     df = _tile_df(spark, epsg=4326)
     out = df.select(prx.rst_to_webmercator("tile").alias("t"))
-    assert out.select(prx.rst_srid("t").alias("s")).first()["s"] == 3857
+    assert out.select(rx.rst_srid("t").alias("s")).first()["s"] == 3857
 
 
 def test_rst_resample_factor(spark):
     df = _tile_df(spark, width=4, height=3)
     out = df.select(prx.rst_resample("tile", 2.0).alias("t"))
     row = out.select(
-        prx.rst_width("t").alias("w"), prx.rst_height("t").alias("h")
+        rx.rst_width("t").alias("w"), rx.rst_height("t").alias("h")
     ).first()
     assert (row["w"], row["h"]) == (8, 6)
 
@@ -102,7 +53,7 @@ def test_rst_resample_to_size(spark):
     df = _tile_df(spark, width=4, height=3)
     out = df.select(prx.rst_resample_to_size("tile", 10, 7).alias("t"))
     row = out.select(
-        prx.rst_width("t").alias("w"), prx.rst_height("t").alias("h")
+        rx.rst_width("t").alias("w"), rx.rst_height("t").alias("h")
     ).first()
     assert (row["w"], row["h"]) == (10, 7)
 
@@ -111,7 +62,7 @@ def test_rst_resample_to_res(spark):
     df = _tile_df(spark, width=4, height=3, epsg=4326)
     out = df.select(prx.rst_resample_to_res("tile", 0.25, 0.25).alias("t"))
     row = out.select(
-        prx.rst_width("t").alias("w"), prx.rst_height("t").alias("h")
+        rx.rst_width("t").alias("w"), rx.rst_height("t").alias("h")
     ).first()
     assert (row["w"], row["h"]) == (8, 6)
 
@@ -125,7 +76,7 @@ def test_rst_clip(spark):
     df = df.withColumn("g", f.lit(geom))
     out = df.select(prx.rst_clip("tile", "g", False).alias("t"))
     row = out.select(
-        prx.rst_width("t").alias("w"), prx.rst_height("t").alias("h")
+        rx.rst_width("t").alias("w"), rx.rst_height("t").alias("h")
     ).first()
     assert 0 < row["w"] < 4 and 0 < row["h"] < 3
 
@@ -162,28 +113,10 @@ def test_rst_clip_geom_encodings(spark):
     assert len(distinct) == 1, f"encodings diverged: {sizes}"
 
 
-def test_rst_sample_geom_encodings(spark):
-    from shapely import set_srid, to_wkb
-    from shapely.geometry import Point
-
-    pt = Point(10.75, 49.75)
-    encodings = {
-        "wkb": to_wkb(pt),
-        "ewkb": to_wkb(set_srid(pt, 4326), include_srid=True),
-        "wkt": pt.wkt,
-        "ewkt": f"SRID=4326;{pt.wkt}",
-    }
-    for name, geom in encodings.items():
-        df = _tile_df(spark, width=4, height=3, count=2)
-        df = df.withColumn("g", f.lit(geom))
-        vals = df.select(prx.rst_sample("tile", "g").alias("v")).first()["v"]
-        assert vals == [1.0, 101.0], f"{name} sampled {vals}"
-
-
 def test_rst_updatetype(spark):
     df = _tile_df(spark, width=4, height=3)
     out = df.select(prx.rst_updatetype("tile", f.lit("Int32")).alias("t"))
-    assert out.select(prx.rst_type("t").alias("ty")).first()["ty"][0] == "Int32"
+    assert out.select(rx.rst_type("t").alias("ty")).first()["ty"][0] == "Int32"
 
 
 def test_rst_initnodata(spark):
@@ -192,7 +125,7 @@ def test_rst_initnodata(spark):
     df = _tile_df(spark, nodata=None)
     out = df.select(prx.rst_initnodata("tile").alias("t"))
     # float32 tile: the dtype's fallback (heavy GDAL.getNoDataConstant: Float.MinValue)
-    nd = out.select(prx.rst_getnodata("t").alias("nd")).first()["nd"][0]
+    nd = out.select(rx.rst_getnodata("t").alias("nd")).first()["nd"][0]
     assert nd == float(np.finfo(np.float32).min)
 
 
@@ -206,9 +139,9 @@ def test_rst_rasterize(spark):
         prx.rst_rasterize("g", 5.0, 0.0, 0.0, 4.0, 4.0, 4, 4, 4326).alias("t")
     )
     row = out.select(
-        prx.rst_width("t").alias("w"),
-        prx.rst_height("t").alias("h"),
-        prx.rst_srid("t").alias("s"),
+        rx.rst_width("t").alias("w"),
+        rx.rst_height("t").alias("h"),
+        rx.rst_srid("t").alias("s"),
     ).first()
     assert (row["w"], row["h"], row["s"]) == (4, 4, 4326)
 
@@ -239,9 +172,9 @@ def test_rst_fillnodata(spark):
     out = df.select(prx.rst_fillnodata("tile").alias("t"))
     # rst_pixelcount absent in pyrx; verify via dims and nodata list (all filled = empty nodata)
     row = out.select(
-        prx.rst_width("t").alias("w"),
-        prx.rst_height("t").alias("h"),
-        prx.rst_getnodata("t").alias("nd"),
+        rx.rst_width("t").alias("w"),
+        rx.rst_height("t").alias("h"),
+        rx.rst_getnodata("t").alias("nd"),
     ).first()
     assert (row["w"], row["h"]) == (5, 5)
     # nodata is set but all pixels should now be valid — getnodata returns the
@@ -253,7 +186,7 @@ def test_rst_ndvi(spark):
     df = _tile_df(spark, width=4, height=3, count=2)
     out = df.select(prx.rst_ndvi("tile", 1, 2).alias("t"))
     row = out.select(
-        prx.rst_numbands("t").alias("n"), prx.rst_type("t").alias("ty")
+        rx.rst_numbands("t").alias("n"), rx.rst_type("t").alias("ty")
     ).first()
     assert row["n"] == 1
     assert row["ty"][0] == "Float32"
@@ -267,7 +200,7 @@ def test_rst_evi_savi_ndwi_nbr_single_band(spark):
         prx.rst_ndwi("tile", 1, 2),
         prx.rst_nbr("tile", 2, 1),
     ):
-        n = df.select(prx.rst_numbands(col).alias("n")).first()["n"]
+        n = df.select(rx.rst_numbands(col).alias("n")).first()["n"]
         assert n == 1
 
 
@@ -296,33 +229,31 @@ def test_rst_slope_aspect_hillshade(spark):
     )
     # Auto-scale path (no scale args): must run and produce Float32.
     assert (
-        df.select(prx.rst_type(prx._light_rst_slope("tile")).alias("t")).first()["t"][0]
+        df.select(rx.rst_type(prx._light_rst_slope("tile")).alias("t")).first()["t"][0]
         == "Float32"
     )
     # Explicit xscale/yscale override path: also runs, Float32, and differs from auto.
     auto_min = df.select(
-        prx.rst_min(prx._light_rst_slope("tile"))[0].alias("v")
+        rx.rst_min(prx._light_rst_slope("tile"))[0].alias("v")
     ).first()["v"]
     over_min = df.select(
-        prx.rst_min(prx._light_rst_slope("tile", xscale=111120.0, yscale=111120.0))[
+        rx.rst_min(prx._light_rst_slope("tile", xscale=111120.0, yscale=111120.0))[
             0
         ].alias("v")
     ).first()["v"]
     assert over_min != auto_min
     assert (
         df.select(
-            prx.rst_type(prx._light_rst_slope("tile", xscale=2.0, yscale=2.0)).alias(
-                "t"
-            )
+            rx.rst_type(prx._light_rst_slope("tile", xscale=2.0, yscale=2.0)).alias("t")
         ).first()["t"][0]
         == "Float32"
     )
     assert (
-        df.select(prx.rst_type(prx.rst_hillshade("tile")).alias("t")).first()["t"][0]
+        df.select(rx.rst_type(prx.rst_hillshade("tile")).alias("t")).first()["t"][0]
         == "Byte"
     )
     assert (
-        df.select(prx.rst_numbands(prx.rst_aspect("tile")).alias("n")).first()["n"] == 1
+        df.select(rx.rst_numbands(prx.rst_aspect("tile")).alias("n")).first()["n"] == 1
     )
 
 
@@ -386,7 +317,7 @@ def test_rst_tri_tpi_roughness(spark):
     )
     for col in (prx.rst_tri("tile"), prx.rst_tpi("tile"), prx.rst_roughness("tile")):
         row = df.select(
-            prx.rst_numbands(col).alias("n"), prx.rst_type(col).alias("t")
+            rx.rst_numbands(col).alias("n"), rx.rst_type(col).alias("t")
         ).first()
         assert row["n"] == 1 and row["t"][0] == "Float32"
 
@@ -415,13 +346,13 @@ def test_rst_threshold(spark):
         prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     out = df.select(prx.rst_threshold("tile", f.lit(">"), 5.0).alias("t"))
-    assert out.select(prx.rst_getnodata("t").alias("nd")).first()["nd"][0] == -9999.0
+    assert out.select(rx.rst_getnodata("t").alias("nd")).first()["nd"][0] == -9999.0
 
 
 def test_rst_filter_and_convolve(spark):
     df = _tile_df(spark, width=5, height=5, count=1)
     fout = df.select(prx.rst_filter("tile", 3, f.lit("mean")).alias("t"))
-    assert fout.select(prx.rst_numbands("t").alias("n")).first()["n"] == 1
+    assert fout.select(rx.rst_numbands("t").alias("n")).first()["n"] == 1
     cout = df.select(
         prx.rst_convolve(
             "tile",
@@ -432,7 +363,7 @@ def test_rst_filter_and_convolve(spark):
             ),
         ).alias("t")
     )
-    assert cout.select(prx.rst_numbands("t").alias("n")).first()["n"] == 1
+    assert cout.select(rx.rst_numbands("t").alias("n")).first()["n"] == 1
 
 
 def test_rst_color_relief(spark):
@@ -467,7 +398,7 @@ def test_rst_color_relief(spark):
         prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     out = df.select(prx.rst_color_relief("tile", f.lit(color_table_path)).alias("t"))
-    assert out.select(prx.rst_numbands("t").alias("n")).first()["n"] == 3
+    assert out.select(rx.rst_numbands("t").alias("n")).first()["n"] == 3
 
 
 def test_rst_mapalgebra(spark):
@@ -499,7 +430,7 @@ def test_rst_mapalgebra(spark):
     )
     out = df.select(rx.rst_mapalgebra(f.array("ta", "tb"), f.lit("A + B")).alias("t"))
     row = out.select(
-        prx.rst_numbands("t").alias("n"), prx.rst_type("t").alias("ty")
+        rx.rst_numbands("t").alias("n"), rx.rst_type("t").alias("ty")
     ).first()
     assert row["n"] == 1 and row["ty"][0] == "Float32"
 
@@ -516,7 +447,7 @@ def test_rst_separatebands(spark):
     assert parts.count() == 3
     assert (
         parts.select(
-            prx.rst_numbands(f.struct("cellid", "raster", "metadata")).alias("n")
+            rx.rst_numbands(f.struct("cellid", "raster", "metadata")).alias("n")
         ).first()["n"]
         == 1
     )
@@ -532,8 +463,8 @@ def test_rst_retile(spark):
     )
     assert parts.count() == 4
     row = parts.select(
-        prx.rst_width(f.struct("cellid", "raster", "metadata")).alias("w"),
-        prx.rst_height(f.struct("cellid", "raster", "metadata")).alias("h"),
+        rx.rst_width(f.struct("cellid", "raster", "metadata")).alias("w"),
+        rx.rst_height(f.struct("cellid", "raster", "metadata")).alias("h"),
     ).first()
     assert (row["w"], row["h"]) == (2, 2)
 
@@ -580,7 +511,7 @@ def test_rst_derivedband(spark):
     out = df.select(
         prx.rst_derivedband("tile", f.lit(pyfunc), f.lit("double")).alias("t")
     )
-    assert out.select(prx.rst_numbands("t").alias("n")).first()["n"] == 1
+    assert out.select(rx.rst_numbands("t").alias("n")).first()["n"] == 1
 
 
 def test_rst_maketiles(spark):
@@ -619,7 +550,7 @@ def test_rst_maketiles(spark):
     assert parts.count() == 16
     assert (
         parts.select(
-            prx.rst_numbands(f.struct("cellid", "raster", "metadata")).alias("n")
+            rx.rst_numbands(f.struct("cellid", "raster", "metadata")).alias("n")
         ).first()["n"]
         == 1
     )
@@ -1047,117 +978,18 @@ def test_rastertogrid_all_10_register_and_return_flat_rows(spark):
 
 
 # --- Group 1: per-band statistics & accessors -------------------------------
-def test_rst_avg_min_max_median_pixelcount(spark):
-    import math
-
-    df = _tile_df(spark, width=4, height=3, count=2)
-    row = df.select(
-        prx.rst_avg("tile").alias("avg"),
-        prx.rst_min("tile").alias("min"),
-        prx.rst_max("tile").alias("max"),
-        prx.rst_median("tile").alias("med"),
-        prx.rst_pixelcount("tile").alias("pc"),
-    ).first()
-    # band1 = arange(12); band2 = +100 (no -9999 -> all 12 valid).
-    assert row["avg"][0] == math.fsum(range(12)) / 12
-    assert row["min"] == [0.0, 100.0]
-    assert row["max"] == [11.0, 111.0]
-    assert row["med"][0] == 5.5
-    assert row["pc"] == [12, 12]
-
-
-def test_rst_memsize(spark):
-    raster = make_geotiff_bytes(width=4, height=3)
-    df = spark.createDataFrame([(raster,)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
-    )
-    sz = df.select(prx.rst_memsize("tile").alias("s")).first()["s"]
-    assert sz == len(raster)
-
-
-def test_rst_rotation_skew_format(spark):
-    df = _tile_df(spark)
-    row = df.select(
-        prx.rst_rotation("tile").alias("rot"),
-        prx.rst_skewx("tile").alias("sx"),
-        prx.rst_skewy("tile").alias("sy"),
-        prx.rst_format("tile").alias("fmt"),
-    ).first()
-    assert row["rot"] == 0.0
-    assert row["sx"] == 0.0
-    assert row["sy"] == 0.0
-    assert row["fmt"] == "GTiff"
-
-
-def test_rst_georeference_keys(spark):
-    df = _tile_df(spark)
-    gr = df.select(prx.rst_georeference("tile").alias("g")).first()["g"]
-    assert set(gr.keys()) == {
-        "upperLeftX",
-        "upperLeftY",
-        "scaleX",
-        "scaleY",
-        "skewX",
-        "skewY",
-    }
-    assert gr["scaleX"] == 0.5
-    assert gr["scaleY"] == -0.5
-    assert gr["upperLeftX"] == 10.0
-    assert gr["upperLeftY"] == 50.0
-
-
-def test_rst_bandmetadata_and_subdatasets(spark):
-    df = _tile_df(spark)
-    row = df.select(
-        prx.rst_bandmetadata("tile", f.lit(1)).alias("bm"),
-        prx.rst_subdatasets("tile").alias("sd"),
-    ).first()
-    assert isinstance(row["bm"], dict)
-    assert row["sd"] == {}  # plain GTiff has no subdatasets
-
-
-def test_rst_summary_is_json(spark):
-    import json
-
-    df = _tile_df(spark, width=4, height=3, count=1)
-    s = df.select(prx.rst_summary("tile").alias("s")).first()["s"]
-    obj = json.loads(s)
-    assert obj["driverShortName"] == "GTiff"
-    assert obj["size"] == [4, 3]
-    assert obj["bands"][0]["max"] == 11.0
-
-
-def test_rst_histogram_bucket_sum(spark):
-    df = _tile_df(spark, width=4, height=3, count=1)
-    hist = df.select(
-        prx.rst_histogram("tile", 4, f.lit(0.0), f.lit(11.0)).alias("h")
-    ).first()["h"]
-    assert list(hist.keys()) == ["band_1"]
-    assert sum(hist["band_1"]) == 12
 
 
 # --- Operations (tryopen, setsrid, band, asformat, buildoverviews, sample) --
-def test_rst_tryopen_true(spark):
-    df = _tile_df(spark, width=4, height=3)
-    assert df.select(prx.rst_tryopen("tile").alias("ok")).first()["ok"] is True
-
-
-def test_rst_tryopen_false_on_garbage(spark):
-    # Build a tile struct directly with garbage raster bytes.
-    df = spark.createDataFrame(
-        [((0, b"not a raster", {"driver": "GTiff"}),)],
-        "tile struct<cellid:bigint,raster:binary,metadata:map<string,string>>",
-    )
-    assert df.select(prx.rst_tryopen("tile").alias("ok")).first()["ok"] is False
 
 
 def test_rst_setsrid_stamps_crs(spark):
     df = _tile_df(spark, width=4, height=3, epsg=4326)
     out = df.select(prx.rst_setsrid("tile", f.lit(27700)).alias("t"))
     row = out.select(
-        prx.rst_srid("t").alias("s"),
-        prx.rst_width("t").alias("w"),
-        prx.rst_height("t").alias("h"),
+        rx.rst_srid("t").alias("s"),
+        rx.rst_width("t").alias("w"),
+        rx.rst_height("t").alias("h"),
     ).first()
     assert (row["s"], row["w"], row["h"]) == (27700, 4, 3)
 
@@ -1166,7 +998,7 @@ def test_rst_band_extracts_single_band(spark):
     df = _tile_df(spark, width=4, height=3, count=3)
     out = df.select(prx.rst_band("tile", f.lit(2)).alias("t"))
     row = out.select(
-        prx.rst_numbands("t").alias("n"), prx.rst_max("t").alias("mx")
+        rx.rst_numbands("t").alias("n"), rx.rst_max("t").alias("mx")
     ).first()
     assert row["n"] == 1
     # band2 = arange(12)+100 -> max 111.
@@ -1177,15 +1009,15 @@ def test_rst_band_out_of_range_raises(spark):
     df = _tile_df(spark, width=4, height=3, count=2)
     out = df.select(prx.rst_band("tile", f.lit(5)).alias("t"))
     with __import__("pytest").raises(Exception):
-        out.select(prx.rst_numbands("t")).first()
+        out.select(rx.rst_numbands("t")).first()
 
 
 def test_rst_asformat_gtiff(spark):
     df = _tile_df(spark, width=4, height=3)
     out = df.select(prx.rst_asformat("tile", "GTiff").alias("t"))
-    meta = df.select(prx.rst_metadata(prx.rst_asformat("tile", "GTiff")).alias("m"))
+    meta = df.select(rx.rst_metadata(prx.rst_asformat("tile", "GTiff")).alias("m"))
     assert meta.first()["m"]["driver"] == "GTiff"
-    assert out.select(prx.rst_width("t").alias("w")).first()["w"] == 4
+    assert out.select(rx.rst_width("t").alias("w")).first()["w"] == 4
 
 
 @pytest.mark.parametrize(
@@ -1206,7 +1038,7 @@ def test_rst_buildoverviews(spark):
         prx.rst_buildoverviews("tile", f.array(f.lit(2), f.lit(4))).alias("t")
     )
     # Reopen and confirm overviews are embedded via summary/numbands sanity.
-    row = out.select(prx.rst_numbands("t").alias("n")).first()
+    row = out.select(rx.rst_numbands("t").alias("n")).first()
     assert row["n"] == 1
     # Verify overviews persisted by reading raster bytes back through rasterio.
     raster = out.select(f.col("t.raster").alias("r")).first()["r"]
@@ -1215,29 +1047,6 @@ def test_rst_buildoverviews(spark):
     with MemoryFile(bytes(raster)) as mf:
         with mf.open() as o:
             assert o.overviews(1) == [2, 4]
-
-
-def test_rst_sample(spark):
-    import shapely.wkb
-    from shapely.geometry import Point
-
-    pt = shapely.wkb.dumps(Point(10.75, 49.75))
-    df = _tile_df(spark, width=4, height=3, count=2)
-    df = df.withColumn("g", f.lit(pt))
-    vals = df.select(prx.rst_sample("tile", "g").alias("v")).first()["v"]
-    assert vals == [1.0, 101.0]
-
-
-def test_rst_rastertoworldcoord_struct_roundtrip(spark):
-    df = _tile_df(spark)
-    wc = df.select(
-        prx.rst_rastertoworldcoord("tile", f.lit(2), f.lit(1)).alias("wc")
-    ).first()["wc"]
-    assert wc["x"] is not None and wc["y"] is not None
-    rc = df.select(
-        prx.rst_worldtorastercoord("tile", f.lit(wc["x"]), f.lit(wc["y"])).alias("rc")
-    ).first()["rc"]
-    assert (rc["x"], rc["y"]) == (2, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -1941,7 +1750,7 @@ def test_rst_index_ndvi(spark):
         ).alias("t")
     )
     row = out.select(
-        prx.rst_numbands("t").alias("n"), prx.rst_type("t").alias("ty")
+        rx.rst_numbands("t").alias("n"), rx.rst_type("t").alias("ty")
     ).first()
     assert row["n"] == 1
     assert row["ty"][0] == "Float32"
@@ -1960,7 +1769,7 @@ def test_rst_h3_tessellate(spark):
     )
     assert parts.count() > 0
     rows = parts.select(
-        prx.rst_numbands(f.struct("cellid", "raster", "metadata")).alias("n"),
+        rx.rst_numbands(f.struct("cellid", "raster", "metadata")).alias("n"),
         f.col("cellid").alias("cid"),
     ).collect()
     for r in rows:
@@ -2025,16 +1834,16 @@ def test_rst_proximity_column_api(spark):
     )
     out = df.select(prx.rst_proximity("tile", None, "PIXEL", None).alias("t"))
     # Float32 output, nodata -1.
-    assert out.select(prx.rst_type("t").alias("ty")).first()["ty"][0] == "Float32"
-    assert out.select(prx.rst_getnodata("t").alias("nd")).first()["nd"][0] == -1.0
+    assert out.select(rx.rst_type("t").alias("ty")).first()["ty"][0] == "Float32"
+    assert out.select(rx.rst_getnodata("t").alias("nd")).first()["nd"][0] == -1.0
 
 
 def test_rst_cog_convert_column_api(spark):
     df = _tile_df(spark, width=64, height=64)
     out = df.select(prx.rst_cog_convert("tile", "DEFLATE", 512, "AVERAGE").alias("t"))
     # Round-trips: still openable, same band count.
-    assert out.select(prx.rst_numbands("t").alias("n")).first()["n"] == 1
-    assert out.select(prx.rst_width("t").alias("w")).first()["w"] == 64
+    assert out.select(rx.rst_numbands("t").alias("n")).first()["n"] == 1
+    assert out.select(rx.rst_width("t").alias("w")).first()["w"] == 64
 
 
 def test_rst_contour_column_api(spark):
@@ -2105,8 +1914,8 @@ def test_rst_viewshed_column_api(spark):
     )
     out = df.select(prx.rst_viewshed("tile", f.col("g"), 1.0, 0.0, None).alias("t"))
     # Byte output, single band.
-    assert out.select(prx.rst_type("t").alias("ty")).first()["ty"][0] == "Byte"
-    assert out.select(prx.rst_numbands("t").alias("n")).first()["n"] == 1
+    assert out.select(rx.rst_type("t").alias("ty")).first()["ty"][0] == "Byte"
+    assert out.select(rx.rst_numbands("t").alias("n")).first()["n"] == 1
 
 
 # ---------------------------------------------------------------------------

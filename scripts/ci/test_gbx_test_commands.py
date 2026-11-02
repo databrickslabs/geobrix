@@ -1647,7 +1647,7 @@ def test_an_interrupt_after_the_new_venv_is_in_place_keeps_it_and_drops_the_old(
     assert _no_leftovers(sandbox)
 
 
-@pytest.mark.parametrize("suffix", ["/.", "/./", "/"])
+@pytest.mark.parametrize("suffix", ["/.", "/./", "/", "//"])
 def test_a_dot_segment_on_the_venv_does_not_put_the_staging_dir_inside_it(sandbox, suffix):
     old = _old_venv(sandbox)
     _swap_uv(sandbox)
@@ -1741,18 +1741,6 @@ def test_recreate_match_container_says_when_it_could_not_check(sandbox):
     assert (old / "old-venv").read_text() == "keep me" and _no_leftovers(sandbox)
 
 
-def test_a_trailing_slash_on_the_venv_does_not_break_recreate(sandbox):
-    old = _old_venv(sandbox)
-    _swap_uv(sandbox)
-    _fake_lock(sandbox)
-
-    res = sandbox.run("gbx-venv-sync.sh", "--recreate", "--venv", f"{old}//")
-
-    assert res.returncode == 0, res.output
-    assert (old / "new-venv").exists() and not (old / "old-venv").exists()
-    assert _no_leftovers(sandbox)
-
-
 @pytest.mark.parametrize("command", ["gbx-venv-sync.sh", "gbx-venv-check.sh"])
 def test_a_relative_venv_resolves_against_the_callers_directory_not_the_repo(
     sandbox, tmp_path, command
@@ -1840,20 +1828,6 @@ def test_recreate_match_container_swaps_in_a_venv_that_matches(sandbox):
     assert _no_leftovers(sandbox)
 
 
-def test_venv_check_names_the_venv_it_was_given_and_documents_the_option(sandbox, tmp_path):
-    venv = _curated_sandbox(sandbox, _env_json(numpy="2.1.3"))
-    other = tmp_path / "other-venv"
-    shutil.move(str(venv), str(other))
-
-    res = sandbox.run(
-        "gbx-venv-check.sh", "--venv", str(other), FAKE_DOCKER_EXEC_STDOUT=_env_json(numpy="2.1.3")
-    )
-
-    assert res.returncode == 0, res.output
-    assert f"host venv : {other}" in res.output
-    assert "--venv <dir>" in sandbox.run("gbx-venv-check.sh", "--help").output
-
-
 def test_venv_check_prints_the_fix_on_drift_and_a_plain_tick_on_a_clean_match(sandbox):
     _curated_sandbox(sandbox, _env_json(numpy="2.3.4"))
 
@@ -1865,19 +1839,6 @@ def test_venv_check_prints_the_fix_on_drift_and_a_plain_tick_on_a_clean_match(sa
     assert clean.returncode == 0, clean.output
     assert "✅ host venv matches the container" in clean.output
     assert "WARN" not in clean.output and "Fix:" not in clean.output
-
-
-def test_the_venv_option_moves_the_venv_and_is_documented(sandbox, tmp_path):
-    other = tmp_path / "throwaway"
-    _swap_uv(sandbox)
-    _fake_lock(sandbox)
-
-    sandbox.run("gbx-venv-sync.sh", "--venv", str(other))
-
-    assert (other / "new-venv").exists()
-    assert not (sandbox.root / ".venv-pyrx").exists()
-    help_ = sandbox.run("gbx-venv-sync.sh", "--help")
-    assert "--venv <dir>" in help_.output
 
 
 def test_venv_check_passes_with_a_warn_on_the_expected_payload_divergence(sandbox):

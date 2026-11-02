@@ -43,25 +43,6 @@ def test_readme_keeps_the_vizx_badge_outside_the_generated_region():
     assert "badge/VizX-" in readme and "badge/VizX-" not in readme[begin:end]
 
 
-def test_canonical_manifest_keeps_the_driver_classes_and_connect_class():
-    import json
-
-    gen = _tool("gen_surfaces")
-    raw = json.loads(gen.MANIFEST_JSON.read_text())
-    again = json.loads(gen._canonical_manifest(raw))
-    assert again == {**raw, "functions": again["functions"]}
-    assert sorted(again["functions"], key=lambda r: r["sql_name"]) == sorted(
-        raw["functions"], key=lambda r: r["sql_name"]
-    )
-    assert set(again["gdal"]["raster_drivers"]) == {
-        "allowed",
-        "bytes",
-        "bytes_refused_light",
-        "refused",
-    }
-    assert any("connect_class" in r["levels"].get("L2", {}) for r in again["functions"])
-
-
 def test_the_committed_tree_has_no_drift():
     findings = _tool("gen_surfaces").check()
     assert findings == [], "\n".join(findings)

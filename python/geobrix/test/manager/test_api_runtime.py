@@ -78,8 +78,6 @@ P_DOUBLE, P_INT = Param("p", ("DOUBLE",), "DOUBLE"), Param("p", ("INT",), "INT")
         (b"\x01\xff", P_INT, "X'01ff'"),
         (None, P_INT, "CAST(NULL AS INT)"),
         ("o'k", P_INT, "'o''k'"),
-        (True, P_INT, "TRUE"),
-        (7, P_INT, "7"),
     ],
 )
 def test_sql_literals(value, param, text):

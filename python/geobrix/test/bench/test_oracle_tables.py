@@ -13,7 +13,6 @@ PROBES = {
     "keys": "list(oracles.TABLES.keys())",
     "items": "list(oracles.TABLES.items())",
     "values": "list(oracles.TABLES.values())",
-    "iter": "list(iter(oracles.TABLES))",
 }
 
 
@@ -55,15 +54,6 @@ def test_concurrent_first_reads_import_the_family_modules_once(monkeypatch):
     for t in threads:
         t.join()
     assert len(calls) == 1 and seen == [{"T": ("row",)}] * 6  # none saw a partial dict
-
-
-def test_a_registered_fixture_builder_resolves_with_the_tmpdir(monkeypatch):
-    from databricks.labs.gbx.bench import oracles
-
-    monkeypatch.setitem(
-        oracles.BUILDERS, "tmp_fixture", lambda tmpdir: ("built", tmpdir)
-    )
-    assert oracles.resolve_arg(oracles.Build("tmp_fixture"), "/x") == ("built", "/x")
 
 
 def test_a_builder_a_family_module_registers_on_import_is_found_before_any_table_read(

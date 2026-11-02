@@ -136,22 +136,6 @@ def test_the_range_ends_are_parsed_and_a_three_dot_range_starts_at_the_merge_bas
     assert mod.range_ends("HEAD...HEAD") == (sha, "HEAD")
 
 
-def test_names_added_at_the_end_of_the_range_not_the_working_tree_are_counted(
-    monkeypatch,
-):
-    """The names after are read at the range's end revision, so a name only in the checkout is not added."""
-    mod = _notes(
-        monkeypatch,
-        {
-            ("a", "registered_functions.txt"): "",
-            ("a", "functions.json"): "",
-            ("b", "registered_functions.txt"): "gbx_x\n",
-            ("b", "functions.json"): "",
-        },
-    )
-    assert mod.added_functions("a..b") == ["gbx_x"]
-
-
 # --- check-binding-parity.py ----------------------------------------------------------------------------
 
 

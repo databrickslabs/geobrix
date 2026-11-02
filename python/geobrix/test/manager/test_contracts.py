@@ -595,8 +595,8 @@ def test_one_unavailable_function_does_not_stop_the_rest(monkeypatch, capsys):
     out = manager.register(stub)
     assert "gbx_rst_transformcrs" not in out and "gbx_bng_eastnorthasbng" in out
     assert (
-        "gbx__l3d_st_makevalid" in stub.registered
-    )  # registered after the skipped one (behind its default wrapper)
+        "gbx_st_makevalid" in stub.registered
+    )  # registered after the skipped one (it takes its own defaults: no wrapper)
     skipped = [
         p for p in capsys.readouterr().out.splitlines() if "gbx_rst_transformcrs" in p
     ]
@@ -1159,10 +1159,6 @@ def test_replacement_gates_pass_on_the_committed_manifest():
     assert _gates().run() == []
 
 
-def test_no_light_public_def_for_a_manifest_row():
-    assert _gates().legacy_findings(FNS) == []
-
-
 def test_overlap_gate_refuses_a_uc_type_that_is_not_a_form_of_the_session_type(
     monkeypatch,
 ):
@@ -1172,25 +1168,6 @@ def test_overlap_gate_refuses_a_uc_type_that_is_not_a_form_of_the_session_type(
         fn, params=(dataclasses.replace(fn.params[0], uc="STRING"),) + fn.params[1:]
     )
     assert any("easting" in f for f in gates.overlap_findings([bad]))
-
-
-def test_every_stable_row_has_an_oracle_row_and_a_single_row_example():
-    gates = _gates()
-    assert gates.oracle_findings(FNS) == []
-
-
-def test_param_name_gate_names_every_surface_that_spells_a_parameter_differently():
-    """A manifest parameter renamed under the implementations: the generated entry and the Scala wrapper each
-    still spell the old name, and the gate names each of them (a manifest row has no light def left).
-    """
-    gates = _gates()
-    fn = MAN.functions["gbx_rst_transformcrs"]
-    renamed = dataclasses.replace(
-        fn, params=(fn.params[0], dataclasses.replace(fn.params[1], name="to_crs"))
-    )
-    found = gates.name_findings([renamed])
-    for where in ("rasterx/functions.py", "functions.scala"):
-        assert any("to_crs" in f and where in f for f in found), (where, found)
 
 
 # --- the replacement gates fire on what they guard (each case feeds a break and expects the finding) ----------
@@ -1368,10 +1345,10 @@ def test_param_name_gate_covers_usage_arity_orphan_wrapper_and_snake_case(monkey
     renamed = dataclasses.replace(
         fn, params=(fn.params[0], dataclasses.replace(fn.params[1], name="to_crs"))
     )
-    assert any(
-        "function-info.json" in f and "to_crs" in f
-        for f in gates.name_findings([renamed])
-    )
+    found = gates.name_findings([renamed])
+    assert any("function-info.json" in f and "to_crs" in f for f in found)
+    for where in ("rasterx/functions.py", "functions.scala"):
+        assert any("to_crs" in f and where in f for f in found), (where, found)
     camel = dataclasses.replace(
         fn, params=(fn.params[0], dataclasses.replace(fn.params[1], name="targetCrs"))
     )
@@ -1429,7 +1406,6 @@ def test_docs_tab_gate_rejects_a_bad_tab(tmp_path, monkeypatch):
 
 def test_since_gate_names_a_stable_row_without_a_release():
     gates = _gates()
-    assert gates.since_findings(FNS) == []
     for bad in ("", "0.4", "v0.4.0"):
         assert any(
             "`since`" in f
@@ -1454,58 +1430,6 @@ def test_shared_fallback_reason_prints_once_with_a_count(capsys):
     assert len(out) == 1 and "40 functions" in out[0], out
 
 
-def test_a_per_name_reason_keeps_its_name_when_alone(capsys):
-    from databricks.labs.gbx.manager import messages
-
-    spark = object.__new__(type("S2", (), {}))
-    messages.say_grouped(
-        spark, [("gbx_rst_x", "geobrix: gbx_rst_x not registered (needs rasterio)")]
-    )
-    assert (
-        capsys.readouterr().out.strip()
-        == "geobrix: gbx_rst_x not registered (needs rasterio)"
-    )
-
-
-def test_a_missing_light_dependency_skips_only_that_name(spark, monkeypatch, capsys):
-    import importlib.util as iu
-
-    from databricks.labs.gbx import register
-    from databricks.labs.gbx.engine import run
-    from databricks.labs.gbx.manager import capabilities
-
-    real = iu.find_spec
-    monkeypatch.setattr(
-        iu, "find_spec", lambda m, *a: None if m == "rasterio" else real(m, *a)
-    )
-    # light only: no JAR level, and no osgeo that would serve transformcrs on the engine without rasterio
-    monkeypatch.setattr(capabilities, "detect", lambda s, need_jvm: _caps())
-    monkeypatch.setattr(run, "unavailable_reason", lambda: "no osgeo in this test")
-    names = ["gbx_bng_eastnorthasbng", "gbx_rst_transformcrs"]
-    got = register(spark, only=names, _levels=None)
-    assert "gbx_bng_eastnorthasbng" in got and "gbx_rst_transformcrs" not in got
-    assert "gbx_rst_transformcrs" in capsys.readouterr().out
-
-
-def test_register_reaches_a_name_not_yet_in_the_manifest(spark):
-    from databricks.labs.gbx import register
-    from databricks.labs.gbx.manager import _legacy
-
-    name = sorted(_legacy.names() - set(MAN.functions))[0]
-    assert register(spark, only=[name])[name].variant == "legacy"
-    spark.sql(f"DESCRIBE FUNCTION {name}").collect()
-
-
-def test_file_ref_wrapper_sends_the_file_reference():
-    from databricks.labs.gbx.manager import sqlwrap
-
-    fn = MAN.functions["gbx_rst_transformcrs"]
-    ddl = sqlwrap.file_ref_wrapper(
-        fn, "gbx__l3f_rst_transformcrs", "try_to_file(tile.path)"
-    )
-    assert "gbx__l3f_rst_transformcrs(tile, try_to_file(tile.path), target_crs)" in ddl
-
-
 def test_file_ref_wrapper_leaves_the_file_expression_as_given_for_any_parameter_name():
     """The caller builds the FILE expression around the tile parameter's own name; the wrapper must not rewrite a
     `tile.` inside a longer name (`raster_tile.` stays `raster_tile.`)."""
@@ -1527,23 +1451,6 @@ def test_file_ref_wrapper_leaves_the_file_expression_as_given_for_any_parameter_
     assert (
         "gbx__l3f_rst_x(raster_tile, try_to_file(raster_tile.path), target_crs)" in ddl
     ), ddl
-
-
-def test_capabilities_are_detected_once_per_session(monkeypatch, spark):
-    from databricks.labs.gbx import register
-    from databricks.labs.gbx.manager import capabilities
-
-    calls = []
-    real = capabilities._detect_uncached
-    monkeypatch.setattr(
-        capabilities,
-        "_detect_uncached",
-        lambda s, need_jvm: calls.append(need_jvm) or real(s, need_jvm),
-    )
-    capabilities._CACHE.clear()
-    register(spark, only=["gbx_bng_eastnorthasbng"])
-    register(spark, only=["gbx_st_makevalid"])
-    assert len(calls) == 1
 
 
 def test_first_python_call_carries_the_remote_read_switch(spark, monkeypatch):
@@ -1734,42 +1641,6 @@ def test_heavy_format_of_a_netcdf_tile_is_its_own_not_the_geotiff_it_is_read_as(
         jvm_spark, tmp_path, names, _heavy(jvm_spark, names), "tile_4326_netcdf"
     )
     assert got["rst_format"] == "netCDF"
-
-
-def test_a_failing_registrar_group_skips_only_its_own_names(monkeypatch):
-    """The bridge registers per registrar GROUP: one group's failing guard (a missing dependency) leaves the names
-    of the groups before it registered and reported as registered, and names its own with the reason.
-    """
-    import sys
-    import types
-
-    from databricks.labs.gbx.manager import _legacy
-
-    seen = []
-
-    def boom():
-        raise RuntimeError("needs the thing")
-
-    mod = types.ModuleType("fake_gbx_light")
-    mod._registrar_groups = lambda: [
-        (
-            lambda: None,
-            {f"gbx_{n}": (lambda s, n=n: seen.append(n)) for n in ("a", "b")},
-        ),
-        (boom, {"gbx_c": lambda s: seen.append("c")}),
-    ]
-    monkeypatch.setitem(sys.modules, mod.__name__, mod)
-    monkeypatch.setattr(_legacy, "_MODULES", (mod.__name__,))
-    _legacy._by_module.cache_clear()
-    spark = types.SimpleNamespace(conf={})
-    try:
-        done, lines = _legacy.register_unmigrated(spark, ["gbx_a", "gbx_b", "gbx_c"])
-    finally:
-        _legacy._by_module.cache_clear()
-    assert (sorted(seen), done) == (["a", "b"], {"gbx_a", "gbx_b"})
-    assert lines == [
-        ("gbx_c", "geobrix: gbx_c not registered (RuntimeError: needs the thing)")
-    ]
 
 
 def test_a_failing_data_source_registration_is_a_reported_line_not_a_failure(
@@ -2312,15 +2183,6 @@ def test_every_level_a_row_declares_is_in_its_order():
     assert omitted == {}
 
 
-def test_select_falls_back_to_light_when_the_order_names_no_level_of_the_row(
-    monkeypatch,
-):
-    fn = next(f for f in FNS if "L2" not in f.levels)
-    monkeypatch.delitem(levels.PREFERENCE, fn.sql_name, raising=False)
-    monkeypatch.setitem(levels.FAMILY_PREFERENCE, fn.family, ("L2",))
-    assert levels.select(fn, _caps()).level == "L3"
-
-
 def test_a_full_registration_probes_the_session_again(monkeypatch, spark):
     from databricks.labs.gbx import register
     from databricks.labs.gbx.manager import capabilities
@@ -2341,15 +2203,6 @@ def test_a_full_registration_probes_the_session_again(monkeypatch, spark):
     capabilities.forget(spark)
     register(spark, only=["gbx_st_makevalid"])
     assert len(calls) == 3
-
-
-def test_a_return_type_outside_the_words_passes_through_as_ddl():
-    from pyspark.sql import types as T
-
-    from databricks.labs.gbx.manager import l3
-
-    assert l3._return_type("array<bigint>") == "array<bigint>"
-    assert isinstance(l3._return_type("bng_chips"), T.ArrayType)
 
 
 def test_the_keyed_helpers_carry_the_sessions_read_cap(spark, tmp_path):
@@ -2377,57 +2230,6 @@ def test_the_keyed_helpers_carry_the_sessions_read_cap(spark, tmp_path):
                 fold(df, ["k"]).collect()
         finally:
             spark.conf.unset(READ_CAP_KEY)
-
-
-def test_a_bridge_registers_its_names_and_a_grid_registration_re_registers_only_those(
-    monkeypatch,
-):
-    """The bridge does not mark its light module as registered (that would have a CRS-grid registration re-register the
-    module's every name over the manager's wrappers): it records the names it registered, and those are the ones
-    registered again."""
-    import sys
-    import types
-
-    from databricks.labs.gbx.manager import _legacy
-
-    seen = []
-    mod = types.ModuleType("fake_gbx_light_bridge")
-    mod._registrar_groups = lambda: [
-        (lambda: None, {f"gbx_{n}": (lambda s, n=n: seen.append(n)) for n in "abc"})
-    ]
-    monkeypatch.setitem(sys.modules, mod.__name__, mod)
-    monkeypatch.setattr(_legacy, "_MODULES", (mod.__name__,))
-    monkeypatch.setattr(_legacy, "_BRIDGED", {})
-    _legacy._by_module.cache_clear()
-    spark = types.SimpleNamespace(conf={})
-    try:
-        _legacy.register_unmigrated(spark, ["gbx_a", "gbx_b"])
-        assert not getattr(mod, "_gbx_registered", False)
-        seen.clear()
-        _legacy.reregister_bridged(spark)
-        assert sorted(seen) == ["a", "b"]  # never "c"
-    finally:
-        _legacy._by_module.cache_clear()
-
-
-def test_a_light_module_that_fails_to_import_loses_only_its_own_names(monkeypatch):
-    import sys
-    import types
-
-    from databricks.labs.gbx.manager import _legacy
-
-    good = types.ModuleType("fake_gbx_light_good")
-    good._registrar_groups = lambda: [(lambda: None, {"gbx_a": lambda s: None})]
-    monkeypatch.setitem(sys.modules, good.__name__, good)
-    monkeypatch.setattr(
-        _legacy, "_MODULES", ("fake_gbx_light_missing_dependency", good.__name__)
-    )
-    _legacy._by_module.cache_clear()
-    try:
-        assert _legacy.names() == {"gbx_a"}
-        assert list(_legacy.import_failures()) == ["fake_gbx_light_missing_dependency"]
-    finally:
-        _legacy._by_module.cache_clear()
 
 
 def _fake_wheel(

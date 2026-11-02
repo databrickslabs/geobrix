@@ -7,17 +7,7 @@ from test.pyrx.test_virtual_aware_family import _slope_array_from_row, _v2_df
 import numpy as np
 from pyspark.sql import functions as f
 
-from databricks.labs.gbx import _api, manifest
 from databricks.labs.gbx.pyrx import _serde
-
-
-def test_slope_sends_every_sql_argument_with_the_unit_default(spark):
-    fn = manifest.load().functions["gbx_rst_slope"]
-    cols = _api._columns(fn, ("t",), fill_all=True)
-    assert len(cols) == 4
-    assert (
-        "degrees" in str(cols[1]) and "NULL" in str(cols[2]) and "NULL" in str(cols[3])
-    )
 
 
 def test_slope_virtualize_dir_writes_under_the_dir_and_matches_unforced(

@@ -7,9 +7,37 @@ paths:
   - "src/main/resources/com/databricks/labs/gbx/function-info.json"
   - "docs/scripts/*.py"
   - "docs/tests/python/api/*_functions_sql.py"
+  - "python/geobrix/src/databricks/labs/gbx/manifest/**"
+  - "scripts/manifest/**"
 ---
 
 # Adding or changing a GeoBrix function
+
+## The rule: one manifest row + one oracle row, then generate
+
+A function is ONE row in `python/geobrix/src/databricks/labs/gbx/manifest/functions.json` (the source of
+truth: SQL name, parameters with session and UC types, defaults, returns, levels, docs text, Python entry,
+since) plus at least ONE row in its family's oracle table
+(`python/geobrix/src/databricks/labs/gbx/bench/oracle_tables/<family>.py`). Then run
+`bash scripts/commands/gbx-manifest-gen.sh --write`, which writes every other surface:
+
+- the Python API entry in `databricks.labs.gbx.<module>.functions` (a thin call of the registered SQL name);
+- the docs Signature/parameter block under the function's `### <name>` heading;
+- the `function-info.json` entry (DESCRIBE metadata; L1 reads it; UC's COMMENT comes from the same row);
+- the availability matrix row (`docs/docs/api/availability.mdx`);
+- the doc-test example from the oracle row (`docs/tests/python/api/generated_examples.py`);
+- the function-count badges.
+
+`bash scripts/commands/gbx-manifest-gen.sh --check` is the gate (CI runs it in the light pytest job; QC runs
+it before a push). Never edit a GENERATED region by hand. The Python manager is the only registrar: no Scala
+code registers SQL, and no per-name Scala wrapper is added. Prose, hand-written examples and the page
+structure stay hand-written.
+
+SQL binds positionally, so an arity change is a manifest change, and a level whose implementation cannot
+honour the signature is not selected (the manager says why). Per-surface names and signatures may differ:
+Python-only keywords (the force-output trio) are declared in the row's `python` block.
+
+## Functions not yet in the manifest (transition only; deleted when the last family migrates)
 
 Load-bearing rules for touching function expressions, bindings, signatures, and
 generated metadata. Cross-cutting summary lives in `CLAUDE.md`; this is the detail.

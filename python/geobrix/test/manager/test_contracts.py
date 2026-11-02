@@ -1497,6 +1497,29 @@ def test_file_ref_wrapper_sends_the_file_reference():
     assert "gbx__l3f_rst_transformcrs(tile, try_to_file(tile.path), target_crs)" in ddl
 
 
+def test_file_ref_wrapper_leaves_the_file_expression_as_given_for_any_parameter_name():
+    """The caller builds the FILE expression around the tile parameter's own name; the wrapper must not rewrite a
+    `tile.` inside a longer name (`raster_tile.` stays `raster_tile.`)."""
+    from types import SimpleNamespace as NS
+
+    from databricks.labs.gbx.manager import sqlwrap
+
+    fn = NS(
+        sql_name="gbx_rst_x",
+        returns_session="TILE",
+        params=[
+            NS(name="raster_tile", session=["TILE"], default=None),
+            NS(name="target_crs", session=["STRING"], default=None),
+        ],
+    )
+    ddl = sqlwrap.file_ref_wrapper(
+        fn, "gbx__l3f_rst_x", "try_to_file(raster_tile.path)"
+    )
+    assert (
+        "gbx__l3f_rst_x(raster_tile, try_to_file(raster_tile.path), target_crs)" in ddl
+    ), ddl
+
+
 def test_capabilities_are_detected_once_per_session(monkeypatch, spark):
     from databricks.labs.gbx import register
     from databricks.labs.gbx.manager import capabilities

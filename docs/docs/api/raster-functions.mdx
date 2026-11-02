@@ -7,6 +7,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 import CodeFromTest from '@site/src/components/CodeFromTest';
 import Tier from '@site/src/components/Tier';
+import Surfaces from '@site/src/components/Surfaces';
 import { Impl } from '@site/src/components/Tier';
 import RasterXIcon from '../../../resources/images/brand/RasterX.png';
 import rasterxCode from '!!raw-loader!../../tests/python/api/rasterx_functions.py';
@@ -809,7 +810,32 @@ Combine or merge rasters in group-by (7 total).
 
 ### rst_bng_rasterize_agg
 
-<Tier both/> <Impl groupedAgg/>
+{/* BEGIN GENERATED gbx_rst_bng_rasterize_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_bng_rasterize_agg(cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs])` | `BINARY` |
+| Python | `rasterx.functions.rst_bng_rasterize_agg(cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, out_crs=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cellid` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
+| `value` | `DOUBLE` |  | The value burned for the cell. A repeated cell burns its largest value. |
+| `out_srid` | `INT` |  | Not read: the output is always EPSG:27700. |
+| `pixel_size` | `DOUBLE` |  | The pixel size in metres. |
+| `xmin` | `DOUBLE` |  | The west edge of the canvas in EPSG:27700 metres. |
+| `ymin` | `DOUBLE` |  | The south edge of the canvas in EPSG:27700 metres. |
+| `xmax` | `DOUBLE` |  | The east edge of the canvas in EPSG:27700 metres. |
+| `ymax` | `DOUBLE` |  | The north edge of the canvas in EPSG:27700 metres. |
+| `width` | `INT` |  | The canvas width in pixels. |
+| `height` | `INT` |  | The canvas height in pixels. |
+| `mode` | `STRING` |  | How the canvas is derived when no extent is given, for example `'centroids'`. |
+| `kring_pad` | `INT` |  | Cells of padding around the derived canvas. |
+| `out_crs` | `STRING` | `NULL` | Must be NULL. Reproject the tile with `gbx_rst_transformcrs` instead. |
+{/* END GENERATED gbx_rst_bng_rasterize_agg */}
+
+<Impl groupedAgg/>
 
 If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first. The heavyweight tier counts a null value as `1.0` in that comparison, and burns `1.0` for a column of nulls. A `NaN` that is a real value, not a null, is ignored the same way on both tiers: beside a number in one cell the number is burned, and a cell whose values are all `NaN` burns `NaN`.
 
@@ -839,8 +865,6 @@ Streaming aggregator that burns BNG cell geometry/value pairs (one row per cell)
 :::note Optional trailing `out_crs` parameter (refused when non-NULL, on both tiers)
 Both tiers accept an optional trailing `out_crs` (string CRS) argument so the signature matches on each, but a non-NULL value is refused with a parameter error on either tier. The output is always EPSG:27700: pass `NULL` for `out_crs`, and reproject the tile with `rst_transformcrs` when another CRS is wanted. `out_srid` is not read on either tier (it exists for signature parity with the H3/quadbin aggregators).
 :::
-
-**Signature:** `rst_bng_rasterize_agg(cellid: Column, value: Column, out_srid: Column, pixel_size: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, mode: Column, kring_pad: Column, out_crs: Column): Column`
 
 **Parameters:** `cellid` — BNG cell ID (STRING); `value` — numeric burn value; `out_srid` — EPSG code for the output CRS (typically `27700`); `pixel_size` — output raster cell size in metres (usually `1.0` for 1km BNG cells); `xmin/ymin/xmax/ymax` — output extent in EPSG:27700 metres; `width/height` — output raster dimensions in pixels; `mode` — aggregation mode for overlapping values (typically `"last"`); `kring_pad` — cell neighbourhood expansion (typically `0`); `out_crs` — must be `NULL`: both tiers refuse a non-NULL value (reproject the tile with `rst_transformcrs` instead)
 
@@ -1121,7 +1145,20 @@ _Multi-row fixture: 3 H3 resolution-9 cell rows with burn values 1.0/2.0/3.0. Al
 
 ### rst_merge_agg
 
-<Tier both/> <Impl groupedAgg/>
+{/* BEGIN GENERATED gbx_rst_merge_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_merge_agg(tile)` | `BINARY` |
+| Python | `rasterx.functions.rst_merge_agg(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tiles of the group. |
+{/* END GENERATED gbx_rst_merge_agg */}
+
+<Impl groupedAgg/>
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** (`rasterio.merge`). Aggregate — `groupBy(...).agg(rx.rst_merge_agg("tile"))` merges the group's tiles into one mosaic tile (output spans the union extent). A tile in a different CRS is reprojected onto the pixel size and the pixel grid of a tile in the reference CRS, so a mosaic built in memory and one streamed from disk (when it is too large for memory) place the tiles on the same pixels. The reprojected tile can grow by up to a pixel on each side to stay on that grid. A tile reprojected from another CRS that declares no NoData (or has its own mask band) is written with the footprint of the warp as its mask, so the mosaic then has a mask band and a pixel no tile reaches is invalid in it; a gap between tiles that are all in the reference CRS and declare no NoData is still filled with zeros. The heavyweight `gbx_rst_merge_agg` does not merge tiles in different CRSs: it returns one tile (the one that sorts first) and leaves the others out.
@@ -1140,7 +1177,7 @@ GROUP BY group_key
 ```
 :::
 
-**Signature:** `rst_merge_agg(tile: Column): Column` — Merge tiles per group.
+Merge tiles per group.
 
 _Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif`. All tabs use the same grouped-agg mosaic invocation._
 
@@ -1737,13 +1774,30 @@ Tessellate a raster to user-defined custom-grid cells — one row per overlappin
 
 ### rst_retile
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_retile: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_retile(tile, tile_width, tile_height)` | rows |
+| Python | `rasterx.functions.rst_retile(df, tile, tile_width, tile_height)` | DataFrame |
+
+Rows: `cellid` `BIGINT`, `raster` `BINARY`, `path` `STRING`, `path_mode` `STRING`, `window` `struct<col_off:int,row_off:int,width:int,height:int>`, `clip_polygon` `BINARY`, `clip_crs` `STRING`, `crs` `STRING`, `metadata` `map<string,string>`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to split. |
+| `tile_width` | `INT` |  | The sub-tile width in pixels. |
+| `tile_height` | `INT` |  | The sub-tile height in pixels. |
+{/* END GENERATED gbx_rst_retile */}
+
+<Impl udtf/>
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**. Streams one tile row per retiled region via streaming UDTF. Every window is emitted, including windows whose pixels are all NoData, in both tiers. To drop them, filter with `WHERE NOT gbx_rst_isempty(tile)` or write with `pruneEmpty`.
 :::
 
-**Signature:** `rst_retile(tile: Column, tileWidth: Column, tileHeight: Column): Column` — Retile to uniform dimensions.
+Retile to uniform dimensions.
 
 **SQL:**
 
@@ -3070,7 +3124,19 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands with real pixe
 
 ### rst_mapalgebra
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_mapalgebra: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_mapalgebra(tiles, expression)` | `TILE` |
+| Python | `rasterx.functions.rst_mapalgebra(tiles, expression, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tiles` | `ARRAY<TILE>` |  | The input tiles. Band 1 of each tile binds to `A`, `B`, `C` and so on, in array order. |
+| `expression` | `STRING` |  | The expression: a JSON envelope with a `calc` key, or a bare expression such as `'(A - B) / (A + B)'`. |
+{/* END GENERATED gbx_rst_mapalgebra */}
 
 :::note Lightweight tier (pyrx)
 Powered by **NumExpr**. Bands map to `A`, `B`, `C`, … and the `calc` expression is evaluated with NumExpr (no `gdal_calc` NumPy builtins); single-band Float32 output.
@@ -3080,7 +3146,7 @@ Powered by **NumExpr**. Bands map to `A`, `B`, `C`, … and the `calc` expressio
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_mapalgebra(tiles: Column, expression: Column): Column` — Map algebra expression (e.g. `A - B`).
+Map algebra expression (e.g. `A - B`).
 
 **How the inputs bind.** `tiles` is an `ARRAY<tile>`. By default, band 1 of each tile, **in array order**, binds to the variables `A`, `B`, `C`, … (`A` = first tile, `B` = second, …). The result is a single-band Float32 tile on the first input's georeference.
 
@@ -3327,13 +3393,26 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 
 ### rst_transformcrs
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_transformcrs: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session uc python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_transformcrs(tile, target_crs)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_transformcrs(tile, target_crs)` | `TILE` |
+| Python | `rasterx.functions.rst_transformcrs(tile, target_crs)` | Column |
+
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to reproject. |
+| `target_crs` | `STRING` | `STRING` |  | The target CRS: an authority code such as `'EPSG:3857'` or `'ESRI:54008'`, WKT, PROJJSON or PROJ4. An integer string is an EPSG code. |
+{/* END GENERATED gbx_rst_transformcrs */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** (`rasterio.warp`) + **pyproj**. Reprojection uses the GDAL build bundled with rasterio, whose projection database and driver set may be narrower than the heavyweight tier.
 :::
 
-**Signature:** `rst_transformcrs(tile: Column, targetCrs: Column): Column` — reproject to a target CRS given as a *string* (`EPSG:x` / `ESRI:x` / WKT / PROJ4; an int-castable string is treated as a SRID). See [Coordinate Reference Systems](./coordinate-reference-systems).
+Reproject to a target CRS given as a *string* (`EPSG:x` / `ESRI:x` / WKT / PROJ4; an int-castable string is treated as a SRID). See [Coordinate Reference Systems](./coordinate-reference-systems).
 
 Distinct from `rst_transform` (integer EPSG only): `rst_transformcrs` accepts any CRS string — an authority code (`EPSG:3857`, `ESRI:54008`), WKT, or PROJ4 — so you can reproject to a non-EPSG target. An int-castable string (`'3857'`) is treated as an EPSG SRID. See the [CRS: SRID int vs CRS string](#rst_crs) note above.
 
@@ -3667,7 +3746,21 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 
 ### rst_slope
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_slope: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_slope(tile, [unit], [xscale], [yscale])` | `TILE` |
+| Python | `rasterx.functions.rst_slope(tile, unit=None, xscale=None, yscale=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The single-band DEM tile. |
+| `unit` | `STRING` | `'degrees'` | `'degrees'` or `'percent'`. |
+| `xscale` | `DOUBLE` | `NULL` | Vertical units per horizontal unit along x; set it with `yscale`. When both are NULL, the scale comes from the raster CRS. |
+| `yscale` | `DOUBLE` | `NULL` | Vertical units per horizontal unit along y; set it with `xscale`. |
+{/* END GENERATED gbx_rst_slope */}
 
 :::note Lightweight tier (pyrx)
 Powered by **NumPy** — a reimplementation of GDAL `gdaldem`. Results are close but not bit-identical: edge pixels are filled by replicating the border (gdaldem leaves them NoData) and NoData cells are not excluded from the 3×3 window.
@@ -3677,7 +3770,7 @@ Powered by **NumPy** — a reimplementation of GDAL `gdaldem`. Results are close
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_slope(tile: Column, unit: Column, xscale: Column, yscale: Column): Column` — Compute slope per pixel. `unit` is `'degrees'` or `'percent'`; `xscale` and `yscale` are the elevation/horizontal unit ratio per axis (supply both or neither; when omitted, GDAL 3.11+ auto-derives from the raster CRS). For isotropic scaling pass the same value to both (e.g. `1.0, 1.0` for a projected CRS in metres).
+Compute slope per pixel. `unit` is `'degrees'` or `'percent'`; `xscale` and `yscale` are the elevation/horizontal unit ratio per axis (supply both or neither; when omitted, GDAL 3.11+ auto-derives from the raster CRS). For isotropic scaling pass the same value to both (e.g. `1.0, 1.0` for a projected CRS in metres).
 
 <FunctionExamples
   name="rst_slope"

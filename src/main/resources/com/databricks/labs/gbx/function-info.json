@@ -92,10 +92,10 @@
     "gbx_rst_bng_rasterize_agg": {
       "examples": "Examples:\n      > SELECT region_id, gbx_rst_bng_rasterize_agg( cellid, burn_value, 27700, cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as int), cast(null as int), 'centroids', cast(0 as int) ) AS tile FROM bng_cell_values GROUP BY region_id;",
       "usage_args": "cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Rasterize a group's BNG cells into one tile (pixel-centroid burn).",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.3"
@@ -887,11 +887,11 @@
     },
     "gbx_rst_mapalgebra": {
       "examples": "Examples:\n      > SELECT gbx_rst_mapalgebra( array(tile), '{\"calc\": \"(A - B) / (A + B)\", \"A_index\": 0, \"B_index\": 0, \"A_band\": 2, \"B_band\": 1}' ) AS ndvi FROM multiband_rasters;",
-      "usage_args": "tiles, json_spec",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "usage_args": "tiles, expression",
+      "description": "Apply a map-algebra expression across an array of tiles.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -943,10 +943,10 @@
     "gbx_rst_merge_agg": {
       "examples": "Examples:\n      > SELECT scene_id, gbx_rst_merge_agg(tile) as merged_scene FROM satellite_tiles GROUP BY scene_id;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Merge a group's tile rasters into one mosaic tile.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1280,10 +1280,10 @@
     "gbx_rst_retile": {
       "examples": "Examples:\n      > SELECT gbx_rst_retile(tile, 256, 256) FROM rasters;",
       "usage_args": "tile, tile_width, tile_height",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Partition a tile into non-overlapping sub-tiles of the given pixel size.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1412,11 +1412,10 @@
     "gbx_rst_slope": {
       "examples": "Examples:\n      > SELECT gbx_rst_slope(tile, 'degrees', 1.0, 1.0) AS slope FROM dem_rasters;",
       "usage_args": "tile, [unit], [xscale], [yscale]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
-        "scala"
+      "description": "Compute terrain slope from a single-band DEM tile (Horn's 3x3 method).",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -1521,11 +1520,12 @@
     },
     "gbx_rst_transformcrs": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_transformcrs(tile, 'EPSG:3857') as webmercator_tile, gbx_rst_crs(gbx_rst_transformcrs(tile, 'EPSG:3857')) as new_crs FROM rasters;",
-      "usage_args": "tile, crs",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "usage_args": "tile, target_crs",
+      "description": "Reproject the raster to a target CRS given as a string.",
+      "surfaces": [
+        "session",
+        "uc",
+        "python",
         "scala"
       ],
       "since": "0.5.0"
@@ -1831,10 +1831,11 @@
     "gbx_bng_eastnorthasbng": {
       "examples": "Examples:\n      > SELECT gbx_bng_eastnorthasbng(530000, 180000, '1km') as bng_cell;",
       "usage_args": "easting, northing, resolution",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Convert an easting and northing to a BNG cell id.",
+      "surfaces": [
+        "session",
+        "uc",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1955,10 +1956,11 @@
     "gbx_bng_tessellate": {
       "examples": "Examples:\n      > SELECT gbx_bng_tessellate( 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))', 3 ) AS chips;",
       "usage_args": "geom, resolution, [keep_core_geom]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Tessellate a geometry into BNG cells, one chip per cell.",
+      "surfaces": [
+        "session",
+        "uc",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1966,9 +1968,12 @@
     "gbx_bng_tessellateexplode": {
       "examples": "Examples:\n      > SELECT t.cellid, t.core, t.chip FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src LATERAL VIEW gbx_bng_tessellateexplode(src.geom, 3) t AS cellid, core, chip;",
       "usage_args": "geom, resolution, [keep_core_geom]",
-      "bindings": [
-        "sql",
-        "python-light"
+      "description": "Tessellate a geometry into BNG cells, one row per cell.",
+      "surfaces": [
+        "session",
+        "uc",
+        "python",
+        "scala"
       ],
       "since": "0.2.0"
     },
@@ -2219,9 +2224,12 @@
     },
     "gbx_st_makevalid": {
       "examples": "Examples:\n      > SELECT gbx_st_makevalid('POLYGON((0 0,1 1,1 0,0 1,0 0))') AS clean;",
-      "bindings": [
-        "sql",
-        "python-light"
+      "usage_args": "geom, [level]",
+      "description": "Repair a geometry to OGC-SFS validity.",
+      "surfaces": [
+        "session",
+        "uc",
+        "python"
       ],
       "since": "0.5.0"
     },

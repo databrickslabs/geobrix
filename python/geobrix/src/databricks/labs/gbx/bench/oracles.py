@@ -1075,6 +1075,49 @@ MVP_IO: Tuple[Case, ...] = (
 )
 
 
+# Fixture builders a family oracle module registers for its own `Build(name)` fixtures.
+BUILDERS: Dict[str, Callable[[str], Any]] = {}
+
+
+def builder(name: str):
+    """Register a fixture builder for ``Build(name)``; the family oracle modules use it."""
+
+    def deco(f):
+        BUILDERS[name] = f
+        return f
+
+    return deco
+
+
+def _tables() -> Dict[str, Tuple[Case, ...]]:
+    import importlib
+    import pkgutil
+
+    from databricks.labs.gbx.bench import oracle_tables
+
+    def is_table(v) -> bool:
+        return isinstance(v, tuple) and bool(v) and isinstance(v[0], Case)
+
+    found = {k: v for k, v in globals().items() if k.isupper() and is_table(v)}
+    for m in pkgutil.iter_modules(oracle_tables.__path__):
+        mod = importlib.import_module(f"{oracle_tables.__name__}.{m.name}")
+        found.update(
+            {k: v for k, v in vars(mod).items() if k.isupper() and is_table(v)}
+        )
+    return found
+
+
+class _Tables(dict):
+    """Every oracle table by name, discovered on first lookup (so family modules need no registry edit)."""
+
+    def __missing__(self, key):
+        self.update(_tables())
+        return dict.__getitem__(self, key)
+
+
+TABLES = _Tables()
+
+
 def _tile_bytes(
     crs_value: str, w: int = 64, h: int = 48, origin=None, px=None
 ) -> bytes:
@@ -1453,6 +1496,8 @@ def _se_build(name: str, tmpdir: Optional[str] = None):
 
 
 def _build(name: str, tmpdir: str):
+    if name in BUILDERS:
+        return BUILDERS[name](tmpdir)
     se = _se_build(name, tmpdir)
     if se is not None:
         return se
@@ -2388,6 +2433,63 @@ def _verdict(case: Case, outs, rows) -> Optional[str]:
     return next(filter(None, (check(case, o, r) for o, r in zip(outs, rows))), None)
 
 
+def argument_rows(case: Case, tmpdir: str) -> List[List[Any]]:
+    """The argument rows of `case` as one SQL view holds them. An aggregate's view has one row per group
+    member (its member columns only: the per-group constants are literals of the call).
+    """
+    from databricks.labs.gbx import manifest
+
+    fn = manifest.load().functions[case.fn]
+    if fn.kind == "aggregate":
+        group = resolve_arg(case.args[0], tmpdir)
+        group = [group] if isinstance(group, dict) else group
+        return (
+            [[t] for t in group]
+            if group_width(fn.params) == 1
+            else [list(m) for m in group]
+        )
+    if case.kind == "windows_batch":
+        return [[resolve_arg(a, tmpdir) for a in row] for row in case.args]
+    return _argument_rows(case, tmpdir)
+
+
+def argument_schema(case: Case, rows, surface: str = "session") -> str:
+    """The DDL schema of the view `argument_rows` fills: a column is typed from its first non-NULL value,
+    an all-NULL column from the manifest."""
+    from databricks.labs.gbx import manifest
+    from databricks.labs.gbx.manifest import TILE_SQL
+
+    fn = manifest.load().functions[case.fn]
+    if fn.kind == "aggregate":
+        if group_width(fn.params) == 1:
+            return f"c0 {TILE_SQL}"
+        return "c0 string, c1 double"
+    params = fn.params
+    return ", ".join(
+        f"c{i} "
+        + _ddl_type(next((r[i] for r in rows if r[i] is not None), None), params[i])
+        for i in range(len(rows[0]))
+    )
+
+
+def verdict(case: Case, outs, rows) -> Optional[str]:
+    """None when the outputs of one case meet it: a scalar's values (one per argument row), a generator's
+    rows, or an aggregate's one value. A scalar that returns an array of cells is judged on its elements,
+    as the rows its array explodes to."""
+    from databricks.labs.gbx import manifest
+
+    fn = manifest.load().functions[case.fn]
+    if fn.kind == "generator":
+        return _check_rows(
+            case, outs, rows if case.kind == "windows_batch" else rows[0]
+        )
+    if fn.kind == "scalar" and case.kind == "cells":
+        return _check_rows(case, [e for o in outs for e in (o or [])], rows[0])
+    if fn.kind == "aggregate":
+        return check(case, outs[0] if outs else None, case.args)
+    return _verdict(case, outs, rows)
+
+
 def run_session(
     spark,
     cases: Sequence[Case],
@@ -2415,12 +2517,7 @@ def run_session(
         args = rows[0]
         fn = man.functions[case.fn]
         params = fn.params
-        # A column is typed from its first non-NULL value; an all-NULL column from the manifest.
-        schema = ", ".join(
-            f"c{i} "
-            + _ddl_type(next((r[i] for r in rows if r[i] is not None), None), params[i])
-            for i in range(len(args))
-        )
+        schema = argument_schema(case, rows, surface)
         # On the UC surface GEOMETRY params get an integer-SRID constructor, never a CRS string.
         cols = ", ".join(
             (

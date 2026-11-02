@@ -112,6 +112,29 @@ def test_level_keys_are_in_the_closed_vocabulary(fn):
             assert set(spec) & manifest.LEVEL_REQUIRED_ANY[lvl], lvl
 
 
+@pytest.mark.parametrize("fn", FNS, ids=lambda f: f.sql_name)
+def test_schema2_fields(fn):
+    assert fn.status in manifest.STATUSES
+    assert all(p.py in manifest.PY_MODES for p in fn.params)
+    if (
+        fn.status == "mvp"
+    ):  # a probe: installed by name only, with no Python entry or docs
+        assert fn.python is None, fn.sql_name
+        return
+    assert fn.doc.summary and fn.doc.page.startswith("api/"), fn.sql_name
+    assert re.fullmatch(r"\d+\.\d+\.\d+", fn.since), fn.sql_name
+    if fn.status == "stable":
+        assert fn.python is not None and fn.python.module == manifest.package_of(
+            fn.sql_name
+        )
+        assert (
+            fn.example
+        ), f"{fn.sql_name}: name the oracle row its generated example comes from"
+    if fn.python is not None and fn.python.extras:
+        assert fn.python.extras in manifest.PY_EXTRAS and fn.python.extra_impl
+        assert manifest.resolve_ref(fn.python.extra_impl) is not None
+
+
 @pytest.mark.parametrize("helper", MAN.helpers, ids=lambda h: h.name)
 def test_helpers_import_and_have_oracle_rows(helper):
     import importlib

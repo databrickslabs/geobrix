@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.kernels
 
-import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, WithExpressionInfo}
+import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, FunctionInfoLoader, WithExpressionInfo}
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.kernels.spec.{GdalSpecArgv, GdalSpecExpr, GdalSpecs, RasterProps, SpecDataException, SpecFunction}
 import org.apache.spark.sql.SparkSession
@@ -74,10 +74,19 @@ object L1Installer {
             bindLiterals(spark, fn, all)
             GdalSpecExpr(sqlName, all :+ ExpressionConfigExpr())
         }
-        val usage = s"$name(${fn.params.map(_.name).mkString(", ")}) - GDAL '${fn.gdal.alg}' on the GDAL spec engine."
-        val info = new ExpressionInfo(classOf[GdalSpecExpr].getName, null, name, usage, "", "", "", "", "0.6.0", "", "built-in")
-        spark.sessionState.functionRegistry.registerFunction(FunctionIdentifier(name), info, builder)
+        spark.sessionState.functionRegistry.registerFunction(FunctionIdentifier(name), specInfo(name, fn), builder)
         "ok"
+    }
+
+    /** The DESCRIBE metadata of an engine function installed as `name`: usage, description and examples from
+      * function-info.json (the manifest's row, read as [[WithExpressionInfo]] reads it), else the engine's own text. */
+    def specInfo(name: String, fn: SpecFunction): ExpressionInfo = {
+        val meta = FunctionInfoLoader.get(fn.sqlName)
+        val usageArgs = meta.flatMap(_.usageArgs).getOrElse(fn.params.map(_.name).mkString(", "))
+        val description = meta.flatMap(_.description).getOrElse(s"GDAL '${fn.gdal.alg}' on the GDAL spec engine.")
+        val examples = meta.flatMap(_.examples).getOrElse("")
+        val usage = s"$name($usageArgs) - $description"
+        new ExpressionInfo(classOf[GdalSpecExpr].getName, null, name, usage, "", examples, "", "", "0.6.0", "", "built-in")
     }
 
     private def literal(v: Any): Any = v match {

@@ -48,21 +48,13 @@ def test_rst_retile(spark):
     """Test retiling a raster."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    df = spark.range(1).select(
-        rx.rst_retile(
-            tile_from_path(rx, f, str(MODIS_B01), "GTiff"),
-            f.lit(256),  # tile_width
-            f.lit(256),  # tile_height
-        ).alias("tiles")
+    src = spark.range(1).select(
+        tile_from_path(rx, f, str(MODIS_B01), "GTiff").alias("tile")
     )
-
-    result = df.collect()
-    assert result is not None
-    # rst_retile returns an array of tiles
-    assert result[0]["tiles"] is not None
-    assert isinstance(result[0]["tiles"], (list, tuple))
+    # rst_retile is a table function: one output row per sub-tile, beside the input row's columns
+    rows = rx.rst_retile(src, "tile", 256, 256).collect()
     # MODIS tile (2400x2400) split into 256x256 tiles should create multiple tiles
-    assert len(result[0]["tiles"]) > 1
+    assert len(rows) > 1
 
 
 def test_rst_maketiles(spark):
@@ -227,16 +219,7 @@ def test_generators_workflow(spark):
         tile_from_path(rx, f, str(MODIS_B01), "GTiff").alias("original")
     )
 
-    # Retile it
-    df = df.select(
-        f.col("original"),
-        rx.rst_retile(f.col("original"), f.lit(512), f.lit(512)).alias("retiled"),
-    )
-
-    result = df.collect()
-    assert result is not None
+    # Retile it: one row per sub-tile, each beside its original tile
+    result = rx.rst_retile(df, "original", 512, 512).collect()
+    assert len(result) > 1
     assert result[0]["original"] is not None
-    # Retiled returns an array of tiles
-    assert result[0]["retiled"] is not None
-    assert isinstance(result[0]["retiled"], (list, tuple))
-    assert len(result[0]["retiled"]) > 1

@@ -12,6 +12,7 @@ import gridxFunctionsSqlExamples from '!!raw-loader!../../tests/python/api/gridx
 import gridxLightCode from '!!raw-loader!../../tests/python/api/gridx_functions_python_light.py';
 import scalaApiExamplesCode from '!!raw-loader!../../tests/scala/api/ScalaApiExamples.scala';
 import Tier from '@site/src/components/Tier';
+import Surfaces from '@site/src/components/Surfaces';
 import { Impl } from '@site/src/components/Tier';
 import GridXIcon from '../../../resources/images/brand/GridX.png';
 
@@ -965,15 +966,27 @@ Convert coordinates or geometries to BNG cells.
 
 ### bng_eastnorthasbng
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_bng_eastnorthasbng: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session uc python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_eastnorthasbng(easting, northing, resolution)` | `STRING` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_eastnorthasbng(easting, northing, resolution)` | `STRING` |
+| Python | `gridx.bng.functions.bng_eastnorthasbng(easting, northing, resolution)` | Column |
+
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `easting` | `DOUBLE` | `DOUBLE` |  | Easting in EPSG:27700 metres. |
+| `northing` | `DOUBLE` | `DOUBLE` |  | Northing in EPSG:27700 metres. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+{/* END GENERATED gbx_bng_eastnorthasbng */}
 
 Convert easting/northing coordinates to a BNG cell reference.
 
 :::note Lightweight tier (pygx)
 Powered by the **pure-Python port of `BNG.scala`** (numpy-vectorized encoder). Eastings/northings must be **EPSG:27700** (e.g. `530000, 180000` for London). Bit-identical cell IDs to the heavyweight tier.
 :::
-
-**Signature:** `bng_eastnorthasbng(easting: Column, northing: Column, resolution: Column): Column`
 
 **Parameters:**
 - `easting` - Easting coordinate value
@@ -1192,15 +1205,27 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Enumerates the
 
 ### bng_tessellate
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_bng_tessellate: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session uc python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_tessellate(geom, resolution, [keep_core_geom])` | `array<struct<cellid:string,core:boolean,chip:binary>>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_tessellate(geom, resolution, [keep_core_geom])` | `array<struct<cellid:string,core:boolean,chip:binary>>` |
+| Python | `gridx.bng.functions.bng_tessellate(geom, resolution, keep_core_geom=None)` | Column |
+
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+| `keep_core_geom` | `BOOLEAN` | `BOOLEAN` | `false` | When true, a core cell's chip is its cell geometry; when false it is NULL. Border cells always carry their clipped geometry. |
+{/* END GENERATED gbx_bng_tessellate */}
 
 Tessellate a geometry into BNG cells with their geometries.
 
 :::note Lightweight tier (pygx)
 Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfill plus a per-cell core/border split, returning one `STRUCT<cellid, core, chip>` per cell (chip geometry as WKB in EPSG:27700, no SRID). Border chips are filtered to the input geometry's dimension, matching the heavyweight tier: a Polygon can yield MultiPolygon chips (and the reverse), a clip that is a mixed collection keeps its polygonal part, and the boundary-only points and lines of a grid-aligned input are dropped.
 :::
-
-**Signature:** `bng_tessellate(geometry: Column, resolution: Column[, keep_core_geom: Column]): Column`
 
 **Parameters:**
 - `geometry` - Input geometry to tessellate
@@ -1475,15 +1500,31 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming 
 
 ### bng_tessellateexplode
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_bng_tessellateexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session uc python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_tessellateexplode(geom, resolution, [keep_core_geom])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_tessellateexplode(geom, resolution, [keep_core_geom])` | rows |
+| Python | `gridx.bng.functions.bng_tessellateexplode(df, geom, resolution, keep_core_geom=None)` | DataFrame |
+
+Rows: `cellid` `STRING`, `core` `BOOLEAN`, `chip` `BINARY`.
+
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+| `keep_core_geom` | `BOOLEAN` | `BOOLEAN` | `false` | When true, a core cell's chip is its cell geometry; when false it is NULL. Border cells always carry their clipped geometry. |
+{/* END GENERATED gbx_bng_tessellateexplode */}
+
+<Impl udtf/>
 
 Explode tessellated cells into separate rows.
 
 :::note Lightweight tier (pygx)
 Powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming UDTF — one output row per tessellated cell, each carrying the cell ID and chip geometry (WKB in EPSG:27700, no SRID).
 :::
-
-**Signature:** `bng_tessellateexplode(geometry: Column, resolution: Column[, keep_core_geom: Column]): Column`
 
 **Parameters:**
 - `geometry` - Input geometry to tessellate

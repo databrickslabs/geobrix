@@ -1,0 +1,22 @@
+def st_makevalid(
+    geom: ColLike,
+    level: ColLike = None,
+) -> Column:
+    """Repair a geometry to OGC-SFS validity.
+
+    Args:
+        geom: The geometry: WKB, EWKB, WKT or EWKT.
+        level: The repair strategy: `'linework'`, `'structure'` or `'ogc'` (no
+            ring-orientation fix). SQL default: ``'linework'``.
+
+    Returns:
+        The repaired geometry as WKB (EWKB when the input carried an SRID), or NULL for
+        NULL input.
+
+    SQL: ``gbx_st_makevalid(geom, [level])``
+    """
+    return _api.call(
+        "gbx_st_makevalid",
+        geom,
+        level,
+    )

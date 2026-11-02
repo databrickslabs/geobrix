@@ -19,10 +19,12 @@ from databricks.labs.gbx import _pyspark  # noqa: F401
 
 # isort: split
 
-from typing import Union
+from typing import Optional, Union  # noqa: F401
 
-from pyspark.sql import Column, SparkSession
+from pyspark.sql import Column, DataFrame, SparkSession  # noqa: F401
 from pyspark.sql import functions as f
+
+from databricks.labs.gbx import _api  # noqa: F401
 
 ColLike = Union[Column, str, bool, int, float, bytes]
 
@@ -474,18 +476,6 @@ def rst_derivedband_agg(
     )
 
 
-def rst_merge_agg(tile: ColLike) -> Column:
-    """Aggregate multiple raster tiles by merging (use with groupBy).
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of merged raster tile.
-    """
-    return f.call_function("gbx_rst_merge_agg", _col(tile))
-
-
 def rst_rasterize_agg(
     geom: ColLike,
     value: ColLike,
@@ -772,22 +762,6 @@ def rst_maketiles(tile: ColLike, size_in_mb: ColLike) -> Column:
         Column of array of raster tiles.
     """
     return f.call_function("gbx_rst_maketiles", _col(tile), _col(size_in_mb))
-
-
-def rst_retile(tile: ColLike, tile_width: ColLike, tile_height: ColLike) -> Column:
-    """Retile the raster into tiles of the given pixel dimensions.
-
-    Args:
-        tile: Raster tile column.
-        tile_width: Width of output tiles (pixels).
-        tile_height: Height of output tiles (pixels).
-
-    Returns:
-        Column of array of raster tiles.
-    """
-    return f.call_function(
-        "gbx_rst_retile", _col(tile), _col(tile_width), _col(tile_height)
-    )
 
 
 def rst_separatebands(tile: ColLike) -> Column:
@@ -2025,85 +1999,6 @@ def rst_quadbin_rasterize_agg(
     )
 
 
-def rst_bng_rasterize_agg(
-    cellid: ColLike,
-    value: ColLike = None,
-    out_srid: ColLike = None,
-    pixel_size: ColLike = None,
-    xmin: ColLike = None,
-    ymin: ColLike = None,
-    xmax: ColLike = None,
-    ymax: ColLike = None,
-    width: ColLike = None,
-    height: ColLike = None,
-    mode: ColLike = None,
-    kring_pad: ColLike = None,
-    out_crs: ColLike = None,
-) -> Column:
-    """Rasterize a group's BNG grid cells into one tile (pixel-centroid burn).
-
-    Use with ``groupBy``; each row contributes one BNG ``cellid`` (STRING, e.g.
-    ``"TQ3080"``) and optionally a ``value``. When ``value`` is omitted (or
-    ``None``), pixels covered by any cell are burned with ``1.0`` (presence
-    mask). Supply an explicit canvas (``xmin`` … ``height``) for aligned
-    multi-band stacking; otherwise the grid is auto-derived from the cell set.
-
-    Every argument except ``cellid`` is optional and defaults to the same value
-    the lightweight tier uses, so the common call is simply
-    ``rx.rst_bng_rasterize_agg("cellid", "value")``. Because SQL binds
-    positionally, an omitted keyword is filled here with a correctly-typed SQL
-    literal (a typed ``NULL`` for the extent/size fields).
-
-    Note on ``out_srid``: BNG always operates in EPSG:27700 (British National Grid).
-    The ``out_srid`` argument is accepted for API consistency with the H3 and
-    quadbin variants but is a no-op — the function forces EPSG:27700 regardless
-    of the value passed.
-
-    Args:
-        cellid:     STRING column of BNG cell ids (e.g. ``"TQ3080"``).
-        value:      DOUBLE burn-value column; omit for a presence mask.
-        out_srid:   Ignored — BNG forces EPSG:27700 (default). Accepted for
-                    parity with the H3/quadbin variants; the value has no effect.
-        pixel_size: Pixel size in CRS units (used when extent is auto-derived).
-        xmin:       Minimum X of the output canvas (BNG eastings).
-        ymin:       Minimum Y of the output canvas (BNG northings).
-        xmax:       Maximum X of the output canvas (BNG eastings).
-        ymax:       Maximum Y of the output canvas (BNG northings).
-        width:      Canvas width in pixels (INTEGER).
-        height:     Canvas height in pixels (INTEGER).
-        mode:       Sampling mode string (default ``"centroids"``).
-        kring_pad:  K-ring expansion around each cell before rasterizing
-                    (default ``1``; ``0`` = no expansion).
-        out_crs:    Must be NULL: a non-NULL value is refused with a parameter
-                    error, on both tiers. BNG output is always EPSG:27700; reproject
-                    the tile with ``rst_transformcrs`` for another CRS.
-
-    Returns:
-        Column of raster tile — the v2 tile struct with fields
-        ``cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata``.
-    """
-
-    def _c(x, default):
-        return _col(x) if x is not None else default
-
-    return f.call_function(
-        "gbx_rst_bng_rasterize_agg",
-        _col(cellid),
-        _c(value, f.lit(None).cast("double")),
-        _c(out_srid, f.lit(27700)),
-        _c(pixel_size, f.lit(None).cast("double")),
-        _c(xmin, f.lit(None).cast("double")),
-        _c(ymin, f.lit(None).cast("double")),
-        _c(xmax, f.lit(None).cast("double")),
-        _c(ymax, f.lit(None).cast("double")),
-        _c(width, f.lit(None).cast("int")),
-        _c(height, f.lit(None).cast("int")),
-        _c(mode, f.lit("centroids")),
-        _c(kring_pad, f.lit(1)),
-        _c(out_crs, f.lit(None).cast("string")),
-    )
-
-
 # Operations
 
 
@@ -2374,19 +2269,6 @@ def rst_isempty(tile: ColLike) -> Column:
     return f.call_function("gbx_rst_isempty", _col(tile))
 
 
-def rst_mapalgebra(tiles: ColLike, json_spec: ColLike) -> Column:
-    """Apply a map algebra expression to one or more tiles.
-
-    Args:
-        tiles: Column of array of raster tiles (or single tile).
-        json_spec: Expression string (e.g. A + B, A * 2).
-
-    Returns:
-        Column of result raster tile.
-    """
-    return f.call_function("gbx_rst_mapalgebra", _col(tiles), _col(json_spec))
-
-
 def rst_merge(tiles: ColLike) -> Column:
     """Merge multiple raster tiles into one (e.g. mosaic).
 
@@ -2466,27 +2348,6 @@ def rst_transform(tile: ColLike, srid: ColLike) -> Column:
         Column of reprojected raster tile.
     """
     return f.call_function("gbx_rst_transform", _col(tile), _col(srid))
-
-
-def rst_transformcrs(tile: ColLike, crs: ColLike) -> Column:
-    """Reproject the raster to a string-given target CRS.
-
-    Accepts any CRS descriptor accepted by rasterio's CRS parser: int EPSG,
-    int-castable string, authority string (``"EPSG:3857"``, ``"ESRI:54008"``),
-    WKT, or PROJ4. Unlike ``rst_transform`` (int EPSG only) this supports
-    non-EPSG targets such as ESRI codes or custom projections.
-
-    Pixel-producing: always materializes (a new reprojected tile is emitted).
-
-    Args:
-        tile: Tile struct column.
-        crs:  Target CRS descriptor — int EPSG, int-castable string, authority
-              string, WKT, or PROJ4.
-
-    Returns:
-        Tile reprojected to the target CRS.
-    """
-    return f.call_function("gbx_rst_transformcrs", _col(tile), _crs_col(crs))
 
 
 def rst_tryopen(tile: ColLike) -> Column:
@@ -2787,44 +2648,6 @@ def rst_polygonize(
 # Seven thin wrappers around gdal.DEMProcessing. All take a single source tile
 # and return a derived tile. Defaults match the GDAL conventions.
 # ---------------------------------------------------------------------------
-
-
-def rst_slope(
-    tile: ColLike,
-    unit: ColLike = None,
-    xscale: ColLike = None,
-    yscale: ColLike = None,
-) -> Column:
-    """Compute slope from a DEM tile via ``gdal.DEMProcessing("slope")``.
-
-    Args:
-        tile: Single-band DEM tile column.
-        unit: ``"degrees"`` (default) or ``"percent"``.
-        xscale: Explicit horizontal scale override (vertical/horizontal ratio)
-            along the x axis. Must be supplied together with ``yscale``.
-            By default the scale is auto-derived from the raster CRS (GDAL 3.11
-            behavior), so projected CRS in metres and geographic CRS in degrees
-            both work without an explicit value.
-        yscale: Explicit horizontal scale override along the y axis. Must be
-            supplied together with ``xscale``.
-
-    Returns:
-        Single-band Float32 GTiff tile column.
-    """
-    unit_col = (
-        f.lit("degrees")
-        if unit is None
-        else (f.lit(unit) if isinstance(unit, str) else _col(unit))
-    )
-    if xscale is None and yscale is None:
-        return f.call_function("gbx_rst_slope", _col(tile), unit_col)
-    if xscale is None or yscale is None:
-        raise ValueError(
-            "rst_slope: xscale and yscale must be supplied together (both or neither)"
-        )
-    return f.call_function(
-        "gbx_rst_slope", _col(tile), unit_col, _col(xscale), _col(yscale)
-    )
 
 
 def rst_aspect(
@@ -3992,3 +3815,223 @@ def rst_viewshed(
         md_col,
         _crs_col(crs),
     )
+
+
+# BEGIN GENERATED by gbx:manifest:gen: edit manifest/functions.json, then run the generator
+
+
+def rst_bng_rasterize_agg(
+    cellid: ColLike,
+    value: ColLike,
+    out_srid: ColLike,
+    pixel_size: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width: ColLike,
+    height: ColLike,
+    mode: ColLike,
+    kring_pad: ColLike,
+    out_crs: ColLike = None,
+) -> Column:
+    """Rasterize a group's BNG cells into one tile (pixel-centroid burn).
+
+    Args:
+        cellid: The BNG cell id, for example `'TQ3080'`.
+        value: The value burned for the cell. A repeated cell burns its largest value.
+        out_srid: Not read: the output is always EPSG:27700.
+        pixel_size: The pixel size in metres.
+        xmin: The west edge of the canvas in EPSG:27700 metres.
+        ymin: The south edge of the canvas in EPSG:27700 metres.
+        xmax: The east edge of the canvas in EPSG:27700 metres.
+        ymax: The north edge of the canvas in EPSG:27700 metres.
+        width: The canvas width in pixels.
+        height: The canvas height in pixels.
+        mode: How the canvas is derived when no extent is given, for example
+            `'centroids'`.
+        kring_pad: Cells of padding around the derived canvas.
+        out_crs: Must be NULL. Reproject the tile with `gbx_rst_transformcrs` instead.
+            SQL default: ``NULL``.
+
+    Returns:
+        The EPSG:27700 raster of the group; NoData is -9999.
+
+    SQL: ``gbx_rst_bng_rasterize_agg(cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs])``
+    """
+    return _api.call(
+        "gbx_rst_bng_rasterize_agg",
+        cellid,
+        value,
+        out_srid,
+        pixel_size,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+        mode,
+        kring_pad,
+        out_crs,
+    )
+
+
+def rst_mapalgebra(
+    tiles: ColLike,
+    expression: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Apply a map-algebra expression across an array of tiles.
+
+    Args:
+        tiles: The input tiles. Band 1 of each tile binds to `A`, `B`, `C` and so on, in
+            array order.
+        expression: The expression: a JSON envelope with a `calc` key, or a bare
+            expression such as `'(A - B) / (A + B)'`.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile on the georeference of the first tile.
+
+    SQL: ``gbx_rst_mapalgebra(tiles, expression)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_mapalgebra",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tiles,
+            expression,
+        )
+    return _api.call(
+        "gbx_rst_mapalgebra",
+        tiles,
+        expression,
+    )
+
+
+def rst_merge_agg(
+    tile: ColLike,
+) -> Column:
+    """Merge a group's tile rasters into one mosaic tile.
+
+    Args:
+        tile: The tiles of the group.
+
+    Returns:
+        The merged raster over the union extent, or NULL for an empty group.
+
+    SQL: ``gbx_rst_merge_agg(tile)``
+    """
+    return _api.call(
+        "gbx_rst_merge_agg",
+        tile,
+    )
+
+
+def rst_retile(
+    df: DataFrame,
+    tile: ColLike,
+    tile_width: ColLike,
+    tile_height: ColLike,
+) -> DataFrame:
+    """Partition a tile into non-overlapping sub-tiles of the given pixel size.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to split.
+        tile_width: The sub-tile width in pixels.
+        tile_height: The sub-tile height in pixels.
+
+    Returns:
+        One row per sub-tile; the edge tiles are smaller when the size does not divide
+        the raster.
+
+    SQL: ``gbx_rst_retile(tile, tile_width, tile_height)``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_retile",
+        tile,
+        tile_width,
+        tile_height,
+    )
+
+
+def rst_slope(
+    tile: ColLike,
+    unit: ColLike = None,
+    xscale: ColLike = None,
+    yscale: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute terrain slope from a single-band DEM tile (Horn's 3x3 method).
+
+    Args:
+        tile: The single-band DEM tile.
+        unit: `'degrees'` or `'percent'`. SQL default: ``'degrees'``.
+        xscale: Vertical units per horizontal unit along x; set it with `yscale`. When
+            both are NULL, the scale comes from the raster CRS. SQL default: ``NULL``.
+        yscale: Vertical units per horizontal unit along y; set it with `xscale`. SQL
+            default: ``NULL``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile; NoData is -9999.
+
+    SQL: ``gbx_rst_slope(tile, [unit], [xscale], [yscale])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_slope",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            unit,
+            xscale,
+            yscale,
+        )
+    return _api.call(
+        "gbx_rst_slope",
+        tile,
+        unit,
+        xscale,
+        yscale,
+    )
+
+
+def rst_transformcrs(
+    tile: ColLike,
+    target_crs: ColLike,
+) -> Column:
+    """Reproject the raster to a target CRS given as a string.
+
+    Args:
+        tile: The tile to reproject.
+        target_crs: The target CRS: an authority code such as `'EPSG:3857'` or
+            `'ESRI:54008'`, WKT, PROJJSON or PROJ4. An integer string is an EPSG code.
+
+    Returns:
+        The tile reprojected to the target CRS.
+
+    SQL: ``gbx_rst_transformcrs(tile, target_crs)``
+    """
+    return _api.call(
+        "gbx_rst_transformcrs",
+        tile,
+        target_crs,
+    )
+
+
+# END GENERATED

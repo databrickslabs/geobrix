@@ -150,6 +150,7 @@ const sidebars = {
         'api/coordinate-reference-systems',
         'api/error-handling',
         'api/language-bindings',
+        'api/availability',
         {
           type: 'category',
           label: 'RasterX',

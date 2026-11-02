@@ -56,8 +56,15 @@ def _load_bindings():
         return json.load(fh)["functions"]
 
 
+# A function in the function manifest lists `surfaces` instead of `bindings`; FunctionExamples renders these
+# tabs for it (the Python tab shows the lightweight example until a function has its own Python example).
+_TIER_OF_SURFACE = {"session": "sql", "python": "python-light", "scala": "scala"}
+
+
 def _bindings_for(fns, name):
     entry = fns.get(name) or fns.get("gbx_" + name) or {}
+    if "surfaces" in entry:
+        return {_TIER_OF_SURFACE[s] for s in entry["surfaces"] if s in _TIER_OF_SURFACE}
     return set(entry.get("bindings", []))
 
 

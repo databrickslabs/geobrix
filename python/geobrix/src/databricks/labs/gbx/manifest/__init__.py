@@ -17,7 +17,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping, Optional, Tuple
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # The closed vocabulary of keys a function's per-level spec may carry. A mistyped key
 # would be read with `.get` and silently drop a guard, so a contract test rejects any key
@@ -103,6 +103,31 @@ TILE_SQL = (
 )
 
 
+# The generated Python API: one module per SQL prefix (gbx_<prefix>_...).
+PACKAGE_OF_PREFIX = {
+    "rst": "rasterx",
+    "bng": "gridx.bng",
+    "quadbin": "gridx.quadbin",
+    "custom": "gridx.custom",
+    "h3": "gridx.h3",
+    "st": "vectorx",
+    "pmtiles": "pmtiles",
+}
+# How the Python API reads a bare str for a parameter: a column name, or a literal (a CRS, a unit, a mode).
+PY_MODES = frozenset({"col", "lit"})
+# Python-only keyword groups a generated entry may carry (per-surface signatures may differ).
+PY_EXTRAS = {"force_output": ("virtualize_dir", "virtualize_prefix", "materialize")}
+# "mvp" marks a probe: installed when named (`register(only=[...])`), never by a plain `register()`.
+STATUSES = frozenset({"stable", "mvp"})
+DATASOURCE_KINDS = frozenset({"reader", "writer", "reader_writer"})
+DATASOURCE_IMPLS = frozenset({"python", "scala"})
+
+
+def package_of(sql_name: str) -> str:
+    """The Python API module of a SQL name: gbx_rst_x -> rasterx, gbx_bng_x -> gridx.bng."""
+    return PACKAGE_OF_PREFIX[sql_name.split("_")[1]]
+
+
 @dataclass(frozen=True)
 class Param:
     name: str
@@ -110,6 +135,45 @@ class Param:
     uc: str
     default: Optional[str] = None
     uc_crs: bool = False
+    doc: str = ""
+    py: str = "col"  # a key of PY_MODES
+
+
+@dataclass(frozen=True)
+class Doc:
+    summary: str
+    returns: str = ""
+    page: str = ""  # docs/docs/<page>.mdx holds the section "### <python name>"
+
+
+@dataclass(frozen=True)
+class PythonEntry:
+    name: str
+    module: str  # "rasterx" -> databricks.labs.gbx.rasterx.functions
+    extras: Optional[str] = None  # a key of PY_EXTRAS
+    extra_impl: Optional[str] = (
+        None  # "pkg.mod:attr", run when one of the extras is set
+    )
+    extra_factory_args: Optional[str] = (
+        None  # extra_impl is a factory called with these (as L3's factory_args)
+    )
+
+    @property
+    def ref(self) -> str:
+        return f"databricks.labs.gbx.{self.module}.functions:{self.name}"
+
+
+@dataclass(frozen=True)
+class DataSource:
+    """A reader or writer format: spark.read/write.format(name)."""
+
+    name: str
+    kind: str
+    impl: str
+    ref: str
+    page: str
+    since: str
+    status: str = "stable"
 
 
 @dataclass(frozen=True)
@@ -485,12 +549,38 @@ class Function:
     columns: Tuple[Tuple[str, str], ...] = ()
     # The GDAL spec engine's spec for this row (its `gdal` block), when the row has one.
     gdal: Optional[GdalSpec] = None
-    # "mvp" marks a probe: installed when named (`register(only=[...])`), never by a plain `register()`.
-    status: str = ""
+    # A key of STATUSES; "mvp" marks a probe: installed when named, never by a plain `register()`.
+    status: str = "stable"
+    doc: Doc = Doc("")
+    python: Optional[PythonEntry] = None
+    since: str = ""
+    # The cid of the oracle row the generated doc-test example comes from.
+    example: Optional[str] = None
 
     @property
     def max_args(self) -> int:
         return len(self.params)
+
+    @property
+    def surfaces(self) -> Tuple[str, ...]:
+        """Where this name exists: session SQL always (every function has a light level), UC SQL with an L4
+        level, Python with a Python entry, Scala where a Catalyst companion (and its Scala wrapper) is kept.
+        """
+        out = ["session"]
+        if "L4" in self.levels:
+            out.append("uc")
+        if self.python is not None:
+            out.append("python")
+        if "companion" in self.levels.get("L1", {}):
+            out.append("scala")
+        return tuple(out)
+
+
+def usage_args(fn: "Function") -> str:
+    """The DESCRIBE / docs argument list: optional parameters in brackets (Style B)."""
+    return ", ".join(
+        p.name if i < fn.min_args else f"[{p.name}]" for i, p in enumerate(fn.params)
+    )
 
 
 @dataclass(frozen=True, eq=False)
@@ -500,6 +590,7 @@ class Manifest:
     level_table_version: str
     helpers: Tuple[Helper, ...] = ()
     gdal: Optional[GdalSection] = None
+    datasources: Tuple[DataSource, ...] = ()
 
 
 def sql_type(t: str) -> str:
@@ -534,9 +625,26 @@ def load() -> Manifest:
                 p.get("uc", ""),
                 p.get("default"),
                 bool(p.get("uc_crs")),
+                p.get("doc", ""),
+                p.get("py", "col"),
             )
             for p in r["params"]
         )
+        py = r.get("python", "derive")
+        short = r["sql_name"][len("gbx_") :]
+        if py is None:  # a probe row: no Python entry
+            python = None
+        elif py == "derive":
+            python = PythonEntry(short, package_of(r["sql_name"]))
+        else:
+            python = PythonEntry(
+                py.get("name", short),
+                py.get("module", package_of(r["sql_name"])),
+                py.get("extras"),
+                py.get("extra_impl"),
+                py.get("extra_factory_args"),
+            )
+        doc = r.get("doc", {})
         fns[r["sql_name"]] = Function(
             r["sql_name"],
             r["family"],
@@ -550,7 +658,11 @@ def load() -> Manifest:
             r["oracle"],
             tuple((c[0], c[1]) for c in r.get("columns", [])),
             parse_gdal_spec(r["gdal"]) if "gdal" in r else None,
-            r.get("status", ""),
+            r.get("status", "stable"),
+            Doc(doc.get("summary", ""), doc.get("returns", ""), doc.get("page", "")),
+            python,
+            r.get("since", ""),
+            r.get("example"),
         )
     return Manifest(
         MappingProxyType(fns),
@@ -560,6 +672,18 @@ def load() -> Manifest:
             Helper(h["name"], h["module"], h["status"]) for h in raw.get("helpers", [])
         ),
         _parse_gdal_section(raw.get("gdal")),
+        tuple(
+            DataSource(
+                d["name"],
+                d["kind"],
+                d["impl"],
+                d["ref"],
+                d["page"],
+                d["since"],
+                d.get("status", "stable"),
+            )
+            for d in raw.get("datasources", [])
+        ),
     )
 
 

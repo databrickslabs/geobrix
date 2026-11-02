@@ -17,7 +17,9 @@ Light dropping a param that heavy carries is a violation; light may add extra tr
 params (allowed by the "light tier may exceed heavy" rule).
 
 Functions listed in param_name_waiver.txt are exempt while the rename migration is
-underway. Pure stdlib; runs on the host. Exit 0 on pass, 1 on any non-waived violation.
+underway. A function in the function manifest (manifest/functions.json) is not checked here: the
+manifest fixes its parameters and gbx:manifest:gen generates its Python entry.
+Pure stdlib; runs on the host. Exit 0 on pass, 1 on any non-waived violation.
 """
 from __future__ import annotations
 import argparse, re, sys
@@ -95,6 +97,14 @@ def extract_py_params(path: Path, gbx_name: str) -> list[str] | None:
             params.append(pname)
     return params
 
+def manifest_names() -> set[str]:
+    """The SQL names the function manifest owns (its probe rows aside)."""
+    import json
+
+    raw = json.loads((PY_SRC / "databricks/labs/gbx/manifest/functions.json").read_text())
+    return {r["sql_name"] for r in raw["functions"] if r.get("status", "stable") != "mvp"}
+
+
 def _first_existing(globs: list[str], gbx_name: str) -> list[str] | None:
     for g in globs:
         params = extract_py_params(PY_SRC / g, gbx_name)
@@ -118,7 +128,10 @@ def check_invariant_a(report: bool = False,
     fixture, waiver = load_fixture(), load_waiver()
     b_names = b_names or set()
     violations = []
+    owned = manifest_names()
     for gbx_name, canon in fixture.items():
+        if gbx_name in owned:
+            continue
         heavy = _first_existing(HEAVY_GLOBS, gbx_name)
         light = _first_existing(LIGHT_GLOBS, gbx_name)
         # Heavy: exact equality.
@@ -147,7 +160,10 @@ def check_invariant_b(report: bool = False) -> list[str]:
     """
     fixture, waiver = load_fixture(), load_waiver()
     violations = []
+    owned = manifest_names()
     for gbx_name in fixture:
+        if gbx_name in owned:
+            continue
         heavy = _first_existing(HEAVY_GLOBS, gbx_name)
         light = _first_existing(LIGHT_GLOBS, gbx_name)
         if heavy is None or light is None:

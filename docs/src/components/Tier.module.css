@@ -8,3 +8,7 @@
 .implUdtf { background: #fef3e2; color: #a05a00; border: 1px solid #f5d79e; }
 .implAgg  { background: #f3e8ff; color: #6b21a8; border: 1px solid #d8b4fe; }
 .implLink { text-decoration: none; }
+.session { background: #e6f4ea; color: #1e7e34; border: 1px solid #b7dfc2; }
+.uc      { background: #e6f4ea; color: #1e7e34; border: 1px solid #b7dfc2; }
+.python  { background: #e6f4ea; color: #1e7e34; border: 1px solid #b7dfc2; }
+.scala   { background: #e6f4ea; color: #1e7e34; border: 1px solid #b7dfc2; }

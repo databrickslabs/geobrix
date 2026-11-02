@@ -1,0 +1,40 @@
+---
+title: Availability by surface
+sidebar_label: Availability
+---
+
+# Availability by surface
+
+GeoBrix functions exist on up to four surfaces:
+
+- SQL in a notebook or job session: `gbx_*` after `databricks.labs.gbx.register(spark)`.
+- SQL in Unity Catalog: `<catalog>.<schema>.gbx_*` after `gbx.uc.install`.
+- The Python API.
+- Scala.
+
+GeoBrix runs each session function at the best implementation level the compute offers. The
+Levels column lists the levels that exist.
+
+## Functions
+
+{/* BEGIN GENERATED functions: edit manifest/functions.json, then run gbx:manifest:gen */}
+| Function | SQL (session) | SQL (Unity Catalog) | Python | Scala | Levels |
+|---|---|---|---|---|---|
+| `gbx_bng_eastnorthasbng` | ✓ | ✓ | `gridx.bng.bng_eastnorthasbng` | ✓ | L1 L2 L3 L4 |
+| `gbx_bng_tessellate` | ✓ | ✓ | `gridx.bng.bng_tessellate` | ✓ | L1 L2 L3 L4 |
+| `gbx_bng_tessellateexplode` | ✓ | ✓ | `gridx.bng.bng_tessellateexplode` | ✓ | L1 L3 L4 |
+| `gbx_rst_bng_rasterize_agg` | ✓ |  | `rasterx.rst_bng_rasterize_agg` | ✓ | L1 L3 |
+| `gbx_rst_mapalgebra` | ✓ |  | `rasterx.rst_mapalgebra` | ✓ | L1 L3 |
+| `gbx_rst_merge_agg` | ✓ |  | `rasterx.rst_merge_agg` | ✓ | L1 L3 |
+| `gbx_rst_retile` | ✓ |  | `rasterx.rst_retile` | ✓ | L1 L3 |
+| `gbx_rst_slope` | ✓ |  | `rasterx.rst_slope` |  | L1 L3 |
+| `gbx_rst_transformcrs` | ✓ | ✓ | `rasterx.rst_transformcrs` | ✓ | L1 L2 L3 L4 |
+| `gbx_st_makevalid` | ✓ | ✓ | `vectorx.st_makevalid` |  | L3 L4 |
+{/* END GENERATED functions */}
+
+## Readers and writers
+
+{/* BEGIN GENERATED datasources: edit manifest/functions.json, then run gbx:manifest:gen */}
+| Format | Read | Write | Implementation | Page |
+|---|---|---|---|---|
+{/* END GENERATED datasources */}

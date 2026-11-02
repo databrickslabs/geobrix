@@ -77,6 +77,9 @@ def register(
             messages.say(spark, f"geobrix: {n} not registered ({why})")
             continue
         out[n] = _install(spark, fn, choice, caps, forced=n in overrides)
+    from databricks.labs.gbx import _api
+
+    _api.mark_registered(spark, out.keys())
     return out
 
 

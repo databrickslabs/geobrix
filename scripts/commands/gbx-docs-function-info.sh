@@ -60,6 +60,11 @@ show_separator
 # refused a container that mounts another tree, so the generator reads and writes this checkout.
 docker exec "$GBX_DEV_CONTAINER" /bin/bash -c "cd \"$GBX_CONTAINER_ROOT\" && unset JAVA_TOOL_OPTIONS && python3 docs/scripts/generate-function-info.py"
 EXIT=$?
+# Overlay the function manifest's rows (gbx:manifest:gen), so a legacy regeneration keeps them.
+if [ $EXIT -eq 0 ]; then
+    docker exec "$GBX_DEV_CONTAINER" /bin/bash -c "cd \"$GBX_CONTAINER_ROOT\" && python3 scripts/manifest/gen_surfaces.py --write --only function-info"
+    EXIT=$?
+fi
 
 show_separator
 if [ $EXIT -eq 0 ]; then

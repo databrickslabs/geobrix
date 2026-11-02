@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.kernels.spec
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
-import com.databricks.labs.gbx.kernels.KernelGdal
+import com.databricks.labs.gbx.kernels.{KernelGdal, L1Installer}
 import com.databricks.labs.gbx.operations.SpatialRefOps
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.rasterx.operator.OperatorOptions
@@ -100,6 +100,9 @@ class GdalSpecSmokeTest extends AnyFunSuite {
             val e = intercept[IllegalArgumentException](GdalSpecs.parse(r))
             assert(e.getMessage.contains(what), s"$what: ${e.getMessage}")
         }
+        // An installed engine row's DESCRIBE usage is the manifest's (function-info.json), optionals in brackets.
+        val usage = L1Installer.specInfo("gbx_rst_slope", GdalSpecs.function("gbx_rst_slope")).getUsage
+        assert(usage.contains("gbx_rst_slope(tile, [unit], [xscale], [yscale])"), usage)
     }
 
     test("the level knob, the virtual-tile policy and the engine's settings are the light tier's") {

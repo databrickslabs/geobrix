@@ -14,6 +14,22 @@ const TABS = [
   { key: 'scala',        label: 'Scala',          lang: 'scala',  suffix: '_scala_example' },
 ];
 
+// Tabs by surface, for a function whose function-info entry lists `surfaces` (generated from the function
+// manifest). The Python tab shows the lightweight example until a function has its own Python example.
+const SURFACE_TABS = [
+  { key: 'session', label: 'SQL',               prop: 'sql',    lang: 'sql',    suffix: '_sql_example' },
+  { key: 'uc',      label: 'Unity Catalog SQL', prop: 'ucSql',  lang: 'sql',    suffix: '_uc_sql_example' },
+  { key: 'python',  label: 'Python',            prop: 'python', lang: 'python', suffix: '_python_example',
+    fallback: 'pythonLight', fallbackSuffix: '_python_light_example' },
+  { key: 'scala',   label: 'Scala',             prop: 'scala',  lang: 'scala',  suffix: '_scala_example' },
+];
+
+function surfacesFor(name) {
+  const fns = functionInfo.functions || functionInfo;
+  const entry = fns[name] || fns['gbx_' + name] || {};
+  return entry.surfaces ? new Set(entry.surfaces) : null;
+}
+
 function bindingsFor(name) {
   const fns = functionInfo.functions || functionInfo;
   const entry = fns[name] || fns['gbx_' + name] || {};
@@ -30,8 +46,29 @@ function sinceFor(name) {
 
 export default function FunctionExamples(props) {
   const { name, testFile } = props;
+  const surfaces = surfacesFor(name);
   const present = bindingsFor(name);
   const since = sinceFor(name);
+  const tabs = surfaces
+    ? SURFACE_TABS.filter((t) => surfaces.has(t.key)).map((t) => {
+        const own = Boolean(props[t.prop]);
+        return {
+          key: t.key,
+          label: t.label,
+          lang: t.lang,
+          code: own ? props[t.prop] : props[t.fallback],
+          source: own ? props[t.prop + 'Source'] : props[t.fallback + 'Source'],
+          suffix: own || !t.fallback ? t.suffix : t.fallbackSuffix,
+          shown: true,
+        };
+      })
+    : TABS.map((t) => ({
+        key: t.key,
+        label: t.label,
+        lang: t.lang,
+        suffix: t.suffix,
+        shown: present.has(t.key),
+      }));
   const codeByKey = {
     'sql': props.sql,
     'python-light': props.pythonLight,
@@ -66,13 +103,16 @@ export default function FunctionExamples(props) {
       </span>
     )}
     <Tabs groupId="gbx-example-lang" className="gbx-example-lang-tabs">
-      {TABS.map((t) => (
-        <TabItem key={t.key} value={t.key} label={t.label} default={t.key === 'sql'}>
-          {present.has(t.key) && codeByKey[t.key] ? (
+      {tabs.map((t) => {
+        const code = surfaces ? t.code : codeByKey[t.key];
+        const source = surfaces ? t.source : sourceByKey[t.key];
+        return (
+        <TabItem key={t.key} value={t.key} label={t.label} default={t.key === tabs[0].key}>
+          {t.shown && code ? (
             <CodeFromTest
               language={t.lang}
-              code={codeByKey[t.key]}
-              source={sourceByKey[t.key]}
+              code={code}
+              source={source}
               testFile={testFile}
               functionName={name + t.suffix}
               outputConstant={name + t.suffix + '_output'}
@@ -81,7 +121,8 @@ export default function FunctionExamples(props) {
             <p><em>Not available in this tier.</em></p>
           )}
         </TabItem>
-      ))}
+        );
+      })}
     </Tabs>
     </>
   );

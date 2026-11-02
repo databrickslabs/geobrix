@@ -40,9 +40,11 @@ def test_the_light_and_heavy_shims_take_the_same_thirteen_parameters():
 
 def test_the_docs_signature_line_lists_the_same_parameters():
     text = (REPO / "docs/docs/api/raster-functions.mdx").read_text()
-    line = re.search(r"\*\*Signature:\*\* `rst_bng_rasterize_agg\(([^)]*)\)", text)
+    line = re.search(
+        r"\| SQL \(session\) \| `gbx_rst_bng_rasterize_agg\(([^)]*)\)`", text
+    )
     assert line is not None
-    names = [p.strip().split(":")[0] for p in line.group(1).split(",")]
+    names = [p.strip().strip("[]") for p in line.group(1).split(",")]
     assert names == EXPECTED
 
 

@@ -18,6 +18,8 @@ show_help() {
     echo -e "  ${GREEN}--path <file|dir>${NC} Lint (or, with --fix, format) only this file or directory. Repeatable. It must be"
     echo -e "                      under python/geobrix or connectors/lakeflow; relative paths are taken from the"
     echo -e "                      current directory, else from the repo root. Without --path both scopes run in full."
+    echo -e "                      The manifest generator (scripts/manifest) and its generated doc examples"
+    echo -e "                      (docs/tests/python/api/generated_examples.py) lint with the package's settings."
     echo -e "  ${GREEN}--log <path>${NC}     Write output to log file."
     echo -e "  ${GREEN}--help${NC}           Show this help."
     echo ""
@@ -62,6 +64,10 @@ add_lint_path() {
         python/geobrix/*) PKG_PATHS+="${rel#python/geobrix/}"$'\n' ;;
         connectors/lakeflow) LAKEFLOW_PATHS+="sources"$'\n' ;;
         connectors/lakeflow/*) LAKEFLOW_PATHS+="${rel#connectors/lakeflow/}"$'\n' ;;
+        # The manifest generator and the file it writes for the docs: linted from the package scope
+        # (its settings), by a path relative to it.
+        scripts/manifest|scripts/manifest/*|docs/tests/python/api/generated_examples.py)
+            PKG_PATHS+="../../$rel"$'\n' ;;
         *)
             echo -e "${RED}--path: $raw is outside the lint scopes (python/geobrix, connectors/lakeflow)${NC}" >&2
             exit 2 ;;

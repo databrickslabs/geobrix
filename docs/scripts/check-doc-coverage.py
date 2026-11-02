@@ -618,7 +618,8 @@ def main() -> int:
         return 1
 
     # A stable manifest row is checked by gbx:manifest:gen --check; this script keeps the other names.
-    names = [n for n in canonical_sql() if n not in stable_names()]
+    owned = stable_names()
+    names = [n for n in canonical_sql() if n not in owned]
     print(f"Canonical registered functions: {len(names)}")
     print()
 

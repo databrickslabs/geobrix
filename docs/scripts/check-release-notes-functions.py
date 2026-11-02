@@ -7,9 +7,10 @@ Reads:
                      If unset or empty, prints a notice and exits 0 (nothing to check).
 
 Algorithm:
-  1. The added names: the registered names now (the stable rows of the function manifest,
+  1. The added names: the registered names at the range's end (the stable rows of the function manifest,
      ``manifest/functions.json``, plus the legacy ``docs/tests-function-info/registered_functions.txt``)
-     minus the names at the range's base (the same two files, read with ``git show <base>:<path>``).
+     minus the names at the range's base (the same two files, read with ``git show <rev>:<path>``).
+     The end is HEAD when the range has none; the base of ``a...b`` is the merge-base of a and b.
   2. For each added name, check whether it appears (substring) anywhere in
      ``docs/docs/release-notes.mdx``, ``docs/docs/release-notes-0-6.mdx`` or
      ``docs/docs/release-notes-0-5-and-earlier.mdx`` (the release notes are split across
@@ -32,9 +33,6 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent))
-from _manifest_names import all_names  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REGISTERED_TXT = REPO_ROOT / "docs/tests-function-info/registered_functions.txt"
@@ -81,21 +79,45 @@ def names_at(rev: str) -> set[str] | None:
         return None
     names = set(LISTED_RE.findall(listed))
     if manifest.strip():
-        rows = json.loads(manifest).get("functions", [])
-        names |= {r["sql_name"] for r in rows if r.get("status", "stable") == "stable"}
+        try:
+            rows = json.loads(manifest).get("functions", [])
+            names |= {r["sql_name"] for r in rows if r.get("status", "stable") == "stable"}
+        except (ValueError, KeyError, TypeError, AttributeError):
+            print(f"the manifest at {rev} is not readable; treating as advisory skip.", file=sys.stderr)
+            return None
     return names
 
 
+def range_ends(qc_range: str) -> tuple[str, str] | None:
+    """(base, end) revisions of ``a..b`` (base a) or ``a...b`` (base the merge-base of a and b); the end is
+    HEAD when empty. None when git cannot find the merge-base."""
+    sep = re.search(r"\.{2,3}", qc_range)
+    three = bool(sep) and len(sep.group()) == 3
+    left, right = (qc_range[: sep.start()], qc_range[sep.end() :]) if sep else (qc_range, "")
+    left, right = left.strip() or "HEAD", right.strip() or "HEAD"
+    if not three:
+        return left, right
+    result = subprocess.run(
+        ["git", "merge-base", left, right], capture_output=True, text=True, cwd=str(REPO_ROOT)
+    )
+    if result.returncode != 0:
+        print(f"git merge-base {left} {right} failed; treating as advisory skip.", file=sys.stderr)
+        return None
+    return result.stdout.strip(), right
+
+
 def added_functions(qc_range: str) -> list[str] | None:
-    """Return the names registered now that were not registered at the base of ``qc_range``.
+    """Return the names registered at the end of ``qc_range`` that were not registered at its base.
 
     Returns None on git error (caller should treat as advisory skip).
     """
-    base = re.split(r"\.{2,3}", qc_range, maxsplit=1)[0].strip() or "HEAD"
-    before = names_at(base)
-    if before is None:
+    ends = range_ends(qc_range)
+    if ends is None:
         return None
-    return sorted(all_names() - before)
+    before, after = names_at(ends[0]), names_at(ends[1])
+    if before is None or after is None:
+        return None
+    return sorted(after - before)
 
 
 def mentioned_in_release_notes(name: str, notes_text: str) -> bool:

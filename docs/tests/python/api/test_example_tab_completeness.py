@@ -191,3 +191,17 @@ def test_annotation_consistency_across_tabs():
     ), "trailing-annotation drift across identical-output tabs:\n  " + (
         "\n  ".join(failures)
     )
+
+
+def test_check_tab_completeness_passes():
+    """The standalone guard's own run: its skip of a manifest row (the docs-tab gate owns those) and the
+    `python` example suffix it reads."""
+    assert _load_check_script().check_tab_completeness() == []
+
+
+def test_the_script_maps_surfaces_to_tabs_as_this_file_does():
+    script = _load_check_script()
+    assert script._TIER_OF_SURFACE == _TIER_OF_SURFACE
+    fns = {"gbx_x": {"surfaces": ["session", "uc", "python"]}}
+    assert script._bindings_for(fns, "x") == {"sql", "python-light"}
+    assert script._bindings_for({"gbx_y": {"bindings": ["sql"]}}, "y") == {"sql"}

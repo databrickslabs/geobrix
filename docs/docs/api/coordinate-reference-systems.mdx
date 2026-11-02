@@ -66,7 +66,7 @@ Reach for the **SRID** when you need the integer for the native ST bridge or an 
 Every GeoBrix function that takes a CRS *string* accepts any of these four forms interchangeably — an authority code, an int-castable string, **WKT**, or **PROJ4**:
 
 ```python
-from databricks.labs.gbx.pyrx import functions as rx   # or ...rasterx — same names
+from databricks.labs.gbx.rasterx import functions as rx   # or ...pyrx — same names, except rst_transformcrs (rasterx only)
 
 # 1) Authority code (EPSG or ESRI)
 rx.rst_setcrs("tile", "EPSG:4326")
@@ -307,7 +307,7 @@ RasterX exposes both names through parallel functions. See the [RasterX Function
 - [`rst_transformcrs`](./raster-functions#rst_transformcrs) — reproject to a CRS string target (accepts non-EPSG ESRI/WKT/PROJ4).
 
 ```python
-from databricks.labs.gbx.pyrx import functions as rx   # or ...rasterx — same names
+from databricks.labs.gbx.rasterx import functions as rx   # or ...pyrx — same names, except rst_transformcrs (rasterx only)
 
 df.select(
     rx.rst_srid("tile").alias("srid"),                       # 4326, or 54008 for ESRI:54008 (both tiers)

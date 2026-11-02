@@ -25,6 +25,14 @@ from databricks.labs.gbx.rasterx import functions as rx   # Heavyweight tier
 from databricks.labs.gbx.pyrx    import functions as rx   # Lightweight tier — same alias
 
 # everything below is identical across tiers:
+df.select(rx.rst_setcrs("tile", "EPSG:4326"))
+```
+
+Ten functions are not in the `pyrx`, `pygx` and `pyvx` modules by name: `rst_slope`, `rst_transformcrs`, `rst_mapalgebra`, `rst_retile`, `rst_merge_agg`, `rst_bng_rasterize_agg`, `bng_eastnorthasbng`, `bng_tessellate`, `bng_tessellateexplode` and `st_makevalid`. Call them from `rasterx`, `gridx.bng` and `vectorx`. They run on either tier once `register(spark)` has run: the manager registers the implementation that suits the compute.
+
+```python
+from databricks.labs.gbx.rasterx import functions as rx
+
 df.select(rx.rst_slope("tile", unit="degrees"))
 ```
 

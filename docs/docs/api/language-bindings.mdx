@@ -71,7 +71,7 @@ from databricks.labs.gbx.rasterx import functions as rx     # heavyweight (GDAL/
 from databricks.labs.gbx.pyrx     import functions as rx     # lightweight (pure-Python)
 ```
 
-Downstream code is identical. See [Choosing an Execution Tier](./execution-tiers) for the comparison and the lightweight install, and [Performance & Benchmarking](./performance) for tier-by-tier timings.
+Downstream code is identical, except for ten functions that you call from `rasterx`, `gridx.bng` and `vectorx` on either tier (listed in [Choosing an Execution Tier](./execution-tiers#the-one-line-swap)). See [Choosing an Execution Tier](./execution-tiers) for the comparison and the lightweight install, and [Performance & Benchmarking](./performance) for tier-by-tier timings.
 
 ## Next Steps
 

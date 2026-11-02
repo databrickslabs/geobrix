@@ -77,11 +77,11 @@ sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
 postcodes = spark.read.format("geojson_ogr").load(f"{sample_path}/london/postcodes/london_postcodes.geojson")
 postcodes_bng = postcodes.withColumn(
     "bng_1km",
-    bx.bng_polyfill(f.col("geometry"), "1km")
+    bx.bng_polyfill(f.col("geometry"), f.lit("1km"))
 )
 
 # Tessellate the same geometries into BNG chips (cell id, core flag, clipped geometry)
-bng_cells = postcodes.select(bx.bng_tessellate(f.col("geometry"), "1km").alias("cell"))
+bng_cells = postcodes.select(bx.bng_tessellate(f.col("geometry"), f.lit("1km")).alias("cell"))
 bng_cells.show(5)"""
 
 GEOGRAPHIC_COHERENCE_LONDON_BNG_output = """

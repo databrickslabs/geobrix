@@ -848,7 +848,7 @@ Pixels not covered by any geometry in the group are set to **`-9999.0`** (band-r
 :::
 
 :::warning `gbx_rst_bng_rasterize_agg` returns BINARY
-On every surface the aggregate returns the raster as `BINARY` (the GeoTIFF bytes), not a tile. A grouped aggregate cannot return the tile struct. Wrap the result with `gbx_rst_fromcontent` to get a tile back:
+In SQL and Python the aggregate returns the raster as `BINARY` (the GeoTIFF bytes), not a tile. A grouped aggregate cannot return the tile struct there. The Scala function `rst_bng_rasterize_agg` keeps returning the tile struct. Wrap the SQL or Python result with `gbx_rst_fromcontent` to get a tile back:
 
 ```sql
 SELECT
@@ -1163,7 +1163,7 @@ Powered by **rasterio** (`rasterio.merge`). Aggregate — `groupBy(...).agg(rx.r
 :::
 
 :::warning `gbx_rst_merge_agg` returns BINARY
-On every surface the aggregate returns the raster as `BINARY` (the GeoTIFF bytes), not a tile. A grouped aggregate cannot return the tile struct. Wrap the result with `gbx_rst_fromcontent` to get a tile back:
+In SQL and Python the aggregate returns the raster as `BINARY` (the GeoTIFF bytes), not a tile. A grouped aggregate cannot return the tile struct there. The Scala function `rst_merge_agg` keeps returning the tile struct. Wrap the SQL or Python result with `gbx_rst_fromcontent` to get a tile back:
 
 ```sql
 SELECT

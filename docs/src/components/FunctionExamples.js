@@ -62,6 +62,9 @@ export default function FunctionExamples(props) {
           shown: true,
         };
       })
+      // A surface tab with neither its own example nor a fallback is left out, not shown as "Not available":
+      // the function does run on that surface, the page just has no hand-written example for it.
+      .filter((t) => Boolean(t.code))
     : TABS.map((t) => ({
         key: t.key,
         label: t.label,
@@ -102,6 +105,7 @@ export default function FunctionExamples(props) {
         Since v{since}
       </span>
     )}
+    {tabs.length > 0 && (
     <Tabs groupId="gbx-example-lang" className="gbx-example-lang-tabs">
       {tabs.map((t) => {
         const code = surfaces ? t.code : codeByKey[t.key];
@@ -124,6 +128,7 @@ export default function FunctionExamples(props) {
         );
       })}
     </Tabs>
+    )}
     </>
   );
 }

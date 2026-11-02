@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from test.rasterx._helpers import read_bytes, tile_from_path
+from test.rasterx._helpers import read_bytes
 
 import pytest
 from pyspark.sql import SparkSession
@@ -42,67 +42,6 @@ def spark():
 
     rx.register(spark)
     return spark
-
-
-def test_rst_filter(spark):
-    """Test filtering a raster with kernel operations."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    # Test with median filter
-    df = spark.range(1).select(
-        rx.rst_filter(
-            tile_from_path(rx, f, str(MODIS_B01), "GTiff"),
-            f.lit(3),  # kernel_size
-            f.lit("median"),  # operation
-        ).alias("filtered_tile")
-    )
-
-    result = df.collect()
-    assert result is not None
-    assert len(result) == 1
-    assert result[0]["filtered_tile"] is not None
-
-
-def test_rst_filter_operations(spark):
-    """Test different filter operations."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    operations = ["avg", "median", "mode", "max", "min"]
-
-    for op in operations:
-        df = spark.range(1).select(
-            rx.rst_filter(
-                tile_from_path(rx, f, str(MODIS_B01), "GTiff"),
-                f.lit(3),
-                f.lit(op),
-            ).alias("result")
-        )
-        result = df.collect()
-        assert result is not None, f"Filter operation '{op}' failed"
-        assert result[0]["result"] is not None
-
-
-def test_rst_convolve(spark):
-    """Test convolution operation on raster."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    # Simple 3x3 averaging kernel - use f.array to create proper array type
-    kernel = f.array(
-        f.array(f.lit(0.111), f.lit(0.111), f.lit(0.111)),
-        f.array(f.lit(0.111), f.lit(0.111), f.lit(0.111)),
-        f.array(f.lit(0.111), f.lit(0.111), f.lit(0.111)),
-    )
-
-    df = spark.range(1).select(
-        rx.rst_convolve(tile_from_path(rx, f, str(MODIS_B01), "GTiff"), kernel).alias(
-            "convolved_tile"
-        )
-    )
-
-    result = df.collect()
-    assert result is not None
-    assert len(result) == 1
-    assert result[0]["convolved_tile"] is not None
 
 
 def test_rst_merge(spark):
@@ -150,59 +89,6 @@ def test_rst_combineavg(spark):
     assert result is not None
     assert len(result) == 1
     assert result[0]["combined_tile"] is not None
-
-
-def test_rst_asformat(spark):
-    """Test converting raster format.
-
-    Note: Converts from GTiff to Zarr. Output compression defaults to DEFLATE
-    (baseline TIFF, previewable by Databricks image preview / Java ImageIO).
-    """
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    # Convert from GTiff to Zarr format
-    df = spark.range(1).select(
-        rx.rst_asformat(
-            tile_from_path(rx, f, str(MODIS_B01), "GTiff"), f.lit("Zarr")
-        ).alias("zarr_tile")
-    )
-
-    result = df.collect()
-    assert result is not None
-    assert len(result) == 1
-    assert result[0]["zarr_tile"] is not None
-
-
-def test_rst_initnodata(spark):
-    """Test initializing NoData values."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    df = spark.range(1).select(
-        rx.rst_initnodata(tile_from_path(rx, f, str(MODIS_B01), "GTiff")).alias(
-            "nodata_tile"
-        )
-    )
-
-    result = df.collect()
-    assert result is not None
-    assert len(result) == 1
-    assert result[0]["nodata_tile"] is not None
-
-
-def test_rst_updatetype(spark):
-    """Test updating raster data type."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    df = spark.range(1).select(
-        rx.rst_updatetype(
-            tile_from_path(rx, f, str(MODIS_B01), "GTiff"), f.lit("Float32")
-        ).alias("updated_tile")
-    )
-
-    result = df.collect()
-    assert result is not None
-    assert len(result) == 1
-    assert result[0]["updated_tile"] is not None
 
 
 def test_rst_mapalgebra(spark):

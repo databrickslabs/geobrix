@@ -122,33 +122,6 @@ def test_register_enables_quadbin_rastertogrid_sql(spark):
 # --- Operations via SQL -----------------------------------------------------
 
 
-def test_register_enables_setsrid_sql(spark):
-    prx.register(spark)
-    _tile_view(spark, width=4, height=3, epsg=4326)
-    s = spark.sql(
-        "SELECT gbx_rst_srid(gbx_rst_setsrid(tile, 27700)) AS s FROM t"
-    ).first()["s"]
-    assert s == 27700
-
-
-def test_register_enables_band_sql(spark):
-    prx.register(spark)
-    _tile_view(spark, width=4, height=3, count=3)
-    n = spark.sql("SELECT gbx_rst_numbands(gbx_rst_band(tile, 2)) AS n FROM t").first()[
-        "n"
-    ]
-    assert n == 1
-
-
-def test_register_enables_asformat_sql(spark):
-    prx.register(spark)
-    _tile_view(spark, width=4, height=3)
-    drv = spark.sql(
-        "SELECT gbx_rst_metadata(gbx_rst_asformat(tile, 'GTiff'))['driver'] AS d FROM t"
-    ).first()["d"]
-    assert drv == "GTiff"
-
-
 def test_register_enables_buildoverviews_sql(spark):
     prx.register(spark)
     _tile_view(spark, width=64, height=64)

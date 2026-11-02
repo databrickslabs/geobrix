@@ -1350,7 +1350,7 @@ REGISTRY: Dict[str, FnSpec] = {
         {"band_index": 2},
         min_bands=2,
         core_fn=lambda ds, a: edit.band(ds, a["band_index"]),
-        col_fn=lambda t, a: prx.rst_band(t, a["band_index"]),
+        col_fn=lambda t, a: rx.rst_band(t, a["band_index"]),
         sources=_EDIT_LIGHT + (_HEAVY + "pixel/RST_Band.scala",),
         core=False,
     ),
@@ -1381,7 +1381,7 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {},
         core_fn=lambda ds, a: edit.init_nodata(ds),
-        col_fn=lambda t, a: prx.rst_initnodata(t),
+        col_fn=lambda t, a: rx.rst_initnodata(t),
         sources=_EDIT_LIGHT + (_HEAVY + "RST_InitNoData.scala",),
         core=False,
     ),
@@ -1392,7 +1392,7 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"srid": 4326},
         core_fn=lambda ds, a: edit.set_srid(ds, a["srid"]),
-        col_fn=lambda t, a: prx.rst_setsrid(t, a["srid"]),
+        col_fn=lambda t, a: rx.rst_setsrid(t, a["srid"]),
         sources=_EDIT_LIGHT + (_HEAVY + "pixel/RST_SetSrid.scala",),
         core=False,
     ),
@@ -1416,7 +1416,7 @@ REGISTRY: Dict[str, FnSpec] = {
         {"crs": "EPSG:4326"},
         core_fn=lambda ds, a: edit.set_crs(ds, a["crs"]),
         # F.lit the STRING crs arg (bare str would resolve as a column name).
-        col_fn=lambda t, a: prx.rst_setcrs(t, F.lit(a["crs"])),
+        col_fn=lambda t, a: rx.rst_setcrs(t, F.lit(a["crs"])),
         sources=_EDIT_LIGHT + (_HEAVY + "pixel/RST_SetCrs.scala",),
         core=False,
     ),
@@ -1444,7 +1444,7 @@ REGISTRY: Dict[str, FnSpec] = {
         # F.lit the STRING arg: prx _col passes bare str through as a column NAME
         # (auto-lit covers only numeric scalars), so an unwrapped "Float64" resolves
         # as a column in spark-path. Numeric args may stay raw.
-        col_fn=lambda t, a: prx.rst_updatetype(t, F.lit(a["new_type"])),
+        col_fn=lambda t, a: rx.rst_updatetype(t, F.lit(a["new_type"])),
         sources=_EDIT_LIGHT + (_HEAVY + "RST_UpdateType.scala",),
         core=False,
     ),
@@ -1456,7 +1456,7 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"lo_pct": 2.0, "hi_pct": 98.0},
         core_fn=lambda ds, a: stretch.percentile_stretch(ds, a["lo_pct"], a["hi_pct"]),
-        col_fn=lambda t, a: prx.rst_percentile_stretch(t, a["lo_pct"], a["hi_pct"]),
+        col_fn=lambda t, a: rx.rst_percentile_stretch(t, a["lo_pct"], a["hi_pct"]),
         sources=_STRETCH_LIGHT + (_HEAVY + "pixel/RST_PercentileStretch.scala",),
         core=False,
     ),
@@ -1489,7 +1489,7 @@ REGISTRY: Dict[str, FnSpec] = {
         {"kernel_size": 3, "operation": "median"},
         core_fn=lambda ds, a: focal.filt(ds, a["kernel_size"], a["operation"]),
         # F.lit the STRING operation arg (kernel_size is numeric -> auto-lit).
-        col_fn=lambda t, a: prx.rst_filter(t, a["kernel_size"], F.lit(a["operation"])),
+        col_fn=lambda t, a: rx.rst_filter(t, a["kernel_size"], F.lit(a["operation"])),
         sources=_FOCAL_LIGHT
         + (_HEAVY + "RST_Filter.scala", _OPS + "KernelFilter.scala", _GDAL_BLOCK),
         core=False,
@@ -1503,7 +1503,7 @@ REGISTRY: Dict[str, FnSpec] = {
         # actual coefficients are hardcoded identically on both engines.
         {"kernel_size": 3},
         core_fn=lambda ds, a: focal.convolve(ds, _CONVOLVE_KERNEL),
-        col_fn=lambda t, a: prx.rst_convolve(
+        col_fn=lambda t, a: rx.rst_convolve(
             t, F.array(*[F.array(*[F.lit(c) for c in row]) for row in _CONVOLVE_KERNEL])
         ),
         sources=_FOCAL_LIGHT
@@ -1518,7 +1518,7 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"new_format": "GTiff"},
         core_fn=lambda ds, a: ops.as_format(ds, a["new_format"]),
-        col_fn=lambda t, a: prx.rst_asformat(t, a["new_format"]),
+        col_fn=lambda t, a: rx.rst_asformat(t, a["new_format"]),
         sources=_OPS_LIGHT + (_HEAVY + "RST_AsFormat.scala",),
         core=False,
     ),
@@ -1710,7 +1710,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: derivedband.derivedband(
             ds, _DERIVEDBAND_PYFUNC, _DERIVEDBAND_FUNC_NAME
         ),
-        col_fn=lambda t, a: prx.rst_derivedband(
+        col_fn=lambda t, a: rx.rst_derivedband(
             t, _DERIVEDBAND_PYFUNC, _DERIVEDBAND_FUNC_NAME
         ),
         sources=_DERIVEDBAND_LIGHT + (_HEAVY + "RST_DerivedBand.scala", _PIXEL_COMBINE),
@@ -1926,7 +1926,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ("pure-core",),
         {"name": "0"},
         core_fn=lambda ds, a: _getsubdataset_timing(ds, a["name"]),
-        col_fn=lambda t, a: prx.rst_getsubdataset(t, a["name"]),
+        col_fn=lambda t, a: rx.rst_getsubdataset(t, a["name"]),
         sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_GetSubdataset.scala",),
         core=False,
         fingerprint=False,
@@ -2108,7 +2108,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: agg_core.align_to_tiles(
             _ds_to_gtiff_bytes(ds), _ds_to_gtiff_bytes(ds)
         ),
-        col_fn=lambda t, a: prx.rst_align_to(t, t),
+        col_fn=lambda t, a: rx.rst_align_to(t, t),
         sources=_AGG_LIGHT
         + (
             _HEAVY + "RST_AlignTo.scala",
@@ -4229,7 +4229,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: (
             _land_cover_classify_bytes(ds, a["method"], a["n_clusters"], a["smooth"])
         ),
-        col_fn=lambda t, a: prx.rst_land_cover(
+        col_fn=lambda t, a: rx.rst_land_cover(
             t, a["method"], a["n_clusters"], a["smooth"]
         ),
         sources=(_PYRX + "land_cover.py", _PYRX + "_nodata.py"),

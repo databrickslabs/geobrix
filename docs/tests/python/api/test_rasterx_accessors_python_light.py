@@ -331,10 +331,10 @@ def test_rst_width_python_example(spark):
 # ---------------------------------------------------------------------------
 
 
-def test_rst_getsubdataset_python_light_example(spark):
+def test_rst_getsubdataset_python_example(spark):
     """rst_getsubdataset extracts the prAdjust subdataset and returns a materialized tile."""
     assert light_examples is not None
-    result = light_examples.rst_getsubdataset_python_light_example(spark)
+    result = light_examples.rst_getsubdataset_python_example(spark)
     # Light tier materializes the extracted subdataset: raster bytes populated, path null.
     assert result is not None, "rst_getsubdataset: result Row is None"
     assert (
@@ -375,7 +375,7 @@ def test_output_constants_exist():
         "rst_format_python_example_output",
         "rst_georeference_python_example_output",
         "rst_getnodata_python_example_output",
-        "rst_getsubdataset_python_light_example_output",
+        "rst_getsubdataset_python_example_output",
         "rst_height_python_example_output",
         "rst_histogram_python_example_output",
         "rst_isempty_python_example_output",

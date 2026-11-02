@@ -1079,6 +1079,26 @@ result.show()
 (filtered tile; 3x3 median filter applied)
 """.trim
 
+  val rst_percentile_stretch_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+val rasters = spark.table("rasters")
+val result = rasters.select(rx.rst_percentile_stretch(col("tile"), 2.0, 98.0).alias("tile"))
+result.show()
+""".trim
+
+  val rst_percentile_stretch_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(stretched tile; UInt8 values 0-255, 0 is NoData)
+""".trim
+
   val rst_fromcontent_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}

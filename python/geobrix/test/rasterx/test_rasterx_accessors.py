@@ -55,18 +55,3 @@ def test_rst_subdatasets(spark):
     result = df.collect()
     assert result is not None
     assert result[0]["subdatasets"] is not None
-
-
-def test_rst_getsubdataset(spark):
-    """Test extracting subdataset from NetCDF."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    tile_col = tile_from_path(rx, f, str(NETCDF), "NetCDF")
-
-    df = spark.range(1).select(
-        rx.rst_getsubdataset(tile_col, f.lit("prAdjust")).alias("subdataset")
-    )
-
-    result = df.collect()
-    assert result is not None
-    assert result[0]["subdataset"] is not None

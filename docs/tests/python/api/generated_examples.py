@@ -219,6 +219,16 @@ EXAMPLES = {
         "qb_tessellate_triangle",
         "SELECT gbx_quadbin_tessellate('POLYGON((-122.5 37.9, -122.2 37.9, -122.5 37.6, -122.5 37.9))', 10) AS out",
     ),
+    "gbx_rst_align_to": (
+        "RASTER_TILE_OP",
+        "align_to_coarse",
+        "SELECT gbx_rst_align_to(c0, c1) AS out FROM gbx_example",
+    ),
+    "gbx_rst_asformat": (
+        "RASTER_TILE_OP",
+        "asformat_gtiff",
+        "SELECT gbx_rst_asformat(c0, 'GTiff') AS out FROM gbx_example",
+    ),
     "gbx_rst_aspect": (
         "SPEC_DEM",
         "aspect_compass",
@@ -228,6 +238,11 @@ EXAMPLES = {
         "RASTER_STAT",
         "avg",
         "SELECT gbx_rst_avg(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_band": (
+        "RASTER_TILE_OP",
+        "band_2",
+        "SELECT gbx_rst_band(c0, 2) AS out FROM gbx_example",
     ),
     "gbx_rst_bandmetadata": (
         "RASTER_ACCESSOR",
@@ -254,10 +269,20 @@ EXAMPLES = {
         "clip_half",
         "SELECT gbx_rst_clip(c0, 'POLYGON((-1.05 51.4, -0.68 51.4, -0.68 52.1, -1.05 52.1, -1.05 51.4))', FALSE) AS out FROM gbx_example",
     ),
+    "gbx_rst_convolve": (
+        "RASTER_TILE_OP",
+        "convolve_asymmetric",
+        "SELECT gbx_rst_convolve(c0, c1) AS out FROM gbx_example",
+    ),
     "gbx_rst_crs": (
         "RASTER_ACCESSOR",
         "crs",
         "SELECT gbx_rst_crs(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_derivedband": (
+        "RASTER_TILE_OP",
+        "derivedband_double_plus_one",
+        "SELECT gbx_rst_derivedband(c0, 'def double_plus_one(in_ar, out_ar, xoff, yoff, xsize, ysize, raster_xsize, raster_ysize, buf_radius, gt, **kwargs): out_ar[:] = in_ar[0] * 2 + 1', 'double_plus_one') AS out FROM gbx_example",
     ),
     "gbx_rst_evi": (
         "SPEC_CALC",
@@ -268,6 +293,11 @@ EXAMPLES = {
         "SPEC_ANALYSIS",
         "fillnodata_default",
         "SELECT gbx_rst_fillnodata(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_filter": (
+        "RASTER_TILE_OP",
+        "filter_median",
+        "SELECT gbx_rst_filter(c0, 3, 'median') AS out FROM gbx_example",
     ),
     "gbx_rst_format": (
         "RASTER_ACCESSOR",
@@ -283,6 +313,11 @@ EXAMPLES = {
         "RASTER_ACCESSOR",
         "getnodata",
         "SELECT gbx_rst_getnodata(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_getsubdataset": (
+        "RASTER_TILE_OP",
+        "getsubdataset_band2",
+        "SELECT gbx_rst_getsubdataset(c0, 'Band2') AS out FROM gbx_example",
     ),
     "gbx_rst_height": (
         "RASTER_ACCESSOR",
@@ -304,10 +339,20 @@ EXAMPLES = {
         "index_ndvi",
         "SELECT gbx_rst_index(c0, 'ndvi', c2) AS out FROM gbx_example",
     ),
+    "gbx_rst_initnodata": (
+        "RASTER_TILE_OP",
+        "initnodata_unset",
+        "SELECT gbx_rst_initnodata(c0) AS out FROM gbx_example",
+    ),
     "gbx_rst_isempty": (
         "RASTER_STAT",
         "isempty",
         "SELECT gbx_rst_isempty(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_land_cover": (
+        "RASTER_TILE_OP",
+        "land_cover_spectral",
+        "SELECT gbx_rst_land_cover(c0, 'spectral', 6, 0) AS out FROM gbx_example",
     ),
     "gbx_rst_mapalgebra": (
         "SPEC_SE",
@@ -363,6 +408,11 @@ EXAMPLES = {
         "RASTER_ACCESSOR",
         "numbands",
         "SELECT gbx_rst_numbands(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_percentile_stretch": (
+        "RASTER_TILE_OP",
+        "percentile_stretch_2_98",
+        "SELECT gbx_rst_percentile_stretch(c0, 2.0D, 98.0D) AS out FROM gbx_example",
     ),
     "gbx_rst_pixelcount": (
         "RASTER_STAT",
@@ -449,6 +499,16 @@ EXAMPLES = {
         "scaley",
         "SELECT gbx_rst_scaley(c0) AS out FROM gbx_example",
     ),
+    "gbx_rst_setcrs": (
+        "RASTER_TILE_OP",
+        "setcrs_epsg",
+        "SELECT gbx_rst_setcrs(c0, 'EPSG:3857') AS out FROM gbx_example",
+    ),
+    "gbx_rst_setsrid": (
+        "RASTER_TILE_OP",
+        "setsrid_3857",
+        "SELECT gbx_rst_setsrid(c0, 3857) AS out FROM gbx_example",
+    ),
     "gbx_rst_skewx": (
         "RASTER_ACCESSOR",
         "skewx",
@@ -518,6 +578,11 @@ EXAMPLES = {
         "RASTER_ACCESSOR",
         "type",
         "SELECT gbx_rst_type(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_updatetype": (
+        "RASTER_TILE_OP",
+        "updatetype_int32",
+        "SELECT gbx_rst_updatetype(c0, 'Int32') AS out FROM gbx_example",
     ),
     "gbx_rst_upperleftx": (
         "RASTER_ACCESSOR",

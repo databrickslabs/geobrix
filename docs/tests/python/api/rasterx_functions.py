@@ -293,33 +293,6 @@ rst_fromfile_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_getsubdataset_python_heavy_example(spark):
-    """Extract a named subdataset from a NetCDF raster tile via the heavy rasterx tier.
-
-    Uses the committed CMIP5 NetCDF fixture which has two subdatasets: time_bnds
-    and prAdjust. Subdatasets require a multi-layer format such as NetCDF.
-    Returns the extracted subdataset tile directly.
-    """
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    nc_df = spark.table("netcdf_rasters")
-    result = nc_df.select(
-        rx.rst_getsubdataset("tile", f.lit("prAdjust")).alias("tile")
-    ).first()
-    return result["tile"]
-
-
-rst_getsubdataset_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(extracted prAdjust subdataset — 720 pixels wide, 31 bands, 360 rows)
-"""
-
-
 # ---------------------------------------------------------------------------
 # rst_height — raster height in pixels (heavy tier)
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — 161 rows)
@@ -475,56 +448,10 @@ rst_getsubdataset_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_asformat_python_heavy_example(spark):
-    """Convert a raster tile to another GDAL format via the heavy rasterx tier."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    tile_df = spark.table("rasters")
-    result = tile_df.select(
-        rx.rst_asformat("tile", f.lit("GTiff")).alias("tile")
-    ).first()
-    return result["tile"]
-
-
-rst_asformat_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(re-encoded tile in the requested GDAL format)
-"""
-
-
 # ---------------------------------------------------------------------------
 # rst_band — extract a single band from a multi-band raster (heavy tier)
 # Fixture: MULTIBAND (rgb_nir_small.tif — 3 bands)
 # ---------------------------------------------------------------------------
-
-
-def rst_band_python_heavy_example(spark):
-    """Extract band 1 from a multi-band raster tile via the heavy rasterx tier.
-
-    Uses the multiband fixture (rgb_nir_small.tif, 3 bands) to demonstrate
-    band extraction. The result is a new single-band tile.
-    """
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    tile_df = spark.table("multiband_rasters")
-    result = tile_df.select(rx.rst_band("tile", f.lit(1)).alias("tile")).first()
-    return result["tile"]
-
-
-rst_band_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(single band extracted from the 3-band multiband fixture)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -594,31 +521,6 @@ rst_cog_convert_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_convolve_python_heavy_example(spark):
-    """Apply a 3x3 identity convolution kernel to a raster tile via the heavy rasterx tier."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    tile_df = spark.table("rasters")
-    kernel = f.array(
-        f.array(f.lit(0.0), f.lit(0.0), f.lit(0.0)),
-        f.array(f.lit(0.0), f.lit(1.0), f.lit(0.0)),
-        f.array(f.lit(0.0), f.lit(0.0), f.lit(0.0)),
-    )
-    result = tile_df.select(rx.rst_convolve("tile", kernel).alias("tile")).first()
-    return result["tile"]
-
-
-rst_convolve_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(convolved tile; kernel is a 3x3 identity)
-"""
-
-
 # ---------------------------------------------------------------------------
 # rst_fillnodata — fill NoData pixels via inverse-distance interpolation (heavy tier)
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — nodata=0.0)
@@ -629,28 +531,6 @@ rst_convolve_python_heavy_example_output = """
 # rst_filter — spatial filter (heavy tier)
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # ---------------------------------------------------------------------------
-
-
-def rst_filter_python_heavy_example(spark):
-    """Apply a 3x3 median spatial filter to a raster tile via the heavy rasterx tier."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    tile_df = spark.table("rasters")
-    result = tile_df.select(
-        rx.rst_filter("tile", f.lit(3), f.lit("median")).alias("tile")
-    ).first()
-    return result["tile"]
-
-
-rst_filter_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(filtered tile; 3x3 median filter applied)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -734,25 +614,6 @@ rst_frombands_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_initnodata_python_heavy_example(spark):
-    """Initialize NoData values on a raster tile via the heavy rasterx tier."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    tile_df = spark.table("rasters")
-    result = tile_df.select(rx.rst_initnodata("tile").alias("tile")).first()
-    return result["tile"]
-
-
-rst_initnodata_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(tile with NoData initialized)
-"""
-
-
 # ---------------------------------------------------------------------------
 # rst_resample — resample by a multiplicative factor (heavy tier)
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — 236x161 px)
@@ -780,52 +641,10 @@ rst_initnodata_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_setcrs_python_heavy_example(spark):
-    """Stamp a CRS string onto a raster tile via the heavy rasterx tier."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    tile_df = spark.table("rasters")
-    result = tile_df.select(
-        rx.rst_crs(rx.rst_setcrs("tile", f.lit("EPSG:32618"))).alias("crs")
-    ).first()
-    return result["crs"]
-
-
-rst_setcrs_python_heavy_example_output = """
-+----------+
-|crs       |
-+----------+
-|EPSG:32618|
-+----------+
-(CRS string after stamping; does NOT reproject — use rst_transformcrs to reproject)
-"""
-
-
 # ---------------------------------------------------------------------------
 # rst_setsrid — stamp an EPSG SRID integer onto a raster (heavy tier)
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — SRID=32618)
 # ---------------------------------------------------------------------------
-
-
-def rst_setsrid_python_heavy_example(spark):
-    """Stamp an EPSG SRID onto a raster tile via the heavy rasterx tier."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    tile_df = spark.table("rasters")
-    result = tile_df.select(rx.rst_setsrid("tile", f.lit(32618)).alias("tile")).first()
-    return result["tile"]
-
-
-rst_setsrid_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(tile with SRID stamped to 32618; does NOT reproject — use rst_transform to reproject)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -845,28 +664,6 @@ rst_setsrid_python_heavy_example_output = """
 # rst_updatetype — convert the raster data type (heavy tier)
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # ---------------------------------------------------------------------------
-
-
-def rst_updatetype_python_heavy_example(spark):
-    """Convert a raster tile's data type via the heavy rasterx tier."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    tile_df = spark.table("rasters")
-    result = tile_df.select(
-        rx.rst_updatetype("tile", f.lit("Float32")).alias("tile")
-    ).first()
-    return result["tile"]
-
-
-rst_updatetype_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(type-converted tile; use rst_type to confirm the new data type)
-"""
 
 
 # ===========================================================================
@@ -1608,37 +1405,6 @@ rst_combinesum_python_heavy_example_output = """
 # Fixture: multiband_tile_df_heavy(spark) (3 bands)
 # Output: tile struct (raster with derived band)
 # ---------------------------------------------------------------------------
-
-
-def rst_derivedband_python_heavy_example(spark):
-    """Apply a Python pixel-function to derive a band (doubles band 1).
-
-    ``python_func`` follows GDAL's VRT pixel-function signature; ``func_name``
-    names the callable within it.
-    """
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    df = spark.table("multiband_rasters")
-    python_func = (
-        "def double(in_ar, out_ar, xoff, yoff, xsize, ysize, "
-        "raster_xsize, raster_ysize, buf_radius, gt, **kwargs):\n"
-        "    out_ar[:] = in_ar[0] * 2\n"
-    )
-    result = df.select(
-        rx.rst_derivedband("tile", f.lit(python_func), f.lit("double")).alias("tile")
-    ).first()
-    return result["tile"]
-
-
-rst_derivedband_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(raster with derived band from Python UDF)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -3105,38 +2871,6 @@ rst_custom_rasterize_agg_python_heavy_example_output = """
 # Fixture: DEM used for both tile and reference_tile (no-op warp)
 # Output: tile struct (warped to reference grid)
 # ---------------------------------------------------------------------------
-
-
-def rst_align_to_python_heavy_example(spark):
-    """Warp a tile to match a reference tile's grid via the heavy rasterx tier.
-
-    Loads the DEM fixture (64×64 Float32, EPSG:32618) and uses it as both the
-    input tile and the reference grid — a no-op warp that demonstrates the API.
-    In production, pass two tiles on different grids; the output will have the
-    reference tile's exact CRS, extent, and pixel dimensions.
-    """
-    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
-    from pyspark.sql import functions as f  # noqa: PLC0415
-    from ._fixtures import dem_path  # noqa: PLC0415
-
-    rx.register(spark)
-    dem = str(dem_path())
-    df = spark.read.format("binaryFile").load(dem).select(
-        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile"),
-        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("reference_tile"),
-    )
-    result = df.select(rx.rst_align_to("tile", "reference_tile").alias("tile")).first()
-    return result["tile"]
-
-
-rst_align_to_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(tile warped to reference grid; output has reference tile's CRS, extent, width, height)
-"""
 
 
 # ---------------------------------------------------------------------------

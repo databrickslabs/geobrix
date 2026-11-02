@@ -9,7 +9,6 @@ from rasterio.io import MemoryFile
 from rasterio.transform import from_bounds
 
 from databricks.labs.gbx.ds.register import register
-from databricks.labs.gbx.pyrx import functions as rx
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 from databricks.labs.gbx.rasterx import functions as rx_api
@@ -129,7 +128,7 @@ def _read_virtual_df(spark, tif):
 def test_initnodata_virtual_stays_virtual_records_key():
     spark = _spark()
     df = _read_virtual_df(spark, _a_tif())
-    out = df.withColumn("tile", rx.rst_initnodata("tile"))
+    out = df.withColumn("tile", rx_api.rst_initnodata("tile"))
     row = out.select("tile.raster", "tile.path", "tile.metadata").first()
     assert row["raster"] is None, "virtual tile must stay virtual (no bytes)"
     assert row["path"] is not None, "path reference preserved"
@@ -140,7 +139,7 @@ def test_initnodata_virtual_stays_virtual_records_key():
 def test_initnodata_virtual_emits_v2_struct():
     spark = _spark()
     df = _read_virtual_df(spark, _a_tif())
-    out = df.withColumn("tile", rx.rst_initnodata("tile"))
+    out = df.withColumn("tile", rx_api.rst_initnodata("tile"))
     fields = [f.name for f in out.schema["tile"].dataType.fields]
     assert "path" in fields and "window" in fields  # v2, not v1 3-field
 
@@ -148,7 +147,7 @@ def test_initnodata_virtual_emits_v2_struct():
 def test_initnodata_materialize_true_bakes_bytes():
     spark = _spark()
     df = _read_virtual_df(spark, _a_tif())
-    out = df.withColumn("tile", rx.rst_initnodata("tile", materialize=True))
+    out = df.withColumn("tile", rx_api.rst_initnodata("tile", materialize=True))
     row = out.select("tile.raster").first()
     assert row["raster"] is not None and len(row["raster"]) > 0
 
@@ -161,7 +160,7 @@ def test_initnodata_materialize_true_bakes_bytes():
 def test_setsrid_virtual_records_key_stays_virtual():
     spark = _spark()
     df = _read_virtual_df(spark, _a_tif())
-    out = df.withColumn("tile", rx.rst_setsrid("tile", 3857))
+    out = df.withColumn("tile", rx_api.rst_setsrid("tile", 3857))
     row = out.select("tile.raster", "tile.path", "tile.metadata").first()
     assert row["raster"] is None and row["path"] is not None
     assert row["metadata"]["pending_srid"] == "3857"
@@ -173,7 +172,7 @@ def test_setsrid_virtual_records_key_stays_virtual():
 def test_band_virtual_records_key_stays_virtual():
     spark = _spark()
     df = _read_virtual_df(spark, _a_tif())
-    out = df.withColumn("tile", rx.rst_band("tile", 1))
+    out = df.withColumn("tile", rx_api.rst_band("tile", 1))
     row = out.select("tile.raster", "tile.path", "tile.metadata").first()
     assert row["raster"] is None and row["path"] is not None
     assert row["metadata"]["pending_bands"] == "1"
@@ -184,7 +183,7 @@ def test_band_virtual_records_key_stays_virtual():
 def test_setsrid_band_v2_struct():
     spark = _spark()
     df = _read_virtual_df(spark, _a_tif())
-    for col in (rx.rst_setsrid("tile", 3857), rx.rst_band("tile", 1)):
+    for col in (rx_api.rst_setsrid("tile", 3857), rx_api.rst_band("tile", 1)):
         fields = [
             f.name for f in df.withColumn("tile", col).schema["tile"].dataType.fields
         ]
@@ -205,9 +204,9 @@ def test_accumulated_instructions_apply_in_order():
     spark = _spark()
     df = _read_virtual_df(spark, _a_tif())
     out = (
-        df.withColumn("tile", rx.rst_band("tile", 1))
-        .withColumn("tile", rx.rst_initnodata("tile"))
-        .withColumn("tile", rx.rst_setsrid("tile", 3857))
+        df.withColumn("tile", rx_api.rst_band("tile", 1))
+        .withColumn("tile", rx_api.rst_initnodata("tile"))
+        .withColumn("tile", rx_api.rst_setsrid("tile", 3857))
     )
     row = out.select("tile.raster", "tile.metadata").first()
     assert row["raster"] is None  # still virtual after 3 ops
@@ -217,9 +216,9 @@ def test_accumulated_instructions_apply_in_order():
     assert md["pending_srid"] == "3857"
     # materialize once: all three apply
     m = (
-        df.withColumn("tile", rx.rst_band("tile", 1))
-        .withColumn("tile", rx.rst_setsrid("tile", 3857))
-        .withColumn("tile", rx.rst_initnodata("tile", materialize=True))
+        df.withColumn("tile", rx_api.rst_band("tile", 1))
+        .withColumn("tile", rx_api.rst_setsrid("tile", 3857))
+        .withColumn("tile", rx_api.rst_initnodata("tile", materialize=True))
     )
     r = m.select(
         rx_api.rst_numbands("tile").alias("n"),
@@ -374,10 +373,10 @@ def test_band_stacking_guard_raises():
     spark = _spark()
     df = _read_virtual_df(spark, _a_tif())
     # Record a pending band selection (stays virtual).
-    df_band = df.withColumn("tile", rx.rst_band("tile", 1))
+    df_band = df.withColumn("tile", rx_api.rst_band("tile", 1))
     # A second rst_band on the same virtual tile should raise.
     with pytest.raises(Exception, match="pending band selection"):
-        df_band.withColumn("tile", rx.rst_band("tile", 1)).collect()
+        df_band.withColumn("tile", rx_api.rst_band("tile", 1)).collect()
 
 
 # ---------------------------------------------------------------------------
@@ -463,7 +462,7 @@ def test_initnodata_virtual_uint16_without_nodata_resolves_fallback(tmp_path):
     _write_tif(str(tmp_path / "u16.tif"), "uint16", nodata=None)
     spark = _spark()
     df = _read_virtual_df(spark, str(tmp_path))
-    row = df.withColumn("tile", rx.rst_initnodata("tile")).select("tile").first()
+    row = df.withColumn("tile", rx_api.rst_initnodata("tile")).select("tile").first()
     tile = row["tile"]
     assert tile["raster"] is None, "tile must stay virtual"
     assert tile["metadata"]["pending_nodata"] == ot.PENDING_NODATA_AUTO

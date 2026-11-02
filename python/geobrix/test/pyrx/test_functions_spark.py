@@ -1,4 +1,3 @@
-import pytest
 from pyspark.sql import functions as f
 
 from databricks.labs.gbx.pyrx import functions as prx
@@ -32,22 +31,6 @@ def test_rst_transform_to_3857(spark):
     ).first()
     assert row["s"] == 3857
     assert row["n"] == 2
-
-
-def test_rst_updatetype(spark):
-    df = _tile_df(spark, width=4, height=3)
-    out = df.select(prx.rst_updatetype("tile", f.lit("Int32")).alias("t"))
-    assert out.select(rx.rst_type("t").alias("ty")).first()["ty"][0] == "Int32"
-
-
-def test_rst_initnodata(spark):
-    import numpy as np
-
-    df = _tile_df(spark, nodata=None)
-    out = df.select(prx.rst_initnodata("tile").alias("t"))
-    # float32 tile: the dtype's fallback (heavy GDAL.getNoDataConstant: Float.MinValue)
-    nd = out.select(rx.rst_getnodata("t").alias("nd")).first()["nd"][0]
-    assert nd == float(np.finfo(np.float32).min)
 
 
 def test_rst_rasterize(spark):
@@ -145,23 +128,6 @@ def test_rst_polygonize(spark):
     vals = [r["v"] for r in rows]
     assert 5.0 in vals
     assert all(r["g"] is not None for r in rows)
-
-
-def test_rst_filter_and_convolve(spark):
-    df = _tile_df(spark, width=5, height=5, count=1)
-    fout = df.select(prx.rst_filter("tile", 3, f.lit("mean")).alias("t"))
-    assert fout.select(rx.rst_numbands("t").alias("n")).first()["n"] == 1
-    cout = df.select(
-        prx.rst_convolve(
-            "tile",
-            f.array(
-                f.array(f.lit(0.0), f.lit(0.0), f.lit(0.0)),
-                f.array(f.lit(0.0), f.lit(1.0), f.lit(0.0)),
-                f.array(f.lit(0.0), f.lit(0.0), f.lit(0.0)),
-            ),
-        ).alias("t")
-    )
-    assert cout.select(rx.rst_numbands("t").alias("n")).first()["n"] == 1
 
 
 def test_rst_color_relief(spark):
@@ -276,40 +242,6 @@ def test_rst_tooverlappingtiles(spark):
         "LATERAL gbx_rst_tooverlappingtiles(tile, 2, 2, 1) t"
     )
     assert parts.count() >= 4
-
-
-def test_rst_derivedband(spark):
-    import numpy as np
-    from rasterio.io import MemoryFile
-    from rasterio.transform import from_origin
-
-    pyfunc = (
-        "def double(in_ar, out_ar, xoff, yoff, xsize, ysize, "
-        "raster_xsize, raster_ysize, buf_radius, gt, **kwargs):\n"
-        "    out_ar[:] = in_ar[0] * 2\n"
-    )
-    data = np.array([[1.0, 2.0], [3.0, 4.0]], dtype="float32")
-    profile = dict(
-        driver="GTiff",
-        width=2,
-        height=2,
-        count=1,
-        dtype="float32",
-        crs="EPSG:32633",
-        transform=from_origin(0, 2, 1, 1),
-        nodata=-9999.0,
-    )
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(data, 1)
-        src = mf.read()
-    df = spark.createDataFrame([(src,)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
-    )
-    out = df.select(
-        prx.rst_derivedband("tile", f.lit(pyfunc), f.lit("double")).alias("t")
-    )
-    assert out.select(rx.rst_numbands("t").alias("n")).first()["n"] == 1
 
 
 def test_rst_maketiles(spark):
@@ -779,55 +711,6 @@ def test_rastertogrid_all_10_register_and_return_flat_rows(spark):
 
 
 # --- Operations (tryopen, setsrid, band, asformat, buildoverviews, sample) --
-
-
-def test_rst_setsrid_stamps_crs(spark):
-    df = _tile_df(spark, width=4, height=3, epsg=4326)
-    out = df.select(prx.rst_setsrid("tile", f.lit(27700)).alias("t"))
-    row = out.select(
-        rx.rst_srid("t").alias("s"),
-        rx.rst_width("t").alias("w"),
-        rx.rst_height("t").alias("h"),
-    ).first()
-    assert (row["s"], row["w"], row["h"]) == (27700, 4, 3)
-
-
-def test_rst_band_extracts_single_band(spark):
-    df = _tile_df(spark, width=4, height=3, count=3)
-    out = df.select(prx.rst_band("tile", f.lit(2)).alias("t"))
-    row = out.select(
-        rx.rst_numbands("t").alias("n"), rx.rst_max("t").alias("mx")
-    ).first()
-    assert row["n"] == 1
-    # band2 = arange(12)+100 -> max 111.
-    assert row["mx"][0] == 111.0
-
-
-def test_rst_band_out_of_range_raises(spark):
-    df = _tile_df(spark, width=4, height=3, count=2)
-    out = df.select(prx.rst_band("tile", f.lit(5)).alias("t"))
-    with __import__("pytest").raises(Exception):
-        out.select(rx.rst_numbands("t")).first()
-
-
-def test_rst_asformat_gtiff(spark):
-    df = _tile_df(spark, width=4, height=3)
-    out = df.select(prx.rst_asformat("tile", "GTiff").alias("t"))
-    meta = df.select(rx.rst_metadata(prx.rst_asformat("tile", "GTiff")).alias("m"))
-    assert meta.first()["m"]["driver"] == "GTiff"
-    assert out.select(rx.rst_width("t").alias("w")).first()["w"] == 4
-
-
-@pytest.mark.parametrize(
-    "requested,stamped",
-    [("GTiff", "GTiff"), ("COG", "GTiff"), ("cog", "GTiff")],
-)
-def test_rst_asformat_stamps_the_driver_the_bytes_open_as(spark, requested, stamped):
-    # COG is a layout of a GeoTIFF: rst_cog_convert stamps GTiff, so does rst_asformat, and a
-    # writer then passes the COG bytes through instead of re-encoding them with its own defaults.
-    df = _tile_df(spark, width=4, height=3)
-    out = df.select(prx.rst_asformat("tile", requested).alias("t"))
-    assert out.select("t.metadata").first()["metadata"]["driver"] == stamped
 
 
 def test_rst_buildoverviews(spark):

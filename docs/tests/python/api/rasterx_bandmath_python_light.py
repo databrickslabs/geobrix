@@ -380,14 +380,14 @@ rst_combinesum_python_light_example_output = """
 """
 
 
-def rst_derivedband_python_light_example(spark):
+def rst_derivedband_python_example(spark):
     """Apply a user-provided Python pixel-function across the tile's bands.
 
     ``python_func`` is a source string following GDAL's VRT pixel-function
     signature; ``func_name`` names the callable within it. Output: single-band
     Float64 tile. Uses the multiband fixture (non-default; 3 bands).
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
     df = spark.table("multiband_rasters")
@@ -404,7 +404,7 @@ def rst_derivedband_python_light_example(spark):
     return result["tile"]
 
 
-rst_derivedband_python_light_example_output = """
+rst_derivedband_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+

@@ -417,7 +417,9 @@ def test_focal_filter_parity_skips_transparent_and_masked_neighbours(
     from pyspark.sql import functions as f
 
     outs = _both_tiers(
-        spark_with_jar, _striped(name), lambda m, t: m.rst_filter(t, 3, f.lit(op))
+        spark_with_jar,
+        _striped(name),
+        lambda m, t: f.call_function("gbx_rst_filter", t, f.lit(3), f.lit(op)),
     )
     assert outs["light"]["dtype"] == outs["heavy"]["dtype"]
     assert (outs["light"]["data"][0] == outs["heavy"]["data"][0]).all(), op
@@ -433,7 +435,9 @@ def test_convolve_parity_skips_transparent_and_masked_neighbours(spark_with_jar,
 
     kernel = f.array(*[f.array(*[f.lit(1.0)] * 3)] * 3)
     outs = _both_tiers(
-        spark_with_jar, _striped(name), lambda m, t: m.rst_convolve(t, kernel)
+        spark_with_jar,
+        _striped(name),
+        lambda m, t: f.call_function("gbx_rst_convolve", t, kernel),
     )
     light, heavy = outs["light"]["data"][0], outs["heavy"]["data"][0]
     assert (light == heavy).all(), (light.tolist(), heavy.tolist())
@@ -493,7 +497,9 @@ def test_derivedband_parity_is_invalid_where_the_input_is(spark_with_jar, name):
     def derive(m, t):
         from pyspark.sql import functions as f
 
-        return m.rst_derivedband(t, f.lit(_FIRST_FUNC), f.lit("first"))
+        return f.call_function(
+            "gbx_rst_derivedband", t, f.lit(_FIRST_FUNC), f.lit("first")
+        )
 
     outs = {
         tier: _single_tile(spark_with_jar, raster, tier, derive)
@@ -524,6 +530,8 @@ def test_percentile_stretch_parity_over_the_pixels_valid_for_each_band(
     outs = _both_tiers(
         spark_with_jar,
         _raster_of(name),
-        lambda m, t: m.rst_percentile_stretch(t, 2.0, 98.0),
+        lambda m, t: f.call_function(
+            "gbx_rst_percentile_stretch", t, f.lit(2.0), f.lit(98.0)
+        ),
     )
     assert (outs["light"]["data"] == outs["heavy"]["data"]).all()

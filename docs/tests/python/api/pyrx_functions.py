@@ -269,6 +269,7 @@ def pyrx_land_cover_example(spark):
     from rasterio.transform import from_origin
     from databricks.labs.gbx.core.crs import area_m2
     from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api
     from databricks.labs.gbx.pyrx.core.land_cover import DEFAULT_CLASSES
 
     # Build a 32 x 32, 3-band (RGB) uint8 raster with two regions: left half
@@ -298,7 +299,7 @@ def pyrx_land_cover_example(spark):
     df = spark.createDataFrame([(raster_bytes,)], ["raster"])
     tile_df = df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
     lc_df = tile_df.select(
-        rx.rst_land_cover("tile", method="spectral", smooth=0).alias("lc")
+        rx_api.rst_land_cover("tile", method="spectral", smooth=0).alias("lc")
     )
 
     # rst_land_cover is also registered as gbx_rst_land_cover in SQL; the
@@ -332,6 +333,48 @@ pyrx_land_cover_example_output = """
 Two contiguous regions traced from the class-mask tile, e.g.:
 [Row(g=<wkb bytes>, v=0), Row(g=<wkb bytes>, v=1)]
 class_names -> {0: "vegetation", 1: "bare"}  (id -> DEFAULT_CLASSES[id])
+"""
+
+
+def rst_land_cover_python_example(spark):
+    """Classify an RGB tile with the spectral thresholds and read the class ids."""
+    import numpy as np
+    from pyspark.sql import functions as f
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx.rasterx import functions as rx_api
+
+    # A 2 x 2 RGB tile: a green pixel, a light pixel, a grey pixel and a dark one.
+    a = np.array(
+        [[[30, 210], [100, 30]], [[200, 205], [100, 30]], [[40, 200], [100, 30]]],
+        np.uint8,
+    )
+    profile = dict(
+        driver="GTiff",
+        width=2,
+        height=2,
+        count=3,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(0, 2, 1, 1),
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as ds:
+            ds.write(a)
+        raster_bytes = mf.read()
+    df = spark.createDataFrame([(raster_bytes,)], ["raster"])
+    tile_df = df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    lc = tile_df.select(
+        rx_api.rst_land_cover("tile", "spectral", 6, 0).alias("tile")
+    ).first()["tile"]
+    return prx.tile_to_numpy(lc)
+
+
+rst_land_cover_python_example_output = """
+[[[0 1]
+  [2 3]]]
+(class ids: 0 vegetation, 1 bare, 2 impervious, 3 dark; -1 is NoData)
 """
 
 

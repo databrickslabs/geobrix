@@ -444,21 +444,32 @@ NoData values per band.
 
 ### rst_getsubdataset
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_getsubdataset: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_getsubdataset(tile, subset_name)` | `TILE` |
+| Python | `rasterx.functions.rst_getsubdataset(tile, subset_name)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | A tile whose raster is a container with subdatasets, such as a NetCDF file. |
+| `subset_name` | `STRING` |  | The name of the subdataset (the last part of its GDAL name, such as `'prAdjust'`). A name that matches none raises. |
+{/* END GENERATED gbx_rst_getsubdataset */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**. Subdataset availability depends on rasterio's bundled GDAL driver set.
 :::
 
-**Signature:** `rst_getsubdataset(tile: Column, subsetName: Column): Column` — Extract subdataset.
+Extract a subdataset of a container file. A tile that holds no subdataset of that name raises an error that names it.
 
 _Examples use the CMIP5 NetCDF fixture (`prAdjust_day_HadGEM2-CC_*.nc`) which has two subdatasets: `time_bnds` and `prAdjust`. Subdatasets require a multi-layer format such as NetCDF; plain GeoTIFFs return no subdatasets._
 
 <FunctionExamples
   name="rst_getsubdataset"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
@@ -3080,7 +3091,19 @@ Transform and analyze rasters (20 total).
 
 ### rst_align_to
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_align_to: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_align_to(tile, reference_tile)` | `TILE` |
+| Python | `rasterx.functions.rst_align_to(tile, reference_tile, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to warp. |
+| `reference_tile` | `TILE` |  | The tile whose grid (CRS, extent, width, height) the result takes. |
+{/* END GENERATED gbx_rst_align_to */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** (`rasterio.warp`). Warps `tile` onto the reference tile's grid — matching its CRS, extent, and pixel dimensions — using nearest-neighbour resampling. Satisfies the alignment precondition required by the `rst_combine*` family.
@@ -3088,42 +3111,48 @@ Powered by **rasterio** (`rasterio.warp`). Warps `tile` onto the reference tile'
 
 Warp a tile to match the grid of a reference tile exactly — same CRS, extent, width, height, and geotransform — using nearest-neighbour resampling (`-r near`). This is the explicit fix for the alignment precondition of the cross-raster combine family (`rst_combine*`): align each tile to a common reference, then combine.
 
-**Signature:** `rst_align_to(tile: Column, reference_tile: Column): Column`
-
-**Parameters:** `tile` — input raster tile to warp; `reference_tile` — reference tile whose grid (CRS, extent, pixel size) defines the output grid.
-
 <FunctionExamples
   name="rst_align_to"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
 ### rst_asformat
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_asformat: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_asformat(tile, new_format)` | `TILE` |
+| Python | `rasterx.functions.rst_asformat(tile, new_format, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to re-encode. |
+| `new_format` | `STRING` |  | A GDAL driver short name that can write a raster, in any case: `'GTiff'`, `'PNG'`, `'COG'`. A name that names none raises. |
+{/* END GENERATED gbx_rst_asformat */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**. Output formats are limited to rasterio's bundled-GDAL writable driver set; the tile is re-encoded in the requested format. `'COG'` produces a Cloud Optimized GeoTIFF (512-pixel blocks, size-adaptive ZSTD compression, and overviews when the tile is larger than 512 pixels), the same layout as [`rst_cog_convert`](#rst_cog_convert).
 :::
 
 :::note Heavyweight tier
-`'COG'` does not produce a Cloud Optimized GeoTIFF in the heavyweight tier yet: the tile is written as a plain GeoTIFF. Use the lightweight tier when you need the COG layout from `rst_asformat`.
+`'COG'` is written by GDAL's COG driver with its default options; its block size, compression and overviews are not the lightweight tier's.
 :::
 
 :::note Lightweight Python — virtual-tile force-output
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_asformat(tile: Column, newFormat: Column): Column` — Convert to another format.
+Convert to another format. A driver that is unknown, or cannot write a raster, raises an error that names it. An error tile in comes out as it is.
 
 <FunctionExamples
   name="rst_asformat"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
@@ -3171,7 +3200,20 @@ _Example clip geometry: a WKT polygon in the raster's native CRS (EPSG:32618, no
 
 ### rst_percentile_stretch
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_percentile_stretch: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_percentile_stretch(tile, lo_pct, hi_pct)` | `TILE` |
+| Python | `rasterx.functions.rst_percentile_stretch(tile, lo_pct, hi_pct, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to stretch. |
+| `lo_pct` | `DOUBLE` |  | The lower percentile, in `[0, 100]` and below `hi_pct`: the value at it becomes 0. |
+| `hi_pct` | `DOUBLE` |  | The upper percentile, in `[0, 100]`: the value at it becomes 255. |
+{/* END GENERATED gbx_rst_percentile_stretch */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **NumPy**. Computes per-band percentiles over valid pixels, clips to that range, and linearly rescales to [0,255]. Each band is stretched independently.
@@ -3181,13 +3223,12 @@ Powered by **rasterio** + **NumPy**. Computes per-band percentiles over valid pi
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_percentile_stretch(tile: Column, lo_pct: Column, hi_pct: Column): Column` — Per-band percentile contrast stretch to uint8. For each band, `lo_pct` and `hi_pct` (percentiles in 0–100) define the stretch range: pixels at the lower percentile map to 0, at the upper percentile map to 255, and intermediate pixels are linearly rescaled. NoData pixels remain 0 in the output. Typical values: `lo_pct=2.0, hi_pct=98.0` (trim outliers and stretch to full uint8 range). Output is a uint8 GTiff with the same bands, extent, and CRS as the input.
+Per-band percentile contrast stretch to uint8. For each band, `lo_pct` and `hi_pct` (percentiles in 0–100) define the stretch range. Pixels at the lower percentile map to 0, those at the upper percentile map to 255, and the rest are linearly rescaled. NoData pixels remain 0 in the output. Typical values are `lo_pct=2.0, hi_pct=98.0`, which trim outliers and use the full uint8 range. The output is a uint8 GTiff with the same bands, extent, and CRS as the input.
 
 <FunctionExamples
   name="rst_percentile_stretch"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
@@ -3345,34 +3386,58 @@ Per-pixel sum across an `ARRAY` of aligned tiles. **On invocation** the tiles ar
 
 ### rst_convolve
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_convolve: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_convolve(tile, kernel)` | `TILE` |
+| Python | `rasterx.functions.rst_convolve(tile, kernel, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to convolve. |
+| `kernel` | `ARRAY<ARRAY<DOUBLE>>` |  | A 2-D array of weights with an odd number of rows and columns, applied unflipped (correlation). |
+{/* END GENERATED gbx_rst_convolve */}
 
 See [interpolation & fill](./grid-raster-tessellation#interpolation-and-fill) to choose among sampling, resampling, and gap-filling.
 
 :::note Lightweight tier (pyrx)
-Powered by **SciPy** (`scipy.ndimage`). Output is Float64 and border pixels are filled by edge-replication; the heavyweight tier preserves the input dtype and leaves border pixels unchanged.
+Powered by **SciPy** (`scipy.ndimage`). Both tiers give a Float64 result and apply the kernel unflipped, with the edges zero-padded. A NoData or masked neighbour adds 0, and the result is never NoData.
 :::
 
 :::note Lightweight Python — virtual-tile force-output
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_convolve(tile: Column, kernel: Column): Column` — Apply convolution kernel.
+Apply a convolution kernel. A kernel that is not a rectangular array with an odd number of rows and columns raises an error that names its shape.
 
 _Example kernel: 3×3 identity (`[[0,0,0],[0,1,0],[0,0,0]]`), which passes pixels through unchanged._
 
 <FunctionExamples
   name="rst_convolve"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
 ### rst_derivedband
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_derivedband: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_derivedband(tile, python_func, func_name)` | `TILE` |
+| Python | `rasterx.functions.rst_derivedband(tile, python_func, func_name, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile whose bands are the pixel function's input. |
+| `python_func` | `STRING` |  | Python source that defines the pixel function, with GDAL's VRT pixel-function signature `func(in_ar, out_ar, xoff, yoff, xsize, ysize, raster_xsize, raster_ysize, buf_radius, gt, **kwargs)`: `in_ar` is the list of band arrays and `out_ar` the output array the function fills in place. |
+| `func_name` | `STRING` |  | The name of the function in `python_func`. A source that does not parse, or that defines no such name, raises. |
+{/* END GENERATED gbx_rst_derivedband */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** with GDAL VRT Python pixel functions. A pixel function authored for one tier runs unchanged in the other.
@@ -3382,45 +3447,67 @@ Powered by **rasterio** with GDAL VRT Python pixel functions. A pixel function a
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_derivedband(tile: Column, pyfunc: String, funcName: String): Column` — Apply Python UDF to derive band.
+Apply a Python pixel function to derive a band. The function runs in the session's Python (`exec`), so only code you trust belongs in `python_func`. A source that does not parse, or that defines no function of the name `func_name`, raises an error that names it.
 
 <FunctionExamples
   name="rst_derivedband"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxBandmathLightCode} pythonSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
 />
 
 ### rst_filter
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_filter: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_filter(tile, kernel_size, operation)` | `TILE` |
+| Python | `rasterx.functions.rst_filter(tile, kernel_size, operation, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to filter. |
+| `kernel_size` | `INT` |  | The side of the square window, a positive odd integer. |
+| `operation` | `STRING` |  | `'min'`, `'max'`, `'mean'` or `'median'`, in any case. Another word raises. |
+{/* END GENERATED gbx_rst_filter */}
 
 See [interpolation & fill](./grid-raster-tessellation#interpolation-and-fill) to choose among sampling, resampling, and gap-filling.
 
 :::note Lightweight tier (pyrx)
-Powered by **SciPy** (`scipy.ndimage`). The averaging filter is named `'mean'` (not `'avg'`) and `'mode'` is unavailable; the averaging output is Float32 and near-edge values may differ slightly from the heavyweight tier.
+Powered by **SciPy** (`scipy.ndimage`). Both tiers take `'min'`, `'max'`, `'mean'` and `'median'` (any case); `'avg'` and `'mode'` are not accepted. The median of an even number of valid pixels, at an edge or beside NoData, is the mean of the two middle values.
 :::
 
 :::note Lightweight Python — virtual-tile force-output
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_filter(tile: Column, kernelSize: Column, operation: Column): Column` — Spatial filter (e.g. median, avg).
+Spatial filter over a square window. A window width that is not a positive odd number raises an error that names it. So does an operation that is not one of the four.
 
 <FunctionExamples
   name="rst_filter"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
 ### rst_initnodata
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_initnodata: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_initnodata(tile)` | `TILE` |
+| Python | `rasterx.functions.rst_initnodata(tile, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to give a NoData value. |
+{/* END GENERATED gbx_rst_initnodata */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**. A source without NoData gets the data type's fallback value (for example 65535 for `UInt16`), the same one the heavyweight tier uses. A NoData value the source already declares is kept.
@@ -3430,13 +3517,12 @@ Powered by **rasterio**. A source without NoData gets the data type's fallback v
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_initnodata(tile: Column): Column` — Initialize NoData values.
+Initialize NoData values.
 
 <FunctionExamples
   name="rst_initnodata"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
@@ -3912,7 +3998,19 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, committed to the repo,
 
 ### rst_updatetype
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_updatetype: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_updatetype(tile, new_type)` | `TILE` |
+| Python | `rasterx.functions.rst_updatetype(tile, new_type, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to cast. |
+| `new_type` | `STRING` |  | A GDAL data type name, in any case: `Byte`, `Int8`, `UInt16`, `Int16`, `UInt32`, `Int32`, `Float32` or `Float64`. Another word raises. |
+{/* END GENERATED gbx_rst_updatetype */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**. Output is re-encoded as GeoTIFF; a NoData value that is not representable in the target type is dropped.
@@ -3922,13 +4020,12 @@ Powered by **rasterio**. Output is re-encoded as GeoTIFF; a NoData value that is
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_updatetype(tile: Column, newType: Column): Column` — Convert raster data type.
+Convert raster data type.
 
 <FunctionExamples
   name="rst_updatetype"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
@@ -4481,7 +4578,21 @@ Generic dispatcher that picks a built-in formula by name and wires bands via a `
 
 ### rst_land_cover
 
-<Tier light/>
+{/* BEGIN GENERATED gbx_rst_land_cover: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_land_cover(tile, [method], [n_clusters], [smooth])` | `TILE` |
+| Python | `rasterx.functions.rst_land_cover(tile, method=None, n_clusters=None, smooth=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | A tile of 3 or more bands: red, green, blue (and optionally near-infrared). |
+| `method` | `STRING` | `'hybrid'` | `'spectral'` (thresholds on excess green and brightness), `'kmeans'` or `'hybrid'` (a k-means partition labelled by the same thresholds), in any case. Another word raises. |
+| `n_clusters` | `INT` | `6` | The k-means cluster count (`'kmeans'` and `'hybrid'`), 1 or more. |
+| `smooth` | `INT` | `3` | The de-speckle window in pixels: isolated specks of a class are dropped; 0 turns it off. |
+{/* END GENERATED gbx_rst_land_cover */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **NumPy** + **SciPy**. Classifies a multi-band RGB(+NIR) tile into land-cover class ids using spectral thresholds, k-means clustering, or a hybrid approach. Registered as `gbx_rst_land_cover` in SQL (light-only; no heavyweight Scala equivalent).
@@ -4491,14 +4602,10 @@ Powered by **rasterio** + **NumPy** + **SciPy**. Classifies a multi-band RGB(+NI
 The lightweight **Python** binding accepts three optional keyword arguments the SQL tier does not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**SQL signature:** `gbx_rst_land_cover(tile, method, n_clusters, smooth)` — Classify an RGB(+NIR) tile into land-cover class ids; single-band Int32 tile. Positional args after `tile`: `method` (string), `n_clusters` (int), `smooth` (int).
-
-**Python signature:** `rst_land_cover(tile: Column, *, method: str = "hybrid", classes: List[str] = None, n_clusters: int = 6, smooth: int = 3): Column` — Classify an RGB(+NIR) tile into land-cover class ids; single-band Int32 tile.
-
-**Parameters:** `method` — `"spectral"` (fixed excess-green / brightness thresholds), `"kmeans"` (a `scipy` k-means partition over RGB + excess-green + brightness features, with clusters labeled by the same spectral thresholds), or `"hybrid"` (default; same k-means partition as `"kmeans"` today, kept as a distinct branch so a later release can diverge it); `classes` — not yet wired through the columnar UDF: only the built-in default class scheme is supported, and a non-`None` value raises `NotImplementedError`; `n_clusters` — k-means cluster count (`"kmeans"`/`"hybrid"` only); `smooth` — de-speckle window in pixels (a binary-opening pass drops isolated salt-and-pepper specks of each class back to NoData; `0` disables it)
+Classify an RGB(+NIR) tile into land-cover class ids. The `'spectral'` method uses fixed excess-green and brightness thresholds. The `'kmeans'` method partitions the pixels with a `scipy` k-means over RGB, excess green and brightness, then labels each cluster by the same thresholds. The default `'hybrid'` is the same partition as `'kmeans'` today, kept as its own word so a later release can diverge it. `smooth` runs a binary-opening pass that drops isolated salt-and-pepper specks of each class back to NoData.
 
 Requires a **3+ band** tile (RGB, optionally +NIR — a 4th band is read but not yet consumed by
-any classifier). Each output pixel is an index into the class scheme —
+any classifier). A tile with fewer bands is an error tile. Each output pixel is an index into the class scheme —
 `land_cover.DEFAULT_CLASSES` (`["vegetation", "bare", "impervious", "dark"]`) by default — so
 map id to name with `DEFAULT_CLASSES[value]`. NoData / unclassified pixels are `-1`, which is
 also the output tile's NoData value.
@@ -4517,7 +4624,7 @@ threshold.
 <FunctionExamples
   name="rst_land_cover"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={pyrxCode}                pythonLightSource="docs/tests/python/api/pyrx_functions.py"
+  python={pyrxCode}                pythonSource="docs/tests/python/api/pyrx_functions.py"
   testFile="python/geobrix/test/pyrx/test_docs_examples.py"
 />
 
@@ -4640,7 +4747,19 @@ Per-pixel transformations and band-level extraction.
 
 ### rst_band
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_band: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_band(tile, band_index)` | `TILE` |
+| Python | `rasterx.functions.rst_band(tile, band_index, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to take a band from. |
+| `band_index` | `INT` |  | The 1-based band to extract, in `[1 .. numbands]`. |
+{/* END GENERATED gbx_rst_band */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**.
@@ -4650,15 +4769,14 @@ Powered by **rasterio**.
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_band(tile: Column, bandIndex: Column): Column` — Extract a single band from a multi-band raster as a new single-band tile (`gdal.Translate -b N`). 1-based band index.
+Extract a single band from a multi-band raster as a new single-band tile (`gdal.Translate -b N`). 1-based band index.
 
 _Example uses the multiband fixture (`rgb_nir_small.tif`, 3 bands) to demonstrate extraction; result has `num_bands = 1`._
 
 <FunctionExamples
   name="rst_band"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
@@ -4802,28 +4920,51 @@ See [Raster Sampling](./raster-sampling) for the full workflow guide.
 
 ### rst_setcrs
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_setcrs: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_setcrs(tile, crs)` | `TILE` |
+| Python | `rasterx.functions.rst_setcrs(tile, crs)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to relabel. |
+| `crs` | `STRING` |  | The CRS to stamp: an authority code such as `'EPSG:3857'` or `'ESRI:54008'`, WKT, PROJ4, PROJJSON, or an integer string (an EPSG code). A value that is no CRS raises. |
+{/* END GENERATED gbx_rst_setcrs */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **pyproj**. Stamps the CRS without reprojecting.
 :::
 
-**Signature:** `rst_setcrs(tile: Column, crs: Column): Column` — Stamp a CRS onto a raster that lacks (or has a wrong) spatial reference, from a CRS *string* (`EPSG:x` / `ESRI:x` / WKT / PROJ4; an int-castable string is treated as a SRID). Does NOT reproject — only rewrites the CRS metadata. Use `rst_transformcrs` when you need an actual reprojection. See [Coordinate Reference Systems](./coordinate-reference-systems).
+Stamp a CRS onto a raster that lacks a spatial reference, or has a wrong one, from a CRS *string* (`EPSG:x` / `ESRI:x` / WKT / PROJ4). An int-castable string is treated as a SRID. Does NOT reproject — only rewrites the CRS metadata. Use `rst_transformcrs` when you need an actual reprojection. See [Coordinate Reference Systems](./coordinate-reference-systems).
 
 Distinct from `rst_setsrid` (integer EPSG only): `rst_setcrs` accepts any CRS string — an authority code (`EPSG:3857`, `ESRI:54008`), WKT, or PROJ4 — so a non-EPSG CRS can be applied. An int-castable string (`'4326'`) behaves like `rst_setsrid(tile, 4326)`. See the [CRS: SRID int vs CRS string](#rst_crs) note above.
 
 <FunctionExamples
   name="rst_setcrs"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
 ### rst_setsrid
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_setsrid: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_setsrid(tile, srid)` | `TILE` |
+| Python | `rasterx.functions.rst_setsrid(tile, srid, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to relabel. |
+| `srid` | `INT` |  | The code to stamp, an EPSG or ESRI code; `0` clears the CRS. A negative number, or a positive code that is neither, raises. |
+{/* END GENERATED gbx_rst_setsrid */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**. Stamps the CRS without reprojecting.
@@ -4833,13 +4974,12 @@ Powered by **rasterio**. Stamps the CRS without reprojecting.
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_setsrid(tile: Column, srid: Column): Column` — Stamp a SRID (`>= 0`; an EPSG or ESRI code) onto a raster that lacks (or has a wrong) spatial reference; `0` clears the CRS. Does NOT reproject — only rewrites the CRS metadata. A negative SRID is rejected, and a positive code that is neither EPSG nor ESRI raises when stamped. Use `rst_transform` when you need an actual reprojection, or `rst_setcrs` to stamp from a CRS string. See [Coordinate Reference Systems](./coordinate-reference-systems).
+Stamp a SRID (`>= 0`; an EPSG or ESRI code) onto a raster that lacks (or has a wrong) spatial reference; `0` clears the CRS. Does NOT reproject — only rewrites the CRS metadata. A negative SRID is rejected, and a positive code that is neither EPSG nor ESRI raises when stamped. Use `rst_transform` when you need an actual reprojection, or `rst_setcrs` to stamp from a CRS string. See [Coordinate Reference Systems](./coordinate-reference-systems).
 
 <FunctionExamples
   name="rst_setsrid"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />

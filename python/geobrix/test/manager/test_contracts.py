@@ -1813,34 +1813,6 @@ def test_every_pyrx_column_api_udf_carries_the_cap_at_the_call():
     assert bare == []
 
 
-def test_the_column_api_reads_at_the_sessions_read_cap(spark, tmp_path):
-    """A light Column-API call carries the session's cap from the driver, as a registered function does: the same tile
-    is refused (with a Fix) under a lowered cap and read without it."""
-    from pyspark.sql import functions as f
-    from pyspark.sql.types import StructField, StructType
-
-    from databricks.labs.gbx.bench import oracles
-    from databricks.labs.gbx.ds.file_gbx import READ_CAP_KEY
-    from databricks.labs.gbx.pyrx import functions as prx
-    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
-
-    tile = oracles._build("tile_4326", str(tmp_path))  # 12 KiB decoded
-    df = spark.createDataFrame(
-        [(tile,)], StructType([StructField("tile", V2_TILE_SCHEMA)])
-    )
-
-    def retyped():
-        return prx.rst_updatetype("tile", f.lit("Float64")).alias("t")
-
-    assert df.select(retyped()).first()["t"]["raster"] is not None
-    spark.conf.set(READ_CAP_KEY, "4096")
-    try:
-        with pytest.raises(Exception, match="Fix:"):
-            df.select(retyped()).first()
-    finally:
-        spark.conf.unset(READ_CAP_KEY)
-
-
 def test_a_worker_with_no_memory_signal_reads_a_tile_at_the_classic_cap(spark):
     """End to end: the host's Python workers have no SPARK_*_MEMORY (a standard-access worker's position), so their own
     budget is 64 MiB. The session is classic, so the driver carries 1536 MiB, and a 67 MB tile is read through the

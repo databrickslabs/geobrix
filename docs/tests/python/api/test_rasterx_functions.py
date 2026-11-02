@@ -60,30 +60,6 @@ def test_heavy_output_constants_exist():
 
 
 # ---------------------------------------------------------------------------
-# Accessor family — heavy-tier tests
-# ---------------------------------------------------------------------------
-
-
-def test_rst_getsubdataset_python_heavy_example(spark):
-    """rst_getsubdataset extracts the prAdjust subdataset and returns a tile struct."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_getsubdataset_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_getsubdataset")
-
-
-def test_accessor_heavy_output_constants_exist():
-    """All accessor heavy-tier *_output constants are present and non-empty strings."""
-    assert rasterx_functions is not None
-    output_names = [
-        "rst_getsubdataset_python_heavy_example_output",
-    ]
-    for name in output_names:
-        assert hasattr(rasterx_functions, name), f"Missing output constant: {name}"
-        val = getattr(rasterx_functions, name)
-        assert isinstance(val, str) and val.strip(), f"Output constant is empty: {name}"
-
-
-# ---------------------------------------------------------------------------
 # Aggregator heavy-Python tests
 # ---------------------------------------------------------------------------
 
@@ -100,20 +76,6 @@ def _assert_heavy_tile(result, name):
 # ---------------------------------------------------------------------------
 
 
-def test_rst_asformat_python_heavy_example(spark):
-    """rst_asformat returns a non-null tile struct."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_asformat_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_asformat")
-
-
-def test_rst_band_python_heavy_example(spark):
-    """rst_band returns a non-null tile struct (single band from multiband fixture)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_band_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_band")
-
-
 def test_rst_buildoverviews_python_heavy_example(spark):
     """rst_buildoverviews returns a non-null tile struct."""
     assert rasterx_functions is not None
@@ -128,46 +90,11 @@ def test_rst_cog_convert_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_cog_convert")
 
 
-def test_rst_convolve_python_heavy_example(spark):
-    """rst_convolve returns a non-null tile struct."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_convolve_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_convolve")
-
-
-def test_rst_filter_python_heavy_example(spark):
-    """rst_filter returns a non-null tile struct."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_filter_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_filter")
-
-
 def test_rst_frombands_python_heavy_example(spark):
     """rst_frombands returns a non-null tile struct (3 bands re-stacked)."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_frombands_python_heavy_example(spark)
     _assert_heavy_tile(result, "rst_frombands")
-
-
-def test_rst_initnodata_python_heavy_example(spark):
-    """rst_initnodata returns a non-null tile struct."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_initnodata_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_initnodata")
-
-
-def test_rst_setsrid_python_heavy_example(spark):
-    """rst_setsrid returns a non-null tile struct."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_setsrid_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_setsrid")
-
-
-def test_rst_updatetype_python_heavy_example(spark):
-    """rst_updatetype returns a non-null tile struct (data type changed to Float32)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_updatetype_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_updatetype")
 
 
 def test_rst_combineavg_agg_python_heavy_example(spark):
@@ -247,13 +174,6 @@ def test_rst_custom_rasterize_agg_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_custom_rasterize_agg")
 
 
-def test_rst_align_to_python_heavy_example(spark):
-    """rst_align_to returns a non-null tile struct (warped to reference grid)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_align_to_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_align_to")
-
-
 def test_rst_isoband_python_heavy_example(spark):
     """rst_isoband returns a non-empty list of polygon patches from a DEM tile."""
     assert rasterx_functions is not None
@@ -326,13 +246,6 @@ def test_rst_combinesum_python_heavy_example(spark):
     assert rasterx_functions is not None
     result = rasterx_functions.rst_combinesum_python_heavy_example(spark)
     _assert_heavy_tile(result, "rst_combinesum")
-
-
-def test_rst_derivedband_python_heavy_example(spark):
-    """rst_derivedband returns a non-null tile struct (derived from Python UDF)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_derivedband_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_derivedband")
 
 
 def test_rst_merge_python_heavy_example(spark):

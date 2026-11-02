@@ -4,10 +4,10 @@
     "gbx_rst_align_to": {
       "examples": "Examples:\n      > SELECT gbx_rst_align_to(tile, reference_tile) AS aligned FROM paired_rasters;",
       "usage_args": "tile, reference_tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Warp a tile onto the grid of a reference tile, with nearest-neighbour resampling.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.1"
@@ -15,10 +15,10 @@
     "gbx_rst_asformat": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_asformat(tile, 'GTiff') as geotiff_tile FROM netcdf_rasters;",
       "usage_args": "tile, new_format",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Re-encode the raster to another GDAL driver (for example PNG, GTiff or COG).",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -48,10 +48,10 @@
     "gbx_rst_band": {
       "examples": "Examples:\n      > SELECT gbx_rst_band(tile, 1) AS b1 FROM rasters;",
       "usage_args": "tile, band_index",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Extract one band as a new single-band tile.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -365,10 +365,10 @@
     "gbx_rst_convolve": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_convolve(tile, kernel) as filtered FROM rasters_with_kernels;",
       "usage_args": "tile, kernel",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Convolve each band with a 2-D kernel.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -495,12 +495,12 @@
       "since": "0.5.1"
     },
     "gbx_rst_derivedband": {
-      "examples": "Examples:\n      > SELECT gbx_rst_derivedband(tile, 'def double(in_ar, out_ar, xoff, yoff, xsize, ysize, raster_xsize, raster_ysize, buf_radius, gt, **kwargs):\\n    out_ar[:] = in_ar[0] * 2\\n', 'double') AS result FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_derivedband(tile, 'def double(in_ar, out_ar, xoff, yoff, xsize, ysize, raster_xsize, raster_ysize, buf_radius, gt, **kwargs):\\n out_ar[:] = in_ar[0] * 2\\n', 'double') AS result FROM multiband_rasters;",
       "usage_args": "tile, python_func, func_name",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Apply a Python pixel function to the bands of the raster.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -562,10 +562,10 @@
     "gbx_rst_filter": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_filter(tile, 3, 'median') as denoised FROM noisy_rasters;",
       "usage_args": "tile, kernel_size, operation",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Apply a focal minimum, maximum, mean or median over a square window.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -648,10 +648,10 @@
     "gbx_rst_getsubdataset": {
       "examples": "Examples:\n      > SELECT gbx_rst_getsubdataset(tile, 'prAdjust') AS subdataset FROM netcdf_rasters;",
       "usage_args": "tile, subset_name",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Extract the named subdataset of a container raster as a tile.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -833,10 +833,10 @@
     "gbx_rst_initnodata": {
       "examples": "Examples:\n      > SELECT gbx_rst_initnodata(tile) as tile FROM rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Ensure a NoData value is set on the raster; an existing value is kept.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -865,9 +865,13 @@
     },
     "gbx_rst_land_cover": {
       "examples": "Examples:\n      > SELECT gbx_rst_land_cover(tile, 'spectral', 6, 0) AS lc FROM multiband_rasters;",
-      "bindings": [
-        "sql"
-      ]
+      "usage_args": "tile, [method], [n_clusters], [smooth]",
+      "description": "Classify an RGB tile into land-cover class ids.",
+      "surfaces": [
+        "session",
+        "python"
+      ],
+      "since": "0.5.2"
     },
     "gbx_rst_maketiles": {
       "examples": "Examples:\n      > SELECT gbx_rst_maketiles(tile, 4) FROM rasters;",
@@ -1012,9 +1016,13 @@
     "gbx_rst_percentile_stretch": {
       "examples": "Examples:\n      > SELECT gbx_rst_percentile_stretch(tile, 2.0, 98.0) AS stretched FROM multiband_rasters;",
       "usage_args": "tile, lo_pct, hi_pct",
-      "bindings": [
-        "sql"
-      ]
+      "description": "Stretch the contrast of each band between two percentiles, to 8 bits.",
+      "surfaces": [
+        "session",
+        "python",
+        "scala"
+      ],
+      "since": "0.5.2"
     },
     "gbx_rst_pixelcount": {
       "examples": "Examples:\n      > SELECT gbx_rst_pixelcount(tile) AS pixel_count FROM multiband_rasters;",
@@ -1359,10 +1367,10 @@
     "gbx_rst_setcrs": {
       "examples": "Examples:\n      > SELECT gbx_rst_setcrs(tile, 'EPSG:3857') AS tagged FROM rasters;",
       "usage_args": "tile, crs",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Stamp a CRS on the raster without reprojecting it, from a CRS string.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.0"
@@ -1370,10 +1378,10 @@
     "gbx_rst_setsrid": {
       "examples": "Examples:\n      > SELECT gbx_rst_setsrid(tile, 4326) AS tagged FROM rasters;",
       "usage_args": "tile, srid",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Stamp the CRS of a raster from an integer SRID without reprojecting it.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -1556,10 +1564,10 @@
     "gbx_rst_updatetype": {
       "examples": "Examples:\n      > SELECT gbx_rst_updatetype(tile, 'Float32') as float_tile FROM rasters;",
       "usage_args": "tile, new_type",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Cast all bands of the raster to another data type.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"

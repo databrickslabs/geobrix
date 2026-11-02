@@ -1950,6 +1950,7 @@ def test_rst_band_of_the_alpha_labelled_band_parity(
     included), and a colour band is unchanged. Started from a virtual tile, the light tier
     records the selection and applies it when the tile is read (``rst_asformat`` reads it).
     """
+    from pyspark.sql import functions as f
     from rasterio.io import MemoryFile
 
     from databricks.labs.gbx.pyrx.core._nodata import valid_mask
@@ -1963,12 +1964,21 @@ def test_rst_band_of_the_alpha_labelled_band_parity(
     raster = _start_from(al.layout_bytes(layout, data=data), start, tmp_path)
 
     def light_fn(m, t):
-        out = m.rst_band(t, band)
-        return m.rst_asformat(out, "GTiff") if start == "virtual" else out
+        out = f.call_function("gbx_rst_band", t, f.lit(band))
+        return (
+            f.call_function("gbx_rst_asformat", out, f.lit("GTiff"))
+            if start == "virtual"
+            else out
+        )
 
     outs = {
         "light": _single_tile(spark, raster, "light", light_fn),
-        "heavy": _single_tile(spark, raster, "heavy", lambda m, t: m.rst_band(t, band)),
+        "heavy": _single_tile(
+            spark,
+            raster,
+            "heavy",
+            lambda m, t: f.call_function("gbx_rst_band", t, f.lit(band)),
+        ),
     }
     for tier, out in outs.items():
         with MemoryFile(out) as mf, mf.open() as ds:
@@ -1986,18 +1996,29 @@ def test_initnodata_masked_source_parity(spark_with_jar, tmp_path, start):
     tiers declare 65535, keep the masked pixels and the real 65535s out of the valid
     data, and agree on every pixel. Started from a virtual tile, the light tier records
     the instruction and applies it when the tile is read; ``rst_asformat`` reads it."""
+    from pyspark.sql import functions as f
+
     spark = spark_with_jar
     raster = _start_from(
         _mw_raster(**_MW_SRC_4326, masked=True, nodata=None), start, tmp_path
     )
 
     def light_fn(m, t):
-        out = m.rst_initnodata(t)
-        return m.rst_asformat(out, "GTiff") if start == "virtual" else out
+        out = f.call_function("gbx_rst_initnodata", t)
+        return (
+            f.call_function("gbx_rst_asformat", out, f.lit("GTiff"))
+            if start == "virtual"
+            else out
+        )
 
     light = _decoded(_single_tile(spark, raster, "light", light_fn))
     heavy = _decoded(
-        _single_tile(spark, raster, "heavy", lambda m, t: m.rst_initnodata(t))
+        _single_tile(
+            spark,
+            raster,
+            "heavy",
+            lambda m, t: f.call_function("gbx_rst_initnodata", t),
+        )
     )
     vals = _mw_values()
     hidden = np.zeros_like(vals, dtype=bool)
@@ -2072,7 +2093,7 @@ def test_clip_masked_source_hexagon_parity(spark_with_jar, tmp_path, nodata, sta
     raster = _start_from(raster, start, tmp_path)
 
     def clip(m, t):
-        return m.rst_clip(t, f.lit(_CLIP_HEXAGON), f.lit(True))
+        return f.call_function("gbx_rst_clip", t, f.lit(_CLIP_HEXAGON), f.lit(True))
 
     light = _decoded(_single_tile(spark, raster, "light", clip))
     heavy = _decoded(_single_tile(spark, raster, "heavy", clip))

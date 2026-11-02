@@ -93,19 +93,6 @@ def register(_spark: SparkSession) -> None:
         pass
 
 
-def rst_getsubdataset(tile: ColLike, subset_name: ColLike) -> Column:
-    """Return a sub-dataset (e.g. HDF sublayer) by name.
-
-    Args:
-        tile: Raster tile column.
-        subset_name: Name of the sub-dataset.
-
-    Returns:
-        Column of raster tile (sub-dataset).
-    """
-    return f.call_function("gbx_rst_getsubdataset", _col(tile), _col(subset_name))
-
-
 # Aggregators
 
 
@@ -1634,19 +1621,6 @@ def rst_quadbin_rasterize_agg(
 # Operations
 
 
-def rst_asformat(tile: ColLike, new_format: ColLike) -> Column:
-    """Convert the raster to a different GDAL format (e.g. COG, Zarr).
-
-    Args:
-        tile: Raster tile column.
-        new_format: Target format/driver name.
-
-    Returns:
-        Column of raster tile in the new format.
-    """
-    return f.call_function("gbx_rst_asformat", _col(tile), _col(new_format))
-
-
 def rst_combineavg(tiles: ColLike) -> Column:
     """Combine multiple raster tiles by averaging (same extent/cellsize).
 
@@ -1731,22 +1705,6 @@ def rst_combinesum(tiles: ColLike) -> Column:
     return f.call_function("gbx_rst_combinesum", _col(tiles))
 
 
-def rst_align_to(tile: ColLike, reference_tile: ColLike) -> Column:
-    """Warp a tile to match the grid of a reference tile.
-
-    Output has exactly the same CRS, extent, width, height, and geotransform as
-    the reference tile. Uses nearest-neighbour resampling.
-
-    Args:
-        tile: The raster tile to warp.
-        reference_tile: Reference tile whose grid defines the output grid.
-
-    Returns:
-        Column of warped raster tile aligned to the reference grid.
-    """
-    return f.call_function("gbx_rst_align_to", _col(tile), _col(reference_tile))
-
-
 def rst_isoband(tile: ColLike, breaks: ColLike) -> Column:
     """Reclassify a raster band into value bins and return contour polygons.
 
@@ -1765,63 +1723,6 @@ def rst_isoband(tile: ColLike, breaks: ColLike) -> Column:
     return f.call_function("gbx_rst_isoband", _col(tile), _col(breaks))
 
 
-def rst_convolve(tile: ColLike, kernel: ColLike) -> Column:
-    """Apply a convolution kernel to the raster.
-
-    Args:
-        tile: Raster tile column.
-        kernel: Kernel matrix (e.g. 3x3) as column.
-
-    Returns:
-        Column of convolved raster tile.
-    """
-    return f.call_function("gbx_rst_convolve", _col(tile), _col(kernel))
-
-
-def rst_derivedband(tile: ColLike, python_func: ColLike, func_name: ColLike) -> Column:
-    """Apply a Python UDF to each pixel (or band) to produce a derived band.
-
-    Args:
-        tile: Raster tile column.
-        python_func: Python source code of the UDF (string).
-        func_name: Name of the callable in python_func.
-
-    Returns:
-        Column of raster tile with derived band(s).
-    """
-    return f.call_function(
-        "gbx_rst_derivedband", _col(tile), _col(python_func), _col(func_name)
-    )
-
-
-def rst_filter(tile: ColLike, kernel_size: ColLike, operation: ColLike) -> Column:
-    """Apply a filter (e.g. min, max, mean) over a kernel window.
-
-    Args:
-        tile: Raster tile column.
-        kernel_size: Size of the kernel (e.g. 3 for 3x3).
-        operation: Filter operation name (e.g. min, max, mean).
-
-    Returns:
-        Column of filtered raster tile.
-    """
-    return f.call_function(
-        "gbx_rst_filter", _col(tile), _col(kernel_size), _col(operation)
-    )
-
-
-def rst_initnodata(tile: ColLike) -> Column:
-    """Initialise or fix NoData values in the raster (e.g. from metadata).
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of raster tile with NoData set.
-    """
-    return f.call_function("gbx_rst_initnodata", _col(tile))
-
-
 def rst_merge(tiles: ColLike) -> Column:
     """Merge multiple raster tiles into one (e.g. mosaic).
 
@@ -1832,19 +1733,6 @@ def rst_merge(tiles: ColLike) -> Column:
         Column of merged raster tile.
     """
     return f.call_function("gbx_rst_merge", _col(tiles))
-
-
-def rst_updatetype(tile: ColLike, new_type: ColLike) -> Column:
-    """Update the declared data type of the raster (e.g. after conversion).
-
-    Args:
-        tile: Raster tile column.
-        new_type: New GDAL data type name (e.g. Byte, Float32).
-
-    Returns:
-        Column of raster tile with updated type metadata.
-    """
-    return f.call_function("gbx_rst_updatetype", _col(tile), _col(new_type))
 
 
 def rst_tilexyz(
@@ -2490,62 +2378,6 @@ def rst_dtmfromgeoms_agg(
 # ---------------------------------------------------------------------------
 
 
-def rst_setcrs(tile: ColLike, crs: ColLike) -> Column:
-    """Stamp the CRS WITHOUT reprojecting, accepting any CRS string.
-
-    Accepts an int EPSG code, an int-castable string (``"4326"``), or any
-    string accepted by rasterio's CRS parser such as ``"ESRI:54008"``, WKT, or
-    PROJ4 strings. Pixel values and the GeoTransform are unchanged; only the
-    CRS metadata is rewritten. Use ``rst_transformcrs`` for a reprojecting warp.
-
-    Args:
-        tile: Tile struct column.
-        crs:  CRS descriptor — int EPSG code, int-castable string, authority
-              string (``"EPSG:4326"``, ``"ESRI:54008"``), WKT, or PROJ4.
-
-    Returns:
-        Tile with the same pixels/transform but the new CRS.
-    """
-    return f.call_function("gbx_rst_setcrs", _col(tile), _crs_col(crs))
-
-
-def rst_setsrid(tile: ColLike, srid: ColLike) -> Column:
-    """Stamp an EPSG code on the raster's spatial-reference header (no warp).
-
-    Use when the source raster lost or has incorrect CRS metadata but the
-    actual pixel grid is already aligned with the target CRS. For real
-    reprojection (with pixel-grid warp) use :func:`rst_transform`.
-
-    Args:
-        tile: Raster tile column.
-        srid: EPSG code (positive integer).
-
-    Returns:
-        Raster tile column with rewritten SR header.
-    """
-    return f.call_function("gbx_rst_setsrid", _col(tile), _col(srid))
-
-
-def rst_percentile_stretch(tile: ColLike, lo_pct: ColLike, hi_pct: ColLike) -> Column:
-    """Per-band percentile contrast stretch to uint8 [0,255].
-
-    For each band, computes lo_pct and hi_pct percentiles over valid (non-NoData)
-    pixels, clips to that range, and linearly rescales to [0,255]. Output is uint8.
-    NoData pixels are preserved as 0.
-
-    Args:
-        tile: Raster tile column (any number of bands).
-        lo_pct: Lower percentile threshold (0-100), e.g., 2.0 for 2nd percentile.
-        hi_pct: Upper percentile threshold (0-100), e.g., 98.0 for 98th percentile.
-
-    Returns:
-        Multi-band uint8 GTiff tile column (same number of bands as input).
-    """
-    return f.call_function(
-        "gbx_rst_percentile_stretch", _col(tile), _col(lo_pct), _col(hi_pct)
-    )
-
-
 def rst_buildoverviews(
     tile: ColLike,
     levels: ColLike,
@@ -2571,19 +2403,6 @@ def rst_buildoverviews(
         else (f.lit(resampling) if isinstance(resampling, str) else _col(resampling))
     )
     return f.call_function("gbx_rst_buildoverviews", _col(tile), _col(levels), res_col)
-
-
-def rst_band(tile: ColLike, band_index: ColLike) -> Column:
-    """Extract a single band as a new single-band tile via ``gdal.Translate -b <i>``.
-
-    Args:
-        tile: Multi-band raster tile column.
-        band_index: 1-based band index to extract.
-
-    Returns:
-        Single-band raster tile column.
-    """
-    return f.call_function("gbx_rst_band", _col(tile), _col(band_index))
 
 
 def rst_cog_convert(
@@ -2727,6 +2546,86 @@ def rst_viewshed(
 # BEGIN GENERATED by gbx:manifest:gen: edit manifest/functions.json, then run the generator
 
 
+def rst_align_to(
+    tile: ColLike,
+    reference_tile: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Warp a tile onto the grid of a reference tile, with nearest-neighbour resampling.
+
+    Args:
+        tile: The tile to warp.
+        reference_tile: The tile whose grid (CRS, extent, width, height) the result
+            takes.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        The tile on the reference tile's grid: its CRS, width, height and geotransform,
+        nearest-neighbour values; NoData where the tile does not cover the grid. NULL
+        when either tile is NULL; an error tile in either comes out as itself.
+
+    SQL: ``gbx_rst_align_to(tile, reference_tile)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_align_to",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            reference_tile,
+        )
+    return _api.call(
+        "gbx_rst_align_to",
+        tile,
+        reference_tile,
+    )
+
+
+def rst_asformat(
+    tile: ColLike,
+    new_format: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Re-encode the raster to another GDAL driver (for example PNG, GTiff or COG).
+
+    Args:
+        tile: The tile to re-encode.
+        new_format: A GDAL driver short name that can write a raster, in any case:
+            `'GTiff'`, `'PNG'`, `'COG'`. A name that names none raises.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        The tile with its raster bytes encoded in `new_format` and its `driver` metadata
+        set to the driver the bytes open as (`'COG'` is a layout of a GeoTIFF and opens
+        as `'GTiff'`).
+
+    SQL: ``gbx_rst_asformat(tile, new_format)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_asformat",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            new_format,
+        )
+    return _api.call(
+        "gbx_rst_asformat",
+        tile,
+        new_format,
+    )
+
+
 def rst_aspect(
     tile: ColLike,
     trigonometric: ColLike = None,
@@ -2786,6 +2685,44 @@ def rst_avg(
     return _api.call(
         "gbx_rst_avg",
         tile,
+    )
+
+
+def rst_band(
+    tile: ColLike,
+    band_index: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Extract one band as a new single-band tile.
+
+    Args:
+        tile: The tile to take a band from.
+        band_index: The 1-based band to extract, in `[1 .. numbands]`.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band tile with the band's pixels, NoData, data type and georeferencing.
+        A band outside the tile raises.
+
+    SQL: ``gbx_rst_band(tile, band_index)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_band",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            band_index,
+        )
+    return _api.call(
+        "gbx_rst_band",
+        tile,
+        band_index,
     )
 
 
@@ -2958,6 +2895,45 @@ def rst_clip(
     )
 
 
+def rst_convolve(
+    tile: ColLike,
+    kernel: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Convolve each band with a 2-D kernel.
+
+    Args:
+        tile: The tile to convolve.
+        kernel: A 2-D array of weights with an odd number of rows and columns, applied
+            unflipped (correlation).
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A Float64 tile: each band is the weighted sum of its neighbourhood, zero-padded
+        at the edges. A NoData or masked neighbour adds 0; the result is never NoData.
+
+    SQL: ``gbx_rst_convolve(tile, kernel)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_convolve",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            kernel,
+        )
+    return _api.call(
+        "gbx_rst_convolve",
+        tile,
+        kernel,
+    )
+
+
 def rst_crs(
     tile: ColLike,
 ) -> Column:
@@ -2975,6 +2951,52 @@ def rst_crs(
     return _api.call(
         "gbx_rst_crs",
         tile,
+    )
+
+
+def rst_derivedband(
+    tile: ColLike,
+    python_func: ColLike,
+    func_name: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Apply a Python pixel function to the bands of the raster.
+
+    Args:
+        tile: The tile whose bands are the pixel function's input.
+        python_func: Python source that defines the pixel function, with GDAL's VRT
+            pixel-function signature `func(in_ar, out_ar, xoff, yoff, xsize, ysize,
+            raster_xsize, raster_ysize, buf_radius, gt, **kwargs)`: `in_ar` is the list of
+            band arrays and `out_ar` the output array the function fills in place.
+        func_name: The name of the function in `python_func`. A source that does not
+            parse, or that defines no such name, raises.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float64 tile of the function's output, with the tile's
+        georeferencing; where the tile is transparent or masked the result is masked.
+
+    SQL: ``gbx_rst_derivedband(tile, python_func, func_name)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_derivedband",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            python_func,
+            func_name,
+        )
+    return _api.call(
+        "gbx_rst_derivedband",
+        tile,
+        python_func,
+        func_name,
     )
 
 
@@ -3083,6 +3105,50 @@ def rst_fillnodata(
     )
 
 
+def rst_filter(
+    tile: ColLike,
+    kernel_size: ColLike,
+    operation: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Apply a focal minimum, maximum, mean or median over a square window.
+
+    Args:
+        tile: The tile to filter.
+        kernel_size: The side of the square window, a positive odd integer.
+        operation: `'min'`, `'max'`, `'mean'` or `'median'`, in any case. Another word
+            raises.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        The tile with each band filtered over the valid pixels of the window, which
+        shrinks at the edges; a window with no valid pixel is NoData. `'mean'` is
+        Float32, the others keep the data type.
+
+    SQL: ``gbx_rst_filter(tile, kernel_size, operation)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_filter",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            kernel_size,
+            operation,
+        )
+    return _api.call(
+        "gbx_rst_filter",
+        tile,
+        kernel_size,
+        operation,
+    )
+
+
 def rst_format(
     tile: ColLike,
 ) -> Column:
@@ -3139,6 +3205,30 @@ def rst_getnodata(
     return _api.call(
         "gbx_rst_getnodata",
         tile,
+    )
+
+
+def rst_getsubdataset(
+    tile: ColLike,
+    subset_name: ColLike,
+) -> Column:
+    """Extract the named subdataset of a container raster as a tile.
+
+    Args:
+        tile: A tile whose raster is a container with subdatasets, such as a NetCDF
+            file.
+        subset_name: The name of the subdataset (the last part of its GDAL name, such as
+            `'prAdjust'`). A name that matches none raises.
+
+    Returns:
+        The subdataset as a GeoTIFF tile.
+
+    SQL: ``gbx_rst_getsubdataset(tile, subset_name)``
+    """
+    return _api.call(
+        "gbx_rst_getsubdataset",
+        tile,
+        subset_name,
     )
 
 
@@ -3295,6 +3385,40 @@ def rst_index(
     )
 
 
+def rst_initnodata(
+    tile: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Ensure a NoData value is set on the raster; an existing value is kept.
+
+    Args:
+        tile: The tile to give a NoData value.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        The tile with a NoData value: the one it declares, or the data type's fallback
+        (for example 65535 for UInt16) when it declares none.
+
+    SQL: ``gbx_rst_initnodata(tile)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_initnodata",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+        )
+    return _api.call(
+        "gbx_rst_initnodata",
+        tile,
+    )
+
+
 def rst_isempty(
     tile: ColLike,
 ) -> Column:
@@ -3312,6 +3436,58 @@ def rst_isempty(
     return _api.call(
         "gbx_rst_isempty",
         tile,
+    )
+
+
+def rst_land_cover(
+    tile: ColLike,
+    method: ColLike = None,
+    n_clusters: ColLike = None,
+    smooth: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Classify an RGB tile into land-cover class ids.
+
+    Args:
+        tile: A tile of 3 or more bands: red, green, blue (and optionally
+            near-infrared).
+        method: `'spectral'` (thresholds on excess green and brightness), `'kmeans'` or
+            `'hybrid'` (a k-means partition labelled by the same thresholds), in any case.
+            Another word raises. SQL default: ``'hybrid'``.
+        n_clusters: The k-means cluster count (`'kmeans'` and `'hybrid'`), 1 or more.
+            SQL default: ``6``.
+        smooth: The de-speckle window in pixels: isolated specks of a class are dropped;
+            0 turns it off. SQL default: ``3``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Int32 tile of class ids: 0 vegetation, 1 bare, 2 impervious, 3
+        dark; -1 (the tile's NoData) for near-black pixels and dropped specks. A tile of
+        fewer than 3 bands is an error tile.
+
+    SQL: ``gbx_rst_land_cover(tile, [method], [n_clusters], [smooth])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_land_cover",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            method,
+            n_clusters,
+            smooth,
+        )
+    return _api.call(
+        "gbx_rst_land_cover",
+        tile,
+        method,
+        n_clusters,
+        smooth,
     )
 
 
@@ -3623,6 +3799,50 @@ def rst_numbands(
     return _api.call(
         "gbx_rst_numbands",
         tile,
+    )
+
+
+def rst_percentile_stretch(
+    tile: ColLike,
+    lo_pct: ColLike,
+    hi_pct: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Stretch the contrast of each band between two percentiles, to 8 bits.
+
+    Args:
+        tile: The tile to stretch.
+        lo_pct: The lower percentile, in `[0, 100]` and below `hi_pct`: the value at it
+            becomes 0.
+        hi_pct: The upper percentile, in `[0, 100]`: the value at it becomes 255.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A UInt8 tile with the bands of the input, each stretched on its own valid pixels
+        between its two percentiles; a NoData, masked or transparent pixel is 0, which
+        is the NoData value.
+
+    SQL: ``gbx_rst_percentile_stretch(tile, lo_pct, hi_pct)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_percentile_stretch",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            lo_pct,
+            hi_pct,
+        )
+    return _api.call(
+        "gbx_rst_percentile_stretch",
+        tile,
+        lo_pct,
+        hi_pct,
     )
 
 
@@ -4143,6 +4363,70 @@ def rst_scaley(
     )
 
 
+def rst_setcrs(
+    tile: ColLike,
+    crs: ColLike,
+) -> Column:
+    """Stamp a CRS on the raster without reprojecting it, from a CRS string.
+
+    Args:
+        tile: The tile to relabel.
+        crs: The CRS to stamp: an authority code such as `'EPSG:3857'` or
+            `'ESRI:54008'`, WKT, PROJ4, PROJJSON, or an integer string (an EPSG code). A
+            value that is no CRS raises.
+
+    Returns:
+        The tile with the same pixels and geotransform and the CRS stamped; nothing is
+        reprojected.
+
+    SQL: ``gbx_rst_setcrs(tile, crs)``
+    """
+    return _api.call(
+        "gbx_rst_setcrs",
+        tile,
+        crs,
+    )
+
+
+def rst_setsrid(
+    tile: ColLike,
+    srid: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Stamp the CRS of a raster from an integer SRID without reprojecting it.
+
+    Args:
+        tile: The tile to relabel.
+        srid: The code to stamp, an EPSG or ESRI code; `0` clears the CRS. A negative
+            number, or a positive code that is neither, raises.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        The tile with the same pixels and geotransform and the CRS `EPSG:<srid>`;
+        nothing is reprojected.
+
+    SQL: ``gbx_rst_setsrid(tile, srid)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_setsrid",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            srid,
+        )
+    return _api.call(
+        "gbx_rst_setsrid",
+        tile,
+        srid,
+    )
+
+
 def rst_skewx(
     tile: ColLike,
 ) -> Column:
@@ -4531,6 +4815,46 @@ def rst_type(
     return _api.call(
         "gbx_rst_type",
         tile,
+    )
+
+
+def rst_updatetype(
+    tile: ColLike,
+    new_type: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Cast all bands of the raster to another data type.
+
+    Args:
+        tile: The tile to cast.
+        new_type: A GDAL data type name, in any case: `Byte`, `Int8`, `UInt16`, `Int16`,
+            `UInt32`, `Int32`, `Float32` or `Float64`. Another word raises.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A GeoTIFF tile with every band cast to the type: a floating-point value cast to
+        an integer type is rounded and clamped to the type's range; a NoData value the
+        type cannot hold is dropped.
+
+    SQL: ``gbx_rst_updatetype(tile, new_type)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_updatetype",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            new_type,
+        )
+    return _api.call(
+        "gbx_rst_updatetype",
+        tile,
+        new_type,
     )
 
 

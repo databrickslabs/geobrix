@@ -143,10 +143,10 @@ def test_rst_combinesum_python_light_example(spark):
     _assert_materialized_tile(result, "rst_combinesum")
 
 
-def test_rst_derivedband_python_light_example(spark):
+def test_rst_derivedband_python_example(spark):
     """rst_derivedband returns a materialized tile with populated raster bytes."""
     assert bandmath_examples is not None
-    result = bandmath_examples.rst_derivedband_python_light_example(spark)
+    result = bandmath_examples.rst_derivedband_python_example(spark)
     _assert_materialized_tile(result, "rst_derivedband")
 
 

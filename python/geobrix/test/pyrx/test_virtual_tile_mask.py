@@ -415,8 +415,8 @@ def test_rst_initnodata_from_a_virtual_tile(spark, tmp_path):
     for start in (True, False):
         df = _tile_df(spark, p, virtual_start=start)
         row = df.select(
-            rx.rst_pixelcount(prx.rst_initnodata("tile")).alias("n"),
-            rx.rst_max(prx.rst_initnodata("tile")).alias("mx"),
+            rx.rst_pixelcount(rx.rst_initnodata("tile")).alias("n"),
+            rx.rst_max(rx.rst_initnodata("tile")).alias("mx"),
         ).collect()[0]
         got[start] = (list(row["n"]), list(row["mx"]))
     # 1600 pixels - 80 masked - 40 real 65535s (the NoData it stamps)

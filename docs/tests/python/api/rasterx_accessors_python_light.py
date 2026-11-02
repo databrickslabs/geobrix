@@ -223,7 +223,7 @@ rst_getnodata_python_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_getsubdataset_python_light_example(spark):
+def rst_getsubdataset_python_example(spark):
     """Extract a named subdataset from a NetCDF raster tile using the light pyrx tier.
 
     Uses the committed CMIP5 NetCDF fixture (prAdjust_day_HadGEM2-CC_*.nc) which
@@ -231,7 +231,7 @@ def rst_getsubdataset_python_light_example(spark):
     format such as NetCDF; plain GeoTIFFs return no subdatasets.
     Returns the extracted subdataset tile directly.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.table("netcdf_rasters")
@@ -241,7 +241,7 @@ def rst_getsubdataset_python_light_example(spark):
     return result["tile"]
 
 
-rst_getsubdataset_python_light_example_output = """
+rst_getsubdataset_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+

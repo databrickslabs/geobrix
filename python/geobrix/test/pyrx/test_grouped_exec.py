@@ -15,6 +15,7 @@ from pyspark.sql.types import LongType, StructField, StructType
 
 from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA, VirtualTile
 from databricks.labs.gbx.pyrx.grouped_exec import grouped_tile_map
+from databricks.labs.gbx.rasterx import functions as rx
 
 _FLOAT32_ITEMSIZE = 4  # bytes per sample in the test GeoTIFFs (float32)
 
@@ -745,7 +746,7 @@ def test_rst_initnodata_then_a_pixel_grouped_function_on_a_whole_file_tile(
     assert vt.window is None
     df = spark.createDataFrame(
         [(vt.to_row(),)], StructType([StructField("tile", V2_TILE_SCHEMA)])
-    ).select(prx.rst_initnodata("tile").alias("tile"))
+    ).select(rx.rst_initnodata("tile").alias("tile"))
     out = prx.rst_resample_grouped(df, 2.0, "nearest").collect()
     assert len(out) == 1 and out[0]["tile"] is not None, "NULL tile"
     with rasterio.MemoryFile(bytes(out[0]["tile"]["raster"])) as mf, mf.open() as ds:

@@ -39,6 +39,15 @@
       "expect_exit": 0,
       "timeout_seconds": 30
     },
+    "manifest-gen-drift": {
+      "name": "Generated surfaces match the function manifest",
+      "type": "command",
+      "severity": "fail",
+      "enabled": true,
+      "cmd": "[ -f scripts/commands/gbx-manifest-gen.sh ] || { echo 'absent; skip'; exit 0; }; bash scripts/commands/gbx-manifest-gen.sh --check",
+      "expect_exit": 0,
+      "timeout_seconds": 120
+    },
     "param-name-parity": {
       "name": "Parameter name consistency and arity parity across tiers",
       "type": "command",

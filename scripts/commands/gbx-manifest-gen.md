@@ -22,7 +22,7 @@ bash scripts/commands/gbx-manifest-gen.sh [--write | --check] [--only <surface>]
 ## Options
 
 - `--write` — write every generated surface from the manifest (the default)
-- `--check` — exit 1 when a generated surface differs from the manifest, or a replacement gate fails
+- `--check` — exit 1 when a generated surface differs from the manifest or names a machine path. It also runs the replacement gates once `scripts/manifest/check_surfaces.py` exists
 - `--only <surface>` — one of `manifest`, `python`, `docs`, `function-info`, `availability`, `examples`, `counts`
 - `--log <path>` — write output to a log file (`filename` → `test-logs/filename`; relative → under `test-logs/`; absolute → as-is)
 - `--help`, `-h` — show help and exit

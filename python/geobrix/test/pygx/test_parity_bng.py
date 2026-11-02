@@ -183,7 +183,9 @@ def test_bng_full_parity(spark_with_jar):
         mod.register(spark)
         return df.select(
             mod.bng_pointascell(f.col("pt"), f.col("res")).alias("pac"),
-            mod.bng_eastnorthasbng(f.col("e"), f.col("n"), f.col("res")).alias("enb"),
+            f.call_function(
+                "gbx_bng_eastnorthasbng", f.col("e"), f.col("n"), f.col("res")
+            ).alias("enb"),
             mod.bng_cellarea(f.col("seed")).alias("area"),
             mod.bng_distance(f.col("seed"), f.col("cell_b")).alias("dist"),
             mod.bng_euclideandistance(f.col("seed"), f.col("cell_b")).alias("edist"),
@@ -220,7 +222,9 @@ def test_bng_full_parity(spark_with_jar):
         """Tessellate chips. Both tiers called with keep_core_geom=False so core
         chips have no geometry on either side (parity comparison is clean)."""
         mod.register(spark)
-        tess_col = mod.bng_tessellate(f.col("geom"), f.col("res"), f.lit(keep_core))
+        tess_col = f.call_function(
+            "gbx_bng_tessellate", f.col("geom"), f.col("res"), f.lit(keep_core)
+        )
         exploded = df.select(f.explode(tess_col).alias("chip")).select(
             f.col("chip.cellid").alias("cell"),
             f.col("chip.core").alias("core"),
@@ -603,7 +607,9 @@ def test_bng_mosaic_423_no_degenerate_chips(spark_with_jar):
     def tess(mod, keep_core):
         """Both tiers called with explicit keep_core_geom for a clean parity comparison."""
         mod.register(spark)
-        tess_col = mod.bng_tessellate(f.col("geom"), f.col("res"), f.lit(keep_core))
+        tess_col = f.call_function(
+            "gbx_bng_tessellate", f.col("geom"), f.col("res"), f.lit(keep_core)
+        )
         exploded = df.select(f.explode(tess_col).alias("chip")).select(
             f.col("chip.cellid").alias("cell"), f.col("chip.chip").alias("geom")
         )
@@ -769,7 +775,9 @@ def test_bng_tessellate_mixed_collection_clip_parity(spark_with_jar):
     def tess(mod, keep_core):
         """name -> {cellid: (core, chip WKB | None)} for one tier and keep_core_geom."""
         mod.register(spark)
-        col = mod.bng_tessellate(f.col("geom"), f.col("res"), f.lit(keep_core))
+        col = f.call_function(
+            "gbx_bng_tessellate", f.col("geom"), f.col("res"), f.lit(keep_core)
+        )
         rows = (
             df.select("name", f.explode_outer(col).alias("c"))
             .select(

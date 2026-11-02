@@ -157,16 +157,23 @@ rst_frombands_agg_python_light_example_output = """
 
 
 def rst_merge_agg_python_example(spark):
-    """Merge a group's raster tiles into one spatial mosaic using the light pyrx tier.
+    """Merge a group's raster tiles into one spatial mosaic.
 
     Multi-tile fixture: 3 per-band rows from rgb_nir_small.tif.  Each tile
     covers the same extent (all from the same source), so the merged result
     has the same bounding box as the inputs.  Grouped by region.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
 
     df = _get_multi_band_tiles_df(spark)
-    result = df.groupBy("region").agg(rx.rst_merge_agg("tile").alias("mosaic")).first()
+    # The aggregate returns the mosaic's GeoTIFF bytes (BINARY) on every surface;
+    # rst_fromcontent turns them back into a tile.
+    merged = df.groupBy("region").agg(rx.rst_merge_agg("tile").alias("content"))
+    result = merged.select(
+        "region", rx.rst_fromcontent("content", f.lit("GTiff")).alias("mosaic")
+    ).first()
     return result["mosaic"]
 
 
@@ -517,14 +524,16 @@ rst_quadbin_rasterize_agg_python_light_example_output = """
 
 
 def rst_bng_rasterize_agg_python_example(spark):
-    """Rasterize BNG cell/value rows into one tile per group using the light pyrx tier.
+    """Rasterize BNG cell/value rows into one tile per group.
 
     Multi-row fixture: 3 rows of (BNG STRING cell id, burn value) at 1km resolution
     near central London (EPSG:27700 eastings/northings).  Grouped by region,
     producing 1 rasterized tile in EPSG:27700.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
     from databricks.labs.gbx.gridx.bng import functions as bngx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
 
     bngx.register(spark)
 
@@ -540,11 +549,28 @@ def rst_bng_rasterize_agg_python_example(spark):
         ) AS t(region, e, n, val)
     """)
     df = spark.table("_bng_cells")
-    result = (
-        df.groupBy("region")
-        .agg(rx.rst_bng_rasterize_agg("cellid", "value").alias("tile"))
-        .first()
+    # A 3 km x 3 km canvas of 1 km pixels over the three cells. out_srid is not
+    # read (the output is always EPSG:27700); mode applies only when no extent is
+    # given. The aggregate returns GeoTIFF bytes; rst_fromcontent makes the tile.
+    burned = df.groupBy("region").agg(
+        rx.rst_bng_rasterize_agg(
+            "cellid",
+            "value",
+            27700,
+            1000.0,
+            529000.0,
+            179000.0,
+            532000.0,
+            182000.0,
+            3,
+            3,
+            "centroids",
+            0,
+        ).alias("content")
     )
+    result = burned.select(
+        "region", rx.rst_fromcontent("content", f.lit("GTiff")).alias("tile")
+    ).first()
     spark.catalog.dropTempView("_bng_cells")
     return result["tile"]
 

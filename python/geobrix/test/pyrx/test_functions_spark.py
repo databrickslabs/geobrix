@@ -2,6 +2,7 @@ import pytest
 from pyspark.sql import functions as f
 
 from databricks.labs.gbx.pyrx import functions as prx
+from databricks.labs.gbx.rasterx import functions as rx
 
 from .conftest import make_geotiff_bytes
 
@@ -295,20 +296,24 @@ def test_rst_slope_aspect_hillshade(spark):
     )
     # Auto-scale path (no scale args): must run and produce Float32.
     assert (
-        df.select(prx.rst_type(prx.rst_slope("tile")).alias("t")).first()["t"][0]
+        df.select(prx.rst_type(prx._light_rst_slope("tile")).alias("t")).first()["t"][0]
         == "Float32"
     )
     # Explicit xscale/yscale override path: also runs, Float32, and differs from auto.
-    auto_min = df.select(prx.rst_min(prx.rst_slope("tile"))[0].alias("v")).first()["v"]
+    auto_min = df.select(
+        prx.rst_min(prx._light_rst_slope("tile"))[0].alias("v")
+    ).first()["v"]
     over_min = df.select(
-        prx.rst_min(prx.rst_slope("tile", xscale=111120.0, yscale=111120.0))[0].alias(
-            "v"
-        )
+        prx.rst_min(prx._light_rst_slope("tile", xscale=111120.0, yscale=111120.0))[
+            0
+        ].alias("v")
     ).first()["v"]
     assert over_min != auto_min
     assert (
         df.select(
-            prx.rst_type(prx.rst_slope("tile", xscale=2.0, yscale=2.0)).alias("t")
+            prx.rst_type(prx._light_rst_slope("tile", xscale=2.0, yscale=2.0)).alias(
+                "t"
+            )
         ).first()["t"][0]
         == "Float32"
     )
@@ -492,7 +497,7 @@ def test_rst_mapalgebra(spark):
         prx.rst_fromcontent("a", f.lit("GTiff")).alias("ta"),
         prx.rst_fromcontent("b", f.lit("GTiff")).alias("tb"),
     )
-    out = df.select(prx.rst_mapalgebra(f.array("ta", "tb"), f.lit("A + B")).alias("t"))
+    out = df.select(rx.rst_mapalgebra(f.array("ta", "tb"), f.lit("A + B")).alias("t"))
     row = out.select(
         prx.rst_numbands("t").alias("n"), prx.rst_type("t").alias("ty")
     ).first()
@@ -1277,7 +1282,7 @@ def test_rst_merge_agg(spark):
     left = _ras_bytes(np.array([[1, 2], [3, 4]]), ulx=0.0, uly=2.0)
     right = _ras_bytes(np.array([[5, 6], [7, 8]]), ulx=2.0, uly=2.0)
     df = _tiles_df(spark, [("g", left), ("g", right)])
-    tile = df.groupBy("k").agg(prx.rst_merge_agg("tile").alias("t")).first()["t"]
+    tile = df.groupBy("k").agg(prx._light_rst_merge_agg("tile").alias("t")).first()["t"]
     assert tile is not None
     with _serde.open_tile(bytes(tile["raster"])) as ds:
         assert ds.width == 4
@@ -1395,8 +1400,8 @@ def _error_tiles_df(spark, *reasons):
 @pytest.mark.parametrize(
     "agg",
     [
-        lambda d: prx.rst_merge_agg("tile"),
-        lambda d: prx.rst_merge_agg("tile", virtualize_dir=str(d)),
+        lambda d: prx._light_rst_merge_agg("tile"),
+        lambda d: prx._light_rst_merge_agg("tile", virtualize_dir=str(d)),
         lambda d: prx.rst_combineavg_agg("tile"),
         lambda d: prx.rst_derivedband_agg("tile", PYFUNC_SUM_AGG, "addbands"),
     ],
@@ -1451,10 +1456,10 @@ def _surfaces(spark, df, d):
     _mvp_forms.register_probe_forms(spark)
     by = df.groupBy("k")
     return {
-        "api": (True, by.agg(prx.rst_merge_agg("tile").alias("t"))),
+        "api": (True, by.agg(prx._light_rst_merge_agg("tile").alias("t"))),
         "api-virtualize": (
             True,
-            by.agg(prx.rst_merge_agg("tile", virtualize_dir=str(d)).alias("t")),
+            by.agg(prx._light_rst_merge_agg("tile", virtualize_dir=str(d)).alias("t")),
         ),
         "finalize": (
             True,

@@ -109,7 +109,8 @@ _TOP_LEVEL = re.compile(
 
 def _declares_name(text: str, obj: str, sql_name: str) -> bool:
     """``object <obj>`` in ``text`` defines its ``name`` as ``sql_name``: the body of that object only, up to
-    the next top-level declaration, so a name quoted by another object of the file does not count."""
+    the next top-level declaration, so a name quoted by another object of the file does not count.
+    """
     m = re.search(rf"^object {re.escape(obj)}\b", text, re.M)
     if not m:
         return False
@@ -459,8 +460,19 @@ def docs_findings(fns: Iterable) -> List[str]:
 
 
 def legacy_findings(fns: Iterable) -> List[str]:
-    """No public lightweight def for a manifest row; filled when the seeder and codemod land, empty here."""
-    return []
+    """A stable manifest row has no public def of its Python name in the lightweight modules: the
+    generated entry is the one Python name (no aliases)."""
+    public = {}
+    for path in LIGHT_FILES:
+        for node in ast.parse(path.read_text()).body:
+            if isinstance(node, ast.FunctionDef) and not node.name.startswith("_"):
+                public[node.name] = path
+    return [
+        f"{fn.sql_name}: {_rel(public[fn.python.name])} still defines {fn.python.name} "
+        f"(the generated entry is {fn.python.module}.functions.{fn.python.name})"
+        for fn in fns
+        if fn.status == "stable" and fn.python and fn.python.name in public
+    ]
 
 
 def run() -> List[str]:

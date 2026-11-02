@@ -4,6 +4,7 @@ shapely = pytest.importorskip("shapely")
 from shapely import from_wkb, get_srid, to_wkb  # noqa: E402
 from shapely.geometry import Point, Polygon, box  # noqa: E402
 
+from databricks.labs.gbx.gridx.bng import functions as bx  # noqa: E402
 from databricks.labs.gbx.pygx import functions as gx  # noqa: E402
 
 # quadbin cells at zoom 3 of (-122.4194, 37.7749) and (0, 0); custom-grid cells at resolution 3
@@ -171,9 +172,9 @@ def test_tessellate_keep_core_geom_defaults_to_false(spark):
             "SELECT gbx_bng_tessellate(g, 3) AS t FROM bv_tess_default"
         ).collect()[0]["t"]
     )
-    wrapper = by_cell(df.select(gx.bng_tessellate("g", 3).alias("t")).collect()[0]["t"])
+    wrapper = by_cell(df.select(bx.bng_tessellate("g", 3).alias("t")).collect()[0]["t"])
     kept = by_cell(
-        df.select(gx.bng_tessellate("g", 3, keep_core_geom=True).alias("t")).collect()[
+        df.select(bx.bng_tessellate("g", 3, keep_core_geom=True).alias("t")).collect()[
             0
         ]["t"]
     )
@@ -289,14 +290,13 @@ def test_cellintersection_agg(spark):
 
 
 def test_explode_column_wrappers_raise_not_implemented():
-    # The 5 *explode UDTFs are SQL-LATERAL-only; their Column wrappers must exist
+    # The 4 light *explode UDTFs are SQL-LATERAL-only; their Column wrappers must exist
     # (for binding parity) but raise NotImplementedError pointing to SQL LATERAL.
     for name in (
         "bng_kringexplode",
         "bng_kloopexplode",
         "bng_geomkringexplode",
         "bng_geomkloopexplode",
-        "bng_tessellateexplode",
     ):
         fn = getattr(gx, name)
         with pytest.raises(NotImplementedError):
@@ -307,7 +307,6 @@ def test_scalar_column_wrappers_exist():
     # All non-explode wrappers exist as importable callables for parity.
     for name in (
         "bng_pointascell",
-        "bng_eastnorthasbng",
         "bng_cellarea",
         "bng_distance",
         "bng_euclideandistance",
@@ -321,7 +320,6 @@ def test_scalar_column_wrappers_exist():
         "bng_polyfill",
         "bng_geomkring",
         "bng_geomkloop",
-        "bng_tessellate",
         "bng_cellunion_agg",
         "bng_cellintersection_agg",
     ):

@@ -3,15 +3,11 @@ through SQL. The light variants also run through the Python Column API; the JVM 
 and Java UDF) run when the staged JAR is in the session (`gbx-test-parity.sh` builds and stages it).
 """
 
-import importlib
-
 import pytest
 
 from databricks.labs.gbx import _rs, manifest, register
 from databricks.labs.gbx.bench import oracles
 from databricks.labs.gbx.manager import capabilities
-
-_API_PACKAGE = {"bng": "pygx", "rst": "pyrx", "st": "pyvx"}
 
 
 def _cases():
@@ -51,9 +47,7 @@ def _cases():
 
 
 def _column_function(sql_name):
-    package = _API_PACKAGE[sql_name.split("_")[1]]
-    module = importlib.import_module(f"databricks.labs.gbx.{package}.functions")
-    return getattr(module, sql_name[len("gbx_") :])
+    return manifest.resolve_ref(manifest.load().functions[sql_name].python.ref)
 
 
 @pytest.mark.parametrize("fn,level,variant,api", list(_cases()))

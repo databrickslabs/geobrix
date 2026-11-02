@@ -425,7 +425,7 @@ def rst_mapalgebra_python_example(spark):
     ``gdal_calc -A in --A_band=2 -B in --B_band=1 --calc="(A-B)/(A+B)"``.
     Output: single-band Float32 tile. Uses the multiband fixture (rgb_nir_small).
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
     df = spark.table("multiband_rasters")

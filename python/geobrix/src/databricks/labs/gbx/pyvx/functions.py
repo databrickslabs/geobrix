@@ -713,23 +713,6 @@ def st_split(input_geom: ColLike, blade_geom: ColLike) -> Column:
     return f.call_function("gbx_st_split", _col(input_geom), _col(blade_geom))
 
 
-def st_makevalid(geom: ColLike, level: ColLike = None) -> Column:
-    """Repair a geometry to OGC-SFS validity (SQL surface, BINARY output).
-
-    Args:
-        geom:  BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
-        level: Repair strategy: ``'linework'`` (default), ``'structure'``, or
-               ``'ogc'`` (OGC topology repair only, no ring-orientation normalization).
-               ``'cleaning'`` / ``'full'`` are reserved for a later release.
-
-    Returns:
-        BINARY column: EWKB repaired geometry, or NULL when input is NULL.
-    """
-    if level is None:
-        return f.call_function("gbx_st_makevalid", _col(geom))
-    return f.call_function("gbx_st_makevalid", _col(geom), _col(level))
-
-
 def st_explainvalidity(geom: ColLike) -> Column:
     """Diagnose SFS validity: JSON ``{valid, reason, code, location}`` (STRING).
 

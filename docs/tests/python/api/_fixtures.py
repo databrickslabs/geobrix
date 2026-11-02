@@ -29,6 +29,7 @@ NETCDF        prAdjust_day_HadGEM2-CC_*.nc — two subdatasets (time_bnds,
 from pathlib import Path
 import sys
 import os
+from databricks.labs.gbx.gridx.bng import functions as bx
 
 # ---------------------------------------------------------------------------
 # Path constants (relative paths are relative to repo root)
@@ -949,7 +950,7 @@ def bng_chips_df(spark):
     gx.register(spark)
     geom_df = spark.sql(f"SELECT '{_BNG_POLYGON_WKT}' AS geom")
     return geom_df.select(
-        f.explode(gx.bng_tessellate(f.col("geom"), f.lit(_BNG_RESOLUTION))).alias(
+        f.explode(bx.bng_tessellate(f.col("geom"), f.lit(_BNG_RESOLUTION))).alias(
             "chip"
         )
     )

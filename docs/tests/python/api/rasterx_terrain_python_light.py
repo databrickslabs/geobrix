@@ -16,10 +16,9 @@ from _fixtures import dem_tile_df
 
 def rst_slope_python_example(spark):
     """Compute slope (degrees or percent rise/run) from a DEM tile."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
     df = dem_tile_df(spark)
     result = df.select(
         rx.rst_slope("tile", f.lit("degrees"), f.lit(1.0), f.lit(1.0)).alias("tile")

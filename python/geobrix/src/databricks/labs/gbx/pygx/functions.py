@@ -1640,15 +1640,6 @@ def bng_pointascell(geom: ColLike, resolution: ColLike) -> Column:
     return f.call_function("gbx_bng_pointascell", _col(geom), _col(resolution))
 
 
-def bng_eastnorthasbng(
-    easting: ColLike, northing: ColLike, resolution: ColLike
-) -> Column:
-    """BNG cell id (STRING) for scalar EPSG:27700 eastings/northings at `resolution`."""
-    return f.call_function(
-        "gbx_bng_eastnorthasbng", _col(easting), _col(northing), _col(resolution)
-    )
-
-
 def bng_cellarea(cellid: ColLike) -> Column:
     """Cell area in square KILOMETRES (DOUBLE)."""
     return f.call_function("gbx_bng_cellarea", _col(cellid))
@@ -1748,19 +1739,6 @@ def bng_geomkloop(
     )
 
 
-def bng_tessellate(
-    geom: ColLike, resolution: ColLike, keep_core_geom: ColLike = False
-) -> Column:
-    """ARRAY<STRUCT<cellid:STRING, core:BOOL, chip:BINARY>> chips per cell.
-
-    keep_core_geom (default False, as in every API and tier): when True, a
-    fully-interior cell's chip holds its core-geometry WKB; when False the chip is null.
-    """
-    return f.call_function(
-        "gbx_bng_tessellate", _col(geom), _col(resolution), _col(keep_core_geom)
-    )
-
-
 def bng_cellunion_agg(input_chip: ColLike) -> Column:
     """Aggregator: union a group's same-cell chips into one dissolved-chip WKB BINARY.
 
@@ -1816,15 +1794,6 @@ def bng_geomkloopexplode(*args, **kwargs) -> Column:
     raise NotImplementedError(
         _EXPLODE_HINT.format(
             name="bng_geomkloopexplode", udtf="gbx_bng_geomkloopexplode"
-        )
-    )
-
-
-def bng_tessellateexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT t.* FROM <df>, LATERAL gbx_bng_tessellateexplode(geom, res) t. No Column form."""
-    raise NotImplementedError(
-        _EXPLODE_HINT.format(
-            name="bng_tessellateexplode", udtf="gbx_bng_tessellateexplode"
         )
     )
 

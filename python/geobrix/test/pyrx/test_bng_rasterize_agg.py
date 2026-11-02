@@ -24,7 +24,9 @@ def test_rst_bng_rasterize_agg_presence_mask(spark):
     assert len(cells) >= 2
     df = spark.createDataFrame([(c, "TX1") for c in cells], ["cellid", "tx"])
     out = (
-        df.groupBy("tx").agg(rx.rst_bng_rasterize_agg("cellid").alias("tile")).collect()
+        df.groupBy("tx")
+        .agg(rx._light_rst_bng_rasterize_agg("cellid").alias("tile"))
+        .collect()
     )
     tile = out[0]["tile"]
     assert tile is not None and tile["raster"] is not None
@@ -40,7 +42,7 @@ def test_rst_bng_rasterize_agg_burns_value(spark):
     df = spark.createDataFrame([(c, 42.0, "TX1")], ["cellid", "val", "tx"])
     out = (
         df.groupBy("tx")
-        .agg(rx.rst_bng_rasterize_agg("cellid", "val").alias("tile"))
+        .agg(rx._light_rst_bng_rasterize_agg("cellid", "val").alias("tile"))
         .collect()
     )
     with _serde.open_tile(bytes(out[0]["tile"]["raster"])) as ds:
@@ -79,7 +81,7 @@ def test_rst_bng_rasterize_agg_null_cellid_value_alignment(spark):
     df = spark.createDataFrame(rows, schema)
     out = (
         df.groupBy("tx")
-        .agg(rx.rst_bng_rasterize_agg("cellid", "val").alias("tile"))
+        .agg(rx._light_rst_bng_rasterize_agg("cellid", "val").alias("tile"))
         .collect()
     )
     tile = out[0]["tile"]

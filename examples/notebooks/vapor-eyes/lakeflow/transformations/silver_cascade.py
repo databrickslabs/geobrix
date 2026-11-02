@@ -184,7 +184,7 @@ def _s2_index_cells(spark, tiles, s2_h3_res):
     rst_mapalgebra (band 1 of each tile binds A=B12, B=B11), tessellate the index
     raster into H3 cells (LATERAL UDTF), and summarize per cell. Tagged with the
     scene's observation_date."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
 
     def _band_tile(band):
         return tiles.where(F.col("band") == band).select(
@@ -198,7 +198,7 @@ def _s2_index_cells(spark, tiles, s2_h3_res):
         # tessellation below each hold a full scene's rasters.
         .repartition(_S2_SCENE_BUCKETS, "item_id")
         .withColumn("tile", rx.rst_mapalgebra(F.array("tile_b12", "tile_b11"),
-                                              "(B - A) / (A + B)"))
+                                          "(B - A) / (A + B)"))
         .select("observation_date", "tile")
     )
     mbmp.createOrReplaceTempView("_s2_mbmp")

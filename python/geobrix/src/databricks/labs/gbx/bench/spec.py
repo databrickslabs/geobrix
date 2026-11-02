@@ -738,7 +738,7 @@ REGISTRY: Dict[str, FnSpec] = {
         sources=_TERRAIN_LIGHT + (_HEAVY + "dem/RST_Slope.scala", _DEM_HELPER),
         core=True,
         core_fn=lambda ds, a: terrain.slope(ds, a["unit"]),
-        col_fn=lambda t, a: prx.rst_slope(t, a["unit"]),
+        col_fn=lambda t, a: prx._light_rst_slope(t, a["unit"]),
     ),
     "rst_ndvi": FnSpec(
         "rst_ndvi",
@@ -1407,7 +1407,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core=False,
         core_fn=lambda ds, a: warp.reproject_to_crs(ds, a["target_crs"]),
         # F.lit the STRING crs arg (bare str would resolve as a column name).
-        col_fn=lambda t, a: prx.rst_transformcrs(t, F.lit(a["target_crs"])),
+        col_fn=lambda t, a: prx._light_rst_transformcrs(t, F.lit(a["target_crs"])),
         sources=_WARP_LIGHT + (_HEAVY + "RST_TransformCrs.scala",),
     ),
     "rst_updatetype": FnSpec(
@@ -1670,7 +1670,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: mapalgebra.mapalgebra(
             [_ds_to_gtiff_bytes(ds)], a["expr"]
         ),
-        col_fn=lambda t, a: prx.rst_mapalgebra(F.array(t), a["expr"]),
+        col_fn=lambda t, a: prx._light_rst_mapalgebra(F.array(t), a["expr"]),
         sources=_MAPALGEBRA_LIGHT + (_HEAVY + "RST_MapAlgebra.scala",),
         core=False,
     ),
@@ -2149,7 +2149,7 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"tile_width": 128, "tile_height": 128},
         core_fn=lambda ds, a: tiling.retile(ds, a["tile_width"], a["tile_height"]),
-        col_fn=lambda t, a: prx.rst_retile(t, a["tile_width"], a["tile_height"]),
+        col_fn=lambda t, a: prx._light_rst_retile(t, a["tile_width"], a["tile_height"]),
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TILING_LIGHT
         + (_HEAVY + "generators/RST_ReTile.scala", _OPS + "ReTile.scala"),
@@ -3172,7 +3172,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "format",
         ("spark-path",),
         {},
-        col_fn=lambda t, a: prx.rst_merge_agg(t),
+        col_fn=lambda t, a: prx._light_rst_merge_agg(t),
         core_fn=lambda t, a: t,
         input_kind="tile_aggregate",
         sources=_AGG_LIGHT
@@ -3413,7 +3413,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "dggs",
         ("spark-path",),
         {},
-        col_fn=lambda cid, v, a: prx.rst_bng_rasterize_agg(cid, value=None),
+        col_fn=lambda cid, v, a: prx._light_rst_bng_rasterize_agg(cid, value=None),
         core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         input_kind="grid_aggregate",
         sources=_CELLRASTER_LIGHT
@@ -3966,7 +3966,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: pyvx.st_makevalid(col),
+        col_fn=lambda col, a: F.call_function("gbx_st_makevalid", col),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,

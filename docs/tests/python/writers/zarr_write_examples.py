@@ -214,7 +214,7 @@ def write_tiles_with_provenance(spark, table):
     """Correct four hours as tiles, and write them back to the cells they were cut from."""
     from pyspark.sql import functions as F
 
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from databricks.labs.gbx.zarr import gbx_zarr_read, gbx_zarr_write
 
     tiles = gbx_zarr_read(
@@ -238,7 +238,7 @@ def write_tiles_with_dim_cols(spark, table):
     """The same correction, saying where each tile goes with `dim_cols` and `variables`."""
     from pyspark.sql import functions as F
 
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from databricks.labs.gbx.zarr import gbx_zarr_read, gbx_zarr_write
 
     tiles = gbx_zarr_read(
@@ -262,7 +262,7 @@ def create_from_tiles(spark, cube, table, root):
     """A new store from tiles: its grid comes from the tiles, its time labels from `dim_cols`."""
     from pyspark.sql import functions as F
 
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from databricks.labs.gbx.zarr import gbx_zarr_read, gbx_zarr_write
 
     tiles = gbx_zarr_read(

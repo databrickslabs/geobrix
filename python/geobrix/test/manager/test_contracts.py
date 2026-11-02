@@ -1176,15 +1176,16 @@ def test_every_stable_row_has_an_oracle_row_and_a_single_row_example():
 
 
 def test_param_name_gate_names_every_surface_that_spells_a_parameter_differently():
-    """A manifest parameter renamed under the implementations: the generated entry, the light def and the
-    Scala wrapper each still spell the old name, and the gate names each of them."""
+    """A manifest parameter renamed under the implementations: the generated entry and the Scala wrapper each
+    still spell the old name, and the gate names each of them (a manifest row has no light def left).
+    """
     gates = _gates()
     fn = MAN.functions["gbx_rst_transformcrs"]
     renamed = dataclasses.replace(
         fn, params=(fn.params[0], dataclasses.replace(fn.params[1], name="to_crs"))
     )
     found = gates.name_findings([renamed])
-    for where in ("rasterx/functions.py", "pyrx/functions.py", "functions.scala"):
+    for where in ("rasterx/functions.py", "functions.scala"):
         assert any("to_crs" in f and where in f for f in found), (where, found)
 
 
@@ -2070,8 +2071,10 @@ def _column_api_forms(tmp_path):
         "combinemax-virtualize": lambda: prx.rst_combinemax(tiles, virtualize_dir=out),
         "frombands": lambda: prx.rst_frombands(tiles),
         "frombands-virtualize": lambda: prx.rst_frombands(tiles, virtualize_dir=out),
-        "merge_agg": lambda: prx.rst_merge_agg("tile"),
-        "merge_agg-virtualize": lambda: prx.rst_merge_agg("tile", virtualize_dir=out),
+        "merge_agg": lambda: prx._light_rst_merge_agg("tile"),
+        "merge_agg-virtualize": lambda: prx._light_rst_merge_agg(
+            "tile", virtualize_dir=out
+        ),
         "derivedband_agg": lambda: prx.rst_derivedband_agg("tile", _PYFUNC, "f"),
     }
 

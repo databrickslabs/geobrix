@@ -3540,11 +3540,14 @@ def rst_setcrs(
     return _uf_setcrs(tc, file_ref_arg(tc), _crs_col(crs))
 
 
-def rst_transformcrs(
+def _light_rst_transformcrs(
     tile: ColLike,
     target_crs: ColLike,
 ) -> Column:
-    """Reproject the raster to a string-given target CRS.
+    """The light Column composition of ``gbx_rst_transformcrs`` (the bench's light form and the
+    light tests). The Python API is ``databricks.labs.gbx.rasterx.functions.rst_transformcrs``.
+
+    Reproject the raster to a string-given target CRS.
 
     Accepts int EPSG, an int-castable string, an authority string (``"EPSG:3857"``,
     ``"ESRI:54008"``), WKT, PROJJSON or PROJ4 (never a file name or URL, and no grid
@@ -4604,14 +4607,17 @@ def _uf_mapalgebra(tiles, file_refs, expression):
     )
 
 
-def rst_mapalgebra(
+def _light_rst_mapalgebra(
     tiles: ColLike,
     expression: ColLike,
     virtualize_dir: Optional[str] = None,
     virtualize_prefix: Optional[str] = None,
     materialize: Optional[bool] = None,
 ) -> Column:
-    """Apply a map-algebra expression across an array of tiles.
+    """The light Column composition of ``gbx_rst_mapalgebra`` (the bench's light form and the
+    light tests). The Python API is ``databricks.labs.gbx.rasterx.functions.rst_mapalgebra``.
+
+    Apply a map-algebra expression across an array of tiles.
 
     By default band 1 of each tile (in array order) binds to A, B, C, …; the
     expression is evaluated with numexpr (safe math only — no arbitrary code
@@ -5849,8 +5855,11 @@ def rst_separatebands(tile: ColLike):
     return _RstSeparateBandsUDTF(tc, file_ref_arg(tc))
 
 
-def rst_retile(tile: ColLike, tile_width: ColLike, tile_height: ColLike):
-    """Partition a tile into non-overlapping sub-tiles of the given pixel size.
+def _light_rst_retile(tile: ColLike, tile_width: ColLike, tile_height: ColLike):
+    """The light Column composition of ``gbx_rst_retile`` (the bench's light form and the
+    light tests). The Python API is ``databricks.labs.gbx.rasterx.functions.rst_retile``.
+
+    Partition a tile into non-overlapping sub-tiles of the given pixel size.
 
     Edge tiles are narrower/shorter when the raster dimensions are not exact
     multiples of tile_width/tile_height. Each output tile carries the correct
@@ -6383,7 +6392,7 @@ def _uf_hillshade(tile, file_ref, azimuth, altitude, z_factor, xscale, yscale):
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
-def rst_slope(
+def _light_rst_slope(
     tile: ColLike,
     unit: ColLike = "degrees",
     xscale: ColLike = None,
@@ -6392,7 +6401,10 @@ def rst_slope(
     virtualize_prefix: Optional[str] = None,
     materialize: Optional[bool] = None,
 ) -> Column:
-    """Compute terrain slope from a single-band DEM tile (Horn's 3x3 method).
+    """The light Column composition of ``gbx_rst_slope`` (the bench's light form and the
+    light tests). The Python API is ``databricks.labs.gbx.rasterx.functions.rst_slope``.
+
+    Compute terrain slope from a single-band DEM tile (Horn's 3x3 method).
 
     By default the horizontal scale is auto-derived from the raster CRS
     (geographic grids use a latitude-based degree->metre ratio, projected
@@ -9725,16 +9737,19 @@ def _rst_custom_rasterize_agg_udf(
 
 
 # --- public Column wrappers (compose grouped-agg BINARY + scalar as_tile) ----
-def rst_merge_agg(
+def _light_rst_merge_agg(
     tile: ColLike,
     virtualize_dir: Optional[str] = None,
     virtualize_prefix: Optional[str] = None,
 ) -> Column:
-    """Merge a group's tile rasters into one spatial mosaic tile.
+    """The light Column composition of ``gbx_rst_merge_agg`` (the bench's light form and the
+    light tests). The Python API is ``databricks.labs.gbx.rasterx.functions.rst_merge_agg``.
+
+    Merge a group's tile rasters into one spatial mosaic tile.
 
     Use inside ``.agg()``::
 
-        df.groupBy(k).agg(prx.rst_merge_agg("tile").alias("merged"))
+        df.groupBy(k).agg(prx._light_rst_merge_agg("tile").alias("merged"))
 
     Each tile carries its own georef/CRS, so the merge is spatial and the output
     spans the union extent. Returns a tile struct (cellid 0).
@@ -10212,7 +10227,7 @@ def rst_quadbin_rasterize_agg(
     )
 
 
-def rst_bng_rasterize_agg(
+def _light_rst_bng_rasterize_agg(
     cellid: ColLike,
     value: ColLike = None,
     out_srid: ColLike = None,
@@ -10227,7 +10242,10 @@ def rst_bng_rasterize_agg(
     kring_pad: ColLike = None,
     out_crs: ColLike = None,
 ) -> Column:
-    """Rasterize a group's BNG cells into one tile (pixel-centroid burn).
+    """The light Column composition of ``gbx_rst_bng_rasterize_agg`` (the bench's light form and the
+    light tests). The Python API is ``databricks.labs.gbx.rasterx.functions.rst_bng_rasterize_agg``.
+
+    Rasterize a group's BNG cells into one tile (pixel-centroid burn).
 
     ``cellid`` is a STRING column of BNG cell ids (e.g. ``"TQ3080"``); each id is
     parsed via ``pygx._bng`` (single source of truth). ``value`` omitted ->
@@ -10235,7 +10253,7 @@ def rst_bng_rasterize_agg(
     aligned band stacking; else the grid is auto-derived per ``mode``/``kring_pad``.
     Use inside ``.agg()``::
 
-        df.groupBy(k).agg(prx.rst_bng_rasterize_agg("cellid").alias("tile"))
+        df.groupBy(k).agg(prx._light_rst_bng_rasterize_agg("cellid").alias("tile"))
 
     BNG is EPSG:27700-native (British National Grid): the output raster is always
     EPSG:27700, and ``out_srid`` is not read. A non-NULL ``out_crs`` is refused on

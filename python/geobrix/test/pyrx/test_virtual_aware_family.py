@@ -28,6 +28,7 @@ from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx import functions as prx
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA, VirtualTile
+from databricks.labs.gbx.rasterx import functions as rx
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +208,7 @@ def test_rst_slope_virtual_materialize_true_forces_bytes(tmp_path):
 def test_rst_slope_conflict_raises():
     # virtualize_dir + materialize=True is rejected at wrapper-call time.
     with pytest.raises(ValueError, match="mutually exclusive"):
-        prx.rst_slope("tile", virtualize_dir="/x", materialize=True)
+        rx.rst_slope("tile", virtualize_dir="/x", materialize=True)
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +346,7 @@ def test_rst_width_column_api_on_virtual_df(spark, tmp_path):
 def test_rst_slope_column_api_virtualize_dir_on_virtual_df(spark, tmp_path):
     df = _v2_df(spark, tmp_path)
     out_dir = str(tmp_path / "col_vout")
-    row = df.select(prx.rst_slope("tile", virtualize_dir=out_dir).alias("t")).first()[
+    row = df.select(rx.rst_slope("tile", virtualize_dir=out_dir).alias("t")).first()[
         "t"
     ]
     assert row["raster"] is None

@@ -903,9 +903,9 @@ def test_merge_agg_no_try_to_file(spark):
     ``spark`` is required so the JVM is up (Column._jc.toString() needs the
     JVM running).
     """
-    from databricks.labs.gbx.pyrx.functions import rst_merge_agg
+    from databricks.labs.gbx.pyrx.functions import _light_rst_merge_agg
 
-    expr = rst_merge_agg("tile")._jc.toString()
+    expr = _light_rst_merge_agg("tile")._jc.toString()
     assert "try_to_file" not in expr.lower()
 
 
@@ -930,7 +930,7 @@ class TestAggPublicFunctionsParity:
         left = _ras(np.array([[1.0, 2.0], [3.0, 4.0]]), ulx=0.0, uly=2.0, px=1.0)
         right = _ras(np.array([[5.0, 6.0], [7.0, 8.0]]), ulx=2.0, uly=2.0, px=1.0)
         df = _spark_tile_df_raw(spark, [left, right])
-        result = df.groupBy("g").agg(prx.rst_merge_agg("tile").alias("merged"))
+        result = df.groupBy("g").agg(prx._light_rst_merge_agg("tile").alias("merged"))
         rows = result.collect()
         assert rows, "no rows returned"
         merged = rows[0]["merged"]
@@ -983,7 +983,7 @@ class TestMergeAggVirtualizeDir:
         right = _ras(np.array([[5.0, 6.0], [7.0, 8.0]]), ulx=2.0, uly=2.0, px=1.0)
         df = _spark_tile_df_raw(spark, [left, right])
         result = df.groupBy("g").agg(
-            prx.rst_merge_agg("tile", virtualize_dir=out_dir).alias("merged")
+            prx._light_rst_merge_agg("tile", virtualize_dir=out_dir).alias("merged")
         )
         rows = result.collect()
         assert rows, "no rows returned"
@@ -1015,7 +1015,9 @@ class TestMergeAggVirtualizeDir:
 
         # Materialized reference for extent comparison.
         ref_rows = (
-            df.groupBy("g").agg(prx.rst_merge_agg("tile").alias("merged")).collect()
+            df.groupBy("g")
+            .agg(prx._light_rst_merge_agg("tile").alias("merged"))
+            .collect()
         )
         ref_merged = ref_rows[0]["merged"]
         with _serde.open_tile(bytes(ref_merged["raster"])) as ds_ref:
@@ -1025,7 +1027,9 @@ class TestMergeAggVirtualizeDir:
         # Virtualized result.
         virt_rows = (
             df.groupBy("g")
-            .agg(prx.rst_merge_agg("tile", virtualize_dir=out_dir).alias("merged"))
+            .agg(
+                prx._light_rst_merge_agg("tile", virtualize_dir=out_dir).alias("merged")
+            )
             .collect()
         )
         merged = virt_rows[0]["merged"]
@@ -1042,7 +1046,7 @@ class TestMergeAggVirtualizeDir:
         left = _ras(np.array([[1.0, 2.0], [3.0, 4.0]]), ulx=0.0, uly=2.0, px=1.0)
         right = _ras(np.array([[5.0, 6.0], [7.0, 8.0]]), ulx=2.0, uly=2.0, px=1.0)
         df = _spark_tile_df_raw(spark, [left, right])
-        result = df.groupBy("g").agg(prx.rst_merge_agg("tile").alias("merged"))
+        result = df.groupBy("g").agg(prx._light_rst_merge_agg("tile").alias("merged"))
         rows = result.collect()
         merged = rows[0]["merged"]
         assert merged is not None
@@ -1062,7 +1066,7 @@ class TestMergeAggVirtualizeDir:
         right = _ras(np.array([[5.0, 6.0], [7.0, 8.0]]), ulx=2.0, uly=2.0, px=1.0)
         df = _spark_tile_df_raw(spark, [left, right])
         result = df.groupBy("g").agg(
-            prx.rst_merge_agg(
+            prx._light_rst_merge_agg(
                 "tile", virtualize_dir=out_dir, virtualize_prefix="run42"
             ).alias("merged")
         )

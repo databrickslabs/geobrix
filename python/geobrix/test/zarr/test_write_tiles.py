@@ -19,6 +19,7 @@ from test.zarr.test_write import _create, _dataset, _read  # noqa: E402
 
 import pandas as pd  # noqa: E402
 
+from databricks.labs.gbx.rasterx import functions as rx  # noqa: E402
 from databricks.labs.gbx.zarr import _write  # noqa: E402
 from databricks.labs.gbx.zarr import _write_tiles as WT  # noqa: E402
 from databricks.labs.gbx.zarr._read import gbx_zarr_read  # noqa: E402
@@ -222,8 +223,6 @@ def test_round_trip_tiles_after_rst_op(
     """
     from pyspark.sql import functions as F
 
-    from databricks.labs.gbx.pyrx import functions as prx
-
     ds = _dataset()
     if latitude == "ascending":
         ds = ds.isel(latitude=slice(None, None, -1))
@@ -240,7 +239,7 @@ def test_round_trip_tiles_after_rst_op(
         F.col("tile.metadata").alias("provenance"),
         F.to_timestamp(F.col("tile.metadata")["sliceCoord_time"]).alias("t"),
     )
-    doubled = df.withColumn("tile", prx.rst_mapalgebra(F.array("tile"), F.lit("A*2")))
+    doubled = df.withColumn("tile", rx.rst_mapalgebra(F.array("tile"), F.lit("A*2")))
     if carry == "provenance":  # the tile is a GeoTIFF with the provenance put back
         out = doubled.withColumn(
             "tile", F.col("tile").withField("metadata", F.col("provenance"))

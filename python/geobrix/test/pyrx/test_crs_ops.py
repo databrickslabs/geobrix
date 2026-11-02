@@ -24,6 +24,7 @@ from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical, resolve_crs
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+from databricks.labs.gbx.rasterx import functions as rx
 
 from .conftest import make_geotiff_bytes
 
@@ -463,7 +464,7 @@ def test_rst_setcrs_bare_string_crs_is_a_literal(spark):
     df = df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
     row = df.select(
         prx.rst_crs(prx.rst_setcrs("tile", "ESRI:54008")).alias("set_bare"),
-        prx.rst_crs(prx.rst_transformcrs("tile", "EPSG:3857")).alias("xform_bare"),
+        prx.rst_crs(rx.rst_transformcrs("tile", "EPSG:3857")).alias("xform_bare"),
     ).first()
     assert row["set_bare"] is not None
     assert "ESRI" in row["set_bare"] and "54008" in row["set_bare"]
@@ -498,7 +499,7 @@ def test_rst_transformcrs_spark_epsg(spark):
     df = spark.createDataFrame([(b,)], ["raster"])
     df = df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
     row = df.select(
-        prx.rst_crs(prx.rst_transformcrs("tile", f.lit("EPSG:3857"))).alias("c")
+        prx.rst_crs(rx.rst_transformcrs("tile", f.lit("EPSG:3857"))).alias("c")
     ).first()
     assert row["c"] == "EPSG:3857"
 
@@ -513,7 +514,7 @@ def test_rst_transformcrs_non_epsg_spark(spark):
     df = spark.createDataFrame([(b,)], ["raster"])
     df = df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
     row = df.select(
-        prx.rst_crs(prx.rst_transformcrs("tile", f.lit("ESRI:54008"))).alias("c")
+        prx.rst_crs(rx.rst_transformcrs("tile", f.lit("ESRI:54008"))).alias("c")
     ).first()
     crs_str = row["c"]
     assert crs_str is not None

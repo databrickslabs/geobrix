@@ -507,13 +507,13 @@ st_split_python_light_example_output = """
 
 
 def st_makevalid_python_example(spark):
-    """Repair an invalid geometry to OGC-SFS validity (light pyvx tier).
+    """Repair an invalid geometry to OGC-SFS validity.
 
     Creates a WKB bowtie self-intersecting polygon inline via shapely and
     repairs it with ``st_makevalid``.  The default ``linework`` level nodes the
     self-intersection into a valid multi-polygon.  Returns the repaired WKB bytes.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
     from shapely import from_wkt, to_wkb  # noqa: PLC0415
 
     bowtie = from_wkt("POLYGON((0 0,1 1,1 0,0 1,0 0))")

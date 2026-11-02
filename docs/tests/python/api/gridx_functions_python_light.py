@@ -293,7 +293,7 @@ bng_centroid_python_light_example_output = """
 
 
 def bng_eastnorthasbng_python_example(spark):
-    """Convert BNG easting/northing coordinates to a BNG cell reference (light pygx tier).
+    """Convert BNG easting/northing coordinates to a BNG cell reference.
 
     Reads the ``bng_points`` setup view (easting=530000, northing=180000,
     EPSG:27700).  Resolution string ``'1km'`` (equivalent to integer index 3)
@@ -301,11 +301,11 @@ def bng_eastnorthasbng_python_example(spark):
     output (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+    from databricks.labs.gbx.gridx.bng import functions as bx  # noqa: PLC0415
 
     df = _get_bng_coordinates_df(spark)
     result = df.select(
-        gx.bng_eastnorthasbng(f.col("easting"), f.col("northing"), f.lit("1km")).alias(
+        bx.bng_eastnorthasbng(f.col("easting"), f.col("northing"), f.lit("1km")).alias(
             "bng_cell"
         )
     ).first()
@@ -634,7 +634,7 @@ bng_polyfill_python_light_example_output = """
 
 
 def bng_tessellate_python_example(spark):
-    """Tessellate a geometry into BNG cells, splitting border cells at the boundary (light pygx tier).
+    """Tessellate a geometry into BNG cells, splitting border cells at the boundary.
 
     Reads the ``bng_polygons`` setup view (3km × 3km polygon in EPSG:27700).
     At res=3 (1km) the polygon produces 9 chips.  Center cell TQ3080 is a core
@@ -643,11 +643,11 @@ def bng_tessellate_python_example(spark):
     Identical to the heavyweight output (AGREE).  Geometry MUST be in EPSG:27700.
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+    from databricks.labs.gbx.gridx.bng import functions as bx  # noqa: PLC0415
 
     df = _get_bng_polygons_df(spark)
     result = df.select(
-        gx.bng_tessellate(f.col("geom"), f.lit(3)).alias("chips")
+        bx.bng_tessellate(f.col("geom"), f.lit(3)).alias("chips")
     ).first()
     return result["chips"]
 

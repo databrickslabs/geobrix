@@ -8,7 +8,11 @@ no rows. The oracle writes the five files on local disk and copies them over.
 import os
 from pathlib import Path
 
-import pyogrio
+import pytest
+
+# The heavy CI phase (requirements-ci.txt) has no pyogrio, and test/native runs only there, so the file skips
+# there and runs in the dev container (gbx:test:python).
+pyogrio = pytest.importorskip("pyogrio")
 
 from databricks.labs.gbx._native import _selfcheck
 

@@ -109,10 +109,11 @@ jobs:
         # FAIL in CI (CI=true) when uv or the index is missing, they do not skip.
         # The index comes from the pip.conf the JFrog bootstrap wrote ($PIP_CONFIG_FILE). `pip config get` does not
         # read that file ("No such key"), which left UV_DEFAULT_INDEX empty, so uv went to pypi.org, which the hardened
-        # runner blocks ("tls handshake eof"). An empty index now fails the step instead.
+        # runner blocks ("tls handshake eof"). An empty index now fails the step instead. The file is read raw: a
+        # percent-encoded credential in the URL (%40) is no interpolation.
         run: |
           python -m pip install --quiet uv==0.13.5
-          index="$(python -c 'import configparser, os; c = configparser.ConfigParser(); c.read(os.environ["PIP_CONFIG_FILE"]); print(c.get("global", "index-url", fallback=""))')"
+          index="$(python -c 'import configparser, os; c = configparser.RawConfigParser(); c.read(os.environ["PIP_CONFIG_FILE"]); print(c.get("global", "index-url", fallback=""))')"
           if [ -z "$index" ]; then echo "::error::no index-url in PIP_CONFIG_FILE; uv would fall back to pypi.org"; exit 1; fi
           UV_DEFAULT_INDEX="$index" python -m pytest scripts/ci -v
 

@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.rasterx.ds.netcdf
 
-import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import com.databricks.labs.gbx.rasterx.operations.BalancedSubdivision
 import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, RasterSerializationUtil}
 import com.databricks.labs.gbx.util.NodeFileManager
@@ -36,14 +36,17 @@ class NetCDF_Reader(partition: NetCDF_Partition) extends PartitionReader[Interna
     // applyScale=true: decode CF scale_factor/add_offset to physical Float64 in WindowedExtract,
     // matching the light netcdf_gbx reader (xarray mask_and_scale=True). Heavy default is OFF;
     // only netcdf_gdal opts in, so other raster readers keep raw-copy behavior.
-    private val tilesIter = {
+    // Its GDAL work (the open, each tile, the close) runs one thread at a time: GDALManager.withHdfLock.
+    private val tilesIter = GDALManager.withHdfLock {
         var opened: Dataset = null
         try {
             opened = gdal.Open(selector, GA_ReadOnly)
             if (opened == null) {
                 throw new RuntimeException(s"Failed to open subdataset: $selector; Error: ${gdal.GetLastErrorMsg}")
             }
-            BalancedSubdivision.splitRasterIter(opened, Map("applyScale" -> "true"), partition.sizeInMB)
+            GDALManager.hdfSerialized(
+              BalancedSubdivision.splitRasterIter(opened, Map("applyScale" -> "true"), partition.sizeInMB)
+            )
         } catch {
             // No tile iterator owns the Dataset or the copy yet, and Spark never closes a reader whose
             // constructor threw: let go of both here.

@@ -180,6 +180,26 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession with NodeCa
         }
     }
 
+    // Tasks of one executor read netCDF-4 partitions at once. GDAL's netCDF driver reads a band's extra-dimension
+    // metadata (NETCDF_DIM_time) outside its own mutex and the payload's HDF5 is not thread-safe, so two readers in
+    // that code at once crashed the JVM (SIGSEGV in H5CX_pop); the readers run their GDAL work one thread at a time.
+    test("netcdf_gdal readers of netCDF-4 partitions on many threads at once all finish") {
+        val dir = Paths.get(this.getClass.getResource("/binary/netcdf-coral/").toURI)
+        val files = Files.list(dir).iterator().asScala.map(_.toString).filter(_.endsWith(".nc")).toSeq.sorted
+        val parts = for (f <- files; v <- Seq("bleaching_alert_area", "mask")) yield NetCDF_Partition(f, v, 8, ExpressionConfig(spark))
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(8)
+        val rows =
+            try {
+                val jobs = (0 until 3).flatMap(_ => parts).map { p =>
+                    pool.submit(new java.util.concurrent.Callable[Int] {
+                        def call(): Int = { val r = new NetCDF_Reader(p); var n = 0; while (r.next()) { r.get(); n += 1 }; n }
+                    })
+                }
+                jobs.map(_.get(5, java.util.concurrent.TimeUnit.MINUTES)).sum
+            } finally pool.shutdownNow()
+        rows should be >= 3 * parts.size
+    }
+
     // NetCDF_Reader stages its .nc before opening the subdataset; Spark never closes a reader whose constructor
     // threw, so the constructor itself must release that copy when the open fails.
     test("a NetCDF_Reader whose subdataset cannot be opened releases the copy it staged") {

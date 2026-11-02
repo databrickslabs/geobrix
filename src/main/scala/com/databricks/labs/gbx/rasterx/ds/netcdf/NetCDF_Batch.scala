@@ -61,8 +61,9 @@ class NetCDF_Batch(schema: StructType, options: Map[String, String]) extends Sca
                 // granules per JVM, so leaking a Dataset/staged file per bad granule
                 // accumulates; the outer catch below only logs+skips, it must not be
                 // the sole cleanup site. Guard covers subdatasetsMap/isGeorefGrid/
-                // wholeFileVarName throwing after the open.
-                try {
+                // wholeFileVarName throwing after the open. The probes run one thread at a time
+                // (GDALManager.withHdfLock): enumeration UDFs of several files share an executor JVM.
+                GDALManager.withHdfLock { try {
                 // Shared "is this a true georeferenced raster grid?" probe, applied both to
                 // subdataset selectors AND (below) to the file opened directly. A grid must be
                 // bigger than 1x1 with >=1 band AND carry real georeferencing: a non-empty CRS
@@ -125,7 +126,7 @@ class NetCDF_Batch(schema: StructType, options: Map[String, String]) extends Sca
                 partitionsForFile
                 } finally {
                     RasterDriver.releaseDataset(ds)
-                }
+                } }
             } catch {
                 // A per-file enumeration failure must not silently vanish (a swallowed
                 // executor-side error here previously surfaced only as "zero rows"). Log

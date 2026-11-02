@@ -87,7 +87,8 @@ object RasterDriver {
         try {
             val cleanPath = this.cleanPath(readPath, isZip, isSubdataset)
             val flags = if (shared) GA_ReadOnly | OF_SHARED else GA_ReadOnly
-            val dataset = org.gdal.gdal.gdal.Open(cleanPath, flags)
+            val dataset =
+                GDALManager.withHdfLockIf(GDALManager.isHdfFamilyPath(cleanPath))(org.gdal.gdal.gdal.Open(cleanPath, flags))
             if (dataset == null) {
                 val error = org.gdal.gdal.gdal.GetLastErrorMsg
                 throw new RuntimeException(s"Failed to open dataset at path: $cleanPath; Error: $error")
@@ -107,9 +108,12 @@ object RasterDriver {
       * file) is left alone. */
     def releaseDataset(ds: Dataset): Unit = {
         if (ds != null) {
-            ds.FlushCache()
-            val files = ds.GetFileList().asScala.toSeq.map(_.toString).distinct
-            ds.delete()
+            val files = GDALManager.withHdfLockIf(GDALManager.isHdfFamily(ds)) {
+                ds.FlushCache()
+                val listed = ds.GetFileList().asScala.toSeq.map(_.toString).distinct
+                ds.delete()
+                listed
+            }
             files.foreach(f => {
                 if (f.contains("/vsimem/")) gdal.Unlink(f)
                 else NodeFileManager.releaseLocal(f)
@@ -143,14 +147,13 @@ object RasterDriver {
             val tempPath = bytesPath(options, java.util.UUID.randomUUID().toString.replace("-", "_"))
             gdal.FileFromMemBuffer(tempPath, bytes)
             var ds: Dataset = null
-            try {
-                TileBytes.refusedClassOf(tempPath, bytes).foreach(d => throw TileBytes.refusal(d))
-                ds = gdal.OpenEx(tempPath, OF_RASTER | OF_READONLY, TileBytes.openDrivers)
-                Option(ds).map(_.GetDriver().getShortName)
-            } finally {
-                if (ds != null) ds.delete()
-                gdal.Unlink(tempPath)
-            }
+            try GDALManager.withHdfLockIf(GDALManager.isHdfFamilyBytes(bytes)) {
+                try {
+                    TileBytes.refusedClassOf(tempPath, bytes).foreach(d => throw TileBytes.refusal(d))
+                    ds = gdal.OpenEx(tempPath, OF_RASTER | OF_READONLY, TileBytes.openDrivers)
+                    Option(ds).map(_.GetDriver().getShortName)
+                } finally if (ds != null) ds.delete()
+            } finally gdal.Unlink(tempPath)
         }
 
     /** The in-memory path tile bytes are opened at: the one rule of [[openFromBytes]] and [[sourceDriverOf]], so the
@@ -163,7 +166,9 @@ object RasterDriver {
 
     /** [[readFromBytes]] or [[readFromBytesUngated]] by `gated`. */
     def readBytes(bytes: Array[Byte], options: Map[String, String], gated: Boolean): Dataset =
-        if (bytes == null) null else openFromBytes(bytes, options, gated)
+        if (bytes == null) null
+        // netCDF / HDF bytes are opened, translated and closed one thread at a time (GDALManager.withHdfLock)
+        else GDALManager.withHdfLockIf(GDALManager.isHdfFamilyBytes(bytes))(openFromBytes(bytes, options, gated))
 
     private def openFromBytes(bytes: Array[Byte], options: Map[String, String], gated: Boolean): Dataset = {
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "_")

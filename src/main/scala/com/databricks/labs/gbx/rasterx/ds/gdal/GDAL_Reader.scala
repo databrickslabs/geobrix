@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.rasterx.ds.gdal
 
-import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import com.databricks.labs.gbx.rasterx.operations.BalancedSubdivision
 import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
@@ -17,9 +17,13 @@ class GDAL_Reader(partition: GDAL_Partition) extends PartitionReader[InternalRow
 
     // TODO: Options should come from the partition here
     private val ds = RasterDriver.read(partition.filePath, Map.empty)
+    // A netCDF / HDF source's tiles (and its close) are cut one thread at a time: GDALManager.withHdfLock.
     private val tilesIter =
-        try BalancedSubdivision.splitRasterIter(ds, Map.empty, partition.sizeInMB)
-        catch {
+        try {
+            if (GDALManager.isHdfFamily(ds))
+                GDALManager.withHdfLock(GDALManager.hdfSerialized(BalancedSubdivision.splitRasterIter(ds, Map.empty, partition.sizeInMB)))
+            else BalancedSubdivision.splitRasterIter(ds, Map.empty, partition.sizeInMB)
+        } catch {
             // No tile iterator owns ds (or the copy it holds) yet, and Spark never closes a reader whose
             // constructor threw: release it here.
             case NonFatal(e) =>

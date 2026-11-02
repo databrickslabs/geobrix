@@ -156,6 +156,66 @@ object GDALManager extends Logging {
         }
     }
 
+    private val hdfLock = new Object
+
+    /** The drivers whose GDAL work reaches netCDF-C or HDF5. GDAL guards its netCDF driver with one mutex and its HDF5
+      * drivers with another, the netCDF driver reads a band's extra-dimension metadata outside its mutex
+      * (`netCDFRasterBand::CreateMetadataFromOtherVars`, GDAL 3.13), and the payload's HDF5 is built without thread
+      * safety: two threads in this code at once crash the JVM (SIGSEGV in `H5CX_pop`). See [[withHdfLock]]. */
+    val HdfFamilyDrivers: Set[String] =
+        Set("netCDF", "HDF5", "HDF5Image", "HDF4", "HDF4Image", "BAG", "KEA", "S102", "S104", "S111")
+
+    /** Run `block` with no other thread of this JVM in GeoBrix's netCDF / HDF GDAL work (reentrant). Every open,
+      * read and close of a [[HdfFamilyDrivers]] dataset in the readers and the tile-bytes read goes through it. GDAL
+      * already runs each netCDF call under one process-wide mutex, so serializing the whole step costs little. */
+    def withHdfLock[T](block: => T): T = hdfLock.synchronized(block)
+
+    /** [[withHdfLock]] when `family`, else `block` as is. */
+    def withHdfLockIf[T](family: Boolean)(block: => T): T = if (family) withHdfLock(block) else block
+
+    /** True when `ds` is open with one of the [[HdfFamilyDrivers]]. */
+    def isHdfFamily(ds: org.gdal.gdal.Dataset): Boolean =
+        ds != null && Option(ds.GetDriver()).exists(d => HdfFamilyDrivers.contains(d.getShortName))
+
+    // netCDF classic (CDF 1, 2, 5), HDF5 (netCDF-4 too) and HDF4 signatures
+    private val HdfMagics: Seq[Array[Byte]] = Seq(
+      Array[Byte](0x43, 0x44, 0x46, 0x01),
+      Array[Byte](0x43, 0x44, 0x46, 0x02),
+      Array[Byte](0x43, 0x44, 0x46, 0x05),
+      Array[Byte](0x89.toByte, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a),
+      Array[Byte](0x0e, 0x03, 0x13, 0x01)
+    )
+    private val HdfPrefixes = Seq("NETCDF:", "HDF5:", "HDF4_", "BAG:", "S102:", "S104:", "S111:")
+    private val HdfExtensions = Set("nc", "nc4", "cdf", "h5", "hdf5", "he5", "hdf", "h4", "hdf4", "he4", "bag", "kea")
+
+    /** True when `bytes` start with a netCDF or HDF signature. */
+    def isHdfFamilyBytes(bytes: Array[Byte]): Boolean =
+        bytes != null && HdfMagics.exists(m => bytes.length >= m.length && m.indices.forall(i => bytes(i) == m(i)))
+
+    /** True when `path` names a netCDF / HDF source: a driver prefix, an extension, or (a local file) its signature. */
+    def isHdfFamilyPath(path: String): Boolean = {
+        val name = path.substring(path.lastIndexOf('/') + 1)
+        val ext = if (name.contains('.')) name.substring(name.lastIndexOf('.') + 1).toLowerCase else ""
+        HdfPrefixes.exists(path.toUpperCase.startsWith) || HdfExtensions.contains(ext) || {
+            val f = new File(path)
+            f.isFile && Try {
+                val in = new java.io.FileInputStream(f)
+                try isHdfFamilyBytes(in.readNBytes(8)) finally in.close()
+            }.getOrElse(false)
+        }
+    }
+
+    /** `it` with each step, and its close (for an [[AutoCloseable]] `it`), under [[withHdfLock]]. */
+    def hdfSerialized[A](it: Iterator[A]): Iterator[A] with AutoCloseable =
+        new Iterator[A] with AutoCloseable {
+            override def hasNext: Boolean = withHdfLock(it.hasNext)
+            override def next(): A = withHdfLock(it.next())
+            override def close(): Unit = it match {
+                case c: AutoCloseable => withHdfLock(c.close())
+                case _                => ()
+            }
+        }
+
     /** Initialize GDAL once per process; idempotent after first success. Every call checks that `config` names the
       * GDAL already loaded (a JVM cannot change GDAL) and puts any PROJ grid directories it brings that are not yet
       * on PROJ's search path there. */

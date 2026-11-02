@@ -246,14 +246,30 @@ class _UnreadableTile(Exception):
     """
 
 
+def _is_gdal_io_error(exc) -> bool:
+    """True for the error rasterio raises when GDAL cannot open or read a dataset (an ``OSError`` subclass)."""
+    from rasterio.errors import RasterioIOError
+
+    return isinstance(exc, RasterioIOError)
+
+
 @contextlib.contextmanager
 def _open_op(tile, file_ref=None):
-    """:func:`ot._open` for a tile op: opening the tile fails as :class:`_UnreadableTile`, the op's own errors pass."""
+    """:func:`ot._open` for a tile op: opening the tile fails as :class:`_UnreadableTile`, the op's own errors pass.
+
+    A file that cannot be reached is not an unreadable tile: an ``OSError`` that is not GDAL's (a
+    ``FileNotFoundError`` from a UC Volume that has not caught up, once the staging retries are spent) fails
+    the task so that Spark retries it, instead of becoming an error tile that stays.
+    """
     with contextlib.ExitStack() as stack:
         try:
             ds = stack.enter_context(ot._open(tile, file_ref=file_ref))
         except (MemoryError, RecursionError):
             raise
+        except OSError as exc:
+            if not _is_gdal_io_error(exc):
+                raise
+            raise _UnreadableTile(str(exc)) from exc
         except (
             Exception
         ) as exc:  # noqa: BLE001 - what GDAL or the policy says is the tile's reason
@@ -285,6 +301,13 @@ def _tile_op(*required):
             try:
                 return func(*args)
             except _UnreadableTile as exc:
+                return _serde.build_error_tile(str(exc), _tile_cellid(tile))
+            except OSError as exc:
+                if not _is_gdal_io_error(
+                    exc
+                ):  # not GDAL's: the file is unreachable, fail the task
+                    raise
+                # GDAL failing to read the pixels of a tile that opened (truncated, corrupt)
                 return _serde.build_error_tile(str(exc), _tile_cellid(tile))
 
         return run
@@ -390,8 +413,9 @@ def _header_accessor_udf(core_fn, return_type):
 
 
 def _pixel_accessor_udf(core_fn, return_type, on_empty=None):
-    """Struct-accepting pixel accessor UDF (_open, materialises the window). `on_empty` is the answer for a tile
-    with neither bytes nor a path (an error tile); a NULL tile is always NULL."""
+    """Struct-accepting pixel accessor UDF (_open, materialises the window). `on_empty` is the answer for an error tile (neither
+    bytes nor a path, its reason in the metadata); a NULL tile, and any other tile with nothing in it, is NULL.
+    """
     from databricks.labs.gbx.core import proj_grids
     from databricks.labs.gbx.pyrx import _env
 
@@ -400,7 +424,7 @@ def _pixel_accessor_udf(core_fn, return_type, on_empty=None):
     @f.udf(return_type)
     def _udf(tile):
         if _tile_is_empty(tile):
-            return None if tile is None else on_empty
+            return on_empty if _error_tile_of(tile) is not None else None
         try:
             _env.configure_gdal_env(extra_proj_dirs=_grid_dirs)
             with ot._open(tile) as ds:
@@ -456,7 +480,7 @@ def _pixel_accessor_udf_file(core_fn, return_type, on_empty=None):
     @f.udf(return_type)
     def _udf(tile, file_ref):
         if _tile_is_empty(tile):
-            return None if tile is None else on_empty
+            return on_empty if _error_tile_of(tile) is not None else None
         try:
             _env.configure_gdal_env(extra_proj_dirs=_grid_dirs)
             with ot._open(tile, file_ref=file_ref) as ds:

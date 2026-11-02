@@ -14,7 +14,7 @@ show_help() {
     echo -e "${CYAN}Targeting (run pinpointed tests; full suite is 10+ min):${NC}"
     echo -e "  ${GREEN}--test <nodeid>${NC}        Single test: file::testname (e.g. quickstart/test_examples.py::test_exec_sql_read_and_use_snippet)"
     echo -e "  ${GREEN}--suite <name>${NC}         Subset: quickstart|api|readers|ingestion|rasterx|advanced|setup|integration (see table below)"
-    echo -e "  ${GREEN}--path <path>${NC}          Directory or file (relative to docs/tests/python/)"
+    echo -e "  ${GREEN}--path <path>${NC}          Directory or file (relative to docs/tests/python/); one target per run"
     echo ""
     echo -e "${CYAN}Suites (approx time with --skip-build):${NC}"
     echo -e "  ${YELLOW}quickstart${NC}  ~1–2 min   quickstart/"
@@ -52,6 +52,16 @@ show_help() {
 # Parse arguments
 BASE="/root/geobrix/docs/tests/python"
 TEST_PATH="${BASE}/"
+TARGET_GIVEN=""
+# One target per run: a second --path/--test/--suite used to replace the first silently, so a run that named
+# two files tested only the last one and reported green for both.
+set_target() {
+    if [ -n "$TARGET_GIVEN" ]; then
+        echo -e "${RED}❌ One target per run: $TARGET_GIVEN was given, then $1 $2. Fix: run the command once per file, or pass their directory.${NC}"
+        exit 1
+    fi
+    TARGET_GIVEN="$1 $2"
+}
 LOG_PATH=""
 MARKERS="-m 'not integration'"
 FILTER=""
@@ -68,10 +78,12 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --test)
             # Single test: path relative to docs/tests/python, e.g. quickstart/test_examples.py::test_foo
+            set_target "$1" "$2"
             TEST_PATH="${BASE}/$2"
             shift 2
             ;;
         --suite)
+            set_target "$1" "$2"
             case "$2" in
                 quickstart|api|readers|ingestion|rasterx|advanced|setup)
                     TEST_PATH="${BASE}/$2/"
@@ -90,6 +102,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --path)
+            set_target "$1" "$2"
             TEST_PATH="${BASE}/$2"
             shift 2
             ;;

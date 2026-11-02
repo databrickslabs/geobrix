@@ -4,7 +4,7 @@ Runs Python documentation tests from `docs/tests/python/` using pytest **inside 
 
 **Isolation from SQL tests:** By default (full suite), the **api/** directory (SQL API Reference tests) is **excluded** so that `gbx:test:python-docs` and `gbx:test:sql-docs` stay isolated. To run SQL/API tests use `gbx:test:sql-docs` or `gbx:test:python-docs --suite api`.
 
-**Full suite takes 10+ minutes.** Use **targeted runs** (e.g. `--suite`, `--test`, `--path`) for day-to-day work and reserve the full suite for pre-commit or CI. Log-path conventions (`--log`): [Adding or fixing a `gbx:*` command](../../.claude/rules/gbx-commands.md).
+**Full suite takes 10+ minutes.** Give one target per run: a second one exits 1 with a `Fix:`. Use **targeted runs** (e.g. `--suite`, `--test`, `--path`) for day-to-day work and reserve the full suite for pre-commit or CI. Log-path conventions (`--log`): [Adding or fixing a `gbx:*` command](../../.claude/rules/gbx-commands.md).
 
 ---
 

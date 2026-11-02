@@ -116,12 +116,16 @@ object RST_Sample extends WithExpressionInfo {
                         // x is the easting or longitude, y the northing or latitude, whatever the authority's axis order
                         sr.SetAxisMappingStrategy(org.gdal.osr.osrConstants.OAMS_TRADITIONAL_GIS_ORDER)
                         val dst = dsSR.Clone()
-                        dst.SetAxisMappingStrategy(org.gdal.osr.osrConstants.OAMS_TRADITIONAL_GIS_ORDER)
-                        val tf = new org.gdal.osr.CoordinateTransformation(sr, dst)
-                        val pt = tf.TransformPoint(x, y)
-                        tf.delete()
-                        dst.delete()
-                        (pt(0), pt(1))
+                        var tf: org.gdal.osr.CoordinateTransformation = null
+                        try { // the clone and the transform are native: free them when the transform throws too
+                            dst.SetAxisMappingStrategy(org.gdal.osr.osrConstants.OAMS_TRADITIONAL_GIS_ORDER)
+                            tf = new org.gdal.osr.CoordinateTransformation(sr, dst)
+                            val pt = tf.TransformPoint(x, y)
+                            (pt(0), pt(1))
+                        } finally {
+                            if (tf != null) tf.delete()
+                            dst.delete()
+                        }
                     }
                 } catch { case _: Throwable => (x, y) }
                 finally sr.delete() // release the source SR on every path (incl. identity)

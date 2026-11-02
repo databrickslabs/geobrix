@@ -1,4 +1,4 @@
-"""The replacement gates (run by gbx:manifest:gen --check): per-surface completeness, session/UC overlap
+"""The replacement gates (run by gbx:manifest:gen --check): per-surface completeness, `since`, session/UC overlap
 parity, parameter names per surface, and the docs-tab guards against the availability matrix.
 
 Each gate returns one finding per line, naming the function and the file. They read the manifest, the
@@ -38,7 +38,7 @@ _SCALA_DEF = re.compile(r"def ([a-z][a-z0-9_]*)\(([^)]*)\)\s*:\s*Column")
 
 
 def _rel(path: Path) -> str:
-    return str(path.relative_to(REPO))
+    return str(path.relative_to(REPO)) if path.is_relative_to(REPO) else str(path)
 
 
 def _session_key(p) -> str:
@@ -102,6 +102,46 @@ def _defines(ref: str) -> bool:
     )
 
 
+_TOP_LEVEL = re.compile(
+    r"^(?:object|(?:case |abstract |final |sealed )*class|(?:sealed )?trait)\s", re.M
+)
+
+
+def _declares_name(text: str, obj: str, sql_name: str) -> bool:
+    """``object <obj>`` in ``text`` defines its ``name`` as ``sql_name``: the body of that object only, up to
+    the next top-level declaration, so a name quoted by another object of the file does not count."""
+    m = re.search(rf"^object {re.escape(obj)}\b", text, re.M)
+    if not m:
+        return False
+    nxt = _TOP_LEVEL.search(text, m.end())
+    body = text[m.end() : nxt.start() if nxt else len(text)]
+    return bool(
+        re.search(rf'\b(?:def|val)\s+name\b[^=\n]*=\s*"{re.escape(sql_name)}"', body)
+    )
+
+
+_MODULE_OF_PREFIX = {
+    "rst": "rasterx",
+    "bng": "gridx.bng",
+    "quadbin": "gridx.quadbin",
+    "custom": "gridx.custom",
+    "h3": "gridx.h3",
+    "st": "vectorx",
+    "pmtiles": "pmtiles",
+}
+
+
+def _scala_functions_file(fn) -> Path:
+    """The functions.scala of the row's own package (its Python module's family): wrappers of the same name in
+    another package are not this row's."""
+    module = (
+        fn.python.module
+        if fn.python
+        else _MODULE_OF_PREFIX.get(fn.sql_name.split("_")[1], "unknown")
+    )
+    return SCALA / module.replace(".", "/") / "functions.scala"
+
+
 def completeness_findings(man, fns: Iterable) -> List[str]:
     """G1: each surface a row has exists in its implementation (the binding-parity check, from the manifest)."""
     info = json.loads(FUNCTION_INFO.read_text()).get("functions", {})
@@ -116,6 +156,7 @@ def completeness_findings(man, fns: Iterable) -> List[str]:
             continue
         if fn.sql_name not in info:
             out.append(f"{fn.sql_name}: no entry in {_rel(FUNCTION_INFO)}")
+        docs_name = fn.python.name if fn.python else fn.sql_name[len("gbx_") :]
         if fn.python is not None:
             path = _module_file(fn.python.module)
             if not path.exists() or f"def {fn.python.name}(" not in _generated_region(
@@ -124,11 +165,11 @@ def completeness_findings(man, fns: Iterable) -> List[str]:
                 out.append(
                     f"{fn.sql_name}: no generated Python entry {fn.python.name} in {_rel(path)}"
                 )
-            page = DOCS / f"{fn.doc.page}.mdx"
-            if not page.exists() or f"\n### {fn.python.name}\n" not in page.read_text():
-                out.append(
-                    f"{fn.sql_name}: no section '### {fn.python.name}' in docs/docs/{fn.doc.page}.mdx"
-                )
+        page = DOCS / f"{fn.doc.page}.mdx"
+        if not page.exists() or f"\n### {docs_name}\n" not in page.read_text():
+            out.append(
+                f"{fn.sql_name}: no section '### {docs_name}' in docs/docs/{fn.doc.page}.mdx"
+            )
         l4 = fn.levels.get("L4", {})
         if "handler" in l4 and not _defines(l4["handler"]):
             out.append(f"{fn.sql_name}: its UC handler {l4['handler']} is not defined")
@@ -140,19 +181,31 @@ def completeness_findings(man, fns: Iterable) -> List[str]:
             fqn = fn.levels["L1"]["companion"]
             pkg, _, obj = fqn.rpartition(".")
             src = REPO / "src/main/scala" / pkg.replace(".", "/")
-            texts = [p.read_text() for p in src.glob("*.scala")]
             if not any(
-                f"object {obj} " in t and f'"{fn.sql_name}"' in t for t in texts
+                _declares_name(t, obj, fn.sql_name)
+                for t in (p.read_text() for p in src.glob("*.scala"))
             ):
                 out.append(
                     f"{fn.sql_name}: its L1 companion {fqn} does not declare that name"
                 )
             name = fn.python.name if fn.python else fn.sql_name[len("gbx_") :]
-            if name not in wrappers:
+            if _rel(_scala_functions_file(fn)) not in wrappers.get(name, {}):
                 out.append(
-                    f"{fn.sql_name}: the Scala surface has no wrapper {name} in a functions.scala"
+                    f"{fn.sql_name}: the Scala surface has no wrapper {name} in {_rel(_scala_functions_file(fn))}"
                 )
     return out
+
+
+_SINCE = re.compile(r"\d+\.\d+\.\d+")
+
+
+def since_findings(fns: Iterable) -> List[str]:
+    """Every stable row says the release that first shipped it (check-since.py no longer reads these rows)."""
+    return [
+        f"{fn.sql_name}: `since` {fn.since!r} is not a version like 0.4.0"
+        for fn in fns
+        if fn.status == "stable" and not _SINCE.fullmatch(fn.since)
+    ]
 
 
 # --------------------------------------------------------------------------------------------------- G2
@@ -299,7 +352,10 @@ def name_findings(fns: Iterable) -> List[str]:
                 out.append(
                     f"{fn.sql_name}: the usage in {_rel(FUNCTION_INFO)} names {usage}, the manifest {names}"
                 )
+        own = _rel(_scala_functions_file(fn))
         for file, overloads in wrappers.get(py_name, {}).items():
+            if file != own:
+                continue
             # Convenience overloads that fill constants take fewer arguments; only more than the signature is wrong
             # (the L1 arity itself is pinned by test_l1_arity_contract_for_every_companion).
             bad = sorted({len(a) for a in overloads if len(a) > fn.max_args})
@@ -416,6 +472,7 @@ def run() -> List[str]:
     return (
         oracle_findings(fns)
         + completeness_findings(man, fns)
+        + since_findings(fns)
         + overlap_findings(fns)
         + collision_findings(man)
         + name_findings(fns)

@@ -1165,3 +1165,250 @@ def test_param_name_gate_names_every_surface_that_spells_a_parameter_differently
     found = gates.name_findings([renamed])
     for where in ("rasterx/functions.py", "pyrx/functions.py", "functions.scala"):
         assert any("to_crs" in f and where in f for f in found), (where, found)
+
+
+# --- the replacement gates fire on what they guard (each case feeds a break and expects the finding) ----------
+
+
+def _row(name, **changes):
+    return dataclasses.replace(MAN.functions[name], **changes)
+
+
+def test_oracle_gate_names_a_missing_table_a_missing_row_and_a_multi_row_example():
+    from databricks.labs.gbx.bench import oracles
+
+    gates = _gates()
+    assert any(
+        "does not exist" in f
+        for f in gates.oracle_findings([_row("gbx_bng_eastnorthasbng", oracle="NOPE")])
+    )
+    fn = MAN.functions["gbx_bng_eastnorthasbng"]
+    assert any(
+        "no row in" in f
+        for f in gates.oracle_findings([_row(fn.sql_name, sql_name="gbx_bng_zzz")])
+    )
+    assert any(
+        "is not a single-row case" in f
+        for f in gates.oracle_findings([_row(fn.sql_name, example="nonexistent")])
+    )
+    with_variants = next(
+        c for c in getattr(oracles, fn.oracle) if c.fn == fn.sql_name and c.variants
+    )
+    assert any(
+        "is not a single-row case" in f
+        for f in gates.oracle_findings([_row(fn.sql_name, example=with_variants.cid)])
+    )
+
+
+def test_completeness_gate_names_each_missing_surface(tmp_path, monkeypatch):
+    gates = _gates()
+    name = "gbx_rst_transformcrs"
+    fn = MAN.functions[name]
+
+    def found(fn_, **patch):
+        for k, v in patch.items():
+            monkeypatch.setattr(gates, k, v)
+        return gates.completeness_findings(MAN, [fn_])
+
+    # a function-info file and a docs page that lack the row
+    info = tmp_path / "function-info.json"
+    info.write_text('{"functions": {}}')
+    assert any(
+        "no entry in" in f and "function-info" in f
+        for f in found(fn, FUNCTION_INFO=info)
+    )
+    monkeypatch.undo()
+    docs = tmp_path / "docs"
+    (docs / "api").mkdir(parents=True)
+    (docs / f"{fn.doc.page}.mdx").write_text("### other\n")
+    assert any("no section '### rst_transformcrs'" in f for f in found(fn, DOCS=docs))
+    monkeypatch.undo()
+    # a Python entry that is not in the generated region
+    ghost = dataclasses.replace(fn.python, name="not_generated")
+    assert any(
+        "no generated Python entry not_generated" in f
+        for f in found(_row(name, python=ghost))
+    )
+    # a UC handler that is not defined, and a table function over a row that does not exist
+    l4 = {
+        **fn.levels,
+        "L4": {**fn.levels["L4"], "handler": "databricks.labs.gbx.uc.handlers:missing"},
+    }
+    assert any(
+        "UC handler" in f and "not defined" in f for f in found(_row(name, levels=l4))
+    )
+    tvf = {**fn.levels, "L4": {"tvf_over": "gbx_nope"}}
+    assert any("gbx_nope, which has no row" in f for f in found(_row(name, levels=tvf)))
+    # a Scala companion that does not declare the name, and a surface with no wrapper in its own package
+    bng = MAN.functions["gbx_bng_eastnorthasbng"]
+    l1 = {
+        **bng.levels,
+        "L1": {
+            **bng.levels["L1"],
+            "companion": "com.databricks.labs.gbx.gridx.bng.BNG_Tessellate",
+        },
+    }
+    assert any(
+        "does not declare that name" in f for f in found(_row(bng.sql_name, levels=l1))
+    )
+    assert any(
+        "no wrapper" in f
+        for f in found(
+            bng,
+            _scala_wrappers=lambda: {
+                "bng_eastnorthasbng": {"other/functions.scala": [[]]}
+            },
+        )
+    )
+
+
+def test_a_companion_must_declare_the_name_in_its_own_object():
+    gates = _gates()
+    text = 'object A extends X {\n  def name: String = "gbx_a"\n}\nobject B extends X {\n  override def name: String = "gbx_b"\n}\n'
+    assert gates._declares_name(text, "A", "gbx_a")
+    assert gates._declares_name(text, "B", "gbx_b")
+    assert not gates._declares_name(
+        text, "A", "gbx_b"
+    )  # quoted in another object of the file
+    assert not gates._declares_name(text, "C", "gbx_a")
+
+
+def test_a_row_with_no_python_entry_still_needs_its_docs_section(tmp_path, monkeypatch):
+    gates = _gates()
+    docs = tmp_path / "docs"
+    (docs / "api").mkdir(parents=True)
+    fn = MAN.functions["gbx_bng_eastnorthasbng"]
+    (docs / f"{fn.doc.page}.mdx").write_text("### other\n")
+    monkeypatch.setattr(gates, "DOCS", docs)
+    found = gates.completeness_findings(MAN, [dataclasses.replace(fn, python=None)])
+    assert any("no section '### bng_eastnorthasbng'" in f for f in found)
+
+
+def test_overlap_gate_compares_the_uc_return_type():
+    gates = _gates()
+    assert any(
+        "UC returns INT" in f
+        for f in gates.overlap_findings(
+            [_row("gbx_bng_eastnorthasbng", returns_uc="INT")]
+        )
+    )
+    # a BINARY session return may be GEOMETRY on UC
+    makevalid = MAN.functions["gbx_st_makevalid"]
+    assert makevalid.returns_session == "BINARY"
+    assert (
+        gates.overlap_findings([_row("gbx_st_makevalid", returns_uc="GEOMETRY")]) == []
+    )
+
+
+def test_collision_gate_fires_on_a_private_name_equal_to_a_public_one_and_a_duplicate_row(
+    tmp_path, monkeypatch
+):
+    """The G2 seed: a manifest where `gbx__x` is also a public row (the private UC name of `gbx_x`, which has a
+    defaulted parameter), a row that does not start gbx_, and the same row twice."""
+    import json
+    from types import SimpleNamespace
+
+    gates = _gates()
+    base = MAN.functions[
+        "gbx_rst_slope"
+    ]  # has defaulted parameters, so it has a private UC name
+    assert any(p.default for p in base.params)
+    private = dataclasses.replace(base, sql_name="gbx__rst_slope")
+    unprefixed = dataclasses.replace(base, sql_name="rst_x")
+    man = SimpleNamespace(
+        functions={f.sql_name: f for f in (base, private, unprefixed)}
+    )
+    raw = tmp_path / "manifest"
+    raw.mkdir()
+    rows = [
+        {"sql_name": n}
+        for n in ("gbx_rst_slope", "gbx__rst_slope", "rst_x", "gbx_rst_slope")
+    ]
+    (raw / "functions.json").write_text(json.dumps({"functions": rows}))
+    monkeypatch.setattr(gates, "PKG", tmp_path)
+    found = gates.collision_findings(man)
+    assert any("gbx_rst_slope: two manifest rows" in f for f in found)
+    assert any("rst_x: a routine name must start gbx_" in f for f in found)
+    assert any("gbx__rst_slope: a routine name must start gbx_" in f for f in found)
+    assert any(
+        "gbx_rst_slope: its UC private function name is a public name" in f
+        for f in found
+    )
+
+
+def test_param_name_gate_covers_usage_arity_orphan_wrapper_and_snake_case(monkeypatch):
+    gates = _gates()
+    fn = MAN.functions["gbx_rst_transformcrs"]
+    renamed = dataclasses.replace(
+        fn, params=(fn.params[0], dataclasses.replace(fn.params[1], name="to_crs"))
+    )
+    assert any(
+        "function-info.json" in f and "to_crs" in f
+        for f in gates.name_findings([renamed])
+    )
+    camel = dataclasses.replace(
+        fn, params=(fn.params[0], dataclasses.replace(fn.params[1], name="targetCrs"))
+    )
+    assert any("not snake_case" in f for f in gates.name_findings([camel]))
+    # a Scala wrapper with more arguments than the signature, and a wrapper for a row with no Scala surface
+    own = gates._rel(gates._scala_functions_file(fn))
+    monkeypatch.setattr(
+        gates,
+        "_scala_wrappers",
+        lambda: {"rst_transformcrs": {own: [["a", "b", "c", "d"]]}},
+    )
+    assert any(
+        "Scala wrapper arities [4] above" in f for f in gates.name_findings([fn])
+    )
+    bare = _row(
+        "gbx_rst_transformcrs",
+        levels={k: v for k, v in fn.levels.items() if k != "L1"},
+        gdal=None,
+    )
+    assert "scala" not in bare.surfaces
+    assert any("delete the wrapper" in f for f in gates.name_findings([bare]))
+    # a wrapper of the same name in ANOTHER package is not this row's
+    monkeypatch.setattr(
+        gates,
+        "_scala_wrappers",
+        lambda: {
+            "rst_transformcrs": {"src/other/functions.scala": [["a", "b", "c", "d"]]}
+        },
+    )
+    assert not any("Scala wrapper" in f for f in gates.name_findings([bare]))
+
+
+def test_docs_tab_gate_rejects_a_bad_tab(tmp_path, monkeypatch):
+    gates = _gates()
+    fn = MAN.functions["gbx_rst_slope"]
+    assert "scala" not in fn.surfaces
+    docs = tmp_path / "docs"
+    (docs / "api").mkdir(parents=True)
+    src = tmp_path / "src.py"
+    src.write_text("def rst_slope_python_example(spark):\n    return 1\n")
+    (docs / f"{fn.doc.page}.mdx").write_text(
+        '<FunctionExamples\n  name="rst_slope"\n'
+        '  pythonHeavy={a}  pythonHeavySource="x.py"\n'
+        '  python={b}  pythonSource="%s"\n'
+        '  scala={c}  scalaSource="x.scala"\n/>\n' % src
+    )
+    monkeypatch.setattr(gates, "DOCS", docs)
+    monkeypatch.setattr(gates, "REPO", tmp_path)
+    found = gates.docs_findings([fn])
+    assert any("'pythonHeavy' tab" in f for f in found)
+    assert any("'scala' tab for a surface it does not have" in f for f in found)
+    assert any("needs rst_slope_python_example_output" in f for f in found)
+    assert not any("needs rst_slope_python_example in" in f for f in found)
+
+
+def test_since_gate_names_a_stable_row_without_a_release():
+    gates = _gates()
+    assert gates.since_findings(FNS) == []
+    for bad in ("", "0.4", "v0.4.0"):
+        assert any(
+            "`since`" in f
+            for f in gates.since_findings([_row("gbx_rst_slope", since=bad)])
+        ), bad
+    probe = next((f for f in FNS if f.status != "stable"), None)
+    if probe is not None:
+        assert gates.since_findings([dataclasses.replace(probe, since="")]) == []

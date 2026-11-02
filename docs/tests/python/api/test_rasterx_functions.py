@@ -976,13 +976,14 @@ _POLYGONIZE_ERROR_TILE_BUG = (
 
 
 def test_rst_retile_python_heavy_example(spark):
-    """rst_retile (heavyweight generator) returns one `tile` row per sub-tile."""
+    """rst_retile (heavyweight generator) returns one row per sub-tile carrying the tile's fields."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_retile_python_heavy_example(spark)
     assert result is not None
     assert isinstance(result, list)
     assert len(result) > 0
-    assert list(result[0].asDict()) == ["tile"]
+    fields = list(result[0].asDict())
+    assert "raster" in fields and "src" not in fields
 
 
 def test_rst_tooverlappingtiles_python_heavy_example(spark):

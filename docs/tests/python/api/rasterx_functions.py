@@ -1843,8 +1843,15 @@ def rst_merge_agg_python_heavy_example(spark):
     """
     from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
 
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
     df = _get_multi_band_tiles_df_heavy(spark)
-    result = df.groupBy("region").agg(rx.rst_merge_agg("tile").alias("mosaic")).first()
+    # The aggregate returns the mosaic's GeoTIFF bytes (BINARY) on every surface;
+    # rst_fromcontent turns them back into a tile.
+    merged = df.groupBy("region").agg(rx.rst_merge_agg("tile").alias("content"))
+    result = merged.select(
+        "region", rx.rst_fromcontent("content", f.lit("GTiff")).alias("mosaic")
+    ).first()
     return result["mosaic"]
 
 
@@ -1854,7 +1861,7 @@ rst_merge_agg_python_heavy_example_output = """
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
+(rst_merge_agg returns BINARY; rst_fromcontent makes the tile)
 """
 
 
@@ -2216,14 +2223,30 @@ def rst_bng_rasterize_agg_python_heavy_example(spark):
         ) AS t(region, e, n, val)
     """)
     df = spark.table("_bng_cells_heavy")
-    # cellid + value are the only required args; the extent/size/mode/kring
-    # options default to the same values the lightweight tier uses (BNG forces
-    # EPSG:27700, so out_srid is a no-op).
-    result = (
-        df.groupBy("region")
-        .agg(rx.rst_bng_rasterize_agg(df["cellid"], df["value"]).alias("tile"))
-        .first()
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    # A 3 km x 3 km canvas of 1 km pixels over the three cells. out_srid is not
+    # read (the output is always EPSG:27700); mode applies only when no extent is
+    # given. The aggregate returns GeoTIFF bytes; rst_fromcontent makes the tile.
+    burned = df.groupBy("region").agg(
+        rx.rst_bng_rasterize_agg(
+            "cellid",
+            "value",
+            27700,
+            1000.0,
+            529000.0,
+            179000.0,
+            532000.0,
+            182000.0,
+            3,
+            3,
+            "centroids",
+            0,
+        ).alias("content")
     )
+    result = burned.select(
+        "region", rx.rst_fromcontent("content", f.lit("GTiff")).alias("tile")
+    ).first()
     spark.catalog.dropTempView("_bng_cells_heavy")
     return result["tile"]
 
@@ -3504,26 +3527,26 @@ rst_custom_tessellate_python_heavy_example_output = """
 def rst_retile_python_heavy_example(spark):
     """Retile a raster into uniform dimensions (heavyweight generator).
 
-    The heavyweight function is a generator: select it directly and it yields one
-    ``tile`` row per sub-tile. (``FROM t, LATERAL`` is the lightweight table-function
-    form; it does not reach the heavyweight tier.)
+    The DataFrame function takes a DataFrame and returns one: each sub-tile is a row
+    that carries the tile's fields (``cellid``, ``raster``, ``path``, ...) beside the
+    input row's columns.
     """
     if rx is None:
         raise ImportError("rasterx not installed")
-    from pyspark.sql import functions as f  # noqa: PLC0415
 
     # The `rasters` view is created in Setup; retile it into 64x64 sub-tiles.
-    df = spark.table("rasters")
-    return df.select(rx.rst_retile("tile", f.lit(64), f.lit(64))).take(3)
+    # The input column is renamed first so only the sub-tile fields are kept.
+    df = spark.table("rasters").withColumnRenamed("tile", "src")
+    return rx.rst_retile(df, "src", 64, 64).drop("src").take(3)
 
 
 rst_retile_python_heavy_example_output = """
-+-------------------------------------------------+
-|tile                                             |
-+-------------------------------------------------+
-|{0, <raster bytes>, ..., {driver -> GTiff, ...}} |
-+-------------------------------------------------+
-(one row per sub-tile; the generator's one column is the tile struct)
++------+-----------------+----+---------+------+-----+
+|cellid|raster           |path|path_mode|window|crs  |
++------+-----------------+----+---------+------+-----+
+|0     |<raster bytes>   |null|...      |null  |...  |
++------+-----------------+----+---------+------+-----+
+(one row per sub-tile; the tile's fields are the columns)
 """
 
 

@@ -1967,8 +1967,11 @@ def test_the_grouped_executor_reads_at_the_sessions_read_cap(spark, tmp_path):
 # --- a member over the read cap is refused with its reason, never dropped ------------------------------------
 # A validity probe asks "can this be opened"; the decode that follows applies the gate. A group of [normal tile,
 # over-cap tile] is the error tile with the refusal, not a result built from the normal tile alone.
-def _over_cap_group(spark, tmp_path, register_it, calls):
-    from pyspark.sql.types import StructField, StructType
+def _over_cap_group(spark, tmp_path, register_it, calls=None, columns=None):
+    """The one-row answer of a group of [normal tile, over-cap tile] (columns `tile` and `idx`, 1 and 2), under a read cap
+    of 4 KiB: `calls` are SQL select expressions over the view `_gbx_group`, or `columns()` are Column-API aggregate
+    columns over the same DataFrame."""
+    from pyspark.sql.types import IntegerType, StructField, StructType
     from rasterio.io import MemoryFile
 
     from databricks.labs.gbx.bench import oracles
@@ -1984,13 +1987,16 @@ def _over_cap_group(spark, tmp_path, register_it, calls):
             dst.write(pixels)
         small = oracles._tile(out.read())
     large = oracles._build("tile_4326", str(tmp_path))
-    schema = StructType([StructField("tile", V2_TILE_SCHEMA)])
-    spark.createDataFrame([(small,), (large,)], schema).createOrReplaceTempView(
-        "_gbx_group"
+    schema = StructType(
+        [StructField("tile", V2_TILE_SCHEMA), StructField("idx", IntegerType())]
     )
+    df = spark.createDataFrame([(small, 1), (large, 2)], schema)
+    df.createOrReplaceTempView("_gbx_group")
     spark.conf.set(READ_CAP_KEY, "4096")
     try:
         register_it()
+        if columns is not None:
+            return df.agg(*columns()).collect()[0].asDict(True)
         return spark.sql(f"SELECT {calls} FROM _gbx_group").collect()[0].asDict(True)
     finally:
         spark.conf.unset(READ_CAP_KEY)
@@ -2012,12 +2018,107 @@ def test_light_array_merge_and_combine_refuse_an_over_cap_member(spark, tmp_path
     assert {n: _refused_tile(got[n]) for n in names} == dict.fromkeys(names, True), got
 
 
+_PYFUNC = "def f(in_ar, out_ar, *a, **kw): out_ar[:] = in_ar[0]"
+
+
 def test_light_aggregates_refuse_an_over_cap_member_not_drop_it(spark, tmp_path):
     """The bytes aggregates have no place for a reason: the group is NULL, not the normal member's mosaic."""
-    names = ["rst_merge_agg", "rst_combineavg_agg", "rst_frombands_agg"]
-    calls = "gbx_rst_merge_agg(tile) AS m, gbx_rst_combineavg_agg(tile) AS c"
-    got = _over_cap_group(spark, tmp_path, _light(spark, names[:2]), calls)
-    assert got == {"m": None, "c": None}
+    names = [
+        "rst_merge_agg",
+        "rst_combineavg_agg",
+        "rst_frombands_agg",
+        "rst_derivedband_agg",
+    ]
+    calls = (
+        "gbx_rst_merge_agg(tile) AS m, gbx_rst_combineavg_agg(tile) AS c, "
+        "gbx_rst_frombands_agg(tile, idx) AS b, "
+        f"gbx_rst_derivedband_agg(tile, '{_PYFUNC}', 'f') AS d"
+    )
+    got = _over_cap_group(spark, tmp_path, _light(spark, names), calls)
+    assert got == {"m": None, "c": None, "b": None, "d": None}
+
+
+def test_light_frombands_refuses_an_over_cap_band(spark, tmp_path):
+    got = _over_cap_group(
+        spark,
+        tmp_path,
+        _light(spark, ["rst_frombands"]),
+        "gbx_rst_frombands(collect_list(tile)) AS b",
+    )
+    assert _refused_tile(got["b"]), got
+
+
+def _column_api_forms(tmp_path):
+    """The Column API's forms of the array and aggregate functions, as thunks building their Column."""
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    out = str(tmp_path / "virtual")
+    tiles = F.collect_list("tile")
+    return {
+        "merge-virtualize": lambda: prx.rst_merge(tiles, virtualize_dir=out),
+        "merge-materialize": lambda: prx.rst_merge(tiles, materialize=True),
+        "combineavg-virtualize": lambda: prx.rst_combineavg(tiles, virtualize_dir=out),
+        "combinemax": lambda: prx.rst_combinemax(tiles),
+        "combinemax-virtualize": lambda: prx.rst_combinemax(tiles, virtualize_dir=out),
+        "frombands": lambda: prx.rst_frombands(tiles),
+        "frombands-virtualize": lambda: prx.rst_frombands(tiles, virtualize_dir=out),
+        "merge_agg": lambda: prx.rst_merge_agg("tile"),
+        "merge_agg-virtualize": lambda: prx.rst_merge_agg("tile", virtualize_dir=out),
+        "derivedband_agg": lambda: prx.rst_derivedband_agg("tile", _PYFUNC, "f"),
+    }
+
+
+@pytest.mark.parametrize(
+    "form",
+    [
+        "merge-virtualize",
+        "merge-materialize",
+        "combineavg-virtualize",
+        "combinemax",
+        "combinemax-virtualize",
+        "frombands",
+        "frombands-virtualize",
+        "merge_agg",
+        "merge_agg-virtualize",
+        "derivedband_agg",
+    ],
+)
+def test_column_api_forms_refuse_an_over_cap_member_with_an_error_tile(
+    spark, tmp_path, form
+):
+    """Every Column-API form of a group function (the force-output variants and the tile-returning aggregates too)
+    answers an over-cap member as the group's error tile with the reason."""
+    got = _over_cap_group(
+        spark,
+        tmp_path,
+        lambda: None,
+        columns=lambda: [_column_api_forms(tmp_path)[form]().alias("out")],
+    )
+    assert _refused_tile(got["out"]), got
+
+
+@pytest.mark.parametrize("name", ["_uf_merge", "_uf_combineavg", "_uf_frombands"])
+def test_file_ref_forms_refuse_an_over_cap_member_with_an_error_tile(tmp_path, name):
+    """The FILE-reference bodies (the forms a session with FILE support runs) refuse as the others do."""
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx import _gdal_policy
+    from databricks.labs.gbx.bench import oracles
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    with MemoryFile(oracles._tile_bytes("EPSG:4326")) as mf, mf.open() as src:
+        profile = {**src.profile, "dtype": "uint8", "nodata": 255}
+        pixels = (src.read() % 200).astype("uint8")
+    with MemoryFile() as out:
+        with out.open(**profile) as dst:
+            dst.write(pixels)
+        small = oracles._tile(out.read())
+    tiles = [small, oracles._build("tile_4326", str(tmp_path))]
+    with _gdal_policy.carried(None, 4096):
+        tile = getattr(prx, name)._f.func(tiles, [None, None])
+    assert _refused_tile(tile), (name, tile)
 
 
 @pytest.mark.integration
@@ -2041,3 +2142,168 @@ def test_heavy_aggregates_refuse_an_over_cap_member_not_drop_it(jvm_spark, tmp_p
         "gbx_rst_merge_agg(tile) AS m, gbx_rst_combineavg_agg(tile) AS c",
     )
     assert _refused_tile(got["m"]) and _refused_tile(got["c"]), got
+    # the cell id of a group refusal is the light tier's (an aggregate has no group key to name)
+    assert got["m"]["cellid"] == got["c"]["cellid"] == 0, got
+
+
+# --- review of the read cap's carriage: the Column-API wrappers, the keyed helpers, the session value -------------
+
+
+def test_a_cap_carrying_call_survives_a_copy():
+    """A wrapper built without `__init__` (a copy, an unpickled object) has no `_f` yet: reading an attribute then is an
+    AttributeError, not a recursion."""
+    import copy
+
+    from pyspark.sql import functions as F
+    from pyspark.sql.types import LongType
+
+    from databricks.labs.gbx import _gdal_policy
+
+    probe = _gdal_policy.CapCarryingCall(F.udf(lambda x: 1, LongType()))
+    assert copy.copy(probe)._f is probe._f
+    bare = _gdal_policy.CapCarryingCall.__new__(_gdal_policy.CapCarryingCall)
+    with pytest.raises(AttributeError):
+        bare.returnType  # noqa: B018
+
+
+def test_with_cap_rebuilds_a_udtf_and_both_kinds_of_pandas_udf(spark):
+    """`_with_cap` keeps a pandas UDF's kind (scalar and grouped aggregate) and its determinism, and a UDTF still
+    runs with the cap carried into its handler."""
+    import pandas as pd
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx import _gdal_policy
+    from databricks.labs.gbx.ds.file_gbx import READ_CAP_KEY
+
+    @F.pandas_udf("long")
+    def scalar(v: pd.Series) -> pd.Series:
+        from databricks.labs.gbx import _gdal_policy as gp
+
+        return pd.Series([gp.carried_read_cap()] * len(v))
+
+    @F.pandas_udf("long")
+    def grouped(v: pd.Series) -> int:
+        from databricks.labs.gbx import _gdal_policy as gp
+
+        return gp.carried_read_cap()
+
+    @F.udtf(returnType="cap: long")
+    class Probe:
+        def eval(self, x):
+            from databricks.labs.gbx import _gdal_policy as gp
+
+            yield (gp.carried_read_cap(),)
+
+    nondeterministic = scalar.asNondeterministic()
+    for original in (scalar, grouped, nondeterministic):
+        rebuilt = _gdal_policy._with_cap(original, 777)
+        assert rebuilt.evalType == original.evalType
+        assert rebuilt.deterministic == original.deterministic
+    spark.conf.set(READ_CAP_KEY, "777")
+    try:
+        df = spark.range(3).withColumn("g", F.lit(1))
+        assert (
+            df.select(_gdal_policy.CapCarryingCall(scalar)("id"))
+            .distinct()
+            .collect()[0][0]
+            == 777
+        )
+        assert (
+            df.groupBy("g")
+            .agg(_gdal_policy.CapCarryingCall(grouped)("id"))
+            .collect()[0][1]
+            == 777
+        )
+        assert _gdal_policy.CapCarryingCall(Probe)(F.lit(1)).collect()[0][0] == 777
+    finally:
+        spark.conf.unset(READ_CAP_KEY)
+
+
+def _held_udfs(obj, where, seen, found):
+    """Every UDF / UDTF object held by `obj` (containers, a function's defaults and closure cells), as (where, object)."""
+    import types
+
+    from databricks.labs.gbx import _gdal_policy
+
+    if id(obj) in seen:
+        return
+    seen.add(id(obj))
+    if _gdal_policy.is_light_udf(obj) or isinstance(obj, _gdal_policy.CapCarryingCall):
+        found.append((where, obj))
+    elif isinstance(obj, dict):
+        for k, v in obj.items():
+            _held_udfs(v, f"{where}[{k!r}]", seen, found)
+    elif isinstance(obj, (list, tuple, set, frozenset)):
+        for i, v in enumerate(obj):
+            _held_udfs(v, f"{where}[{i}]", seen, found)
+    elif isinstance(obj, types.FunctionType) and obj.__module__ == (
+        "databricks.labs.gbx.pyrx.functions"
+    ):
+        for i, v in enumerate(obj.__defaults__ or ()):
+            _held_udfs(v, f"{where}.defaults[{i}]", seen, found)
+        for name, cell in zip(obj.__code__.co_freevars, obj.__closure__ or ()):
+            try:
+                _held_udfs(cell.cell_contents, f"{where}.closure[{name}]", seen, found)
+            except ValueError:  # an empty cell
+                pass
+
+
+def test_no_light_udf_is_held_bare_below_the_pyrx_namespace():
+    """The Column API's cap is carried at the call of a module-level UDF; a UDF held in a container, a default or a
+    closure would be called bare. The registries hold the wrappers (a registration unwraps them), and no function
+    keeps a bare UDF of its own."""
+    from databricks.labs.gbx import _gdal_policy
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    found, seen = [], set()
+    for name, value in vars(prx).items():
+        _held_udfs(value, name, seen, found)
+    bare = sorted(
+        w for w, o in found if not isinstance(o, _gdal_policy.CapCarryingCall)
+    )
+    assert bare == []
+
+
+def test_session_read_cap_falls_back_to_the_classic_budget_for_a_bad_value():
+    import types
+
+    from databricks.labs.gbx.ds.file_gbx import session_read_cap
+    from databricks.labs.gbx.pyrx.core.budget import decoded_budget_bytes
+
+    classic = decoded_budget_bytes("classic")
+    for bad in ("abc", "0", "-5", ""):
+        spark = types.SimpleNamespace(
+            conf=types.SimpleNamespace(get=lambda k, d=None, v=bad: v)
+        )
+        assert session_read_cap(spark) == classic, bad
+    named = types.SimpleNamespace(
+        conf=types.SimpleNamespace(get=lambda k, d=None: " 4096 ")
+    )
+    assert session_read_cap(named) == 4096
+
+
+def test_the_keyed_helpers_carry_the_sessions_read_cap(spark, tmp_path):
+    """`merge_by_key` / `combine_by_key` fold each member through the same read gate as the aggregates, so their
+    closures carry the driver's cap, as `grouped_tile_map`'s does."""
+    from pyspark.sql.types import IntegerType, StructField, StructType
+
+    from databricks.labs.gbx.bench import oracles
+    from databricks.labs.gbx.ds.file_gbx import READ_CAP_KEY
+    from databricks.labs.gbx.pyrx import helpers
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+    tile = oracles._build("tile_4326", str(tmp_path))  # 12 KiB decoded
+    df = spark.createDataFrame(
+        [(1, tile), (1, tile)],  # two members: a lone member is returned as it is
+        StructType(
+            [StructField("k", IntegerType()), StructField("tile", V2_TILE_SCHEMA)]
+        ),
+    )
+    for fold in (helpers.merge_by_key, helpers.combine_by_key):
+        assert fold(df, ["k"]).collect()[0]["raster"] is not None
+        spark.conf.set(READ_CAP_KEY, "4096")
+        try:
+            with pytest.raises(Exception, match="read cap"):
+                fold(df, ["k"]).collect()
+        finally:
+            spark.conf.unset(READ_CAP_KEY)

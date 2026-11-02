@@ -341,7 +341,12 @@ class CapCarryingCall:
         return (self._f if cap is None else _with_cap(self._f, cap))(*cols)
 
     def __getattr__(self, name):
-        return getattr(self._f, name)
+        # only reached for a name not found on the instance: `_f` itself is missing on a copy or an unpickled object
+        # (built without __init__), where reading it here would recurse
+        wrapped = self.__dict__.get("_f")
+        if wrapped is None:
+            raise AttributeError(name)
+        return getattr(wrapped, name)
 
 
 def _with_cap(f, cap: int):

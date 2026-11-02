@@ -57,3 +57,37 @@ def test_open_tile_refuses_a_tile_decoded_over_the_carried_read_cap():
         ):
             with _serde.open_tile(raw):
                 pass
+
+
+def test_decoded_bytes_sizes_a_complex_integer_band():
+    """rasterio names GDAL's CInt16 / CInt32 bands `complex_int16` / `complex_int32`, which numpy has no dtype of: the
+    size still comes from the header, and the read-cap gate does not fail on such a tile.
+    """
+    from types import SimpleNamespace
+
+    for name, item in (("complex_int16", 4), ("complex_int32", 8), ("float32", 4)):
+        ds = SimpleNamespace(width=5, height=3, count=2, dtypes=(name, name))
+        assert _serde.decoded_bytes(ds) == 5 * 3 * 2 * item, name
+
+
+def test_open_tile_opens_a_complex_integer_tile_under_the_gate():
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    profile = dict(
+        driver="GTiff",
+        width=4,
+        height=4,
+        count=1,
+        dtype="complex_int16",
+        crs="EPSG:4326",
+        transform=from_origin(0, 4, 1, 1),
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(np.ones((1, 4, 4), dtype="complex64"))
+        raw = mf.read()
+    with _serde.open_tile(raw) as ds:  # the gated open reads the header's size
+        assert ds.dtypes[0] == "complex_int16"
+        assert _serde.decoded_bytes(ds) == 4 * 4 * 4

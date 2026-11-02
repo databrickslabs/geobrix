@@ -577,7 +577,16 @@ def _fold_by_key(
             fix_group,
         )
 
-    return shuffled.mapInArrow(run, _out_schema(df, keys))
+    # the driver's read cap goes to the workers with the closure (a standard-access worker cannot work it out itself):
+    # the gate the folds apply to each member is the one the session names, as for a registered function
+    from databricks.labs.gbx._gdal_policy import carrying
+    from databricks.labs.gbx.ds.file_gbx import session_read_cap
+
+    read_cap = session_read_cap(df.sparkSession)
+    return shuffled.mapInArrow(
+        run if read_cap is None else carrying(run, None, read_cap),
+        _out_schema(df, keys),
+    )
 
 
 def _vrt_mosaic(members, cap_bytes: int):

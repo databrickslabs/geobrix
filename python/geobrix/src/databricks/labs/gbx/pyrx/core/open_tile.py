@@ -1351,8 +1351,9 @@ def shape_output(
         if vt.is_virtual():
             return vt
 
-        # The written file's own size (header read only).
-        with _serde.open_tile(vt.raster) as ds:
+        # The written file's own size (header read only: no pixel is decoded, so a mosaic over the read cap is
+        # still written, and a result is no member of the group the gate judged).
+        with _serde.open_tile(vt.raster, gate=False) as ds:
             own_w, own_h = ds.width, ds.height
 
         # (col, row, w, h) names the file. A part cut from a parent carries its

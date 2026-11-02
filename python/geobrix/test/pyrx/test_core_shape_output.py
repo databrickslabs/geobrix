@@ -174,3 +174,14 @@ def test_virtualize_dir_resets_the_provenance_already_baked_into_the_bytes(tmp_p
     got_px, got_tf, got_crs = _pixels(out)
     assert got_px.shape == want_px.shape and np.array_equal(got_px, want_px)
     assert got_tf == want_tf and got_crs == want_crs
+
+
+def test_virtualize_dir_writes_a_result_over_the_read_cap(tmp_path):
+    """The size of the written file is a header read: a merge result larger than the read cap is still written (the
+    gate judges the members that are decoded, not this)."""
+    from databricks.labs.gbx import _gdal_policy
+
+    vt = VirtualTile(cellid=3, raster=make_geotiff_bytes(width=64, height=64))
+    with _gdal_policy.carried(None, 1024):
+        out = ot.shape_output(vt, virtualize_dir=str(tmp_path))
+    assert out.is_virtual() and os.path.exists(out.path)

@@ -51,15 +51,19 @@ TILE_SCHEMA = StructType(
 )
 
 
+# rasterio's names for GDAL's complex integer types, which numpy has no dtype of
+_COMPLEX_INT_SIZES = {"complex_int16": 4, "complex_int32": 8}
+
+
 def decoded_bytes(ds) -> int:
     """The decoded size of an open raster, from its header: width x height x bands x the first band's type size."""
     import numpy as np
 
-    return (
-        ds.width * ds.height * ds.count * np.dtype(ds.dtypes[0]).itemsize
-        if ds.count
-        else 0
-    )
+    if not ds.count:
+        return 0
+    name = ds.dtypes[0]
+    item = _COMPLEX_INT_SIZES.get(name) or np.dtype(name).itemsize
+    return ds.width * ds.height * ds.count * item
 
 
 def over_read_cap(ds) -> Optional[str]:

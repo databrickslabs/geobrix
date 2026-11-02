@@ -60,7 +60,7 @@ runs:
           echo "::error::no x86_64 native build: neither the cache entry native-out-x86_64-$HASH nor this run's native-out-x86_64 artifact. The job needs a job that calls .github/workflows/build-gdal-native.yml (cache: true), on the same runner group (a cache entry's version includes its compression)."
           exit 1
         fi
-        echo "native build from: $([ "$HIT" = true ] && echo the cache || echo this run's artifact)"
+        echo "native build from: $([ "$HIT" = true ] && echo "the cache" || echo "this run's artifact")"
         root="$GITHUB_WORKSPACE/build/native/jvm-payload"
         python3 scripts/native/jvm_payload.py --native "$native" --arch x86_64 --out "$root"
         echo "root=$root" >> "$GITHUB_OUTPUT"

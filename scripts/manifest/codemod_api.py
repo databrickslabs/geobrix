@@ -6,7 +6,9 @@ of a moved name is reported for a hand edit. When the new alias is already bound
 file (often the light module itself, `rx` for pyrx), the import uses `<alias>_api` instead, so the light
 module's other calls keep their meaning. Notebooks (.ipynb) are edited cell by cell, kept at indent 1, the
 file's own ensure_ascii, and a trailing newline; a notebook with no change is never rewritten, and one
-whose JSON layout does not round-trip is reported instead. Anything else
+whose JSON layout does not round-trip is reported instead. The new alias must be bound where each
+rewritten call is (module scope, or an enclosing function): a binding only inside another function does
+not count, the module-level import is added, and an alias still unbound afterwards is reported. Anything else
 is printed as UNRESOLVED for a hand edit. `--dry-run` prints what would change and writes nothing.
 """
 
@@ -79,6 +81,119 @@ def _after_docstring(text: str) -> int:
     return sum(len(x) for x in lines[:line])
 
 
+def _parse(text: str):
+    """The module's AST; a notebook cell's magic lines (`%`, `!`) are blanked first. None when unparseable."""
+    import ast
+
+    try:
+        return ast.parse(text)
+    except SyntaxError:
+        lines = ["pass" if x.lstrip().startswith(("%", "!")) else x for x in text.splitlines()]
+        try:
+            return ast.parse("\n".join(lines))
+        except SyntaxError:
+            return None
+
+
+def _bound_here(nodes, params=()) -> set:
+    """Names bound directly in one scope's body (nested functions and classes bind only their own name)."""
+    import ast
+
+    out = set(params)
+    stack = list(nodes)
+    while stack:
+        n = stack.pop()
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            out.add(n.name)
+            stack.extend(n.decorator_list)
+            continue
+        if isinstance(n, (ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            continue
+        if isinstance(n, (ast.Import, ast.ImportFrom)):
+            out |= {a.asname or a.name.split(".")[0] for a in n.names}
+        elif isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del)):
+            out.add(n.id)
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            out.add(n.name)
+        elif isinstance(n, (ast.MatchAs, ast.MatchStar)) and n.name:
+            out.add(n.name)
+        elif isinstance(n, ast.MatchMapping) and n.rest:
+            out.add(n.rest)
+        stack.extend(ast.iter_child_nodes(n))
+    return out
+
+
+def _params(args) -> set:
+    names = [a.arg for a in args.posonlyargs + args.args + args.kwonlyargs]
+    return set(names) | {a.arg for a in (args.vararg, args.kwarg) if a}
+
+
+def _context_names(context: str) -> set:
+    """Module-level names the earlier notebook cells bind."""
+    tree = _parse(context) if context.strip() else None
+    if tree is not None:
+        return _bound_here(tree.body)
+    names = set(re.findall(r"\bas (\w+)", context))
+    names |= set(re.findall(r"^(\w+)\s*=", context, re.M))
+    names |= set(re.findall(r"\bfrom [\w.]+ import (\w+)\s*$", context, re.M))
+    return names
+
+
+def _undefined(text: str, names, context: str = "") -> List[Tuple[str, int]]:
+    """(name, line) of each load of one of ``names`` that no visible scope binds (a pyflakes F821, limited
+    to ``names``). A function's local binding is not visible to its siblings. None when ``text`` has no AST."""
+    import ast
+
+    tree = _parse(text)
+    if tree is None:
+        return None
+    declared = {
+        g for n in ast.walk(tree) if isinstance(n, (ast.Global, ast.Nonlocal)) for g in n.names
+    }
+    found: List[Tuple[str, int]] = []
+
+    def visible(name, chain):
+        if name in declared:
+            return True
+        return any(name in bound for i, (bound, is_class) in enumerate(chain) if not is_class or i == len(chain) - 1)
+
+    def visit(n, chain):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load):
+            if n.id in names and not visible(n.id, chain):
+                found.append((n.id, n.lineno))
+            return
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            outer = list(n.decorator_list) if not isinstance(n, ast.Lambda) else []
+            outer += [d for d in n.args.defaults + n.args.kw_defaults if d]
+            for o in outer:
+                visit(o, chain)
+            body = n.body if isinstance(n.body, list) else [n.body]
+            inner = chain + [(_bound_here(body, _params(n.args)), False)]
+            for b in body:
+                visit(b, inner)
+            return
+        if isinstance(n, ast.ClassDef):
+            for o in n.decorator_list + n.bases + [k.value for k in n.keywords]:
+                visit(o, chain)
+            inner = chain + [(_bound_here(n.body), True)]
+            for b in n.body:
+                visit(b, inner)
+            return
+        if isinstance(n, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            targets = {x.id for g in n.generators for x in ast.walk(g.target) if isinstance(x, ast.Name)}
+            inner = chain + [(targets, False)]
+            for c in ast.iter_child_nodes(n):
+                visit(c, inner)
+            return
+        for c in ast.iter_child_nodes(n):
+            visit(c, chain)
+
+    top = [(_bound_here(tree.body) | _context_names(context), False)]
+    for b in tree.body:
+        visit(b, top)
+    return found
+
+
 def rewrite(
     text: str, targets: Dict[str, str], context: str = ""
 ) -> Tuple[str, List[str]]:
@@ -125,7 +240,10 @@ def rewrite(
             )
     for module, (alias, needs) in sorted(chosen.items()):
         imp = _import_line(module, alias) + "\n"
-        if needs and imp.strip() not in scope:
+        gaps = _undefined(text, {alias}, context)
+        # a binding only inside another function does not reach the rewritten call: judge by scope
+        missing = bool(gaps) if gaps is not None else needs and imp.strip() not in scope
+        if missing:
             # the header's import block: top-level imports before the first def, class or decorator
             body = re.search(r"^(def|class|async def|@)\b", text, re.M)
             head = text[: body.start()] if body else text
@@ -139,6 +257,9 @@ def rewrite(
                     imp.rstrip("\n") + "  # noqa: E402\n"
                 )  # the header's imports follow code
             text = text[:at] + imp + text[at:]
+    left = _undefined(text, {a for a, _ in chosen.values()}, context) or []
+    for name, line in left:
+        unresolved.append(f"line {line}: {name} is still unbound where it is used after the rewrite (F821)")
     return text, unresolved
 
 

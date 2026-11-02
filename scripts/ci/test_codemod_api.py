@@ -22,3 +22,17 @@ def test_a_second_codemod_run_over_the_callers_changes_nothing():
             elif path.suffix == ".ipynb":
                 old, new, _ = codemod_api._notebook(path, targets)
                 assert new == old, f"{path} still changes"
+
+    # the new alias bound only inside another function does not reach the rewritten call
+    name = next(n for n, m in targets.items() if m == "gridx.bng")
+    src = (
+        "from databricks.labs.gbx.pygx import functions as gx\n\n\n"
+        "def other():\n"
+        "    from databricks.labs.gbx.gridx.bng import functions as bx\n\n"
+        "    return bx\n\n\n"
+        f"def test_it():\n    return gx.{name}(1)\n"
+    )
+    new, issues = codemod_api.rewrite(src, targets)
+    assert "\nfrom databricks.labs.gbx.gridx.bng import functions as bx\n" in new
+    assert codemod_api._undefined(new, {"bx"}) == [] and not issues
+    assert codemod_api.rewrite(new, targets)[0] == new

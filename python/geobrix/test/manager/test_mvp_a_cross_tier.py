@@ -134,3 +134,21 @@ def test_mvp_a_oracle(request, tmp_path, shape):
         assert len(ran) == len(rows)
         failures += [m for _, m in ran if m]
     assert failures == []
+
+
+def test_mvp_a_oracle_through_the_python_api_matches_sql(spark, tmp_path):
+    """The generated Column API leg of `run_groups` (`column_of`): the same rows, the same red set as SQL."""
+    from databricks.labs.gbx import manifest
+
+    def api(sql_name):
+        return manifest.resolve_ref(manifest.load().functions[sql_name].python.ref)
+
+    _grouped(spark)
+    for fn in (MA, BR):
+        rows = [c for c in oracles.MVP_A if c.fn == fn and "session" in c.surfaces]
+        sql = oracles.run_groups(spark, rows, GROUPED, str(tmp_path), oracles.NAN)
+        col = oracles.run_groups(
+            spark, rows, GROUPED, str(tmp_path), oracles.NAN, column_of=api
+        )
+        assert len(col) == len(rows)
+        assert {c.cid: m for c, m in col} == {c.cid: m for c, m in sql}

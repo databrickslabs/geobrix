@@ -13,6 +13,7 @@ import json
 import math
 import os
 import tempfile
+import threading
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -1113,11 +1114,17 @@ class _Tables(dict):
     """
 
     _found = False
+    _lock = threading.RLock()
 
     def _find(self) -> None:
-        if not self._found:
-            dict.update(self, _tables())
-            self._found = True
+        if self._found:
+            return
+        with (
+            self._lock
+        ):  # one thread imports the family modules; the others wait for a whole dict
+            if not self._found:
+                dict.update(self, _tables())
+                self._found = True
 
     def __getitem__(self, key):
         self._find()
@@ -1533,6 +1540,7 @@ def _se_build(name: str, tmpdir: Optional[str] = None):
 
 
 def _build(name: str, tmpdir: str):
+    TABLES._find()  # the family modules register their fixture builders when they are imported
     if name in BUILDERS:
         return BUILDERS[name](tmpdir)
     se = _se_build(name, tmpdir)
@@ -2500,7 +2508,10 @@ def argument_schema(case: Case, rows, surface: str = "session") -> str:
     if fn.kind == "aggregate":
         if group_width(fn.params) == 1:
             return f"c0 {TILE_SQL}"
-        return "c0 string, c1 double"
+        return ", ".join(
+            f"c{i} {manifest.sql_type(p.session[0])}"
+            for i, p in enumerate(fn.params[: group_width(fn.params)])
+        )
     params = fn.params
     return ", ".join(
         f"c{i} "
@@ -2509,10 +2520,11 @@ def argument_schema(case: Case, rows, surface: str = "session") -> str:
     )
 
 
-def verdict(case: Case, outs, rows) -> Optional[str]:
+def verdict(case: Case, outs, rows, tmpdir: Optional[str] = None) -> Optional[str]:
     """None when the outputs of one case meet it: a scalar's values (one per argument row), a generator's
     rows, or an aggregate's one value. A scalar that returns an array of cells is judged on its elements,
-    as the rows its array explodes to."""
+    as the rows its array explodes to. An aggregate's check reads the resolved arguments, so it takes the
+    ``tmpdir`` its fixtures were built in."""
     from databricks.labs.gbx import manifest
 
     fn = manifest.load().functions[case.fn]
@@ -2523,7 +2535,8 @@ def verdict(case: Case, outs, rows) -> Optional[str]:
     if fn.kind == "scalar" and case.kind == "cells":
         return _check_rows(case, [e for o in outs for e in (o or [])], rows[0])
     if fn.kind == "aggregate":
-        return check(case, outs[0] if outs else None, case.args)
+        args = [resolve_arg(a, tmpdir) for a in case.args]
+        return check(case, outs[0] if outs else None, args)
     return _verdict(case, outs, rows)
 
 
@@ -2822,7 +2835,7 @@ def run_groups(
         if "session" not in case.surfaces:
             continue
         params = man.functions[case.fn].params
-        group = resolve_arg(case.args[0], tmpdir)
+        group = group_arg = resolve_arg(case.args[0], tmpdir)
         group = (
             [group] if isinstance(group, dict) else group
         )  # one tile is a group of one
@@ -2830,9 +2843,10 @@ def run_groups(
         if group_width(params) == 1:
             rows, first = [("a", t, *consts) for t in group], [f"c0 {TILE_SQL}"]
         else:
-            rows, first = [("a", c, v, *consts) for c, v in group], [
-                "c0 string",
-                "c1 double",
+            rows = [("a", *m, *consts) for m in group]
+            first = [
+                f"c{i} {manifest.sql_type(p.session[0])}"
+                for i, p in enumerate(params[: group_width(params)])
             ]
         n0 = len(first)
         schema = ", ".join(
@@ -2877,7 +2891,7 @@ def run_groups(
                 tile_out = isinstance(df.schema["out"].dataType, StructType)
                 out.append((case, _check_error_group(want, value, tile_out)))
             else:
-                out.append((case, check(want, value, case.args)))
+                out.append((case, check(want, value, [group_arg, *consts])))
         except (
             Exception
         ) as exc:  # noqa: BLE001 - the case decides whether an error is expected

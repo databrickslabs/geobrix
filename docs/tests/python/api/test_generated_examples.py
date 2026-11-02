@@ -19,4 +19,4 @@ def test_generated_example(spark, tmp_path, sql_name):
     view.createOrReplaceTempView("gbx_example")
     got = spark.sql(sql).collect()
     outs = [r["out"] for r in got] if " AS out" in sql else got
-    assert oracles.verdict(case, outs, rows) is None, sql
+    assert oracles.verdict(case, outs, rows, str(tmp_path)) is None, sql

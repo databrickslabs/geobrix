@@ -37,7 +37,12 @@ def _rows():
             continue
         for variant in _l3_forms(fn.levels.get("L3", {})):
             engine = variant.startswith("engine")
-            apis = ("sql",) if fn.kind == "generator" else ("sql", "python")
+            # the Python API leg needs a Python entry, and a generator is a DataFrame call (not a Column)
+            apis = (
+                ("sql",)
+                if fn.kind == "generator" or fn.python is None
+                else ("sql", "python")
+            )
             for api in apis:
                 marks = [pytest.mark.integration] if engine else []
                 yield pytest.param(
@@ -125,3 +130,30 @@ def test_l1_arity_contract_for_every_companion(jvm_spark):
                 fn.levels["L1"]["companion"], fn.min_args, fn.max_args
             )
             assert str(got) == want, fn.sql_name
+
+
+def test_the_python_leg_is_only_for_a_row_with_a_python_entry(monkeypatch):
+    import dataclasses
+    from types import SimpleNamespace
+
+    base = manifest.load().functions["gbx_bng_eastnorthasbng"]
+    rows = {
+        "gbx_a": dataclasses.replace(base, sql_name="gbx_a", oracle="FAM_X"),
+        "gbx_b": dataclasses.replace(
+            base, sql_name="gbx_b", oracle="FAM_X", python=None
+        ),
+        "gbx_c": dataclasses.replace(
+            base, sql_name="gbx_c", oracle="FAM_X", kind="generator"
+        ),
+    }
+    monkeypatch.setattr(manifest, "load", lambda: SimpleNamespace(functions=rows))
+    monkeypatch.setattr(__import__(__name__, fromlist=["_ONLY"]), "_ONLY", set())
+    apis = {}
+    for p in _rows():
+        if p.values[1] == "L3":
+            apis.setdefault(p.values[0], set()).add(p.values[3])
+    assert apis == {
+        "gbx_a": {"sql", "python"},
+        "gbx_b": {"sql"},
+        "gbx_c": {"sql"},
+    }

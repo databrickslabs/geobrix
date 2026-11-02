@@ -270,6 +270,16 @@ def test_a_directory_target_leaves_pythonpath_alone(sandbox, args):
     assert "PYTHONPATH" not in _docs_run_cmd(sandbox, *args)
 
 
+def test_two_targets_in_one_python_docs_run_are_refused_not_run_as_the_last(sandbox):
+    res = sandbox.run(
+        "gbx-test-python-docs.sh", "--skip-build", "--path", "a.py", "--path", "b.py"
+    )
+
+    assert res.returncode == 1
+    assert "One target per run" in res.output and "Fix:" in res.output
+    assert not [c for c in sandbox.execs() if "pytest" in c[-1]]
+
+
 # -------------------------------------------------------------- scala: non-ASCII paths
 
 

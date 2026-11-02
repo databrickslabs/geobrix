@@ -119,6 +119,15 @@ SPEC_ANALYSIS = (
         "proximity_geo",
         ONLY,
     ),
+    # NaN is the heavy tier's absent sentinel: no cap, at every level
+    Case(
+        "proximity_nan_cap",
+        PRX,
+        (CLASSES, "1", "GEO", float("nan")),
+        "ref",
+        "proximity_geo",
+        ONLY,
+    ),
     Case("proximity_error_in", PRX, (ERR, "1"), "error_tile", UPSTREAM_ERROR, ONLY),
     Case("proximity_corrupt", PRX, (CORRUPT, "1"), "error_tile", None, ONLY),
     # fillnodata: rasterio's own GDAL FillNodata call is the reference (the 3 x 3 hole of dem_3857)

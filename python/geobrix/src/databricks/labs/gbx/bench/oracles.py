@@ -89,15 +89,8 @@ _METADATA_L1 = "the JVM metadata is GDAL's metadata domains merged, not the cont
 # With zero_for_flat GDAL drops the NoData value, so its border pixels are 0; light keeps them NoData (a documented
 # divergence, which the GDAL spec engine keeps).
 _ASPECT_ZERO_L1 = "GDAL drops the NoData value when zero_for_flat is set, so its border pixels are 0, not NoData"
-# The manager's SQL dispatch sends an error tile out before the JVM expression runs, so a wrong argument that the
-# expression itself rejects (it checks arguments before it passes an error tile through) is not seen on that path.
-_L1_ERROR_TILE_FIRST = (
-    "the manager's SQL dispatch returns an error tile before the JVM expression checks its arguments; "
-    "the expression itself raises"
-)
 HEAVY_PENDING: Dict[str, Dict[str, str]] = {
     "aspect_flat_zero": {"L1": _ASPECT_ZERO_L1},
-    "resample_error_in_bad_word": {"L1": _L1_ERROR_TILE_FIRST},
     **{
         cid: {"L1": _QUADBIN_L1}
         for cid in (
@@ -2293,6 +2286,8 @@ def _ref_proximity(units: str):
 
         targets = args[1] if len(args) > 1 else None
         cap = args[3] if len(args) > 3 else None
+        if cap is not None and cap != cap:  # NaN is no cap
+            cap = None
         with _ref_dataset(args) as ds:
             band = ds.read(1)
             px, py = abs(ds.transform.a), abs(ds.transform.e)

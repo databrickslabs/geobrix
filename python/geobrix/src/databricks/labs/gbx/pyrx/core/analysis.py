@@ -52,13 +52,10 @@ def check_proximity(*, distunits=None, max_distance=None, **_) -> None:
         raise ValueError(
             f"rst_proximity: distunits must be 'GEO' or 'PIXEL'; got '{distunits}'"
         )
-    if max_distance is not None:
+    # NaN is the absent sentinel of the heavy tier (no cap), so only a real value is checked
+    if max_distance is not None and not math.isnan(float(max_distance)):
         max_distance = float(max_distance)
-        if (
-            not (max_distance > 0.0)
-            or math.isinf(max_distance)
-            or math.isnan(max_distance)
-        ):
+        if not (max_distance > 0.0) or math.isinf(max_distance):
             raise ValueError(
                 f"rst_proximity: max_distance must be > 0 and finite; got {max_distance}"
             )
@@ -97,6 +94,8 @@ def proximity(ds, target_values, distunits, max_distance):
     check_proximity(distunits=distunits, max_distance=max_distance)
     if max_distance is not None:
         max_distance = float(max_distance)
+        if math.isnan(max_distance):
+            max_distance = None  # NaN is "no cap", as on the heavy tier
 
     # scipy is a pyrx dependency; import lazily so module import stays cheap.
     from scipy import ndimage

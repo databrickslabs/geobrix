@@ -186,8 +186,15 @@ SPEC_WARP = (
     Case("resample_null_tile", RS, (None, 0.5), "null", None, ONLY),
     Case("resample_null_factor", RS, (T4326, None), "null", None, ONLY),
     Case("resample_error_in", RS, (ERR, 0.5), "error_tile", UPSTREAM_ERROR, ONLY),
-    # a wrong argument fails the call before an error tile passes through
-    Case("resample_error_in_bad_word", RS, (ERR, 0.5, "sinc"), "raises", "sinc", ONLY),
+    # an error tile passes through before its arguments are checked
+    Case(
+        "resample_error_tile_passes_bad_word",
+        RS,
+        (ERR, 0.5, "sinc"),
+        "error_tile",
+        UPSTREAM_ERROR,
+        ONLY,
+    ),
     Case("resample_corrupt", RS, (CORRUPT, 0.5), "error_tile", None, ONLY),
     # a tile decoded over the read cap is an error tile with a Fix, never a failed task (READ_CAP_ROWS lowers the cap)
     Case(

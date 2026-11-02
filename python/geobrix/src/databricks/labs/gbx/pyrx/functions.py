@@ -282,10 +282,10 @@ def _tile_op(*required, check=None):
     """Decorator for a tile-returning UDF body ``(tile, ..., <named parameters>)``.
 
     The checks run in this order. NULL in is NULL out: a NULL ``tile`` or a NULL argument named in ``required``
-    gives NULL. ``check``, when given, is called with every argument by name and raises a ``ValueError`` that names
-    a wrong one: that fails the call, also for an error tile or a tile that cannot be opened. A tile with neither
-    bytes nor a path goes out as itself when it is an error tile (so the upstream reason survives) and is NULL
-    otherwise. A tile the body cannot open is its error tile, with the reason (:class:`_UnreadableTile`).
+    gives NULL. A tile with neither bytes nor a path goes out as itself when it is an error tile (so the upstream
+    reason survives) and is NULL otherwise. ``check``, when given, is then called with every argument by name and
+    raises a ``ValueError`` that names a wrong one: that fails the call, also for a tile that cannot be opened.
+    A tile the body cannot open is its error tile, with the reason (:class:`_UnreadableTile`).
     """
 
     def wrap(func):
@@ -299,10 +299,10 @@ def _tile_op(*required, check=None):
             tile = args[0]
             if tile is None or any(args[i] is None for i in at):
                 return None
-            if check is not None:
-                check(**dict(zip(names, args)))
             if _tile_is_empty(tile):
                 return _empty_tile_out(tile)
+            if check is not None:
+                check(**dict(zip(names, args)))
             try:
                 return func(*args)
             except _UnreadableTile as exc:

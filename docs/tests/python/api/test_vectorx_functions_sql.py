@@ -33,14 +33,13 @@ def vectorx_registered(spark):
     Registers:
     - ``vectorx`` (heavy tier): TIN, MVT, CRS functions
     - ``vectorx.jts.legacy`` (heavy tier): ``gbx_st_legacyaswkb``
-    - ``pyvx`` (light tier): light-only functions including the antimeridian
-      family (``gbx_st_shiftlongitude``, ``gbx_st_wrapx``, ``gbx_st_split``)
+    - the manager: the antimeridian, cleaning and coverage functions
+      (``gbx_st_shiftlongitude``, ``gbx_st_wrapx``, ``gbx_st_split`` and the rest),
+      each on the best level this session offers
 
-    The light registration must come after the heavy registration so the last
-    write to the SQL function registry wins; both tiers register the same
-    ``gbx_st_*`` SQL names, and pyvx's scalar UDFs override the heavy
-    expressions for the light-only antimeridian functions (which have no heavy
-    counterpart).
+    The manager registration comes after the heavy registration so the last
+    write to the SQL function registry wins; both register the same
+    ``gbx_st_*`` SQL names.
 
     Also creates the four canonical fixture views used by the SQL examples.
     """
@@ -48,12 +47,12 @@ def vectorx_registered(spark):
     from databricks.labs.gbx.vectorx.jts.legacy import (
         functions as legacy_vx,
     )  # noqa: PLC0415
-    from databricks.labs.gbx.pyvx import functions as pyvx  # noqa: PLC0415
+    from databricks.labs.gbx.manager import register as gbx_register  # noqa: PLC0415
     from ._fixtures import create_setup_views_vectorx_heavy  # noqa: PLC0415
 
     vx.register(spark)
     legacy_vx.register(spark)
-    pyvx.register(
+    gbx_register(
         spark,
         only=[
             "gbx_st_shiftlongitude",
@@ -268,8 +267,8 @@ def test_st_legacyaswkb_sql_example(vectorx_registered):
 
 # ---------------------------------------------------------------------------
 # Antimeridian family — st_shiftlongitude, st_wrapx, st_split
-# These are light-only (pyvx tier) SQL UDFs registered in the fixture above.
-# All three tests use inline WKT string inputs; pyvx functions accept WKT/EWKT
+# The fixture above registers these through the manager.
+# All three tests use inline WKT string inputs; the functions accept WKT/EWKT
 # strings directly via parse_geom, so no ST_AsBinary/ST_GeomFromText wrapper
 # is needed in these Docker-executable examples.
 # ---------------------------------------------------------------------------
@@ -342,8 +341,8 @@ def test_st_split_sql_example(vectorx_registered):
 
 # ---------------------------------------------------------------------------
 # Geometry validity family — st_makevalid, st_explainvalidity
-# These are light-only (pyvx tier) SQL UDFs registered in the fixture above.
-# Both tests use inline WKT string inputs; pyvx functions accept WKT/EWKT
+# The fixture above registers these through the manager.
+# Both tests use inline WKT string inputs; the functions accept WKT/EWKT
 # directly via parse_geom, so no ST_AsBinary wrapper is needed.
 # ---------------------------------------------------------------------------
 
@@ -403,7 +402,7 @@ def test_antimeridian_pattern_sql_example(vectorx_registered):
     ST_GeomFromWKB) that are available on DBR 17.3+ but not in vanilla Spark.
     The structural test checks the SQL string is non-empty and references all three
     antimeridian functions.  The integration test builds the equivalent chain using
-    the pyvx Python Column API + shapely to confirm the geometry result is correct.
+    the vectorx Python Column API + shapely to confirm the geometry result is correct.
     """
     # Part 1: structural — the example SQL string is non-empty and references all functions.
     # ST_XMax is the conditional guard that applies wrapx only to pieces with x > 180;
@@ -421,7 +420,7 @@ def test_antimeridian_pattern_sql_example(vectorx_registered):
 
     # Part 2: integration — the full chain produces a valid normalized geometry
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
     from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
     from shapely.ops import unary_union  # noqa: PLC0415
 
@@ -496,8 +495,8 @@ def test_antimeridian_pattern_sql_example(vectorx_registered):
 # ---------------------------------------------------------------------------
 # Geometry cleaning family — st_simplifypreservetopology, st_removerepeatedpoints,
 #                            st_reduceprecision, st_node, st_snap
-# These are light-only (pyvx tier) SQL UDFs registered in the fixture above.
-# All tests use inline WKT string inputs; pyvx functions accept WKT/EWKT
+# The fixture above registers these through the manager.
+# All tests use inline WKT string inputs; the functions accept WKT/EWKT
 # directly via parse_geom, so no ST_AsBinary wrapper is needed.
 # ---------------------------------------------------------------------------
 
@@ -602,8 +601,8 @@ def test_st_snap_sql_example(vectorx_registered):
 
 # ---------------------------------------------------------------------------
 # Coverage validity family — st_coverageisvalid, st_coverageinvalidedges
-# These are light-only (pyvx tier) grouped-aggregate SQL UDFs registered in
-# the fixture above.  Both tests use the coverage_parcels / coverage_overlap
+# These are grouped-aggregate SQL functions the fixture above registers
+# through the manager.  Both tests use the coverage_parcels / coverage_overlap
 # fixture views created by create_setup_views_vectorx_heavy.
 # ---------------------------------------------------------------------------
 

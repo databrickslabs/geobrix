@@ -3,7 +3,8 @@ package com.databricks.labs.gbx.rasterx.ds.gdal
 import org.apache.spark.sql.connector.catalog._
 import org.apache.spark.sql.connector.read.ScanBuilder
 import org.apache.spark.sql.connector.write.{LogicalWriteInfo, WriteBuilder}
-import org.apache.spark.sql.types.StructType
+import com.databricks.labs.gbx.rasterx.util.RST_ExpressionUtil
+import org.apache.spark.sql.types.{BinaryType, StringType, StructField, StructType}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
 import scala.jdk.CollectionConverters._
@@ -24,8 +25,13 @@ class GDAL_Table(schema: StructType, properties: Map[String, String]) extends Ta
     override def columns(): Array[Column] = schema.fields.map(f => Column.create(f.name, f.dataType, f.nullable))
 
     /** Builds a scan that produces (source path, tile struct) rows via GDAL_Reader. */
-    override def newScanBuilder(options: CaseInsensitiveStringMap): ScanBuilder = { () =>
-        new GDAL_Batch(schema, properties ++ options.asScala)
+    override def newScanBuilder(options: CaseInsensitiveStringMap): ScanBuilder = {
+        // `supportsExternalMetadata` lets a write reach the refusal below, and Spark applies it to reads too: a schema
+        // handed to `.schema(...)` arrives here instead of being rejected, so the read checks it against its own layout.
+        if (schema.catalogString != GDAL_Table.ReadSchema.catalogString) {
+            throw new IllegalArgumentException(GDAL_Table.schemaMismatchMsg(schema))
+        }
+        () => new GDAL_Batch(schema, properties ++ options.asScala)
     }
 
     /** Refuses every write: the Scala GDAL writers are retired and the Python writers serve every compute. */
@@ -39,6 +45,19 @@ class GDAL_Table(schema: StructType, properties: Map[String, String]) extends Ta
 }
 
 object GDAL_Table {
+
+    /** The read schema: source path and the tile struct (binary raster content). */
+    val ReadSchema: StructType = StructType(
+      Array(
+        StructField("source", StringType),
+        StructField("tile", RST_ExpressionUtil.tileDataType(BinaryType))
+      )
+    )
+
+    /** The refusal for a read given a schema other than [[ReadSchema]]. */
+    def schemaMismatchMsg(given: StructType): String =
+        s"The 'gdal' and 'gtiff_gdal' readers have a fixed schema (${ReadSchema.simpleString}); " +
+            s"a schema of ${given.simpleString} was given. Fix: drop .schema(...) and select or cast the columns after the read."
 
     /** The refusal for a write to `gdal` or `gtiff_gdal`. */
     val WriteRetiredMsg: String =

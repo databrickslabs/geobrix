@@ -1,10 +1,9 @@
 package com.databricks.labs.gbx.rasterx.ds.gdal
 
-import com.databricks.labs.gbx.rasterx.util.RST_ExpressionUtil
 import org.apache.spark.sql.connector.catalog.{Table, TableProvider}
 import org.apache.spark.sql.connector.expressions.Transform
 import org.apache.spark.sql.sources.DataSourceRegister
-import org.apache.spark.sql.types.{BinaryType, StringType, StructField, StructType}
+import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
 import scala.jdk.CollectionConverters.MapHasAsScala
@@ -19,12 +18,7 @@ class GDAL_DataSource extends TableProvider with DataSourceRegister {
 
     /** Overrides TableProvider.inferSchema: fixed schema (source: String, tile: struct). */
     override def inferSchema(options: CaseInsensitiveStringMap): StructType = {
-        StructType(
-          Array(
-            StructField("source", StringType),
-            StructField("tile", RST_ExpressionUtil.tileDataType(BinaryType))
-          )
-        )
+        GDAL_Table.ReadSchema
     }
 
     /** Overrides TableProvider.getTable: returns GDAL_Table with given schema and properties. */
@@ -32,7 +26,8 @@ class GDAL_DataSource extends TableProvider with DataSourceRegister {
         new GDAL_Table(schema, properties.asScala.toMap)
     }
 
-    /** True so a write reaches GDAL_Table.newWriteBuilder (the retirement refusal) whatever the DataFrame's schema. */
+    /** True so a write reaches GDAL_Table.newWriteBuilder (the retirement refusal) whatever the DataFrame's schema;
+      * GDAL_Table.newScanBuilder then rejects a read given a schema other than the fixed one. */
     override def supportsExternalMetadata(): Boolean = true
 
     /** Overrides DataSourceRegister.shortName: returns "gdal". */

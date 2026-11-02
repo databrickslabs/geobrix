@@ -103,6 +103,15 @@ class GDAL_DataSourceTest extends PlanTest with SilentSparkSession with NodeCach
         }
     }
 
+    test("a read given a schema other than the fixed one is refused with a Fix") {
+        val modis = this.getClass.getResource("/modis/").toString
+        for (fmt <- Seq("gdal", "gtiff_gdal")) {
+            val e = intercept[Exception](spark.read.format(fmt).schema("id long").load(modis).count())
+            val msgs = Iterator.iterate[Throwable](e)(_.getCause).takeWhile(_ != null).map(_.getMessage).mkString(" | ")
+            withClue(s"$fmt: $msgs: ") { (msgs.contains("fixed schema") && msgs.contains("Fix:")) shouldBe true }
+        }
+    }
+
     test("an invalid retention in the session conf fails a gdal read's planning and names the conf") {
         val modis = this.getClass.getResource("/modis/").toString
         withSessionRetention("soon") {

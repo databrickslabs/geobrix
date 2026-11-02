@@ -285,6 +285,7 @@ try:
     from pyspark.sql.functions import lit
     from rasterio.io import MemoryFile
     from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api
     with MemoryFile() as mf:
         with mf.open(driver="GTiff", width=4, height=4, count=1, dtype="uint8") as ds:
             ds.write(np.arange(16, dtype="uint8").reshape(4, 4), 1)

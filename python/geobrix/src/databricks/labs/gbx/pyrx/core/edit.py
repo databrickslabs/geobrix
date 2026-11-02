@@ -124,7 +124,17 @@ def update_type(ds, new_type: str) -> bytes:
         if np.issubdtype(data.dtype, np.floating):
             # NaN has no integer: it becomes 0, as GDAL's
             data = np.floor(np.nan_to_num(data.astype("float64"), nan=0.0) + 0.5)
-        data = np.clip(data, info.min, info.max)
+        elif data.dtype == np.uint64:
+            # nothing below zero, and the type's top fits uint64: no widening needed (or possible: past int64)
+            data = np.minimum(data, np.uint64(info.max))
+        else:
+            # widen first: under NumPy 2 a bound outside the source dtype (uint16 -> Int16's 32767..) is an error
+            lo, hi = max(info.min, np.iinfo("int64").min), min(
+                info.max, np.iinfo("int64").max
+            )
+            data = np.clip(data.astype("int64"), lo, hi)
+        if np.issubdtype(data.dtype, np.floating):
+            data = np.clip(data, info.min, info.max)
     data = data.astype(np_dtype)
     profile = ds.profile.copy()
     profile.update(driver="GTiff", dtype=np_dtype)

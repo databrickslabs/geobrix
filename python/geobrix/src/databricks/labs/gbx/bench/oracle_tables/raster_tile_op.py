@@ -146,11 +146,52 @@ def _rto_u16(tmpdir):
 
 @builder("rto_cast")
 def _rto_cast(tmpdir):
-    """Eight float32 values, some fractional and some outside UInt8's range, no NoData."""
+    """Eight float32 values, some fractional, some outside UInt8's range and one NaN (it casts to 0), no NoData."""
     import numpy as np
 
-    z = np.array([[[-5.0, 0.4, 1.6, 254.4], [255.6, 300.0, 100.2, 77.7]]])
+    z = np.array([[[-5.0, 0.4, 1.6, 254.4], [255.6, 300.0, 100.2, np.nan]]])
     return _tile(_gtiff(z, "EPSG:3857", nodata=None))
+
+
+@builder("rto_nan_nodata")
+def _rto_nan_nodata(tmpdir):
+    """Two Float32 bands that declare NaN as their NoData value, with NaN pixels in both."""
+    import numpy as np
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    z = np.array(
+        [[[1.0, np.nan], [3.0, 4.0]], [[np.nan, 6.0], [7.0, np.nan]]], "float32"
+    )
+    return _tile(
+        _encode(
+            z,
+            "GTiff",
+            crs=resolve_crs("EPSG:3857"),
+            transform=from_origin(400000.0, 5760000.0, 10.0, 10.0),
+            nodata=np.nan,
+        )
+    )
+
+
+@builder("rto_u16_wide")
+def _rto_u16_wide(tmpdir):
+    """Six UInt16 values from 0 to 65535, three of them past Int16's range (an integer-to-integer cast)."""
+    import numpy as np
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    z = np.array([[[0, 100, 32767], [32768, 40000, 65535]]], dtype="uint16")
+    return _tile(
+        _encode(
+            z,
+            "GTiff",
+            crs=resolve_crs("EPSG:3857"),
+            transform=from_origin(400000.0, 5760000.0, 10.0, 10.0),
+        )
+    )
 
 
 @builder("rto_rgb")
@@ -259,6 +300,14 @@ def _rto_nc_bytes(tmpdir):
         return _tile(fh.read())
 
 
+@builder("rto_nc_windowed")
+def _rto_nc_windowed(tmpdir):
+    """The tile of `rto_nc` cut to a window: a container has no pixel grid for the window to apply to."""
+    tile = _rto_nc(tmpdir)
+    tile["window"] = {"col_off": 0, "row_off": 0, "width": 4, "height": 4}
+    return tile
+
+
 RASTER_TILE_OP = (
     # --- align_to: nearest-neighbour onto the grid of a reference tile (rasterio.warp), the same CRS
     Case(
@@ -303,6 +352,15 @@ RASTER_TILE_OP = (
         ONLY,
     ),
     Case("align_to_corrupt_reference", AL, (T4326, CORRUPT), "error_tile", None, ONLY),
+    # only the reference's CRS, size and transform are read: a reference over the read cap (READ_CAP_ROWS) is no error
+    Case(
+        "align_to_big_reference",
+        AL,
+        (BYTE, T4326),
+        "tile_meta",
+        {"grid_of_arg1": True},
+        ONLY,
+    ),
     # --- asformat: the bytes open as the driver asked for (in any case), the pixels unchanged
     Case(
         "asformat_png",
@@ -325,12 +383,7 @@ RASTER_TILE_OP = (
         AF,
         (T4326, "GTiff"),
         "tile_meta",
-        {
-            "driver": "GTiff",
-            "meta_driver": "GTiff",
-            "pixels_of_arg0": True,
-            "crs": "EPSG:4326",
-        },
+        {"driver": "GTiff", "pixels_of_arg0": True, "crs": "EPSG:4326"},
         ONLY,
     ),
     # COG is a layout of a GeoTIFF: it opens as GTiff, with the COG layout
@@ -338,6 +391,20 @@ RASTER_TILE_OP = (
         "asformat_cog",
         AF,
         (T4326, "COG"),
+        "tile_meta",
+        {
+            "driver": "GTiff",
+            "meta_driver": "GTiff",
+            "layout": "COG",
+            "pixels_of_arg0": True,
+        },
+        ONLY,
+    ),
+    # the driver name is resolved to GDAL's spelling: `cog` writes what `COG` does
+    Case(
+        "asformat_lower_cog",
+        AF,
+        (T4326, "cog"),
         "tile_meta",
         {
             "driver": "GTiff",
@@ -421,6 +488,14 @@ RASTER_TILE_OP = (
         (RAMP, [[1.0, 2.0], [3.0, 4.0]]),
         "raises",
         "2x2",
+        ONLY,
+    ),
+    Case(
+        "convolve_ragged_kernel",
+        CV,
+        (RAMP, [[1.0, 2.0, 3.0], [4.0, 5.0]]),
+        "raises",
+        "kernel must be a rectangular",
         ONLY,
     ),
     Case("convolve_null_tile", CV, (None, IDENTITY), "null", None, ONLY),
@@ -533,6 +608,7 @@ RASTER_TILE_OP = (
     ),
     Case("filter_even_size", FI, (RAMP, 4, "min"), "raises", "4", ONLY),
     Case("filter_zero_size", FI, (RAMP, 0, "min"), "raises", "0", ONLY),
+    Case("filter_fractional_size", FI, (RAMP, 3.9, "min"), "raises", "3.9", ONLY),
     Case("filter_bad_operation", FI, (RAMP, 3, "mode"), "raises", "mode", ONLY),
     Case("filter_null_tile", FI, (None, 3, "min"), "null", None, ONLY),
     Case("filter_null_size", FI, (RAMP, None, "min"), "null", None, ONLY),
@@ -562,6 +638,14 @@ RASTER_TILE_OP = (
     Case(
         "getsubdataset_missing", SD, (Build("rto_nc"), "nope"), "raises", "nope", ONLY
     ),
+    Case(
+        "getsubdataset_windowed",
+        SD,
+        (Build("rto_nc_windowed"), "Band2"),
+        "error_fix",
+        None,
+        ONLY,
+    ),
     Case("getsubdataset_plain_tile", SD, (T4326, "Band1"), "raises", "Band1", ONLY),
     Case("getsubdataset_null_tile", SD, (None, "Band1"), "null", None, ONLY),
     Case("getsubdataset_null_name", SD, (Build("rto_nc"), None), "null", None, ONLY),
@@ -583,6 +667,15 @@ RASTER_TILE_OP = (
         (RAMP,),
         "tile_meta",
         {"nodata": -9999.0, "pixels_of_arg0": True},
+        ONLY,
+    ),
+    # a NaN NoData value is a value like any other: kept, not replaced by the type's constant
+    Case(
+        "initnodata_nan_kept",
+        IN,
+        (Build("rto_nan_nodata"),),
+        "tile_meta",
+        {"nodata": float("nan"), "count": 2, "pixels_of_arg0": True},
         ONLY,
     ),
     Case(
@@ -838,7 +931,17 @@ RASTER_TILE_OP = (
         {"dtype": "int32", "nodata": -9999.0, "crs": "EPSG:3857"},
         ONLY,
     ),
+    # clamps the out-of-range values and casts the NaN pixel to 0
     Case("updatetype_byte_clamps", UT, (CAST, "Byte"), "ref", "cast", ONLY),
+    # integer to integer: past Int16's range is clamped, not wrapped (and not an overflow error under NumPy 2)
+    Case(
+        "updatetype_uint16_clamps",
+        UT,
+        (Build("rto_u16_wide"), "Int16"),
+        "ref",
+        "cast",
+        ONLY,
+    ),
     Case(
         "updatetype_byte_drops_nodata",
         UT,

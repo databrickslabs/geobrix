@@ -32,7 +32,9 @@ def check_filter(kernel_size, operation):
     """
     try:
         size = int(kernel_size)
-    except (TypeError, ValueError) as exc:
+        if float(kernel_size) != size:  # 3.9 is not 3
+            raise ValueError(kernel_size)
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(
             f"rst_filter: kernel_size must be a positive odd integer; got {kernel_size!r}"
         ) from exc

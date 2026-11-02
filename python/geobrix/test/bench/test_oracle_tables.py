@@ -121,15 +121,22 @@ def _ewkb(wkt, srid):
     )
 
 
-def _sized(width, height):
-    """A tile whose raster is `width` x `height` pixels."""
+def _sized(width, height, fill=0.0, nodata=None):
+    """A tile whose raster is `width` x `height` pixels, all `fill`, declaring `nodata`."""
     import numpy as np
 
     from databricks.labs.gbx.bench import oracles
 
     return oracles._tile(
-        oracles._gtiff(np.zeros((1, height, width)), "EPSG:3857", nodata=None)
+        oracles._gtiff(np.full((1, height, width), fill), "EPSG:3857", nodata=nodata)
     )
+
+
+# the arguments a tile_meta key that compares the result with them reads (the other probes read none)
+_META_ARGS = {
+    "pixels_of_arg0": (_sized(32, 24),),
+    "grid_of_arg1": (_sized(32, 24), _sized(32, 24)),
+}
 
 
 @pytest.mark.parametrize(
@@ -150,6 +157,9 @@ def _sized(width, height):
             _sized(32, 24),
             _sized(31, 24),
         ),
+        ("tile_meta", {"pixels_of_arg0": True}, _sized(32, 24), _sized(32, 24, 1.0)),
+        ("tile_meta", {"grid_of_arg1": True}, _sized(32, 24), _sized(31, 24)),
+        ("tile_meta", {"nodata": None}, _sized(32, 24), _sized(32, 24, nodata=-9999.0)),
         (
             "json_subset",
             {"size": [4, 3], "bands": [{"min": 2.0}]},
@@ -167,7 +177,11 @@ def _sized(width, height):
 def test_a_new_check_kind_passes_its_value_and_fails_another(kind, expect, good, bad):
     from databricks.labs.gbx.bench import oracles
 
-    case = oracles.Case("probe", "gbx_bng_aswkt", ("TQ3080",), kind, expect)
+    args = next(
+        (a for k, a in _META_ARGS.items() if isinstance(expect, dict) and k in expect),
+        ("TQ3080",),
+    )
+    case = oracles.Case("probe", "gbx_bng_aswkt", args, kind, expect)
     assert oracles.check(case, good, case.args) is None
     assert oracles.check(case, bad, case.args) is not None
     assert oracles.check(case, None, case.args) is not None

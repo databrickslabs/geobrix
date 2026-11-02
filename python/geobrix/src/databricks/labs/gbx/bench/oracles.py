@@ -90,6 +90,7 @@ _SUMMARY_L1 = "the JVM summary is gdalinfo's JSON, not the contract's; the GDAL 
 # The JVM statistics and metadata that differ from the contract; their companions are deleted in the decision sweep.
 _MEDIAN_L1 = "the JVM median is GDAL's median resampling, which takes one of the two middle values of an even count, not their mean"
 _HISTOGRAM_L1 = "the JVM histogram leaves the top edge out of the last bucket, gives NULL for a NULL bound, ignores include_nodata and turns a bad bucket count into NULL"
+_FRACTIONAL_L1 = "the JVM takes kernel_size as an INT: the SQL engine casts 3.9 to 3 before the function runs, so a fractional size is never seen"
 _METADATA_L1 = "the JVM metadata is GDAL's metadata domains merged, not the contract's driver, size and tag keys"
 # With zero_for_flat GDAL drops the NoData value, so its border pixels are 0; light keeps them NoData (a documented
 # divergence, which the GDAL spec engine keeps).
@@ -137,6 +138,7 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
     "summary_float32_precision": {"L1": _SUMMARY_L1},
     "median_two_band": {"L1": _MEDIAN_L1},
     "metadata": {"L1": _METADATA_L1},
+    "filter_fractional_size": {"L1": _FRACTIONAL_L1},
     **{
         cid: {"L1": _HISTOGRAM_L1}
         for cid in (
@@ -164,6 +166,7 @@ READ_CAP_ROWS: Dict[str, int] = {
     "dem_decoded_over_cap": 4096,
     "resample_decoded_over_cap": 4096,
     "tile_op_decoded_over_cap": 4096,
+    "align_to_big_reference": 4096,
     "rt_over_cap_windows": 4096,
 }
 # The refusal of a tile's bytes in a driver that can name other files, on every level (the light tier's text).
@@ -2150,7 +2153,14 @@ def _tile_meta_flaws(case: Case, out, got, want) -> Optional[str]:
         return f"data type {got.dtypes[0]} is not {want['dtype']}"
     if "nodata" in want:
         n, w = got.nodata, want["nodata"]
-        if (n is None) != (w is None) or (w is not None and abs(n - w) > 1e-6):
+        # NaN is a NoData value that equals itself here
+        same = (
+            n is None
+            if w is None
+            else n is not None
+            and ((math.isnan(n) and math.isnan(w)) or abs(n - w) <= 1e-6)
+        )
+        if not same:
             return f"NoData {n} is not {w}"
     if "driver" in want and got.driver != want["driver"]:
         return f"format {got.driver} is not {want['driver']}"
@@ -2174,18 +2184,21 @@ def _tile_meta_against_args(got, want, args) -> Optional[str]:
     if want.get("pixels_of_arg0") or want.get("transform_of_arg0"):
         with _ref_dataset(args) as src:
             if want.get("pixels_of_arg0") and not np.array_equal(
-                got.read(), src.read()
+                got.read(), src.read(), equal_nan=True
             ):
                 return "the pixels differ from the input's"
             if want.get("transform_of_arg0") and got.transform != src.transform:
                 return f"geotransform {got.transform} is not the input's"
     if "grid_of_arg1" in want:
         with open_bytes(_raster_of(args[1])) as ref:
-            if (got.width, got.height, got.transform) != (
+            # the transform to float rounding: gdalwarp derives the pixel size from the extent it is given
+            if (got.width, got.height) != (
                 ref.width,
                 ref.height,
-                ref.transform,
-            ) or not crs_equal(got.crs, ref.crs):
+            ) or not (
+                got.transform.almost_equals(ref.transform, precision=1e-9)
+                and crs_equal(got.crs, ref.crs)
+            ):
                 return (
                     f"grid {got.width}x{got.height} {got.transform} {got.crs} is not the reference's "
                     f"{ref.width}x{ref.height} {ref.transform} {ref.crs}"
@@ -2541,7 +2554,7 @@ def _ref_derived_plus_one(args):
 
 def _ref_cast(args):
     """rst_updatetype to an integer type: each value rounded to the nearest integer and clamped to the type's range,
-    as `gdal_translate -ot` does; the NoData mask is the input's."""
+    as `gdal_translate -ot` does, a NaN as 0; the NoData mask is the input's."""
     import numpy as np
 
     info = np.iinfo(
@@ -2549,31 +2562,55 @@ def _ref_cast(args):
     )
     with _ref_dataset(args) as ds:
         band = ds.read(1, masked=True)
-    out = np.clip(np.floor(band.data.astype("float64") + 0.5), info.min, info.max)
+    values = np.nan_to_num(band.data.astype("float64"), nan=0.0)
+    out = np.clip(np.floor(values + 0.5), info.min, info.max)
     return out, np.ma.getmaskarray(band)
 
 
 def _ref_align_to(args):
     """rst_align_to: rasterio.warp's nearest-neighbour reprojection of the first tile onto the grid of the second,
-    the tile's NoData where it does not cover the grid."""
+    the tile's NoData (0 for a tile without) where it does not cover the grid; the NoData mask is the pixels no valid
+    source pixel lands on, from a warped validity array."""
     import numpy as np
     from rasterio.warp import Resampling, reproject
 
     with _ref_dataset(args) as src, open_bytes(_raster_of(args[1])) as ref:
-        out = np.full((ref.height, ref.width), src.nodata, dtype=src.dtypes[0])
-        reproject(
-            source=src.read(1),
-            destination=out,
+        nodata = src.nodata
+        fill = (
+            0 if nodata is None else nodata
+        )  # a source without NoData fills what it does not cover with 0
+        data = src.read(1)
+        grid = dict(
             src_transform=src.transform,
             src_crs=src.crs,
-            src_nodata=src.nodata,
             dst_transform=ref.transform,
             dst_crs=ref.crs,
-            dst_nodata=src.nodata,
             resampling=Resampling.nearest,
         )
-        nodata = src.nodata
-    return out.astype("float64"), out == nodata
+        out = np.full((ref.height, ref.width), fill, dtype=src.dtypes[0])
+        reproject(
+            source=data,
+            destination=out,
+            src_nodata=nodata,
+            dst_nodata=fill,
+            **grid,
+        )
+        # the pixels that carry a source value: a source pixel is valid (1) unless it is the NoData value, and the
+        # warp fills what the source does not cover with 0, so the mask is where this comes out 0
+        valid = np.zeros(out.shape, dtype="uint8")
+        reproject(
+            source=(
+                np.ones(data.shape, "uint8")
+                if nodata is None
+                else (data != nodata).astype("uint8")
+            ),
+            destination=valid,
+            src_nodata=0,
+            dst_nodata=0,
+            **grid,
+        )
+    mask = np.zeros(out.shape, dtype=bool) if nodata is None else valid == 0
+    return out.astype("float64"), mask
 
 
 def _ref_land_cover_spectral(args):

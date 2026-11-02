@@ -255,9 +255,11 @@ def _is_gdal_io_error(exc) -> bool:
 
 
 @contextlib.contextmanager
-def _open_op(tile, file_ref=None, source=False):
+def _open_op(tile, file_ref=None, source=False, header=False):
     """:func:`ot._open` for a tile op: opening the tile fails as :class:`_UnreadableTile`, the op's own errors pass.
     ``source`` opens the tile's file whole, as GDAL does (:func:`ot.open_source`), for an op on a container.
+    ``header`` opens it for its header only (:func:`ot.open_header`: CRS, size, transform; no window is read and the
+    read cap's decoded-size gate does not apply), for a tile an op reads no pixel of.
 
     A file that cannot be reached is not an unreadable tile: an ``OSError`` that is not GDAL's (a
     ``FileNotFoundError`` from a UC Volume that has not caught up, once the staging retries are spent) fails
@@ -265,9 +267,13 @@ def _open_op(tile, file_ref=None, source=False):
     """
     with contextlib.ExitStack() as stack:
         try:
-            ds = stack.enter_context(
-                ot.open_source(tile) if source else ot._open(tile, file_ref=file_ref)
-            )
+            if source:
+                opened = ot.open_source(tile)
+            elif header:
+                opened = ot.open_header(tile, file_ref=file_ref)
+            else:
+                opened = ot._open(tile, file_ref=file_ref)
+            ds = stack.enter_context(opened)
         except (MemoryError, RecursionError):
             raise
         except OSError as exc:
@@ -795,6 +801,24 @@ def _getsubdataset_udf(tile, name):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
+    vt = ot._to_virtual_tile(tile)
+    edits = [
+        what
+        for what, on in (
+            ("a window", vt.window is not None),
+            ("a clip", vt.clip_polygon is not None),
+            ("pending edits", any(str(k).startswith("pending_") for k in vt.metadata)),
+        )
+        if on
+    ]
+    if edits:
+        # a container has no pixel grid of its own for a window, a clip or an edit to apply to: the subdataset
+        # of the whole file would silently ignore them
+        raise _UnreadableTile(
+            f"rst_getsubdataset: the tile carries {' and '.join(edits)}, which do not apply to the subdatasets of "
+            "its container file. Fix: call gbx_rst_getsubdataset on the tile as read from the file (no window, clip "
+            "or edits), then apply them to the subdataset it returns"
+        )
     with _open_op(tile, source=True) as ds:
         new_bytes = accessors.getsubdataset(ds, str(name))
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
@@ -1811,12 +1835,13 @@ rst_combinestddev = _make_rst_combine_stat(
 def _align_to_bytes(tile, reference):
     """Shared align_to body: open both tiles and warp ``tile`` onto the grid of ``reference``.
 
-    An unreadable, refused or over-cap tile (either one) is :class:`_UnreadableTile`.
+    An unreadable or refused tile (either one), or ``tile`` over the read cap, is :class:`_UnreadableTile`. The
+    reference gives only its CRS, size and transform, so it is opened for its header: no read cap applies to it.
     """
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _open_op(tile) as src, _open_op(reference) as ref:
+    with _open_op(tile) as src, _open_op(reference, header=True) as ref:
         return agg_core.align_datasets(src, ref)
 
 

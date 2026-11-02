@@ -95,6 +95,14 @@ class GDAL_DataSourceTest extends PlanTest with SilentSparkSession with NodeCach
         noOpt.foreach(r => r.isNullAt(0) should be(true))
     }
 
+    test("a write to gdal or gtiff_gdal is refused with a Fix naming the Python writers") {
+        for (fmt <- Seq("gdal", "gtiff_gdal")) {
+            val e = intercept[Exception](spark.range(1).write.format(fmt).mode("append").save("/tmp/gbx_retired_gdal_write"))
+            val msgs = Iterator.iterate[Throwable](e)(_.getCause).takeWhile(_ != null).map(_.getMessage).mkString(" | ")
+            withClue(s"$fmt: $msgs: ") { (msgs.contains("Fix:") && msgs.contains("gtiff_gbx")) shouldBe true }
+        }
+    }
+
     test("an invalid retention in the session conf fails a gdal read's planning and names the conf") {
         val modis = this.getClass.getResource("/modis/").toString
         withSessionRetention("soon") {

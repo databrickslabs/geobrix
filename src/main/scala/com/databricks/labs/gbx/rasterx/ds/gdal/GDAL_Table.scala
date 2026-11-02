@@ -2,13 +2,16 @@ package com.databricks.labs.gbx.rasterx.ds.gdal
 
 import org.apache.spark.sql.connector.catalog._
 import org.apache.spark.sql.connector.read.ScanBuilder
+import org.apache.spark.sql.connector.write.{LogicalWriteInfo, WriteBuilder}
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
 import scala.jdk.CollectionConverters._
 
-/** Spark Connector Table for the GDAL data source: reads only (GDAL_Batch). Writing is the Python writers' job. */
-class GDAL_Table(schema: StructType, properties: Map[String, String]) extends Table with SupportsRead {
+/** Spark Connector Table for the GDAL data source: reads (GDAL_Batch). A write is refused with a `Fix:` naming the
+  * Python writers. BATCH_WRITE and TRUNCATE are declared only so Spark reaches `newWriteBuilder`, where the refusal is,
+  * rather than raising its bare "does not support batch write". */
+class GDAL_Table(schema: StructType, properties: Map[String, String]) extends Table with SupportsRead with SupportsWrite {
 
     /** Overrides Table.name: returns "gdal". */
     override def name(): String = "gdal"
@@ -25,8 +28,21 @@ class GDAL_Table(schema: StructType, properties: Map[String, String]) extends Ta
         new GDAL_Batch(schema, properties ++ options.asScala)
     }
 
-    /** Overrides Table.capabilities: BATCH_READ only. */
-    override def capabilities(): java.util.Set[TableCapability] =
-        Set(TableCapability.BATCH_READ).asJava
+    /** Refuses every write: the Scala GDAL writers are retired and the Python writers serve every compute. */
+    override def newWriteBuilder(info: LogicalWriteInfo): WriteBuilder =
+        throw new UnsupportedOperationException(GDAL_Table.WriteRetiredMsg)
 
+    /** Overrides Table.capabilities: BATCH_READ, plus the write capabilities that route a write to the refusal above. */
+    override def capabilities(): java.util.Set[TableCapability] =
+        Set(TableCapability.BATCH_READ, TableCapability.BATCH_WRITE, TableCapability.TRUNCATE).asJava
+
+}
+
+object GDAL_Table {
+
+    /** The refusal for a write to `gdal` or `gtiff_gdal`. */
+    val WriteRetiredMsg: String =
+        "The 'gdal' and 'gtiff_gdal' formats are read-only: the Scala raster writers were retired in 0.6.0. " +
+            "Fix: write with a Python writer: 'raster_gbx', 'gtiff_gbx' or 'cog_gbx', after " +
+            "`from databricks.labs.gbx.ds.register import register; register(spark)`. See the Raster Writer docs page."
 }

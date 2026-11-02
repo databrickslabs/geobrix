@@ -32,6 +32,9 @@ class GDAL_DataSource extends TableProvider with DataSourceRegister {
         new GDAL_Table(schema, properties.asScala.toMap)
     }
 
+    /** True so a write reaches GDAL_Table.newWriteBuilder (the retirement refusal) whatever the DataFrame's schema. */
+    override def supportsExternalMetadata(): Boolean = true
+
     /** Overrides DataSourceRegister.shortName: returns "gdal". */
     override def shortName(): String = "gdal"
 

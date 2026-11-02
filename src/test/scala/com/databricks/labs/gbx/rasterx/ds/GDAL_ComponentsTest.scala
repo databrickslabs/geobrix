@@ -136,13 +136,13 @@ class GDAL_ComponentsTest extends PlanTest with SilentSparkSession {
         capabilities should contain(org.apache.spark.sql.connector.catalog.TableCapability.BATCH_READ)
     }
 
-    test("GDAL_Table is read only: no write capability") {
+    test("GDAL_Table refuses a write with a Fix naming the Python writers") {
         val schema = StructType(Array(StructField("test", StringType)))
         val table = new GDAL_Table(schema, Map.empty)
 
-        val capabilities = table.capabilities()
-        capabilities should not contain org.apache.spark.sql.connector.catalog.TableCapability.BATCH_WRITE
-        capabilities should not contain org.apache.spark.sql.connector.catalog.TableCapability.TRUNCATE
+        table.capabilities() should contain(org.apache.spark.sql.connector.catalog.TableCapability.BATCH_WRITE)
+        val e = intercept[UnsupportedOperationException](table.newWriteBuilder(null))
+        e.getMessage should (include("Fix:") and include("gtiff_gbx") and include("raster_gbx"))
     }
 
     test("GDAL_Table should be a SupportsRead") {
@@ -150,13 +150,6 @@ class GDAL_ComponentsTest extends PlanTest with SilentSparkSession {
         val table = new GDAL_Table(schema, Map("path" -> "/test"))
         
         table shouldBe a [org.apache.spark.sql.connector.catalog.SupportsRead]
-    }
-
-    test("GDAL_Table should not be a SupportsWrite") {
-        val schema = StructType(Array(StructField("test", StringType)))
-        val table = new GDAL_Table(schema, Map.empty)
-
-        table should not be a [org.apache.spark.sql.connector.catalog.SupportsWrite]
     }
 
     // ========== GDAL_Batch Tests ==========

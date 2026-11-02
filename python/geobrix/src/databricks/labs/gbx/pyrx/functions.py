@@ -33,6 +33,7 @@ from pyspark.sql.types import (
 
 from databricks.labs.gbx import _gdal_policy, _register
 from databricks.labs.gbx._gdal_policy import (
+    DriverPolicyError,
     carrying_udf,
     data_path,
     driver_switch,
@@ -781,6 +782,67 @@ def rst_fromcontent(content: ColLike, driver: ColLike) -> Column:
 # ``virtualize_dir``/``virtualize_prefix`` (those exist only for functions that
 # COMPUTE new pixels and need somewhere to write them).
 # A bad/missing path yields NULL (matching the heavyweight's Option(...).orNull).
+def _names_a_vrt(local) -> bool:
+    """Whether the file at ``local`` is a VRT: by its name, or by the root element in its first bytes."""
+    if str(local).lower().endswith(".vrt"):
+        return True
+    try:
+        with open(local, "rb") as fh:
+            return b"<VRTDataset" in fh.read(4096)
+    except OSError:
+        return False
+
+
+def _fromfile_render_vrt(path, local, drv, cap_bytes):
+    """``rst_fromfile(<a VRT>, materialize=True)``: render the VRT into a self-contained GTiff tile.
+
+    A VRT's file holds XML that names its sources, and a tile's bytes may not (the policy refuses VRT bytes), so the
+    VRT is opened by its path (where its relative sources resolve) and its pixels are written as GTiff by
+    ``write_gtiff``, the canonical writer. The rendered size is gated first, from the header, through
+    ``materialize_decision`` (kind ``read``): over the cap is an error tile, not a read. Every refusal is the
+    tile's reason with a Fix: NULL is for a path that does not exist.
+    """
+    import os
+
+    import numpy as np
+
+    from databricks.labs.gbx.ds.file_gbx import materialize_decision
+
+    if not os.path.exists(local):
+        return None
+    try:
+        with open_data(local) as src:
+            decoded = (
+                src.width
+                * src.height
+                * sum(int(np.dtype(dt).itemsize) for dt in src.dtypes)
+            )
+            if materialize_decision(decoded, "read", cap_bytes=cap_bytes) != "stream":
+                mib = f"{decoded / 1024 ** 2:.1f} MiB"
+                return _serde.build_error_tile(
+                    f"rst_fromfile materialize=True unsuccessful: the VRT {path} renders to {mib} decoded, "
+                    "over this compute's materialize cap. Fix: omit materialize=True (a virtual tile of the "
+                    "VRT reads it in windows), or retile the VRT into smaller VRTs first.",
+                    0,
+                )
+            data = src.read()
+            mask = src.read_masks(1) if _nodata.has_own_mask(src) else None
+            new_bytes = write_gtiff(
+                src.profile, data, alpha_like=src.colorinterp, mask=mask
+            )
+    except DriverPolicyError as exc:
+        return _serde.build_error_tile(str(exc), 0)
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 — an unreadable VRT (a missing source) is the tile's reason
+        return _serde.build_error_tile(
+            f"rst_fromfile materialize=True unsuccessful: the VRT {path} could not be rendered: {exc}. "
+            "Fix: check that every source file the VRT names exists and is readable here.",
+            0,
+        )
+    return _serde.build_tile(new_bytes, drv, 0)
+
+
 def _fromfile_impl(path, driver, materialize, cap_bytes=None):
     """Shared body for both the Python-binding UDF (4-arg) and the SQL UDF (2-arg,
     virtual). Returns a v2 tile row (virtual by default, materialized when asked),
@@ -803,6 +865,9 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
     _env.configure_gdal_env()
     drv = "GTiff" if driver is None else str(driver)
     local = to_local_path(str(path))
+
+    if materialize and _names_a_vrt(local):
+        return _fromfile_render_vrt(str(path), local, drv, cap_bytes)
 
     if materialize:
         # Eager path: read the source bytes SEQUENTIALLY (FUSE-safe) and re-encode
@@ -874,7 +939,12 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
             # not a bad-path that should silently null out. The UDF boundary converts
             # it to a task failure on Spark, but direct callers (e.g. tests) see it.
             raise
-        except Exception:  # noqa: BLE001 — null-on-error, matching heavyweight
+        except DriverPolicyError as exc:
+            # the policy refused this file's format: the reason (and its Fix) is the answer, never NULL
+            return _serde.build_error_tile(str(exc), 0)
+        except (
+            Exception
+        ):  # noqa: BLE001 — a bad/missing path is NULL, matching heavyweight
             return None
         return _serde.build_tile(new_bytes, drv, 0)
 
@@ -889,7 +959,10 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
     try:
         with open_data(local) as src:
             width, height, count = src.width, src.height, src.count
-    except Exception:  # noqa: BLE001 — null-on-error, matching heavyweight
+    except DriverPolicyError as exc:
+        # a refusal by the driver policy is the answer (reason and Fix), never NULL
+        return _serde.build_error_tile(str(exc), 0)
+    except Exception:  # noqa: BLE001 — a bad/missing path is NULL, matching heavyweight
         return None
     meta = {
         "sourcePath": str(path),
@@ -958,6 +1031,11 @@ def rst_fromfile(
 
     A path that cannot be opened returns NULL (matching the heavyweight's
     null-on-error behaviour), whether virtual (header open fails) or materialized.
+    A file the driver policy refuses is an error tile carrying the reason and its Fix, never NULL.
+
+    A **VRT** with ``materialize=True`` is rendered into a self-contained GTiff tile (the VRT's pixels, no path
+    back to the VRT). A VRT that renders over the materialize cap, or whose sources cannot be read, is an
+    error tile with the reason; the virtual default reads the VRT in windows and has no such cap.
 
     Args:
         path:        Raster file path (string column).

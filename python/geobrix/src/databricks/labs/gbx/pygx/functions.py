@@ -50,6 +50,21 @@ def _col(x: ColLike) -> Union[Column, str]:
     return f.lit(x)
 
 
+def _check_exact_ids(cell: pd.Series, fn: str) -> None:
+    """Raise when a BIGINT id column reached a grouped aggregate as float64 and holds an id past 2**53.
+
+    A NULL in a BIGINT column makes pandas hand the batch over as float64, which rounds every id past 2**53
+    (all quadbin, custom and H3 ids) to the nearest float: a different cell, with no error. An aggregate
+    cannot read the exact ints (a row UDF can, see `_resolution_udf`), so it refuses the batch instead.
+    """
+    if pd.api.types.is_float_dtype(cell) and (cell.dropna().abs() > 2**53).any():
+        raise ValueError(
+            f"{fn}: the cell id column holds a NULL, so its ids arrived as float64 and ids above 2**53 "
+            "would be rounded to a different cell. Fix: filter the NULL cells out first "
+            "(WHERE cellid IS NOT NULL)."
+        )
+
+
 # --- impl rule: scalar-output -> pandas_udf ; array-output -> plain @udf --------------------
 # Scalar/bounded-output functions (pointascell/resolution/distance + the single-
 # geometry aswkb/centroid/cellunion) use pandas_udf: pointascell/resolution are
@@ -82,33 +97,22 @@ def _pointascell_udf(lon: pd.Series, lat: pd.Series, res: pd.Series) -> pd.Serie
     return cells
 
 
-@pandas_udf(IntegerType())
-def _resolution_udf(cell: pd.Series) -> pd.Series:
-    # a NULL cell arrives as NaN in a batch (an all-NULL column is a float one): it has no resolution
-    null = cell.isna().to_numpy()
-    cells = cell.fillna(0).to_numpy(dtype=np.int64)
-    out = pd.Series(_quadbin.resolution_vec(cells).astype(np.int32), dtype="Int32")
-    out[null] = pd.NA
-    return out
+# A BIGINT cell id is read by a plain row UDF, not a pandas_udf (nor an Arrow-optimized UDF, which Spark 4.0
+# builds on pandas too): pandas hands a BIGINT column that holds a NULL over as float64, and an id past 2**53
+# (quadbin ~5.2e18, custom ~7.2e16, H3 ~6e17) is then rounded to the nearest float, a different cell with no
+# error. A row UDF gets the exact int or None.
 
 
-@pandas_udf(IntegerType())
-def _distance_udf(a: pd.Series, b: pd.Series) -> pd.Series:
-    # Same-resolution-or-error; Chebyshev on cell_to_tile coords. Looped per
-    # element (cell_to_tile is scalar in the lib); batched Arrow transfer is the win.
-    # NULL input -> NULL (matches heavy NULL propagation).  ValueError from
-    # mismatched-resolution pair still propagates unchanged.
-    return pd.Series(
-        [
-            (
-                int(_quadbin.distance(int(x), int(y)))
-                if not (pd.isna(x) or pd.isna(y))
-                else None
-            )
-            for x, y in zip(a, b)
-        ],
-        dtype="object",
-    ).astype("Int32")
+@udf(IntegerType())
+def _resolution_udf(cell):
+    return None if cell is None else int(_quadbin.resolution(cell))
+
+
+@udf(IntegerType())
+def _distance_udf(a, b):
+    # Same-resolution-or-error; Chebyshev on cell_to_tile coords. NULL input -> NULL (matches heavy NULL
+    # propagation). ValueError from a mismatched-resolution pair propagates unchanged.
+    return None if a is None or b is None else int(_quadbin.distance(a, b))
 
 
 # --- single-geometry UDFs (pandas_udf, bounded scalar output) --------------------------------
@@ -117,14 +121,14 @@ def _distance_udf(a: pd.Series, b: pd.Series) -> pd.Series:
 # _quadbin oracle (the win is the batched Arrow transfer). NULL preserved per row.
 
 
-@pandas_udf(BinaryType())
-def _aswkb_udf(cell: pd.Series) -> pd.Series:
-    return pd.Series([None if pd.isna(c) else _quadbin.as_wkb(int(c)) for c in cell])
+@udf(BinaryType())
+def _aswkb_udf(cell):
+    return None if cell is None else _quadbin.as_wkb(cell)
 
 
-@pandas_udf(BinaryType())
-def _centroid_udf(cell: pd.Series) -> pd.Series:
-    return pd.Series([None if pd.isna(c) else _quadbin.centroid(int(c)) for c in cell])
+@udf(BinaryType())
+def _centroid_udf(cell):
+    return None if cell is None else _quadbin.centroid(cell)
 
 
 @pandas_udf(BinaryType())
@@ -152,7 +156,8 @@ def _quadbin_geomkring(geom, res, k, mode="boundary-out", coverage="coveras"):
         return None
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
     res = _whole_res("gbx_quadbin_geomkring", res)
-    if _not_finite(geom):
+    geom, finite = _parse_finite(geom)
+    if not finite:
         return None  # a geometry that is not finite has no cells
     try:
         return _quadbin.geometry_k_ring(
@@ -169,7 +174,8 @@ def _quadbin_geomkloop(geom, res, k, mode="boundary-out", coverage="coveras"):
         return None
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
     res = _whole_res("gbx_quadbin_geomkloop", res)
-    if _not_finite(geom):
+    geom, finite = _parse_finite(geom)
+    if not finite:
         return None  # a geometry that is not finite has no cells
     try:
         return _quadbin.geometry_k_loop(
@@ -257,7 +263,8 @@ def _tessellate(geom, res):
 
 @pandas_udf(BinaryType())
 def _cellunion_agg_udf(cell: pd.Series) -> Optional[bytes]:
-    return _quadbin.cell_union([int(c) for c in cell if c is not None])
+    _check_exact_ids(cell, "gbx_quadbin_cellunion_agg")
+    return _quadbin.cell_union([int(c) for c in cell if not pd.isna(c)])
 
 
 # ============================================================================
@@ -403,7 +410,8 @@ def _chip_tuple(struct_row):
     geom)``), matching the heavy reader's by-position/type field detection.
     """
     cellid, core, raw = struct_row[0], struct_row[1], struct_row[2]
-    chip = parse_geom(raw) if raw is not None else None
+    # NULL bytes are an empty geometry (an empty intersection leaves a chip with no bytes)
+    chip = parse_geom(raw) if raw is not None else _bng._empty_polygon()
     return (cellid, bool(core), chip)
 
 
@@ -456,6 +464,12 @@ def _bng_cellintersection(left, right):
     return _chip_to_row(_bng.cell_intersection(_chip_tuple(left), _chip_tuple(right)))
 
 
+# Arrow-optimized row UDFs: the batches cross as Arrow (not pickled rows) and a NULL chip is a NULL result,
+# which a struct-returning pandas_udf cannot give.
+_bng_cellunion_udf = udf(_bng_cellunion, BNG_CHIP_SCHEMA, useArrow=True)
+_bng_cellintersection_udf = udf(_bng_cellintersection, BNG_CHIP_SCHEMA, useArrow=True)
+
+
 # --- array-output -> plain @udf (row-by-row, scale-safe) --------------------
 
 
@@ -493,7 +507,8 @@ def _bng_geomkring(geom, res, k, mode="boundary-out", coverage="coveras"):
     _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
     k_int = int(k)  # bad k PARAMETER -> raises
-    if _not_finite(geom):
+    geom, finite = _parse_finite(geom)
+    if not finite:
         return None  # a non-finite coordinate has no cell: NULL, as for every point-taking BNG function
     try:
         return sorted(
@@ -517,7 +532,8 @@ def _bng_geomkloop(geom, res, k, mode="boundary-out", coverage="coveras"):
     _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
     k_int = int(k)  # bad k PARAMETER -> raises
-    if _not_finite(geom):
+    geom, finite = _parse_finite(geom)
+    if not finite:
         return None  # a non-finite coordinate has no cell: NULL, as for every point-taking BNG function
     try:
         return sorted(
@@ -704,15 +720,21 @@ def _dilate_check_mode(mode):
         raise ValueError(f"unknown mode {mode!r}; expected one of {_MODES}")
 
 
-def _not_finite(geom) -> bool:
-    """The geometry has a NaN or infinite coordinate (an unreadable one is left to the caller's NULL rule)."""
+def _parse_finite(geom):
+    """Parse a geometry ONCE: ``(geom, finite)``, ``finite`` False when it has a NaN or infinite coordinate.
+
+    ``geom`` is the parsed geometry, which the grid engine takes as is (no second parse); an unreadable one
+    comes back unchanged with ``finite`` True, so the engine's own data-error rule (NULL) applies.
+    """
     from shapely import get_coordinates
 
     try:
         g = parse_geom(geom)
     except Exception:  # noqa: BLE001 - unreadable geometry DATA is the caller's NULL
-        return False
-    return g is not None and not bool(np.isfinite(get_coordinates(g)).all())
+        return geom, True
+    if g is None:
+        return geom, True
+    return g, bool(np.isfinite(get_coordinates(g)).all())
 
 
 def _norm_res(res):
@@ -848,46 +870,25 @@ def _custom_pointascell_udf(
     return pd.Series(out, dtype="Int64")
 
 
-@pandas_udf(BinaryType())
-def _custom_cellaswkb_udf(cell: pd.Series, grid: pd.Series) -> pd.Series:
-    return pd.Series(
-        [
-            (
-                _custom.cell_aswkb(_custom.conf_from_row(s), int(c))
-                if not pd.isna(c) and s is not None
-                else None
-            )
-            for c, s in zip(cell, _custom_grid_records(grid))
-        ]
-    )
+@udf(BinaryType())
+def _custom_cellaswkb_udf(cell, grid):
+    if cell is None or grid is None:
+        return None
+    return _custom.cell_aswkb(_custom.conf_from_row(grid), cell)
 
 
-@pandas_udf(StringType())
-def _custom_cellaswkt_udf(cell: pd.Series, grid: pd.Series) -> pd.Series:
-    return pd.Series(
-        [
-            (
-                _custom.cell_aswkt(_custom.conf_from_row(s), int(c))
-                if not pd.isna(c) and s is not None
-                else None
-            )
-            for c, s in zip(cell, _custom_grid_records(grid))
-        ]
-    )
+@udf(StringType())
+def _custom_cellaswkt_udf(cell, grid):
+    if cell is None or grid is None:
+        return None
+    return _custom.cell_aswkt(_custom.conf_from_row(grid), cell)
 
 
-@pandas_udf(BinaryType())
-def _custom_centroid_udf(cell: pd.Series, grid: pd.Series) -> pd.Series:
-    return pd.Series(
-        [
-            (
-                _custom.cell_centroid(_custom.conf_from_row(s), int(c))
-                if not pd.isna(c) and s is not None
-                else None
-            )
-            for c, s in zip(cell, _custom_grid_records(grid))
-        ]
-    )
+@udf(BinaryType())
+def _custom_centroid_udf(cell, grid):
+    if cell is None or grid is None:
+        return None
+    return _custom.cell_centroid(_custom.conf_from_row(grid), cell)
 
 
 def _custom_grid_records(grid):
@@ -926,7 +927,8 @@ def _custom_geomkring(geom, grid, res, k, mode="boundary-out", coverage="coveras
         return None
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
     res = _whole_res("gbx_custom_geomkring", res)
-    if _not_finite(geom):
+    geom, finite = _parse_finite(geom)
+    if not finite:
         return None  # a geometry that is not finite has no cells
     try:
         return _custom.geometry_k_ring(
@@ -948,7 +950,8 @@ def _custom_geomkloop(geom, grid, res, k, mode="boundary-out", coverage="coveras
         return None
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
     res = _whole_res("gbx_custom_geomkloop", res)
-    if _not_finite(geom):
+    geom, finite = _parse_finite(geom)
+    if not finite:
         return None  # a geometry that is not finite has no cells
     try:
         return _custom.geometry_k_loop(
@@ -1027,21 +1030,11 @@ def _custom_kloop(cell, grid, k):
     return _custom.k_loop(_custom.conf_from_row(grid), int(cell), int(k))
 
 
-@pandas_udf(LongType())
-def _custom_distance_udf(
-    cell1: pd.Series, grid: pd.Series, cell2: pd.Series
-) -> pd.Series:
-    return pd.Series(
-        [
-            (
-                int(_custom.distance(_custom.conf_from_row(s), int(a), int(b)))
-                if not (pd.isna(a) or s is None or pd.isna(b))
-                else None
-            )
-            for a, s, b in zip(cell1, _custom_grid_records(grid), cell2)
-        ],
-        dtype="object",
-    ).astype("Int64")
+@udf(LongType())
+def _custom_distance_udf(cell1, grid, cell2):
+    if cell1 is None or grid is None or cell2 is None:
+        return None
+    return int(_custom.distance(_custom.conf_from_row(grid), cell1, cell2))
 
 
 # ============================================================================
@@ -1090,6 +1083,7 @@ def _h3_cellfill_agg_udf(
     method: pd.Series,
     power: pd.Series,
 ) -> Optional[bytes]:
+    _check_exact_ids(cellid, "gbx_h3_cellfill")
     cells = _cellfill.collect(
         (int(c), None if pd.isna(v) else float(v))
         for c, v in zip(cellid, value)
@@ -1115,6 +1109,7 @@ def _quadbin_cellfill_agg_udf(
     method: pd.Series,
     power: pd.Series,
 ) -> Optional[bytes]:
+    _check_exact_ids(cellid, "gbx_quadbin_cellfill")
     cells = _cellfill.collect(
         (int(c), None if pd.isna(v) else float(v))
         for c, v in zip(cellid, value)
@@ -1170,6 +1165,7 @@ def _custom_cellfill_agg_udf(
     method: pd.Series,
     power: pd.Series,
 ) -> Optional[bytes]:
+    _check_exact_ids(cellid, "gbx_custom_cellfill")
     # Extract grid conf from first non-null row (all rows share the same grid spec).
     conf = None
     for g in grid:
@@ -1237,7 +1233,8 @@ def _h3_geomkring(geom, resolution, k, mode="boundary-out", coverage="coveras"):
         return None
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
     resolution = _whole_res("gbx_h3_geomkring", resolution)
-    if _not_finite(geom):
+    geom, finite = _parse_finite(geom)
+    if not finite:
         return None  # a geometry that is not finite has no cells
     try:
         return sorted(
@@ -1262,7 +1259,8 @@ def _h3_geomkloop(geom, resolution, k, mode="boundary-out", coverage="coveras"):
         return None
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
     resolution = _whole_res("gbx_h3_geomkloop", resolution)
-    if _not_finite(geom):
+    geom, finite = _parse_finite(geom)
+    if not finite:
         return None  # a geometry that is not finite has no cells
     try:
         return sorted(
@@ -1404,10 +1402,10 @@ def _registrar_groups() -> List[_register.Group]:
             "gbx_bng_centroid", _bng_centroid_udf
         ),
         "gbx_bng_cellintersection": lambda s: s.udf.register(
-            "gbx_bng_cellintersection", _bng_cellintersection, BNG_CHIP_SCHEMA
+            "gbx_bng_cellintersection", _bng_cellintersection_udf
         ),
         "gbx_bng_cellunion": lambda s: s.udf.register(
-            "gbx_bng_cellunion", _bng_cellunion, BNG_CHIP_SCHEMA
+            "gbx_bng_cellunion", _bng_cellunion_udf
         ),
         "gbx_bng_kring": lambda s: s.udf.register(
             "gbx_bng_kring", _bng_kring, ArrayType(StringType())

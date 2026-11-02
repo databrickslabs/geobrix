@@ -21,6 +21,7 @@ fed to the shared ``_dilate`` engine. h3 uses (lat, lng) order; shapely uses
 import h3
 from shapely import from_wkb, from_wkt
 from shapely.geometry import MultiLineString, MultiPoint, MultiPolygon
+from shapely.geometry.base import BaseGeometry
 
 from databricks.labs.gbx.pygx import _dilate
 
@@ -33,7 +34,14 @@ def _parse_geom(g):
     """Parse a geometry from WKB bytes or a WKT string; None/empty -> None."""
     if g is None:
         return None
-    geom = from_wkb(bytes(g)) if isinstance(g, (bytes, bytearray)) else from_wkt(str(g))
+    if isinstance(g, BaseGeometry):  # already parsed
+        geom = g
+    else:
+        geom = (
+            from_wkb(bytes(g))
+            if isinstance(g, (bytes, bytearray))
+            else from_wkt(str(g))
+        )
     return None if (geom is None or geom.is_empty) else geom
 
 

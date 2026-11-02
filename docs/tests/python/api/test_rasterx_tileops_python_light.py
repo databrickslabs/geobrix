@@ -170,10 +170,10 @@ def test_rst_transform_python_light_example(spark):
     _assert_materialized_tile(result, "rst_transform")
 
 
-def test_rst_transformcrs_python_light_example(spark):
+def test_rst_transformcrs_python_example(spark):
     """rst_transformcrs('EPSG:3857') reprojects the tile to Web Mercator."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_transformcrs_python_light_example(spark)
+    result = tileops_examples.rst_transformcrs_python_example(spark)
     assert (
         isinstance(result, str) and "3857" in result
     ), f"Expected CRS containing '3857', got {result!r}"

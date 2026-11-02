@@ -121,10 +121,10 @@ def test_bng_centroid_python_light_example(spark):
     assert len(result) > 0, "WKB centroid bytes should be non-empty"
 
 
-def test_bng_eastnorthasbng_python_light_example(spark):
+def test_bng_eastnorthasbng_python_example(spark):
     """bng_eastnorthasbng returns 'TQ3080' for easting=530000, northing=180000, res='1km'."""
     assert light_examples is not None
-    result = light_examples.bng_eastnorthasbng_python_light_example(spark)
+    result = light_examples.bng_eastnorthasbng_python_example(spark)
     assert (
         result == "TQ3080"
     ), f"Expected 'TQ3080' for easting=530000, northing=180000, res='1km', got {result!r}"
@@ -283,10 +283,10 @@ def test_bng_polyfill_python_light_example(spark):
     ), "polyfill must return non-empty results with EPSG:27700 geometry"
 
 
-def test_bng_tessellate_python_light_example(spark):
+def test_bng_tessellate_python_example(spark):
     """bng_tessellate returns a 9-chip list for the 3km × 3km BNG polygon at res=3."""
     assert light_examples is not None
-    result = light_examples.bng_tessellate_python_light_example(spark)
+    result = light_examples.bng_tessellate_python_example(spark)
     assert result is not None, "bng_tessellate should return a non-null list"
     assert isinstance(
         result, list
@@ -398,10 +398,10 @@ def test_bng_geomkloopexplode_python_light_example(spark):
     ), "geomkloopexplode must return non-empty results with BNG coords"
 
 
-def test_bng_tessellateexplode_python_light_example(spark):
+def test_bng_tessellateexplode_python_example(spark):
     """bng_tessellateexplode (light) LATERAL returns 9 rows with cellid/core/chip columns."""
     assert light_examples is not None
-    rows = light_examples.bng_tessellateexplode_python_light_example(spark)
+    rows = light_examples.bng_tessellateexplode_python_example(spark)
     assert rows is not None, "bng_tessellateexplode should return non-null rows"
     assert isinstance(rows, list), f"Expected list of Row, got {type(rows)}"
     assert (

@@ -27,6 +27,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+from _manifest_names import stable_names  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REGISTERED_TXT = REPO_ROOT / "docs/tests-function-info/registered_functions.txt"
 FUNCTION_INFO_JSON = REPO_ROOT / "src/main/resources/com/databricks/labs/gbx/function-info.json"
@@ -153,7 +156,10 @@ def main() -> int:
             print(f"❌ missing required file: {required}", file=sys.stderr)
             return 1
 
-    sql = canonical_sql()
+    # A stable manifest row is checked by gbx:manifest:gen --check (per-surface completeness); this script keeps
+    # checking the names not yet in the manifest.
+    listed = canonical_sql()
+    sql = listed - stable_names()
     bindings = {
         "Scala (override def name)": scala_names(),
         "Python (functions.py)": python_names(),
@@ -205,7 +211,7 @@ def main() -> int:
     # Extras are informational: a binding name not in the canonical list (e.g. an
     # expression whose rd.register(...) is commented out). Not a failure.
     for label, found in bindings.items():
-        extra = sorted(found - sql)
+        extra = sorted(found - listed - stable_names())
         if extra:
             print(f"ℹ️  {len(extra)} name(s) in {label} not in the canonical list (ignored): "
                   f"{', '.join(extra)}")
@@ -216,8 +222,8 @@ def main() -> int:
         print("   Fix the missing binding(s), or remove the function from "
               "docs/tests-function-info/registered_functions.txt if it was withdrawn.")
         return 1
-    print(f"✅ binding parity OK — all {len(sql)} registered functions exist in Scala, Python, "
-          "and function-info.json.")
+    print(f"✅ binding parity OK — all {len(sql)} registered functions outside the manifest exist in Scala, "
+          "Python, and function-info.json.")
     return 0
 
 

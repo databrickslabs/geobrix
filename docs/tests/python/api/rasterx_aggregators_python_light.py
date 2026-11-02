@@ -156,7 +156,7 @@ rst_frombands_agg_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_merge_agg_python_light_example(spark):
+def rst_merge_agg_python_example(spark):
     """Merge a group's raster tiles into one spatial mosaic using the light pyrx tier.
 
     Multi-tile fixture: 3 per-band rows from rgb_nir_small.tif.  Each tile
@@ -170,7 +170,7 @@ def rst_merge_agg_python_light_example(spark):
     return result["mosaic"]
 
 
-rst_merge_agg_python_light_example_output = """
+rst_merge_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|mosaic                                                     |
 +------+-----------------------------------------------------------+
@@ -516,7 +516,7 @@ rst_quadbin_rasterize_agg_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_bng_rasterize_agg_python_light_example(spark):
+def rst_bng_rasterize_agg_python_example(spark):
     """Rasterize BNG cell/value rows into one tile per group using the light pyrx tier.
 
     Multi-row fixture: 3 rows of (BNG STRING cell id, burn value) at 1km resolution
@@ -549,7 +549,7 @@ def rst_bng_rasterize_agg_python_light_example(spark):
     return result["tile"]
 
 
-rst_bng_rasterize_agg_python_light_example_output = """
+rst_bng_rasterize_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|tile                                                       |
 +------+-----------------------------------------------------------+

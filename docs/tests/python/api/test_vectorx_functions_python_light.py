@@ -290,12 +290,12 @@ def test_st_split_python_light_example(spark):
 # ---------------------------------------------------------------------------
 
 
-def test_st_makevalid_python_light_example(spark):
+def test_st_makevalid_python_example(spark):
     """st_makevalid returns non-null valid WKB bytes for a bowtie self-intersecting polygon."""
     import json  # noqa: PLC0415
 
     assert light_examples is not None
-    result = light_examples.st_makevalid_python_light_example(spark)
+    result = light_examples.st_makevalid_python_example(spark)
     assert result is not None, "st_makevalid should return non-null WKB bytes"
     assert isinstance(
         result, (bytes, bytearray)

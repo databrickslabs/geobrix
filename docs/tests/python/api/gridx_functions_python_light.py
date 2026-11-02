@@ -292,7 +292,7 @@ bng_centroid_python_light_example_output = """
 """
 
 
-def bng_eastnorthasbng_python_light_example(spark):
+def bng_eastnorthasbng_python_example(spark):
     """Convert BNG easting/northing coordinates to a BNG cell reference (light pygx tier).
 
     Reads the ``bng_points`` setup view (easting=530000, northing=180000,
@@ -312,7 +312,7 @@ def bng_eastnorthasbng_python_light_example(spark):
     return result["bng_cell"]
 
 
-bng_eastnorthasbng_python_light_example_output = """
+bng_eastnorthasbng_python_example_output = """
 +--------+
 |bng_cell|
 +--------+
@@ -633,7 +633,7 @@ bng_polyfill_python_light_example_output = """
 """
 
 
-def bng_tessellate_python_light_example(spark):
+def bng_tessellate_python_example(spark):
     """Tessellate a geometry into BNG cells, splitting border cells at the boundary (light pygx tier).
 
     Reads the ``bng_polygons`` setup view (3km × 3km polygon in EPSG:27700).
@@ -652,7 +652,7 @@ def bng_tessellate_python_light_example(spark):
     return result["chips"]
 
 
-bng_tessellate_python_light_example_output = """
+bng_tessellate_python_example_output = """
 +--------------------------------------------+
 |chips                                       |
 +--------------------------------------------+
@@ -902,7 +902,7 @@ bng_geomkloopexplode_python_light_example_output = """
 """
 
 
-def bng_tessellateexplode_python_light_example(spark):
+def bng_tessellateexplode_python_example(spark):
     """Explode tessellation into one row per chip via SQL LATERAL (light pygx tier).
 
     The light UDTF (``gbx_bng_tessellateexplode``) has **no Python Column form** —
@@ -925,7 +925,7 @@ def bng_tessellateexplode_python_light_example(spark):
     return result.collect()
 
 
-bng_tessellateexplode_python_light_example_output = """
+bng_tessellateexplode_python_example_output = """
 +------+-----+--------+
 |cellid|core |chip    |
 +------+-----+--------+

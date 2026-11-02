@@ -1646,35 +1646,6 @@ rst_transform_python_heavy_example_output = """
 
 
 # ---------------------------------------------------------------------------
-# rst_transformcrs — reproject to a target CRS string (heavy tier)
-# Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — EPSG:32618)
-# Reproject to EPSG:3857
-# ---------------------------------------------------------------------------
-
-
-def rst_transformcrs_python_heavy_example(spark):
-    """Reproject a raster tile to a CRS string target via the heavy rasterx tier."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    tile_df = spark.table("rasters")
-    result = tile_df.select(
-        rx.rst_crs(rx.rst_transformcrs("tile", f.lit("EPSG:3857"))).alias("crs")
-    ).first()
-    return result["crs"]
-
-
-rst_transformcrs_python_heavy_example_output = """
-+----------+
-|crs       |
-+----------+
-|EPSG:3857 |
-+----------+
-(CRS string of the reprojected tile; accepts authority codes, WKT, or PROJ4)
-"""
-
-
-# ---------------------------------------------------------------------------
 # rst_updatetype — convert the raster data type (heavy tier)
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # ---------------------------------------------------------------------------
@@ -1820,44 +1791,6 @@ def rst_frombands_agg_python_heavy_example(spark):
 rst_frombands_agg_python_heavy_example_output = """
 +------+-----------------------------------------------------------+
 |region|stacked                                                    |
-+------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
-"""
-
-
-# ---------------------------------------------------------------------------
-# rst_merge_agg -- spatial mosaic of a group's tiles (union extent)
-# Fixture: MULTI-TILE (3 per-band rows from rgb_nir_small.tif, same extent)
-# Output: tile struct (returns a raster tile)
-# ---------------------------------------------------------------------------
-
-
-def rst_merge_agg_python_heavy_example(spark):
-    """Merge a group's raster tiles into one spatial mosaic using the heavy rasterx tier.
-
-    Multi-tile fixture: 3 per-band rows from rgb_nir_small.tif.  Each tile
-    covers the same extent, so the merged result has the same bounding box.
-    Grouped by region.
-    """
-    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
-
-    from pyspark.sql import functions as f  # noqa: PLC0415
-
-    df = _get_multi_band_tiles_df_heavy(spark)
-    # The aggregate returns the mosaic's GeoTIFF bytes (BINARY) on every surface;
-    # rst_fromcontent turns them back into a tile.
-    merged = df.groupBy("region").agg(rx.rst_merge_agg("tile").alias("content"))
-    result = merged.select(
-        "region", rx.rst_fromcontent("content", f.lit("GTiff")).alias("mosaic")
-    ).first()
-    return result["mosaic"]
-
-
-rst_merge_agg_python_heavy_example_output = """
-+------+-----------------------------------------------------------+
-|region|mosaic                                                     |
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
@@ -2184,74 +2117,6 @@ def rst_quadbin_rasterize_agg_python_heavy_example(spark):
 
 
 rst_quadbin_rasterize_agg_python_heavy_example_output = """
-+------+-----------------------------------------------------------+
-|region|tile                                                       |
-+------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
-"""
-
-
-# ---------------------------------------------------------------------------
-# rst_bng_rasterize_agg -- burn BNG cells into one tile per group
-# Fixture: synthesized 3 BNG 1km cell STRING rows near central London
-# Output: tile struct (returns a raster tile)
-# ---------------------------------------------------------------------------
-
-
-def rst_bng_rasterize_agg_python_heavy_example(spark):
-    """Rasterize BNG cell/value rows into one tile per group using the heavy rasterx tier.
-
-    Multi-row fixture: 3 rows of (BNG STRING cell id, burn value) at 1km resolution
-    near central London (EPSG:27700).  Grouped by region, producing 1 rasterized tile.
-    """
-    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
-    from databricks.labs.gbx.gridx.bng import functions as bngx  # noqa: PLC0415
-
-    bngx.register(spark)
-
-    spark.sql("""
-        CREATE OR REPLACE TEMP VIEW _bng_cells_heavy AS
-        SELECT region,
-               gbx_bng_eastnorthasbng(e, n, 3) AS cellid,
-               val AS value
-        FROM (VALUES
-            ('R1', cast(530000.0 as double), cast(180000.0 as double), cast(1.0 as double)),
-            ('R1', cast(531000.0 as double), cast(181000.0 as double), cast(2.0 as double)),
-            ('R1', cast(529000.0 as double), cast(179000.0 as double), cast(3.0 as double))
-        ) AS t(region, e, n, val)
-    """)
-    df = spark.table("_bng_cells_heavy")
-    from pyspark.sql import functions as f  # noqa: PLC0415
-
-    # A 3 km x 3 km canvas of 1 km pixels over the three cells. out_srid is not
-    # read (the output is always EPSG:27700); mode applies only when no extent is
-    # given. The aggregate returns GeoTIFF bytes; rst_fromcontent makes the tile.
-    burned = df.groupBy("region").agg(
-        rx.rst_bng_rasterize_agg(
-            "cellid",
-            "value",
-            27700,
-            1000.0,
-            529000.0,
-            179000.0,
-            532000.0,
-            182000.0,
-            3,
-            3,
-            "centroids",
-            0,
-        ).alias("content")
-    )
-    result = burned.select(
-        "region", rx.rst_fromcontent("content", f.lit("GTiff")).alias("tile")
-    ).first()
-    spark.catalog.dropTempView("_bng_cells_heavy")
-    return result["tile"]
-
-
-rst_bng_rasterize_agg_python_heavy_example_output = """
 +------+-----------------------------------------------------------+
 |region|tile                                                       |
 +------+-----------------------------------------------------------+
@@ -2706,47 +2571,6 @@ rst_derivedband_python_heavy_example_output = """
 
 
 # ---------------------------------------------------------------------------
-# rst_mapalgebra -- apply map algebra expression
-# Fixture: multiband_tile_df_heavy(spark) (3 bands)
-# Output: tile struct (result raster)
-# ---------------------------------------------------------------------------
-
-
-def rst_mapalgebra_python_heavy_example(spark):
-    """NDVI from two bands of a SINGLE multiband raster — no need to decompose it.
-
-    The spec is a gdal_calc JSON envelope (the same shape on both tiers). The
-    per-variable keys select a raster (`*_index`, 0-based into the tiles array)
-    and a 1-based band (`*_band`): here A and B both read raster 0 (the one
-    tile), A = band 2 (NIR), B = band 1 (Red), giving NDVI = (NIR-Red)/(NIR+Red).
-    Direct equivalent of `gdal_calc -A in --A_band=2 -B in --B_band=1
-    --calc="(A-B)/(A+B)"`. Output: single-band Float32 tile.
-    """
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    df = spark.table("multiband_rasters")
-    ndvi_spec = (
-        '{"calc": "(A - B) / (A + B)", '
-        '"A_index": 0, "B_index": 0, "A_band": 2, "B_band": 1}'
-    )
-    result = df.select(
-        rx.rst_mapalgebra(f.array("tile"), f.lit(ndvi_spec)).alias("tile")
-    ).first()
-    return result["tile"]
-
-
-rst_mapalgebra_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(single-band Float32 NDVI tile; per-pixel (NIR-Red)/(NIR+Red) in [-1, 1])
-"""
-
-
-# ---------------------------------------------------------------------------
 # rst_merge -- merge/mosaic multiple raster tiles
 # Fixture: multi_band_tiles_df_heavy(spark) (3 rows: one per band)
 # Output: tile struct (merged raster)
@@ -2785,28 +2609,6 @@ rst_merge_python_heavy_example_output = """
 # ============================================================================
 # Fixture: dem_tile_df_heavy(spark) (SRTM elevation, NYC area)
 # All return tile struct
-
-
-def rst_slope_python_heavy_example(spark):
-    """Compute slope (degrees or percent rise/run) from a DEM tile."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    df = spark.table("dem_rasters")
-    result = df.select(
-        rx.rst_slope("tile", f.lit("degrees"), f.lit(1.0), f.lit(1.0)).alias("tile")
-    ).first()
-    return result["tile"]
-
-
-rst_slope_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(slope in degrees; auto-scaled from raster CRS units)
-"""
 
 
 def rst_aspect_python_heavy_example(spark):
@@ -3522,32 +3324,6 @@ rst_custom_tessellate_python_heavy_example_output = """
 # ============================================================================
 # Generator Functions (Heavy Tier)
 # ============================================================================
-
-
-def rst_retile_python_heavy_example(spark):
-    """Retile a raster into uniform dimensions (heavyweight generator).
-
-    The DataFrame function takes a DataFrame and returns one: each sub-tile is a row
-    that carries the tile's fields (``cellid``, ``raster``, ``path``, ...) beside the
-    input row's columns.
-    """
-    if rx is None:
-        raise ImportError("rasterx not installed")
-
-    # The `rasters` view is created in Setup; retile it into 64x64 sub-tiles.
-    # The input column is renamed first so only the sub-tile fields are kept.
-    df = spark.table("rasters").withColumnRenamed("tile", "src")
-    return rx.rst_retile(df, "src", 64, 64).drop("src").take(3)
-
-
-rst_retile_python_heavy_example_output = """
-+------+-----------------+----+---------+------+-----+
-|cellid|raster           |path|path_mode|window|crs  |
-+------+-----------------+----+---------+------+-----+
-|0     |<raster bytes>   |null|...      |null  |...  |
-+------+-----------------+----+---------+------+-----+
-(one row per sub-tile; the tile's fields are the columns)
-"""
 
 
 def rst_tooverlappingtiles_python_heavy_example(spark):

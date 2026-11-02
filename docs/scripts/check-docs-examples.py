@@ -28,6 +28,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+from _manifest_names import stable_names  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MDX = REPO_ROOT / "docs" / "docs" / "api" / "raster-functions.mdx"
 FUNCTION_INFO = (
@@ -171,9 +174,11 @@ def check_tab_completeness() -> list[str]:
     mdx = MDX.read_text()
 
     fe_checked = 0
+    # A stable manifest row's tabs are checked by gbx:manifest:gen --check (the docs-tab gate, every page).
+    owned = {n[len("gbx_") :] for n in stable_names()}
     for block in re.findall(r"<FunctionExamples\b(.*?)/>", mdx, re.S):
         nm = re.search(r'name="([^"]+)"', block)
-        if not nm:
+        if not nm or nm.group(1) in owned:
             continue
         name = nm.group(1)
         tiers = _bindings_for(fns, name)
@@ -209,7 +214,7 @@ def check_tab_completeness() -> list[str]:
         if not fn:
             continue
         base = re.sub(
-            r"_(sql|python_light|python_heavy|scala)_example$", "", fn.group(1)
+            r"_(sql|python_light|python_heavy|python|scala)_example$", "", fn.group(1)
         )
         tiers = _bindings_for(fns, base)
         if len(tiers) > 1:

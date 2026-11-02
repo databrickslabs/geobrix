@@ -468,34 +468,6 @@ bng_centroid_python_heavy_example_output = """
 """
 
 
-def bng_eastnorthasbng_python_heavy_example(spark):
-    """Convert BNG easting/northing coordinates to a BNG cell reference (heavy bng tier).
-
-    Reads the ``bng_points`` setup view (easting=530000, northing=180000,
-    EPSG:27700).  Resolution string ``'1km'`` maps the coordinates to
-    cell ``'TQ3080'``.  Identical to the lightweight output (AGREE).
-    """
-    from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.gridx.bng import functions as bx  # noqa: PLC0415
-
-    df = spark.table("bng_points")
-    result = df.select(
-        bx.bng_eastnorthasbng(f.col("easting"), f.col("northing"), f.lit("1km")).alias(
-            "bng_cell"
-        )
-    ).first()
-    return result["bng_cell"]
-
-
-bng_eastnorthasbng_python_heavy_example_output = """
-+--------+
-|bng_cell|
-+--------+
-|TQ3080  |
-+--------+
-"""
-
-
 def bng_pointascell_python_heavy_example(spark):
     """Convert a WKT point in BNG coordinates to a BNG cell reference (heavy bng tier).
 
@@ -794,35 +766,6 @@ bng_polyfill_python_heavy_example_output = """
 |[TQ2979, TQ2980, TQ2981, ...]|
 +-----------------------------+
 ... (9 cells covering the 3km × 3km BNG polygon at 1km resolution)
-"""
-
-
-def bng_tessellate_python_heavy_example(spark):
-    """Tessellate a geometry into BNG cells, splitting border cells at the boundary (heavy bng tier).
-
-    Reads the ``bng_polygons`` setup view (3km × 3km polygon in EPSG:27700).
-    At res=3 (1km) the polygon produces 9 chips.  Center cell TQ3080 is a core
-    chip (core=True, chip=None); the 8 border cells carry a WKB clipped polygon.
-    Returns ARRAY<STRUCT<cellid STRING, core BOOLEAN, chip BINARY>>.
-    Identical to the lightweight output (AGREE).  Geometry MUST be in EPSG:27700.
-    """
-    from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.gridx.bng import functions as bx  # noqa: PLC0415
-
-    df = spark.table("bng_polygons")
-    result = df.select(
-        bx.bng_tessellate(f.col("geom"), f.lit(3)).alias("chips")
-    ).first()
-    return result["chips"]
-
-
-bng_tessellate_python_heavy_example_output = """
-+--------------------------------------------+
-|chips                                       |
-+--------------------------------------------+
-|[{TQ2979, false, [binary]}, {TQ3080, true,..|
-+--------------------------------------------+
-... (9 chips; TQ3080 is core (core=true, chip=null); border cells carry WKB clip geometry)
 """
 
 

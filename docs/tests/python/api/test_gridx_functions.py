@@ -157,12 +157,6 @@ def test_bng_centroid_python_heavy_example_exists():
     assert hasattr(gridx_functions, "bng_centroid_python_heavy_example_output")
 
 
-def test_bng_eastnorthasbng_python_heavy_example_exists():
-    assert hasattr(gridx_functions, "bng_eastnorthasbng_python_heavy_example")
-    assert callable(gridx_functions.bng_eastnorthasbng_python_heavy_example)
-    assert hasattr(gridx_functions, "bng_eastnorthasbng_python_heavy_example_output")
-
-
 def test_bng_pointascell_python_heavy_example_exists():
     assert hasattr(gridx_functions, "bng_pointascell_python_heavy_example")
     assert callable(gridx_functions.bng_pointascell_python_heavy_example)
@@ -229,15 +223,6 @@ def test_bng_centroid_python_heavy_example(bng_heavy_setup):
         result, (bytes, bytearray)
     ), f"Expected bytes (WKB POINT), got {type(result)}"
     assert len(result) > 0, "WKB centroid bytes should be non-empty"
-
-
-def test_bng_eastnorthasbng_python_heavy_example(bng_heavy_setup):
-    """bng_eastnorthasbng (heavy) returns 'TQ3080' for easting=530000, northing=180000."""
-    spark = bng_heavy_setup
-    result = gridx_functions.bng_eastnorthasbng_python_heavy_example(spark)
-    assert (
-        result == "TQ3080"
-    ), f"Expected 'TQ3080' for easting=530000, northing=180000, res='1km', got {result!r}"
 
 
 def test_bng_pointascell_python_heavy_example(bng_heavy_setup):
@@ -372,12 +357,6 @@ def test_bng_polyfill_python_heavy_example_exists():
     assert hasattr(gridx_functions, "bng_polyfill_python_heavy_example_output")
 
 
-def test_bng_tessellate_python_heavy_example_exists():
-    assert hasattr(gridx_functions, "bng_tessellate_python_heavy_example")
-    assert callable(gridx_functions.bng_tessellate_python_heavy_example)
-    assert hasattr(gridx_functions, "bng_tessellate_python_heavy_example_output")
-
-
 # ---------------------------------------------------------------------------
 # T4: BNG neighbourhood/fill — heavy-tier execution tests
 # Fixture: bng_heavy_setup registers bx + creates the ten GridX heavy views.
@@ -448,26 +427,6 @@ def test_bng_polyfill_python_heavy_example(bng_heavy_setup):
         len(result) == 9
     ), f"Expected 9 cells for polyfill(BNG polygon, res=3), got {len(result)}"
     assert "TQ3080" in result, "Center cell TQ3080 should be in the polyfill"
-
-
-def test_bng_tessellate_python_heavy_example(bng_heavy_setup):
-    """bng_tessellate (heavy) returns 9 chips for the 3km × 3km BNG polygon at res=3."""
-    spark = bng_heavy_setup
-    result = gridx_functions.bng_tessellate_python_heavy_example(spark)
-    assert result is not None, "bng_tessellate (heavy) should return non-null list"
-    assert isinstance(
-        result, list
-    ), f"Expected list (ARRAY<STRUCT>), got {type(result)}"
-    assert (
-        len(result) == 9
-    ), f"Expected 9 chips for tessellate(BNG polygon, res=3), got {len(result)}"
-    core_chips = [c for c in result if c["core"] is True]
-    assert len(core_chips) >= 1, "Expected at least one core chip"
-    assert "TQ3080" in {
-        c["cellid"] for c in core_chips
-    }, "Expected TQ3080 to be the core chip"
-    # as documented: keep_core_geom defaults to false, so the core chip is NULL
-    assert all(c["chip"] is None for c in core_chips)
 
 
 # ---------------------------------------------------------------------------

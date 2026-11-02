@@ -506,7 +506,7 @@ st_split_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def st_makevalid_python_light_example(spark):
+def st_makevalid_python_example(spark):
     """Repair an invalid geometry to OGC-SFS validity (light pyvx tier).
 
     Creates a WKB bowtie self-intersecting polygon inline via shapely and
@@ -521,7 +521,7 @@ def st_makevalid_python_light_example(spark):
     return df.select(vx.st_makevalid("geom").alias("clean")).first()["clean"]
 
 
-st_makevalid_python_light_example_output = """
+st_makevalid_python_example_output = """
 +--------+
 |clean   |
 +--------+

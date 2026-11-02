@@ -7,9 +7,9 @@ Reads:
                      If unset or empty, prints a notice and exits 0 (nothing to check).
 
 Algorithm:
-  1. ``git diff QC_RANGE -- docs/tests-function-info/registered_functions.txt``
-     Collect lines matching ``^+gbx_[a-z0-9_]+`` (added registered functions;
-     the ``+++`` file-header line is excluded by the regex).
+  1. The added names: the registered names now (the stable rows of the function manifest,
+     ``manifest/functions.json``, plus the legacy ``docs/tests-function-info/registered_functions.txt``)
+     minus the names at the range's base (the same two files, read with ``git show <base>:<path>``).
   2. For each added name, check whether it appears (substring) anywhere in
      ``docs/docs/release-notes.mdx``, ``docs/docs/release-notes-0-6.mdx`` or
      ``docs/docs/release-notes-0-5-and-earlier.mdx`` (the release notes are split across
@@ -26,14 +26,19 @@ Graceful degradation:
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+from _manifest_names import all_names  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REGISTERED_TXT = REPO_ROOT / "docs/tests-function-info/registered_functions.txt"
+MANIFEST_JSON = REPO_ROOT / "python/geobrix/src/databricks/labs/gbx/manifest/functions.json"
 RELEASE_NOTES = REPO_ROOT / "docs/docs/release-notes.mdx"
 # The release notes are split across the summary page and the series subpages; a function
 # mentioned on any of them counts.
@@ -43,34 +48,54 @@ RELEASE_NOTES_PAGES = [
     REPO_ROOT / "docs/docs/release-notes-0-5-and-earlier.mdx",
 ]
 
-# Matches a newly added registered-function line: ``+gbx_foo_bar``
-# The ``+++`` diff file-header lines are excluded because they contain a path,
-# not a bare function name -- they will never match ``^[+]gbx_[a-z0-9_]+$``.
-ADDED_LINE_RE = re.compile(r"^\+(?P<name>gbx_[a-z0-9_]+)\s*$", re.MULTILINE)
+# A registered-function line of the legacy list: ``gbx_foo_bar``.
+LISTED_RE = re.compile(r"^(gbx_[a-z0-9_]+)\s*$", re.MULTILINE)
 
 
-def added_functions(qc_range: str) -> list[str] | None:
-    """Return names added to registered_functions.txt in ``qc_range``.
-
-    Returns None on git error (caller should treat as advisory skip).
-    """
+def _show(rev: str, path: Path) -> str | None:
+    """``path`` at ``rev`` ("" when the file did not exist there); None on any other git error."""
+    rel = str(path.relative_to(REPO_ROOT))
     result = subprocess.run(
-        ["git", "diff", qc_range, "--", str(REGISTERED_TXT.relative_to(REPO_ROOT))],
+        ["git", "show", f"{rev}:{rel}"], capture_output=True, text=True, cwd=str(REPO_ROOT)
+    )
+    if result.returncode == 0:
+        return result.stdout
+    exists = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}"],
         capture_output=True,
         text=True,
         cwd=str(REPO_ROOT),
     )
-    if result.returncode != 0:
-        print(
-            f"git diff failed (exit {result.returncode}); treating as advisory skip.",
-            file=sys.stderr,
-        )
-        if result.stderr.strip():
-            print(result.stderr.strip(), file=sys.stderr)
-        return None
+    if exists.returncode == 0:
+        return ""  # the revision exists; the file did not exist there
+    print(f"git show {rev}:{rel} failed; treating as advisory skip.", file=sys.stderr)
+    if result.stderr.strip():
+        print(result.stderr.strip(), file=sys.stderr)
+    return None
 
-    names = ADDED_LINE_RE.findall(result.stdout)
+
+def names_at(rev: str) -> set[str] | None:
+    """The registered names at ``rev``: the legacy list's and the manifest's stable rows."""
+    listed, manifest = _show(rev, REGISTERED_TXT), _show(rev, MANIFEST_JSON)
+    if listed is None or manifest is None:
+        return None
+    names = set(LISTED_RE.findall(listed))
+    if manifest.strip():
+        rows = json.loads(manifest).get("functions", [])
+        names |= {r["sql_name"] for r in rows if r.get("status", "stable") == "stable"}
     return names
+
+
+def added_functions(qc_range: str) -> list[str] | None:
+    """Return the names registered now that were not registered at the base of ``qc_range``.
+
+    Returns None on git error (caller should treat as advisory skip).
+    """
+    base = re.split(r"\.{2,3}", qc_range, maxsplit=1)[0].strip() or "HEAD"
+    before = names_at(base)
+    if before is None:
+        return None
+    return sorted(all_names() - before)
 
 
 def mentioned_in_release_notes(name: str, notes_text: str) -> bool:
@@ -131,7 +156,7 @@ def main() -> int:
         return 0
 
     if not added:
-        print("No functions added to registered_functions.txt in this range.")
+        print("No functions registered in this range.")
         print("release-notes-functions: PASS")
         return 0
 

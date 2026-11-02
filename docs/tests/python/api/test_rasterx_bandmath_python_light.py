@@ -150,10 +150,10 @@ def test_rst_derivedband_python_light_example(spark):
     _assert_materialized_tile(result, "rst_derivedband")
 
 
-def test_rst_mapalgebra_python_light_example(spark):
+def test_rst_mapalgebra_python_example(spark):
     """rst_mapalgebra returns a materialized tile with populated raster bytes."""
     assert bandmath_examples is not None
-    result = bandmath_examples.rst_mapalgebra_python_light_example(spark)
+    result = bandmath_examples.rst_mapalgebra_python_example(spark)
     _assert_materialized_tile(result, "rst_mapalgebra")
 
 

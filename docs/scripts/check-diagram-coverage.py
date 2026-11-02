@@ -23,6 +23,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+from _manifest_names import all_names  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REGISTERED_TXT = REPO_ROOT / "docs/tests-function-info/registered_functions.txt"
 DIAGRAM_PY = REPO_ROOT / "resources/images/generators/rasterx-function-categories.py"
@@ -38,13 +41,8 @@ COUNT_RE = re.compile(r"""(\d+)\s+(?:SQL\s+)?functions""")
 
 
 def canonical_rst() -> set[str]:
-    """Return the set of registered rst_ names (without the gbx_ prefix)."""
-    names = set()
-    for line in REGISTERED_TXT.read_text().splitlines():
-        line = line.strip()
-        if line.startswith("gbx_rst_"):
-            names.add(line[len("gbx_"):])   # strip "gbx_" -> "rst_..."
-    return names
+    """Return the set of registered rst_ names (without the gbx_ prefix): the manifest's and the legacy list's."""
+    return {n[len("gbx_"):] for n in all_names() if n.startswith("gbx_rst_")}
 
 
 def diagram_tokens(text: str) -> set[str]:

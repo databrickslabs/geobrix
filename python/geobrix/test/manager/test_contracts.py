@@ -1,5 +1,6 @@
 """Contract checks generated from the per-surface manifest. No per-function tests."""
 
+import dataclasses
 import re
 from pathlib import Path
 
@@ -1119,3 +1120,48 @@ def test_forced_l2_on_standard_refuses_a_row_without_a_java_handler_cleanly(
     assert stub.java_registered == []
     # the same words the default path gives
     assert levels.available(fn, "L2", _caps(connect=True, jar=OK_JAR)) == why
+
+
+def _gates():
+    import importlib.util
+    import sys
+
+    path = REPO / "scripts/manifest/check_surfaces.py"
+    spec = importlib.util.spec_from_file_location("gbx_check_surfaces", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_replacement_gates_pass_on_the_committed_manifest():
+    assert _gates().run() == []
+
+
+def test_overlap_gate_refuses_a_uc_type_that_is_not_a_form_of_the_session_type(
+    monkeypatch,
+):
+    gates = _gates()
+    fn = MAN.functions["gbx_bng_eastnorthasbng"]
+    bad = dataclasses.replace(
+        fn, params=(dataclasses.replace(fn.params[0], uc="STRING"),) + fn.params[1:]
+    )
+    assert any("easting" in f for f in gates.overlap_findings([bad]))
+
+
+def test_every_stable_row_has_an_oracle_row_and_a_single_row_example():
+    gates = _gates()
+    assert gates.oracle_findings(FNS) == []
+
+
+def test_param_name_gate_names_every_surface_that_spells_a_parameter_differently():
+    """A manifest parameter renamed under the implementations: the generated entry, the light def and the
+    Scala wrapper each still spell the old name, and the gate names each of them."""
+    gates = _gates()
+    fn = MAN.functions["gbx_rst_transformcrs"]
+    renamed = dataclasses.replace(
+        fn, params=(fn.params[0], dataclasses.replace(fn.params[1], name="to_crs"))
+    )
+    found = gates.name_findings([renamed])
+    for where in ("rasterx/functions.py", "pyrx/functions.py", "functions.scala"):
+        assert any("to_crs" in f and where in f for f in found), (where, found)

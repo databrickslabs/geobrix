@@ -414,7 +414,7 @@ rst_derivedband_python_light_example_output = """
 """
 
 
-def rst_mapalgebra_python_light_example(spark):
+def rst_mapalgebra_python_example(spark):
     """NDVI from two bands of a SINGLE multiband raster — no need to decompose it.
 
     The spec is the same gdal_calc JSON envelope both tiers accept. The per-
@@ -440,7 +440,7 @@ def rst_mapalgebra_python_light_example(spark):
     return result["tile"]
 
 
-rst_mapalgebra_python_light_example_output = """
+rst_mapalgebra_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+

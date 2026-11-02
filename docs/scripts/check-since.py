@@ -12,6 +12,9 @@ Exit 0 = every registered function has a since; non-zero + a list otherwise.
 import os
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _manifest_names import stable_names  # noqa: E402
+
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 REGISTERED = os.path.join(
     REPO_ROOT, "docs", "tests-function-info", "registered_functions.txt"
@@ -54,10 +57,12 @@ def _load_since(path, key_col=0, header_first_col="function_name"):
 
 
 def main() -> int:
-    registered = _load_registered()
+    # A stable manifest row carries its own `since` (gbx:manifest:gen --check); this script keeps the other names.
+    owned = stable_names()
+    registered = [n for n in _load_registered() if n not in owned]
     since = _load_since(SINCE_TSV)
     missing = sorted(n for n in registered if n not in since)
-    extra = sorted(n for n in since if n not in registered)
+    extra = sorted(n for n in since if n not in registered and n not in owned)
 
     if missing:
         print(

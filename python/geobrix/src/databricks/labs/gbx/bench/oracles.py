@@ -2799,12 +2799,16 @@ def run_groups(
     shape_sql: str = "SELECT key, {fn}({args}) AS out FROM _gbx_oracle GROUP BY key",
     tmpdir: Optional[str] = None,
     null_burn: float = NAN,
+    column_of: Optional[Callable[[str], Callable]] = None,
 ):
     """Aggregates: `args[0]` is the group's rows, the rest are its constants. The table `_gbx_oracle` has one
     row per member: a key, the member's columns c0.., then the constants as columns. `shape_sql` takes `{fn}`,
     `{src}` (that table) and `{args}` (the member columns, then the constants as literals: a Catalyst aggregate
     reads them when it finishes, with no row to look in) and returns `(key, out)`. `null_burn` is what a NULL
     value burns on the tier the shape runs.
+
+    With `column_of` (SQL name -> Column function) the group runs through the Python Column API instead of
+    `shape_sql`: `groupBy(key).agg(column_of(fn)(members..., constants as literals))`.
     """
     from pyspark.sql.types import StructType
 
@@ -2849,14 +2853,24 @@ def run_groups(
             else case
         )
         try:
-            spark.createDataFrame(rows, schema).createOrReplaceTempView("_gbx_oracle")
-            df = spark.sql(
-                shape_sql.format(
-                    fn=case.fn,
-                    src="_gbx_oracle",
-                    args=", ".join([members] + literals),
+            src = spark.createDataFrame(rows, schema)
+            src.createOrReplaceTempView("_gbx_oracle")
+            if column_of is None:
+                df = spark.sql(
+                    shape_sql.format(
+                        fn=case.fn,
+                        src="_gbx_oracle",
+                        args=", ".join([members] + literals),
+                    )
                 )
-            )
+            else:
+                from pyspark.sql import functions as F
+
+                call = column_of(case.fn)(
+                    *[F.col(f"c{i}") for i in range(n0)],
+                    *[F.expr(lit) for lit in literals],
+                )
+                df = src.groupBy("key").agg(call.alias("out"))
             got = df.collect()
             value = got[0]["out"] if got else None
             if case.kind == "error_group":

@@ -36,6 +36,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+from _manifest_names import stable_names  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REGISTERED_TXT = REPO_ROOT / "docs/tests-function-info/registered_functions.txt"
 RASTERX_SCALA_ROOT = REPO_ROOT / "src/main/scala/com/databricks/labs/gbx/rasterx"
@@ -614,7 +617,8 @@ def main() -> int:
         print(f"[FAIL] missing required file: {REGISTERED_TXT}", file=sys.stderr)
         return 1
 
-    names = canonical_sql()
+    # A stable manifest row is checked by gbx:manifest:gen --check; this script keeps the other names.
+    names = [n for n in canonical_sql() if n not in stable_names()]
     print(f"Canonical registered functions: {len(names)}")
     print()
 

@@ -70,10 +70,10 @@ def test_rst_frombands_agg_python_light_example(spark):
     _assert_tile(result, "rst_frombands_agg")
 
 
-def test_rst_merge_agg_python_light_example(spark):
+def test_rst_merge_agg_python_example(spark):
     """rst_merge_agg returns a non-null tile struct."""
     assert agg_examples is not None
-    result = agg_examples.rst_merge_agg_python_light_example(spark)
+    result = agg_examples.rst_merge_agg_python_example(spark)
     _assert_tile(result, "rst_merge_agg")
 
 
@@ -117,10 +117,10 @@ def test_rst_quadbin_rasterize_agg_python_light_example(spark):
     _assert_tile(result, "rst_quadbin_rasterize_agg")
 
 
-def test_rst_bng_rasterize_agg_python_light_example(spark):
+def test_rst_bng_rasterize_agg_python_example(spark):
     """rst_bng_rasterize_agg returns a non-null tile struct."""
     assert agg_examples is not None
-    result = agg_examples.rst_bng_rasterize_agg_python_light_example(spark)
+    result = agg_examples.rst_bng_rasterize_agg_python_example(spark)
     _assert_tile(result, "rst_bng_rasterize_agg")
 
 

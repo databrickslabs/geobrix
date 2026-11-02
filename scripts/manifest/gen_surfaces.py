@@ -211,13 +211,10 @@ def check(only: Optional[str] = None) -> List[str]:
                 findings.append(
                     f"{rel}: does not import _api (the generated entries call it)"
                 )
-    if only is None:
-        try:  # the replacement gates
-            import check_surfaces
-        except ModuleNotFoundError:
-            pass
-        else:
-            findings += check_surfaces.run()
+    if only is None:  # the replacement gates
+        import check_surfaces
+
+        findings += check_surfaces.run()
     return findings
 
 

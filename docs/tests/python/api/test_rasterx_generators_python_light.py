@@ -8,7 +8,7 @@ LATERAL syntax, not direct df.select calls.
 
 import pytest
 from rasterx_generators_python_light import (
-    rst_retile_python_light_example,
+    rst_retile_python_example,
     rst_tooverlappingtiles_python_light_example,
     rst_separatebands_python_light_example,
     rst_polygonize_python_light_example,
@@ -17,9 +17,9 @@ from rasterx_generators_python_light import (
 )
 
 
-def test_rst_retile_python_light_example(spark):
+def test_rst_retile_python_example(spark):
     """Light-tier retile returns array of sub-tiles."""
-    result = rst_retile_python_light_example(spark)
+    result = rst_retile_python_example(spark)
     assert isinstance(result, list)
     assert len(result) > 0
     assert all(hasattr(row, "asDict") or isinstance(row, dict) for row in result)

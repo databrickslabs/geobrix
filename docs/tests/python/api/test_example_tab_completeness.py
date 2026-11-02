@@ -109,7 +109,13 @@ def _function_examples_blocks():
 
 
 _FNS = _load_bindings()
-_BLOCKS = _function_examples_blocks()
+# A function of the function manifest (its entry lists `surfaces`) has its tabs checked by
+# gbx:manifest:gen --check, on every page; this test keeps the other functions.
+_BLOCKS = [
+    b
+    for b in _function_examples_blocks()
+    if "surfaces" not in (_FNS.get("gbx_" + b[0]) or _FNS.get(b[0]) or {})
+]
 
 
 @pytest.mark.parametrize("name,sources", _BLOCKS, ids=[b[0] for b in _BLOCKS])
@@ -146,7 +152,7 @@ def test_no_single_tab_on_multitier_function():
         if not fn:
             continue
         base = re.sub(
-            r"_(sql|python_light|python_heavy|scala)_example$", "", fn.group(1)
+            r"_(sql|python_light|python_heavy|python|scala)_example$", "", fn.group(1)
         )
         tiers = _bindings_for(_FNS, base)
         if len(tiers) > 1:

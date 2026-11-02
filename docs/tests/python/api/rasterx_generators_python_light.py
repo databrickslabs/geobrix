@@ -19,7 +19,7 @@ from _fixtures import single_band_tile_df, multiband_tile_df
 # ============================================================================
 
 
-def rst_retile_python_light_example(spark):
+def rst_retile_python_example(spark):
     """Retile a raster into uniform dimensions (UDTF via LATERAL).
 
     Generator function: invoke via SQL LATERAL, not df.select.
@@ -35,7 +35,7 @@ def rst_retile_python_light_example(spark):
     ).take(3)
 
 
-rst_retile_python_light_example_output = """
+rst_retile_python_example_output = """
 +------+--------------+-----+----------------------+
 |cellid|raster        |path |...                   |
 +------+--------------+-----+----------------------+

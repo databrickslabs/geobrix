@@ -653,7 +653,7 @@ rst_transform_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_transformcrs_python_light_example(spark):
+def rst_transformcrs_python_example(spark):
     """Reproject a raster tile to a CRS string target using the light pyrx tier."""
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
@@ -665,7 +665,7 @@ def rst_transformcrs_python_light_example(spark):
     return result["crs"]
 
 
-rst_transformcrs_python_light_example_output = """
+rst_transformcrs_python_example_output = """
 +----------+
 |crs       |
 +----------+

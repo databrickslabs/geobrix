@@ -538,13 +538,6 @@ def test_rst_frombands_agg_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_frombands_agg")
 
 
-def test_rst_merge_agg_python_heavy_example(spark):
-    """rst_merge_agg returns a non-null tile struct."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_merge_agg_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_merge_agg")
-
-
 def test_rst_rasterize_agg_python_heavy_example(spark):
     """rst_rasterize_agg returns a non-null tile struct."""
     assert rasterx_functions is not None
@@ -578,13 +571,6 @@ def test_rst_quadbin_rasterize_agg_python_heavy_example(spark):
     assert rasterx_functions is not None
     result = rasterx_functions.rst_quadbin_rasterize_agg_python_heavy_example(spark)
     _assert_heavy_tile(result, "rst_quadbin_rasterize_agg")
-
-
-def test_rst_bng_rasterize_agg_python_heavy_example(spark):
-    """rst_bng_rasterize_agg returns a non-null tile struct."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_bng_rasterize_agg_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_bng_rasterize_agg")
 
 
 def test_rst_binpoints_python_heavy_example(spark):
@@ -745,13 +731,6 @@ def test_rst_derivedband_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_derivedband")
 
 
-def test_rst_mapalgebra_python_heavy_example(spark):
-    """rst_mapalgebra returns a non-null tile struct (from algebra expression)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_mapalgebra_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_mapalgebra")
-
-
 def test_rst_merge_python_heavy_example(spark):
     """rst_merge returns a non-null tile struct (merged from aligned tiles)."""
     assert rasterx_functions is not None
@@ -762,13 +741,6 @@ def test_rst_merge_python_heavy_example(spark):
 # ============================================================================
 # Terrain Analysis Function Tests
 # ============================================================================
-
-
-def test_rst_slope_python_heavy_example(spark):
-    """rst_slope returns a non-null tile struct (slope in degrees/percent)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_slope_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_slope")
 
 
 def test_rst_aspect_python_heavy_example(spark):
@@ -973,17 +945,6 @@ _SEPARATEBANDS_ERROR_TILE_BUG = (
 _POLYGONIZE_ERROR_TILE_BUG = (
     "rst_polygonize works correctly; returns array of feature structs"
 )
-
-
-def test_rst_retile_python_heavy_example(spark):
-    """rst_retile (heavyweight generator) returns one row per sub-tile carrying the tile's fields."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_retile_python_heavy_example(spark)
-    assert result is not None
-    assert isinstance(result, list)
-    assert len(result) > 0
-    fields = list(result[0].asDict())
-    assert "raster" in fields and "src" not in fields
 
 
 def test_rst_tooverlappingtiles_python_heavy_example(spark):

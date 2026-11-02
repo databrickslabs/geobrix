@@ -39,7 +39,7 @@ object RST_WorldToRasterCoordX extends WithExpressionInfo {
                 () => {
                     val exprConf = ExpressionConfig.fromB64(conf.toString)
                     RST_ExpressionUtil.init(exprConf)
-                    val ds = RasterSerializationUtil.rowToDS(row, dt)
+                    val ds = RasterSerializationUtil.rowToDS(row, dt, gated = false)
                     val res = execute(ds, xGeo, yGeo)
                     RasterDriver.releaseDataset(ds)
                     res

@@ -441,7 +441,9 @@ def _tile_member(tile, cap_bytes: int, decoded_budget: int, fix: str):
     if candidate is None:
         return None
     try:
-        with _serde.open_tile(candidate) as ds:
+        with _serde.open_tile(
+            candidate, gate=False
+        ) as ds:  # the size probe: the budget check below judges it
             size = _decoded_size(ds)
     except Exception:  # noqa: BLE001 - dropped, as the aggregates drop it
         return None

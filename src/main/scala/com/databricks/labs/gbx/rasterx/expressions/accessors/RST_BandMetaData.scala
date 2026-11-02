@@ -47,7 +47,7 @@ object RST_BandMetaData extends WithExpressionInfo {
             () => {
                 val exprConf = ExpressionConfig.fromB64(conf.toString)
                 RST_ExpressionUtil.init(exprConf)
-                val ds = RasterSerializationUtil.rowToDS(row, dt)
+                val ds = RasterSerializationUtil.rowToDS(row, dt, gated = false)
                 val band = ds.GetRasterBand(bandIndex)
                 val mtd = execute(band)
                 band.delete()

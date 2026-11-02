@@ -43,7 +43,7 @@ case class RST_ToOverlappingTiles(
               val tileWidth = tileWidthExpr.eval(input).asInstanceOf[Int]
               val tileHeight = tileHeightExpr.eval(input).asInstanceOf[Int]
               val overlap = overlapExpr.eval(input).asInstanceOf[Int]
-              val (cell, ds, mtd) = RasterSerializationUtil.rowToTile(rawTile, rasterType)
+              val (cell, ds, mtd) = RasterSerializationUtil.rowToTile(rawTile, rasterType, gated = false)
               val iter = OverlappingTiles.reTileIter(ds, mtd, tileWidth, tileHeight, overlap)
               RST_ExpressionUtil.addCleanupListener(iter)
               iter.map { case (resDs, resMtd) =>

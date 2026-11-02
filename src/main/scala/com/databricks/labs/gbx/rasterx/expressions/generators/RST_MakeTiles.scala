@@ -55,7 +55,7 @@ case class RST_MakeTiles(
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
 
-              val (cell, ds, mtd) = RasterSerializationUtil.rowToTile(rawTile, rasterType)
+              val (cell, ds, mtd) = RasterSerializationUtil.rowToTile(rawTile, rasterType, gated = false)
 
               val targetSize = sizeInMBExpr.eval(input).asInstanceOf[Int]
               val inputSize = RasterAccessors.memSize(ds)

@@ -52,11 +52,14 @@ TILE_SCHEMA = StructType(
 
 
 @contextmanager
-def open_tile(raster_bytes: bytes) -> Iterator[DatasetReader]:
+def open_tile(raster_bytes: bytes, gate: bool = True) -> Iterator[DatasetReader]:
     """Open raster BINARY content as a rasterio DatasetReader (in-memory).
 
     A tile decoded over the read cap (``ds.file_gbx.tile_read_cap``; width x height x bands x the band type's size,
     from the header, before any pixel is read) raises with the reason every level gives and its Fix.
+
+    ``gate=False`` skips that check, for the callers that never decode the whole tile: a header answer, and the
+    retile family, which cuts the tile into windows (the very function the Fix names).
     """
     import numpy as np
 
@@ -64,14 +67,15 @@ def open_tile(raster_bytes: bytes) -> Iterator[DatasetReader]:
 
     with MemoryFile(bytes(raster_bytes)) as mf:
         with open_bytes(mf) as ds:
-            decoded = (
-                ds.width * ds.height * ds.count * np.dtype(ds.dtypes[0]).itemsize
-                if ds.count
-                else 0
-            )
-            cap = tile_read_cap()
-            if decoded > cap:
-                raise ValueError(read_cap_refusal(decoded, cap))
+            if gate:
+                decoded = (
+                    ds.width * ds.height * ds.count * np.dtype(ds.dtypes[0]).itemsize
+                    if ds.count
+                    else 0
+                )
+                cap = tile_read_cap()
+                if decoded > cap:
+                    raise ValueError(read_cap_refusal(decoded, cap))
             yield ds
 
 
@@ -115,7 +119,7 @@ def build_tile(
     1-based ``band`` that ``rst_separatebands`` stamps). Both default to absent.
     """
     raster = bytes(raster_bytes)
-    with open_tile(raster) as ds:
+    with open_tile(raster, gate=False) as ds:  # a header read: no pixel is decoded
         meta = {
             "driver": driver or ds.driver,
             "width": str(ds.width),

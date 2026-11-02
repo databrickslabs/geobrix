@@ -44,7 +44,7 @@ object RST_Crs extends WithExpressionInfo {
             () => {
                 val exprConf = ExpressionConfig.fromB64(conf.toString)
                 RST_ExpressionUtil.init(exprConf)
-                val ds = RasterSerializationUtil.rowToDS(row, dt)
+                val ds = RasterSerializationUtil.rowToDS(row, dt, gated = false)
                 val res = execute(ds)
                 RasterDriver.releaseDataset(ds)
                 if (res == null) null else UTF8String.fromString(res)

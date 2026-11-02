@@ -77,7 +77,7 @@ object RetileKernel {
                 m.remove(k)
                 RasterDriver.releaseDataset(hit.ds)
             }
-            val ds = RasterDriver.readFromBytes(raster, Map("driver" -> "GTiff"))
+            val ds = RasterDriver.readFromBytesUngated(raster, Map("driver" -> "GTiff")) // cut into windows: never decoded whole
             if (ds == null) throw new IllegalArgumentException("the raster bytes do not open")
             m.put(k, Held(ds, raster))
             ds

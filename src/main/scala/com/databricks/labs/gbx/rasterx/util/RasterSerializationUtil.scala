@@ -86,8 +86,9 @@ object RasterSerializationUtil {
 
     /** Deserialize a tile row to (cellId, Dataset, metadata); opens the raster via RasterDriver.
       * A tile with no raster and no path (an error tile) has nothing to open: the Dataset is null and GDAL is
-      * not called. */
-    def rowToTile(row: InternalRow, rasterDT: DataType): (Long, Dataset, Map[String, String]) = {
+      * not called. `gated = false` opens it without the decoded-size gate ([[RasterDriver.readFromBytesUngated]]):
+      * for the retile family, which cuts the tile into windows and never decodes it whole. */
+    def rowToTile(row: InternalRow, rasterDT: DataType, gated: Boolean = true): (Long, Dataset, Map[String, String]) = {
         val lyt = tileLayout(row)
         guardMaterialized(row, lyt)
         if (row.isNullAt(lyt.raster)) {
@@ -97,14 +98,15 @@ object RasterSerializationUtil {
             val metadataRow = row.getMap(lyt.metadata)
             val metadata = SerializationUtil.createMap[String, String](metadataRow)
             val buffer = row.getBinary(lyt.raster)
-            val ds = RasterDriver.readFromBytes(buffer, metadata)
+            val ds = RasterDriver.readBytes(buffer, metadata, gated)
             (cellID, ds, TileBytes.metadataAfterRead(metadata, ds))
         }
     }
 
     /** Extract and open the raster Dataset from a tile row; caller must release the Dataset. Null for a tile with
-      * no raster and no path (an error tile). */
-    def rowToDS(row: InternalRow, rasterDT: DataType, shared: Boolean = false): Dataset = {
+      * no raster and no path (an error tile). `gated = false` opens it without the decoded-size gate: for the
+      * header-only accessors, which decode no pixel ([[RasterDriver.readFromBytesUngated]]). */
+    def rowToDS(row: InternalRow, rasterDT: DataType, shared: Boolean = false, gated: Boolean = true): Dataset = {
         val lyt = tileLayout(row)
         guardMaterialized(row, lyt)
         if (row.isNullAt(lyt.raster)) {
@@ -113,7 +115,7 @@ object RasterSerializationUtil {
             val metadataRow = row.getMap(lyt.metadata)
             val metadata = SerializationUtil.createMap[String, String](metadataRow)
             val buffer = row.getBinary(lyt.raster)
-            RasterDriver.readFromBytes(buffer, metadata)
+            RasterDriver.readBytes(buffer, metadata, gated)
         }
     }
 

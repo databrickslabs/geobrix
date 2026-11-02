@@ -1608,3 +1608,80 @@ def test_a_grouped_line_agrees_in_number(capsys, names, want):
         ],
     )
     assert capsys.readouterr().out.strip() == want
+
+
+# A tile decoded over the read cap: the gate's own Fix points at gbx_rst_retile, and a header answer needs no pixel, so
+# neither may be refused by the size gate (the pixel readers stay gated).
+_HEADER_ANSWERS = {
+    "rst_width": 64,
+    "rst_height": 48,
+    "rst_numbands": 1,
+    "rst_srid": 4326,
+    "rst_format": "GTiff",
+}
+
+
+def _answers(spark, tmp_path, names, register_it, fixture="tile_4326", cap=None):
+    """The accessors' answers for a fixture tile, with the read cap lowered to `cap` (when given) while `register_it`
+    runs (a light function carries the cap from its registration) and while the query runs (the JVM reads it per
+    query)."""
+    from pyspark.sql.types import StructField, StructType
+
+    from databricks.labs.gbx.bench import oracles
+    from databricks.labs.gbx.ds.file_gbx import READ_CAP_KEY
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+    tile = oracles._build(fixture, str(tmp_path))
+    schema = StructType([StructField("tile", V2_TILE_SCHEMA)])
+    spark.createDataFrame([(tile,)], schema).createOrReplaceTempView("_gbx_answers")
+    if cap is not None:
+        spark.conf.set(READ_CAP_KEY, str(cap))
+    try:
+        register_it()
+        calls = ", ".join(f"gbx_{n}(tile) AS {n}" for n in names)
+        return spark.sql(f"SELECT {calls} FROM _gbx_answers").collect()[0].asDict()
+    finally:
+        spark.conf.unset(READ_CAP_KEY)
+
+
+def _light(spark, names):
+    from databricks.labs.gbx import register
+
+    return lambda: register(spark, only=[f"gbx_{n}" for n in names])
+
+
+def _heavy(spark, names):
+    """The Catalyst accessors under their own names (the manifest does not hold them yet)."""
+    from databricks.labs.gbx.manager import jvm
+
+    def install():
+        jvm._point_jvm_at_payload(spark)
+        inst = spark._jvm.com.databricks.labs.gbx.kernels.L1Installer
+        base = "com.databricks.labs.gbx.rasterx.expressions.accessors.RST_"
+        for n in names:
+            cls = {"rst_numbands": "NumBands", "rst_srid": "SRID"}.get(
+                n, n[len("rst_") :].capitalize()
+            )
+            r = inst.install(spark._jsparkSession, f"gbx_{n}", base + cls)
+            assert str(r) == "ok", r
+
+    return install
+
+
+def test_light_header_accessors_answer_for_a_tile_over_the_read_cap(spark, tmp_path):
+    names = [*_HEADER_ANSWERS, "rst_avg"]
+    got = _answers(spark, tmp_path, names, _light(spark, names), cap=4096)
+    assert {k: got[k] for k in _HEADER_ANSWERS} == _HEADER_ANSWERS
+    assert got["rst_avg"] is None, "a pixel reader still refuses the tile"
+
+
+@pytest.mark.integration
+def test_heavy_header_accessors_answer_for_a_tile_over_the_read_cap(
+    jvm_spark, tmp_path
+):
+    names = [*_HEADER_ANSWERS, "rst_avg"]
+    got = _answers(jvm_spark, tmp_path, names, _heavy(jvm_spark, names), cap=4096)
+    assert {k: got[k] for k in _HEADER_ANSWERS} == _HEADER_ANSWERS
+    assert got["rst_avg"] is None, "a pixel reader still refuses the tile"
+
+

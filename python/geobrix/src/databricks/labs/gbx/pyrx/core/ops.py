@@ -48,7 +48,8 @@ def try_open(raster_bytes: bytes) -> bool:
     if raster_bytes is None:
         return False
     try:
-        with _serde.open_tile(bytes(raster_bytes)) as ds:
+        # an open, not a read: a tile too large to decode still opens
+        with _serde.open_tile(bytes(raster_bytes), gate=False) as ds:
             # Touch a property so a lazily-opened-but-invalid dataset still trips.
             _ = ds.count
         return True

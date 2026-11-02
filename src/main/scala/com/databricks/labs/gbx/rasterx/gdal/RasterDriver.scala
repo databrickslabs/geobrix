@@ -124,10 +124,21 @@ object RasterDriver {
       * for every raster function: a driver that can name other files, or a tile decoded over the read cap, throws
       * [[TileBytesRefused]] (an error tile, with its `Fix:`); a driver outside the self-contained class is read as
       * its GeoTIFF translation. Null when no allowed driver reads the bytes. */
-    def readFromBytes(bytes: Array[Byte], options: Map[String, String]): Dataset =
-        if (bytes == null) null else openFromBytes(bytes, options)
+    def readFromBytes(bytes: Array[Byte], options: Map[String, String]): Dataset = readBytes(bytes, options, gated = true)
 
-    private def openFromBytes(bytes: Array[Byte], options: Map[String, String]): Dataset = {
+    /** As [[readFromBytes]], without the decoded-size check. For the callers that never decode the whole tile: a
+      * header answer, and the retile family, which cuts the tile into windows (the function the gate's own Fix names).
+      * The bytes rule still holds (a driver that can name other files is refused, any other is read as its GeoTIFF
+      * translation, which for a non-GeoTIFF tile over the read cap is a full copy). A pixel reader uses
+      * [[readFromBytes]]. */
+    def readFromBytesUngated(bytes: Array[Byte], options: Map[String, String]): Dataset =
+        readBytes(bytes, options, gated = false)
+
+    /** [[readFromBytes]] or [[readFromBytesUngated]] by `gated`. */
+    def readBytes(bytes: Array[Byte], options: Map[String, String], gated: Boolean): Dataset =
+        if (bytes == null) null else openFromBytes(bytes, options, gated)
+
+    private def openFromBytes(bytes: Array[Byte], options: Map[String, String], gated: Boolean): Dataset = {
         val driverName = options.getOrElse("driver", "GTiff")
         val isZip = options.getOrElse("isZip", "false").toBoolean
         val extension = GDAL.getExtension(driverName)
@@ -146,7 +157,7 @@ object RasterDriver {
                 gdal.Unlink(tempPath)
                 return null
             }
-            TileBytes.checkSize(ds)
+            if (gated) TileBytes.checkSize(ds)
             if (TileBytes.selfContained(ds)) ds
             else {
                 val gtiff = TileBytes.toGTiff(ds, s"/vsimem/temp_raster_${uuid}_gtiff.tif")

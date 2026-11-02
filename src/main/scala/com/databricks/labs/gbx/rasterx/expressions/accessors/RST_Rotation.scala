@@ -35,7 +35,7 @@ object RST_Rotation extends WithExpressionInfo {
             () => {
                 val exprConf = ExpressionConfig.fromB64(conf.toString)
                 RST_ExpressionUtil.init(exprConf)
-                val ds = RasterSerializationUtil.rowToDS(row, rdt)
+                val ds = RasterSerializationUtil.rowToDS(row, rdt, gated = false)
                 val res = execute(ds)
                 RasterDriver.releaseDataset(ds)
                 res

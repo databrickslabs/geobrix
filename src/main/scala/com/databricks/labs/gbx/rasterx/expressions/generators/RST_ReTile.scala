@@ -48,7 +48,7 @@ case class RST_ReTile(
           () => {
               val exprConf = ExpressionConfig.fromExpr(exprConfExpr)
               RST_ExpressionUtil.init(exprConf)
-              val (cell, ds, mtd) = RasterSerializationUtil.rowToTile(rawTile, rasterType)
+              val (cell, ds, mtd) = RasterSerializationUtil.rowToTile(rawTile, rasterType, gated = false)
               val tileWidth = tileWidthExpr.eval(input).asInstanceOf[Int]
               val tileHeight = tileHeightExpr.eval(input).asInstanceOf[Int]
               val iter = ReTile.reTileIter(ds, mtd, tileWidth, tileHeight)

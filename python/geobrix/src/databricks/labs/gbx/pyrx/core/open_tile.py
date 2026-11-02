@@ -433,11 +433,14 @@ def _open_bytes(stack: ExitStack, raster_bytes: bytes) -> DatasetReader:
 
 
 @contextmanager
-def open_tile(tile: VirtualTile, file_ref=None) -> Iterator[DatasetReader]:
+def open_tile(
+    tile: VirtualTile, file_ref=None, gate: bool = True
+) -> Iterator[DatasetReader]:
     # 1. raster present: the bytes ARE the result; provenance fields are ignored
     #    (including any bogus path). Delegate to the v1 bytes contextmanager.
+    #    ``gate=False`` lifts the decoded-size gate of the bytes open (see ``_serde.open_tile``).
     if tile.raster is not None:
-        with _serde.open_tile(tile.raster) as ds:
+        with _serde.open_tile(tile.raster, gate=gate) as ds:
             yield ds
         return
 
@@ -569,7 +572,7 @@ def _to_virtual_tile(tile) -> VirtualTile:
 
 
 @contextmanager
-def _open(tile, file_ref=None):
+def _open(tile, file_ref=None, gate=True):
     """Context manager that yields an open ``DatasetReader`` for any tile shape.
 
     Accepts a ``VirtualTile``, raw bytes/bytearray, a v1 dict/Row
@@ -580,8 +583,11 @@ def _open(tile, file_ref=None):
 
     ``file_ref``: optional FileRef for FILE-type windowed reads; threaded through
     to ``open_tile``.  Defaults to None (today's behaviour, unchanged).
+
+    ``gate``: False lifts the decoded-size gate of a materialized tile's bytes (see ``_serde.open_tile``): for
+    the retile family, which never decodes the whole tile.
     """
-    with open_tile(_to_virtual_tile(tile), file_ref=file_ref) as ds:
+    with open_tile(_to_virtual_tile(tile), file_ref=file_ref, gate=gate) as ds:
         yield ds
 
 
@@ -764,8 +770,9 @@ def open_header(tile, file_ref=None) -> Iterator[DatasetReader]:
     vt = _to_virtual_tile(tile)
 
     if not vt.is_virtual():
-        # Bytes path: delegate to _open; no pixel read is performed here.
-        with _open(vt) as ds:
+        # Bytes path: no pixel read is performed here, so the decoded-size gate (a pixel reader's) does not apply:
+        # a tile too large to read still has a width, a CRS and a format.
+        with open_tile(vt, gate=False) as ds:
             yield ds
         return
 

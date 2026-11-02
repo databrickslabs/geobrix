@@ -38,7 +38,7 @@ object RST_BoundingBox extends WithExpressionInfo {
             () => {
                 val exprConf = ExpressionConfig.fromB64(conf.toString)
                 RST_ExpressionUtil.init(exprConf)
-                val ds = RasterSerializationUtil.rowToDS(row, dt)
+                val ds = RasterSerializationUtil.rowToDS(row, dt, gated = false)
                 val bbox = execute(ds)
                 RasterDriver.releaseDataset(ds)
                 JTS.toWKB(bbox)

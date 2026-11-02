@@ -78,7 +78,10 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
 
 # Rows every level runs through SQL with the session's read cap (`spark.databricks.labs.gbx.read_cap`) lowered to
 # this many bytes: the decoded-size gate where each level reads a tile's bytes.
-READ_CAP_ROWS: Dict[str, int] = {"decoded_over_cap_error_tile": 4096}
+READ_CAP_ROWS: Dict[str, int] = {
+    "decoded_over_cap_error_tile": 4096,
+    "rt_over_cap_windows": 4096,
+}
 # The refusal of a tile's bytes in a driver that can name other files, on every level (the light tier's text).
 _BYTES_REFUSED_LIGHT = "is a {} raster, a format that can name other files, which GeoBrix does not open from tile bytes. Fix:"
 
@@ -616,6 +619,16 @@ MVP_G: Tuple[Case, ...] = (
         ),
         "windows_batch",
         None,
+        ("session",),
+    ),
+    # A tile decoded over the read cap is the very tile `gbx_rst_retile` is for: the retile family opens it without
+    # the size gate (run with the cap lowered: READ_CAP_ROWS), so the Fix the gate gives works.
+    Case(
+        "rt_over_cap_windows",
+        RT,
+        (Build("tile_4326"), 32, 32),
+        "windows",
+        [(0, 0, 32, 32), (32, 0, 32, 32), (0, 32, 32, 16), (32, 32, 32, 16)],
         ("session",),
     ),
     # A window of 0 pixels never advances: a parameter error that raises on every level and says how to fix it

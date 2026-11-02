@@ -12,6 +12,7 @@ import pytest
 
 from databricks.labs.gbx import register
 from databricks.labs.gbx.bench import oracles
+from databricks.labs.gbx.ds.file_gbx import READ_CAP_KEY
 
 RT, TE, TS = oracles.RT, oracles.TE, oracles.TS
 LAT = "SELECT t.* FROM _gbx_oracle, LATERAL {fn}({args}) t"
@@ -134,15 +135,26 @@ def test_mvp_g_oracle(request, tmp_path, shape):
             and c.cid not in s.skip
         ]
         assert rows, f"{shape}: no oracle rows for {fn}"
-        ran = oracles.run_rows(
-            spark,
-            rows,
+        # a row that needs the read cap lowered runs so on the shapes that register a level; a probe form
+        # (no level) has no cap to carry
+        capped = [c for c in rows if c.cid in oracles.READ_CAP_ROWS and s.level != "-"]
+        kw = dict(
             shape_sql=s.sql,
             name_of=s.name_of or (lambda f: f),
             tmpdir=str(tmp_path),
             pad=s.pad,
         )
+        ran = oracles.run_rows(spark, [c for c in rows if c not in capped], **kw)
         failures += [m for _, m in ran if m]
+        for c in capped:
+            # the JVM reads the key per query; a light function carries it from its registration
+            spark.conf.set(READ_CAP_KEY, str(oracles.READ_CAP_ROWS[c.cid]))
+            try:
+                register(spark, only=[fn], _levels={fn: (s.level, "-")})
+                failures += [m for _, m in oracles.run_rows(spark, [c], **kw) if m]
+            finally:
+                spark.conf.unset(READ_CAP_KEY)
+                register(spark, only=[fn], _levels={fn: (s.level, "-")})
     assert failures == []
 
 

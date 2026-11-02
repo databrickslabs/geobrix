@@ -2,6 +2,7 @@ package com.databricks.labs.gbx.vectorx
 
 import com.databricks.labs.gbx.expressions.RegistryDelegate
 import com.databricks.labs.gbx.vectorx.expressions.{ST_AsMvt, ST_AsMvtPyramid, ST_Crs, ST_InterpolateElevationBBox, ST_InterpolateElevationGeom, ST_SetCrs, ST_TransformCrs, ST_Triangulate}
+import com.databricks.labs.gbx.vectorx.jts.legacy.expressions.ST_LegacyAsWKB
 import com.databricks.labs.gbx.vectorx.mvt.MvtWriter
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
 import org.apache.spark.sql.functions.lit
@@ -102,6 +103,9 @@ object functions extends Serializable {
         geom: Column, attrs: Column, minZ: Int, maxZ: Int, layerName: String, extent: Int
     ): Column =
         st_asmvt_pyramid(geom, attrs, lit(minZ), lit(maxZ), lit(layerName), lit(extent))
+
+    /** Decodes a legacy Mosaic geometry struct (`typeId`, `srid`, `boundaries`, `holes`) to ISO WKB, Z and holes kept. */
+    def st_legacyaswkb(geom: Column): Column = ColumnAdapter(ST_LegacyAsWKB.name, Seq(geom))
 
     /**
       * Returns the canonical CRS string (e.g. `"EPSG:4326"`, `"ESRI:54008"`) for a geometry's

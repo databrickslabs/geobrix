@@ -113,6 +113,14 @@ def test_an_aggregate_verdict_checks_the_resolved_arguments(monkeypatch):
     assert seen[0][0] == ["resolved"]
 
 
+def _ewkb(wkt, srid):
+    import shapely
+
+    return shapely.to_wkb(
+        shapely.set_srid(shapely.from_wkt(wkt), srid), include_srid=True
+    )
+
+
 @pytest.mark.parametrize(
     "kind,expect,good,bad",
     [
@@ -124,6 +132,12 @@ def test_an_aggregate_verdict_checks_the_resolved_arguments(monkeypatch):
         ),
         ("cell_set", ["TQ3080", "TQ3180"], ["TQ3180", "TQ3080"], ["TQ3080", "TQ3080"]),
         ("approx", (1.0, 2.0), (1.0 + 1e-12, 2.0), (1.0, 2.1)),
+        (
+            "geom_srid",
+            ("POINT Z(1 2 3)", 4326),
+            _ewkb("POINT Z(1 2 3)", 4326),
+            _ewkb("POINT Z(1 2 3)", 3857),
+        ),
     ],
 )
 def test_a_new_check_kind_passes_its_value_and_fails_another(kind, expect, good, bad):
@@ -133,3 +147,14 @@ def test_a_new_check_kind_passes_its_value_and_fails_another(kind, expect, good,
     assert oracles.check(case, good, case.args) is None
     assert oracles.check(case, bad, case.args) is not None
     assert oracles.check(case, None, case.args) is not None
+
+
+def test_geom_srid_without_a_fixed_srid_follows_the_first_argument():
+    from databricks.labs.gbx.bench import oracles
+
+    case = oracles.Case(
+        "probe", "gbx_st_node", ("SRID=4326;POINT(1 2)",), "geom_srid", "POINT(1 2)"
+    )
+    assert oracles.check(case, _ewkb("POINT(1 2)", 4326), case.args) is None
+    assert oracles.check(case, _ewkb("POINT(1 2)", 3857), case.args) is not None
+    assert oracles.check(case, _ewkb("POINT Z(1 2 3)", 4326), case.args) is not None

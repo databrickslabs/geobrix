@@ -5,6 +5,7 @@ distinct capability from validity (see geometry-validity). WKB in/out, CRS
 preserved. See docs/docs/api/geometry-cleaning.mdx.
 """
 
+import math
 from typing import Optional
 
 from shapely import (
@@ -28,6 +29,19 @@ def _finish(g, srid: int) -> bytes:
     return to_wkb(g, include_srid=True)
 
 
+def _size(fn: str, name: str, value) -> float:
+    """A distance or grid size: a finite number, 0 or more. Anything else raises naming the value."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        v = math.nan
+    if not math.isfinite(v) or v < 0.0:
+        raise ValueError(
+            f"gbx_st_{fn}: {name} must be a finite number, 0 or more; got {value!r}"
+        )
+    return v
+
+
 def st_simplifypreservetopology(geom, tolerance) -> Optional[bytes]:
     """Douglas-Peucker simplify that preserves topology (shapely preserve_topology=True).
 
@@ -38,7 +52,14 @@ def st_simplifypreservetopology(geom, tolerance) -> Optional[bytes]:
     if g is None:
         return None
     srid = get_srid(g)
-    return _finish(simplify(g, float(tolerance), preserve_topology=True), srid)
+    return _finish(
+        simplify(
+            g,
+            _size("simplifypreservetopology", "tolerance", tolerance),
+            preserve_topology=True,
+        ),
+        srid,
+    )
 
 
 def st_removerepeatedpoints(geom, tolerance=0.0) -> Optional[bytes]:
@@ -47,7 +68,12 @@ def st_removerepeatedpoints(geom, tolerance=0.0) -> Optional[bytes]:
     if g is None:
         return None
     srid = get_srid(g)
-    return _finish(remove_repeated_points(g, float(tolerance)), srid)
+    return _finish(
+        remove_repeated_points(
+            g, _size("removerepeatedpoints", "tolerance", tolerance)
+        ),
+        srid,
+    )
 
 
 def st_reduceprecision(geom, grid_size) -> Optional[bytes]:
@@ -59,7 +85,12 @@ def st_reduceprecision(geom, grid_size) -> Optional[bytes]:
     if g is None:
         return None
     srid = get_srid(g)
-    return _finish(set_precision(g, float(grid_size), mode="valid_output"), srid)
+    return _finish(
+        set_precision(
+            g, _size("reduceprecision", "grid_size", grid_size), mode="valid_output"
+        ),
+        srid,
+    )
 
 
 def st_node(geom) -> Optional[bytes]:
@@ -78,7 +109,7 @@ def st_snap(geom, reference, tolerance) -> Optional[bytes]:
     if g is None or ref is None:
         return None
     srid = get_srid(g)
-    return _finish(snap(g, ref, float(tolerance)), srid)
+    return _finish(snap(g, ref, _size("snap", "tolerance", tolerance)), srid)
 
 
 def _udf_st_simplifypreservetopology(geom, tolerance) -> Optional[bytes]:

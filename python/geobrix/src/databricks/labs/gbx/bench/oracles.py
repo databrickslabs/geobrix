@@ -45,6 +45,8 @@ class Case:
     # geom_equals: `expect` is the WKT of the geometry the output (WKB or WKT) must equal, vertex order aside.
     # cell_set: `expect` is the cell ids an array output must hold, each once, in any order (an array of chip
     # structs is judged by the first field of each). approx: a number, or a struct or list of numbers, to 1e-9.
+    # geom_srid: `expect` is the WKT of the geometry the output (WKB or EWKB) must equal, Z included, and the SRID it
+    # carries: a (WKT, SRID) pair fixes the SRID (0 for none), a bare WKT means the SRID of the first argument.
     # exact_rows is one batch: `args` is a tuple of argument rows, `expect` one value per row.
     # Generators also use no_rows | windows | cells, and error_tile means exactly one row.
     # The DataFrame helpers' rst_viewshed_towers uses towers (see MVP_H).
@@ -59,8 +61,9 @@ class Case:
     geom_srid: int = (
         4326  # the integer SRID UC GEOMETRY args are built with (never a CRS string)
     )
-    # exact | null only: more argument rows with the same expectation (one batch on the session surface,
-    # one handler call each on UC). The UC warehouse statement is the primary `args` only.
+    # More argument rows with the same expectation (one batch on the session surface, one handler call each on UC).
+    # The UC warehouse statement is the primary `args` only. A column holds one type, so a variant that changes an
+    # argument's type (a WKT string for WKB bytes) is a row of its own.
     variants: Tuple[Tuple[Any, ...], ...] = ()
 
 
@@ -359,6 +362,32 @@ MVP_S: Tuple[Case, ...] = (
     ),
     Case("mv_null", M, (None,), "null"),
     Case("mv_bad_level", M, (SQUARE, "bogus"), "raises", "bogus"),
+    # Every geometry form: WKT above, then EWKT, WKB and EWKB (the fixtures are in the vector_scalar module); the
+    # SRID an EWKT or EWKB carries stays on the repaired geometry.
+    Case(
+        "mv_ewkt",
+        M,
+        ("SRID=4326;POLYGON((0 0, 1 1, 1 0, 0 1, 0 0))",),
+        "geom_srid",
+        "MULTIPOLYGON(((0 0, 0.5 0.5, 0 1, 0 0)), ((0.5 0.5, 1 0, 1 1, 0.5 0.5)))",
+        ("session",),
+    ),
+    Case(
+        "mv_wkb",
+        M,
+        (Build("wkb_bowtie"),),
+        "geom_props",
+        {"valid": True, "area": 0.5},
+        ("session",),
+    ),
+    Case(
+        "mv_ewkb",
+        M,
+        (Build("ewkb_bowtie"),),
+        "geom_srid",
+        "MULTIPOLYGON(((0 0, 0.5 0.5, 0 1, 0 0)), ((0.5 0.5, 1 0, 1 1, 0.5 0.5)))",
+        ("session",),
+    ),
 )
 
 
@@ -2128,6 +2157,35 @@ def _check_geom_equals(case: Case, out) -> Optional[str]:
     return None
 
 
+def _check_geom_srid(case: Case, out, args) -> Optional[str]:
+    import shapely
+
+    from databricks.labs.gbx._geom import parse_geom
+
+    wkt, srid = case.expect if isinstance(case.expect, tuple) else (case.expect, None)
+    bad = _check_geom_equals(replace(case, expect=wkt), out)
+    if bad:
+        return bad
+    got = parse_geom(bytes(out) if isinstance(out, (bytearray, memoryview)) else out)
+    want = shapely.from_wkt(wkt)
+    if bool(got.has_z) != bool(want.has_z):
+        return f"{case.cid}: Z is {bool(got.has_z)}, want {bool(want.has_z)}"
+    if want.has_z:
+        a, b = (
+            sorted(map(tuple, shapely.get_coordinates(g, include_z=True)))
+            for g in (got, want)
+        )
+        if len(a) != len(b) or any(
+            abs(x - y) > 1e-6 for p, q in zip(a, b) for x, y in zip(p, q)
+        ):
+            return f"{case.cid}: coordinates {a}, want {b}"
+    if srid is None:
+        srid = shapely.get_srid(parse_geom(args[0]))
+    if shapely.get_srid(got) != srid:
+        return f"{case.cid}: SRID {shapely.get_srid(got)}, want {srid}"
+    return None
+
+
 def _check_approx(case: Case, out) -> Optional[str]:
     """`out` (a number, or a struct or list of numbers) equals `case.expect` to a relative 1e-9."""
     import math
@@ -2228,6 +2286,8 @@ def check(case: Case, out, args) -> Optional[str]:
         return None
     if case.kind == "geom_props":
         return _check_geom(case, out)
+    if case.kind == "geom_srid":
+        return _check_geom_srid(case, out, args)
     if case.kind in _VALUE_CHECKS:
         return _VALUE_CHECKS[case.kind](case, out)
     if case.kind == "merged_equals":

@@ -668,3 +668,21 @@ def _udf_st_transformcrs(geom, target_crs, source_crs=None) -> Optional[bytes]:
         # Text-input core result -> convert to (E)WKB for the SQL surface.
         return _text_result_to_wkb(result)
     return bytes(result)
+
+
+def _build_transformcrs_udf(grid_dirs):
+    """The ``gbx_st_transformcrs`` UDF, built with the PROJ grid directories registered on the driver.
+
+    The directories are captured here, so they travel with the pickled function to the workers, where
+    they join PROJ's search path before the first transform.
+    """
+    from pyspark.sql import functions as f
+    from pyspark.sql.types import BinaryType
+
+    def _udf(geom, target_crs, source_crs=None):
+        from databricks.labs.gbx.pyrx import _env
+
+        _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
+        return _udf_st_transformcrs(geom, target_crs, source_crs)
+
+    return f.udf(_udf, BinaryType())

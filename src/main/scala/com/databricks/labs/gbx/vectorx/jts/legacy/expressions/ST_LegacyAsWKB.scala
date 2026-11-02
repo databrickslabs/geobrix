@@ -30,7 +30,7 @@ object ST_LegacyAsWKB extends WithExpressionInfo {
 
     def eval(legacyGeom: InternalRow): Array[Byte] = {
         val geom = InternalGeometry(legacyGeom).toJTS
-        JTS.toWKB3(geom)
+        JTS.toWKBAdaptive(geom) // 3D only when the geometry carries Z: a 2D geometry stays 2D
     }
 
     override def name: String = "gbx_st_legacyaswkb"

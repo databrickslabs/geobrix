@@ -139,6 +139,7 @@ gbx_rst_index	0.4.0
 gbx_rst_initnodata	0.2.0
 gbx_rst_isempty	0.2.0
 gbx_rst_isoband	0.5.2
+gbx_rst_land_cover	0.5.2
 gbx_rst_maketiles	0.2.0
 gbx_rst_mapalgebra	0.2.0
 gbx_rst_max	0.2.0
@@ -152,6 +153,7 @@ gbx_rst_nbr	0.4.0
 gbx_rst_ndvi	0.2.0
 gbx_rst_ndwi	0.4.0
 gbx_rst_numbands	0.2.0
+gbx_rst_percentile_stretch	0.5.2
 gbx_rst_pixelcount	0.2.0
 gbx_rst_pixelheight	0.2.0
 gbx_rst_pixelwidth	0.2.0

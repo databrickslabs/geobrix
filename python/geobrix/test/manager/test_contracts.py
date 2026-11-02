@@ -1155,6 +1155,10 @@ def test_replacement_gates_pass_on_the_committed_manifest():
     assert _gates().run() == []
 
 
+def test_no_light_public_def_for_a_manifest_row():
+    assert _gates().legacy_findings(FNS) == []
+
+
 def test_overlap_gate_refuses_a_uc_type_that_is_not_a_form_of_the_session_type(
     monkeypatch,
 ):
@@ -2412,3 +2416,73 @@ def test_a_light_module_that_fails_to_import_loses_only_its_own_names(monkeypatc
         assert list(_legacy.import_failures()) == ["fake_gbx_light_missing_dependency"]
     finally:
         _legacy._by_module.cache_clear()
+
+
+def _fake_wheel(tmp_path, jars):
+    import zipfile
+
+    whl = tmp_path / "geobrix-0.6.0+env6-py3-none-any.whl"
+    with zipfile.ZipFile(whl, "w") as z:
+        for name in jars:
+            z.writestr(f"databricks/labs/gbx/_jar/{name}", b"jar-bytes")
+        z.writestr("databricks/labs/gbx/__init__.py", b"")
+    return str(whl)
+
+
+def test_jar_from_wheel_takes_the_one_jar_and_refuses_otherwise(tmp_path):
+    from databricks.labs.gbx import stage
+
+    assert (
+        stage.jar_from_wheel(
+            _fake_wheel(tmp_path, ["geobrix-0.6.0-jar-with-dependencies.jar"])
+        )
+        == b"jar-bytes"
+    )
+    with pytest.raises(ValueError, match="Fix:"):
+        stage.jar_from_wheel(_fake_wheel(tmp_path, []))
+
+
+def test_stage_jar_writes_the_jar_and_its_sha_and_refuses_a_second_jar(
+    tmp_path, monkeypatch, capsys
+):
+    import hashlib
+
+    from databricks.labs.gbx import _native, stage
+
+    src = tmp_path / "geobrix-0.6.0-jar-with-dependencies.jar"
+    src.write_bytes(b"jar-bytes")
+    vol = tmp_path / "vol"
+    monkeypatch.setattr(_native, "jar_path", lambda root=None: str(src))
+    monkeypatch.setattr(stage, "check_volume_dir", lambda p: p)
+    dst = stage.stage_jar(str(vol))
+    assert open(dst, "rb").read() == b"jar-bytes"
+    assert (
+        open(dst + ".sha256").read().split()[0]
+        == hashlib.sha256(b"jar-bytes").hexdigest()
+    )
+    assert "cluster library" in capsys.readouterr().out
+    (vol / "geobrix-0.5.3-jar-with-dependencies.jar").write_bytes(b"old")
+    with pytest.raises(RuntimeError, match="one geobrix JAR"):
+        stage.stage_jar(str(vol))
+
+
+def test_stage_jar_without_a_bundled_jar_or_off_a_volume_says_how_to_fix_it(
+    tmp_path, monkeypatch
+):
+    from databricks.labs.gbx import _native, stage
+
+    monkeypatch.setattr(_native, "jar_path", lambda root=None: None)
+    with pytest.raises(RuntimeError, match="Fix:.*env wheel"):
+        stage.stage_jar("/Volumes/c/s/v/jars")
+    src = tmp_path / "geobrix-0.6.0-jar-with-dependencies.jar"
+    src.write_bytes(b"jar-bytes")
+    monkeypatch.setattr(_native, "jar_path", lambda root=None: str(src))
+    with pytest.raises(ValueError, match="Fix:"):
+        stage.stage_jar(str(tmp_path / "not-a-volume"))
+
+
+def test_stage_jar_is_a_lazy_package_export():
+    import databricks.labs.gbx as gbx
+    from databricks.labs.gbx import stage
+
+    assert gbx.stage_jar is stage.stage_jar and "stage_jar" in gbx.__all__

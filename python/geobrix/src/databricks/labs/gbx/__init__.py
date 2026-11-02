@@ -37,7 +37,11 @@ def __getattr__(name):
             if exc.name == "databricks.labs.gbx.uc":
                 raise AttributeError(name) from exc
             raise
+    if name == "stage_jar":
+        from databricks.labs.gbx.stage import stage_jar
+
+        return stage_jar
     raise AttributeError(name)
 
 
-__all__ = ["register_proj_grids", "register"]
+__all__ = ["register_proj_grids", "register", "stage_jar"]

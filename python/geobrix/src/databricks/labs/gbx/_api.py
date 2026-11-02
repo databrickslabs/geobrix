@@ -159,28 +159,43 @@ def table(df, sql_name: str, *values):
     """
     from pyspark.sql import Column
 
+    from databricks.labs.gbx.manifest import sql_type
+
     fn = _fn(sql_name)
     if len(values) > fn.max_args:
         raise TypeError(
             f"{sql_name} takes at most {fn.max_args} arguments ({len(values)} given)"
         )
+    taken = {c.lower() for c in df.columns}
+    clash = [n for n, _ in fn.columns if n.lower() in taken]
+    if clash:
+        raise ValueError(
+            f"{sql_name} returns the column(s) {clash}, which the input DataFrame already has. "
+            f"Fix: rename them first, e.g. df = df.withColumnRenamed('{clash[0]}', '{clash[0]}_in')."
+        )
+    vals = list(values) + [None] * (fn.max_args - len(values))
+    set_at = [i for i, v in enumerate(vals) if v is not None]
+    last = max(set_at + [fn.min_args - 1])
     args = []
-    for i, v in enumerate(values):
-        p = fn.params[i]
+    for i in range(last + 1):
+        p, v = fn.params[i], vals[i]
         if isinstance(v, Column):
             raise TypeError(
                 f"{sql_name}: pass the column name of {p.name!r} as a str, not a Column. "
                 f"Fix: df = df.withColumn('{p.name}', <expression>) first, then pass '{p.name}'."
             )
         if v is None and i >= fn.min_args:
-            break
-        if isinstance(v, str) and p.py == "col":
+            # an optional left out before one that is set takes its SQL default, never a shifted value
+            args.append(f"CAST({p.default} AS {sql_type(p.session[0])})")
+        elif isinstance(v, str) and p.py == "col":
             args.append("gbx_in.`" + v.replace("`", "``") + "`")
         else:
             args.append(_sql_literal(v, p))
     spark = df.sparkSession
     ensure(spark, sql_name)
+    # spark.sql formats the text with str.format, so braces in an argument are escaped
+    call_args = ", ".join(args).replace("{", "{{").replace("}", "}}")
     return spark.sql(
-        f"SELECT gbx_in.*, gbx_out.* FROM {{gbx_in}} AS gbx_in, LATERAL {sql_name}({', '.join(args)}) AS gbx_out",
+        f"SELECT gbx_in.*, gbx_out.* FROM {{gbx_in}} AS gbx_in, LATERAL {sql_name}({call_args}) AS gbx_out",
         gbx_in=df,
     )

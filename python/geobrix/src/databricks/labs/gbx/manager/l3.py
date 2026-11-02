@@ -215,7 +215,7 @@ def register_l3_engine(
         ddl = sqlwrap.tiles_dispatch(
             fn,
             sqlwrap.tile_from_result(
-                c1_name + "(transform({tiles}, gbx_t -> gbx_t.raster), {rest})",
+                c1_name + "(transform({tiles}, gbx_t -> gbx_t.raster){rest})",
                 "{tiles}[0]",
             ),
             c0_name,
@@ -223,7 +223,7 @@ def register_l3_engine(
     else:
         ddl = sqlwrap.tile_dispatch(
             fn,
-            sqlwrap.tile_from_result(c1_name + "({tile}.raster, {rest})", first),
+            sqlwrap.tile_from_result(c1_name + "({tile}.raster{rest})", first),
             c0_name,
         )
     jvm._create_wrapper(spark, fn, ddl)

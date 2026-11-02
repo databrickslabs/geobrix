@@ -85,11 +85,9 @@ def install_l1(spark, fn, caps) -> Optional[str]:
             return r
         light = _install_light_side(spark, fn)
         if _is_tiles(fn):
-            ddl = sqlwrap.tiles_dispatch(
-                fn, _priv(fn, "L1") + "({tiles}, {rest})", light
-            )
+            ddl = sqlwrap.tiles_dispatch(fn, _priv(fn, "L1") + "({tiles}{rest})", light)
         else:
-            ddl = sqlwrap.tile_dispatch(fn, _priv(fn, "L1") + "({tile}, {rest})", light)
+            ddl = sqlwrap.tile_dispatch(fn, _priv(fn, "L1") + "({tile}{rest})", light)
         _create_wrapper(spark, fn, ddl)
         return None
     except Exception as exc:  # noqa: BLE001 - any failure is a fallback reason
@@ -115,9 +113,9 @@ def install_l1_engine(spark, fn, caps) -> Optional[str]:
         light = _priv(fn, "L3")
         l3.register_l3_engine(spark, fn, "engine-c0", name=light)
         if _is_tiles(fn):
-            ddl = sqlwrap.tiles_dispatch(fn, target + "({tiles}, {rest})", light)
+            ddl = sqlwrap.tiles_dispatch(fn, target + "({tiles}{rest})", light)
         else:
-            ddl = sqlwrap.tile_dispatch(fn, target + "({tile}, {rest})", light)
+            ddl = sqlwrap.tile_dispatch(fn, target + "({tile}{rest})", light)
         _create_wrapper(spark, fn, ddl)
         return None
     except Exception as exc:  # noqa: BLE001 - any failure is a fallback reason
@@ -149,7 +147,7 @@ def install_l2(spark, fn, caps) -> Optional[str]:
             _register_java(spark, k, spec)
             light = _install_light_side(spark, fn)
             tile = fn.params[0].name
-            jvm = sqlwrap.tile_from_raster(k + "({tile}.raster, {rest})", tile)
+            jvm = sqlwrap.tile_from_raster(k + "({tile}.raster{rest})", tile)
             _create_wrapper(spark, fn, sqlwrap.tile_dispatch(fn, jvm, light))
             return None
         if fn.min_args != fn.max_args:

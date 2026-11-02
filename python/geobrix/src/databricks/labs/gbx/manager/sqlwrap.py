@@ -23,20 +23,21 @@ def tile_dispatch(fn, jvm_call: str, l3_name: str) -> str:
     """CREATE FUNCTION text for a tile-first function.
 
     ``jvm_call`` is the JVM branch with ``{tile}`` (the tile argument, NULL unless it is
-    materialized) and ``{rest}`` (the other arguments) as placeholders. A NULL required argument
+    materialized) and ``{rest}`` (each other argument, each with a leading ", ": empty for a tile-only function)
+    as placeholders. A NULL required argument
     gives NULL. A tile with neither bytes nor a path is an error tile when it carries a diagnostic
     (it goes out unchanged, so the upstream reason survives) and NULL otherwise, as in the light tier.
     """
     t = fn.params[0].name
     others = [p.name for p in fn.params[1:]]
-    rest = ", ".join(others)
+    rest = "".join(
+        f", {n}" for n in others
+    )  # each argument after the tile, with its separator: none when none
     required = " OR ".join(f"{p.name} IS NULL" for p in fn.params[: fn.min_args])
     virt = f"(IF({t}.raster IS NULL AND {t}.path IS NOT NULL, {t}, NULL))"
     mat = f"(IF({t}.raster IS NOT NULL, {t}, NULL))"
     light = ", ".join([virt] + others)
     jvm = jvm_call.format(tile=mat, rest=rest)
-    if not others:  # a tile-only function: no argument after the tile
-        jvm = jvm.replace(f"{mat}, )", f"{mat})")
     return (
         f"CREATE OR REPLACE TEMPORARY FUNCTION {fn.sql_name}({_sig(fn)}) "
         f"RETURNS {sql_type(fn.returns_session)} RETURN CASE WHEN {required} THEN NULL "
@@ -141,14 +142,17 @@ def tile_from_result(result_expr: str, tile: str) -> str:
 def tiles_dispatch(fn, plain_call: str, l3_name: str) -> str:
     """CREATE FUNCTION text for a function whose first argument is an array of tiles.
 
-    ``plain_call`` (with ``{tiles}`` and ``{rest}`` placeholders) serves an array of materialized tiles; any
+    ``plain_call`` (with ``{tiles}`` and ``{rest}`` placeholders; ``{rest}`` as in ``tile_dispatch``) serves an
+    array of materialized tiles; any
     other array (a virtual, NULL, empty or error tile in it) goes to the row-wise light UDF ``l3_name``, which
     materializes virtual tiles and gives an error tile out unchanged. As in ``tile_dispatch``, each branch gets
     NULL for the arrays the other serves. A NULL argument or an empty array gives NULL.
     """
     t = fn.params[0].name
     others = [p.name for p in fn.params[1:]]
-    rest = ", ".join(others)
+    rest = "".join(
+        f", {n}" for n in others
+    )  # each argument after the tile, with its separator: none when none
     required = " OR ".join(f"{p.name} IS NULL" for p in fn.params[: fn.min_args])
     odd = f"exists({t}, gbx_e -> gbx_e IS NULL OR gbx_e.raster IS NULL)"
     light = ", ".join([f"(IF({odd}, {t}, NULL))"] + others)

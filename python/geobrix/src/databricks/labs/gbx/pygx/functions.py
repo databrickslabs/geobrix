@@ -68,7 +68,7 @@ def _pointascell_udf(lon: pd.Series, lat: pd.Series, res: pd.Series) -> pd.Serie
     lats = lat.to_numpy(dtype=np.float64)
     ress = res.to_numpy()
     # a NULL arrives as NaN (or None) in a batch: a NULL resolution, longitude or latitude
-    # gives a NULL cell (a NaN coordinate used to come out as a made-up cell)
+    # gives a NULL cell, and so does a coordinate that is not finite (it used to come out as a made-up cell)
     null = pd.isna(ress) | ~np.isfinite(lons) | ~np.isfinite(lats)
     out = np.zeros(len(lons), dtype=np.int64)
     # point_as_cell_vec needs a fixed z per call; group rows by their resolution
@@ -1545,110 +1545,9 @@ def register(spark: SparkSession = None, only: Optional[List[str]] = None) -> No
 # --- Column wrappers (mirror heavy gridx.grid.functions) ------------------------------------
 
 
-def quadbin_pointascell(
-    longitude: ColLike, latitude: ColLike, resolution: ColLike
-) -> Column:
-    """Quadbin cell (LONG) for the WGS84 longitude/latitude point at `resolution`."""
-    return f.call_function(
-        "gbx_quadbin_pointascell", _col(longitude), _col(latitude), _col(resolution)
-    )
-
-
-def quadbin_resolution(cell: ColLike) -> Column:
-    """Resolution (INT) of a quadbin cell."""
-    return f.call_function("gbx_quadbin_resolution", _col(cell))
-
-
-def quadbin_kring(cell: ColLike, k: ColLike) -> Column:
-    """ARRAY<LONG> of cells within ring distance `k` of `cell` (includes center)."""
-    return f.call_function("gbx_quadbin_kring", _col(cell), _col(k))
-
-
-def quadbin_distance(cellid1: ColLike, cellid2: ColLike) -> Column:
-    """Chebyshev grid distance (INT) between two same-resolution cells."""
-    return f.call_function("gbx_quadbin_distance", _col(cellid1), _col(cellid2))
-
-
-def quadbin_polyfill(geom: ColLike, resolution: ColLike) -> Column:
-    """ARRAY<LONG> of cells covering the geometry's envelope at `resolution`."""
-    return f.call_function("gbx_quadbin_polyfill", _col(geom), _col(resolution))
-
-
-def quadbin_aswkb(cell: ColLike) -> Column:
-    """Cell boundary polygon as EWKB (SRID 4326) BINARY."""
-    return f.call_function("gbx_quadbin_aswkb", _col(cell))
-
-
-def quadbin_centroid(cell: ColLike) -> Column:
-    """Cell centroid point as EWKB (SRID 4326) BINARY."""
-    return f.call_function("gbx_quadbin_centroid", _col(cell))
-
-
-def quadbin_cellunion(cells: ColLike) -> Column:
-    """Union of an ARRAY<LONG> of cell boundaries as EWKB (SRID 4326) BINARY."""
-    return f.call_function("gbx_quadbin_cellunion", _col(cells))
-
-
-def quadbin_tessellate(geom: ColLike, resolution: ColLike) -> Column:
-    """ARRAY<STRUCT<cell:LONG, geom:BINARY>> chips clipping the geometry per cell."""
-    return f.call_function("gbx_quadbin_tessellate", _col(geom), _col(resolution))
-
-
 def quadbin_cellunion_agg(cellid: ColLike) -> Column:
     """Aggregator: union a group's cell boundaries into one EWKB (SRID 4326) BINARY."""
     return _cellunion_agg_udf(_col(cellid))
-
-
-def quadbin_geomkring(
-    geom: ColLike,
-    resolution: ColLike,
-    k: ColLike,
-    mode: ColLike = "boundary-out",
-    coverage: ColLike = "coveras",
-) -> Column:
-    """ARRAY<BIGINT> geometry-aware k-ring around a geometry's covering cells.
-
-    mode: dilation mode (default ``"boundary-out"``). One of the 6 modes in
-    ``_dilate.MODES``.
-    coverage: coverage basis (default ``"coveras"``). One of ``_dilate.COVERAGE``:
-    ``"coveras"`` (overlap), ``"polyfill"`` (centroid), ``"core"`` (fully contained).
-    """
-    # mode/coverage are always string VALUES (never column names); use f.lit so Spark
-    # does not misinterpret them as unresolved column references.
-    mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
-    cov_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
-    return f.call_function(
-        "gbx_quadbin_geomkring",
-        _col(geom),
-        _col(resolution),
-        _col(k),
-        mode_arg,
-        cov_arg,
-    )
-
-
-def quadbin_geomkloop(
-    geom: ColLike,
-    resolution: ColLike,
-    k: ColLike,
-    mode: ColLike = "boundary-out",
-    coverage: ColLike = "coveras",
-) -> Column:
-    """ARRAY<BIGINT> geometry-aware k-loop (hollow shell) around a geometry's covering cells.
-
-    mode: dilation mode (default ``"boundary-out"``). See :func:`quadbin_geomkring`.
-    coverage: coverage basis (default ``"coveras"``). See :func:`quadbin_geomkring`.
-    """
-    mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
-    cov_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
-    return f.call_function(
-        "gbx_quadbin_geomkloop",
-        _col(geom),
-        _col(resolution),
-        _col(k),
-        mode_arg,
-        cov_arg,
-    )
 
 
 # The two *explode functions are SQL-LATERAL-only table functions in the light
@@ -1745,134 +1644,6 @@ def bng_geomkloopexplode(*args, **kwargs) -> Column:
 # --- Custom-grid Column wrappers (mirror heavy gridx.custom.functions) ------------------------
 # Cell ids are BIGINT; geometry outputs are plain WKB (NO SRID). custom_grid ALWAYS
 # supplies all 8 args (defaulting srid=-1) so the validating @udf sees a fixed arity.
-
-
-def custom_grid(
-    bound_x_min: ColLike,
-    bound_x_max: ColLike,
-    bound_y_min: ColLike,
-    bound_y_max: ColLike,
-    cell_splits: ColLike,
-    root_cell_size_x: ColLike,
-    root_cell_size_y: ColLike,
-    srid: ColLike = -1,
-) -> Column:
-    """Build a custom-grid spec STRUCT (validated eagerly). srid=-1 means no CRS."""
-    return f.call_function(
-        "gbx_custom_grid",
-        _col(bound_x_min),
-        _col(bound_x_max),
-        _col(bound_y_min),
-        _col(bound_y_max),
-        _col(cell_splits),
-        _col(root_cell_size_x),
-        _col(root_cell_size_y),
-        _col(srid),
-    )
-
-
-def custom_pointascell(point: ColLike, grid: ColLike, resolution: ColLike) -> Column:
-    """Custom-grid cell ID (BIGINT) for the first coordinate of a geometry at `resolution`."""
-    return f.call_function(
-        "gbx_custom_pointascell", _col(point), _col(grid), _col(resolution)
-    )
-
-
-def custom_cellaswkb(cell: ColLike, grid: ColLike) -> Column:
-    """Cell footprint polygon as plain WKB (no SRID) BINARY."""
-    return f.call_function("gbx_custom_cellaswkb", _col(cell), _col(grid))
-
-
-def custom_cellaswkt(cell: ColLike, grid: ColLike) -> Column:
-    """Cell footprint polygon as WKT (STRING)."""
-    return f.call_function("gbx_custom_cellaswkt", _col(cell), _col(grid))
-
-
-def custom_centroid(cell: ColLike, grid: ColLike) -> Column:
-    """Cell centroid point as plain WKB (no SRID) BINARY."""
-    return f.call_function("gbx_custom_centroid", _col(cell), _col(grid))
-
-
-def custom_polyfill(geom: ColLike, grid: ColLike, resolution: ColLike) -> Column:
-    """ARRAY<BIGINT> of cells whose center is contained by the geometry."""
-    return f.call_function(
-        "gbx_custom_polyfill", _col(geom), _col(grid), _col(resolution)
-    )
-
-
-def custom_kring(cell: ColLike, grid: ColLike, k: ColLike) -> Column:
-    """ARRAY<BIGINT> of cells within Chebyshev ring distance `k` (includes center)."""
-    return f.call_function("gbx_custom_kring", _col(cell), _col(grid), _col(k))
-
-
-def quadbin_kloop(cell: ColLike, k: ColLike) -> Column:
-    """ARRAY<LONG> of cells at EXACTLY Chebyshev distance `k` (hollow ring; k=0=[cell])."""
-    return f.call_function("gbx_quadbin_kloop", _col(cell), _col(k))
-
-
-def custom_kloop(cell: ColLike, grid: ColLike, k: ColLike) -> Column:
-    """ARRAY<BIGINT> of custom-grid cells at EXACTLY Chebyshev distance `k` (hollow ring)."""
-    return f.call_function("gbx_custom_kloop", _col(cell), _col(grid), _col(k))
-
-
-def custom_distance(cell1: ColLike, grid: ColLike, cell2: ColLike) -> Column:
-    """Chebyshev grid-ring distance (BIGINT) between two custom-grid cells: max(|dx|,|dy|)."""
-    return f.call_function("gbx_custom_distance", _col(cell1), _col(grid), _col(cell2))
-
-
-def custom_geomkring(
-    geom: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    k: ColLike,
-    mode: ColLike = "boundary-out",
-    coverage: ColLike = "coveras",
-) -> Column:
-    """ARRAY<BIGINT> geometry-aware k-ring around a geometry's covering cells.
-
-    mode: dilation mode (default ``"boundary-out"``). One of the 6 modes in
-    ``_dilate.MODES``.
-    coverage: coverage basis (default ``"coveras"``). One of ``_dilate.COVERAGE``.
-    """
-    # mode/coverage are always string VALUES (never column names); use f.lit so Spark
-    # does not misinterpret them as unresolved column references.
-    mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
-    cov_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
-    return f.call_function(
-        "gbx_custom_geomkring",
-        _col(geom),
-        _col(grid),
-        _col(resolution),
-        _col(k),
-        mode_arg,
-        cov_arg,
-    )
-
-
-def custom_geomkloop(
-    geom: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    k: ColLike,
-    mode: ColLike = "boundary-out",
-    coverage: ColLike = "coveras",
-) -> Column:
-    """ARRAY<BIGINT> geometry-aware k-loop (hollow shell) around a geometry's covering cells.
-
-    mode: dilation mode (default ``"boundary-out"``). See :func:`custom_geomkring`.
-    coverage: coverage basis (default ``"coveras"``). See :func:`custom_geomkring`.
-    """
-    mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
-    cov_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
-    return f.call_function(
-        "gbx_custom_geomkloop",
-        _col(geom),
-        _col(grid),
-        _col(resolution),
-        _col(k),
-        mode_arg,
-        cov_arg,
-    )
 
 
 # The two *explode functions are SQL-LATERAL-only table functions in the light
@@ -1994,46 +1765,6 @@ def custom_cellfill(
 # Python via the h3 library (polyfill + neighbour walk) — no Databricks product
 # functions, runs anywhere. gridx.h3.functions.geomkring/geomkloop are thin
 # aliases of these.
-
-
-def h3_geomkring(
-    geom: ColLike,
-    resolution: ColLike,
-    k: ColLike,
-    mode: ColLike = "boundary-out",
-    coverage: ColLike = "coveras",
-) -> Column:
-    """ARRAY<BIGINT> h3 geometry-aware k-ring around a geometry's covering cells.
-
-    geom: WKB BINARY or WKT STRING geometry column. resolution: H3 res 0..15.
-    k: ring distance (0 = covering set only). mode: dilation mode (default
-    "boundary-out"), one of the 6 modes.
-    coverage: coverage basis (default ``"coveras"``). One of ``_dilate.COVERAGE``.
-    """
-    mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
-    cov_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
-    return f.call_function(
-        "gbx_h3_geomkring", _col(geom), _col(resolution), _col(k), mode_arg, cov_arg
-    )
-
-
-def h3_geomkloop(
-    geom: ColLike,
-    resolution: ColLike,
-    k: ColLike,
-    mode: ColLike = "boundary-out",
-    coverage: ColLike = "coveras",
-) -> Column:
-    """ARRAY<BIGINT> h3 geometry-aware k-loop (hollow shell at exactly k steps).
-
-    See :func:`h3_geomkring`. Returns cells at EXACTLY k steps.
-    coverage: coverage basis (default ``"coveras"``). See :func:`h3_geomkring`.
-    """
-    mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
-    cov_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
-    return f.call_function(
-        "gbx_h3_geomkloop", _col(geom), _col(resolution), _col(k), mode_arg, cov_arg
-    )
 
 
 # The two *explode functions are SQL-LATERAL-only table functions in the light

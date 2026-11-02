@@ -410,7 +410,7 @@ Every CRS-touching function across GeoBrix, with its CRS parameter(s) and role. 
 | RasterX | `rst_{h3,quadbin}_rastertogrid*` | both | `crs` | source | raster auto-reprojected to grid-native 4326 |
 | RasterX | `rst_bng_rastertogrid*` | both | `crs` | source | raster auto-reprojected to grid-native 27700 |
 | RasterX | `rst_h3_gridspec` | light | `out_srid` / `out_crs` | output | grid-spec output CRS (DataFrame helper) |
-| GridX | `gbx_h3_cell_bbox` | both | `out_srid` / `out_crs` | output | cell bbox in the output CRS |
+| GridX | `gbx_h3_cell_bbox` | both | `srid` / `out_crs` | output | cell bbox in the output CRS |
 | VectorX | [`st_crs`](./vectorx-functions#st_crs) | both | — | accessor | returns the geometry's CRS string, or NULL when it carries no SRID |
 | VectorX | [`st_setcrs`](./vectorx-functions#st_setcrs) | both | `crs` | source | relabel from a CRS string; raises when the CRS has no integer authority code |
 | VectorX | [`st_transformcrs`](./vectorx-functions#st_transformcrs) | both | `target_crs`, `source_crs` | output (+ source) | reproject to a CRS string; `source_crs` names the input CRS for a plain SRID-less geometry |

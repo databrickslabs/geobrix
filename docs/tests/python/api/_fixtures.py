@@ -30,6 +30,8 @@ from pathlib import Path
 import sys
 import os
 from databricks.labs.gbx.gridx.bng import functions as bx
+from databricks.labs.gbx.gridx.custom import functions as cx
+from databricks.labs.gbx.gridx.quadbin import functions as qx
 
 # ---------------------------------------------------------------------------
 # Path constants (relative paths are relative to repo root)
@@ -1004,8 +1006,8 @@ def quadbin_cell_pairs_df(spark):
     gx.register(spark)
     base = spark.sql("SELECT 1 AS dummy")
     return base.select(
-        gx.quadbin_pointascell(f.lit(0.0), f.lit(0.0), f.lit(10)).alias("cell1"),
-        gx.quadbin_pointascell(f.lit(0.0), f.lit(0.1), f.lit(10)).alias("cell2"),
+        qx.quadbin_pointascell(f.lit(0.0), f.lit(0.0), f.lit(10)).alias("cell1"),
+        qx.quadbin_pointascell(f.lit(0.0), f.lit(0.1), f.lit(10)).alias("cell2"),
     )
 
 
@@ -1046,7 +1048,7 @@ def quadbin_kring_cells_df(spark):
     gx.register(spark)
     cell_df = spark.sql(f"SELECT {_QUADBIN_CELL_SF_Z10}L AS cell")
     return cell_df.select(
-        f.explode(gx.quadbin_kring(f.col("cell"), f.lit(1))).alias("cell")
+        f.explode(qx.quadbin_kring(f.col("cell"), f.lit(1))).alias("cell")
     )
 
 
@@ -1081,7 +1083,7 @@ def custom_grid_df(spark):
     gx.register(spark)
     base_df = spark.sql("SELECT 1 AS dummy")
     grid_df = base_df.select(
-        gx.custom_grid(
+        cx.custom_grid(
             f.lit(0),
             f.lit(1000000),
             f.lit(0),
@@ -1094,7 +1096,7 @@ def custom_grid_df(spark):
     )
     return grid_df.select(
         f.col("grid"),
-        gx.custom_pointascell(f.lit(_BNG_POINT_WKT), f.col("grid"), f.lit(5)).alias(
+        cx.custom_pointascell(f.lit(_BNG_POINT_WKT), f.col("grid"), f.lit(5)).alias(
             "cell"
         ),
         f.lit(_BNG_POINT_WKT).alias("point"),

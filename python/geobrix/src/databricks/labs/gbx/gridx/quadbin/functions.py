@@ -49,102 +49,6 @@ def register(_spark: SparkSession) -> None:
     ).load().collect()
 
 
-def quadbin_pointascell(
-    longitude: ColLike, latitude: ColLike, resolution: ColLike
-) -> Column:
-    """Encode (longitude, latitude) at a given zoom as a CARTO quadbin v0 cell (BIGINT).
-
-    Args:
-        longitude: Longitude in EPSG:4326 (degrees).
-        latitude: Latitude in EPSG:4326 (degrees).
-        resolution: Quadbin zoom level, integer in ``[0, 26]``.
-
-    Returns:
-        Column of BIGINT quadbin cell ids.
-    """
-    return f.call_function(
-        "gbx_quadbin_pointascell", _col(longitude), _col(latitude), _col(resolution)
-    )
-
-
-def quadbin_aswkb(cell: ColLike) -> Column:
-    """Return the quadbin cell footprint as an EWKB polygon (SRID=4326).
-
-    Args:
-        cell: Column of BIGINT quadbin cell ids.
-
-    Returns:
-        Column of EWKB bytes (polygon).
-    """
-    return f.call_function("gbx_quadbin_aswkb", _col(cell))
-
-
-def quadbin_centroid(cell: ColLike) -> Column:
-    """Return the quadbin cell centroid as an EWKB point (SRID=4326).
-
-    Args:
-        cell: Column of BIGINT quadbin cell ids.
-
-    Returns:
-        Column of EWKB bytes (point).
-    """
-    return f.call_function("gbx_quadbin_centroid", _col(cell))
-
-
-def quadbin_resolution(cell: ColLike) -> Column:
-    """Return the resolution (zoom level, 0..26) of a quadbin cell.
-
-    Args:
-        cell: Column of BIGINT quadbin cell ids.
-
-    Returns:
-        Column of INT resolutions.
-    """
-    return f.call_function("gbx_quadbin_resolution", _col(cell))
-
-
-def quadbin_polyfill(geom: ColLike, resolution: ColLike) -> Column:
-    """Return the quadbin cells covering the geometry's envelope at the given resolution.
-
-    Args:
-        geom: Geometry column (WKT or WKB).
-        resolution: Quadbin zoom level, integer in ``[0, 20]`` (cell-count guard).
-
-    Returns:
-        Column of ``ARRAY<BIGINT>`` quadbin cell ids.
-    """
-    return f.call_function("gbx_quadbin_polyfill", _col(geom), _col(resolution))
-
-
-def quadbin_kring(cell: ColLike, k: ColLike) -> Column:
-    """Return all quadbin cells within Chebyshev distance ``k`` of ``cell`` (inclusive).
-
-    Args:
-        cell: Column of BIGINT quadbin cell ids.
-        k: Ring distance (0 = cell itself only).
-
-    Returns:
-        Column of ``ARRAY<BIGINT>`` quadbin cell ids.
-    """
-    return f.call_function("gbx_quadbin_kring", _col(cell), _col(k))
-
-
-def quadbin_kloop(cell: ColLike, k: ColLike) -> Column:
-    """Return quadbin cells at EXACTLY Chebyshev distance ``k`` (hollow ring).
-
-    At ``k=0`` returns the center cell; at ``k=1`` returns the 8 surrounding
-    cells (center excluded).
-
-    Args:
-        cell: Column of BIGINT quadbin cell ids.
-        k: Loop distance — only the shell at exactly distance ``k`` is returned.
-
-    Returns:
-        Column of ``ARRAY<BIGINT>`` quadbin cell ids.
-    """
-    return f.call_function("gbx_quadbin_kloop", _col(cell), _col(k))
-
-
 def quadbin_cellfill(
     cellid: ColLike,
     value: ColLike,
@@ -178,44 +82,6 @@ def quadbin_cellfill(
     )
 
 
-def quadbin_tessellate(geom: ColLike, resolution: ColLike) -> Column:
-    """Tessellate a geometry into quadbin cells; returns ``ARRAY<struct(cell, geom)>``.
-
-    Args:
-        geom: Geometry column (WKT or WKB).
-        resolution: Quadbin zoom level, integer in ``[0, 20]``.
-
-    Returns:
-        Column of ``ARRAY<STRUCT<cell:BIGINT, geom:BINARY>>``.
-    """
-    return f.call_function("gbx_quadbin_tessellate", _col(geom), _col(resolution))
-
-
-def quadbin_cellunion(cells: ColLike) -> Column:
-    """Union an ARRAY of quadbin cells into a single MultiPolygon (EWKB SRID=4326).
-
-    Args:
-        cells: Column of ``ARRAY<BIGINT>`` quadbin cell ids.
-
-    Returns:
-        Column of EWKB bytes (Polygon or MultiPolygon).
-    """
-    return f.call_function("gbx_quadbin_cellunion", _col(cells))
-
-
-def quadbin_distance(cellid1: ColLike, cellid2: ColLike) -> Column:
-    """Chebyshev distance (in tile-grid steps) between two cells at the same resolution.
-
-    Args:
-        cellid1: First quadbin cell column.
-        cellid2: Second quadbin cell column.
-
-    Returns:
-        Column of INT (cells must share resolution; otherwise the underlying eval throws).
-    """
-    return f.call_function("gbx_quadbin_distance", _col(cellid1), _col(cellid2))
-
-
 def quadbin_cellunion_agg(cellid: ColLike) -> Column:
     """Aggregate quadbin cell BIGINTs into their union geometry (use with groupBy).
 
@@ -230,54 +96,6 @@ def quadbin_cellunion_agg(cellid: ColLike) -> Column:
         Column of BINARY (EWKB Polygon or MultiPolygon, SRID 4326).
     """
     return f.call_function("gbx_quadbin_cellunion_agg", _col(cellid))
-
-
-def quadbin_geomkring(
-    geom: ColLike, resolution: ColLike, k: ColLike, mode: ColLike = "boundary-out"
-) -> Column:
-    """Geometry-aware k-ring for quadbin: cells reachable in k steps from the covering set.
-
-    Args:
-        geom: Geometry column (WKT or WKB).
-        resolution: Quadbin zoom level, integer in ``[0, 20]``.
-        k: Ring distance (0 = covering set only).
-        mode: Dilation mode (default ``"boundary-out"``). One of the 6 modes.
-
-    Returns:
-        Column of ``ARRAY<BIGINT>`` quadbin cell ids.
-    """
-    # mode is always a string VALUE (never a column name); use f.lit so Spark
-    # does not misinterpret it as an unresolved column reference.
-    return f.call_function(
-        "gbx_quadbin_geomkring",
-        _col(geom),
-        _col(resolution),
-        _col(k),
-        mode if isinstance(mode, Column) else f.lit(mode),
-    )
-
-
-def quadbin_geomkloop(
-    geom: ColLike, resolution: ColLike, k: ColLike, mode: ColLike = "boundary-out"
-) -> Column:
-    """Geometry-aware k-loop (hollow ring) for quadbin.
-
-    Args:
-        geom: Geometry column (WKT or WKB).
-        resolution: Quadbin zoom level, integer in ``[0, 20]``.
-        k: Ring distance (0 = covering set only).
-        mode: Dilation mode (default ``"boundary-out"``). See :func:`quadbin_geomkring`.
-
-    Returns:
-        Column of ``ARRAY<BIGINT>`` quadbin cell ids.
-    """
-    return f.call_function(
-        "gbx_quadbin_geomkloop",
-        _col(geom),
-        _col(resolution),
-        _col(k),
-        mode if isinstance(mode, Column) else f.lit(mode),
-    )
 
 
 def quadbin_geomkringexplode(
@@ -365,6 +183,297 @@ def quadbin_geomkloopexplode(
 
 
 # BEGIN GENERATED by gbx:manifest:gen: edit manifest/functions.json, then run the generator
+
+
+def quadbin_aswkb(
+    cell: ColLike,
+) -> Column:
+    """Return the footprint of a quadbin cell as an EWKB polygon in EPSG:4326.
+
+    Args:
+        cell: The quadbin cell id.
+
+    Returns:
+        The cell polygon, or NULL for a NULL cell.
+
+    SQL: ``gbx_quadbin_aswkb(cell)``
+    """
+    return _api.call(
+        "gbx_quadbin_aswkb",
+        cell,
+    )
+
+
+def quadbin_cellunion(
+    cells: ColLike,
+) -> Column:
+    """Return the union of an array of quadbin cells as an EWKB polygon in EPSG:4326.
+
+    Args:
+        cells: The quadbin cell ids to merge.
+
+    Returns:
+        The merged polygon or multipolygon, or NULL for a NULL or empty array.
+
+    SQL: ``gbx_quadbin_cellunion(cells)``
+    """
+    return _api.call(
+        "gbx_quadbin_cellunion",
+        cells,
+    )
+
+
+def quadbin_centroid(
+    cell: ColLike,
+) -> Column:
+    """Return the centre of a quadbin cell as an EWKB point in EPSG:4326.
+
+    Args:
+        cell: The quadbin cell id.
+
+    Returns:
+        The cell centre, the middle of its longitude and latitude range, or NULL for a
+        NULL cell.
+
+    SQL: ``gbx_quadbin_centroid(cell)``
+    """
+    return _api.call(
+        "gbx_quadbin_centroid",
+        cell,
+    )
+
+
+def quadbin_distance(
+    cellid1: ColLike,
+    cellid2: ColLike,
+) -> Column:
+    """Return the distance in cells between two quadbin cells of the same zoom level.
+
+    Args:
+        cellid1: The first quadbin cell id.
+        cellid2: The second quadbin cell id, at the same zoom level.
+
+    Returns:
+        The number of cell steps (a diagonal step counts as one), or NULL when either
+        cell is NULL. Cells of different zoom levels raise an error.
+
+    SQL: ``gbx_quadbin_distance(cellid1, cellid2)``
+    """
+    return _api.call(
+        "gbx_quadbin_distance",
+        cellid1,
+        cellid2,
+    )
+
+
+def quadbin_geomkloop(
+    geom: ColLike,
+    resolution: ColLike,
+    k: ColLike,
+    mode: ColLike = None,
+    coverage: ColLike = None,
+) -> Column:
+    """Return the quadbin cells at exactly k rings from a geometry.
+
+    Args:
+        geom: The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees.
+        resolution: Quadbin zoom level, a whole number from 0 to 20.
+        k: The loop distance: only the cells at exactly this ring distance from the
+            covering cells are returned.
+        mode: The dilation mode: `'boundary-out'`, `'boundary-in'`,
+            `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or
+            `'hole-out-ignore-geom'`. SQL default: ``'boundary-out'``.
+        coverage: How a cell belongs to the geometry: `'coveras'` (it overlaps),
+            `'polyfill'` (its centre is inside) or `'core'` (it is inside). SQL default:
+            ``'coveras'``.
+
+    Returns:
+        The cell ids of the hollow band at distance k, or NULL for a NULL or unreadable
+        geometry.
+
+    SQL: ``gbx_quadbin_geomkloop(geom, resolution, k, [mode], [coverage])``
+    """
+    return _api.call(
+        "gbx_quadbin_geomkloop",
+        geom,
+        resolution,
+        k,
+        mode,
+        coverage,
+    )
+
+
+def quadbin_geomkring(
+    geom: ColLike,
+    resolution: ColLike,
+    k: ColLike,
+    mode: ColLike = None,
+    coverage: ColLike = None,
+) -> Column:
+    """Return the quadbin cells of a geometry dilated by k rings.
+
+    Args:
+        geom: The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees.
+        resolution: Quadbin zoom level, a whole number from 0 to 20.
+        k: The ring distance: 0 is the covering cells alone, 1 adds the cells around
+            them.
+        mode: The dilation mode: `'boundary-out'`, `'boundary-in'`,
+            `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or
+            `'hole-out-ignore-geom'`. SQL default: ``'boundary-out'``.
+        coverage: How a cell belongs to the geometry: `'coveras'` (it overlaps),
+            `'polyfill'` (its centre is inside) or `'core'` (it is inside). SQL default:
+            ``'coveras'``.
+
+    Returns:
+        The cell ids of the dilated band, or NULL for a NULL or unreadable geometry.
+
+    SQL: ``gbx_quadbin_geomkring(geom, resolution, k, [mode], [coverage])``
+    """
+    return _api.call(
+        "gbx_quadbin_geomkring",
+        geom,
+        resolution,
+        k,
+        mode,
+        coverage,
+    )
+
+
+def quadbin_kloop(
+    cell: ColLike,
+    k: ColLike,
+) -> Column:
+    """Return the quadbin cells at exactly ring distance k from a cell.
+
+    Args:
+        cell: The quadbin cell id.
+        k: The loop distance: only the cells at exactly this distance are returned.
+
+    Returns:
+        The cell ids of the hollow square at distance k (the cell itself for k = 0), or
+        NULL for a NULL argument.
+
+    SQL: ``gbx_quadbin_kloop(cell, k)``
+    """
+    return _api.call(
+        "gbx_quadbin_kloop",
+        cell,
+        k,
+    )
+
+
+def quadbin_kring(
+    cell: ColLike,
+    k: ColLike,
+) -> Column:
+    """Return the quadbin cells within ring distance k of a cell, the cell included.
+
+    Args:
+        cell: The quadbin cell id.
+        k: The ring distance: 0 is the cell alone, 1 adds its eight neighbours.
+
+    Returns:
+        The cell ids of the filled square of side 2k+1 around the cell, or NULL for a
+        NULL argument.
+
+    SQL: ``gbx_quadbin_kring(cell, k)``
+    """
+    return _api.call(
+        "gbx_quadbin_kring",
+        cell,
+        k,
+    )
+
+
+def quadbin_pointascell(
+    longitude: ColLike,
+    latitude: ColLike,
+    resolution: ColLike,
+) -> Column:
+    """Return the quadbin cell that holds a longitude and latitude.
+
+    Args:
+        longitude: Longitude in EPSG:4326 degrees.
+        latitude: Latitude in EPSG:4326 degrees.
+        resolution: Quadbin zoom level, a whole number from 0 to 26.
+
+    Returns:
+        The cell id, or NULL when the longitude, latitude or resolution is NULL or not
+        finite.
+
+    SQL: ``gbx_quadbin_pointascell(longitude, latitude, resolution)``
+    """
+    return _api.call(
+        "gbx_quadbin_pointascell",
+        longitude,
+        latitude,
+        resolution,
+    )
+
+
+def quadbin_polyfill(
+    geom: ColLike,
+    resolution: ColLike,
+) -> Column:
+    """Return the quadbin cells that cover the bounding box of a geometry.
+
+    Args:
+        geom: The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees.
+        resolution: Quadbin zoom level, a whole number from 0 to 20.
+
+    Returns:
+        The cell ids of every cell the bounding box touches, or NULL for a NULL or
+        unreadable geometry.
+
+    SQL: ``gbx_quadbin_polyfill(geom, resolution)``
+    """
+    return _api.call(
+        "gbx_quadbin_polyfill",
+        geom,
+        resolution,
+    )
+
+
+def quadbin_resolution(
+    cell: ColLike,
+) -> Column:
+    """Return the zoom level of a quadbin cell.
+
+    Args:
+        cell: The quadbin cell id.
+
+    Returns:
+        The zoom level, from 0 to 26, or NULL for a NULL cell.
+
+    SQL: ``gbx_quadbin_resolution(cell)``
+    """
+    return _api.call(
+        "gbx_quadbin_resolution",
+        cell,
+    )
+
+
+def quadbin_tessellate(
+    geom: ColLike,
+    resolution: ColLike,
+) -> Column:
+    """Cut a geometry into quadbin cells, one chip per cell it touches.
+
+    Args:
+        geom: The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees.
+        resolution: Quadbin zoom level, a whole number from 0 to 20.
+
+    Returns:
+        One struct per cell: `cell` and `geom`, the part of the geometry in that cell as
+        EWKB in EPSG:4326, or NULL for a NULL or unreadable geometry.
+
+    SQL: ``gbx_quadbin_tessellate(geom, resolution)``
+    """
+    return _api.call(
+        "gbx_quadbin_tessellate",
+        geom,
+        resolution,
+    )
 
 
 # END GENERATED

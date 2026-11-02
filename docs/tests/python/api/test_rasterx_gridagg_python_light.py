@@ -171,7 +171,7 @@ def test_rastertogrid_sql_example_outputs_exist():
 def test_h3_cell_bbox_python_light_example(spark):
     """h3_cell_bbox light-tier scalar example returns non-null bbox structs."""
     assert light_examples is not None
-    rows = light_examples.h3_cell_bbox_python_light_example(spark)
+    rows = light_examples.h3_cell_bbox_python_example(spark)
     assert isinstance(rows, list) and len(rows) == 3
     for row in rows:
         d = row.asDict()
@@ -180,4 +180,4 @@ def test_h3_cell_bbox_python_light_example(spark):
         assert bbox is not None
         # STRUCT<xmin, ymin, xmax, ymax> — ordered, finite.
         assert bbox["xmin"] <= bbox["xmax"] and bbox["ymin"] <= bbox["ymax"]
-    assert hasattr(light_examples, "h3_cell_bbox_python_light_example_output")
+    assert hasattr(light_examples, "h3_cell_bbox_python_example_output")

@@ -616,7 +616,7 @@ rst_bng_rastertogridstddev_python_light_example_output = """
 # ============================================================================
 
 
-def h3_cell_bbox_python_light_example(spark):
+def h3_cell_bbox_python_example(spark):
     """Bounding box STRUCT for H3 cells in a given CRS (light tier scalar UDF).
 
     gbx_h3_cell_bbox is a scalar function — call it in a plain select over a
@@ -624,7 +624,7 @@ def h3_cell_bbox_python_light_example(spark):
     resolution-9 cell ids and request the EPSG:4326 centroid-mode bbox
     (kring_pad omitted → default). Returns STRUCT<xmin, ymin, xmax, ymax>.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.gridx.h3 import functions as hx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.createDataFrame(
@@ -633,11 +633,11 @@ def h3_cell_bbox_python_light_example(spark):
     )
     return df.select(
         "cellid",
-        rx.gbx_h3_cell_bbox("cellid", f.lit(4326), f.lit("centroids")).alias("bbox"),
+        hx.h3_cell_bbox("cellid", f.lit(4326), f.lit("centroids")).alias("bbox"),
     ).take(3)
 
 
-h3_cell_bbox_python_light_example_output = """
+h3_cell_bbox_python_example_output = """
 +------------------+------------------------------+
 |cellid            |bbox                          |
 +------------------+------------------------------+

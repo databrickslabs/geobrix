@@ -77,16 +77,17 @@ shapes.limit(3).show()"""
 
 USE_QUADBIN = """# Register GridX quadbin (works on BOTH tiers), index a point, inspect the cell
 from databricks.labs.gbx.pygx import functions as gx
+from databricks.labs.gbx.gridx.quadbin import functions as qx
 from pyspark.sql import Row
 from pyspark.sql.functions import lit
 gx.register(spark)
 # A point in NYC (WGS84 lon/lat) -> a resolution-15 quadbin cell, then its resolution
 points = spark.createDataFrame([Row(lon=-73.985, lat=40.748)])
 points.select(
-    gx.quadbin_pointascell("lon", "lat", lit(15)).alias("cell")
+    qx.quadbin_pointascell("lon", "lat", lit(15)).alias("cell")
 ).select(
     "cell",
-    gx.quadbin_resolution("cell").alias("res"),
+    qx.quadbin_resolution("cell").alias("res"),
 ).show()"""
 
 USE_RASTERX = """# Register, load raster, apply RasterX
@@ -502,6 +503,7 @@ def use_quadbin_functions(spark, lon=-73.985, lat=40.748, res=15):
     Returns:
         DataFrame with the quadbin cell id and its resolution
     """
+    from databricks.labs.gbx.gridx.quadbin import functions as qx
     from databricks.labs.gbx.pygx import functions as gx
     from pyspark.sql import Row
     from pyspark.sql.functions import lit
@@ -509,10 +511,10 @@ def use_quadbin_functions(spark, lon=-73.985, lat=40.748, res=15):
     gx.register(spark)
     points = spark.createDataFrame([Row(lon=float(lon), lat=float(lat))])
     return points.select(
-        gx.quadbin_pointascell("lon", "lat", lit(res)).alias("cell")
+        qx.quadbin_pointascell("lon", "lat", lit(res)).alias("cell")
     ).select(
         "cell",
-        gx.quadbin_resolution("cell").alias("res"),
+        qx.quadbin_resolution("cell").alias("res"),
     )
 
 

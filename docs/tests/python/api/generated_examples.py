@@ -89,6 +89,136 @@ EXAMPLES = {
         "te_offset",
         "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_bng_tessellateexplode('POLYGON((530100 180100, 532900 180100, 532900 181900, 530100 181900, 530100 180100))', 3) AS gbx_out",
     ),
+    "gbx_custom_cellaswkb": (
+        "GRID_SCALAR",
+        "cg_aswkb",
+        "SELECT gbx_custom_cellaswkb(72057594038650997, c1) AS out FROM gbx_example",
+    ),
+    "gbx_custom_cellaswkt": (
+        "GRID_SCALAR",
+        "cg_aswkt",
+        "SELECT gbx_custom_cellaswkt(72057594038650997, c1) AS out FROM gbx_example",
+    ),
+    "gbx_custom_centroid": (
+        "GRID_SCALAR",
+        "cg_centroid",
+        "SELECT gbx_custom_centroid(72057594038650997, c1) AS out FROM gbx_example",
+    ),
+    "gbx_custom_distance": (
+        "GRID_SCALAR",
+        "cg_distance",
+        "SELECT gbx_custom_distance(72057594038650997, c1, 72057594038655000) AS out FROM gbx_example",
+    ),
+    "gbx_custom_geomkloop": (
+        "GRID_ARRAY",
+        "cg_geomkloop_point_k1",
+        "SELECT gbx_custom_geomkloop('POINT(530500 180500)', c1, 0, 1) AS out FROM gbx_example",
+    ),
+    "gbx_custom_geomkring": (
+        "GRID_ARRAY",
+        "cg_geomkring_point_k1",
+        "SELECT gbx_custom_geomkring('POINT(530500 180500)', c1, 0, 1) AS out FROM gbx_example",
+    ),
+    "gbx_custom_grid": (
+        "GRID_SCALAR",
+        "cg_grid",
+        "SELECT gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700) AS out",
+    ),
+    "gbx_custom_kloop": (
+        "GRID_ARRAY",
+        "cg_kloop_k1",
+        "SELECT gbx_custom_kloop(180530, c1, 1) AS out FROM gbx_example",
+    ),
+    "gbx_custom_kring": (
+        "GRID_ARRAY",
+        "cg_kring_k1",
+        "SELECT gbx_custom_kring(180530, c1, 1) AS out FROM gbx_example",
+    ),
+    "gbx_custom_pointascell": (
+        "GRID_SCALAR",
+        "cg_pac_res1",
+        "SELECT gbx_custom_pointascell('POINT(530750 180750)', c1, 1) AS out FROM gbx_example",
+    ),
+    "gbx_custom_polyfill": (
+        "GRID_ARRAY",
+        "cg_polyfill_2x2",
+        "SELECT gbx_custom_polyfill('POLYGON((530000 180000, 532000 180000, 532000 182000, 530000 182000, 530000 180000))', c1, 0) AS out FROM gbx_example",
+    ),
+    "gbx_h3_cell_bbox": (
+        "GRID_SCALAR",
+        "h3bbox_default",
+        "SELECT gbx_h3_cell_bbox(613196570331971583) AS out",
+    ),
+    "gbx_h3_geomkloop": (
+        "GRID_ARRAY",
+        "h3_geomkloop_point_k1",
+        "SELECT gbx_h3_geomkloop('POINT(-122.4194 37.7749)', 8, 1) AS out",
+    ),
+    "gbx_h3_geomkring": (
+        "GRID_ARRAY",
+        "h3_geomkring_point_k1",
+        "SELECT gbx_h3_geomkring('POINT(-122.4194 37.7749)', 8, 1) AS out",
+    ),
+    "gbx_quadbin_aswkb": (
+        "GRID_SCALAR",
+        "qb_aswkb",
+        "SELECT gbx_quadbin_aswkb(5233961839712272383) AS out",
+    ),
+    "gbx_quadbin_cellunion": (
+        "GRID_SCALAR",
+        "qb_cellunion",
+        "SELECT gbx_quadbin_cellunion(c0) AS out FROM gbx_example",
+    ),
+    "gbx_quadbin_centroid": (
+        "GRID_SCALAR",
+        "qb_centroid",
+        "SELECT gbx_quadbin_centroid(5233961839712272383) AS out",
+    ),
+    "gbx_quadbin_distance": (
+        "GRID_SCALAR",
+        "qb_distance_2",
+        "SELECT gbx_quadbin_distance(5233961839712272383, 5233961788172664831) AS out",
+    ),
+    "gbx_quadbin_geomkloop": (
+        "GRID_ARRAY",
+        "qb_geomkloop_point_k1",
+        "SELECT gbx_quadbin_geomkloop('POINT(-122.4194 37.7749)', 10, 1) AS out",
+    ),
+    "gbx_quadbin_geomkring": (
+        "GRID_ARRAY",
+        "qb_geomkring_point_k1",
+        "SELECT gbx_quadbin_geomkring('POINT(-122.4194 37.7749)', 10, 1) AS out",
+    ),
+    "gbx_quadbin_kloop": (
+        "GRID_ARRAY",
+        "qb_kloop_k1",
+        "SELECT gbx_quadbin_kloop(5233961839712272383, 1) AS out",
+    ),
+    "gbx_quadbin_kring": (
+        "GRID_ARRAY",
+        "qb_kring_k1",
+        "SELECT gbx_quadbin_kring(5233961839712272383, 1) AS out",
+    ),
+    "gbx_quadbin_pointascell": (
+        "GRID_SCALAR",
+        "qb_pac_z10",
+        "SELECT gbx_quadbin_pointascell(-122.4194D, 37.7749D, 10) AS out",
+    ),
+    "gbx_quadbin_polyfill": (
+        "GRID_ARRAY",
+        "qb_polyfill_span",
+        "SELECT gbx_quadbin_polyfill('POLYGON((-122.5 37.8, -122.3 37.8, -122.3 37.9, -122.5 37.9, -122.5 37.8))', 10) AS out",
+    ),
+    "gbx_quadbin_resolution": (
+        "GRID_SCALAR",
+        "qb_resolution",
+        "SELECT gbx_quadbin_resolution(5233961839712272383) AS out",
+    ),
+    "gbx_quadbin_tessellate": (
+        "GRID_ARRAY",
+        "qb_tessellate_triangle",
+        "SELECT gbx_quadbin_tessellate('POLYGON((-122.5 37.9, -122.2 37.9, -122.5 37.6, -122.5 37.9))', 10) AS out",
+    ),
     "gbx_rst_bng_rasterize_agg": (
         "MVP_A",
         "br_nan_beside_numbers",

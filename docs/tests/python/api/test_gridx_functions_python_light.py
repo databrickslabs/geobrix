@@ -435,7 +435,7 @@ def test_bng_tessellateexplode_python_example(spark):
 def test_quadbin_pointascell_python_light_example(spark):
     """quadbin_pointascell (light) returns 5233961839712272383 for SF at zoom 10."""
     assert light_examples is not None
-    result = light_examples.quadbin_pointascell_python_light_example(spark)
+    result = light_examples.quadbin_pointascell_python_example(spark)
     assert (
         result is not None
     ), "quadbin_pointascell (light) should return non-null cell ID"
@@ -447,7 +447,7 @@ def test_quadbin_pointascell_python_light_example(spark):
 def test_quadbin_aswkb_python_light_example(spark):
     """quadbin_aswkb (light) returns non-empty EWKB bytes for SF z10 cell."""
     assert light_examples is not None
-    result = light_examples.quadbin_aswkb_python_light_example(spark)
+    result = light_examples.quadbin_aswkb_python_example(spark)
     assert result is not None, "quadbin_aswkb (light) should return non-null EWKB bytes"
     assert isinstance(
         result, (bytes, bytearray)
@@ -458,7 +458,7 @@ def test_quadbin_aswkb_python_light_example(spark):
 def test_quadbin_centroid_python_light_example(spark):
     """quadbin_centroid (light) returns non-empty EWKB POINT bytes for SF z10 cell."""
     assert light_examples is not None
-    result = light_examples.quadbin_centroid_python_light_example(spark)
+    result = light_examples.quadbin_centroid_python_example(spark)
     assert (
         result is not None
     ), "quadbin_centroid (light) should return non-null EWKB bytes"
@@ -471,7 +471,7 @@ def test_quadbin_centroid_python_light_example(spark):
 def test_quadbin_resolution_python_light_example(spark):
     """quadbin_resolution (light) returns 10 for SF z10 cell."""
     assert light_examples is not None
-    result = light_examples.quadbin_resolution_python_light_example(spark)
+    result = light_examples.quadbin_resolution_python_example(spark)
     assert result is not None, "quadbin_resolution (light) should return non-null INT"
     assert result == 10, f"Expected resolution 10 for SF z10 cell, got {result!r}"
 
@@ -479,7 +479,7 @@ def test_quadbin_resolution_python_light_example(spark):
 def test_quadbin_distance_python_light_example(spark):
     """quadbin_distance (light) returns 1 for two adjacent z10 cells (0.0 vs 0.1 lat)."""
     assert light_examples is not None
-    result = light_examples.quadbin_distance_python_light_example(spark)
+    result = light_examples.quadbin_distance_python_example(spark)
     assert result is not None, "quadbin_distance (light) should return non-null INT"
     assert (
         result == 1
@@ -501,7 +501,7 @@ def test_quadbin_distance_python_light_example(spark):
 def test_quadbin_kring_python_light_example(spark):
     """quadbin_kring (light) returns 9 cells for SF z10 at k=1."""
     assert light_examples is not None
-    result = light_examples.quadbin_kring_python_light_example(spark)
+    result = light_examples.quadbin_kring_python_example(spark)
     assert result is not None, "quadbin_kring (light) should return non-null array"
     assert len(result) == 9, f"Expected 9 cells at k=1, got {len(result)}"
     # Center cell must be present in the kring
@@ -513,7 +513,7 @@ def test_quadbin_kring_python_light_example(spark):
 def test_quadbin_polyfill_python_light_example(spark):
     """quadbin_polyfill (light) returns 4 cells for WGS84 polygon at zoom 5."""
     assert light_examples is not None
-    result = light_examples.quadbin_polyfill_python_light_example(spark)
+    result = light_examples.quadbin_polyfill_python_example(spark)
     assert result is not None, "quadbin_polyfill (light) should return non-null array"
     assert len(result) == 4, f"Expected 4 cells for polygon at z5, got {len(result)}"
     assert (
@@ -524,7 +524,7 @@ def test_quadbin_polyfill_python_light_example(spark):
 def test_quadbin_tessellate_python_light_example(spark):
     """quadbin_tessellate (light) returns 4 chips for WGS84 polygon at zoom 5."""
     assert light_examples is not None
-    result = light_examples.quadbin_tessellate_python_light_example(spark)
+    result = light_examples.quadbin_tessellate_python_example(spark)
     assert result is not None, "quadbin_tessellate (light) should return non-null array"
     assert len(result) == 4, f"Expected 4 chips for polygon at z5, got {len(result)}"
     assert 5211790668774506495 in [
@@ -535,7 +535,7 @@ def test_quadbin_tessellate_python_light_example(spark):
 def test_quadbin_cellunion_python_light_example(spark):
     """quadbin_cellunion (light) returns non-empty EWKB bytes for SF z10 kring."""
     assert light_examples is not None
-    result = light_examples.quadbin_cellunion_python_light_example(spark)
+    result = light_examples.quadbin_cellunion_python_example(spark)
     assert (
         result is not None
     ), "quadbin_cellunion (light) should return non-null EWKB bytes"
@@ -571,72 +571,72 @@ def test_quadbin_cellunion_agg_python_light_example(spark):
 
 
 def test_custom_grid_python_light_example_exists():
-    """custom_grid_python_light_example is defined with an output constant."""
+    """custom_grid_python_example is defined with an output constant."""
     assert light_examples is not None
-    assert hasattr(light_examples, "custom_grid_python_light_example")
-    assert callable(light_examples.custom_grid_python_light_example)
-    assert hasattr(light_examples, "custom_grid_python_light_example_output")
+    assert hasattr(light_examples, "custom_grid_python_example")
+    assert callable(light_examples.custom_grid_python_example)
+    assert hasattr(light_examples, "custom_grid_python_example_output")
 
 
 def test_custom_pointascell_python_light_example_exists():
-    """custom_pointascell_python_light_example is defined with an output constant."""
+    """custom_pointascell_python_example is defined with an output constant."""
     assert light_examples is not None
-    assert hasattr(light_examples, "custom_pointascell_python_light_example")
-    assert callable(light_examples.custom_pointascell_python_light_example)
-    assert hasattr(light_examples, "custom_pointascell_python_light_example_output")
+    assert hasattr(light_examples, "custom_pointascell_python_example")
+    assert callable(light_examples.custom_pointascell_python_example)
+    assert hasattr(light_examples, "custom_pointascell_python_example_output")
 
 
 def test_custom_cellaswkb_python_light_example_exists():
-    """custom_cellaswkb_python_light_example is defined with an output constant."""
+    """custom_cellaswkb_python_example is defined with an output constant."""
     assert light_examples is not None
-    assert hasattr(light_examples, "custom_cellaswkb_python_light_example")
-    assert callable(light_examples.custom_cellaswkb_python_light_example)
-    assert hasattr(light_examples, "custom_cellaswkb_python_light_example_output")
+    assert hasattr(light_examples, "custom_cellaswkb_python_example")
+    assert callable(light_examples.custom_cellaswkb_python_example)
+    assert hasattr(light_examples, "custom_cellaswkb_python_example_output")
 
 
 def test_custom_cellaswkt_python_light_example_exists():
-    """custom_cellaswkt_python_light_example is defined with an output constant."""
+    """custom_cellaswkt_python_example is defined with an output constant."""
     assert light_examples is not None
-    assert hasattr(light_examples, "custom_cellaswkt_python_light_example")
-    assert callable(light_examples.custom_cellaswkt_python_light_example)
-    assert hasattr(light_examples, "custom_cellaswkt_python_light_example_output")
+    assert hasattr(light_examples, "custom_cellaswkt_python_example")
+    assert callable(light_examples.custom_cellaswkt_python_example)
+    assert hasattr(light_examples, "custom_cellaswkt_python_example_output")
 
 
 def test_custom_centroid_python_light_example_exists():
-    """custom_centroid_python_light_example is defined with an output constant."""
+    """custom_centroid_python_example is defined with an output constant."""
     assert light_examples is not None
-    assert hasattr(light_examples, "custom_centroid_python_light_example")
-    assert callable(light_examples.custom_centroid_python_light_example)
-    assert hasattr(light_examples, "custom_centroid_python_light_example_output")
+    assert hasattr(light_examples, "custom_centroid_python_example")
+    assert callable(light_examples.custom_centroid_python_example)
+    assert hasattr(light_examples, "custom_centroid_python_example_output")
 
 
 def test_custom_polyfill_python_light_example_exists():
-    """custom_polyfill_python_light_example is defined with an output constant."""
+    """custom_polyfill_python_example is defined with an output constant."""
     assert light_examples is not None
-    assert hasattr(light_examples, "custom_polyfill_python_light_example")
-    assert callable(light_examples.custom_polyfill_python_light_example)
-    assert hasattr(light_examples, "custom_polyfill_python_light_example_output")
+    assert hasattr(light_examples, "custom_polyfill_python_example")
+    assert callable(light_examples.custom_polyfill_python_example)
+    assert hasattr(light_examples, "custom_polyfill_python_example_output")
 
 
 def test_custom_kring_python_light_example_exists():
-    """custom_kring_python_light_example is defined with an output constant."""
+    """custom_kring_python_example is defined with an output constant."""
     assert light_examples is not None
-    assert hasattr(light_examples, "custom_kring_python_light_example")
-    assert callable(light_examples.custom_kring_python_light_example)
-    assert hasattr(light_examples, "custom_kring_python_light_example_output")
+    assert hasattr(light_examples, "custom_kring_python_example")
+    assert callable(light_examples.custom_kring_python_example)
+    assert hasattr(light_examples, "custom_kring_python_example_output")
 
 
 def test_custom_grid_python_light_example(spark):
     """custom_grid (light) returns a non-null grid descriptor struct."""
     assert light_examples is not None
-    result = light_examples.custom_grid_python_light_example(spark)
+    result = light_examples.custom_grid_python_example(spark)
     assert result is not None, "custom_grid (light) should return non-null grid struct"
 
 
 def test_custom_pointascell_python_light_example(spark):
     """custom_pointascell (light) returns 360287970373976640 for POINT(530000 180000) at res=5."""
     assert light_examples is not None
-    result = light_examples.custom_pointascell_python_light_example(spark)
+    result = light_examples.custom_pointascell_python_example(spark)
     assert (
         result is not None
     ), "custom_pointascell (light) should return non-null cell ID"
@@ -648,7 +648,7 @@ def test_custom_pointascell_python_light_example(spark):
 def test_custom_cellaswkb_python_light_example(spark):
     """custom_cellaswkb (light) returns non-empty WKB bytes for cell 360287970373976640."""
     assert light_examples is not None
-    result = light_examples.custom_cellaswkb_python_light_example(spark)
+    result = light_examples.custom_cellaswkb_python_example(spark)
     assert (
         result is not None
     ), "custom_cellaswkb (light) should return non-null WKB bytes"
@@ -661,7 +661,7 @@ def test_custom_cellaswkb_python_light_example(spark):
 def test_custom_cellaswkt_python_light_example(spark):
     """custom_cellaswkt (light) returns a WKT POLYGON string for cell 360287970373976640."""
     assert light_examples is not None
-    result = light_examples.custom_cellaswkt_python_light_example(spark)
+    result = light_examples.custom_cellaswkt_python_example(spark)
     assert (
         result is not None
     ), "custom_cellaswkt (light) should return non-null WKT string"
@@ -673,7 +673,7 @@ def test_custom_cellaswkt_python_light_example(spark):
 def test_custom_centroid_python_light_example(spark):
     """custom_centroid (light) returns non-empty WKB bytes for cell 360287970373976640."""
     assert light_examples is not None
-    result = light_examples.custom_centroid_python_light_example(spark)
+    result = light_examples.custom_centroid_python_example(spark)
     assert (
         result is not None
     ), "custom_centroid (light) should return non-null WKB bytes"
@@ -686,7 +686,7 @@ def test_custom_centroid_python_light_example(spark):
 def test_custom_polyfill_python_light_example(spark):
     """custom_polyfill (light) returns exactly 36 cells (500m) at res=1 for the 3km BNG polygon."""
     assert light_examples is not None
-    result = light_examples.custom_polyfill_python_light_example(spark)
+    result = light_examples.custom_polyfill_python_example(spark)
     assert result is not None, "custom_polyfill (light) should return non-null array"
     assert (
         len(result) == 36
@@ -702,7 +702,7 @@ def test_custom_polyfill_python_light_example(spark):
 def test_custom_kring_python_light_example(spark):
     """custom_kring (light) returns 9 cells for k=1 around cell 360287970373976640."""
     assert light_examples is not None
-    result = light_examples.custom_kring_python_light_example(spark)
+    result = light_examples.custom_kring_python_example(spark)
     assert result is not None, "custom_kring (light) should return non-null array"
     assert len(result) == 9, f"Expected 9 cells at k=1, got {len(result)}"
     assert (
@@ -718,7 +718,7 @@ def test_custom_kring_python_light_example(spark):
 def test_quadbin_geomkring_python_light_example(spark):
     """quadbin_geomkring (light) returns a non-empty list for the polygon at zoom 12, k=1."""
     assert light_examples is not None
-    result = light_examples.quadbin_geomkring_python_light_example(spark)
+    result = light_examples.quadbin_geomkring_python_example(spark)
     assert result is not None, "quadbin_geomkring should return a non-null array"
     assert isinstance(result, list), f"Expected list (ARRAY<BIGINT>), got {type(result)}"
     assert len(result) > 0, "quadbin_geomkring must return non-empty results"
@@ -728,7 +728,7 @@ def test_quadbin_geomkring_python_light_example(spark):
 def test_quadbin_geomkloop_python_light_example(spark):
     """quadbin_geomkloop (light) returns a non-empty list for the polygon at zoom 12, k=1."""
     assert light_examples is not None
-    result = light_examples.quadbin_geomkloop_python_light_example(spark)
+    result = light_examples.quadbin_geomkloop_python_example(spark)
     assert result is not None, "quadbin_geomkloop should return a non-null array"
     assert isinstance(result, list), f"Expected list (ARRAY<BIGINT>), got {type(result)}"
     assert len(result) > 0, "quadbin_geomkloop must return non-empty results"
@@ -758,7 +758,7 @@ def test_quadbin_geomkloopexplode_python_light_example(spark):
 def test_custom_geomkring_python_light_example(spark):
     """custom_geomkring (light) returns 56 cells for the offset polygon at res=1, k=1."""
     assert light_examples is not None
-    result = light_examples.custom_geomkring_python_light_example(spark)
+    result = light_examples.custom_geomkring_python_example(spark)
     assert result is not None, "custom_geomkring should return a non-null array"
     assert isinstance(result, list), f"Expected list (ARRAY<BIGINT>), got {type(result)}"
     assert len(result) == 56, f"Expected 56 cells for geomkring(offset poly, res=1, k=1), got {len(result)}"
@@ -767,7 +767,7 @@ def test_custom_geomkring_python_light_example(spark):
 def test_custom_geomkloop_python_light_example(spark):
     """custom_geomkloop (light) returns 32 cells for the offset polygon at res=1, k=1 (hollow band at k=1)."""
     assert light_examples is not None
-    result = light_examples.custom_geomkloop_python_light_example(spark)
+    result = light_examples.custom_geomkloop_python_example(spark)
     assert result is not None, "custom_geomkloop should return a non-null array"
     assert isinstance(result, list), f"Expected list (ARRAY<BIGINT>), got {type(result)}"
     assert len(result) == 32, f"Expected 32 cells for geomkloop(offset poly, res=1, k=1), got {len(result)}"
@@ -797,7 +797,7 @@ def test_custom_geomkloopexplode_python_light_example(spark):
 def test_h3_geomkring_python_light_example(spark):
     """h3_geomkring (light) returns a non-empty array from a geometry column, k=1."""
     assert light_examples is not None
-    result = light_examples.h3_geomkring_python_light_example(spark)
+    result = light_examples.h3_geomkring_python_example(spark)
     assert result is not None, "h3_geomkring should return a non-null array"
     assert isinstance(result, list), f"Expected list (ARRAY<BIGINT>), got {type(result)}"
     assert len(result) > 0, "h3_geomkring must return non-empty results"
@@ -807,7 +807,7 @@ def test_h3_geomkring_python_light_example(spark):
 def test_h3_geomkloop_python_light_example(spark):
     """h3_geomkloop (light) returns a non-empty array from a geometry column, k=1."""
     assert light_examples is not None
-    result = light_examples.h3_geomkloop_python_light_example(spark)
+    result = light_examples.h3_geomkloop_python_example(spark)
     assert result is not None, "h3_geomkloop should return a non-null array"
     assert isinstance(result, list), f"Expected list (ARRAY<BIGINT>), got {type(result)}"
     assert len(result) > 0, "h3_geomkloop must return non-empty results"
@@ -881,7 +881,7 @@ def test_custom_cellfill_python_light_example(spark):
 def test_quadbin_kloop_python_light_example(spark):
     """quadbin_kloop (light) returns 8 cells for the SF z10 cell at k=1 (hollow ring)."""
     assert light_examples is not None
-    result = light_examples.quadbin_kloop_python_light_example(spark)
+    result = light_examples.quadbin_kloop_python_example(spark)
     assert result is not None, "quadbin_kloop should return a non-null array"
     assert isinstance(result, list), f"Expected list (ARRAY<BIGINT>), got {type(result)}"
     assert len(result) == 8, f"Expected 8 cells for k=1 hollow ring, got {len(result)}"
@@ -891,7 +891,7 @@ def test_quadbin_kloop_python_light_example(spark):
 def test_custom_kloop_python_light_example(spark):
     """custom_kloop (light) returns 8 cells for k=1 around cell 360287970373976640."""
     assert light_examples is not None
-    result = light_examples.custom_kloop_python_light_example(spark)
+    result = light_examples.custom_kloop_python_example(spark)
     assert result is not None, "custom_kloop should return a non-null array"
     assert isinstance(result, list), f"Expected list (ARRAY<BIGINT>), got {type(result)}"
     assert len(result) == 8, f"Expected 8 cells for k=1 hollow ring, got {len(result)}"
@@ -903,7 +903,7 @@ def test_custom_kloop_python_light_example(spark):
 def test_custom_distance_python_light_example(spark):
     """custom_distance (light) returns 1 for two cells 1000m apart at res=0."""
     assert light_examples is not None
-    result = light_examples.custom_distance_python_light_example(spark)
+    result = light_examples.custom_distance_python_example(spark)
     assert result is not None, "custom_distance should return a non-null result"
     assert isinstance(result, int), f"Expected BIGINT (int), got {type(result)}"
     assert result == 1, f"Expected Chebyshev distance 1, got {result}"

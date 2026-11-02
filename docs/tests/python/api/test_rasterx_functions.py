@@ -1118,20 +1118,6 @@ def test_bng_rastertogrid_python_heavy_example(spark, example_fn, aggregator):
             ), f"band {band_idx} BNG cellID must be a STRING"
 
 
-def test_h3_cell_bbox_python_heavy_example(spark):
-    """h3_cell_bbox heavy-tier scalar example returns non-null ordered bbox structs."""
-    assert rasterx_functions is not None
-    rows = rasterx_functions.h3_cell_bbox_python_heavy_example(spark)
-    assert isinstance(rows, list) and len(rows) == 3
-    for row in rows:
-        d = row.asDict()
-        assert d["cellid"] is not None
-        bbox = d["bbox"]
-        assert bbox is not None
-        assert bbox["xmin"] <= bbox["xmax"] and bbox["ymin"] <= bbox["ymax"]
-    assert hasattr(rasterx_functions, "h3_cell_bbox_python_heavy_example_output")
-
-
 def test_pmtiles_agg_python_heavy_example(spark):
     """pmtiles_agg (heavy tier) returns a valid PMTile v3 BINARY blob with 9 tiles."""
     import struct  # noqa: PLC0415

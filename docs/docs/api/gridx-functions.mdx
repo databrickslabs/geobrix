@@ -207,7 +207,20 @@ Resolution (zoom) range:
 
 ### quadbin_pointascell
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_quadbin_pointascell: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_quadbin_pointascell(longitude, latitude, resolution)` | `BIGINT` |
+| Python | `gridx.quadbin.functions.quadbin_pointascell(longitude, latitude, resolution)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `longitude` | `DOUBLE` |  | Longitude in EPSG:4326 degrees. |
+| `latitude` | `DOUBLE` |  | Latitude in EPSG:4326 degrees. |
+| `resolution` | `INT` or `STRING` |  | Quadbin zoom level, a whole number from 0 to 26. |
+{/* END GENERATED gbx_quadbin_pointascell */}
 
 Convert a lon/lat coordinate (EPSG:4326) to the quadbin cell containing it at the given zoom.
 
@@ -215,16 +228,13 @@ Convert a lon/lat coordinate (EPSG:4326) to the quadbin cell containing it at th
 Powered by the **quadbin** package (numpy-vectorized encoder). Encodes WGS84 lon/lat to a quadbin cell at the given zoom; bit-identical to the heavyweight `Quadbin.scala` (incl. the antimeridian/pole tile clamp).
 :::
 
-**Signature:** `quadbin_pointascell(longitude: Column, latitude: Column, zoom: Column): Column`
-
 **Returns:**
 - `BIGINT` quadbin cell ID
 
 <FunctionExamples
   name="quadbin_pointascell"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -233,7 +243,18 @@ Powered by the **quadbin** package (numpy-vectorized encoder). Encodes WGS84 lon
 
 ### quadbin_aswkb
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_quadbin_aswkb: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_quadbin_aswkb(cell)` | `BINARY` |
+| Python | `gridx.quadbin.functions.quadbin_aswkb(cell)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cell` | `BIGINT` |  | The quadbin cell id. |
+{/* END GENERATED gbx_quadbin_aswkb */}
 
 Return the quadbin cell footprint as EWKB (SRID=4326) — the four-corner polygon of the tile in lon/lat.
 
@@ -241,16 +262,13 @@ Return the quadbin cell footprint as EWKB (SRID=4326) — the four-corner polygo
 Powered by the **quadbin** package + **shapely**. Cell boundary polygon as EWKB (SRID 4326).
 :::
 
-**Signature:** `quadbin_aswkb(cellId: Column): Column`
-
 **Returns:**
 - Binary EWKB polygon (SRID-tagged 4326)
 
 <FunctionExamples
   name="quadbin_aswkb"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -259,7 +277,18 @@ Powered by the **quadbin** package + **shapely**. Cell boundary polygon as EWKB 
 
 ### quadbin_centroid
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_quadbin_centroid: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_quadbin_centroid(cell)` | `BINARY` |
+| Python | `gridx.quadbin.functions.quadbin_centroid(cell)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cell` | `BIGINT` |  | The quadbin cell id. |
+{/* END GENERATED gbx_quadbin_centroid */}
 
 Return the quadbin cell centroid as an EWKB POINT (SRID=4326).
 
@@ -267,16 +296,13 @@ Return the quadbin cell centroid as an EWKB POINT (SRID=4326).
 Powered by the **quadbin** package + **shapely**. Cell centroid (bbox-corner mean, matching `Quadbin.scala`) as EWKB point (SRID 4326).
 :::
 
-**Signature:** `quadbin_centroid(cellId: Column): Column`
-
 **Returns:**
 - Binary EWKB point (SRID-tagged 4326)
 
 <FunctionExamples
   name="quadbin_centroid"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -285,7 +311,18 @@ Powered by the **quadbin** package + **shapely**. Cell centroid (bbox-corner mea
 
 ### quadbin_resolution
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_quadbin_resolution: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_quadbin_resolution(cell)` | `INT` |
+| Python | `gridx.quadbin.functions.quadbin_resolution(cell)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cell` | `BIGINT` |  | The quadbin cell id. |
+{/* END GENERATED gbx_quadbin_resolution */}
 
 Return the resolution (zoom) of a quadbin cell.
 
@@ -293,16 +330,13 @@ Return the resolution (zoom) of a quadbin cell.
 Powered by the **quadbin** package (numpy-vectorized). Extracts the zoom level from a cell id.
 :::
 
-**Signature:** `quadbin_resolution(cellId: Column): Column`
-
 **Returns:**
 - `INT` zoom level (0..26)
 
 <FunctionExamples
   name="quadbin_resolution"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -311,7 +345,19 @@ Powered by the **quadbin** package (numpy-vectorized). Extracts the zoom level f
 
 ### quadbin_polyfill
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_quadbin_polyfill: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_quadbin_polyfill(geom, resolution)` | `array<bigint>` |
+| Python | `gridx.quadbin.functions.quadbin_polyfill(geom, resolution)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
+| `resolution` | `INT` or `STRING` |  | Quadbin zoom level, a whole number from 0 to 20. |
+{/* END GENERATED gbx_quadbin_polyfill */}
 
 Polyfill a geometry's bounding box with all quadbin cells at the given zoom.
 
@@ -319,16 +365,13 @@ Polyfill a geometry's bounding box with all quadbin cells at the given zoom.
 Powered by the **quadbin** package + **shapely**. Enumerates the cells covering the geometry's bounding box at the resolution, mirroring `Quadbin.scala`'s envelope semantics.
 :::
 
-**Signature:** `quadbin_polyfill(geom: Column, zoom: Column): Column`
-
 **Returns:**
 - `ARRAY<BIGINT>` of cell IDs covering the bbox
 
 <FunctionExamples
   name="quadbin_polyfill"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -337,7 +380,19 @@ Powered by the **quadbin** package + **shapely**. Enumerates the cells covering 
 
 ### quadbin_kring
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_quadbin_kring: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_quadbin_kring(cell, k)` | `array<bigint>` |
+| Python | `gridx.quadbin.functions.quadbin_kring(cell, k)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cell` | `BIGINT` |  | The quadbin cell id. |
+| `k` | `INT` |  | The ring distance: 0 is the cell alone, 1 adds its eight neighbours. |
+{/* END GENERATED gbx_quadbin_kring */}
 
 Return all cells within Chebyshev distance `k` of a quadbin cell (inclusive of the center cell).
 
@@ -345,16 +400,13 @@ Return all cells within Chebyshev distance `k` of a quadbin cell (inclusive of t
 Powered by the **quadbin** package. All cells within Chebyshev distance `k` (inclusive).
 :::
 
-**Signature:** `quadbin_kring(cellId: Column, k: Column): Column`
-
 **Returns:**
 - `ARRAY<BIGINT>` of cell IDs (length `(2k+1)^2`)
 
 <FunctionExamples
   name="quadbin_kring"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -363,7 +415,19 @@ Powered by the **quadbin** package. All cells within Chebyshev distance `k` (inc
 
 ### quadbin_kloop
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_quadbin_kloop: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_quadbin_kloop(cell, k)` | `array<bigint>` |
+| Python | `gridx.quadbin.functions.quadbin_kloop(cell, k)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cell` | `BIGINT` |  | The quadbin cell id. |
+| `k` | `INT` |  | The loop distance: only the cells at exactly this distance are returned. |
+{/* END GENERATED gbx_quadbin_kloop */}
 
 Return the hollow ring of quadbin cells at exactly Chebyshev distance `k` from the center cell. At `k=1` the ring contains the 8 surrounding cells (center excluded); at `k=0` the result is a single-element array containing the center cell.
 
@@ -371,16 +435,13 @@ Return the hollow ring of quadbin cells at exactly Chebyshev distance `k` from t
 Powered by the **quadbin** package. The cells at exactly Chebyshev distance `k` (center excluded for `k ≥ 1`). Exact cell-set parity with the heavyweight tier.
 :::
 
-**Signature:** `quadbin_kloop(cellId: Column, k: Column): Column`
-
 **Returns:**
 - `ARRAY<BIGINT>` of cell IDs at exactly distance `k` (up to `(2k+1)^2 - (2(k-1)+1)^2` cells)
 
 <FunctionExamples
   name="quadbin_kloop"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -389,7 +450,19 @@ Powered by the **quadbin** package. The cells at exactly Chebyshev distance `k` 
 
 ### quadbin_tessellate
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_quadbin_tessellate: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_quadbin_tessellate(geom, resolution)` | `array<struct<cell:bigint,geom:binary>>` |
+| Python | `gridx.quadbin.functions.quadbin_tessellate(geom, resolution)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
+| `resolution` | `INT` or `STRING` |  | Quadbin zoom level, a whole number from 0 to 20. |
+{/* END GENERATED gbx_quadbin_tessellate */}
 
 Tessellate a geometry into quadbin cells. Like `quadbin_polyfill` but returns the per-cell geometry chip alongside the cell ID, suitable for chip-based join patterns.
 
@@ -397,16 +470,13 @@ Tessellate a geometry into quadbin cells. Like `quadbin_polyfill` but returns th
 Powered by the **quadbin** package + **shapely**. Bbox polyfill then per-cell intersection with the input geometry; one `STRUCT<cell, geom>` per chip (EWKB, SRID 4326).
 :::
 
-**Signature:** `quadbin_tessellate(geom: Column, zoom: Column): Column`
-
 **Returns:**
 - `ARRAY<STRUCT<cell: BIGINT, geom: BINARY>>`
 
 <FunctionExamples
   name="quadbin_tessellate"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -415,7 +485,18 @@ Powered by the **quadbin** package + **shapely**. Bbox polyfill then per-cell in
 
 ### quadbin_cellunion
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_quadbin_cellunion: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_quadbin_cellunion(cells)` | `BINARY` |
+| Python | `gridx.quadbin.functions.quadbin_cellunion(cells)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cells` | `ARRAY<BIGINT>` |  | The quadbin cell ids to merge. |
+{/* END GENERATED gbx_quadbin_cellunion */}
 
 Union an `ARRAY<BIGINT>` of quadbin cells into a single MultiPolygon EWKB.
 
@@ -423,16 +504,13 @@ Union an `ARRAY<BIGINT>` of quadbin cells into a single MultiPolygon EWKB.
 Powered by **shapely** (`union_all` of the cell polygons). Dissolves an `ARRAY<LONG>` of cells into one EWKB MultiPolygon (SRID 4326).
 :::
 
-**Signature:** `quadbin_cellunion(cellIds: Column): Column`
-
 **Returns:**
 - Binary EWKB multipolygon (SRID-tagged 4326)
 
 <FunctionExamples
   name="quadbin_cellunion"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -467,7 +545,19 @@ Powered by **shapely**. Grouped aggregate — `groupBy(...).agg(gx.quadbin_cellu
 
 ### quadbin_distance
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_quadbin_distance: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_quadbin_distance(cellid1, cellid2)` | `INT` |
+| Python | `gridx.quadbin.functions.quadbin_distance(cellid1, cellid2)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cellid1` | `BIGINT` |  | The first quadbin cell id. |
+| `cellid2` | `BIGINT` |  | The second quadbin cell id, at the same zoom level. |
+{/* END GENERATED gbx_quadbin_distance */}
 
 Chebyshev (king-move) distance between two quadbin cells at the same resolution.
 
@@ -475,16 +565,13 @@ Chebyshev (king-move) distance between two quadbin cells at the same resolution.
 Powered by the **quadbin** package. Chebyshev distance on tile coordinates; mirrors `Quadbin.scala` (errors if the two cells differ in resolution).
 :::
 
-**Signature:** `quadbin_distance(cellA: Column, cellB: Column): Column`
-
 **Returns:**
 - `INT` cell-step distance
 
 <FunctionExamples
   name="quadbin_distance"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -562,18 +649,24 @@ Nesting: `coveras ⊇ polyfill ⊇ core`. Point and line geometries are covered 
 
 ### quadbin_geomkring
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_quadbin_geomkring: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_quadbin_geomkring(geom, resolution, k, [mode], [coverage])` | `array<bigint>` |
+| Python | `gridx.quadbin.functions.quadbin_geomkring(geom, resolution, k, mode=None, coverage=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
+| `resolution` | `INT` or `STRING` |  | Quadbin zoom level, a whole number from 0 to 20. |
+| `k` | `INT` |  | The ring distance: 0 is the covering cells alone, 1 adds the cells around them. |
+| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+{/* END GENERATED gbx_quadbin_geomkring */}
 
 Polyfill a geometry at a given quadbin zoom level then expand by `k` ring steps. Returns all cells within Chebyshev distance `k` of the covering set.
-
-**Signature:** `quadbin_geomkring(geom, resolution, k, [mode], [coverage])`
-
-**Parameters:**
-- `geom` — Geometry column (WKT or WKB, WGS84 coordinates)
-- `resolution` — Quadbin zoom level (integer `0..20`)
-- `k` — Ring distance (0 = covering set only)
-- `mode` *(optional, default `'boundary-out'`)* — expansion direction & hole handling; see [Dilation modes](#dilation-modes) for all six values.
-- `coverage` *(optional, default `'coveras'`)* — how a cell is judged to belong to a region; see [Coverage](#coverage) for the three values.
 
 **Returns:**
 - `ARRAY<BIGINT>` of quadbin cell IDs
@@ -581,8 +674,7 @@ Polyfill a geometry at a given quadbin zoom level then expand by `k` ring steps.
 <FunctionExamples
   name="quadbin_geomkring"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -591,18 +683,24 @@ Polyfill a geometry at a given quadbin zoom level then expand by `k` ring steps.
 
 ### quadbin_geomkloop
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_quadbin_geomkloop: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_quadbin_geomkloop(geom, resolution, k, [mode], [coverage])` | `array<bigint>` |
+| Python | `gridx.quadbin.functions.quadbin_geomkloop(geom, resolution, k, mode=None, coverage=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
+| `resolution` | `INT` or `STRING` |  | Quadbin zoom level, a whole number from 0 to 20. |
+| `k` | `INT` |  | The loop distance: only the cells at exactly this ring distance from the covering cells are returned. |
+| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+{/* END GENERATED gbx_quadbin_geomkloop */}
 
 Polyfill a geometry at a given quadbin zoom level then return only the hollow outer ring at exactly `k` steps.
-
-**Signature:** `quadbin_geomkloop(geom, resolution, k, [mode], [coverage])`
-
-**Parameters:**
-- `geom` — Geometry column (WKT or WKB, WGS84 coordinates)
-- `resolution` — Quadbin zoom level (integer `0..20`)
-- `k` — Ring distance
-- `mode` *(optional, default `'boundary-out'`)* — expansion direction & hole handling; see [Dilation modes](#dilation-modes) for all six values.
-- `coverage` *(optional, default `'coveras'`)* — how a cell is judged to belong to a region; see [Coverage](#coverage) for the three values.
 
 **Returns:**
 - `ARRAY<BIGINT>` of quadbin cell IDs at exactly distance k
@@ -610,8 +708,7 @@ Polyfill a geometry at a given quadbin zoom level then return only the hollow ou
 <FunctionExamples
   name="quadbin_geomkloop"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -1629,21 +1726,27 @@ A custom grid is a user-defined regular rectangular grid specified by its spatia
 
 ### custom_grid
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_custom_grid: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_custom_grid(bound_x_min, bound_x_max, bound_y_min, bound_y_max, cell_splits, root_cell_size_x, root_cell_size_y, [srid])` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |
+| Python | `gridx.custom.functions.custom_grid(bound_x_min, bound_x_max, bound_y_min, bound_y_max, cell_splits, root_cell_size_x, root_cell_size_y, srid=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `bound_x_min` | `BIGINT` |  | The west edge of the grid. |
+| `bound_x_max` | `BIGINT` |  | The east edge of the grid; it must be greater than the west edge. |
+| `bound_y_min` | `BIGINT` |  | The south edge of the grid. |
+| `bound_y_max` | `BIGINT` |  | The north edge of the grid; it must be greater than the south edge. |
+| `cell_splits` | `INT` |  | How many parts each cell splits into along each axis at the next resolution; at least 2. |
+| `root_cell_size_x` | `INT` |  | The width of a resolution-0 cell; greater than 0. |
+| `root_cell_size_y` | `INT` |  | The height of a resolution-0 cell; greater than 0. |
+| `srid` | `INT` | `-1` | The coordinate system of the grid, as an EPSG code; -1 for none. |
+{/* END GENERATED gbx_custom_grid */}
 
 Define a user-specified regular grid from an origin, extent, cell size, split factor, and SRID.
-
-**Signature:** `gbx_custom_grid(boundXMin, boundXMax, boundYMin, boundYMax, cellSplits, rootCellSizeX, rootCellSizeY, srid)`
-
-**Parameters:**
-- `boundXMin` — minimum X bound of the grid extent
-- `boundXMax` — maximum X bound of the grid extent
-- `boundYMin` — minimum Y bound of the grid extent
-- `boundYMax` — maximum Y bound of the grid extent
-- `cellSplits` — number of splits per axis at each resolution level (e.g. 2 = 2x2 = 4 sub-cells per step)
-- `rootCellSizeX` — root cell width in CRS units
-- `rootCellSizeY` — root cell height in CRS units
-- `srid` — spatial reference ID (e.g. 27700 for BNG)
 
 **Returns:**
 - `STRUCT<bound_x_min, bound_x_max, bound_y_min, bound_y_max, cell_splits, root_cell_size_x, root_cell_size_y, srid>` — a grid descriptor struct passed to all other `gbx_custom_*` functions.
@@ -1651,8 +1754,7 @@ Define a user-specified regular grid from an origin, extent, cell size, split fa
 <FunctionExamples
   name="custom_grid"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -1661,16 +1763,22 @@ Define a user-specified regular grid from an origin, extent, cell size, split fa
 
 ### custom_pointascell
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_custom_pointascell: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_custom_pointascell(point, grid, resolution)` | `BIGINT` |
+| Python | `gridx.custom.functions.custom_pointascell(point, grid, resolution)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `point` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in the grid's coordinates. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `resolution` | `INT` or `STRING` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
+{/* END GENERATED gbx_custom_pointascell */}
 
 Index a point geometry into a custom grid cell ID at the specified resolution level.
-
-**Signature:** `gbx_custom_pointascell(point, grid, resolution)`
-
-**Parameters:**
-- `point` — point geometry as WKT (STRING) or WKB (BINARY) in the grid's CRS
-- `grid` — custom grid descriptor returned by `gbx_custom_grid`
-- `resolution` — resolution level (integer; 0 = root cells, higher = finer)
 
 **Returns:**
 - `BIGINT` cell ID encoding the grid position at the given resolution
@@ -1678,8 +1786,7 @@ Index a point geometry into a custom grid cell ID at the specified resolution le
 <FunctionExamples
   name="custom_pointascell"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -1688,15 +1795,21 @@ Index a point geometry into a custom grid cell ID at the specified resolution le
 
 ### custom_cellaswkb
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_custom_cellaswkb: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_custom_cellaswkb(cell, grid)` | `BINARY` |
+| Python | `gridx.custom.functions.custom_cellaswkb(cell, grid)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cell` | `BIGINT` |  | The custom-grid cell id. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+{/* END GENERATED gbx_custom_cellaswkb */}
 
 Return the WKB footprint polygon of a custom grid cell.
-
-**Signature:** `gbx_custom_cellaswkb(cell, grid)`
-
-**Parameters:**
-- `cell` — `BIGINT` cell ID
-- `grid` — custom grid descriptor returned by `gbx_custom_grid`
 
 **Returns:**
 - `BINARY` WKB polygon representing the cell boundary (geometry `... (WKB binary)`)
@@ -1704,8 +1817,7 @@ Return the WKB footprint polygon of a custom grid cell.
 <FunctionExamples
   name="custom_cellaswkb"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -1714,15 +1826,21 @@ Return the WKB footprint polygon of a custom grid cell.
 
 ### custom_cellaswkt
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_custom_cellaswkt: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_custom_cellaswkt(cell, grid)` | `STRING` |
+| Python | `gridx.custom.functions.custom_cellaswkt(cell, grid)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cell` | `BIGINT` |  | The custom-grid cell id. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+{/* END GENERATED gbx_custom_cellaswkt */}
 
 Return the WKT footprint polygon of a custom grid cell.
-
-**Signature:** `gbx_custom_cellaswkt(cell, grid)`
-
-**Parameters:**
-- `cell` — `BIGINT` cell ID
-- `grid` — custom grid descriptor returned by `gbx_custom_grid`
 
 **Returns:**
 - `STRING` WKT polygon representing the cell boundary
@@ -1730,8 +1848,7 @@ Return the WKT footprint polygon of a custom grid cell.
 <FunctionExamples
   name="custom_cellaswkt"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -1740,15 +1857,21 @@ Return the WKT footprint polygon of a custom grid cell.
 
 ### custom_centroid
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_custom_centroid: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_custom_centroid(cell, grid)` | `BINARY` |
+| Python | `gridx.custom.functions.custom_centroid(cell, grid)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cell` | `BIGINT` |  | The custom-grid cell id. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+{/* END GENERATED gbx_custom_centroid */}
 
 Return the centroid of a custom grid cell as a WKB point.
-
-**Signature:** `gbx_custom_centroid(cell, grid)`
-
-**Parameters:**
-- `cell` — `BIGINT` cell ID
-- `grid` — custom grid descriptor returned by `gbx_custom_grid`
 
 **Returns:**
 - `BINARY` WKB point at the cell center (geometry `... (WKB binary)`)
@@ -1756,8 +1879,7 @@ Return the centroid of a custom grid cell as a WKB point.
 <FunctionExamples
   name="custom_centroid"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -1766,16 +1888,22 @@ Return the centroid of a custom grid cell as a WKB point.
 
 ### custom_polyfill
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_custom_polyfill: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_custom_polyfill(geom, grid, resolution)` | `array<bigint>` |
+| Python | `gridx.custom.functions.custom_polyfill(geom, grid, resolution)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in the grid's coordinates. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `resolution` | `INT` or `STRING` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
+{/* END GENERATED gbx_custom_polyfill */}
 
 Fill a geometry with all custom grid cell IDs at the specified resolution.
-
-**Signature:** `gbx_custom_polyfill(geom, grid, resolution)`
-
-**Parameters:**
-- `geom` — input geometry as WKT (STRING) or WKB (BINARY) in the grid's CRS
-- `grid` — custom grid descriptor returned by `gbx_custom_grid`
-- `resolution` — resolution level (integer; higher = finer cells)
 
 **Returns:**
 - `ARRAY<BIGINT>` of cell IDs whose footprints intersect the geometry
@@ -1783,8 +1911,7 @@ Fill a geometry with all custom grid cell IDs at the specified resolution.
 <FunctionExamples
   name="custom_polyfill"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -1793,16 +1920,22 @@ Fill a geometry with all custom grid cell IDs at the specified resolution.
 
 ### custom_kring
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_custom_kring: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_custom_kring(cell, grid, k)` | `array<bigint>` |
+| Python | `gridx.custom.functions.custom_kring(cell, grid, k)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cell` | `BIGINT` |  | The custom-grid cell id. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `k` | `INT` |  | The ring distance: 0 is the cell alone, 1 adds its eight neighbours. |
+{/* END GENERATED gbx_custom_kring */}
 
 Return all custom grid cells within `k` steps of a center cell (filled neighborhood, Chebyshev distance).
-
-**Signature:** `gbx_custom_kring(cell, grid, k)`
-
-**Parameters:**
-- `cell` — `BIGINT` center cell ID
-- `grid` — custom grid descriptor returned by `gbx_custom_grid`
-- `k` — integer ring distance (0 = center only; 1 = 3x3 neighborhood including center)
 
 **Returns:**
 - `ARRAY<BIGINT>` of cell IDs within distance `k` (up to `(2k+1)^2` cells)
@@ -1810,8 +1943,7 @@ Return all custom grid cells within `k` steps of a center cell (filled neighborh
 <FunctionExamples
   name="custom_kring"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -1820,16 +1952,22 @@ Return all custom grid cells within `k` steps of a center cell (filled neighborh
 
 ### custom_kloop
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_custom_kloop: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_custom_kloop(cell, grid, k)` | `array<bigint>` |
+| Python | `gridx.custom.functions.custom_kloop(cell, grid, k)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cell` | `BIGINT` |  | The custom-grid cell id. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `k` | `INT` |  | The loop distance: only the cells at exactly this distance are returned. |
+{/* END GENERATED gbx_custom_kloop */}
 
 Return the hollow ring of custom grid cells at exactly `k` steps from the center cell. The ring at distance `k` is the set of cells in `kRing(k)` but not in `kRing(k-1)`, clamped to the grid boundary. At `k=0` the result contains only the center cell.
-
-**Signature:** `gbx_custom_kloop(cell, grid, k)`
-
-**Parameters:**
-- `cell` — `BIGINT` center cell ID
-- `grid` — custom grid descriptor returned by `gbx_custom_grid`
-- `k` — integer ring distance (0 = center only; 1 = 8-cell ring excluding center)
 
 **Returns:**
 - `ARRAY<BIGINT>` of cell IDs at exactly distance `k`
@@ -1837,8 +1975,7 @@ Return the hollow ring of custom grid cells at exactly `k` steps from the center
 <FunctionExamples
   name="custom_kloop"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -1851,19 +1988,25 @@ Geometry-aware functions polyfill a geometry into the custom grid and then expan
 
 ### custom_geomkring
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_custom_geomkring: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_custom_geomkring(geom, grid, resolution, k, [mode], [coverage])` | `array<bigint>` |
+| Python | `gridx.custom.functions.custom_geomkring(geom, grid, resolution, k, mode=None, coverage=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in the grid's coordinates. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `resolution` | `INT` or `STRING` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
+| `k` | `INT` |  | The ring distance: 0 is the covering cells alone, 1 adds the cells around them. |
+| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+{/* END GENERATED gbx_custom_geomkring */}
 
 Polyfill a geometry at a given custom grid resolution then expand by `k` ring steps.
-
-**Signature:** `custom_geomkring(geom, grid, resolution, k, [mode], [coverage])`
-
-**Parameters:**
-- `geom` — Geometry column (WKT or WKB, native grid CRS)
-- `grid` — Custom grid descriptor returned by `gbx_custom_grid`
-- `resolution` — Resolution level
-- `k` — Ring distance (0 = covering set only)
-- `mode` *(optional, default `'boundary-out'`)* — expansion direction & hole handling; see [Dilation modes](#dilation-modes) for all six values.
-- `coverage` *(optional, default `'coveras'`)* — how a cell is judged to belong to a region; see [Coverage](#coverage) for the three values.
 
 **Returns:**
 - `ARRAY<BIGINT>` of custom grid cell IDs
@@ -1871,8 +2014,7 @@ Polyfill a geometry at a given custom grid resolution then expand by `k` ring st
 <FunctionExamples
   name="custom_geomkring"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -1881,19 +2023,25 @@ Polyfill a geometry at a given custom grid resolution then expand by `k` ring st
 
 ### custom_geomkloop
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_custom_geomkloop: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_custom_geomkloop(geom, grid, resolution, k, [mode], [coverage])` | `array<bigint>` |
+| Python | `gridx.custom.functions.custom_geomkloop(geom, grid, resolution, k, mode=None, coverage=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in the grid's coordinates. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `resolution` | `INT` or `STRING` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
+| `k` | `INT` |  | The loop distance: only the cells at exactly this ring distance from the covering cells are returned. |
+| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+{/* END GENERATED gbx_custom_geomkloop */}
 
 Polyfill a geometry at a given custom grid resolution then return only the hollow outer ring at exactly `k` steps.
-
-**Signature:** `custom_geomkloop(geom, grid, resolution, k, [mode], [coverage])`
-
-**Parameters:**
-- `geom` — Geometry column (WKT or WKB, native grid CRS)
-- `grid` — Custom grid descriptor returned by `gbx_custom_grid`
-- `resolution` — Resolution level
-- `k` — Ring distance
-- `mode` *(optional, default `'boundary-out'`)* — expansion direction & hole handling; see [Dilation modes](#dilation-modes) for all six values.
-- `coverage` *(optional, default `'coveras'`)* — how a cell is judged to belong to a region; see [Coverage](#coverage) for the three values.
 
 **Returns:**
 - `ARRAY<BIGINT>` of custom grid cell IDs at exactly distance k
@@ -1901,8 +2049,7 @@ Polyfill a geometry at a given custom grid resolution then return only the hollo
 <FunctionExamples
   name="custom_geomkloop"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -1959,16 +2106,22 @@ Streaming version of `custom_geomkloop` — one row per cell at exactly `k` step
 
 ### custom_distance
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_custom_distance: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_custom_distance(cellid1, grid, cellid2)` | `BIGINT` |
+| Python | `gridx.custom.functions.custom_distance(cellid1, grid, cellid2)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cellid1` | `BIGINT` |  | The first custom-grid cell id. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `cellid2` | `BIGINT` |  | The second custom-grid cell id, at the same resolution. |
+{/* END GENERATED gbx_custom_distance */}
 
 Chebyshev (king-move) distance in grid steps between two custom grid cells. Returns the minimum `k` such that the second cell appears in `kRing(firstCell, k)`, i.e. `max(|dx|, |dy|)` in cell-position units. Both cells must be at the same resolution; the grid spec enforces consistent encoding.
-
-**Signature:** `gbx_custom_distance(cellid1, grid, cellid2)`
-
-**Parameters:**
-- `cellid1` — `BIGINT` first cell ID
-- `grid` — custom grid descriptor returned by `gbx_custom_grid`
-- `cellid2` — `BIGINT` second cell ID
 
 **Returns:**
 - `BIGINT` Chebyshev grid distance in cell steps
@@ -1976,8 +2129,7 @@ Chebyshev (king-move) distance in grid steps between two custom grid cells. Retu
 <FunctionExamples
   name="custom_distance"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -2068,29 +2220,35 @@ Fill missing H3 cell values by interpolating from ring-`k` neighbours. Designed 
 H3 geometry-aware kring/kloop are **light-tier only** (no Scala/heavy implementation), but they work exactly like the other grids: a single **geometry-taking** function does the whole job in pure Python via the `h3` library — the performant `polygon_to_cells_experimental` polyfill for the covering set and `grid_disk` for the neighbour walk. They run anywhere (local, Serverless, and classic clusters) and are called identically from SQL and PySpark:
 
 ```python
-from databricks.labs.gbx.pygx.functions import register
-from databricks.labs.gbx.gridx.h3.functions import geomkring
+from databricks.labs.gbx import register
+from databricks.labs.gbx.gridx.h3 import functions as hx
 
 register(spark)
-df.withColumn("kring", geomkring("geom_col", resolution=9, k=1))
+df.withColumn("kring", hx.h3_geomkring("geom_col", 9, 1))
 ```
 
 **Dilation modes** work the same as for BNG/quadbin/custom, and all six operate on holed geometries: `'hole-in'`, `'hole-out'`, and `'hole-out-ignore-geom'` expand from the geometry's holes; `'boundary-in-ignore-holes'` treats the polygon as solid, expanding inward across holes as if they were filled.
 
 ### h3_geomkring
 
-<Tier light/>
+{/* BEGIN GENERATED gbx_h3_geomkring: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_h3_geomkring(geom, resolution, k, [mode], [coverage])` | `array<bigint>` |
+| Python | `gridx.h3.functions.h3_geomkring(geom, resolution, k, mode=None, coverage=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
+| `resolution` | `INT` or `STRING` |  | H3 resolution, a whole number from 0 to 15. |
+| `k` | `INT` |  | The ring distance: 0 is the covering cells alone, 1 adds the cells around them. |
+| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+{/* END GENERATED gbx_h3_geomkring */}
 
 Geometry-aware H3 k-ring: the geometry's covering set expanded outward by `k` ring steps — the polyfill and neighbour walk both use the `h3` library.
-
-**Signature:** `h3_geomkring(geom, resolution, k, [mode], [coverage])`
-
-**Parameters:**
-- `geom` — geometry column (WKB `BINARY` or WKT `STRING`)
-- `resolution` — H3 resolution (`0`–`15`)
-- `k` — ring distance (`0` = covering set only)
-- `mode` *(optional, default `'boundary-out'`)* — expansion direction & hole handling; see [Dilation modes](#dilation-modes) for all six values.
-- `coverage` *(optional, default `'coveras'`)* — how a cell is judged to belong to a region; see [Coverage](#coverage) for the three values.
 
 **Returns:**
 - `ARRAY<BIGINT>` of H3 cell IDs
@@ -2098,7 +2256,7 @@ Geometry-aware H3 k-ring: the geometry's covering set expanded outward by `k` ri
 <FunctionExamples
   name="h3_geomkring"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -2106,13 +2264,24 @@ Geometry-aware H3 k-ring: the geometry's covering set expanded outward by `k` ri
 
 ### h3_geomkloop
 
-<Tier light/>
+{/* BEGIN GENERATED gbx_h3_geomkloop: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_h3_geomkloop(geom, resolution, k, [mode], [coverage])` | `array<bigint>` |
+| Python | `gridx.h3.functions.h3_geomkloop(geom, resolution, k, mode=None, coverage=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
+| `resolution` | `INT` or `STRING` |  | H3 resolution, a whole number from 0 to 15. |
+| `k` | `INT` |  | The loop distance: only the cells at exactly this ring distance from the covering cells are returned. |
+| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+{/* END GENERATED gbx_h3_geomkloop */}
 
 Geometry-aware H3 k-loop (hollow ring at exactly `k` steps).
-
-**Signature:** `h3_geomkloop(geom, resolution, k, [mode], [coverage])`
-
-**Parameters:** Same as `h3_geomkring`.
 
 **Returns:**
 - `ARRAY<BIGINT>` of H3 cell IDs at exactly distance k
@@ -2120,7 +2289,7 @@ Geometry-aware H3 k-loop (hollow ring at exactly `k` steps).
 <FunctionExamples
   name="h3_geomkloop"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 

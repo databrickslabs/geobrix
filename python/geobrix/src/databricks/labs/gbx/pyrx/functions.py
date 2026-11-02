@@ -10443,32 +10443,6 @@ def _h3_cell_bbox_udf(cellid, srid, mode, kring_pad, out_crs=None):
     return (float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max()))
 
 
-def gbx_h3_cell_bbox(
-    cellid: ColLike,
-    out_srid: ColLike = None,
-    mode: ColLike = None,
-    out_crs: ColLike = None,
-) -> Column:
-    """Bounding box of one H3 cell in the output CRS (centroid point or envelope).
-
-    Returns a ``STRUCT<xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE>``.
-
-    Args:
-        cellid:   Column holding the H3 cell id (integer).
-        out_srid: Output CRS as an EPSG or ESRI code (int). Defaults to 4326.
-        mode:     ``"centroids"`` (default) or ``"spatial_envelope"``.
-        out_crs:  Output CRS string (``EPSG:x`` / ``ESRI:x`` / WKT); wins over
-                  ``out_srid`` when set.
-    """
-    return _h3_cell_bbox_udf(
-        _col(cellid),
-        _col(out_srid) if out_srid is not None else f.lit(4326),
-        _col(mode) if mode is not None else f.lit("centroids"),
-        f.lit(0),
-        f.lit(out_crs) if out_crs is not None else f.lit(None),
-    )
-
-
 def rst_h3_gridspec(
     df,
     cell_col="cellid",

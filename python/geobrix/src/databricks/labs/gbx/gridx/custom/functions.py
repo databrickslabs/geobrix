@@ -53,179 +53,6 @@ def register(_spark: SparkSession) -> None:
     ).load().collect()
 
 
-def custom_grid(
-    bound_x_min: ColLike,
-    bound_x_max: ColLike,
-    bound_y_min: ColLike,
-    bound_y_max: ColLike,
-    cell_splits: ColLike,
-    root_cell_size_x: ColLike,
-    root_cell_size_y: ColLike,
-    srid: Optional[ColLike] = None,
-) -> Column:
-    """Build a custom grid specification struct for use with other gbx_custom_* functions.
-
-    All numeric parameters must be integers (INT or LONG). Bounds define the
-    extent of the grid in native CRS units; root cell sizes define the top-level
-    tile size in the same units; cell_splits controls how many times each root
-    cell is subdivided per resolution level.
-
-    Args:
-        bound_x_min: Minimum x coordinate of the grid extent.
-        bound_x_max: Maximum x coordinate of the grid extent.
-        bound_y_min: Minimum y coordinate of the grid extent.
-        bound_y_max: Maximum y coordinate of the grid extent.
-        cell_splits: Number of subdivisions per axis at each resolution level (>= 2).
-        root_cell_size_x: Root cell width in native CRS units (> 0).
-        root_cell_size_y: Root cell height in native CRS units (> 0).
-        srid: Optional EPSG SRID for the grid CRS (``None`` means no CRS, stored as -1).
-
-    Returns:
-        Column of grid-spec STRUCT consumed by all other gbx_custom_* functions.
-    """
-    if srid is None:
-        return f.call_function(
-            "gbx_custom_grid",
-            _col(bound_x_min),
-            _col(bound_x_max),
-            _col(bound_y_min),
-            _col(bound_y_max),
-            _col(cell_splits),
-            _col(root_cell_size_x),
-            _col(root_cell_size_y),
-        )
-    return f.call_function(
-        "gbx_custom_grid",
-        _col(bound_x_min),
-        _col(bound_x_max),
-        _col(bound_y_min),
-        _col(bound_y_max),
-        _col(cell_splits),
-        _col(root_cell_size_x),
-        _col(root_cell_size_y),
-        _col(srid),
-    )
-
-
-def custom_pointascell(geom: ColLike, grid: ColLike, resolution: ColLike) -> Column:
-    """Encode a point geometry as a custom grid cell id at the given resolution.
-
-    Args:
-        geom: Point geometry column (WKB bytes or WKT string, native CRS).
-        grid: Grid-spec struct column produced by ``custom_grid``.
-        resolution: Resolution level (0 = root; each level subdivides by cell_splits).
-
-    Returns:
-        Column of BIGINT custom grid cell ids.
-    """
-    return f.call_function(
-        "gbx_custom_pointascell", _col(geom), _col(grid), _col(resolution)
-    )
-
-
-def custom_cellaswkb(cell: ColLike, grid: ColLike) -> Column:
-    """Return the custom grid cell footprint as a WKB polygon.
-
-    Args:
-        cell: Column of BIGINT custom grid cell ids.
-        grid: Grid-spec struct column produced by ``custom_grid``.
-
-    Returns:
-        Column of BINARY (WKB polygon).
-    """
-    return f.call_function("gbx_custom_cellaswkb", _col(cell), _col(grid))
-
-
-def custom_cellaswkt(cell: ColLike, grid: ColLike) -> Column:
-    """Return the custom grid cell footprint as a WKT string.
-
-    Args:
-        cell: Column of BIGINT custom grid cell ids.
-        grid: Grid-spec struct column produced by ``custom_grid``.
-
-    Returns:
-        Column of STRING (WKT polygon).
-    """
-    return f.call_function("gbx_custom_cellaswkt", _col(cell), _col(grid))
-
-
-def custom_centroid(cell: ColLike, grid: ColLike) -> Column:
-    """Return the centroid of a custom grid cell as a WKB point.
-
-    Args:
-        cell: Column of BIGINT custom grid cell ids.
-        grid: Grid-spec struct column produced by ``custom_grid``.
-
-    Returns:
-        Column of BINARY (WKB point).
-    """
-    return f.call_function("gbx_custom_centroid", _col(cell), _col(grid))
-
-
-def custom_polyfill(geom: ColLike, grid: ColLike, resolution: ColLike) -> Column:
-    """Return the custom grid cells covering a geometry at the given resolution.
-
-    Args:
-        geom: Geometry column (WKB bytes or WKT string, native CRS).
-        grid: Grid-spec struct column produced by ``custom_grid``.
-        resolution: Resolution level (0 = root; each level subdivides by cell_splits).
-
-    Returns:
-        Column of ``ARRAY<BIGINT>`` custom grid cell ids.
-    """
-    return f.call_function(
-        "gbx_custom_polyfill", _col(geom), _col(grid), _col(resolution)
-    )
-
-
-def custom_kring(cell: ColLike, grid: ColLike, k: ColLike) -> Column:
-    """Return all custom grid cells within Chebyshev distance ``k`` of ``cell`` (inclusive).
-
-    Args:
-        cell: Column of BIGINT custom grid cell ids.
-        grid: Grid-spec struct column produced by ``custom_grid``.
-        k: Ring distance (0 = cell itself only).
-
-    Returns:
-        Column of ``ARRAY<BIGINT>`` custom grid cell ids.
-    """
-    return f.call_function("gbx_custom_kring", _col(cell), _col(grid), _col(k))
-
-
-def custom_kloop(cell: ColLike, grid: ColLike, k: ColLike) -> Column:
-    """Return custom grid cells at EXACTLY Chebyshev distance ``k`` (hollow ring).
-
-    At ``k=0`` returns the center cell; at ``k=1`` returns the 8 surrounding
-    cells (center excluded).
-
-    Args:
-        cell: Column of BIGINT custom grid cell ids.
-        grid: Grid-spec struct column produced by ``custom_grid``.
-        k: Loop distance — only the shell at exactly distance ``k`` is returned.
-
-    Returns:
-        Column of ``ARRAY<BIGINT>`` custom grid cell ids.
-    """
-    return f.call_function("gbx_custom_kloop", _col(cell), _col(grid), _col(k))
-
-
-def custom_distance(cell1: ColLike, grid: ColLike, cell2: ColLike) -> Column:
-    """Chebyshev grid-ring distance between two custom-grid cells.
-
-    Returns ``max(|dx|, |dy|)`` — the minimum number of ring steps needed to
-    travel from ``cell1`` to ``cell2``.
-
-    Args:
-        cell1: Column of BIGINT source cell ids.
-        grid: Grid-spec struct column produced by ``custom_grid``.
-        cell2: Column of BIGINT target cell ids.
-
-    Returns:
-        Column of BIGINT Chebyshev distance.
-    """
-    return f.call_function("gbx_custom_distance", _col(cell1), _col(grid), _col(cell2))
-
-
 def custom_cellfill(
     cellid: ColLike,
     value: ColLike,
@@ -259,73 +86,6 @@ def custom_cellfill(
         _col(k),
         _method,
         _col(power),
-    )
-
-
-def custom_geomkring(
-    geom: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    k: ColLike,
-    mode: ColLike = "boundary-out",
-) -> Column:
-    """Geometry-aware k-ring for a custom grid.
-
-    Returns all cells reachable from the geometry's covering set in at most ``k``
-    Chebyshev steps.
-
-    Args:
-        geom: Geometry column (WKB bytes or WKT string, native grid CRS).
-        grid: Grid-spec struct column produced by ``custom_grid``.
-        resolution: Resolution level.
-        k: Dilation distance (0 = covering set only).
-        mode: Dilation mode (default ``"boundary-out"``).
-
-    Returns:
-        Column of ``ARRAY<BIGINT>`` custom grid cell ids.
-    """
-    # mode is always a string VALUE (never a column name); use f.lit so Spark
-    # does not misinterpret it as an unresolved column reference.
-    mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
-    return f.call_function(
-        "gbx_custom_geomkring",
-        _col(geom),
-        _col(grid),
-        _col(resolution),
-        _col(k),
-        mode_arg,
-    )
-
-
-def custom_geomkloop(
-    geom: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    k: ColLike,
-    mode: ColLike = "boundary-out",
-) -> Column:
-    """Geometry-aware k-loop (hollow ring) for a custom grid.
-
-    Returns cells at EXACTLY ``k`` Chebyshev steps from the geometry's covering set.
-
-    Args:
-        geom: Geometry column (WKB bytes or WKT string, native grid CRS).
-        grid: Grid-spec struct column produced by ``custom_grid``.
-        resolution: Resolution level.
-        k: Dilation distance.
-        mode: Dilation mode (default ``"boundary-out"``).
-
-    Returns:
-        Column of ``ARRAY<BIGINT>`` custom grid cell ids.
-    """
-    mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
-    return f.call_function(
-        "gbx_custom_geomkloop",
-        _col(geom),
-        _col(grid),
-        _col(resolution),
-        _col(k),
-        mode_arg,
     )
 
 
@@ -422,6 +182,329 @@ def custom_geomkloopexplode(
 
 
 # BEGIN GENERATED by gbx:manifest:gen: edit manifest/functions.json, then run the generator
+
+
+def custom_cellaswkb(
+    cell: ColLike,
+    grid: ColLike,
+) -> Column:
+    """Return the footprint of a custom-grid cell as a WKB polygon.
+
+    Args:
+        cell: The custom-grid cell id.
+        grid: The grid, as built by `gbx_custom_grid`.
+
+    Returns:
+        The cell polygon in the grid's coordinates, with no SRID, or NULL for a NULL
+        cell or grid.
+
+    SQL: ``gbx_custom_cellaswkb(cell, grid)``
+    """
+    return _api.call(
+        "gbx_custom_cellaswkb",
+        cell,
+        grid,
+    )
+
+
+def custom_cellaswkt(
+    cell: ColLike,
+    grid: ColLike,
+) -> Column:
+    """Return the footprint of a custom-grid cell as WKT.
+
+    Args:
+        cell: The custom-grid cell id.
+        grid: The grid, as built by `gbx_custom_grid`.
+
+    Returns:
+        The cell polygon in the grid's coordinates, or NULL for a NULL cell or grid.
+
+    SQL: ``gbx_custom_cellaswkt(cell, grid)``
+    """
+    return _api.call(
+        "gbx_custom_cellaswkt",
+        cell,
+        grid,
+    )
+
+
+def custom_centroid(
+    cell: ColLike,
+    grid: ColLike,
+) -> Column:
+    """Return the centre of a custom-grid cell as a WKB point.
+
+    Args:
+        cell: The custom-grid cell id.
+        grid: The grid, as built by `gbx_custom_grid`.
+
+    Returns:
+        The cell centre in the grid's coordinates, with no SRID, or NULL for a NULL cell
+        or grid.
+
+    SQL: ``gbx_custom_centroid(cell, grid)``
+    """
+    return _api.call(
+        "gbx_custom_centroid",
+        cell,
+        grid,
+    )
+
+
+def custom_distance(
+    cellid1: ColLike,
+    grid: ColLike,
+    cellid2: ColLike,
+) -> Column:
+    """Return the distance in cells between two custom-grid cells of the same resolution.
+
+    Args:
+        cellid1: The first custom-grid cell id.
+        grid: The grid, as built by `gbx_custom_grid`.
+        cellid2: The second custom-grid cell id, at the same resolution.
+
+    Returns:
+        The number of cell steps (a diagonal step counts as one), or NULL for a NULL
+        argument.
+
+    SQL: ``gbx_custom_distance(cellid1, grid, cellid2)``
+    """
+    return _api.call(
+        "gbx_custom_distance",
+        cellid1,
+        grid,
+        cellid2,
+    )
+
+
+def custom_geomkloop(
+    geom: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    k: ColLike,
+    mode: ColLike = None,
+    coverage: ColLike = None,
+) -> Column:
+    """Return the custom-grid cells at exactly k rings from a geometry.
+
+    Args:
+        geom: The geometry: WKB, EWKB, WKT or EWKT, in the grid's coordinates.
+        grid: The grid, as built by `gbx_custom_grid`.
+        resolution: The grid resolution: 0 is the root cells, each level splits a cell
+            into `cell_splits` by `cell_splits`.
+        k: The loop distance: only the cells at exactly this ring distance from the
+            covering cells are returned.
+        mode: The dilation mode: `'boundary-out'`, `'boundary-in'`,
+            `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or
+            `'hole-out-ignore-geom'`. SQL default: ``'boundary-out'``.
+        coverage: How a cell belongs to the geometry: `'coveras'` (it overlaps),
+            `'polyfill'` (its centre is inside) or `'core'` (it is inside). SQL default:
+            ``'coveras'``.
+
+    Returns:
+        The cell ids of the hollow band at distance k, or NULL for a NULL or unreadable
+        geometry.
+
+    SQL: ``gbx_custom_geomkloop(geom, grid, resolution, k, [mode], [coverage])``
+    """
+    return _api.call(
+        "gbx_custom_geomkloop",
+        geom,
+        grid,
+        resolution,
+        k,
+        mode,
+        coverage,
+    )
+
+
+def custom_geomkring(
+    geom: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    k: ColLike,
+    mode: ColLike = None,
+    coverage: ColLike = None,
+) -> Column:
+    """Return the custom-grid cells of a geometry dilated by k rings.
+
+    Args:
+        geom: The geometry: WKB, EWKB, WKT or EWKT, in the grid's coordinates.
+        grid: The grid, as built by `gbx_custom_grid`.
+        resolution: The grid resolution: 0 is the root cells, each level splits a cell
+            into `cell_splits` by `cell_splits`.
+        k: The ring distance: 0 is the covering cells alone, 1 adds the cells around
+            them.
+        mode: The dilation mode: `'boundary-out'`, `'boundary-in'`,
+            `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or
+            `'hole-out-ignore-geom'`. SQL default: ``'boundary-out'``.
+        coverage: How a cell belongs to the geometry: `'coveras'` (it overlaps),
+            `'polyfill'` (its centre is inside) or `'core'` (it is inside). SQL default:
+            ``'coveras'``.
+
+    Returns:
+        The cell ids of the dilated band, or NULL for a NULL or unreadable geometry.
+
+    SQL: ``gbx_custom_geomkring(geom, grid, resolution, k, [mode], [coverage])``
+    """
+    return _api.call(
+        "gbx_custom_geomkring",
+        geom,
+        grid,
+        resolution,
+        k,
+        mode,
+        coverage,
+    )
+
+
+def custom_grid(
+    bound_x_min: ColLike,
+    bound_x_max: ColLike,
+    bound_y_min: ColLike,
+    bound_y_max: ColLike,
+    cell_splits: ColLike,
+    root_cell_size_x: ColLike,
+    root_cell_size_y: ColLike,
+    srid: ColLike = None,
+) -> Column:
+    """Define a custom grid and return the grid struct the other `gbx_custom_*` functions take.
+
+    Args:
+        bound_x_min: The west edge of the grid.
+        bound_x_max: The east edge of the grid; it must be greater than the west edge.
+        bound_y_min: The south edge of the grid.
+        bound_y_max: The north edge of the grid; it must be greater than the south edge.
+        cell_splits: How many parts each cell splits into along each axis at the next
+            resolution; at least 2.
+        root_cell_size_x: The width of a resolution-0 cell; greater than 0.
+        root_cell_size_y: The height of a resolution-0 cell; greater than 0.
+        srid: The coordinate system of the grid, as an EPSG code; -1 for none. SQL
+            default: ``-1``.
+
+    Returns:
+        A struct holding the grid definition. A grid whose bounds or sizes are not valid
+        raises an error.
+
+    SQL: ``gbx_custom_grid(bound_x_min, bound_x_max, bound_y_min, bound_y_max, cell_splits, root_cell_size_x, root_cell_size_y, [srid])``
+    """
+    return _api.call(
+        "gbx_custom_grid",
+        bound_x_min,
+        bound_x_max,
+        bound_y_min,
+        bound_y_max,
+        cell_splits,
+        root_cell_size_x,
+        root_cell_size_y,
+        srid,
+    )
+
+
+def custom_kloop(
+    cell: ColLike,
+    grid: ColLike,
+    k: ColLike,
+) -> Column:
+    """Return the custom-grid cells at exactly ring distance k from a cell.
+
+    Args:
+        cell: The custom-grid cell id.
+        grid: The grid, as built by `gbx_custom_grid`.
+        k: The loop distance: only the cells at exactly this distance are returned.
+
+    Returns:
+        The cell ids of the hollow square at distance k (the cell itself for k = 0), or
+        NULL for a NULL argument.
+
+    SQL: ``gbx_custom_kloop(cell, grid, k)``
+    """
+    return _api.call(
+        "gbx_custom_kloop",
+        cell,
+        grid,
+        k,
+    )
+
+
+def custom_kring(
+    cell: ColLike,
+    grid: ColLike,
+    k: ColLike,
+) -> Column:
+    """Return the custom-grid cells within ring distance k of a cell, the cell included.
+
+    Args:
+        cell: The custom-grid cell id.
+        grid: The grid, as built by `gbx_custom_grid`.
+        k: The ring distance: 0 is the cell alone, 1 adds its eight neighbours.
+
+    Returns:
+        The cell ids of the filled square around the cell, cut off at the grid's edge,
+        or NULL for a NULL argument.
+
+    SQL: ``gbx_custom_kring(cell, grid, k)``
+    """
+    return _api.call(
+        "gbx_custom_kring",
+        cell,
+        grid,
+        k,
+    )
+
+
+def custom_pointascell(
+    point: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+) -> Column:
+    """Return the custom-grid cell that holds the first coordinate of a geometry.
+
+    Args:
+        point: The geometry: WKB, EWKB, WKT or EWKT, in the grid's coordinates.
+        grid: The grid, as built by `gbx_custom_grid`.
+        resolution: The grid resolution: 0 is the root cells, each level splits a cell
+            into `cell_splits` by `cell_splits`.
+
+    Returns:
+        The cell id, or NULL when the geometry is NULL, empty or not finite, or falls
+        outside the grid.
+
+    SQL: ``gbx_custom_pointascell(point, grid, resolution)``
+    """
+    return _api.call(
+        "gbx_custom_pointascell",
+        point,
+        grid,
+        resolution,
+    )
+
+
+def custom_polyfill(
+    geom: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+) -> Column:
+    """Return the custom-grid cells whose centre lies inside a geometry.
+
+    Args:
+        geom: The geometry: WKB, EWKB, WKT or EWKT, in the grid's coordinates.
+        grid: The grid, as built by `gbx_custom_grid`.
+        resolution: The grid resolution: 0 is the root cells, each level splits a cell
+            into `cell_splits` by `cell_splits`.
+
+    Returns:
+        The cell ids, or NULL for a NULL or unreadable geometry.
+
+    SQL: ``gbx_custom_polyfill(geom, grid, resolution)``
+    """
+    return _api.call(
+        "gbx_custom_polyfill",
+        geom,
+        grid,
+        resolution,
+    )
 
 
 # END GENERATED

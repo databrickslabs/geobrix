@@ -4166,40 +4166,6 @@ rst_custom_rastertogridstddev_python_heavy_example_output = """
 """
 
 
-def h3_cell_bbox_python_heavy_example(spark):
-    """Bounding box STRUCT for H3 cells in a given CRS (heavy tier scalar).
-
-    gbx_h3_cell_bbox is a scalar function — call it in a plain select over a
-    column of H3 cell ids. Builds a small DataFrame of NYC-area resolution-9
-    cell ids and requests the EPSG:4326 centroid-mode bbox (kring_pad default 0).
-    Returns STRUCT<xmin, ymin, xmax, ymax>.
-    """
-    if rx is None:
-        raise ImportError("rasterx not installed")
-    from pyspark.sql import functions as f
-
-    df = spark.createDataFrame(
-        [(617733151020810239,), (617733151085035519,), (617733151021334527,)],
-        ["cellid"],
-    )
-    return df.select(
-        "cellid",
-        rx.gbx_h3_cell_bbox("cellid", f.lit(4326), f.lit("centroids"), f.lit(0)).alias(
-            "bbox"
-        ),
-    ).take(3)
-
-
-h3_cell_bbox_python_heavy_example_output = """
-+------------------+------------------------------+
-|cellid            |bbox                          |
-+------------------+------------------------------+
-|617733151020810239|{-74.02, 40.70, -74.01, 40.71}|
-+------------------+------------------------------+
-(STRUCT<xmin, ymin, xmax, ymax> per H3 cell, in EPSG:4326)
-"""
-
-
 # ---------------------------------------------------------------------------
 # rst_binpoints — bin parallel x/y/z arrays into a Float32 raster tile (heavy tier)
 # Fixture: inline 3-point BNG (EPSG:27700) set, 10×10 pixel grid over 1 km extent

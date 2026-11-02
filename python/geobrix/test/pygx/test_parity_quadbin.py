@@ -39,6 +39,8 @@ from shapely import equals_exact, from_wkb, get_srid  # noqa: E402
 from shapely import to_wkb as _to_wkb  # noqa: E402
 from shapely.geometry import box as _box  # noqa: E402
 
+from databricks.labs.gbx.gridx.quadbin import functions as qx  # noqa: E402
+
 pytestmark = pytest.mark.integration
 
 _HERE = Path(__file__).resolve()
@@ -114,101 +116,6 @@ _POLYFILL_RES = 12
 # --- the full 10-function parity sweep --------------------------------------------------------
 
 
-def test_quadbin_full_parity(spark_with_jar):
-    """All 10 quadbin functions, light vs heavy, in one session (light first, then heavy)."""
-    from pyspark.sql import functions as f
-
-    from databricks.labs.gbx.gridx.quadbin import functions as hx
-    from databricks.labs.gbx.pygx import functions as gx
-
-    spark = spark_with_jar
-
-    # Seed cell + a k_ring cell-list computed via the lib so the INPUT is
-    # tier-independent — both tiers consume the SAME cell ids.
-    seed = quadbin.point_to_cell(_LON, _LAT, _RES)
-    union_cells = sorted(quadbin.k_ring(seed, 1))
-    cell_b = quadbin.point_to_cell(_LON + 1.0, _LAT + 1.0, _RES)  # same-res neighbour
-    box_wkb = bytearray(_to_wkb(_BOX))
-
-    df = spark.createDataFrame(
-        [(_LON, _LAT, _RES, seed, cell_b, union_cells, box_wkb)],
-        "lon double, lat double, res int, seed bigint, cell_b bigint, "
-        "cells array<bigint>, geom binary",
-    )
-
-    def scalar_row(mod):
-        mod.register(spark)
-        return df.select(
-            mod.quadbin_pointascell(f.col("lon"), f.col("lat"), f.col("res")).alias(
-                "pac"
-            ),
-            mod.quadbin_resolution(f.col("seed")).alias("res_of"),
-            mod.quadbin_kring(f.col("seed"), f.lit(1)).alias("kring"),
-            mod.quadbin_distance(f.col("seed"), f.col("cell_b")).alias("dist"),
-            mod.quadbin_polyfill(f.col("geom"), f.lit(_POLYFILL_RES)).alias("pf"),
-            mod.quadbin_aswkb(f.col("seed")).alias("aswkb"),
-            mod.quadbin_centroid(f.col("seed")).alias("centroid"),
-            mod.quadbin_cellunion(f.col("cells")).alias("cu"),
-        ).collect()[0]
-
-    def tess_rows(mod):
-        mod.register(spark)
-        exploded = df.select(
-            f.explode(
-                mod.quadbin_tessellate(f.col("geom"), f.lit(_POLYFILL_RES))
-            ).alias("chip")
-        ).select(f.col("chip.cell").alias("cell"), f.col("chip.geom").alias("geom"))
-        return {r["cell"]: r["geom"] for r in exploded.collect()}
-
-    def agg_blob(mod):
-        mod.register(spark)
-        return (
-            df.select(f.explode(f.col("cells")).alias("c"))
-            .agg(mod.quadbin_cellunion_agg(f.col("c")).alias("agg"))
-            .collect()[0]["agg"]
-        )
-
-    # ---- LIGHT first (the heavy register call overwrites the catalog names) ----
-    light = scalar_row(gx)
-    light_tess = tess_rows(gx)
-    light_agg = agg_blob(gx)
-
-    # ---- HEAVY (overwrites the gbx_quadbin_* SQL names) ----
-    heavy = scalar_row(hx)
-    heavy_tess = tess_rows(hx)
-    heavy_agg = agg_blob(hx)
-
-    # === cell-ID / set parity (EXACT) ===
-    assert (
-        light["pac"] == heavy["pac"]
-    ), f"pointascell mismatch: light={light['pac']} heavy={heavy['pac']}"
-    assert (
-        light["res_of"] == heavy["res_of"]
-    ), f"resolution mismatch: light={light['res_of']} heavy={heavy['res_of']}"
-    assert sorted(light["kring"]) == sorted(
-        heavy["kring"]
-    ), f"kring set mismatch:\n  light={sorted(light['kring'])}\n  heavy={sorted(heavy['kring'])}"
-    assert (
-        light["dist"] == heavy["dist"]
-    ), f"distance mismatch: light={light['dist']} heavy={heavy['dist']}"
-    assert sorted(light["pf"]) == sorted(
-        heavy["pf"]
-    ), f"polyfill cell-set mismatch:\n  light={sorted(light['pf'])}\n  heavy={sorted(heavy['pf'])}"
-    assert set(light_tess.keys()) == set(
-        heavy_tess.keys()
-    ), f"tessellate cell-set mismatch:\n  light={sorted(light_tess)}\n  heavy={sorted(heavy_tess)}"
-
-    # === geometry EWKB parity (within 1e-6) ===
-    _assert_geom_parity(light["aswkb"], heavy["aswkb"], "aswkb")
-    _assert_geom_parity(light["centroid"], heavy["centroid"], "centroid")
-    _assert_geom_parity(light["cu"], heavy["cu"], "cellunion")
-    _assert_geom_parity(light_agg, heavy_agg, "cellunion_agg")
-    for cell in light_tess:
-        _assert_geom_parity(
-            light_tess[cell], heavy_tess[cell], f"tessellate-chip cell={cell}"
-        )
-
-
 # --- risk-area edge cases (from the spec) -----------------------------------------------------
 
 
@@ -233,7 +140,7 @@ def test_pointascell_edge_antimeridian_and_pole(spark_with_jar):
         (179.9999, 89.0, 10),  # lat beyond the merc band -> clamps to LAT_MAX
     ]
     df = spark.createDataFrame(edge_pts, "lon double, lat double, res int")
-    col = gx.quadbin_pointascell(f.col("lon"), f.col("lat"), f.col("res")).alias("c")
+    col = qx.quadbin_pointascell(f.col("lon"), f.col("lat"), f.col("res")).alias("c")
 
     gx.register(spark)
     light = [r["c"] for r in df.select(col).collect()]
@@ -269,7 +176,7 @@ def test_polyfill_bbox_corner_tile_boundary(spark_with_jar):
     # NE corner lands a hair past the 11.25 (== 2 tiles) edge; SW a hair below 0.
     box_geom = _box(-0.0001, -0.0001, 11.2501, 11.2501)
     df = spark.createDataFrame([(bytearray(_to_wkb(box_geom)),)], "geom binary")
-    col = gx.quadbin_polyfill(f.col("geom"), f.lit(res)).alias("pf")
+    col = qx.quadbin_polyfill(f.col("geom"), f.lit(res)).alias("pf")
 
     gx.register(spark)
     light = sorted(df.select(col).collect()[0]["pf"])
@@ -308,7 +215,9 @@ def test_tessellate_touching_intersection(spark_with_jar):
     def tess(mod):
         mod.register(spark)
         exploded = df.select(
-            f.explode(mod.quadbin_tessellate(f.col("geom"), f.lit(res))).alias("chip")
+            f.explode(
+                f.call_function("gbx_quadbin_tessellate", f.col("geom"), f.lit(res))
+            ).alias("chip")
         ).select(f.col("chip.cell").alias("cell"), f.col("chip.geom").alias("geom"))
         return {r["cell"]: r["geom"] for r in exploded.collect()}
 
@@ -327,97 +236,4 @@ def test_tessellate_touching_intersection(spark_with_jar):
         )
 
 
-def test_null_geom_propagation(spark_with_jar):
-    """NULL geom -> SQL NULL (not empty array) for polyfill/tessellate, both tiers."""
-    from databricks.labs.gbx.gridx.quadbin import functions as hx
-    from databricks.labs.gbx.pygx import functions as gx
-
-    spark = spark_with_jar
-    df = spark.createDataFrame(
-        [(None,), (bytearray(_to_wkb(_box(-0.05, -0.05, 0.05, 0.05))),)], "geom binary"
-    )
-    df.createOrReplaceTempView("nullv")
-
-    def nulls(mod):
-        mod.register(spark)
-        rows = spark.sql(
-            "SELECT geom IS NULL AS g_null, "
-            "gbx_quadbin_polyfill(geom, 8) IS NULL AS pf_null, "
-            "gbx_quadbin_tessellate(geom, 8) IS NULL AS te_null FROM nullv"
-        ).collect()
-        return sorted((r["g_null"], r["pf_null"], r["te_null"]) for r in rows)
-
-    light = nulls(gx)  # light first
-    heavy = nulls(hx)  # heavy overwrites the SQL name
-    assert (True, True, True) in light  # null geom -> both fns NULL
-    assert (False, False, False) in light  # real geom -> not NULL
-    assert light == heavy
-
-
 # --- kloop cross-tier parity -----------------------------------------------
-
-
-def test_quadbin_kloop_parity(spark_with_jar):
-    """gbx_quadbin_kloop cross-tier parity: sorted cell-set equality at k=0, 1, 2.
-
-    kLoop semantics (FROZEN per stage-3 spec):
-      - k=0 → exactly [seed] (center cell only).
-      - k=1 → hollow ring of 8 cells at an interior position.
-      - k=2 → hollow outer ring (kring(2) minus kring(1)).
-      - Rings at different k values are pairwise disjoint.
-
-    Phase 1: register LIGHT (pygx UDFs) → collect results via gbx_quadbin_kloop SQL.
-    Phase 2: register HEAVY (JVM expressions overwrite the SQL name) → re-collect.
-    Assert sorted cell-ID lists are bit-exact across tiers for each k.
-    """
-    from databricks.labs.gbx.gridx.quadbin import functions as hx
-    from databricks.labs.gbx.pygx import functions as gx
-
-    spark = spark_with_jar
-    # Use the canonical SF z10 fixture cell (same as test_quadbin_full_parity).
-    seed = quadbin.point_to_cell(_LON, _LAT, _RES)
-
-    def collect_kloop():
-        """Collect kloop results at k=0,1,2 via the currently-registered SQL names."""
-        k0 = sorted(
-            spark.sql(f"SELECT gbx_quadbin_kloop({seed}L, 0) AS r").collect()[0]["r"]
-        )
-        k1 = sorted(
-            spark.sql(f"SELECT gbx_quadbin_kloop({seed}L, 1) AS r").collect()[0]["r"]
-        )
-        k2 = sorted(
-            spark.sql(f"SELECT gbx_quadbin_kloop({seed}L, 2) AS r").collect()[0]["r"]
-        )
-        return k0, k1, k2
-
-    # ---- LIGHT first (heavy register OVERWRITES the gbx_quadbin_* SQL names) ----
-    gx.register(spark)
-    light = collect_kloop()
-
-    # ---- HEAVY (overwrites the catalog names) ----
-    hx.register(spark)
-    heavy = collect_kloop()
-
-    # === cell-set parity (EXACT, sorted) ===
-    for ki, (lk, hk) in enumerate(zip(light, heavy)):
-        assert lk == hk, (
-            f"kloop k={ki} cell-set mismatch (the verbatim port and heavy DISAGREE; "
-            f"INVESTIGATE — do not weaken the test):\n  light={lk}\n  heavy={hk}\n"
-            f"  light_only={sorted(set(lk) - set(hk))} "
-            f"heavy_only={sorted(set(hk) - set(lk))}"
-        )
-
-    # === semantic invariants (verified against LIGHT; heavy must match above) ===
-    # k=0 → exactly [seed]: the FROZEN kLoop(k=0) → [center] contract.
-    assert light[0] == [seed], f"kloop k=0 must return exactly [seed]; got {light[0]}"
-    # At the SF z10 cell (interior position), k=1 ring has exactly 8 cells.
-    assert (
-        len(light[1]) == 8
-    ), f"kloop k=1 at an interior quadbin cell must have 8 cells; got {len(light[1])}"
-    # Rings at different k values are pairwise disjoint (hollow-ring contract).
-    assert not (
-        set(light[0]) & set(light[1])
-    ), f"k=0 and k=1 rings must be disjoint: overlap={set(light[0]) & set(light[1])}"
-    assert not (
-        set(light[1]) & set(light[2])
-    ), f"k=1 and k=2 rings must be disjoint: overlap={set(light[1]) & set(light[2])}"

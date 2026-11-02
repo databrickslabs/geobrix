@@ -70,8 +70,8 @@ object functions extends Serializable {
     def quadbin_cellunion(cells: Column): Column =
         ColumnAdapter(Quadbin_CellUnion.name, Seq(cells))
 
-    def quadbin_distance(cellA: Column, cellB: Column): Column =
-        ColumnAdapter(Quadbin_Distance.name, Seq(cellA, cellB))
+    def quadbin_distance(cellid1: Column, cellid2: Column): Column =
+        ColumnAdapter(Quadbin_Distance.name, Seq(cellid1, cellid2))
 
     def quadbin_kloop(cell: Column, k: Column): Column =
         ColumnAdapter(Quadbin_KLoop.name, Seq(cell, k))

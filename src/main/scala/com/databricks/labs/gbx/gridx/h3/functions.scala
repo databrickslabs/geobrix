@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.gridx.h3
 
 import com.databricks.labs.gbx.expressions.RegistryDelegate
+import com.databricks.labs.gbx.rasterx.expressions.grid.RST_H3_CellBBox
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
 import org.apache.spark.sql.functions.lit
 import org.apache.spark.sql.{Column, SparkSession}
@@ -46,4 +47,16 @@ object functions extends Serializable {
         ColumnAdapter(H3_CellFill.name, Seq(cellid, value, lit(k), lit(method)))
     def h3_cellfill(cellid: Column, value: Column, k: Int, method: String, power: Double): Column =
         ColumnAdapter(H3_CellFill.name, Seq(cellid, value, lit(k), lit(method), lit(power)))
+
+    /** `gbx_h3_cell_bbox(cellid, srid, mode, kring_pad, out_crs)`: the bounding box of an H3 cell. */
+    def h3_cell_bbox(cellid: Column): Column =
+        ColumnAdapter(RST_H3_CellBBox.name, Seq(cellid))
+    def h3_cell_bbox(cellid: Column, srid: Column): Column =
+        ColumnAdapter(RST_H3_CellBBox.name, Seq(cellid, srid))
+    def h3_cell_bbox(cellid: Column, srid: Column, mode: Column): Column =
+        ColumnAdapter(RST_H3_CellBBox.name, Seq(cellid, srid, mode))
+    def h3_cell_bbox(cellid: Column, srid: Column, mode: Column, kringPad: Column): Column =
+        ColumnAdapter(RST_H3_CellBBox.name, Seq(cellid, srid, mode, kringPad))
+    def h3_cell_bbox(cellid: Column, srid: Column, mode: Column, kringPad: Column, outCrs: Column): Column =
+        ColumnAdapter(RST_H3_CellBBox.name, Seq(cellid, srid, mode, kringPad, outCrs))
 }

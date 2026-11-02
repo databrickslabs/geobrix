@@ -1857,23 +1857,30 @@ See [Grid raster tessellation](./grid-raster-tessellation) for the coverage / as
 
 Aggregate raster values to H3 grid cells, and utility functions for H3-based canvas setup (9 total).
 
-### gbx_h3_cell_bbox
+### h3_cell_bbox
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_h3_cell_bbox: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_h3_cell_bbox(cellid, [srid], [mode], [kring_pad], [out_crs])` | `struct<xmin:double,ymin:double,xmax:double,ymax:double>` |
+| Python | `gridx.h3.functions.h3_cell_bbox(cellid, srid=None, mode=None, kring_pad=None, out_crs=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cellid` | `BIGINT` |  | The H3 cell id. |
+| `srid` | `INT` | `4326` | The EPSG code of the output coordinates. |
+| `mode` | `STRING` | `'centroids'` | `'centroids'` wraps the cell centres, `'spatial_envelope'` the whole hexagons. |
+| `kring_pad` | `INT` | `0` | How many rings of neighbours to include before taking the box; 0 is the cell alone. |
+| `out_crs` | `STRING` | `NULL` | The output coordinate system as `EPSG:<n>`, `ESRI:<n>` or WKT; when set it wins over `srid`. |
+{/* END GENERATED gbx_h3_cell_bbox */}
 
 :::note Lightweight tier (pyrx)
-Powered by **h3**. Returns a `STRUCT<xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE>` bounding box for the given H3 cell in the requested `srid`. In `'centroids'` mode the box tightly wraps the centroid point; in `'spatial_envelope'` mode it wraps the full hexagon outline. When `kring_pad > 0` the k-ring of that radius is computed first and the bounding box covers all cells in the ring. The lightweight SQL function requires all four arguments explicitly; the Python API (`rx.h3_cell_bbox(cellid, srid, mode, kring_pad)`) honors the same defaults as the Scala implementation.
+Powered by **h3**. Returns a `STRUCT<xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE>` bounding box for the given H3 cell in the requested `srid`. In `'centroids'` mode the box tightly wraps the centroid point; in `'spatial_envelope'` mode it wraps the full hexagon outline. When `kring_pad > 0` the k-ring of that radius is computed first and the bounding box covers all cells in the ring.
 :::
 
 Scalar function — returns the bounding box `STRUCT<xmin, ymin, xmax, ymax>` for one H3 cell in the given CRS. Use this to drive the `xmin/ymin/xmax/ymax` and grid-size parameters of [`rst_h3_rasterize_agg`](#rst_h3_rasterize_agg) when you need a consistent per-cell canvas, or to clip and inspect cell extents in downstream queries.
-
-**Signature:** `h3_cell_bbox(cellid: Column, srid: Column, mode: Column, kring_pad: Column): Column`
-
-**Parameters:**
-- `cellid` — H3 cell ID (BIGINT or STRING)
-- `srid` — EPSG code; `4326` for WGS 84 lon/lat
-- `mode` — `'centroids'` (centroid point envelope) or `'spatial_envelope'` (hexagon boundary envelope)
-- `kring_pad` — expand by this many k-rings before computing the bounding box; `0` = no expansion
 
 **Returns:** `STRUCT<xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE>`
 
@@ -1882,8 +1889,7 @@ Scalar function — returns the bounding box `STRUCT<xmin, ymin, xmax, ymax>` fo
 <FunctionExamples
   name="h3_cell_bbox"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />

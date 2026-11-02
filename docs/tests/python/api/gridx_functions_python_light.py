@@ -71,6 +71,9 @@ The Python (light) tab for these functions uses::
 This is the same invocation as the SQL tab, driven via Python. SQL ``LATERAL``
 works for both tiers; the DataFrame Column form is SQL-only for these generators.
 """
+from databricks.labs.gbx.gridx.custom import functions as cx
+from databricks.labs.gbx.gridx.h3 import functions as hx
+from databricks.labs.gbx.gridx.quadbin import functions as qx
 
 try:
     from databricks.labs.gbx.pygx import functions as gx
@@ -958,7 +961,7 @@ bng_tessellateexplode_python_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def quadbin_pointascell_python_light_example(spark):
+def quadbin_pointascell_python_example(spark):
     """Convert WGS84 lon/lat to a quadbin cell at a given zoom (light pygx tier).
 
     Creates an inline one-row DataFrame (lon=-122.4194, lat=37.7749, zoom=10)
@@ -966,18 +969,17 @@ def quadbin_pointascell_python_light_example(spark):
     ``5233961839712272383``.  Identical to the heavyweight output (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = spark.sql("SELECT -122.4194 AS lon, 37.7749 AS lat, 10 AS zoom")
     result = df.select(
-        gx.quadbin_pointascell(f.col("lon"), f.col("lat"), f.col("zoom")).alias(
+        qx.quadbin_pointascell(f.col("lon"), f.col("lat"), f.col("zoom")).alias(
             "sf_cell"
         )
     ).first()
     return result["sf_cell"]
 
 
-quadbin_pointascell_python_light_example_output = """
+quadbin_pointascell_python_example_output = """
 +-------------------+
 |sf_cell            |
 +-------------------+
@@ -986,7 +988,7 @@ quadbin_pointascell_python_light_example_output = """
 """
 
 
-def quadbin_aswkb_python_light_example(spark):
+def quadbin_aswkb_python_example(spark):
     """Return the quadbin cell footprint as EWKB geometry (light pygx tier).
 
     Reads the ``quadbin_cells`` setup view (1 row: ``cell = 5233961839712272383``,
@@ -994,14 +996,13 @@ def quadbin_aswkb_python_light_example(spark):
     EWKB bytes with embedded SRID 4326.  Identical to the heavyweight output (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = spark.table("quadbin_cells")
-    result = df.select(gx.quadbin_aswkb(f.col("cell")).alias("wkb")).first()
+    result = df.select(qx.quadbin_aswkb(f.col("cell")).alias("wkb")).first()
     return result["wkb"]
 
 
-quadbin_aswkb_python_light_example_output = """
+quadbin_aswkb_python_example_output = """
 +--------+
 |wkb     |
 +--------+
@@ -1011,7 +1012,7 @@ quadbin_aswkb_python_light_example_output = """
 """
 
 
-def quadbin_centroid_python_light_example(spark):
+def quadbin_centroid_python_example(spark):
     """Return the quadbin cell centroid as an EWKB POINT (light pygx tier).
 
     Reads the ``quadbin_cells`` setup view (``cell = 5233961839712272383``,
@@ -1019,14 +1020,13 @@ def quadbin_centroid_python_light_example(spark):
     EWKB POINT with embedded SRID 4326.  Identical to the heavyweight output (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = spark.table("quadbin_cells")
-    result = df.select(gx.quadbin_centroid(f.col("cell")).alias("centroid")).first()
+    result = df.select(qx.quadbin_centroid(f.col("cell")).alias("centroid")).first()
     return result["centroid"]
 
 
-quadbin_centroid_python_light_example_output = """
+quadbin_centroid_python_example_output = """
 +-----------+
 |centroid   |
 +-----------+
@@ -1036,7 +1036,7 @@ quadbin_centroid_python_light_example_output = """
 """
 
 
-def quadbin_resolution_python_light_example(spark):
+def quadbin_resolution_python_example(spark):
     """Return the resolution (zoom) of a quadbin cell (light pygx tier).
 
     Reads the ``quadbin_cells`` setup view (``cell = 5233961839712272383``,
@@ -1044,14 +1044,13 @@ def quadbin_resolution_python_light_example(spark):
     Identical to the heavyweight output (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = spark.table("quadbin_cells")
-    result = df.select(gx.quadbin_resolution(f.col("cell")).alias("z")).first()
+    result = df.select(qx.quadbin_resolution(f.col("cell")).alias("z")).first()
     return result["z"]
 
 
-quadbin_resolution_python_light_example_output = """
+quadbin_resolution_python_example_output = """
 +--+
 |z |
 +--+
@@ -1060,7 +1059,7 @@ quadbin_resolution_python_light_example_output = """
 """
 
 
-def quadbin_distance_python_light_example(spark):
+def quadbin_distance_python_example(spark):
     """Chebyshev distance between two adjacent quadbin cells (light pygx tier).
 
     Reads the ``quadbin_cell_pairs`` setup view (1 row: ``cell1`` and ``cell2``
@@ -1068,16 +1067,15 @@ def quadbin_distance_python_light_example(spark):
     Returns INT.  Identical to the heavyweight output (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = spark.table("quadbin_cell_pairs")
     result = df.select(
-        gx.quadbin_distance(f.col("cell1"), f.col("cell2")).alias("d")
+        qx.quadbin_distance(f.col("cell1"), f.col("cell2")).alias("d")
     ).first()
     return result["d"]
 
 
-quadbin_distance_python_light_example_output = """
+quadbin_distance_python_example_output = """
 +--+
 |d |
 +--+
@@ -1102,7 +1100,7 @@ quadbin_distance_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def quadbin_kring_python_light_example(spark):
+def quadbin_kring_python_example(spark):
     """Return all quadbin cells within Chebyshev distance k of a cell (light pygx tier).
 
     Reads the ``quadbin_cells`` setup view (cell = 5233961839712272383, SF at
@@ -1111,14 +1109,13 @@ def quadbin_kring_python_light_example(spark):
     (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = spark.table("quadbin_cells")
-    result = df.select(gx.quadbin_kring(f.col("cell"), f.lit(1)).alias("kring")).first()
+    result = df.select(qx.quadbin_kring(f.col("cell"), f.lit(1)).alias("kring")).first()
     return result["kring"]
 
 
-quadbin_kring_python_light_example_output = """
+quadbin_kring_python_example_output = """
 +-------------------------------------+
 |kring                                |
 +-------------------------------------+
@@ -1128,7 +1125,7 @@ quadbin_kring_python_light_example_output = """
 """
 
 
-def quadbin_polyfill_python_light_example(spark):
+def quadbin_polyfill_python_example(spark):
     """Polyfill a WGS84 geometry with quadbin cells at a given zoom (light pygx tier).
 
     Reads the ``quadbin_polygons`` setup view (WGS84 polygon
@@ -1137,16 +1134,15 @@ def quadbin_polyfill_python_light_example(spark):
     Identical to the heavyweight output (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = spark.table("quadbin_polygons")
     result = df.select(
-        gx.quadbin_polyfill(f.col("geom"), f.lit(5)).alias("cells")
+        qx.quadbin_polyfill(f.col("geom"), f.lit(5)).alias("cells")
     ).first()
     return result["cells"]
 
 
-quadbin_polyfill_python_light_example_output = """
+quadbin_polyfill_python_example_output = """
 +--------------------------+
 |cells                     |
 +--------------------------+
@@ -1156,7 +1152,7 @@ quadbin_polyfill_python_light_example_output = """
 """
 
 
-def quadbin_tessellate_python_light_example(spark):
+def quadbin_tessellate_python_example(spark):
     """Tessellate a WGS84 geometry into quadbin cells with per-cell clip geometry (light pygx tier).
 
     Reads the ``quadbin_polygons`` setup view (WGS84 polygon near origin).
@@ -1166,16 +1162,15 @@ def quadbin_tessellate_python_light_example(spark):
     Identical to the heavyweight output (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = spark.table("quadbin_polygons")
     result = df.select(
-        gx.quadbin_tessellate(f.col("geom"), f.lit(5)).alias("chips")
+        qx.quadbin_tessellate(f.col("geom"), f.lit(5)).alias("chips")
     ).first()
     return result["chips"]
 
 
-quadbin_tessellate_python_light_example_output = """
+quadbin_tessellate_python_example_output = """
 +----------------------------------------------+
 |chips                                         |
 +----------------------------------------------+
@@ -1185,7 +1180,7 @@ quadbin_tessellate_python_light_example_output = """
 """
 
 
-def quadbin_cellunion_python_light_example(spark):
+def quadbin_cellunion_python_example(spark):
     """Dissolve an array of quadbin cells into a single MultiPolygon EWKB (light pygx tier).
 
     Reads the ``quadbin_cells`` setup view (cell = 5233961839712272383, SF at z10)
@@ -1193,18 +1188,17 @@ def quadbin_cellunion_python_light_example(spark):
     EWKB with embedded SRID 4326.  Identical to the heavyweight output (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = spark.table("quadbin_cells")
     result = df.select(
-        gx.quadbin_cellunion(gx.quadbin_kring(f.col("cell"), f.lit(1))).alias(
+        qx.quadbin_cellunion(qx.quadbin_kring(f.col("cell"), f.lit(1))).alias(
             "union_geom"
         )
     ).first()
     return result["union_geom"]
 
 
-quadbin_cellunion_python_light_example_output = """
+quadbin_cellunion_python_example_output = """
 +-----------+
 |union_geom |
 +-----------+
@@ -1268,7 +1262,7 @@ _BNG_POLY_WKT = (
 )
 
 
-def custom_grid_python_light_example(spark):
+def custom_grid_python_example(spark):
     """Construct a custom regular grid descriptor (light pygx tier).
 
     Calls ``gx.custom_grid`` directly on a one-row DataFrame to build the BNG-like
@@ -1277,11 +1271,10 @@ def custom_grid_python_light_example(spark):
     ``gbx_custom_*`` functions.  Identical to the heavyweight output (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     base = spark.sql("SELECT 1 AS dummy")
     result = base.select(
-        gx.custom_grid(
+        cx.custom_grid(
             f.lit(0),
             f.lit(1000000),
             f.lit(0),
@@ -1295,7 +1288,7 @@ def custom_grid_python_light_example(spark):
     return result["grid"]
 
 
-custom_grid_python_light_example_output = """
+custom_grid_python_example_output = """
 +----------------------------------------------+
 |grid                                          |
 +----------------------------------------------+
@@ -1304,7 +1297,7 @@ custom_grid_python_light_example_output = """
 """
 
 
-def custom_pointascell_python_light_example(spark):
+def custom_pointascell_python_example(spark):
     """Index a WKT point into a custom grid at a given resolution (light pygx tier).
 
     Reads the ``custom_grids`` setup view (``point = 'POINT(530000 180000)'`` and
@@ -1313,16 +1306,15 @@ def custom_pointascell_python_light_example(spark):
     Identical to the heavyweight output (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = _get_custom_grid_df(spark)
     result = df.select(
-        gx.custom_pointascell(f.col("point"), f.col("grid"), f.lit(5)).alias("cell")
+        cx.custom_pointascell(f.col("point"), f.col("grid"), f.lit(5)).alias("cell")
     ).first()
     return result["cell"]
 
 
-custom_pointascell_python_light_example_output = """
+custom_pointascell_python_example_output = """
 +--------------------+
 |cell                |
 +--------------------+
@@ -1331,7 +1323,7 @@ custom_pointascell_python_light_example_output = """
 """
 
 
-def custom_cellaswkb_python_light_example(spark):
+def custom_cellaswkb_python_example(spark):
     """Return the WKB footprint polygon of a custom grid cell (light pygx tier).
 
     Reads the ``custom_grids`` setup view (``cell = 360287970373976640`` at resolution 5,
@@ -1340,16 +1332,15 @@ def custom_cellaswkb_python_light_example(spark):
     Identical to the heavyweight output (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = _get_custom_grid_df(spark)
     result = df.select(
-        gx.custom_cellaswkb(f.col("cell"), f.col("grid")).alias("geom")
+        cx.custom_cellaswkb(f.col("cell"), f.col("grid")).alias("geom")
     ).first()
     return result["geom"]
 
 
-custom_cellaswkb_python_light_example_output = """
+custom_cellaswkb_python_example_output = """
 +--------+
 |geom    |
 +--------+
@@ -1359,7 +1350,7 @@ custom_cellaswkb_python_light_example_output = """
 """
 
 
-def custom_cellaswkt_python_light_example(spark):
+def custom_cellaswkt_python_example(spark):
     """Return the WKT footprint polygon of a custom grid cell (light pygx tier).
 
     Reads the ``custom_grids`` setup view (``cell = 360287970373976640``,
@@ -1368,16 +1359,15 @@ def custom_cellaswkt_python_light_example(spark):
     Identical to the heavyweight output (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = _get_custom_grid_df(spark)
     result = df.select(
-        gx.custom_cellaswkt(f.col("cell"), f.col("grid")).alias("wkt")
+        cx.custom_cellaswkt(f.col("cell"), f.col("grid")).alias("wkt")
     ).first()
     return result["wkt"]
 
 
-custom_cellaswkt_python_light_example_output = """
+custom_cellaswkt_python_example_output = """
 +----------------------------------------------------------------------------------------------------+
 |wkt                                                                                                 |
 +----------------------------------------------------------------------------------------------------+
@@ -1386,7 +1376,7 @@ custom_cellaswkt_python_light_example_output = """
 """
 
 
-def custom_centroid_python_light_example(spark):
+def custom_centroid_python_example(spark):
     """Return the centroid of a custom grid cell as a WKB POINT (light pygx tier).
 
     Reads the ``custom_grids`` setup view (``cell = 360287970373976640``,
@@ -1394,16 +1384,15 @@ def custom_centroid_python_light_example(spark):
     WKB (no SRID).  Identical to the heavyweight output (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = _get_custom_grid_df(spark)
     result = df.select(
-        gx.custom_centroid(f.col("cell"), f.col("grid")).alias("centroid")
+        cx.custom_centroid(f.col("cell"), f.col("grid")).alias("centroid")
     ).first()
     return result["centroid"]
 
 
-custom_centroid_python_light_example_output = """
+custom_centroid_python_example_output = """
 +-----------+
 |centroid   |
 +-----------+
@@ -1413,7 +1402,7 @@ custom_centroid_python_light_example_output = """
 """
 
 
-def custom_polyfill_python_light_example(spark):
+def custom_polyfill_python_example(spark):
     """Fill a BNG polygon with custom grid cells at resolution 1 (500m cells) — light pygx tier.
 
     Reads the ``custom_grids`` setup view for the ``grid`` struct and uses the
@@ -1422,16 +1411,15 @@ def custom_polyfill_python_light_example(spark):
     Returns ``ARRAY<BIGINT>``.  Identical to the heavyweight output (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = _get_custom_grid_df(spark)
     result = df.select(
-        gx.custom_polyfill(f.lit(_BNG_POLY_WKT), f.col("grid"), f.lit(1)).alias("cells")
+        cx.custom_polyfill(f.lit(_BNG_POLY_WKT), f.col("grid"), f.lit(1)).alias("cells")
     ).first()
     return result["cells"]
 
 
-custom_polyfill_python_light_example_output = """
+custom_polyfill_python_example_output = """
 +---------------------------------------------+
 |cells                                        |
 +---------------------------------------------+
@@ -1441,7 +1429,7 @@ custom_polyfill_python_light_example_output = """
 """
 
 
-def custom_kring_python_light_example(spark):
+def custom_kring_python_example(spark):
     """Return the 3×3 neighbourhood (k=1) around a custom grid cell (light pygx tier).
 
     Reads the ``custom_grids`` setup view (``cell = 360287970373976640`` at resolution 5,
@@ -1450,16 +1438,15 @@ def custom_kring_python_light_example(spark):
     Identical to the heavyweight output (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = _get_custom_grid_df(spark)
     result = df.select(
-        gx.custom_kring(f.col("cell"), f.col("grid"), f.lit(1)).alias("ring")
+        cx.custom_kring(f.col("cell"), f.col("grid"), f.lit(1)).alias("ring")
     ).first()
     return result["ring"]
 
 
-custom_kring_python_light_example_output = """
+custom_kring_python_example_output = """
 +-------------------------------------------+
 |ring                                       |
 +-------------------------------------------+
@@ -1482,7 +1469,7 @@ custom_kring_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def quadbin_geomkring_python_light_example(spark):
+def quadbin_geomkring_python_example(spark):
     """Geometry-aware quadbin k-ring: all cells within k steps of the geometry's covering set (light pygx tier).
 
     Reads the ``quadbin_polygons`` setup view (WGS84 polygon near origin).
@@ -1490,16 +1477,15 @@ def quadbin_geomkring_python_light_example(spark):
     Returns ``ARRAY<BIGINT>``.  Identical to the heavyweight output (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = _get_quadbin_polygons_df(spark)
     result = df.select(
-        gx.quadbin_geomkring(f.col("geom"), f.lit(12), f.lit(1)).alias("kring")
+        qx.quadbin_geomkring(f.col("geom"), f.lit(12), f.lit(1)).alias("kring")
     ).first()
     return result["kring"]
 
 
-quadbin_geomkring_python_light_example_output = """
+quadbin_geomkring_python_example_output = """
 +-------------------------------------+
 |kring                                |
 +-------------------------------------+
@@ -1509,7 +1495,7 @@ quadbin_geomkring_python_light_example_output = """
 """
 
 
-def quadbin_geomkloop_python_light_example(spark):
+def quadbin_geomkloop_python_example(spark):
     """Geometry-aware quadbin k-loop: hollow ring at exactly k steps from the geometry (light pygx tier).
 
     Reads the ``quadbin_polygons`` setup view (WGS84 polygon near origin).
@@ -1517,16 +1503,15 @@ def quadbin_geomkloop_python_light_example(spark):
     Returns ``ARRAY<BIGINT>``.  Identical to the heavyweight output (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = _get_quadbin_polygons_df(spark)
     result = df.select(
-        gx.quadbin_geomkloop(f.col("geom"), f.lit(12), f.lit(1)).alias("kloop")
+        qx.quadbin_geomkloop(f.col("geom"), f.lit(12), f.lit(1)).alias("kloop")
     ).first()
     return result["kloop"]
 
 
-quadbin_geomkloop_python_light_example_output = """
+quadbin_geomkloop_python_example_output = """
 +-------------------------------------+
 |kloop                                |
 +-------------------------------------+
@@ -1616,7 +1601,7 @@ _CUSTOM_GEOMK_OFFSET_WKT = (
 )
 
 
-def custom_geomkring_python_light_example(spark):
+def custom_geomkring_python_example(spark):
     """Geometry-aware custom-grid k-ring: all cells within k steps of the geometry's covering set (light pygx tier).
 
     Reads the ``custom_grids`` setup view.  Uses an offset 3km × 3km BNG polygon
@@ -1625,16 +1610,15 @@ def custom_geomkring_python_light_example(spark):
     Identical to heavyweight (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = _get_custom_grid_df(spark)
     result = df.select(
-        gx.custom_geomkring(f.lit(_CUSTOM_GEOMK_OFFSET_WKT), f.col("grid"), f.lit(1), f.lit(1)).alias("kring")
+        cx.custom_geomkring(f.lit(_CUSTOM_GEOMK_OFFSET_WKT), f.col("grid"), f.lit(1), f.lit(1)).alias("kring")
     ).first()
     return result["kring"]
 
 
-custom_geomkring_python_light_example_output = """
+custom_geomkring_python_example_output = """
 +-------------------------------------------+
 |kring                                      |
 +-------------------------------------------+
@@ -1644,7 +1628,7 @@ custom_geomkring_python_light_example_output = """
 """
 
 
-def custom_geomkloop_python_light_example(spark):
+def custom_geomkloop_python_example(spark):
     """Geometry-aware custom-grid k-loop: hollow outer ring at exactly k steps (light pygx tier).
 
     Reads the ``custom_grids`` setup view.  Uses an offset 3km × 3km BNG polygon
@@ -1653,16 +1637,15 @@ def custom_geomkloop_python_light_example(spark):
     Identical to heavyweight (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = _get_custom_grid_df(spark)
     result = df.select(
-        gx.custom_geomkloop(f.lit(_CUSTOM_GEOMK_OFFSET_WKT), f.col("grid"), f.lit(1), f.lit(1)).alias("kloop")
+        cx.custom_geomkloop(f.lit(_CUSTOM_GEOMK_OFFSET_WKT), f.col("grid"), f.lit(1), f.lit(1)).alias("kloop")
     ).first()
     return result["kloop"]
 
 
-custom_geomkloop_python_light_example_output = """
+custom_geomkloop_python_example_output = """
 +-------------------------------------------+
 |kloop                                      |
 +-------------------------------------------+
@@ -1755,7 +1738,7 @@ _NYC_WKT_FOR_H3 = (
 )
 
 
-def h3_geomkring_python_light_example(spark):
+def h3_geomkring_python_example(spark):
     """Geometry-aware H3 k-ring from a WKB geometry column (light pygx tier).
 
     Creates a single-row DataFrame with the NYC box as WKB, then calls
@@ -1767,17 +1750,16 @@ def h3_geomkring_python_light_example(spark):
     from shapely import to_wkb  # noqa: PLC0415
     from shapely.geometry import box  # noqa: PLC0415
 
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     geom_wkb = to_wkb(box(-73.99, 40.71, -73.95, 40.75))
     df = spark.createDataFrame([(bytearray(geom_wkb),)], ["geom"])
     result = df.select(
-        gx.h3_geomkring(f.col("geom"), 9, 1).alias("kring")
+        hx.h3_geomkring(f.col("geom"), 9, 1).alias("kring")
     ).first()
     return result["kring"]
 
 
-h3_geomkring_python_light_example_output = """
+h3_geomkring_python_example_output = """
 +------------------------------------+
 |kring                               |
 +------------------------------------+
@@ -1787,7 +1769,7 @@ h3_geomkring_python_light_example_output = """
 """
 
 
-def h3_geomkloop_python_light_example(spark):
+def h3_geomkloop_python_example(spark):
     """Geometry-aware H3 k-loop (hollow shell) from a WKB geometry column (light pygx tier).
 
     At k=1 returns only the outer shell cells at exactly one step from the
@@ -1797,17 +1779,16 @@ def h3_geomkloop_python_light_example(spark):
     from shapely import to_wkb  # noqa: PLC0415
     from shapely.geometry import box  # noqa: PLC0415
 
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     geom_wkb = to_wkb(box(-73.99, 40.71, -73.95, 40.75))
     df = spark.createDataFrame([(bytearray(geom_wkb),)], ["geom"])
     result = df.select(
-        gx.h3_geomkloop(f.col("geom"), 9, 1).alias("kloop")
+        hx.h3_geomkloop(f.col("geom"), 9, 1).alias("kloop")
     ).first()
     return result["kloop"]
 
 
-h3_geomkloop_python_light_example_output = """
+h3_geomkloop_python_example_output = """
 +------------------------------------+
 |kloop                               |
 +------------------------------------+
@@ -2067,9 +2048,9 @@ def custom_cellfill_python_light_example(spark):
     df_grid = _get_custom_grid_df(spark)
     # Derive valid cell IDs from the fixture grid at resolution 0 (1000m cells)
     center_row = df_grid.select(
-        gx.custom_pointascell(f.lit("POINT(530000 180000)"), f.col("grid"), f.lit(0)).alias("center"),
-        gx.custom_pointascell(f.lit("POINT(531000 180000)"), f.col("grid"), f.lit(0)).alias("nbr1"),
-        gx.custom_pointascell(f.lit("POINT(531000 181000)"), f.col("grid"), f.lit(0)).alias("nbr2"),
+        cx.custom_pointascell(f.lit("POINT(530000 180000)"), f.col("grid"), f.lit(0)).alias("center"),
+        cx.custom_pointascell(f.lit("POINT(531000 180000)"), f.col("grid"), f.lit(0)).alias("nbr1"),
+        cx.custom_pointascell(f.lit("POINT(531000 181000)"), f.col("grid"), f.lit(0)).alias("nbr2"),
         f.col("grid"),
     ).first()
     center_id = center_row["center"]
@@ -2115,7 +2096,7 @@ custom_cellfill_python_light_example_output = """
 # -- Quadbin kloop -----------------------------------------------------------
 
 
-def quadbin_kloop_python_light_example(spark):
+def quadbin_kloop_python_example(spark):
     """Return the 8-cell hollow ring at exactly k=1 around a quadbin cell (light pygx tier).
 
     Reads the ``quadbin_cells`` setup view (cell = 5233961839712272383, SF at z10).
@@ -2123,16 +2104,15 @@ def quadbin_kloop_python_light_example(spark):
     ``ARRAY<BIGINT>``.  Identical to the heavyweight output (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = _get_quadbin_cells_df(spark)
     result = df.select(
-        gx.quadbin_kloop(f.col("cell"), f.lit(1)).alias("kloop")
+        qx.quadbin_kloop(f.col("cell"), f.lit(1)).alias("kloop")
     ).first()
     return result["kloop"]
 
 
-quadbin_kloop_python_light_example_output = """
+quadbin_kloop_python_example_output = """
 +-------------------------------+
 |kloop                          |
 +-------------------------------+
@@ -2145,7 +2125,7 @@ quadbin_kloop_python_light_example_output = """
 # -- Custom kloop ------------------------------------------------------------
 
 
-def custom_kloop_python_light_example(spark):
+def custom_kloop_python_example(spark):
     """Return the 8-cell hollow ring at exactly k=1 around a custom-grid cell (light pygx tier).
 
     Reads the ``custom_grids`` setup view (``cell = 360287970373976640`` at res=5,
@@ -2153,16 +2133,15 @@ def custom_kloop_python_light_example(spark):
     Returns ``ARRAY<BIGINT>``.  Identical to the heavyweight output (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = _get_custom_grid_df(spark)
     result = df.select(
-        gx.custom_kloop(f.col("cell"), f.col("grid"), f.lit(1)).alias("kloop")
+        cx.custom_kloop(f.col("cell"), f.col("grid"), f.lit(1)).alias("kloop")
     ).first()
     return result["kloop"]
 
 
-custom_kloop_python_light_example_output = """
+custom_kloop_python_example_output = """
 +-----------------------+
 |kloop                  |
 +-----------------------+
@@ -2175,7 +2154,7 @@ custom_kloop_python_light_example_output = """
 # -- Custom distance ---------------------------------------------------------
 
 
-def custom_distance_python_light_example(spark):
+def custom_distance_python_example(spark):
     """Chebyshev distance between two custom-grid cells (light pygx tier).
 
     Reads the ``custom_grids`` setup view for the grid spec.  Computes two
@@ -2185,20 +2164,19 @@ def custom_distance_python_light_example(spark):
     Identical to the heavyweight output (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = _get_custom_grid_df(spark)
     result = df.select(
-        gx.custom_distance(
-            gx.custom_pointascell(f.lit("POINT(530000 180000)"), f.col("grid"), f.lit(0)),
+        cx.custom_distance(
+            cx.custom_pointascell(f.lit("POINT(530000 180000)"), f.col("grid"), f.lit(0)),
             f.col("grid"),
-            gx.custom_pointascell(f.lit("POINT(531000 180000)"), f.col("grid"), f.lit(0)),
+            cx.custom_pointascell(f.lit("POINT(531000 180000)"), f.col("grid"), f.lit(0)),
         ).alias("dist")
     ).first()
     return result["dist"]
 
 
-custom_distance_python_light_example_output = """
+custom_distance_python_example_output = """
 +----+
 |dist|
 +----+

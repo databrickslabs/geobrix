@@ -1666,10 +1666,10 @@
     "gbx_h3_cell_bbox": {
       "examples": "Examples:\n      > SELECT cellid, gbx_h3_cell_bbox(cellid, 4326, 'centroids', 0) AS bbox FROM ( VALUES (617733151020810239), (617733151085035519), (617733151021334527) ) AS t(cellid);",
       "usage_args": "cellid, [srid], [mode], [kring_pad], [out_crs]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the bounding box of an H3 cell, or of the cells around it, in a chosen coordinate system.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -1687,9 +1687,11 @@
     },
     "gbx_h3_geomkloop": {
       "examples": "Examples:\n      > SELECT gbx_h3_geomkloop( 'POLYGON((-73.99 40.71, -73.99 40.75, -73.95 40.75, -73.95 40.71, -73.99 40.71))', 9, 1, 'boundary-out' ) AS kloop;",
-      "bindings": [
-        "sql",
-        "python-light"
+      "usage_args": "geom, resolution, k, [mode], [coverage]",
+      "description": "Return the H3 cells at exactly k rings from a geometry.",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.5.1"
     },
@@ -1703,9 +1705,11 @@
     },
     "gbx_h3_geomkring": {
       "examples": "Examples:\n      > SELECT gbx_h3_geomkring( 'POLYGON((-73.99 40.71, -73.99 40.75, -73.95 40.75, -73.95 40.71, -73.99 40.71))', 9, 1, 'boundary-out' ) AS kring;",
-      "bindings": [
-        "sql",
-        "python-light"
+      "usage_args": "geom, resolution, k, [mode], [coverage]",
+      "description": "Return the H3 cells of a geometry dilated by k rings.",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.5.1"
     },
@@ -1981,10 +1985,10 @@
     "gbx_custom_cellaswkb": {
       "examples": "Examples:\n      > SELECT gbx_custom_cellaswkb(360287970373976640, gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700)) AS geom;",
       "usage_args": "cell, grid",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the footprint of a custom-grid cell as a WKB polygon.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -1992,10 +1996,10 @@
     "gbx_custom_cellaswkt": {
       "examples": "Examples:\n      > SELECT gbx_custom_cellaswkt(360287970373976640, gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700)) AS wkt;",
       "usage_args": "cell, grid",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the footprint of a custom-grid cell as WKT.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -2014,10 +2018,10 @@
     "gbx_custom_centroid": {
       "examples": "Examples:\n      > SELECT gbx_custom_centroid(360287970373976640, gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700)) AS centroid;",
       "usage_args": "cell, grid",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the centre of a custom-grid cell as a WKB point.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -2025,10 +2029,10 @@
     "gbx_custom_distance": {
       "examples": "Examples:\n      > SELECT gbx_custom_distance( gbx_custom_pointascell('POINT(530000 180000)', gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700), 0), gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700), gbx_custom_pointascell('POINT(531000 180000)', gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700), 0) ) AS dist;",
       "usage_args": "cellid1, grid, cellid2",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the distance in cells between two custom-grid cells of the same resolution.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.1"
@@ -2036,10 +2040,10 @@
     "gbx_custom_geomkloop": {
       "examples": "Examples:\n      > SELECT gbx_custom_geomkloop( 'POLYGON((530200 180200, 534800 180200, 534800 184800, 530200 184800, 530200 180200))', gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700), 0, 1, 'boundary-out' ) AS kloop;",
       "usage_args": "geom, grid, resolution, k, [mode], [coverage]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the custom-grid cells at exactly k rings from a geometry.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.1"
@@ -2058,10 +2062,10 @@
     "gbx_custom_geomkring": {
       "examples": "Examples:\n      > SELECT gbx_custom_geomkring( 'POLYGON((530200 180200, 534800 180200, 534800 184800, 530200 184800, 530200 180200))', gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700), 0, 1, 'boundary-out' ) AS kring;",
       "usage_args": "geom, grid, resolution, k, [mode], [coverage]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the custom-grid cells of a geometry dilated by k rings.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.1"
@@ -2079,11 +2083,11 @@
     },
     "gbx_custom_grid": {
       "examples": "Examples:\n      > SELECT gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700) AS grid;",
-      "usage_args": "bound_x_min, bound_x_max, bound_y_min, bound_y_max, cell_splits, root_cell_size_x, root_cell_size_y, srid",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "usage_args": "bound_x_min, bound_x_max, bound_y_min, bound_y_max, cell_splits, root_cell_size_x, root_cell_size_y, [srid]",
+      "description": "Define a custom grid and return the grid struct the other `gbx_custom_*` functions take.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -2091,10 +2095,10 @@
     "gbx_custom_kloop": {
       "examples": "Examples:\n      > SELECT gbx_custom_kloop(360287970373976640, gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700), 1) AS kloop;",
       "usage_args": "cell, grid, k",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the custom-grid cells at exactly ring distance k from a cell.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.1"
@@ -2102,10 +2106,10 @@
     "gbx_custom_kring": {
       "examples": "Examples:\n      > SELECT gbx_custom_kring(360287970373976640, gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700), 1) AS ring;",
       "usage_args": "cell, grid, k",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the custom-grid cells within ring distance k of a cell, the cell included.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -2113,10 +2117,10 @@
     "gbx_custom_pointascell": {
       "examples": "Examples:\n      > SELECT gbx_custom_pointascell('POINT(530000 180000)', gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700), 5) AS cell;",
       "usage_args": "point, grid, resolution",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the custom-grid cell that holds the first coordinate of a geometry.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -2124,10 +2128,10 @@
     "gbx_custom_polyfill": {
       "examples": "Examples:\n      > SELECT gbx_custom_polyfill('POLYGON((529000 179000,529000 182000,532000 182000,532000 179000,529000 179000))', gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700), 1) AS cells;",
       "usage_args": "geom, grid, resolution",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the custom-grid cells whose centre lies inside a geometry.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -2345,10 +2349,10 @@
     "gbx_quadbin_aswkb": {
       "examples": "Examples:\n      > SELECT gbx_quadbin_aswkb(gbx_quadbin_pointascell(-122.4194, 37.7749, 10)) AS wkb;",
       "usage_args": "cell",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the footprint of a quadbin cell as an EWKB polygon in EPSG:4326.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -2367,10 +2371,10 @@
     "gbx_quadbin_cellunion": {
       "examples": "Examples:\n      > SELECT gbx_quadbin_cellunion( gbx_quadbin_kring(gbx_quadbin_pointascell(-122.4194, 37.7749, 10), 1) ) AS union_geom;",
       "usage_args": "cells",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the union of an array of quadbin cells as an EWKB polygon in EPSG:4326.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -2389,10 +2393,10 @@
     "gbx_quadbin_centroid": {
       "examples": "Examples:\n      > SELECT gbx_quadbin_centroid(gbx_quadbin_pointascell(-122.4194, 37.7749, 10)) AS centroid;",
       "usage_args": "cell",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the centre of a quadbin cell as an EWKB point in EPSG:4326.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -2400,10 +2404,10 @@
     "gbx_quadbin_distance": {
       "examples": "Examples:\n      > SELECT gbx_quadbin_distance( gbx_quadbin_pointascell(0.0, 0.0, 10), gbx_quadbin_pointascell(0.0, 0.1, 10) ) AS d;",
       "usage_args": "cellid1, cellid2",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the distance in cells between two quadbin cells of the same zoom level.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -2411,10 +2415,10 @@
     "gbx_quadbin_geomkloop": {
       "examples": "Examples:\n      > SELECT gbx_quadbin_geomkloop( 'POLYGON((-73.99 40.71, -73.95 40.71, -73.95 40.75, -73.99 40.75, -73.99 40.71))', 12, 1, 'boundary-out' ) AS kloop;",
       "usage_args": "geom, resolution, k, [mode], [coverage]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the quadbin cells at exactly k rings from a geometry.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.1"
@@ -2433,10 +2437,10 @@
     "gbx_quadbin_geomkring": {
       "examples": "Examples:\n      > SELECT gbx_quadbin_geomkring( 'POLYGON((-73.99 40.71, -73.95 40.71, -73.95 40.75, -73.99 40.75, -73.99 40.71))', 12, 1, 'boundary-out' ) AS kring;",
       "usage_args": "geom, resolution, k, [mode], [coverage]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the quadbin cells of a geometry dilated by k rings.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.1"
@@ -2455,10 +2459,10 @@
     "gbx_quadbin_kloop": {
       "examples": "Examples:\n      > SELECT gbx_quadbin_kloop(gbx_quadbin_pointascell(-122.4194, 37.7749, 10), 1) AS kloop;",
       "usage_args": "cell, k",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the quadbin cells at exactly ring distance k from a cell.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.1"
@@ -2466,10 +2470,10 @@
     "gbx_quadbin_kring": {
       "examples": "Examples:\n      > SELECT gbx_quadbin_kring(gbx_quadbin_pointascell(-122.4194, 37.7749, 10), 1) AS kring;",
       "usage_args": "cell, k",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the quadbin cells within ring distance k of a cell, the cell included.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -2477,10 +2481,10 @@
     "gbx_quadbin_pointascell": {
       "examples": "Examples:\n      > SELECT gbx_quadbin_pointascell(-122.4194, 37.7749, 10) as sf_cell;",
       "usage_args": "longitude, latitude, resolution",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the quadbin cell that holds a longitude and latitude.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -2488,10 +2492,10 @@
     "gbx_quadbin_polyfill": {
       "examples": "Examples:\n      > SELECT gbx_quadbin_polyfill('POLYGON((-1 -1, 1 -1, 1 1, -1 1, -1 -1))', 5) AS cells;",
       "usage_args": "geom, resolution",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the quadbin cells that cover the bounding box of a geometry.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -2499,10 +2503,10 @@
     "gbx_quadbin_resolution": {
       "examples": "Examples:\n      > SELECT gbx_quadbin_resolution(gbx_quadbin_pointascell(-122.4194, 37.7749, 10)) AS z;",
       "usage_args": "cell",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the zoom level of a quadbin cell.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -2510,10 +2514,10 @@
     "gbx_quadbin_tessellate": {
       "examples": "Examples:\n      > SELECT gbx_quadbin_tessellate('POLYGON((-1 -1, 1 -1, 1 1, -1 1, -1 -1))', 5) AS chips;",
       "usage_args": "geom, resolution",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Cut a geometry into quadbin cells, one chip per cell it touches.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"

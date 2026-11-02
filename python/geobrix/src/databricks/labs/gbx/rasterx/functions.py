@@ -614,37 +614,6 @@ def rst_h3_rasterize_agg(
     )
 
 
-def gbx_h3_cell_bbox(
-    cellid: ColLike,
-    srid: ColLike = None,
-    mode: ColLike = None,
-    kring_pad: ColLike = 0,
-) -> Column:
-    """Bounding box of one H3 cell in *srid* (centroid point or hexagon envelope).
-
-    Returns a ``STRUCT<xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE>``.
-
-    Args:
-        cellid:    Column holding the H3 cell id (integer / long).
-        srid:      Output CRS EPSG code.  Defaults to ``4326``.
-        mode:      ``"centroids"`` (default) or ``"spatial_envelope"``.
-        kring_pad: K-ring expansion before computing the bbox (default ``0``).
-                   When > 0 the returned bbox covers the full padded neighbourhood.
-
-    Returns:
-        Column of STRUCT<xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE>.
-    """
-    srid_col = _col(srid) if srid is not None else f.lit(4326)
-    mode_col = _col(mode) if mode is not None else f.lit("centroids")
-    return f.call_function(
-        "gbx_h3_cell_bbox",
-        _col(cellid),
-        srid_col,
-        mode_col,
-        _col(kring_pad),
-    )
-
-
 # Constructors
 
 

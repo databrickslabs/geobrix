@@ -79,6 +79,20 @@ def jar_from_wheel(whl_path: str) -> bytes:
         return data
 
 
+def _already_staged(src: str, dst: str, sha: str) -> bool:
+    """The staged JAR exists with the source's size and hashes to ``sha``, and its sidecar says so: the sidecar alone
+    is not proof (an interrupted copy or a deleted JAR leaves it behind)."""
+    if not (os.path.exists(dst) and os.path.exists(dst + ".sha256")):
+        return False
+    if os.path.getsize(dst) != os.path.getsize(src):
+        return False
+    with open(dst + ".sha256") as fh:
+        if fh.read().split()[:1] != [sha]:
+            return False
+    with open(dst, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest() == sha
+
+
 def stage_jar(vol_dir: str, *, overwrite: bool = False) -> str:
     """Copy the JAR this wheel carries into ``vol_dir`` with a ``.sha256`` sidecar and print the cluster
     step. One geobrix JAR per folder (one per cluster). Returns the staged path."""
@@ -105,11 +119,7 @@ def stage_jar(vol_dir: str, *, overwrite: bool = False) -> str:
     with open(src, "rb") as fh:
         sha = hashlib.sha256(fh.read()).hexdigest()
     dst = os.path.join(vol_dir, name)
-    if (
-        overwrite
-        or not os.path.exists(dst + ".sha256")
-        or open(dst + ".sha256").read().split()[:1] != [sha]
-    ):
+    if overwrite or not _already_staged(src, dst, sha):
         shutil.copyfile(src, dst)  # a Volume (FUSE) takes no rename: copy in place
         with open(dst + ".sha256", "w") as fh:
             fh.write(f"{sha}  {name}\n")

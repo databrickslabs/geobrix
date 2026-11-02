@@ -2341,6 +2341,28 @@ def test_stage_jar_writes_the_jar_and_its_sha_and_refuses_a_second_jar(
         stage.stage_jar(str(vol))
 
 
+def test_stage_jar_recopies_a_jar_that_is_gone_or_truncated_behind_its_sidecar(
+    tmp_path, monkeypatch
+):
+    from databricks.labs.gbx import _native, stage
+
+    src = tmp_path / "geobrix-0.6.0-jar-with-dependencies.jar"
+    src.write_bytes(b"jar-bytes")
+    vol = tmp_path / "vol"
+    monkeypatch.setattr(_native, "jar_path", lambda root=None: str(src))
+    monkeypatch.setattr(stage, "check_volume_dir", lambda p: p)
+    dst = stage.stage_jar(str(vol))
+    import os
+
+    os.remove(dst)  # the sidecar still matches
+    stage.stage_jar(str(vol))
+    assert open(dst, "rb").read() == b"jar-bytes"
+    with open(dst, "wb") as fh:
+        fh.write(b"jar-by")
+    stage.stage_jar(str(vol))
+    assert open(dst, "rb").read() == b"jar-bytes"
+
+
 def test_stage_jar_without_a_bundled_jar_or_off_a_volume_says_how_to_fix_it(
     tmp_path, monkeypatch
 ):

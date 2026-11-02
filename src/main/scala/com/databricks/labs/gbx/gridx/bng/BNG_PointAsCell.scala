@@ -3,6 +3,7 @@ package com.databricks.labs.gbx.gridx.bng
 import com.databricks.labs.gbx.expressions.{InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.gridx.grid.BNG
+import com.databricks.labs.gbx.kernels.Coerce
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.Expression
@@ -19,6 +20,8 @@ case class BNG_PointAsCell(
     override def children: Seq[Expression] = Seq(geom, resolution)
     override def dataType: DataType = StringType
     override def nullable: Boolean = true
+    // the resolution reaches eval as an INT index or a STRING (BNG.resolutionInputType)
+    override def inputTypes: Seq[DataType] = Seq(geom.dataType, BNG.resolutionInputType(resolution.dataType))
     override def prettyName: String = BNG_PointAsCell.name
     override def replacement: Expression = invoke(BNG_PointAsCell)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1))
@@ -28,19 +31,25 @@ case class BNG_PointAsCell(
 /** Companion: SQL name gbx_bng_pointascell, builder, and eval. */
 object BNG_PointAsCell extends WithExpressionInfo {
 
-    def eval(wkt: UTF8String, resolution: Int): UTF8String =
-        GridErrorHandler.safeEval[UTF8String](null)(UTF8String.fromString(executeWKT(wkt.toString, resolution)))
-
-    def eval(wkt: UTF8String, resolution: UTF8String): UTF8String = {
-        val res = BNG.resolutionMap(resolution.toString) // PARAMETER: raises on bad resolution
+    // PARAMETER: a resolution BNG does not define raises (naming the value); it is never a NULL.
+    def eval(wkt: UTF8String, resolution: Int): UTF8String = {
+        val res = Coerce.bngResolution(Int.box(resolution), digitStrings = false)
         GridErrorHandler.safeEval[UTF8String](null)(UTF8String.fromString(executeWKT(wkt.toString, res)))
     }
 
-    def eval(wkb: Array[Byte], resolution: Int): UTF8String =
-        GridErrorHandler.safeEval[UTF8String](null)(UTF8String.fromString(executeWKB(wkb, resolution)))
+    def eval(wkt: UTF8String, resolution: UTF8String): UTF8String = {
+        val res = Coerce.bngResolution(resolution.toString, digitStrings = true) // a size name, or the digits of an index
+        GridErrorHandler.safeEval[UTF8String](null)(UTF8String.fromString(executeWKT(wkt.toString, res)))
+    }
+
+    // PARAMETER: a resolution BNG does not define raises (naming the value); it is never a NULL.
+    def eval(wkb: Array[Byte], resolution: Int): UTF8String = {
+        val res = Coerce.bngResolution(Int.box(resolution), digitStrings = false)
+        GridErrorHandler.safeEval[UTF8String](null)(UTF8String.fromString(executeWKB(wkb, res)))
+    }
 
     def eval(wkb: Array[Byte], resolution: UTF8String): UTF8String = {
-        val res = BNG.resolutionMap(resolution.toString) // PARAMETER: raises on bad resolution
+        val res = Coerce.bngResolution(resolution.toString, digitStrings = true) // a size name, or the digits of an index
         GridErrorHandler.safeEval[UTF8String](null)(UTF8String.fromString(executeWKB(wkb, res)))
     }
 

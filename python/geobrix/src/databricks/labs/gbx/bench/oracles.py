@@ -41,7 +41,9 @@ class Case:
     cid: str
     fn: str
     args: Tuple[Any, ...]
-    # exact | exact_rows | null | raises | uc_refused | error_tile | tile_props | geom_props
+    # exact | exact_rows | null | raises | uc_refused | error_tile | tile_props | geom_props | geom_equals | cell_set
+    # geom_equals: `expect` is the WKT of the geometry the output (WKB or WKT) must equal, vertex order aside.
+    # cell_set: `expect` is the cell ids an array output must hold, each once, in any order.
     # exact_rows is one batch: `args` is a tuple of argument rows, `expect` one value per row.
     # Generators also use no_rows | windows | cells, and error_tile means exactly one row.
     # The DataFrame helpers' rst_viewshed_towers uses towers (see MVP_H).
@@ -148,6 +150,8 @@ MVP_S: Tuple[Case, ...] = (
     # accepts the digit-string form of the integer resolution.
     Case("bng_digit_res", B, (530000.0, 180000.0, "3"), "exact", "TQ3080"),
     Case("bng_digit_res_quad", B, (530000.0, 180000.0, "-3"), "exact", "TQ38SW"),
+    # INT eastings, northings and resolution (columns typed INT) give the cells DOUBLE ones give, on every level.
+    Case("bng_enab_int_args", B, (530000, 180000, 3), "exact", "TQ3080"),
     Case("tcrs_epsg", T, (Build("tile_4326"), "EPSG:3857"), "tile_props", "EPSG:3857"),
     Case(
         "tcrs_virtual",
@@ -2088,6 +2092,22 @@ def _check_geom(case: Case, out) -> Optional[str]:
     return None
 
 
+def _check_geom_equals(case: Case, out) -> Optional[str]:
+    import shapely
+
+    from databricks.labs.gbx._geom import parse_geom
+
+    if out is None:
+        return f"{case.cid}: got NULL, want {case.expect}"
+    got = parse_geom(bytes(out) if isinstance(out, (bytearray, memoryview)) else out)
+    want = shapely.from_wkt(case.expect)
+    if got is None or not shapely.normalize(got).equals_exact(
+        shapely.normalize(want), 1e-6
+    ):
+        return f"{case.cid}: got {got.wkt if got is not None else out!r}, want {case.expect}"
+    return None
+
+
 def check(case: Case, out, args) -> Optional[str]:
     """None when `out` meets the case; else a one-line reason."""
     if case.kind == "exact":
@@ -2152,6 +2172,16 @@ def check(case: Case, out, args) -> Optional[str]:
         return None
     if case.kind == "geom_props":
         return _check_geom(case, out)
+    if case.kind == "geom_equals":
+        return _check_geom_equals(case, out)
+    if case.kind == "cell_set":
+        if out is None:
+            return f"{case.cid}: got NULL, want the cells {sorted(case.expect)}"
+        return (
+            None
+            if sorted(out) == sorted(case.expect)
+            else f"{case.cid}: cells {sorted(out)}, want {sorted(case.expect)}"
+        )
     if case.kind == "merged_equals":
         return _check_merged(case, out)
     if case.kind == "pixels":
@@ -2543,6 +2573,10 @@ def _ddl_type(value, param) -> str:
 
     if param.session[0] == "ARRAY<TILE>":
         return f"array<{TILE_SQL}>"
+    if param.session[0].startswith(
+        "struct<"
+    ):  # a struct parameter other than a tile (a BNG chip)
+        return param.session[0]
     if isinstance(value, dict) or "TILE" in param.session:
         return TILE_SQL
     if isinstance(value, bool):
@@ -2625,7 +2659,14 @@ def verdict(case: Case, outs, rows, tmpdir: Optional[str] = None) -> Optional[st
             case, outs, rows if case.kind == "windows_batch" else rows[0]
         )
     if fn.kind == "scalar" and case.kind == "cells":
-        return _check_rows(case, [e for o in outs for e in (o or [])], rows[0])
+        # an array of chips is its elements; one chip (a struct) is one cell
+        cells = [
+            e
+            for o in outs
+            if o is not None
+            for e in (o if isinstance(o, list) else [o])
+        ]
+        return _check_rows(case, cells, rows[0])
     if fn.kind == "aggregate":
         args = [resolve_arg(a, tmpdir) for a in case.args]
         return check(case, outs[0] if outs else None, args)
@@ -2683,7 +2724,7 @@ def run_session(
                 fcols = [F.col(f"c{i}") for i in range(len(args))]
                 got = df.select(column_of(case.fn)(*fcols).alias("out")).collect()
             outs = [r["out"] for r in got]
-            results.append((case, _verdict(case, outs, rows)))
+            results.append((case, verdict(case, outs, rows, tmpdir)))
         except (
             Exception
         ) as exc:  # noqa: BLE001 - the case decides whether an error is expected

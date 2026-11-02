@@ -35,6 +35,9 @@ case class BNG_CellIntersection(
 /** Companion: SQL name gbx_bng_cellintersection, builder, and eval. */
 object BNG_CellIntersection extends WithExpressionInfo {
 
+    /** A chip's WKB; an empty result (chips of different cells) has no chip geometry: NULL. */
+    private def chipBytes(g: Geometry): Array[Byte] = if (g.isEmpty) null else JTS.toWKB(g)
+
     def evalLong(chip1: InternalRow, chip2: InternalRow): InternalRow =
         // Note: core-chip early exits avoid unnecessary WKB parsing
         if (chip1.getBoolean(1)) chip1
@@ -45,7 +48,7 @@ object BNG_CellIntersection extends WithExpressionInfo {
             val geom1 = JTS.fromWKB(chip1.getBinary(2))
             val geom2 = JTS.fromWKB(chip2.getBinary(2))
             val res = executeLong((cell1, chip1.getBoolean(1), geom1), (cell2, chip2.getBoolean(1), geom2))
-            InternalRow.fromSeq(Seq(res._1, res._2, JTS.toWKB(res._3)))
+            InternalRow.fromSeq(Seq(res._1, res._2, chipBytes(res._3)))
         }
 
     def evalString(chip1: InternalRow, chip2: InternalRow): InternalRow =
@@ -58,7 +61,7 @@ object BNG_CellIntersection extends WithExpressionInfo {
             val geom1 = JTS.fromWKB(chip1.getBinary(2))
             val geom2 = JTS.fromWKB(chip2.getBinary(2))
             val res = executeString((cell1, chip1.getBoolean(1), geom1), (cell2, chip2.getBoolean(1), geom2))
-            InternalRow(UTF8String.fromString(res._1), res._2, JTS.toWKB(res._3))
+            InternalRow(UTF8String.fromString(res._1), res._2, chipBytes(res._3))
         }
 
     def executeLong(chip1: (Long, Boolean, Geometry), chip2: (Long, Boolean, Geometry)): (Long, Boolean, Geometry) = {

@@ -485,6 +485,11 @@ object GeomDilation {
     if (kind == "ring") acc.toSet else shellK
   }
 
+  /** Refuse a mode that is not one of MODES (a parameter error, raised before any per-row data guard). */
+  def requireMode(mode: String): Unit =
+    if (!MODES.contains(mode))
+      throw new IllegalArgumentException(s"unknown mode '$mode'; expected ${MODES.mkString(", ")}")
+
   /** Lazy O(perimeter) expand for Polygon/MultiPolygon inputs.
     * Mirrors light `geom_expand_lazy`.  Selects the appropriate lazy builder by mode
     * and runs the shared BFS loop. */

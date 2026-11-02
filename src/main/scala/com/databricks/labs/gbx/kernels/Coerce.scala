@@ -19,11 +19,13 @@ object Coerce {
     }
 
     /** A BNG resolution: an INT index or a resolution-map STRING; anything else raises `found <value>`.
-      * A UC STRING parameter receives an INT argument as its digits, so `digitStrings` also accepts those. */
+      * A UC STRING parameter receives an INT argument as its digits, so `digitStrings` also accepts those (and a
+      * whole number with a zero fraction, `3.0`, which is how a DOUBLE argument reads). */
     def bngResolution(v: Any, digitStrings: Boolean): Int = v match {
         case i: java.lang.Integer => index(i.intValue, v)
         case l: java.lang.Long    => Try(Math.toIntExact(l)).toOption.map(index(_, v)).getOrElse(unsupported(v))
-        case s: String if digitStrings && s.matches("-?[0-9]+") => Try(s.toInt).toOption.map(index(_, v)).getOrElse(unsupported(v))
+        case s: String if digitStrings && s.matches("-?[0-9]+(\\.0+)?") =>
+            Try(s.takeWhile(_ != '.').toInt).toOption.map(index(_, v)).getOrElse(unsupported(v))
         case s: String            => BNG.resolutionMap.getOrElse(s, unsupported(v))
         case other                => throw new IllegalArgumentException(
           s"BNG resolution must be INT or STRING, got ${other.getClass.getName}: $other")

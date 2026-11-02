@@ -35,6 +35,9 @@ case class BNG_CellUnion(
 /** Companion: SQL name gbx_bng_cellunion, builder, and eval. */
 object BNG_CellUnion extends WithExpressionInfo {
 
+    /** A chip's WKB; an empty result (chips of different cells) has no chip geometry: NULL. */
+    private def chipBytes(g: Geometry): Array[Byte] = if (g.isEmpty) null else JTS.toWKB(g)
+
     def evalLong(chip1: InternalRow, chip2: InternalRow): InternalRow =
         // Note: core-chip early exits avoid unnecessary WKB parsing
         if (chip1.getBoolean(1)) chip1
@@ -47,7 +50,7 @@ object BNG_CellUnion extends WithExpressionInfo {
             val geom1 = JTS.fromWKB(chip1.getBinary(2))
             val geom2 = JTS.fromWKB(chip2.getBinary(2))
             val union = executeLong((cellId, chip1.getBoolean(1), geom1), (cellId, chip2.getBoolean(1), geom2))
-            InternalRow.fromSeq(Seq(union._1, union._2, JTS.toWKB(union._3)))
+            InternalRow.fromSeq(Seq(union._1, union._2, chipBytes(union._3)))
         }
 
     def evalString(chip1: InternalRow, chip2: InternalRow): InternalRow =
@@ -62,7 +65,7 @@ object BNG_CellUnion extends WithExpressionInfo {
             val geom1 = JTS.fromWKB(chip1.getBinary(2))
             val geom2 = JTS.fromWKB(chip2.getBinary(2))
             val union = executeString((cellId, chip1.getBoolean(1), geom1), (cellId, chip2.getBoolean(1), geom2))
-            InternalRow.fromSeq(Seq(UTF8String.fromString(union._1), union._2, JTS.toWKB(union._3)))
+            InternalRow.fromSeq(Seq(UTF8String.fromString(union._1), union._2, chipBytes(union._3)))
         }
 
     @inline def executeLong(chip1: (Long, Boolean, Geometry), chip2: (Long, Boolean, Geometry)): (Long, Boolean, Geometry) = {

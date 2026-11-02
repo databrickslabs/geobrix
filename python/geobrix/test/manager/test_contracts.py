@@ -64,7 +64,7 @@ def test_python_refs_resolve(sql_name, ref):
 def test_oracle_rows_fit_signature(fn):
     from databricks.labs.gbx.bench import oracles
 
-    rows = [c for c in getattr(oracles, fn.oracle) if c.fn == fn.sql_name]
+    rows = [c for c in oracles.TABLES[fn.oracle] if c.fn == fn.sql_name]
     assert rows, "every manifest function needs oracle rows"
     assert len({c.cid for c in rows}) == len(rows), "oracle row ids must be unique"
     # an aggregate's first argument is the group's rows: one row fills 1 parameter (a tile) or 2 (cellid, value)

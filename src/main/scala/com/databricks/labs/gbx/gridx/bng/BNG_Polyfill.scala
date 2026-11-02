@@ -3,6 +3,7 @@ package com.databricks.labs.gbx.gridx.bng
 import com.databricks.labs.gbx.expressions.{InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.gridx.grid.BNG
+import com.databricks.labs.gbx.kernels.Coerce
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions._
@@ -20,6 +21,8 @@ case class BNG_Polyfill(
     override def children: Seq[Expression] = Seq(geom, resolution)
     override def dataType: DataType = ArrayType(StringType)
     override def nullable: Boolean = true
+    // the resolution reaches eval as an INT index or a STRING (BNG.resolutionInputType)
+    override def inputTypes: Seq[DataType] = Seq(geom.dataType, BNG.resolutionInputType(resolution.dataType))
     override def prettyName: String = BNG_Polyfill.name
     override def replacement: Expression = invoke(BNG_Polyfill)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1))
@@ -30,32 +33,36 @@ case class BNG_Polyfill(
 object BNG_Polyfill extends WithExpressionInfo {
 
     def eval(geom: UTF8String, resolution: UTF8String): ArrayData = {
-        val res = BNG.resolutionMap(resolution.toString) // PARAMETER: raises on bad resolution
+        val res = Coerce.bngResolution(resolution.toString, digitStrings = true) // a size name, or the digits of an index
         GridErrorHandler.safeEval[ArrayData](null) {
             val geometry = JTS.fromWKT(geom.toString)
             ArrayData.toArrayData(execute(geometry, res).map(UTF8String.fromString).toArray)
         }
     }
 
-    def eval(geom: UTF8String, resolution: Int): ArrayData =
+    def eval(geom: UTF8String, resolution: Int): ArrayData = {
+        val res = Coerce.bngResolution(Int.box(resolution), digitStrings = false) // PARAMETER: raises on bad resolution
         GridErrorHandler.safeEval[ArrayData](null) {
             val geometry = JTS.fromWKT(geom.toString)
-            ArrayData.toArrayData(execute(geometry, resolution).map(UTF8String.fromString).toArray)
+            ArrayData.toArrayData(execute(geometry, res).map(UTF8String.fromString).toArray)
         }
+    }
 
     def eval(geom: Array[Byte], resolution: UTF8String): ArrayData = {
-        val res = BNG.resolutionMap(resolution.toString) // PARAMETER: raises on bad resolution
+        val res = Coerce.bngResolution(resolution.toString, digitStrings = true) // a size name, or the digits of an index
         GridErrorHandler.safeEval[ArrayData](null) {
             val geometry = JTS.fromWKB(geom)
             ArrayData.toArrayData(execute(geometry, res).map(UTF8String.fromString).toArray)
         }
     }
 
-    def eval(geom: Array[Byte], resolution: Int): ArrayData =
+    def eval(geom: Array[Byte], resolution: Int): ArrayData = {
+        val res = Coerce.bngResolution(Int.box(resolution), digitStrings = false) // PARAMETER: raises on bad resolution
         GridErrorHandler.safeEval[ArrayData](null) {
             val geometry = JTS.fromWKB(geom)
-            ArrayData.toArrayData(execute(geometry, resolution).map(UTF8String.fromString).toArray)
+            ArrayData.toArrayData(execute(geometry, res).map(UTF8String.fromString).toArray)
         }
+    }
 
     def execute(geom: Geometry, resolution: Int): Iterator[String] = {
         BNG.polyfillIter(geom, resolution)

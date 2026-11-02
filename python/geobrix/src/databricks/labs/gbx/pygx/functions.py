@@ -422,22 +422,18 @@ def _chip_to_row(result):
     return {"cellid": cellid, "core": bool(core), "chip": chip_wkb}
 
 
-@pandas_udf(BNG_CHIP_SCHEMA)
-def _bng_cellunion_udf(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
-    rows = [
-        _chip_to_row(_bng.cell_union(_chip_tuple(lt), _chip_tuple(rt)))
-        for lt, rt in zip(_chip_records(left), _chip_records(right))
-    ]
-    return pd.DataFrame(rows, columns=["cellid", "core", "chip"])
+def _bng_cellunion(left, right):
+    """Row-wise (a NULL chip is a NULL result, which a struct-returning pandas UDF cannot give)."""
+    if left is None or right is None:
+        return None
+    return _chip_to_row(_bng.cell_union(_chip_tuple(left), _chip_tuple(right)))
 
 
-@pandas_udf(BNG_CHIP_SCHEMA)
-def _bng_cellintersection_udf(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
-    rows = [
-        _chip_to_row(_bng.cell_intersection(_chip_tuple(lt), _chip_tuple(rt)))
-        for lt, rt in zip(_chip_records(left), _chip_records(right))
-    ]
-    return pd.DataFrame(rows, columns=["cellid", "core", "chip"])
+def _bng_cellintersection(left, right):
+    """Row-wise, as :func:`_bng_cellunion`."""
+    if left is None or right is None:
+        return None
+    return _chip_to_row(_bng.cell_intersection(_chip_tuple(left), _chip_tuple(right)))
 
 
 # --- array-output -> plain @udf (row-by-row, scale-safe) --------------------
@@ -477,6 +473,8 @@ def _bng_geomkring(geom, res, k, mode="boundary-out", coverage="coveras"):
     _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
     k_int = int(k)  # bad k PARAMETER -> raises
+    if _not_finite(geom):
+        return None  # a non-finite coordinate has no cell: NULL, as for every point-taking BNG function
     try:
         return sorted(
             _bng.geometry_k_ring_str(
@@ -499,6 +497,8 @@ def _bng_geomkloop(geom, res, k, mode="boundary-out", coverage="coveras"):
     _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
     k_int = int(k)  # bad k PARAMETER -> raises
+    if _not_finite(geom):
+        return None  # a non-finite coordinate has no cell: NULL, as for every point-taking BNG function
     try:
         return sorted(
             _bng.geometry_k_loop_str(
@@ -682,6 +682,17 @@ def _dilate_check_mode(mode):
     """
     if mode is not None and mode not in _MODES:
         raise ValueError(f"unknown mode {mode!r}; expected one of {_MODES}")
+
+
+def _not_finite(geom) -> bool:
+    """The geometry has a NaN or infinite coordinate (an unreadable one is left to the caller's NULL rule)."""
+    from shapely import get_coordinates
+
+    try:
+        g = parse_geom(geom)
+    except Exception:  # noqa: BLE001 - unreadable geometry DATA is the caller's NULL
+        return False
+    return g is not None and not bool(np.isfinite(get_coordinates(g)).all())
 
 
 def _norm_res(res):
@@ -1355,10 +1366,10 @@ def _registrar_groups() -> List[_register.Group]:
             "gbx_bng_centroid", _bng_centroid_udf
         ),
         "gbx_bng_cellintersection": lambda s: s.udf.register(
-            "gbx_bng_cellintersection", _bng_cellintersection_udf
+            "gbx_bng_cellintersection", _bng_cellintersection, BNG_CHIP_SCHEMA
         ),
         "gbx_bng_cellunion": lambda s: s.udf.register(
-            "gbx_bng_cellunion", _bng_cellunion_udf
+            "gbx_bng_cellunion", _bng_cellunion, BNG_CHIP_SCHEMA
         ),
         "gbx_bng_kring": lambda s: s.udf.register(
             "gbx_bng_kring", _bng_kring, ArrayType(StringType())

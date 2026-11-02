@@ -355,11 +355,16 @@ def _with_cap(f, cap: int):
         f.func, type
     ):  # a UDTF: the same function over a carrying handler class
         return carrying(f, None, cap)
-    from pyspark.sql.udf import UserDefinedFunction
+    from pyspark.sql.utils import is_remote
 
-    # The class `F.udf` / `F.pandas_udf` build through, with the eval type the original resolved (from its type hints, or
-    # a UDF's own): `F.pandas_udf(func, type, evalType)` would raise PySpark's SPARK-28264 deprecation warning, and the
-    # carrying wrapper has no hints for it to infer from.
+    if is_remote():  # Spark Connect (Serverless, standard): the classic class resolves its UDF through SparkContext._jvm
+        from pyspark.sql.connect.udf import UserDefinedFunction
+    else:
+        from pyspark.sql.udf import UserDefinedFunction
+
+    # The class `F.udf` / `F.pandas_udf` build through for this kind of session, with the eval type the original
+    # resolved (from its type hints, or a UDF's own): `F.pandas_udf(func, type, evalType)` would raise PySpark's
+    # SPARK-28264 deprecation warning, and the carrying wrapper has no hints for it to infer from.
     out = UserDefinedFunction(
         _carrying_function(f.func, None, cap), f.returnType, evalType=f.evalType
     )._wrapped()

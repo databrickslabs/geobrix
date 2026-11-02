@@ -2108,6 +2108,36 @@ def test_with_cap_rebuilds_a_udtf_and_both_kinds_of_pandas_udf(spark):
         spark.conf.unset(READ_CAP_KEY)
 
 
+def test_with_cap_rebuilds_through_the_connect_class_on_a_remote_session(monkeypatch):
+    """Under Spark Connect the rebuilt UDF is the Connect class (the classic one resolves through SparkContext._jvm when
+    applied), with the original's eval type and return type. Connect cannot run here (no grpcio), so the module is a
+    recording stand-in."""
+    import sys
+    import types
+
+    from pyspark.sql import functions as F
+    from pyspark.sql.types import LongType
+
+    from databricks.labs.gbx import _gdal_policy
+
+    class ConnectUDF:
+        def __init__(self, func, returnType, name=None, evalType=None, deterministic=True):
+            self.func, self.returnType, self.evalType = func, returnType, evalType
+
+        def _wrapped(self):
+            return self
+
+    stand_in = types.ModuleType("pyspark.sql.connect.udf")
+    stand_in.UserDefinedFunction = ConnectUDF
+    original = F.udf(lambda x: 1, LongType())
+    monkeypatch.setitem(sys.modules, "pyspark.sql.connect.udf", stand_in)
+    monkeypatch.setattr("pyspark.sql.utils.is_remote", lambda: True)
+    rebuilt = _gdal_policy._with_cap(original, 5)
+    assert type(rebuilt) is ConnectUDF
+    assert rebuilt.evalType == original.evalType
+    assert rebuilt.returnType == original.returnType
+
+
 def _held_udfs(obj, where, seen, found):
     """Every UDF / UDTF object held by `obj` (containers, a function's defaults and closure cells), as (where, object)."""
     import types

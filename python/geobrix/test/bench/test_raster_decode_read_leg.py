@@ -14,7 +14,7 @@ Covers:
 Monkeypatch strategy:
   - read_file_table: patch the SOURCE module (file_table.read_file_table) so
     the deferred ``from ... import read_file_table`` inside the leg picks it up.
-  - rst_avg: patch functions.rst_avg so the UDF is replaced by F.lit(1.0),
+  - rst_avg: patch rasterx.functions.rst_avg (the generated entry the bench calls) so the UDF is replaced by F.lit(1.0),
     making .select(rst_avg(col("tile"))).count() work on any DataFrame.
   - measure_parallelism / time_iters: patch the bench.readers module attributes.
 """
@@ -62,7 +62,7 @@ def _patch_common(monkeypatch, spark, n, ms=200.0):
         lambda _spark, _table, *, skip_ordering=False: _tile_df(spark, n),
     )
     monkeypatch.setattr(
-        "databricks.labs.gbx.pyrx.functions.rst_avg",
+        "databricks.labs.gbx.rasterx.functions.rst_avg",
         lambda col: _F.lit(1.0),
     )
 
@@ -280,7 +280,7 @@ def test_per_tile_avg_uses_n_tasks_not_n_tiles(spark, monkeypatch):
         lambda _spark, _table, *, skip_ordering=False: _tile_df(spark, n_tiles),
     )
     monkeypatch.setattr(
-        "databricks.labs.gbx.pyrx.functions.rst_avg",
+        "databricks.labs.gbx.rasterx.functions.rst_avg",
         lambda col: _F.lit(1.0),
     )
 

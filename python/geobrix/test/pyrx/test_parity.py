@@ -6,25 +6,11 @@ import inspect
 from databricks.labs.gbx.pyrx import functions as prx
 
 # Scope: accessors + coordinate transforms + constructor.
+# Only names still served by pyrx itself. The accessors and coordinate transforms moved to the generated
+# rasterx.functions API in scale-out Task 10; their signatures are held to the manifest by gbx:manifest:gen --check
+# (gate G3), so pinning them here again would duplicate that gate.
 PHASE0 = {
     "rst_fromcontent": ("content", "driver"),
-    "rst_width": ("tile",),
-    "rst_height": ("tile",),
-    "rst_numbands": ("tile",),
-    "rst_srid": ("tile",),
-    "rst_pixelwidth": ("tile",),
-    "rst_pixelheight": ("tile",),
-    "rst_upperleftx": ("tile",),
-    "rst_upperlefty": ("tile",),
-    "rst_boundingbox": ("tile",),
-    "rst_metadata": ("tile",),
-    "rst_scalex": ("tile",),
-    "rst_scaley": ("tile",),
-    "rst_isempty": ("tile",),
-    "rst_rastertoworldcoordx": ("tile", "x", "y"),
-    "rst_rastertoworldcoordy": ("tile", "x", "y"),
-    "rst_worldtorastercoordx": ("tile", "x", "y"),
-    "rst_worldtorastercoordy": ("tile", "x", "y"),
 }
 
 

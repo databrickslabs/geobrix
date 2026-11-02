@@ -324,7 +324,7 @@ def test_download_fallback_injected_fetcher(spark, tmp_path):
             (
                 "places",
                 "place",
-                "http://fake/place.parquet",
+                "http://93.184.216.34/place.parquet",
                 [0.0, 0.0, 1.0, 1.0],
                 "2024-07-01",
             )
@@ -358,7 +358,15 @@ def test_the_download_fallback_fetches_only_the_hosts_allowed(spark, tmp_path):
         allowed_hosts=["only.example"],
     )
     assets = spark.createDataFrame(
-        [("places", "place", "http://fake/place.parquet", [0.0, 0.0, 1.0, 1.0], "r")],
+        [
+            (
+                "places",
+                "place",
+                "http://93.184.216.34/place.parquet",
+                [0.0, 0.0, 1.0, 1.0],
+                "r",
+            )
+        ],
         "theme string, type string, href string, asset_bbox array<double>, release string",
     )
     meta = client._download_fallback(
@@ -553,7 +561,7 @@ def test_download_routes_http_to_fallback(spark, tmp_path):
             (
                 "places",
                 "place",
-                "http://fake-overture.example.com/place.parquet",
+                "http://93.184.216.34/place.parquet",
                 [0.0, 0.0, 1.0, 1.0],
                 "2024-07-01",
             )

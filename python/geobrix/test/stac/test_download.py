@@ -62,7 +62,7 @@ def test_fetch_publishes_only_valid(tmp_path):
         return R()
 
     res = fetch_validate_publish(
-        lambda: "http://x/ok.tif", str(out_dir), "ok.tif", get=get
+        lambda: "http://93.184.216.34/ok.tif", str(out_dir), "ok.tif", get=get
     )
     assert res == os.path.join(str(out_dir), "ok.tif")
     assert os.path.exists(res)
@@ -85,7 +85,7 @@ def test_fetch_retries_then_gives_up_on_bad(tmp_path):
         return R()
 
     res = fetch_validate_publish(
-        lambda: "http://x/bad.tif",
+        lambda: "http://93.184.216.34/bad.tif",
         str(out_dir),
         "bad.tif",
         get=get,

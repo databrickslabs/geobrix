@@ -79,7 +79,7 @@ def test_no_bbox_path_unchanged(tmp_path):
         return R()
 
     res = fetch_validate_publish(
-        lambda: "http://x/ok.tif", str(out_dir), "ok.tif", get=get
+        lambda: "http://93.184.216.34/ok.tif", str(out_dir), "ok.tif", get=get
     )
     assert res == os.path.join(str(out_dir), "ok.tif")
     assert os.path.getsize(res) == os.path.getsize(

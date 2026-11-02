@@ -32,8 +32,8 @@ _ITEM = {
     "bbox": [1.0, 2.0, 3.0, 4.0],
     "properties": {"datetime": "2022-06-01T19:49:11Z"},
     "assets": {
-        "B02": {"href": "http://x/B02.tif"},
-        "B03": {"href": "http://x/B03.tif"},
+        "B02": {"href": "http://93.184.216.34/B02.tif"},
+        "B03": {"href": "http://93.184.216.34/B03.tif"},
     },
 }
 
@@ -56,8 +56,8 @@ _ITEM_DICT = {
     "bbox": [1.0, 2.0, 3.0, 4.0],
     "properties": {"datetime": "2022-06-01T19:49:11Z", "eo:cloud_cover": 5},
     "assets": {
-        "B02": {"href": "http://fake/B02.tif"},
-        "B03": {"href": "http://fake/B03.tif"},
+        "B02": {"href": "http://93.184.216.34/B02.tif"},
+        "B03": {"href": "http://93.184.216.34/B03.tif"},
     },
 }
 
@@ -73,7 +73,7 @@ class _FakeSearch:
 
 
 class _Asset:
-    href = "http://fake/B02.tif"
+    href = "http://93.184.216.34/B02.tif"
 
 
 class _PCItem:
@@ -153,7 +153,7 @@ def test_search_explodes_items_to_asset_rows(spark):
     rows = {(r["cellid"], r["item_id"], r["asset_name"]) for r in out.collect()}
     assert rows == {("cellA", "S2_X", "B02"), ("cellA", "S2_X", "B03")}
     one = out.filter("asset_name = 'B02'").first()
-    assert one["date"] == "2022-06-01" and one["href"] == "http://x/B02.tif"
+    assert one["date"] == "2022-06-01" and one["href"] == "http://93.184.216.34/B02.tif"
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +291,7 @@ def test_download_udf_path_publishes_valid_bytes(spark_with_fake_catalog, tmp_pa
         return _Resp()
 
     search_df = spark.createDataFrame(
-        [("S2_X", "B02", "http://fake/B02.tif")],
+        [("S2_X", "B02", "http://93.184.216.34/B02.tif")],
         ["item_id", "asset_name", "href"],
     )
     client = StacClient(catalog="http://fake-catalog", sign=None)
@@ -330,7 +330,8 @@ def test_download_fetches_only_the_hosts_allowed(spark, tmp_path):
         return _Resp()
 
     df = spark.createDataFrame(
-        [("S2_X", "B02", "http://fake/B02.tif")], ["item_id", "asset_name", "href"]
+        [("S2_X", "B02", "http://93.184.216.34/B02.tif")],
+        ["item_id", "asset_name", "href"],
     )
 
     def download(allowed):
@@ -348,7 +349,7 @@ def test_download_fetches_only_the_hosts_allowed(spark, tmp_path):
 
     assert download(["only.example"])["out_file_path"] is None
     assert not marker.exists()
-    assert download(["fake"])["out_file_path"] is not None
+    assert download(["93.184.216.34"])["out_file_path"] is not None
     assert marker.exists()
 
 
@@ -378,7 +379,7 @@ def test_fetch_validate_false_publishes_non_decodable(tmp_path):
 
     out_dir = tmp_path / "out"
     res = fetch_validate_publish(
-        lambda: "http://x/garbage.tif",
+        lambda: "http://93.184.216.34/garbage.tif",
         str(out_dir),
         "garbage.tif",
         get=fake_get,
@@ -408,7 +409,7 @@ def test_fetch_validate_true_rejects_garbage(tmp_path):
 
     out_dir = tmp_path / "out"
     res = fetch_validate_publish(
-        lambda: "http://x/bad.tif",
+        lambda: "http://93.184.216.34/bad.tif",
         str(out_dir),
         "bad.tif",
         get=fake_get,
@@ -459,7 +460,7 @@ def test_download_emits_last_update_column(spark_with_fake_catalog, tmp_path):
 
     out_dir = tmp_path / "out"
     search_df = spark.createDataFrame(
-        [("S2_X", "B02", "http://fake/B02.tif")],
+        [("S2_X", "B02", "http://93.184.216.34/B02.tif")],
         ["item_id", "asset_name", "href"],
     )
     client = StacClient(catalog="http://fake-catalog", sign=None)
@@ -606,7 +607,7 @@ def test_fetch_skips_existing_valid_file(tmp_path):
         return _Resp()
 
     res = fetch_validate_publish(
-        lambda: "http://x/ok.tif",
+        lambda: "http://93.184.216.34/ok.tif",
         str(out_dir),
         "ok.tif",
         get=fake_get,
@@ -641,7 +642,7 @@ def test_fetch_skips_existing_no_validate(tmp_path):
         return _Resp()
 
     res = fetch_validate_publish(
-        lambda: "http://x/ok.bin",
+        lambda: "http://93.184.216.34/ok.bin",
         str(out_dir),
         "ok.bin",
         get=fake_get,
@@ -694,7 +695,7 @@ def test_filename_sanitized_against_path_traversal(tmp_path):
     # filename contains path-traversal components
     dangerous_filename = "../../../etc/evil_B02_../evil/item.tif"
     res = fetch_validate_publish(
-        lambda: "http://x/evil.tif",
+        lambda: "http://93.184.216.34/evil.tif",
         str(out_dir),
         dangerous_filename,
         get=fake_get,

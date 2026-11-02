@@ -35,7 +35,9 @@ object RST_Format extends WithExpressionInfo {
                 val exprConf = ExpressionConfig.fromB64(conf.toString)
                 RST_ExpressionUtil.init(exprConf)
                 val ds = RasterSerializationUtil.rowToDS(row, dt, gated = false)
-                val res = execute(ds)
+                // a tile in netCDF, HFA, JP2 or GPKG bytes is read as its GeoTIFF translation; the format is still its own
+                val fmt = execute(ds)
+                val res = if (fmt == "GTiff") RasterSerializationUtil.translatedFromDriver(row).getOrElse(fmt) else fmt
                 RasterDriver.releaseDataset(ds)
                 UTF8String.fromString(res)
             },

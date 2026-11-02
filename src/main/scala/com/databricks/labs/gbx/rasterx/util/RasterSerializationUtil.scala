@@ -119,6 +119,21 @@ object RasterSerializationUtil {
         }
     }
 
+    /** The driver a materialized tile's bytes were written in when [[rowToDS]] reads them as a GeoTIFF translation
+      * (netCDF, HFA, JP2OpenJPEG, GPKG, ...), else None (a TIFF, a tile with no raster, or bytes that do not open). */
+    def translatedFromDriver(row: InternalRow): Option[String] = {
+        val lyt = tileLayout(row)
+        if (row.isNullAt(lyt.raster)) None
+        else {
+            val buffer = row.getBinary(lyt.raster)
+            if (TileBytes.isTiff(buffer)) None
+            else {
+                val metadata = SerializationUtil.createMap[String, String](row.getMap(lyt.metadata))
+                RasterDriver.sourceDriverOf(buffer, metadata)
+            }
+        }
+    }
+
     /** Serialize (cellId, Dataset, metadata) to an InternalRow; writes raster to bytes. */
     def tileToRow(tuple: (Long, Dataset, Map[String, String]), dataType: DataType, hconf: SerializableConfiguration): InternalRow = // retained for signature compat
         tileToRow(tuple, dataType, hconf, None)

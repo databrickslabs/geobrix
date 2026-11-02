@@ -134,6 +134,26 @@ object RasterDriver {
     def readFromBytesUngated(bytes: Array[Byte], options: Map[String, String]): Dataset =
         readBytes(bytes, options, gated = false)
 
+    /** The driver `bytes` open with, before any GeoTIFF translation: the tile's own format (netCDF, HFA, ...), which
+      * [[readFromBytes]] hides for a driver outside the self-contained class. None when the bytes do not open; a
+      * driver that can name other files is refused as it is on a read. Opens the header only. */
+    def sourceDriverOf(bytes: Array[Byte], options: Map[String, String]): Option[String] =
+        if (bytes == null) None
+        else {
+            val extension = GDAL.getExtension(options.getOrElse("driver", "GTiff"))
+            val tempPath = s"/vsimem/temp_raster_${java.util.UUID.randomUUID().toString.replace("-", "_")}.$extension"
+            gdal.FileFromMemBuffer(tempPath, bytes)
+            var ds: Dataset = null
+            try {
+                TileBytes.refusedClassOf(tempPath, bytes).foreach(d => throw TileBytes.refusal(d))
+                ds = gdal.OpenEx(tempPath, OF_RASTER | OF_READONLY, TileBytes.openDrivers)
+                Option(ds).map(_.GetDriver().getShortName)
+            } finally {
+                if (ds != null) ds.delete()
+                gdal.Unlink(tempPath)
+            }
+        }
+
     /** [[readFromBytes]] or [[readFromBytesUngated]] by `gated`. */
     def readBytes(bytes: Array[Byte], options: Map[String, String], gated: Boolean): Dataset =
         if (bytes == null) null else openFromBytes(bytes, options, gated)

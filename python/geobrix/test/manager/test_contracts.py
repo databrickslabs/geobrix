@@ -1685,3 +1685,22 @@ def test_heavy_header_accessors_answer_for_a_tile_over_the_read_cap(
     assert got["rst_avg"] is None, "a pixel reader still refuses the tile"
 
 
+def test_light_format_of_a_netcdf_tile_is_its_own(spark, tmp_path):
+    names = ["rst_format"]
+    got = _answers(spark, tmp_path, names, _light(spark, names), "tile_4326_netcdf")
+    assert got["rst_format"] == "netCDF"
+
+
+@pytest.mark.integration
+def test_heavy_format_of_a_netcdf_tile_is_its_own_not_the_geotiff_it_is_read_as(
+    jvm_spark, tmp_path
+):
+    """Heavy reads netCDF bytes as their GeoTIFF translation; the format still names the tile's own driver, as
+    light's does."""
+    names = ["rst_format"]
+    got = _answers(
+        jvm_spark, tmp_path, names, _heavy(jvm_spark, names), "tile_4326_netcdf"
+    )
+    assert got["rst_format"] == "netCDF"
+
+

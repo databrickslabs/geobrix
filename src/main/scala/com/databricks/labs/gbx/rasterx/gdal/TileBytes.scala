@@ -142,6 +142,9 @@ object TileBytes {
         }
     }
 
+    /** True when `bytes` start like a TIFF (classic or BigTIFF, either byte order). */
+    def isTiff(bytes: Array[Byte]): Boolean = BinaryMagics.take(4).exists(startsWith(bytes, _))
+
     /** A tile's metadata once its bytes are read as `ds`: a `driver` outside the self-contained class names the
       * GeoTIFF it was translated to, so the result is written as GeoTIFF too. */
     def metadataAfterRead(metadata: Map[String, String], ds: Dataset): Map[String, String] =

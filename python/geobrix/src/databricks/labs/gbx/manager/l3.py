@@ -15,7 +15,9 @@ _TYPES = {
 
 
 def _return_type(name: str):
-    """A manifest `returns` word -> the pyspark type (imported here, so the manifest stays pyspark-free)."""
+    """A manifest `returns` value -> what `spark.udf.register` takes: the pyspark type of a word in `_TYPES` or
+    `bng_chips` (imported here, so the manifest stays pyspark-free), else the value as it is, a DDL type string
+    such as ``array<bigint>``."""
     from pyspark.sql import types as T
 
     if (
@@ -24,7 +26,9 @@ def _return_type(name: str):
         from databricks.labs.gbx.pygx._serde import BNG_CHIP_SCHEMA
 
         return T.ArrayType(BNG_CHIP_SCHEMA)
-    return getattr(T, _TYPES[name])()
+    if name in _TYPES:
+        return getattr(T, _TYPES[name])()
+    return name
 
 
 def l3_variant(fn) -> Tuple[str, Optional[str]]:
@@ -70,6 +74,25 @@ def register_l3(spark, fn, variant: str, name: Optional[str] = None) -> None:
     reg = _gdal_policy.carrying_session(
         spark
     )  # the driver's remote-path switch goes to the workers
+    if spec.get("file_ref") and name == fn.sql_name:
+        from databricks.labs.gbx.manager import capabilities
+
+        if capabilities._sql_functions(spark):
+            # the light UDF that also takes a FILE reference (second), behind a wrapper that mints it from the
+            # tile's path with the read rule of `file_ref_arg`
+            from databricks.labs.gbx.ds.file_gbx import file_ref_sql
+            from databricks.labs.gbx.manager import jvm, sqlwrap
+
+            private = jvm._priv(fn, "L3f")
+            reg.udf.register(private, resolve_ref(spec["file_ref"]))
+            jvm._create_wrapper(
+                spark,
+                fn,
+                sqlwrap.file_ref_wrapper(
+                    fn, private, file_ref_sql(fn.params[0].name, spark)
+                ),
+            )
+            return
     if "variants" in spec:
         reg.udf.register(name, resolve_ref(spec["variants"][variant]))
     elif "factory" in spec:

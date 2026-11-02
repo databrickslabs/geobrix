@@ -35,6 +35,30 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     # histogram are Catalyst steps) and JVM-DF (one Scala DataFrame step). The levels leg measures them.
     "rst_viewshed_towers": ("L3",),
 }
+# The order a function with no PREFERENCE row takes, by its manifest family (measured on-cluster where a record or
+# the benchmark tables have the family; the spec's "highest available" where not). Per-name exceptions are
+# PREFERENCE rows. L3 is always there: every function has a light level.
+FAMILY_PREFERENCE: Dict[str, Tuple[str, ...]] = {
+    "grid-scalar": ("L1", "L3"),
+    "grid-array": ("L3",),
+    "grid-generator": ("L3",),
+    "cell-aggregate": ("L3",),
+    "vector-scalar": ("L3",),
+    "vector-aggregate": ("L3",),
+    "vector-generator": ("L3",),
+    "raster-accessor": ("L3",),
+    "raster-stat": ("L3",),
+    "raster-tile-op": ("L3",),
+    "raster-constructor": ("L1", "L3"),
+    "raster-rasterize": ("L1", "L3"),
+    "raster-array-op": ("L1", "L3"),
+    "raster-aggregate": ("L3",),
+    "raster-vectorize": ("L1", "L3"),
+    "raster-generator": ("L3",),
+    "raster-to-grid": ("L3",),
+    "web-tiles": ("L3",),
+    "raster-file-op": ("L3",),
+}
 TOWERS_LEVELS: Tuple[str, ...] = ("L3", "L1-steps", "JVM-DF")
 # The Catalyst steps L1-steps calls by their private session names.
 TOWERS_STEPS: Tuple[Tuple[str, str], ...] = (
@@ -186,17 +210,28 @@ def available(fn, level: str, caps: Capabilities) -> Optional[str]:
     return f"{level} is not a session level"
 
 
+def order(fn) -> Tuple[str, ...]:
+    """The levels to try for ``fn``, best first: its PREFERENCE row, else its family's, else every level it has,
+    highest first. A level the row does not have is skipped by ``select``; a family order that names none of the
+    row's levels falls through to L3 there (every row has L3)."""
+    return (
+        PREFERENCE.get(fn.sql_name)
+        or FAMILY_PREFERENCE.get(fn.family)
+        or tuple(lv for lv in ("L1", "L2", "L3") if lv in fn.levels)
+    )
+
+
 def select(
     fn, caps: Capabilities, override: Optional[Tuple[str, str]] = None
 ) -> Choice:
-    """First available level in PREFERENCE (or the testing-only override)."""
+    """First available level in ``order(fn)`` (or the testing-only override)."""
     if override is not None:
         return Choice(override[0], override[1], ())
-    order = PREFERENCE.get(fn.sql_name) or tuple(
-        lv for lv in ("L1", "L2", "L3") if lv in fn.levels
-    )
+    order_ = order(fn)
+    if not any(lv in fn.levels for lv in order_):
+        order_ = ("L3",)
     reasons = []
-    for level in order:
+    for level in order_:
         if level not in fn.levels:
             continue
         why = available(fn, level, caps)

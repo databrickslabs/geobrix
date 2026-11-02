@@ -219,12 +219,18 @@ def _l1_shape_ok(fn):
         ),
         # A dedicated JVM on another GDAL than the pin: no engine at L1, the row's own L1 where it has one.
         ("other-jvm-gdal", dict(jar=OK_JAR, jar_reason="", jvm_gdal="3.11.4")),
+        # A row with no per-name order takes its family's: a family that prefers light selects L3 with no
+        # reasons, even on a dedicated cluster where L1 is available.
+        ("family-l3", dict(jar=OK_JAR, jar_reason="", jvm_gdal=MAN.gdal.pin)),
     ],
     ids=lambda c: c[0],
 )
 def test_level_selection_contract(fn, case, monkeypatch):
     """Invariants of the level table, generated per manifest row (not a hand-written expectation list)."""
     name, kw = case
+    if name == "family-l3":
+        monkeypatch.delitem(levels.PREFERENCE, fn.sql_name, raising=False)
+        monkeypatch.setitem(levels.FAMILY_PREFERENCE, fn.family, ("L3",))
     if (
         name == "dedicated"
     ):  # an env wheel: this process runs the light engine the L1 engine sends virtual tiles to
@@ -232,7 +238,9 @@ def test_level_selection_contract(fn, case, monkeypatch):
 
         monkeypatch.setattr(run, "unavailable_reason", lambda: None)
     choice = levels.select(fn, _caps(**kw))
-    pref = [lv for lv in levels.PREFERENCE[fn.sql_name] if lv in fn.levels]
+    pref = [lv for lv in levels.order(fn) if lv in fn.levels]
+    if name == "family-l3":
+        assert (choice.level, choice.reasons) == ("L3", ())
     assert choice.level in pref
     assert len(choice.reasons) == pref.index(
         choice.level
@@ -333,10 +341,11 @@ def test_an_unforced_engine_row_installs_the_engine_or_says_why_not(
     monkeypatch.setattr(caps_mod, "_sql_functions", lambda s: True)
     monkeypatch.setattr(file_gbx, "report_detected_cap", lambda s=None: 1 << 26)
     spark = _Session()
+    lines = []
     choice = manager._install(
-        spark, fn, levels.Choice("L3", "-", ()), _caps(), forced=False
+        spark, fn, levels.Choice("L3", "-", ()), _caps(), forced=False, lines=lines
     )
-    said = capsys.readouterr().out
+    said = "\n".join(line for _, line in lines)
     if want == "fallback":
         assert choice.variant not in levels.ENGINE_L3
         assert spark.registered == [fn.sql_name]
@@ -539,11 +548,19 @@ def test_connect_session_never_touches_the_jvm(monkeypatch, capsys, runtime, rea
         monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
     else:
         monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", runtime)
+    from databricks.labs.gbx.manager import _legacy
+
     stub = ConnectStub()
     out = manager.register(stub)
     assert {c.level for c in out.values()} == {"L3"}
+    # every name, the ones not yet in the manifest too, and the light data sources
+    assert set(out) == (set(_legacy.names()) | set(MAN.functions)) - {
+        f.sql_name for f in FNS if f.status == "mvp"
+    }
+    assert "raster_gbx" in stub.sources
     assert stub.touched == []  # _jvm/_jsc/sparkContext/conf.set never accessed
     printed = capsys.readouterr().out.splitlines()
+    assert len(printed) <= 6, printed  # one line per reason, not one per name
     assert printed.count(manager.messages.REMINDER) == 1
     assert len(printed) == len(
         set(printed)
@@ -1412,3 +1429,131 @@ def test_since_gate_names_a_stable_row_without_a_release():
     probe = next((f for f in FNS if f.status != "stable"), None)
     if probe is not None:
         assert gates.since_findings([dataclasses.replace(probe, since="")]) == []
+
+
+# register() serves every registered name: grouped fallback lines, names not yet in the manifest, the
+# FILE-reference wrapper, and capabilities detected once per session.
+
+
+def test_shared_fallback_reason_prints_once_with_a_count(capsys):
+    from databricks.labs.gbx.manager import messages
+
+    spark = object.__new__(type("S", (), {}))
+    line = "geobrix: heavy unavailable: Spark Connect session (Serverless); using light"
+    messages.say_grouped(spark, [(f"gbx_rst_f{i}", line) for i in range(40)])
+    out = capsys.readouterr().out.strip().splitlines()
+    assert len(out) == 1 and "40 functions" in out[0], out
+
+
+def test_a_per_name_reason_keeps_its_name_when_alone(capsys):
+    from databricks.labs.gbx.manager import messages
+
+    spark = object.__new__(type("S2", (), {}))
+    messages.say_grouped(
+        spark, [("gbx_rst_x", "geobrix: gbx_rst_x not registered (needs rasterio)")]
+    )
+    assert (
+        capsys.readouterr().out.strip()
+        == "geobrix: gbx_rst_x not registered (needs rasterio)"
+    )
+
+
+def test_a_missing_light_dependency_skips_only_that_name(spark, monkeypatch, capsys):
+    import importlib.util as iu
+
+    from databricks.labs.gbx import register
+    from databricks.labs.gbx.engine import run
+    from databricks.labs.gbx.manager import capabilities
+
+    real = iu.find_spec
+    monkeypatch.setattr(
+        iu, "find_spec", lambda m, *a: None if m == "rasterio" else real(m, *a)
+    )
+    # light only: no JAR level, and no osgeo that would serve transformcrs on the engine without rasterio
+    monkeypatch.setattr(capabilities, "detect", lambda s, need_jvm: _caps())
+    monkeypatch.setattr(run, "unavailable_reason", lambda: "no osgeo in this test")
+    names = ["gbx_bng_eastnorthasbng", "gbx_rst_transformcrs"]
+    got = register(spark, only=names, _levels=None)
+    assert "gbx_bng_eastnorthasbng" in got and "gbx_rst_transformcrs" not in got
+    assert "gbx_rst_transformcrs" in capsys.readouterr().out
+
+
+def test_register_reaches_a_name_not_yet_in_the_manifest(spark):
+    from databricks.labs.gbx import register
+    from databricks.labs.gbx.manager import _legacy
+
+    name = sorted(_legacy.names() - set(MAN.functions))[0]
+    assert register(spark, only=[name])[name].variant == "legacy"
+    spark.sql(f"DESCRIBE FUNCTION {name}").collect()
+
+
+def test_file_ref_wrapper_sends_the_file_reference():
+    from databricks.labs.gbx.manager import sqlwrap
+
+    fn = MAN.functions["gbx_rst_transformcrs"]
+    ddl = sqlwrap.file_ref_wrapper(
+        fn, "gbx__l3f_rst_transformcrs", "try_to_file(tile.path)"
+    )
+    assert "gbx__l3f_rst_transformcrs(tile, try_to_file(tile.path), target_crs)" in ddl
+
+
+def test_capabilities_are_detected_once_per_session(monkeypatch, spark):
+    from databricks.labs.gbx import register
+    from databricks.labs.gbx.manager import capabilities
+
+    calls = []
+    real = capabilities._detect_uncached
+    monkeypatch.setattr(
+        capabilities,
+        "_detect_uncached",
+        lambda s, need_jvm: calls.append(need_jvm) or real(s, need_jvm),
+    )
+    capabilities._CACHE.clear()
+    register(spark, only=["gbx_bng_eastnorthasbng"])
+    register(spark, only=["gbx_st_makevalid"])
+    assert len(calls) == 1
+
+
+def test_first_python_call_carries_the_remote_read_switch(spark, monkeypatch):
+    """The first Python use of a driver-reading name registers it with the driver's remote-path switch carried,
+    so a first Python call reads a remote path the way SQL does after register()."""
+    from databricks.labs.gbx import _api, _gdal_policy
+
+    seen = []
+    real = _gdal_policy._CarryingRegistration.register
+
+    def spy(self, name, f, *a, **k):
+        seen.append((name, self._allowed))
+        return real(self, name, f, *a, **k)
+
+    monkeypatch.setattr(_gdal_policy._CarryingRegistration, "register", spy)
+    monkeypatch.setenv(_gdal_policy.REMOTE_ENV, "true")
+    _api._done(spark).discard("gbx_rst_fromfile")
+    _api.ensure(spark, "gbx_rst_fromfile")
+    assert ("gbx_rst_fromfile", True) in seen
+
+
+def test_a_file_ref_row_registers_the_file_udf_behind_its_wrapper(monkeypatch):
+    """An L3 `file_ref` row on a session with SQL functions: the light UDF that takes the FILE reference under its
+    private name, and the wrapper that sends it under the SQL name."""
+    from databricks.labs.gbx.ds import file_gbx
+    from databricks.labs.gbx.manager import l3
+
+    fn = MAN.functions["gbx_rst_slope"]
+    l3_spec = dict(fn.levels["L3"], file_ref=fn.levels["L3"]["variants"]["c0"])
+    row = dataclasses.replace(fn, levels={**fn.levels, "L3": l3_spec})
+    monkeypatch.setattr(caps_mod, "_sql_functions", lambda s: True)
+    monkeypatch.setattr(file_gbx, "file_supported", lambda spark=None: False)
+    spark = _Session()
+    l3.register_l3(spark, row, "c0")
+    assert spark.registered == ["gbx__l3f_rst_slope"]
+    assert any(
+        "gbx__l3f_rst_slope(tile, NULL, " in s and s.startswith("CREATE")
+        for s in spark.statements
+    ), spark.statements
+
+
+def test_every_manifest_family_has_a_family_order():
+    missing = sorted({f.family for f in FNS} - set(levels.FAMILY_PREFERENCE))
+    assert not missing, missing
+    assert all(o[-1] == "L3" for o in levels.FAMILY_PREFERENCE.values())

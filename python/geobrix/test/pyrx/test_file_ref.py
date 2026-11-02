@@ -627,3 +627,24 @@ def test_sql_registry_still_maps_to_single_arg_udfs():
     assert (
         SQL_REGISTRY["gbx_rst_isempty"] is _u_isempty
     ), "gbx_rst_isempty must map to _u_isempty"
+
+
+def test_file_ref_sql_follows_the_rule_of_file_ref_arg(monkeypatch):
+    """The SQL form a FILE-reference wrapper sends: NULL without FILE, the bare mint with FUSE-direct off, else the
+    mint with the same size-gated FUSE-direct rule and connect-aware cap as ``file_ref_arg``.
+    """
+    from databricks.labs.gbx.ds import file_gbx
+
+    monkeypatch.setattr(file_gbx, "file_supported", lambda spark=None: False)
+    assert file_gbx.file_ref_sql("t") == "NULL"
+    monkeypatch.setattr(file_gbx, "file_supported", lambda spark=None: True)
+    monkeypatch.setenv("GBX_DISABLE_FUSE_DIRECT", "1")
+    assert file_gbx.file_ref_sql("t") == "try_to_file(t.path)"
+    monkeypatch.delenv("GBX_DISABLE_FUSE_DIRECT")
+    cap = file_gbx._connect_aware_lru_sizing(None)[0]
+    got = file_gbx.file_ref_sql("t")
+    assert got.startswith(
+        "CASE WHEN t.window IS NULL AND (startswith(t.path, '/Volumes')"
+    )
+    assert f"CAST(t.metadata['path_file_size'] AS BIGINT) > {cap} THEN NULL" in got
+    assert got.endswith("ELSE try_to_file(t.path) END")

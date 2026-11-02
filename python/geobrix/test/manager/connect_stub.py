@@ -27,12 +27,22 @@ class _Udtf:
         self.owner.registered.append(name)
 
 
+class _DataSource:
+    def __init__(self, owner):
+        self.owner = owner
+
+    def register(self, cls):
+        self.owner.sources.append(cls.name())
+
+
 class ConnectStub:
     def __init__(self):
         self.touched, self.registered, self.sql_text = [], [], []
         self.artifacts, self.java_registered, self.sandbox_classes = [], [], set()
+        self.sources = []
         self.udf = _Udf(self)
         self.udtf = _Udtf(self)
+        self.dataSource = _DataSource(self)
 
     def sql(self, text):
         self.sql_text.append(text)

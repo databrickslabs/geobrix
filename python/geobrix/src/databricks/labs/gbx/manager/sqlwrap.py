@@ -44,6 +44,21 @@ def tile_dispatch(fn, jvm_call: str, l3_name: str) -> str:
     )
 
 
+def file_ref_wrapper(fn, private: str, file_sql: str) -> str:
+    """CREATE FUNCTION text: the SQL name calls the light UDF ``private`` that also takes a FILE reference, second.
+
+    ``file_sql`` is the FILE-reference expression for the tile parameter (``ds.file_gbx.file_ref_sql``); where it
+    names ``tile.`` it is rewritten to the row's own tile parameter.
+    """
+    t = fn.params[0].name
+    rest = [p.name for p in fn.params[1:]]
+    args = ", ".join([t, file_sql.replace("tile.", f"{t}.")] + rest)
+    return (
+        f"CREATE OR REPLACE TEMPORARY FUNCTION {fn.sql_name}({_sig(fn)}) "
+        f"RETURNS {sql_type(fn.returns_session)} RETURN {private}({args})"
+    )
+
+
 def cast_call(fn, java_name: str, types) -> str:
     """CREATE FUNCTION text that calls the Java UDF ``java_name`` with each argument cast to the type its class
     declares (``types``, one SQL type per parameter, in order).

@@ -48,6 +48,7 @@ LEVEL_KEYS = {
             "returns",
             "needs",
             "engine",
+            "file_ref",
         }
     ),
     "L4": frozenset({"handler", "deps", "tvf_over", "engine"}),

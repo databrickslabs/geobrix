@@ -1030,6 +1030,27 @@ def file_ref_arg(tile_col: Column, spark: Optional["SparkSession"] = None) -> Co
     return F.lit(None)
 
 
+def file_ref_sql(tile_sql: str, spark: Optional["SparkSession"] = None) -> str:
+    """The SQL form of :func:`file_ref_arg`, for a SQL function wrapper: the FILE mint for ``tile_sql``'s path,
+    with the same size-gated FUSE-direct rule and cap; ``NULL`` when FILE is not supported here.
+
+    ``tile_sql`` is the SQL text of the tile (a parameter name or a column). Serverless-safe, as
+    :func:`file_ref_arg`: no .rdd / _jvm / _jsc / sparkContext / conf.set.
+    """
+    if not file_supported(spark):
+        return "NULL"
+    path = f"{tile_sql}.path"
+    mint = f"try_to_file({path})"
+    if _fuse_direct_disabled():
+        return mint
+    sess = spark if spark is not None else _resolve_session_for_cap()
+    cap = int(_connect_aware_lru_sizing(sess)[0])
+    return (
+        f"CASE WHEN {tile_sql}.window IS NULL AND (startswith({path}, '/Volumes') OR startswith({path}, '/dbfs')) "
+        f"AND CAST({tile_sql}.metadata['path_file_size'] AS BIGINT) > {cap} THEN NULL ELSE {mint} END"
+    )
+
+
 class FileRefReadError(Exception):
     """Raised when a FILE/FILEREF windowed read fails (allows degradation)."""
 

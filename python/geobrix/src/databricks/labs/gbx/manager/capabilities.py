@@ -178,7 +178,35 @@ def _sql_functions(spark) -> bool:
         return False
 
 
+# session -> {need_jvm: Capabilities}: the first-use registration of each name (`_api.ensure`) calls `detect`, and
+# its probes (the JAR, GDAL in the JVM, SQL functions) answer the same for the whole session.
+_CACHE: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+
+
 def detect(spark, need_jvm: bool) -> Capabilities:
+    """What this session offers, probed once per session: a ``need_jvm=True`` result also answers
+    ``need_jvm=False``. A session that cannot be weakly referenced is probed every time.
+    """
+    try:
+        seen = _CACHE.setdefault(spark, {})
+    except TypeError:
+        return _detect_uncached(spark, need_jvm)
+    for key in (True,) if need_jvm else (True, False):
+        if key in seen:
+            return seen[key]
+    seen[need_jvm] = _detect_uncached(spark, need_jvm)
+    return seen[need_jvm]
+
+
+def forget(spark) -> None:
+    """Drop the probes of ``spark``, so the next ``detect`` runs them again (a forced level after a JAR is staged)."""
+    try:
+        _CACHE.pop(spark, None)
+    except TypeError:
+        pass
+
+
+def _detect_uncached(spark, need_jvm: bool) -> Capabilities:
     _runtime_guard()
     connect = is_connect(spark)  # no JVM access before this line
     serverless = connect and is_serverless()

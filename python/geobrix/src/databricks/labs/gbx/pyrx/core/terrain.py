@@ -103,6 +103,13 @@ def _gdaldem_scale(ds) -> tuple:
     return 1.0, 1.0
 
 
+# One scale without the other is refused, with the same text as the engine (engine/argv.py).
+SLOPE_HALF_SCALE_REFUSAL = (
+    "gbx_rst_slope: xscale and yscale must be supplied together (both or neither). "
+    "Fix: pass both xscale and yscale, or neither."
+)
+
+
 def _resolve_scale(ds, xscale, yscale) -> tuple:
     """Explicit (xscale, yscale) when BOTH given, else GDAL-normal auto-scale."""
     if xscale is not None and yscale is not None:
@@ -127,6 +134,8 @@ def slope(ds, unit: str = "degrees", xscale=None, yscale=None) -> bytes:
     Returns:
         Single-band Float32 GTiff bytes; nodata = -9999.
     """
+    if (xscale is None) != (yscale is None):
+        raise ValueError(SLOPE_HALF_SCALE_REFUSAL)
     dzdx, dzdy, valid = _horn_gradients(ds)
     xs, ys = _resolve_scale(ds, xscale, yscale)
     magnitude = np.sqrt((dzdx / xs) ** 2 + (dzdy / ys) ** 2)

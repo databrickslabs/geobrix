@@ -726,7 +726,7 @@ SPEC_SE: Tuple[Case, ...] = (
         SL,
         (Build("dem_3857"), "degrees", 2.0, None),
         "raises",
-        "yscale",
+        "xscale and yscale must be supplied together",
         ("session",),
     ),
     # An unknown unit is a parameter error (it was silently degrees on the heavy tier).

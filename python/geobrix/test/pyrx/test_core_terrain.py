@@ -1,6 +1,7 @@
 import math
 
 import numpy as np
+import pytest
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
@@ -380,3 +381,15 @@ def test_hillshade_auto_scale_geographic_realistic():
     with _serde.open_tile(out) as o:
         r = o.read(1)
     assert np.array_equal(r[1:-1, 1:-1], expected[1:-1, 1:-1])
+
+
+@pytest.mark.parametrize("scales", [{"xscale": 2.0}, {"yscale": 2.0}])
+def test_slope_refuses_one_scale_without_the_other(scales):
+    """The legacy kernel (and the force-output path that runs it) refuses half a scale, as the engine does."""
+    with _serde.open_tile(_dem(np.zeros((4, 4)))) as ds:
+        with pytest.raises(ValueError) as exc:
+            terrain.slope(ds, **scales)
+    assert (
+        "xscale and yscale must be supplied together (both or neither). Fix: pass both"
+        in str(exc.value)
+    )

@@ -249,7 +249,10 @@ object GdalSpecArgv {
                 val v = values.getOrElse(a.source.get, null)
                 val partner = a.withArg.map(byArg)
                 if (partner.exists(p => isNull(v) != isNull(values.getOrElse(p.source.get, null)))) {
-                    throw new SpecParamException(s"${fn.sqlName}: ${a.source.get} and ${partner.get.source.get} must be given together")
+                    throw new SpecParamException(
+                        s"${fn.sqlName}: ${a.source.get} and ${partner.get.source.get} must be supplied together (both or neither). " +
+                            s"Fix: pass both ${a.source.get} and ${partner.get.source.get}, or neither."
+                    )
                 }
                 if (isNull(v)) {
                     a.nullRule match {

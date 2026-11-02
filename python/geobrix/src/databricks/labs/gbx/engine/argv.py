@@ -312,7 +312,8 @@ def _template(fn, values, inputs, section) -> Optional[List[str]]:
         partner = by_arg[a.with_] if a.with_ else None
         if partner is not None and _is_null(v) != _is_null(values.get(partner.source)):
             raise ParamError(
-                f"{fn.sql_name}: {a.source} and {partner.source} must be given together"
+                f"{fn.sql_name}: {a.source} and {partner.source} must be supplied together (both or neither). "
+                f"Fix: pass both {a.source} and {partner.source}, or neither."
             )
         if _is_null(v):
             if a.null == "omit":

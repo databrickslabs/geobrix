@@ -44,7 +44,11 @@ _ALLOWLIST = {
     # (_uf_merge, _uf_combineavg, _uf_frombands) + 3 pandas_udf FILE variants
     # (_merge_agg_file_udf, _combineavg_agg_file_udf, _frombands_agg_file_udf)
     # add 6 more pre-validation opens on front-door-obtained bytes = 14 total.
-    "_serde.open_tile(candidate)": 14,
+    # Each probe passes ``gate=False``: it only asks "do these bytes open?", and the
+    # decode that follows (agg_core's open of the collected members) applies the read
+    # cap, so the probe must not refuse first (a merge or combine refuses an over-cap
+    # member there, never drops it). Same bytes, same purpose; only the cap skip is new.
+    "_serde.open_tile(candidate, gate=False)": 14,
 }
 
 # The v1 shared UDF builders in _udf.py. Every registered rst_* function was
@@ -85,7 +89,11 @@ def test_only_allowlisted_open_tile_calls_remain():
     """Every surviving ``_serde.open_tile(`` call is on the explicit allowlist."""
     src = _functions_source()
     # Count each distinct open_tile(...) call form.
-    calls = re.findall(r"_serde\.open_tile\([^)]*\)", src)
+    # Whitespace-normalised: the formatter wraps a long call over lines.
+    calls = [
+        re.sub(r"\(\s+", "(", re.sub(r"\s+\)", ")", re.sub(r"\s+", " ", c)))
+        for c in re.findall(r"_serde\.open_tile\([^)]*\)", src)
+    ]
     unexpected = []
     counts = {}
     for c in calls:

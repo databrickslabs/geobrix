@@ -1616,7 +1616,8 @@ def _bytes_class_build(name: str, tmpdir: str):
         tif, nc = (os.path.join(tmpdir, f"oracle_4326.{e}") for e in ("tif", "nc"))
         with open(tif, "wb") as fh:
             fh.write(_tile_bytes("EPSG:4326"))
-        rasterio.shutil.copy(tif, nc, driver="netCDF")
+        with open_data(tif) as src:  # the copy reads this dataset, not the name
+            rasterio.shutil.copy(src, nc, driver="netCDF")
         with open(nc, "rb") as fh:
             return _tile(fh.read())
     if (

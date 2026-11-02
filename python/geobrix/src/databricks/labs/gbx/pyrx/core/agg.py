@@ -58,10 +58,16 @@ def _open_all(rasters: List[bytes]):
     memfiles = []
     datasets = []
     try:
+        from databricks.labs.gbx.pyrx._serde import over_read_cap
+
         for b in rasters:
             mf = MemoryFile(bytes(b))
             memfiles.append(mf)
             datasets.append(open_bytes(mf))
+            # the decode of a member's pixels follows: the gate applies here, where a validity probe only opened it
+            reason = over_read_cap(datasets[-1])
+            if reason is not None:
+                raise ReadCapRefused(reason)
     except Exception:
         _close_all(memfiles, datasets)
         raise
@@ -431,6 +437,12 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
         shutil.rmtree(scratch, ignore_errors=True)
 
 
+class ReadCapRefused(ValueError):
+    """A member of a group is decoded over the read cap (the reason and Fix every level gives). Where the aggregate's
+    result is a tile it is that group's error tile, where it is bytes a NULL, like :class:`MosaicTooLarge`.
+    """
+
+
 class MosaicTooLarge(ValueError):
     """The mosaic of a group is past what a merge can stream (see :func:`merge_tiles`). It is a ValueError for a
     caller that lets it stop the query; one whose result is a tile turns it into that group's error tile, and one
@@ -646,6 +658,13 @@ def combineavg_tiles(rasters: List[bytes]) -> bytes:
     any_nodata = False
     for b in rasters:
         with MemoryFile(bytes(b)) as mf, open_bytes(mf) as ds:
+            from databricks.labs.gbx.pyrx._serde import over_read_cap
+
+            reason = over_read_cap(
+                ds
+            )  # the decode of this member follows: the read-cap gate applies
+            if reason is not None:
+                raise ReadCapRefused(reason)
             if sums is None:
                 shape = (ds.count, ds.height, ds.width)
                 sums = np.zeros(shape, dtype="float64")

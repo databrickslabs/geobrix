@@ -1962,3 +1962,82 @@ def test_the_grouped_executor_reads_at_the_sessions_read_cap(spark, tmp_path):
         assert width() is None
     finally:
         spark.conf.unset(READ_CAP_KEY)
+
+
+# --- a member over the read cap is refused with its reason, never dropped ------------------------------------
+# A validity probe asks "can this be opened"; the decode that follows applies the gate. A group of [normal tile,
+# over-cap tile] is the error tile with the refusal, not a result built from the normal tile alone.
+def _over_cap_group(spark, tmp_path, register_it, calls):
+    from pyspark.sql.types import StructField, StructType
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.bench import oracles
+    from databricks.labs.gbx.ds.file_gbx import READ_CAP_KEY
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+    # the same 64 x 48 grid in two types, as combine needs aligned tiles: 3 KiB decoded as bytes, 12 KiB as float32
+    with MemoryFile(oracles._tile_bytes("EPSG:4326")) as mf, mf.open() as src:
+        profile = {**src.profile, "dtype": "uint8", "nodata": 255}
+        pixels = (src.read() % 200).astype("uint8")
+    with MemoryFile() as out:
+        with out.open(**profile) as dst:
+            dst.write(pixels)
+        small = oracles._tile(out.read())
+    large = oracles._build("tile_4326", str(tmp_path))
+    schema = StructType([StructField("tile", V2_TILE_SCHEMA)])
+    spark.createDataFrame([(small,), (large,)], schema).createOrReplaceTempView(
+        "_gbx_group"
+    )
+    spark.conf.set(READ_CAP_KEY, "4096")
+    try:
+        register_it()
+        return spark.sql(f"SELECT {calls} FROM _gbx_group").collect()[0].asDict(True)
+    finally:
+        spark.conf.unset(READ_CAP_KEY)
+
+
+def _refused_tile(tile):
+    md = tile["metadata"] if tile else {}
+    return tile is not None and tile["raster"] is None and "read cap" in str(md)
+
+
+def test_light_array_merge_and_combine_refuse_an_over_cap_member(spark, tmp_path):
+    names = ["rst_merge", "rst_combineavg", "rst_combinemax"]
+    got = _over_cap_group(
+        spark,
+        tmp_path,
+        _light(spark, names),
+        ", ".join(f"gbx_{n}(collect_list(tile)) AS {n}" for n in names),
+    )
+    assert {n: _refused_tile(got[n]) for n in names} == dict.fromkeys(names, True), got
+
+
+def test_light_aggregates_refuse_an_over_cap_member_not_drop_it(spark, tmp_path):
+    """The bytes aggregates have no place for a reason: the group is NULL, not the normal member's mosaic."""
+    names = ["rst_merge_agg", "rst_combineavg_agg", "rst_frombands_agg"]
+    calls = "gbx_rst_merge_agg(tile) AS m, gbx_rst_combineavg_agg(tile) AS c"
+    got = _over_cap_group(spark, tmp_path, _light(spark, names[:2]), calls)
+    assert got == {"m": None, "c": None}
+
+
+@pytest.mark.integration
+def test_heavy_aggregates_refuse_an_over_cap_member_not_drop_it(jvm_spark, tmp_path):
+    from databricks.labs.gbx.manager import jvm
+
+    def install():
+        jvm._point_jvm_at_payload(jvm_spark)
+        inst = jvm_spark._jvm.com.databricks.labs.gbx.kernels.L1Installer
+        base = "com.databricks.labs.gbx.rasterx.expressions.agg.RST_"
+        for sql, cls in (
+            ("gbx_rst_merge_agg", "MergeAgg"),
+            ("gbx_rst_combineavg_agg", "CombineAvgAgg"),
+        ):
+            assert str(inst.install(jvm_spark._jsparkSession, sql, base + cls)) == "ok"
+
+    got = _over_cap_group(
+        jvm_spark,
+        tmp_path,
+        install,
+        "gbx_rst_merge_agg(tile) AS m, gbx_rst_combineavg_agg(tile) AS c",
+    )
+    assert _refused_tile(got["m"]) and _refused_tile(got["c"]), got

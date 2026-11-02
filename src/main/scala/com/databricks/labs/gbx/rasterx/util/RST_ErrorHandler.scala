@@ -24,6 +24,12 @@ object RST_ErrorHandler extends Logging {
     /** Builds metadata map with error message and class name for safeEval error rows. The reason is under
       * `error_message` and under `last_error`, the key every other tile operation, the light tier and the
       * manager's error-tile contract use. */
+    /** The error tile of a group one of whose members was refused (decoded over the read cap, or a driver that can name
+      * other files): the reason and its `Fix:` as every error tile carries them, never a result built from the other
+      * members. */
+    def refusedGroupTile(error: Throwable, rasterType: DataType): InternalRow =
+        RasterSerializationUtil.tileToRow((-1L, null, createErrorMetadata(error)), rasterType, null)
+
     private def createErrorMetadata(error: Throwable): Map[String, String] = {
         Map(
           "error_message" -> error.getMessage,

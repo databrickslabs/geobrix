@@ -2,8 +2,8 @@ package com.databricks.labs.gbx.rasterx.expressions.agg
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, WithExpressionInfo}
 import com.databricks.labs.gbx.rasterx.expressions.constructor.RST_FromBands
-import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
-import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, RasterSerializationUtil}
+import com.databricks.labs.gbx.rasterx.gdal.{RasterDriver, TileBytesRefused}
+import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.aggregate.{ImperativeAggregate, TypedImperativeAggregate}
@@ -110,13 +110,20 @@ case class RST_FromBandsAgg(
         // Open each buffered tile, skipping corrupt members.
         // Buffer is uniformly BinaryType (normalized in update/updateWithIndex).
         var dropped = 0
+        var refused: Option[TileBytesRefused] = None
         val tiles: Seq[(Long, org.gdal.gdal.Dataset, Map[String, String])] = sorted.flatMap { row =>
             val tileRow = row.getStruct(1, tileFieldCount)
-            Try(RasterSerializationUtil.rowToTile(tileRow, org.apache.spark.sql.types.BinaryType)).toOption match {
-                case Some(t) if t._2 != null => Some(t)
+            Try(RasterSerializationUtil.rowToTile(tileRow, org.apache.spark.sql.types.BinaryType)) match {
+                case scala.util.Success(t) if t._2 != null => Some(t)
+                // a refused member is the group's answer, not a corrupt one to skip
+                case scala.util.Failure(e: TileBytesRefused) => if (refused.isEmpty) refused = Some(e); None
                 case _ => dropped += 1; None
             }
         }.toSeq
+        if (refused.nonEmpty) {
+            tiles.foreach(t => RasterDriver.releaseDataset(t._2))
+            return RST_ErrorHandler.refusedGroupTile(refused.get, rasterType)
+        }
 
         if (tiles.isEmpty) return null
 

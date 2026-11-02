@@ -51,6 +51,25 @@ TILE_SCHEMA = StructType(
 )
 
 
+def decoded_bytes(ds) -> int:
+    """The decoded size of an open raster, from its header: width x height x bands x the first band's type size."""
+    import numpy as np
+
+    return (
+        ds.width * ds.height * ds.count * np.dtype(ds.dtypes[0]).itemsize
+        if ds.count
+        else 0
+    )
+
+
+def over_read_cap(ds) -> Optional[str]:
+    """The refusal (reason and Fix, the text every level gives) when ``ds`` is decoded over the read cap, else None."""
+    from databricks.labs.gbx.ds.file_gbx import read_cap_refusal, tile_read_cap
+
+    decoded, cap = decoded_bytes(ds), tile_read_cap()
+    return read_cap_refusal(decoded, cap) if decoded > cap else None
+
+
 @contextmanager
 def open_tile(raster_bytes: bytes, gate: bool = True) -> Iterator[DatasetReader]:
     """Open raster BINARY content as a rasterio DatasetReader (in-memory).
@@ -61,21 +80,12 @@ def open_tile(raster_bytes: bytes, gate: bool = True) -> Iterator[DatasetReader]
     ``gate=False`` skips that check, for the callers that never decode the whole tile: a header answer, and the
     retile family, which cuts the tile into windows (the very function the Fix names).
     """
-    import numpy as np
-
-    from databricks.labs.gbx.ds.file_gbx import read_cap_refusal, tile_read_cap
-
     with MemoryFile(bytes(raster_bytes)) as mf:
         with open_bytes(mf) as ds:
             if gate:
-                decoded = (
-                    ds.width * ds.height * ds.count * np.dtype(ds.dtypes[0]).itemsize
-                    if ds.count
-                    else 0
-                )
-                cap = tile_read_cap()
-                if decoded > cap:
-                    raise ValueError(read_cap_refusal(decoded, cap))
+                reason = over_read_cap(ds)
+                if reason is not None:
+                    raise ValueError(reason)
             yield ds
 
 

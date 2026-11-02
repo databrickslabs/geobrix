@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.expressions.agg
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, WithExpressionInfo}
-import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.gdal.{RasterDriver, TileBytesRefused}
 import com.databricks.labs.gbx.rasterx.operations.PixelCombineRasters
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
@@ -82,11 +82,19 @@ case class RST_DerivedBandAgg(
             val funcName = funcNameExpr.eval(null).asInstanceOf[UTF8String].toString
 
             var dropped = 0
+            var refused: Option[TileBytesRefused] = None
             val tiles = buffer.flatMap { row =>
-                Try(RasterSerializationUtil.rowToTile(row.asInstanceOf[InternalRow], rasterType)).toOption match {
-                    case Some(t) if t._2 != null => Some(t)
+                Try(RasterSerializationUtil.rowToTile(row.asInstanceOf[InternalRow], rasterType)) match {
+                    case scala.util.Success(t) if t._2 != null => Some(t)
+                    // a refused member is the group's answer, not a corrupt one to skip
+                    case scala.util.Failure(e: TileBytesRefused) => if (refused.isEmpty) refused = Some(e); None
                     case _ => dropped += 1; None
                 }
+            }
+            if (refused.nonEmpty) {
+                tiles.foreach(t => RasterDriver.releaseDataset(t._2))
+                buffer.clear()
+                return RST_ErrorHandler.refusedGroupTile(refused.get, rasterType)
             }
             val onlyErrors = if (tiles.isEmpty) RST_ErrorHandler.errorTileOfGroup(buffer) else null
             buffer.clear()

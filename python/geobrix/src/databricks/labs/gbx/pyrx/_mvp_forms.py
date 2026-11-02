@@ -565,7 +565,7 @@ def _member_bytes(tile):
     if b is None:
         return None
     try:
-        with _serde.open_tile(b):
+        with _serde.open_tile(b, gate=False):  # a validity probe: the decode gates
             return b
     except Exception:  # noqa: BLE001
         return None

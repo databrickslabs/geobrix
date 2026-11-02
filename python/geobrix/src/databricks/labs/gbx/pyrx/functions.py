@@ -10,6 +10,7 @@ from databricks.labs.gbx import _pyspark  # noqa: F401
 
 # isort: split
 
+import functools
 import json
 from typing import List, Optional
 
@@ -987,6 +988,33 @@ def rst_fromfile(
 
 
 # rst_merge: single ARRAY<tile struct> arg in one row -> mosaic tile.
+def _refusal_as_error_tile(func):
+    """A tile-returning UDF body whose group has a member decoded over the read cap answers that group's error tile with
+    the refusal (reason and Fix), never a result built from the other members."""
+
+    @functools.wraps(func)
+    def run(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except agg_core.ReadCapRefused as exc:
+            return _serde.build_error_tile(str(exc), 0)
+
+    return run
+
+
+def _refusal_as_null(func):
+    """The same for a bytes-returning aggregate, which has no place for a reason: the group is NULL."""
+
+    @functools.wraps(func)
+    def run(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except agg_core.ReadCapRefused:
+            return None
+
+    return run
+
+
 # Mirrors gbx_rst_merge: extract each element's raster bytes and mosaic by
 # extent (reuses core.agg.merge_tiles, the same union-extent reducer the
 # heavyweight RST_MergeAgg uses). cellid = 0 (no aggregate group key here).
@@ -1023,7 +1051,9 @@ def _merge_bytes(tiles):
             # member that passes the empty/None filter but cannot be opened by
             # rasterio must be skipped here, not inside agg_core.merge_tiles
             # (which opens all bytes at once and re-raises on the first failure).
-            with _serde.open_tile(candidate):
+            with _serde.open_tile(
+                candidate, gate=False
+            ):  # a validity probe: the decode gates
                 pass
             rasters.append(candidate)
         except Exception:  # noqa: BLE001
@@ -1040,7 +1070,7 @@ def _merge_udf(tiles):
         return None
     try:
         result = _merge_bytes(tiles)
-    except agg_core.MosaicTooLarge as exc:
+    except (agg_core.MosaicTooLarge, agg_core.ReadCapRefused) as exc:
         return _serde.build_error_tile(
             str(exc), 0
         )  # this row's answer, not the query's failure
@@ -1064,7 +1094,7 @@ def _merge_v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
         return None
     try:
         result = _merge_bytes(tiles)
-    except agg_core.MosaicTooLarge as exc:
+    except (agg_core.MosaicTooLarge, agg_core.ReadCapRefused) as exc:
         return _serde.build_error_tile(str(exc), 0)
     if result is None:
         return None
@@ -1109,7 +1139,9 @@ def _uf_merge(tiles, file_refs):
                     candidate = _dataset_to_gtiff_bytes(ds)
             else:
                 candidate = bytes(vt.raster)
-            with _serde.open_tile(candidate):
+            with _serde.open_tile(
+                candidate, gate=False
+            ):  # a validity probe: the decode gates
                 pass
             rasters.append(candidate)
         except Exception:  # noqa: BLE001
@@ -1120,7 +1152,7 @@ def _uf_merge(tiles, file_refs):
         return None
     try:
         new_bytes = agg_core.merge_tiles(rasters)
-    except agg_core.MosaicTooLarge as exc:
+    except (agg_core.MosaicTooLarge, agg_core.ReadCapRefused) as exc:
         return _serde.build_error_tile(str(exc), 0)
     tile = _serde.build_tile(new_bytes, "GTiff", 0)
     if dropped:
@@ -1204,7 +1236,9 @@ def _combineavg_bytes(tiles):
                 candidate = bytes(vt.raster)
             # Validate openability before collecting — corrupt bytes must be
             # dropped here, not inside agg_core which opens all at once.
-            with _serde.open_tile(candidate):
+            with _serde.open_tile(
+                candidate, gate=False
+            ):  # a validity probe: the decode gates
                 pass
             rasters.append(candidate)
             good_elems.append(t)
@@ -1219,6 +1253,7 @@ def _combineavg_bytes(tiles):
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_refusal_as_error_tile
 def _combineavg_udf(tiles):
     if not tiles:
         return None
@@ -1235,6 +1270,7 @@ def _combineavg_udf(tiles):
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_refusal_as_error_tile
 def _combineavg_v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
     if not tiles:
         return None
@@ -1253,6 +1289,7 @@ def _combineavg_v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_refusal_as_error_tile
 def _uf_combineavg(tiles, file_refs):
     """FILE-aware rst_combineavg: reads each input via its per-element FileRef."""
     if not tiles:
@@ -1277,7 +1314,9 @@ def _uf_combineavg(tiles, file_refs):
                     candidate = _dataset_to_gtiff_bytes(ds)
             else:
                 candidate = bytes(vt.raster)
-            with _serde.open_tile(candidate):
+            with _serde.open_tile(
+                candidate, gate=False
+            ):  # a validity probe: the decode gates
                 pass
             rasters.append(candidate)
             good_elems.append(t)
@@ -1377,7 +1416,9 @@ def _combine_stat_bytes(tiles, stat: str):
                 candidate = ot.materialize_to_bytes(vt).raster
             else:
                 candidate = bytes(vt.raster)
-            with _serde.open_tile(candidate):
+            with _serde.open_tile(
+                candidate, gate=False
+            ):  # a validity probe: the decode gates
                 pass
             rasters.append(candidate)
             good_elems.append(t)
@@ -1404,6 +1445,7 @@ def _make_combine_stat_udf(stat: str):
     """Factory that produces a ``@f.udf(V2_TILE_SCHEMA)`` for the given stat."""
     _stat_cap = stat.capitalize()
 
+    @_refusal_as_error_tile
     def _udf(tiles):
         if not tiles:
             return None
@@ -1426,6 +1468,7 @@ def _make_combine_stat_v2_udf(stat: str):
     """Factory for the force-output (v2) variant of a combine-stat UDF."""
     _stat_cap = stat.capitalize()
 
+    @_refusal_as_error_tile
     def _v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
         if not tiles:
             return None
@@ -1715,7 +1758,9 @@ def _frombands_bytes(bands):
             )
             # Validate openability before collecting — corrupt bytes must be
             # dropped here, not inside agg_core which opens all at once.
-            with _serde.open_tile(candidate):
+            with _serde.open_tile(
+                candidate, gate=False
+            ):  # a validity probe: the decode gates
                 pass
             indexed.append((i, candidate))
             if first_good is None:
@@ -1730,6 +1775,7 @@ def _frombands_bytes(bands):
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_refusal_as_error_tile
 def _frombands_udf(bands):
     if not bands:
         return None
@@ -1746,6 +1792,7 @@ def _frombands_udf(bands):
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_refusal_as_error_tile
 def _frombands_v2_udf(bands, virtualize_dir, virtualize_prefix, materialize):
     if not bands:
         return None
@@ -1764,6 +1811,7 @@ def _frombands_v2_udf(bands, virtualize_dir, virtualize_prefix, materialize):
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_refusal_as_error_tile
 def _uf_frombands(bands, file_refs):
     """FILE-aware rst_frombands: reads each input via its per-element FileRef.
 
@@ -1794,7 +1842,9 @@ def _uf_frombands(bands, file_refs):
                     candidate = _dataset_to_gtiff_bytes(ds)
             else:
                 candidate = bytes(vt.raster)
-            with _serde.open_tile(candidate):
+            with _serde.open_tile(
+                candidate, gate=False
+            ):  # a validity probe: the decode gates
                 pass
             indexed.append((i, candidate))
             if first_good is None:
@@ -8687,7 +8737,9 @@ def _merge_agg_bytes(tile: pd.Series, error_channel: bool):
         if candidate is None:
             continue
         try:
-            with _serde.open_tile(candidate):
+            with _serde.open_tile(
+                candidate, gate=False
+            ):  # a validity probe: the decode gates
                 pass
             rasters.append(candidate)
         except Exception:  # noqa: BLE001
@@ -8699,7 +8751,7 @@ def _merge_agg_bytes(tile: pd.Series, error_channel: bool):
     # bare bytes; no struct/metadata assembly here). The skip still stops raising.
     try:
         return agg_core.merge_tiles(rasters)
-    except agg_core.MosaicTooLarge as exc:
+    except (agg_core.MosaicTooLarge, agg_core.ReadCapRefused) as exc:
         # This group's answer, not the query's failure: its error tile where the result is a tile, NULL where it
         # is bytes (they have no place for a reason).
         if not error_channel:
@@ -8748,7 +8800,9 @@ def _merge_agg_v2_udf(
         if candidate is None:
             continue
         try:
-            with _serde.open_tile(candidate):
+            with _serde.open_tile(
+                candidate, gate=False
+            ):  # a validity probe: the decode gates
                 pass
             rasters.append(candidate)
         except Exception:  # noqa: BLE001
@@ -8758,7 +8812,7 @@ def _merge_agg_v2_udf(
 
     try:
         merged_bytes = agg_core.merge_tiles(rasters)
-    except agg_core.MosaicTooLarge as exc:
+    except (agg_core.MosaicTooLarge, agg_core.ReadCapRefused) as exc:
         return _error_payload([_serde.build_error_tile(str(exc), 0)])
     vt = VirtualTile(cellid=0, raster=bytes(merged_bytes))
     shaped = ot.shape_output(vt, virtualize_dir=vdir, virtualize_prefix=vprefix)
@@ -8793,6 +8847,7 @@ def _as_virtual_tile_from_path_udf(encoded):
 
 
 @pandas_udf(BinaryType())
+@_refusal_as_null
 def _combineavg_agg_udf(tile: pd.Series) -> bytes:
     from databricks.labs.gbx.pyrx import _env
 
@@ -8806,7 +8861,9 @@ def _combineavg_agg_udf(tile: pd.Series) -> bytes:
         if candidate is None:
             continue
         try:
-            with _serde.open_tile(candidate):
+            with _serde.open_tile(
+                candidate, gate=False
+            ):  # a validity probe: the decode gates
                 pass
             if first:
                 cid = r["cellid"]
@@ -8829,6 +8886,7 @@ def _combineavg_agg_udf(tile: pd.Series) -> bytes:
 
 
 @pandas_udf(BinaryType())
+@_refusal_as_null
 def _combineavg_agg_sql_udf(tile: pd.Series) -> bytes:
     # SQL registration variant: returns raw GTiff bytes (no cellid envelope), so
     # SQL callers can wrap it directly with gbx_rst_fromcontent(<agg>, 'GTiff').
@@ -8844,7 +8902,9 @@ def _combineavg_agg_sql_udf(tile: pd.Series) -> bytes:
         if candidate is None:
             continue
         try:
-            with _serde.open_tile(candidate):
+            with _serde.open_tile(
+                candidate, gate=False
+            ):  # a validity probe: the decode gates
                 pass
             rasters.append(candidate)
         except Exception:  # noqa: BLE001
@@ -8858,6 +8918,7 @@ def _combineavg_agg_sql_udf(tile: pd.Series) -> bytes:
 
 
 @pandas_udf(BinaryType())
+@_refusal_as_null
 def _frombands_agg_udf(tile: pd.Series, band_index: pd.Series) -> bytes:
     from databricks.labs.gbx.pyrx import _env
 
@@ -8871,7 +8932,9 @@ def _frombands_agg_udf(tile: pd.Series, band_index: pd.Series) -> bytes:
         if candidate is None:
             continue
         try:
-            with _serde.open_tile(candidate):
+            with _serde.open_tile(
+                candidate, gate=False
+            ):  # a validity probe: the decode gates
                 pass
             indexed.append((int(idx), candidate))
         except Exception:  # noqa: BLE001
@@ -8885,6 +8948,7 @@ def _frombands_agg_udf(tile: pd.Series, band_index: pd.Series) -> bytes:
 
 
 @pandas_udf(BinaryType())
+@_refusal_as_null
 def _frombands_agg_file_udf(
     tile: pd.Series, file_ref: pd.Series, band_index: pd.Series
 ) -> bytes:
@@ -8904,7 +8968,9 @@ def _frombands_agg_file_udf(
                     candidate = _dataset_to_gtiff_bytes(ds)
             else:
                 candidate = bytes(vt.raster)
-            with _serde.open_tile(candidate):
+            with _serde.open_tile(
+                candidate, gate=False
+            ):  # a validity probe: the decode gates
                 pass
             indexed.append((int(idx), candidate))
         except Exception:  # noqa: BLE001
@@ -8963,7 +9029,9 @@ def _derivedband_agg_bytes(
         if candidate is None:
             continue
         try:
-            with _serde.open_tile(candidate):
+            with _serde.open_tile(
+                candidate, gate=False
+            ):  # a validity probe: the decode gates
                 pass
             rasters.append(candidate)
         except Exception:  # noqa: BLE001
@@ -8974,9 +9042,16 @@ def _derivedband_agg_bytes(
     # NOTE: drop-count has no metadata carrier at this layer (pandas_udf returns
     # bare bytes; no struct/metadata assembly here). The skip still stops raising.
     # pyfunc/func_name are per-group constants; read them from the first row.
-    return agg_core.derivedband_tiles(
-        rasters, str(python_func.iloc[0]), str(func_name.iloc[0])
-    )
+    try:
+        return agg_core.derivedband_tiles(
+            rasters, str(python_func.iloc[0]), str(func_name.iloc[0])
+        )
+    except (
+        agg_core.ReadCapRefused
+    ) as exc:  # this group's answer: its error tile where there is a channel, else NULL
+        if not error_channel:
+            return None
+        return _error_payload([_serde.build_error_tile(str(exc), 0)])
 
 
 @pandas_udf(BinaryType())

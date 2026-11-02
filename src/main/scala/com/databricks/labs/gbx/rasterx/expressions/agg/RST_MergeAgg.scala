@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.expressions.agg
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, WithExpressionInfo}
-import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.gdal.{RasterDriver, TileBytesRefused}
 import com.databricks.labs.gbx.rasterx.operations.MergeRasters
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil, V2Tile}
 import org.apache.spark.sql.catalyst.InternalRow
@@ -80,15 +80,22 @@ case class RST_MergeAgg(
             // and fell back to GetDescription, which for an in-memory BinaryType tile is a
             // per-open /vsimem/<uuid> path -- i.e. random. Raw content has no such hole.
             var dropped = 0
+            var refused: Option[TileBytesRefused] = None
             val tiles = buffer
                 .map(_.asInstanceOf[InternalRow])
                 .sortBy(row => RST_MergeAgg.contentKey(row))(RST_MergeAgg.unsignedBytesOrdering)
                 .flatMap { row =>
-                    Try(RasterSerializationUtil.rowToTile(row, rasterType)).toOption match {
-                        case Some(t) if t._2 != null => Some(t)
+                    Try(RasterSerializationUtil.rowToTile(row, rasterType)) match {
+                        case scala.util.Success(t) if t._2 != null => Some(t)
+                        // a refused member is the group's answer, not a corrupt one to skip
+                        case scala.util.Failure(e: TileBytesRefused) => if (refused.isEmpty) refused = Some(e); None
                         case _ => dropped += 1; None
                     }
                 }
+            if (refused.nonEmpty) {
+                tiles.foreach(t => RasterDriver.releaseDataset(t._2))
+                return RST_ErrorHandler.refusedGroupTile(refused.get, rasterType)
+            }
 
             if (tiles.isEmpty) {
                 RST_ErrorHandler.errorTileOfGroup(buffer) // NULL unless every member is an error tile

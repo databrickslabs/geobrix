@@ -133,6 +133,10 @@ def _needs_default_wrapper(spark, fn, spec, name: str) -> bool:
 
     if not capabilities._sql_functions(spark):
         return False
+    # The wrapper declares each parameter with its first session type, so a parameter that accepts several (a geometry
+    # as BINARY or STRING, a resolution as INT or STRING) would cast the other forms: the kernel keeps its own defaults.
+    if any(len(p.session) > 1 for p in fn.params):
+        return False
     # A kernel that already defaults its own optional arguments needs no wrapper, and must not sit behind one:
     # Spark rejects a SQL function inside a generator, and `explode(gbx_bng_tessellate(g, 3))` is the way
     # to read the chips of an array-returning scalar.

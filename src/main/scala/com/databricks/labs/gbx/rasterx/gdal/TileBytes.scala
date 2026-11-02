@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.rasterx.gdal
 
+import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.kernels.spec.{GdalSpecEngine, GdalSpecs}
 import org.gdal.gdal.{Dataset, TranslateOptions, gdal}
 import org.gdal.gdalconst.gdalconstConstants
@@ -129,18 +130,25 @@ object TileBytes {
         }
     }
 
-    /** Refuse `ds` when it is decoded over the read cap (the light tier's read gate: an error tile with a Fix). */
-    private[gdal] def checkSize(ds: Dataset): Unit = {
-        val decoded = decodedSize(ds)
-        val limit = readCap
-        if (decoded > limit) {
+    /** The refusal of a tile decoded to `decodedBytes` when that is over the read cap, else None: the one rule and
+      * text of the decoded-size gate (the light tier's read gate: an error tile with a Fix), for every reader of
+      * tile bytes. The cap is `conf`'s [[ReadCapKey]] when it names one, else this task's ([[readCap]]). */
+    def checkDecoded(decodedBytes: Long, conf: Option[ExpressionConfig]): Option[TileBytesRefused] = {
+        val limit = conf.flatMap(_.readCap).getOrElse(readCap)
+        if (decodedBytes > limit) {
             def size(n: Long) = if (n >= (1L << 20)) s"${n >> 20} MiB" else s"${n >> 10} KiB"
-            throw new TileBytesRefused(
-              s"the tile is ${size(decoded)} decoded, over this compute's read cap (${size(limit)}). " +
-                  "Fix: retile it first (gbx_rst_retile) so each tile is smaller"
+            Some(
+              new TileBytesRefused(
+                s"the tile is ${size(decodedBytes)} decoded, over this compute's read cap (${size(limit)}). " +
+                    "Fix: retile it first (gbx_rst_retile) so each tile is smaller"
+              )
             )
-        }
+        } else None
     }
+
+    /** Refuse `ds` when it is decoded over the read cap: [[checkDecoded]] for its header's decoded size. */
+    private[gdal] def checkSize(ds: Dataset): Unit =
+        checkDecoded(decodedSize(ds), None).foreach(r => throw r)
 
     /** True when `bytes` start like a TIFF (classic or BigTIFF, either byte order). */
     def isTiff(bytes: Array[Byte]): Boolean = BinaryMagics.take(4).exists(startsWith(bytes, _))

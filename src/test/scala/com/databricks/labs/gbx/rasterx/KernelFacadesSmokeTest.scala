@@ -13,7 +13,7 @@ import com.databricks.labs.gbx.kernels.udf.{BngEastNorthAsBngConnectUdf, BngEast
 import com.databricks.labs.gbx.rasterx.expressions.agg.mvp.BngRasterizeCellsBytesUdf
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx.expressions.mvp.RST_MvpMaterialize
-import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
+import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver, TileBytes, TileBytesRefused}
 import com.databricks.labs.gbx.rasterx.util.V2Tile
 import com.databricks.labs.gbx.util.NodeFilePathUtil
 import org.apache.spark.sql.Row
@@ -125,6 +125,21 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         assert(vsimemEntries() == before, "the facade left in-memory GDAL files behind")
         val ds = RasterDriver.readFromBytes(out, Map("driver" -> "GTiff"))
         try assert(ds.GetProjection().contains("Pseudo-Mercator")) finally RasterDriver.releaseDataset(ds)
+    }
+
+    test("TileBytes.checkDecoded gives the decoded-size refusal; the ungated read opens a tile the gate refuses") {
+        val conf = Some(ExpressionConfig(Map(TileBytes.ReadCapKey -> "1024"), null))
+        assert(TileBytes.checkDecoded(1024L, conf).isEmpty)
+        val refusal = TileBytes.checkDecoded(1025L, conf).get
+        assert(refusal.getMessage.contains("over this compute's read cap (1 KiB)") &&
+            refusal.getMessage.contains("Fix: retile it first (gbx_rst_retile)"))
+        val tile = tinyGTiff() // 16 x 16 float32 = 1 KiB decoded
+        TileBytes.useReadCap(Some(512L))
+        try {
+            intercept[TileBytesRefused](RasterDriver.readFromBytes(tile, Map("driver" -> "GTiff")))
+            val ds = RasterDriver.readFromBytesUngated(tile, Map("driver" -> "GTiff"))
+            try assert(ds.getRasterXSize == 16) finally RasterDriver.releaseDataset(ds)
+        } finally TileBytes.useReadCap(None)
     }
 
     // The first band of a GTiff as rows of pixels, and its size.

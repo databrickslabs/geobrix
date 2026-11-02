@@ -88,6 +88,8 @@ GRID_ARRAY = (
         "geomkloop_point_k1", GKL, (POINT, 3, 1), "cell_set", _square(530, 180, 1, True)
     ),
     Case("geomkloop_null", GKL, (POINT, 3, None), "null"),
+    Case("geomkloop_bad_mode", GKL, (POINT, 3, 1, "sideways"), "raises", "sideways"),
+    Case("geomkloop_res_3_5", GKL, (POINT, 3.5, 1), "raises", "3.5"),
     # A non-finite point has no cell: NULL on every level.
     Case("bng_inf_point_array", GKR, (INF_POINT, 3, 1), "null"),
 )
@@ -180,6 +182,10 @@ GRID_ARRAY += (
     Case("qb_geomkring_null", QGKR, (None, 10, 1), "null"),
     Case("qb_geomkloop_point_k1", QGKL, (QB_PT, 10, 1), "cell_set", QB_LOOP1),
     Case("qb_geomkloop_null", QGKL, (QB_PT, 10, None), "null"),
+    Case(
+        "qb_geomkloop_bad_mode", QGKL, (QB_PT, 10, 1, "sideways"), "raises", "sideways"
+    ),
+    Case("qb_geomkloop_res_3_5", QGKL, (QB_PT, 3.5, 1), "raises", "3.5"),
     Case("quadbin_res_null_geomk", QGKR, (QB_PT, None, 1), "null"),
     Case("quadbin_res_3_5_raises_geomk", QGKR, (QB_PT, 3.5, 1), "raises", "3.5"),
     Case(
@@ -207,9 +213,10 @@ GRID_ARRAY += (
     Case("cg_kring_null", CKR, (None, G, 1), "null", variants=((CG0, G, None),)),
     Case("cg_kloop_k1", CKL, (CG0, G, 1), "cell_set", CG_LOOP1),
     Case("cg_kloop_k0", CKL, (CG0, G, 0), "cell_set", [CG0]),
-    Case("cg_kloop_null", CKL, (None, G, 1), "null"),
+    Case("cg_kloop_null", CKL, (None, G, 1), "null", variants=((CG0, G, None),)),
     Case("cg_polyfill_2x2", CPF, (CG_SQ2, G, 0), "cell_set", CG_SQ2_CELLS),
     Case("cg_polyfill_null", CPF, (None, G, 0), "null"),
+    Case("cg_polyfill_bad_geom", CPF, ("not a geometry", G, 0), "null"),
     Case("custom_res_null_array", CPF, (CG_SQ2, G, None), "null"),
     Case("custom_res_3_5_raises_array", CPF, (CG_SQ2, G, 3.5), "raises", "3.5"),
     Case(
@@ -226,6 +233,14 @@ GRID_ARRAY += (
     Case("cg_geomkring_null", CGKR, (None, G, 0, 1), "null"),
     Case("cg_geomkloop_point_k1", CGKL, (CG0_PT, G, 0, 1), "cell_set", CG_LOOP1),
     Case("cg_geomkloop_null", CGKL, (CG0_PT, G, 0, None), "null"),
+    Case(
+        "cg_geomkloop_bad_mode",
+        CGKL,
+        (CG0_PT, G, 0, 1, "sideways"),
+        "raises",
+        "sideways",
+    ),
+    Case("cg_geomkloop_res_3_5", CGKL, (CG0_PT, G, 3.5, 1), "raises", "3.5"),
     Case("custom_res_null_geomk", CGKR, (CG0_PT, G, None, 1), "null"),
     Case("custom_res_3_5_raises_geomk", CGKR, (CG0_PT, G, 3.5, 1), "raises", "3.5"),
     Case(
@@ -256,6 +271,10 @@ GRID_ARRAY += (
     Case("h3_geomkring_null", HGKR, (None, 8, 1), "null"),
     Case("h3_geomkloop_point_k1", HGKL, (QB_PT, 8, 1), "cell_set", H3_LOOP1),
     Case("h3_geomkloop_null", HGKL, (QB_PT, 8, None), "null"),
+    Case(
+        "h3_geomkloop_bad_mode", HGKL, (QB_PT, 8, 1, "sideways"), "raises", "sideways"
+    ),
+    Case("h3_geomkloop_res_3_5", HGKL, (QB_PT, 3.5, 1), "raises", "3.5"),
     Case("h3_res_null", HGKR, (QB_PT, None, 1), "null"),
     Case("h3_res_3_5_raises", HGKR, (QB_PT, 3.5, 1), "raises", "3.5"),
     Case("h3_res_digit_string", HGKR, (QB_PT, "8", 1), "cell_set", H3_RING1),

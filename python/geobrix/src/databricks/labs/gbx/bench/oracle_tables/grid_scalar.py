@@ -45,6 +45,12 @@ def _chip_south(tmpdir):
     return _chip("TQ3080", False, SOUTH)
 
 
+@builder("chip_no_bytes")
+def _chip_no_bytes(tmpdir):
+    """A non-core chip with no geometry: what an empty intersection leaves in a chip table."""
+    return {"cellid": "TQ3080", "core": False, "chip": None}
+
+
 @builder("chip_west_core")
 def _chip_west_core(tmpdir):
     return _chip("TQ3080", True, WEST)
@@ -124,6 +130,14 @@ GRID_SCALAR = (
     Case("bng_res_named", PAC, ("POINT(530500 180500)", "1km"), "exact", "TQ3080"),
     Case("bng_res_whole_double", PAC, ("POINT(530500 180500)", 3.0), "exact", "TQ3080"),
     Case("bng_res_bad_int", PAC, ("POINT(530500 180500)", 1001), "raises", "1001"),
+    # 2**32 + 3 narrowed to INT wraps to the valid index 3: a BIGINT outside INT raises naming the value instead.
+    Case(
+        "bng_res_huge_bigint",
+        PAC,
+        ("POINT(530500 180500)", 4294967299),
+        "raises",
+        "4294967299",
+    ),
     Case("bng_res_unknown", PAC, ("POINT(530500 180500)", "3km"), "raises", "3km"),
     # A NULL in an INT column hands a pandas batch over as floats: the valid rows around it still answer.
     # (Session only: the batch is a pandas UDF artifact.)
@@ -180,6 +194,14 @@ GRID_SCALAR = (
         {"cells": {"TQ3080": 500000.0}, "core": 1},
     ),
     Case("cellunion_null", CUNI, (Build("chip_west"), None), "null"),
+    # A chip with NULL bytes (the empty result of an intersection) is an empty geometry: the union is the other chip.
+    Case(
+        "cellunion_empty_chip",
+        CUNI,
+        (Build("chip_no_bytes"), Build("chip_south")),
+        "cells",
+        {"cells": {"TQ3080": 500000.0}, "core": 0},
+    ),
 )
 
 
@@ -308,6 +330,16 @@ GRID_SCALAR += (
     Case("qb_distance_same", QDIST, (QB_C, QB_C), "exact", 0),
     Case("qb_distance_null", QDIST, (None, QB_C), "null", variants=((QB_C, None),)),
     Case("qb_distance_mixed_zoom", QDIST, (QB_C, QB_C5), "raises", "resolution"),
+    # A NULL beside real ids makes pandas hand the BIGINT column over as floats: an id past 2**53 (these are
+    # ~5.2e18) must still be the same cell, not the nearest float's. (Session only: the batch is a pandas artifact.)
+    Case(
+        "qb_distance_big_ids_beside_null",
+        QDIST,
+        ((QB_C, QB_E), (None, QB_C), (QB_C, QB_D2)),
+        "exact_rows",
+        (1, None, 2),
+        ("session",),
+    ),
     Case(
         "qb_cellunion",
         QUNI,
@@ -354,6 +386,9 @@ GRID_SCALAR += (
     Case("cg_pac_outside", CPAC, ("POINT(2000000 180750)", G, 1), "null"),
     Case("custom_res_null", CPAC, (CG_PT, G, None), "null"),
     Case("custom_res_3_5_raises", CPAC, (CG_PT, G, 3.5), "raises", "3.5"),
+    Case(
+        "custom_res_huge_bigint", CPAC, (CG_PT, G, 4294967297), "raises", "4294967297"
+    ),
     Case("custom_res_digit_string", CPAC, (CG_PT, G, "1"), "exact", CG_CELL),
     Case(
         "custom_mixed_null_res",
@@ -373,6 +408,19 @@ GRID_SCALAR += (
     Case("cg_distance", CDIST, (CG_CELL, G, cg_id(1064, 363, 1)), "exact", 3),
     Case("cg_distance_same", CDIST, (CG_CELL, G, CG_CELL), "exact", 0),
     Case("cg_distance_null", CDIST, (None, G, CG_CELL), "null"),
+    # Same as qb_distance_big_ids_beside_null: custom ids are ~7.2e16, past 2**53.
+    Case(
+        "cg_distance_big_ids_beside_null",
+        CDIST,
+        (
+            (CG_CELL, G, cg_id(1064, 363, 1)),
+            (None, G, CG_CELL),
+            (CG_CELL, G, cg_id(1062, 361, 1)),
+        ),
+        "exact_rows",
+        (3, None, 1),
+        ("session",),
+    ),
     # H3
     Case(
         "h3bbox_default", HBBOX, (H3_CELL,), "approx", (H3_LNG, H3_LAT, H3_LNG, H3_LAT)

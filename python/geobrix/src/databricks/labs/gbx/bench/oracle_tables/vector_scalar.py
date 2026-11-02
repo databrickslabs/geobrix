@@ -146,6 +146,7 @@ VECTOR_SCALAR = (
     ),
     Case("rp_null", RP, (SHAPES["point_grid"], None), "null"),
     Case("rp_negative", RP, (SHAPES["point_grid"], -1.0), "raises", "-1.0"),
+    Case("rp_inf", RP, (SHAPES["point_grid"], float("inf")), "raises", "inf"),
     # --- gbx_st_removerepeatedpoints: tolerance defaults to 0 (exact duplicates only)
     Case(
         "rrp_dupes",
@@ -279,6 +280,9 @@ VECTOR_SCALAR = (
     Case("snap_null_reference", SNAP, (SHAPES["line_near"], None, 0.5), "null"),
     Case(
         "snap_negative", SNAP, (SHAPES["line_near"], LINE_REF, -0.5), "raises", "-0.5"
+    ),
+    Case(
+        "snap_nan", SNAP, (SHAPES["line_near"], LINE_REF, float("nan")), "raises", "nan"
     ),
     # --- gbx_st_split: the pieces of the geometry on either side of the blade, as a collection
     Case(

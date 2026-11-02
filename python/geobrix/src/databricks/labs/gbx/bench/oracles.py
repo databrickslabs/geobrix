@@ -87,6 +87,8 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
             "quadbin_res_3_5_raises_array",
             "quadbin_res_digit_string_array",
             "qb_geomkring_bad_mode",
+            "qb_geomkloop_bad_mode",
+            "qb_geomkloop_res_3_5",
             "quadbin_res_3_5_raises_geomk",
             "quadbin_res_digit_string_geomk",
             "quadbin_inf_point_geomk",
@@ -2180,7 +2182,16 @@ def _check_geom_srid(case: Case, out, args) -> Optional[str]:
         ):
             return f"{case.cid}: coordinates {a}, want {b}"
     if srid is None:
-        srid = shapely.get_srid(parse_geom(args[0]))
+        try:
+            first = parse_geom(args[0])
+        except Exception:  # noqa: BLE001 - not a geometry at all (a struct, a number)
+            first = None
+        if first is None:
+            return (
+                f"{case.cid}: the first argument is not a geometry, so a bare WKT has no SRID to compare with; "
+                "give the expectation as a (WKT, SRID) pair"
+            )
+        srid = shapely.get_srid(first)
     if shapely.get_srid(got) != srid:
         return f"{case.cid}: SRID {shapely.get_srid(got)}, want {srid}"
     return None
@@ -2207,7 +2218,14 @@ def _check_cell_set(case: Case, out) -> Optional[str]:
     if out is None:
         return f"{case.cid}: got NULL, want the cells {sorted(case.expect)}"
     # a chip array (struct elements) is judged by its cells: the struct's first field
-    cells = sorted(e[0] if isinstance(e, tuple) else e for e in out)
+    cells = sorted(
+        (
+            e[0]
+            if isinstance(e, tuple)
+            else next(iter(e.values())) if isinstance(e, dict) else e
+        )
+        for e in out
+    )
     return (
         None
         if cells == sorted(case.expect)
@@ -2692,16 +2710,33 @@ def _ddl_type(value, param) -> str:
     if isinstance(value, bool):
         return "boolean"
     if isinstance(value, list):  # an array parameter (quadbin cells)
-        return _SQL[param.session[0]]
+        return _array_ddl_type(param)
     if isinstance(value, int):
-        return "bigint" if param.session[0] == "BIGINT" else "int"
+        wide = param.session[0] == "BIGINT" or not -(2**31) <= value < 2**31
+        return "bigint" if wide else "int"
     if isinstance(value, float):
         return "double"
     if isinstance(value, (bytes, bytearray)):
         return "binary"
     if isinstance(value, str):
         return "string"
-    return _SQL[param.session[0]]
+    return _SQL[param.session[0]] if param.session[0] in _SQL else _unmapped(param)
+
+
+def _unmapped(param):
+    raise ValueError(
+        f"parameter {param.name!r}: no DDL type for {param.session[0]!r}; add it to oracles._SQL"
+    )
+
+
+def _array_ddl_type(param) -> str:
+    """The DDL type of an array argument: ARRAY<...> parameter types map as they are written."""
+    t = param.session[0]
+    if t.upper().startswith("ARRAY<") and t.endswith(">"):
+        return t.lower()
+    raise ValueError(
+        f"parameter {param.name!r}: a list was given but its type is {t!r}, not ARRAY<...>"
+    )
 
 
 def _argument_rows(case: Case, tmpdir: str) -> List[List[Any]]:

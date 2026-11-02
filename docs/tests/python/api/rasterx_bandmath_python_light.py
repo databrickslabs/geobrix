@@ -16,13 +16,13 @@ own multi-row input from the _fixtures helper.
 # ============================================================================
 
 
-def rst_ndvi_python_light_example(spark):
+def rst_ndvi_python_example(spark):
     """Compute Normalized Difference Vegetation Index (NDVI).
 
     NDVI = (NIR - Red) / (NIR + Red)
     Output: single-band Float32 tile.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
     df = spark.table("multiband_rasters")
@@ -30,7 +30,7 @@ def rst_ndvi_python_light_example(spark):
     return result["tile"]
 
 
-rst_ndvi_python_light_example_output = """
+rst_ndvi_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -40,13 +40,13 @@ rst_ndvi_python_light_example_output = """
 """
 
 
-def rst_evi_python_light_example(spark):
+def rst_evi_python_example(spark):
     """Compute Enhanced Vegetation Index (EVI).
 
     EVI = 2.5 * (NIR - Red) / (NIR + 6*Red - 7.5*Blue + 1)
     Output: single-band Float32 tile.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
     df = spark.table("multiband_rasters")
@@ -57,7 +57,7 @@ def rst_evi_python_light_example(spark):
     return result["tile"]
 
 
-rst_evi_python_light_example_output = """
+rst_evi_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -67,13 +67,13 @@ rst_evi_python_light_example_output = """
 """
 
 
-def rst_savi_python_light_example(spark):
+def rst_savi_python_example(spark):
     """Compute Soil-Adjusted Vegetation Index (SAVI).
 
     SAVI = ((NIR - Red) / (NIR + Red + L)) * (1 + L)
     Default L = 0.5. Output: single-band Float32 tile.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
     df = spark.table("multiband_rasters")
@@ -81,7 +81,7 @@ def rst_savi_python_light_example(spark):
     return result["tile"]
 
 
-rst_savi_python_light_example_output = """
+rst_savi_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -91,13 +91,13 @@ rst_savi_python_light_example_output = """
 """
 
 
-def rst_ndwi_python_light_example(spark):
+def rst_ndwi_python_example(spark):
     """Compute Normalized Difference Water Index (NDWI).
 
     NDWI = (Green - NIR) / (Green + NIR)
     Output: single-band Float32 tile.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
     df = spark.table("multiband_rasters")
@@ -106,7 +106,7 @@ def rst_ndwi_python_light_example(spark):
     return result["tile"]
 
 
-rst_ndwi_python_light_example_output = """
+rst_ndwi_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -116,14 +116,14 @@ rst_ndwi_python_light_example_output = """
 """
 
 
-def rst_nbr_python_light_example(spark):
+def rst_nbr_python_example(spark):
     """Compute Normalized Burn Ratio (NBR).
 
     NBR = (NIR - SWIR) / (NIR + SWIR)
     Uses band 2 (NIR) and band 3 (proxied as SWIR for fixture).
     Output: single-band Float32 tile.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
     df = spark.table("multiband_rasters")
@@ -132,7 +132,7 @@ def rst_nbr_python_light_example(spark):
     return result["tile"]
 
 
-rst_nbr_python_light_example_output = """
+rst_nbr_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -142,14 +142,14 @@ rst_nbr_python_light_example_output = """
 """
 
 
-def rst_index_python_light_example(spark):
+def rst_index_python_example(spark):
     """Compute a named spectral index via formula and band map.
 
     ``band_map`` is a Spark MAP<STRING, INT> wiring the formula's named bands to
     1-based band indices (built with ``f.create_map``). Output: single-band
     Float32 tile. Uses the multiband fixture (non-default; band 1=red, 2=NIR).
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
     df = spark.table("multiband_rasters")
@@ -161,7 +161,7 @@ def rst_index_python_light_example(spark):
     return result["tile"]
 
 
-rst_index_python_light_example_output = """
+rst_index_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+

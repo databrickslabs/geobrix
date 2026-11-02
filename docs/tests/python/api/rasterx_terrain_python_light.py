@@ -36,9 +36,9 @@ rst_slope_python_example_output = """
 """
 
 
-def rst_aspect_python_light_example(spark):
+def rst_aspect_python_example(spark):
     """Compute aspect (compass direction of steepest slope) from a DEM tile."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
     rx.register(spark)
@@ -49,7 +49,7 @@ def rst_aspect_python_light_example(spark):
     return result["tile"]
 
 
-rst_aspect_python_light_example_output = """
+rst_aspect_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -59,9 +59,9 @@ rst_aspect_python_light_example_output = """
 """
 
 
-def rst_hillshade_python_light_example(spark):
+def rst_hillshade_python_example(spark):
     """Compute hillshade (8-bit shaded relief) from a DEM tile."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
     rx.register(spark)
@@ -72,7 +72,7 @@ def rst_hillshade_python_light_example(spark):
     return result["tile"]
 
 
-rst_hillshade_python_light_example_output = """
+rst_hillshade_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -82,9 +82,9 @@ rst_hillshade_python_light_example_output = """
 """
 
 
-def rst_tri_python_light_example(spark):
+def rst_tri_python_example(spark):
     """Compute Terrain Ruggedness Index (TRI) from a DEM tile."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
     df = dem_tile_df(spark)
@@ -92,7 +92,7 @@ def rst_tri_python_light_example(spark):
     return result["tile"]
 
 
-rst_tri_python_light_example_output = """
+rst_tri_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -102,9 +102,9 @@ rst_tri_python_light_example_output = """
 """
 
 
-def rst_tpi_python_light_example(spark):
+def rst_tpi_python_example(spark):
     """Compute Topographic Position Index (TPI) from a DEM tile."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
     df = dem_tile_df(spark)
@@ -112,7 +112,7 @@ def rst_tpi_python_light_example(spark):
     return result["tile"]
 
 
-rst_tpi_python_light_example_output = """
+rst_tpi_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -122,9 +122,9 @@ rst_tpi_python_light_example_output = """
 """
 
 
-def rst_roughness_python_light_example(spark):
+def rst_roughness_python_example(spark):
     """Compute Roughness (max neighbour delta in 3x3 window) from a DEM tile."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
     df = dem_tile_df(spark)
@@ -132,7 +132,7 @@ def rst_roughness_python_light_example(spark):
     return result["tile"]
 
 
-rst_roughness_python_light_example_output = """
+rst_roughness_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+

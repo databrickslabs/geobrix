@@ -643,8 +643,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_combinecount(tiles: Column): Column = ColumnAdapter(RST_CombineCount.name, Seq(tiles))
     def rst_align_to(tile: Column, referenceTile: Column): Column =
         ColumnAdapter(RST_AlignTo.name, Seq(tile, referenceTile))
-    def rst_chm(dsmTile: Column, demTile: Column): Column =
-        ColumnAdapter(RST_Chm.name, Seq(dsmTile, demTile))
     def rst_convolve(tile: Column, kernel: Column): Column = ColumnAdapter(RST_Convolve.name, Seq(tile, kernel))
     def rst_derivedband(tile: Column, pyfunc: String, funcName: String): Column =
         ColumnAdapter(RST_DerivedBand.name, Seq(tile, lit(pyfunc), lit(funcName)))
@@ -656,7 +654,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_isempty(tile: Column): Column = ColumnAdapter(RST_IsEmpty.name, Seq(tile))
     def rst_mapalgebra(tiles: Column, expression: Column): Column = ColumnAdapter(RST_MapAlgebra.name, Seq(tiles, expression))
     def rst_merge(tiles: Column): Column = ColumnAdapter(RST_Merge.name, Seq(tiles))
-    def rst_ndvi(tile: Column, redBand: Column, nirBand: Column): Column = ColumnAdapter(RST_NDVI.name, Seq(tile, redBand, nirBand))
     def rst_rastertoworldcoord(tile: Column, x: Column, y: Column): Column =
         ColumnAdapter(RST_RasterToWorldCoord.name, Seq(tile, x, y))
     def rst_rastertoworldcoordx(tile: Column, x: Column, y: Column): Column =
@@ -763,7 +760,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_filter(tile: Column, kernelSize: Int, operation: String): Column =
         rst_filter(tile, lit(kernelSize), lit(operation))
     def rst_mapalgebra(tiles: Column, expression: String): Column = rst_mapalgebra(tiles, lit(expression))
-    def rst_ndvi(tile: Column, redBand: Int, nirBand: Int): Column = rst_ndvi(tile, lit(redBand), lit(nirBand))
     def rst_rastertoworldcoord(tile: Column, x: Int, y: Int): Column =
         rst_rastertoworldcoord(tile, lit(x), lit(y))
     def rst_rastertoworldcoordx(tile: Column, x: Int, y: Int): Column =
@@ -856,15 +852,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_aspect(tile: Column, trigonometric: Boolean, zeroForFlat: Boolean): Column =
         rst_aspect(tile, lit(trigonometric), lit(zeroForFlat))
 
-    def rst_hillshade(tile: Column): Column =
-        ColumnAdapter(RST_Hillshade.name, Seq(tile, lit(315.0), lit(45.0), lit(1.0)))
-    def rst_hillshade(tile: Column, azimuth: Column, altitude: Column, zFactor: Column): Column =
-        ColumnAdapter(RST_Hillshade.name, Seq(tile, azimuth, altitude, zFactor))
-    def rst_hillshade(tile: Column, azimuth: Double, altitude: Double): Column =
-        rst_hillshade(tile, lit(azimuth), lit(altitude), lit(1.0))
-    def rst_hillshade(tile: Column, azimuth: Double, altitude: Double, zFactor: Double): Column =
-        rst_hillshade(tile, lit(azimuth), lit(altitude), lit(zFactor))
-
     def rst_tri(tile: Column): Column = ColumnAdapter(RST_TRI.name, Seq(tile))
     def rst_tpi(tile: Column): Column = ColumnAdapter(RST_TPI.name, Seq(tile))
     def rst_roughness(tile: Column): Column = ColumnAdapter(RST_Roughness.name, Seq(tile))
@@ -873,49 +860,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         ColumnAdapter(RST_ColorRelief.name, Seq(tile, colorTablePath))
     def rst_color_relief(tile: Column, colorTablePath: String): Column =
         rst_color_relief(tile, lit(colorTablePath))
-
-    // Spectral indices - all delegate to RST_MapAlgebra under the hood.
-    def rst_evi(
-        tile: Column, redIdx: Column, nirIdx: Column, blueIdx: Column
-    ): Column =
-        ColumnAdapter(RST_EVI.name, Seq(tile, redIdx, nirIdx, blueIdx,
-            lit(1.0), lit(6.0), lit(7.5), lit(2.5)))
-    def rst_evi(
-        tile: Column, redIdx: Column, nirIdx: Column, blueIdx: Column,
-        l: Column, c1: Column, c2: Column, g: Column
-    ): Column =
-        ColumnAdapter(RST_EVI.name, Seq(tile, redIdx, nirIdx, blueIdx, l, c1, c2, g))
-    def rst_evi(tile: Column, redIdx: Int, nirIdx: Int, blueIdx: Int): Column =
-        rst_evi(tile, lit(redIdx), lit(nirIdx), lit(blueIdx))
-    def rst_evi(
-        tile: Column, redIdx: Int, nirIdx: Int, blueIdx: Int,
-        l: Double, c1: Double, c2: Double, g: Double
-    ): Column =
-        rst_evi(tile, lit(redIdx), lit(nirIdx), lit(blueIdx), lit(l), lit(c1), lit(c2), lit(g))
-
-    def rst_savi(tile: Column, redIdx: Column, nirIdx: Column): Column =
-        ColumnAdapter(RST_SAVI.name, Seq(tile, redIdx, nirIdx, lit(0.5)))
-    def rst_savi(tile: Column, redIdx: Column, nirIdx: Column, l: Column): Column =
-        ColumnAdapter(RST_SAVI.name, Seq(tile, redIdx, nirIdx, l))
-    def rst_savi(tile: Column, redIdx: Int, nirIdx: Int): Column =
-        rst_savi(tile, lit(redIdx), lit(nirIdx))
-    def rst_savi(tile: Column, redIdx: Int, nirIdx: Int, l: Double): Column =
-        rst_savi(tile, lit(redIdx), lit(nirIdx), lit(l))
-
-    def rst_ndwi(tile: Column, greenIdx: Column, nirIdx: Column): Column =
-        ColumnAdapter(RST_NDWI.name, Seq(tile, greenIdx, nirIdx))
-    def rst_ndwi(tile: Column, greenIdx: Int, nirIdx: Int): Column =
-        rst_ndwi(tile, lit(greenIdx), lit(nirIdx))
-
-    def rst_nbr(tile: Column, nirIdx: Column, swirIdx: Column): Column =
-        ColumnAdapter(RST_NBR.name, Seq(tile, nirIdx, swirIdx))
-    def rst_nbr(tile: Column, nirIdx: Int, swirIdx: Int): Column =
-        rst_nbr(tile, lit(nirIdx), lit(swirIdx))
-
-    def rst_index(tile: Column, formulaName: Column, bandMap: Column): Column =
-        ColumnAdapter(RST_Index.name, Seq(tile, formulaName, bandMap))
-    def rst_index(tile: Column, formulaName: String, bandMap: Column): Column =
-        rst_index(tile, lit(formulaName), bandMap)
 
     // Resample family - gdal.Warp -tr / -ts wrappers
     def rst_resample(tile: Column, factor: Column): Column =
@@ -1071,11 +1015,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         ColumnAdapter(RST_PercentileStretch.name, Seq(tile, loPct, hiPct))
     def rst_percentile_stretch(tile: Column, loPct: Double, hiPct: Double): Column =
         rst_percentile_stretch(tile, lit(loPct), lit(hiPct))
-
-    def rst_threshold(tile: Column, op: Column, value: Column): Column =
-        ColumnAdapter(RST_Threshold.name, Seq(tile, op, value))
-    def rst_threshold(tile: Column, op: String, value: Double): Column =
-        rst_threshold(tile, lit(op), lit(value))
 
     def rst_buildoverviews(tile: Column, levels: Column): Column =
         ColumnAdapter(RST_BuildOverviews.name, Seq(tile, levels, lit("average")))

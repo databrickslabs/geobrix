@@ -954,28 +954,6 @@ rst_setsrid_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_threshold_python_heavy_example(spark):
-    """Binarize a raster tile using a threshold condition via the heavy rasterx tier."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    tile_df = spark.table("rasters")
-    result = tile_df.select(
-        rx.rst_threshold("tile", f.lit(">"), f.lit(0.0)).alias("tile")
-    ).first()
-    return result["tile"]
-
-
-rst_threshold_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(binary mask tile; pixels > 0.0 → 1, others → 0)
-"""
-
-
 # ---------------------------------------------------------------------------
 # rst_transform — reproject to a target EPSG SRID (heavy tier)
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — EPSG:32618)
@@ -1491,53 +1469,11 @@ rst_quadbin_rasterize_agg_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_ndvi_python_heavy_example(spark):
-    """Compute NDVI from multiband tile using red (band 1) and NIR (band 2)."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    df = spark.table("multiband_rasters")
-    result = df.select(rx.rst_ndvi("tile", f.lit(1), f.lit(2)).alias("tile")).first()
-    return result["tile"]
-
-
-rst_ndvi_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(single-band NDVI raster: (NIR-Red)/(NIR+Red))
-"""
-
-
 # ---------------------------------------------------------------------------
 # rst_evi -- Enhanced Vegetation Index from red, NIR, blue
 # Fixture: multiband_tile_df_heavy(spark) (3 bands: red=1, NIR=2, green=3)
 # Output: tile struct (single-band raster)
 # ---------------------------------------------------------------------------
-
-
-def rst_evi_python_heavy_example(spark):
-    """Compute EVI using red (band 1), NIR (band 2), and green (band 3) as blue."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    df = spark.table("multiband_rasters")
-    result = df.select(
-        rx.rst_evi("tile", f.lit(1), f.lit(2), f.lit(3)).alias("tile")
-    ).first()
-    return result["tile"]
-
-
-rst_evi_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(single-band EVI raster: G*(NIR-Red)/(NIR+C1*Red-C2*Blue+L))
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -1547,51 +1483,11 @@ rst_evi_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_savi_python_heavy_example(spark):
-    """Compute SAVI from red (band 1) and NIR (band 2) bands."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    df = spark.table("multiband_rasters")
-    result = df.select(rx.rst_savi("tile", f.lit(1), f.lit(2)).alias("tile")).first()
-    return result["tile"]
-
-
-rst_savi_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(single-band SAVI raster: (NIR-Red)/(NIR+Red+L)*(1+L))
-"""
-
-
 # ---------------------------------------------------------------------------
 # rst_ndwi -- Normalized Difference Water Index
 # Fixture: multiband_tile_df_heavy(spark) (3 bands: red=1, NIR=2, green=3)
 # Output: tile struct (single-band raster)
 # ---------------------------------------------------------------------------
-
-
-def rst_ndwi_python_heavy_example(spark):
-    """Compute NDWI from green (band 3) and NIR (band 2) bands."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    df = spark.table("multiband_rasters")
-    result = df.select(rx.rst_ndwi("tile", f.lit(3), f.lit(2)).alias("tile")).first()
-    return result["tile"]
-
-
-rst_ndwi_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(single-band NDWI raster: (Green-NIR)/(Green+NIR))
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -1602,54 +1498,11 @@ rst_ndwi_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_nbr_python_heavy_example(spark):
-    """Compute NBR using NIR (band 2) and green (band 3) as SWIR substitute."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    df = spark.table("multiband_rasters")
-    result = df.select(rx.rst_nbr("tile", f.lit(2), f.lit(3)).alias("tile")).first()
-    return result["tile"]
-
-
-rst_nbr_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(single-band NBR raster: (NIR-SWIR)/(NIR+SWIR))
-"""
-
-
 # ---------------------------------------------------------------------------
 # rst_index -- generic dispatcher for named spectral indices
 # Fixture: multiband_tile_df_heavy(spark) (3 bands: red=1, NIR=2, green=3)
 # Output: tile struct (single-band raster)
 # ---------------------------------------------------------------------------
-
-
-def rst_index_python_heavy_example(spark):
-    """Compute NDVI via the generic rst_index dispatcher with band map."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    df = spark.table("multiband_rasters")
-    band_map = f.create_map(f.lit("red"), f.lit(1), f.lit("nir"), f.lit(2))
-    result = df.select(
-        rx.rst_index("tile", f.lit("ndvi"), band_map).alias("tile")
-    ).first()
-    return result["tile"]
-
-
-rst_index_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(single-band index raster computed from named formula)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -1967,107 +1820,6 @@ rst_merge_python_heavy_example_output = """
 # ============================================================================
 # Fixture: dem_tile_df_heavy(spark) (SRTM elevation, NYC area)
 # All return tile struct
-
-
-def rst_aspect_python_heavy_example(spark):
-    """Compute aspect (compass direction of steepest slope) from a DEM tile."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    df = spark.table("dem_rasters")
-    result = df.select(
-        rx.rst_aspect("tile", f.lit(False), f.lit(False)).alias("tile")
-    ).first()
-    return result["tile"]
-
-
-rst_aspect_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(aspect in compass degrees: 0=N, 90=E, 180=S, 270=W)
-"""
-
-
-def rst_hillshade_python_heavy_example(spark):
-    """Compute hillshade (8-bit shaded relief) from a DEM tile."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    df = spark.table("dem_rasters")
-    result = df.select(
-        rx.rst_hillshade("tile", f.lit(315.0), f.lit(45.0), f.lit(1.0)).alias("tile")
-    ).first()
-    return result["tile"]
-
-
-rst_hillshade_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(8-bit hillshade: 0..255, NW azimuth 45-degree altitude)
-"""
-
-
-def rst_tri_python_heavy_example(spark):
-    """Compute Terrain Ruggedness Index (TRI) from a DEM tile."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    df = spark.table("dem_rasters")
-    result = df.select(rx.rst_tri("tile").alias("tile")).first()
-    return result["tile"]
-
-
-rst_tri_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(TRI: mean absolute neighbour difference)
-"""
-
-
-def rst_tpi_python_heavy_example(spark):
-    """Compute Topographic Position Index (TPI) from a DEM tile."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    df = spark.table("dem_rasters")
-    result = df.select(rx.rst_tpi("tile").alias("tile")).first()
-    return result["tile"]
-
-
-rst_tpi_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(TPI: positive=ridge, negative=valley)
-"""
-
-
-def rst_roughness_python_heavy_example(spark):
-    """Compute Roughness (max neighbour delta in 3x3 window) from a DEM tile."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    df = spark.table("dem_rasters")
-    result = df.select(rx.rst_roughness("tile").alias("tile")).first()
-    return result["tile"]
-
-
-rst_roughness_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(roughness: max absolute difference in 3x3 window)
-"""
 
 
 def rst_color_relief_python_heavy_example(spark):
@@ -3575,33 +3327,6 @@ rst_align_to_python_heavy_example_output = """
 # Fixture: DEM used as both DSM and DEM (degenerate CHM = 0 everywhere)
 # Output: tile struct (Float32 CHM tile)
 # ---------------------------------------------------------------------------
-
-
-def rst_chm_python_heavy_example(spark):
-    """Compute Canopy Height Model from DSM and DEM tiles via the heavy rasterx tier.
-
-    Uses the DEM fixture (64×64 Float32, EPSG:32618) as both DSM and DEM — a
-    degenerate case where CHM = clamp(DSM - DEM, min=0) = 0 everywhere, but
-    demonstrates the API. In production, pass a LiDAR-derived DSM (e.g. from
-    ``rst_binpoints``) and a matching DEM tile to compute real canopy heights.
-    """
-    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
-    from ._fixtures import dem_tile_df_heavy  # noqa: PLC0415
-
-    rx.register(spark)
-    df = dem_tile_df_heavy(spark)
-    result = df.select(rx.rst_chm("tile", "tile").alias("chm")).first()
-    return result["chm"]
-
-
-rst_chm_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|chm                                                        |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(Float32 CHM tile: clamp(DSM - DEM, min=0); NoData propagates from either input)
-"""
 
 
 # ---------------------------------------------------------------------------

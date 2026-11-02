@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.bench
 
 import com.databricks.labs.gbx.rasterx.expressions.RST_IsEmpty
+import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
 import com.databricks.labs.gbx.rasterx.expressions.RST_NDVI
 import com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoord
 import com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoordX
@@ -1140,13 +1141,13 @@ object BenchDispatch {
       case "rst_pixelcount" => rst_pixelcount(tile)
       case "rst_slope"      => rst_slope(tile, argS(a, "unit", "degrees"))
       case "rst_aspect"     => rst_aspect(tile)
-      case "rst_hillshade"  => rst_hillshade(tile)
+      case "rst_hillshade"  => ColumnAdapter(com.databricks.labs.gbx.rasterx.expressions.dem.RST_Hillshade.name, Seq(tile, org.apache.spark.sql.functions.lit(315.0), org.apache.spark.sql.functions.lit(45.0), org.apache.spark.sql.functions.lit(1.0)))
       case "rst_tri"        => rst_tri(tile)
       case "rst_tpi"        => rst_tpi(tile)
       case "rst_roughness"  => rst_roughness(tile)
-      case "rst_ndvi"       => rst_ndvi(tile, argI(a, "red_band", 1), argI(a, "nir_band", 2))
-      case "rst_ndwi"       => rst_ndwi(tile, argI(a, "green_idx", 1), argI(a, "nir_idx", 2))
-      case "rst_nbr"        => rst_nbr(tile, argI(a, "nir_idx", 1), argI(a, "swir_idx", 2))
+      case "rst_ndvi"       => ColumnAdapter(RST_NDVI.name, Seq(tile, org.apache.spark.sql.functions.lit(argI(a, "red_band", 1)), org.apache.spark.sql.functions.lit(argI(a, "nir_band", 2))))
+      case "rst_ndwi"       => ColumnAdapter(RST_NDWI.name, Seq(tile, org.apache.spark.sql.functions.lit(argI(a, "green_idx", 1)), org.apache.spark.sql.functions.lit(argI(a, "nir_idx", 2))))
+      case "rst_nbr"        => ColumnAdapter(RST_NBR.name, Seq(tile, org.apache.spark.sql.functions.lit(argI(a, "nir_idx", 1)), org.apache.spark.sql.functions.lit(argI(a, "swir_idx", 2))))
       case "rst_transform"  => rst_transform(tile, argI(a, "target_srid", 3857))
       case "rst_transformcrs" => rst_transformcrs(tile, argS(a, "target_crs", "3857"))
       case "rst_to_webmercator" => rst_to_webmercator(tile, argS(a, "resampling", "bilinear"))
@@ -1187,7 +1188,7 @@ object BenchDispatch {
       case "rst_histogram"     => rst_histogram(tile)
       // tile-out transforms with scalar / fixed args
       case "rst_band"        => rst_band(tile, argI(a, "band_index", 2))
-      case "rst_threshold"   => rst_threshold(tile, argS(a, "op", ">"), argD(a, "value", 0.5))
+      case "rst_threshold"   => ColumnAdapter(com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Threshold.name, Seq(tile, org.apache.spark.sql.functions.lit(argS(a, "op", ">")), org.apache.spark.sql.functions.lit(argD(a, "value", 0.5))))
       case "rst_initnodata"  => rst_initnodata(tile)
       case "rst_setsrid"     => rst_setsrid(tile, argI(a, "srid", 4326))
       case "rst_setcrs"      => rst_setcrs(tile, argS(a, "crs", "4326"))
@@ -1220,14 +1221,15 @@ object BenchDispatch {
       // are pure-core-only and their column form is here only to keep the match
       // exhaustive (the spark-path runner filters by modes).
       case "rst_evi" =>
-        rst_evi(tile, argI(a, "red_idx", 1), argI(a, "nir_idx", 2), argI(a, "blue_idx", 1),
-          argD(a, "l", 1.0), argD(a, "c1", 6.0), argD(a, "c2", 7.5), argD(a, "g", 2.5))
+        ColumnAdapter(com.databricks.labs.gbx.rasterx.expressions.spectral.RST_EVI.name, Seq(tile,
+          org.apache.spark.sql.functions.lit(argI(a, "red_idx", 1)), org.apache.spark.sql.functions.lit(argI(a, "nir_idx", 2)), org.apache.spark.sql.functions.lit(argI(a, "blue_idx", 1)),
+          org.apache.spark.sql.functions.lit(argD(a, "l", 1.0)), org.apache.spark.sql.functions.lit(argD(a, "c1", 6.0)), org.apache.spark.sql.functions.lit(argD(a, "c2", 7.5)), org.apache.spark.sql.functions.lit(argD(a, "g", 2.5))))
       case "rst_savi" =>
-        rst_savi(tile, argI(a, "red_idx", 1), argI(a, "nir_idx", 2), argD(a, "l", 0.5))
+        ColumnAdapter(com.databricks.labs.gbx.rasterx.expressions.spectral.RST_SAVI.name, Seq(tile, org.apache.spark.sql.functions.lit(argI(a, "red_idx", 1)), org.apache.spark.sql.functions.lit(argI(a, "nir_idx", 2)), org.apache.spark.sql.functions.lit(argD(a, "l", 0.5))))
       case "rst_index" =>
         import org.apache.spark.sql.functions.{lit, map => sqlMap}
         val bandMapCol = sqlMap(indexBandMap.toSeq.flatMap { case (k, v) => Seq(lit(k), lit(v)) }: _*)
-        rst_index(tile, indexName, bandMapCol)
+        ColumnAdapter(com.databricks.labs.gbx.rasterx.expressions.spectral.RST_Index.name, Seq(tile, org.apache.spark.sql.functions.lit(indexName), bandMapCol))
       case "rst_mapalgebra" =>
         import org.apache.spark.sql.functions.array
         rst_mapalgebra(array(tile), mapAlgebraExpr)
@@ -1279,7 +1281,7 @@ object BenchDispatch {
         // Extract DSM from arr[0] and DEM from arr[1] (or arr[0] if only one tile).
         val dsmTile = element_at(tile, 1)
         val demTile = when(size(tile) > 1, element_at(tile, 2)).otherwise(dsmTile)
-        rst_chm(dsmTile, demTile)
+        ColumnAdapter(RST_Chm.name, Seq(dsmTile, demTile))
       // rst_align_to: two-tile fn; bench passes same tile as both source + reference.
       // Python spec modes=("pure-core",) so spark-path is timing-only; column form
       // here keeps the match exhaustive (spark-path runner still invokes it when --modes=both).

@@ -595,9 +595,9 @@ rst_setsrid_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_threshold_python_light_example(spark):
+def rst_threshold_python_example(spark):
     """Binarize a raster tile using a threshold condition using the light pyrx tier."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.table("rasters")
@@ -607,7 +607,7 @@ def rst_threshold_python_light_example(spark):
     return result["tile"]
 
 
-rst_threshold_python_light_example_output = """
+rst_threshold_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -794,7 +794,7 @@ rst_align_to_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_chm_python_light_example(spark):
+def rst_chm_python_example(spark):
     """Compute Canopy Height Model from DSM and DEM tiles using the light pyrx tier.
 
     Uses the DEM fixture (64×64 Float32, EPSG:32618) as both DSM and DEM — a
@@ -802,7 +802,7 @@ def rst_chm_python_light_example(spark):
     demonstrates the API. In production, pass a LiDAR-derived DSM (e.g. from
     ``rst_binpoints``) and a matching DEM tile to compute real canopy heights.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from ._fixtures import dem_tile_df  # noqa: PLC0415
 
     df = dem_tile_df(spark)
@@ -810,7 +810,7 @@ def rst_chm_python_light_example(spark):
     return result["chm"]
 
 
-rst_chm_python_light_example_output = """
+rst_chm_python_example_output = """
 +-----------------------------------------------------------+
 |chm                                                        |
 +-----------------------------------------------------------+

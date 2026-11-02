@@ -49,9 +49,9 @@ with rasterio.open("in.tif") as src:
     nir = src.read(2).astype("float32")
     ndvi = (nir - red) / (nir + red)"""
 
-NDVI_PYRX = """# GeoBrix pyrx: NDVI across a DataFrame of tiles, distributed
-import databricks.labs.gbx.pyrx.functions as rx
-# rst_ndvi(tile, red_band, nir_band) — band indices are 1-based
+NDVI_PYRX = """# GeoBrix: NDVI across a DataFrame of tiles, distributed
+from databricks.labs.gbx.rasterx import functions as rx
+# rst_ndvi(tile, red_idx, nir_idx) — band indices are 1-based
 df2 = df.withColumn("tile", rx.rst_ndvi("tile", 1, 2))"""
 
 
@@ -154,7 +154,7 @@ def ndvi_both(spark, src_path):
     import numpy as np
     import rasterio
     from rasterio.io import MemoryFile
-    import databricks.labs.gbx.pyrx.functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api
 
     _register(spark)
 
@@ -169,7 +169,7 @@ def ndvi_both(spark, src_path):
     # rst_ndvi(tile, red_band, nir_band): band1=red, band2=nir
     df = (
         _one_tile_df(spark, src_path)
-        .withColumn("tile", rx.rst_ndvi("tile", 1, 2))
+        .withColumn("tile", rx_api.rst_ndvi("tile", 1, 2))
     )
     tile_bytes = bytes(
         df.selectExpr("tile.raster AS r").collect()[0]["r"]

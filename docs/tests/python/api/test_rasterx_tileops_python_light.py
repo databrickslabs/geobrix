@@ -156,10 +156,10 @@ def test_rst_setsrid_python_light_example(spark):
     _assert_materialized_tile(result, "rst_setsrid")
 
 
-def test_rst_threshold_python_light_example(spark):
+def test_rst_threshold_python_example(spark):
     """rst_threshold returns a materialized tile (binary mask)."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_threshold_python_light_example(spark)
+    result = tileops_examples.rst_threshold_python_example(spark)
     _assert_materialized_tile(result, "rst_threshold")
 
 
@@ -241,10 +241,10 @@ def test_rst_align_to_python_light_example(spark):
     _assert_materialized_tile(result, "rst_align_to")
 
 
-def test_rst_chm_python_light_example(spark):
+def test_rst_chm_python_example(spark):
     """rst_chm returns a materialized Float32 CHM tile (same-tile input yields all-zero CHM)."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_chm_python_light_example(spark)
+    result = tileops_examples.rst_chm_python_example(spark)
     _assert_materialized_tile(result, "rst_chm")
 
 

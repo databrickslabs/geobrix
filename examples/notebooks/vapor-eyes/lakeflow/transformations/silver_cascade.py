@@ -383,7 +383,7 @@ def plume_quant():
     floor = c["emit_enh_floor"]
     clipped = (
         paired
-        .withColumn("scene_qc", rx.rst_threshold("scene", F.lit(">"), F.lit(floor)))
+        .withColumn("scene_qc", rx_api.rst_threshold("scene", F.lit(">"), F.lit(floor)))
         .withColumn("clip", rx.rst_clip("scene_qc", "plume_geom", F.lit(True)))
         .withColumn("summary", rx_api.rst_summary("clip"))
         .withColumn("gbx_mean_ppmm",

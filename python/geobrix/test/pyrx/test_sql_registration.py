@@ -503,16 +503,6 @@ def test_register_enables_fromfile_sql(spark, tmp_path):
     assert w == 4
 
 
-def test_register_enables_index_sql(spark):
-    prx.register(spark)
-    _tile_view(spark, width=4, height=3, count=2, epsg=4326)
-    n = spark.sql(
-        "SELECT gbx_rst_numbands("
-        "gbx_rst_index(tile, 'ndvi', map('red', 1, 'nir', 2))) AS n FROM t"
-    ).first()["n"]
-    assert n == 1
-
-
 def test_register_enables_h3_tessellate_sql(spark):
     prx.register(spark)
     _tile_view(spark, width=8, height=8, epsg=4326)

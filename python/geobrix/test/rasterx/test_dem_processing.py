@@ -61,11 +61,6 @@ def color_table_path():
     "expression, extra_args",
     [
         ("gbx_rst_slope(t)", ""),
-        ("gbx_rst_aspect(t)", ""),
-        ("gbx_rst_hillshade(t)", ""),
-        ("gbx_rst_tri(t)", ""),
-        ("gbx_rst_tpi(t)", ""),
-        ("gbx_rst_roughness(t)", ""),
         # color_relief is the only one requiring an extra arg.
         ("gbx_rst_color_relief(t, '__COLOR_TABLE__')", ""),
     ],

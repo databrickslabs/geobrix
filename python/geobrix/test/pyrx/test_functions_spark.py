@@ -182,28 +182,6 @@ def test_rst_fillnodata(spark):
     assert row["nd"] is not None
 
 
-def test_rst_ndvi(spark):
-    df = _tile_df(spark, width=4, height=3, count=2)
-    out = df.select(prx.rst_ndvi("tile", 1, 2).alias("t"))
-    row = out.select(
-        rx.rst_numbands("t").alias("n"), rx.rst_type("t").alias("ty")
-    ).first()
-    assert row["n"] == 1
-    assert row["ty"][0] == "Float32"
-
-
-def test_rst_evi_savi_ndwi_nbr_single_band(spark):
-    df = _tile_df(spark, width=4, height=3, count=3)
-    for col in (
-        prx.rst_evi("tile", 1, 2, 3),
-        prx.rst_savi("tile", 1, 2),
-        prx.rst_ndwi("tile", 1, 2),
-        prx.rst_nbr("tile", 2, 1),
-    ):
-        n = df.select(rx.rst_numbands(col).alias("n")).first()["n"]
-        assert n == 1
-
-
 def test_rst_slope_aspect_hillshade(spark):
     import numpy as np
     from rasterio.io import MemoryFile
@@ -248,13 +226,6 @@ def test_rst_slope_aspect_hillshade(spark):
         ).first()["t"][0]
         == "Float32"
     )
-    assert (
-        df.select(rx.rst_type(prx.rst_hillshade("tile")).alias("t")).first()["t"][0]
-        == "Byte"
-    )
-    assert (
-        df.select(rx.rst_numbands(prx.rst_aspect("tile")).alias("n")).first()["n"] == 1
-    )
 
 
 def test_rst_polygonize(spark):
@@ -289,64 +260,6 @@ def test_rst_polygonize(spark):
     vals = [r["v"] for r in rows]
     assert 5.0 in vals
     assert all(r["g"] is not None for r in rows)
-
-
-def test_rst_tri_tpi_roughness(spark):
-    import numpy as np
-    from rasterio.io import MemoryFile
-    from rasterio.transform import from_origin
-
-    data = np.full((5, 5), 0.0, dtype="float32")
-    data[2, 2] = 7.0
-    profile = dict(
-        driver="GTiff",
-        width=5,
-        height=5,
-        count=1,
-        dtype="float32",
-        crs="EPSG:32633",
-        transform=from_origin(0, 5, 1, 1),
-        nodata=-9999.0,
-    )
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(data, 1)
-        src = mf.read()
-    df = spark.createDataFrame([(src,)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
-    )
-    for col in (prx.rst_tri("tile"), prx.rst_tpi("tile"), prx.rst_roughness("tile")):
-        row = df.select(
-            rx.rst_numbands(col).alias("n"), rx.rst_type(col).alias("t")
-        ).first()
-        assert row["n"] == 1 and row["t"][0] == "Float32"
-
-
-def test_rst_threshold(spark):
-    import numpy as np
-    from rasterio.io import MemoryFile
-    from rasterio.transform import from_origin
-
-    data = np.array([[1.0, 5.0], [10.0, 20.0]], dtype="float32")
-    profile = dict(
-        driver="GTiff",
-        width=2,
-        height=2,
-        count=1,
-        dtype="float32",
-        crs="EPSG:32633",
-        transform=from_origin(0, 2, 1, 1),
-        nodata=-9999.0,
-    )
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(data, 1)
-        src = mf.read()
-    df = spark.createDataFrame([(src,)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
-    )
-    out = df.select(prx.rst_threshold("tile", f.lit(">"), 5.0).alias("t"))
-    assert out.select(rx.rst_getnodata("t").alias("nd")).first()["nd"][0] == -9999.0
 
 
 def test_rst_filter_and_convolve(spark):
@@ -1738,22 +1651,6 @@ def test_rst_dtmfromgeoms_breakline_encodings(spark):
         with _serde.open_tile(bytes(tile["raster"])) as ds:
             results[name] = ds.read(1).tobytes()
     assert len(set(results.values())) == 1, "dtmfromgeoms breakline encodings diverged"
-
-
-def test_rst_index_ndvi(spark):
-    df = _tile_df(spark, width=4, height=3, count=2)
-    out = df.select(
-        prx.rst_index(
-            "tile",
-            f.lit("ndvi"),
-            f.create_map(f.lit("red"), f.lit(1), f.lit("nir"), f.lit(2)),
-        ).alias("t")
-    )
-    row = out.select(
-        rx.rst_numbands("t").alias("n"), rx.rst_type("t").alias("ty")
-    ).first()
-    assert row["n"] == 1
-    assert row["ty"][0] == "Float32"
 
 
 def test_rst_h3_tessellate(spark):

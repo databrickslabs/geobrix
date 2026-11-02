@@ -47,45 +47,45 @@ def _assert_materialized_tile(result, name):
 # ============================================================================
 
 
-def test_rst_ndvi_python_light_example(spark):
+def test_rst_ndvi_python_example(spark):
     """rst_ndvi returns a materialized tile with populated raster bytes."""
     assert bandmath_examples is not None
-    result = bandmath_examples.rst_ndvi_python_light_example(spark)
+    result = bandmath_examples.rst_ndvi_python_example(spark)
     _assert_materialized_tile(result, "rst_ndvi")
 
 
-def test_rst_evi_python_light_example(spark):
+def test_rst_evi_python_example(spark):
     """rst_evi returns a materialized tile with populated raster bytes."""
     assert bandmath_examples is not None
-    result = bandmath_examples.rst_evi_python_light_example(spark)
+    result = bandmath_examples.rst_evi_python_example(spark)
     _assert_materialized_tile(result, "rst_evi")
 
 
-def test_rst_savi_python_light_example(spark):
+def test_rst_savi_python_example(spark):
     """rst_savi returns a materialized tile with populated raster bytes."""
     assert bandmath_examples is not None
-    result = bandmath_examples.rst_savi_python_light_example(spark)
+    result = bandmath_examples.rst_savi_python_example(spark)
     _assert_materialized_tile(result, "rst_savi")
 
 
-def test_rst_ndwi_python_light_example(spark):
+def test_rst_ndwi_python_example(spark):
     """rst_ndwi returns a materialized tile with populated raster bytes."""
     assert bandmath_examples is not None
-    result = bandmath_examples.rst_ndwi_python_light_example(spark)
+    result = bandmath_examples.rst_ndwi_python_example(spark)
     _assert_materialized_tile(result, "rst_ndwi")
 
 
-def test_rst_nbr_python_light_example(spark):
+def test_rst_nbr_python_example(spark):
     """rst_nbr returns a materialized tile with populated raster bytes."""
     assert bandmath_examples is not None
-    result = bandmath_examples.rst_nbr_python_light_example(spark)
+    result = bandmath_examples.rst_nbr_python_example(spark)
     _assert_materialized_tile(result, "rst_nbr")
 
 
-def test_rst_index_python_light_example(spark):
+def test_rst_index_python_example(spark):
     """rst_index returns a materialized tile with populated raster bytes."""
     assert bandmath_examples is not None
-    result = bandmath_examples.rst_index_python_light_example(spark)
+    result = bandmath_examples.rst_index_python_example(spark)
     _assert_materialized_tile(result, "rst_index")
 
 

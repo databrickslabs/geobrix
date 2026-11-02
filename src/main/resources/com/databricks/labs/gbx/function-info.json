@@ -26,10 +26,10 @@
     "gbx_rst_aspect": {
       "examples": "Examples:\n      > SELECT gbx_rst_aspect(tile, false, false) AS aspect FROM dem_rasters;",
       "usage_args": "tile, [trigonometric], [zero_for_flat]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Compute the direction of steepest descent from a single-band DEM tile (Horn's 3x3 method).",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -224,11 +224,10 @@
     "gbx_rst_chm": {
       "examples": "Examples:\n      > SELECT gbx_rst_chm(tile, tile) AS chm FROM dem_rasters;",
       "usage_args": "dsm_tile, dem_tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
-        "scala"
+      "description": "Compute the canopy height model: the surface aligned to the terrain, minus the terrain, no lower than 0.",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.5.2"
     },
@@ -543,11 +542,10 @@
     "gbx_rst_evi": {
       "examples": "Examples:\n      > SELECT gbx_rst_evi(tile, 1, 2, 3) AS evi FROM multiband_rasters;",
       "usage_args": "tile, red_idx, nir_idx, blue_idx, [l], [c1], [c2], [g]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
-        "scala"
+      "description": "Compute EVI = G * (NIR - Red) / (NIR + C1 * Red - C2 * Blue + L).",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -804,12 +802,11 @@
     },
     "gbx_rst_hillshade": {
       "examples": "Examples:\n      > SELECT gbx_rst_hillshade(tile, 315.0, 45.0, 1.0) AS hillshade FROM dem_rasters;",
-      "usage_args": "tile, [azimuth], [altitude], [z_factor]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
-        "scala"
+      "usage_args": "tile, [azimuth], [altitude], [z_factor], [xscale], [yscale]",
+      "description": "Compute shaded relief from a single-band DEM tile (Horn's 3x3 method).",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -827,11 +824,10 @@
     "gbx_rst_index": {
       "examples": "Examples:\n      > SELECT gbx_rst_index(tile, 'ndvi', map('red', 1, 'nir', 2)) AS ndvi FROM multiband_rasters;",
       "usage_args": "tile, formula_name, band_map",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
-        "scala"
+      "description": "Compute a named spectral index from a map of band names to band numbers.",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -976,33 +972,30 @@
     "gbx_rst_nbr": {
       "examples": "Examples:\n      > SELECT gbx_rst_nbr(tile, 2, 3) AS nbr FROM multiband_rasters;",
       "usage_args": "tile, nir_idx, swir_idx",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
-        "scala"
+      "description": "Compute NBR = (NIR - SWIR) / (NIR + SWIR).",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.4.0"
     },
     "gbx_rst_ndvi": {
       "examples": "Examples:\n      > SELECT gbx_rst_ndvi(tile, 1, 2) AS ndvi FROM multiband_rasters;",
       "usage_args": "tile, red_idx, nir_idx",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
-        "scala"
+      "description": "Compute NDVI = (NIR - Red) / (NIR + Red).",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.2.0"
     },
     "gbx_rst_ndwi": {
       "examples": "Examples:\n      > SELECT gbx_rst_ndwi(tile, 3, 2) AS ndwi FROM multiband_rasters;",
       "usage_args": "tile, green_idx, nir_idx",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
-        "scala"
+      "description": "Compute NDWI = (Green - NIR) / (Green + NIR).",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -1302,10 +1295,10 @@
     "gbx_rst_roughness": {
       "examples": "Examples:\n      > SELECT gbx_rst_roughness(tile) AS roughness FROM dem_rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Compute terrain roughness from a single-band DEM tile.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -1324,11 +1317,10 @@
     "gbx_rst_savi": {
       "examples": "Examples:\n      > SELECT gbx_rst_savi(tile, 1, 2, 0.5) AS savi FROM multiband_rasters;",
       "usage_args": "tile, red_idx, nir_idx, [l]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
-        "scala"
+      "description": "Compute SAVI = (NIR - Red) / (NIR + Red + L) * (1 + L).",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -1454,12 +1446,11 @@
     },
     "gbx_rst_threshold": {
       "examples": "Examples:\n      > SELECT gbx_rst_threshold(tile, '>', 100.0) AS mask FROM rasters;",
-      "usage_args": "tile, op, value",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
-        "scala"
+      "usage_args": "tile, [op], [value]",
+      "description": "Keep the pixels that satisfy the comparison and set the others to NoData.",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -1499,10 +1490,10 @@
     "gbx_rst_tpi": {
       "examples": "Examples:\n      > SELECT gbx_rst_tpi(tile) AS tpi FROM dem_rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Compute the Topographic Position Index from a single-band DEM tile.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -1533,10 +1524,10 @@
     "gbx_rst_tri": {
       "examples": "Examples:\n      > SELECT gbx_rst_tri(tile) AS tri FROM dem_rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Compute the Terrain Ruggedness Index (Riley) from a single-band DEM tile.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"

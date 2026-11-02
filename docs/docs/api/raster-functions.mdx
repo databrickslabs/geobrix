@@ -1940,9 +1940,21 @@ Implemented with `numpy.digitize` + `rasterio.features.shapes` — no GDAL requi
 
 ---
 
-### rst_chm {#rst_chm}
+### rst_chm
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_chm: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_chm(dsm_tile, dem_tile)` | `TILE` |
+| Python | `rasterx.functions.rst_chm(dsm_tile, dem_tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `dsm_tile` | `TILE` |  | The Digital Surface Model tile. |
+| `dem_tile` | `TILE` |  | The Digital Elevation Model tile; it defines the output grid. |
+{/* END GENERATED gbx_rst_chm */}
 
 Compute a **Canopy Height Model (CHM)** from a Digital Surface Model (DSM) tile and a
 Digital Elevation Model (DEM) tile: `CHM = clamp(align(DSM → DEM grid) − DEM, min=0)`.
@@ -1959,16 +1971,10 @@ nearest-neighbour resampling before subtraction. Negative differences (where the
 dips below the DEM due to noise) are clamped to 0. NoData in either input propagates
 to the output. Output is a Float32 GeoTIFF tile with NoData −9999.
 
-**Signature:** `rst_chm(dsm_tile, dem_tile)`
-
-**Parameters:** `dsm_tile` — Digital Surface Model tile (defines the surface heights); `dem_tile` — Digital Elevation Model tile (defines the bare-earth reference; also defines the output grid).
-
 <FunctionExamples
   name="rst_chm"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
@@ -3537,24 +3543,35 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 
 ### rst_ndvi
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_ndvi: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **NumPy**. Valid pixels match the heavyweight tier; pixels with a zero denominator are set to NoData (-9999) rather than left as non-finite values.
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_ndvi(tile, red_idx, nir_idx)` | `TILE` |
+| Python | `rasterx.functions.rst_ndvi(tile, red_idx, nir_idx, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The multi-band tile. |
+| `red_idx` | `INT` |  | The 1-based band of red. |
+| `nir_idx` | `INT` |  | The 1-based band of near infrared. |
+{/* END GENERATED gbx_rst_ndvi */}
+
+:::note NoData
+A pixel where an input band is NoData, or where the denominator is 0, is NoData (-9999).
 :::
 
 :::note Lightweight Python — virtual-tile force-output
-The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
+The Python function accepts three optional keyword arguments that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_ndvi(tile: Column, redBand: Column, nirBand: Column): Column` — NDVI from band indices.
+NDVI from band indices.
 
 <FunctionExamples
   name="rst_ndvi"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxBandmathLightCode} pythonSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
 />
 
@@ -4096,24 +4113,37 @@ Thin wrappers around `gdal.DEMProcessing` for digital elevation model (DEM) deri
 
 ### rst_aspect
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_aspect: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
 
-:::note Lightweight tier (pyrx)
-Powered by **NumPy** — a reimplementation of GDAL `gdaldem`; results are close but not bit-identical to the heavyweight tier (edge pixels are filled and NoData is not excluded from the 3×3 window).
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_aspect(tile, [trigonometric], [zero_for_flat])` | `TILE` |
+| Python | `rasterx.functions.rst_aspect(tile, trigonometric=None, zero_for_flat=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The single-band DEM tile. |
+| `trigonometric` | `BOOLEAN` | `false` | `true` gives counter-clockwise degrees from east; `false` gives compass degrees clockwise from north. |
+| `zero_for_flat` | `BOOLEAN` | `false` | `true` gives 0 for flat cells; `false` leaves them NoData. |
+{/* END GENERATED gbx_rst_aspect */}
+
+:::note Edges and NoData
+A pixel whose 3×3 window holds NoData, and the one-pixel border, are NoData. Values can differ from GDAL's `gdaldem` in the last digits.
 :::
 
 :::note Lightweight Python — virtual-tile force-output
-The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
+The Python function accepts three optional keyword arguments that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_aspect(tile: Column, trigonometric: Column, zeroForFlat: Column): Column` — Compass direction of steepest descent in degrees (0=N, 90=E, 180=S, 270=W). Flat areas return `-9999` unless `zeroForFlat = true`. Set `trigonometric = true` for mathematical convention (0=E, counter-clockwise).
+Compass direction of steepest descent in degrees (0=N, 90=E, 180=S, 270=W). Flat areas are NoData unless `zero_for_flat` is true. Set `trigonometric` to true for the mathematical convention (0=E, counter-clockwise).
+
+With `zero_for_flat`, GDAL drops the NoData value, so its border pixels are 0. The NumPy kernel keeps them NoData.
 
 <FunctionExamples
   name="rst_aspect"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxTerrainLightCode} pythonSource="docs/tests/python/api/rasterx_terrain_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
 />
 
@@ -4144,51 +4174,70 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 
 ### rst_hillshade
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_hillshade: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **NumPy** — a reimplementation of GDAL `gdaldem`; results are close but not bit-identical to the heavyweight tier (edge pixels are filled and NoData is not excluded from the 3×3 window).
-:::
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_hillshade(tile, [azimuth], [altitude], [z_factor], [xscale], [yscale])` | `TILE` |
+| Python | `rasterx.functions.rst_hillshade(tile, azimuth=None, altitude=None, z_factor=None, xscale=None, yscale=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-:::note Lightweight-only `xscale` / `yscale` parameters
-The lightweight **Python** binding accepts two optional horizontal-scale overrides — `xscale` and `yscale` — that the SQL and heavyweight/Scala tiers do not (the heavyweight `RST_Hillshade` builder is strictly 4-argument: `tile, azimuth, altitude, z_factor`). By default the horizontal scale is auto-derived from the CRS; pass **both** `xscale` and `yscale` to override it. This is a lightweight superset, not a heavyweight regression.
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The single-band DEM tile. |
+| `azimuth` | `DOUBLE` | `315.0` | Sun azimuth in degrees clockwise from north. |
+| `altitude` | `DOUBLE` | `45.0` | Sun elevation above the horizon in degrees. |
+| `z_factor` | `DOUBLE` | `1.0` | Vertical exaggeration applied to the gradients. |
+| `xscale` | `DOUBLE` | `NULL` | Vertical units per horizontal unit along x; set it with `yscale`. When both are NULL, the scale comes from the raster CRS. |
+| `yscale` | `DOUBLE` | `NULL` | Vertical units per horizontal unit along y; set it with `xscale`. |
+{/* END GENERATED gbx_rst_hillshade */}
+
+:::note Edges and NoData
+A pixel whose 3×3 window holds NoData, and the one-pixel border, are NoData. Values can differ from GDAL's `gdaldem` in the last digits.
 :::
 
 :::note Lightweight Python — virtual-tile force-output
-The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
+The Python function accepts three optional keyword arguments that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_hillshade(tile: Column, azimuth: Column, altitude: Column, zFactor: Column): Column` — 8-bit (0..255) shaded relief image. Common values: NW sun azimuth `315.0`, altitude `45.0`, `zFactor = 1.0`.
+Shaded relief as an 8-bit image with values from 1 to 255; 0 is NoData. Common values are a north-west sun at azimuth `315.0`, altitude `45.0` and `z_factor` 1.0. Pass both `xscale` and `yscale`, or neither.
 
 <FunctionExamples
   name="rst_hillshade"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxTerrainLightCode} pythonSource="docs/tests/python/api/rasterx_terrain_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
 />
 
 ### rst_roughness
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_roughness: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
 
-:::note Lightweight tier (pyrx)
-Powered by **NumPy** — a reimplementation of GDAL `gdaldem`; results are close but not bit-identical to the heavyweight tier (edge pixels are filled and NoData is not excluded from the 3×3 window).
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_roughness(tile)` | `TILE` |
+| Python | `rasterx.functions.rst_roughness(tile, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The single-band DEM tile. |
+{/* END GENERATED gbx_rst_roughness */}
+
+:::note Edges and NoData
+A pixel whose 3×3 window holds NoData, and the one-pixel border, are NoData. Values can differ from GDAL's `gdaldem` in the last digits.
 :::
 
 :::note Lightweight Python — virtual-tile force-output
-The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
+The Python function accepts three optional keyword arguments that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_roughness(tile: Column): Column` — Largest absolute difference between a pixel and any of its 8 neighbours in a 3×3 window.
+The largest minus the smallest value in the 3×3 window around each pixel.
 
 <FunctionExamples
   name="rst_roughness"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxTerrainLightCode} pythonSource="docs/tests/python/api/rasterx_terrain_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
 />
 
@@ -4229,97 +4278,142 @@ Compute slope per pixel. `unit` is `'degrees'` or `'percent'`; `xscale` and `ysc
 
 ### rst_tpi
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_tpi: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
 
-:::note Lightweight tier (pyrx)
-Powered by **NumPy** — a reimplementation of GDAL `gdaldem`; results are close but not bit-identical to the heavyweight tier (edge pixels are filled and NoData is not excluded from the 3×3 window).
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_tpi(tile)` | `TILE` |
+| Python | `rasterx.functions.rst_tpi(tile, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The single-band DEM tile. |
+{/* END GENERATED gbx_rst_tpi */}
+
+:::note Edges and NoData
+A pixel whose 3×3 window holds NoData, and the one-pixel border, are NoData. Values can differ from GDAL's `gdaldem` in the last digits.
 :::
 
 :::note Lightweight Python — virtual-tile force-output
-The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
+The Python function accepts three optional keyword arguments that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_tpi(tile: Column): Column` — Topographic Position Index — pixel value minus the mean of its 8 neighbours. Positive values are ridges, negative values are valleys.
+Topographic Position Index — pixel value minus the mean of its 8 neighbours. Positive values are ridges, negative values are valleys.
 
 <FunctionExamples
   name="rst_tpi"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxTerrainLightCode} pythonSource="docs/tests/python/api/rasterx_terrain_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
 />
 
 ### rst_tri
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_tri: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
 
-:::note Lightweight tier (pyrx)
-Powered by **NumPy** — a reimplementation of GDAL `gdaldem`; results are close but not bit-identical to the heavyweight tier (edge pixels are filled and NoData is not excluded from the 3×3 window).
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_tri(tile)` | `TILE` |
+| Python | `rasterx.functions.rst_tri(tile, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The single-band DEM tile. |
+{/* END GENERATED gbx_rst_tri */}
+
+:::note Edges and NoData
+A pixel whose 3×3 window holds NoData, and the one-pixel border, are NoData. Values can differ from GDAL's `gdaldem` in the last digits.
 :::
 
 :::note Lightweight Python — virtual-tile force-output
-The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
+The Python function accepts three optional keyword arguments that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_tri(tile: Column): Column` — Terrain Ruggedness Index — mean absolute difference between a pixel and its 8 neighbours. Useful for landscape-ecology habitat scoring.
+Terrain Ruggedness Index (Riley): the square root of the summed squared differences between a pixel and its 8 neighbours. Useful for landscape-ecology habitat scoring.
 
 <FunctionExamples
   name="rst_tri"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxTerrainLightCode} pythonSource="docs/tests/python/api/rasterx_terrain_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
 />
 
 ## Spectral Indices
 
-Multi-band satellite math built on `gbx_rst_mapalgebra`. Band arguments are 1-based GDAL band indices; the output is always a single-band Float32 GeoTIFF tile. `gbx_rst_ndvi` is documented under [Operations](#rst_ndvi).
+Multi-band satellite math. Band arguments are 1-based GDAL band indices; the output is always a single-band Float32 GeoTIFF tile. `gbx_rst_ndvi` is documented under [Operations](#rst_ndvi).
 
 ### rst_evi
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_evi: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **NumPy**. Valid pixels match the heavyweight tier; pixels with a zero denominator are set to NoData (-9999) rather than left as non-finite values.
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_evi(tile, red_idx, nir_idx, blue_idx, [l], [c1], [c2], [g])` | `TILE` |
+| Python | `rasterx.functions.rst_evi(tile, red_idx, nir_idx, blue_idx, l=None, c1=None, c2=None, g=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The multi-band tile. |
+| `red_idx` | `INT` |  | The 1-based band of red. |
+| `nir_idx` | `INT` |  | The 1-based band of near infrared. |
+| `blue_idx` | `INT` |  | The 1-based band of blue. |
+| `l` | `DOUBLE` | `1.0` | The canopy background adjustment. |
+| `c1` | `DOUBLE` | `6.0` | The aerosol coefficient for red. |
+| `c2` | `DOUBLE` | `7.5` | The aerosol coefficient for blue. |
+| `g` | `DOUBLE` | `2.5` | The gain factor. |
+{/* END GENERATED gbx_rst_evi */}
+
+:::note NoData
+A pixel where an input band is NoData, or where the denominator is 0, is NoData (-9999).
 :::
 
 :::note Lightweight Python — virtual-tile force-output
-The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
+The Python function accepts three optional keyword arguments that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_evi(tile: Column, redBand: Column, nirBand: Column, blueBand: Column): Column` — Enhanced Vegetation Index. Formula: `G * (NIR - Red) / (NIR + C1*Red - C2*Blue + L)` with MODIS canonical coefficients `G=2.5, L=1.0, C1=6.0, C2=7.5`.
+Enhanced Vegetation Index. Formula: `G * (NIR - Red) / (NIR + C1*Red - C2*Blue + L)` with MODIS canonical coefficients `G=2.5, L=1.0, C1=6.0, C2=7.5`.
 
 <FunctionExamples
   name="rst_evi"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxBandmathLightCode} pythonSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
 />
 
 ### rst_index
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_index: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **NumExpr**. Generic named-index dispatcher over a `band_map`; single-band Float32. Zero-denominator pixels are set to NoData (−9999).
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_index(tile, formula_name, band_map)` | `TILE` |
+| Python | `rasterx.functions.rst_index(tile, formula_name, band_map, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The multi-band tile. |
+| `formula_name` | `STRING` |  | The index: `ndvi`, `gndvi`, `msavi`, `ndvi_re`, `ndmi` or `ndsi` (any case). |
+| `band_map` | `MAP<STRING,INT>` |  | The 1-based band of each name the index needs, such as `map('red', 1, 'nir', 2)`. |
+{/* END GENERATED gbx_rst_index */}
+
+:::note NoData
+A pixel where an input band is NoData, or where the denominator is 0, is NoData (-9999).
 :::
 
 :::note Lightweight Python — virtual-tile force-output
-The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
+The Python function accepts three optional keyword arguments that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_index(tile: Column, indexName: Column, bandMap: Column): Column` — Generic dispatcher that picks a built-in formula by name and wires bands via a `MAP<STRING, INT>` (e.g. `map('red', 1, 'nir', 2)`). Built-in names: `ndvi`, `gndvi`, `msavi`, `ndvi_re`, `ndmi`, `ndsi`.
+Generic dispatcher that picks a built-in formula by name and wires bands via a `MAP<STRING, INT>` (e.g. `map('red', 1, 'nir', 2)`). Built-in names: `ndvi`, `gndvi`, `msavi`, `ndvi_re`, `ndmi`, `ndsi`.
 
 <FunctionExamples
   name="rst_index"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxBandmathLightCode} pythonSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
 />
 
@@ -4379,70 +4473,104 @@ threshold.
 
 ### rst_nbr
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_nbr: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **NumPy**. Valid pixels match the heavyweight tier; pixels with a zero denominator are set to NoData (-9999) rather than left as non-finite values.
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_nbr(tile, nir_idx, swir_idx)` | `TILE` |
+| Python | `rasterx.functions.rst_nbr(tile, nir_idx, swir_idx, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The multi-band tile. |
+| `nir_idx` | `INT` |  | The 1-based band of near infrared. |
+| `swir_idx` | `INT` |  | The 1-based band of shortwave infrared. |
+{/* END GENERATED gbx_rst_nbr */}
+
+:::note NoData
+A pixel where an input band is NoData, or where the denominator is 0, is NoData (-9999).
 :::
 
 :::note Lightweight Python — virtual-tile force-output
-The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
+The Python function accepts three optional keyword arguments that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_nbr(tile: Column, nirBand: Column, swirBand: Column): Column` — Normalized Burn Ratio. Formula: `(NIR - SWIR) / (NIR + SWIR)`. The pre-/post-fire difference (`dNBR`) is the canonical burn-severity index.
+Normalized Burn Ratio. Formula: `(NIR - SWIR) / (NIR + SWIR)`. The pre-/post-fire difference (`dNBR`) is the canonical burn-severity index.
 
 <FunctionExamples
   name="rst_nbr"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxBandmathLightCode} pythonSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
 />
 
 ### rst_ndwi
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_ndwi: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **NumPy**. Valid pixels match the heavyweight tier; pixels with a zero denominator are set to NoData (-9999) rather than left as non-finite values.
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_ndwi(tile, green_idx, nir_idx)` | `TILE` |
+| Python | `rasterx.functions.rst_ndwi(tile, green_idx, nir_idx, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The multi-band tile. |
+| `green_idx` | `INT` |  | The 1-based band of green. |
+| `nir_idx` | `INT` |  | The 1-based band of near infrared. |
+{/* END GENERATED gbx_rst_ndwi */}
+
+:::note NoData
+A pixel where an input band is NoData, or where the denominator is 0, is NoData (-9999).
 :::
 
 :::note Lightweight Python — virtual-tile force-output
-The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
+The Python function accepts three optional keyword arguments that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_ndwi(tile: Column, greenBand: Column, nirBand: Column): Column` — Normalized Difference Water Index (McFeeters 1996). Formula: `(Green - NIR) / (Green + NIR)`. Positive values typically indicate open water.
+Normalized Difference Water Index (McFeeters 1996). Formula: `(Green - NIR) / (Green + NIR)`. Positive values typically indicate open water.
 
 <FunctionExamples
   name="rst_ndwi"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxBandmathLightCode} pythonSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
 />
 
 ### rst_savi
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_savi: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **NumPy**. Valid pixels match the heavyweight tier; pixels with a zero denominator are set to NoData (-9999) rather than left as non-finite values.
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_savi(tile, red_idx, nir_idx, [l])` | `TILE` |
+| Python | `rasterx.functions.rst_savi(tile, red_idx, nir_idx, l=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The multi-band tile. |
+| `red_idx` | `INT` |  | The 1-based band of red. |
+| `nir_idx` | `INT` |  | The 1-based band of near infrared. |
+| `l` | `DOUBLE` | `0.5` | The soil-brightness correction; 0 reduces SAVI to NDVI. |
+{/* END GENERATED gbx_rst_savi */}
+
+:::note NoData
+A pixel where an input band is NoData, or where the denominator is 0, is NoData (-9999).
 :::
 
 :::note Lightweight Python — virtual-tile force-output
-The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
+The Python function accepts three optional keyword arguments that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_savi(tile: Column, redBand: Column, nirBand: Column, l: Column): Column` — Soil-Adjusted Vegetation Index. Formula: `(NIR - Red) / (NIR + Red + L) * (1 + L)`. `L = 0.5` (the canonical default) is a balanced soil/vegetation tradeoff; `L = 0` reduces SAVI to NDVI.
+Soil-Adjusted Vegetation Index. Formula: `(NIR - Red) / (NIR + Red + L) * (1 + L)`. `L = 0.5` (the canonical default) is a balanced soil/vegetation tradeoff; `L = 0` reduces SAVI to NDVI.
 
 <FunctionExamples
   name="rst_savi"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxBandmathLightCode} pythonSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
 />
 
@@ -4646,24 +4774,31 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 
 ### rst_threshold
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_threshold: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **NumPy**. This tier keeps each passing pixel's original value and sets failing pixels to NoData; the heavyweight tier instead returns a 0/1 binary mask (Float32). Choose the tier that matches the output you need. A source without NoData gets the data type's fallback value (for example 65535 for `UInt16`), the same one the heavyweight tier uses.
-:::
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_threshold(tile, [op], [value])` | `TILE` |
+| Python | `rasterx.functions.rst_threshold(tile, op=None, value=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to threshold. |
+| `op` | `STRING` | `'>'` | The comparison: `>`, `<`, `>=`, `<=`, `==` or `!=`. |
+| `value` | `DOUBLE` | `0.0` | The value to compare each pixel with. |
+{/* END GENERATED gbx_rst_threshold */}
 
 :::note Lightweight Python — virtual-tile force-output
-The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
+The Python function accepts three optional keyword arguments that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_threshold(tile: Column, op: Column, value: Column): Column` — Binarize the raster: pixels matching `op value` get `1`, others get `0`. `op` is one of `>`, `>=`, `<`, `<=`, `==`, `!=`. Output is a `Byte` raster (0/1) sized to the input extent. Implemented as a `gbx_rst_mapalgebra` template.
+Keep the pixels for which `pixel op value` holds, with their original values, and set the others to NoData. `op` is one of `>`, `>=`, `<`, `<=`, `==`, `!=`. A source without NoData gets the data type's fallback value, such as 65535 for `UInt16`.
 
 <FunctionExamples
   name="rst_threshold"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 

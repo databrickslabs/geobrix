@@ -46,3 +46,23 @@ def test_mapalgebra_materialize_returns_raster_bytes(spark, tmp_path):
         assert np.array_equal(
             ds.read(1), np.arange(64, dtype="float32").reshape(8, 8) * 2
         )
+
+
+def test_dem_and_calc_force_output_keywords(spark, tmp_path):
+    """The DEM and band-math entries take the force-output keywords: `virtualize_dir` writes the tile under the
+    directory, `materialize=True` returns the raster bytes."""
+    from databricks.labs.gbx.bench import oracles
+    from databricks.labs.gbx.manifest import TILE_SQL
+    from databricks.labs.gbx.rasterx import functions as rx
+
+    dem = oracles._build("dem_3857", str(tmp_path))
+    bands = oracles._build("calc_bands", str(tmp_path))
+    df = spark.createDataFrame([(dem, bands)], f"dem {TILE_SQL}, bands {TILE_SQL}")
+    out_dir = tmp_path / "dem_vout"
+    row = df.select(
+        rx.rst_aspect("dem", virtualize_dir=str(out_dir)).alias("a"),
+        rx.rst_ndvi("bands", 1, 2, materialize=True).alias("n"),
+    ).first()
+    assert row["a"]["raster"] is None and row["a"]["path"].startswith(str(out_dir))
+    assert list(out_dir.glob("*.tif"))
+    assert row["n"]["raster"] is not None and row["n"]["path"] is None

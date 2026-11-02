@@ -78,13 +78,6 @@ def spark():
             and any(k.startswith("band_") for k in v.keys())
             and all(len(buckets) == 16 for buckets in v.values()),
         ),
-        # 5) threshold - returns a tile struct.
-        (
-            "threshold",
-            "gbx_rst_threshold(t, '>', 100.0)",
-            "out",
-            lambda v: v is not None and v["raster"] is not None,
-        ),
         # 6) buildoverviews - returns a tile struct.
         (
             "buildoverviews",

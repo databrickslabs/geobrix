@@ -751,7 +751,7 @@ REGISTRY: Dict[str, FnSpec] = {
         sources=_INDICES_LIGHT + (_HEAVY + "RST_NDVI.scala",),
         core=True,
         core_fn=lambda ds, a: indices.ndvi(ds, a["red_band"], a["nir_band"]),
-        col_fn=lambda t, a: prx.rst_ndvi(t, a["red_band"], a["nir_band"]),
+        col_fn=lambda t, a: rx.rst_ndvi(t, a["red_band"], a["nir_band"]),
     ),
     "rst_transform": FnSpec(
         "rst_transform",
@@ -843,7 +843,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: terrain.aspect(
             ds, a["trigonometric"], a["zero_for_flat"]
         ),
-        col_fn=lambda t, a: prx.rst_aspect(t, a["trigonometric"], a["zero_for_flat"]),
+        col_fn=lambda t, a: rx.rst_aspect(t, a["trigonometric"], a["zero_for_flat"]),
     ),
     "rst_hillshade": FnSpec(
         "rst_hillshade",
@@ -856,7 +856,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: terrain.hillshade(
             ds, a["azimuth"], a["altitude"], a["z_factor"]
         ),
-        col_fn=lambda t, a: prx.rst_hillshade(
+        col_fn=lambda t, a: rx.rst_hillshade(
             t, a["azimuth"], a["altitude"], a["z_factor"]
         ),
     ),
@@ -869,7 +869,7 @@ REGISTRY: Dict[str, FnSpec] = {
         sources=_TERRAIN_LIGHT + (_HEAVY + "dem/RST_TRI.scala", _DEM_HELPER),
         core=True,
         core_fn=lambda ds, a: terrain.tri(ds),
-        col_fn=lambda t, a: prx.rst_tri(t),
+        col_fn=lambda t, a: rx.rst_tri(t),
     ),
     "rst_tpi": FnSpec(
         "rst_tpi",
@@ -880,7 +880,7 @@ REGISTRY: Dict[str, FnSpec] = {
         sources=_TERRAIN_LIGHT + (_HEAVY + "dem/RST_TPI.scala", _DEM_HELPER),
         core=True,
         core_fn=lambda ds, a: terrain.tpi(ds),
-        col_fn=lambda t, a: prx.rst_tpi(t),
+        col_fn=lambda t, a: rx.rst_tpi(t),
     ),
     "rst_roughness": FnSpec(
         "rst_roughness",
@@ -891,7 +891,7 @@ REGISTRY: Dict[str, FnSpec] = {
         sources=_TERRAIN_LIGHT + (_HEAVY + "dem/RST_Roughness.scala", _DEM_HELPER),
         core=True,
         core_fn=lambda ds, a: terrain.roughness(ds),
-        col_fn=lambda t, a: prx.rst_roughness(t),
+        col_fn=lambda t, a: rx.rst_roughness(t),
     ),
     # --- band-math (bytes; indices.py) ---
     "rst_ndwi": FnSpec(
@@ -904,7 +904,7 @@ REGISTRY: Dict[str, FnSpec] = {
         sources=_INDICES_LIGHT + (_HEAVY + "spectral/RST_NDWI.scala",),
         core=True,
         core_fn=lambda ds, a: indices.ndwi(ds, a["green_idx"], a["nir_idx"]),
-        col_fn=lambda t, a: prx.rst_ndwi(t, a["green_idx"], a["nir_idx"]),
+        col_fn=lambda t, a: rx.rst_ndwi(t, a["green_idx"], a["nir_idx"]),
     ),
     "rst_nbr": FnSpec(
         "rst_nbr",
@@ -916,7 +916,7 @@ REGISTRY: Dict[str, FnSpec] = {
         sources=_INDICES_LIGHT + (_HEAVY + "spectral/RST_NBR.scala",),
         core=True,
         core_fn=lambda ds, a: indices.nbr(ds, a["nir_idx"], a["swir_idx"]),
-        col_fn=lambda t, a: prx.rst_nbr(t, a["nir_idx"], a["swir_idx"]),
+        col_fn=lambda t, a: rx.rst_nbr(t, a["nir_idx"], a["swir_idx"]),
     ),
     # --- warp (bytes; warp.py) ---
     "rst_to_webmercator": FnSpec(
@@ -1346,7 +1346,7 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"op": ">", "value": 0.5},
         core_fn=lambda ds, a: edit.threshold(ds, a["op"], a["value"]),
-        col_fn=lambda t, a: prx.rst_threshold(t, a["op"], a["value"]),
+        col_fn=lambda t, a: rx.rst_threshold(t, a["op"], a["value"]),
         sources=_EDIT_LIGHT + (_HEAVY + "pixel/RST_Threshold.scala",),
         core=False,
         fingerprint=False,
@@ -1612,7 +1612,7 @@ REGISTRY: Dict[str, FnSpec] = {
             c2=a["c2"],
             g=a["g"],
         ),
-        col_fn=lambda t, a: prx.rst_evi(
+        col_fn=lambda t, a: rx.rst_evi(
             t,
             a["red_idx"],
             a["nir_idx"],
@@ -1633,7 +1633,7 @@ REGISTRY: Dict[str, FnSpec] = {
         {"red_idx": 1, "nir_idx": 2, "l": 0.5},
         min_bands=2,
         core_fn=lambda ds, a: indices.savi(ds, a["red_idx"], a["nir_idx"], l=a["l"]),
-        col_fn=lambda t, a: prx.rst_savi(t, a["red_idx"], a["nir_idx"], a["l"]),
+        col_fn=lambda t, a: rx.rst_savi(t, a["red_idx"], a["nir_idx"], a["l"]),
         sources=_INDICES_LIGHT + (_HEAVY + "spectral/RST_SAVI.scala",),
         core=False,
     ),
@@ -1649,7 +1649,7 @@ REGISTRY: Dict[str, FnSpec] = {
         {"index_name": _INDEX_NAME, "band_map": _INDEX_BAND_MAP},
         min_bands=2,
         core_fn=lambda ds, a: indices.index(ds, _INDEX_NAME, _INDEX_BAND_MAP),
-        col_fn=lambda t, a: prx.rst_index(
+        col_fn=lambda t, a: rx.rst_index(
             t,
             _INDEX_NAME,
             F.create_map(
@@ -4183,7 +4183,7 @@ REGISTRY: Dict[str, FnSpec] = {
             if dss
             else None
         ),
-        col_fn=lambda arr, a: prx.rst_chm(
+        col_fn=lambda arr, a: rx.rst_chm(
             F.element_at(arr, 1),
             F.coalesce(F.element_at(arr, 2), F.element_at(arr, 1)),
         ),

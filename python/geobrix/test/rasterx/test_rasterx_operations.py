@@ -200,26 +200,6 @@ def test_rst_combineavg(spark):
     assert result[0]["combined_tile"] is not None
 
 
-def test_rst_ndvi(spark):
-    """Test NDVI calculation."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    # NDVI typically uses red (band 1) and NIR (band 2)
-    # For this test, we'll use bands from the same tile
-    df = spark.range(1).select(
-        rx.rst_ndvi(
-            tile_from_path(rx, f, str(MODIS_B01), "GTiff"),
-            f.lit(1),  # red band
-            f.lit(1),  # NIR band (using same for test purposes)
-        ).alias("ndvi_tile")
-    )
-
-    result = df.collect()
-    assert result is not None
-    assert len(result) == 1
-    assert result[0]["ndvi_tile"] is not None
-
-
 def test_rst_asformat(spark):
     """Test converting raster format.
 

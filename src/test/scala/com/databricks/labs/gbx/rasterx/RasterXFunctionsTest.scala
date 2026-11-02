@@ -310,11 +310,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
         result should not be null
     }
 
-    test("rst_ndvi should accept tile, red band, and NIR band") {
-        val result = functions.rst_ndvi(col("tile"), col("red"), col("nir"))
-        result should not be null
-    }
-
     test("rst_rastertoworldcoord should accept tile, pixelX, and pixelY") {
         val result = functions.rst_rastertoworldcoord(col("tile"), col("x"), col("y"))
         result should not be null
@@ -368,7 +363,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
         // int scalars
         functions.rst_bandmetadata(col("tile"), 1) should not be null
         functions.rst_transform(col("tile"), 4326) should not be null
-        functions.rst_ndvi(col("tile"), 1, 2) should not be null
         // string scalars
         functions.rst_asformat(col("tile"), "GTiff") should not be null
         functions.rst_updatetype(col("tile"), "Float32") should not be null

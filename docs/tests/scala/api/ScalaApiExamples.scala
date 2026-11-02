@@ -1275,26 +1275,6 @@ result.show()
 (tile with SRID stamped to 32618; does NOT reproject — use rst_transform to reproject)
 """.trim
 
-  val rst_threshold_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_threshold(col("tile"), lit(">"), lit(0.0)).alias("tile"))
-result.show()
-""".trim
-
-  val rst_threshold_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(binary mask tile; pixels > 0.0 → 1, others → 0)
-""".trim
-
   val rst_transform_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -1673,133 +1653,6 @@ result.show()
   // Band-math examples (tabbed docs: 10 functions)
   // =========================================================================
 
-  val rst_ndvi_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Uses multiband fixture (rgb_nir_small.tif, 3 bands: red=1, NIR=2, green=3)
-val rasters = spark.table("multiband_rasters")
-val result = rasters.select(rx.rst_ndvi(col("tile"), lit(1), lit(2)).alias("ndvi"))
-result.show(truncate = false)
-""".trim
-
-  val rst_ndvi_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|ndvi                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(single-band NDVI raster: (NIR-Red)/(NIR+Red))
-""".trim
-
-  val rst_evi_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Uses multiband fixture with red, NIR, and green (as blue)
-val rasters = spark.table("multiband_rasters")
-val result = rasters.select(rx.rst_evi(col("tile"), lit(1), lit(2), lit(3)).alias("evi"))
-result.show(truncate = false)
-""".trim
-
-  val rst_evi_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|evi                                                        |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(single-band EVI raster: G*(NIR-Red)/(NIR+C1*Red-C2*Blue+L))
-""".trim
-
-  val rst_savi_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Soil-Adjusted Vegetation Index: uses red (band 1) and NIR (band 2)
-val rasters = spark.table("multiband_rasters")
-val result = rasters.select(rx.rst_savi(col("tile"), lit(1), lit(2)).alias("savi"))
-result.show(truncate = false)
-""".trim
-
-  val rst_savi_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|savi                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(single-band SAVI raster: (NIR-Red)/(NIR+Red+L)*(1+L))
-""".trim
-
-  val rst_ndwi_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Normalized Difference Water Index: green (band 3) and NIR (band 2)
-val rasters = spark.table("multiband_rasters")
-val result = rasters.select(rx.rst_ndwi(col("tile"), lit(3), lit(2)).alias("ndwi"))
-result.show(truncate = false)
-""".trim
-
-  val rst_ndwi_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|ndwi                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(single-band NDWI raster: (Green-NIR)/(Green+NIR))
-""".trim
-
-  val rst_nbr_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Normalized Burn Ratio: NIR (band 2) and green (band 3) as SWIR substitute
-val rasters = spark.table("multiband_rasters")
-val result = rasters.select(rx.rst_nbr(col("tile"), lit(2), lit(3)).alias("nbr"))
-result.show(truncate = false)
-""".trim
-
-  val rst_nbr_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|nbr                                                        |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(single-band NBR raster: (NIR-SWIR)/(NIR+SWIR))
-""".trim
-
-  val rst_index_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Generic index dispatcher: computes NDVI via named formula with band map
-val rasters = spark.table("multiband_rasters")
-val bandMap = create_map(lit("red"), lit(1), lit("nir"), lit(2))
-val result = rasters.select(rx.rst_index(col("tile"), lit("ndvi"), bandMap).alias("index"))
-result.show(truncate = false)
-""".trim
-
-  val rst_index_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|index                                                      |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(single-band index raster from named formula)
-""".trim
-
   val rst_combineavg_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -2006,30 +1859,6 @@ result.show(truncate = false)
 (tile warped to reference grid; output has reference tile's CRS, extent, width, height)
 """.trim
 
-  val rst_chm_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Compute CHM = clamp(align(DSM -> DEM) - DEM, min=0).
-// Using the same tile for both is a degenerate (all-zero) but valid example.
-// In production: pass a LiDAR-derived DSM (rst_binpoints over LiDAR returns)
-// and a matching DEM tile to produce real canopy heights.
-val dem = spark.table("dem_rasters")
-val result = dem.select(rx.rst_chm(col("tile"), col("tile")).alias("chm"))
-result.show(truncate = false)
-""".trim
-
-  val rst_chm_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|chm                                                        |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(Float32 CHM tile: clamp(DSM - DEM, min=0); NoData propagates from either input)
-""".trim
-
   val rst_isoband_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -2164,26 +1993,6 @@ result.show(truncate = false)
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
 (aspect in compass degrees: 0=N, 90=E, 180=S, 270=W)
-""".trim
-
-  val rst_hillshade_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val dem = spark.table("dem_rasters")
-val result = dem.select(rx.rst_hillshade(col("tile"), lit(315.0), lit(45.0), lit(1.0)).alias("shade"))
-result.show(truncate = false)
-""".trim
-
-  val rst_hillshade_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|shade                                                      |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(8-bit hillshade: NW azimuth, 45-degree altitude)
 """.trim
 
   val rst_tri_scala_example: String =

@@ -37,6 +37,7 @@ from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
 from _config import cfg, paths, register_gbx  # correct under the pipeline root_path
+from databricks.labs.gbx.rasterx import functions as rx_api
 
 # Tasks the .laz files are spread over when they are read: the same 512-way
 # fan-out the surface steps use, so a full-SF update parses its tens of thousands
@@ -223,5 +224,5 @@ def wc_surface_chm():
     return (
         dsm.join(dtm, ["tx", "ty"])
         .repartition(512, "tx", "ty")
-        .select("tx", "ty", rx.rst_chm("dsm", "dtm").alias("chm"))
+        .select("tx", "ty", rx_api.rst_chm("dsm", "dtm").alias("chm"))
     )

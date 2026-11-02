@@ -219,6 +219,11 @@ EXAMPLES = {
         "qb_tessellate_triangle",
         "SELECT gbx_quadbin_tessellate('POLYGON((-122.5 37.9, -122.2 37.9, -122.5 37.6, -122.5 37.9))', 10) AS out",
     ),
+    "gbx_rst_aspect": (
+        "SPEC_DEM",
+        "aspect_compass",
+        "SELECT gbx_rst_aspect(c0, FALSE, FALSE) AS out FROM gbx_example",
+    ),
     "gbx_rst_avg": (
         "RASTER_STAT",
         "avg",
@@ -239,10 +244,20 @@ EXAMPLES = {
         "boundingbox",
         "SELECT gbx_rst_boundingbox(c0) AS out FROM gbx_example",
     ),
+    "gbx_rst_chm": (
+        "SPEC_CALC",
+        "chm",
+        "SELECT gbx_rst_chm(c0, c1) AS out FROM gbx_example",
+    ),
     "gbx_rst_crs": (
         "RASTER_ACCESSOR",
         "crs",
         "SELECT gbx_rst_crs(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_evi": (
+        "SPEC_CALC",
+        "evi",
+        "SELECT gbx_rst_evi(c0, 1, 2, 3, 2.0D, 6.0D, 7.5D, 2.5D) AS out FROM gbx_example",
     ),
     "gbx_rst_format": (
         "RASTER_ACCESSOR",
@@ -264,10 +279,20 @@ EXAMPLES = {
         "height",
         "SELECT gbx_rst_height(c0) AS out FROM gbx_example",
     ),
+    "gbx_rst_hillshade": (
+        "SPEC_DEM",
+        "hillshade_default",
+        "SELECT gbx_rst_hillshade(c0, 315.0D, 45.0D, 1.0D, CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE)) AS out FROM gbx_example",
+    ),
     "gbx_rst_histogram": (
         "RASTER_STAT",
         "histogram",
         "SELECT gbx_rst_histogram(c0, 2) AS out FROM gbx_example",
+    ),
+    "gbx_rst_index": (
+        "SPEC_CALC",
+        "index_ndvi",
+        "SELECT gbx_rst_index(c0, 'ndvi', c2) AS out FROM gbx_example",
     ),
     "gbx_rst_isempty": (
         "RASTER_STAT",
@@ -308,6 +333,21 @@ EXAMPLES = {
         "RASTER_STAT",
         "min",
         "SELECT gbx_rst_min(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_nbr": (
+        "SPEC_CALC",
+        "nbr",
+        "SELECT gbx_rst_nbr(c0, 2, 3) AS out FROM gbx_example",
+    ),
+    "gbx_rst_ndvi": (
+        "SPEC_CALC",
+        "ndvi",
+        "SELECT gbx_rst_ndvi(c0, 1, 2) AS out FROM gbx_example",
+    ),
+    "gbx_rst_ndwi": (
+        "SPEC_CALC",
+        "ndwi",
+        "SELECT gbx_rst_ndwi(c0, 3, 2) AS out FROM gbx_example",
     ),
     "gbx_rst_numbands": (
         "RASTER_ACCESSOR",
@@ -354,10 +394,20 @@ EXAMPLES = {
         "rotation",
         "SELECT gbx_rst_rotation(c0) AS out FROM gbx_example",
     ),
+    "gbx_rst_roughness": (
+        "SPEC_DEM",
+        "roughness",
+        "SELECT gbx_rst_roughness(c0) AS out FROM gbx_example",
+    ),
     "gbx_rst_sample": (
         "RASTER_STAT",
         "sample",
         "SELECT gbx_rst_sample(c0, 'POINT(400015 5759995)') AS out FROM gbx_example",
+    ),
+    "gbx_rst_savi": (
+        "SPEC_CALC",
+        "savi",
+        "SELECT gbx_rst_savi(c0, 1, 2, 0.25D) AS out FROM gbx_example",
     ),
     "gbx_rst_scalex": (
         "RASTER_ACCESSOR",
@@ -380,8 +430,8 @@ EXAMPLES = {
         "SELECT gbx_rst_skewy(c0) AS out FROM gbx_example",
     ),
     "gbx_rst_slope": (
-        "SPEC_SE",
-        "se_slope_deg",
+        "SPEC_DEM",
+        "slope_example",
         "SELECT gbx_rst_slope(c0, 'degrees') AS out FROM gbx_example",
     ),
     "gbx_rst_srid": (
@@ -399,10 +449,25 @@ EXAMPLES = {
         "summary",
         "SELECT gbx_rst_summary(c0) AS out FROM gbx_example",
     ),
+    "gbx_rst_threshold": (
+        "SPEC_CALC",
+        "threshold",
+        "SELECT gbx_rst_threshold(c0, '>', 12.0D) AS out FROM gbx_example",
+    ),
+    "gbx_rst_tpi": (
+        "SPEC_DEM",
+        "tpi",
+        "SELECT gbx_rst_tpi(c0) AS out FROM gbx_example",
+    ),
     "gbx_rst_transformcrs": (
         "MVP_S",
         "tcrs_epsg",
         "SELECT gbx_rst_transformcrs(c0, 'EPSG:3857') AS out FROM gbx_example",
+    ),
+    "gbx_rst_tri": (
+        "SPEC_DEM",
+        "tri",
+        "SELECT gbx_rst_tri(c0) AS out FROM gbx_example",
     ),
     "gbx_rst_tryopen": (
         "RASTER_STAT",

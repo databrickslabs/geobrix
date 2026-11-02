@@ -1776,25 +1776,6 @@ def rst_align_to(tile: ColLike, reference_tile: ColLike) -> Column:
     return f.call_function("gbx_rst_align_to", _col(tile), _col(reference_tile))
 
 
-def rst_chm(dsm_tile: ColLike, dem_tile: ColLike) -> Column:
-    """Compute Canopy Height Model from DSM and DEM tiles.
-
-    Returns ``clamp(align(DSM→DEM) - DEM, min=0)``. The DSM is warped onto the
-    DEM's grid (CRS, extent, width, height) via nearest-neighbour resampling
-    before subtraction. Negative differences are clamped to 0. NoData in either
-    input propagates to the output.
-
-    Args:
-        dsm_tile: Digital Surface Model tile (surface heights).
-        dem_tile: Digital Elevation Model tile (bare-earth reference; also defines
-            the output grid).
-
-    Returns:
-        Column of Float32 CHM tile (NoData -9999).
-    """
-    return f.call_function("gbx_rst_chm", _col(dsm_tile), _col(dem_tile))
-
-
 def rst_isoband(tile: ColLike, breaks: ColLike) -> Column:
     """Reclassify a raster band into value bins and return contour polygons.
 
@@ -1880,20 +1861,6 @@ def rst_merge(tiles: ColLike) -> Column:
         Column of merged raster tile.
     """
     return f.call_function("gbx_rst_merge", _col(tiles))
-
-
-def rst_ndvi(tile: ColLike, red_idx: ColLike, nir_idx: ColLike) -> Column:
-    """Compute NDVI from red and NIR band indices.
-
-    Args:
-        tile: Raster tile column.
-        red_idx: 1-based red band index.
-        nir_idx: 1-based NIR band index.
-
-    Returns:
-        Column of raster tile (single-band NDVI).
-    """
-    return f.call_function("gbx_rst_ndvi", _col(tile), _col(red_idx), _col(nir_idx))
 
 
 def rst_transform(tile: ColLike, srid: ColLike) -> Column:
@@ -2155,100 +2122,6 @@ def rst_polygonize(
 # ---------------------------------------------------------------------------
 
 
-def rst_aspect(
-    tile: ColLike,
-    trigonometric: ColLike = None,
-    zero_for_flat: ColLike = None,
-) -> Column:
-    """Compute aspect (slope direction) from a DEM tile via ``gdal.DEMProcessing("aspect")``.
-
-    Args:
-        tile: Single-band DEM tile column.
-        trigonometric: If true, output trigonometric angles measured
-            counterclockwise from east; if false (default), output compass
-            angles measured clockwise from north.
-        zero_for_flat: If true, flat areas get value 0; if false (default),
-            flat areas get -9999.
-
-    Returns:
-        Single-band Float32 GTiff tile column.
-    """
-    trig_col = f.lit(False) if trigonometric is None else _col(trigonometric)
-    zff_col = f.lit(False) if zero_for_flat is None else _col(zero_for_flat)
-    return f.call_function("gbx_rst_aspect", _col(tile), trig_col, zff_col)
-
-
-def rst_hillshade(
-    tile: ColLike,
-    azimuth: ColLike = None,
-    altitude: ColLike = None,
-    z_factor: ColLike = None,
-) -> Column:
-    """Compute hillshade (shaded relief) from a DEM tile via ``gdal.DEMProcessing("hillshade")``.
-
-    Args:
-        tile: Single-band DEM tile column.
-        azimuth: Light-source azimuth in degrees (default 315.0;
-            0=N, 90=E, 180=S, 270=W).
-        altitude: Light-source altitude above horizon in degrees
-            (default 45.0).
-        z_factor: Vertical exaggeration (default 1.0).
-
-    Returns:
-        Single-band Byte GTiff tile column with values 0..255.
-    """
-    az_col = f.lit(315.0) if azimuth is None else _col(azimuth)
-    alt_col = f.lit(45.0) if altitude is None else _col(altitude)
-    z_col = f.lit(1.0) if z_factor is None else _col(z_factor)
-    return f.call_function("gbx_rst_hillshade", _col(tile), az_col, alt_col, z_col)
-
-
-def rst_tri(tile: ColLike) -> Column:
-    """Compute Terrain Ruggedness Index (TRI) via ``gdal.DEMProcessing("TRI")``.
-
-    TRI is the mean absolute difference between a pixel and its 8 neighbours;
-    used in landscape ecology and habitat analysis.
-
-    Args:
-        tile: Single-band DEM tile column.
-
-    Returns:
-        Single-band Float32 GTiff tile column.
-    """
-    return f.call_function("gbx_rst_tri", _col(tile))
-
-
-def rst_tpi(tile: ColLike) -> Column:
-    """Compute Topographic Position Index (TPI) via ``gdal.DEMProcessing("TPI")``.
-
-    TPI is the difference between a pixel's elevation and the mean of its 8
-    neighbours; positive values indicate ridges/peaks, negative values
-    valleys.
-
-    Args:
-        tile: Single-band DEM tile column.
-
-    Returns:
-        Single-band Float32 GTiff tile column.
-    """
-    return f.call_function("gbx_rst_tpi", _col(tile))
-
-
-def rst_roughness(tile: ColLike) -> Column:
-    """Compute Roughness via ``gdal.DEMProcessing("Roughness")``.
-
-    Roughness is the largest inter-cell difference of a central pixel and
-    its 8 neighbours.
-
-    Args:
-        tile: Single-band DEM tile column.
-
-    Returns:
-        Single-band Float32 GTiff tile column.
-    """
-    return f.call_function("gbx_rst_roughness", _col(tile))
-
-
 def rst_color_relief(
     tile: ColLike,
     color_table_path: ColLike,
@@ -2279,132 +2152,6 @@ def rst_color_relief(
 # band indices and delegate to ``gbx_rst_mapalgebra`` internally. All return a
 # single-band Float32 GTiff tile sized to the input raster's extent.
 # ---------------------------------------------------------------------------
-
-
-def rst_evi(
-    tile: ColLike,
-    red_idx: ColLike,
-    nir_idx: ColLike,
-    blue_idx: ColLike,
-    l: ColLike = None,
-    c1: ColLike = None,
-    c2: ColLike = None,
-    g: ColLike = None,
-) -> Column:
-    """Enhanced Vegetation Index (EVI).
-
-    Formula: ``G * (NIR - Red) / (NIR + C1*Red - C2*Blue + L)``.
-
-    Args:
-        tile: Multi-band raster tile column.
-        red_idx: 1-based red band index.
-        nir_idx: 1-based NIR band index.
-        blue_idx: 1-based blue band index.
-        l: Canopy background adjustment (default 1.0).
-        c1: Aerosol resistance coefficient for red (default 6.0).
-        c2: Aerosol resistance coefficient for blue (default 7.5).
-        g: Gain factor (default 2.5).
-
-    Returns:
-        Single-band Float32 GTiff tile column.
-    """
-    l_col = f.lit(1.0) if l is None else _col(l)
-    c1_col = f.lit(6.0) if c1 is None else _col(c1)
-    c2_col = f.lit(7.5) if c2 is None else _col(c2)
-    g_col = f.lit(2.5) if g is None else _col(g)
-    return f.call_function(
-        "gbx_rst_evi",
-        _col(tile),
-        _col(red_idx),
-        _col(nir_idx),
-        _col(blue_idx),
-        l_col,
-        c1_col,
-        c2_col,
-        g_col,
-    )
-
-
-def rst_savi(
-    tile: ColLike,
-    red_idx: ColLike,
-    nir_idx: ColLike,
-    l: ColLike = None,
-) -> Column:
-    """Soil-Adjusted Vegetation Index (SAVI).
-
-    Formula: ``(NIR - Red) / (NIR + Red + L) * (1 + L)``.
-
-    Args:
-        tile: Multi-band raster tile column.
-        red_idx: 1-based red band index.
-        nir_idx: 1-based NIR band index.
-        l: Soil-brightness correction factor (default 0.5; ``L=0`` reduces to
-            NDVI; ``L=1`` is appropriate for very low vegetation cover).
-
-    Returns:
-        Single-band Float32 GTiff tile column.
-    """
-    l_col = f.lit(0.5) if l is None else _col(l)
-    return f.call_function(
-        "gbx_rst_savi",
-        _col(tile),
-        _col(red_idx),
-        _col(nir_idx),
-        l_col,
-    )
-
-
-def rst_ndwi(
-    tile: ColLike,
-    green_idx: ColLike,
-    nir_idx: ColLike,
-) -> Column:
-    """Normalized Difference Water Index (NDWI, McFeeters 1996).
-
-    Formula: ``(Green - NIR) / (Green + NIR)``. Positive values typically
-    indicate open water, negative values indicate land/vegetation.
-
-    Args:
-        tile: Multi-band raster tile column.
-        green_idx: 1-based green band index.
-        nir_idx: 1-based NIR band index.
-
-    Returns:
-        Single-band Float32 GTiff tile column.
-    """
-    return f.call_function(
-        "gbx_rst_ndwi",
-        _col(tile),
-        _col(green_idx),
-        _col(nir_idx),
-    )
-
-
-def rst_nbr(
-    tile: ColLike,
-    nir_idx: ColLike,
-    swir_idx: ColLike,
-) -> Column:
-    """Normalized Burn Ratio (NBR).
-
-    Formula: ``(NIR - SWIR) / (NIR + SWIR)``. The difference between pre-fire
-    and post-fire NBR (``dNBR``) is the canonical burn-severity index.
-
-    Args:
-        tile: Multi-band raster tile column.
-        nir_idx: 1-based NIR band index.
-        swir_idx: 1-based SWIR band index.
-
-    Returns:
-        Single-band Float32 GTiff tile column.
-    """
-    return f.call_function(
-        "gbx_rst_nbr",
-        _col(tile),
-        _col(nir_idx),
-        _col(swir_idx),
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -2894,47 +2641,6 @@ def rst_dtmfromgeoms_agg(
     )
 
 
-def rst_index(
-    tile: ColLike,
-    formula_name: ColLike,
-    band_map: ColLike,
-) -> Column:
-    """Generic dispatcher for named spectral indices.
-
-    Built-in formulae (case-insensitive ``formula_name``):
-
-    * ``ndvi``: ``(NIR-Red)/(NIR+Red)`` - bands ``red``, ``nir``.
-    * ``gndvi``: ``(NIR-Green)/(NIR+Green)`` - bands ``green``, ``nir``.
-    * ``msavi``: modified SAVI - bands ``red``, ``nir``.
-    * ``ndvi_re``: red-edge NDVI - bands ``red_edge``, ``nir``.
-    * ``ndmi``: ``(NIR-SWIR)/(NIR+SWIR)`` - bands ``nir``, ``swir``.
-    * ``ndsi``: snow-index ``(Green-SWIR)/(Green+SWIR)`` - bands ``green``, ``swir``.
-
-    For arbitrary user-supplied formulae, drop down to ``rst_mapalgebra``.
-
-    Args:
-        tile: Multi-band raster tile column.
-        formula_name: Built-in formula name (e.g. ``"ndvi"``). Passed as a
-            string literal; wrap in ``f.lit(...)`` if you want a column
-            reference instead.
-        band_map: ``MAP<STRING, INT>`` column wiring the formula's band names
-            to 1-based band indices in ``tile`` (e.g.
-            ``F.create_map(F.lit("red"), F.lit(1), F.lit("nir"), F.lit(2))``).
-
-    Returns:
-        Single-band Float32 GTiff tile column.
-    """
-    formula_col = (
-        f.lit(formula_name) if isinstance(formula_name, str) else _col(formula_name)
-    )
-    return f.call_function(
-        "gbx_rst_index",
-        _col(tile),
-        formula_col,
-        _col(band_map),
-    )
-
-
 # ---------------------------------------------------------------------------
 # Pixel ops + extraction
 #
@@ -3002,30 +2708,6 @@ def rst_setsrid(tile: ColLike, srid: ColLike) -> Column:
         Raster tile column with rewritten SR header.
     """
     return f.call_function("gbx_rst_setsrid", _col(tile), _col(srid))
-
-
-def rst_threshold(
-    tile: ColLike,
-    op: Union[ColLike, None] = None,
-    value: ColLike = None,
-) -> Column:
-    """Binarise a raster: ``(pixel <op> value)`` -> 0/1.
-
-    Args:
-        tile: Raster tile column.
-        op: Comparison operator — one of ``">"``, ``">="``, ``"<"``, ``"<="``,
-            ``"=="``, ``"!="``. String literals auto-wrapped via ``f.lit``.
-        value: Threshold value (``float``).
-
-    Returns:
-        Single-band Float32 GTiff tile column with values 0 or 1.
-    """
-    op_col = (
-        f.lit(op)
-        if isinstance(op, str)
-        else _col(op) if op is not None else f.lit(None)
-    )
-    return f.call_function("gbx_rst_threshold", _col(tile), op_col, _col(value))
 
 
 def rst_percentile_stretch(tile: ColLike, lo_pct: ColLike, hi_pct: ColLike) -> Column:
@@ -3271,6 +2953,49 @@ def rst_viewshed(
 # BEGIN GENERATED by gbx:manifest:gen: edit manifest/functions.json, then run the generator
 
 
+def rst_aspect(
+    tile: ColLike,
+    trigonometric: ColLike = None,
+    zero_for_flat: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute the direction of steepest descent from a single-band DEM tile (Horn's 3x3 method).
+
+    Args:
+        tile: The single-band DEM tile.
+        trigonometric: `true` gives counter-clockwise degrees from east; `false` gives
+            compass degrees clockwise from north. SQL default: ``false``.
+        zero_for_flat: `true` gives 0 for flat cells; `false` leaves them NoData. SQL
+            default: ``false``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile in degrees from 0 to 360; NoData is -9999.
+
+    SQL: ``gbx_rst_aspect(tile, [trigonometric], [zero_for_flat])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_aspect",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            trigonometric,
+            zero_for_flat,
+        )
+    return _api.call(
+        "gbx_rst_aspect",
+        tile,
+        trigonometric,
+        zero_for_flat,
+    )
+
+
 def rst_avg(
     tile: ColLike,
 ) -> Column:
@@ -3388,6 +3113,28 @@ def rst_boundingbox(
     )
 
 
+def rst_chm(
+    dsm_tile: ColLike,
+    dem_tile: ColLike,
+) -> Column:
+    """Compute the canopy height model: the surface aligned to the terrain, minus the terrain, no lower than 0.
+
+    Args:
+        dsm_tile: The Digital Surface Model tile.
+        dem_tile: The Digital Elevation Model tile; it defines the output grid.
+
+    Returns:
+        A single-band Float32 tile on the grid of `dem_tile`; NoData is -9999.
+
+    SQL: ``gbx_rst_chm(dsm_tile, dem_tile)``
+    """
+    return _api.call(
+        "gbx_rst_chm",
+        dsm_tile,
+        dem_tile,
+    )
+
+
 def rst_crs(
     tile: ColLike,
 ) -> Column:
@@ -3405,6 +3152,67 @@ def rst_crs(
     return _api.call(
         "gbx_rst_crs",
         tile,
+    )
+
+
+def rst_evi(
+    tile: ColLike,
+    red_idx: ColLike,
+    nir_idx: ColLike,
+    blue_idx: ColLike,
+    l: ColLike = None,
+    c1: ColLike = None,
+    c2: ColLike = None,
+    g: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute EVI = G * (NIR - Red) / (NIR + C1 * Red - C2 * Blue + L).
+
+    Args:
+        tile: The multi-band tile.
+        red_idx: The 1-based band of red.
+        nir_idx: The 1-based band of near infrared.
+        blue_idx: The 1-based band of blue.
+        l: The canopy background adjustment. SQL default: ``1.0``.
+        c1: The aerosol coefficient for red. SQL default: ``6.0``.
+        c2: The aerosol coefficient for blue. SQL default: ``7.5``.
+        g: The gain factor. SQL default: ``2.5``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile; NoData is -9999, also where the denominator is 0.
+
+    SQL: ``gbx_rst_evi(tile, red_idx, nir_idx, blue_idx, [l], [c1], [c2], [g])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_evi",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            red_idx,
+            nir_idx,
+            blue_idx,
+            l,
+            c1,
+            c2,
+            g,
+        )
+    return _api.call(
+        "gbx_rst_evi",
+        tile,
+        red_idx,
+        nir_idx,
+        blue_idx,
+        l,
+        c1,
+        c2,
+        g,
     )
 
 
@@ -3486,6 +3294,61 @@ def rst_height(
     )
 
 
+def rst_hillshade(
+    tile: ColLike,
+    azimuth: ColLike = None,
+    altitude: ColLike = None,
+    z_factor: ColLike = None,
+    xscale: ColLike = None,
+    yscale: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute shaded relief from a single-band DEM tile (Horn's 3x3 method).
+
+    Args:
+        tile: The single-band DEM tile.
+        azimuth: Sun azimuth in degrees clockwise from north. SQL default: ``315.0``.
+        altitude: Sun elevation above the horizon in degrees. SQL default: ``45.0``.
+        z_factor: Vertical exaggeration applied to the gradients. SQL default: ``1.0``.
+        xscale: Vertical units per horizontal unit along x; set it with `yscale`. When
+            both are NULL, the scale comes from the raster CRS. SQL default: ``NULL``.
+        yscale: Vertical units per horizontal unit along y; set it with `xscale`. SQL
+            default: ``NULL``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Byte tile with values from 1 to 255; 0 is NoData.
+
+    SQL: ``gbx_rst_hillshade(tile, [azimuth], [altitude], [z_factor], [xscale], [yscale])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_hillshade",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            azimuth,
+            altitude,
+            z_factor,
+            xscale,
+            yscale,
+        )
+    return _api.call(
+        "gbx_rst_hillshade",
+        tile,
+        azimuth,
+        altitude,
+        z_factor,
+        xscale,
+        yscale,
+    )
+
+
 def rst_histogram(
     tile: ColLike,
     n_buckets: ColLike = None,
@@ -3519,6 +3382,49 @@ def rst_histogram(
         min_val,
         max_val,
         include_nodata,
+    )
+
+
+def rst_index(
+    tile: ColLike,
+    formula_name: ColLike,
+    band_map: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute a named spectral index from a map of band names to band numbers.
+
+    Args:
+        tile: The multi-band tile.
+        formula_name: The index: `ndvi`, `gndvi`, `msavi`, `ndvi_re`, `ndmi` or `ndsi`
+            (any case).
+        band_map: The 1-based band of each name the index needs, such as `map('red', 1,
+            'nir', 2)`.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile; NoData is -9999.
+
+    SQL: ``gbx_rst_index(tile, formula_name, band_map)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_index",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            formula_name,
+            band_map,
+        )
+    return _api.call(
+        "gbx_rst_index",
+        tile,
+        formula_name,
+        band_map,
     )
 
 
@@ -3707,6 +3613,129 @@ def rst_min(
     return _api.call(
         "gbx_rst_min",
         tile,
+    )
+
+
+def rst_nbr(
+    tile: ColLike,
+    nir_idx: ColLike,
+    swir_idx: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute NBR = (NIR - SWIR) / (NIR + SWIR).
+
+    Args:
+        tile: The multi-band tile.
+        nir_idx: The 1-based band of near infrared.
+        swir_idx: The 1-based band of shortwave infrared.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile; NoData is -9999, also where the denominator is 0.
+
+    SQL: ``gbx_rst_nbr(tile, nir_idx, swir_idx)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_nbr",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            nir_idx,
+            swir_idx,
+        )
+    return _api.call(
+        "gbx_rst_nbr",
+        tile,
+        nir_idx,
+        swir_idx,
+    )
+
+
+def rst_ndvi(
+    tile: ColLike,
+    red_idx: ColLike,
+    nir_idx: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute NDVI = (NIR - Red) / (NIR + Red).
+
+    Args:
+        tile: The multi-band tile.
+        red_idx: The 1-based band of red.
+        nir_idx: The 1-based band of near infrared.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile; NoData is -9999, also where the denominator is 0.
+
+    SQL: ``gbx_rst_ndvi(tile, red_idx, nir_idx)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_ndvi",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            red_idx,
+            nir_idx,
+        )
+    return _api.call(
+        "gbx_rst_ndvi",
+        tile,
+        red_idx,
+        nir_idx,
+    )
+
+
+def rst_ndwi(
+    tile: ColLike,
+    green_idx: ColLike,
+    nir_idx: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute NDWI = (Green - NIR) / (Green + NIR).
+
+    Args:
+        tile: The multi-band tile.
+        green_idx: The 1-based band of green.
+        nir_idx: The 1-based band of near infrared.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile; NoData is -9999, also where the denominator is 0.
+
+    SQL: ``gbx_rst_ndwi(tile, green_idx, nir_idx)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_ndwi",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            green_idx,
+            nir_idx,
+        )
+    return _api.call(
+        "gbx_rst_ndwi",
+        tile,
+        green_idx,
+        nir_idx,
     )
 
 
@@ -3912,6 +3941,40 @@ def rst_rotation(
     )
 
 
+def rst_roughness(
+    tile: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute terrain roughness from a single-band DEM tile.
+
+    Args:
+        tile: The single-band DEM tile.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile holding the largest minus the smallest value of each
+        3x3 window; NoData is -9999.
+
+    SQL: ``gbx_rst_roughness(tile)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_roughness",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+        )
+    return _api.call(
+        "gbx_rst_roughness",
+        tile,
+    )
+
+
 def rst_sample(
     tile: ColLike,
     geom: ColLike,
@@ -3935,6 +3998,51 @@ def rst_sample(
         tile,
         geom,
         crs,
+    )
+
+
+def rst_savi(
+    tile: ColLike,
+    red_idx: ColLike,
+    nir_idx: ColLike,
+    l: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute SAVI = (NIR - Red) / (NIR + Red + L) * (1 + L).
+
+    Args:
+        tile: The multi-band tile.
+        red_idx: The 1-based band of red.
+        nir_idx: The 1-based band of near infrared.
+        l: The soil-brightness correction; 0 reduces SAVI to NDVI. SQL default: ``0.5``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile; NoData is -9999, also where the denominator is 0.
+
+    SQL: ``gbx_rst_savi(tile, red_idx, nir_idx, [l])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_savi",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            red_idx,
+            nir_idx,
+            l,
+        )
+    return _api.call(
+        "gbx_rst_savi",
+        tile,
+        red_idx,
+        nir_idx,
+        l,
     )
 
 
@@ -4121,6 +4229,81 @@ def rst_summary(
     )
 
 
+def rst_threshold(
+    tile: ColLike,
+    op: ColLike = None,
+    value: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Keep the pixels that satisfy the comparison and set the others to NoData.
+
+    Args:
+        tile: The tile to threshold.
+        op: The comparison: `>`, `<`, `>=`, `<=`, `==` or `!=`. SQL default: ``'>'``.
+        value: The value to compare each pixel with. SQL default: ``0.0``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A tile with the dtype and band count of the input.
+
+    SQL: ``gbx_rst_threshold(tile, [op], [value])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_threshold",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            op,
+            value,
+        )
+    return _api.call(
+        "gbx_rst_threshold",
+        tile,
+        op,
+        value,
+    )
+
+
+def rst_tpi(
+    tile: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute the Topographic Position Index from a single-band DEM tile.
+
+    Args:
+        tile: The single-band DEM tile.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile; positive on ridges, negative in valleys; NoData is
+        -9999.
+
+    SQL: ``gbx_rst_tpi(tile)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_tpi",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+        )
+    return _api.call(
+        "gbx_rst_tpi",
+        tile,
+    )
+
+
 def rst_transformcrs(
     tile: ColLike,
     target_crs: ColLike,
@@ -4141,6 +4324,39 @@ def rst_transformcrs(
         "gbx_rst_transformcrs",
         tile,
         target_crs,
+    )
+
+
+def rst_tri(
+    tile: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute the Terrain Ruggedness Index (Riley) from a single-band DEM tile.
+
+    Args:
+        tile: The single-band DEM tile.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A single-band Float32 tile; NoData is -9999.
+
+    SQL: ``gbx_rst_tri(tile)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_tri",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+        )
+    return _api.call(
+        "gbx_rst_tri",
+        tile,
     )
 
 

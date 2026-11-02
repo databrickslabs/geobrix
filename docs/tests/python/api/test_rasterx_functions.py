@@ -198,13 +198,6 @@ def test_rst_setsrid_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_setsrid")
 
 
-def test_rst_threshold_python_heavy_example(spark):
-    """rst_threshold returns a non-null tile struct (binary mask)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_threshold_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_threshold")
-
-
 def test_rst_transform_python_heavy_example(spark):
     """rst_transform returns a non-null tile struct (reprojected to EPSG:4326)."""
     assert rasterx_functions is not None
@@ -303,13 +296,6 @@ def test_rst_align_to_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_align_to")
 
 
-def test_rst_chm_python_heavy_example(spark):
-    """rst_chm returns a non-null Float32 CHM tile struct."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_chm_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_chm")
-
-
 def test_rst_isoband_python_heavy_example(spark):
     """rst_isoband returns a non-empty list of polygon patches from a DEM tile."""
     assert rasterx_functions is not None
@@ -333,48 +319,6 @@ _BAND_MATH_ERROR_TILE_BUG = (
     "pre-existing heavy-tier error-tile bug in band-math family "
     '(GDAL null output dataset: "Cannot invoke Dataset.GetDriver() because ds is null")'
 )
-
-
-def test_rst_ndvi_python_heavy_example(spark):
-    """rst_ndvi returns a non-null tile struct (single-band NDVI)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_ndvi_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_ndvi")
-
-
-def test_rst_evi_python_heavy_example(spark):
-    """rst_evi returns a non-null tile struct (single-band EVI)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_evi_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_evi")
-
-
-def test_rst_savi_python_heavy_example(spark):
-    """rst_savi returns a non-null tile struct (single-band SAVI)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_savi_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_savi")
-
-
-def test_rst_ndwi_python_heavy_example(spark):
-    """rst_ndwi returns a non-null tile struct (single-band NDWI)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_ndwi_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_ndwi")
-
-
-def test_rst_nbr_python_heavy_example(spark):
-    """rst_nbr returns a non-null tile struct (single-band NBR)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_nbr_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_nbr")
-
-
-def test_rst_index_python_heavy_example(spark):
-    """rst_index returns a non-null tile struct (generic index via dispatcher)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_index_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_index")
 
 
 def test_rst_combineavg_python_heavy_example(spark):
@@ -443,41 +387,6 @@ def test_rst_merge_python_heavy_example(spark):
 # ============================================================================
 # Terrain Analysis Function Tests
 # ============================================================================
-
-
-def test_rst_aspect_python_heavy_example(spark):
-    """rst_aspect returns a non-null tile struct (compass direction)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_aspect_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_aspect")
-
-
-def test_rst_hillshade_python_heavy_example(spark):
-    """rst_hillshade returns a non-null tile struct (8-bit shaded relief)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_hillshade_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_hillshade")
-
-
-def test_rst_tri_python_heavy_example(spark):
-    """rst_tri returns a non-null tile struct (terrain ruggedness index)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_tri_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_tri")
-
-
-def test_rst_tpi_python_heavy_example(spark):
-    """rst_tpi returns a non-null tile struct (topographic position index)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_tpi_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_tpi")
-
-
-def test_rst_roughness_python_heavy_example(spark):
-    """rst_roughness returns a non-null tile struct (max neighbor delta)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_roughness_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_roughness")
 
 
 def test_rst_color_relief_python_heavy_example(spark):

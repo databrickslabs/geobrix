@@ -227,11 +227,44 @@ def render_doc_block(fn) -> str:
     return "\n".join(out) + "\n"
 
 
+def _info_script():
+    """docs/scripts/generate-function-info.py, the one owner of statement splitting and path neutralizing."""
+    import importlib.util
+
+    path = REPO / "docs/scripts/generate-function-info.py"
+    spec = importlib.util.spec_from_file_location("gbx_generate_function_info", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _strip_comments(stmt: str) -> str:
+    """``stmt`` without its ``--`` comments; a ``--`` inside a quoted string stays."""
+    out, quote, i = [], None, 0
+    while i < len(stmt):
+        ch = stmt[i]
+        if quote:
+            out.append(ch)
+            quote = None if ch == quote else quote
+        elif ch in "'\"":
+            out.append(ch)
+            quote = ch
+        elif stmt.startswith("--", i):
+            i = stmt.find("\n", i)
+            if i < 0:
+                break
+            continue
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def first_statement(sql: str) -> Optional[str]:
-    """The first statement naming a gbx_ function, comments stripped (what DESCRIBE shows)."""
-    text = "\n".join(line.split("--", 1)[0] for line in sql.splitlines())
-    for stmt in text.split(";"):
-        flat = " ".join(stmt.split())
+    """The first statement naming a gbx_ function, comments stripped (what DESCRIBE shows). Statements split
+    on a ``;`` outside quotes and comments, so a ``;`` or ``--`` inside a string literal stays."""
+    for stmt in _info_script()._split_sql_statements(sql):
+        flat = " ".join(_strip_comments(stmt).split())
         if "gbx_" in flat:
             return flat
     return None
@@ -274,10 +307,15 @@ def example_sql(fn, case) -> str:
 
         n0 = oracles.group_width(fn.params)
         consts = [_literal(a, fn.params[i + n0]) for i, a in enumerate(case.args[1:])]
+        if None in consts:
+            raise ValueError(
+                f"{fn.sql_name}: oracle row {case.cid!r} has a per-group argument that is not a literal; "
+                "pick an example row whose per-group arguments are plain values"
+            )
         args = [f"c{i}" for i in range(n0)] + consts
         return f"SELECT {fn.sql_name}({', '.join(args)}) AS out FROM gbx_example"
     args, uses_view = [], False
-    for i, a in enumerate(case.args):
+    for i, a in enumerate(case.args[: len(fn.params)]):
         lit = _literal(a, fn.params[i])
         uses_view = uses_view or lit is None
         args.append(lit if lit is not None else f"c{i}")
@@ -321,7 +359,8 @@ def render_examples(man) -> str:
 def function_info_entries(man) -> Dict[str, dict]:
     from databricks.labs.gbx.manifest import usage_args
 
-    hand = hand_written_sql_examples()
+    neutral = _info_script().neutral_paths
+    hand = {n: neutral(t) for n, t in hand_written_sql_examples().items()}
     gen = examples_by_name(man)
     out = {}
     for f in man.functions.values():
@@ -350,9 +389,11 @@ def merge_function_info(existing: dict, entries: Dict[str, dict]) -> dict:
         else:
             sections.setdefault(current, {})[key] = value
     for name, entry in entries.items():
-        for names in sections.values():
-            names.pop(name, None)
-        sections.setdefault(SECTION_OF_PREFIX[name.split("_")[1]], {})[name] = entry
+        # a row stays in the section that holds it; SECTION_OF_PREFIX places a new name only
+        held = next((sec for sec, names in sections.items() if name in names), None)
+        sections.setdefault(held or SECTION_OF_PREFIX[name.split("_")[1]], {})[
+            name
+        ] = entry
     out: Dict[str, object] = {}
     for sec, names in sections.items():
         out[f"_package_{sec}"] = f"--- {sec} ---"

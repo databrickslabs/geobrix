@@ -63,20 +63,36 @@ def _first_section(text: str, start: int) -> int:
     return min(ends) if ends else len(text)
 
 
-def _strip_parameters(section: str) -> str:
-    """``section`` without its hand-written ``**Parameters:**`` paragraph (a line, or a line and its bullets)."""
-    return _PARAMETERS.sub("", section)
+_END_REGION = re.compile(r"\{/\* END GENERATED gbx_\w+ \*/\}")
+
+
+def _hand_parameters(path: Path, text: str) -> List[str]:
+    """A ``**Parameters:**`` paragraph left beside a generated table. The generator never rewrites a section
+    whose region exists (it would delete hand-written prose), so it names the paragraph instead."""
+    out = []
+    for m in _END_REGION.finditer(text):
+        stop = _first_section(text, m.end())
+        if _PARAMETERS.search(text[m.end() : stop]):
+            out.append(
+                f"{path.relative_to(REPO)}: a hand-written **Parameters:** paragraph follows "
+                f"{m.group(0)}; delete it (the generated table is the one parameter list)"
+            )
+    return out
 
 
 def _docs_section(section: str, region: str) -> str:
     """A function section with its generated region in place of the ``<Tier .../>`` line, and the
     ``**Signature:**`` paragraph removed (the region carries the signature; prose after its dash stays).
+    A ``**Parameters:**`` paragraph directly after the signature goes with it; one anywhere else stays and
+    ``check`` names it. This runs once per function, when its region is first inserted.
     """
     sig = _SIGNATURE.search(section)
     if sig:
         prose = sig.group(1).split(" — ", 1)[1].strip() if " — " in sig.group(1) else ""
         keep = (prose[:1].upper() + prose[1:] + "\n\n") if prose else ""
-        section = section[: sig.start()] + keep + section[sig.end() :]
+        rest = section[sig.end() :]
+        listed = _PARAMETERS.match(rest)
+        section = section[: sig.start()] + keep + (rest[listed.end() :] if listed else rest)
     tier = _TIER_LINE.search(section)
     if tier:
         impl = (tier.group(1) or "").strip()
@@ -95,9 +111,6 @@ def _docs_page(path: Path, fns, text: str) -> str:
         block = S.render_doc_block(fn)
         if begin in text:
             text = S.replace_region(text, begin, end, block)
-            at = text.index(end) + len(end)
-            stop = _first_section(text, at)
-            text = text[:at] + _strip_parameters(text[at:stop]) + text[stop:]
             continue
         name = fn.python.name if fn.python else fn.sql_name[len("gbx_") :]
         heading = f"### {name}\n"
@@ -108,9 +121,7 @@ def _docs_page(path: Path, fns, text: str) -> str:
             )
         start = at + len(heading)
         stop = _first_section(text, start)
-        section = _docs_section(
-            _strip_parameters(text[start:stop]), f"{begin}\n{block}{end}\n"
-        )
+        section = _docs_section(text[start:stop], f"{begin}\n{block}{end}\n")
         text = text[:start] + section + text[stop:]
     return text
 
@@ -203,6 +214,8 @@ def check(only: Optional[str] = None) -> List[str]:
             findings.append(
                 f"{rel}: differs from the manifest ({first[:120]}); run gbx:manifest:gen --write"
             )
+        if path.suffix == ".mdx":
+            findings += _hand_parameters(path, new)
         if _MACHINE_PATH.search(new):
             findings.append(f"{rel}: a machine path in generated output")
         if path in S.MODULE_FILES.values():

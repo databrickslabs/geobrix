@@ -2418,14 +2418,25 @@ def test_a_light_module_that_fails_to_import_loses_only_its_own_names(monkeypatc
         _legacy._by_module.cache_clear()
 
 
-def _fake_wheel(tmp_path, jars):
+def _fake_wheel(
+    tmp_path, jars, record_hash=None, name="geobrix-0.6.0+env6-py3-none-any.whl"
+):
+    """A wheel with the given JAR names (bytes b"jar-bytes") and a RECORD listing each one's sha256
+    (``record_hash`` overrides the listed hash)."""
+    import base64
+    import hashlib
     import zipfile
 
-    whl = tmp_path / "geobrix-0.6.0+env6-py3-none-any.whl"
+    good = base64.urlsafe_b64encode(hashlib.sha256(b"jar-bytes").digest()).rstrip(b"=")
+    whl = tmp_path / name
     with zipfile.ZipFile(whl, "w") as z:
-        for name in jars:
-            z.writestr(f"databricks/labs/gbx/_jar/{name}", b"jar-bytes")
+        rows = []
+        for jar in jars:
+            member = f"databricks/labs/gbx/_jar/{jar}"
+            z.writestr(member, b"jar-bytes")
+            rows.append(f"{member},sha256={record_hash or good.decode()},9")
         z.writestr("databricks/labs/gbx/__init__.py", b"")
+        z.writestr("geobrix-0.6.0.dist-info/RECORD", "\n".join(rows) + "\n")
     return str(whl)
 
 
@@ -2440,6 +2451,26 @@ def test_jar_from_wheel_takes_the_one_jar_and_refuses_otherwise(tmp_path):
     )
     with pytest.raises(ValueError, match="Fix:"):
         stage.jar_from_wheel(_fake_wheel(tmp_path, []))
+
+
+def test_jar_from_wheel_refuses_a_jar_of_another_version(tmp_path):
+    from databricks.labs.gbx import stage
+
+    whl = _fake_wheel(tmp_path, ["geobrix-0.5.3-jar-with-dependencies.jar"])
+    with pytest.raises(ValueError, match=r"0\.5\.3.*0\.6\.0.*Fix:.*rebuild"):
+        stage.jar_from_wheel(whl)
+
+
+def test_jar_from_wheel_refuses_bytes_that_differ_from_the_record(tmp_path):
+    from databricks.labs.gbx import stage
+
+    whl = _fake_wheel(
+        tmp_path,
+        ["geobrix-0.6.0-jar-with-dependencies.jar"],
+        record_hash="A" * 43,
+    )
+    with pytest.raises(ValueError, match=r"RECORD.*Fix:.*rebuild"):
+        stage.jar_from_wheel(whl)
 
 
 def test_stage_jar_writes_the_jar_and_its_sha_and_refuses_a_second_jar(

@@ -3,7 +3,10 @@ cluster whose metastore admin allowlists the path). The light tier never needs i
 
 from __future__ import annotations
 
+import base64
+import csv
 import hashlib
+import io
 import os
 import re
 import shutil
@@ -24,16 +27,56 @@ INSTRUCTION = (
 )
 
 
+_WHEEL_NAME = re.compile(r"geobrix-([^-+]+)(?:\+[^-]+)?-py3-none-any\.whl")
+
+
+def _recorded_sha256(z: zipfile.ZipFile, member: str):
+    """The hex sha256 the wheel's RECORD lists for ``member`` (``sha256=<urlsafe base64>``), or None."""
+    records = [n for n in z.namelist() if re.fullmatch(r"[^/]+\.dist-info/RECORD", n)]
+    if len(records) != 1:
+        return None
+    for row in csv.reader(io.StringIO(z.read(records[0]).decode("utf-8"))):
+        if row and row[0] == member:
+            algo, _, digest = (row[1] if len(row) > 1 else "").partition("=")
+            if algo == "sha256" and digest:
+                try:
+                    return base64.urlsafe_b64decode(
+                        digest + "=" * (-len(digest) % 4)
+                    ).hex()
+                except ValueError:
+                    return None
+    return None
+
+
 def jar_from_wheel(whl_path: str) -> bytes:
-    """The bytes of the JAR an env wheel carries."""
+    """The bytes of the JAR an env wheel carries, after two checks: the JAR is named for the wheel's
+    version, and its sha256 is the one the wheel's RECORD lists."""
+    base = os.path.basename(whl_path)
     with zipfile.ZipFile(whl_path) as z:
         hits = [n for n in z.namelist() if _IN_WHEEL.fullmatch(n)]
         if len(hits) != 1:
             raise ValueError(
-                f"{os.path.basename(whl_path)} carries {len(hits)} geobrix JARs, expected 1. "
+                f"{base} carries {len(hits)} geobrix JARs, expected 1. "
                 "Fix: use an env wheel (geobrix-<version>+env5 or +env6)."
             )
-        return z.read(hits[0])
+        member = hits[0]
+        named = _WHEEL_NAME.fullmatch(base)
+        if named and os.path.basename(member) != (
+            f"geobrix-{named.group(1)}-jar-with-dependencies.jar"
+        ):
+            raise ValueError(
+                f"{base} carries {os.path.basename(member)}, not the JAR of version "
+                f"{named.group(1)}. Fix: rebuild the wheel (gbx:data:stage-wheel) so it bundles its own JAR."
+            )
+        data = z.read(member)
+        want = _recorded_sha256(z, member)
+        if want is None or hashlib.sha256(data).hexdigest() != want:
+            raise ValueError(
+                f"the JAR in {base} does not match the sha256 its RECORD lists"
+                + (" (RECORD lists none)" if want is None else "")
+                + ". Fix: rebuild the wheel and stage the new one."
+            )
+        return data
 
 
 def stage_jar(vol_dir: str, *, overwrite: bool = False) -> str:

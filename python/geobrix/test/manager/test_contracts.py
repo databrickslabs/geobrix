@@ -1557,3 +1557,26 @@ def test_every_manifest_family_has_a_family_order():
     missing = sorted({f.family for f in FNS} - set(levels.FAMILY_PREFERENCE))
     assert not missing, missing
     assert all(o[-1] == "L3" for o in levels.FAMILY_PREFERENCE.values())
+
+
+def test_l1_gives_the_jvm_the_light_read_cap_unless_the_session_names_one():
+    """One number decides when a materialized tile is too large to read: the JVM's read cap is the light tier's
+    decoded budget, and a value the session already has (a user's, a test's) is kept."""
+    from databricks.labs.gbx.manager import jvm
+    from databricks.labs.gbx.pyrx.core.budget import decoded_budget_bytes
+
+    class Conf(dict):
+        def get(self, k, default=None):
+            return super().get(k, default)
+
+        def set(self, k, v):
+            self[k] = v
+
+    class S:
+        conf = Conf()
+
+    jvm._pass_read_cap(S)
+    assert S.conf[jvm.READ_CAP_KEY] == str(decoded_budget_bytes("auto"))
+    S.conf[jvm.READ_CAP_KEY] = "4096"
+    jvm._pass_read_cap(S)
+    assert S.conf[jvm.READ_CAP_KEY] == "4096"

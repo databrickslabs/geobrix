@@ -63,8 +63,24 @@ class Case:
 
 # Rows a JVM level is known to fail until it conforms to the light contract, as {row: {level: reason}}.
 # The parity run expects exactly these (level, row) pairs to fail, strictly, and a row that starts to
-# pass must be dropped from here. Empty: every JVM level conforms.
-HEAVY_PENDING: Dict[str, Dict[str, str]] = {}
+# pass must be dropped from here.
+_L2_NO_REASON = (
+    "the raster Java UDF returns NULL bytes for a refused tile, so its error tile carries no reason; "
+    "raster functions lose this level"
+)
+HEAVY_PENDING: Dict[str, Dict[str, str]] = {
+    "bytes_class_refused_driver": {"L2": _L2_NO_REASON},
+    "bytes_class_vrt_refused": {"L2": _L2_NO_REASON},
+    "decoded_over_cap_error_tile": {
+        "L2": "a Java UDF has no session configuration, so it reads at the default read cap"
+    },
+}
+
+# Rows the JVM levels run with the session's read cap lowered to this many bytes (the JVM's decoded-size gate at
+# its tile-from-bytes point reads it from `spark.databricks.labs.gbx.read_cap`); the light levels do not run them.
+JVM_READ_CAP_ROWS: Dict[str, int] = {"decoded_over_cap_error_tile": 4096}
+# The refusal of a tile's bytes in a driver that can name other files, on every level (the light tier's text).
+_BYTES_REFUSED_LIGHT = "is a {} raster, a format that can name other files, which GeoBrix does not open from tile bytes. Fix:"
 
 B, T, M = "gbx_bng_eastnorthasbng", "gbx_rst_transformcrs", "gbx_st_makevalid"
 SQUARE = "POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))"
@@ -267,6 +283,45 @@ MVP_S: Tuple[Case, ...] = (
         "null",
         None,
         ("uc",),
+    ),
+    # A materialized tile's driver decides how every level reads its bytes (the manifest's driver classes). One
+    # that is neither self-contained nor refused (netCDF here) is read as GeoTIFF bytes: the same result on every
+    # level. One that can name other files (a PDS label, a VRT) is an error tile with a Fix, and nothing it names is
+    # opened.
+    Case(
+        "bytes_class_netcdf_translated",
+        T,
+        (Build("tile_4326_netcdf"), "EPSG:3857"),
+        "tile_props",
+        "EPSG:3857",
+        ("session",),
+    ),
+    Case(
+        "bytes_class_refused_driver",
+        T,
+        (Build("tile_pds_bytes"), "EPSG:3857"),
+        "error_tile_has",
+        _BYTES_REFUSED_LIGHT.format("PDS"),
+        ("session",),
+    ),
+    Case(
+        "bytes_class_vrt_refused",
+        T,
+        (Build("tile_vrt_bytes"), "EPSG:4326"),
+        "error_tile_has",
+        _BYTES_REFUSED_LIGHT.format("VRT"),
+        ("session",),
+    ),
+    # A materialized tile decoded over the read cap is an error tile with a Fix, never a failed task. The JVM levels
+    # run it with the cap lowered (JVM_READ_CAP_ROWS); the light tier holds the tile's bytes already, and its read
+    # cap applies where it decodes a virtual tile.
+    Case(
+        "decoded_over_cap_error_tile",
+        T,
+        (Build("tile_4326"), "EPSG:3857"),
+        "error_tile_has",
+        "Fix: retile it first (gbx_rst_retile)",
+        ("session",),
     ),
     Case(
         "mv_bowtie",
@@ -1539,6 +1594,30 @@ def _se_build(name: str, tmpdir: Optional[str] = None):
     return None
 
 
+def _bytes_class_build(name: str, tmpdir: str):
+    """The bytes-class rows' fixtures: a materialized tile in a driver outside the self-contained class."""
+    if (
+        name == "tile_4326_netcdf"
+    ):  # the tile_4326 raster, materialized as netCDF (GDAL writes netCDF by copy, to a file only)
+        import rasterio.shutil
+
+        tif, nc = (os.path.join(tmpdir, f"oracle_4326.{e}") for e in ("tif", "nc"))
+        with open(tif, "wb") as fh:
+            fh.write(_tile_bytes("EPSG:4326"))
+        rasterio.shutil.copy(tif, nc, driver="netCDF")
+        with open(nc, "rb") as fh:
+            return _tile(fh.read())
+    if (
+        name == "tile_pds_bytes"
+    ):  # a PDS label (it names its image file) as a materialized tile's bytes
+        return _tile(
+            b"PDS_VERSION_ID = PDS3\r\nRECORD_TYPE = FIXED_LENGTH\r\nRECORD_BYTES = 64\r\n"
+            b'^IMAGE = ("oracle_image.img", 1)\r\nOBJECT = IMAGE\r\nLINES = 48\r\nLINE_SAMPLES = 64\r\n'
+            b"SAMPLE_TYPE = UNSIGNED_INTEGER\r\nSAMPLE_BITS = 8\r\nEND_OBJECT = IMAGE\r\nEND\r\n"
+        )
+    return None
+
+
 def _build(name: str, tmpdir: str):
     TABLES._find()  # the family modules register their fixture builders when they are imported
     if name in BUILDERS:
@@ -1546,6 +1625,8 @@ def _build(name: str, tmpdir: str):
     se = _se_build(name, tmpdir)
     if se is not None:
         return se
+    if name in ("tile_4326_netcdf", "tile_pds_bytes"):
+        return _bytes_class_build(name, tmpdir)
     if name == "tile_edit_a":
         return _tile(_edit_pair()[0])
     if name == "tile_edit_b":

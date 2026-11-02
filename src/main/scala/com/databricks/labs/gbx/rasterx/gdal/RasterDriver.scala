@@ -118,7 +118,12 @@ object RasterDriver {
     }
 
     /** Open a raster from in-memory bytes (vsimem); avoids temp-file lifecycle. Caller must release.
-      * Null for NULL bytes: they must never reach `gdal.FileFromMemBuffer`, which crashes the JVM on a null array. */
+      * Null for NULL bytes: they must never reach `gdal.FileFromMemBuffer`, which crashes the JVM on a null array.
+      *
+      * The one point where the JVM reads a materialized tile's bytes, so the bytes rule of [[TileBytes]] holds here
+      * for every raster function: a driver that can name other files, or a tile decoded over the read cap, throws
+      * [[TileBytesRefused]] (an error tile, with its `Fix:`); a driver outside the self-contained class is read as
+      * its GeoTIFF translation. Null when no allowed driver reads the bytes. */
     def readFromBytes(bytes: Array[Byte], options: Map[String, String]): Dataset =
         if (bytes == null) null else openFromBytes(bytes, options)
 
@@ -131,14 +136,31 @@ object RasterDriver {
             if (isZip) s"/vsizip//vsimem/$uuid.zip/$uuid.$extension"
             else s"/vsimem/temp_raster_$uuid.$extension"
         gdal.FileFromMemBuffer(tempPath, bytes)
-        // An unreadable payload opens as null (or throws): nothing owns the in-memory file then, so unlink it here.
-        val ds = try gdal.Open(tempPath) catch {
+        // An unreadable or refused payload opens as null (or throws): nothing owns the in-memory file then, so unlink
+        // it here.
+        var ds: Dataset = null
+        try {
+            TileBytes.refusedClassOf(tempPath, bytes).foreach(d => throw TileBytes.refusal(d))
+            ds = gdal.OpenEx(tempPath, OF_RASTER | OF_READONLY, TileBytes.openDrivers)
+            if (ds == null) {
+                gdal.Unlink(tempPath)
+                return null
+            }
+            TileBytes.checkSize(ds)
+            if (TileBytes.selfContained(ds)) ds
+            else {
+                val gtiff = TileBytes.toGTiff(ds, s"/vsimem/temp_raster_${uuid}_gtiff.tif")
+                ds.delete()
+                ds = null
+                gdal.Unlink(tempPath)
+                gtiff
+            }
+        } catch {
             case e: Exception =>
+                if (ds != null) ds.delete()
                 gdal.Unlink(tempPath)
                 throw e
         }
-        if (ds == null) gdal.Unlink(tempPath)
-        ds
     }
 
     /** Encode a Dataset to bytes: always translates to a fresh /vsimem/ path so the output

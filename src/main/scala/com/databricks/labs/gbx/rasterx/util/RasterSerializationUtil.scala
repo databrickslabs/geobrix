@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.rasterx.util
 
-import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.gdal.{RasterDriver, TileBytes}
 import com.databricks.labs.gbx.util.SerializationUtil
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.util.ArrayData
@@ -98,7 +98,7 @@ object RasterSerializationUtil {
             val metadata = SerializationUtil.createMap[String, String](metadataRow)
             val buffer = row.getBinary(lyt.raster)
             val ds = RasterDriver.readFromBytes(buffer, metadata)
-            (cellID, ds, metadata)
+            (cellID, ds, TileBytes.metadataAfterRead(metadata, ds))
         }
     }
 

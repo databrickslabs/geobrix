@@ -43,6 +43,11 @@ case class ExpressionConfig(
     /** The env wheel's `_native/<arch>` directory whose GDAL this JVM loads (see GDALManager.resolveNative). */
     def nativeDir: Option[String] = configs.get(com.databricks.labs.gbx.rasterx.gdal.GDALManager.NativeDirKey)
 
+    /** The decoded size, in bytes, a materialized tile may have where its bytes are read (the session's
+      * `spark.databricks.labs.gbx.read_cap`, which the Python manager sets); None when it is not set or not a number. */
+    def readCap: Option[Long] =
+        configs.get(com.databricks.labs.gbx.rasterx.gdal.TileBytes.ReadCapKey).flatMap(_.trim.toLongOption).filter(_ > 0)
+
     /** If true, expression errors surface as exceptions; if false, return null and optionally log. */
     def crashExpressions: Boolean = {
         configs.getOrElse("spark.databricks.labs.gbx.expressions.crash.on.error", "false").toBoolean

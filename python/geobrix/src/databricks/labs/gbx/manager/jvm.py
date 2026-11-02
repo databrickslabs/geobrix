@@ -19,6 +19,9 @@ def _priv(fn, level: str) -> str:
 NATIVE_DIR_KEY = (
     "spark.databricks.labs.gbx.native.dir"  # the JVM's GDALManager reads it
 )
+# The decoded size, in bytes, a materialized tile may have where the JVM reads its bytes (RasterDriver's one
+# tile-from-bytes point, through ExpressionConfig): over it the tile is an error tile with a Fix.
+READ_CAP_KEY = "spark.databricks.labs.gbx.read_cap"
 
 
 def _point_jvm_at_payload(spark) -> None:
@@ -32,6 +35,16 @@ def _point_jvm_at_payload(spark) -> None:
         spark.conf.set(
             NATIVE_DIR_KEY, d
         )  # classic dedicated only: never reached on Connect
+
+
+def _pass_read_cap(spark) -> None:
+    """On dedicated (classic only) give the JVM the light tier's decoded budget as its read cap, unless the session
+    already names one: one number decides when a tile is too large to read, whichever level reads it.
+    """
+    if spark.conf.get(READ_CAP_KEY, None) is None:
+        from databricks.labs.gbx.pyrx.core.budget import decoded_budget_bytes
+
+        spark.conf.set(READ_CAP_KEY, str(decoded_budget_bytes("auto")))
 
 
 def _install_light_side(spark, fn) -> str:
@@ -52,6 +65,7 @@ def _create_wrapper(spark, fn, ddl: str) -> None:
 def install_l1(spark, fn, caps) -> Optional[str]:
     try:
         _point_jvm_at_payload(spark)
+        _pass_read_cap(spark)
         fqn = fn.levels["L1"]["companion"]
         inst = spark._jvm.com.databricks.labs.gbx.kernels.L1Installer
         want = ",".join(str(n) for n in range(fn.min_args, fn.max_args + 1))
@@ -92,6 +106,7 @@ def install_l1_engine(spark, fn, caps) -> Optional[str]:
     the dispatch wrapper under the SQL name."""
     try:
         _point_jvm_at_payload(spark)
+        _pass_read_cap(spark)
         inst = spark._jvm.com.databricks.labs.gbx.kernels.L1Installer
         target = _priv(fn, "L1") if fn.accepts_virtual_tile else fn.sql_name
         r = str(inst.installSpec(spark._jsparkSession, target, fn.sql_name))
@@ -158,6 +173,7 @@ def install_companion(spark, fqn: str, name: str) -> Optional[str]:
     not. Called only after `capabilities.detect` found a matching JAR."""
     try:
         _point_jvm_at_payload(spark)
+        _pass_read_cap(spark)
         r = str(
             spark._jvm.com.databricks.labs.gbx.kernels.L1Installer.install(
                 spark._jsparkSession, name, fqn

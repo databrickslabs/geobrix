@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.util
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
-import com.databricks.labs.gbx.rasterx.gdal.GDALManager
+import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, TileBytes}
 import com.databricks.labs.gbx.util.NodeFileManager
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.catalyst.expressions.Expression
@@ -123,6 +123,8 @@ object RST_ExpressionUtil {
     def init(expressionConfig: ExpressionConfig): Unit = {
         NodeFileManager.init(expressionConfig)
         GDALManager.init(expressionConfig)
+        // the read cap of this task's tile reads (TileBytes, at RasterDriver.readFromBytes)
+        TileBytes.useReadCap(expressionConfig.readCap)
     }
 
     /** Register task completion/failure listeners to close the given iterator (e.g. release resources). */

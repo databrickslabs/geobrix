@@ -11,6 +11,7 @@ import pytest
 
 from databricks.labs.gbx import _rs, manifest, register
 from databricks.labs.gbx.bench import oracles
+from databricks.labs.gbx.ds.file_gbx import READ_CAP_KEY
 
 # Tables that still have their own cross-tier file. A SPEC_* table of an engine family is never listed here.
 _OWN_FILES = {"MVP_S", "MVP_G", "MVP_A", "MVP_H", "MVP_IO", "SPEC_SE"}
@@ -110,7 +111,21 @@ def test_family_oracle(request, tmp_path, sql_name, level, variant, api):
         if api == "python"
         else None
     )
-    red = {c.cid: m for c, m in _run(spark, fn, cases, str(tmp_path), column_of) if m}
+    capped = [c for c in cases if c.cid in oracles.READ_CAP_ROWS]
+    ran = _run(
+        spark, fn, [c for c in cases if c not in capped], str(tmp_path), column_of
+    )
+    # the decoded-size gate, with the session's read cap lowered for the row: the JVM reads the key per query, a
+    # light function carries it from its registration
+    for c in capped:
+        spark.conf.set(READ_CAP_KEY, str(oracles.READ_CAP_ROWS[c.cid]))
+        try:
+            register(spark, only=[sql_name], _levels={sql_name: (level, variant)})
+            ran += _run(spark, fn, [c], str(tmp_path), column_of)
+        finally:
+            spark.conf.unset(READ_CAP_KEY)
+            register(spark, only=[sql_name], _levels={sql_name: (level, variant)})
+    red = {c.cid: m for c, m in ran if m}
     pending = {
         cid
         for cid, lv in oracles.HEAVY_PENDING.items()

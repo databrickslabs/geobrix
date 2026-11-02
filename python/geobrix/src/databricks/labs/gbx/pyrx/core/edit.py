@@ -172,6 +172,9 @@ def threshold(ds, op: str = ">", value: float = 0.0) -> bytes:
     """
     op = ">" if op is None else str(op)
     value = 0.0 if value is None else float(value)
+    if op not in _THRESHOLD_OPS:
+        known = ", ".join(sorted(_THRESHOLD_OPS))
+        raise ValueError(f"rst_threshold: unknown operator {op!r}. Known: {known}")
     fn = _THRESHOLD_OPS[op]
     data = ds.read()
     nd = ds.nodata if ds.nodata is not None else _nd.fallback_nodata(data.dtype.name)

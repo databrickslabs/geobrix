@@ -34,11 +34,14 @@ def tile_dispatch(fn, jvm_call: str, l3_name: str) -> str:
     virt = f"(IF({t}.raster IS NULL AND {t}.path IS NOT NULL, {t}, NULL))"
     mat = f"(IF({t}.raster IS NOT NULL, {t}, NULL))"
     light = ", ".join([virt] + others)
+    jvm = jvm_call.format(tile=mat, rest=rest)
+    if not others:  # a tile-only function: no argument after the tile
+        jvm = jvm.replace(f"{mat}, )", f"{mat})")
     return (
         f"CREATE OR REPLACE TEMPORARY FUNCTION {fn.sql_name}({_sig(fn)}) "
         f"RETURNS {sql_type(fn.returns_session)} RETURN CASE WHEN {required} THEN NULL "
         f"WHEN {t}.raster IS NULL AND {t}.path IS NOT NULL THEN {l3_name}({light}) "
-        f"WHEN {t}.raster IS NOT NULL THEN {jvm_call.format(tile=mat, rest=rest)} "
+        f"WHEN {t}.raster IS NOT NULL THEN {jvm} "
         f"WHEN map_contains_key({t}.metadata, 'last_error') "
         f"OR map_contains_key({t}.metadata, 'error_message') THEN {t} END"
     )

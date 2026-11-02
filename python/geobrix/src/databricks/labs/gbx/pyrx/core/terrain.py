@@ -110,6 +110,11 @@ SLOPE_HALF_SCALE_REFUSAL = (
 )
 
 
+HILLSHADE_HALF_SCALE_REFUSAL = SLOPE_HALF_SCALE_REFUSAL.replace(
+    "gbx_rst_slope", "gbx_rst_hillshade"
+)
+
+
 def _resolve_scale(ds, xscale, yscale) -> tuple:
     """Explicit (xscale, yscale) when BOTH given, else GDAL-normal auto-scale."""
     if xscale is not None and yscale is not None:
@@ -175,7 +180,7 @@ def aspect(
     aspect_rad = np.arctan2(dy, -dx)
     aspect_deg = np.degrees(aspect_rad)
     if trigonometric:
-        result = aspect_deg
+        result = aspect_deg % 360.0  # [0, 360), as GDAL gives it
     else:
         result = (90.0 - aspect_deg) % 360.0
     flat_mask = (dx == 0.0) & (dy == 0.0)
@@ -446,6 +451,8 @@ def hillshade(
         Single-band Byte (uint8) GTiff bytes; valid values [1..255],
         0 reserved for NoData (gdaldem convention).
     """
+    if (xscale is None) != (yscale is None):
+        raise ValueError(HILLSHADE_HALF_SCALE_REFUSAL)
     dzdx, dzdy, valid = _horn_gradients(ds)
     xs, ys = _resolve_scale(ds, xscale, yscale)
     dzdx = dzdx / xs

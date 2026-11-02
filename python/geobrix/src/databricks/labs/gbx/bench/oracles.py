@@ -86,7 +86,11 @@ _SUMMARY_L1 = "the JVM summary is gdalinfo's JSON, not the contract's; the GDAL 
 _MEDIAN_L1 = "the JVM median is GDAL's median resampling, which takes one of the two middle values of an even count, not their mean"
 _HISTOGRAM_L1 = "the JVM histogram leaves the top edge out of the last bucket, gives NULL for a NULL bound, ignores include_nodata and turns a bad bucket count into NULL"
 _METADATA_L1 = "the JVM metadata is GDAL's metadata domains merged, not the contract's driver, size and tag keys"
+# With zero_for_flat GDAL drops the NoData value, so its border pixels are 0; light keeps them NoData (a documented
+# divergence, which the GDAL spec engine keeps).
+_ASPECT_ZERO_L1 = "GDAL drops the NoData value when zero_for_flat is set, so its border pixels are 0, not NoData"
 HEAVY_PENDING: Dict[str, Dict[str, str]] = {
+    "aspect_flat_zero": {"L1": _ASPECT_ZERO_L1},
     **{
         cid: {"L1": _QUADBIN_L1}
         for cid in (
@@ -139,6 +143,7 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
 # this many bytes: the decoded-size gate where each level reads a tile's bytes.
 READ_CAP_ROWS: Dict[str, int] = {
     "decoded_over_cap_error_tile": 4096,
+    "dem_decoded_over_cap": 4096,
     "rt_over_cap_windows": 4096,
 }
 # The refusal of a tile's bytes in a driver that can name other files, on every level (the light tier's text).
@@ -2094,15 +2099,22 @@ def _masked_band(raster: bytes, band: int = 1):
         return ds.read(band, masked=True)
 
 
-def _ref_slope(args):
-    """The light tier's numpy Horn (pyrx.core.terrain), independent of GDAL: (values, NoData mask)."""
+@contextlib.contextmanager
+def _ref_dataset(args):
+    """The tile `args[0]` opened for a reference to read."""
     from rasterio.io import MemoryFile
 
+    with MemoryFile(_raster_of(args[0])) as mf, mf.open() as ds:
+        yield ds
+
+
+def _ref_slope(args):
+    """The light tier's numpy Horn (pyrx.core.terrain), independent of GDAL: (values, NoData mask)."""
     from databricks.labs.gbx.pyrx.core import terrain
 
     unit = args[1] if len(args) > 1 else "degrees"
     xs, ys = (args[2], args[3]) if len(args) > 3 else (None, None)
-    with MemoryFile(_raster_of(args[0])) as mf, mf.open() as ds:
+    with _ref_dataset(args) as ds:
         ref = terrain.slope(ds, unit=unit, xscale=xs, yscale=ys)
     g = _masked_band(ref)
     return g.data.astype("float64"), g.mask
@@ -2129,12 +2141,137 @@ def _ref_times2(args):
     return a * 2, mask
 
 
+def _dem_band(args):
+    """Band 1 of the DEM tile `args[0]` as float64, its NoData value and its pixel size."""
+    with _ref_dataset(args) as ds:
+        return (
+            ds.read(1).astype("float64"),
+            ds.nodata,
+            abs(ds.transform.a),
+            abs(ds.transform.e),
+        )
+
+
+def _ref_terrain(name):
+    """The independent reference (oracle_refs) of a DEM function, called with the case's arguments."""
+
+    def ref(args):
+        from databricks.labs.gbx.bench import oracle_refs
+
+        z, nodata, xres, yres = _dem_band(args)
+        rest = [1.0 if a is None else a for a in args[1:]]
+        return getattr(oracle_refs, name)(z, nodata, xres, yres, *rest)
+
+    return ref
+
+
+def _ref_window(name):
+    """The independent reference of a 3 x 3 window function (TRI, TPI, roughness)."""
+
+    def ref(args):
+        from databricks.labs.gbx.bench import oracle_refs
+
+        z, nodata, _, _ = _dem_band(args)
+        return getattr(oracle_refs, name)(z, nodata)
+
+    return ref
+
+
+def _ref_calc(formula, bands=2):
+    """Band math on the tile `args[0]`: `formula` over its bands `args[1:1 + bands]` (1-based) and the remaining
+    arguments, NoData where an input band is NoData or the result is not finite."""
+
+    def ref(args):
+        import numpy as np
+
+        arrays, mask = _calc_inputs(args[0], args[1 : 1 + bands])
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out = formula(*arrays, *args[1 + bands :])
+        return out, mask | ~np.isfinite(out)
+
+    return ref
+
+
+def _calc_inputs(tile, indexes):
+    import numpy as np
+
+    bands = [_masked_band(_raster_of(tile), int(i)) for i in indexes]
+    mask = np.zeros(bands[0].shape, dtype=bool)
+    for m in bands:
+        mask |= np.ma.getmaskarray(m)
+    return [m.data.astype("float64") for m in bands], mask
+
+
+def _ref_index(formula):
+    """rst_index: `formula` over the bands the map names (red, nir)."""
+
+    def ref(args):
+        import numpy as np
+
+        band_map = {k.lower(): v for k, v in dict(args[2]).items()}
+        arrays, mask = _calc_inputs(args[0], [band_map["red"], band_map["nir"]])
+        with np.errstate(divide="ignore", invalid="ignore"):
+            out = formula(*arrays)
+        return out, mask | ~np.isfinite(out)
+
+    return ref
+
+
+def _ref_threshold(args):
+    """rst_threshold: the pixels that satisfy the comparison keep their value, the rest are NoData."""
+    import operator
+
+    ops = {
+        ">": operator.gt,
+        "<": operator.lt,
+        ">=": operator.ge,
+        "<=": operator.le,
+        "==": operator.eq,
+        "!=": operator.ne,
+    }
+    (band,), mask = _calc_inputs(args[0], [1])
+    keep = ops[args[1]](band, float(args[2]))
+    return band, mask | ~keep
+
+
+def _ref_chm(args):
+    """rst_chm on tiles that share a grid: the surface minus the terrain, no lower than 0."""
+    import numpy as np
+
+    (dsm,), m_dsm = _calc_inputs(args[0], [1])
+    (dem,), m_dem = _calc_inputs(args[1], [1])
+    return np.maximum(dsm - dem, 0.0), m_dsm | m_dem
+
+
 _REFS = {
     "slope": _ref_slope,
+    "chm": _ref_chm,
     "norm_diff": _ref_norm_diff,
     "times2": _ref_times2,
     "nd_bands_4_3": lambda args: _ref_norm_diff(args, ((0, 4), (0, 3))),
+    "aspect": _ref_terrain("aspect"),
+    "hillshade": _ref_terrain("hillshade"),
+    "tri": _ref_window("riley_tri"),
+    "tpi": _ref_window("tpi"),
+    "roughness": _ref_window("roughness"),
+    "ndvi": _ref_calc(lambda r, n: (n - r) / (n + r)),
+    "ndwi": _ref_calc(lambda g, n: (g - n) / (g + n)),
+    "nbr": _ref_calc(lambda n, s: (n - s) / (n + s)),
+    "savi": _ref_calc(lambda r, n, l_=0.5: (n - r) / (n + r + l_) * (1 + l_), bands=2),
+    "evi": _ref_calc(
+        lambda r, n, b, l_=1.0, c1=6.0, c2=7.5, g=2.5: g
+        * (n - r)
+        / (n + c1 * r - c2 * b + l_),
+        bands=3,
+    ),
+    "index_ndvi": _ref_index(lambda r, n: (n - r) / (n + r)),
+    "index_msavi": _ref_index(
+        lambda r, n: (2 * n + 1 - ((2 * n + 1) ** 2 - 8 * (n - r)) ** 0.5) / 2
+    ),
+    "threshold": _ref_threshold,
 }
+# Byte output (hillshade) is rounded by GDAL, not by the reference: one grey level either way.
+_REF_ATOL = {"hillshade": 1.0, "aspect": 0.01}  # GDAL computes aspect in float32
 
 
 def _check_ref(case: Case, out, args) -> Optional[str]:
@@ -2154,7 +2291,12 @@ def _check_ref(case: Case, out, args) -> Optional[str]:
             f"{case.cid}: the NoData mask differs from the reference at {off} pixel(s)"
         )
     ok = ~want_mask
-    close = np.isclose(got.data[ok].astype("float64"), want[ok], rtol=1e-4, atol=1e-3)
+    close = np.isclose(
+        got.data[ok].astype("float64"),
+        want[ok],
+        rtol=1e-4,
+        atol=_REF_ATOL.get(case.expect, 1e-3),
+    )
     if not close.all():
         worst = float(np.max(np.abs(got.data[ok] - want[ok])))
         return f"{case.cid}: {int((~close).sum())} pixel(s) differ from the reference (max |d| {worst:.3g})"
@@ -2778,6 +2920,8 @@ def _ddl_type(value, param) -> str:
         "struct<"
     ):  # a struct parameter other than a tile (a BNG chip)
         return param.session[0]
+    if isinstance(value, dict) and param.session[0].upper().startswith("MAP<"):
+        return param.session[0].lower()  # a map parameter (a band map)
     if isinstance(value, dict) or "TILE" in param.session:
         return TILE_SQL
     if isinstance(value, bool):

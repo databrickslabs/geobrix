@@ -1861,7 +1861,7 @@ rst_merge_agg_python_heavy_example_output = """
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
-(rst_merge_agg returns BINARY; rst_fromcontent makes the tile)
+(one v2 Tile per group — raster bytes populated, path null)
 """
 
 

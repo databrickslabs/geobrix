@@ -304,22 +304,8 @@ def test_explode_column_wrappers_raise_not_implemented():
 
 
 def test_scalar_column_wrappers_exist():
-    # All non-explode wrappers exist as importable callables for parity.
+    # The aggregate wrappers still live here; the scalars are gridx.bng.functions (generated from the manifest).
     for name in (
-        "bng_pointascell",
-        "bng_cellarea",
-        "bng_distance",
-        "bng_euclideandistance",
-        "bng_aswkb",
-        "bng_aswkt",
-        "bng_centroid",
-        "bng_cellintersection",
-        "bng_cellunion",
-        "bng_kring",
-        "bng_kloop",
-        "bng_polyfill",
-        "bng_geomkring",
-        "bng_geomkloop",
         "bng_cellunion_agg",
         "bng_cellintersection_agg",
     ):

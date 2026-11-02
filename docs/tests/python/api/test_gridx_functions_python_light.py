@@ -81,7 +81,7 @@ def test_gridx_light_setup_executes(spark):
 def test_bng_aswkb_python_light_example(spark):
     """bng_aswkb returns non-empty WKB bytes for 'TQ3080'."""
     assert light_examples is not None
-    result = light_examples.bng_aswkb_python_light_example(spark)
+    result = light_examples.bng_aswkb_python_example(spark)
     assert result is not None, "bng_aswkb should return non-null WKB bytes"
     assert isinstance(
         result, (bytes, bytearray)
@@ -92,7 +92,7 @@ def test_bng_aswkb_python_light_example(spark):
 def test_bng_aswkt_python_light_example(spark):
     """bng_aswkt returns the WKT polygon string for 'TQ3080'."""
     assert light_examples is not None
-    result = light_examples.bng_aswkt_python_light_example(spark)
+    result = light_examples.bng_aswkt_python_example(spark)
     assert result is not None, "bng_aswkt should return non-null WKT string"
     assert isinstance(result, str), f"Expected str (WKT), got {type(result)}"
     assert result.startswith("POLYGON"), f"Expected POLYGON WKT, got {result!r}"
@@ -103,7 +103,7 @@ def test_bng_aswkt_python_light_example(spark):
 def test_bng_cellarea_python_light_example(spark):
     """bng_cellarea returns 1.0 sq km for the 1km 'TQ3080' cell."""
     assert light_examples is not None
-    result = light_examples.bng_cellarea_python_light_example(spark)
+    result = light_examples.bng_cellarea_python_example(spark)
     assert result is not None, "bng_cellarea should return non-null area"
     assert (
         result == 1.0
@@ -113,7 +113,7 @@ def test_bng_cellarea_python_light_example(spark):
 def test_bng_centroid_python_light_example(spark):
     """bng_centroid returns non-empty WKB bytes for 'TQ3080'."""
     assert light_examples is not None
-    result = light_examples.bng_centroid_python_light_example(spark)
+    result = light_examples.bng_centroid_python_example(spark)
     assert result is not None, "bng_centroid should return non-null WKB bytes"
     assert isinstance(
         result, (bytes, bytearray)
@@ -133,7 +133,7 @@ def test_bng_eastnorthasbng_python_example(spark):
 def test_bng_pointascell_python_light_example(spark):
     """bng_pointascell returns 'TQ3080' for POINT(530000 180000) at res='1km'."""
     assert light_examples is not None
-    result = light_examples.bng_pointascell_python_light_example(spark)
+    result = light_examples.bng_pointascell_python_example(spark)
     assert (
         result == "TQ3080"
     ), f"Expected 'TQ3080' for POINT(530000 180000) at res='1km', got {result!r}"
@@ -153,7 +153,7 @@ def test_bng_pointascell_python_light_example(spark):
 def test_bng_distance_python_light_example(spark):
     """bng_distance returns 1 (grid step) for adjacent cells 'TQ3080' and 'TQ3081'."""
     assert light_examples is not None
-    result = light_examples.bng_distance_python_light_example(spark)
+    result = light_examples.bng_distance_python_example(spark)
     assert result is not None, "bng_distance should return non-null value"
     assert (
         result == 1
@@ -163,7 +163,7 @@ def test_bng_distance_python_light_example(spark):
 def test_bng_euclideandistance_python_light_example(spark):
     """bng_euclideandistance returns 1 (grid unit) for adjacent cells 'TQ3080' and 'TQ3081'."""
     assert light_examples is not None
-    result = light_examples.bng_euclideandistance_python_light_example(spark)
+    result = light_examples.bng_euclideandistance_python_example(spark)
     assert result is not None, "bng_euclideandistance should return non-null value"
     assert (
         result == 1
@@ -173,7 +173,7 @@ def test_bng_euclideandistance_python_light_example(spark):
 def test_bng_cellintersection_python_light_example(spark):
     """bng_cellintersection returns the core chip struct for TQ3080 intersected with itself."""
     assert light_examples is not None
-    result = light_examples.bng_cellintersection_python_light_example(spark)
+    result = light_examples.bng_cellintersection_python_example(spark)
     assert result is not None, "bng_cellintersection should return non-null chip struct"
     assert (
         result["cellid"] == "TQ3080"
@@ -186,7 +186,7 @@ def test_bng_cellintersection_python_light_example(spark):
 def test_bng_cellunion_python_light_example(spark):
     """bng_cellunion returns the core chip struct for TQ3080 unioned with itself."""
     assert light_examples is not None
-    result = light_examples.bng_cellunion_python_light_example(spark)
+    result = light_examples.bng_cellunion_python_example(spark)
     assert result is not None, "bng_cellunion should return non-null chip struct"
     assert (
         result["cellid"] == "TQ3080"
@@ -211,7 +211,7 @@ def test_bng_cellunion_python_light_example(spark):
 def test_bng_kring_python_light_example(spark):
     """bng_kring returns a 9-cell list for 'TQ3080' at k=1 (center + 8 neighbors)."""
     assert light_examples is not None
-    result = light_examples.bng_kring_python_light_example(spark)
+    result = light_examples.bng_kring_python_example(spark)
     assert result is not None, "bng_kring should return a non-null list"
     assert isinstance(
         result, list
@@ -225,7 +225,7 @@ def test_bng_kring_python_light_example(spark):
 def test_bng_kloop_python_light_example(spark):
     """bng_kloop returns an 8-cell list for 'TQ3080' at k=1 (hollow ring, center excluded)."""
     assert light_examples is not None
-    result = light_examples.bng_kloop_python_light_example(spark)
+    result = light_examples.bng_kloop_python_example(spark)
     assert result is not None, "bng_kloop should return a non-null list"
     assert isinstance(
         result, list
@@ -237,7 +237,7 @@ def test_bng_kloop_python_light_example(spark):
 def test_bng_geomkring_python_light_example(spark):
     """bng_geomkring returns a 24-cell list for the BNG polygon at res=3, k=1 (boundary band + 1 ring out)."""
     assert light_examples is not None
-    result = light_examples.bng_geomkring_python_light_example(spark)
+    result = light_examples.bng_geomkring_python_example(spark)
     assert result is not None, "bng_geomkring should return a non-null list"
     assert isinstance(
         result, list
@@ -253,7 +253,7 @@ def test_bng_geomkring_python_light_example(spark):
 def test_bng_geomkloop_python_light_example(spark):
     """bng_geomkloop returns a 16-cell list for the BNG polygon at res=3, k=1 (outer ring)."""
     assert light_examples is not None
-    result = light_examples.bng_geomkloop_python_light_example(spark)
+    result = light_examples.bng_geomkloop_python_example(spark)
     assert result is not None, "bng_geomkloop should return a non-null list"
     assert isinstance(
         result, list
@@ -269,7 +269,7 @@ def test_bng_geomkloop_python_light_example(spark):
 def test_bng_polyfill_python_light_example(spark):
     """bng_polyfill returns a 9-cell list for the 3km × 3km BNG polygon at res=3."""
     assert light_examples is not None
-    result = light_examples.bng_polyfill_python_light_example(spark)
+    result = light_examples.bng_polyfill_python_example(spark)
     assert result is not None, "bng_polyfill should return a non-null list"
     assert isinstance(
         result, list

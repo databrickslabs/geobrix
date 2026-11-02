@@ -4,10 +4,80 @@ Run by test_generated_examples.py; shown on a function's page when it has no han
 """
 
 EXAMPLES = {
+    "gbx_bng_aswkb": (
+        "GRID_SCALAR",
+        "aswkb_tq3080",
+        "SELECT gbx_bng_aswkb('TQ3080') AS out",
+    ),
+    "gbx_bng_aswkt": (
+        "GRID_SCALAR",
+        "aswkt_tq3080",
+        "SELECT gbx_bng_aswkt('TQ3080') AS out",
+    ),
+    "gbx_bng_cellarea": (
+        "GRID_SCALAR",
+        "cellarea_1km",
+        "SELECT gbx_bng_cellarea('TQ3080') AS out",
+    ),
+    "gbx_bng_cellintersection": (
+        "GRID_SCALAR",
+        "cellint_halves",
+        "SELECT gbx_bng_cellintersection(c0, c1) AS out FROM gbx_example",
+    ),
+    "gbx_bng_cellunion": (
+        "GRID_SCALAR",
+        "cellunion_halves",
+        "SELECT gbx_bng_cellunion(c0, c1) AS out FROM gbx_example",
+    ),
+    "gbx_bng_centroid": (
+        "GRID_SCALAR",
+        "centroid_tq3080",
+        "SELECT gbx_bng_centroid('TQ3080') AS out",
+    ),
+    "gbx_bng_distance": (
+        "GRID_SCALAR",
+        "distance_diag",
+        "SELECT gbx_bng_distance('TQ3080', 'TQ3282') AS out",
+    ),
     "gbx_bng_eastnorthasbng": (
         "MVP_S",
         "bng_1km",
         "SELECT gbx_bng_eastnorthasbng(530000.0D, 180000.0D, 3) AS out",
+    ),
+    "gbx_bng_euclideandistance": (
+        "GRID_SCALAR",
+        "edistance_diag",
+        "SELECT gbx_bng_euclideandistance('TQ3080', 'TQ3282') AS out",
+    ),
+    "gbx_bng_geomkloop": (
+        "GRID_ARRAY",
+        "geomkloop_point_k1",
+        "SELECT gbx_bng_geomkloop('POINT(530500 180500)', 3, 1) AS out",
+    ),
+    "gbx_bng_geomkring": (
+        "GRID_ARRAY",
+        "geomkring_point_k1",
+        "SELECT gbx_bng_geomkring('POINT(530500 180500)', 3, 1) AS out",
+    ),
+    "gbx_bng_kloop": (
+        "GRID_ARRAY",
+        "kloop_k1",
+        "SELECT gbx_bng_kloop('TQ3080', 1) AS out",
+    ),
+    "gbx_bng_kring": (
+        "GRID_ARRAY",
+        "kring_k1",
+        "SELECT gbx_bng_kring('TQ3080', 1) AS out",
+    ),
+    "gbx_bng_pointascell": (
+        "GRID_SCALAR",
+        "pac_point_1km",
+        "SELECT gbx_bng_pointascell('POINT(530500 180500)', 3) AS out",
+    ),
+    "gbx_bng_polyfill": (
+        "GRID_ARRAY",
+        "polyfill_2x2",
+        "SELECT gbx_bng_polyfill('POLYGON((530000 180000, 532000 180000, 532000 182000, 530000 182000, 530000 180000))', 3) AS out",
     ),
     "gbx_bng_tessellate": (
         "MVP_G",

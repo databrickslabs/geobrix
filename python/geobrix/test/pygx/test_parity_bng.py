@@ -182,21 +182,33 @@ def test_bng_full_parity(spark_with_jar):
     def scalar_row(mod, tess_keep_core):
         mod.register(spark)
         return df.select(
-            mod.bng_pointascell(f.col("pt"), f.col("res")).alias("pac"),
+            f.call_function("gbx_bng_pointascell", f.col("pt"), f.col("res")).alias(
+                "pac"
+            ),
             f.call_function(
                 "gbx_bng_eastnorthasbng", f.col("e"), f.col("n"), f.col("res")
             ).alias("enb"),
-            mod.bng_cellarea(f.col("seed")).alias("area"),
-            mod.bng_distance(f.col("seed"), f.col("cell_b")).alias("dist"),
-            mod.bng_euclideandistance(f.col("seed"), f.col("cell_b")).alias("edist"),
-            mod.bng_aswkb(f.col("seed")).alias("aswkb"),
-            mod.bng_aswkt(f.col("seed")).alias("aswkt"),
-            mod.bng_centroid(f.col("seed")).alias("centroid"),
-            mod.bng_kring(f.col("seed"), f.lit(1)).alias("kring"),
-            mod.bng_kloop(f.col("seed"), f.lit(1)).alias("kloop"),
-            mod.bng_polyfill(f.col("geom"), f.col("res")).alias("pf"),
-            mod.bng_geomkring(f.col("geom"), f.col("res"), f.lit(1)).alias("gkr"),
-            mod.bng_geomkloop(f.col("geom"), f.col("res"), f.lit(1)).alias("gkl"),
+            f.call_function("gbx_bng_cellarea", f.col("seed")).alias("area"),
+            f.call_function("gbx_bng_distance", f.col("seed"), f.col("cell_b")).alias(
+                "dist"
+            ),
+            f.call_function(
+                "gbx_bng_euclideandistance", f.col("seed"), f.col("cell_b")
+            ).alias("edist"),
+            f.call_function("gbx_bng_aswkb", f.col("seed")).alias("aswkb"),
+            f.call_function("gbx_bng_aswkt", f.col("seed")).alias("aswkt"),
+            f.call_function("gbx_bng_centroid", f.col("seed")).alias("centroid"),
+            f.call_function("gbx_bng_kring", f.col("seed"), f.lit(1)).alias("kring"),
+            f.call_function("gbx_bng_kloop", f.col("seed"), f.lit(1)).alias("kloop"),
+            f.call_function("gbx_bng_polyfill", f.col("geom"), f.col("res")).alias(
+                "pf"
+            ),
+            f.call_function(
+                "gbx_bng_geomkring", f.col("geom"), f.col("res"), f.lit(1)
+            ).alias("gkr"),
+            f.call_function(
+                "gbx_bng_geomkloop", f.col("geom"), f.col("res"), f.lit(1)
+            ).alias("gkl"),
         ).collect()[0]
 
     def chip_row(mod):
@@ -214,8 +226,8 @@ def test_bng_full_parity(spark_with_jar):
         left = f.struct(f.col("lid"), f.col("lcore"), f.col("lchip"))
         right = f.struct(f.col("rid"), f.col("rcore"), f.col("rchip"))
         return cdf.select(
-            mod.bng_cellunion(left, right).alias("cu"),
-            mod.bng_cellintersection(left, right).alias("ci"),
+            f.call_function("gbx_bng_cellunion", left, right).alias("cu"),
+            f.call_function("gbx_bng_cellintersection", left, right).alias("ci"),
         ).collect()[0]
 
     def tess_rows(mod, keep_core):
@@ -551,8 +563,8 @@ def test_bng_mosaic_434_100km_cells_are_res1(spark_with_jar):
         mod.register(spark)
         return df.select(
             f.col("cellid"),
-            mod.bng_cellarea(f.col("cellid")).alias("area"),
-            mod.bng_aswkb(f.col("cellid")).alias("wkb"),
+            f.call_function("gbx_bng_cellarea", f.col("cellid")).alias("area"),
+            f.call_function("gbx_bng_aswkb", f.col("cellid")).alias("wkb"),
         ).collect()
 
     light = {r["cellid"]: (r["area"], r["wkb"]) for r in rows(gx)}
@@ -866,8 +878,12 @@ def test_bng_geomkring_geomkloop_grid_aligned(spark_with_jar, k):
     def sets(mod):
         mod.register(spark)
         row = df.select(
-            mod.bng_geomkring(f.col("geom"), f.col("res"), f.col("k")).alias("ring"),
-            mod.bng_geomkloop(f.col("geom"), f.col("res"), f.col("k")).alias("loop"),
+            f.call_function(
+                "gbx_bng_geomkring", f.col("geom"), f.col("res"), f.col("k")
+            ).alias("ring"),
+            f.call_function(
+                "gbx_bng_geomkloop", f.col("geom"), f.col("res"), f.col("k")
+            ).alias("loop"),
         ).collect()[0]
         return sorted(row["ring"]), sorted(row["loop"])
 
@@ -915,10 +931,18 @@ def test_bng_pointascell_all_four_encodings(spark_with_jar):
     def cells(mod):
         mod.register(spark)
         return df.select(
-            mod.bng_pointascell(f.col("wkb"), f.col("res")).alias("a"),
-            mod.bng_pointascell(f.col("ewkb"), f.col("res")).alias("b"),
-            mod.bng_pointascell(f.col("wkt"), f.col("res")).alias("c"),
-            mod.bng_pointascell(f.col("ewkt"), f.col("res")).alias("d"),
+            f.call_function("gbx_bng_pointascell", f.col("wkb"), f.col("res")).alias(
+                "a"
+            ),
+            f.call_function("gbx_bng_pointascell", f.col("ewkb"), f.col("res")).alias(
+                "b"
+            ),
+            f.call_function("gbx_bng_pointascell", f.col("wkt"), f.col("res")).alias(
+                "c"
+            ),
+            f.call_function("gbx_bng_pointascell", f.col("ewkt"), f.col("res")).alias(
+                "d"
+            ),
         ).collect()[0]
 
     light = cells(gx)

@@ -714,7 +714,18 @@ Functions to convert BNG cell IDs to standard geometry formats.
 
 ### bng_aswkb
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_bng_aswkb: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_aswkb(cellid)` | `BINARY` |
+| Python | `gridx.bng.functions.bng_aswkb(cellid)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cellid` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
+{/* END GENERATED gbx_bng_aswkb */}
 
 Convert a BNG cell ID to Well-Known Binary (WKB) format.
 
@@ -722,19 +733,13 @@ Convert a BNG cell ID to Well-Known Binary (WKB) format.
 Powered by a **pure-Python port of `BNG.scala`** + **shapely**. The cell footprint polygon as plain WKB in EPSG:27700 (no SRID).
 :::
 
-**Signature:** `bng_aswkb(cellId: Column): Column`
-
-**Parameters:**
-- `cellId` - BNG cell reference string
-
 **Returns:**
 - Binary WKB geometry representation
 
 <FunctionExamples
   name="bng_aswkb"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -743,7 +748,18 @@ Powered by a **pure-Python port of `BNG.scala`** + **shapely**. The cell footpri
 
 ### bng_aswkt
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_bng_aswkt: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_aswkt(cellid)` | `STRING` |
+| Python | `gridx.bng.functions.bng_aswkt(cellid)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cellid` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
+{/* END GENERATED gbx_bng_aswkt */}
 
 Convert a BNG cell ID to Well-Known Text (WKT) format.
 
@@ -751,19 +767,13 @@ Convert a BNG cell ID to Well-Known Text (WKT) format.
 Powered by a **pure-Python port of `BNG.scala`** + **shapely**. The cell footprint as WKT in EPSG:27700 coordinates.
 :::
 
-**Signature:** `bng_aswkt(cellId: Column): Column`
-
-**Parameters:**
-- `cellId` - BNG cell reference string
-
 **Returns:**
 - String WKT geometry representation
 
 <FunctionExamples
   name="bng_aswkt"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -776,7 +786,18 @@ Fundamental operations on BNG cells.
 
 ### bng_cellarea
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_bng_cellarea: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_cellarea(cellid)` | `DOUBLE` |
+| Python | `gridx.bng.functions.bng_cellarea(cellid)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cellid` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
+{/* END GENERATED gbx_bng_cellarea */}
 
 Calculate the area of a BNG grid cell.
 
@@ -784,19 +805,13 @@ Calculate the area of a BNG grid cell.
 Powered by the **pure-Python port of `BNG.scala`**. Returns the cell area in **square kilometres**, matching the heavyweight tier.
 :::
 
-**Signature:** `bng_cellarea(cellId: Column): Column`
-
-**Parameters:**
-- `cellId` - BNG cell reference
-
 **Returns:**
 - Double representing the cell area in square kilometres
 
 <FunctionExamples
   name="bng_cellarea"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -805,7 +820,18 @@ Powered by the **pure-Python port of `BNG.scala`**. Returns the cell area in **s
 
 ### bng_centroid
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_bng_centroid: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_centroid(cellid)` | `BINARY` |
+| Python | `gridx.bng.functions.bng_centroid(cellid)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cellid` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
+{/* END GENERATED gbx_bng_centroid */}
 
 Get the centroid (center point) of a BNG cell.
 
@@ -813,19 +839,13 @@ Get the centroid (center point) of a BNG cell.
 Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Cell-center POINT as WKB in EPSG:27700 (no SRID).
 :::
 
-**Signature:** `bng_centroid(cellId: Column): Column`
-
-**Parameters:**
-- `cellId` - BNG cell reference
-
 **Returns:**
 - Point geometry at cell center
 
 <FunctionExamples
   name="bng_centroid"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -834,7 +854,19 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Cell-center PO
 
 ### bng_distance
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_bng_distance: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_distance(cellid1, cellid2)` | `BIGINT` |
+| Python | `gridx.bng.functions.bng_distance(cellid1, cellid2)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cellid1` | `STRING` |  | The first BNG cell id. |
+| `cellid2` | `STRING` |  | The second BNG cell id. |
+{/* END GENERATED gbx_bng_distance */}
 
 Return the grid-step distance between two BNG cells.
 
@@ -842,20 +874,13 @@ Return the grid-step distance between two BNG cells.
 Powered by the **pure-Python port of `BNG.scala`** — Chebyshev grid-step count between two cells, exact-parity with the heavyweight tier.  Returns **LONG** (grid steps, not metres).
 :::
 
-**Signature:** `bng_distance(cellid1: Column, cellid2: Column): Column`
-
-**Parameters:**
-- `cellid1` - First BNG cell reference (STRING)
-- `cellid2` - Second BNG cell reference (STRING)
-
 **Returns:**
 - LONG — Chebyshev grid-step distance.  Adjacent cells (sharing an edge or corner) return 1; the cell itself returns 0.
 
 <FunctionExamples
   name="bng_distance"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -864,7 +889,19 @@ Powered by the **pure-Python port of `BNG.scala`** — Chebyshev grid-step count
 
 ### bng_euclideandistance
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_bng_euclideandistance: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_euclideandistance(cellid1, cellid2)` | `BIGINT` |
+| Python | `gridx.bng.functions.bng_euclideandistance(cellid1, cellid2)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cellid1` | `STRING` |  | The first BNG cell id. |
+| `cellid2` | `STRING` |  | The second BNG cell id. |
+{/* END GENERATED gbx_bng_euclideandistance */}
 
 Return the Chebyshev grid-unit distance between two BNG cells.
 
@@ -872,20 +909,13 @@ Return the Chebyshev grid-unit distance between two BNG cells.
 Powered by the **pure-Python port of `BNG.scala`** — Chebyshev distance in grid units, exact-parity with the heavyweight tier.  Returns **LONG** (grid units, not metres).
 :::
 
-**Signature:** `bng_euclideandistance(cellid1: Column, cellid2: Column): Column`
-
-**Parameters:**
-- `cellid1` - First BNG cell reference (STRING)
-- `cellid2` - Second BNG cell reference (STRING)
-
 **Returns:**
 - LONG — Chebyshev distance in grid units.  Adjacent cells return 1; diagonal cells also return 1.
 
 <FunctionExamples
   name="bng_euclideandistance"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -902,7 +932,19 @@ Operations combining multiple BNG chip structs.
 
 ### bng_cellintersection
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_bng_cellintersection: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_cellintersection(left_chip, right_chip)` | `struct<cellid:string,core:boolean,chip:binary>` |
+| Python | `gridx.bng.functions.bng_cellintersection(left_chip, right_chip)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `left_chip` | `struct<cellid:string,core:boolean,chip:binary>` |  | A chip: a struct of `cellid`, `core` and `chip` (WKB), read by position. |
+| `right_chip` | `struct<cellid:string,core:boolean,chip:binary>` |  | The second chip, in the same form. |
+{/* END GENERATED gbx_bng_cellintersection */}
 
 Intersect two BNG chip structs and return the dissolved intersection chip.
 
@@ -910,20 +952,13 @@ Intersect two BNG chip structs and return the dissolved intersection chip.
 Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Returns the same `STRUCT<cellid, core, chip>` as the heavyweight tier (AGREE).
 :::
 
-**Signature:** `bng_cellintersection(chip1: Column, chip2: Column): Column`
-
-**Parameters:**
-- `chip1` - First chip struct (`STRUCT<cellid STRING, core BOOLEAN, chip BINARY>`)
-- `chip2` - Second chip struct (same schema)
-
 **Returns:**
 - `STRUCT<cellid STRING, core BOOLEAN, chip BINARY>` — dissolved intersection chip.  A fully interior chip (core=true) intersected with itself returns `{cellid, true, null}`.
 
 <FunctionExamples
   name="bng_cellintersection"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -932,7 +967,19 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Returns the sa
 
 ### bng_cellunion
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_bng_cellunion: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_cellunion(left_chip, right_chip)` | `struct<cellid:string,core:boolean,chip:binary>` |
+| Python | `gridx.bng.functions.bng_cellunion(left_chip, right_chip)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `left_chip` | `struct<cellid:string,core:boolean,chip:binary>` |  | A chip: a struct of `cellid`, `core` and `chip` (WKB), read by position. |
+| `right_chip` | `struct<cellid:string,core:boolean,chip:binary>` |  | The second chip, in the same form. |
+{/* END GENERATED gbx_bng_cellunion */}
 
 Union two BNG chip structs and return the dissolved union chip.
 
@@ -940,20 +987,13 @@ Union two BNG chip structs and return the dissolved union chip.
 Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Returns the same `STRUCT<cellid, core, chip>` as the heavyweight tier (AGREE).
 :::
 
-**Signature:** `bng_cellunion(chip1: Column, chip2: Column): Column`
-
-**Parameters:**
-- `chip1` - First chip struct (`STRUCT<cellid STRING, core BOOLEAN, chip BINARY>`)
-- `chip2` - Second chip struct (same schema)
-
 **Returns:**
 - `STRUCT<cellid STRING, core BOOLEAN, chip BINARY>` — dissolved union chip.  A fully interior chip (core=true) unioned with itself returns `{cellid, true, null}`.
 
 <FunctionExamples
   name="bng_cellunion"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -1003,7 +1043,19 @@ Powered by the **pure-Python port of `BNG.scala`** (numpy-vectorized encoder). E
 
 ### bng_pointascell
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_bng_pointascell: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_pointascell(geom, resolution)` | `STRING` |
+| Python | `gridx.bng.functions.bng_pointascell(geom, resolution)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:27700 metres. |
+| `resolution` | `INT` or `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+{/* END GENERATED gbx_bng_pointascell */}
 
 Convert a point geometry to a BNG grid cell. The point must be supplied as **WKT or WKB** (GeoBrix does not accept native Databricks geometry types).
 
@@ -1011,20 +1063,13 @@ Convert a point geometry to a BNG grid cell. The point must be supplied as **WKT
 Powered by the **pure-Python port of `BNG.scala`** + **shapely**. The point coordinates must be **EPSG:27700** eastings/northings (e.g. `POINT(530000 180000)` for London), **not** WGS84 lon/lat. Exact-parity cell IDs with the heavyweight tier.
 :::
 
-**Signature:** `bng_pointascell(point: Column, resolution: Column): Column`
-
-**Parameters:**
-- `point` - Point geometry as **WKT** (string) or **WKB** (binary). Must be in **EPSG:27700** eastings/northings (e.g. `'POINT(530000 180000)'` for London). Do not use `st_point()` or other DBR native geometry functions — they return a type GeoBrix does not accept.
-- `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. '1km', '100m')
-
 **Returns:**
 - String BNG cell reference, or NULL when the point's coordinates are NaN or infinite (an empty point, for example)
 
 <FunctionExamples
   name="bng_pointascell"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -1037,7 +1082,19 @@ Generate neighboring cells using k-ring patterns.
 
 ### bng_kring
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_bng_kring: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_kring(cellid, k)` | `array<string>` |
+| Python | `gridx.bng.functions.bng_kring(cellid, k)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cellid` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
+| `k` | `INT` |  | The ring distance: 0 is the cell alone, 1 adds its eight neighbours. |
+{/* END GENERATED gbx_bng_kring */}
 
 Generate a k-ring of cells around a center cell (filled disk).
 
@@ -1045,20 +1102,13 @@ Generate a k-ring of cells around a center cell (filled disk).
 Powered by the **pure-Python port of `BNG.scala`**. All cells within ring distance `k` (inclusive of the center). Exact cell-set parity with the heavyweight tier.
 :::
 
-**Signature:** `bng_kring(cellId: Column, k: Column): Column`
-
-**Parameters:**
-- `cellId` - BNG cell reference for center
-- `k` - Integer ring distance (0 = just center, 1 = center + neighbors, etc.)
-
 **Returns:**
 - Array of BNG cell references in the k-ring
 
 <FunctionExamples
   name="bng_kring"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -1067,7 +1117,19 @@ Powered by the **pure-Python port of `BNG.scala`**. All cells within ring distan
 
 ### bng_kloop
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_bng_kloop: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_kloop(cellid, k)` | `array<string>` |
+| Python | `gridx.bng.functions.bng_kloop(cellid, k)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cellid` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
+| `k` | `INT` |  | The ring distance: 1 is the eight neighbours of the cell. |
+{/* END GENERATED gbx_bng_kloop */}
 
 Generate a k-loop of cells around a center cell (hollow ring).
 
@@ -1075,20 +1137,13 @@ Generate a k-loop of cells around a center cell (hollow ring).
 Powered by the **pure-Python port of `BNG.scala`**. The cells at exactly ring distance `k`. Exact cell-set parity with the heavyweight tier.
 :::
 
-**Signature:** `bng_kloop(cellId: Column, k: Column): Column`
-
-**Parameters:**
-- `cellId` - BNG cell reference for center
-- `k` - Integer ring distance
-
 **Returns:**
 - Array of BNG cell references at exactly distance k
 
 <FunctionExamples
   name="bng_kloop"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -1097,7 +1152,22 @@ Powered by the **pure-Python port of `BNG.scala`**. The cells at exactly ring di
 
 ### bng_geomkring
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_bng_geomkring: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_geomkring(geom, resolution, k, [mode], [coverage])` | `array<string>` |
+| Python | `gridx.bng.functions.bng_geomkring(geom, resolution, k, mode=None, coverage=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:27700 metres. |
+| `resolution` | `INT` or `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+| `k` | `INT` |  | The number of rings of dilation around the geometry's cells. |
+| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+{/* END GENERATED gbx_bng_geomkring */}
 
 Generate a k-ring of cells around a geometry at specified resolution.
 
@@ -1105,24 +1175,13 @@ Generate a k-ring of cells around a geometry at specified resolution.
 Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfills the geometry then expands by ring distance `k`. Exact cell-set parity with the heavyweight tier.
 :::
 
-**Signature:** `bng_geomkring(geom, resolution, k, [mode], [coverage])`
-
-**Parameters:**
-- `geom` - Input geometry (WKT or WKB, EPSG:27700 coordinates required)
-- `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. `'1km'`, `'100m'`)
-- `k` - Integer ring distance
-- `mode` *(optional, default `'boundary-out'`)* — expansion direction & hole handling; see [Dilation modes](#dilation-modes) for all six values.
-- `coverage` *(optional, default `'coveras'`)* — how a cell is judged to belong to a region; see [Coverage](#coverage) for the three values.
-- _`mode` and `coverage` were added in **v0.5.1**; on v0.2.0–v0.5.0 these functions accept only `(geom, resolution, k)`._
-
 **Returns:**
 - `ARRAY<STRING>` of BNG cell references
 
 <FunctionExamples
   name="bng_geomkring"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -1131,7 +1190,22 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfills the 
 
 ### bng_geomkloop
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_bng_geomkloop: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_geomkloop(geom, resolution, k, [mode], [coverage])` | `array<string>` |
+| Python | `gridx.bng.functions.bng_geomkloop(geom, resolution, k, mode=None, coverage=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:27700 metres. |
+| `resolution` | `INT` or `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+| `k` | `INT` |  | The number of rings of dilation around the geometry's cells. |
+| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+{/* END GENERATED gbx_bng_geomkloop */}
 
 Generate a k-loop of cells around a geometry at specified resolution. The loop is the hollow outer ring: cells in `kring(k)` but not in `kring(k-1)`.
 
@@ -1139,24 +1213,13 @@ Generate a k-loop of cells around a geometry at specified resolution. The loop i
 Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfills the geometry then returns only the cells at exactly ring distance `k`. Exact cell-set parity with the heavyweight tier.
 :::
 
-**Signature:** `bng_geomkloop(geom, resolution, k, [mode], [coverage])`
-
-**Parameters:**
-- `geom` - Input geometry (WKT or WKB, EPSG:27700 coordinates required)
-- `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. `'1km'`, `'100m'`)
-- `k` - Integer ring distance
-- `mode` *(optional, default `'boundary-out'`)* — expansion direction & hole handling; see [Dilation modes](#dilation-modes) for all six values.
-- `coverage` *(optional, default `'coveras'`)* — how a cell is judged to belong to a region; see [Coverage](#coverage) for the three values.
-- _`mode` and `coverage` were added in **v0.5.1**; on v0.2.0–v0.5.0 these functions accept only `(geom, resolution, k)`._
-
 **Returns:**
 - `ARRAY<STRING>` of BNG cell references at exactly distance k
 
 <FunctionExamples
   name="bng_geomkloop"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -1169,7 +1232,19 @@ Fill geometries with grid cells.
 
 ### bng_polyfill
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_bng_polyfill: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_polyfill(geom, resolution)` | `array<string>` |
+| Python | `gridx.bng.functions.bng_polyfill(geom, resolution)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:27700 metres. |
+| `resolution` | `INT` or `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+{/* END GENERATED gbx_bng_polyfill */}
 
 Fill a geometry with BNG cells at specified resolution.
 
@@ -1177,20 +1252,13 @@ Fill a geometry with BNG cells at specified resolution.
 Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Enumerates the cells covering the geometry, mirroring the heavyweight seed-and-flood-fill. Exact cell-set parity with the heavyweight tier.
 :::
 
-**Signature:** `bng_polyfill(geometry: Column, resolution: Column): Column`
-
-**Parameters:**
-- `geometry` - Input geometry to fill
-- `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. '1km', '100m')
-
 **Returns:**
 - Array of BNG cell IDs covering the geometry
 
 <FunctionExamples
   name="bng_polyfill"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />

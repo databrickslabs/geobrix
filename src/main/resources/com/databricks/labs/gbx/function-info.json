@@ -1721,10 +1721,10 @@
     "gbx_bng_aswkb": {
       "examples": "Examples:\n      > SELECT gbx_bng_aswkb('TQ3080') as wkb_geom;",
       "usage_args": "cellid",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return a BNG cell's boundary polygon as WKB.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1732,10 +1732,10 @@
     "gbx_bng_aswkt": {
       "examples": "Examples:\n      > SELECT gbx_bng_aswkt('TQ3080') as wkt_geom;",
       "usage_args": "cellid",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return a BNG cell's boundary polygon as WKT.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1743,10 +1743,10 @@
     "gbx_bng_cellarea": {
       "examples": "Examples:\n      > SELECT gbx_bng_cellarea('TQ3080') AS area_km2;",
       "usage_args": "cellid",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the area of a BNG cell in square kilometres.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1765,10 +1765,10 @@
     "gbx_bng_cellintersection": {
       "examples": "Examples:\n      > SELECT gbx_bng_cellintersection(chip, chip) AS intersection_chip FROM ( SELECT explode( gbx_bng_tessellate( 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))', 3 ) ) AS chip ) t WHERE t.chip.cellid = 'TQ3080';",
       "usage_args": "left_chip, right_chip",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Intersect two chips of the same BNG cell.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1787,10 +1787,10 @@
     "gbx_bng_cellunion": {
       "examples": "Examples:\n      > SELECT gbx_bng_cellunion(chip, chip) AS union_chip FROM ( SELECT explode( gbx_bng_tessellate( 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))', 3 ) ) AS chip ) t WHERE t.chip.cellid = 'TQ3080';",
       "usage_args": "left_chip, right_chip",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Union two chips of the same BNG cell.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1809,10 +1809,10 @@
     "gbx_bng_centroid": {
       "examples": "Examples:\n      > SELECT gbx_bng_centroid('TQ3080') as centroid;",
       "usage_args": "cellid",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the centre point of a BNG cell as WKB.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1820,10 +1820,10 @@
     "gbx_bng_distance": {
       "examples": "Examples:\n      > SELECT gbx_bng_distance('TQ3080', 'TQ3081') AS dist_steps;",
       "usage_args": "cellid1, cellid2",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the grid distance between two BNG cells (Manhattan, in cells).",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1843,10 +1843,10 @@
     "gbx_bng_euclideandistance": {
       "examples": "Examples:\n      > SELECT gbx_bng_euclideandistance('TQ3080', 'TQ3081') AS euclidean_dist;",
       "usage_args": "cellid1, cellid2",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the grid distance between two BNG cells (the larger axis offset, in cells).",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1854,10 +1854,10 @@
     "gbx_bng_geomkloop": {
       "examples": "Examples:\n      > SELECT gbx_bng_geomkloop( 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))', 3, 1, 'boundary-out' ) AS kloop;",
       "usage_args": "geom, resolution, k, [mode], [coverage]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the BNG cells at exactly ring distance k from a geometry's cells.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1874,10 +1874,10 @@
     "gbx_bng_geomkring": {
       "examples": "Examples:\n      > SELECT gbx_bng_geomkring( 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))', 3, 1, 'boundary-out' ) AS kring;",
       "usage_args": "geom, resolution, k, [mode], [coverage]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the BNG cells of a geometry dilated by k rings.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1894,10 +1894,10 @@
     "gbx_bng_kloop": {
       "examples": "Examples:\n      > SELECT gbx_bng_kloop('TQ3080', 1) AS kloop;",
       "usage_args": "cellid, k",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the cells at exactly ring distance k from a BNG cell.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1914,10 +1914,10 @@
     "gbx_bng_kring": {
       "examples": "Examples:\n      > SELECT gbx_bng_kring('TQ3080', 1) AS kring;",
       "usage_args": "cellid, k",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the cells within ring distance k of a BNG cell, the cell included.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1934,10 +1934,10 @@
     "gbx_bng_pointascell": {
       "examples": "Examples:\n      > SELECT gbx_bng_pointascell('POINT(530000 180000)', '1km') AS bng_cell;",
       "usage_args": "geom, resolution",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the BNG cell id of a geometry's centroid.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1945,10 +1945,10 @@
     "gbx_bng_polyfill": {
       "examples": "Examples:\n      > SELECT gbx_bng_polyfill( 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))', 3 ) AS cells;",
       "usage_args": "geom, resolution",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the BNG cells whose centre lies inside a geometry.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"

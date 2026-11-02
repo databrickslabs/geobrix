@@ -53,224 +53,6 @@ def register(_spark: SparkSession) -> None:
     _spark.read.format("register_ds").option("functions", "gridx.bng").load().collect()
 
 
-def bng_aswkb(cellid: ColLike) -> Column:
-    """Return the BNG cell as Well-Known Binary.
-
-    Args:
-        cellid: BNG cell identifier column.
-
-    Returns:
-        Column of WKB (binary).
-    """
-    return f.call_function("gbx_bng_aswkb", _col(cellid))
-
-
-def bng_aswkt(cellid: ColLike) -> Column:
-    """Return the BNG cell as Well-Known Text.
-
-    Args:
-        cellid: BNG cell identifier column.
-
-    Returns:
-        Column of WKT (string).
-    """
-    return f.call_function("gbx_bng_aswkt", _col(cellid))
-
-
-def bng_cellarea(cellid: ColLike) -> Column:
-    """Return the area of the BNG cell in square kilometres.
-
-    Args:
-        cellid: BNG cell identifier column.
-
-    Returns:
-        Column of area (double, km²).
-    """
-    return f.call_function("gbx_bng_cellarea", _col(cellid))
-
-
-def bng_cellintersection(left_chip: ColLike, right_chip: ColLike) -> Column:
-    """Return the intersection of two BNG cell chips as a chip struct.
-
-    Args:
-        left_chip: Left BNG chip struct column.
-        right_chip: Right BNG chip struct column.
-
-    Returns:
-        Column of chip struct (cellid, core, chip).
-    """
-    return f.call_function(
-        "gbx_bng_cellintersection", _col(left_chip), _col(right_chip)
-    )
-
-
-def bng_cellunion(left_chip: ColLike, right_chip: ColLike) -> Column:
-    """Return the union of two BNG cell chips as a chip struct.
-
-    Args:
-        left_chip: Left BNG chip struct column.
-        right_chip: Right BNG chip struct column.
-
-    Returns:
-        Column of chip struct (cellid, core, chip).
-    """
-    return f.call_function("gbx_bng_cellunion", _col(left_chip), _col(right_chip))
-
-
-def bng_centroid(cellid: ColLike) -> Column:
-    """Return the centroid of the BNG cell as geometry.
-
-    Args:
-        cellid: BNG cell identifier column.
-
-    Returns:
-        Column of point geometry (WKB).
-    """
-    return f.call_function("gbx_bng_centroid", _col(cellid))
-
-
-def bng_distance(cellid1: ColLike, cellid2: ColLike) -> Column:
-    """Return the grid distance between two BNG cells (in cell units).
-
-    Args:
-        cellid1: First BNG cell identifier column.
-        cellid2: Second BNG cell identifier column.
-
-    Returns:
-        Column of long (grid distance).
-    """
-    return f.call_function("gbx_bng_distance", _col(cellid1), _col(cellid2))
-
-
-def bng_euclideandistance(cellid1: ColLike, cellid2: ColLike) -> Column:
-    """Return the Euclidean distance between two BNG cell centres (metres).
-
-    Args:
-        cellid1: First BNG cell identifier column.
-        cellid2: Second BNG cell identifier column.
-
-    Returns:
-        Column of long (distance in metres).
-    """
-    return f.call_function("gbx_bng_euclideandistance", _col(cellid1), _col(cellid2))
-
-
-def bng_geomkloop(
-    geom: ColLike,
-    resolution: ColLike,
-    k: ColLike,
-    mode: ColLike = "boundary-out",
-) -> Column:
-    """Return the k-loop (hollow ring at exactly k) of cells around the geometry.
-
-    Args:
-        geom: Geometry column (WKT or WKB).
-        resolution: BNG resolution — integer index ±1..±6 or string key.
-        k: Loop distance — only the shell at exactly k is returned.
-        mode: Dilation mode (default ``"boundary-out"``). One of:
-            ``"boundary-out"``, ``"boundary-in"``,
-            ``"boundary-in-ignore-holes"``, ``"hole-in"``, ``"hole-out"``,
-            ``"hole-out-ignore-geom"``. Use ``f.lit("boundary-in")`` or pass
-            a bare string (auto-promoted to a literal).
-
-    Returns:
-        Column of array of BNG cell identifiers (hollow ring).
-    """
-    # mode is a VALUE (never a column name); promote bare strings to literals.
-    mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
-    return f.call_function(
-        "gbx_bng_geomkloop", _col(geom), _col(resolution), _col(k), mode_arg
-    )
-
-
-def bng_geomkring(
-    geom: ColLike,
-    resolution: ColLike,
-    k: ColLike,
-    mode: ColLike = "boundary-out",
-) -> Column:
-    """Return the k-ring (filled disk through k) of cells around the geometry.
-
-    Args:
-        geom: Geometry column (WKT or WKB).
-        resolution: BNG resolution — integer index ±1..±6 or string key.
-        k: Ring distance — all cells from 0..k are included.
-        mode: Dilation mode (default ``"boundary-out"``). One of:
-            ``"boundary-out"``, ``"boundary-in"``,
-            ``"boundary-in-ignore-holes"``, ``"hole-in"``, ``"hole-out"``,
-            ``"hole-out-ignore-geom"``. Use ``f.lit("boundary-in")`` or pass
-            a bare string (auto-promoted to a literal).
-
-    Returns:
-        Column of array of BNG cell identifiers (filled disk).
-    """
-    # mode is a VALUE (never a column name); promote bare strings to literals.
-    mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
-    return f.call_function(
-        "gbx_bng_geomkring", _col(geom), _col(resolution), _col(k), mode_arg
-    )
-
-
-def bng_kloop(cellid: ColLike, k: ColLike) -> Column:
-    """Return the k-ring of cell IDs around the given cell (including centre).
-
-    Args:
-        cellid: BNG cell identifier column.
-        k: Ring distance (0 = cell itself only).
-
-    Returns:
-        Column of array of BNG cell identifiers.
-    """
-    return f.call_function("gbx_bng_kloop", _col(cellid), _col(k))
-
-
-def bng_kring(cellid: ColLike, k: ColLike) -> Column:
-    """Return the k-loop (hollow ring) of cell IDs around the given cell.
-
-    Args:
-        cellid: BNG cell identifier column.
-        k: Ring distance.
-
-    Returns:
-        Column of array of BNG cell identifiers.
-    """
-    return f.call_function("gbx_bng_kring", _col(cellid), _col(k))
-
-
-def bng_pointascell(geom: ColLike, resolution: ColLike) -> Column:
-    """Convert a point geometry to a BNG grid cell identifier.
-
-    The point must be a Column of WKT (string) or WKB (binary) with BNG
-    eastings/northings (EPSG:27700). GeoBrix does not accept native Databricks
-    geometry types (e.g. do not pass the result of st_point() or other DBR
-    geometry functions).
-
-    Args:
-        geom: Point geometry (WKT/WKB) in BNG coordinates.
-        resolution: BNG resolution — integer index ±1..±6 or string key.
-
-    Returns:
-        Column of BNG cell identifier.
-
-    Example:
-        bx.bng_pointascell("POINT(400000 400000)", "1km")
-    """
-    return f.call_function("gbx_bng_pointascell", _col(geom), _col(resolution))
-
-
-def bng_polyfill(geom: ColLike, resolution: ColLike) -> Column:
-    """Return the set of BNG cells that cover the geometry (as array).
-
-    Args:
-        geom: Geometry column (WKT or WKB).
-        resolution: BNG resolution — integer index ±1..±6 or string key.
-
-    Returns:
-        Column of array of BNG cell identifiers.
-    """
-    return f.call_function("gbx_bng_polyfill", _col(geom), _col(resolution))
-
-
 # Aggregators
 
 
@@ -419,6 +201,155 @@ def bng_kringexplode(cellid: ColLike, k: ColLike) -> Column:
 # BEGIN GENERATED by gbx:manifest:gen: edit manifest/functions.json, then run the generator
 
 
+def bng_aswkb(
+    cellid: ColLike,
+) -> Column:
+    """Return a BNG cell's boundary polygon as WKB.
+
+    Args:
+        cellid: The BNG cell id, for example `'TQ3080'`.
+
+    Returns:
+        The cell polygon as WKB in EPSG:27700 (no SRID), or NULL for a NULL or malformed
+        cell id.
+
+    SQL: ``gbx_bng_aswkb(cellid)``
+    """
+    return _api.call(
+        "gbx_bng_aswkb",
+        cellid,
+    )
+
+
+def bng_aswkt(
+    cellid: ColLike,
+) -> Column:
+    """Return a BNG cell's boundary polygon as WKT.
+
+    Args:
+        cellid: The BNG cell id, for example `'TQ3080'`.
+
+    Returns:
+        The cell polygon as WKT in EPSG:27700, or NULL for a NULL or malformed cell id.
+
+    SQL: ``gbx_bng_aswkt(cellid)``
+    """
+    return _api.call(
+        "gbx_bng_aswkt",
+        cellid,
+    )
+
+
+def bng_cellarea(
+    cellid: ColLike,
+) -> Column:
+    """Return the area of a BNG cell in square kilometres.
+
+    Args:
+        cellid: The BNG cell id, for example `'TQ3080'`.
+
+    Returns:
+        The cell area in square kilometres, or NULL for a NULL or malformed cell id.
+
+    SQL: ``gbx_bng_cellarea(cellid)``
+    """
+    return _api.call(
+        "gbx_bng_cellarea",
+        cellid,
+    )
+
+
+def bng_cellintersection(
+    left_chip: ColLike,
+    right_chip: ColLike,
+) -> Column:
+    """Intersect two chips of the same BNG cell.
+
+    Args:
+        left_chip: A chip: a struct of `cellid`, `core` and `chip` (WKB), read by
+            position.
+        right_chip: The second chip, in the same form.
+
+    Returns:
+        A chip: a core chip on either side is returned unchanged (the left one first);
+        chips of different cells give an empty chip.
+
+    SQL: ``gbx_bng_cellintersection(left_chip, right_chip)``
+    """
+    return _api.call(
+        "gbx_bng_cellintersection",
+        left_chip,
+        right_chip,
+    )
+
+
+def bng_cellunion(
+    left_chip: ColLike,
+    right_chip: ColLike,
+) -> Column:
+    """Union two chips of the same BNG cell.
+
+    Args:
+        left_chip: A chip: a struct of `cellid`, `core` and `chip` (WKB), read by
+            position.
+        right_chip: The second chip, in the same form.
+
+    Returns:
+        A chip: a core chip on either side is returned unchanged (the left one first);
+        chips of different cells give an empty chip.
+
+    SQL: ``gbx_bng_cellunion(left_chip, right_chip)``
+    """
+    return _api.call(
+        "gbx_bng_cellunion",
+        left_chip,
+        right_chip,
+    )
+
+
+def bng_centroid(
+    cellid: ColLike,
+) -> Column:
+    """Return the centre point of a BNG cell as WKB.
+
+    Args:
+        cellid: The BNG cell id, for example `'TQ3080'`.
+
+    Returns:
+        The cell centre as a WKB point in EPSG:27700 (no SRID), or NULL for a NULL or
+        malformed cell id.
+
+    SQL: ``gbx_bng_centroid(cellid)``
+    """
+    return _api.call(
+        "gbx_bng_centroid",
+        cellid,
+    )
+
+
+def bng_distance(
+    cellid1: ColLike,
+    cellid2: ColLike,
+) -> Column:
+    """Return the grid distance between two BNG cells (Manhattan, in cells).
+
+    Args:
+        cellid1: The first BNG cell id.
+        cellid2: The second BNG cell id.
+
+    Returns:
+        The sum of the east and north offsets, in cells of the coarser resolution, or
+        NULL when either id is NULL or malformed.
+
+    SQL: ``gbx_bng_distance(cellid1, cellid2)``
+    """
+    return _api.call(
+        "gbx_bng_distance",
+        cellid1,
+        cellid2,
+    )
+
+
 def bng_eastnorthasbng(
     easting: ColLike,
     northing: ColLike,
@@ -441,6 +372,194 @@ def bng_eastnorthasbng(
         "gbx_bng_eastnorthasbng",
         easting,
         northing,
+        resolution,
+    )
+
+
+def bng_euclideandistance(
+    cellid1: ColLike,
+    cellid2: ColLike,
+) -> Column:
+    """Return the grid distance between two BNG cells (the larger axis offset, in cells).
+
+    Args:
+        cellid1: The first BNG cell id.
+        cellid2: The second BNG cell id.
+
+    Returns:
+        The larger of the east and north offsets, in cells of the coarser resolution, or
+        NULL when either id is NULL or malformed.
+
+    SQL: ``gbx_bng_euclideandistance(cellid1, cellid2)``
+    """
+    return _api.call(
+        "gbx_bng_euclideandistance",
+        cellid1,
+        cellid2,
+    )
+
+
+def bng_geomkloop(
+    geom: ColLike,
+    resolution: ColLike,
+    k: ColLike,
+    mode: ColLike = None,
+    coverage: ColLike = None,
+) -> Column:
+    """Return the BNG cells at exactly ring distance k from a geometry's cells.
+
+    Args:
+        geom: The geometry: WKB, EWKB, WKT or EWKT, in EPSG:27700 metres.
+        resolution: BNG resolution: an index (1 to 6, negative for a quadrant) or a size
+            such as `'1km'` or `'100m'`.
+        k: The number of rings of dilation around the geometry's cells.
+        mode: The dilation mode: `'boundary-out'`, `'boundary-in'`,
+            `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or
+            `'hole-out-ignore-geom'`. SQL default: ``'boundary-out'``.
+        coverage: How a cell belongs to the geometry: `'coveras'` (it overlaps),
+            `'polyfill'` (its centre is inside) or `'core'` (it is inside). SQL default:
+            ``'coveras'``.
+
+    Returns:
+        The cell ids of the outer ring of the band, sorted, or NULL for a NULL or
+        unreadable geometry.
+
+    SQL: ``gbx_bng_geomkloop(geom, resolution, k, [mode], [coverage])``
+    """
+    return _api.call(
+        "gbx_bng_geomkloop",
+        geom,
+        resolution,
+        k,
+        mode,
+        coverage,
+    )
+
+
+def bng_geomkring(
+    geom: ColLike,
+    resolution: ColLike,
+    k: ColLike,
+    mode: ColLike = None,
+    coverage: ColLike = None,
+) -> Column:
+    """Return the BNG cells of a geometry dilated by k rings.
+
+    Args:
+        geom: The geometry: WKB, EWKB, WKT or EWKT, in EPSG:27700 metres.
+        resolution: BNG resolution: an index (1 to 6, negative for a quadrant) or a size
+            such as `'1km'` or `'100m'`.
+        k: The number of rings of dilation around the geometry's cells.
+        mode: The dilation mode: `'boundary-out'`, `'boundary-in'`,
+            `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or
+            `'hole-out-ignore-geom'`. SQL default: ``'boundary-out'``.
+        coverage: How a cell belongs to the geometry: `'coveras'` (it overlaps),
+            `'polyfill'` (its centre is inside) or `'core'` (it is inside). SQL default:
+            ``'coveras'``.
+
+    Returns:
+        The cell ids of the dilated band, sorted, or NULL for a NULL or unreadable
+        geometry.
+
+    SQL: ``gbx_bng_geomkring(geom, resolution, k, [mode], [coverage])``
+    """
+    return _api.call(
+        "gbx_bng_geomkring",
+        geom,
+        resolution,
+        k,
+        mode,
+        coverage,
+    )
+
+
+def bng_kloop(
+    cellid: ColLike,
+    k: ColLike,
+) -> Column:
+    """Return the cells at exactly ring distance k from a BNG cell.
+
+    Args:
+        cellid: The BNG cell id, for example `'TQ3080'`.
+        k: The ring distance: 1 is the eight neighbours of the cell.
+
+    Returns:
+        The cell ids of the hollow square ring at distance k.
+
+    SQL: ``gbx_bng_kloop(cellid, k)``
+    """
+    return _api.call(
+        "gbx_bng_kloop",
+        cellid,
+        k,
+    )
+
+
+def bng_kring(
+    cellid: ColLike,
+    k: ColLike,
+) -> Column:
+    """Return the cells within ring distance k of a BNG cell, the cell included.
+
+    Args:
+        cellid: The BNG cell id, for example `'TQ3080'`.
+        k: The ring distance: 0 is the cell alone, 1 adds its eight neighbours.
+
+    Returns:
+        The cell ids of the filled square of side 2k+1 around the cell.
+
+    SQL: ``gbx_bng_kring(cellid, k)``
+    """
+    return _api.call(
+        "gbx_bng_kring",
+        cellid,
+        k,
+    )
+
+
+def bng_pointascell(
+    geom: ColLike,
+    resolution: ColLike,
+) -> Column:
+    """Return the BNG cell id of a geometry's centroid.
+
+    Args:
+        geom: The geometry: WKB, EWKB, WKT or EWKT, in EPSG:27700 metres.
+        resolution: BNG resolution: an index (1 to 6, negative for a quadrant) or a size
+            such as `'1km'` or `'100m'`.
+
+    Returns:
+        The BNG cell id, or NULL for a NULL or empty geometry or a centroid that is not
+        finite.
+
+    SQL: ``gbx_bng_pointascell(geom, resolution)``
+    """
+    return _api.call(
+        "gbx_bng_pointascell",
+        geom,
+        resolution,
+    )
+
+
+def bng_polyfill(
+    geom: ColLike,
+    resolution: ColLike,
+) -> Column:
+    """Return the BNG cells whose centre lies inside a geometry.
+
+    Args:
+        geom: The geometry: WKB, EWKB, WKT or EWKT, in EPSG:27700 metres.
+        resolution: BNG resolution: an index (1 to 6, negative for a quadrant) or a size
+            such as `'1km'` or `'100m'`.
+
+    Returns:
+        The cell ids, or NULL for a NULL or unreadable geometry.
+
+    SQL: ``gbx_bng_polyfill(geom, resolution)``
+    """
+    return _api.call(
+        "gbx_bng_polyfill",
+        geom,
         resolution,
     )
 

@@ -57,7 +57,7 @@ object RST_SetSrid extends WithExpressionInfo {
         row: InternalRow, srid: Int, conf: UTF8String, dt: DataType
     ): InternalRow = {
         // A wrong SRID fails the call (naming it); only the tile's own failures become its error tile.
-        if (row != null) {
+        if (RasterSerializationUtil.checksArguments(row)) {
             RST_ExpressionUtil.init(ExpressionConfig.fromB64(conf.toString))
             requireSrid(srid)
         }

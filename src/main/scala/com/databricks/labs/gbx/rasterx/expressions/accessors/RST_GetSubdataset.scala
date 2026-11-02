@@ -79,11 +79,18 @@ object RST_GetSubdataset extends WithExpressionInfo {
         val driver = ds.GetDriver.getShortName
         val subdatasetPath = s"$driver:$path:$name"
         val sub = GDALManager.withHdfLockIf(GDALManager.isHdfFamily(ds))(scala.util.Try(gdal.Open(subdatasetPath, GA_ReadOnly)).getOrElse(null))
-        // A tile that holds no subdataset of that name: the argument names none, which fails the call naming it
-        if (sub == null)
-            throw new RasterArgumentException(
-              s"gbx_rst_getsubdataset: no subdataset named '$name' (available: ${subdatasetNames(ds).mkString(", ")})"
+        if (sub == null) {
+            // The argument is wrong only when the tile lists no subdataset of that name (a single-variable file lists
+            // none, but opens by name). Any other failure to open is the tile's: it becomes its error tile.
+            val available = subdatasetNames(ds)
+            if (!available.exists(n => n == name || n.endsWith(s":$name")))
+                throw new RasterArgumentException(
+                  s"gbx_rst_getsubdataset: no subdataset named '$name' (available: ${available.mkString(", ")})"
+                )
+            throw new IllegalStateException(
+              s"gbx_rst_getsubdataset: could not open subdataset '$name' of $path: ${gdal.GetLastErrorMsg}"
             )
+        }
         sub
     }
 

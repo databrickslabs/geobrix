@@ -52,7 +52,7 @@ object RST_Convolve extends WithExpressionInfo {
             case LongType    => SerializationUtil.create2DArray[Long](kernelAD, kdt).map(_.map(_.toDouble))
         }
         // A wrong kernel fails the call (naming its shape); only the tile's own failures become its error tile.
-        if (row != null) Convolve.requireKernel(kernel)
+        if (RasterSerializationUtil.checksArguments(row)) Convolve.requireKernel(kernel)
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)

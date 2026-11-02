@@ -21,6 +21,7 @@ object Convolve {
 
     /** Convolves the dataset with the given kernel; returns (new Dataset, metadata). Caller must release. */
     def convolve(ds: Dataset, options: Map[String, String], kernel: Array[Array[Double]]): (Dataset, Map[String, String]) = {
+        requireKernel(kernel) // before anything is allocated: a refused kernel leaves no /vsimem file behind
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "_")
         val driver = ds.GetDriver()
         val outShortName = driver.getShortName
@@ -35,9 +36,9 @@ object Convolve {
 
         val outputRaster = gdal.Open(tmpPath, GF_Write)
 
-        requireKernel(kernel)
-        val kernelH = kernel.length
-        val stride = kernelH / 2
+        // The block halo: the kernel reaches kernelH / 2 rows and kernelW / 2 columns past a pixel, and a block
+        // read takes one halo for both axes, so it is the larger of the two.
+        val stride = math.max(kernel.length, kernel.head.length) / 2
         val resultBuf: Array[Double] = Array.emptyDoubleArray
         val trimBuf: Array[Double] = Array.emptyDoubleArray
 

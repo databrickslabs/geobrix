@@ -59,7 +59,7 @@ object RST_PercentileStretch extends WithExpressionInfo {
         row: InternalRow, loPct: Double, hiPct: Double, conf: UTF8String, dt: DataType
     ): InternalRow = {
         // Wrong percentiles fail the call (naming the value); only the tile's own failures become its error tile.
-        if (row != null) requirePercentiles(loPct, hiPct)
+        if (RasterSerializationUtil.checksArguments(row)) requirePercentiles(loPct, hiPct)
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)

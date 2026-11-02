@@ -54,7 +54,7 @@ object RST_SetCrs extends WithExpressionInfo {
         row: InternalRow, crs: UTF8String, conf: UTF8String, dt: DataType
     ): InternalRow = {
         // A value that is no CRS fails the call (naming it); only the tile's own failures become its error tile.
-        if (row != null && crs != null) {
+        if (RasterSerializationUtil.checksArguments(row) && crs != null) {
             RST_ExpressionUtil.init(ExpressionConfig.fromB64(conf.toString))
             SpatialRefOps.resolveCrs(crs.toString).delete()
         }

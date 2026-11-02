@@ -44,7 +44,7 @@ object RST_UpdateType extends WithExpressionInfo {
 
     def eval(row: InternalRow, newType: UTF8String, conf: UTF8String, rdt: DataType): InternalRow = {
         // A wrong type fails the call (naming it); only the tile's own failures become its error tile.
-        val gdalType = if (row != null && newType != null) requireDataType(newType.toString) else newType.toString
+        val gdalType = if (RasterSerializationUtil.checksArguments(row) && newType != null) requireDataType(newType.toString) else newType.toString
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)

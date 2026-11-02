@@ -47,7 +47,7 @@ object RST_Filter extends WithExpressionInfo {
 
     def eval(row: InternalRow, n: Int, operation: UTF8String, conf: UTF8String, rdt: DataType): InternalRow = {
         // A wrong argument fails the call (naming the value); only the tile's own failures become its error tile.
-        val op = if (row != null && operation != null) requireArguments(n, operation.toString) else operation.toString
+        val op = if (RasterSerializationUtil.checksArguments(row) && operation != null) requireArguments(n, operation.toString) else operation.toString
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)

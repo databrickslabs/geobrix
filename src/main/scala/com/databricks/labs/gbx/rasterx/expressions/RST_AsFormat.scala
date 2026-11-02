@@ -32,34 +32,44 @@ object RST_AsFormat extends WithExpressionInfo {
     def eval(row: InternalRow, newFormat: UTF8String, conf: UTF8String): InternalRow = eval(row, newFormat, conf, BinaryType)
 
     /** Converts tile to newFormat via TranslateFormat; uses safeEval. The driver is checked before it, so a name that
-      * is no driver that can write a raster fails the call naming it (any case, as GDAL reads it); the result's
-      * `driver` metadata is the driver asked for even when the tile already is in it. */
+      * is no driver that can write a raster fails the call naming it (any case, as GDAL reads it). The name is
+      * resolved to GDAL's own spelling first; a tile already in that driver comes out unchanged, and the `driver`
+      * metadata of a translated one is the driver its bytes open as (`GTiff` for `COG`). */
     private def eval(row: InternalRow, newFormat: UTF8String, conf: UTF8String, dt: DataType): InternalRow = {
-        if (row != null && newFormat != null) {
-            RST_ExpressionUtil.init(ExpressionConfig.fromB64(conf.toString))
-            requireWritableDriver(newFormat.toString)
-        }
+        val driverName =
+            if (RasterSerializationUtil.checksArguments(row) && newFormat != null) {
+                RST_ExpressionUtil.init(ExpressionConfig.fromB64(conf.toString))
+                requireWritableDriver(newFormat.toString)
+            } else if (newFormat != null) newFormat.toString
+            else null
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
               val (cell, ds, mtd) = RasterSerializationUtil.rowToTile(row, dt)
-              val (resDS, resMtd) = TranslateFormat.update(ds, mtd, newFormat.toString)
-              val res = RasterSerializationUtil.tileToRow((cell, resDS, resMtd), dt, exprConf.hConf)
-              RasterDriver.releaseDataset(resDS)
-              RasterDriver.releaseDataset(ds)
-              res
+              if (ds.GetDriver().getShortName == driverName) {
+                  RasterDriver.releaseDataset(ds)
+                  row // already in this driver: nothing to translate
+              } else {
+                  val (resDS, resMtd) = TranslateFormat.update(ds, mtd, driverName)
+                  val res = RasterSerializationUtil.tileToRow((cell, resDS, resMtd), dt, exprConf.hConf)
+                  RasterDriver.releaseDataset(resDS)
+                  RasterDriver.releaseDataset(ds)
+                  res
+              }
           },
           row,
           dt
         )
     }
 
-    /** The driver `name` names (GDAL reads a driver name in any case) must exist and be able to write a raster. */
-    private def requireWritableDriver(name: String): Unit = {
+    /** The driver `name` names (GDAL reads a driver name in any case) must exist and be able to write a raster;
+      * returns its canonical short name (`png` is `PNG`). */
+    private def requireWritableDriver(name: String): String = {
         val driver = org.gdal.gdal.gdal.GetDriverByName(name)
         val writes = driver != null && Seq("DCAP_CREATE", "DCAP_CREATECOPY").exists(k => "YES".equalsIgnoreCase(driver.GetMetadataItem(k)))
         require(writes, s"gbx_rst_asformat: driver '$name' is not available in this GDAL build, or cannot write a raster")
+        driver.getShortName
     }
 
     def execute(ds: Dataset, mtd: Map[String, String], newFormat: String): (Dataset, Map[String, String]) = {

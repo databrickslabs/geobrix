@@ -47,34 +47,11 @@ object RST_InitNoData extends WithExpressionInfo {
         )
 
     def execute(ds: Dataset, options: Map[String, String]): (Dataset, Map[String, String]) = {
-        val constants = (1 to ds.GetRasterCount())
-            .map { bandIndex =>
-                val band = ds.GetRasterBand(bandIndex)
-                GDAL.getNoDataConstant(band.getDataType)
-            }
-        // A raster whose bands all declare one NoData value keeps it (an existing value is kept); otherwise each band
-        // gets its type's constant.
-        val declared = (1 to ds.GetRasterCount()).map { bandIndex =>
-            val value = new Array[java.lang.Double](1)
-            ds.GetRasterBand(bandIndex).GetNoDataValue(value)
-            Option(value(0)).map(_.doubleValue())
-        }
-        val perBand =
-            if (declared.forall(_.isDefined) && declared.flatten.distinct.size == 1) declared.flatten else constants
-        // gdalwarp -dstnodata takes ONE argv (a single value applied to all bands,
-        // or a space-separated per-band list). The command string is later split on
-        // spaces by OperatorOptions.parseOptions, so a multi-value string must NOT
-        // be quote-wrapped (the quotes survive the split and gdalwarp rejects the
-        // stray-quote tokens). When all bands share one constant (uniform dtype, the
-        // common case) emit a single unquoted value; that is one token and applies
-        // to every band. (A genuinely mixed-dtype multi-band raster would still need
-        // a per-band list, which the space-splitting command path cannot carry; that
-        // is out of scope here and uniform-dtype is the norm for these rasters.)
-        val noDataValues = perBand.distinct match {
-            case Seq(single) => single.toString
-            case _           => perBand.mkString(" ")
-        }
-        val cmd = s"""gdalwarp -dstnodata $noDataValues"""
+        // Each band keeps the NoData it declares (NaN is a value like any other: the warp carries it); a band that
+        // declares none gets its type's constant. GDAL.dstNoDataArgs gives ONE `-dstnodata` argument with a value per
+        // band, and is empty when every band declares NoData (the warp carries them). The command string is split on
+        // spaces, so a multi-value list must travel as a warp extra argument, never inside it.
+        val cmd = "gdalwarp"
         val uuid = java.util.UUID.randomUUID().toString
         val driver = ds.GetDriver()
         val extension = GDAL.getExtension(driver.getShortName)
@@ -84,7 +61,7 @@ object RST_InitNoData extends WithExpressionInfo {
         // become NoData (as in the lightweight tier) rather than being moved to the constant +/- 1 by
         // gdalwarp. A band that declares NoData keeps gdalwarp's handling: its NoData pixels take the constant.
         val source = new WarpSource(ds)
-        try source.warp(resFile, options, cmd, GDAL.srcNoDataArgs(ds, maskAsAlpha = source.masked))
+        try source.warp(resFile, options, cmd, GDAL.dstNoDataArgs(ds) ++ GDAL.srcNoDataArgs(ds, maskAsAlpha = source.masked))
         finally source.close()
     }
 

@@ -50,7 +50,8 @@ object RST_AlignTo extends WithExpressionInfo {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
               val (cell, ds, options) = RasterSerializationUtil.rowToTile(tileRow, BinaryType)
-              val refDs = RasterSerializationUtil.rowToDS(refRow, BinaryType)
+              // only the reference's CRS, size and transform are read: no decoded-size gate
+              val refDs = RasterSerializationUtil.rowToDS(refRow, BinaryType, gated = false)
               try {
                   val (resDs, resMtd) = execute(ds, refDs, options)
                   val out = RasterSerializationUtil.tileToRow((cell, resDs, resMtd), BinaryType, exprConf.hConf)

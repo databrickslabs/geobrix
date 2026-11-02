@@ -84,6 +84,10 @@ object RasterSerializationUtil {
             noPixels && lyt.path.forall(row.isNullAt) && (metadata.contains("error_message") || metadata.contains("last_error"))
         }.getOrElse(false)
 
+    /** True when a tile op's own arguments are to be checked for `row`: the row is not NULL and not an error tile.
+      * An error tile passes through whole, whatever the arguments are (NULL, then error tile, then arguments). */
+    def checksArguments(row: InternalRow): Boolean = row != null && !isErrorTile(row)
+
     /** Deserialize a tile row to (cellId, Dataset, metadata); opens the raster via RasterDriver.
       * A tile with no raster and no path (an error tile) has nothing to open: the Dataset is null and GDAL is
       * not called. `gated = false` opens it without the decoded-size gate ([[RasterDriver.readFromBytesUngated]]):

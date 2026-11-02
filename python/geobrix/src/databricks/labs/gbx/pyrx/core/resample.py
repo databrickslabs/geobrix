@@ -9,7 +9,15 @@ from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core._util import resampling_enum
 
 
+def _positive(who: str, **values) -> None:
+    """Each value is a positive, finite number, else a ``ValueError`` naming the parameter and its value."""
+    for name, v in values.items():
+        if not (0.0 < float(v) < float("inf")):
+            raise ValueError(f"{who}: {name} must be positive and finite; got {v}")
+
+
 def _write_resampled(ds, dst_width: int, dst_height: int, algorithm: str) -> bytes:
+    resampling_enum(algorithm)  # a word that names no resampling raises before any work
     dst_width = max(1, int(dst_width))
     dst_height = max(1, int(dst_height))
     # Scale the affine so the same ground extent maps onto the new pixel grid.
@@ -44,17 +52,20 @@ def _write_resampled(ds, dst_width: int, dst_height: int, algorithm: str) -> byt
 
 def resample_by_factor(ds, factor: float, algorithm: str = "bilinear") -> bytes:
     """Resample by a multiplicative factor (>1 upsamples, 0<factor<1 downsamples)."""
+    _positive("rst_resample", factor=factor)
     f = float(factor)
     return _write_resampled(ds, round(ds.width * f), round(ds.height * f), algorithm)
 
 
 def resample_to_size(ds, width_px, height_px, algorithm: str = "bilinear") -> bytes:
     """Resample to exact pixel dimensions."""
+    _positive("rst_resample_to_size", width_px=width_px, height_px=height_px)
     return _write_resampled(ds, width_px, height_px, algorithm)
 
 
 def resample_to_res(ds, x_res, y_res, algorithm: str = "bilinear") -> bytes:
     """Resample to a target ground resolution in CRS units."""
+    _positive("rst_resample_to_res", x_res=x_res, y_res=y_res)
     left, bottom, right, top = ds.bounds
     return _write_resampled(
         ds,

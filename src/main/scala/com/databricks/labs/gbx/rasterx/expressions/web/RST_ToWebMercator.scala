@@ -1,7 +1,9 @@
 package com.databricks.labs.gbx.rasterx.expressions.web
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
+import com.databricks.labs.gbx.rasterx.expressions.resample.RST_ResampleHelper
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, RasterDriver}
+import com.databricks.labs.gbx.rasterx.operations.RasterProject
 import com.databricks.labs.gbx.rasterx.operator.GDALWarp
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
@@ -39,28 +41,19 @@ case class RST_ToWebMercator(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_ToWebMercator extends WithExpressionInfo {
 
-    /** Allowed GDAL warp resampling algorithms — keep aligned with `gdalwarp -r` options. */
-    private val AllowedResampling: Set[String] = Set(
-        "near", "bilinear", "cubic", "cubicspline", "lanczos",
-        "average", "mode", "max", "min", "med", "q1", "q3"
-    )
-
     def eval(row: InternalRow, resampling: UTF8String, conf: UTF8String): InternalRow =
         doInvoke(row, resampling, conf, BinaryType)
 
-    private def doInvoke(row: InternalRow, resampling: UTF8String, conf: UTF8String, dt: DataType): InternalRow =
+    private def doInvoke(row: InternalRow, resampling: UTF8String, conf: UTF8String, dt: DataType): InternalRow = {
+        // A word that names no resampling fails the call (naming it); only the tile's own failures become its error tile.
+        val resampleLower = RST_ResampleHelper.validateAlgorithm(
+          if (resampling == null) "bilinear" else resampling.toString,
+          "rst_to_webmercator"
+        )
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
-              val resampleStr = if (resampling == null) "bilinear" else resampling.toString
-              // scalastyle:off caselocale
-              val resampleLower = resampleStr.toLowerCase
-              // scalastyle:on caselocale
-              require(
-                AllowedResampling.contains(resampleLower),
-                s"rst_to_webmercator: unsupported resampling '$resampleStr'; allowed: ${AllowedResampling.toSeq.sorted.mkString(", ")}"
-              )
               val (cell, ds, options) = RasterSerializationUtil.rowToTile(row, dt)
               val (resultDs, metadata) = execute(ds, options, resampleLower)
               RasterDriver.releaseDataset(ds)
@@ -71,9 +64,11 @@ object RST_ToWebMercator extends WithExpressionInfo {
           row,
           dt
         )
+    }
 
     /** Warp `ds` to EPSG:3857 using `resampling` (lowercased gdalwarp -r value). Caller releases the returned Dataset. */
     def execute(ds: Dataset, options: Map[String, String], resampling: String): (Dataset, Map[String, String]) = {
+        RasterProject.requireCrs(ds)
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "")
         val driver = ds.GetDriver()
         val extension = GDAL.getExtension(driver.getShortName)

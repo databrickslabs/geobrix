@@ -84,7 +84,12 @@ def register_l3(spark, fn, variant: str, name: Optional[str] = None) -> None:
             from databricks.labs.gbx.manager import jvm, sqlwrap
 
             private = jvm._priv(fn, "L3f")
-            reg.udf.register(private, resolve_ref(spec["file_ref"]))
+            file_udf = resolve_ref(spec["file_ref"])
+            if (
+                "factory" in spec
+            ):  # a row built by a factory builds its FILE form the same way
+                file_udf = file_udf(*_factory_args(spec["factory_args"], spark))
+            reg.udf.register(private, file_udf)
             jvm._create_wrapper(
                 spark,
                 fn,

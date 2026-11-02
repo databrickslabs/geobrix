@@ -1494,6 +1494,33 @@ def test_a_file_ref_row_registers_the_file_udf_behind_its_wrapper(monkeypatch):
     ), spark.statements
 
 
+def test_a_factory_row_with_a_file_ref_builds_its_file_udf_from_the_factory(
+    monkeypatch,
+):
+    """A row built by a factory (PROJ grid directories) builds its FILE form the same way: the `file_ref` names a
+    factory, called with the row's `factory_args`, and its UDF sits behind the wrapper.
+    """
+    from databricks.labs.gbx.ds import file_gbx
+    from databricks.labs.gbx.manager import l3
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    built, made = [], object()
+    monkeypatch.setattr(
+        prx, "_build_uf_transform", lambda *dirs: built.append(dirs) or made
+    )
+    monkeypatch.setattr(caps_mod, "_sql_functions", lambda s: True)
+    monkeypatch.setattr(file_gbx, "file_supported", lambda spark=None: False)
+
+    class Session(_Session):
+        def register(self, name, f, returnType=None):
+            self.registered.append((name, f))
+
+    spark = Session()
+    l3.register_l3(spark, MAN.functions["gbx_rst_transform"], "-")
+    assert spark.registered == [("gbx__l3f_rst_transform", made)]
+    assert len(built) == 1 and isinstance(built[0][0], tuple)
+
+
 def test_every_manifest_family_has_a_family_order():
     missing = sorted({f.family for f in FNS} - set(levels.FAMILY_PREFERENCE))
     assert not missing, missing

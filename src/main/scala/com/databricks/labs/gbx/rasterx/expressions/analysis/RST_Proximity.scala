@@ -6,7 +6,7 @@ import com.databricks.labs.gbx.rasterx.operator.OperatorOptions
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
-import org.apache.spark.sql.catalyst.expressions.{Expression, Literal}
+import org.apache.spark.sql.catalyst.expressions.{Coalesce, Expression, Literal}
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.{Dataset, gdal}
@@ -73,7 +73,23 @@ object RST_Proximity extends WithExpressionInfo {
         // With propagateNull=false the invoke now runs eval even for a null primary tile; preserve
         // the prior null-tile→null behavior (rowToTile/safeEval would otherwise NPE on a null row).
         if (row == null) null
-        else RST_ErrorHandler.safeEval(
+        else {
+            // A wrong argument fails the call (naming the value); only the tile's own failures become its error tile.
+            val unitsArg = Option(distUnits).map(_.toString).getOrElse("GEO")
+            requireUnits(unitsArg)
+            requireMaxDistance(maxDistance match {
+                case d: Double => Some(d)
+                case n: Number => Some(n.doubleValue())
+                case _         => None
+            })
+            safeRun(row, targetValues, distUnits, maxDistance, conf, dt)
+        }
+
+    private def safeRun(
+        row: InternalRow, targetValues: UTF8String, distUnits: UTF8String,
+        maxDistance: Any, conf: UTF8String, dt: DataType
+    ): InternalRow =
+        RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
@@ -97,6 +113,17 @@ object RST_Proximity extends WithExpressionInfo {
           dt
         )
 
+    private def requireUnits(distUnits: String): Unit =
+        require(distUnits == "GEO" || distUnits == "PIXEL",
+            s"gbx_rst_proximity: distunits must be 'GEO' or 'PIXEL'; got '$distUnits'")
+
+    /** NaN is the "absent" sentinel (unlimited), so only a real value is checked. */
+    private def requireMaxDistance(maxDistance: Option[Double]): Unit =
+        maxDistance.filterNot(_.isNaN).foreach { d =>
+            require(d > 0.0 && !d.isInfinity,
+                s"gbx_rst_proximity: max_distance must be > 0 and finite; got $d")
+        }
+
     /** Pure compute path — extracted for direct unit-testing without Spark.
       *
       * Creates a Float32 GTiff at the same extent/CRS as `ds`, then runs
@@ -109,12 +136,8 @@ object RST_Proximity extends WithExpressionInfo {
         targetValues: Option[String], distUnits: String, maxDistance: Option[Double]
     ): (Dataset, Map[String, String]) = {
         require(ds != null, "RST_Proximity.execute: source Dataset is null")
-        require(distUnits == "GEO" || distUnits == "PIXEL",
-            s"gbx_rst_proximity: distunits must be 'GEO' or 'PIXEL'; got '$distUnits'")
-        maxDistance.foreach { d =>
-            require(d > 0.0 && !d.isNaN && !d.isInfinity,
-                s"gbx_rst_proximity: max_distance must be > 0 and finite; got $d")
-        }
+        requireUnits(distUnits)
+        requireMaxDistance(maxDistance)
 
         // Build an output GTiff Dataset matching the source's georeferencing.
         val w = ds.GetRasterXSize
@@ -178,7 +201,8 @@ object RST_Proximity extends WithExpressionInfo {
         case 1 => RST_Proximity(c(0), Literal(null, StringType), Literal("GEO"), nanDist)
         case 2 => RST_Proximity(c(0), c(1), Literal("GEO"), nanDist)
         case 3 => RST_Proximity(c(0), c(1), c(2), nanDist)
-        case 4 => RST_Proximity(c(0), c(1), c(2), c(3))
+        // a NULL max_distance (the SQL default of the Python-registered function) means unlimited, like the NaN default
+        case 4 => RST_Proximity(c(0), c(1), c(2), Coalesce(Seq(c(3), nanDist)))
         case n => throw new IllegalArgumentException(
             s"gbx_rst_proximity takes 1 to 4 arguments (tile, [target_values, [distunits, [max_distance]]]); got $n"
         )

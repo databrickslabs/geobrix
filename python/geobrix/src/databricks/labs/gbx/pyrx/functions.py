@@ -239,7 +239,8 @@ def _tile_cellid(tile) -> int:
 
 
 class _UnreadableTile(Exception):
-    """A tile an op cannot open (corrupt bytes, a driver the policy refuses, decoded over the read cap).
+    """A tile an op cannot process: it cannot be opened (corrupt bytes, a driver the policy refuses, decoded over
+    the read cap), or it has no CRS to reproject from, or the target names no CRS.
 
     Carries the reason. :func:`_tile_op` turns it into the tile's error tile; an error in the op's own
     arguments is not one, and fails the call naming the value.
@@ -2095,51 +2096,66 @@ def rst_frombands(
 
 
 # --- Tier 1b: tile-returning warp UDFs -------------------------------------
+def _reproject(who, ds, project):
+    """``project(ds)``, the reprojection of an open tile, with the tile's own failures as its error tile.
+
+    A tile with no CRS cannot be reprojected, and a target the CRS library does not know (an SRID that names
+    nothing) is data too: both are the tile's error tile with the reason, not a failed task.
+    """
+    from rasterio.errors import CRSError
+
+    if ds.crs is None:
+        raise _UnreadableTile(
+            f"{who}: the tile has no CRS, so it cannot be reprojected. "
+            "Fix: set its CRS first with gbx_rst_setcrs"
+        )
+    try:
+        return project(ds)
+    except CRSError as exc:
+        raise _UnreadableTile(f"{who}: {exc}") from exc
+
+
 def _transform_bytes(tile, target_srid, file_ref=None):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    # CRITICAL: for a MATERIALIZED tile with an identity transform (source EPSG ==
-    # target_srid), return the ORIGINAL raster bytes verbatim — no re-encode.
-    # ``agg_core.merge_tiles`` sorts inputs on their RAW GTiff byte content to
-    # choose a deterministic, heavy-parity last-wins overlap winner.  Calling
-    # ``warp.reproject_to_srid`` even on the identity path opens the dataset and
-    # re-serialises it through a rasterio MemoryFile write, which produces
-    # byte-different output (header metadata may differ even though pixels are
-    # identical) and shifts the sort key — potentially flipping the overlap winner
-    # vs. the heavy tier.  For VIRTUAL tiles (no original bytes) there is nothing
-    # to return verbatim, so they fall through to the normal warp path (which
-    # itself also identity-short-circuits at the pixel level).
-    vt = ot._to_virtual_tile(tile)
-    if not vt.is_virtual() and vt.raster is not None:
-        target_srid_int = int(target_srid)
-        with ot._open(tile, file_ref=file_ref) as ds:
-            from databricks.labs.gbx.core.crs import authority_srid_of
+    target = int(target_srid)
 
+    def project(ds):
+        # CRITICAL: for a MATERIALIZED tile with an identity transform (source EPSG ==
+        # target_srid), return the ORIGINAL raster bytes verbatim — no re-encode.
+        # ``agg_core.merge_tiles`` sorts inputs on their RAW GTiff byte content to
+        # choose a deterministic, heavy-parity last-wins overlap winner.  Re-serialising
+        # through a rasterio MemoryFile write produces byte-different output (header
+        # metadata may differ even though pixels are identical) and shifts the sort key —
+        # potentially flipping the overlap winner vs. the heavy tier.  For VIRTUAL tiles
+        # (no original bytes) there is nothing to return verbatim, so they fall through
+        # to the normal warp path (which itself identity-short-circuits at the pixel level).
+        from databricks.labs.gbx.core.crs import authority_srid_of
+
+        vt = ot._to_virtual_tile(tile)
+        if not vt.is_virtual() and vt.raster is not None:
             src_epsg = authority_srid_of(ds.crs)
-            if src_epsg is not None and src_epsg == target_srid_int:
-                # Identity on a materialized tile: original bytes, sort key intact.
+            if src_epsg is not None and src_epsg == target:
                 return bytes(vt.raster)
-            return warp.reproject_to_srid(ds, target_srid_int)
-    # Virtual tile: no original bytes — open and reproject (identity-short-circuits inside).
-    with ot._open(tile, file_ref=file_ref) as ds:
-        return warp.reproject_to_srid(ds, int(target_srid))
+        return warp.reproject_to_srid(ds, target)
+
+    with _open_op(tile, file_ref=file_ref) as ds:
+        return _reproject("RST_Transform", ds, project)
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("target_srid")
 def _transform_udf(tile, target_srid):
-    if _tile_is_empty(tile):
-        return None
     new_bytes = _transform_bytes(tile, target_srid)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("target_srid")
 def _transform_v2_udf(
     tile, target_srid, virtualize_dir, virtualize_prefix, materialize
 ):
-    if _tile_is_empty(tile):
-        return None
     new_bytes = _transform_bytes(tile, target_srid)
     return _shaped_result_row(
         new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
@@ -2147,12 +2163,9 @@ def _transform_v2_udf(
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("target_srid")
 def _uf_transform(tile, file_ref, target_srid):
-    if _tile_is_empty(tile):
-        return None
     new_bytes = _transform_bytes(tile, target_srid, file_ref=file_ref)
-    if new_bytes is None:
-        return None
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
@@ -2161,13 +2174,10 @@ def _build_uf_transform(grid_dirs):
     from databricks.labs.gbx.pyrx import _env
 
     @f.udf(V2_TILE_SCHEMA)
+    @_tile_op("target_srid")
     def _udf(tile, file_ref, target_srid):
-        if _tile_is_empty(tile):
-            return None
         _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
         new_bytes = _transform_bytes(tile, target_srid, file_ref=file_ref)
-        if new_bytes is None:
-            return None
         return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
     return _udf
@@ -2178,9 +2188,8 @@ def _build_transform_v2_udf(grid_dirs):
     from databricks.labs.gbx.pyrx import _env
 
     @f.udf(V2_TILE_SCHEMA)
+    @_tile_op("target_srid")
     def _udf(tile, target_srid, virtualize_dir, virtualize_prefix, materialize):
-        if _tile_is_empty(tile):
-            return None
         _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
         new_bytes = _transform_bytes(tile, target_srid)
         return _shaped_result_row(
@@ -2199,9 +2208,8 @@ def _build_transform_sql_udf(grid_dirs):
     from databricks.labs.gbx.pyrx import _env
 
     @f.udf(V2_TILE_SCHEMA)
+    @_tile_op("target_srid")
     def _udf(tile, target_srid):
-        if _tile_is_empty(tile):
-            return None
         _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
         new_bytes = _transform_bytes(tile, target_srid)
         return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
@@ -2211,26 +2219,32 @@ def _build_transform_sql_udf(grid_dirs):
 
 def _to_webmercator_bytes(tile, resampling, file_ref=None):
     from databricks.labs.gbx.pyrx import _env
+    from databricks.labs.gbx.pyrx.core._util import resampling_enum
 
     _env.configure_gdal_env()
-    with ot._open(tile, file_ref=file_ref) as ds:
-        return warp.reproject_to_srid(ds, 3857, resampling=str(resampling))
+    resampling_enum(
+        str(resampling)
+    )  # a word that names no resampling raises, also for a tile already in 3857
+    with _open_op(tile, file_ref=file_ref) as ds:
+        return _reproject(
+            "RST_ToWebMercator",
+            ds,
+            lambda d: warp.reproject_to_srid(d, 3857, resampling=str(resampling)),
+        )
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("resampling")
 def _to_webmercator_udf(tile, resampling):
-    if _tile_is_empty(tile):
-        return None
     new_bytes = _to_webmercator_bytes(tile, resampling)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("resampling")
 def _to_webmercator_v2_udf(
     tile, resampling, virtualize_dir, virtualize_prefix, materialize
 ):
-    if _tile_is_empty(tile):
-        return None
     new_bytes = _to_webmercator_bytes(tile, resampling)
     return _shaped_result_row(
         new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
@@ -2238,12 +2252,9 @@ def _to_webmercator_v2_udf(
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("resampling")
 def _uf_to_webmercator(tile, file_ref, resampling):
-    if _tile_is_empty(tile):
-        return None
     new_bytes = _to_webmercator_bytes(tile, resampling, file_ref=file_ref)
-    if new_bytes is None:
-        return None
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
@@ -2252,13 +2263,10 @@ def _build_uf_to_webmercator(grid_dirs):
     from databricks.labs.gbx.pyrx import _env
 
     @f.udf(V2_TILE_SCHEMA)
+    @_tile_op("resampling")
     def _udf(tile, file_ref, resampling):
-        if _tile_is_empty(tile):
-            return None
         _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
         new_bytes = _to_webmercator_bytes(tile, resampling, file_ref=file_ref)
-        if new_bytes is None:
-            return None
         return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
     return _udf
@@ -2269,9 +2277,8 @@ def _build_to_webmercator_v2_udf(grid_dirs):
     from databricks.labs.gbx.pyrx import _env
 
     @f.udf(V2_TILE_SCHEMA)
+    @_tile_op("resampling")
     def _udf(tile, resampling, virtualize_dir, virtualize_prefix, materialize):
-        if _tile_is_empty(tile):
-            return None
         _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
         new_bytes = _to_webmercator_bytes(tile, resampling)
         return _shaped_result_row(
@@ -2290,9 +2297,8 @@ def _build_to_webmercator_sql_udf(grid_dirs):
     from databricks.labs.gbx.pyrx import _env
 
     @f.udf(V2_TILE_SCHEMA)
+    @_tile_op("resampling")
     def _udf(tile, resampling):
-        if _tile_is_empty(tile):
-            return None
         _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
         new_bytes = _to_webmercator_bytes(tile, resampling)
         return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
@@ -2300,96 +2306,27 @@ def _build_to_webmercator_sql_udf(grid_dirs):
     return _udf
 
 
-def rst_transform(
-    tile: ColLike,
-    srid: ColLike,
-    virtualize_dir: Optional[str] = None,
-    virtualize_prefix: Optional[str] = None,
-    materialize: Optional[bool] = None,
-) -> Column:
-    """Reproject the raster to the target SRID (EPSG code).
-
-    Identity (``srid`` == the source CRS's EPSG code) is a passthrough:
-    no resample, no re-encode; the tile stays a reference/passthrough (so
-    ``virtualize_dir`` is a no-op on an already-virtual input). A non-identity
-    reproject PRODUCES new pixels and materializes; pass ``virtualize_dir`` to
-    write the reprojected result to a durable path and get a light virtual row.
-
-    Force-output (light-tier, Python API only): ``virtualize_dir`` writes the
-    result to a durable path and returns a light virtual tile; ``materialize=True``
-    forces raster bytes (mutually exclusive with ``virtualize_dir``).
-    """
-    from databricks.labs.gbx.core import proj_grids
-
-    _grid_dirs = tuple(proj_grids.get_registered_dirs())
-    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
-        _validate_force_output(virtualize_dir, materialize)
-        return _build_transform_v2_udf(_grid_dirs)(
-            _col(tile),
-            _col(srid),
-            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
-        )
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _build_uf_transform(_grid_dirs)(tc, file_ref_arg(tc), _col(srid))
-
-
-def rst_to_webmercator(
-    tile: ColLike,
-    resampling: ColLike = "bilinear",
-    virtualize_dir: Optional[str] = None,
-    virtualize_prefix: Optional[str] = None,
-    materialize: Optional[bool] = None,
-) -> Column:
-    """Reproject the tile to EPSG:3857 (web mercator). resampling defaults to 'bilinear'.
-
-    Force-output (light-tier, Python API only): ``virtualize_dir`` writes the
-    result to a durable path and returns a light virtual tile; ``materialize=True``
-    forces raster bytes (mutually exclusive with ``virtualize_dir``).
-    """
-    from databricks.labs.gbx.core import proj_grids
-
-    _grid_dirs = tuple(proj_grids.get_registered_dirs())
-    resampling_col = (
-        f.lit(resampling) if isinstance(resampling, str) else _col(resampling)
-    )
-    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
-        _validate_force_output(virtualize_dir, materialize)
-        return _build_to_webmercator_v2_udf(_grid_dirs)(
-            _col(tile),
-            resampling_col,
-            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
-        )
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _build_uf_to_webmercator(_grid_dirs)(tc, file_ref_arg(tc), resampling_col)
-
-
 # --- Tier 1c: tile-returning resample UDFs ----------------------------------
 def _resample_bytes(tile, factor, algorithm, file_ref=None):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with ot._open(tile, file_ref=file_ref) as ds:
+    with _open_op(tile, file_ref=file_ref) as ds:
         return resample.resample_by_factor(ds, float(factor), str(algorithm))
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("factor", "algorithm")
 def _resample_udf(tile, factor, algorithm):
-    if _tile_is_empty(tile):
-        return None
     new_bytes = _resample_bytes(tile, factor, algorithm)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("factor", "algorithm")
 def _resample_v2_udf(
     tile, factor, algorithm, virtualize_dir, virtualize_prefix, materialize
 ):
-    if _tile_is_empty(tile):
-        return None
     new_bytes = _resample_bytes(tile, factor, algorithm)
     return _shaped_result_row(
         new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
@@ -2397,12 +2334,9 @@ def _resample_v2_udf(
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("factor", "algorithm")
 def _uf_resample(tile, file_ref, factor, algorithm):
-    if _tile_is_empty(tile):
-        return None
     new_bytes = _resample_bytes(tile, factor, algorithm, file_ref=file_ref)
-    if new_bytes is None:
-        return None
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
@@ -2410,26 +2344,24 @@ def _resample_to_size_bytes(tile, width_px, height_px, algorithm, file_ref=None)
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with ot._open(tile, file_ref=file_ref) as ds:
+    with _open_op(tile, file_ref=file_ref) as ds:
         return resample.resample_to_size(
             ds, int(width_px), int(height_px), str(algorithm)
         )
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("width_px", "height_px", "algorithm")
 def _resample_to_size_udf(tile, width_px, height_px, algorithm):
-    if _tile_is_empty(tile):
-        return None
     new_bytes = _resample_to_size_bytes(tile, width_px, height_px, algorithm)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("width_px", "height_px", "algorithm")
 def _resample_to_size_v2_udf(
     tile, width_px, height_px, algorithm, virtualize_dir, virtualize_prefix, materialize
 ):
-    if _tile_is_empty(tile):
-        return None
     new_bytes = _resample_to_size_bytes(tile, width_px, height_px, algorithm)
     return _shaped_result_row(
         new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
@@ -2437,14 +2369,11 @@ def _resample_to_size_v2_udf(
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("width_px", "height_px", "algorithm")
 def _uf_resample_to_size(tile, file_ref, width_px, height_px, algorithm):
-    if _tile_is_empty(tile):
-        return None
     new_bytes = _resample_to_size_bytes(
         tile, width_px, height_px, algorithm, file_ref=file_ref
     )
-    if new_bytes is None:
-        return None
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
@@ -2452,24 +2381,22 @@ def _resample_to_res_bytes(tile, x_res, y_res, algorithm, file_ref=None):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with ot._open(tile, file_ref=file_ref) as ds:
+    with _open_op(tile, file_ref=file_ref) as ds:
         return resample.resample_to_res(ds, float(x_res), float(y_res), str(algorithm))
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("x_res", "y_res", "algorithm")
 def _resample_to_res_udf(tile, x_res, y_res, algorithm):
-    if _tile_is_empty(tile):
-        return None
     new_bytes = _resample_to_res_bytes(tile, x_res, y_res, algorithm)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("x_res", "y_res", "algorithm")
 def _resample_to_res_v2_udf(
     tile, x_res, y_res, algorithm, virtualize_dir, virtualize_prefix, materialize
 ):
-    if _tile_is_empty(tile):
-        return None
     new_bytes = _resample_to_res_bytes(tile, x_res, y_res, algorithm)
     return _shaped_result_row(
         new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
@@ -2477,112 +2404,10 @@ def _resample_to_res_v2_udf(
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("x_res", "y_res", "algorithm")
 def _uf_resample_to_res(tile, file_ref, x_res, y_res, algorithm):
-    if _tile_is_empty(tile):
-        return None
     new_bytes = _resample_to_res_bytes(tile, x_res, y_res, algorithm, file_ref=file_ref)
-    if new_bytes is None:
-        return None
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
-
-
-def rst_resample(
-    tile: ColLike,
-    factor: ColLike,
-    algorithm: ColLike = "bilinear",
-    virtualize_dir: Optional[str] = None,
-    virtualize_prefix: Optional[str] = None,
-    materialize: Optional[bool] = None,
-) -> Column:
-    """Resample a raster tile by a multiplicative factor (>1 upsamples, 0<factor<1 downsamples).
-
-    CRS and geographic extent are preserved; only the pixel grid changes.
-
-    Force-output (light-tier, Python API only): ``virtualize_dir`` writes the
-    result to a durable path and returns a light virtual tile; ``materialize=True``
-    forces raster bytes (mutually exclusive with ``virtualize_dir``).
-    """
-    alg = f.lit(algorithm) if isinstance(algorithm, str) else _col(algorithm)
-    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
-        _validate_force_output(virtualize_dir, materialize)
-        return _resample_v2_udf(
-            _col(tile),
-            _col(factor),
-            alg,
-            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
-        )
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_resample(tc, file_ref_arg(tc), _col(factor), alg)
-
-
-def rst_resample_to_size(
-    tile: ColLike,
-    width_px: ColLike,
-    height_px: ColLike,
-    algorithm: ColLike = "bilinear",
-    virtualize_dir: Optional[str] = None,
-    virtualize_prefix: Optional[str] = None,
-    materialize: Optional[bool] = None,
-) -> Column:
-    """Resample a raster tile to exact pixel dimensions (width_px x height_px).
-
-    CRS and geographic extent are preserved; only the pixel grid changes.
-
-    Force-output (light-tier, Python API only): ``virtualize_dir`` writes the
-    result to a durable path and returns a light virtual tile; ``materialize=True``
-    forces raster bytes (mutually exclusive with ``virtualize_dir``).
-    """
-    alg = f.lit(algorithm) if isinstance(algorithm, str) else _col(algorithm)
-    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
-        _validate_force_output(virtualize_dir, materialize)
-        return _resample_to_size_v2_udf(
-            _col(tile),
-            _col(width_px),
-            _col(height_px),
-            alg,
-            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
-        )
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_resample_to_size(
-        tc, file_ref_arg(tc), _col(width_px), _col(height_px), alg
-    )
-
-
-def rst_resample_to_res(
-    tile: ColLike,
-    x_res: ColLike,
-    y_res: ColLike,
-    algorithm: ColLike = "bilinear",
-    virtualize_dir: Optional[str] = None,
-    virtualize_prefix: Optional[str] = None,
-    materialize: Optional[bool] = None,
-) -> Column:
-    """Resample a raster tile to a target ground resolution in CRS units.
-
-    CRS and geographic extent are preserved; pixel count is derived from extent / resolution.
-
-    Force-output (light-tier, Python API only): ``virtualize_dir`` writes the
-    result to a durable path and returns a light virtual tile; ``materialize=True``
-    forces raster bytes (mutually exclusive with ``virtualize_dir``).
-    """
-    alg = f.lit(algorithm) if isinstance(algorithm, str) else _col(algorithm)
-    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
-        _validate_force_output(virtualize_dir, materialize)
-        return _resample_to_res_v2_udf(
-            _col(tile),
-            _col(x_res),
-            _col(y_res),
-            alg,
-            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
-        )
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_resample_to_res(tc, file_ref_arg(tc), _col(x_res), _col(y_res), alg)
 
 
 # --- Tier 1d: tile-returning edit UDFs -------------------------------------
@@ -2601,14 +2426,13 @@ def _clip_bytes(tile, geom_wkb, all_touched, clip_crs=None):
     geom = parse_geom(geom_wkb)
     if geom is None:
         return None
-    with ot._open(tile) as ds:
+    with _open_op(tile) as ds:
         return edit.clip_to_geom(ds, geom, bool(all_touched), geom_crs=clip_crs)
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("geom_wkb", "all_touched")
 def _clip_udf(tile, geom_wkb, all_touched, clip_crs=None):
-    if _tile_is_empty(tile) or geom_wkb is None:
-        return None
     new_bytes = _clip_bytes(tile, geom_wkb, all_touched, clip_crs)
     if new_bytes is None:
         # Cutline does not overlap the raster -> null tile (no crash), mirroring
@@ -2618,6 +2442,7 @@ def _clip_udf(tile, geom_wkb, all_touched, clip_crs=None):
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("geom_wkb", "all_touched")
 def _clip_v2_udf(
     tile,
     geom_wkb,
@@ -2629,8 +2454,6 @@ def _clip_v2_udf(
 ):
     # Force-output variant (Python API only): same clip math, but the produced
     # bytes are shaped via shape_output. Returns the 9-field v2 tile envelope.
-    if _tile_is_empty(tile) or geom_wkb is None:
-        return None
     new_bytes = _clip_bytes(tile, geom_wkb, all_touched, clip_crs)
     return _shaped_result_row(
         new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
@@ -2638,60 +2461,25 @@ def _clip_v2_udf(
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("geom_wkb", "all_touched")
 def _uf_clip(tile, file_ref, geom_wkb, all_touched, clip_crs):
-    """FILE-aware rst_clip: reads input tile via file_ref, then clips.
+    """FILE-aware clip: reads the input tile through ``file_ref``, then clips.
 
-    C1 guard in open_tile: FILE fast-path applies when tile.clip_polygon is None
-    (normal for rst_clip input) AND no warp is pending.  The explicit geom_wkb
-    cutline is applied AFTER the tile bytes are read (not a tile-level clip_polygon).
+    The explicit cutline is applied AFTER the tile bytes are read (it is not a tile-level
+    ``clip_polygon``).
     """
-    if _tile_is_empty(tile) or geom_wkb is None:
-        return None
-    try:
-        from databricks.labs.gbx._geom import parse_geom
-        from databricks.labs.gbx.pyrx import _env
-
-        _env.configure_gdal_env()
-        geom = parse_geom(geom_wkb)
-        if geom is None:
-            return None
-        with ot._open(tile, file_ref=file_ref) as ds:
-            new_bytes = edit.clip_to_geom(
-                ds, geom, bool(all_touched), geom_crs=clip_crs
-            )
-        if new_bytes is None:
-            return None
-        return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def _build_uf_clip(grid_dirs):
-    """FILE-aware clip UDF factory: captures grid_dirs at build time → pickled."""
+    from databricks.labs.gbx._geom import parse_geom
     from databricks.labs.gbx.pyrx import _env
 
-    @f.udf(V2_TILE_SCHEMA)
-    def _udf(tile, file_ref, geom_wkb, all_touched, clip_crs):
-        if _tile_is_empty(tile) or geom_wkb is None:
-            return None
-        try:
-            from databricks.labs.gbx._geom import parse_geom
-
-            _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
-            geom = parse_geom(geom_wkb)
-            if geom is None:
-                return None
-            with ot._open(tile, file_ref=file_ref) as ds:
-                new_bytes = edit.clip_to_geom(
-                    ds, geom, bool(all_touched), geom_crs=clip_crs
-                )
-            if new_bytes is None:
-                return None
-            return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
-        except Exception:  # noqa: BLE001
-            return None
-
-    return _udf
+    _env.configure_gdal_env()
+    geom = parse_geom(geom_wkb)
+    if geom is None:
+        return None
+    with _open_op(tile, file_ref=file_ref) as ds:
+        new_bytes = edit.clip_to_geom(ds, geom, bool(all_touched), geom_crs=clip_crs)
+    if new_bytes is None:
+        return None
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 def _build_clip_v2_udf(grid_dirs):
@@ -2699,6 +2487,7 @@ def _build_clip_v2_udf(grid_dirs):
     from databricks.labs.gbx.pyrx import _env
 
     @f.udf(V2_TILE_SCHEMA)
+    @_tile_op("geom_wkb", "all_touched")
     def _udf(
         tile,
         geom_wkb,
@@ -2708,8 +2497,6 @@ def _build_clip_v2_udf(grid_dirs):
         virtualize_prefix,
         materialize,
     ):
-        if _tile_is_empty(tile) or geom_wkb is None:
-            return None
         _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
         new_bytes = _clip_bytes(tile, geom_wkb, all_touched, clip_crs)
         return _shaped_result_row(
@@ -2728,9 +2515,8 @@ def _build_clip_sql_udf(grid_dirs):
     from databricks.labs.gbx.pyrx import _env
 
     @f.udf(V2_TILE_SCHEMA)
+    @_tile_op("geom_wkb", "all_touched")
     def _udf(tile, geom_wkb, all_touched, clip_crs=None):
-        if _tile_is_empty(tile) or geom_wkb is None:
-            return None
         _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
         new_bytes = _clip_bytes(tile, geom_wkb, all_touched, clip_crs)
         if new_bytes is None:
@@ -2840,50 +2626,6 @@ def _uf_initnodata(tile, file_ref):
     return VirtualTile(
         cellid=_tile_cellid(tile), raster=new_bytes, metadata=dict(vt.metadata or {})
     ).to_row()
-
-
-def rst_clip(
-    tile: ColLike,
-    geom: ColLike,
-    cutline_all_touched: ColLike,
-    clip_crs: ColLike = None,
-    virtualize_dir: Optional[str] = None,
-    virtualize_prefix: Optional[str] = None,
-    materialize: Optional[bool] = None,
-) -> Column:
-    """Clip the raster to a geometry (WKB, EWKB, WKT, or EWKT). cutline_all_touched includes pixels touched by the boundary.
-
-    ``clip_crs`` declares the source CRS of a plain WKB/WKT cutline (int SRID or
-    CRS string — ``EPSG:x`` / ``ESRI:x`` / WKT); an EWKB/EWKT embedded SRID wins,
-    and a cutline with neither is assumed already in the raster CRS (never errors).
-
-    Force-output (light-tier only, Python API only): ``virtualize_dir`` writes
-    the clipped result to a durable path and returns a light virtual tile;
-    ``materialize=True`` forces raster bytes. ``virtualize_dir`` and
-    ``materialize=True`` are mutually exclusive. When neither is set the SQL
-    registered signature is used unchanged (materialized tile struct).
-    """
-    from databricks.labs.gbx.core import proj_grids
-
-    _grid_dirs = tuple(proj_grids.get_registered_dirs())
-    crs_col = f.lit(clip_crs) if clip_crs is not None else f.lit(None)
-    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
-        _validate_force_output(virtualize_dir, materialize)
-        return _build_clip_v2_udf(_grid_dirs)(
-            _col(tile),
-            _col(geom),
-            _col(cutline_all_touched),
-            crs_col,
-            f.lit(virtualize_dir),
-            f.lit(virtualize_prefix),
-            f.lit(materialize),
-        )
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _build_uf_clip(_grid_dirs)(
-        tc, file_ref_arg(tc), _col(geom), _col(cutline_all_touched), crs_col
-    )
 
 
 def rst_updatetype(
@@ -3346,19 +3088,19 @@ def _proximity_bytes(tile, target_values, distunits, max_distance):
     units = "GEO" if distunits is None else str(distunits)
     tv = None if target_values is None else str(target_values)
     md = None if max_distance is None else float(max_distance)
-    with ot._open(tile) as ds:
+    with _open_op(tile) as ds:
         return analysis_core.proximity(ds, tv, units, md)
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op()
 def _proximity_udf(tile, target_values, distunits, max_distance):
-    if _tile_is_empty(tile):
-        return None
     new_bytes = _proximity_bytes(tile, target_values, distunits, max_distance)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op()
 def _proximity_v2_udf(
     tile,
     target_values,
@@ -3368,8 +3110,6 @@ def _proximity_v2_udf(
     virtualize_prefix,
     materialize,
 ):
-    if _tile_is_empty(tile):
-        return None
     new_bytes = _proximity_bytes(tile, target_values, distunits, max_distance)
     return _shaped_result_row(
         new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
@@ -3794,71 +3534,6 @@ def rst_buildoverviews(
             *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
         )
     return _buildoverviews_udf(_col(tile), _col(levels), resamp)
-
-
-def rst_proximity(
-    tile: ColLike,
-    target_values: ColLike = None,
-    dist_units: ColLike = "GEO",
-    max_distance: ColLike = None,
-    virtualize_dir: Optional[str] = None,
-    virtualize_prefix: Optional[str] = None,
-    materialize: Optional[bool] = None,
-) -> Column:
-    """Compute a proximity raster: each pixel's distance to the nearest source.
-
-    Mirrors the heavyweight ``gbx_rst_proximity`` (GDAL ComputeProximity),
-    implemented with ``scipy.ndimage.distance_transform_edt``.
-
-    Args:
-        tile:          Tile struct column.
-        target_values: Optional comma-separated string of source pixel values,
-                       matched in GDAL's integer domain (each pixel is rounded to
-                       the nearest integer before the comparison). When given,
-                       source pixels are those whose rounded value is in the set.
-                       When None, the GDAL default applies: source = pixels whose
-                       rounded value is != 0.
-        dist_units:    ``"GEO"`` (default; CRS ground units, scaled by pixel
-                       size) or ``"PIXEL"`` (pixel counts).
-        max_distance:  Optional positive distance cap; pixels beyond it become
-                       NoData.
-
-    Returns:
-        Single-band Float32 tile (nodata = -1.0); source pixels get distance 0.
-    """
-    tv_col = (
-        f.lit(None).cast(StringType())
-        if target_values is None
-        else (
-            f.lit(target_values)
-            if isinstance(target_values, str)
-            else _col(target_values)
-        )
-    )
-    units_col = (
-        f.lit("GEO")
-        if dist_units is None
-        else (f.lit(dist_units) if isinstance(dist_units, str) else _col(dist_units))
-    )
-    md_col = (
-        f.lit(None).cast(DoubleType())
-        if max_distance is None
-        else (
-            f.lit(float(max_distance))
-            if isinstance(max_distance, (int, float))
-            else _col(max_distance)
-        )
-    )
-    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
-        _validate_force_output(virtualize_dir, materialize)
-        return _proximity_v2_udf(
-            _col(tile),
-            tv_col,
-            units_col,
-            md_col,
-            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
-        )
-    return _proximity_udf(_col(tile), tv_col, units_col, md_col)
 
 
 def rst_cog_convert(
@@ -4366,6 +4041,8 @@ def rst_viewshed_towers(
     ]
 
     if to_crs is not None:
+        from databricks.labs.gbx.rasterx.functions import rst_transform
+
         piped = piped.withColumn(
             "_vs_reproj", rst_transform("_vs", f.lit(int(to_crs)), materialize=True)
         ).withColumn("_hist_reproj", histogram("_vs_reproj"))
@@ -5086,19 +4763,19 @@ def _fillnodata_bytes(tile, max_search_dist, smoothing_iter):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with ot._open(tile) as ds:
+    with _open_op(tile) as ds:
         return features.fill_nodata(ds, max_search_dist, smoothing_iter)
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("max_search_dist", "smoothing_iter")
 def _fillnodata_udf(tile, max_search_dist, smoothing_iter):
-    if _tile_is_empty(tile):
-        return None
     new_bytes = _fillnodata_bytes(tile, max_search_dist, smoothing_iter)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("max_search_dist", "smoothing_iter")
 def _fillnodata_v2_udf(
     tile,
     max_search_dist,
@@ -5107,37 +4784,10 @@ def _fillnodata_v2_udf(
     virtualize_prefix,
     materialize,
 ):
-    if _tile_is_empty(tile):
-        return None
     new_bytes = _fillnodata_bytes(tile, max_search_dist, smoothing_iter)
     return _shaped_result_row(
         new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
     )
-
-
-def rst_fillnodata(
-    tile: ColLike,
-    max_search_dist: ColLike = None,
-    smoothing_iter: ColLike = None,
-    virtualize_dir: Optional[str] = None,
-    virtualize_prefix: Optional[str] = None,
-    materialize: Optional[bool] = None,
-) -> Column:
-    """Interpolate across NoData gaps in the raster.
-
-    Force-output (light-tier, Python API only): ``virtualize_dir`` / ``materialize``.
-    """
-    msd = f.lit(None) if max_search_dist is None else _col(max_search_dist)
-    smi = f.lit(None) if smoothing_iter is None else _col(smoothing_iter)
-    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
-        _validate_force_output(virtualize_dir, materialize)
-        return _fillnodata_v2_udf(
-            _col(tile),
-            msd,
-            smi,
-            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
-        )
-    return _fillnodata_udf(_col(tile), msd, smi)
 
 
 # --- Tier 1e3: TIN / IDW constructors (point-array -> tile) -----------------

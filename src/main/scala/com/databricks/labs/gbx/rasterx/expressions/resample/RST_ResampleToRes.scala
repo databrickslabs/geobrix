@@ -48,7 +48,12 @@ object RST_ResampleToRes extends WithExpressionInfo {
     private def runDispatch(
         row: InternalRow, xRes: Double, yRes: Double,
         algorithm: UTF8String, conf: UTF8String, dt: DataType
-    ): InternalRow =
+    ): InternalRow = {
+        // A wrong argument fails the call (naming the value); only the tile's own failures become its error tile.
+        if (row != null) {
+            RST_ResampleHelper.checkRes(xRes, yRes)
+            RST_ResampleHelper.validateAlgorithm(if (algorithm == null) "bilinear" else algorithm.toString, "rst_resample_to_res")
+        }
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
@@ -64,6 +69,7 @@ object RST_ResampleToRes extends WithExpressionInfo {
           row,
           dt
         )
+    }
 
     def execute(
         ds: Dataset, options: Map[String, String], xRes: Double, yRes: Double, algorithm: String

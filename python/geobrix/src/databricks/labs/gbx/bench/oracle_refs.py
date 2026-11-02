@@ -97,3 +97,23 @@ def hillshade(
         sun - asp
     )
     return 1.0 + 254.0 * np.maximum(cang, 0.0), mask
+
+
+def block_mean(z, k):
+    """The mean of every k x k block of a 2-D array (its sides a multiple of k): what an average downsample by 1/k is."""
+    h, w = z.shape
+    return z.reshape(h // k, k, w // k, k).mean(axis=(1, 3))
+
+
+def proximity(source, px, py, max_distance=None, pixel_units=False):
+    """The distance from every pixel to the nearest source pixel (exact Euclidean, scipy), and the mask of pixels
+    farther than ``max_distance`` (NoData). ``source`` is a boolean array; the distance is in ground units, or in
+    pixels with ``pixel_units``."""
+    from scipy import ndimage
+
+    sampling = (1.0, 1.0) if pixel_units else (float(py), float(px))
+    dist = ndimage.distance_transform_edt(~source, sampling=sampling)
+    mask = np.zeros(dist.shape, dtype=bool)
+    if max_distance is not None:
+        mask = dist > float(max_distance)
+    return dist, mask

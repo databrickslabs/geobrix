@@ -145,6 +145,7 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
 READ_CAP_ROWS: Dict[str, int] = {
     "decoded_over_cap_error_tile": 4096,
     "dem_decoded_over_cap": 4096,
+    "resample_decoded_over_cap": 4096,
     "rt_over_cap_windows": 4096,
 }
 # The refusal of a tile's bytes in a driver that can name other files, on every level (the light tier's text).
@@ -2262,7 +2263,82 @@ def _ref_chm(args):
     return np.maximum(dsm - dem, 0.0), m_dsm | m_dem
 
 
+def _ref_resample_average(args):
+    """rst_resample by a factor 1/k with `average`: every k x k block of the source is one output pixel, its mean."""
+    import numpy as np
+
+    from databricks.labs.gbx.bench import oracle_refs
+
+    with _ref_dataset(args) as ds:
+        z = ds.read(1).astype("float64")
+    k = int(round(1.0 / float(args[1])))
+    out = oracle_refs.block_mean(z, k)
+    return out, np.zeros(out.shape, dtype=bool)
+
+
+def _ref_proximity(units: str):
+    """rst_proximity: the distance to the nearest source pixel (oracle_refs), in ground units or in pixels."""
+
+    def ref(args):
+        import numpy as np
+
+        from databricks.labs.gbx.bench import oracle_refs
+
+        targets = args[1] if len(args) > 1 else None
+        cap = args[3] if len(args) > 3 else None
+        with _ref_dataset(args) as ds:
+            band = ds.read(1)
+            px, py = abs(ds.transform.a), abs(ds.transform.e)
+        # GDAL matches targets in the integer domain: a pixel is rounded half away from zero first
+        rounded = (np.sign(band) * np.floor(np.abs(band) + 0.5)).astype("int64")
+        if targets is not None and str(targets).strip():
+            wanted = [
+                int(round(float(v))) for v in str(targets).split(",") if v.strip()
+            ]
+            source = np.isin(rounded, wanted)
+        else:
+            source = rounded != 0
+        return oracle_refs.proximity(source, px, py, cap, units == "PIXEL")
+
+    return ref
+
+
+def _ref_fillnodata(args):
+    """rst_fillnodata: rasterio's own GDAL `FillNodata` call on band 1, the same search distance and smoothing."""
+    from rasterio.fill import fillnodata
+
+    max_dist = args[1] if len(args) > 1 and args[1] is not None else 100.0
+    smoothing = args[2] if len(args) > 2 and args[2] is not None else 0
+    with _ref_dataset(args) as ds:
+        out = fillnodata(
+            ds.read(1),
+            mask=ds.read_masks(1),
+            max_search_distance=float(max_dist),
+            smoothing_iterations=int(smoothing),
+        )
+        nodata = ds.nodata
+    return out.astype("float64"), out == nodata
+
+
+def _ref_clip_columns(first: int, count: int):
+    """rst_clip with a cutline that covers `count` whole columns from column `first` and every row: those columns."""
+
+    def ref(args):
+        import numpy as np
+
+        with _ref_dataset(args) as ds:
+            band = ds.read(1, masked=True)[:, first : first + count]
+        return band.data.astype("float64"), np.ma.getmaskarray(band)
+
+    return ref
+
+
 _REFS = {
+    "resample_average_half": _ref_resample_average,
+    "proximity_geo": _ref_proximity("GEO"),
+    "proximity_pixel": _ref_proximity("PIXEL"),
+    "fillnodata": _ref_fillnodata,
+    "clip_left_half": _ref_clip_columns(0, 32),
     "slope": _ref_slope,
     "chm": _ref_chm,
     "norm_diff": _ref_norm_diff,
@@ -2290,7 +2366,13 @@ _REFS = {
     "threshold": _ref_threshold,
 }
 # Byte output (hillshade) is rounded by GDAL, not by the reference: one grey level either way.
-_REF_ATOL = {"hillshade": 1.0, "aspect": 0.01}  # GDAL computes aspect in float32
+# GDAL's proximity is a fast two-pass distance, not the exact Euclidean one: it agrees to within a pixel's diagonal.
+_REF_ATOL = {
+    "hillshade": 1.0,
+    "aspect": 0.01,
+    "proximity_geo": 15.0,
+    "proximity_pixel": 1.5,
+}  # GDAL computes aspect in float32
 
 
 def _check_ref(case: Case, out, args) -> Optional[str]:
@@ -2471,7 +2553,22 @@ def _check_json_subset(case: Case, out) -> Optional[str]:
     return None
 
 
+def _check_tile_size(case: Case, out) -> Optional[str]:
+    """`out` is a tile whose raster is `case.expect` = (width, height) pixels."""
+    raster = _field(out, "raster")
+    if raster is None:
+        return f"{case.cid}: no raster in the result (metadata={_field(out, 'metadata')!r})"
+    height, width = _masked_band(raster).shape
+    got = (width, height)
+    return (
+        None
+        if got == tuple(case.expect)
+        else f"{case.cid}: the raster is {got[0]}x{got[1]}, want {case.expect[0]}x{case.expect[1]}"
+    )
+
+
 _VALUE_CHECKS = {
+    "tile_size": _check_tile_size,
     "geom_equals": _check_geom_equals,
     "json_subset": _check_json_subset,
     "approx": _check_approx,

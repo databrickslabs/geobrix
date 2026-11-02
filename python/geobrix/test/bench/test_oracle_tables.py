@@ -121,6 +121,17 @@ def _ewkb(wkt, srid):
     )
 
 
+def _sized(width, height):
+    """A tile whose raster is `width` x `height` pixels."""
+    import numpy as np
+
+    from databricks.labs.gbx.bench import oracles
+
+    return oracles._tile(
+        oracles._gtiff(np.zeros((1, height, width)), "EPSG:3857", nodata=None)
+    )
+
+
 @pytest.mark.parametrize(
     "kind,expect,good,bad",
     [
@@ -132,6 +143,7 @@ def _ewkb(wkt, srid):
         ),
         ("cell_set", ["TQ3080", "TQ3180"], ["TQ3180", "TQ3080"], ["TQ3080", "TQ3080"]),
         ("approx", (1.0, 2.0), (1.0 + 1e-12, 2.0), (1.0, 2.1)),
+        ("tile_size", (32, 24), _sized(32, 24), _sized(31, 24)),
         (
             "json_subset",
             {"size": [4, 3], "bands": [{"min": 2.0}]},

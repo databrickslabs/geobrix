@@ -27,16 +27,36 @@ object RST_ResampleHelper {
         "average", "mode", "max", "min", "med", "q1", "q3"
     )
 
-    private def validateAlgorithm(algorithm: String, fnName: String): String = {
+    /** The `gdalwarp -r` word of `algorithm` (any case; `nearest` is `near`), or an error that names it and lists
+      * the allowed ones. A caller checks it before its error handler, so a wrong word fails the call. */
+    def validateAlgorithm(algorithm: String, fnName: String): String = {
         // scalastyle:off caselocale
         val lower = algorithm.toLowerCase
         // scalastyle:on caselocale
+        val word = if (lower == "nearest") "near" else lower
         require(
-            AllowedAlgorithms.contains(lower),
+            AllowedAlgorithms.contains(word),
             s"$fnName: unsupported resampling algorithm '$algorithm'; allowed: " +
-                AllowedAlgorithms.toSeq.sorted.mkString(", ")
+                AllowedAlgorithms.toSeq.sorted.mkString(", ") + " (and nearest)"
         )
-        lower
+        word
+    }
+
+    /** A multiplicative factor must be a positive finite number. */
+    def checkFactor(factor: Double): Unit =
+        require(factor > 0.0 && !java.lang.Double.isInfinite(factor) && !java.lang.Double.isNaN(factor),
+            s"rst_resample: factor must be a positive finite number; got $factor")
+
+    /** An output size must be positive in both directions. */
+    def checkSize(widthPx: Int, heightPx: Int): Unit = {
+        require(widthPx > 0, s"rst_resample_to_size: width_px must be positive; got $widthPx")
+        require(heightPx > 0, s"rst_resample_to_size: height_px must be positive; got $heightPx")
+    }
+
+    /** An output resolution must be positive in both directions. */
+    def checkRes(xRes: Double, yRes: Double): Unit = {
+        require(xRes > 0.0, s"rst_resample_to_res: x_res must be positive; got $xRes")
+        require(yRes > 0.0, s"rst_resample_to_res: y_res must be positive; got $yRes")
     }
 
     /** Resample by an explicit output pixel size (width x height). */
@@ -48,8 +68,7 @@ object RST_ResampleHelper {
         algorithm: String
     ): (Dataset, Map[String, String]) = {
         require(ds != null, "rst_resample: source Dataset is null")
-        require(widthPx > 0, s"rst_resample: width_px must be positive; got $widthPx")
-        require(heightPx > 0, s"rst_resample: height_px must be positive; got $heightPx")
+        checkSize(widthPx, heightPx)
         val alg = validateAlgorithm(algorithm, "rst_resample")
         val outPath = newVsimemPath(ds)
         GDALWarp.executeWarp(
@@ -69,8 +88,7 @@ object RST_ResampleHelper {
         algorithm: String
     ): (Dataset, Map[String, String]) = {
         require(ds != null, "rst_resample_to_res: source Dataset is null")
-        require(xRes > 0.0, s"rst_resample_to_res: x_res must be positive; got $xRes")
-        require(yRes > 0.0, s"rst_resample_to_res: y_res must be positive; got $yRes")
+        checkRes(xRes, yRes)
         val alg = validateAlgorithm(algorithm, "rst_resample_to_res")
         val outPath = newVsimemPath(ds)
         GDALWarp.executeWarp(
@@ -89,8 +107,7 @@ object RST_ResampleHelper {
         algorithm: String
     ): (Dataset, Map[String, String]) = {
         require(ds != null, "rst_resample: source Dataset is null")
-        require(factor > 0.0 && !java.lang.Double.isInfinite(factor) && !java.lang.Double.isNaN(factor),
-            s"rst_resample: factor must be a positive finite number; got $factor")
+        checkFactor(factor)
         val srcW = ds.GetRasterXSize
         val srcH = ds.GetRasterYSize
         val newW = math.max(1, math.round(srcW * factor).toInt)

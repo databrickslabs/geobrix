@@ -10,6 +10,16 @@ import java.nio.file.Files
 /** Projects a raster to a new CRS via GDAL Warp (-t_srs); returns (Dataset, metadata). Caller must release. */
 object RasterProject {
 
+    /** A tile with no CRS has nothing to reproject from: say how to set one, not GDAL's "points failed to transform". */
+    def requireCrs(ds: Dataset): Unit = {
+        val projection = ds.GetProjection
+        if (projection == null || projection.isEmpty) {
+            throw new IllegalArgumentException(
+              "the tile has no CRS, so it cannot be reprojected. Fix: set its CRS first with gbx_rst_setcrs"
+            )
+        }
+    }
+
     /** Warps ds to dstSR; writes to vsimem.
       *
       * When the target CRS has an authority (`EPSG:4326`, `ESRI:54008`, ...) the warp
@@ -21,6 +31,7 @@ object RasterProject {
       * spaces (and WKT is full of spaces), the WKT is written to a temp `.wkt` file and
       * passed by path: GDAL's `-t_srs` accepts a filename holding the SRS definition. */
     def project(ds: Dataset, options: Map[String, String], dstSR: SpatialReference): (Dataset, Map[String, String]) = {
+        requireCrs(ds)
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "")
         val driver = ds.GetDriver()
         val extension = GDAL.getExtension(driver.getShortName)

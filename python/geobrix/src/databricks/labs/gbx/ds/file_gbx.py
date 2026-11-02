@@ -1040,6 +1040,10 @@ def session_read_cap(spark) -> Optional[int]:
     """Driver side: the read cap a registration carries to its workers. On a classic session it is the session's
     :data:`READ_CAP_KEY` when set, else the classic decoded budget (the cap the JVM reads there). None on Spark Connect,
     whose configuration is not read here: each worker then uses its own budget (:func:`tile_read_cap`).
+
+    The light tier keeps the cap it was registered with: it is read here, once per registration, and travels with the
+    function. Changing :data:`READ_CAP_KEY` afterwards does not reach a function already registered (the JVM reads
+    the key per query): call ``register()`` again after changing it.
     """
     if spark is None or "connect" in type(spark).__module__:
         return None

@@ -37,6 +37,8 @@ object TileBytes {
 
     // (task attempt, cap): a value holds for the task that set it, so a later task on the same thread (a Java UDF,
     // which has no configuration) reads at the default; -1 is a read with no task (driver-side evaluation).
+    // Every driver-side evaluation shares attempt -1, so a cap lowered for one carries over to a later driver-side Java
+    // UDF on the same thread (until another expression's configuration replaces it); a task never sees that carry-over.
     private val cap = new ThreadLocal[(Long, Long)]
 
     private def attempt: Long = Option(org.apache.spark.TaskContext.get()).map(_.taskAttemptId()).getOrElse(-1L)

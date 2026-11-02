@@ -367,6 +367,10 @@ def carrying_session(spark, allowed: Optional[bool] = None):
     """``spark`` for the registrars: each function they register through its ``udf`` / ``udtf`` carries the
     driver's switch (read now, unless ``allowed`` is given) and the session's read cap
     (``ds.file_gbx.session_read_cap``). The one point where they hand their functions to Spark.
+
+    Both are captured NOW, at registration, and kept by every function registered through the returned session: a
+    later change of the session's read-cap key reaches the JVM at its next query but not these functions, which
+    need a fresh ``register()``.
     """
     from databricks.labs.gbx.ds.file_gbx import session_read_cap
 

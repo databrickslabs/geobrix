@@ -2178,19 +2178,21 @@
     "gbx_st_crs": {
       "examples": "Examples:\n      > SELECT gbx_st_crs(geom) AS crs FROM vector_geoms;",
       "usage_args": "geom",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Return the canonical CRS of the SRID a geometry carries.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.0"
     },
     "gbx_st_explainvalidity": {
       "examples": "Examples:\n      > SELECT gbx_st_explainvalidity('POLYGON((0 0,1 1,1 0,0 1,0 0))') AS detail;",
-      "bindings": [
-        "sql",
-        "python-light"
+      "usage_args": "geom",
+      "description": "Diagnose whether a geometry is valid under the OGC Simple Features rules.",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.5.0"
     },
@@ -2218,10 +2220,11 @@
     },
     "gbx_st_legacyaswkb": {
       "examples": "Examples:\n      > SELECT gbx_st_legacyaswkb(geom_legacy) AS wkb FROM legacy_geoms;",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "usage_args": "geom",
+      "description": "Decode a legacy Mosaic geometry struct to ISO WKB, with Z and holes kept.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -2239,78 +2242,92 @@
     },
     "gbx_st_node": {
       "examples": "Examples:\n      > SELECT gbx_st_node('LINESTRING(0 0,10 10,0 10,10 0)') AS noded;",
-      "bindings": [
-        "sql",
-        "python-light"
+      "usage_args": "geom",
+      "description": "Node a linework: split it at every point where its lines cross or touch.",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.5.0"
     },
     "gbx_st_reduceprecision": {
       "examples": "Examples:\n      > SELECT gbx_st_reduceprecision('POINT(1.234 5.678)', 1.0) AS snapped;",
-      "bindings": [
-        "sql",
-        "python-light"
+      "usage_args": "geom, grid_size",
+      "description": "Snap a geometry's coordinates to a grid, keeping the result valid.",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.5.0"
     },
     "gbx_st_removerepeatedpoints": {
       "examples": "Examples:\n      > SELECT gbx_st_removerepeatedpoints('LINESTRING(0 0,0 0,1 1,1 1,2 2)') AS deduped;",
-      "bindings": [
-        "sql",
-        "python-light"
+      "usage_args": "geom, [tolerance]",
+      "description": "Remove consecutive repeated vertices, or near-repeats within a tolerance.",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.5.0"
     },
     "gbx_st_setcrs": {
       "examples": "Examples:\n      > SELECT gbx_st_setcrs(geom, 'EPSG:4326') AS stamped FROM vector_geoms;",
       "usage_args": "geom, crs",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Stamp a CRS on a geometry without reprojecting it.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.0"
     },
     "gbx_st_shiftlongitude": {
       "examples": "Examples:\n      > SELECT gbx_st_shiftlongitude('POLYGON((-170 -10, -150 -10, -150 10, -170 10, -170 -10))') AS shifted;",
-      "bindings": [
-        "sql",
-        "python-light"
+      "usage_args": "geom",
+      "description": "Shift longitudes from [-180, 180] into [0, 360].",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.5.0"
     },
     "gbx_st_simplifypreservetopology": {
       "examples": "Examples:\n      > SELECT gbx_st_simplifypreservetopology('POLYGON((0 0,0 5,0.001 8,0 10,10 10,10 0,0 0))', 1.0) AS simplified;",
-      "bindings": [
-        "sql",
-        "python-light"
+      "usage_args": "geom, tolerance",
+      "description": "Simplify a geometry with Douglas-Peucker without splitting or collapsing it.",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.5.0"
     },
     "gbx_st_snap": {
       "examples": "Examples:\n      > SELECT gbx_st_snap('LINESTRING(0 0.4,10 0.4)', 'LINESTRING(0 0,10 0)', 0.5) AS snapped;",
-      "bindings": [
-        "sql",
-        "python-light"
+      "usage_args": "geom, reference, tolerance",
+      "description": "Snap a geometry's vertices onto a reference geometry within a tolerance.",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.5.0"
     },
     "gbx_st_split": {
       "examples": "Examples:\n      > SELECT gbx_st_split('POLYGON((170 -10, 190 -10, 190 10, 170 10, 170 -10))', 'LINESTRING(180 -90, 180 90)') AS pieces;",
-      "bindings": [
-        "sql",
-        "python-light"
+      "usage_args": "input_geom, blade_geom",
+      "description": "Split a geometry by a blade into the pieces on either side of it.",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.5.0"
     },
     "gbx_st_transformcrs": {
       "examples": "Examples:\n      > SELECT gbx_st_transformcrs(geom, 'EPSG:32633') AS utm33n FROM vector_geoms;",
       "usage_args": "geom, target_crs, [source_crs]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Reproject a geometry to a target CRS.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.0"
@@ -2328,9 +2345,11 @@
     },
     "gbx_st_wrapx": {
       "examples": "Examples:\n      > SELECT gbx_st_wrapx('POINT(190 10)', 180, -360) AS wrapped;",
-      "bindings": [
-        "sql",
-        "python-light"
+      "usage_args": "geom, wrap_x_origin, wrap_direction",
+      "description": "Wrap x coordinates around an origin by a shift.",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.5.0"
     },

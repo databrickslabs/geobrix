@@ -517,14 +517,20 @@ These apply in **every** input encoding and on **both** tiers — they are prope
 
 ### st_crs
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_st_crs: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_crs(geom)` | `STRING` |
+| Python | `vectorx.functions.st_crs(geom)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT. |
+{/* END GENERATED gbx_st_crs */}
 
 Returns the canonical CRS string for the geometry's embedded SRID, or `NULL`.
-
-**Signature:** `gbx_st_crs(geom)`
-
-**Parameters:**
-- `geom` — Geometry. Accepts WKB/EWKB/WKT/EWKT.
 
 **Returns:** `STRING` — the authority string (`'EPSG:4326'`, `'ESRI:54008'`, …), or `NULL` for a plain WKB/WKT geometry with no embedded SRID, a NULL input, or an SRID in no known registry.
 
@@ -533,8 +539,7 @@ An SRID is classified against the authoritative PROJ registries, so an ESRI-rang
 <FunctionExamples
   name="st_crs"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
-  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
-  pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
+  python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
   scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
 />
@@ -543,15 +548,21 @@ An SRID is classified against the authoritative PROJ registries, so an ESRI-rang
 
 ### st_setcrs
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_st_setcrs: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_setcrs(geom, crs)` | `BINARY` |
+| Python | `vectorx.functions.st_setcrs(geom, crs)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT. |
+| `crs` | `STRING` or `INT` |  | The CRS to stamp: `EPSG:<code>` or `ESRI:<code>`, or an integer. A CRS with no integer code is an error. |
+{/* END GENERATED gbx_st_setcrs */}
 
 Stamps a CRS on a geometry **without reprojecting** — it relabels, it does not move coordinates. The counterpart to the built-in `ST_SetSRID`, taking a CRS string instead of an integer.
-
-**Signature:** `gbx_st_setcrs(geom, crs)`
-
-**Parameters:**
-- `geom` — Geometry. Accepts WKB/EWKB/WKT/EWKT.
-- `crs` (`STRING`) — Target CRS. An authority string (`'EPSG:4326'`, `'ESRI:54008'`) or an int-castable string / integer (`32633`, `'32633'`), which behaves like `ST_SetSRID(geom, 32633)`.
 
 **Returns:** `BINARY` — EWKB with the new SRID embedded. Coordinate **values** are preserved exactly, to the last decimal place — no reprojection and no rounding. (The output bytes are not identical to the input's: embedding the SRID is what makes it EWKB.)
 
@@ -565,8 +576,7 @@ Stamps a CRS on a geometry **without reprojecting** — it relabels, it does not
 <FunctionExamples
   name="st_setcrs"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
-  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
-  pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
+  python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
   scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
 />
@@ -575,16 +585,22 @@ Stamps a CRS on a geometry **without reprojecting** — it relabels, it does not
 
 ### st_transformcrs
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_st_transformcrs: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_transformcrs(geom, target_crs, [source_crs])` | `BINARY` |
+| Python | `vectorx.functions.st_transformcrs(geom, target_crs, source_crs=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT. |
+| `target_crs` | `STRING` or `INT` |  | The target CRS: `EPSG:<code>` or `ESRI:<code>`, an integer, WKT, PROJJSON or PROJ4. |
+| `source_crs` | `STRING` or `INT` | `NULL` | The CRS of a geometry that carries no SRID; ignored when it does. |
+{/* END GENERATED gbx_st_transformcrs */}
 
 Reprojects a geometry's coordinates into `target_crs`. The counterpart to the built-in `ST_Transform`, taking a CRS string instead of an integer — so an ESRI code, a WKT definition, or a PROJ4 string can be a target.
-
-**Signature:** `gbx_st_transformcrs(geom, target_crs [, source_crs])`
-
-**Parameters:**
-- `geom` — Geometry. Accepts WKB/EWKB/WKT/EWKT.
-- `target_crs` (`STRING`) — CRS to reproject into: authority string, int-castable string/integer, WKT, or PROJ4.
-- `source_crs` (`STRING`, optional) — CRS the input is in. Used **only** for a plain (SRID-less) geometry; a geometry that carries an embedded SRID ignores this argument, so a mixed column is safe.
 
 **Returns:** `BINARY` — the reprojected geometry.
 
@@ -604,8 +620,7 @@ When the output is EWKB (the SRID travels with the geometry), convert it with th
 <FunctionExamples
   name="st_transformcrs"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
-  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
-  pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
+  python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
   scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
 />
@@ -650,14 +665,20 @@ See [Geometry Validity](./geometry-validity).
 
 ### st_explainvalidity
 
-<Tier light/>
+{/* BEGIN GENERATED gbx_st_explainvalidity: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_explainvalidity(geom)` | `STRING` |
+| Python | `vectorx.functions.st_explainvalidity(geom)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT. |
+{/* END GENERATED gbx_st_explainvalidity */}
 
 Diagnoses geometry validity and returns a JSON string with four fields: `valid` (boolean), `reason` (GEOS reason string), `code` (stable integer violation class), and `location` (`POINT(x y)` WKT string of the violation site). `code` and `location` are `null` when GEOS does not provide them. Use `ST_IsValid` as a cheap boolean gate and call `gbx_st_explainvalidity` only on flagged rows.
-
-**Signature:** `gbx_st_explainvalidity(geom)`
-
-**Parameters:**
-- `geom` — Geometry to diagnose. Accepts WKB/EWKB/WKT/EWKT.
 
 **Returns:** `STRING` — JSON `{"valid": ..., "reason": ..., "code": ..., "location": ...}`. Returns `NULL` for null or unparseable input.
 
@@ -666,7 +687,7 @@ See [Geometry Validity](./geometry-validity).
 <FunctionExamples
   name="st_explainvalidity"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
-  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
   testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
 />
 
@@ -763,15 +784,21 @@ Distributed shapely helpers — shapely/GEOS operations running as Python UDFs �
 
 ### st_simplifypreservetopology
 
-<Tier light/>
+{/* BEGIN GENERATED gbx_st_simplifypreservetopology: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_simplifypreservetopology(geom, tolerance)` | `BINARY` |
+| Python | `vectorx.functions.st_simplifypreservetopology(geom, tolerance)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT. |
+| `tolerance` | `DOUBLE` |  | The distance below which a vertex is dropped. |
+{/* END GENERATED gbx_st_simplifypreservetopology */}
 
 Simplifies a geometry using the Douglas-Peucker algorithm with topology preservation (`preserve_topology=True`). Vertices that deviate less than `tolerance` from the simplified line are dropped, but the output geometry is guaranteed to be of the same topological class as the input and to remain valid. Use this instead of the product's `st_simplify` when ring connectivity must be maintained.
-
-**Signature:** `gbx_st_simplifypreservetopology(geom, tolerance)`
-
-**Parameters:**
-- `geom` — Geometry to simplify. Accepts WKB/EWKB/WKT/EWKT.
-- `tolerance` — Simplification tolerance in the geometry's coordinate units.
 
 **Returns:** `BINARY` — WKB (or EWKB if input carried a SRID). The original CRS is preserved. Returns `NULL` for null or unparseable input.
 
@@ -780,7 +807,7 @@ See [Geometry Cleaning](./geometry-cleaning).
 <FunctionExamples
   name="st_simplifypreservetopology"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
-  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
   testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
 />
 
@@ -788,15 +815,21 @@ See [Geometry Cleaning](./geometry-cleaning).
 
 ### st_removerepeatedpoints
 
-<Tier light/>
+{/* BEGIN GENERATED gbx_st_removerepeatedpoints: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_removerepeatedpoints(geom, [tolerance])` | `BINARY` |
+| Python | `vectorx.functions.st_removerepeatedpoints(geom, tolerance=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT. |
+| `tolerance` | `DOUBLE` | `0.0` | Vertices closer than this to the one before are dropped; 0 drops exact repeats only. |
+{/* END GENERATED gbx_st_removerepeatedpoints */}
 
 Removes consecutive duplicate or near-duplicate vertices from a geometry. With the default `tolerance=0.0`, only exact duplicate consecutive coordinate pairs are removed. A positive `tolerance` collapses vertices within that distance of their predecessor into a single representative vertex.
-
-**Signature:** `gbx_st_removerepeatedpoints(geom [, tolerance])`
-
-**Parameters:**
-- `geom` — Geometry to deduplicate. Accepts WKB/EWKB/WKT/EWKT.
-- `tolerance` (optional, default `0.0`) — Distance threshold for consecutive near-duplicate vertices.
 
 **Returns:** `BINARY` — WKB (or EWKB if input carried a SRID). The original CRS is preserved. Returns `NULL` for null or unparseable input.
 
@@ -805,7 +838,7 @@ See [Geometry Cleaning](./geometry-cleaning).
 <FunctionExamples
   name="st_removerepeatedpoints"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
-  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
   testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
 />
 
@@ -813,15 +846,21 @@ See [Geometry Cleaning](./geometry-cleaning).
 
 ### st_reduceprecision
 
-<Tier light/>
+{/* BEGIN GENERATED gbx_st_reduceprecision: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_reduceprecision(geom, grid_size)` | `BINARY` |
+| Python | `vectorx.functions.st_reduceprecision(geom, grid_size)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT. |
+| `grid_size` | `DOUBLE` |  | The grid cell size; coordinates snap to its multiples. |
+{/* END GENERATED gbx_st_reduceprecision */}
 
 Snaps coordinates to a precision grid of size `grid_size`, rounding each coordinate to the nearest multiple of `grid_size`. Useful for eliminating floating-point noise, aligning data from different sources, or reducing coordinate storage size. Uses GEOS `set_precision` with `mode="valid_output"` so the output remains valid even if snapping would otherwise collapse a ring.
-
-**Signature:** `gbx_st_reduceprecision(geom, grid_size)`
-
-**Parameters:**
-- `geom` — Geometry to snap to grid. Accepts WKB/EWKB/WKT/EWKT.
-- `grid_size` — Precision grid size in the geometry's coordinate units (e.g. `1.0` for integer coordinates, `0.001` for 3 decimal places).
 
 **Returns:** `BINARY` — WKB (or EWKB if input carried a SRID). The original CRS is preserved. Returns `NULL` for null or unparseable input.
 
@@ -830,7 +869,7 @@ See [Geometry Cleaning](./geometry-cleaning).
 <FunctionExamples
   name="st_reduceprecision"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
-  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
   testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
 />
 
@@ -838,14 +877,20 @@ See [Geometry Cleaning](./geometry-cleaning).
 
 ### st_node
 
-<Tier light/>
+{/* BEGIN GENERATED gbx_st_node: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_node(geom)` | `BINARY` |
+| Python | `vectorx.functions.st_node(geom)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT. |
+{/* END GENERATED gbx_st_node */}
 
 Nodes a geometry's linework by splitting at all self-intersections and pairwise intersections. The result is a `MultiLineString` (or `LineString`) where every segment endpoint is a valid node — no two segments cross without sharing an explicit endpoint. Noding is typically a prerequisite for polygonization, planar graph analysis, or building topologically clean networks from raw linework.
-
-**Signature:** `gbx_st_node(geom)`
-
-**Parameters:**
-- `geom` — Linework geometry to node. Accepts WKB/EWKB/WKT/EWKT. Best suited for `LineString` and `MultiLineString` inputs; polygon rings can also be noded.
 
 **Returns:** `BINARY` — WKB (or EWKB if input carried a SRID). The original CRS is preserved. Returns `NULL` for null or unparseable input.
 
@@ -854,7 +899,7 @@ See [Geometry Cleaning](./geometry-cleaning).
 <FunctionExamples
   name="st_node"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
-  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
   testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
 />
 
@@ -862,18 +907,24 @@ See [Geometry Cleaning](./geometry-cleaning).
 
 ### st_snap
 
-<Tier light/>
+{/* BEGIN GENERATED gbx_st_snap: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_snap(geom, reference, tolerance)` | `BINARY` |
+| Python | `vectorx.functions.st_snap(geom, reference, tolerance)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT. |
+| `reference` | `BINARY` or `STRING` |  | The geometry to snap onto: WKB, EWKB, WKT or EWKT. |
+| `tolerance` | `DOUBLE` |  | The distance within which a vertex moves onto the reference. |
+{/* END GENERATED gbx_st_snap */}
 
 Snaps `geom`'s vertices onto `reference` where within `tolerance`. Any vertex in `geom` that lies within `tolerance` distance of a vertex or edge in `reference` is moved onto that nearest point. Useful for aligning features from different sources that should share boundaries but don't quite meet due to digitizing differences or floating-point noise.
 
 Complements the product's `ST_ClosestPoint` (exact nearest point, no tolerance gate).
-
-**Signature:** `gbx_st_snap(geom, reference, tolerance)`
-
-**Parameters:**
-- `geom` — Geometry whose vertices will be snapped. Accepts WKB/EWKB/WKT/EWKT.
-- `reference` — Reference geometry to snap onto. Accepts WKB/EWKB/WKT/EWKT.
-- `tolerance` — Maximum snap distance in the geometry's coordinate units.
 
 **Returns:** `BINARY` — WKB (or EWKB if input carried a SRID). The SRID of `geom` is preserved. Returns `NULL` if either input is null or unparseable.
 
@@ -882,7 +933,7 @@ See [Geometry Cleaning](./geometry-cleaning).
 <FunctionExamples
   name="st_snap"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
-  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
   testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
 />
 
@@ -894,14 +945,20 @@ These three functions are distributed shapely helpers — shapely/GEOS geometry 
 
 ### st_shiftlongitude
 
-<Tier light/>
+{/* BEGIN GENERATED gbx_st_shiftlongitude: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_shiftlongitude(geom)` | `BINARY` |
+| Python | `vectorx.functions.st_shiftlongitude(geom)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT. |
+{/* END GENERATED gbx_st_shiftlongitude */}
 
 Shifts all longitude (x) coordinates of a geometry from `[-180, 180]` space into `[0, 360]` space by adding 360 to any negative x value. Use this as the first step when normalizing a geometry that crosses the 180° antimeridian: after shifting, the crossing polygon becomes contiguous around x=180 and can be cleanly split there.
-
-**Signature:** `gbx_st_shiftlongitude(geom)`
-
-**Parameters:**
-- `geom` — Geometry. Accepts WKB/EWKB/WKT/EWKT.
 
 **Returns:** `BINARY` — WKB with all negative x coordinates shifted by +360.
 
@@ -910,7 +967,7 @@ See [Antimeridian](./antimeridian).
 <FunctionExamples
   name="st_shiftlongitude"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
-  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
   testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
 />
 
@@ -918,16 +975,22 @@ See [Antimeridian](./antimeridian).
 
 ### st_wrapx
 
-<Tier light/>
+{/* BEGIN GENERATED gbx_st_wrapx: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_wrapx(geom, wrap_x_origin, wrap_direction)` | `BINARY` |
+| Python | `vectorx.functions.st_wrapx(geom, wrap_x_origin, wrap_direction)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT. |
+| `wrap_x_origin` | `DOUBLE` |  | The x value the wrap starts from. |
+| `wrap_direction` | `DOUBLE` |  | The amount added to the coordinates that qualify: negative moves those at or east of the origin, positive those at or west of it. |
+{/* END GENERATED gbx_st_wrapx */}
 
 Wraps x coordinates that exceed a threshold back by a fixed offset. The primary use is the reverse of `gbx_st_shiftlongitude`: after splitting at x=180, apply `gbx_st_wrapx(geom, 180, -360)` to the eastern pieces to move them from `[180, 360]` back into `[-180, 0]`. Apply only to the pieces where `ST_XMax(piece) > 180` — wrapping the western piece's shared 180° edge would produce a malformed geometry.
-
-**Signature:** `gbx_st_wrapx(geom, wrap_x_origin, wrap_direction)`
-
-**Parameters:**
-- `geom` — Geometry. Accepts WKB/EWKB/WKT/EWKT.
-- `wrap_x_origin` (`DOUBLE`) — x threshold above which wrapping is applied (typically `180`).
-- `wrap_direction` (`DOUBLE`) — offset to add to coordinates that exceed the threshold (typically `-360`).
 
 **Returns:** `BINARY` — WKB with qualifying x coordinates shifted by `wrap_direction`.
 
@@ -936,7 +999,7 @@ See [Antimeridian](./antimeridian).
 <FunctionExamples
   name="st_wrapx"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
-  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
   testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
 />
 
@@ -944,15 +1007,21 @@ See [Antimeridian](./antimeridian).
 
 ### st_split
 
-<Tier light/>
+{/* BEGIN GENERATED gbx_st_split: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_split(input_geom, blade_geom)` | `BINARY` |
+| Python | `vectorx.functions.st_split(input_geom, blade_geom)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `input_geom` | `BINARY` or `STRING` |  | The geometry to split: WKB, EWKB, WKT or EWKT. |
+| `blade_geom` | `BINARY` or `STRING` |  | The geometry to split by: WKB, EWKB, WKT or EWKT. |
+{/* END GENERATED gbx_st_split */}
 
 Splits a geometry by a blade geometry, returning a `GEOMETRYCOLLECTION` containing all resulting pieces. The primary use is cutting an antimeridian-crossing polygon at the 180° meridian: pass the polygon (already shifted into `[0, 360]` space by `gbx_st_shiftlongitude`) and the blade `'LINESTRING(180 -90, 180 90)'`.
-
-**Signature:** `gbx_st_split(geom, blade)`
-
-**Parameters:**
-- `geom` — Geometry to split. Accepts WKB/EWKB/WKT/EWKT.
-- `blade` — Cutting geometry. Accepts WKB/EWKB/WKT/EWKT.
 
 **Returns:** `BINARY` — WKB `GEOMETRYCOLLECTION` of the resulting pieces.
 
@@ -961,7 +1030,7 @@ See [Antimeridian](./antimeridian).
 <FunctionExamples
   name="st_split"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
-  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
   testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
 />
 
@@ -971,15 +1040,21 @@ See [Antimeridian](./antimeridian).
 
 ### st_legacyaswkb
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_st_legacyaswkb: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_legacyaswkb(geom)` | `BINARY` |
+| Python | `vectorx.functions.st_legacyaswkb(geom)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `struct<typeId:int,srid:int,boundaries:array<array<array<double>>>,holes:array<array<array<array<double>>>>>` |  | The legacy Mosaic geometry struct: `typeId`, `srid`, `boundaries` and `holes`. |
+{/* END GENERATED gbx_st_legacyaswkb */}
 
 Migrates a legacy DBLabs Mosaic geometry value to standard Well-Known Binary (WKB). Pass the raw legacy geometry column through `st_legacyaswkb` to obtain a WKB binary that all downstream `ST_*` functions accept — the practical first step when moving a Mosaic-era table onto the product's native `GEOMETRY`/`GEOGRAPHY` types.
 
-A scalar function in **both** tiers (same registered name, same output bytes), so the migration query is a one-line tier swap.
-
-**Parameters:** `legacyGeometry` — Column containing a legacy Mosaic geometry value (e.g. `{1, [[[x, y]]], [[]]}`).
-
-**Returns:** `BINARY` — standard WKB.
 
 **Migration notes:**
 - **Z values are preserved.** 3D legacy geometries round-trip through `st_legacyaswkb` with their Z coordinate intact.
@@ -990,8 +1065,7 @@ A scalar function in **both** tiers (same registered name, same output bytes), s
 <FunctionExamples
   name="st_legacyaswkb"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
-  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
-  pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
+  python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
   scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
 />

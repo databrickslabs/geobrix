@@ -102,10 +102,11 @@ bx.register(spark)
 spark.sql("SELECT gbx_bng_cellarea('TQ3080') as area_km2").show()"""
 
 USE_VECTORX = '''# Register VectorX, create legacy point struct, convert to WKB
-from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
+from databricks.labs.gbx.vectorx.jts.legacy import functions as legacy
+from databricks.labs.gbx.vectorx import functions as vx
 from pyspark.sql import Row
 from pyspark.sql.types import ArrayType, DoubleType, IntegerType, StructField, StructType
-vx.register(spark)
+legacy.register(spark)
 legacy_schema = StructType([
     StructField("typeId", IntegerType()),
     StructField("srid", IntegerType()),

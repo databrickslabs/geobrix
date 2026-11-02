@@ -312,16 +312,16 @@ st_interpolateelevationgeom_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def st_crs_python_light_example(spark):
+def st_crs_python_example(spark):
     """Return the canonical CRS string for a geometry's embedded SRID (light pyvx tier)."""
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
 
     df = spark.table("vector_geoms")
     result = df.select(vx.st_crs("geom").alias("crs")).first()
     return result["crs"]
 
 
-st_crs_python_light_example_output = """
+st_crs_python_example_output = """
 +---------+
 |crs      |
 +---------+
@@ -330,16 +330,16 @@ st_crs_python_light_example_output = """
 """
 
 
-def st_setcrs_python_light_example(spark):
+def st_setcrs_python_example(spark):
     """Stamp a CRS on a geometry without reprojecting (light pyvx tier)."""
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
 
     df = spark.table("vector_geoms")
     result = df.select(vx.st_setcrs("geom", "EPSG:4326").alias("stamped")).first()
     return result["stamped"]
 
 
-st_setcrs_python_light_example_output = """
+st_setcrs_python_example_output = """
 +---------+
 |stamped  |
 +---------+
@@ -349,16 +349,16 @@ st_setcrs_python_light_example_output = """
 """
 
 
-def st_transformcrs_python_light_example(spark):
+def st_transformcrs_python_example(spark):
     """Reproject a geometry to a target CRS (light pyvx tier)."""
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
 
     df = spark.table("vector_geoms")
     result = df.select(vx.st_transformcrs("geom", "EPSG:32633").alias("utm33n")).first()
     return result["utm33n"]
 
 
-st_transformcrs_python_light_example_output = """
+st_transformcrs_python_example_output = """
 +--------+
 |utm33n  |
 +--------+
@@ -377,7 +377,7 @@ st_transformcrs_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def st_legacyaswkb_python_light_example(spark):
+def st_legacyaswkb_python_example(spark):
     """Convert a legacy Mosaic geometry struct to standard WKB (light pyvx tier).
 
     Uses the ``legacy_geoms`` setup view — one row with a Mosaic InternalGeometry
@@ -385,14 +385,14 @@ def st_legacyaswkb_python_light_example(spark):
     ``st_legacyaswkb`` is a scalar function in both tiers (same name, same output
     bytes); the only difference between tiers is the import path.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
 
     df = spark.table("legacy_geoms")
     result = df.select(vx.st_legacyaswkb("geom_legacy").alias("wkb")).first()
     return result["wkb"]
 
 
-st_legacyaswkb_python_light_example_output = """
+st_legacyaswkb_python_example_output = """
 +--------+
 |wkb     |
 +--------+
@@ -411,14 +411,14 @@ st_legacyaswkb_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def st_shiftlongitude_python_light_example(spark):
+def st_shiftlongitude_python_example(spark):
     """Shift longitude from [-180,180] to [0,360] (light pyvx tier).
 
     Creates a WKB POINT(-170, 10) inline via shapely and passes it through
     ``st_shiftlongitude``.  Negative x coordinates are moved by +360, so
     x=-170 becomes x=190.  Returns the shifted WKB bytes.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
     from shapely import to_wkb  # noqa: PLC0415
     from shapely.geometry import Point  # noqa: PLC0415
 
@@ -426,7 +426,7 @@ def st_shiftlongitude_python_light_example(spark):
     return df.select(vx.st_shiftlongitude("geom").alias("shifted")).first()["shifted"]
 
 
-st_shiftlongitude_python_light_example_output = """
+st_shiftlongitude_python_example_output = """
 +--------+
 |shifted |
 +--------+
@@ -436,7 +436,7 @@ st_shiftlongitude_python_light_example_output = """
 """
 
 
-def st_wrapx_python_light_example(spark):
+def st_wrapx_python_example(spark):
     """Wrap X coordinates back into [-180,180] (light pyvx tier).
 
     Creates a WKB POINT(190, 10) inline — a coordinate in [0,360] longitude
@@ -445,7 +445,7 @@ def st_wrapx_python_light_example(spark):
     x=-170.  Returns the wrapped WKB bytes.
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
     from shapely import to_wkb  # noqa: PLC0415
     from shapely.geometry import Point  # noqa: PLC0415
 
@@ -455,7 +455,7 @@ def st_wrapx_python_light_example(spark):
     ).first()["wrapped"]
 
 
-st_wrapx_python_light_example_output = """
+st_wrapx_python_example_output = """
 +--------+
 |wrapped |
 +--------+
@@ -465,7 +465,7 @@ st_wrapx_python_light_example_output = """
 """
 
 
-def st_split_python_light_example(spark):
+def st_split_python_example(spark):
     """Split a polygon by the 180° meridian; returns a GEOMETRYCOLLECTION (light pyvx tier).
 
     Creates a WKB polygon that straddles the antimeridian (x range 170 to 190)
@@ -473,7 +473,7 @@ def st_split_python_light_example(spark):
     GeometryCollection — one polygon on each side of the cut.  Returns the
     GeometryCollection WKB bytes.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
     from shapely import to_wkb  # noqa: PLC0415
     from shapely.geometry import LineString, Polygon  # noqa: PLC0415
 
@@ -488,7 +488,7 @@ def st_split_python_light_example(spark):
     ).first()["pieces"]
 
 
-st_split_python_light_example_output = """
+st_split_python_example_output = """
 +--------+
 |pieces  |
 +--------+
@@ -531,7 +531,7 @@ st_makevalid_python_example_output = """
 """
 
 
-def st_explainvalidity_python_light_example(spark):
+def st_explainvalidity_python_example(spark):
     """Diagnose SFS validity as JSON {valid, reason, code, location} (light pyvx tier).
 
     Creates a WKB bowtie self-intersecting polygon inline and calls
@@ -539,7 +539,7 @@ def st_explainvalidity_python_light_example(spark):
     the GEOS reason string, ``code=10`` (self-intersection), and
     ``POINT(0.5 0.5)`` as the location where the violation occurs.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
     from shapely import from_wkt, to_wkb  # noqa: PLC0415
 
     bowtie = from_wkt("POLYGON((0 0,1 1,1 0,0 1,0 0))")
@@ -547,7 +547,7 @@ def st_explainvalidity_python_light_example(spark):
     return df.select(vx.st_explainvalidity("geom").alias("detail")).first()["detail"]
 
 
-st_explainvalidity_python_light_example_output = """
+st_explainvalidity_python_example_output = """
 +----------------------------------------------------------------------+
 |detail                                                                |
 +----------------------------------------------------------------------+
@@ -565,7 +565,7 @@ st_explainvalidity_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def st_simplifypreservetopology_python_light_example(spark):
+def st_simplifypreservetopology_python_example(spark):
     """Simplify a polygon while preserving topology (light pyvx tier).
 
     Creates an inline near-collinear polygon and simplifies it with tolerance=1.0.
@@ -573,7 +573,7 @@ def st_simplifypreservetopology_python_light_example(spark):
     vertex without collapsing or splitting the polygon.  Returns the simplified
     WKB bytes.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
     from shapely import from_wkt, to_wkb  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
@@ -584,7 +584,7 @@ def st_simplifypreservetopology_python_light_example(spark):
     ).first()["simplified"]
 
 
-st_simplifypreservetopology_python_light_example_output = """
+st_simplifypreservetopology_python_example_output = """
 +----------+
 |simplified|
 +----------+
@@ -594,14 +594,14 @@ st_simplifypreservetopology_python_light_example_output = """
 """
 
 
-def st_removerepeatedpoints_python_light_example(spark):
+def st_removerepeatedpoints_python_example(spark):
     """Remove consecutive duplicate vertices from a linestring (light pyvx tier).
 
     Creates a WKB linestring with repeated consecutive vertices inline and removes
     the exact duplicates with the default tolerance=0.0.  Returns the deduplicated
     WKB bytes.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
     from shapely import from_wkt, to_wkb  # noqa: PLC0415
 
     geom = from_wkt("LINESTRING(0 0,0 0,1 1,1 1,2 2)")
@@ -611,7 +611,7 @@ def st_removerepeatedpoints_python_light_example(spark):
     ).first()["deduped"]
 
 
-st_removerepeatedpoints_python_light_example_output = """
+st_removerepeatedpoints_python_example_output = """
 +--------+
 |deduped |
 +--------+
@@ -621,14 +621,14 @@ st_removerepeatedpoints_python_light_example_output = """
 """
 
 
-def st_reduceprecision_python_light_example(spark):
+def st_reduceprecision_python_example(spark):
     """Snap coordinates to a precision grid (light pyvx tier).
 
     Creates a WKB POINT(1.234, 5.678) inline and snaps it to a grid of size 1.0.
     The coordinates are rounded to the nearest integer grid lines: x=1.234 -> 1.0,
     y=5.678 -> 6.0.  Returns the snapped WKB bytes.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
     from shapely import from_wkt, to_wkb  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
@@ -639,7 +639,7 @@ def st_reduceprecision_python_light_example(spark):
     ).first()["snapped"]
 
 
-st_reduceprecision_python_light_example_output = """
+st_reduceprecision_python_example_output = """
 +--------+
 |snapped |
 +--------+
@@ -649,14 +649,14 @@ st_reduceprecision_python_light_example_output = """
 """
 
 
-def st_node_python_light_example(spark):
+def st_node_python_example(spark):
     """Node linework: split at all self-intersections (light pyvx tier).
 
     Creates a self-intersecting figure-eight linestring inline and nodes it.
     The self-intersection at (5, 5) is resolved by splitting the linework, returning
     a MultiLineString with clean non-overlapping segments.  Returns the noded WKB bytes.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
     from shapely import from_wkt, to_wkb  # noqa: PLC0415
 
     geom = from_wkt("LINESTRING(0 0,10 10,0 10,10 0)")
@@ -664,7 +664,7 @@ def st_node_python_light_example(spark):
     return df.select(vx.st_node("geom").alias("noded")).first()["noded"]
 
 
-st_node_python_light_example_output = """
+st_node_python_example_output = """
 +--------+
 |noded   |
 +--------+
@@ -674,7 +674,7 @@ st_node_python_light_example_output = """
 """
 
 
-def st_snap_python_light_example(spark):
+def st_snap_python_example(spark):
     """Snap geometry vertices onto a reference within a tolerance (light pyvx tier).
 
     Creates a WKB linestring that misses a reference by 0.4 units and snaps it
@@ -682,7 +682,7 @@ def st_snap_python_light_example(spark):
     onto the reference (y=0), aligning the two geometries.  Returns the snapped
     WKB bytes.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
     from shapely import from_wkt, to_wkb  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
@@ -694,7 +694,7 @@ def st_snap_python_light_example(spark):
     ).first()["snapped"]
 
 
-st_snap_python_light_example_output = """
+st_snap_python_example_output = """
 +--------+
 |snapped |
 +--------+

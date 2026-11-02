@@ -38,50 +38,6 @@ VectorX registered. You can now use st_legacyaswkb in Python and gbx_st_legacyas
 """
 
 
-def _legacy_point_struct_schema():
-    """Schema for legacy point (InternalGeometry: typeId, srid, boundaries, holes)."""
-    from pyspark.sql.types import (
-        ArrayType,
-        DoubleType,
-        IntegerType,
-        StructField,
-        StructType,
-    )
-
-    return StructType(
-        [
-            StructField("typeId", IntegerType()),
-            StructField("srid", IntegerType()),
-            StructField("boundaries", ArrayType(ArrayType(ArrayType(DoubleType())))),
-            StructField(
-                "holes", ArrayType(ArrayType(ArrayType(ArrayType(DoubleType()))))
-            ),
-        ]
-    )
-
-
-def st_legacyaswkb_python_example(spark):
-    """Convert a legacy point geometry to WKB (single row). Requires vectorx_setup_example first."""
-    from pyspark.sql import Row
-    from pyspark.sql.types import StructField, StructType
-
-    # Point (30, 10): typeId=1 (POINT), srid=0, boundaries=[[[30.0, 10.0]]], holes=[]
-    legacy_schema = _legacy_point_struct_schema()
-    schema = StructType([StructField("geom_legacy", legacy_schema)])
-    row = Row(geom_legacy=(1, 0, [[[30.0, 10.0]]], []))
-    shapes = spark.createDataFrame([row], schema)
-    shapes.select(vx.st_legacyaswkb("geom_legacy").alias("wkb")).show()
-    return shapes.select(vx.st_legacyaswkb("geom_legacy").alias("wkb"))
-
-
-st_legacyaswkb_python_example_output = """
-+-----------+
-|wkb        |
-+-----------+
-|[BINARY]   |
-+-----------+
-"""
-
 # SQL example (after registering VectorX and creating a table with geom_legacy column)
 ST_LEGACYASWKB_SQL_EXAMPLE = """
 SELECT gbx_st_legacyaswkb(geom_legacy) AS wkb FROM legacy_table;
@@ -305,69 +261,6 @@ st_asmvt_pyramid_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def st_crs_python_heavy_example(spark):
-    """Return the canonical CRS string for a geometry's embedded SRID (heavy Python)."""
-    from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
-
-    df = spark.table("vector_geoms")
-    result = df.select(vx.st_crs(f.col("geom")).alias("crs")).first()
-    return result["crs"]
-
-
-st_crs_python_heavy_example_output = """
-+---------+
-|crs      |
-+---------+
-|EPSG:4326|
-+---------+
-"""
-
-
-def st_setcrs_python_heavy_example(spark):
-    """Stamp a CRS on a geometry without reprojecting (heavy Python)."""
-    from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
-
-    df = spark.table("vector_geoms")
-    result = df.select(
-        vx.st_setcrs(f.col("geom"), "EPSG:4326").alias("stamped")
-    ).first()
-    return result["stamped"]
-
-
-st_setcrs_python_heavy_example_output = """
-+---------+
-|stamped  |
-+---------+
-|[binary] |
-+---------+
-... (EWKB binary — coordinates preserved, SRID=4326 embedded)
-"""
-
-
-def st_transformcrs_python_heavy_example(spark):
-    """Reproject a geometry to a target CRS (heavy Python)."""
-    from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
-
-    df = spark.table("vector_geoms")
-    result = df.select(
-        vx.st_transformcrs(f.col("geom"), "EPSG:32633").alias("utm33n")
-    ).first()
-    return result["utm33n"]
-
-
-st_transformcrs_python_heavy_example_output = """
-+--------+
-|utm33n  |
-+--------+
-|[binary]|
-+--------+
-... (EWKB binary — POINT(13, 42) reprojected from EPSG:4326 to EPSG:32633)
-"""
-
-
 # ---------------------------------------------------------------------------
 # Legacy Mosaic conversion family — heavy (vectorx.jts.legacy) Python examples
 # Fixture: ``legacy_geoms`` view — 1 row: geom_legacy STRUCT (Mosaic InternalGeometry)
@@ -376,29 +269,3 @@ st_transformcrs_python_heavy_example_output = """
 # Import path (light): databricks.labs.gbx.pyvx.functions (same function, same output)
 # ---------------------------------------------------------------------------
 
-
-def st_legacyaswkb_python_heavy_example(spark):
-    """Convert a legacy Mosaic geometry struct to standard WKB (heavy vectorx tier).
-
-    Uses the ``legacy_geoms`` setup view — one row with a Mosaic InternalGeometry
-    struct encoding POINT(13, 42) — and returns the plain WKB bytes for that point.
-    The heavy tier imports from ``vectorx.jts.legacy``; the lightweight tier imports
-    from ``pyvx`` (same function name, same output bytes — a one-line tier swap).
-    """
-    from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as vx  # noqa: PLC0415
-
-    vx.register(spark)
-    df = spark.table("legacy_geoms")
-    result = df.select(vx.st_legacyaswkb(f.col("geom_legacy")).alias("wkb")).first()
-    return result["wkb"]
-
-
-st_legacyaswkb_python_heavy_example_output = """
-+--------+
-|wkb     |
-+--------+
-|[binary]|
-+--------+
-... (WKB binary)
-"""

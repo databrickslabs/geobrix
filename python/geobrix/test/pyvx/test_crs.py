@@ -20,6 +20,7 @@ from shapely.geometry import Point
 
 from databricks.labs.gbx.core.crs import in_target_domain
 from databricks.labs.gbx.pyvx import _crs
+from databricks.labs.gbx.vectorx import functions as vx
 
 shapely = pytest.importorskip("shapely")
 
@@ -837,15 +838,15 @@ def test_column_wrappers_accept_literal_crs_string(spark):
     df = spark.sql(f"SELECT unhex('{ewkb_hex}') AS geom")
 
     # st_crs
-    result_crs = df.select(pvx.st_crs("geom")).first()[0]
+    result_crs = df.select(vx.st_crs("geom")).first()[0]
     assert result_crs == "EPSG:4326"
 
     # st_setcrs — CRS string literal must be wrapped as f.lit, not a column name
-    result_set = bytes(df.select(pvx.st_setcrs("geom", "EPSG:32633")).first()[0])
+    result_set = bytes(df.select(vx.st_setcrs("geom", "EPSG:32633")).first()[0])
     assert get_srid(from_wkb(result_set)) == 32633
 
     # st_transformcrs — same
-    result_tr = bytes(df.select(pvx.st_transformcrs("geom", "EPSG:32633")).first()[0])
+    result_tr = bytes(df.select(vx.st_transformcrs("geom", "EPSG:32633")).first()[0])
     assert get_srid(from_wkb(result_tr)) == 32633
 
 

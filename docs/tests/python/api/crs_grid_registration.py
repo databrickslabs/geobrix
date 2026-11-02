@@ -64,6 +64,7 @@ def register_custom_grids_example(spark):
     """
     import databricks.labs.gbx as gbx  # noqa: PLC0415
     from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx_api  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     # Step 1 — Session start: register the Volume directory that holds your grids.
@@ -77,7 +78,7 @@ def register_custom_grids_example(spark):
     # st_transformcrs(geom, target_crs [, source_crs]) reprojects to target_crs.
     geom_df = spark.createDataFrame([(_INPUT_POINT,)], ["geom"])
     result = geom_df.select(
-        vx.st_transformcrs(f.col("geom"), _TARGET_CRS, _GRID_CRS).alias("shifted")
+        vx_api.st_transformcrs(f.col("geom"), _TARGET_CRS, _GRID_CRS).alias("shifted")
     ).first()
 
     return result["shifted"]

@@ -249,9 +249,74 @@ EXAMPLES = {
         "tcrs_epsg",
         "SELECT gbx_rst_transformcrs(c0, 'EPSG:3857') AS out FROM gbx_example",
     ),
+    "gbx_st_crs": (
+        "VECTOR_SCALAR",
+        "crs_ewkt",
+        "SELECT gbx_st_crs('SRID=4326;POINT(1 2)') AS out",
+    ),
+    "gbx_st_explainvalidity": (
+        "VECTOR_SCALAR",
+        "ev_bowtie",
+        "SELECT gbx_st_explainvalidity('POLYGON((0 0, 1 1, 1 0, 0 1, 0 0))') AS out",
+    ),
+    "gbx_st_legacyaswkb": (
+        "VECTOR_SCALAR",
+        "leg_polygon_hole",
+        "SELECT gbx_st_legacyaswkb(c0) AS out FROM gbx_example",
+    ),
     "gbx_st_makevalid": (
         "MVP_S",
         "mv_bowtie",
         "SELECT gbx_st_makevalid('POLYGON((0 0, 1 1, 1 0, 0 1, 0 0))') AS out",
+    ),
+    "gbx_st_node": (
+        "VECTOR_SCALAR",
+        "node_cross",
+        "SELECT gbx_st_node('LINESTRING(0 0, 10 10, 0 10, 10 0)') AS out",
+    ),
+    "gbx_st_reduceprecision": (
+        "VECTOR_SCALAR",
+        "rp_point",
+        "SELECT gbx_st_reduceprecision('POINT(1.234 5.678)', 1.0D) AS out",
+    ),
+    "gbx_st_removerepeatedpoints": (
+        "VECTOR_SCALAR",
+        "rrp_dupes",
+        "SELECT gbx_st_removerepeatedpoints('LINESTRING(0 0, 0 0, 1 1, 1 1, 2 2)') AS out",
+    ),
+    "gbx_st_setcrs": (
+        "VECTOR_SCALAR",
+        "setcrs_epsg",
+        "SELECT gbx_st_setcrs('POINT(1 2)', 'EPSG:32633') AS out",
+    ),
+    "gbx_st_shiftlongitude": (
+        "VECTOR_SCALAR",
+        "shl_polygon",
+        "SELECT gbx_st_shiftlongitude('POLYGON((-170 -10, -150 -10, -150 10, -170 10, -170 -10))') AS out",
+    ),
+    "gbx_st_simplifypreservetopology": (
+        "VECTOR_SCALAR",
+        "spt_bump",
+        "SELECT gbx_st_simplifypreservetopology('POLYGON((0 0, 0 5, 0.001 8, 0 10, 10 10, 10 0, 0 0))', 1.0D) AS out",
+    ),
+    "gbx_st_snap": (
+        "VECTOR_SCALAR",
+        "snap_close",
+        "SELECT gbx_st_snap('LINESTRING(0 0.4, 10 0.4)', 'LINESTRING(0 0, 10 0)', 0.5D) AS out",
+    ),
+    "gbx_st_split": (
+        "VECTOR_SCALAR",
+        "split_dateline",
+        "SELECT gbx_st_split('POLYGON((170 -10, 190 -10, 190 10, 170 10, 170 -10))', 'LINESTRING(180 -90, 180 90)') AS out",
+    ),
+    "gbx_st_transformcrs": (
+        "VECTOR_SCALAR",
+        "tcrs_utm",
+        "SELECT gbx_st_transformcrs('SRID=4326;POINT(15 50)', 'EPSG:32633') AS out",
+    ),
+    "gbx_st_wrapx": (
+        "VECTOR_SCALAR",
+        "wrapx_east",
+        "SELECT gbx_st_wrapx('POINT(190 10)', 180.0D, -360.0D) AS out",
     ),
 }

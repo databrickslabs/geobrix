@@ -988,8 +988,9 @@ Decoded-output parity holds across both tiers (enforced by the cross-tier parity
 
 The validity-checking and geometry-cleaning functions — `st_removeRepeatedPoints`, `st_snap`,
 `st_makeValid`, `st_node`, `st_simplifyPreserveTopology`, `st_reducePrecision`, `st_explainValidity`,
-`st_transformCrs`, `st_shiftLongitude`, `st_wrapX`, `st_split`, `st_setCrs`, and `st_crs` — are
-lightweight-tier scalar operations with no heavyweight equivalent. The benchmark measures **per-geometry latency** on a
+`st_shiftLongitude`, `st_wrapX`, and `st_split` — are
+lightweight-tier scalar operations with no heavyweight equivalent. `st_transformCrs`, `st_setCrs`, and `st_crs`
+have heavyweight companions too, but the figures below time only the lightweight tier. The benchmark measures **per-geometry latency** on a
 distributed job (1,000 geometries per function) and reports **absolute throughput** (geometries/sec)
 rather than a heavy-vs-light ratio. All are pure-Python using `shapely` for geometry validation,
 transformation, and cleaning.

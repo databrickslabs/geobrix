@@ -42,20 +42,6 @@ def test_st_legacyaswkb_sql_example_constant():
     assert hasattr(vectorx_functions, "ST_LEGACYASWKB_SQL_EXAMPLE_output")
 
 
-def test_st_legacyaswkb_python_example_callable(spark):
-    """st_legacyaswkb_python_example is defined and callable."""
-    assert callable(vectorx_functions.st_legacyaswkb_python_example)
-
-
-def test_st_legacyaswkb_python_example_executes(spark):
-    """st_legacyaswkb_python_example runs and returns one row with wkb column."""
-    result = vectorx_functions.st_legacyaswkb_python_example(spark)
-    rows = result.collect()
-    assert len(rows) == 1
-    assert "wkb" in result.columns
-    assert rows[0]["wkb"] is not None
-
-
 # ---------------------------------------------------------------------------
 # T4: TIN family heavy-tier tests
 # Fixture: ``tin_survey`` view — 1 row: pts ARRAY<BINARY> (4 POINT Z), bl empty.
@@ -137,38 +123,6 @@ def test_st_asmvt_pyramid_python_heavy_example(vectorx_heavy_setup):
 # ---------------------------------------------------------------------------
 
 
-def test_st_crs_python_heavy_example(vectorx_heavy_setup):
-    """st_crs returns 'EPSG:4326' for the SRID=4326 EWKT fixture."""
-    spark = vectorx_heavy_setup
-    result = vectorx_functions.st_crs_python_heavy_example(spark)
-    assert result == "EPSG:4326", f"Expected EPSG:4326, got {result!r}"
-
-
-def test_st_setcrs_python_heavy_example(vectorx_heavy_setup):
-    """st_setcrs returns non-null EWKB bytes with SRID=4326 stamped."""
-    spark = vectorx_heavy_setup
-    result = vectorx_functions.st_setcrs_python_heavy_example(spark)
-    assert result is not None, "st_setcrs should not return None"
-    assert isinstance(
-        result, (bytes, bytearray)
-    ), f"Expected bytes (EWKB), got {type(result)}"
-    assert len(result) > 0, "EWKB bytes should be non-empty"
-
-
-def test_st_transformcrs_python_heavy_example(vectorx_heavy_setup):
-    """st_transformcrs returns non-null EWKB bytes for in-domain POINT(13,42) -> EPSG:32633."""
-    spark = vectorx_heavy_setup
-    result = vectorx_functions.st_transformcrs_python_heavy_example(spark)
-    # POINT(13, 42) is inside UTM zone 33N's area of use — must be non-null.
-    assert (
-        result is not None
-    ), "st_transformcrs with in-domain coords should not return None"
-    assert isinstance(
-        result, (bytes, bytearray)
-    ), f"Expected bytes (EWKB), got {type(result)}"
-    assert len(result) > 0, "EWKB bytes should be non-empty"
-
-
 # ---------------------------------------------------------------------------
 # T5: Legacy Mosaic conversion heavy-tier tests
 # Fixture: ``legacy_geoms`` view — 1 row: geom_legacy STRUCT (POINT(13, 42)).
@@ -176,20 +130,3 @@ def test_st_transformcrs_python_heavy_example(vectorx_heavy_setup):
 # The example function registers vectorx.jts.legacy internally (idempotent).
 # ---------------------------------------------------------------------------
 
-
-def test_st_legacyaswkb_python_heavy_example(vectorx_heavy_setup):
-    """st_legacyaswkb returns non-null WKB bytes for the legacy POINT(13, 42) fixture."""
-    spark = vectorx_heavy_setup
-    result = vectorx_functions.st_legacyaswkb_python_heavy_example(spark)
-    assert result is not None, "st_legacyaswkb should return non-null WKB bytes"
-    assert isinstance(
-        result, (bytes, bytearray)
-    ), f"Expected bytes (WKB binary), got {type(result)}"
-    assert len(result) > 0, "WKB bytes should be non-empty"
-    # Round-trip: parse the WKB and verify the geometry type is a POINT.
-    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
-
-    geom = wkb_loads(bytes(result))
-    assert (
-        geom.geom_type == "Point"
-    ), f"Expected Point geometry type, got {geom.geom_type}"

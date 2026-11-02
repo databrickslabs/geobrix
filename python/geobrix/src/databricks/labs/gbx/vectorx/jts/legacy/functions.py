@@ -46,18 +46,3 @@ def register(spark: SparkSession = None) -> None:
     spark.read.format("register_ds").option(
         "functions", "vectorx.jts.legacy"
     ).load().collect()
-
-
-def st_legacyaswkb(geom: ColLike) -> Column:
-    """Return the legacy vector geometry as Well-Known Binary.
-
-    Converts the internal legacy geometry format (e.g. from Mosaic) to WKB
-    for use with GeoBrix or other tools that expect WKB.
-
-    Args:
-        geom: Legacy geometry column (internal format).
-
-    Returns:
-        Column of WKB (binary).
-    """
-    return f.call_function("gbx_st_legacyaswkb", _col(geom))

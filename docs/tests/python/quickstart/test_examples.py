@@ -199,9 +199,10 @@ def test_use_vectorx_returns_one_row_with_wkb(spark):
     from pyspark.sql import Row
     from pyspark.sql.types import ArrayType, DoubleType, IntegerType, StructField, StructType
 
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
+    from databricks.labs.gbx.vectorx import functions as vx
+    from databricks.labs.gbx.vectorx.jts.legacy import functions as legacy
 
-    vx.register(spark)
+    legacy.register(spark)
     legacy_schema = StructType([
         StructField("typeId", IntegerType()),
         StructField("srid", IntegerType()),

@@ -30,7 +30,7 @@ from pyspark.sql.types import (
     StructType,
 )
 
-from databricks.labs.gbx import _register
+from databricks.labs.gbx import _gdal_policy, _register
 from databricks.labs.gbx._gdal_policy import (
     carrying_udf,
     data_path,
@@ -10526,3 +10526,8 @@ _sql_aggregators = {
 }
 
 SQL_REGISTRY = {**_sql_accessors, **_sql_tile_ops, **_sql_aggregators}
+
+# A Column-API call on a module-level UDF / UDTF builds its column on the driver, where the session's read cap is known
+# (a standard-access worker cannot work it out itself): each call carries the cap to the workers, as a registration does.
+# Last, so the registries above hold the plain objects, which a registrar carries through ``carrying_session``.
+_gdal_policy.carry_read_cap_in_column_api(globals())

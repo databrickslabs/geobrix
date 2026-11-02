@@ -1784,3 +1784,181 @@ def test_a_failing_data_source_registration_is_a_reported_line_not_a_failure(
         for p in printed
     ), printed
     assert out and set(out) <= _api._done(stub), "the names are still marked registered"
+
+
+# --- the read cap is decided on the driver and carried to the workers -----------------------------------------
+# A Spark Connect session is Serverless OR standard access mode. A standard worker can read neither SPARK_WORKER_MEMORY
+# nor a cgroup limit, so its own budget is Serverless's 64 MiB: the driver decides, whenever the compute is not Serverless.
+_MIB = 1024 * 1024
+
+
+@pytest.mark.parametrize(
+    "env,want",
+    [
+        ({"SPARK_WORKER_MEMORY": "4g"}, 1536 * _MIB),
+        (
+            {"SPARK_WORKER_MEMORY": "4g", "DATABRICKS_RUNTIME_VERSION": "17.3"},
+            1536 * _MIB,
+        ),
+        ({"DATABRICKS_RUNTIME_VERSION": "client.4.1"}, None),
+        (
+            {"SPARK_WORKER_MEMORY": "4g", "DATABRICKS_RUNTIME_VERSION": "client.4.1"},
+            None,
+        ),
+        ({"SPARK_WORKER_MEMORY": "4g", "IS_SERVERLESS": "true"}, None),
+        ({}, None),
+    ],
+    ids=[
+        "standard",
+        "standard-dbr",
+        "serverless",
+        "serverless-with-memory",
+        "is-serverless",
+        "no-driver-signal",
+    ],
+)
+def test_a_connect_session_carries_the_classic_cap_unless_the_compute_is_serverless(
+    monkeypatch, env, want
+):
+    from databricks.labs.gbx.ds.file_gbx import session_read_cap
+
+    for k in (
+        "SPARK_WORKER_MEMORY",
+        "SPARK_EXECUTOR_MEMORY",
+        "IS_SERVERLESS",
+        "DATABRICKS_RUNTIME_VERSION",
+    ):
+        monkeypatch.delenv(k, raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    assert session_read_cap(ConnectStub()) == want
+    assert ConnectStub().touched == []  # nothing is read from the Connect session
+
+
+def test_carrying_udf_carries_the_cap_beside_the_switch():
+    from pyspark.sql import functions as F
+    from pyspark.sql.types import LongType
+
+    from databricks.labs.gbx import _gdal_policy
+
+    probe = F.udf(lambda x: _gdal_policy.carried_read_cap(), LongType())
+    assert _gdal_policy.carrying_udf(probe, True, cap=123).func(None) == 123
+
+
+def test_every_pyrx_column_api_udf_carries_the_cap_at_the_call():
+    """The structural invariant of the Column API: no module-level light UDF or UDTF is called bare (a bare call reaches
+    a worker with no cap, and a standard-access worker then reads at Serverless's 64 MiB).
+    """
+    from databricks.labs.gbx import _gdal_policy
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    bare = sorted(
+        n
+        for n, v in vars(prx).items()
+        if _gdal_policy.is_light_udf(v)
+        and not isinstance(v, _gdal_policy.CapCarryingCall)
+    )
+    assert bare == []
+
+
+def test_the_column_api_reads_at_the_sessions_read_cap(spark, tmp_path):
+    """A Column-API call carries the session's cap from the driver, as a registered function does: the same tile is
+    refused under a lowered cap and read without it."""
+    from pyspark.sql.types import StructField, StructType
+
+    from databricks.labs.gbx.bench import oracles
+    from databricks.labs.gbx.ds.file_gbx import READ_CAP_KEY
+    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+    tile = oracles._build("tile_4326", str(tmp_path))  # 12 KiB decoded
+    df = spark.createDataFrame(
+        [(tile,)], StructType([StructField("tile", V2_TILE_SCHEMA)])
+    )
+    assert df.select(prx.rst_avg("tile")).first()[0] is not None
+    spark.conf.set(READ_CAP_KEY, "4096")
+    try:
+        assert df.select(prx.rst_avg("tile")).first()[0] is None
+    finally:
+        spark.conf.unset(READ_CAP_KEY)
+
+
+def test_a_worker_with_no_memory_signal_reads_a_tile_at_the_classic_cap(spark):
+    """End to end: the host's Python workers have no SPARK_*_MEMORY (a standard-access worker's position), so their own
+    budget is 64 MiB. The session is classic, so the driver carries 1536 MiB, and a 67 MB tile is read through the
+    Column API and through a registered function."""
+    import numpy as np
+    from pyspark.sql.types import StructField, StructType
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx import register
+    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+    side = 4200  # float32: 70.56 MB decoded, over Serverless's 64 MiB, a few KB encoded
+    profile = dict(
+        driver="GTiff",
+        width=side,
+        height=side,
+        count=1,
+        dtype="float32",
+        compress="zstd",
+        transform=from_origin(0, side, 1, 1),
+        crs="EPSG:3857",
+        tiled=True,
+        blockxsize=256,
+        blockysize=256,
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as ds:
+            ds.write(np.full((1, side, side), 2.0, dtype="float32"))
+        raw = mf.read()
+    tile = {
+        "cellid": 0,
+        "raster": raw,
+        "path": None,
+        "path_mode": None,
+        "window": None,
+        "clip_polygon": None,
+        "clip_crs": None,
+        "crs": None,
+        "metadata": {},
+    }
+    df = spark.createDataFrame(
+        [(tile,)], StructType([StructField("tile", V2_TILE_SCHEMA)])
+    )
+    assert df.select(prx.rst_avg("tile")).first()[0] == [2.0]
+    register(spark, only=["gbx_rst_avg"])
+    df.createOrReplaceTempView("_gbx_big")
+    assert spark.sql("SELECT gbx_rst_avg(tile) FROM _gbx_big").first()[0] == [2.0]
+
+
+def test_the_grouped_executor_reads_at_the_sessions_read_cap(spark, tmp_path):
+    """`grouped_tile_map` (mapInPandas) carries the driver's cap with its closure."""
+    from pyspark.sql.types import LongType, StructField, StructType
+
+    from databricks.labs.gbx.bench import oracles
+    from databricks.labs.gbx.ds.file_gbx import READ_CAP_KEY
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+    from databricks.labs.gbx.pyrx.grouped_exec import grouped_tile_map
+
+    tile = oracles._build("tile_4326", str(tmp_path))  # 12 KiB decoded
+    df = spark.createDataFrame(
+        [(tile,)], StructType([StructField("tile", V2_TILE_SCHEMA)])
+    )
+
+    def width():
+        out = grouped_tile_map(
+            df,
+            lambda ds, cellid: int(ds.width),
+            return_field=StructField("w", LongType()),
+        )
+        return out.select("w").first()[0]
+
+    assert width() == 64
+    spark.conf.set(READ_CAP_KEY, "4096")
+    try:
+        assert width() is None
+    finally:
+        spark.conf.unset(READ_CAP_KEY)

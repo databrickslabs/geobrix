@@ -451,4 +451,11 @@ def grouped_tile_map(
         finally:
             lru.close_all()
 
-    return df.mapInPandas(_map, schema=out_schema)
+    # the driver's read cap goes to the workers with the closure (a standard-access worker cannot work it out itself)
+    from databricks.labs.gbx._gdal_policy import carrying
+    from databricks.labs.gbx.ds.file_gbx import session_read_cap
+
+    _cap = session_read_cap(_driver_spark)
+    return df.mapInPandas(
+        _map if _cap is None else carrying(_map, None, _cap), schema=out_schema
+    )

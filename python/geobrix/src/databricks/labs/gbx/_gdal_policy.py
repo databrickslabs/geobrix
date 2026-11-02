@@ -277,6 +277,8 @@ def carrying(f, allowed: bool, cap: Optional[int] = None):
     """What a registration takes, for ``f`` with the driver's switch (and read cap, when given) carried into every
     worker call: a UDF object (``spark.udf.register``), a UDTF (``spark.udtf.register``) or a plain function.
     """
+    if isinstance(f, CapCarryingCall):  # a Column-API wrapper: the function it wraps
+        f = f._f
     func = getattr(f, "func", None)
     if isinstance(
         func, type
@@ -299,11 +301,83 @@ def carrying(f, allowed: bool, cap: Optional[int] = None):
     return f
 
 
-def carrying_udf(f, allowed: bool):
-    """A scalar Python UDF ``f`` (``F.udf``) remade with the switch carried, for a column a binding builds."""
+def carrying_udf(f, allowed: Optional[bool], cap: Optional[int] = None):
+    """A scalar Python UDF ``f`` (``F.udf``) remade with the switch (and the read cap) carried, for a column a binding
+    builds. ``cap`` is the session's read cap now (``ds.file_gbx.session_read_cap``) unless given.
+    """
     from pyspark.sql import functions as F
 
-    return F.udf(_carrying_function(f.func, allowed), f.returnType)
+    if cap is None:
+        cap = _session_read_cap_now()
+    return F.udf(_carrying_function(f.func, allowed, cap), f.returnType)
+
+
+def _session_read_cap_now() -> Optional[int]:
+    """The read cap of the session a Column-API call is built on (None: carry none)."""
+    from databricks.labs.gbx.ds.file_gbx import (
+        _resolve_session_for_cap,
+        session_read_cap,
+    )
+
+    return session_read_cap(_resolve_session_for_cap())
+
+
+def is_light_udf(obj) -> bool:
+    """True for a ``udf`` / ``pandas_udf`` / ``udtf`` object (what a registrar hands Spark and a Column call applies)."""
+    func = getattr(obj, "func", None)
+    return func is not None and (isinstance(func, type) or hasattr(obj, "evalType"))
+
+
+class CapCarryingCall:
+    """A module-level light UDF / UDTF as the Column API calls it: each CALL (on the driver, where the session is)
+    remakes the function with the session's read cap carried, as a registration does. Every other use (a
+    registrar's ``carrying``, attribute reads) sees the function as it is."""
+
+    def __init__(self, f):
+        self._f = f
+
+    def __call__(self, *cols):
+        cap = _session_read_cap_now()
+        return (self._f if cap is None else _with_cap(self._f, cap))(*cols)
+
+    def __getattr__(self, name):
+        return getattr(self._f, name)
+
+
+def _with_cap(f, cap: int):
+    """``f`` (a UDF, a pandas UDF or a UDTF) remade with ``cap`` carried; its kind, return type and determinism stay."""
+    if isinstance(
+        f.func, type
+    ):  # a UDTF: the same function over a carrying handler class
+        return carrying(f, None, cap)
+    from pyspark.sql import functions as F
+
+    func = _carrying_function(f.func, None, cap)
+    if f.evalType in (
+        100,
+        101,
+    ):  # PythonEvalType.SQL_BATCHED_UDF / SQL_ARROW_BATCHED_UDF
+        out = F.udf(func, f.returnType, useArrow=f.evalType == 101)
+    else:  # a pandas UDF of the same kind (scalar, grouped aggregate, ...)
+        out = F.pandas_udf(func, f.returnType, f.evalType)
+    return out if getattr(f, "deterministic", True) else out.asNondeterministic()
+
+
+def carry_read_cap_in_column_api(namespace: dict) -> None:
+    """Make every UDF / UDTF object bound in ``namespace`` (a module's ``globals()``) carry the session's read cap when
+    the Column API calls it. The module's registries (dicts holding the same objects) hold the wrappers too, so one name
+    is one object; a registration unwraps them (``carrying``) and carries the cap through ``carrying_session``.
+    """
+    swapped = {}
+    for name, obj in list(namespace.items()):
+        if is_light_udf(obj) and not isinstance(obj, CapCarryingCall):
+            swapped.setdefault(id(obj), CapCarryingCall(obj))
+            namespace[name] = swapped[id(obj)]
+    for value in list(namespace.values()):
+        if isinstance(value, dict):
+            for key, item in list(value.items()):
+                if id(item) in swapped:
+                    value[key] = swapped[id(item)]
 
 
 def carrying_source(cls, allowed: bool):

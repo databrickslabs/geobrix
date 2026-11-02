@@ -363,17 +363,16 @@ def merge_function_info(existing: dict, entries: Dict[str, dict]) -> dict:
 def render_availability(man) -> Tuple[str, str]:
     yes = "✓"
     rows = [
-        "| Function | SQL (session) | SQL (Unity Catalog) | Python | Scala | Levels |",
-        "|---|---|---|---|---|---|",
+        "| Function | SQL (session) | SQL (Unity Catalog) | Python | Scala |",
+        "|---|---|---|---|---|",
     ]
     for f in sorted(man.functions.values(), key=lambda f: f.sql_name):
         if f.status != "stable":
             continue
-        levels = " ".join(lv for lv in ("L1", "L2", "L3", "L4") if lv in f.levels)
-        py = f"`{f.python.module}.{f.python.name}`" if f.python else ""
+        py = f"`{f.python.module}.functions.{f.python.name}`" if f.python else ""
         uc = yes if "uc" in f.surfaces else ""
         sc = yes if "scala" in f.surfaces else ""
-        rows.append(f"| `{f.sql_name}` | {yes} | {uc} | {py} | {sc} | {levels} |")
+        rows.append(f"| `{f.sql_name}` | {yes} | {uc} | {py} | {sc} |")
     ds = ["| Format | Read | Write | Implementation | Page |", "|---|---|---|---|---|"]
     for d in sorted(man.datasources, key=lambda d: d.name):
         if d.status == "stable":

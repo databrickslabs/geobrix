@@ -988,11 +988,6 @@ Convert easting/northing coordinates to a BNG cell reference.
 Powered by the **pure-Python port of `BNG.scala`** (numpy-vectorized encoder). Eastings/northings must be **EPSG:27700** (e.g. `530000, 180000` for London). Bit-identical cell IDs to the heavyweight tier.
 :::
 
-**Parameters:**
-- `easting` - Easting coordinate value
-- `northing` - Northing coordinate value
-- `resolution` - BNG resolution: integer index (1–6 or negative for quadrant) or string (e.g. '1km', '100m'). See resolutionMap in BNG.
-
 **Returns:**
 - String BNG cell reference, or NULL when the easting or northing is NaN or infinite (no cell exists for it)
 
@@ -1226,11 +1221,6 @@ Tessellate a geometry into BNG cells with their geometries.
 :::note Lightweight tier (pygx)
 Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfill plus a per-cell core/border split, returning one `STRUCT<cellid, core, chip>` per cell (chip geometry as WKB in EPSG:27700, no SRID). Border chips are filtered to the input geometry's dimension, matching the heavyweight tier: a Polygon can yield MultiPolygon chips (and the reverse), a clip that is a mixed collection keeps its polygonal part, and the boundary-only points and lines of a grid-aligned input are dropped.
 :::
-
-**Parameters:**
-- `geometry` - Input geometry to tessellate
-- `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. '1km', '100m')
-- `keep_core_geom` - Optional (default `false`). When `true`, a core cell's `chip` is the cell geometry; when `false` it is NULL. Border cells always carry their clipped geometry
 
 **Returns:**
 - `ARRAY<STRUCT<cellid STRING, core BOOLEAN, chip BINARY>>`, one struct per cell (chip as WKB in EPSG:27700)
@@ -1525,11 +1515,6 @@ Explode tessellated cells into separate rows.
 :::note Lightweight tier (pygx)
 Powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming UDTF — one output row per tessellated cell, each carrying the cell ID and chip geometry (WKB in EPSG:27700, no SRID).
 :::
-
-**Parameters:**
-- `geometry` - Input geometry to tessellate
-- `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. '1km', '100m')
-- `keep_core_geom` - Optional (default `false`), in both tiers. When `true`, a core cell's `chip` is the cell geometry; when `false` it is NULL. Border cells always carry their clipped geometry
 
 **Returns:**
 - One row per cell with the columns `cellid` (STRING), `core` (BOOLEAN) and `chip` (BINARY, WKB in EPSG:27700), in both tiers and for WKB or WKT input

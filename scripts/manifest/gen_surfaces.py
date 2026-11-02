@@ -36,6 +36,8 @@ SURFACE_KEYS = (
 _MACHINE_PATH = re.compile(r"/(Users|home|root)/[A-Za-z0-9_.-]+")
 _TIER_LINE = re.compile(r"^<Tier [^>]*/>( *<Impl [^>]*/>)?\n", re.M)
 _SIGNATURE = re.compile(r"^\*\*Signature:\*\*(.*?)(?:\n\n|\Z)", re.M | re.S)
+# A hand-written parameter list beside the generated table: the table is the one source, so it goes.
+_PARAMETERS = re.compile(r"^\*\*Parameters:\*\*[^\n]*\n(?:[^\n]+\n)*\n?", re.M)
 
 
 def read(path: Path) -> str:
@@ -59,6 +61,11 @@ def _first_section(text: str, start: int) -> int:
         i for i in (text.find("\n### ", start), text.find("\n## ", start)) if i >= 0
     ]
     return min(ends) if ends else len(text)
+
+
+def _strip_parameters(section: str) -> str:
+    """``section`` without its hand-written ``**Parameters:**`` paragraph (a line, or a line and its bullets)."""
+    return _PARAMETERS.sub("", section)
 
 
 def _docs_section(section: str, region: str) -> str:
@@ -88,6 +95,9 @@ def _docs_page(path: Path, fns, text: str) -> str:
         block = S.render_doc_block(fn)
         if begin in text:
             text = S.replace_region(text, begin, end, block)
+            at = text.index(end) + len(end)
+            stop = _first_section(text, at)
+            text = text[:at] + _strip_parameters(text[at:stop]) + text[stop:]
             continue
         name = fn.python.name if fn.python else fn.sql_name[len("gbx_") :]
         heading = f"### {name}\n"
@@ -98,7 +108,9 @@ def _docs_page(path: Path, fns, text: str) -> str:
             )
         start = at + len(heading)
         stop = _first_section(text, start)
-        section = _docs_section(text[start:stop], f"{begin}\n{block}{end}\n")
+        section = _docs_section(
+            _strip_parameters(text[start:stop]), f"{begin}\n{block}{end}\n"
+        )
         text = text[:start] + section + text[stop:]
     return text
 

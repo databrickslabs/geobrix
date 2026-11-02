@@ -847,17 +847,18 @@ The lightweight implementation is backed by `pygx._bng` cell math and `rasterio`
 Pixels not covered by any geometry in the group are set to **`-9999.0`** (band-registered NoData). Filter or mask downstream via `gbx_rst_getnodata` or `IS NULL` on the extracted band value.
 :::
 
-:::warning Lightweight SQL returns BINARY (not the tile struct)
-Heavyweight `gbx_rst_bng_rasterize_agg` returns a tile **`STRUCT<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata>`** (the v2 8-field tile); the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_bng_rasterize_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
+:::warning `gbx_rst_bng_rasterize_agg` returns BINARY
+On every surface the aggregate returns the raster as `BINARY` (the GeoTIFF bytes), not a tile. A grouped aggregate cannot return the tile struct. Wrap the result with `gbx_rst_fromcontent` to get a tile back:
 
 ```sql
--- Lightweight SQL: rebuild the (cellid, raster) the heavyweight struct would carry
 SELECT
   cell_id AS cellid,
   gbx_rst_fromcontent(gbx_rst_bng_rasterize_agg(cellid, burn_value), 'GTiff') AS tile
 FROM bng_cell_values
 GROUP BY cell_id
 ```
+
+The Python call `rx.rst_bng_rasterize_agg(...)` returns the same `BINARY` column. Pass it to `rx.rst_fromcontent(col, "GTiff")` for a tile.
 :::
 
 Streaming aggregator that burns BNG cell geometry/value pairs (one row per cell) into a single rasterized tile per group. The output tile is always in EPSG:27700 (British National Grid). BNG cell IDs are **STRING**. The inverse of `rst_bng_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, this one synthesizes a raster from per-cell values.
@@ -865,8 +866,6 @@ Streaming aggregator that burns BNG cell geometry/value pairs (one row per cell)
 :::note Optional trailing `out_crs` parameter (refused when non-NULL, on both tiers)
 Both tiers accept an optional trailing `out_crs` (string CRS) argument so the signature matches on each, but a non-NULL value is refused with a parameter error on either tier. The output is always EPSG:27700: pass `NULL` for `out_crs`, and reproject the tile with `rst_transformcrs` when another CRS is wanted. `out_srid` is not read on either tier (it exists for signature parity with the H3/quadbin aggregators).
 :::
-
-**Parameters:** `cellid` — BNG cell ID (STRING); `value` — numeric burn value; `out_srid` — EPSG code for the output CRS (typically `27700`); `pixel_size` — output raster cell size in metres (usually `1.0` for 1km BNG cells); `xmin/ymin/xmax/ymax` — output extent in EPSG:27700 metres; `width/height` — output raster dimensions in pixels; `mode` — aggregation mode for overlapping values (typically `"last"`); `kring_pad` — cell neighbourhood expansion (typically `0`); `out_crs` — must be `NULL`: both tiers refuse a non-NULL value (reproject the tile with `rst_transformcrs` instead)
 
 _Multi-row fixture: 3 BNG 1km STRING cell rows near central London (EPSG:27700) with burn values 1.0/2.0/3.0. All tabs use the same grouped-agg rasterize invocation._
 
@@ -1164,17 +1163,18 @@ _Multi-row fixture: 3 H3 resolution-9 cell rows with burn values 1.0/2.0/3.0. Al
 Powered by **rasterio** (`rasterio.merge`). Aggregate — `groupBy(...).agg(rx.rst_merge_agg("tile"))` merges the group's tiles into one mosaic tile (output spans the union extent). A tile in a different CRS is reprojected onto the pixel size and the pixel grid of a tile in the reference CRS, so a mosaic built in memory and one streamed from disk (when it is too large for memory) place the tiles on the same pixels. The reprojected tile can grow by up to a pixel on each side to stay on that grid. A tile reprojected from another CRS that declares no NoData (or has its own mask band) is written with the footprint of the warp as its mask, so the mosaic then has a mask band and a pixel no tile reaches is invalid in it; a gap between tiles that are all in the reference CRS and declare no NoData is still filled with zeros. The heavyweight `gbx_rst_merge_agg` does not merge tiles in different CRSs: it returns one tile (the one that sorts first) and leaves the others out.
 :::
 
-:::warning Lightweight SQL returns BINARY (not the tile struct)
-Heavyweight `gbx_rst_merge_agg` returns a tile **`STRUCT<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata>`** (the v2 8-field tile); the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_merge_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
+:::warning `gbx_rst_merge_agg` returns BINARY
+On every surface the aggregate returns the raster as `BINARY` (the GeoTIFF bytes), not a tile. A grouped aggregate cannot return the tile struct. Wrap the result with `gbx_rst_fromcontent` to get a tile back:
 
 ```sql
--- Lightweight SQL: rebuild the (cellid, raster) the heavyweight struct would carry
 SELECT
   group_key AS cellid,
   gbx_rst_fromcontent(gbx_rst_merge_agg(tile), 'GTiff') AS tile
 FROM tiles
 GROUP BY group_key
 ```
+
+The Python call `rx.rst_merge_agg(...)` returns the same `BINARY` column. Pass it to `rx.rst_fromcontent(col, "GTiff")` for a tile.
 :::
 
 Merge tiles per group.

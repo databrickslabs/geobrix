@@ -804,7 +804,8 @@ _RASTER_SUFFIXES = (
 
 def _names_a_vrt(local) -> bool:
     """Whether the file at ``local`` is a VRT: by its name, or because it starts with the VRT root element (after
-    optional whitespace and an XML declaration). A file named for a known raster format is not opened to look."""
+    optional whitespace and an XML declaration). A file named for a known raster format is not opened to look.
+    """
     name = str(local).lower()
     if name.endswith(".vrt"):
         return True
@@ -835,7 +836,9 @@ def _fromfile_render_vrt(path, local, drv, cap_bytes):
 
     from databricks.labs.gbx.ds.file_gbx import materialize_decision
 
-    if "://" in str(local):  # an object-store or http URL: GDAL cannot resolve a VRT's relative sources there
+    if "://" in str(
+        local
+    ):  # an object-store or http URL: GDAL cannot resolve a VRT's relative sources there
         return _serde.build_error_tile(
             f"rst_fromfile materialize=True unsuccessful: the VRT {path} is not on local or FUSE-mounted "
             "storage, and a VRT must be on local or FUSE-mounted storage to render. Fix: use a virtual tile "

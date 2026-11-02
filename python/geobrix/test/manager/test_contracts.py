@@ -2121,7 +2121,9 @@ def test_with_cap_rebuilds_through_the_connect_class_on_a_remote_session(monkeyp
     from databricks.labs.gbx import _gdal_policy
 
     class ConnectUDF:
-        def __init__(self, func, returnType, name=None, evalType=None, deterministic=True):
+        def __init__(
+            self, func, returnType, name=None, evalType=None, deterministic=True
+        ):
             self.func, self.returnType, self.evalType = func, returnType, evalType
 
         def _wrapped(self):

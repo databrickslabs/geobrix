@@ -109,7 +109,9 @@ def test_a_vrt_naming_a_remote_source_is_an_error_tile_with_the_policy_reason(tm
     # a VRT that is itself on a URL cannot be rendered: its reason, not a silent NULL
     url = "s3://bucket/r.vrt"
     msg = _error_of(prx._fromfile_render_vrt(url, url, "GTiff", None))
-    assert "local or FUSE-mounted" in msg and "virtual tile" in msg and "Fix:" in msg, msg
+    assert (
+        "local or FUSE-mounted" in msg and "virtual tile" in msg and "Fix:" in msg
+    ), msg
 
 
 def test_a_virtual_vrt_is_unchanged(tmp_path):

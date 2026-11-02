@@ -1032,7 +1032,8 @@ class TestMergeAggVirtualizeDir:
         self, spark, materialize
     ):
         """`materialize=True` (no directory) is the merged tile struct with its raster bytes and no path;
-        `materialize=False` is the unforced path, the same BINARY as no keyword. Both span the 4x2 union extent."""
+        `materialize=False` is the unforced path, the same BINARY as no keyword. Both span the 4x2 union extent.
+        """
         from databricks.labs.gbx.rasterx import functions as rx
 
         left = _ras(np.array([[1.0, 2.0], [3.0, 4.0]]), ulx=0.0, uly=2.0, px=1.0)
@@ -1047,7 +1048,9 @@ class TestMergeAggVirtualizeDir:
             assert merged["raster"] is not None and merged["path"] is None
             merged = merged["raster"]
         else:
-            plain = df.groupBy("g").agg(rx.rst_merge_agg("tile").alias("m")).first()["m"]
+            plain = (
+                df.groupBy("g").agg(rx.rst_merge_agg("tile").alias("m")).first()["m"]
+            )
             assert bytes(merged) == bytes(plain)
         with MemoryFile(bytes(merged)) as mf, mf.open() as ds:
             assert (ds.width, ds.height) == (4, 2)

@@ -106,9 +106,7 @@ def call(sql_name: str, *values):
 def forced(virtualize_dir, virtualize_prefix, materialize) -> bool:
     """A force-output keyword is set: ``materialize=False`` is the natural (unforced) form, not a force."""
     return (
-        virtualize_dir is not None
-        or virtualize_prefix is not None
-        or bool(materialize)
+        virtualize_dir is not None or virtualize_prefix is not None or bool(materialize)
     )
 
 

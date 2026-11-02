@@ -357,7 +357,9 @@ def _with_cap(f, cap: int):
         return carrying(f, None, cap)
     from pyspark.sql.utils import is_remote
 
-    if is_remote():  # Spark Connect (Serverless, standard): the classic class resolves its UDF through SparkContext._jvm
+    if (
+        is_remote()
+    ):  # Spark Connect (Serverless, standard): the classic class resolves its UDF through SparkContext._jvm
         from pyspark.sql.connect.udf import UserDefinedFunction
     else:
         from pyspark.sql.udf import UserDefinedFunction

@@ -310,7 +310,10 @@ def column_api(pkg: str, pyname: str) -> Optional[dict]:
     return None
 
 
-def seed(classes: List[str], csv_path: Path) -> Tuple[List[dict], List[str]]:
+def seed(
+    classes: List[str], csv_path: Path, include_existing: bool = False
+) -> Tuple[List[dict], List[str]]:
+    """Draft rows for the classification's names in ``classes`` that the manifest lacks (``include_existing``: all)."""
     sys.path.insert(0, str(REPO / "docs/scripts"))
     spec = importlib.util.spec_from_file_location(
         "efm", REPO / "docs/scripts/extend-function-metadata.py"
@@ -339,7 +342,7 @@ def seed(classes: List[str], csv_path: Path) -> Tuple[List[dict], List[str]]:
     for c in csv.DictReader(csv_path.open()):
         cls = c["family"][:3]
         name = c["name"]
-        if cls not in classes or name in have:
+        if cls not in classes or (name in have and not include_existing):
             continue
         prefix = name.split("_")[1]
         pyname = name[len("gbx_") :]
@@ -419,11 +422,13 @@ def seed(classes: List[str], csv_path: Path) -> Tuple[List[dict], List[str]]:
             "since": since.get(name, "?"),
             "doc": {
                 "summary": (api or {}).get("summary") or "?",
-                "page": PAGE_OF_PREFIX[prefix],
+                "page": PAGE_OF_PREFIX.get(prefix, "?"),
             },
         }
         if api and api["force"] and api["v2"]:
             row["python"] = {"extras": "force_output", "extra_impl": api["v2"]}
+        if prefix not in PAGE_OF_PREFIX:
+            report.append(f"GUESS {name}: doc.page (no page is known for the prefix '{prefix}')")
         report.append(
             f"GUESS {name}: returns.session (read it from the L3 UDF's returnType or the UDTF schema)"
         )

@@ -49,7 +49,8 @@ def _import_line(module: str, alias: str) -> str:
 def _alias_for(text: str, module: str) -> Tuple[str, bool]:
     """(alias, needs an import): the module's short alias when it is free (or already this module's)."""
     for alias in (ALIAS[module], ALIAS[module] + "_api"):
-        if _import_line(module, alias) in text:
+        same = rf"^\s*import databricks\.labs\.gbx\.{re.escape(module)}\.functions as {alias}\b"
+        if _import_line(module, alias) in text or re.search(same, text, re.M):
             return alias, False
         bound = re.search(rf"\bas {alias}\b", text) or re.search(
             rf"^\s*{alias}\s*=", text, re.M

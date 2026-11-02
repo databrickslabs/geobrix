@@ -211,7 +211,8 @@ echo -e "${CYAN}🏷️  Markers: ${YELLOW}not connect — integration ENABLED (
 echo ""
 
 TOTAL_PASSED=0
-TOTAL_SKIPPED_FILES=()
+TOTAL_SKIPPED_FILES=()   # nothing passed: every collected test skipped, or none were collected
+PARTIAL_SKIP_FILES=()    # some passed, some skipped
 FAILED_FILES=()
 SAMPLE_DATA_MISSING=false
 
@@ -268,7 +269,12 @@ for f in "${RUN_FILES[@]}"; do
             WHY="; sample data missing"
             SAMPLE_DATA_MISSING=true
         fi
-        TOTAL_SKIPPED_FILES+=("$f ($N_PASSED passed, $N_SKIPPED skipped$WHY)")
+        # "did NOT RUN" is only for a file where nothing passed; a file with passes ran, and says so.
+        if [ "$N_PASSED" -eq 0 ]; then
+            TOTAL_SKIPPED_FILES+=("$f ($N_PASSED passed, $N_SKIPPED skipped$WHY)")
+        else
+            PARTIAL_SKIP_FILES+=("$f ($N_PASSED passed, $N_SKIPPED skipped$WHY)")
+        fi
     fi
     echo ""
 done
@@ -282,10 +288,8 @@ if [ ${#FAILED_FILES[@]} -gt 0 ]; then
     echo -e "${CYAN}   Mass ${YELLOW}UNRESOLVED_ROUTINE${CYAN} failures mean a stale JAR — re-run without --skip-build.${NC}"
     EXIT_CODE=1
 fi
-if [ ${#TOTAL_SKIPPED_FILES[@]} -gt 0 ]; then
-    echo -e "${RED}❌ Cross-tier parity did NOT RUN in ${#TOTAL_SKIPPED_FILES[@]} suite(s) — 0 tests passed:${NC}"
-    for f in "${TOTAL_SKIPPED_FILES[@]}"; do echo -e "     ${YELLOW}$f${NC}"; done
-    echo -e "${CYAN}   A skipped parity suite is not a passing gate. Common causes:${NC}"
+print_skip_causes() {
+    echo -e "${CYAN}   A skipped parity test is not a passing gate. Common causes:${NC}"
     if [ "$SAMPLE_DATA_MISSING" = true ]; then
         echo -e "     • ${YELLOW}sample data missing${NC} (start the container with the sample-data mounts: ${GREEN}gbx:docker:start${NC})"
     fi
@@ -293,6 +297,18 @@ if [ ${#TOTAL_SKIPPED_FILES[@]} -gt 0 ]; then
     echo -e "     • the payload's bundled _jar is not this JAR (Step 2b refreshes it when GBX_NATIVE_ROOT names a payload)"
     echo -e "     • a JAR-free Spark session already live in the same process"
     echo -e "     • the suite's own dependency guard (e.g. mapbox-vector-tile) is unmet"
+    echo -e "     • a variant with no build for this platform (e.g. the Rust variant on aarch64)"
+}
+if [ ${#TOTAL_SKIPPED_FILES[@]} -gt 0 ]; then
+    echo -e "${RED}❌ Cross-tier parity did NOT RUN in ${#TOTAL_SKIPPED_FILES[@]} suite(s) — every test skipped or none were collected:${NC}"
+    for f in "${TOTAL_SKIPPED_FILES[@]}"; do echo -e "     ${YELLOW}$f${NC}"; done
+    print_skip_causes
+    EXIT_CODE=1
+fi
+if [ ${#PARTIAL_SKIP_FILES[@]} -gt 0 ]; then
+    echo -e "${RED}❌ Cross-tier parity ran WITH SKIPS in ${#PARTIAL_SKIP_FILES[@]} suite(s) — the skipped tests did not run:${NC}"
+    for f in "${PARTIAL_SKIP_FILES[@]}"; do echo -e "     ${YELLOW}$f${NC}"; done
+    print_skip_causes
     EXIT_CODE=1
 fi
 if [ $EXIT_CODE -eq 0 ]; then

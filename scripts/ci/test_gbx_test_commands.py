@@ -206,6 +206,35 @@ def test_a_parity_skip_names_missing_sample_data_when_that_is_why(sandbox):
     assert "2 skipped" in res.output  # it still read the (coloured) summary
 
 
+def test_partial_skips_are_not_reported_as_did_not_run(sandbox):
+    # A file with some passes and some skips (the Rust variant has no aarch64 build) ran: the
+    # report said "did NOT RUN ... 0 tests passed" for it, as if nothing had. "did NOT RUN" is for
+    # a file where EVERY collected test skipped (or none were collected); a partial skip still
+    # fails the gate but states the counts.
+    _parity_sandbox(sandbox, TEST_ROOT)
+    path = ("--path", "python/geobrix/test/manager/test_mvp_s_cross_tier.py")
+    report = sandbox.root / "target" / "parity-test_mvp_s_cross_tier.txt"
+    report.parent.mkdir()
+
+    def run(summary):
+        report.write_text(f"=== short test summary info ===\nSKIPPED [3] x.py:1: no aarch64 build\n{summary}\n")
+        return sandbox.run(
+            "gbx-test-parity.sh",
+            "--skip-build",
+            *path,
+            FAKE_DOCKER_RUN_MATCHING="tail -6",
+        )
+
+    res = run("=== 29 passed, 3 skipped in 1.00s ===")
+    assert res.returncode == 1  # a skipped test is still not a passing gate
+    assert "did NOT RUN" not in res.output
+    assert "29 passed, 3 skipped" in res.output
+
+    res = run("=== 3 skipped in 1.00s ===")
+    assert res.returncode == 1
+    assert "did NOT RUN" in res.output
+
+
 # --------------------------------------------------- python-docs: single-file isolation
 
 

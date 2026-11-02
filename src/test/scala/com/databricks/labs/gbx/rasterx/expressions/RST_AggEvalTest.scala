@@ -2,7 +2,7 @@ package com.databricks.labs.gbx.rasterx.expressions
 
 import com.databricks.labs.gbx.rasterx.expressions.agg.{RST_CombineAvgAgg, RST_DerivedBandAgg, RST_FromBandsAgg, RST_MergeAgg}
 import com.databricks.labs.gbx.rasterx.functions
-import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
+import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver, TileBytes}
 import com.databricks.labs.gbx.rasterx.util.RasterSerializationUtil
 import com.databricks.labs.gbx.util.SerializationUtil
 import com.databricks.labs.gbx.udfs
@@ -617,6 +617,33 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         val errVal = mdMap.get("last_error").orNull
         assert(errVal != null, "metadata must contain last_error key")
         errVal should include ("RST_DerivedBandAgg")
+    }
+
+    test("every buffering aggregate answers an over-cap member as the group's error tile, never drops it") {
+        functions.register(spark)
+        val big = tinyGTiffBytes(42) // 4 x 4 bytes: 16 decoded
+        val pyfunc = Literal(UTF8String.fromString("import numpy as np\ndef identity(in_ar, out_ar, *a, **kw): out_ar[:] = in_ar[0]"))
+        val funcName = Literal(UTF8String.fromString("identity"))
+
+        def run(name: String, make: () => Any): Unit = {
+            val out = make()
+            assert(out != null, s"$name: the group is not dropped to NULL")
+            val row = out.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow]
+            assert(row.isNullAt(1), s"$name: no raster is built from the other members")
+            val md = RasterSerializationUtil.metadataOf(row)
+            assert(md.getOrElse("last_error", "").contains("read cap"), s"$name: $md")
+        }
+        spark.conf.set(TileBytes.ReadCapKey, "8") // below the 16 bytes decoded
+        try {
+            run("merge", () => { val a = RST_MergeAgg(v1TileRef); val b = a.createAggregationBuffer()
+                a.update(b, inputRow(v1Row(1L, big))); a.update(b, inputRow(v1Row(2L, big))); a.eval(b) })
+            run("combineavg", () => { val a = RST_CombineAvgAgg(v1TileRef); val b = a.createAggregationBuffer()
+                a.update(b, inputRow(v1Row(1L, big))); a.update(b, inputRow(v1Row(2L, big))); a.eval(b) })
+            run("derivedband", () => { val a = RST_DerivedBandAgg(v1TileRef, pyfunc, funcName); val b = a.createAggregationBuffer()
+                a.update(b, inputRow(v1Row(1L, big))); a.update(b, inputRow(v1Row(2L, big))); a.eval(b) })
+            run("frombands", () => { val a = RST_FromBandsAgg(v1TileRef, v1TileRef); val b = a.createAggregationBuffer()
+                a.updateWithIndex(b, v1Row(1L, big), 1); a.updateWithIndex(b, v1Row(2L, big), 2); a.eval(b) })
+        } finally spark.conf.unset(TileBytes.ReadCapKey)
     }
 
     test("RST_FromBandsAgg skips a corrupt member and records the drop, does not raise") {

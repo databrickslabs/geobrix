@@ -104,4 +104,15 @@ class GDALManagerTest extends AnyFunSuite with BeforeAndAfterAll {
         missing.getMessage should include(s"no GDAL JNI at $empty/lib/libgdalalljni.so")
     }
 
+    test("a tile that does not convert to GeoTIFF is a corrupt one, not a policy refusal") {
+        // a dataset with no bands cannot be translated; an aggregate drops such a member as corrupt, and only the
+        // policy refusals (TileBytesRefused) make it the group's answer
+        val ds = gdal.GetDriverByName("MEM").Create("", 4, 4, 0)
+        try {
+            val e = intercept[IllegalArgumentException](TileBytes.toGTiff(ds, "/vsimem/gbx_to_gtiff_fail.tif"))
+            e.getMessage should include("could not be converted to GeoTIFF")
+            e should not be a[TileBytesRefused]
+        } finally ds.delete()
+    }
+
 }

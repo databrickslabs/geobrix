@@ -140,8 +140,7 @@ object RasterDriver {
     def sourceDriverOf(bytes: Array[Byte], options: Map[String, String]): Option[String] =
         if (bytes == null) None
         else {
-            val extension = GDAL.getExtension(options.getOrElse("driver", "GTiff"))
-            val tempPath = s"/vsimem/temp_raster_${java.util.UUID.randomUUID().toString.replace("-", "_")}.$extension"
+            val tempPath = bytesPath(options, java.util.UUID.randomUUID().toString.replace("-", "_"))
             gdal.FileFromMemBuffer(tempPath, bytes)
             var ds: Dataset = null
             try {
@@ -154,18 +153,21 @@ object RasterDriver {
             }
         }
 
+    /** The in-memory path tile bytes are opened at: the one rule of [[openFromBytes]] and [[sourceDriverOf]], so the
+      * driver a tile reports is the one its read uses (a zipped tile at its `/vsizip/` path). */
+    private def bytesPath(options: Map[String, String], uuid: String): String = {
+        val extension = GDAL.getExtension(options.getOrElse("driver", "GTiff"))
+        if (options.getOrElse("isZip", "false").toBoolean) s"/vsizip//vsimem/$uuid.zip/$uuid.$extension"
+        else s"/vsimem/temp_raster_$uuid.$extension"
+    }
+
     /** [[readFromBytes]] or [[readFromBytesUngated]] by `gated`. */
     def readBytes(bytes: Array[Byte], options: Map[String, String], gated: Boolean): Dataset =
         if (bytes == null) null else openFromBytes(bytes, options, gated)
 
     private def openFromBytes(bytes: Array[Byte], options: Map[String, String], gated: Boolean): Dataset = {
-        val driverName = options.getOrElse("driver", "GTiff")
-        val isZip = options.getOrElse("isZip", "false").toBoolean
-        val extension = GDAL.getExtension(driverName)
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "_")
-        val tempPath =
-            if (isZip) s"/vsizip//vsimem/$uuid.zip/$uuid.$extension"
-            else s"/vsimem/temp_raster_$uuid.$extension"
+        val tempPath = bytesPath(options, uuid)
         gdal.FileFromMemBuffer(tempPath, bytes)
         // An unreadable or refused payload opens as null (or throws): nothing owns the in-memory file then, so unlink
         // it here.

@@ -2,7 +2,7 @@ package com.databricks.labs.gbx.rasterx.util
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx.expressions.RST_TryOpen
-import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.gdal.{RasterDriver, TileBytesRefused}
 import com.databricks.labs.gbx.util.SerializationUtil
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow
@@ -91,6 +91,13 @@ class RST_ErrorHandlerTest extends AnyFunSuite {
         val meta = getMetadata(seq.head.getStruct(0, 9))
         meta should contain key "error_message"
         meta("error_message") should include("gen error")
+    }
+
+    test("a refused group is the error tile with the reason and cell id 0, as the light tier's") {
+        val tile = RST_ErrorHandler.refusedGroupTile(new TileBytesRefused("over this compute's read cap. Fix: retile"), BinaryType)
+        RasterSerializationUtil.isErrorTile(tile) shouldBe true
+        RasterSerializationUtil.cellIdOf(tile) shouldBe 0L
+        RasterSerializationUtil.metadataOf(tile)("last_error") should include("read cap")
     }
 
     test("safeEval (generator) error tile carries the input tile's cellid") {

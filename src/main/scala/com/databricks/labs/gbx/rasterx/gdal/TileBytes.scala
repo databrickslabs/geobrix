@@ -8,9 +8,9 @@ import org.gdal.gdalconst.gdalconstConstants
 import java.nio.charset.StandardCharsets
 import scala.jdk.CollectionConverters._
 
-/** A tile's bytes the JVM does not read: a driver that can name other files, or a tile decoded over the read cap. It
-  * is a data error, so a raster function gives the error tile with this reason (and its `Fix:`), never a failed task.
-  */
+/** A tile's bytes the JVM does not read by policy: a driver that can name other files, or a tile decoded over the read
+  * cap. It is a data error, so a raster function gives the error tile with this reason (and its `Fix:`), never a failed
+  * task. Bytes that merely fail to convert (corrupt) are no refusal: they throw an `IllegalArgumentException`. */
 final class TileBytesRefused(msg: String) extends RuntimeException(msg)
 
 /** The rule for reading a materialized tile's bytes on the JVM, applied once, at [[RasterDriver.readFromBytes]] (the
@@ -177,7 +177,8 @@ object TileBytes {
             val out = gdal.Translate(dst, ds, options)
             if (out == null) {
                 gdal.Unlink(dst)
-                throw new TileBytesRefused(
+                // a corrupt tile, not a policy refusal: an aggregate drops the member as corrupt, as for any unreadable one
+                throw new IllegalArgumentException(
                   s"the raster bytes (${ds.GetDriver().getShortName}) could not be converted to GeoTIFF: " +
                       gdal.GetLastErrorMsg()
                 )

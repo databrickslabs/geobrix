@@ -142,6 +142,24 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         } finally TileBytes.useReadCap(None)
     }
 
+    test("the read cap holds for the task that set it: a later task on the same thread reads at the default") {
+        val sc = spark.sparkContext
+        val n = 64 // more tasks than the pool has threads, so every thread has set a cap before any reads
+        val set = sc.parallelize(1 to n, n).map { _ => TileBytes.useReadCap(Some(512L)); TileBytes.readCap }.collect()
+        assert(set.forall(_ == 512L))
+        val later = sc.parallelize(1 to n, n).map(_ => TileBytes.readCap).collect()
+        assert(later.forall(_ == com.databricks.labs.gbx.kernels.spec.GdalSpecEngine.DecodedBudget), later.distinct.toSeq)
+    }
+
+    test("a zipped tile reports its driver from the path its read uses") {
+        val tile = tinyGTiff()
+        val options = Map("driver" -> "GTiff", "isZip" -> "true")
+        val read = RasterDriver.readFromBytesUngated(tile, options)
+        val readable = read != null
+        if (readable) RasterDriver.releaseDataset(read)
+        assert(RasterDriver.sourceDriverOf(tile, options).isDefined == readable)
+    }
+
     // The first band of a GTiff as rows of pixels, and its size.
     private def decode(bytes: Array[Byte]): (Int, Int, Seq[Seq[Double]]) = {
         val ds = RasterDriver.readFromBytes(bytes, Map("driver" -> "GTiff"))

@@ -29,6 +29,10 @@ The host run sets `TZ=UTC` (as the container and the CI runners are), and points
 
 Set `GBX_NATIVE_ROOT` in the calling shell to run the container's pytest on a native payload, for example `GBX_NATIVE_ROOT=build/env-wheel/env6/payload` (from `gbx:build:wheel --env 6`). The command passes it into the container as its `/root/geobrix` path (a path under this checkout, relative or absolute; any other absolute path is taken as a container path), so the run's Python serves the payload's bindings (its `osgeo` and rasterio on one GDAL). Unset, nothing is passed.
 
+## The oracle table selection
+
+Set `GBX_ORACLE_TABLES` in the calling shell to run only those oracle tables in the family harness (`python/geobrix/test/manager/test_family_cross_tier.py`), for example `GBX_ORACLE_TABLES=GRID_SCALAR,GRID_ARRAY`. The command passes it into the container unchanged. Unset, nothing is passed and the harness runs every table.
+
 ## Other pytest options
 
 Set `PYTEST_ADDOPTS` in the calling shell: pytest reads it as extra arguments, and both the host and the `--docker` run pass it on. For example `PYTEST_ADDOPTS='--durations=20 --junitxml=test-logs/pyrx.xml' gbx:test:pyrx --path python/geobrix/test/zarr/test_manifest.py`. (`gbx:test:light` takes the same.)

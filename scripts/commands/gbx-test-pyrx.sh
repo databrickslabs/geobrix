@@ -33,6 +33,8 @@ show_help() {
     echo -e "  ${YELLOW}/abs/path/file.log${NC}     -> /abs/path/file.log"
     echo ""
     echo -e "${CYAN}Environment:${NC}"
+    echo -e "  ${YELLOW}GBX_ORACLE_TABLES=<T1,T2>${NC} Run only these oracle tables in the family harness (test_family_cross_tier.py);"
+    echo -e "                          read on the host, passed into the container with --docker"
     echo -e "  ${YELLOW}GBX_PYRX_VENV=<dir>${NC}  Use this venv instead of .venv-pyrx (create it with the same variable: gbx:venv:sync)"
     echo -e "  ${YELLOW}GBX_TEST_TZ=<zone>${NC}   Run under this time zone instead of UTC (the host run pins UTC, as the container and CI are), e.g. America/New_York, to check a timestamp test does not depend on UTC"
     echo ""
@@ -166,7 +168,8 @@ run_pass() {
             python3 -m pytest ${paths[*]} -v --tb=short --color=yes -m $markers_q"
         [[ -n "${PYTEST_ADDOPTS:-}" ]] && env_args+=(-e "PYTEST_ADDOPTS=$PYTEST_ADDOPTS")
         gbx_native_env_args
-        env_args+=(${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"})
+        gbx_test_env_args
+        env_args+=(${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"} ${GBX_TEST_ENV_ARGS[@]+"${GBX_TEST_ENV_ARGS[@]}"})
         docker exec ${env_args[@]+"${env_args[@]}"} "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$pytest_cmd"
     else
         # Host venv path (default): isolated from system site-packages. run_in_pyrx_venv also

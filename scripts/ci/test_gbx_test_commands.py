@@ -420,6 +420,27 @@ def test_a_native_payload_reaches_the_container_pytest_runs(sandbox):
     assert pytest_env()["GBX_NATIVE_ROOT"] == "/root/geobrix/build/env-wheel/env6/payload"
 
 
+def test_the_oracle_table_selection_reaches_the_container_pytest_runs(sandbox):
+    # GBX_ORACLE_TABLES (the family harness's table selection) is passed into the container's pytest unchanged, on the
+    # parity run and on the light --docker run; unset, nothing is passed.
+    def pytest_env():
+        return [e for c, e in zip(sandbox.execs(), sandbox.exec_envs()) if "pytest" in c[-1]][-1]
+
+    tree = sandbox.root / "t"
+    tree.mkdir()
+    (tree / "test_x_cross_tier.py").write_text("def test_x():\n    pass\n")
+    _parity_sandbox(sandbox, tree)
+    for env in ({"GBX_ORACLE_TABLES": "GRID_SCALAR"}, {}):
+        res = sandbox.run("gbx-test-parity.sh", "--skip-build", FAKE_DOCKER_EXEC_STDOUT="== 3 passed in 1.00s ==", **env)
+        assert res.returncode == 0, res.output
+        assert pytest_env().get("GBX_ORACLE_TABLES") == env.get("GBX_ORACLE_TABLES")
+    path = "python/geobrix/test/zarr/test_keys.py"
+    sandbox.run("gbx-test-pyrx.sh", "--docker", "--path", path, GBX_ORACLE_TABLES="GRID_SCALAR,GRID_ARRAY")
+    assert pytest_env()["GBX_ORACLE_TABLES"] == "GRID_SCALAR,GRID_ARRAY"
+    sandbox.run("gbx-test-pyrx.sh", "--docker", "--path", path)
+    assert "GBX_ORACLE_TABLES" not in pytest_env()
+
+
 def test_a_native_payload_reaches_the_scala_test_jvm(sandbox):
     # The Scala run passes GBX_NATIVE_ROOT (as its /root/geobrix path) beside the locale; unset, nothing is passed.
     def maven_env():

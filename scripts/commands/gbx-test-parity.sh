@@ -77,6 +77,11 @@ show_help() {
     print_lock_help
     echo -e "  ${GREEN}--help${NC}             Show this help"
     echo ""
+    echo -e "${CYAN}Environment:${NC}"
+    echo -e "  ${YELLOW}GBX_NATIVE_ROOT=<payload>${NC}  Run the container's pytest on this native payload (its /root/geobrix path)"
+    echo -e "  ${YELLOW}GBX_ORACLE_TABLES=<T1,T2>${NC}  Run only these oracle tables in the family harness"
+    echo -e "                             (test_family_cross_tier.py); passed into the container unchanged"
+    echo ""
     echo -e "${CYAN}Why the rebuild is the default:${NC}"
     echo -e "  A staged JAR older than the Scala sources makes every heavy call fail with"
     echo -e "  ${YELLOW}UNRESOLVED_ROUTINE${NC} — a mass failure that looks like a code bug but is"
@@ -227,8 +232,9 @@ for f in "${RUN_FILES[@]}"; do
     PYTEST_CMD="$PYTEST_CMD | tee $REPORT"
 
     gbx_native_env_args
-    docker exec ${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"} "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN \
-        /bin/bash -c "set -o pipefail; $PYTEST_CMD"
+    gbx_test_env_args
+    docker exec ${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"} ${GBX_TEST_ENV_ARGS[@]+"${GBX_TEST_ENV_ARGS[@]}"} \
+        "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "set -o pipefail; $PYTEST_CMD"
     FILE_EXIT=$?
 
     # The pytest summary line, then the skip reasons (-rs): which one explains a skip below.

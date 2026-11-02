@@ -596,6 +596,14 @@ gbx_native_env_args() {
     GBX_NATIVE_ENV_ARGS=(-e "GBX_NATIVE_ROOT=${p%/}")
 }
 
+# gbx_test_env_args: GBX_TEST_ENV_ARGS, the `docker exec` -e arguments for the test-selection variables a host
+# caller sets (GBX_ORACLE_TABLES: the oracle tables the family harness runs). Empty when none is set.
+gbx_test_env_args() {
+    GBX_TEST_ENV_ARGS=()
+    [ -n "${GBX_ORACLE_TABLES:-}" ] && GBX_TEST_ENV_ARGS+=(-e "GBX_ORACLE_TABLES=${GBX_ORACLE_TABLES}")
+    return 0
+}
+
 # gbx_ensure_container_python_deps: make the dev container able to run geobrix's Python tests.
 # Called by every command that runs them in the container (gbx:test:python, gbx:test:parity), so a
 # fresh container works whichever runs first. Idempotent and near-zero cost when everything is

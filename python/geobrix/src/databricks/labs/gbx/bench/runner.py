@@ -2100,6 +2100,20 @@ def run_spark_path(  # noqa: C901
                 f"[bench] loaded geometry_set '{gset_name}' with {len(geoms)} unique geometries"
             )
 
+    # The generated API registers a name at the level the manager picks on first use, which can be a JVM
+    # companion: pin the light level for the functions timed here (the plan check in _assert_lightweight
+    # would otherwise be the only thing between a light timing and a heavy one).
+    from databricks.labs.gbx.bench.spec import pin_light_level
+
+    pin_light_level(
+        spark,
+        [
+            f.sql_name
+            for f in fnspecs
+            if "spark-path" in f.modes and f.sql_name.startswith("gbx_rst_")
+        ],
+    )
+
     # --explain-only: build each fn's spark-path DataFrame and PRINT its physical plan,
     # no timing / no Delta write (delegated to _explain_spark_path).
     if explain_only:

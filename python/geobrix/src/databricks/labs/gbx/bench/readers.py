@@ -422,7 +422,10 @@ def run_virtual_tile_pixel_read(
 
     import pyspark.sql.functions as _F
 
+    from databricks.labs.gbx.bench.spec import pin_light_level
     from databricks.labs.gbx.rasterx import functions as rx
+
+    pin_light_level(spark, ["gbx_rst_avg"])  # on THIS session, at the light level
 
     def _job():
         reader = spark.read.format("raster_gbx").option("virtualTiles", "true")
@@ -3069,7 +3072,13 @@ def run_raster_decode_read_sweep(
 
     import pyspark.sql.functions as _F
 
+    from databricks.labs.gbx.bench.spec import pin_light_level
     from databricks.labs.gbx.rasterx import functions as rx
+
+    if (
+        api == "lightweight"
+    ):  # the row says light: time the light level, not a JVM companion
+        pin_light_level(spark, ["gbx_rst_avg"])
 
     def _na_row(mode_label: str, note: str) -> "ResultRow":
         return ResultRow(

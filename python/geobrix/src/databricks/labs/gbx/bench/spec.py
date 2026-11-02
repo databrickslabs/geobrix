@@ -707,6 +707,28 @@ def bng_cellfill_cells() -> "List[tuple]":
     return list(zip(cells, _cellfill_values(len(cells))))
 
 
+def pin_light_level(spark, sql_names) -> None:
+    """Register ``sql_names`` in ``spark`` at the light level (L3), whatever the session offers.
+
+    The functions the benchmark times as the light tier (``col_fn``, the readers' ``rst_avg``) are called through
+    the generated ``rasterx`` API, which registers a name at the level the manager picks on first use: on a session
+    with the JAR that can be a JVM companion, and a light-versus-heavy comparison would time heavy against heavy.
+    Registering the name here, forced to L3, on the session that runs the timing, makes the API call a set lookup
+    that keeps this level. A name with no manifest row or no L3 level is left to the API.
+    """
+    from databricks.labs.gbx import manifest
+    from databricks.labs.gbx import register as _register
+
+    fns = manifest.load().functions
+    forced = {
+        n: ("L3", "-")
+        for n in dict.fromkeys(sql_names)
+        if n in fns and "L3" in fns[n].levels
+    }
+    if forced:
+        _register(spark, only=list(forced), _levels=forced)
+
+
 REGISTRY: Dict[str, FnSpec] = {
     "rst_width": FnSpec(
         "rst_width",

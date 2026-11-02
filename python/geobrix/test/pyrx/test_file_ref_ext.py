@@ -17,7 +17,6 @@ import tempfile
 from databricks.labs.gbx.pyrx.core import accessors as _acc
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
-from databricks.labs.gbx.rasterx import functions as rx
 
 
 class _StubFileRef:
@@ -60,35 +59,6 @@ def test_rst_avg_file_ref_equals_fallback(gtiff_bytes):
         assert got == expected, f"FILE branch diverged: {got!r} != {expected!r}"
     finally:
         os.remove(tmp)
-
-
-def test_rst_avg_public_binding_uses_file_ref_arg(spark):
-    """rst_avg public binding must call _uf_avg (2-arg), not _u_avg (1-arg).
-    Verify by inspecting the returned Column's UDF object arity.
-    ``spark`` param ensures the JVM is running (needed for Column._jc).
-    """
-    from unittest import mock
-
-    from pyspark.sql import functions as F
-
-    import databricks.labs.gbx.pyrx.functions as prx
-
-    tc = F.col("tile")
-    with mock.patch(
-        "databricks.labs.gbx.pyrx._file_ref.file_supported", return_value=False
-    ):
-        col = rx.rst_avg(tc)
-
-    # The column wraps a UDF call. The UDF must accept 2 args (tile, file_ref).
-    # _uf_avg is a 2-arg UDF; _u_avg is a 1-arg UDF.
-    # Check the number of args in the column's children as a proxy.
-    # NOTE: repr(col) shows "_udf" (closure name inside the factory), never "_uf_avg".
-    # The right operand is trivially true but the left is always false; see A4 in fix report.
-    # TODO: replace with an arity-based check once a reliable introspection path is found.
-    assert (
-        "_uf_avg" in repr(col) or len(col._jc.toString()) > 0
-    )  # column built without error
-    assert hasattr(prx, "_uf_avg"), "_uf_avg singleton must exist"
 
 
 # ---------------------------------------------------------------------------

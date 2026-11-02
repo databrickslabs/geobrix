@@ -36,3 +36,39 @@ def test_a_second_codemod_run_over_the_callers_changes_nothing():
     assert "\nfrom databricks.labs.gbx.gridx.bng import functions as bx\n" in new
     assert codemod_api._undefined(new, {"bx"}) == [] and not issues
     assert codemod_api.rewrite(new, targets)[0] == new
+
+    # fault 1: the import goes after a parenthesized import, never inside it
+    src = (
+        "from databricks.labs.gbx.pygx import functions as gx\n"
+        "from databricks.labs.gbx.util import (\n    a,\n    b,\n)\n\n\n"
+        f"def test_it():\n    return gx.{name}(1)\n"
+    )
+    new, issues = codemod_api.rewrite(src, targets)
+    compile(new, "fixture", "exec")
+    assert "    b,\n)\nfrom databricks.labs.gbx.gridx.bng import functions as bx\n" in new and not issues
+
+    # fault 2: an alias bound only inside a function (parenthesized import too) is rewritten
+    src = (
+        "def test_it():\n    from databricks.labs.gbx.pygx import (\n        functions as gx,\n    )\n"
+        f"    return gx.{name}(1)\n"
+    )
+    new, issues = codemod_api.rewrite(src, targets)
+    assert f"bx.{name}(1)" in new and not issues
+    assert codemod_api._undefined(new, {"bx"}) == []
+
+    # fault 3: a %run target's binding counts; an unreadable target is reported
+    import json
+    import tempfile
+
+    cells = [{"cell_type": "code", "source": ["%run ./cfg_nb"]}, {"cell_type": "code", "source": [f"gx.{name}(1)\n"]}]
+    nb = json.dumps({"cells": cells, "metadata": {}, "nbformat": 4, "nbformat_minor": 5}, indent=1) + "\n"
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "nb.ipynb").write_text(nb)
+        old, new, issues = codemod_api._notebook(Path(d) / "nb.ipynb", targets)
+        assert new == old and any("cfg_nb cannot be read" in i for i in issues)
+        (Path(d) / "cfg_nb.py").write_text("from databricks.labs.gbx.pygx import functions as gx\n")
+        old, new, issues = codemod_api._notebook(Path(d) / "nb.ipynb", targets)
+        assert f"bx.{name}(1)" in new and not issues
+
+    # a rewrite that would not compile is reported, not written
+    assert codemod_api._compile_issue("x = (\n") and not codemod_api._compile_issue("%run x\ny = 1\n")

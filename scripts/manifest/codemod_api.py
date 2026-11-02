@@ -9,7 +9,11 @@ file's own ensure_ascii, and a trailing newline; a notebook with no change is ne
 whose JSON layout does not round-trip is reported instead. The new alias must be bound where each
 rewritten call is (module scope, or an enclosing function): a binding only inside another function does
 not count, the module-level import is added, and an alias still unbound afterwards is reported. Anything else
-is printed as UNRESOLVED for a hand edit. `--dry-run` prints what would change and writes nothing.
+is printed as UNRESOLVED for a hand edit. The import goes after the end of the header's last top-level import
+statement (never inside a parenthesized one). Aliases are read from the syntax tree, so a function-scope
+or parenthesized `from ...pyrx import (functions as rx)` counts. A notebook's `%run <relative path>` target is
+read for the bindings it defines (UNRESOLVED when it cannot be read). A rewritten file that no longer compiles
+is reported instead of written. `--dry-run` prints what would change and writes nothing.
 """
 
 from __future__ import annotations
@@ -88,7 +92,7 @@ def _parse(text: str):
     try:
         return ast.parse(text)
     except SyntaxError:
-        lines = ["pass" if x.lstrip().startswith(("%", "!")) else x for x in text.splitlines()]
+        lines = ["pass" if x.lstrip().startswith(("%", "!")) else x for x in text.split("\n")]
         try:
             return ast.parse("\n".join(lines))
         except SyntaxError:
@@ -126,6 +130,111 @@ def _bound_here(nodes, params=()) -> set:
 def _params(args) -> set:
     names = [a.arg for a in args.posonlyargs + args.args + args.kwonlyargs]
     return set(names) | {a.arg for a in (args.vararg, args.kwarg) if a}
+
+
+def _imports(text: str) -> Tuple[set, set]:
+    """(light-module aliases, every name an import binds) anywhere in ``text``, at any scope."""
+    import ast
+
+    light: set = set()
+    names: set = set()
+    tree = _parse(text) if text.strip() else None
+    if tree is None:
+        found = re.findall(rf"from {LIGHT} import functions as (\w+)", text)
+        found += re.findall(rf"import {LIGHT}\.functions as (\w+)", text)
+        light = {m[-1] for m in found}  # LIGHT has a group: each match is (package, alias)
+        names = set(re.findall(r"\bimport [\w.]+ as (\w+)", text))
+        names |= set(re.findall(r"\bfrom [\w.]+ import (?:\w+ as )?(\w+)\s*$", text, re.M))
+        return light, names | light
+    for n in ast.walk(tree):
+        if isinstance(n, ast.ImportFrom) and not n.level:
+            is_light = bool(re.fullmatch(LIGHT, n.module or ""))
+            for a in n.names:
+                names.add(a.asname or a.name)
+                if is_light and a.name == "functions" and a.asname:
+                    light.add(a.asname)
+        elif isinstance(n, ast.Import):
+            for a in n.names:
+                names.add(a.asname or a.name.split(".")[0])
+                if a.asname and re.fullmatch(LIGHT + r"\.functions", a.name):
+                    light.add(a.asname)
+    return light, names
+
+
+def _import_anchor(text: str):
+    """(offset after the header's last top-level import statement, that statement's last line); the gbx
+    imports win over others. None when ``text`` has no AST or no such import."""
+    import ast
+
+    tree = _parse(text)
+    if tree is None:
+        return None
+    imports, gbx = [], []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            break
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            imports.append(node)
+            mods = [node.module or ""] if isinstance(node, ast.ImportFrom) else [a.name for a in node.names]
+            if any(m.startswith("databricks.labs.gbx") for m in mods):
+                gbx.append(node)
+    pick = (gbx or imports or [None])[-1]
+    if pick is None:
+        return None
+    lines = re.findall(r"[^\n]*\n|[^\n]+", text)
+    return sum(len(x) for x in lines[: pick.end_lineno]), lines[pick.end_lineno - 1]
+
+
+def _compile_issue(text: str):
+    """The SyntaxError message when ``text`` (a notebook cell's magic lines blanked) does not compile, else None."""
+    try:
+        compile(text, "<codemod>", "exec")
+        return None
+    except SyntaxError:
+        pass
+    lines = ["pass" if x.lstrip().startswith(("%", "!")) else x for x in text.split("\n")]
+    try:
+        compile("\n".join(lines), "<codemod>", "exec")
+        return None
+    except SyntaxError as e:
+        return f"the rewrite would leave a SyntaxError (line {e.lineno}: {e.msg}); edit by hand"
+
+
+RUN = re.compile(r"^[ \t]*(?:# MAGIC )?%run[ \t]+(\S+)", re.M)
+
+
+def _run_code(text: str, base: Path, issues: List[str], seen=()) -> str:
+    """The code of every ``%run <path>`` target in ``text`` (relative to ``base``'s directory), nested runs
+    included. An unreadable target adds an issue."""
+    out: List[str] = []
+    for ref in RUN.findall(text):
+        ref = ref.strip("'\"")
+        ref_path = Path(ref)
+        found = None
+        for cand in (ref_path, ref_path.with_name(ref_path.name + ".py"), ref_path.with_name(ref_path.name + ".ipynb")):
+            full = cand if cand.is_absolute() else base.parent / cand
+            if full.is_file():
+                found = full
+                break
+        code = None
+        if found is not None and found.resolve() not in seen:
+            try:
+                if found.suffix == ".ipynb":
+                    cells = json.loads(found.read_text()).get("cells", [])
+                    code = "\n".join(_cell_text(c) for c in cells if c.get("cell_type") == "code")
+                else:
+                    code = found.read_text()
+            except (OSError, ValueError, KeyError):
+                code = None
+        elif found is not None:
+            code = ""  # a cycle: its bindings are already counted
+        if code is None:
+            issues.append(f"%run {ref} cannot be read: the names it binds are unknown, check by hand")
+            continue
+        out.append(code)
+        if found is not None:
+            out.append(_run_code(code, found, issues, tuple(seen) + (found.resolve(),)))
+    return "\n".join(out)
 
 
 def _context_names(context: str) -> set:
@@ -200,9 +309,9 @@ def rewrite(
     """``context``: the text that binds names for ``text`` too (a notebook's other cells)."""
     unresolved: List[str] = []
     scope = context + "\n" + text
-    aliases = set(re.findall(rf"from {LIGHT} import functions as (\w+)", scope))
-    aliases |= set(re.findall(rf"import {LIGHT}\.functions as (\w+)", scope))
-    aliases = {a[1] if isinstance(a, tuple) else a for a in aliases}
+    light_c, names_c = _imports(context)
+    light_t, names_t = _imports(text)
+    aliases = light_c | light_t
     chosen: Dict[str, Tuple[str, bool]] = {}
     for alias in sorted(aliases):
         for name, module in targets.items():
@@ -218,10 +327,7 @@ def rewrite(
                 )
                 continue
             text = pat.sub(f"{new}.{name}(", text)
-    imported = set(re.findall(r"\bimport [\w.]+ as (\w+)", scope))
-    imported |= set(
-        re.findall(r"\bfrom [\w.]+ import (?:\w+ as )?(\w+)\s*$", scope, re.M)
-    )
+    imported = names_c | names_t
     imported |= {alias for alias, _ in chosen.values()}
     for name in targets:
         for m in re.finditer(rf"(?<![\w.])(\w+)\.{re.escape(name)}\(", text):
@@ -244,18 +350,22 @@ def rewrite(
         # a binding only inside another function does not reach the rewritten call: judge by scope
         missing = bool(gaps) if gaps is not None else needs and imp.strip() not in scope
         if missing:
-            # the header's import block: top-level imports before the first def, class or decorator
-            body = re.search(r"^(def|class|async def|@)\b", text, re.M)
-            head = text[: body.start()] if body else text
-            anchor = list(
-                re.finditer(r"^(from|import) databricks\.labs\.gbx[^\n]*\n", head, re.M)
-            )
-            anchor = anchor or list(re.finditer(r"^(from|import) [^\n]*\n", head, re.M))
-            at = anchor[-1].end() if anchor else _after_docstring(text)
-            if anchor and "noqa: E402" in anchor[-1].group(0):
-                imp = (
-                    imp.rstrip("\n") + "  # noqa: E402\n"
-                )  # the header's imports follow code
+            # after the end of the header's last top-level import statement (a parenthesized one included)
+            found = _import_anchor(text)
+            if found is not None:
+                at, last = found
+                if "noqa: E402" in last:
+                    imp = imp.rstrip("\n") + "  # noqa: E402\n"  # the header's imports follow code
+                if at and not text[:at].endswith("\n"):
+                    imp = "\n" + imp
+            else:  # no AST (or no import): the old line scan, else after the docstring
+                body = re.search(r"^(def|class|async def|@)\b", text, re.M)
+                head = text[: body.start()] if body else text
+                anchor = list(re.finditer(r"^(from|import) databricks\.labs\.gbx[^\n]*\n", head, re.M))
+                anchor = anchor or list(re.finditer(r"^(from|import) [^\n]*\n", head, re.M))
+                at = anchor[-1].end() if anchor else _after_docstring(text)
+                if anchor and "noqa: E402" in anchor[-1].group(0):
+                    imp = imp.rstrip("\n") + "  # noqa: E402\n"
             text = text[:at] + imp + text[at:]
     left = _undefined(text, {a for a, _ in chosen.values()}, context) or []
     for name, line in left:
@@ -273,12 +383,19 @@ def _notebook(path: Path, targets) -> Tuple[str, str, List[str]]:
     nb = json.loads(raw)
     issues, changed = [], False
     code = [c for c in nb.get("cells", []) if c.get("cell_type") == "code"]
+    runs: List[str] = []  # per cell: the code its %run targets bind
+    for cell in code:
+        runs.append(_run_code(_cell_text(cell), path, issues))
     for i, cell in enumerate(code):
         src = _cell_text(cell)
-        # earlier cells bind names for this one (later cells bind nothing yet)
-        new, un = rewrite(src, targets, "\n".join(_cell_text(c) for c in code[:i]))
+        # earlier cells (and their %run targets) bind names for this one; later cells bind nothing yet
+        ctx = "\n".join(_cell_text(c) + "\n" + r for c, r in zip(code[:i], runs[:i])) + "\n" + runs[i]
+        new, un = rewrite(src, targets, ctx)
         issues += un
         if new != src:
+            bad = _compile_issue(new)
+            if bad:
+                return raw, raw, issues + [bad]
             changed = True
             cell["source"] = (
                 new.splitlines(keepends=True)
@@ -334,7 +451,13 @@ def main(argv=None) -> int:
             old, new, issues = _notebook(path, targets)
         else:
             old = path.read_text()
-            new, issues = rewrite(old, targets)
+            issues = []
+            new, un = rewrite(old, targets, _run_code(old, path, issues))
+            issues += un
+            bad = _compile_issue(new) if new != old else None
+            if bad:
+                new = old
+                issues.append(bad)
         if new != old:
             print(f"{'WOULD CHANGE' if a.dry_run else 'CHANGED'} {path}")
             if not a.dry_run:

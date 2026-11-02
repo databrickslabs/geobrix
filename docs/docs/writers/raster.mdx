@@ -3,28 +3,20 @@ sidebar_position: 1
 sidebar_label: Raster
 ---
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
 import CodeFromTest from '@site/src/components/CodeFromTest';
 import rasterGbxWrite from '!!raw-loader!../../tests/python/writers/raster_gbx_write_examples.py';
-import gdalWriteExamples from '!!raw-loader!../../tests/python/writers/gdal_examples.py';
-import gdalWriteScala from '!!raw-loader!../../tests/scala/writers/GDALWriteExamples.scala';
 
 # Raster Writer
 
-_Since:_ lightweight `raster_gbx` **v0.4.0** · heavyweight `gdal` **v0.2.0**
+_Since:_ `raster_gbx` **v0.4.0**
 
-Write raster tiles from the shared `(source, tile)` schema. The **lightweight**
-`raster_gbx` writer (`rasterio`-backed, JAR-free, supports `overwrite`) and the
-**heavyweight** GDAL-backed `gdal` writer (append-only) take the same schema — see
-[Choosing an Execution Tier](../api/execution-tiers#the-one-line-swap).
+Write raster tiles from the shared `(source, tile)` schema with the `raster_gbx` writer
+(`rasterio`-backed, JAR-free, supports `overwrite`).
 
-:::tip Benchmark & tradeoff
-The lightweight (`*_gbx`) writers need **no JAR** and are the **only** option
-on Serverless and standard (shared) clusters. The heavyweight raster/PMTiles writers run on
-**dedicated clusters**. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix [DCS image](../installation/dcs.mdx). See [Choose an install path](../installation.mdx#choose-an-install-path).
-where available they use native GDAL on the JVM. So your compute usually decides the tier — then data scale. See the
-[Benchmarking](../api/benchmarking) page for timings and methodology.
+:::tip No JAR needed
+The `*_gbx` writers need **no JAR** and run on every compute, Serverless and standard
+(shared) clusters included. See the [Benchmarking](../api/benchmarking) page for timings and
+methodology.
 :::
 
 ## Schema
@@ -57,29 +49,16 @@ df.withColumn("source", df["scene_id"]) \
 
 ## Options
 
-Both tiers require the exact `(source, tile)` schema and take the same two writer options. The on-disk driver and block layout come from `tile.metadata`, not from writer options (see [Output encoding](#output-encoding-from-tile-metadata)). The lightweight writer also takes `compress`, `compressLevel` and `predictor` to choose the GeoTIFF codec (see [Output format & compression](#output-format--compression)); the heavyweight writer reads its compression from `tile.metadata`.
+The writer requires the exact `(source, tile)` schema and takes two writer options. The on-disk driver and block layout come from `tile.metadata`, not from writer options. The writer also takes `compress`, `compressLevel` and `predictor` to choose the GeoTIFF codec (see [Output format & compression](#output-format--compression)).
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `ext` | `"tif"` | Filename suffix appended to each written file. Does **not** change the on-disk format; that is driven by `tile.metadata["driver"]`. |
-| `nameCol` | _unset_ | Name of an existing string column whose value becomes the output filename (without extension). Must be one of the two table columns — in practice, overwrite `source` (see [Filename Control](#filename-control)). When unset, an opaque unique name is used. |
+| `nameCol` | _unset_ | Name of an existing string column whose value becomes the output filename (without extension). Must be one of the two table columns — in practice, overwrite `source` (see [Control filenames](#control-filenames-namecol)). When unset, an opaque unique name is used. |
 
-### Lightweight (`raster_gbx`)
+### Modes and codecs
 
 Supports `.mode("overwrite")`. For GeoTIFF output the `compress` option decides what happens to each tile: by default (`auto`) a ZSTD tile is written as it is and a tile in any other codec is re-encoded to ZSTD, while an explicit codec re-encodes every tile. Tiles whose driver is not GTiff (e.g. `COG`) are re-encoded via `rasterio`.
-
-### Heavyweight (`gdal`)
-
-Append-only — `.mode("overwrite")` is not supported. Re-encodes every tile through native GDAL (decoded pixels are identical to the lightweight output).
-
-<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
-<TabItem value="lightweight" label="Lightweight · raster_gbx">
-
-Pure-Python/PySpark raster writer — the lightweight tier's drop-in for the
-GDAL-backed [`gdal`](./raster?tier=heavyweight) writer. Requires the exact `(source, tile)` schema,
-the same as the heavy writer. Writer options are `path` / `nameCol` / `ext`, plus
-`compress` / `compressLevel` / `predictor` to choose the GeoTIFF codec; the
-on-disk format comes from `tile.metadata`.
 
 ## Write raster tiles
 
@@ -91,14 +70,13 @@ With the default `compress="auto"`, a GeoTIFF tile that is already ZSTD-compress
 as it is, and a GeoTIFF tile in any other codec (DEFLATE, LZW, uncompressed) is re-encoded to
 ZSTD. A tile whose `metadata["driver"]` is non-GTiff (e.g. `COG`) is re-encoded via `rasterio`.
 
-For an explicit GeoTIFF-forced writer, see the [Lightweight GeoTIFF Writer](./geotiff).
+For an explicit GeoTIFF-forced writer, see the [GeoTIFF Writer](./geotiff).
 
 :::note Register before writing
 
-Like the lightweight readers, the lightweight writers are **not** auto-registered
-(Python Data Source V2 has no classpath auto-discovery, unlike the JAR-based
-heavyweight writers). Call `register(spark)` first, as shown above. See
-[Lightweight Raster Readers → Register](../readers/raster#register) for the
+Like the Python readers, the writers are **not** auto-registered
+(Python Data Source V2 has no classpath auto-discovery). Call `register(spark)` first, as shown above. See
+[Raster Readers → Register](../readers/raster#register) for the
 full explanation.
 
 :::
@@ -134,154 +112,6 @@ for the codec, level, and dtype-matched predictor details.
   source="docs/tests/python/writers/raster_gbx_write_examples.py"
   testFile="docs/tests/python/writers/test_raster_gbx_write_examples.py" />
 
-The heavyweight `gdal` writer has no compression options: it reads the codec, block size and
-levels from `tile.metadata` and re-encodes every tile. It is also **append-only**, whereas the
-lightweight writer supports `overwrite`. See [Choosing an Execution Tier](../api/execution-tiers)
-and the [Benchmarking](../api/benchmarking) page for light-vs-heavy timings.
-
-It is the lightweight counterpart of the heavyweight `gdal` writer, supporting Python and SQL bindings (not Scala).
-
-</TabItem>
-<TabItem value="heavyweight" label="Heavyweight · gdal">
-
-The GDAL writer emits each row's `tile` to a raster file under a target directory. It is the counterpart to the [GDAL Reader](../readers/raster).
-
-## Format Name
-
-`gdal`
-
-## How the Output Format Is Chosen
-
-**The GDAL driver comes from the tile, not from the writer.** Each tile carries its originating driver (e.g. `GTiff`, `COG`, `HFA`) in its metadata — that driver is what GDAL uses to serialize the tile to disk. The `ext` option only controls the **filename suffix**.
-
-| Source of output format | Value |
-|------|------|
-| Raster format on disk | `tile.metadata["driver"]` — set when the tile was read or produced. |
-| Filename suffix | `ext` option (default `"tif"`). |
-
-That means:
-
-- A tile read as GeoTIFF will be written back as GeoTIFF regardless of what `ext` says. Setting `ext = "jp2"` on a GeoTIFF tile gives you a file named `*.jp2` whose bytes are still a GeoTIFF — confusing, not what you want.
-- Pick `ext` to match the driver carried in your tiles. For a read-GeoTIFF → write pipeline, the default `ext = "tif"` is correct.
-- To change the on-disk format, change the driver in the tile (via upstream transforms), not via a writer option.
-
-## Basic Usage
-
-### Python
-
-<CodeFromTest
-  code={gdalWriteExamples}
-  language="python"
-  functionName="WRITE_GDAL"
-  source="docs/tests/python/writers/gdal_examples.py"
-  testFile="docs/tests/python/writers/test_gdal_examples.py"
-  outputConstant="WRITE_GDAL_output"
-/>
-
-### Scala
-
-<CodeFromTest
-  code={gdalWriteScala}
-  language="scala"
-  functionName="WRITE_GDAL"
-  source="docs/tests/scala/writers/GDALWriteExamples.scala"
-  testFile="docs/tests/scala/writers/WritersDocTest.scala"
-  outputConstant="WRITE_GDAL_output"
-/>
-
-## Required Conventions
-
-### 1. Input schema must be exactly `(source, tile)`
-
-The writer's table schema is fixed and Spark V2 enforces it by arity and name. The simplest way to satisfy this is to pass the reader's schema through untouched:
-
-```python
-spark.read.format("gdal").load(IN).write.format("gdal")...   # ✅ (source, tile) preserved
-df.withColumn("source", expr("..."))                         # ✅ overwrite source in place
-  .write.format("gdal")...
-df.select("tile").write.format("gdal")...                    # ❌ missing 'source'
-df.withColumn("extra", lit(1)).write.format("gdal")...       # ❌ 3 columns, table has 2
-```
-
-### 2. Only `.mode("append")` is supported
-
-`overwrite`, `errorIfExists`, and `ignore` are not implemented. Clear the target directory yourself (`dbutils.fs.rm(OUT_DIR, recurse=True)`) when you want overwrite semantics.
-
-### 3. Target directory must already exist
-
-The writer writes files into the directory you point at — it does **not** create Volume roots:
-
-```python
-OUT_DIR = "/Volumes/main/default/test-data/geobrix-examples/out/writer-docs-example"
-dbutils.fs.mkdirs(OUT_DIR)   # safe on Volumes (parent dirs are ok)
-```
-
-## Output encoding (from tile metadata)
-
-The output **driver, compression, and block layout are read from
-`tile.metadata`**, not from writer options. They are set when the tile is read or
-produced (e.g. via `RST_AsFormat`); the writer honors them on serialization.
-
-| Metadata key | Default | Effect |
-|--------------|---------|--------|
-| `driver` / `format` | `GTiff` | GDAL output driver. |
-| `compression` | `DEFLATE` | `DEFLATE` / `ZSTD` / `LZW` / … creation compression. See [Materialized Compression](../api/materialized-compression). |
-| `blocksize` | `512` | Tile/block size in pixels (floored to a multiple of 16, clamped to the raster size). |
-| `zlevel` | `6` | DEFLATE level. |
-| `zstd_level` | `9` | ZSTD level. |
-
-For a `Zarr` output the Zarr driver's own codecs apply: `DEFLATE` is written as `ZLIB` (with
-`zlevel`), `ZSTD` keeps its name (with `zstd_level`), and `NONE`, `GZIP` and `LZMA` also work. A
-codec the driver lacks, such as `LZW`, raises an error that names the ones it has.
-
-<CodeFromTest code={gdalWriteExamples} language="python" functionName="ENCODING_FROM_METADATA"
-  source="docs/tests/python/writers/gdal_examples.py" />
-
-### Named GeoTIFF writer (`gtiff_gdal`)
-
-`gtiff_gdal` is the `gdal` writer with the GeoTIFF driver preset — use it to make
-GeoTIFF output explicit.
-
-<CodeFromTest code={gdalWriteExamples} language="python" functionName="WRITE_GTIFF_GDAL"
-  source="docs/tests/python/writers/gdal_examples.py" />
-
-## Filename Control
-
-Default filenames look like `946817315_0_0.tif` — collision-resistant within a single write, but with two rough edges:
-
-- **Re-running duplicates files.** `.mode("append")` can't clean up.
-- **Names aren't traceable back to source rows.**
-
-To control names, overwrite the `source` column with your desired prefix and set `nameCol = "source"`. (The schema is fixed at `(source, tile)`, so you can't add a separate name column.)
-
-<CodeFromTest
-  code={gdalWriteExamples}
-  language="python"
-  functionName="WRITE_WITH_NAMECOL"
-  source="docs/tests/python/writers/gdal_examples.py"
-  testFile="docs/tests/python/writers/test_gdal_examples.py"
-/>
-
-<CodeFromTest
-  code={gdalWriteScala}
-  language="scala"
-  functionName="WRITE_WITH_NAMECOL"
-  source="docs/tests/scala/writers/GDALWriteExamples.scala"
-  testFile="docs/tests/scala/writers/WritersDocTest.scala"
-/>
-
-## Materialization Pattern
-
-Spark is lazy: every `.display()`, `.count()`, and downstream transform re-runs the plan unless the intermediate data is materialized. For multi-step raster pipelines, write intermediate stages to a Volume and read them back for the next step:
-
-<CodeFromTest
-  code={gdalWriteExamples}
-  language="python"
-  functionName="MATERIALIZE_PIPELINE"
-  source="docs/tests/python/writers/gdal_examples.py"
-  testFile="docs/tests/python/writers/test_gdal_examples.py"
-/>
-
 ## Tile Payloads vs Local Paths
 
 After a write round-trip, raster expressions should consume the **binary payload** inside the `tile` struct, not any `/tmp/...` paths that may appear in tile `metadata`. Those local paths refer to transient staging files on whichever executor produced the tile and will not exist elsewhere. GeoBrix expressions (`rst_*`) use the binary payload by default; hand-rolled UDFs should too.
@@ -292,10 +122,7 @@ Written rasters are standard GDAL-compatible files:
 
 - **QGIS / ArcGIS / any GDAL-aware viewer** opens them directly.
 - **`gdalinfo <file>`** (via the [GDAL CLI](../advanced/gdal-cli)) prints metadata, geotransform, and band statistics.
-- **Read them back through GeoBrix** with `spark.read.format("gtiff_gdal").load(OUT_DIR)` — covered by the round-trip docs test.
-
-</TabItem>
-</Tabs>
+- **Read them back through GeoBrix** with `spark.read.format("raster_gbx").load(OUT_DIR)`.
 
 :::tip Splitting source files into a tile grid?
 This writer takes an already-loaded tile DataFrame (`(source, tile)` schema).
@@ -322,6 +149,6 @@ Lightweight writers commit via the shared [`file_gbx` file-access base](../reade
 
 ## Next Steps
 
-- [GDAL Reader](../readers/raster) — The corresponding read path.
+- [Raster Readers](../readers/raster) — The corresponding read path.
 - [Raster Functions](../api/raster-functions) — Transforms to run before the write.
 - [COG Writer](./cog) — Prepare source files into COGs; mosaic mode for large sources, native or quadbin tile grid.

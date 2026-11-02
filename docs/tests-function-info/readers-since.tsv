@@ -6,8 +6,6 @@ gpkg_ogr	heavy	0.2.0
 gtiff_gdal	heavy	0.2.0
 ogr	heavy	0.2.0
 shapefile_ogr	heavy	0.2.0
-geojsonl_ogr	heavy	0.4.0
-pmtiles	heavy	0.4.0
 netcdf_gdal	heavy	0.4.3
 netcdf_ogr	heavy	0.4.3
 file_gdb_gbx	light	0.4.0

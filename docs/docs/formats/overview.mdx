@@ -33,7 +33,7 @@ two are held to the same results; see [Choosing an Execution Tier](../api/execut
 
 | Format | Good for | Tiers | Read | Write | Functions |
 |---|---|---|---|---|---|
-| **GeoTIFF / COG** | Imagery, elevation models, any single raster. COG adds internal tiling and overviews, so a reader fetches only the pieces it needs. | Both | [`gtiff_gbx`](../readers/geotiff) and [`cog_gbx`](../readers/cog); heavyweight `gtiff_gdal` | [`gtiff_gbx`](../writers/geotiff) and [`cog_gbx`](../writers/cog); heavyweight `gtiff_gdal` | [RasterX `rst_*`](../api/raster-functions) |
+| **GeoTIFF / COG** | Imagery, elevation models, any single raster. COG adds internal tiling and overviews, so a reader fetches only the pieces it needs. | Both | [`gtiff_gbx`](../readers/geotiff) and [`cog_gbx`](../readers/cog); heavyweight `gtiff_gdal` | [`gtiff_gbx`](../writers/geotiff) and [`cog_gbx`](../writers/cog) | [RasterX `rst_*`](../api/raster-functions) |
 | **JPEG 2000** | High-compression imagery. | Both | the [generic raster reader](../readers/raster): `raster_gbx` or `gdal` | the [generic raster writer](../writers/raster) | [RasterX `rst_*`](../api/raster-functions) |
 
 ## Array formats
@@ -55,13 +55,13 @@ longitude together.
 | **GeoPackage** | Exchange of one or more layers in a single file. | Both | [`gpkg_gbx`](../readers/geopackage); heavyweight `gpkg_ogr` | [`gpkg_gbx`](../writers/geopackage) | [`gbx_st_*`](../api/vectorx-functions) |
 | **Shapefile** | Exchange with older tools. | Both | [`shapefile_gbx`](../readers/shapefile); heavyweight `shapefile_ogr` | [`shapefile_gbx`](../writers/shapefile) | [`gbx_st_*`](../api/vectorx-functions) |
 | **File Geodatabase** | Esri data. | Both | [`file_gdb_gbx`](../readers/filegdb); heavyweight `file_gdb_ogr` | [`file_gdb_gbx`](../writers/filegdb) | [`gbx_st_*`](../api/vectorx-functions) |
-| **GeoJSON / GeoJSONL** | Web exchange. GeoJSONL (one feature per line) shards and streams. | Both | [`geojson_gbx`](../readers/geojson) and [`geojsonl_gbx`](../writers/geojsonl); heavyweight `geojson_ogr` and `geojsonl_ogr` | [`geojson_gbx`](../writers/geojson); [`geojsonl_gbx`](../writers/geojsonl) and heavyweight `geojsonl_ogr` | [`gbx_st_*`](../api/vectorx-functions) |
+| **GeoJSON / GeoJSONL** | Web exchange. GeoJSONL (one feature per line) shards and streams. | Both | [`geojson_gbx`](../readers/geojson) and [`geojsonl_gbx`](../writers/geojsonl); heavyweight `geojson_ogr` | [`geojson_gbx`](../writers/geojson); [`geojsonl_gbx`](../writers/geojsonl) | [`gbx_st_*`](../api/vectorx-functions) |
 
 ## Tile formats
 
 | Format | Good for | Tiers | Read | Write | Functions |
 |---|---|---|---|---|---|
-| **PMTiles** | A raster or vector tile pyramid in one file that a web map reads straight from object storage. | Both | [`pmtiles_gbx`](../readers/pmtiles) | [`pmtiles_gbx`](../writers/pmtiles); heavyweight `pmtiles` | [`gbx_pmtiles_agg`](../api/pmtiles-functions), and `gbx_st_asmvt` for vector tiles |
+| **PMTiles** | A raster or vector tile pyramid in one file that a web map reads straight from object storage. | Both | [`pmtiles_gbx`](../readers/pmtiles) | [`pmtiles_gbx`](../writers/pmtiles) | [`gbx_pmtiles_agg`](../api/pmtiles-functions), and `gbx_st_asmvt` for vector tiles |
 
 Point clouds and images with positions have their own readers: [LiDAR](../readers/lidar) (LAS and
 LAZ, which feed the DSM and CHM functions) and [EXIF](../readers/exif) (drone and camera images).

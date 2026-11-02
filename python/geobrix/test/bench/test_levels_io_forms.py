@@ -31,7 +31,7 @@ def _corpus(tmp_path, n=4):
     return str(tmp_path / "corpus")
 
 
-def test_the_io_set_holds_the_reads_the_udf_the_floor_and_the_three_writers():
+def test_the_io_set_holds_the_reads_the_udf_the_floor_and_the_two_writers():
     forms = {f.variant: f for f in lf.FORMS["IO"]}
     assert set(forms) == {
         "a",
@@ -41,7 +41,6 @@ def test_the_io_set_holds_the_reads_the_udf_the_floor_and_the_three_writers():
         "d-py",
         "d-rs",
         "floor",
-        "W0",
         "W1",
         "W2",
     }

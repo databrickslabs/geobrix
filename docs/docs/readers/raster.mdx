@@ -195,7 +195,7 @@ Example — forcing the GDAL driver explicitly:
 
 :::note Lightweight readers and writers are not auto-registered
 
-This is a key difference from the heavyweight tier. The heavyweight readers/writers
+This is a key difference from the heavyweight tier. The heavyweight readers
 (`gdal`, `gtiff_gdal`, …) are **auto-discovered from the JAR** on the classpath via
 Spark's JVM `DataSourceRegister` service loader, so `spark.read.format("gdal")`
 works with no setup call. The lightweight readers/writers are **Python** Data

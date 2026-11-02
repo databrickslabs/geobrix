@@ -1591,7 +1591,7 @@ FORMS["SE"] = (
 #   floor  d-py's read and `mapInArrow` shell with the decode skipped (the tiles stay virtual): its median is the shell
 #          cost, shown as `floor_median_s` beside d-py and d-rs
 # The writer forms start from the same reads and write GeoTIFFs to a scratch directory they delete after timing:
-#   W0 `gtiff_gdal` over the heavy read (the retiring baseline), W1 `gtiff_gbx` over virtual tiles,
+#   W1 `gtiff_gbx` over virtual tiles,
 #   W2 `gtiff_gbx` over virtual tiles the JVM decoded first (`gbx_mvp_rst_materialize`).
 
 IO_FN = "gbx_mvp_rst_materialize"
@@ -1879,10 +1879,8 @@ def _io_write(fmt, kind):
         out = new_scratch_dir(scratch, "io")
         os.makedirs(scratch, exist_ok=True)
         try:
-            # the light writer takes overwrite; the heavy one is append-only (it raises on overwrite)
-            mode = "append" if fmt == "gtiff_gdal" else "overwrite"
             named = _io_named(spark, rows_dir, n, kind, only=r["only"])
-            named.write.format(fmt).mode(mode).save(out)
+            named.write.format(fmt).mode("overwrite").save(out)
             files = [
                 os.path.join(d, f)
                 for d, _, fs in os.walk(out)
@@ -1898,8 +1896,7 @@ def _io_write(fmt, kind):
     return run
 
 
-io_w0, io_w1, io_w2 = (
-    _io_write("gtiff_gdal", "a"),
+io_w1, io_w2 = (
     _io_write("gtiff_gbx", "virtual"),
     _io_write("gtiff_gbx", "c"),
 )
@@ -1943,7 +1940,6 @@ FORMS["IO"] = [
     _io("read", "DF", "d-rs", io_d_rs),
     # the shell cost of d-py / d-rs (Task 17's "decode share" floor): `summarize` puts its median beside theirs
     _io("read", "DF", "floor", io_floor),
-    _io("write", "JVM-DF", "W0", io_w0, computes=_IO_DED),
     _io("write", "DF", "W1", io_w1),
     _io("write", "L1", "W2", io_w2, setup="register_io_materialize", computes=_IO_DED),
 ]
@@ -1960,7 +1956,7 @@ register_io_udf.installs = {IO_FN: ("L3", "-")}
 
 
 # Module-level names the forms resolve by ``module:function``.
-for _fn in (io_a, io_b, io_c, io_udf, io_d_py, io_d_rs, io_floor, io_w0, io_w1, io_w2):
+for _fn in (io_a, io_b, io_c, io_udf, io_d_py, io_d_rs, io_floor, io_w1, io_w2):
     globals()[_fn.__name__] = _fn
 
 

@@ -3,28 +3,21 @@ sidebar_position: 3
 sidebar_label: PMTiles
 ---
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
 import CodeFromTest from '@site/src/components/CodeFromTest';
 import pmtilesEx from '!!raw-loader!../../tests/python/writers/pmtiles_gbx_examples.py';
 
 # PMTiles Writer
 
-_Since:_ lightweight `pmtiles_gbx` **v0.4.0** · heavyweight `pmtiles` **v0.4.0**
+_Since:_ `pmtiles_gbx` **v0.4.0**
 
 Package a tile pyramid (`(z, x, y, bytes)`) into [PMTiles](https://docs.protomaps.com/pmtiles/)
-archives. The **lightweight** `pmtiles_gbx` writer (pure-Python, Serverless-safe,
-distributed spatial sharding) and the **heavyweight** `pmtiles` writer take the
-same input and produce decoded-tile-identical archives (verified in the
-[benchmark](../api/benchmarking#tiled-output-pmtiles-writer)).
+archives with the `pmtiles_gbx` writer (pure-Python, Serverless-safe, distributed
+spatial sharding; see the [benchmark](../api/benchmarking#tiled-output-pmtiles-writer)).
 
-:::tip Benchmark & tradeoff
-The lightweight (`*_gbx`) writers need **no JAR** and are the **only** option
-on Serverless and standard (shared) clusters. The heavyweight raster/PMTiles writers run on
-**dedicated clusters**. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix [DCS image](../installation/dcs.mdx). See [Choose an install path](../installation.mdx#choose-an-install-path).
-where available they use native GDAL on the JVM. So your compute usually decides the tier — then data scale. See the
-[Benchmarking](../api/benchmarking) page for timings and methodology.
-At 1,000 tiles the lightweight `pmtiles_gbx` writer runs comparably to the heavyweight encoder (~18.4 s vs ~20.7 s).
+:::tip No JAR needed
+The `*_gbx` writers need **no JAR** and run on every compute, Serverless and standard
+(shared) clusters included. See the [Benchmarking](../api/benchmarking) page for timings and
+methodology.
 :::
 
 ## Schema
@@ -83,9 +76,7 @@ tiles.write.format("pmtiles_gbx").mode("overwrite").save("/Volumes/cat/sch/vol/o
 
 ## Options
 
-Both tiers are write-only and require `.mode("overwrite")` — a finalized archive cannot be appended to.
-
-### Lightweight (`pmtiles_gbx`)
+The writer is write-only and requires `.mode("overwrite")` — a finalized archive cannot be appended to.
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -101,21 +92,12 @@ Both tiers are write-only and require `.mode("overwrite")` — a finalized archi
   source="docs/tests/python/writers/pmtiles_gbx_examples.py"
   testFile="docs/tests/python/writers/test_pmtiles_gbx_examples.py" />
 
-### Heavyweight (`pmtiles`)
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `metadataJson` | `"{}"` | JSON metadata string written into the PMTile header (e.g. `'{"name":"my_tileset","attribution":"..."}'`). |
-| `tileType` | _auto-detect_ | Override the auto-detected PMTile `tile_type` byte: `1` = MVT, `2` = PNG, `3` = JPEG, `4` = WebP. Useful when emitting via a custom encoder that doesn't carry the standard magic bytes. |
-| `tileCompression` | `1` (none) | PMTile `tile_compression` byte advertised in the header: `1` = none, `2` = gzip, `3` = brotli, `4` = zstd. GeoBrix passes tile bytes through unchanged; set this only if you have pre-compressed your tiles upstream. |
-| `fileName` | _(none)_ | Name the output `.pmtiles` file explicitly. When set, `.save(path)` treats `path` as the **parent directory** (created if missing) and writes `path/<fileName>.pmtiles` (extension auto-completed). The heavyweight writer is always single-archive. See [Output naming](#output-naming). |
-
 ## Output naming
 
-Both tiers apply the same 3-case naming contract. The output unit differs by mode:
+The writer applies a 3-case naming contract. The output unit differs by mode:
 
-- **Single-archive** (`shardZoom=0` for `pmtiles_gbx`; always for `pmtiles`) — the unit is a **single `.pmtiles` file**. Extension auto-completion applies: `tiles` → `tiles.pmtiles`; `tiles.pmtiles` → unchanged. Passing a name ending in a different recognized geo extension raises a clear error.
-- **Sharded** (default `pmtiles_gbx` with `shardZoom ≥ 1`) — the unit is the **output directory** that holds the shard archives, `overview.pmtiles`, and the catalog. No `.pmtiles` extension is appended to the directory name.
+- **Single-archive** (`shardZoom=0`) — the unit is a **single `.pmtiles` file**. Extension auto-completion applies: `tiles` → `tiles.pmtiles`; `tiles.pmtiles` → unchanged. Passing a name ending in a different recognized geo extension raises a clear error.
+- **Sharded** (the default, `shardZoom ≥ 1`) — the unit is the **output directory** that holds the shard archives, `overview.pmtiles`, and the catalog. No `.pmtiles` extension is appended to the directory name.
 
 Rules evaluated in order:
 
@@ -124,11 +106,6 @@ Rules evaluated in order:
 | `fileName` given | `.option("fileName","tiles").save("/out/exports")` | `/out/exports/tiles.pmtiles` | `/out/exports/tiles/` (directory) |
 | No `fileName`; `path` is an existing directory | `.save("/out/exports")` | `/out/exports/exports.pmtiles` | `/out/exports/exports/` (directory under the given path) |
 | No `fileName`; `path` is a stem | `.save("/out/exports/tiles")` | `/out/exports/tiles.pmtiles` | `/out/exports/tiles/` (directory) |
-
-The heavyweight `pmtiles` writer is always single-archive (the sharded column does not apply). Both tiers behave identically for single-archive mode.
-
-<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
-<TabItem value="lightweight" label="Lightweight · pmtiles_gbx">
 
 Pure-Python, JAR-free, Serverless-safe writer that packages a tile pyramid
 (`(z, x, y, bytes)`) into [PMTiles](https://docs.protomaps.com/pmtiles/) archives
@@ -164,95 +141,10 @@ catalog over the shards rather than one merged file. This keeps shards
 independently regenerable and lets a browser fetch only the shard for the area in
 view. Set `shardZoom=0` for a single merged archive.
 
-It is the lightweight counterpart of the heavyweight `pmtiles` writer, supporting Python and SQL bindings (not Scala).
-
-</TabItem>
-<TabItem value="heavyweight" label="Heavyweight · pmtiles">
-
-The PMTiles writer streams a per-tile `(z, x, y, bytes)` row set into a single [PMTiles v3](https://github.com/protomaps/PMTiles/blob/main/spec/v3/spec.md) archive file. It is the write-only counterpart of the [`gbx_pmtiles_agg` UDAF](../api/pmtiles-functions#pmtiles_agg) — both share the same native-Scala encoder, but the DataSource avoids the Spark cell-size ceiling by performing a partitioned streaming commit with no in-memory consolidation.
-
-## Format Name
-
-`pmtiles`
-
-The DataSource is registered automatically when the GeoBrix JAR is on the Spark classpath (via `META-INF/services`) — no `register(spark)` call is required.
-
-## Required Conventions
-
-### 1. Input schema must be exactly `(z, x, y, bytes)`
-
-The writer enforces an exact write schema. Missing columns, extra columns, or wrong types all raise a single `IllegalArgumentException` that names the canonical schema (mirrors the GDAL writer's policy — predictable failure mode).
-
-```text
-z      INT       — tile zoom level (0..31)
-x      INT       — tile x within the zoom
-y      INT       — tile y within the zoom
-bytes  BINARY    — tile payload (PNG / JPEG / WebP / MVT)
-```
-
-Project to exactly these columns before writing:
-
-```python
-tiles_df = (
-    raster_df
-    .select(explode(rst_xyzpyramid("tile", lit(0), lit(5))).alias("t"))
-    .selectExpr("t.tile.z AS z", "t.tile.x AS x", "t.tile.y AS y", "t.tile.bytes AS bytes")
-)
-```
-
-### 2. `.mode("overwrite")` is required
-
-The PMTiles DataSource is single-file — `append` semantics do not apply. The default `ErrorIfExists` mode is rejected upstream by Spark with a loud error that points you at `.mode("overwrite")`:
-
-```python
-tiles_df.write.format("pmtiles")...                       # ❌ ErrorIfExists rejected
-tiles_df.write.mode("overwrite").format("pmtiles")...     # ✅
-```
-
-`append` and `ignore` are not implemented.
-
-### 3. Output path and naming
-
-By default, `.save(path)` resolves `path` as the final `.pmtiles` file (extension auto-completed). With `.option("fileName", name)`, `path` is instead treated as the parent directory and `name.pmtiles` is written inside it. See [Output naming](#output-naming) for the full 3-case contract.
-
-```python
-# stem path — extension auto-completed
-.save("/Volumes/main/default/tiles/out")          # -> out.pmtiles
-
-# explicit fileName — path is the parent directory
-.option("fileName", "out").save("/Volumes/main/default/tiles")  # -> tiles/out.pmtiles
-```
-
-Scratch `_part_*.tdata` and `_part_*.entries` files are written alongside the target path during the commit phase and deleted on success.
-
-## Basic Usage
-
-### Python
-
-```python
-(
-    tiles_df
-    .write
-    .format("pmtiles")
-    .option("metadataJson", '{"name":"my_tileset"}')
-    .mode("overwrite")
-    .save("/Volumes/main/default/tiles/out.pmtiles")
-)
-```
-
-### Scala
-
-```scala
-tilesDf.write
-    .format("pmtiles")
-    .option("metadataJson", "{\"name\":\"my_tileset\"}")
-    .mode("overwrite")
-    .save("/Volumes/main/default/tiles/out.pmtiles")
-```
 
 ## Tile-Type Detection
 
-The encoder reads the first 12 bytes of the first non-empty tile payload and sets the PMTile header's `tile_type` byte:
+The writer reads the first 12 bytes of the first non-empty tile payload and sets the PMTile header's `tile_type` byte:
 
 | Magic bytes | tile_type | Meaning |
 |---|---|---|
@@ -261,11 +153,11 @@ The encoder reads the first 12 bytes of the first non-empty tile payload and set
 | `RIFF????WEBP` | 4 (WebP) | WebP raster |
 | _anything else_ | 1 (MVT) | Mapbox Vector Tile (protobuf) |
 
-Override via `.option("tileType", "<byte>")` when auto-detection isn't appropriate.
+Override with the `tileType` option when auto-detection isn't appropriate.
 
 ## Reading PMTiles
 
-Reading PMTiles through the **heavyweight** DataSource is not supported — `spark.read.format("pmtiles")` raises a friendly error. To read PMTiles **within GeoBrix**, use the lightweight [`pmtiles_gbx` reader](../readers/pmtiles), which reads tiles from an existing archive or builds a mosaic pyramid from rasters. For browser/inspection use, the client libraries also work:
+To read PMTiles within GeoBrix, use the [`pmtiles_gbx` reader](../readers/pmtiles), which reads tiles from an existing archive or builds a mosaic pyramid from rasters. For browser and inspection use, the client libraries also work:
 
 - [pmtiles JS library](https://github.com/protomaps/PMTiles) for MapLibre / browser rendering.
 - The Python [`pmtiles`](https://pypi.org/project/pmtiles/) package for tile inspection and extraction.
@@ -278,14 +170,6 @@ PMTiles is designed to be served as a single static file with HTTP `Range` reque
 2. **Content-Type**: serve as `application/vnd.pmtiles`.
 3. **Browse**: drop the URL into [pmtiles.io](https://pmtiles.io) for a visual sanity check.
 4. **Embed** in [MapLibre GL JS](https://maplibre.org/) via the pmtiles protocol — see the [PMTiles functions page](../api/pmtiles-functions#serving-from-object-storage) for a worked HTML snippet.
-
-## Limits
-
-- **No leaf directories.** If the global root directory would exceed 16,257 bytes (PMTiles spec § 4), the encoder errors out and asks you to split your input. In practice this only happens with very large pyramids (tens of millions of tiles); the limit will be relaxed in a future release.
-- **No cross-task dedup.** Identical tiles across partitions are stored multiple times in the final file. The [`gbx_pmtiles_agg`](../api/pmtiles-functions#pmtiles_agg) UDAF does per-blob SHA-256 dedup, so for known-redundant pyramids prefer the UDAF when your data fits a single Spark cell.
-
-</TabItem>
-</Tabs>
 
 ## Next Steps
 

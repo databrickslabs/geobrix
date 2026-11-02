@@ -8,7 +8,7 @@ import vectorWriteExamples from '!!raw-loader!../../tests/python/writers/vector_
 
 # Shapefile Writer
 
-_Since:_ lightweight `shapefile_gbx` **v0.4.0** · _(light-only — no heavyweight tier)_
+_Since:_ `shapefile_gbx` **v0.4.0**
 
 `shapefile_gbx` — pyogrio-backed, pure-Python DataSource V2 writer with the OGR
 driver preset to `ESRI Shapefile`. It round-trips with the matching `shapefile_gbx`
@@ -21,17 +21,16 @@ across all lightweight vector readers and writers.
   writer for large datasets**](./overview#choosing-a-writer-for-large-datasets) —
   use a **classic cluster** (high-memory Serverless does *not* help here) or the
   scalable `geojsonl_gbx` / `gpkg_gbx` writers.
-- **Tier & compute:** the lightweight (`*_gbx`) writers need **no JAR** and are the **only** option on Serverless and standard (shared)
-  clusters. The heavyweight raster/PMTiles writers run on **dedicated clusters**. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix [DCS image](../installation/dcs.mdx). See [Choose an install path](../installation.mdx#choose-an-install-path). Your compute usually decides the tier — then
-  data scale. See [Benchmarking](../api/benchmarking) for timings and methodology.
+- **Compute:** the `*_gbx` writers need **no JAR** and run on every compute, Serverless and
+  standard (shared) clusters included. See [Benchmarking](../api/benchmarking) for timings and
+  methodology.
 :::
 
 :::note Before you write
 - **Register first** — call `register(spark)` once before using any `*_gbx`
   format (see the [Writers Overview](./overview)).
-- **Lightweight-only** — this single-file writer isn't implemented in the
-  heavyweight tier; for output in **both** tiers, use the sharded [**GeoJSONL**
-  writer](./geojsonl) (`geojsonl_gbx` / `geojsonl_ogr`).
+- **Single file** — this writer assembles one output file; for sharded output, use the
+  [**GeoJSONL** writer](./geojsonl) (`geojsonl_gbx`).
 - **Input geometry** — provide geometry as **WKB** (binary) or **WKT** (text),
   with the CRS in the companion `*_srid` / `*_srid_proj` columns. **EWKB**,
   **EWKT**, and GeoJSON-encoded geometry are **not** accepted. Writing from a
@@ -113,7 +112,7 @@ df = spark.table("main.geo.parcels")  # vector data in a (Delta) table
 df.write.format("shapefile_gbx").mode("overwrite").save("/Volumes/main/geo/exports/parcels.shp")
 ```
 
-Each partition is written concurrently, then merged into one output file. See [Benchmarking](../api/benchmarking) for light-vs-heavy export figures.
+Each partition is written concurrently, then merged into one output file. See [Benchmarking](../api/benchmarking) for export timings.
 
 ## Producing a portable ZIP archive
 

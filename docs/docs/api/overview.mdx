@@ -87,7 +87,7 @@ Tier-agnostic visualization helpers for inspecting GeoBrix outputs in a notebook
 Container format for serving raster (PNG / JPEG / WebP) or vector (MVT) tile pyramids from a single static file via HTTP range requests. Native Scala v3 encoder — no GDAL/OGR dependency.
 
 - `gbx_pmtiles_agg` UDAF — aggregator returning a `BINARY` PMTile blob; fits tilesets up to ~100 MiB tile payload / 2 GiB cell limit
-- `.write.format("pmtiles").save(path)` DataSource — streams larger pyramids via a partitioned commit protocol
+- `.write.format("pmtiles_gbx").save(path)` DataSource (Python) — writes larger pyramids with spatial sharding
 - Auto-detects `tile_type` from magic bytes (PNG / JPEG / WebP / otherwise MVT)
 - Composes with `gbx_rst_xyzpyramid` (raster) and `gbx_st_asmvt_pyramid` (vector) upstream
 

@@ -905,7 +905,7 @@ if HEAVYWEIGHT:
     _r = _rd.run_format_read(spark, _rows_dir, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
                              api="heavyweight", fmt="gdal", where="cluster")
     _sink([_r]); hw.append(_r); _reader_rows.append(_r)
-# Writer benchmark: light gtiff_gbx vs heavy gtiff_gdal (same raster_gbx-read input)
+# Writer benchmark: light gtiff_gbx (raster_gbx-read input)
 import shutil as _sh
 _wsrc = f"{CORPUS}/rows"
 if LIGHTWEIGHT:
@@ -915,14 +915,6 @@ if LIGHTWEIGHT:
                                write_api="lightweight", read_fmt="raster_gbx", write_fmt="gtiff_gbx",
                                options={"filterRegex": r".*\\.tif$"}, where="cluster")
     _sink([_wr]); lw.append(_wr); _reader_rows.append(_wr)
-if HEAVYWEIGHT:
-    _wh = "/local_disk0/bench_writer_heavy"
-    _sh.rmtree(_wh, ignore_errors=True)
-    _wr = _rd.run_format_write(spark, _wsrc, _wh, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
-                               write_api="heavyweight", read_fmt="raster_gbx", write_fmt="gtiff_gdal",
-                               mode="append",  # heavy gdal writer is append-only (overwrite -> truncate error)
-                               options={"filterRegex": r".*\\.tif$"}, where="cluster")
-    _sink([_wr]); hw.append(_wr); _reader_rows.append(_wr)
 if _reader_rows:
     _df = spark.sql(
         f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND category IN ('reader', 'writer')"
@@ -1265,21 +1257,17 @@ if _jpg_files:
         _show_md(f"EXIF reader benchmark (light-only) -- {RUN_ID}", _md)
 """
 
-_CELL_PMTILES = """# PMTiles benchmark: light pmtiles_gbx vs heavy pmtiles (both on-cluster) + parity check
+_CELL_PMTILES = """# PMTiles benchmark: the light pmtiles_gbx writer (on-cluster)
 from databricks.labs.gbx.bench import readers as _rd
-from databricks.labs.gbx.pmtiles._directory import iter_tiles as _iter_tiles
 import os as _os
 import shutil as _sh
-# Both pmtiles writers are two-phase (executor-write -> driver-merge), so their
-# intermediates MUST be on a filesystem shared across driver+executors. Node-local
-# /local_disk0 fails the driver merge on a multi-node cluster. Use DBFS: light
-# (pure-Python) via the /dbfs FUSE mount (its single-archive finalize is now
-# rename-free, so sequential FUSE writes are safe); heavy (JVM) via the dbfs:
-# scheme (it cannot use UC /Volumes by direct API). Parity decodes both via FUSE.
+# The pmtiles writer is two-phase (executor-write -> driver-merge), so its intermediates
+# MUST be on a filesystem shared across driver+executors. Node-local /local_disk0 fails the
+# driver merge on a multi-node cluster. Use DBFS via the /dbfs FUSE mount (its single-archive
+# finalize is rename-free, so sequential FUSE writes are safe).
 _DBFS_FUSE = "/dbfs/tmp/gbx_bench"
 _os.makedirs(_DBFS_FUSE, exist_ok=True)
 _pmtiles_rows = []
-_pl = _ph = None
 if LIGHTWEIGHT:
     _pl = _DBFS_FUSE + "/pmtiles_light.pmtiles"
     if _os.path.isdir(_pl):
@@ -1290,65 +1278,10 @@ if LIGHTWEIGHT:
                                n_tiles=1000, shard_zoom=0, write_fmt="pmtiles_gbx",
                                where="cluster")
     _sink([_r]); lw.append(_r); _pmtiles_rows.append(_r)
-if HEAVYWEIGHT:
-    _ph = _DBFS_FUSE + "/pmtiles_heavy"            # FUSE path (for parity decode)
-    _sh.rmtree(_ph, ignore_errors=True)
-    _ph_save = "dbfs:/tmp/gbx_bench/pmtiles_heavy"  # dbfs: scheme (for the JVM writer)
-    _r = _rd.run_pmtiles_write(spark, _ph_save, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
-                               n_tiles=1000, shard_zoom=0, write_fmt="pmtiles",
-                               where="cluster")
-    _sink([_r]); hw.append(_r); _pmtiles_rows.append(_r)
-# Parity check: decode all tiles from both archives and compare (z,x,y) keys+bytes.
-if LIGHTWEIGHT and HEAVYWEIGHT and _pl and _ph:
-    def _decode_any(path):
-        # Return {(z,x,y): bytes} for every tile in path (file or dir of *.pmtiles).
-        # Read the whole archive into memory (sequential): the DBFS/Volumes paths
-        # are cloud object storage and do not support the seek that a lazy
-        # reader needs. iter_tiles reads the directories by the header, so it
-        # decodes the heavy writer's uncompressed ones as well as the light gzip.
-        import os as _os2
-        if _os2.path.isfile(path):
-            files = [path]
-        else:
-            from databricks.labs.gbx.ds._listing import list_files
-            files = list_files(path, r".*\\.pmtiles$", raise_on_empty=False)
-        tiles = {}
-        for _pf in files:
-            with open(_pf, "rb") as _fh:
-                _data = _fh.read()
-            for _key, _b in _iter_tiles(_data):
-                tiles[_key] = bytes(_b)
-        return tiles
-    _verdict_path = "/dbfs/tmp/gbx_bench/parity_verdict.txt"
-    try:
-        _lt = _decode_any(_pl)
-        _ht = _decode_any(_ph)
-        _lk = set(_lt.keys())
-        _hk = set(_ht.keys())
-        if _lk == _hk and all(_lt[_k] == _ht[_k] for _k in _lk):
-            _verdict = f"PMTILES PARITY: PASS ({len(_lk)} tiles, keys+bytes equal)"
-        elif _lk == _hk:
-            _bad = [_k for _k in _lk if _lt[_k] != _ht[_k]]
-            _verdict = (f"PMTILES PARITY: FAIL bytes differ on {len(_bad)} tile(s) "
-                        f"e.g. {sorted(_bad)[:5]} ({len(_lk)} tiles)")
-        else:
-            _verdict = (f"PMTILES PARITY: FAIL keyset differs -- light-only "
-                        f"{sorted(_lk - _hk)[:5]}, heavy-only {sorted(_hk - _lk)[:5]} "
-                        f"(light={len(_lk)}, heavy={len(_hk)})")
-    except Exception as _pe:
-        _verdict = f"PMTILES PARITY: ERROR -- {type(_pe).__name__}: {_pe}"
-    print(_verdict)
-    try:
-        with open(_verdict_path, "w") as _vf:
-            _vf.write(_verdict)
-    except Exception as _we:
-        print(f"(could not write verdict file: {_we})")
-    # Hard gate: a parity mismatch or decode error fails the bench run.
-    assert _verdict.startswith("PMTILES PARITY: PASS"), _verdict
 if _pmtiles_rows:
     _df = spark.sql(
         f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND category = 'writer' "
-        f"AND fn IN ('pmtiles_gbx', 'pmtiles')"
+        f"AND fn = 'pmtiles_gbx'"
     )
     try:
         display(_df)

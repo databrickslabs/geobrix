@@ -39,7 +39,7 @@ The one-line *import* swap is symmetric, but the *install* is not. The **lightwe
 Both tiers implement the **full raster set** — every `rst_*` function, including the BNG and quadbin
 raster-grid functions — so the tier choice is about *environment*, not *capability*. The remaining
 heavyweight-only surfaces are narrow: the vector **OGR readers** (`shapefile_ogr`, `geojson_ogr`, …),
-the `conforming` triangulation mode, and the heavy `pmtiles` DataSource writer. For the per-function
+and the `conforming` triangulation mode. For the per-function
 breakdown see the [Raster Functions](./raster-functions) availability section; for the tier tile
 model (virtual vs. materialized), see [Virtual Tiles](./virtual-tiles).
 
@@ -93,7 +93,8 @@ The lightweight raster tier is, in effect, [distributed rasterio](./rasterio-dis
 | Driver coverage | Full custom GDAL build | rasterio's bundled build (narrower) |
 | SQL default arguments | Supported | Pass all arguments explicitly |
 | Function coverage | Full raster set | Full raster set — every `rst_*` function, including the BNG/quadbin raster-grid functions |
-| Readers / Writers | `gtiff_gdal`, `gdal`, OGR readers | `raster_gbx` / `gtiff_gbx` native Python DataSource V2 reader + writer (no JAR); vector OGR readers still heavy-only |
+| Readers | `gtiff_gdal`, `gdal`, OGR readers | `raster_gbx` / `gtiff_gbx` native Python DataSource V2 readers (no JAR); vector OGR readers still heavy-only |
+| Writers | None (the Python writers serve every compute) | `raster_gbx` / `gtiff_gbx` and the other `*_gbx` writers (no JAR) |
 
 ## How to choose
 
@@ -102,10 +103,10 @@ The lightweight raster tier is, in effect, [distributed rasterio](./rasterio-dis
 Choose **Heavyweight (rasterx)** in three cases:
 
 1. **Your environment is already JVM/GDAL-based.** The wheel and JAR, or the DCS image, are in place. Or you want JVM-native execution on a dedicated cluster.
-2. **You need vector OGR readers or format-specific GDAL options** — the OGR vector readers (`shapefile_ogr`, `geojson_ogr`, `gpkg_ogr`, …) and the generic `gdal` reader with exotic driver options are heavy-only. For raster I/O, the lightweight tier ships native `raster_gbx` / `gtiff_gbx` readers and a writer (no JAR; see [Lightweight Raster Readers](../readers/raster)).
+2. **You need vector OGR readers or format-specific GDAL options** — the OGR vector readers (`shapefile_ogr`, `geojson_ogr`, `gpkg_ogr`, …) and the generic `gdal` reader with exotic driver options are heavy-only. For raster I/O, the lightweight tier ships native `raster_gbx` / `gtiff_gbx` readers (no JAR; see [Lightweight Raster Readers](../readers/raster)).
 3. **You need the heavy-only `conforming` triangulation mode** — GridX is now **fully lightweight**: the **quadbin** (`gbx_quadbin_*`), **BNG** (`gbx_bng_*`), and **custom-grid** (`gbx_custom_*`) functions all run in both tiers via the lightweight `pygx` package. The full **VectorX** function set is now available in the lightweight `pyvx` tier — vector-tile encoding (`gbx_st_asmvt`, `gbx_st_asmvt_pyramid`), TIN surface modeling (`gbx_st_triangulate`, `gbx_st_interpolateelevation*`), and legacy-geometry migration (`gbx_st_legacyaswkb`); only the Steiner-point `conforming` triangulation mode is heavyweight-only (the default `constrained` mode runs in both tiers). See [GridX](./gridx-functions) and [VectorX Function Reference](./vectorx-functions).
 
-The vector OGR readers, the `conforming` triangulation mode, and the heavy `pmtiles` DataSource writer are the remaining heavyweight-only surfaces. Raster I/O, the full VectorX function set, all of GridX (quadbin, BNG, and custom grids), and the `gbx_pmtiles_agg` aggregate are now available in both tiers; heavyweight's unique surface is expected to keep narrowing.
+The vector OGR readers and the `conforming` triangulation mode are the remaining heavyweight-only surfaces. These are now available in both tiers: raster I/O, the full VectorX function set, all of GridX (quadbin, BNG, and custom grids), and the `gbx_pmtiles_agg` aggregate. Heavyweight's unique surface is expected to keep narrowing.
 
 ## Performance
 

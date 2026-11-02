@@ -164,7 +164,6 @@ Everything in the matrix above. Every `rst_*` function runs in both the lightwei
 A small number of capabilities run only in the heavyweight tier:
 
 - **Conforming TIN mode.** The VectorX function `st_triangulate` (`gbx_st_triangulate`) supports two triangulation modes: `mode='constrained'` (constrained Delaunay, the default) works in both tiers; `mode='conforming'` (Steiner-point conforming Delaunay) requires a C-level refinement library not available in the lightweight stack and raises in `pyrx` with an informative message.
-- **Advanced PMTiles writer options.** The `gbx_pmtiles_agg` aggregate function is available in both tiers. Advanced DataSource-level `pmtiles_gbx` writer options (multi-part, spatial index tuning) are heavyweight-only.
 
 See [Execution Tiers](./execution-tiers) for how to choose and switch between tiers.
 

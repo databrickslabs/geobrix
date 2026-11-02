@@ -13,7 +13,7 @@ import { Impl } from '@site/src/components/Tier';
 
 # PMTiles Function Reference
 
-Most PMTiles functions — the `pmtiles` DataSource writer and its options — are heavyweight-only. The `gbx_pmtiles_agg` aggregate and the lightweight `pmtiles_gbx` DataSource writer are available in **both tiers** (see the per-function badge below and the [PMTiles Writer](../writers/pmtiles) page). See [Choosing an Execution Tier](./execution-tiers) for the lightweight vs heavyweight comparison.
+The `gbx_pmtiles_agg` aggregate is available in **both tiers** (see the per-function badge below). The `pmtiles_gbx` DataSource writer is a pure-Python writer that runs on every compute (see the [PMTiles Writer](../writers/pmtiles) page). See [Choosing an Execution Tier](./execution-tiers) for the lightweight vs heavyweight comparison.
 
 GeoBrix encodes tile pyramids (raster or vector) into the [PMTiles v3](https://github.com/protomaps/PMTiles/blob/main/spec/v3/spec.md) single-file archive format. PMTiles replaces the "directory of tiles" pattern with one compact, hash-deduplicated, range-readable file servable directly from cloud object storage. Tile content bytes (PNG / JPEG / WebP / MVT) pass through verbatim — PMTiles is container-only.
 
@@ -28,9 +28,7 @@ Pick based on pyramid size:
 | Entry point | When to use | Limit |
 |---|---|---|
 | **`gbx_pmtiles_agg` UDAF** (this page) | The full pyramid fits in a single Spark cell. Returns a `BINARY` column. Convenient for one-shot bundle generation. | ~100 MiB of tile payload by default; hard ceiling at the 2 GiB Spark cell limit. |
-| [**PMTiles Writer**](../writers/pmtiles) (`.write.format("pmtiles")`) | Larger pyramids; streaming partitioned commit writes one `.pmtiles` file with no in-memory consolidation. | Bound only by available disk on the driver during commit. |
-
-Both paths share the same native-Scala PMTiles v3 encoder — bytes they emit are byte-compatible.
+| [**PMTiles Writer**](../writers/pmtiles) (`.write.format("pmtiles_gbx")`) | Larger pyramids; per-partition writes with spatial sharding, no in-memory consolidation. | Bound only by available disk. |
 
 ## Registration
 
@@ -46,7 +44,7 @@ import com.databricks.labs.gbx.pmtiles.functions
 functions.register(spark)
 ```
 
-The DataSource writer (`.write.format("pmtiles")`) does NOT need registration — it is wired through `META-INF/services` as soon as the GeoBrix JAR is on the Spark classpath.
+The `pmtiles_gbx` writer is a Python DataSource: install it with `databricks.labs.gbx.ds.register.register(spark)`.
 
 On the lightweight tier, `gbx_pmtiles_agg` is installed automatically by `pyrx.register(spark)` **and** `pyvx.register(spark)` (PMTiles is format-agnostic, so it belongs to both). To install only the aggregate — without the rest of a tier — call the standalone helper:
 
@@ -83,28 +81,24 @@ SELECT gbx_pmtiles_agg(bytes, z, x, y, '{"name":"my_tileset"}') AS pmt
 FROM tiles_z2;
 ```
 
-### DataSource: stream to a single `.pmtiles` file
+### DataSource: write a pyramid with `pmtiles_gbx`
 
 ```python
+from databricks.labs.gbx.ds.register import register
+register(spark)
+
 (
     tiles_df
     .write
-    .format("pmtiles")
-    .option("metadataJson", '{"name":"my_tileset"}')
+    .format("pmtiles_gbx")
+    .option("shardZoom", "0")        # 0 = one merged archive
+    .option("metadata", '{"name":"my_tileset"}')
     .mode("overwrite")
     .save("/tmp/out.pmtiles")
 )
 ```
 
-```scala
-tilesDf.write
-    .format("pmtiles")
-    .option("metadataJson", "{\"name\":\"my_tileset\"}")
-    .mode("overwrite")
-    .save("/tmp/out.pmtiles")
-```
-
-The output path is the **final file**, not a directory: scratch `_part_*.tdata` and `_part_*.entries` files are written alongside it during the commit phase and deleted on success.
+With `shardZoom=0` the output path is the **final file**. See the [PMTiles Writer](../writers/pmtiles) page for sharded output and the other options.
 
 :::tip Save mode
 Always pass `.mode("overwrite")`. The default `ErrorIfExists` is not supported — the failure is loud and points you at `.mode("overwrite")`.
@@ -112,7 +106,7 @@ Always pass `.mode("overwrite")`. The default `ErrorIfExists` is not supported �
 
 ## Schema contract
 
-The DataSource writer enforces an exact write schema:
+The DataSource writer expects this write schema:
 
 ```text
 z      INT       — tile zoom level (0..31)
@@ -121,7 +115,7 @@ y      INT       — tile y within the zoom
 bytes  BINARY    — tile payload (PNG / JPEG / WebP / MVT)
 ```
 
-Missing columns, extra columns, or wrong types all raise a single `IllegalArgumentException` that names the canonical schema. The UDAF is more relaxed: `z`/`x`/`y` accept either `INT` or `LONG` (PySpark's `createDataFrame` infers Python ints as `LongType` by default, which the UDAF coerces in `update`).
+The UDAF is more relaxed: `z`/`x`/`y` accept either `INT` or `LONG` (PySpark's `createDataFrame` infers Python ints as `LongType` by default, which the UDAF coerces in `update`).
 
 ## Tile-type detection
 
@@ -147,7 +141,7 @@ GeoBrix passes tile bytes through unchanged. If your tiles are already compresse
 | `3` | brotli |
 | `4` | zstd |
 
-The internal compression (root directory + metadata) is always `none` in v0.4.0; the spec's compressed-root-directory variant ships in a future release. Archives the heavyweight writer produces read back through the lightweight [`pmtiles_gbx` reader](../readers/pmtiles).
+The internal compression (root directory + metadata) is always `none` in v0.4.0; the spec's compressed-root-directory variant ships in a future release.
 
 ---
 
@@ -236,7 +230,7 @@ PMTiles is designed to be served as a single static file via HTTP `Range` reques
 ## Limits in v0.4.0
 
 - **No leaf directories.** If the global root directory would exceed 16,257 bytes (spec § 4), the encoder errors out and asks you to split your input. In practice this only happens with very large pyramids (tens of millions of tiles); the limit will be relaxed in a future release.
-- **No heavyweight read path.** `spark.read.format("pmtiles")` raises a friendly error. Read within GeoBrix via the lightweight [`pmtiles_gbx` reader](../readers/pmtiles); the JS / Python pmtiles client libraries also work for external read access.
+- **Read within GeoBrix** via the [`pmtiles_gbx` reader](../readers/pmtiles); the JS / Python pmtiles client libraries also work for external read access.
 - **No cross-task dedup in the DataSource.** Identical tiles across partitions are stored multiple times in the final file. The UDAF path does per-blob SHA-256 dedup, so for known-redundant pyramids prefer the UDAF if your data fits.
 
 ## References

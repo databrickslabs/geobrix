@@ -686,9 +686,7 @@ def run_format_write(
 ) -> "ResultRow":
     """Time spark.write.format(write_fmt).save(out_path) on a pre-read input DataFrame.
 
-    ``mode`` is the Spark write mode: the light gtiff_gbx writer supports
-    "overwrite"; the heavy gtiff_gdal writer is append-only ("overwrite" raises
-    UNSUPPORTED_FEATURE truncate), so pass mode="append" for it.
+    ``mode`` is the Spark write mode ("overwrite" by default).
 
     ``label`` (default "") distinguishes otherwise-identical legs in the store: when
     non-empty it is appended to the success ResultRow's ``note`` as " [<label>]" so a
@@ -721,9 +719,9 @@ def run_format_write(
 
     register(spark)
 
-    # Best-effort heavy init when either format is a heavyweight GDAL format.
+    # Best-effort heavy init when the input is read by a heavyweight GDAL format.
     _heavy_fmts = {"gdal", "gtiff_gdal"}
-    if read_fmt in _heavy_fmts or write_fmt in _heavy_fmts:
+    if read_fmt in _heavy_fmts:
         try:
             from databricks.labs.gbx.rasterx import functions as _rx
 
@@ -932,7 +930,7 @@ def run_pmtiles_write(
 ) -> "ResultRow":
     """Time a PMTiles write of ``n_tiles`` synthetic PNG tiles.
 
-    ``write_fmt`` is ``'pmtiles_gbx'`` (light) or ``'pmtiles'`` (heavy).
+    ``write_fmt`` is ``'pmtiles_gbx'``, the one PMTiles writer.
     Generates distinct (z, x, y) tiles, caches the DataFrame, then times
     repeated ``write.format(write_fmt)`` calls. Returns a single ResultRow
     (mode="spark-path", category="writer").

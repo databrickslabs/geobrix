@@ -34,11 +34,11 @@ def _section_cells(nb):
     ]
 
 
-def test_benchmark_pmtiles_cell_contains_run_pmtiles_write_and_parity():
+def test_benchmark_pmtiles_cell_contains_run_pmtiles_write():
     nb = cl.build_bench_notebook(_cfg(benchmark_pmtiles=True))
     src = _src(nb)
     assert "run_pmtiles_write" in src
-    assert "PMTILES PARITY" in src
+    assert "PMTILES PARITY" not in src
     # Standard fn-bench sections still present (benchmark_pmtiles does NOT suppress them).
     secs = _section_cells(nb)
     assert len(secs) == 4  # both tiers, both modes
@@ -48,7 +48,6 @@ def test_pmtiles_only_omits_per_function_sections():
     nb = cl.build_bench_notebook(_cfg(pmtiles_only=True))
     src = _src(nb)
     assert "run_pmtiles_write" in src
-    assert "PMTILES PARITY" in src
     # pmtiles_only must skip per-fn section cells entirely.
     secs = _section_cells(nb)
     assert (
@@ -60,8 +59,7 @@ def test_pmtiles_only_lightweight_only():
     nb = cl.build_bench_notebook(_cfg(pmtiles_only=True, heavyweight=False))
     src = _src(nb)
     assert "run_pmtiles_write" in src
-    # No parity check when only one tier runs.
-    assert "PMTILES PARITY" not in src or "LIGHTWEIGHT and HEAVYWEIGHT" in src
+    assert "PMTILES PARITY" not in src
 
 
 def test_benchmark_pmtiles_false_no_pmtiles_cell():
@@ -87,17 +85,16 @@ def test_benchmark_pmtiles_preamble_flags_set():
     assert "PMTILES_ONLY = False" in src
 
 
-def test_pmtiles_cell_uses_correct_write_fmts():
+def test_pmtiles_cell_writes_only_pmtiles_gbx():
     nb = cl.build_bench_notebook(_cfg(benchmark_pmtiles=True))
     src = _src(nb)
     assert 'write_fmt="pmtiles_gbx"' in src
-    assert 'write_fmt="pmtiles"' in src
+    assert 'write_fmt="pmtiles"' not in src
 
 
-def test_pmtiles_cell_uses_sink_lw_hw_variables():
+def test_pmtiles_cell_uses_sink_lw_variables():
     # The cell must reference the canonical preamble-defined names.
     nb = cl.build_bench_notebook(_cfg(benchmark_pmtiles=True))
     src = _src(nb)
     assert "_sink([_r])" in src
     assert "lw.append(_r)" in src
-    assert "hw.append(_r)" in src

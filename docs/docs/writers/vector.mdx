@@ -8,7 +8,7 @@ import vectorWriteExamples from '!!raw-loader!../../tests/python/writers/vector_
 
 # Vector Writer
 
-_Since:_ lightweight `vector_gbx` **v0.4.0** · _(light-only — no heavyweight tier)_
+_Since:_ `vector_gbx` **v0.4.0**
 
 `vector_gbx` — pyogrio-backed, pure-Python DataSource V2 writer. It is the generic
 catch-all vector writer: pass any OGR-supported driver via `driverName` and it
@@ -25,19 +25,16 @@ writers instead:
   for very large outputs, use a **classic cluster** (high-memory Serverless does *not* help
   here) or switch to the scalable `geojsonl_gbx` / `gpkg_gbx` writers. See
   [**Choosing a writer for large datasets**](./overview#choosing-a-writer-for-large-datasets).
-- **Tier & compute:** the lightweight (`*_gbx`) writers need **no JAR** and are
-  the **only** option on Serverless and standard (shared) clusters. The heavyweight
-  raster/PMTiles writers run on **dedicated clusters**. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix [DCS image](../installation/dcs.mdx). See [Choose an install path](../installation.mdx#choose-an-install-path). Your
-  compute usually decides the tier — then data scale. See
-  [Benchmarking](../api/benchmarking) for timings and methodology.
+- **Compute:** the `*_gbx` writers need **no JAR** and run on every compute, Serverless and
+  standard (shared) clusters included. See [Benchmarking](../api/benchmarking) for timings and
+  methodology.
 :::
 
 :::note Before you write
 - **Register first** — call `register(spark)` once before using any `*_gbx` format (see the
   [Writers Overview](./overview)).
-- **Lightweight-only** — this single-file writer isn't implemented in the heavyweight tier;
-  for output in **both** tiers, use the sharded [**GeoJSONL** writer](./geojsonl)
-  (`geojsonl_gbx` lightweight / `geojsonl_ogr` heavyweight).
+- **Single file** — this writer assembles one output file; for sharded output, use the
+  [**GeoJSONL** writer](./geojsonl) (`geojsonl_gbx`).
 - **Input geometry** — provide geometry as **WKB** (binary) or **WKT** (text), with the CRS in
   the companion `*_srid` / `*_srid_proj` columns. **EWKB**, **EWKT**, and GeoJSON-encoded
   geometry are **not** accepted. Writing from a Databricks `GEOMETRY` / `GEOGRAPHY` column?
@@ -154,7 +151,7 @@ df = spark.table("main.geo.features")  # vector data in a (Delta) table
 df.write.format("vector_gbx").option("driverName", "GeoJSON").mode("overwrite").save("/Volumes/main/geo/exports/features.geojson")
 ```
 
-Each partition is written concurrently, then merged into one output file. See [Benchmarking](../api/benchmarking) for light-vs-heavy export figures.
+Each partition is written concurrently, then merged into one output file. See [Benchmarking](../api/benchmarking) for export timings.
 
 ## Common functions: used vs excluded
 

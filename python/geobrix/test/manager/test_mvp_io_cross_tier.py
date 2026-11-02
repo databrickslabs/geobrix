@@ -475,7 +475,7 @@ def test_the_rust_decode_opens_with_the_allowed_drivers_only(tmp_path):
 
 @pytest.mark.integration
 def test_every_io_bench_form_runs_with_the_jar(jvm_spark, tmp_path):
-    """The levels leg's IO forms (reads a / b / c / udf / d-py / d-rs, writers W0 / W1 / W2) on four local tiles, the
+    """The levels leg's IO forms (reads a / b / c / udf / d-py / d-rs, writers W1 / W2) on four local tiles, the
     JVM forms included: each ends `ok`, or `na_by_design` for d-rs alone, and the writers leave no scratch behind.
     """
     import numpy as np

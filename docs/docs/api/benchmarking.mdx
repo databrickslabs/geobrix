@@ -176,10 +176,10 @@ Representative results across the benchmark families, organized by function grou
 
 ### Raster readers & writers
 
-The raster reader/writer is benchmarked the same way on both tiers: read **1,000 ×
-1024² GeoTIFF tiles** from a UC Volume (count), and write the same 1,000 tiles back
-out as GeoTIFF. Lightweight uses `raster_gbx` / `gtiff_gbx` (rasterio); heavyweight
-uses `gdal` / `gtiff_gdal` (native GDAL in the JVM). Run with
+The raster reader is benchmarked the same way on both tiers: read **1,000 ×
+1024² GeoTIFF tiles** from a UC Volume (count). Lightweight uses `raster_gbx` (rasterio);
+heavyweight uses `gdal` (native GDAL in the JVM). The GeoTIFF writer, `gtiff_gbx`, writes the
+same 1,000 tiles back out (4.7 s); it has no heavyweight counterpart. Run with
 `gbx:bench:cluster --readers-only --spark-warmup 0 --spark-measured 1`.
 
 :::note Large-raster benchmark profile (coming)
@@ -197,11 +197,8 @@ section once the profile lands.
 | Operation | rows | light | heavy | ratio |
 |---|---|---|---|---|
 | **Read** GeoTIFF (`raster_gbx` / `gdal`) | 1,000 | 22.7 s | **9.5 s** | **2.4×** (heavy faster) |
-| **Write** GeoTIFF (`gtiff_gbx` / `gtiff_gdal`) | 1,000 | 4.7 s | **4.0 s** | **1.18×** (≈ parity) |
 
-Both tiers emit the **same tile schema**, so they are drop-in swaps. The **writer runs
-at parity** (~1.2×): the GeoTIFF encode dominates and costs about the same whether it
-runs in the JVM or via rasterio. The **reader trails ~2.4×** — the cost is moving each
+Both tiers emit the **same tile schema**, so the readers are drop-in swaps. The **reader trails ~2.4×** — the cost is moving each
 decoded tile's bytes across the Spark Python DataSource boundary (JVM↔Python ser/de),
 not the decode itself. That boundary is the structural tax of the pure-Python tier, and
 it is the trade for running where the heavyweight tier can't (Serverless, ARM, no JAR). At scale the read still parallelizes across the cluster (~23 ms/tile here,
@@ -333,28 +330,19 @@ skips cleanly with a clear message rather than failing the run.
 
 The PMTiles writer is benchmarked separately from the `rst_*` functions: it is a
 **write** that packages a tile pyramid into a `.pmtiles` archive, not a per-tile
-transform. The lightweight `pmtiles_gbx` writer and the heavyweight `pmtiles`
-writer take the same `(z, x, y, bytes)` input; the benchmark writes **1,000 tiles
-to a single archive** on each tier and verifies **decoded-tile parity** between the
-two outputs. Run it with `gbx:bench:cluster --pmtiles-only --row-counts 1000`.
+transform. The `pmtiles_gbx` writer takes a `(z, x, y, bytes)` input; the benchmark writes
+**1,000 tiles to a single archive**. Run it with `gbx:bench:cluster --pmtiles-only --row-counts 1000`.
 
 > **Environment:** Databricks · DBR 17.3 LTS · 1,000 synthetic PNG tiles → one
-> `.pmtiles` archive per tier · whole-job wall-clock median.
+> `.pmtiles` archive · whole-job wall-clock median.
 
-| Writer | Tier | Whole-job median (1,000 tiles) | Speedup |
-|---|---|---|---|
-| `pmtiles_gbx` | lightweight | 18.4 s | — |
-| `pmtiles` | heavyweight | 20.7 s | **1.13×** (lightweight faster) |
+| Writer | Whole-job median (1,000 tiles) |
+|---|---|
+| `pmtiles_gbx` | 18.4 s |
 
-**Parity:** the two archives decode to the **same 1,000 `(z, x, y)` tiles with
-byte-identical tile data**. This is a hard gate — the benchmark fails if the tiers
-diverge — so the timing above is a like-for-like comparison of identical output.
-
-> Both writers are two-phase (executors write intermediates, the driver assembles
-> the archive), so the benchmark stages intermediates on a **shared filesystem**
-> rather than node-local disk; the lightweight writer streams its per-partition
-> scratch and assembles on the driver, the same model the sharded/mosaic output
-> uses at scale.
+> The writer is two-phase: executors write intermediates, then the driver assembles
+> the archive. The benchmark stages intermediates on a **shared filesystem**,
+> not node-local disk. The sharded and mosaic output use the same model at scale.
 
 ### Tiled output aggregate (`pmtiles_agg`)
 
@@ -421,26 +409,22 @@ scale (a single 1M archive is shown).
 
 ### Vector writers
 
-The **single-file** vector writers are **lightweight-only** — their OGR write paths aren't
-implemented in the heavyweight tier. The **sharded GeoJSONL** writer is available in **both**
-tiers (as the table shows). Each writes a **14,000,000-feature** Delta table to a **single
+The vector writers are all `*_gbx` writers. Each single-file writer writes a **14,000,000-feature** Delta table to a **single
 file** (the two-phase writer merges the partition fragments on the driver). Run with
 `gbx:bench:cluster --vector-only --vector-scale --vector-legs writer --writer-rows 14000000`.
 
-| Format | rows | light (`*_gbx`) | throughput |
+| Format | rows | time | throughput |
 |---|---|---|---|
 | GeoJSON (single file) | 14M | 279.1 s | ~50k rows/s |
 | Shapefile (single file) | 14M | 152.6 s | ~92k rows/s |
 | GeoPackage (single file) | 14M | 155.9 s | ~90k rows/s |
 | FileGDB (single file) | 14M | 97.2 s | ~144k rows/s |
-| **GeoJSONL (sharded)** — light `geojsonl_gbx` / heavy `geojsonl_ogr` | 14M | **16.4 s** / **16.1 s** (80 shards) | **~855k / ~870k rows/s** |
+| **GeoJSONL (sharded)** — `geojsonl_gbx` | 14M | **16.4 s** (80 shards) | **~855k rows/s** |
 
 The single-file writers are **driver-bound** — the partition fragments are merged into one
-file on the driver (GeoJSON is slowest: text encoding). The **sharded GeoJSONL** writer skips the merge entirely — one newline-delimited
-shard per partition, written in parallel — so it is **~17× faster** than the single-file
-GeoJSON writer at 14M (~16 s vs 279 s) and scales with partitions. It is the only vector
-writer available in **both tiers** (the others are lightweight-only), and the two tiers run at
-parity (16.4 s light vs 16.1 s heavy). It's the recommended writer for large / any-scale
+file on the driver (GeoJSON is slowest: text encoding). The **sharded GeoJSONL** writer skips the merge entirely. It writes one newline-delimited
+shard per partition, in parallel. It is **~17× faster** than the single-file
+GeoJSON writer at 14M (~16 s vs 279 s) and scales with partitions. It's the recommended writer for large
 output; `maxRecordsPerFile` caps features per shard.
 
 **FileGDB driver memory.** The FileGDB commit is the one single-file writer whose driver memory is

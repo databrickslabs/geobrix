@@ -1,7 +1,7 @@
 """
 SQL examples for the PMTiles UDAF.
 
-The PMTiles DataSource writer (`df.write.format("pmtiles").mode("overwrite").save(path)`)
+The PMTiles DataSource writer (`df.write.format("pmtiles_gbx").mode("overwrite").save(path)`)
 is documented in `docs/docs/packages/pmtiles.mdx` — it is not a SQL function and
 therefore has no `*_sql_example()` entry here.
 

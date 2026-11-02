@@ -8,7 +8,7 @@ import vectorWriteExamples from '!!raw-loader!../../tests/python/writers/vector_
 
 # GeoDatabase Writer
 
-_Since:_ lightweight `file_gdb_gbx` **v0.4.0** · _(light-only — no heavyweight tier)_
+_Since:_ `file_gdb_gbx` **v0.4.0**
 
 `file_gdb_gbx` — a pure-Python DataSource V2 writer like the other `*_gbx` writers. It
 encodes the `.gdb` with the OpenFileGDB driver in pyogrio's bundled GDAL, so it needs no
@@ -161,7 +161,7 @@ df = spark.table("main.geo.parcels")  # vector data in a (Delta) table
 df.write.format("file_gdb_gbx").mode("overwrite").save("/Volumes/main/geo/exports/parcels.gdb")
 ```
 
-Each partition is written concurrently, then merged into one output file. See [Benchmarking](../api/benchmarking) for light-vs-heavy export figures.
+Each partition is written concurrently, then merged into one output file. See [Benchmarking](../api/benchmarking) for export timings.
 
 ## Common functions: used vs excluded
 

@@ -3,27 +3,20 @@ sidebar_position: 2
 sidebar_label: GeoTIFF
 ---
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
 import CodeFromTest from '@site/src/components/CodeFromTest';
 import rasterGbxWrite from '!!raw-loader!../../tests/python/writers/raster_gbx_write_examples.py';
-import gdalWriteExamples from '!!raw-loader!../../tests/python/writers/gdal_examples.py';
 
 # GeoTIFF Writer
 
-_Since:_ lightweight `gtiff_gbx` **v0.4.0** · heavyweight `gtiff_gdal` **v0.2.0**
+_Since:_ `gtiff_gbx` **v0.4.0**
 
-Write GeoTIFF tiles. The **lightweight** `gtiff_gbx` writer (the `raster_gbx`
-writer with the GeoTIFF driver forced) and the **heavyweight** `gtiff_gdal` writer
-(the GDAL writer restricted to the GTiff driver) are interchangeable — see
-[Choosing an Execution Tier](../api/execution-tiers#the-one-line-swap).
+Write GeoTIFF tiles with the `gtiff_gbx` writer (the `raster_gbx` writer with the
+GeoTIFF driver forced).
 
-:::tip Benchmark & tradeoff
-The lightweight (`*_gbx`) writers need **no JAR** and are the **only** option
-on Serverless and standard (shared) clusters. The heavyweight raster/PMTiles writers run on
-**dedicated clusters**. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix [DCS image](../installation/dcs.mdx). See [Choose an install path](../installation.mdx#choose-an-install-path).
-where available they use native GDAL on the JVM. So your compute usually decides the tier — then data scale. See the
-[Benchmarking](../api/benchmarking) page for timings and methodology.
+:::tip No JAR needed
+The `*_gbx` writers need **no JAR** and run on every compute, Serverless and standard
+(shared) clusters included. See the [Benchmarking](../api/benchmarking) page for timings and
+methodology.
 :::
 
 ## Schema
@@ -54,13 +47,10 @@ df.withColumn("source", df["scene_id"]) \
 
 **Output:** one GeoTIFF (`.tif`) file per input row, written under the target directory.
 
-<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
-<TabItem value="lightweight" label="Lightweight · gtiff_gbx">
-
 `gtiff_gbx` is the [`raster_gbx`](./raster) catch-all writer with the GeoTIFF
 driver forced — output is always GeoTIFF regardless of `tile.metadata`. Register
-the lightweight DataSources first (see
-[Lightweight Raster Writer](./raster)).
+the DataSources first (see
+[Raster Writer](./raster)).
 
 <CodeFromTest code={rasterGbxWrite} language="python" functionName="WRITE_GTIFF_GBX"
   source="docs/tests/python/writers/raster_gbx_write_examples.py"
@@ -69,26 +59,6 @@ the lightweight DataSources first (see
 `nameCol` / `ext`, the `compress` / `compressLevel` / `predictor` options and the
 performance characteristics are the same as the catch-all
 [`raster_gbx` writer](./raster#output-format--compression).
-
-It is the lightweight counterpart of the heavyweight `gtiff_gdal` writer, supporting Python and SQL bindings (not Scala).
-
-</TabItem>
-<TabItem value="heavyweight" label="Heavyweight · gtiff_gdal">
-
-`gtiff_gdal` is the GDAL writer restricted to the GeoTIFF driver — it reads and
-writes `.tif` rasters and is **append-only** (use the lightweight writer for
-`overwrite`). It takes the same `(source, tile)` schema as the other writers.
-
-<CodeFromTest code={gdalWriteExamples} language="python" functionName="WRITE_GTIFF_GDAL"
-  source="docs/tests/python/writers/gdal_examples.py"
-  testFile="docs/tests/python/writers/test_gdal_examples.py" />
-
-See the [Raster Writer → Heavyweight](./raster?tier=heavyweight) tab for the full
-GDAL-writer options (`path` / `nameCol` / `ext`, format & compression from
-`tile.metadata`).
-
-</TabItem>
-</Tabs>
 
 :::tip Splitting source files into a tile grid?
 This writer takes an already-loaded tile DataFrame (`(source, tile)` schema).

@@ -3,12 +3,9 @@ sidebar_position: 7
 sidebar_label: GeoJSONL (multi-file)
 ---
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
-
 # GeoJSONL Writer (multi-file)
 
-_Since:_ lightweight `geojsonl_gbx` **v0.4.0** · heavyweight `geojsonl_ogr` **v0.4.0**
+_Since:_ `geojsonl_gbx` **v0.4.0**
 
 Emit a **directory of newline-delimited GeoJSONL shards** (OGR driver `GeoJSONSeq`, one
 `Feature` per line) — **one shard per partition, no driver merge**. Unlike the single-file
@@ -16,31 +13,22 @@ GeoJSON writer — which merges every partition into one `FeatureCollection` fil
 the GeoJSONL writer's shards *are* the dataset, so write throughput scales with partitions. An
 optional `maxRecordsPerFile` splits a partition into several shards.
 
-Both tiers take the same input shape and produce a directory of `part-<uuid>.geojsonl` shards
-that round-trips with the GeoJSON reader's directory mode:
-
-- **Lightweight** `geojsonl_gbx` — pure-Python, Serverless-safe (pyogrio); read back via
-  `geojson_gbx` with `option("multi","true")`.
-- **Heavyweight** `geojsonl_ogr` — DataSource V2 writer on native GDAL/OGR (JVM); read back via
-  `geojson_ogr` with `option("multi","true")`.
+The `geojsonl_gbx` writer is pure-Python and Serverless-safe (pyogrio). It produces a directory of
+`part-<uuid>.geojsonl` shards that round-trips with the GeoJSON reader's directory mode: read it
+back via `geojson_gbx` with `option("multi","true")`.
 
 :::tip Compute & scale
 - **Large datasets:** GeoJSONL is the **recommended writer for large data** — one shard per
   partition, no driver assembly, write throughput scales with partitions. See
   [**Choosing a writer for large datasets**](./overview#choosing-a-writer-for-large-datasets)
   for a comparison with the single-file writers.
-- **Tier & compute:** the lightweight `geojsonl_gbx` writer needs **no JAR** and
-  is the **only** option on Serverless and standard (shared) clusters. The heavyweight
-  `geojsonl_ogr` writer runs on **dedicated clusters**. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix [DCS image](../installation/dcs.mdx). See [Choose an install path](../installation.mdx#choose-an-install-path).
-  it encodes each shard with native GDAL/OGR on the JVM. Your compute usually decides the tier.
-  See [Benchmarking](../api/benchmarking) for timings and methodology.
+- **Compute:** the `geojsonl_gbx` writer needs **no JAR** and runs on every compute, Serverless and
+  standard (shared) clusters included. See [Benchmarking](../api/benchmarking) for timings and methodology.
 :::
 
 :::note Before you write
 - **Register first** — call `register(spark)` once before using any `*_gbx` format (see the
   [Writers Overview](./overview)).
-- **Both tiers** — `geojsonl_gbx` (lightweight) and `geojsonl_ogr` (heavyweight) take the same
-  input shape and produce the same output layout; the format name is the only difference.
 - **Input geometry** — provide geometry as **WKB** (binary) or **WKT** (text), with the CRS in
   the companion `*_srid` / `*_srid_proj` columns. **EWKB**, **EWKT**, and GeoJSON-encoded
   geometry are **not** accepted. Writing from a Databricks `GEOMETRY` / `GEOGRAPHY` column?
@@ -56,13 +44,13 @@ that round-trips with the GeoJSON reader's directory mode:
 | `mode` | `overwrite` | `overwrite` only; `append` is rejected. The target directory is cleared once before the shards land. |
 | `geometryType` | inferred from the data | Override the OGR geometry type. |
 | `layerName` | driver default | Output layer name where supported. |
-| `geomCol` | auto-detected from the `*_srid` column | Override the geometry column name. Locates the geometry and its SRID companion (`<geomCol>_srid`). See [Named Vector Formats](./overview#named-vector-formats). Available in **both** lightweight and heavyweight tiers. |
-| `sridCol` | `<geomCol>_srid` | Override the SRID column name. **Required** — supplies the CRS authority code (e.g. `"4326"`, or `"0"` if unknown). Available in **both** tiers. |
-| `projCol` | `<geomCol>_srid_proj` | Override the PROJ4 column name (optional fallback CRS when `sridCol` is `"0"`). Available in **both** tiers. |
+| `geomCol` | auto-detected from the `*_srid` column | Override the geometry column name. Locates the geometry and its SRID companion (`<geomCol>_srid`). See [Named Vector Formats](./overview#named-vector-formats). |
+| `sridCol` | `<geomCol>_srid` | Override the SRID column name. **Required** — supplies the CRS authority code (e.g. `"4326"`, or `"0"` if unknown). |
+| `projCol` | `<geomCol>_srid_proj` | Override the PROJ4 column name (optional fallback CRS when `sridCol` is `"0"`). |
 
 ## Schema
 
-`geojsonl_gbx` / `geojsonl_ogr` use the shared [vector column contract](./vector#schema) — a
+`geojsonl_gbx` uses the shared [vector column contract](./vector#schema) — a
 geometry column plus its `*_srid` (required) / `*_srid_proj` (optional) CRS companions; every
 other column becomes a feature attribute. Point the writer at your columns with
 `geomCol` / `sridCol` / `projCol`, or coerce to the `geom_0` convention.
@@ -72,9 +60,6 @@ non-empty partition (plus an advisory `_SUCCESS` marker). Each shard is a sequen
 newline-delimited GeoJSON `Feature` objects; attributes are written as feature `properties`.
 
 ## Write it
-
-<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
-<TabItem value="lightweight" label="Lightweight · geojsonl_gbx">
 
 Name your geometry/CRS columns with options (or coerce to the `geom_0` convention — see the
 [Vector Writer schema](./vector#schema) for that and for exporting Databricks `GEOMETRY` /
@@ -95,33 +80,6 @@ Name your geometry/CRS columns with options (or coerce to the `geom_0` conventio
 back = spark.read.format("geojson_gbx").option("multi", "true").load("/Volumes/cat/sch/vol/out")
 ```
 
-</TabItem>
-<TabItem value="heavyweight" label="Heavyweight · geojsonl_ogr">
-
-Same input shape and output layout; the format name is `geojsonl_ogr` and reads back through the
-heavyweight GeoJSON reader (`geojson_ogr`). Requires a dedicated cluster with the heavyweight tier installed. See [Choose an install path](../installation.mdx#choose-an-install-path). The same column options apply (see the [Vector Writer schema](./vector#schema)):
-
-```python
-(df  # geometry + CRS under your own column names
- .write.format("geojsonl_ogr")
- .option("geomCol", "the_geom")   # WKB or WKT
- .option("sridCol", "epsg")       # REQUIRED — CRS authority code
- .mode("overwrite").save("/Volumes/cat/sch/vol/out"))
-```
-
-**Read it back** with the heavyweight GeoJSON reader's directory mode:
-
-```python
-back = spark.read.format("geojson_ogr").option("multi", "true").load("/Volumes/cat/sch/vol/out")
-```
-
-Each shard is encoded with native GDAL/OGR (`GeoJSONSeq` driver) to worker-local temp, then
-sequentially copied into the output directory (rename-free, so safe on FUSE-mounted Unity
-Catalog Volumes / DBFS).
-
-</TabItem>
-</Tabs>
-
 ## How it scales
 
 The single-file GeoJSON writer writes **one merged file**: each partition writes a fragment, then
@@ -134,9 +92,8 @@ directory (rename-free, so safe on FUSE-mounted Unity Catalog Volumes / DBFS). B
 is splittable and concatenable, the directory of shards *is* the dataset — there is nothing to
 assemble on the driver, so **write throughput scales with the number of partitions**. Use
 `df.repartition(n, "<col>")` to set shard granularity, or `maxRecordsPerFile` to cap features per
-shard (splitting a large partition into several shards). This holds for both tiers — the lightweight
-writer parallelizes per partition with pyogrio, the heavyweight writer with native GDAL/OGR on the
-JVM.
+shard (splitting a large partition into several shards). The writer parallelizes
+per partition with pyogrio.
 
 :::warning Serverless: repartition by a column
 On Serverless, hash by a column — `df.repartition(n, "<key>")` — to control parallelism. A
@@ -153,7 +110,7 @@ or highly parallel writes.
 Export a table of vector data to a directory of GeoJSONL shards — repartition to control
 write parallelism (one shard per partition):
 
-| Step | Code (lightweight) |
+| Step | Code |
 |---|---|
 | 1. Load a table | `df = spark.table("main.geo.parcels")` |
 | 2. Set parallelism | `df = df.repartition(64, "id")` &nbsp;*(by a column — see Serverless note above)* |
@@ -167,9 +124,6 @@ df.repartition(64, "id").write.format("geojsonl_gbx").mode("overwrite").save(
 )
 # -> a directory of 64 part-<uuid>.geojsonl shards, written in parallel, no driver merge
 ```
-
-On a dedicated cluster with the heavyweight tier installed, swap the format names for the heavyweight tier
-(`geojsonl_ogr` to write, `geojson_ogr` with `multi=true` to read back).
 
 To cap features per shard regardless of partition size:
 
@@ -198,9 +152,9 @@ primitives. The table below shows which are active in this writer and which are 
 | `gbx_file_read` (FILE-tier read) | Not in the DataSource | FILE-tier reads for vector data go through `vector_file_read` at the function layer. |
 
 :::note Coordinate reference systems
-The writer reads the CRS from the `geom_0_srid` column (or `sridCol`) and passes it to the OGR GeoJSONSeq driver. Per RFC 7946, each Feature is WGS84: the heavyweight writer's driver reprojects features in another CRS to WGS84. If `srid` is `"0"`, or an integer code that is neither an EPSG nor an ESRI code, the `geom_0_srid_proj` PROJ4 fallback is used. On the heavyweight tier (`geojsonl_ogr`), a `srid` or PROJ4 value that is not a CRS GeoBrix reads fails the write with an error that names the column, rather than writing the layer without a CRS. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
+The writer reads the CRS from the `geom_0_srid` column (or `sridCol`) and passes it to the OGR GeoJSONSeq driver. Per RFC 7946, each Feature is WGS84. If `srid` is `"0"`, or an integer code that is neither an EPSG nor an ESRI code, the `geom_0_srid_proj` PROJ4 fallback is used. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
 :::
 
 :::note Shared file-access layer
-Lightweight writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
+The writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
 :::

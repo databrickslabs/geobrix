@@ -7,6 +7,4 @@ com.databricks.labs.gbx.vectorx.ds.gdb.FileGDB_DataSource
 com.databricks.labs.gbx.vectorx.ds.geojson.GeoJSON_DataSource
 com.databricks.labs.gbx.vectorx.ds.netcdf.NetCDF_OGR_DataSource
 com.databricks.labs.gbx.vectorx.ds.gpkg.GPKG_DataSource
-com.databricks.labs.gbx.vectorx.ds.geojsonl.GeoJSONL_DataSource
-com.databricks.labs.gbx.pmtiles.PMTiles_DataSource
 com.databricks.labs.gbx.ds.register.RegisterDataSource

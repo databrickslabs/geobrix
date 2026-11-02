@@ -2,9 +2,7 @@
 
 Reads a real raster via the light reader, writes it via the light writer, and
 re-reads — asserting the written tile decodes to the same pixels as the source.
-The source raster is the pixel ground truth that both tiers must match (a live
-side-by-side vs the heavy ``gtiff_gdal`` writer is skipped because the heavy GDAL
-path does not run in the local dev container; the cluster is where heavy runs).
+The source raster is the pixel ground truth the written tile must match.
 
 Runs in Docker only: needs the geobrix JAR for the light DS register + sample
 data mounted at ``/Volumes``. Marked ``integration``; execute with::

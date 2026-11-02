@@ -13,30 +13,6 @@ import scala.jdk.CollectionConverters._
 
 class GDAL_ComponentsTest extends PlanTest with SilentSparkSession {
 
-    // ========== GDAL_WriterMsg Tests ==========
-
-    test("GDAL_WriterMsg should store error messages") {
-        val errors = Array("Error 1", "Error 2", "Error 3")
-        val msg = GDAL_WriterMsg(errors)
-        
-        msg.gdalErrors.length shouldBe 3
-        msg.gdalErrors(0) shouldBe "Error 1"
-        msg.gdalErrors(1) shouldBe "Error 2"
-        msg.gdalErrors(2) shouldBe "Error 3"
-    }
-
-    test("GDAL_WriterMsg should handle empty error array") {
-        val msg = GDAL_WriterMsg(Array.empty)
-        
-        msg.gdalErrors.length shouldBe 0
-    }
-
-    test("GDAL_WriterMsg should be a WriterCommitMessage") {
-        val msg = GDAL_WriterMsg(Array("error"))
-        
-        msg shouldBe a [org.apache.spark.sql.connector.write.WriterCommitMessage]
-    }
-
     // ========== GDAL_Partition Tests ==========
 
     test("GDAL_Partition should store file path and configuration") {
@@ -160,12 +136,13 @@ class GDAL_ComponentsTest extends PlanTest with SilentSparkSession {
         capabilities should contain(org.apache.spark.sql.connector.catalog.TableCapability.BATCH_READ)
     }
 
-    test("GDAL_Table should support batch write capability") {
+    test("GDAL_Table is read only: no write capability") {
         val schema = StructType(Array(StructField("test", StringType)))
         val table = new GDAL_Table(schema, Map.empty)
-        
+
         val capabilities = table.capabilities()
-        capabilities should contain(org.apache.spark.sql.connector.catalog.TableCapability.BATCH_WRITE)
+        capabilities should not contain org.apache.spark.sql.connector.catalog.TableCapability.BATCH_WRITE
+        capabilities should not contain org.apache.spark.sql.connector.catalog.TableCapability.TRUNCATE
     }
 
     test("GDAL_Table should be a SupportsRead") {
@@ -175,11 +152,11 @@ class GDAL_ComponentsTest extends PlanTest with SilentSparkSession {
         table shouldBe a [org.apache.spark.sql.connector.catalog.SupportsRead]
     }
 
-    test("GDAL_Table should be a SupportsWrite") {
+    test("GDAL_Table should not be a SupportsWrite") {
         val schema = StructType(Array(StructField("test", StringType)))
         val table = new GDAL_Table(schema, Map.empty)
-        
-        table shouldBe a [org.apache.spark.sql.connector.catalog.SupportsWrite]
+
+        table should not be a [org.apache.spark.sql.connector.catalog.SupportsWrite]
     }
 
     // ========== GDAL_Batch Tests ==========

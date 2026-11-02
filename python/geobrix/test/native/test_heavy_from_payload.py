@@ -1,6 +1,6 @@
 """The heavy tier runs the env wheel payload's GDAL (local probe P9).
 
-- conf only: a fresh JVM whose first GDAL user has no ExpressionConfig (KernelGdal, a vector writer's load on a task)
+- conf only: a fresh JVM whose first GDAL user has no ExpressionConfig (KernelGdal, a task's JNI load)
   and only the session's ``spark.databricks.labs.gbx.native.dir`` loads that payload's GDAL (``ConfOnlyProbe``).
 - guard: a JVM that already loaded another GDAL's JNI is refused the payload's (``DoubleLoadProbe``, exit 3).
 - oracle: one Spark session on the staged JAR whose JVM sees the payload only through that conf. The light and then the
@@ -157,7 +157,7 @@ def _system_gdal_or_skip():
     return jni
 
 
-# kernel: KernelGdal on the driver; writer: a vector writer's load on a task; writer-no-session: the same with no
+# kernel: KernelGdal on the driver; writer: the JNI load a task makes; writer-no-session: the same with no
 # session visible (as on an executor), so only the task's local property carries the conf; ogr: initOgr first.
 @pytest.mark.parametrize("first_user", ["kernel", "writer", "writer-no-session", "ogr"])
 def test_the_session_conf_alone_loads_the_payload(

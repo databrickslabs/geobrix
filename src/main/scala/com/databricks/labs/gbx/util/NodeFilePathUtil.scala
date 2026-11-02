@@ -38,8 +38,8 @@ object NodeFilePathUtil extends Logging {
 
     /** Base directory for this JVM's cached files (/tmp/gdal_local_files/&lt;uuid&gt;_&lt;pid&gt;).
       *
-      * Created eagerly: several callers (RST_MapAlgebra, RST_NDVI, NDVI, ClipToGeom,
-      * GDAL_RowWriter) write GDAL outputs directly under this path, and GDAL's
+      * Created eagerly: several callers (RST_MapAlgebra, RST_NDVI, NDVI, ClipToGeom)
+      * write GDAL outputs directly under this path, and GDAL's
       * gdal_translate / gdal_calc silently return a null Dataset when the target
       * directory does not exist, so the directory must exist before any write.
       */

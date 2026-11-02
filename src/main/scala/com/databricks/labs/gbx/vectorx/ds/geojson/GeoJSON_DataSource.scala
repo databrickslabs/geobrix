@@ -26,7 +26,7 @@ class GeoJSON_DataSource extends OGR_DataSource with DataSourceExtras {
     /** Overrides parent writeGuardMessage: names geojson_ogr and its geojson_gbx alternative. */
     override protected def writeGuardMessage(path: String): String =
         "'geojson_ogr' is a read-only reader; write vector data with the light geojson_gbx writer " +
-        "(or geojsonl_ogr for sharded GeoJSONL)."
+        "(or geojsonl_gbx for sharded GeoJSONL)."
 
     /** Overrides parent inferSchema: delegates to super with dsExtraMap options (GeoJSON/GeoJSONSeq). */
     override def inferSchema(options: CaseInsensitiveStringMap): StructType = {

@@ -408,7 +408,7 @@ def test_a_verbatim_copy_of_an_allowlisted_parse_line_is_a_new_site():
 
 
 def test_the_guard_finds_a_planted_unrouted_parse():
-    """The guard is not vacuous: a raw ImportFromProj4 of a column value (the GeoJSONL writer's old shape) is a hit."""
+    """The guard is not vacuous: a raw ImportFromProj4 of a column value (the shape a retired writer had) is a hit."""
     text = "val srs = new SpatialReference()\nsrs.ImportFromProj4(proj4)\n"
     found = [ln for ln in text.splitlines() if SCALA_PARSE.search(ln)]
     assert found == ["srs.ImportFromProj4(proj4)"]
@@ -418,15 +418,6 @@ def test_the_guard_finds_a_planted_unrouted_parse():
         isinstance(n.func, ast.Attribute) and n.func.attr == "from_user_input"
         for n in calls
     )
-
-
-def test_the_geojsonl_writer_parses_its_crs_through_the_resolver():
-    """The GeoJSONL writer's PROJ4 and SRID columns go through SpatialRefOps.resolveCrs, never ImportFromProj4."""
-    text = (SCALA_ROOT / "vectorx/ds/geojsonl/GeoJSONL_RowWriter.scala").read_text()
-    assert "ImportFromProj4" not in text
-    # the PROJ4 and SRID columns both go through resolveLoudly, which calls the canonical resolver (loud, with a Fix)
-    assert "SpatialRefOps.resolveCrs(value)" in text
-    assert 'resolveLoudly(proj4, "PROJ4")' in text
 
 
 def test_a_planted_user_text_parse_in_an_allowlisted_file_is_flagged():

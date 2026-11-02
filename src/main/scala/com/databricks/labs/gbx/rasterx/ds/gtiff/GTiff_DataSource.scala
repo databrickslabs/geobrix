@@ -7,7 +7,7 @@ import org.apache.spark.sql.connector.expressions.Transform
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
-/** GDAL TableProvider restricted to GeoTIFF (driver = GTiff). Use format "gtiff_gdal" to read/write .tif rasters. */
+/** GDAL TableProvider restricted to GeoTIFF (driver = GTiff). Use format "gtiff_gdal" to read .tif rasters. */
 //noinspection ScalaUnusedSymbol
 class GTiff_DataSource extends GDAL_DataSource with DataSourceExtras {
 

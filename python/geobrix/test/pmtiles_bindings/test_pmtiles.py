@@ -3,14 +3,10 @@
 Covers:
   - Registration via ``register_ds``.
   - UDAF path: ``pmtiles_agg`` returns a valid PMTile v3 binary blob.
-  - DataSource path: ``df.write.format("pmtiles").mode("overwrite").save(path)``
-    produces a single ``.pmtiles`` file with the correct header.
 """
 
 import logging
 import struct
-import tempfile
-import uuid
 from pathlib import Path
 
 import pytest
@@ -104,34 +100,3 @@ def test_pmtiles_agg_blob_metadata_and_png_detect(spark, pmtiles_registered):
         ).alias("pmt")
     ).collect()[0]["pmt"]
     assert _read_tile_type(pmt_png) == 2  # PNG
-
-
-def test_pmtiles_datasource_write(spark, pmtiles_registered):
-    """The .write.format("pmtiles") DataSource should produce a single file."""
-    tiles = [
-        (2, x, y, f"tile_{x}_{y}".encode("utf-8")) for x in range(3) for y in range(3)
-    ]
-    df = spark.createDataFrame(tiles, schema=["z", "x", "y", "bytes"]).repartition(
-        2, f.col("x"), f.col("y")
-    )
-
-    with tempfile.TemporaryDirectory(prefix="pmtiles-py-test-") as tmp:
-        out_path = f"{tmp}/out-{uuid.uuid4()}.pmtiles"
-        df.write.format("pmtiles").mode("overwrite").save(out_path)
-        # Read back as bytes and verify header.
-        with open(out_path, "rb") as fh:
-            blob = fh.read()
-        assert blob[:7] == b"PMTiles"
-        assert blob[7] == 3
-        assert _read_addressed_tiles(blob) == 9
-        # No leftover scratch files.
-        leftovers = [p.name for p in Path(tmp).iterdir() if p.name.startswith("_part_")]
-        assert not leftovers, f"scratch files left behind: {leftovers}"
-
-
-def test_pmtiles_read_not_supported(spark, pmtiles_registered):
-    """Reading a PMTile should surface a clear 'not supported' message, not class-not-found."""
-    with pytest.raises(Exception) as exc_info:
-        spark.read.format("pmtiles").load("/tmp/does-not-matter").collect()
-    msg = str(exc_info.value)
-    assert "Reading PMTiles archives is not supported" in msg, f"got: {msg}"

@@ -25,7 +25,7 @@ class OGR_DataSource extends TableProvider with DataSourceRegister {
       */
     protected def writeGuardMessage(path: String): String =
         s"'${shortName()}' is a read-only reader; write vector data with a light _gbx writer " +
-        s"(shapefile_gbx, gpkg_gbx, file_gdb_gbx, geojson_gbx) or geojsonl_ogr for sharded GeoJSONL."
+        s"(shapefile_gbx, gpkg_gbx, file_gdb_gbx, geojson_gbx) or geojsonl_gbx for sharded GeoJSONL."
 
     /** Overrides TableProvider.inferSchema: first file at path via OGR_SchemaInference; initializes GDAL and NodeFileManager. */
     override def inferSchema(options: CaseInsensitiveStringMap): StructType = {

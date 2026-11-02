@@ -1027,6 +1027,31 @@ class TestMergeAggVirtualizeDir:
         assert merged["raster"] is None and os.path.getsize(merged["path"]) > 0
         assert os.path.basename(merged["path"]).startswith("pub_")
 
+    @pytest.mark.parametrize("materialize", [True, False])
+    def test_materialize_alone_gives_the_tile_and_false_is_the_unforced_path(
+        self, spark, materialize
+    ):
+        """`materialize=True` (no directory) is the merged tile struct with its raster bytes and no path;
+        `materialize=False` is the unforced path, the same BINARY as no keyword. Both span the 4x2 union extent."""
+        from databricks.labs.gbx.rasterx import functions as rx
+
+        left = _ras(np.array([[1.0, 2.0], [3.0, 4.0]]), ulx=0.0, uly=2.0, px=1.0)
+        right = _ras(np.array([[5.0, 6.0], [7.0, 8.0]]), ulx=2.0, uly=2.0, px=1.0)
+        df = _spark_tile_df_raw(spark, [left, right])
+        merged = (
+            df.groupBy("g")
+            .agg(rx.rst_merge_agg("tile", materialize=materialize).alias("m"))
+            .first()["m"]
+        )
+        if materialize:
+            assert merged["raster"] is not None and merged["path"] is None
+            merged = merged["raster"]
+        else:
+            plain = df.groupBy("g").agg(rx.rst_merge_agg("tile").alias("m")).first()["m"]
+            assert bytes(merged) == bytes(plain)
+        with MemoryFile(bytes(merged)) as mf, mf.open() as ds:
+            assert (ds.width, ds.height) == (4, 2)
+
     def test_virtualize_dir_reopens_to_correct_extent(self, spark, tmp_path):
         """Re-opening the written file yields the correct merged extent/dims."""
         import databricks.labs.gbx.pyrx.functions as prx

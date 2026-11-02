@@ -38,15 +38,27 @@ object RST_GetNoData extends WithExpressionInfo {
                 val exprConf = ExpressionConfig.fromB64(conf.toString)
                 RST_ExpressionUtil.init(exprConf)
                 val ds = RasterSerializationUtil.rowToDS(row, rdt, gated = false)
-                val res = execute(ds)
+                val res = executeOrNull(ds)
                 RasterDriver.releaseDataset(ds)
-                ArrayData.toArrayData(res)
+                if (res == null) null else ArrayData.toArrayData(res)
             },
             row,
             rdt,
             conf
           )
         ).map(_.asInstanceOf[ArrayData]).orNull
+
+    /** The NoData value of each band, NaN for a band that declares none; NULL when no band declares one (the
+      * lightweight function's answer). A NoData value that is itself NaN counts as declared. */
+    def executeOrNull(ds: Dataset): Array[Double] = {
+        val declared = (1 to ds.GetRasterCount()).map { bandIndex =>
+            val band = ds.GetRasterBand(bandIndex)
+            val v    = Array.fill[java.lang.Double](1)(null)
+            if (band != null) band.GetNoDataValue(v)
+            Option(v(0)).map(_.doubleValue())
+        }
+        if (declared.forall(_.isEmpty)) null else declared.map(_.getOrElse(Double.NaN)).toArray
+    }
 
     def execute(ds: Dataset): Array[Double] = {
         (1 to ds.GetRasterCount()).map { bandIndex =>

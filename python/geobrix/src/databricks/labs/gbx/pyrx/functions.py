@@ -334,8 +334,9 @@ def _header_accessor_udf(core_fn, return_type):
     return _udf
 
 
-def _pixel_accessor_udf(core_fn, return_type):
-    """Struct-accepting pixel accessor UDF (_open, materialises the window)."""
+def _pixel_accessor_udf(core_fn, return_type, on_empty=None):
+    """Struct-accepting pixel accessor UDF (_open, materialises the window). `on_empty` is the answer for a tile
+    with neither bytes nor a path (an error tile); a NULL tile is always NULL."""
     from databricks.labs.gbx.core import proj_grids
     from databricks.labs.gbx.pyrx import _env
 
@@ -344,7 +345,7 @@ def _pixel_accessor_udf(core_fn, return_type):
     @f.udf(return_type)
     def _udf(tile):
         if _tile_is_empty(tile):
-            return None
+            return None if tile is None else on_empty
         try:
             _env.configure_gdal_env(extra_proj_dirs=_grid_dirs)
             with ot._open(tile) as ds:
@@ -385,8 +386,8 @@ def _header_accessor_udf_file(core_fn, return_type):
     return _udf
 
 
-def _pixel_accessor_udf_file(core_fn, return_type):
-    """Struct + FileRef accepting pixel accessor UDF (2-arg).
+def _pixel_accessor_udf_file(core_fn, return_type, on_empty=None):
+    """Struct + FileRef accepting pixel accessor UDF (2-arg). `on_empty` is as for `_pixel_accessor_udf`.
 
     Signature: (tile: Struct, file_ref: FileRef|null) → return_type
     Calls _open(tile, file_ref=file_ref) internally.  When file_ref is None
@@ -400,7 +401,7 @@ def _pixel_accessor_udf_file(core_fn, return_type):
     @f.udf(return_type)
     def _udf(tile, file_ref):
         if _tile_is_empty(tile):
-            return None
+            return None if tile is None else on_empty
         try:
             _env.configure_gdal_env(extra_proj_dirs=_grid_dirs)
             with ot._open(tile, file_ref=file_ref) as ds:
@@ -428,7 +429,7 @@ _u_scaley = _header_accessor_udf(accessors.scaley, DoubleType())
 _u_type = _header_accessor_udf(accessors.type, ArrayType(StringType()))
 _u_getnodata = _header_accessor_udf(accessors.getnodata, ArrayType(DoubleType()))
 # Pixel accessors (_open — materialise the window).
-_u_isempty = _pixel_accessor_udf(accessors.isempty, BooleanType())
+_u_isempty = _pixel_accessor_udf(accessors.isempty, BooleanType(), on_empty=True)
 
 
 # metadata: HEADER-ONLY accessor. Struct-accepting (so a virtual tile's ``path``
@@ -458,7 +459,9 @@ _uf_crs = _header_accessor_udf_file(accessors.crs, StringType())
 _uf_width = _header_accessor_udf_file(accessors.width, IntegerType())
 _uf_boundingbox = _header_accessor_udf_file(accessors.boundingbox, BinaryType())
 # Pixel-reading (_open — materialises the window):
-_uf_isempty = _pixel_accessor_udf_file(accessors.isempty, BooleanType())
+_uf_isempty = _pixel_accessor_udf_file(
+    accessors.isempty, BooleanType(), on_empty=True
+)
 
 # Group 1 pixel accessors — FILE-aware 2-arg singletons.
 _uf_avg = _pixel_accessor_udf_file(accessors.avg, ArrayType(DoubleType()))
@@ -506,6 +509,7 @@ def _uf_summary_udf(tile, file_ref):
 # histogram: PIXEL accessor, MapType return.  2-arg FILE-aware variant.
 @f.udf(MapType(StringType(), ArrayType(LongType())))
 def _uf_histogram_udf(tile, file_ref, n_buckets, min_val, max_val, include_nodata):
+    accessors.check_n_buckets(n_buckets)
     if _tile_is_empty(tile):
         return None
     try:
@@ -643,7 +647,7 @@ def _georeference_udf(tile):
 
 @f.udf(MapType(StringType(), StringType()))
 def _bandmetadata_udf(tile, band):
-    if _tile_is_empty(tile):
+    if _tile_is_empty(tile) or band is None:
         return None
     from databricks.labs.gbx.pyrx import _env
 
@@ -677,6 +681,7 @@ def _summary_udf(tile):
 
 @f.udf(MapType(StringType(), ArrayType(LongType())))
 def _histogram_udf(tile, n_buckets, min_val, max_val, include_nodata):
+    accessors.check_n_buckets(n_buckets)
     if _tile_is_empty(tile):
         return None
     from databricks.labs.gbx.pyrx import _env

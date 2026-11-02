@@ -61,22 +61,28 @@ object RST_Sample extends WithExpressionInfo {
         // geom; preserve the prior "null in -> null out" behavior (rowToDS/safeEval would otherwise
         // NPE on a null row, and a null geom would hit the `case other` throw -> error path).
         if (row == null || geom == null) null
-        else Option(
+        else {
+            // A parameter error is raised here, outside the handler that turns a failed tile into NULL.
+            val parsed: Geometry = geom match {
+                case g: UTF8String  => JTS.fromWKT(g.toString)
+                case g: Array[Byte] => JTS.fromWKB(g)
+                case other          =>
+                    throw new IllegalArgumentException(
+                        s"gbx_rst_sample: unsupported geom payload type ${if (other == null) "null" else other.getClass.getName}"
+                    )
+            }
+            require(parsed.getGeometryType == "Point",
+                s"gbx_rst_sample requires a POINT geometry; got ${parsed.getGeometryType}")
+            sampleAt(row, parsed, crs, conf, dt)
+        }
+
+    private def sampleAt(row: InternalRow, parsed: Geometry, crs: UTF8String, conf: UTF8String, dt: DataType): ArrayData =
+        Option(
           RST_ErrorHandler.safeEval(
             () => {
                 val exprConf = ExpressionConfig.fromB64(conf.toString)
                 RST_ExpressionUtil.init(exprConf)
                 val ds = RasterSerializationUtil.rowToDS(row, dt)
-                val parsed: Geometry = geom match {
-                    case g: UTF8String  => JTS.fromWKT(g.toString)
-                    case g: Array[Byte] => JTS.fromWKB(g)
-                    case other          =>
-                        throw new IllegalArgumentException(
-                            s"gbx_rst_sample: unsupported geom payload type ${if (other == null) "null" else other.getClass.getName}"
-                        )
-                }
-                require(parsed.getGeometryType == "Point",
-                    s"gbx_rst_sample requires a POINT geometry; got ${parsed.getGeometryType}")
                 val clip = Option(crs).map(_.toString).filter(_.nonEmpty)
                 val (x, y) = reprojectToRaster(
                   ds, parsed.getCoordinate.x, parsed.getCoordinate.y, parsed.getSRID, clip)
@@ -107,9 +113,14 @@ object RST_Sample extends WithExpressionInfo {
                 try {
                     if (sr.IsSame(dsSR) == 1) (x, y) // already aligned; no transform
                     else {
-                        val tf = new org.gdal.osr.CoordinateTransformation(sr, dsSR)
+                        // x is the easting or longitude, y the northing or latitude, whatever the authority's axis order
+                        sr.SetAxisMappingStrategy(org.gdal.osr.osrConstants.OAMS_TRADITIONAL_GIS_ORDER)
+                        val dst = dsSR.Clone()
+                        dst.SetAxisMappingStrategy(org.gdal.osr.osrConstants.OAMS_TRADITIONAL_GIS_ORDER)
+                        val tf = new org.gdal.osr.CoordinateTransformation(sr, dst)
                         val pt = tf.TransformPoint(x, y)
                         tf.delete()
+                        dst.delete()
                         (pt(0), pt(1))
                     }
                 } catch { case _: Throwable => (x, y) }

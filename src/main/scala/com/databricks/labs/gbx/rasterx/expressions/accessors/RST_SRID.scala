@@ -48,7 +48,8 @@ object RST_SRID extends WithExpressionInfo {
             rdt,
             conf
           )
-        ).map(v => java.lang.Integer.valueOf(v.asInstanceOf[Int])).orNull
+        )// 0 is `execute`'s "no authority code"; the SQL answer is NULL, as the lightweight function gives
+        .map(_.asInstanceOf[Int]).filter(_ != 0).map(java.lang.Integer.valueOf(_)).orNull
 
     def execute(ds: Dataset): Int = {
         val proj = new SpatialReference(ds.GetProjection())

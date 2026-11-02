@@ -133,6 +133,12 @@ def _ewkb(wkt, srid):
         ("cell_set", ["TQ3080", "TQ3180"], ["TQ3180", "TQ3080"], ["TQ3080", "TQ3080"]),
         ("approx", (1.0, 2.0), (1.0 + 1e-12, 2.0), (1.0, 2.1)),
         (
+            "json_subset",
+            {"size": [4, 3], "bands": [{"min": 2.0}]},
+            '{"size": [4, 3], "extra": 1, "bands": [{"min": 2.0, "max": 12.0}]}',
+            '{"size": [4, 3], "bands": [{"min": 3.0}]}',
+        ),
+        (
             "geom_srid",
             ("POINT Z(1 2 3)", 4326),
             _ewkb("POINT Z(1 2 3)", 4326),

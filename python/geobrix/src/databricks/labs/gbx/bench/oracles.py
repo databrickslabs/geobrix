@@ -43,6 +43,7 @@ class Case:
     args: Tuple[Any, ...]
     # exact | exact_rows | null | raises | uc_refused | error_tile | tile_props | geom_props | geom_equals | cell_set
     # geom_equals: `expect` is the WKT of the geometry the output (WKB or WKT) must equal, vertex order aside.
+    # json_subset: the output is JSON text that holds every key and value of the `expect` dict (extra keys allowed).
     # cell_set: `expect` is the cell ids an array output must hold, each once, in any order (an array of chip
     # structs is judged by the first field of each). approx: a number, or a struct or list of numbers, to 1e-9.
     # geom_srid: `expect` is the WKT of the geometry the output (WKB or EWKB) must equal, Z included, and the SRID it
@@ -77,6 +78,14 @@ _L2_NO_REASON = (
 # The quadbin Catalyst companions are not a default level (their cluster timings are at parity with light) and
 # are deleted in the decision sweep, so they keep the contract gaps below instead of being fixed.
 _QUADBIN_L1 = "the quadbin Catalyst companion is not conformed to the light contract; it is deleted in the decision sweep"
+# A JVM level reads tile bytes only; the manager does not pick one for these functions, whose levels are light.
+_L1_NO_VIRTUAL = "the JVM level cannot read a virtual tile (a path, no bytes); the manager keeps these functions on light"
+# The JVM summary is GDAL's own info JSON; the contract is the light JSON. The GDAL spec engine replaces the JVM form.
+_SUMMARY_L1 = "the JVM summary is gdalinfo's JSON, not the contract's; the GDAL spec engine replaces it"
+# The JVM statistics and metadata that differ from the contract; their companions are deleted in the decision sweep.
+_MEDIAN_L1 = "the JVM median is GDAL's median resampling, which takes one of the two middle values of an even count, not their mean"
+_HISTOGRAM_L1 = "the JVM histogram leaves the top edge out of the last bucket, gives NULL for a NULL bound, ignores include_nodata and turns a bad bucket count into NULL"
+_METADATA_L1 = "the JVM metadata is GDAL's metadata domains merged, not the contract's driver, size and tag keys"
 HEAVY_PENDING: Dict[str, Dict[str, str]] = {
     **{
         cid: {"L1": _QUADBIN_L1}
@@ -92,6 +101,31 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
             "quadbin_res_3_5_raises_geomk",
             "quadbin_res_digit_string_geomk",
             "quadbin_inf_point_geomk",
+        )
+    },
+    **{
+        cid: {"L1": _L1_NO_VIRTUAL}
+        for cid in (
+            "width_virtual",
+            "memsize_virtual",
+            "avg_virtual",
+            "summary_virtual",
+        )
+    },
+    "summary": {"L1": _SUMMARY_L1},
+    "median_two_band": {"L1": _MEDIAN_L1},
+    "metadata": {"L1": _METADATA_L1},
+    **{
+        cid: {"L1": _HISTOGRAM_L1}
+        for cid in (
+            "histogram",
+            "histogram_range",
+            "histogram_top_edge",
+            "histogram_null_min",
+            "histogram_null_max",
+            "histogram_two_band",
+            "histogram_include_nodata",
+            "histogram_zero_buckets",
         )
     },
     "bytes_class_refused_driver": {"L2": _L2_NO_REASON},
@@ -2233,8 +2267,47 @@ def _check_cell_set(case: Case, out) -> Optional[str]:
     )
 
 
+def _json_subset(got, want) -> bool:
+    """`want` (parsed JSON) is inside `got`: an object may hold more keys, a list has the same length, numbers
+    agree to a relative 1e-9, anything else is equal."""
+    import math
+
+    if isinstance(want, dict):
+        return isinstance(got, dict) and all(
+            k in got and _json_subset(got[k], v) for k, v in want.items()
+        )
+    if isinstance(want, list):
+        return (
+            isinstance(got, list)
+            and len(got) == len(want)
+            and all(_json_subset(g, w) for g, w in zip(got, want))
+        )
+    if isinstance(want, (int, float)) and not isinstance(want, bool):
+        return (
+            isinstance(got, (int, float))
+            and not isinstance(got, bool)
+            and math.isclose(got, want, rel_tol=1e-9, abs_tol=1e-12)
+        )
+    return got == want
+
+
+def _check_json_subset(case: Case, out) -> Optional[str]:
+    """`out` is JSON text that holds every key and value of `case.expect` (a dict): the fields a contract fixes,
+    where a tier may add others."""
+    if out is None:
+        return f"{case.cid}: got NULL, want JSON holding {case.expect}"
+    try:
+        got = json.loads(out)
+    except (TypeError, ValueError):
+        return f"{case.cid}: not JSON: {str(out)[:200]!r}"
+    if not _json_subset(got, case.expect):
+        return f"{case.cid}: got {str(out)[:300]}, want it to hold {case.expect}"
+    return None
+
+
 _VALUE_CHECKS = {
     "geom_equals": _check_geom_equals,
+    "json_subset": _check_json_subset,
     "approx": _check_approx,
     "cell_set": _check_cell_set,
 }

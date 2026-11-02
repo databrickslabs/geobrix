@@ -148,7 +148,7 @@ def avg(ds) -> List[Optional[float]]:
     out: List[Optional[float]] = []
     for bi in range(1, ds.count + 1):
         vals = _valid_values(ds, bi)
-        out.append(float(np.mean(vals)) if vals.size else None)
+        out.append(float(np.mean(vals, dtype=np.float64)) if vals.size else None)
     return out
 
 
@@ -282,8 +282,8 @@ def summary(ds) -> str:
             stats = {
                 "min": float(np.min(vals)),
                 "max": float(np.max(vals)),
-                "mean": float(np.mean(vals)),
-                "stdDev": float(np.std(vals)),
+                "mean": float(np.mean(vals, dtype=np.float64)),
+                "stdDev": float(np.std(vals, dtype=np.float64)),
             }
         else:
             stats = {"min": None, "max": None, "mean": None, "stdDev": None}
@@ -309,6 +309,13 @@ def summary(ds) -> str:
     return json.dumps(info)
 
 
+def check_n_buckets(n_buckets) -> None:
+    """Raise, naming the value, for a bucket count below 1 (NULL means the default); a UDF calls this before its
+    own error swallowing, so a bad parameter is an error and not a NULL."""
+    if n_buckets is not None and int(n_buckets) < 1:
+        raise ValueError(f"gbx_rst_histogram: n_buckets must be >= 1; got {n_buckets}")
+
+
 def histogram(
     ds,
     n_buckets: int = 256,
@@ -323,9 +330,8 @@ def histogram(
     bucket). When min/max are omitted they default to the band's valid-pixel
     range. ``include_nodata`` includes masked pixels in the binning.
     """
+    check_n_buckets(n_buckets)
     n_buckets = int(n_buckets)
-    if n_buckets < 1:
-        raise ValueError(f"gbx_rst_histogram: n_buckets must be >= 1; got {n_buckets}")
     result: Dict[str, List[int]] = {}
     for bi in range(1, ds.count + 1):
         if include_nodata:

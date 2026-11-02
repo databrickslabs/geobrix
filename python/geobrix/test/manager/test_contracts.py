@@ -348,7 +348,9 @@ def test_an_unforced_engine_row_installs_the_engine_or_says_why_not(
     said = "\n".join(line for _, line in lines)
     if want == "fallback":
         assert choice.variant not in levels.ENGINE_L3
-        assert spark.registered == [fn.sql_name]
+        assert spark.registered == [
+            "gbx__l3d_rst_slope"
+        ]  # the light kernel, behind the wrapper that carries the defaults
         assert (
             f"{fn.sql_name} runs without the GDAL spec engine at light (no payload)"
             in said
@@ -592,7 +594,9 @@ def test_one_unavailable_function_does_not_stop_the_rest(monkeypatch, capsys):
     stub = ConnectStub()
     out = manager.register(stub)
     assert "gbx_rst_transformcrs" not in out and "gbx_bng_eastnorthasbng" in out
-    assert "gbx_st_makevalid" in stub.registered  # registered after the skipped one
+    assert (
+        "gbx__l3d_st_makevalid" in stub.registered
+    )  # registered after the skipped one (behind its default wrapper)
     skipped = [
         p for p in capsys.readouterr().out.splitlines() if "gbx_rst_transformcrs" in p
     ]

@@ -59,6 +59,17 @@ def file_ref_wrapper(fn, private: str, file_sql: str) -> str:
     )
 
 
+def default_wrapper(fn, private: str) -> str:
+    """CREATE FUNCTION text: the SQL name, with every optional parameter's manifest default, calls the light UDF
+    ``private`` with every parameter in order (a SQL call binds positionally, so none may be left out).
+    """
+    args = ", ".join(p.name for p in fn.params)
+    return (
+        f"CREATE OR REPLACE TEMPORARY FUNCTION {fn.sql_name}({_sig(fn)}) "
+        f"RETURNS {sql_type(fn.returns_session)} RETURN {private}({args})"
+    )
+
+
 def cast_call(fn, java_name: str, types) -> str:
     """CREATE FUNCTION text that calls the Java UDF ``java_name`` with each argument cast to the type its class
     declares (``types``, one SQL type per parameter, in order).

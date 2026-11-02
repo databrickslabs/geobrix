@@ -93,21 +93,45 @@ def register_l3(spark, fn, variant: str, name: Optional[str] = None) -> None:
                 ),
             )
             return
+    target = name
+    if _needs_default_wrapper(spark, fn, spec, name):
+        # a scalar UDF takes every argument it was written with, and a SQL call that leaves an optional one out
+        # binds fewer: it registers under a private name, behind a wrapper that passes each default
+        from databricks.labs.gbx.manager import jvm
+
+        target = jvm._priv(fn, "L3d")
     if "variants" in spec:
-        reg.udf.register(name, resolve_ref(spec["variants"][variant]))
+        reg.udf.register(target, resolve_ref(spec["variants"][variant]))
     elif "factory" in spec:
         reg.udf.register(
-            name,
+            target,
             resolve_ref(spec["factory"])(*_factory_args(spec["factory_args"], spark)),
         )
     elif "callable" in spec:
         reg.udf.register(
-            name, resolve_ref(spec["callable"]), _return_type(spec["returns"])
+            target, resolve_ref(spec["callable"]), _return_type(spec["returns"])
         )
     elif "udtf" in spec:
         reg.udtf.register(name, resolve_ref(spec["udtf"]))
     else:
         raise ValueError(f"{fn.sql_name}: unknown L3 registration")
+    if target != name:
+        from databricks.labs.gbx.manager import jvm, sqlwrap
+
+        jvm._create_wrapper(spark, fn, sqlwrap.default_wrapper(fn, target))
+
+
+def _needs_default_wrapper(spark, fn, spec, name: str) -> bool:
+    """True for a scalar row with optional parameters, registered under its own SQL name where SQL functions
+    exist. (A generator or an aggregate cannot sit behind a scalar SQL function; the light kernels of those rows
+    take their own defaults.)"""
+    if name != fn.sql_name or fn.kind != "scalar" or fn.max_args == fn.min_args:
+        return False
+    if not any(k in spec for k in ("variants", "factory", "callable")):
+        return False
+    from databricks.labs.gbx.manager import capabilities
+
+    return bool(capabilities._sql_functions(spark))
 
 
 def register_l3_engine(

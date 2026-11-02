@@ -3918,17 +3918,31 @@ def rst_mapalgebra(
 
 def rst_merge_agg(
     tile: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
 ) -> Column:
     """Merge a group's tile rasters into one mosaic tile.
 
     Args:
         tile: The tiles of the group.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
 
     Returns:
         The merged raster over the union extent, or NULL for an empty group.
 
     SQL: ``gbx_rst_merge_agg(tile)``
     """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_merge_agg",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+        )
     return _api.call(
         "gbx_rst_merge_agg",
         tile,

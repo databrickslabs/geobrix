@@ -1003,6 +1003,30 @@ class TestMergeAggVirtualizeDir:
         assert os.path.exists(path), f"written file not found: {path}"
         assert os.path.getsize(path) > 0, "written file is empty"
 
+    def test_the_public_api_takes_virtualize_dir_and_prefix(self, spark, tmp_path):
+        """`rasterx.functions.rst_merge_agg(..., virtualize_dir=, virtualize_prefix=)` writes the mosaic and
+        returns a path-only tile (the SQL form returns BINARY and has no such keywords).
+        """
+        import os
+
+        from databricks.labs.gbx.rasterx import functions as rx
+
+        out_dir = str(tmp_path / "magg_public")
+        left = _ras(np.array([[1.0, 2.0], [3.0, 4.0]]), ulx=0.0, uly=2.0, px=1.0)
+        right = _ras(np.array([[5.0, 6.0], [7.0, 8.0]]), ulx=2.0, uly=2.0, px=1.0)
+        df = _spark_tile_df_raw(spark, [left, right])
+        merged = (
+            df.groupBy("g")
+            .agg(
+                rx.rst_merge_agg(
+                    "tile", virtualize_dir=out_dir, virtualize_prefix="pub"
+                ).alias("merged")
+            )
+            .first()["merged"]
+        )
+        assert merged["raster"] is None and os.path.getsize(merged["path"]) > 0
+        assert os.path.basename(merged["path"]).startswith("pub_")
+
     def test_virtualize_dir_reopens_to_correct_extent(self, spark, tmp_path):
         """Re-opening the written file yields the correct merged extent/dims."""
         import databricks.labs.gbx.pyrx.functions as prx

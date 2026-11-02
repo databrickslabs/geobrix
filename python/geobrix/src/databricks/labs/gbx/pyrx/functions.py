@@ -8904,6 +8904,10 @@ def _merge_agg_v2_udf(
         merged_bytes = agg_core.merge_tiles(rasters)
     except (agg_core.MosaicTooLarge, agg_core.ReadCapRefused) as exc:
         return _error_payload([_serde.build_error_tile(str(exc), 0)])
+    if (
+        vdir is None
+    ):  # materialize=True alone: the merged bytes, as the natural form returns them
+        return bytes(merged_bytes)
     vt = VirtualTile(cellid=0, raster=bytes(merged_bytes))
     shaped = ot.shape_output(vt, virtualize_dir=vdir, virtualize_prefix=vprefix)
     # Encode the path into the BinaryType return channel.
@@ -9737,6 +9741,16 @@ def _rst_custom_rasterize_agg_udf(
 
 
 # --- public Column wrappers (compose grouped-agg BINARY + scalar as_tile) ----
+def _merge_agg_forced(tile, virtualize_dir, virtualize_prefix, materialize):
+    """The force-output form of ``gbx_rst_merge_agg`` that ``rasterx.functions.rst_merge_agg`` runs when
+    ``virtualize_dir``, ``virtualize_prefix`` or ``materialize`` is set: the group's mosaic as a tile struct, written
+    under ``virtualize_dir`` (a path-only tile) so a large mosaic never travels as Arrow bytes. The arguments are
+    Columns (``_api.force_output`` passes the force-output literals as ``lit``)."""
+    return _as_virtual_tile_from_path_udf(
+        _merge_agg_v2_udf(tile, virtualize_dir, virtualize_prefix)
+    )
+
+
 def _light_rst_merge_agg(
     tile: ColLike,
     virtualize_dir: Optional[str] = None,

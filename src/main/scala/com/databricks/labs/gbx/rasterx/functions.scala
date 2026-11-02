@@ -664,8 +664,8 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_rastertoworldcoordy(tile: Column, pixelX: Column, pixelY: Column): Column =
         ColumnAdapter(RST_RasterToWorldCoordY.name, Seq(tile, pixelX, pixelY))
     def rst_transform(tile: Column, targetSrid: Column): Column = ColumnAdapter(RST_Transform.name, Seq(tile, targetSrid))
-    def rst_transformcrs(tile: Column, crs: Column): Column = ColumnAdapter(RST_TransformCrs.name, Seq(tile, crs))
-    def rst_transformcrs(tile: Column, crs: String): Column = rst_transformcrs(tile, lit(crs))
+    def rst_transformcrs(tile: Column, targetCrs: Column): Column = ColumnAdapter(RST_TransformCrs.name, Seq(tile, targetCrs))
+    def rst_transformcrs(tile: Column, targetCrs: String): Column = rst_transformcrs(tile, lit(targetCrs))
     def rst_tryopen(tile: Column): Column = ColumnAdapter(RST_TryOpen.name, Seq(tile))
     def rst_updatetype(tile: Column, newType: Column): Column = ColumnAdapter(RST_UpdateType.name, Seq(tile, newType))
     def rst_worldtorastercoord(tile: Column, worldX: Column, worldY: Column): Column =

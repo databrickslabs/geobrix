@@ -3414,7 +3414,7 @@ def rst_setcrs(
 
 def rst_transformcrs(
     tile: ColLike,
-    crs: ColLike,
+    target_crs: ColLike,
 ) -> Column:
     """Reproject the raster to a string-given target CRS.
 
@@ -3427,8 +3427,8 @@ def rst_transformcrs(
 
     Args:
         tile: Tile struct column.
-        crs:  Target CRS descriptor — int EPSG, int-castable string, authority
-              string, WKT, or PROJ4.
+        target_crs: Target CRS descriptor — int EPSG, int-castable string,
+              authority string, WKT, or PROJ4.
 
     Returns:
         Tile reprojected to the target CRS.
@@ -3438,7 +3438,9 @@ def rst_transformcrs(
 
     _grid_dirs = tuple(proj_grids.get_registered_dirs())
     tc = _col(tile)
-    return _build_uf_transformcrs(_grid_dirs)(tc, file_ref_arg(tc), _crs_col(crs))
+    return _build_uf_transformcrs(_grid_dirs)(
+        tc, file_ref_arg(tc), _crs_col(target_crs)
+    )
 
 
 def rst_band(
@@ -4476,7 +4478,7 @@ def _uf_mapalgebra(tiles, file_refs, expression):
 
 def rst_mapalgebra(
     tiles: ColLike,
-    json_spec: ColLike,
+    expression: ColLike,
     virtualize_dir: Optional[str] = None,
     virtualize_prefix: Optional[str] = None,
     materialize: Optional[bool] = None,
@@ -4490,7 +4492,7 @@ def rst_mapalgebra(
 
     Args:
         tiles:     Column of ARRAY<tile struct> (e.g. ``f.array("ta", "tb")``).
-        json_spec: the map-algebra expression. Accepts either the gdal_calc JSON
+        expression: the map-algebra expression. Accepts either the gdal_calc JSON
             envelope the heavy/SQL tier uses (e.g. ``'{"calc": "(A - B)/(A + B)"}'``)
             or a bare numexpr string (e.g. ``"(A - B) / (A + B)"``). The envelope's
             per-variable keys ``A_index`` / ``A_band`` (and ``B_``, ``C_``, …)
@@ -4509,7 +4511,7 @@ def rst_mapalgebra(
     Returns:
         Single-band Float32 tile struct.
     """
-    expr_col = f.lit(json_spec) if isinstance(json_spec, str) else _col(json_spec)
+    expr_col = f.lit(expression) if isinstance(expression, str) else _col(expression)
     if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
         _validate_force_output(virtualize_dir, materialize)
         return _mapalgebra_v2_udf(

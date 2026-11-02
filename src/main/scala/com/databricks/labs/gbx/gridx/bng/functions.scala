@@ -64,8 +64,8 @@ object functions extends Serializable {
     def bng_cellunion(c1: Column, c2: Column): Column = ColumnAdapter(BNG_CellUnion.name, Seq(c1, c2))
     def bng_centroid(cellId: Column): Column = ColumnAdapter(BNG_Centroid.name, Seq(cellId))
     def bng_distance(c1: Column, c2: Column): Column = ColumnAdapter(BNG_Distance.name, Seq(c1, c2))
-    def bng_eastnorthasbng(east: Column, north: Column, resolution: Column): Column =
-        ColumnAdapter(BNG_EastNorthAsBNG.name, Seq(east, north, resolution))
+    def bng_eastnorthasbng(easting: Column, northing: Column, resolution: Column): Column =
+        ColumnAdapter(BNG_EastNorthAsBNG.name, Seq(easting, northing, resolution))
     def bng_euclideandistance(c1: Column, c2: Column): Column = ColumnAdapter(BNG_EuclideanDistance.name, Seq(c1, c2))
     def bng_geomkloop(geom: Column, resolution: Column, k: Column): Column = ColumnAdapter(BNG_GeometryKLoop.name, Seq(geom, resolution, k))
     def bng_geomkloop(geom: Column, resolution: Column, k: Column, mode: Column): Column = ColumnAdapter(BNG_GeometryKLoop.name, Seq(geom, resolution, k, mode))
@@ -116,10 +116,10 @@ object functions extends Serializable {
 
     // Scalar-literal overloads — so users can pass plain values for non-Column params.
     // Resolution accepts Int (±1..±6 index) or String ("1km", "100m"). k is Int.
-    def bng_eastnorthasbng(east: Column, north: Column, resolution: Int): Column =
-        bng_eastnorthasbng(east, north, lit(resolution))
-    def bng_eastnorthasbng(east: Column, north: Column, resolution: String): Column =
-        bng_eastnorthasbng(east, north, lit(resolution))
+    def bng_eastnorthasbng(easting: Column, northing: Column, resolution: Int): Column =
+        bng_eastnorthasbng(easting, northing, lit(resolution))
+    def bng_eastnorthasbng(easting: Column, northing: Column, resolution: String): Column =
+        bng_eastnorthasbng(easting, northing, lit(resolution))
     def bng_geomkloop(geom: Column, resolution: Int, k: Int): Column = bng_geomkloop(geom, lit(resolution), lit(k))
     def bng_geomkloop(geom: Column, resolution: String, k: Int): Column = bng_geomkloop(geom, lit(resolution), lit(k))
     def bng_geomkloop(geom: Column, resolution: Int, k: Int, mode: String): Column = bng_geomkloop(geom, lit(resolution), lit(k), lit(mode))

@@ -771,8 +771,6 @@ _VT_POLICY = "which GeoBrix does not open for a virtual tile"
 _VT_TOP = f"a file no driver on the virtual-tile allowlist reads, {_VT_POLICY}"
 _VT_NESTED = f"a source GDAL has no driver for here, {_VT_POLICY}"
 NORM_DIFF = '{"calc": "norm_diff", "dialect": "builtin"}'
-# A tile's bytes in a driver outside the manifest's self-contained `bytes` class (engine/run.py), as the rows read it.
-_BYTES_REFUSED = "is a {} raster, which may name other files, so GeoBrix does not open it from tile bytes. Fix:"
 SPEC_SE: Tuple[Case, ...] = (
     # Horn's slope with no edges: the 1-pixel border and the neighbours of the NoData hole are NoData.
     Case(
@@ -896,10 +894,10 @@ SPEC_SE: Tuple[Case, ...] = (
         None,
         ("session",),
     ),
-    # A materialized tile kept in another driver is translated to GeoTIFF first, only when its driver is one of the
-    # manifest's self-contained `bytes` class: a PNG carries no CRS, so reprojecting it is the no-CRS error tile. A
-    # driver outside the class (ERDAS Imagine names spill files; a VRT names its sources, a local file or a URL) is
-    # an error tile with a Fix, and nothing it names is opened.
+    # A materialized tile kept in another driver is translated to GeoTIFF first, under the light bytes rule on every
+    # level: a PNG carries no CRS, so reprojecting it is the no-CRS error tile; HFA (as netCDF, HDF5, JP2OpenJPEG and
+    # GPKG) is read as the GeoTIFF it translates to, as the light tier reads it; a driver that can name other files
+    # (a VRT names its sources, a local file or a URL) is an error tile with a Fix, and nothing it names is opened.
     Case(
         "se_tcrs_png",
         T,
@@ -912,8 +910,8 @@ SPEC_SE: Tuple[Case, ...] = (
         "se_tcrs_hfa",
         T,
         (Build("tile_4326_hfa"), "EPSG:3857"),
-        "error_tile_has",
-        _BYTES_REFUSED.format("HFA"),
+        "tile_props",
+        "EPSG:3857",
         ("session",),
     ),
     Case(
@@ -921,7 +919,7 @@ SPEC_SE: Tuple[Case, ...] = (
         T,
         (Build("tile_vrt_bytes"), "EPSG:4326"),
         "error_tile_has",
-        _BYTES_REFUSED.format("VRT"),
+        _BYTES_REFUSED_LIGHT.format("VRT"),
         ("session",),
     ),
     Case(
@@ -929,7 +927,7 @@ SPEC_SE: Tuple[Case, ...] = (
         T,
         (Build("tile_vrt_bytes_vsicurl"), "EPSG:4326"),
         "error_tile_has",
-        _BYTES_REFUSED.format("VRT"),
+        _BYTES_REFUSED_LIGHT.format("VRT"),
         ("session",),
     ),
     # Virtual tiles: a VRT is read (the policy allows it); a stored GDAL pipeline, a VRT over one, a VRT with a

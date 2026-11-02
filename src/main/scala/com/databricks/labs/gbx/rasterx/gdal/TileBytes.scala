@@ -94,8 +94,11 @@ object TileBytes {
 
     /** The driver of the `bytes_refused_light` class that `bytes` (written at `path`) are, else None: GDAL's identify
       * with the class's drivers, then how each of them begins. Nothing is opened. */
-    private[gdal] def refusedClassOf(path: String, bytes: Array[Byte]): Option[String] = {
-        val names = GdalSpecs.section.bytesRefusedLight
+    private[gbx] def refusedClassOf(
+        path: String,
+        bytes: Array[Byte],
+        names: Seq[String] = GdalSpecs.section.bytesRefusedLight
+    ): Option[String] = {
         if (names.isEmpty || BinaryMagics.exists(startsWith(bytes, _))) return None
         val identified = Option(
           gdal.IdentifyDriverEx(path, gdalconstConstants.OF_RASTER, new java.util.Vector[String](names.asJava))
@@ -109,11 +112,13 @@ object TileBytes {
         }
     }
 
+    /** The text a tile's bytes in a `driver` that can name other files are refused with (no subject): the one phrase
+      * of the rule, which a caller with its own subject (the spec engine's "input 0") prefixes. */
+    private[gbx] def refusedPhrase(driver: String): String =
+        s"is a $driver raster, a format that can name other files, which GeoBrix does not open from tile bytes. $Fix"
+
     private[gdal] def refusal(driver: String): TileBytesRefused =
-        new TileBytesRefused(
-          s"the raster bytes: is a $driver raster, a format that can name other files, which GeoBrix does not open " +
-              s"from tile bytes. $Fix"
-        )
+        new TileBytesRefused(s"the raster bytes: ${refusedPhrase(driver)}")
 
     /** The drivers an open of tile bytes may use: the manifest's allowed drivers less the refused class. */
     private[gdal] def openDrivers: java.util.Vector[String] = {

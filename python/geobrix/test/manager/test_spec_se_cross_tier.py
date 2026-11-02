@@ -10,6 +10,7 @@ import pytest
 
 from databricks.labs.gbx import manifest, register
 from databricks.labs.gbx.bench import oracles
+from databricks.labs.gbx.ds.file_gbx import READ_CAP_KEY
 from databricks.labs.gbx.engine import run
 from databricks.labs.gbx.manager import capabilities
 
@@ -44,8 +45,22 @@ def _session(request, level):
 
 def _run(request, tmp_path, fn, level, variant, rows):
     spark = _session(request, level)
-    register(spark, only=[fn], _levels={fn: (level, variant)})
-    results = oracles.run_session(spark, rows, tmpdir=str(tmp_path))
+    forced = {fn: (level, variant)}
+    register(spark, only=[fn], _levels=forced)
+    capped = [c for c in rows if c.cid in oracles.READ_CAP_ROWS]
+    results = oracles.run_session(
+        spark, [c for c in rows if c not in capped], tmpdir=str(tmp_path)
+    )
+    # the decoded-size gate, with the session's read cap lowered for the row: the JVM reads the key per query, a
+    # light function carries it from its registration (as test_mvp_s_cross_tier runs these rows)
+    for c in capped:
+        spark.conf.set(READ_CAP_KEY, str(oracles.READ_CAP_ROWS[c.cid]))
+        try:
+            register(spark, only=[fn], _levels=forced)
+            results += oracles.run_session(spark, [c], tmpdir=str(tmp_path))
+        finally:
+            spark.conf.unset(READ_CAP_KEY)
+            register(spark, only=[fn], _levels=forced)
     assert len(results) == len(rows)
     return {case.cid: msg for case, msg in results if msg}
 

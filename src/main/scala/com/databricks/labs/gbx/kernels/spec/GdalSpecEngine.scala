@@ -2,7 +2,7 @@ package com.databricks.labs.gbx.kernels.spec
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.kernels.KernelGdal
-import com.databricks.labs.gbx.rasterx.gdal.GDALManager
+import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, TileBytes}
 import org.gdal.gdal.{Algorithm, AlgorithmRegistry, TranslateOptions, gdal}
 import org.gdal.gdalconst.gdalconstConstants
 
@@ -16,12 +16,12 @@ final case class SpecResult(raster: Array[Byte], error: String, command: String)
 /** One engine call on the JVM's GDAL: the mirror of `engine/run.py`.
   *
   *   1. The input bytes are written to `/vsimem/gbx-spec/<uuid>/in<i>.tif` and their headers read (size, bands, type,
-  *      CRS); the call must fit the decoded budget. Bytes without the GeoTIFF magic (a PNG or JPEG tile kept in its
-  *      own driver) are written as `src<i>.bin` and opened only if a driver of the manifest's `bytes` class identifies
-  *      them: drivers whose dataset is the bytes alone, never a name, href or URL read from the data (a VRT, a label
-  *      format, netCDF or HDF5 bytes are refused with a Fix, before anything is opened). They are judged by the budget
-  *      from their header, and only then translated to `in<i>.tif` (GTiff, no other option); the source goes before
-  *      the run.
+  *      CRS); each tile must be within the read cap ([[TileBytes.checkDecoded]]) and the call within the decoded
+  *      budget. Bytes without the GeoTIFF magic (a PNG, netCDF or HFA tile kept in its own driver) are written as
+  *      `src<i>.bin` and read under the light tier's bytes rule ([[TileBytes]]): a driver that can name other files
+  *      (the manifest's `bytes_refused_light` class: a VRT, a label format) is named from the bytes and refused with a
+  *      Fix before anything is opened, and any other allowed driver reads them. They are judged from their header, and
+  *      only then translated to `in<i>.tif` (GTiff, no other option); the source goes before the run.
   *   1. The argv is bound ([[GdalSpecArgv.build]]) and checked; the algorithm is instantiated (single use), parsed,
   *      run and finalized; the output is read from `/vsimem`.
   *   1. Every file under the call's prefix is removed, and every handle deleted, whatever happened.
@@ -127,25 +127,27 @@ object GdalSpecEngine {
     }
 
     val BytesFix =
-        "Fix: store the tile as a GeoTIFF, or pass it as a virtual tile (a path), which the virtual-tile policy judges"
+        "Fix: store the tile as a GeoTIFF, or pass a VRT as a virtual tile (a path), which the virtual-tile policy judges"
 
-    /** Throw a [[SpecDataException]] (with a Fix) unless a driver of the `bytes` class (`drivers`) identifies `src`, a
-      * tile's bytes without the TIFF magic. Only the header is read: a driver outside the class (a VRT, whose sources
-      * GDAL would open) is named, never opened (the light tier's `_bytes_source`). */
-    private def bytesSource(sqlName: String, i: Int, src: String, drivers: Seq[String]): Unit = {
+    /** The drivers an open of tile bytes may use: the allowlist this call runs under less the light bytes rule's
+      * refused class (what `TileBytes.openDrivers` lists for the default allowlist). */
+    private def openDrivers(section: GdalSection): Seq[String] =
+        section.allowedDrivers.filterNot(section.bytesRefusedLight.toSet)
+
+    /** Throw a [[SpecDataException]] (with a Fix) unless the tile bytes at `src` (without the TIFF magic) are read
+      * under the light tier's bytes rule: a driver that can name other files is named from the bytes and never opened
+      * (the light tier's `_bytes_source`), and any other driver of `drivers` identifies them. Only the header is read. */
+    private def bytesSource(sqlName: String, i: Int, src: String, bytes: Array[Byte], section: GdalSection,
+                            drivers: Seq[String]): Unit = {
         gdal.ErrorReset()
+        TileBytes.refusedClassOf(src, bytes, section.bytesRefusedLight).foreach { d =>
+            throw new SpecDataException(s"$sqlName: input $i ${TileBytes.refusedPhrase(d)}")
+        }
         val drv =
-            try gdal.IdentifyDriverEx(src, gdalconstConstants.OF_RASTER)
+            try gdal.IdentifyDriverEx(src, gdalconstConstants.OF_RASTER, new java.util.Vector[String](drivers.asJava))
             catch { case _: RuntimeException => null }
         if (drv == null) {
             throw new SpecDataException(s"$sqlName: input $i is not a raster GeoBrix reads from tile bytes. $BytesFix")
-        }
-        val name = drv.getShortName
-        if (!drivers.contains(name)) {
-            throw new SpecDataException(
-              s"$sqlName: input $i is a $name raster, which may name other files, so GeoBrix does not open it from " +
-                  s"tile bytes. $BytesFix"
-            )
         }
     }
 
@@ -265,14 +267,19 @@ object GdalSpecEngine {
                 rasters.zipWithIndex.foreach { case (r, i) =>
                     gdal.FileFromMemBuffer(if (translated.contains(i)) srcNames(i) else inNames(i), r)
                 }
-                val drivers = section.bytesDrivers // self-contained drivers only, from the allowlist this call runs under
-                translated.foreach(i => bytesSource(fn.sqlName, i, srcNames(i), drivers))
+                val drivers = openDrivers(section) // the allowlist this call runs under, less the refused class
+                translated.foreach(i => bytesSource(fn.sqlName, i, srcNames(i), rasters(i), section, drivers))
                 val inputs = inNames.indices.map { i =>
                     if (translated.contains(i)) props(fn.sqlName, srcNames(i), block.needsCrs, drivers)
                     else props(fn.sqlName, inNames(i), block.needsCrs)
                 }
-                val decoded =
-                    inputs.map(p => p.width.toLong * p.height * p.bands * GdalSpecArgv.ItemSize.getOrElse(p.dtype, 8)).sum
+                val sizes =
+                    inputs.map(p => p.width.toLong * p.height * p.bands * GdalSpecArgv.ItemSize.getOrElse(p.dtype, 8))
+                // the read cap of every tile read from bytes (the one gate and text of the other readers), from its header
+                sizes.foreach { size =>
+                    TileBytes.checkDecoded(size, conf).foreach(r => throw new SpecDataException(s"${fn.sqlName}: ${r.getMessage}"))
+                }
+                val decoded = sizes.sum
                 if (2 * decoded > DecodedBudget) {
                     throw new SpecDataException(
                       s"${fn.sqlName}: the call needs ${2 * decoded >> 20} MiB decoded (input and output), over this " +

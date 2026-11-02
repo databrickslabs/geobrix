@@ -1,12 +1,12 @@
 """One engine call on ``osgeo`` (the light tier); the JVM's ``GdalSpecEngine`` makes the same call.
 
 1. The input bytes are written to ``/vsimem/gbx-spec/<uuid>/in<i>.tif`` and their headers read (size, bands, type,
-   CRS); the call must fit the decoded budget. Bytes without the GeoTIFF magic (a PNG or JPEG tile kept in its own
-   driver) are written as ``src<i>.bin`` and opened only if a driver of the manifest's ``bytes`` class identifies
-   them: drivers whose dataset is the bytes alone, never a name, href or URL read from the data (a VRT, a label
-   format, netCDF or HDF5 bytes are refused with a Fix, before anything is opened). They are judged by the budget
-   from their header, and only then translated to ``in<i>.tif`` (GTiff, no other option); the source goes before
-   the run.
+   CRS); each tile must be within the read cap and the call within the decoded budget. Bytes without the GeoTIFF
+   magic (a PNG, netCDF or HFA tile kept in its own driver) are written as ``src<i>.bin`` and read under the light
+   bytes rule (``_gdal_policy.open_bytes``): a driver that can name other files (the manifest's
+   ``bytes_refused_light`` class: a VRT, a label format) is named from the bytes and refused with a Fix before
+   anything is opened, and any other allowed driver reads them. They are judged by the cap and budget from their
+   header, and only then translated to ``in<i>.tif`` (GTiff, no other option); the source goes before the run.
 2. The argv is bound (``argv.build``) and checked; the algorithm is instantiated (single use), parsed, run and
    finalized; the output is read from ``/vsimem``.
 3. Every file under the call's prefix is removed, whatever happened.
@@ -227,25 +227,39 @@ def _props(
         ds = None
 
 
-BYTES_FIX = "Fix: store the tile as a GeoTIFF, or pass it as a virtual tile (a path), which the virtual-tile policy judges"
+BYTES_FIX = _gdal_policy.BYTES_FIX
+
+
+def _open_drivers(section) -> tuple:
+    """The drivers an open of tile bytes may use: the allowlist this call runs under less the light bytes rule's
+    refused class (``_gdal_policy.open_bytes`` lists the same)."""
+    refused = set(section.bytes_refused_light_drivers)
+    return tuple(n for n in section.allowed_drivers if n not in refused)
 
 
 def _bytes_source(
-    gdal, sql_name: str, i: int, src: str, drivers: Sequence[str]
+    gdal, sql_name: str, i: int, src: str, data: bytes, drivers: Sequence[str]
 ) -> None:
-    """Raise DataError (with a Fix) unless a driver of the ``bytes`` class (`drivers`) identifies `src`, a tile's
-    bytes without the TIFF magic. Only the header is read: a driver outside the class (a VRT, whose sources GDAL would
-    open) is named, never opened. The JVM's GdalSpecEngine applies the same rule."""
+    """Raise DataError (with a Fix) unless the tile bytes `data` (written at `src`, without the TIFF magic) are read
+    under the light tier's bytes rule (``_gdal_policy.open_bytes``): a driver that can name other files (a VRT, a
+    label format: the manifest's ``bytes_refused_light`` class) is named from the bytes and never opened, and any
+    other driver of `drivers` (the allowed ones less that class: netCDF, HFA, ...) reads them. Only the header is read.
+    The JVM's GdalSpecEngine applies the same rule (through ``TileBytes``).
+    """
+    mode = apply_driver_policy()["mode"]
+    refused = _gdal_policy._class_of_bytes(data[:4096], mode)
+    if refused is not None:
+        raise DataError(
+            f"{sql_name}: input {i} is a {refused} raster, a format that can name other files, "
+            f"{_gdal_policy.REFUSED_PHRASE} from tile bytes. {BYTES_FIX}"
+        )
     gdal.ErrorReset()
-    drv = gdal.IdentifyDriverEx(src, gdal.OF_RASTER)
-    if drv is None:
+    if (
+        gdal.IdentifyDriverEx(src, gdal.OF_RASTER, allowed_drivers=list(drivers))
+        is None
+    ):
         raise DataError(
             f"{sql_name}: input {i} is not a raster GeoBrix reads from tile bytes. {BYTES_FIX}"
-        )
-    if not drivers or drv.ShortName not in drivers:
-        raise DataError(
-            f"{sql_name}: input {i} is a {drv.ShortName} raster, which may name other files, so GeoBrix does not "
-            f"open it from tile bytes. {BYTES_FIX}"
         )
 
 
@@ -395,9 +409,10 @@ def run(
     command = None
     with engine_settings(), _gdal_status() as gdal:
         try:
-            # A raster without the GeoTIFF magic is read only by a self-contained driver (the manifest's bytes
-            # class), and translated to GeoTIFF once the budget below holds (its props are its header's).
+            # A raster without the GeoTIFF magic is read under the light bytes rule (a driver that can name other
+            # files is refused), and translated to GeoTIFF once the budget below holds (its props are its header's).
             sources = {}
+            payloads = {}
             for i, raster in enumerate(rasters):
                 data = bytes(raster)
                 if data[:4] in _TIFF_MAGIC:
@@ -406,10 +421,10 @@ def run(
                     sources[i] = f"{prefix}/src{i}.bin"
                     shown[sources[i]] = shown.get(names[i], f"<input{i}>")
                     gdal.FileFromMemBuffer(sources[i], data)
-            # the manifest's bytes class (self-contained drivers only), from the allowlist this call runs under
-            drivers = tuple((section or manifest.load().gdal).bytes_drivers)
+                    payloads[i] = data
+            drivers = _open_drivers(section or manifest.load().gdal)
             for i, src in sources.items():
-                _bytes_source(gdal, fn.sql_name, i, src, drivers)
+                _bytes_source(gdal, fn.sql_name, i, src, payloads[i], drivers)
             props = [
                 (
                     _props(gdal, fn.sql_name, sources[i], block.needs_crs, drivers)
@@ -418,10 +433,18 @@ def run(
                 )
                 for i, n in enumerate(names)
             ]
-            decoded = sum(
+            sizes = [
                 p.width * p.height * p.bands * argv_mod._ITEMSIZE.get(p.dtype, 8)
                 for p in props
-            )
+            ]
+            # the read cap of every tile read from bytes (light's ``_serde.open_tile``), judged from its header
+            from databricks.labs.gbx.ds.file_gbx import read_cap_refusal, tile_read_cap
+
+            cap = tile_read_cap()
+            for size in sizes:
+                if size > cap:
+                    raise DataError(f"{fn.sql_name}: {read_cap_refusal(size, cap)}")
+            decoded = sum(sizes)
             budget = decoded_budget()
             if budget and 2 * decoded > budget:
                 raise DataError(

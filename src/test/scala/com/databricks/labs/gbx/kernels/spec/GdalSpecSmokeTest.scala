@@ -201,7 +201,7 @@ class GdalSpecSmokeTest extends AnyFunSuite {
         finally Seq(in, out, out + ".aux.xml").foreach(gdal.Unlink)
     }
 
-    test("a materialized tile in a self-contained driver runs on its GeoTIFF translation; any other is refused") {
+    test("a materialized tile runs on its GeoTIFF translation; one in a driver that can name other files is refused") {
         val probe = KernelGdal.probe()
         assume(
           probe == s"ok:${GdalSpecs.section.pin}",
@@ -212,12 +212,13 @@ class GdalSpecSmokeTest extends AnyFunSuite {
         val tcrs = GdalSpecs.function("gbx_rst_transformcrs")
         val vals = Map[String, Any]("unit" -> "degrees", "xscale" -> null, "yscale" -> null)
         def refusedAs(driver: String, r: SpecResult): Unit = assert(
-          r.raster == null && String.valueOf(r.error).contains(s"is a $driver raster, which may name other files") &&
+          r.raster == null && String.valueOf(r.error).contains(s"is a $driver raster, a format that can name other files") &&
               String.valueOf(r.error).contains("Fix:"),
           String.valueOf(r.error)
         )
-        // ERDAS Imagine names spill and dependent files: outside the manifest's bytes class, refused from its header
-        refusedAs("HFA", GdalSpecEngine.run(slope, Seq(asDriver(tif, "HFA")), vals).get)
+        // ERDAS Imagine is not in the refused class (the light tier reads it): it runs on its GeoTIFF translation
+        val hfaSlope = GdalSpecEngine.run(slope, Seq(asDriver(tif, "HFA")), vals).get
+        assert(hfaSlope.error == null && hfaSlope.raster != null, String.valueOf(hfaSlope.error))
         // a VRT's XML as tile bytes, its source a local GeoTIFF or a URL: refused from its header, so the source is never
         // opened (the same VRT, written as a file, reads the sentinel: the control)
         val sentinel = Files.createTempFile("gbx_sentinel", ".tif")

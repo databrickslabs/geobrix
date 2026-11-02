@@ -1704,3 +1704,39 @@ def test_heavy_format_of_a_netcdf_tile_is_its_own_not_the_geotiff_it_is_read_as(
     assert got["rst_format"] == "netCDF"
 
 
+def test_a_failing_registrar_group_skips_only_its_own_names(monkeypatch):
+    """The bridge registers per registrar GROUP: one group's failing guard (a missing dependency) leaves the names
+    of the groups before it registered and reported as registered, and names its own with the reason.
+    """
+    import sys
+    import types
+
+    from databricks.labs.gbx.manager import _legacy
+
+    seen = []
+
+    def boom():
+        raise RuntimeError("needs the thing")
+
+    mod = types.ModuleType("fake_gbx_light")
+    mod._registrar_groups = lambda: [
+        (
+            lambda: None,
+            {f"gbx_{n}": (lambda s, n=n: seen.append(n)) for n in ("a", "b")},
+        ),
+        (boom, {"gbx_c": lambda s: seen.append("c")}),
+    ]
+    monkeypatch.setitem(sys.modules, mod.__name__, mod)
+    monkeypatch.setattr(_legacy, "_MODULES", (mod.__name__,))
+    _legacy._by_module.cache_clear()
+    spark = types.SimpleNamespace(conf={})
+    try:
+        done, lines = _legacy.register_unmigrated(spark, ["gbx_a", "gbx_b", "gbx_c"])
+    finally:
+        _legacy._by_module.cache_clear()
+    assert (sorted(seen), done) == (["a", "b"], {"gbx_a", "gbx_b"})
+    assert lines == [
+        ("gbx_c", "geobrix: gbx_c not registered (RuntimeError: needs the thing)")
+    ]
+
+

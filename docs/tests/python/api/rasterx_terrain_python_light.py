@@ -41,7 +41,6 @@ def rst_aspect_python_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
     df = dem_tile_df(spark)
     result = df.select(
         rx.rst_aspect("tile", f.lit(False), f.lit(False)).alias("tile")
@@ -64,7 +63,6 @@ def rst_hillshade_python_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
     df = dem_tile_df(spark)
     result = df.select(
         rx.rst_hillshade("tile", f.lit(315.0), f.lit(45.0), f.lit(1.0)).alias("tile")
@@ -86,7 +84,6 @@ def rst_tri_python_example(spark):
     """Compute Terrain Ruggedness Index (TRI) from a DEM tile."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
     df = dem_tile_df(spark)
     result = df.select(rx.rst_tri("tile").alias("tile")).first()
     return result["tile"]
@@ -106,7 +103,6 @@ def rst_tpi_python_example(spark):
     """Compute Topographic Position Index (TPI) from a DEM tile."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
     df = dem_tile_df(spark)
     result = df.select(rx.rst_tpi("tile").alias("tile")).first()
     return result["tile"]
@@ -126,7 +122,6 @@ def rst_roughness_python_example(spark):
     """Compute Roughness (max neighbour delta in 3x3 window) from a DEM tile."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
     df = dem_tile_df(spark)
     result = df.select(rx.rst_roughness("tile").alias("tile")).first()
     return result["tile"]
@@ -172,7 +167,6 @@ def rst_proximity_python_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
     df = dem_tile_df(spark)
     result = df.select(
         rx.rst_proximity("tile", f.lit(""), f.lit("PIXEL"), f.lit(100.0)).alias("tile")
@@ -249,7 +243,6 @@ def rst_sample_python_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
     df = dem_tile_df(spark)
     result = df.select(
         rx.rst_sample("tile", f.lit("SRID=32618;POINT(500320 4500320)")).alias("values")

@@ -23,7 +23,6 @@ def rst_rastertoworldcoord_python_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
     df = single_band_tile_df(spark)
     # Pixel (100, 80) → world struct {x: <easting>, y: <northing>}
     result = df.select(
@@ -47,7 +46,6 @@ def rst_rastertoworldcoordx_python_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
     df = single_band_tile_df(spark)
     # Pixel col=100 → easting
     result = df.select(
@@ -70,7 +68,6 @@ def rst_rastertoworldcoordy_python_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
     df = single_band_tile_df(spark)
     # Pixel row=80 → northing
     result = df.select(
@@ -93,7 +90,6 @@ def rst_worldtorastercoord_python_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
     df = single_band_tile_df(spark)
     # World (2122955, -10791275) in the raster CRS → pixel (100, 80) — the exact
     # inverse of the rst_rastertoworldcoord example above.
@@ -120,7 +116,6 @@ def rst_worldtorastercoordx_python_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
     df = single_band_tile_df(spark)
     # World (2122955, -10791275) → pixel column 100
     result = df.select(
@@ -145,7 +140,6 @@ def rst_worldtorastercoordy_python_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
     df = single_band_tile_df(spark)
     # World (2122955, -10791275) → pixel row 80
     result = df.select(
@@ -174,7 +168,6 @@ def rst_to_webmercator_python_example(spark):
     """Transform raster from its native CRS to Web Mercator (EPSG:3857)."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
     df = single_band_tile_df(spark)
     # Reproject to Web Mercator (default bilinear resampling)
     result = df.select(rx.rst_to_webmercator("tile").alias("tile")).first()

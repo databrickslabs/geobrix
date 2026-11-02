@@ -305,7 +305,6 @@ def rst_fromcontent_python_light_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
     path = str(single_band_path())
     binary_df = spark.read.format("binaryFile").load(path)
     tile_df = binary_df.select(

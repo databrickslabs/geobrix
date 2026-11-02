@@ -481,9 +481,9 @@ def rst_quadbin_rasterize_agg_python_light_example(spark):
     near central London (lon/lat).  Grouped by region, producing 1 rasterized tile.
     """
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
-    from databricks.labs.gbx.gridx.quadbin import functions as qbx  # noqa: PLC0415
+    from databricks.labs.gbx.manager import register as gbx_register  # noqa: PLC0415
 
-    qbx.register(spark)
+    gbx_register(spark, only=["gbx_quadbin_pointascell"])
 
     spark.sql("""
         CREATE OR REPLACE TEMP VIEW _qb_cells AS
@@ -532,10 +532,10 @@ def rst_bng_rasterize_agg_python_example(spark):
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    from databricks.labs.gbx.gridx.bng import functions as bngx  # noqa: PLC0415
+    from databricks.labs.gbx.manager import register as gbx_register  # noqa: PLC0415
     from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
 
-    bngx.register(spark)
+    gbx_register(spark, only=["gbx_bng_eastnorthasbng"])
 
     spark.sql("""
         CREATE OR REPLACE TEMP VIEW _bng_cells AS

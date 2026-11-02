@@ -89,8 +89,6 @@ def rst_fromfile_python_light_example(spark):
     from pyspark.sql import functions as f
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-
     # Write a small synthetic GeoTIFF to a temp file on the driver
     raster_bytes = _make_geotiff_bytes(width=4, height=3, count=1)
     with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:

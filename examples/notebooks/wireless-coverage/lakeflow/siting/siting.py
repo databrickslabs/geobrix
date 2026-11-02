@@ -44,7 +44,6 @@ import math
 import sys
 
 import h3
-from databricks.labs.gbx.rasterx import functions as rx_api
 
 # Constants mirror transformations/_config._FULL_SF / _DEMO_GGP exactly. The CLI
 # --full-aoi flag selects the AOI; _config.cfg's spark.conf-driven bbox is not
@@ -181,13 +180,13 @@ def _bin_h3(spark, surface_df, col, res, agg):
     Returns ``(cellid LONG, z DOUBLE)``. Serverless fan-out is ``repartition(N,
     column)`` -- one tile per task keeps the per-tile raster memory bounded.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as F
 
     view = f"_wc_siting_bin_{agg}_{res}"
     (
         surface_df.repartition(64, "tx", "ty")
-        .select(rx_api.rst_transform(col, F.lit(4326)).alias("t4326"))
+        .select(rx.rst_transform(col, F.lit(4326)).alias("t4326"))
         .createOrReplaceTempView(view)
     )
     return spark.sql(

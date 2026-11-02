@@ -2,7 +2,7 @@ package com.databricks.labs.gbx.rasterx.expressions.mvp
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.kernels.spec.GdalSpecs
-import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import com.databricks.labs.gbx.rasterx.operations.ReTile
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, V2Tile}
 import com.databricks.labs.gbx.util.{NodeFileManager, SerializationUtil}
@@ -110,7 +110,8 @@ object RST_MvpMaterialize extends WithExpressionInfo {
         val local = if (isLocal) path else NodeFileManager.readRemote(path)
         var ds: Dataset = null
         var sub: Dataset = null
-        try {
+        // a netCDF / HDF file is opened, cut and closed one thread at a time (GDALManager.withHdfLock)
+        GDALManager.withHdfLockIf(GDALManager.isHdfFamilyPath(local)) { try {
             gdal.ErrorReset()
             ds = gdal.OpenEx(local, gdalconstConstants.OF_RASTER | gdalconstConstants.OF_READONLY,
               new java.util.Vector[String](GdalSpecs.section.allowedDrivers.asJava))
@@ -145,7 +146,7 @@ object RST_MvpMaterialize extends WithExpressionInfo {
             if (sub != null && (sub ne ds)) RasterDriver.releaseDataset(sub)
             if (ds != null) ds.delete()
             if (!isLocal) NodeFileManager.releaseLocal(local)
-        }
+        } }
     }
 
     override def name: String = "gbx_mvp_rst_materialize"

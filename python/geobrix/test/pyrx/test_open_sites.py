@@ -24,6 +24,7 @@ file: a new site, and a verbatim copy of an allowlisted line, both fail until th
 """
 
 import ast
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -716,3 +717,33 @@ def test_the_gate_guards_flag_a_planted_opt_out_and_a_raw_vector_read():
     )
     assert remote_ok_sites_in(text) == ["f"]
     assert pyogrio_reads_in(text) == (True, [6])
+
+
+# GDAL 3.13's netCDF driver reads a band's metadata outside its own mutex and the payload's HDF5 is built without
+# thread safety, so two threads of one process in netCDF / HDF5 at once (rasterio or osgeo, on a netCDF-4 or HDF5
+# file) crash it: SIGSEGV in H5CX_pop, or a hang. A Spark Python worker runs one task per process, so that needs a
+# thread GeoBrix starts itself. Each module that starts a thread or a pool and also binds a GDAL open, with why none
+# opens a raster in it; a new one is reviewed (and serialized with the heavy tier's GDALManager.withHdfLock rule)
+# before it joins.
+THREADED_MODULES = {
+    "bench/cluster.py": "the thread is the JVM benchmark call; it opens no raster",
+    "bench/compression_sweep.py": "multiprocessing with spawn: one process per case, not threads",
+    "bench/datagen.py": "the pool writes the tile bytes it generates; no raster is opened in it",
+    "bench/runner.py": "the thread samples worker memory from /proc",
+    "pyrx/ortho.py": "the pool decodes JPEG images with PIL; the rasters are opened outside it",
+}
+
+
+def test_a_module_that_starts_threads_and_opens_rasters_is_one_that_opens_none_in_them():
+    starts = re.compile(
+        r"ThreadPoolExecutor|threading\.Thread\(|ProcessPoolExecutor|multiprocessing"
+    )
+    opens = re.compile(r"open_data|open_bytes|rasterio|osgeo")
+    found = sorted(
+        str(py.relative_to(PY_ROOT))
+        for py in PY_ROOT.rglob("*.py")
+        if py.name not in EXCLUDED_FILES
+        and starts.search(py.read_text())
+        and opens.search(py.read_text())
+    )
+    assert found == sorted(THREADED_MODULES), found

@@ -269,8 +269,10 @@ object GdalSpecEngine {
                 }
                 val drivers = openDrivers(section) // the allowlist this call runs under, less the refused class
                 translated.foreach(i => bytesSource(fn.sqlName, i, srcNames(i), rasters(i), section, drivers))
+                // netCDF / HDF bytes are opened, read and translated one thread at a time (GDALManager.withHdfLock)
+                def hdf[T](i: Int)(step: => T): T = GDALManager.withHdfLockIf(GDALManager.isHdfFamilyBytes(rasters(i)))(step)
                 val inputs = inNames.indices.map { i =>
-                    if (translated.contains(i)) props(fn.sqlName, srcNames(i), block.needsCrs, drivers)
+                    if (translated.contains(i)) hdf(i)(props(fn.sqlName, srcNames(i), block.needsCrs, drivers))
                     else props(fn.sqlName, inNames(i), block.needsCrs)
                 }
                 val sizes =
@@ -286,7 +288,7 @@ object GdalSpecEngine {
                           s"compute's ${DecodedBudget >> 20} MiB. Fix: retile the tile first (gbx_rst_retile)"
                     )
                 }
-                translated.foreach(i => toGTiff(fn.sqlName, srcNames(i), inNames(i), drivers))
+                translated.foreach(i => hdf(i)(toGTiff(fn.sqlName, srcNames(i), inNames(i), drivers)))
                 GdalSpecArgv.build(fn, values, inputs, inNames, out, section) match {
                     case None => None
                     case Some(tokens) =>

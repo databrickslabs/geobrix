@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.rasterx.util
 
-import com.databricks.labs.gbx.rasterx.gdal.{RasterDriver, TileBytes}
+import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver, TileBytes}
 import com.databricks.labs.gbx.util.SerializationUtil
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.util.ArrayData
@@ -116,6 +116,19 @@ object RasterSerializationUtil {
             val metadata = SerializationUtil.createMap[String, String](metadataRow)
             val buffer = row.getBinary(lyt.raster)
             RasterDriver.readBytes(buffer, metadata, gated)
+        }
+    }
+
+    /** [[rowToTile]] with the tile's bytes read as their own driver's dataset, not their GeoTIFF translation
+      * ([[RasterDriver.readSourceFromBytes]]): for the functions that answer from a netCDF / HDF file's subdatasets.
+      * The metadata is the tile's own. A netCDF / HDF dataset stays open under the caller's [[GDALManager.withHdfLock]]. */
+    def rowToSourceTile(row: InternalRow, rasterDT: DataType): (Long, Dataset, Map[String, String]) = {
+        val lyt = tileLayout(row)
+        guardMaterialized(row, lyt)
+        if (row.isNullAt(lyt.raster)) (cellIdOf(row), null, metadataOf(row))
+        else {
+            val metadata = SerializationUtil.createMap[String, String](row.getMap(lyt.metadata))
+            (row.getLong(lyt.cellid), RasterDriver.readSourceFromBytes(row.getBinary(lyt.raster), metadata), metadata)
         }
     }
 

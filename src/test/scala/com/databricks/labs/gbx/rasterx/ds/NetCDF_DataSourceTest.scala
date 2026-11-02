@@ -3,12 +3,16 @@ package com.databricks.labs.gbx.rasterx.ds
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx
 import com.databricks.labs.gbx.rasterx.ds.netcdf.{NetCDF_DataSource, NetCDF_Partition, NetCDF_Reader}
+import com.databricks.labs.gbx.rasterx.expressions.accessors.{RST_GetSubdataset, RST_MetaData, RST_Summary}
+import com.databricks.labs.gbx.rasterx.util.V2Tile
 import com.databricks.labs.gbx.util.NodeFileCacheProbe.{entries, garbage, withNetCDFCopy}
-import com.databricks.labs.gbx.util.{HadoopUtils, NodeCacheRetentionOff, NodeFileManager, NodeFilePathUtil}
+import com.databricks.labs.gbx.util.{HadoopUtils, NodeCacheRetentionOff, NodeFileManager, NodeFilePathUtil, SerializationUtil}
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.test.SilentSparkSession
 import org.apache.spark.sql.types.StringType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
+import org.apache.spark.unsafe.types.UTF8String
+import org.gdal.gdal.{TranslateOptions, gdal}
 import org.scalatest.matchers.should.Matchers._
 
 import java.nio.file.{Files, Paths}
@@ -198,6 +202,47 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession with NodeCa
                 jobs.map(_.get(5, java.util.concurrent.TimeUnit.MINUTES)).sum
             } finally pool.shutdownNow()
         rows should be >= 3 * parts.size
+    }
+
+    // The same crash through the rst_* functions: a tile whose bytes are a netCDF-4 file is opened, read and cut by every
+    // function that takes a tile, on the several tasks of one executor. Each open goes through RasterDriver.readBytes,
+    // which reads such bytes (and translates them to a GeoTIFF) one thread at a time; gbx_rst_getsubdataset also opens
+    // the container's subdataset and cuts it to bytes under the same lock.
+    test("rst_* functions over netCDF-4 tiles on many threads at once all finish") {
+        rasterx.functions.register(spark)
+        val dir = Paths.get(this.getClass.getResource("/binary/netcdf-coral/").toURI)
+        val files = Files.list(dir).iterator().asScala.map(_.toString).filter(_.endsWith(".nc")).toSeq.sorted
+        val conf = UTF8String.fromString(ExpressionConfig(spark).toB64)
+        val meta = SerializationUtil.toMapData[String, String](Map("driver" -> "netCDF", "extension" -> "nc"))
+        // the file itself (a container of several variables: subdatasets, no band), and a netCDF-4 file of one grid
+        // variable (a tile read as its GeoTIFF translation), as the bytes of a tile
+        val containers = files.map(f => V2Tile.row(raster = Files.readAllBytes(Paths.get(f)), metadata = meta))
+        val tiles = containers ++ files.map { f =>
+            val src = gdal.Open(s"""NETCDF:"$f":bleaching_alert_area""")
+            withClue(s"open of $f: ${gdal.GetLastErrorMsg}: ") { src should not be null }
+            val dst = Files.createTempFile("gbx-nc4-tile", ".nc").toString // netCDF cannot write to /vsimem
+            val opts = new TranslateOptions(new java.util.Vector[String](Seq("-of", "netCDF", "-co", "FORMAT=NC4").asJava))
+            val out = gdal.Translate(dst, src, opts)
+            withClue(s"translate of $f to netCDF-4: ${gdal.GetLastErrorMsg}: ") { out should not be null }
+            out.delete()
+            src.delete()
+            try V2Tile.row(raster = Files.readAllBytes(Paths.get(dst)), metadata = meta) finally Files.delete(Paths.get(dst))
+        }
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(8)
+        val done =
+            try {
+                val jobs = (0 until 4).flatMap(_ => tiles).flatMap { t =>
+                    Seq(
+                      () => RST_MetaData.eval(t, conf),
+                      () => RST_Summary.eval(t, conf),
+                      () => RST_GetSubdataset.eval(t, UTF8String.fromString("bleaching_alert_area"), conf)
+                    )
+                }.map { fn =>
+                    pool.submit(new java.util.concurrent.Callable[Int] { def call(): Int = { fn(); 1 } })
+                }
+                jobs.map(_.get(5, java.util.concurrent.TimeUnit.MINUTES)).sum
+            } finally pool.shutdownNow()
+        done shouldBe 4 * tiles.size * 3
     }
 
     // NetCDF_Reader stages its .nc before opening the subdataset; Spark never closes a reader whose constructor

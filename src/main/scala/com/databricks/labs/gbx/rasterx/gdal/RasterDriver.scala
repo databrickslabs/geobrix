@@ -168,9 +168,19 @@ object RasterDriver {
     def readBytes(bytes: Array[Byte], options: Map[String, String], gated: Boolean): Dataset =
         if (bytes == null) null
         // netCDF / HDF bytes are opened, translated and closed one thread at a time (GDALManager.withHdfLock)
-        else GDALManager.withHdfLockIf(GDALManager.isHdfFamilyBytes(bytes))(openFromBytes(bytes, options, gated))
+        else GDALManager.withHdfLockIf(GDALManager.isHdfFamilyBytes(bytes))(openFromBytes(bytes, options, gated, translate = true))
 
-    private def openFromBytes(bytes: Array[Byte], options: Map[String, String], gated: Boolean): Dataset = {
+    /** As [[readFromBytesUngated]], but a driver outside the self-contained class is not translated to a GeoTIFF: the
+      * tile's own dataset (netCDF, HDF5, ...), subdatasets and all, which the translation does not keep. For
+      * `gbx_rst_subdatasets` and `gbx_rst_getsubdataset`, whose answer is the source file's structure. The bytes rule
+      * still holds (a driver that can name other files is refused). The caller reads no pixel from it and releases it;
+      * a netCDF / HDF dataset is opened here under [[GDALManager.withHdfLock]] and the caller holds that lock for the
+      * rest of its use. */
+    def readSourceFromBytes(bytes: Array[Byte], options: Map[String, String]): Dataset =
+        if (bytes == null) null
+        else GDALManager.withHdfLockIf(GDALManager.isHdfFamilyBytes(bytes))(openFromBytes(bytes, options, gated = false, translate = false))
+
+    private def openFromBytes(bytes: Array[Byte], options: Map[String, String], gated: Boolean, translate: Boolean): Dataset = {
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "_")
         val tempPath = bytesPath(options, uuid)
         gdal.FileFromMemBuffer(tempPath, bytes)
@@ -185,7 +195,7 @@ object RasterDriver {
                 return null
             }
             if (gated) TileBytes.checkSize(ds)
-            if (TileBytes.selfContained(ds)) ds
+            if (!translate || TileBytes.selfContained(ds)) ds
             else {
                 val gtiff = TileBytes.toGTiff(ds, s"/vsimem/temp_raster_${uuid}_gtiff.tif")
                 ds.delete()

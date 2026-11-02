@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.expressions.accessors
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
-import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -36,12 +36,22 @@ object RST_GetSubdataset extends WithExpressionInfo {
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
-              val (cell, ds, mtd) = RasterSerializationUtil.rowToTile(row, rdt)
-              val subdataset = execute(ds, subsetName.toString)
-              val res = RasterSerializationUtil.tileToRow((cell, subdataset, mtd), rdt, exprConf.hConf)
-              RasterDriver.releaseDataset(ds)
-              RasterDriver.releaseDataset(subdataset)
-              res
+              val (cell, ds, mtd) = RasterSerializationUtil.rowToSourceTile(row, rdt)
+              var subdataset: Dataset = null
+              try {
+                  // A netCDF / HDF container and its subdataset are opened, cut to GeoTIFF bytes and closed one thread at
+                  // a time (GDALManager.withHdfLock); nothing in this block waits on a Spark task.
+                  GDALManager.withHdfLockIf(GDALManager.isHdfFamily(ds)) {
+                      subdataset = execute(ds, subsetName.toString)
+                      // the subdataset is stored as the GeoTIFF the bytes rule reads, not as its container's driver
+                      RasterSerializationUtil.tileToRow((cell, subdataset, mtd + ("driver" -> "GTiff")), rdt, exprConf.hConf)
+                  }
+              } finally {
+                  GDALManager.withHdfLockIf(GDALManager.isHdfFamily(ds)) {
+                      RasterDriver.releaseDataset(subdataset) // before ds: it is open on ds's in-memory file
+                      RasterDriver.releaseDataset(ds)
+                  }
+              }
           },
           row,
           rdt
@@ -51,8 +61,7 @@ object RST_GetSubdataset extends WithExpressionInfo {
         val path = ds.GetDescription
         val driver = ds.GetDriver.getShortName
         val subdatasetPath = s"$driver:$path:$name"
-        val subdataset = gdal.Open(subdatasetPath, GA_ReadOnly)
-        subdataset
+        GDALManager.withHdfLockIf(GDALManager.isHdfFamily(ds))(gdal.Open(subdatasetPath, GA_ReadOnly))
     }
 
     override def name: String = "gbx_rst_getsubdataset"

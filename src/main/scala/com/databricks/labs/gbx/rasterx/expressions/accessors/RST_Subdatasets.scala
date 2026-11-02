@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.expressions.accessors
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
-import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import com.databricks.labs.gbx.rasterx.operations.RasterAccessors
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import com.databricks.labs.gbx.util.SerializationUtil
@@ -38,9 +38,12 @@ object RST_Subdatasets extends WithExpressionInfo {
             () => {
                 val exprConf = ExpressionConfig.fromB64(conf.toString)
                 RST_ExpressionUtil.init(exprConf)
-                val ds = RasterSerializationUtil.rowToDS(row, rdt, gated = false)
-                val res = execute(ds)
-                RasterDriver.releaseDataset(ds)
+                // the tile's own dataset, not its GeoTIFF translation, which keeps no subdataset
+                val (_, ds, _) = RasterSerializationUtil.rowToSourceTile(row, rdt)
+                // a netCDF / HDF dataset is read and closed one thread at a time (GDALManager.withHdfLock)
+                val res = GDALManager.withHdfLockIf(GDALManager.isHdfFamily(ds)) {
+                    try execute(ds) finally RasterDriver.releaseDataset(ds)
+                }
                 SerializationUtil.toMapData[String, String](res)
             },
             row,

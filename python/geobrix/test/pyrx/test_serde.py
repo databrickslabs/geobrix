@@ -35,3 +35,25 @@ def test_build_tile_no_grid_system_key_absent():
     """build_tile without grid_system (default None) must NOT add gridSystem key."""
     tile = _serde.build_tile(make_geotiff_bytes(), driver="GTiff", cellid=7)
     assert "gridSystem" not in tile["metadata"]
+
+
+def test_open_tile_refuses_a_tile_decoded_over_the_carried_read_cap():
+    """The light tile-bytes open checks the decoded size from the header against the read cap the registration
+    carried, with the reason every level gives."""
+    import numpy as np
+    import pytest
+
+    from databricks.labs.gbx import _gdal_policy
+
+    raw = make_geotiff_bytes()
+    with _serde.open_tile(raw) as ds:
+        decoded = ds.width * ds.height * ds.count * np.dtype(ds.dtypes[0]).itemsize
+    with _gdal_policy.carried(None, decoded):
+        with _serde.open_tile(raw):
+            pass
+    with _gdal_policy.carried(None, decoded - 1):
+        with pytest.raises(
+            ValueError, match="over this compute's read cap.*Fix: retile"
+        ):
+            with _serde.open_tile(raw):
+                pass

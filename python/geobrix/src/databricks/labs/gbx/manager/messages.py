@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import weakref
 from typing import Dict, Iterable, List, Set, Tuple
 
@@ -33,6 +34,10 @@ def reminder(spark) -> None:
     say(spark, REMINDER)
 
 
+# The verbs a reason puts after its function's name, singular -> plural, for a line that names several functions.
+_PLURAL = {"runs": "run", "is": "are", "has": "have", "needs": "need", "was": "were"}
+
+
 def say_grouped(spark, lines: Iterable[Tuple[str, str]]) -> None:
     """(name, line) pairs -> one printed line per distinct reason. A reason shared by several names prints
     once with a count; a reason that names its function prints as it is when only one name has it.
@@ -45,6 +50,11 @@ def say_grouped(spark, lines: Iterable[Tuple[str, str]]) -> None:
             say(spark, template.replace("{fn}", names[0]))
         elif "{fn}" in template:
             shown = ", ".join(sorted(names)[:3]) + (", ..." if len(names) > 3 else "")
-            say(spark, template.replace("{fn}", f"{len(names)} functions ({shown})"))
+            plural = re.sub(
+                r"\{fn\} (" + "|".join(_PLURAL) + r")\b",
+                lambda m: "{fn} " + _PLURAL[m.group(1)],
+                template,
+            )
+            say(spark, plural.replace("{fn}", f"{len(names)} functions ({shown})"))
         else:
             say(spark, f"{template} ({len(names)} functions)")

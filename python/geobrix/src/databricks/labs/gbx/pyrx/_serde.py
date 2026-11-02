@@ -53,9 +53,25 @@ TILE_SCHEMA = StructType(
 
 @contextmanager
 def open_tile(raster_bytes: bytes) -> Iterator[DatasetReader]:
-    """Open raster BINARY content as a rasterio DatasetReader (in-memory)."""
+    """Open raster BINARY content as a rasterio DatasetReader (in-memory).
+
+    A tile decoded over the read cap (``ds.file_gbx.tile_read_cap``; width x height x bands x the band type's size,
+    from the header, before any pixel is read) raises with the reason every level gives and its Fix.
+    """
+    import numpy as np
+
+    from databricks.labs.gbx.ds.file_gbx import read_cap_refusal, tile_read_cap
+
     with MemoryFile(bytes(raster_bytes)) as mf:
         with open_bytes(mf) as ds:
+            decoded = (
+                ds.width * ds.height * ds.count * np.dtype(ds.dtypes[0]).itemsize
+                if ds.count
+                else 0
+            )
+            cap = tile_read_cap()
+            if decoded > cap:
+                raise ValueError(read_cap_refusal(decoded, cap))
             yield ds
 
 

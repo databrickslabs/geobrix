@@ -76,9 +76,9 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
     },
 }
 
-# Rows the JVM levels run with the session's read cap lowered to this many bytes (the JVM's decoded-size gate at
-# its tile-from-bytes point reads it from `spark.databricks.labs.gbx.read_cap`); the light levels do not run them.
-JVM_READ_CAP_ROWS: Dict[str, int] = {"decoded_over_cap_error_tile": 4096}
+# Rows every level runs through SQL with the session's read cap (`spark.databricks.labs.gbx.read_cap`) lowered to
+# this many bytes: the decoded-size gate where each level reads a tile's bytes.
+READ_CAP_ROWS: Dict[str, int] = {"decoded_over_cap_error_tile": 4096}
 # The refusal of a tile's bytes in a driver that can name other files, on every level (the light tier's text).
 _BYTES_REFUSED_LIGHT = "is a {} raster, a format that can name other files, which GeoBrix does not open from tile bytes. Fix:"
 
@@ -312,15 +312,14 @@ MVP_S: Tuple[Case, ...] = (
         _BYTES_REFUSED_LIGHT.format("VRT"),
         ("session",),
     ),
-    # A materialized tile decoded over the read cap is an error tile with a Fix, never a failed task. The JVM levels
-    # run it with the cap lowered (JVM_READ_CAP_ROWS); the light tier holds the tile's bytes already, and its read
-    # cap applies where it decodes a virtual tile.
+    # A materialized tile decoded over the read cap is an error tile with a Fix, never a failed task, on every level
+    # (run with the cap lowered: READ_CAP_ROWS).
     Case(
         "decoded_over_cap_error_tile",
         T,
         (Build("tile_4326"), "EPSG:3857"),
         "error_tile_has",
-        "Fix: retile it first (gbx_rst_retile)",
+        "the tile is 12 KiB decoded, over this compute's read cap (4 KiB). Fix: retile it first (gbx_rst_retile)",
         ("session",),
     ),
     Case(

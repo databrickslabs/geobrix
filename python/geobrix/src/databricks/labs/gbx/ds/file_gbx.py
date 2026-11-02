@@ -18,6 +18,7 @@ Exports:
 from __future__ import annotations
 
 import fnmatch
+import functools
 import os
 import re as _re
 import shutil
@@ -1028,6 +1029,63 @@ def file_ref_arg(tile_col: Column, spark: Optional["SparkSession"] = None) -> Co
         return F.call_function("try_to_file", path_col)
     # FILE not supported or no session — pass None (UDF uses fallback path).
     return F.lit(None)
+
+
+# The session key of the read cap: the decoded size, in bytes, a materialized tile may have where a function reads its
+# bytes (the JVM's RasterDriver.readFromBytes and the light _serde.open_tile).
+READ_CAP_KEY = "spark.databricks.labs.gbx.read_cap"
+
+
+def session_read_cap(spark) -> Optional[int]:
+    """Driver side: the read cap a registration carries to its workers. On a classic session it is the session's
+    :data:`READ_CAP_KEY` when set, else the classic decoded budget (the cap the JVM reads there). None on Spark Connect,
+    whose configuration is not read here: each worker then uses its own budget (:func:`tile_read_cap`).
+    """
+    if spark is None or "connect" in type(spark).__module__:
+        return None
+    from databricks.labs.gbx.pyrx.core.budget import decoded_budget_bytes
+
+    try:
+        value = spark.conf.get(READ_CAP_KEY, None)
+    except (
+        Exception
+    ):  # noqa: BLE001 - a session without a readable configuration carries the default
+        value = None
+    try:
+        cap = int(str(value).strip()) if value is not None else 0
+    except ValueError:
+        cap = 0
+    return cap if cap > 0 else decoded_budget_bytes("classic")
+
+
+def tile_read_cap() -> int:
+    """Worker side: the decoded size, in bytes, a materialized tile may have where its bytes are read: the cap the
+    registration carried (:func:`session_read_cap`), else this process's decoded budget (``decoded_budget_bytes``).
+    """
+    from databricks.labs.gbx._gdal_policy import carried_read_cap
+
+    carried = carried_read_cap()
+    return carried if carried is not None else _process_read_cap()
+
+
+@functools.lru_cache(maxsize=1)
+def _process_read_cap() -> int:
+    """This process's decoded budget, read once (it reads the task's cgroup limit on Serverless)."""
+    from databricks.labs.gbx.pyrx.core.budget import decoded_budget_bytes
+
+    return decoded_budget_bytes("auto")
+
+
+def read_cap_refusal(decoded: int, cap: int) -> str:
+    """The reason of a tile decoded over the read cap, the same text on every level (the JVM's TileBytes)."""
+
+    def size(n: int) -> str:
+        return f"{n >> 20} MiB" if n >= (1 << 20) else f"{n >> 10} KiB"
+
+    return (
+        f"the tile is {size(decoded)} decoded, over this compute's read cap ({size(cap)}). "
+        "Fix: retile it first (gbx_rst_retile) so each tile is smaller"
+    )
 
 
 def file_ref_sql(tile_sql: str, spark: Optional["SparkSession"] = None) -> str:

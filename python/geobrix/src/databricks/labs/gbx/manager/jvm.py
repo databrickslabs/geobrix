@@ -21,7 +21,7 @@ NATIVE_DIR_KEY = (
 )
 # The decoded size, in bytes, a materialized tile may have where the JVM reads its bytes (RasterDriver's one
 # tile-from-bytes point, through ExpressionConfig): over it the tile is an error tile with a Fix.
-READ_CAP_KEY = "spark.databricks.labs.gbx.read_cap"
+from databricks.labs.gbx.ds.file_gbx import READ_CAP_KEY  # noqa: E402
 
 
 def _point_jvm_at_payload(spark) -> None:
@@ -44,7 +44,7 @@ def _pass_read_cap(spark) -> None:
     if spark.conf.get(READ_CAP_KEY, None) is None:
         from databricks.labs.gbx.pyrx.core.budget import decoded_budget_bytes
 
-        spark.conf.set(READ_CAP_KEY, str(decoded_budget_bytes("auto")))
+        spark.conf.set(READ_CAP_KEY, str(decoded_budget_bytes("classic")))
 
 
 def _install_light_side(spark, fn) -> str:

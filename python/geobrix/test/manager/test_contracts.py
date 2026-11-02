@@ -1576,7 +1576,35 @@ def test_l1_gives_the_jvm_the_light_read_cap_unless_the_session_names_one():
         conf = Conf()
 
     jvm._pass_read_cap(S)
-    assert S.conf[jvm.READ_CAP_KEY] == str(decoded_budget_bytes("auto"))
+    assert S.conf[jvm.READ_CAP_KEY] == str(decoded_budget_bytes("classic"))
     S.conf[jvm.READ_CAP_KEY] = "4096"
     jvm._pass_read_cap(S)
     assert S.conf[jvm.READ_CAP_KEY] == "4096"
+
+
+@pytest.mark.parametrize(
+    "names,want",
+    [
+        (
+            ["gbx_rst_a"],
+            "geobrix: gbx_rst_a runs without the GDAL spec engine at light (x)",
+        ),
+        (
+            ["gbx_rst_a", "gbx_rst_b", "gbx_rst_c"],
+            "geobrix: 3 functions (gbx_rst_a, gbx_rst_b, gbx_rst_c) run without the GDAL spec engine at light (x)",
+        ),
+    ],
+    ids=["one", "three"],
+)
+def test_a_grouped_line_agrees_in_number(capsys, names, want):
+    from databricks.labs.gbx.manager import messages
+
+    spark = object.__new__(type("S3", (), {}))
+    messages.say_grouped(
+        spark,
+        [
+            (n, f"geobrix: {n} runs without the GDAL spec engine at light (x)")
+            for n in names
+        ],
+    )
+    assert capsys.readouterr().out.strip() == want

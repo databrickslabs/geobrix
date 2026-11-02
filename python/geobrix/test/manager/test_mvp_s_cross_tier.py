@@ -66,24 +66,27 @@ def test_mvp_s_oracle_session(request, tmp_path, fn, level, variant, api):
     rows = [
         c for c in oracles.MVP_S if c.fn == fn and (not raw or c.kind == "error_tile")
     ]
-    capped = [c for c in rows if c.cid in oracles.JVM_READ_CAP_ROWS]
+    capped = [c for c in rows if c.cid in oracles.READ_CAP_ROWS]
     kw = dict(
         name_of=(lambda f: f"gbx__l1_{f[len('gbx_'):]}") if raw else (lambda f: f),
         tmpdir=str(tmp_path),
         column_of=_column_function if api == "column" else None,
     )
     results = oracles.run_session(spark, [c for c in rows if c not in capped], **kw)
-    if (
-        level != "L3"
-    ):  # the JVM's decoded-size gate, with the session's read cap lowered for the row
-        from databricks.labs.gbx.manager.jvm import READ_CAP_KEY
+    if api == "sql":
+        # the decoded-size gate of every level, with the session's read cap lowered for the row: the JVM reads the
+        # key per query, a light function carries it from its registration
+        from databricks.labs.gbx.ds.file_gbx import READ_CAP_KEY
 
+        forced = {fn: (level, "-" if raw else variant)}
         for c in capped:
-            spark.conf.set(READ_CAP_KEY, str(oracles.JVM_READ_CAP_ROWS[c.cid]))
+            spark.conf.set(READ_CAP_KEY, str(oracles.READ_CAP_ROWS[c.cid]))
             try:
+                register(spark, only=[fn], _levels=forced)
                 results += oracles.run_session(spark, [c], **kw)
             finally:
                 spark.conf.unset(READ_CAP_KEY)
+                register(spark, only=[fn], _levels=forced)
     red = {case.cid: msg for case, msg in results if msg}
     # A row a JVM level is known to fail is a strict expected failure: it must fail, and
     # when it starts to pass it comes out of HEAVY_PENDING.

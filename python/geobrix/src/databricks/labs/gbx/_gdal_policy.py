@@ -179,6 +179,16 @@ _VSI = re.compile(r"(?:^|(?<=[/{\"':,\s]))/vsi([a-z0-9_]+)", re.IGNORECASE)
 _CARRIED: contextvars.ContextVar = contextvars.ContextVar(
     "gbx_remote_paths", default=None
 )
+# The session's read cap (``ds.file_gbx.session_read_cap``), carried from the registration like the switch: None
+# where the driver carried none (each worker then uses its own budget, ``ds.file_gbx.tile_read_cap``).
+_CARRIED_CAP: contextvars.ContextVar = contextvars.ContextVar(
+    "gbx_carried_read_cap", default=None
+)
+
+
+def carried_read_cap() -> Optional[int]:
+    """The read cap the driver carried into this call, or None."""
+    return _CARRIED_CAP.get()
 
 
 def driver_switch() -> bool:
@@ -209,22 +219,23 @@ def remote_paths_allowed() -> bool:
 
 
 @contextlib.contextmanager
-def carried(allowed: Optional[bool]):
-    """The block runs with ``allowed`` as the carried switch (None: as it was)."""
-    if allowed is None:
-        yield
-        return
-    token = _CARRIED.set(bool(allowed))
+def carried(allowed: Optional[bool], cap: Optional[int] = None):
+    """The block runs with ``allowed`` as the carried switch and ``cap`` as the carried read cap (None: as it was)."""
+    token = None if allowed is None else _CARRIED.set(bool(allowed))
+    cap_token = None if cap is None else _CARRIED_CAP.set(int(cap))
     try:
         yield
     finally:
-        _CARRIED.reset(token)
+        if cap_token is not None:
+            _CARRIED_CAP.reset(cap_token)
+        if token is not None:
+            _CARRIED.reset(token)
 
 
-def carrying_iter(it, allowed: Optional[bool]):
+def carrying_iter(it, allowed: Optional[bool], cap: Optional[int] = None):
     """``it``'s items, each produced with ``allowed`` carried (None: as it was); nothing is carried across a yield."""
     while True:
-        with carried(allowed):
+        with carried(allowed, cap):
             try:
                 item = next(it)
             except StopIteration:
@@ -232,16 +243,16 @@ def carrying_iter(it, allowed: Optional[bool]):
         yield item
 
 
-def _carrying_function(func, allowed: bool):
-    """``func`` run with ``allowed`` carried; an iterator it returns (an iterator UDF, a UDTF's rows) produces each
-    item with it carried too."""
+def _carrying_function(func, allowed: bool, cap: Optional[int] = None):
+    """``func`` run with ``allowed`` (and ``cap``) carried; an iterator it returns (an iterator UDF, a UDTF's rows)
+    produces each item with them carried too."""
 
     @functools.wraps(func)
     def run(*args, **kwargs):
-        with carried(allowed):
+        with carried(allowed, cap):
             result = func(*args, **kwargs)
         if isinstance(result, collections.abc.Iterator):
-            return carrying_iter(result, allowed)
+            return carrying_iter(result, allowed, cap)
         return result
 
     return run
@@ -250,10 +261,10 @@ def _carrying_function(func, allowed: bool):
 _HANDLER_METHODS = ("__init__", "eval", "terminate", "cleanup")
 
 
-def _carrying_class(cls, allowed: bool):
+def _carrying_class(cls, allowed: bool, cap: Optional[int] = None):
     """A UDTF handler class whose methods run with ``allowed`` carried (a class made here is pickled by value)."""
     own = {
-        name: _carrying_function(getattr(cls, name), allowed)
+        name: _carrying_function(getattr(cls, name), allowed, cap)
         for name in _HANDLER_METHODS
         if any(name in c.__dict__ for c in cls.__mro__[:-1])
     }
@@ -262,28 +273,29 @@ def _carrying_class(cls, allowed: bool):
     )
 
 
-def carrying(f, allowed: bool):
-    """What a registration takes, for ``f`` with the driver's switch carried into every worker call: a UDF object
-    (``spark.udf.register``), a UDTF (``spark.udtf.register``) or a plain function."""
+def carrying(f, allowed: bool, cap: Optional[int] = None):
+    """What a registration takes, for ``f`` with the driver's switch (and read cap, when given) carried into every
+    worker call: a UDF object (``spark.udf.register``), a UDTF (``spark.udtf.register``) or a plain function.
+    """
     func = getattr(f, "func", None)
     if isinstance(
         func, type
     ):  # a UDTF: the same registration over a carrying handler class
         out = copy.copy(f)
-        out.func = _carrying_class(func, allowed)
+        out.func = _carrying_class(func, allowed, cap)
         return out
     if func is not None and hasattr(
         f, "evalType"
     ):  # a UDF: the attributes the registration reads
         return types.SimpleNamespace(
-            func=_carrying_function(func, allowed),
+            func=_carrying_function(func, allowed, cap),
             returnType=f.returnType,
             evalType=f.evalType,
             deterministic=getattr(f, "deterministic", True),
             asNondeterministic=getattr(f, "asNondeterministic", None),
         )
     if callable(f):
-        return _carrying_function(f, allowed)
+        return _carrying_function(f, allowed, cap)
     return f
 
 
@@ -313,11 +325,13 @@ class _CarryingRegistration:
     """A session's ``udf`` / ``udtf`` as a registrar sees it: ``register`` hands Spark the function with the switch
     carried (``carrying``); everything else is the session's own."""
 
-    def __init__(self, target, allowed: bool):
-        self._target, self._allowed = target, allowed
+    def __init__(self, target, allowed: bool, cap: Optional[int] = None):
+        self._target, self._allowed, self._cap = target, allowed, cap
 
     def register(self, name, f, *args, **kwargs):
-        return self._target.register(name, carrying(f, self._allowed), *args, **kwargs)
+        return self._target.register(
+            name, carrying(f, self._allowed, self._cap), *args, **kwargs
+        )
 
     def __getattr__(self, name):
         return getattr(self._target, name)
@@ -328,16 +342,16 @@ class _CarryingSession:
     workers; every other attribute is the session's own. Nothing global changes, so a registration made elsewhere
     (another thread's ``register()``, the user's own UDF) is untouched."""
 
-    def __init__(self, spark, allowed: bool):
-        self._spark, self._allowed = spark, allowed
+    def __init__(self, spark, allowed: bool, cap: Optional[int] = None):
+        self._spark, self._allowed, self._cap = spark, allowed, cap
 
     @property
     def udf(self):
-        return _CarryingRegistration(self._spark.udf, self._allowed)
+        return _CarryingRegistration(self._spark.udf, self._allowed, self._cap)
 
     @property
     def udtf(self):
-        return _CarryingRegistration(self._spark.udtf, self._allowed)
+        return _CarryingRegistration(self._spark.udtf, self._allowed, self._cap)
 
     def __getattr__(self, name):
         return getattr(self._spark, name)
@@ -351,9 +365,16 @@ def real_session(spark):
 
 def carrying_session(spark, allowed: Optional[bool] = None):
     """``spark`` for the registrars: each function they register through its ``udf`` / ``udtf`` carries the
-    driver's switch (read now, unless ``allowed`` is given). The one point where they hand their functions to Spark.
+    driver's switch (read now, unless ``allowed`` is given) and the session's read cap
+    (``ds.file_gbx.session_read_cap``). The one point where they hand their functions to Spark.
     """
-    return _CarryingSession(spark, driver_switch() if allowed is None else allowed)
+    from databricks.labs.gbx.ds.file_gbx import session_read_cap
+
+    return _CarryingSession(
+        spark,
+        driver_switch() if allowed is None else allowed,
+        session_read_cap(real_session(spark)),
+    )
 
 
 def url_scheme(path) -> str:

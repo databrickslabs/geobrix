@@ -438,9 +438,9 @@ def test_gtiff_writer_has_no_cog_option(tmp_path):
 
 
 def test_file_and_cog_registered():
-    from databricks.labs.gbx.ds.register import _SOURCES
+    from databricks.labs.gbx.manifest import datasource_classes
 
-    names = {s.name() for s in _SOURCES}
+    names = {s.name() for s in datasource_classes()}
     assert "file_gbx" in names and "cog_gbx" in names
 
 

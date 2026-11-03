@@ -7,7 +7,7 @@ import pytest
 
 zarr = pytest.importorskip("zarr")
 
-from databricks.labs.gbx.ds import register as ds_register  # noqa: E402
+from databricks.labs.gbx import manifest  # noqa: E402
 from databricks.labs.gbx.zarr import datasource  # noqa: E402
 from databricks.labs.gbx.zarr.datasource import (  # noqa: E402
     ZarrGbxDataSource,
@@ -399,7 +399,7 @@ def test_no_pushfilters_method():
 def test_register_lists_zarr_gbx(spark, era5_v3_sharded):
     from databricks.labs.gbx import manager as gbx_manager
 
-    assert ZarrGbxDataSource in ds_register._SOURCES
+    assert ZarrGbxDataSource in manifest.datasource_classes()
     assert ZarrGbxDataSource.name() == "zarr_gbx"
     gbx_manager.register_sources(
         spark, only=["zarr_gbx"]

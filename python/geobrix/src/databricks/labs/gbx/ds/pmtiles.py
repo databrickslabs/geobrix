@@ -101,7 +101,7 @@ class PMTilesGbxWriter(DataSourceWriter):
     def __init__(self, path: str, options: Dict[str, str], overwrite: bool):
         # Lazy import: pmtiles is only needed when actually writing PMTiles output.
         # Keeping it at module level would force the pmtiles package to be installed
-        # even on raster-only paths that import ds/register.py (e.g. a bench run that
+        # even on raster-only paths that register the data sources (e.g. a bench run that
         # never writes PMTiles). The import is cheap after the first call (cached by
         # the Python module system) and only runs when a PMTiles write is initiated.
         from pmtiles.tile import Compression, TileType

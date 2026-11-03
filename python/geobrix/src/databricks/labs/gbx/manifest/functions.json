@@ -292,6 +292,136 @@
       ]
     }
   },
+  "datasources": [
+    {
+      "name": "raster_gbx",
+      "kind": "reader_writer",
+      "impl": "python",
+      "ref": "databricks.labs.gbx.ds.raster:RasterGbxDataSource",
+      "page": "readers/raster",
+      "since": "0.4.0"
+    },
+    {
+      "name": "gtiff_gbx",
+      "kind": "reader_writer",
+      "impl": "python",
+      "ref": "databricks.labs.gbx.ds.gtiff:GTiffGbxDataSource",
+      "page": "readers/geotiff",
+      "since": "0.4.0"
+    },
+    {
+      "name": "netcdf_gbx",
+      "kind": "reader_writer",
+      "impl": "python",
+      "ref": "databricks.labs.gbx.ds.netcdf:NetcdfGbxDataSource",
+      "page": "readers/netcdf",
+      "since": "0.4.1"
+    },
+    {
+      "name": "pmtiles_gbx",
+      "kind": "reader_writer",
+      "impl": "python",
+      "ref": "databricks.labs.gbx.ds.pmtiles:PMTilesGbxDataSource",
+      "page": "readers/pmtiles",
+      "since": "0.4.0"
+    },
+    {
+      "name": "file_gbx",
+      "kind": "reader",
+      "impl": "python",
+      "ref": "databricks.labs.gbx.ds.file:FileGbxDataSource",
+      "page": "readers/file",
+      "since": "0.5.0"
+    },
+    {
+      "name": "cog_gbx",
+      "kind": "reader_writer",
+      "impl": "python",
+      "ref": "databricks.labs.gbx.ds.cog:CogGbxDataSource",
+      "page": "readers/cog",
+      "since": "0.5.0"
+    },
+    {
+      "name": "vector_gbx",
+      "kind": "reader_writer",
+      "impl": "python",
+      "ref": "databricks.labs.gbx.ds.vector:VectorGbxDataSource",
+      "page": "readers/vector",
+      "since": "0.4.0"
+    },
+    {
+      "name": "shapefile_gbx",
+      "kind": "reader_writer",
+      "impl": "python",
+      "ref": "databricks.labs.gbx.ds.vector:ShapefileGbxDataSource",
+      "page": "readers/shapefile",
+      "since": "0.4.0"
+    },
+    {
+      "name": "geojson_gbx",
+      "kind": "reader_writer",
+      "impl": "python",
+      "ref": "databricks.labs.gbx.ds.vector:GeoJSONGbxDataSource",
+      "page": "readers/geojson",
+      "since": "0.4.0"
+    },
+    {
+      "name": "geojsonl_gbx",
+      "kind": "reader_writer",
+      "impl": "python",
+      "ref": "databricks.labs.gbx.ds.vector:GeoJSONLGbxDataSource",
+      "page": "writers/geojsonl",
+      "since": "0.4.0"
+    },
+    {
+      "name": "gpkg_gbx",
+      "kind": "reader_writer",
+      "impl": "python",
+      "ref": "databricks.labs.gbx.ds.vector:GpkgGbxDataSource",
+      "page": "readers/geopackage",
+      "since": "0.4.0"
+    },
+    {
+      "name": "file_gdb_gbx",
+      "kind": "reader_writer",
+      "impl": "python",
+      "ref": "databricks.labs.gbx.ds.vector:FileGdbGbxDataSource",
+      "page": "readers/filegdb",
+      "since": "0.4.0"
+    },
+    {
+      "name": "lidar_gbx",
+      "kind": "reader_writer",
+      "impl": "python",
+      "ref": "databricks.labs.gbx.ds.lidar:LidarGbxDataSource",
+      "page": "readers/lidar",
+      "since": "0.5.2"
+    },
+    {
+      "name": "exif_gbx",
+      "kind": "reader",
+      "impl": "python",
+      "ref": "databricks.labs.gbx.ds.exif:ExifGbxDataSource",
+      "page": "readers/exif",
+      "since": "0.5.2"
+    },
+    {
+      "name": "zarr_gbx",
+      "kind": "reader",
+      "impl": "python",
+      "ref": "databricks.labs.gbx.zarr.datasource:ZarrGbxDataSource",
+      "page": "readers/zarr",
+      "since": "0.6.0"
+    },
+    {
+      "name": "netcdf_ogr",
+      "kind": "reader",
+      "impl": "scala",
+      "ref": "com.databricks.labs.gbx.vectorx.ds.netcdf.NetCDF_OGR_DataSource",
+      "page": "readers/netcdf",
+      "since": "0.4.3"
+    }
+  ],
   "functions": [
     {"sql_name": "gbx_bng_cellfill", "family": "cell-aggregate", "kind": "aggregate", "status": "stable", "params": [{"name": "cellid", "session": ["STRING"], "doc": "The BNG cell id, for example `'TQ3080'`."}, {"name": "value", "session": ["DOUBLE"], "doc": "The cell's value; NULL marks a covered cell with no value, which is filled."}, {"name": "k", "session": ["INT"], "doc": "The neighbourhood radius in rings, at least 0; 0 fills nothing.", "default": "1"}, {"name": "method", "session": ["STRING"], "doc": "`'mean'` (the mean of the valid neighbours) or `'idw'` (weighted by ring distance). Any other word raises.", "default": "'mean'", "py": "lit"}, {"name": "power", "session": ["DOUBLE"], "doc": "The distance exponent of `'idw'`; unused by `'mean'`.", "default": "2.0"}], "min_args": 2, "returns": {"session": "BINARY"}, "levels": {"L1": {"companion": "com.databricks.labs.gbx.gridx.bng.BNG_CellFill"}, "L3": {"register": "udf", "variants": {"c0": "databricks.labs.gbx.pygx.functions:_bng_cellfill_agg_udf"}}}, "oracle": "CELL_AGGREGATE", "example": "bng_fill_mean", "since": "0.5.1", "doc": {"summary": "Fill the NULL cells of a group of BNG cells from their valid neighbours.", "returns": "The payload of the filled cells: a 4-byte count, then per cell its id (8 bytes), a present flag (1 byte) and the value (8 bytes, when present), all big-endian, in ascending id order. A group with no cell gives NULL.", "page": "api/gridx-functions"}},
     {"sql_name": "gbx_bng_cellintersection_agg", "family": "cell-aggregate", "kind": "aggregate", "status": "stable", "params": [{"name": "input_chip", "session": ["struct<cellid:string,core:boolean,chip:binary>"], "doc": "A chip of the cell: its id, whether it is a core chip, and its geometry (NULL for a core chip)."}], "min_args": 1, "returns": {"session": "BINARY"}, "levels": {"L3": {"register": "udf", "variants": {"c0": "databricks.labs.gbx.pygx.functions:_bng_cellintersection_agg_udf"}}}, "oracle": "CELL_AGGREGATE", "example": "bi_agg_two_chips", "since": "0.2.0", "doc": {"summary": "Take the intersection of a group's chips of one cell.", "returns": "The intersection as WKB (no SRID), or NULL when it is empty or the group has no chip. A core chip stands for the whole cell.", "page": "api/gridx-functions"}},

@@ -2081,12 +2081,13 @@ def test_a_failing_data_source_registration_is_a_reported_line_not_a_failure(
     """The light data sources register last; if that fails the functions are registered all the same, the failure is
     one of the grouped lines, and the session still counts the names as done."""
     from databricks.labs.gbx import _api, manager
-    from databricks.labs.gbx.ds import register as sources
 
     def boom(spark):
         raise RuntimeError("no data source support here")
 
-    monkeypatch.setattr(sources, "_install", lambda spark, only=None: boom(spark))
+    monkeypatch.setattr(
+        manager, "register_sources", lambda spark, only=None: boom(spark)
+    )
     stub = ConnectStub()
     out = manager.register(stub)
     printed = capsys.readouterr().out.splitlines()
@@ -3317,7 +3318,6 @@ def test_names_at_level_filters_prefix_level_and_mvp_and_takes_a_bare_string():
 
 def test_register_sources_registers_the_named_formats_and_refuses_an_unknown_one():
     from databricks.labs.gbx import manager
-    from databricks.labs.gbx.ds import register as ds_register
 
     class _Spark:
         class dataSource:
@@ -3335,4 +3335,41 @@ def test_register_sources_registers_the_named_formats_and_refuses_an_unknown_one
     with pytest.raises(ValueError, match="raster_gpx"):
         manager.register_sources(_Spark, only=["raster_gpx"])
     assert manager.register_sources(_Spark, only=[]) == []
-    assert {s.name() for s in ds_register._SOURCES} >= {"raster_gbx", "gtiff_gbx"}
+    assert {s.name() for s in manifest.datasource_classes()} >= {
+        "raster_gbx",
+        "gtiff_gbx",
+    }
+
+
+_LIGHT_FORMATS = {
+    "raster_gbx", "gtiff_gbx", "netcdf_gbx", "pmtiles_gbx", "file_gbx", "cog_gbx", "vector_gbx",
+    "shapefile_gbx", "geojson_gbx", "geojsonl_gbx", "gpkg_gbx", "file_gdb_gbx", "lidar_gbx", "exif_gbx",
+    "zarr_gbx",
+}  # fmt: skip
+PY_SOURCES = [d for d in MAN.datasources if d.impl == "python"]
+
+
+def test_every_python_data_source_ref_resolves_and_is_available_after_register(spark):
+    """The manifest's `datasources` region: one row per light format, its `ref` the class (named as its row), its page a
+    docs page; `register(spark)` makes `spark.read.format(name)` resolve for every one of them.
+    """
+    from databricks.labs.gbx import register
+
+    assert {d.name for d in PY_SOURCES} == _LIGHT_FORMATS
+    assert len({d.name for d in MAN.datasources}) == len(MAN.datasources)
+    for d in PY_SOURCES:
+        assert manifest.resolve_ref(d.ref).name() == d.name, d.name
+        assert (
+            d.kind in manifest.DATASOURCE_KINDS
+            and (REPO / "docs/docs" / f"{d.page}.mdx").is_file()
+        ), d.name
+    register(spark)
+    for d in PY_SOURCES:
+        try:
+            spark.read.format(d.name).load("/nonexistent/path")
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - the probe fails on the path; only the format lookup matters
+            assert "DATA_SOURCE_NOT_FOUND" not in str(
+                exc
+            ), f"{d.name} is not registered"

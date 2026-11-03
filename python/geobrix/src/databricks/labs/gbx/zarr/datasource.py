@@ -19,8 +19,8 @@ else, because the store changed since the plan, raises ``ZarrError`` rather than
 the plan did not count. A plain store has no snapshot; it is read as it is.
 
 This module must not import ``databricks.labs.gbx.ds`` at module level: importing any ds
-module runs ``ds/__init__``, which imports ``ds.register``, which imports this module, and
-a worker unpickling the reader imports this module first.
+module runs ``ds/__init__``, and a worker unpickling the reader imports this module first
+(the manager reaches this class by the manifest row's ``ref``, so nothing in ``ds`` imports it).
 
 Options (camelCase, like the other ``*_gbx`` readers); every value is a string:
 

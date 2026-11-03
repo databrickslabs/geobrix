@@ -174,16 +174,51 @@ def manifest_names(prefix: str = "gbx_") -> List[str]:
     )
 
 
+def _format_name(name: str) -> str:
+    """``raster``, ``RASTER`` and ``raster_gbx`` all name ``raster_gbx``."""
+    n = name.strip().lower()
+    return n if n.endswith("_gbx") else f"{n}_gbx"
+
+
 def register_sources(spark=None, only: Optional[Iterable[str]] = None) -> List[str]:
     """Register the light data sources (``raster_gbx``, ``gtiff_gbx`` and the others) and no functions.
 
-    ``register(spark)`` does this as its last step; call this when a session needs only the readers and writers.
-    ``only`` limits the formats (``raster_gbx`` or ``raster``); an unrecognized format raises ``ValueError``.
-    Returns the registered format names.
+    The sources are the manifest's ``datasources`` rows with ``impl: python``. ``register(spark)`` does this as its
+    last step; call this when a session needs only the readers and writers. ``only`` limits the formats
+    (``raster_gbx`` or ``raster``, any case; ``[]`` registers nothing); an unrecognized format raises ``ValueError``
+    that lists the close matches. Each source goes in through the driver's remote-path switch, which the readers
+    carry into their planning. Returns the registered format names.
     """
-    from databricks.labs.gbx.ds import register as _ds
+    import difflib
 
-    return _ds._install(spark if spark is not None else _active(), only)
+    from databricks.labs.gbx import _gdal_policy
+
+    spark = spark if spark is not None else _active()
+    by_name = {src.name(): src for src in manifest.datasource_classes()}
+    if only is None:
+        selected = list(by_name)
+    else:
+        requested = [(orig, _format_name(orig)) for orig in only]
+        unknown = [(orig, norm) for orig, norm in requested if norm not in by_name]
+        if unknown:
+            lines = []
+            for orig, norm in unknown:
+                near = difflib.get_close_matches(norm, by_name, n=3)
+                lines.append(
+                    f"  {orig!r}"
+                    + (f" -> did you mean: {', '.join(near)}?" if near else "")
+                )
+            raise ValueError(
+                "register(only=...) got unrecognized data source name(s):\n"
+                + "\n".join(lines)
+                + "\nPass a registerable format name (or its short form)."
+            )
+        selected = list(dict.fromkeys(n for _o, n in requested))
+    # each reader carries the driver's remote-path switch into its planning (the workers never read it)
+    allowed = _gdal_policy.driver_switch()
+    for name in selected:
+        spark.dataSource.register(_gdal_policy.carrying_source(by_name[name], allowed))
+    return selected
 
 
 def names_at_level(prefixes: Iterable[str], level: str) -> list:

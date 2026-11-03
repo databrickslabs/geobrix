@@ -159,9 +159,9 @@ def _check_on_error(on_error: str, bad_records_dir: Optional[str] = None) -> str
 
 
 def _sources() -> Dict[str, type]:
-    from databricks.labs.gbx.ds.register import _SOURCES
+    from databricks.labs.gbx import manifest
 
-    return {src.name(): src for src in _SOURCES}
+    return {src.name(): src for src in manifest.datasource_classes()}
 
 
 def resolve_format(fmt: str) -> type:

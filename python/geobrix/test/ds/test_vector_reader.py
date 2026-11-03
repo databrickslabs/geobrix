@@ -845,9 +845,9 @@ _NAMED = [
 
 
 def _source(name):
-    from databricks.labs.gbx.ds.register import _SOURCES
+    from databricks.labs.gbx.manifest import datasource_classes
 
-    return {s.name(): s for s in _SOURCES}[name]
+    return {s.name(): s for s in datasource_classes()}[name]
 
 
 @pytest.mark.parametrize("fmt,driver,fname", _NAMED)

@@ -5,7 +5,7 @@ A snippet that says ``spark.read.format("gpkg")`` copy-pastes into a
 ``gpkg_gbx`` (lightweight), and there are no aliases. This is a static scan -- no Spark,
 no JAR -- over the doc pages, the doc-test sources they import, the example notebooks and
 the READMEs. The registered names come from the heavyweight services file and the
-lightweight ``_SOURCES`` (see ``registered_readers.py``); Spark built-ins are allowed.
+lightweight manifest ``datasources`` (see ``registered_readers.py``); Spark built-ins are allowed.
 """
 
 import sys
@@ -172,6 +172,6 @@ def test_docs_and_examples_name_only_registered_readers():
     ]
     assert not report, (
         "snippets name readers that are not registered "
-        "(heavyweight: shortName() in the services file; lightweight: ds/register.py _SOURCES):\n  "
+        "(heavyweight: shortName() in the services file; lightweight: the manifest datasources):\n  "
         + "\n  ".join(report)
     )

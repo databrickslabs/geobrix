@@ -84,7 +84,7 @@ def test_writer_arrow_table_types_timestamp_as_utc(serverless_arrow):
     [("gpkg_gbx", "GPKG", "ts.gpkg"), ("file_gdb_gbx", "OpenFileGDB", "ts.gdb")],
 )
 def test_reader_streams_timestamp_column(tmp_path, serverless_arrow, fmt, driver, name):
-    from databricks.labs.gbx.ds.register import _SOURCES
+    from databricks.labs.gbx.manifest import datasource_classes
 
     path = str(tmp_path / name)
     seen = pa.array(
@@ -108,7 +108,7 @@ def test_reader_streams_timestamp_column(tmp_path, serverless_arrow, fmt, driver
         geometry_type="Point",
         crs="EPSG:4326",
     )
-    rdr = {s.name(): s for s in _SOURCES}[fmt]({"path": path}).reader(None)
+    rdr = {s.name(): s for s in datasource_classes()}[fmt]({"path": path}).reader(None)
     batches = [b for p in rdr.partitions() for b in rdr.read(p)]
     assert sum(b.num_rows for b in batches) == 2
     # UTC-typed, and the values are the instants that were written

@@ -20,3 +20,6 @@ vector_gbx	light	0.4.0
 netcdf_gbx	light	0.4.1
 cog_gbx	light	0.5.0
 file_gbx	light	0.5.0
+lidar_gbx	light	0.5.2
+exif_gbx	light	0.5.2
+zarr_gbx	light	0.6.0

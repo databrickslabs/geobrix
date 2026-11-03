@@ -5,8 +5,8 @@ Two sources define what ``spark.read.format("<name>")`` can resolve to:
 * heavyweight (JAR): the ``DataSourceRegister`` classes listed in
   ``src/main/resources/META-INF/services/org.apache.spark.sql.sources.DataSourceRegister``;
   each class's ``shortName()`` is the name;
-* lightweight (wheel): the ``name()`` of each class in
-  ``databricks.labs.gbx.ds.register._SOURCES``.
+* lightweight (wheel): the ``name()`` of each class the manifest's ``datasources`` rows name
+  (``databricks.labs.gbx.manifest.datasource_classes()``).
 
 A snippet that names anything else (``gpkg`` for ``gpkg_ogr`` / ``gpkg_gbx``, say)
 fails at run time with ``DATA_SOURCE_NOT_FOUND``. Spark and Databricks built-in
@@ -84,9 +84,9 @@ def heavy_reader_names():
 
 def light_reader_names():
     """Names of the lightweight (``*_gbx``) data sources ``register()`` installs."""
-    from databricks.labs.gbx.ds.register import _SOURCES
+    from databricks.labs.gbx.manifest import datasource_classes
 
-    return {source.name() for source in _SOURCES}
+    return {source.name() for source in datasource_classes()}
 
 
 def registered_reader_names():

@@ -728,6 +728,11 @@ def load() -> Manifest:
     )
 
 
+def datasource_classes() -> Tuple[type, ...]:
+    """The DataSource classes of the manifest's ``impl: python`` rows, in manifest order (each row's ``ref``)."""
+    return tuple(resolve_ref(d.ref) for d in load().datasources if d.impl == "python")
+
+
 def resolve_ref(ref: str) -> Any:
     """'pkg.module:attr' -> the object (imports the module)."""
     mod, _, attr = ref.partition(":")

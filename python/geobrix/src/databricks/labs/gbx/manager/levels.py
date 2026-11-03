@@ -49,6 +49,12 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_rst_mapalgebra": ("L1", "L3"),
     # MVP-IO's decode of a virtual tile: the JVM's (Catalyst) where there is a JAR, else the light UDF.
     "gbx_mvp_rst_materialize": ("L1", "L3"),
+    # The file functions: cog_convert is 2.6x faster on the JVM on a cluster (0.38x); color_relief has only a pure-core
+    # timing (default, unmeasured: highest available); viewshed is light (R-2 (c); its JVM level cannot take a WKT
+    # observer behind the dispatch wrapper). buildoverviews (2.2x light faster) takes its family order.
+    "gbx_rst_cog_convert": ("L1", "L3"),
+    "gbx_rst_color_relief": ("L1", "L3"),
+    "gbx_rst_viewshed": ("L3",),
     # A DataFrame helper, not a SQL name: its levels are L3 (all light), L1-steps (the viewshed and the
     # histogram are Catalyst steps) and JVM-DF (one Scala DataFrame step). The levels leg measures them.
     "rst_viewshed_towers": ("L3",),

@@ -98,28 +98,6 @@ def test_register_enables_xyzpyramid_minimal_args_sql(spark):
     assert n_minimal == n_explicit
 
 
-def test_register_enables_h3_rastertogrid_sql(spark):
-    prx.register(spark)
-    _tile_view(spark, width=4, height=3, epsg=4326)
-    # UDTF returns flat (band, cellID, measure) rows; sum of counts == 12 pixels.
-    rows = spark.sql(
-        "SELECT t.band, t.measure FROM t, LATERAL gbx_rst_h3_rastertogridcount(tile, 6) t"
-    ).collect()
-    assert all(r["band"] == 1 for r in rows)
-    assert sum(r["measure"] for r in rows) == 12
-
-
-def test_register_enables_quadbin_rastertogrid_sql(spark):
-    prx.register(spark)
-    _tile_view(spark, width=4, height=3, epsg=4326)
-    # UDTF returns flat (band, cellID, measure) rows; sum of counts == 12 pixels.
-    total = spark.sql(
-        "SELECT sum(t.measure) AS total FROM t, "
-        "LATERAL gbx_rst_quadbin_rastertogridcount(tile, 10) t"
-    ).first()["total"]
-    assert total == 12
-
-
 # --- Operations via SQL -----------------------------------------------------
 
 

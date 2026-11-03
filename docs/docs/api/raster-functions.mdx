@@ -2393,6 +2393,16 @@ See [Grid raster tessellation](./grid-raster-tessellation) for the coverage / as
 
 Aggregate raster values to H3 grid cells, and utility functions for H3-based canvas setup (9 total).
 
+The `rst_<grid>_rastertogrid<stat>` reducers of all four grids (H3, quadbin, BNG, custom grid) are **table functions** at every implementation level: one row per band and cell, with `band` (from 1), `cellID` and `measure`. Call them in the `FROM` clause with `LATERAL`, or through the Python API, which takes the input DataFrame first and returns it joined with the rows:
+
+```python
+from databricks.labs.gbx.rasterx import functions as rx
+
+rx.rst_h3_rastertogridavg(df, "tile", 5)  # one row per band and H3 cell, beside the input columns
+```
+
+A NULL tile, an error tile and a tile that cannot be read give no rows; a resolution the grid does not define, or a `coverage` or `assignment` word that names none, raises and names the value. Cell ids are `BIGINT` (H3, quadbin, custom grid) and never pass through a float; BNG ids are `STRING`.
+
 ### h3_cell_bbox
 
 {/* BEGIN GENERATED gbx_h3_cell_bbox: edit manifest/functions.json, then run gbx:manifest:gen */}
@@ -2477,201 +2487,249 @@ STRUCT<xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE,
 
 ### rst_h3_rastertogridavg
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_h3_rastertogridavg: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
-:::
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_h3_rastertogridavg(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_h3_rastertogridavg(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_h3_rastertogridavg` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_h3_rastertogridavg(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridavg(tile, 4) t`. Both forms appear in the SQL tab below.
-:::
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-**Signature:** `rst_h3_rastertogridavg(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column`
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_h3_rastertogridavg */}
 
-**SQL:**
+<Impl udtf/>
+
+Mean pixel value per H3 cell.
 
 <FunctionExamples
   name="rst_h3_rastertogridavg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_h3_rastertogridcount
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_h3_rastertogridcount: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the per-cell pixel count (integer). A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
-:::
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_h3_rastertogridcount(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_h3_rastertogridcount(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_h3_rastertogridcount` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_h3_rastertogridcount(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridcount(tile, 4) t`. Both forms appear in the SQL tab below.
-:::
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-**Signature:** `rst_h3_rastertogridcount(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Pixel count (Double) per H3 cell.
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_h3_rastertogridcount */}
 
-**SQL:**
+<Impl udtf/>
+
+Pixel count (Double) per H3 cell.
 
 <FunctionExamples
   name="rst_h3_rastertogridcount"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_h3_rastertogridmax
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_h3_rastertogridmax: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
-:::
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_h3_rastertogridmax(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_h3_rastertogridmax(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_h3_rastertogridmax` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_h3_rastertogridmax(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmax(tile, 4) t`. Both forms appear in the SQL tab below.
-:::
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-**Signature:** `rst_h3_rastertogridmax(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Max value per H3 cell.
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_h3_rastertogridmax */}
 
-**SQL:**
+<Impl udtf/>
+
+Max value per H3 cell.
 
 <FunctionExamples
   name="rst_h3_rastertogridmax"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_h3_rastertogridmedian
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_h3_rastertogridmedian: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
-:::
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_h3_rastertogridmedian(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_h3_rastertogridmedian(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_h3_rastertogridmedian` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_h3_rastertogridmedian(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmedian(tile, 4) t`. Both forms appear in the SQL tab below.
-:::
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-**Signature:** `rst_h3_rastertogridmedian(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Median value per H3 cell.
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_h3_rastertogridmedian */}
 
-**SQL:**
+<Impl udtf/>
+
+Median value per H3 cell.
 
 <FunctionExamples
   name="rst_h3_rastertogridmedian"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_h3_rastertogridmin
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_h3_rastertogridmin: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
-:::
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_h3_rastertogridmin(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_h3_rastertogridmin(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_h3_rastertogridmin` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_h3_rastertogridmin(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmin(tile, 4) t`. Both forms appear in the SQL tab below.
-:::
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-**Signature:** `rst_h3_rastertogridmin(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Min value per H3 cell.
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_h3_rastertogridmin */}
 
-**SQL:**
+<Impl udtf/>
+
+Min value per H3 cell.
 
 <FunctionExamples
   name="rst_h3_rastertogridmin"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_h3_rastertogridstddev
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_h3_rastertogridstddev: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the population standard deviation (`sqrt` of the population variance) of the valid pixel values in each cell — a single-pixel cell yields `0.0`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
-:::
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_h3_rastertogridstddev(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_h3_rastertogridstddev(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_h3_rastertogridstddev` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_h3_rastertogridstddev(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridstddev(tile, 4) t`. Both forms appear in the SQL tab below.
-:::
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-**Signature:** `rst_h3_rastertogridstddev(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Population standard deviation of pixel values per H3 cell.
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_h3_rastertogridstddev */}
 
-**SQL:**
+<Impl udtf/>
+
+Population standard deviation of pixel values per H3 cell.
 
 <FunctionExamples
   name="rst_h3_rastertogridstddev"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_h3_rastertogridsum
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_h3_rastertogridsum: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the total of the valid pixel values in each cell. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
-:::
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_h3_rastertogridsum(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_h3_rastertogridsum(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_h3_rastertogridsum` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_h3_rastertogridsum(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridsum(tile, 4) t`. Both forms appear in the SQL tab below.
-:::
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-**Signature:** `rst_h3_rastertogridsum(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Sum of pixel values per H3 cell.
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_h3_rastertogridsum */}
 
-**SQL:**
+<Impl udtf/>
+
+Sum of pixel values per H3 cell.
 
 <FunctionExamples
   name="rst_h3_rastertogridsum"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_h3_rastertogridvariance
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_h3_rastertogridvariance: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the population variance (`÷ n`, two-pass) of the valid pixel values in each cell — a single-pixel cell yields `0.0`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
-:::
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_h3_rastertogridvariance(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_h3_rastertogridvariance(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_h3_rastertogridvariance` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_h3_rastertogridvariance(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridvariance(tile, 4) t`. Both forms appear in the SQL tab below.
-:::
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-**Signature:** `rst_h3_rastertogridvariance(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Population variance of pixel values per H3 cell.
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_h3_rastertogridvariance */}
 
-**SQL:**
+<Impl udtf/>
+
+Population variance of pixel values per H3 cell.
 
 <FunctionExamples
   name="rst_h3_rastertogridvariance"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
@@ -2679,155 +2737,191 @@ Heavyweight registers `gbx_rst_h3_rastertogridvariance` as a scalar (ARRAY-retur
 
 See [Grid raster tessellation](./grid-raster-tessellation) for the coverage / assignment / fill model shared by all grids.
 
-Aggregate raster values to CARTO quadbin v0 grid cells (8 reducers). Each reducer returns an array (one entry per band) of `struct<cellID: BIGINT, measure: DOUBLE>` rows; explode the array element you want to drive per-cell rows. Resolution is the quadbin zoom (0..26). See also [`rst_quadbin_tessellate`](#rst_quadbin_tessellate) (Generator Functions) and [`rst_quadbin_rasterize_agg`](#rst_quadbin_rasterize_agg) (Aggregator Functions) for the remaining quadbin raster-grid surface.
+Aggregate raster values to CARTO quadbin v0 grid cells (8 reducers). Each reducer is a table function with one row per band and cell (`band`, `cellID` BIGINT, `measure` DOUBLE). Resolution is the quadbin zoom (0..20). See also [`rst_quadbin_tessellate`](#rst_quadbin_tessellate) (Generator Functions) and [`rst_quadbin_rasterize_agg`](#rst_quadbin_rasterize_agg) (Aggregator Functions) for the remaining quadbin raster-grid surface.
 
 ### rst_quadbin_rastertogridavg
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_quadbin_rastertogridavg: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
-:::
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_quadbin_rastertogridavg(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_quadbin_rastertogridavg(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_quadbin_rastertogridavg` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridavg(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridavg(tile, 4) t`. Both forms appear in the SQL tab below.
-:::
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-**Signature:** `rst_quadbin_rastertogridavg(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Mean pixel value per quadbin cell.
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` |  | The quadbin zoom level, a whole number from 0 to 20. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_quadbin_rastertogridavg */}
 
-**SQL:**
+<Impl udtf/>
+
+Mean pixel value per quadbin cell.
 
 <FunctionExamples
   name="rst_quadbin_rastertogridavg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_quadbin_rastertogridcount
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_quadbin_rastertogridcount: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the per-cell pixel count (integer). A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
-:::
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_quadbin_rastertogridcount(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_quadbin_rastertogridcount(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_quadbin_rastertogridcount` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridcount(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridcount(tile, 4) t`. Both forms appear in the SQL tab below.
-:::
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-**Signature:** `rst_quadbin_rastertogridcount(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Pixel count (Double) per quadbin cell.
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` |  | The quadbin zoom level, a whole number from 0 to 20. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_quadbin_rastertogridcount */}
 
-**SQL:**
+<Impl udtf/>
+
+Pixel count (Double) per quadbin cell.
 
 <FunctionExamples
   name="rst_quadbin_rastertogridcount"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_quadbin_rastertogridmax
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_quadbin_rastertogridmax: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
-:::
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_quadbin_rastertogridmax(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_quadbin_rastertogridmax(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_quadbin_rastertogridmax` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridmax(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmax(tile, 4) t`. Both forms appear in the SQL tab below.
-:::
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-**Signature:** `rst_quadbin_rastertogridmax(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Max pixel value per quadbin cell.
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` |  | The quadbin zoom level, a whole number from 0 to 20. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_quadbin_rastertogridmax */}
 
-**SQL:**
+<Impl udtf/>
+
+Max pixel value per quadbin cell.
 
 <FunctionExamples
   name="rst_quadbin_rastertogridmax"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_quadbin_rastertogridmedian
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_quadbin_rastertogridmedian: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
-:::
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_quadbin_rastertogridmedian(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_quadbin_rastertogridmedian(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_quadbin_rastertogridmedian` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridmedian(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmedian(tile, 4) t`. Both forms appear in the SQL tab below.
-:::
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-**Signature:** `rst_quadbin_rastertogridmedian(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Median pixel value per quadbin cell.
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` |  | The quadbin zoom level, a whole number from 0 to 20. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_quadbin_rastertogridmedian */}
 
-**SQL:**
+<Impl udtf/>
+
+Median pixel value per quadbin cell.
 
 <FunctionExamples
   name="rst_quadbin_rastertogridmedian"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_quadbin_rastertogridmin
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_quadbin_rastertogridmin: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
-:::
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_quadbin_rastertogridmin(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_quadbin_rastertogridmin(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_quadbin_rastertogridmin` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridmin(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmin(tile, 4) t`. Both forms appear in the SQL tab below.
-:::
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-**Signature:** `rst_quadbin_rastertogridmin(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Min pixel value per quadbin cell.
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` |  | The quadbin zoom level, a whole number from 0 to 20. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_quadbin_rastertogridmin */}
 
-**SQL:**
+<Impl udtf/>
+
+Min pixel value per quadbin cell.
 
 <FunctionExamples
   name="rst_quadbin_rastertogridmin"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_quadbin_rastertogridstddev
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_quadbin_rastertogridstddev: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the population standard deviation (`sqrt` of the population variance) of the valid pixel values in each cell — a single-pixel cell yields `0.0`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
-:::
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_quadbin_rastertogridstddev(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_quadbin_rastertogridstddev(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_quadbin_rastertogridstddev` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridstddev(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridstddev(tile, 4) t`. Both forms appear in the SQL tab below.
-:::
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-**Signature:** `rst_quadbin_rastertogridstddev(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Population standard deviation of pixel values per quadbin cell.
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` |  | The quadbin zoom level, a whole number from 0 to 20. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_quadbin_rastertogridstddev */}
 
-**SQL:**
+<Impl udtf/>
+
+Population standard deviation of pixel values per quadbin cell.
 
 <FunctionExamples
   name="rst_quadbin_rastertogridstddev"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
@@ -2835,51 +2929,63 @@ Heavyweight registers `gbx_rst_quadbin_rastertogridstddev` as a scalar (ARRAY-re
 
 ### rst_quadbin_rastertogridsum
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_quadbin_rastertogridsum: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the total of the valid pixel values in each cell. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
-:::
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_quadbin_rastertogridsum(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_quadbin_rastertogridsum(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_quadbin_rastertogridsum` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridsum(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridsum(tile, 4) t`. Both forms appear in the SQL tab below.
-:::
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-**Signature:** `rst_quadbin_rastertogridsum(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Sum of pixel values per quadbin cell.
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` |  | The quadbin zoom level, a whole number from 0 to 20. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_quadbin_rastertogridsum */}
 
-**SQL:**
+<Impl udtf/>
+
+Sum of pixel values per quadbin cell.
 
 <FunctionExamples
   name="rst_quadbin_rastertogridsum"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_quadbin_rastertogridvariance
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_quadbin_rastertogridvariance: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the population variance (`÷ n`, two-pass) of the valid pixel values in each cell — a single-pixel cell yields `0.0`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
-:::
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_quadbin_rastertogridvariance(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_quadbin_rastertogridvariance(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_quadbin_rastertogridvariance` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridvariance(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridvariance(tile, 4) t`. Both forms appear in the SQL tab below.
-:::
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-**Signature:** `rst_quadbin_rastertogridvariance(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Population variance of pixel values per quadbin cell.
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` |  | The quadbin zoom level, a whole number from 0 to 20. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_quadbin_rastertogridvariance */}
 
-**SQL:**
+<Impl udtf/>
+
+Population variance of pixel values per quadbin cell.
 
 <FunctionExamples
   name="rst_quadbin_rastertogridvariance"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
@@ -2889,149 +2995,193 @@ See [Grid raster tessellation](./grid-raster-tessellation) for the coverage / as
 
 Aggregate raster values to British National Grid (BNG) cells (8 total). BNG functions automatically reproject the input raster to **EPSG:27700** before sampling — no `rst_transform` needed upstream. Resolution accepts integer indices **±1..±6** (1 = 100 km, 2 = 10 km, 3 = 1 km, 4 = 100 m, 5 = 10 m, 6 = 1 m; negative indices address quadrant sub-cells) or string keys (e.g. `"1km"`, `"100m"`). Cell IDs are **STRING**.
 
-:::note Lightweight tier (pyrx)
-The BNG raster-grid reducers are available in both tiers. The lightweight implementation is backed by `pygx._bng` cell math and `rasterio`: it auto-warps the input to **EPSG:27700** via `rasterio.warp`, samples pixels per cell, and renders **STRING** BNG cell IDs — matching the heavyweight cell set and measures exactly.
-:::
-
 :::warning NoData and NULL
-A cell that covers only NoData pixels returns **`NULL`** for the measure (not `0` or `NaN`) — the same behavior as the H3 and quadbin reducers. `NULL` is safe to filter (`WHERE measure IS NULL`) and is excluded by SQL aggregates like `MAX`/`MIN`/`AVG`.
+With the default `complete` coverage, a cell that overlaps the raster but holds only NoData pixels is returned with a **`NULL`** measure (`0` for a count; never `NaN`) — the same behavior as the H3 and quadbin reducers. `NULL` is safe to filter (`WHERE measure IS NULL`) and is excluded by SQL aggregates like `MAX`/`MIN`/`AVG`.
 :::
 
 ### rst_bng_rastertogridavg
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_bng_rastertogridavg: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_bng_rastertogridavg(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_bng_rastertogridavg(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
+
+Rows: `band` `INT`, `cellID` `STRING`, `measure` `DOUBLE`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` or `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_bng_rastertogridavg */}
+
+<Impl udtf/>
 
 Mean pixel value per BNG cell. The raster is reprojected to EPSG:27700 internally before sampling.
-
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_bng_rastertogridavg` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_bng_rastertogridavg(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridavg(tile, 3) t`. Both forms appear in the SQL tab below.
-:::
-
-**Signature:** `rst_bng_rastertogridavg(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Mean pixel value per BNG cell.
-
-**SQL:**
 
 <FunctionExamples
   name="rst_bng_rastertogridavg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_bng_rastertogridcount
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_bng_rastertogridcount: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_bng_rastertogridcount(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_bng_rastertogridcount(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
+
+Rows: `band` `INT`, `cellID` `STRING`, `measure` `DOUBLE`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` or `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_bng_rastertogridcount */}
+
+<Impl udtf/>
 
 Valid (non-NoData) pixel count per BNG cell.
-
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_bng_rastertogridcount` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_bng_rastertogridcount(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridcount(tile, 3) t`. Both forms appear in the SQL tab below.
-:::
-
-**Signature:** `rst_bng_rastertogridcount(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Pixel count (Double) per BNG cell.
-
-**SQL:**
 
 <FunctionExamples
   name="rst_bng_rastertogridcount"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_bng_rastertogridmax
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_bng_rastertogridmax: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_bng_rastertogridmax(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_bng_rastertogridmax(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
+
+Rows: `band` `INT`, `cellID` `STRING`, `measure` `DOUBLE`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` or `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_bng_rastertogridmax */}
+
+<Impl udtf/>
 
 Maximum pixel value per BNG cell.
-
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_bng_rastertogridmax` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_bng_rastertogridmax(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmax(tile, 3) t`. Both forms appear in the SQL tab below.
-:::
-
-**Signature:** `rst_bng_rastertogridmax(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Max pixel value per BNG cell.
-
-**SQL:**
 
 <FunctionExamples
   name="rst_bng_rastertogridmax"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_bng_rastertogridmedian
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_bng_rastertogridmedian: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_bng_rastertogridmedian(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_bng_rastertogridmedian(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
+
+Rows: `band` `INT`, `cellID` `STRING`, `measure` `DOUBLE`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` or `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_bng_rastertogridmedian */}
+
+<Impl udtf/>
 
 Median pixel value per BNG cell.
-
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_bng_rastertogridmedian` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_bng_rastertogridmedian(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmedian(tile, 3) t`. Both forms appear in the SQL tab below.
-:::
-
-**Signature:** `rst_bng_rastertogridmedian(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Median pixel value per BNG cell.
-
-**SQL:**
 
 <FunctionExamples
   name="rst_bng_rastertogridmedian"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_bng_rastertogridmin
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_bng_rastertogridmin: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_bng_rastertogridmin(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_bng_rastertogridmin(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
+
+Rows: `band` `INT`, `cellID` `STRING`, `measure` `DOUBLE`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` or `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_bng_rastertogridmin */}
+
+<Impl udtf/>
 
 Minimum pixel value per BNG cell.
-
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_bng_rastertogridmin` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_bng_rastertogridmin(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmin(tile, 3) t`. Both forms appear in the SQL tab below.
-:::
-
-**Signature:** `rst_bng_rastertogridmin(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Min pixel value per BNG cell.
-
-**SQL:**
 
 <FunctionExamples
   name="rst_bng_rastertogridmin"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_bng_rastertogridstddev
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_bng_rastertogridstddev: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_bng_rastertogridstddev(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_bng_rastertogridstddev(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
+
+Rows: `band` `INT`, `cellID` `STRING`, `measure` `DOUBLE`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` or `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_bng_rastertogridstddev */}
+
+<Impl udtf/>
 
 Population standard deviation (`sqrt` of the population variance) of pixel values per BNG cell — a single-pixel cell yields `0.0`.
-
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_bng_rastertogridstddev` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_bng_rastertogridstddev(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridstddev(tile, 3) t`. Both forms appear in the SQL tab below.
-:::
-
-**Signature:** `rst_bng_rastertogridstddev(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Population standard deviation of pixel values per BNG cell.
-
-**SQL:**
 
 <FunctionExamples
   name="rst_bng_rastertogridstddev"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
@@ -3039,47 +3189,63 @@ Heavyweight registers `gbx_rst_bng_rastertogridstddev` as a scalar (ARRAY-return
 
 ### rst_bng_rastertogridsum
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_bng_rastertogridsum: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_bng_rastertogridsum(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_bng_rastertogridsum(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
+
+Rows: `band` `INT`, `cellID` `STRING`, `measure` `DOUBLE`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` or `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_bng_rastertogridsum */}
+
+<Impl udtf/>
 
 Sum of pixel values per BNG cell.
-
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_bng_rastertogridsum` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_bng_rastertogridsum(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridsum(tile, 3) t`. Both forms appear in the SQL tab below.
-:::
-
-**Signature:** `rst_bng_rastertogridsum(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Sum of pixel values per BNG cell.
-
-**SQL:**
 
 <FunctionExamples
   name="rst_bng_rastertogridsum"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_bng_rastertogridvariance
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_bng_rastertogridvariance: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_bng_rastertogridvariance(tile, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_bng_rastertogridvariance(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
+
+Rows: `band` `INT`, `cellID` `STRING`, `measure` `DOUBLE`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` or `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_bng_rastertogridvariance */}
+
+<Impl udtf/>
 
 Population variance (`÷ n`, two-pass) of pixel values per BNG cell — a single-pixel cell yields `0.0`.
-
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_bng_rastertogridvariance` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_bng_rastertogridvariance(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridvariance(tile, 3) t`. Both forms appear in the SQL tab below.
-:::
-
-**Signature:** `rst_bng_rastertogridvariance(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Population variance of pixel values per BNG cell.
-
-**SQL:**
 
 <FunctionExamples
   name="rst_bng_rastertogridvariance"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
@@ -3089,149 +3255,199 @@ See [Grid raster tessellation](./grid-raster-tessellation) for the coverage / as
 
 Aggregate raster values to user-defined custom-grid cells (8 total). Custom grids are defined via `gbx_custom_grid(origin_x, origin_y, min_x, min_y, max_x, max_y, root_cell_size_x, root_cell_size_y, crs_srid)` — a regular planar grid with an explicit origin, bounds, and cell size. Cell IDs are **BIGINT** encoded by the custom-grid layout, and the resolution parameter selects the subdivision level. The raster is expected to be in the grid's native CRS — no automatic reprojection is performed; use `rst_transform` upstream if needed.
 
-:::note Lightweight tier (pyrx)
-The custom raster→grid reducers are available in both tiers. The lightweight implementation is backed by `pygx` custom-grid cell math and `rasterio`: it samples pixels per cell and emits BIGINT cell IDs — matching the heavyweight cell set and measures exactly.
-:::
-
 :::warning NoData and NULL
-A cell that covers only NoData pixels returns **`NULL`** for the measure (not `0` or `NaN`) — the same behavior as the H3, quadbin, and BNG reducers. `NULL` is safe to filter (`WHERE measure IS NULL`) and is excluded by SQL aggregates like `MAX`/`MIN`/`AVG`.
+With the default `complete` coverage, a cell that overlaps the raster but holds only NoData pixels is returned with a **`NULL`** measure (`0` for a count; never `NaN`) — the same behavior as the H3, quadbin, and BNG reducers. `NULL` is safe to filter (`WHERE measure IS NULL`) and is excluded by SQL aggregates like `MAX`/`MIN`/`AVG`.
 :::
 
 ### rst_custom_rastertogridavg
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_custom_rastertogridavg: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_custom_rastertogridavg(tile, grid, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_custom_rastertogridavg(df, tile, grid, resolution, coverage=None, assignment=None)` | DataFrame |
+
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `resolution` | `INT` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_custom_rastertogridavg */}
+
+<Impl udtf/>
 
 Mean pixel value per custom-grid cell.
-
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_custom_rastertogridavg` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
-:::
-
-**Signature:** `rst_custom_rastertogridavg(tile: Column, grid: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Mean pixel value per custom-grid cell.
-
-**SQL:**
 
 <FunctionExamples
   name="rst_custom_rastertogridavg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_custom_rastertogridcount
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_custom_rastertogridcount: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_custom_rastertogridcount(tile, grid, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_custom_rastertogridcount(df, tile, grid, resolution, coverage=None, assignment=None)` | DataFrame |
+
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `resolution` | `INT` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_custom_rastertogridcount */}
+
+<Impl udtf/>
 
 Valid (non-NoData) pixel count per custom-grid cell (measure is DOUBLE).
-
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_custom_rastertogridcount` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
-:::
-
-**Signature:** `rst_custom_rastertogridcount(tile: Column, grid: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Pixel count (Double) per custom-grid cell.
-
-**SQL:**
 
 <FunctionExamples
   name="rst_custom_rastertogridcount"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_custom_rastertogridmax
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_custom_rastertogridmax: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_custom_rastertogridmax(tile, grid, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_custom_rastertogridmax(df, tile, grid, resolution, coverage=None, assignment=None)` | DataFrame |
+
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `resolution` | `INT` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_custom_rastertogridmax */}
+
+<Impl udtf/>
 
 Maximum pixel value per custom-grid cell.
-
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_custom_rastertogridmax` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
-:::
-
-**Signature:** `rst_custom_rastertogridmax(tile: Column, grid: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Max pixel value per custom-grid cell.
-
-**SQL:**
 
 <FunctionExamples
   name="rst_custom_rastertogridmax"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_custom_rastertogridmedian
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_custom_rastertogridmedian: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_custom_rastertogridmedian(tile, grid, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_custom_rastertogridmedian(df, tile, grid, resolution, coverage=None, assignment=None)` | DataFrame |
+
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `resolution` | `INT` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_custom_rastertogridmedian */}
+
+<Impl udtf/>
 
 Median pixel value per custom-grid cell.
-
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_custom_rastertogridmedian` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
-:::
-
-**Signature:** `rst_custom_rastertogridmedian(tile: Column, grid: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Median pixel value per custom-grid cell.
-
-**SQL:**
 
 <FunctionExamples
   name="rst_custom_rastertogridmedian"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_custom_rastertogridmin
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_custom_rastertogridmin: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_custom_rastertogridmin(tile, grid, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_custom_rastertogridmin(df, tile, grid, resolution, coverage=None, assignment=None)` | DataFrame |
+
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `resolution` | `INT` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_custom_rastertogridmin */}
+
+<Impl udtf/>
 
 Minimum pixel value per custom-grid cell.
-
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_custom_rastertogridmin` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
-:::
-
-**Signature:** `rst_custom_rastertogridmin(tile: Column, grid: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Min pixel value per custom-grid cell.
-
-**SQL:**
 
 <FunctionExamples
   name="rst_custom_rastertogridmin"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_custom_rastertogridstddev
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_custom_rastertogridstddev: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_custom_rastertogridstddev(tile, grid, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_custom_rastertogridstddev(df, tile, grid, resolution, coverage=None, assignment=None)` | DataFrame |
+
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `resolution` | `INT` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_custom_rastertogridstddev */}
+
+<Impl udtf/>
 
 Population standard deviation (`sqrt` of the population variance) of pixel values per custom-grid cell — a single-pixel cell yields `0.0`.
-
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_custom_rastertogridstddev` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
-:::
-
-**Signature:** `rst_custom_rastertogridstddev(tile: Column, grid: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Population standard deviation of pixel values per custom-grid cell.
-
-**SQL:**
 
 <FunctionExamples
   name="rst_custom_rastertogridstddev"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
@@ -3239,47 +3455,65 @@ Heavyweight registers `gbx_rst_custom_rastertogridstddev` as a scalar (ARRAY-ret
 
 ### rst_custom_rastertogridsum
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_custom_rastertogridsum: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_custom_rastertogridsum(tile, grid, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_custom_rastertogridsum(df, tile, grid, resolution, coverage=None, assignment=None)` | DataFrame |
+
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `resolution` | `INT` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_custom_rastertogridsum */}
+
+<Impl udtf/>
 
 Sum of pixel values per custom-grid cell.
-
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_custom_rastertogridsum` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
-:::
-
-**Signature:** `rst_custom_rastertogridsum(tile: Column, grid: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Sum of pixel values per custom-grid cell.
-
-**SQL:**
 
 <FunctionExamples
   name="rst_custom_rastertogridsum"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
 ### rst_custom_rastertogridvariance
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_custom_rastertogridvariance: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_custom_rastertogridvariance(tile, grid, resolution, [coverage], [assignment])` | rows |
+| Python | `rasterx.functions.rst_custom_rastertogridvariance(df, tile, grid, resolution, coverage=None, assignment=None)` | DataFrame |
+
+Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to aggregate. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `resolution` | `INT` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_custom_rastertogridvariance */}
+
+<Impl udtf/>
 
 Population variance (`÷ n`, two-pass) of pixel values per custom-grid cell — a single-pixel cell yields `0.0`.
-
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_custom_rastertogridvariance` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
-:::
-
-**Signature:** `rst_custom_rastertogridvariance(tile: Column, grid: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Population variance of pixel values per custom-grid cell.
-
-**SQL:**
 
 <FunctionExamples
   name="rst_custom_rastertogridvariance"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 

@@ -276,1020 +276,6 @@ def rst_h3_rasterize_agg(
 # Grid
 
 
-def rst_h3_rastertogridavg(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute average pixel value per H3 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: H3 resolution (0–15).
-        coverage: ``"complete"`` (default) or ``"sparse"`` — whether to emit
-            cells with no valid pixels.
-        assignment: ``"centroid"`` (default) single-assigns each valid pixel to
-            one cell; ``"covering"`` distributes pixels to all overlapping cells.
-
-    Returns:
-        Column of grid values (e.g. struct with H3 index and avg).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_h3_rastertogridavg",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_h3_rastertogridcount(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute pixel count per H3 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: H3 resolution (0–15).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_h3_rastertogridcount",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_h3_rastertogridmax(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute maximum pixel value per H3 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: H3 resolution (0–15).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column of grid values (e.g. struct with H3 index and max).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_h3_rastertogridmax",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_h3_rastertogridmin(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute minimum pixel value per H3 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: H3 resolution (0–15).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column of grid values (e.g. struct with H3 index and min).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_h3_rastertogridmin",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_h3_rastertogridmedian(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute median pixel value per H3 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: H3 resolution (0–15).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column of grid values (e.g. struct with H3 index and median).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_h3_rastertogridmedian",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_h3_rastertogridsum(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the sum of pixel values per H3 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: H3 resolution (0–15).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column of grid values (e.g. struct with H3 index and sum).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_h3_rastertogridsum",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_h3_rastertogridvariance(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the population variance of pixel values per H3 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: H3 resolution (0–15).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column of grid values (e.g. struct with H3 index and variance).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_h3_rastertogridvariance",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_h3_rastertogridstddev(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the population standard deviation of pixel values per H3 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: H3 resolution (0–15).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column of grid values (e.g. struct with H3 index and stddev).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_h3_rastertogridstddev",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_quadbin_rastertogridavg(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute average pixel value per CARTO quadbin v0 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: Quadbin resolution / zoom (0–20).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_quadbin_rastertogridavg",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_quadbin_rastertogridcount(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute pixel count per CARTO quadbin v0 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: Quadbin resolution / zoom (0–20).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_quadbin_rastertogridcount",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_quadbin_rastertogridmax(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute maximum pixel value per CARTO quadbin v0 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: Quadbin resolution / zoom (0–20).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_quadbin_rastertogridmax",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_quadbin_rastertogridmin(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute minimum pixel value per CARTO quadbin v0 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: Quadbin resolution / zoom (0–20).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_quadbin_rastertogridmin",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_quadbin_rastertogridmedian(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute median pixel value per CARTO quadbin v0 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: Quadbin resolution / zoom (0–20).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_quadbin_rastertogridmedian",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_quadbin_rastertogridsum(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the sum of pixel values per CARTO quadbin v0 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: Quadbin resolution / zoom (0–20).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_quadbin_rastertogridsum",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_quadbin_rastertogridvariance(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the population variance of pixel values per CARTO quadbin v0 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: Quadbin resolution / zoom (0–20).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_quadbin_rastertogridvariance",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_quadbin_rastertogridstddev(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the population standard deviation of pixel values per CARTO quadbin v0 cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: Quadbin resolution / zoom (0–20).
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_quadbin_rastertogridstddev",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_bng_rastertogridavg(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute average pixel value per BNG grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: BNG resolution — integer index ±1..±6 (1=100km … 6=1m;
-            negative indices select quadrant subdivisions) or a resolution
-            string such as ``"1km"`` or ``"100m"``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID STRING, measure DOUBLE)>>.
-        Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_bng_rastertogridavg",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_bng_rastertogridcount(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute pixel count per BNG grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: BNG resolution — integer index ±1..±6 or a resolution
-            string such as ``"1km"`` or ``"100m"``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID STRING, measure DOUBLE)>>.
-        Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_bng_rastertogridcount",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_bng_rastertogridmax(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute maximum pixel value per BNG grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: BNG resolution — integer index ±1..±6 or a resolution
-            string such as ``"1km"`` or ``"100m"``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID STRING, measure DOUBLE)>>.
-        Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_bng_rastertogridmax",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_bng_rastertogridmin(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute minimum pixel value per BNG grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: BNG resolution — integer index ±1..±6 or a resolution
-            string such as ``"1km"`` or ``"100m"``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID STRING, measure DOUBLE)>>.
-        Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_bng_rastertogridmin",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_bng_rastertogridmedian(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute median pixel value per BNG grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: BNG resolution — integer index ±1..±6 or a resolution
-            string such as ``"1km"`` or ``"100m"``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID STRING, measure DOUBLE)>>.
-        Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_bng_rastertogridmedian",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_bng_rastertogridsum(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the sum of pixel values per BNG grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: BNG resolution — integer index ±1..±6 (1=100km … 6=1m;
-            negative indices select quadrant subdivisions) or a resolution
-            string such as ``"1km"`` or ``"100m"``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID STRING, measure DOUBLE)>>.
-        Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_bng_rastertogridsum",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_bng_rastertogridvariance(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the population variance of pixel values per BNG grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: BNG resolution — integer index ±1..±6 (1=100km … 6=1m;
-            negative indices select quadrant subdivisions) or a resolution
-            string such as ``"1km"`` or ``"100m"``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID STRING, measure DOUBLE)>>.
-        Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_bng_rastertogridvariance",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_bng_rastertogridstddev(
-    tile: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the population standard deviation of pixel values per BNG grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: BNG resolution — integer index ±1..±6 (1=100km … 6=1m;
-            negative indices select quadrant subdivisions) or a resolution
-            string such as ``"1km"`` or ``"100m"``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID STRING, measure DOUBLE)>>.
-        Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_bng_rastertogridstddev",
-        _col(tile),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_custom_rastertogridavg(
-    tile: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute average pixel value per custom-grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
-        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-        Output cell ids are BIGINT encoded by the custom-grid layout.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_custom_rastertogridavg",
-        _col(tile),
-        _col(grid),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_custom_rastertogridcount(
-    tile: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute pixel count per custom-grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
-        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-        Output cell ids are BIGINT encoded by the custom-grid layout.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_custom_rastertogridcount",
-        _col(tile),
-        _col(grid),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_custom_rastertogridmax(
-    tile: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute maximum pixel value per custom-grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
-        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-        Output cell ids are BIGINT encoded by the custom-grid layout.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_custom_rastertogridmax",
-        _col(tile),
-        _col(grid),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_custom_rastertogridmin(
-    tile: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute minimum pixel value per custom-grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
-        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-        Output cell ids are BIGINT encoded by the custom-grid layout.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_custom_rastertogridmin",
-        _col(tile),
-        _col(grid),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_custom_rastertogridmedian(
-    tile: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute median pixel value per custom-grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
-        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-        Output cell ids are BIGINT encoded by the custom-grid layout.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_custom_rastertogridmedian",
-        _col(tile),
-        _col(grid),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_custom_rastertogridsum(
-    tile: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the sum of pixel values per custom-grid cell at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
-        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-        Output cell ids are BIGINT encoded by the custom-grid layout.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_custom_rastertogridsum",
-        _col(tile),
-        _col(grid),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_custom_rastertogridvariance(
-    tile: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the population variance of pixel values per custom-grid cell.
-
-    Args:
-        tile: Raster tile column.
-        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
-        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-        Output cell ids are BIGINT encoded by the custom-grid layout.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_custom_rastertogridvariance",
-        _col(tile),
-        _col(grid),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
-def rst_custom_rastertogridstddev(
-    tile: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    coverage: ColLike = "complete",
-    assignment: ColLike = "centroid",
-) -> Column:
-    """Compute the population standard deviation of pixel values per custom-grid cell.
-
-    Args:
-        tile: Raster tile column.
-        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
-        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
-        coverage: ``"complete"`` (default) or ``"sparse"``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-
-    Returns:
-        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
-        Output cell ids are BIGINT encoded by the custom-grid layout.
-    """
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    return f.call_function(
-        "gbx_rst_custom_rastertogridstddev",
-        _col(tile),
-        _col(grid),
-        _col(resolution),
-        coverage_col,
-        assignment_col,
-    )
-
-
 def rst_quadbin_rasterize_agg(
     cellid: ColLike,
     value: ColLike = None,
@@ -1931,6 +917,345 @@ def rst_bng_rasterize_agg(
     )
 
 
+def rst_bng_rastertogridavg(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Mean of the pixel values in each BNG cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: BNG resolution: an index (1 to 6, negative for a quadrant) or a size
+            such as `'1km'` or `'100m'`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the mean of
+        the band's valid pixels in the cell. A pixel is valid when the band's NoData and
+        mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution, an error tile and a tile that cannot be read give no rows. A raster
+        in another CRS is reprojected to EPSG:27700 (nearest neighbour, so values are
+        never interpolated); pixels outside Great Britain are left out.
+
+    SQL: ``gbx_rst_bng_rastertogridavg(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_bng_rastertogridavg",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_bng_rastertogridcount(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Count the pixels in each BNG cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: BNG resolution: an index (1 to 6, negative for a quadrant) or a size
+            such as `'1km'` or `'100m'`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the number
+        of the band's valid pixels in the cell (a DOUBLE; with `covering`, the sum of
+        their area shares). A pixel is valid when the band's NoData and mask (and the
+        alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an
+        error tile and a tile that cannot be read give no rows. A raster in another CRS
+        is reprojected to EPSG:27700 (nearest neighbour, so values are never
+        interpolated); pixels outside Great Britain are left out.
+
+    SQL: ``gbx_rst_bng_rastertogridcount(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_bng_rastertogridcount",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_bng_rastertogridmax(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Maximum of the pixel values in each BNG cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: BNG resolution: an index (1 to 6, negative for a quadrant) or a size
+            such as `'1km'` or `'100m'`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the largest
+        value of the band's valid pixels in the cell. A pixel is valid when the band's
+        NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile,
+        a NULL resolution, an error tile and a tile that cannot be read give no rows. A
+        raster in another CRS is reprojected to EPSG:27700 (nearest neighbour, so values
+        are never interpolated); pixels outside Great Britain are left out.
+
+    SQL: ``gbx_rst_bng_rastertogridmax(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_bng_rastertogridmax",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_bng_rastertogridmedian(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Median of the pixel values in each BNG cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: BNG resolution: an index (1 to 6, negative for a quadrant) or a size
+            such as `'1km'` or `'100m'`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the median
+        of the band's valid pixels in the cell. A pixel is valid when the band's NoData
+        and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution, an error tile and a tile that cannot be read give no rows. A raster
+        in another CRS is reprojected to EPSG:27700 (nearest neighbour, so values are
+        never interpolated); pixels outside Great Britain are left out.
+
+    SQL: ``gbx_rst_bng_rastertogridmedian(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_bng_rastertogridmedian",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_bng_rastertogridmin(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Minimum of the pixel values in each BNG cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: BNG resolution: an index (1 to 6, negative for a quadrant) or a size
+            such as `'1km'` or `'100m'`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the smallest
+        value of the band's valid pixels in the cell. A pixel is valid when the band's
+        NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile,
+        a NULL resolution, an error tile and a tile that cannot be read give no rows. A
+        raster in another CRS is reprojected to EPSG:27700 (nearest neighbour, so values
+        are never interpolated); pixels outside Great Britain are left out.
+
+    SQL: ``gbx_rst_bng_rastertogridmin(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_bng_rastertogridmin",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_bng_rastertogridstddev(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Population standard deviation of the pixel values in each BNG cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: BNG resolution: an index (1 to 6, negative for a quadrant) or a size
+            such as `'1km'` or `'100m'`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the
+        population standard deviation (divisor n) of the band's valid pixels in the
+        cell. A pixel is valid when the band's NoData and mask (and the alpha band, if
+        the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a
+        tile that cannot be read give no rows. A raster in another CRS is reprojected to
+        EPSG:27700 (nearest neighbour, so values are never interpolated); pixels outside
+        Great Britain are left out.
+
+    SQL: ``gbx_rst_bng_rastertogridstddev(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_bng_rastertogridstddev",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_bng_rastertogridsum(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Sum of the pixel values in each BNG cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: BNG resolution: an index (1 to 6, negative for a quadrant) or a size
+            such as `'1km'` or `'100m'`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the sum of
+        the band's valid pixels in the cell. A pixel is valid when the band's NoData and
+        mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution, an error tile and a tile that cannot be read give no rows. A raster
+        in another CRS is reprojected to EPSG:27700 (nearest neighbour, so values are
+        never interpolated); pixels outside Great Britain are left out.
+
+    SQL: ``gbx_rst_bng_rastertogridsum(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_bng_rastertogridsum",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_bng_rastertogridvariance(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Population variance of the pixel values in each BNG cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: BNG resolution: an index (1 to 6, negative for a quadrant) or a size
+            such as `'1km'` or `'100m'`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the
+        population variance (divisor n) of the band's valid pixels in the cell. A pixel
+        is valid when the band's NoData and mask (and the alpha band, if the raster has
+        one) say so. A NULL tile, a NULL resolution, an error tile and a tile that
+        cannot be read give no rows. A raster in another CRS is reprojected to
+        EPSG:27700 (nearest neighbour, so values are never interpolated); pixels outside
+        Great Britain are left out.
+
+    SQL: ``gbx_rst_bng_rastertogridvariance(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_bng_rastertogridvariance",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
 def rst_bng_tessellate(
     df: DataFrame,
     tile: ColLike,
@@ -2551,6 +1876,361 @@ def rst_crs(
     )
 
 
+def rst_custom_rastertogridavg(
+    df: DataFrame,
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Mean of the pixel values in each custom-grid cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        grid: The grid, as built by `gbx_custom_grid`.
+        resolution: The grid resolution: 0 is the root cells, each level splits a cell
+            into `cell_splits` by `cell_splits`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the mean of
+        the band's valid pixels in the cell. A pixel is valid when the band's NoData and
+        mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution or grid, an error tile and a tile that cannot be read give no rows.
+        The raster is not reprojected: it must already be in the grid's CRS.
+
+    SQL: ``gbx_rst_custom_rastertogridavg(tile, grid, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_custom_rastertogridavg",
+        tile,
+        grid,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_custom_rastertogridcount(
+    df: DataFrame,
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Count the pixels in each custom-grid cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        grid: The grid, as built by `gbx_custom_grid`.
+        resolution: The grid resolution: 0 is the root cells, each level splits a cell
+            into `cell_splits` by `cell_splits`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the number
+        of the band's valid pixels in the cell (a DOUBLE; with `covering`, the sum of
+        their area shares). A pixel is valid when the band's NoData and mask (and the
+        alpha band, if the raster has one) say so. A NULL tile, a NULL resolution or
+        grid, an error tile and a tile that cannot be read give no rows. The raster is
+        not reprojected: it must already be in the grid's CRS.
+
+    SQL: ``gbx_rst_custom_rastertogridcount(tile, grid, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_custom_rastertogridcount",
+        tile,
+        grid,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_custom_rastertogridmax(
+    df: DataFrame,
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Maximum of the pixel values in each custom-grid cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        grid: The grid, as built by `gbx_custom_grid`.
+        resolution: The grid resolution: 0 is the root cells, each level splits a cell
+            into `cell_splits` by `cell_splits`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the largest
+        value of the band's valid pixels in the cell. A pixel is valid when the band's
+        NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile,
+        a NULL resolution or grid, an error tile and a tile that cannot be read give no
+        rows. The raster is not reprojected: it must already be in the grid's CRS.
+
+    SQL: ``gbx_rst_custom_rastertogridmax(tile, grid, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_custom_rastertogridmax",
+        tile,
+        grid,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_custom_rastertogridmedian(
+    df: DataFrame,
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Median of the pixel values in each custom-grid cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        grid: The grid, as built by `gbx_custom_grid`.
+        resolution: The grid resolution: 0 is the root cells, each level splits a cell
+            into `cell_splits` by `cell_splits`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the median
+        of the band's valid pixels in the cell. A pixel is valid when the band's NoData
+        and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution or grid, an error tile and a tile that cannot be read give no rows.
+        The raster is not reprojected: it must already be in the grid's CRS.
+
+    SQL: ``gbx_rst_custom_rastertogridmedian(tile, grid, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_custom_rastertogridmedian",
+        tile,
+        grid,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_custom_rastertogridmin(
+    df: DataFrame,
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Minimum of the pixel values in each custom-grid cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        grid: The grid, as built by `gbx_custom_grid`.
+        resolution: The grid resolution: 0 is the root cells, each level splits a cell
+            into `cell_splits` by `cell_splits`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the smallest
+        value of the band's valid pixels in the cell. A pixel is valid when the band's
+        NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile,
+        a NULL resolution or grid, an error tile and a tile that cannot be read give no
+        rows. The raster is not reprojected: it must already be in the grid's CRS.
+
+    SQL: ``gbx_rst_custom_rastertogridmin(tile, grid, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_custom_rastertogridmin",
+        tile,
+        grid,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_custom_rastertogridstddev(
+    df: DataFrame,
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Population standard deviation of the pixel values in each custom-grid cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        grid: The grid, as built by `gbx_custom_grid`.
+        resolution: The grid resolution: 0 is the root cells, each level splits a cell
+            into `cell_splits` by `cell_splits`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the
+        population standard deviation (divisor n) of the band's valid pixels in the
+        cell. A pixel is valid when the band's NoData and mask (and the alpha band, if
+        the raster has one) say so. A NULL tile, a NULL resolution or grid, an error
+        tile and a tile that cannot be read give no rows. The raster is not reprojected:
+        it must already be in the grid's CRS.
+
+    SQL: ``gbx_rst_custom_rastertogridstddev(tile, grid, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_custom_rastertogridstddev",
+        tile,
+        grid,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_custom_rastertogridsum(
+    df: DataFrame,
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Sum of the pixel values in each custom-grid cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        grid: The grid, as built by `gbx_custom_grid`.
+        resolution: The grid resolution: 0 is the root cells, each level splits a cell
+            into `cell_splits` by `cell_splits`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the sum of
+        the band's valid pixels in the cell. A pixel is valid when the band's NoData and
+        mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution or grid, an error tile and a tile that cannot be read give no rows.
+        The raster is not reprojected: it must already be in the grid's CRS.
+
+    SQL: ``gbx_rst_custom_rastertogridsum(tile, grid, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_custom_rastertogridsum",
+        tile,
+        grid,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_custom_rastertogridvariance(
+    df: DataFrame,
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Population variance of the pixel values in each custom-grid cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        grid: The grid, as built by `gbx_custom_grid`.
+        resolution: The grid resolution: 0 is the root cells, each level splits a cell
+            into `cell_splits` by `cell_splits`.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the
+        population variance (divisor n) of the band's valid pixels in the cell. A pixel
+        is valid when the band's NoData and mask (and the alpha band, if the raster has
+        one) say so. A NULL tile, a NULL resolution or grid, an error tile and a tile
+        that cannot be read give no rows. The raster is not reprojected: it must already
+        be in the grid's CRS.
+
+    SQL: ``gbx_rst_custom_rastertogridvariance(tile, grid, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_custom_rastertogridvariance",
+        tile,
+        grid,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
 def rst_custom_tessellate(
     df: DataFrame,
     tile: ColLike,
@@ -3082,6 +2762,337 @@ def rst_gridfrompoints(
         power,
         max_pts,
         out_crs,
+    )
+
+
+def rst_h3_rastertogridavg(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Mean of the pixel values in each H3 cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The H3 resolution, a whole number from 0 to 15.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the mean of
+        the band's valid pixels in the cell. A pixel is valid when the band's NoData and
+        mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution, an error tile and a tile that cannot be read give no rows. A raster
+        in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are
+        never interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_h3_rastertogridavg(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_h3_rastertogridavg",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_h3_rastertogridcount(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Count the pixels in each H3 cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The H3 resolution, a whole number from 0 to 15.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the number
+        of the band's valid pixels in the cell (a DOUBLE; with `covering`, the sum of
+        their area shares). A pixel is valid when the band's NoData and mask (and the
+        alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an
+        error tile and a tile that cannot be read give no rows. A raster in another CRS
+        is reprojected to EPSG:4326 (nearest neighbour, so values are never
+        interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_h3_rastertogridcount(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_h3_rastertogridcount",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_h3_rastertogridmax(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Maximum of the pixel values in each H3 cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The H3 resolution, a whole number from 0 to 15.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the largest
+        value of the band's valid pixels in the cell. A pixel is valid when the band's
+        NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile,
+        a NULL resolution, an error tile and a tile that cannot be read give no rows. A
+        raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values
+        are never interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_h3_rastertogridmax(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_h3_rastertogridmax",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_h3_rastertogridmedian(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Median of the pixel values in each H3 cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The H3 resolution, a whole number from 0 to 15.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the median
+        of the band's valid pixels in the cell. A pixel is valid when the band's NoData
+        and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution, an error tile and a tile that cannot be read give no rows. A raster
+        in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are
+        never interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_h3_rastertogridmedian(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_h3_rastertogridmedian",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_h3_rastertogridmin(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Minimum of the pixel values in each H3 cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The H3 resolution, a whole number from 0 to 15.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the smallest
+        value of the band's valid pixels in the cell. A pixel is valid when the band's
+        NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile,
+        a NULL resolution, an error tile and a tile that cannot be read give no rows. A
+        raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values
+        are never interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_h3_rastertogridmin(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_h3_rastertogridmin",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_h3_rastertogridstddev(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Population standard deviation of the pixel values in each H3 cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The H3 resolution, a whole number from 0 to 15.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the
+        population standard deviation (divisor n) of the band's valid pixels in the
+        cell. A pixel is valid when the band's NoData and mask (and the alpha band, if
+        the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a
+        tile that cannot be read give no rows. A raster in another CRS is reprojected to
+        EPSG:4326 (nearest neighbour, so values are never interpolated); a raster with
+        no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_h3_rastertogridstddev(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_h3_rastertogridstddev",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_h3_rastertogridsum(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Sum of the pixel values in each H3 cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The H3 resolution, a whole number from 0 to 15.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the sum of
+        the band's valid pixels in the cell. A pixel is valid when the band's NoData and
+        mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution, an error tile and a tile that cannot be read give no rows. A raster
+        in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are
+        never interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_h3_rastertogridsum(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_h3_rastertogridsum",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_h3_rastertogridvariance(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Population variance of the pixel values in each H3 cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The H3 resolution, a whole number from 0 to 15.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the
+        population variance (divisor n) of the band's valid pixels in the cell. A pixel
+        is valid when the band's NoData and mask (and the alpha band, if the raster has
+        one) say so. A NULL tile, a NULL resolution, an error tile and a tile that
+        cannot be read give no rows. A raster in another CRS is reprojected to EPSG:4326
+        (nearest neighbour, so values are never interpolated); a raster with no CRS is
+        taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_h3_rastertogridvariance(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_h3_rastertogridvariance",
+        tile,
+        resolution,
+        coverage,
+        assignment,
     )
 
 
@@ -3961,6 +3972,337 @@ def rst_proximity(
         target_values,
         dist_units,
         max_distance,
+    )
+
+
+def rst_quadbin_rastertogridavg(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Mean of the pixel values in each quadbin cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The quadbin zoom level, a whole number from 0 to 20.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the mean of
+        the band's valid pixels in the cell. A pixel is valid when the band's NoData and
+        mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution, an error tile and a tile that cannot be read give no rows. A raster
+        in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are
+        never interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_quadbin_rastertogridavg(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_quadbin_rastertogridavg",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_quadbin_rastertogridcount(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Count the pixels in each quadbin cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The quadbin zoom level, a whole number from 0 to 20.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the number
+        of the band's valid pixels in the cell (a DOUBLE; with `covering`, the sum of
+        their area shares). A pixel is valid when the band's NoData and mask (and the
+        alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an
+        error tile and a tile that cannot be read give no rows. A raster in another CRS
+        is reprojected to EPSG:4326 (nearest neighbour, so values are never
+        interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_quadbin_rastertogridcount(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_quadbin_rastertogridcount",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_quadbin_rastertogridmax(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Maximum of the pixel values in each quadbin cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The quadbin zoom level, a whole number from 0 to 20.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the largest
+        value of the band's valid pixels in the cell. A pixel is valid when the band's
+        NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile,
+        a NULL resolution, an error tile and a tile that cannot be read give no rows. A
+        raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values
+        are never interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_quadbin_rastertogridmax(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_quadbin_rastertogridmax",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_quadbin_rastertogridmedian(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Median of the pixel values in each quadbin cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The quadbin zoom level, a whole number from 0 to 20.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the median
+        of the band's valid pixels in the cell. A pixel is valid when the band's NoData
+        and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution, an error tile and a tile that cannot be read give no rows. A raster
+        in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are
+        never interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_quadbin_rastertogridmedian(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_quadbin_rastertogridmedian",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_quadbin_rastertogridmin(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Minimum of the pixel values in each quadbin cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The quadbin zoom level, a whole number from 0 to 20.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the smallest
+        value of the band's valid pixels in the cell. A pixel is valid when the band's
+        NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile,
+        a NULL resolution, an error tile and a tile that cannot be read give no rows. A
+        raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values
+        are never interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_quadbin_rastertogridmin(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_quadbin_rastertogridmin",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_quadbin_rastertogridstddev(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Population standard deviation of the pixel values in each quadbin cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The quadbin zoom level, a whole number from 0 to 20.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the
+        population standard deviation (divisor n) of the band's valid pixels in the
+        cell. A pixel is valid when the band's NoData and mask (and the alpha band, if
+        the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a
+        tile that cannot be read give no rows. A raster in another CRS is reprojected to
+        EPSG:4326 (nearest neighbour, so values are never interpolated); a raster with
+        no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_quadbin_rastertogridstddev(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_quadbin_rastertogridstddev",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_quadbin_rastertogridsum(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Sum of the pixel values in each quadbin cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The quadbin zoom level, a whole number from 0 to 20.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the sum of
+        the band's valid pixels in the cell. A pixel is valid when the band's NoData and
+        mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL
+        resolution, an error tile and a tile that cannot be read give no rows. A raster
+        in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are
+        never interpolated); a raster with no CRS is taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_quadbin_rastertogridsum(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_quadbin_rastertogridsum",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
+def rst_quadbin_rastertogridvariance(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> DataFrame:
+    """Population variance of the pixel values in each quadbin cell, per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to aggregate.
+        resolution: The quadbin zoom level, a whole number from 0 to 20.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        One row per band and cell: `band` (from 1), `cellID` and `measure`, the
+        population variance (divisor n) of the band's valid pixels in the cell. A pixel
+        is valid when the band's NoData and mask (and the alpha band, if the raster has
+        one) say so. A NULL tile, a NULL resolution, an error tile and a tile that
+        cannot be read give no rows. A raster in another CRS is reprojected to EPSG:4326
+        (nearest neighbour, so values are never interpolated); a raster with no CRS is
+        taken as already in EPSG:4326.
+
+    SQL: ``gbx_rst_quadbin_rastertogridvariance(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_quadbin_rastertogridvariance",
+        tile,
+        resolution,
+        coverage,
+        assignment,
     )
 
 

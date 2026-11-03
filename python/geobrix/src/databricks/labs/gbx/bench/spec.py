@@ -2347,7 +2347,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(
             ds, a["resolution"], "h3", "avg", coverage="sparse", assignment="centroid"
         ),
-        col_fn=lambda t, a: prx.rst_h3_rastertogridavg(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -2367,7 +2367,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(
             ds, a["resolution"], "h3", "count", coverage="sparse", assignment="centroid"
         ),
-        col_fn=lambda t, a: prx.rst_h3_rastertogridcount(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -2387,7 +2387,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(
             ds, a["resolution"], "h3", "max", coverage="sparse", assignment="centroid"
         ),
-        col_fn=lambda t, a: prx.rst_h3_rastertogridmax(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -2412,7 +2412,7 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_h3_rastertogridmedian(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -2432,7 +2432,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(
             ds, a["resolution"], "h3", "min", coverage="sparse", assignment="centroid"
         ),
-        col_fn=lambda t, a: prx.rst_h3_rastertogridmin(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -2452,7 +2452,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(
             ds, a["resolution"], "h3", "sum", coverage="sparse", assignment="centroid"
         ),
-        col_fn=lambda t, a: prx.rst_h3_rastertogridsum(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -2477,7 +2477,7 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_h3_rastertogridvariance(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -2502,7 +2502,7 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_h3_rastertogridstddev(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -2528,7 +2528,7 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_quadbin_rastertogridavg(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -2553,7 +2553,7 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_quadbin_rastertogridcount(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -2578,7 +2578,7 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_quadbin_rastertogridmax(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -2603,7 +2603,7 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_quadbin_rastertogridmedian(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -2628,7 +2628,7 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_quadbin_rastertogridmin(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -2653,7 +2653,7 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_quadbin_rastertogridsum(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -2678,7 +2678,7 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_quadbin_rastertogridvariance(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -2703,7 +2703,7 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_quadbin_rastertogridstddev(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -2735,7 +2735,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(
             ds, a["resolution"], "bng", "avg", coverage="sparse", assignment="centroid"
         ),
-        col_fn=lambda t, a: prx.rst_bng_rastertogridavg(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid_str",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -2762,7 +2762,7 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_bng_rastertogridcount(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid_str",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -2784,7 +2784,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(
             ds, a["resolution"], "bng", "max", coverage="sparse", assignment="centroid"
         ),
-        col_fn=lambda t, a: prx.rst_bng_rastertogridmax(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid_str",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -2811,7 +2811,7 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_bng_rastertogridmedian(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid_str",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -2833,7 +2833,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(
             ds, a["resolution"], "bng", "min", coverage="sparse", assignment="centroid"
         ),
-        col_fn=lambda t, a: prx.rst_bng_rastertogridmin(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid_str",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -2855,7 +2855,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(
             ds, a["resolution"], "bng", "sum", coverage="sparse", assignment="centroid"
         ),
-        col_fn=lambda t, a: prx.rst_bng_rastertogridsum(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid_str",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -2882,7 +2882,7 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_bng_rastertogridvariance(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid_str",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -2909,7 +2909,7 @@ REGISTRY: Dict[str, FnSpec] = {
             coverage="sparse",
             assignment="centroid",
         ),
-        col_fn=lambda t, a: prx.rst_bng_rastertogridstddev(t, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid_str",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
@@ -3471,7 +3471,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {"resolution": 1},  # resolution only; grid struct not yet bench-renderable
         core_fn=lambda ds, a: None,
-        col_fn=lambda t, a: prx.rst_custom_rastertogridavg(t, None, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,
         fingerprint=False,  # grid struct arg not yet supported in _udtf_lateral_sql
@@ -3489,7 +3489,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {"resolution": 1},
         core_fn=lambda ds, a: None,
-        col_fn=lambda t, a: prx.rst_custom_rastertogridcount(t, None, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,
         fingerprint=False,
@@ -3507,7 +3507,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {"resolution": 1},
         core_fn=lambda ds, a: None,
-        col_fn=lambda t, a: prx.rst_custom_rastertogridmax(t, None, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,
         fingerprint=False,
@@ -3525,7 +3525,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {"resolution": 1},
         core_fn=lambda ds, a: None,
-        col_fn=lambda t, a: prx.rst_custom_rastertogridmin(t, None, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,
         fingerprint=False,
@@ -3543,7 +3543,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {"resolution": 1},
         core_fn=lambda ds, a: None,
-        col_fn=lambda t, a: prx.rst_custom_rastertogridmedian(t, None, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,
         fingerprint=False,
@@ -3561,7 +3561,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {"resolution": 1},
         core_fn=lambda ds, a: None,
-        col_fn=lambda t, a: prx.rst_custom_rastertogridsum(t, None, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,
         fingerprint=False,
@@ -3579,9 +3579,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {"resolution": 1},
         core_fn=lambda ds, a: None,
-        col_fn=lambda t, a: prx.rst_custom_rastertogridvariance(
-            t, None, a["resolution"]
-        ),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,
         fingerprint=False,
@@ -3599,7 +3597,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {"resolution": 1},
         core_fn=lambda ds, a: None,
-        col_fn=lambda t, a: prx.rst_custom_rastertogridstddev(t, None, a["resolution"]),
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,
         fingerprint=False,

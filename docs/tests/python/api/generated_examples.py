@@ -314,6 +314,46 @@ EXAMPLES = {
         "br_nan_beside_numbers",
         "SELECT gbx_rst_bng_rasterize_agg(c0, c1, 27700, CAST(NULL AS DOUBLE), 530000.0D, 180000.0D, 533000.0D, 182000.0D, 3, 2, 'centroids', 0) AS out FROM gbx_example",
     ),
+    "gbx_rst_bng_rastertogridavg": (
+        "RASTER_TO_GRID",
+        "bng_rtg_avg",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_bng_rastertogridavg(c0, 3) AS gbx_out",
+    ),
+    "gbx_rst_bng_rastertogridcount": (
+        "RASTER_TO_GRID",
+        "bng_rtg_count",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_bng_rastertogridcount(c0, 3) AS gbx_out",
+    ),
+    "gbx_rst_bng_rastertogridmax": (
+        "RASTER_TO_GRID",
+        "bng_rtg_max",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_bng_rastertogridmax(c0, 3) AS gbx_out",
+    ),
+    "gbx_rst_bng_rastertogridmedian": (
+        "RASTER_TO_GRID",
+        "bng_rtg_median",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_bng_rastertogridmedian(c0, 3) AS gbx_out",
+    ),
+    "gbx_rst_bng_rastertogridmin": (
+        "RASTER_TO_GRID",
+        "bng_rtg_min",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_bng_rastertogridmin(c0, 3) AS gbx_out",
+    ),
+    "gbx_rst_bng_rastertogridstddev": (
+        "RASTER_TO_GRID",
+        "bng_rtg_stddev",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_bng_rastertogridstddev(c0, 3) AS gbx_out",
+    ),
+    "gbx_rst_bng_rastertogridsum": (
+        "RASTER_TO_GRID",
+        "bng_rtg_sum",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_bng_rastertogridsum(c0, 3) AS gbx_out",
+    ),
+    "gbx_rst_bng_rastertogridvariance": (
+        "RASTER_TO_GRID",
+        "bng_rtg_variance",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_bng_rastertogridvariance(c0, 3) AS gbx_out",
+    ),
     "gbx_rst_bng_tessellate": (
         "RASTER_GENERATOR",
         "bng_tess_1km",
@@ -399,6 +439,46 @@ EXAMPLES = {
         "crs",
         "SELECT gbx_rst_crs(c0) AS out FROM gbx_example",
     ),
+    "gbx_rst_custom_rastertogridavg": (
+        "RASTER_TO_GRID",
+        "cg_rtg_avg",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_custom_rastertogridavg(c0, c1, 1) AS gbx_out",
+    ),
+    "gbx_rst_custom_rastertogridcount": (
+        "RASTER_TO_GRID",
+        "cg_rtg_count",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_custom_rastertogridcount(c0, c1, 1) AS gbx_out",
+    ),
+    "gbx_rst_custom_rastertogridmax": (
+        "RASTER_TO_GRID",
+        "cg_rtg_max",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_custom_rastertogridmax(c0, c1, 1) AS gbx_out",
+    ),
+    "gbx_rst_custom_rastertogridmedian": (
+        "RASTER_TO_GRID",
+        "cg_rtg_median",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_custom_rastertogridmedian(c0, c1, 1) AS gbx_out",
+    ),
+    "gbx_rst_custom_rastertogridmin": (
+        "RASTER_TO_GRID",
+        "cg_rtg_min",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_custom_rastertogridmin(c0, c1, 1) AS gbx_out",
+    ),
+    "gbx_rst_custom_rastertogridstddev": (
+        "RASTER_TO_GRID",
+        "cg_rtg_stddev",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_custom_rastertogridstddev(c0, c1, 1) AS gbx_out",
+    ),
+    "gbx_rst_custom_rastertogridsum": (
+        "RASTER_TO_GRID",
+        "cg_rtg_sum",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_custom_rastertogridsum(c0, c1, 1) AS gbx_out",
+    ),
+    "gbx_rst_custom_rastertogridvariance": (
+        "RASTER_TO_GRID",
+        "cg_rtg_variance",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_custom_rastertogridvariance(c0, c1, 1) AS gbx_out",
+    ),
     "gbx_rst_custom_tessellate": (
         "RASTER_GENERATOR",
         "cg_tess_res0",
@@ -468,6 +548,46 @@ EXAMPLES = {
         "RASTER_RASTERIZE",
         "gridfrompoints_wkb",
         "SELECT gbx_rst_gridfrompoints(c0, c1, 0.0D, 0.0D, 10.0D, 10.0D, 4, 4, 3857) AS out FROM gbx_example",
+    ),
+    "gbx_rst_h3_rastertogridavg": (
+        "RASTER_TO_GRID",
+        "h3_rtg_avg",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_h3_rastertogridavg(c0, 5) AS gbx_out",
+    ),
+    "gbx_rst_h3_rastertogridcount": (
+        "RASTER_TO_GRID",
+        "h3_rtg_count",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_h3_rastertogridcount(c0, 5) AS gbx_out",
+    ),
+    "gbx_rst_h3_rastertogridmax": (
+        "RASTER_TO_GRID",
+        "h3_rtg_max",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_h3_rastertogridmax(c0, 5) AS gbx_out",
+    ),
+    "gbx_rst_h3_rastertogridmedian": (
+        "RASTER_TO_GRID",
+        "h3_rtg_median",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_h3_rastertogridmedian(c0, 5) AS gbx_out",
+    ),
+    "gbx_rst_h3_rastertogridmin": (
+        "RASTER_TO_GRID",
+        "h3_rtg_min",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_h3_rastertogridmin(c0, 5) AS gbx_out",
+    ),
+    "gbx_rst_h3_rastertogridstddev": (
+        "RASTER_TO_GRID",
+        "h3_rtg_stddev",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_h3_rastertogridstddev(c0, 5) AS gbx_out",
+    ),
+    "gbx_rst_h3_rastertogridsum": (
+        "RASTER_TO_GRID",
+        "h3_rtg_sum",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_h3_rastertogridsum(c0, 5) AS gbx_out",
+    ),
+    "gbx_rst_h3_rastertogridvariance": (
+        "RASTER_TO_GRID",
+        "h3_rtg_variance",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_h3_rastertogridvariance(c0, 5) AS gbx_out",
     ),
     "gbx_rst_h3_tessellate": (
         "RASTER_GENERATOR",
@@ -608,6 +728,46 @@ EXAMPLES = {
         "SPEC_ANALYSIS",
         "proximity_targets",
         "SELECT gbx_rst_proximity(c0, '1,2') AS out FROM gbx_example",
+    ),
+    "gbx_rst_quadbin_rastertogridavg": (
+        "RASTER_TO_GRID",
+        "qb_rtg_avg",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_quadbin_rastertogridavg(c0, 11) AS gbx_out",
+    ),
+    "gbx_rst_quadbin_rastertogridcount": (
+        "RASTER_TO_GRID",
+        "qb_rtg_count",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_quadbin_rastertogridcount(c0, 11) AS gbx_out",
+    ),
+    "gbx_rst_quadbin_rastertogridmax": (
+        "RASTER_TO_GRID",
+        "qb_rtg_max",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_quadbin_rastertogridmax(c0, 11) AS gbx_out",
+    ),
+    "gbx_rst_quadbin_rastertogridmedian": (
+        "RASTER_TO_GRID",
+        "qb_rtg_median",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_quadbin_rastertogridmedian(c0, 11) AS gbx_out",
+    ),
+    "gbx_rst_quadbin_rastertogridmin": (
+        "RASTER_TO_GRID",
+        "qb_rtg_min",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_quadbin_rastertogridmin(c0, 11) AS gbx_out",
+    ),
+    "gbx_rst_quadbin_rastertogridstddev": (
+        "RASTER_TO_GRID",
+        "qb_rtg_stddev",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_quadbin_rastertogridstddev(c0, 11) AS gbx_out",
+    ),
+    "gbx_rst_quadbin_rastertogridsum": (
+        "RASTER_TO_GRID",
+        "qb_rtg_sum",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_quadbin_rastertogridsum(c0, 11) AS gbx_out",
+    ),
+    "gbx_rst_quadbin_rastertogridvariance": (
+        "RASTER_TO_GRID",
+        "qb_rtg_variance",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_quadbin_rastertogridvariance(c0, 11) AS gbx_out",
     ),
     "gbx_rst_quadbin_tessellate": (
         "RASTER_GENERATOR",

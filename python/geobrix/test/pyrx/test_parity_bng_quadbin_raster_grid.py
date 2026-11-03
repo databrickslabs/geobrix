@@ -210,6 +210,17 @@ def _small_covering_bng_raster():
 _REDUCERS = ["avg", "count", "max", "min", "median", "sum", "variance", "stddev"]
 
 
+def _heavy_rastertogrid(sql_name):
+    """The heavy ARRAY scalar of a raster-to-grid reducer as a function of (tile, resolution, coverage, assignment):
+    the generated Python API has the table function (the light contract), so the heavy form is called by SQL name.
+    """
+    from pyspark.sql import functions as f
+
+    return lambda tile, res, coverage, assignment: f.call_function(
+        sql_name, tile, res, f.lit(coverage), f.lit(assignment)
+    )
+
+
 def _heavy_reducer_rows(
     spark, raster, resolution, agg, *, coverage="complete", assignment="centroid"
 ):
@@ -225,7 +236,7 @@ def _heavy_reducer_rows(
     from databricks.labs.gbx.rasterx import functions as hx
 
     hx.register(spark)
-    fn = getattr(hx, f"rst_bng_rastertogrid{agg}")
+    fn = _heavy_rastertogrid(f"gbx_rst_bng_rastertogrid{agg}")
     df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
         hx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
@@ -364,7 +375,7 @@ def _heavy_grid_rows(
     from databricks.labs.gbx.rasterx import functions as hx
 
     hx.register(spark)
-    fn = getattr(hx, f"rst_{grid}_rastertogrid{agg}")
+    fn = _heavy_rastertogrid(f"gbx_rst_{grid}_rastertogrid{agg}")
     df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
         hx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )

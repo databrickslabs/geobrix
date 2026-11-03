@@ -1360,25 +1360,13 @@ rst_bng_tessellate_sql_example_output = """
 def rst_h3_rastertogridavg_sql_example():
     """Aggregate raster values to H3 grid using average"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_h3_rastertogridavg(tile, 4)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridavg(tile, 4) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_h3_rastertogridavg(tile, 4, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridavg(tile, 4, 'complete', 'covering') t;
 """
 
 
@@ -1399,25 +1387,13 @@ rst_h3_rastertogridavg_sql_example_output = """
 def rst_h3_rastertogridcount_sql_example():
     """Count pixels per H3 cell (measure is DOUBLE)"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_h3_rastertogridcount(tile, 4)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridcount(tile, 4) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_h3_rastertogridcount(tile, 4, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridcount(tile, 4, 'complete', 'covering') t;
 """
 
 
@@ -1436,25 +1412,13 @@ rst_h3_rastertogridcount_sql_example_output = """
 def rst_h3_rastertogridmax_sql_example():
     """Get maximum values per H3 cell"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_h3_rastertogridmax(tile, 4)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmax(tile, 4) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_h3_rastertogridmax(tile, 4, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmax(tile, 4, 'complete', 'covering') t;
 """
 
 
@@ -1473,25 +1437,13 @@ rst_h3_rastertogridmax_sql_example_output = """
 def rst_h3_rastertogridmin_sql_example():
     """Get minimum values per H3 cell"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_h3_rastertogridmin(tile, 4)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmin(tile, 4) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_h3_rastertogridmin(tile, 4, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmin(tile, 4, 'complete', 'covering') t;
 """
 
 
@@ -1510,25 +1462,13 @@ rst_h3_rastertogridmin_sql_example_output = """
 def rst_h3_rastertogridmedian_sql_example():
     """Get median values per H3 cell"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_h3_rastertogridmedian(tile, 4)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmedian(tile, 4) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_h3_rastertogridmedian(tile, 4, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmedian(tile, 4, 'complete', 'covering') t;
 """
 
 
@@ -1547,25 +1487,13 @@ rst_h3_rastertogridmedian_sql_example_output = """
 def rst_h3_rastertogridsum_sql_example():
     """Get the sum of pixel values per H3 cell"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_h3_rastertogridsum(tile, 4)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridsum(tile, 4) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_h3_rastertogridsum(tile, 4, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridsum(tile, 4, 'complete', 'covering') t;
 """
 
 
@@ -1584,25 +1512,13 @@ rst_h3_rastertogridsum_sql_example_output = """
 def rst_h3_rastertogridvariance_sql_example():
     """Get the population variance of pixel values per H3 cell"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_h3_rastertogridvariance(tile, 4)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridvariance(tile, 4) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_h3_rastertogridvariance(tile, 4, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridvariance(tile, 4, 'complete', 'covering') t;
 """
 
 
@@ -1621,25 +1537,13 @@ rst_h3_rastertogridvariance_sql_example_output = """
 def rst_h3_rastertogridstddev_sql_example():
     """Get the population standard deviation of pixel values per H3 cell"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_h3_rastertogridstddev(tile, 4)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridstddev(tile, 4) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_h3_rastertogridstddev(tile, 4, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridstddev(tile, 4, 'complete', 'covering') t;
 """
 
 
@@ -1658,25 +1562,13 @@ rst_h3_rastertogridstddev_sql_example_output = """
 def rst_quadbin_rastertogridavg_sql_example():
     """Aggregate raster values to CARTO quadbin v0 cells using average"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridavg(tile, 4)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridavg(tile, 4) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridavg(tile, 4, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridavg(tile, 4, 'complete', 'covering') t;
 """
 
 
@@ -1695,25 +1587,13 @@ rst_quadbin_rastertogridavg_sql_example_output = """
 def rst_quadbin_rastertogridcount_sql_example():
     """Count pixels per CARTO quadbin v0 cell (measure is DOUBLE)"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridcount(tile, 4)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridcount(tile, 4) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridcount(tile, 4, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridcount(tile, 4, 'complete', 'covering') t;
 """
 
 
@@ -1732,25 +1612,13 @@ rst_quadbin_rastertogridcount_sql_example_output = """
 def rst_quadbin_rastertogridmax_sql_example():
     """Get maximum values per CARTO quadbin v0 cell"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridmax(tile, 4)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmax(tile, 4) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridmax(tile, 4, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmax(tile, 4, 'complete', 'covering') t;
 """
 
 
@@ -1769,25 +1637,13 @@ rst_quadbin_rastertogridmax_sql_example_output = """
 def rst_quadbin_rastertogridmin_sql_example():
     """Get minimum values per CARTO quadbin v0 cell"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridmin(tile, 4)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmin(tile, 4) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridmin(tile, 4, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmin(tile, 4, 'complete', 'covering') t;
 """
 
 
@@ -1806,25 +1662,13 @@ rst_quadbin_rastertogridmin_sql_example_output = """
 def rst_quadbin_rastertogridmedian_sql_example():
     """Get median values per CARTO quadbin v0 cell"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridmedian(tile, 4)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmedian(tile, 4) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridmedian(tile, 4, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmedian(tile, 4, 'complete', 'covering') t;
 """
 
 
@@ -1843,25 +1687,13 @@ rst_quadbin_rastertogridmedian_sql_example_output = """
 def rst_quadbin_rastertogridsum_sql_example():
     """Get the sum of pixel values per CARTO quadbin v0 cell"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridsum(tile, 4)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridsum(tile, 4) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridsum(tile, 4, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridsum(tile, 4, 'complete', 'covering') t;
 """
 
 
@@ -1880,25 +1712,13 @@ rst_quadbin_rastertogridsum_sql_example_output = """
 def rst_quadbin_rastertogridvariance_sql_example():
     """Get the population variance of pixel values per CARTO quadbin v0 cell"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridvariance(tile, 4)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridvariance(tile, 4) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridvariance(tile, 4, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridvariance(tile, 4, 'complete', 'covering') t;
 """
 
 
@@ -1917,25 +1737,13 @@ rst_quadbin_rastertogridvariance_sql_example_output = """
 def rst_quadbin_rastertogridstddev_sql_example():
     """Get the population standard deviation of pixel values per CARTO quadbin v0 cell"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridstddev(tile, 4)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridstddev(tile, 4) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridstddev(tile, 4, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridstddev(tile, 4, 'complete', 'covering') t;
 """
 
 
@@ -1967,25 +1775,13 @@ rst_quadbin_rastertogridstddev_sql_example_output = """
 def rst_bng_rastertogridavg_sql_example():
     """Aggregate raster values to British National Grid cells using average"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_bng_rastertogridavg(tile, 3)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridavg(tile, 3) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_bng_rastertogridavg(tile, 3, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridavg(tile, 3, 'complete', 'covering') t;
 """
 
 
@@ -2004,25 +1800,13 @@ rst_bng_rastertogridavg_sql_example_output = """
 def rst_bng_rastertogridcount_sql_example():
     """Count pixels per British National Grid cell (measure is DOUBLE)"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_bng_rastertogridcount(tile, 3)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridcount(tile, 3) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_bng_rastertogridcount(tile, 3, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridcount(tile, 3, 'complete', 'covering') t;
 """
 
 
@@ -2041,25 +1825,13 @@ rst_bng_rastertogridcount_sql_example_output = """
 def rst_bng_rastertogridmax_sql_example():
     """Get maximum values per British National Grid cell"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_bng_rastertogridmax(tile, 3)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmax(tile, 3) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_bng_rastertogridmax(tile, 3, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmax(tile, 3, 'complete', 'covering') t;
 """
 
 
@@ -2078,25 +1850,13 @@ rst_bng_rastertogridmax_sql_example_output = """
 def rst_bng_rastertogridmin_sql_example():
     """Get minimum values per British National Grid cell"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_bng_rastertogridmin(tile, 3)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmin(tile, 3) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_bng_rastertogridmin(tile, 3, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmin(tile, 3, 'complete', 'covering') t;
 """
 
 
@@ -2115,25 +1875,13 @@ rst_bng_rastertogridmin_sql_example_output = """
 def rst_bng_rastertogridmedian_sql_example():
     """Get median values per British National Grid cell"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_bng_rastertogridmedian(tile, 3)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmedian(tile, 3) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_bng_rastertogridmedian(tile, 3, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmedian(tile, 3, 'complete', 'covering') t;
 """
 
 
@@ -2152,25 +1900,13 @@ rst_bng_rastertogridmedian_sql_example_output = """
 def rst_bng_rastertogridsum_sql_example():
     """Get the sum of pixel values per British National Grid cell"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_bng_rastertogridsum(tile, 3)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridsum(tile, 3) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_bng_rastertogridsum(tile, 3, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridsum(tile, 3, 'complete', 'covering') t;
 """
 
 
@@ -2189,25 +1925,13 @@ rst_bng_rastertogridsum_sql_example_output = """
 def rst_bng_rastertogridvariance_sql_example():
     """Get the population variance of pixel values per British National Grid cell"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_bng_rastertogridvariance(tile, 3)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridvariance(tile, 3) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_bng_rastertogridvariance(tile, 3, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridvariance(tile, 3, 'complete', 'covering') t;
 """
 
 
@@ -2226,25 +1950,13 @@ rst_bng_rastertogridvariance_sql_example_output = """
 def rst_bng_rastertogridstddev_sql_example():
     """Get the population standard deviation of pixel values per British National Grid cell"""
     return """
--- heavyweight tier
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_bng_rastertogridstddev(tile, 3)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridstddev(tile, 3) t;
 
--- heavyweight tier, explicit coverage='complete', assignment='covering'
--- (non-default assignment).
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM multiband_rasters
-LATERAL VIEW posexplode(gbx_rst_bng_rastertogridstddev(tile, 3, 'complete', 'covering')) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
+-- lightweight tier, explicit coverage='complete', assignment='covering'
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridstddev(tile, 3, 'complete', 'covering') t;
 """
 
 
@@ -3740,18 +3452,9 @@ _CUSTOM_RASTER_PATH = (
 def rst_custom_rastertogridavg_sql_example():
     """Aggregate raster values to custom-grid cells using average (custom grid)"""
     return f"""
--- heavyweight tier
--- gbx_rst_fromfile only reads the file (a Python function in both tiers).
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM (SELECT gbx_rst_fromfile('{_CUSTOM_RASTER_PATH}') AS tile) AS r
-LATERAL VIEW posexplode(gbx_rst_custom_rastertogridavg(tile, {_CUSTOM_GRID_LITERAL}, 1)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.band, t.cellID, t.measure
 FROM (SELECT gbx_rst_fromfile('{_CUSTOM_RASTER_PATH}') AS tile) AS r,
 LATERAL gbx_rst_custom_rastertogridavg(
@@ -3784,18 +3487,9 @@ rst_custom_rastertogridavg_sql_example_output = """
 def rst_custom_rastertogridcount_sql_example():
     """Count raster pixels per custom-grid cell (measure is DOUBLE)"""
     return f"""
--- heavyweight tier
--- gbx_rst_fromfile only reads the file (a Python function in both tiers).
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM (SELECT gbx_rst_fromfile('{_CUSTOM_RASTER_PATH}') AS tile) AS r
-LATERAL VIEW posexplode(gbx_rst_custom_rastertogridcount(tile, {_CUSTOM_GRID_LITERAL}, 1)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.band, t.cellID, t.measure
 FROM (SELECT gbx_rst_fromfile('{_CUSTOM_RASTER_PATH}') AS tile) AS r,
 LATERAL gbx_rst_custom_rastertogridcount(
@@ -3819,18 +3513,9 @@ rst_custom_rastertogridcount_sql_example_output = """
 def rst_custom_rastertogridmax_sql_example():
     """Get maximum raster value per custom-grid cell"""
     return f"""
--- heavyweight tier
--- gbx_rst_fromfile only reads the file (a Python function in both tiers).
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM (SELECT gbx_rst_fromfile('{_CUSTOM_RASTER_PATH}') AS tile) AS r
-LATERAL VIEW posexplode(gbx_rst_custom_rastertogridmax(tile, {_CUSTOM_GRID_LITERAL}, 1)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.band, t.cellID, t.measure
 FROM (SELECT gbx_rst_fromfile('{_CUSTOM_RASTER_PATH}') AS tile) AS r,
 LATERAL gbx_rst_custom_rastertogridmax(
@@ -3854,18 +3539,9 @@ rst_custom_rastertogridmax_sql_example_output = """
 def rst_custom_rastertogridmin_sql_example():
     """Get minimum raster value per custom-grid cell"""
     return f"""
--- heavyweight tier
--- gbx_rst_fromfile only reads the file (a Python function in both tiers).
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM (SELECT gbx_rst_fromfile('{_CUSTOM_RASTER_PATH}') AS tile) AS r
-LATERAL VIEW posexplode(gbx_rst_custom_rastertogridmin(tile, {_CUSTOM_GRID_LITERAL}, 1)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.band, t.cellID, t.measure
 FROM (SELECT gbx_rst_fromfile('{_CUSTOM_RASTER_PATH}') AS tile) AS r,
 LATERAL gbx_rst_custom_rastertogridmin(
@@ -3889,18 +3565,9 @@ rst_custom_rastertogridmin_sql_example_output = """
 def rst_custom_rastertogridmedian_sql_example():
     """Get median raster value per custom-grid cell"""
     return f"""
--- heavyweight tier
--- gbx_rst_fromfile only reads the file (a Python function in both tiers).
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM (SELECT gbx_rst_fromfile('{_CUSTOM_RASTER_PATH}') AS tile) AS r
-LATERAL VIEW posexplode(gbx_rst_custom_rastertogridmedian(tile, {_CUSTOM_GRID_LITERAL}, 1)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.band, t.cellID, t.measure
 FROM (SELECT gbx_rst_fromfile('{_CUSTOM_RASTER_PATH}') AS tile) AS r,
 LATERAL gbx_rst_custom_rastertogridmedian(
@@ -3924,18 +3591,9 @@ rst_custom_rastertogridmedian_sql_example_output = """
 def rst_custom_rastertogridsum_sql_example():
     """Sum raster values per custom-grid cell"""
     return f"""
--- heavyweight tier
--- gbx_rst_fromfile only reads the file (a Python function in both tiers).
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM (SELECT gbx_rst_fromfile('{_CUSTOM_RASTER_PATH}') AS tile) AS r
-LATERAL VIEW posexplode(gbx_rst_custom_rastertogridsum(tile, {_CUSTOM_GRID_LITERAL}, 1)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.band, t.cellID, t.measure
 FROM (SELECT gbx_rst_fromfile('{_CUSTOM_RASTER_PATH}') AS tile) AS r,
 LATERAL gbx_rst_custom_rastertogridsum(
@@ -3959,18 +3617,9 @@ rst_custom_rastertogridsum_sql_example_output = """
 def rst_custom_rastertogridvariance_sql_example():
     """Population variance of raster values per custom-grid cell"""
     return f"""
--- heavyweight tier
--- gbx_rst_fromfile only reads the file (a Python function in both tiers).
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM (SELECT gbx_rst_fromfile('{_CUSTOM_RASTER_PATH}') AS tile) AS r
-LATERAL VIEW posexplode(gbx_rst_custom_rastertogridvariance(tile, {_CUSTOM_GRID_LITERAL}, 1)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.band, t.cellID, t.measure
 FROM (SELECT gbx_rst_fromfile('{_CUSTOM_RASTER_PATH}') AS tile) AS r,
 LATERAL gbx_rst_custom_rastertogridvariance(
@@ -3994,18 +3643,9 @@ rst_custom_rastertogridvariance_sql_example_output = """
 def rst_custom_rastertogridstddev_sql_example():
     """Population standard deviation of raster values per custom-grid cell"""
     return f"""
--- heavyweight tier
--- gbx_rst_fromfile only reads the file (a Python function in both tiers).
--- An ARRAY with one element per band, each an ARRAY<STRUCT<cellID, measure>>:
--- posexplode the bands and inline the cells for one row per band x cell.
-SELECT b.pos + 1 AS band, c.cellID, c.measure
-FROM (SELECT gbx_rst_fromfile('{_CUSTOM_RASTER_PATH}') AS tile) AS r
-LATERAL VIEW posexplode(gbx_rst_custom_rastertogridstddev(tile, {_CUSTOM_GRID_LITERAL}, 1)) b AS pos, cells
-LATERAL VIEW inline(cells) c AS cellID, measure;
-
 -- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; it yields the same
--- [band, cellID, measure] rows.
+-- A table function, called with FROM ..., LATERAL: one row per band and cell,
+-- with the columns [band, cellID, measure].
 SELECT t.band, t.cellID, t.measure
 FROM (SELECT gbx_rst_fromfile('{_CUSTOM_RASTER_PATH}') AS tile) AS r,
 LATERAL gbx_rst_custom_rastertogridstddev(

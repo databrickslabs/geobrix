@@ -113,7 +113,7 @@ class RST_GridIntegrationTest extends PlanTest with SilentSparkSession {
             // collect the nested array and flatten it Scala-side.
             val bands = Seq(p).toDF("path")
                 .withColumn("raster", udfs.rasterFromPath(col("path")))
-                .select(rst_bng_rastertogridavg(col("raster"), lit(3)).alias("grid"))
+                .select(call_function("gbx_rst_bng_rastertogridavg", col("raster"), lit(3)).alias("grid"))
                 .collect().head.getSeq[Seq[Row]](0)
 
             val cells = bands.flatten
@@ -264,7 +264,7 @@ class RST_GridIntegrationTest extends PlanTest with SilentSparkSession {
             .agg(rst_quadbin_rasterize_agg(col("cellid"), col("value")).alias("out"))
 
         val bands = gridDf
-            .select(rst_quadbin_rastertogridavg(col("out"), lit(z), "sparse", "centroid").alias("grid"))
+            .select(call_function("gbx_rst_quadbin_rastertogridavg", col("out"), lit(z), lit("sparse"), lit("centroid")).alias("grid"))
             .collect().head.getSeq[Seq[Row]](0)
         val recovered = bands.flatten.map(r => (r.getLong(0), r.getDouble(1))).toMap
 
@@ -295,7 +295,7 @@ class RST_GridIntegrationTest extends PlanTest with SilentSparkSession {
             .agg(rst_bng_rasterize_agg(col("cellid"), col("value")).alias("out"))
 
         val bands = gridDf
-            .select(rst_bng_rastertogridavg(col("out"), lit(res), "sparse", "centroid").alias("grid"))
+            .select(call_function("gbx_rst_bng_rastertogridavg", col("out"), lit(res), lit("sparse"), lit("centroid")).alias("grid"))
             .collect().head.getSeq[Seq[Row]](0)
         val recovered = bands.flatten.map(r => (r.getString(0), r.getDouble(1))).toMap
 

@@ -28,11 +28,11 @@ class RST_GridEvalTest extends PlanTest with SilentSparkSession {
                 .cache()
             base.collect()
             Seq(
-              rst_h3_rastertogridavg(col("raster"), lit(2)),
-              rst_h3_rastertogridcount(col("raster"), lit(2)),
-              rst_h3_rastertogridmax(col("raster"), lit(2)),
-              rst_h3_rastertogridmin(col("raster"), lit(2)),
-              rst_h3_rastertogridmedian(col("raster"), lit(2))
+              call_function("gbx_rst_h3_rastertogridavg", col("raster"), lit(2)),
+              call_function("gbx_rst_h3_rastertogridcount", col("raster"), lit(2)),
+              call_function("gbx_rst_h3_rastertogridmax", col("raster"), lit(2)),
+              call_function("gbx_rst_h3_rastertogridmin", col("raster"), lit(2)),
+              call_function("gbx_rst_h3_rastertogridmedian", col("raster"), lit(2))
             ).foreach(f => base.select(f).collect())
             base.unpersist()
         }

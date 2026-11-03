@@ -79,7 +79,7 @@ The raster-to-grid surface has two output shapes:
 | | `rst_<grid>_tessellate(...)` | `rst_<grid>_rastertogrid*` |
 |---|---|---|
 | **Output per cell** | Raster **chip** (clipped tile struct) | Scalar **measure** (avg / count / max / min / median) |
-| **Return type** | One row per cell via UDTF | `ARRAY<ARRAY<STRUCT(cellid, measure)>>` per band |
+| **Return type** | One row per cell via UDTF | One row per band and cell via UDTF: `band`, `cellID`, `measure` |
 | **coverage** param | shared | shared |
 | **assignment** param | shared | shared |
 | **Use for** | Per-cell raster chips for downstream raster ops | Numeric aggregation into the grid |
@@ -93,8 +93,9 @@ FROM rasters,
 LATERAL gbx_rst_h3_tessellate(tile, 7) t;
 
 -- scalar-reducing (same pixel assignment, same coverage default)
-SELECT path, gbx_rst_h3_rastertogridavg(tile, 7) AS h3_avg
-FROM rasters;
+SELECT r.path, t.band, t.cellID, t.measure AS h3_avg
+FROM rasters r,
+LATERAL gbx_rst_h3_rastertogridavg(r.tile, 7) t;
 ```
 
 ---
@@ -114,7 +115,7 @@ FROM rasters;
 
 **Available functions:**
 - `gbx_rst_h3_tessellate(tile, resolution, [assignment], [coverage])` — UDTF, one chip per cell
-- `gbx_rst_h3_rastertogrid{avg,count,max,min,median,sum,stddev,variance}(tile, resolution, [coverage], [assignment])` — scalar aggregation
+- `gbx_rst_h3_rastertogrid{avg,count,max,min,median,sum,stddev,variance}(tile, resolution, [coverage], [assignment])` — UDTF, one row per band and cell
 - `gbx_rst_h3_rasterize_agg` — grouped (`GROUP BY`) aggregator: rasterizes each cell's `value` (or a `1.0` presence mask when omitted) at the cell location into one tile per group (cells→raster inverse direction). See the reference for the full signature.
 - `gbx_h3_cellfill(cellid, value, [k], [method], [power])` — post-aggregation cell-space fill
 
@@ -157,11 +158,11 @@ See the [Helios notebooks](../notebooks/helios) for a worked example of `gbx_rst
 
 **CRS handling:** tiles are reprojected to geographic coordinates internally. Any CRS supported by GDAL is accepted; no pre-transformation required.
 
-**Resolution:** an integer zoom level 0–26 (higher = finer tiles). Quadbin cells align with Web Mercator tile boundaries.
+**Resolution:** an integer zoom level 0–20 (higher = finer tiles). Quadbin cells align with Web Mercator tile boundaries.
 
 **Available functions:**
 - `gbx_rst_quadbin_tessellate(tile, resolution, [assignment], [coverage])` — UDTF, one chip per cell
-- `gbx_rst_quadbin_rastertogrid{avg,count,max,min,median,sum,stddev,variance}(tile, resolution, [coverage], [assignment])` — scalar aggregation
+- `gbx_rst_quadbin_rastertogrid{avg,count,max,min,median,sum,stddev,variance}(tile, resolution, [coverage], [assignment])` — UDTF, one row per band and cell
 - `gbx_rst_quadbin_rasterize_agg` — grouped (`GROUP BY`) aggregator: rasterizes each cell's `value` (or a `1.0` presence mask when omitted) at the cell location into one tile per group (cells→raster inverse direction). See the reference for the full signature.
 - `gbx_quadbin_cellfill(cellid, value, [k], [method], [power])` — post-aggregation cell-space fill
 
@@ -176,7 +177,7 @@ See the [Helios notebooks](../notebooks/helios) for a worked example of `gbx_rst
 
 **Available functions:**
 - `gbx_rst_bng_tessellate(tile, resolution, [assignment], [coverage])` — UDTF, one chip per cell
-- `gbx_rst_bng_rastertogrid{avg,count,max,min,median,sum,stddev,variance}(tile, resolution, [coverage], [assignment])` — scalar aggregation
+- `gbx_rst_bng_rastertogrid{avg,count,max,min,median,sum,stddev,variance}(tile, resolution, [coverage], [assignment])` — UDTF, one row per band and cell
 - `gbx_rst_bng_rasterize_agg` — grouped (`GROUP BY`) aggregator: rasterizes each cell's `value` (or a `1.0` presence mask when omitted) at the cell location into one tile per group (cells→raster inverse direction). See the reference for the full signature.
 - `gbx_bng_cellfill(cellid, value, [k], [method], [power])` — post-aggregation cell-space fill
 
@@ -191,7 +192,7 @@ See the [Helios notebooks](../notebooks/helios) for a worked example of `gbx_rst
 
 **Available functions:**
 - `gbx_rst_custom_tessellate(tile, grid, resolution, [assignment], [coverage])` — UDTF, one chip per cell
-- `gbx_rst_custom_rastertogrid{avg,count,max,min,median,sum,stddev,variance}(tile, grid, resolution, [coverage], [assignment])` — scalar aggregation
+- `gbx_rst_custom_rastertogrid{avg,count,max,min,median,sum,stddev,variance}(tile, grid, resolution, [coverage], [assignment])` — UDTF, one row per band and cell
 - `gbx_rst_custom_rasterize_agg` — grouped (`GROUP BY`) aggregator: rasterizes each cell's `value` (or a `1.0` presence mask when omitted) at the cell location into one tile per group (cells→raster inverse direction). See the reference for the full signature.
 - `gbx_custom_cellfill(cellid, value, grid, [k], [method], [power])` — post-aggregation cell-space fill
 

@@ -946,15 +946,9 @@ def london_rasters_view(spark):
     spark.catalog.dropTempView("london_rasters")
 
 
-# The rastertogrid SQL examples invoke DIFFERENTLY per tier, so each example
-# carries TWO labeled variations (see the tier-divergence doc convention):
-#   Heavyweight (scalar ARRAY): SELECT gbx_rst_<grid>_rastertogrid<agg>(tile, res) AS grid FROM v
-#   Lightweight (pyrx UDTF):    SELECT t.* FROM v, LATERAL gbx_rst_<grid>_rastertogrid<agg>(tile, res) t
-# The heavy scalar form comes FIRST so heavy-only DESCRIBE FUNCTION extraction
-# (first_statement_containing) picks it up; the light LATERAL form comes second.
-# This module registers the heavy tier, so here we validate the STRING shape of
-# BOTH variations; the executable round-trips live in the tier-specific modules
-# (test_rasterx_gridagg_python_light.py runs the LATERAL form under pyrx).
+# The rastertogrid functions are table functions at every level, so their SQL examples show the LATERAL form
+# only (marked lightweight, the implementation that serves them). The executable round-trips live in
+# test_rasterx_gridagg_python_light.py.
 _RASTERTOGRID_SQL_EXAMPLES = [
     (f"rst_{grid}_rastertogrid{agg}_sql_example", f"gbx_rst_{grid}_rastertogrid{agg}")
     for grid in ("h3", "quadbin", "bng")
@@ -964,22 +958,15 @@ _RASTERTOGRID_SQL_EXAMPLES = [
 
 @pytest.mark.parametrize("example_attr,sql_fn", _RASTERTOGRID_SQL_EXAMPLES)
 def test_rastertogrid_sql_example_shape(example_attr, sql_fn):
-    """Each rastertogrid SQL example shows each tier's form, marked, heavy first.
-
-    The heavyweight function returns an ARRAY (one element per band) of
-    ARRAY<STRUCT<cellID, measure>>, flattened with posexplode + inline; the
-    lightweight table function is called with FROM ..., LATERAL and yields the
-    same [band, cellID, measure] rows.
-    """
+    """Each rastertogrid SQL example is the table-function call: FROM ..., LATERAL, plain and with an explicit
+    coverage and assignment, with the output constant beside it."""
     sql = getattr(rasterx_functions_sql, example_attr)()
     assert isinstance(sql, str) and sql.strip(), f"{example_attr} must be non-empty"
     tiers = [t for t, _ in rasterx_functions_sql._sql_statements(sql)]
-    assert tiers == ["heavyweight", "lightweight", "heavyweight"], tiers
-    heavy = rasterx_functions_sql._sql_variant(sql, lateral=False)
-    light = rasterx_functions_sql._sql_variant(sql, lateral=True)
-    assert f"posexplode({sql_fn}(tile" in heavy and "inline(cells)" in heavy
-    assert f", LATERAL {sql_fn}(tile" not in heavy, "heavy must not use the table-function form"
-    assert f", LATERAL {sql_fn}(tile" in light and "LATERAL VIEW" not in light
+    assert tiers == ["lightweight", "lightweight"], tiers
+    for stmt in (b for _, b in rasterx_functions_sql._sql_statements(sql)):
+        assert f", LATERAL {sql_fn}(tile" in stmt and "LATERAL VIEW" not in stmt
+    assert "'complete', 'covering'" in sql
     assert hasattr(
         rasterx_functions_sql, f"{example_attr}_output"
     ), f"{example_attr}_output constant missing"
@@ -1225,7 +1212,13 @@ def _tier_marked_examples():
 
 _TIER_MARKED = _tier_marked_examples()
 # Heavy statements cheap enough to execute on the doc views (the others are planned only).
-_EXECUTE = {"rst_xyzpyramid_sql_example"} | {f"{a}" for a, _ in _RASTERTOGRID_SQL_EXAMPLES}
+_EXECUTE = {"rst_xyzpyramid_sql_example"}
+# An example with no heavyweight statement (a function the JVM level does not serve) has nothing to plan here.
+_HEAVY_MARKED = [
+    (n, q)
+    for n, q in _TIER_MARKED
+    if any(t == "heavyweight" for t, _ in rasterx_functions_sql._sql_statements(q))
+]
 
 
 def test_every_generator_example_marks_its_tiers():
@@ -1239,7 +1232,7 @@ def test_every_generator_example_marks_its_tiers():
     assert len(names) >= 42
 
 
-@pytest.mark.parametrize("name,sql", _TIER_MARKED, ids=[n for n, _ in _TIER_MARKED])
+@pytest.mark.parametrize("name,sql", _HEAVY_MARKED, ids=[n for n, _ in _HEAVY_MARKED])
 def test_heavyweight_statements_run_the_heavyweight_implementation(
     spark, rasters_view, multiband_rasters_view, name, sql
 ):

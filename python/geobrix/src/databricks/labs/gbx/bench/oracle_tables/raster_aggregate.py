@@ -27,6 +27,7 @@ from databricks.labs.gbx.bench.oracles import (
     CANVAS,
     MVP_A,
     NAN,
+    OMITTED,
     UPSTREAM_ERROR,
     Build,
     Case,
@@ -197,6 +198,12 @@ def _rz_overlap_rev(tmpdir):
     return _rz_overlap(tmpdir)[::-1]
 
 
+@builder("rz_nan_feature")
+def _rz_nan_feature(tmpdir):
+    # a NaN-valued feature over x 1..4: its WKB sorts after every other, so a burned NaN would be the last write
+    return [*_rz_overlap(tmpdir), _feature(1, 4, NAN)]
+
+
 @builder("rz_none")
 def _rz_none(tmpdir):
     return [(None, 1.0)]
@@ -217,6 +224,15 @@ RASTER_AGGREGATE += (
         "rz_agg_overlap_rev",
         RZ,
         (Build("rz_overlap_rev"), *RZ_CANVAS),
+        "ref",
+        "agg_rasterize",
+        ONLY,
+    ),
+    # a NaN value is a missing one, like a NULL: the feature is skipped at every level
+    Case(
+        "rz_agg_nan_skipped",
+        RZ,
+        (Build("rz_nan_feature"), *RZ_CANVAS),
         "ref",
         "agg_rasterize",
         ONLY,
@@ -406,7 +422,13 @@ _CELLS = {
         8,
         (4326, None, -122.43, 37.76, -122.405, 37.785, 10, 10, "centroids", 0),
     ),
-    "qb": (QBA, QBT, 10, (4326, None, -0.6, 51.2, 0.4, 51.8, 10, 6, "centroids", 0)),
+    # the canvas covers QB_C and the three ring cells (San Francisco), square 0.08875-degree pixels, 4 x 3 to a cell
+    "qb": (
+        QBA,
+        QBT,
+        10,
+        (4326, None, -123.05, 37.7186, -122.34, 38.2511, 8, 6, "centroids", 0),
+    ),
     "cg": (
         CGA,
         CGT,
@@ -437,6 +459,8 @@ def _members(prefix, kind):
             (cells[1], NAN),
         ],
         "null_id": [(cells[0], 1.0), (None, 2.0)],
+        # no value given: every covered cell is present, 1.0
+        "presence": [(cells[0], OMITTED), (cells[1], OMITTED), (cells[0], OMITTED)],
         # a custom-grid id of resolution 0 is small; resolution 1 puts the resolution in bit 56, past 2**53
         "big_null": [
             (cg_id(1061, 361, 1) if prefix == "cg" else cells[0], 1.0),
@@ -463,7 +487,7 @@ def _pixels(prefix, kind):
         for c, v in _members(prefix, kind):
             if c is None:
                 continue
-            v = None if v is None or v != v else v
+            v = 1.0 if v is OMITTED else (None if v is None or v != v else v)
             cur = best.get(c, "unset")
             if cur == "unset" or (v is not None and (cur is None or v > cur)):
                 best[c] = v
@@ -481,7 +505,11 @@ def _pixels(prefix, kind):
             NAN if (k in best and best[k] is None) else best.get(k, -9999.0)
             for k in keys
         ]
-        return np.array(vals, dtype="float64").reshape(h, w).tolist()
+        pixels = np.array(vals, dtype="float64").reshape(h, w)
+        assert (
+            pixels != -9999.0
+        ).any(), f"{prefix}: the canvas holds no cell of the group"
+        return pixels.tolist()
 
     return expect
 
@@ -493,6 +521,7 @@ def _cells_cases(prefix):
     for kind in ("dup_max", "nan_beside", "null_id", "big_null", "empty"):
         builder(f"{name}_{kind}")(lambda tmpdir, p=prefix, k=kind: _group(p, k))
         builder(f"{tname}_{kind}")(lambda tmpdir, p=prefix, k=kind: list(_group(p, k)))
+    builder(f"{name}_presence")(lambda tmpdir, p=prefix: _group(p, "presence"))
     grid_arg = (dict(CUSTOM_GRID),) if prefix == "cg" else ()
     rows = []
     for kind in ("dup_max", "nan_beside"):
@@ -557,7 +586,7 @@ def _cells_cases(prefix):
 for _p in _CELLS:
     RASTER_AGGREGATE += _cells_cases(_p)
 
-# out_crs: the output CRS asked for by its name, also when out_srid is NULL
+# out_crs: the output CRS asked for by its name, also when out_srid is NULL (the trailing 13th argument of H3 and quadbin)
 RASTER_AGGREGATE += (
     Case(
         "h3r_out_crs",
@@ -565,6 +594,46 @@ RASTER_AGGREGATE += (
         (Build("h3r_dup_max"), None, *_CELLS["h3"][3][1:], "EPSG:4326"),
         "pixels",
         _pixels("h3", "dup_max"),
+        ONLY,
+    ),
+    Case(
+        "qbr_out_crs",
+        QBA,
+        (Build("qbr_dup_max"), None, *_CELLS["qb"][3][1:], "EPSG:4326"),
+        "pixels",
+        _pixels("qb", "dup_max"),
+        ONLY,
+    ),
+    # No value given (an untyped NULL: SQL `NULL`, Python `None`) is the presence mask: every covered cell burns 1.0,
+    # where a NULL in a typed column burns NaN (h3r_dup_max).
+    Case(
+        "h3r_value_omitted",
+        H3A,
+        (Build("h3r_presence"), *_CELLS["h3"][3]),
+        "pixels",
+        _pixels("h3", "presence"),
+        ONLY,
+    ),
+    # A NULL out_srid is the custom grid's CRS; a grid without one has no CRS to fall back to.
+    Case(
+        "cgr_out_srid_from_grid",
+        CGA,
+        (Build("cgr_dup_max"), dict(CUSTOM_GRID), None, *_CELLS["cg"][3][1:]),
+        "pixels",
+        _pixels("cg", "dup_max"),
+        ONLY,
+    ),
+    Case(
+        "cgr_grid_no_crs",
+        CGA,
+        (
+            Build("cgr_dup_max"),
+            {**CUSTOM_GRID, "srid": -1},
+            None,
+            *_CELLS["cg"][3][1:],
+        ),
+        "raises",
+        "supply out_srid",
         ONLY,
     ),
 )

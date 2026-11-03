@@ -1081,7 +1081,7 @@
       "since": "0.4.0"
     },
     "gbx_rst_quadbin_rasterize": {
-      "examples": "Examples:\n      > SELECT gbx_rst_quadbin_rasterize(c0, 4326, CAST(NULL AS DOUBLE), -0.6D, 51.2D, 0.4D, 51.8D, 10, 6, 'centroids', 0) AS out FROM gbx_example;",
+      "examples": "Examples:\n      > SELECT gbx_rst_quadbin_rasterize(c0, 4326, CAST(NULL AS DOUBLE), -123.05D, 37.7186D, -122.34D, 38.2511D, 8, 6, 'centroids', 0) AS out FROM gbx_example;",
       "usage_args": "cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs]",
       "description": "Rasterize an array of quadbin cells into one tile (pixel-centroid burn).",
       "surfaces": [

@@ -822,12 +822,12 @@ EXAMPLES = {
     "gbx_rst_quadbin_rasterize": (
         "RASTER_AGGREGATE",
         "qbrt_dup_max",
-        "SELECT gbx_rst_quadbin_rasterize(c0, 4326, CAST(NULL AS DOUBLE), -0.6D, 51.2D, 0.4D, 51.8D, 10, 6, 'centroids', 0) AS out FROM gbx_example",
+        "SELECT gbx_rst_quadbin_rasterize(c0, 4326, CAST(NULL AS DOUBLE), -123.05D, 37.7186D, -122.34D, 38.2511D, 8, 6, 'centroids', 0) AS out FROM gbx_example",
     ),
     "gbx_rst_quadbin_rasterize_agg": (
         "RASTER_AGGREGATE",
         "qbr_dup_max",
-        "SELECT gbx_rst_quadbin_rasterize_agg(c0, c1, 4326, CAST(NULL AS DOUBLE), -0.6D, 51.2D, 0.4D, 51.8D, 10, 6, 'centroids', 0) AS out FROM gbx_example",
+        "SELECT gbx_rst_quadbin_rasterize_agg(c0, c1, 4326, CAST(NULL AS DOUBLE), -123.05D, 37.7186D, -122.34D, 38.2511D, 8, 6, 'centroids', 0) AS out FROM gbx_example",
     ),
     "gbx_rst_quadbin_rastertogridavg": (
         "RASTER_TO_GRID",

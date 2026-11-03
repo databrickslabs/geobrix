@@ -116,7 +116,9 @@ PACKAGE_OF_PREFIX = {
     "pmtiles": "pmtiles",
 }
 # How the Python API reads a bare str for a parameter: a column name, or a literal (a CRS, a unit, a mode).
-PY_MODES = frozenset({"col", "lit"})
+# `col_null` reads a str as a column too, and sends None as an UNTYPED NULL: where a typed NULL and an untyped one mean
+# different things (the cell rasterizers' `value`: a typed NULL burns NaN, an untyped one is the presence mask).
+PY_MODES = frozenset({"col", "lit", "col_null"})
 # Python-only keyword groups a generated entry may carry (per-surface signatures may differ).
 # `materialize` alone is the constructor's keyword: the Python entry always runs the row's `extra_impl` with the value
 # (unset or `False` is a virtual tile of the file; `True` reads the pixels now, as the SQL name does).

@@ -46,3 +46,7 @@ def register(spark: SparkSession = None) -> None:
     spark.read.format("register_ds").option(
         "functions", "vectorx.jts.legacy"
     ).load().collect()
+    # the manager's choice for the legacy decode stays (the JAR's registration must not replace it)
+    from databricks.labs.gbx import manager
+
+    manager.reapply_manager_choice(spark, "gbx_st_legacy")

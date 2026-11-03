@@ -130,29 +130,27 @@ def register(
     return out
 
 
-def no_l1_names(prefix: str = "gbx_") -> List[str]:
-    """The SQL names starting with ``prefix`` whose manifest row has no Catalyst level (L1).
-
-    The JAR still registers a scalar under some of these names (the raster-to-grid reducers, clip, retile,
-    ...); the manifest says the session serves them from a light table function or UDF.
-    """
+def manifest_names(prefix: str = "gbx_") -> List[str]:
+    """Every SQL name starting with ``prefix`` that the manager serves (the manifest rows that are not probes)."""
     return sorted(
         n
         for n, f in manifest.load().functions.items()
-        if n.startswith(prefix) and "L1" not in f.levels and f.status != "mvp"
+        if n.startswith(prefix) and f.status != "mvp"
     )
 
 
-def reapply_no_l1(spark, prefix: str = "gbx_") -> Dict[str, Choice]:
-    """Register the manifest's choice again for every ``prefix`` name that has no L1.
+def reapply_manager_choice(spark, prefix: str = "gbx_") -> Dict[str, Choice]:
+    """Register the manager's own choice again for every manifest name that starts with ``prefix``.
 
     The package ``register(spark)`` calls of the old heavy path load every Scala expression under its
-    ``gbx_*`` name, and the last registration wins; a JAR scalar would then replace the table function the
-    manifest names (``FROM t, LATERAL gbx_rst_h3_rastertogridavg(...)`` fails over a scalar). Called right
-    after that JVM registration, this puts the manifest's function back, and marks the names registered so
-    the Python API's first-use check stays true.
+    ``gbx_*`` name, and the last registration wins. For a row the manager serves another way, that JAR
+    registration is wrong: a row with no L1 (a JAR scalar replaces the light table function that
+    ``FROM t, LATERAL gbx_rst_h3_rastertogridavg(...)`` needs), a row whose Catalyst block does not return the session
+    type (a tile-struct aggregate where the contract is BINARY), a row the table prefers light for. Called right
+    after the JVM registration, this puts the manager's choice back for the whole prefix, at the level it selects
+    here, and marks the names registered so the Python API's first-use check stays true.
     """
-    names = no_l1_names(prefix)
+    names = manifest_names(prefix)
     return register(spark, only=names) if names else {}
 
 

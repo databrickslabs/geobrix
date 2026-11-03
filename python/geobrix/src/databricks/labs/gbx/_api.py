@@ -63,6 +63,10 @@ def _arg(value: Any, param):
     if isinstance(value, Column):
         return value
     if value is None:
+        if (
+            param.py == "col_null"
+        ):  # the untyped NULL is the meaning (a presence mask), not a typed missing value
+            return F.lit(None)
         return F.lit(None).cast(sql_type(param.session[0]))
     if isinstance(value, str):
         return F.lit(value) if param.py == "lit" else F.col(value)
@@ -157,6 +161,8 @@ def _sql_literal(value: Any, param) -> str:
     from databricks.labs.gbx.manifest import sql_type
 
     if value is None:
+        if param.py == "col_null":
+            return "NULL"
         return f"CAST(NULL AS {sql_type(param.session[0])})"
     if isinstance(value, bool):
         return "TRUE" if value else "FALSE"
@@ -205,7 +211,7 @@ def table(df, sql_name: str, *values):
         if v is None and i >= fn.min_args:
             # an optional left out before one that is set takes its SQL default, never a shifted value
             args.append(f"CAST({p.default} AS {sql_type(p.session[0])})")
-        elif isinstance(v, str) and p.py == "col":
+        elif isinstance(v, str) and p.py != "lit":
             args.append("gbx_in.`" + v.replace("`", "``") + "`")
         else:
             args.append(_sql_literal(v, p))

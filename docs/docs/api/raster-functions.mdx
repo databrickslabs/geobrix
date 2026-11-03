@@ -1153,7 +1153,7 @@ Combine or merge rasters in group-by (7 total).
 | Parameter | SQL type | Default | Description |
 |---|---|---|---|
 | `cellid` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
-| `value` | `DOUBLE` |  | The value burned for the cell. A repeated cell burns its largest value; a NULL value in a typed column never wins against a number, and a cell of nothing but NULL burns NaN. An untyped NULL (the argument left out) is the presence mask and burns 1.0. |
+| `value` | `DOUBLE` |  | The value burned for the cell. A repeated cell burns its largest value; a NULL value in a typed column never wins against a number, and a cell of nothing but NULL burns NaN. An untyped NULL (the argument left out, or `None` in Python) is the presence mask and burns 1.0. |
 | `out_srid` | `INT` |  | Not read: the output is always EPSG:27700. |
 | `pixel_size` | `DOUBLE` |  | The pixel size in metres. |
 | `xmin` | `DOUBLE` |  | The west edge of the canvas in EPSG:27700 metres. |
@@ -1340,7 +1340,7 @@ _Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif`. All tabs use the 
 | `height_px` | `INT` |  | The output height in pixels. |
 | `out_srid` | `INT` | `NULL` | The EPSG or ESRI code of the output CRS. NULL leaves the output without a CRS. |
 | `no_data` | `DOUBLE` | `-9999.0` | The NoData value. |
-| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over `out_srid`. |
+| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over `out_srid`; setting both raises. |
 {/* END GENERATED gbx_rst_dtmfromgeoms_agg */}
 
 <Impl groupedAgg/>
@@ -1440,7 +1440,7 @@ _Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif` with `band_index` 
 | `out_srid` | `INT` | `NULL` | The EPSG or ESRI code of the output CRS. NULL leaves the output without a CRS. |
 | `power` | `DOUBLE` | `2.0` | The inverse-distance exponent, above 0. |
 | `max_pts` | `INT` | `12` | The number of nearest points used per pixel, above 0. |
-| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over `out_srid`. |
+| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over `out_srid`; setting both raises. |
 {/* END GENERATED gbx_rst_gridfrompoints_agg */}
 
 <Impl groupedAgg/>
@@ -1477,7 +1477,7 @@ _Multi-row fixture: 4 WKB POINT rows with observations 10–40 over a `[0,0,1,1]
 | Parameter | SQL type | Default | Description |
 |---|---|---|---|
 | `cellid` | `BIGINT` |  | The H3 cell id. |
-| `value` | `DOUBLE` |  | The value burned for the cell. A repeated cell burns its largest value; a NULL value in a typed column never wins against a number, and a cell of nothing but NULL burns NaN. An untyped NULL (the argument left out) is the presence mask and burns 1.0. |
+| `value` | `DOUBLE` |  | The value burned for the cell. A repeated cell burns its largest value; a NULL value in a typed column never wins against a number, and a cell of nothing but NULL burns NaN. An untyped NULL (the argument left out, or `None` in Python) is the presence mask and burns 1.0. |
 | `out_srid` | `INT` |  | The EPSG code of the output CRS. |
 | `pixel_size` | `DOUBLE` |  | The pixel size in CRS units; NULL takes it from the cells' resolution. |
 | `xmin` | `DOUBLE` |  | The west edge of the canvas; NULL derives the canvas from the cells. |
@@ -1611,7 +1611,7 @@ _Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif`. All tabs use the 
 | Parameter | SQL type | Default | Description |
 |---|---|---|---|
 | `cellid` | `BIGINT` |  | The quadbin cell id. |
-| `value` | `DOUBLE` |  | The value burned for the cell. A repeated cell burns its largest value; a NULL value in a typed column never wins against a number, and a cell of nothing but NULL burns NaN. An untyped NULL (the argument left out) is the presence mask and burns 1.0. |
+| `value` | `DOUBLE` |  | The value burned for the cell. A repeated cell burns its largest value; a NULL value in a typed column never wins against a number, and a cell of nothing but NULL burns NaN. An untyped NULL (the argument left out, or `None` in Python) is the presence mask and burns 1.0. |
 | `out_srid` | `INT` |  | The EPSG code of the output CRS. |
 | `pixel_size` | `DOUBLE` |  | The pixel size in CRS units; NULL takes it from the cells' resolution. |
 | `xmin` | `DOUBLE` |  | The west edge of the canvas; NULL derives the canvas from the cells. |
@@ -1699,7 +1699,7 @@ Rasterize an array of quadbin cells into one tile, the scalar twin of [`rst_quad
 | Parameter | SQL type | Default | Description |
 |---|---|---|---|
 | `cellid` | `BIGINT` |  | The custom-grid cell id. |
-| `value` | `DOUBLE` |  | The value burned for the cell. A repeated cell burns its largest value; a NULL value in a typed column never wins against a number, and a cell of nothing but NULL burns NaN. An untyped NULL (the argument left out) is the presence mask and burns 1.0. |
+| `value` | `DOUBLE` |  | The value burned for the cell. A repeated cell burns its largest value; a NULL value in a typed column never wins against a number, and a cell of nothing but NULL burns NaN. An untyped NULL (the argument left out, or `None` in Python) is the presence mask and burns 1.0. |
 | `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, from `gbx_custom_grid`. The same for every row of the group. |
 | `out_srid` | `INT` |  | The EPSG code of the output CRS. |
 | `pixel_size` | `DOUBLE` |  | The pixel size in CRS units; NULL takes it from the cells' resolution. |

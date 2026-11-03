@@ -2524,16 +2524,22 @@ def test_an_arrow_l3_row_registers_an_arrow_udtf_and_another_row_does_not(
     assert "arrow" in manifest.LEVEL_KEYS["L3"]
 
 
-def test_the_heavy_register_puts_back_every_name_without_an_l1(monkeypatch):
+def test_the_heavy_register_puts_back_the_managers_choice_for_every_name(monkeypatch):
     """The JAR registers a scalar under each Scala name, and the last registration wins: right after it the old
-    `register(spark)` calls must re-apply the manager for every manifest row with no L1 (the raster-to-grid
-    table functions, clip, retile, ...), or `LATERAL gbx_rst_h3_rastertogridavg(...)` meets a JAR scalar.
+    `register(spark)` calls must re-apply the manager for EVERY manifest row under their prefix: the rows with no L1
+    (the raster-to-grid table functions, clip, retile, ...), the rows whose Catalyst block is not selectable (a tile
+    struct where the contract is BINARY), and the rows the table prefers light for.
     No JAR here: the JVM call is a fake session; the manager call is recorded."""
     from pyspark.sql import SparkSession
 
     from databricks.labs.gbx import manager
+    from databricks.labs.gbx.gridx.bng import functions as bngx
+    from databricks.labs.gbx.gridx.custom import functions as cgx
     from databricks.labs.gbx.gridx.h3 import functions as h3x
+    from databricks.labs.gbx.gridx.quadbin import functions as qbx
+    from databricks.labs.gbx.pmtiles import functions as pmx
     from databricks.labs.gbx.vectorx import functions as vx
+    from databricks.labs.gbx.vectorx.jts.legacy import functions as legacy
 
     class _Chain:
         def __getattr__(self, _name):
@@ -2555,26 +2561,42 @@ def test_the_heavy_register_puts_back_every_name_without_an_l1(monkeypatch):
     monkeypatch.setattr(
         manager, "register", lambda spark, **kw: calls.append(kw["only"]) or {}
     )
-    rx.register(None)
-    h3x.register(None)
-    vx.register(None)
-    rst, h3, st = calls
-    assert len(calls) == 3
-    expect = {n for n, f in MAN.functions.items() if "L1" not in f.levels}
-    for names, prefix in ((rst, "gbx_rst_"), (h3, "gbx_h3_"), (st, "gbx_st_")):
+    registers = (
+        (rx, "gbx_rst_"),
+        (h3x, "gbx_h3_"),
+        (vx, "gbx_st_"),
+        (bngx, "gbx_bng_"),
+        (qbx, "gbx_quadbin_"),
+        (cgx, "gbx_custom_"),
+        (pmx, "gbx_pmtiles_"),
+        (legacy, "gbx_st_legacy"),
+    )
+    for module, _prefix in registers:
+        module.register(None)
+    assert len(calls) == len(registers)
+    live = {n for n, f in MAN.functions.items() if f.status != "mvp"}
+    for names, (_module, prefix) in zip(calls, registers):
         assert names and all(n.startswith(prefix) for n in names)
-        assert set(names) == {n for n in expect if n.startswith(prefix)} - {
-            n for n, f in MAN.functions.items() if f.status == "mvp"
-        }
-    assert len([n for n in rst if "rastertogrid" in n]) == 32
-    assert not any("L1" in MAN.functions[n].levels for n in rst + h3 + st)
+        assert set(names) == {n for n in live if n.startswith(prefix)}, prefix
+    by_prefix = dict(zip((p for _m, p in registers), calls))
+    assert len([n for n in by_prefix["gbx_rst_"] if "rastertogrid" in n]) == 32
+    # not only the rows without an L1: a row with a Catalyst block the manager does not select, and one with L1
+    rst = set(by_prefix["gbx_rst_"])
+    assert (
+        "gbx_rst_combineavg_agg" in rst
+        and "L1" in MAN.functions["gbx_rst_combineavg_agg"].levels
+    )
+    assert "gbx_rst_width" in rst and "L1" in MAN.functions["gbx_rst_width"].levels
+    assert any("L1" not in MAN.functions[n].levels for n in rst)
 
 
 @pytest.mark.integration
-def test_the_heavy_register_leaves_a_no_l1_name_a_table_function(jvm_spark):
-    """With the JAR loaded, `rasterx.register(spark)` registers the JVM scalar under each Scala name; the manifest
-    row has no L1, so `LATERAL` must still resolve to the light table function, and the Python API's per-session
-    cache must still agree with the session."""
+def test_the_heavy_register_leaves_the_managers_choice_in_place(jvm_spark):
+    """With the JAR loaded, `rasterx.register(spark)` registers the JVM scalar under each Scala name; the manager's
+    choice must still be what the session runs: a no-L1 name is the light table function (`LATERAL` resolves), a
+    tile-struct aggregate returns BINARY (its Catalyst block is not selectable), and a tile op the table prefers light
+    for is the light UDF. The Python API's per-session cache must still agree with the session.
+    """
     from databricks.labs.gbx import _api
 
     tile = (
@@ -2590,3 +2612,17 @@ def test_the_heavy_register_leaves_a_no_l1_name_a_table_function(jvm_spark):
     assert "gbx_rst_h3_rastertogridavg" in _api._done(jvm_spark)
     df = jvm_spark.sql(f"SELECT {tile} AS tile")
     assert rx.rst_h3_rastertogridavg(df, "tile", 5).collect() == []
+    # a row with an L1 block that returns the tile struct: the session contract is BINARY
+    kind = jvm_spark.sql(
+        f"SELECT typeof(gbx_rst_combineavg_agg(t)) AS k FROM (SELECT {tile} AS t)"
+    ).collect()[0]["k"]
+    assert kind == "binary"
+    # a tile op the table prefers light for runs as a Python UDF, not the JVM scalar
+    full = f"CAST(NULL AS {manifest.TILE_SQL})"
+    plan = (
+        jvm_spark.sql(f"SELECT gbx_rst_width(t) AS w FROM (SELECT {full} AS t)")
+        ._jdf.queryExecution()
+        .executedPlan()
+        .treeString()
+    )
+    assert "EvalPython" in plan, plan

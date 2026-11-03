@@ -904,6 +904,9 @@ CANVAS = (27700, None, 530000.0, 180000.0, 533000.0, 182000.0, 3, 2, "centroids"
 # stays so a shape that burned it differently could say so (`run_groups`); every shape uses NaN now.
 NULL_BURN = "<the burn of a NULL value>"
 NAN = float("nan")
+# A member column of a group whose every value is OMITTED is an argument left out of the call: the SQL `NULL` (untyped)
+# and Python's `None`, where a NULL in the column is a typed NULL (the cell rasterizers: presence mask versus NaN).
+OMITTED = "<the argument left out>"
 MVP_A: Tuple[Case, ...] = (
     Case(
         "ma_quad",
@@ -2967,7 +2970,9 @@ def _ref_agg_rasterize(args):
     from databricks.labs.gbx.bench import oracle_refs
 
     rows = sorted(
-        (bytes(g), float(v)) for g, v in args[0] if g is not None and v is not None
+        (bytes(g), float(v))
+        for g, v in args[0]
+        if g is not None and v is not None and v == v  # a NULL or NaN value is skipped
     )
     xmin, ymin, xmax, ymax, w, h = args[1:7]
     out, mask = np.full((h, w), -9999.0), np.ones((h, w), bool)
@@ -3571,6 +3576,11 @@ def _check_pixels(case: Case, out) -> Optional[str]:
         return case.args[i] if i < len(case.args) else None
 
     srid, out_crs = const("out_srid", "srid"), const("out_crs")
+    if (
+        srid is None
+    ):  # a NULL out_srid: the custom grid's CRS, else the lon/lat default of the cell rasterizers
+        grid = const("grid")
+        srid = grid["srid"] if isinstance(grid, dict) else 4326
     xmin, ymin, xmax, ymax = (const(n) for n in ("xmin", "ymin", "xmax", "ymax"))
     width, height = const("width", "width_px"), const("height", "height_px")
     want_transform = Affine(
@@ -4578,7 +4588,9 @@ def run_groups(
             rows = [("a", t, *consts) for t in group]
             first = [f"c0 {_member_types(man.functions[case.fn], group, 1)[0]}"]
         else:
-            rows = [("a", *m, *consts) for m in group]
+            rows = [
+                ("a", *(None if v is OMITTED else v for v in m), *consts) for m in group
+            ]
             first = [
                 f"c{i} {t}"
                 for i, t in enumerate(
@@ -4586,6 +4598,11 @@ def run_groups(
                 )
             ]
         n0 = len(first)
+        omitted = {  # a member column left out of the call
+            i
+            for i in range(n0)
+            if n_cols > 1 and group and all(m[i] is OMITTED for m in group)
+        }
         schema = ", ".join(
             ["key string"]
             + first
@@ -4594,7 +4611,7 @@ def run_groups(
                 for i, v in enumerate(consts)
             ]
         )
-        members = ", ".join(f"c{i}" for i in range(n0))
+        members = ", ".join("NULL" if i in omitted else f"c{i}" for i in range(n0))
         literals = [
             _typed_literal(v, params[i + n0], case) for i, v in enumerate(consts)
         ]
@@ -4618,7 +4635,7 @@ def run_groups(
                 from pyspark.sql import functions as F
 
                 call = column_of(case.fn)(
-                    *[F.col(f"c{i}") for i in range(n0)],
+                    *[None if i in omitted else F.col(f"c{i}") for i in range(n0)],
                     *[F.expr(lit) for lit in literals],
                 )
                 df = src.groupBy("key").agg(call.alias("out"))

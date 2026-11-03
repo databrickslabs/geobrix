@@ -48,6 +48,9 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_quadbin_distance": ("L3",),
     "gbx_quadbin_cellunion": ("L3",),
     "gbx_rst_merge_agg": ("L3",),
+    # The cell-fill aggregates are light by family, except H3's: 0.57x on a cluster (inside the 0.8 rule), and its
+    # Catalyst level returns the session's BINARY payload and the deterministic largest value, as light does.
+    "gbx_h3_cellfill": ("L1", "L3"),
     "gbx_rst_bng_rasterize_agg": ("L3",),
     # The rasterize family is L1 first (gridfrompoints is 5x to 16x faster on the JVM on a cluster; binpoints has no
     # timing, so the highest level). Two rows are light: the terrain model is 18x faster on light, and rasterize is

@@ -51,6 +51,10 @@ def register(_spark: SparkSession) -> None:
     """
     _spark = SparkSession.builder.getOrCreate()
     _spark.read.format("register_ds").option("functions", "gridx.bng").load().collect()
+    # the manager's choice for every name stays (the JAR's registration must not replace it)
+    from databricks.labs.gbx import manager
+
+    manager.reapply_manager_choice(_spark, "gbx_bng_")
 
 
 # Aggregators

@@ -63,11 +63,12 @@ def register(_spark: SparkSession) -> None:
     """
     _spark = SparkSession.builder.getOrCreate()
     _spark.read.format("register_ds").option("functions", "rasterx").load().collect()
-    # The JAR registers a scalar under every Scala name, including names the manifest serves from a light table
-    # function or UDF (no L1): put the manifest's choice back, before the fromfile override below.
+    # The JAR registers a scalar under every Scala name, including names the manifest serves another way (a light
+    # table function or UDF, a BINARY aggregate, a light-preferred row): put the manager's choice back for every
+    # name, before the fromfile override below.
     from databricks.labs.gbx import manager
 
-    manager.reapply_no_l1(_spark, "gbx_rst_")
+    manager.reapply_manager_choice(_spark, "gbx_rst_")
 
     # gbx_rst_fromfile reads a file on the executor. On Databricks the JVM (Scala) cannot read a
     # UC Volume (/Volumes/...) FUSE path in the Spark execution context -- the UC credential is held
@@ -546,8 +547,8 @@ def rst_bng_rasterize_agg(
         cellid: The BNG cell id, for example `'TQ3080'`.
         value: The value burned for the cell. A repeated cell burns its largest value; a
             NULL value in a typed column never wins against a number, and a cell of nothing
-            but NULL burns NaN. An untyped NULL (the argument left out) is the presence mask
-            and burns 1.0.
+            but NULL burns NaN. An untyped NULL (the argument left out, or `None` in Python)
+            is the presence mask and burns 1.0.
         out_srid: Not read: the output is always EPSG:27700.
         pixel_size: The pixel size in metres.
         xmin: The west edge of the canvas in EPSG:27700 metres.
@@ -1644,8 +1645,8 @@ def rst_custom_rasterize_agg(
         cellid: The custom-grid cell id.
         value: The value burned for the cell. A repeated cell burns its largest value; a
             NULL value in a typed column never wins against a number, and a cell of nothing
-            but NULL burns NaN. An untyped NULL (the argument left out) is the presence mask
-            and burns 1.0.
+            but NULL burns NaN. An untyped NULL (the argument left out, or `None` in Python)
+            is the presence mask and burns 1.0.
         grid: The grid, from `gbx_custom_grid`. The same for every row of the group.
         out_srid: The EPSG code of the output CRS.
         pixel_size: The pixel size in CRS units; NULL takes it from the cells'
@@ -2247,7 +2248,7 @@ def rst_dtmfromgeoms_agg(
             without a CRS. SQL default: ``NULL``.
         no_data: The NoData value. SQL default: ``-9999.0``.
         out_crs: The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over
-            `out_srid`. SQL default: ``NULL``.
+            `out_srid`; setting both raises. SQL default: ``NULL``.
 
     Returns:
         GeoTIFF bytes, Float64: the points' Z interpolated over an unconstrained
@@ -2716,7 +2717,7 @@ def rst_gridfrompoints_agg(
         max_pts: The number of nearest points used per pixel, above 0. SQL default:
             ``12``.
         out_crs: The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over
-            `out_srid`. SQL default: ``NULL``.
+            `out_srid`; setting both raises. SQL default: ``NULL``.
 
     Returns:
         GeoTIFF bytes, Float64 with NoData -9999 where a pixel has no point; NULL for a
@@ -2820,8 +2821,8 @@ def rst_h3_rasterize_agg(
         cellid: The H3 cell id.
         value: The value burned for the cell. A repeated cell burns its largest value; a
             NULL value in a typed column never wins against a number, and a cell of nothing
-            but NULL burns NaN. An untyped NULL (the argument left out) is the presence mask
-            and burns 1.0.
+            but NULL burns NaN. An untyped NULL (the argument left out, or `None` in Python)
+            is the presence mask and burns 1.0.
         out_srid: The EPSG code of the output CRS.
         pixel_size: The pixel size in CRS units; NULL takes it from the cells'
             resolution.
@@ -4150,8 +4151,8 @@ def rst_quadbin_rasterize_agg(
         cellid: The quadbin cell id.
         value: The value burned for the cell. A repeated cell burns its largest value; a
             NULL value in a typed column never wins against a number, and a cell of nothing
-            but NULL burns NaN. An untyped NULL (the argument left out) is the presence mask
-            and burns 1.0.
+            but NULL burns NaN. An untyped NULL (the argument left out, or `None` in Python)
+            is the presence mask and burns 1.0.
         out_srid: The EPSG code of the output CRS.
         pixel_size: The pixel size in CRS units; NULL takes it from the cells'
             resolution.

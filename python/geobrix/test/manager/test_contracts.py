@@ -1899,10 +1899,11 @@ def test_the_grouped_executor_reads_at_the_sessions_read_cap(spark, tmp_path):
 # --- a member over the read cap is refused with its reason, never dropped ------------------------------------
 # A validity probe asks "can this be opened"; the decode that follows applies the gate. A group of [normal tile,
 # over-cap tile] is the error tile with the refusal, not a result built from the normal tile alone.
-def _over_cap_group(spark, tmp_path, register_it, calls=None, columns=None):
+def _over_cap_group(spark, tmp_path, register_it, calls=None, columns=None, cap="4096"):
     """The one-row answer of a group of [normal tile, over-cap tile] (columns `tile` and `idx`, 1 and 2), under a read cap
-    of 4 KiB: `calls` are SQL select expressions over the view `_gbx_group`, or `columns()` are Column-API aggregate
-    columns over the same DataFrame."""
+    of 4 KiB (`cap`; None: the session's default, so the answer to compare a capped one with): `calls` are SQL select
+    expressions over the view `_gbx_group`, or `columns()` are Column-API aggregate columns over the same DataFrame.
+    """
     from pyspark.sql.types import IntegerType, StructField, StructType
     from rasterio.io import MemoryFile
 
@@ -1924,7 +1925,8 @@ def _over_cap_group(spark, tmp_path, register_it, calls=None, columns=None):
     )
     df = spark.createDataFrame([(small, 1), (large, 2)], schema)
     df.createOrReplaceTempView("_gbx_group")
-    spark.conf.set(READ_CAP_KEY, "4096")
+    if cap is not None:
+        spark.conf.set(READ_CAP_KEY, cap)
     try:
         register_it()
         if columns is not None:
@@ -1939,35 +1941,113 @@ def _refused_tile(tile):
     return tile is not None and tile["raster"] is None and "read cap" in str(md)
 
 
-def test_light_array_merge_and_combine_refuse_an_over_cap_member(spark, tmp_path):
-    names = ["rst_merge", "rst_combineavg", "rst_combinemax"]
-    got = _over_cap_group(
-        spark,
-        tmp_path,
-        _light(spark, names),
-        ", ".join(f"gbx_{n}(collect_list(tile)) AS {n}" for n in names),
+def _error_tile_with(tile, *words):
+    """An error tile (no raster, no path) whose reason has every one of `words`."""
+    md = str(tile["metadata"]) if tile else ""
+    return (
+        tile is not None
+        and tile["raster"] is None
+        and tile["path"] is None
+        and all(w in md for w in words)
     )
-    assert {n: _refused_tile(got[n]) for n in names} == dict.fromkeys(names, True), got
+
+
+def _tile_pixels(tile):
+    """The pixel array of a result tile, by its bytes or (a virtual tile) its path: layouts differ between a streamed and
+    an in-RAM result, the pixels do not."""
+    import rasterio
+    from rasterio.io import MemoryFile
+
+    if tile is None:
+        return None
+    if tile["raster"] is not None:
+        with MemoryFile(bytes(tile["raster"])) as mf, mf.open() as ds:
+            return ds.read()
+    if tile["path"] is not None:
+        with rasterio.open(tile["path"]) as ds:
+            return ds.read()
+    return None
+
+
+def _same_pixels_as_uncapped(got, uncapped):
+    """`got` is a result tile (not an error tile) with the pixels of the same call without the cap."""
+    mine, theirs = _tile_pixels(got), _tile_pixels(uncapped)
+    assert mine is not None and theirs is not None, (got, uncapped)
+    assert mine.shape == theirs.shape and (mine == theirs).all()
+
+
+def test_light_array_merge_and_combine_stream_or_refuse_an_over_cap_member(
+    spark, tmp_path
+):
+    """Under a cap of 4 KiB the group [3 KiB uint8, 12 KiB float32, 64 pixels wide] is folded, not refused: the merge
+    streams (a member copied as it is is never decoded whole) and gives the uncapped pixels; combinemax folds in windows
+    of one row (a row of the stack is 2048 bytes, the half of the budget a window may use) and gives the uncapped
+    pixels; combineavg needs 2560 bytes for a row, so it is the row's error tile with the memory-budget Fix naming
+    `combine_by_key`."""
+    names = ["rst_merge", "rst_combineavg", "rst_combinemax"]
+    calls = ", ".join(f"gbx_{n}(collect_list(tile)) AS {n}" for n in names)
+    got = _over_cap_group(spark, tmp_path, _light(spark, names), calls)
+    uncapped = _over_cap_group(spark, tmp_path, _light(spark, names), calls, cap=None)
+    _same_pixels_as_uncapped(got["rst_merge"], uncapped["rst_merge"])
+    _same_pixels_as_uncapped(got["rst_combinemax"], uncapped["rst_combinemax"])
+    assert _error_tile_with(
+        got["rst_combineavg"], "memory budget", "combine_by_key"
+    ), got["rst_combineavg"]
+    assert uncapped["rst_combineavg"]["raster"] is not None
 
 
 _PYFUNC = "def f(in_ar, out_ar, *a, **kw): out_ar[:] = in_ar[0]"
 
 
-def test_light_aggregates_refuse_an_over_cap_member_not_drop_it(spark, tmp_path):
-    """The bytes aggregates have no place for a reason: the group is NULL, not the normal member's mosaic."""
-    names = [
-        "rst_merge_agg",
-        "rst_combineavg_agg",
-        "rst_frombands_agg",
-        "rst_derivedband_agg",
-    ]
-    calls = (
-        "gbx_rst_merge_agg(tile) AS m, gbx_rst_combineavg_agg(tile) AS c, "
-        "gbx_rst_frombands_agg(tile, idx) AS b, "
-        f"gbx_rst_derivedband_agg(tile, '{_PYFUNC}', 'f') AS d"
+def _aggregate_over_cap(spark, tmp_path, name, call, **kw):
+    return _over_cap_group(
+        spark, tmp_path, _light(spark, [name]), f"{call} AS a", **kw
+    )["a"]
+
+
+def test_light_merge_agg_streams_an_over_cap_member(spark, tmp_path):
+    """The merge aggregate does not decode a member it copies as it is: the group is streamed, and the bytes are the
+    mosaic of the uncapped call (a different layout, the same pixels)."""
+    from rasterio.io import MemoryFile
+
+    def pixels(raw):
+        with MemoryFile(bytes(raw)) as mf, mf.open() as ds:
+            return ds.read()
+
+    got = _aggregate_over_cap(
+        spark, tmp_path, "rst_merge_agg", "gbx_rst_merge_agg(tile)"
     )
-    got = _over_cap_group(spark, tmp_path, _light(spark, names), calls)
-    assert got == {"m": None, "c": None, "b": None, "d": None}
+    uncapped = _aggregate_over_cap(
+        spark, tmp_path, "rst_merge_agg", "gbx_rst_merge_agg(tile)", cap=None
+    )
+    assert got is not None and (pixels(got) == pixels(uncapped)).all()
+
+
+@pytest.mark.parametrize(
+    "name, call, words",
+    [
+        (
+            "rst_combineavg_agg",
+            "gbx_rst_combineavg_agg(tile)",
+            ("memory budget", "combine_by_key"),
+        ),
+        ("rst_frombands_agg", "gbx_rst_frombands_agg(tile, idx)", ("read cap",)),
+        (
+            "rst_derivedband_agg",
+            f"gbx_rst_derivedband_agg(tile, '{_PYFUNC}', 'f')",
+            ("read cap",),
+        ),
+    ],
+)
+def test_light_aggregates_raise_for_what_they_cannot_cover_never_a_null(
+    spark, tmp_path, name, call, words
+):
+    """The bytes aggregates have no place for a reason, and a NULL reads as an empty group: a group they cannot fold
+    (a row of the stack over the budget, a member decoded whole over the read cap) stops the query with the Fix.
+    """
+    with pytest.raises(Exception) as err:
+        _aggregate_over_cap(spark, tmp_path, name, call)
+    assert all(w in str(err.value) for w in words), str(err.value)[:600]
 
 
 def test_light_frombands_refuses_an_over_cap_band(spark, tmp_path):
@@ -2001,41 +2081,69 @@ def _column_api_forms(tmp_path):
             "tile", virtualize_dir=out
         ),
         "derivedband_agg": lambda: prx._light_rst_derivedband_agg("tile", _PYFUNC, "f"),
+        "combineavg_agg": lambda: prx._light_rst_combineavg_agg("tile"),
     }
 
 
-@pytest.mark.parametrize(
-    "form",
-    [
-        "merge-virtualize",
-        "merge-materialize",
-        "combineavg-virtualize",
-        "combinemax",
-        "combinemax-virtualize",
-        "frombands",
-        "frombands-virtualize",
-        "merge_agg",
-        "merge_agg-virtualize",
-        "derivedband_agg",
-    ],
-)
-def test_column_api_forms_refuse_an_over_cap_member_with_an_error_tile(
+# What each form answers under the cap: "folded" (the pixels of the uncapped call), "refused" (the error tile with the
+# read-cap reason of a member decoded whole), or the words of the memory-budget Fix of a stack too wide to fold.
+_COLUMN_API_OUTCOME = {
+    "merge-virtualize": "folded",
+    "merge-materialize": "folded",
+    "combineavg-virtualize": ("memory budget", "combine_by_key"),
+    "combinemax": "folded",
+    "combinemax-virtualize": "folded",
+    "frombands": "refused",
+    "frombands-virtualize": "refused",
+    "merge_agg": "folded",
+    "merge_agg-virtualize": "folded",
+    "derivedband_agg": "refused",
+    # a BINARY aggregate with a tile envelope still has no place for a reason: it raises, never an envelope of the error
+    "combineavg_agg": "raises",
+}
+
+
+@pytest.mark.parametrize("form", sorted(_COLUMN_API_OUTCOME))
+def test_column_api_forms_fold_or_refuse_an_over_cap_group_with_an_error_tile(
     spark, tmp_path, form
 ):
     """Every Column-API form of a group function (the force-output variants and the tile-returning aggregates too)
-    answers an over-cap member as the group's error tile with the reason."""
-    got = _over_cap_group(
-        spark,
-        tmp_path,
-        lambda: None,
-        columns=lambda: [_column_api_forms(tmp_path)[form]().alias("out")],
-    )
-    assert _refused_tile(got["out"]), got
+    folds what streaming covers, to the pixels of the uncapped call, and answers what it cannot as the group's error
+    tile with the reason."""
+
+    def run(cap):
+        return _over_cap_group(
+            spark,
+            tmp_path,
+            lambda: None,
+            columns=lambda: [_column_api_forms(tmp_path)[form]().alias("out")],
+            cap=cap,
+        )["out"]
+
+    outcome = _COLUMN_API_OUTCOME[form]
+    if outcome == "raises":
+        with pytest.raises(Exception, match="combine_by_key"):
+            run("4096")
+        assert (
+            run(None)["raster"] is not None
+        )  # uncapped, the envelope still carries the tile
+        return
+    got = run("4096")
+    if outcome == "folded":
+        _same_pixels_as_uncapped(got, run(None))
+    elif outcome == "refused":
+        assert _refused_tile(got), got
+    else:
+        assert _error_tile_with(got, *outcome), got
 
 
 @pytest.mark.parametrize("name", ["_uf_merge", "_uf_combineavg", "_uf_frombands"])
-def test_file_ref_forms_refuse_an_over_cap_member_with_an_error_tile(tmp_path, name):
-    """The FILE-reference bodies (the forms a session with FILE support runs) refuse as the others do."""
+def test_file_ref_forms_fold_or_refuse_an_over_cap_group_with_an_error_tile(
+    tmp_path, name
+):
+    """The FILE-reference bodies (the forms a session with FILE support runs) answer as the others do: the merge
+    streams, the combine refuses a stack too wide with the memory-budget Fix, frombands refuses the member.
+    """
     from rasterio.io import MemoryFile
 
     from databricks.labs.gbx import _gdal_policy
@@ -2052,7 +2160,15 @@ def test_file_ref_forms_refuse_an_over_cap_member_with_an_error_tile(tmp_path, n
     tiles = [small, oracles._build("tile_4326", str(tmp_path))]
     with _gdal_policy.carried(None, 4096):
         tile = getattr(prx, name)._f.func(tiles, [None, None])
-    assert _refused_tile(tile), (name, tile)
+    if name == "_uf_merge":
+        with _gdal_policy.carried(None, 1 << 30):
+            _same_pixels_as_uncapped(
+                tile, getattr(prx, name)._f.func(tiles, [None, None])
+            )
+    elif name == "_uf_combineavg":
+        assert _error_tile_with(tile, "memory budget", "combine_by_key"), tile
+    else:
+        assert _refused_tile(tile), (name, tile)
 
 
 @pytest.mark.integration
@@ -2305,11 +2421,21 @@ def test_the_keyed_helpers_carry_the_sessions_read_cap(spark, tmp_path):
             [StructField("k", IntegerType()), StructField("tile", V2_TILE_SCHEMA)]
         ),
     )
+
+    def layout(raster):
+        from rasterio.io import MemoryFile
+
+        with MemoryFile(bytes(raster)) as mf, mf.open() as ds:
+            return ds.tags(ns="IMAGE_STRUCTURE").get("LAYOUT")
+
     for fold in (helpers.merge_by_key, helpers.combine_by_key):
         assert fold(df, ["k"]).collect()[0]["raster"] is not None
+    # the mosaic fits the default budget: built in RAM (a striped GeoTIFF); the streamed one is a COG, so the layout
+    # says which path ran, and under the carried cap only the streaming path can have produced a COG
+    assert layout(helpers.merge_by_key(df, ["k"]).collect()[0]["raster"]) != "COG"
     spark.conf.set(READ_CAP_KEY, "4096")
     try:
-        assert helpers.merge_by_key(df, ["k"]).collect()[0]["raster"] is not None
+        assert layout(helpers.merge_by_key(df, ["k"]).collect()[0]["raster"]) == "COG"
         with pytest.raises(Exception, match="memory budget"):
             helpers.combine_by_key(df, ["k"]).collect()
     finally:

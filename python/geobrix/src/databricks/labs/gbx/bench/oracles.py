@@ -266,10 +266,15 @@ READ_CAP_ROWS: Dict[str, int] = {
     "merge_array_streams_under_budget": 3000,
     "combineavg_array_streams_under_budget": 3000,
     "combinesum_array_streams_under_budget": 3000,
+    "combinemax_array_streams_under_budget": 1000,
     # the aggregates: the same streaming; and what it cannot cover raises (a tile in another CRS over a cap of 150 bytes)
     "merge_agg_streams_under_budget": 3000,
     "combineavg_agg_streams_under_budget": 3000,
     "merge_agg_member_over_cap_refused": 150,
+    # the encoded result of a bytes aggregate is bounded by the cap too: the streamed COG of quad_tiles is about 2.4 KB
+    "merge_agg_output_over_cap_refused": 2000,
+    # derivedband stacks its members whole: a member (48 bytes decoded) over a cap of 20 raises, never a NULL
+    "db_agg_member_over_cap_refused": 20,
 }
 # The refusal of a tile's bytes in a driver that can name other files, on every level (the light tier's text).
 _BYTES_REFUSED_LIGHT = "is a {} raster, a format that can name other files, which GeoBrix does not open from tile bytes. Fix:"

@@ -138,6 +138,15 @@ def test_block_cache_is_a_share_of_the_tile_budget_under_a_ceiling(
     assert budget.block_cache_bytes(strategy, **kwargs) == want
 
 
+def test_a_folds_block_cache_is_never_smaller_than_one_large_block():
+    """A fold within a tiny budget (the rows that lower the read cap to a few hundred bytes) still gets 1 MiB of GDAL
+    cache, the block of a 512-pixel float32 tile; a real budget gets its 1/16 share, under the ceiling.
+    """
+    assert budget.block_cache_for(0) == budget.block_cache_for(300) == _MIB
+    assert budget.block_cache_for(64 * _MIB) == 4 * _MIB
+    assert budget.block_cache_for(64 * _MIB, ceiling=_MIB // 2) == _MIB // 2
+
+
 def test_none_budget_single_tile():
     plan = budget.plan_layout(2000, 2000, 1, 1, False, None, None, 0)
     assert plan.tiles == [(0, 0, 2000, 2000)]

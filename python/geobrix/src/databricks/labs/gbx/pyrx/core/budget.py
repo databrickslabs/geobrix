@@ -122,6 +122,10 @@ def decoded_budget_bytes(strategy: str) -> int:
 _BLOCK_CACHE_SHARE = 16
 _BLOCK_CACHE_MAX = 128 * _MIB
 STREAMING_BLOCK_CACHE_MAX = 4 * _MIB
+# GDAL's cache holds a block at a time at the least: a block of a 512-pixel float32 tile is 1 MiB, and a cache smaller
+# than the block being read thrashes (the same block read again for each of its rows). A fold within a tiny budget (the
+# rows that lower the cap to a few hundred bytes) still gets this much.
+_BLOCK_CACHE_MIN = 1 * _MIB
 
 
 def block_cache_bytes(
@@ -141,8 +145,10 @@ def block_cache_bytes(
 def block_cache_for(budget_bytes: int, *, ceiling: int = _BLOCK_CACHE_MAX) -> int:
     """Size in bytes for GDAL's block cache in a fold that works within ``budget_bytes`` (the same share of it as
     :func:`block_cache_bytes` takes of a tile budget): the many members a fold keeps open are read a window at a
-    time, and their blocks must not pile up to the machine's default cache."""
-    return max(1, min(int(ceiling), int(budget_bytes) // _BLOCK_CACHE_SHARE))
+    time, and their blocks must not pile up to the machine's default cache. Never less than one block of a large tile
+    (1 MiB), whatever the budget, unless the ceiling is lower."""
+    share = max(_BLOCK_CACHE_MIN, int(budget_bytes) // _BLOCK_CACHE_SHARE)
+    return min(int(ceiling), share)
 
 
 @dataclass(frozen=True)

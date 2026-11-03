@@ -1223,19 +1223,6 @@ def _refusal_as_error_tile(func):
     return run
 
 
-def _refusal_as_null(func):
-    """The same for a bytes-returning aggregate, which has no place for a reason: the group is NULL."""
-
-    @functools.wraps(func)
-    def run(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except agg_core.ReadCapRefused:
-            return None
-
-    return run
-
-
 def _array_without_members(tiles):
     """What an array function answers when no member can be used: the first error tile when every element is one (as
     it is, so the upstream reason survives), else NULL."""
@@ -3412,23 +3399,26 @@ def rst_viewshed_towers(
                 f.col("_dem"),
             ),
         ).withColumn("_vs", viewshed())
-        piped = piped.withColumn(
-            "_vs",
-            _raise_if_null(
-                f.col("_vs")["raster"],
-                f.concat(
-                    f.lit("rst_viewshed_towers: the viewshed of tower "),
-                    tower,
-                    f.lit(" failed: "),
-                    f.coalesce(
-                        f.col("_vs")["metadata"]["last_error"], f.lit("no reason given")
-                    ),
-                ),
-                f.col("_vs"),
-            ),
-        )
     else:
         piped = piped.withColumn("_vs", viewshed())
+    # An unreadable DSM tile fails the query at every level: the viewshed of a tile op that cannot read its DEM is the
+    # row's error tile (no raster), which the histogram would count as a (0, 0) row.
+    tower = f.col("tower_id").cast("string")
+    piped = piped.withColumn(
+        "_vs",
+        _raise_if_null(
+            f.col("_vs")["raster"],
+            f.concat(
+                f.lit("rst_viewshed_towers: the viewshed of tower "),
+                tower,
+                f.lit(" failed: "),
+                f.coalesce(
+                    f.col("_vs")["metadata"]["last_error"], f.lit("no reason given")
+                ),
+            ),
+            f.col("_vs"),
+        ),
+    )
     piped = piped.withColumn("_hist", histogram("_vs"))
 
     # Histogram bucket 1 = [128, 256) = the visible class (255); bucket 0 = invisible (0).
@@ -5982,7 +5972,8 @@ def _merge_agg_bytes(tile: pd.Series, error_channel: bool):
     # NOTE: drop-count has no metadata carrier at this layer (pandas_udf returns
     # bare bytes; no struct/metadata assembly here). The skip still stops raising.
     try:
-        return agg_core.merge_tiles(rasters)
+        # the bytes come back whole in one row: bounded by the cap the members are
+        return agg_core.merge_tiles(rasters, max_out=agg_core._merge_budget())
     except (agg_core.MosaicTooLarge, agg_core.ReadCapRefused) as exc:
         # Where the result is a tile this group's answer is its error tile. Bytes have no place for a reason and a
         # NULL reads as an empty group, so the aggregate raises with the Fix, never a silent NULL.
@@ -6111,13 +6102,9 @@ def _combineavg_agg_udf(tile: pd.Series) -> bytes:
     if not rasters:
         payload = _error_payload(_only_error_tiles(tile))
         return None if payload is None else (0).to_bytes(8, "big") + payload
-    try:
-        out = agg_core.combineavg_tiles(rasters)
-    except (
-        agg_core.ReadCapRefused
-    ) as exc:  # this group's error tile, in the tile channel
-        refusal = _error_payload([_serde.build_error_tile(str(exc), 0)])
-        return (0).to_bytes(8, "big") + refusal
+    # a group the fold cannot cover (a row of the stack over the budget, an encoded result over the cap of a row) RAISES
+    # with the Fix: the bytes have no place for a reason, and a NULL reads as an empty group
+    out = agg_core.combineavg_tiles(rasters, max_out=agg_core._merge_budget())
     if out is None:
         return None
     # NOTE: drop-count has no metadata carrier at this layer (pandas_udf returns
@@ -6154,11 +6141,10 @@ def _combineavg_agg_sql_udf(tile: pd.Series) -> bytes:
         return None
     # NOTE: drop-count has no metadata carrier at this layer (pandas_udf returns
     # bare bytes; no struct/metadata assembly here). The skip still stops raising.
-    return agg_core.combineavg_tiles(rasters)
+    return agg_core.combineavg_tiles(rasters, max_out=agg_core._merge_budget())
 
 
 @pandas_udf(BinaryType())
-@_refusal_as_null
 def _frombands_agg_udf(tile: pd.Series, band_index: pd.Series) -> bytes:
     from databricks.labs.gbx.pyrx import _env
 
@@ -6188,7 +6174,6 @@ def _frombands_agg_udf(tile: pd.Series, band_index: pd.Series) -> bytes:
 
 
 @pandas_udf(BinaryType())
-@_refusal_as_null
 def _frombands_agg_file_udf(
     tile: pd.Series, file_ref: pd.Series, band_index: pd.Series
 ) -> bytes:
@@ -6289,9 +6274,9 @@ def _derivedband_agg_bytes(
         )
     except (
         agg_core.ReadCapRefused
-    ) as exc:  # this group's answer: its error tile where there is a channel, else NULL
+    ) as exc:  # this group's answer: its error tile where there is a channel, else it raises (never a silent NULL)
         if not error_channel:
-            return None
+            raise
         return _error_payload([_serde.build_error_tile(str(exc), 0)])
 
 

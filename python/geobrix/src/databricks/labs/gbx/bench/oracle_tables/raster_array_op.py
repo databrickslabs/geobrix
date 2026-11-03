@@ -218,7 +218,8 @@ RASTER_ARRAY_OP = (
     ),
     # an array whose members add up to more than the memory budget is folded by streaming, window by window, and gives
     # the result of an unconstrained call (READ_CAP_ROWS lowers the budget to 3000 bytes: the 4 KiB mosaic of quad_tiles,
-    # and a stack of three 8 x 6 tiles that is folded in windows of rows)
+    # and a stack of three 8 x 6 tiles that is folded in windows of rows, avg and sum; max, the running reducer, at 1000
+    # bytes: a window of one row)
     Case(
         "merge_array_streams_under_budget",
         MG,
@@ -236,7 +237,7 @@ RASTER_ARRAY_OP = (
             f"combine_{s}",
             ONLY,
         )
-        for s in ("avg", "sum")
+        for s in ("avg", "sum", "max")
     ),
     # --- merge: the four windows of tile_32 merge back into it
     Case(

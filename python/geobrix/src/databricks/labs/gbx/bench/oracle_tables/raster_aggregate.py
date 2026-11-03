@@ -161,6 +161,16 @@ RASTER_AGGREGATE = (
         "merge_by_key",
         ONLY,
     ),
+    # The encoded result of a bytes aggregate comes back whole in one row, so it is bounded by the same cap (READ_CAP_ROWS:
+    # 2000 bytes; the streamed COG of quad_tiles is about 2.4 KB): over it the aggregate raises with the vrt route.
+    Case(
+        "merge_agg_output_over_cap_refused",
+        MA,
+        (Build("quad_tiles"),),
+        "raises",
+        "merge_by_key",
+        ONLY,
+    ),
     # --- combineavg: the mean of the valid values at each pixel, against numpy
     Case("ca_agg_stack", CA, (STACK,), "ref", "combine_avg", ONLY),
     Case(
@@ -210,6 +220,16 @@ RASTER_AGGREGATE = (
         (Build("ra_sum_pair"), SUM2, "sum2"),
         "ref",
         "agg_derived_sum",
+        ONLY,
+    ),
+    # a member over the read cap raises with the Fix, as the merge and the combine do: never a NULL, which reads as an
+    # empty group (READ_CAP_ROWS: 20 bytes; a member of ra_sum_pair is 48)
+    Case(
+        "db_agg_member_over_cap_refused",
+        DB,
+        (Build("ra_sum_pair"), SUM2, "sum2"),
+        "raises",
+        "read cap",
         ONLY,
     ),
 )

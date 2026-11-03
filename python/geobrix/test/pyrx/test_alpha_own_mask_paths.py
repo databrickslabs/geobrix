@@ -440,7 +440,7 @@ def test_a_merge_keeps_the_alpha_band_and_the_mask(monkeypatch, name, streaming)
     where the tiles are, labelled alpha where they are, and a 4th data band stays data.
     """
     if streaming:
-        monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+        monkeypatch.setattr(agg, "_in_ram_bytes", lambda *a, **k: 1 << 62)  # stream
     tiles = [
         al.row_coded(
             name,
@@ -499,7 +499,7 @@ def test_a_merge_keeps_valid_zero_pixels_when_a_tile_has_an_own_mask(
     that holds 0 (black, sea level) stays valid, and the result does not depend on which path merged
     the group."""
     if streaming:
-        monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+        monkeypatch.setattr(agg, "_in_ram_bytes", lambda *a, **k: 1 << 62)  # stream
 
     def tile(x):
         data = np.full((1, 12, 12), 50, dtype="uint8")
@@ -565,7 +565,7 @@ def test_a_merge_keeps_nodata_pixels_invalid_beside_a_tile_with_an_own_mask(
     paths give the validity of the sources, whichever tile stands first in byte order.
     """
     if streaming:
-        monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+        monkeypatch.setattr(agg, "_in_ram_bytes", lambda *a, **k: 1 << 62)  # stream
     other_x = 26 - masked_x
     masked = _merge_tile(masked_x, mask_rows=(3,))
     plain = _merge_tile(other_x, nodata=9, nodata_rows=(7,))
@@ -631,7 +631,7 @@ def test_a_merge_shows_the_valid_tile_where_a_later_alpha_tile_is_transparent(
     paths. (The byte order puts the transparent tile last, which is the one that used to win.)
     """
     if streaming:
-        monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+        monkeypatch.setattr(agg, "_in_ram_bytes", lambda *a, **k: 1 << 62)  # stream
     rows = (11,) if masked else ()
     opaque = _overlap_alpha_tile(10, 10, layout=layout, mask_rows=rows)
     # starts 6 columns in: its first 6 columns lie over the opaque tile and are transparent
@@ -691,7 +691,7 @@ def test_a_merge_judges_a_multi_band_tile_by_any_band_beside_a_tile_with_an_own_
     paths give the validity of the sources, whichever tile stands first in byte order.
     """
     if streaming:
-        monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+        monkeypatch.setattr(agg, "_in_ram_bytes", lambda *a, **k: 1 << 62)  # stream
     masked = _rgb_merge_tile(masked_x, mask_rows=(3,))
     plain = _rgb_merge_tile(26 - masked_x)
 
@@ -717,7 +717,7 @@ def test_a_merge_keeps_a_jpeg_tiles_pixels_beside_a_tile_with_an_own_mask(
     paths: the streamed path rewrites such a tile to give it a mask, with the canonical creation options,
     never the source's lossy codec."""
     if streaming:
-        monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+        monkeypatch.setattr(agg, "_in_ram_bytes", lambda *a, **k: 1 << 62)  # stream
     yy, xx = np.mgrid[0:64, 0:64]
     textured = (
         np.stack([(xx * 3 + yy) % 251, (yy * 5) % 251, (xx * yy) % 251]).astype("uint8")
@@ -897,7 +897,7 @@ def test_a_two_crs_merge_has_the_pixel_size_of_the_tile_in_the_reference_crs(
     The mosaic used to take the size of the first tile after reprojection (70 km when the 4326 tile
     stood first)."""
     if streaming:
-        monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+        monkeypatch.setattr(agg, "_in_ram_bytes", lambda *a, **k: 1 << 62)  # stream
     res, _, _, pixels, covered = _merged_grid(_two_crs_group(first))
     assert res == (50000.0, 50000.0)
     assert covered.any() and set(np.unique(pixels)) <= {0, 7}
@@ -907,7 +907,7 @@ def test_a_two_crs_merge_has_the_pixel_size_of_the_tile_in_the_reference_crs(
 def test_a_two_crs_merge_does_not_depend_on_the_byte_order(monkeypatch, streaming):
     """The same two tiles, in either byte order, merge to the same grid and the same pixels."""
     if streaming:
-        monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+        monkeypatch.setattr(agg, "_in_ram_bytes", lambda *a, **k: 1 << 62)  # stream
     a = _merged_grid(_two_crs_group("3857"))
     b = _merged_grid(_two_crs_group("4326"))
     assert a[0] == b[0] and a[1] == b[1] and a[2] == b[2]
@@ -923,7 +923,7 @@ def test_the_in_ram_and_the_streamed_two_crs_merge_agree(monkeypatch, first):
     """
     group = _two_crs_group(first)
     in_ram = _merged_grid(group)
-    monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+    monkeypatch.setattr(agg, "_in_ram_bytes", lambda *a, **k: 1 << 62)  # stream
     streamed = _merged_grid(group)
     assert in_ram[0] == streamed[0] and in_ram[1] == streamed[1]
     assert in_ram[2] == pytest.approx(
@@ -967,7 +967,7 @@ def test_a_merge_masks_each_tile_by_its_own_nodata_in_ram_and_streamed(
     tile folds last wins a column both have data in; the two paths agree on every pixel.
     """
     if streaming:
-        monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+        monkeypatch.setattr(agg, "_in_ram_bytes", lambda *a, **k: 1 << 62)  # stream
     nodata_values = [50] * 6 + [0, 0]  # columns 0-7; columns 6-7 are NoData
     plain_values = [0] + [7] * 7  # columns 5-12; column 5 is a valid 0
     # tags move a tile within the byte order; try them until the wanted tile sorts where wanted

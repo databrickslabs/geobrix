@@ -133,6 +133,12 @@ def test_merge_tiles_same_origin_overlap_winner_order_invariant():
 # --- merge_tiles streaming path ------------------------------------
 
 
+def _force_streaming(monkeypatch):
+    """The merge streams whatever the budget: the estimate of what the in-RAM merge would hold is over any budget (the
+    read cap, which a member to be decoded whole is judged by, stays as it is)."""
+    monkeypatch.setattr(agg, "_in_ram_bytes", lambda *a, **k: 1 << 62)
+
+
 def test_merge_tiles_refuses_a_mosaic_it_cannot_stream_before_building_it(monkeypatch):
     """Two tiles a continent apart make a mosaic of terabytes that is nearly all NoData. The size comes from the
     headers, and past the COG ceiling the merge stops with a Fix: instead of streaming for ever or allocating.
@@ -151,7 +157,7 @@ def test_merge_tiles_refuses_a_mosaic_it_cannot_stream_before_building_it(monkey
 def test_merge_streaming_matches_in_ram(monkeypatch):
     """Streaming path produces same extent, band count, and pixel values as in-RAM path.
 
-    Forces the streaming path via a monkeypatched budget of 1 byte, then compares
+    Forces the streaming path (the in-RAM estimate is over any budget), then compares
     the result with the default in-RAM result: extent (within pixel tolerance),
     band count, and per-pixel values must all match.  Includes one overlapping tile
     pair to exercise last-wins determinism on both paths.
@@ -166,8 +172,8 @@ def test_merge_streaming_matches_in_ram(monkeypatch):
     # In-RAM path (default budget).
     in_ram_bytes = agg.merge_tiles(tiles)
 
-    # Streaming path (monkeypatch budget to 1 → always streams).
-    monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+    # Streaming path (the in-RAM estimate patched over any budget → always streams).
+    _force_streaming(monkeypatch)
     streaming_bytes = agg.merge_tiles(tiles)
 
     assert streaming_bytes is not None, "streaming merge returned None"
@@ -202,8 +208,8 @@ from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 from databricks.labs.gbx.pyrx.core import agg
 
-# Force the streaming path regardless of the runtime cgroup budget.
-agg.decoded_budget_bytes = lambda s: 1
+# Force the streaming path regardless of the runtime cgroup budget (the in-RAM estimate is over any budget).
+agg._in_ram_bytes = lambda *a, **k: 1 << 62
 
 W, H = 3000, 3000
 tile_bytes_list = []
@@ -291,7 +297,7 @@ def test_merge_streaming_error_propagates(monkeypatch):
     tile_a = _ras(np.full((2, 2), 1.0), ulx=0.0, uly=2.0, px=1.0)
     tile_b = _ras(np.full((2, 2), 2.0), ulx=2.0, uly=2.0, px=1.0)
 
-    monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+    _force_streaming(monkeypatch)
 
     def boom(*args, **kwargs):
         raise RuntimeError("boom")
@@ -374,7 +380,7 @@ def test_merge_streaming_multicrs_produces_valid_output(monkeypatch):
             dst.write(data_b, 1)
         tile_b = mf.read()
 
-    monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+    _force_streaming(monkeypatch)
     result = agg.merge_tiles([tile_a, tile_b])
 
     assert result is not None and len(result) > 0, "streaming merge must return bytes"
@@ -419,7 +425,7 @@ def test_a_tile_in_another_crs_leaves_its_neighbours_pixels_alone(
         sorted([ref, other])[0] == ref
     ), "fixture: the reprojected tile must fold last"
     if streamed:
-        monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+        _force_streaming(monkeypatch)
 
     with MemoryFile(agg.merge_tiles([ref, other])) as mf, mf.open() as ds:
         left, top = ds.transform.c, ds.transform.f
@@ -470,6 +476,285 @@ def test_merge_small_unchanged():
             # Left half should be left tile values; right half should be right tile values.
             assert np.allclose(arr[:, 0:2], [[1.0, 2.0], [3.0, 4.0]])
             assert np.allclose(arr[:, 2:4], [[5.0, 6.0], [7.0, 8.0]])
+
+
+# --- the budget the merge and the combines work in ------------------------------------------------------------------
+
+
+def _tile_in(arr, crs, ulx, uly, px, nodata=0):
+    """A one-band uint8 tile in *crs*, with its pixel size *px* in that CRS's units."""
+    arr = np.asarray(arr, dtype="uint8")
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff",
+            width=arr.shape[1],
+            height=arr.shape[0],
+            count=1,
+            dtype="uint8",
+            crs=crs,
+            transform=from_origin(ulx, uly, px, px),
+            nodata=nodata,
+        ) as dst:
+            dst.write(arr, 1)
+        return mf.read()
+
+
+def _grid_and_pixels(raster):
+    with MemoryFile(raster) as mf, mf.open() as ds:
+        return (
+            (ds.width, ds.height, str(ds.crs)),
+            ds.transform,
+            ds.read(1),
+            ds.read_masks(1),
+        )
+
+
+def _streamed_calls(monkeypatch):
+    """Record the calls of the streaming merge (it still runs)."""
+    calls, real = [], agg._merge_tiles_streaming
+
+    def spy(rasters, **kwargs):
+        calls.append(len(rasters))
+        return real(rasters, **kwargs)
+
+    monkeypatch.setattr(agg, "_merge_tiles_streaming", spy)
+    return calls
+
+
+@pytest.mark.parametrize("fx, fy", [(0.0, 0.0), (0.3, 0.7), (0.55, 0.85), (0.9, 0.5)])
+def test_a_merge_whose_mosaic_fits_but_whose_working_set_does_not_streams_to_the_same_grid(
+    monkeypatch, fx, fy
+):
+    """The mosaic of a mixed-CRS group fits the budget (`materialize_decision` says in RAM), but the in-RAM merge also
+    holds the reprojected tile, the masks and the members' bytes (`_in_ram_bytes`): over the budget, it streams. The
+    streamed mosaic has the grid and the pixels of the in-RAM one, whatever the offset of the reprojected tile from the
+    reference grid (a tile at a fractional offset is where a 1-pixel difference between the two merges shows), and
+    one budget exactly at the estimate does not stream."""
+    from databricks.labs.gbx import _gdal_policy
+
+    px = 50000.0
+    rng = np.random.default_rng(7)
+    ref = _tile_in(
+        rng.integers(1, 200, (12, 12)),
+        "EPSG:3857",
+        1.0e6 + fx * px,
+        5.0e6 + fy * px,
+        px,
+    )
+    other = _tile_in(
+        rng.integers(1, 200, (12, 12)), "EPSG:4326", 9.0 + fx, 44.0 + fy, 0.4
+    )
+    rasters = sorted([ref, other])
+    hdrs = agg._scan_headers(rasters)
+    ref_crs = agg._pick_ref_crs(hdrs)
+    union = agg._union_decoded_bytes(hdrs, ref_crs)
+    estimate = agg._in_ram_bytes(hdrs, ref_crs, union)
+    assert union < estimate - 1, (union, estimate)  # the mosaic alone fits the budget
+
+    in_ram = agg.merge_tiles(rasters)
+    calls = _streamed_calls(monkeypatch)
+    with _gdal_policy.carried(None, estimate):
+        assert agg.merge_tiles(rasters) == in_ram and calls == []
+    with _gdal_policy.carried(None, estimate - 1):
+        streamed = agg.merge_tiles(rasters)
+    assert calls == [2]
+
+    (ga, ta, pa, ma), (gb, tb, pb, mb) = (
+        _grid_and_pixels(in_ram),
+        _grid_and_pixels(streamed),
+    )
+    assert ga == gb
+    assert tuple(tb) == pytest.approx(tuple(ta), rel=0, abs=1e-6)
+    assert np.array_equal(pa, pb) and np.array_equal(ma, mb)
+
+
+def test_the_in_ram_estimate_counts_the_copies_the_merge_holds():
+    """Each term of the estimate moves it: an alpha member adds its decoded copy, a member in another CRS its
+    reprojected tile at the target size, a group with an own mask a union-sized mask."""
+    base = [
+        _ras(np.ones((8, 8)), ulx=0.0, uly=8.0),
+        _ras(np.ones((8, 8)), ulx=8.0, uly=8.0),
+    ]
+
+    def estimate(rasters):
+        hdrs = agg._scan_headers(rasters)
+        ref_crs = agg._pick_ref_crs(hdrs)
+        return agg._in_ram_bytes(hdrs, ref_crs, agg._union_decoded_bytes(hdrs, ref_crs))
+
+    plain = estimate(base)
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff",
+            width=8,
+            height=8,
+            count=2,
+            dtype="float32",
+            crs="EPSG:32633",
+            transform=from_origin(0.0, 8.0, 1.0, 1.0),
+            alpha="YES",
+        ) as dst:
+            dst.write(np.ones((2, 8, 8), dtype="float32"))
+        alpha = mf.read()
+    alpha_size = 8 * 8 * 2 * 4
+    assert estimate([base[0], alpha]) >= plain + alpha_size
+    other_crs = _ras(np.ones((8, 8)), ulx=0.0, uly=8.0, epsg=32733)
+    assert estimate([base[0], other_crs]) > plain + 8 * 8 * 4
+
+
+def test_a_member_decoded_whole_is_judged_at_its_output_size_against_the_merge_budget():
+    """In the streamed merge a member that is reprojected, or rewritten with its mask, is the only one decoded whole: it
+    is refused with the Fix when it is over the MERGE budget at the size it is decoded at (the reprojected tile, not the
+    source), and a member copied as it is is never refused, whatever its size."""
+    from databricks.labs.gbx import _gdal_policy
+
+    ref = _tile_in(np.ones((2, 2)), "EPSG:3857", 1.0e6, 5.0e6, 100.0)
+    # 4 x 4 pixels of 0.01 degrees: 16 bytes at the source, about 46 x 46 once on the 100 m reference grid
+    small_source = _tile_in(np.ones((4, 4)), "EPSG:4326", 9.0, 44.0, 0.01)
+    with _gdal_policy.carried(None, 1500):
+        with pytest.raises(agg.ReadCapRefused, match="merge_by_key"):
+            agg._merge_tiles_streaming(sorted([ref, small_source]))
+    with _gdal_policy.carried(None, 5000):
+        assert agg._merge_tiles_streaming(sorted([ref, small_source]))
+
+    # alpha band: rewritten whole with its mask, so judged by its size; a tile that needs neither is copied as it is
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff",
+            width=32,
+            height=32,
+            count=2,
+            dtype="uint8",
+            crs="EPSG:32633",
+            transform=from_origin(0.0, 32.0, 1.0, 1.0),
+            alpha="YES",
+        ) as dst:
+            dst.write(np.full((2, 32, 32), 5, dtype="uint8"))
+        alpha = mf.read()
+    plain = _tile_in(np.full((32, 32), 9), "EPSG:32633", 32.0, 32.0, 1.0)  # 1 KiB
+    with _gdal_policy.carried(None, 1500):
+        with pytest.raises(agg.ReadCapRefused, match="merge_by_key"):
+            agg._merge_tiles_streaming(sorted([alpha, plain]))
+    big = _tile_in(np.full((64, 64), 9), "EPSG:32633", 0.0, 64.0, 1.0)  # 4 KiB
+    with _gdal_policy.carried(None, 1500):
+        assert agg._merge_tiles_streaming(sorted([big, plain]))
+
+
+def test_a_member_over_the_read_cap_falls_to_streaming_not_a_refusal(monkeypatch):
+    """The in-RAM path is chosen against the merge budget, the read gate of a member judges by the same cap: a member the
+    gate refuses is merged by the streaming path (which copies it as it is) instead of failing the merge.
+    """
+    big = _tile_in(np.full((64, 64), 9), "EPSG:32633", 0.0, 64.0, 1.0)  # 4 KiB decoded
+    other = _tile_in(np.full((64, 64), 7), "EPSG:32633", 64.0, 64.0, 1.0)
+    calls = _streamed_calls(monkeypatch)
+    # the size estimate is taken to fit; the gate, which judges each member by the read cap, refuses one
+    monkeypatch.setattr(agg, "_in_ram_bytes", lambda *a, **k: 0)
+    monkeypatch.setattr(agg, "_merge_budget", lambda: 1 << 30)
+    real_open_all = agg._open_all
+
+    def refusing(rasters, gate=True):
+        if gate:
+            raise agg.ReadCapRefused("over the read cap")
+        return real_open_all(rasters, gate=gate)
+
+    monkeypatch.setattr(agg, "_open_all", refusing)
+    out = agg.merge_tiles([big, other])
+    assert calls == [2]
+    with MemoryFile(out) as mf, mf.open() as ds:
+        assert (ds.width, ds.height) == (128, 64)
+
+
+def test_the_encoded_result_of_a_bytes_aggregate_is_bounded():
+    """The bytes of a merged or combined result come back whole in one row: over the cap `max_out`, both raise with the
+    Fix that names their own route (the merge: the vrt route; the combine: `combine_by_key`).
+    """
+    left = _ras(np.arange(64 * 64).reshape(64, 64) % 251, ulx=0.0, uly=64.0)
+    right = _ras(np.arange(64 * 64).reshape(64, 64) % 241, ulx=64.0, uly=64.0)
+    assert agg.merge_tiles([left, right], max_out=1 << 20)
+    with pytest.raises(
+        agg.OutputOverBudget, match=r'merge_by_key\(\.\.\., method="vrt"\)'
+    ):
+        agg.merge_tiles([left, right], max_out=100)
+    with pytest.raises(agg.OutputOverBudget, match="merge_by_key"):
+        agg._merge_tiles_streaming(
+            sorted([left, right]), max_out=100
+        )  # checked before the COG is read
+    assert agg.combineavg_tiles([left, left], max_out=1 << 20)
+    with pytest.raises(agg.OutputOverBudget, match="combine_by_key") as err:
+        agg.combineavg_tiles([left, left], max_out=100)
+    assert "merge_by_key" not in str(err.value)
+    with pytest.raises(agg.OutputOverBudget, match="combine_by_key"):
+        agg._combine_stat_tiles([left, left], "max", max_out=100)
+
+
+def test_the_fold_windows_are_whole_output_blocks_and_the_refusal_names_the_combine_route():
+    """A window is a whole number of the output's blocks (each compressed block is written by one window), unless the
+    budget cannot hold one; a row too wide for the budget is refused with the combine route, not the mosaic one.
+    """
+    windows = agg._fold_windows((1, 100, 10), "avg", 1, 10 * 40 * 37 * 2, block_rows=16)
+    assert [w.row_off for w in windows] == [0, 32, 64, 96]
+    assert [w.height for w in windows] == [32, 32, 32, 4]
+    # fewer rows fit than a block: the budget decides, the windows still cover every row once
+    short = agg._fold_windows((1, 100, 10), "avg", 1, 10 * 40 * 3 * 2, block_rows=16)
+    assert sum(w.height for w in short) == 100 and short[0].height == 3
+    with pytest.raises(agg.ArrayOverBudget, match="combine_by_key") as err:
+        agg._fold_windows((1, 4, 1000), "avg", 1, 1000, block_rows=1)
+    assert "merge_by_key" not in str(err.value)
+
+
+@pytest.mark.parametrize("stat", ["min", "max"])
+def test_the_running_combines_fold_over_several_windows(stat):
+    """min and max keep a running value per window: folded over many windows (one row each) they equal the one-window
+    fold."""
+    from databricks.labs.gbx import _gdal_policy
+
+    rng = np.random.default_rng(3)
+    tiles = [_ras(rng.integers(0, 90, (6, 8)).astype("float32")) for _ in range(3)]
+    combine = {"min": agg.combine_min_tiles, "max": agg.combine_max_tiles}[stat]
+    whole = combine(tiles)
+    seen = []
+    real = agg._running_stat
+
+    def spy(datasets, nodatas, stat, fallback, window=None):
+        seen.append(window)
+        return real(datasets, nodatas, stat, fallback, window)
+
+    agg._running_stat = spy
+    try:
+        with _gdal_policy.carried(None, 1000):
+            folded = combine(tiles)
+    finally:
+        agg._running_stat = real
+    assert len(seen) > 1
+    with (
+        MemoryFile(whole) as a,
+        a.open() as da,
+        MemoryFile(folded) as b,
+        b.open() as db,
+    ):
+        assert np.array_equal(da.read(), db.read())
+
+
+def test_a_spooled_member_keeps_the_byte_open_driver_policy(tmp_path):
+    """A group too large to open from memory is spooled to files and opened by path: a member of a driver that can name
+    other files (a VRT) is refused with the byte-open policy's error before it is written, as `open_bytes` refuses it.
+    """
+    from databricks.labs.gbx._gdal_policy import DriverPolicyError
+
+    a = _ras(np.ones((8, 8)), ulx=0.0, uly=8.0)
+    b = _ras(np.ones((8, 8)), ulx=8.0, uly=8.0)
+    with agg._members([a, b], 10) as datasets:  # 10 bytes: the group is spooled
+        assert [
+            str(d.name).endswith(f"member_{i}.tif") for i, d in enumerate(datasets)
+        ] == [True, True]
+        assert datasets[0].read().shape == (1, 8, 8)
+    vrt = (
+        b'<VRTDataset rasterXSize="2" rasterYSize="2"><VRTRasterBand dataType="Byte" band="1">'
+        b'<SimpleSource><SourceFilename relativeToVRT="0">/etc/hostname</SourceFilename>'
+        b"<SourceBand>1</SourceBand></SimpleSource></VRTRasterBand></VRTDataset>"
+    )
+    with pytest.raises(DriverPolicyError, match="can name other files"):
+        with agg._members([a, vrt], 10):
+            pass
 
 
 # --- combineavg_tiles -------------------------------------------------------

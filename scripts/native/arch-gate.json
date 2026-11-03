@@ -1,11 +1,11 @@
 {
   "written_by": "bash scripts/commands/gbx-native-verify-arches.sh",
   "checked_by": "python3 scripts/native/native_inputs.py check-stamp (CI: build_main.yml, job arch-gate)",
-  "native_inputs_sha256": "5bb2b3f84de59d3796796de054f78d149c6d55dcf4a32f13c92475c1a2b8227b",
+  "native_inputs_sha256": "27e2c7bc41748d5c9de761a0166dea05fb8962c51cf74962f3d9806697121219",
   "date": "2026-11-03",
   "gdal_version": "3.13.3",
   "native_revision": "1",
-  "built_from": "b31bf70dec6b23c9ffc48cad3017d8f2db5bba76",
+  "built_from": "acc6cb7bfa461a18ce0f0124a4d3f7e564b915d7",
   "results": {
     "aarch64": {
       "verify_native": {
@@ -69,7 +69,7 @@
     "python/geobrix/src/_gbx_native_path.py": "91439a475d1c3910874667efef67770407ddd5ff03854c40bfa85d0bb2ce0361",
     "python/geobrix/src/databricks/labs/gbx/_native/__init__.py": "5f5372383f99daf248cd9decc8c10b4eb643aab9cf64662b305c7d6f7964fad2",
     "python/geobrix/src/databricks/labs/gbx/_native/_rules.py": "c2d094f3a6379e6e5d7c6be3e0d9838629df5a02d584f5a20d70cb8c12ab14d6",
-    "python/geobrix/src/databricks/labs/gbx/_native/_selfcheck.py": "a238c8a8734d0e7a5ce51f8e9d13d7d18a5234fa7be400ba95ce78489c289e79",
+    "python/geobrix/src/databricks/labs/gbx/_native/_selfcheck.py": "1bba473e798fb0afc58a77d80c022ef5d90881da4657a60707badad5a569afa1",
     "rust-toolchain.toml": "862adc14eccb8038bf8cead88a04def82032db0e59673d7cf228131e5e25d3b1",
     "scripts/native/JniSmoke.java": "d119583c5188d53f3c45ee7e0cf335a05fd2b2d347ead61d8310d2bfeb5b510b",
     "scripts/native/base_held.py": "433e6d93c6b89ab24b6ccb2e9f46fbfb628ebf80e5560dded46a615dd47cdcf6",

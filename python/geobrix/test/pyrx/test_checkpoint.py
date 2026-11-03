@@ -1,6 +1,6 @@
 import threading
 
-from databricks.labs.gbx.pyrx.checkpoint import (
+from databricks.labs.gbx.rasterx.checkpoint import (
     Manifest,
     checkpoint_skip,
     input_signature,

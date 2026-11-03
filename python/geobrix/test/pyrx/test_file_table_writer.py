@@ -16,7 +16,7 @@ from pyspark.sql.types import (
     StructType,
 )
 
-from databricks.labs.gbx.pyrx import file_table as ft
+from databricks.labs.gbx.rasterx import file_table as ft
 
 
 def test_create_sql_external_no_partition_no_zorder():
@@ -333,7 +333,7 @@ def test_write_file_table_rejects_zorder_layout_before_drop():
 
 
 def test_build_create_sql_rejects_zorder_layout_via_shared_validator():
-    from databricks.labs.gbx.pyrx import file_table
+    from databricks.labs.gbx.rasterx import file_table
 
     with pytest.raises(ValueError, match="layout must be one of"):
         file_table.build_create_sql(

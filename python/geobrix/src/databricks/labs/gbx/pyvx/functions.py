@@ -520,31 +520,8 @@ def _light_st_coverageinvalidedges(geom: ColLike, gap_width: float = 0.0) -> Col
     return _coverageinvalidedges_udf(_col(geom), f.lit(gap_width))
 
 
-def coverage_simplify(
-    df,
-    group_col,
-    geom_col,
-    tolerance,
-    simplify_boundary=True,
-    out_col="geom_simplified",
-):
-    """Topology-preserving simplification of a whole coverage (Python-API only).
+def __getattr__(name):
+    """A removed public name: say where it went (no alias keeps working)."""
+    from databricks.labs.gbx import _moved
 
-    Groups df by group_col and simplifies each coverage together (shared edges stay
-    shared). N rows in -> N rows out; every input column preserved, EWKB written to
-    out_col. Serverless-safe (groupBy().applyInPandas()).
-    """
-    from pyspark.sql.types import StructField, StructType
-
-    from . import _coverage as _cov
-
-    out_schema = StructType(
-        list(df.schema.fields) + [StructField(out_col, BinaryType(), True)]
-    )
-
-    def _fn(pdf):
-        return _cov.coverage_simplify_pdf(
-            pdf, geom_col, tolerance, simplify_boundary, out_col
-        )
-
-    return df.groupBy(group_col).applyInPandas(_fn, schema=out_schema)
+    return _moved.removed_name(__name__, name)

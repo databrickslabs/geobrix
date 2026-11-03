@@ -3,6 +3,7 @@ import rasterio
 from pyspark.sql import functions as F
 
 from databricks.labs.gbx.pyrx import functions as rx
+from databricks.labs.gbx.rasterx import helpers as rx_helpers
 
 
 def _pixels(row):
@@ -37,7 +38,7 @@ def test_bin_points_tiled_parity(spark):
     df = _mk_df(spark)
     for s in ("max", "min", "mean", "count"):
         got = _pixels(
-            rx.bin_points_tiled(
+            rx_helpers.bin_points_tiled(
                 df,
                 x="x",
                 y="y",
@@ -91,7 +92,7 @@ def test_bin_points_tiled_multi_tile(spark):
         rows,
         "x double,y double,z double,tk int,xmin double,ymin double,xmax double,ymax double",
     )
-    out = rx.bin_points_tiled(
+    out = rx_helpers.bin_points_tiled(
         df,
         x="x",
         y="y",
@@ -113,7 +114,7 @@ def test_bin_points_tiled_empty(spark):
     rx.register(spark)
     df = _mk_df(spark).where(F.col("x") > 1000.0)  # no rows
     assert (
-        rx.bin_points_tiled(
+        rx_helpers.bin_points_tiled(
             df,
             x="x",
             y="y",
@@ -136,7 +137,7 @@ def test_bin_points_tiled_median_delegates(spark):
     rx.register(spark)
     df = _mk_df(spark)
     got = _pixels(
-        rx.bin_points_tiled(
+        rx_helpers.bin_points_tiled(
             df,
             x="x",
             y="y",
@@ -196,7 +197,7 @@ def test_bin_points_tiled_null_z_parity(spark):
     )
     for s in ("count", "mean", "max", "min"):
         got = _pixels(
-            rx.bin_points_tiled(
+            rx_helpers.bin_points_tiled(
                 df,
                 x="x",
                 y="y",

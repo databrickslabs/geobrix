@@ -469,7 +469,10 @@ class ExifGbxReader(DataSourceReader):
         import pyarrow as pa
 
         from databricks.labs.gbx.ds.file_gbx import materialize_decision
-        from databricks.labs.gbx.pyrx.imagery import image_brightness, image_sharpness
+        from databricks.labs.gbx.rasterx.imagery import (
+            image_brightness,
+            image_sharpness,
+        )
 
         local = _listing.to_local_path(file_path)
         source = _listing.to_spark_uri(file_path)

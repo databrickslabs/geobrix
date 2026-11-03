@@ -7,7 +7,7 @@ These helpers are imported directly by the ``exif_gbx`` ``qc`` mode and by the
 orthomosaic Phase-1 example notebook — they must remain importable without a
 SparkContext:
 
-    from databricks.labs.gbx.pyrx.imagery import (
+    from databricks.labs.gbx.rasterx.imagery import (
         gsd_from_telemetry,
         image_sharpness,
         image_brightness,

@@ -14,8 +14,8 @@ from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA, VirtualTile
-from databricks.labs.gbx.pyrx.functions import rst_memsize_grouped
 from databricks.labs.gbx.rasterx.functions import rst_memsize
+from databricks.labs.gbx.rasterx.helpers import rst_memsize_grouped
 
 
 def _make_bytes(width=8, height=8, count=1, epsg=4326):

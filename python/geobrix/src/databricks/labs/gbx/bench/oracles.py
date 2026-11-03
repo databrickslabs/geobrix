@@ -596,7 +596,7 @@ TOWERS_TOLERANCE = (
     0.005  # of total_px: GDAL builds differ by a pixel or so along a visibility edge
 )
 
-# The DataFrame helpers in pyrx/helpers.py (a case's `fn` is the helper's name, not a SQL name).
+# The DataFrame helpers in rasterx/helpers.py (a case's `fn` is the helper's name, not a SQL name).
 # The first arg builds the input rows; the rest are the helper's arguments after the DataFrame and,
 # for the by-key helpers, the method / stat. A towers row (`rst_viewshed_towers`) takes the DSM manifest
 # `(tx, ty, path)` instead of tiles, then the towers (id, x, y[, mast]; a mast column is passed by name), the radius
@@ -3834,7 +3834,7 @@ def reader_failures(cid: str, form: str, src, tiles) -> List[str]:
 def run_towers(spark, case: Case, tmpdir: str, level: Optional[str] = None):
     """`rst_viewshed_towers` over the case's DSM and towers, at `level` (None: the default one).
     Returns {tower: (visible_px, total_px)}; a tower with no row is not in it."""
-    from databricks.labs.gbx.pyrx.functions import rst_viewshed_towers
+    from databricks.labs.gbx.rasterx.helpers import rst_viewshed_towers
 
     manifest_rows, towers, radius, height = case.args
     tiles = spark.createDataFrame(
@@ -3873,7 +3873,7 @@ def run_helpers(
     """Build a (key, tile) DataFrame from the case, call the helper by name, check the rows.
     A towers case runs at `level` (None: the default one)."""
     from databricks.labs.gbx.manifest import TILE_SQL
-    from databricks.labs.gbx.pyrx import helpers
+    from databricks.labs.gbx.rasterx import helpers
 
     tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")
     out = []

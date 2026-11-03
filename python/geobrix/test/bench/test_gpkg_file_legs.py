@@ -188,7 +188,7 @@ def test_gpkg_file_readback_reads_path_not_table_name(spark, tmp_path, monkeypat
 
     gpkg = _write_one_gpkg(tmp_path, rows=7)
     monkeypatch.setattr(
-        "databricks.labs.gbx.pyrx.file_table.read_file_table",
+        "databricks.labs.gbx.rasterx.file_table.read_file_table",
         lambda _s, _t: _tile_path_df(_s, gpkg),
     )
     status, note, refs = rd._gpkg_file_readback(
@@ -207,7 +207,7 @@ def test_gpkg_file_readback_feature_count_mismatch_is_error(
 
     gpkg = _write_one_gpkg(tmp_path, rows=5)
     monkeypatch.setattr(
-        "databricks.labs.gbx.pyrx.file_table.read_file_table",
+        "databricks.labs.gbx.rasterx.file_table.read_file_table",
         lambda _s, _t: _tile_path_df(_s, gpkg),
     )
     status, note, refs = rd._gpkg_file_readback(spark, "cat.sch.tbl", 999, "managed")
@@ -227,7 +227,7 @@ def test_gpkg_file_readback_no_file_refs_is_error(spark, monkeypatch):
         )
 
     monkeypatch.setattr(
-        "databricks.labs.gbx.pyrx.file_table.read_file_table", _null_tile
+        "databricks.labs.gbx.rasterx.file_table.read_file_table", _null_tile
     )
     status, note, refs = rd._gpkg_file_readback(spark, "cat.sch.tbl", 5, "external")
     assert status == "error"

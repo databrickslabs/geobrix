@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from databricks.labs.gbx.pyrx.ortho import _backproject_image
+from databricks.labs.gbx.rasterx.ortho import _backproject_image
 
 
 def _nadir_case(height_m=40.0, cam_w=64, cam_h=48, f=50.0):
@@ -167,7 +167,7 @@ def test_backproject_returns_none_when_too_low():
 
 
 def test_ortho_canvas_dims():
-    from databricks.labs.gbx.pyrx.ortho import _ortho_canvas_dims
+    from databricks.labs.gbx.rasterx.ortho import _ortho_canvas_dims
 
     e0, e1, n0, n1, w, h = _ortho_canvas_dims(0.0, 100.0, 0.0, 50.0, gsd_cm=5.0)
     # 5% margin each side
@@ -177,7 +177,7 @@ def test_ortho_canvas_dims():
 
 
 def test_ortho_canvas_dims_tiny_nonzero():
-    from databricks.labs.gbx.pyrx.ortho import _ortho_canvas_dims
+    from databricks.labs.gbx.rasterx.ortho import _ortho_canvas_dims
 
     _, _, _, _, w, h = _ortho_canvas_dims(0.0, 0.0, 0.0, 0.0, gsd_cm=5.0)
     assert w >= 1 and h >= 1
@@ -186,7 +186,7 @@ def test_ortho_canvas_dims_tiny_nonzero():
 def test_sparse_orthomosaic_signature_light_import():
     import inspect
 
-    from databricks.labs.gbx.pyrx import ortho
+    from databricks.labs.gbx.rasterx import ortho
 
     sig = inspect.signature(ortho.sparse_orthomosaic)
     p = sig.parameters
@@ -206,7 +206,7 @@ def test_sparse_orthomosaic_end_to_end(tmp_path):
     # A meaningful end-to-end needs a real posed reconstruction + overlapping imagery,
     # which is impractical to synthesize minimally. Assert the callable + contract here
     # and defer the true end-to-end to the on-cluster nb1a run (documented integration gate).
-    from databricks.labs.gbx.pyrx import ortho
+    from databricks.labs.gbx.rasterx import ortho
 
     assert callable(ortho.sparse_orthomosaic)
     pytest.skip(

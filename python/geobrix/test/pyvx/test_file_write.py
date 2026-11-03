@@ -4,13 +4,13 @@ from unittest.mock import MagicMock, patch
 
 
 def test_vector_file_write_managed_builds_bytes_row_and_delegates(tmp_path):
-    from databricks.labs.gbx.pyvx.file_write import vector_file_write
+    from databricks.labs.gbx.vectorx.file_write import vector_file_write
 
     out = tmp_path / "out.geojson"
     out.write_bytes(b'{"type":"FeatureCollection","features":[]}')
     spark = MagicMock()
     spark.createDataFrame.return_value = "DF"
-    with patch("databricks.labs.gbx.pyvx.file_write.gbx_file_write") as gfw:
+    with patch("databricks.labs.gbx.vectorx.file_write.gbx_file_write") as gfw:
         vector_file_write(
             spark,
             str(out),
@@ -30,7 +30,7 @@ def test_vector_file_write_managed_builds_bytes_row_and_delegates(tmp_path):
 def test_vector_file_write_external_copies_and_references(tmp_path):
     import os
 
-    from databricks.labs.gbx.pyvx.file_write import vector_file_write
+    from databricks.labs.gbx.vectorx.file_write import vector_file_write
 
     source_bytes = b'{"type":"FeatureCollection","features":[]}'
     out = tmp_path / "out.geojson"
@@ -38,7 +38,7 @@ def test_vector_file_write_external_copies_and_references(tmp_path):
     vol = tmp_path / "vol"
     vol.mkdir()
     spark = MagicMock()
-    with patch("databricks.labs.gbx.pyvx.file_write.gbx_file_write") as gfw:
+    with patch("databricks.labs.gbx.vectorx.file_write.gbx_file_write") as gfw:
         vector_file_write(
             spark,
             str(out),
@@ -62,13 +62,13 @@ def test_vector_file_write_external_copies_and_references(tmp_path):
 
 def test_vector_file_write_layout_forwarded(tmp_path):
     """layout kwarg is forwarded to gbx_file_write."""
-    from databricks.labs.gbx.pyvx.file_write import vector_file_write
+    from databricks.labs.gbx.vectorx.file_write import vector_file_write
 
     out = tmp_path / "out.gpkg"
     out.write_bytes(b"GPKG")
     spark = MagicMock()
     spark.createDataFrame.return_value = "DF"
-    with patch("databricks.labs.gbx.pyvx.file_write.gbx_file_write") as gfw:
+    with patch("databricks.labs.gbx.vectorx.file_write.gbx_file_write") as gfw:
         vector_file_write(
             spark,
             str(out),
@@ -83,13 +83,13 @@ def test_vector_file_write_layout_forwarded(tmp_path):
 
 def test_vector_file_write_target_forwarded(tmp_path):
     """target is forwarded as the first positional arg to gbx_file_write."""
-    from databricks.labs.gbx.pyvx.file_write import vector_file_write
+    from databricks.labs.gbx.vectorx.file_write import vector_file_write
 
     out = tmp_path / "out.gpkg"
     out.write_bytes(b"GPKG")
     spark = MagicMock()
     spark.createDataFrame.return_value = "DF"
-    with patch("databricks.labs.gbx.pyvx.file_write.gbx_file_write") as gfw:
+    with patch("databricks.labs.gbx.vectorx.file_write.gbx_file_write") as gfw:
         vector_file_write(
             spark,
             str(out),
@@ -103,12 +103,12 @@ def test_vector_file_write_target_forwarded(tmp_path):
 
 def test_vector_file_write_external_no_filespace_raises(tmp_path):
     """external mode without filespace raises ValueError."""
-    from databricks.labs.gbx.pyvx.file_write import vector_file_write
+    from databricks.labs.gbx.vectorx.file_write import vector_file_write
 
     out = tmp_path / "out.gpkg"
     out.write_bytes(b"x")
     spark = MagicMock()
-    with patch("databricks.labs.gbx.pyvx.file_write.gbx_file_write"):
+    with patch("databricks.labs.gbx.vectorx.file_write.gbx_file_write"):
         try:
             vector_file_write(
                 spark,
@@ -127,7 +127,7 @@ def test_vector_file_write_external_no_filespace_raises(tmp_path):
 
 def test_vector_file_write_invalid_mode_raises(tmp_path):
     """Unknown file_mode raises ValueError."""
-    from databricks.labs.gbx.pyvx.file_write import vector_file_write
+    from databricks.labs.gbx.vectorx.file_write import vector_file_write
 
     out = tmp_path / "out.gpkg"
     out.write_bytes(b"x")

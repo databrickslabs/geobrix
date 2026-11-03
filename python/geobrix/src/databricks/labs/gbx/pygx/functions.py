@@ -1547,3 +1547,10 @@ def _light_custom_cellfill(
         _method,
         _col(power),
     )
+
+
+def __getattr__(name):
+    """A removed public name: say where it went (no alias keeps working)."""
+    from databricks.labs.gbx import _moved
+
+    return _moved.removed_name(__name__, name)

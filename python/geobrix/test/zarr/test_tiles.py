@@ -23,6 +23,7 @@ from databricks.labs.gbx.pyrx.core.virtual_tile import (  # noqa: E402
     VirtualTile,
 )
 from databricks.labs.gbx.rasterx import functions as rx  # noqa: E402
+from databricks.labs.gbx.rasterx import helpers as rx_helpers  # noqa: E402
 from databricks.labs.gbx.zarr import _read, _tiles  # noqa: E402
 from databricks.labs.gbx.zarr._testing import (  # noqa: E402
     make_era5_like,
@@ -811,8 +812,6 @@ def test_rst_clip_and_transform_on_zarr_tiles(spark_delta, era5_v3_sharded):
     from pyspark.sql import functions as F
     from shapely.geometry import box
 
-    from databricks.labs.gbx.pyrx import functions as prx
-
     df = _tiles_df(
         spark_delta, str(era5_v3_sharded), variables=["t2m"], isel={"time": 0}
     ).select("tile")
@@ -831,7 +830,7 @@ def test_rst_clip_and_transform_on_zarr_tiles(spark_delta, era5_v3_sharded):
     ).first()
     assert (row.w, row.h, row.srid, row.bands) == (72, 37, 4326, 1)
     assert row.srid_t == 3857 and 0 < row.w_clip < 72 and row.empty is False
-    grouped = prx.rst_clip_grouped(
+    grouped = rx_helpers.rst_clip_grouped(
         one, bytes(box(10, 60, 40, 80).wkb), out_col="clipped"
     )
     assert grouped.select(rx.rst_width("clipped")).first()[0] == row.w_clip

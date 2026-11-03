@@ -1,6 +1,6 @@
 import numpy as np
 
-from databricks.labs.gbx.pyrx.imagery import zbuffer_ortho
+from databricks.labs.gbx.rasterx.imagery import zbuffer_ortho
 
 
 def test_zbuffer_ortho_top_surface_rgb_and_dsm():

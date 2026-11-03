@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from databricks.labs.gbx._gdal_policy import open_data
+from databricks.labs.gbx.rasterx import helpers as rx_helpers
 
 from .results import ResultRow
 from .runner import capture_env, peak_rss_mb, time_iters
@@ -64,20 +65,20 @@ MANIFEST_NAME = "cog_multiwindow_manifest.json"
 
 
 def _apply_clip(prx, df, *, geom_wkb, geom_crs, **_):
-    return prx.rst_clip_grouped(df, geom_wkb, clip_crs=geom_crs)
+    return rx_helpers.rst_clip_grouped(df, geom_wkb, clip_crs=geom_crs)
 
 
 def _apply_transform(prx, df, *, target_srid, **_):
     # Reproject to WebMercator EPSG code via the generic transform fn.
-    return prx.rst_transform_grouped(df, int(target_srid))
+    return rx_helpers.rst_transform_grouped(df, int(target_srid))
 
 
 def _apply_to_webmercator(prx, df, **_):
-    return prx.rst_to_webmercator_grouped(df)
+    return rx_helpers.rst_to_webmercator_grouped(df)
 
 
 def _apply_slope(prx, df, **_):
-    return prx.rst_slope_grouped(df)
+    return rx_helpers.rst_slope_grouped(df)
 
 
 # name -> (apply, category-note).  category is a free label used only for the

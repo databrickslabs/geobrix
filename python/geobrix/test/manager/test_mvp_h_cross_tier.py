@@ -70,9 +70,7 @@ def test_a_session_without_the_jar_runs_light_and_says_why(
 
 def test_the_levels_knob_refuses_what_it_cannot_run(spark, tmp_path):
     """A level that does not exist, and JVM-DF with a reprojection (its step has none), are errors, not fallbacks."""
-    from databricks.labs.gbx.pyrx.functions import (
-        rst_viewshed_towers,  # not at import: see the Connect oracle
-    )
+    from databricks.labs.gbx.rasterx.helpers import rst_viewshed_towers
 
     with pytest.raises(ValueError, match="_levels must be one of L3, L1-steps, JVM-DF"):
         oracles.run_towers(spark, TOWERS_ROW, str(tmp_path), "L2")
@@ -91,7 +89,7 @@ def test_the_levels_knob_refuses_what_it_cannot_run(spark, tmp_path):
 
 def test_a_virtual_member_over_the_cap_stops_the_fold(spark, tmp_path, monkeypatch):
     """Decoding a virtual member into a row goes through the materialize cap, and the error says what to do."""
-    from databricks.labs.gbx.pyrx import helpers
+    from databricks.labs.gbx.rasterx import helpers
 
     monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "1000")  # the cap is read on the driver
     tile = oracles.resolve_arg(oracles.Build("tile_virtual"), str(tmp_path))
@@ -110,7 +108,7 @@ def _frame(spark, tmp_path, name):
 def test_a_group_over_the_materialize_cap_stops_the_fold(spark, tmp_path, monkeypatch):
     """A key's members (their encoded bytes, 2.2 KB here) are bounded by the materialize cap, before
     the fold copies them; each member alone (about 0.6 KB) fits."""
-    from databricks.labs.gbx.pyrx import helpers
+    from databricks.labs.gbx.rasterx import helpers
 
     monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "1500")  # the cap is read on the driver
     with pytest.raises(Exception, match="split the key"):
@@ -121,7 +119,7 @@ def test_a_member_that_decodes_over_the_tile_budget_stops_the_fold(
     spark, tmp_path, monkeypatch
 ):
     """A member's decoded size comes from its header, also when its bytes are already in the row."""
-    from databricks.labs.gbx.pyrx import helpers
+    from databricks.labs.gbx.rasterx import helpers
 
     monkeypatch.setattr(
         "databricks.labs.gbx.pyrx.core.budget.decoded_budget_bytes",
@@ -135,7 +133,7 @@ def test_a_mosaic_over_the_cap_is_refused_before_it_is_read(
     spark, tmp_path, monkeypatch
 ):
     """The vrt merge checks the size of its COG on disk; reading it whole first would be the OOM."""
-    from databricks.labs.gbx.pyrx import helpers
+    from databricks.labs.gbx.rasterx import helpers
 
     monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "1000")
     with pytest.raises(Exception, match="merged mosaic is"):

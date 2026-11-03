@@ -277,7 +277,7 @@ PY_ALLOW_BY_LINE = {
         "code); the values are the oracle's own constants"
     ),
     (
-        "pyrx/ortho.py",
+        "rasterx/ortho.py",
         "tf = pyproj.Transformer.from_crs(4326, epsg, always_xy=True)",
     ): INT_EPSG,
     ("sample/_bundle.py", "srs.ImportFromEPSG(4326)"): CONST_CRS,
@@ -400,7 +400,7 @@ def test_a_verbatim_copy_of_an_allowlisted_parse_line_is_a_new_site():
     _new, wrong = _drift(hits, SCALA_FILE_ALLOW, SCALA_SITES, SCALA_COUNTS)
     assert wrong == {(rel, line): (2, 1)}
     prel, pline = (
-        "pyrx/ortho.py",
+        "rasterx/ortho.py",
         "tf = pyproj.Transformer.from_crs(4326, epsg, always_xy=True)",
     )
     ptext = (PY_ROOT / prel).read_text() + "\n\ndef _copy(epsg):\n    " + pline + "\n"

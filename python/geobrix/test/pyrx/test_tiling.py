@@ -1,4 +1,6 @@
-from databricks.labs.gbx.pyrx import tile_range  # adjust import to chosen export
+from databricks.labs.gbx.rasterx.helpers import (
+    tile_range,  # adjust import to chosen export
+)
 
 
 def test_tile_range_centered():

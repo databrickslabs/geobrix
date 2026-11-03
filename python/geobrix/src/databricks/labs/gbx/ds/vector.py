@@ -1137,7 +1137,7 @@ class VectorGbxReader(DataSourceReader):
                 f"access='{access}' is not supported on the "
                 f"df.read.format('vector_gbx') reader (FUSE-only, session-less on "
                 f"Spark Connect). Use the function-layer API instead: "
-                f"from databricks.labs.gbx.pyvx.file_read import vector_file_read. "
+                f"from databricks.labs.gbx.vectorx.file_read import vector_file_read. "
                 f"It reads a directory of vector files with FILE (MANAGED/EXTERNAL) "
                 f"leverage where the runtime supports it."
             )
@@ -1802,7 +1802,7 @@ class VectorGbxWriter(DataSourceWriter):
                 f"file_mode='{self._file_mode}' is not supported on the "
                 f"df.write.format('vector_gbx') writer (FUSE-only). Use the "
                 f"function-layer API instead: "
-                f"from databricks.labs.gbx.pyvx.file_write import vector_file_write. "
+                f"from databricks.labs.gbx.vectorx.file_write import vector_file_write. "
                 f"It assembles your vector output into a FILE-column Delta table "
                 f"(MANAGED create_file / EXTERNAL try_to_file)."
             )

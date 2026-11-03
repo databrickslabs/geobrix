@@ -58,7 +58,7 @@ def _patch_common(monkeypatch, spark, n, ms=200.0):
         lambda fn, w, m: _mock_stats(w, m, ms),
     )
     monkeypatch.setattr(
-        "databricks.labs.gbx.pyrx.file_table.read_file_table",
+        "databricks.labs.gbx.rasterx.file_table.read_file_table",
         lambda _spark, _table, *, skip_ordering=False: _tile_df(spark, n),
     )
     monkeypatch.setattr(
@@ -175,7 +175,7 @@ def test_managed_value_error_yields_na_by_design_rows(spark, monkeypatch):
     from databricks.labs.gbx.bench.readers import run_raster_decode_read_sweep
 
     monkeypatch.setattr(
-        "databricks.labs.gbx.pyrx.file_table.read_file_table",
+        "databricks.labs.gbx.rasterx.file_table.read_file_table",
         lambda *_a, **_kw: (_ for _ in ()).throw(
             ValueError("FILE tier unavailable on FUSE-only tier")
         ),
@@ -203,7 +203,7 @@ def test_external_value_error_single_variant_na(spark, monkeypatch):
     from databricks.labs.gbx.bench.readers import run_raster_decode_read_sweep
 
     monkeypatch.setattr(
-        "databricks.labs.gbx.pyrx.file_table.read_file_table",
+        "databricks.labs.gbx.rasterx.file_table.read_file_table",
         lambda *_a, **_kw: (_ for _ in ()).throw(
             ValueError("FILE tier unavailable on FUSE-only tier")
         ),
@@ -229,7 +229,7 @@ def test_external_value_error_two_variants_both_na(spark, monkeypatch):
     from databricks.labs.gbx.bench.readers import run_raster_decode_read_sweep
 
     monkeypatch.setattr(
-        "databricks.labs.gbx.pyrx.file_table.read_file_table",
+        "databricks.labs.gbx.rasterx.file_table.read_file_table",
         lambda *_a, **_kw: (_ for _ in ()).throw(
             ValueError("FILE tier unavailable on FUSE-only tier")
         ),
@@ -276,7 +276,7 @@ def test_per_tile_avg_uses_n_tasks_not_n_tiles(spark, monkeypatch):
         lambda fn, w, m: _mock_stats(w, m, ms),
     )
     monkeypatch.setattr(
-        "databricks.labs.gbx.pyrx.file_table.read_file_table",
+        "databricks.labs.gbx.rasterx.file_table.read_file_table",
         lambda _spark, _table, *, skip_ordering=False: _tile_df(spark, n_tiles),
     )
     monkeypatch.setattr(

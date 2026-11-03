@@ -72,3 +72,34 @@ def test_a_second_codemod_run_over_the_callers_changes_nothing():
 
     # a rewrite that would not compile is reported, not written
     assert codemod_api._compile_issue("x = (\n") and not codemod_api._compile_issue("%run x\ny = 1\n")
+
+
+def test_the_modules_pass_moves_paths_names_and_helpers_and_is_idempotent():
+    targets = dict(codemod_api.HELPERS)
+    src = (
+        "from databricks.labs.gbx.pyrx import functions as rx\n"
+        "from databricks.labs.gbx.pyrx import mvs, functions as prx2\n"
+        "from databricks.labs.gbx.pyrx import Manifest, configure_gdal_env\n"
+        "from databricks.labs.gbx.pyvx.file_read import vector_file_read\n"
+        "from databricks.labs.gbx.pyrx.functions import _uf_clip, rst_clip_grouped\n"
+        'PATCH = "databricks.labs.gbx.pyrx.ortho.some_name"\n\n\n'
+        "def test_it():\n    return rx.bin_points_tiled(1)\n"
+    )
+    new, issues = codemod_api._apply(src, targets, "", True)
+    assert not issues, issues
+    assert "from databricks.labs.gbx.rasterx import mvs, functions as prx2\n" not in new  # functions stays
+    assert "from databricks.labs.gbx.pyrx import functions as prx2\n" in new
+    assert "from databricks.labs.gbx.rasterx import mvs\n" in new
+    assert "from databricks.labs.gbx.pyrx import configure_gdal_env\n" in new
+    assert "from databricks.labs.gbx.rasterx.checkpoint import Manifest\n" in new
+    assert "from databricks.labs.gbx.vectorx.file_read import vector_file_read\n" in new
+    assert "from databricks.labs.gbx.pyrx.functions import _uf_clip\n" in new
+    assert "from databricks.labs.gbx.rasterx.helpers import rst_clip_grouped\n" in new
+    assert 'PATCH = "databricks.labs.gbx.rasterx.ortho.some_name"' in new
+    assert "rx_helpers.bin_points_tiled(1)" in new
+    assert "from databricks.labs.gbx.rasterx import helpers as rx_helpers\n" in new
+    assert codemod_api._apply(new, targets, "", True)[0] == new
+
+    # a moved name reached through the package alias is left for a hand edit
+    _, issues = codemod_api.rewrite_modules("from databricks.labs.gbx import pyrx as p\n\nx = p.Manifest('a')\n")
+    assert any("p.Manifest" in i for i in issues)

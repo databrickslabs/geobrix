@@ -10,23 +10,28 @@
   "helpers": [
     {
       "name": "retile_virtual",
-      "module": "databricks.labs.gbx.pyrx.helpers",
-      "status": "mvp"
+      "module": "databricks.labs.gbx.rasterx.helpers",
+      "status": "stable"
     },
     {
       "name": "bng_tessellate_virtual",
-      "module": "databricks.labs.gbx.pyrx.helpers",
+      "module": "databricks.labs.gbx.rasterx.helpers",
       "status": "mvp"
     },
     {
       "name": "merge_by_key",
-      "module": "databricks.labs.gbx.pyrx.helpers",
-      "status": "mvp"
+      "module": "databricks.labs.gbx.rasterx.helpers",
+      "status": "stable"
     },
     {
       "name": "combine_by_key",
-      "module": "databricks.labs.gbx.pyrx.helpers",
-      "status": "mvp"
+      "module": "databricks.labs.gbx.rasterx.helpers",
+      "status": "stable"
+    },
+    {
+      "name": "rst_viewshed_towers",
+      "module": "databricks.labs.gbx.rasterx.helpers",
+      "status": "stable"
     }
   ],
   "gdal": {

@@ -1,4 +1,5 @@
 from databricks.labs.gbx.pyvx import functions as vx
+from databricks.labs.gbx.vectorx import helpers as vx_helpers
 
 
 def test_register_only_is_granular():
@@ -45,7 +46,7 @@ def test_coverage_simplify_helper_n_to_n(spark):
 
     rows = [("c", "p0", to_wkb(box(0, 0, 1, 1))), ("c", "p1", to_wkb(box(1, 0, 2, 1)))]
     df = spark.createDataFrame(rows, "cov_id string, name string, geom binary")
-    out = vx.coverage_simplify(df, "cov_id", "geom", 0.0).collect()
+    out = vx_helpers.coverage_simplify(df, "cov_id", "geom", 0.0).collect()
     assert len(out) == 2
     assert {row["name"] for row in out} == {"p0", "p1"}
     # PySpark collect() returns bytearray for BinaryType; bytes() makes it readable

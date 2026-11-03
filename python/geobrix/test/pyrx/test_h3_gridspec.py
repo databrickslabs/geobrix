@@ -2,7 +2,7 @@ import h3
 import pytest
 from pyspark.sql.types import LongType, StringType, StructField, StructType
 
-from databricks.labs.gbx.pyrx import functions as rx
+from databricks.labs.gbx.rasterx import helpers as rx_helpers
 
 
 def test_rst_h3_gridspec_matches_core(spark):
@@ -10,7 +10,7 @@ def test_rst_h3_gridspec_matches_core(spark):
     poly = h3.LatLngPoly([(0.0, 0.0), (0.0, 0.02), (0.02, 0.02), (0.02, 0.0)])
     cells = [h3.str_to_int(c) for c in h3.polygon_to_cells(poly, res)]
     df = spark.createDataFrame([(int(c), "TX1") for c in cells], ["cellid", "tx"])
-    out = rx.rst_h3_gridspec(df, "cellid", "tx", pixel_size=0.005).collect()
+    out = rx_helpers.rst_h3_gridspec(df, "cellid", "tx", pixel_size=0.005).collect()
     assert len(out) == 1
     g = out[0]["grid"]
     from databricks.labs.gbx.pyrx.core import cellraster as cr
@@ -27,7 +27,7 @@ def test_rst_h3_gridspec_auto_pixel_size_matches_core(spark):
     cells = [h3.str_to_int(c) for c in h3.polygon_to_cells(poly, res)]
     df = spark.createDataFrame([(int(c), "TX1") for c in cells], ["cellid", "tx"])
     # No pixel_size: exercises the auto edge-length-from-resolution + lat-cosine path.
-    out = rx.rst_h3_gridspec(df, "cellid", "tx").collect()
+    out = rx_helpers.rst_h3_gridspec(df, "cellid", "tx").collect()
     assert len(out) == 1
     g = out[0]["grid"]
 
@@ -50,4 +50,4 @@ def test_rst_h3_gridspec_empty_raises(spark):
     )
     empty_df = spark.createDataFrame([], schema)
     with pytest.raises(ValueError, match="empty cell set"):
-        rx.rst_h3_gridspec(empty_df, "cellid", "tx")
+        rx_helpers.rst_h3_gridspec(empty_df, "cellid", "tx")

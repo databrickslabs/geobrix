@@ -59,7 +59,7 @@ _SAMPLE_PTS = [
 
 def test_read_fused_ply_roundtrip():
     """Build a tiny binary PLY, read it back, assert x/y/z and r/g/b."""
-    from databricks.labs.gbx.pyrx.imagery import read_fused_ply
+    from databricks.labs.gbx.rasterx.imagery import read_fused_ply
 
     ply_bytes = _make_binary_ply(_SAMPLE_PTS)
 
@@ -98,7 +98,7 @@ def test_read_fused_ply_roundtrip():
 
 def test_read_fused_ply_roundtrip_double():
     """Same test with double-precision x/y/z properties."""
-    from databricks.labs.gbx.pyrx.imagery import read_fused_ply
+    from databricks.labs.gbx.rasterx.imagery import read_fused_ply
 
     ply_bytes = _make_binary_ply(_SAMPLE_PTS, x_type="double")
     with tempfile.NamedTemporaryFile(suffix=".ply", delete=False) as fh:
@@ -124,7 +124,7 @@ def test_write_xyzrgb_laz_roundtrip():
     """Write colored cloud to tmp LAZ (or LAS fallback), read back, check RGB."""
     import laspy
 
-    from databricks.labs.gbx.pyrx.imagery import write_xyzrgb_laz
+    from databricks.labs.gbx.rasterx.imagery import write_xyzrgb_laz
 
     x = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
     y = np.array([10.0, 11.0, 12.0, 13.0, 14.0])
@@ -160,7 +160,7 @@ def test_write_xyzrgb_laz_roundtrip():
 
 def test_write_xyzrgb_laz_returns_path():
     """write_xyzrgb_laz returns the path written (string)."""
-    from databricks.labs.gbx.pyrx.imagery import write_xyzrgb_laz
+    from databricks.labs.gbx.rasterx.imagery import write_xyzrgb_laz
 
     x = np.array([0.0, 1.0])
     y = np.array([0.0, 1.0])
@@ -183,7 +183,7 @@ def test_write_xyzrgb_laz_returns_path():
 
 def test_read_fused_ply_rejects_ascii():
     """A PLY with 'format ascii 1.0' must raise a clear ValueError."""
-    from databricks.labs.gbx.pyrx.imagery import read_fused_ply
+    from databricks.labs.gbx.rasterx.imagery import read_fused_ply
 
     header = (
         "ply\n"

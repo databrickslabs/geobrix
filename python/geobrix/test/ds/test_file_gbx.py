@@ -965,7 +965,7 @@ def test_open_for_write_auto_managed_routes_to_write_file_table():
 
     with (
         patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs,
-        patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
+        patch("databricks.labs.gbx.rasterx.file_table.write_file_table") as mock_wft,
     ):
         mock_fs.return_value = True
         file_gbx.open_for_write(
@@ -996,7 +996,7 @@ def test_open_for_write_auto_external_no_filespace():
 
     with (
         patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs,
-        patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
+        patch("databricks.labs.gbx.rasterx.file_table.write_file_table") as mock_wft,
     ):
         mock_fs.return_value = True
         file_gbx.open_for_write(
@@ -1029,7 +1029,7 @@ def test_open_for_write_auto_fuse_tier_writes_plain_delta():
 
     with (
         patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs,
-        patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
+        patch("databricks.labs.gbx.rasterx.file_table.write_file_table") as mock_wft,
     ):
         mock_fs.return_value = False
         file_gbx.open_for_write(
@@ -1063,7 +1063,7 @@ def test_the_default_file_mode_is_fuse_even_where_file_is_supported(entry):
 
     with (
         patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs,
-        patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
+        patch("databricks.labs.gbx.rasterx.file_table.write_file_table") as mock_wft,
     ):
         mock_fs.return_value = True
         if entry == "open_for_write":
@@ -1084,7 +1084,7 @@ def test_open_for_write_explicit_managed_routes_to_write_file_table():
 
     with (
         patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs,
-        patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
+        patch("databricks.labs.gbx.rasterx.file_table.write_file_table") as mock_wft,
     ):
         mock_fs.return_value = True
         file_gbx.open_for_write(
@@ -1107,7 +1107,7 @@ def test_open_for_write_explicit_external_routes_to_write_file_table():
 
     with (
         patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs,
-        patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
+        patch("databricks.labs.gbx.rasterx.file_table.write_file_table") as mock_wft,
     ):
         mock_fs.return_value = True
         file_gbx.open_for_write(
@@ -1185,7 +1185,7 @@ def test_filespace_without_file_mode_resolves_as_auto_to_managed(entry):
     mock_df = _make_tile_df()
     with (
         patch("databricks.labs.gbx.ds.file_gbx.file_supported", return_value=True),
-        patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
+        patch("databricks.labs.gbx.rasterx.file_table.write_file_table") as mock_wft,
     ):
         _write_with(entry, mock_spark, mock_df, filespace="/Volumes/c/s/v")
 
@@ -1204,7 +1204,7 @@ def test_filespace_without_file_mode_raises_where_file_is_unavailable(entry):
     mock_df = _make_tile_df()
     with (
         patch("databricks.labs.gbx.ds.file_gbx.file_supported", return_value=False),
-        patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
+        patch("databricks.labs.gbx.rasterx.file_table.write_file_table") as mock_wft,
     ):
         with pytest.raises(ValueError, match="FILE write-primitive"):
             _write_with(entry, mock_spark, mock_df, filespace="/Volumes/c/s/v")
@@ -1223,7 +1223,7 @@ def test_explicit_file_mode_wins_over_filespace(entry, explicit):
     mock_df = _make_tile_df()
     with (
         patch("databricks.labs.gbx.ds.file_gbx.file_supported", return_value=True),
-        patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
+        patch("databricks.labs.gbx.rasterx.file_table.write_file_table") as mock_wft,
     ):
         _write_with(
             entry, mock_spark, mock_df, file_mode=explicit, filespace="/Volumes/c/s/v"
@@ -1242,7 +1242,7 @@ def test_open_for_write_invalid_layout_raises():
     mock_spark = MagicMock()
     mock_df = _make_tile_df()
 
-    with patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft:
+    with patch("databricks.labs.gbx.rasterx.file_table.write_file_table") as mock_wft:
         with pytest.raises(ValueError, match="layout must be"):
             file_gbx.open_for_write(
                 mock_spark,
@@ -1278,7 +1278,7 @@ def test_open_for_write_cluster_layout_emits_optimize_warning():
 
     with (
         patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs,
-        patch("databricks.labs.gbx.pyrx.file_table.write_file_table"),
+        patch("databricks.labs.gbx.rasterx.file_table.write_file_table"),
         _warnings_mod.catch_warnings(record=True) as caught,
     ):
         _warnings_mod.simplefilter("always")
@@ -1323,7 +1323,7 @@ def test_open_for_write_cluster_layout_no_warning_for_fuse():
 
 def test_open_for_write_create_sql_no_partitioned_by():
     """Verify create SQL (via write_file_table) never contains PARTITIONED BY."""
-    from databricks.labs.gbx.pyrx import file_table as ft
+    from databricks.labs.gbx.rasterx import file_table as ft
 
     sql = ft.build_create_sql(
         "cat.sch.t",
@@ -1415,7 +1415,7 @@ def test_open_for_write_explicit_managed_no_filespace_raises_early():
     # Patch file_supported so we can confirm it was NOT reached (early guard fires first).
     with (
         patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs,
-        patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
+        patch("databricks.labs.gbx.rasterx.file_table.write_file_table") as mock_wft,
     ):
         mock_fs.return_value = True
         with pytest.raises(ValueError) as exc_info:
@@ -2079,7 +2079,7 @@ def test_open_for_write_write_primitive_absent_read_tier_present_raises():
 
     with (
         patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs,
-        patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
+        patch("databricks.labs.gbx.rasterx.file_table.write_file_table") as mock_wft,
     ):
         mock_fs.return_value = False  # write primitive absent
         with pytest.raises(ValueError) as exc_info:
@@ -2105,7 +2105,7 @@ def test_open_for_write_write_primitive_present_routes_to_file_table():
 
     with (
         patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs,
-        patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
+        patch("databricks.labs.gbx.rasterx.file_table.write_file_table") as mock_wft,
     ):
         mock_fs.return_value = True
         file_gbx.open_for_write(

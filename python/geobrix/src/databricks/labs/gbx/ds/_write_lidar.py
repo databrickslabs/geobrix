@@ -218,7 +218,7 @@ def _merge_laz_parts(inputs: List[str], tmp_path: str, has_rgb: bool, crs) -> in
     """
     import laspy
 
-    from databricks.labs.gbx.pyrx.imagery import write_xyz_laz, write_xyzrgb_laz
+    from databricks.labs.gbx.rasterx.imagery import write_xyz_laz, write_xyzrgb_laz
 
     # Infer CRS from the first part when the caller did not supply one.
     if crs is None and inputs:
@@ -434,7 +434,7 @@ def _merge_laz_parts_seam(
     """
     import laspy
 
-    from databricks.labs.gbx.pyrx.imagery import write_xyz_laz, write_xyzrgb_laz
+    from databricks.labs.gbx.rasterx.imagery import write_xyz_laz, write_xyzrgb_laz
 
     if not inputs:
         return 0
@@ -581,7 +581,7 @@ class LidarGbxWriter(DataSourceWriter):
         return fallback
 
     def _encode_part(self, tmp_path: str, xs, ys, zs, rs, gs, bs) -> str:
-        from databricks.labs.gbx.pyrx.imagery import write_xyz_laz, write_xyzrgb_laz
+        from databricks.labs.gbx.rasterx.imagery import write_xyz_laz, write_xyzrgb_laz
 
         x = np.asarray(xs, dtype=np.float64)
         y = np.asarray(ys, dtype=np.float64)

@@ -38,6 +38,7 @@ from pyspark.sql.window import Window
 
 from _config import cfg, paths, register_gbx  # correct under the pipeline root_path
 from databricks.labs.gbx.rasterx import functions as rx_api
+from databricks.labs.gbx.rasterx import helpers as rx_helpers
 
 # Tasks the .laz files are spread over when they are read: the same 512-way
 # fan-out the surface steps use, so a full-SF update parses its tens of thousands
@@ -128,14 +129,13 @@ def wc_surface_dsm():
     spark = SparkSession.getActiveSession()
     register_gbx(spark)
     c = cfg(spark)
-    from databricks.labs.gbx.pyrx import functions as rx
 
     pts = spark.read.table("wc_lidar_pts")
     tpx = int(c["tile_m"] / c["pixel_m"])
     # bin_points_tiled bins each tile with memory bounded by the raster grid (W x H),
     # NOT the point count -- so a full-resolution tile never OOMs a worker. max z of
     # all returns is the DSM (surface).
-    return rx.bin_points_tiled(
+    return rx_helpers.bin_points_tiled(
         pts,
         x="x",
         y="y",

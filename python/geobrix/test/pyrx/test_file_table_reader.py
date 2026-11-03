@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from databricks.labs.gbx.pyrx.file_table import read_file_table
+from databricks.labs.gbx.rasterx.file_table import read_file_table
 
 
 def _make_plain_table(spark, name):
@@ -130,7 +130,7 @@ def test_managed_capable_branch_uses_file_uri(spark, monkeypatch):
     _make_managed_stub_table(spark, "file_tbl_managed_cap")
 
     # _table_props, _describe_cols, _FILE_SUPPORT_CACHE are now canonical in
-    # ds/file_gbx.py (moved from pyrx/file_table.py for the shared core).
+    # ds/file_gbx.py (moved from rasterx/file_table.py for the shared core).
     # Patch them at their canonical location so resolve_file_table sees the stubs.
     from databricks.labs.gbx.ds import file_gbx as fg
     from databricks.labs.gbx.pyrx import file_props
@@ -172,7 +172,7 @@ def test_not_capable_branch_no_file_col_reference(spark, monkeypatch):
     """Not-capable: FILE column is never referenced; path comes from plain column."""
     _make_managed_stub_table(spark, "file_tbl_managed_notcap")
 
-    # Patch at canonical location (ds/file_gbx.py) — moved from pyrx/file_table.py
+    # Patch at canonical location (ds/file_gbx.py) — moved from rasterx/file_table.py
     from databricks.labs.gbx.ds import file_gbx as fg
     from databricks.labs.gbx.pyrx import file_props
 
@@ -317,7 +317,7 @@ def test_describe_cols_file_type_detection(data_type, expected_is_file):
     (data_type == 'file') would miss these, leaving file_col_name=None and
     use_managed_uri=False even when file_supported(spark)=True.
     """
-    import databricks.labs.gbx.pyrx.file_table as ft
+    import databricks.labs.gbx.rasterx.file_table as ft
 
     # Simulate DESCRIBE TABLE rows: 'path' STRING and 'tile_file' <data_type>.
     # _describe_cols uses r["col_name"] subscript access, so fake rows must

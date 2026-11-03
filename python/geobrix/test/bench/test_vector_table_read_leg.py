@@ -40,7 +40,7 @@ def test_vector_table_read_external_ok_on_parity(spark, monkeypatch):
         return _make_feature_df(_s, n)
 
     monkeypatch.setattr(
-        "databricks.labs.gbx.pyvx.file_read.vector_file_read", _mock_vfr
+        "databricks.labs.gbx.vectorx.file_read.vector_file_read", _mock_vfr
     )
 
     r = run_vector_table_read_sweep(
@@ -68,7 +68,7 @@ def test_vector_table_read_managed_ok_on_parity(spark, monkeypatch):
         return _make_feature_df(_s, n)
 
     monkeypatch.setattr(
-        "databricks.labs.gbx.pyvx.file_read.vector_file_read", _mock_vfr
+        "databricks.labs.gbx.vectorx.file_read.vector_file_read", _mock_vfr
     )
 
     r = run_vector_table_read_sweep(
@@ -97,7 +97,7 @@ def test_vector_table_read_mismatch_is_error(spark, monkeypatch):
         return _make_feature_df(_s, decoded_n)
 
     monkeypatch.setattr(
-        "databricks.labs.gbx.pyvx.file_read.vector_file_read", _mock_vfr
+        "databricks.labs.gbx.vectorx.file_read.vector_file_read", _mock_vfr
     )
 
     r = run_vector_table_read_sweep(
@@ -122,7 +122,7 @@ def test_vector_table_read_value_error_is_na_by_design(spark, monkeypatch):
         raise ValueError("FILE tier unavailable on FUSE-only tier")
 
     monkeypatch.setattr(
-        "databricks.labs.gbx.pyvx.file_read.vector_file_read", _raise_vfr
+        "databricks.labs.gbx.vectorx.file_read.vector_file_read", _raise_vfr
     )
 
     r = run_vector_table_read_sweep(
@@ -146,7 +146,7 @@ def test_vector_table_read_no_expected_n_ok_on_nonzero(spark, monkeypatch):
         return _make_feature_df(_s, 3)
 
     monkeypatch.setattr(
-        "databricks.labs.gbx.pyvx.file_read.vector_file_read", _mock_vfr
+        "databricks.labs.gbx.vectorx.file_read.vector_file_read", _mock_vfr
     )
 
     r = run_vector_table_read_sweep(

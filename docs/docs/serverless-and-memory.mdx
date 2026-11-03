@@ -75,7 +75,7 @@ The staging cache is bounded so it cannot fill a worker's local disk. When a new
 **3. FILE-column vector table.** For a directory of vector files that is read repeatedly, store them as a FILE-column Delta table via `vector_file_write` or the `vector_gbx` writer with `file_mode="external"`. Reading from the Delta table resolves FILE references without per-file FUSE opens and enables the same open-amortization as the raster fast path:
 
 ```python
-from databricks.labs.gbx.pyvx.file_read import vector_file_read
+from databricks.labs.gbx.vectorx.file_read import vector_file_read
 
 # Read from a FILE-column vector table (table mode)
 df = vector_file_read(spark, "catalog.schema.roads_table", source_type="table")

@@ -8,7 +8,7 @@ import io
 import numpy as np
 from PIL import Image
 
-from databricks.labs.gbx.pyrx.imagery import (
+from databricks.labs.gbx.rasterx.imagery import (
     gsd_from_telemetry,
     image_brightness,
     image_sharpness,
@@ -150,7 +150,7 @@ def test_gsd_udf_spark(spark):
     """gsd_udf should compute the same value as gsd_from_telemetry."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx.imagery import gsd_udf
+    from databricks.labs.gbx.rasterx.imagery import gsd_udf
 
     df = spark.createDataFrame(
         [(30.0, 1733.30, 6.17, 4000)],
@@ -169,7 +169,7 @@ def test_sharpness_udf_spark(spark):
     """sharpness_udf should return float on a flat image."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx.imagery import sharpness_udf
+    from databricks.labs.gbx.rasterx.imagery import sharpness_udf
 
     img_bytes = _make_png_bytes(value=128)
     df = spark.createDataFrame([(img_bytes,)], ["img"])
@@ -181,7 +181,7 @@ def test_brightness_udf_spark(spark):
     """brightness_udf should return near-128 for a flat gray image."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx.imagery import brightness_udf
+    from databricks.labs.gbx.rasterx.imagery import brightness_udf
 
     img_bytes = _make_png_bytes(value=128)
     df = spark.createDataFrame([(img_bytes,)], ["img"])

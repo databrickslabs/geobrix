@@ -28,6 +28,7 @@ import pytest
 import rasterio
 
 from databricks.labs.gbx.bench import grouped_file as gf
+from databricks.labs.gbx.rasterx import helpers as rx_helpers
 
 
 @pytest.fixture(scope="module")
@@ -96,14 +97,12 @@ def test_three_modes_run_and_produce_rows(spark, corpus):
 
 def _clip_outputs_by_cellid(spark, corpus, mode):
     """Apply rst_clip_grouped in `mode`; return {cellid: decoded pixels}."""
-    from databricks.labs.gbx.pyrx import functions as prx
-
     manifest_rows = gf.read_manifest_rows(corpus)
     geom_wkb, geom_crs = gf._clip_geom_from_source(manifest_rows[0]["path"])
     prior = gf._set_file_env(mode)
     try:
         df = gf.build_tile_df(spark, manifest_rows, mode=mode)
-        out = prx.rst_clip_grouped(df, geom_wkb, clip_crs=geom_crs)
+        out = rx_helpers.rst_clip_grouped(df, geom_wkb, clip_crs=geom_crs)
         collected = out.collect()
     finally:
         gf._restore_file_env(prior)

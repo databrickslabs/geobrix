@@ -75,7 +75,7 @@ def clip_geom_wkb():
 
 def test_rst_clip_grouped_produces_clipped_tile(materialized_tile_df, clip_geom_wkb):
     """rst_clip_grouped returns a non-null clipped tile for a materialized tile."""
-    from databricks.labs.gbx.pyrx.functions import rst_clip_grouped
+    from databricks.labs.gbx.rasterx.helpers import rst_clip_grouped
 
     out = rst_clip_grouped(
         materialized_tile_df, clip_geom_wkb, all_touched=False, out_col="clipped"
@@ -90,7 +90,7 @@ def test_rst_clip_grouped_produces_clipped_tile(materialized_tile_df, clip_geom_
 
 def test_rst_clip_grouped_cellids_preserved(materialized_tile_df, clip_geom_wkb):
     """Output tiles carry the same cellid as the corresponding input tiles."""
-    from databricks.labs.gbx.pyrx.functions import rst_clip_grouped
+    from databricks.labs.gbx.rasterx.helpers import rst_clip_grouped
 
     out = rst_clip_grouped(
         materialized_tile_df, clip_geom_wkb, all_touched=False, out_col="clipped"
@@ -114,7 +114,8 @@ def test_rst_clip_grouped_parity_with_scalar(spark, raster_bytes, clip_geom_wkb)
     mode) while exercising the same clip_to_geom math.  This is the intended
     fallback-path comparison: grouped executor (view='pixels') vs per-row UDF.
     """
-    from databricks.labs.gbx.pyrx.functions import _uf_clip, rst_clip_grouped
+    from databricks.labs.gbx.pyrx.functions import _uf_clip
+    from databricks.labs.gbx.rasterx.helpers import rst_clip_grouped
 
     # Single tile so comparison is 1-to-1.
     df = spark.createDataFrame(
@@ -247,7 +248,8 @@ def _assert_pixel_equal(grouped_bytes, scalar_bytes, name):
 
 def test_rst_transform_grouped_parity(spark, raster_bytes):
     """rst_transform_grouped pixel-equals _uf_transform on the same materialized tile."""
-    from databricks.labs.gbx.pyrx.functions import _uf_transform, rst_transform_grouped
+    from databricks.labs.gbx.pyrx.functions import _uf_transform
+    from databricks.labs.gbx.rasterx.helpers import rst_transform_grouped
 
     df = _parity_df(spark, raster_bytes)
     g_bytes = _read_grouped(rst_transform_grouped(df, 3857, out_col="out"))
@@ -260,10 +262,8 @@ def test_rst_transform_grouped_parity(spark, raster_bytes):
 
 def test_rst_to_webmercator_grouped_parity(spark, raster_bytes):
     """rst_to_webmercator_grouped pixel-equals _uf_to_webmercator (bilinear)."""
-    from databricks.labs.gbx.pyrx.functions import (
-        _uf_to_webmercator,
-        rst_to_webmercator_grouped,
-    )
+    from databricks.labs.gbx.pyrx.functions import _uf_to_webmercator
+    from databricks.labs.gbx.rasterx.helpers import rst_to_webmercator_grouped
 
     df = _parity_df(spark, raster_bytes)
     g_bytes = _read_grouped(rst_to_webmercator_grouped(df, "bilinear", out_col="out"))
@@ -279,10 +279,8 @@ def test_rst_to_webmercator_grouped_parity(spark, raster_bytes):
 
 def test_rst_transformcrs_grouped_parity(spark, raster_bytes):
     """rst_transformcrs_grouped pixel-equals _uf_transformcrs for EPSG:3857."""
-    from databricks.labs.gbx.pyrx.functions import (
-        _uf_transformcrs,
-        rst_transformcrs_grouped,
-    )
+    from databricks.labs.gbx.pyrx.functions import _uf_transformcrs
+    from databricks.labs.gbx.rasterx.helpers import rst_transformcrs_grouped
 
     df = _parity_df(spark, raster_bytes)
     g_bytes = _read_grouped(rst_transformcrs_grouped(df, "EPSG:3857", out_col="out"))
@@ -298,7 +296,8 @@ def test_rst_transformcrs_grouped_parity(spark, raster_bytes):
 
 def test_rst_resample_grouped_parity(spark, raster_bytes):
     """rst_resample_grouped pixel-equals _uf_resample (nearest, factor=2.0)."""
-    from databricks.labs.gbx.pyrx.functions import _uf_resample, rst_resample_grouped
+    from databricks.labs.gbx.pyrx.functions import _uf_resample
+    from databricks.labs.gbx.rasterx.helpers import rst_resample_grouped
 
     df = _parity_df(spark, raster_bytes)
     g_bytes = _read_grouped(rst_resample_grouped(df, 2.0, "nearest", out_col="out"))
@@ -314,10 +313,8 @@ def test_rst_resample_grouped_parity(spark, raster_bytes):
 
 def test_rst_resample_to_size_grouped_parity(spark, raster_bytes):
     """rst_resample_to_size_grouped pixel-equals _uf_resample_to_size (2x2, nearest)."""
-    from databricks.labs.gbx.pyrx.functions import (
-        _uf_resample_to_size,
-        rst_resample_to_size_grouped,
-    )
+    from databricks.labs.gbx.pyrx.functions import _uf_resample_to_size
+    from databricks.labs.gbx.rasterx.helpers import rst_resample_to_size_grouped
 
     df = _parity_df(spark, raster_bytes)
     g_bytes = _read_grouped(
@@ -337,10 +334,8 @@ def test_rst_resample_to_size_grouped_parity(spark, raster_bytes):
 
 def test_rst_resample_to_res_grouped_parity(spark, raster_bytes):
     """rst_resample_to_res_grouped pixel-equals _uf_resample_to_res (1.0, nearest)."""
-    from databricks.labs.gbx.pyrx.functions import (
-        _uf_resample_to_res,
-        rst_resample_to_res_grouped,
-    )
+    from databricks.labs.gbx.pyrx.functions import _uf_resample_to_res
+    from databricks.labs.gbx.rasterx.helpers import rst_resample_to_res_grouped
 
     df = _parity_df(spark, raster_bytes)
     # Original pixel res = 0.5 degrees; resample to 1.0 degrees (halve pixel count)
@@ -361,7 +356,8 @@ def test_rst_resample_to_res_grouped_parity(spark, raster_bytes):
 
 def test_rst_threshold_grouped_parity(spark, raster_bytes):
     """rst_threshold_grouped pixel-equals _uf_threshold (> 5.0)."""
-    from databricks.labs.gbx.pyrx.functions import _uf_threshold, rst_threshold_grouped
+    from databricks.labs.gbx.pyrx.functions import _uf_threshold
+    from databricks.labs.gbx.rasterx.helpers import rst_threshold_grouped
 
     df = _parity_df(spark, raster_bytes)
     g_bytes = _read_grouped(rst_threshold_grouped(df, ">", 5.0, out_col="out"))
@@ -377,10 +373,8 @@ def test_rst_threshold_grouped_parity(spark, raster_bytes):
 
 def test_rst_updatetype_grouped_parity(spark, raster_bytes):
     """rst_updatetype_grouped pixel-equals _uf_update_type (Float64)."""
-    from databricks.labs.gbx.pyrx.functions import (
-        _uf_update_type,
-        rst_updatetype_grouped,
-    )
+    from databricks.labs.gbx.pyrx.functions import _uf_update_type
+    from databricks.labs.gbx.rasterx.helpers import rst_updatetype_grouped
 
     df = _parity_df(spark, raster_bytes)
     g_bytes = _read_grouped(rst_updatetype_grouped(df, "Float64", out_col="out"))
@@ -396,7 +390,8 @@ def test_rst_updatetype_grouped_parity(spark, raster_bytes):
 
 def test_rst_slope_grouped_parity(spark):
     """rst_slope_grouped pixel-equals _uf_slope on a projected DEM tile."""
-    from databricks.labs.gbx.pyrx.functions import _uf_slope, rst_slope_grouped
+    from databricks.labs.gbx.pyrx.functions import _uf_slope
+    from databricks.labs.gbx.rasterx.helpers import rst_slope_grouped
 
     dem_bytes = _make_dem_bytes()
     df = _parity_df(spark, dem_bytes)
@@ -415,7 +410,8 @@ def test_rst_slope_grouped_parity(spark):
 
 def test_rst_aspect_grouped_parity(spark):
     """rst_aspect_grouped pixel-equals _uf_aspect on a projected DEM tile."""
-    from databricks.labs.gbx.pyrx.functions import _uf_aspect, rst_aspect_grouped
+    from databricks.labs.gbx.pyrx.functions import _uf_aspect
+    from databricks.labs.gbx.rasterx.helpers import rst_aspect_grouped
 
     dem_bytes = _make_dem_bytes()
     df = _parity_df(spark, dem_bytes)
@@ -434,7 +430,8 @@ def test_rst_aspect_grouped_parity(spark):
 
 def test_rst_hillshade_grouped_parity(spark):
     """rst_hillshade_grouped pixel-equals _uf_hillshade on a projected DEM tile."""
-    from databricks.labs.gbx.pyrx.functions import _uf_hillshade, rst_hillshade_grouped
+    from databricks.labs.gbx.pyrx.functions import _uf_hillshade
+    from databricks.labs.gbx.rasterx.helpers import rst_hillshade_grouped
 
     dem_bytes = _make_dem_bytes()
     df = _parity_df(spark, dem_bytes)

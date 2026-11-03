@@ -32,7 +32,7 @@ from databricks.labs.gbx.pyrx.core.analysis import (
     _observer_height_col,
     _validate_towers_inputs,
 )
-from databricks.labs.gbx.pyrx.functions import rst_viewshed_towers
+from databricks.labs.gbx.rasterx.helpers import rst_viewshed_towers
 
 
 # --- _validate_towers_inputs ------------------------------------------------

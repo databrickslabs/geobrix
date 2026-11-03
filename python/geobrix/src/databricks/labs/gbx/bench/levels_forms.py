@@ -627,32 +627,32 @@ def _stats(df, tile_expr: Optional[str]):
 
 
 def h_retile_helper(spark, src):
-    from databricks.labs.gbx.pyrx import helpers
+    from databricks.labs.gbx.rasterx import helpers
 
     tiles = helpers.retile_virtual(spark.table(src), "tile", _RETILE_PX, _RETILE_PX)
     return _stats(tiles, _DOWN)
 
 
 def h_tess_helper(spark, src):
-    from databricks.labs.gbx.pyrx import helpers
+    from databricks.labs.gbx.rasterx import helpers
 
     return _stats(helpers.bng_tessellate_virtual(spark.table(src), "tile", 3), _DOWN)
 
 
 def h_merge_fold(spark, src):
-    from databricks.labs.gbx.pyrx import helpers
+    from databricks.labs.gbx.rasterx import helpers
 
     return _stats(helpers.merge_by_key(spark.table(src), ["key"], method="fold"), None)
 
 
 def h_merge_vrt(spark, src):
-    from databricks.labs.gbx.pyrx import helpers
+    from databricks.labs.gbx.rasterx import helpers
 
     return _stats(helpers.merge_by_key(spark.table(src), ["key"], method="vrt"), None)
 
 
 def h_combine_avg(spark, src):
-    from databricks.labs.gbx.pyrx import helpers
+    from databricks.labs.gbx.rasterx import helpers
 
     return _stats(helpers.combine_by_key(spark.table(src), ["key"], stat="avg"), None)
 
@@ -664,7 +664,7 @@ def _towers(spark, src, level):
     """
     from pyspark.sql import functions as F
 
-    from databricks.labs.gbx.pyrx.functions import rst_viewshed_towers
+    from databricks.labs.gbx.rasterx.helpers import rst_viewshed_towers
 
     done = rst_viewshed_towers(
         spark.table(src), spark.table(src + "_tiles"), _TOWER_RADIUS, _TOWER_MAST,

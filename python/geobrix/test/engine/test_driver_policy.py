@@ -871,7 +871,7 @@ def _through_a_vrt_member(tmp_path):
 def _through_a_vector_table_path(tmp_path):
     import pandas as pd
 
-    from databricks.labs.gbx.pyvx import file_read
+    from databricks.labs.gbx.vectorx import file_read
 
     decode = file_read._make_vector_decode_fn(True, 0)
     next(
@@ -1166,7 +1166,7 @@ def test_vector_file_read_carries_the_switch_to_its_workers_reads(
     import json
 
     pytest.importorskip("pyogrio")
-    from databricks.labs.gbx.pyvx import file_read
+    from databricks.labs.gbx.vectorx import file_read
 
     feature = {
         "type": "Feature",
@@ -1205,7 +1205,7 @@ def test_the_vector_decode_carries_the_switch_per_batch_not_across_its_yields(
     import pandas as pd
 
     pytest.importorskip("pyogrio")
-    from databricks.labs.gbx.pyvx import file_read
+    from databricks.labs.gbx.vectorx import file_read
 
     gj = tmp_path / "a.geojson"
     gj.write_text(

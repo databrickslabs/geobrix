@@ -11,7 +11,7 @@ _MID_CLOUD_BYTES = 1024 * _MIB  # ~1 GiB mid-size cloud
 
 def _patch_infra(monkeypatch, avail_mb, gpu):
     monkeypatch.setattr(
-        "databricks.labs.gbx.pyrx.mvs.gpu_infra",
+        "databricks.labs.gbx.rasterx.mvs.gpu_infra",
         lambda: {
             "host_ram_available_mb": avail_mb,
             "host_ram_mb": avail_mb,
@@ -26,7 +26,7 @@ def test_driver_merge_override_wins(monkeypatch):
     from databricks.labs.gbx.pyrx.core.budget import budget_for
 
     monkeypatch.setattr(
-        "databricks.labs.gbx.pyrx.mvs.gpu_infra",
+        "databricks.labs.gbx.rasterx.mvs.gpu_infra",
         lambda: (_ for _ in ()).throw(RuntimeError("probe must not be called")),
     )
     d = budget_for("driver_merge", 0, override_mb="100")
@@ -59,7 +59,7 @@ def test_driver_merge_probe_failure_floor(monkeypatch):
     def _raise():
         raise RuntimeError("nvidia-smi: command not found")
 
-    monkeypatch.setattr("databricks.labs.gbx.pyrx.mvs.gpu_infra", _raise)
+    monkeypatch.setattr("databricks.labs.gbx.rasterx.mvs.gpu_infra", _raise)
     d = budget_for("driver_merge", 0, override_mb=None)
     assert d.budget_bytes == _MERGE_FALLBACK_BYTES
 
@@ -127,7 +127,7 @@ def test_dense_alloc_override_mb_wins(monkeypatch):
 
     # override_mb must win without touching the infra probe
     monkeypatch.setattr(
-        "databricks.labs.gbx.pyrx.mvs.gpu_infra",
+        "databricks.labs.gbx.rasterx.mvs.gpu_infra",
         lambda: (_ for _ in ()).throw(RuntimeError("probe must not be called")),
     )
     d = budget_for("dense_alloc", override_mb="200")

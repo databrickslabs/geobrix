@@ -93,7 +93,7 @@ points to a complete vector file (e.g. a `.gpkg`). Reading decodes all features 
 referenced file via pyogrio.
 
 ```python
-from databricks.labs.gbx.pyvx import vector_file_read
+from databricks.labs.gbx.vectorx.file_read import vector_file_read
 
 # Read all vector files referenced in a FILE-column table
 features = vector_file_read(
@@ -132,7 +132,7 @@ in the table DDL. After a bulk insert, run `OPTIMIZE` to materialize the cluster
 the same source land in the same data files, which makes repeated reads and compaction-stable:
 
 ```python
-from databricks.labs.gbx.pyvx import vector_file_write
+from databricks.labs.gbx.vectorx.file_write import vector_file_write
 
 vector_file_write(
     spark,

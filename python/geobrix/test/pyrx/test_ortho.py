@@ -1,7 +1,11 @@
 import numpy as np
 import pytest
 
-from databricks.labs.gbx.pyrx.ortho import apply_sim3, rasterize_enu_ortho, umeyama_sim3
+from databricks.labs.gbx.rasterx.ortho import (
+    apply_sim3,
+    rasterize_enu_ortho,
+    umeyama_sim3,
+)
 
 
 def test_umeyama_recovers_known_transform():
@@ -43,7 +47,7 @@ def test_module_imports_without_pycolmap():
     # Importing the module + using the pure primitives must NOT require pycolmap.
     import importlib
 
-    m = importlib.import_module("databricks.labs.gbx.pyrx.ortho")
+    m = importlib.import_module("databricks.labs.gbx.rasterx.ortho")
     assert hasattr(m, "umeyama_sim3") and hasattr(m, "apply_sim3")
 
 
@@ -61,7 +65,7 @@ def test_place_clusters_shared_enu_requires_pycolmap_with_clear_message():
     else:
         pytest.skip("pycolmap is importable in this environment")
 
-    m = importlib.import_module("databricks.labs.gbx.pyrx.ortho")
+    m = importlib.import_module("databricks.labs.gbx.rasterx.ortho")
     with pytest.raises(ImportError, match="place_clusters_shared_enu"):
         m.place_clusters_shared_enu(
             {0: ("/nonexistent/sparse", "/nonexistent/gps.json")}
@@ -71,7 +75,7 @@ def test_place_clusters_shared_enu_requires_pycolmap_with_clear_message():
 @pytest.mark.parametrize("_", [0])
 def test_place_clusters_shared_enu_available(_):
     pytest.importorskip("pycolmap")
-    from databricks.labs.gbx.pyrx.ortho import place_clusters_shared_enu
+    from databricks.labs.gbx.rasterx.ortho import place_clusters_shared_enu
 
     assert callable(place_clusters_shared_enu)
     # A full functional test needs a synthetic pycolmap Reconstruction; building
@@ -85,7 +89,7 @@ def test_place_clusters_shared_enu_available(_):
 def test_dense_clusters_to_products_available():
     import inspect
 
-    from databricks.labs.gbx.pyrx.ortho import dense_clusters_to_products
+    from databricks.labs.gbx.rasterx.ortho import dense_clusters_to_products
 
     # Importing dense_clusters_to_products does not require pycolmap, so this
     # structural assertion runs unconditionally (light venv + CI too) -- spark
@@ -100,7 +104,7 @@ def test_dense_clusters_to_products_available():
 
 
 def test_dense_orthomosaic_composes(monkeypatch):
-    import databricks.labs.gbx.pyrx.ortho as ortho_mod
+    import databricks.labs.gbx.rasterx.ortho as ortho_mod
 
     calls = {}
 
@@ -176,7 +180,7 @@ def test_dense_orthomosaic_composes(monkeypatch):
 
 
 def test_dense_orthomosaic_raises_on_empty(monkeypatch):
-    import databricks.labs.gbx.pyrx.ortho as ortho_mod
+    import databricks.labs.gbx.rasterx.ortho as ortho_mod
 
     monkeypatch.setattr(ortho_mod, "dense_reconstruct_clusters", lambda *a, **k: {})
 
@@ -204,7 +208,7 @@ def test_dense_orthomosaic_raises_on_empty(monkeypatch):
 def test_dense_orthomosaic_spark_is_explicit():
     import inspect
 
-    from databricks.labs.gbx.pyrx.ortho import dense_orthomosaic
+    from databricks.labs.gbx.rasterx.ortho import dense_orthomosaic
 
     sig = inspect.signature(dense_orthomosaic)
     assert list(sig.parameters)[0] == "spark"

@@ -78,7 +78,7 @@ __all__ = [
     "_resolve_session_for_cap",
     "materialize_decision",
     "report_detected_cap",
-    # FILE-column table helpers (moved from pyrx/file_table.py for DRY shared core)
+    # FILE-column table helpers (moved from rasterx/file_table.py for DRY shared core)
     "_table_props",
     "_describe_cols",
     # Generic session-ful FILE-column table read
@@ -1985,7 +1985,7 @@ def open_for_write(
     """
     import warnings
 
-    from databricks.labs.gbx.pyrx.file_table import write_file_table
+    from databricks.labs.gbx.rasterx.file_table import write_file_table
 
     # 0. A bare ``filespace`` signals FILE MANAGED intent: resolve it as "auto" would,
     #    but through the explicit-mode branch so a runtime without FILE raises instead of
@@ -2149,7 +2149,7 @@ def ingest_files(
         ValueError: If FILE support is unavailable (tier='fuse'), or ``layout`` is
                     invalid.
     """
-    from databricks.labs.gbx.pyrx.file_table import build_create_sql
+    from databricks.labs.gbx.rasterx.file_table import build_create_sql
 
     # 1. Validate layout before any side effects.
     _validate_layout(layout)
@@ -2212,12 +2212,12 @@ def ingest_files(
 
 
 # =============================================================================
-# FILE-column table helpers (moved from pyrx/file_table.py — shared core)
+# FILE-column table helpers (moved from rasterx/file_table.py — shared core)
 # =============================================================================
-# These helpers were formerly private to pyrx/file_table.py.  They are now
-# canonical here so both the raster reader (pyrx/file_table.py) and future
+# These helpers were formerly private to rasterx/file_table.py.  They are now
+# canonical here so both the raster reader (rasterx/file_table.py) and future
 # format-agnostic consumers (vector table read, gbx_file_read table mode) can
-# share them without duplication.  pyrx/file_table.py imports them from here.
+# share them without duplication.  rasterx/file_table.py imports them from here.
 
 
 def _table_props(spark: SparkSession, table: str) -> dict:

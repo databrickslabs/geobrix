@@ -24,7 +24,7 @@ def _decode_laz(path):
 
 
 def test_write_xyz_laz_roundtrips_xyz_format0(tmp_path):
-    from databricks.labs.gbx.pyrx.imagery import write_xyz_laz
+    from databricks.labs.gbx.rasterx.imagery import write_xyz_laz
 
     x = np.array([0.0, 1.0, 2.5], dtype=np.float64)
     y = np.array([10.0, 11.0, 12.0], dtype=np.float64)
@@ -462,7 +462,7 @@ def test_writer_merge_names_a_part_that_fails_to_parse(tmp_path):
     from pyspark.sql.types import DoubleType, StructField, StructType
 
     from databricks.labs.gbx.ds._write_lidar import LidarGbxWriter
-    from databricks.labs.gbx.pyrx.imagery import write_xyz_laz
+    from databricks.labs.gbx.rasterx.imagery import write_xyz_laz
 
     rng = np.random.default_rng(5)
     write_xyz_laz(
@@ -495,7 +495,7 @@ def test_writer_merge_rejects_heterogeneous_formats(spark, tmp_path):
     import os as _os
 
     from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
-    from databricks.labs.gbx.pyrx.imagery import write_xyz_laz, write_xyzrgb_laz
+    from databricks.labs.gbx.rasterx.imagery import write_xyz_laz, write_xyzrgb_laz
 
     try:
         spark.dataSource.register(LidarGbxDataSource)

@@ -14,6 +14,14 @@ statement (never inside a parenthesized one). Aliases are read from the syntax t
 or parenthesized `from ...pyrx import (functions as rx)` counts. A notebook's `%run <relative path>` target is
 read for the bindings it defines (UNRESOLVED when it cannot be read). A rewritten file that no longer compiles
 is reported instead of written. `--dry-run` prints what would change and writes nothing.
+
+`--modules` moves the Python-only API: `databricks.labs.gbx.pyrx.<mod>` becomes `...rasterx.<mod>` (and
+`pyvx.<mod>` becomes `vectorx.<mod>`) for the moved modules, in code, strings and import statements; the
+names the light packages used to export (`Manifest`, `tile_range`, `h3_viewshed_towers`, ...) are imported
+from their new module; and `<light alias>.<helper>` (`rst_viewshed_towers`, the `*_grouped` functions,
+`bin_points_tiled`, `rst_h3_gridspec`, `coverage_simplify`, and the `from ...pyrx.functions import
+<helper>` form) points at `rasterx.helpers` / `vectorx.helpers`. A name reached through the package
+(`pyrx.Manifest(`, `pyrx.ortho.x`) is reported for a hand edit.
 """
 
 from __future__ import annotations
@@ -34,6 +42,62 @@ ALIAS = {
     "gridx.h3": "hx",
     "vectorx": "vx",
     "pmtiles": "pmx",
+    "rasterx.helpers": "rx_helpers",
+    "gridx.helpers": "gx_helpers",
+    "vectorx.helpers": "vx_helpers",
+}
+
+# --modules: what moved out of the light packages (Task "Python-only API moves under rasterx/gridx/vectorx").
+MOVED_MODULES = {
+    "pyrx": ("rasterx", ("checkpoint", "mvs", "ortho", "sfm", "imagery", "file_table", "helpers")),
+    "pyvx": ("vectorx", ("file_read", "file_write")),
+}
+# a name the package `__init__` used to export -> the module that defines it now
+PACKAGE_NAMES = {
+    "pyrx": {
+        "Manifest": "rasterx.checkpoint",
+        "checkpoint_skip": "rasterx.checkpoint",
+        "input_signature": "rasterx.checkpoint",
+        "dense_fuse": "rasterx.mvs",
+        "dense_mvs_pool": "rasterx.mvs",
+        "dense_patch_match": "rasterx.mvs",
+        "dense_reconstruct_clusters": "rasterx.mvs",
+        "dense_undistort": "rasterx.mvs",
+        "gpu_infra": "rasterx.mvs",
+        "recommend_dense_allocation": "rasterx.mvs",
+        "tile_range": "rasterx.helpers",
+        "rst_viewshed_towers": "rasterx.helpers",
+    },
+    "pygx": {
+        "h3_los_visible": "gridx.helpers",
+        "h3_viewshed_towers": "gridx.helpers",
+    },
+    "pyvx": {},
+}
+# a Python-only function the light `functions` module defined -> the helpers module that defines it now
+HELPERS = {
+    **{
+        n: "rasterx.helpers"
+        for n in (
+            "rst_viewshed_towers",
+            "rst_memsize_grouped",
+            "rst_clip_grouped",
+            "rst_transform_grouped",
+            "rst_to_webmercator_grouped",
+            "rst_transformcrs_grouped",
+            "rst_resample_grouped",
+            "rst_resample_to_size_grouped",
+            "rst_resample_to_res_grouped",
+            "rst_threshold_grouped",
+            "rst_updatetype_grouped",
+            "rst_slope_grouped",
+            "rst_aspect_grouped",
+            "rst_hillshade_grouped",
+            "bin_points_tiled",
+            "rst_h3_gridspec",
+        )
+    },
+    "coverage_simplify": "vectorx.helpers",
 }
 
 
@@ -49,6 +113,9 @@ def _targets(names) -> Dict[str, str]:
 
 
 def _import_line(module: str, alias: str) -> str:
+    if module.endswith(".helpers"):
+        pkg = module.rsplit(".", 1)[0]
+        return f"from databricks.labs.gbx.{pkg} import helpers as {alias}"
     return f"from databricks.labs.gbx.{module} import functions as {alias}"
 
 
@@ -318,7 +385,8 @@ def rewrite(
     chosen: Dict[str, Tuple[str, bool]] = {}
     for alias in sorted(aliases):
         for name, module in targets.items():
-            pat = re.compile(rf"\b{re.escape(alias)}\.{re.escape(name)}\(")
+            end = r"\b" if module.endswith(".helpers") else r"(?=\()"
+            pat = re.compile(rf"\b{re.escape(alias)}\.{re.escape(name)}{end}")
             if not pat.search(text):
                 continue
             if module not in chosen:
@@ -329,7 +397,7 @@ def rewrite(
                     f"no free alias for {module} ({ALIAS[module]}, {ALIAS[module]}_api)"
                 )
                 continue
-            text = pat.sub(f"{new}.{name}(", text)
+            text = pat.sub(f"{new}.{name}", text)
     imported = names_c | names_t
     imported |= {alias for alias, _ in chosen.values()}
     for name in targets:
@@ -376,12 +444,101 @@ def rewrite(
     return text, unresolved
 
 
+
+_GBX = r"databricks\.labs\.gbx"
+
+
+def _split_import(node, lines) -> List[str]:
+    """The replacement lines of one ``from databricks.labs.gbx.<light>[.functions] import ...`` statement
+    whose names moved ([] when none did). Each destination module gets its own statement; names that
+    stay keep the original one."""
+    m = re.fullmatch(rf"{_GBX}\.(pyrx|pygx|pyvx)(\.functions)?", node.module or "")
+    if not m or node.level:
+        return []
+    pkg, in_functions = m.group(1), bool(m.group(2))
+    stay, moved = [], {}
+    for a in node.names:
+        if a.name == "*":
+            return []
+        if in_functions:
+            dest = HELPERS.get(a.name)
+            dest = dest if dest and dest.split(".")[0] == {"pyrx": "rasterx", "pyvx": "vectorx", "pygx": "gridx"}[pkg] else None
+            target = f"databricks.labs.gbx.{dest}" if dest else None
+        elif a.name in MOVED_MODULES.get(pkg, ("", ()))[1]:
+            target = f"databricks.labs.gbx.{MOVED_MODULES[pkg][0]}"
+        elif a.name in PACKAGE_NAMES.get(pkg, {}):
+            target = f"databricks.labs.gbx.{PACKAGE_NAMES[pkg][a.name]}"
+        else:
+            target = None
+        item = a.name + (f" as {a.asname}" if a.asname else "")
+        (moved.setdefault(target, []) if target else stay).append(item)
+    if not moved:
+        return []
+    indent = " " * node.col_offset
+    tail = lines[node.end_lineno - 1][node.end_col_offset :]
+    out = []
+    if stay:
+        out.append(f"{indent}from {node.module} import {', '.join(stay)}")
+    for target, items in moved.items():
+        out.append(f"{indent}from {target} import {', '.join(items)}")
+    out[-1] += tail
+    return out
+
+
+def rewrite_modules(text: str) -> Tuple[str, List[str]]:
+    """``--modules``: the module paths, the import statements and the package-level names that moved."""
+    unresolved: List[str] = []
+    # 1. a dotted path in code, a string (a monkeypatch target, an importlib name) or a docstring
+    for pkg, (new, mods) in MOVED_MODULES.items():
+        text = re.sub(rf"{_GBX}\.{pkg}\.({'|'.join(mods)})\b", rf"databricks.labs.gbx.{new}.\1", text)
+    for pkg, new in (("pyrx", "rasterx"), ("pyvx", "vectorx")):
+        names = "|".join(n for n, m in HELPERS.items() if m.startswith(new))
+        text = re.sub(
+            rf"{_GBX}\.{pkg}\.functions\.({names})\b", rf"databricks.labs.gbx.{new}.helpers.\1", text
+        )
+    # 2. import statements (last first, so the line numbers hold)
+    tree = _parse(text)
+    if tree is not None:
+        import ast
+
+        lines = text.split("\n")
+        nodes = [n for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)]
+        for node in sorted(nodes, key=lambda n: n.lineno, reverse=True):
+            new = _split_import(node, lines)
+            if new:
+                lines[node.lineno - 1 : node.end_lineno] = new
+        text = "\n".join(lines)
+    # 3. a moved name reached through the package alias: edit by hand
+    movers = set(PACKAGE_NAMES["pyrx"]) | set(MOVED_MODULES["pyrx"][1]) | set(PACKAGE_NAMES["pygx"])
+    movers |= set(MOVED_MODULES["pyvx"][1])
+    for alias in re.findall(rf"from {_GBX} import (?:pyrx|pygx|pyvx) as (\w+)", text) + re.findall(
+        rf"import {_GBX}\.(?:pyrx|pygx|pyvx) as (\w+)", text
+    ):
+        for m in re.finditer(rf"(?<![\w.]){alias}\.({'|'.join(sorted(movers))})\b", text):
+            line = text.count("\n", 0, m.start()) + 1
+            unresolved.append(
+                f"line {line}: {alias}.{m.group(1)} reaches a moved name through the package: use its new module by hand"
+            )
+    for m in re.finditer(rf"{_GBX}\.(?:pyrx|pygx|pyvx)\.({'|'.join(sorted(movers))})\b", text):
+        line = text.count("\n", 0, m.start()) + 1
+        unresolved.append(f"line {line}: {m.group(0)} reaches a moved name through the package: edit by hand")
+    return text, unresolved
+
+
 def _cell_text(cell) -> str:
     src = cell["source"]
     return "".join(src) if isinstance(src, list) else src
 
 
-def _notebook(path: Path, targets) -> Tuple[str, str, List[str]]:
+def _apply(src: str, targets, ctx: str, modules: bool) -> Tuple[str, List[str]]:
+    issues: List[str] = []
+    if modules:
+        src, issues = rewrite_modules(src)
+    new, un = rewrite(src, targets, ctx)
+    return new, issues + un
+
+
+def _notebook(path: Path, targets, modules: bool = False) -> Tuple[str, str, List[str]]:
     raw = path.read_text()
     nb = json.loads(raw)
     issues, changed = [], False
@@ -393,7 +550,7 @@ def _notebook(path: Path, targets) -> Tuple[str, str, List[str]]:
         src = _cell_text(cell)
         # earlier cells (and their %run targets) bind names for this one; later cells bind nothing yet
         ctx = "\n".join(_cell_text(c) + "\n" + r for c, r in zip(code[:i], runs[:i])) + "\n" + runs[i]
-        new, un = rewrite(src, targets, ctx)
+        new, un = _apply(src, targets, ctx, modules)
         issues += un
         if new != src:
             bad = _compile_issue(new)
@@ -426,6 +583,11 @@ def main(argv=None) -> int:
     ap.add_argument("--names", nargs="+", default=[])
     ap.add_argument("--names-from-family")
     ap.add_argument(
+        "--modules",
+        action="store_true",
+        help="point callers at the modules and helpers that moved out of pyrx / pygx / pyvx",
+    )
+    ap.add_argument(
         "--dry-run", action="store_true", help="print what would change; write nothing"
     )
     ap.add_argument("paths", nargs="*")
@@ -444,6 +606,8 @@ def main(argv=None) -> int:
             if f.family == a.names_from_family
         ]
     targets = _targets(names)
+    if a.modules:
+        targets = {**targets, **HELPERS}
     files = [
         p
         for root in paths
@@ -451,11 +615,11 @@ def main(argv=None) -> int:
     ]
     for path in sorted(f for f in files if f.suffix in (".py", ".ipynb")):
         if path.suffix == ".ipynb":
-            old, new, issues = _notebook(path, targets)
+            old, new, issues = _notebook(path, targets, a.modules)
         else:
             old = path.read_text()
             issues = []
-            new, un = rewrite(old, targets, _run_code(old, path, issues))
+            new, un = _apply(old, targets, _run_code(old, path, issues), a.modules)
             issues += un
             bad = _compile_issue(new) if new != old else None
             if bad:

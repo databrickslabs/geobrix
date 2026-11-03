@@ -26,11 +26,13 @@ def _write_geojson(p, n):
 
 
 def test_vector_file_read_fuse_reads_members(spark, tmp_path):
-    from databricks.labs.gbx.pyvx.file_read import vector_file_read
+    from databricks.labs.gbx.vectorx.file_read import vector_file_read
 
     _write_geojson(tmp_path / "a.geojson", 2)
     _write_geojson(tmp_path / "b.geojson", 3)
-    with patch("databricks.labs.gbx.pyvx.file_read.file_supported", return_value=False):
+    with patch(
+        "databricks.labs.gbx.vectorx.file_read.file_supported", return_value=False
+    ):
         df = vector_file_read(spark, str(tmp_path), driver="GeoJSON")
         rows = df.collect()
     assert len(rows) == 5
@@ -42,7 +44,7 @@ def test_vector_file_read_fuse_reads_members(spark, tmp_path):
 
 
 def test_vector_file_read_injects_file_ref_when_supported(spark, tmp_path, monkeypatch):
-    from databricks.labs.gbx.pyvx import file_read
+    from databricks.labs.gbx.vectorx import file_read
 
     _write_geojson(tmp_path / "a.geojson", 1)
     captured = {}
@@ -71,7 +73,7 @@ def test_vector_file_read_managed_on_path_raises(spark, tmp_path):
     """access='managed' on a location (path/dir) source raises the table-only rule
     error — aligned with gbx_file_read. vector_file_read is location-only, so
     managed can never resolve here."""
-    from databricks.labs.gbx.pyvx.file_read import vector_file_read
+    from databricks.labs.gbx.vectorx.file_read import vector_file_read
 
     _write_geojson(tmp_path / "a.geojson", 1)
     with pytest.raises(
@@ -83,11 +85,12 @@ def test_vector_file_read_managed_on_path_raises(spark, tmp_path):
 def test_vector_file_read_managed_raises_regardless_of_tier(spark, tmp_path):
     """managed raises the table-only error even on a FILE-capable tier — it is a
     source-kind rule, not a tier gate (vector_file_read reads a location)."""
-    from databricks.labs.gbx.pyvx.file_read import vector_file_read
+    from databricks.labs.gbx.vectorx.file_read import vector_file_read
 
     _write_geojson(tmp_path / "a.geojson", 1)
     with patch(
-        "databricks.labs.gbx.pyvx.file_read.file_access_tier", return_value="list_files"
+        "databricks.labs.gbx.vectorx.file_read.file_access_tier",
+        return_value="list_files",
     ):
         with pytest.raises(
             ValueError, match="only valid for a MANAGED FILE-column table source"
@@ -96,10 +99,12 @@ def test_vector_file_read_managed_raises_regardless_of_tier(spark, tmp_path):
 
 
 def test_vector_file_read_as_wkb_false_returns_wkt(spark, tmp_path):
-    from databricks.labs.gbx.pyvx.file_read import vector_file_read
+    from databricks.labs.gbx.vectorx.file_read import vector_file_read
 
     _write_geojson(tmp_path / "c.geojson", 2)
-    with patch("databricks.labs.gbx.pyvx.file_read.file_supported", return_value=False):
+    with patch(
+        "databricks.labs.gbx.vectorx.file_read.file_supported", return_value=False
+    ):
         df = vector_file_read(spark, str(tmp_path), driver="GeoJSON", as_wkb=False)
         rows = df.collect()
     assert len(rows) == 2
@@ -139,7 +144,7 @@ def test_vector_file_read_source_uses_read_arrow_not_read_dataframe():
     """
     import inspect
 
-    from databricks.labs.gbx.pyvx import file_read
+    from databricks.labs.gbx.vectorx import file_read
 
     src = inspect.getsource(file_read)
     assert "read_dataframe" not in src, (
@@ -157,10 +162,12 @@ def test_vector_file_read_gpkg_reads_wkb_without_geopandas(spark, tmp_path):
     The fixture is written via pyogrio.write_arrow (no geopandas), so this
     exercises the geopandas-free read path end-to-end.
     """
-    from databricks.labs.gbx.pyvx.file_read import vector_file_read
+    from databricks.labs.gbx.vectorx.file_read import vector_file_read
 
     _write_gpkg(tmp_path / "t.gpkg", 3)
-    with patch("databricks.labs.gbx.pyvx.file_read.file_supported", return_value=False):
+    with patch(
+        "databricks.labs.gbx.vectorx.file_read.file_supported", return_value=False
+    ):
         df = vector_file_read(spark, str(tmp_path), driver="GPKG", as_wkb=True)
         rows = df.collect()
     assert len(rows) == 3
@@ -176,10 +183,12 @@ def test_vector_file_read_gpkg_reads_wkb_without_geopandas(spark, tmp_path):
 
 def test_vector_file_read_gpkg_wkt_mode(spark, tmp_path):
     """as_wkb=False on a .gpkg returns WKT strings (no geopandas needed)."""
-    from databricks.labs.gbx.pyvx.file_read import vector_file_read
+    from databricks.labs.gbx.vectorx.file_read import vector_file_read
 
     _write_gpkg(tmp_path / "t.gpkg", 2)
-    with patch("databricks.labs.gbx.pyvx.file_read.file_supported", return_value=False):
+    with patch(
+        "databricks.labs.gbx.vectorx.file_read.file_supported", return_value=False
+    ):
         df = vector_file_read(spark, str(tmp_path), driver="GPKG", as_wkb=False)
         rows = df.collect()
     assert len(rows) == 2
@@ -223,7 +232,7 @@ def test_vector_file_read_table_roundtrip_external(spark, tmp_path):
     """
     import shapely
 
-    from databricks.labs.gbx.pyvx.file_read import vector_file_read
+    from databricks.labs.gbx.vectorx.file_read import vector_file_read
 
     gpkg_path = tmp_path / "roundtrip.gpkg"
     _write_gpkg(gpkg_path, 4)
@@ -252,7 +261,7 @@ def test_vector_file_read_source_type_detection(spark, tmp_path):
     - Explicit ``source_type='table'`` overrides heuristic → ``'table'``
     - Explicit ``source_type='path'`` overrides heuristic → ``'path'``
     """
-    from databricks.labs.gbx.pyvx.file_read import _classify_vector_source
+    from databricks.labs.gbx.vectorx.file_read import _classify_vector_source
 
     # Qualified table names → table
     assert _classify_vector_source("catalog.schema.table", "auto") == "table"
@@ -283,8 +292,8 @@ def test_vector_file_read_table_skip_ordering(spark, tmp_path):
     Patches ``resolve_file_table`` in the ``pyvx.file_read`` module and asserts
     it is called with the ``skip_ordering`` value the caller specified.
     """
-    import databricks.labs.gbx.pyvx.file_read as vfr_mod
-    from databricks.labs.gbx.pyvx.file_read import vector_file_read
+    import databricks.labs.gbx.vectorx.file_read as vfr_mod
+    from databricks.labs.gbx.vectorx.file_read import vector_file_read
 
     gpkg_path = tmp_path / "f.gpkg"
     _write_gpkg(gpkg_path, 1)
@@ -317,7 +326,7 @@ def test_vector_file_read_table_skip_ordering(spark, tmp_path):
 def _decode(as_wkb, sources):
     import pandas as pd
 
-    from databricks.labs.gbx.pyvx.file_read import _make_vector_decode_fn
+    from databricks.labs.gbx.vectorx.file_read import _make_vector_decode_fn
 
     fn = _make_vector_decode_fn(as_wkb, 0)
     return list(fn(iter([pd.DataFrame({"source": sources})])))

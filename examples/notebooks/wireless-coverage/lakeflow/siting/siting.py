@@ -17,7 +17,7 @@ Entry point: ``main(argv)`` -- invoked by the DAB job task::
 
 Key difference from notebook 04: the expensive exact (fine-resolution) viewshed
 no longer runs as a driver-side ``tower_viewshed`` / ``h3_los_visible`` loop. It
-goes through the distributed ``databricks.labs.gbx.pygx.h3_viewshed_towers``
+goes through the distributed ``databricks.labs.gbx.gridx.helpers.h3_viewshed_towers``
 primitive (``mapInPandas``, one tower per task, no ``sparkContext`` / ``.rdd`` /
 ``_jvm``), so the siting pass scales to the full San Francisco AOI. The cheap,
 coarse quick-pass screen stays a driver-side loop by design (that is the whole
@@ -156,7 +156,7 @@ def rank_candidates(rows):
 def _buffer_k(radius_m, res):
     """H3 ring radius covering ``radius_m`` at resolution ``res``.
 
-    Mirrors the buffer sizing inside ``pygx.h3_viewshed_towers`` so the quick-pass
+    Mirrors the buffer sizing inside ``gridx.helpers.h3_viewshed_towers`` so the quick-pass
     screen and the viewshed-fraction denominator (``n_targets``) count the same
     neighborhood the primitive actually tests. Hex centers are ~1.73*edge apart;
     dividing by 1.5 (< 1.73) is a safe over-estimate of k.
@@ -315,7 +315,7 @@ def main(argv=None):
 
     from databricks.labs.gbx.ds.register import register as register_ds
     from databricks.labs.gbx.pygx import functions as gx
-    from databricks.labs.gbx.pygx import h3_los_visible, h3_viewshed_towers
+    from databricks.labs.gbx.gridx.helpers import h3_los_visible, h3_viewshed_towers
     from databricks.labs.gbx.pyrx import functions as rx
     from databricks.labs.gbx.pyvx import functions as vx
     from pyspark.databricks.sql import functions as DBF

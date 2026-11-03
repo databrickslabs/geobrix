@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from databricks.labs.gbx.pyrx.mvs import (
+from databricks.labs.gbx.rasterx.mvs import (
     _parse_gpu_infra,
     _resolve_model_dir,
     dense_mvs_pool,
@@ -106,7 +106,7 @@ def test_recommend_dense_allocation_routes_budget_for(monkeypatch):
     the post-migration output matches the pre-migration formula exactly.
     """
     import databricks.labs.gbx.pyrx.core.budget as _budget_mod
-    from databricks.labs.gbx.pyrx.mvs import recommend_dense_allocation
+    from databricks.labs.gbx.rasterx.mvs import recommend_dense_allocation
 
     # Pre-migration formula (independent computation, pinning expected values):
     # ram_avail_gb = 2018981 / 1024.0 = 1971.665...
@@ -223,7 +223,7 @@ def test_dense_fuse_input_type_matches_geom_consistency(
     'geometric' after a photometric-only (geom_consistency=False) pass finds no maps
     and silently produces an EMPTY cloud. dense_fuse MUST select input_type to match
     the patch_match pass, or the fast (geom_consistency=False) path yields 0 points."""
-    from databricks.labs.gbx.pyrx import mvs
+    from databricks.labs.gbx.rasterx import mvs
 
     rec = {}
     _fake_pycolmap(rec)
@@ -236,7 +236,7 @@ def test_dense_fuse_input_type_matches_geom_consistency(
 def test_dense_fuse_defaults_geometric(tmp_path):
     """Default (no arg) fuses geometric — the caller wiring passes the same
     geom_consistency it gave dense_patch_match."""
-    from databricks.labs.gbx.pyrx import mvs
+    from databricks.labs.gbx.rasterx import mvs
 
     rec = {}
     _fake_pycolmap(rec)
@@ -259,8 +259,8 @@ def test_resolve_model_dir_flat(tmp_path):
     assert _resolve_model_dir(tmp_path) == tmp_path
 
 
-def test_pyrx_exports_mvs():
-    from databricks.labs.gbx import pyrx
+def test_rasterx_mvs_exports_the_dense_api():
+    from databricks.labs.gbx.rasterx import mvs as mvs_api
 
     for n in [
         "gpu_infra",
@@ -271,7 +271,7 @@ def test_pyrx_exports_mvs():
         "dense_fuse",
         "dense_reconstruct_clusters",
     ]:
-        assert hasattr(pyrx, n), f"pyrx missing export: {n}"
+        assert hasattr(mvs_api, n), f"rasterx.mvs missing export: {n}"
 
 
 # --- dense_reconstruct_clusters tests ---
@@ -292,8 +292,8 @@ def _dense_sig_args(**overrides):
 def test_reconstruct_skips_checkpointed(tmp_path, monkeypatch):
     """A cluster already checkpointed (matching sig + a persisted, existing ply)
     is skipped WITHOUT calling dense_undistort/dense_mvs_pool for it."""
-    from databricks.labs.gbx.pyrx import mvs
-    from databricks.labs.gbx.pyrx.checkpoint import Manifest
+    from databricks.labs.gbx.rasterx import mvs
+    from databricks.labs.gbx.rasterx.checkpoint import Manifest
 
     sparse_dir = tmp_path / "sparse"
     sparse_dir.mkdir()
@@ -336,8 +336,8 @@ def test_reconstruct_skips_checkpointed(tmp_path, monkeypatch):
 def test_reconstruct_recomputes_and_persists(tmp_path, monkeypatch):
     """No checkpoint entry -> undistort/pool/fuse run; ply is copied under
     ply_root and the checkpoint records it as done."""
-    from databricks.labs.gbx.pyrx import mvs
-    from databricks.labs.gbx.pyrx.checkpoint import Manifest
+    from databricks.labs.gbx.rasterx import mvs
+    from databricks.labs.gbx.rasterx.checkpoint import Manifest
 
     sparse_dir = tmp_path / "sparse"
     sparse_dir.mkdir()
@@ -390,7 +390,7 @@ def test_reconstruct_recomputes_and_persists(tmp_path, monkeypatch):
 def test_reconstruct_threads_geom_consistency(tmp_path, monkeypatch, geom_consistency):
     """geom_consistency must reach BOTH the patch_match spec (pool) AND dense_fuse
     (a miss here reintroduces the empty-PLY bug fixed in 193ded76)."""
-    from databricks.labs.gbx.pyrx import mvs
+    from databricks.labs.gbx.rasterx import mvs
 
     sparse_dir = tmp_path / "sparse"
     sparse_dir.mkdir()
@@ -431,7 +431,7 @@ def test_reconstruct_threads_geom_consistency(tmp_path, monkeypatch, geom_consis
 def test_reconstruct_drops_patch_match_failure(tmp_path, monkeypatch):
     """A cluster whose patch_match pool status != 'ok' is dropped from the
     result (and reported via on_event); other clusters still succeed."""
-    from databricks.labs.gbx.pyrx import mvs
+    from databricks.labs.gbx.rasterx import mvs
 
     sparse0 = tmp_path / "sparse0"
     sparse0.mkdir()
@@ -477,8 +477,8 @@ def test_reconstruct_drops_patch_match_failure(tmp_path, monkeypatch):
 
 def test_reconstruct_force_ignores_checkpoint(tmp_path, monkeypatch):
     """force=True bypasses an existing checkpoint entry and recomputes."""
-    from databricks.labs.gbx.pyrx import mvs
-    from databricks.labs.gbx.pyrx.checkpoint import Manifest
+    from databricks.labs.gbx.rasterx import mvs
+    from databricks.labs.gbx.rasterx.checkpoint import Manifest
 
     sparse_dir = tmp_path / "sparse"
     sparse_dir.mkdir()
@@ -533,7 +533,7 @@ def test_reconstruct_force_ignores_checkpoint(tmp_path, monkeypatch):
 def test_reconstruct_recompute_no_ply_root_returns_local_path(tmp_path, monkeypatch):
     """Review Focus (b): ply_root=None keeps a recomputed cluster's fused ply
     LOCAL (under work_root), not a Volume path."""
-    from databricks.labs.gbx.pyrx import mvs
+    from databricks.labs.gbx.rasterx import mvs
 
     sparse_dir = tmp_path / "sparse"
     sparse_dir.mkdir()
@@ -577,8 +577,8 @@ def test_reconstruct_skip_uses_manifest_output_not_this_run_ply_root(
     calling dense_undistort/dense_mvs_pool and (b) return run 1's persisted
     Volume path — not f'{work_dir}/fused.ply' for a work_dir that was never
     populated this run."""
-    from databricks.labs.gbx.pyrx import mvs
-    from databricks.labs.gbx.pyrx.checkpoint import Manifest
+    from databricks.labs.gbx.rasterx import mvs
+    from databricks.labs.gbx.rasterx.checkpoint import Manifest
 
     sparse_dir = tmp_path / "sparse"
     sparse_dir.mkdir()

@@ -123,14 +123,14 @@ The core pipeline:
 ![Notebook 01b — loading the persisted sparse model, one call to ortho.dense_orthomosaic (dense_reconstruct_clusters + dense_mvs_pool patch-match on GPU), then a dense point cloud written via lidar_gbx](../../../resources/images/diagrams/orthomosaic/orthomosaic-01b.png)
 
 An optional GPU notebook that upgrades the sparse result to a **dense** reconstruction. It
-loads the persisted sparse model from `01a` and, per group, makes one call —
-`ortho.dense_orthomosaic` — that reconstructs every GPS cluster (undistort, COLMAP
-`patch_match_stereo` across the node's GPUs via a driver-side GPU-slot scheduler sized by
-`recommend_dense_allocation`, and fuse to a per-cluster `fused.ply`, with per-cluster
-checkpointing) and then georeferences the result into a dense RGB orthomosaic, DSM, and
-LAZ point cloud (per-cluster and merged); see the `pyrx.ortho` module reference further
-down this page for its full API. Runs on the **Serverless GPU AI Runtime** (environment 5,
-`pycolmap-cuda12`, CUDA 12); `01a` is the CPU peer that produces the sparse model it
+loads the persisted sparse model from `01a`. Per group, it makes one call, `ortho.dense_orthomosaic`.
+The call reconstructs every GPS cluster: it undistorts the images, runs COLMAP `patch_match_stereo`
+across the node's GPUs, and fuses a per-cluster `fused.ply`. A driver-side GPU-slot scheduler sized by
+`recommend_dense_allocation` places the work, and each cluster is checkpointed. The call then
+georeferences the result into a dense RGB orthomosaic, a DSM, and a LAZ point cloud (per-cluster and
+merged). See the `rasterx.ortho` module reference further down this page for its full API. The
+notebook runs on the **Serverless GPU AI Runtime** (environment 5, `pycolmap-cuda12`, CUDA 12); `01a`
+is the CPU peer that produces the sparse model it
 consumes. `02_publish` automatically uses the dense orthomosaic when present.
 
 ### `02_publish` — color correction → COG → PMTiles
@@ -321,7 +321,7 @@ reconstruction statistics (registered images, 3-D points) while `01a_sfm_orthomo
   emits one row per image with GPS coordinates, camera identity, focal length, pixel dimensions,
   and a `POINT WKB` geometry column. `mode="qc"` adds `sharpness` and `brightness`. Options:
   `filterRegex`, `sensorWidthMm`, `focalLengthMm`. See [EXIF/GPS reader](../readers/exif).
-- **`pyrx.gsd_from_telemetry`** — `gsd_from_telemetry(focal_length_mm, altitude, image_width,
+- **`rasterx.imagery.gsd_from_telemetry`** — `gsd_from_telemetry(focal_length_mm, altitude, image_width,
   sensor_width_mm)` returns ground sampling distance in cm/pixel. Used to confirm the dataset
   meets the target GSD before reconstruction.
 - **`cog_gbx` writer** — converts the corrected orthomosaic to Cloud-Optimized GeoTIFF
@@ -349,10 +349,10 @@ reconstruction statistics (registered images, 3-D points) while `01a_sfm_orthomo
 
 ---
 
-## The `pyrx.sfm` module
+## The `rasterx.sfm` module
 
 `01a`'s SIFT extraction → GPS pair discovery → matching → mapping pipeline is, like the
-dense pass, not bespoke notebook code — it lives in `databricks.labs.gbx.pyrx.sfm`, a
+dense pass, not bespoke notebook code — it lives in `databricks.labs.gbx.rasterx.sfm`, a
 tested library module. The module imports on the light tier with **no optional
 dependency** at all; `pycolmap` is imported lazily, inside `run_sfm`'s master-DB-assembly
 and mapping stage only, and raises a clear `ImportError` there if missing — install the
@@ -361,7 +361,7 @@ and mapping stage only, and raises a clear `ImportError` there if missing — in
 ### `run_sfm` — distributed sparse SfM for one group of images
 
 ```python
-from databricks.labs.gbx.pyrx import sfm
+from databricks.labs.gbx.rasterx import sfm
 
 result = sfm.run_sfm(
     spark,
@@ -448,7 +448,7 @@ gated. `01a` calls `run_sfm` once per GPS cluster with per-cluster `feature_tabl
 ### `image_ids_to_pair_id` — the COLMAP pair-id primitive
 
 ```python
-from databricks.labs.gbx.pyrx.sfm import image_ids_to_pair_id
+from databricks.labs.gbx.rasterx.sfm import image_ids_to_pair_id
 
 pair_id = image_ids_to_pair_id(image_id1, image_id2)
 ```
@@ -461,11 +461,11 @@ always ordered first (the two ids are swapped beforehand if needed), and the res
 
 ---
 
-## The `pyrx.ortho` module
+## The `rasterx.ortho` module
 
 `01b`'s dense pass is not bespoke notebook code — the shared-frame alignment, cloud
 rasterization, and per-cluster/merged product export live in
-`databricks.labs.gbx.pyrx.ortho`, a tested library module. The module splits cleanly by
+`databricks.labs.gbx.rasterx.ortho`, a tested library module. The module splits cleanly by
 dependency: the pure math (`umeyama_sim3`, `apply_sim3`, and `rasterize_enu_ortho` when
 called with `gps_tf=None`) is plain NumPy and imports with no optional dependency. The
 orchestration functions that actually drive a dense reconstruction
@@ -477,8 +477,7 @@ extra to use them.
 ### `dense_orthomosaic` — dense orthomosaic in one call
 
 ```python
-from databricks.labs.gbx import pyrx as rx
-from databricks.labs.gbx.pyrx import ortho
+from databricks.labs.gbx.rasterx import checkpoint, mvs, ortho
 
 used_cids, merged_laz_path = ortho.dense_orthomosaic(
     spark,
@@ -494,7 +493,7 @@ used_cids, merged_laz_path = ortho.dense_orthomosaic(
     },
     work_root="/local_disk0/tmp/dense",
     ply_root="/Volumes/.../dense",
-    checkpoint=rx.Manifest("/Volumes/.../checkpoint.json"),
+    checkpoint=checkpoint.Manifest("/Volumes/.../checkpoint.json"),
     gsd_cm=3.0,
     max_image_size=1600,
     geom_consistency=True,
@@ -521,19 +520,18 @@ Requires the `photogrammetry` extra (`pycolmap`).
 
 ### `dense_reconstruct_clusters` — reconstruction only
 
-For callers who want to drive reconstruction and georeferencing/products separately — for
-example, reconstructing once and rasterizing at more than one `gsd_cm`, or reconstructing
-now and deferring products to a later step — the mid-level `dense_reconstruct_clusters`
-(re-exported directly on `pyrx`, not `pyrx.ortho`) does just the reconstruction half that
-`dense_orthomosaic` composes:
+Some callers drive reconstruction and products separately. For example, they reconstruct once
+and rasterize at more than one `gsd_cm`, or they defer the products to a later step. For them,
+the mid-level `dense_reconstruct_clusters` (in `rasterx.mvs`, not `rasterx.ortho`) does just the
+reconstruction half that `dense_orthomosaic` composes:
 
 ```python
-plys = rx.dense_reconstruct_clusters(
+plys = mvs.dense_reconstruct_clusters(
     cluster_models,        # {cid: (sparse_dir, gps_json)}
     image_dir,
     work_root="/local_disk0/tmp/dense",
     ply_root="/Volumes/.../dense",
-    checkpoint=rx.Manifest("/Volumes/.../checkpoint.json"),
+    checkpoint=checkpoint.Manifest("/Volumes/.../checkpoint.json"),
     geom_consistency=True,
 )
 # plys: {cid: fused.ply path}
@@ -555,7 +553,7 @@ handing the result to `dense_clusters_to_products`.
 ### `dense_clusters_to_products` — the dense entry point
 
 ```python
-from databricks.labs.gbx.pyrx import ortho
+from databricks.labs.gbx.rasterx import ortho
 
 used_cids, merged_laz_path = ortho.dense_clusters_to_products(
     spark,

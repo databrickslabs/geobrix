@@ -2411,8 +2411,8 @@ def test_the_keyed_helpers_carry_the_sessions_read_cap(spark, tmp_path):
 
     from databricks.labs.gbx.bench import oracles
     from databricks.labs.gbx.ds.file_gbx import READ_CAP_KEY
-    from databricks.labs.gbx.pyrx import helpers
     from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+    from databricks.labs.gbx.rasterx import helpers
 
     tile = oracles._build("tile_4326", str(tmp_path))  # 12 KiB decoded, 64 pixels wide
     df = spark.createDataFrame(
@@ -2779,3 +2779,89 @@ def test_only_a_table_function_takes_a_table_parameter():
         for f in FNS
         if any(p.session == ("TABLE",) for p in f.params)
     )
+
+
+# --- the light packages hold the implementation only: the Python-only API lives under rasterx / gridx / vectorx ---
+
+_LIGHT = ("pyrx", "pygx", "pyvx")
+
+
+def test_light_modules_define_no_public_callable():
+    import importlib
+    import inspect
+
+    for pkg in _LIGHT:
+        mod = importlib.import_module(f"databricks.labs.gbx.{pkg}.functions")
+        public = [
+            n
+            for n, v in vars(mod).items()
+            if not n.startswith("_")
+            and inspect.isfunction(v)
+            and v.__module__ == mod.__name__
+            and n != "register"
+        ]
+        assert public == [], (pkg, public)
+
+
+def test_removed_light_api_names_the_new_module():
+    from databricks.labs.gbx.pyrx import functions as old
+
+    with pytest.raises(AttributeError, match=r"rasterx\.functions\.rst_width.*Fix:"):
+        old.rst_width
+
+
+@pytest.mark.parametrize(
+    "pkg, name, home",
+    [
+        ("pyrx", "rst_viewshed_towers", "rasterx.helpers"),
+        ("pyrx", "rst_clip_grouped", "rasterx.helpers"),
+        ("pyrx", "bin_points_tiled", "rasterx.helpers"),
+        ("pyrx", "rst_h3_gridspec", "rasterx.helpers"),
+        ("pyvx", "coverage_simplify", "vectorx.helpers"),
+    ],
+)
+def test_a_removed_python_only_function_names_its_helpers_module(pkg, name, home):
+    import importlib
+
+    old = importlib.import_module(f"databricks.labs.gbx.{pkg}.functions")
+    with pytest.raises(
+        AttributeError,
+        match=rf"{home}\.{name}.*Fix: from databricks\.labs\.gbx\.{home} import {name}",
+    ):
+        getattr(old, name)
+    new = importlib.import_module(f"databricks.labs.gbx.{home}")
+    assert callable(getattr(new, name))
+
+
+def test_the_moved_modules_are_under_the_public_packages_and_gone_from_the_light_ones():
+    import importlib
+
+    root = REPO / "python/geobrix/src/databricks/labs/gbx"
+    moved = {
+        "pyrx": (
+            "rasterx",
+            ("checkpoint", "mvs", "ortho", "sfm", "imagery", "file_table", "helpers"),
+        ),
+        "pyvx": ("vectorx", ("file_read", "file_write")),
+    }
+    for pkg, (new, mods) in moved.items():
+        for m in mods:
+            assert not (root / pkg / f"{m}.py").exists(), f"{pkg}/{m}.py is back"
+            importlib.import_module(f"databricks.labs.gbx.{new}.{m}")
+            with pytest.raises(
+                ImportError, match=rf"Fix: from databricks\.labs\.gbx\.{new} import {m}"
+            ):
+                importlib.import_module(f"databricks.labs.gbx.{pkg}.{m}")
+    importlib.import_module("databricks.labs.gbx.gridx.helpers")
+
+
+@pytest.mark.parametrize("helper", MAN.helpers, ids=lambda h: h.name)
+def test_every_helper_lives_under_a_public_package(helper):
+    assert helper.module.startswith(
+        (
+            "databricks.labs.gbx.rasterx.",
+            "databricks.labs.gbx.gridx.",
+            "databricks.labs.gbx.vectorx.",
+        )
+    ), helper
+    assert helper.status in manifest.STATUSES

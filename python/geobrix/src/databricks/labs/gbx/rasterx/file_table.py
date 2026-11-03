@@ -20,15 +20,14 @@ from pyspark.sql.types import BinaryType, LongType, StringType
 
 # _table_props and _describe_cols are now canonical in ds/file_gbx.py.
 # Import them here so existing code that references them via
-# ``from databricks.labs.gbx.pyrx.file_table import _table_props`` keeps working.
+# ``from databricks.labs.gbx.rasterx.file_table import _table_props`` keeps working.
 from databricks.labs.gbx.ds.file_gbx import (  # noqa: F401  re-exported for backward compatibility
     _describe_cols,
     _table_props,
     resolve_file_table,
 )
-
-from . import file_props
-from .core.virtual_tile import V2_TILE_SCHEMA
+from databricks.labs.gbx.pyrx import file_props
+from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
 
 # plain (non-FILE) columns the reader is willing to project into a tile
 _TILE_PLAIN_COLS = (

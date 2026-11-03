@@ -1,4 +1,4 @@
-"""Dense MVS + GPU infra/scheduler helpers (pyrx, light tier; lazy pycolmap)."""
+"""Dense MVS + GPU infra/scheduler helpers (light tier; lazy pycolmap)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from databricks.labs.gbx.pyrx.checkpoint import checkpoint_skip, input_signature
+from databricks.labs.gbx.rasterx.checkpoint import checkpoint_skip, input_signature
 
 
 def _run(args: list[str], timeout: int = 60) -> str:

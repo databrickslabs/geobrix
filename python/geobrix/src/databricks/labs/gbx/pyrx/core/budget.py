@@ -275,7 +275,7 @@ def _probe_infra():
     """(host_ram_available_mb, gpu_count) via gpu_infra(); (0, 0) on any failure.
     DRIVER-ONLY (see _assert_driver)."""
     try:
-        from databricks.labs.gbx.pyrx.mvs import gpu_infra
+        from databricks.labs.gbx.rasterx.mvs import gpu_infra
 
         infra = gpu_infra()
         avail = int(infra.get("host_ram_available_mb") or infra.get("host_ram_mb") or 0)

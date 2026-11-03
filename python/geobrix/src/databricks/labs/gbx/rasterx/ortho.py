@@ -1,4 +1,4 @@
-"""pyrx.ortho — dense-photogrammetry orchestration (Sim(3) alignment, shared-ENU
+"""rasterx.ortho — dense-photogrammetry orchestration (Sim(3) alignment, shared-ENU
 cluster placement, dense-cloud -> ortho/DSM/LAZ products), plus the lighter-weight
 ``sparse_orthomosaic`` blender that skips the dense point cloud entirely.
 
@@ -25,8 +25,8 @@ from rasterio.transform import from_origin
 from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.core.crs import enu_to_lonlat, resolve_crs, utm_epsg_for
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
-from databricks.labs.gbx.pyrx.imagery import read_fused_ply, zbuffer_ortho
-from databricks.labs.gbx.pyrx.mvs import dense_reconstruct_clusters
+from databricks.labs.gbx.rasterx.imagery import read_fused_ply, zbuffer_ortho
+from databricks.labs.gbx.rasterx.mvs import dense_reconstruct_clusters
 
 
 def umeyama_sim3(src, dst):
@@ -351,7 +351,7 @@ def _import_pycolmap():
         import pycolmap
     except ImportError as exc:
         raise ImportError(
-            "pyrx.ortho.place_clusters_shared_enu requires pycolmap "
+            "rasterx.ortho.place_clusters_shared_enu requires pycolmap "
             "(install the photogrammetry extra)"
         ) from exc
     return pycolmap

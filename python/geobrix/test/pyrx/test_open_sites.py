@@ -730,7 +730,7 @@ THREADED_MODULES = {
     "bench/compression_sweep.py": "multiprocessing with spawn: one process per case, not threads",
     "bench/datagen.py": "the pool writes the tile bytes it generates; no raster is opened in it",
     "bench/runner.py": "the thread samples worker memory from /proc",
-    "pyrx/ortho.py": "the pool decodes JPEG images with PIL; the rasters are opened outside it",
+    "rasterx/ortho.py": "the pool decodes JPEG images with PIL; the rasters are opened outside it",
 }
 
 

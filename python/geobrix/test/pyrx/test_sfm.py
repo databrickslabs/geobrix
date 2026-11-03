@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from databricks.labs.gbx.pyrx.sfm import _assemble_colmap_db, image_ids_to_pair_id
+from databricks.labs.gbx.rasterx.sfm import _assemble_colmap_db, image_ids_to_pair_id
 
 _MAX = 2147483647
 
@@ -101,7 +101,7 @@ def test_extract_features_udf_smoke(tmp_path):
 
     import pandas as pd
 
-    from databricks.labs.gbx.pyrx.sfm import _extract_features_to_df
+    from databricks.labs.gbx.rasterx.sfm import _extract_features_to_df
 
     # Use a checked-in fixture image if present; else skip (SIFT needs real texture).
     fixtures = list((Path(__file__).parent / "data").glob("*.jpg"))
@@ -117,7 +117,7 @@ def test_find_geo_pairs_requires_dbr():
     # ST_DistanceSphere is a Databricks-runtime built-in, absent from OSS Spark,
     # so _find_geo_pairs cannot be unit-tested locally. Assert it imports and is
     # callable; real coverage is the on-cluster nb1a run. (Documented skip.)
-    from databricks.labs.gbx.pyrx import sfm
+    from databricks.labs.gbx.rasterx import sfm
 
     assert callable(sfm._find_geo_pairs)
     pytest.skip(
@@ -126,10 +126,10 @@ def test_find_geo_pairs_requires_dbr():
 
 
 def test_module_imports_without_pycolmap():
-    # pyrx.sfm must import on the light tier; run_sfm exists and is keyword-strict.
+    # rasterx.sfm must import on the light tier; run_sfm exists and is keyword-strict.
     import inspect
 
-    from databricks.labs.gbx.pyrx import sfm
+    from databricks.labs.gbx.rasterx import sfm
 
     sig = inspect.signature(sfm.run_sfm)
     params = sig.parameters

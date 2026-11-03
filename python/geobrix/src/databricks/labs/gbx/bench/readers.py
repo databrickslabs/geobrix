@@ -1974,7 +1974,7 @@ def run_gtiff_file_write(
     Returns a single ResultRow (mode="spark-path", category="writer").
     """
     from databricks.labs.gbx.ds.register import register
-    from databricks.labs.gbx.pyrx.file_table import write_file_table
+    from databricks.labs.gbx.rasterx.file_table import write_file_table
 
     register(spark)
     env = capture_env(where)
@@ -2058,7 +2058,7 @@ def run_gtiff_file_write(
         if file_mode == "fuse":
             back_n = int(spark.read.format("gtiff_gbx").load(target).count())
         else:
-            from databricks.labs.gbx.pyrx.file_table import read_file_table
+            from databricks.labs.gbx.rasterx.file_table import read_file_table
 
             back_n = int(read_file_table(spark, target).count())
 
@@ -2177,7 +2177,7 @@ def run_gpkg_file_read(
         # Probe once: on a FUSE-only tier, vector_file_read raises ValueError →
         # clean na_by_design skip (no FILE tier available locally).
         try:
-            from databricks.labs.gbx.pyvx.file_read import vector_file_read
+            from databricks.labs.gbx.vectorx.file_read import vector_file_read
 
             df = vector_file_read(spark, source, driver="GPKG", access="external")
         except ValueError as ve:
@@ -2252,7 +2252,7 @@ def run_gpkg_file_read(
                 chunk_size=chunk_size,
                 **env,
             )
-        from databricks.labs.gbx.pyrx.file_table import read_file_table
+        from databricks.labs.gbx.rasterx.file_table import read_file_table
 
         df = read_file_table(spark, source)
 
@@ -2468,8 +2468,8 @@ def _gpkg_file_readback(
     try:
         import pyspark.sql.functions as _F
 
-        from databricks.labs.gbx.pyrx.file_table import read_file_table
-        from databricks.labs.gbx.pyvx.file_read import vector_file_read
+        from databricks.labs.gbx.rasterx.file_table import read_file_table
+        from databricks.labs.gbx.vectorx.file_read import vector_file_read
 
         _tbl = read_file_table(spark, target).filter(_F.col("tile.path").isNotNull())
         _paths = [
@@ -2683,7 +2683,7 @@ def run_gpkg_file_write(
             )
 
     else:  # managed or external
-        from databricks.labs.gbx.pyvx.file_write import vector_file_write
+        from databricks.labs.gbx.vectorx.file_write import vector_file_write
 
         # Read the source gpkg to get parallelism info.
         try:
@@ -2893,7 +2893,7 @@ def run_vector_table_read_sweep(
 
     # managed or external: read back via the new TABLE mode.
     try:
-        from databricks.labs.gbx.pyvx.file_read import vector_file_read
+        from databricks.labs.gbx.vectorx.file_read import vector_file_read
 
         # Probe once: on a FUSE-only tier, resolve_file_table raises ValueError
         # (FILE unavailable) → na_by_design.
@@ -3206,7 +3206,7 @@ def run_raster_decode_read_sweep(
         _variants = [(False, "spark-path")]
 
     # Probe once (default ordering) to get tile count + check FILE availability.
-    from databricks.labs.gbx.pyrx.file_table import read_file_table
+    from databricks.labs.gbx.rasterx.file_table import read_file_table
 
     try:
         _probe_df = read_file_table(spark, source, skip_ordering=False)
@@ -9525,7 +9525,7 @@ def run_layout_scan_comparison(
         ``"layout-shuffle-input"`` row per layout when
         ``include_shuffle_input=True``.
     """
-    from databricks.labs.gbx.pyrx.file_table import read_file_table
+    from databricks.labs.gbx.rasterx.file_table import read_file_table
 
     env = capture_env(where)
     out: List["ResultRow"] = []

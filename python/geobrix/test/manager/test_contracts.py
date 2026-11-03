@@ -416,12 +416,21 @@ def test_l2_is_refused_while_proj_grids_are_registered(tmp_path, monkeypatch):
     finally:
         proj_grids.set_registered_dirs(saved, replace=True)
     assert why and "PROJ grids" in why
-    # The JVM engine reads them: with grids registered, L1 still runs the engine.
-    dedicated = _caps(jar=OK_JAR, jar_reason="", jvm_gdal=MAN.gdal.pin)
-    assert levels.select(fn, dedicated).variant == levels.ENGINE
+    # The table's order for transformcrs is L3 only; ask for L2 first, as a forced level would: with grids
+    # registered it is refused and the selection falls back to L3, with the grids in the reason.
     proj_grids.set_registered_dirs(str(tmp_path), replace=True)
     try:
-        choice = levels.select(fn, dedicated)
+        refused = levels.select(fn, classic, prefer="L2")
+    finally:
+        proj_grids.set_registered_dirs(saved, replace=True)
+    assert refused.level == "L3"
+    assert any("PROJ grids" in r for r in refused.reasons), refused.reasons
+    # The JVM engine reads them: with grids registered, L1 (asked for first) still runs the engine.
+    dedicated = _caps(jar=OK_JAR, jar_reason="", jvm_gdal=MAN.gdal.pin)
+    assert levels.select(fn, dedicated, prefer="L1").variant == levels.ENGINE
+    proj_grids.set_registered_dirs(str(tmp_path), replace=True)
+    try:
+        choice = levels.select(fn, dedicated, prefer="L1")
         why = levels.engine_unavailable(fn, "L1", dedicated)
     finally:
         proj_grids.set_registered_dirs(saved, replace=True)
@@ -609,10 +618,13 @@ def test_one_unavailable_function_does_not_stop_the_rest(monkeypatch, capsys):
     assert (
         "gbx_st_makevalid" in stub.registered
     )  # registered after the skipped one (it takes its own defaults: no wrapper)
+    # transformcrs is light-first like the other raster functions, so it is skipped in their group, with the reason
     skipped = [
-        p for p in capsys.readouterr().out.splitlines() if "gbx_rst_transformcrs" in p
+        p
+        for p in capsys.readouterr().out.splitlines()
+        if "not registered" in p and "need rasterio" in p
     ]
-    assert len(skipped) == 1 and "rasterio" in skipped[0]
+    assert skipped, "the skipped functions were not reported with their reason"
 
 
 def test_bad_target():
@@ -2417,16 +2429,23 @@ def test_session_read_cap_falls_back_to_the_classic_budget_for_a_bad_value():
 
 def test_every_level_a_row_declares_is_in_its_order():
     """`select` only tries the levels in `order(fn)`: a row that declares L2 and whose family order omits it would
-    never reach its Java UDF. A row with a deliberate omission names it in PREFERENCE, so this lists none.
+    never reach its Java UDF. Only `gbx_rst_transformcrs` omits it on purpose (light measured faster than both
+    JVM levels), so this lists none.
     """
     omitted = {
         f.sql_name: sorted(set(f.levels) & {"L1", "L2", "L3"} - set(levels.order(f)))
         for f in FNS
         if "L2" in f.levels
         and "L2" not in levels.order(f)
-        and f.sql_name not in levels.PREFERENCE
+        and f.sql_name not in {"gbx_rst_transformcrs"}
     }
     assert omitted == {}
+    # that one omission is pinned: L3 only, and a dedicated cluster with the JVM available still selects L3
+    fn = MAN.functions["gbx_rst_transformcrs"]
+    assert levels.PREFERENCE["gbx_rst_transformcrs"] == ("L3",)
+    dedicated = _caps(jar=OK_JAR, jar_reason="", jvm_gdal=MAN.gdal.pin)
+    choice = levels.select(fn, dedicated)
+    assert (choice.level, choice.reasons) == ("L3", ())
 
 
 def test_a_full_registration_probes_the_session_again(monkeypatch, spark):

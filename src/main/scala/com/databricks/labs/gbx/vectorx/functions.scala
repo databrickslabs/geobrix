@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.vectorx
 
-import com.databricks.labs.gbx.vectorx.expressions.{ST_AsMvt, ST_AsMvtPyramid, ST_Crs, ST_InterpolateElevationBBox, ST_InterpolateElevationGeom, ST_SetCrs, ST_TransformCrs, ST_Triangulate}
+import com.databricks.labs.gbx.vectorx.expressions.{ST_AsMvt, ST_Crs, ST_InterpolateElevationBBox, ST_InterpolateElevationGeom, ST_SetCrs, ST_TransformCrs, ST_Triangulate}
 import com.databricks.labs.gbx.vectorx.jts.legacy.expressions.ST_LegacyAsWKB
 import com.databricks.labs.gbx.vectorx.mvt.MvtWriter
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
@@ -14,8 +14,7 @@ import org.apache.spark.sql.Column
   * (VectorX data sources are registered separately via
   * `META-INF/services/org.apache.spark.sql.sources.DataSourceRegister`.)
   *
-  * This package exposes the `gbx_st_asmvt` MVT aggregator (see [[ST_AsMvt]]), the
-  * `gbx_st_asmvt_pyramid` generator (see [[ST_AsMvtPyramid]]), the `gbx_st_triangulate`
+  * This package exposes the `gbx_st_asmvt` MVT aggregator (see [[ST_AsMvt]]), the `gbx_st_triangulate`
   * constrained-Delaunay TIN generator (see [[ST_Triangulate]]), and the
   * `gbx_st_interpolateelevationbbox`/`gbx_st_interpolateelevationgeom` elevation
   * generators (see [[ST_InterpolateElevationBBox]], [[ST_InterpolateElevationGeom]]).

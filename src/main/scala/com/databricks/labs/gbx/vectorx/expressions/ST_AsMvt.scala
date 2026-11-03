@@ -24,8 +24,7 @@ import java.io.{ByteArrayInputStream, ByteArrayOutputStream, DataInputStream, Da
   * Buffer: [[MvtAcc]] — holds the layer name and a list of per-feature
   * `(wkb_bytes, attrs_encoded_bytes)` tuples until the final encode pass.
   *
-  * Follows the same `TypedImperativeAggregate` pattern as
-  * `com.databricks.labs.gbx.gridx.bng.agg.BNG_CellUnionAgg`. The companion object's
+  * Follows the `TypedImperativeAggregate` pattern. The companion object's
   * `name = "gbx_st_asmvt"` is registered with Spark via
   * `com.databricks.labs.gbx.vectorx.functions.register`.
   */

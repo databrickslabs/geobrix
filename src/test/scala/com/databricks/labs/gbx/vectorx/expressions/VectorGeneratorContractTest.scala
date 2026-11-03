@@ -56,18 +56,6 @@ class VectorGeneratorContractTest extends PlanTest with SilentSparkSession {
             geomArrayLit(corners), emptyArrayLit, Literal(0.0), Literal(0.01), finder,
             Literal.create(JTS.toEWKB(origin), BinaryType), Literal(10), Literal(10), Literal(10.0), Literal(10.0), Literal("constrained")
           )
-      }),
-      "gbx_st_asmvt_pyramid" -> (() => {
-          TestL1.installAll(spark)
-          val poly = new GeometryFactory().createPolygon(
-            Array(
-              new Coordinate(-30.0, 10.0), new Coordinate(30.0, 10.0), new Coordinate(30.0, 20.0),
-              new Coordinate(-30.0, 20.0), new Coordinate(-30.0, 10.0)
-            )
-          )
-          val attrsType = StructType(Seq(StructField("name", StringType), StructField("id", LongType)))
-          val attrs = Literal(InternalRow(UTF8String.fromString("region-a"), 1L), attrsType)
-          ST_AsMvtPyramid(Literal.create(JTS.toWKB(poly), BinaryType), attrs, Literal(2), Literal(2), Literal("regions"))
       })
     )
 
@@ -86,10 +74,6 @@ class VectorGeneratorContractTest extends PlanTest with SilentSparkSession {
 
     test("st_interpolateelevationgeom emits exactly the declared elevation_point column") {
         checkCase("gbx_st_interpolateelevationgeom")
-    }
-
-    test("st_asmvt_pyramid emits exactly the declared tile struct") {
-        checkCase("gbx_st_asmvt_pyramid")
     }
 
     // The Column wrappers hand ColumnAdapter a positional Seq: a swapped argument would run, with another grid. Every

@@ -82,7 +82,7 @@ def test_the_aggregate_view_is_typed_from_the_manifest_params():
     from databricks.labs.gbx.bench import oracles
 
     fn = manifest.load().functions["gbx_rst_bng_rasterize_agg"]
-    case = next(c for c in getattr(oracles, fn.oracle) if c.fn == fn.sql_name)
+    case = next(c for c in oracles.TABLES[fn.oracle] if c.fn == fn.sql_name)
     assert oracles.argument_schema(case, []) == "c0 STRING, c1 DOUBLE"
     wide = dataclasses.replace(
         fn,
@@ -104,7 +104,7 @@ def test_an_aggregate_verdict_checks_the_resolved_arguments(monkeypatch):
     from databricks.labs.gbx.bench import oracles
 
     fn = manifest.load().functions["gbx_rst_bng_rasterize_agg"]
-    case = next(c for c in getattr(oracles, fn.oracle) if c.fn == fn.sql_name)
+    case = next(c for c in oracles.TABLES[fn.oracle] if c.fn == fn.sql_name)
     case = dataclasses.replace(case, args=(oracles.Build("late_agg"), *case.args[1:]))
     monkeypatch.setitem(oracles.BUILDERS, "late_agg", lambda tmpdir: ["resolved"])
     seen = []

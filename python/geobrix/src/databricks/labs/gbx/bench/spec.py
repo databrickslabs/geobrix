@@ -2254,6 +2254,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: [
             d["bytes"] for d in xyz.pyramid(ds, a["min_z"], a["max_z"])
         ],
+        col_fn=_lateral_only,  # a table function with no spark-path leg: kept callable, and naming the cause if called
         sources=_XYZ_LIGHT
         + (
             _HEAVY + "web/RST_XYZPyramid.scala",

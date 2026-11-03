@@ -289,24 +289,27 @@ def test_cellintersection_agg(spark):
     assert len(out) > 0
 
 
-def test_explode_column_wrappers_raise_not_implemented():
-    # The 4 light *explode UDTFs are SQL-LATERAL-only; their Column wrappers must exist
-    # (for binding parity) but raise NotImplementedError pointing to SQL LATERAL.
+def test_explode_wrappers_are_dataframe_functions_on_the_generated_api(spark):
+    # The 4 BNG *explode functions are table functions on gridx.bng.functions: the DataFrame first, then
+    # the arguments, and the result is that DataFrame joined with the generated rows. They no longer
+    # live on pygx.functions, and none raises NotImplementedError.
+    gx.register(spark)
     for name in (
         "bng_kringexplode",
         "bng_kloopexplode",
         "bng_geomkringexplode",
         "bng_geomkloopexplode",
     ):
-        fn = getattr(gx, name)
-        with pytest.raises(NotImplementedError):
-            fn("TQ3080", 1)
+        assert callable(getattr(bx, name)), name
+    cells = spark.createDataFrame([("TQ3080",)], "c string")
+    rows = bx.bng_kringexplode(cells, "c", 1).collect()
+    assert len(rows) == 9 and all(isinstance(r["cellid"], str) for r in rows)
 
 
 def test_scalar_column_wrappers_exist():
-    # The aggregate wrappers still live here; the scalars are gridx.bng.functions (generated from the manifest).
+    # The scalars and the two cell aggregates are all gridx.bng.functions (generated from the manifest).
     for name in (
         "bng_cellunion_agg",
         "bng_cellintersection_agg",
     ):
-        assert callable(getattr(gx, name)), name
+        assert callable(getattr(bx, name)), name

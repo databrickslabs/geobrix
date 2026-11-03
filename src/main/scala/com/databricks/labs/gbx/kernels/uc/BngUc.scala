@@ -2,9 +2,9 @@ package com.databricks.labs.gbx.kernels.uc
 
 import com.databricks.labs.gbx.gridx.grid.BNG
 import com.databricks.labs.gbx.kernels.{Coerce, KernelGdal}
+import com.databricks.labs.gbx.vectorx.jts.JTS
 
 import org.locationtech.jts.geom.Geometry
-import org.locationtech.jts.io.{ByteOrderValues, WKBWriter}
 
 import scala.util.control.NonFatal
 
@@ -14,12 +14,8 @@ import scala.util.control.NonFatal
   * handler is documented for BINARY and ARRAY results, not for GEOMETRY. */
 object BngUc {
     /** Little-endian EWKB, the bytes the UC Python handlers write (shapely's native order), so a Volume with or without
-      * the JAR gives the same BINARY. A JTS writer is not thread-safe: one per thread. */
-    private val ewkbLittleEndian = new ThreadLocal[WKBWriter] {
-        override def initialValue(): WKBWriter = new WKBWriter(2, ByteOrderValues.LITTLE_ENDIAN, true)
-    }
-
-    private def toEwkb(geom: Geometry): Array[Byte] = ewkbLittleEndian.get().write(geom)
+      * the JAR gives the same BINARY. */
+    private def toEwkb(geom: Geometry): Array[Byte] = JTS.toEWKB(geom)
 
     def eastNorthAsBng(easting: java.lang.Double, northing: java.lang.Double, resolution: String): String = {
         if (easting == null || northing == null || resolution == null) return null

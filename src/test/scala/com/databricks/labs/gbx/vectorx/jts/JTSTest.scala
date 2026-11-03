@@ -342,6 +342,39 @@ class JTSTest extends AnyFunSuite {
         adaptive shouldEqual standard
     }
 
+    // ====== Byte order: every writer is little-endian (NDR), like shapely, GDAL and st_asbinary ======
+
+    private def hex(b: Array[Byte]): String = b.map(x => f"${x & 0xff}%02x").mkString
+
+    test("toWKB writes little-endian bytes (POINT(1 2))") {
+        hex(JTS.toWKB(JTS.point(1.0, 2.0))) shouldBe "0101000000000000000000f03f0000000000000040"
+    }
+
+    test("toWKB3 writes little-endian WKB with Z (JTS Z flag 0x80000000) (POINT Z(1 2 3))") {
+        val pt = new GeometryFactory().createPoint(new Coordinate(1.0, 2.0, 3.0))
+        hex(JTS.toWKB3(pt)) shouldBe "0101000080000000000000f03f00000000000000400000000000000840"
+    }
+
+    test("toEWKB writes little-endian bytes with the SRID (POINT(1 2), 4326)") {
+        val pt = JTS.point(1.0, 2.0)
+        pt.setSRID(4326)
+        hex(JTS.toEWKB(pt)) shouldBe "0101000020e6100000000000000000f03f0000000000000040"
+    }
+
+    test("toEWKB3 writes little-endian bytes with Z and the SRID") {
+        val pt = new GeometryFactory().createPoint(new Coordinate(1.0, 2.0, 3.0))
+        pt.setSRID(4326)
+        hex(JTS.toEWKB3(pt)) shouldBe "01010000a0e6100000000000000000f03f00000000000000400000000000000840"
+    }
+
+    test("every adaptive writer leads with the little-endian marker 0x01") {
+        val gf = new GeometryFactory()
+        val flat = gf.createPoint(new Coordinate(1.0, 2.0)); flat.setSRID(4326)
+        val deep = gf.createPoint(new Coordinate(1.0, 2.0, 3.0)); deep.setSRID(4326)
+        Seq(JTS.toWKBAdaptive(flat), JTS.toWKBAdaptive(deep), JTS.toEWKBAdaptive(flat), JTS.toEWKBAdaptive(deep),
+            JTS.toWKBForOGR(flat), JTS.toWKBForOGR(deep)).foreach(_.head shouldBe 1.toByte)
+    }
+
     test("toEWKBAdaptive: 2D point is 25 bytes (no Z)") {
         val gf = new GeometryFactory()
         val pt = gf.createPoint(new Coordinate(1.0, 2.0))

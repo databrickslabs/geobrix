@@ -78,6 +78,11 @@ DIST, EDIST, PAC = (
 )
 CINT, CUNI = "gbx_bng_cellintersection", "gbx_bng_cellunion"
 
+# The bytes of TQ3080's centre, laid out by hand: little-endian (NDR) like shapely, GDAL and st_asbinary, no SRID. The
+# same call must give these bytes at the lightweight and the JAR level. (A point has no ring to start anywhere, so the
+# bytes can only differ by byte order or flags.)
+TQ3080_CENTRE_WKB = struct.pack("<BIdd", 1, 1, 530500.0, 180500.0)
+
 GRID_SCALAR = (
     Case("aswkb_tq3080", AWKB, ("TQ3080",), "geom_equals", TQ3080),
     Case("aswkb_null", AWKB, (None,), "null"),
@@ -98,6 +103,15 @@ GRID_SCALAR = (
     Case("cellarea_quadrant", AREA, ("TQ38SW",), "exact", 25.0),
     Case("cellarea_null", AREA, (None,), "null", variants=(("XX9999",),)),
     Case("centroid_tq3080", CENT, ("TQ3080",), "geom_equals", "POINT(530500 180500)"),
+    # The exact bytes (session surface only: the UC handler returns EWKB with the SRID).
+    Case(
+        "centroid_tq3080_bytes",
+        CENT,
+        ("TQ3080",),
+        "wkb_bytes",
+        TQ3080_CENTRE_WKB,
+        surfaces=("session",),
+    ),
     Case("centroid_null", CENT, (None,), "null"),
     # TQ3282 is 2 cells east and 2 north of TQ3080.
     Case("distance_diag", DIST, ("TQ3080", "TQ3282"), "exact", 4),

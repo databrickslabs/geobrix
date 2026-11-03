@@ -5,7 +5,7 @@ import org.apache.spark.sql.types.{BinaryType, DataType, StringType}
 import org.apache.spark.unsafe.types.UTF8String
 import org.locationtech.jts.geom.util.AffineTransformation
 import org.locationtech.jts.geom._
-import org.locationtech.jts.io.{WKBReader, WKBWriter, WKTReader, WKTWriter}
+import org.locationtech.jts.io.{ByteOrderValues, WKBReader, WKBWriter, WKTReader, WKTWriter}
 import org.locationtech.jts.operation.union.UnaryUnionOp
 import org.locationtech.jts.simplify.DouglasPeuckerSimplifier
 
@@ -77,6 +77,8 @@ object JTS {
         result
     }
 
+    // Every WKB/EWKB writer here is little-endian (NDR), the byte order the light level, GDAL and
+    // Databricks st_asbinary write, so one call returns the same bytes on every compute.
     // Per-thread caches: JTS readers/writers are not thread-safe and this object is shared across tasks,
     // so the caches are concurrent maps (two threads can add their entries at the same moment).
     private val geometryFactories = TrieMap[Long, GeometryFactory]()
@@ -223,14 +225,14 @@ object JTS {
       * Use [[toEWKB]] when you need to preserve SRID across the encoding. */
     def toWKB(intersection: Geometry): Array[Byte] = {
         val tid = Thread.currentThread().getId
-        val writer = wkbWriters.getOrElseUpdate(tid, new WKBWriter())
+        val writer = wkbWriters.getOrElseUpdate(tid, new WKBWriter(2, ByteOrderValues.LITTLE_ENDIAN))
         writer.write(intersection)
     }
 
     /** Encode a JTS Geometry to OGC WKB preserving Z (3 dimensions); per-thread WKBWriter(3). */
     def toWKB3(geom: org.locationtech.jts.geom.Geometry): Array[Byte] = {
         val tid = Thread.currentThread().getId
-        val writer = wkb3Writers.getOrElseUpdate(tid, new WKBWriter(3))
+        val writer = wkb3Writers.getOrElseUpdate(tid, new WKBWriter(3, ByteOrderValues.LITTLE_ENDIAN))
         writer.write(geom)
     }
 
@@ -241,7 +243,7 @@ object JTS {
       * built-in `st_*` functions) may not accept EWKB — use [[toWKB]] for those. */
     def toEWKB(geom: Geometry): Array[Byte] = {
         val tid = Thread.currentThread().getId
-        val writer = ewkbWriters.getOrElseUpdate(tid, new WKBWriter(2, true))
+        val writer = ewkbWriters.getOrElseUpdate(tid, new WKBWriter(2, ByteOrderValues.LITTLE_ENDIAN, true))
         writer.write(geom)
     }
 
@@ -252,7 +254,7 @@ object JTS {
       * coordinates). Per-thread writer. */
     def toEWKB3(geom: Geometry): Array[Byte] = {
         val tid = Thread.currentThread().getId
-        val writer = ewkb3Writers.getOrElseUpdate(tid, new WKBWriter(3, true))
+        val writer = ewkb3Writers.getOrElseUpdate(tid, new WKBWriter(3, ByteOrderValues.LITTLE_ENDIAN, true))
         writer.write(geom)
     }
 

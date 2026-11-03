@@ -1,5 +1,6 @@
 """The oracle tables are found on first use of the mapping, by any read, not only by a missing-key lookup."""
 
+import struct
 import subprocess
 import sys
 
@@ -196,6 +197,14 @@ _META_ARGS = {
             "POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))",
             "POLYGON((1 0, 1 1, 0 1, 0 0, 1 0))",  # the same ring, another start vertex
             "POLYGON((0 0, 2 0, 2 2, 0 2, 0 0))",
+        ),
+        (
+            "wkb_bytes",
+            struct.pack("<BIdd", 1, 1, 1.0, 2.0),
+            bytearray(struct.pack("<BIdd", 1, 1, 1.0, 2.0)),
+            struct.pack(
+                ">BIdd", 0, 1, 1.0, 2.0
+            ),  # the same point, big-endian: a byte-level difference
         ),
         ("cell_set", ["TQ3080", "TQ3180"], ["TQ3180", "TQ3080"], ["TQ3080", "TQ3080"]),
         ("approx", (1.0, 2.0), (1.0 + 1e-12, 2.0), (1.0, 2.1)),

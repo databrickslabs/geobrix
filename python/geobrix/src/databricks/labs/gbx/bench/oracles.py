@@ -62,6 +62,7 @@ class Case:
     # raster-to-grid reducer, each statistic recomputed with numpy over the pixels of the cells (see oracle_checks).
     # The DataFrame helpers' rst_viewshed_towers uses towers (see MVP_H).
     # windows_batch is one task over several tiles: `args` is a tuple of argument rows, as for exact_rows.
+    # wkb_bytes: `expect` is the exact bytes of a geometry output (WKB, no decoding).
     # Aggregates use merged_equals | pixels | error_group | null | cellfill | mvt_layer | geom_equals | exact;
     # `args[0]` is the group's rows. cellfill: `expect` is {cell id: value or None}, the fill payload decoded from its
     # documented layout. mvt_layer: `expect` is {"layer": name, "features": [(WKT in tile coordinates, properties)]}.
@@ -3166,6 +3167,18 @@ def _check_geom_equals(case: Case, out) -> Optional[str]:
     return None
 
 
+def _check_wkb_bytes(case: Case, out) -> Optional[str]:
+    """The exact bytes, for a geometry output: the same call returns the same bytes at every level (the byte order, the
+    flags, the ring start and direction), which a decoded-geometry comparison cannot see.
+    """
+    if out is None:
+        return f"{case.cid}: got NULL, want {case.expect.hex()}"
+    got = bytes(out)
+    if got != bytes(case.expect):
+        return f"{case.cid}: got {got.hex()}, want {bytes(case.expect).hex()}"
+    return None
+
+
 def _check_geom_srid(case: Case, out, args) -> Optional[str]:
     import shapely
 
@@ -3396,6 +3409,7 @@ _VALUE_CHECKS = {
     "pmtiles_archive": _check_pmtiles_archive,
     "tile_size": _check_tile_size,
     "geom_equals": _check_geom_equals,
+    "wkb_bytes": _check_wkb_bytes,
     "json_subset": _check_json_subset,
     "approx": _check_approx,
     "cell_set": _check_cell_set,

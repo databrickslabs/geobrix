@@ -9,16 +9,10 @@ The bar (per the pygx BNG spec) is EXACT, not tolerant, for cell ids / sets:
   ``geomkloop`` (sorted set), and the five ``*explode`` UDTFs (light SQL UDTF vs
   heavy ``LATERAL VIEW`` — sorted cellid set).
 - **Geometry WKB within 1e-6**: ``aswkb`` / ``aswkt`` / ``centroid`` / surviving
-  ``tessellate`` chips / ``cellunion`` / ``cellintersection`` and the two aggs —
+  ``tessellate`` chips / ``cellunion`` / ``cellintersection`` —
   decode both tiers (shapely ``from_wkb`` / ``from_wkt``). BNG carries **NO SRID**
   (heavy ``JTS.toWKB``), so assert ``get_srid == 0`` in BOTH tiers and compare the
   normalized geometries within 1e-6 via ``equals_exact``.
-
-The aggregates are the documented light-agg-struct-return deviation: the light SQL
-agg returns plain **BINARY** (the dissolved chip geometry) while heavy returns a
-``STRUCT<cellid, core, chip>`` (PySpark grouped-agg pandas UDFs cannot return a
-struct). We therefore compare the **decoded chip GEOMETRY** (light BINARY vs the
-heavy struct's ``chip`` field), not the struct wrapper.
 
 Both tiers register the SAME ``gbx_bng_*`` SQL names. Light registers PySpark
 UDF/UDTF/pandas-agg; heavy registers JVM expressions. Both wrapper modules resolve
@@ -255,27 +249,6 @@ def test_bng_full_parity(spark_with_jar):
         )
         return {r["cell"]: (r["core"], r["geom"]) for r in exploded.collect()}
 
-    def agg_chip_geom(mod):
-        """Dissolve a group of identical-cell chips. Both tiers return BINARY: the
-        dissolved geometry as WKB (no SRID). Compare the decoded geometry."""
-        _register_tier(spark, mod, ("gbx_bng_",))
-        chip_geom = _bng.cell_id_to_geometry(_bng.parse(seed))
-        chip_wkb = _wkb(chip_geom)
-        gdf = spark.createDataFrame(
-            [(seed, False, chip_wkb), (seed, False, chip_wkb)],
-            "cellid string, core boolean, chip binary",
-        )
-        chip_struct = f.struct(f.col("cellid"), f.col("core"), f.col("chip"))
-        out = (
-            gdf.groupBy("cellid")
-            .agg(
-                f.call_function("gbx_bng_cellunion_agg", chip_struct).alias("u"),
-                f.call_function("gbx_bng_cellintersection_agg", chip_struct).alias("i"),
-            )
-            .collect()[0]
-        )
-        return out["u"], out["i"]
-
     def explode_sets_light():
         """Light registers the five *explode as UDTFs (table functions) -> invoke
         via SQL LATERAL. Collect each as a sorted cellid set."""
@@ -344,7 +317,6 @@ def test_bng_full_parity(spark_with_jar):
     light = scalar_row(gx, None)
     light_chip = chip_row(gx)
     light_tess = tess_rows(gx, False)  # light: keep_core_geom=False, matches heavy
-    light_agg_u, light_agg_i = agg_chip_geom(gx)
     light_expl = explode_sets_light()
 
     # ---- HEAVY (overwrites the gbx_bng_* SQL names) ----
@@ -425,14 +397,6 @@ def test_bng_full_parity(spark_with_jar):
             )
             continue
         _assert_geom_parity(lgeom, hgeom, f"tessellate-chip cell={cell}")
-
-    # aggregates: the manifest rows are light-only (BINARY WKB, no L1 row). The JAR's leftover companions return a
-    # cell, not a geometry, so there is no heavy contract to compare; the light result is checked on its own.
-    for ctx, blob in (
-        ("cellunion_agg", light_agg_u),
-        ("cellintersection_agg", light_agg_i),
-    ):
-        assert blob is not None and from_wkb(bytes(blob)) is not None, ctx
 
 
 # --- tessellateexplode: the heavy generator emits the columns it declares ---------------------

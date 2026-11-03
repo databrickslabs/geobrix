@@ -1,6 +1,5 @@
 package com.databricks.labs.gbx.gridx.bng
 
-import com.databricks.labs.gbx.gridx.bng.agg.{BNG_CellIntersectionAgg, BNG_CellUnionAgg}
 import com.databricks.labs.gbx.gridx.bng.generators._
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
 import org.apache.spark.sql.functions.lit

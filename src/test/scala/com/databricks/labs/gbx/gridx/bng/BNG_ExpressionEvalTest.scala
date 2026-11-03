@@ -72,43 +72,6 @@ class BNG_ExpressionEvalTest extends PlanTest with SilentSparkSession {
 
     }
 
-    test("BNG_ aggregator expressions should run in spark sql without errors") {
-        spark.sparkContext.setLogLevel("ERROR")
-        import functions._
-        TestL1.installAll(spark)
-
-        val df = spark
-            .createDataFrame(
-              Seq(
-                ("TQ388791", 0.01)
-              )
-            )
-            .toDF("cellId", "value")
-
-        def runQuery(df: DataFrame): Unit = {
-            val wkbLit = JTS.toWKB(JTS.fromWKT("POLYGON ((0 0, 2 0, 2 1, 0 1, 0 0))"))
-            val coreCell = struct(df("cellId"), lit(true), lit(wkbLit))
-            df
-                .withColumn("gen", explode(array(lit(1), lit(2), lit(3))))
-                .withColumn("dummy", lit(1))
-                .withColumn("cell", coreCell)
-                .repartition(10)
-                .groupBy("dummy")
-                .agg(
-                  call_function("gbx_bng_cellunion_agg", col("cell")).as("unionCore"),
-                  call_function("gbx_bng_cellintersection_agg", col("cell")).as("intersectCore")
-                )
-                .write
-                .format("noop")
-                .mode("overwrite")
-                .save()
-        }
-
-        runQuery(df)
-        runQuery(df.withColumn("cellId", lit(BNG.parse("TQ388791"))))
-
-    }
-
     test("BNG_ generator expressions should run in spark sql without errors") {
         spark.sparkContext.setLogLevel("ERROR")
         import functions._

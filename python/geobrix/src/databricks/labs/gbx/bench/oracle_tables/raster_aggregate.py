@@ -56,6 +56,7 @@ H3A, QBA, CGA = (
     "gbx_rst_quadbin_rasterize_agg",
     "gbx_rst_custom_rasterize_agg",
 )
+MT, BT = "gbx_rst_merge_tvf", "gbx_rst_bng_rasterize_tvf"
 BRT, H3T, QBT, CGT = (
     "gbx_rst_bng_rasterize",
     "gbx_rst_h3_rasterize",
@@ -748,5 +749,53 @@ RASTER_AGGREGATE += (
         "raises",
         "out_crs",
         ONLY,
+    ),
+)
+
+
+# --- the table functions of the two MVP_A aggregates: `gbx_x(TABLE(<members>) PARTITION BY (key), <constants>)` --------
+# The group of a case is the partition of key `a`; the harness calls the function with `oracles.table_call_sql` (the one
+# input mode of a function that reads a table argument). The expectations are those of the aggregate rows they are
+# made from (MVP_A: the shapes of the merge and the rasterize all meet the same rows), so the table function and the
+# grouped aggregate are held to the same pixels. A partition with no answer gives NO ROW (the harness reads it as NULL):
+# the aggregate's NULL.
+_MVP = {c.cid: c for c in MVP_A}
+_CANVAS_ARGS = CANVAS[
+    2:8
+]  # xmin, ymin, xmax, ymax, width, height: the table function has no out_srid / mode / pad
+RASTER_AGGREGATE += (
+    Case("mt_quad", MT, _MVP["ma_quad"].args, "merged_equals", Build("tile_32"), ONLY),
+    # a partition of nothing but error tiles has no mosaic: no row
+    Case(
+        "mt_error_only",
+        MT,
+        _MVP["ma_error_only"].args,
+        "error_group",
+        UPSTREAM_ERROR,
+        ONLY,
+    ),
+    # a partition past what a merge can build raises with the Fix, as the aggregate does (never a missing group)
+    Case(
+        "mt_over_budget_refused",
+        MT,
+        (Build("ra_far_apart"),),
+        "raises",
+        "merge_by_key",
+        ONLY,
+    ),
+    *(
+        Case(
+            cid,
+            BT,
+            (_MVP[src].args[0], *_CANVAS_ARGS),
+            _MVP[src].kind,
+            _MVP[src].expect,
+            ONLY,
+        )
+        for cid, src in (
+            ("bt_dup_max", "br_dup_max"),
+            ("bt_nan_beside_numbers", "br_nan_beside_numbers"),
+            ("bt_empty", "br_empty"),
+        )
     ),
 )

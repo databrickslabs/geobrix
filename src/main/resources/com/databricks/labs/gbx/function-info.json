@@ -110,6 +110,16 @@
       ],
       "since": "0.4.3"
     },
+    "gbx_rst_bng_rasterize_tvf": {
+      "examples": "Examples:\n      > SELECT raster AS out FROM gbx_rst_bng_rasterize_tvf(TABLE(SELECT 'a' AS key, c0 AS cellid, c1 AS value FROM gbx_example) PARTITION BY (key), 530000.0D, 180000.0D, 533000.0D, 182000.0D, 3, 2);",
+      "usage_args": "rows, xmin, ymin, xmax, ymax, width, height",
+      "description": "Rasterize each partition's BNG cells onto an explicit EPSG:27700 canvas, as a table function over `TABLE(...) PARTITION BY`.",
+      "surfaces": [
+        "session",
+        "python"
+      ],
+      "since": "0.6.0"
+    },
     "gbx_rst_bng_rastertogridavg": {
       "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridavg(tile, 3) t;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
@@ -951,6 +961,16 @@
         "python"
       ],
       "since": "0.2.0"
+    },
+    "gbx_rst_merge_tvf": {
+      "examples": "Examples:\n      > SELECT raster AS out FROM gbx_rst_merge_tvf(TABLE(SELECT 'a' AS key, c0 AS tile FROM gbx_example) PARTITION BY (key));",
+      "usage_args": "rows",
+      "description": "Merge each partition's tiles into one mosaic, as a table function over `TABLE(...) PARTITION BY`.",
+      "surfaces": [
+        "session",
+        "python"
+      ],
+      "since": "0.6.0"
     },
     "gbx_rst_metadata": {
       "examples": "Examples:\n      > SELECT gbx_rst_metadata(tile) as metadata FROM rasters;",

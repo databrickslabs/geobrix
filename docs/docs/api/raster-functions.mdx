@@ -1209,6 +1209,31 @@ _Multi-row fixture: 3 BNG 1km STRING cell rows near central London (EPSG:27700) 
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
+### rst_bng_rasterize_tvf
+
+{/* BEGIN GENERATED gbx_rst_bng_rasterize_tvf: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_bng_rasterize_tvf(rows, xmin, ymin, xmax, ymax, width, height)` | rows |
+| Python | `rasterx.functions.rst_bng_rasterize_tvf(df, xmin, ymin, xmax, ymax, width, height)` | DataFrame |
+
+Rows: `key` `STRING`, `raster` `BINARY`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `rows` | `TABLE` |  | The cells, as `TABLE(SELECT key, cellid, value FROM ...) PARTITION BY (key)`: one canvas per key. `cellid` is the BNG cell id (for example `'TQ3080'`) and `value` the value burned for it. A repeated cell burns its largest value; a NULL value never wins against a number, and a cell of nothing but NULL burns NaN. A NULL cell id is skipped. |
+| `xmin` | `DOUBLE` |  | The west edge of the canvas in EPSG:27700 metres. |
+| `ymin` | `DOUBLE` |  | The south edge of the canvas in EPSG:27700 metres. |
+| `xmax` | `DOUBLE` |  | The east edge of the canvas in EPSG:27700 metres. |
+| `ymax` | `DOUBLE` |  | The north edge of the canvas in EPSG:27700 metres. |
+| `width` | `INT` |  | The canvas width in pixels. |
+| `height` | `INT` |  | The canvas height in pixels. |
+{/* END GENERATED gbx_rst_bng_rasterize_tvf */}
+
+Use it instead of [`rst_bng_rasterize_agg`](#rst_bng_rasterize_agg) for groups of many cells: `SELECT * FROM gbx_rst_bng_rasterize_tvf(TABLE(SELECT key, cellid, value FROM cells) PARTITION BY (key), xmin, ymin, xmax, ymax, width, height)` reads each key's cells a row at a time, keeping only the largest value per cell, so it needs less memory than the grouped aggregate and burns the same pixels. The canvas is explicit, and a key with no cell gives no row.
+
 ---
 
 
@@ -1597,6 +1622,25 @@ _Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif`. All tabs use the 
   python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
+
+### rst_merge_tvf
+
+{/* BEGIN GENERATED gbx_rst_merge_tvf: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_merge_tvf(rows)` | rows |
+| Python | `rasterx.functions.rst_merge_tvf(df)` | DataFrame |
+
+Rows: `key` `STRING`, `raster` `BINARY`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `rows` | `TABLE` |  | The tiles, as `TABLE(SELECT key, tile FROM ...) PARTITION BY (key)`: one mosaic per key. An error tile, an empty tile and a tile that does not open are left out. |
+{/* END GENERATED gbx_rst_merge_tvf */}
+
+Use it instead of [`rst_merge_agg`](#rst_merge_agg) for large groups: `SELECT * FROM gbx_rst_merge_tvf(TABLE(SELECT key, tile FROM tiles) PARTITION BY (key))` merges each key's tiles with the same pixels as the aggregate, reading them a row at a time instead of as one batch of the whole group. A key with no readable tile gives no row; one whose mosaic is too large to build raises with a Fix that names `merge_by_key`.
 
 ### rst_quadbin_rasterize_agg
 

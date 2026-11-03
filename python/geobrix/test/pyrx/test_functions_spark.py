@@ -836,11 +836,13 @@ def _far_and_near(spark):
 
 def _surfaces(spark, df, d):
     """Each way to merge a group, as (is the result a tile?, the DataFrame of (k, t))."""
+    from databricks.labs.gbx import register
     from databricks.labs.gbx.pyrx import _mvp_forms
     from databricks.labs.gbx.pyrx.functions import _merge_agg_udf
 
     df.createOrReplaceTempView("far_and_near")
     _mvp_forms.register_probe_forms(spark)
+    register(spark, only=["gbx_rst_merge_tvf"])
     by = df.groupBy("k")
     return {
         "api": (True, by.agg(prx._light_rst_merge_agg("tile").alias("t"))),
@@ -858,32 +860,38 @@ def _surfaces(spark, df, d):
         "tvf": (
             False,
             spark.sql(
-                "SELECT key AS k, raster AS t FROM gbx_mvp_rst_merge_tvf("
-                "TABLE(SELECT k AS key, tile FROM far_and_near) PARTITION BY key)"
+                "SELECT key AS k, raster AS t FROM gbx_rst_merge_tvf("
+                "TABLE(SELECT k AS key, tile FROM far_and_near) PARTITION BY (key))"
             ),
         ),
     }
 
 
-@pytest.mark.parametrize(
-    "surface", ["api", "api-virtualize", "finalize", "sql-bytes", "tvf"]
-)
+@pytest.mark.parametrize("surface", ["api", "api-virtualize", "finalize"])
 def test_a_merge_too_big_to_build_is_that_groups_answer_not_the_querys_failure(
     spark, tmp_path, surface
 ):
-    """One group whose mosaic is past what a merge can stream does not fail the query: where the result is a tile
-    that group is an error tile (a NULL raster and the reason, `Fix:` included), where it is bytes it is NULL, and
-    the other group is merged."""
-    is_tile, out = _surfaces(spark, _far_and_near(spark), tmp_path)[surface]
+    """One group whose mosaic is past what a merge can stream does not fail the query where the result is a tile:
+    that group is an error tile (a NULL raster and the reason, `Fix:` included), and the other group is merged.
+    """
+    _, out = _surfaces(spark, _far_and_near(spark), tmp_path)[surface]
     rows = {r["k"]: r["t"] for r in out.collect()}
-    far, near = rows.get("far"), rows["near"]
-    if is_tile:
-        assert far is not None and far["raster"] is None and far["path"] is None
-        assert "GiB" in far["metadata"]["last_error"]
-        assert "Fix:" in far["metadata"]["last_error"]
-        assert near["raster"] is not None or near["path"] is not None
-    else:
-        assert far is None and near is not None
+    far, near = rows["far"], rows["near"]
+    assert far is not None and far["raster"] is None and far["path"] is None
+    assert "GiB" in far["metadata"]["last_error"]
+    assert "Fix:" in far["metadata"]["last_error"]
+    assert near["raster"] is not None or near["path"] is not None
+
+
+@pytest.mark.parametrize("surface", ["sql-bytes", "tvf"])
+def test_a_merge_too_big_to_build_raises_with_the_fix_where_the_result_is_bytes(
+    spark, tmp_path, surface
+):
+    """Bytes have no place for a reason, and a NULL or a missing row reads as an empty group: the query raises, and
+    the message names the route that can mosaic the files (`merge_by_key`)."""
+    _, out = _surfaces(spark, _far_and_near(spark), tmp_path)[surface]
+    with pytest.raises(Exception, match="merge_by_key"):
+        out.collect()
 
 
 # ---------------------------------------------------------------------------

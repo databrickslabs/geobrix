@@ -17,7 +17,6 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 
 import numpy as np
-import pandas as pd
 from pyspark.sql import functions as f
 from pyspark.sql.functions import udtf
 from pyspark.sql.types import ArrayType, BinaryType, IntegerType
@@ -25,20 +24,16 @@ from pyspark.sql.types import ArrayType, BinaryType, IntegerType
 from databricks.labs.gbx._gdal_policy import open_bytes
 from databricks.labs.gbx.pygx.functions import _BngTessellateExplode
 from databricks.labs.gbx.pyrx import _serde
-from databricks.labs.gbx.pyrx.core import agg as agg_core
 from databricks.labs.gbx.pyrx.core import budget
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core import tiling
 from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
 from databricks.labs.gbx.pyrx.functions import (
-    _NO_VALUE,
+    _burn_best,
     _cut_tile,
-    _error_tile_of,
-    _max_value_per_cell,
-    _rasterize_agg_body,
+    _keep_larger,
     _RstRetileUDTF,
     _tile_cellid,
-    _tile_raster_bytes,
 )
 
 _WINDOW_KEYS = ("col_off", "row_off", "width", "height")
@@ -469,48 +464,13 @@ def materialize_batches(batches, rust: bool = False, cap_bytes=None, decode=None
             yield pa.RecordBatch.from_pylist(rows[start:], schema=b.schema)
 
 
-# --- Aggregates as a finalize over collect_list, a tree of finalizes, and a table function --------------
+# --- Aggregates as a finalize over collect_list and a tree of finalizes ------------------------------------
+# (the table function over `TABLE(...) PARTITION BY` is the product's `gbx_rst_merge_tvf` / `gbx_rst_bng_rasterize_tvf`)
 #
 # Every form here keeps the contract of `gbx_rst_merge_agg` / `gbx_rst_bng_rasterize_agg` on the light tier, so
 # whichever wins can take the aggregate's place: a repeated cell keeps its largest value, a null value (None or
 # NaN) never wins over a number, and a cell with nothing but nulls burns NaN (`_max_value_per_cell`). They give
 # BINARY, which has no place for an error tile: a group of nothing but error tiles gives NULL.
-
-
-def _keep_larger(best, cell, value):
-    """Fold one (cell, value) into `best` ({cell: value, or None for null}) by the rule of `_max_value_per_cell`.
-
-    The one place a probe form decides what a repeated cell keeps, whether it sees the group at once (the
-    finalize) or a row at a time (the table function)."""
-    v = None if value is None or value != value else float(value)
-    cur = best.get(cell, _NO_VALUE)
-    if cur is _NO_VALUE or (v is not None and (cur is None or v > cur)):
-        best[cell] = v
-
-
-def _burn(best, xmin, ymin, xmax, ymax, width, height):
-    """The canvas of `best` ({cell: value or None}) as GTiff bytes: what the grouped aggregate gives for it."""
-    from databricks.labs.gbx.pyrx.core import cellraster as cr
-
-    ad = cr._adapter("bng")
-    cells = list(best)
-    s = lambda v: pd.Series([v])  # noqa: E731 - _rasterize_agg_body reads .iloc[0]
-    return _rasterize_agg_body(
-        _max_value_per_cell(cells, [best[c] for c in cells], ad.to_key),
-        cells,
-        ad,
-        "bng",
-        27700,
-        s(None),
-        s(xmin),
-        s(ymin),
-        s(xmax),
-        s(ymax),
-        s(width),
-        s(height),
-        s("centroids"),
-        s(0),
-    )
 
 
 @f.udf(BinaryType())
@@ -520,7 +480,7 @@ def bng_rasterize_cells(cells, xmin, ymin, xmax, ymax, width, height):
     for c in cells or []:
         if c["cellid"] is not None:
             _keep_larger(best, c["cellid"], c["value"])
-    return _burn(best, xmin, ymin, xmax, ymax, width, height) if best else None
+    return _burn_best(best, xmin, ymin, xmax, ymax, width, height) if best else None
 
 
 @f.udf(BinaryType())
@@ -555,62 +515,6 @@ def canvas_max(rasters):
     return write_gtiff(profile, out.astype(profile["dtype"])[None, :, :])
 
 
-def _member_bytes(tile):
-    """The raster bytes of a group member, or None for a member an aggregate drops: an error tile (it failed
-    upstream), an empty one, or one that does not open. Not a place to fail: the group still has an answer.
-    """
-    if _error_tile_of(tile) is not None:
-        return None
-    b = _tile_raster_bytes(tile)
-    if b is None:
-        return None
-    try:
-        with _serde.open_tile(b, gate=False):  # a validity probe: the decode gates
-            return b
-    except Exception:  # noqa: BLE001
-        return None
-
-
-@udtf(returnType="key string, raster binary")
-class MergeByKeyTvf:
-    """Holds the bytes of the partition's members, as every merge shape does (`merge_tiles` takes the list)."""
-
-    def __init__(self):
-        self.key, self.rasters = None, []
-
-    def eval(self, row):
-        self.key = row["key"]
-        b = _member_bytes(row["tile"])
-        if b is not None:
-            self.rasters.append(b)
-
-    def terminate(self):
-        if self.rasters:
-            try:
-                yield self.key, agg_core.merge_tiles(self.rasters)
-            except agg_core.MosaicTooLarge:
-                pass  # this group has no raster (bytes have no place for a reason); the other groups still merge
-
-
-@udtf(returnType="key string, raster binary")
-class BngRasterizeTvf:
-    """Streaming: keeps only cell -> larger value (bounded by the distinct cells), burns once at the end."""
-
-    def __init__(self):
-        self.key, self.best, self.canvas = None, {}, None
-
-    def eval(self, row):
-        self.key = row["key"]
-        if row["cellid"] is None:
-            return
-        _keep_larger(self.best, row["cellid"], row["value"])
-        self.canvas = (row["c4"], row["c5"], row["c6"], row["c7"], row["c8"], row["c9"])
-
-    def terminate(self):
-        if self.best:
-            yield self.key, _burn(self.best, *self.canvas)
-
-
 _L2 = "com.databricks.labs.gbx.kernels.udf."
 _CHIPS = "array<struct<cellid:string,core:boolean,chip:binary>>"
 _L1_AGGREGATES = ("gbx_rst_merge_agg", "gbx_rst_bng_rasterize_agg")
@@ -623,8 +527,6 @@ def register_probe_forms(spark) -> None:
     spark.udf.register("gbx_mvp_rst_retile_part", retile_part)
     spark.udf.register("gbx_mvp_rst_bng_rasterize_cells", bng_rasterize_cells)
     spark.udf.register("gbx_mvp_rst_canvas_max", canvas_max)
-    spark.udtf.register("gbx_mvp_rst_merge_tvf", MergeByKeyTvf)
-    spark.udtf.register("gbx_mvp_rst_bng_rasterize_tvf", BngRasterizeTvf)
     spark.udtf.register("gbx_rst_retile_mvp_arrow", retile_udtf_arrow)
     spark.udtf.register(
         "gbx_bng_tessellateexplode_mvp_arrow", bng_tessellateexplode_udtf_arrow

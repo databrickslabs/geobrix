@@ -332,7 +332,8 @@ def name_findings(fns: Iterable) -> List[str]:
                 got = (
                     got[1:] if got[:1] == ["df"] else got
                 )  # a generator entry takes the DataFrame first
-                if got != names:
+                # a table function's entry takes the DataFrame for its table argument (the first parameter)
+                if got != (names[1:] if fn.table_input is not None else names):
                     out.append(
                         f"{fn.sql_name}: the generated entry in {_rel(path)} takes {got}, the manifest {names}"
                     )

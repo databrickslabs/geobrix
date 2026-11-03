@@ -1140,8 +1140,8 @@ def _ma_shapes():
         "finalize": "SELECT key, gbx_rst_merge(collect_list(tile)).raster AS out FROM {src} GROUP BY key",
         "finalize_l2": "SELECT key, gbx_mvp_rst_merge_array_l2(collect_list(tile.raster)) AS out FROM {src} GROUP BY key",
         "tvf": (
-            "SELECT key, raster AS out FROM gbx_mvp_rst_merge_tvf("
-            "TABLE(SELECT key, tile FROM {src}) PARTITION BY key)"
+            "SELECT key, raster AS out FROM gbx_rst_merge_tvf("
+            "TABLE(SELECT key, tile FROM {src}) PARTITION BY (key))"
         ),
     }
 
@@ -1152,7 +1152,6 @@ def _br_shapes(canvas=_A_CANVAS):
     lits = [f"CAST({v} AS {t})" for v, t in zip(canvas, types)]
     on = ", ".join(lits)
     args = f"cellid, value, 27700, NULL, {on}, 'centroids', 0"
-    cols = ", ".join(f"{lit} AS c{i + 4}" for i, lit in enumerate(lits))
     finalize = (
         "SELECT key, {fn}(" + _PAIRS + ", " + on + ") AS out FROM {{src}} GROUP BY key"
     )
@@ -1168,19 +1167,21 @@ def _br_shapes(canvas=_A_CANVAS):
             "SELECT *, pmod(xxhash64(cellid, value), 2) AS salt FROM {src}) GROUP BY key, salt) GROUP BY key"
         ),
         "tvf": (
-            "SELECT key, raster AS out FROM gbx_mvp_rst_bng_rasterize_tvf("
-            f"TABLE(SELECT key, cellid, value, {cols} FROM {{src}}) PARTITION BY key)"
+            "SELECT key, raster AS out FROM gbx_rst_bng_rasterize_tvf("
+            f"TABLE(SELECT key, cellid, value FROM {{src}}) PARTITION BY (key), {on})"
         ),
     }
 
 
 def setup_a_probes(spark):
-    """The light probes (finalizes, tree step, table functions) and the light `gbx_rst_merge` finalize."""
+    """The light probes (finalizes, tree step), the product's table functions and the light `gbx_rst_merge` finalize."""
+    from databricks.labs.gbx import register
     from databricks.labs.gbx.pyrx import _mvp_forms
     from databricks.labs.gbx.pyrx import functions as prx
 
     _mvp_forms.register_probe_forms(spark)
     prx.register(spark, only=["gbx_rst_merge"])
+    register(spark, only=["gbx_rst_merge_tvf", "gbx_rst_bng_rasterize_tvf"])
 
 
 def setup_a_l2(spark):

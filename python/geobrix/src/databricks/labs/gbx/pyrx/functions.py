@@ -7106,6 +7106,130 @@ def _rst_custom_rasterize_udf(
     )  # fmt: skip
 
 
+# --- the table functions: a grouped merge / rasterize over `TABLE(...) PARTITION BY` --------------------------------
+#
+# `gbx_rst_merge_tvf` and `gbx_rst_bng_rasterize_tvf` answer what `gbx_rst_merge_agg` and `gbx_rst_bng_rasterize_agg`
+# answer, one row per partition, from a table argument a task reads a row at a time. The rasterize keeps only
+# cell -> value (bounded by the distinct cells of a partition), so a group of millions of cells never sits in one
+# Arrow batch the way an aggregate's group does; the merge holds the partition's tiles, as the aggregate does. A repeated
+# cell keeps its largest value, a NULL value (None or NaN) never wins over a number, and a cell of nothing but
+# NULLs burns NaN (`_max_value_per_cell`).
+
+
+def _keep_larger(best, cell, value):
+    """Fold one (cell, value) into `best` ({cell: value, or None for null}) by the rule of `_max_value_per_cell`.
+
+    The one place the table function decides what a repeated cell keeps: it sees the group a row at a time.
+    """
+    v = None if value is None or value != value else float(value)
+    cur = best.get(cell, _NO_VALUE)
+    if cur is _NO_VALUE or (v is not None and (cur is None or v > cur)):
+        best[cell] = v
+
+
+def _burn_best(best, xmin, ymin, xmax, ymax, width, height):
+    """The canvas of `best` ({cell: value or None}) as GTiff bytes: what the aggregate gives for the same cells."""
+    ad = cellraster_core._adapter("bng")
+    cells = list(best)
+    s = _as_series  # _rasterize_agg_body reads .iloc[0]
+    return _rasterize_agg_body(
+        _max_value_per_cell(cells, [best[c] for c in cells], ad.to_key),
+        cells,
+        ad,
+        "bng",
+        27700,
+        s(None),
+        s(xmin),
+        s(ymin),
+        s(xmax),
+        s(ymax),
+        s(width),
+        s(height),
+        s("centroids"),
+        s(0),
+    )
+
+
+def _member_bytes(tile):
+    """The raster bytes of a group member, or None for a member a merge drops: an error tile (it failed upstream), an
+    empty one, or one that does not open. Not a place to fail: the group still has an answer.
+    """
+    if _error_tile_of(tile) is not None:
+        return None
+    b = _tile_raster_bytes(tile)
+    if b is None:
+        return None
+    try:
+        with _serde.open_tile(b, gate=False):  # a validity probe: the decode gates
+            return b
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _table_column(row, fn_name, column, columns):
+    """`row[column]`, or a ValueError that names the columns the table argument must have."""
+    try:
+        return row[column]
+    except (KeyError, ValueError, AttributeError):
+        raise ValueError(
+            f"{fn_name}: the table argument has no column {column!r}. "
+            f"Fix: pass TABLE(SELECT {', '.join(columns)} FROM ...) PARTITION BY (key)."
+        ) from None
+
+
+@udtf(returnType="key string, raster binary")
+class _RstMergeTvf:
+    """`gbx_rst_merge_tvf`: the partition's tiles merged into one mosaic (the table function of `gbx_rst_merge_agg`)."""
+
+    def __init__(self):
+        from databricks.labs.gbx.pyrx import _env
+
+        _env.configure_gdal_env()
+        self.key, self.rasters = None, []
+
+    def eval(self, row):
+        self.key = _table_column(row, "gbx_rst_merge_tvf", "key", ("key", "tile"))
+        b = _member_bytes(
+            _table_column(row, "gbx_rst_merge_tvf", "tile", ("key", "tile"))
+        )
+        if b is not None:
+            self.rasters.append(b)
+
+    def terminate(self):
+        if self.rasters:
+            # as the aggregate: a group past what a merge can build raises with the Fix, never a silent missing group
+            yield self.key, agg_core.merge_tiles(
+                self.rasters, max_out=agg_core._merge_budget()
+            )
+
+
+@udtf(returnType="key string, raster binary")
+class _RstBngRasterizeTvf:
+    """`gbx_rst_bng_rasterize_tvf`: the partition's BNG cells burned onto an explicit canvas in EPSG:27700."""
+
+    _COLUMNS = ("key", "cellid", "value")
+
+    def __init__(self):
+        from databricks.labs.gbx.pyrx import _env
+
+        _env.configure_gdal_env()
+        self.key, self.best, self.canvas = None, {}, None
+
+    def eval(self, row, xmin, ymin, xmax, ymax, width, height):
+        name = "gbx_rst_bng_rasterize_tvf"
+        self.key = _table_column(row, name, "key", self._COLUMNS)
+        cell = _table_column(row, name, "cellid", self._COLUMNS)
+        value = _table_column(row, name, "value", self._COLUMNS)
+        if cell is None:
+            return
+        _keep_larger(self.best, cell, value)
+        self.canvas = (xmin, ymin, xmax, ymax, width, height)
+
+    def terminate(self):
+        if self.best:
+            yield self.key, _burn_best(self.best, *self.canvas)
+
+
 # --- public Column wrappers (compose grouped-agg BINARY + scalar as_tile) ----
 def _merge_agg_forced(tile, virtualize_dir, virtualize_prefix, materialize):
     """The force-output form of ``gbx_rst_merge_agg`` that ``rasterx.functions.rst_merge_agg`` runs when

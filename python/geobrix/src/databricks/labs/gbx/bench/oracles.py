@@ -3584,6 +3584,8 @@ def _check_pixels(case: Case, out) -> Optional[str]:
         return case.args[i] if i < len(case.args) else None
 
     srid, out_crs = const("out_srid", "srid"), const("out_crs")
+    if "_bng_" in fn.sql_name:
+        srid = 27700  # the BNG rasterizers always write EPSG:27700 (a table function has no out_srid)
     if (
         srid is None
     ):  # a NULL out_srid: the custom grid's CRS, else the lon/lat default of the cell rasterizers
@@ -4006,7 +4008,7 @@ def argument_rows(case: Case, tmpdir: str) -> List[List[Any]]:
     from databricks.labs.gbx import manifest
 
     fn = manifest.load().functions[case.fn]
-    if fn.kind == "aggregate":
+    if has_groups(fn):
         group = resolve_arg(case.args[0], tmpdir)
         group = [group] if isinstance(group, dict) else group
         return (
@@ -4023,7 +4025,7 @@ def argument_schema(case: Case, rows, surface: str = "session") -> str:
     from databricks.labs.gbx import manifest
 
     fn = manifest.load().functions[case.fn]
-    if fn.kind == "aggregate":
+    if has_groups(fn):
         n = group_width(fn)
         group = [r[0] if n == 1 else tuple(r) for r in rows]
         return ", ".join(f"c{i} {t}" for i, t in enumerate(_member_types(fn, group, n)))
@@ -4043,7 +4045,7 @@ def verdict(case: Case, outs, rows, tmpdir: Optional[str] = None) -> Optional[st
     from databricks.labs.gbx import manifest
 
     fn = manifest.load().functions[case.fn]
-    if fn.kind == "generator":
+    if fn.kind == "generator" and fn.table_input is None:
         return _check_rows(
             case, outs, rows if case.kind == "windows_batch" else rows[0]
         )
@@ -4056,7 +4058,9 @@ def verdict(case: Case, outs, rows, tmpdir: Optional[str] = None) -> Optional[st
             for e in (o if isinstance(o, list) else [o])
         ]
         return _check_rows(case, cells, rows[0])
-    if fn.kind == "aggregate":
+    if has_groups(
+        fn
+    ):  # an aggregate's one value; a table function's one row per partition (none: NULL)
         args = [resolve_arg(a, tmpdir) for a in case.args]
         return check(case, outs[0] if outs else None, args)
     return _verdict(case, outs, rows)
@@ -4520,8 +4524,16 @@ GROUP_WIDTH: Dict[str, int] = {
 }
 
 
+def has_groups(fn) -> bool:
+    """True for a function whose case is a group of member rows (`args[0]`) and constants: an aggregate, or a table
+    function over `TABLE(...) PARTITION BY`."""
+    return fn.kind == "aggregate" or fn.table_input is not None
+
+
 def group_width(fn) -> int:
     """The number of member columns of aggregate `fn` (a manifest Function)."""
+    if fn.table_input is not None:
+        return len(fn.table_input.members)
     if fn.sql_name in GROUP_WIDTH:
         return GROUP_WIDTH[fn.sql_name]
     if fn.params[0].name == "bytes":
@@ -4535,6 +4547,8 @@ def _member_types(fn, group, n0: int) -> List[str]:
     from databricks.labs.gbx import manifest
 
     out = []
+    if fn.table_input is not None:  # the table's own columns, not parameters
+        return [manifest.sql_type(t) for _, t in fn.table_input.members]
     for i, p in enumerate(fn.params[:n0]):
         if len(p.session) > 1 or p.session[0] == "STRUCT":
             v = next(
@@ -4558,10 +4572,29 @@ def _burn_nulls(expect, null_burn: float):
     return [[null_burn if v == NULL_BURN else v for v in row] for row in expect]
 
 
+def table_call_sql(fn) -> str:
+    """The SQL of one group through a table function: `SELECT * FROM gbx_x(TABLE(<members>) PARTITION BY (<key>), <constants>)`.
+
+    The one place the harness calls a function that reads a table argument (a manifest row with `table_input`). The
+    members are the view's `key` and `c0..`, named as the function's table argument names its columns; `{args}` is the
+    constants as typed literals (the Spark parser needs the parentheses to tell the key from a constant). The result is
+    `(key, out)` with `out` the function's last column."""
+    ti = fn.table_input
+    (key,) = ti.partition_by  # one partition key: the harness view has one `key` column
+    members = iter(f"c{i}" for i in range(len(ti.members)))
+    cols = ", ".join(
+        "key" if n == key else f"{next(members)} AS {n}" for n, _ in ti.columns
+    )
+    return (
+        f"SELECT key, {fn.columns[-1][0]} AS out FROM {fn.sql_name}("
+        f"TABLE(SELECT {cols} FROM {{src}}) PARTITION BY ({key}){{args}})"
+    )
+
+
 def run_groups(
     spark,
     cases,
-    shape_sql: str = "SELECT key, {fn}({args}) AS out FROM _gbx_oracle GROUP BY key",
+    shape_sql: Optional[str] = None,
     tmpdir: Optional[str] = None,
     null_burn: float = NAN,
     column_of: Optional[Callable[[str], Callable]] = None,
@@ -4574,6 +4607,9 @@ def run_groups(
 
     With `column_of` (SQL name -> Column function) the group runs through the Python Column API instead of
     `shape_sql`: `groupBy(key).agg(column_of(fn)(members..., constants as literals))`.
+
+    A function that reads a table argument (`table_input` on its row) is called with `table_call_sql` when `shape_sql`
+    is not given: the group is the partition of key `a`, a partition with no answer gives no row (NULL here).
     """
     from pyspark.sql.types import StructType
 
@@ -4585,13 +4621,16 @@ def run_groups(
     for case in cases:
         if "session" not in case.surfaces:
             continue
-        params = man.functions[case.fn].params
+        fn = man.functions[case.fn]
+        params = fn.params
         group = group_arg = resolve_arg(case.args[0], tmpdir)
         group = (
             [group] if isinstance(group, dict) else group
         )  # one tile is a group of one
         consts = [resolve_arg(a, tmpdir) for a in case.args[1:]]
-        n_cols = group_width(man.functions[case.fn])
+        n_cols = group_width(fn)
+        # the constants' parameters follow the member parameters of an aggregate, or the one TABLE parameter
+        first_const = 1 if fn.table_input is not None else n_cols
         if n_cols == 1:
             rows = [("a", t, *consts) for t in group]
             first = [f"c0 {_member_types(man.functions[case.fn], group, 1)[0]}"]
@@ -4615,13 +4654,14 @@ def run_groups(
             ["key string"]
             + first
             + [
-                f"c{i + n0} {_ddl_type(v, params[i + n0])}"
+                f"c{i + n0} {_ddl_type(v, params[i + first_const])}"
                 for i, v in enumerate(consts)
             ]
         )
         members = ", ".join("NULL" if i in omitted else f"c{i}" for i in range(n0))
         literals = [
-            _typed_literal(v, params[i + n0], case) for i, v in enumerate(consts)
+            _typed_literal(v, params[i + first_const], case)
+            for i, v in enumerate(consts)
         ]
         want = (
             replace(case, expect=_burn_nulls(case.expect, null_burn))
@@ -4631,9 +4671,31 @@ def run_groups(
         try:
             src = spark.createDataFrame(rows, schema)
             src.createOrReplaceTempView("_gbx_oracle")
-            if column_of is None:
+            if column_of is None and fn.table_input is not None:
                 df = spark.sql(
-                    shape_sql.format(
+                    (shape_sql or table_call_sql(fn)).format(
+                        src="_gbx_oracle",
+                        args="".join(f", {lit}" for lit in literals),
+                    )
+                )
+            elif fn.table_input is not None:  # column_of given
+                # the Python API: the DataFrame-first entry, the view's `key` and members as the table's columns
+                from pyspark.sql import functions as F
+
+                ti = fn.table_input
+                names = {k: "key" for k in ti.partition_by}
+                names.update({n: f"c{i}" for i, (n, _) in enumerate(ti.members)})
+                table = src.select(*[F.col(names[n]).alias(n) for n, _ in ti.columns])
+                got_df = column_of(case.fn)(table, *consts)
+                df = got_df.select(
+                    *ti.partition_by, F.col(fn.columns[-1][0]).alias("out")
+                )
+            elif column_of is None:
+                df = spark.sql(
+                    (
+                        shape_sql
+                        or "SELECT key, {fn}({args}) AS out FROM _gbx_oracle GROUP BY key"
+                    ).format(
                         fn=case.fn,
                         src="_gbx_oracle",
                         args=", ".join([members] + literals),

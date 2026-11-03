@@ -2754,3 +2754,28 @@ def test_the_heavy_register_leaves_the_managers_choice_in_place(jvm_spark):
         .treeString()
     )
     assert "EvalPython" in plan, plan
+
+
+@pytest.mark.parametrize(
+    "fn", [f for f in FNS if f.table_input is not None], ids=lambda f: f.sql_name
+)
+def test_a_table_function_row_names_its_table_argument_and_its_output(fn):
+    """A row with `table_input` is a generator whose first parameter is the TABLE argument; the partition keys are
+    columns of the table and come back as columns of the output; its Python entry is DataFrame-first (the DataFrame is
+    the table argument) and it has no UC level."""
+    ti = fn.table_input
+    assert fn.kind == "generator" and fn.params[0].session == ("TABLE",)
+    assert ti.partition_by and set(ti.partition_by) <= {n for n, _ in ti.columns}
+    assert ti.members, "a partition needs member columns"
+    assert set(ti.partition_by) <= {n for n, _ in fn.columns}
+    assert fn.python is not None and "L4" not in fn.levels
+    # no other row takes a TABLE parameter, and none of them takes it anywhere but first
+    assert all(p.session != ("TABLE",) for p in fn.params[1:])
+
+
+def test_only_a_table_function_takes_a_table_parameter():
+    assert all(
+        f.table_input is not None
+        for f in FNS
+        if any(p.session == ("TABLE",) for p in f.params)
+    )

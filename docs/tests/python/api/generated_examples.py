@@ -359,6 +359,11 @@ EXAMPLES = {
         "br_nan_beside_numbers",
         "SELECT gbx_rst_bng_rasterize_agg(c0, c1, 27700, CAST(NULL AS DOUBLE), 530000.0D, 180000.0D, 533000.0D, 182000.0D, 3, 2, 'centroids', 0) AS out FROM gbx_example",
     ),
+    "gbx_rst_bng_rasterize_tvf": (
+        "RASTER_AGGREGATE",
+        "bt_nan_beside_numbers",
+        "SELECT raster AS out FROM gbx_rst_bng_rasterize_tvf(TABLE(SELECT 'a' AS key, c0 AS cellid, c1 AS value FROM gbx_example) PARTITION BY (key), 530000.0D, 180000.0D, 533000.0D, 182000.0D, 3, 2)",
+    ),
     "gbx_rst_bng_rastertogridavg": (
         "RASTER_TO_GRID",
         "bng_rtg_avg",
@@ -758,6 +763,11 @@ EXAMPLES = {
         "RASTER_AGGREGATE",
         "ma_quad",
         "SELECT gbx_rst_merge_agg(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_merge_tvf": (
+        "RASTER_AGGREGATE",
+        "mt_quad",
+        "SELECT raster AS out FROM gbx_rst_merge_tvf(TABLE(SELECT 'a' AS key, c0 AS tile FROM gbx_example) PARTITION BY (key))",
     ),
     "gbx_rst_metadata": (
         "RASTER_ACCESSOR",

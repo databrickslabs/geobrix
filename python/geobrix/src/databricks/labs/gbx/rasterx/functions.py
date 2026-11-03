@@ -587,6 +587,46 @@ def rst_bng_rasterize_agg(
     )
 
 
+def rst_bng_rasterize_tvf(
+    df: DataFrame,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width: ColLike,
+    height: ColLike,
+) -> DataFrame:
+    """Rasterize each partition's BNG cells onto an explicit EPSG:27700 canvas, as a table function over `TABLE(...) PARTITION BY`.
+
+    Args:
+        df: The input DataFrame, with the columns ``key``, ``cellid``, ``value`` (others
+            are left out); it is partitioned by ``key``.
+        xmin: The west edge of the canvas in EPSG:27700 metres.
+        ymin: The south edge of the canvas in EPSG:27700 metres.
+        xmax: The east edge of the canvas in EPSG:27700 metres.
+        ymax: The north edge of the canvas in EPSG:27700 metres.
+        width: The canvas width in pixels.
+        height: The canvas height in pixels.
+
+    Returns:
+        One row per partition: its `key` and the `raster` (GeoTIFF bytes, Float64 with
+        NoData -9999, in EPSG:27700 over the canvas). A partition with no cell gives no
+        row.
+
+    SQL: ``gbx_rst_bng_rasterize_tvf(rows, xmin, ymin, xmax, ymax, width, height)``
+    """
+    return _api.table_by(
+        df,
+        "gbx_rst_bng_rasterize_tvf",
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+    )
+
+
 def rst_bng_rastertogridavg(
     df: DataFrame,
     tile: ColLike,
@@ -3706,6 +3746,28 @@ def rst_merge_agg(
     return _api.call(
         "gbx_rst_merge_agg",
         tile,
+    )
+
+
+def rst_merge_tvf(
+    df: DataFrame,
+) -> DataFrame:
+    """Merge each partition's tiles into one mosaic, as a table function over `TABLE(...) PARTITION BY`.
+
+    Args:
+        df: The input DataFrame, with the columns ``key``, ``tile`` (others are left
+            out); it is partitioned by ``key``.
+
+    Returns:
+        One row per partition: its `key` and the merged `raster` (GeoTIFF bytes over the
+        union extent). A partition with no readable tile gives no row; one past what a
+        merge can build raises with a Fix that names `merge_by_key`.
+
+    SQL: ``gbx_rst_merge_tvf(rows)``
+    """
+    return _api.table_by(
+        df,
+        "gbx_rst_merge_tvf",
     )
 
 

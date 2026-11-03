@@ -100,11 +100,21 @@ def _docstring(fn, extras, group=None) -> List[str]:
     out = ['    """' + fn.doc.summary.strip(), ""]
     if fn.params or extras:
         out.append("    Args:")
-        if fn.kind == "generator":
+        if fn.table_input is not None:
+            cols = ", ".join(f"``{n}``" for n, _ in fn.table_input.columns)
+            keys = ", ".join(f"``{k}``" for k in fn.table_input.partition_by)
+            lines = _wrap(
+                f"df: The input DataFrame, with the columns {cols} (others are left out); it is partitioned by {keys}.",
+                8,
+            )
+            out += ["        " + lines[0]] + ["            " + x for x in lines[1:]]
+        elif fn.kind == "generator":
             out.append(
                 "        df: The input DataFrame; each row is joined with the rows generated from it."
             )
         for i, p in enumerate(fn.params):
+            if fn.table_input is not None and i == 0:
+                continue  # the table argument is `df`
             tail = "" if i < fn.min_args else f" SQL default: ``{p.default}``."
             lines = _wrap(f"{p.name}: {p.doc or p.name}{tail}", 8)
             out += ["        " + lines[0]] + ["            " + x for x in lines[1:]]
@@ -127,19 +137,24 @@ def render_python_entry(fn) -> str:
     py = fn.python
     extras = PY_EXTRAS[py.extras] if py.extras else ()
     sig = ["df: DataFrame"] if fn.kind == "generator" else []
+    # a table function's first parameter is its table argument, which `df` stands for
+    skip = 1 if fn.table_input is not None else 0
     sig += [
         f"{p.name}: ColLike" + ("" if i < fn.min_args else " = None")
         for i, p in enumerate(fn.params)
+        if i >= skip
     ]
     sig += [f"{e}: {EXTRA_TYPES[e]} = None" for e in extras]
     ret = "DataFrame" if fn.kind == "generator" else "Column"
-    names = [p.name for p in fn.params]
+    names = [p.name for p in fn.params[skip:]]
     lines = [
         f"def {py.name}(",
         *[f"    {s}," for s in sig],
         f") -> {ret}:",
     ] + _docstring(fn, extras, py.extras)
-    if fn.kind == "generator":
+    if fn.table_input is not None:
+        lines += _call("_api.table_by", ["df", f'"{fn.sql_name}"', *names], 4)
+    elif fn.kind == "generator":
         lines += _call("_api.table", ["df", f'"{fn.sql_name}"', *names], 4)
     else:
         if py.extras == "materialize":
@@ -183,8 +198,11 @@ def _py_usage(fn) -> str:
     from databricks.labs.gbx.manifest import PY_EXTRAS
 
     parts = ["df"] if fn.kind == "generator" else []
+    skip = 1 if fn.table_input is not None else 0
     parts += [
-        p.name if i < fn.min_args else f"{p.name}=None" for i, p in enumerate(fn.params)
+        p.name if i < fn.min_args else f"{p.name}=None"
+        for i, p in enumerate(fn.params)
+        if i >= skip
     ]
     parts += [
         f"{e}=None" for e in (PY_EXTRAS[fn.python.extras] if fn.python.extras else ())
@@ -363,6 +381,31 @@ def example_sql(fn, case) -> str:
     """The SQL of one oracle row. A fixture argument is a column ``c<i>`` of the view ``gbx_example``; an
     aggregate's first argument is its group, so the view holds one row per member (``c0``, or ``c0, c1``)
     and the per-group constants are literals."""
+    if fn.table_input is not None:
+        # A table function: the members are the view's columns c0.., named as the function's table argument names them
+        # (`PARTITION BY` on a constant key: the view is one partition), the constants follow the partition clause.
+        from databricks.labs.gbx.bench import oracles
+
+        n0 = oracles.group_width(fn)
+        consts = [_literal(a, fn.params[i + 1]) for i, a in enumerate(case.args[1:])]
+        if None in consts:
+            raise ValueError(
+                f"{fn.sql_name}: oracle row {case.cid!r} has a constant that is not a literal; "
+                "pick an example row whose constants are plain values"
+            )
+        (key,) = fn.table_input.partition_by
+        members = iter(f"c{i}" for i in range(n0))
+        cols = ", ".join(
+            f"'a' AS {n}" if n == key else f"{next(members)} AS {n}"
+            for n, _ in fn.table_input.columns
+        )
+        out = fn.columns[-1][0]
+        return (
+            f"SELECT {out} AS out FROM {fn.sql_name}("
+            f"TABLE(SELECT {cols} FROM gbx_example) PARTITION BY ({key})"
+            + "".join(f", {c}" for c in consts)
+            + ")"
+        )
     if fn.kind == "aggregate":
         from databricks.labs.gbx.bench import oracles
 

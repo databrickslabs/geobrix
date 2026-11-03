@@ -173,6 +173,21 @@ class PythonEntry:
 
 
 @dataclass(frozen=True)
+class TableInput:
+    """The table argument of a table function called as `fn(TABLE(<query>) PARTITION BY (<keys>), <constants>)`: the
+    columns the query must have, in order (name, SQL type), and the ones the partitions are made by. The other columns
+    are a partition's members; the function's first parameter (session type `TABLE`) stands for the whole argument.
+    """
+
+    columns: Tuple[Tuple[str, str], ...]
+    partition_by: Tuple[str, ...]
+
+    @property
+    def members(self) -> Tuple[Tuple[str, str], ...]:
+        return tuple(c for c in self.columns if c[0] not in self.partition_by)
+
+
+@dataclass(frozen=True)
 class DataSource:
     """A reader or writer format: spark.read/write.format(name)."""
 
@@ -565,6 +580,8 @@ class Function:
     since: str = ""
     # The cid of the oracle row the generated doc-test example comes from.
     example: Optional[str] = None
+    # A generator that reads a table argument (`TABLE(...) PARTITION BY`) instead of being joined laterally to a row.
+    table_input: Optional[TableInput] = None
 
     @property
     def max_args(self) -> int:
@@ -676,6 +693,14 @@ def load() -> Manifest:
             python,
             r.get("since", ""),
             r.get("example"),
+            (
+                TableInput(
+                    tuple((c[0], c[1]) for c in r["table_input"]["columns"]),
+                    tuple(r["table_input"]["partition_by"]),
+                )
+                if r.get("table_input")
+                else None
+            ),
         )
     return Manifest(
         MappingProxyType(fns),

@@ -75,10 +75,12 @@ def _rows():
 
 
 def _run(spark, fn, cases, tmpdir, column_of=None):
+    if oracles.has_groups(
+        fn
+    ):  # an aggregate, or a table function over TABLE(...) PARTITION BY
+        return oracles.run_groups(spark, cases, tmpdir=tmpdir, column_of=column_of)
     if fn.kind == "generator":
         return oracles.run_rows(spark, cases, tmpdir=tmpdir, table_of=column_of)
-    if fn.kind == "aggregate":
-        return oracles.run_groups(spark, cases, tmpdir=tmpdir, column_of=column_of)
     return oracles.run_session(spark, cases, tmpdir=tmpdir, column_of=column_of)
 
 

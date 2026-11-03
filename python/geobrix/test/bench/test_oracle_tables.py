@@ -595,3 +595,33 @@ def test_the_cellfill_and_mvt_layer_kinds_can_fail():
     )  # the geometry
     assert layer({"layer": "lyr", "features": []}) is not None  # a feature too many
     assert shapely  # the module imports with the fixtures it names
+
+
+def test_a_table_function_is_called_with_a_partition_clause_and_a_wrong_row_fails(
+    spark, tmp_path
+):
+    """The one harness mode for a function that reads `TABLE(...) PARTITION BY`: the SQL it builds, a row that
+    meets its expectation, and the same row with another expectation (which must be red).
+    """
+    import dataclasses
+
+    from databricks.labs.gbx import manifest, register
+    from databricks.labs.gbx.bench import oracles
+
+    fn = manifest.load().functions["gbx_rst_bng_rasterize_tvf"]
+    assert oracles.table_call_sql(fn) == (
+        "SELECT key, raster AS out FROM gbx_rst_bng_rasterize_tvf("
+        "TABLE(SELECT key, c0 AS cellid, c1 AS value FROM {src}) PARTITION BY (key){args})"
+    )
+    register(spark, only=[fn.sql_name])
+    (case,) = [
+        c
+        for c in oracles.TABLES[fn.oracle]
+        if c.fn == fn.sql_name and c.cid == "bt_dup_max"
+    ]
+    assert [m for _, m in oracles.run_groups(spark, [case], tmpdir=str(tmp_path))] == [
+        None
+    ]
+    wrong = dataclasses.replace(case, expect=[[0.0] * 3, [0.0] * 3])
+    ((_, msg),) = oracles.run_groups(spark, [wrong], tmpdir=str(tmp_path))
+    assert msg and "pixels" in msg

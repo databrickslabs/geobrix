@@ -223,3 +223,44 @@ def table(df, sql_name: str, *values):
         f"SELECT gbx_in.*, gbx_out.* FROM {{gbx_in}} AS gbx_in, LATERAL {sql_name}({call_args}) AS gbx_out",
         gbx_in=df,
     )
+
+
+def table_by(df, sql_name: str, *values):
+    """The table function ``sql_name`` over ``df`` as its table argument, partitioned by the function's key:
+    ``SELECT * FROM sql_name(TABLE(SELECT <its columns> FROM df) PARTITION BY (<key>), values...)``.
+
+    ``df`` needs the columns the function's table argument names (others are left out); ``values`` are the
+    function's constants after the table argument, plain Python values (a Column is not constant). One output row
+    per partition, as the function gives it.
+    """
+    from pyspark.sql import Column
+
+    fn = _fn(sql_name)
+    ti = fn.table_input
+    constants = fn.params[1:]  # the first parameter is the table argument itself
+    if len(values) > len(constants):
+        raise TypeError(
+            f"{sql_name} takes at most {len(constants)} arguments after the DataFrame ({len(values)} given)"
+        )
+    if len(values) < fn.min_args - 1:
+        raise TypeError(
+            f"{sql_name} needs {fn.min_args - 1} arguments after the DataFrame ({len(values)} given)"
+        )
+    args = []
+    for p, v in zip(constants, values):
+        if isinstance(v, Column):
+            raise TypeError(
+                f"{sql_name}: {p.name!r} is a constant of the call, not a column. "
+                f"Fix: pass a Python value for {p.name!r}."
+            )
+        args.append(_sql_literal(v, p))
+    quote = lambda c: "`" + c.replace("`", "``") + "`"  # noqa: E731
+    cols = ", ".join(quote(n) for n, _ in ti.columns)
+    keys = ", ".join(quote(k) for k in ti.partition_by)
+    spark = df.sparkSession
+    ensure(spark, sql_name)
+    call_args = "".join(", " + a for a in args).replace("{", "{{").replace("}", "}}")
+    return spark.sql(
+        f"SELECT * FROM {sql_name}(TABLE(SELECT {cols} FROM {{gbx_in}}) PARTITION BY ({keys}){call_args})",
+        gbx_in=df,
+    )

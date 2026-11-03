@@ -35,15 +35,21 @@ TREE = (
     "SELECT *, pmod(xxhash64(c0, c1), 2) AS salt FROM _gbx_oracle) "
     "GROUP BY key, salt, c4, c5, c6, c7, c8, c9) GROUP BY key"
 )
+# The product's table functions (`gbx_rst_merge_tvf`, `gbx_rst_bng_rasterize_tvf`): the constants of a call are literals,
+# so the canvas of `oracles.CANVAS` (the same for every rasterize row) is written into the SQL.
+_TVF_CANVAS = ", ".join(
+    f"CAST({v} AS {t})"
+    for v, t in zip(oracles.CANVAS[2:8], ("DOUBLE",) * 4 + ("INT",) * 2)
+)
 TVF = {
     MA: (
-        "SELECT key, raster AS out FROM gbx_mvp_rst_merge_tvf("
-        "TABLE(SELECT key, c0 AS tile FROM _gbx_oracle) PARTITION BY key)"
+        "SELECT key, raster AS out FROM gbx_rst_merge_tvf("
+        "TABLE(SELECT key, c0 AS tile FROM _gbx_oracle) PARTITION BY (key))"
     ),
     BR: (
-        "SELECT key, raster AS out FROM gbx_mvp_rst_bng_rasterize_tvf("
-        "TABLE(SELECT key, c0 AS cellid, c1 AS value, c4, c5, c6, c7, c8, c9 FROM _gbx_oracle) "
-        "PARTITION BY key)"
+        "SELECT key, raster AS out FROM gbx_rst_bng_rasterize_tvf("
+        "TABLE(SELECT key, c0 AS cellid, c1 AS value FROM _gbx_oracle) "
+        f"PARTITION BY (key), {_TVF_CANVAS})"
     ),
 }
 
@@ -67,6 +73,11 @@ def _light(spark):
     prx.register(
         spark, only=["gbx_rst_merge"]
     )  # the light finalize (the heavy one has this name too)
+
+
+def _tvf(spark):
+    _light(spark)
+    register(spark, only=["gbx_rst_merge_tvf", "gbx_rst_bng_rasterize_tvf"])
 
 
 def _l1_merge(spark):
@@ -110,7 +121,7 @@ SHAPES = {
     # partial canvases per (key, salt), merged by a per-pixel max: associative, so exact
     "tree": Shape(_light, {BR: TREE}, oracles.NAN),
     # a Python table function over the whole partition of a key
-    "tvf": Shape(_light, TVF, oracles.NAN),
+    "tvf": Shape(_tvf, TVF, oracles.NAN),
 }
 JVM = {"udaf", "collect_finalize_l1", "collect_finalize_l2"}
 

@@ -29,6 +29,16 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_rst_retile": ("L3",),
     "gbx_bng_tessellate": ("L1", "L3"),
     "gbx_bng_tessellateexplode": ("L1", "L3"),
+    # The five BNG explodes are 1.5x to 2.7x faster on the JVM on a cluster (0.37x to 0.67x). The other explodes
+    # (quadbin, custom, H3) are light by family: unmeasured, and the quadbin companions are not conformed.
+    "gbx_bng_kringexplode": ("L1", "L3"),
+    "gbx_bng_kloopexplode": ("L1", "L3"),
+    "gbx_bng_geomkringexplode": ("L1", "L3"),
+    "gbx_bng_geomkloopexplode": ("L1", "L3"),
+    # The TIN generators: triangulate is 1.7x faster on the JVM (0.60x) and the bbox grid 0.75x (both within the 0.8
+    # rule); the origin grid is 0.88x and the MVT pyramid is unmeasured (light).
+    "gbx_st_triangulate": ("L1", "L3"),
+    "gbx_st_interpolateelevationbbox": ("L1", "L3"),
     # Quadbin cell math is at parity with light on a cluster (0.89x to 1.33x), so it stays on light; the other
     # grid scalars (custom grid, H3) are L1 first through their family. The quadbin arrays are light by family.
     "gbx_quadbin_pointascell": ("L3",),

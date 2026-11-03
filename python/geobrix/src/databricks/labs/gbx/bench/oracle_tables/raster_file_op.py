@@ -73,6 +73,15 @@ RASTER_FILE_OP = (
     Case(
         "cog_convert_layout", CG, (TILE,), "tile_meta", {**SAME, "layout": "COG"}, ONLY
     ),
+    # the default codec, AUTO, is ZSTD in the COG, at every level
+    Case(
+        "cog_convert_auto",
+        CG,
+        (TILE, "AUTO"),
+        "tile_meta",
+        {**SAME, "layout": "COG", "compression": "ZSTD"},
+        ONLY,
+    ),
     Case(
         "cog_convert_blocksize",
         CG,

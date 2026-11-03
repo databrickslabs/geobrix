@@ -168,6 +168,19 @@ def _blocked(size):
         }
 
 
+def _compressed(codec):
+    """The `_sized(32, 24)` raster as a COG written with `codec`."""
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.pyrx.core import analysis
+
+    with MemoryFile(_sized(32, 24)["raster"]) as mf, mf.open() as ds:
+        return {
+            **_sized(32, 24),
+            "raster": analysis.cog_convert(ds, codec, 32, "AVERAGE"),
+        }
+
+
 # the arguments a tile_meta key that compares the result with them reads (the other probes read none)
 _META_ARGS = {
     "pixels_of_arg0": (_sized(32, 24),),
@@ -193,6 +206,7 @@ _META_ARGS = {
             _sized(32, 24),
             _sized(31, 24),
         ),
+        ("tile_meta", {"width": (31, 32)}, _sized(32, 24), _sized(33, 24)),
         ("tile_meta", {"pixels_of_arg0": True}, _sized(32, 24), _sized(32, 24, 1.0)),
         ("tile_meta", {"grid_of_arg1": True}, _sized(32, 24), _sized(31, 24)),
         ("tile_meta", {"nodata": None}, _sized(32, 24), _sized(32, 24, nodata=-9999.0)),
@@ -208,6 +222,12 @@ _META_ARGS = {
         ("tile_meta", {"overviews": [2]}, _with_overviews([2]), _with_overviews([])),
         ("tile_meta", {"blocksize": (16, 16)}, _blocked(16), _blocked(32)),
         (
+            "tile_meta",
+            {"compression": "ZSTD"},
+            _compressed("ZSTD"),
+            _compressed("DEFLATE"),
+        ),
+        (
             "image_meta",
             {"driver": "PNG", "width": 4, "height": 4, "count": 4, "alpha": "opaque"},
             _png(255),
@@ -219,6 +239,7 @@ _META_ARGS = {
             _png(0),
             _png(255),
         ),
+        ("image_meta", {"gray": (100, 104)}, _png(102), _png(50)),
         (
             "json_subset",
             {"size": [4, 3], "bands": [{"min": 2.0}]},

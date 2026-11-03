@@ -11,7 +11,7 @@ and the spec's directory layout."""
 
 import math
 
-from databricks.labs.gbx.bench.oracles import Build, Case
+from databricks.labs.gbx.bench.oracles import Build, Case, _gtiff, _tile, builder
 
 TXYZ, PYR, PMA = "gbx_rst_tilexyz", "gbx_rst_xyzpyramid", "gbx_pmtiles_agg"
 TILE, VIRT, ERR, CORRUPT = (
@@ -23,6 +23,22 @@ TILE, VIRT, ERR, CORRUPT = (
 ONLY = ("session",)
 PNG_256 = {"driver": "PNG", "width": 256, "height": 256, "count": 4}
 BOUNDS = (-1.0, 51.52, -0.36, 52.0)  # tile_4326: west, south, east, north
+
+
+@builder("tile_flat_40")
+def _tile_flat_40(tmpdir):
+    """`tile_4326`'s grid and extent, every pixel 40 (no NoData): a rescale of it has one known value."""
+    import numpy as np
+
+    return _tile(
+        _gtiff(
+            np.full((1, 48, 64), 40.0),
+            "EPSG:4326",
+            nodata=None,
+            origin=(-1.0, 52.0),
+            px=0.01,
+        )
+    )
 
 
 def _tile_of(lon, lat, z):
@@ -121,6 +137,24 @@ WEB_TILES = (
         )
     ),
     Case("tilexyz_null_coordinate", TXYZ, (TILE, None, 1020, 678), "null", None, ONLY),
+    # a rescale between two numbers maps them to 0 and 255: 40 of 0..100 is 102 (a pixel of 40 everywhere, so the
+    # warp cannot change it); a pair with min above max raises and names it
+    Case(
+        "tilexyz_rescale_pair",
+        TXYZ,
+        (Build("tile_flat_40"), 11, 1020, 678, "PNG", 256, "bilinear", "0,100"),
+        "image_meta",
+        {**PNG_256, "alpha": "opaque", "gray": (101, 103)},
+        ONLY,
+    ),
+    Case(
+        "tilexyz_rescale_reversed",
+        TXYZ,
+        (TILE, 11, 1020, 678, "PNG", 256, "bilinear", "100,0"),
+        "raises",
+        "100.0",
+        ONLY,
+    ),
     # a bad argument raises and names the value (H13)
     Case(
         "tilexyz_bad_format",

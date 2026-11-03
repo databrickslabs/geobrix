@@ -56,14 +56,14 @@ _COMPLEX_INT_SIZES = {"complex_int16": 4, "complex_int32": 8}
 
 
 def decoded_bytes(ds) -> int:
-    """The decoded size of an open raster, from its header: width x height x bands x the first band's type size."""
+    """The decoded size of an open raster, from its header: width x height x the type size of each band."""
     import numpy as np
 
-    if not ds.count:
-        return 0
-    name = ds.dtypes[0]
-    item = _COMPLEX_INT_SIZES.get(name) or np.dtype(name).itemsize
-    return ds.width * ds.height * ds.count * item
+    pixels = ds.width * ds.height
+    return sum(
+        pixels * (_COMPLEX_INT_SIZES.get(name) or np.dtype(name).itemsize)
+        for name in ds.dtypes
+    )
 
 
 def over_read_cap(ds) -> Optional[str]:

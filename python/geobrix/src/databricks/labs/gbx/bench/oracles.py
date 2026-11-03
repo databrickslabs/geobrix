@@ -59,8 +59,8 @@ class Case:
     # value), so a missing function cannot pass. tile_props: the target CRS, or (CRS, SRID).
     # error_tile: when set, the reason that must come out unchanged. error_tile_has: a substring the reason must hold.
     # tile_meta: `expect` is a dict of what the result tile's raster must be, each key optional: crs, no_crs, srid, width,
-    # height, count, dtype, nodata (a value, or None for none declared), driver (the raster's format), meta_driver (the
-    # tile metadata's driver), layout (the GeoTIFF IMAGE_STRUCTURE layout), pixels_of_arg0 (the pixels of the first
+    # height, count (each a number, or a (least, most) pair), dtype, nodata (a value, or None for none declared), driver (the raster's format), meta_driver (the
+    # tile metadata's driver), layout (the GeoTIFF IMAGE_STRUCTURE layout), compression (its IMAGE_STRUCTURE codec), pixels_of_arg0 (the pixels of the first
     # argument unchanged), transform_of_arg0 (its geotransform) and grid_of_arg1 (the width, height, CRS and geotransform
     # of the second argument), and materialized (True: the raster bytes are in the tile and it has no path; False: a
     # path and no bytes). A result that is still a virtual tile is read as its next reader reads it.
@@ -107,9 +107,7 @@ _DERIVEDBAND_L1 = "the JVM derived band is a VRT pixel function run on read: the
 # The L3-first web-tile and file functions keep their JVM companion for a restore on measured numbers; these rows are
 # where it differs from the contract, and the companions go in the decision sweep (Task 21) if no restore comes.
 _BUILDOVERVIEWS_L1 = "the JVM builds the overviews in a sidecar the tile bytes do not carry, and turns a bad resampling or level into an error tile, not a raised error; the companion is deleted in the decision sweep"
-_COG_BLOCK_L1 = "the JVM serializes a tile through a GeoTIFF translate whose block is at least 64 pixels, so a smaller COG block is lost; the companion is deleted in the decision sweep"
 _XYZ_ERROR_L1 = "the JVM answers a tile that is an error tile or cannot be read with one row whose bytes are NULL (a deliberate, auditable row); the contract is no rows; the companion is deleted in the decision sweep"
-_VIEWSHED_L1 = "the JVM dispatch wrapper declares one type for the observer geometry (BINARY or STRING), validates after reading the tile and turns a failure into NULL or an error tile; the companion is deleted in the decision sweep"
 HEAVY_PENDING: Dict[str, Dict[str, str]] = {
     **{
         cid: {"L1": _DERIVEDBAND_L1}
@@ -130,22 +128,9 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
             "buildoverviews_bad_levels",
         )
     },
-    "cog_convert_blocksize": {"L1": _COG_BLOCK_L1},
     **{
         cid: {"L1": _XYZ_ERROR_L1}
         for cid in ("xyzpyramid_error_tile", "xyzpyramid_corrupt_tile")
-    },
-    **{
-        cid: {"L1": _VIEWSHED_L1}
-        for cid in (
-            "viewshed_wall",
-            "viewshed_wkb",
-            "viewshed_virtual",
-            "viewshed_max_distance",
-            "viewshed_not_a_point",
-            "viewshed_negative_height",
-            "viewshed_corrupt",
-        )
     },
     **{
         cid: {"L1": _QUADBIN_L1}
@@ -1510,8 +1495,15 @@ def _encode(bands, driver: str, **profile) -> bytes:
         return mf.read()
 
 
-def _gtiff(bands, crs_value: Optional[str], nodata=-9999.0) -> bytes:
-    """A float32 GeoTIFF of `bands` (a (count, h, w) array) on a 10 m grid, in `crs_value` (None: no CRS)."""
+def _gtiff(
+    bands,
+    crs_value: Optional[str],
+    nodata=-9999.0,
+    origin=(400000.0, 5760000.0),
+    px=10.0,
+) -> bytes:
+    """A float32 GeoTIFF of `bands` (a (count, h, w) array) on a `px` pixel grid (10 m) from the top-left corner
+    `origin`, in `crs_value` (None: no CRS)."""
     from rasterio.io import MemoryFile
     from rasterio.transform import from_origin
 
@@ -1526,7 +1518,7 @@ def _gtiff(bands, crs_value: Optional[str], nodata=-9999.0) -> bytes:
         count=count,
         dtype="float32",
         nodata=nodata,
-        transform=from_origin(400000.0, 5760000.0, 10.0, 10.0),
+        transform=from_origin(origin[0], origin[1], px, px),
         **creation_opts("float32", compress="zstd"),
     )
     if crs_value:
@@ -2184,6 +2176,16 @@ def _open_out(out):
         yield ds
 
 
+def _extent_flaw(got, want) -> Optional[str]:
+    """The width, height or band count of the open raster `got` against `want`, each a number or a (least, most) pair."""
+    for key in ("width", "height", "count"):
+        if key in want:
+            lo, hi = want[key] if isinstance(want[key], tuple) else (want[key],) * 2
+            if not lo <= getattr(got, key) <= hi:
+                return f"{key} {getattr(got, key)} is not {want[key]}"
+    return None
+
+
 def _tile_meta_flaws(case: Case, out, got, want) -> Optional[str]:
     """What is wrong with the open raster `got` of a result tile `out` against the dict `want` (see `Case`), else None."""
     from databricks.labs.gbx.core.crs import authority_srid_of, crs_equal
@@ -2194,9 +2196,9 @@ def _tile_meta_flaws(case: Case, out, got, want) -> Optional[str]:
         return f"CRS {got.crs}, want none"
     if "srid" in want and authority_srid_of(got.crs) != want["srid"]:
         return f"SRID {authority_srid_of(got.crs)} is not {want['srid']}"
-    for key in ("width", "height", "count"):
-        if key in want and getattr(got, key) != want[key]:
-            return f"{key} {getattr(got, key)} is not {want[key]}"
+    why = _extent_flaw(got, want)
+    if why:
+        return why
     if "dtype" in want and got.dtypes[0] != want["dtype"]:
         return f"data type {got.dtypes[0]} is not {want['dtype']}"
     if "nodata" in want:
@@ -2228,6 +2230,10 @@ def _tile_meta_flaws(case: Case, out, got, want) -> Optional[str]:
         layout = got.tags(ns="IMAGE_STRUCTURE").get("LAYOUT")
         if layout != want["layout"]:
             return f"layout {layout!r} is not {want['layout']!r}"
+    if "compression" in want:
+        codec = got.tags(ns="IMAGE_STRUCTURE").get("COMPRESSION")
+        if codec != want["compression"]:
+            return f"compression {codec!r} is not {want['compression']!r}"
     if "overviews" in want and list(got.overviews(1)) != list(want["overviews"]):
         return f"overviews {list(got.overviews(1))} are not {list(want['overviews'])}"
     if "blocksize" in want and tuple(got.block_shapes[0]) != tuple(want["blocksize"]):
@@ -3157,7 +3163,8 @@ def _quiet_no_georeference():
 
 def _check_image_meta(case: Case, out) -> Optional[str]:
     """`out` is the bytes of an image (a web tile) with the format, size and band count of `case.expect`, and the alpha
-    band it names: ``transparent`` (every pixel 0), ``opaque`` (every pixel 255) or ``mixed``.
+    band it names: ``transparent`` (every pixel 0), ``opaque`` (every pixel 255) or ``mixed``; ``gray`` is the
+    ``(least, most)`` that every pixel of band 1 lies between.
     """
     if out is None:
         return f"{case.cid}: got NULL, want an image"
@@ -3182,6 +3189,11 @@ def _check_image_meta(case: Case, out) -> Optional[str]:
             )
             if state != want["alpha"]:
                 return f"{case.cid}: the alpha band is {state}, want {want['alpha']}"
+        if "gray" in want:
+            lo, hi = want["gray"]
+            first = ds.read(1)
+            if first.min() < lo or first.max() > hi:
+                return f"{case.cid}: band 1 runs {first.min()}..{first.max()}, want {lo}..{hi}"
     return None
 
 

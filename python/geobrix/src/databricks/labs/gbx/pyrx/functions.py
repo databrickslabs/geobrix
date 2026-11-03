@@ -15,6 +15,7 @@ import functools
 import json
 import math
 import os
+import re
 from typing import List, Optional
 
 import pandas as pd
@@ -1263,6 +1264,7 @@ def _merge_bytes(tiles):
     if not elems:
         return None
     rasters = []
+    sizes = []
     dropped = 0
     for t in elems:
         try:
@@ -1279,15 +1281,16 @@ def _merge_bytes(tiles):
             # (which opens all bytes at once and re-raises on the first failure).
             with _serde.open_tile(
                 candidate, gate=False
-            ):  # a validity probe: the decode gates
-                pass
+            ) as ds:  # a validity probe: the decode gates
+                size = _serde.decoded_bytes(ds)
             rasters.append(candidate)
+            sizes.append(size)
         except Exception:  # noqa: BLE001
             dropped += 1
             continue
     if not rasters:
         return None
-    agg_core.check_array_budget(rasters)
+    agg_core.check_array_budget(sizes)
     return agg_core.merge_tiles(rasters), dropped
 
 
@@ -1355,6 +1358,7 @@ def _uf_merge(tiles, file_refs):
         frefs.append(None)
 
     rasters = []
+    sizes = []
     dropped = 0
     for t, fref in zip(tiles, frefs):
         if t is None or _tile_is_empty(t):
@@ -1368,9 +1372,10 @@ def _uf_merge(tiles, file_refs):
                 candidate = bytes(vt.raster)
             with _serde.open_tile(
                 candidate, gate=False
-            ):  # a validity probe: the decode gates
-                pass
+            ) as ds:  # a validity probe: the decode gates
+                size = _serde.decoded_bytes(ds)
             rasters.append(candidate)
+            sizes.append(size)
         except Exception:  # noqa: BLE001
             dropped += 1
             continue
@@ -1378,7 +1383,7 @@ def _uf_merge(tiles, file_refs):
     if not rasters:
         return _array_without_members(tiles)
     try:
-        agg_core.check_array_budget(rasters)
+        agg_core.check_array_budget(sizes)
         new_bytes = agg_core.merge_tiles(rasters)
     except (agg_core.MosaicTooLarge, agg_core.ReadCapRefused) as exc:
         return _serde.build_error_tile(str(exc), 0)
@@ -1408,6 +1413,7 @@ def _combineavg_bytes(tiles):
     if not elems:
         return None
     rasters = []
+    sizes = []
     good_elems = []
     dropped = 0
     for t in elems:
@@ -1421,16 +1427,17 @@ def _combineavg_bytes(tiles):
             # dropped here, not inside agg_core which opens all at once.
             with _serde.open_tile(
                 candidate, gate=False
-            ):  # a validity probe: the decode gates
-                pass
+            ) as ds:  # a validity probe: the decode gates
+                size = _serde.decoded_bytes(ds)
             rasters.append(candidate)
+            sizes.append(size)
             good_elems.append(t)
         except Exception:  # noqa: BLE001
             dropped += 1
             continue
     if not rasters:
         return None
-    agg_core.check_array_budget(rasters)
+    agg_core.check_array_budget(sizes)
     cellids = {_tile_cellid(t) for t in good_elems}
     cellid = _tile_cellid(good_elems[0]) if len(cellids) == 1 else -1
     return agg_core.combineavg_tiles(rasters), cellid, dropped
@@ -1486,6 +1493,7 @@ def _uf_combineavg(tiles, file_refs):
         frefs.append(None)
 
     rasters = []
+    sizes = []
     good_elems = []
     dropped = 0
     for t, fref in zip(tiles, frefs):
@@ -1500,9 +1508,10 @@ def _uf_combineavg(tiles, file_refs):
                 candidate = bytes(vt.raster)
             with _serde.open_tile(
                 candidate, gate=False
-            ):  # a validity probe: the decode gates
-                pass
+            ) as ds:  # a validity probe: the decode gates
+                size = _serde.decoded_bytes(ds)
             rasters.append(candidate)
+            sizes.append(size)
             good_elems.append(t)
         except Exception:  # noqa: BLE001
             dropped += 1
@@ -1510,7 +1519,7 @@ def _uf_combineavg(tiles, file_refs):
 
     if not rasters:
         return _array_without_members(tiles)
-    agg_core.check_array_budget(rasters)
+    agg_core.check_array_budget(sizes)
     cellids = {_tile_cellid(t) for t in good_elems}
     cellid = _tile_cellid(good_elems[0]) if len(cellids) == 1 else -1
     new_bytes = agg_core.combineavg_tiles(rasters)
@@ -1547,6 +1556,7 @@ def _combine_stat_bytes(tiles, stat: str):
     if not elems:
         return None
     rasters = []
+    sizes = []
     good_elems = []
     dropped = 0
     for t in elems:
@@ -1558,16 +1568,17 @@ def _combine_stat_bytes(tiles, stat: str):
                 candidate = bytes(vt.raster)
             with _serde.open_tile(
                 candidate, gate=False
-            ):  # a validity probe: the decode gates
-                pass
+            ) as ds:  # a validity probe: the decode gates
+                size = _serde.decoded_bytes(ds)
             rasters.append(candidate)
+            sizes.append(size)
             good_elems.append(t)
         except Exception:  # noqa: BLE001
             dropped += 1
             continue
     if not rasters:
         return None
-    agg_core.check_array_budget(rasters)
+    agg_core.check_array_budget(sizes)
     cellids = {_tile_cellid(t) for t in good_elems}
     cellid = _tile_cellid(good_elems[0]) if len(cellids) == 1 else -1
     _reducer = {
@@ -5158,7 +5169,11 @@ def _color_relief_bytes(tile, color_table_path):
 def _check_color_relief(*, color_table_path, **_):
     from databricks.labs.gbx.ds._listing import to_local_path
 
-    if not os.path.isfile(to_local_path(str(color_table_path))):
+    path = to_local_path(str(color_table_path))
+    # a remote path (a URI scheme) or a GDAL virtual one (/vsi...) is GDAL's to open, so only a local file is checked
+    if re.match(r"^(/vsi|[A-Za-z][A-Za-z0-9+.-]*:)", path):
+        return
+    if not os.path.isfile(path):
         raise FileNotFoundError(
             f"rst_color_relief: the colour table {color_table_path!r} does not exist"
         )

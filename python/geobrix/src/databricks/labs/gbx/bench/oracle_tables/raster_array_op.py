@@ -101,6 +101,22 @@ def _aa_misshaped(tmpdir):
     ]
 
 
+@builder("aa_mixed_crs")
+def _aa_mixed_crs(tmpdir):
+    """Two 8 x 6 tiles on a 10 m grid: the west one in UTM 33N, the east one in UTM 33S, half a pixel (5 m) past the
+    west one's east edge. The zones share their meridian and differ only in the false northing (10,000,000 m), so the
+    east tile, put in the 33N CRS, spans x 500085..500165 (the half pixel keeps the expected size clear of the
+    projection library's rounding): on the west tile's pixel grid it grows to 500080..500170, 9 pixels.
+    """
+    import numpy as np
+
+    pixels = np.arange(48, dtype="float64").reshape(1, 6, 8)
+    return [
+        _tile(_gtiff(pixels, "EPSG:32633", origin=(500000.0, 5000060.0))),
+        _tile(_gtiff(pixels + 100, "EPSG:32733", origin=(500085.0, 15000060.0))),
+    ]
+
+
 @builder("aa_quad_corrupt")
 def _aa_quad_corrupt(tmpdir):
     return [*_build("quad_tiles", tmpdir), _build("tile_corrupt", tmpdir)]
@@ -257,6 +273,17 @@ RASTER_ARRAY_OP = (
         (Build("aa_quad_error"),),
         "merged_equals",
         Build("tile_32"),
+        ONLY,
+    ),
+    # tiles in other CRSs are mosaicked in one of them (the smallest EPSG code), none is dropped: the 8-pixel tile and
+    # the 9 pixels the other one grows to, from x 500000 to 500170, are 17 pixels wide; the light tier's reprojection
+    # can add a pixel on an edge (the projection library's rounding), so 17 or 18 wide and 6 or 7 high (a dropped tile gives 8 wide)
+    Case(
+        "merge_mixed_crs",
+        MG,
+        (Build("aa_mixed_crs"),),
+        "tile_meta",
+        {"crs": "EPSG:32633", "width": (17, 18), "height": (6, 7), "count": 1},
         ONLY,
     ),
     # --- frombands: one band per tile, in array order

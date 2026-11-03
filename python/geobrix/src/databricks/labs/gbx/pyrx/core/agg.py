@@ -448,33 +448,36 @@ class ArrayOverBudget(ReadCapRefused):
     The scalar array functions answer it with that row's error tile and its Fix."""
 
 
-def check_array_budget(rasters: List[bytes], cap: Optional[int] = None) -> None:
+def check_array_budget(sizes: List[int], cap: Optional[int] = None) -> None:
     """Refuse an array of tiles whose decoded size is over the memory budget, before any of it is decoded.
 
     The scalar array functions (``gbx_rst_merge``, ``gbx_rst_combine*``) hold the whole array in one row and decode its
     members in one task. A member over the read cap is refused with the retile Fix every level gives; members that each
     fit but add up to more than ``cap`` (the read cap this task carries, the worker-side binary cap of
-    ``materialize_decision``) are refused together, with the route that streams them from files. The sizes come from
-    the headers; no pixel is read.
-    """
-    from databricks.labs.gbx.ds.file_gbx import materialize_decision, tile_read_cap
-    from databricks.labs.gbx.pyrx._serde import over_read_cap
+    ``materialize_decision``) are refused together, with the route that streams them from files.
 
-    cap = tile_read_cap() if cap is None else cap
-    total = 0
-    for b in rasters:
-        with MemoryFile(bytes(b)) as mf, open_bytes(mf) as ds:
-            reason = over_read_cap(ds)
-            if reason is not None:
-                raise ReadCapRefused(reason)
-            total += ds.count * ds.height * ds.width * np.dtype(ds.dtypes[0]).itemsize
+    ``sizes`` are the members' decoded sizes (:func:`_serde.decoded_bytes`, each band at its own type), which the
+    caller has from the headers it opened to check the member: no pixel is read, and no member is opened here.
+    """
+    from databricks.labs.gbx.ds.file_gbx import (
+        materialize_decision,
+        read_cap_refusal,
+        tile_read_cap,
+    )
+
+    read_cap = tile_read_cap()
+    cap = read_cap if cap is None else cap
+    for n in sizes:
+        if n > read_cap:
+            raise ReadCapRefused(read_cap_refusal(n, read_cap))
+    total = sum(sizes)
     if materialize_decision(total, "ingest", cap_bytes=cap) == "error":
 
         def size(n: int) -> str:
             return f"{n >> 20} MiB" if n >= (1 << 20) else f"{n >> 10} KiB"
 
         raise ArrayOverBudget(
-            f"the {len(rasters)} tiles are {size(total)} decoded together, over this compute's memory budget "
+            f"the {len(sizes)} tiles are {size(total)} decoded together, over this compute's memory budget "
             f"({size(cap)}) for one call. Fix: keep the tiles as files and mosaic them with "
             'databricks.labs.gbx.rasterx.helpers.merge_by_key(..., method="vrt"), or retile them first '
             "(gbx_rst_retile) into fewer, smaller tiles"

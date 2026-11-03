@@ -31,19 +31,9 @@ def _corpus(tmp_path, n=4):
     return str(tmp_path / "corpus")
 
 
-def test_the_io_set_holds_the_reads_the_udf_the_floor_and_the_two_writers():
+def test_the_io_set_holds_the_reads_the_udf_the_floor_and_the_writer():
     forms = {f.variant: f for f in lf.FORMS["IO"]}
-    assert set(forms) == {
-        "a",
-        "b",
-        "c",
-        "udf",
-        "d-py",
-        "d-rs",
-        "floor",
-        "W1",
-        "W2",
-    }
+    assert set(forms) == {"b", "udf", "d-py", "floor", "W1"}
     # the floor sits beside the d forms: `summarize` keys floor_median_s on (fn, level, rows)
     assert (forms["floor"].fn, forms["floor"].level) == (
         forms["d-py"].fn,
@@ -87,8 +77,8 @@ def test_the_scratch_directory_is_beside_the_corpus_on_a_volume_and_in_temp_else
     assert lf._io_scratch("/tmp/x/corpus").endswith(lf.SCRATCH_PREFIX.rstrip("/"))
 
 
-def test_each_io_form_installs_the_level_it_measures(monkeypatch):
-    """c (L1), udf (L3), W2 (L1) in the order of the set: W2 must not time the L3 UDF the `udf` form left installed."""
+def test_the_udf_form_installs_the_light_level_it_measures_once(monkeypatch):
+    """udf installs the row UDF at L3, and the repeat installs nothing."""
     import databricks.labs.gbx as gbx
     from databricks.labs.gbx.bench import levels
 
@@ -99,16 +89,12 @@ def test_each_io_form_installs_the_level_it_measures(monkeypatch):
         lambda spark, only=None, _levels=None: installed.append(_levels[lf.IO_FN][0]),
     )
     ctx = levels._Ctx(None, 0, 1, "", None, None, {})
-    by_variant = {f.variant: f for f in lf.FORMS["IO"]}
+    udf = {f.variant: f for f in lf.FORMS["IO"]}["udf"]
     seen = []
-    for v in ("c", "udf", "W2", "W2"):
-        levels._ensure_setup(ctx, by_variant[v])
+    for _ in range(2):
+        levels._ensure_setup(ctx, udf)
         seen.append(ctx.registered[lf.IO_FN][0])
-    assert seen == ["L1", "L3", "L1", "L1"] and installed == [
-        "L1",
-        "L3",
-        "L1",
-    ]  # the repeat installs nothing
+    assert seen == ["L3", "L3"] and installed == ["L3"]
 
 
 def test_an_explicit_default_looking_ladder_is_kept_for_a_set_with_its_own():
@@ -219,7 +205,7 @@ def test_the_io_partition_count_follows_the_compute_and_keeps_a_few_rows_per_par
         )  # a few rows per partition
 
 
-@pytest.mark.parametrize("kind", ["udf", "d-py", "d-rs", "floor", "virtual"])
+@pytest.mark.parametrize("kind", ["udf", "d-py", "floor", "virtual"])
 def test_the_limit_sits_below_the_exchange_that_feeds_the_decode(
     spark_session_local, tmp_path, kind
 ):
@@ -231,7 +217,7 @@ def test_the_limit_sits_below_the_exchange_that_feeds_the_decode(
     plan = _plan(lf._io_read(spark_session_local, corpus + "/rows", 3, kind))
     decode = {
         "udf": ("BatchEvalPython", "ArrowEvalPython"),
-        "d-py": ("MapInArrow",), "d-rs": ("MapInArrow",), "floor": ("MapInArrow",),
+        "d-py": ("MapInArrow",), "floor": ("MapInArrow",),
         "virtual": ("Exchange",),
     }[kind]  # fmt: skip
     top, exch, limit = (
@@ -351,9 +337,8 @@ def _count_listings(monkeypatch):
     return calls
 
 
-@pytest.mark.parametrize("form", ["io_a", "io_b"])
-def test_a_and_b_do_not_list_the_corpus_or_build_the_file_filter_inside_the_timed_form(
-    spark_session_local, tmp_path, monkeypatch, form
+def test_b_does_not_list_the_corpus_or_build_the_file_filter_inside_the_timed_form(
+    spark_session_local, tmp_path, monkeypatch
 ):
     """The input builder lists the corpus once and carries the filter; the form only reads."""
     corpus = _corpus(tmp_path, 4)
@@ -364,15 +349,8 @@ def test_a_and_b_do_not_list_the_corpus_or_build_the_file_filter_inside_the_time
         "_only_files_regex",
         lambda *a: pytest.fail("the filter was built in the form"),
     )
-    if form == "io_b":  # a needs the JAR; b is the same path with the light reader
-        n, fp, n_out, *_ = lf.io_b(spark_session_local, src)
-        assert n == 3
-    else:
-        with pytest.raises(
-            Exception
-        ) as err:  # no JAR here: it must fail in the read, not in the listing
-            lf.io_a(spark_session_local, src)
-        assert "the filter was built" not in str(err.value)
+    n, fp, n_out, *_ = lf.io_b(spark_session_local, src)
+    assert n == 3
     assert calls == []
 
 

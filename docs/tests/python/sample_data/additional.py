@@ -51,7 +51,7 @@ print(f"   Path: {output_file}")
 from databricks.labs.gbx.rasterx import functions as rx
 rx.register(spark)
 
-synthetic = spark.read.format("gdal").load(str(output_file))
+synthetic = spark.read.format("raster_gbx").load(str(output_file))
 synthetic.select(
     rx.rst_width("tile"),
     rx.rst_height("tile"),

@@ -34,15 +34,17 @@ except ImportError:
 
 # SQL constant for cellid example (use your sample raster path)
 SQL_CELLID_NON_TESSELLATED = f"""-- Non-tessellated: cellid is null
-SELECT tile.cellid 
-FROM gdal.`{SAMPLE_NYC_RASTER}`;
+CREATE OR REPLACE TEMP VIEW nyc_raster USING raster_gbx OPTIONS (path '{SAMPLE_NYC_RASTER}');
+SELECT tile.cellid
+FROM nyc_raster;
 -- Returns: null"""
 
 SQL_CELLID_TESSELLATED = f"""-- Tessellated: cellid contains H3 cell ID
-SELECT tile.cellid 
+CREATE OR REPLACE TEMP VIEW nyc_raster USING raster_gbx OPTIONS (path '{SAMPLE_NYC_RASTER}');
+SELECT tile.cellid
 FROM (
   SELECT explode(gbx_rst_h3_tessellate(tile, 7)) as tile
-  FROM gdal.`{SAMPLE_NYC_RASTER}`
+  FROM nyc_raster
 );
 -- Returns: 604189641255419903, 604189641255420159, ..."""
 
@@ -132,7 +134,7 @@ def tile_path_mode_storage(spark):
 
 def access_metadata_fields(spark):
     """Access metadata fields from tile."""
-    df = spark.read.format("gdal").load(SAMPLE_NYC_RASTERS)
+    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTERS)
     
     metadata_df = df.select(
         f.col("tile.metadata").alias("metadata"),
@@ -154,7 +156,7 @@ def accessing_tile_fields_python(spark):
     from pyspark.sql import functions as f
     from databricks.labs.gbx.rasterx import functions as rx
     
-    df = spark.read.format("gdal").load(SAMPLE_NYC_RASTERS)
+    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTERS)
     
     # Access individual fields
     df.select(
@@ -166,17 +168,18 @@ def accessing_tile_fields_python(spark):
     return df
 
 
-SQL_ACCESSING_TILE_FIELDS = f"""SELECT 
+SQL_ACCESSING_TILE_FIELDS = f"""CREATE OR REPLACE TEMP VIEW nyc_raster USING raster_gbx OPTIONS (path '{SAMPLE_NYC_RASTER}', virtualTiles 'false');
+SELECT
     tile.cellid,
     tile.raster,
     tile.metadata,
     tile.metadata['driver'] as driver
-FROM gdal.`{SAMPLE_NYC_RASTER}`;"""
+FROM nyc_raster;"""
 
 
 def filtering_by_metadata(spark):
     """Filter tiles based on driver or other metadata."""
-    df = spark.read.format("gdal").load(SAMPLE_NYC_RASTERS)
+    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTERS)
     
     # Filter by driver
     gtiff_only = df.filter(f.col("tile.metadata.driver") == "GTiff")
@@ -200,7 +203,7 @@ def using_tiles_in_custom_udfs(spark):
             return len(raster_binary)
         return 0
     
-    df = spark.read.format("gdal").load(SAMPLE_NYC_RASTERS)
+    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTERS)
     df_with_size = df.withColumn(
         "data_size",
         get_raster_size(f.col("tile.raster"), f.col("tile.metadata"))
@@ -232,7 +235,7 @@ def processing_binary_raster_data(spark):
                 return float(np.mean(data))
     
     # Use with tiles from content or GDAL reader (sample data)
-    df = spark.read.format("gdal").load(SAMPLE_NYC_RASTER)
+    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER)
     stats_df = df.withColumn(
         "mean_value",
         compute_mean_from_tile(f.col("tile.raster"))
@@ -282,7 +285,7 @@ def comparing_fromfile_vs_fromcontent_tiles(spark):
 
 def non_tessellated_tiles(spark):
     """Non-Tessellated Tiles."""
-    df = spark.read.format("gdal").load(SAMPLE_NYC_RASTER)
+    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER)
     
     df.select(
         f.col("tile.cellid"),      # null
@@ -296,7 +299,7 @@ def tessellated_tiles(spark):
     """Tessellated Tiles."""
     from databricks.labs.gbx.rasterx import functions as rx
     
-    df = spark.read.format("gdal").load(SAMPLE_NYC_RASTER).select(
+    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER).select(
         f.explode(rx.rst_h3_tessellate(f.col("tile"), f.lit(7))).alias("tile")
     )
     
@@ -310,7 +313,7 @@ def tessellated_tiles(spark):
 
 def best_practice_access_fields_efficiently(spark):
     """Best Practice: Access multiple fields in one select."""
-    df = spark.read.format("gdal").load(SAMPLE_NYC_RASTERS)
+    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTERS)
     
     # ✅ Good: Access multiple fields in one select
     df.select(
@@ -329,7 +332,7 @@ def best_practice_filter_early_on_metadata(spark):
     """Best Practice: Filter before expensive operations."""
     from databricks.labs.gbx.rasterx import functions as rx
     
-    df = spark.read.format("gdal").load(SAMPLE_NYC_RASTERS)
+    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTERS)
     boundary = None  # placeholder
     
     # ✅ Good: Filter before expensive operations
@@ -346,7 +349,7 @@ def best_practice_use_accessor_functions(spark):
     """Best Practice: Use accessor functions when possible."""
     from databricks.labs.gbx.rasterx import functions as rx
     
-    df = spark.read.format("gdal").load(SAMPLE_NYC_RASTERS)
+    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTERS)
     
     # ✅ Preferred: Use accessor functions
     result1 = df.select(rx.rst_metadata(f.col("tile")))
@@ -362,7 +365,7 @@ def pattern_conditional_processing_based_on_metadata(spark):
     from pyspark.sql.functions import when
     from databricks.labs.gbx.rasterx import functions as rx
     
-    df = spark.read.format("gdal").load(SAMPLE_NYC_RASTERS)
+    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTERS)
     aoi = None  # placeholder
     
     processed = df.withColumn(
@@ -381,11 +384,11 @@ def pattern_joining_tiles_by_cell_id(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     
     # Tessellate two rasters to same grid (sample data)
-    rasters1 = spark.read.format("gdal").load(SAMPLE_NYC_RASTER).select(
+    rasters1 = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER).select(
         f.explode(rx.rst_h3_tessellate(f.col("tile"), f.lit(7))).alias("tile1")
     )
     
-    rasters2 = spark.read.format("gdal").load(SAMPLE_NYC_RASTER).select(
+    rasters2 = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER).select(
         f.explode(rx.rst_h3_tessellate(f.col("tile"), f.lit(7))).alias("tile2")
     )
     
@@ -399,7 +402,7 @@ def pattern_joining_tiles_by_cell_id(spark):
 
 def pattern_extract_binary_for_external_processing(spark):
     """Pattern 3: Extract Binary for External Processing."""
-    df = spark.read.format("gdal").load(SAMPLE_NYC_RASTER)
+    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER)
     
     # Extract binary rasters for download or external processing
     export_path = f"{SAMPLE_DATA_BASE}/export"
@@ -417,7 +420,7 @@ def performance_io_patterns(spark):
     """Performance: tiles carry binary content, so cache after expensive ops."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    df = spark.read.format("gdal").load(SAMPLE_NYC_RASTERS)
+    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTERS)
     aoi = None  # placeholder
 
     # Tile ops pass binary content through the plan
@@ -432,7 +435,7 @@ def performance_io_patterns(spark):
 
 def troubleshooting_inspect_raster_field(spark):
     """Troubleshooting: inspect the raster field's type and size."""
-    df = spark.read.format("gdal").load(SAMPLE_NYC_RASTERS)
+    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTERS)
 
     # Raster is always BinaryType; length gives the on-wire byte size.
     df.select(
@@ -444,7 +447,7 @@ def troubleshooting_inspect_raster_field(spark):
 
 def troubleshooting_null_cellid(spark):
     """Troubleshooting: NullPointerException on cellid."""
-    df = spark.read.format("gdal").load(SAMPLE_NYC_RASTERS)
+    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTERS)
     
     # Filter out non-tessellated tiles
     tessellated_only = df.filter(f.col("tile.cellid").isNotNull())

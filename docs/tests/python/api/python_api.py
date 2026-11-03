@@ -52,7 +52,7 @@ def import_pattern_rasterx(spark):
     gbx_manager.register_family(spark, ('gbx_rst_',))
     
     raster_path = SAMPLE_NYC_RASTER
-    rasters = spark.read.format("gdal").load(raster_path)
+    rasters = spark.read.format("raster_gbx").load(raster_path)
     
     # Use functions
     df = rasters.select(rx.rst_boundingbox("tile"))
@@ -95,7 +95,7 @@ def rst_boundingbox_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     gbx_manager.register_family(spark, ('gbx_rst_',))
     raster_path = SAMPLE_NYC_RASTER
-    rasters = spark.read.format("gdal").load(raster_path)
+    rasters = spark.read.format("raster_gbx").load(raster_path)
     bbox_df = rasters.select(
         "path",
         rx.rst_boundingbox("tile").alias("bbox")
@@ -110,7 +110,7 @@ def rst_width_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     gbx_manager.register_family(spark, ('gbx_rst_',))
     raster_path = SAMPLE_NYC_RASTER
-    rasters = spark.read.format("gdal").load(raster_path)
+    rasters = spark.read.format("raster_gbx").load(raster_path)
     width_df = rasters.select(rx.rst_width("tile").alias("width"))
     width_df.limit(1).show()
     return width_df
@@ -122,7 +122,7 @@ def rst_height_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     gbx_manager.register_family(spark, ('gbx_rst_',))
     raster_path = SAMPLE_NYC_RASTER
-    rasters = spark.read.format("gdal").load(raster_path)
+    rasters = spark.read.format("raster_gbx").load(raster_path)
     height_df = rasters.select(rx.rst_height("tile").alias("height"))
     height_df.limit(1).show()
     return height_df
@@ -134,7 +134,7 @@ def rst_numbands_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     gbx_manager.register_family(spark, ('gbx_rst_',))
     raster_path = SAMPLE_NYC_RASTER
-    rasters = spark.read.format("gdal").load(raster_path)
+    rasters = spark.read.format("raster_gbx").load(raster_path)
     bands_df = rasters.select(rx.rst_numbands("tile").alias("num_bands"))
     bands_df.limit(1).show()
     return bands_df
@@ -146,7 +146,7 @@ def rst_metadata_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     gbx_manager.register_family(spark, ('gbx_rst_',))
     raster_path = SAMPLE_NYC_RASTER
-    rasters = spark.read.format("gdal").load(raster_path)
+    rasters = spark.read.format("raster_gbx").load(raster_path)
     metadata_df = rasters.select(rx.rst_metadata("tile").alias("metadata"))
     metadata_df.limit(1).show(truncate=False)
     return metadata_df
@@ -158,7 +158,7 @@ def rst_srid_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     gbx_manager.register_family(spark, ('gbx_rst_',))
     raster_path = SAMPLE_NYC_RASTER
-    rasters = spark.read.format("gdal").load(raster_path)
+    rasters = spark.read.format("raster_gbx").load(raster_path)
     srid_df = rasters.select(rx.rst_srid("tile").alias("srid"))
     srid_df.limit(1).show()
     return srid_df
@@ -172,7 +172,7 @@ def rst_clip_example(spark):
     
     gbx_manager.register_family(spark, ('gbx_rst_',))
     raster_path = SAMPLE_NYC_RASTER
-    rasters = spark.read.format("gdal").load(raster_path)
+    rasters = spark.read.format("raster_gbx").load(raster_path)
     clip_wkt = "POLYGON((-122 37, -122 38, -121 38, -121 37, -122 37))"
     clipped = rasters.select(
         rx.rst_clip("tile", lit(clip_wkt), lit(True)).alias("clipped_tile")
@@ -191,7 +191,7 @@ def rasterx_complete_example(spark):
     gbx_manager.register_family(spark, ('gbx_rst_',))
     
     raster_path = SAMPLE_NYC_RASTER
-    rasters = spark.read.format("gdal").load(raster_path)
+    rasters = spark.read.format("raster_gbx").load(raster_path)
     
     # Extract metadata and process
     result = rasters.select(
@@ -292,7 +292,7 @@ def dataframe_select_operations(spark):
     gbx_manager.register_family(spark, ('gbx_rst_',))
     
     raster_path = SAMPLE_NYC_RASTER
-    df = spark.read.format("gdal").load(raster_path)
+    df = spark.read.format("raster_gbx").load(raster_path)
     
     # Single function
     result = df.select(rx.rst_boundingbox("tile"))
@@ -319,7 +319,7 @@ def dataframe_filter_operations(spark):
     gbx_manager.register_family(spark, ('gbx_rst_',))
     
     raster_path = SAMPLE_NYC_RASTER
-    df = spark.read.format("gdal").load(raster_path)
+    df = spark.read.format("raster_gbx").load(raster_path)
     
     # Filter based on GeoBrix function results
     result = df.filter(
@@ -342,7 +342,7 @@ def dataframe_withcolumn_operations(spark):
     gbx_manager.register_family(spark, ('gbx_rst_',))
     
     raster_path = SAMPLE_NYC_RASTER
-    df = spark.read.format("gdal").load(raster_path)
+    df = spark.read.format("raster_gbx").load(raster_path)
     
     # Add new columns
     result = df.withColumn("bbox", rx.rst_boundingbox("tile"))
@@ -365,7 +365,7 @@ def using_with_sql(spark):
     gbx_manager.register_family(spark, ('gbx_rst_',))
     
     raster_path = SAMPLE_NYC_RASTER
-    rasters = spark.read.format("gdal").load(raster_path)
+    rasters = spark.read.format("raster_gbx").load(raster_path)
     # Create temp view
     rasters.createOrReplaceTempView("rasters")
     
@@ -408,7 +408,7 @@ def type_hints_and_ide_support(spark):
         )
     
     raster_path = SAMPLE_NYC_RASTER
-    rasters = spark.read.format("gdal").load(raster_path)
+    rasters = spark.read.format("raster_gbx").load(raster_path)
     result = process_rasters(rasters)
     return result
 
@@ -419,7 +419,7 @@ def error_handling_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     
     raster_path = SAMPLE_NYC_RASTER
-    df = spark.read.format("gdal").load(raster_path)
+    df = spark.read.format("raster_gbx").load(raster_path)
     
     try:
         gbx_manager.register_family(spark, ('gbx_rst_',))

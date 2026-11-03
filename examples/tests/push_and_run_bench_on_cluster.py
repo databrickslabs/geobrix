@@ -761,8 +761,8 @@ def main() -> int:
     # --fanout-only: ONLY run the fanout benchmark, skip all fn benchmarks.
     benchmark_fanout = "--benchmark-fanout" in sys.argv
     fanout_only = "--fanout-only" in sys.argv
-    # --benchmark-netcdf: also run the NetCDF reader benchmark (light netcdf_gbx vs heavy
-    #   netcdf_gdal) over the same staged .nc pool at {CORPUS}/netcdf.
+    # --benchmark-netcdf: also run the NetCDF reader benchmark (light netcdf_gbx)
+    #   over the staged .nc pool at {CORPUS}/netcdf.
     # --netcdf-only: ONLY run the NetCDF reader benchmark, skip all fn benchmarks.
     benchmark_netcdf = "--benchmark-netcdf" in sys.argv
     netcdf_only = "--netcdf-only" in sys.argv
@@ -1211,7 +1211,7 @@ def main() -> int:
         fanout_only=fanout_only,
         #  --fanout-scale F: dial the synthetic fan-out size (default 1.0).
         fanout_scale=fanout_scale,
-        #  --benchmark-netcdf: also run NetCDF reader benchmark (light netcdf_gbx vs heavy netcdf_gdal).
+        #  --benchmark-netcdf: also run NetCDF reader benchmark (light netcdf_gbx).
         benchmark_netcdf=benchmark_netcdf,
         #  --netcdf-only: ONLY run the NetCDF reader benchmark, skip fn benchmarks.
         netcdf_only=netcdf_only,

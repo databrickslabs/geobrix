@@ -1460,21 +1460,19 @@ FORMS["SE"] = (
 )
 
 
-# --- IO, the read paths: bytes-free reads with a JVM, Arrow-batch or Rust decode against the readers with bytes ---------
+# --- IO, the read paths: bytes-free reads with a Python decode against the reader with bytes ----------------------------
 #
-# The measured heavy read lead is the cost of moving decoded bytes into Python rows. Every read form reads the corpus
+# The measured heavy read lead was the cost of moving decoded bytes into Python rows. Every read form reads the corpus
 # tiles under `{CORPUS}/rows` end to end (read, decode, `sum(length(tile.raster))`) at 1000 / 4000 / 10000 tiles:
-#   a      the heavy `gdal` reader (the JVM reads and encodes)
 #   b      the light `raster_gbx` reader with bytes (the reader decodes in Python, the rows carry the bytes)
-#   c      virtual tiles, decoded by the JVM (`gbx_mvp_rst_materialize`, L1)
-#   udf    virtual tiles, decoded row by row by the light UDF (the same function at L3)
+#   udf    virtual tiles, decoded row by row by the light UDF (`gbx_mvp_rst_materialize` at L3)
 #   d-py   virtual tiles, decoded in one Python call per Arrow batch (`mapInArrow`)
-#   d-rs   the same with the Rust build's `decode_window` (skipped where the module has none)
 #   floor  d-py's read and `mapInArrow` shell with the decode skipped (the tiles stay virtual): its median is the shell
-#          cost, shown as `floor_median_s` beside d-py and d-rs
-# The writer forms start from the same reads and write GeoTIFFs to a scratch directory they delete after timing:
-#   W1 `gtiff_gbx` over virtual tiles,
-#   W2 `gtiff_gbx` over virtual tiles the JVM decoded first (`gbx_mvp_rst_materialize`).
+#          cost, shown as `floor_median_s` beside d-py
+# The writer form starts from the same read and writes GeoTIFFs to a scratch directory it deletes after timing:
+#   W1 `gtiff_gbx` over virtual tiles.
+# (The Scala `gdal` reader, the JVM decode, the Rust decode and the JVM pre-encode writer were measured against these and
+# retired; see the decision record.)
 
 IO_FN = "gbx_mvp_rst_materialize"
 IO_SCALES = (1, 4, 10)  # times BASE_ROWS["io_rows"]: 1000 / 4000 / 10000 tiles
@@ -1632,7 +1630,7 @@ def _only_files_regex(files) -> str:
 def _virtual_tiles(spark, rows_dir, n, only=None):
     """The virtual tiles of the corpus' first `n` files, as `n` rows spread over `io_partitions` partitions.
 
-    The scan is given the first `n` files themselves (`only`: the `filterRegex` the input builder made for `a` and `b`;
+    The scan is given the first `n` files themselves (`only`: the `filterRegex` the input builder made for `b`;
     built here when not given), so it plans and reads `n` files, never the folder: a `limit` alone leaves a task per file
     of a 10,000-file corpus, whatever `n` is.
 
@@ -1663,8 +1661,8 @@ def _io_read(spark, rows_dir, n, kind, only=None):
     """The read of `kind` over the corpus' first `n` tiles, one `tile` column, every kind on exactly `n` tiles.
 
     Every kind is given the first `n` files themselves (the readers' `filterRegex`, `only`: the input builder's, so a
-    timed form lists nothing; built here when not given), so every scan has `n` tasks. `a` and `b` decode inside the
-    scan, where a limit cannot reach; the others decode above `_virtual_tiles`' exchange.
+    timed form lists nothing; built here when not given), so every scan has `n` tasks. `b` decodes inside the scan,
+    where a limit cannot reach; the others decode above `_virtual_tiles`' exchange.
     """
     import functools
 
@@ -1672,9 +1670,7 @@ def _io_read(spark, rows_dir, n, kind, only=None):
     from databricks.labs.gbx.pyrx import _mvp_forms
 
     only = only or _only_files_regex(_first_files(rows_dir, n))
-    if kind in ("a", "b"):
-        if kind == "a":
-            return spark.read.format("gdal").option("filterRegex", only).load(rows_dir)
+    if kind == "b":
         return (
             spark.read.format("raster_gbx")
             .option("virtualTiles", "false")
@@ -1682,13 +1678,12 @@ def _io_read(spark, rows_dir, n, kind, only=None):
             .load(rows_dir)
         )
     virt = _virtual_tiles(spark, rows_dir, n, only=only)
-    if kind in ("c", "udf"):
+    if kind == "udf":
         return virt.selectExpr(f"{IO_FN}(tile) AS tile")
-    if kind in ("d-py", "d-rs", "floor"):
+    if kind in ("d-py", "floor"):
         # the floor is d-py's shell with the decode skipped (`keep_virtual`): same read, same Arrow round trip
         decode = functools.partial(
             _mvp_forms.materialize_batches,
-            rust=kind == "d-rs",
             cap_bytes=report_detected_cap(spark),
             **({"decode": _mvp_forms.keep_virtual} if kind == "floor" else {}),
         )
@@ -1708,9 +1703,7 @@ def _io_form(kind):
     return run
 
 
-io_a, io_b, io_c, io_udf, io_d_py, io_d_rs = (
-    _io_form(k) for k in ("a", "b", "c", "udf", "d-py", "d-rs")
-)
+io_b, io_udf, io_d_py = (_io_form(k) for k in ("b", "udf", "d-py"))
 
 
 def io_floor(spark, src):
@@ -1778,22 +1771,7 @@ def _io_write(fmt, kind):
     return run
 
 
-io_w1, io_w2 = (
-    _io_write("gtiff_gbx", "virtual"),
-    _io_write("gtiff_gbx", "c"),
-)
-
-
-def register_io_materialize(spark):
-    """Install `gbx_mvp_rst_materialize` where the form needs it: the JVM's (L1) for c / W2."""
-    from databricks.labs.gbx import register
-
-    register(spark, only=[IO_FN], _levels={IO_FN: ("L1", "-")})
-
-
-register_io_materialize.installs = {
-    IO_FN: ("L1", "-")
-}  # judged by what is installed (levels._ensure_setup)
+io_w1 = _io_write("gtiff_gbx", "virtual")
 
 _IO = "databricks.labs.gbx.bench.levels_forms:"
 
@@ -1812,18 +1790,13 @@ def _io(fn, level, variant, run, *, setup="", **kw):
     )
 
 
-_IO_DED = ("dedicated",)
 FORMS["IO"] = [
-    _io("read", "JVM-DF", "a", io_a, computes=_IO_DED),
     _io("read", "DF", "b", io_b),
-    _io(IO_FN, "L1", "c", io_c, setup="register_io_materialize", computes=_IO_DED),
     _io(IO_FN, "L3", "udf", io_udf, setup="register_io_udf"),
     _io("read", "DF", "d-py", io_d_py),
-    _io("read", "DF", "d-rs", io_d_rs),
-    # the shell cost of d-py / d-rs (Task 17's "decode share" floor): `summarize` puts its median beside theirs
+    # the shell cost of d-py (Task 17's "decode share" floor): `summarize` puts its median beside it
     _io("read", "DF", "floor", io_floor),
     _io("write", "DF", "W1", io_w1),
-    _io("write", "L1", "W2", io_w2, setup="register_io_materialize", computes=_IO_DED),
 ]
 
 
@@ -1838,7 +1811,7 @@ register_io_udf.installs = {IO_FN: ("L3", "-")}
 
 
 # Module-level names the forms resolve by ``module:function``.
-for _fn in (io_a, io_b, io_c, io_udf, io_d_py, io_d_rs, io_floor, io_w1, io_w2):
+for _fn in (io_b, io_udf, io_d_py, io_floor, io_w1):
     globals()[_fn.__name__] = _fn
 
 

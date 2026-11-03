@@ -2,13 +2,10 @@
 
 Two sources define what ``spark.read.format("<name>")`` can resolve to:
 
-* heavyweight (JAR): the ``DataSourceRegister`` classes listed in
-  ``src/main/resources/META-INF/services/org.apache.spark.sql.sources.DataSourceRegister``;
-  each class's ``shortName()`` is the name;
-* lightweight (wheel): the ``name()`` of each class the manifest's ``datasources`` rows name
-  (``databricks.labs.gbx.manifest.datasource_classes()``).
+* the manifest's ``datasources`` rows (``databricks.labs.gbx.manifest``): the lightweight (wheel) readers are the
+  ``impl: python`` rows, the JAR's readers (none once the Scala readers are retired) the ``impl: scala`` rows.
 
-A snippet that names anything else (``gpkg`` for ``gpkg_ogr`` / ``gpkg_gbx``, say)
+A snippet that names anything else (``gpkg`` for ``gpkg_gbx``, say)
 fails at run time with ``DATA_SOURCE_NOT_FOUND``. Spark and Databricks built-in
 formats are allowed.
 
@@ -33,12 +30,6 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-
-SERVICES_FILE = (
-    REPO_ROOT
-    / "src/main/resources/META-INF/services/org.apache.spark.sql.sources.DataSourceRegister"
-)
-SCALA_ROOT = REPO_ROOT / "src/main/scala"
 
 # Formats Spark / Databricks provide; a snippet may use them next to GeoBrix readers.
 # (``read_files(format => 'file')``, the FILE-reference listing the ``file`` docs use, is
@@ -66,20 +57,14 @@ BUILTIN_FORMATS = frozenset(
 
 READ_FILES_FORMATS = BUILTIN_FORMATS | {"file"}
 
-_SHORT_NAME = re.compile(r'def\s+shortName\s*\(\s*\)\s*:\s*String\s*=\s*"([^"]+)"')
 _READER_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 
 
 def heavy_reader_names():
-    """Short names of the JAR's registered data sources (services file -> ``shortName()``)."""
-    names = set()
-    for cls in SERVICES_FILE.read_text().split():
-        package, _, simple = cls.rpartition(".")
-        source = SCALA_ROOT / package.replace(".", "/") / f"{simple}.scala"
-        match = _SHORT_NAME.search(source.read_text())
-        assert match, f"{cls}: no shortName() found in {source}"
-        names.add(match.group(1))
-    return names
+    """Names of the JAR's registered data sources (the manifest's ``impl: scala`` rows)."""
+    from databricks.labs.gbx import manifest
+
+    return {d.name for d in manifest.load().datasources if d.impl == "scala"}
 
 
 def light_reader_names():
@@ -360,6 +345,6 @@ def is_registered(kind, name, known=None):
 
 
 def suggestions(name):
-    """The registered readers whose name starts with ``name`` (``gpkg`` -> ``gpkg_gbx``, ``gpkg_ogr``)."""
+    """The registered readers whose name starts with ``name`` (``gpkg`` -> ``gpkg_gbx``)."""
     prefix = name.lower()
     return sorted(r for r in heavy_reader_names() | light_reader_names() if r.lower().startswith(prefix))

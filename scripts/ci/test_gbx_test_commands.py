@@ -25,7 +25,7 @@ EXCLUDED = {
     "python/geobrix/test/core/test_check_binding_parity.py",  # unit test of the checker
     "python/geobrix/test/ds/test_vector_writer_parity.py",  # light-only round trip
     "python/geobrix/test/ds/test_writer_parity.py",  # light-only round trip
-    "python/geobrix/test/ds/test_reader_parity.py",  # skips when the heavy reader yields 0 rows
+    "python/geobrix/test/ds/test_reader_parity.py",  # light-only reader check, not a tier comparison
 }
 
 
@@ -89,7 +89,7 @@ def test_the_default_run_keeps_the_suites_the_old_list_named(sandbox):
     for old in (
         "python/geobrix/test/pyvx/test_crs_parity.py",
         "python/geobrix/test/pygx/test_gridx_error_parity.py",
-        "python/geobrix/test/ds/test_vector_parity.py",
+        "python/geobrix/test/ds/test_netcdf_cross_tier.py",
     ):
         assert old in ran, old
 
@@ -178,17 +178,17 @@ def test_a_parity_skip_names_missing_sample_data_when_that_is_why(sandbox):
     # container (the fake docker executes it, on a coloured report the test wrote): stripping
     # the colour anywhere but inside that command fails here.
     _parity_sandbox(sandbox, TEST_ROOT)
-    path = ("--path", "python/geobrix/test/ds/test_vector_parity.py")
-    report = sandbox.root / "target" / "parity-test_vector_parity.txt"
+    path = ("--path", "python/geobrix/test/ds/test_netcdf_cross_tier.py")
+    report = sandbox.root / "target" / "parity-test_netcdf_cross_tier.txt"
     report.parent.mkdir()
     yellow, bold, reset = "\x1b[33m", "\x1b[1m", "\x1b[0m"
 
     def run(reason):
         report.write_text(
-            "python/geobrix/test/ds/test_vector_parity.py::test_a "
+            "python/geobrix/test/ds/test_netcdf_cross_tier.py::test_a "
             f"{yellow}SKIPPED{reset}{yellow} (reason){reset}\n"
             f"{yellow}=== short test summary info ==={reset}\n"
-            f"{yellow}SKIPPED{reset} [2] python/geobrix/test/ds/test_vector_parity.py:67: {reason}\n"
+            f"{yellow}SKIPPED{reset} [2] python/geobrix/test/ds/test_netcdf_cross_tier.py:67: {reason}\n"
             f"{yellow}=============== {bold}2 skipped{reset}{yellow} in 1.00s ==============={reset}\n"
         )
         return sandbox.run(

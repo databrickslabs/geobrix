@@ -82,8 +82,8 @@ Each `--benchmark-*` flag adds a leg. Each `--*-only` flag runs only that leg, w
 
 - `--benchmark-readers` / `--readers-only`: reader benchmarks (`raster_gbx` vs `gdal`).
 - `--benchmark-pmtiles` / `--pmtiles-only`: the PMTiles writer benchmark (`pmtiles_gbx` vs `pmtiles`).
-- `--benchmark-vector` / `--vector-only`: the vector reader benchmark (lightweight `*_gbx` vs heavyweight `*_ogr`).
-- `--benchmark-netcdf` / `--netcdf-only`: the NetCDF reader benchmark (`netcdf_gbx` vs `netcdf_gdal`).
+- `--benchmark-vector` / `--vector-only`: the vector reader benchmark (the lightweight `*_gbx` readers and writers).
+- `--benchmark-netcdf` / `--netcdf-only`: the NetCDF reader benchmark (`netcdf_gbx`).
 - `--benchmark-lidar` / `--lidar-only`: the LiDAR reader and writer benchmark (`lidar_gbx` only).
 - `--benchmark-exif` / `--exif-only`: the EXIF reader benchmark (`exif_gbx` only).
 

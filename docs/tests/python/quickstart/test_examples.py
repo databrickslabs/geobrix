@@ -139,7 +139,7 @@ def test_exec_use_quadbin_snippet(spark):
 
 
 def test_read_geotiff_light_returns_tile(spark, sample_raster_path):
-    """Lightweight gtiff_gbx reader returns a 'tile' column with non-empty data, like gtiff_gdal."""
+    """Lightweight gtiff_gbx reader returns a 'tile' column with non-empty data, """
     if not os.path.isfile(sample_raster_path):
         pytest.skip("Minimal bundle has no nyc/sentinel2 raster; run gbx:data:generate-minimal-bundle or use full bundle")
     result_df = examples.read_geotiff_files_light(spark, sample_raster_path)
@@ -154,7 +154,7 @@ def test_read_geotiff_light_returns_tile(spark, sample_raster_path):
 
 
 def test_read_shapefile_light_returns_geometry(spark):
-    """Lightweight shapefile_gbx reader returns a geometry column with rows, like shapefile_ogr."""
+    """Lightweight shapefile_gbx reader returns a geometry column with rows."""
     if not os.path.isfile(SAMPLE_NYC_SUBWAY_SHP):
         pytest.skip("Minimal bundle has no nyc/subway .shp.zip; run gbx:data:generate-minimal-bundle or use full bundle")
     result_df = examples.read_shapefiles_light(spark, SAMPLE_NYC_SUBWAY_SHP)
@@ -376,9 +376,9 @@ def test_read_shapefiles_returns_dataframe_with_geometry(spark, sample_shapefile
     assert count <= 10, f"Expected at most 10 boroughs, got {count}"
 
 
-def test_read_geopackage_uses_the_registered_gpkg_ogr_reader(spark):
+def test_read_geopackage_uses_the_registered_gpkg_gbx_reader(spark):
     """
-    The GeoPackage snippet reads through ``gpkg_ogr`` (there is no ``gpkg`` alias).
+    The GeoPackage snippet reads through ``gpkg_gbx`` (there is no ``gpkg`` alias).
 
     Validates:
     - It reads the sample GeoPackage into a DataFrame with a geometry column
@@ -481,7 +481,7 @@ def test_sql_constants_are_valid_strings():
     
     if hasattr(examples, 'SQL_WORKING_WITH_SQL'):
         assert "CREATE OR REPLACE TEMP VIEW" in examples.SQL_WORKING_WITH_SQL
-        assert "shapefile" in examples.SQL_WORKING_WITH_SQL  # shapefile_ogr or shapefile
+        assert "shapefile" in examples.SQL_WORKING_WITH_SQL
     
     if hasattr(examples, 'SQL_CONVERSION'):
         assert "st_geomfromwkb" in examples.SQL_CONVERSION

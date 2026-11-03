@@ -11,7 +11,7 @@ from . import vector_data
 
 
 _VECTOR_CONSTANTS = [
-    ("DOWNLOAD_NYC_TAXI_ZONES", "geojson_ogr"),
+    ("DOWNLOAD_NYC_TAXI_ZONES", "geojson_gbx"),
     ("USAGE_NYC_TAXI_ZONES", "nyc/taxi-zones"),
     ("DOWNLOAD_LONDON_POSTCODES", "london_postcodes"),
     ("USAGE_LONDON_POSTCODES", "london/postcodes"),
@@ -20,7 +20,7 @@ _VECTOR_CONSTANTS = [
     ("DOWNLOAD_NYC_NTA", "ntaname"),
     ("USAGE_NYC_NTA", "nyc-neighborhoods"),
     ("DOWNLOAD_LONDON_BOROUGHS", "London_Borough"),
-    ("USAGE_LONDON_BOROUGHS", "geojson_ogr"),
+    ("USAGE_LONDON_BOROUGHS", "geojson_gbx"),
     ("DOWNLOAD_NYC_PARKS", "parks"),
     ("USAGE_NYC_PARKS", "nyc/parks"),
     ("DOWNLOAD_NYC_SUBWAY", "Subway"),
@@ -28,7 +28,7 @@ _VECTOR_CONSTANTS = [
     ("CREATE_GEOPACKAGE_NYC", "GPKG"),
     ("USAGE_GEOPACKAGE_NYC", "layerName"),
     ("CREATE_FILEGDB_NYC", "CreateLayer"),
-    ("USAGE_FILEGDB_NYC", "file_gdb_ogr"),
+    ("USAGE_FILEGDB_NYC", "file_gdb_gbx"),
 ]
 
 _OUTPUT_CONSTANTS = [
@@ -65,12 +65,11 @@ _READ_SNIPPETS = [
 
 
 @pytest.mark.parametrize("const_name", _READ_SNIPPETS)
-def test_displayed_reader_names_are_registered(spark, const_name):
-    """Every ``spark.read.format("...")`` on the page names a reader the JAR
-    registers (no aliases: ``filegdb`` and ``gpkg`` are not readers;
-    ``file_gdb_ogr`` and ``gpkg_ogr`` are)."""
-    datasources = spark._jvm.org.apache.spark.sql.execution.datasources
-    lookup = datasources.DataSource.lookupDataSource
-    conf = spark._jsparkSession.sessionState().conf()
+def test_displayed_reader_names_are_registered(const_name):
+    """Every ``spark.read.format("...")`` on the page names a reader the manifest lists
+    (no aliases: ``filegdb`` and ``gpkg`` are not readers; ``file_gdb_gbx`` and ``gpkg_gbx`` are)."""
+    from databricks.labs.gbx.manifest import datasource_classes
+
+    registered = {src.name() for src in datasource_classes()}
     for name in _READER.findall(getattr(vector_data, const_name)):
-        lookup(name, conf)  # raises DATA_SOURCE_NOT_FOUND for an unknown name
+        assert name in registered, f"{name} is not a registered reader"

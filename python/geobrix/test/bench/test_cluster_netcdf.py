@@ -1,9 +1,8 @@
 """Smoke tests for the --benchmark-netcdf / --netcdf-only wiring in build_bench_notebook.
 
-The NetCDF reader bench is a same-corpus heavy-vs-light throughput comparison
-(light netcdf_gbx vs heavy netcdf_gdal) over a .nc pool staged separately. These
-assert the cell is emitted, wired to the shared sink/lw/hw names, uses the
-.*\\.nc$ filter for both tiers, and SKIPS CLEANLY when the pool is empty.
+The NetCDF reader bench is a throughput measurement of the light netcdf_gbx reader
+over a .nc pool staged separately. These assert the cell is emitted, wired to the
+shared sink/lw names, uses the .*\\.nc$ filter, and SKIPS CLEANLY when the pool is empty.
 """
 
 from databricks.labs.gbx.bench import cluster as cl
@@ -44,15 +43,14 @@ def test_benchmark_netcdf_cell_present_and_wired():
     nb = cl.build_bench_notebook(_cfg(benchmark_netcdf=True))
     src = _src(nb)
     assert "netcdf_gbx" in src
-    assert "netcdf_gdal" in src
+    assert "netcdf_gdal" not in src  # the Scala reader is retired
     assert "run_format_read" in src
-    # Same-corpus: both tiers filter the same .nc pool.
+    # The reader filters the .nc pool.
     assert r".*\.nc$" in src
     assert "/netcdf" in src
     # Uses canonical preamble-defined sink/accumulator names.
     assert "_sink([_r])" in src
     assert "lw.append(_r)" in src
-    assert "hw.append(_r)" in src
     # Standard fn-bench sections still present (benchmark_netcdf does NOT suppress them).
     assert len(_section_cells(nb)) == 4
 
@@ -69,7 +67,6 @@ def test_netcdf_only_omits_per_function_sections():
     nb = cl.build_bench_notebook(_cfg(netcdf_only=True))
     src = _src(nb)
     assert "netcdf_gbx" in src
-    assert "netcdf_gdal" in src
     assert _section_cells(nb) == []
 
 
@@ -90,8 +87,7 @@ def test_netcdf_preamble_flags_set():
 def test_benchmark_netcdf_false_no_netcdf_cell():
     nb = cl.build_bench_notebook(_cfg(benchmark_netcdf=False, netcdf_only=False))
     src = _src(nb)
-    # "netcdf_gdal" appears in the always-emitted preamble help comment, so it is
-    # not a reliable sentinel. The cell's runtime output strings are cell-only.
+    # The cell's runtime output strings are cell-only.
     assert "NETCDF BENCH" not in src
     assert "list_corpus_files" not in src
 
@@ -100,29 +96,25 @@ def test_netcdf_only_lightweight_only():
     nb = cl.build_bench_notebook(_cfg(netcdf_only=True, heavyweight=False))
     src = _src(nb)
     assert "netcdf_gbx" in src
-    # Heavy leg is guarded by HEAVYWEIGHT at runtime; the cell is tier-agnostic
-    # source, so netcdf_gdal text is still present but gated by `if HEAVYWEIGHT`.
-    assert "if HEAVYWEIGHT:" in src
+    assert "if LIGHTWEIGHT:" in src  # the leg runs only on the light tier
 
 
 # ---------------------------------------------------------------------------
 # Raster/vector split: the NetCDF reader bench now has TWO legs --
-#   RASTER leg  -> {CORPUS}/netcdf       (NASA-NEX grids; heavy netcdf_gdal vs light
-#                  netcdf_gbx raster mode; size_mib=-1 for matching granularity)
+#   RASTER leg  -> {CORPUS}/netcdf       (NASA-NEX grids; light netcdf_gbx raster mode;
+#                  size_mib=-1)
 #   VECTOR leg  -> {CORPUS}/netcdf-swath (S5P swaths; light netcdf_gbx mode=vector
 #                  only -- heavy has no swath path)
 # ---------------------------------------------------------------------------
 
 
-def test_netcdf_raster_leg_reads_netcdf_dir_both_tiers_size_minus_one():
+def test_netcdf_raster_leg_reads_netcdf_dir_size_minus_one():
     nb = cl.build_bench_notebook(_cfg(benchmark_netcdf=True))
     src = _src(nb)
     # Raster leg reads the regular-grid NASA-NEX pool.
     assert 'f"{CORPUS}/netcdf"' in src
-    # Both tiers over the same grid pool.
     assert 'fmt="netcdf_gbx"' in src
-    assert 'fmt="netcdf_gdal"' in src
-    # Fair one-tile-per-var granularity: size_mib=-1 passed to the raster leg.
+    # One tile per var: size_mib=-1 passed to the raster leg.
     assert "size_mib=-1" in src
 
 

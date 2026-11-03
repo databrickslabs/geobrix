@@ -29,7 +29,7 @@ def eval_method_standard_usage(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     gbx_manager.register_family(spark, ('gbx_rst_',))
-    rasters = spark.read.format("gdal").load(
+    rasters = spark.read.format("raster_gbx").load(
         _RASTER_PATH
     )
     df = rasters.select(rx.rst_boundingbox("tile").alias("bbox"))
@@ -87,7 +87,7 @@ def basic_python_udf_example(spark):
         except Exception as e:
             return {"error": str(e)}
     
-    rasters = spark.read.format("gdal").load(
+    rasters = spark.read.format("raster_gbx").load(
         _RASTER_PATH
     )
     enriched = rasters.withColumn("custom_metadata", extract_custom_metadata("tile"))
@@ -119,7 +119,7 @@ def conditional_processing_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     gbx_manager.register_family(spark, ('gbx_rst_',))
-    rasters = spark.read.format("gdal").load(_RASTER_PATH)
+    rasters = spark.read.format("raster_gbx").load(_RASTER_PATH)
     # Branch by band count: different path for multiband vs single band
     with_band_count = rasters.select(
         rx.rst_numbands("tile").alias("num_bands"),
@@ -149,7 +149,7 @@ def chained_processing_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     gbx_manager.register_family(spark, ('gbx_rst_',))
-    rasters = spark.read.format("gdal").load(_RASTER_PATH)
+    rasters = spark.read.format("raster_gbx").load(_RASTER_PATH)
     # Step 1: metadata; Step 2: dimensions; Step 3: optional clip/transform
     result = rasters.select(
         rx.rst_boundingbox("tile").alias("bbox"),
@@ -185,7 +185,7 @@ def integration_test_example():
         # spark.udf.register("custom_stats", custom_raster_stats)
         
         # Load test data
-        rasters = spark.read.format("gdal").load("/test/data")
+        rasters = spark.read.format("raster_gbx").load("/test/data")
         
         # Apply UDF
         # result = rasters.selectExpr("custom_stats(tile) as stats")

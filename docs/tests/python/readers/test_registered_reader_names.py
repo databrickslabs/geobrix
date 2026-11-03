@@ -1,11 +1,10 @@
 """Every reader name a doc, example or README snippet uses is a registered reader.
 
 A snippet that says ``spark.read.format("gpkg")`` copy-pastes into a
-``DATA_SOURCE_NOT_FOUND`` error: the readers are ``gpkg_ogr`` (heavyweight) and
-``gpkg_gbx`` (lightweight), and there are no aliases. This is a static scan -- no Spark,
+``DATA_SOURCE_NOT_FOUND`` error: the reader is ``gpkg_gbx``, and there are no aliases. This is a static scan -- no Spark,
 no JAR -- over the doc pages, the doc-test sources they import, the example notebooks and
-the READMEs. The registered names come from the heavyweight services file and the
-lightweight manifest ``datasources`` (see ``registered_readers.py``); Spark built-ins are allowed.
+the READMEs. The registered names come from the manifest ``datasources`` (see ``registered_readers.py``);
+Spark built-ins are allowed.
 """
 
 import sys
@@ -19,11 +18,10 @@ import registered_readers as rr  # noqa: E402
 
 def test_registered_names_are_the_shipped_readers():
     heavy, light = rr.heavy_reader_names(), rr.light_reader_names()
-    # One entry per line of the services file: a class whose shortName() is missed
-    # would shrink the set silently.
-    assert len(heavy) == len(rr.SERVICES_FILE.read_text().split())
-    assert {"gdal", "gtiff_gdal", "shapefile_ogr", "geojson_ogr", "gpkg_ogr", "file_gdb_ogr"} <= heavy
     assert {"raster_gbx", "gtiff_gbx", "shapefile_gbx", "geojson_gbx", "gpkg_gbx", "file_gdb_gbx"} <= light
+    # The Scala readers are retired: their names are registered by neither tier.
+    retired = {"gdal", "ogr", "gtiff_gdal", "netcdf_gdal", "shapefile_ogr", "geojson_ogr", "gpkg_ogr", "file_gdb_ogr"}
+    assert not (retired & (heavy | light))
     # A bare format name is registered by neither tier (the failure this test guards).
     assert not ({"gpkg", "shapefile", "geojson", "filegdb", "file_gdb"} & (heavy | light))
 
@@ -87,7 +85,7 @@ def test_the_scan_finds_the_names_a_snippet_uses(text, expected):
     [
         # Spark's own format() resolves the exact name only
         ("format()", "gpkg_gbx", True),
-        ("format()", "gpkg_ogr", True),
+        ("format()", "gpkg_ogr", False),  # the Scala reader is retired
         ("format()", "GPKG_GBX", True),
         ("format()", "gpkg", False),
         ("format()", "parquet", True),
@@ -151,9 +149,10 @@ def test_the_scan_covers_the_docs_the_examples_and_the_readmes():
     # Every way of naming a reader is still found somewhere (a broken pattern would
     # scan nothing and pass).
     kinds = {kind for _, _, kind, _ in references}
+    # ("SQL path read" is not among them: the lightweight readers are Python data sources, which Spark cannot query
+    # by path, so no doc shows it; the pattern itself is tested above.)
     assert {
         "format()",
-        "SQL path read",
         "SQL USING",
         "read_files(format=>)",
         "read_paths()",
@@ -172,6 +171,6 @@ def test_docs_and_examples_name_only_registered_readers():
     ]
     assert not report, (
         "snippets name readers that are not registered "
-        "(heavyweight: shortName() in the services file; lightweight: the manifest datasources):\n  "
+        "(the manifest datasources):\n  "
         + "\n  ".join(report)
     )

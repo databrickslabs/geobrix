@@ -1337,10 +1337,10 @@ SPEC_SE: Tuple[Case, ...] = (
 )
 
 
-# MVP-IO: four ways to read a file into tiles (and the decode that follows a bytes-free read), held to one answer.
+# MVP-IO: the ways to read a file into tiles (and the decode that follows a bytes-free read), held to one answer.
 # `io_cover` runs per read path (`run_reader`): the tiles must reproduce the file exactly, each pixel once.
-# `io_materialize` is the manifest row of `gbx_mvp_rst_materialize`: the virtual tile of the oracle file comes back
-# materialized, its pixels the file's, with no path left.
+# `io_materialize` is the manifest row of `gbx_mvp_rst_materialize` (the light UDF, L3 only): the virtual tile of the
+# oracle file comes back materialized, its pixels the file's, with no path left.
 IO = "gbx_mvp_rst_materialize"
 MVP_IO: Tuple[Case, ...] = (
     Case(
@@ -3713,10 +3713,9 @@ def _check_helper(case: Case, rows, tiles) -> Optional[str]:
 def run_reader(spark, case: Case, form: str, tmpdir: Optional[str] = None) -> List[str]:
     """MVP-IO: read the oracle file through one path; the tiles must reproduce it exactly, once.
 
-    The forms: ``a`` the heavy ``gdal`` reader; ``b`` the light reader, materialized; ``c`` the light reader's virtual
-    tiles decoded by the JVM (``gbx_mvp_rst_materialize``); ``d-py`` / ``d-rs`` the same decoded in one Python call per
-    Arrow batch (pyrx / the Rust build). Each output tile is located by its own geotransform, so this holds
-    whatever window fields a path keeps.
+    The forms: ``b`` the light reader, materialized; ``d-py`` its virtual tiles decoded in one Python call per Arrow
+    batch (pyrx). Each output tile is located by its own geotransform, so this holds whatever window fields a path
+    keeps.
     """
     import functools
 
@@ -3734,22 +3733,17 @@ def run_reader(spark, case: Case, form: str, tmpdir: Optional[str] = None) -> Li
         .load(path)
         .select("tile")
     )
-    if form == "a":
-        df = spark.read.format("gdal").load(path)
-    elif form == "b":
+    if form == "b":
         df = (
             spark.read.format("raster_gbx")
             .option("virtualTiles", "false")
             .option("tileSize", "32")
             .load(path)
         )
-    elif form == "c":
-        df = virt.selectExpr(f"{IO}(tile) AS tile")
-    elif form in ("d-py", "d-rs"):
+    elif form == "d-py":
         df = virt.mapInArrow(
             functools.partial(
                 _mvp_forms.materialize_batches,
-                rust=form == "d-rs",
                 cap_bytes=report_detected_cap(
                     spark
                 ),  # the driver's cap: a worker cannot measure it

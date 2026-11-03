@@ -31,7 +31,7 @@ def example_read_catalog_rasters(spark):
     gbx_manager.register_family(spark, ('gbx_rst_',))
     
     # Read rasters
-    rasters = spark.read.format("gdal").load("/data/satellite")
+    rasters = spark.read.format("raster_gbx").load("/data/satellite")
     
     # Build catalog
     catalog = rasters.select(

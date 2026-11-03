@@ -285,7 +285,7 @@ def test_a_form_sinks_its_rows_before_the_next_form_starts_and_reports_its_tasks
 def test_a_scale_that_never_finishes_loses_no_row_of_the_scales_before_it(
     spark_session_local, tmp_path, monkeypatch
 ):
-    """d-rs got no row after hours because the rows of a form sank only once all its scales had run."""
+    """A form got no row after hours because the rows of a form sank only once all its scales had run."""
     tiny_forms(monkeypatch, 1)
     real, calls, sunk = levels._run_one, [], []
 
@@ -593,7 +593,7 @@ def test_a_levels_forms_name_that_matches_no_variant_is_reported():
     assert preflight.unknown_form_names("SE", ("today@256", "today@1024")) == []
     assert preflight.unknown_form_names("SE", ("today@256", "tday@256")) == ["tday@256"]
     assert preflight.unknown_form_names("SE", ()) == []
-    assert preflight.unknown_form_names("IO", ("a", "d-rs", "nope")) == ["nope"]
+    assert preflight.unknown_form_names("IO", ("b", "d-py", "nope")) == ["nope"]
 
 
 def test_the_memory_probes_of_the_g_set_are_marked():

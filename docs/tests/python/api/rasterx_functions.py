@@ -68,12 +68,12 @@ def rasterx_setup_example(spark):
         return df
 
     # Load the default single-band raster into the `rasters` view:
-    rasters = load_tiles(GTIFF_SAMPLE_DIR, "gtiff_gdal", "rasters")
+    rasters = load_tiles(GTIFF_SAMPLE_DIR, "gtiff_gbx", "rasters")
 
-    # The other three load the same way — GeoTIFFs use "gtiff_gdal", NetCDF uses "netcdf_gdal":
-    load_tiles(GTIFF_MULTI_DIR, "gtiff_gdal", "multiband_rasters")
-    load_tiles(DTM_DIR, "gtiff_gdal", "dem_rasters")
-    load_tiles(NETCDF_DIR, "netcdf_gdal", "netcdf_rasters")
+    # The other three load the same way — GeoTIFFs use "gtiff_gbx", NetCDF uses "netcdf_gbx":
+    load_tiles(GTIFF_MULTI_DIR, "gtiff_gbx", "multiband_rasters")
+    load_tiles(DTM_DIR, "gtiff_gbx", "dem_rasters")
+    load_tiles(NETCDF_DIR, "netcdf_gbx", "netcdf_rasters")
     return rasters
 
 

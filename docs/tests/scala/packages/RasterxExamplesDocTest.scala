@@ -50,7 +50,7 @@ class RasterxExamplesDocTest extends AnyFunSuite with BeforeAndAfterAll {
         TestL1.installAll(spark)
 
         // The documentation shows this pattern:
-        // val rasterDf = spark.read.format("gdal").load("/path/to/geotiffs")
+        // val rasterDf = spark.read.format("binaryFile").load("/path/to/geotiffs").select(col("path"), call_function("gbx_rst_fromcontent", col("content"), lit("GTiff")).alias("tile"))
         // val metadataDf = rasterDf.select(
         //   col("path"),
         //   rx.rst_width(col("tile")).alias("width"),

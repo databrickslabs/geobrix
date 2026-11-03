@@ -100,7 +100,7 @@ def test_sql_rasterx_usage_executable(spark):
     try:
         gbx_manager.register_family(spark, ('gbx_rst_',))
         path = getattr(examples, "SAMPLE_RASTER_PATH", None) or ""
-        df = spark.read.format("gdal").load(path)
+        df = spark.read.format("raster_gbx").load(path)
         df.createOrReplaceTempView("rasters")
         out = spark.sql(
             "SELECT source, gbx_rst_width(tile) as width, gbx_rst_height(tile) as height, "

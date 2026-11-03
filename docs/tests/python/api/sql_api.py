@@ -55,8 +55,7 @@ DESCRIBE FUNCTION gbx_rst_boundingbox;
 DESCRIBE FUNCTION EXTENDED gbx_rst_boundingbox;"""
 
 SQL_READ_AND_QUERY_RASTERS = f"""-- Read rasters (use your sample data path)
-CREATE OR REPLACE TEMP VIEW rasters AS
-SELECT * FROM gdal.`{SAMPLE_NYC_RASTERS}`;
+CREATE OR REPLACE TEMP VIEW rasters USING raster_gbx OPTIONS (path '{SAMPLE_NYC_RASTERS}');
 
 -- Extract metadata
 SELECT
@@ -174,8 +173,7 @@ FROM legacy_features;
 SELECT * FROM features_analyzed WHERE area > 1000;"""
 
 SQL_READ_GEOJSON = f"""-- Read GeoJSON (use your path)
-CREATE OR REPLACE TEMP VIEW features AS
-SELECT * FROM geojson_ogr.`{SAMPLE_NYC_GEOJSON}`;
+CREATE OR REPLACE TEMP VIEW features USING geojson_gbx OPTIONS (path '{SAMPLE_NYC_GEOJSON}');
 
 -- Query with geometry
 SELECT
@@ -186,7 +184,7 @@ FROM features
 WHERE st_area(st_geomfromwkb(geom_0)) > 1000;"""
 
 SQL_READ_GEOPACKAGE = """-- Read GeoPackage (note: specify layer in Python/Scala first)
--- gpkg = spark.read.format("gpkg_ogr").option("layerName", "buildings").load("/data/city.gpkg")
+-- gpkg = spark.read.format("gpkg_gbx").option("layerName", "buildings").load("/data/city.gpkg")
 -- gpkg.createOrReplaceTempView("buildings")
 
 SELECT

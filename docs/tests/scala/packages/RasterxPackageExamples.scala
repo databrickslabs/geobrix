@@ -15,7 +15,7 @@ rx.register(spark)
 
 // Read raster files (sample data path; see Sample Data guide)
 val rasterPath = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
-val rasterDf = spark.read.format("gdal").load(rasterPath)
+val rasterDf = spark.read.format("binaryFile").load(rasterPath).select(col("path"), call_function("gbx_rst_fromcontent", col("content"), lit("GTiff")).alias("tile"))
 
 // Get metadata
 val metadataDf = rasterDf.select(

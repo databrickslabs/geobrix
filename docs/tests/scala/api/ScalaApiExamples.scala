@@ -69,7 +69,7 @@ import org.apache.spark.sql.functions._
 rx.register(spark)
 
 // Read rasters (sample data path)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.read.format("binaryFile").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif").select(col("path"), call_function("gbx_rst_fromcontent", col("content"), lit("GTiff")).alias("tile"))
 
 // Extract metadata
 val metadata = rasters.select(
@@ -91,7 +91,7 @@ import org.apache.spark.sql.functions._
 
 rx.register(spark)
 
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.read.format("binaryFile").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif").select(col("path"), call_function("gbx_rst_fromcontent", col("content"), lit("GTiff")).alias("tile"))
 
 // Clip raster with WKT geometry (GeoBrix accepts WKT or WKB; cutlineAllTouched = true)
 val clipWkt = "POLYGON((-122 37, -122 38, -121 38, -121 37, -122 37))"
@@ -110,7 +110,7 @@ import org.apache.spark.sql.functions._
 rx.register(spark)
 
 // Read rasters (sample data path)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.read.format("binaryFile").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif").select(col("path"), call_function("gbx_rst_fromcontent", col("content"), lit("GTiff")).alias("tile"))
 
 // Extract metadata and filter
 val catalog = rasters.select(
@@ -1315,7 +1315,7 @@ import org.apache.spark.sql.functions._
 
 rx.register(spark)
 // Multi-tile fixture: load multiband tif and split to 3 per-band rows (same grid).
-val mb = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val mb = spark.read.format("binaryFile").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif").select(col("path"), call_function("gbx_rst_fromcontent", col("content"), lit("GTiff")).alias("tile"))
 val b1 = mb.select(rx.rst_band(col("tile"), lit(1)).alias("tile")).withColumn("region", lit("R1"))
 val b2 = mb.select(rx.rst_band(col("tile"), lit(2)).alias("tile")).withColumn("region", lit("R1"))
 val b3 = mb.select(rx.rst_band(col("tile"), lit(3)).alias("tile")).withColumn("region", lit("R1"))
@@ -1341,7 +1341,7 @@ import org.apache.spark.sql.functions._
 
 rx.register(spark)
 // Multi-tile fixture: load multiband tif and split to 3 per-band rows.
-val mb = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val mb = spark.read.format("binaryFile").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif").select(col("path"), call_function("gbx_rst_fromcontent", col("content"), lit("GTiff")).alias("tile"))
 val b1 = mb.select(rx.rst_band(col("tile"), lit(1)).alias("tile")).withColumn("region", lit("R1"))
 val b2 = mb.select(rx.rst_band(col("tile"), lit(2)).alias("tile")).withColumn("region", lit("R1"))
 val b3 = mb.select(rx.rst_band(col("tile"), lit(3)).alias("tile")).withColumn("region", lit("R1"))
@@ -1368,7 +1368,7 @@ import org.apache.spark.sql.functions._
 
 rx.register(spark)
 // Multi-tile fixture: load multiband tif and split to 3 per-band rows with band_index.
-val mb = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val mb = spark.read.format("binaryFile").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif").select(col("path"), call_function("gbx_rst_fromcontent", col("content"), lit("GTiff")).alias("tile"))
 val b1 = mb.select(rx.rst_band(col("tile"), lit(1)).alias("tile")).withColumn("band_index", lit(1)).withColumn("region", lit("R1"))
 val b2 = mb.select(rx.rst_band(col("tile"), lit(2)).alias("tile")).withColumn("band_index", lit(2)).withColumn("region", lit("R1"))
 val b3 = mb.select(rx.rst_band(col("tile"), lit(3)).alias("tile")).withColumn("band_index", lit(3)).withColumn("region", lit("R1"))

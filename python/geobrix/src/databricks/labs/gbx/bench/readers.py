@@ -8,7 +8,7 @@ Spark-path: register the raster_gbx data source and time
 spark.read.format("raster_gbx").load(path).count() over a corpus directory.
 
 Cluster format-read: generic spark.read.format(...).load(path).count() wrapper
-for comparing light (raster_gbx) vs heavy (gdal) readers on the same cluster.
+for timing the light readers (raster_gbx and the others) on a cluster.
 """
 
 from __future__ import annotations
@@ -534,7 +534,6 @@ def run_format_read(
     """Time spark.read.format(fmt).load(path).count() on-cluster.
 
     For fmt=="raster_gbx": registers the light data source first.
-    For fmt=="gdal": ensures the heavyweight GDAL driver is initialised.
     When ``ingest_table`` is set, the timed job writes the read DataFrame to
     that Delta table (mode="overwrite") and returns its row count -- a real
     ingest that forces materialization.  When None the behavior is unchanged
@@ -551,37 +550,14 @@ def run_format_read(
         # formats (geojson_gbx, shapefile_gbx, ...) unregistered -> DATA_SOURCE_NOT_FOUND.
 
         gbx_manager.register_sources(spark)
-    elif fmt in ("gdal", "gtiff_gdal", "netcdf_gdal"):
-        # Heavy raster readers need the GDAL drivers initialised (registered via the
-        # synchronized GDALManager guard inside rasterx.register). netcdf_gdal is the
-        # heavy leg of the NetCDF raster bench; gtiff_gdal/gdal are the GeoTIFF readers.
-        try:
-
-            gbx_manager.register_family(
-                spark,
-                ("gbx_rst_",),
-                only=gbx_manager.names_at_level(("gbx_rst_",), "L1"),
-                level="L1",
-            )
-        except Exception:  # noqa: BLE001
-            pass  # best-effort GDAL init; failure surfaces in the timed call
 
     def _job():
         reader = spark.read.format(fmt)
         if options:
             for k, v in options.items():
                 reader = reader.option(k, str(v))
-        # sizeInMB is honored by the light raster reader (raster_gbx) AND the heavy
-        # raster readers (netcdf_gdal / gdal / gtiff_gdal). Broadened beyond raster_gbx
-        # so the netcdf raster leg can pass size_mib=-1 to BOTH tiers -- one tile per
-        # grid variable -- giving the heavy reader the same one-tile-per-var granularity
-        # as light (a fair heavy-vs-light comparison).
-        # NOTE (re-baseline): the existing GeoTIFF reader leg calls fmt="gdal" without an
-        # explicit size_mib, so it now inherits the default (16) and tiles at ~16 MB where
-        # it previously read whole-image. This aligns it with the light raster_gbx leg
-        # (already 16) -- fairer -- but GeoTIFF heavy reader-bench numbers are NOT
-        # comparable across this change.
-        if fmt in ("raster_gbx", "netcdf_gdal", "gdal", "gtiff_gdal"):
+        # sizeInMB is honored by the light raster reader (raster_gbx).
+        if fmt == "raster_gbx":
             reader = reader.option("sizeInMB", str(size_mib))
         df = reader.load(path)
         if ingest_table:
@@ -727,20 +703,6 @@ def run_format_write(
     # Register light DS (always needed for raster_gbx reader/writer).
 
     gbx_manager.register_sources(spark)
-
-    # Best-effort heavy init when the input is read by a heavyweight GDAL format.
-    _heavy_fmts = {"gdal", "gtiff_gdal"}
-    if read_fmt in _heavy_fmts:
-        try:
-
-            gbx_manager.register_family(
-                spark,
-                ("gbx_rst_",),
-                only=gbx_manager.names_at_level(("gbx_rst_",), "L1"),
-                level="L1",
-            )
-        except Exception:  # noqa: BLE001
-            pass
 
     # Read the input once and cache — isolates write cost from read cost.
     try:
@@ -8400,9 +8362,8 @@ def list_corpus_files(
 
     The reader bench is format-parameterized: GeoTIFF pools filter on the default
     ``.*\\.tif$`` while a NetCDF pool passes ``.*\\.nc$``. Mirrors the
-    ``filterRegex`` option honored by both the light (netcdf_gbx) and heavy
-    (netcdf_gdal / gdal) directory readers so the host-side listing and the
-    on-cluster reader see the SAME set of files. Recurses into subdirectories.
+    ``filterRegex`` option honored by the light (netcdf_gbx, raster_gbx) directory readers so
+    the host-side listing and the on-cluster reader see the SAME set of files. Recurses into subdirectories.
 
     ``filter_regex`` is matched against the full absolute path (not basename only).
     For the standard patterns ``r".*\\.tif$"`` and ``r".*\\.nc$"`` the behaviour is
@@ -8500,8 +8461,7 @@ def stage_nasanex_corpus(
     invokes it once (interactively / from a staging notebook) to populate the
     ``{CORPUS}/netcdf`` pool that the NetCDF reader-bench RASTER leg reads.
     NASA-NEX GDDP-CMIP6 granules are regular 0.25-degree lat/lon global grids, so
-    BOTH the heavy ``netcdf_gdal`` and the light ``netcdf_gbx`` (raster mode)
-    readers can enumerate them -- a fair heavy-vs-light comparison. (The S5P swath
+    the light ``netcdf_gbx`` reader (raster mode) enumerates them. (The S5P swath
     VECTOR leg is staged separately by ``stage_netcdf_corpus`` into
     ``{CORPUS}/netcdf-swath``.)
 

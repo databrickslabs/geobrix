@@ -70,7 +70,7 @@ if items:
     print(f"   Path: {output_file}")
     
     # Verify
-    raster = spark.read.format("gdal").load(str(output_file))
+    raster = spark.read.format("raster_gbx").load(str(output_file))
     raster.select(
         rx.rst_width("tile").alias("width"),
         rx.rst_height("tile").alias("height"),
@@ -91,7 +91,7 @@ Selected scene: S2A_MSIL2A_20230715...
 +-----+------+-----+-----------+"""
 
 USAGE_SENTINEL_NYC = """sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
-sentinel_nyc = spark.read.format("gdal").load(f"{sample_path}/nyc/sentinel2/nyc_sentinel2_red.tif")"""
+sentinel_nyc = spark.read.format("raster_gbx").load(f"{sample_path}/nyc/sentinel2/nyc_sentinel2_red.tif")"""
 
 DOWNLOAD_SENTINEL_LONDON = """# Install pystac-client if needed
 %pip install pystac-client planetary-computer --quiet
@@ -158,7 +158,7 @@ if items:
     print(f"   Path: {output_file}")
     
     # Verify
-    raster = spark.read.format("gdal").load(str(output_file))
+    raster = spark.read.format("raster_gbx").load(str(output_file))
     raster.select(
         rx.rst_width("tile").alias("width"),
         rx.rst_height("tile").alias("height"),
@@ -178,7 +178,7 @@ Selected scene: S2B_MSIL2A_20230722...
 +-----+------+----+"""
 
 USAGE_SENTINEL_LONDON = """sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
-sentinel_london = spark.read.format("gdal").load(f"{sample_path}/london/sentinel2/london_sentinel2_red.tif")"""
+sentinel_london = spark.read.format("raster_gbx").load(f"{sample_path}/london/sentinel2/london_sentinel2_red.tif")"""
 
 DOWNLOAD_SRTM_NYC = """# Download SRTM Elevation Tiles for NYC area (from AWS Public Data)
 import requests
@@ -225,7 +225,7 @@ print(f"\\n✅ NYC elevation data ready at: {output_dir}")
 from databricks.labs.gbx.rasterx import functions as rx
 rx.register(spark)
 
-elevation = spark.read.format("gdal").load(f"{output_dir}/*.tif")
+elevation = spark.read.format("raster_gbx").load(f"{output_dir}/*.tif")
 elevation.select(
     "path",
     rx.rst_min("tile").alias("min_elevation"),
@@ -246,7 +246,7 @@ Downloading SRTM N40W073...
 +--------------------+-------------+-------------+-------------+"""
 
 USAGE_SRTM_NYC = """sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
-elevation = spark.read.format("gdal").load(f"{sample_path}/nyc-elevation/srtm_n40w074.tif")"""
+elevation = spark.read.format("raster_gbx").load(f"{sample_path}/nyc-elevation/srtm_n40w074.tif")"""
 
 DOWNLOAD_SRTM_LONDON = """# Download SRTM Elevation Tile for London (from AWS Public Data)
 import requests
@@ -284,7 +284,7 @@ print(f"   Path: {tif_file}")
 from databricks.labs.gbx.rasterx import functions as rx
 rx.register(spark)
 
-elevation = spark.read.format("gdal").load(str(tif_file))
+elevation = spark.read.format("raster_gbx").load(str(tif_file))
 elevation.select(
     rx.rst_min("tile").alias("min_elevation"),
     rx.rst_max("tile").alias("max_elevation")
@@ -300,7 +300,7 @@ DOWNLOAD_SRTM_LONDON_output = """Downloading SRTM London area...
 +-------------+-------------+"""
 
 USAGE_SRTM_LONDON = """sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
-elevation_london = spark.read.format("gdal").load(f"{sample_path}/london-elevation/srtm_n51w001.tif")"""
+elevation_london = spark.read.format("raster_gbx").load(f"{sample_path}/london-elevation/srtm_n51w001.tif")"""
 
 DOWNLOAD_HRRR_NYC = """# Download NOAA HRRR NetCDF for NYC area
 import requests
@@ -340,7 +340,7 @@ from databricks.labs.gbx.rasterx import functions as rx
 rx.register(spark)
 
 # GDAL can read GRIB2 files
-hrrr = spark.read.format("gdal").load(str(output_file))
+hrrr = spark.read.format("raster_gbx").load(str(output_file))
 print(f"   Subdatasets/bands: {hrrr.count()}")
 hrrr.select(
     "path",
@@ -362,7 +362,7 @@ This may take 2-3 minutes (~20-30MB)...
 +-------------------------+-----+------+"""
 
 USAGE_HRRR_NYC = """sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
-hrrr = spark.read.format("gdal").load(f"{sample_path}/nyc/hrrr-weather/hrrr_*.grib2")"""
+hrrr = spark.read.format("raster_gbx").load(f"{sample_path}/nyc/hrrr-weather/hrrr_*.grib2")"""
 
 
 GENERATE_ERA5_ZARR = """# The Zarr weather cube is generated, not downloaded (it takes seconds)

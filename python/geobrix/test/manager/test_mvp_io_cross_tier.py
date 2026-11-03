@@ -1,55 +1,29 @@
 """The read-path oracle (MVP-IO): the oracle file read through every path comes back exactly, once.
 
-Forms: ``a`` the heavy ``gdal`` reader, ``b`` the light reader (materialized tiles), ``c`` the light reader's
-virtual tiles decoded by the JVM (``gbx_mvp_rst_materialize``), ``d-py`` and ``d-rs`` the same tiles decoded in one
-Python call per Arrow batch (pyrx, and the Rust build when its wheel has one). The JVM forms need the staged JAR and
-run under `gbx-test-parity.sh`; ``d-rs`` skips unless the loaded `_gbxrs` has `decode_window`.
+Forms: ``b`` the light reader (materialized tiles) and ``d-py`` its virtual tiles decoded in one Python call per Arrow
+batch (pyrx). The manifest function ``gbx_mvp_rst_materialize`` is the same decode as a row UDF (L3 only).
 """
 
 import os
 
 import pytest
 
-from databricks.labs.gbx import _rs, register
+from databricks.labs.gbx import register
 from databricks.labs.gbx.bench import oracles
 
 COVER = next(c for c in oracles.MVP_IO if c.cid == "io_cover")
 MATERIALIZE = next(c for c in oracles.MVP_IO if c.cid == "io_materialize")
 FN = oracles.IO
-JVM = {"a", "c"}
 
 
-def _has_rust_decode() -> bool:
-    mod = _rs.load()
-    return mod is not None and hasattr(mod, "decode_window")
-
-
-@pytest.mark.parametrize(
-    "form",
-    [
-        pytest.param(f, marks=pytest.mark.integration) if f in JVM else f
-        for f in ("a", "b", "c", "d-py", "d-rs")
-    ],
-)
-def test_mvp_io_cover(request, tmp_path, form):
-    if form == "d-rs" and not _has_rust_decode():
-        pytest.skip(
-            _rs.unavailable_reason() or "this _gbxrs build has no decode_window"
-        )
-    spark = request.getfixturevalue("jvm_spark" if form in JVM else "spark")
-    if form == "c":
-        register(spark, only=[FN], _levels={FN: ("L1", "-")})
+@pytest.mark.parametrize("form", ["b", "d-py"])
+def test_mvp_io_cover(spark, tmp_path, form):
     assert oracles.run_reader(spark, COVER, form, str(tmp_path)) == []
 
 
-@pytest.mark.parametrize(
-    "level",
-    [pytest.param("L1", marks=pytest.mark.integration), "L3"],
-)
-def test_mvp_io_materialize_row(request, tmp_path, level):
-    """The manifest function at both of its levels: a virtual tile of the file in, the file's pixels out."""
-    spark = request.getfixturevalue("jvm_spark" if level == "L1" else "spark")
-    register(spark, only=[FN], _levels={FN: (level, "-")})
+def test_mvp_io_materialize_row(spark, tmp_path):
+    """The manifest function (the light UDF, its only level): a virtual tile of the file in, the file's pixels out."""
+    register(spark, only=[FN], _levels={FN: ("L3", "-")})
     (result,) = oracles.run_session(spark, [MATERIALIZE], tmpdir=str(tmp_path))
     assert result[1] is None
 
@@ -85,82 +59,33 @@ def _tif(path, bands=1, size=64, dtype="float32", crs="EPSG:4326"):
     return str(path)
 
 
-def _decoded_rows(batch, rust=False, cap_bytes=None):
+def _decoded_rows(batch, cap_bytes=None):
     from databricks.labs.gbx.pyrx import _mvp_forms
 
-    (out,) = _mvp_forms.materialize_batches([batch], rust=rust, cap_bytes=cap_bytes)
+    (out,) = _mvp_forms.materialize_batches([batch], cap_bytes=cap_bytes)
     return [r["tile"] for r in out.to_pylist()]
 
 
-@pytest.mark.parametrize("rust", [False, True], ids=["d-py", "d-rs"])
-def test_the_batch_decode_returns_an_error_tile_for_a_refused_location(rust):
-    """A path from data is judged by the remote-path gate before anything opens it, on both paths; a refusal is a row of
-    data (the light `rst_*` convention, as the JVM's safeEval), not a task failure."""
-    if rust and not _has_rust_decode():
-        pytest.skip("this _gbxrs build has no decode_window")
-    (tile,) = _decoded_rows(_batch_of("/vsicurl/https://example.invalid/x.tif"), rust)
+def test_the_batch_decode_returns_an_error_tile_for_a_refused_location():
+    """A path from data is judged by the remote-path gate before anything opens it; a refusal is a row of data (the
+    light `rst_*` convention, as the JVM's safeEval), not a task failure."""
+    (tile,) = _decoded_rows(_batch_of("/vsicurl/https://example.invalid/x.tif"))
     assert tile["raster"] is None and tile["cellid"] == 1
     assert "/vsicurl/" in dict(tile["metadata"])["last_error"]
 
 
-@pytest.mark.parametrize("build", ["none", "no-decode-window"])
-def test_a_missing_rust_build_fails_the_batch_and_is_not_an_error_tile(
-    tmp_path, monkeypatch, build
-):
-    """A build without `decode_window` is a configuration error: a d-rs run on it must raise, not return a column of
-    error tiles that reads as a (cheap) result. A per-tile data error still becomes an error tile (the test above).
-    """
-    monkeypatch.setattr(_rs, "load", lambda: None if build == "none" else object())
-    with pytest.raises(RuntimeError, match="Rust decode is unavailable"):
-        _decoded_rows(_batch_of(_tif(tmp_path / "f.tif")), rust=True)
-
-
-def test_the_rust_decode_runs_under_the_per_file_sidecar_option(tmp_path, monkeypatch):
-    """`decode_window` is called inside `readdir_option(readdir_mode(file))`, as pyrx's own opens are: under the process
-    value GDAL stats a dozen sidecar names per open, which cost ~1.7 s a tile on a Volume (EMPTY_DIR: ~0.08 s).
-    """
-    from contextlib import contextmanager
-
-    from databricks.labs.gbx.pyrx import _env
-
-    active, seen = [], []
-    path = _tif(tmp_path / "f.tif")
-
-    @contextmanager
-    def option(mode):
-        active.append(mode)
-        try:
-            yield
-        finally:
-            active.pop()
-
-    class FakeRs:
-        def decode_window(self, *a):
-            seen.append(list(active))  # the options in force at the call
-            return b"II*\x00"
-
-    monkeypatch.setattr(_rs, "load", lambda: FakeRs())
-    monkeypatch.setattr(_env, "readdir_mode", lambda p: "EMPTY_DIR")
-    monkeypatch.setattr(_env, "readdir_option", option)
-    (tile,) = _decoded_rows(_batch_of(path), rust=True)
-    assert tile["raster"] == b"II*\x00"
-    assert seen == [["EMPTY_DIR"]] and active == []
-
-
 @pytest.mark.parametrize("exc", [MemoryError, RecursionError])
-@pytest.mark.parametrize("rust", [False, True], ids=["d-py", "d-rs"])
 def test_resource_exhaustion_fails_the_task_it_is_not_an_error_tile(
-    tmp_path, monkeypatch, exc, rust
+    tmp_path, monkeypatch, exc
 ):
     from databricks.labs.gbx.pyrx import _mvp_forms
 
     def boom(*a, **k):
         raise exc("while decoding")
 
-    monkeypatch.setattr(_mvp_forms, "_decode_rust", boom)
     monkeypatch.setattr(_mvp_forms, "_decode_py", boom)
     with pytest.raises(exc):
-        _decoded_rows(_batch_of(_tif(tmp_path / "f.tif")), rust=rust)
+        _decoded_rows(_batch_of(_tif(tmp_path / "f.tif")))
 
 
 def test_the_row_udf_returns_an_error_tile_for_a_refused_location():
@@ -182,9 +107,7 @@ def test_a_tile_with_pending_instructions_decodes_as_the_row_udf_decodes_it(tmp_
 
     path = _tif(tmp_path / "f.tif")
     md = {"pending_nodata": "0", "keep": "me"}
-    (got,) = _decoded_rows(
-        _batch_of(path, metadata=md), rust=True
-    )  # rust=True: pyrx must take it
+    (got,) = _decoded_rows(_batch_of(path, metadata=md))
     want = _mvp_forms.materialize_udf.func(
         VirtualTile(cellid=1, path=path, metadata=md).to_row()
     )
@@ -194,88 +117,6 @@ def test_a_tile_with_pending_instructions_decodes_as_the_row_udf_decodes_it(tmp_
         and "tile_byte_size" in want["metadata"]
     )
     assert got["raster"] == want["raster"] and got["path"] is None
-
-
-def test_the_rust_decode_is_offered_a_plain_file_only():
-    """An instruction, a clip, a Zarr array and an object-store or /vsi path go the pyrx way (rasterio rewrites an
-    `s3://` URI to GDAL's /vsis3/; the Rust open does not). The map metadata is a dict by now, as a batch makes it.
-    """
-    from databricks.labs.gbx.pyrx import _mvp_forms
-
-    plain = {
-        "clip_polygon": None,
-        "metadata": {"k": "v"},
-        "path": "dbfs:/Volumes/c/s/v/a.tif",
-    }
-    assert _mvp_forms._rust_can_decode(plain)
-    for change in (
-        {"metadata": {"pending_srid": "3857"}},
-        {"metadata": {"zarr_array": "a"}},
-        {"clip_polygon": b"x"},
-        *(
-            {"path": p}
-            for p in (
-                "s3://b/k.tif",
-                "abfss://c@a.dfs.core.windows.net/k.tif",
-                "gs://b/k.tif",
-                "/vsis3/b/k.tif",
-                # a scheme with no "//" is a scheme to rasterio too (urllib.parse reads it)
-                "zip:/x.zip",
-                "gs:bucket/x.tif",
-                "hdfs:/x.tif",
-            )
-        ),
-    ):
-        assert not _mvp_forms._rust_can_decode({**plain, **change}), change
-
-
-def test_the_rust_decode_takes_a_plain_tile_without_pyrx_and_gives_the_pyrx_row(
-    tmp_path, monkeypatch
-):
-    """d-rs must be Rust (pyrx made to raise), and its row equals the d-py row for the same tile."""
-    from databricks.labs.gbx.pyrx import _mvp_forms
-
-    if not _has_rust_decode():
-        pytest.skip(
-            _rs.unavailable_reason() or "this _gbxrs build has no decode_window"
-        )
-    batch = _batch_of(
-        _tif(tmp_path / "f.tif"),
-        window=(8, 8, 16, 16),
-        metadata={"k": "v"},
-    )
-    (want,) = _decoded_rows(batch, rust=False)
-
-    def no_pyrx(*a, **k):
-        raise AssertionError("fell back to pyrx")
-
-    monkeypatch.setattr(_mvp_forms, "_decode_py", no_pyrx)
-    (got,) = _decoded_rows(batch, rust=True)
-    for row in (
-        got,
-        want,
-    ):  # the size stamped is the size of the bytes each decode wrote
-        assert dict(row["metadata"]).pop("tile_byte_size") == str(len(row["raster"]))
-
-    def meta(row):
-        return {k: v for k, v in row["metadata"] if k != "tile_byte_size"}
-
-    assert meta(got) == meta(want)
-    assert {k: v for k, v in got.items() if k not in ("raster", "metadata")} == {
-        k: v for k, v in want.items() if k not in ("raster", "metadata")
-    }
-    import numpy as np
-    from rasterio.io import MemoryFile
-
-    from databricks.labs.gbx._gdal_policy import open_bytes
-
-    with (
-        MemoryFile(bytes(got["raster"])) as a,
-        open_bytes(a) as g,
-        MemoryFile(bytes(want["raster"])) as b,
-        open_bytes(b) as w,
-    ):
-        assert np.array_equal(g.read(), w.read())
 
 
 @pytest.mark.parametrize(
@@ -437,47 +278,9 @@ def test_plain_register_leaves_a_probe_out_and_a_named_one_installs_it():
     assert FN in manager.register(ConnectStub(), only=[FN], _levels={FN: ("L3", "-")})
 
 
-def test_the_rust_decode_opens_with_the_allowed_drivers_only(tmp_path):
-    """`drivers` is GDAL's driver list for the open: a GeoTIFF is refused when GTiff is not in it."""
-    import numpy as np
-    import rasterio
-    from rasterio.transform import from_origin
-
-    if not _has_rust_decode():
-        pytest.skip(
-            _rs.unavailable_reason() or "this _gbxrs build has no decode_window"
-        )
-    path = str(tmp_path / "f.tif")
-    with rasterio.open(
-        path,
-        "w",
-        driver="GTiff",
-        width=16,
-        height=16,
-        count=1,
-        dtype="float32",
-        crs="EPSG:4326",
-        transform=from_origin(0, 16, 1, 1),
-    ) as dst:
-        dst.write(np.arange(256, dtype="float32").reshape(1, 16, 16))
-    mod = _rs.load()
-    with pytest.raises(Exception, match="cannot open"):
-        mod.decode_window(path, 0, 0, 8, 8, 3, ["PNG"])
-    out = mod.decode_window(path, 8, 8, 8, 8, 3, ["GTiff", "PNG"])
-    with rasterio.MemoryFile(bytes(out)) as mf, mf.open() as got:
-        assert got.compression.value == "ZSTD" and got.shape == (8, 8)
-        assert np.array_equal(
-            got.read(1), np.arange(256, dtype="float32").reshape(16, 16)[8:, 8:]
-        )
-    with pytest.raises(ValueError, match="not inside"):
-        mod.decode_window(path, 12, 12, 8, 8, 3, None)
-
-
-@pytest.mark.integration
-def test_every_io_bench_form_runs_with_the_jar(jvm_spark, tmp_path):
-    """The levels leg's IO forms (reads a / b / c / udf / d-py / d-rs, writers W1 / W2) on four local tiles, the
-    JVM forms included: each ends `ok`, or `na_by_design` for d-rs alone, and the writers leave no scratch behind.
-    """
+def test_every_io_bench_form_runs(spark, tmp_path):
+    """The levels leg's IO forms (reads b / udf / d-py / floor, writer W1) on four local tiles: each ends `ok`, and the
+    writer leaves no scratch behind."""
     import numpy as np
     import rasterio
     from rasterio.transform import from_origin
@@ -500,7 +303,7 @@ def test_every_io_bench_form_runs_with_the_jar(jvm_spark, tmp_path):
         ) as dst:
             dst.write(np.full((1, 16, 16), i, dtype="float32"))
     got = levels.run_mvp(
-        jvm_spark, "IO", "io-test", 0, 1, corpus=str(tmp_path / "corpus"), schema=None, scales=(1,), base_rows=4,
+        spark, "IO", "io-test", 0, 1, corpus=str(tmp_path / "corpus"), schema=None, scales=(1,), base_rows=4,
         where="test",
     )  # fmt: skip
     by_form = {r.form: r for r in got}
@@ -510,12 +313,7 @@ def test_every_io_bench_form_runs_with_the_jar(jvm_spark, tmp_path):
         for k, r in by_form.items()
         if r.status != "ok"
     }
-    allowed = (
-        set() if _has_rust_decode() else {"d-rs"}
-    )  # without decode_window the d-rs form is skipped by design
-    assert set(bad) <= allowed and all(
-        v[0] == "na_by_design" for v in bad.values()
-    ), bad
+    assert not bad, bad
     scratch = levels_forms._io_scratch(str(tmp_path / "corpus"))
     assert not os.path.isdir(scratch) or not os.listdir(scratch)
 
@@ -597,34 +395,3 @@ def test_the_batch_decode_passes_skipped_rows_through_and_keeps_every_row_in_ord
             out[2]["tile"]["raster"] == b"already" and out[3]["tile"]["raster"] is None
         )  # untouched
         assert out[0]["tile"] is None and out[5]["tile"] is None
-
-
-@pytest.mark.integration
-@pytest.mark.parametrize("form", ["a", "c"])
-def test_the_jvm_io_reads_take_exactly_n_files(jvm_spark, tmp_path, form):
-    """`a` decodes in the scan (the heavy reader is given the first n files); `c` decodes above the exchange that
-    follows `limit(n)` (the JVM expression is no longer pushed below the limit onto every file).
-    """
-    from databricks.labs.gbx.bench import levels_forms as lf
-
-    rows = tmp_path / "corpus" / "rows"
-    rows.mkdir(parents=True)
-    for i in range(8):
-        _tif(rows / f"t{i}.tif")
-    if form == "c":
-        register(jvm_spark, only=[FN], _levels={FN: ("L1", "-")})
-    df = lf._io_read(jvm_spark, str(rows), 3, form)
-    assert df.count() == 3
-    if form == "c":
-        plan = df._jdf.queryExecution().executedPlan().treeString().splitlines()
-
-        def at(*k):
-            return next(i for i, ln in enumerate(plan) if any(x in ln for x in k))
-
-        assert (
-            at(FN)
-            < at("Exchange rangepartitioning")
-            < at("GlobalLimit", "CollectLimit")
-        )
-    else:
-        assert df.rdd.getNumPartitions() == 3

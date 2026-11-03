@@ -21,12 +21,11 @@ _KNOWN_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://?")
 def to_spark_uri(path: str) -> str:
     """Scheme-qualify a listed path to the form Hadoop's FileSystem produces on Databricks.
 
-    ``binaryFile`` and the heavy ``gdal``/``gtiff_gdal`` reader both qualify paths
-    via the Hadoop FileSystem, so a Volume file comes back as ``dbfs:/Volumes/...``.
-    The light reader lists bare FUSE paths (``os.path.abspath`` -> ``/Volumes/...``),
-    which then fail to join (0 rows) against a binaryFile/heavy ``path`` column.
-    This mirrors the heavy ``HadoopUtils.cleanPath`` mapping but for the OUTPUT
-    form (what ``listFiles`` returns), so the light ``source`` column matches.
+    ``binaryFile`` qualifies paths via the Hadoop FileSystem, so a Volume file comes
+    back as ``dbfs:/Volumes/...``. The light reader lists bare FUSE paths
+    (``os.path.abspath`` -> ``/Volumes/...``), which then fail to join (0 rows)
+    against a binaryFile ``path`` column. This maps to the OUTPUT form (what
+    ``listFiles`` returns), so the light ``source`` column matches.
 
     The bare path is still what we hand to rasterio for the actual read — only the
     emitted ``source`` column is qualified.

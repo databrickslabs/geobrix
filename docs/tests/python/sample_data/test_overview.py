@@ -12,7 +12,7 @@ from . import overview
 def test_geographic_coherence_nyc_zonal():
     assert isinstance(overview.GEOGRAPHIC_COHERENCE_NYC_ZONAL, str)
     assert "sample_path" in overview.GEOGRAPHIC_COHERENCE_NYC_ZONAL
-    assert "geojson_ogr" in overview.GEOGRAPHIC_COHERENCE_NYC_ZONAL
+    assert "geojson_gbx" in overview.GEOGRAPHIC_COHERENCE_NYC_ZONAL
     assert "rst_avg" in overview.GEOGRAPHIC_COHERENCE_NYC_ZONAL
 
 

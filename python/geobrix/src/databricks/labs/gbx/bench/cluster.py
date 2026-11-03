@@ -277,7 +277,7 @@ LIGHTWEIGHT, HEAVYWEIGHT = {lightweight!r}, {heavyweight!r}
 # they can be harvested after the run. Diagnostic only -- no rows are produced.
 EXPLAIN_ONLY = {explain_only!r}
 EXPLAIN_DIR = OUT + "/explain"
-# --benchmark-readers: also run the reader benchmark (raster_gbx vs gdal) on the cluster.
+# --benchmark-readers: also run the reader benchmark (raster_gbx) on the cluster.
 # --readers-only: ONLY run the reader benchmark, skip all fn benchmarks.
 BENCHMARK_READERS = {benchmark_readers!r}
 READERS_ONLY = {readers_only!r}
@@ -285,7 +285,7 @@ READERS_ONLY = {readers_only!r}
 # --pmtiles-only: ONLY run the pmtiles benchmark, skip all fn benchmarks.
 BENCHMARK_PMTILES = {benchmark_pmtiles!r}
 PMTILES_ONLY = {pmtiles_only!r}
-# --benchmark-vector: also run the vector reader benchmark (light *_gbx vs heavy *_ogr).
+# --benchmark-vector: also run the vector reader benchmark (the light *_gbx readers and writers).
 # --vector-only: ONLY run the vector reader benchmark, skip all fn benchmarks.
 BENCHMARK_VECTOR = {benchmark_vector!r}
 VECTOR_ONLY = {vector_only!r}
@@ -317,8 +317,8 @@ GRID_CUSTOM_ONLY = {grid_custom_only!r}
 # --fanout-only: ONLY run the fanout benchmark, skip all fn benchmarks.
 BENCHMARK_FANOUT = {benchmark_fanout!r}
 FANOUT_ONLY = {fanout_only!r}
-# --benchmark-netcdf: also run the NetCDF reader benchmark (light netcdf_gbx vs heavy
-# netcdf_gdal) over the same staged .nc granule pool at {{CORPUS}}/netcdf.
+# --benchmark-netcdf: also run the NetCDF reader benchmark (light netcdf_gbx)
+# over the staged .nc granule pool at {{CORPUS}}/netcdf.
 # --netcdf-only: ONLY run the NetCDF reader benchmark, skip all fn benchmarks.
 # The corpus is staged separately (real S5P L2 CH4 granules via TropomiDownloader);
 # the bench SKIPS CLEANLY when the pool is empty/missing.
@@ -892,7 +892,7 @@ _CELL_HEAVY_SPARK = """# (d) Heavyweight spark-path
 show_section("heavyweight", "spark-path", run_heavy("spark-path"))
 """
 
-_CELL_READERS = """# Reader benchmark: light raster_gbx vs heavy gdal (both on-cluster)
+_CELL_READERS = """# Reader benchmark: light raster_gbx (on-cluster)
 from databricks.labs.gbx.bench import readers as _rd
 _rows_dir = f"{CORPUS}/rows"
 _reader_rows = []
@@ -901,10 +901,6 @@ if LIGHTWEIGHT:
                              api="lightweight", fmt="raster_gbx",
                              options={"filterRegex": r".*\\.tif$"}, where="cluster")
     _sink([_r]); lw.append(_r); _reader_rows.append(_r)
-if HEAVYWEIGHT:
-    _r = _rd.run_format_read(spark, _rows_dir, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
-                             api="heavyweight", fmt="gdal", where="cluster")
-    _sink([_r]); hw.append(_r); _reader_rows.append(_r)
 # Writer benchmark: light gtiff_gbx (raster_gbx-read input)
 import shutil as _sh
 _wsrc = f"{CORPUS}/rows"
@@ -927,12 +923,11 @@ if _reader_rows:
     _show_md(f"reader benchmark -- {RUN_ID}", _md)
 """
 
-_CELL_NETCDF = """# NetCDF RASTER reader benchmark: heavy netcdf_gdal vs light netcdf_gbx (regular grids, on-cluster)
-# Honest heavy-vs-light throughput over real NASA-NEX GDDP-CMIP6 granules staged at {CORPUS}/netcdf
+_CELL_NETCDF = """# NetCDF RASTER reader benchmark: light netcdf_gbx (regular grids, on-cluster)
+# Throughput over real NASA-NEX GDDP-CMIP6 granules staged at {CORPUS}/netcdf
 # (download-and-stop via NasaNexDownloader -- staged separately, decoupled from read()). These are
-# regular 0.25-degree lat/lon global grids, so BOTH tiers can enumerate the SAME .nc pool with
-# filterRegex .*\\.nc$ (light in raster mode) -- a fair comparison. size_mib=-1 makes each grid var
-# ONE tile in both tiers (matching one-tile-per-var granularity). This is a THROUGHPUT bench, NOT a
+# regular 0.25-degree lat/lon global grids, read with filterRegex .*\\.nc$ (netcdf_gbx in raster mode).
+# size_mib=-1 makes each grid var ONE tile. This is a THROUGHPUT bench, NOT a
 # bit-parity gate (cross-tier parity uses a small gridded fixture -- see docs/api/benchmarking.mdx).
 from databricks.labs.gbx.bench import readers as _rd
 import os as _os
@@ -956,11 +951,6 @@ else:
                                  api="lightweight", fmt="netcdf_gbx",
                                  options={"filterRegex": r".*\\.nc$"}, size_mib=-1, where="cluster")
         _sink([_r]); lw.append(_r); _netcdf_rows.append(_r)
-    if HEAVYWEIGHT:
-        _r = _rd.run_format_read(spark, _netcdf_dir, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
-                                 api="heavyweight", fmt="netcdf_gdal",
-                                 options={"filterRegex": r".*\\.nc$"}, size_mib=-1, where="cluster")
-        _sink([_r]); hw.append(_r); _netcdf_rows.append(_r)
     if _netcdf_rows:
         _df = spark.sql(
             f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND category = 'reader' AND fn LIKE 'read_netcdf%'"
@@ -977,9 +967,8 @@ _CELL_NETCDF_SWATH = """# NetCDF VECTOR (swath) reader benchmark: light netcdf_g
 # Real Sentinel-5P L2 CH4 SWATH granules staged at {CORPUS}/netcdf-swath (download-and-stop via
 # TropomiDownloader -- staged separately, decoupled from read()). S5P L2 is an irregular per-pixel
 # lat/lon SWATH, so it is read in the light netcdf_gbx VECTOR mode (one point row per pixel). There
-# is NO heavy swath path -- netcdf_gdal has no swath reader -- so this leg is a LIGHT-ONLY throughput
-# measurement, NOT a heavy-vs-light comparison. (The heavy-vs-light comparison lives in the RASTER
-# leg above, over regular-grid NASA-NEX granules.)
+# is NO heavy swath path, so this leg is a throughput measurement. (The RASTER leg above reads
+# regular-grid NASA-NEX granules.)
 from databricks.labs.gbx.bench import readers as _rd
 import os as _os
 _swath_dir = f"{CORPUS}/netcdf-swath"
@@ -1025,7 +1014,7 @@ else:
 """
 
 _CELL_NETCDF_WRITER = """# NetCDF WRITER benchmark: light netcdf_gbx write throughput (raster + vector legs, on-cluster)
-# LIGHT-ONLY: there is NO heavy NetCDF writer (netcdf_gdal is read-only here), so this is a
+# LIGHT-ONLY: there is NO heavy NetCDF writer, so this is a
 # throughput measurement of the light netcdf_gbx writer, NOT a heavy-vs-light comparison -- the
 # same shape as the S5P vector reader leg. Each mode runs THREE write shapes:
 #   parts  (default): one .nc per row (raster) / per partition (vector)
@@ -3153,7 +3142,7 @@ if _rdr_rows:
     _show_md(f"Raster decode-read (FILE) -- {RUN_ID}", _md)
 """
 
-_CELL_VECTOR = """# Vector reader + writer benchmark: light *_gbx vs heavy *_ogr (+ row-count parity)
+_CELL_VECTOR = """# Vector reader + writer benchmark: the light *_gbx readers and writers
 # Two-leg pipeline (scaled branch):
 #   Leg 1 (reader): spark.read.format(fmt).load(copies/) -> Delta ingest table (forces
 #     materialization of the full multi-file corpus into one queryable table per format).
@@ -3162,9 +3151,8 @@ _CELL_VECTOR = """# Vector reader + writer benchmark: light *_gbx vs heavy *_ogr
 from databricks.labs.gbx.bench import readers as _rd
 if VECTOR_SCALE:
     # Scaled corpus: 1M-row seed per format.  The READ path is the copies/ directory so
-    # BOTH tiers enumerate N copies and read them in parallel -- a fair all-format
-    # light-vs-heavy comparison.  Shapefile and FileGDB copies are self-contained zips
-    # (.shp.zip / .gdb.zip) so the heavy OGR dir-read sees each copy as one file.
+    # the reader enumerates N copies and reads them in parallel.  Shapefile and FileGDB
+    # copies are self-contained zips (.shp.zip / .gdb.zip).
     # Writer source is the shared pre-materialized Delta table (WRITER_ROWS polygons).
     _vscale_base = f"{CORPUS}/vector-scale"
     # Fresh Delta state each run: drop the writer-source + per-format ingest tables so each
@@ -3172,23 +3160,17 @@ if VECTOR_SCALE:
     # in the catalog between repeat benchmarks. Dropped again at the end (cleanup).
     _bench_tbls = ["geospatial_docs.geobrix.bench_vec_wsrc"] + [
         f"geospatial_docs.geobrix.bench_vec_ingest_{_f}"
-        for _f in (
-            "geojson_gbx", "geojson_ogr", "shapefile_gbx", "shapefile_ogr",
-            "gpkg_gbx", "gpkg_ogr", "file_gdb_gbx", "file_gdb_ogr",
-        )
+        for _f in ("geojson_gbx", "shapefile_gbx", "gpkg_gbx", "file_gdb_gbx")
     ]
     for _t in _bench_tbls:
         spark.sql(f"DROP TABLE IF EXISTS {_t}")
     _vcases = [
-        # (light_fmt, heavy_fmt, read_path, heavy_options)
-        ("geojson_gbx",  "geojson_ogr",  _vscale_base + "/geojson_gbx/copies",   {"multi": "false"}),
-        ("shapefile_gbx", "shapefile_ogr", _vscale_base + "/shapefile_gbx/copies", {}),
-        ("gpkg_gbx",     "gpkg_ogr",     _vscale_base + "/gpkg_gbx/copies",      {}),
-        # FileGDB reads the single seed.gdb.zip for BOTH tiers: the heavy OGR reader opens
-        # one FileGDB datasource, not a directory of them. (light *_gbx CAN dir-read a folder
-        # of .gdb.zip -- a light-only capability noted in the docs.) Single-archive keeps the
-        # light-vs-heavy comparison fair and avoids the heavy dir-read error.
-        ("file_gdb_gbx", "file_gdb_ogr", _vscale_base + "/file_gdb_gbx/seed.gdb.zip",  {}),
+        # (fmt, read_path)
+        ("geojson_gbx",  _vscale_base + "/geojson_gbx/copies"),
+        ("shapefile_gbx", _vscale_base + "/shapefile_gbx/copies"),
+        ("gpkg_gbx",     _vscale_base + "/gpkg_gbx/copies"),
+        # FileGDB reads the single seed.gdb.zip (light *_gbx can also dir-read a folder of .gdb.zip).
+        ("file_gdb_gbx", _vscale_base + "/file_gdb_gbx/seed.gdb.zip"),
     ]
     if VECTOR_FORMATS:
         _sel = set(f.strip() for f in VECTOR_FORMATS.split(",") if f.strip())
@@ -3202,35 +3184,13 @@ if VECTOR_SCALE:
         from databricks.labs.gbx.bench.corpus_vector import generate_polygon_seed
         generate_polygon_seed(spark, WRITER_ROWS).write.format("delta").mode("overwrite").saveAsTable(_wsrc_tbl)
     _vrows = []
-    for _lfmt, _hfmt, _vp, _hopts in _vcases:
+    for _lfmt, _vp in _vcases:
         if LIGHTWEIGHT and _do_read:
             _it = f"geospatial_docs.geobrix.bench_vec_ingest_{_lfmt}"
             _r = _rd.run_format_read(spark, _vp, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
                                      api="lightweight", fmt=_lfmt, ingest_table=_it,
                                      where="cluster")
             _sink([_r]); lw.append(_r); _vrows.append(_r)
-        # The heavy OGR FileGDB reader reads native Esri .gdb/.gdb.zip but not the GeoBrix-
-        # generated .gdb.zip archive -- skip its heavy leg (FileGDB heavy-read is reported as
-        # native-archive-only; light reads the generated corpus, incl. a directory of them).
-        _heavy_ok = _hfmt != "file_gdb_ogr"
-        if HEAVYWEIGHT and _heavy_ok and _do_read:
-            _it = f"geospatial_docs.geobrix.bench_vec_ingest_{_hfmt}"
-            _r = _rd.run_format_read(spark, _vp, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
-                                     api="heavyweight", fmt=_hfmt, options=(_hopts or None),
-                                     ingest_table=_it, where="cluster")
-            _sink([_r]); hw.append(_r); _vrows.append(_r)
-        if LIGHTWEIGHT and HEAVYWEIGHT and _heavy_ok and _do_read:
-            # Non-fatal parity: a single format's mismatch/failure must NOT abort the whole
-            # vector bench -- record it and continue so the other formats + the writer leg run.
-            try:
-                _lc = spark.read.format(_lfmt).load(_vp).count()
-                _hr = spark.read.format(_hfmt)
-                for _k, _v in (_hopts or {}).items():
-                    _hr = _hr.option(_k, _v)
-                _hc = _hr.load(_vp).count()
-                print(f"VECTOR PARITY {_lfmt}: light={_lc} heavy={_hc} {'PASS' if _lc==_hc else 'FAIL'}")
-            except Exception as _e:  # noqa: BLE001
-                print(f"VECTOR PARITY {_lfmt}: ERROR {type(_e).__name__}: {str(_e)[:120]}")
         if LIGHTWEIGHT and _do_write:
             _w = _rd.run_vector_write(spark, _wsrc_tbl, f"{OUT}/vecwrite/{_lfmt}", RUN_ID,
                                       SPARK_WARMUP, SPARK_MEASURED, fmt=_lfmt,
@@ -3241,40 +3201,19 @@ if VECTOR_SCALE:
         spark.sql(f"DROP TABLE IF EXISTS {_t}")
 else:
     _vbase = f"{CORPUS}/vector"
-    # (light_fmt, heavy_fmt, read_path, seed_path, heavy_options).
-    # The heavy geojson_ogr reader defaults to the GeoJSONSeq driver, so force multi=false
-    # to read the standard FeatureCollection corpus file (matching the light geojson_gbx
-    # GeoJSON-driver reader) for a fair comparison.
+    # (fmt, read_path, seed_path).
     _vcases = [
-        ("geojson_gbx",  "geojson_ogr",  _vbase + "/nyc_boroughs.geojson", _vbase + "/nyc_boroughs.geojson", {"multi": "false"}),
-        ("shapefile_gbx", "shapefile_ogr", _vbase + "/nyc_subway.shp.zip",  _vbase + "/nyc_subway.shp.zip",   {}),
-        ("gpkg_gbx",     "gpkg_ogr",     _vbase + "/nyc_complete.gpkg",    _vbase + "/nyc_complete.gpkg",    {}),
-        ("file_gdb_gbx", "file_gdb_ogr", _vbase + "/NYC_Sample.gdb.zip",   _vbase + "/NYC_Sample.gdb.zip",   {}),
+        ("geojson_gbx",  _vbase + "/nyc_boroughs.geojson", _vbase + "/nyc_boroughs.geojson"),
+        ("shapefile_gbx", _vbase + "/nyc_subway.shp.zip",  _vbase + "/nyc_subway.shp.zip"),
+        ("gpkg_gbx",     _vbase + "/nyc_complete.gpkg",    _vbase + "/nyc_complete.gpkg"),
+        ("file_gdb_gbx", _vbase + "/NYC_Sample.gdb.zip",   _vbase + "/NYC_Sample.gdb.zip"),
     ]
     _vrows = []
-    for _lfmt, _hfmt, _vp, _vseed, _hopts in _vcases:
+    for _lfmt, _vp, _vseed in _vcases:
         if LIGHTWEIGHT:
             _r = _rd.run_format_read(spark, _vp, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
                                      api="lightweight", fmt=_lfmt, where="cluster")
             _sink([_r]); lw.append(_r); _vrows.append(_r)
-        if HEAVYWEIGHT:
-            _r = _rd.run_format_read(spark, _vp, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
-                                     api="heavyweight", fmt=_hfmt, options=(_hopts or None),
-                                     where="cluster")
-            _sink([_r]); hw.append(_r); _vrows.append(_r)
-        if LIGHTWEIGHT and HEAVYWEIGHT:
-            # Non-fatal parity: a single format's mismatch/failure must NOT abort the whole
-            # vector bench -- record it and continue so the other formats + the writer leg run.
-            try:
-                _lc = spark.read.format(_lfmt).load(_vp).count()
-                _hr = spark.read.format(_hfmt)
-                for _k, _v in (_hopts or {}).items():
-                    _hr = _hr.option(_k, _v)
-                _hc = _hr.load(_vp).count()
-                print(f"VECTOR PARITY {_lfmt}: light={_lc} heavy={_hc} {'PASS' if _lc==_hc else 'FAIL'}")
-            except Exception as _e:  # noqa: BLE001
-                print(f"VECTOR PARITY {_lfmt}: ERROR {type(_e).__name__}: {str(_e)[:120]}")
-        if LIGHTWEIGHT:
             _w = _rd.run_vector_write(spark, _vseed, f"{OUT}/vecwrite/{_lfmt}", RUN_ID,
                                       SPARK_WARMUP, SPARK_MEASURED, fmt=_lfmt, where="cluster")
             _sink([_w]); lw.append(_w); _vrows.append(_w)

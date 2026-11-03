@@ -249,7 +249,7 @@ def netcdf_tile_df_heavy(spark):
 # ---------------------------------------------------------------------------
 
 # view name -> tile-df builder, one mapping per tier. The builder loads the same
-# committed fixture the documented named reader would (gtiff_gbx/gtiff_gdal etc.).
+# committed fixture the documented named reader would (gtiff_gbx etc.).
 _SETUP_VIEWS_LIGHT = {
     "rasters": single_band_tile_df,
     "multiband_rasters": multiband_tile_df,

@@ -4,9 +4,8 @@ replicates each seed into a per-format directory on the bench Volume. Runs local
 (small scale) and on the bench cluster (full scale).
 
 Shapefile and FileGDB seeds+copies are stored as self-contained zip archives
-(.shp.zip / .gdb.zip) so both the light (*_gbx) and heavy (*_ogr) readers can read
-a directory of copies -- the heavy OGR dir-read requires each entry to be a single
-self-contained file."""
+(.shp.zip / .gdb.zip) so the light (*_gbx) readers can read
+a directory of copies."""
 
 from __future__ import annotations
 

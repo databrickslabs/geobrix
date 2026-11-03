@@ -11,7 +11,7 @@ object TileStructureExamples {
     """import org.apache.spark.sql.functions._
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 
-val df = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val df = spark.read.format("binaryFile").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif").select(col("path"), call_function("gbx_rst_fromcontent", col("content"), lit("GTiff")).alias("tile"))
 
 // Access individual fields
 df.select(

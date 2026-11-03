@@ -29,19 +29,15 @@ COLOR_TABLE_PATH = str(_color_table_path())
 # Common setup: create the temp views the SQL examples read from. Point the
 # paths at your own rasters — GTIFF_SAMPLE_DIR (single-band) is the default;
 # GTIFF_MULTI_DIR, DTM_DIR, and NETCDF_DIR back the band-math/terrain/subdataset
-# examples. GeoTIFFs use the `gdal` reader; NetCDF uses `netcdf_gdal`.
+# examples. GeoTIFFs use the `raster_gbx` reader; NetCDF uses `netcdf_gbx`.
 RASTERX_SQL_SETUP = f"""-- After registering RasterX (Python: rx.register(spark)), create the views:
-CREATE OR REPLACE TEMP VIEW rasters AS
-SELECT * FROM gdal.`{SAMPLE_RASTER_PATH}`;              -- GTIFF_SAMPLE_DIR (single-band)
+CREATE OR REPLACE TEMP VIEW rasters USING raster_gbx OPTIONS (path '{SAMPLE_RASTER_PATH}');              -- GTIFF_SAMPLE_DIR (single-band)
 
-CREATE OR REPLACE TEMP VIEW multiband_rasters AS
-SELECT * FROM gdal.`{MULTIBAND_RASTER_PATH}`;           -- GTIFF_MULTI_DIR
+CREATE OR REPLACE TEMP VIEW multiband_rasters USING raster_gbx OPTIONS (path '{MULTIBAND_RASTER_PATH}');           -- GTIFF_MULTI_DIR
 
-CREATE OR REPLACE TEMP VIEW dem_rasters AS
-SELECT * FROM gdal.`{DEM_RASTER_PATH}`;                 -- DTM_DIR
+CREATE OR REPLACE TEMP VIEW dem_rasters USING raster_gbx OPTIONS (path '{DEM_RASTER_PATH}');                 -- DTM_DIR
 
-CREATE OR REPLACE TEMP VIEW netcdf_rasters AS
-SELECT * FROM netcdf_gdal.`{NETCDF_RASTER_PATH}`;       -- NETCDF_DIR"""
+CREATE OR REPLACE TEMP VIEW netcdf_rasters USING netcdf_gbx OPTIONS (path '{NETCDF_RASTER_PATH}');       -- NETCDF_DIR"""
 
 RASTERX_SQL_SETUP_output = """
 Views `rasters`, `multiband_rasters`, `dem_rasters`, and `netcdf_rasters` created.

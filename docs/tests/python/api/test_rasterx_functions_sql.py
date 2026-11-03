@@ -106,7 +106,7 @@ def multiband_rasters_view(spark):
         from _fixtures import multiband_path  # noqa: PLC0415
 
         path = str(multiband_path())
-        rasters = spark.read.format("gdal").load(path)
+        rasters = spark.read.format("raster_gbx").load(path)
         view_df = (
             rasters.withColumnRenamed("source", "path")
             if "source" in rasters.columns
@@ -149,10 +149,9 @@ def dem_rasters_view(spark):
     from _fixtures import dem_path  # noqa: PLC0415
 
     # Build the tile column with binaryFile + rst_fromcontent (same robust path
-    # as the `rasters` view) rather than the heavy `gdal` reader, whose
-    # registration state across the full suite can intermittently yield an empty
-    # view — which silently degraded `tile` to raw BINARY and made terrain SQL
-    # fail with a misleading RST_*.eval "wrong argument types" error.
+    # as the `rasters` view) rather than a data source reader, so a
+    # missing registration cannot yield an empty view — which would silently degrade `tile` to raw BINARY and
+    # make terrain SQL fail with a misleading RST_*.eval "wrong argument types" error.
     path = str(dem_path())
     binary_df = spark.read.format("binaryFile").load(path)
     view_df = binary_df.select(
@@ -175,7 +174,7 @@ def netcdf_rasters_view(spark):
         from _fixtures import netcdf_path  # noqa: PLC0415
 
         path = str(netcdf_path())
-        rasters = spark.read.format("netcdf_gdal").load(path)
+        rasters = spark.read.format("netcdf_gbx").load(path)
         view_df = (
             rasters.withColumnRenamed("source", "path")
             if "source" in rasters.columns
@@ -919,7 +918,7 @@ def london_rasters_view(spark):
 
     path = f"{SAMPLE_DATA_BASE}/london/elevation/srtm_n51w001.tif"
     try:
-        df = spark.read.format("gdal").load(path)
+        df = spark.read.format("raster_gbx").load(path)
         if df.count() == 0:
             pytest.skip(f"London sample raster not available at {path}")
     except Exception as e:  # pragma: no cover - env-dependent
@@ -962,7 +961,7 @@ def london_rasters(spark):
 
     path = f"{SAMPLE_DATA_BASE}/london/elevation/srtm_n51w001.tif"
     try:
-        df = spark.read.format("gdal").load(path)
+        df = spark.read.format("raster_gbx").load(path)
         if df.count() == 0:
             pytest.skip(f"London sample raster not available at {path}")
         return df

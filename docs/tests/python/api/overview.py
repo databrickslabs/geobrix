@@ -75,7 +75,7 @@ def pattern_import_register(spark):
     gbx_manager.register_family(spark, ('gbx_rst_',))
     
     # Load rasters (sample data from mounted Volumes)
-    rasters = spark.read.format("gdal").load(SAMPLE_NYC_RASTER)
+    rasters = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER)
     
     # Use in DataFrame operations
     df = rasters.select(rx.rst_boundingbox("tile"))
@@ -94,7 +94,7 @@ def pattern_mixed_language(spark):
     gbx_manager.register_family(spark, ('gbx_rst_',))
     
     # Load rasters (sample data from mounted Volumes)
-    rasters = spark.read.format("gdal").load(SAMPLE_NYC_RASTER)
+    rasters = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER)
     
     # Use in Python
     python_result = rasters.select(rx.rst_boundingbox("tile"))
@@ -118,7 +118,7 @@ def pattern_chaining_operations(spark):
     gbx_manager.register_family(spark, ('gbx_rst_',))
     
     # Load rasters (sample data from mounted Volumes)
-    rasters = spark.read.format("gdal").load(SAMPLE_NYC_RASTER)
+    rasters = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER)
     
     # Chain multiple operations
     result = (
@@ -189,7 +189,7 @@ def performance_use_dataframe_api(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     gbx_manager.register_family(spark, ('gbx_rst_',))
     
-    df = spark.read.format("gdal").load(SAMPLE_NYC_RASTER)
+    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER)
     
     # Prefer DataFrame API for complex operations
     result = df.select(rx.rst_boundingbox("tile"))
@@ -206,7 +206,7 @@ def performance_batch_operations(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     gbx_manager.register_family(spark, ('gbx_rst_',))
     
-    df = spark.read.format("gdal").load(SAMPLE_NYC_RASTER)
+    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER)
     
     # Process multiple columns at once
     result = df.select(

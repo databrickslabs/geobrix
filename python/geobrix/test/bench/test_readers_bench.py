@@ -4,6 +4,7 @@ import os
 from unittest.mock import patch
 
 import numpy as np
+import pytest
 import rasterio
 from rasterio.transform import from_origin
 
@@ -46,9 +47,7 @@ def test_pure_local_reader_bench_emits_result(tmp_path):
 
 # ---------------------------------------------------------------------------
 # sizeInMB passthrough: run_format_read must set the sizeInMB reader option for
-# the heavy raster formats (netcdf_gdal / gdal / gtiff_gdal), not only for the
-# light raster_gbx reader. The netcdf raster leg passes size_mib=-1 (one tile
-# per grid var) so the heavy reader matches the light reader's granularity.
+# the light raster_gbx reader.
 # ---------------------------------------------------------------------------
 
 
@@ -87,42 +86,26 @@ class _StubSpark:
         self.read = _StubReadNamespace(self.sink)
 
 
-def test_run_format_read_passes_sizeinmb_to_netcdf_gdal():
+@pytest.mark.parametrize("size_mib", [-1, 32])
+def test_run_format_read_passes_sizeinmb_to_raster_gbx(size_mib):
     spark = _StubSpark()
-    r = readers.run_format_read(
-        spark,
-        "/tmp/netcdf",
-        run_id="t",
-        warmup=1,
-        measured=1,
-        api="heavyweight",
-        fmt="netcdf_gdal",
-        options={"filterRegex": r".*\.nc$"},
-        size_mib=-1,
-        where="venv",
-    )
-    assert r.status == "ok", f"expected ok, got: {r.note}"
-    # The heavy raster reader must have received the sizeInMB knob (=-1 here).
-    assert spark.sink["options"].get("sizeInMB") == "-1"
-    # Explicit format-passed options are still applied.
-    assert spark.sink["options"].get("filterRegex") == r".*\.nc$"
-
-
-def test_run_format_read_passes_sizeinmb_to_gdal_and_gtiff_gdal():
-    for fmt in ("gdal", "gtiff_gdal"):
-        spark = _StubSpark()
-        readers.run_format_read(
+    with patch("databricks.labs.gbx.manager.register_sources"):
+        r = readers.run_format_read(
             spark,
             "/tmp/x",
             run_id="t",
             warmup=1,
             measured=1,
-            api="heavyweight",
-            fmt=fmt,
-            size_mib=32,
+            api="lightweight",
+            fmt="raster_gbx",
+            options={"filterRegex": r".*\.tif$"},
+            size_mib=size_mib,
             where="venv",
         )
-        assert spark.sink["options"].get("sizeInMB") == "32", f"{fmt} missing sizeInMB"
+    assert r.status == "ok", f"expected ok, got: {r.note}"
+    assert spark.sink["options"].get("sizeInMB") == str(size_mib)
+    # Explicit format-passed options are still applied.
+    assert spark.sink["options"].get("filterRegex") == r".*\.tif$"
 
 
 # ---------------------------------------------------------------------------

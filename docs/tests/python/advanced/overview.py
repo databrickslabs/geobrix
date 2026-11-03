@@ -37,7 +37,7 @@ def spark_expressions_standard_usage(spark):
 
     gbx_manager.register_family(spark, ('gbx_rst_',))
     # Uses Spark's columnar expression engine
-    rasters = spark.read.format("gdal").load(_RASTER_PATH)
+    rasters = spark.read.format("raster_gbx").load(_RASTER_PATH)
     df = rasters.select(rx.rst_boundingbox("tile").alias("bbox"))
     df.limit(3).show(truncate=40)
     return df
@@ -67,7 +67,7 @@ def end_to_end_advanced_pipeline(spark):
     # !gdalwarp -t_srs EPSG:4326 input.tif reprojected.tif
     
     # 2. Read with GeoBrix
-    rasters = spark.read.format("gdal").load("/data/reprojected.tif")
+    rasters = spark.read.format("raster_gbx").load("/data/reprojected.tif")
     
     # 3. Apply custom UDF for specialized logic
     from databricks.labs.gbx.rasterx.expressions.accessors import RST_Metadata

@@ -88,7 +88,7 @@ class SetSpec:
 SETS: Dict[str, SetSpec] = {
     "IO": SetSpec(
         mvp="IO",
-        forms=("b", "c", "udf", "d-py", "d-rs", "floor"),
+        forms=("b", "udf", "d-py", "floor"),
         reference="udf",
         ns=(6, 24, 96),
         corpus_src="/Volumes/main/default/bench-corpus/rows",
@@ -538,7 +538,7 @@ def _jar(root: Optional[str] = None) -> str:
         if found:
             return found[-1]
     raise PreconditionMissing(
-        "no geobrix JAR (python/geobrix/lib or target/); c needs it"
+        "no geobrix JAR (python/geobrix/lib or target/); the pass starts Spark with it"
     )
 
 

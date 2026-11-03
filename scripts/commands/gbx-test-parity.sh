@@ -29,7 +29,7 @@ PARITY_EXCLUDE=(
     "python/geobrix/test/core/test_check_binding_parity.py"      # unit test of the binding-parity checker (gbx:test:bindings)
     "python/geobrix/test/ds/test_vector_writer_parity.py"        # light-only writer round trip, not a tier comparison
     "python/geobrix/test/ds/test_writer_parity.py"               # light-only writer round trip, not a tier comparison
-    "python/geobrix/test/ds/test_reader_parity.py"               # skips by design when the heavy gdal reader yields 0 rows
+    "python/geobrix/test/ds/test_reader_parity.py"               # light-only reader check, not a tier comparison
 )
 
 # norm_path <path>: "./a//b/" and "a/./b" are "a/b", the form PARITY_EXCLUDE and the discovery use.

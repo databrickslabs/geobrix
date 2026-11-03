@@ -80,6 +80,13 @@ def spark_with_geobrix():
     except Exception as e:
         print(f"⚠️  Could not register vectorx functions: {e}")
     
+    # The lightweight readers and writers (raster_gbx, shapefile_gbx, ...) are Python data sources: register them
+    try:
+        gbx_manager.register_sources(spark)
+        print("✅ GeoBrix lightweight data sources registered")
+    except Exception as e:
+        print(f"⚠️  Could not register the lightweight data sources: {e}")
+
     yield spark
     
     # Cleanup

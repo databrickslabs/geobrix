@@ -12,16 +12,11 @@ import com.databricks.labs.gbx.kernels.uc.BngUc
 import com.databricks.labs.gbx.kernels.udf.{BngEastNorthAsBngConnectUdf, BngEastNorthAsBngUdf, BuildInfoConnectUdf, GdalProbeConnectUdf, RstTransformCrsBytesUdf}
 import com.databricks.labs.gbx.rasterx.expressions.agg.mvp.BngRasterizeCellsBytesUdf
 import com.databricks.labs.gbx.expressions.ExpressionConfig
-import com.databricks.labs.gbx.rasterx.expressions.mvp.RST_MvpMaterialize
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver, TileBytes, TileBytesRefused}
-import com.databricks.labs.gbx.rasterx.util.V2Tile
-import com.databricks.labs.gbx.util.NodeFilePathUtil
 import org.apache.spark.sql.Row
-import org.apache.spark.sql.catalyst.expressions.GenericInternalRow
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.test.SilentSparkSession
 import org.gdal.gdalconst.gdalconstConstants
-import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.osr.SpatialReference
 
 import scala.jdk.CollectionConverters._
@@ -311,75 +306,5 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         val rows = BngTessellateJob.transform(spark, polys, 3).collect()
         assert(rows.map(_.getString(0)).toSet == Set("TQ3080", "TQ3180", "TQ3280"))
         assert(rows.forall(r => !r.getBoolean(1)) && math.abs(rows.map(_.getDouble(2)).sum - 2800.0 * 800.0) < 1e-6)
-    }
-
-    test("gbx_mvp_rst_materialize decodes a virtual tile's window as ZSTD, refuses a remote path, and holds nothing") {
-        val dir = Files.createTempDirectory("gbx-materialize")
-        val file = dir.resolve("src.tif")
-        Files.write(file, tinyGTiff())
-        val conf = UTF8String.fromString(ExpressionConfig(spark).toB64)
-        def virtual(path: String, window: Option[(Int, Int, Int, Int)]) = V2Tile.row(
-          cellid = 7L, path = UTF8String.fromString(path),
-          window = window.map { case (c, r, w, h) => new GenericInternalRow(Array[Any](c, r, w, h)) }.orNull)
-        val before = vsimemEntries()
-        // "file:" is not a local path, so the open goes through a node-file copy: the one hold that must come back
-        val remote = s"file:${file.toString}"
-        try {
-            val out = RST_MvpMaterialize.eval(virtual(remote, Some((0, 0, 8, 8))), conf)
-            assert(out.getLong(V2Tile.idx("cellid")) == 7L && V2Tile.getPath(out) == null, "cellid kept, path cleared")
-            val win = V2Tile.getWindow(out)
-            assert((win.getInt(0), win.getInt(1), win.getInt(2), win.getInt(3)) == (0, 0, 8, 8), "window kept")
-            val ds = RasterDriver.readFromBytes(V2Tile.getRaster(out), Map("driver" -> "GTiff"))
-            try {
-                assert(ds.GetRasterXSize == 8 && ds.GetRasterYSize == 8, "an 8 x 8 tile")
-                assert(ds.GetMetadata_Dict("IMAGE_STRUCTURE").get("COMPRESSION") == "ZSTD")
-            } finally RasterDriver.releaseDataset(ds)
-            assert(NodeFilePathUtil.readersOf(remote) == 0, "the node-file lease came back")
-            // a tile with bytes already, and one that is not a raster
-            assert(RST_MvpMaterialize.eval(out, conf) eq out, "a materialized tile is returned as it is")
-            Files.write(dir.resolve("bad.tif"), "not a raster".getBytes("UTF-8"))
-            val bad = RST_MvpMaterialize.eval(virtual(s"file:${dir.resolve("bad.tif")}", None), conf)
-            assert(V2Tile.getRaster(bad) == null && V2Tile.getMetadata(bad) != null, "an error tile")
-            assert(NodeFilePathUtil.readersOf(s"file:${dir.resolve("bad.tif")}") == 0, "the lease came back on a failed open")
-            // a path from data may not name a remote location
-            val refused = RST_MvpMaterialize.eval(virtual("/vsicurl/https://example.com/x.tif", None), conf)
-            assert(V2Tile.getRaster(refused) == null, "a remote location is refused")
-            // a plain local path decodes the whole file (no window): the tile keeps its cellid and gets bytes
-            val whole = RST_MvpMaterialize.eval(virtual(file.toString, None), conf)
-            assert(V2Tile.getRaster(whole) != null && V2Tile.getWindow(whole) == null && V2Tile.getPath(whole) == null, "a whole-file decode")
-            assert(whole.getLong(V2Tile.idx("cellid")) == 7L)
-            // the error tile says why: a scheme without "//" is a remote location too (the light gate reads it by urlsplit), a
-            // clip or a pending instruction is not applied, a window must lie inside the raster (also when its sum overflows Int)
-            def whyNot(out: org.apache.spark.sql.catalyst.InternalRow): String = {
-                assert(V2Tile.getRaster(out) == null, "an error tile")
-                val md = com.databricks.labs.gbx.util.SerializationUtil.createMap[String, String](V2Tile.getMetadata(out))
-                md("last_error")
-            }
-            for (p <- Seq("hdfs:/n/x.tif", "https:example.com/x.tif", "HTTP:x/y.tif", "ftp://h/x.tif", "/vsizip//vsicurl/https://h/x.zip"))
-                assert(RST_MvpMaterialize.remoteLocation(p).isDefined && whyNot(RST_MvpMaterialize.eval(virtual(p, None), conf)).contains("remote location"), p)
-            // the same verdicts as `_gdal_policy.remote_location` where Java and Python differ in character handling: a
-            // trailing "+" is an empty scheme part (refused), Python's IGNORECASE folds U+017F and the Kelvin sign into [a-z],
-            // and its \s (the "/vsi" lookbehind) matches NBSP and U+001C
-            for (p <- Seq("s3+://x", "\u017f3://x", "\u212aa://x", "\u00a0/vsicurl/https://h/x", "\u001c/vsicurl/https://h/x",
-                          "X\u00a0/vsicurl/x"))
-                assert(RST_MvpMaterialize.remoteLocation(p).isDefined, s"refused as the light gate refuses it: ${p.map(_.toInt.toHexString).mkString(" ")}")
-            assert(RST_MvpMaterialize.remoteLocation("\u00a0/vsis3/b/k").isEmpty, "an allowed /vsi name after a NBSP")
-            for (p <- Seq("s3://b/k.tif", "abfss://c@a.dfs.core.windows.net/k.tif", "dbfs:/Volumes/c/s/v/a.tif", "file:/tmp/a.tif",
-                          "/Volumes/c/s/v/a.tif", "rel/a.tif", "C:\\x\\a.tif", "/vsizip//Volumes/c/s/v/a.zip"))
-                assert(RST_MvpMaterialize.remoteLocation(p).isEmpty, p)
-            val pending = V2Tile.row(cellid = 7L, path = UTF8String.fromString(file.toString),
-              metadata = com.databricks.labs.gbx.util.SerializationUtil.toMapData[String, String](Map("pending_nodata" -> "0")))
-            assert(whyNot(RST_MvpMaterialize.eval(pending, conf)).contains("pending instruction"))
-            val clipped = V2Tile.row(cellid = 7L, path = UTF8String.fromString(file.toString), clipPolygon = Array[Byte](1, 2))
-            assert(whyNot(RST_MvpMaterialize.eval(clipped, conf)).contains("clip"))
-            for (w <- Seq((8, 8, 16, 16), (-1, 0, 4, 4), (0, 0, 0, 4), (2000000000, 0, 2000000000, 1), (0, 2000000000, 1, 2000000000)))
-                assert(whyNot(RST_MvpMaterialize.eval(virtual(file.toString, Some(w)), conf)).contains("is not inside"), w.toString)
-            assert(NodeFilePathUtil.readersOf(file.toString) == 0, "no hold left by the refusals")
-            assert(vsimemEntries() == before, "in-memory GDAL files left behind")
-        } finally {
-            Files.deleteIfExists(file)
-            Files.deleteIfExists(dir.resolve("bad.tif"))
-            Files.deleteIfExists(dir)
-        }
     }
 }

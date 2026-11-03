@@ -2,7 +2,7 @@
 Integration tests for Quick Start examples that require DBR or integration env.
 
 These tests are physically in integration/ and marked @pytest.mark.integration.
-They require Databricks Runtime (CREATE VIEW from shapefile_ogr, st_geomfromwkb)
+They require Databricks Runtime (CREATE VIEW from shapefile_gbx, st_geomfromwkb)
 or data at /data/ paths. Run with -m integration or --include-integration.
 
 Source examples: docs/tests/python/quickstart/examples.py
@@ -32,7 +32,7 @@ def _strip_sql_comment_lines(stmt):
 
 @pytest.mark.integration
 def test_exec_sql_read_and_use_snippet(spark):
-    """Quick-start SQL_READ_AND_USE: create view from shapefile, then SELECT. DBR-only (CREATE VIEW from shapefile_ogr)."""
+    """Quick-start SQL_READ_AND_USE: create view from shapefile, then SELECT. DBR-only (CREATE VIEW from shapefile_gbx)."""
     examples = _load_quickstart_examples()
     for stmt in examples.SQL_READ_AND_USE.strip().split(";"):
         stmt = _strip_sql_comment_lines(stmt)

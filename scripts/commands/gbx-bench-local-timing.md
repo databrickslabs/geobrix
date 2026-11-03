@@ -27,7 +27,7 @@ The plain pass takes about 70 seconds on a 12-core arm64 laptop. `--baseline` an
 - Starts Spark without the `GDAL_DISABLE_READDIR_ON_OPEN=TRUE` that importing pyrx sets in the driver. A JVM started with it hands it to the Python workers. There it reads as a value you set, which turns the per-file sidecar mode off. A value you export yourself is kept.
 - Checks for a built JAR and the Rust payload (`GBX_NATIVE_ROOT`, default `build/env-wheel/env6/payload`). A missing one prints `PRECONDITION MISSING` and exits 2; so does a corpus with fewer than 96 tiles, a missing baseline, or a baseline of another set.
 - Copies 96 tiles from `/Volumes/main/default/bench-corpus/rows` to `/tmp/gbx-local-timing/IO/rows` in the container, once.
-- Runs forms `b`, `c`, `udf`, `d-py`, `d-rs` and `floor` at n = 6, 24 and 96. A dropped warmup pass comes first, then `--repeats` measured runs of each n.
+- Runs forms `b`, `udf`, `d-py` and `floor` at n = 6, 24 and 96. A dropped warmup pass comes first, then `--repeats` measured runs of each n.
 - Prints the median seconds per n, the ratio to `floor`, the ratio to `udf` and t96/t24. With more than one run it also prints each form's cost per tile in every run and the max/min spread.
 
 **Exit codes:** `0` no flags, `1` the pass flagged a form, `2` a precondition is missing (or a usage error), `3` the pass itself failed.

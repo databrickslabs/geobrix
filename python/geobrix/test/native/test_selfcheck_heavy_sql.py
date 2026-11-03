@@ -1,4 +1,4 @@
-"""``_selfcheck.heavy_sql`` hands the heavy reader a complete Shapefile.
+"""``_selfcheck.heavy_sql`` hands the Shapefile reader a complete Shapefile.
 
 A Shapefile is written non-sequentially: its ``.shx`` and ``.dbf`` headers are rewritten when the
 writer closes. A ``/Volumes`` FUSE mount cannot do that, so a Shapefile written straight onto it holds
@@ -50,6 +50,9 @@ class _Spark:
 
 
 def _offline(monkeypatch):
+    from databricks.labs.gbx import manager
+
+    monkeypatch.setattr(manager, "register_sources", lambda spark, only=None: [])
     monkeypatch.setattr(_selfcheck, "_heavy_register", lambda spark: None)
     monkeypatch.setattr(
         _selfcheck,

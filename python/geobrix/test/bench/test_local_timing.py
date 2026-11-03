@@ -13,8 +13,8 @@ from databricks.labs.gbx.bench import local_timing as lt
 
 NS = (6, 24, 96)
 GOOD = {  # seconds at n = 6 / 24 / 96: the validated run after the topology fix, every form scaling with n
-    "b": (1.0, 1.9, 5.5), "c": (1.6, 2.6, 7.4), "udf": (1.5, 2.5, 7.0),
-    "d-py": (2.4, 5.5, 17.0), "d-rs": (2.0, 4.2, 12.4), "floor": (1.5, 1.5, 1.6),
+    "b": (1.0, 1.9, 5.5), "udf": (1.5, 2.5, 7.0),
+    "d-py": (2.4, 5.5, 17.0), "floor": (1.5, 1.5, 1.6),
 }  # fmt: skip
 
 
@@ -37,8 +37,9 @@ def test_a_form_that_does_not_scale_with_n_is_flagged_as_decoding_more_than_n():
 
 
 def test_a_form_that_is_non_linear_is_flagged():
-    (flag,) = _flags(_res(**{"d-py": (2.0, 2.5, 18.0)}))  # t96/t24 = 7.2 (4 expected)
-    assert flag.startswith("d-py: non-linear") and "7.20" in flag
+    flags = _flags(_res(**{"d-py": (2.0, 2.5, 18.0)}))  # t96/t24 = 7.2 (4 expected)
+    (flag,) = [f for f in flags if f.startswith("d-py: non-linear")]
+    assert "7.20" in flag
 
 
 def test_growth_below_linear_is_normal_with_a_fixed_cost_but_a_flat_time_is_not():
@@ -50,22 +51,22 @@ def test_growth_below_linear_is_normal_with_a_fixed_cost_but_a_flat_time_is_not(
 
 
 def test_a_form_more_than_k_times_the_row_udf_is_flagged_and_k_is_overridable():
-    res = _res(**{"d-rs": (3.0, 9.0, 36.0)})
-    assert any(f.startswith("d-rs: 5.1x the row UDF at n=96") for f in _flags(res))
+    res = _res(**{"d-py": (3.0, 9.0, 36.0)})
+    assert any(f.startswith("d-py: 5.1x the row UDF at n=96") for f in _flags(res))
     assert not any("the row UDF" in f for f in _flags(res, k=6.0))
 
 
 def test_a_form_whose_cost_per_tile_is_more_than_k_times_its_peers_is_flagged():
     flags = _flags(
-        _res(b=(3.0, 11.0, 44.0))
-    )  # per tile ~440 ms against its peers' median ~108 ms
+        _res(b=(6.0, 22.0, 88.0))
+    )  # per tile ~900 ms against its peers' median ~160 ms
     assert [f for f in flags if f.startswith("b: per-tile")]
 
 
 def test_a_form_that_failed_is_a_flag_not_a_crash():
-    flags = _flags(_res(**{"d-rs": (2.0, float("nan"), 12.4)}))
+    flags = _flags(_res(**{"d-py": (2.0, float("nan"), 12.4)}))
     assert flags == [
-        "d-rs: no time at n=24 (the form failed, was skipped or timed 0 s)"
+        "d-py: no time at n=24 (the form failed, was skipped or timed 0 s)"
     ]
 
 
@@ -220,9 +221,9 @@ def test_measure_warms_up_at_the_smallest_n_keeps_the_measured_run_and_turns_a_f
                     failure_mode="",
                     note="",
                 )
-                if f.variant != "d-rs"
+                if f.variant != "d-py"
                 else R(
-                    form="d-rs",
+                    form="d-py",
                     iter_median_s=0.0,
                     status="error",
                     failure_mode="boom",
@@ -240,8 +241,8 @@ def test_measure_warms_up_at_the_smallest_n_keeps_the_measured_run_and_turns_a_f
     )  # the set's forms, in its order (floor last)
     assert res[("udf", 6)] == 0.6  # the second pass at 6 overwrote the warmup's 100 s
     assert res[("udf", 96)] == 9.6
-    assert all(math.isnan(res[("d-rs", n)]) for n in spec.ns)
-    assert "d-rs n=6: error boom" in capsys.readouterr().out
+    assert all(math.isnan(res[("d-py", n)]) for n in spec.ns)
+    assert "d-py n=6: error boom" in capsys.readouterr().out
 
 
 # ---- the stored per-form baseline: a per-tile regression under K x is caught
@@ -392,10 +393,10 @@ def test_the_median_time_of_three_runs_ignores_the_one_odd_run():
 
 
 def test_a_cell_that_failed_in_any_run_stays_a_failure_in_the_median():
-    bad = {**_scaled(1.0), ("d-rs", 24): float("nan")}
+    bad = {**_scaled(1.0), ("d-py", 24): float("nan")}
     med = lt.median_res([_scaled(1.0), bad, _scaled(1.0)])
     assert (
-        math.isnan(med[("d-rs", 24)]) and med[("udf", 24)] == _scaled(1.0)[("udf", 24)]
+        math.isnan(med[("d-py", 24)]) and med[("udf", 24)] == _scaled(1.0)[("udf", 24)]
     )
 
 

@@ -9,8 +9,8 @@ Tested by: docs/tests/python/sample_data/test_overview.py
 # NYC workflows
 GEOGRAPHIC_COHERENCE_NYC_ZONAL = """# Zonal statistics: Average elevation per borough
 sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
-boroughs = spark.read.format("geojson_ogr").load(f"{sample_path}/nyc/boroughs/nyc_boroughs.geojson")
-elevation = spark.read.format("gdal").load(f"{sample_path}/nyc/elevation/srtm_n40w074.tif")
+boroughs = spark.read.format("geojson_gbx").load(f"{sample_path}/nyc/boroughs/nyc_boroughs.geojson")
+elevation = spark.read.format("raster_gbx").load(f"{sample_path}/nyc/elevation/srtm_n40w074.tif")
 
 # Spatial join and compute statistics
 borough_elevation = boroughs.join(elevation, "spatial_intersect") \\
@@ -31,8 +31,8 @@ GEOGRAPHIC_COHERENCE_NYC_ZONAL_output = """
 
 GEOGRAPHIC_COHERENCE_NYC_CLIP = """# Clip satellite imagery to taxi zone
 sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
-zones = spark.read.format("geojson_ogr").load(f"{sample_path}/nyc/taxi-zones/nyc_taxi_zones.geojson")
-sentinel = spark.read.format("gdal").load(f"{sample_path}/nyc/sentinel2/nyc_sentinel2_red.tif")
+zones = spark.read.format("geojson_gbx").load(f"{sample_path}/nyc/taxi-zones/nyc_taxi_zones.geojson")
+sentinel = spark.read.format("raster_gbx").load(f"{sample_path}/nyc/sentinel2/nyc_sentinel2_red.tif")
 
 # Clip raster to specific zone
 jfk_zone = zones.filter("LocationID = 132")  # JFK Airport zone
@@ -51,9 +51,9 @@ GEOGRAPHIC_COHERENCE_NYC_CLIP_output = """
 
 GEOGRAPHIC_COHERENCE_NYC_MULTISCALE = """# Multi-scale analysis: Taxi zones within boroughs
 sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
-zones = spark.read.format("geojson_ogr").load(f"{sample_path}/nyc/taxi-zones/nyc_taxi_zones.geojson")
-boroughs = spark.read.format("geojson_ogr").load(f"{sample_path}/nyc/boroughs/nyc_boroughs.geojson")
-neighborhoods = spark.read.format("geojson_ogr").load(f"{sample_path}/nyc/neighborhoods/nyc_nta.geojson")
+zones = spark.read.format("geojson_gbx").load(f"{sample_path}/nyc/taxi-zones/nyc_taxi_zones.geojson")
+boroughs = spark.read.format("geojson_gbx").load(f"{sample_path}/nyc/boroughs/nyc_boroughs.geojson")
+neighborhoods = spark.read.format("geojson_gbx").load(f"{sample_path}/nyc/neighborhoods/nyc_nta.geojson")
 
 # Hierarchical spatial joins
 zones_with_context = zones \\
@@ -74,7 +74,7 @@ GEOGRAPHIC_COHERENCE_LONDON_BNG = """from databricks.labs.gbx.gridx.bng import f
 
 sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
 # Index London postcodes to BNG grid
-postcodes = spark.read.format("geojson_ogr").load(f"{sample_path}/london/postcodes/london_postcodes.geojson")
+postcodes = spark.read.format("geojson_gbx").load(f"{sample_path}/london/postcodes/london_postcodes.geojson")
 postcodes_bng = postcodes.withColumn(
     "bng_1km",
     bx.bng_polyfill(f.col("geometry"), f.lit("1km"))

@@ -321,11 +321,9 @@ def test_no_launcher_or_smoke_notebook_names_a_real_workspace_user():
 @pytest.mark.parametrize(
     "launcher",
     [
-        "_netcdf_diag.py",
         "_stage_bench_corpora.py",
         "_stage_distinct_var_corpus.py",
         "_stage_s5p_netcdf_corpus.py",
-        "netcdf_gdal_cluster_validate.py",
     ],
 )
 def test_the_launchers_that_upload_a_runner_notebook_ask_for_the_runner_dir(launcher):
@@ -672,11 +670,9 @@ def test_the_known_launchers_use_submit_once():
         )
     }
     assert users >= {
-        "_netcdf_diag.py",
         "_stage_bench_corpora.py",
         "_stage_distinct_var_corpus.py",
         "_stage_s5p_netcdf_corpus.py",
-        "netcdf_gdal_cluster_validate.py",
         "push_and_run_bench_on_cluster.py",
         "push_and_run_bundle_on_cluster.py",
         "push_and_run_primitive_on_cluster.py",

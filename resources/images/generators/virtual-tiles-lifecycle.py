@@ -450,7 +450,7 @@ def render():
     parts.append(text(x_load + 24, hy, "READERS", size=9, weight=700,
                       fill=ACCENT_LOAD, letter_spacing="1.2"))
     rx = x_load + 22
-    for opt in ["cog_gbx", "gdal", "netcdf_gbx", "…"]:
+    for opt in ["cog_gbx", "raster_gbx", "netcdf_gbx", "…"]:
         c, cw = chip(rx, hy + 10, opt, fg=ACCENT_LOAD, bg=TINT_LOAD,
                      border=ACCENT_LOAD, mono_font=(opt != "…"))
         parts.append(c)

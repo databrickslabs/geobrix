@@ -89,8 +89,7 @@ def pyrx_setup_example(spark):
 
     gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     # Register the lightweight Python DataSource readers (raster_gbx / gtiff_gbx /
-    # netcdf_gbx / cog_gbx). Pure-Python, no JAR — the light-tier counterpart of the
-    # heavy gdal / gtiff_gdal / netcdf_gdal readers.
+    # netcdf_gbx / cog_gbx). Pure-Python, no JAR.
     gbx_manager.register_sources(spark)
 
     GTIFF_SAMPLE_DIR = _SAMPLE_PATHS["gtiff"]

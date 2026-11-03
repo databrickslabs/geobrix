@@ -11,7 +11,7 @@ from . import additional
 @pytest.mark.structure
 def test_synthetic_raster_constant():
     assert isinstance(additional.SYNTHETIC_RASTER, str)
-    assert "gdal" in additional.SYNTHETIC_RASTER
+    assert "raster_gbx" in additional.SYNTHETIC_RASTER
     assert "100x100" in additional.SYNTHETIC_RASTER
     assert "rst_width" in additional.SYNTHETIC_RASTER
 

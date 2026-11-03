@@ -600,7 +600,8 @@ def _jvm_gdal(spark):
 
 
 def heavy_sql(spark, scratch_dir):
-    """The heavy functions over the oracle GeoTIFF (binaryFile) and Shapefile (shapefile_ogr)."""
+    """The heavy functions over the oracle GeoTIFF (binaryFile), and the light Shapefile reader (shapefile_gbx) over the
+    oracle Shapefile."""
     os.makedirs(scratch_dir, exist_ok=True)
     tif = os.path.join(scratch_dir, "gbx-selfcheck.tif")
     with open(tif, "wb") as fh:
@@ -612,7 +613,10 @@ def heavy_sql(spark, scratch_dir):
     size = _size_sql(
         spark, spark.read.format("binaryFile").load(tif), "gbx_selfcheck_heavy"
     )
-    count = spark.read.format("shapefile_ogr").load(shp_dir).count()
+    from databricks.labs.gbx import manager
+
+    manager.register_sources(spark, only=["shapefile"])
+    count = spark.read.format("shapefile_gbx").load(shp_dir).count()
     jvm = _jvm_gdal(spark)
     calc = '{"calc": "A + 1", "A_index": 0, "A_band": 1}'
     try:  # recorded, not gating: heavy band math shells out to gdal_calc.py

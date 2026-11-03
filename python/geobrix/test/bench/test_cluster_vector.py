@@ -34,11 +34,13 @@ def _section_cells(nb):
     ]
 
 
-def test_benchmark_vector_cell_contains_run_format_read_and_parity():
+def test_benchmark_vector_cell_contains_run_format_read():
     nb = cl.build_bench_notebook(_cfg(benchmark_vector=True))
     src = _src(nb)
     assert "run_format_read" in src
-    assert "VECTOR PARITY" in src
+    assert (
+        "VECTOR PARITY" not in src
+    )  # the heavy readers it was compared with are retired
     # Standard fn-bench sections still present (benchmark_vector does NOT suppress them).
     secs = _section_cells(nb)
     assert len(secs) == 4  # both tiers, both modes
@@ -48,7 +50,6 @@ def test_vector_only_omits_per_function_sections():
     nb = cl.build_bench_notebook(_cfg(vector_only=True))
     src = _src(nb)
     assert "run_format_read" in src
-    assert "VECTOR PARITY" in src
     # vector_only must skip per-fn section cells entirely.
     secs = _section_cells(nb)
     assert (
@@ -60,8 +61,6 @@ def test_vector_only_lightweight_only():
     nb = cl.build_bench_notebook(_cfg(vector_only=True, heavyweight=False))
     src = _src(nb)
     assert "run_format_read" in src
-    # No parity check when only one tier runs.
-    assert "VECTOR PARITY" not in src or "LIGHTWEIGHT and HEAVYWEIGHT" in src
 
 
 def test_benchmark_vector_false_no_vector_cell():
@@ -97,14 +96,9 @@ def test_benchmark_vector_preamble_flags_set():
 def test_vector_cell_uses_correct_formats():
     nb = cl.build_bench_notebook(_cfg(benchmark_vector=True))
     src = _src(nb)
-    assert "geojson_gbx" in src
-    assert "geojson_ogr" in src
-    assert "shapefile_gbx" in src
-    assert "shapefile_ogr" in src
-    assert "gpkg_gbx" in src
-    assert "gpkg_ogr" in src
-    assert "file_gdb_gbx" in src
-    assert "file_gdb_ogr" in src
+    for fmt in ("geojson_gbx", "shapefile_gbx", "gpkg_gbx", "file_gdb_gbx"):
+        assert fmt in src
+    assert "_ogr" not in src  # the Scala readers are retired
 
 
 def test_vector_cell_uses_sink_lw_hw_variables():
@@ -113,4 +107,3 @@ def test_vector_cell_uses_sink_lw_hw_variables():
     src = _src(nb)
     assert "_sink([_r])" in src
     assert "lw.append(_r)" in src
-    assert "hw.append(_r)" in src

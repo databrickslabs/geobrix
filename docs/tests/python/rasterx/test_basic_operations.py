@@ -62,7 +62,7 @@ def test_get_raster_metadata_with_sentinel2(spark, sample_nyc_raster):
     - Metadata is complete
     """
     # Load raster
-    rasters_df = spark.read.format("gdal").load(sample_nyc_raster)
+    rasters_df = spark.read.format("raster_gbx").load(sample_nyc_raster)
     if rasters_df.count() == 0:
         pytest.skip("No raster rows; use full bundle or generate minimal bundle")
     
@@ -106,7 +106,7 @@ def test_get_raster_bounds_returns_coordinates(spark, sample_nyc_raster):
     - Bbox is not null (contains geometry data)
     """
     # Load raster
-    rasters_df = spark.read.format("gdal").load(sample_nyc_raster)
+    rasters_df = spark.read.format("raster_gbx").load(sample_nyc_raster)
     if rasters_df.count() == 0:
         pytest.skip("No raster rows; use full bundle or generate minimal bundle")
     
@@ -140,7 +140,7 @@ def test_get_pixel_statistics_calculates_values(spark, sample_nyc_raster):
     - Std is non-negative
     """
     # Load raster
-    rasters_df = spark.read.format("gdal").load(sample_nyc_raster)
+    rasters_df = spark.read.format("raster_gbx").load(sample_nyc_raster)
     if rasters_df.count() == 0:
         pytest.skip("No raster rows; use full bundle or generate minimal bundle")
     
@@ -180,7 +180,7 @@ def test_transform_raster_crs_changes_projection(spark, sample_nyc_raster):
     - Target SRID is applied
     """
     # Load raster
-    rasters_df = spark.read.format("gdal").load(sample_nyc_raster)
+    rasters_df = spark.read.format("raster_gbx").load(sample_nyc_raster)
     if rasters_df.count() == 0:
         pytest.skip("No raster rows; use full bundle or generate minimal bundle")
     
@@ -208,7 +208,7 @@ def test_clip_raster_to_geometry_reduces_extent(spark, sample_nyc_raster):
     Note: Full validation would require comparing extents
     """
     # Load raster
-    rasters_df = spark.read.format("gdal").load(sample_nyc_raster)
+    rasters_df = spark.read.format("raster_gbx").load(sample_nyc_raster)
     if rasters_df.count() == 0:
         pytest.skip("No raster rows; use full bundle or generate minimal bundle")
     
@@ -270,7 +270,7 @@ def test_full_rasterx_workflow(spark, sample_nyc_raster):
     basic_operations.setup_rasterx(spark)
     
     # 2. Load raster
-    rasters_df = spark.read.format("gdal").load(sample_nyc_raster)
+    rasters_df = spark.read.format("raster_gbx").load(sample_nyc_raster)
     if rasters_df.count() == 0:
         pytest.skip("No raster rows; use full bundle or generate minimal bundle")
     

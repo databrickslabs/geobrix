@@ -100,7 +100,7 @@ def rasterx_basic_usage(spark):
 
     gbx_manager.register_family(spark, ('gbx_rst_',))
 
-    raster_df = spark.read.format("gdal").load(raster_path)
+    raster_df = spark.read.format("raster_gbx").load(raster_path)
     
     metadata_df = raster_df.select(
         "source",
@@ -131,7 +131,7 @@ def rasterx_clip_raster(spark):
     
     gbx_manager.register_family(spark, ('gbx_rst_',))
     
-    raster_df = spark.read.format("gdal").load("/path/to/geotiffs")
+    raster_df = spark.read.format("raster_gbx").load("/path/to/geotiffs")
     
     # Clip raster by geometry (WKT or WKB; GeoBrix does not accept st_geomfromtext)
     clipped_df = raster_df.select(
@@ -152,7 +152,7 @@ def rasterx_cataloging_workflow(spark):
     gbx_manager.register_family(spark, ('gbx_rst_',))
     
     # Read all rasters
-    rasters = spark.read.format("gdal").load("/data/satellite_imagery")
+    rasters = spark.read.format("raster_gbx").load("/data/satellite_imagery")
     
     # Build catalog
     catalog = rasters.select(
@@ -181,7 +181,7 @@ def rasterx_processing_pipeline(spark):
     gbx_manager.register_family(spark, ('gbx_rst_',))
     
     # Read rasters
-    rasters = spark.read.format("gdal").load("/data/input")
+    rasters = spark.read.format("raster_gbx").load("/data/input")
     
     # Process: clip, extract metadata (aoi_wkt column holds WKT; GeoBrix does not accept st_geomfromwkt)
     processed = rasters.select(
@@ -209,7 +209,7 @@ def rasterx_multiband_analysis(spark):
     gbx_manager.register_family(spark, ('gbx_rst_',))
     
     # Read multi-band raster (e.g., Landsat)
-    landsat = spark.read.format("gdal").load("/data/landsat")
+    landsat = spark.read.format("raster_gbx").load("/data/landsat")
     
     # Separate bands
     bands = landsat.select(
@@ -242,7 +242,7 @@ def rasterx_tiling_performance(spark):
     gbx_manager.register_family(spark, ('gbx_rst_',))
     
     # Read large raster
-    large_raster = spark.read.format("gdal").option("sizeInMB", "16").load("/data/large.tif")
+    large_raster = spark.read.format("raster_gbx").option("sizeInMB", "16").load("/data/large.tif")
     
     # Tessellate into smaller tiles
     tiles = large_raster.select(
@@ -736,8 +736,7 @@ SQL_RASTERX_USAGE = f"""-- Register functions first in Python/Scala notebook
 -- Then use in SQL
 
 -- Read raster data (sample data path; see Sample Data guide)
-CREATE OR REPLACE TEMP VIEW rasters AS
-SELECT * FROM gdal.`{SAMPLE_RASTER_PATH}`;
+CREATE OR REPLACE TEMP VIEW rasters USING raster_gbx OPTIONS (path '{SAMPLE_RASTER_PATH}');
 
 -- Extract metadata
 SELECT

@@ -155,7 +155,7 @@ All documentation examples that reference sample data use this path. There are n
 **GeoBrix supports `.zip` directly:**
 ```python
 # Read zipped shapefile
-df = spark.read.format("shapefile_ogr").load("/path/to/shapefile.zip")
+df = spark.read.format("shapefile_gbx").load("/path/to/shapefile.zip")
 ```
 
 **Available zipped shapefiles:**
@@ -169,7 +169,7 @@ df = spark.read.format("shapefile_ogr").load("/path/to/shapefile.zip")
 **Standard GeoJSON (FeatureCollection)**
 Use `.option("multi", "false")` for standard GeoJSON files:
 ```python
-df = spark.read.format("geojson_ogr") \
+df = spark.read.format("geojson_gbx") \
     .option("multi", "false") \
     .load("/path/to/file.geojson")
 ```
@@ -177,7 +177,7 @@ df = spark.read.format("geojson_ogr") \
 **GeoJSONSeq (newline-delimited)**
 Default behavior or explicit `.option("multi", "true")`:
 ```python
-df = spark.read.format("geojson_ogr").load("/path/to/file.geojsonl")
+df = spark.read.format("geojson_gbx").load("/path/to/file.geojsonl")
 ```
 
 ## Data Sources

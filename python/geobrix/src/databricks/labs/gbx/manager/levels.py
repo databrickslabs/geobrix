@@ -264,12 +264,19 @@ def order(fn) -> Tuple[str, ...]:
 
 
 def select(
-    fn, caps: Capabilities, override: Optional[Tuple[str, str]] = None
+    fn,
+    caps: Capabilities,
+    override: Optional[Tuple[str, str]] = None,
+    prefer: Optional[str] = None,
 ) -> Choice:
-    """First available level in ``order(fn)`` (or the testing-only override)."""
+    """First available level in ``order(fn)`` (or the testing-only override). ``prefer`` puts one level first when
+    ``fn`` has a row there; unlike ``override`` it is not forced, so an unavailable level falls back to the next.
+    """
     if override is not None:
         return Choice(override[0], override[1], ())
     order_ = order(fn)
+    if prefer in fn.levels:
+        order_ = (prefer,) + tuple(lv for lv in order_ if lv != prefer)
     if not any(lv in fn.levels for lv in order_):
         order_ = ("L3",)
     reasons = []

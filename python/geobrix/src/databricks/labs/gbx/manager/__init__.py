@@ -23,6 +23,7 @@ def register(
     catalog: Optional[str] = None,
     schema: Optional[str] = None,
     _levels: Optional[Dict[str, Tuple[str, str]]] = None,
+    _prefer: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Choice]:
     """Register GeoBrix SQL functions on the best level this session offers.
 
@@ -31,7 +32,8 @@ def register(
     ``only`` limits the names (SQL names or short names, e.g. ``bng_eastnorthasbng``).
     Returns the level chosen for each name. A name no level can serve here is skipped (one line
     says why) and the others still register. A reason that several names share prints once, with a count.
-    ``_levels`` forces a level and is for tests.
+    ``_levels`` forces a level and is for tests. ``_prefer`` (name -> level) tries that level first and falls back
+    as usual when it is unavailable; it is how a name is registered again at the level it already has.
 
     A generator (a function that returns many rows per input) is a table function: call it as
     ``FROM t, LATERAL gbx_...(args)``. That form works at every level. The select-list form
@@ -68,6 +70,7 @@ def register(
         )
         return {}
     overrides = _levels or {}
+    prefer = _prefer or {}
     if overrides or only is None:
         # a forced level, or a full registration, may follow a JAR staged since the last call; the per-name first-use
         # registrations of the Python API (`only=[name]`) keep the session's probes
@@ -79,7 +82,7 @@ def register(
     for n in names:
         fn = man.functions[n]
         try:
-            choice = levels.select(fn, caps, overrides.get(n))
+            choice = levels.select(fn, caps, overrides.get(n), prefer.get(n))
         except levels.NoLevelAvailable as exc:
             # The rest still register; the skipped name is reported once.
             why = "; ".join(r.removeprefix("geobrix: ") for r in exc.reasons)
@@ -136,10 +139,11 @@ def names_at_level(prefixes: Iterable[str], level: str) -> list:
     ``register_family`` when it wants "every function of these prefixes that has this level" (a bench or parity
     leg over a whole family, where some names exist at L3 only)."""
     man = manifest.load()
+    prefixes = (prefixes,) if isinstance(prefixes, str) else tuple(prefixes)
     return [
         n
         for n, f in man.functions.items()
-        if f.status != "mvp" and n.startswith(tuple(prefixes)) and level in f.levels
+        if f.status != "mvp" and n.startswith(prefixes) and level in f.levels
     ]
 
 
@@ -157,11 +161,12 @@ def register_family(
     (with ``only`` or without), so a leg pinned to a level can never fall back to another one without saying so.
     """
     man = manifest.load()
+    prefixes = (prefixes,) if isinstance(prefixes, str) else tuple(prefixes)
     if only is None:
         names = [
             n
             for n, f in man.functions.items()
-            if f.status != "mvp" and n.startswith(tuple(prefixes))
+            if f.status != "mvp" and n.startswith(prefixes)
         ]
     else:
         names = [n if n.lower().startswith("gbx_") else f"gbx_{n}" for n in only]

@@ -298,6 +298,18 @@ def test_override_is_honoured(fn):
     assert levels.select(fn, _caps(), override=(forced, "-")).level == forced
 
 
+def test_a_preferred_level_is_tried_first_and_falls_back_when_unavailable():
+    """``prefer`` is not ``override``: with no JAR the preferred heavy level is skipped, with its reason, and a level
+    the row does not have is ignored."""
+    fn = MAN.functions["gbx_st_transformcrs"]
+    assert (
+        levels.select(fn, _caps(jar=OK_JAR, jar_reason=""), prefer="L1").level == "L1"
+    )
+    choice = levels.select(fn, _caps(), prefer="L1")
+    assert choice.level == "L3" and any("unavailable" in r for r in choice.reasons)
+    assert levels.select(fn, _caps(), prefer="L2").level == "L3"
+
+
 class _Session:
     """A session that records what an install registers (``udf.register``) and runs (``sql``)."""
 
@@ -2957,6 +2969,26 @@ def test_register_family_with_a_level_raises_for_names_without_it(monkeypatch):
         manager.register_family(None, ("gbx_h3_",), only=[name], level="L1")
     with pytest.raises(ValueError, match="gbx_no_such_fn"):
         manager.register_family(None, ("gbx_h3_",), only=["no_such_fn"], level="L3")
+
+
+def test_names_at_level_filters_prefix_level_and_mvp_and_takes_a_bare_string():
+    """The prefix, the level and ``status != 'mvp'`` filters; a bare string is one prefix, not its characters."""
+    from databricks.labs.gbx import manager
+
+    got = manager.names_at_level(("gbx_h3_",), "L1")
+    assert got and all(
+        n.startswith("gbx_h3_") and "L1" in MAN.functions[n].levels for n in got
+    )
+    assert "gbx_h3_geomkring" not in got  # an L3-only name of the family
+    assert "gbx_h3_geomkring" in manager.names_at_level(("gbx_h3_",), "L3")
+    assert not any(
+        MAN.functions[n].status == "mvp"
+        for n in manager.names_at_level(("gbx_",), "L3")
+    )
+    assert manager.names_at_level("gbx_h3_", "L1") == got
+    assert manager.names_at_level("gbx_h3_", "L3") == manager.names_at_level(
+        ("gbx_h3_",), "L3"
+    )
 
 
 def test_register_sources_registers_the_named_formats_and_refuses_an_unknown_one():

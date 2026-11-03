@@ -952,6 +952,15 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
     local = to_local_path(str(path))
 
     if materialize and _names_a_vrt(local):
+        if _gdal_policy.remote_location(str(path)) is not None:
+            # the switch is on (data_path above refused it otherwise), but a VRT names its own sources and the
+            # remote-path gate never sees them: a remote VRT would open whatever it names, from this worker
+            return _serde.build_error_tile(
+                f"rst_fromfile materialize=True unsuccessful: the VRT {path} is a remote location, and a VRT "
+                "names its own sources, which the remote-path gate does not check. Fix: read the VRT as a virtual "
+                "tile (omit materialize=True), or copy the VRT and its sources to a Volume.",
+                0,
+            )
         return _fromfile_render_vrt(str(path), local, drv, cap_bytes)
 
     if materialize:

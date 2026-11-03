@@ -375,14 +375,24 @@ def test_cellfill_parity_all_grids(spark_with_jar):
     #          collect all results
     # -----------------------------------------------------------------------
     _register_h3_heavy(spark)
-    gbx_manager.register_family(spark, ("gbx_quadbin_",), level="L1")
+    gbx_manager.register_family(
+        spark,
+        ("gbx_quadbin_",),
+        only=gbx_manager.names_at_level(("gbx_quadbin_",), "L1"),
+        level="L1",
+    )
     gbx_manager.register_family(
         spark,
         ("gbx_bng_",),
         only=gbx_manager.names_at_level(("gbx_bng_",), "L1"),
         level="L1",
     )
-    gbx_manager.register_family(spark, ("gbx_custom_",), level="L1")
+    gbx_manager.register_family(
+        spark,
+        ("gbx_custom_",),
+        only=gbx_manager.names_at_level(("gbx_custom_",), "L1"),
+        level="L1",
+    )
 
     def _collect_heavy(view: str, fn_sql: str) -> Dict[int, Dict[int, Optional[float]]]:
         rows = spark.sql(

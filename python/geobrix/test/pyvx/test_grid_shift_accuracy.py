@@ -218,17 +218,23 @@ def test_grids_registered_after_the_function_reach_the_live_binding():
     assert float(lat) == pytest.approx(EXPECT_LAT, abs=1e-6)
 
 
-def test_grid_dirs_reregistration_keeps_the_recorded_level(spark, monkeypatch):
-    """Each name is registered again at the level the session recorded for it, not at the manager's own pick."""
+def test_grid_dirs_reregistration_prefers_the_recorded_level(monkeypatch):
+    """Each name is registered again with its recorded level as a preference, never forced; a name a JAR companion
+    holds at a level it has no row at is left alone. The session is a fresh object, so nothing an earlier test
+    registered in the shared one can change what is read."""
+    from types import SimpleNamespace
+
     from databricks.labs.gbx import _api, manager
 
-    name = "gbx_st_transformcrs"
-    manager.register_family(spark, ("gbx_st_",), only=[name], level="L3")
-    monkeypatch.setitem(_api.chosen(spark), name, ("L1", "-"))
+    session = SimpleNamespace()
+    kept, companion = "gbx_st_transformcrs", "gbx_rst_clip"
+    _api.mark_registered(session, [kept, companion, "gbx_st_setcrs"])
+    _api.chosen(session).update({kept: ("L1", "-"), companion: ("L1", "-")})
     seen = {}
     monkeypatch.setattr(manager, "register", lambda s, **kw: seen.update(kw))
 
-    crs_grids._reregister_active_light_tiers(spark)
+    crs_grids._reregister_active_light_tiers(session)
 
-    assert seen["only"] == [name]
-    assert seen["_levels"] == {name: ("L1", "-")}
+    assert seen["only"] == [kept]
+    assert seen["_prefer"] == {kept: "L1"}
+    assert "_levels" not in seen

@@ -46,7 +46,8 @@ def _warn_if_unusable(d: str) -> None:
 def _reregister_active_light_tiers(spark) -> None:
     """Register again the functions this session already has whose light implementation embeds the grid dirs
     (``factory_args: proj_grid_dirs``), so live SQL bindings get fresh closures with the current dirs. Each name
-    is registered again at the level the session installed it at, never at the manager's own pick.
+    is registered again with the level the session installed it at as its preference: that level is tried first and,
+    when it is unavailable now, the manager falls back as in any registration (one line says so).
     """
     if spark is None:
         return
@@ -59,12 +60,14 @@ def _reregister_active_light_tiers(spark) -> None:
         for n in _api._done(spark)
         if n in functions
         and functions[n].levels.get("L3", {}).get("factory_args") == "proj_grid_dirs"
+        # a name installed at a level it has no row at (a JAR companion a test put there) is not ours to replace
+        and chosen.get(n, ("L3",))[0] in functions[n].levels
     )
     if names:
         manager.register(
             spark,
             only=names,
-            _levels={n: chosen[n] for n in names if n in chosen} or None,
+            _prefer={n: chosen[n][0] for n in names if n in chosen} or None,
         )
 
 

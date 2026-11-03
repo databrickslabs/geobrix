@@ -26,7 +26,9 @@ _NAME = re.compile(r'override\s+def\s+name\s*:\s*String\s*=\s*"(gbx_[a-z0-9_]+)"
 
 
 _TOP_LEVEL = re.compile(
-    r"^(?:object|class|case class|trait|sealed|abstract|final)\b", re.M
+    r"^(?:(?:private(?:\[[\w.]+\])?|protected|implicit|sealed|abstract|final|case)\s+)*"
+    r"(?:package\s+object|object|class|trait)\b",
+    re.M,
 )
 
 
@@ -64,6 +66,13 @@ def install_jvm_scalars(spark, prefixes):
         result = installer.install(spark._jsparkSession, name, fqn)
         assert result == "ok", f"{fqn}: {result}"
         installed.append(name)
+    if installed:
+        # the session now holds the JVM companion under each name: record it as L1, so a later generated-wrapper
+        # `ensure` and a grid-dir re-registration leave it where it is
+        from databricks.labs.gbx import _api
+
+        _api._done(spark).update(installed)
+        _api.chosen(spark).update({n: ("L1", "-") for n in installed})
     return installed
 
 

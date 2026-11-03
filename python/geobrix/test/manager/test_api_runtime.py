@@ -166,3 +166,52 @@ def test_a_table_call_with_the_first_optional_left_out_sends_its_default_not_a_s
     _api.table(df, "gbx_bng_geomkringexplode", "g", 3, 1, None, "polyfill")
     ((text, _),) = df.sparkSession.calls
     assert "CAST('boundary-out' AS STRING), 'polyfill'" in text, text
+
+
+def test_a_jar_companion_a_test_installs_stays_over_a_later_ensure(monkeypatch):
+    """``install_jvm_scalars`` records each companion it installs as done at L1, so the generated wrapper's ``ensure``
+    does not register the light function over it, and a companion's source is read up to the next top-level
+    declaration, whatever its modifiers."""
+    from test import _heavy
+    from types import SimpleNamespace
+
+    installed = []
+    installer = SimpleNamespace(
+        install=lambda s, name, fqn: installed.append(name) or "ok"
+    )
+    spark = SimpleNamespace(
+        _jsparkSession=None,
+        _jvm=SimpleNamespace(
+            com=SimpleNamespace(
+                databricks=SimpleNamespace(
+                    labs=SimpleNamespace(
+                        gbx=SimpleNamespace(
+                            kernels=SimpleNamespace(L1Installer=installer)
+                        )
+                    )
+                )
+            )
+        ),
+    )
+    name = "gbx_st_triangulate"
+    monkeypatch.setattr(_heavy, "_companions", lambda: ["x.Y"])
+    monkeypatch.setattr(_heavy, "_sql_name", lambda fqn: name)
+    assert _heavy.install_jvm_scalars(spark, ("gbx_st_",)) == [name]
+    assert installed == [name]
+    assert name in _api._done(spark) and _api.chosen(spark)[name] == ("L1", "-")
+    monkeypatch.setattr(
+        manager, "register", lambda *a, **k: pytest.fail("registered over it")
+    )
+    _api.ensure(spark, name)
+
+    for decl in (
+        "case object B",
+        "private object B",
+        "private[gbx] object B",
+        "implicit class B",
+        "package object b",
+        "sealed trait B",
+    ):
+        assert _heavy._TOP_LEVEL.search(f"object A {{ }}\n{decl} {{ }}\n"), decl
+    # a nested declaration is not at column 0
+    assert not _heavy._TOP_LEVEL.search("{\n  private object B\n}\n")

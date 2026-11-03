@@ -1138,6 +1138,48 @@ def test_fromfile_remote_switch_on(spark8, monkeypatch, tmp_path):
         server.close()
 
 
+def test_fromfile_remote_switch_on_refuses_a_remote_vrt_and_a_raster_over_the_cap(
+    spark8, monkeypatch, tmp_path
+):
+    """With the remote switch on, a materialized remote read is still bounded and still safe: a raster whose decoded
+    size is over a forced-low cap (the cap the registration bakes) is refused with the cap's Fix before any pixel is
+    read, and a ``.vrt`` URL (a VRT names its own sources, which the gate does not see) is an error tile with a Fix,
+    never a read.
+    """
+    from databricks.labs.gbx import manager as gbx_manager
+
+    _rasterio_or_skip()
+    spark = spark8
+    server = _served_tif(tmp_path)
+
+    def register():
+        gbx_manager.register_family(
+            spark, ("gbx_rst_",), only=["gbx_rst_fromfile"], level="L3"
+        )
+
+    try:
+        monkeypatch.setenv(_gdal_policy.REMOTE_ENV, "true")
+        with monkeypatch.context() as low:
+            low.setenv("GBX_STREAM_MAX_BYTES", "16")  # the 48-byte raster is over it
+            register()
+        with pytest.raises(Exception, match="decoded exceeds") as ei:
+            spark.sql(
+                f"SELECT gbx_rst_fromfile('{server.url}', 'GTiff') AS t"
+            ).collect()
+        assert "Omit materialize=True" in str(ei.value)
+        register()  # the default cap again for the session's later tests
+        vrt = server.url.replace("a.tif", "a.vrt")
+        tile = spark.sql(f"SELECT gbx_rst_fromfile('{vrt}', 'GTiff') AS t").collect()[
+            0
+        ]["t"]
+        assert tile["raster"] is None
+        assert "remote location" in tile["metadata"]["last_error"]
+        assert "Fix:" in tile["metadata"]["last_error"]
+    finally:
+        register()
+        server.close()
+
+
 def _served_tif(tmp_path):
     import numpy as np
     import rasterio

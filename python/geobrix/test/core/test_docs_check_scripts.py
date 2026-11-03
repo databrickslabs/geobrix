@@ -167,8 +167,12 @@ def test_check_since_reports_a_legacy_name_without_a_row_but_not_a_manifest_name
 ):
     mod = _load("check-since")
     owned = mod.stable_names()
-    legacy = next(n for n in mod._load_registered() if n not in owned)
-    assert "gbx_rst_slope" in mod._load_registered() and "gbx_rst_slope" in owned
+    # Every registered name is a manifest row now (the legacy set is empty), so the test brings its own.
+    legacy = "gbx_zz_legacy_probe"
+    registered = [*mod._load_registered(), legacy]
+    assert "gbx_rst_slope" in registered and "gbx_rst_slope" in owned
+    assert legacy not in owned
+    monkeypatch.setattr(mod, "_load_registered", lambda: registered)
     monkeypatch.setattr(mod, "_load_since", lambda *a, **k: {})
     assert mod.main() == 1
     err = capsys.readouterr().err

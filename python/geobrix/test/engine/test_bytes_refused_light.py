@@ -268,12 +268,16 @@ def test_a_real_light_function_gives_the_refusal_with_its_fix_on_vrt_bytes(
     _assert_refusal(str(raised.value), "VRT")
 
 
-def test_the_constructor_refuses_vrt_bytes_with_the_fix(sentinel_tif):
+def test_the_constructor_gives_an_error_tile_with_the_fix_for_vrt_bytes(sentinel_tif):
     from databricks.labs.gbx.pyrx import functions as fns
 
-    with pytest.raises(_gdal_policy.DriverPolicyError) as raised:
-        fns._fromcontent_udf.func(_vrt(str(sentinel_tif)), "VRT")
-    _assert_refusal(str(raised.value), "VRT")
+    # The tile contract: bytes the constructor refuses come back as an error tile that carries the refusal and its
+    # Fix in `last_error`, not as a raise (a raise would fail the whole query for one row).
+    tile = fns._fromcontent_udf.func(_vrt(str(sentinel_tif)), "VRT")
+    assert tile["raster"] is None and tile["path"] is None, tile
+    msg = tile["metadata"]["last_error"]
+    assert msg.startswith("rst_fromcontent:"), msg
+    _assert_refusal(msg, "VRT")
 
 
 def test_a_virtual_tile_path_to_a_vrt_is_not_bytes_and_still_opens(

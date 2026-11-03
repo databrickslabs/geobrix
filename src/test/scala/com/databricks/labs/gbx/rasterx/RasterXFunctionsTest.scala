@@ -62,18 +62,8 @@ class RasterXFunctionsTest extends AnyFunSuite {
         result should not be null
     }
 
-    test("rst_median should create Column") {
-        val result = functions.rst_median(col("tile"))
-        result should not be null
-    }
-
     test("rst_memsize should create Column") {
         val result = functions.rst_memsize(col("tile"))
-        result should not be null
-    }
-
-    test("rst_metadata should create Column") {
-        val result = functions.rst_metadata(col("tile"))
         result should not be null
     }
 

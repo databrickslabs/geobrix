@@ -78,7 +78,7 @@ val metadata = rasters.select(
   rx.rst_width(col("tile")).alias("width"),
   rx.rst_height(col("tile")).alias("height"),
   rx.rst_numbands(col("tile")).alias("num_bands"),
-  rx.rst_metadata(col("tile")).alias("metadata")
+  call_function("gbx_rst_metadata", col("tile")).alias("metadata")
 )
 
 metadata.show()
@@ -119,7 +119,7 @@ val catalog = rasters.select(
   rx.rst_width(col("tile")).alias("width"),
   rx.rst_height(col("tile")).alias("height"),
   rx.rst_numbands(col("tile")).alias("bands"),
-  rx.rst_metadata(col("tile")).alias("metadata")
+  call_function("gbx_rst_metadata", col("tile")).alias("metadata")
 ).filter(
   col("width") > 1000 && col("height") > 1000
 )
@@ -467,26 +467,6 @@ result.show()
 +---------------------+
 """.trim
 
-  val rst_median_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Uses multiband fixture (rgb_nir_small.tif, 3 bands); single-band sentinel2 is all-NoData.
-val rasters = spark.table("multiband_rasters")
-val result = rasters.select(rx.rst_median(col("tile")).alias("band_median"))
-result.show()
-""".trim
-
-  val rst_median_scala_example_output: String =
-    """
-+---------------------+
-|band_median          |
-+---------------------+
-|[85.0, 157.5, 111.5] |
-+---------------------+
-""".trim
-
   val rst_memsize_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -504,25 +484,6 @@ result.show()
 +-------+
 |71749  |
 +-------+
-""".trim
-
-  val rst_metadata_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_metadata(col("tile")).alias("metadata"))
-result.show(truncate = false)
-""".trim
-
-  val rst_metadata_scala_example_output: String =
-    """
-+--------------------------------------------------+
-|metadata                                          |
-+--------------------------------------------------+
-|{driver -> GTiff, crs -> EPSG:32618, count -> 1,..|
-+--------------------------------------------------+
 """.trim
 
   val rst_min_scala_example: String =
@@ -874,26 +835,6 @@ result.show()
 +--------+
 |true    |
 +--------+
-""".trim
-
-  val rst_histogram_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Uses multiband fixture (rgb_nir_small.tif, 3 bands) so histogram has entries per band.
-val rasters = spark.table("multiband_rasters")
-val result = rasters.select(rx.rst_histogram(col("tile")).alias("histogram"))
-result.show(truncate = false)
-""".trim
-
-  val rst_histogram_scala_example_output: String =
-    """
-+--------------------------------------------------+
-|histogram                                         |
-+--------------------------------------------------+
-|{band_1 -> [1, 0, 0, ...], band_2 -> [1, 0, 1,... |
-+--------------------------------------------------+
 """.trim
 
   // ===========================================================================

@@ -35,9 +35,7 @@ object functions extends Serializable {
     def rst_getsubdataset(tile: Column, subsetName: Column): Column = ColumnAdapter(RST_GetSubdataset.name, Seq(tile, subsetName))
     def rst_height(tile: Column): Column = ColumnAdapter(RST_Height.name, Seq(tile))
     def rst_max(tile: Column): Column = ColumnAdapter(RST_Max.name, Seq(tile))
-    def rst_median(tile: Column): Column = ColumnAdapter(RST_Median.name, Seq(tile))
     def rst_memsize(tile: Column): Column = ColumnAdapter(RST_MemSize.name, Seq(tile))
-    def rst_metadata(tile: Column): Column = ColumnAdapter(RST_MetaData.name, Seq(tile))
     def rst_min(tile: Column): Column = ColumnAdapter(RST_Min.name, Seq(tile))
     def rst_numbands(tile: Column): Column = ColumnAdapter(RST_NumBands.name, Seq(tile))
     def rst_pixelcount(tile: Column): Column = ColumnAdapter(RST_PixelCount.name, Seq(tile))
@@ -528,31 +526,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         ColumnAdapter(RST_SetCrs.name, Seq(tile, crs))
     def rst_setcrs(tile: Column, crs: String): Column =
         rst_setcrs(tile, lit(crs))
-
-    // NaN (not null) is the "derive from band stats" sentinel for min/max: a null primitive-Double
-    // literal is force-null-checked by Spark's Invoke and short-circuits the whole result to null
-    // before eval runs (this silently broke rst_histogram(tile)). eval maps NaN -> None. Mirrors the
-    // NaN default in RST_Histogram.builder() for the SQL path.
-    def rst_histogram(tile: Column): Column =
-        ColumnAdapter(RST_Histogram.name, Seq(
-            tile, lit(256), lit(Double.NaN), lit(Double.NaN), lit(false)
-        ))
-    def rst_histogram(tile: Column, nBuckets: Column): Column =
-        ColumnAdapter(RST_Histogram.name, Seq(
-            tile, nBuckets, lit(Double.NaN), lit(Double.NaN), lit(false)
-        ))
-    def rst_histogram(tile: Column, nBuckets: Column, minVal: Column, maxVal: Column): Column =
-        ColumnAdapter(RST_Histogram.name, Seq(
-            tile, nBuckets, minVal, maxVal, lit(false)
-        ))
-    def rst_histogram(
-        tile: Column, nBuckets: Column, minVal: Column, maxVal: Column, includeNodata: Column
-    ): Column =
-        ColumnAdapter(RST_Histogram.name, Seq(
-            tile, nBuckets, minVal, maxVal, includeNodata
-        ))
-    def rst_histogram(tile: Column, nBuckets: Int): Column =
-        rst_histogram(tile, lit(nBuckets))
 
     def rst_percentile_stretch(tile: Column, loPct: Column, hiPct: Column): Column =
         ColumnAdapter(RST_PercentileStretch.name, Seq(tile, loPct, hiPct))

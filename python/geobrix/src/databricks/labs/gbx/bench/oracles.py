@@ -104,11 +104,7 @@ _L1_NO_VIRTUAL = "the JVM level cannot read a virtual tile (a path, no bytes); t
 _VIRTUAL_RAISES_L1 = "a virtual tile at L1 raises VirtualTileException; needs a wrapper-free virtual dispatch"
 # The JVM summary is GDAL's own info JSON; the contract is the light JSON. The GDAL spec engine replaces the JVM form.
 _SUMMARY_L1 = "the JVM summary is gdalinfo's JSON, not the contract's; the GDAL spec engine replaces it"
-# The JVM statistics and metadata that differ from the contract; their companions are deleted in the decision sweep.
-_MEDIAN_L1 = "the JVM median is GDAL's median resampling, which takes one of the two middle values of an even count, not their mean"
-_HISTOGRAM_L1 = "the JVM histogram leaves the top edge out of the last bucket, gives NULL for a NULL bound, ignores include_nodata and turns a bad bucket count into NULL"
 _FRACTIONAL_L1 = "the JVM takes kernel_size as an INT: the SQL engine casts 3.9 to 3 before the function runs, so a fractional size is never seen"
-_METADATA_L1 = "the JVM metadata is GDAL's metadata domains merged, not the contract's driver, size and tag keys"
 # With zero_for_flat GDAL drops the NoData value, so its border pixels are 0; light keeps them NoData (a documented
 # divergence, which the GDAL spec engine keeps).
 _ASPECT_ZERO_L1 = "GDAL drops the NoData value when zero_for_flat is set, so its border pixels are 0, not NoData"
@@ -200,22 +196,7 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
     },
     "summary": {"L1": _SUMMARY_L1},
     "summary_float32_precision": {"L1": _SUMMARY_L1},
-    "median_two_band": {"L1": _MEDIAN_L1},
-    "metadata": {"L1": _METADATA_L1},
     "filter_fractional_size": {"L1": _FRACTIONAL_L1},
-    **{
-        cid: {"L1": _HISTOGRAM_L1}
-        for cid in (
-            "histogram",
-            "histogram_range",
-            "histogram_top_edge",
-            "histogram_null_min",
-            "histogram_null_max",
-            "histogram_two_band",
-            "histogram_include_nodata",
-            "histogram_zero_buckets",
-        )
-    },
     "bytes_class_refused_driver": {"L2": _L2_NO_REASON},
     "bytes_class_vrt_refused": {"L2": _L2_NO_REASON},
     "decoded_over_cap_error_tile": {

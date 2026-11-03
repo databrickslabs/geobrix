@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
-import com.databricks.labs.gbx.rasterx.expressions.accessors.{RST_Avg, RST_BandMetaData, RST_BoundingBox, RST_Format, RST_GeoReference, RST_GetNoData, RST_GetSubdataset, RST_Height, RST_Max, RST_Median, RST_MemSize, RST_MetaData, RST_Min, RST_NumBands, RST_PixelCount, RST_PixelHeight, RST_PixelWidth, RST_Rotation, RST_SRID, RST_ScaleX, RST_ScaleY, RST_SkewX, RST_SkewY, RST_Subdatasets, RST_Summary, RST_Type, RST_UpperLeftX, RST_UpperLeftY, RST_Width}
+import com.databricks.labs.gbx.rasterx.expressions.accessors.{RST_Avg, RST_BandMetaData, RST_BoundingBox, RST_Format, RST_GeoReference, RST_GetNoData, RST_GetSubdataset, RST_Height, RST_Max, RST_MemSize, RST_Min, RST_NumBands, RST_PixelCount, RST_PixelHeight, RST_PixelWidth, RST_Rotation, RST_SRID, RST_ScaleX, RST_ScaleY, RST_SkewX, RST_SkewY, RST_Subdatasets, RST_Summary, RST_Type, RST_UpperLeftX, RST_UpperLeftY, RST_Width}
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import org.gdal.gdal.{Dataset, gdal}
 import org.scalatest.BeforeAndAfterAll
@@ -94,17 +94,6 @@ class RST_AccessorsExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         max.head shouldBe ds.GetRasterBand(1).AsMDArray().GetStatistics().getMax
     }
 
-    test("RST_Median should return approximated median of a single band") {
-        val median = RST_Median.execute(ds, Map.empty)
-        val buf = Array.ofDim[Double](ds.GetRasterXSize() * ds.GetRasterYSize())
-        ds.GetRasterBand(1).ReadRaster(0, 0, ds.GetRasterXSize(), ds.GetRasterYSize(), buf)
-        val noData = RST_GetNoData.execute(ds)
-        val sorted = buf.filterNot(_ == noData.head).sortBy(identity)
-        val expected = sorted(sorted.length / 2)
-        val epsilon = expected / 100.0
-        median.head.doubleValue shouldBe expected +- epsilon
-    }
-
     test("RST_MemSize should return approximated memory storage size") {
         val memSize = RST_MemSize.execute(ds)
         val location = ds.GetDescription()
@@ -117,12 +106,6 @@ class RST_AccessorsExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         memSize2 shouldBe expected2.length
         cpy.delete()
         gdal.Unlink("/vsimem/cpy.tif")
-    }
-
-    test("RST_MetaData should return a map of metadata") {
-        val mtd = RST_MetaData.execute(ds)
-        mtd should not be null
-        mtd should contain key "AREA_OR_POINT"
     }
 
     test("RST_Min should return the min value of the raster per band") {
@@ -329,18 +312,6 @@ class RST_AccessorsExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
     test("RST_Min returns 0.0 (not null) for a genuine-zero band") {
         val zeros = allZeroDs()
         RST_Min.execute(zeros).head shouldBe (0.0: java.lang.Double)
-        zeros.delete()
-    }
-
-    test("RST_Median returns null for an all-nodata band (issue #59)") {
-        val empty = allNodataDs()
-        RST_Median.execute(empty, Map.empty).head shouldBe null
-        empty.delete()
-    }
-
-    test("RST_Median returns 0.0 (not null) for a genuine-zero band") {
-        val zeros = allZeroDs()
-        RST_Median.execute(zeros, Map.empty).head shouldBe (0.0: java.lang.Double)
         zeros.delete()
     }
 

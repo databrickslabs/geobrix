@@ -28,7 +28,6 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     val _: Column = rx.rst_width(col("tile"))
     val _: Column = rx.rst_height(col("tile"))
     val _: Column = rx.rst_numbands(col("tile"))
-    val _: Column = rx.rst_metadata(col("tile"))
     succeed
   }
 
@@ -230,9 +229,7 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     val _: Column = rx.rst_getsubdataset(col("tile"), lit(""))
     val _: Column = rx.rst_height(col("tile"))
     val _: Column = rx.rst_max(col("tile"))
-    val _: Column = rx.rst_median(col("tile"))
     val _: Column = rx.rst_memsize(col("tile"))
-    val _: Column = rx.rst_metadata(col("tile"))
     val _: Column = rx.rst_min(col("tile"))
     val _: Column = rx.rst_pixelcount(col("tile"))
     val _: Column = rx.rst_pixelheight(col("tile"))
@@ -251,7 +248,6 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     val _: Column = rx.rst_upperlefty(col("tile"))
     val _: Column = rx.rst_isempty(col("tile"))
     val _: Column = rx.rst_tryopen(col("tile"))
-    val _: Column = rx.rst_histogram(col("tile"))
     succeed
   }
 
@@ -263,9 +259,7 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     assert(ScalaApiExamples.rst_getsubdataset_scala_example.nonEmpty)
     assert(ScalaApiExamples.rst_height_scala_example.nonEmpty)
     assert(ScalaApiExamples.rst_max_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_median_scala_example.nonEmpty)
     assert(ScalaApiExamples.rst_memsize_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_metadata_scala_example.nonEmpty)
     assert(ScalaApiExamples.rst_min_scala_example.nonEmpty)
     assert(ScalaApiExamples.rst_pixelcount_scala_example.nonEmpty)
     assert(ScalaApiExamples.rst_pixelheight_scala_example.nonEmpty)
@@ -284,7 +278,6 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     assert(ScalaApiExamples.rst_upperlefty_scala_example.nonEmpty)
     assert(ScalaApiExamples.rst_isempty_scala_example.nonEmpty)
     assert(ScalaApiExamples.rst_tryopen_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_histogram_scala_example.nonEmpty)
   }
 
   test("ScalaApiExamples accessor output vals are non-empty") {
@@ -295,9 +288,7 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     assert(ScalaApiExamples.rst_getsubdataset_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.rst_height_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.rst_max_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_median_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.rst_memsize_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_metadata_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.rst_min_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.rst_pixelcount_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.rst_pixelheight_scala_example_output.nonEmpty)
@@ -316,6 +307,5 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     assert(ScalaApiExamples.rst_upperlefty_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.rst_isempty_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.rst_tryopen_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_histogram_scala_example_output.nonEmpty)
   }
 }

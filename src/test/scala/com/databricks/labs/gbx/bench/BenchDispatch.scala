@@ -46,7 +46,6 @@ import com.databricks.labs.gbx.rasterx.expressions.dem._
 import com.databricks.labs.gbx.rasterx.expressions.spectral._
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Band
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_FillNodata
-import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Histogram
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Sample
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetSrid
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetCrs
@@ -137,7 +136,7 @@ object BenchDispatch {
 
   private val cats: Map[String, String] = Map(
     "rst_width" -> ACC, "rst_height" -> ACC, "rst_numbands" -> ACC, "rst_avg" -> ACC,
-    "rst_min" -> ACC, "rst_max" -> ACC, "rst_median" -> ACC, "rst_pixelcount" -> ACC,
+    "rst_min" -> ACC, "rst_max" -> ACC, "rst_pixelcount" -> ACC,
     "rst_slope" -> TER, "rst_aspect" -> TER, "rst_hillshade" -> TER,
     "rst_tri" -> TER, "rst_tpi" -> TER, "rst_roughness" -> TER,
     "rst_ndvi" -> BM, "rst_ndwi" -> BM, "rst_nbr" -> BM,
@@ -154,8 +153,8 @@ object BenchDispatch {
     "rst_worldtorastercoordx" -> ACC, "rst_worldtorastercoordy" -> ACC,
     "rst_tilexyz" -> ACC,
     // map / struct accessors: timing-only
-    "rst_metadata" -> ACC, "rst_bandmetadata" -> ACC, "rst_georeference" -> ACC,
-    "rst_boundingbox" -> ACC, "rst_summary" -> ACC, "rst_histogram" -> ACC,
+    "rst_bandmetadata" -> ACC, "rst_georeference" -> ACC,
+    "rst_boundingbox" -> ACC, "rst_summary" -> ACC,
     // tile-out transforms with scalar / fixed args
     "rst_band" -> EDIT, "rst_threshold" -> EDIT, "rst_initnodata" -> EDIT,
     "rst_setsrid" -> EDIT, "rst_setcrs" -> EDIT, "rst_updatetype" -> EDIT, "rst_fillnodata" -> FEAT,
@@ -460,7 +459,6 @@ object BenchDispatch {
     case "rst_avg"        => BenchFingerprint.ofArray(RST_Avg.execute(ds))
     case "rst_min"        => BenchFingerprint.ofArray(RST_Min.execute(ds))
     case "rst_max"        => BenchFingerprint.ofArray(RST_Max.execute(ds))
-    case "rst_median"     => BenchFingerprint.ofArray(RST_Median.execute(ds, Map.empty))
     case "rst_pixelcount" => BenchFingerprint.ofArray(RST_PixelCount.execute(ds).map(_.toDouble))
     case "rst_slope"      => fpDerived(RST_Slope.execute(ds, argS(a, "unit", "degrees"), argD(a, "xscale", Double.NaN), argD(a, "yscale", Double.NaN)))
     case "rst_aspect"     => fpDerived(RST_Aspect.execute(ds, argB(a, "trigonometric", false), argB(a, "zero_for_flat", false)))
@@ -520,12 +518,10 @@ object BenchDispatch {
         argI(a, "y", 1539), argS(a, "format", "PNG"), argI(a, "size", 256), argS(a, "resampling", "bilinear"))
       BenchFingerprint.empty
     // map / struct accessors: timing-only (maps, structs, CRS/JSON bytes).
-    case "rst_metadata"      => { RST_MetaData.execute(ds); BenchFingerprint.empty }
     case "rst_bandmetadata"  => { RST_BandMetaData.execute(ds.GetRasterBand(1)); BenchFingerprint.empty }
     case "rst_georeference"  => { RST_GeoReference.execute(ds); BenchFingerprint.empty }
     case "rst_boundingbox"   => { RST_BoundingBox.execute(ds); BenchFingerprint.empty }
     case "rst_summary"       => { RST_Summary.execute(ds); BenchFingerprint.empty }
-    case "rst_histogram"     => { RST_Histogram.execute(ds, 256, None, None, false); BenchFingerprint.empty }
     // tile-out transforms with scalar / fixed args: all produce a raster
     // tile -> fpDerived raster fingerprint (same path as terrain).
     case "rst_band"        => fpDerived(RST_Band.execute(ds, Map.empty, argI(a, "band_index", 2)))
@@ -1026,7 +1022,6 @@ object BenchDispatch {
       case "rst_avg"        => rst_avg(tile)
       case "rst_min"        => rst_min(tile)
       case "rst_max"        => rst_max(tile)
-      case "rst_median"     => rst_median(tile)
       case "rst_pixelcount" => rst_pixelcount(tile)
       case "rst_slope"      => rst_slope(tile, argS(a, "unit", "degrees"))
       case "rst_aspect"     => rst_aspect(tile)
@@ -1069,12 +1064,10 @@ object BenchDispatch {
       case "rst_tilexyz"             => rst_tilexyz(tile, argI(a, "z", 12), argI(a, "x", 1205), argI(a, "y", 1539))
       // map / struct accessors are pure-core-only; the column form is here
       // only to keep the match exhaustive (the spark-path runner filters by modes).
-      case "rst_metadata"      => rst_metadata(tile)
       case "rst_bandmetadata"  => rst_bandmetadata(tile, 1)
       case "rst_georeference"  => rst_georeference(tile)
       case "rst_boundingbox"   => rst_boundingbox(tile)
       case "rst_summary"       => rst_summary(tile)
-      case "rst_histogram"     => rst_histogram(tile)
       // tile-out transforms with scalar / fixed args
       case "rst_band"        => rst_band(tile, argI(a, "band_index", 2))
       case "rst_threshold"   => ColumnAdapter(com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Threshold.name, Seq(tile, org.apache.spark.sql.functions.lit(argS(a, "op", ">")), org.apache.spark.sql.functions.lit(argD(a, "value", 0.5))))

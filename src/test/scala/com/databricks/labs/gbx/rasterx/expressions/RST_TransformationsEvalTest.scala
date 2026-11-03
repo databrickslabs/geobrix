@@ -480,46 +480,6 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         assert(result.head.get(0) == null, "proximity of a null tile must be null")
     }
 
-    test("RST_Histogram short-arity (tile only) returns a non-null histogram map") {
-        // rst_histogram(tile) hits builder() case 1 which injects nullDouble defaults for min/max.
-        // Old propagateNull=true nulled the whole result; now it must produce a real MAP.
-        val sc = spark
-        import com.databricks.labs.gbx.rasterx.functions._
-        import sc.implicits._
-        TestL1.installAll(spark)
-
-        val tifPath = this.getClass.getResource("/modis/").toString
-
-        val df: DataFrame = Seq(
-          (1, s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF")
-        ).toDF("id", "path")
-            .withColumn("raster", udfs.rasterFromPath(col("path")))
-            .withColumn("hist", rst_histogram(col("raster")))
-
-        noException should be thrownBy df.collect()
-        val result = df.select("hist").collect()
-        result should not be empty
-        assert(result.head.get(0) != null, "rst_histogram(tile) must return a non-null histogram map")
-    }
-
-    test("RST_Histogram on a NULL primary tile returns null (not an NPE)") {
-        val sc = spark
-        import com.databricks.labs.gbx.rasterx.functions._
-        TestL1.installAll(spark)
-
-        val schema = StructType(Seq(
-            StructField("tile", RST_ExpressionUtil.v2TileType, nullable = true)))
-        val df = spark.createDataFrame(
-            spark.sparkContext.parallelize(Seq(Row(null))),
-            schema)
-            .withColumn("hist", rst_histogram(col("tile")))
-
-        noException should be thrownBy df.collect()
-        val result = df.select("hist").collect()
-        result should not be empty
-        assert(result.head.get(0) == null, "histogram of a null tile must be null")
-    }
-
     test("RST_Transform should surface a clear error for invalid SRID") {
         // RST_ErrorHandler.safeEval converts exceptions into error-metadata rows rather than
         // failing the whole job, so we assert the error surfaces in the tile's metadata.

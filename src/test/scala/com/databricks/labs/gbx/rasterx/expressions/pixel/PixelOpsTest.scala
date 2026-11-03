@@ -244,25 +244,6 @@ class PixelOpsTest extends AnyFunSuite with BeforeAndAfterAll {
         }
     }
 
-    test("RST_Histogram on a uniform-distribution raster produces counts evenly across buckets") {
-        // 10x10 raster with column ramp 0..9. Histogram with 10 buckets over [0,10]
-        // should have ~10 pixels per bucket (10 rows x 1 column per value).
-        val src = buildRaster(10, 10, (c, _) => c.toFloat)
-        try {
-            val res = RST_Histogram.execute(src, 10, Some(-0.5), Some(9.5), includeNodata = false)
-            res should not be null
-            res.keySet shouldBe Set("band_1")
-            val counts = res("band_1")
-            counts.length shouldBe 10
-            // Each bucket should have exactly 10 pixels (one column of 10 rows).
-            counts.foreach(c => c shouldBe 10L)
-            // Sum across buckets = total pixel count.
-            counts.sum shouldBe 100L
-        } finally {
-            src.delete()
-        }
-    }
-
     test("RST_Threshold('>', 5.0) over a 0..10 ramp produces 0 for v<=5, 1 for v>5") {
         // 11x1 raster with values 0..10.
         val src = buildRaster(11, 1, (c, _) => c.toFloat)

@@ -2,8 +2,7 @@ package com.databricks.labs.gbx.rasterx.operations
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx.expressions.RST_DerivedBand
-import com.databricks.labs.gbx.rasterx.expressions.accessors.{RST_Avg, RST_Max, RST_Median, RST_Min, RST_PixelCount, RST_Summary}
-import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Histogram
+import com.databricks.labs.gbx.rasterx.expressions.accessors.{RST_Avg, RST_Max, RST_Min, RST_PixelCount, RST_Summary}
 import com.databricks.labs.gbx.rasterx.expressions.vector.{RST_Isoband, RST_Polygonize}
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver, ValidMask}
 import org.apache.hadoop.conf.Configuration
@@ -128,16 +127,6 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
         } finally RasterDriver.releaseDataset(ds)
     }
 
-    test("the median of a 3-band gray+x+alpha raster is over its opaque pixels") {
-        // 12 transparent pixels hold 99 and the 4 opaque ones hold 5: the median is 99 over every pixel, 5 over the
-        // opaque ones
-        val ds = fixture(GrayXA, (row, last) => if (last) (if (row == 3) 255.0 else 0.0) else (if (row == 3) 5.0 else 99.0))
-        try {
-            val median = RST_Median.execute(ds, Map.empty[String, String]).head
-            assert(median.doubleValue == 5.0, s"median $median")
-        } finally RasterDriver.releaseDataset(ds)
-    }
-
     for (l <- Seq(Rgba, GrayA, GrayXA, RgbXA)) {
         test(s"${l.name} is empty exactly when it is entirely transparent") {
             val opaque      = fixture(l)
@@ -165,46 +154,7 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
             // band 4 of the fixture holds the pattern's last-band values (0 and 255): 6 of each over the 12 pixels
             assert(RST_Avg.execute(ds).map(_.doubleValue).toSeq == Seq(3.5, 3.5, 3.5, 127.5))
             assert(RST_Min.execute(ds).head.doubleValue == 0.0 && RST_Max.execute(ds).head.doubleValue == 7.0)
-            // GetHistogram honours the mask band: 6 zeros and 6 sevens
-            val h = RST_Histogram.execute(ds, 8, Some(0.0), Some(7.5), includeNodata = false)("band_1")
-            assert(h.sum == 12L && h.head == 6L)
             assert(!RasterAccessors.isEmpty(ds))
-        } finally RasterDriver.releaseDataset(ds)
-    }
-
-    // ------------------------------------------------------------------------------------------------
-    // histogram: over the pixels valid for the band, GDAL's own bucket rule
-    // ------------------------------------------------------------------------------------------------
-
-    for (l <- Seq(GrayXA, Rgba, RgbXA)) {
-        test(s"the histogram of ${l.name} is over the opaque pixels, with GDAL's buckets") {
-            // band 1 over the 8 opaque pixels: 4 zeros and 4 sevens. GDAL histograms the reference itself.
-            val ds    = fixture(l)
-            // the plain raster is 4 x 4: top half 0, bottom half 7, 8 of each: twice the counts of the opaque pixels
-            val plain = fixture(GrayXA.copy(interps = Seq(GCI_GrayIndex)), (row, _) => if (row < 2) 0.0 else 7.0, size = 4)
-            try {
-                val got  = RST_Histogram.execute(ds, 8, None, None, includeNodata = false)("band_1")
-                val want = RST_Histogram.execute(plain, 8, None, None, includeNodata = false)("band_1")
-                // GDAL's buckets are half-open, so the sevens (the top of the range) are out of both histograms
-                assert(got.sum > 0L)
-                assert(got.toSeq == want.map(_ / 2).toSeq, s"${got.toSeq} vs ${want.toSeq}")
-            } finally {
-                RasterDriver.releaseDataset(ds)
-                RasterDriver.releaseDataset(plain)
-            }
-        }
-    }
-
-    test("the histogram of a raster larger than a strip adds up the strips, the shorter last one included") {
-        // 1100 x 1100 is 1,210,000 pixels: a strip of 953 rows (ValidMask.StripPixels / 1100) and one of 147. Band 1 holds
-        // row % 8, and every 10th row is transparent; the buckets are those of [0, 8) over 8 buckets.
-        val n  = 1100
-        val ds = fixture(GrayXA, (row, last) => if (last) (if (row % 10 == 0) 0.0 else 255.0) else (row % 8).toDouble, size = n)
-        try {
-            val got = RST_Histogram.execute(ds, 8, Some(0.0), Some(8.0), includeNodata = false)("band_1")
-            val want = Array.tabulate(8)(k => (0 until n).count(r => r % 10 != 0 && r % 8 == k).toLong * n)
-            assert(got.toSeq == want.toSeq, s"${got.toSeq} vs ${want.toSeq}")
-            assert(n * n > ValidMask.StripPixels)
         } finally RasterDriver.releaseDataset(ds)
     }
 

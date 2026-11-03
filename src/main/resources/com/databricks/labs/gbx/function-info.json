@@ -829,8 +829,7 @@
       "description": "Return the histogram of each band.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -925,8 +924,7 @@
       "description": "Return the median of the valid pixels of each band.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.2.0"
     },
@@ -978,8 +976,7 @@
       "description": "Return the raster's metadata as a map.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.2.0"
     },

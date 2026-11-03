@@ -6,7 +6,7 @@ import com.databricks.labs.gbx.kernels.spec.{GdalSpecEngine, GdalSpecs}
 import com.databricks.labs.gbx.rasterx
 import com.databricks.labs.gbx.rasterx.ds.gdal.{GDAL_Partition, GDAL_Reader}
 import com.databricks.labs.gbx.rasterx.ds.netcdf.{NetCDF_DataSource, NetCDF_Partition, NetCDF_Reader}
-import com.databricks.labs.gbx.rasterx.expressions.accessors.{RST_GetSubdataset, RST_MetaData, RST_Summary}
+import com.databricks.labs.gbx.rasterx.expressions.accessors.{RST_GetSubdataset, RST_Summary}
 import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
 import com.databricks.labs.gbx.rasterx.util.V2Tile
 import com.databricks.labs.gbx.util.NodeFileCacheProbe.{entries, garbage, withNetCDFCopy}
@@ -253,7 +253,6 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession with NodeCa
             try {
                 val perTile = tiles.flatMap { t =>
                     Seq[() => Any](
-                      () => RST_MetaData.eval(t, conf),
                       () => RST_Summary.eval(t, conf),
                       () => RST_GetSubdataset.eval(t, UTF8String.fromString("bleaching_alert_area"), conf)
                     )
@@ -267,7 +266,7 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession with NodeCa
                 }
                 jobs.map(_.get(5, java.util.concurrent.TimeUnit.MINUTES)).sum
             } finally pool.shutdownNow()
-        done shouldBe 4 * (tiles.size * 3 + singles.size + partitions.size)
+        done shouldBe 4 * (tiles.size * 2 + singles.size + partitions.size)
     }
 
     // NetCDF_Reader stages its .nc before opening the subdataset; Spark never closes a reader whose constructor

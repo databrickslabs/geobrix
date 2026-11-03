@@ -312,78 +312,16 @@ def _raster_of(name):
 @pytest.mark.parametrize(
     "name", ["gray_x_alpha", "rgb_x_alpha", "rgba", "masked_rgb_nir"]
 )
-def test_histogram_parity_over_the_pixels_valid_for_each_band(spark_with_jar, name):
+def test_histogram_over_the_pixels_valid_for_each_band(spark_with_jar, name):
     """Per band, the histogram counts the pixels valid for it. The range [0, 8) holds the data values
-    (0 and 7) and not the alpha band's 255: GDAL's buckets are half-open and numpy's close the top one, so
-    a range ending on a value that occurs would count it in one tier only."""
+    (0 and 7) and not the alpha band's 255."""
     raster = _raster_of(name)
     sql = "SELECT gbx_rst_histogram(tile, 8, 0.0, 8.0, false) AS h FROM _alpha_t"
     light = dict(_sql_rows(spark_with_jar, raster, "light", sql)[0]["h"])
-    heavy = dict(_sql_rows(spark_with_jar, raster, "heavy", sql)[0]["h"])
-    assert {k: list(v) for k, v in light.items()} == {
-        k: list(v) for k, v in heavy.items()
-    }
     # band 1 is 0 over rows 1 and 2 and 7 over rows 0 and 3 of the pattern; an alpha layout counts rows 1 and 3
     # (4 zeros and 4 sevens), the masked raster all rows but column 0 (6 and 6)
     want = (6, 6) if name == "masked_rgb_nir" else (4, 4)
     assert (light["band_1"][0], light["band_1"][7]) == want, light["band_1"]
-
-
-def _default_range_histograms(spark, name):
-    """``{tier: {band: counts}}`` of 8 buckets over the range each tier derives from the valid pixels."""
-    # the light function is registered with its five arguments; the heavyweight one takes the range as
-    # absent in its 2-argument form (its 5-argument form with NULLs returns NULL)
-    sql = {
-        "light": "SELECT gbx_rst_histogram(tile, 8, NULL, NULL, false) AS h FROM _alpha_t",
-        "heavy": "SELECT gbx_rst_histogram(tile, 8) AS h FROM _alpha_t",
-    }
-    return {
-        tier: {
-            k: list(v)
-            for k, v in dict(
-                _sql_rows(
-                    spark,
-                    _raster_of(name),
-                    tier,
-                    sql[tier],
-                    jvm=("gbx_rst_histogram",),
-                )[0]["h"]
-            ).items()
-        }
-        for tier in ("light", "heavy")
-    }
-
-
-@pytest.mark.parametrize("name", ["gray_x_alpha", "masked_rgb_nir"])
-def test_histogram_parity_with_the_default_range_below_the_maximum(
-    spark_with_jar, name
-):
-    """With the range derived from the valid pixels the tiers count the same pixels in every bucket but the
-    top one, where the heavyweight tier counts none of the pixels at the maximum (H19, below).
-    """
-    got = _default_range_histograms(spark_with_jar, name)
-    assert got["light"].keys() == got["heavy"].keys()
-    for band in got["light"]:
-        assert got["light"][band][:-1] == got["heavy"][band][:-1], (band, got)
-    assert any(
-        got["light"][b][-1] > got["heavy"][b][-1] for b in got["light"]
-    ), "the premise: some band has pixels at its maximum"
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "H19 (held for the streamline): the heavyweight histogram with the default range drops every "
-        "pixel equal to the band maximum (GDAL's buckets are half-open), the lightweight one counts it. "
-        "Pre-existing and unrelated to alpha; remove this mark when the heavyweight tier counts the maximum."
-    ),
-)
-@pytest.mark.parametrize("name", ["gray_x_alpha", "masked_rgb_nir"])
-def test_histogram_parity_with_the_default_range(spark_with_jar, name):
-    """With no range given both tiers derive it from the valid pixels of each band and must count the
-    same pixels in it, those at the maximum among them."""
-    got = _default_range_histograms(spark_with_jar, name)
-    assert got["light"] == got["heavy"], got
 
 
 def test_statistics_of_a_raster_with_its_own_mask_parity(spark_with_jar):

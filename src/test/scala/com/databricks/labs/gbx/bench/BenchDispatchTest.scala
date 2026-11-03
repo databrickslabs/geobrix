@@ -52,7 +52,7 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     //   centroid + complete assignment) -> 143 + 1 = 144.
     // The raster-to-grid reducers (24), rst_retile, rst_merge_agg, rst_rasterize, rst_dtmfromgeoms,
     // rst_gridfrompoints_agg and rst_dtmfromgeoms_agg left with their companions: 144 - 30 = 114.
-    assert(BenchDispatch.all.size == 114)
+    assert(BenchDispatch.all.size == 111)
     // bucket A: tile vs geometry aggregate input kinds + agg synth recipes.
     assert(BenchDispatch.inputKind("rst_combineavg_agg") == "tile_aggregate")
     assert(BenchDispatch.inputKind("rst_frombands_agg") == "tile_aggregate")
@@ -110,12 +110,11 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
   }
 
   test("BenchDispatch registers the BNG/quadbin raster-grid functions") {
-    val reducers = Seq.empty[String]
     val tessellates = Seq("rst_bng_tessellate", "rst_quadbin_tessellate")
     val aggs = Seq("rst_quadbin_rasterize_agg", "rst_bng_rasterize_agg")
-    (reducers ++ tessellates ++ aggs).foreach { fn =>
+    (tessellates ++ aggs).foreach { fn =>
       assert(BenchDispatch.all.contains(fn), s"$fn not in BenchDispatch.all")
-      // reducers + tessellate + rasterize_agg are all DGGS shape (like H3/quadbin).
+      // tessellate + rasterize_agg are all DGGS shape (like H3/quadbin).
       assert(BenchDispatch.category(fn) == "dggs", s"$fn should be dggs")
     }
     // The 2 rasterize_aggs route to the grid-aggregate branch (the same branch that
@@ -123,9 +122,9 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     Seq("rst_h3_rasterize_agg", "rst_quadbin_rasterize_agg", "rst_bng_rasterize_agg").foreach { fn =>
       assert(BenchDispatch.inputKind(fn) == "grid_aggregate", s"$fn should be grid_aggregate")
     }
-    // The reducers + tessellates take tile+resolution, so they must NOT be caught by
+    // The tessellates take tile+resolution, so they must NOT be caught by
     // the byte / tile-array / geometry / aggregate input-classification sets: plain "tile".
-    (reducers ++ tessellates).foreach { fn =>
+    tessellates.foreach { fn =>
       assert(BenchDispatch.inputKind(fn) == "tile", s"$fn should be plain tile input")
     }
     // Fixed-cell-set parity contracts (deterministic input for the light-vs-heavy check).

@@ -539,7 +539,7 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands); the canonica
 ### rst_median
 
 {/* BEGIN GENERATED gbx_rst_median: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -565,7 +565,6 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands); the canonica
   name="rst_median"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
@@ -601,7 +600,7 @@ In-memory size in bytes.
 ### rst_metadata
 
 {/* BEGIN GENERATED gbx_rst_metadata: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -623,7 +622,6 @@ Metadata map.
   name="rst_metadata"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
@@ -5659,7 +5657,7 @@ Fill NoData pixels via `gdal.FillNodata` using inverse-distance interpolation fr
 ### rst_histogram
 
 {/* BEGIN GENERATED gbx_rst_histogram: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -5679,7 +5677,7 @@ Fill NoData pixels via `gdal.FillNodata` using inverse-distance interpolation fr
 Powered by **rasterio** + **NumPy**. Per-band bucket counts via `numpy.histogram`; map keys are `band_<i>` (1-based).
 :::
 
-Compute per-band histograms via `band.GetHistogram`. Returns `MAP<STRING, ARRAY<LONG>>` keyed by `"band_<n>"` with bucket counts. If `bands` is null, all bands are processed; if `min` / `max` are null, GDAL auto-detects the range.
+Compute a histogram for each band. Returns `MAP<STRING, ARRAY<LONG>>` keyed by `"band_<n>"` with bucket counts. When `min_val` or `max_val` is NULL, the range comes from the band's valid pixels.
 
 _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands) so the histogram has entries for each band._
 
@@ -5687,7 +5685,6 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands) so the histog
   name="rst_histogram"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 

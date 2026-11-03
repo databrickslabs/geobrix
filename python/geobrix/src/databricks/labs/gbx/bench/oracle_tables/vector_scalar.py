@@ -618,6 +618,16 @@ VECTOR_SCALAR = (
 
 # --- Unity Catalog rows: a GEOMETRY result carries an integer SRID, and the SRID of the argument is kept.
 VECTOR_SCALAR += (
+    Case("uc_ev_valid", EV, (SQUARE,), "exact", VALID_JSON, ("uc",)),
+    # the struct's own srid becomes the GEOMETRY's SRID (the other legacy rows carry 0)
+    Case(
+        "uc_leg_point_srid",
+        LEG,
+        ({"typeId": 1, "srid": 27700, "boundaries": [[[1.0, 2.0]]], "holes": []},),
+        "geom_srid",
+        ("POINT(1 2)", 27700),
+        ("uc",),
+    ),
     Case(
         "uc_wrapx_east",
         WRAPX,
@@ -663,6 +673,7 @@ VECTOR_SCALAR += (
 VECTOR_SCALAR = uc_view(
     VECTOR_SCALAR,
     session_only=(
+        "ev_valid",  # its EWKT variant: UC st_geomfromwkt takes no EWKT prefix (uc_ev_valid is the plain-WKT row)
         "wrapx_east",
         "wrapx_west",
         "wrapx_at_origin_west",

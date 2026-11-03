@@ -4056,6 +4056,33 @@ def verdict(case: Case, outs, rows, tmpdir: Optional[str] = None) -> Optional[st
     return _verdict(case, outs, rows)
 
 
+def _projection(case: Case, params, rows, surface: str) -> str:
+    """The select list over the argument columns. On UC a GEOMETRY parameter reads its column through an integer-SRID
+    ``st_geomfromwkt``, except a column of WKB bytes, which goes in as BINARY (the engine refuses it). A column holds
+    one type, so the choice is made over EVERY row of the batch: a column that is bytes in some rows and text in others
+    is a harness error (give the variant a row of its own), never a wrapping decided from the first row.
+    """
+    cols = []
+    for i in range(len(rows[0])):
+        as_binary = False
+        if surface == "uc" and params[i].uc == "GEOMETRY":
+            kinds = {
+                isinstance(r[i], (bytes, bytearray)) for r in rows if r[i] is not None
+            }
+            if len(kinds) > 1:
+                raise ValueError(
+                    f"{case.cid}: argument {i} is WKB bytes in some rows and text in others, and a column holds one "
+                    "type; give the variant a row of its own"
+                )
+            as_binary = kinds == {True}
+        cols.append(
+            f"c{i}"
+            if surface != "uc" or params[i].uc != "GEOMETRY" or as_binary
+            else f"CAST(st_geomfromwkt(c{i}, {case.geom_srid}) AS {UC_GEOMETRY})"
+        )
+    return ", ".join(cols)
+
+
 def run_session(
     spark,
     cases: Sequence[Case],
@@ -4087,18 +4114,7 @@ def run_session(
         params = fn.params
         schema = argument_schema(case, rows, surface)
         # On the UC surface GEOMETRY params get an integer-SRID constructor, never a CRS string.
-        cols = ", ".join(
-            (
-                f"CAST(st_geomfromwkt(c{i}, {case.geom_srid}) AS {UC_GEOMETRY})"
-                if surface == "uc"
-                and params[i].uc == "GEOMETRY"
-                and not isinstance(
-                    args[i], (bytes, bytearray)
-                )  # BINARY goes in as it is: the engine refuses it
-                else f"c{i}"
-            )
-            for i in range(len(args))
-        )
+        cols = _projection(case, params, rows, surface)
         call = f"{name_of(case.fn)}({cols})"
         if surface == "uc" and fn.returns_uc == "GEOMETRY":
             call = f"st_asewkb({call})"
@@ -4440,18 +4456,7 @@ def run_rows(
         schema = ", ".join(
             f"c{i} {_ddl_type(v, params[i])}" for i, v in enumerate(args)
         )
-        cols = ", ".join(
-            (
-                f"CAST(st_geomfromwkt(c{i}, {case.geom_srid}) AS {UC_GEOMETRY})"
-                if surface == "uc"
-                and params[i].uc == "GEOMETRY"
-                and not isinstance(
-                    args[i], (bytes, bytearray)
-                )  # BINARY goes in as it is: the engine refuses it
-                else f"c{i}"
-            )
-            for i in range(len(args))
-        )
+        cols = _projection(case, params, arg_rows, surface)
         if pad:
             cols = ", ".join([cols] + [p.default for p in params[len(args) :]])
         if table_of is not None and python_leg_unexpressible(
@@ -4857,13 +4862,13 @@ def run_handlers_rows(cases, tmpdir: Optional[str] = None):
             None if p.default is None else p.default.strip("'")
             for p in inner.params[len(args) :]
         ]
-        args = [_uc_value(a, p, case) for a, p in zip(args, inner.params)]
-        args = [
+        uc_args = [_uc_value(a, p, case) for a, p in zip(args, inner.params)]
+        uc_args = [
             a == "true" if p.uc == "BOOLEAN" and isinstance(a, str) else a
-            for a, p in zip(args, inner.params)
+            for a, p in zip(uc_args, inner.params)
         ]
         try:
-            elems = list(handler(*args) or [])
+            elems = list(handler(*uc_args) or [])
             if (
                 len(fn.columns) == 1
             ):  # an array of single values: the TVF's one column holds each
@@ -4882,7 +4887,14 @@ def _legacy_literal(value: dict, param) -> str:
     def nest(v) -> str:
         if isinstance(v, (list, tuple)):
             return "array(" + ", ".join(nest(x) for x in v) + ")"
-        return repr(float(v)) + "D"
+        x = float(v)
+        if math.isnan(x):
+            return "CAST('NaN' AS DOUBLE)"
+        if math.isinf(x):
+            return (
+                "CAST('Infinity' AS DOUBLE)" if x > 0 else "CAST('-Infinity' AS DOUBLE)"
+            )
+        return repr(x) + "D"
 
     return (
         f"CAST(named_struct('typeId', {int(value['typeId'])}, 'srid', {int(value['srid'])}, "

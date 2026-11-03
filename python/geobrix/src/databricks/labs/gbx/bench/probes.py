@@ -244,8 +244,10 @@ def run_uc_slice(
     1. times ``gbx.uc.install`` (a JAR in ``volume_dir`` makes the JVM-only BNG functions Scala functions);
     2. runs every UC row of the slice tables (scalars through ``run_session``, the table functions through
        ``run_rows``) against ``catalog.schema.<name>``;
-    3. ``register(spark, target='uc', ...)`` (the schema is at this wheel's version), then ``USE catalog.schema`` and the
-       same rows with the bare names: the same text must give the same answers.
+    3. ``register(spark, target='uc', ...)`` (the schema is at this wheel's version), drops the session's temporary
+       ``gbx_`` functions (a session function outranks a schema function of the same bare name, and the pass would
+       then never reach UC), then ``USE catalog.schema`` and the same rows with the bare names: the same text must
+       give the same answers. Run it in a session that needs no session ``gbx_`` functions afterwards.
 
     Returns ``{"install_s", "statements", "scala", "failures", "cases", "unqualified_failures", "unqualified_cases"}``;
     ``scala`` counts the functions created on the JAR.
@@ -278,6 +280,8 @@ def run_uc_slice(
     out["failures"] = [m for _, m in res if m]
     out["cases"] = len(res)
     register(spark, target="uc", catalog=catalog, schema=schema)
+    for fn in (n for n, f in man.functions.items() if "L4" in f.levels):
+        spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {fn}")
     spark.sql(f"USE `{catalog}`.`{schema}`")
     res = run(lambda f: f)
     out["unqualified_failures"] = [m for _, m in res if m]
@@ -291,7 +295,7 @@ def uc_probe_sql(
     """E-UCScala + the OD-18 batch form + per-statement timing at n rows, for gbx-uc-sql on the warehouse."""
     q = f"`{catalog}`.`{schema}`"
     gen = f"(SELECT rand(7) * 700000 AS e, rand(8) * 1300000 AS n FROM range({n}))"
-    env = f"ENVIRONMENT (java_dependencies = '[\"{jar_path}\"]', environment_version = '4')"
+    env = f"ENVIRONMENT (java_dependencies = '[\"{jar_path}\"]', environment_version = '6')"
     handler = "HANDLER 'com.databricks.labs.gbx.kernels.uc.BngUc"
     return [
         (

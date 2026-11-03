@@ -198,6 +198,7 @@ GRID_GENERATOR = uc_view(
     GRID_GENERATOR,
     {BGKR: 27700},
     session_only=(
+        "geomkringx_bigint_k",  # a BIGINT k: the UC table function declares k INT
         "geomkringx_inf_point",
         "geomkringx_bad_geom",
         "h3_geomkringx_inf_point",

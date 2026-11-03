@@ -155,7 +155,8 @@ case class RST_RasterizeAgg(
 
     /** Direct typed update used by unit tests. */
     def update(buffer: RasterizeAcc, wkb: Array[Byte], v: Double): RasterizeAcc =
-        buffer.add(wkb, v)
+        if (v.isNaN) buffer // a NaN feature value is a missing one, skipped like a NULL (the lightweight rule)
+        else buffer.add(wkb, v)
 
     override def merge(buffer: RasterizeAcc, input: RasterizeAcc): RasterizeAcc =
         buffer.merge(input)

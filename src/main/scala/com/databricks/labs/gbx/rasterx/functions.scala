@@ -267,10 +267,10 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         ColumnAdapter(RST_RasterizeAgg.name, Seq(geom, value, xmin, ymin, xmax, ymax, widthPx, heightPx, outSrid))
 
     /** UDAF: rasterize a group's H3 cells into one tile (pixel-centroid burn).
-     *  Auto-derives the grid from the cell set; value omitted -> presence mask (1.0). */
+     *  Auto-derives the grid from the cell set; value omitted -> presence mask (1.0, an untyped NULL value). */
     def rst_h3_rasterize_agg(cellid: Column): Column =
         ColumnAdapter(RST_H3_RasterizeAgg.name, Seq(
-            cellid, lit(null).cast("double"), lit(4326), lit(null).cast("double"),
+            cellid, lit(null), lit(4326), lit(null).cast("double"),
             lit(null).cast("double"), lit(null).cast("double"),
             lit(null).cast("double"), lit(null).cast("double"),
             lit(null).cast("int"), lit(null).cast("int"),
@@ -304,10 +304,10 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         ))
 
     /** UDAF: rasterize a group's quadbin cells into one tile (pixel-centroid burn).
-     *  Auto-derives the grid from the cell set; value omitted -> presence mask (1.0). */
+     *  Auto-derives the grid from the cell set; value omitted -> presence mask (1.0, an untyped NULL value). */
     def rst_quadbin_rasterize_agg(cellid: Column): Column =
         ColumnAdapter(RST_Quadbin_RasterizeAgg.name, Seq(
-            cellid, lit(null).cast("double"), lit(4326), lit(null).cast("double"),
+            cellid, lit(null), lit(4326), lit(null).cast("double"),
             lit(null).cast("double"), lit(null).cast("double"),
             lit(null).cast("double"), lit(null).cast("double"),
             lit(null).cast("int"), lit(null).cast("int"),
@@ -342,10 +342,10 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
 
     /** UDAF: rasterize a group's BNG cells (STRING ids) into one 27700-native tile.
      *  The `srid` argument is retained for signature parity but forced to 27700 (no-op);
-     *  auto-derives the grid from the cell set; value omitted -> presence mask (1.0). */
+     *  auto-derives the grid from the cell set; value omitted -> presence mask (1.0, an untyped NULL value). */
     def rst_bng_rasterize_agg(cellid: Column): Column =
         ColumnAdapter(RST_BNG_RasterizeAgg.name, Seq(
-            cellid, lit(null).cast("double"), lit(27700), lit(null).cast("double"),
+            cellid, lit(null), lit(27700), lit(null).cast("double"),
             lit(null).cast("double"), lit(null).cast("double"),
             lit(null).cast("double"), lit(null).cast("double"),
             lit(null).cast("int"), lit(null).cast("int"),
@@ -381,7 +381,7 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
 
     /** UDAF: rasterize a group's custom-grid cells into one tile (pixel-centroid burn).
      *  Requires a `grid` struct column (produced by `gbx_custom_grid(...)`).
-     *  Auto-derives the extent from the cell set; value omitted -> presence mask (1.0). */
+     *  Auto-derives the extent from the cell set; value omitted -> presence mask (1.0, an untyped NULL value). */
     def rst_custom_rasterize_agg(cellid: Column, value: Column, grid: Column): Column =
         ColumnAdapter(RST_Custom_RasterizeAgg.name, Seq(
             cellid, value, grid,

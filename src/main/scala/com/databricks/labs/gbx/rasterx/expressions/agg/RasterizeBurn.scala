@@ -42,10 +42,12 @@ object RasterizeBurn {
         outCrs.map(_.trim).filter(_.nonEmpty) match {
             case Some(crs) =>
                 val m = """(?i)^(?:EPSG:)?(\d+)$""".r
+                // a digit string past the Int range is no EPSG code either: the same Fix, never a NumberFormatException
+                def refuse: Nothing = throw new IllegalArgumentException(
+                    s"$fn: out_crs '$crs' is not an EPSG code. Fix: pass EPSG:<n> (or the integer out_srid).")
                 crs match {
-                    case m(code) => code.toInt
-                    case other => throw new IllegalArgumentException(
-                        s"$fn: out_crs '$other' is not an EPSG code. Fix: pass EPSG:<n> (or the integer out_srid).")
+                    case m(code) => code.toIntOption.getOrElse(refuse)
+                    case _ => refuse
                 }
             case None => outSrid.getOrElse(default)
         }

@@ -165,6 +165,19 @@ class CellFillTest extends AnyFunSuite {
         }
     }
 
+    test("a NaN value is missing: order-independent, and it never feeds a neighbour's mean") {
+        val center = H3.pointToCellID(-0.1, 51.5, 8)
+        val nb     = H3.kLoop(center, 1)(0)
+        for (order <- Seq(Seq(Double.NaN, 4.0), Seq(4.0, Double.NaN))) {
+            val one = CellFill.largestPerCell(order.map(v => (nb, Some(v): Option[Double])))
+            one(nb) shouldBe Some(4.0)
+        }
+        CellFill.largestPerCell(Seq((nb, Some(Double.NaN)))) shouldBe Map(nb -> None)
+        val filled = CellFill.fill(H3, Map(center -> Some(Double.NaN), nb -> Some(6.0)), 1, "mean", 2.0).toMap
+        filled(center) shouldBe Some(6.0)
+        filled(nb) shouldBe Some(6.0)
+    }
+
     test("BNG_CellFill eval carries the BNG cell ids as Long in the BINARY payload") {
         val center = BNG.pointToCellID(530000.0, 180000.0, 4)
         val ring1  = BNG.kLoop(center, 1)

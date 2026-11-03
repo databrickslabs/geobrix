@@ -204,6 +204,41 @@ class RST_GridIntegrationTest extends PlanTest with SilentSparkSession {
         nd.doubleValue() shouldBe -9999.0 +- 1e-9
     }
 
+    test("the value-less rasterize_agg overloads burn the presence mask, 1.0 (an untyped NULL value)") {
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        import sc.implicits._
+        functions.register(spark)
+
+        def burnedValues(rasterBytes: Array[Byte]): Seq[Double] = {
+            val mem = s"/vsimem/grid_int_${java.util.UUID.randomUUID().toString.replace("-", "")}.tif"
+            gdal.FileFromMemBuffer(mem, rasterBytes)
+            val ds = gdal.Open(mem)
+            try {
+                val band = ds.GetRasterBand(1)
+                val px = new Array[Double](ds.GetRasterXSize * ds.GetRasterYSize)
+                band.ReadRaster(0, 0, ds.GetRasterXSize, ds.GetRasterYSize, px)
+                px.toSeq.filterNot(_ == -9999.0)
+            } finally {
+                RasterDriver.releaseDataset(ds)
+                gdal.Unlink(mem)
+            }
+        }
+        val qb = Seq((-0.1276, 51.5074), (-0.1419, 51.5014)).map { case (lon, lat) => Quadbin.pointToCell(lon, lat, 12) }
+        val qbBytes = qb.toDF("cellid").groupBy(lit(1).alias("g"))
+            .agg(rst_quadbin_rasterize_agg(col("cellid")).alias("out"))
+            .collect().head.getAs[Array[Byte]]("out")
+        val bng = Seq((530000.0, 180000.0), (531000.0, 181000.0)).map { case (e, n) => BNG.format(BNG.pointToCellID(e, n, 3)) }
+        val bngBytes = bng.toDF("cellid").groupBy(lit(1).alias("g"))
+            .agg(rst_bng_rasterize_agg(col("cellid")).alias("out"))
+            .collect().head.getAs[Array[Byte]]("out")
+        for (bytes <- Seq(qbBytes, bngBytes)) {
+            val burned = burnedValues(bytes)
+            assert(burned.nonEmpty, "the cells must cover at least one pixel")
+            assert(burned.forall(_ == 1.0), s"a presence mask burns 1.0, got ${burned.distinct}")
+        }
+    }
+
     test("bng rasterize_agg output declares -9999 NoData (spec 2.6)") {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._

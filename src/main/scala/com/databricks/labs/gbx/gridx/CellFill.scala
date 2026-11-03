@@ -98,7 +98,7 @@ object CellFill {
      * Fill NULL cells in `cells` from valid neighbours within `k` rings.
      *
      *  @param grid   grid system whose `kLoop` defines neighbour rings
-     *  @param cells  the group's cell -> optional value map (`None` = covered-but-missing)
+     *  @param rawCells the group's cell -> optional value map (`None` or NaN = covered-but-missing)
      *  @param k      neighbourhood radius in rings (>= 0); `k = 0` performs no fill
      *  @param method `"mean"` or `"idw"`
      *  @param power  IDW distance exponent (used by `idw` only)
@@ -106,7 +106,7 @@ object CellFill {
      */
     def fill(
         grid: GridSystem,
-        cells: Map[Long, Option[Double]],
+        rawCells: Map[Long, Option[Double]],
         k: Int,
         method: String,
         power: Double
@@ -115,6 +115,8 @@ object CellFill {
         val m = method.toLowerCase
         require(m == "mean" || m == "idw", s"cellfill: method must be 'mean' or 'idw'; got '$method'")
 
+        // A NaN is a missing value like a NULL: it is filled, and it never feeds a neighbour's mean or IDW.
+        val cells = rawCells.map { case (id, v) => id -> v.filterNot(_.isNaN) }
         // Deterministic output order: ascending unsigned cell id.
         val ordered = cells.keys.toSeq.sortWith((a, b) => java.lang.Long.compareUnsigned(a, b) < 0)
 
@@ -176,10 +178,12 @@ object CellFill {
         ArrayData.toArrayData(rows)
     }
 
-    /** One value per distinct cell: a cell id that repeats keeps its LARGEST non-null value, whatever order the rows
-     *  arrive in (the lightweight rule); `None` (covered but missing) survives only for a cell whose every value is `None`. */
+    /** One value per distinct cell: a cell id that repeats keeps its LARGEST non-null, non-NaN value, whatever order
+     *  the rows arrive in (the lightweight rule); a NaN is a missing value like a NULL. `None` (covered but missing)
+     *  survives only for a cell whose every value is missing. */
     def largestPerCell(pairs: scala.collection.Seq[(Long, Option[Double])]): Map[Long, Option[Double]] =
-        pairs.foldLeft(Map.empty[Long, Option[Double]]) { case (acc, (id, v)) =>
+        pairs.foldLeft(Map.empty[Long, Option[Double]]) { case (acc, (id, raw)) =>
+            val v = raw.filterNot(_.isNaN)
             acc.get(id) match {
                 case None                                  => acc.updated(id, v)
                 case Some(cur) if v.isDefined && (cur.isEmpty || v.get > cur.get) => acc.updated(id, v)

@@ -233,4 +233,18 @@ class RST_GridRasterizeAggTest extends AnyFunSuite with BeforeAndAfterAll {
         val noDataPixels = r.data.count(_ == -9999.0)
         noDataPixels should be > 0
     }
+
+    test("an out_crs digit string past the Int range is refused with the Fix, not a NumberFormatException") {
+        val e = intercept[IllegalArgumentException](
+            RasterizeBurn.outSrid("rst_h3_rasterize_agg", Some("99999999999999"), None, 4326))
+        e.getMessage should include("Fix:")
+        // WKT and ESRI codes are not read at this level: refused with the Fix, never burned into the wrong CRS
+        for (text <- Seq("ESRI:102100", "GEOGCS[\"WGS 84\"]")) {
+            val refused = intercept[IllegalArgumentException](
+                RasterizeBurn.outSrid("rst_h3_rasterize_agg", Some(text), None, 4326))
+            refused.getMessage should include("Fix:")
+        }
+        RasterizeBurn.outSrid("f", Some("EPSG:3857"), None, 4326) shouldBe 3857
+        RasterizeBurn.outSrid("f", None, None, 4326) shouldBe 4326
+    }
 }

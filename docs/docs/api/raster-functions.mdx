@@ -1640,7 +1640,7 @@ Rows: `key` `STRING`, `raster` `BINARY`.
 | `rows` | `TABLE` |  | The tiles, as `TABLE(SELECT key, tile FROM ...) PARTITION BY (key)`: one mosaic per key. An error tile, an empty tile and a tile that does not open are left out. The `tile` column is a tile, not BINARY: wrap bytes with `gbx_rst_fromcontent`. A partition that holds more than one key raises. |
 {/* END GENERATED gbx_rst_merge_tvf */}
 
-Use it instead of [`rst_merge_agg`](#rst_merge_agg) for large groups: `SELECT * FROM gbx_rst_merge_tvf(TABLE(SELECT key, tile FROM tiles) PARTITION BY (key))`. It merges each key's tiles into the same pixels as the aggregate. It reads them a row at a time, not as one batch of the whole group. A key with no readable tile gives no row; one whose mosaic is too large to build raises with a Fix that names the [VRT-mosaic](./vrt-mosaic) route (`mint_vrt`).
+Use it instead of [`rst_merge_agg`](#rst_merge_agg) for large groups: `SELECT * FROM gbx_rst_merge_tvf(TABLE(SELECT key, tile FROM tiles) PARTITION BY (key))`. It merges each key's tiles into the same pixels as the aggregate. It reads them a row at a time, not as one batch of the whole group. A key with no readable tile gives no row. A key whose mosaic is too large to build raises with a Fix that names the [VRT-mosaic](./vrt-mosaic) route (`mint_vrt`).
 
 ### rst_quadbin_rasterize_agg
 
@@ -6041,8 +6041,8 @@ result_df = rst_viewshed_towers(
 `observer_x`, `observer_y`, `visible_px` (long), `total_px` (long), `frac` (double,
 visible/total), and — when `to_crs` is set — `visible_px_reproj` and `total_px_reproj`.
 
-The `tile_range` helper (in `databricks.labs.gbx.rasterx.helpers`) computes the index window covering a circle of
-`radius_m` around a projected coordinate; `rst_viewshed_towers` uses it to select the tiles each
+`databricks.labs.gbx.rasterx.helpers.tile_range` computes the index window covering a circle of
+`radius_m` around a projected coordinate. `rst_viewshed_towers` uses it to select the tiles each
 tower needs before minting the per-tower VRT.
 
 ---

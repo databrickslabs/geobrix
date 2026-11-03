@@ -12,6 +12,24 @@ from path_config import SAMPLE_DATA_BASE
 from . import rasterx_functions_sql
 
 
+# The levels the module pins. Every generator example is `FROM t, LATERAL gbx_...(...)`, a form that
+# works at every level; L3 (the light table functions) is the one every compute can run. The other
+# prefixes are the helpers some examples feed from (cell ids, bounding boxes).
+_PINNED = ("gbx_rst_", "gbx_pmtiles_")
+_HELPERS = ("gbx_h3_", "gbx_quadbin_", "gbx_bng_", "gbx_custom_")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def rasterx_sql_registered(spark):
+    """Register what this module reads at L3, so no test depends on a registration an earlier module made."""
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, _PINNED, level="L3")
+    gbx_manager.register_family(
+        spark, _HELPERS, only=gbx_manager.names_at_level(_HELPERS, "L3"), level="L3"
+    )
+
+
 @pytest.fixture(scope="module")
 def sample_rasters(spark):
     """Load sample raster data for testing.
@@ -24,12 +42,10 @@ def sample_rasters(spark):
 
     Falls back to the elevation SRTM if the sentinel2 file is unavailable.
     """
-    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as F
     from _fixtures import single_band_path  # noqa: PLC0415
 
-    gbx_manager.register_family(spark, ('gbx_rst_',))
 
     # Committed real single-band fixture (the /Volumes sentinel2 is an all-NoData
     # placeholder); fall back to the /Volumes copies only if it is unavailable.
@@ -71,9 +87,7 @@ def sample_rasters(spark):
 @pytest.fixture(scope="module")
 def rasters_view(spark, sample_rasters):
     """Create 'rasters' temp view for SQL examples from the canonical single-band fixture."""
-    from databricks.labs.gbx import manager as gbx_manager
 
-    gbx_manager.register_family(spark, ('gbx_rst_',))
     sample_rasters.createOrReplaceTempView("rasters")
     yield
     spark.catalog.dropTempView("rasters")
@@ -87,9 +101,7 @@ def multiband_rasters_view(spark):
     (rst_avg, rst_min, rst_max, rst_median, rst_numbands, rst_bandmetadata,
     rst_pixelcount, rst_summary, rst_type, rst_isempty, rst_tryopen, rst_histogram).
     """
-    from databricks.labs.gbx import manager as gbx_manager
 
-    gbx_manager.register_family(spark, ('gbx_rst_',))
     try:
         from _fixtures import multiband_path  # noqa: PLC0415
 
@@ -131,11 +143,9 @@ def dem_rasters_view(spark):
     (rst_slope, rst_aspect, rst_hillshade, rst_tri, rst_tpi, rst_roughness,
     rst_contour, rst_viewshed).
     """
-    from databricks.labs.gbx import manager as gbx_manager
     from pyspark.sql import functions as F  # noqa: PLC0415
     from databricks.labs.gbx.rasterx import functions as rx
 
-    gbx_manager.register_family(spark, ('gbx_rst_',))
     from _fixtures import dem_path  # noqa: PLC0415
 
     # Build the tile column with binaryFile + rst_fromcontent (same robust path
@@ -160,9 +170,7 @@ def netcdf_rasters_view(spark):
 
     This view is used by SQL examples for rst_subdatasets and rst_getsubdataset.
     """
-    from databricks.labs.gbx import manager as gbx_manager
 
-    gbx_manager.register_family(spark, ('gbx_rst_',))
     try:
         from _fixtures import netcdf_path  # noqa: PLC0415
 
@@ -210,9 +218,7 @@ def test_rasterx_sql_setup_constant():
 @pytest.mark.integration
 def test_rasterx_sql_setup_executable(spark, sample_rasters):
     """Running the SQL in RASTERX_SQL_SETUP creates view rasters (requires sample data path)."""
-    from databricks.labs.gbx import manager as gbx_manager
 
-    gbx_manager.register_family(spark, ('gbx_rst_',))
     sql = rasterx_functions_sql.RASTERX_SQL_SETUP.strip()
     spark.sql(sql)
     result = spark.sql("SELECT * FROM rasters LIMIT 1")
@@ -553,59 +559,44 @@ def test_rst_updatetype_sql_example(spark, rasters_view):
 # ============================================================================
 
 
-def test_rst_maketiles_sql_example(spark, rasters_view):
-    """SQL make tiles example: the heavyweight generator in the select list."""
-    sql = rasterx_functions_sql._sql_variant(
-        rasterx_functions_sql.rst_maketiles_sql_example(), lateral=False
-    )
-    result = spark.sql(sql)
-    assert _plan_tier(result, "gbx_rst_maketiles") == "heavyweight"
+def _first_statement(sql):
+    """The first statement of an example: the one its function-info description shows."""
+    return rasterx_functions_sql._sql_statements(sql)[0][1]
+
+
+def _assert_tile_rows(result):
+    """A tile generator returns the flat tile columns, one row per output tile."""
     assert result.count() > 0
-    # the generator's one column is the tile struct
-    assert result.columns == ["tile"]
+    assert result.columns[:2] == ["cellid", "raster"]
+
+
+def test_rst_maketiles_sql_example(spark, rasters_view):
+    """SQL make tiles example: the table function, one row per sub-tile."""
+    sql = _first_statement(rasterx_functions_sql.rst_maketiles_sql_example())
+    _assert_tile_rows(spark.sql(sql))
 
 
 def test_rst_retile_sql_example(spark, rasters_view):
-    """SQL retile example: the heavyweight generator in the select list."""
-    sql = rasterx_functions_sql._sql_variant(
-        rasterx_functions_sql.rst_retile_sql_example(), lateral=False
-    )
-    result = spark.sql(sql)
-    assert _plan_tier(result, "gbx_rst_retile") == "heavyweight"
-    assert result.count() > 0
-    # the generator's one column is the tile struct
-    assert result.columns == ["tile"]
+    """SQL retile example: the table function, one row per sub-tile."""
+    sql = _first_statement(rasterx_functions_sql.rst_retile_sql_example())
+    _assert_tile_rows(spark.sql(sql))
 
 
 def test_rst_tooverlappingtiles_sql_example(spark, rasters_view):
-    """SQL overlapping tiles example: the heavyweight generator in the select list."""
-    sql = rasterx_functions_sql._sql_variant(
-        rasterx_functions_sql.rst_tooverlappingtiles_sql_example(), lateral=False
-    )
-    result = spark.sql(sql)
-    assert _plan_tier(result, "gbx_rst_tooverlappingtiles") == "heavyweight"
-    assert result.count() > 0
-    # the generator's one column is the tile struct
-    assert result.columns == ["tile"]
+    """SQL overlapping tiles example: the table function, one row per tile."""
+    sql = _first_statement(rasterx_functions_sql.rst_tooverlappingtiles_sql_example())
+    _assert_tile_rows(spark.sql(sql))
 
 
 def test_rst_separatebands_sql_example(spark, multiband_rasters_view):
-    """SQL separate bands example: the heavyweight generator in the select list."""
-    sql = rasterx_functions_sql._sql_variant(
-        rasterx_functions_sql.rst_separatebands_sql_example(), lateral=False
-    )
-    result = spark.sql(sql)
-    assert _plan_tier(result, "gbx_rst_separatebands") == "heavyweight"
-    assert result.count() > 0
-    # the generator's one column is the tile struct
-    assert result.columns == ["tile"]
+    """SQL separate bands example: the table function, one row per band."""
+    sql = _first_statement(rasterx_functions_sql.rst_separatebands_sql_example())
+    _assert_tile_rows(spark.sql(sql))
 
 
 def test_rst_rasterize_sql_example(spark):
     """rst_rasterize returns a non-null tile struct for the example burn."""
-    from databricks.labs.gbx import manager as gbx_manager
 
-    gbx_manager.register_family(spark, ('gbx_rst_',))
     sql = rasterx_functions_sql.rst_rasterize_sql_example()
     result = spark.sql(sql).collect()
     assert len(result) == 1
@@ -613,20 +604,15 @@ def test_rst_rasterize_sql_example(spark):
 
 
 def test_rst_polygonize_sql_example(spark):
-    """Round-trip rasterize->polygonize returns >=1 feature with the burn value."""
-    from databricks.labs.gbx import manager as gbx_manager
-
-    gbx_manager.register_family(spark, ('gbx_rst_',))
-    # The example carries two variations (heavy scalar first, light LATERAL
-    # second); execute the heavy scalar statement under the rasterx tier.
-    sql = rasterx_functions_sql._sql_variant(
-        rasterx_functions_sql.rst_polygonize_sql_example(), lateral=False
-    )
+    """Round-trip rasterize->polygonize returns >=1 region with the burn value."""
+    # the example's second statement is the round-trip: rasterize a polygon, then polygonize it
+    sql = rasterx_functions_sql._sql_statements(
+        rasterx_functions_sql.rst_polygonize_sql_example()
+    )[1][1]
     result = spark.sql(sql).collect()
-    assert len(result) == 1
-    features = result[0]["features"]
-    assert len(features) > 0
-    assert any(abs(feat["value"] - 42.0) < 1e-6 for feat in features)
+    assert len(result) >= 1
+    assert result[0]["geom_wkb"] is not None
+    assert any(abs(row["value"] - 42.0) < 1e-6 for row in result)
 
 
 # ============================================================================
@@ -902,11 +888,7 @@ def test_rst_h3_rasterize_agg_sql_example():
 
 def test_h3_cell_bbox_sql_example(spark):
     """h3_cell_bbox example string exists and executes to non-null bbox structs."""
-    from databricks.labs.gbx import manager as gbx_manager
 
-    gbx_manager.register_family(
-        spark, ('gbx_rst_', 'gbx_pmtiles_', 'gbx_h3_'), level="L3"
-    )
     sql = rasterx_functions_sql.h3_cell_bbox_sql_example()
     assert isinstance(sql, str) and len(sql) > 0
     assert "gbx_h3_cell_bbox" in sql
@@ -934,9 +916,7 @@ def london_rasters_view(spark):
     Used by BNG examples (warp to EPSG:27700) and quadbin examples (warp to
     EPSG:4326). Skips the dependent test when the sample raster is absent.
     """
-    from databricks.labs.gbx import manager as gbx_manager
 
-    gbx_manager.register_family(spark, ('gbx_rst_',))
     path = f"{SAMPLE_DATA_BASE}/london/elevation/srtm_n51w001.tif"
     try:
         df = spark.read.format("gdal").load(path)
@@ -979,9 +959,7 @@ def test_rastertogrid_sql_example_shape(example_attr, sql_fn):
 @pytest.fixture(scope="module")
 def london_rasters(spark):
     """Alias fixture: load the London raster DataFrame (skips if unavailable)."""
-    from databricks.labs.gbx import manager as gbx_manager
 
-    gbx_manager.register_family(spark, ('gbx_rst_',))
     path = f"{SAMPLE_DATA_BASE}/london/elevation/srtm_n51w001.tif"
     try:
         df = spark.read.format("gdal").load(path)
@@ -992,75 +970,25 @@ def london_rasters(spark):
         pytest.skip(f"London sample raster not loadable: {e}")
 
 
-def test_rst_quadbin_tessellate_sql_example(spark, london_rasters, london_rasters_view):
-    """quadbin tessellate is tier-divergent: heavy generator-in-SELECT + light LATERAL.
-
-    The heavy CollectionGenerator does NOT resolve via the modern
-    ``FROM v, LATERAL gbx_fn(...) t`` table-function syntax (that form is the
-    lightweight pyrx-UDTF surface, exercised under pyrx in
-    test_rasterx_transforms_python_light.py). The heavy tier invokes the
-    generator directly in ``SELECT``. The example therefore carries BOTH forms
-    (heavy first); here we validate the shape of both and execute the heavy one.
-    """
-    sql = rasterx_functions_sql.rst_quadbin_tessellate_sql_example()
-    assert "gbx_rst_quadbin_tessellate" in sql
-    assert (
-        "LATERAL VIEW" not in sql
-    ), "tessellate example should use modern LATERAL ... t, not LATERAL VIEW"
-    heavy = rasterx_functions_sql._sql_variant(sql, lateral=False)
-    light = rasterx_functions_sql._sql_variant(sql, lateral=True)
-    assert (
-        "LATERAL" not in heavy.upper()
-    ), "heavy tessellate form must be generator-in-SELECT, not LATERAL"
-    assert "LATERAL" in light.upper(), "light tessellate form must use LATERAL"
-    assert sql.index("gbx_rst_quadbin_tessellate(tile") < sql.index(
-        "LATERAL"
-    ), "heavy scalar form must come before the light LATERAL form"
-    # Execute the HEAVY (generator-in-SELECT) form against the heavy tier.
-    stmt = heavy.replace("FROM rasters", "FROM london_rasters")
-    result = spark.sql(stmt).collect()
-    assert len(result) > 0, "quadbin tessellate (heavy) produced no rows"
-    assert hasattr(rasterx_functions_sql, "rst_quadbin_tessellate_sql_example_output")
-
-
-def test_rst_bng_tessellate_sql_example(spark, london_rasters, london_rasters_view):
-    """bng tessellate is tier-divergent: heavy generator-in-SELECT + light LATERAL.
-
-    BNG warps the raster to EPSG:27700, then the heavy generator explodes to one
-    row per overlapping 1km cell when invoked directly in ``SELECT``. The modern
-    ``FROM v, LATERAL gbx_fn(...) t`` table-function form is the lightweight
-    pyrx-UDTF surface (exercised under pyrx in
-    test_rasterx_transforms_python_light.py), not the heavy tier. The example
-    carries BOTH forms (heavy first); here we validate both shapes and execute
-    the heavy one.
-    """
-    sql = rasterx_functions_sql.rst_bng_tessellate_sql_example()
-    assert "gbx_rst_bng_tessellate" in sql
-    assert (
-        "LATERAL VIEW" not in sql
-    ), "tessellate example should use modern LATERAL ... t, not LATERAL VIEW"
-    heavy = rasterx_functions_sql._sql_variant(sql, lateral=False)
-    light = rasterx_functions_sql._sql_variant(sql, lateral=True)
-    assert (
-        "LATERAL" not in heavy.upper()
-    ), "heavy tessellate form must be generator-in-SELECT, not LATERAL"
-    assert "LATERAL" in light.upper(), "light tessellate form must use LATERAL"
-    assert sql.index("gbx_rst_bng_tessellate(tile") < sql.index(
-        "LATERAL"
-    ), "heavy scalar form must come before the light LATERAL form"
-    # Execute the HEAVY (generator-in-SELECT) form against the heavy tier.
-    stmt = heavy.replace("FROM rasters", "FROM london_rasters")
-    result = spark.sql(stmt).collect()
-    assert len(result) > 0, "bng tessellate (heavy) produced no rows"
-    assert hasattr(rasterx_functions_sql, "rst_bng_tessellate_sql_example_output")
+@pytest.mark.parametrize("grid", ["quadbin", "bng"])
+def test_rst_grid_tessellate_sql_example(spark, london_rasters, london_rasters_view, grid):
+    """quadbin and bng tessellate are table functions: every statement is
+    ``FROM t, LATERAL gbx_...(...)`` and the first one runs, one row per overlapping cell."""
+    sql = getattr(rasterx_functions_sql, f"rst_{grid}_tessellate_sql_example")()
+    fn = f"gbx_rst_{grid}_tessellate"
+    statements = [b for _, b in rasterx_functions_sql._sql_statements(sql)]
+    assert len(statements) == 2
+    for stmt in statements:
+        assert f"LATERAL {fn}(" in stmt and "LATERAL VIEW" not in stmt, stmt
+    result = spark.sql(statements[0].replace("FROM rasters", "FROM london_rasters"))
+    assert result.columns[:2] == ["cellid", "raster"]
+    assert len(result.collect()) > 0, f"{grid} tessellate produced no rows"
+    assert hasattr(rasterx_functions_sql, f"rst_{grid}_tessellate_sql_example_output")
 
 
 def test_rst_quadbin_rasterize_agg_sql_example(spark):
     """quadbin rasterize_agg burns a group of quadbin cells into one non-null tile."""
-    from databricks.labs.gbx import manager as gbx_manager
 
-    gbx_manager.register_family(spark, ('gbx_rst_',))
-    gbx_manager.register_family(spark, ('gbx_quadbin_',))
     sql = rasterx_functions_sql.rst_quadbin_rasterize_agg_sql_example()
     assert "gbx_rst_quadbin_rasterize_agg" in sql
     # Build a small quadbin cell set over central London (lon/lat, zoom 12).
@@ -1092,14 +1020,12 @@ def test_rst_quadbin_rasterize_agg_sql_example(spark):
 
 def test_rst_binpoints_sql_example(spark):
     """binpoints SQL example executes and returns a non-null tile."""
-    from databricks.labs.gbx import manager as gbx_manager
     sql = rasterx_functions_sql.rst_binpoints_sql_example()
     assert isinstance(sql, str) and len(sql) > 0
     assert "gbx_rst_binpoints" in sql
     assert "SELECT" in sql.upper()
     assert hasattr(rasterx_functions_sql, "rst_binpoints_sql_example_output")
 
-    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     result = spark.sql(sql.strip()).collect()
     assert len(result) == 1
     assert result[0]["dsm"] is not None, "binpoints must produce a non-null tile"
@@ -1107,14 +1033,12 @@ def test_rst_binpoints_sql_example(spark):
 
 def test_rst_binpoints_agg_sql_example(spark):
     """binpoints_agg SQL example string exists, is valid SQL, and references the function."""
-    from databricks.labs.gbx import manager as gbx_manager
     sql = rasterx_functions_sql.rst_binpoints_agg_sql_example()
     assert isinstance(sql, str) and len(sql) > 0
     assert "gbx_rst_binpoints_agg" in sql
     assert "SELECT" in sql.upper()
     assert hasattr(rasterx_functions_sql, "rst_binpoints_agg_sql_example_output")
 
-    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     result = spark.sql(sql).collect()
     assert len(result) == 1
     assert result[0]["dsm"] is not None, "binpoints_agg must produce a non-null BINARY result"
@@ -1122,28 +1046,24 @@ def test_rst_binpoints_agg_sql_example(spark):
 
 def test_rst_isoband_sql_example(spark, dem_rasters_view):
     """isoband SQL example string exists, is valid SQL, and executes on dem_rasters."""
-    from databricks.labs.gbx import manager as gbx_manager
     sql = rasterx_functions_sql.rst_isoband_sql_example()
     assert isinstance(sql, str) and len(sql) > 0
     assert "gbx_rst_isoband" in sql
     assert "SELECT" in sql.upper()
     assert hasattr(rasterx_functions_sql, "rst_isoband_sql_example_output")
 
-    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     result = spark.sql(sql.strip()).collect()
     assert len(result) > 0
 
 
 def test_rst_chm_sql_example(spark, dem_rasters_view):
     """chm SQL example string exists, is valid SQL, and executes on dem_rasters."""
-    from databricks.labs.gbx import manager as gbx_manager
     sql = rasterx_functions_sql.rst_chm_sql_example()
     assert isinstance(sql, str) and len(sql) > 0
     assert "gbx_rst_chm" in sql
     assert "SELECT" in sql.upper()
     assert hasattr(rasterx_functions_sql, "rst_chm_sql_example_output")
 
-    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     result = spark.sql(sql.strip()).collect()
     assert len(result) > 0
     assert result[0]["chm"] is not None, "chm must produce a non-null tile"
@@ -1151,10 +1071,7 @@ def test_rst_chm_sql_example(spark, dem_rasters_view):
 
 def test_rst_bng_rasterize_agg_sql_example(spark):
     """bng rasterize_agg burns a group of STRING BNG cells into one non-null tile."""
-    from databricks.labs.gbx import manager as gbx_manager
 
-    gbx_manager.register_family(spark, ('gbx_rst_',))
-    gbx_manager.register_family(spark, ('gbx_bng_',))
     sql = rasterx_functions_sql.rst_bng_rasterize_agg_sql_example()
     assert "gbx_rst_bng_rasterize_agg" in sql
     # Build BNG STRING cell ids over central London (BNG eastings/northings, 1km).
@@ -1182,77 +1099,39 @@ def test_rst_bng_rasterize_agg_sql_example(spark):
 
 
 
-def _plan_tier(df, fn=None):
-    """Which tier evaluates ``fn`` (or anything, when ``fn`` is None) in ``df``'s physical plan.
-
-    'lightweight' when a Python exec node (``org.apache.spark.sql.execution.python``)
-    evaluates the function, else 'heavyweight'. A heavyweight example may still use a
-    lightweight-only helper (``gbx_rst_fromfile`` is a Python UDF in both tiers), so the
-    check can be limited to the example's own function.
-    """
-    stack, python_nodes = [df._jdf.queryExecution().sparkPlan()], []
-    while stack:
-        node = stack.pop()
-        if node.getClass().getName().startswith("org.apache.spark.sql.execution.python."):
-            python_nodes.append(node.toString())
-        children = node.children()
-        stack.extend(children.apply(i) for i in range(children.size()))
-    hit = [n for n in python_nodes if fn is None or f"{fn}(" in n]
-    return "lightweight" if hit else "heavyweight"
-
-
-def _tier_marked_examples():
-    """(example name, sql) of every rasterx SQL example that marks its tiers."""
+def _generator_examples():
+    """(example name, sql) of every rasterx SQL example that calls a table function."""
     out = []
     for name in sorted(dir(rasterx_functions_sql)):
         if name.endswith("_sql_example") and callable(getattr(rasterx_functions_sql, name)):
             sql = getattr(rasterx_functions_sql, name)()
-            if any(t for t, _ in rasterx_functions_sql._sql_statements(sql)):
+            if ", LATERAL gbx_" in sql or ",\nLATERAL gbx_" in sql:
                 out.append((name, sql))
     return out
 
 
-_TIER_MARKED = _tier_marked_examples()
-# Heavy statements cheap enough to execute on the doc views (the others are planned only).
-_EXECUTE = {"rst_xyzpyramid_sql_example"}
-# An example with no heavyweight statement (a function the JVM level does not serve) has nothing to plan here.
-_HEAVY_MARKED = [
-    (n, q)
-    for n, q in _TIER_MARKED
-    if any(t == "heavyweight" for t, _ in rasterx_functions_sql._sql_statements(q))
-]
+_GENERATORS = _generator_examples()
+# The table-function examples cheap enough to execute on the doc views (the others are analyzed only: the
+# custom-grid ones read a file that exists on a workspace, not in the test environment).
+_EXECUTE = {"rst_h3_tessellate_sql_example", "rst_xyzpyramid_sql_example"}
 
 
-def test_every_generator_example_marks_its_tiers():
-    """Every rasterx example with a LATERAL table-function call says which tier each form is."""
-    names = {n for n, _ in _TIER_MARKED}
+def test_no_example_uses_the_select_list_generator_form():
+    """The select-list and LATERAL VIEW forms exist at one level only; no rasterx example shows them."""
     for name in dir(rasterx_functions_sql):
         if name.endswith("_sql_example") and callable(getattr(rasterx_functions_sql, name)):
             sql = getattr(rasterx_functions_sql, name)()
-            if ", LATERAL gbx_" in sql or ",\nLATERAL gbx_" in sql:
-                assert name in names, f"{name} uses the lightweight LATERAL form unmarked"
-    assert len(names) >= 42
+            assert "LATERAL VIEW" not in sql.upper(), name
+            assert "-- heavyweight tier" not in sql, name
+    assert len(_GENERATORS) >= 42
 
 
-@pytest.mark.parametrize("name,sql", _HEAVY_MARKED, ids=[n for n, _ in _HEAVY_MARKED])
-def test_heavyweight_statements_run_the_heavyweight_implementation(
+@pytest.mark.parametrize("name,sql", _GENERATORS, ids=[n for n, _ in _GENERATORS])
+def test_table_function_examples_resolve(
     spark, rasters_view, multiband_rasters_view, name, sql
 ):
-    """Each heavyweight-marked statement plans the JVM implementation, even with the
-    lightweight table functions registered in the same session, and never uses the
-    lightweight FROM t, LATERAL form."""
-    from databricks.labs.gbx import manager as gbx_manager
-
-    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")  # the light UDTFs share the SQL names
-
-    gbx_manager.register_family(spark, ('gbx_rst_',))
-    gbx_manager.register_family(spark, ('gbx_custom_',))
-    heavy = [b for t, b in rasterx_functions_sql._sql_statements(sql) if t == "heavyweight"]
-    assert heavy, f"{name} has no heavyweight statement"
-    fn = "gbx_" + name[: -len("_sql_example")]
-    for stmt in heavy:
-        assert f", LATERAL {fn}(" not in stmt and f",\nLATERAL {fn}(" not in stmt, stmt
+    """Each table-function statement resolves against the registered functions; the cheap ones run."""
+    for stmt in (b for _, b in rasterx_functions_sql._sql_statements(sql)):
         df = spark.sql(stmt)
-        assert _plan_tier(df, fn) == "heavyweight", stmt
         if name in _EXECUTE:
-            df.take(1)
+            assert len(df.take(1)) == 1, stmt

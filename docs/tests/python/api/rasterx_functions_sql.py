@@ -78,21 +78,14 @@ def _sql_statements(sql: str):
 
 
 def _sql_variant(sql: str, *, lateral: bool) -> str:
-    """Pick one tier's statement from an example that shows each tier's form.
+    """Pick one statement from an example that carries more than one.
 
-    Generators and table functions are called differently per tier: the
-    heavyweight tier registers generators (select list or ``LATERAL VIEW``) and
-    ARRAY-returning functions, the lightweight (pyrx) tier streaming table
-    functions called as ``FROM t, LATERAL f(...)``. Those examples mark each
-    statement with a ``-- heavyweight tier`` or ``-- lightweight tier`` comment
-    line, heavy first (so heavy-only ``DESCRIBE FUNCTION`` extraction picks it up).
-    Execution tests run one statement at a time, so they use this helper to select
-    the first statement for the tier under test.
-
-    ``lateral=True`` returns the lightweight statement, ``lateral=False`` the
-    heavyweight one. An example without tier markers falls back to "has a
-    ``LATERAL`` table-function call" for lightweight; a single-statement example
-    returns its statement either way.
+    A generator is a table function, called as ``FROM t, LATERAL f(...)``, which works at
+    every level. An example may mark a statement ``-- heavyweight tier`` or
+    ``-- lightweight tier`` when the form belongs to one level only; ``lateral=True`` then
+    returns the lightweight statement and ``lateral=False`` the heavyweight one. An example
+    without markers falls back to "has a ``LATERAL`` table-function call" for ``lateral=True``;
+    a single-statement example returns its statement either way.
     """
     want = "lightweight" if lateral else "heavyweight"
     stmts = _sql_statements(sql)
@@ -1279,16 +1272,11 @@ rst_updatetype_sql_example_output = """
 def rst_h3_tessellate_sql_example():
     """Tessellate raster to H3 grid (assignment and coverage control)"""
     return """
--- heavyweight tier
--- The generator in the select list explodes to one row per overlapping H3
--- cell (default assignment='centroid', coverage='complete').
-SELECT gbx_rst_h3_tessellate(tile, 7, 'covering') FROM rasters;
-
--- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL.
+-- A table function, called with FROM ..., LATERAL: one row per overlapping H3
+-- cell. 3rd arg is assignment ('covering' shown; default is 'centroid').
 SELECT t.* FROM rasters, LATERAL gbx_rst_h3_tessellate(tile, 7, 'covering') t;
 
--- lightweight tier, explicit assignment='centroid' (default) + coverage='complete' (default).
+-- Explicit assignment='centroid' (default) + coverage='complete' (default).
 SELECT t.* FROM rasters, LATERAL gbx_rst_h3_tessellate(tile, 7, 'centroid', 'complete') t;
 """
 
@@ -1304,17 +1292,12 @@ rst_h3_tessellate_sql_example_output = """
 def rst_quadbin_tessellate_sql_example():
     """Tessellate a raster into CARTO quadbin v0 cells (assignment and coverage control)"""
     return """
--- heavyweight tier
--- The generator in the select list explodes to one row per overlapping
+-- A table function, called with FROM ..., LATERAL: one row per overlapping
 -- quadbin cell, each chip clipped to its cell. 3rd arg is assignment
 -- ('covering' shown; default is 'centroid'). Zoom 12 for a city-scale raster.
-SELECT gbx_rst_quadbin_tessellate(tile, 12, 'covering') FROM rasters;
-
--- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL.
 SELECT t.* FROM rasters, LATERAL gbx_rst_quadbin_tessellate(tile, 12, 'covering') t;
 
--- lightweight tier, explicit assignment='centroid' (default) + coverage='complete' (default).
+-- Explicit assignment='centroid' (default) + coverage='complete' (default).
 SELECT t.* FROM rasters, LATERAL gbx_rst_quadbin_tessellate(tile, 12, 'centroid', 'complete') t;
 """
 
@@ -1332,17 +1315,12 @@ rst_quadbin_tessellate_sql_example_output = """
 def rst_bng_tessellate_sql_example():
     """Tessellate a raster into British National Grid cells (assignment and coverage control)"""
     return """
--- heavyweight tier
--- The generator in the select list explodes to one row per overlapping BNG
+-- A table function, called with FROM ..., LATERAL: one row per overlapping BNG
 -- cell. 3rd arg is assignment ('covering' shown; default is 'centroid').
 -- '1km' == integer resolution 3; a raster in any CRS is warped to EPSG:27700 first.
-SELECT gbx_rst_bng_tessellate(tile, '1km', 'covering') FROM rasters;
-
--- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL.
 SELECT t.* FROM rasters, LATERAL gbx_rst_bng_tessellate(tile, '1km', 'covering') t;
 
--- lightweight tier, explicit assignment='centroid' (default) + coverage='complete' (default).
+-- Explicit assignment='centroid' (default) + coverage='complete' (default).
 SELECT t.* FROM rasters, LATERAL gbx_rst_bng_tessellate(tile, '1km', 'centroid', 'complete') t;
 """
 
@@ -1980,14 +1958,9 @@ rst_bng_rastertogridstddev_sql_example_output = """
 def rst_maketiles_sql_example():
     """Subdivide rasters into tiles by approximate size in MB"""
     return """
--- heavyweight tier
--- A generator: in the select list it yields one `tile` row per MB-sized sub-tile.
-SELECT gbx_rst_maketiles(tile, 4) FROM rasters;
-
--- lightweight tier
--- Subdivide into MB-sized tiles using LATERAL. The second argument is a target
--- size in MB, not pixel dimensions; the tile grid is derived from the MB budget.
--- A streaming table function, called with FROM ..., LATERAL; t.* expands the tile fields.
+-- Subdivide into MB-sized tiles. The second argument is a target size in MB,
+-- not pixel dimensions; the tile grid is derived from the MB budget.
+-- A table function, called with FROM ..., LATERAL; t.* expands the tile fields.
 SELECT t.*
 FROM rasters,
 LATERAL gbx_rst_maketiles(tile, 4) t;
@@ -2007,12 +1980,8 @@ rst_maketiles_sql_example_output = """
 def rst_retile_sql_example():
     """Retile rasters to uniform dimensions"""
     return """
--- heavyweight tier
--- A generator: in the select list it yields one `tile` row per sub-tile.
-SELECT gbx_rst_retile(tile, 256, 256) FROM rasters;
-
--- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; t.* expands the tile fields.
+-- A table function, called with FROM ..., LATERAL: one row per sub-tile;
+-- t.* expands the tile fields.
 SELECT t.*
 FROM rasters,
 LATERAL gbx_rst_retile(tile, 256, 256) t;
@@ -2032,12 +2001,8 @@ rst_retile_sql_example_output = """
 def rst_tooverlappingtiles_sql_example():
     """Create overlapping tiles for edge-aware processing"""
     return """
--- heavyweight tier
--- A generator: in the select list it yields one `tile` row per overlapping tile.
-SELECT gbx_rst_tooverlappingtiles(tile, 256, 256, 10) FROM rasters;
-
--- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; t.* expands the tile fields.
+-- A table function, called with FROM ..., LATERAL: one row per overlapping
+-- tile; t.* expands the tile fields.
 SELECT t.*
 FROM rasters,
 LATERAL gbx_rst_tooverlappingtiles(tile, 256, 256, 10) t;
@@ -2057,12 +2022,8 @@ rst_tooverlappingtiles_sql_example_output = """
 def rst_separatebands_sql_example():
     """Separate multi-band raster into individual bands"""
     return """
--- heavyweight tier
--- A generator: in the select list it yields one `tile` row per band.
-SELECT gbx_rst_separatebands(tile) FROM multiband_rasters;
-
--- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; t.* expands the tile fields.
+-- A table function, called with FROM ..., LATERAL: one row per band;
+-- t.* expands the tile fields.
 SELECT t.*
 FROM multiband_rasters,
 LATERAL gbx_rst_separatebands(tile) t;
@@ -2194,21 +2155,10 @@ rst_tilexyz_sql_example_output = """
 def rst_xyzpyramid_sql_example():
     """Generate one row per (z, x, y) tile across a zoom range"""
     return """
--- heavyweight tier
--- A generator, called with LATERAL VIEW: per-tile rows across zoom levels 4..6 (PNG, 256px).
+-- A table function, called with FROM ..., LATERAL: one (z, x, y, bytes) row per tile
+-- across zoom levels 4..6 (PNG, 256px).
 -- Optional trailing rescale arg (default 'auto') controls 8-bit display contrast:
 --   gbx_rst_xyzpyramid(tile, 4, 6, 'PNG', 256, 'bilinear', 'auto')
-SELECT
-    path,
-    t.z,
-    t.x,
-    t.y,
-    t.bytes AS png_bytes
-FROM rasters
-LATERAL VIEW gbx_rst_xyzpyramid(tile, 4, 6) AS t;
-
--- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; one (z, x, y, bytes) row per tile.
 SELECT path, t.z, t.x, t.y, t.bytes AS png_bytes
 FROM rasters, LATERAL gbx_rst_xyzpyramid(tile, 4, 6) t;
 """
@@ -2287,38 +2237,30 @@ rst_rasterize_agg_sql_example_output = """
 def rst_polygonize_sql_example():
     """Extract polygons from contiguous-value regions of a freshly-rasterized tile."""
     return """
--- heavyweight tier
--- A scalar ARRAY return — call directly; each feature carries the
--- source pixel value as the `value` field. Round-trip: rasterize a polygon then
--- immediately polygonize it.
-SELECT gbx_rst_polygonize(
-    gbx_rst_rasterize(
+-- A table function, called with FROM ..., LATERAL: one row per contiguous-value
+-- region as (geom_wkb, value). Args are band and connectedness (4 or 8).
+SELECT t.geom_wkb, t.value FROM rasters, LATERAL gbx_rst_polygonize(tile, 1, 4) t;
+
+-- Round-trip: rasterize a polygon, then polygonize the result. The burn value
+-- comes back as the `value` of the one region.
+SELECT t.geom_wkb, t.value
+FROM (
+    SELECT gbx_rst_rasterize(
         unhex('010300000001000000050000000000000000000000000000000000000000000000000024400000000000000000000000000000244000000000000024400000000000000000000000000000244000000000000000000000000000000000'),
         42.0, 0.0, 0.0, 10.0, 10.0, 100, 100, 4326
-    )
-) AS features;
-
--- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL; one row per
--- contiguous-value region as (geom_wkb, value).
-SELECT t.geom_wkb, t.value FROM rasters, LATERAL gbx_rst_polygonize(tile, 1, 4) t;
+    ) AS tile
+) r,
+LATERAL gbx_rst_polygonize(tile) t;
 """
 
 
 rst_polygonize_sql_example_output = """
-# Heavyweight SQL — one ARRAY of features per row:
-+------------------+
-|features          |
-+------------------+
-|[{[BINARY], 42.0}]|
-+------------------+
-
-# Lightweight SQL — LATERAL streams one row per region (geom_wkb, value):
 +--------+-----+
 |geom_wkb|value|
 +--------+-----+
 |...     |365.0|
 +--------+-----+
+(one row per contiguous-value region; the rasterize round-trip returns one row with value 42.0)
 """
 
 
@@ -3669,19 +3611,7 @@ rst_custom_rastertogridstddev_sql_example_output = """
 def rst_custom_tessellate_sql_example():
     """Tessellate a raster into custom-grid chips (one chip per overlapping cell)"""
     return f"""
--- heavyweight tier
--- gbx_rst_fromfile only reads the file (a Python function in both tiers).
--- The generator in the select list yields one chip per cell (centroid assignment,
--- complete coverage by default).
-SELECT gbx_rst_custom_tessellate(
-    tile,
-    {_CUSTOM_GRID_LITERAL},
-    1
-)
-FROM (SELECT gbx_rst_fromfile('{_CUSTOM_RASTER_PATH}') AS tile) AS r;
-
--- lightweight tier
--- A streaming table function, called with FROM ..., LATERAL: centroid assignment,
+-- A table function, called with FROM ..., LATERAL: centroid assignment,
 -- complete coverage (one chip per cell).
 SELECT t.*
 FROM (SELECT gbx_rst_fromfile('{_CUSTOM_RASTER_PATH}') AS tile) AS r,
@@ -3691,8 +3621,7 @@ LATERAL gbx_rst_custom_tessellate(
     1
 ) t;
 
--- lightweight tier, explicit covering assignment (each pixel contributes to all
--- overlapping cells).
+-- Explicit covering assignment (each pixel contributes to all overlapping cells).
 SELECT t.*
 FROM (SELECT gbx_rst_fromfile('{_CUSTOM_RASTER_PATH}') AS tile) AS r,
 LATERAL gbx_rst_custom_tessellate(

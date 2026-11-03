@@ -201,7 +201,7 @@
       "since": "0.4.3"
     },
     "gbx_rst_bng_tessellate": {
-      "examples": "Examples:\n      > SELECT gbx_rst_bng_tessellate(tile, '1km', 'covering') FROM rasters;",
+      "examples": "Examples:\n      > SELECT t.* FROM rasters, LATERAL gbx_rst_bng_tessellate(tile, '1km', 'covering') t;",
       "usage_args": "tile, resolution, [assignment], [coverage]",
       "description": "Cut a tile in EPSG:27700 into BNG cells, one tile per cell.",
       "surfaces": [
@@ -498,7 +498,7 @@
       "since": "0.5.1"
     },
     "gbx_rst_custom_tessellate": {
-      "examples": "Examples:\n      > SELECT gbx_rst_custom_tessellate( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r;",
+      "examples": "Examples:\n      > SELECT t.* FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_tessellate( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [assignment], [coverage]",
       "description": "Cut a tile into custom-grid cells, one tile per cell.",
       "surfaces": [
@@ -792,7 +792,7 @@
       "since": "0.4.3"
     },
     "gbx_rst_h3_tessellate": {
-      "examples": "Examples:\n      > SELECT gbx_rst_h3_tessellate(tile, 7, 'covering') FROM rasters;",
+      "examples": "Examples:\n      > SELECT t.* FROM rasters, LATERAL gbx_rst_h3_tessellate(tile, 7, 'covering') t;",
       "usage_args": "tile, resolution, [assignment], [coverage]",
       "description": "Cut a tile into H3 cells, one tile per cell.",
       "surfaces": [
@@ -888,7 +888,7 @@
       "since": "0.5.2"
     },
     "gbx_rst_maketiles": {
-      "examples": "Examples:\n      > SELECT gbx_rst_maketiles(tile, 4) FROM rasters;",
+      "examples": "Examples:\n      > SELECT t.* FROM rasters, LATERAL gbx_rst_maketiles(tile, 4) t;",
       "usage_args": "tile, size_in_mb",
       "description": "Split a tile into tiles of about the given size in megabytes.",
       "surfaces": [
@@ -1080,7 +1080,7 @@
       "since": "0.2.0"
     },
     "gbx_rst_polygonize": {
-      "examples": "Examples:\n      > SELECT gbx_rst_polygonize( gbx_rst_rasterize( unhex('010300000001000000050000000000000000000000000000000000000000000000000024400000000000000000000000000000244000000000000024400000000000000000000000000000244000000000000000000000000000000000'), 42.0, 0.0, 0.0, 10.0, 10.0, 100, 100, 4326 ) ) AS features;",
+      "examples": "Examples:\n      > SELECT t.geom_wkb, t.value FROM rasters, LATERAL gbx_rst_polygonize(tile, 1, 4) t;",
       "usage_args": "tile, [band], [connectedness]",
       "description": "Extract a polygon for each connected region of equal pixel values.",
       "surfaces": [
@@ -1202,7 +1202,7 @@
       "since": "0.4.3"
     },
     "gbx_rst_quadbin_tessellate": {
-      "examples": "Examples:\n      > SELECT gbx_rst_quadbin_tessellate(tile, 12, 'covering') FROM rasters;",
+      "examples": "Examples:\n      > SELECT t.* FROM rasters, LATERAL gbx_rst_quadbin_tessellate(tile, 12, 'covering') t;",
       "usage_args": "tile, resolution, [assignment], [coverage]",
       "description": "Cut a tile into quadbin cells, one tile per cell.",
       "surfaces": [
@@ -1300,7 +1300,7 @@
       "since": "0.4.0"
     },
     "gbx_rst_retile": {
-      "examples": "Examples:\n      > SELECT gbx_rst_retile(tile, 256, 256) FROM rasters;",
+      "examples": "Examples:\n      > SELECT t.* FROM rasters, LATERAL gbx_rst_retile(tile, 256, 256) t;",
       "usage_args": "tile, tile_width, tile_height",
       "description": "Partition a tile into non-overlapping sub-tiles of the given pixel size.",
       "surfaces": [
@@ -1375,7 +1375,7 @@
       "since": "0.2.0"
     },
     "gbx_rst_separatebands": {
-      "examples": "Examples:\n      > SELECT gbx_rst_separatebands(tile) FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_separatebands(tile) t;",
       "usage_args": "tile",
       "description": "Split a multi-band tile into single-band tiles, one row per band.",
       "surfaces": [
@@ -1505,7 +1505,7 @@
       "since": "0.4.0"
     },
     "gbx_rst_tooverlappingtiles": {
-      "examples": "Examples:\n      > SELECT gbx_rst_tooverlappingtiles(tile, 256, 256, 10) FROM rasters;",
+      "examples": "Examples:\n      > SELECT t.* FROM rasters, LATERAL gbx_rst_tooverlappingtiles(tile, 256, 256, 10) t;",
       "usage_args": "tile, tile_width, tile_height, overlap",
       "description": "Partition a tile into overlapping tiles of the given pixel size.",
       "surfaces": [
@@ -1670,7 +1670,7 @@
       "since": "0.2.0"
     },
     "gbx_rst_xyzpyramid": {
-      "examples": "Examples:\n      > SELECT path, t.z, t.x, t.y, t.bytes AS png_bytes FROM rasters LATERAL VIEW gbx_rst_xyzpyramid(tile, 4, 6) AS t;",
+      "examples": "Examples:\n      > SELECT path, t.z, t.x, t.y, t.bytes AS png_bytes FROM rasters, LATERAL gbx_rst_xyzpyramid(tile, 4, 6) t;",
       "usage_args": "tile, min_z, max_z, [format], [size], [resampling], [rescale]",
       "description": "Render every web-mercator XYZ tile that the raster touches, across a range of zoom levels.",
       "surfaces": [

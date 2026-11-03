@@ -695,8 +695,7 @@
       "bindings": [
         "sql",
         "python-light",
-        "python-heavy",
-        "scala"
+        "python-heavy"
       ],
       "since": "0.2.0"
     },
@@ -1864,7 +1863,7 @@
       "since": "0.2.0"
     },
     "gbx_bng_geomkloopexplode": {
-      "examples": "Examples:\n      > SELECT t.cellid FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src LATERAL VIEW gbx_bng_geomkloopexplode(src.geom, 3, 1, 'boundary-out') t AS cellid;",
+      "examples": "Examples:\n      > SELECT t.cellid FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src, LATERAL gbx_bng_geomkloopexplode(src.geom, 3, 1, 'boundary-out') t;",
       "usage_args": "geom, resolution, k, [mode], [coverage]",
       "description": "Return the BNG cells at exactly ring distance k from a geometry's cells, one row per cell.",
       "surfaces": [
@@ -1886,7 +1885,7 @@
       "since": "0.2.0"
     },
     "gbx_bng_geomkringexplode": {
-      "examples": "Examples:\n      > SELECT t.cellid FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src LATERAL VIEW gbx_bng_geomkringexplode(src.geom, 3, 1, 'boundary-out') t AS cellid;",
+      "examples": "Examples:\n      > SELECT t.cellid FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src, LATERAL gbx_bng_geomkringexplode(src.geom, 3, 1, 'boundary-out') t;",
       "usage_args": "geom, resolution, k, [mode], [coverage]",
       "description": "Return the BNG cells of a geometry dilated by k rings, one row per cell.",
       "surfaces": [
@@ -1908,7 +1907,7 @@
       "since": "0.2.0"
     },
     "gbx_bng_kloopexplode": {
-      "examples": "Examples:\n      > SELECT t.cellid FROM (SELECT 'TQ3080' AS cell) src LATERAL VIEW gbx_bng_kloopexplode(src.cell, 1) t AS cellid;",
+      "examples": "Examples:\n      > SELECT t.cellid FROM (SELECT 'TQ3080' AS cell) src, LATERAL gbx_bng_kloopexplode(src.cell, 1) t;",
       "usage_args": "cellid, k",
       "description": "Return the cells at exactly ring distance k of a BNG cell, one row per cell.",
       "surfaces": [
@@ -1930,7 +1929,7 @@
       "since": "0.2.0"
     },
     "gbx_bng_kringexplode": {
-      "examples": "Examples:\n      > SELECT t.cellid FROM (SELECT 'TQ3080' AS cell) src LATERAL VIEW gbx_bng_kringexplode(src.cell, 1) t AS cellid;",
+      "examples": "Examples:\n      > SELECT t.cellid FROM (SELECT 'TQ3080' AS cell) src, LATERAL gbx_bng_kringexplode(src.cell, 1) t;",
       "usage_args": "cellid, k",
       "description": "Return the cells within ring distance k of a BNG cell, one row per cell.",
       "surfaces": [
@@ -1975,7 +1974,7 @@
       "since": "0.2.0"
     },
     "gbx_bng_tessellateexplode": {
-      "examples": "Examples:\n      > SELECT t.cellid, t.core, t.chip FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src LATERAL VIEW gbx_bng_tessellateexplode(src.geom, 3) t AS cellid, core, chip;",
+      "examples": "Examples:\n      > SELECT t.cellid, t.core, t.chip FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src, LATERAL gbx_bng_tessellateexplode(src.geom, 3) t;",
       "usage_args": "geom, resolution, [keep_core_geom]",
       "description": "Tessellate a geometry into BNG cells, one row per cell.",
       "surfaces": [
@@ -2154,7 +2153,7 @@
       "since": "0.4.0"
     },
     "gbx_st_asmvt_pyramid": {
-      "examples": "Examples:\n      > WITH feats AS ( SELECT unhex('010100000000000000000000000000000000000000') AS geom_wkb, named_struct('name', 'origin', 'id', 1L) AS attrs ) SELECT t.tile.z AS z, t.tile.x AS x, t.tile.y AS y, t.tile.mvt_bytes AS mvt_bytes FROM feats LATERAL VIEW gbx_st_asmvt_pyramid(geom_wkb, attrs, 0, 2, 'layer', 4096) t AS tile;",
+      "examples": "Examples:\n      > WITH feats AS ( SELECT unhex('010100000000000000000000000000000000000000') AS geom_wkb, named_struct('name', 'origin', 'id', 1L) AS attrs ) SELECT t.z, t.x, t.y, t.mvt_bytes FROM feats, LATERAL gbx_st_asmvt_pyramid(geom_wkb, attrs, 0, 2, 'layer', 4096) t;",
       "usage_args": "geom, attrs, min_z, max_z, [layer_name], [extent]",
       "description": "Encode one feature into a Mapbox Vector Tile for every web-mercator tile it touches, across a range of zoom levels.",
       "surfaces": [
@@ -2201,7 +2200,7 @@
       "since": "0.5.0"
     },
     "gbx_st_interpolateelevationbbox": {
-      "examples": "Examples:\n      > SELECT t.elevation_point FROM tin_survey LATERAL VIEW gbx_st_interpolateelevationbbox(pts, bl, 0, 0, 'NONENCROACHING', 0, 0, 10, 10, 3, 3, 0, 'constrained') t AS elevation_point;",
+      "examples": "Examples:\n      > SELECT t.elevation_point FROM tin_survey, LATERAL gbx_st_interpolateelevationbbox(pts, bl, 0, 0, 'NONENCROACHING', 0, 0, 10, 10, 3, 3, 0, 'constrained') t;",
       "usage_args": "points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, xmin, ymin, xmax, ymax, width_px, height_px, srid, [mode]",
       "description": "Interpolate the Z of a triangulated surface at the centres of a bounding-box grid, one row per cell.",
       "surfaces": [
@@ -2212,7 +2211,7 @@
       "since": "0.4.0"
     },
     "gbx_st_interpolateelevationgeom": {
-      "examples": "Examples:\n      > SELECT t.elevation_point FROM tin_survey LATERAL VIEW gbx_st_interpolateelevationgeom(pts, bl, 0, 0, 'NONENCROACHING', unhex('010100000000000000000000000000000000002440'), 3, 3, 3, -3, 'constrained') t AS elevation_point;",
+      "examples": "Examples:\n      > SELECT t.elevation_point FROM tin_survey, LATERAL gbx_st_interpolateelevationgeom(pts, bl, 0, 0, 'NONENCROACHING', unhex('010100000000000000000000000000000000002440'), 3, 3, 3, -3, 'constrained') t;",
       "usage_args": "points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, grid_origin, grid_cols, grid_rows, cell_size_x, cell_size_y, [mode]",
       "description": "Interpolate the Z of a triangulated surface at the centres of a grid anchored at a point, one row per cell.",
       "surfaces": [
@@ -2337,7 +2336,7 @@
       "since": "0.5.0"
     },
     "gbx_st_triangulate": {
-      "examples": "Examples:\n      > SELECT t.triangle FROM tin_survey LATERAL VIEW gbx_st_triangulate(pts, bl, 0, 0, 'NONENCROACHING', 'constrained') t AS triangle;",
+      "examples": "Examples:\n      > SELECT t.triangle FROM tin_survey, LATERAL gbx_st_triangulate(pts, bl, 0, 0, 'NONENCROACHING', 'constrained') t;",
       "usage_args": "points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, [mode]",
       "description": "Build a constrained Delaunay triangulation of Z-valued points and break lines, one row per triangle.",
       "surfaces": [

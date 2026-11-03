@@ -66,6 +66,12 @@ object RST_Isoband extends WithExpressionInfo {
 
     def eval(tileRow: InternalRow, breaksData: ArrayData, conf: UTF8String): ArrayData = {
         // PARAMETER: breaks that do not rise raise, naming the rule; they are never an error tile or a NULL
+        if (breaksData != null) {
+            // a NULL element would read as 0.0 (or an NPE) in toDoubleArray: name it instead
+            (0 until breaksData.numElements()).foreach { i =>
+                require(!breaksData.isNullAt(i), s"breaks must not contain NULL; element $i is NULL")
+            }
+        }
         if (breaksData != null && breaksData.numElements() > 1) {
             val b = breaksData.toDoubleArray()
             require((0 until b.length - 1).forall(i => b(i) < b(i + 1)), "breaks must be strictly ascending")

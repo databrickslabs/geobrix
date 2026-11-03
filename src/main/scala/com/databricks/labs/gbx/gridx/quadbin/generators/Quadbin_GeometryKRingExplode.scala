@@ -39,7 +39,7 @@ case class Quadbin_GeometryKRingExplode(
             Seq.empty
         } else {
             val resolutionVal = resolutionRaw.asInstanceOf[Int]
-            val kVal = kRaw.asInstanceOf[Int]
+            val kVal = GeomDilation.kAsInt(kRaw)
             val modeStr = if (modeRaw == null) GeomDilation.DEFAULT_MODE else modeRaw.asInstanceOf[UTF8String].toString
             val coverageStr = if (coverageRaw == null) GeomDilation.DEFAULT_COVERAGE else coverageRaw.asInstanceOf[UTF8String].toString
 

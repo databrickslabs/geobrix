@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.gridx.bng.generators
 
 import com.databricks.labs.gbx.expressions.WithExpressionInfo
-import com.databricks.labs.gbx.gridx.grid.BNG
+import com.databricks.labs.gbx.gridx.grid.{BNG, GeomDilation}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.codegen.CodegenFallback
@@ -31,10 +31,10 @@ case class BNG_KRingExplode(
             case s: UTF8String =>
                 val cid = BNG.parseOrNull(s.toString)
                 if (cid == null) Iterator.empty[InternalRow]
-                else BNG.kRing(cid, kValue.asInstanceOf[Int])
+                else BNG.kRing(cid, GeomDilation.kAsInt(kValue))
                     .map(cid => InternalRow.fromSeq(Seq(UTF8String.fromString(BNG.format(cid)))))
             case l: Long       => BNG
-                    .kRing(l, kValue.asInstanceOf[Int])
+                    .kRing(l, GeomDilation.kAsInt(kValue))
                     .map(cid => InternalRow.fromSeq(Seq(cid)))
             case _             => throw new IllegalArgumentException(s"Unsupported cellid type: ${cellidValue.getClass.getName}")
         }

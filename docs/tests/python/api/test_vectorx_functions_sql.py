@@ -34,8 +34,8 @@ def vectorx_registered(spark):
     - ``vectorx`` (heavy tier): TIN, MVT, CRS functions
     - ``vectorx.jts.legacy`` (heavy tier): ``gbx_st_legacyaswkb``
     - the manager: the antimeridian, cleaning and coverage functions
-      (``gbx_st_shiftlongitude``, ``gbx_st_wrapx``, ``gbx_st_split`` and the rest),
-      each on the best level this session offers
+      (``gbx_st_shiftlongitude``, ``gbx_st_wrapx``, ``gbx_st_split`` and the rest) and
+      the generators (the MVT pyramid and the TIN functions), each on the best level this session offers
 
     The manager registration comes after the heavy registration so the last
     write to the SQL function registry wins; both register the same
@@ -67,6 +67,11 @@ def vectorx_registered(spark):
             "gbx_st_snap",
             "gbx_st_coverageisvalid",
             "gbx_st_coverageinvalidedges",
+            # the generators are table functions (FROM t, LATERAL f(...)), installed by the manager
+            "gbx_st_asmvt_pyramid",
+            "gbx_st_triangulate",
+            "gbx_st_interpolateelevationbbox",
+            "gbx_st_interpolateelevationgeom",
         ],
     )
     create_setup_views_vectorx_heavy(spark)

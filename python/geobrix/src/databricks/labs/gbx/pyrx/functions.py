@@ -2861,6 +2861,25 @@ _CONTOUR_SCHEMA = ArrayType(
 )
 
 
+def _path_is_unreachable(tile) -> bool:
+    """True for a path-backed tile whose local file is not there (a UC Volume path that has not caught up). Like
+    the non-GDAL ``OSError`` that :func:`_open_op` lets through, it is not a tile whose bytes GDAL cannot read.
+    A path this cannot test (a remote or ``/vsi`` path) is not called unreachable.
+    """
+    try:
+        vt = ot._to_virtual_tile(tile)
+    except Exception:  # noqa: BLE001 - a tile of no known shape has no path to test
+        return False
+    path = vt.path
+    if vt.raster is not None or not path:
+        return False
+    if path.startswith("file:"):
+        path = "/" + path[len("file:") :].lstrip("/")
+    if "://" in path or path.startswith("/vsi") or path.startswith("dbfs:"):
+        return False
+    return not os.path.exists(path)
+
+
 @contextlib.contextmanager
 def _open_or_none(tile):
     """The tile's dataset, or None when its bytes are not a raster GDAL can read (a function that returns an array
@@ -2872,6 +2891,8 @@ def _open_or_none(tile):
     try:
         ds = cm.__enter__()
     except RasterioIOError:
+        if _path_is_unreachable(tile):  # not corrupt bytes: Spark retries the task
+            raise
         yield None
         return
     try:
@@ -2913,6 +2934,13 @@ _ISOBAND_SCHEMA = ArrayType(
 
 @f.udf(_ISOBAND_SCHEMA)
 def _isoband_udf(tile, breaks):
+    if breaks is not None:  # a PARAMETER error, as in the JVM: checked before the tile
+        for i, b in enumerate(breaks):
+            if b is None:
+                raise ValueError(
+                    f"rst_isoband: breaks must not contain NULL; element {i} is NULL. "
+                    "Fix: remove the NULL from the breaks array."
+                )
     if _tile_is_empty(tile):
         return None
     if not breaks:
@@ -4341,11 +4369,19 @@ class _RstToOverlappingTilesUDTF:
 
     def eval(self, tile, tile_width, tile_height, overlap, file_ref=None):
         tiling.require_window(tile_width, tile_height, "gbx_rst_tooverlappingtiles")
-        if overlap is not None and not 0 <= int(overlap) < 100:
-            raise ValueError(
-                f"gbx_rst_tooverlappingtiles: overlap must be from 0 to below 100 percent, got {int(overlap)}. "
-                "Fix: pass the overlap as a percentage of the tile size."
-            )
+        if overlap is not None:
+            try:
+                overlap = int(overlap)
+            except (TypeError, ValueError, OverflowError):  # NaN, infinity, text
+                raise ValueError(
+                    f"gbx_rst_tooverlappingtiles: overlap must be a number from 0 to below 100 percent, got {overlap!r}. "
+                    "Fix: pass the overlap as a percentage of the tile size."
+                ) from None
+            if not 0 <= overlap < 100:
+                raise ValueError(
+                    f"gbx_rst_tooverlappingtiles: overlap must be from 0 to below 100 percent, got {overlap}. "
+                    "Fix: pass the overlap as a percentage of the tile size."
+                )
         if _tile_is_empty(tile):
             yield from _empty_tile_rows(tile, "RST_ToOverlappingTiles")
             return
@@ -4547,8 +4583,10 @@ class _RstBngTessellateUDTF:
                 f"got '{effective_coverage}'"
             )
         from databricks.labs.gbx.pygx import _bng
+        from databricks.labs.gbx.pygx.functions import _norm_res
         from databricks.labs.gbx.pyrx import _env
 
+        resolution = _norm_res(resolution)  # as the grid explodes read it
         _bng.get_resolution(
             resolution
         )  # a resolution BNG does not define is a parameter error: it raises

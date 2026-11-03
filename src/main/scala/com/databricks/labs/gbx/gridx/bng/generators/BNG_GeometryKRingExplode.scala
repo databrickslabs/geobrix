@@ -43,10 +43,11 @@ case class BNG_GeometryKRingExplode(
                 case i: java.lang.Integer => Coerce.bngResolution(i, digitStrings = false)
                 case other                => Coerce.bngResolution(other.toString, digitStrings = true)
             }
-            val kVal = kRaw.asInstanceOf[Int]
+            val kVal = GeomDilation.kAsInt(kRaw)
             val modeStr = if (modeRaw == null) GeomDilation.DEFAULT_MODE else modeRaw.asInstanceOf[UTF8String].toString
             val coverageStr = if (coverageRaw == null) GeomDilation.DEFAULT_COVERAGE else coverageRaw.asInstanceOf[UTF8String].toString
             GeomDilation.requireMode(modeStr)
+            GeomDilation.requireCoverage(coverageStr)
 
             GridErrorHandler.safeEval[IterableOnce[InternalRow]](Iterator.empty) {
                 val geometryVal = geom.dataType match {

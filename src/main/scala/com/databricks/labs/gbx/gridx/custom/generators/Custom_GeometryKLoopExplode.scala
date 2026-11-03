@@ -46,6 +46,7 @@ case class Custom_GeometryKLoopExplode(
             val cvRaw   = coverage.eval(input)
             val coverageStr = if (cvRaw == null) GeomDilation.DEFAULT_COVERAGE else cvRaw.asInstanceOf[UTF8String].toString
             GeomDilation.requireMode(modeStr) // PARAMETER: an unknown mode raises, never zero rows
+            GeomDilation.requireCoverage(coverageStr) // and an unknown coverage
             val sys     = Custom_GridSpec.systemFromRow(gridRaw.asInstanceOf[InternalRow])
             val res     = Custom_GridSpec.asResolution(resRaw, "resolution") // PARAMETER: whole number, as text too
             val kVal    = Custom_GridSpec.asInt(kRaw, "k")

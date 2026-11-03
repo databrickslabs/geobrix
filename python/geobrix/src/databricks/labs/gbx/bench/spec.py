@@ -730,6 +730,15 @@ def pin_light_level(spark, sql_names) -> None:
         _register(spark, only=list(forced), _levels=forced)
 
 
+def _lateral_only(*_args, **_kwargs):
+    """The ``col_fn`` of a table function (a UDTF): it has no scalar Column form, so a runner path that builds one
+    fails here, naming the cause, instead of on ``None.alias``. The spark-path runner routes ``udtf=True`` specs
+    through SQL ``FROM t, LATERAL gbx_<fn>(...)`` and never calls it."""
+    raise NotImplementedError(
+        "this function is a table function: call it as FROM t, LATERAL gbx_<fn>(...), not as a Column"
+    )
+
+
 REGISTRY: Dict[str, FnSpec] = {
     "rst_width": FnSpec(
         "rst_width",
@@ -2156,7 +2165,7 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"size_in_mb": 1},
         core_fn=lambda ds, a: tiling.make_tiles(ds, float(a["size_in_mb"])),
-        col_fn=lambda t, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TILING_LIGHT
         + (
@@ -2189,7 +2198,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: tiling.to_overlapping_tiles(
             ds, a["tile_width"], a["tile_height"], a["overlap"]
         ),
-        col_fn=lambda t, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TILING_LIGHT
         + (
@@ -2206,7 +2215,7 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {},
         core_fn=lambda ds, a: tiling.separate_bands(ds),
-        col_fn=lambda t, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TILING_LIGHT
         + (
@@ -2284,7 +2293,7 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"resolution": 7},
         core_fn=lambda ds, a: [tessellate.tessellate_h3(ds, a["resolution"])],
-        col_fn=lambda t, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TESSELLATE_LIGHT
@@ -2316,7 +2325,7 @@ REGISTRY: Dict[str, FnSpec] = {
                 )
             )
         ],
-        col_fn=lambda t, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,
         sources=_TESSELLATE_LIGHT
@@ -2929,7 +2938,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: [
             list(tessellate.iter_tessellate_quadbin(ds, a["resolution"]))
         ],
-        col_fn=lambda t, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TESSELLATE_LIGHT
@@ -2950,7 +2959,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: [
             list(tessellate.iter_tessellate_bng(ds, a["resolution"]))
         ],
-        col_fn=lambda t, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid_str",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TESSELLATE_LIGHT
@@ -3012,7 +3021,7 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"band": 1, "connectedness": 4},
         core_fn=lambda ds, a: features.polygonize(ds, a["band"], a["connectedness"]),
-        col_fn=lambda t, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         # Reads every pixel to vectorize and emits geometry rows, not an output tile:
         # the disposition sampler finds no tile-struct column, so we pin it explicitly.
@@ -3608,7 +3617,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {"resolution": 1},
         core_fn=lambda ds, a: None,
-        col_fn=lambda t, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,
         fingerprint=False,
@@ -3804,7 +3813,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only (UDTF)
         core=False,
         fingerprint=True,
@@ -3817,7 +3826,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
@@ -3830,7 +3839,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
@@ -3851,7 +3860,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {"attrs": None, "min_z": 0, "max_z": 5, "layer_name": "features"},
-        col_fn=lambda col, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
+        col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         core_fn=lambda ds, a: None,
         core=False,
         fingerprint=False,

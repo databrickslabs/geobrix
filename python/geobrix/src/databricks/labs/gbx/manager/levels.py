@@ -65,11 +65,6 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_rst_cog_convert": ("L1", "L3"),
     "gbx_rst_color_relief": ("L1", "L3"),
     "gbx_rst_viewshed": ("L3",),
-    # contour (0.11x) and isoband (10x in the pure-core timing) are faster on the JVM, but a JVM level here sits behind
-    # the tile dispatch wrapper, a SQL function, and Spark refuses a SQL function inside explode(...): the way these
-    # arrays are read. Light until the dispatch can be built without a wrapper (conformed L1 blocks stay).
-    "gbx_rst_contour": ("L3",),
-    "gbx_rst_isoband": ("L3",),
     # A DataFrame helper, not a SQL name: its levels are L3 (all light), L1-steps (the viewshed and the
     # histogram are Catalyst steps) and JVM-DF (one Scala DataFrame step). The levels leg measures them.
     "rst_viewshed_towers": ("L3",),

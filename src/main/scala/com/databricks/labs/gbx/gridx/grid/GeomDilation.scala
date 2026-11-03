@@ -485,6 +485,22 @@ object GeomDilation {
     if (kind == "ring") acc.toSet else shellK
   }
 
+  /** Refuse a coverage that is not one of COVERAGE (a parameter error, raised before any per-row data guard). */
+  def requireCoverage(coverage: String): Unit =
+    if (!COVERAGE.contains(coverage))
+      throw new IllegalArgumentException(s"unknown coverage '$coverage'; expected ${COVERAGE.mkString(", ")}")
+
+  /** A ring distance k from any whole-number SQL value (INT, or BIGINT from a PySpark integer): never a
+    * ClassCastException, and a value beyond INT raises naming it instead of wrapping. */
+  def kAsInt(v: Any): Int = v match {
+    case n: java.lang.Number =>
+      val l = n.longValue
+      if (l < Int.MinValue || l > Int.MaxValue)
+        throw new IllegalArgumentException(s"k must fit an INT; got $l")
+      l.toInt
+    case other => throw new IllegalArgumentException(s"k must be a whole number; got '$other'")
+  }
+
   /** Refuse a mode that is not one of MODES (a parameter error, raised before any per-row data guard). */
   def requireMode(mode: String): Unit =
     if (!MODES.contains(mode))

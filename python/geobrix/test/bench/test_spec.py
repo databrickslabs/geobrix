@@ -1160,3 +1160,23 @@ def test_virtual_disposition_override_wins():
     fs = s.REGISTRY["rst_width"]
     fs2 = __import__("dataclasses").replace(fs, virtual_disposition="materialized")
     assert s.accessor_disposition("rst_width", fs2) == "materialized"
+
+
+def test_light_only_specs_are_the_names_bench_dispatch_dropped():
+    """A spec marked ``heavy=False`` has no JVM form: BenchDispatch must not know its name, and the
+    heavyweight run skips it."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve()
+    for _ in range(12):
+        if (root / "pom.xml").exists():
+            break
+        root = root.parent
+    text = (
+        root / "src/test/scala/com/databricks/labs/gbx/bench/BenchDispatch.scala"
+    ).read_text()
+    known = set(re.findall(r'"([a-z0-9_]+)"\s*(?:->|=>)', text))
+    light_only = {n for n, f in s.REGISTRY.items() if not f.heavy}
+    assert {"rst_median", "rst_retile", "rst_h3_rastertogridavg"} <= light_only
+    assert not (light_only & known), light_only & known

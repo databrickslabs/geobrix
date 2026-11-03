@@ -808,7 +808,7 @@ def run_heavy(mode):
     # Scope to fns that HAVE this mode (the *_agg aggregators are spark-path-only); otherwise
     # a pure-core resume perpetually reports the 7 aggregators as "missing" + dispatches them
     # to the JVM pure-core path for zero rows.
-    _mode_names = {f.name for f in fnspecs if mode in f.modes}
+    _mode_names = {f.name for f in fnspecs if mode in f.modes and f.heavy}
     _todo_fns = [
         f for f in FUNCTIONS.split(",") if f and f not in _done and f in _mode_names
     ]

@@ -348,6 +348,10 @@ class FnSpec:
     # function, and coverage checks count the case under it. None for the
     # function's own entry.
     variant_of: Optional[str] = None
+    # False when the function has no JVM form left (its heavyweight companion is deleted and
+    # BenchDispatch no longer knows the name): the heavyweight run skips it and only the
+    # lightweight run times it.
+    heavy: bool = True
 
 
 _BOTH = ("pure-core", "spark-path")
@@ -840,10 +844,11 @@ REGISTRY: Dict[str, FnSpec] = {
         "accessor",
         _BOTH,
         {},
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_Median.scala",),
+        sources=_ACCESSORS_LIGHT,
         core=True,
         core_fn=lambda ds, a: accessors.median(ds),
         col_fn=lambda t, a: rx.rst_median(t),
+        heavy=False,
     ),
     "rst_pixelcount": FnSpec(
         "rst_pixelcount",
@@ -1273,9 +1278,10 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         core_fn=lambda ds, a: accessors.metadata(ds),
         col_fn=lambda t, a: rx.rst_metadata(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_MetaData.scala",),
+        sources=_ACCESSORS_LIGHT,
         core=False,
         fingerprint=False,
+        heavy=False,
     ),
     "rst_bandmetadata": FnSpec(
         "rst_bandmetadata",
@@ -1334,9 +1340,10 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         core_fn=lambda ds, a: accessors.histogram(ds),
         col_fn=lambda t, a: rx.rst_histogram(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "pixel/RST_Histogram.scala",),
+        sources=_ACCESSORS_LIGHT,
         core=False,
         fingerprint=False,
+        heavy=False,
     ),
     # --- Tile-out transforms with scalar / fixed args (13) -----------
     # Each returns a raster tile, so the runner fingerprints the output as a
@@ -2179,6 +2186,7 @@ REGISTRY: Dict[str, FnSpec] = {
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TILING_LIGHT + (_OPS + "ReTile.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_tooverlappingtiles": FnSpec(
         "rst_tooverlappingtiles",
@@ -2345,6 +2353,7 @@ REGISTRY: Dict[str, FnSpec] = {
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT + (_GRIDX + "H3.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_h3_rastertogridcount": FnSpec(
         "rst_h3_rastertogridcount",
@@ -2360,6 +2369,7 @@ REGISTRY: Dict[str, FnSpec] = {
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT + (_GRIDX + "H3.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_h3_rastertogridmax": FnSpec(
         "rst_h3_rastertogridmax",
@@ -2375,6 +2385,7 @@ REGISTRY: Dict[str, FnSpec] = {
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT + (_GRIDX + "H3.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_h3_rastertogridmedian": FnSpec(
         "rst_h3_rastertogridmedian",
@@ -2395,6 +2406,7 @@ REGISTRY: Dict[str, FnSpec] = {
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT + (_GRIDX + "H3.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_h3_rastertogridmin": FnSpec(
         "rst_h3_rastertogridmin",
@@ -2410,6 +2422,7 @@ REGISTRY: Dict[str, FnSpec] = {
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT + (_GRIDX + "H3.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_h3_rastertogridsum": FnSpec(
         "rst_h3_rastertogridsum",
@@ -2425,6 +2438,7 @@ REGISTRY: Dict[str, FnSpec] = {
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT + (_GRIDX + "H3.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_h3_rastertogridvariance": FnSpec(
         "rst_h3_rastertogridvariance",
@@ -2445,6 +2459,7 @@ REGISTRY: Dict[str, FnSpec] = {
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT + (_GRIDX + "H3.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_h3_rastertogridstddev": FnSpec(
         "rst_h3_rastertogridstddev",
@@ -2465,6 +2480,7 @@ REGISTRY: Dict[str, FnSpec] = {
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT + (_GRIDX + "H3.scala",),
         core=False,
+        heavy=False,
     ),
     # --- quadbin raster->grid aggregates (gridagg.py) -------------------------
     "rst_quadbin_rastertogridavg": FnSpec(
@@ -2486,6 +2502,7 @@ REGISTRY: Dict[str, FnSpec] = {
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT + (_GRIDX + "Quadbin.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_quadbin_rastertogridcount": FnSpec(
         "rst_quadbin_rastertogridcount",
@@ -2506,6 +2523,7 @@ REGISTRY: Dict[str, FnSpec] = {
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT + (_GRIDX + "Quadbin.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_quadbin_rastertogridmax": FnSpec(
         "rst_quadbin_rastertogridmax",
@@ -2526,6 +2544,7 @@ REGISTRY: Dict[str, FnSpec] = {
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT + (_GRIDX + "Quadbin.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_quadbin_rastertogridmedian": FnSpec(
         "rst_quadbin_rastertogridmedian",
@@ -2546,6 +2565,7 @@ REGISTRY: Dict[str, FnSpec] = {
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT + (_GRIDX + "Quadbin.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_quadbin_rastertogridmin": FnSpec(
         "rst_quadbin_rastertogridmin",
@@ -2566,6 +2586,7 @@ REGISTRY: Dict[str, FnSpec] = {
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT + (_GRIDX + "Quadbin.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_quadbin_rastertogridsum": FnSpec(
         "rst_quadbin_rastertogridsum",
@@ -2586,6 +2607,7 @@ REGISTRY: Dict[str, FnSpec] = {
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT + (_GRIDX + "Quadbin.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_quadbin_rastertogridvariance": FnSpec(
         "rst_quadbin_rastertogridvariance",
@@ -2606,6 +2628,7 @@ REGISTRY: Dict[str, FnSpec] = {
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT + (_GRIDX + "Quadbin.scala",),
         core=False,
+        heavy=False,
     ),
     "rst_quadbin_rastertogridstddev": FnSpec(
         "rst_quadbin_rastertogridstddev",
@@ -2626,6 +2649,7 @@ REGISTRY: Dict[str, FnSpec] = {
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT + (_GRIDX + "Quadbin.scala",),
         core=False,
+        heavy=False,
     ),
     # --- BNG raster->grid aggregates (gridagg.py): {avg,count,max,median,min} --
     # BNG cell ids are OS grid reference STRINGS (e.g. "TQ3080"), NOT Longs, so
@@ -2658,6 +2682,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         gb_tile=True,
         core=False,
+        heavy=False,
     ),
     "rst_bng_rastertogridcount": FnSpec(
         "rst_bng_rastertogridcount",
@@ -2683,6 +2708,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         gb_tile=True,
         core=False,
+        heavy=False,
     ),
     "rst_bng_rastertogridmax": FnSpec(
         "rst_bng_rastertogridmax",
@@ -2703,6 +2729,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         gb_tile=True,
         core=False,
+        heavy=False,
     ),
     "rst_bng_rastertogridmedian": FnSpec(
         "rst_bng_rastertogridmedian",
@@ -2728,6 +2755,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         gb_tile=True,
         core=False,
+        heavy=False,
     ),
     "rst_bng_rastertogridmin": FnSpec(
         "rst_bng_rastertogridmin",
@@ -2748,6 +2776,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         gb_tile=True,
         core=False,
+        heavy=False,
     ),
     "rst_bng_rastertogridsum": FnSpec(
         "rst_bng_rastertogridsum",
@@ -2768,6 +2797,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         gb_tile=True,
         core=False,
+        heavy=False,
     ),
     "rst_bng_rastertogridvariance": FnSpec(
         "rst_bng_rastertogridvariance",
@@ -2793,6 +2823,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         gb_tile=True,
         core=False,
+        heavy=False,
     ),
     "rst_bng_rastertogridstddev": FnSpec(
         "rst_bng_rastertogridstddev",
@@ -2818,6 +2849,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         gb_tile=True,
         core=False,
+        heavy=False,
     ),
     # --- quadbin + BNG tessellation (tessellate.py): one tile per overlapping cell
     # Mirror rst_h3_tessellate: the core_fn wraps the FLAT list of (cellid, bytes)
@@ -2968,6 +3000,7 @@ REGISTRY: Dict[str, FnSpec] = {
         input_kind="geometry",
         sources=_FEATURES_LIGHT,
         core=False,
+        heavy=False,
     ),
     # max_pts is a LARGE sentinel (>= any corpus point count) so the lightweight
     # IDW uses ALL points -- NOT a nearest-k subset. This is required for parity:
@@ -3041,6 +3074,7 @@ REGISTRY: Dict[str, FnSpec] = {
         input_kind="geometry",
         sources=_TIN_LIGHT,
         core=False,
+        heavy=False,
     ),
     # --- bucket A: the 7 *_agg aggregators (Spark groupBy aggregate harness) ----
     # Each reduces a GROUP of rows to ONE output tile via a real Spark
@@ -3105,6 +3139,7 @@ REGISTRY: Dict[str, FnSpec] = {
             _OPS + "MergeRasters.scala",
         ),
         core=False,
+        heavy=False,
     ),
     "rst_frombands_agg": FnSpec(
         "rst_frombands_agg",
@@ -3198,6 +3233,7 @@ REGISTRY: Dict[str, FnSpec] = {
             _HEAVY + "grid/RST_GridFromPoints.scala",
         ),
         core=False,
+        heavy=False,
     ),
     "rst_dtmfromgeoms_agg": FnSpec(
         "rst_dtmfromgeoms_agg",
@@ -3225,6 +3261,7 @@ REGISTRY: Dict[str, FnSpec] = {
         input_kind="geometry_aggregate",
         sources=_TIN_LIGHT + (_PYRX_SERDE,),
         core=False,
+        heavy=False,
     ),
     # rst_h3_rasterize_agg: a GRID aggregator -- rows of (cellid LONG, value
     # DOUBLE) grouped -> one GTiff tile per group, burning each H3 cell's centroid

@@ -19,14 +19,15 @@ LEVEL_TABLE_VERSION = manifest.load().level_table_version  # one source: the man
 # A function with no measured row below tries every level it has, highest first.
 PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_bng_eastnorthasbng": ("L1", "L2", "L3"),
-    "gbx_rst_transformcrs": ("L1", "L2", "L3"),
-    "gbx_st_makevalid": ("L3",),
+    # transformcrs: the JVM level is 1.6x slower than light (47.7 s against 29.7 s over 1000 tiles) and the Java UDF
+    # is 1.67x slower than the engine, so it is light. The row names the omission of its L1 and L2 blocks, which stay
+    # for the GDAL spec engine switch; that switch records its own order here.
+    "gbx_rst_transformcrs": ("L3",),
     # The CRS functions have JVM companions that are not timed against light yet, so they take the highest
     # available level; the other vector scalars have no companion (the legacy decode is light by family).
     "gbx_st_crs": ("L1", "L3"),
     "gbx_st_setcrs": ("L1", "L3"),
     "gbx_st_transformcrs": ("L1", "L3"),
-    "gbx_rst_retile": ("L3",),
     "gbx_bng_tessellate": ("L1", "L3"),
     "gbx_bng_tessellateexplode": ("L1", "L3"),
     # The five BNG explodes are 1.5x to 2.7x faster on the JVM on a cluster (0.37x to 0.67x). The other explodes
@@ -47,11 +48,9 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_quadbin_resolution": ("L3",),
     "gbx_quadbin_distance": ("L3",),
     "gbx_quadbin_cellunion": ("L3",),
-    "gbx_rst_merge_agg": ("L3",),
     # The cell-fill aggregates are light by family, except H3's: 0.57x on a cluster (inside the 0.8 rule), and its
     # Catalyst level returns the session's BINARY payload and the deterministic largest value, as light does.
     "gbx_h3_cellfill": ("L1", "L3"),
-    "gbx_rst_bng_rasterize_agg": ("L3",),
     # The rasterize family is L1 first (gridfrompoints is 5x to 16x faster on the JVM on a cluster; binpoints has no
     # timing, so the highest level). Two rows are light: the terrain model is 18x faster on light, and rasterize is
     # 15x faster in the pure-core timing (no cluster number; default, unmeasured). Neither keeps a JVM level.
@@ -63,11 +62,10 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     # MVP-IO's decode of a virtual tile: the JVM's (Catalyst) where there is a JAR, else the light UDF.
     "gbx_mvp_rst_materialize": ("L1", "L3"),
     # The file functions: cog_convert is 2.6x faster on the JVM on a cluster (0.38x); color_relief has only a pure-core
-    # timing (default, unmeasured: highest available); viewshed is light (R-2 (c); its JVM level cannot take a WKT
-    # observer behind the dispatch wrapper). buildoverviews (2.2x light faster) takes its family order.
+    # timing (default, unmeasured: highest available). viewshed (its JVM level cannot take a WKT observer behind the
+    # dispatch wrapper) and buildoverviews (2.2x light faster) take the family order, light.
     "gbx_rst_cog_convert": ("L1", "L3"),
     "gbx_rst_color_relief": ("L1", "L3"),
-    "gbx_rst_viewshed": ("L3",),
     # contour (0.11x) and isoband (10x in the pure-core timing) are faster on the JVM, but a virtual tile at L1 raises
     # VirtualTileException (the conformed L1 block has no dispatch wrapper), and a virtual tile is the light default input.
     # Light first until a wrapper-free virtual dispatch exists; the L1 blocks stay for a forced L1.

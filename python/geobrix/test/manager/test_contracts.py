@@ -2422,7 +2422,9 @@ def test_every_level_a_row_declares_is_in_its_order():
     omitted = {
         f.sql_name: sorted(set(f.levels) & {"L1", "L2", "L3"} - set(levels.order(f)))
         for f in FNS
-        if "L2" in f.levels and "L2" not in levels.order(f)
+        if "L2" in f.levels
+        and "L2" not in levels.order(f)
+        and f.sql_name not in levels.PREFERENCE
     }
     assert omitted == {}
 

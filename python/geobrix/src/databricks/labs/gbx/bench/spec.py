@@ -1245,7 +1245,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: xyz.render_tile(
             ds, a["z"], a["x"], a["y"], "PNG", 256, "bilinear"
         ),
-        col_fn=lambda t, a: prx.rst_tilexyz(t, a["z"], a["x"], a["y"]),
+        col_fn=lambda t, a: rx.rst_tilexyz(t, a["z"], a["x"], a["y"]),
         sources=_XYZ_LIGHT + (_HEAVY + "web/RST_TileXYZ.scala",),
         core=False,
         fingerprint=False,
@@ -1535,7 +1535,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: analysis_core.cog_convert(
             ds, a["compression"], a["blocksize"], a["overview_resampling"]
         ),
-        col_fn=lambda t, a: prx.rst_cog_convert(
+        col_fn=lambda t, a: rx.rst_cog_convert(
             t, a["compression"], a["blocksize"], a["overview_resampling"]
         ),
         sources=_ANALYSIS_LIGHT + (_HEAVY + "analysis/RST_CogConvert.scala",),
@@ -1766,7 +1766,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ("pure-core",),
         {},
         core_fn=lambda ds, a: terrain.color_relief(ds, _color_table_path()),
-        col_fn=lambda t, a: prx.rst_color_relief(t, _color_table_path()),
+        col_fn=lambda t, a: rx.rst_color_relief(t, _color_table_path()),
         sources=_TERRAIN_LIGHT + (_HEAVY + "dem/RST_ColorRelief.scala", _DEM_HELPER),
         core=False,
         fingerprint=False,
@@ -1785,7 +1785,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: analysis_core.viewshed(
             ds, *_tile_center_xy(ds), a["observer_height"], a["target_height"], None
         ),
-        col_fn=lambda t, a: prx.rst_viewshed(
+        col_fn=lambda t, a: rx.rst_viewshed(
             t, F.lit(_VIEWSHED_OBSERVER_WKB), a["observer_height"], a["target_height"]
         ),
         sources=_ANALYSIS_LIGHT + (_HEAVY + "analysis/RST_Viewshed.scala",),
@@ -1884,7 +1884,7 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"levels": [2, 4], "resampling": "average"},
         core_fn=lambda ds, a: ops.build_overviews(ds, a["levels"], a["resampling"]),
-        col_fn=lambda t, a: prx.rst_buildoverviews(
+        col_fn=lambda t, a: rx.rst_buildoverviews(
             t, F.array(*[F.lit(int(x)) for x in a["levels"]]), a["resampling"]
         ),
         sources=_OPS_LIGHT + (_HEAVY + "pixel/RST_BuildOverviews.scala",),
@@ -1958,7 +1958,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda dss, a: agg_core.frombands_tiles(
             [(i, _ds_to_gtiff_bytes(ds)) for i, ds in enumerate(dss)]
         ),
-        col_fn=lambda arr, a: prx.rst_frombands(arr),
+        col_fn=lambda arr, a: rx.rst_frombands(arr),
         sources=_AGG_LIGHT
         + (
             _HEAVY + "constructor/RST_FromBands.scala",
@@ -1976,7 +1976,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda dss, a: agg_core.combineavg_tiles(
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
-        col_fn=lambda arr, a: prx.rst_combineavg(arr),
+        col_fn=lambda arr, a: rx.rst_combineavg(arr),
         sources=_AGG_LIGHT
         + (
             _HEAVY + "RST_CombineAvg.scala",
@@ -1997,7 +1997,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda dss, a: agg_core.combine_min_tiles(
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
-        col_fn=lambda arr, a: prx.rst_combinemin(arr),
+        col_fn=lambda arr, a: rx.rst_combinemin(arr),
         sources=_AGG_LIGHT
         + (
             _HEAVY + "RST_CombineMin.scala",
@@ -2015,7 +2015,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda dss, a: agg_core.combine_max_tiles(
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
-        col_fn=lambda arr, a: prx.rst_combinemax(arr),
+        col_fn=lambda arr, a: rx.rst_combinemax(arr),
         sources=_AGG_LIGHT
         + (
             _HEAVY + "RST_CombineMax.scala",
@@ -2033,7 +2033,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda dss, a: agg_core.combine_median_tiles(
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
-        col_fn=lambda arr, a: prx.rst_combinemedian(arr),
+        col_fn=lambda arr, a: rx.rst_combinemedian(arr),
         sources=_AGG_LIGHT
         + (
             _HEAVY + "RST_CombineMedian.scala",
@@ -2051,7 +2051,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda dss, a: agg_core.combine_sum_tiles(
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
-        col_fn=lambda arr, a: prx.rst_combinesum(arr),
+        col_fn=lambda arr, a: rx.rst_combinesum(arr),
         sources=_AGG_LIGHT
         + (
             _HEAVY + "RST_CombineSum.scala",
@@ -2069,7 +2069,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda dss, a: agg_core.combine_stddev_tiles(
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
-        col_fn=lambda arr, a: prx.rst_combinestddev(arr),
+        col_fn=lambda arr, a: rx.rst_combinestddev(arr),
         sources=_AGG_LIGHT
         + (
             _HEAVY + "RST_CombineStddev.scala",
@@ -2087,7 +2087,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda dss, a: agg_core.combine_count_tiles(
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
-        col_fn=lambda arr, a: prx.rst_combinecount(arr),
+        col_fn=lambda arr, a: rx.rst_combinecount(arr),
         sources=_AGG_LIGHT
         + (
             _HEAVY + "RST_CombineCount.scala",
@@ -2126,7 +2126,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda dss, a: agg_core.merge_tiles(
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
-        col_fn=lambda arr, a: prx.rst_merge(arr),
+        col_fn=lambda arr, a: rx.rst_merge(arr),
         sources=_AGG_LIGHT
         + (
             _HEAVY + "RST_Merge.scala",
@@ -2247,7 +2247,6 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: [
             d["bytes"] for d in xyz.pyramid(ds, a["min_z"], a["max_z"])
         ],
-        col_fn=lambda t, a: prx.rst_xyzpyramid(t, a["min_z"], a["max_z"]),
         sources=_XYZ_LIGHT
         + (
             _HEAVY + "web/RST_XYZPyramid.scala",

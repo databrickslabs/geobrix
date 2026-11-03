@@ -73,7 +73,7 @@ def test_rst_asformat_python_example(spark):
 def test_rst_buildoverviews_python_light_example(spark):
     """rst_buildoverviews returns a materialized tile with populated raster bytes."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_buildoverviews_python_light_example(spark)
+    result = tileops_examples.rst_buildoverviews_python_example(spark)
     _assert_materialized_tile(result, "rst_buildoverviews")
 
 
@@ -87,7 +87,7 @@ def test_rst_clip_python_example(spark):
 def test_rst_cog_convert_python_light_example(spark):
     """rst_cog_convert returns a materialized tile with populated raster bytes."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_cog_convert_python_light_example(spark)
+    result = tileops_examples.rst_cog_convert_python_example(spark)
     _assert_materialized_tile(result, "rst_cog_convert")
 
 
@@ -220,7 +220,7 @@ def test_rst_fromcontent_python_light_example(spark):
 def test_rst_frombands_python_light_example(spark):
     """rst_frombands returns a materialized tile (3 per-band tiles stacked into a 3-band tile)."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_frombands_python_light_example(spark)
+    result = tileops_examples.rst_frombands_python_example(spark)
     _assert_materialized_tile(result, "rst_frombands")
 
 

@@ -109,19 +109,19 @@ rst_band_python_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_buildoverviews_python_light_example(spark):
+def rst_buildoverviews_python_example(spark):
     """Add internal overview levels to a raster tile using the light pyrx tier."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.table("rasters")
     result = df.select(
-        rx.rst_buildoverviews("tile", f.array(f.lit(2), f.lit(4))).alias("tile")
+        rx_api.rst_buildoverviews("tile", f.array(f.lit(2), f.lit(4))).alias("tile")
     ).first()
     return result["tile"]
 
 
-rst_buildoverviews_python_light_example_output = """
+rst_buildoverviews_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -176,16 +176,16 @@ rst_clip_python_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_cog_convert_python_light_example(spark):
+def rst_cog_convert_python_example(spark):
     """Re-layout a raster tile as a Cloud Optimized GeoTIFF using the light pyrx tier."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
 
     df = spark.table("rasters")
-    result = df.select(rx.rst_cog_convert("tile").alias("tile")).first()
+    result = df.select(rx_api.rst_cog_convert("tile").alias("tile")).first()
     return result["tile"]
 
 
-rst_cog_convert_python_light_example_output = """
+rst_cog_convert_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -358,14 +358,13 @@ rst_fromcontent_python_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_frombands_python_light_example(spark):
+def rst_frombands_python_example(spark):
     """Stack an array of single-band tiles into a multi-band tile using the light pyrx tier.
 
     Constructor: takes an ARRAY<tile> of single-band tiles and stacks them in
     array order (element 0 → band 1). Example splits the multiband fixture into
     per-band tiles via rst_band, then re-stacks them into a 3-band tile.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
@@ -378,11 +377,11 @@ def rst_frombands_python_light_example(spark):
             rx_api.rst_band("tile", f.lit(3)),
         ).alias("bands")
     )
-    result = with_bands.select(rx.rst_frombands("bands").alias("tile")).first()
+    result = with_bands.select(rx_api.rst_frombands("bands").alias("tile")).first()
     return result["tile"]
 
 
-rst_frombands_python_light_example_output = """
+rst_frombands_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+

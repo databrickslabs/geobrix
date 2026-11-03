@@ -97,49 +97,49 @@ def test_rst_index_python_example(spark):
 def test_rst_combineavg_python_light_example(spark):
     """rst_combineavg returns a materialized tile with populated raster bytes."""
     assert bandmath_examples is not None
-    result = bandmath_examples.rst_combineavg_python_light_example(spark)
+    result = bandmath_examples.rst_combineavg_python_example(spark)
     _assert_materialized_tile(result, "rst_combineavg")
 
 
 def test_rst_combinecount_python_light_example(spark):
     """rst_combinecount returns a materialized tile with populated raster bytes."""
     assert bandmath_examples is not None
-    result = bandmath_examples.rst_combinecount_python_light_example(spark)
+    result = bandmath_examples.rst_combinecount_python_example(spark)
     _assert_materialized_tile(result, "rst_combinecount")
 
 
 def test_rst_combinemax_python_light_example(spark):
     """rst_combinemax returns a materialized tile with populated raster bytes."""
     assert bandmath_examples is not None
-    result = bandmath_examples.rst_combinemax_python_light_example(spark)
+    result = bandmath_examples.rst_combinemax_python_example(spark)
     _assert_materialized_tile(result, "rst_combinemax")
 
 
 def test_rst_combinemedian_python_light_example(spark):
     """rst_combinemedian returns a materialized tile with populated raster bytes."""
     assert bandmath_examples is not None
-    result = bandmath_examples.rst_combinemedian_python_light_example(spark)
+    result = bandmath_examples.rst_combinemedian_python_example(spark)
     _assert_materialized_tile(result, "rst_combinemedian")
 
 
 def test_rst_combinemin_python_light_example(spark):
     """rst_combinemin returns a materialized tile with populated raster bytes."""
     assert bandmath_examples is not None
-    result = bandmath_examples.rst_combinemin_python_light_example(spark)
+    result = bandmath_examples.rst_combinemin_python_example(spark)
     _assert_materialized_tile(result, "rst_combinemin")
 
 
 def test_rst_combinestddev_python_light_example(spark):
     """rst_combinestddev returns a materialized tile with populated raster bytes."""
     assert bandmath_examples is not None
-    result = bandmath_examples.rst_combinestddev_python_light_example(spark)
+    result = bandmath_examples.rst_combinestddev_python_example(spark)
     _assert_materialized_tile(result, "rst_combinestddev")
 
 
 def test_rst_combinesum_python_light_example(spark):
     """rst_combinesum returns a materialized tile with populated raster bytes."""
     assert bandmath_examples is not None
-    result = bandmath_examples.rst_combinesum_python_light_example(spark)
+    result = bandmath_examples.rst_combinesum_python_example(spark)
     _assert_materialized_tile(result, "rst_combinesum")
 
 
@@ -160,5 +160,5 @@ def test_rst_mapalgebra_python_example(spark):
 def test_rst_merge_python_light_example(spark):
     """rst_merge returns a materialized tile with populated raster bytes."""
     assert bandmath_examples is not None
-    result = bandmath_examples.rst_merge_python_light_example(spark)
+    result = bandmath_examples.rst_merge_python_example(spark)
     _assert_materialized_tile(result, "rst_merge")

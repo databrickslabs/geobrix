@@ -71,13 +71,6 @@ def spark():
             and any(k.startswith("band_") for k in v.keys())
             and all(len(buckets) == 16 for buckets in v.values()),
         ),
-        # 6) buildoverviews - returns a tile struct.
-        (
-            "buildoverviews",
-            "gbx_rst_buildoverviews(t, array(2, 4), 'average')",
-            "out",
-            lambda v: v is not None and v["raster"] is not None,
-        ),
         # 7) band - extract band 1 from the (single-band) SRTM. Returns a tile.
         (
             "band",

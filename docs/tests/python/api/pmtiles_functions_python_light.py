@@ -22,7 +22,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 
-def pmtiles_agg_python_light_example(spark):
+def pmtiles_agg_python_example(spark):
     """Aggregate (z, x, y, bytes) tile rows into a PMTiles v3 BINARY blob using the light pmtiles tier.
 
     Multi-row fixture: 9 synthetic tiles at zoom level 2 (x in [0,2], y in [0,2]).
@@ -55,7 +55,7 @@ def pmtiles_agg_python_light_example(spark):
     return result["pmt"]
 
 
-pmtiles_agg_python_light_example_output = """
+pmtiles_agg_python_example_output = """
 +------------------------------------------+
 |pmt                                       |
 +------------------------------------------+

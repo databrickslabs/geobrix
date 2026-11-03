@@ -270,18 +270,6 @@ def rst_h3_rasterize_agg(
 # Constructors
 
 
-def rst_frombands(bands: ColLike) -> Column:
-    """Build a raster tile from a list of band tiles (same dimensions).
-
-    Args:
-        bands: Column of array of raster tiles (one per band).
-
-    Returns:
-        Column of multi-band raster tile.
-    """
-    return f.call_function("gbx_rst_frombands", _col(bands))
-
-
 # Generators
 
 
@@ -1574,90 +1562,6 @@ def rst_quadbin_rasterize_agg(
 # Operations
 
 
-def rst_combineavg(tiles: ColLike) -> Column:
-    """Combine multiple raster tiles by averaging (same extent/cellsize).
-
-    Args:
-        tiles: Column of array of raster tiles.
-
-    Returns:
-        Column of combined raster tile.
-    """
-    return f.call_function("gbx_rst_combineavg", _col(tiles))
-
-
-def rst_combinecount(tiles: ColLike) -> Column:
-    """Count valid (non-NoData) inputs per pixel across aligned tiles.
-
-    Args:
-        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
-
-    Returns:
-        Column of combined raster tile where each pixel is the count of valid inputs.
-    """
-    return f.call_function("gbx_rst_combinecount", _col(tiles))
-
-
-def rst_combinemax(tiles: ColLike) -> Column:
-    """Combine multiple raster tiles by taking the per-pixel maximum.
-
-    Args:
-        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
-
-    Returns:
-        Column of combined raster tile where each pixel is the maximum of valid inputs.
-    """
-    return f.call_function("gbx_rst_combinemax", _col(tiles))
-
-
-def rst_combinemedian(tiles: ColLike) -> Column:
-    """Combine multiple raster tiles by taking the per-pixel median.
-
-    Args:
-        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
-
-    Returns:
-        Column of combined raster tile where each pixel is the median of valid inputs.
-    """
-    return f.call_function("gbx_rst_combinemedian", _col(tiles))
-
-
-def rst_combinemin(tiles: ColLike) -> Column:
-    """Combine multiple raster tiles by taking the per-pixel minimum.
-
-    Args:
-        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
-
-    Returns:
-        Column of combined raster tile where each pixel is the minimum of valid inputs.
-    """
-    return f.call_function("gbx_rst_combinemin", _col(tiles))
-
-
-def rst_combinestddev(tiles: ColLike) -> Column:
-    """Combine multiple raster tiles by computing per-pixel population std-dev.
-
-    Args:
-        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
-
-    Returns:
-        Column of combined raster tile where each pixel is the population std-dev of valid inputs.
-    """
-    return f.call_function("gbx_rst_combinestddev", _col(tiles))
-
-
-def rst_combinesum(tiles: ColLike) -> Column:
-    """Combine multiple raster tiles by summing per pixel.
-
-    Args:
-        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
-
-    Returns:
-        Column of combined raster tile where each pixel is the sum of valid inputs.
-    """
-    return f.call_function("gbx_rst_combinesum", _col(tiles))
-
-
 def rst_isoband(tile: ColLike, breaks: ColLike) -> Column:
     """Reclassify a raster band into value bins and return contour polygons.
 
@@ -1674,149 +1578,6 @@ def rst_isoband(tile: ColLike, breaks: ColLike) -> Column:
         Column of ``ARRAY<struct>`` — one polygon per contiguous patch.
     """
     return f.call_function("gbx_rst_isoband", _col(tile), _col(breaks))
-
-
-def rst_merge(tiles: ColLike) -> Column:
-    """Merge multiple raster tiles into one (e.g. mosaic).
-
-    Args:
-        tiles: Column of array of raster tiles.
-
-    Returns:
-        Column of merged raster tile.
-    """
-    return f.call_function("gbx_rst_merge", _col(tiles))
-
-
-def rst_tilexyz(
-    tile: ColLike,
-    z: ColLike,
-    x: ColLike,
-    y: ColLike,
-    format: Union[ColLike, None] = None,
-    size: ColLike = 256,
-    resampling: Union[ColLike, None] = None,
-    rescale: Union[ColLike, None] = None,
-) -> Column:
-    """Render a single web-mercator XYZ tile to PNG / JPEG / WEBP bytes.
-
-    Returns ``BinaryType`` with the encoded tile bytes for ``(z, x, y)``.
-    Out-of-extent tiles return a transparent PNG (alpha=0) of the requested
-    size -- NOT null. Slippy-map tile servers expect a 200-status non-zero
-    body even outside source coverage.
-
-    Args:
-        tile: Raster tile column.
-        z: Zoom level (0 <= z <= 20).
-        x: Tile X coordinate (0 <= x < 2^z).
-        y: Tile Y coordinate (0 <= y < 2^z, Y north-down).
-        format: Output image format -- ``"PNG"`` (default), ``"JPEG"``, or ``"WEBP"``.
-            String literals are auto-wrapped in ``f.lit``.
-        size: Output edge length in pixels (default 256).
-        resampling: gdalwarp -r algorithm (default ``"bilinear"``). String literals
-            are auto-wrapped in ``f.lit``.
-        rescale: 8-bit encoding contrast -- ``"auto"`` (default) rescales non-8-bit
-            imagery by whole-dataset per-band min/max for display contrast; ``"none"``
-            keeps the raw full-dtype-range mapping; a ``"min,max"`` string (e.g.
-            ``"8000,12000"``) sets explicit bounds applied to every band. An explicit
-            ``(min, max)`` tuple is NOT supported through the Column API -- pass a
-            ``"min,max"`` string literal or use ``f.lit("min,max")``. String literals
-            are auto-wrapped in ``f.lit``. Note: rescale currently affects PNG output
-            only; JPEG/WEBP rescale support is a future follow-up.
-
-    Returns:
-        Binary column with the encoded image bytes.
-    """
-    format_col = (
-        f.lit("PNG")
-        if format is None
-        else (f.lit(format) if isinstance(format, str) else _col(format))
-    )
-    resampling_col = (
-        f.lit("bilinear")
-        if resampling is None
-        else (f.lit(resampling) if isinstance(resampling, str) else _col(resampling))
-    )
-    rescale_col = (
-        f.lit("auto")
-        if rescale is None
-        else (f.lit(rescale) if isinstance(rescale, str) else _col(rescale))
-    )
-    return f.call_function(
-        "gbx_rst_tilexyz",
-        _col(tile),
-        _col(z),
-        _col(x),
-        _col(y),
-        format_col,
-        _col(size),
-        resampling_col,
-        rescale_col,
-    )
-
-
-def rst_xyzpyramid(
-    tile: ColLike,
-    min_z: ColLike,
-    max_z: ColLike,
-    format: Union[ColLike, None] = None,
-    size: ColLike = 256,
-    resampling: Union[ColLike, None] = None,
-    rescale: Union[ColLike, None] = None,
-) -> Column:
-    """Generator: emit one row per intersecting (z, x, y) tile across [min_z, max_z].
-
-    Per-row output column is a struct ``tile: STRUCT<z INT, x INT, y INT, bytes BINARY>``.
-    Invoke directly in ``select(...)`` (top-level generator, do not wrap in ``F.explode``).
-    Cell-count is capped at 10^6 candidate tiles across the requested zoom range;
-    ``max_z`` is capped at 20.
-
-    The scale mapping is resolved ONCE from the source raster before the tile loop so
-    that every tile in the pyramid shares one 8-bit mapping -- no tile-to-tile seams.
-
-    Args:
-        tile: Raster tile column.
-        min_z: Inclusive minimum zoom level.
-        max_z: Inclusive maximum zoom level (<= 20).
-        format: Output image format -- ``"PNG"`` (default), ``"JPEG"``, or ``"WEBP"``.
-            String literals are auto-wrapped in ``f.lit``.
-        size: Output edge length in pixels (default 256).
-        resampling: gdalwarp -r algorithm (default ``"bilinear"``). String literals
-            are auto-wrapped in ``f.lit``.
-        rescale: 8-bit encoding contrast -- ``"auto"`` (default) rescales non-8-bit
-            imagery by whole-dataset per-band min/max; ``"none"`` keeps the raw
-            full-dtype-range mapping; a ``"min,max"`` string sets explicit bounds.
-            String literals are auto-wrapped in ``f.lit``. Note: rescale currently
-            affects PNG output only; JPEG/WEBP rescale support is a future follow-up.
-
-    Returns:
-        Array column of structs (use ``F.explode`` to get one row per tile).
-    """
-    format_col = (
-        f.lit("PNG")
-        if format is None
-        else (f.lit(format) if isinstance(format, str) else _col(format))
-    )
-    resampling_col = (
-        f.lit("bilinear")
-        if resampling is None
-        else (f.lit(resampling) if isinstance(resampling, str) else _col(resampling))
-    )
-    rescale_col = (
-        f.lit("auto")
-        if rescale is None
-        else (f.lit(rescale) if isinstance(rescale, str) else _col(rescale))
-    )
-    return f.call_function(
-        "gbx_rst_xyzpyramid",
-        _col(tile),
-        _col(min_z),
-        _col(max_z),
-        format_col,
-        _col(size),
-        resampling_col,
-        rescale_col,
-    )
 
 
 def rst_polygonize(
@@ -1848,29 +1609,6 @@ def rst_polygonize(
 # Seven thin wrappers around gdal.DEMProcessing. All take a single source tile
 # and return a derived tile. Defaults match the GDAL conventions.
 # ---------------------------------------------------------------------------
-
-
-def rst_color_relief(
-    tile: ColLike,
-    color_table_path: ColLike,
-) -> Column:
-    """Apply a color relief mapping to a DEM tile via ``gdal.DEMProcessing("color-relief")``.
-
-    Args:
-        tile: Single-band DEM tile column.
-        color_table_path: Path (FUSE-mounted Volume or local) to a gdaldem
-            color file. Each line is ``elevation R G B [A]``; special values
-            ``nv``, ``default``, ``0%``, ``100%`` are accepted.
-
-    Returns:
-        3- or 4-band Byte GTiff tile column (RGB or RGBA).
-    """
-    ctp_col = (
-        f.lit(color_table_path)
-        if isinstance(color_table_path, str)
-        else _col(color_table_path)
-    )
-    return f.call_function("gbx_rst_color_relief", _col(tile), ctp_col)
 
 
 # ---------------------------------------------------------------------------
@@ -2121,77 +1859,6 @@ def rst_dtmfromgeoms_agg(
 # ---------------------------------------------------------------------------
 
 
-def rst_buildoverviews(
-    tile: ColLike,
-    levels: ColLike,
-    resampling: Union[ColLike, None] = None,
-) -> Column:
-    """Build internal overviews on a raster via ``Dataset.BuildOverviews``.
-
-    Args:
-        tile: Raster tile column.
-        levels: ``ARRAY<INT>`` of downsampling factors (e.g. ``[2, 4, 8, 16]``).
-            Each factor produces one overview level at ``1 / factor`` resolution.
-        resampling: Overview resampling algorithm — one of ``nearest``,
-            ``average``, ``rms``, ``gauss``, ``cubic``, ``cubicspline``,
-            ``lanczos``, ``bilinear``, ``mode``, ``none``. Defaults to
-            ``"average"``. String literals auto-wrapped via ``f.lit``.
-
-    Returns:
-        Raster tile column with embedded overview pyramid.
-    """
-    res_col = (
-        f.lit("average")
-        if resampling is None
-        else (f.lit(resampling) if isinstance(resampling, str) else _col(resampling))
-    )
-    return f.call_function("gbx_rst_buildoverviews", _col(tile), _col(levels), res_col)
-
-
-def rst_cog_convert(
-    tile: ColLike,
-    compression: Union[ColLike, None] = None,
-    blocksize: ColLike = None,
-    overview_resampling: Union[ColLike, None] = None,
-) -> Column:
-    """Convert a raster tile to Cloud Optimized GeoTIFF (COG) layout.
-
-    Wraps ``gdal.Translate -of COG`` with the requested compression, internal
-    block size, and overview resampling. The result is still a GTiff on disk
-    (downstream ``metadata.driver`` reads ``GTiff``) but laid out so HTTP range
-    reads can extract regions or overview levels cheaply.
-
-    Args:
-        tile: Raster tile column.
-        compression: Pixel compression — one of ``NONE``, ``DEFLATE``, ``LZW``,
-            ``ZSTD``, ``LERC``, ``JPEG``, ``WEBP``. Default ``"ZSTD"``.
-            String literals auto-wrapped via ``f.lit``.
-        blocksize: Internal tile size in pixels (square). Default ``512``.
-        overview_resampling: Downsampling algorithm for the overview pyramid —
-            one of ``NEAREST``, ``AVERAGE``, ``GAUSS``, ``CUBIC``, ``CUBICSPLINE``,
-            ``LANCZOS``, ``BILINEAR``, ``MODE``. Default ``"AVERAGE"``.
-
-    Returns:
-        COG-laid-out raster tile column.
-    """
-    comp_col = (
-        f.lit("ZSTD")
-        if compression is None
-        else (f.lit(compression) if isinstance(compression, str) else _col(compression))
-    )
-    bs_col = f.lit(512) if blocksize is None else _col(blocksize)
-    or_col = (
-        f.lit("AVERAGE")
-        if overview_resampling is None
-        else (
-            f.lit(overview_resampling)
-            if isinstance(overview_resampling, str)
-            else _col(overview_resampling)
-        )
-    )
-    return f.call_function("gbx_rst_cog_convert", _col(tile), comp_col, bs_col, or_col)
-
-
 def rst_contour(
     tile: ColLike,
     levels: ColLike,
@@ -2227,62 +1894,6 @@ def rst_contour(
     )
     return f.call_function(
         "gbx_rst_contour", _col(tile), _col(levels), int_col, base_col, af_col
-    )
-
-
-def rst_viewshed(
-    tile: ColLike,
-    observer_geom: ColLike,
-    observer_height: ColLike,
-    target_height: ColLike = None,
-    max_distance: ColLike = None,
-    crs: ColLike = None,
-) -> Column:
-    """Compute a binary viewshed raster from a DEM and an observer POINT.
-
-    Wraps ``gdal.ViewshedGenerate``. Output is a Byte raster in the source CRS,
-    pixel-aligned with it: visible pixels = ``255``, invisible / out-of-range
-    pixels = ``0``. With a ``max_distance`` it is the window around the observer
-    (the observer's pixel plus ``max_distance`` each way, clipped to the DEM);
-    without one it is the whole DEM. Non-POINT ``observer_geom`` is rejected at
-    runtime.
-
-    Args:
-        tile: Single-band DEM raster tile column.
-        observer_geom: Observer POINT — WKB ``bytes`` or WKT ``string`` column.
-            Coordinates must be in the raster's CRS.
-        observer_height: Observer height above DEM at the observer pixel
-            (e.g. eye height + tower height).
-        target_height: Target height above DEM at each tested pixel.
-            Default ``1.6`` (~average eye height).
-        max_distance: Optional clipping distance in CRS units; ``None`` =
-            unlimited (only bounded by raster extent).
-        crs: Optional source CRS of a plain WKB/WKT observer point (int SRID
-            or CRS string). An EWKB/EWKT embedded SRID wins; absent + no SRID
-            -> assumed already in the raster CRS.
-
-    Returns:
-        Byte raster tile column (0 / 255).
-    """
-    th_col = f.lit(1.6) if target_height is None else _col(target_height)
-    md_col = f.lit(None).cast("double") if max_distance is None else _col(max_distance)
-    if crs is None:
-        return f.call_function(
-            "gbx_rst_viewshed",
-            _col(tile),
-            _col(observer_geom),
-            _col(observer_height),
-            th_col,
-            md_col,
-        )
-    return f.call_function(
-        "gbx_rst_viewshed",
-        _col(tile),
-        _col(observer_geom),
-        _col(observer_height),
-        th_col,
-        md_col,
-        _crs_col(crs),
     )
 
 
@@ -2619,6 +2230,51 @@ def rst_boundingbox(
     )
 
 
+def rst_buildoverviews(
+    tile: ColLike,
+    levels: ColLike,
+    resampling: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Build internal pyramid overviews at the given decimation levels.
+
+    Args:
+        tile: The tile to add overviews to.
+        levels: The decimation factors, such as `array(2, 4, 8)`: each at least 2.
+        resampling: The overview resampling: `nearest`, `average`, `gauss`, `cubic`,
+            `cubicspline`, `lanczos`, `bilinear` or `mode`. Any other word raises. SQL
+            default: ``'average'``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A GeoTIFF tile with the same pixels and one overview per level. A NULL tile or
+        NULL levels gives NULL; an error tile comes out as itself; a tile that cannot be
+        read gives an error tile.
+
+    SQL: ``gbx_rst_buildoverviews(tile, levels, [resampling])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_buildoverviews",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            levels,
+            resampling,
+        )
+    return _api.call(
+        "gbx_rst_buildoverviews",
+        tile,
+        levels,
+        resampling,
+    )
+
+
 def rst_chm(
     dsm_tile: ColLike,
     dem_tile: ColLike,
@@ -2687,6 +2343,359 @@ def rst_clip(
         geom,
         cutline_all_touched,
         clip_crs,
+    )
+
+
+def rst_cog_convert(
+    tile: ColLike,
+    compression: ColLike = None,
+    blocksize: ColLike = None,
+    overview_resampling: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Convert a tile to a Cloud Optimized GeoTIFF (COG).
+
+    Args:
+        tile: The tile to convert.
+        compression: `'AUTO'` (a size-adaptive ZSTD with the predictor for the data
+            type) or a codec: `ZSTD`, `DEFLATE`, `LZW`, `LERC`, `JPEG`, `WEBP` or `NONE`.
+            Any other word raises. SQL default: ``'AUTO'``.
+        blocksize: The internal block size in pixels, square: a multiple of 16. Any
+            other value raises. SQL default: ``512``.
+        overview_resampling: The resampling of the overview pyramid, such as `AVERAGE`.
+            SQL default: ``'AVERAGE'``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A GeoTIFF tile in COG layout with the same pixels. A NULL tile gives NULL; an
+        error tile comes out as itself; a tile that cannot be read gives an error tile.
+
+    SQL: ``gbx_rst_cog_convert(tile, [compression], [blocksize], [overview_resampling])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_cog_convert",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            compression,
+            blocksize,
+            overview_resampling,
+        )
+    return _api.call(
+        "gbx_rst_cog_convert",
+        tile,
+        compression,
+        blocksize,
+        overview_resampling,
+    )
+
+
+def rst_color_relief(
+    tile: ColLike,
+    color_table_path: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Colour a DEM through a `gdaldem` colour table.
+
+    Args:
+        tile: The single-band DEM tile.
+        color_table_path: The path of a `gdaldem` colour file: one `elevation R G B [A]`
+            line per stop, with `nv` for NoData and `N%` for a share of the value range. The
+            file must exist.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A Byte tile of 3 bands (RGB), or 4 (RGBA) when a stop has an alpha column. A
+        NULL tile or path gives NULL; an error tile comes out as itself; a tile that
+        cannot be read gives an error tile.
+
+    SQL: ``gbx_rst_color_relief(tile, color_table_path)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_color_relief",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            color_table_path,
+        )
+    return _api.call(
+        "gbx_rst_color_relief",
+        tile,
+        color_table_path,
+    )
+
+
+def rst_combineavg(
+    tiles: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Per-pixel mean across an array of aligned tiles, NoData aware.
+
+    Args:
+        tiles: The tiles to combine, in an array: aligned tiles that share size, extent
+            and CRS (use `gbx_rst_align_to` first).
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        Mean of the valid values at each pixel; a pixel that is NoData in every tile
+        stays NoData. The output cellid is the tiles' shared cellid, or -1 when they
+        differ. A NULL or empty array gives NULL; an array of only error tiles gives the
+        first one; a tile that cannot be read is skipped. Tiles of different shapes
+        raise; an array over the memory budget gives an error tile with a `Fix:`.
+
+    SQL: ``gbx_rst_combineavg(tiles)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_combineavg",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tiles,
+        )
+    return _api.call(
+        "gbx_rst_combineavg",
+        tiles,
+    )
+
+
+def rst_combinecount(
+    tiles: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Per-pixel count of valid values across an array of aligned tiles.
+
+    Args:
+        tiles: The tiles to combine, in an array: aligned tiles that share size, extent
+            and CRS (use `gbx_rst_align_to` first).
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        Number of valid values at each pixel; a pixel that is NoData in every tile is
+        NoData, never 0. A NULL or empty array gives NULL; an array of only error tiles
+        gives the first one; a tile that cannot be read is skipped. Tiles of different
+        shapes raise; an array over the memory budget gives an error tile with a `Fix:`.
+
+    SQL: ``gbx_rst_combinecount(tiles)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_combinecount",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tiles,
+        )
+    return _api.call(
+        "gbx_rst_combinecount",
+        tiles,
+    )
+
+
+def rst_combinemax(
+    tiles: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Per-pixel maximum across an array of aligned tiles, NoData aware.
+
+    Args:
+        tiles: The tiles to combine, in an array: aligned tiles that share size, extent
+            and CRS (use `gbx_rst_align_to` first).
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        Largest valid value at each pixel; a pixel that is NoData in every tile stays
+        NoData. A NULL or empty array gives NULL; an array of only error tiles gives the
+        first one; a tile that cannot be read is skipped. Tiles of different shapes
+        raise; an array over the memory budget gives an error tile with a `Fix:`.
+
+    SQL: ``gbx_rst_combinemax(tiles)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_combinemax",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tiles,
+        )
+    return _api.call(
+        "gbx_rst_combinemax",
+        tiles,
+    )
+
+
+def rst_combinemedian(
+    tiles: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Per-pixel median across an array of aligned tiles, NoData aware.
+
+    Args:
+        tiles: The tiles to combine, in an array: aligned tiles that share size, extent
+            and CRS (use `gbx_rst_align_to` first).
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        Median of the valid values at each pixel (the mean of the two middle values for
+        an even count); a pixel that is NoData in every tile stays NoData. A NULL or
+        empty array gives NULL; an array of only error tiles gives the first one; a tile
+        that cannot be read is skipped. Tiles of different shapes raise; an array over
+        the memory budget gives an error tile with a `Fix:`.
+
+    SQL: ``gbx_rst_combinemedian(tiles)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_combinemedian",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tiles,
+        )
+    return _api.call(
+        "gbx_rst_combinemedian",
+        tiles,
+    )
+
+
+def rst_combinemin(
+    tiles: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Per-pixel minimum across an array of aligned tiles, NoData aware.
+
+    Args:
+        tiles: The tiles to combine, in an array: aligned tiles that share size, extent
+            and CRS (use `gbx_rst_align_to` first).
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        Smallest valid value at each pixel; a pixel that is NoData in every tile stays
+        NoData. A NULL or empty array gives NULL; an array of only error tiles gives the
+        first one; a tile that cannot be read is skipped. Tiles of different shapes
+        raise; an array over the memory budget gives an error tile with a `Fix:`.
+
+    SQL: ``gbx_rst_combinemin(tiles)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_combinemin",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tiles,
+        )
+    return _api.call(
+        "gbx_rst_combinemin",
+        tiles,
+    )
+
+
+def rst_combinestddev(
+    tiles: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Per-pixel population standard deviation across an array of aligned tiles, NoData aware.
+
+    Args:
+        tiles: The tiles to combine, in an array: aligned tiles that share size, extent
+            and CRS (use `gbx_rst_align_to` first).
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        Population standard deviation (divisor n) of the valid values at each pixel; a
+        pixel that is NoData in every tile stays NoData. A NULL or empty array gives
+        NULL; an array of only error tiles gives the first one; a tile that cannot be
+        read is skipped. Tiles of different shapes raise; an array over the memory
+        budget gives an error tile with a `Fix:`.
+
+    SQL: ``gbx_rst_combinestddev(tiles)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_combinestddev",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tiles,
+        )
+    return _api.call(
+        "gbx_rst_combinestddev",
+        tiles,
+    )
+
+
+def rst_combinesum(
+    tiles: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Per-pixel sum across an array of aligned tiles, NoData aware.
+
+    Args:
+        tiles: The tiles to combine, in an array: aligned tiles that share size, extent
+            and CRS (use `gbx_rst_align_to` first).
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        Sum of the valid values at each pixel; a pixel that is NoData in every tile
+        stays NoData. A NULL or empty array gives NULL; an array of only error tiles
+        gives the first one; a tile that cannot be read is skipped. Tiles of different
+        shapes raise; an array over the memory budget gives an error tile with a `Fix:`.
+
+    SQL: ``gbx_rst_combinesum(tiles)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_combinesum",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tiles,
+        )
+    return _api.call(
+        "gbx_rst_combinesum",
+        tiles,
     )
 
 
@@ -3023,6 +3032,42 @@ def rst_format(
     return _api.call(
         "gbx_rst_format",
         tile,
+    )
+
+
+def rst_frombands(
+    bands: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Stack an array of single-band tiles into one multi-band tile.
+
+    Args:
+        bands: The single-band tiles, in an array: element 0 becomes band 1, element 1
+            band 2, and so on. The georeference, data type and NoData come from the first.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A tile with one band per readable input tile, in array order. A NULL or empty
+        array gives NULL; an array of only error tiles gives the first one; a tile that
+        cannot be read is skipped.
+
+    SQL: ``gbx_rst_frombands(bands)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_frombands",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            bands,
+        )
+    return _api.call(
+        "gbx_rst_frombands",
+        bands,
     )
 
 
@@ -3559,6 +3604,43 @@ def rst_memsize(
     return _api.call(
         "gbx_rst_memsize",
         tile,
+    )
+
+
+def rst_merge(
+    tiles: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Mosaic an array of tiles into one tile that spans their union extent.
+
+    Args:
+        tiles: The tiles to mosaic, in an array. Tiles in another CRS are reprojected
+            onto the grid of a tile in the reference CRS.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        One tile over the union extent. A NULL or empty array gives NULL; an array of
+        only error tiles gives the first one; a tile that cannot be read is skipped. An
+        array over the memory budget gives an error tile with a `Fix:` that names
+        `merge_by_key(..., method="vrt")`.
+
+    SQL: ``gbx_rst_merge(tiles)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_merge",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tiles,
+        )
+    return _api.call(
+        "gbx_rst_merge",
+        tiles,
     )
 
 
@@ -4637,6 +4719,56 @@ def rst_threshold(
     )
 
 
+def rst_tilexyz(
+    tile: ColLike,
+    z: ColLike,
+    x: ColLike,
+    y: ColLike,
+    format: ColLike = None,
+    size: ColLike = None,
+    resampling: ColLike = None,
+    rescale: ColLike = None,
+) -> Column:
+    """Render one web-mercator XYZ slippy-map tile of the raster as image bytes.
+
+    Args:
+        tile: The tile to render.
+        z: The zoom level of the web tile, from 0.
+        x: The tile column, from 0 to 2^z - 1.
+        y: The tile row (north-down slippy-map order), from 0 to 2^z - 1.
+        format: `'PNG'`, `'JPEG'` or `'WEBP'`, in any case. Any other word raises. SQL
+            default: ``'PNG'``.
+        size: The side of the output tile in pixels, in (0, 4096]. Any other value
+            raises. SQL default: ``256``.
+        resampling: The GDAL warp resampling: `near`, `bilinear`, `cubic`,
+            `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3`.
+            Any other word raises. SQL default: ``'bilinear'``.
+        rescale: The 8-bit contrast: `'auto'` rescales a tile that is not 8-bit by its
+            band minimum and maximum and passes an 8-bit one through, `'none'` keeps the
+            full range of the data type, and `'min,max'` rescales between two numbers. Any
+            other text raises. SQL default: ``'auto'``.
+
+    Returns:
+        The image bytes: PNG and WebP are RGBA, JPEG is RGB. A pixel that is NoData, or
+        outside the raster, is transparent; a tile outside the raster, a NULL tile and a
+        tile that cannot be read give a fully transparent image of the requested size. A
+        NULL z, x or y gives NULL.
+
+    SQL: ``gbx_rst_tilexyz(tile, z, x, y, [format], [size], [resampling], [rescale])``
+    """
+    return _api.call(
+        "gbx_rst_tilexyz",
+        tile,
+        z,
+        x,
+        y,
+        format,
+        size,
+        resampling,
+        rescale,
+    )
+
+
 def rst_to_webmercator(
     tile: ColLike,
     resampling: ColLike = None,
@@ -4921,6 +5053,66 @@ def rst_upperlefty(
     )
 
 
+def rst_viewshed(
+    tile: ColLike,
+    observer_geom: ColLike,
+    observer_height: ColLike,
+    target_height: ColLike = None,
+    max_distance: ColLike = None,
+    crs: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute a binary viewshed from a DEM tile and an observer point.
+
+    Args:
+        tile: The DEM tile.
+        observer_geom: The observer: a POINT as WKB, EWKB, WKT or EWKT, in the DEM's CRS
+            (an SRID in EWKB or EWKT wins over `crs`). Any other geometry raises.
+        observer_height: The observer's height above the DEM, 0 or more.
+        target_height: The height of the target above the DEM at each cell, 0 or more.
+            SQL default: ``1.6``.
+        max_distance: The largest distance to analyse in the DEM's CRS units, above 0.
+            NULL for no limit: the whole DEM. A limit gives the window around the observer.
+            SQL default: ``NULL``.
+        crs: The CRS of the observer when it has no SRID (`EPSG:n`, `ESRI:n` or WKT).
+            NULL means the DEM's CRS. SQL default: ``NULL``.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A Byte tile: 255 where the cell is visible, 0 where it is not. A NULL tile or
+        observer gives NULL; an error tile comes out as itself; a tile that cannot be
+        read gives an error tile.
+
+    SQL: ``gbx_rst_viewshed(tile, observer_geom, observer_height, [target_height], [max_distance], [crs])``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_viewshed",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            observer_geom,
+            observer_height,
+            target_height,
+            max_distance,
+            crs,
+        )
+    return _api.call(
+        "gbx_rst_viewshed",
+        tile,
+        observer_geom,
+        observer_height,
+        target_height,
+        max_distance,
+        crs,
+    )
+
+
 def rst_width(
     tile: ColLike,
 ) -> Column:
@@ -5013,6 +5205,51 @@ def rst_worldtorastercoordy(
         tile,
         x,
         y,
+    )
+
+
+def rst_xyzpyramid(
+    df: DataFrame,
+    tile: ColLike,
+    min_z: ColLike,
+    max_z: ColLike,
+    format: ColLike = None,
+    size: ColLike = None,
+    resampling: ColLike = None,
+    rescale: ColLike = None,
+) -> DataFrame:
+    """Render every web-mercator XYZ tile that the raster touches, across a range of zoom levels.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to render.
+        min_z: The first zoom level, from 0.
+        max_z: The last zoom level, at least `min_z` and at most 20.
+        format: `'PNG'`, `'JPEG'` or `'WEBP'`, in any case. Any other word raises. SQL
+            default: ``'PNG'``.
+        size: The side of each output tile in pixels, in (0, 4096]. Any other value
+            raises. SQL default: ``256``.
+        resampling: The GDAL warp resampling, as for `gbx_rst_tilexyz`. Any other word
+            raises. SQL default: ``'bilinear'``.
+        rescale: The 8-bit contrast, as for `gbx_rst_tilexyz`. SQL default: ``'auto'``.
+
+    Returns:
+        One row per tile: `z`, `x`, `y` and the image `bytes`. A NULL tile, an error
+        tile and a tile that cannot be read give no rows. A pyramid of more than
+        1,000,000 candidate tiles raises.
+
+    SQL: ``gbx_rst_xyzpyramid(tile, min_z, max_z, [format], [size], [resampling], [rescale])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_xyzpyramid",
+        tile,
+        min_z,
+        max_z,
+        format,
+        size,
+        resampling,
+        rescale,
     )
 
 

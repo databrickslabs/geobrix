@@ -13,9 +13,9 @@ from . import pmtiles_functions_sql
 @pytest.fixture(scope="module")
 def tiles_view(spark):
     """Create a test (z, x, y, bytes) view that the SQL examples reference."""
-    from databricks.labs.gbx.pmtiles import functions as px
+    from databricks.labs.gbx import manager
 
-    px.register(spark)
+    manager.register(spark, only=["gbx_pmtiles_agg"])
 
     test_data = [
         (2, x, y, f"tile_{x}_{y}".encode("utf-8"))

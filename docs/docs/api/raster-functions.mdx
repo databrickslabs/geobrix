@@ -1710,7 +1710,18 @@ Output CRS via `out_srid` (int); input points assumed already in the output CRS.
 
 ### rst_frombands
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_frombands: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_frombands(bands)` | `TILE` |
+| Python | `rasterx.functions.rst_frombands(bands, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `bands` | `ARRAY<TILE>` |  | The single-band tiles, in an array: element 0 becomes band 1, element 1 band 2, and so on. The georeference, data type and NoData come from the first. |
+{/* END GENERATED gbx_rst_frombands */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**. Stacks an `ARRAY` of single-band tiles into one multi-band tile in array order (element 0 → band 1), preserving georeference/CRS/dtype/NoData from the first.
@@ -1722,15 +1733,12 @@ Create a raster from an array of band tiles.
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_frombands(bands: Column): Column`
-
 _Constructor — stacks per-band tiles into a multi-band tile. Example splits the multiband fixture into per-band tiles via `rst_band`, then re-stacks them into a 3-band tile._
 
 <FunctionExamples
   name="rst_frombands"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
@@ -3300,9 +3308,20 @@ Per-band percentile contrast stretch to uint8. For each band, `lo_pct` and `hi_p
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
-### rst_combineavg {#multi-raster}
+### rst_combineavg
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_combineavg: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_combineavg(tiles)` | `TILE` |
+| Python | `rasterx.functions.rst_combineavg(tiles, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tiles` | `ARRAY<TILE>` |  | The tiles to combine, in an array: aligned tiles that share size, extent and CRS (use `gbx_rst_align_to` first). |
+{/* END GENERATED gbx_rst_combineavg */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoData-aware per-pixel mean; input tiles must share the same grid (shape/extent/CRS). cellid is preserved when all inputs share one, else −1.
@@ -3314,20 +3333,30 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 
 Per-pixel mean across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the mean of that location's valid (non-NoData) values across the stack (a pixel that is NoData in *every* input stays NoData). Use for temporal/ensemble composites such as cloud-reduced mean reflectance.
 
-**Signature:** `rst_combineavg(tiles: Column): Column` — Average multiple tiles (e.g. temporal composite).
+Average multiple tiles (e.g. temporal composite).
 
 <FunctionExamples
   name="rst_combineavg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxBandmathLightCode} pythonSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
 />
 
 ### rst_combinecount
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_combinecount: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_combinecount(tiles)` | `TILE` |
+| Python | `rasterx.functions.rst_combinecount(tiles, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tiles` | `ARRAY<TILE>` |  | The tiles to combine, in an array: aligned tiles that share size, extent and CRS (use `gbx_rst_align_to` first). |
+{/* END GENERATED gbx_rst_combinecount */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns a tile where each pixel is the count of valid (non-NoData) inputs across the stack; input tiles must share the same grid (shape/extent/CRS). All-NoData pixels yield NoData in the output (never 0 for an all-NoData pixel). Align tiles with `gbx_rst_align_to` before combining.
@@ -3335,20 +3364,30 @@ Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns a tile w
 
 Per-pixel count of valid (non-NoData) inputs across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the number of inputs whose value at that location is valid; a location that is NoData in *every* input yields NoData (never 0). Use alongside the other `rst_combine*` reducers to build multi-statistic temporal or ensemble composites.
 
-**Signature:** `rst_combinecount(tiles: Column): Column` — Count of valid pixels per location.
+Count of valid pixels per location.
 
 <FunctionExamples
   name="rst_combinecount"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxBandmathLightCode} pythonSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
 />
 
 ### rst_combinemax
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_combinemax: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_combinemax(tiles)` | `TILE` |
+| Python | `rasterx.functions.rst_combinemax(tiles, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tiles` | `ARRAY<TILE>` |  | The tiles to combine, in an array: aligned tiles that share size, extent and CRS (use `gbx_rst_align_to` first). |
+{/* END GENERATED gbx_rst_combinemax */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoData-aware per-pixel maximum; input tiles must share the same grid (shape/extent/CRS). All-NoData pixels yield NoData in the output. Align tiles with `gbx_rst_align_to` before combining.
@@ -3356,20 +3395,30 @@ Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoDa
 
 Per-pixel maximum across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the largest of that location's valid (non-NoData) values across the stack (a pixel that is NoData in *every* input stays NoData). Use to build cloud-free maximum-NDVI composites or storm-peak accumulations.
 
-**Signature:** `rst_combinemax(tiles: Column): Column` — Maximum pixel value per location.
+Maximum pixel value per location.
 
 <FunctionExamples
   name="rst_combinemax"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxBandmathLightCode} pythonSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
 />
 
 ### rst_combinemedian
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_combinemedian: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_combinemedian(tiles)` | `TILE` |
+| Python | `rasterx.functions.rst_combinemedian(tiles, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tiles` | `ARRAY<TILE>` |  | The tiles to combine, in an array: aligned tiles that share size, extent and CRS (use `gbx_rst_align_to` first). |
+{/* END GENERATED gbx_rst_combinemedian */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoData-aware per-pixel median; input tiles must share the same grid (shape/extent/CRS). Even-count median uses the mean of the two middle values (`numpy np.ma.median` convention). All-NoData pixels yield NoData in the output. Align tiles with `gbx_rst_align_to` before combining.
@@ -3377,20 +3426,30 @@ Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoDa
 
 Per-pixel median across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the median of that location's valid (non-NoData) values across the stack (even counts average the two middle values; a pixel that is NoData in *every* input stays NoData). Robust to outliers — useful for seasonal median composites from time-series imagery.
 
-**Signature:** `rst_combinemedian(tiles: Column): Column` — Median pixel value per location.
+Median pixel value per location.
 
 <FunctionExamples
   name="rst_combinemedian"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxBandmathLightCode} pythonSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
 />
 
 ### rst_combinemin
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_combinemin: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_combinemin(tiles)` | `TILE` |
+| Python | `rasterx.functions.rst_combinemin(tiles, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tiles` | `ARRAY<TILE>` |  | The tiles to combine, in an array: aligned tiles that share size, extent and CRS (use `gbx_rst_align_to` first). |
+{/* END GENERATED gbx_rst_combinemin */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoData-aware per-pixel minimum; input tiles must share the same grid (shape/extent/CRS). All-NoData pixels yield NoData in the output. Align tiles with `gbx_rst_align_to` before combining.
@@ -3398,20 +3457,30 @@ Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoDa
 
 Per-pixel minimum across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the smallest of that location's valid (non-NoData) values across the stack (a pixel that is NoData in *every* input stays NoData). Use to extract the lowest-cloud-probability pixel from a time stack or to track cumulative minimum temperatures.
 
-**Signature:** `rst_combinemin(tiles: Column): Column` — Minimum pixel value per location.
+Minimum pixel value per location.
 
 <FunctionExamples
   name="rst_combinemin"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxBandmathLightCode} pythonSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
 />
 
 ### rst_combinestddev
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_combinestddev: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_combinestddev(tiles)` | `TILE` |
+| Python | `rasterx.functions.rst_combinestddev(tiles, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tiles` | `ARRAY<TILE>` |  | The tiles to combine, in an array: aligned tiles that share size, extent and CRS (use `gbx_rst_align_to` first). |
+{/* END GENERATED gbx_rst_combinestddev */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoData-aware per-pixel population standard deviation (ddof=0) across the stack; input tiles must share the same grid (shape/extent/CRS). All-NoData pixels yield NoData in the output. Align tiles with `gbx_rst_align_to` before combining.
@@ -3419,20 +3488,30 @@ Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoDa
 
 Per-pixel population standard deviation across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the population standard deviation (ddof=0) of that location's valid (non-NoData) values across the stack (a pixel that is NoData in *every* input stays NoData). Quantifies variability in a time-series or multi-scene ensemble — high values indicate heterogeneous pixels.
 
-**Signature:** `rst_combinestddev(tiles: Column): Column` — Population standard deviation of pixel values per location.
+Population standard deviation of pixel values per location.
 
 <FunctionExamples
   name="rst_combinestddev"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxBandmathLightCode} pythonSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
 />
 
 ### rst_combinesum
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_combinesum: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_combinesum(tiles)` | `TILE` |
+| Python | `rasterx.functions.rst_combinesum(tiles, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tiles` | `ARRAY<TILE>` |  | The tiles to combine, in an array: aligned tiles that share size, extent and CRS (use `gbx_rst_align_to` first). |
+{/* END GENERATED gbx_rst_combinesum */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoData-aware per-pixel sum across the stack; input tiles must share the same grid (shape/extent/CRS). All-NoData pixels yield NoData in the output. Align tiles with `gbx_rst_align_to` before combining.
@@ -3440,13 +3519,12 @@ Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoDa
 
 Per-pixel sum across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the sum of that location's valid (non-NoData) values across the stack (a pixel that is NoData in *every* input stays NoData). Use to accumulate total precipitation from a daily time-series or to sum spectral flux across dates.
 
-**Signature:** `rst_combinesum(tiles: Column): Column` — Sum of pixel values per location.
+Sum of pixel values per location.
 
 <FunctionExamples
   name="rst_combinesum"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxBandmathLightCode} pythonSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
 />
@@ -3630,7 +3708,7 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands with real pixe
 ### rst_mapalgebra
 
 {/* BEGIN GENERATED gbx_rst_mapalgebra: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -3679,29 +3757,38 @@ The **envelope** is portable, but the **calc expression language is not fully po
   name="rst_mapalgebra"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxBandmathLightCode} pythonSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
 />
 
 ### rst_merge
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_merge: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_merge(tiles)` | `TILE` |
+| Python | `rasterx.functions.rst_merge(tiles, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tiles` | `ARRAY<TILE>` |  | The tiles to mosaic, in an array. Tiles in another CRS are reprojected onto the grid of a tile in the reference CRS. |
+{/* END GENERATED gbx_rst_merge */}
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** (`rasterio.merge`). Takes an `ARRAY<tile>` (in one row) and mosaics them into a single tile spanning the union extent (first-tile-wins on overlap, in array order). Tiles in a different CRS are reprojected onto the pixel size and grid of a tile in the reference CRS and mosaicked with it. A tile reprojected from another CRS that declares no NoData (or has its own mask band) is written with the footprint of the warp as its mask, so the mosaic then has a mask band and a pixel no tile reaches is invalid in it; a gap between tiles that are all in the reference CRS and declare no NoData is still filled with zeros. The heavyweight tier does not merge tiles in different CRSs and returns one of them.
+Powered by **rasterio** (`rasterio.merge`). Takes an `ARRAY<tile>` (in one row) and mosaics them into a single tile spanning the union extent (where tiles overlap, the winner does not depend on the array order: the tile whose bytes sort last wins). Tiles in a different CRS are reprojected onto the pixel size and grid of a tile in the reference CRS and mosaicked with it. A tile reprojected from another CRS that declares no NoData (or has its own mask band) is written with the footprint of the warp as its mask, so the mosaic then has a mask band and a pixel no tile reaches is invalid in it; a gap between tiles that are all in the reference CRS and declare no NoData is still filled with zeros. The JVM level (L1) does not merge tiles in different CRSs and returns one of them.
 :::
 
 :::note Lightweight Python — virtual-tile force-output
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_merge(tiles: Column): Column` — Merge tiles into mosaic.
+Merge tiles into mosaic.
 
 <FunctionExamples
   name="rst_merge"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxBandmathLightCode} pythonSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
 />
@@ -4193,13 +4280,33 @@ Pixel column / row for a world coordinate.
 
 ### rst_tilexyz
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_tilexyz: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_tilexyz(tile, z, x, y, [format], [size], [resampling], [rescale])` | `BINARY` |
+| Python | `rasterx.functions.rst_tilexyz(tile, z, x, y, format=None, size=None, resampling=None, rescale=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to render. |
+| `z` | `INT` |  | The zoom level of the web tile, from 0. |
+| `x` | `INT` |  | The tile column, from 0 to 2^z - 1. |
+| `y` | `INT` |  | The tile row (north-down slippy-map order), from 0 to 2^z - 1. |
+| `format` | `STRING` | `'PNG'` | `'PNG'`, `'JPEG'` or `'WEBP'`, in any case. Any other word raises. |
+| `size` | `INT` | `256` | The side of the output tile in pixels, in (0, 4096]. Any other value raises. |
+| `resampling` | `STRING` | `'bilinear'` | The GDAL warp resampling: `near`, `bilinear`, `cubic`, `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3`. Any other word raises. |
+| `rescale` | `STRING` | `'auto'` | The 8-bit contrast: `'auto'` rescales a tile that is not 8-bit by its band minimum and maximum and passes an 8-bit one through, `'none'` keeps the full range of the data type, and `'min,max'` rescales between two numbers. Any other text raises. |
+{/* END GENERATED gbx_rst_tilexyz */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rio-tiler** + **morecantile**. Out-of-extent tiles return a transparent PNG (never null); available output formats depend on rasterio's bundled GDAL build.
 :::
 
-**Signature:** `rst_tilexyz(tile: Column, z: Column, x: Column, y: Column, format: Column, tileSize: Column, resampling: Column): Column` — Render a single web-mercator XYZ tile from a raster as encoded image bytes (e.g. PNG, JPEG, WebP) at the given tile coordinates and pixel size.
+Render a single web-mercator XYZ tile from a raster as encoded image bytes (e.g. PNG, JPEG, WebP) at the given tile coordinates and pixel size.
+
+A bad argument raises an error that names the value: a `format` other than `PNG`, `JPEG` or `WEBP`, a `size` outside (0, 4096], a `resampling` word that names none, or a `rescale` that is not `auto`, `none` or `min,max`. It raises also when the tile is NULL or cannot be read, because the argument is checked first; a NULL `z`, `x` or `y` gives NULL.
 
 :::note Display RGB(A) output (both tiers)
 The output is a display web-map tile, not the source's raw bands. **PNG and WebP** are **RGBA** (4-band); **JPEG** is **RGB** (3-band, no alpha). The alpha channel is a binary transparency mask derived from the source's valid-data footprint, so a pixel that is NoData — whether outside the raster or an internal hole — renders **transparent**, and both the lightweight and heavyweight tiers agree on which pixels are transparent. Band mapping matches the lightweight tier: a single-band source becomes greyscale RGB (`R=G=B`), a two-band source uses band 1 as greyscale RGB and band 2 as the alpha channel, three bands map to R, G, B, an existing fourth band is treated as alpha, and five-or-more-band sources use the first three bands as RGB. Non-8-bit sources are contrast-rescaled to 8-bit per the `rescale` argument (default `"auto"`; see the `rescale` note above). WebP alpha requires GDAL WebP-alpha support in the runtime; where absent, WebP falls back to RGB.
@@ -4208,8 +4315,7 @@ The output is a display web-map tile, not the source's raw bands. **PNG and WebP
 <FunctionExamples
   name="rst_tilexyz"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTransformsLightCode} pythonSource="docs/tests/python/api/rasterx_transforms_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
 />
@@ -4250,19 +4356,39 @@ Reproject a raster to EPSG:3857 (Web Mercator) using bilinear resampling by defa
 
 ### rst_xyzpyramid
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_xyzpyramid: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_xyzpyramid(tile, min_z, max_z, [format], [size], [resampling], [rescale])` | rows |
+| Python | `rasterx.functions.rst_xyzpyramid(df, tile, min_z, max_z, format=None, size=None, resampling=None, rescale=None)` | DataFrame |
+
+Rows: `z` `INT`, `x` `INT`, `y` `INT`, `bytes` `BINARY`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to render. |
+| `min_z` | `INT` |  | The first zoom level, from 0. |
+| `max_z` | `INT` |  | The last zoom level, at least `min_z` and at most 20. |
+| `format` | `STRING` | `'PNG'` | `'PNG'`, `'JPEG'` or `'WEBP'`, in any case. Any other word raises. |
+| `size` | `INT` | `256` | The side of each output tile in pixels, in (0, 4096]. Any other value raises. |
+| `resampling` | `STRING` | `'bilinear'` | The GDAL warp resampling, as for `gbx_rst_tilexyz`. Any other word raises. |
+| `rescale` | `STRING` | `'auto'` | The 8-bit contrast, as for `gbx_rst_tilexyz`. |
+{/* END GENERATED gbx_rst_xyzpyramid */}
+
+<Impl udtf/>
 
 :::note Lightweight tier (pyrx)
 Powered by **rio-tiler** + **morecantile**. Streams one XYZ tile row per intersecting tile via streaming UDTF. Bounded by `max_z <= 20` and at most 1,000,000 candidate tiles.
 :::
 
-**Signature:** `rst_xyzpyramid(tile: Column, minZoom: Column, maxZoom: Column): Column` — Generator: explode a raster into one row per intersecting `(z, x, y)` tile across a zoom range, producing PNG bytes per tile. Use `LATERAL VIEW` to materialize the rows; the output struct exposes `z`, `x`, `y`, and `bytes`. Each tile is rendered by `rst_tilexyz`, so the per-tile PNG is display **RGBA** with the same band mapping and binary NoData alpha described above.
+Generator: explode a raster into one row per intersecting `(z, x, y)` tile across a zoom range, producing PNG bytes per tile. Use `LATERAL VIEW` to materialize the rows; the output struct exposes `z`, `x`, `y`, and `bytes`. Each tile is rendered by `rst_tilexyz`, so the per-tile PNG is display **RGBA** with the same band mapping and binary NoData alpha described above.
 
 <FunctionExamples
   name="rst_xyzpyramid"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTransformsLightCode} pythonSource="docs/tests/python/api/rasterx_transforms_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
 />
@@ -4391,7 +4517,19 @@ With `zero_for_flat`, GDAL drops the NoData value, so its border pixels are 0. T
 
 ### rst_color_relief
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_color_relief: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_color_relief(tile, color_table_path)` | `TILE` |
+| Python | `rasterx.functions.rst_color_relief(tile, color_table_path, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The single-band DEM tile. |
+| `color_table_path` | `STRING` |  | The path of a `gdaldem` colour file: one `elevation R G B [A]` line per stop, with `nv` for NoData and `N%` for a share of the value range. The file must exist. |
+{/* END GENERATED gbx_rst_color_relief */}
 
 :::note Cross-tier output differs (both tiers, by design)
 The two tiers use **different color interpolation engines**, so their pixel values are close but **not identical** and are not byte-comparable: the heavyweight tier calls GDAL `gdal.DEMProcessing` color-relief (GDAL's native C interpolation), while the lightweight (`pyrx`) tier is a **NumPy** reimplementation using per-channel `np.interp`. Two known differences on the lightweight tier: the `gdaldem` `default` color keyword is **not supported** (it is skipped; out-of-range elevations are clamped to the nearest color stop by `np.interp` instead), and boundary/edge interpolation may differ slightly. Both tiers emit an RGB or RGBA Byte tile (RGBA when any color-table entry carries an alpha column). Because the outputs diverge, this function is not cross-tier fingerprint-compared in benchmarks (measured `timing-only`); pick the tier by your pipeline (heavyweight for `gdaldem`-exact output, lightweight for the pure-Python/Serverless path).
@@ -4401,13 +4539,12 @@ The two tiers use **different color interpolation engines**, so their pixel valu
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_color_relief(tile: Column, colorTablePath: Column): Column` — Apply a `gdaldem` color table (`elevation R G B [A]` per line) to produce an RGB(A) visualization tile. Special values `nv` (NoData color), `0%`, and `100%` (percentages of the band value range) are honored on both tiers; the `default` keyword is honored only on the heavyweight tier (see the tier note above).
+Apply a `gdaldem` color table (`elevation R G B [A]` per line) to produce an RGB(A) visualization tile. Special values `nv` (NoData color), `0%`, and `100%` (percentages of the band value range) are honored on both tiers; the `default` keyword is honored only on the heavyweight tier (see the tier note above).
 
 <FunctionExamples
   name="rst_color_relief"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTerrainLightCode} pythonSource="docs/tests/python/api/rasterx_terrain_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
 />
@@ -4868,7 +5005,20 @@ _Example uses the multiband fixture (`rgb_nir_small.tif`, 3 bands) to demonstrat
 
 ### rst_buildoverviews
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_buildoverviews: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_buildoverviews(tile, levels, [resampling])` | `TILE` |
+| Python | `rasterx.functions.rst_buildoverviews(tile, levels, resampling=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to add overviews to. |
+| `levels` | `ARRAY<INT>` |  | The decimation factors, such as `array(2, 4, 8)`: each at least 2. |
+| `resampling` | `STRING` | `'average'` | The overview resampling: `nearest`, `average`, `gauss`, `cubic`, `cubicspline`, `lanczos`, `bilinear` or `mode`. Any other word raises. |
+{/* END GENERATED gbx_rst_buildoverviews */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**. Builds internal GeoTIFF overviews.
@@ -4878,13 +5028,12 @@ Powered by **rasterio**. Builds internal GeoTIFF overviews.
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_buildoverviews(tile: Column, levels: Column, [resampling: Column = lit("average")]): Column` — Add pyramid overview levels to a tile via `ds.BuildOverviews`. `levels` is an `ARRAY<INT>` (e.g. `array(2, 4, 8, 16)`); `resampling` is one of `nearest`, `average`, `gauss`, `cubic`, `cubicspline`, `lanczos`, `bilinear`, `mode`.
+Add pyramid overview levels to a tile via `ds.BuildOverviews`. `levels` is an `ARRAY<INT>` (e.g. `array(2, 4, 8, 16)`); `resampling` is one of `nearest`, `average`, `gauss`, `cubic`, `cubicspline`, `lanczos`, `bilinear`, `mode`.
 
 <FunctionExamples
   name="rst_buildoverviews"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
@@ -5105,7 +5254,21 @@ Higher-level analytical transforms wrapping single GDAL primitives — COG layou
 
 ### rst_cog_convert
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_cog_convert: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_cog_convert(tile, [compression], [blocksize], [overview_resampling])` | `TILE` |
+| Python | `rasterx.functions.rst_cog_convert(tile, compression=None, blocksize=None, overview_resampling=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to convert. |
+| `compression` | `STRING` | `'AUTO'` | `'AUTO'` (a size-adaptive ZSTD with the predictor for the data type) or a codec: `ZSTD`, `DEFLATE`, `LZW`, `LERC`, `JPEG`, `WEBP` or `NONE`. Any other word raises. |
+| `blocksize` | `INT` | `512` | The internal block size in pixels, square: a multiple of 16. Any other value raises. |
+| `overview_resampling` | `STRING` | `'AVERAGE'` | The resampling of the overview pyramid, such as `AVERAGE`. |
+{/* END GENERATED gbx_rst_cog_convert */}
 
 :::note Lightweight tier (pyrx)
 Re-encodes the tile as a Cloud Optimized GeoTIFF (it passes GDAL's COG validator). `compression` defaults to `"auto"` — a **size-adaptive ZSTD** level with a dtype-matched predictor (the GeoBrix materialize baseline; see [Materialized Compression](./materialized-compression)) — or an explicit codec name (`zstd`, `deflate`, `lzw`, `lerc`, `jpeg`, `webp`, `none`). The tile's `metadata.driver` is `GTiff` (a COG is a valid GeoTIFF).
@@ -5115,13 +5278,12 @@ Re-encodes the tile as a Cloud Optimized GeoTIFF (it passes GDAL's COG validator
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_cog_convert(tile: Column, [compression: Column, blocksize: Column = lit(512), overviewResampling: Column = lit("AVERAGE")]): Column` — Re-layout a raster tile as a Cloud Optimized GeoTIFF via `gdal.Translate -of COG`. Both tiers use a **ZSTD + dtype-predictor** baseline. `compression` accepts an explicit codec on either tier — `ZSTD`, `DEFLATE`, `LZW`, `NONE`, `LERC`, `JPEG`, `WEBP` — and its default is `ZSTD` on the heavyweight tier. The **lightweight tier additionally accepts `AUTO`** (its default): a size-adaptive ZSTD level with the dtype predictor. `blocksize` is the internal tile size in pixels (square). `overviewResampling` is the algorithm for the auto-generated overview pyramid. Output is a GTiff-on-disk variant suitable for HTTP range serving. See [Materialized Compression](./materialized-compression) for the codec/level details and when to override. See [Materialized Compression](./materialized-compression) for the codec/level details and when to override.
+Re-layout a raster tile as a Cloud Optimized GeoTIFF via `gdal.Translate -of COG`. Both tiers use a **ZSTD + dtype-predictor** baseline. `compression` accepts an explicit codec on either tier — `ZSTD`, `DEFLATE`, `LZW`, `NONE`, `LERC`, `JPEG`, `WEBP` — and its default is `ZSTD` on the heavyweight tier. The **lightweight tier additionally accepts `AUTO`** (its default): a size-adaptive ZSTD level with the dtype predictor. `blocksize` is the internal tile size in pixels (square). `overviewResampling` is the algorithm for the auto-generated overview pyramid. Output is a GTiff-on-disk variant suitable for HTTP range serving. See [Materialized Compression](./materialized-compression) for the codec/level details and when to override. See [Materialized Compression](./materialized-compression) for the codec/level details and when to override.
 
 <FunctionExamples
   name="rst_cog_convert"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
@@ -5183,7 +5345,23 @@ Compute a Float32 raster where each pixel holds the distance to the nearest sour
 
 ### rst_viewshed
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_viewshed: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_viewshed(tile, observer_geom, observer_height, [target_height], [max_distance], [crs])` | `TILE` |
+| Python | `rasterx.functions.rst_viewshed(tile, observer_geom, observer_height, target_height=None, max_distance=None, crs=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The DEM tile. |
+| `observer_geom` | `BINARY` or `STRING` |  | The observer: a POINT as WKB, EWKB, WKT or EWKT, in the DEM's CRS (an SRID in EWKB or EWKT wins over `crs`). Any other geometry raises. |
+| `observer_height` | `DOUBLE` |  | The observer's height above the DEM, 0 or more. |
+| `target_height` | `DOUBLE` | `1.6` | The height of the target above the DEM at each cell, 0 or more. |
+| `max_distance` | `DOUBLE` | `NULL` | The largest distance to analyse in the DEM's CRS units, above 0. NULL for no limit: the whole DEM. A limit gives the window around the observer. |
+| `crs` | `STRING` | `NULL` | The CRS of the observer when it has no SRID (`EPSG:n`, `ESRI:n` or WKT). NULL means the DEM's CRS. |
+{/* END GENERATED gbx_rst_viewshed */}
 
 :::note Lightweight tier (pyrx)
 Runs GDAL's viewshed (`GDALViewshedGenerate`) with the same settings as the heavyweight tier. Returns a Byte tile (255 visible / 0 invisible) from a DEM tile and a POINT observer.
@@ -5197,13 +5375,12 @@ With a `maxDistance`, the light tier now returns the window around the observer 
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-**Signature:** `rst_viewshed(tile: Column, observerGeom: Column, observerHeight: Column, [targetHeight: Column = lit(1.6), maxDistance: Column = null]): Column` — Compute a binary viewshed Byte raster (`255` = visible, `0` = invisible / out-of-range) from a DEM tile and an observer POINT via `gdal.ViewshedGenerate`. `observerGeom` is WKB / WKT POINT; it is reprojected from its source CRS to the raster CRS (an EWKB/EWKT embedded SRID wins, else the optional `crs` argument, else assumed already aligned). Non-POINT geometries raise an error at execution time. Heights are above the DEM at each pixel. `maxDistance` clips the search radius; `null` = unlimited. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
+Compute a binary viewshed Byte raster (`255` = visible, `0` = invisible / out-of-range) from a DEM tile and an observer POINT via `gdal.ViewshedGenerate`. `observerGeom` is WKB / WKT POINT; it is reprojected from its source CRS to the raster CRS (an EWKB/EWKT embedded SRID wins, else the optional `crs` argument, else assumed already aligned). Non-POINT geometries raise an error at execution time. Heights are above the DEM at each pixel. `maxDistance` clips the search radius; `null` = unlimited. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
 
 <FunctionExamples
   name="rst_viewshed"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTerrainLightCode} pythonSource="docs/tests/python/api/rasterx_terrain_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
 />

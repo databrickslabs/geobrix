@@ -1989,13 +1989,13 @@ def _column_api_forms(tmp_path):
     out = str(tmp_path / "virtual")
     tiles = F.collect_list("tile")
     return {
-        "merge-virtualize": lambda: prx.rst_merge(tiles, virtualize_dir=out),
-        "merge-materialize": lambda: prx.rst_merge(tiles, materialize=True),
-        "combineavg-virtualize": lambda: prx.rst_combineavg(tiles, virtualize_dir=out),
-        "combinemax": lambda: prx.rst_combinemax(tiles),
-        "combinemax-virtualize": lambda: prx.rst_combinemax(tiles, virtualize_dir=out),
-        "frombands": lambda: prx.rst_frombands(tiles),
-        "frombands-virtualize": lambda: prx.rst_frombands(tiles, virtualize_dir=out),
+        "merge-virtualize": lambda: rx.rst_merge(tiles, virtualize_dir=out),
+        "merge-materialize": lambda: rx.rst_merge(tiles, materialize=True),
+        "combineavg-virtualize": lambda: rx.rst_combineavg(tiles, virtualize_dir=out),
+        "combinemax": lambda: rx.rst_combinemax(tiles),
+        "combinemax-virtualize": lambda: rx.rst_combinemax(tiles, virtualize_dir=out),
+        "frombands": lambda: rx.rst_frombands(tiles),
+        "frombands-virtualize": lambda: rx.rst_frombands(tiles, virtualize_dir=out),
         "merge_agg": lambda: prx._light_rst_merge_agg("tile"),
         "merge_agg-virtualize": lambda: prx._light_rst_merge_agg(
             "tile", virtualize_dir=out

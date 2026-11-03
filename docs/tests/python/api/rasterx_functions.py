@@ -420,26 +420,8 @@ def _heavy_tile_df(spark, **kw):
 # ---------------------------------------------------------------------------
 
 
-def rst_buildoverviews_python_heavy_example(spark):
-    """Add internal overview levels to a raster tile via the heavy rasterx tier."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    tile_df = spark.table("rasters")
-    result = tile_df.select(
-        rx.rst_buildoverviews("tile", f.array(f.lit(2), f.lit(4))).alias("tile")
-    ).first()
-    return result["tile"]
 
 
-rst_buildoverviews_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(tile with internal overviews at levels [2, 4] embedded)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -455,23 +437,8 @@ rst_buildoverviews_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_cog_convert_python_heavy_example(spark):
-    """Re-layout a raster tile as a Cloud Optimized GeoTIFF via the heavy rasterx tier."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    tile_df = spark.table("rasters")
-    result = tile_df.select(rx.rst_cog_convert("tile").alias("tile")).first()
-    return result["tile"]
 
 
-rst_cog_convert_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(COG tile; a COG is a valid GeoTIFF with tiled internal layout)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -499,36 +466,8 @@ rst_cog_convert_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_frombands_python_heavy_example(spark):
-    """Stack an array of single-band tiles into a multi-band tile via the heavy rasterx tier.
-
-    Constructor: takes ARRAY<tile> of single-band tiles and stacks them in
-    array order (element 0 → band 1). Splits the multiband fixture into per-band
-    tiles via rst_band, then re-stacks into a 3-band tile.
-    """
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    tile_df = spark.table("multiband_rasters")
-    with_bands = tile_df.select(
-        f.array(
-            rx.rst_band("tile", f.lit(1)),
-            rx.rst_band("tile", f.lit(2)),
-            rx.rst_band("tile", f.lit(3)),
-        ).alias("bands")
-    )
-    result = with_bands.select(rx.rst_frombands("bands").alias("tile")).first()
-    return result["tile"]
 
 
-rst_frombands_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(3 per-band tiles stacked back into a 3-band tile)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -1092,31 +1031,8 @@ rst_quadbin_rasterize_agg_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_combineavg_python_heavy_example(spark):
-    """Combine 3 aligned band tiles by averaging."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    rx.register(spark)
-    from ._fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
-
-    df = multi_band_tiles_df_heavy(spark)
-    result = (
-        df.groupBy("region")
-        .agg(rx.rst_combineavg(f.collect_list("tile")).alias("tile"))
-        .first()
-    )
-    return result["tile"]
 
 
-rst_combineavg_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(averaged combined raster from 3 input tiles)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -1126,31 +1042,8 @@ rst_combineavg_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_combinecount_python_heavy_example(spark):
-    """Count valid (non-NoData) inputs per pixel across aligned tiles."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    rx.register(spark)
-    from ._fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
-
-    df = multi_band_tiles_df_heavy(spark)
-    result = (
-        df.groupBy("region")
-        .agg(rx.rst_combinecount(f.collect_list("tile")).alias("tile"))
-        .first()
-    )
-    return result["tile"]
 
 
-rst_combinecount_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(pixel-count raster: 3 valid inputs per pixel from 3 input tiles)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -1160,31 +1053,8 @@ rst_combinecount_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_combinemax_python_heavy_example(spark):
-    """Combine 3 aligned band tiles by taking per-pixel maximum."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    rx.register(spark)
-    from ._fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
-
-    df = multi_band_tiles_df_heavy(spark)
-    result = (
-        df.groupBy("region")
-        .agg(rx.rst_combinemax(f.collect_list("tile")).alias("tile"))
-        .first()
-    )
-    return result["tile"]
 
 
-rst_combinemax_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(per-pixel maximum raster from 3 input tiles)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -1194,31 +1064,8 @@ rst_combinemax_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_combinemedian_python_heavy_example(spark):
-    """Combine 3 aligned band tiles by taking per-pixel median."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    rx.register(spark)
-    from ._fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
-
-    df = multi_band_tiles_df_heavy(spark)
-    result = (
-        df.groupBy("region")
-        .agg(rx.rst_combinemedian(f.collect_list("tile")).alias("tile"))
-        .first()
-    )
-    return result["tile"]
 
 
-rst_combinemedian_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(per-pixel median raster from 3 input tiles)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -1228,31 +1075,8 @@ rst_combinemedian_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_combinemin_python_heavy_example(spark):
-    """Combine 3 aligned band tiles by taking per-pixel minimum."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    rx.register(spark)
-    from ._fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
-
-    df = multi_band_tiles_df_heavy(spark)
-    result = (
-        df.groupBy("region")
-        .agg(rx.rst_combinemin(f.collect_list("tile")).alias("tile"))
-        .first()
-    )
-    return result["tile"]
 
 
-rst_combinemin_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(per-pixel minimum raster from 3 input tiles)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -1262,31 +1086,8 @@ rst_combinemin_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_combinestddev_python_heavy_example(spark):
-    """Combine 3 aligned band tiles by taking per-pixel population std-dev."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    rx.register(spark)
-    from ._fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
-
-    df = multi_band_tiles_df_heavy(spark)
-    result = (
-        df.groupBy("region")
-        .agg(rx.rst_combinestddev(f.collect_list("tile")).alias("tile"))
-        .first()
-    )
-    return result["tile"]
 
 
-rst_combinestddev_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(per-pixel population std-dev raster from 3 input tiles)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -1296,31 +1097,8 @@ rst_combinestddev_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_combinesum_python_heavy_example(spark):
-    """Combine 3 aligned band tiles by summing per pixel."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    rx.register(spark)
-    from ._fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
-
-    df = multi_band_tiles_df_heavy(spark)
-    result = (
-        df.groupBy("region")
-        .agg(rx.rst_combinesum(f.collect_list("tile")).alias("tile"))
-        .first()
-    )
-    return result["tile"]
 
 
-rst_combinesum_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(per-pixel sum raster from 3 input tiles)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -1337,31 +1115,8 @@ rst_combinesum_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_merge_python_heavy_example(spark):
-    """Merge 3 aligned band tiles into a single raster."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    rx.register(spark)
-    from ._fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
-
-    df = multi_band_tiles_df_heavy(spark)
-    result = (
-        df.groupBy("region")
-        .agg(rx.rst_merge(f.collect_list("tile")).alias("tile"))
-        .first()
-    )
-    return result["tile"]
 
 
-rst_merge_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(merged raster from co-registered input tiles)
-"""
 
 
 # ============================================================================
@@ -1371,28 +1126,8 @@ rst_merge_python_heavy_example_output = """
 # All return tile struct
 
 
-def rst_color_relief_python_heavy_example(spark):
-    """Apply a color relief mapping (elevation → RGBA) from a DEM tile."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-    from ._fixtures import color_table_path  # noqa: PLC0415
-
-    df = spark.table("dem_rasters")
-    clr_path = str(color_table_path())
-    result = df.select(
-        rx.rst_color_relief("tile", f.lit(clr_path)).alias("tile")
-    ).first()
-    return result["tile"]
 
 
-rst_color_relief_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(4-band RGBA tile mapped via gdaldem color table)
-"""
 
 
 def rst_contour_python_heavy_example(spark):
@@ -1419,32 +1154,8 @@ rst_contour_python_heavy_example_output = """
 """
 
 
-def rst_viewshed_python_heavy_example(spark):
-    """Compute binary viewshed mask from a DEM and observer point."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    df = spark.table("dem_rasters")
-    result = df.select(
-        rx.rst_viewshed(
-            "tile",
-            f.lit("POINT(500320 4500320)"),
-            f.lit(100.0),
-            f.lit(1.6),
-            f.lit(500.0),
-        ).alias("tile")
-    ).first()
-    return result["tile"]
 
 
-rst_viewshed_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(binary viewshed: 1=visible, 0=not visible)
-"""
 
 
 # ============================================================================
@@ -1452,64 +1163,12 @@ rst_viewshed_python_heavy_example_output = """
 # ============================================================================
 
 
-def rst_tilexyz_python_heavy_example(spark):
-    """Render a single Web-Mercator XYZ tile (z, x, y) as PNG bytes."""
-    from pyspark.sql import functions as f
-
-    if rx is None:
-        raise ImportError("rasterx not installed")
-
-    df = spark.table("rasters")
-    # Render z=12, x=1234, y=1523 as a 256x256 PNG (rescale='none' keeps the raw
-    # dtype mapping; an off-footprint slippy tile renders transparent, never null).
-    result = df.select(
-        rx.rst_tilexyz(
-            "tile",
-            f.lit(12),
-            f.lit(1234),
-            f.lit(1523),
-            f.lit("PNG"),
-            f.lit(256),
-            f.lit("bilinear"),
-            f.lit("none"),
-        ).alias("png_bytes")
-    ).first()
-    return result["png_bytes"]
 
 
-rst_tilexyz_python_heavy_example_output = """
-+----------+
-|png_bytes |
-+----------+
-|[BINARY]  |
-+----------+
-(PNG image bytes, 256×256 pixels)
-"""
 
 
-def rst_xyzpyramid_python_heavy_example(spark):
-    """Generate XYZ tiles across a zoom range."""
-    from pyspark.sql import functions as f
-
-    if rx is None:
-        raise ImportError("rasterx not installed")
-
-    df = spark.table("rasters")
-    # Explode raster into PNG tiles for z=10..12 (returns array via LATERAL VIEW)
-    result = df.select(
-        rx.rst_xyzpyramid("tile", f.lit(10), f.lit(12)).alias("tile_array")
-    ).first()
-    return result["tile_array"]
 
 
-rst_xyzpyramid_python_heavy_example_output = """
-+----------+
-|tile_array|
-+----------+
-|[tile, ...|
-+----------+
-(array of tile structs: [{z, x, y, bytes}, ...])
-"""
 
 
 def rst_h3_tessellate_python_heavy_example(spark):
@@ -2656,44 +2315,5 @@ rst_isoband_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def pmtiles_agg_python_heavy_example(spark):
-    """Aggregate (z, x, y, bytes) tile rows into a PMTiles v3 BINARY blob using the heavy pmtiles tier.
-
-    Multi-row fixture: 9 synthetic tiles at zoom level 2 (x in [0,2], y in [0,2]).
-    Each tile payload is a short ASCII byte string.  The heavy tier UDAF is registered
-    via ``px.register(spark)`` and runs as a native Scala GROUPED_AGG expression.
-    Returns BINARY containing the full PMTile v3 archive with magic bytes b'PMTiles'.
-    """
-    from databricks.labs.gbx.pmtiles import functions as px  # noqa: PLC0415
-
-    px.register(spark)
-
-    test_data = [
-        (2, x, y, f"tile_{x}_{y}".encode("utf-8"))
-        for x in range(3)
-        for y in range(3)
-    ]
-    df = spark.createDataFrame(test_data, ["z", "x", "y", "tile_bytes"])
-    result = (
-        df.agg(
-            px.pmtiles_agg(
-                "tile_bytes",
-                "z",
-                "x",
-                "y",
-                '{"name":"my_tileset"}',
-            ).alias("pmt")
-        )
-        .first()
-    )
-    return result["pmt"]
 
 
-pmtiles_agg_python_heavy_example_output = """
-+------------------------------------------+
-|pmt                                       |
-+------------------------------------------+
-|[50 4D 54 69 6C 65 73 03 ...]             |
-+------------------------------------------+
-(BINARY: PMTiles v3 archive — starts with magic bytes b'PMTiles' + version byte 3; contains 9 synthetic tiles at zoom 2)
-"""

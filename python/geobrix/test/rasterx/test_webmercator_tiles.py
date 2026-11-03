@@ -1,7 +1,7 @@
-"""End-to-end Python tests for the 3 web-mercator tile functions.
+"""End-to-end Python test for the web-mercator reprojection function.
 
-One smoke / round-trip test per function — confirms the JVM bindings fire and
-the Long-overload eval entry points accept PySpark int inputs (LongType).
+A smoke / round-trip test — confirms the JVM binding fires. The tile functions (rst_tilexyz, rst_xyzpyramid)
+are covered by the WEB_TILES oracle table.
 """
 
 import logging
@@ -56,48 +56,3 @@ def test_rst_to_webmercator_roundtrip(spark):
     )
     row = df.collect()[0]
     assert row["srid"] == 3857
-
-
-def test_rst_tilexyz_returns_png_bytes(spark):
-    """Out-of-extent tile still returns non-null PNG bytes (transparent fallback)."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    # z=10, x=0, y=0 is the upper-left corner of the world — way outside MODIS h10v07.
-    df = spark.range(1).select(
-        rx.rst_tilexyz(
-            tile_from_path(rx, f, str(MODIS_B01), "GTiff"),
-            10,
-            0,
-            0,
-        ).alias("bytes")
-    )
-    row = df.collect()[0]
-    assert row["bytes"] is not None
-    assert len(row["bytes"]) > 0
-    # PNG magic header
-    assert bytes(row["bytes"][:4]) == b"\x89PNG"
-
-
-def test_rst_xyzpyramid_emits_rows(spark):
-    """Pyramid generator emits at least one (z, x, y, bytes) row at z=4."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    # Generators are top-level in Spark 4.0 — invoke directly in select(), no f.explode wrap.
-    df = spark.range(1).select(
-        rx.rst_xyzpyramid(
-            tile_from_path(rx, f, str(MODIS_B01), "GTiff"),
-            4,
-            4,
-        ).alias("t")
-    )
-    rows = df.collect()
-    assert len(rows) >= 1
-    # Each row's "t" is the (z, x, y, bytes) inner struct (the generator emits a single
-    # "tile" column per row, which the .alias("t") above renames to "t").
-    for r in rows:
-        t = r["t"]
-        assert t["z"] == 4
-        assert t["x"] is not None
-        assert t["y"] is not None
-        assert t["bytes"] is not None
-        assert bytes(t["bytes"][:4]) == b"\x89PNG"

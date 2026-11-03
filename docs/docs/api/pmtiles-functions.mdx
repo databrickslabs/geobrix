@@ -32,11 +32,11 @@ Pick based on pyramid size:
 
 ## Registration
 
-Register the UDAF once per session:
+The Python entry (`px.pmtiles_agg`) registers `gbx_pmtiles_agg` in the session on its first call. To call it from SQL first, register it once per session:
 
 ```python
-from databricks.labs.gbx.pmtiles import functions as px
-px.register(spark)
+from databricks.labs.gbx import register
+register(spark, only=["gbx_pmtiles_agg"])
 ```
 
 ```scala
@@ -149,9 +149,26 @@ The internal compression (root directory + metadata) is always `none` in v0.4.0;
 Examples below use **SQL**. PMTiles functions are prefixed with **`gbx_`** (e.g. `gbx_pmtiles_agg`). For language-specific usage, see [Language Bindings](./language-bindings).
 :::
 
-## pmtiles_agg
+### pmtiles_agg
 
-<Tier both/> <Impl groupedAgg/>
+{/* BEGIN GENERATED gbx_pmtiles_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_pmtiles_agg(bytes, z, x, y, [metadata_json])` | `BINARY` |
+| Python | `pmtiles.functions.pmtiles_agg(bytes, z, x, y, metadata_json=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `bytes` | `BINARY` |  | The tile payload, passed through as it is (PNG, JPEG, WebP or MVT). A NULL payload is skipped. |
+| `z` | `INT` |  | The zoom level of the tile. |
+| `x` | `INT` |  | The tile column. |
+| `y` | `INT` |  | The tile row (north-down slippy-map order). |
+| `metadata_json` | `STRING` | `'{}'` | The archive's metadata as JSON text; NULL, blank or `'{}'` means none. |
+{/* END GENERATED gbx_pmtiles_agg */}
+
+<Impl groupedAgg/>
 
 :::note Lightweight tier (pyrx/pyvx)
 Powered by the **pmtiles** package. Grouped aggregate — `groupBy(...).agg(px.pmtiles_agg("bytes", "z", "x", "y"))` folds a group's `(bytes, z, x, y)` map tiles into one PMTiles v3 archive (`BINARY`). Registered by both `pyrx.register` and `pyvx.register` — accepts raster tiles (PNG / JPEG / WebP) or vector tiles (MVT) in either tier.
@@ -159,21 +176,10 @@ Powered by the **pmtiles** package. Grouped aggregate — `groupBy(...).agg(px.p
 
 Aggregate a per-tile `(z, x, y, bytes)` row set into a single PMTile v3 archive blob.
 
-**Signature:** `pmtiles_agg(bytes: Column, z: Column, x: Column, y: Column, metadataJson: Column): Column`
-
-**Parameters:**
-- `bytes` — Tile payload (BINARY). PNG / JPEG / WebP magic bytes are auto-detected; everything else is treated as MVT.
-- `z`, `x`, `y` — Tile coordinates (INT or BIGINT — the UDAF coerces LongType inputs).
-- `metadataJson` — Optional JSON metadata string written into the PMTile header. Pass `'{}'` (or omit, using the 4-argument form) for no metadata.
-
-**Returns:**
-- Binary blob containing the full PMTile v3 archive.
-
 <FunctionExamples
   name="pmtiles_agg"
   sql={pmtilesSqlCode}           sqlSource="docs/tests/python/api/pmtiles_functions_sql.py"
-  pythonLight={pmtilesLightCode} pythonLightSource="docs/tests/python/api/pmtiles_functions_python_light.py"
-  pythonHeavy={rasterxCode}      pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={pmtilesLightCode} pythonSource="docs/tests/python/api/pmtiles_functions_python_light.py"
   scala={scalaApiExamplesCode}   scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_pmtiles_functions_python_light.py"
 />

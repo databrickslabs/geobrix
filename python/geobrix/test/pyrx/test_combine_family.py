@@ -24,6 +24,7 @@ from rasterio.transform import from_origin
 
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import agg
+from databricks.labs.gbx.rasterx import functions as rx
 
 ND = -9999.0
 TOL = 1e-6
@@ -336,8 +337,6 @@ def test_rst_combinemin_column_wrapper(spark):
         StructType,
     )
 
-    import databricks.labs.gbx.pyrx.functions as prx
-
     t0 = _tile([1.0, 10.0, ND, 4.0])
     t1 = _tile([2.0, ND, ND, 4.0])
     t2 = _tile([3.0, 20.0, ND, 4.0])
@@ -358,7 +357,7 @@ def test_rst_combinemin_column_wrapper(spark):
         schema=StructType([StructField("tiles", ArrayType(schema), True)]),
     )
 
-    result_df = df.select(prx.rst_combinemin("tiles").alias("out"))
+    result_df = df.select(rx.rst_combinemin("tiles").alias("out"))
     rows = result_df.collect()
     assert rows, "no rows returned"
     out = rows[0]["out"]

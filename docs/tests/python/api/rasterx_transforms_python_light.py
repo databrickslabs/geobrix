@@ -184,9 +184,10 @@ rst_to_webmercator_python_example_output = """
 """
 
 
-def rst_tilexyz_python_light_example(spark):
+def rst_tilexyz_python_example(spark):
     """Render a single Web-Mercator XYZ tile (z, x, y) as PNG bytes."""
     from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api
     from pyspark.sql import functions as f
 
     rx.register(spark)
@@ -195,7 +196,7 @@ def rst_tilexyz_python_light_example(spark):
     # dtype mapping (a slippy-map tile off the raster's footprint renders
     # transparent — rst_tilexyz never returns null).
     result = df.select(
-        rx.rst_tilexyz(
+        rx_api.rst_tilexyz(
             "tile",
             f.lit(12),
             f.lit(1234),
@@ -209,7 +210,7 @@ def rst_tilexyz_python_light_example(spark):
     return result["png_bytes"]
 
 
-rst_tilexyz_python_light_example_output = """
+rst_tilexyz_python_example_output = """
 +----------+
 |png_bytes |
 +----------+
@@ -219,7 +220,7 @@ rst_tilexyz_python_light_example_output = """
 """
 
 
-def rst_xyzpyramid_python_light_example(spark):
+def rst_xyzpyramid_python_example(spark):
     """Generate XYZ tiles across a zoom range (UDTF: one row per tile).
 
     rst_xyzpyramid is a Python UDTF — invoke it as a SQL LATERAL table function
@@ -236,7 +237,7 @@ def rst_xyzpyramid_python_light_example(spark):
     ).take(3)
 
 
-rst_xyzpyramid_python_light_example_output = """
+rst_xyzpyramid_python_example_output = """
 +---+---+---+--------+
 |z  |x  |y  |bytes   |
 +---+---+---+--------+

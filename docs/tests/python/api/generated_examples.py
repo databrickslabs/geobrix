@@ -159,6 +159,11 @@ EXAMPLES = {
         "h3_geomkring_point_k1",
         "SELECT gbx_h3_geomkring('POINT(-122.4194 37.7749)', 8, 1) AS out",
     ),
+    "gbx_pmtiles_agg": (
+        "WEB_TILES",
+        "pmtiles_agg_png",
+        'SELECT gbx_pmtiles_agg(c0, c1, c2, c3, \'{"name":"t"}\') AS out FROM gbx_example',
+    ),
     "gbx_quadbin_aswkb": (
         "GRID_SCALAR",
         "qb_aswkb",
@@ -264,6 +269,11 @@ EXAMPLES = {
         "boundingbox",
         "SELECT gbx_rst_boundingbox(c0) AS out FROM gbx_example",
     ),
+    "gbx_rst_buildoverviews": (
+        "RASTER_FILE_OP",
+        "buildoverviews_levels",
+        "SELECT gbx_rst_buildoverviews(c0, c1) AS out FROM gbx_example",
+    ),
     "gbx_rst_chm": (
         "SPEC_CALC",
         "chm",
@@ -273,6 +283,51 @@ EXAMPLES = {
         "SPEC_WARP",
         "clip_half",
         "SELECT gbx_rst_clip(c0, 'POLYGON((-1.05 51.4, -0.68 51.4, -0.68 52.1, -1.05 52.1, -1.05 51.4))', FALSE) AS out FROM gbx_example",
+    ),
+    "gbx_rst_cog_convert": (
+        "RASTER_FILE_OP",
+        "cog_convert_layout",
+        "SELECT gbx_rst_cog_convert(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_color_relief": (
+        "SPEC_DEM",
+        "color_relief_rgb",
+        "SELECT gbx_rst_color_relief(c0, c1) AS out FROM gbx_example",
+    ),
+    "gbx_rst_combineavg": (
+        "RASTER_ARRAY_OP",
+        "combineavg_stack",
+        "SELECT gbx_rst_combineavg(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_combinecount": (
+        "RASTER_ARRAY_OP",
+        "combinecount_stack",
+        "SELECT gbx_rst_combinecount(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_combinemax": (
+        "RASTER_ARRAY_OP",
+        "combinemax_stack",
+        "SELECT gbx_rst_combinemax(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_combinemedian": (
+        "RASTER_ARRAY_OP",
+        "combinemedian_stack",
+        "SELECT gbx_rst_combinemedian(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_combinemin": (
+        "RASTER_ARRAY_OP",
+        "combinemin_stack",
+        "SELECT gbx_rst_combinemin(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_combinestddev": (
+        "RASTER_ARRAY_OP",
+        "combinestddev_stack",
+        "SELECT gbx_rst_combinestddev(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_combinesum": (
+        "RASTER_ARRAY_OP",
+        "combinesum_stack",
+        "SELECT gbx_rst_combinesum(c0) AS out FROM gbx_example",
     ),
     "gbx_rst_convolve": (
         "RASTER_TILE_OP",
@@ -313,6 +368,11 @@ EXAMPLES = {
         "RASTER_ACCESSOR",
         "format",
         "SELECT gbx_rst_format(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_frombands": (
+        "RASTER_ARRAY_OP",
+        "frombands_three",
+        "SELECT gbx_rst_frombands(c0) AS out FROM gbx_example",
     ),
     "gbx_rst_fromcontent": (
         "RASTER_CONSTRUCTOR",
@@ -398,6 +458,11 @@ EXAMPLES = {
         "RASTER_ACCESSOR",
         "memsize",
         "SELECT gbx_rst_memsize(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_merge": (
+        "RASTER_ARRAY_OP",
+        "merge_quad",
+        "SELECT gbx_rst_merge(c0) AS out FROM gbx_example",
     ),
     "gbx_rst_merge_agg": (
         "MVP_A",
@@ -574,6 +639,11 @@ EXAMPLES = {
         "threshold",
         "SELECT gbx_rst_threshold(c0, '>', 12.0D) AS out FROM gbx_example",
     ),
+    "gbx_rst_tilexyz": (
+        "WEB_TILES",
+        "tilexyz_covered",
+        "SELECT gbx_rst_tilexyz(c0, 11, 1020, 678) AS out FROM gbx_example",
+    ),
     "gbx_rst_to_webmercator": (
         "SPEC_WARP",
         "webmercator_default",
@@ -624,6 +694,11 @@ EXAMPLES = {
         "upperlefty",
         "SELECT gbx_rst_upperlefty(c0) AS out FROM gbx_example",
     ),
+    "gbx_rst_viewshed": (
+        "SPEC_ANALYSIS",
+        "viewshed_wall",
+        "SELECT gbx_rst_viewshed(c0, 'POINT(400065 5759895)', 2.0D) AS out FROM gbx_example",
+    ),
     "gbx_rst_width": (
         "RASTER_ACCESSOR",
         "width",
@@ -643,6 +718,11 @@ EXAMPLES = {
         "RASTER_ACCESSOR",
         "worldtorastercoordy",
         "SELECT gbx_rst_worldtorastercoordy(c0, 400015.0D, 5759975.0D) AS out FROM gbx_example",
+    ),
+    "gbx_rst_xyzpyramid": (
+        "WEB_TILES",
+        "xyzpyramid_z8_9",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_xyzpyramid(c0, 8, 9) AS gbx_out",
     ),
     "gbx_st_crs": (
         "VECTOR_SCALAR",

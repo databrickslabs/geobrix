@@ -137,9 +137,10 @@ rst_roughness_python_example_output = """
 """
 
 
-def rst_color_relief_python_light_example(spark):
+def rst_color_relief_python_example(spark):
     """Apply a color relief mapping (elevation → RGBA) from a DEM tile."""
     from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api
     from pyspark.sql import functions as f
     from _fixtures import color_table_path
 
@@ -147,12 +148,12 @@ def rst_color_relief_python_light_example(spark):
     df = dem_tile_df(spark)
     clr_path = str(color_table_path())
     result = df.select(
-        rx.rst_color_relief("tile", f.lit(clr_path)).alias("tile")
+        rx_api.rst_color_relief("tile", f.lit(clr_path)).alias("tile")
     ).first()
     return result["tile"]
 
 
-rst_color_relief_python_light_example_output = """
+rst_color_relief_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -209,15 +210,16 @@ rst_contour_python_light_example_output = """
 """
 
 
-def rst_viewshed_python_light_example(spark):
+def rst_viewshed_python_example(spark):
     """Compute binary viewshed mask from a DEM and observer point."""
     from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api
     from pyspark.sql import functions as f
 
     rx.register(spark)
     df = dem_tile_df(spark)
     result = df.select(
-        rx.rst_viewshed(
+        rx_api.rst_viewshed(
             "tile",
             f.lit("POINT(500320 4500320)"),
             f.lit(100.0),
@@ -228,7 +230,7 @@ def rst_viewshed_python_light_example(spark):
     return result["tile"]
 
 
-rst_viewshed_python_light_example_output = """
+rst_viewshed_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+

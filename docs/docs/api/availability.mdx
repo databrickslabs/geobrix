@@ -51,6 +51,7 @@ Python names are relative to the `databricks.labs.gbx` package. For example,
 | `gbx_h3_cell_bbox` | ✓ |  | `gridx.h3.functions.h3_cell_bbox` | ✓ |
 | `gbx_h3_geomkloop` | ✓ |  | `gridx.h3.functions.h3_geomkloop` |  |
 | `gbx_h3_geomkring` | ✓ |  | `gridx.h3.functions.h3_geomkring` |  |
+| `gbx_pmtiles_agg` | ✓ |  | `pmtiles.functions.pmtiles_agg` | ✓ |
 | `gbx_quadbin_aswkb` | ✓ |  | `gridx.quadbin.functions.quadbin_aswkb` | ✓ |
 | `gbx_quadbin_cellunion` | ✓ |  | `gridx.quadbin.functions.quadbin_cellunion` | ✓ |
 | `gbx_quadbin_centroid` | ✓ |  | `gridx.quadbin.functions.quadbin_centroid` | ✓ |
@@ -72,8 +73,18 @@ Python names are relative to the `databricks.labs.gbx` package. For example,
 | `gbx_rst_binpoints` | ✓ |  | `rasterx.functions.rst_binpoints` | ✓ |
 | `gbx_rst_bng_rasterize_agg` | ✓ |  | `rasterx.functions.rst_bng_rasterize_agg` | ✓ |
 | `gbx_rst_boundingbox` | ✓ |  | `rasterx.functions.rst_boundingbox` | ✓ |
+| `gbx_rst_buildoverviews` | ✓ |  | `rasterx.functions.rst_buildoverviews` | ✓ |
 | `gbx_rst_chm` | ✓ |  | `rasterx.functions.rst_chm` |  |
 | `gbx_rst_clip` | ✓ |  | `rasterx.functions.rst_clip` |  |
+| `gbx_rst_cog_convert` | ✓ |  | `rasterx.functions.rst_cog_convert` | ✓ |
+| `gbx_rst_color_relief` | ✓ |  | `rasterx.functions.rst_color_relief` | ✓ |
+| `gbx_rst_combineavg` | ✓ |  | `rasterx.functions.rst_combineavg` | ✓ |
+| `gbx_rst_combinecount` | ✓ |  | `rasterx.functions.rst_combinecount` | ✓ |
+| `gbx_rst_combinemax` | ✓ |  | `rasterx.functions.rst_combinemax` | ✓ |
+| `gbx_rst_combinemedian` | ✓ |  | `rasterx.functions.rst_combinemedian` | ✓ |
+| `gbx_rst_combinemin` | ✓ |  | `rasterx.functions.rst_combinemin` | ✓ |
+| `gbx_rst_combinestddev` | ✓ |  | `rasterx.functions.rst_combinestddev` | ✓ |
+| `gbx_rst_combinesum` | ✓ |  | `rasterx.functions.rst_combinesum` | ✓ |
 | `gbx_rst_convolve` | ✓ |  | `rasterx.functions.rst_convolve` | ✓ |
 | `gbx_rst_crs` | ✓ |  | `rasterx.functions.rst_crs` | ✓ |
 | `gbx_rst_derivedband` | ✓ |  | `rasterx.functions.rst_derivedband` | ✓ |
@@ -82,6 +93,7 @@ Python names are relative to the `databricks.labs.gbx` package. For example,
 | `gbx_rst_fillnodata` | ✓ |  | `rasterx.functions.rst_fillnodata` | ✓ |
 | `gbx_rst_filter` | ✓ |  | `rasterx.functions.rst_filter` | ✓ |
 | `gbx_rst_format` | ✓ |  | `rasterx.functions.rst_format` | ✓ |
+| `gbx_rst_frombands` | ✓ |  | `rasterx.functions.rst_frombands` | ✓ |
 | `gbx_rst_fromcontent` | ✓ |  | `rasterx.functions.rst_fromcontent` | ✓ |
 | `gbx_rst_fromfile` | ✓ |  | `rasterx.functions.rst_fromfile` |  |
 | `gbx_rst_georeference` | ✓ |  | `rasterx.functions.rst_georeference` | ✓ |
@@ -95,10 +107,11 @@ Python names are relative to the `databricks.labs.gbx` package. For example,
 | `gbx_rst_initnodata` | ✓ |  | `rasterx.functions.rst_initnodata` | ✓ |
 | `gbx_rst_isempty` | ✓ |  | `rasterx.functions.rst_isempty` | ✓ |
 | `gbx_rst_land_cover` | ✓ |  | `rasterx.functions.rst_land_cover` |  |
-| `gbx_rst_mapalgebra` | ✓ |  | `rasterx.functions.rst_mapalgebra` | ✓ |
+| `gbx_rst_mapalgebra` | ✓ |  | `rasterx.functions.rst_mapalgebra` |  |
 | `gbx_rst_max` | ✓ |  | `rasterx.functions.rst_max` | ✓ |
 | `gbx_rst_median` | ✓ |  | `rasterx.functions.rst_median` | ✓ |
 | `gbx_rst_memsize` | ✓ |  | `rasterx.functions.rst_memsize` | ✓ |
+| `gbx_rst_merge` | ✓ |  | `rasterx.functions.rst_merge` | ✓ |
 | `gbx_rst_merge_agg` | ✓ |  | `rasterx.functions.rst_merge_agg` | ✓ |
 | `gbx_rst_metadata` | ✓ |  | `rasterx.functions.rst_metadata` | ✓ |
 | `gbx_rst_min` | ✓ |  | `rasterx.functions.rst_min` | ✓ |
@@ -134,6 +147,7 @@ Python names are relative to the `databricks.labs.gbx` package. For example,
 | `gbx_rst_subdatasets` | ✓ |  | `rasterx.functions.rst_subdatasets` | ✓ |
 | `gbx_rst_summary` | ✓ |  | `rasterx.functions.rst_summary` | ✓ |
 | `gbx_rst_threshold` | ✓ |  | `rasterx.functions.rst_threshold` |  |
+| `gbx_rst_tilexyz` | ✓ |  | `rasterx.functions.rst_tilexyz` | ✓ |
 | `gbx_rst_to_webmercator` | ✓ |  | `rasterx.functions.rst_to_webmercator` | ✓ |
 | `gbx_rst_tpi` | ✓ |  | `rasterx.functions.rst_tpi` | ✓ |
 | `gbx_rst_transform` | ✓ |  | `rasterx.functions.rst_transform` | ✓ |
@@ -144,10 +158,12 @@ Python names are relative to the `databricks.labs.gbx` package. For example,
 | `gbx_rst_updatetype` | ✓ |  | `rasterx.functions.rst_updatetype` | ✓ |
 | `gbx_rst_upperleftx` | ✓ |  | `rasterx.functions.rst_upperleftx` | ✓ |
 | `gbx_rst_upperlefty` | ✓ |  | `rasterx.functions.rst_upperlefty` | ✓ |
+| `gbx_rst_viewshed` | ✓ |  | `rasterx.functions.rst_viewshed` | ✓ |
 | `gbx_rst_width` | ✓ |  | `rasterx.functions.rst_width` | ✓ |
 | `gbx_rst_worldtorastercoord` | ✓ |  | `rasterx.functions.rst_worldtorastercoord` | ✓ |
 | `gbx_rst_worldtorastercoordx` | ✓ |  | `rasterx.functions.rst_worldtorastercoordx` | ✓ |
 | `gbx_rst_worldtorastercoordy` | ✓ |  | `rasterx.functions.rst_worldtorastercoordy` | ✓ |
+| `gbx_rst_xyzpyramid` | ✓ |  | `rasterx.functions.rst_xyzpyramid` | ✓ |
 | `gbx_st_crs` | ✓ |  | `vectorx.functions.st_crs` | ✓ |
 | `gbx_st_explainvalidity` | ✓ |  | `vectorx.functions.st_explainvalidity` |  |
 | `gbx_st_legacyaswkb` | ✓ |  | `vectorx.functions.st_legacyaswkb` | ✓ |

@@ -153,32 +153,6 @@ def test_rst_h3_tessellate(spark):
     assert len(result[0]["h3_tiles"]) > 0
 
 
-def test_rst_frombands(spark):
-    """Test creating raster from multiple bands."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    # rst_fromfile is lightweight-only (issue #34); load bytes + gbx_rst_fromcontent.
-    df = spark.createDataFrame(
-        [
-            (1, read_bytes(MODIS_B01)),
-            (2, read_bytes(MODIS_B02)),
-            (3, read_bytes(MODIS_B03)),
-        ],
-        ["id", "content"],
-    )
-
-    df = df.withColumn("tile", rx.rst_fromcontent(f.col("content"), f.lit("GTiff")))
-
-    result_df = df.select(
-        rx.rst_frombands(f.collect_list("tile")).alias("multiband_raster")
-    )
-
-    result = result_df.collect()
-    assert result is not None
-    assert len(result) == 1
-    assert result[0]["multiband_raster"] is not None
-
-
 def test_rst_from_local_path(spark):
     """Test creating a raster tile from a local file path (heavy-native bytes path).
 

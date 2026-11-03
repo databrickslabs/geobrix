@@ -61,8 +61,6 @@ def color_table_path():
     "expression, extra_args",
     [
         ("gbx_rst_slope(t)", ""),
-        # color_relief is the only one requiring an extra arg.
-        ("gbx_rst_color_relief(t, '__COLOR_TABLE__')", ""),
     ],
 )
 def test_dem_processing_roundtrip(spark, color_table_path, expression, extra_args):

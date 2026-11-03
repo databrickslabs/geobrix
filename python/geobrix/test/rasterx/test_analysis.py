@@ -43,12 +43,6 @@ def spark():
 @pytest.mark.parametrize(
     "label, sql_expr, validator",
     [
-        # 1) cog_convert — returns a tile struct (GTiff-on-disk variant of COG).
-        (
-            "cog_convert",
-            "gbx_rst_cog_convert(t, 'DEFLATE', 256, 'AVERAGE')",
-            lambda v: v is not None and v["raster"] is not None,
-        ),
         # 3) contour — returns ARRAY<struct(geom_wkb, value)>. London SRTM
         # n51w001 spans only ~91-95 m elevation so a 1 m interval is required
         # to pick up at least one contour line within that narrow range.
@@ -56,14 +50,6 @@ def spark():
             "contour",
             "gbx_rst_contour(t, array(), 1.0, 0.0, 'elev')",
             lambda v: v is not None and len(v) >= 1,
-        ),
-        # 4) viewshed — needs an observer POINT in the raster's CRS. SRTM
-        # n51w001 is EPSG:4326 covering lon ~ [-1, 0], lat ~ [51, 52]. Use the
-        # tile centre (-0.5, 51.5). Cap max_distance to avoid NULL literals.
-        (
-            "viewshed",
-            "gbx_rst_viewshed(t, 'POINT(-0.5 51.5)', 100.0, 1.6, 0.5)",
-            lambda v: v is not None and v["raster"] is not None,
         ),
     ],
 )

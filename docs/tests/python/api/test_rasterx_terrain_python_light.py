@@ -81,7 +81,7 @@ def test_rst_roughness_python_example(spark):
 def test_rst_color_relief_python_light_example(spark):
     """rst_color_relief returns a materialized tile with populated raster bytes."""
     assert terrain_examples is not None
-    result = terrain_examples.rst_color_relief_python_light_example(spark)
+    result = terrain_examples.rst_color_relief_python_example(spark)
     _assert_materialized_tile(result, "rst_color_relief")
 
 
@@ -108,7 +108,7 @@ def test_rst_contour_python_light_example(spark):
 def test_rst_viewshed_python_light_example(spark):
     """rst_viewshed returns a materialized tile with populated raster bytes."""
     assert terrain_examples is not None
-    result = terrain_examples.rst_viewshed_python_light_example(spark)
+    result = terrain_examples.rst_viewshed_python_example(spark)
     _assert_materialized_tile(result, "rst_viewshed")
 
 

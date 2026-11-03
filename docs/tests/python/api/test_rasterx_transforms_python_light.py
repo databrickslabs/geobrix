@@ -67,14 +67,14 @@ def test_rst_to_webmercator_python_example(spark):
 
 def test_rst_tilexyz_python_light_example(spark):
     """rst_tilexyz renders a single XYZ tile as PNG bytes (never null)."""
-    result = transforms_examples.rst_tilexyz_python_light_example(spark)
+    result = transforms_examples.rst_tilexyz_python_example(spark)
     assert result is not None
     assert len(bytes(result)) > 0
 
 
 def test_rst_xyzpyramid_python_light_example(spark):
     """rst_xyzpyramid (UDTF via LATERAL) yields one row per XYZ tile."""
-    rows = transforms_examples.rst_xyzpyramid_python_light_example(spark)
+    rows = transforms_examples.rst_xyzpyramid_python_example(spark)
     assert isinstance(rows, list) and len(rows) >= 1
     assert "bytes" in rows[0].asDict()
 

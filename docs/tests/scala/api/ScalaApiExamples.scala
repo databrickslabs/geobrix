@@ -1901,27 +1901,6 @@ result.show(truncate = false)
 (derived band raster from Python UDF)
 """.trim
 
-  val rst_mapalgebra_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Map algebra: scale band values by factor of 2
-val rasters = spark.table("multiband_rasters")
-val result = rasters.select(rx.rst_mapalgebra(array(col("tile")), lit("A * 2")).alias("scaled"))
-result.show(truncate = false)
-""".trim
-
-  val rst_mapalgebra_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|scaled                                                     |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(result raster from map algebra: A * 2)
-""".trim
-
   val rst_merge_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}

@@ -462,12 +462,3 @@ def test_tilexyz_udf_rescale_defaults_to_auto():
     default = fns._tilexyz_udf.func(tile, z, x, y, "PNG", 256, "bilinear")
     explicit_auto = fns._tilexyz_udf.func(tile, z, x, y, "PNG", 256, "bilinear", "auto")
     assert default == explicit_auto
-
-
-def test_rst_tilexyz_column_api_rejects_tuple_rescale():
-    import pytest
-
-    from databricks.labs.gbx.pyrx import functions as fns
-
-    with pytest.raises(ValueError, match="not supported through the Column API"):
-        fns.rst_tilexyz("tile", 0, 0, 0, rescale=(8000, 12000))

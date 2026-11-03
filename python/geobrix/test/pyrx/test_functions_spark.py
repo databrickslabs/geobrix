@@ -144,7 +144,7 @@ def test_rst_color_relief(spark):
     df = spark.createDataFrame([(src,)], ["raster"]).select(
         rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
-    out = df.select(prx.rst_color_relief("tile", f.lit(color_table_path)).alias("t"))
+    out = df.select(rx.rst_color_relief("tile", f.lit(color_table_path)).alias("t"))
     assert out.select(rx.rst_numbands("t").alias("n")).first()["n"] == 3
 
 
@@ -538,7 +538,7 @@ def _rgb_tile_df(spark):
 def test_rst_tilexyz_in_extent_png(spark):
     df = _rgb_tile_df(spark)
     png = df.select(
-        prx.rst_tilexyz("tile", f.lit(5), f.lit(16), f.lit(10)).alias("b")
+        rx.rst_tilexyz("tile", f.lit(5), f.lit(16), f.lit(10)).alias("b")
     ).first()["b"]
     assert bytes(png)[:4] == b"\x89PNG"
 
@@ -546,7 +546,7 @@ def test_rst_tilexyz_in_extent_png(spark):
 def test_rst_tilexyz_out_of_extent_transparent(spark):
     df = _rgb_tile_df(spark)
     png = df.select(
-        prx.rst_tilexyz("tile", f.lit(2), f.lit(0), f.lit(0), "PNG", 64).alias("b")
+        rx.rst_tilexyz("tile", f.lit(2), f.lit(0), f.lit(0), "PNG", 64).alias("b")
     ).first()["b"]
     assert bytes(png)[:4] == b"\x89PNG"
 
@@ -558,7 +558,7 @@ def test_rst_tilexyz_null_tile_transparent(spark):
         "tile struct<cellid:bigint,raster:binary,metadata:map<string,string>>",
     )
     png = df.select(
-        prx.rst_tilexyz("tile", f.lit(2), f.lit(0), f.lit(0), "PNG", 32).alias("b")
+        rx.rst_tilexyz("tile", f.lit(2), f.lit(0), f.lit(0), "PNG", 32).alias("b")
     ).first()["b"]
     assert png is not None
     assert bytes(png)[:4] == b"\x89PNG"
@@ -698,7 +698,7 @@ def test_rastertogrid_all_10_register_and_return_flat_rows(spark):
 def test_rst_buildoverviews(spark):
     df = _tile_df(spark, width=64, height=64)
     out = df.select(
-        prx.rst_buildoverviews("tile", f.array(f.lit(2), f.lit(4))).alias("t")
+        rx.rst_buildoverviews("tile", f.array(f.lit(2), f.lit(4))).alias("t")
     )
     # Reopen and confirm overviews are embedded via summary/numbands sanity.
     row = out.select(rx.rst_numbands("t").alias("n")).first()
@@ -936,7 +936,7 @@ def _surfaces(spark, df, d):
         "finalize": (
             True,
             by.agg(f.collect_list("tile").alias("ts")).select(
-                "k", prx.rst_merge("ts").alias("t")
+                "k", rx.rst_merge("ts").alias("t")
             ),
         ),
         "sql-bytes": (False, by.agg(_merge_agg_udf(f.col("tile")).alias("t"))),
@@ -983,7 +983,7 @@ def test_rst_merge_array(spark):
         rx.rst_fromcontent("a", f.lit("GTiff")).alias("ta"),
         rx.rst_fromcontent("b", f.lit("GTiff")).alias("tb"),
     )
-    tile = df.select(prx.rst_merge(f.array("ta", "tb")).alias("t")).first()["t"]
+    tile = df.select(rx.rst_merge(f.array("ta", "tb")).alias("t")).first()["t"]
     assert tile is not None
     assert tile["cellid"] == 0
     with _serde.open_tile(bytes(tile["raster"])) as ds:
@@ -1000,7 +1000,7 @@ def test_rst_combineavg_array(spark):
         rx.rst_fromcontent("a", f.lit("GTiff")).alias("ta"),
         rx.rst_fromcontent("b", f.lit("GTiff")).alias("tb"),
     )
-    tile = df.select(prx.rst_combineavg(f.array("ta", "tb")).alias("t")).first()["t"]
+    tile = df.select(rx.rst_combineavg(f.array("ta", "tb")).alias("t")).first()["t"]
     # cellid shared across elements (fromcontent -> 0) -> carried as 0.
     assert tile["cellid"] == 0
     with _serde.open_tile(bytes(tile["raster"])) as ds:
@@ -1017,7 +1017,7 @@ def test_rst_combineavg_array_shape_mismatch_raises(spark):
         rx.rst_fromcontent("b", f.lit("GTiff")).alias("tb"),
     )
     with pytest.raises(PythonException, match="aligned tiles"):
-        df.select(prx.rst_combineavg(f.array("ta", "tb")).alias("t")).first()
+        df.select(rx.rst_combineavg(f.array("ta", "tb")).alias("t")).first()
 
 
 def test_rst_frombands_array_order(spark):
@@ -1028,7 +1028,7 @@ def test_rst_frombands_array_order(spark):
         rx.rst_fromcontent("a", f.lit("GTiff")).alias("ta"),
         rx.rst_fromcontent("b", f.lit("GTiff")).alias("tb"),
     )
-    tile = df.select(prx.rst_frombands(f.array("ta", "tb")).alias("t")).first()["t"]
+    tile = df.select(rx.rst_frombands(f.array("ta", "tb")).alias("t")).first()["t"]
     with _serde.open_tile(bytes(tile["raster"])) as ds:
         assert ds.count == 2
         assert np.allclose(ds.read(1), 10.0)
@@ -1189,7 +1189,7 @@ def test_rst_viewshed_geom_encodings(spark):
             f.col("g"),
         )
         tile = df.select(
-            prx.rst_viewshed("tile", f.col("g"), 1.0, 0.0, None).alias("t")
+            rx.rst_viewshed("tile", f.col("g"), 1.0, 0.0, None).alias("t")
         ).first()["t"]
         assert tile is not None and tile["raster"] is not None, f"{name} null tile"
         with _serde.open_tile(bytes(tile["raster"])) as ds:
@@ -1412,7 +1412,7 @@ def test_rst_proximity_column_api(spark):
 
 def test_rst_cog_convert_column_api(spark):
     df = _tile_df(spark, width=64, height=64)
-    out = df.select(prx.rst_cog_convert("tile", "DEFLATE", 512, "AVERAGE").alias("t"))
+    out = df.select(rx.rst_cog_convert("tile", "DEFLATE", 512, "AVERAGE").alias("t"))
     # Round-trips: still openable, same band count.
     assert out.select(rx.rst_numbands("t").alias("n")).first()["n"] == 1
     assert out.select(rx.rst_width("t").alias("w")).first()["w"] == 64
@@ -1484,7 +1484,7 @@ def test_rst_viewshed_column_api(spark):
     df = spark.createDataFrame([(src, obs)], ["raster", "g"]).select(
         rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"), f.col("g")
     )
-    out = df.select(prx.rst_viewshed("tile", f.col("g"), 1.0, 0.0, None).alias("t"))
+    out = df.select(rx.rst_viewshed("tile", f.col("g"), 1.0, 0.0, None).alias("t"))
     # Byte output, single band.
     assert out.select(rx.rst_type("t").alias("ty")).first()["ty"][0] == "Byte"
     assert out.select(rx.rst_numbands("t").alias("n")).first()["n"] == 1

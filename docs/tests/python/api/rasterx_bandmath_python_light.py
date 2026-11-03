@@ -176,12 +176,12 @@ rst_index_python_example_output = """
 # ============================================================================
 
 
-def rst_combineavg_python_light_example(spark):
+def rst_combineavg_python_example(spark):
     """Compute per-pixel mean across aligned tiles (NoData-aware).
 
     Input: array of aligned tiles. Output: single-band Float32 tile.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api
     from pyspark.sql import functions as f
     from ._fixtures import multi_band_tiles_df  # noqa: PLC0415
 
@@ -189,13 +189,13 @@ def rst_combineavg_python_light_example(spark):
     # Aggregate the 3 per-band tiles into one array, then average per-pixel.
     result = (
         df.groupBy("region")
-        .agg(rx.rst_combineavg(f.collect_list("tile")).alias("tile"))
+        .agg(rx_api.rst_combineavg(f.collect_list("tile")).alias("tile"))
         .first()
     )
     return result["tile"]
 
 
-rst_combineavg_python_light_example_output = """
+rst_combineavg_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -205,26 +205,26 @@ rst_combineavg_python_light_example_output = """
 """
 
 
-def rst_combinecount_python_light_example(spark):
+def rst_combinecount_python_example(spark):
     """Count valid (non-NoData) inputs per pixel across aligned tiles.
 
     Input: array of aligned tiles. Output: single-band Float32 tile where
     each pixel value is the count of valid inputs (0 for all-NoData pixels).
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api
     from pyspark.sql import functions as f
     from ._fixtures import multi_band_tiles_df  # noqa: PLC0415
 
     df = multi_band_tiles_df(spark)
     result = (
         df.groupBy("region")
-        .agg(rx.rst_combinecount(f.collect_list("tile")).alias("tile"))
+        .agg(rx_api.rst_combinecount(f.collect_list("tile")).alias("tile"))
         .first()
     )
     return result["tile"]
 
 
-rst_combinecount_python_light_example_output = """
+rst_combinecount_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -234,26 +234,26 @@ rst_combinecount_python_light_example_output = """
 """
 
 
-def rst_combinemax_python_light_example(spark):
+def rst_combinemax_python_example(spark):
     """Compute per-pixel maximum across aligned tiles (NoData-aware).
 
     Input: array of aligned tiles. Output: single-band Float32 tile where
     each pixel is the maximum of the valid (non-NoData) values.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api
     from pyspark.sql import functions as f
     from ._fixtures import multi_band_tiles_df  # noqa: PLC0415
 
     df = multi_band_tiles_df(spark)
     result = (
         df.groupBy("region")
-        .agg(rx.rst_combinemax(f.collect_list("tile")).alias("tile"))
+        .agg(rx_api.rst_combinemax(f.collect_list("tile")).alias("tile"))
         .first()
     )
     return result["tile"]
 
 
-rst_combinemax_python_light_example_output = """
+rst_combinemax_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -263,26 +263,26 @@ rst_combinemax_python_light_example_output = """
 """
 
 
-def rst_combinemedian_python_light_example(spark):
+def rst_combinemedian_python_example(spark):
     """Compute per-pixel median across aligned tiles (NoData-aware).
 
     Input: array of aligned tiles. Output: single-band Float32 tile where
     each pixel is the median of the valid (non-NoData) values.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api
     from pyspark.sql import functions as f
     from ._fixtures import multi_band_tiles_df  # noqa: PLC0415
 
     df = multi_band_tiles_df(spark)
     result = (
         df.groupBy("region")
-        .agg(rx.rst_combinemedian(f.collect_list("tile")).alias("tile"))
+        .agg(rx_api.rst_combinemedian(f.collect_list("tile")).alias("tile"))
         .first()
     )
     return result["tile"]
 
 
-rst_combinemedian_python_light_example_output = """
+rst_combinemedian_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -292,26 +292,26 @@ rst_combinemedian_python_light_example_output = """
 """
 
 
-def rst_combinemin_python_light_example(spark):
+def rst_combinemin_python_example(spark):
     """Compute per-pixel minimum across aligned tiles (NoData-aware).
 
     Input: array of aligned tiles. Output: single-band Float32 tile where
     each pixel is the minimum of the valid (non-NoData) values.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api
     from pyspark.sql import functions as f
     from ._fixtures import multi_band_tiles_df  # noqa: PLC0415
 
     df = multi_band_tiles_df(spark)
     result = (
         df.groupBy("region")
-        .agg(rx.rst_combinemin(f.collect_list("tile")).alias("tile"))
+        .agg(rx_api.rst_combinemin(f.collect_list("tile")).alias("tile"))
         .first()
     )
     return result["tile"]
 
 
-rst_combinemin_python_light_example_output = """
+rst_combinemin_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -321,27 +321,27 @@ rst_combinemin_python_light_example_output = """
 """
 
 
-def rst_combinestddev_python_light_example(spark):
+def rst_combinestddev_python_example(spark):
     """Compute per-pixel population std-dev across aligned tiles (NoData-aware).
 
     Input: array of aligned tiles. Output: single-band Float32 tile where
     each pixel is the population standard deviation (ddof=0) of the valid
     (non-NoData) values.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api
     from pyspark.sql import functions as f
     from ._fixtures import multi_band_tiles_df  # noqa: PLC0415
 
     df = multi_band_tiles_df(spark)
     result = (
         df.groupBy("region")
-        .agg(rx.rst_combinestddev(f.collect_list("tile")).alias("tile"))
+        .agg(rx_api.rst_combinestddev(f.collect_list("tile")).alias("tile"))
         .first()
     )
     return result["tile"]
 
 
-rst_combinestddev_python_light_example_output = """
+rst_combinestddev_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -351,26 +351,26 @@ rst_combinestddev_python_light_example_output = """
 """
 
 
-def rst_combinesum_python_light_example(spark):
+def rst_combinesum_python_example(spark):
     """Compute per-pixel sum across aligned tiles (NoData-aware).
 
     Input: array of aligned tiles. Output: single-band Float32 tile where
     each pixel is the sum of the valid (non-NoData) values.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api
     from pyspark.sql import functions as f
     from ._fixtures import multi_band_tiles_df  # noqa: PLC0415
 
     df = multi_band_tiles_df(spark)
     result = (
         df.groupBy("region")
-        .agg(rx.rst_combinesum(f.collect_list("tile")).alias("tile"))
+        .agg(rx_api.rst_combinesum(f.collect_list("tile")).alias("tile"))
         .first()
     )
     return result["tile"]
 
 
-rst_combinesum_python_light_example_output = """
+rst_combinesum_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -450,13 +450,13 @@ rst_mapalgebra_python_example_output = """
 """
 
 
-def rst_merge_python_light_example(spark):
+def rst_merge_python_example(spark):
     """Mosaic (merge) multiple aligned tiles into one spanning their union.
 
     Input: array of aligned tiles (same grid / CRS).
     Output: single merged tile covering the union extent.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api
     from pyspark.sql import functions as f
     from ._fixtures import multi_band_tiles_df  # noqa: PLC0415
 
@@ -464,13 +464,13 @@ def rst_merge_python_light_example(spark):
 
     result = (
         df.groupBy("region")
-        .agg(rx.rst_merge(f.collect_list("tile")).alias("tile"))
+        .agg(rx_api.rst_merge(f.collect_list("tile")).alias("tile"))
         .first()
     )
     return result["tile"]
 
 
-rst_merge_python_light_example_output = """
+rst_merge_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+

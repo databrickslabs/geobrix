@@ -213,10 +213,10 @@
     "gbx_rst_buildoverviews": {
       "examples": "Examples:\n      > SELECT gbx_rst_buildoverviews(tile, array(2, 4), 'average') AS withovr FROM rasters;",
       "usage_args": "tile, levels, [resampling]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Build internal pyramid overviews at the given decimation levels.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -244,21 +244,21 @@
     "gbx_rst_cog_convert": {
       "examples": "Examples:\n      > SELECT gbx_rst_cog_convert(tile, 'ZSTD', 512, 'AVERAGE') AS cog FROM rasters;",
       "usage_args": "tile, [compression], [blocksize], [overview_resampling]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Convert a tile to a Cloud Optimized GeoTIFF (COG).",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
     },
     "gbx_rst_color_relief": {
-      "examples": "Examples:\n      > SELECT gbx_rst_color_relief(tile, '/Volumes/<catalog>/<schema>/<volume>/elevation.clr') AS rgba FROM dem_rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_color_relief(c0, c1) AS out FROM gbx_example;",
       "usage_args": "tile, color_table_path",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Colour a DEM through a `gdaldem` colour table.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -266,10 +266,10 @@
     "gbx_rst_combineavg": {
       "examples": "Examples:\n      > SELECT gbx_rst_combineavg(array(tile)) AS combined FROM multiband_rasters;",
       "usage_args": "tiles",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Per-pixel mean across an array of aligned tiles, NoData aware.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -288,10 +288,10 @@
     "gbx_rst_combinecount": {
       "examples": "Examples:\n      > SELECT gbx_rst_combinecount(array(tile)) AS combined FROM multiband_rasters;",
       "usage_args": "tiles",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Per-pixel count of valid values across an array of aligned tiles.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.1"
@@ -299,10 +299,10 @@
     "gbx_rst_combinemax": {
       "examples": "Examples:\n      > SELECT gbx_rst_combinemax(array(tile)) AS combined FROM multiband_rasters;",
       "usage_args": "tiles",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Per-pixel maximum across an array of aligned tiles, NoData aware.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.1"
@@ -310,10 +310,10 @@
     "gbx_rst_combinemedian": {
       "examples": "Examples:\n      > SELECT gbx_rst_combinemedian(array(tile)) AS combined FROM multiband_rasters;",
       "usage_args": "tiles",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Per-pixel median across an array of aligned tiles, NoData aware.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.1"
@@ -321,10 +321,10 @@
     "gbx_rst_combinemin": {
       "examples": "Examples:\n      > SELECT gbx_rst_combinemin(array(tile)) AS combined FROM multiband_rasters;",
       "usage_args": "tiles",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Per-pixel minimum across an array of aligned tiles, NoData aware.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.1"
@@ -332,10 +332,10 @@
     "gbx_rst_combinestddev": {
       "examples": "Examples:\n      > SELECT gbx_rst_combinestddev(array(tile)) AS combined FROM multiband_rasters;",
       "usage_args": "tiles",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Per-pixel population standard deviation across an array of aligned tiles, NoData aware.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.1"
@@ -343,10 +343,10 @@
     "gbx_rst_combinesum": {
       "examples": "Examples:\n      > SELECT gbx_rst_combinesum(array(tile)) AS combined FROM multiband_rasters;",
       "usage_args": "tiles",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Per-pixel sum across an array of aligned tiles, NoData aware.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.1"
@@ -583,10 +583,10 @@
     "gbx_rst_frombands": {
       "examples": "Examples:\n      > SELECT gbx_rst_frombands(array(band1, band2, band3)) as multi_band FROM separated_bands;",
       "usage_args": "bands",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Stack an array of single-band tiles into one multi-band tile.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -890,8 +890,7 @@
       "description": "Apply a map-algebra expression across an array of tiles.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.2.0"
     },
@@ -931,10 +930,10 @@
     "gbx_rst_merge": {
       "examples": "Examples:\n      > SELECT gbx_rst_merge(array(tile)) AS merged FROM multiband_rasters;",
       "usage_args": "tiles",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Mosaic an array of tiles into one tile that spans their union extent.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1463,10 +1462,10 @@
     "gbx_rst_tilexyz": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_tilexyz(tile, 10, 512, 512, 'PNG', 256, 'bilinear', 'auto') as tile_png FROM rasters;",
       "usage_args": "tile, z, x, y, [format], [size], [resampling], [rescale]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Render one web-mercator XYZ slippy-map tile of the raster as image bytes.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -1596,10 +1595,10 @@
     "gbx_rst_viewshed": {
       "examples": "Examples:\n      > SELECT gbx_rst_viewshed(tile, 'POINT(-73.5 40.5)', 100.0, 1.6, 5000.0) AS vs FROM dem_rasters;",
       "usage_args": "tile, observer_geom, observer_height, [target_height], [max_distance], [crs]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Compute a binary viewshed from a DEM tile and an observer point.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -1651,10 +1650,10 @@
     "gbx_rst_xyzpyramid": {
       "examples": "Examples:\n      > SELECT path, t.z, t.x, t.y, t.bytes AS png_bytes FROM rasters LATERAL VIEW gbx_rst_xyzpyramid(tile, 4, 6) AS t;",
       "usage_args": "tile, min_z, max_z, [format], [size], [resampling], [rescale]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Render every web-mercator XYZ tile that the raster touches, across a range of zoom levels.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -2353,10 +2352,11 @@
     "_package_pmtiles": "--- pmtiles ---",
     "gbx_pmtiles_agg": {
       "examples": "Examples:\n      > SELECT gbx_pmtiles_agg(bytes, z, x, y, '{\"name\":\"my_tileset\"}') AS pmt FROM tiles_z2;",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "usage_args": "bytes, z, x, y, [metadata_json]",
+      "description": "Fold the tiles of a group into one PMTiles v3 archive.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"

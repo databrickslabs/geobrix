@@ -13,6 +13,8 @@ from databricks.labs.gbx import _pyspark  # noqa: F401
 import contextlib
 import functools
 import json
+import math
+import os
 from typing import List, Optional
 
 import pandas as pd
@@ -1233,6 +1235,12 @@ def _refusal_as_null(func):
     return run
 
 
+def _array_without_members(tiles):
+    """What an array function answers when no member can be used: the first error tile when every element is one (as
+    it is, so the upstream reason survives), else NULL."""
+    return _error_tile_of_group(_only_error_tiles(tiles))
+
+
 # Mirrors gbx_rst_merge: extract each element's raster bytes and mosaic by
 # extent (reuses core.agg.merge_tiles, the same union-extent reducer the
 # heavyweight RST_MergeAgg uses). cellid = 0 (no aggregate group key here).
@@ -1279,6 +1287,7 @@ def _merge_bytes(tiles):
             continue
     if not rasters:
         return None
+    agg_core.check_array_budget(rasters)
     return agg_core.merge_tiles(rasters), dropped
 
 
@@ -1293,8 +1302,8 @@ def _merge_udf(tiles):
             str(exc), 0
         )  # this row's answer, not the query's failure
     if result is None:
-        return _error_tile_of_group(
-            _only_error_tiles(tiles)
+        return _array_without_members(
+            tiles
         )  # NULL unless every element is an error tile
     new_bytes, dropped = result
     tile = _serde.build_tile(new_bytes, "GTiff", 0)
@@ -1315,7 +1324,7 @@ def _merge_v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
     except (agg_core.MosaicTooLarge, agg_core.ReadCapRefused) as exc:
         return _serde.build_error_tile(str(exc), 0)
     if result is None:
-        return None
+        return _array_without_members(tiles)
     new_bytes, dropped = result
     row = _shaped_result_row(
         new_bytes, 0, virtualize_dir, virtualize_prefix, materialize
@@ -1367,8 +1376,9 @@ def _uf_merge(tiles, file_refs):
             continue
 
     if not rasters:
-        return None
+        return _array_without_members(tiles)
     try:
+        agg_core.check_array_budget(rasters)
         new_bytes = agg_core.merge_tiles(rasters)
     except (agg_core.MosaicTooLarge, agg_core.ReadCapRefused) as exc:
         return _serde.build_error_tile(str(exc), 0)
@@ -1378,51 +1388,6 @@ def _uf_merge(tiles, file_refs):
             "last_error"
         ] = f"RST_Merge: skipped {dropped} corrupt input tile(s)"
     return tile
-
-
-def rst_merge(
-    tiles: ColLike,
-    virtualize_dir: Optional[str] = None,
-    virtualize_prefix: Optional[str] = None,
-    materialize: Optional[bool] = None,
-) -> Column:
-    """Mosaic an ARRAY of tiles into one tile spanning their union extent.
-
-    Mirrors the heavyweight ``gbx_rst_merge``: ``tiles`` is a single column of
-    ARRAY<tile struct> (e.g. ``f.array("ta", "tb")``); each element's raster is
-    placed by its own georeference and the output spans the union extent. On
-    overlap the merge is first-tile-wins in array order. Output ``cellid`` is 0.
-
-    Args:
-        tiles: Column of ARRAY<tile struct>.
-        virtualize_dir:    Force-output (light-tier, Python API only): write the
-            merged result to a durable path and return a light virtual tile.
-        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
-        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
-            exclusive with ``virtualize_dir``.
-
-    Returns:
-        Tile struct spanning the union extent, or NULL on an empty array. When
-        neither force-output param is set the SQL registered signature is used
-        unchanged.
-    """
-    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
-        _validate_force_output(virtualize_dir, materialize)
-        return _merge_v2_udf(
-            _col(tiles),
-            f.lit(virtualize_dir),
-            f.lit(virtualize_prefix),
-            f.lit(materialize),
-        )
-    from databricks.labs.gbx.pyrx._file_ref import file_supported
-
-    tc = _col(tiles)
-    if file_supported():
-        file_refs_col = f.transform(
-            tc, lambda t: f.call_function("try_to_file", t["path"])
-        )
-        return _uf_merge(tc, file_refs_col)
-    return _merge_udf(tc)
 
 
 # rst_combineavg: single ARRAY<tile struct> arg -> per-pixel mean tile.
@@ -1465,6 +1430,7 @@ def _combineavg_bytes(tiles):
             continue
     if not rasters:
         return None
+    agg_core.check_array_budget(rasters)
     cellids = {_tile_cellid(t) for t in good_elems}
     cellid = _tile_cellid(good_elems[0]) if len(cellids) == 1 else -1
     return agg_core.combineavg_tiles(rasters), cellid, dropped
@@ -1477,7 +1443,7 @@ def _combineavg_udf(tiles):
         return None
     result = _combineavg_bytes(tiles)
     if result is None:
-        return None
+        return _array_without_members(tiles)
     new_bytes, cellid, dropped = result
     tile = _serde.build_tile(new_bytes, "GTiff", cellid)
     if dropped:
@@ -1494,7 +1460,7 @@ def _combineavg_v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
         return None
     result = _combineavg_bytes(tiles)
     if result is None:
-        return None
+        return _array_without_members(tiles)
     new_bytes, cellid, dropped = result
     row = _shaped_result_row(
         new_bytes, cellid, virtualize_dir, virtualize_prefix, materialize
@@ -1543,7 +1509,8 @@ def _uf_combineavg(tiles, file_refs):
             continue
 
     if not rasters:
-        return None
+        return _array_without_members(tiles)
+    agg_core.check_array_budget(rasters)
     cellids = {_tile_cellid(t) for t in good_elems}
     cellid = _tile_cellid(good_elems[0]) if len(cellids) == 1 else -1
     new_bytes = agg_core.combineavg_tiles(rasters)
@@ -1555,51 +1522,6 @@ def _uf_combineavg(tiles, file_refs):
             "last_error"
         ] = f"RST_CombineAvg: skipped {dropped} corrupt input tile(s)"
     return tile
-
-
-def rst_combineavg(
-    tiles: ColLike,
-    virtualize_dir: Optional[str] = None,
-    virtualize_prefix: Optional[str] = None,
-    materialize: Optional[bool] = None,
-) -> Column:
-    """NoData-aware per-pixel mean across an ARRAY of aligned tiles.
-
-    Mirrors the heavyweight ``gbx_rst_combineavg``: ``tiles`` is a single column
-    of ARRAY<tile struct>; each declared NoData is excluded from both the sum
-    and the divisor (a valid 0 counts). Output ``cellid`` is the shared input
-    cellid when every element matches, else -1 (matching the heavyweight).
-
-    PARITY DIVERGENCE: assumes the tiles are ALREADY aligned (same
-    shape/extent/CRS) and raises ``ValueError`` on mismatched shapes rather than
-    resampling (inherited from ``core.agg.combineavg_tiles``).
-
-    Args:
-        tiles: Column of ARRAY<tile struct> (same-grid).
-        virtualize_dir:    Force-output (light-tier, Python API only): write the
-            result to a durable path and return a light virtual tile.
-        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
-        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
-            exclusive with ``virtualize_dir``.
-
-    Returns:
-        Tile struct of per-pixel means, or NULL on an empty array.
-    """
-    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
-        _validate_force_output(virtualize_dir, materialize)
-        return _combineavg_v2_udf(
-            _col(tiles),
-            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
-        )
-    from databricks.labs.gbx.pyrx._file_ref import file_supported
-
-    tc = _col(tiles)
-    if file_supported():
-        file_refs_col = f.transform(
-            tc, lambda t: f.call_function("try_to_file", t["path"])
-        )
-        return _uf_combineavg(tc, file_refs_col)
-    return _combineavg_udf(tc)
 
 
 # ---------------------------------------------------------------------------
@@ -1645,6 +1567,7 @@ def _combine_stat_bytes(tiles, stat: str):
             continue
     if not rasters:
         return None
+    agg_core.check_array_budget(rasters)
     cellids = {_tile_cellid(t) for t in good_elems}
     cellid = _tile_cellid(good_elems[0]) if len(cellids) == 1 else -1
     _reducer = {
@@ -1669,7 +1592,7 @@ def _make_combine_stat_udf(stat: str):
             return None
         result = _combine_stat_bytes(tiles, stat)
         if result is None:
-            return None
+            return _array_without_members(tiles)
         new_bytes, cellid, dropped = result
         tile = _serde.build_tile(new_bytes, "GTiff", cellid)
         if dropped:
@@ -1692,7 +1615,7 @@ def _make_combine_stat_v2_udf(stat: str):
             return None
         result = _combine_stat_bytes(tiles, stat)
         if result is None:
-            return None
+            return _array_without_members(tiles)
         new_bytes, cellid, dropped = result
         row = _shaped_result_row(
             new_bytes, cellid, virtualize_dir, virtualize_prefix, materialize
@@ -1721,89 +1644,6 @@ _combinesum_v2_udf = _make_combine_stat_v2_udf("sum")
 _combinecount_v2_udf = _make_combine_stat_v2_udf("count")
 _combinemedian_v2_udf = _make_combine_stat_v2_udf("median")
 _combinestddev_v2_udf = _make_combine_stat_v2_udf("stddev")
-
-
-_COMBINE_STAT_DOC = """\
-NoData-aware per-pixel {doc_stat} across an ARRAY of aligned tiles.
-
-    Mirrors ``gbx_rst_{sql_name}``: ``tiles`` is a single column of
-    ARRAY<tile struct>; each declared NoData is excluded from the statistic,
-    and a pixel that is NoData in ALL inputs produces NoData in the output
-    (never 0 for count). Output ``cellid`` is the shared input cellid when
-    every element matches, else -1.
-
-    PARITY DIVERGENCE: assumes the tiles are ALREADY aligned (same
-    shape/extent/CRS) and raises ``ValueError`` on misaligned inputs rather
-    than resampling. Align first with ``rst_align_to``.
-
-    Args:
-        tiles: Column of ARRAY<tile struct> (same-grid, aligned).
-        virtualize_dir:    Force-output: write result to a durable path.
-        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
-        materialize:       Force-output: ``True`` ensures raster bytes.
-
-    Returns:
-        Tile struct of per-pixel {doc_stat}, or NULL on an empty array.
-"""
-
-
-def _make_rst_combine_stat(
-    stat: str,
-    sql_name: str,
-    doc_stat: str,
-):
-    """Factory for the public ``rst_combine{stat}`` Column API function."""
-
-    def rst_combine_stat(
-        tiles: ColLike,
-        virtualize_dir: Optional[str] = None,
-        virtualize_prefix: Optional[str] = None,
-        materialize: Optional[bool] = None,
-    ) -> Column:
-        _v2 = {
-            "min": _combinemin_v2_udf,
-            "max": _combinemax_v2_udf,
-            "sum": _combinesum_v2_udf,
-            "count": _combinecount_v2_udf,
-            "median": _combinemedian_v2_udf,
-            "stddev": _combinestddev_v2_udf,
-        }[stat]
-        _plain = {
-            "min": _combinemin_udf,
-            "max": _combinemax_udf,
-            "sum": _combinesum_udf,
-            "count": _combinecount_udf,
-            "median": _combinemedian_udf,
-            "stddev": _combinestddev_udf,
-        }[stat]
-        if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
-            _validate_force_output(virtualize_dir, materialize)
-            return _v2(
-                _col(tiles),
-                *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
-            )
-        return _plain(_col(tiles))
-
-    rst_combine_stat.__name__ = f"rst_combine{stat}"
-    rst_combine_stat.__qualname__ = f"rst_combine{stat}"
-    # Assign __doc__ explicitly: an f-string expression is discarded by Python
-    # (only a plain string *literal* at the top of a function becomes __doc__).
-    rst_combine_stat.__doc__ = _COMBINE_STAT_DOC.format(
-        doc_stat=doc_stat, sql_name=sql_name
-    )
-    return rst_combine_stat
-
-
-rst_combinemin = _make_rst_combine_stat("min", "combinemin", "minimum")
-rst_combinemax = _make_rst_combine_stat("max", "combinemax", "maximum")
-rst_combinesum = _make_rst_combine_stat("sum", "combinesum", "sum")
-rst_combinecount = _make_rst_combine_stat(
-    "count", "combinecount", "count of valid inputs"
-)
-rst_combinemedian = _make_rst_combine_stat("median", "combinemedian", "median")
-rst_combinestddev = _make_rst_combine_stat(
-    "stddev", "combinestddev", "population standard deviation"
-)
 
 
 # ---------------------------------------------------------------------------
@@ -1933,7 +1773,7 @@ def _frombands_udf(bands):
         return None
     result = _frombands_bytes(bands)
     if result is None:
-        return None
+        return _array_without_members(bands)
     new_bytes, cellid, dropped = result
     tile = _serde.build_tile(new_bytes, "GTiff", cellid)
     if dropped:
@@ -1950,7 +1790,7 @@ def _frombands_v2_udf(bands, virtualize_dir, virtualize_prefix, materialize):
         return None
     result = _frombands_bytes(bands)
     if result is None:
-        return None
+        return _array_without_members(bands)
     new_bytes, cellid, dropped = result
     row = _shaped_result_row(
         new_bytes, cellid, virtualize_dir, virtualize_prefix, materialize
@@ -2006,7 +1846,7 @@ def _uf_frombands(bands, file_refs):
             continue
 
     if not indexed:
-        return None
+        return _array_without_members(bands)
     cellid = _tile_cellid(first_good) if first_good is not None else 0
     new_bytes = agg_core.frombands_tiles(indexed)
     tile = _serde.build_tile(new_bytes, "GTiff", cellid)
@@ -2015,47 +1855,6 @@ def _uf_frombands(bands, file_refs):
             "last_error"
         ] = f"RST_FromBands: skipped {dropped} corrupt input tile(s)"
     return tile
-
-
-def rst_frombands(
-    bands: ColLike,
-    virtualize_dir: Optional[str] = None,
-    virtualize_prefix: Optional[str] = None,
-    materialize: Optional[bool] = None,
-) -> Column:
-    """Assemble an ARRAY of single-band tiles into one multi-band tile.
-
-    Mirrors the heavyweight ``gbx_rst_frombands``: ``bands`` is a single column
-    of ARRAY<tile struct> and the ARRAY ORDER is the band order (element 0 ->
-    band 1, element 1 -> band 2, ...). Georef/CRS/dtype/nodata are taken from
-    the first element. Output ``cellid`` carries from the first element.
-
-    Args:
-        bands: Column of ARRAY<single-band tile struct>, in band order.
-        virtualize_dir:    Force-output (light-tier, Python API only): write the
-            result to a durable path and return a light virtual tile.
-        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
-        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
-            exclusive with ``virtualize_dir``.
-
-    Returns:
-        Multi-band tile struct, or NULL on an empty array.
-    """
-    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
-        _validate_force_output(virtualize_dir, materialize)
-        return _frombands_v2_udf(
-            _col(bands),
-            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
-        )
-    from databricks.labs.gbx.pyrx._file_ref import file_supported
-
-    tc = _col(bands)
-    if file_supported():
-        file_refs_col = f.transform(
-            tc, lambda t: f.call_function("try_to_file", t["path"])
-        )
-        return _uf_frombands(tc, file_refs_col)
-    return _frombands_udf(tc)
 
 
 # --- Tier 1b: tile-returning warp UDFs -------------------------------------
@@ -2954,24 +2753,26 @@ def _buildoverviews_bytes(tile, levels, resampling):
 
     _env.configure_gdal_env()
     resamp = "average" if resampling is None else str(resampling)
-    with ot._open(tile) as ds:
+    with _open_op(tile) as ds:
         return ops_core.build_overviews(ds, list(levels), resamp)
 
 
+def _check_overviews(*, levels, resampling=None, **_):
+    ops_core.check_overview_args(levels, resampling)
+
+
 @f.udf(V2_TILE_SCHEMA)
-def _buildoverviews_udf(tile, levels, resampling):
-    if _tile_is_empty(tile):
-        return None
+@_tile_op("levels", check=_check_overviews)
+def _buildoverviews_udf(tile, levels, resampling="average"):
     new_bytes = _buildoverviews_bytes(tile, levels, resampling)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("levels", check=_check_overviews)
 def _buildoverviews_v2_udf(
     tile, levels, resampling, virtualize_dir, virtualize_prefix, materialize
 ):
-    if _tile_is_empty(tile):
-        return None
     new_bytes = _buildoverviews_bytes(tile, levels, resampling)
     return _shaped_result_row(
         new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
@@ -3015,7 +2816,7 @@ def _proximity_bytes(tile, target_values, distunits, max_distance):
 
 @f.udf(V2_TILE_SCHEMA)
 @_tile_op(check=analysis_core.check_proximity)
-def _proximity_udf(tile, target_values, distunits, max_distance):
+def _proximity_udf(tile, target_values=None, distunits="GEO", max_distance=None):
     new_bytes = _proximity_bytes(tile, target_values, distunits, max_distance)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
@@ -3123,18 +2924,13 @@ def _viewshed_bytes(
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    # observer_geom may be WKB/EWKB (binary) or WKT/EWKT (string); require a POINT.
-    geom = parse_geom(observer_geom)
-    if geom is None:
-        return None
-    if geom.geom_type != "Point":
-        raise ValueError(
-            f"rst_viewshed requires a POINT observer_geom; got {geom.geom_type}"
-        )
-    oh = 0.0 if observer_height is None else float(observer_height)
-    th = 0.0 if target_height is None else float(target_height)
+    geom = parse_geom(
+        observer_geom
+    )  # a POINT as WKB, EWKB, WKT or EWKT (checked by _check_viewshed)
+    oh = float(observer_height)
+    th = 1.6 if target_height is None else float(target_height)
     md = None if max_distance is None else float(max_distance)
-    with ot._open(tile) as ds:
+    with _open_op(tile) as ds:
         # CRS-align the observer (Rule 1): embedded SRID wins; else the explicit
         # `crs` (int SRID or CRS string incl. ESRI/WKT); else assume aligned. When
         # a source CRS is known and the raster has a CRS, reproject so a 4326
@@ -3157,21 +2953,47 @@ def _viewshed_bytes(
         return analysis_core.viewshed(ds, ox, oy, oh, th, md)
 
 
-@f.udf(V2_TILE_SCHEMA)
-def _viewshed_udf(
-    tile, observer_geom, observer_height, target_height, max_distance, crs=None
+def _check_viewshed(
+    *, observer_geom, observer_height, target_height=None, max_distance=None, **_
 ):
-    if _tile_is_empty(tile) or observer_geom is None:
-        return None
+    from databricks.labs.gbx._geom import parse_geom
+
+    geom = parse_geom(observer_geom)
+    if geom is None:
+        raise ValueError(
+            f"rst_viewshed: observer_geom {observer_geom!r} is not a geometry (WKB, EWKB, WKT or EWKT)"
+        )
+    if geom.geom_type != "Point":
+        raise ValueError(
+            f"rst_viewshed requires a POINT observer_geom; got {geom.geom_type}"
+        )
+    for name, v in (
+        ("observer_height", observer_height),
+        ("target_height", target_height),
+    ):
+        if v is not None and not (math.isfinite(float(v)) and float(v) >= 0):
+            raise ValueError(f"rst_viewshed: {name} must be >= 0 and finite; got {v}")
+    if max_distance is not None and not (
+        math.isfinite(float(max_distance)) and float(max_distance) > 0
+    ):
+        raise ValueError(
+            f"rst_viewshed: max_distance must be > 0 and finite; got {max_distance}"
+        )
+
+
+@f.udf(V2_TILE_SCHEMA)
+@_tile_op("observer_geom", "observer_height", check=_check_viewshed)
+def _viewshed_udf(
+    tile, observer_geom, observer_height, target_height=1.6, max_distance=None, crs=None
+):
     new_bytes = _viewshed_bytes(
         tile, observer_geom, observer_height, target_height, max_distance, crs
     )
-    if new_bytes is None:
-        return None
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("observer_geom", "observer_height", check=_check_viewshed)
 def _viewshed_v2_udf(
     tile,
     observer_geom,
@@ -3183,8 +3005,6 @@ def _viewshed_v2_udf(
     virtualize_prefix,
     materialize,
 ):
-    if _tile_is_empty(tile) or observer_geom is None:
-        return None
     new_bytes = _viewshed_bytes(
         tile, observer_geom, observer_height, target_height, max_distance, crs
     )
@@ -3197,23 +3017,35 @@ def _cog_convert_bytes(tile, compression, blocksize, overview_resampling):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    comp = "DEFLATE" if compression is None else str(compression)
+    comp = "AUTO" if compression is None else str(compression)
     bs = 512 if blocksize is None else int(blocksize)
     resamp = "AVERAGE" if overview_resampling is None else str(overview_resampling)
-    with ot._open(tile) as ds:
+    with _open_op(tile) as ds:
         return analysis_core.cog_convert(ds, comp, bs, resamp)
 
 
+def _check_cog_convert(
+    *, compression=None, blocksize=None, overview_resampling=None, **_
+):
+    analysis_core.check_cog_args(
+        "AUTO" if compression is None else compression,
+        512 if blocksize is None else blocksize,
+        "AVERAGE" if overview_resampling is None else overview_resampling,
+    )
+
+
 @f.udf(V2_TILE_SCHEMA)
-def _cog_convert_udf(tile, compression, blocksize, overview_resampling):
-    if _tile_is_empty(tile):
-        return None
+@_tile_op(check=_check_cog_convert)
+def _cog_convert_udf(
+    tile, compression="AUTO", blocksize=512, overview_resampling="AVERAGE"
+):
     new_bytes = _cog_convert_bytes(tile, compression, blocksize, overview_resampling)
     # COG is a GTiff variant on disk; downstream readers see driver "GTiff".
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op(check=_check_cog_convert)
 def _cog_convert_v2_udf(
     tile,
     compression,
@@ -3223,8 +3055,6 @@ def _cog_convert_v2_udf(
     virtualize_prefix,
     materialize,
 ):
-    if _tile_is_empty(tile):
-        return None
     new_bytes = _cog_convert_bytes(tile, compression, blocksize, overview_resampling)
     return _shaped_result_row(
         new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
@@ -3265,112 +3095,6 @@ def _light_rst_transformcrs(
     )
 
 
-def rst_buildoverviews(
-    tile: ColLike,
-    levels: ColLike,
-    resampling: ColLike = "average",
-    virtualize_dir: Optional[str] = None,
-    virtualize_prefix: Optional[str] = None,
-    materialize: Optional[bool] = None,
-) -> Column:
-    """Build internal pyramid overviews at the given decimation ``levels``.
-
-    Mirrors the heavyweight ``gbx_rst_buildoverviews``: ``levels`` is a
-    non-empty array of integer decimation factors, each >= 2; ``resampling``
-    defaults to "average" (one of near, average, rms, gauss, cubic,
-    cubicspline, lanczos, bilinear, mode). Overviews are embedded internally
-    in the output GTiff (no .ovr sidecar).
-
-    Args:
-        tile:       Tile struct column.
-        levels:     ARRAY<INT> of decimation factors (e.g. ``f.array(...)``).
-        resampling: Overview resampling algorithm. Defaults to "average".
-        virtualize_dir:    Force-output (light-tier, Python API only): write the
-            result to a durable path and return a light virtual tile.
-        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
-        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
-            exclusive with ``virtualize_dir``.
-
-    Returns:
-        Tile struct with internal overviews embedded.
-    """
-    resamp = f.lit(resampling) if isinstance(resampling, str) else _col(resampling)
-    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
-        _validate_force_output(virtualize_dir, materialize)
-        return _buildoverviews_v2_udf(
-            _col(tile),
-            _col(levels),
-            resamp,
-            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
-        )
-    return _buildoverviews_udf(_col(tile), _col(levels), resamp)
-
-
-def rst_cog_convert(
-    tile: ColLike,
-    compression: ColLike = "AUTO",
-    blocksize: ColLike = 512,
-    overview_resampling: ColLike = "AVERAGE",
-    virtualize_dir: Optional[str] = None,
-    virtualize_prefix: Optional[str] = None,
-    materialize: Optional[bool] = None,
-) -> Column:
-    """Convert a raster tile to a Cloud Optimized GeoTIFF (COG) layout.
-
-    Mirrors the heavyweight ``gbx_rst_cog_convert`` (``gdal.Translate -of COG``),
-    implemented via GDAL's native ``driver="COG"``.  The output tile's raster
-    bytes are COG-layout GTiff; downstream readers see ``metadata.driver =
-    "GTiff"`` (COG is a GTiff variant).
-
-    Args:
-        tile:                Tile struct column.
-        compression:         COG compression (default "AUTO" = size-adaptive
-                             ZSTD + dtype predictor; or a codec name, any case:
-                             ZSTD, DEFLATE, LZW, WEBP, JPEG, PACKBITS, LZMA,
-                             LERC, LERC_DEFLATE, LERC_ZSTD; NONE or RAW writes no
-                             compression).
-        blocksize:           Internal tile size in pixels, square (default 512).
-        overview_resampling: Overview-pyramid resampling (default "AVERAGE").
-        virtualize_dir:    Force-output (light-tier, Python API only): write the
-            result to a durable path and return a light virtual tile.
-        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
-        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
-            exclusive with ``virtualize_dir``.
-
-    Returns:
-        Tile struct whose raster bytes are a COG.
-    """
-    comp_col = (
-        f.lit("DEFLATE")
-        if compression is None
-        else (f.lit(compression) if isinstance(compression, str) else _col(compression))
-    )
-    bs_col = (
-        f.lit(512)
-        if blocksize is None
-        else (f.lit(int(blocksize)) if isinstance(blocksize, int) else _col(blocksize))
-    )
-    resamp_col = (
-        f.lit("AVERAGE")
-        if overview_resampling is None
-        else (
-            f.lit(overview_resampling)
-            if isinstance(overview_resampling, str)
-            else _col(overview_resampling)
-        )
-    )
-    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
-        _validate_force_output(virtualize_dir, materialize)
-        return _cog_convert_v2_udf(
-            _col(tile),
-            comp_col,
-            bs_col,
-            resamp_col,
-            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
-        )
-    return _cog_convert_udf(_col(tile), comp_col, bs_col, resamp_col)
-
-
 def rst_contour(
     tile: ColLike,
     levels: ColLike,
@@ -3404,84 +3128,6 @@ def rst_contour(
     bs = f.lit(float(base)) if isinstance(base, (int, float)) else _col(base)
     attr = f.lit(attr_field) if isinstance(attr_field, str) else _col(attr_field)
     return _contour_udf(_col(tile), _col(levels), iv, bs, attr)
-
-
-def rst_viewshed(
-    tile: ColLike,
-    observer_geom: ColLike,
-    observer_height: ColLike = 0.0,
-    target_height: ColLike = 1.6,
-    max_distance: ColLike = None,
-    crs: ColLike = None,
-    virtualize_dir: Optional[str] = None,
-    virtualize_prefix: Optional[str] = None,
-    materialize: Optional[bool] = None,
-) -> Column:
-    """Compute a binary viewshed (255 visible / 0 invisible) from a DEM tile.
-
-    Mirrors the heavyweight ``gbx_rst_viewshed``: both tiers call GDAL's
-    ``GDALViewshedGenerate`` with the same parameters (GVM_Edge, curvature
-    coefficient 0.85714, binary output) for every DEM size, so they give the same
-    mask. The light tier streams the DEM through the bundled libgdal, so its peak
-    memory is about GDAL's block cache whatever the DEM size. With a ``max_distance``
-    the output is the window around the observer (pixel-aligned with the DEM), as the
-    heavyweight tier returns it; without one it is the whole DEM. ``crs`` declares the
-    source CRS of a plain WKB/WKT observer point (int SRID or CRS string incl.
-    ESRI/WKT); an EWKB/EWKT embedded SRID wins; absent + no SRID -> assumed in the
-    raster CRS.
-
-    Args:
-        tile:            Tile struct column (the DEM).
-        observer_geom:   POINT observer location in the raster's CRS, as WKB
-                         (BINARY) or WKT (STRING). Non-POINT geometries raise.
-        observer_height: Observer height above the DEM (>= 0). Defaults to 0.0.
-        target_height:   Target height above the DEM at each tested cell (>= 0).
-                         Defaults to 0.0.
-        max_distance:    Optional analysis-distance cap in CRS ground units
-                         (> 0). ``None`` = unlimited.
-        virtualize_dir:    Force-output (light-tier, Python API only): write the
-            result to a durable path and return a light virtual tile.
-        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
-        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
-            exclusive with ``virtualize_dir``.
-
-    Returns:
-        Single-band uint8 (Byte) tile struct: 255 = visible, 0 = invisible.
-    """
-    oh = (
-        f.lit(float(observer_height))
-        if isinstance(observer_height, (int, float))
-        else _col(observer_height)
-    )
-    th = (
-        f.lit(float(target_height))
-        if isinstance(target_height, (int, float))
-        else _col(target_height)
-    )
-    md = (
-        f.lit(None).cast(DoubleType())
-        if max_distance is None
-        else (
-            f.lit(float(max_distance))
-            if isinstance(max_distance, (int, float))
-            else _col(max_distance)
-        )
-    )
-    crs_col = f.lit(crs) if crs is not None else f.lit(None)
-    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
-        _validate_force_output(virtualize_dir, materialize)
-        return _viewshed_v2_udf(
-            _col(tile),
-            _col(observer_geom),
-            oh,
-            th,
-            md,
-            crs_col,
-            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
-        )
-    if crs is None:
-        return _viewshed_udf(_col(tile), _col(observer_geom), oh, th, md)
-    return _viewshed_udf(_col(tile), _col(observer_geom), oh, th, md, crs_col)
 
 
 def _tower_window_paths(tile_map, x0, y0, tile_m, radius):
@@ -3737,7 +3383,9 @@ def rst_viewshed_towers(
         )
         if heavy:
             return f.call_function("gbx__l1_rst_viewshed", f.col("_dem"), *args)
-        return rst_viewshed("_dem", *args, materialize=True)
+        from databricks.labs.gbx.rasterx import functions as rx_api
+
+        return rx_api.rst_viewshed(f.col("_dem"), *args, materialize=True)
 
     def histogram(tile_col: str):
         args = (f.lit(2), f.lit(0.0), f.lit(256.0), f.lit(False))
@@ -5503,68 +5151,35 @@ def _color_relief_bytes(tile, color_table_path):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with ot._open(tile) as ds:
+    with _open_op(tile) as ds:
         return terrain.color_relief(ds, str(color_table_path))
 
 
+def _check_color_relief(*, color_table_path, **_):
+    from databricks.labs.gbx.ds._listing import to_local_path
+
+    if not os.path.isfile(to_local_path(str(color_table_path))):
+        raise FileNotFoundError(
+            f"rst_color_relief: the colour table {color_table_path!r} does not exist"
+        )
+
+
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("color_table_path", check=_check_color_relief)
 def _color_relief_udf(tile, color_table_path):
-    if _tile_is_empty(tile) or color_table_path is None:
-        return None
     new_bytes = _color_relief_bytes(tile, color_table_path)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 @f.udf(V2_TILE_SCHEMA)
+@_tile_op("color_table_path", check=_check_color_relief)
 def _color_relief_v2_udf(
     tile, color_table_path, virtualize_dir, virtualize_prefix, materialize
 ):
-    if _tile_is_empty(tile) or color_table_path is None:
-        return None
     new_bytes = _color_relief_bytes(tile, color_table_path)
     return _shaped_result_row(
         new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
     )
-
-
-def rst_color_relief(
-    tile: ColLike,
-    color_table_path: ColLike,
-    virtualize_dir: Optional[str] = None,
-    virtualize_prefix: Optional[str] = None,
-    materialize: Optional[bool] = None,
-) -> Column:
-    """Map a single-band DEM through a gdaldem color table to an RGB(A) Byte tile.
-
-    Reads a gdaldem-style color file (elevation R G B [A] per line; ``nv`` for
-    NoData pixels; ``<n>%`` for percentage of the band range).  Applies linear
-    interpolation per channel.
-
-    Args:
-        tile:             Tile struct column containing a single-band DEM raster.
-        color_table_path: Column or string path to a gdaldem color file.
-        virtualize_dir:    Force-output (light-tier, Python API only): write the
-            result to a durable path and return a light virtual tile.
-        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
-        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
-            exclusive with ``virtualize_dir``.
-
-    Returns:
-        3-band (RGB) or 4-band (RGBA) Byte tile.
-    """
-    ctp = (
-        f.lit(color_table_path)
-        if isinstance(color_table_path, str)
-        else _col(color_table_path)
-    )
-    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
-        _validate_force_output(virtualize_dir, materialize)
-        return _color_relief_v2_udf(
-            _col(tile),
-            ctp,
-            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
-        )
-    return _color_relief_udf(_col(tile), ctp)
 
 
 # --- Accessors and statistics ----------------------------------------
@@ -6161,20 +5776,31 @@ def _derivedband_v2_udf(
 
 # --- Tier 1h: web-mercator XYZ tiling UDFs ---------------------------------
 @f.udf(BinaryType())
-def _tilexyz_udf(tile, z, x, y, format, size, resampling, rescale=None):
-    # Mirror heavyweight: rst_tilexyz NEVER returns null — a null/empty tile or
-    # any hard failure yields a transparent PNG (slippy-map servers need a 200).
+def _tilexyz_udf(
+    tile, z, x, y, format="PNG", size=256, resampling="bilinear", rescale="auto"
+):
+    # A NULL coordinate is NULL. Otherwise rst_tilexyz NEVER returns null: a null, error or unreadable tile, a tile
+    # outside the raster and any hard failure yield a transparent image (slippy-map servers need a body). A bad
+    # argument raises, also for such a tile.
+    if z is None or x is None or y is None:
+        return None
     sz = int(size) if size is not None else 256
+    fmt = str(format) if format is not None else "PNG"
+    resamp = str(resampling) if resampling is not None else "bilinear"
+    rsc = rescale if rescale is not None else "auto"
+    xyz.validate_render_args(fmt, sz, resamp, rsc)
     if _tile_is_empty(tile):
         return xyz.transparent_png(sz)
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    fmt = str(format) if format is not None else "PNG"
-    resamp = str(resampling) if resampling is not None else "bilinear"
-    rsc = rescale if rescale is not None else "auto"
-    with ot._open(tile) as ds:
-        return xyz.render_tile(ds, int(z), int(x), int(y), fmt, sz, resamp, rescale=rsc)
+    try:
+        with _open_op(tile) as ds:
+            return xyz.render_tile(
+                ds, int(z), int(x), int(y), fmt, sz, resamp, rescale=rsc
+            )
+    except _UnreadableTile:
+        return xyz.transparent_png(sz)
 
 
 _XYZPYRAMID_ROW_SCHEMA = StructType(
@@ -6201,115 +5827,29 @@ class _RstXyzPyramidUDTF:
     ):
         # Defaults make format/size/resampling/rescale optional in the SQL UDTF call
         # (gbx_rst_xyzpyramid(tile, min_z, max_z)). None maps to PNG/256/bilinear/auto.
+        # A NULL tile, an error tile and a tile that cannot be read have no tiles to render: no rows. A bad argument
+        # raises, also for such a tile.
+        if min_z is None or max_z is None:
+            return
+        fmt = str(format) if format is not None else "PNG"
+        sz = int(size) if size is not None else 256
+        resamp = str(resampling) if resampling is not None else "bilinear"
+        rsc = rescale if rescale is not None else "auto"
+        xyz.validate_render_args(fmt, sz, resamp, rsc)
+        xyz._validate_zoom_range(min_z, max_z)
         if _tile_is_empty(tile):
             return
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
-        fmt = str(format) if format is not None else "PNG"
-        sz = int(size) if size is not None else 256
-        resamp = str(resampling) if resampling is not None else "bilinear"
-        rsc = rescale if rescale is not None else "auto"
-        with ot._open(tile) as ds:
-            for z, x, y, b in xyz.iter_pyramid(
-                ds, int(min_z), int(max_z), fmt, sz, resamp, rsc
-            ):
-                yield (z, x, y, b)
-
-
-def rst_tilexyz(
-    tile: ColLike,
-    z: ColLike,
-    x: ColLike,
-    y: ColLike,
-    format: ColLike = "PNG",
-    size: ColLike = 256,
-    resampling: ColLike = "bilinear",
-    rescale: ColLike = "auto",
-) -> Column:
-    """Render a single web-mercator XYZ slippy-map tile from the raster.
-
-    Warps the source into a ``size`` x ``size`` raster covering exactly the
-    EPSG:3857 bbox of (z, x, y) and encodes it to the requested image format.
-
-    Args:
-        tile:       Tile struct column.
-        z, x, y:    Web-mercator tile coordinates (Y north-down slippy-map).
-        format:     "PNG" (default), "JPEG", or "WEBP" (case-insensitive).
-        size:       Output tile side in pixels, in (0, 4096]. Default 256.
-        resampling: GDAL warp resampling name (near, bilinear (default), cubic,
-                    cubicspline, lanczos, average, mode, max, min, med, q1, q3).
-        rescale:    8-bit encoding contrast: "auto" (default) rescales non-8-bit
-                    rasters by whole-dataset per-band min/max and passes uint8
-                    through unchanged; "none" keeps the raw full-dtype-range
-                    mapping. (An explicit (min, max) pair is supported by the
-                    direct core/UDF API; see the Note below.)
-
-    Note:
-        The ``rescale`` Column wrapper supports the ``"auto"``/``"none"`` string
-        modes and a Column expression; a numeric ``(min, max)`` tuple is
-        supported only by the direct/core/UDF API, not the Column wrapper.
-
-    Returns:
-        BINARY image bytes. Out-of-extent / empty tiles (and any hard failure)
-        return a transparent RGBA PNG of ``size`` x ``size`` — NEVER null — so
-        slippy-map servers always get a 200-status body.
-    """
-    if isinstance(rescale, (tuple, list)):
-        raise ValueError(
-            "rst_tilexyz: an explicit (min, max) rescale tuple is not supported "
-            "through the Column API; pass rescale='auto' or 'none' (or a Column), "
-            "or use the core/UDF path for explicit bounds."
-        )
-    fmt = f.lit(format) if isinstance(format, str) else _col(format)
-    sz = f.lit(size) if isinstance(size, int) else _col(size)
-    resamp = f.lit(resampling) if isinstance(resampling, str) else _col(resampling)
-    if isinstance(rescale, str):
-        rsc = f.lit(rescale)
-    else:
-        rsc = _col(rescale)
-    return _tilexyz_udf(_col(tile), _col(z), _col(x), _col(y), fmt, sz, resamp, rsc)
-
-
-def rst_xyzpyramid(
-    tile: ColLike,
-    min_z: ColLike,
-    max_z: ColLike,
-    format: ColLike = "PNG",
-    size: ColLike = 256,
-    resampling: ColLike = "bilinear",
-    rescale: ColLike = "auto",
-) -> None:
-    """Render every web-mercator XYZ tile intersecting the raster across a zoom range.
-
-    Computes the source extent in WGS84, enumerates intersecting (z, x, y) tiles
-    for each zoom in [min_z, max_z] (WebMercatorQuad TMS, Y north-down), and
-    renders each via the same path as :func:`rst_tilexyz`.
-
-    Light tier is a Python UDTF — invoke as a SQL LATERAL table function::
-
-        SELECT t.z, t.x, t.y, t.bytes
-        FROM <df>, LATERAL gbx_rst_xyzpyramid(tile, min_z, max_z, format, size, resampling, rescale) t
-
-    Each output row is ``struct(z INT, x INT, y INT, bytes BINARY)``, one per
-    intersecting tile. Raises if the candidate tile-count across the range
-    exceeds 1,000,000.
-
-    Args:
-        tile:       Tile struct column.
-        min_z:      Minimum zoom (>= 0).
-        max_z:      Maximum zoom (>= min_z, <= 20).
-        format:     "PNG" (default), "JPEG", or "WEBP".
-        size:       Output tile side in pixels, in (0, 4096]. Default 256.
-        resampling: GDAL warp resampling name (default "bilinear").
-        rescale:    8-bit encoding contrast: "auto" (default), "none", or a
-                    (min, max) pair. See rst_tilexyz.
-    """
-    raise NotImplementedError(
-        "Invoke the registered UDTF as a SQL LATERAL table function: "
-        "SELECT t.* FROM <df>, "
-        "LATERAL gbx_rst_xyzpyramid(tile, min_z, max_z, format, size, resampling, rescale) t"
-    )
+        try:
+            with _open_op(tile) as ds:
+                for z, x, y, b in xyz.iter_pyramid(
+                    ds, int(min_z), int(max_z), fmt, sz, resamp, rsc
+                ):
+                    yield (z, x, y, b)
+        except _UnreadableTile:
+            return
 
 
 # --- Tier 1i: raster->grid aggregation UDTFs (h3 + quadbin) -----------------

@@ -98,6 +98,7 @@ _L2_NO_REASON = (
 _QUADBIN_L1 = "the quadbin Catalyst companion is not conformed to the light contract; it is deleted in the decision sweep"
 # A JVM level reads tile bytes only; the manager does not pick one for these functions, whose levels are light.
 _L1_NO_VIRTUAL = "the JVM level cannot read a virtual tile (a path, no bytes); the manager keeps these functions on light"
+_VIRTUAL_RAISES_L1 = "a virtual tile at L1 raises VirtualTileException; needs a wrapper-free virtual dispatch"
 # The JVM summary is GDAL's own info JSON; the contract is the light JSON. The GDAL spec engine replaces the JVM form.
 _SUMMARY_L1 = "the JVM summary is gdalinfo's JSON, not the contract's; the GDAL spec engine replaces it"
 # The JVM statistics and metadata that differ from the contract; their companions are deleted in the decision sweep.
@@ -148,6 +149,10 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
     },
     "aspect_flat_zero": {"L1": _ASPECT_ZERO_L1},
     "tilexyz_virtual": {"L1": _L1_NO_VIRTUAL},
+    **{
+        cid: {"L1": _VIRTUAL_RAISES_L1}
+        for cid in ("contour_virtual", "isoband_virtual")
+    },
     **{
         cid: {"L1": _BUILDOVERVIEWS_L1}
         for cid in (

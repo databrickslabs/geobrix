@@ -65,6 +65,11 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_rst_cog_convert": ("L1", "L3"),
     "gbx_rst_color_relief": ("L1", "L3"),
     "gbx_rst_viewshed": ("L3",),
+    # contour (0.11x) and isoband (10x in the pure-core timing) are faster on the JVM, but a virtual tile at L1 raises
+    # VirtualTileException (the conformed L1 block has no dispatch wrapper), and a virtual tile is the light default input.
+    # Light first until a wrapper-free virtual dispatch exists; the L1 blocks stay for a forced L1.
+    "gbx_rst_contour": ("L3",),
+    "gbx_rst_isoband": ("L3",),
     # A DataFrame helper, not a SQL name: its levels are L3 (all light), L1-steps (the viewshed and the
     # histogram are Catalyst steps) and JVM-DF (one Scala DataFrame step). The levels leg measures them.
     "rst_viewshed_towers": ("L3",),

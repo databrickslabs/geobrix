@@ -31,6 +31,18 @@ def _vz_missing(tmpdir):
     return _tile(None, os.path.join(tmpdir, "gbx_missing_tile.tif"))
 
 
+@builder("vz_columns_virtual")
+def _vz_columns_virtual(tmpdir):
+    """`vz_columns` as a virtual tile: the same pixels in a file, the tile a path and no bytes."""
+    import numpy as np
+
+    z = np.tile(np.arange(6, dtype="float64"), (6, 1))
+    path = os.path.join(tmpdir, "gbx_vz_columns.tif")
+    with open(path, "wb") as fh:
+        fh.write(_gtiff(z[np.newaxis], "EPSG:3857", nodata=None))
+    return _tile(None, path)
+
+
 RASTER_VECTORIZE = (
     # [0, 2) holds columns 0 and 1, [2, 4) columns 2 and 3, [4, 6) columns 4 and 5: 12 pixels each, 1200 m2.
     Case(
@@ -46,6 +58,14 @@ RASTER_VECTORIZE = (
         "isoband_outside_dropped",
         ISO,
         (COLUMNS, [1.0, 3.0]),
+        "isobands",
+        [(0, 1.0, 3.0, 1200.0)],
+        ONLY,
+    ),
+    Case(
+        "isoband_virtual",
+        ISO,
+        (Build("vz_columns_virtual"), [1.0, 3.0]),
         "isobands",
         [(0, 1.0, 3.0, 1200.0)],
         ONLY,

@@ -5409,8 +5409,8 @@ Classify an RGB(+NIR) tile into land-cover class ids. The `'spectral'` method us
 
 Requires a **3+ band** tile (RGB, optionally +NIR — a 4th band is read but not yet consumed by
 any classifier). A tile with fewer bands is an error tile. Each output pixel is an index into the class scheme —
-`land_cover.DEFAULT_CLASSES` (`["vegetation", "bare", "impervious", "dark"]`) by default — so
-map id to name with `DEFAULT_CLASSES[value]`. NoData / unclassified pixels are `-1`, which is
+the class list `["vegetation", "bare", "impervious", "dark"]` by default — so
+map id to name by indexing that list with the value. NoData / unclassified pixels are `-1`, which is
 also the output tile's NoData value.
 
 :::tip Tracing class regions to polygons, with a metric min-area filter
@@ -6095,12 +6095,12 @@ GDAL also accepts `GDAL_VRT_ENABLE_PYTHON=TRUSTED_MODULES` plus a `GDAL_VRT_PYTH
 
 ## Escape hatches
 
-When a raster operation isn't in the `rst_*` surface, drop down to rasterio/NumPy per tile (lightweight tier). These are **Python-only** helpers on `databricks.labs.gbx.pyrx.functions` — not SQL functions, and not registered as `gbx_rst_*`.
+When a raster operation isn't in the `rst_*` surface, drop down to rasterio/NumPy per tile (lightweight tier). These are **Python-only** helpers on `databricks.labs.gbx.rasterx.helpers` — not SQL functions, and not registered as `gbx_rst_*`.
 
 ### tile_to_numpy
 
 ```python
-from databricks.labs.gbx.pyrx.functions import tile_to_numpy
+from databricks.labs.gbx.rasterx.helpers import tile_to_numpy
 
 arr = tile_to_numpy(tile_or_bytes)   # -> np.ndarray, shape (bands, rows, cols)
 ```
@@ -6111,7 +6111,7 @@ Read a tile's raster into a NumPy array (all bands). Accepts either a tile struc
 
 ```python
 from pyspark.sql.types import DoubleType
-from databricks.labs.gbx.pyrx.functions import rst_apply
+from databricks.labs.gbx.rasterx.helpers import rst_apply
 
 df.select(
     rst_apply("tile", lambda ds: float(ds.read(1).mean()), returnType=DoubleType()).alias("band1_mean")

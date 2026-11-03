@@ -259,8 +259,8 @@ def pyrx_land_cover_example(spark):
     region to polygons.
 
     ``rst_land_cover`` assigns each pixel a class id -- an index into
-    ``land_cover.DEFAULT_CLASSES`` (``["vegetation", "bare", "impervious",
-    "dark"]``); NoData/unclassified pixels are ``-1``. The class-mask tile it
+    the class scheme ``["vegetation", "bare", "impervious",
+    "dark"]``; NoData/unclassified pixels are ``-1``. The class-mask tile it
     returns is single-band Int32, so it composes with ``rst_polygonize`` (a
     streaming Python UDTF) exactly like any other single-band tile --
     ``rst_land_cover`` is also registered as ``gbx_rst_land_cover`` in SQL.
@@ -273,7 +273,8 @@ def pyrx_land_cover_example(spark):
     from databricks.labs.gbx.core.crs import area_m2
     from databricks.labs.gbx.pyrx import functions as rx
     from databricks.labs.gbx.rasterx import functions as rx_api
-    from databricks.labs.gbx.pyrx.core.land_cover import DEFAULT_CLASSES
+    # The class scheme: a class id is an index into this list.
+    classes = ["vegetation", "bare", "impervious", "dark"]
 
     # Build a 32 x 32, 3-band (RGB) uint8 raster with two regions: left half
     # green (-> vegetation), right half bright/gray (-> bare).
@@ -315,8 +316,8 @@ def pyrx_land_cover_example(spark):
         "LATERAL gbx_rst_polygonize(lc, 1, 4) t"
     ).collect()
 
-    # value -> class name via the fixed DEFAULT_CLASSES scheme.
-    class_names = {int(r["v"]): DEFAULT_CLASSES[int(r["v"])] for r in rows}
+    # value -> class name via the class scheme.
+    class_names = {int(r["v"]): classes[int(r["v"])] for r in rows}
 
     # min_area is not an rst_polygonize / rst_land_cover parameter -- apply it
     # as a post-polygonize filter, in metric square meters, via
@@ -335,7 +336,7 @@ def pyrx_land_cover_example(spark):
 pyrx_land_cover_example_output = """
 Two contiguous regions traced from the class-mask tile, e.g.:
 [Row(g=<wkb bytes>, v=0), Row(g=<wkb bytes>, v=1)]
-class_names -> {0: "vegetation", 1: "bare"}  (id -> DEFAULT_CLASSES[id])
+class_names -> {0: "vegetation", 1: "bare"}  (id -> classes[id])
 """
 
 
@@ -345,8 +346,8 @@ def rst_land_cover_python_example(spark):
     from pyspark.sql import functions as f
     from rasterio.io import MemoryFile
     from rasterio.transform import from_origin
-    from databricks.labs.gbx.pyrx import functions as prx
     from databricks.labs.gbx.rasterx import functions as rx_api
+    from databricks.labs.gbx.rasterx import helpers
 
     # A 2 x 2 RGB tile: a green pixel, a light pixel, a grey pixel and a dark one.
     a = np.array(
@@ -371,7 +372,7 @@ def rst_land_cover_python_example(spark):
     lc = tile_df.select(
         rx_api.rst_land_cover("tile", "spectral", 6, 0).alias("tile")
     ).first()["tile"]
-    return prx.tile_to_numpy(lc)
+    return helpers.tile_to_numpy(lc)
 
 
 rst_land_cover_python_example_output = """

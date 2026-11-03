@@ -151,7 +151,7 @@ raster_cells = df.select(
 analytics = spark.table("catalog.schema.bng_metrics")  # BNG-indexed DataFrame
 result = raster_cells.join(analytics, on="cellid", how="inner")"""
 
-VRT_MINT = r"""from databricks.labs.gbx.ds._mosaic import mint_vrt
+VRT_MINT = r"""from databricks.labs.gbx.rasterx.helpers import mint_vrt
 
 # Build a transient VRT over an explicit tile list
 tile_paths = [
@@ -532,7 +532,8 @@ def vrt_mint_windowed(spark, src_path=None):
     import rasterio
     from rasterio.windows import Window
 
-    from databricks.labs.gbx.ds._mosaic import mint_vrt, minted_vrt
+    from databricks.labs.gbx.ds._mosaic import minted_vrt
+    from databricks.labs.gbx.rasterx.helpers import mint_vrt
 
     _register(spark)
     src = src_path or SAMPLE_RASTER_SINGLE

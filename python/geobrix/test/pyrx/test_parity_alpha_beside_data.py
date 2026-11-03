@@ -4,7 +4,7 @@ and for rasters masked by their own mask band.
 Every reader and operation below judges each band alone: a pixel is valid for a band when the band's own
 mask says so (NoData, the raster's own mask band) and, for a raster with an alpha band, its alpha is above
 0, at any band count. Both tiers must aggregate, count, filter, vectorise and stretch the same pixels:
-the raster-to-grid reducers, the band statistics, the histogram, the focal filters and convolution,
+the band statistics, the histogram, the focal filters and convolution,
 polygonize and isoband, the derived band, the percentile stretch and the tessellation chips.
 
 The helpers (Spark session with the JAR, the two tiers' row collectors) are those of
@@ -40,9 +40,6 @@ from databricks.labs.gbx.rasterx import functions as rx  # noqa: E402
 from .test_parity_bng_quadbin_raster_grid import (  # noqa: E402
     _TESS_CONFIG,
     _decoded,
-    _heavy_grid_rows,
-    _light_grid_rows,
-    _parity_cmp,
     _single_tile,
     _tess_id,
 )
@@ -118,30 +115,6 @@ def _valid_counts(name):
     layout counts the opaque pixels, the alpha band every pixel."""
     n = len(al.LAYOUTS[name][0])
     return [8] * (n - 1) + [16] if al.LAYOUTS[name][1] else [16] * n
-
-
-@pytest.mark.parametrize("assignment", ["centroid", "covering"])
-@pytest.mark.parametrize("grid,resolution", [("h3", 4), ("quadbin", 6)])
-@pytest.mark.parametrize("name", ["gray_x_alpha", "rgb_x_alpha", "rgba", "rgb_nir"])
-def test_rastertogrid_alpha_parity(spark_with_jar, name, grid, resolution, assignment):
-    """The reducers aggregate the same cells and the same pixels in both tiers: per band, the
-    counts add up to the pixels valid for it."""
-    spark = spark_with_jar
-    raster = _pattern_raster(name)
-    label = f"{grid} {assignment} {name}"
-    kw = dict(coverage="sparse", assignment=assignment)
-    light = _light_grid_rows(spark, raster, resolution, grid, "count", **kw)
-    heavy = _heavy_grid_rows(spark, raster, resolution, grid, "count", **kw)
-    assert light and heavy, f"{label}: a tier emitted no cells"
-    _parity_cmp(light, heavy, label=label, tol=1e-6)
-    for tier, rows in (("light", light), ("heavy", heavy)):
-        totals = [
-            sum(m for (b, _), m in rows.items() if b == band + 1)
-            for band in range(len(_valid_counts(name)))
-        ]
-        assert totals == pytest.approx(
-            [float(c) for c in _valid_counts(name)]
-        ), f"{label}: {tier} totals {totals}"
 
 
 def _tile_df(spark, raster, tier):

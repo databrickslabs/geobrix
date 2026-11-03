@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx
 
 import com.databricks.labs.gbx.rasterx.expressions.accessors._
-import com.databricks.labs.gbx.rasterx.expressions.agg.{RST_BNG_RasterizeAgg, RST_CombineAvgAgg, RST_Custom_RasterizeAgg, RST_DerivedBandAgg, RST_FromBandsAgg, RST_H3_RasterizeAgg, RST_MergeAgg, RST_Quadbin_RasterizeAgg, RST_RasterizeAgg}
+import com.databricks.labs.gbx.rasterx.expressions.agg.{RST_BNG_RasterizeAgg, RST_CombineAvgAgg, RST_Custom_RasterizeAgg, RST_DerivedBandAgg, RST_FromBandsAgg, RST_H3_RasterizeAgg, RST_Quadbin_RasterizeAgg, RST_RasterizeAgg}
 import com.databricks.labs.gbx.rasterx.expressions.analysis._
 import com.databricks.labs.gbx.rasterx.expressions.constructor.{RST_FromBands, RST_FromContent}
 import com.databricks.labs.gbx.rasterx.expressions.dem._
@@ -10,7 +10,7 @@ import com.databricks.labs.gbx.rasterx.expressions.grid._
 import com.databricks.labs.gbx.rasterx.expressions.pixel._
 import com.databricks.labs.gbx.rasterx.expressions.resample._
 import com.databricks.labs.gbx.rasterx.expressions.spectral._
-import com.databricks.labs.gbx.rasterx.expressions.vector.{RST_Isoband, RST_Polygonize, RST_Rasterize}
+import com.databricks.labs.gbx.rasterx.expressions.vector.{RST_Isoband, RST_Polygonize}
 import com.databricks.labs.gbx.rasterx.expressions.web._
 import com.databricks.labs.gbx.rasterx.expressions._
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}

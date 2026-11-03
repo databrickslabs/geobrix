@@ -50,12 +50,13 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     // + 1 rst_percentile_stretch (edit category) -> 142 + 1 = 143.
     // + 1 rst_h3_tessellate_centroid (a second rst_h3_tessellate case, the default
     //   centroid + complete assignment) -> 143 + 1 = 144.
-    assert(BenchDispatch.all.size == 144)
+    // The raster-to-grid reducers (24), rst_retile, rst_merge_agg, rst_rasterize, rst_dtmfromgeoms,
+    // rst_gridfrompoints_agg and rst_dtmfromgeoms_agg left with their companions: 144 - 30 = 114.
+    assert(BenchDispatch.all.size == 114)
     // bucket A: tile vs geometry aggregate input kinds + agg synth recipes.
     assert(BenchDispatch.inputKind("rst_combineavg_agg") == "tile_aggregate")
     assert(BenchDispatch.inputKind("rst_frombands_agg") == "tile_aggregate")
     assert(BenchDispatch.inputKind("rst_rasterize_agg") == "geometry_aggregate")
-    assert(BenchDispatch.inputKind("rst_dtmfromgeoms_agg") == "geometry_aggregate")
     // rst_h3_rasterize_agg: grid_aggregate kind, dggs category, deterministic 331-cell set.
     assert(BenchDispatch.inputKind("rst_h3_rasterize_agg") == "grid_aggregate")
     assert(BenchDispatch.category("rst_h3_rasterize_agg") == "dggs")
@@ -79,19 +80,12 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     assert(BenchDispatch.cellFillLongCells("h3_cellfill").size == BenchDispatch.h3RaggNCells)
     assert(BenchDispatch.cellFillLongCells("quadbin_cellfill").size == BenchDispatch.quadbinRaggNCells)
     assert(BenchDispatch.aggSynthRecipe("rst_combineavg_agg") == "combineavg")
-    assert(BenchDispatch.aggSynthRecipe("rst_merge_agg") == "merge")
     assert(BenchDispatch.aggSynthRecipe("rst_frombands_agg") == "frombands")
     assert(BenchDispatch.aggSynthRecipe("rst_derivedband_agg") == "frombands")
-    assert(BenchDispatch.category("rst_merge_agg") == "format")
-    assert(BenchDispatch.category("rst_gridfrompoints_agg") == "vector")
     assert(BenchDispatch.category("rst_h3_tessellate") == "dggs")
     assert(BenchDispatch.category("rst_h3_tessellate_centroid") == "dggs")
     assert(BenchDispatch.inputKind("rst_h3_tessellate_centroid") == "tile")
-    assert(BenchDispatch.inputKind("rst_rasterize") == "geometry")
     assert(BenchDispatch.inputKind("rst_gridfrompoints") == "geometry")
-    assert(BenchDispatch.inputKind("rst_dtmfromgeoms") == "geometry")
-    assert(BenchDispatch.category("rst_rasterize") == "vector")
-    assert(BenchDispatch.category("rst_quadbin_rastertogridavg") == "dggs")
     assert(BenchDispatch.category("rst_contour") == "vector")
     assert(BenchDispatch.category("rst_polygonize") == "vector")
     assert(BenchDispatch.category("rst_xyzpyramid") == "format")
@@ -115,10 +109,8 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     assert(BenchDispatch.inputKind("rst_transformcrs") == "tile")
   }
 
-  test("BenchDispatch registers the 9 BNG/quadbin raster-grid functions") {
-    val reducers = Seq(
-      "rst_bng_rastertogridavg", "rst_bng_rastertogridcount", "rst_bng_rastertogridmax",
-      "rst_bng_rastertogridmin", "rst_bng_rastertogridmedian")
+  test("BenchDispatch registers the BNG/quadbin raster-grid functions") {
+    val reducers = Seq.empty[String]
     val tessellates = Seq("rst_bng_tessellate", "rst_quadbin_tessellate")
     val aggs = Seq("rst_quadbin_rasterize_agg", "rst_bng_rasterize_agg")
     (reducers ++ tessellates ++ aggs).foreach { fn =>

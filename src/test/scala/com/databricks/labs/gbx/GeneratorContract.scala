@@ -36,8 +36,6 @@ object GeneratorContract {
       "gbx_st_triangulate"              -> VectorSuite,
       "gbx_st_interpolateelevationbbox" -> VectorSuite,
       "gbx_st_interpolateelevationgeom" -> VectorSuite,
-      "gbx_st_asmvt_pyramid"            -> VectorSuite,
-      "gbx_rst_retile"                  -> RasterSuite,
       "gbx_rst_separatebands"           -> RasterSuite,
       "gbx_rst_tooverlappingtiles"      -> RasterSuite,
       "gbx_rst_maketiles"               -> RasterSuite,

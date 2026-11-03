@@ -7208,10 +7208,8 @@ def _make_synthetic_geotiff(
 # Fan-out functions covered by run_fanout_udtf.  Order is stable for parity loops.
 FANOUT_FUNCTIONS = [
     "rst_polygonize",
-    "rst_h3_rastertogridcount",
     "rst_xyzpyramid",
     "rst_h3_tessellate",
-    "rst_retile",
     "rst_tooverlappingtiles",
     "rst_maketiles",
     "rst_separatebands",
@@ -7225,8 +7223,7 @@ FANOUT_FUNCTIONS = [
 # fragments are the part AFTER "LATERAL" in the SQL, and ``heavy_lateral`` already
 # flattens the heavy tier to the SAME granularity as the light flat UDTF rows:
 #   * polygonize  -> heavy ARRAY<struct>           -> explode  (single)
-#   * gridcount   -> heavy ARRAY<ARRAY<struct>>    -> explode∘explode (double)
-#   * 5 tilers    -> heavy CollectionGenerator     -> LATERAL VIEW gbx_.. (no explode)
+#   * 3 tilers    -> heavy CollectionGenerator     -> LATERAL VIEW gbx_.. (no explode)
 #   * xyzpyramid  -> heavy CollectionGenerator emits flat rows -> LATERAL VIEW (no explode)
 
 
@@ -7249,25 +7246,6 @@ def _fanout_spec(fn: str, scale: float):
         heavy = (
             "SELECT p.* FROM _fanout_bench_ras "
             "LATERAL VIEW explode(gbx_rst_polygonize(tile, 1, 4)) e AS p"
-        )
-        return tile_kwargs, light, heavy
-
-    if fn == "rst_h3_rastertogridcount":
-        # Fine H3 resolution + wide extent -> many cells.
-        res = 9 if s <= 1.0 else 10
-        # Wider extent at higher scale -> more cells.
-        span = 0.5 * (s**0.5)
-        bounds = (-span, 51.5 - span, span, 51.5 + span)
-        tile_kwargs = dict(size=max(128, int(round(256 * (s**0.5)))), bounds=bounds)
-        light = (
-            "SELECT t.* FROM _fanout_bench_ras, "
-            f"LATERAL gbx_rst_h3_rastertogridcount(tile, {res}) t"
-        )
-        # Heavy returns ARRAY<ARRAY<struct>> (bands x cells) -> DOUBLE explode.
-        heavy = (
-            "SELECT c.* FROM _fanout_bench_ras "
-            f"LATERAL VIEW explode(gbx_rst_h3_rastertogridcount(tile, {res})) eb AS band_cells "
-            "LATERAL VIEW explode(band_cells) ec AS c"
         )
         return tile_kwargs, light, heavy
 
@@ -7309,30 +7287,20 @@ def _fanout_spec(fn: str, scale: float):
         )
         return tile_kwargs, light, heavy
 
-    if fn in ("rst_retile", "rst_tooverlappingtiles"):
+    if fn == "rst_tooverlappingtiles":
         # Large raster with small tile size -> many tiles.
         size = max(512, int(round(1024 * (s**0.5))))
         tw = th = 64
         tile_kwargs = dict(size=size)
-        if fn == "rst_retile":
-            light = (
-                "SELECT t.* FROM _fanout_bench_ras, "
-                f"LATERAL gbx_rst_retile(tile, {tw}, {th}) t"
-            )
-            heavy = (
-                "SELECT t.* FROM _fanout_bench_ras "
-                f"LATERAL VIEW gbx_rst_retile(tile, {tw}, {th}) t AS tile"
-            )
-        else:
-            overlap = 8
-            light = (
-                "SELECT t.* FROM _fanout_bench_ras, "
-                f"LATERAL gbx_rst_tooverlappingtiles(tile, {tw}, {th}, {overlap}) t"
-            )
-            heavy = (
-                "SELECT t.* FROM _fanout_bench_ras "
-                f"LATERAL VIEW gbx_rst_tooverlappingtiles(tile, {tw}, {th}, {overlap}) t AS tile"
-            )
+        overlap = 8
+        light = (
+            "SELECT t.* FROM _fanout_bench_ras, "
+            f"LATERAL gbx_rst_tooverlappingtiles(tile, {tw}, {th}, {overlap}) t"
+        )
+        heavy = (
+            "SELECT t.* FROM _fanout_bench_ras "
+            f"LATERAL VIEW gbx_rst_tooverlappingtiles(tile, {tw}, {th}, {overlap}) t AS tile"
+        )
         return tile_kwargs, light, heavy
 
     if fn == "rst_maketiles":

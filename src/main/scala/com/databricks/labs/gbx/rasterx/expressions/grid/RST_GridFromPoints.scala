@@ -24,9 +24,6 @@ import java.util.{Vector => JVector}
   * covering the bounding box `(xmin, ymin) -> (xmax, ymax)` in the given SRID.
   * Points are interpolated via `gdal.Grid` using the
   * `invdist:power=<p>:max_points=<m>` algorithm; NoData = `-9999.0`.
-  *
-  * For the aggregator form (one point per row, grouped by extent) use
-  * [[RST_GridFromPointsAgg]].
   */
 case class RST_GridFromPoints(
     pointsArray: Expression,
@@ -227,7 +224,7 @@ object RST_GridFromPoints extends WithExpressionInfo {
         widthPx: Int, heightPx: Int, crs: String,
         power: Double, maxPts: Int
     ): InternalRow = {
-        // Materialize rootPath defensively - same /vsimem prep pattern as RST_Rasterize.
+        // Materialize rootPath defensively - same /vsimem prep pattern as the vector bridge.
         import com.databricks.labs.gbx.util.NodeFilePathUtil
         java.nio.file.Files.createDirectories(NodeFilePathUtil.rootPath)
 

@@ -24,7 +24,6 @@ NETCDF = (
 
 @pytest.fixture(scope="module")
 def spark():
-    from databricks.labs.gbx import manager as gbx_manager
 
     logging.getLogger("py4j").setLevel(logging.ERROR)
     spark = (
@@ -37,7 +36,9 @@ def spark():
         .getOrCreate()
     )
 
-    gbx_manager.register_family(spark, ("gbx_rst_",))
+    from test._heavy import heavy_register
+
+    heavy_register(spark, ("gbx_rst_",))
     return spark
 
 

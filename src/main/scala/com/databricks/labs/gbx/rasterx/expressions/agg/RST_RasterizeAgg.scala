@@ -92,8 +92,8 @@ object RasterizeAcc {
  *  Streams `(geom BINARY, value DOUBLE)` per row; the remaining seven
  *  arguments are per-group constants (Literal or constant expressions).  On
  *  `eval` all accumulated features are burned into one raster via
- *  [[VectorRasterBridge]] -- identical to [[RST_Rasterize.execute]] except
- *  that the OGR layer carries all features rather than just one.
+ *  [[VectorRasterBridge]]; the OGR layer carries all
+ *  the group's features.
  *
  *  Overlap is last-wins.  A Spark `groupBy().agg()` does not guarantee the order
  *  features reach the aggregator, so before burning we sort the accumulated

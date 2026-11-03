@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.vectorx.jts
 
-/** Delaunay triangulation and Z interpolation for DTM. Used by RST_DTMFromGeoms and VectorX generators. */
+/** Delaunay triangulation and Z interpolation for DTM. Used by the VectorX generators. */
 import org.locationtech.jts.geom.util.{LinearComponentExtracter, PolygonExtracter}
 import org.locationtech.jts.geom._
 import org.locationtech.jts.index.strtree.STRtree

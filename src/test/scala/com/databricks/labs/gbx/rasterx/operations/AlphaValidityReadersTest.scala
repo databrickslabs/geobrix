@@ -1,12 +1,10 @@
 package com.databricks.labs.gbx.rasterx.operations
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
-import com.databricks.labs.gbx.gridx.grid.{H3, Quadbin}
 import com.databricks.labs.gbx.rasterx.expressions.RST_DerivedBand
 import com.databricks.labs.gbx.rasterx.expressions.accessors.{RST_Avg, RST_Max, RST_Median, RST_Min, RST_PixelCount, RST_Summary}
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Histogram
 import com.databricks.labs.gbx.rasterx.expressions.vector.{RST_Isoband, RST_Polygonize}
-import com.databricks.labs.gbx.rasterx.expressions.grid.RasterToGridGeneric
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver, ValidMask}
 import org.apache.hadoop.conf.Configuration
 import org.apache.spark.util.SerializableConfiguration
@@ -17,7 +15,6 @@ import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
 
 import java.util.UUID
-import scala.collection.mutable
 
 /**
   * The readers that judge each band on its own (the raster-to-grid reducers and the band statistics) count a
@@ -92,34 +89,6 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
       * every pixel. */
     private def validCounts(l: Layout): Seq[Int] =
         if (l.alphaLast) Seq.fill(l.count - 1)(8) :+ 16 else Seq.fill(l.count)(16)
-
-    // ------------------------------------------------------------------------------------------------
-    // raster-to-grid reducers
-    // ------------------------------------------------------------------------------------------------
-
-    private val grids = Seq(("h3", H3, 4), ("quadbin", Quadbin, 6))
-
-    for ((name, grid, res) <- grids; l <- Layouts) {
-        test(s"$name centroid raster-to-grid of ${l.name} aggregates the pixels valid for each band") {
-            val ds = fixture(l)
-            try {
-                val bands = RasterToGridGeneric.execute[Seq[Double]](grid, ds, res, (buf: mutable.ArrayBuffer[Double]) => buf.toSeq)
-                assert(bands.map(_.map(_._2.size).sum).toSeq == validCounts(l))
-            } finally RasterDriver.releaseDataset(ds)
-        }
-
-        test(s"$name covering raster-to-grid of ${l.name} aggregates the pixels valid for each band") {
-            val ds = fixture(l)
-            try {
-                val bands = RasterToGridGeneric.execute[Double](
-                  grid, ds, res, "sparse", "covering", (b: mutable.ArrayBuffer[Double]) => b.size.toDouble,
-                  (b: mutable.ArrayBuffer[(Double, Double)]) => b.map(_._2).sum, None
-                )
-                val totals = bands.map(_.map(_._2.getOrElse(0.0)).sum).toSeq
-                assert(totals.zip(validCounts(l)).forall { case (t, w) => math.abs(t - w) < 1e-6 }, s"$totals != ${validCounts(l)}")
-            } finally RasterDriver.releaseDataset(ds)
-        }
-    }
 
     // ------------------------------------------------------------------------------------------------
     // band statistics and isEmpty

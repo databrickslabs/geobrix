@@ -19,7 +19,7 @@ import java.nio.file.Files
 /** Direct-execute tests for [[RST_RasterizeAgg]].
  *
  *  We construct the aggregator with Literal constant children (same approach as
- *  RST_DTMFromGeomsAgg) and drive `update`/`merge`/`eval` directly -- no Spark
+ *  the other buffering aggregators) and drive `update`/`merge`/`eval` directly -- no Spark
  *  session required.
  *
  *  Extent: (0,0) -> (100,100), 100x100 px, EPSG:32633.

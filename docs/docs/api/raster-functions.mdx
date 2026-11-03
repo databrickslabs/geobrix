@@ -1891,7 +1891,7 @@ Powered by **rasterio** + **SciPy** (`scipy.spatial.Delaunay`). Barycentric inte
 Create a DTM raster tile via TIN/Delaunay interpolation from an array of Z-valued point WKB geometries, with an optional array of breakline WKB geometries to preserve sharp terrain transitions.
 
 :::note Lightweight-only `out_crs` parameter
-The lightweight **Python** binding accepts an optional trailing `out_crs` (string CRS) argument that the SQL and heavyweight/Scala tiers do not — the heavyweight `RST_DTMFromGeoms` builder is strictly ≤12-argument (`…, out_srid, [no_data]`) and rejects a 13th argument. In lightweight Python, `out_crs` (string) wins over the int `out_srid`. This is a lightweight superset, not a heavyweight regression.
+The lightweight **Python** binding accepts an optional trailing `out_crs` (string CRS) argument that the SQL function does not. `out_crs` (string) wins over the int `out_srid`.
 :::
 
 Output CRS via `out_srid` (int); input points assumed already in the output CRS. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
@@ -5042,7 +5042,7 @@ Powered by **rasterio** (`rasterio.features`).
 :::
 
 :::note Lightweight-only `out_crs` parameter
-The lightweight **Python** binding accepts an optional trailing `out_crs` (string CRS) argument that the SQL and heavyweight/Scala tiers do not — the heavyweight `RST_Rasterize` builder is strictly 9-argument (`out_srid` only) and rejects a 10th argument. In lightweight Python, `out_crs` (string) wins over the int `out_srid`; both → error; neither → the geometry's carried source CRS. This is a lightweight superset, not a heavyweight regression.
+The lightweight **Python** binding accepts an optional trailing `out_crs` (string CRS) argument that the SQL function does not. `out_crs` (string) wins over the int `out_srid`; both → error; neither → the geometry's carried source CRS.
 :::
 
 Burn a polygon (WKB) into a fresh GeoTIFF tile at the given extent and pixel dimensions. Pixels inside the polygon carry `burnValue`; pixels outside are NoData. The output CRS is `out_srid` (integer EPSG code); the geometry is reprojected from its source CRS into the output CRS before burning. When `out_srid` is omitted the geometry's carried source CRS is used. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).

@@ -1,7 +1,7 @@
 """End-to-end Python tests for the resample + IDW functions.
 
 One parameterized round-trip across the 3-function resample family, plus a
-single combined round-trip for the IDW pair (non-aggregator + aggregator).
+single round-trip for the IDW grid.
 Following the streamlined test budget: only verify JVM bindings fire and a
 non-empty tile comes back; numerical correctness is asserted in the Scala
 suites (ResampleTest, RST_GridFromPointsTest).
@@ -27,7 +27,6 @@ SAMPLE_TILE_PATH = (
 
 @pytest.fixture(scope="module")
 def spark():
-    from databricks.labs.gbx import manager as gbx_manager
 
     logging.getLogger("py4j").setLevel(logging.ERROR)
     spark = (
@@ -40,7 +39,9 @@ def spark():
         .getOrCreate()
     )
 
-    gbx_manager.register_family(spark, ("gbx_rst_",))
+    from test._heavy import heavy_register
+
+    heavy_register(spark, ("gbx_rst_",))
     return spark
 
 
@@ -86,29 +87,3 @@ def test_idw_roundtrip_non_agg_and_agg_match(spark):
     assert out_na is not None, "rst_gridfrompoints returned null tile"
     assert out_na["raster"] is not None
     assert len(out_na["raster"]) > 0
-
-    # Aggregator: one row per point/value, grouped on a constant key.
-    df_long = spark.createDataFrame(
-        [Row(grp=1, point=w, value=v) for w, v in zip(wkbs, vals)]
-    )
-    df_agg = df_long.groupBy("grp").agg(
-        f.call_function(
-            "gbx_rst_gridfrompoints_agg",
-            f.col("point"),
-            f.col("value"),
-            f.lit(0.0),
-            f.lit(0.0),
-            f.lit(100.0),
-            f.lit(100.0),
-            f.lit(50),
-            f.lit(50),
-            f.lit(32633),
-            f.lit(2.0),
-            f.lit(12),
-        ).alias("out")
-    )
-    rows_a = df_agg.collect()
-    assert len(rows_a) == 1
-    out_a = rows_a[0]["out"]
-    assert out_a is not None, "rst_gridfrompoints_agg returned null"
-    assert len(out_a) > 0  # the aggregate returns the GeoTIFF bytes

@@ -45,23 +45,6 @@ def spark():
     return spark
 
 
-def test_rst_retile(spark):
-    """Test retiling a raster."""
-    # Served by the light level (or a heavy level that dispatches to it): needs the light deps, which the
-    # heavyweight CI env does not have (test/conftest.py).
-    pytest.importorskip("rasterio")
-    pytest.importorskip("pandas")
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    src = spark.range(1).select(
-        tile_from_path(rx, f, str(MODIS_B01), "GTiff").alias("tile")
-    )
-    # rst_retile is a table function: one output row per sub-tile, beside the input row's columns
-    rows = rx.rst_retile(src, "tile", 256, 256).collect()
-    # MODIS tile (2400x2400) split into 256x256 tiles should create multiple tiles
-    assert len(rows) > 1
-
-
 def test_rst_maketiles(spark):
     """Test making tiles based on size in MB."""
     from databricks.labs.gbx.rasterx import functions as rx
@@ -146,22 +129,3 @@ def test_rst_from_local_path(spark):
     assert result is not None
     assert len(result) == 1
     assert result[0]["raster"] is not None
-
-
-def test_generators_workflow(spark):
-    """Test a complete workflow using multiple generators."""
-    # Served by the light level (or a heavy level that dispatches to it): needs the light deps, which the
-    # heavyweight CI env does not have (test/conftest.py).
-    pytest.importorskip("rasterio")
-    pytest.importorskip("pandas")
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    # Load raster
-    df = spark.range(1).select(
-        tile_from_path(rx, f, str(MODIS_B01), "GTiff").alias("original")
-    )
-
-    # Retile it: one row per sub-tile, each beside its original tile
-    result = rx.rst_retile(df, "original", 512, 512).collect()
-    assert len(result) > 1
-    assert result[0]["original"] is not None

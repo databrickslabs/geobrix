@@ -1,19 +1,15 @@
 """Cross-tier (light pyrx vs heavy Scala/GDAL) parity for the 10 custom-grid
 raster functions.
 
-The capstone parity check. Both tiers are run on the SAME
-in-memory raster + custom-grid struct and their outputs compared:
+Both tiers are run on the SAME in-memory raster + custom-grid struct and their outputs compared:
 
-  * 8 custom reducers (``rst_custom_rastertogrid{avg,count,max,min,median,sum,
-    variance,stddev}``) — EXACT cell-set equality + per-cell measure within 1e-9
-    (centroid) or 1e-6 (covering, where JTS vs shapely area fractions may differ).
   * ``rst_custom_tessellate`` — identical Long cell-id set + chip count, both
     ``covering`` and ``centroid`` modes.
   * ``rst_custom_rasterize_agg`` — same NoData=-9999 in both tiers, identical
     covered-pixel mask + burned value 1.0 on the same explicit grid.
 
 HARNESS REUSE (no new comparison framework invented):
-  * Reducers + tessellate reuse the ``test_parity_bng_quadbin_raster_grid.py``
+  * Tessellate reuses the ``test_parity_bng_quadbin_raster_grid.py``
     two-phase pattern — register LIGHT first (prx.register), collect via SQL
     LATERAL or scalar, then register HEAVY (hx.register which OVERWRITES the
     gbx_rst_custom_* SQL names) and collect; sequential collection materialises
@@ -218,27 +214,6 @@ def _covering_raster():
     return _gtiff_bytes(data, epsg=27700, origin=(521000.0, 204000.0), px=18000.0)
 
 
-def _small_pixel_covering_raster():
-    """9x9 EPSG:27700 raster, 2000 m pixels (SUB-CELL: the grid's cells are 10000 m).
-
-    Origin (521000, 204000) → extent [521000, 186000, 539000, 204000], the SAME
-    footprint as ``_covering_raster`` but paved with 81 sub-cell 2000 m pixels
-    instead of one 18000 m pixel.  It spans the 4 inner cells (cols 1-2, rows 2-3).
-
-    THIS is the regime the pre-fix light tier got wrong: each 2000 m pixel is far
-    smaller than a 10000 m cell, so per-pixel centroid polyfill finds NO cell centre
-    inside most pixels → the un-buffered light covering path returned zero cells for
-    them and dropped their mass (missing cells, lost weight), while heavy's buffered
-    ``coveringCandidateCells`` found the containing cell and kept it.  With the buffer
-    fix the two tiers must agree exactly.
-
-    Footprint is strictly interior (10000 m buffer stays within the grid bounds), so
-    heavy's buffered enumeration does not hit the out-of-bounds guard.
-    """
-    data = np.arange(1, 82, dtype="float32").reshape(9, 9)
-    return _gtiff_bytes(data, epsg=27700, origin=(521000.0, 204000.0), px=2000.0)
-
-
 # ---------------------------------------------------------------------------
 # Helper: add grid struct column to a DataFrame
 # ---------------------------------------------------------------------------
@@ -263,11 +238,6 @@ def _add_grid_col(df):
     )
 
 
-# ---------------------------------------------------------------------------
-# Reducer helpers (rastertogrid 8 functions)
-# ---------------------------------------------------------------------------
-
-
 def _tile_df(spark, raster):
     """Build a one-row DataFrame with tile + grid columns."""
     from pyspark.sql import functions as f
@@ -276,207 +246,6 @@ def _tile_df(spark, raster):
         rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     return _add_grid_col(raw)
-
-
-def _light_reducer_rows(
-    spark, raster, agg, *, coverage="complete", assignment="centroid"
-):
-    """Light tier: SQL LATERAL → {(band, cellID): measure}.
-
-    Registers pyrx (light), then collects via the registered gbx_rst_custom_* UDTF.
-    """
-    from databricks.labs.gbx import manager as gbx_manager
-
-    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
-    df = _tile_df(spark, raster)
-    df.createOrReplaceTempView("_rst_cust_light")
-    rows = spark.sql(
-        f"SELECT t.band AS band, t.cellID AS cellID, t.measure AS measure "
-        f"FROM _rst_cust_light, "
-        f"LATERAL gbx_rst_custom_rastertogrid{agg}("
-        f"tile, grid, {_GRID_RES}, '{coverage}', '{assignment}') t"
-    ).collect()
-    return {(r["band"], r["cellID"]): r["measure"] for r in rows}
-
-
-def _heavy_reducer_rows(
-    spark, raster, agg, *, coverage="complete", assignment="centroid"
-):
-    """Heavy tier: scalar ARRAY expression → {(band, cellID): measure}.
-
-    Registers rasterx (which overwrites the gbx_rst_custom_* SQL names with GDAL
-    expressions), then collects via scalar SQL with posexplode/explode.
-    """
-    from pyspark.sql import functions as f
-
-    heavy_register(spark, ("gbx_rst_",))
-    df = _tile_df(spark, raster)
-    df.createOrReplaceTempView("_rst_cust_heavy")
-    rows = (
-        spark.sql(
-            f"SELECT posexplode("
-            f"  gbx_rst_custom_rastertogrid{agg}("
-            f"    tile, grid, {_GRID_RES}, '{coverage}', '{assignment}')"
-            f") AS (band0, cells) "
-            f"FROM _rst_cust_heavy"
-        )
-        .select(
-            (f.col("band0") + 1).alias("band"),
-            f.explode("cells").alias("c"),
-        )
-        .select(
-            "band",
-            f.col("c.cellID").alias("cellID"),
-            f.col("c.measure").alias("measure"),
-        )
-        .collect()
-    )
-    return {(r["band"], r["cellID"]): r["measure"] for r in rows}
-
-
-# ---------------------------------------------------------------------------
-# Parity comparison helper
-# ---------------------------------------------------------------------------
-
-
-def _parity_cmp(light, heavy, *, label, tol=1e-9):
-    """Assert cross-tier parity for a {(band, cellID): measure} dict pair."""
-    light_keys = set(light.keys())
-    heavy_keys = set(heavy.keys())
-    if light_keys != heavy_keys:
-        pytest.fail(
-            f"{label} cell-set MISMATCH: "
-            f"|light|={len(light_keys)} |heavy|={len(heavy_keys)} "
-            f"light_only={sorted(light_keys - heavy_keys)[:8]} "
-            f"heavy_only={sorted(heavy_keys - light_keys)[:8]}"
-        )
-    for key in light_keys:
-        lv, hv = light[key], heavy[key]
-        if lv is None and hv is None:
-            continue
-        if lv is None or hv is None:
-            pytest.fail(f"{label} one-sided None at {key}: light={lv} heavy={hv}")
-        lv_f, hv_f = float(lv), float(hv)
-        threshold = tol * max(1.0, abs(hv_f))
-        assert abs(lv_f - hv_f) <= threshold, (
-            f"{label} cell {key} diverged: "
-            f"light={lv_f} heavy={hv_f} (diff={abs(lv_f - hv_f):.3e} > tol={threshold:.3e})"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Tests: rastertogrid (all 8 aggregations, centroid + complete)
-# ---------------------------------------------------------------------------
-
-_REDUCERS = ["avg", "count", "max", "min", "median", "sum", "variance", "stddev"]
-
-
-@pytest.mark.parametrize("agg", _REDUCERS)
-def test_custom_rastertogrid_centroid_complete_parity(spark_with_jar, agg):
-    """All 8 custom rastertogrid aggs: exact cell-set + measure within 1e-9.
-
-    27700-native fixture: both tiers skip any CRS warp, so any divergence is a
-    real cell-math or reducer difference (do NOT loosen tolerance — fix upstream).
-    """
-    spark = spark_with_jar
-    raster = _custom_raster_27700()
-
-    # Collect LIGHT first (both tiers share the gbx_rst_custom_* SQL names).
-    light = _light_reducer_rows(
-        spark, raster, agg, coverage="complete", assignment="centroid"
-    )
-    heavy = _heavy_reducer_rows(
-        spark, raster, agg, coverage="complete", assignment="centroid"
-    )
-
-    assert light, f"custom {agg} centroid/complete: light emitted no cells"
-    assert heavy, f"custom {agg} centroid/complete: heavy emitted no cells"
-    assert all(isinstance(k[1], int) for k in light), "light cellID must be Long int"
-    assert all(isinstance(k[1], int) for k in heavy), "heavy cellID must be Long int"
-
-    _parity_cmp(light, heavy, label=f"custom {agg} centroid/complete", tol=1e-9)
-
-
-@pytest.mark.parametrize("agg", ["avg", "count"])
-def test_custom_rastertogrid_covering_sparse_parity(spark_with_jar, agg):
-    """Custom rastertogrid covering+sparse: exact cell-set + measure within 1e-6.
-
-    Uses a single large pixel (18000 m) whose footprint overlaps all 4 inner cells.
-    Companion to the sub-cell case below: this locks the pixel>=cell regime while
-    ``test_custom_rastertogrid_covering_smallpixel_parity`` exercises the sub-cell
-    regime that used to diverge. Both tiers must produce the same 4-cell set with
-    fractional (0.25) count weights.
-
-    Tolerance 1e-6 because JTS vs shapely area fractions can differ at ~1e-10.
-    """
-    spark = spark_with_jar
-    raster = _covering_raster()
-
-    # Collect LIGHT first.
-    light = _light_reducer_rows(
-        spark, raster, agg, coverage="sparse", assignment="covering"
-    )
-    heavy = _heavy_reducer_rows(
-        spark, raster, agg, coverage="sparse", assignment="covering"
-    )
-
-    assert light, f"custom {agg} covering/sparse: light emitted no cells"
-    assert heavy, f"custom {agg} covering/sparse: heavy emitted no cells"
-
-    _parity_cmp(light, heavy, label=f"custom {agg} covering/sparse", tol=1e-6)
-
-    # Non-degeneracy guard for count: each cell gets area_fraction = cell_area / pixel_area
-    # = 10000^2 / 20000^2 = 0.25 (fractional) → all counts are non-integer.
-    if agg == "count":
-        non_integer = any(
-            v is not None and abs(v - round(v)) > 1e-6 for v in light.values()
-        )
-        assert non_integer, (
-            "Custom covering fixture degenerate: all count values are integers. "
-            "Expected fractional counts from area-fraction weighting (0.25 per cell). "
-            "Check that the 20000m pixel and 10000m cells produce fractional overlap."
-        )
-
-
-@pytest.mark.parametrize("agg", ["avg", "count", "sum"])
-def test_custom_rastertogrid_covering_smallpixel_parity(spark_with_jar, agg):
-    """Custom rastertogrid covering+sparse in the SUB-CELL regime: exact parity.
-
-    Regression gate for the load-bearing bug: 2000 m pixels over a 10000 m custom
-    grid.  Pre-fix, the light per-pixel centroid polyfill found no cell centre in a
-    sub-cell pixel and returned zero cells for it → those pixels were dropped (fewer
-    cells and/or smaller measures than heavy).  With the covering-candidate buffer
-    fix (mirroring heavy ``CustomGridSystem.coveringCandidateCells``) light finds the
-    containing cell for every sub-cell pixel, so the cell SETS are equal and every
-    per-cell measure matches heavy within tolerance.
-
-    Asserting full cell-set equality here is the honest gate: if light silently
-    dropped any sub-cell pixel's cell, ``_parity_cmp`` fails on the set mismatch.
-
-    Tolerance 1e-6 because JTS vs shapely area fractions can differ at ~1e-10.
-    """
-    spark = spark_with_jar
-    raster = _small_pixel_covering_raster()
-
-    # Collect LIGHT first (both tiers share the gbx_rst_custom_* SQL names).
-    light = _light_reducer_rows(
-        spark, raster, agg, coverage="sparse", assignment="covering"
-    )
-    heavy = _heavy_reducer_rows(
-        spark, raster, agg, coverage="sparse", assignment="covering"
-    )
-
-    assert light, f"custom {agg} covering/sparse (small pixel): light emitted no cells"
-    assert heavy, f"custom {agg} covering/sparse (small pixel): heavy emitted no cells"
-    # The footprint spans the 4 inner cells; both tiers must cover all of them.
-    assert len(light) == 4, (
-        f"small-pixel covering must cover the 4 inner cells; light has {len(light)} "
-        f"— a smaller count means sub-cell pixels were dropped (the fixed bug)"
-    )
-
-    _parity_cmp(
-        light, heavy, label=f"custom {agg} covering/sparse (small pixel)", tol=1e-6
-    )
 
 
 # ---------------------------------------------------------------------------

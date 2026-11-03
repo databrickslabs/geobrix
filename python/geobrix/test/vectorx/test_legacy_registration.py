@@ -28,8 +28,8 @@ def spark():
 
 
 def test_legacy_functions_registration(spark):
-    from databricks.labs.gbx import manager
+    from test._heavy import heavy_register
 
-    manager.register_family(spark, ("gbx_st_legacy",))
+    heavy_register(spark, ("gbx_st_legacy",))
     df = spark.sql("show functions like 'gbx_st_legacyaswkb'")
     assert df.count() is not None

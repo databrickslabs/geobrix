@@ -1,12 +1,9 @@
-"""Cross-tier (light pyrx vs heavy Scala/GDAL) parity for the 9 BNG/quadbin
+"""Cross-tier (light pyrx vs heavy Scala/GDAL) parity for the BNG/quadbin
 raster-grid functions.
 
-THE Phase-2 parity def-of-done. For each of the nine functions, both tiers are
-run on the SAME in-memory sample raster + resolution and their outputs compared
-against the design §4.1 parity bar:
+Both tiers are run on the SAME in-memory sample raster + resolution and their
+outputs compared against the design §4.1 parity bar:
 
-  * 5 BNG reducers (``rst_bng_rastertogrid{avg,count,max,min,median}``) — EXACT
-    BNG-String cell-set equality + per-cell measure within 1e-9.
   * ``rst_quadbin_tessellate`` / ``rst_bng_tessellate`` — identical emitted
     cell-id set (quadbin Long / BNG String) + identical chip count, for both
     ``covering`` and ``centroid`` modes; under ``centroid`` the chips also match
@@ -15,12 +12,12 @@ against the design §4.1 parity bar:
     raster on a shared explicit grid: band NoData == -9999 both tiers, and the
     covered-pixel mask + burned values identical (NoData-aware).
   * Sources without NoData or with their own mask band, through the warps and
-    clips that must keep them (raster-to-grid, BNG tessellate, covering,
+    clips that must keep them (BNG tessellate, covering,
     ``rst_initnodata``, ``rst_clip``): the warp fill, the masked pixels and the
     pixels equal to the NoData are never valid data, in either tier.
 
 HARNESS REUSE (no new comparison framework invented):
-  * Reducers + tessellate reuse the ``test/pyvx/test_parity_h3_tessellate.py``
+  * Tessellate reuses the ``test/pyvx/test_parity_h3_tessellate.py``
     pattern — register ONE tier, collect its rows, then register the other and
     collect (both tiers register the same ``gbx_rst_*`` SQL name, so collection
     must be sequential; ``.collect()`` materialises before re-registration).
@@ -31,10 +28,8 @@ HARNESS REUSE (no new comparison framework invented):
 
 CRS handling mirrors the design:
   * BNG fixtures are EPSG:27700-native so BOTH tiers skip the internal warp —
-    this isolates cell-math + reducer parity from any gdalwarp-vs-rasterio.warp
-    boundary difference (which the heavy-only reproject-equivalence Scala test,
-    RST_BNG_RasterToGridTest, already pins). One extra BNG reducer check feeds a
-    4326 fixture to BOTH tiers to exercise the warp path cross-tier.
+    this isolates cell-math parity from any gdalwarp-vs-rasterio.warp
+    boundary difference.
   * Quadbin fixtures are EPSG:4326 (the quadbin API input contract).
 
 Heavy requires the geobrix JAR *and* the GDAL native libraries (JNI); both are
@@ -164,200 +159,15 @@ def _bng_raster_27700():
     return _gtiff_bytes(data, epsg=27700, origin=(530000.0, 181000.0), px=100.0)
 
 
-def _bng_raster_4326():
-    """6x6 EPSG:4326 raster over central London — BOTH tiers warp to 27700.
-
-    Exercises the gdalwarp (heavy) vs rasterio.warp (light) cross-tier path.
-    """
-    data = np.arange(1, 37, dtype="float32").reshape(6, 6)
-    return _gtiff_bytes(data, epsg=4326, origin=(-0.12, 51.52), px=0.005)
-
-
 def _quadbin_raster_4326():
     """16x16 EPSG:4326 raster over central London, 0.01 deg pixels, ramp values."""
     data = np.arange(1, 257, dtype="float32").reshape(16, 16)
     return _gtiff_bytes(data, epsg=4326, origin=(-0.13, 51.55), px=0.01)
 
 
-def _small_covering_raster_4326():
-    """4x4 EPSG:4326 raster (16 pixels, 0.1 deg each) at the equator.
-
-    Performance guard for ``covering`` assignment tests: covering is O(pixels ×
-    candidate-cells-per-pixel) in both tiers. 16 pixels at coarse resolution keeps
-    the geometry-intersection count tiny (<100 JTS/shapely ops) so the suite does not
-    time out.  Use with H3 res=4 or quadbin res=5 so the raster fits in a handful of
-    cells.
-    """
-    data = np.arange(1, 17, dtype="float32").reshape(4, 4)
-    return _gtiff_bytes(data, epsg=4326, origin=(0.0, 0.4), px=0.1)
-
-
-def _small_covering_bng_raster():
-    """4x4 EPSG:27700 raster (16 pixels, 1000 m each) with origin offset to straddle
-    BNG 1 km cell boundaries.
-
-    Origin (530300, 181700): BNG 1 km cell boundaries fall at every exact 1000 m;
-    the 300 m offset means every pixel spans one internal boundary in x and one in y,
-    so each pixel has fractional overlap (weights ≈ 0.49/0.21/0.21/0.09) with its
-    four neighbouring BNG 1 km cells.  This prevents the degenerate all-1.0-weight
-    case that occurs when pixels are grid-aligned to cell boundaries.
-
-    Use with ``_RTG_COVERING_RES["bng"] = 3`` (1 km cells).  16 pixels × ~4 cells each
-    = ~64 JTS/shapely intersection operations — fast even for the covering O(pixels) path.
-    """
-    data = np.arange(1, 17, dtype="float32").reshape(4, 4)
-    return _gtiff_bytes(data, epsg=27700, origin=(530300.0, 181700.0), px=1000.0)
-
-
 # ---------------------------------------------------------------------------
 # Reducer parity (5 BNG functions) — exact cell-set + measure within 1e-9
 # ---------------------------------------------------------------------------
-
-_REDUCERS = ["avg", "count", "max", "min", "median", "sum", "variance", "stddev"]
-
-
-def _heavy_rastertogrid(sql_name):
-    """The heavy ARRAY scalar of a raster-to-grid reducer as a function of (tile, resolution, coverage, assignment):
-    the generated Python API has the table function (the light contract), so the heavy form is called by SQL name.
-    """
-    from pyspark.sql import functions as f
-
-    return lambda tile, res, coverage, assignment: f.call_function(
-        sql_name, tile, res, f.lit(coverage), f.lit(assignment)
-    )
-
-
-def _heavy_reducer_rows(
-    spark, raster, resolution, agg, *, coverage="complete", assignment="centroid"
-):
-    """Heavy tier: ARRAY<ARRAY<struct(cellID,measure)>> -> flat {(band,cellID): measure}.
-
-    ``coverage`` and ``assignment`` are forwarded to the SQL expression.
-    Defaults mirror the expression's built-in defaults (complete, centroid) so
-    existing 4-positional-arg callers that omit these keyword params continue to
-    produce identical results to the previous 2-arg SQL form.
-    """
-    from pyspark.sql import functions as f
-
-    from databricks.labs.gbx.rasterx import functions as hx
-
-    heavy_register(spark, ("gbx_rst_",))
-    fn = _heavy_rastertogrid(f"gbx_rst_bng_rastertogrid{agg}")
-    df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
-        hx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
-    )
-    rows = (
-        df.select(
-            fn(f.col("tile"), f.lit(resolution), coverage, assignment).alias("bands")
-        )
-        # posexplode outer array -> 0-based band index + inner cell array
-        .select(f.posexplode("bands").alias("band0", "cells"))
-        .select((f.col("band0") + 1).alias("band"), f.explode("cells").alias("c"))
-        .select(
-            "band",
-            f.col("c.cellID").alias("cellID"),
-            f.col("c.measure").alias("measure"),
-        )
-        .collect()
-    )
-    return {(r["band"], r["cellID"]): r["measure"] for r in rows}
-
-
-def _light_reducer_rows(
-    spark, raster, resolution, agg, *, coverage="complete", assignment="centroid"
-):
-    """Light tier: SQL LATERAL over the registered pyrx UDTF -> {(band,cellID): measure}.
-
-    ``coverage`` and ``assignment`` are forwarded to the SQL LATERAL call. A
-    ``tp.Staged`` ``raster`` starts the light tier from a virtual tile.
-    """
-    from databricks.labs.gbx import manager as gbx_manager
-
-    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
-    df = tp.light_tile_df(spark, raster)
-    df.createOrReplaceTempView("_ras_light_bng")
-    rows = spark.sql(
-        f"SELECT t.band AS band, t.cellID AS cellID, t.measure AS measure "
-        f"FROM _ras_light_bng, "
-        f"LATERAL gbx_rst_bng_rastertogrid{agg}(tile, {resolution}, '{coverage}', '{assignment}') t"
-    ).collect()
-    return {(r["band"], r["cellID"]): r["measure"] for r in rows}
-
-
-@pytest.mark.parametrize("agg", _REDUCERS)
-def test_bng_rastertogrid_reducer_parity_27700(spark_with_jar, agg):
-    """Exact BNG-String cell-set equality + per-cell measure within 1e-9.
-
-    27700-native fixture: BOTH tiers skip the warp, so any divergence is a real
-    cell-math / reducer difference, not a resampling artifact.
-    """
-    spark = spark_with_jar
-    raster = _bng_raster_27700()
-    resolution = 3  # 1 km
-
-    # Collect LIGHT first (both tiers share the gbx_rst_* SQL name; sequential
-    # collection materialises light rows before heavy re-registration).
-    light = _light_reducer_rows(spark, raster, resolution, agg)
-    heavy = _heavy_reducer_rows(spark, raster, resolution, agg)
-
-    assert light, f"light emitted no cells for agg={agg}"
-    assert heavy, f"heavy emitted no cells for agg={agg}"
-
-    # Cell ids must be BNG strings both tiers.
-    assert all(isinstance(k[1], str) for k in light), "light cellID must be BNG String"
-    assert all(isinstance(k[1], str) for k in heavy), "heavy cellID must be BNG String"
-
-    light_keys, heavy_keys = set(light), set(heavy)
-    if light_keys != heavy_keys:
-        pytest.fail(
-            f"agg={agg} BNG cell-set MISMATCH (real cross-tier divergence): "
-            f"|light|={len(light_keys)} |heavy|={len(heavy_keys)} "
-            f"light_only={sorted(light_keys - heavy_keys)[:8]} "
-            f"heavy_only={sorted(heavy_keys - light_keys)[:8]}"
-        )
-
-    for key in light_keys:
-        lv, hv = float(light[key]), float(heavy[key])
-        assert abs(lv - hv) < 1e-9, (
-            f"agg={agg} cell {key} measure diverged beyond 1e-9: "
-            f"light={lv} heavy={hv} (diff={abs(lv - hv):.3e})"
-        )
-
-
-def test_bng_rastertogrid_avg_parity_4326_warp_path(spark_with_jar):
-    """BNG avg on a 4326 fixture: exercises gdalwarp (heavy) vs rasterio.warp (light).
-
-    The design warns this is exactly where a real cross-tier boundary divergence
-    could surface. We assert exact cell-set + measure parity; a genuine
-    divergence here is a FINDING (do not weaken), reported with the exact cells.
-    """
-    spark = spark_with_jar
-    raster = _bng_raster_4326()
-    resolution = 3  # 1 km
-
-    light = _light_reducer_rows(spark, raster, resolution, "avg")
-    heavy = _heavy_reducer_rows(spark, raster, resolution, "avg")
-
-    assert light, "light emitted no cells (4326 warp path)"
-    assert heavy, "heavy emitted no cells (4326 warp path)"
-
-    light_keys, heavy_keys = set(light), set(heavy)
-    if light_keys != heavy_keys:
-        pytest.fail(
-            "BNG avg 4326-warp cell-set MISMATCH (gdalwarp vs rasterio.warp — "
-            "REAL FINDING): "
-            f"|light|={len(light_keys)} |heavy|={len(heavy_keys)} "
-            f"light_only={sorted(light_keys - heavy_keys)[:8]} "
-            f"heavy_only={sorted(heavy_keys - light_keys)[:8]}"
-        )
-
-    for key in light_keys:
-        lv, hv = float(light[key]), float(heavy[key])
-        assert abs(lv - hv) < 1e-9, (
-            f"BNG avg 4326-warp cell {key} measure diverged: "
-            f"light={lv} heavy={hv} (diff={abs(lv - hv):.3e}) — "
-            "REAL gdalwarp-vs-rasterio.warp boundary finding"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -367,108 +177,6 @@ def test_bng_rastertogrid_avg_parity_4326_warp_path(spark_with_jar):
 # it shares avg's within_tol summation-order class cross-tier. We assert the
 # EXACT Long cell-set and per-cell measure within a relative tolerance on a
 # real multi-value tile (ramp values, several cells with >1 pixel each).
-
-
-def _heavy_grid_rows(
-    spark, raster, resolution, grid, agg, *, coverage="complete", assignment="centroid"
-):
-    """Heavy tier (Long cell id grids): -> {(band,cellID): measure}.
-
-    ``coverage`` and ``assignment`` are forwarded to the SQL expression.
-    """
-    from pyspark.sql import functions as f
-
-    from databricks.labs.gbx.rasterx import functions as hx
-
-    heavy_register(spark, ("gbx_rst_",))
-    fn = _heavy_rastertogrid(f"gbx_rst_{grid}_rastertogrid{agg}")
-    df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
-        hx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
-    )
-    rows = (
-        df.select(
-            fn(f.col("tile"), f.lit(resolution), coverage, assignment).alias("bands")
-        )
-        .select(f.posexplode("bands").alias("band0", "cells"))
-        .select((f.col("band0") + 1).alias("band"), f.explode("cells").alias("c"))
-        .select(
-            "band",
-            f.col("c.cellID").alias("cellID"),
-            f.col("c.measure").alias("measure"),
-        )
-        .collect()
-    )
-    return {(r["band"], r["cellID"]): r["measure"] for r in rows}
-
-
-def _light_grid_rows(
-    spark, raster, resolution, grid, agg, *, coverage="complete", assignment="centroid"
-):
-    """Light tier (Long cell id grids): SQL LATERAL over the pyrx UDTF.
-
-    ``coverage`` and ``assignment`` are forwarded to the SQL LATERAL call.
-    """
-    from databricks.labs.gbx import manager as gbx_manager
-
-    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
-    df = tp.light_tile_df(spark, raster)
-    df.createOrReplaceTempView("_ras_light_grid")
-    rows = spark.sql(
-        f"SELECT t.band AS band, t.cellID AS cellID, t.measure AS measure "
-        f"FROM _ras_light_grid, "
-        f"LATERAL gbx_rst_{grid}_rastertogrid{agg}(tile, {resolution}, '{coverage}', '{assignment}') t"
-    ).collect()
-    return {(r["band"], r["cellID"]): r["measure"] for r in rows}
-
-
-@pytest.mark.parametrize("agg", ["sum", "variance", "stddev"])
-@pytest.mark.parametrize("grid,resolution", [("quadbin", 12), ("h3", 7)])
-def test_grid_rastertogrid_reducer_parity(spark_with_jar, grid, resolution, agg):
-    """h3/quadbin sum/variance/stddev: exact Long cell-set + measure within tol.
-
-    Real multi-value tile (ramp 1..256) so cells carry several pixels and the
-    reducer exercises REAL spread — variance/stddev are non-degenerate (not the
-    single-pixel variance-0 case). variance/stddev use the SAME two-pass
-    population formula on both tiers, so they share sum/avg's within_tol class;
-    a formula mismatch would surface here as a divergence (do NOT loosen tol —
-    fix the formula).
-
-    Note: ``coverage="sparse"`` is explicit here (only cells that have pixels).
-    The Stage-2 ``complete`` behaviour (empty-cell parity) is exercised by
-    ``test_rastertogrid_coverage_assignment_parity``.
-    """
-    spark = spark_with_jar
-    raster = _quadbin_raster_4326()  # 16x16 4326 ramp — valid for both h3 & quadbin
-
-    light = _light_grid_rows(spark, raster, resolution, grid, agg, coverage="sparse")
-    heavy = _heavy_grid_rows(spark, raster, resolution, grid, agg, coverage="sparse")
-
-    assert light, f"light emitted no cells for {grid} {agg}"
-    assert heavy, f"heavy emitted no cells for {grid} {agg}"
-
-    light_keys, heavy_keys = set(light), set(heavy)
-    if light_keys != heavy_keys:
-        pytest.fail(
-            f"{grid} {agg} cell-set MISMATCH: "
-            f"|light|={len(light_keys)} |heavy|={len(heavy_keys)} "
-            f"light_only={sorted(light_keys - heavy_keys)[:8]} "
-            f"heavy_only={sorted(heavy_keys - light_keys)[:8]}"
-        )
-
-    # A tile ramp with real spread means at least one multi-pixel cell has
-    # nonzero variance -- guard against a vacuous all-zero (single-pixel) pass.
-    if agg in ("variance", "stddev"):
-        assert any(
-            abs(v) > 1e-6 for v in light.values()
-        ), f"{grid} {agg}: all cells zero -- fixture lacks real spread"
-
-    # within_tol (same summation-order class as avg): relative tolerance.
-    for key in light_keys:
-        lv, hv = float(light[key]), float(heavy[key])
-        assert abs(lv - hv) <= 1e-9 * max(1.0, abs(hv)), (
-            f"{grid} {agg} cell {key} diverged beyond within_tol: "
-            f"light={lv} heavy={hv} (diff={abs(lv - hv):.3e})"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -481,61 +189,6 @@ def test_grid_rastertogrid_reducer_parity(spark_with_jar, grid, resolution, agg)
 
 _EDGE_Z = 10
 _EDGE_TILE_DEG = 360.0 / (1 << _EDGE_Z)  # 0.3515625, exact in binary
-
-
-def _quadbin_tile_x_edge_raster():
-    """1025x1 EPSG:4326 row whose pixel centres sit on every zoom-10 tile x edge,
-    from lon = -180 to lon = +180 (the last pixel is on the antimeridian)."""
-    w = (1 << _EDGE_Z) + 1
-    data = np.arange(1, w + 1, dtype="float32").reshape(1, w)
-    return _gtiff_bytes(
-        data,
-        epsg=4326,
-        origin=(-180.0 - _EDGE_TILE_DEG / 2, 10.0),
-        px=_EDGE_TILE_DEG,
-    )
-
-
-def _quadbin_tile_y_edge_raster(k):
-    """1x1 EPSG:4326 raster whose pixel centre is the latitude where zoom-10
-    web-mercator tile row ``k`` starts."""
-    n = 1 << _EDGE_Z
-    px = 2.0**-20
-    lat = float(np.degrees(np.arctan(np.sinh(np.pi * (1.0 - 2.0 * k / n)))))
-    return _gtiff_bytes(
-        np.ones((1, 1), dtype="float32"),
-        epsg=4326,
-        origin=(10.0 - px / 2, lat + px / 2),
-        px=px,
-    )
-
-
-@pytest.mark.parametrize(
-    "label,raster_fn",
-    [
-        ("antimeridian-and-x-edges", _quadbin_tile_x_edge_raster),
-        # These rows are where the CARTO library puts the pixel one tile away from
-        # heavy's floor-and-clamp rule.
-        ("y-edge-18", lambda: _quadbin_tile_y_edge_raster(18)),
-        ("y-edge-120", lambda: _quadbin_tile_y_edge_raster(120)),
-        ("y-edge-511", lambda: _quadbin_tile_y_edge_raster(511)),
-    ],
-)
-def test_quadbin_rastertogrid_edge_pixel_parity(spark_with_jar, label, raster_fn):
-    """Pixels on the antimeridian / a tile edge land in the same cell in both tiers."""
-    spark = spark_with_jar
-    raster = raster_fn()
-
-    light = _light_grid_rows(
-        spark, raster, _EDGE_Z, "quadbin", "count", coverage="sparse"
-    )
-    heavy = _heavy_grid_rows(
-        spark, raster, _EDGE_Z, "quadbin", "count", coverage="sparse"
-    )
-
-    assert light, f"{label}: light emitted no cells"
-    assert heavy, f"{label}: heavy emitted no cells"
-    _parity_cmp(light, heavy, label=f"quadbin edge {label}")
 
 
 # ---------------------------------------------------------------------------
@@ -851,22 +504,8 @@ def test_bng_rasterize_agg_mask_parity(spark_with_jar):
 
 
 # ---------------------------------------------------------------------------
-# Stage-2 gate: coverage × assignment parity for rastertogrid (all 3 grids)
+# Stage-2 gate: tessellate configuration (all 3 grids)
 # ---------------------------------------------------------------------------
-#
-# Grid configurations for the new parametrized parity tests.
-#
-# CENTROID resolution: same as the existing single-function tests so these
-# share the well-understood fixture regime.
-# COVERING resolution: coarser so the raster fits in very few cells (covering
-# is O(pixels × candidate-cells-per-pixel); coarse resolution → 1-4 cells →
-# fast geometry intersection).
-_RTG_CENTROID_RES = {"h3": 7, "bng": 3, "quadbin": 12}
-_RTG_COVERING_RES = {
-    "h3": 4,
-    "bng": 3,
-    "quadbin": 8,
-}  # bng=3 (1km) matches _small_covering_bng_raster fixture
 
 # Tessellate configs indexed by grid name.
 _TESS_CONFIG = {
@@ -876,44 +515,6 @@ _TESS_CONFIG = {
 }
 _TESS_CENTROID_RES = {"h3": 5, "bng": 3, "quadbin": 12}
 _TESS_COVERING_RES = {"h3": 4, "bng": 1, "quadbin": 8}
-
-
-def _parity_cmp(light, heavy, *, label, tol=1e-9):
-    """Assert cross-tier parity for a {(band, cellID): measure} dict pair.
-
-    Rules:
-    - Cell-set equality: every key present in both tiers.
-    - Both None → empty-cell parity (skip value comparison).
-    - One None, one not → FAIL (one-sided None is a real divergence).
-    - Both float → ``abs(lv - hv) <= tol * max(1.0, abs(hv))`` (relative tol).
-
-    ``tol`` defaults to 1e-9.  Use a wider value (e.g. 1e-6) for covering aggs
-    where JTS (heavy) and shapely (light) area fractions may differ slightly.
-    """
-    light_keys = set(light.keys())
-    heavy_keys = set(heavy.keys())
-    if light_keys != heavy_keys:
-        pytest.fail(
-            f"{label} cell-set MISMATCH: "
-            f"|light|={len(light_keys)} |heavy|={len(heavy_keys)} "
-            f"light_only={sorted(light_keys - heavy_keys)[:8]} "
-            f"heavy_only={sorted(heavy_keys - light_keys)[:8]}"
-        )
-    for key in light_keys:
-        lv, hv = light[key], heavy[key]
-        if lv is None and hv is None:
-            continue  # covered-but-empty cell: both tiers agree → parity
-        if lv is None or hv is None:
-            pytest.fail(
-                f"{label} one-sided None at {key}: light={lv} heavy={hv} — "
-                "real cross-tier divergence (one tier emits an empty cell, the other does not)"
-            )
-        lv_f, hv_f = float(lv), float(hv)
-        threshold = tol * max(1.0, abs(hv_f))
-        assert abs(lv_f - hv_f) <= threshold, (
-            f"{label} cell {key} measure diverged: "
-            f"light={lv_f} heavy={hv_f} (diff={abs(lv_f - hv_f):.3e} > tol={threshold:.3e})"
-        )
 
 
 def _is_chip_all_nodata(raster_bytes):
@@ -937,127 +538,6 @@ def _is_chip_all_nodata(raster_bytes):
         if np.isnan(nd_f):
             return bool(np.all(np.isnan(arr.astype("float64"))))
         return bool(np.all(arr == nodata))
-
-
-@pytest.mark.parametrize("agg", ["avg", "count"])
-@pytest.mark.parametrize("assignment", ["centroid", "covering"])
-@pytest.mark.parametrize("coverage", ["sparse", "complete"])
-@pytest.mark.parametrize("grid", ["h3", "bng", "quadbin"])
-def test_rastertogrid_coverage_assignment_parity(
-    spark_with_jar, grid, coverage, assignment, agg
-):
-    """Cross-tier rastertogrid parity for all coverage × assignment combinations.
-
-    Exercises the Stage-2 coverage/assignment extension for all three grid families
-    (h3, bng, quadbin) with two representative aggregations:
-
-    * ``avg`` — the core averaging path (both centroid and covering).
-    * ``count`` — exercises the count→Double change: both tiers now emit Double
-      (not int) for pixel count; covering count is the area-fraction sum (may be
-      fractional).  Compare as float with relative 1e-9 tolerance.
-
-    Assertions:
-    * Exact cell-set equality (both tiers emit the same cell keys).
-    * Per-cell measure within relative tolerance 1e-9 (default for centroid,
-      1e-6 for covering where JTS vs shapely geometry areas may differ slightly).
-    * Both None ⇒ empty-cell parity; one None one not ⇒ FAIL.
-    * ``complete`` cell set ⊇ corresponding ``sparse`` cell set (for both tiers).
-
-    PERFORMANCE: covering mode uses a small 4×4 raster at a coarser resolution so
-    the O(pixels × intersection-ops) geometry work completes quickly.
-    """
-    spark = spark_with_jar
-    is_bng = grid == "bng"
-
-    # Select raster and resolution based on assignment mode.
-    if assignment == "covering":
-        raster = (
-            _small_covering_bng_raster() if is_bng else _small_covering_raster_4326()
-        )
-        resolution = _RTG_COVERING_RES[grid]
-        # JTS (heavy) and shapely (light) intersection areas may differ at ~1e-10;
-        # widen tolerance slightly for covering aggs.
-        tol = 1e-6
-    else:
-        raster = _bng_raster_27700() if is_bng else _quadbin_raster_4326()
-        resolution = _RTG_CENTROID_RES[grid]
-        tol = 1e-9
-
-    label = f"{grid} {coverage}/{assignment} {agg}"
-
-    # Collect LIGHT first (both tiers share the gbx_rst_* SQL names; light must
-    # be materialised before heavy re-registers).
-    if is_bng:
-        light = _light_reducer_rows(
-            spark, raster, resolution, agg, coverage=coverage, assignment=assignment
-        )
-        heavy = _heavy_reducer_rows(
-            spark, raster, resolution, agg, coverage=coverage, assignment=assignment
-        )
-    else:
-        light = _light_grid_rows(
-            spark,
-            raster,
-            resolution,
-            grid,
-            agg,
-            coverage=coverage,
-            assignment=assignment,
-        )
-        heavy = _heavy_grid_rows(
-            spark,
-            raster,
-            resolution,
-            grid,
-            agg,
-            coverage=coverage,
-            assignment=assignment,
-        )
-
-    assert light, f"{label}: light emitted no cells"
-    assert heavy, f"{label}: heavy emitted no cells"
-
-    _parity_cmp(light, heavy, label=label, tol=tol)
-
-    # BNG covering non-degeneracy guard: the origin-offset fixture must produce genuinely
-    # fractional area-fraction weights (< 1.0).  For the ``count`` agg in covering mode,
-    # the cell count equals the sum of area fractions from all overlapping pixels.  If ALL
-    # weights were 1.0 (degenerate grid-aligned fixture), every cell count would be an
-    # integer.  At least one fractional count proves the fixture exercises partial coverage.
-    if grid == "bng" and assignment == "covering" and agg == "count":
-        non_integer_found = any(
-            v is not None and abs(v - round(v)) > 1e-6 for v in light.values()
-        )
-        assert non_integer_found, (
-            "BNG covering fixture is degenerate: all count values are integers "
-            "(area-fraction weights all equal 1.0). "
-            "Fix: stagger the raster origin so pixels straddle BNG cell boundaries."
-        )
-
-    # complete ⊇ sparse: verify the superset relationship using a second sparse call.
-    if coverage == "complete":
-        if is_bng:
-            light_sparse = _light_reducer_rows(
-                spark, raster, resolution, agg, coverage="sparse", assignment=assignment
-            )
-        else:
-            light_sparse = _light_grid_rows(
-                spark,
-                raster,
-                resolution,
-                grid,
-                agg,
-                coverage="sparse",
-                assignment=assignment,
-            )
-
-        sparse_keys = set(light_sparse.keys())
-        assert sparse_keys <= set(
-            light.keys()
-        ), f"{label}: sparse cell set is NOT a subset of complete (light tier)"
-        assert sparse_keys <= set(
-            heavy.keys()
-        ), f"{label}: sparse cell set is NOT a subset of complete (heavy tier)"
 
 
 # ---------------------------------------------------------------------------
@@ -1746,11 +1226,6 @@ _MW_MASKED_ROWS = (10, 11)
 _MW_SRC_27700 = dict(epsg=27700, origin=(600000.0, 320000.0), px=100.0)
 _MW_SRC_4326 = dict(epsg=4326, origin=(1.00, 52.60), px=0.005)
 # grid -> (source, grid CRS, resolution)
-_MW_GRIDS = {
-    "h3": (_MW_SRC_27700, "EPSG:4326", 9),
-    "quadbin": (_MW_SRC_27700, "EPSG:4326", 15),
-    "bng": (_MW_SRC_4326, "EPSG:27700", 3),
-}
 # label -> (masked, declared NoData)
 _MW_SOURCES = {
     "no-nodata": (False, None),
@@ -1797,87 +1272,6 @@ def _mw_raster(*, epsg, origin, px, masked, nodata):
                 with mf.open() as chk:
                     assert chk.mask_flag_enums[0] == [MaskFlags.per_dataset]
             return mf.read()
-
-
-def _mw_expected(src, dst_crs, masked, nodata):
-    """(count, sum) of the valid source pixels the nearest-neighbour warp maps: an
-    index raster of the source (pixel p holds p + 1) warped to the same grid."""
-    from rasterio.transform import from_origin
-    from rasterio.warp import Resampling, calculate_default_transform, reproject
-
-    left, top = src["origin"]
-    px = src["px"]
-    src_crs = f"EPSG:{src['epsg']}"
-    dst_tf, w, h = calculate_default_transform(
-        src_crs, dst_crs, _MW_N, _MW_N, left, top - _MW_N * px, left + _MW_N * px, top
-    )
-    index = (np.arange(_MW_N * _MW_N) + 1).reshape(_MW_N, _MW_N).astype("uint32")
-    out = np.zeros((h, w), dtype="uint32")
-    reproject(
-        index,
-        out,
-        src_transform=from_origin(left, top, px, px),
-        src_crs=src_crs,
-        dst_transform=dst_tf,
-        dst_crs=dst_crs,
-        resampling=Resampling.nearest,
-        dst_nodata=0,
-    )
-    p = out[out > 0].astype("int64") - 1
-    vals = _mw_values().ravel().astype("int64")[p]
-    keep = vals != (65535 if nodata is None else nodata)
-    if masked:
-        keep &= ~np.isin(p // _MW_N, _MW_MASKED_ROWS)
-    return int(keep.sum()), int(vals[keep].sum())
-
-
-# (source label, where the light tier starts): every source from bytes; the masked ones
-# also from a virtual tile, which is where a mask can be lost.
-_MW_STARTS = [(label, "bytes") for label in _MW_SOURCES] + [
-    (label, "virtual") for label, (masked, _) in _MW_SOURCES.items() if masked
-]
-
-
-@pytest.mark.parametrize("label,start", _MW_STARTS)
-@pytest.mark.parametrize("grid", list(_MW_GRIDS))
-def test_rastertogrid_warp_fill_and_mask_parity(
-    spark_with_jar, tmp_path, grid, label, start
-):
-    """Raster-to-grid of a source in another CRS: both tiers aggregate the same cells
-    with the same count and mean, and only the source's valid pixels: not the warp
-    fill (as zeros), the masked pixels, nor the pixels equal to the NoData (the
-    fallback 65535, or the source's own 7, which keeps 65535 a real value). The
-    light tier starts from ``start``: its bytes, or a virtual tile over their file."""
-    spark = spark_with_jar
-    src, dst_crs, resolution = _MW_GRIDS[grid]
-    masked, nodata = _MW_SOURCES[label]
-    raster = _start_from(
-        _mw_raster(**src, masked=masked, nodata=nodata), start, tmp_path
-    )
-    tag = f"{grid} {label} (light from {start})"
-
-    def rows(tier, agg):
-        if grid == "bng":
-            fn = _light_reducer_rows if tier == "light" else _heavy_reducer_rows
-            return fn(spark, raster, resolution, agg, coverage="sparse")
-        fn = _light_grid_rows if tier == "light" else _heavy_grid_rows
-        return fn(spark, raster, resolution, grid, agg, coverage="sparse")
-
-    # light first: both tiers register the same gbx_rst_* names
-    light = {agg: rows("light", agg) for agg in ("count", "avg")}
-    heavy = {agg: rows("heavy", agg) for agg in ("count", "avg")}
-    exp_count, exp_sum = _mw_expected(src, dst_crs, masked, nodata)
-    for agg in ("count", "avg"):
-        assert light[agg], f"{tag}: light emitted no {agg} cells"
-        _parity_cmp(light[agg], heavy[agg], label=f"{tag} {agg}")
-    for tier, got in (("light", light), ("heavy", heavy)):
-        count = sum(got["count"].values())
-        total = sum(got["avg"][k] * got["count"][k] for k in got["count"])
-        assert count == exp_count, f"{tag}: {tier} {count} pixels, expected {exp_count}"
-        assert abs(total - exp_sum) <= 1e-6 * exp_sum, (
-            f"{tag}: {tier} sum {total}, expected {exp_sum} (warp fill, masked or "
-            "NoData-valued pixels aggregated)"
-        )
 
 
 @pytest.mark.parametrize("start", _STARTS)

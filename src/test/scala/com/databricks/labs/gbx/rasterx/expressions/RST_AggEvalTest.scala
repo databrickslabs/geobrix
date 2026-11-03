@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
 import com.databricks.labs.gbx.kernels.TestL1
-import com.databricks.labs.gbx.rasterx.expressions.agg.{RST_CombineAvgAgg, RST_DerivedBandAgg, RST_FromBandsAgg, RST_MergeAgg}
+import com.databricks.labs.gbx.rasterx.expressions.agg.{RST_CombineAvgAgg, RST_DerivedBandAgg, RST_FromBandsAgg}
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver, TileBytes}
 import com.databricks.labs.gbx.rasterx.util.RasterSerializationUtil
@@ -54,8 +54,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
                 .groupBy(lit(1))
                 .agg(
                   rst_combineavg_agg(col("raster")),
-                  rst_derivedband_agg(col("raster"), doublePyFunc, "myfunc"),
-                  call_function("gbx_rst_merge_agg", col("raster"))
+                  rst_derivedband_agg(col("raster"), doublePyFunc, "myfunc")
                 )
                 .collect()
         }
@@ -176,125 +175,6 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         }
     }
 
-    test("rst_merge_agg overlap winner is deterministic regardless of row order") {
-        // Two same-size tiles whose extents overlap (origins differ by half a tile),
-        // filled with distinct constants. The mosaic is last-wins; the aggregator now
-        // orders tiles by their raw serialized content, so the same tile reliably wins
-        // the overlap regardless of the order rows reach the aggregator.
-        val sc = spark
-        import com.databricks.labs.gbx.rasterx.functions._
-        import sc.implicits._
-        TestL1.installAll(spark)
-
-        val tmpDir = java.nio.file.Files.createTempDirectory("gbx_merge_agg_det_").toFile
-        val w = 8; val h = 8
-        // part_0: origin (149.0, -35.0); part_1: origin shifted +0.04 east / -0.04 south
-        // (half the 8 px * 0.01 extent) so the two extents overlap in their inner corner.
-        def writeByteConst(p: String, v: Int, ox: Double, oy: Double): Unit = {
-            val drv = gdal.GetDriverByName("GTiff")
-            val ds = drv.Create(p, w, h, 1, gdalconstConstants.GDT_Byte, Array[String]("COMPRESS=DEFLATE"))
-            ds.SetGeoTransform(Array[Double](ox, 0.01, 0.0, oy, 0.0, -0.01))
-            val sr = new org.gdal.osr.SpatialReference()
-            sr.ImportFromEPSG(4326)
-            ds.SetProjection(sr.ExportToWkt())
-            val band = ds.GetRasterBand(1)
-            band.WriteRaster(0, 0, w, h, Array.fill[Byte](w * h)(v.toByte))
-            band.FlushCache(); ds.FlushCache(); ds.delete()
-        }
-        val p0 = s"${tmpDir.getAbsolutePath}/part_0.tif"  // origin 149.00, value 10
-        val p1 = s"${tmpDir.getAbsolutePath}/part_1.tif"  // origin 149.04, value 20 (wins overlap)
-        writeByteConst(p0, 10, 149.0, -35.0)
-        writeByteConst(p1, 20, 149.04, -35.04)
-
-        def mergeMean(order: Seq[String]): Double = {
-            val bytes = order.toDF("path")
-                .withColumn("tile", udfs.rasterFromPath(col("path")))
-                .groupBy(lit(1).alias("g"))
-                .agg(call_function("gbx_rst_merge_agg", col("tile")).alias("out"))
-                .select(col("out.raster").alias("raster"))
-                .collect().head.getAs[Array[Byte]]("raster")
-            val mem = s"/vsimem/merge_agg_det_${java.util.UUID.randomUUID()}.tif"
-            gdal.FileFromMemBuffer(mem, bytes)
-            val ds = gdal.Open(mem)
-            try {
-                val n = ds.GetRasterXSize * ds.GetRasterYSize
-                val buf = Array.ofDim[Double](n)
-                ds.GetRasterBand(1).ReadRaster(0, 0, ds.GetRasterXSize, ds.GetRasterYSize,
-                    gdalconstConstants.GDT_Float64, buf)
-                buf.sum / n
-            } finally { RasterDriver.releaseDataset(ds); gdal.Unlink(mem) }
-        }
-
-        try {
-            // Same group, both row orders -> identical mosaic (content sort, not arrival).
-            val meanAB = mergeMean(Seq(p0, p1))
-            val meanBA = mergeMean(Seq(p1, p0))
-            meanAB shouldBe meanBA +- 1e-9
-        } finally {
-            tmpDir.listFiles().foreach(_.delete()); tmpDir.delete()
-        }
-    }
-
-    test("rst_merge_agg same-origin overlap winner is deterministic for in-memory tiles") {
-        // The residual nondeterminism hole the content-key fix closes: two tiles sharing
-        // the SAME geotransform origin but different content fully overlap. The previous
-        // key (origin, GetDescription) tied on origin and fell back to GetDescription --
-        // for BinaryType (rst_fromcontent) tiles that is a per-open /vsimem/<uuid> path,
-        // i.e. random -- so the last-wins winner varied run to run. Sorting on raw content
-        // gives a total order with no tie, so the winner is fixed regardless of row order.
-        val sc = spark
-        import com.databricks.labs.gbx.rasterx.functions._
-        import sc.implicits._
-        TestL1.installAll(spark)
-
-        val w = 8; val h = 8
-        // Two byte rasters, IDENTICAL georef/origin, distinct constant fills -> they fully
-        // overlap; the canonical content order alone decides the winner.
-        def byteConstBytes(v: Int): Array[Byte] = {
-            val mem = s"/vsimem/merge_agg_sameorigin_src_${java.util.UUID.randomUUID()}.tif"
-            val drv = gdal.GetDriverByName("GTiff")
-            val ds = drv.Create(mem, w, h, 1, gdalconstConstants.GDT_Byte, Array[String]("COMPRESS=DEFLATE"))
-            ds.SetGeoTransform(Array[Double](149.0, 0.01, 0.0, -35.0, 0.0, -0.01))
-            val sr = new org.gdal.osr.SpatialReference()
-            sr.ImportFromEPSG(4326)
-            ds.SetProjection(sr.ExportToWkt())
-            val band = ds.GetRasterBand(1)
-            band.WriteRaster(0, 0, w, h, Array.fill[Byte](w * h)(v.toByte))
-            band.FlushCache(); ds.FlushCache(); ds.delete()
-            val buf = gdal.GetMemFileBuffer(mem)
-            gdal.Unlink(mem)
-            buf
-        }
-        val a = byteConstBytes(10)
-        val b = byteConstBytes(20)
-
-        def mergeMean(order: Seq[Array[Byte]]): Double = {
-            val bytes = order.toDF("content")
-                .withColumn("tile", rst_fromcontent(col("content"), lit("GTiff")))
-                .groupBy(lit(1).alias("g"))
-                .agg(call_function("gbx_rst_merge_agg", col("tile")).alias("out"))
-                .select(col("out.raster").alias("raster"))
-                .collect().head.getAs[Array[Byte]]("raster")
-            val mem = s"/vsimem/merge_agg_sameorigin_${java.util.UUID.randomUUID()}.tif"
-            gdal.FileFromMemBuffer(mem, bytes)
-            val ds = gdal.Open(mem)
-            try {
-                val n = ds.GetRasterXSize * ds.GetRasterYSize
-                val buf = Array.ofDim[Double](n)
-                ds.GetRasterBand(1).ReadRaster(0, 0, ds.GetRasterXSize, ds.GetRasterYSize,
-                    gdalconstConstants.GDT_Float64, buf)
-                buf.sum / n
-            } finally { RasterDriver.releaseDataset(ds); gdal.Unlink(mem) }
-        }
-
-        // Both row orders must yield the SAME constant mosaic (one tile wins everywhere).
-        val meanAB = mergeMean(Seq(a, b))
-        val meanBA = mergeMean(Seq(b, a))
-        meanAB shouldBe meanBA +- 1e-9
-        // The winner is one of the two inputs (10 or 20), uniform across the tile.
-        (meanAB === 10.0 +- 1e-9 || meanAB === 20.0 +- 1e-9) shouldBe true
-    }
-
     // =========================================================================
     // v1 (3-field) input normalization — regression for AIOOBE on size==1
     // fast-path and serialize UnsafeProjection.
@@ -349,42 +229,6 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
     private def inputRow(tileRow: GenericInternalRow): GenericInternalRow =
         new GenericInternalRow(Array[Any](tileRow))
 
-    test("RST_MergeAgg: size==1 v1 input through update() returns 9-field row (no AIOOBE)") {
-        TestL1.installAll(spark)
-        // BoundReference(0, v1TileType) binds child to field 0 of the input row,
-        // so child.eval(inputRow(tileRow)) returns the v1 InternalRow directly.
-        val agg = RST_MergeAgg(v1TileRef)
-        val buf = agg.createAggregationBuffer()
-        val tile = v1Row(1L, tinyGTiffBytes(10))
-        agg.update(buf, inputRow(tile))
-
-        // Buffered row must be 9-field after normalization in update()
-        buf.head.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow].numFields shouldBe 9
-
-        // eval size==1 returns buffer.head; must be 9-field — before fix was 3-field
-        val out = agg.eval(buf)
-        assert(out != null)
-        out.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow].numFields shouldBe 9
-    }
-
-    test("RST_MergeAgg: serialize+deserialize roundtrip on v1 input via update() does not throw") {
-        TestL1.installAll(spark)
-        val agg = RST_MergeAgg(v1TileRef)
-        val buf = agg.createAggregationBuffer()
-        agg.update(buf, inputRow(v1Row(1L, tinyGTiffBytes(10))))
-        agg.update(buf, inputRow(v1Row(1L, tinyGTiffBytes(20))))
-        buf.size shouldBe 2
-        buf.foreach(_.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow].numFields shouldBe 9)
-
-        // serialize must NOT throw AIOOBE — before fix threw on 9-field UnsafeProjection
-        // applied to 3-field rows
-        noException should be thrownBy {
-            val bytes = agg.serialize(buf)
-            val buf2  = agg.deserialize(bytes)
-            buf2.size shouldBe 2
-        }
-    }
-
     test("RST_CombineAvgAgg: size==1 v1 input through update() returns 9-field row (no AIOOBE)") {
         TestL1.installAll(spark)
         val agg = RST_CombineAvgAgg(v1TileRef)
@@ -429,7 +273,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         }
     }
 
-    test("null tiles from rst_clip are skipped by all three buffering aggregators (no NPE)") {
+    test("null tiles from rst_clip are skipped by the buffering aggregators (no NPE)") {
         // Regression: child.eval(input) returns null when rst_clip sees a
         // non-intersecting geometry.  Before the fix, the null InternalRow was
         // passed straight to normalizeToV2Row which called row.numFields() on
@@ -457,7 +301,6 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
             df.groupBy(lit(1))
                 .agg(
                   rst_combineavg_agg(col("raster")),
-                  call_function("gbx_rst_merge_agg", col("raster")),
                   rst_derivedband_agg(col("raster"), doublePyFunc, "myfunc")
                 )
                 .collect()
@@ -506,52 +349,6 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         errVal should include ("RST_CombineAvgAgg")
     }
 
-    test("RST_MergeAgg skips a corrupt member and records the drop, does not raise") {
-        val sc = spark
-        import com.databricks.labs.gbx.rasterx.functions._
-        import sc.implicits._
-        TestL1.installAll(spark)
-
-        val valid = tinyGTiffBytes(42)
-        val corrupt = Array[Byte](1, 2, 3, 4, 5, 6, 7, 8)
-
-        val df = Seq(valid, corrupt).toDF("content")
-            .withColumn("tile", rst_fromcontent(col("content"), lit("GTiff")))
-            .groupBy(lit(1).alias("g"))
-            .agg(call_function("gbx_rst_merge_agg", col("tile")).alias("out"))
-            .select(col("out").as("out"), col("out.metadata").as("md"))
-
-        noException should be thrownBy df.collect()
-
-        val row = df.collect().head
-        assert(row.get(0) != null, "out struct must be non-null (good tile was aggregated)")
-        val mdMap = row.getAs[Map[String, String]]("md")
-        assert(mdMap != null, "metadata must not be null")
-        val errVal = mdMap.get("last_error").orNull
-        assert(errVal != null, "metadata must contain last_error key")
-        errVal should include ("RST_MergeAgg")
-    }
-
-    test("RST_MergeAgg drops an error tile (NULL raster) member instead of failing the task") {
-        val sc = spark
-        import com.databricks.labs.gbx.rasterx.functions._
-        import sc.implicits._
-        TestL1.installAll(spark)
-
-        // The error tile is what a heavy function returns for a tile it cannot process: raster NULL, a reason.
-        val good = Seq(tinyGTiffBytes(42)).toDF("content")
-            .select(rst_fromcontent(col("content"), lit("GTiff")).as("tile"))
-        val failed = good.select(rst_transformcrs(col("tile"), lit("EPSG:not-a-crs")).as("tile"))
-        assert(failed.select(col("tile.raster").isNull.as("n")).head().getBoolean(0), "the failed tile must have a NULL raster")
-
-        val row = good.union(failed).groupBy(lit(1).alias("g"))
-            .agg(call_function("gbx_rst_merge_agg", col("tile")).alias("out"))
-            .select(col("out").as("out"), col("out.metadata").as("md"))
-            .head()
-        assert(row.get(0) != null, "out struct must be non-null (the good tile was merged)")
-        row.getAs[Map[String, String]]("md")("last_error") should include("RST_MergeAgg")
-    }
-
     test("an aggregate of nothing but error tiles is the first member's error tile, unchanged") {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
@@ -573,7 +370,6 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
 
         // One member or two, the answer is a member as it is: every key, not a rebuilt tile that kept the reason only.
         for (agg <- Seq(
-               call_function("gbx_rst_merge_agg", col("tile")),
                rst_combineavg_agg(col("tile")),
                rst_derivedband_agg(col("tile"), doublePyFunc, "myfunc")
              )) {
@@ -636,8 +432,6 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         }
         spark.conf.set(TileBytes.ReadCapKey, "8") // below the 16 bytes decoded
         try {
-            run("merge", () => { val a = RST_MergeAgg(v1TileRef); val b = a.createAggregationBuffer()
-                a.update(b, inputRow(v1Row(1L, big))); a.update(b, inputRow(v1Row(2L, big))); a.eval(b) })
             run("combineavg", () => { val a = RST_CombineAvgAgg(v1TileRef); val b = a.createAggregationBuffer()
                 a.update(b, inputRow(v1Row(1L, big))); a.update(b, inputRow(v1Row(2L, big))); a.eval(b) })
             run("derivedband", () => { val a = RST_DerivedBandAgg(v1TileRef, pyfunc, funcName); val b = a.createAggregationBuffer()

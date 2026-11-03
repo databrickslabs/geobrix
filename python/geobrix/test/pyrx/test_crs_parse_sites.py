@@ -124,18 +124,6 @@ SCALA_SITES = {
         "val d = new SpatialReference(); d.ImportFromEPSG(grid.crsSrid); d",
     ): INT_EPSG,
     (
-        "rasterx/expressions/grid/GridReprojection.scala",
-        "val dstSR = new SpatialReference(); dstSR.ImportFromEPSG(gridSrid)",
-    ): GRID_INT,
-    (
-        "rasterx/expressions/grid/GridReprojection.scala",
-        "val srcSR = new SpatialReference(); srcSR.ImportFromWkt(srcWkt)",
-    ): DATASET_WKT,
-    (
-        "rasterx/expressions/grid/GridReprojection.scala",
-        'val (result, _) = WarpSource.warpFillAsNoData(ds, resultPath, s"gdalwarp -t_srs EPSG:$gridSrid -r near")',
-    ): GRID_INT,
-    (
         "rasterx/expressions/grid/RST_H3_CellBBox.scala",
         "val gridSR = new SpatialReference(); gridSR.ImportFromEPSG(H3.crsID)",
     ): CONST_CRS,
@@ -143,10 +131,6 @@ SCALA_SITES = {
         "rasterx/expressions/grid/RST_H3_CellBBox.scala",
         "val srcSR = new SpatialReference(); srcSR.ImportFromEPSG(H3.crsID)",
     ): CONST_CRS,
-    (
-        "rasterx/expressions/grid/RasterToGridGeneric.scala",
-        "sr.ImportFromEPSG(crsSrid)",
-    ): GRID_INT,
     (
         "rasterx/expressions/vector/RST_Isoband.scala",
         "val outSr = if (srcSrs != null) srcSrs else { sr.ImportFromEPSG(4326); sr }",

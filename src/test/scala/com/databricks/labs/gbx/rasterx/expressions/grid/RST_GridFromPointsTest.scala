@@ -91,44 +91,4 @@ class RST_GridFromPointsTest extends AnyFunSuite with BeforeAndAfterAll {
         RST_GridFromPoints.outputCrs(0, null) shouldBe null
     }
 
-    test("RST_GridFromPointsAgg produces the same center pixel as the non-aggregator") {
-        // The aggregator's eval pathway delegates to RST_GridFromPoints.execute,
-        // so the direct way to verify numerical parity is to feed the same
-        // (geom, value) tuples into the buffer and call its evaluation.
-        val buf = GridFromPointsAcc.empty
-        cornerPoints().foreach { case (wkb, v) => buf.add(wkb, v) }
-        val agg = RST_GridFromPointsAgg(
-            pointExpr = null, valueExpr = null,
-            xminExpr = org.apache.spark.sql.catalyst.expressions.Literal(0.0),
-            yminExpr = org.apache.spark.sql.catalyst.expressions.Literal(0.0),
-            xmaxExpr = org.apache.spark.sql.catalyst.expressions.Literal(100.0),
-            ymaxExpr = org.apache.spark.sql.catalyst.expressions.Literal(100.0),
-            widthPxExpr = org.apache.spark.sql.catalyst.expressions.Literal(50),
-            heightPxExpr = org.apache.spark.sql.catalyst.expressions.Literal(50),
-            outSridExpr = org.apache.spark.sql.catalyst.expressions.Literal(32633),
-            powerExpr = org.apache.spark.sql.catalyst.expressions.Literal(2.0),
-            maxPtsExpr = org.apache.spark.sql.catalyst.expressions.Literal(12)
-        )
-        val out = agg.eval (buf).asInstanceOf[InternalRow]
-        out should not be null
-
-        val nonAggRow = RST_GridFromPoints.execute(
-            cornerPoints(), 0.0, 0.0, 100.0, 100.0, 50, 50, 32633, 2.0, 12
-        )
-        val aggCenter = centerPixel(out)
-        val nonAggCenter = centerPixel(nonAggRow)
-        math.abs(aggCenter - nonAggCenter) should be < 1e-9
-    }
-
-    test("GridFromPointsAcc serialize/deserialize roundtrips features") {
-        val buf = GridFromPointsAcc.empty
-        cornerPoints().foreach { case (wkb, v) => buf.add(wkb, v) }
-        val bytes = buf.serialize
-        val restored = GridFromPointsAcc.deserialize(bytes)
-        restored.features.length shouldBe 4
-        restored.features.zip(buf.features).foreach { case ((b1, v1), (b2, v2)) =>
-            b1 shouldBe b2
-            v1 shouldBe v2
-        }
-    }
 }

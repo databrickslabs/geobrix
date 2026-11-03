@@ -39,8 +39,7 @@ object RasterTessellate {
       * the raster's own NoData) — those fill their position in covering mode and must not be dropped, else
       * white gaps are punched into the mosaic.
       *
-      * Delegates to [[GridOverlap.hasPositiveAreaOverlap]] — the shared canonical implementation that
-      * [[com.databricks.labs.gbx.rasterx.expressions.grid.RasterToGridGeneric]] also uses.
+      * Delegates to [[GridOverlap.hasPositiveAreaOverlap]] — the shared canonical implementation.
       */
     private def hasPositiveAreaOverlap(cellGeom: Geometry, footprint: Geometry): Boolean =
         GridOverlap.hasPositiveAreaOverlap(cellGeom, footprint)

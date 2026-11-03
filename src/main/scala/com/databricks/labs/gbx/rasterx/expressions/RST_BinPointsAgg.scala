@@ -125,7 +125,7 @@ final case class RST_BinPointsAgg(
     override def serialize(b: BinPointsAcc): Array[Byte] = b.serialize
     override def deserialize(bytes: Array[Byte]): BinPointsAcc = BinPointsAcc.deserialize(bytes)
 
-    /** Coerce an arbitrary Catalyst numeric value to Double (mirrors RST_GridFromPointsAgg). */
+    /** Coerce an arbitrary Catalyst numeric value to Double (a NULL is NaN). */
     private def coerceToDouble(v: Any, label: String): Double = v match {
         case d: Double                               => d
         case f: Float                                => f.toDouble

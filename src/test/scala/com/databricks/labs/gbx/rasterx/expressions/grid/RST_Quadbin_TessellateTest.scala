@@ -17,7 +17,7 @@ class RST_Quadbin_TessellateTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     // A small EPSG:4326 raster over London (~lon -0.1, lat 51.5), 4x4 pixels at ~0.01 degree
-    // resolution, all pixels valid. Built in-memory via the MEM driver (RST_BNG_RasterToGridTest pattern).
+    // resolution, all pixels valid. Built in-memory via the MEM driver (the MEM-driver pattern).
     private def london4326Ds = {
         val drv = gdal.GetDriverByName("MEM")
         val ds = drv.Create("", 4, 4, 1, gdalconstConstants.GDT_Float64)

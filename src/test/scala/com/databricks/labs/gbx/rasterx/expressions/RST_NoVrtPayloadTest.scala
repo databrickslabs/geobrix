@@ -21,7 +21,6 @@ import org.scalatest.matchers.should.Matchers._
   * magic and never with `<VRTDataset`, and tile.metadata("driver") reports "GTiff".
   *
   * Functions exercised (one per VRT-using internal operation):
-  *   - rst_merge_agg  → MergeRasters
   *   - rst_frombands  → MergeBands
   *   - rst_combineavg → PixelCombineRasters (CombineAVG → PixelCombineRasters)
   *
@@ -50,32 +49,6 @@ class RST_NoVrtPayloadTest extends PlanTest with SilentSparkSession {
         withClue(s"$label: tile.metadata(\"driver\") should be GTiff, not VRT: ") {
             driver should not equal "VRT"
         }
-    }
-
-    test("rst_merge_agg returns self-contained GTiff bytes (no VRT payload)") {
-        val sc = spark
-        import com.databricks.labs.gbx.rasterx.functions._
-        import sc.implicits._
-        TestL1.installAll(spark)
-
-        val tifPath = this.getClass.getResource("/modis/").toString
-        val df = Seq(
-          s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF",
-          s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B02.TIF",
-          s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B03.TIF"
-        ).toDF("path")
-            .withColumn("tile", udfs.rasterFromPath(col("path")))
-            .groupBy(lit(1).alias("g"))
-            .agg(call_function("gbx_rst_merge_agg", col("tile")).alias("merged"))
-            .select(
-              col("merged.raster").alias("raster"),
-              col("merged.metadata").alias("metadata")
-            )
-
-        val row = df.collect().head
-        val bytes = row.getAs[Array[Byte]]("raster")
-        val driver = row.getAs[Map[String, String]]("metadata").getOrElse("driver", "")
-        assertSelfContained(bytes, driver, "rst_merge_agg")
     }
 
     test("rst_frombands returns self-contained GTiff bytes (no VRT payload)") {

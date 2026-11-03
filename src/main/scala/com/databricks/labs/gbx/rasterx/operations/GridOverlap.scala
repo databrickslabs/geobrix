@@ -4,9 +4,8 @@ import org.locationtech.jts.geom.Geometry
 
 /** Shared positive-area overlap test for raster→grid functions.
   *
-  * Extracted from [[RasterTessellate]] so that
-  * [[com.databricks.labs.gbx.rasterx.expressions.grid.RasterToGridGeneric]] can apply the same
-  * keep-test in the `complete` coverage path without duplicating the rule.
+  * Extracted from [[RasterTessellate]] so the same
+  * keep-test applies in the `complete` coverage path without duplicating the rule.
   *
   * Accessible from all code within the `rasterx` package scope.
   */

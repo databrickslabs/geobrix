@@ -1,7 +1,6 @@
 package com.databricks.labs.gbx.rasterx.operations
 
 import com.databricks.labs.gbx.gridx.grid.{CustomGridSystem, GridConf}
-import com.databricks.labs.gbx.rasterx.expressions.grid.RST_Custom_RasterToGridAvg
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants
@@ -166,19 +165,4 @@ class RasterTessellateCustomTest extends AnyFunSuite with BeforeAndAfterAll {
         cells.map(_._1) should contain(expectedCell3857)
     }
 
-    test("custom rastertogrid and custom tessellate agree on a mismatched-CRS (4326) raster over a 3857 grid") {
-        val dsA = raster4326()
-        val r2gKeys = RST_Custom_RasterToGridAvg.execute(grid3857, dsA, 1, "sparse", "centroid")(0)
-            .map(_._1).toSet
-        RasterDriver.releaseDataset(dsA)
-
-        val dsB = raster4326()
-        val tessKeys = drain(
-            RasterTessellate.tessellateCustomIter(grid3857, dsB, Map.empty, resolution = 1,
-                assignment = "centroid", coverage = "sparse")).map(_._1).toSet
-
-        r2gKeys should not be empty
-        r2gKeys shouldBe tessKeys
-        r2gKeys shouldBe Set(expectedCell3857)
-    }
 }

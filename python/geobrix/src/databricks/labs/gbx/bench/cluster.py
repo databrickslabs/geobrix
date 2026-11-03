@@ -2890,7 +2890,7 @@ _CELL_FANOUT = """# Fan-out UDTF benchmark: light pyrx (streaming UDTF) vs heavy
 # flat row counts are compared per function (hard gate).
 from databricks.labs.gbx.bench import readers as _rd
 _fanout_rows = []
-_fanout_fns = list(_rd.FANOUT_FUNCTIONS)  # all 8 streaming UDTFs
+_fanout_fns = list(_rd.FANOUT_FUNCTIONS)  # all 6 streaming UDTFs
 # For parity: collect (fn, api, flat_output_count) to compare light vs heavy per-fn.
 _fanout_counts = {}  # (fn, api) -> flat row count
 for _ffn in _fanout_fns:

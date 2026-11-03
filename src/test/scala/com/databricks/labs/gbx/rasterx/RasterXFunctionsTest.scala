@@ -198,11 +198,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
         result should not be null
     }
 
-    test("rst_retile should accept tile, width, and height") {
-        val result = org.apache.spark.sql.functions.call_function("gbx_rst_retile", col("tile"), col("w"), col("h"))
-        result should not be null
-    }
-
     test("rst_separatebands should create Column") {
         val result = functions.rst_separatebands(col("tile"))
         result should not be null
